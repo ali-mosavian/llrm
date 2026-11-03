@@ -1176,6 +1176,41 @@ pub const LINKAGE: [(Linkage, &str); 10] = [
     (Linkage::Appending, "appending"),
 ];
 
+/// A global's visibility (`GlobalValue::VisibilityTypes`): whether another
+/// module may bind the name once linking is done.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum Visibility {
+    #[default]
+    Default,
+    Hidden,
+    Protected,
+}
+
+pub const VISIBILITY: [(Visibility, &str); 2] = [(Visibility::Hidden, "hidden"), (Visibility::Protected, "protected")];
+
+/// `@name = linkage visibility alias type, ptr @aliasee`: a second name for a
+/// global (LLVM's `GlobalAlias`).
+///
+/// DEVIATE: a definition only. LLVM lets a `GlobalAlias` be a constant
+/// operand
+/// (https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/include/llvm/IR/GlobalAlias.h);
+/// the parser reads an operand that names an alias as its aliasee, which has
+/// the same address, and refuses one that names an alias a linker may replace
+/// (`weak`). No operand names an alias, so the analyses that say "MIR has no
+/// `GlobalAlias`" stay true. Exit: the first pass that must tell a call of an
+/// alias from a call of its aliasee.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Alias {
+    pub name: String,
+    pub linkage: Linkage,
+    pub visibility: Visibility,
+    pub unnamed_addr: UnnamedAddr,
+    pub address_space: u32,
+    /// The value type, as written before the comma.
+    pub ty: TypeId,
+    pub aliasee: GlobalId,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub enum UnnamedAddr {
     #[default]
@@ -1252,6 +1287,7 @@ impl std::ops::Deref for GlobalName {
 pub struct GlobalValue {
     pub name: GlobalName,
     pub linkage: Linkage,
+    pub visibility: Visibility,
     pub unnamed_addr: UnnamedAddr,
     pub address_space: u32,
     pub kind: GlobalKind,
@@ -1263,6 +1299,7 @@ impl GlobalValue {
         GlobalValue {
             name: self.name.clone(),
             linkage: self.linkage,
+            visibility: self.visibility,
             unnamed_addr: self.unnamed_addr,
             address_space: self.address_space,
             kind: match &self.kind {
@@ -1280,6 +1317,7 @@ impl GlobalValue {
     ) -> bool {
         self.name == declared.name
             && self.linkage == declared.linkage
+            && self.visibility == declared.visibility
             && self.unnamed_addr == declared.unnamed_addr
             && self.address_space == declared.address_space
             && match (&self.kind, &declared.kind) {
@@ -1344,6 +1382,8 @@ pub struct Module {
     pub datalayout: Option<String>,
     /// Variables and functions, in definition order.
     pub globals: Vec<GlobalValue>,
+    /// The aliases, in definition order; no instruction names one.
+    pub aliases: Vec<Alias>,
     pub metadata: Vec<MetadataNode>,
     pub named_metadata: Vec<(String, Vec<MetadataId>)>,
     /// The nodes of `metadata` written as specialized metadata.
@@ -1404,6 +1444,25 @@ pub enum DwUnary {
 }
 
 impl Module {
+    /// The line a function's `!DISubprogram` says its body starts at
+    /// (`scopeLine`, the line of the `{`): the line of the first row
+    /// (`DwarfDebug::beginFunctionImpl`).
+    pub fn subprogram_line(
+        &self,
+        function: &Function,
+    ) -> Option<u32> {
+        let (_, node) = function.metadata.iter().find(|(kind, _)| kind == "dbg")?;
+        let fields = &self.special.get(node)?.fields;
+        let at = fields.iter().position(|one| one == "scopeLine")?;
+        match self.metadata.get(node.0 as usize)?.operands.get(at)? {
+            MetadataOperand::Constant(value) => match self.context.get(*value).kind {
+                crate::context::ConstantKind::Int(number) => u32::try_from(number).ok(),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// The operations of the `!DIExpression` node `id`, `None` for any other
     /// node. An operation of a kind not listed stands as [`DwOp::Other`], with
     /// its operands.
@@ -1529,11 +1588,31 @@ impl Module {
             }));
         }
         self.context.renumber_globals(&|global| renumbered[global.0 as usize]);
+        // An alias follows its aliasee, and goes with it.
+        self.aliases.retain_mut(|alias| match renumbered[alias.aliasee.0 as usize] {
+            Some(now) => {
+                alias.aliasee = now;
+                true
+            }
+            None => false,
+        });
         let mut at = 0;
         self.globals.retain(|_| {
             at += 1;
             renumbered[at - 1].is_some()
         });
+    }
+
+    /// An error where the module defines an alias and `target`'s writer emits
+    /// none: dropping the symbol would link as an undefined reference later.
+    pub fn refuse_aliases(
+        &self,
+        target: &str,
+    ) -> Result<(), String> {
+        match self.aliases.first() {
+            Some(alias) => Err(format!("{target} cannot emit the alias @{}", alias.name)),
+            None => Ok(()),
+        }
     }
 
     /// Whether the code is position independent: clang's "PIC Level" module

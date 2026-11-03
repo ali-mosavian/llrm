@@ -109,18 +109,18 @@ def test_buildslot_hands_cargo_the_test_cap_unless_the_caller_has_a_runner(tmp_p
     assert show({**base, "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER": "mine"}) == "mine"
 
 
-def test_only_four_builds_hold_a_slot_at_once(tmp_path):
-    """Eight slots ran the host at load 83-100 of 32 cores with ~23 sessions building (2026-10-27) and starved the landing runner: four slots by default, a fifth command waits."""
+def test_only_seven_builds_hold_a_slot_at_once(tmp_path):
+    """Eight slots ran the host at load 83-100 of 32 cores with ~23 sessions building (2026-10-27) and starved the landing runner: seven slots (one 4-core range each), an eighth command waits."""
     import time
 
     script = str(Path(__file__).resolve().parent / "buildslot")
     log = tmp_path / "starts"
     env = {k: v for k, v in {**os.environ, "BUILDSLOT_DIR": str(tmp_path / "slots")}.items() if k != "BUILDSLOTS"}
-    procs = [subprocess.Popen([script, "sh", "-c", f"date +%s.%N >> {log}; sleep 2"], env=env) for _ in range(5)]
+    procs = [subprocess.Popen([script, "sh", "-c", f"date +%s.%N >> {log}; sleep 2"], env=env) for _ in range(8)]
     for p in procs:
         p.wait(timeout=60)
     starts = sorted(float(x) for x in log.read_text().split())
-    assert len(starts) == 5 and starts[4] - starts[0] >= 1.8 and starts[3] - starts[0] < 1.0, starts
+    assert len(starts) == 8 and starts[7] - starts[0] >= 1.8 and starts[6] - starts[0] < 1.0, starts
 
 
 def test_waiters_get_a_slot_in_arrival_order_and_a_priority_ticket_jumps_the_queue(tmp_path):
@@ -139,3 +139,80 @@ def test_waiters_get_a_slot_in_arrival_order_and_a_priority_ticket_jumps_the_que
     for p in (holder, *waiters):
         p.wait(timeout=60)
     assert log.read_text().split() == ["urgent", "first", "second"], log.read_text()
+
+
+def test_each_slot_runs_on_its_own_cores_and_never_shares_one(tmp_path):
+    """Every build was pinned to cores 0-3: 47 processes shared 4 cores (100% busy) while top showed the host 80% idle and ~30 waiters sat in the queue for 50 minutes (2026-11-02)."""
+    script = str(Path(__file__).resolve().parent / "buildslot")
+    env = {**os.environ, "BUILDSLOT_DIR": str(tmp_path / "slots"), "BUILDSLOT_POLL": "0.1"}
+    env.pop("BUILDSLOTS", None)
+    show = "taskset -cp $$ | sed 's/.*: //'; sleep 1.5"
+    procs = [subprocess.Popen(["taskset", "-c", "0-3", script, "sh", "-c", show], env=env, stdout=subprocess.PIPE, text=True) for _ in range(6)]
+    cores = []
+    for p in procs:
+        cpus = set()
+        for part in p.communicate(timeout=60)[0].strip().split(","):
+            lo, _, hi = part.partition("-")
+            cpus |= set(range(int(lo), int(hi or lo) + 1))
+        cores.append(cpus)
+    assert all(len(c) == 4 for c in cores), cores
+    assert len(set().union(*cores)) == 24, cores  # six disjoint ranges
+    assert not set().union(*cores) & set(range(4, 8)) | set().union(*cores) & set(range(28, 32)), cores  # gate legs and the user keep theirs
+
+
+def test_the_seventh_slot_on_the_gate_cores_is_not_offered_while_a_gate_leg_holds_the_lock(tmp_path):
+    """Cores 4-7 are the gate legs'; the seventh slot uses them only when no leg holds the lock file, so a build never lands under a timed leg."""
+    import time
+
+    script = str(Path(__file__).resolve().parent / "buildslot")
+    lock = tmp_path / "gate-leg.lock"
+    env = {**os.environ, "BUILDSLOT_DIR": str(tmp_path / "slots"), "BUILDSLOT_GATE_LOCK": str(lock), "BUILDSLOT_POLL": "0.1"}
+    env.pop("BUILDSLOTS", None)
+
+    def seventh_start(locked):
+        lock.unlink(missing_ok=True)
+        lock.touch() if locked else None
+        log = tmp_path / f"starts-{locked}"
+        procs = [subprocess.Popen([script, "sh", "-c", f"date +%s.%N >> {log}; taskset -cp $$ | sed 's/.*: //' >> {log}.cpu; sleep 2"], env=env) for _ in range(7)]
+        for p in procs:
+            p.wait(timeout=60)
+        starts = sorted(float(x) for x in log.read_text().split())
+        return starts[6] - starts[0], (tmp_path / f"starts-{locked}.cpu").read_text().split()
+
+    wait_locked, cpus_locked = seventh_start(True)
+    wait_free, cpus_free = seventh_start(False)
+    assert wait_locked >= 1.8 and "4-7" not in cpus_locked, (wait_locked, cpus_locked)
+    assert wait_free < 1.0 and "4-7" in cpus_free, (wait_free, cpus_free)
+
+
+def _slot(tmp_path, argv, **env):
+    script = str(Path(__file__).resolve().parent / "buildslot")
+    return subprocess.run([script, *argv], capture_output=True, text=True, env={**os.environ, "BUILDSLOT_DIR": str(tmp_path), **env})
+
+
+def test_a_non_cargo_command_under_a_slot_dies_alone_past_the_memory_cap(tmp_path):
+    """Two unbounded llrm-6502-llc (217 GB at 21:55, 190 GB at 22:07) took the host to 16 and 50 GB free: the slot itself must cap what it launches."""
+    grab = ["python3", "-c", "b = bytearray(4 << 30); print('ok')"]
+    over = _slot(tmp_path, grab, TEST_MEM_CAP_GB="1")
+    assert over.returncode != 0 and "ok" not in over.stdout and "MemoryError" in over.stderr, (over.returncode, over.stderr[-200:])
+
+
+def test_a_non_cargo_command_under_a_slot_gets_a_cap_big_enough_for_a_dosbox_jit(tmp_path):
+    """The 16 GB cap broke every bench.py DOSBox leg ("Could not allocate dynamic translator buffer", BrokenProcessPool) from 21:55: a script gets 96 GB, still far below the 190 GB runaways."""
+    done = _slot(tmp_path, ["sh", "-c", "ulimit -d"], TEST_MEM_CAP_GB="")
+    assert done.stdout.strip() == str(96 << 20), done.stdout
+
+
+def test_a_non_cargo_command_under_a_slot_is_killed_at_the_timeout(tmp_path):
+    done = _slot(tmp_path, ["sleep", "30"], BUILDSLOT_TIMEOUT="1")
+    assert done.returncode == 124, done.returncode
+
+
+def test_cargo_under_a_slot_keeps_no_cap_and_no_timeout_of_its_own(tmp_path):
+    """cargo's rustc and test binaries are capped through the runner; wrapping cargo itself would cap every build."""
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "cargo").write_text("#!/bin/sh\nulimit -d\n")
+    (fake / "cargo").chmod(0o755)
+    done = _slot(tmp_path, ["cargo"], PATH=f"{fake}:{os.environ['PATH']}", TEST_MEM_CAP_GB="1", BUILDSLOT_TIMEOUT="1")
+    assert done.stdout.strip() == "unlimited", (done.stdout, done.stderr[-200:])

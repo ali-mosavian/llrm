@@ -174,6 +174,9 @@ pub mod constraintelim;
 pub mod constraintelim_induction;
 #[cfg(test)]
 mod constraintelim_tests;
+pub mod copyback;
+#[cfg(test)]
+mod copyback_tests;
 #[cfg(test)]
 mod corpus_tests;
 pub mod counting;
@@ -376,6 +379,9 @@ pub mod trivialunswitch;
 pub mod trunc_inst_combine;
 pub mod twoentryphi;
 pub mod typepromotion;
+pub mod typepromotion_pass;
+#[cfg(test)]
+mod typepromotion_pass_tests;
 pub mod uncondicmp;
 pub mod undefpred;
 pub mod uremloop;

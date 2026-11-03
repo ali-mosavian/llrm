@@ -53,6 +53,8 @@ pub struct Out {
     pub arg_vt: EVT,
     /// `ArgFlags.isSplit()`: one of several parts of a value.
     pub split: bool,
+    /// `ArgFlags.isSRet()`: the pointer to the result a callee writes.
+    pub sret: bool,
     /// The argument is one of a call's variadic ones
     /// (`CallLoweringInfo::IsVarArg` past `NumFixedArgs`).
     pub variadic: bool,
@@ -67,11 +69,41 @@ pub struct In {
     pub arg_vt: EVT,
     /// `ArgFlags.isSplit()`.
     pub split: bool,
+    /// `ArgFlags.isSRet()`.
+    pub sret: bool,
+    /// `ArgFlags.isSExt()` / `isZExt()`: how a part narrower than its register
+    /// is extended.
+    pub ext: Ext,
 }
 
 /// `MachineFrameInfo::CreateFixedObject`: size, offset from the first
 /// argument, immutable; the frame index.
 pub type FixedObject<'a> = &'a mut dyn FnMut(u32, i64, bool) -> i32;
+
+/// `CreateStackObject`: size and alignment; the frame index.
+pub type StackObject<'a> = &'a mut dyn FnMut(u32, u32) -> i32;
+
+/// A value `va_start` writes into the `va_list`.
+#[derive(Clone, Copy, Debug)]
+pub enum VaWord {
+    /// The address of a frame object plus an offset.
+    Frame {
+        index: i32,
+        offset: i64,
+    },
+    Constant(i64),
+}
+
+/// What a variadic function's entry made for `va_start`
+/// (`SaveVarArgRegisters`): the chain after the register stores, and the words
+/// of the list as (byte offset in the list, width in bytes, value). `size` is
+/// the list's size, which `va_copy` copies.
+#[derive(Clone, Debug)]
+pub struct VariadicArea {
+    pub chain: SDValue,
+    pub words: Vec<(u32, u32, VaWord)>,
+    pub size: u32,
+}
 
 /// A live-in register: the virtual register the function receives `reg` in.
 pub type LiveIn<'a> = &'a mut dyn FnMut(RegId) -> u32;
@@ -108,6 +140,33 @@ pub trait TargetCalling: Debug + Sync {
     /// A target that puts the bytes in the argument area says no, and a call
     /// with one is refused.
     fn byval_by_reference(&self) -> bool {
+        false
+    }
+
+    /// Whether the hook places a call in calling convention `cc` (LLVM's
+    /// numbers: 0 `ccc`, 8 `fastcc`, 9 `coldcc`): a call in another is refused,
+    /// as the pin's `CCAssignFnForCall` rejects what it has no table for.
+    fn supports_convention(
+        &self,
+        _cc: u32,
+    ) -> bool {
+        true
+    }
+
+    /// `CanLowerReturn`: whether a result of these parts leaves in registers.
+    /// When not, the function returns it through a hidden pointer, the first
+    /// parameter (`sret` demotion).
+    fn can_lower_return(
+        &self,
+        _parts: &[EVT],
+    ) -> bool {
+        true
+    }
+
+    /// Whether a function with an `sret` parameter returns that pointer in the
+    /// result register as well (the pin's `SRetReturnReg`; M68k copies it to
+    /// `d0`), as an extra integer part of `lower_return`'s `outs`.
+    fn returns_sret_pointer(&self) -> bool {
         false
     }
 
@@ -185,6 +244,21 @@ pub trait TargetCalling: Debug + Sync {
         live_in: LiveIn,
     ) -> Vec<SDValue>;
 
+    /// `LowerFormalArguments` of a variadic function whose `va_list` holds
+    /// words over register save areas or the stack arguments: the stores that
+    /// save the unnamed argument registers and the words `va_start` writes.
+    fn variadic_area(
+        &self,
+        _dag: &mut SelectionDAG,
+        _chain: SDValue,
+        _ins: &[In],
+        _fixed: FixedObject,
+        _stack: StackObject,
+        _live_in: LiveIn,
+    ) -> Option<VariadicArea> {
+        None
+    }
+
     /// `LowerFormalArguments` of a variadic function: the pointer to the buffer
     /// its variadic arguments are in, an extra parameter after the `fixed`
     /// ones; none for a target that keeps them elsewhere.
@@ -208,6 +282,19 @@ pub trait TargetCalling: Debug + Sync {
         _size: SDValue,
     ) -> Option<SDValue> {
         None
+    }
+
+    /// `SelectionDAGTargetInfo::EmitTargetCodeForMemmove`; a target that has
+    /// no separate one routes it to [`Self::emit_memcpy`].
+    fn emit_memmove(
+        &self,
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        dst: SDValue,
+        src: SDValue,
+        size: SDValue,
+    ) -> Option<SDValue> {
+        self.emit_memcpy(dag, chain, dst, src, size)
     }
 
     /// `SelectionDAGTargetInfo::EmitTargetCodeForMemset`.

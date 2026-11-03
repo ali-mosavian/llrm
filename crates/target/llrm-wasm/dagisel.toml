@@ -18,13 +18,19 @@ ids_includes = [
   '#include "WebAssemblyGenSDNodeInfo.inc"',
 ]
 
-# `generic` of WebAssembly.td at the pin: the features of its +bulk-memory-opt, +reference-types, +sign-ext,
-# +nontrapping-fptoint set that name a pattern predicate. `Subtarget->hasX()` is true for the listed `X`.
+# The features that name a pattern predicate are decided per function, at selection time (`[dynamic]`): `generic` of
+# WebAssembly.td at the pin is +bulk-memory-opt, +reference-types, +sign-ext, +nontrapping-fptoint; `mvp` has none.
 [cpu.wasm32]
-features = ["BulkMemoryOpt", "ReferenceTypes", "SignExt", "NontrappingFPToInt"]
+features = []
 
 [cpu.wasm64]
-features = ["Addr64", "BulkMemoryOpt", "ReferenceTypes", "SignExt", "NontrappingFPToInt"]
+features = ["Addr64"]
+
+[dynamic]
+"Subtarget->hasBulkMemoryOpt()" = 'has_feature("BulkMemoryOpt")'
+"Subtarget->hasReferenceTypes()" = 'has_feature("ReferenceTypes")'
+"Subtarget->hasSignExt()" = 'has_feature("SignExt")'
+"Subtarget->hasNontrappingFPToInt()" = 'has_feature("NontrappingFPToInt")'
 
 [atom]
 # Position-dependent code: no PIC yet.

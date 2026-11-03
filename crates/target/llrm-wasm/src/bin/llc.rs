@@ -8,7 +8,9 @@ use llrm_wasm::dag::{ExceptionModel, Options};
 use llrm_wasm::driver;
 
 fn main() {
-    std::process::exit(run());
+    // The mid-end recurses along dependency chains: run on a thread with room.
+    let worker = std::thread::Builder::new().stack_size(1 << 30).spawn(run).expect("a thread");
+    std::process::exit(worker.join().unwrap_or(101));
 }
 
 fn run() -> i32 {
@@ -26,11 +28,22 @@ fn run() -> i32 {
             "-filetype=obj" => object = true,
             "-o" => output = arguments.next(),
             "-no-stackify" => options.stackify = false,
+            other if other.starts_with("-O") => match driver::Level::parse(&other[2..]) {
+                Ok(level) => options.level = level,
+                Err(why) => {
+                    eprintln!("llrm-wasm-llc: {why}");
+                    return 2;
+                }
+            },
             "-exception-model=wasm" => options.exception_model = ExceptionModel::Wasm,
             "-exception-model=none" => options.exception_model = ExceptionModel::None,
             "-mattr=+exception-handling" => handling = true,
             other if other.starts_with("-mtriple=") => triple = other["-mtriple=".len()..].to_owned(),
             other if input.is_none() && !other.starts_with('-') => input = Some(other.to_owned()),
+            other if llrm_debug::is_debug_flag(other) => {
+                eprintln!("{}", llrm_debug::no_writer("llrm-wasm-llc", other, "wasm"));
+                return 2;
+            }
             other => {
                 eprintln!("llrm-wasm-llc: unrecognized argument {other}");
                 return 2;

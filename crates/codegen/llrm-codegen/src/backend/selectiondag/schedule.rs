@@ -1483,8 +1483,10 @@ impl Topo {
             }
         }
         let mut id = size as i32;
+        let mut ordered = vec![false; size];
         while let Some(su) = work.pop() {
             id -= 1;
+            ordered[su] = true;
             self.allocate(su, id);
             for pred in &sus[su].preds {
                 self.node2index[pred.su] -= 1;
@@ -1493,6 +1495,15 @@ impl Topo {
                 }
             }
         }
+        // The pin asserts "Wrong topological sorting"; a unit left over
+        // depends on itself, and every later walk of its predecessors would
+        // never end.
+        assert!(
+            id == 0,
+            "the scheduling graph has a dependence cycle: units {:?} (nodes {:?}) are never ordered",
+            (0..size).filter(|su| !ordered[*su]).collect::<Vec<_>>(),
+            (0..size).filter(|su| !ordered[*su]).map(|su| sus[su].nodes.clone()).collect::<Vec<_>>(),
+        );
     }
 
     fn allocate(

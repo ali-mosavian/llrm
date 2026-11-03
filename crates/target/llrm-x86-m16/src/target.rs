@@ -185,6 +185,7 @@ impl Machine for Dos {
             registers: self.registers as u32,
             scaled_index_insns: scaled_index_insns as u32,
             huge_space: crate::spaces().huge,
+            address_registers: native_address_registers(&self.address_forms),
             inline_size_guard: true,
             float_code_size_percent: 200,
             unroll_size_few_trips: (3, 30),
@@ -278,8 +279,9 @@ impl Machine for Dos {
             // Tuning constant fitted to sc.c, weapons, mdl and lru, not
             // derived.
             size_milliclocks_per_byte: 10_000,
-            // The user's rate for m16 at speed: one clock is two bytes.
-            speed_milliclocks_per_byte: 500,
+            // The user's rate for m16 at speed (one clock is two bytes): the
+            // `timings.times` row the judge reads too.
+            speed_milliclocks_per_byte: crate::timings::speed_milliclocks_per_byte(),
             // DEVIATE: real mode weighs code bytes over clocks at every level,
             // so the full unroll takes the pin's size threshold
             // (`OptSizeThreshold`,
@@ -311,7 +313,6 @@ impl Machine for Dos {
             // it), and frame reloads in sum_three. Exit 2026-11-30: the
             // bytes those rows hold above main recovered by the register
             // allocator, then re-price the chain.
-            inline_size_guard_at_speed: true,
             // DEVIATE: a constant offset is a displacement of the access at
             // m16; behind a sunk phi it costs an add and a register
             // (qbsp `r_point_leaf`: two `[bx+si+2|4]` loads became an index
@@ -423,6 +424,14 @@ pub fn address_forms(
     ]
 }
 
+/// The registers the cheapest address form names: its base class and its
+/// index class (the frame's register is in neither); none where the form has
+/// no classes.
+fn native_address_registers(forms: &[AddressForm]) -> Option<u32> {
+    let native = forms.iter().filter(|form| !form.secondary).min_by_key(|form| form.use_cost)?;
+    Some((native.bases? + native.indices?) as u32)
+}
+
 /// `arch`'s (one of `timings::ARCHS`) price of each operation, as the
 /// instructions lowering picks for it.
 pub fn costs(arch: &str) -> OperationCosts {
@@ -434,6 +443,7 @@ pub fn costs(arch: &str) -> OperationCosts {
         pieces_clear_size: timings::CLEAR_RATIO_SIZE[at],
         jump_table: timings::JUMP_TABLE[at],
         cache_line: timings::CACHE_LINE[at],
+        line_fill_clocks: timings::LINE_FILL_CLOCKS[at],
         ..DESCRIPTION.operations(&|kind| timings::COST[kind][at], timings::PREFIX[at])
     }
 }
@@ -477,6 +487,17 @@ mod tests {
         assert_eq!(found.cc.as_deref(), Some("basic"));
         assert!(found.clobbered.iter().all(|name| !matches!(name.as_str(), "si" | "di")), "{:?}", found.clobbered);
         assert!(found.clobbered.iter().any(|name| name == "bx"), "{:?}", found.clobbered);
+    }
+
+    /// An address in real mode is a base (bx) and an index (si or di), the
+    /// frame's bp in neither: three registers, where six hold values. LSR's
+    /// pressure on the address class read the six.
+    #[test]
+    fn the_cheapest_address_form_names_three_registers_of_six() {
+        let costs = super::costs("486");
+        let dos = Dos { address_forms: super::address_forms(&costs, 1), costs, ..Dos::default() };
+        let tti = dos.tti().expect("m16 states its cost model");
+        assert_eq!((tti.address_registers(), tti.number_of_gpr_registers()), (3, 6));
     }
 
     /// LSR reads the addressing hooks of the model: real mode's `[bx+si]` is

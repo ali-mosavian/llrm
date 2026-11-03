@@ -118,11 +118,15 @@ struct Emitter {
     insts: Vec<Inst>,
     /// Parallel to `insts`, filled as each operation is done.
     locs: Vec<Option<(u32, u32)>>,
+    /// The saves' `.cfi_offset`s, stated once the prologue has set the frame
+    /// register up (`AArch64PrologueEmitter::emitCalleeSavedGPRLocations`
+    /// follows `emitFramePointerSetup`).
+    saved: Vec<Cfi>,
 }
 
 impl Emitter {
     fn new() -> Self {
-        Self { insts: Vec::new(), locs: Vec::new() }
+        Self { insts: Vec::new(), locs: Vec::new(), saved: Vec::new() }
     }
 
     /// The instructions made since the last call are from `loc`.
@@ -282,6 +286,9 @@ pub fn lower(
                         Some(Callee::Register(register)) => Inst::BranchReg { link: false, rn: *register },
                     });
                 }
+                Op::JumpTable { dst, scratch, table, index, id, .. } => {
+                    emitter.insts.extend(crate::jumptable::dest32(&function.name, *id, *dst, *scratch, *table, *index));
+                }
                 Op::FrameAddress { dst, slot, offset } => {
                     let (base, total) = frame.place(*slot, *offset);
                     emitter.add_to(*dst, base, total < 0, total.unsigned_abs(), Gpr(16));
@@ -328,6 +335,15 @@ fn prologue(
     if let Some(at) = frame.frame_record {
         emitter.add_to(Gpr::FP, Gpr::R31, false, at, Gpr(16));
         emitter.cfi(Cfi::DefCfa { register: unwind::FP, offset: (frame.size - at) as i64 });
+    }
+    // Highest address first: the order of the pin's frame indices.
+    let mut saved = std::mem::take(&mut emitter.saved);
+    saved.sort_by_key(|cfi| match cfi {
+        Cfi::Offset { offset, .. } => std::cmp::Reverse(*offset),
+        _ => std::cmp::Reverse(0),
+    });
+    for cfi in saved {
+        emitter.cfi(cfi);
     }
 }
 
@@ -458,12 +474,11 @@ fn declare(
     }
     for (index, memory) in std::iter::once(first).chain(second).enumerate() {
         let register = number(memory);
-        let cfi = if store {
-            Cfi::Offset { register, offset: offset as i64 + 8 * index as i64 - size }
+        if store {
+            emitter.saved.push(Cfi::Offset { register, offset: offset as i64 + 8 * index as i64 - size });
         } else {
-            Cfi::Restore { register }
-        };
-        emitter.cfi(cfi);
+            emitter.cfi(Cfi::Restore { register });
+        }
     }
     if !store && moves {
         emitter.cfi(Cfi::DefCfaOffset { offset: 0 });

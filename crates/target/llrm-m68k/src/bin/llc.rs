@@ -13,6 +13,7 @@ fn main() {
 
 fn run() -> i32 {
     let mut assembly = false;
+    let mut debug = false;
     let mut level = Level::O2;
     let mut cpu = "68000".to_owned();
     let mut output = None;
@@ -22,6 +23,7 @@ fn run() -> i32 {
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "-S" => assembly = true,
+            "-g" => debug = true,
             "-o" => output = arguments.next(),
             "--dump" => dump = arguments.next().map(std::path::PathBuf::from),
             other if other.starts_with("--dump=") => dump = Some(other["--dump=".len()..].into()),
@@ -34,6 +36,10 @@ fn run() -> i32 {
                 }
             },
             other if input.is_none() && !other.starts_with('-') => input = Some(other.to_owned()),
+            other if llrm_debug::is_debug_flag(other) => {
+                eprintln!("{}", llrm_debug::no_writer("llrm-m68k-llc", other, "m68k"));
+                return 2;
+            }
             other => {
                 eprintln!("llrm-m68k-llc: unrecognized argument {other}");
                 return 2;
@@ -42,7 +48,7 @@ fn run() -> i32 {
     }
     let Some(input) = input.filter(|_| assembly) else {
         eprintln!(
-            "usage: llrm-m68k-llc -S [-mcpu=68000|68020] [-O0|-O1|-O2|-O3|-Os|-Oz] [--dump DIR] [-o OUT] FILE.ll"
+            "usage: llrm-m68k-llc -S [-g] [-mcpu=68000|68020] [-O0|-O1|-O2|-O3|-Os|-Oz] [--dump DIR] [-o OUT] FILE.ll"
         );
         return 2;
     };
@@ -55,7 +61,7 @@ fn run() -> i32 {
     };
     let env = llrm_support::env_var("LLRM_MIR_STAGES").map(std::path::PathBuf::from);
     let result = driver::cpu_of(&cpu)
-        .and_then(|cpu| driver::assembly_dumping(&text, cpu, level, dump.as_deref().or(env.as_deref())));
+        .and_then(|cpu| driver::assembly_with(&text, cpu, level, debug, dump.as_deref().or(env.as_deref())));
     match result {
         Ok(text) => {
             let path = output

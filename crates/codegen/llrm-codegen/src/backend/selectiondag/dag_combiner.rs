@@ -79,6 +79,13 @@ pub trait CombineHooks {
         false
     }
 
+    /// `visitAND`'s `(and (extload x), c)` is `(zextload x)` for every user of
+    /// the load when `c` keeps none of the bits above the memory type.
+    /// DEVIATE: off by default, as above. Exit: x86 judged.
+    fn fold_and_of_extload(&self) -> bool {
+        false
+    }
+
     /// `visitFREEZE`'s `freeze(op(x, ...))` is `op(freeze(x), ...)`, so a
     /// frozen compare tree is a compare tree of frozen leaves. DEVIATE: off by
     /// default, as above; and only for an integer `setcc` or bitwise/add
@@ -96,6 +103,18 @@ pub trait CombineHooks {
         false
     }
 
+    /// `mergeStoresAfterLegalization`: stores of `mem` are also merged once
+    /// types are legal, to catch the stores legalization made (a promoted
+    /// `i16` store is a truncating `i32` one). The pin's default is true and
+    /// x86's is `!mem.is_vector()`. DEVIATE: off by default, as above. Exit:
+    /// x86 judged.
+    fn merge_stores_after_legalization(
+        &self,
+        _mem: EVT,
+    ) -> bool {
+        false
+    }
+
     /// `ReduceLoadWidth` looks through a `freeze` between an `and` mask and its
     /// load, and puts the freeze back on the narrowed load. Default false
     /// until x86 is judged.
@@ -106,6 +125,19 @@ pub trait CombineHooks {
     /// `visitMUL`'s `(mul (add x, c1), c2)` is `(add (mul x, c2), c1*c2)`.
     /// Default false until x86 is judged.
     fn fold_mul_of_add_with_constant(&self) -> bool {
+        false
+    }
+
+    /// `visitMUL`'s `(mul x, c)` for a `c` that is `2^n +- 1` (times a power
+    /// of two) as shifts and an add or subtract, where the target says the
+    /// pieces are cheaper than the multiply (`decomposeMulByConstant`,
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/TargetLowering.h#L2633>).
+    /// The pin's default is false.
+    fn decompose_mul_by_constant(
+        &self,
+        _vt: EVT,
+        _c: u128,
+    ) -> bool {
         false
     }
 
@@ -171,6 +203,18 @@ pub trait CombineHooks {
         _store: SDValue,
     ) -> Option<SDValue> {
         None
+    }
+
+    /// DEVIATE LS1 (owner m16, exit 2026-11-17): a plain `i32` load every use
+    /// of which is a word half (`trunc i16`, or `trunc i16 (srl 16)`) is
+    /// two `i16` loads. The pin's `ReduceLoadWidth`
+    /// ([pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L17095))
+    /// narrows a load only when nothing else reads it, so the pin keeps
+    /// one `mov eax,[m]` and a `shld`. m16 only: its halves are the registers
+    /// a `long` is returned and passed in (DX:AX), and a 16-bit register file
+    /// has no dword half to extract for free. Default off.
+    fn split_dword_loads(&self) -> bool {
+        false
     }
 
     /// DEVIATE PAIR1: whether the after-legalize combine ends with a sweep that
@@ -250,6 +294,21 @@ pub trait CombineHooks {
         _base_offs: i64,
         _scale: i64,
     ) -> bool {
+        false
+    }
+
+    /// The type `BuildUDIV` widens `vt` to for an uncooperative divisor
+    /// ([L7031]: `i32` to `i64`), or `None` where the target does not.
+    fn widened_unsigned_divide_type(
+        &self,
+        _vt: EVT,
+    ) -> Option<EVT> {
+        None
+    }
+
+    /// `isZExtFree(i32, i64)`, which keeps the even-divisor rewrite of
+    /// `BuildUDIV` out of the way of the widened multiply (x86-64 and AArch64).
+    fn zero_extend_i32_to_i64_free(&self) -> bool {
         false
     }
 
@@ -566,7 +625,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::And => self
                 .visit_and(node)
                 .or_else(|| self.reduce_load_width_of(node))
-                .or_else(|| self.simplify_demanded(node)),
+                .or_else(|| self.simplify_demanded(node))
+                .or_else(|| self.and_of_extload(node)),
             ISD::Or => self.visit_or(node).or_else(|| self.simplify_demanded(node)),
             ISD::Add => self.visit_add(node),
             ISD::Sub => self.visit_sub(node),
@@ -598,9 +658,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::SDiv => self.visit_sdiv(node),
             ISD::UDiv => self.visit_udiv(node),
             ISD::SRem | ISD::URem => self.visit_rem(node),
-            ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => {
-                self.fold_extend_of_cast(node).or_else(|| self.visit_extend(node))
-            }
+            ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => self
+                .fold_extend_of_cast(node)
+                .or_else(|| self.visit_extend(node))
+                .or_else(|| self.sext_of_non_negative(node)),
             ISD::BitCast => self.visit_bitcast(node),
             ISD::Truncate => self.visit_truncate(node).or_else(|| self.simplify_demanded(node)),
             ISD::SignExtendInReg => self.visit_sext_in_reg(node),
@@ -1161,7 +1222,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(self.dag.get_node(ISD::Rotl, vt, &[not_one, amount]));
         }
         if self.dag.constant(n1) != Some(1) || self.dag.opcode(n0) != ISD::SetCC {
-            return self.reassociate_ops(ISD::Xor, n0, n1);
+            return self.reassociate_ops(ISD::Xor, n0, n1, self.dag.node(node).flags);
         }
         let (lhs, rhs) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
         let NodeData::CondCode(cc) = self.dag.node(self.dag.operand(n0, 2)).data else { return None };
@@ -1343,6 +1404,16 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             (ISD::SignExtend, ISD::SignExtend | ISD::AnyExtend) => Some(self.dag.get_node(ISD::SignExtend, vt, &[x])),
             (ISD::AnyExtend, ISD::Truncate) => Some(self.any_ext_or_trunc(x, vt)),
             (ISD::ZeroExtend, ISD::Truncate) => {
+                // `zext nneg (trunc x)` of an `x` with sign bits to spare is
+                // `x` widened by `sext`, or truncated
+                // ([L16459](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L16459)).
+                let (op_bits, mid_bits) =
+                    (self.dag.value_type(x).size_in_bits(), self.dag.value_type(n0).size_in_bits());
+                if self.dag.node(node).flags.has(super::dag::SDNodeFlags::NON_NEG)
+                    && super::known_bits::num_sign_bits(self.dag, x) > op_bits - mid_bits
+                {
+                    return Some(self.dag.get_sext_or_trunc(x, vt));
+                }
                 let wide = self.any_ext_or_trunc(x, vt);
                 let narrow = self.dag.value_type(n0);
                 let mask = self.dag.get_constant(super::fold::mask(narrow.size_in_bits()), vt);
@@ -1357,6 +1428,30 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
             _ => None,
         }
+    }
+
+    /// `visitSIGN_EXTEND` ([L16279][pin]): `(sext x)` is `(zext nneg x)` if the
+    /// sign bit is known zero and the target does not extend signed more
+    /// cheaply. At m64 that is `mov r32, r32`, not `movslq`.
+    ///
+    /// [pin]:
+    ///     https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L16279
+    fn sext_of_non_negative(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        if self.dag.opcode(node) != ISD::SignExtend {
+            return None;
+        }
+        let (n0, vt) = (self.dag.operand(node, 0), self.dag.value_type(node));
+        let from = self.dag.value_type(n0);
+        if self.tli?.is_sext_cheaper_than_zext(from, vt)
+            || (self.legal_operations() && !self.fp_op_legal(ISD::ZeroExtend, vt))
+            || !super::known_bits::masked_value_is_zero(self.dag, n0, 1u128 << (from.size_in_bits() - 1))
+        {
+            return None;
+        }
+        Some(self.dag.get_node_flags(ISD::ZeroExtend, vt, &[n0], super::dag::SDNodeFlags::NON_NEG))
     }
 
     /// `visitSIGN_EXTEND`, `visitZERO_EXTEND` and `visitANY_EXTEND` for a
@@ -1532,7 +1627,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if let Some(folded) = self.fold_logic_of_setccs(true, n0, n1) {
             return Some(folded);
         }
-        if let Some(reassociated) = self.reassociate_ops(ISD::And, n0, n1) {
+        if let Some(reassociated) = self.reassociate_ops(ISD::And, n0, n1, self.dag.node(node).flags) {
             return Some(reassociated);
         }
         if let (Some(c1), true) = (self.dag.constant(n1), !self.dag.is_opaque(n1)) {
@@ -1676,7 +1771,13 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 && !self.reassociation_can_break_addressing_mode_pattern(node, n0, n1)
             {
                 let sum = self.dag.get_node(ISD::Add, vt, &[n1, self.dag.operand(n0, 1)]);
-                return Some(self.dag.get_node(ISD::Add, vt, &[self.dag.operand(n0, 0), sum]));
+                // Both adds `nuw` keep the regrouped one so (`reassociateOps`'s
+                // `NewFlags`); DEVIATE: only where `global_addresses_constant`
+                // is set, until x86 is judged.
+                let nuw = |dag: &SelectionDAG, v: SDValue| dag.node(v).flags.has(SDNodeFlags::NO_UNSIGNED_WRAP);
+                let keep = self.dag.config().global_addresses_constant && nuw(self.dag, n0) && nuw(self.dag, node);
+                let flags = if keep { SDNodeFlags::NO_UNSIGNED_WRAP } else { SDNodeFlags::default() };
+                return Some(self.dag.get_node_flags(ISD::Add, vt, &[self.dag.operand(n0, 0), sum], flags));
             }
         }
         let is_neg =
@@ -1707,7 +1808,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
         }
         if !self.reassociation_can_break_addressing_mode_pattern(node, n0, n1) {
-            return self.reassociate_ops(ISD::Add, n0, n1);
+            return self.reassociate_ops(ISD::Add, n0, n1, self.dag.node(node).flags);
         }
         None
     }
@@ -2418,6 +2519,18 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_node(ISD::Sub, vt, &[zero, shifted]));
             }
         }
+        // `(mul x, 2^n +- 1)` as `(add/sub (shl x, n), x)`, and with a trailing
+        // power of two as a shift of both ([pin][pin]).
+        //
+        // [pin]:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L5024
+        if let (Some(c), false) = (c1, opaque) {
+            if self.hooks.decompose_mul_by_constant(vt, c) {
+                if let Some(decomposed) = self.decompose_mul(n0, vt, c) {
+                    return Some(decomposed);
+                }
+            }
+        }
         // `(mul (shl x, c1), c2)` is `(mul x, c2 << c1)`.
         if self.dag.opcode(n0) == ISD::Shl {
             let (x, c1_shift) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
@@ -2439,7 +2552,45 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 }
             }
         }
-        self.reassociate_ops(ISD::Mul, n0, n1)
+        self.reassociate_ops(ISD::Mul, n0, n1, self.dag.node(node).flags)
+    }
+
+    /// The shifts and the add or subtract of `x * c` for `c = +-(2^n +- 1) <<
+    /// k`, or `None` for any other constant.
+    fn decompose_mul(
+        &mut self,
+        x: SDValue,
+        vt: EVT,
+        c: u128,
+    ) -> Option<SDValue> {
+        let width = vt.size_in_bits();
+        let ones = super::fold::mask(width);
+        let negative = c >> (width - 1) & 1 == 1;
+        let mut magnitude = if negative { c.wrapping_neg() & ones } else { c };
+        // the constant `2` is `2^0 + 1`
+        let zeros = if magnitude == 2 { 0 } else { magnitude.trailing_zeros() };
+        magnitude >>= zeros;
+        let (add, bits) = if (magnitude - 1).is_power_of_two() {
+            (true, magnitude - 1)
+        } else if (magnitude + 1).is_power_of_two() {
+            (false, magnitude + 1)
+        } else {
+            return None;
+        };
+        let amount = bits.trailing_zeros() + zeros;
+        if amount >= width {
+            return None;
+        }
+        let high_amount = self.shift_amount(vt, amount);
+        let high = self.dag.get_node(ISD::Shl, vt, &[x, high_amount]);
+        let low = if zeros == 0 {
+            x
+        } else {
+            let low_amount = self.shift_amount(vt, zeros);
+            self.dag.get_node(ISD::Shl, vt, &[x, low_amount])
+        };
+        let result = self.dag.get_node(if add { ISD::Add } else { ISD::Sub }, vt, &[high, low]);
+        Some(if negative { self.dag.get_negative(result, vt) } else { result })
     }
 
     /// `isMulAddWithConstProfitable`: a one-use add the target accepts, or
@@ -2540,6 +2691,48 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(simplified);
         }
         self.sext_in_reg_of_load(node, n0, vt, ext)
+    }
+
+    /// `visitAND`: `(zext_inreg (extload x))` is `(zextload x)`, for every
+    /// user of the load, and `(zext_inreg (sextload x))` when the `and` is its
+    /// one user. Before legalization, or where the zero-extending load is
+    /// legal.
+    fn and_of_extload(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (load, mask) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        if !self.hooks.fold_and_of_extload() || self.dag.opcode(load) != ISD::Load || load.res != 0 {
+            return None;
+        }
+        let NodeData::Mem(info) = self.dag.node(load).data else { return None };
+        let single_use = self.dag.has_one_use(load.node);
+        if self.dag.node(load).values.len() > 2
+            || !matches!(info.ext, Some(LoadExt::ExtLoad) | Some(LoadExt::SExtLoad))
+            || info.ext == Some(LoadExt::SExtLoad) && !single_use
+        {
+            return None;
+        }
+        let (wide, mem) = (self.dag.value_type(node), info.mem_vt);
+        let high = super::fold::mask(wide.size_in_bits()) & !super::fold::mask(mem.size_in_bits());
+        if super::known_bits::known_bits(self.dag, mask).zero & high != high {
+            return None;
+        }
+        let legal = match (wide, mem) {
+            (EVT::Simple(wide), EVT::Simple(mem)) => {
+                self.tli.is_some_and(|tli| tli.load_ext_action(LoadExt::ZExtLoad, wide, mem) == Action::Legal)
+            }
+            _ => false,
+        };
+        if !(self.legal_operations() && legal || !self.legal_operations() && !info.volatile) {
+            return None;
+        }
+        let (chain, ptr) = (self.dag.operand(load, 0), self.dag.operand(load, 1));
+        let extended = self.dag.get_ext_load(LoadExt::ZExtLoad, wide, chain, ptr, MemInfo { ext: None, ..info });
+        self.add_to_worklist(node.node);
+        self.replace_value(load, extended);
+        self.replace_value(SDValue { node: load.node, res: 1 }, SDValue { node: extended.node, res: 1 });
+        Some(node)
     }
 
     /// `visitSIGN_EXTEND_INREG`: `(sext_inreg (extload x))` and

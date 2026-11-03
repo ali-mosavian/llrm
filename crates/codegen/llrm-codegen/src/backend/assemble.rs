@@ -454,7 +454,11 @@ pub fn assembled_by(
         }
         data.extend([masm::Datum::Label(masm::Label { name }), masm::Datum::Bytes(bytes.to_vec())]);
     }
-    data.extend(masm::jump_tables(&procedures, &mut names, module));
+    let (read_only, tables) = masm::split_read_only(masm::jump_tables(&procedures, &mut names, module));
+    data.extend(tables);
+    if !read_only.is_empty() {
+        sectioned.entry("CONST".to_owned()).or_default().extend(read_only);
+    }
     timed("stack checks", || {
         crate::backend::stackusage::elide_checks(&mut procedures, &masm::entered_directly(module, &names), &*arch)
     });
@@ -530,12 +534,15 @@ pub fn assembled_by(
         }
     }
     let huge_names: Vec<String> = huge_segments.iter().map(|(name, _)| name.clone()).collect();
+    let (visibility, aliases) = globals::exports(module, &names, &|name| abi.linked(name));
     Ok(masm::Module {
         registers: Regs(arch.registers()),
         code: code.to_owned(),
         names,
         externs,
         publics: procedures.iter().filter(|one| one.public).map(|one| one.name.clone()).chain(data_publics).collect(),
+        visibility,
+        aliases,
         data: std::iter::once(("_DATA".to_owned(), data))
             .chain(has_far.then(|| (far_segment.clone(), far_data)))
             .chain(huge_segments)

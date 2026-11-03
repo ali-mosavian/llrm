@@ -65,3 +65,12 @@ fn a_call_ends_the_ranges_of_the_registers_it_clobbers() {
     let f = function(vec![vec![def(reg::E), call, read(reg::E)]]);
     assert!(!live(&f, 0, 1, reg::E), "e is read after the call, but the call clobbers it, so it is not live before");
 }
+
+/// A sign test of `hl` reads `h` only. Counting `l` live made crc16 copy a byte
+/// nothing read: `ld l, e` in its inner loop.
+#[test]
+fn a_sign_test_of_a_pair_reads_its_high_byte() {
+    let test = Inst::new(Kind::Op("BIT7_16"), vec![Operand::Def(Reg::Phys(reg::A)), Operand::Use(Reg::Phys(reg::HL))]);
+    let f = function(vec![vec![test]]);
+    assert!(live(&f, 0, 0, reg::H) && !live(&f, 0, 0, reg::L));
+}

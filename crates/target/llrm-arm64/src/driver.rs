@@ -91,6 +91,7 @@ pub fn program(
     let (_, text) = without_triple(text);
     let text = if platform == Platform::Darwin { without_va_arg(&text) } else { text };
     let mut module = llrm_mir::parse::module(&text).map_err(|error| error.to_string())?;
+    module.refuse_aliases("arm64")?;
     llrm_mir::parse::upgrade_lifetimes(&mut module);
     // Atomics are calls the mid-end moves nothing across; the selector makes
     // them instructions.
@@ -210,10 +211,10 @@ fn c_library() -> Vec<llrm_mir::libfunc::Routine> {
 /// Which instruction selector makes the machine function (`--isel=`).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum IselMode {
-    #[default]
     Hand,
     Dag,
     /// The DAG path, the hand selector where it refuses (counted on stderr).
+    #[default]
     Shadow,
 }
 
@@ -229,7 +230,7 @@ impl IselMode {
     }
 }
 
-static ISEL_MODE: std::sync::Mutex<IselMode> = std::sync::Mutex::new(IselMode::Hand);
+static ISEL_MODE: std::sync::Mutex<IselMode> = std::sync::Mutex::new(IselMode::Shadow);
 
 /// Chooses the selector for the compiles that follow (the process's, as the
 /// pass flags are).
@@ -247,9 +248,10 @@ fn dag_select(
     name: &str,
     layout: &llrm_mir::datalayout::DataLayout,
     platform: Platform,
+    lines: bool,
 ) -> Result<crate::mfunc::MFunc, String> {
     let blocks = crate::dag::function::select_function_in(module, name, layout, platform)?;
-    crate::dag::emit::emit(name, &blocks)
+    crate::dag::emit::emit(name, &blocks, lines)
 }
 
 /// Every defined function of `program`'s one module, selected, allocated and
@@ -265,6 +267,7 @@ pub fn functions_with(
 ) -> Result<Vec<crate::emit::Function>, String> {
     let module = &program.modules[0];
     let platform = platform_of_machine(program);
+    crate::lir_view::set_darwin(platform == Platform::Darwin);
     let mut out = Vec::new();
     for (id, global, function) in module.functions() {
         if function.is_declaration() {
@@ -273,10 +276,10 @@ pub fn functions_with(
         let name = global.name.owned().ok_or("an unnamed function")?;
         let mut machine = match isel_mode() {
             IselMode::Hand => crate::isel::selected(module, id, &program.layout, platform, lines),
-            IselMode::Dag => dag_select(module, &name, &program.layout, platform),
+            IselMode::Dag => dag_select(module, &name, &program.layout, platform, lines),
             // A refusal of the DAG path falls back to the hand selector,
             // counted.
-            IselMode::Shadow => dag_select(module, &name, &program.layout, platform).or_else(|why| {
+            IselMode::Shadow => dag_select(module, &name, &program.layout, platform, lines).or_else(|why| {
                 eprintln!("isel-shadow: @{name}: {why}");
                 crate::isel::selected(module, id, &program.layout, platform, lines)
             }),
@@ -291,6 +294,19 @@ pub fn functions_with(
         }
         crate::prepass::run(&mut machine);
         dump("Prepass", &machine);
+        if !llrm_support::env_flag!("LLRM_ARM64_NO_COMBINE") {
+            let size = function
+                .attrs
+                .iter()
+                .any(
+                    |attr| matches!(
+                        attr,
+                        llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
+                    ),
+                );
+            crate::combine::run(&mut machine, size);
+            dump("Combine", &machine);
+        }
         crate::flagcse::run(&mut machine);
         dump("FlagCse", &machine);
         crate::storecluster::run(&mut machine);
@@ -299,8 +315,9 @@ pub fn functions_with(
         dump("SibCall", &machine);
         crate::prepass::order_copies(&mut machine);
         dump("OrderCopies", &machine);
-        // A function greedy refuses goes to the linear scan, reported.
-        let greedy = llrm_support::env_flag!("LLRM_ARM64_GREEDY").then(|| crate::lir_view::allocate(&mut machine));
+        // The shared greedy allocator, unless `LLRM_ARM64_LINEAR` asks for the
+        // linear scan; a function greedy refuses goes to the scan, reported.
+        let greedy = (!llrm_support::env_flag!("LLRM_ARM64_LINEAR")).then(|| crate::lir_view::allocate(&mut machine));
         let allocation = match greedy {
             Some(Ok(allocation)) => allocation,
             Some(Err(why)) => {
@@ -312,13 +329,18 @@ pub fn functions_with(
         dump("RegAlloc", &machine);
         let variables = crate::frame::variable_offsets(&machine, &allocation);
         let blocks = crate::frame::lower(&machine, &allocation).map_err(|why| format!("@{name}: {why}"))?;
-        let blocks = crate::layout::fold(blocks);
+        let mut tables = crate::jumptable::tables_of(&machine);
+        let blocks = crate::layout::fold(blocks, &mut tables);
         let blocks = crate::pairs::fold(blocks);
+        let mut blocks = crate::ldst_update::fold(blocks, &crate::mfunc::returned_registers(&machine));
+        crate::jumptable::compress(&mut blocks, &mut tables).map_err(|why| format!("@{name}: {why}"))?;
         out.push(crate::emit::Function {
+            tables,
             symbol: crate::data::symbol_name(platform, &name),
             binding: crate::data::binding_of(global.linkage),
             blocks,
             variables,
+            pool: machine.pool.clone(),
         });
     }
     Ok(out)
@@ -404,6 +426,18 @@ pub fn assembly(
             for inst in block.insts.iter().filter(|inst| !matches!(inst, crate::mc::inst::Inst::Mark(_))) {
                 out.push_str(&format!("\t{inst}\n"));
             }
+        }
+        for entry in &function.pool {
+            out.push_str(&format!("{}:\n", entry.label));
+            for chunk in entry.bytes.chunks(8) {
+                let mut word = [0u8; 8];
+                word[..chunk.len()].copy_from_slice(chunk);
+                let directive = if chunk.len() == 4 { ".long" } else { ".quad" };
+                out.push_str(&format!("\t{directive} {:#x}\n", u64::from_le_bytes(word)));
+            }
+        }
+        for table in &function.tables {
+            out.push_str(&table.assembly(platform));
         }
     }
     Ok(out)
