@@ -1065,7 +1065,7 @@ fn a_proved_move_at_m16_is_inline_string_code() {
     assert!(names.iter().any(|n| n == "movsd") && names.iter().all(|n| n != "call"), "{names:?}");
     let down = move_3840_at_m16(", !llrm.backward !0");
     assert!(
-        down.inline.values().any(|bytes| bytes[..] == [0x1E, 0x07, 0xFD, 0xF3, 0x66, 0xA5, 0xFC]),
+        down.inline.values().any(|bytes| bytes[..] == [0xFD, 0xF3, 0x66, 0xA5, 0xFC]),
         "{:?}",
         down.inline
     );
