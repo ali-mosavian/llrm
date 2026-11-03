@@ -126,6 +126,26 @@ fn a_float_decimal_is_read_as_a_float_and_f0x_takes_the_types_width() {
     );
 }
 
+/// The pin writes `0.1L` as `x86_fp80 1.000000e-01`; the reader rounded that to
+/// a double, so `0.1L` was the double 0.1 widened (`0x3FFBCCCCCCCCCCCCD000`,
+/// the low 11 bits zero) in every x87 target's code. `f0x` is the form it
+/// writes for the values that decimal does not read back.
+#[test]
+fn an_x86_fp80_decimal_is_rounded_at_64_bits_not_through_a_double() {
+    for (decimal, hex) in [
+        ("1.000000e-01", "3FFBCCCCCCCCCCCCCCCD"),
+        ("1.100000e+00", "3FFF8CCCCCCCCCCCCCCD"),
+        ("2.500000e+00", "4000A0000000000000000"),
+    ] {
+        let hex = &hex[..20];
+        assert_eq!(
+            round(&format!("@a = global x86_fp80 {decimal}\n")),
+            round(&format!("@a = global x86_fp80 f0x{hex}\n")),
+            "{decimal}"
+        );
+    }
+}
+
 /// The pin writes a `long double` as `f0x` and the 20 digits of x87's format
 /// (sign and exponent, then the 64-bit significand); MIR refused it ("expected
 /// a constant"), so `double_to_uint64.c` never compiled through `llrm-cc`.

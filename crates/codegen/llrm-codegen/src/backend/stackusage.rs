@@ -212,7 +212,7 @@ pub fn stack_to_add(
     limit: Option<i64>,
     target: &dyn llrm_target::Target,
 ) -> Result<i64, String> {
-    let need = Usage::of(std::slice::from_ref(module), target).deepest() + reserve;
+    let need = Usage::of(std::slice::from_ref(module), target).deepest_with_recursion(base) + reserve;
     if let Some(limit) = limit.filter(|limit| need > *limit) {
         return Err(format!(
             "the deepest chain of calls needs {need} bytes of stack, more than the {limit} a stack segment can hold"
@@ -316,6 +316,46 @@ impl Usage {
             })
             .max()
             .unwrap_or(0)
+    }
+
+    /// [`Usage::deepest`], with the frames of an entry that recurses counted
+    /// once each along its longest chain, and `room` more for the recursion
+    /// itself: a recursive program has run in the base stack, but a big frame
+    /// above the recursion takes from it.
+    pub fn deepest_with_recursion(
+        &self,
+        room: i64,
+    ) -> i64 {
+        let mut memo: BTreeMap<usize, i64> = BTreeMap::new();
+        let mut deepest = self.deepest();
+        for name in self.roots() {
+            if matches!(self.bound(name), Bound::Recursive) {
+                let Some(index) = self.names.iter().position(|one| one == name) else { continue };
+                deepest = deepest.max(self.chain(index, &mut BTreeSet::new(), &mut memo) + room);
+            }
+        }
+        deepest
+    }
+
+    /// The longest chain of frames from `index`, each procedure once.
+    fn chain(
+        &self,
+        index: usize,
+        path: &mut BTreeSet<usize>,
+        memo: &mut BTreeMap<usize, i64>,
+    ) -> i64 {
+        if let Some(&known) = memo.get(&index) {
+            return known;
+        }
+        if !path.insert(index) {
+            return 0;
+        }
+        let deeper =
+            self.graph.callees_of(index).into_iter().map(|next| self.chain(next, path, memo)).max().unwrap_or(0);
+        path.remove(&index);
+        let total = self.frames[index] + deeper;
+        memo.insert(index, total);
+        total
     }
 
     /// Each procedure's frame and bound, one to a line.

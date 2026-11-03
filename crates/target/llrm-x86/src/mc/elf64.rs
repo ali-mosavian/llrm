@@ -86,7 +86,14 @@ mod tests {
         section: usize,
         offset: usize,
     ) -> Symbol {
-        Symbol { name: name.into(), binding, definition: Definition::Defined { section, offset }, size: 0, group: None }
+        Symbol {
+            name: name.into(),
+            binding,
+            definition: Definition::Defined { section, offset },
+            size: 0,
+            group: None,
+            visibility: Default::default(),
+        }
     }
 
     fn word(
@@ -244,6 +251,7 @@ mod tests {
                     definition: Definition::Undefined,
                     size: 0,
                     group: None,
+                    visibility: Default::default(),
                 },
             ],
             omf_groups: Vec::new(),

@@ -19,3 +19,7 @@ llrm-transforms = { workspace = true }
 [build-dependencies]
 llrm-target = { workspace = true }
 llrm-lir = { workspace = true }
+
+[[bin]]
+name = "llrm-z80-llc"
+path = "src/bin/llc.rs"

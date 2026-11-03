@@ -87,11 +87,19 @@ fn defined(
         definition: Definition::Defined { section, offset },
         size: 0,
         group: None,
+        visibility: Default::default(),
     }
 }
 
 fn external(name: &str) -> Symbol {
-    Symbol { name: name.into(), binding: Binding::Public, definition: Definition::Undefined, size: 0, group: None }
+    Symbol {
+        name: name.into(),
+        binding: Binding::Public,
+        definition: Definition::Undefined,
+        size: 0,
+        group: None,
+        visibility: Default::default(),
+    }
 }
 
 fn reloc(
@@ -392,6 +400,7 @@ fn ld64_links_it_with_a_clang_object() {
                 definition: Definition::Defined { section: 1, offset: 0 },
                 size: 0,
                 group: None,
+                visibility: Default::default(),
             },
         ],
         omf_groups: Vec::new(),
@@ -564,6 +573,33 @@ fn a_weak_symbol_is_a_weak_definition() {
     }
     found.sort();
     assert_eq!(found, [("_hook".to_owned(), true, true), ("_strong".to_owned(), true, false)]);
+}
+
+/// A hidden symbol is `N_PEXT`: written as plain `N_EXT`, `ld` exported what
+/// the source kept private to the image.
+#[test]
+fn a_hidden_symbol_is_private_external() {
+    let mut object = program();
+    object.sections = vec![section("text", Role::Text, vec![0xC0, 0x03, 0x5F, 0xD6], vec![])];
+    object.symbols = vec![
+        defined("_shown", 0, 0),
+        Symbol { visibility: llrm_object::Visibility::Hidden, ..defined("_hidden", 0, 0) },
+    ];
+    let written = write_arm64(&object).unwrap();
+    let word = |at: usize| u32::from_le_bytes(written[at..at + 4].try_into().unwrap()) as usize;
+    let symtab = commands_of(&written).into_iter().find(|(cmd, _)| *cmd == LC_SYMTAB).unwrap().1;
+    let field = |at: usize| u32::from_le_bytes(symtab[at..at + 4].try_into().unwrap()) as usize;
+    let (symbols_at, count, strings_at) = (field(8), field(12), field(16));
+    let mut found = Vec::new();
+    for index in 0..count {
+        let entry = symbols_at + index * 16;
+        let name_at = strings_at + word(entry);
+        let name =
+            written[name_at..].iter().take_while(|byte| **byte != 0).map(|byte| *byte as char).collect::<String>();
+        found.push((name, written[entry + 4] & llrm_macho::N_PEXT != 0));
+    }
+    found.sort();
+    assert_eq!(found, [("_hidden".to_owned(), true), ("_shown".to_owned(), false)]);
 }
 
 /// A backend that marks the fields it is asked to fill.
