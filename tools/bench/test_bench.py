@@ -935,6 +935,29 @@ def test_a_function_marked_by_name_stays_a_call_while_the_runtime_helpers_inline
     assert calls(crc, "BENCHCRC") == 1 and calls(kernel, r"B\$FMID") + calls(kernel, r"B\$FASC") == 0
 
 
+def test_a_basic_row_is_built_as_the_whole_program_with_only_its_kernel_public():
+    """Every BASIC SUB was public, so fib's recursion stayed far, by reference and in memory: 2.55x the C clocks (908,496 against 356,059), hanoi 4,487x.
+    The harness builds the program as one module (C's helpers are `static`) and exports the kernel, which the map is searched for."""
+    import subprocess
+    import tempfile
+
+    fib = next(v for v in bench.variants(bench.BENCH / "fib") if v.language == "bq16")
+    with tempfile.TemporaryDirectory() as where:
+        out = Path(where) / "p.s"
+        done = subprocess.run(
+            [str(bench.BIN / "llrm-qb"), str(fib.source), "--dialect", "qb45", "-fqb-runtime=llrm", *bench.compile_flags(fib, "O2"), "-S", "-o", str(out)],
+            capture_output=True,
+            text=True,
+        )
+        assert done.returncode == 0, done.stderr
+        text = out.read_text()
+    assert "public BENCHFIB" in text and "public FIB" not in text
+    assert "FIB proc near" in text and "call far ptr FIB" not in text
+    # The flat target's calls are near already: queens read +6% instructions and four more cells worse with the flag.
+    flat = next(v for v in bench.variants(bench.BENCH / "fib") if v.language == "bq32")
+    assert "--whole-program" not in bench.compile_flags(flat, "O2")
+
+
 def test_a_name_no_function_has_is_an_error_not_a_flag_that_did_nothing():
     import subprocess
 
@@ -1100,7 +1123,7 @@ def test_a_priced_cell_passes_when_the_clocks_it_saves_pay_for_the_bytes_it_adds
     assert bench.against("a c -O2", {**more, "clocks": 38}, base, rate=500) == []
     assert bench.against("a c -O2", {**more, "clocks": 45}, base, rate=500) == ["a c -O2: -5 clocks +13 code bytes at 500 milliclocks/byte is worse"]
     assert bench.against("a c -Os", {**more, "clocks": 38}, base) == ["a c -Os: code_bytes 113 > 100 (worse)"]
-    assert bench.against("a c -O2", {**base, "data_bytes": 1}, base, rate=500) == ["a c -O2: data_bytes 1 > 0 (worse)"]
+    assert bench.against("a c -O2", {**base, "data_bytes": 1}, base, rate=500) == ["a c -O2: data_bytes 1 > 0 (worse)", "a c -O2: static_bytes 1 > 0 (worse)"]
 
 
 def test_the_flat_target_prices_a_byte_by_the_486s_line_fill_at_o2_and_o3_only(tmp_path, monkeypatch):
@@ -1172,3 +1195,14 @@ def test_at_a_size_level_bytes_and_clocks_gate_and_the_counts_only_on_a_tie():
     assert bench.against("a c -Os", {**base, "memory_operands": 5}, base) == ["a c -Os: memory_operands 5 > 4 (worse)"]
     untimed = {k: v for k, v in base.items() if k != "clocks"}
     assert bench.against("a c -Os", {**untimed, "memory_operands": 5, "code_bytes": 92}, untimed) == ["a c -Os: memory_operands 5 > 4 (worse)"]
+
+
+def test_bss_is_judged_through_the_footprint_not_alone():
+    """Moving a zero table from data to bss (Nib's statics) lowered data_bytes and raised bss_bytes by the same amount: bss alone failed it.
+    data is strict, data+bss (static_bytes) is strict, bss alone is not judged."""
+    base = {"instructions": 10, "code_bytes": 100, "data_bytes": 30, "bss_bytes": 4}
+    move = {**base, "data_bytes": 10, "bss_bytes": 24}
+    assert bench.against("n nib -O2", move, base) == []  # pure DATA -> BSS: data down, footprint equal
+    assert bench.against("n nib -O2", {**base, "bss_bytes": 5}, base) == ["n nib -O2: static_bytes 35 > 34 (worse)"]  # bss growth grows the footprint
+    assert bench.against("n nib -O2", {**base, "data_bytes": 31, "bss_bytes": 3}, base) == ["n nib -O2: data_bytes 31 > 30 (worse)"]  # data growth, footprint equal
+    assert bench.against("n nib -O2", {**base, "data_bytes": 20, "bss_bytes": 24}, base) == ["n nib -O2: static_bytes 44 > 34 (worse)"]  # data down 10, bss up 20

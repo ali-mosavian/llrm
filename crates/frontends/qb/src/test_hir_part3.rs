@@ -1037,6 +1037,36 @@ fn test_whole_program_procedures_are_not_public() {
     assert!(!public(true));
 }
 
+/// The bench kernel must stay linkable under `--whole-program` (BenchFib is
+/// found by name in the map), while the recursion behind it is the module's
+/// own: fib was a far, by-reference, memory-argument call (3.4x C's clocks)
+/// because every SUB was public; with the kernel the only export it is C's
+/// register-call loop, near.
+#[test]
+fn test_whole_program_export_keeps_the_kernel_public_and_the_rest_near() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(
+        &directory,
+        "FIB.BAS",
+        b"DEFINT A-Z\nDECLARE FUNCTION Fib% (n AS INTEGER)\nDECLARE FUNCTION BenchFib& (n AS INTEGER)\nPRINT BenchFib&(20)\n\
+FUNCTION Fib% (n AS INTEGER)\n IF n < 2 THEN\n Fib% = n\n ELSE\n Fib% = Fib%(n - 1) + Fib%(n - 2)\n END IF\nEND FUNCTION\n\
+FUNCTION BenchFib& (n AS INTEGER)\n BenchFib& = Fib%(n)\nEND FUNCTION\n",
+    );
+    let listed = |exports: &[&str]| {
+        let frontend = qb_driver::Frontend {
+            whole_program: true,
+            exports: exports.iter().map(|one| one.to_string()).collect(),
+            ..qb_driver::Frontend::new("qb45", "llrm")
+        };
+        listing(&qb_driver::parsed(&source, &frontend, None).expect("parses"))
+    };
+    let none = listed(&[]);
+    assert!(!none.contains("public BENCHFIB"));
+    let kept = listed(&["benchfib"]);
+    assert!(kept.contains("public BENCHFIB\n") && !kept.contains("public FIB\n"));
+    assert!(kept.contains("FIB proc near") && !kept.contains("call far ptr FIB"));
+}
+
 /// `1 <= n` lowered to `cmp 1, bx`, which x86 cannot encode; UBOUND made it on
 /// every array.
 #[test]
@@ -2073,7 +2103,8 @@ fn test_a_counter_stepped_before_other_work_is_tested_against_its_end() {
     // is no longer than the pin's i486 loop (8 instructions). The pin's
     // loop-reduce keeps one counter and addresses by `2 * x`; the 16-bit
     // address has no scale, so ours steps the byte offset (`cmp bx, 674`)
-    // beside the counter, for the same length (DEVIATE LU1).
+    // beside the counter, for the same length (DEVIATE LU1); counting the
+    // offset up to zero (`add bx, 2; jne`, one instruction fewer) is as good.
     let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/run/qb/rcflip.bas");
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let text = listing(&program);
@@ -2090,7 +2121,9 @@ fn test_a_counter_stepped_before_other_work_is_tested_against_its_end() {
         .expect("the multiplying loop");
     let instructions = body.lines().filter(|line| line.starts_with("    ")).count();
     assert!(
-        (body.contains("cmp ax, 357") || body.contains(", 674")) && !body.contains("or ax, ax") && instructions <= 8,
+        (body.contains("cmp ax, 357") || body.contains(", 674") || regex::Regex::new(r"add bx, 2\n\s+jne \w+\s*$").unwrap().is_match(&body))
+            && !body.contains("or ax, ax")
+            && instructions <= 8,
         "{body}"
     );
 }

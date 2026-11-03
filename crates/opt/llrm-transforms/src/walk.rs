@@ -292,10 +292,7 @@ impl ProgramPass for Walk {
                                 self.inline.limit == 0,
                                 tti.as_deref(),
                                 decided.as_mut(),
-                                (tti.as_deref().is_some_and(|tti| {
-                                    size != crate::inlinecost::CallerSize::Speed || tti.speed_inline_by_code_size()
-                                }))
-                                .then_some(&mut trials),
+                                (tti.is_some() && size != crate::inlinecost::CallerSize::Speed).then_some(&mut trials),
                             )
                         };
                         let mut declared = declared(&mut modules[at], module);
@@ -500,7 +497,31 @@ impl ProgramPass for Walk {
                                             - gone,
                                     )
                                 } else {
-                                    (0, 0)
+                                    // At size the units count a call by its
+                                    // parameters, not the words and address forms it
+                                    // pushes: the target's byte prices decide too, for a
+                                    // callee that stays (the byte model misprices a
+                                    // body that goes with its last calls), by an eighth of
+                                    // the caller: the model priced a float kernel's copy
+                                    // 19 B under its 180 (+5 B built; qmove -Os).
+                                    let costs = program.target.size_costs();
+                                    let now = module.global(id).function().expect("a body");
+                                    let gone: i64 = if credit > 0 {
+                                        calls
+                                            .iter()
+                                            .filter_map(|one| trials[one].callee)
+                                            .filter_map(|callee| module.global(callee).function())
+                                            .map(|body| function_bytes(module, &program.layout, &costs, body))
+                                            .sum()
+                                    } else {
+                                        0
+                                    };
+                                    (
+                                        0,
+                                        function_bytes(module, &program.layout, &costs, now)
+                                            - function_bytes(module, &program.layout, &costs, &kept)
+                                            - gone,
+                                    )
                                 };
                                 if remarks {
                                     eprintln!(
@@ -520,7 +541,7 @@ impl ProgramPass for Walk {
                                         growth
                                     );
                                 }
-                                if tried <= best + credit || (saved > 0 && growth * rate <= saved * 1000) {
+                                if tried <= best + credit || (saved > 0 && growth * rate <= saved * 1000) || (rate == 0 && credit == 0 && -growth * 8 >= function_bytes(module, &program.layout, &program.target.size_costs(), &kept)) {
                                     best = tried;
                                     accepted.extend(calls);
                                 } else {
@@ -599,7 +620,7 @@ impl ProgramPass for Walk {
 /// simplifier has merged them, 188 clocks, and 185482 copied before), the
 /// calls it makes of itself are fewer than one per call (below), or the body
 /// is sized for bytes (gcc does not inline recursively at -Os).
-fn self_calls(
+pub(crate) fn self_calls(
     module: &Module,
     layout: &llrm_mir::datalayout::DataLayout,
     id: GlobalId,
@@ -855,7 +876,7 @@ const TRIAL_CALLER: usize = 300;
 /// carrying its operand-size prefix, a divide by a constant its multiply-high
 /// sequence. The `CodeSize` units of the cost model count instructions of
 /// the pin's x86, not bytes of a 16-bit encoding.
-fn function_bytes(
+pub(crate) fn function_bytes(
     module: &Module,
     layout: &llrm_mir::datalayout::DataLayout,
     costs: &llrm_mir::target::OperationCosts,
