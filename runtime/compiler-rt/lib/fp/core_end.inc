@@ -12,6 +12,7 @@
 #undef SF_ROUND3
 #undef sf_clz
 #undef sf_shr_sticky
+#undef SF_SHR_STICKY_ADD
 #undef SF_SIGN
 #undef SF_HID
 #undef SF_INF

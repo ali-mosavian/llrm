@@ -6,7 +6,7 @@ Env: BLOCKS=1 profiles per label instead of per function; ANNOTATE=name prints t
 Prints per op the top functions by exclusive cycles per record, and the opcode-class histogram."""
 import glob, os, re, subprocess, sys
 import profile6502 as P
-LIBS = [re.sub(r'[/.]', '_', x[4:]) for x in sorted(glob.glob('lib/fp/f64/*.c')) + ['lib/int/int64.c', 'lib/fp/f32/pack.c']]
+LIBS = [os.path.basename(os.path.dirname(x)) + '_' + os.path.basename(x)[:-2] for x in sorted(glob.glob('lib/fp/f64/*.c')) + ['lib/int/int64.c']]
 
 DIR = sys.argv[1] if len(sys.argv) > 1 else '.'; N = int(sys.argv[2]) if len(sys.argv) > 2 else 100
 OPS = sys.argv[3].split() if len(sys.argv) > 3 else ['add', 'sub', 'mul', 'div']

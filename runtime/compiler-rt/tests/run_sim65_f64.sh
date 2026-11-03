@@ -1,5 +1,5 @@
 #!/bin/sh
-# usage: LLRM_CC=path/to/llrm-cc [MOS_RT=mos_rt.s] [OPT=Os] [SHOW=n] tests/run_sim65_f64.sh [n] [batch]
+# usage: LLRM_CC=path/to/llrm-cc [MOS_RT=mos_rt.s] [OPT=Os] [SHOW=n] [SF_EXTRA=flag] [SF_ASM='a.s ..'] tests/run_sim65_f64.sh [n] [batch]
 # binary64 on the 6502 (sim65) against the host FPU: n standard pairs, then n edge pairs (gen_vectors64_edge.c), batch records per run
 # (sim65 has 64 KB: the library takes about 40 KB). The library is compiled once; each batch relinks the driver with its slice.
 # Prints, per op and class of the expected result (zerosign, denormal, special, normal): pairs and mismatches; then compares and conversions.
@@ -13,12 +13,9 @@ N=${1:-3000}; B=${2:-110}; T=$(mktemp -d); OPT=${OPT:-Os}; SHOW=${SHOW:-0}
 MOS_RT=${MOS_RT:?set MOS_RT to the mos_rt.s runtime}
 for g in gen_vectors64 gen_vectors64_edge; do cc -O2 -ffp-contract=off -DEXT tests/$g.c -o $T/$g; done
 driver() { $LLRM_CC --target=6502-sim65 -O2 -S -DSF_INTABI -DSHOW=$SHOW -Iinclude -I$T tests/sim65_main64.c -o $T/main.s; }
-# one object per source file (fp_sources.sh); names are the path with / as _, so f32/mul.c and f64/mul.c stay apart
-SRCS="$(tests/fp_sources.sh f32 f32_64 f64) lib/int/int64.c"
-LIBS=; for s in $SRCS; do n=$(echo ${s#lib/} | sed 's,[/.],_,g'); LIBS="$LIBS $n"; done
-set -- $LIBS; for s in $SRCS; do
-  $LLRM_CC --target=6502-sim65 -$OPT -S -DSF_INTABI -Iinclude $s -o $T/$1.s; shift
-done
+LIBFILES="$(tests/fp_sources.sh f64 f32_64 f32) lib/int/int64.c"
+LIBS=$(for p in $LIBFILES; do echo $(basename $(dirname $p))_$(basename $p .c); done)
+for p in $LIBFILES; do f=$(basename $(dirname $p))_$(basename $p .c); $LLRM_CC --target=6502-sim65 -$OPT -S -DSF_INTABI $SF_EXTRA -Iinclude $p -o $T/$f.s; done
 # ld65 links whole objects: keep only what the driver reaches (int64.c would bring its divide for a shift).
 $T/gen_vectors64 1 > $T/vectors64.h; driver
 mkdir $T/r
@@ -28,6 +25,7 @@ for f in $LIBS; do
   sed -i '/^\.export \(__\|sf32_pack\|sf64_pack\)/!{/^\.export /d}' $T/r/$f.s
   ca65 -t sim6502 -U $T/r/$f.s -o $T/r/$f.o; OBJS="$OBJS $T/r/$f.o"
 done
+for a in $SF_ASM; do ca65 -t sim6502 -I config/6502 $a -o $T/$(basename $a).o; OBJS="$OBJS $T/$(basename $a).o"; done
 { i=0; while [ $i -lt 26 ]; do echo "rc$i = $((128 + i))"; i=$((i + 1)); done; cat $MOS_RT; echo ".export __sa, __sb"; } > $T/mos.s
 ca65 -t sim6502 $T/mos.s -o $T/mos_rt.o
 # _main: soft stack (rc0:rc1) to the top of a 1 KB buffer, run main, print outbuf, return main's exit code. It is appended to the
