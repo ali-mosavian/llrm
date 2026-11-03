@@ -58,6 +58,6 @@ fn the_sret_pointer_is_returned_in_d0() {
         llrm_m68k::driver::Level::O0,
     )
     .expect("compiles");
-    let mk = text.split("\nf:").next().unwrap();
+    let mk = text.split("\n\t.globl\tf\nf:").next().unwrap();
     assert!(mk.contains("%d0") && mk.trim_end().ends_with("rts"), "mk returns the pointer in d0:\n{mk}");
 }
