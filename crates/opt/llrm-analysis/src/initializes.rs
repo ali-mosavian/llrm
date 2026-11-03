@@ -542,6 +542,51 @@ pub fn add_initializes(
     changed
 }
 
+/// States `accessed` as `llrm.reads` and `llrm.writes` on the pointer parameters
+/// of the members, and drops them where the body no longer bounds its access.
+pub fn add_access_ranges(
+    module: &mut Module,
+    layout: &DataLayout,
+    members: &BTreeSet<GlobalId>,
+) -> BTreeSet<GlobalId> {
+    let mut changed = BTreeSet::new();
+    for &id in members {
+        let Some(function) = module.global(id).function() else { continue };
+        if function.is_declaration() {
+            continue;
+        }
+        for index in 0..function.parameters().len() {
+            let function = module.global(id).function().expect("a procedure");
+            let pointer = matches!(
+                function
+                    .operand_type(&module.context, Operand::Value(function.parameters()[index]))
+                    .map(|ty| module.context.types.get(ty)),
+                Some(Type::Pointer(_))
+            );
+            if !pointer {
+                continue;
+            }
+            let found = accessed(module, layout, id, index);
+            let attrs = match &mut module.globals[id.0 as usize].kind {
+                llrm_mir::module::GlobalKind::Function(function) => &mut function.parameter_attrs[index],
+                llrm_mir::module::GlobalKind::Variable(_) => unreachable!("a procedure is a function"),
+            };
+            let before = attrs.clone();
+            attrs.retain(|attr| {
+                !matches!(attr, Attribute::Str(name, _) if name == llrm_mir::memory::READS || name == llrm_mir::memory::WRITES)
+            });
+            if let Some(found) = found {
+                llrm_mir::memory::state_access_ranges(attrs, llrm_mir::memory::READS, &found.reads);
+                llrm_mir::memory::state_access_ranges(attrs, llrm_mir::memory::WRITES, &found.writes);
+            }
+            if *attrs != before {
+                changed.insert(id);
+            }
+        }
+    }
+    changed
+}
+
 #[cfg(test)]
 #[path = "initializes_tests.rs"]
 mod tests;

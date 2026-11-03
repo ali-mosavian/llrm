@@ -7,7 +7,10 @@ fn of(
     text: &str,
     name: &str,
 ) -> Summary {
-    let module = parsed(text);
+    let mut module = parsed(text);
+    let layout = crate::testing::layout(&module);
+    let members = module.functions().map(|(id, _, _)| id).collect();
+    crate::initializes::add_access_ranges(&mut module, &layout, &members);
     let tracked = std::collections::BTreeSet::new();
     let found = crate::globalsmodref::compute(&module);
     summaries(&module, &crate::testing::layout(&module), &tracked, &found)

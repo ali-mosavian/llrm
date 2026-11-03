@@ -10,7 +10,7 @@
 //!   read or write.
 //! - A parameter whose every use in the body is a constant-offset load, store
 //!   or constant-length memory intrinsic is accessed at those bytes only
-//!   (`initializes::accessed`, DEVIATE I3).
+//!   (`llrm.reads`/`llrm.writes`, stated by `initializes::add_access_ranges`, DEVIATE I3).
 //! - A pointer parameter without `nocapture` is captured.
 //!
 //! # Example
@@ -232,9 +232,8 @@ fn summary_of(
             ..MemoryObject::new(MemoryKind::Parameter)
         });
         debug_assert_eq!(object.key, Key::Int(index as i64));
-        let narrowed = (access.is_ref_set() || access.is_mod_set())
-            .then(|| crate::initializes::accessed(module, layout, id, index))
-            .flatten();
+        let attrs = &function.parameter_attrs[index];
+        let narrowed = (llrm_mir::memory::access_ranges(attrs, llrm_mir::memory::READS), llrm_mir::memory::access_ranges(attrs, llrm_mir::memory::WRITES));
         let state = |set: &mut crate::sliceset::SliceSet, ranges: Option<&Vec<(i64, i64)>>| match ranges {
             Some(ranges) => {
                 for &(low, high) in ranges {
@@ -246,10 +245,10 @@ fn summary_of(
             }
         };
         if access.is_ref_set() {
-            state(&mut summary.reads, narrowed.as_ref().map(|one| &one.reads));
+            state(&mut summary.reads, narrowed.0.as_ref());
         }
         if access.is_mod_set() {
-            state(&mut summary.writes, narrowed.as_ref().map(|one| &one.writes));
+            state(&mut summary.writes, narrowed.1.as_ref());
         }
     }
     summary
