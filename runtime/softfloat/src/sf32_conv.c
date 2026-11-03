@@ -20,7 +20,7 @@ static sf32 from_mag(uint32_t sign, uint32_t x)
     if (!x) return 0;
     int n = 31 - sf_clz32(x);
     uint32_t m = n > 26 ? sf_shr_sticky32(x, n - 26) : x << (26 - n);
-    return pack_near(sign, n + 127, m);
+    return pack_round(sign, n + 127, m); /* n <= 31: e is 127..158 */
 }
 
 static sf32 from_u32_bits(uint32_t x) { return from_mag(0, x); }
