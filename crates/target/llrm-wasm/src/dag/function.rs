@@ -80,6 +80,7 @@ pub fn builder_target(
             // level: `isIntDivCheap`.
             int_div_cheap: true,
             sdiv_pow2_stays: true,
+            add_to_or_disjoint: true,
             ..DagConfig::default()
         },
         shift_amount: pointer(width),
@@ -227,6 +228,8 @@ pub fn select_function(
         function,
     );
     let mut info = FunctionLoweringInfo::new(function);
+    let statics = static_frame(module, function, &layout, &info)?;
+    let alignments: Vec<u64> = statics.iter().map(|&(_, align)| align).collect();
     let mut selected = Vec::new();
     let mut machine_layout = Vec::new();
     for &block in function.layout() {
@@ -252,6 +255,7 @@ pub fn select_function(
         let mut group = vec![(block, block, built, phis)];
         group.extend(extras.into_iter().map(|(id, one)| (id, block, one, Vec::new())));
         for (n, (id, origin, mut one, phis)) in group.into_iter().enumerate() {
+            one.dag.frame_alignments.clone_from(&alignments);
             let Scheduled { units, mem_refs, accesses } =
                 select_block(&mut one.dag, cpu, features, &mut info, optimize).map_err(|why| format!("{why:?}"))?;
             machine_layout.push(id.0);
@@ -271,7 +275,7 @@ pub fn select_function(
             });
         }
     }
-    let mut frame = static_frame(module, function, &layout, &info)?;
+    let mut frame = statics;
     frame.extend(info.objects.iter().map(|&(size, align)| (u64::from(size), u64::from(align))));
     for block in &mut selected {
         block.layout.clone_from(&machine_layout);

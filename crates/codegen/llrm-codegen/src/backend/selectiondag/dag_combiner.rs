@@ -1755,8 +1755,18 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_node(ISD::Sub, vt, &[a, d]));
             }
         }
-        if !self.reassociation_can_break_addressing_mode_pattern(node, n0, n1) {
-            return self.reassociate_ops(ISD::Add, n0, n1, self.dag.node(node).flags);
+        if !self.reassociation_can_break_addressing_mode_pattern(node, n0, n1)
+            && let Some(regrouped) = self.reassociate_ops(ISD::Add, n0, n1, self.dag.node(node).flags)
+        {
+            return Some(regrouped);
+        }
+        // `(add a, b)` is `(or disjoint a, b)` where the two share no bits
+        // ([L3318][pin]).
+        //
+        // [pin]:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L3318
+        if self.dag.config().add_to_or_disjoint && super::dagisel_adapter::no_common_bits(self.dag, n0, n1) {
+            return Some(self.dag.get_node_flags(ISD::Or, vt, &[n0, n1], SDNodeFlags::DISJOINT));
         }
         None
     }
