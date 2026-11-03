@@ -322,6 +322,20 @@ fn a_pointer_copied_into_hl_only_to_load_a_is_read_through_its_own_pair() {
     assert!(out.contains("ld a, (bc)"), "{out}");
 }
 
+/// The carry out of a wide add is `select(sum == b, carry_in, sum < b)`: one
+/// 16-bit compare read for its zero flag and its carry. It was a borrow chain
+/// (`sub a, e; sbc a, d`), whose zero flag is that of the high byte alone, and
+/// the byte made from the carry used `dec`, which sets it again: an `i64` add
+/// returned 0 in the high word where 4 was right. Both flags are the compare's.
+#[test]
+fn a_compare_read_for_equal_and_for_below_sets_both_flags_of_the_word() {
+    let ir = "define i8 @f(i16 %s, i16 %b, i8 %cin) {\n\
+              \x20 %e = icmp eq i16 %s, %b\n  %u = icmp ult i16 %s, %b\n  %z = zext i1 %u to i8\n\
+              \x20 %r = select i1 %e, i8 %cin, i8 %z\n  ret i8 %r\n}\n";
+    let out = compiled(ir, "f");
+    assert!(out.matches("cp a, ").count() == 2 && !out.contains("sbc a,"), "{out}");
+}
+
 /// A word returned in `de` and stored to a global went through `hl`:
 /// `ex de, hl; ld (_r), hl`, two instructions where `ld (_r), de` is one of
 /// the same 4 B / 20 T. Every add16-shaped row paid an instruction for it.

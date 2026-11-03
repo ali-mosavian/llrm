@@ -386,7 +386,7 @@ impl Printer<'_> {
                 let (to, value) = (name_of(self, 0)?, self.immediate(inst, 1, 0xFF)?);
                 // `xor a, a` is a byte and three clocks less, and sets the
                 // flags
-                if to == "a" && value == "#0" && flags_dead(rest) {
+                if to == "a" && value == "#0" && self.flags_dead(rest) {
                     self.push("xor a, a");
                 } else {
                     self.push(format!("ld {to}, {value}"));
@@ -502,7 +502,9 @@ impl Printer<'_> {
                 let skip = format!("{}$", self.out.len());
                 self.push(format!("ld {to}, #1"));
                 self.push(format!("jr {cond}, {skip}"));
-                self.push(format!("dec {to}"));
+                // `dec` would change the zero flag a later reader of the same
+                // compare wants
+                self.push(if self.flags_dead(rest) { format!("dec {to}") } else { format!("ld {to}, #0") });
                 self.out.push(Line::Label(skip));
             }
             "AND16i" | "OR16i" | "XOR16i" => {
@@ -800,16 +802,40 @@ impl Printer<'_> {
             }
             other => return Err(format!("CP16 against {other:?}")),
         };
-        let reader = rest.iter().find(|one| one.reads_flags);
-        let reader = reader.and_then(|one| match (one.kind, one.operands.get(1)) {
-            // a condition as a byte reads the flag its code names
-            (Kind::Op("SETCC8"), Some(Operand::Imm(2 | 3))) => Some("JPC"),
-            (Kind::Op("SETCC8"), Some(Operand::Imm(0 | 1))) => Some("JPZ"),
-            (Kind::Op(name), _) => Some(name),
-            (Kind::Copy, _) => None,
-        });
-        match reader {
-            Some("JPC" | "JPNC" | "RETC" | "RETNC") => {
+        // every reader of the compare's flags, up to the next instruction that
+        // sets them: a carry chain reads the carry (`ult`) and the zero flag
+        // (`eq`) of the one compare
+        let (mut carry, mut zero, mut other) = (false, false, None);
+        for one in &self.flag_readers(rest) {
+            {
+                match (one.kind, one.operands.get(1)) {
+                    (Kind::Op("SETCC8"), Some(Operand::Imm(2 | 3))) | (Kind::Op("JPC" | "JPNC" | "RETC" | "RETNC"), _) => {
+                        carry = true
+                    }
+                    (Kind::Op("SETCC8"), Some(Operand::Imm(0 | 1))) | (Kind::Op("JPZ" | "JPNZ" | "RETZ" | "RETNZ"), _) => {
+                        zero = true
+                    }
+                    (Kind::Op(name), _) => other = Some(name),
+                    (Kind::Copy, _) => {}
+                }
+            }
+        }
+        if other.is_some() || !(carry || zero) {
+            return Err(format!("CP16 read by {other:?}"));
+        }
+        let skip = format!("{}$", self.out.len());
+        match (carry, zero) {
+            // both flags of the word: the high bytes decide unless they are
+            // equal, then the low bytes do (a borrow chain gives only the carry)
+            (true, true) => {
+                self.push(format!("ld a, {}", name(ah)));
+                self.push(format!("cp a, {bh}"));
+                self.push(format!("jr nz, {skip}"));
+                self.push(format!("ld a, {}", name(al)));
+                self.push(format!("cp a, {bl}"));
+                self.out.push(Line::Label(skip));
+            }
+            (true, false) => {
                 self.push(format!("ld a, {}", name(al)));
                 self.push(format!("sub a, {bl}"));
                 self.push(format!("ld a, {}", name(ah)));
@@ -817,12 +843,11 @@ impl Printer<'_> {
             }
             // a word against zero: its two bytes or-ed, which is zero only when
             // both are
-            Some("JPZ" | "JPNZ" | "RETZ" | "RETNZ") if bl == "#0" && bh == "#0" => {
+            (false, true) if bl == "#0" && bh == "#0" => {
                 self.push(format!("ld a, {}", name(ah)));
                 self.push(format!("or a, {}", name(al)));
             }
-            Some("JPZ" | "JPNZ" | "RETZ" | "RETNZ") => {
-                let skip = format!("{}$", self.out.len());
+            (false, true) => {
                 self.push(format!("ld a, {}", name(al)));
                 self.push(format!("sub a, {bl}"));
                 self.push(format!("jr nz, {skip}"));
@@ -830,7 +855,7 @@ impl Printer<'_> {
                 self.push(format!("sub a, {bh}"));
                 self.out.push(Line::Label(skip));
             }
-            other => return Err(format!("CP16 read by {other:?}")),
+            (false, false) => unreachable!("a reader was found"),
         }
         Ok(())
     }
@@ -983,6 +1008,69 @@ impl Printer<'_> {
         Ok((0..count).map(|byte| format!("{byte}(iy)")).collect())
     }
 
+    /// The instructions that read the flags the instruction before `rest` set:
+    /// in `rest` and, when nothing in it sets them again, in the blocks it
+    /// goes on to.
+    fn flag_readers(
+        &self,
+        rest: &[Inst],
+    ) -> Vec<Inst> {
+        let mut readers: Vec<Inst> = Vec::new();
+        let mut scan = |insts: &[Inst]| {
+            for inst in insts {
+                if inst.reads_flags {
+                    readers.push(inst.clone());
+                }
+                if inst.sets_flags {
+                    return true;
+                }
+            }
+            false
+        };
+        if scan(rest) {
+            return readers;
+        }
+        let successors = llrm_spike_mf::regalloc::successors(self.function);
+        let mut seen = vec![false; self.function.blocks.len()];
+        let mut todo = successors[self.at.0].clone();
+        while let Some(block) = todo.pop() {
+            if std::mem::replace(&mut seen[block], true) {
+                continue;
+            }
+            if !scan(&self.function.blocks[block].insts) {
+                todo.extend(&successors[block]);
+            }
+        }
+        readers
+    }
+
+    /// Whether nothing reads the flags before something sets them again, in
+    /// `rest` and in the blocks it goes on to: a conditional return in the
+    /// block after a compare reads the compare's flags, so an `xor a, a` or a
+    /// `dec` in between would change what it sees.
+    fn flags_dead(
+        &self,
+        rest: &[Inst],
+    ) -> bool {
+        if let Some(dead) = flags_first(rest) {
+            return dead;
+        }
+        let successors = llrm_spike_mf::regalloc::successors(self.function);
+        let mut seen = vec![false; self.function.blocks.len()];
+        let mut todo = successors[self.at.0].clone();
+        while let Some(block) = todo.pop() {
+            if std::mem::replace(&mut seen[block], true) {
+                continue;
+            }
+            match flags_first(&self.function.blocks[block].insts) {
+                Some(false) => return false,
+                Some(true) => {}
+                None => todo.extend(&successors[block]),
+            }
+        }
+        true
+    }
+
     /// Whether something holds IY at this instruction.
     fn iy_is_live(&self) -> bool {
         self.liveness
@@ -1011,19 +1099,19 @@ impl Printer<'_> {
     }
 }
 
-/// Whether nothing in `rest` reads the flags before something sets them again.
-/// A block ends with them dead: only a branch reads them, and it follows its
-/// own compare in the block.
-fn flags_dead(rest: &[Inst]) -> bool {
-    for inst in rest {
+/// What `insts` do with the flags first: `Some(true)` if they set them before
+/// anything reads them, `Some(false)` if they read them first, none if they do
+/// neither.
+fn flags_first(insts: &[Inst]) -> Option<bool> {
+    for inst in insts {
         if inst.reads_flags {
-            return false;
+            return Some(false);
         }
         if inst.sets_flags {
-            return true;
+            return Some(true);
         }
     }
-    true
+    None
 }
 
 fn shift_count(inst: &Inst) -> Result<i64, String> {
