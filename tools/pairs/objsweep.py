@@ -19,6 +19,7 @@ import re
 import resource
 import subprocess
 import sys
+import shutil
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -127,9 +128,17 @@ def md5(path: str) -> str:
 
 
 def sweep(args, sources: list[Path], isel: str) -> int:
+    """`_sweep` with a scratch directory that is gone afterwards (2022 `/tmp/objsweep-*` directories of a day's runs held the inodes the landing runner needed)."""
+    scratch = Path(tempfile.mkdtemp(prefix="objsweep-"))
+    try:
+        return _sweep(args, sources, isel, scratch)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _sweep(args, sources: list[Path], isel: str, scratch: Path) -> int:
     legs = lambda target: DEBUG_LEGS[target] if getattr(args, "debug", False) else [[]]  # noqa: E731
     cells = [(s, t, lv, tuple(leg)) for s in sources for t in args.targets.split(",") for lv in args.levels.split(",") for leg in legs(t)]
-    scratch = Path(tempfile.mkdtemp(prefix="objsweep-"))
 
     def run(cell):
         source, target, level, leg = cell
@@ -172,6 +181,14 @@ def sweep(args, sources: list[Path], isel: str) -> int:
 
 
 def sweep_arm64(args, sources: list[Path]) -> int:
+    scratch = Path(tempfile.mkdtemp(prefix="objsweep-arm64-"))
+    try:
+        return _sweep_arm64(args, sources, scratch)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _sweep_arm64(args, sources: list[Path], scratch: Path) -> int:
     """The `.ll` files of --arm64 through `llrm-arm64-llc` beside OLD and beside NEW: the Mach-O and ELF objects of each must match."""
     old_bin, new_bin = (str(Path(one).resolve().parent / "llrm-arm64-llc") for one in (args.old, args.new))
     missing = [one for one in (old_bin, new_bin) if not Path(one).exists()]
@@ -182,7 +199,6 @@ def sweep_arm64(args, sources: list[Path]) -> int:
     if debug and not any("DICompileUnit" in source.read_text(errors="replace") for source in sources):
         print("objsweep --arm64 --debug: NO EVIDENCE: no source carries debug info (!DICompileUnit), so no object has a .debug_* section to compare")
         return 2
-    scratch = Path(tempfile.mkdtemp(prefix="objsweep-arm64-"))
 
     def run(source):
         old_writers, new_writers = {}, {}

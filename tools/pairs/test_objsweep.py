@@ -191,3 +191,15 @@ def test_the_header_names_the_exact_binaries_by_md5(tmp_path):
         (tmp_path / name).write_bytes(body)
     line = objsweep.binaries(str(tmp_path / "llrm-cc"))
     assert line.count(", ") == 2 and "llrm-z80-llc " + objsweep.md5(str(tmp_path / "llrm-z80-llc"))[:12] in line and "notes" not in line
+
+
+def test_a_sweep_leaves_no_scratch_directory_behind(tmp_path, monkeypatch):
+    """Every sweep left /tmp/objsweep-XXXX with its objects: 2022 of them filled the inodes the landing runner needed."""
+    made = []
+    real = objsweep.tempfile.mkdtemp
+    monkeypatch.setattr(objsweep.tempfile, "mkdtemp", lambda *a, **k: made.append(real(*a, **k)) or made[-1])
+    (tmp_path / "x.c").write_text("")
+    stub = _stub(tmp_path, "same", "R_386_PC32")
+    args = type("A", (), {"old": stub, "new": _stub(tmp_path, "other", "R_386_PC32"), "targets": "m32", "levels": "O2", "jobs": 1})()
+    objsweep.sweep(args, [tmp_path / "x.c"], "old")
+    assert made and not any(Path(one).exists() for one in made), made
