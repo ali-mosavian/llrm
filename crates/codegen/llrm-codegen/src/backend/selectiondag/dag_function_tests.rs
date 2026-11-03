@@ -1064,11 +1064,7 @@ fn a_proved_move_at_m16_is_inline_string_code() {
         up.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
     assert!(names.iter().any(|n| n == "movsd") && names.iter().all(|n| n != "call"), "{names:?}");
     let down = move_3840_at_m16(", !llrm.backward !0");
-    assert!(
-        down.inline.values().any(|bytes| bytes[..] == [0xFD, 0xF3, 0x66, 0xA5, 0xFC]),
-        "{:?}",
-        down.inline
-    );
+    assert!(down.inline.values().any(|bytes| bytes[..] == [0xFD, 0xF3, 0x66, 0xA5, 0xFC]), "{:?}", down.inline);
 }
 
 /// A forward string move of 3840 bytes (a multiple of four) was followed by
