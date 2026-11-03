@@ -39,6 +39,8 @@ use std::cmp::Ordering;
 use std::fmt;
 use std::rc::Rc;
 
+use llrm_lir::valuelanes::ValueLanes;
+
 use super::slotindex::{InstrKey, SlotIndex, SlotIndexes};
 
 thread_local! {
@@ -1352,6 +1354,17 @@ pub struct LiveInterval {
     pub range: LiveRange,
     reg: u32,
     weight: f32,
+    /// `SubRanges` (LiveInterval.h#L710): the liveness of the lanes of the
+    /// value, where some lane is defined apart from the rest. Empty for a
+    /// value that is always read and written whole.
+    sub_ranges: Vec<SubRange>,
+}
+
+/// `LiveInterval::SubRange`: the liveness of the lanes `lanes` of a value.
+#[derive(Clone, PartialEq)]
+pub struct SubRange {
+    pub lanes: ValueLanes,
+    pub range: LiveRange,
 }
 
 impl std::ops::Deref for LiveInterval {
@@ -1372,11 +1385,34 @@ impl LiveInterval {
         reg: u32,
         weight: f32,
     ) -> Self {
-        Self { range: LiveRange::new(), reg, weight }
+        Self { range: LiveRange::new(), reg, weight, sub_ranges: Vec::new() }
     }
 
     pub fn reg(&self) -> u32 {
         self.reg
+    }
+
+    /// `hasSubRanges`.
+    pub fn has_sub_ranges(&self) -> bool {
+        !self.sub_ranges.is_empty()
+    }
+
+    pub fn sub_ranges(&self) -> &[SubRange] {
+        &self.sub_ranges
+    }
+
+    /// `createSubRange`: a new, empty range for `lanes`.
+    pub fn create_sub_range(
+        &mut self,
+        lanes: ValueLanes,
+    ) -> &mut SubRange {
+        self.sub_ranges.push(SubRange { lanes, range: LiveRange::new() });
+        self.sub_ranges.last_mut().expect("just pushed")
+    }
+
+    /// `clearSubRanges`.
+    pub fn clear_sub_ranges(&mut self) {
+        self.sub_ranges.clear();
     }
 
     pub fn weight(&self) -> f32 {
@@ -1426,7 +1462,7 @@ impl PartialEq for LiveInterval {
         &self,
         other: &Self,
     ) -> bool {
-        self.reg == other.reg && self.range == other.range
+        self.reg == other.reg && self.range == other.range && self.sub_ranges == other.sub_ranges
     }
 }
 
@@ -1659,6 +1695,19 @@ mod tests {
     use super::*;
     use crate::model::lir::{Block, Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
+
+    /// A value is whole until a lane is defined apart: sub-ranges make two
+    /// intervals unequal and `clear_sub_ranges` makes them equal again.
+    #[test]
+    fn a_live_interval_has_no_sub_ranges_until_one_is_made() {
+        let (mut one, other) = (LiveInterval::new(1, 0.0), LiveInterval::new(1, 0.0));
+        assert!(!one.has_sub_ranges());
+        one.create_sub_range(ValueLanes::at(1, 1));
+        assert!(one.has_sub_ranges() && one != other);
+        assert_eq!(one.sub_ranges()[0].lanes, ValueLanes::at(1, 1));
+        one.clear_sub_ranges();
+        assert!(one == other);
+    }
 
     /// 200 instructions in one block: base index of instruction n is 16 (n +
     /// 1).
