@@ -37,6 +37,15 @@ pub trait TargetInstrInfo {
         what: &Semantics,
     ) -> bool;
 
+    /// `MI.canFoldAsLoad()`: a load whose memory operand
+    /// `foldMemoryOperand` can put in the instruction that reads it.
+    fn can_fold_as_load(
+        &self,
+        what: &Semantics,
+    ) -> bool {
+        self.is_plain_move(what)
+    }
+
     /// `BuildMI(COPY)`: a copy of `from` into `to`, `width` bytes.
     fn copy_semantics(
         &self,
@@ -206,6 +215,15 @@ impl TargetInstrInfo for X86InstrInfo<'_> {
         what: &Semantics,
     ) -> bool {
         what.op == Operation::Move && what.name.as_deref() == Some("mov")
+    }
+
+    /// `MOV32rm`/`MOVSSrm`/`MOVSDrm`: `canFoldAsLoad`.
+    fn can_fold_as_load(
+        &self,
+        what: &Semantics,
+    ) -> bool {
+        self.is_plain_move(what)
+            || what.op == Operation::Move && matches!(what.name.as_deref(), Some("movss_x" | "movsd_x"))
     }
 
     fn copy_semantics(
@@ -379,7 +397,7 @@ pub fn fold_memory_operand(
         sources: what.sources.iter().map(swap).map(|loc| narrow_imm(&loc)).collect(),
         ..what.clone()
     };
-    if !is_encodable(bits, &made, classes).ok()? {
+    if !sse_memory_source(&made, reg) && !is_encodable(bits, &made, classes).ok()? {
         return None;
     }
     let mut out = (**one).clone();
@@ -536,6 +554,23 @@ pub(crate) fn fold_copy_member(
         made.uses = one.uses.iter().copied().filter(|v| *v != value).collect();
         made.undefs.retain(|v| *v != value);
     })))
+}
+
+/// A scalar SSE arithmetic or compare instruction whose last source is the
+/// memory operand taking a register (`ADDSDrr` to `ADDSDrm` in X86's fold
+/// tables). `is_encodable` places integer registers only, so it cannot answer
+/// for these.
+fn sse_memory_source(
+    made: &Semantics,
+    _reg: u32,
+) -> bool {
+    const FORMS: [&str; 14] = [
+        "addss", "subss", "mulss", "divss", "minss", "maxss", "addsd", "subsd", "mulsd", "divsd", "minsd", "maxsd",
+        "ucomiss", "ucomisd",
+    ];
+    made.op == Operation::Binary
+        && made.name.as_deref().is_some_and(|name| FORMS.contains(&name))
+        && matches!(made.sources.last(), Some(Loc::Mem(_)))
 }
 
 /// Whether this form exists, asked of the one place that knows.
