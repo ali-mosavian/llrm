@@ -263,6 +263,10 @@ impl CombineHooks for Aarch64Lowering {
 }
 
 impl LegalizeHooks for Aarch64Lowering {
+    fn stack_pointer(&self) -> Option<(llrm_lir::registers::RegId, u64)> {
+        Some((crate::reg::SP, 16))
+    }
+
     fn lower_operation(
         &mut self,
         dag: &mut SelectionDAG,
@@ -270,6 +274,7 @@ impl LegalizeHooks for Aarch64Lowering {
     ) -> Option<SDValue> {
         let lowered = match dag.opcode(node) {
             ISD::GlobalAddress => self.global_address(dag, node),
+            ISD::ConstantPool => super::lowering::lower_constant_pool(dag, node),
             ISD::JumpTable => super::lowering::lower_jump_table(dag, node),
             ISD::BrJT => super::lowering::lower_br_jt(dag, node),
             ISD::BrInd => super::lowering::lower_br_ind(dag, node),
@@ -277,7 +282,10 @@ impl LegalizeHooks for Aarch64Lowering {
             ISD::Select => super::lowering::lower_select(dag, node),
             ISD::SelectCC => super::lowering::lower_select_cc_node(dag, node),
             ISD::Xor => super::lowering::lower_xor(dag, node),
-            ISD::SAddO | ISD::UAddO | ISD::SSubO | ISD::USubO => super::lowering::lower_xalu(dag, node),
+            ISD::SAddO | ISD::UAddO | ISD::SSubO | ISD::USubO | ISD::SMulO | ISD::UMulO => {
+                super::lowering::lower_xalu(dag, node)
+            }
+            ISD::Abs | ISD::AbsMinPoison => super::lowering::lower_abs(dag, node),
             ISD::BrCond => super::lowering::lower_brcond(dag, node),
             ISD::BrCC => super::lowering::lower_br_cc_node(dag, node),
             ISD::SIntToFp | ISD::UIntToFp => super::lowering::lower_int_to_fp(dag, node),
@@ -285,6 +293,9 @@ impl LegalizeHooks for Aarch64Lowering {
             ISD::FpExtend => super::lowering::lower_fp_extend(dag, node),
             ISD::FpRound => super::lowering::lower_fp_round(dag, node),
             ISD::AtomicLoadAnd => super::lowering::lower_atomic_load_and(dag, node),
+            // `LowerDYNAMIC_STACKALLOC` answers none off Windows without an
+            // inline probe: the legalizer expands it, with the others.
+            ISD::DynamicStackAlloc | ISD::StackSave | ISD::StackRestore => return None,
             _ => None,
         };
         if lowered.is_some() {
@@ -410,8 +421,10 @@ pub fn select_block(
     dag: &mut SelectionDAG,
     globals: &Globals,
     info: &mut llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo,
+    opt_for_size: bool,
 ) -> Result<Vec<Unit>, Refusal> {
     let mut tli = TargetLowering::aarch64(APPLE_M1);
+    tli.set_opt_for_size(opt_for_size);
     tli.set_fp_imm_predicate(super::lowering::fp_imm_legal);
     llrm_codegen::backend::selectiondag::live_out::assert_live_out_copies(dag, info);
     let mut lowering = Aarch64Lowering { custom: None, globals: globals.clone() };
@@ -424,7 +437,6 @@ pub fn select_block(
     legal?;
     // `ComputeLiveOutVRegInfo`: after the legalizer, before the assertions go.
     llrm_codegen::backend::selectiondag::live_out::compute_live_out_vreg_info(dag, info);
-    llrm_codegen::backend::selectiondag::dag_select::remove_assertions(dag);
     let selector = Selector::new(table::TABLE);
     let mut hooks = super::hooks::Aarch64Hooks::new(globals.clone());
     do_instruction_selection_with(dag, &Aarch64Ids::new(), |adapter, node| {

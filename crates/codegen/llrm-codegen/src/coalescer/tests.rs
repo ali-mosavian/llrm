@@ -270,6 +270,68 @@ fn test_a_chain_of_copies_is_joined_to_one_value() {
     assert_consistent(&lis, &was, 1);
 }
 
+/// Asked in the order the copies are tried: `can_share` is called once per
+/// attempted join.
+struct Recording {
+    global: bool,
+    asked: std::cell::RefCell<Vec<(u32, u32)>>,
+}
+
+impl CoalescerEnv for Recording {
+    fn can_share(
+        &self,
+        a: u32,
+        b: u32,
+    ) -> bool {
+        self.asked.borrow_mut().push((a.min(b), a.max(b)));
+        true
+    }
+
+    fn joins_global_copies(&self) -> bool {
+        self.global
+    }
+}
+
+/// A target that reads the joins back (wasm's local numbering) got them by
+/// matching the kept instructions' operands, which breaks when a pass reshapes
+/// an instruction. The coalescer states them: every value of a copy chain
+/// stands for the one that survives, and a value no join took stands for
+/// itself.
+#[test]
+fn test_the_join_map_names_the_survivor_of_each_absorbed_value() {
+    let (a, c1, c2, r) = (def(1), copy(2, 1), copy(3, 2), read(3));
+    let was = body(&[(&[a, c1, c2, r], &[])]);
+    let (_, map) = super::env::joined_with_map(&was, &AnyClass, &[0]);
+    let survivor = map.survivor(1);
+    assert_eq!((map.survivor(2), map.survivor(3)), (survivor, survivor), "{map:?}");
+    assert!([1, 2, 3].contains(&survivor), "{survivor}");
+    let (a, c, b, r1, r2) = (load(1), copy(2, 1), load(1), read(1), read(2));
+    let was = body(&[(&[a, c, b, r1, r2], &[])]);
+    let (_, map) = super::env::joined_with_map(&was, &AnyClass, &[0]);
+    assert_eq!((map.survivor(1), map.survivor(2)), (1, 2), "a copy left stays two values: {map:?}");
+}
+
+/// wasm and m68k run the pin's coalescer with `JoinGlobalCopies` false
+/// (`enableMachineScheduler()` is false there): the copies of a block are
+/// tried top-down in one list, terminals last. The translation had only the
+/// true path, where a copy local to its block waits for the global ones; the
+/// fib loop's head copy was joined in the wrong order (2 copies left in the
+/// loop against the pin's 1).
+#[test]
+fn test_without_join_global_copies_a_local_copy_is_tried_in_block_order() {
+    // v2 is local to the block; v3 is read in the next one.
+    let was = body(&[(&[def(1), def(5), copy(2, 1), copy(3, 5), read(2)], &[1]), (&[read(3), read(5)], &[])]);
+    let first_asked = |global: bool| {
+        let env = Recording { global, asked: Default::default() };
+        let mut lis = LiveIntervals::new(&was);
+        run(&mut lis, &env, &[0, 0]);
+        let asked = env.asked.into_inner();
+        asked[0]
+    };
+    assert_eq!(first_asked(true), (3, 5), "global copies first");
+    assert_eq!(first_asked(false), (1, 2), "block order");
+}
+
 /// A copy that cannot join stays, and the run ends: no round loops forever on
 /// it.
 #[test]
@@ -582,6 +644,7 @@ fn test_a_join_narrows_the_class_the_next_join_is_judged_against() {
         (3, palette(&[RegId::SI, RegId::DI])),
     ]);
     let env = TargetEnv {
+        joins_global_copies: true,
         palettes: palettes.into(),
         pins: IndexMap::default(),
         size: false,
@@ -874,7 +937,11 @@ fn read_at(
     value: u32,
     width: u32,
 ) -> Arc<Insn> {
-    let what = Semantics { name: Some("use".into()), sources: vec![held_at(value, width)], ..Semantics::new(Operation::Nothing) };
+    let what = Semantics {
+        name: Some("use".into()),
+        sources: vec![held_at(value, width)],
+        ..Semantics::new(Operation::Nothing)
+    };
     Arc::new(Insn::new(0, None, Some(what), vec![], vec![value]))
 }
 
@@ -975,10 +1042,15 @@ fn test_a_copy_between_widths_is_left_where_the_target_has_no_sub_registers() {
 
 fn env_with_palettes(palettes: &[(u32, &[RegId])]) -> TargetEnv {
     TargetEnv {
-        palettes: palettes.iter().map(|(value, registers)| (*value, registers.iter().copied().collect())).collect::<IndexMap<_, _>>().into(),
+        palettes: palettes
+            .iter()
+            .map(|(value, registers)| (*value, registers.iter().copied().collect()))
+            .collect::<IndexMap<_, _>>()
+            .into(),
         pins: IndexMap::default(),
         size: false,
         keep_pinned: false,
+        joins_global_copies: false,
         aliases: Default::default(),
         should_join: Box::new(|_| true),
         freq: Vec::new(),

@@ -162,6 +162,7 @@ fn program(
 ) -> Result<Program, String> {
     let mut module =
         llrm_mir::parse::module(&without_reserved_symbols(&without_triple(text))).map_err(|error| error.to_string())?;
+    module.refuse_aliases("the 6502")?;
     llrm_mir::parse::upgrade_lifetimes(&mut module);
     let layout = Mos.layout().datalayout;
     match module.datalayout.as_deref() {
@@ -173,11 +174,6 @@ fn program(
     if request.level != Level::O0 {
         let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
         let mut options = request.level.options();
-        // DEVIATE (6502-5): no unrolling, where the pin's unroller reads the
-        // target's `getUnrollingPreferences`. Exit: the 6502's thresholds as a
-        // per-target override-table entry, once the unroller takes them.
-        options.unroll = false;
-        options.loop_unrolling = false;
         for flag in &request.passes {
             apply_pass_flag(&mut options, flag);
         }
@@ -373,6 +369,9 @@ fn data_text(
         let label = data_label(&name);
         if label != name {
             renames.push((name.clone(), label.clone()));
+        }
+        if crate::select::exported(global.linkage) && label == name {
+            out.push_str(&format!(".export {label}\n"));
         }
         out.push_str(&format!(".segment \"{}\"\n{label}:\n", if variable.constant { "RODATA" } else { "DATA" }));
         let mut at = 0;

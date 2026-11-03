@@ -131,11 +131,13 @@ fn apply_terminal_rule(
     false
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Stats {
     pub joined: usize,
     /// Copies still in the list when no round made progress.
     pub left: usize,
+    /// `(absorbed, survivor)` of each join, in order.
+    pub renames: Vec<(u32, u32)>,
 }
 
 struct Coalescer<'a> {
@@ -213,20 +215,34 @@ impl Coalescer<'_> {
         let prev_size = self.work.len();
         let copies: Vec<InstrKey> =
             self.lis.block_insns(block).iter().filter(|one| move_copy(one).is_some()).map(|one| one.id()).collect();
-        let (mut local_terminals, mut global_terminals) = (Vec::new(), Vec::new());
-        for copy in copies {
-            let terminal = apply_terminal_rule(self.lis, copy, block);
-            match (is_local_copy(self.lis, copy), terminal) {
-                (true, true) => local_terminals.push(Some(copy)),
-                (true, false) => self.local.push(Some(copy)),
-                (false, true) => global_terminals.push(Some(copy)),
-                (false, false) => self.work.push(Some(copy)),
+        if self.env.joins_global_copies() {
+            let (mut local_terminals, mut global_terminals) = (Vec::new(), Vec::new());
+            for copy in copies {
+                let terminal = apply_terminal_rule(self.lis, copy, block);
+                match (is_local_copy(self.lis, copy), terminal) {
+                    (true, true) => local_terminals.push(Some(copy)),
+                    (true, false) => self.local.push(Some(copy)),
+                    (false, true) => global_terminals.push(Some(copy)),
+                    (false, false) => self.work.push(Some(copy)),
+                }
             }
+            // Append the copies evicted by the terminal rule at the end of the
+            // list.
+            self.local.append(&mut local_terminals);
+            self.work.append(&mut global_terminals);
+        } else {
+            let mut terminals = Vec::new();
+            for copy in copies {
+                if apply_terminal_rule(self.lis, copy, block) {
+                    terminals.push(Some(copy));
+                } else {
+                    self.work.push(Some(copy));
+                }
+            }
+            // Append the copies evicted by the terminal rule at the end of the
+            // list.
+            self.work.append(&mut terminals);
         }
-        // Append the copies evicted by the terminal rule at the end of the
-        // list.
-        self.local.append(&mut local_terminals);
-        self.work.append(&mut global_terminals);
         // Try coalescing the collected copies immediately, and remove the
         // nulls. This prevents the work list from getting too large since most
         // copies are joinable on the first attempt.
@@ -271,7 +287,7 @@ pub fn run(
     let mut curr_depth = u32::MAX;
     for info in &order {
         // Try coalescing the collected local copies for deeper loops.
-        if info.depth < curr_depth {
+        if env.joins_global_copies() && info.depth < curr_depth {
             coalescer.coalesce_locals();
             curr_depth = info.depth;
         }
@@ -282,5 +298,5 @@ pub fn run(
     // join until we make no progress.
     while coalescer.copy_coalesce_work_list(List::Work, 0) {}
     let left = coalescer.work.iter().flatten().count();
-    Stats { joined: coalescer.joined, left }
+    Stats { joined: coalescer.joined, left, renames: coalescer.state.renames }
 }

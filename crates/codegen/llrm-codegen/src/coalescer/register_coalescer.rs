@@ -103,6 +103,8 @@ pub struct State {
     /// `MachineInstr*` survives its operands being rewritten; a key here is
     /// the instruction's identity, so the lists of copies follow the moves.
     moved: HashMap<InstrKey, InstrKey>,
+    /// `(absorbed, survivor)` of each join, in order.
+    pub renames: Vec<(u32, u32)>,
 }
 
 impl State {
@@ -318,7 +320,8 @@ fn join_virt_regs(
 /// `updateRegDefsUses`: every instruction that names `src` names `dst`. For a
 /// partial pair (`src` is a sub-register of `dst`) a def of `src` becomes a
 /// def that reads `dst` where the instruction reads `src` or `dst` is live
-/// into it, and a def that starts the value where not (`MO.setIsUndef(!Reads)`).
+/// into it, and a def that starts the value where not
+/// (`MO.setIsUndef(!Reads)`).
 fn update_reg_defs_uses(
     lis: &mut LiveIntervals,
     state: &mut State,
@@ -327,6 +330,7 @@ fn update_reg_defs_uses(
     partial: bool,
 ) {
     lis.rename_input(src, dst);
+    state.renames.push((src, dst));
     let mut keys: Vec<InstrKey> = lis.operands(src).iter().map(|operand| operand.instr).collect();
     keys.sort_unstable();
     keys.dedup();

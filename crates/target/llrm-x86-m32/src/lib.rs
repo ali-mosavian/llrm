@@ -73,8 +73,20 @@ static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| {
 /// the shift/`lea` chain of fewest clocks on the CPU's table with no byte term,
 /// as gcc's `synth_mult` does (`arithmetic::chain_by_clocks`, SD446); -Os keeps
 /// bytes. x_iir was 2.17x gcc's clocks. Owner llrm-target-x86-m32.
-fn tuning() -> llrm_mir::target::Tuning {
-    llrm_mir::target::Tuning { multiply_by_clocks: true, x87_stack_slots: Some(8), ..llrm_mir::target::Tuning::PIN }
+///
+/// A code byte costs the CPU's instruction-cache fill, once per run: a line's
+/// fill clocks over its bytes (`line_fill_clocks` / `cache_line` of the CPU's
+/// sheet; 486: 5 / 16 = 312 milliclocks), so `speed_milliclocks_per_byte` is
+/// derived, never set. Owner llrm-target-x86-m32.
+fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning {
+    let per_byte = llrm_target::timings::derived_byte_rate(costs.cache_line, costs.line_fill_clocks);
+    llrm_mir::target::Tuning {
+        multiply_by_clocks: true,
+        x87_stack_slots: Some(8),
+        speed_milliclocks_per_byte: per_byte,
+        inline_size_guard_at_size: true,
+        ..llrm_mir::target::Tuning::PIN
+    }
 }
 
 impl M32 {
@@ -423,7 +435,11 @@ impl llrm_target::Target for M32 {
                     .tti
                     .zip(layout().llvm_cpu)
                     .and_then(|(tti, cpu)| llrm_x86::tti::X86::described(&tti, &cpu))
-                    .map(|one| std::rc::Rc::new(one.with_tuning(tuning())) as std::rc::Rc<dyn llrm_mir::tti::Tti>),
+                    .map(|one| {
+                        std::rc::Rc::new(
+                            one.with_registers(prices.registers as u32).with_tuning(tuning(&prices.operations)),
+                        ) as std::rc::Rc<dyn llrm_mir::tti::Tti>
+                    }),
                 Some(std::rc::Rc::new(llrm_x86::lowering::X86 { is_64bit: false })),
             )
         }
@@ -594,6 +610,40 @@ mod tests {
         assert_eq!(tti.unroll_threshold_overrides(), (None, None));
         // The x87 stack the unroll counts float values against.
         assert_eq!(tti.x87_stack_slots(), Some(8));
+    }
+
+    /// A code byte is priced by the CPU's own instruction-cache fill, never a
+    /// literal: the 486 fills a 16 byte line in 5 clocks (312 milliclocks per
+    /// byte), the Pentium a 32 byte line in 5 (156), and the price follows the
+    /// sheet. Without the derivation m32 had 0 (no byte price) and its chains
+    /// and pool constants could not be weighed against their bytes.
+    #[test]
+    fn test_a_code_byte_costs_the_cpus_line_fill_per_line_byte() {
+        let rate = |cache_line, line_fill_clocks| {
+            let prices = llrm_target::CpuPrices {
+                costs: Vec::new(),
+                prefix: 1,
+                address_stall: 0,
+                registers: 6,
+                call_registers: 3,
+                float_registers: 0,
+                address_forms: Vec::new(),
+                operations: OperationCosts { cache_line, line_fill_clocks, ..OperationCosts::default() },
+                spaces: layout().spaces.roles,
+                private: None,
+                calling: None,
+                foreign: llrm_target::Foreign::none(),
+                ports: M32.flat_ports(),
+            };
+            (M32.cost_model())(&prices).tti().expect("m32 states its cost model").speed_milliclocks_per_byte()
+        };
+        let (i486, p5) = (TIMINGS.cpu("486").expect("a 486"), TIMINGS.cpu("P5").expect("a P5"));
+        let sheet = |cpu: &llrm_target::timings::CpuTable| {
+            rate(cpu.cache_line.expect("a line"), cpu.line_fill_clocks.expect("a fill"))
+        };
+        assert_eq!((sheet(i486), sheet(p5)), (312, 156));
+        assert_eq!(rate(16, 10), 625, "a slower fill costs more per byte");
+        assert_eq!(rate(0, 5), 0, "no cache line, no byte price");
     }
 
     /// The flat 32-bit target hands a pass that translates LLVM's the x87 X86

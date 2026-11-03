@@ -342,7 +342,7 @@ mod tests {
         Inst::Store {
             mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: Gpr(reg) },
             addr: Addr::Offset { base: Gpr(base), imm },
-            mmo: MemOperand { object: MemObject::Global(object.into()), offset: Some(offset) },
+            mmo: MemOperand { object: MemObject::Global(object.into()), offset: Some(offset), volatile: false },
         }
     }
 

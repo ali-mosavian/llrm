@@ -63,6 +63,8 @@ pub struct Frontend {
     pub alternate_math: bool,
     /// Nothing outside the source calls its procedures: `--whole-program`.
     pub whole_program: bool,
+    /// Procedures `--whole-program` keeps public: `--export NAME`.
+    pub exports: Vec<String>,
     /// Lay out dynamic arrays read together in one allocation:
     /// `--array-merging`.
     pub array_merging: bool,
@@ -110,6 +112,7 @@ impl Frontend {
             mbf: false,
             alternate_math: false,
             whole_program: false,
+            exports: Vec::new(),
             array_merging: false,
             runtime_frames: false,
             error_lines: false,
@@ -154,6 +157,7 @@ fn _options(
             mbf: frontend.mbf,
             alternate_math: frontend.alternate_math,
             whole_program: frontend.whole_program,
+            exports: frontend.exports.clone(),
             array_merging: frontend.array_merging,
             runtime_frames: frontend.runtime_frames,
             error_lines: frontend.error_lines,
