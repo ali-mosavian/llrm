@@ -34,6 +34,30 @@
 //! `lsr_implement.rs`; a store keeps the default position, as the pin's
 //! `I->getType()` is `void` for it). DEVIATE LU3: see `solve`, the drop of a
 //! rewrite that spills (real mode).
+//!
+//! DEVIATE LS1: the pin's rule that a single-register formula of the first
+//! use is "visited" (formulae later in the search that name it lose) is off.
+//! It keeps the search short, but the narrowing already holds the space under
+//! `ComplexityLimit` and the search is pruned by the best cost, so the work
+//! stays bounded by the same limit times the uses
+//! (`the_whole_search_is_linear_in_the_uses`). With the rule on, a counter
+//! that serves two uses is hidden from the second by the first's other
+//! formulae: a loop that sums `a[i] * (i + 1)` keeps a pointer beside the
+//! counter and a `cmp`, where the byte index ending at zero shares the
+//! counter and saves the `cmp`. Exit: none while the pin's rule picks the
+//! worse solution under its own cost model.
+//!
+//! DEVIATE LU3b: the registers the loop keeps live beside its recurrences (the
+//! values its body defines that SCEV does not make a recurrence, in registers
+//! of the target's width, `Tti::gpr_bits`) are taken off the budget the solver
+//! and the spill check count against; the pin counts none. Without it shellsort
+//! bas -Os spent a third formula register to save an instruction and the
+//! allocator spilled the `i32` chain (+6 B). No pin run can decide it: the pin
+//! has no m16 TTI. Where no solution fits the registers left, the cut is
+//! dropped and the search runs again without it: every one spills and the count
+//! no longer tells them apart (stft_fixed c -Os, +11 B). Exit: a pressure model
+//! on the pin's MachineLICM/RegisterPressure terms, by 2026-11-20, or when the
+//! allocator's spill cost is priced in the comparator.
 
 use llrm_analysis::scev::ScalarEvolution;
 use llrm_analysis::scev::expr::Scev;
@@ -89,9 +113,6 @@ impl Collection<'_, '_> {
                 workspace.push(f_idx);
                 if workspace.len() != self.uses.len() {
                     self.solve_recurse(se, solution, solution_cost, workspace, &new_cost, &new_regs, visited);
-                    if f.num_regs() == 1 && workspace.len() == 1 {
-                        visited.insert(f.scaled_reg.unwrap_or_else(|| f.base_regs[0]));
-                    }
                 } else {
                     *solution_cost = new_cost.clone();
                     *solution = workspace.clone();
@@ -196,19 +217,31 @@ impl Collection<'_, '_> {
             }
         }
         let mut solution = Vec::new();
-        let mut solution_cost = Cost::new();
-        solution_cost.lose();
-        let mut workspace = Vec::with_capacity(self.uses.len());
-        let mut visited = HashSet::default();
-        self.solve_recurse(
-            se,
-            &mut solution,
-            &mut solution_cost,
-            &mut workspace,
-            &Cost::new(),
-            &HashSet::default(),
-            &mut visited,
-        );
+        let mut solution_cost;
+        loop {
+            solution.clear();
+            solution_cost = Cost::new();
+            solution_cost.lose();
+            let mut workspace = Vec::with_capacity(self.uses.len());
+            let mut visited = HashSet::default();
+            self.solve_recurse(
+                se,
+                &mut solution,
+                &mut solution_cost,
+                &mut workspace,
+                &Cost::new(),
+                &HashSet::default(),
+                &mut visited,
+            );
+            // DEVIATE LU3b: where the loop's other values leave less than a
+            // base and an index, the cut tells no solution from
+            // another; search again without it.
+            let budget = self.tti.number_of_gpr_registers().saturating_sub(1).saturating_sub(self.pressure_units());
+            if solution.is_empty() || budget >= 2 || solution_cost.c.num_regs <= budget || self.pressure_units() == 0 {
+                break;
+            }
+            self.ignore_pressure.set(true);
+        }
         if solution.is_empty() {
             return solution;
         }
@@ -219,7 +252,7 @@ impl Collection<'_, '_> {
         }
         // DEVIATE LU3: a rewrite that needs more registers than the loop and
         // than the target has, and costs two instructions more, is dropped.
-        let budget = self.tti.number_of_gpr_registers().saturating_sub(1);
+        let budget = self.tti.number_of_gpr_registers().saturating_sub(1).saturating_sub(self.pressure_units());
         let spills = solution_cost.c.num_regs > budget
             && solution_cost.c.num_regs > self.baseline_cost.c.num_regs
             && solution_cost.c.insns >= self.baseline_cost.c.insns + 2;

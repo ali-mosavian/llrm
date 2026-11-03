@@ -440,8 +440,9 @@ impl llrm_target::Target for M32 {
                     .zip(layout().llvm_cpu)
                     .and_then(|(tti, cpu)| llrm_x86::tti::X86::described(&tti, &cpu))
                     .map(|one| {
-                        std::rc::Rc::new(one.with_tuning(tuning(&prices.operations)))
-                            as std::rc::Rc<dyn llrm_mir::tti::Tti>
+                        std::rc::Rc::new(
+                            one.with_registers(prices.registers as u32).with_tuning(tuning(&prices.operations)),
+                        ) as std::rc::Rc<dyn llrm_mir::tti::Tti>
                     }),
                 Some(std::rc::Rc::new(llrm_x86::lowering::X86 { is_64bit: false })),
             )

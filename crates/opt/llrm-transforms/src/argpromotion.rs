@@ -293,8 +293,18 @@ fn planned(
         })
         .collect();
     let covered = Facts::of(function.parameter_attrs.get(parameter).map_or(&[][..], |one| &one[..])).dereferenceable();
+    // A store to the function's own slot cannot reach the memory a caller's
+    // pointer names (LLVM asks alias analysis the same).
     let unwritten = memory::invariant(context, layout, function, Operand::Value(value))
-        || function.walk().all(|(_, inst)| !memory::of(context, callees, function, inst).writes);
+        || function.walk().all(|(_, inst)| {
+            let instruction = function.instruction(inst);
+            !memory::of(context, callees, function, inst).writes
+                || matches!(instruction.opcode, Opcode::Store { volatile: false, .. })
+                    && instruction
+                        .operands
+                        .get(1)
+                        .is_some_and(|&address| crate::copyback::in_a_local(function, address))
+        });
     for field in &fields {
         let first = field.loads.iter().all(|load| early.contains(load));
         let promised = covered.is_some_and(|bytes| field.offset as u64 + field.bytes <= bytes) && unwritten;
