@@ -19,7 +19,7 @@
 
 use super::dag::{SDValue, SelectionDAG};
 use super::isd::ISD;
-use super::known_bits::num_sign_bits;
+use super::known_bits::{known_bits, num_sign_bits};
 use super::mvt::EVT;
 
 /// `node` (a `SDIV` or `SREM`) as `sext(op(trunc a, trunc b))` at `narrow`,
@@ -54,4 +54,38 @@ pub fn narrow_sdivrem(
     let (a, b) = (dag.get_node(ISD::Truncate, narrow, &[a]), dag.get_node(ISD::Truncate, narrow, &[b]));
     let narrowed = dag.get_node(op, narrow, &[a, b]);
     Some(dag.get_node(ISD::SignExtend, vt, &[narrowed]))
+}
+
+/// `node` (a `UDIV` or `UREM`) as `zext(op(trunc a, trunc b))` at `narrow`,
+/// when both operands have their upper bits known zero: the pin's
+/// `narrowUDivOrURem`
+/// ([L903](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/CorrelatedValuePropagation.cpp#L903)),
+/// which only the O2 pipeline runs, made at the DAG for the narrow-register
+/// targets (nbody_fixed at 6502 -O1, +312 B: `ONE / (d >> 18) + 1`). No
+/// overflow case: unsigned.
+pub fn narrow_udivrem(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+    narrow: EVT,
+) -> Option<SDValue> {
+    let op = dag.opcode(node);
+    if !matches!(op, ISD::UDiv | ISD::URem) {
+        return None;
+    }
+    let vt = dag.value_type(node);
+    let (wide_bits, narrow_bits) = (vt.size_in_bits(), narrow.size_in_bits());
+    if narrow_bits >= wide_bits {
+        return None;
+    }
+    let (a, b) = (dag.operand(node, 0), dag.operand(node, 1));
+    let fits = |value: SDValue| {
+        let known = known_bits(dag, value);
+        (narrow_bits..wide_bits).all(|bit| known.zero >> bit & 1 == 1)
+    };
+    if !fits(a) || !fits(b) {
+        return None;
+    }
+    let (a, b) = (dag.get_node(ISD::Truncate, narrow, &[a]), dag.get_node(ISD::Truncate, narrow, &[b]));
+    let narrowed = dag.get_node(op, narrow, &[a, b]);
+    Some(dag.get_node(ISD::ZeroExtend, vt, &[narrowed]))
 }
