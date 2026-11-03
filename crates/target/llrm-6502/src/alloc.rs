@@ -274,6 +274,14 @@ impl<const STACK: bool> Target for Mos<STACK> {
         inst.reads_flags && (inst.terminator || matches!(inst.kind, Kind::Op(name) if name.starts_with("CMOV")))
     }
 
+    fn lane_moves(inst: &Inst) -> Option<(usize, Vec<(usize, u32, u32)>)> {
+        match inst.kind {
+            Kind::Op("PACK") => Some((0, vec![(1, 0, 1), (2, 1, 1)])),
+            Kind::Op("UNPACK") => Some((2, vec![(0, 0, 1), (1, 1, 1)])),
+            _ => None,
+        }
+    }
+
     fn moves_lanes(inst: &Inst) -> bool {
         matches!(inst.kind, Kind::Op("PACK" | "UNPACK"))
     }

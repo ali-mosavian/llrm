@@ -116,6 +116,10 @@ impl Target for Z80Registers {
         crate::mfunc::operand_class(name, index)
     }
 
+    fn lane_moves(inst: &Inst) -> Option<(usize, Vec<(usize, u32, u32)>)> {
+        matches!(inst.kind, Kind::Op("PACK")).then(|| (0, vec![(1, 0, 1), (2, 1, 1)]))
+    }
+
     fn read_part(
         inst: &Inst,
         operand: usize,
