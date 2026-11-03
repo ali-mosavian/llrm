@@ -213,3 +213,21 @@ fn a_gnu_line_is_priced_after_conversion() {
     assert_eq!(clocks(Cpu::M68000, &line), 8);
     assert_eq!(clocks(Cpu::M68020, &line), 2);
 }
+
+/// objdump prints the 32 / 32 `divu.l %d5, %d2` as `divull %d5,%d2,%d2`, three
+/// operands. The model took only the two-operand form, so every long divide in
+/// a disassembled executable was unpriced and the hardware-divide routines of
+/// softfloat looked 3-4x cheaper than they are (68020: 720 clocks per f32
+/// division, the divides' own 76 each missing).
+#[test]
+fn a_gnu_long_divide_is_the_two_operand_form() {
+    assert_eq!(gnu("divull %d5,%d2,%d2"), "divu.l %d5, %d2");
+    assert_eq!(gnu("divsll %d5,%d2,%d2"), "divs.l %d5, %d2");
+    assert_eq!(gnu("divul %d5,%d2,%d3"), "divu.l %d5, %d3");
+    assert_eq!(gnu("divsl %a0@,%d2,%d3"), "divs.l (%a0), %d3");
+    // the cache-case cell (MC68020UM 8.2.8: 78 for DIVU.L, 90 for DIVS.L) plus
+    // the extension word the `**` mark adds
+    assert_eq!(clocks(Cpu::M68020, &gnu("divull %d5,%d2,%d2")), 78 + 2);
+    assert_eq!(clocks(Cpu::M68020, &gnu("divsll %d5,%d2,%d2")), 90 + 2);
+    assert_eq!(clocks(Cpu::M68020, &gnu("divull %d5,%d2,%d2")), clocks(Cpu::M68020, "divu.l %d5, %d2"));
+}

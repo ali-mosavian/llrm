@@ -395,7 +395,10 @@ pub fn from_gnu(text: &str) -> Result<String, String> {
     // a branch target reads `80000074 <k+0x8>`
     let text = text.split(" <").next().unwrap_or(text).trim();
     let (name, rest) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
-    let name = gnu_mnemonic(name);
+    // `divull %d5,%d2,%d3` is the 32 / 32 `divu.l %d5, %d3` with the remainder
+    // register named; the clocks are the long divide's either way
+    let long_divide = ["divul", "divull", "divsl", "divsll"].contains(&name);
+    let name = if long_divide { format!("div{}.l", &name[3..4]) } else { gnu_mnemonic(name) };
     // objdump prints an absolute address bare, as it does a branch target: only
     // a branch or `dbcc` takes it as a target
     let target = name.starts_with('b') || name.starts_with("db");
@@ -410,5 +413,9 @@ pub fn from_gnu(text: &str) -> Result<String, String> {
             }
         })
         .collect();
+    let operands = match operands.as_slice() {
+        [source, _, quotient] if long_divide => vec![source.clone(), quotient.clone()],
+        _ => operands,
+    };
     Ok(if operands.is_empty() { name } else { format!("{name} {}", operands.join(", ")) })
 }
