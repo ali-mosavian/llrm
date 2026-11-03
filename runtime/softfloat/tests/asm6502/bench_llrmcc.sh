@@ -27,6 +27,8 @@ E2
   for k in base full; do
     d=""; [ $k = base ] && d=-DBASE
     srcs="$T/m.c"; [ $k = full ] && srcs="$T/m.c $S/src/sf32.c $S/src/sf32_conv.c"
+    # the 6502 config takes mul/div from sf32_6502.c
+    case "$op:${SF6502--include $S/include/sf_6502.h}" in mul:?*|div:?*) [ $k = full ] && grep -q "define SF_EXT_MULDIV" ${SF6502_HDR:-$S/include/sf_6502.h} && srcs="$srcs $S/src/sf32_6502.c";; esac
     : > $T/all.s
     for c in $srcs; do
       $LLRM_CC --target=6502-sim65 -$OPT $d -DSF_INTABI ${SF6502--include $S/include/sf_6502.h} -I$S/include -I$T -S $c -o $T/$(basename $c .c).s

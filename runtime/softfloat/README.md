@@ -74,3 +74,5 @@ Both compiled by llrm-cc (keep/llrm-cc_soft + llc_soft_merged, 2026-11-02), text
 
 `src/sf64.c`: `__adddf3 __subdf3 __muldf3 __divdf3 __negdf2`, the compares (`__cmpdf2 __eqdf2 __nedf2 __ltdf2 __ledf2 __gedf2 __gtdf2 __unorddf2`), `__floatsidf __floatunsidf __floatdidf __floatundidf` and `__fixdfsi __fixunsdfsi __fixdfdi __fixunsdfdi`; `__extendsfdf2` and `__truncdfsf2` are in `sf32_conv64.c`. The binary32 core at 56-bit working width.
 Host oracle: `cc -O2 -fno-builtin -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_f64.c src/sf64.c src/sf32_conv.c && ./a.out [n]`; edges, random classes, rounding ties, int conversions. Each of: wrong product shift, tie rule, divide step count, sticky bit fails it (10^4..10^5 mismatches).
+
+6502 build: `-include include/sf_6502.h` defines `SF_EXT_MULDIV`; `__mulsf3`/`__divsf3` then come from `src/sf32_6502.c` (link it beside `sf32.c`, `sf32_conv.c`). Reached -Os mul 3607 -> 2381 B, div 2911 -> 2343 B, sim65 cycles per call: mul -7%, div -5% at -Os; mul -21%, div -11% at -O2. Oracle: `tests/host_6502_muldiv.sh` (`CTL=1` must fail).

@@ -8,4 +8,6 @@
 #ifndef __OPTIMIZE_SIZE__
 #define SF_SHIFT_STEPS 1
 #endif
+/* mul and div come from src/sf32_6502.c (add stays generic: its tight form is 415 B larger). */
+#define SF_EXT_MULDIV 1
 #endif

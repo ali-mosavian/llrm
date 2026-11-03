@@ -48,6 +48,7 @@ static sf32 add_bits(sf32 a, sf32 b)
 
 static sf32 sub_bits(sf32 a, sf32 b) { return add_bits(a, b ^ SIGN); }
 
+#ifndef SF_EXT_MULDIV /* a target that supplies __mulsf3/__divsf3 elsewhere (6502: sf32_6502.c) defines it */
 static sf32 mul_bits(sf32 a, sf32 b)
 {
     uint32_t sign = (a ^ b) & SIGN;
@@ -130,6 +131,8 @@ static sf32 div_bits(sf32 a, sf32 b)
     return pack_near(sign, e, q | inexact);
 }
 
+#endif
+
 static int cmp_bits(sf32 a, sf32 b, int unordered)
 {
     if (is_nan(a) || is_nan(b)) return unordered;
@@ -142,8 +145,10 @@ static int cmp_bits(sf32 a, sf32 b, int unordered)
 
 sf_float SF_NAME(addsf3)(sf_float a, sf_float b) { return b2f(add_bits(f2b(a), f2b(b))); }
 sf_float SF_NAME(subsf3)(sf_float a, sf_float b) { return b2f(sub_bits(f2b(a), f2b(b))); }
+#ifndef SF_EXT_MULDIV
 sf_float SF_NAME(mulsf3)(sf_float a, sf_float b) { return b2f(mul_bits(f2b(a), f2b(b))); }
 sf_float SF_NAME(divsf3)(sf_float a, sf_float b) { return b2f(div_bits(f2b(a), f2b(b))); }
+#endif
 sf_float SF_NAME(negsf2)(sf_float a) { return b2f(f2b(a) ^ SIGN); }
 
 /* compiler-rt contract: unordered is 1 for eq/ne/lt/le and -1 for ge/gt; the core takes it as an argument so each entry point is a plain call. */
