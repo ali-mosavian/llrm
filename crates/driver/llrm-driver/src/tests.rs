@@ -463,6 +463,20 @@ fn a_parent_of_an_unrolled_loop_is_folded_by_indvars_at_m64_o3() {
     assert!(listing.contains("mov rdi, 229508"), "{listing}");
 }
 
+/// A 31-byte struct copy at m64 -Os was a `call memcpy` (the real-mode string
+/// rule counted it as eight dwords); the pin copies it as two overlapping
+/// 16-byte pieces (memory_expansion Os, 8 insns -> 5 per copy).
+#[test]
+fn a_31_byte_copy_at_m64_os_is_two_16_byte_pieces() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
+                define void @f(ptr %d, ptr %s) optsize {\n  call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 31, i1 false)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.matches("movups").count() == 4 && !listing.contains("call"), "{listing}");
+}
+
 /// The Os fill rule flips at a length that depends on the byte: the value the
 /// string fill needs in `rax` costs 2 B (`xor`) for 0, 7 for 255 (`mov rax,
 /// -1`) and 10 (`movabs`) otherwise, and the splat's load 3, 7 and 7. Each
