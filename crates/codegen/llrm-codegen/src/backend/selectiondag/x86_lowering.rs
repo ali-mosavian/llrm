@@ -167,6 +167,9 @@ pub struct MulPricing<'a> {
     pub milliclocks_per_byte: i64,
     /// `Tuning::multiply_by_clocks`: the fewest clocks, no byte term.
     pub by_clocks: bool,
+    /// `Tuning::price_pin_multiplies`: the pin's decompositions are priced
+    /// too, and a tie keeps the `imul`.
+    pub price_pin: bool,
 }
 
 impl CombineHooks for X86Lowering<'_> {
@@ -1991,6 +1994,14 @@ fn combine_mul(
         let product = mul_imm(dag, x, abs);
         return Some(negate(dag, product));
     }
+    // DEVIATE SD447: where the target prices the pin's decompositions, the
+    // sheet's chain decides alone: the pin's cases (`lea` pairs, `shl; sub`)
+    // cost an instruction and bytes the `imul` does not, and a tie keeps it.
+    // The pin: <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L51191>.
+    // Exit 2026-11-20. Owner llrm-target-x86-m64.
+    if let Some(pricing) = profile.filter(|pricing| pricing.price_pin) {
+        return priced_chain(dag, x, signed as i64, vt, pricing);
+    }
     let (mut first, mut second) = (0u128, 0u128);
     for divisor in [9u128, 5, 3] {
         if abs % divisor == 0 {
@@ -2064,11 +2075,11 @@ fn priced_chain(
 ) -> Option<SDValue> {
     use crate::backend::arithmetic;
     let width = if vt == EVT::I16 { 2 } else { 4 };
-    let MulPricing { cpu, arch, freq, milliclocks_per_byte, by_clocks } = pricing;
+    let MulPricing { cpu, arch, freq, milliclocks_per_byte, by_clocks, price_pin } = pricing;
     let chain = if by_clocks {
         arithmetic::chain_by_clocks(c, width, cpu)
     } else {
-        arithmetic::chain_at_speed(c, width, cpu, arch, freq, milliclocks_per_byte)
+        arithmetic::priced_chain_at_speed(c, width, cpu, arch, freq, milliclocks_per_byte, price_pin)
     }
     .ok()??;
     let shift = |dag: &mut SelectionDAG, value: SDValue, by: i64| {

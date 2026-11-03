@@ -576,6 +576,29 @@ fn a_node_made_by_the_address_matcher_is_selected_after_its_user_at_m64() {
     assert!(listing.contains("*2]"), "{listing}");
 }
 
+/// The pin turns `x * 10` and `x * 7` into `lea; lea` and `lea; sub`: one more
+/// instruction and 3 B for 1 clock, a loss at one clock per two bytes
+/// (frames/histo -O2: +4.6 % / +5.7 % instructions, +3 B). The `imul` stays;
+/// `x * 5` is one `lea` and stays that.
+#[test]
+fn a_multiply_by_10_or_7_stays_an_imul_and_by_5_a_lea_at_m64() {
+    let listing = |c: u32| {
+        let text = format!(
+            "target datalayout = \"@m64-datalayout@\"\n\
+             target triple = \"x86_64-unknown-linux-gnu\"\n\
+             define i32 @f(i32 %x, i32 %y) {{\n  %m = mul i32 %x, {c}\n  %s = sub i32 %y, %m\n  ret i32 %s\n}}\n"
+        );
+        let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &text, "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    for c in [10, 7] {
+        let listing = listing(c);
+        assert!(listing.contains("imul") && !listing.contains("lea"), "{c}: {listing}");
+    }
+    let five = listing(5);
+    assert!(five.contains("lea") && !five.contains("imul"), "{five}");
+}
+
 /// The Os fill rule flips at a length that depends on the byte: the value the
 /// string fill needs in `rax` costs 2 B (`xor`) for 0, 7 for 255 (`mov rax,
 /// -1`) and 10 (`movabs`) otherwise, and the splat's load 3, 7 and 7. Each

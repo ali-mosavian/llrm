@@ -32,6 +32,11 @@ pub struct Tuning {
     /// -O1..-O3); false: the chain where `speed_milliclocks_per_byte` pays
     /// for its bytes.
     pub multiply_by_clocks: bool,
+    /// A multiply by a constant is decomposed only where the chain's saved
+    /// clocks pay for its extra bytes at `speed_milliclocks_per_byte`, the
+    /// pin's own decompositions included (a tie keeps the `imul`); false:
+    /// the pin's `combineMul` decomposes unconditionally.
+    pub price_pin_multiplies: bool,
     /// `UnrollingPreferences::Threshold` and `MaxPercentThresholdBoost` of the
     /// full-unroll pass; none: the pass's own, by optimization level.
     pub unroll_threshold: Option<u32>,
@@ -77,6 +82,7 @@ impl Tuning {
         size_milliclocks_per_byte: 0,
         speed_milliclocks_per_byte: 0,
         multiply_by_clocks: false,
+        price_pin_multiplies: false,
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
         unroll_partial_threshold: None,

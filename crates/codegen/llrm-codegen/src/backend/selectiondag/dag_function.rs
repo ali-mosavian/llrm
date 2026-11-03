@@ -1068,6 +1068,7 @@ fn selected_in(
     let mul_rate = if cpu.size || cpu.min_size || bytes_beat_clocks { 0 } else { cpu.speed_milliclocks_per_byte() };
     let speed_goal = !(cpu.size || cpu.min_size || bytes_beat_clocks);
     let mul_by_clocks = speed_goal && cpu.target().tti().is_some_and(|tti| tti.multiply_by_clocks());
+    let price_pin = speed_goal && cpu.target().tti().is_some_and(|tti| tti.price_pin_multiplies());
     let frequencies = (mul_rate > 0 && !mul_by_clocks).then(|| {
         let bpi = llrm_analysis::bpi::BranchProbabilityInfo::of(
             llrm_analysis::bpi::Module {
@@ -1102,6 +1103,7 @@ fn selected_in(
                         freq: 1.0,
                         milliclocks_per_byte: mul_rate,
                         by_clocks: true,
+                        price_pin: false,
                     })
                 } else {
                     frequencies
@@ -1113,6 +1115,7 @@ fn selected_in(
                                 freq: frequencies.relative_to_entry(parent),
                                 milliclocks_per_byte: mul_rate,
                                 by_clocks: false,
+                                price_pin,
                             },
                         )
                 },

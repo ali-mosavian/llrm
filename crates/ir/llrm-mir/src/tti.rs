@@ -431,6 +431,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::price_pin_multiplies`.
+    fn price_pin_multiplies(&self) -> bool {
+        false
+    }
+
     /// `Subtarget.canUseCMOV()`: false where a `select` is lowered to a branch.
     fn has_cmov(&self) -> bool {
         true

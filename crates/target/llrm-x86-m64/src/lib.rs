@@ -45,6 +45,13 @@ pub struct M64;
 static REGISTERS: LazyLock<Vec<llrm_target::registers::Register>> =
     LazyLock::new(|| llrm_target::registers::parse(include_str!("registers.regs")).expect("registers.regs parses"));
 
+/// What a code byte is worth at -O2/-O3, in thousandths of a clock: one clock
+/// is two bytes. A rule of the x86-64 corpus bar (oversight 2026-11-03), not a
+/// cache fact: this CPU's sheet has no line-fill price to derive it from (m32
+/// derives its own). A constant multiply is decomposed only where the clocks
+/// it saves pay for the bytes it adds at this rate (`price_pin_multiplies`).
+const SPEED_MILLICLOCKS_PER_BYTE: i64 = 500;
+
 /// How flat operations are priced from the instruction forms: `opcosts.txt`.
 static OPCOSTS: LazyLock<llrm_target::opcosts::Description> = LazyLock::new(|| {
     llrm_target::opcosts::Description::parse(include_str!("opcosts.txt")).expect("opcosts.txt parses")
@@ -355,6 +362,8 @@ impl llrm_target::Target for M64 {
                     .map(|one| {
                         one.with_tuning(llrm_mir::target::Tuning {
                             inline_size_guard_at_size: true,
+                            speed_milliclocks_per_byte: SPEED_MILLICLOCKS_PER_BYTE,
+                            price_pin_multiplies: true,
                             ..llrm_mir::target::Tuning::PIN
                         })
                     })

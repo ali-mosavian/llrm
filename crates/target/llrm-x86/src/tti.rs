@@ -546,6 +546,10 @@ impl Tti for X86 {
         self.tuning.multiply_by_clocks
     }
 
+    fn price_pin_multiplies(&self) -> bool {
+        self.tuning.price_pin_multiplies
+    }
+
     fn has_cmov(&self) -> bool {
         self.cmov
     }
