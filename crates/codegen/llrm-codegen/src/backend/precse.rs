@@ -337,10 +337,15 @@ impl Walk<'_> {
             return false;
         }
         // Heuristic 2: no register operand and only copies read it: no use.
+        // DEVIATE CSE5: a call's argument reads a cheap constant as a copy in
+        // the pin, which then makes it twice; sharing it costs nothing the
+        // callee-saved pricing below does not count (sieve m64 -O2 made a
+        // zero twice, 4 bytes and 6 instructions over release/next). Exit
+        // 2026-11-20 with CSE4.
         let reads_value = !one.uses.is_empty();
         if !reads_value
             && old_readers.iter().all(|reader| match reader {
-                Reader::Insn(id) => self.copies(*id) || self.pinned_read(*id, old),
+                Reader::Insn(id) => self.copies(*id) || (!cheap(one) && self.pinned_read(*id, old)),
                 Reader::Phi(_) => false,
             })
         {
@@ -1043,10 +1048,11 @@ mod tests {
                 address: Some(crate::model::ir::Addr::new(crate::model::ir::Space::External, 0)),
             })
         };
-        let make = |at: i64, value: u32| {
-            insn(at, Operation::Move, "mov", vec![wide(value)], vec![symbol()], vec![value], vec![])
-        };
-        let build = |call_reads: bool, fixed_reader: bool| {
+        let build = |call_reads: bool, fixed_reader: bool, zero: bool| {
+            let make = |at: i64, value: u32| {
+                let source = if zero { Loc::Imm(llrm_lir::Imm { value: 0, width: 8, address: None }) } else { symbol() };
+                insn(at, Operation::Move, "mov", vec![wide(value)], vec![source], vec![value], vec![])
+            };
             let mut reader = if call_reads {
                 insn(3, Operation::Call, "call", vec![], vec![], vec![], vec![11])
             } else {
@@ -1088,14 +1094,17 @@ mod tests {
                 .filter(|one| one.what.as_ref().is_some_and(|what| matches!(what.sources.as_slice(), [Loc::Imm(_)])))
                 .count()
         };
-        let read = shared(&build(false, false), &RegisterClasses::m16());
+        let read = shared(&build(false, false, false), &RegisterClasses::m16());
         assert_eq!(made(&read), 1, "the premise: an address an add reads is shared");
-        let argument = shared(&build(true, false), &RegisterClasses::m16());
+        let argument = shared(&build(true, false, false), &RegisterClasses::m16());
         assert_eq!(made(&argument), 2, "{argument:?}");
         // A reader that is not a call but needs the value in a fixed register
         // (the return value) is not a copy: the shared constant stays shared.
-        let returned = shared(&build(false, true), &RegisterClasses::m16());
+        let returned = shared(&build(false, true, false), &RegisterClasses::m16());
         assert_eq!(made(&returned), 1, "{returned:?}");
+        // A cheap constant a call argument reads is shared all the same (CSE5).
+        let zero = shared(&build(true, false, true), &RegisterClasses::m16());
+        assert_eq!(made(&zero), 1, "{zero:?}");
     }
 
     /// `PerformSimplePRE` hoisted an expression into a block that ends in `ret`
