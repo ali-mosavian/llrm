@@ -258,7 +258,8 @@ fn a_dword_add_that_keeps_its_source_is_a_lea_at_m64() {
 /// again in a register for each (`movsd xmm1, [K]`, `divsd xmm0, xmm1`); the
 /// pin's `reMaterializeFor` folds the load into the division
 /// (`divsd xmm0, [K]`, `canFoldAsLoad`). double_to_uint64 m64 -O2 paid one
-/// instruction per use.
+/// instruction per use. The first use too: `foldAsLoad` folds the one load left
+/// with a single reader once the split's copy is dead.
 #[test]
 fn a_constant_pool_load_made_again_is_folded_into_the_division_at_m64() {
     let mut text = "target datalayout = \"@m64-datalayout@\"\n\
@@ -277,7 +278,7 @@ fn a_constant_pool_load_made_again_is_folded_into_the_division_at_m64() {
     let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let folded = listing.lines().filter(|line| line.contains("divsd") && line.contains("qword ptr $K")).count();
-    assert!(folded >= 3, "{listing}");
+    assert_eq!(folded, 4, "{listing}");
 }
 
 /// A `{ i64, i48 }` (a packed struct of 14 bytes) crossed the DAG selector as
