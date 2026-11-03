@@ -136,6 +136,14 @@ def sim(binpath, cwd):
     return p.returncode, int(m.group(1)), int(i.group(1)) if i else None
 
 
+HAND_HELPERS = {"mulqi3", "mulhi3", "udivhi3", "umodhi3", "divhi3", "modhi3", "memset", "memcpy", "memmove"}
+
+
+def data_size(obj, cwd):
+    p = sh(["od65", "--dump-segsize", obj], cwd)
+    return sum(int(m.group(2)) for m in re.finditer(r"(RODATA|DATA):\s*(\d+)", p.stdout))
+
+
 def code_size(obj, cwd):
     """CODE, RODATA and DATA: constant tables the compiler makes are part of the kernel."""
     p = sh(["od65", "--dump-segsize", obj], cwd)
@@ -200,7 +208,7 @@ def main():
     ver = next(l for l in (r.stdout + r.stderr).splitlines() if "version" in l)
     hdr = [f"cc1: {a.cc1} md5 {md5(a.cc1)}", f"version: {ver}",
            "assembler/linker/sim: " + sh(["sim65", "--version"], w).stderr.strip().splitlines()[0] + " (ca65/ld65 via cl65 -t " + TARGET + ")",
-           "flags: cc1 -quiet -<level> -fno-tree-loop-distribute-patterns -DK_<name> kernels.c; clocks=(T101-T1)/100-9; bytes=CODE+RODATA+DATA of the kernel object plus the helpers it calls"]
+           "flags: cc1 -quiet -<level> -fno-tree-loop-distribute-patterns -DK_<name> kernels.c; clocks=(T101-T1)/100-9; bytes=CODE+RODATA+DATA of the kernel object plus the helpers it calls plus the caller's result move"]
     rows, bad, notes = {}, [], {}
     for name, args, wide, expect, ksrc, rel in kernels:
         if name not in want:
@@ -242,11 +250,20 @@ def main():
             n_ins = None
             if None not in ins_ and (ins_[1] - ins_[0]) % 100 == 0:
                 n_ins = (ins_[1] - ins_[0]) // 100 - 2
-            rows[cell] = (body + extra, (ts[1] - ts[0]) // 100 - 9, n_ins)
+            # Result convention: ours/llvm-mos/cc65 return in A (A:X), gcc in rc2 (rc2:rc3), so the
+            # caller's lda rc2 (+ ldx rc3) is charged to gcc: 2 B / 3 clk / 1 insn, wide 4 B / 6 clk / 2 insn.
+            mv_b, mv_c, mv_i = (4, 6, 2) if wide else (2, 3, 1)
+            rows[cell] = (body + extra + mv_b, (ts[1] - ts[0]) // 100 - 9 + mv_c, None if n_ins is None else n_ins + mv_i)
+            note = f"incl. result move +{mv_b} B +{mv_c} clk +{mv_i} insn"
+            if used:
+                note += f"; body {body} B + " + ", ".join(f"__{h} {helper_bytes[h]} B" for h in used)
+                if any(h in HAND_HELPERS for h in used):
+                    note = "hand helper, not codegen; " + note
+            if data_size(f"{w}/k.o", w) >= 64:
+                note = "table, not codegen; " + note
+            notes[cell] = note
             if (ts[1] - ts[0]) % 100:
                 bad.append((*cell, f"cycles per call not whole: {(ts[1]-ts[0])/100}")); del rows[cell]; continue
-            if used:
-                notes[cell] = f"body {body} B + " + ", ".join(f"__{h} {helper_bytes[h]} B" for h in used)
     lv = a.levels.split(",")
     out = ["# gcc mos6502 spike column", ""] + hdr + ["", "| kernel | " + " | ".join(f"{l} B/clk" for l in lv) + " |", "|---|" + "---|" * len(lv)]
     for name, *_ in kernels:

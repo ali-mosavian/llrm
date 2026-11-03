@@ -1,71 +1,71 @@
-# z80 gcc matrix, fork spike/backends 9d2d5c0c4 (gcc 17.0.0 master d77bceec), 2026-11-03, cc1 md5 ef95b73b10439c23694a3124ce1af2e6, ucsim_z80 0.8.15, sdasz80/sdldz80 SDCC 4.5.0; levels are gcc -O1/-O2/-Os as run (no Oz); clocks=T-states, call minus empty run; bytes=linked code minus crt0 and driver, incl. hand-written helpers
+# z80 gcc matrix, fork spike/backends 9a96eadb5 (gcc 17.0.0 master d77bceec), 2026-11-03, cc1 md5 ef95b73b10439c23694a3124ce1af2e6, ucsim_z80 0.8.15, sdasz80/sdldz80 SDCC 4.5.0; levels are gcc -O1/-O2/-Os as run (no Oz); clocks=T-states, call minus empty run; bytes=linked code minus crt0 and driver, incl. hand-written helpers; CONVENTION: 16-bit results are returned in HL by gcc and DE by ours, so gcc is charged the caller's ex de,hl (+1 B +4 T +1 insn); 8-bit results in A for both; notes mark cells that call hand helpers (hand helper, not codegen)
 target	prog	level	compiler	code_bytes	clocks	instrs	note
-z80	zero	O1	gcc	2	44	4	
-z80	zero	O2	gcc	2	44	4	
-z80	zero	Os	gcc	2	44	4	
-z80	add8	O1	gcc	2	58	6	
-z80	add8	O2	gcc	2	58	6	
-z80	add8	Os	gcc	2	58	6	
-z80	add16	O1	gcc	2	74	6	
-z80	add16	O2	gcc	2	74	6	
-z80	add16	Os	gcc	2	74	6	
-z80	max8	O1	gcc	8	76	9	
-z80	max8	O2	gcc	8	76	9	
-z80	max8	Os	gcc	8	76	9	
-z80	max16	O1	gcc	14	113	16	
-z80	max16	O2	gcc	14	113	16	
-z80	max16	Os	gcc	14	113	16	
-z80	sum_arr	O1	gcc	36	632	115	
-z80	sum_arr	O2	gcc	32	512	85	
-z80	sum_arr	Os	gcc	22	624	102	
-z80	find	O1	gcc	36	486	60	
-z80	find	O2	gcc	32	386	53	
-z80	find	Os	gcc	21	450	59	
-z80	fill	O1	gcc	33	470	71	
-z80	fill	O2	gcc	31	464	70	
-z80	fill	Os	gcc	27	477	63	
-z80	popcount	O1	gcc	27	500	89	
-z80	popcount	O2	gcc	26	500	89	
-z80	popcount	Os	gcc	22	584	98	
-z80	mul8	O1	gcc	17	385	44	
-z80	mul8	O2	gcc	17	385	44	
-z80	mul8	Os	gcc	17	385	44	
-z80	fib	O1	gcc	31	672	107	
-z80	fib	O2	gcc	31	672	107	
-z80	fib	Os	gcc	22	840	140	
-z80	gcd	O1	gcc	24	290	46	
-z80	gcd	O2	gcc	25	274	45	
-z80	gcd	Os	gcc	22	304	48	
-z80	sum4	O1	gcc	20	142	11	
-z80	sum4	O2	gcc	20	142	11	
-z80	sum4	Os	gcc	20	142	11	
-z80	slen	O1	gcc	17	398	55	
-z80	slen	O2	gcc	21	398	55	
-z80	slen	Os	gcc	15	508	66	
-z80	scmp	O1	gcc	36	182	21	
-z80	scmp	O2	gcc	45	171	19	
-z80	scmp	Os	gcc	26	150	18	
-z80	mcopy	O1	gcc	71	786	98	
-z80	mcopy	O2	gcc	103	840	97	
-z80	mcopy	Os	gcc	55	1354	129	
-z80	crc16	O1	gcc	146	12532	1799	
-z80	crc16	O2	gcc	120	5126	519	
-z80	crc16	Os	gcc	100	13764	1582	
-z80	mul16	O1	gcc	23	1008	110	
-z80	mul16	O2	gcc	23	1008	110	
-z80	mul16	Os	gcc	23	1008	110	
-z80	digits	O1	gcc	106	7505	798	
-z80	digits	O2	gcc	99	7505	798	
-z80	digits	Os	gcc	76	7207	786	
-z80	reverse	O1	gcc	58	648	86	
-z80	reverse	O2	gcc	57	644	85	
-z80	reverse	Os	gcc	86	1564	125	
-z80	bsearch8	O1	gcc	74	796	87	
-z80	bsearch8	O2	gcc	80	756	86	
-z80	bsearch8	Os	gcc	71	912	89	
-z80	sum16	O1	gcc	46	1055	132	
-z80	sum16	O2	gcc	79	3054	328	
-z80	sum16	Os	gcc	41	1584	195	
-z80	schr	O1	gcc	32	369	51	
-z80	schr	O2	gcc	32	369	51	
-z80	schr	Os	gcc	23	327	43	
+z80	zero	O1	gcc	2	44	4	8-bit result in A, no move
+z80	zero	O2	gcc	2	44	4	8-bit result in A, no move
+z80	zero	Os	gcc	2	44	4	8-bit result in A, no move
+z80	add8	O1	gcc	2	58	6	8-bit result in A, no move
+z80	add8	O2	gcc	2	58	6	8-bit result in A, no move
+z80	add8	Os	gcc	2	58	6	8-bit result in A, no move
+z80	add16	O1	gcc	3	78	7	incl. result move +1 B +4 T +1 insn
+z80	add16	O2	gcc	3	78	7	incl. result move +1 B +4 T +1 insn
+z80	add16	Os	gcc	3	78	7	incl. result move +1 B +4 T +1 insn
+z80	max8	O1	gcc	8	76	9	8-bit result in A, no move
+z80	max8	O2	gcc	8	76	9	8-bit result in A, no move
+z80	max8	Os	gcc	8	76	9	8-bit result in A, no move
+z80	max16	O1	gcc	15	117	17	incl. result move +1 B +4 T +1 insn
+z80	max16	O2	gcc	15	117	17	incl. result move +1 B +4 T +1 insn
+z80	max16	Os	gcc	15	117	17	incl. result move +1 B +4 T +1 insn
+z80	sum_arr	O1	gcc	36	632	115	8-bit result in A, no move
+z80	sum_arr	O2	gcc	32	512	85	8-bit result in A, no move
+z80	sum_arr	Os	gcc	22	624	102	8-bit result in A, no move
+z80	find	O1	gcc	36	486	60	8-bit result in A, no move
+z80	find	O2	gcc	32	386	53	8-bit result in A, no move
+z80	find	Os	gcc	21	450	59	8-bit result in A, no move
+z80	fill	O1	gcc	33	470	71	8-bit result in A, no move
+z80	fill	O2	gcc	31	464	70	8-bit result in A, no move
+z80	fill	Os	gcc	27	477	63	8-bit result in A, no move
+z80	popcount	O1	gcc	27	500	89	8-bit result in A, no move
+z80	popcount	O2	gcc	26	500	89	8-bit result in A, no move
+z80	popcount	Os	gcc	22	584	98	8-bit result in A, no move
+z80	mul8	O1	gcc	17	385	44	hand helper, not codegen; 8-bit result in A, no move
+z80	mul8	O2	gcc	17	385	44	hand helper, not codegen; 8-bit result in A, no move
+z80	mul8	Os	gcc	17	385	44	hand helper, not codegen; 8-bit result in A, no move
+z80	fib	O1	gcc	32	676	108	incl. result move +1 B +4 T +1 insn
+z80	fib	O2	gcc	32	676	108	incl. result move +1 B +4 T +1 insn
+z80	fib	Os	gcc	23	844	141	incl. result move +1 B +4 T +1 insn
+z80	gcd	O1	gcc	24	290	46	8-bit result in A, no move
+z80	gcd	O2	gcc	25	274	45	8-bit result in A, no move
+z80	gcd	Os	gcc	22	304	48	8-bit result in A, no move
+z80	sum4	O1	gcc	20	142	11	8-bit result in A, no move
+z80	sum4	O2	gcc	20	142	11	8-bit result in A, no move
+z80	sum4	Os	gcc	20	142	11	8-bit result in A, no move
+z80	slen	O1	gcc	18	402	56	incl. result move +1 B +4 T +1 insn
+z80	slen	O2	gcc	22	402	56	incl. result move +1 B +4 T +1 insn
+z80	slen	Os	gcc	16	512	67	incl. result move +1 B +4 T +1 insn
+z80	scmp	O1	gcc	37	186	22	incl. result move +1 B +4 T +1 insn
+z80	scmp	O2	gcc	46	175	20	incl. result move +1 B +4 T +1 insn
+z80	scmp	Os	gcc	27	154	19	incl. result move +1 B +4 T +1 insn
+z80	mcopy	O1	gcc	71	786	98	8-bit result in A, no move
+z80	mcopy	O2	gcc	103	840	97	8-bit result in A, no move
+z80	mcopy	Os	gcc	55	1354	129	8-bit result in A, no move
+z80	crc16	O1	gcc	147	12536	1800	incl. result move +1 B +4 T +1 insn
+z80	crc16	O2	gcc	121	5130	520	incl. result move +1 B +4 T +1 insn
+z80	crc16	Os	gcc	101	13768	1583	incl. result move +1 B +4 T +1 insn
+z80	mul16	O1	gcc	24	1012	111	hand helper, not codegen; incl. result move +1 B +4 T +1 insn
+z80	mul16	O2	gcc	24	1012	111	hand helper, not codegen; incl. result move +1 B +4 T +1 insn
+z80	mul16	Os	gcc	24	1012	111	hand helper, not codegen; incl. result move +1 B +4 T +1 insn
+z80	digits	O1	gcc	106	7505	798	hand helper, not codegen; 8-bit result in A, no move
+z80	digits	O2	gcc	99	7505	798	hand helper, not codegen; 8-bit result in A, no move
+z80	digits	Os	gcc	76	7207	786	hand helper, not codegen; 8-bit result in A, no move
+z80	reverse	O1	gcc	58	648	86	8-bit result in A, no move
+z80	reverse	O2	gcc	57	644	85	8-bit result in A, no move
+z80	reverse	Os	gcc	86	1564	125	8-bit result in A, no move
+z80	bsearch8	O1	gcc	74	796	87	8-bit result in A, no move
+z80	bsearch8	O2	gcc	80	756	86	8-bit result in A, no move
+z80	bsearch8	Os	gcc	71	912	89	8-bit result in A, no move
+z80	sum16	O1	gcc	47	1059	133	incl. result move +1 B +4 T +1 insn
+z80	sum16	O2	gcc	80	3058	329	incl. result move +1 B +4 T +1 insn
+z80	sum16	Os	gcc	42	1588	196	incl. result move +1 B +4 T +1 insn
+z80	schr	O1	gcc	32	369	51	8-bit result in A, no move
+z80	schr	O2	gcc	32	369	51	8-bit result in A, no move
+z80	schr	Os	gcc	23	327	43	8-bit result in A, no move

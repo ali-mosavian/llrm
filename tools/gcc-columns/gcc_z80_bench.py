@@ -110,7 +110,7 @@ def main():
            "assembler/linker: sdasz80/sdldz80 (SDCC 4.5.0), ucsim_z80",
            "flags: cc1 -quiet -<level> -DK_<name> kernels.c; driver cc1 -quiet -O1"]
     base_flags = ["-quiet"]
-    rows, bad = {}, []
+    rows, bad, cnotes = {}, [], {}
     for name, ret, args, want_v in K:
         if name not in want:
             continue
@@ -145,7 +145,14 @@ def main():
             if got & mask != want_v & mask:
                 bad.append((*cell, f"WRONG result {got & mask:#x}, hand-derived {want_v & mask:#x}")); continue
             b = linked_code(f"{w}/x.map") - code_size(f"{w}/crt0.rel") - code_size(f"{w}/d.rel")
-            rows[cell] = (b, t - bt, i - bi)
+            # Result convention: ours returns 16-bit values in DE, gcc in HL, so the caller's
+            # ex de,hl is charged to gcc: +1 B +4 T +1 insn for 16-bit results (8-bit: A in both).
+            mv = (1, 4, 1) if ret != U8 else (0, 0, 0)
+            rows[cell] = (b + mv[0], t - bt + mv[1], i - bi + mv[2])
+            note = f"incl. result move +{mv[0]} B +{mv[1]} T +{mv[2]} insn" if mv[0] else "8-bit result in A, no move"
+            if re.search(r"___(mulqi3|mulhi3|udivhi3|call_hl)\b", open(f"{w}/k.s").read()):
+                note = "hand helper, not codegen; " + note
+            cnotes[cell] = note
     lv = a.levels.split(",")
     out = ["# gcc z80 spike column", ""] + hdr + ["", "| kernel | " + " | ".join(f"{l} B/T/insn" for l in lv) + " | best B | best T |", "|---|" + "---|" * (len(lv) + 2)]
     for name, *_ in K:
@@ -164,7 +171,7 @@ def main():
             for l in lv:
                 if name in want:
                     c = rows.get((name, l))
-                    t.append("\t".join(["z80", name, l, "gcc"] + ([str(x) for x in c] + [""] if c else ["", "", "", "n/a: " + notes.get((name, l), "not run")])))
+                    t.append("\t".join(["z80", name, l, "gcc"] + ([str(x) for x in c] + [cnotes.get((name, l), "")] if c else ["", "", "", "n/a: " + notes.get((name, l), "not run")])))
         open(a.tsv, "w").write("\n".join(t) + "\n")
     text = "\n".join(out) + "\n"
     if a.out:
