@@ -640,6 +640,8 @@ impl Builder<'_> {
         opt_size: bool,
         filled: bool,
     ) -> Option<SDValue> {
+            return None;
+        }
         const FLDZ: u64 = 2;
         const FST_QWORD: u64 = 3;
         if self.target.dag.pointer.size_in_bits() != 16
@@ -652,11 +654,11 @@ impl Builder<'_> {
         }
         let (dwords, cells) = (length / 4, length / 8);
         let x87 = FLDZ + cells * FST_QWORD;
-        // The form it replaces: the fill where `fill_is_smaller` chose it (the
-        // clocks of that trade are not priced here, so only for size), else the
-        // integer stores.
-        let ints = if filled { FILL_BYTES } else { dwords * 8 };
-        if x87 >= ints || (filled && !opt_size) {
+        // Never over a fill: its price here (`FILL_BYTES`) cannot see the setup
+        // that neighbouring fills share, and fpbench/nbody_single -Os grew 2 B
+        // taking the `fst`s over two adjacent ones.
+        let ints = dwords * 8;
+        if filled || x87 >= ints {
             return None;
         }
         if !opt_size {

@@ -874,10 +874,9 @@ entry:
 /// where the old selector's `rep stos` is 12: the inline limit was the pin's
 /// 8 stores, not the target's size-tuned ratio (nbody_single.nib: 96 B of
 /// `mov [bp-N],esi` for four arrays, and 610 more `mov` stores over the
-/// corpus under dag). Three doubles of zeros are `fldz` and three `fst` (11 B,
-/// under the fill's 12): nbody -Os 8 B and 100 clocks under the fill.
+/// corpus under dag). Real mode takes four stores inline at -Os.
 #[test]
-fn at_os_a_24_byte_clear_is_x87_stores() {
+fn at_os_a_24_byte_clear_is_a_rep_string_operation() {
     let module = llrm_mir::parse::module(M16_CLEAR_24).expect("parses");
     let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
     cpu.size = true;
@@ -890,7 +889,7 @@ fn at_os_a_24_byte_clear_is_x87_stores() {
         .filter_map(|i| i.what.as_ref())
         .filter(|w| matches!(w.dests.as_slice(), [crate::model::ir::Loc::Mem(_)]))
         .count();
-    assert_eq!((fills, stores), (0, 3), "no fill, three float stores");
+    assert_eq!((fills, stores), (1, 0), "a fill and no store");
 }
 
 const M16_COPY_12: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
@@ -1163,7 +1162,7 @@ fn at_os_a_clear_that_is_a_fill_stays_a_fill_as_it_grows() {
     for parity in [0, 1] {
         // whole doubles are x87 stores, not a fill
         // (`a_zero_clear_of_doubles_*`)
-        let sizes: Vec<u32> = (4..=64).filter(|n| n % 2 == parity && n % 8 != 0).collect();
+        let sizes: Vec<u32> = (4..=64).filter(|n| n % 2 == parity).collect();
         let first = sizes.iter().copied().find(|&n| memset_shape(n, 0).0 == 1).expect("a fill");
         assert!(first > 8, "{first}");
         assert!(sizes.iter().filter(|&&n| n >= first).all(|&n| memset_shape(n, 0).0 == 1), "parity {parity}");
@@ -1205,16 +1204,17 @@ entry:
 /// four dword immediate stores (32 B) where `fldz; fst; fst` is 8.
 #[test]
 fn a_zero_clear_of_doubles_is_x87_stores_not_dword_stores() {
-    let ops = memset_ops(16, true);
-    assert_eq!(ops[..3], ["FloatLoad:fldz", "FloatStore:fst", "FloatStore:fst"], "{ops:?}");
+    let ops = memset_ops(8, true);
+    assert_eq!(ops[..2], ["FloatLoad:fldz", "FloatStore:fst"], "{ops:?}");
     assert!(!ops.iter().any(|o| o.starts_with("Fill") || o.starts_with("Store")), "{ops:?}");
 }
 
-/// Past the break-even length the `rep stos` fill (16 B) is smaller than the
-/// `fst`s (2 + 3 a double).
+/// A clear the model prices as a fill stays one at -Os: it cannot see the
+/// setup adjacent fills share (fpbench and nbody_single grew 2 B with `fst`s
+/// over two of 24 B).
 #[test]
-fn a_long_zero_clear_of_doubles_stays_rep_stos() {
-    let ops = memset_ops(64, true);
+fn a_zero_clear_of_doubles_that_is_a_fill_stays_rep_stos() {
+    let ops = memset_ops(24, true);
     assert!(ops.iter().any(|o| o.starts_with("Fill")) && !ops.iter().any(|o| o.starts_with("FloatStore")), "{ops:?}");
 }
 
