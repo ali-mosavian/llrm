@@ -234,5 +234,14 @@ pub fn adb(text: &str) -> Option<String> {
         out.push_str(&format!("F:G${}$0_0$0({{{size}}}DF,{result}),C,0,0,0,0,0\n", one.function));
         out.push_str(&format!("S:G${}$0_0$0({{{size}}}DF,{result}),C,0,0\n", one.function));
     }
+    // A function the module calls but does not define: a symbol of its own.
+    for one in llrm_mir::debuginfo::declarations(&module) {
+        let procedure = llrm_mir::debuginfo::read_type(&module, one.r#type)?;
+        let result = match procedure.target {
+            Some(result) => sdcc_type(&module, result)?,
+            None => "SV:S".to_owned(),
+        };
+        out.push_str(&format!("S:G${}$0_0$0({{2}}DF,{result}),C,0,0\n", one.function));
+    }
     Some(out)
 }

@@ -82,3 +82,16 @@ fn the_adb_types_a_function_by_its_signedness() {
     assert!(adb_of("i8", "DW_ATE_unsigned_char", 8).contains("DF,UC:S"));
     assert!(adb_of("i16", "DW_ATE_signed", 16).starts_with("M:f\n"));
 }
+
+/// A function the module calls and does not define had no symbol in the
+/// `.adb`, so the `.cdb` could not type the call (SDCC lists `G$g` as well).
+#[test]
+fn the_adb_lists_a_declared_function_with_its_type() {
+    let ir = LOCATED
+        .replace("define i16 @f(", "declare i16 @g(i16)\ndefine i16 @f(")
+        .replace("%c = add i16 %a, %b, !dbg !7", "%c = call i16 @g(i16 %a), !dbg !7")
+        .replace("!6 = !DISubroutineType(types: !{null})", "!6 = !DISubroutineType(types: !{null})\n!10 = !DISubprogram(name: \"g\", scope: !1, file: !1, line: 9, type: !11, spFlags: 0)\n!11 = !DISubroutineType(types: !{!12, !12})\n!12 = !DIBasicType(name: \"int\", size: 16, encoding: DW_ATE_signed)")
+        .replace("declare i16 @g(i16)", "declare i16 @g(i16) !dbg !10");
+    let adb = llrm_z80::driver::adb(&ir).expect("an adb");
+    assert!(adb.contains("S:G$g$0_0$0({2}DF,SI:S),C,0,0"), "{adb}");
+}
