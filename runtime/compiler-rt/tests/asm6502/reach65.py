@@ -39,4 +39,7 @@ while work:
         if text.startswith('.'): continue  # directives (.export, .segment) name labels without reaching them
         for w in re.findall(r'[A-Za-z_][\w$@]*',text):
             if w in names and w not in seen: work.append(w)
+missing = sorted(n for n in names if n not in lab)
+if missing:
+    sys.exit("reach65: no address for " + " ".join(missing[:5]) + ": link with cl65 -g, or -Ln lists exported labels only and sizes are wrong")
 print(sum(size(n) for n in seen if not bss(n)), " ".join(sorted(seen)))
