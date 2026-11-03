@@ -25,25 +25,36 @@ def code_of(disassembly: str) -> dict[int, list[str]]:
         if (head := re.match(r"^([0-9a-f]+) <(.+)>:$", line)) is not None:
             start = int(head.group(1), 16)
             current = out.setdefault(start, [])
-        elif current is not None and (row := re.match(r"^\s*([0-9a-f]+):\t(.*)$", line)):
-            current.append(f"{int(row.group(1), 16) - start:x} {re.sub(r'\s+', ' ', row.group(2).split('#')[0].strip())}")
+        elif current is not None and (row := re.match(r"^\s*([0-9a-f]+):\s*\t(.*)$", line)):
+            text = re.sub(r"<[^>]*>", "", row.group(2).split("#")[0])  # a target's symbol name differs between the objects, its address does not
+            current.append(f"{int(row.group(1), 16) - start:x} {re.sub(r'\s+', ' ', text.strip())}")
     return out
 
 
-def tables_of(text: str) -> dict[int, tuple]:
-    """start offset in .text -> (end, size of prolog, frame register, unwind codes) from `llvm-objdump -u`."""
+def symbols_of(text: str) -> dict[str, int]:
+    """name -> offset in .text of the symbols `llvm-objdump -t` lists in section 1: `-u` names a function by its symbol where our object has one, `.text + off` where the pin's has none."""
+    return {m.group(2): int(m.group(1), 16) for m in re.finditer(r"\(sec +1\).*? 0x([0-9a-f]+) (\S+)$", text, re.M)}
+
+
+def tables_of(text: str, symbols: dict[str, int] | None = None) -> dict[int, tuple]:
+    """start offset in .text -> (end, size of prolog, frame register, unwind codes) from `llvm-objdump -u`; `symbols` (symbols_of) resolves a function named by symbol."""
+    symbols = {".text": 0, **(symbols or {})}
+
+    def address(name: str, plus: str | None) -> int | None:
+        return None if name not in symbols else symbols[name] + int(plus or "0", 16)
+
     out: dict[int, tuple] = {}
     for block in text.split("Function Table:")[1:]:
         for part in re.split(r"\n\s*Start Address:", block)[1:] if "Start Address:" in block else []:
-            start = re.match(r"\s*\.text(?: \+ 0x([0-9a-f]+))?", part)
-            if start is None:
+            start = re.match(r"\s*(\S+)(?: \+ 0x([0-9a-f]+))?", part)
+            if start is None or (at := address(start.group(1), start.group(2))) is None:
                 continue
-            end = re.search(r"End Address: \.text(?: \+ 0x([0-9a-f]+))?", part)
+            end = re.search(r"End Address: (\S+)(?: \+ 0x([0-9a-f]+))?", part)
             prolog = re.search(r"Size of prolog: (\d+)", part)
             frame = re.search(r"Frame register: (\S+)|No frame pointer used", part)
             codes = tuple(re.findall(r"0x[0-9a-f]+: (UOP_[^\n]*)", part))
-            out[int(start.group(1) or "0", 16)] = (
-                int(end.group(1) or "0", 16) if end else None,
+            out[at] = (
+                address(end.group(1), end.group(2)) if end else None,
                 int(prolog.group(1)) if prolog else None,
                 frame.group(0) if frame else None,
                 codes,
@@ -51,7 +62,7 @@ def tables_of(text: str) -> dict[int, tuple]:
     return out
 
 
-FIXTURES = [str(Path(__file__).resolve().parents[2] / "bench" / name) for name in ("fib/fib.c", "crc/crc.c", "hanoi/hanoi.c")]
+FIXTURES = [str(Path(__file__).resolve().parent / "win64/unwind_fixtures.c")] + [str(Path(__file__).resolve().parents[2] / "bench" / name) for name in ("fib/fib.c", "crc/crc.c", "hanoi/hanoi.c")]
 SKIPPED = 77  # the gate's SKIPPED verdict
 
 
@@ -67,7 +78,7 @@ def verdict(same: int, different: int, ours_emit: bool, strip: bool) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("sources", nargs="*", default=FIXTURES, help="C files (default: three bench programs: a leaf, a loop, calls with saved registers)")
+    parser.add_argument("sources", nargs="*", default=FIXTURES, help="C files (default: win64/unwind_fixtures.c and three bench programs)")
     parser.add_argument("--pin", default=os.environ.get("LLRM_PIN_BIN"), help="the x86 pin LLVM bin directory (clang, opt, llc)")
     parser.add_argument("--tools", default=str(Path.home() / "scratch/llvm-build-aarch64/bin"), help="the directory of llvm-objdump")
     parser.add_argument("--llc", required=True, help="llrm-llc")
@@ -91,7 +102,9 @@ def main() -> int:
             if args.strip:
                 run(["objcopy", "-R", ".pdata", "-R", ".xdata", str(our_o)])
             pin_code, our_code = (code_of(run([f"{args.tools}/llvm-objdump", "-d", "--no-show-raw-insn", str(o)])) for o in (pin_o, our_o))
-            pin_tables, our_tables = (tables_of(run([f"{args.tools}/llvm-objdump", "-u", str(o)])) for o in (pin_o, our_o))
+            pin_tables, our_tables = (
+                tables_of(run([f"{args.tools}/llvm-objdump", "-u", str(o)]), symbols_of(run([f"{args.tools}/llvm-objdump", "-t", str(o)]))) for o in (pin_o, our_o)
+            )
         except (RuntimeError, KeyError) as why:
             print(f"  refused {source.name}: {why}")
             files += 1
