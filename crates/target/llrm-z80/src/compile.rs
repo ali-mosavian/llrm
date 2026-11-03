@@ -575,6 +575,7 @@ pub fn tidy_copies(
     assignment: &Assignment,
 ) {
     remove_copies_back(function, assignment);
+    place_copies_where_needed(function, assignment);
     sink_copies_to_the_branch(function, assignment);
 }
 
@@ -641,6 +642,16 @@ pub fn remove_copies_back(
     function: &mut MFunction,
     assignment: &Assignment,
 ) {
+    copies_in_force(function, assignment, true);
+}
+
+/// The copies in force at the end of each block, as `(destination, source)`
+/// registers; `drop` also removes the ones a copy repeats.
+fn copies_in_force(
+    function: &mut MFunction,
+    assignment: &Assignment,
+    drop: bool,
+) -> Vec<Vec<(RegId, RegId)>> {
     let register = |reg: Reg| match reg {
         Reg::Virt(v) => assignment.0[v as usize],
         Reg::Phys(id) => id,
@@ -664,7 +675,8 @@ pub fn remove_copies_back(
                 (Kind::Copy, [Operand::Def(dst), Operand::Use(src)]) => Some((register(*dst), register(*src))),
                 _ => None,
             };
-            if copy.is_some_and(|(dst, src)| held.contains(&(src, dst)) || held.contains(&(dst, src))) {
+            let repeats = copy.is_some_and(|(dst, src)| held.contains(&(src, dst)) || held.contains(&(dst, src)));
+            if drop && repeats {
                 continue;
             }
             if inst.call {
@@ -683,6 +695,72 @@ pub fn remove_copies_back(
         }
         function.blocks[at].insts = keep;
         ended[at] = held;
+    }
+    ended
+}
+
+/// Moves the copy a loop head starts with into the back edge, when every other
+/// entrance has made it already: `ld a, b` at a loop head, where the entry
+/// has just made it, runs every trip and once more at the exit; on the back
+/// edge alone it runs once a trip. Elsewhere (a diamond's join) the move made
+/// popcount and bsearch8 larger: the copy in a block of its own kept a jump. The flow into the join is the sum of its
+/// entrances, so the count of copies run never grows, and the code does not
+/// grow either: the copy moves, it is not copied.
+///
+/// The pin has no such step: its allocator joins the copy out of existence
+/// (`canJoinPhys`) or leaves it where selection put it. Here the join of an
+/// argument's entry copy into its register is refused (`joins_pinned_copies`),
+/// so the copy stays where selection put it.
+pub fn place_copies_where_needed(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) {
+    let register = |reg: Reg| match reg {
+        Reg::Virt(v) => assignment.0[v as usize],
+        Reg::Phys(id) => id,
+    };
+    let successors = llrm_spike_mf::regalloc::successors(function);
+    let mut changed = true;
+    while changed {
+        changed = false;
+        let ended = copies_in_force(function, assignment, false);
+        for head in 1..function.blocks.len() {
+            let entrances: Vec<usize> = (0..function.blocks.len()).filter(|&from| successors[from].contains(&head)).collect();
+            let Some(first) = function.blocks[head].insts.first() else { continue };
+            let (Kind::Copy, [Operand::Def(dst), Operand::Use(src)]) = (first.kind, &first.operands[..]) else {
+                continue;
+            };
+            let (dst, src) = (register(*dst), register(*src));
+            if entrances.len() < 2 || dst == src {
+                continue;
+            }
+            let made = |from: usize| ended[from].contains(&(dst, src)) || ended[from].contains(&(src, dst));
+            let lacking: Vec<usize> = entrances.iter().copied().filter(|&from| !made(from)).collect();
+            // one entrance lacks it, by a block that only leads here
+            let [from] = lacking[..] else { continue };
+            if successors[from] != [head] || from <= head || entrances.iter().any(|&one| one != from && one > head) {
+                continue;
+            }
+            let block = &function.blocks[from];
+            let end = block.insts.iter().rposition(|inst| !inst.terminator).map_or(0, |last| last + 1);
+            let touched = block.insts[end..].iter().any(|inst| {
+                inst.operands.iter().any(|operand| match operand {
+                    Operand::Def(r) | Operand::Use(r) => {
+                        Z80Registers::overlaps(register(*r), dst) || Z80Registers::overlaps(register(*r), src)
+                    }
+                    _ => false,
+                })
+            });
+            // a block of nothing but its jump is an edge a branch folds away; the
+            // copy would keep it, and the jump with it
+            if touched || end == 0 {
+                continue;
+            }
+            let copy = function.blocks[head].insts.remove(0);
+            function.blocks[from].insts.insert(end, copy);
+            changed = true;
+            break;
+        }
     }
 }
 

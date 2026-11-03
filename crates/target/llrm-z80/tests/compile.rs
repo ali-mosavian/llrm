@@ -616,6 +616,51 @@ fn the_sign_tested_beside_a_shift_left_is_the_shifts_carry() {
     let mut other = build(2);
     llrm_z80::compile::use_the_shift_carry(&mut other);
     assert_eq!(kinds(&other), [Kind::Copy, Kind::Op("SHL16"), Kind::Copy, Kind::Op("BIT7_16"), Kind::Op("JPNZ")]);
+
+/// sum_arr -Oz kept `ld a, b` at the head of a loop, where the entry
+/// has just made it: it ran on every trip and once more at the exit, +4 T.
+/// Moved into the back edge, the only entrance without it, it runs once a trip.
+/// A join with two entrances lacking it keeps it (the code would grow).
+#[test]
+fn a_join_s_copy_moves_into_the_one_entrance_that_lacks_it() {
+    use llrm_spike_mf::Assignment;
+    use llrm_z80::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
+    use llrm_z80::{reg, regalloc::Class};
+    let copy = |to: u32, from: u32| Inst::new(Kind::Copy, vec![Operand::Def(Reg::Virt(to)), Operand::Use(Reg::Virt(from))]);
+    let jump = |to: u32| Inst { terminator: true, barrier: true, ..Inst::new(Kind::Op("JP"), vec![Operand::Block(to)]) };
+    let write = || {
+        Inst::new(
+            Kind::Op("ADD8i"),
+            vec![Operand::Def(Reg::Phys(reg::A)), Operand::Use(Reg::Phys(reg::A)), Operand::Imm(1)],
+        )
+    };
+    let leave = Inst {
+        terminator: true,
+        reads_flags: true,
+        ..Inst::new(Kind::Op("JPZ"), vec![Operand::Block(3), Operand::Use(Reg::Phys(reg::FLAGS))])
+    };
+    let block = |id, insts| Block { id, insts, phis: Vec::new() };
+    let build = |back: Vec<Inst>| {
+        let mut function = MFunction::new("f");
+        function.classes = vec![Class::Gr8; 2];
+        function.blocks.push(block(0, vec![copy(1, 0)]));
+        function.blocks.push(block(1, vec![copy(0, 1), write(), leave.clone()]));
+        function.blocks.push(block(2, back));
+        function.blocks.push(block(3, vec![Inst { terminator: true, barrier: true, ..Inst::new(Kind::Op("RET"), vec![]) }]));
+        function
+    };
+    // v0 a, v1 b
+    let assignment = Assignment(vec![reg::A, reg::B]);
+    let mut function = build(vec![write(), jump(1)]);
+    llrm_z80::compile::place_copies_where_needed(&mut function, &assignment);
+    let counts: Vec<usize> = function.blocks.iter().map(|b| b.insts.iter().filter(|i| i.kind == Kind::Copy).count()).collect();
+    assert_eq!(counts, [1, 0, 1, 0], "{:?}", function.blocks);
+    // a second block also enters the head without the copy: it stays
+    let mut two = build(vec![write(), jump(1)]);
+    two.blocks.push(block(4, vec![write(), jump(1)]));
+    llrm_z80::compile::place_copies_where_needed(&mut two, &assignment);
+    let counts: Vec<usize> = two.blocks.iter().map(|b| b.insts.iter().filter(|i| i.kind == Kind::Copy).count()).collect();
+    assert_eq!(counts, [1, 1, 0, 0, 0], "{:?}", two.blocks);
 }
 
 /// A word returned in `de` and stored to a global went through `hl`:
