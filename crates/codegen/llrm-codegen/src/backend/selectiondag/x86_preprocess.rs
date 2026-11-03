@@ -105,7 +105,9 @@ pub fn preprocess(
     // (the store and load below) is neither.
     for node in dag.node_ids().rev() {
         let value = SDValue { node, res: 0 };
-        if folded.contains(&node) {
+        // The pin's DAG has no dead nodes left by now (a `fp_extend` folded
+        // into a load is gone): none gets a slot.
+        if folded.contains(&node) || (dag.users(value).next().is_none() && dag.get_root() != value) {
             continue;
         }
         let round = match dag.opcode(value) {

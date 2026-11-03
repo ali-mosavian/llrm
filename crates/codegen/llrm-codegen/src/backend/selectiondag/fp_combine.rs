@@ -613,6 +613,23 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 self.dag.get_node(ISD::FpExtend, vt, &[inner])
             });
         }
+        // fold (fpext (load x)) -> (fpext (fptrunc (extload x))): the narrow
+        // load is read as the wide type (`fld m64` into the x87 stack).
+        if self.dag.opcode(n0) == ISD::Load
+            && n0.res == 0
+            && self.dag.has_one_use(n0.node)
+            && let NodeData::Mem(info) = self.dag.node(n0).data
+            && info.ext.is_none()
+            && let (EVT::Simple(wide), EVT::Simple(narrow)) = (vt, info.mem_vt)
+            && self.tli.is_some_and(|tli| {
+                tli.load_ext_action(super::actions::LoadExt::ExtLoad, wide, narrow) == super::actions::Action::Legal
+            })
+        {
+            let (chain, ptr) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+            let extended = self.dag.get_ext_load(super::actions::LoadExt::ExtLoad, vt, chain, ptr, info);
+            self.replace_value(SDValue { node: n0.node, res: 1 }, SDValue { node: extended.node, res: 1 });
+            return Some(extended);
+        }
         None
     }
 
