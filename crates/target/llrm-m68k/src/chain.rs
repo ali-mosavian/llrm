@@ -11,8 +11,9 @@
 //! at the end of the one before, become the `(An)+` form of the pin's row (the
 //! mode letter `p` or `j` of the operand is `o`). The register then holds the
 //! end of the chain, so every later access through it takes the displacement
-//! less the chain's size. Each base is priced on the CPU, the clocks first and
-//! the bytes at the size level, and left alone when it does not win.
+//! less the chain's size. Each base is priced on the CPU, the clocks plus the
+//! bytes at the CPU's byte price (the bytes alone at the size level), and left
+//! alone when it does not win.
 //!
 //! The copies of an inline `memcpy` are in address order for this
 //! (`ordered_copies`). The pass runs before the copies of an allocated
@@ -353,7 +354,7 @@ pub fn post_increment_chains(
                 _ => priced = false,
             }
         }
-        let key = |(clocks, bytes): (u32, u32)| if size { (bytes, clocks) } else { (clocks, bytes) };
+        let key = |(clocks, bytes): (u32, u32)| crate::timing::order(cpu, size, clocks, bytes);
         if !priced || key(after) >= key(before) {
             continue;
         }

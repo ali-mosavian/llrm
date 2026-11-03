@@ -2685,3 +2685,54 @@ fn macos_and_macosx_name_the_same_system() {
     assert!(crate::by_triple("x86_64-apple-macos11").is_some());
     assert!(!crate::same_system("x86_64-apple-macosx", "arm64-apple-macos11"));
 }
+
+/// clang writes `"frame-pointer"="all"` for macOS; a leaf function of ours had
+/// no `push rbp`, so its unwind rows were empty where the pin's state the frame
+/// (16 of 130 functions of the x86-64 Mach-O corpus).
+#[test]
+fn a_function_whose_attribute_keeps_the_frame_pointer_pushes_it_even_as_a_leaf() {
+    let ir = |attribute: &str| {
+        format!(
+            "target datalayout = \"e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+             target triple = \"x86_64-apple-macosx\"\n\
+             define i32 @h(i32 %a) #0 {{\n  %r = mul i32 %a, 3\n  ret i32 %r\n}}\n\
+             attributes #0 = {{ nounwind {attribute} }}\n"
+        )
+    };
+    let listing = |attribute: &str| {
+        let (built, _) = crate::llc::compiled(&flags(&["-O2", "--isel=dag"]), &ir(attribute), "h").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    assert!(listing("\"frame-pointer\"=\"all\"").contains("push rbp"), "{}", listing("\"frame-pointer\"=\"all\""));
+    assert!(!listing("").contains("push rbp"), "control: no attribute, no frame");
+}
+
+/// The pin writes no frame address after a pop on Darwin (`emitEpilogue`'s
+/// `NeedsDwarfCFI` is off); ours put `DW_CFA_def_cfa rsp, 8` after the `pop
+/// rbp` of 75 of 130 functions of the x86-64 Mach-O corpus.
+#[test]
+fn an_x86_64_macho_frame_states_no_address_at_its_exit_but_elf_does() {
+    let ir = |triple: &str, mangling: &str| {
+        format!(
+            "target datalayout = \"e-m:{mangling}-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+             target triple = \"{triple}\"\n\
+             define i32 @h(i32 %a) #0 {{\n  %r = mul i32 %a, 3\n  ret i32 %r\n}}\n\
+             attributes #0 = {{ nounwind uwtable \"frame-pointer\"=\"all\" }}\n"
+        )
+    };
+    let def_cfa_rsp_8 = |triple: &str, mangling: &str| {
+        let (built, format) = crate::llc::compiled(&flags(&["-O2", "--isel=dag"]), &ir(triple, mangling), "h").unwrap();
+        let object = llrm_codegen::backend::objbuild::written_in(
+            &built,
+            "h.ll",
+            llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+            format,
+            llrm_target::Target::objects(&llrm_x86_m64::M64),
+        )
+        .unwrap();
+        object.windows(3).filter(|window| *window == [0x0c, 0x07, 0x08]).count()
+    };
+    // The CIE's initial rows state it once; an exit's rows are a second.
+    assert_eq!(def_cfa_rsp_8("x86_64-unknown-linux-gnu", "e"), 2, "control: ELF states the address after the pop");
+    assert_eq!(def_cfa_rsp_8("x86_64-apple-macosx", "o"), 1, "Mach-O states none");
+}
