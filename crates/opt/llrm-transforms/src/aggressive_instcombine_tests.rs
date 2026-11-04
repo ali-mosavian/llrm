@@ -239,3 +239,57 @@ fn a_de_bruijn_log2_table_is_a_ctlz_where_ctlz_is_cheap() {
     let dear = merged(LOG2_TABLE);
     assert!(dear.contains("load i8"), "no cheap ctlz: the table stays\n{dear}");
 }
+
+const MASK_TABLE: &str = "@t = constant [6 x i32] [i32 0, i32 1, i32 3, i32 7, i32 15, i32 31]
+define i32 @f(i32 %x, i16 %i) {
+b0:
+  %p = getelementptr inbounds [6 x i32], ptr @t, i16 0, i16 %i
+  %m = load i32, ptr %p
+  %r = and i32 %x, %m
+  ret i32 %r
+}
+";
+
+/// `x & tbl[i]` through a table of low-bits masks was a load; the pin's
+/// `tryToRecognizeTableBasedLowBitsMask` makes it `x & ((1 << i) - 1)`.
+#[test]
+fn a_table_of_low_bit_masks_is_a_shift_and_a_decrement() {
+    let before = parsed(&format!("{DOS}{MASK_TABLE}"));
+    let mut module = before.clone();
+    managed(&mut module, AggressiveInstCombine);
+    let after = managed(&mut module, crate::dead::Dead);
+    assert!(after.contains("shl i32 1,") && after.contains("sub i32"), "{after}");
+    assert!(!after.contains("load i32"), "{after}");
+    let inputs: &[&[i128]] = &[&[-1, 0], &[-1, 3], &[4660, 5], &[255, 1]];
+    assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
+}
+
+const GUARDED_FSHL: &str = "define i32 @f(i32 %a, i32 %b, i32 %n) {
+g:
+  %z = icmp eq i32 %n, 0
+  br i1 %z, label %p, label %f
+f:
+  %sub = sub i32 32, %n
+  %shr = lshr i32 %b, %sub
+  %shl = shl i32 %a, %n
+  %or = or i32 %shr, %shl
+  br label %p
+p:
+  %r = phi i32 [ %or, %f ], [ %a, %g ]
+  ret i32 %r
+}
+";
+
+/// A funnel shift behind a branch around a zero amount (the C idiom that
+/// avoids shifting by the width) was a branch, a phi and four operations; the
+/// pin's `foldGuardedFunnelShift` makes it `fshl`.
+#[test]
+fn a_funnel_shift_guarded_against_a_zero_amount_is_an_fshl() {
+    let before = parsed(&format!("{DOS}{GUARDED_FSHL}"));
+    let mut module = before.clone();
+    managed(&mut module, AggressiveInstCombine);
+    let after = managed(&mut module, crate::dead::Dead);
+    assert!(after.contains("llvm.fshl.i32"), "{after}");
+    let inputs: &[&[i128]] = &[&[1, 2, 0], &[1, 2, 4], &[305419896, 2596069104, 8], &[-1, 5, 31]];
+    assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
+}
