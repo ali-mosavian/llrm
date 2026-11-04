@@ -689,7 +689,15 @@ mod tests {
         for number in 0..duplicates {
             let value = 10 + 2 * number;
             let at = i64::from(10 + 3 * number);
-            inside.push(insn(at, Operation::Binary, "add", vec![held(value)], vec![held(1), held(2)], vec![value], vec![1, 2]));
+            inside.push(insn(
+                at,
+                Operation::Binary,
+                "add",
+                vec![held(value)],
+                vec![held(1), held(2)],
+                vec![value],
+                vec![1, 2],
+            ));
             inside.push(insn(
                 at + 1,
                 Operation::Compare,
@@ -728,7 +736,11 @@ mod tests {
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
         RENAMES.with(|renames| renames.set(0));
         let done = hoisted(&body, &RegisterClasses::m16());
-        let adds = done.blocks[0].insns.iter().filter(|one| one.what.as_ref().and_then(|w| w.name.as_deref()) == Some("add")).count();
+        let adds = done.blocks[0]
+            .insns
+            .iter()
+            .filter(|one| one.what.as_ref().and_then(|w| w.name.as_deref()) == Some("add"))
+            .count();
         assert_eq!(adds, 1, "the premise: the duplicates are made once");
         let renames = RENAMES.with(|renames| renames.get());
         assert!(renames <= 3 * duplicates as usize, "{renames}");

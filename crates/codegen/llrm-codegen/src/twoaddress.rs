@@ -713,9 +713,13 @@ pub fn three_address(
             }
             Mem { base: Some(wide(base)), offset: step, ..Mem::new(None, if narrow { 4 } else { width }) }
         }
-        (Loc::Held(index), Some("add")) if index.width == width && index.value != into.value => {
-            Mem { base: Some(wide(base)), index: Some(wide(index)), scale: 1, offset: 0, ..Mem::new(None, width.max(4)) }
-        }
+        (Loc::Held(index), Some("add")) if index.width == width && index.value != into.value => Mem {
+            base: Some(wide(base)),
+            index: Some(wide(index)),
+            scale: 1,
+            offset: 0,
+            ..Mem::new(None, width.max(4))
+        },
         _ => return None,
     };
     let mut made = one.clone();

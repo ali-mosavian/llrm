@@ -2124,7 +2124,8 @@ impl Builder<'_> {
         if demoted {
             let types = &self.module.context.types;
             let size = self.layout.alloc_size(types, result_type) as u32;
-            // `LowerCallTo`: the object has the result type's preferred alignment.
+            // `LowerCallTo`: the object has the result type's preferred
+            // alignment.
             let align = self.layout.pref_align(types, result_type) as u32;
             let index = self.info.new_stack_object(size, align);
             let address = self.dag.get_frame_index(self.target.dag.pointer, index);
@@ -2602,7 +2603,8 @@ impl Builder<'_> {
             let vt = self.dag.value_type(value);
             let pointer = self.target.dag.pointer;
             let address = self.dag.get_copy_from_reg(chain, reg, pointer);
-            // `visitRet`: stored at the preferred alignment of the returned type.
+            // `visitRet`: stored at the preferred alignment of the returned
+            // type.
             let align = match self.function.operand_type(&self.module.context, operand) {
                 Some(ty) => self.layout.pref_align(&self.module.context.types, ty) as u32,
                 None => 1,

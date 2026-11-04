@@ -2807,7 +2807,8 @@ impl<'a> TypeLegalizer<'a> {
                 .dag
                 .get_node_flags(ISD::BuildPair, pointer, &[moved, selector], super::dag::SDNodeFlags::PAIR_FAR);
         }
-        // `getObjectPtrOffset`: the offset stays inside the object, so the add cannot wrap.
+        // `getObjectPtrOffset`: the offset stays inside the object, so the add
+        // cannot wrap.
         self.dag.get_object_ptr_offset(ptr, step as i64)
     }
 

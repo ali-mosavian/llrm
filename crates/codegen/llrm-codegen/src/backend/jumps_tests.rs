@@ -2375,7 +2375,12 @@ fn test_a_jump_where_the_other_way_falls_does_not_hide_the_common_tail() {
     let copy = |at| _inserted(_insn(at, Operation::Move, "mov", vec![cx()], vec![si()], None));
     let lines = _printed(vec![
         block(1, vec![_compare(1), _branch(2, "je", 9)], vec![9, 4]).into(),
-        block(4, vec![_inserted(_insn(4, Operation::Move, "mov", vec![dx()], vec![imm(1)], None)), copy(5), _jump(6, 20)], vec![20]).into(),
+        block(
+            4,
+            vec![_inserted(_insn(4, Operation::Move, "mov", vec![dx()], vec![imm(1)], None)), copy(5), _jump(6, 20)],
+            vec![20],
+        )
+        .into(),
         block(9, vec![copy(9)], vec![20]).into(),
         block(20, vec![_return(20)], vec![]).into(),
     ]);

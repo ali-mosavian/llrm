@@ -21,9 +21,9 @@
 //! hook `free_narrowing` says the casts are free (x86-64; at m32 the pin's
 //! `isZExtFree` gate never opens).
 //!
-//! DEVIATE SD212: no `SRA`/`SELECT` cases, no `SimplifyMultipleUseDemandedBits` beyond `and`/`or`/`xor`
-//! identities and all-demanded-known constants. Exit: those. Owner sdag-b.
-//! Review 2026-12-10.
+//! DEVIATE SD212: no `SRA`/`SELECT` cases, no `SimplifyMultipleUseDemandedBits`
+//! beyond `and`/`or`/`xor` identities and all-demanded-known constants. Exit:
+//! those. Owner sdag-b. Review 2026-12-10.
 //!
 //! [pin]:
 //! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L1201
@@ -396,7 +396,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 }
                 // Shrinking the shift while the amount stays in range, as
                 // `ShrinkDemandedOp` does (TargetLowering.cpp#L1938).
-                if is_shl && u128::from(amount) < u128::from(128 - demanded.leading_zeros()) && self.dag.has_one_use(op.node)
+                if is_shl
+                    && u128::from(amount) < u128::from(128 - demanded.leading_zeros())
+                    && self.dag.has_one_use(op.node)
                 {
                     let mut small = (128 - demanded.leading_zeros()).next_power_of_two();
                     while small < width {
@@ -443,7 +445,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                     {
                         let x = self.dag.get_node(ISD::Truncate, half, &[op0]);
                         let by = self.dag.get_constant(u128::from(amount), self.hooks.shift_amount_type(half));
-                        let shl = self.dag.get_node_flags(ISD::Shl, half, &[x, by], super::dag::SDNodeFlags::NO_UNSIGNED_WRAP);
+                        let shl = self
+                            .dag
+                            .get_node_flags(ISD::Shl, half, &[x, by], super::dag::SDNodeFlags::NO_UNSIGNED_WRAP);
                         let new = self.dag.get_node(ISD::ZeroExtend, vt, &[shl]);
                         return Self::combine_to(tlo, op, new);
                     }

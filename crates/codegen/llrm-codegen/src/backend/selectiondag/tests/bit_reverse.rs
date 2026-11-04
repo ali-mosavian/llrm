@@ -82,7 +82,8 @@ fn the_expansion_reverses_the_bits() {
                 sse2: false,
                 min_size: false,
                 i16_mul_chains: false,
-                sext_load: false, zext_free: false,
+                sext_load: false,
+                zext_free: false,
                 profile: None,
             },
         )

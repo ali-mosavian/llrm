@@ -490,10 +490,12 @@ impl<'a> DagisAdapter<'a> {
         &self,
         node: u32,
     ) -> bool {
-        self.live_user_nodes(node).into_iter().any(|user| {
-            !matches!(self.dag.nodes()[user as usize].opcode, ISD::Machine(_))
-                && self.node_id.get(user as usize).is_none_or(|id| *id != -1)
-        })
+        self.live_user_nodes(node)
+            .into_iter()
+            .any(
+                |user| !matches!(self.dag.nodes()[user as usize].opcode, ISD::Machine(_))
+                    && self.node_id.get(user as usize).is_none_or(|id| *id != -1),
+            )
     }
 
     /// The live nodes that read a result of `node`, in creation order, once
