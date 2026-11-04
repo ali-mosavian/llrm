@@ -2242,5 +2242,13 @@ fn a_routine_answering_an_integer_is_defined_on_a_target_whose_word_is_wider() {
         let text = llrm_mir::print::module(&emitted.module);
         assert!(text.contains("define available_externally") && text.contains("i16 @llrm.qb.B$FASC("), "word {word}\n{text}");
         assert!(text.contains("ret i16"), "word {word}\n{text}");
+        // A value as wide as the word is cut to the stated width, where the word is wider.
+        let wide = Meaning { result: Returns::Value(Expr::Length(0)), ..asc.clone() };
+        let mut program = program;
+        program.promises.routines = vec![wide];
+        let emitted = crate::mir::emit(&program, &Layout::parse(description).unwrap()).remove(0);
+        let text = llrm_mir::print::module(&emitted.module);
+        assert!(text.contains("ret i16"), "word {word}\n{text}");
+        assert_eq!(text.contains("trunc"), word == 4, "word {word}\n{text}");
     }
 }

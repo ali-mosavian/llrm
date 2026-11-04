@@ -901,7 +901,14 @@ mod tests {
         name: &str,
         definition: Definition,
     ) -> Symbol {
-        Symbol { name: name.into(), binding: Binding::Public, definition, size: 0, group: None }
+        Symbol {
+            name: name.into(),
+            binding: Binding::Public,
+            definition,
+            size: 0,
+            group: None,
+            visibility: Default::default(),
+        }
     }
 
     fn section(
@@ -941,6 +948,7 @@ mod tests {
                 definition: Definition::Defined { section: 0, offset: 0 },
                 size: 0,
                 group: None,
+                visibility: Default::default(),
             }],
         );
         made.omf_comdat = vec![0];

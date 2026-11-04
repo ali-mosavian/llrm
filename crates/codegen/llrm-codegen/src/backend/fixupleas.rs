@@ -180,6 +180,16 @@ pub fn opt_two_addr_lea(
     let what = lea.what.as_ref()?;
     let ([Loc::Reg(d)], [source]) = (what.dests.as_slice(), what.sources.as_slice()) else { return None };
     let (symbol, base, index, scale, offset) = lea_cell(source)?;
+    // `LEA64_32r` has 64-bit operands but a 32-bit result: its registers are
+    // compared by their 32-bit halves.
+    let half = |register: RegId| {
+        if d.width == 4 && register != RegId::None && regs.width_of(register) == Some(8) {
+            regs.named(register, 4)
+        } else {
+            register
+        }
+    };
+    let (base, index) = (half(base), half(index));
     if symbol || scale > 1 || !arithmetic_flags().is_subset(dead.get(&id(lea))?) || !free_fields(lea, EXACT) {
         return None;
     }
@@ -797,6 +807,35 @@ mod tests {
             let dead: DeadAfter = [(key, kept)].into_iter().collect();
             assert!(opt_two_addr_lea(regs(), &b, 0, &dead, true).is_none(), "flag {live:#x} live");
         }
+    }
+
+    /// `lea ecx,[rcx+1]` (`LEA64_32r`: 64-bit base, 32-bit result) is `inc
+    /// ecx`: the pin compares the 32-bit halves of its registers. The
+    /// 64-bit base never equalled the 32-bit destination, so the byte add
+    /// the three-address pass made an `lea` stayed one (grep m64 -Os, +1 B
+    /// against the add).
+    #[test]
+    fn a_lea_of_a_wide_base_into_its_dword_is_an_inc() {
+        let m64 = Regs(&llrm_x86_m64::REGISTER_INFO);
+        let address =
+            crate::model::ir::AddressRef { through: RegId::RCX, offset: 1, ..crate::model::ir::AddressRef::new(None) };
+        let lea = insn(0, Operation::Address, "lea", vec![reg(RegId::ECX, 4)], vec![Loc::Address(address)]);
+        let b = block(vec![lea], vec![]);
+        let dead: DeadAfter = [(id(&b.insns[0]), arithmetic_flags())].into_iter().collect();
+        let made = opt_two_addr_lea(m64, &b, 0, &dead, true).expect("an inc");
+        assert_eq!(made[0].what.as_ref().unwrap().name.as_deref(), Some("inc"));
+    }
+
+    /// `lea ebx,[bx+1]` at m16 wraps its address at 16 bits: `inc ebx` would
+    /// not. Only a 64-bit base is read by its low half.
+    #[test]
+    fn a_lea_of_a_word_base_into_its_dword_is_no_inc() {
+        let address =
+            crate::model::ir::AddressRef { through: RegId::BX, offset: 1, ..crate::model::ir::AddressRef::new(None) };
+        let lea = insn(0, Operation::Address, "lea", vec![reg(RegId::EBX, 4)], vec![Loc::Address(address)]);
+        let b = block(vec![lea], vec![]);
+        let dead: DeadAfter = [(id(&b.insns[0]), arithmetic_flags())].into_iter().collect();
+        assert!(opt_two_addr_lea(regs(), &b, 0, &dead, true).is_none());
     }
 
     #[test]

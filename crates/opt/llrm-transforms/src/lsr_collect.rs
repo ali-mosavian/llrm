@@ -479,6 +479,18 @@ pub struct Collection<'a, 'b> {
     /// How many formulae were offered to `insert_formula`: the work generation
     /// did.
     pub insert_attempts: usize,
+    /// Registers (in the target's word) held across the whole loop by values
+    /// LSR does not manage: the accumulators and other loop-carried phis that
+    /// are not induction variables. The registers LSR may use are those the
+    /// target has less these.
+    pub other_register_units: u32,
+    /// Set by `solve` when no solution fits the registers left after
+    /// `other_register_units`: every one spills, and the count no longer tells
+    /// them apart (DEVIATE LU3b).
+    pub ignore_pressure: std::cell::Cell<bool>,
+    /// The compile is for size: a setup instruction costs a byte like a loop
+    /// one.
+    pub size: bool,
     /// How many formulae were rated: the work the filter, narrowing and solver
     /// did.
     pub rated: std::cell::Cell<usize>,
@@ -488,6 +500,11 @@ pub struct Collection<'a, 'b> {
 }
 
 impl<'a, 'b> Collection<'a, 'b> {
+    /// The registers other values of the loop hold, as the rating counts them.
+    pub fn pressure_units(&self) -> u32 {
+        if self.ignore_pressure.get() { 0 } else { self.other_register_units }
+    }
+
     pub fn new(
         cx: &'a Cx<'b>,
         tti: &'a dyn Tti,
@@ -514,6 +531,9 @@ impl<'a, 'b> Collection<'a, 'b> {
             changed: false,
             swapped_compares: Vec::new(),
             insert_attempts: 0,
+            other_register_units: 0,
+            ignore_pressure: std::cell::Cell::new(false),
+            size: false,
             rated: std::cell::Cell::new(0),
             chain_uses: HashSet::default(),
         }
@@ -890,6 +910,7 @@ impl<'a, 'b> Collection<'a, 'b> {
                     l: self.l,
                     hardware_loop_profitable: self.hardware_loop_profitable,
                     as_written: true,
+                    other_register_units: self.pressure_units(),
                 };
                 self.baseline_cost.rate_formula(&mut rating, &f, &mut regs, &visited_regs, &self.uses[lu_idx], None);
                 visited_uses.insert(lu_idx);
@@ -1011,4 +1032,78 @@ impl<'a, 'b> Collection<'a, 'b> {
             }
         }
     }
+}
+
+/// The registers the loop keeps live at once beside the
+/// recurrences LSR rewrites: the accumulators, the loaded values and the
+/// temporaries the body defines (an `i64` takes two on a 32-bit register file).
+/// They compete with the formulae for the target's registers, which the phis
+/// alone did not show (shellsort bas -Os: a third formula register spilled the
+/// `i32` chain).
+pub fn loop_register_units(
+    se: &mut ScalarEvolution,
+    cx: &Cx,
+    tti: &dyn Tti,
+    l: BlockId,
+) -> u32 {
+    let Some(lp) = cx.loops.get_loop_for(l) else { return 0 };
+    let word = tti.gpr_bits();
+    let mut weights: HashMap<llrm_mir::module::ValueId, usize> = HashMap::default();
+    for &block in lp.get_blocks() {
+        for inst in cx.function.iter_block(block) {
+            let Some(result) = cx.function.instruction(inst).result else { continue };
+            let value = Operand::Value(result);
+            if !se.is_value_scevable(cx, value) {
+                continue;
+            }
+            let s = se.get_scev(cx, value);
+            if se.addrec_header(s) == Some(l) {
+                continue;
+            }
+            let ty = se.type_of(s);
+            let bits = se.get_type_size_in_bits(cx, ty) as u32;
+            if bits <= 1 {
+                continue;
+            }
+            weights.insert(result, bits.div_ceil(word) as usize);
+        }
+    }
+    let blocks: Vec<BlockId> = lp.get_blocks().to_vec();
+    // DEVIATE LU7: the pin has no register-unit count here; this one follows
+    // only the loop's own values (and the phis that take them), so it costs the
+    // loop and not the function. Cells that need the count: shellsort -Os,
+    // stft, matmul.
+    let made = llrm_analysis::liveness::pressure_weighted_made_in(cx.function, &blocks, &|one| {
+        weights.get(&one).copied().unwrap_or(0)
+    }) as u32;
+    // DEVIATE LU3c: the values that live across this loop without being read
+    // in it (the enclosing loop's, or the function's parameters and entry
+    // block) hold registers too, or spill on every trip of the outer loop
+    // (nibbles -Os).
+    let scope: Vec<BlockId> = match lp.get_parent_loop() {
+        Some(outer) => outer.get_blocks().iter().copied().filter(|&block| !lp.contains(block)).collect(),
+        None => cx.function.entry().into_iter().collect(),
+    };
+    let mut through: HashMap<llrm_mir::module::ValueId, usize> = HashMap::default();
+    let defined = scope
+        .iter()
+        .flat_map(|&block| cx.function.iter_block(block))
+        .filter_map(|inst| cx.function.instruction(inst).result)
+        .chain(if lp.get_parent_loop().is_none() { cx.function.parameters().to_vec() } else { Vec::new() });
+    for result in defined {
+        let value = Operand::Value(result);
+        if !se.is_value_scevable(cx, value) {
+            continue;
+        }
+        let s = se.get_scev(cx, value);
+        let ty = se.type_of(s);
+        let bits = se.get_type_size_in_bits(cx, ty) as u32;
+        if bits > 1 {
+            through.insert(result, bits.div_ceil(word) as usize);
+        }
+    }
+    let candidates: llrm_mir::dense::IdSet<llrm_mir::module::ValueId> = through.keys().copied().collect();
+    made + llrm_analysis::liveness::live_through_weighted(cx.function, l, &blocks, &candidates, &|one| {
+        through.get(&one).copied().unwrap_or(0)
+    }) as u32
 }

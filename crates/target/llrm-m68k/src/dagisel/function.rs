@@ -72,6 +72,9 @@ pub struct PhiUpdate {
 /// One block, selected and scheduled.
 pub struct Selected {
     pub block: BlockId,
+    /// The IR block this was selected for: `block` itself, or the block a
+    /// lowering made out of it (`&&` chains, `switch`).
+    pub parent: BlockId,
     pub dag: SelectionDAG,
     pub units: Vec<Unit>,
     pub phis: Vec<PhiUpdate>,
@@ -126,12 +129,19 @@ pub fn select_function_with(
         let units = select_block_with(&mut built.dag, cpu, source_order, indexed, short, &mut temporaries)
             .map_err(|why| format!("{why:?}"))?;
         updates.push(built.phi_updates);
-        selected.push(Selected { block, dag: built.dag, units, phis: Vec::new(), locals: Vec::new() });
+        selected.push(Selected { block, parent: block, dag: built.dag, units, phis: Vec::new(), locals: Vec::new() });
         for (id, mut extra) in extras {
             let units = select_block_with(&mut extra.dag, cpu, source_order, indexed, short, &mut temporaries)
                 .map_err(|why| format!("{why:?}"))?;
             updates.push(extra.phi_updates);
-            selected.push(Selected { block: id, dag: extra.dag, units, phis: Vec::new(), locals: Vec::new() });
+            selected.push(Selected {
+                block: id,
+                parent: block,
+                dag: extra.dag,
+                units,
+                phis: Vec::new(),
+                locals: Vec::new(),
+            });
         }
     }
     // `FunctionLoweringInfo`: a static alloca is a frame object of the type's
@@ -166,12 +176,16 @@ pub fn select_function_with(
         entry.locals = locals;
     }
     for (one, pending) in selected.iter_mut().zip(updates) {
-        for (phi, incoming) in pending {
+        for (at, &(phi, incoming)) in pending.iter().enumerate() {
             let ValueDef::Instruction(def) = function.value(phi).def else {
                 return Err("a phi that is not an instruction".to_owned());
             };
             let phi_block = function.parent(def).ok_or("a phi outside a block")?;
             let result = *info.value_regs.get(&phi).ok_or("a phi with no register")?;
+            // a phi of two registers (an `i64`) has an entry for each part, in
+            // order: the k-th is the phi's k-th register
+            let part = pending[..at].iter().filter(|(one, _)| *one == phi).count();
+            let result = if part == 0 { result } else { info.part_regs(result, part + 1)[part] };
             let bits = module.context.types.int_bits(function.value(phi).ty).unwrap_or(32);
             one.phis.push(PhiUpdate { phi_block, result, incoming, bits });
         }

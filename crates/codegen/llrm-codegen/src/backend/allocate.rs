@@ -338,7 +338,7 @@ pub fn greedy_rewritten(
     let Some(decided) = decided.filter(|decided| decided.report.stats.failed == 0 && !decided.spill_failed) else {
         return Err(Error::Value(format!("{}: the greedy allocator could not place every range", body.name)));
     };
-    let Some(edited) = decided.edited else {
+    let Some(mut edited) = decided.edited else {
         return Err(Error::Value(format!("{}: the greedy allocator wrote no body", body.name)));
     };
     if llrm_support::env_flag!("LLRM_GREEDY_TRACE") {
@@ -360,6 +360,30 @@ pub fn greedy_rewritten(
         );
     }
     GREEDY_RUNS.with(|runs| runs.set((runs.get().0 + 1, runs.get().1, runs.get().2)));
+    if llrm_support::env_flag!("LLRM_LDV_DUMP") {
+        crate::backend::livedebugvariables::dump(
+            &edited,
+            &decided.placed,
+            &decided.spilled,
+            &decided.parents,
+            frame,
+            saved,
+        );
+    }
+    if llrm_support::env_flag!("LLRM_LDV_EMIT") {
+        let found = crate::backend::livedebugvariables::ranges_of(
+            &edited,
+            &decided.placed,
+            &decided.spilled,
+            &decided.parents,
+            &|value| crate::backend::frame::FrameInfo::home(&*frame, value),
+            &frame.stacks,
+            saved,
+        );
+        let slots = found.insns.iter().map(|&(slot, id)| (id, slot)).collect();
+        edited = edited.with_slots(&slots);
+        edited.placed = Arc::new(crate::backend::livedebugvariables::Placed { ranges: found.flow, insns: found.insns });
+    }
     let r#where: IndexMap<u32, RegId> = decided.placed.into_iter().collect();
     Ok((
         Assignment { r#where, spilled: BTreeSet::new(), cost: 0.0, optimal: false, why: "llvm greedy".to_owned() },

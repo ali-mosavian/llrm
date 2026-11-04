@@ -90,6 +90,11 @@ pub struct Convention {
     /// What a call's arguments in registers are the callee's to change;
     /// everything else it keeps.
     pub arguments_clobbered: bool,
+    /// The allocator leaves a copy between a value and the register an
+    /// argument arrives in to itself, as the pin does for a register that is
+    /// not reserved (`canJoinPhys`), instead of joining it away. Off where the
+    /// file does not say.
+    pub pinned_copies_unjoined: bool,
     /// The same for the registers a result leaves in.
     pub results_clobbered: bool,
     /// Functions of this name that no function of the module calls and whose
@@ -215,6 +220,7 @@ const KEYS: &[&str] = &[
     "skip_memory",
     "aggregate_arguments_in_memory",
     "arguments_clobbered",
+    "pinned_copies_unjoined",
     "results_clobbered",
     "entry_clobbers_all",
     "variadic",
@@ -644,6 +650,7 @@ impl Convention {
             skip_memory: flag("skip_memory")?,
             aggregate_arguments_in_memory: flag("aggregate_arguments_in_memory")?,
             arguments_clobbered: flag("arguments_clobbered")?,
+            pinned_copies_unjoined: flag("pinned_copies_unjoined")?,
             results_clobbered: flag("results_clobbered")?,
             entry_clobbers_all: match table.get("entry_clobbers_all") {
                 Some(_) => names(table.get("entry_clobbers_all"), "entry_clobbers_all")?,

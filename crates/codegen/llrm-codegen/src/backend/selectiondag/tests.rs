@@ -61,6 +61,7 @@ mod logic_setcc;
 mod m16_coverage;
 mod mem_space;
 mod min_max;
+mod narrow_divrem;
 mod odd_shift;
 mod opt_none;
 mod or_simplify;

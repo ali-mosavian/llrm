@@ -1273,7 +1273,7 @@ fn test_affine_address_is_a_word_lea_where_the_sum_is_a_real_mode_address() {
 fn test_the_lea_of_a_pair_keeps_the_value_the_last_part_made_for_the_debugger() {
     let ax = rl(RegId::AX, 2);
     let first = Insn {
-        debug: crate::model::lir::DebugTags { defines: vec![5], before: vec![0] },
+        debug: crate::model::lir::DebugTags { defines: vec![5], before: vec![0], slot: None },
         ..insn(
             0,
             Some((0, 0)),
@@ -1283,7 +1283,7 @@ fn test_the_lea_of_a_pair_keeps_the_value_the_last_part_made_for_the_debugger() 
         )
     };
     let last = Insn {
-        debug: crate::model::lir::DebugTags { defines: vec![7], before: vec![1] },
+        debug: crate::model::lir::DebugTags { defines: vec![7], before: vec![1], slot: None },
         ..insn(
             1,
             Some((1, 1)),

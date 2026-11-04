@@ -1,17 +1,21 @@
-//! A pointer moved by a constant is added to in an address register: `addq`,
-//! `lea` or `adda`, whichever costs least on the CPU, in place of `move %a0,
-//! %d2; addq #6, %d2; move %d2, %a0`.
+//! A pointer moved by a constant is added to in an address register: `lea`,
+//! then `addq` or `adda` where that costs less on the CPU, in place of `move
+//! %a0, %d2; addq #6, %d2; move %d2, %a0`.
 //!
 //! # How it works
 //! The pin's add of an immediate takes and gives a data register, so a pointer
 //! that loads from its base goes through two copies around it. [`address_adds`]
 //! finds an add whose input is a copy of an address register (used only by the
 //! add) and whose result reaches nothing but address registers, through copies
-//! and phis, and makes it an address-register instruction priced from
-//! the timing tables: `addq`/`subq` for 1 to 8, `lea (d16,An)` for a
-//! displacement that fits 16 bits, `adda` otherwise. On a smaller size they
-//! are ordered by bytes first. None of the three change the codes, so the add
-//! must not be one whose codes a branch reads.
+//! and phis, and makes it `lea (d16,An)` for a displacement that fits 16 bits,
+//! `adda` otherwise. Before allocation the form must not depend on the CPU:
+//! `addq` and `adda` take their result in the base's register and `lea` does
+//! not, so choosing them early moved the allocation (the 040 seeds s6, s242,
+//! s256, s277 grew in bytes and clocks). [`refine_address_adds`] runs after
+//! allocation and turns a `lea` whose result is its base into `addq`/`subq`
+//! for 1 to 8 or `adda`, whichever the timing tables price lower; on a smaller
+//! size they are ordered by bytes first. None of the three change the codes,
+//! so the add must not be one whose codes a branch reads.
 //!
 //! DEVIATE: the pin keeps the add in a data register and leaves the class to
 //! its register allocator, which splits it with copies. Reason: this
@@ -24,11 +28,13 @@ use std::collections::HashSet;
 
 use llrm_spike_mf::{Inst, Kind, Operand, Reg};
 
+use crate::REGISTER_INFO;
 use crate::dagisel::hooks::Cpu;
 use crate::dagisel::local;
 use crate::mc;
 use crate::mfunc::{Class, MFunction, op_inst, operand_class};
 use crate::reg;
+use crate::regalloc::Assignment;
 
 /// A use of a virtual register: an instruction operand, or a phi's incoming.
 enum Use {
@@ -171,9 +177,7 @@ fn cheapest(
 ) -> Option<Candidate> {
     candidates(value)
         .into_iter()
-        .filter_map(|one| {
-            price(&one, cpu).map(|(clocks, bytes)| (if size { (bytes, clocks) } else { (clocks, bytes) }, one))
-        })
+        .filter_map(|one| price(&one, cpu).map(|(clocks, bytes)| (crate::timing::order(cpu, size, clocks, bytes), one)))
         .min_by_key(|(key, _)| *key)
         .map(|(_, one)| one)
 }
@@ -249,7 +253,9 @@ fn rewrite_one(
     if !reaches_addresses_only(function, uses, d, Some(x), &mut HashSet::new()) {
         return None;
     }
-    let one = cheapest(sign * value, cpu, size)?;
+    // the form, priced on the CPU's selection class so that the allocation
+    // does not depend on the CPU; `refine_address_adds` prices the real one
+    let one = cheapest(sign * value, selection_class(cpu), size)?;
     let desc = local::desc(local::code_of(one.opcode)?)?;
     let mut inst: Inst = op_inst(one.opcode, desc, (one.operands)(Reg::Virt(d), base, one.value));
     // none of the three changes the codes; the pin's `adda` says it does
@@ -260,4 +266,56 @@ fn rewrite_one(
     insts[at] = inst;
     insts.remove(copy);
     Some(at)
+}
+
+/// The CPU whose tables the pin selects from: the 68000 for it and the 68010,
+/// the 68020 for the rest.
+fn selection_class(cpu: Cpu) -> Cpu {
+    if cpu.at_least(Cpu::M68020) { Cpu::M68020 } else { Cpu::M68000 }
+}
+
+/// DEVIATE: the pin has no such pass on m68k; this is X86FixupLEAs's `lea` to
+/// `add` (and back) for a result that is its base, priced on the CPU's tables.
+/// Exit: none.
+///
+/// After allocation, an add of a constant to an address register that stays in
+/// it (`lea (d,An), An`, `addq`/`subq`, `adda`) is the cheapest of the three on
+/// `cpu`. One whose result is another register stays `lea`, for the tied forms
+/// would need a copy.
+pub fn refine_address_adds(
+    function: &mut MFunction,
+    assignment: &Assignment,
+    cpu: Cpu,
+    size: bool,
+) {
+    for block in &mut function.blocks {
+        for inst in &mut block.insts {
+            let Kind::Op(name) = inst.kind else { continue };
+            let (d, b, value) = match (name, &inst.operands[..]) {
+                ("LEA32p", [Operand::Def(Reg::Virt(d)), Operand::Imm(value), Operand::Use(Reg::Virt(b))]) => {
+                    (*d, *b, *value)
+                }
+                (
+                    "ADDQ32ai" | "ADD32ai",
+                    [Operand::Def(Reg::Virt(d)), Operand::Use(Reg::Virt(b)), Operand::Imm(value)],
+                ) => (*d, *b, *value),
+                ("SUBQ32ai", [Operand::Def(Reg::Virt(d)), Operand::Use(Reg::Virt(b)), Operand::Imm(value)]) => {
+                    (*d, *b, -*value)
+                }
+                _ => continue,
+            };
+            if REGISTER_INFO.root(assignment.0[d as usize]) != REGISTER_INFO.root(assignment.0[b as usize]) {
+                continue;
+            }
+            let Some(one) = cheapest(value, cpu, size) else { continue };
+            if one.opcode == name {
+                continue;
+            }
+            let Some(desc) = local::code_of(one.opcode).and_then(local::desc) else { continue };
+            let mut new: Inst = op_inst(one.opcode, desc, (one.operands)(Reg::Virt(d), Reg::Virt(b), one.value));
+            // none of the three change the codes; the pin's `adda` says it does
+            new.sets_flags = false;
+            *inst = new;
+        }
+    }
 }

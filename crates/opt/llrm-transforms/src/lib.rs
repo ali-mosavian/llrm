@@ -74,6 +74,7 @@
 //! module's own header.
 
 pub mod adce;
+pub mod aggressive_instcombine;
 pub mod algebraic;
 pub mod alwaysundef;
 pub mod argpromotion;
@@ -123,6 +124,10 @@ pub mod combine_distribute;
 #[cfg(test)]
 mod combine_flags_result_tests;
 pub mod combine_fp;
+pub mod combine_fp_int_casts;
+pub mod combine_fptoint;
+#[cfg(test)]
+mod combine_fptoint_tests;
 pub mod combine_funnel;
 pub mod combine_gep;
 pub mod combine_gep_base;
@@ -174,6 +179,9 @@ pub mod constraintelim;
 pub mod constraintelim_induction;
 #[cfg(test)]
 mod constraintelim_tests;
+pub mod copyback;
+#[cfg(test)]
+mod copyback_tests;
 #[cfg(test)]
 mod corpus_tests;
 pub mod counting;

@@ -17,7 +17,9 @@
 //! (`N_WEAK_DEF`) replaces only itself, and each reference between two symbols
 //! is a relocation.
 
-use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Target, Unsupported, assembler::AsmBackend};
+use llrm_object::{
+    Binding, Definition, Object, Reloc, Role, Section, Target, Unsupported, Visibility, assembler::AsmBackend,
+};
 
 const MH_MAGIC_64: u32 = 0xFEED_FACF;
 const MH_OBJECT: u32 = 1;
@@ -37,6 +39,7 @@ const S_ATTR_PURE_INSTRUCTIONS: u32 = 0x8000_0000;
 const S_ATTR_SOME_INSTRUCTIONS: u32 = 0x0000_0400;
 const S_ATTR_DEBUG: u32 = 0x0200_0000;
 pub const N_EXT: u8 = 1;
+pub const N_PEXT: u8 = 0x10;
 pub const N_WEAK_DEF: u16 = 0x80;
 const N_SECT: u8 = 0xE;
 /// `ARM64_RELOC_ADDEND`, the one entry Mach-O has for an addend a field cannot
@@ -250,7 +253,15 @@ pub fn write<W: MachTargetWriter>(
         put32(&mut nlist, name);
         match symbol.definition {
             Definition::Defined { section, offset } => {
-                let external = if symbol.binding == Binding::Local { 0 } else { N_EXT };
+                // A hidden symbol is private to the image: `N_PEXT` (not
+                // `N_EXT` alone).
+                let external = if symbol.binding == Binding::Local {
+                    0
+                } else if symbol.visibility == Visibility::Hidden {
+                    N_EXT | N_PEXT
+                } else {
+                    N_EXT
+                };
                 nlist.extend([N_SECT | external, ordinal(section) as u8]);
                 nlist.extend((if symbol.binding == Binding::Weak { N_WEAK_DEF } else { 0 }).to_le_bytes());
                 put64(&mut nlist, (address[section] + offset) as u64);

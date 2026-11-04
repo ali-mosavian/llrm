@@ -63,6 +63,16 @@ pub struct Tuning {
     /// SimplifyCFG's sinking of two such accesses behind a phi of the offsets
     /// is refused (it costs the displacement). false: the pin's.
     pub keep_constant_displacements: bool,
+    /// DEVIATE REC-2: (depth, callee `gcc_insns`) of the recursion copied at
+    /// speed, gcc's `max-inline-recursive-depth` and
+    /// `max-inline-insns-recursive` (`Tti::recursive_inlining`); none: the
+    /// pin's inliner.
+    pub recursive_inlining: Option<(u32, i64)>,
+    /// gcc's `max-inline-insns-auto` at -O2 and -O3 (15, 30): the most a copy
+    /// of the recursive callee may grow its caller
+    /// (`want_inline_small_function_p`) for `recursive_inlining` to run on
+    /// it; none: no such bar.
+    pub recursive_edge_growth: Option<(i64, i64)>,
 }
 
 impl Tuning {
@@ -86,6 +96,8 @@ impl Tuning {
         split_merged_conditions: false,
         inline_size_guard_at_size: false,
         keep_constant_displacements: false,
+        recursive_inlining: None,
+        recursive_edge_growth: None,
     };
 }
 
@@ -105,6 +117,13 @@ pub trait Machine {
     /// The address spaces by role: the numbers the target's description gives
     /// them.
     fn spaces(&self) -> Spaces;
+
+    /// Whether the target's pipeline takes vector values. None does yet
+    /// (vectors are deferred, not designed out): a function holding one is
+    /// refused before the mid-end, which assumes scalars.
+    fn has_vector_mir(&self) -> bool {
+        false
+    }
 
     /// What each operation costs on this target, for profitability.
     fn costs(&self) -> OperationCosts;
