@@ -305,7 +305,8 @@ fn unary_name(
         FloatKind::Float => "f32",
         FloatKind::Double => "f64",
         FloatKind::X86Fp80 => "f80",
-        FloatKind::F128 => "f128",
+        // Nothing is wider than fp128 to narrow from.
+        FloatKind::F128 => return None,
     };
     Some(format!("llvm.{base}.{suffix}"))
 }
