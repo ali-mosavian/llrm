@@ -73,6 +73,30 @@ pub struct FunctionLoweringInfo {
     pub(super) module_tables: Option<crate::backend::constpool::Symbols>,
 }
 
+/// How many times [`module_tables`] ran: a test hook.
+pub static MODULE_TABLES_BUILT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// The module's part of the tables: the names of its globals, and which are local.
+/// `isOffsetFoldingLegal`: `shouldAssumeDSOLocal` holds for every symbol under the static relocation model, which DOS objects (no PIC) always use.
+pub fn module_tables(
+    module: &llrm_mir::module::Module,
+    dso_local_symbols: bool,
+) -> crate::backend::constpool::Symbols {
+    MODULE_TABLES_BUILT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    (
+        std::rc::Rc::new(module.globals.iter().map(|global| global.name.as_deref().unwrap_or("").to_string()).collect()),
+        std::rc::Rc::new(if dso_local_symbols {
+            vec![true; module.globals.len()]
+        } else {
+            module
+                .globals
+                .iter()
+                .map(|global| matches!(global.linkage, llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private))
+                .collect()
+        }),
+    )
+}
+
 /// What every block's DAG reads about the module and the function.
 #[derive(Clone)]
 pub(super) struct Tables {
@@ -82,6 +106,14 @@ pub(super) struct Tables {
 }
 
 impl FunctionLoweringInfo {
+    /// The module's tables, made once by the caller ([`module_tables`]) for every function of the module.
+    pub fn with_module_tables(
+        &mut self,
+        tables: crate::backend::constpool::Symbols,
+    ) {
+        self.module_tables = Some(tables);
+    }
+
     /// `AddLiveOutRegInfo`: only information that tells something is kept.
     pub fn add_live_out(
         &mut self,
