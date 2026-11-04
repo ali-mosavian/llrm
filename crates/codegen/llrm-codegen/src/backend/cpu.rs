@@ -808,6 +808,33 @@ mod tests {
         assert_eq!((target.costs().call, target.size_costs().call), (18, 5));
     }
 
+    /// Nib and QB m16 compiles handed the optimizer `Tuning::PIN` (16 stores
+    /// to a memset, no fill price, rate 0) beside m16's costs: `tuning` and
+    /// four more methods were not forwarded, so matmul nib -O2 priced an
+    /// 8-dword row as 16 inline-store clocks and the backend emitted `rep
+    /// stosd` (+135 clocks). Every CPU's lowered target answers what its
+    /// machine does.
+    #[test]
+    fn test_the_lowered_target_forwards_the_machines_tuning() {
+        use llrm_mir::target::Machine;
+        for name in names() {
+            let abi = crate::abi::qb::HirAbi {
+                runtime: crate::hir::model::RuntimeProfile::Freestanding,
+                objects: Default::default(),
+                preserved: Default::default(),
+                stack_check: None,
+                hosted: false,
+            };
+            let cpu = profile(name).unwrap();
+            let (lowered, machine) = (crate::abi::qb::LoweredTarget::of(cpu, abi), cpu.target());
+            assert_eq!(lowered.tuning(), machine.tuning(), "{name}");
+            assert_eq!(lowered.fills_by_pattern(), machine.fills_by_pattern(), "{name}");
+            assert_eq!(lowered.index_register_bits(), machine.index_register_bits(), "{name}");
+            assert_eq!(lowered.multiple_condition_registers(), machine.multiple_condition_registers(), "{name}");
+            assert_eq!(lowered.size_milliclocks_per_byte(), machine.size_milliclocks_per_byte(), "{name}");
+        }
+    }
+
     /// The target every frontend lowers to states its LLVM cost model: the
     /// flat 32-bit target's and real mode's. `tti` was not forwarded, so
     /// `LLRM_EXP_INLINEDECIDE` priced with the generic rules whatever the

@@ -835,7 +835,9 @@ pub(crate) fn fills_pay(
     // The table doubles an operation that becomes more than one instruction;
     // a fill's three immediate loads are 2 to 3 bytes each, not 6: three
     // quarters of `fill` is its real size (12 to 13 of 18 bytes at m16).
-    let loop_bytes = trip_cost(context, layout, function, callees, blocks.iter(), costs, true);
+    // The loop's counter is set before it (`mov si, -24`): its start is the
+    // load the fill's count is, which `fill` includes.
+    let loop_bytes = trip_cost(context, layout, function, callees, blocks.iter(), costs, true) + costs.r#move;
     // At speed under a clock price (m16 -O2: 1 clock = 2 B) with the trips
     // known, the bytes are in the price: a fill larger than the loop still pays
     // for the clocks it saves. At -Os, or for unknown trips, the bytes decide.
@@ -849,6 +851,13 @@ pub(crate) fn fills_pay(
             let each = trip_cost(context, layout, function, callees, blocks.iter(), clocks, true);
             let fill = fills * clocks.fill + cells * clocks.fill_cell;
             let saved = loop_bytes - 3 * fills * costs.fill / 4;
+            // -Os prices bytes and clocks break a tie: a fill of fewer bytes is
+            // taken at any clock price (the fitted 10_000 milliclocks a byte
+            // kept six-dword clears as loops: +44 B and +74 clocks over the
+            // `rep stos`).
+            if !at_speed {
+                return saved > 0 || (saved == 0 && fill <= trips * each);
+            }
             clocks_pay(saved, rate, fill, trips * each)
         })
 }

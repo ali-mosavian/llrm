@@ -594,6 +594,29 @@ impl LoweredTarget {
 }
 
 impl llrm_mir::target::Machine for LoweredTarget {
+    // Everything the optimizer reads of the machine is forwarded: a method
+    // left out takes the trait's default, the pin's value, whatever the CPU's
+    // target states.
+    fn tuning(&self) -> llrm_mir::target::Tuning {
+        self.machine.tuning()
+    }
+
+    fn fills_by_pattern(&self) -> bool {
+        self.machine.fills_by_pattern()
+    }
+
+    fn index_register_bits(&self) -> Option<u32> {
+        self.machine.index_register_bits()
+    }
+
+    fn multiple_condition_registers(&self) -> bool {
+        self.machine.multiple_condition_registers()
+    }
+
+    fn size_milliclocks_per_byte(&self) -> i64 {
+        self.machine.size_milliclocks_per_byte()
+    }
+
     fn spaces(&self) -> llrm_mir::spaces::Spaces {
         self.machine.spaces()
     }
