@@ -1,4 +1,5 @@
 // flags: -Os -march=i486
+// targets: dos
 /* An inlined store through a stack pointer, then calls writing the same object through a far pointer: -Os read the object as unchanged and returned 0 (#2982). */
 extern void report(long value);
 

@@ -1,5 +1,6 @@
 // flags: -O2 -march=i486 -m32 -mabi=watcom
 // link: wc_callee.wc
+// targets: dos
 /* One program of Open Watcom's own wcc386 objects and llrm's: each call crosses the compilers in the default convention,
    registers, an i64 pair, the stack and a struct through ESI, as the other compiler emits it. */
 extern void report(long value);

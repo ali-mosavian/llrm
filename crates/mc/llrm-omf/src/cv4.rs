@@ -667,6 +667,8 @@ impl Symbols<'_> {
             | Location::Offset(..)
             | Location::Expression { .. }
             | Location::EntryValue(_)
+            | Location::WasmLocal(_)
+            | Location::WasmStack(_)
             | Location::Pieces(_) => Ok(()),
             Location::Frame { disp } => {
                 let mut data = Vec::new();
