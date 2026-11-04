@@ -756,10 +756,13 @@ pub trait Target {
             slot: self.stack_slot_bytes(),
             align: self.stack_alignment(),
             optional: self.frame_optional(),
+            saved_first: self.frame_saved_first(),
             enter: self.frame_enter(),
             wrap_split_size: self.frame_wrap_split_size(),
             slot_scratch: self.frame_slot_scratch(),
             free: false,
+            kept: false,
+            exit_cfi: true,
         }
     }
 
@@ -773,6 +776,13 @@ pub trait Target {
     /// Whether a function that needs no frame register may leave it out
     /// (`calling.toml`'s `frame_optional`).
     fn frame_optional(&self) -> bool {
+        false
+    }
+
+    /// Whether the registers a function keeps are pushed before the space for
+    /// its locals even where it calls nothing (`calling.toml`'s
+    /// `frame_saved_first`).
+    fn frame_saved_first(&self) -> bool {
         false
     }
 
@@ -812,6 +822,9 @@ pub struct FrameRegisters {
     pub align: i64,
     /// A function that needs no frame register may leave it out.
     pub optional: bool,
+    /// The registers are pushed before the locals' space even where nothing is
+    /// called.
+    pub saved_first: bool,
     /// A frame tuned for size opens with `enter`.
     pub enter: bool,
     /// A size build may skip the frame on an early exit into a shared return.
@@ -822,6 +835,14 @@ pub struct FrameRegisters {
     /// The function has no frame register: it holds a value, and a frame cell
     /// is addressed through the stack pointer.
     pub free: bool,
+    /// The function's `"frame-pointer"` attribute keeps the frame register
+    /// even where nothing needs it
+    /// (`MachineFunction::disableFramePointerElim`).
+    pub kept: bool,
+    /// The exits state the frame address as they move it
+    /// (`X86FrameLowering::emitEpilogue`'s `NeedsDwarfCFI`); an object
+    /// format whose unwinder does not read them (Mach-O, COFF) turns it off.
+    pub exit_cfi: bool,
 }
 
 impl FrameRegisters {

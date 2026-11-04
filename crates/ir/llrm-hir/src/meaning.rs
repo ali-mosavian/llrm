@@ -28,6 +28,9 @@ pub enum Parameter {
     String,
     /// A 16-bit integer.
     Int,
+    /// A far pointer to a string place: the descriptor of a variable-length
+    /// string, or the bytes of a fixed-length one.
+    Place,
 }
 
 /// A binary operation of a routine's meaning, on integers; `Add` also
@@ -52,6 +55,10 @@ pub enum Expr {
     Length(usize),
     /// The address of the string parameter's first byte.
     Data(usize),
+    /// A place parameter as a near pointer: its offset in the data segment.
+    Near(usize),
+    /// The second where the first (a condition) holds, else the third.
+    If(Box<Expr>, Box<Expr>, Box<Expr>),
     /// The byte at an address.
     Byte(Box<Expr>),
     /// The address of a byte in the caller's frame holding the low byte of the
@@ -68,6 +75,9 @@ pub enum Returns {
     /// A string made of a length and a data address: the runtime hands back
     /// a temporary descriptor.
     View { length: Expr, data: Expr },
+    /// Nothing: `count` bytes copied forward, one at a time, from `from` to
+    /// `to` (a source that overlaps the destination repeats itself).
+    Copy { to: Expr, from: Expr, count: Expr },
 }
 
 /// What one runtime routine computes.
@@ -83,5 +93,7 @@ pub struct Meaning {
     /// `-fno-inline-functions` says of the call.
     pub always_inline: bool,
     /// The condition under which it raises the error, and the error's number.
+    /// A routine that stores raises it in every program: an unchecked store
+    /// is not a harmless read.
     pub check: Option<(Expr, i64)>,
 }

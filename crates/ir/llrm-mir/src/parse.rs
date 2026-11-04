@@ -10,9 +10,9 @@ use crate::hash::{HashMap, HashSet};
 use crate::intrinsics;
 use crate::lexer::{Name, ParseError, Token, lex};
 use crate::module::{
-    Block, BlockId, DebugRecord, DebugWhat, Function, GlobalKind, GlobalValue, GlobalVariable, InstId, Instruction,
-    LINKAGE, Linkage, MetadataId, MetadataNode, MetadataOperand, Module, Operand, Special, UnnamedAddr, ValueData,
-    ValueDef, ValueId,
+    Alias, Block, BlockId, DebugRecord, DebugWhat, Function, GlobalKind, GlobalValue, GlobalVariable, InstId,
+    Instruction, LINKAGE, Linkage, MetadataId, MetadataNode, MetadataOperand, Module, Operand, Special, UnnamedAddr,
+    VISIBILITY, ValueData, ValueDef, ValueId, Visibility,
 };
 use crate::opcode::{
     AtomicInfo, AtomicKind, AtomicOrdering, Attribute, BINARY, BinaryOp, CAST, CallInfo, CastOp, Clause,
@@ -39,6 +39,11 @@ struct Parser {
     at: usize,
     module: Module,
     globals: HashMap<Name, GlobalId>,
+    /// The names the pre-scan found defined as aliases: no instruction may use
+    /// one.
+    /// Each alias the pre-scan found, with what an operand naming it is: its
+    /// aliasee, or none where the alias may be interposed.
+    alias_names: HashMap<Name, Option<Name>>,
     /// Global values referred to, with the pointer type each use gave them.
     global_uses: Vec<(GlobalId, TypeId, usize)>,
     defined_globals: HashSet<GlobalId>,
@@ -68,6 +73,7 @@ impl Parser {
             at: 0,
             module: Module::default(),
             globals: HashMap::default(),
+            alias_names: HashMap::default(),
             global_uses: Vec::new(),
             defined_globals: HashSet::default(),
             groups: HashMap::default(),
@@ -254,7 +260,13 @@ impl Parser {
                 Token::Global(name) => {
                     let defines = awaiting_function
                         || self.tokens.get(at + 1).is_some_and(|(next, _)| *next == Token::Punct('='));
-                    if defines {
+                    if let Some(operand) = (defines && !awaiting_function).then(|| self.alias_operand(at + 2)).flatten()
+                    {
+                        if self.alias_names.insert(name.clone(), operand).is_some() {
+                            let line = self.tokens[at].1;
+                            return Err(ParseError { line, message: format!("@{} is defined twice", display(name)) });
+                        }
+                    } else if defines {
                         if self.globals.contains_key(name) {
                             let line = self.tokens[at].1;
                             return Err(ParseError { line, message: format!("@{} is defined twice", display(name)) });
@@ -271,6 +283,7 @@ impl Parser {
                                     }
                                     .into(),
                                     linkage: Linkage::External,
+                                    visibility: Visibility::Default,
                                     unnamed_addr: UnnamedAddr::None,
                                     address_space: 0,
                                     kind: GlobalKind::Variable(GlobalVariable {
@@ -318,6 +331,7 @@ impl Parser {
                     self.string()?;
                 }
                 Token::Local(Name::Named(name)) => self.named_type(name)?,
+                Token::Global(name) if self.alias_names.contains_key(&name) => self.alias(name)?,
                 Token::Global(name) => self.global_variable(name)?,
                 Token::Word(word) if word == "declare" || word == "define" => self.function(word == "define")?,
                 Token::MetadataName(name) => self.named_metadata(name)?,
@@ -438,6 +452,16 @@ impl Parser {
         Linkage::External
     }
 
+    fn visibility(&mut self) -> Visibility {
+        if let Token::Word(word) = self.peek()
+            && let Some(visibility) = spelled(&VISIBILITY, word)
+        {
+            self.next();
+            return visibility;
+        }
+        Visibility::Default
+    }
+
     fn unnamed_addr(&mut self) -> UnnamedAddr {
         if self.eat_word("unnamed_addr") {
             UnnamedAddr::Global
@@ -479,6 +503,62 @@ impl Parser {
         Ok(space)
     }
 
+    /// For the definition whose `=` stands before `at`: none when it is no
+    /// alias (`alias` comes before any `global` or `constant`), else what an
+    /// operand naming it is, the first global after `alias`, none for a weak
+    /// alias, which a linker may replace.
+    fn alias_operand(
+        &self,
+        at: usize,
+    ) -> Option<Option<Name>> {
+        let mut interposable = false;
+        let mut seen = false;
+        for (token, _) in &self.tokens[at..] {
+            match token {
+                Token::Word(word) if word == "alias" => seen = true,
+                Token::Word(word) if !seen && (word == "global" || word == "constant") => return None,
+                Token::Word(word) if word == "define" || word == "declare" => return None,
+                Token::Word(word) if !seen => {
+                    interposable |= spelled(&LINKAGE, word).is_some_and(|linkage| linkage.is_interposable());
+                }
+                Token::Global(target) if seen => return Some((!interposable).then(|| target.clone())),
+                Token::Eof => return None,
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// `@a = linkage visibility alias T, ptr @target`. Only a plain global is
+    /// an aliasee (LLVM allows any constant): `Alias` says why.
+    fn alias(
+        &mut self,
+        name: Name,
+    ) -> Parsed<()> {
+        self.next();
+        self.expect_punct('=')?;
+        let Name::Named(text) = name else { return self.fail("an alias has a name") };
+        let linkage = self.linkage();
+        let visibility = self.visibility();
+        let unnamed_addr = self.unnamed_addr();
+        self.expect_word("alias")?;
+        let ty = self.ty()?;
+        self.expect_punct(',')?;
+        let pointer = self.ty()?;
+        let Type::Pointer(address_space) = *self.module.context.types.get(pointer) else {
+            return self.fail("an aliasee is a pointer");
+        };
+        let Token::Global(target) = self.next() else {
+            self.at -= 1;
+            return self.fail(format!("an aliasee is a global, found {}", self.describe()));
+        };
+        let Some(&aliasee) = self.globals.get(&target) else {
+            return self.fail(format!("@{} is never defined", display(&target)));
+        };
+        self.module.aliases.push(Alias { name: text, linkage, visibility, unnamed_addr, address_space, ty, aliasee });
+        Ok(())
+    }
+
     fn global_variable(
         &mut self,
         name: Name,
@@ -487,6 +567,7 @@ impl Parser {
         self.expect_punct('=')?;
         let id = self.globals[&name];
         let linkage = self.linkage();
+        let visibility = self.visibility();
         let unnamed_addr = self.unnamed_addr();
         let address_space = self.address_space()?;
         let externally_initialized = self.eat_word("externally_initialized");
@@ -525,6 +606,7 @@ impl Parser {
         self.module.globals[id.0 as usize] = GlobalValue {
             name: self.module.globals[id.0 as usize].name.clone(),
             linkage,
+            visibility,
             unnamed_addr,
             address_space,
             kind: GlobalKind::Variable(GlobalVariable { externally_initialized, ty, constant, initializer, align }),
@@ -569,6 +651,7 @@ impl Parser {
             early.push((kind, self.metadata_id(number)));
         }
         let linkage = self.linkage();
+        let visibility = self.visibility();
         let calling_convention = self.calling_convention()?;
         let return_attrs = self.attributes(false)?;
         let returns = self.ty()?;
@@ -653,6 +736,7 @@ impl Parser {
         self.module.globals[id.0 as usize] = GlobalValue {
             name: self.module.globals[id.0 as usize].name.clone(),
             linkage,
+            visibility,
             unnamed_addr,
             address_space,
             kind: GlobalKind::Function(Box::new(local.function)),
@@ -913,6 +997,20 @@ impl Parser {
         ty: TypeId,
         line: usize,
     ) -> Parsed<ConstantId> {
+        // An alias is its aliasee's address: an operand naming one names that.
+        let mut name = name.clone();
+        let mut hops = 0;
+        while let Some(entry) = self.alias_names.get(&name) {
+            let Some(target) = entry.clone() else {
+                return self.fail_on(line, format!("@{} is an alias a linker may replace", display(&name)));
+            };
+            name = target;
+            hops += 1;
+            if hops > 64 {
+                return self.fail_on(line, format!("@{} is an alias of itself", display(&name)));
+            }
+        }
+        let name = &name;
         let Some(&id) = self.globals.get(name) else {
             return self.fail_on(line, format!("@{} is never defined", display(name)));
         };
@@ -950,8 +1048,11 @@ impl Parser {
                 }
                 ConstantKind::Int(u128::from(word == "true"))
             }
-            Token::Float(value, narrow) => match shape {
+            Token::Float(value, narrow, wide) => match shape {
                 Type::Float(FloatKind::Float) => ConstantKind::Float(u64::from(narrow.to_bits())),
+                Type::Float(FloatKind::X86Fp80) => {
+                    crate::fp80::kind(&crate::apfloat::ApFloat::from_bits(crate::apfloat::X87_DOUBLE_EXTENDED, wide))
+                }
                 _ => self.float(&shape, value, line)?,
             },
             Token::FloatBits { bits, digits } => match shape {

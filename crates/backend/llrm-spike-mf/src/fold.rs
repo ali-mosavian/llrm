@@ -19,11 +19,9 @@
 //! `HoistCommonCodeInSuccs`: the instructions both ways of a conditional
 //! branch begin with run ahead of it.
 //!
-//! DEVIATE: `TailMergeBlocks`, tail calls, EH pads, jump tables and debug
-//! instructions are not translated. Reason: tail merging is its own pass of
-//! about 700 lines (`ProfitableToMerge`, `SplitBlockAt`, the block
-//! frequencies), and the spike has no other three. Exit: the neutral-LIR task,
-//! where `llrm-codegen`'s port takes over.
+//! DEVIATE: tail calls, EH pads, jump tables and debug instructions are not
+//! translated; `TailMergeBlocks` is [`crate::tailmerge`]. Exit: the neutral-LIR
+//! task, where `llrm-codegen`'s port takes over.
 //! DEVIATE: `HoistCommonCodeInSuccs` knows no `dead` marks, so an instruction
 //! that defines a register the compare or branch also defines is not hoisted
 //! (the pin hoists it where the def is dead), and flags are dead at a block's
@@ -547,7 +545,7 @@ impl Effects {
     }
 }
 
-fn resolve(
+pub(crate) fn resolve(
     reg: Reg,
     assignment: &Assignment,
 ) -> RegId {
@@ -570,7 +568,7 @@ fn touches<T: Target>(
 }
 
 /// `isIdenticalTo`: the same instruction on the same registers, as allocated.
-fn identical(
+pub(crate) fn identical(
     one: &Inst,
     other: &Inst,
     assignment: &Assignment,
@@ -711,7 +709,8 @@ fn fold<T: Target + Jump>(
         Folder::<T::Class, T> { function, assignment, number: HashMap::default(), jump: std::marker::PhantomData };
     let mut ever = false;
     loop {
-        let mut changed = folder.optimize_branches();
+        let mut changed = crate::tailmerge::merge_tails::<T, _>(folder.function, folder.assignment);
+        changed |= folder.optimize_branches();
         changed |= folder.hoist_common_code();
         if !changed {
             break;

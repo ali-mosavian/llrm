@@ -409,11 +409,13 @@ pub mod x86isd {
     pub const LLRM_ASM: u16 = 24578;
     pub const LLRM_CALL_FLAGS: u16 = 24585;
     pub const LLRM_CODE: u16 = 24582;
+    pub const LLRM_COPY128: u16 = 24592;
     pub const LLRM_FARCALL: u16 = 24584;
     pub const LLRM_PORT: u16 = 24586;
     pub const LLRM_PTRDIFF: u16 = 24583;
     pub const LLRM_TC_RETURN: u16 = 24587;
     pub const LLRM_WINDOW: u16 = 24581;
+    pub const LLRM_ZERO128: u16 = 24591;
     pub const LOR: u16 = 662;
     pub const LSUB: u16 = 663;
     pub const LWPINS: u16 = 664;
@@ -780,9 +782,13 @@ pub mod x86 {
     pub const INC32m: u16 = 1912;
     pub const INC8m: u16 = 1933;
     pub const MOV32r0: u16 = 386;
+    pub const MOVAPSmr: u16 = 2633;
+    pub const MOVAPSrm: u16 = 2634;
     pub const MOVSX16rm8: u16 = 2735;
     pub const MOVSX16rr8: u16 = 2738;
     pub const MOVSX32rr8_NOREX: u16 = 2746;
+    pub const MOVUPSmr: u16 = 2757;
+    pub const MOVUPSrm: u16 = 2758;
     pub const MOVZX16rm8: u16 = 2763;
     pub const MOVZX16rr8: u16 = 2765;
     pub const MOVZX32rr8_NOREX: u16 = 2771;
@@ -834,6 +840,7 @@ pub mod x86 {
     pub const UCOM_Fpr32: u16 = 5096;
     pub const UCOM_Fpr64: u16 = 5097;
     pub const UCOM_Fpr80: u16 = 5098;
+    pub const V_SET0: u16 = 441;
     pub const XOR16mi: u16 = 22586;
     pub const XOR16mr: u16 = 22596;
     pub const XOR32mi: u16 = 22627;
@@ -848,6 +855,7 @@ pub mod x86 {
     /// The extras that are instructions, by number.
     pub const NAMES: &[(u16, &str)] = &[
         (386, "MOV32r0"),
+        (441, "V_SET0"),
         (465, "ADC16mi"),
         (471, "ADC16mr"),
         (490, "ADC32mi"),
@@ -899,9 +907,13 @@ pub mod x86 {
         (1901, "INC16m"),
         (1912, "INC32m"),
         (1933, "INC8m"),
+        (2633, "MOVAPSmr"),
+        (2634, "MOVAPSrm"),
         (2735, "MOVSX16rm8"),
         (2738, "MOVSX16rr8"),
         (2746, "MOVSX32rr8_NOREX"),
+        (2757, "MOVUPSmr"),
+        (2758, "MOVUPSrm"),
         (2763, "MOVZX16rm8"),
         (2765, "MOVZX16rr8"),
         (2771, "MOVZX32rr8_NOREX"),
@@ -1206,11 +1218,13 @@ pub fn x86isd_id(name: &str) -> Option<u16> {
         "LLRM_ASM" => 24578,
         "LLRM_CALL_FLAGS" => 24585,
         "LLRM_CODE" => 24582,
+        "LLRM_COPY128" => 24592,
         "LLRM_FARCALL" => 24584,
         "LLRM_PORT" => 24586,
         "LLRM_PTRDIFF" => 24583,
         "LLRM_TC_RETURN" => 24587,
         "LLRM_WINDOW" => 24581,
+        "LLRM_ZERO128" => 24591,
         "LOR" => 662,
         "LSUB" => 663,
         "LWPINS" => 664,

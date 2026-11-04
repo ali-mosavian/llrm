@@ -116,7 +116,13 @@ fn an_instruction_that_overwrites_the_compares_operand_prevents_issuing_it_again
 /// The displacement of the spill store the function holds, with or without a
 /// push of the codes round it.
 fn spill_displacement(pushed: bool) -> i64 {
-    use llrm_m68k::dagisel::hooks::Cpu;
+    spill_displacement_on("68000", pushed)
+}
+
+fn spill_displacement_on(
+    cpu: &str,
+    pushed: bool,
+) -> i64 {
     use llrm_m68k::expand::{Line, finish};
     use llrm_m68k::mc::Operand as Mc;
     let mut insts = Vec::new();
@@ -128,7 +134,8 @@ fn spill_displacement(pushed: bool) -> i64 {
         insts.push(op("CCR_POP", vec![], true, false));
     }
     insts.push(op("RET", vec![Operand::Imm(0)], false, false));
-    let lines = finish(&function(insts), &assignment(), 0, &[0], Cpu::M68000, false).unwrap();
+    let cpu = llrm_m68k::driver::cpu_of(cpu).unwrap();
+    let lines = finish(&function(insts), &assignment(), 0, &[0], cpu, false).unwrap();
     lines
         .iter()
         .find_map(|line| match line {
@@ -148,4 +155,29 @@ fn spill_displacement(pushed: bool) -> i64 {
 #[test]
 fn a_frame_slot_between_a_push_and_a_pop_of_the_codes_is_two_bytes_further() {
     assert_eq!(spill_displacement(true), spill_displacement(false) + 2);
+}
+
+/// The opcode `CCR_PUSH` becomes on `cpu`.
+fn pushed_opcode(cpu: &str) -> &'static str {
+    use llrm_m68k::expand::{Line, finish};
+    let insts = vec![op("CCR_PUSH", vec![], false, true), op("RET", vec![Operand::Imm(0)], false, false)];
+    let cpu = llrm_m68k::driver::cpu_of(cpu).unwrap();
+    let lines = finish(&function(insts), &assignment(), 0, &[], cpu, false).unwrap();
+    lines
+        .iter()
+        .find_map(|line| match line {
+            Line::Inst(inst) if inst.opcode.starts_with("MOV16e") => Some(inst.opcode),
+            _ => None,
+        })
+        .expect("the push of the codes")
+}
+
+/// `move %sr` is privileged from the 68010 on: every CPU after the 68000 took
+/// the 68000's form, or (before the 68030 existed here) could not be asked.
+#[test]
+fn the_codes_are_read_with_move_from_sr_on_the_68000_only() {
+    assert_eq!(pushed_opcode("68000"), "MOV16es");
+    for cpu in ["68010", "68020", "68030", "68040", "68060"] {
+        assert_eq!(pushed_opcode(cpu), "MOV16ec", "-mcpu={cpu}");
+    }
 }

@@ -113,9 +113,11 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
     let wide = crate::regalloc::wide_registers(function);
     let labels: HashMap<&str, u32> =
         function.blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at as u32)).collect();
+    let mut origin = 0u32;
     for (at, block) in function.blocks.iter().enumerate() {
         let mut insts = Vec::new();
         for op in &block.ops {
+            origin += 1;
             let (kind, terminator, barrier, call) = match op {
                 Op::I(inst) => (
                     Kind::Op(name_of(inst)),
@@ -144,6 +146,7 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
                 Op::Copy { .. } => (Kind::Copy, false, false, false),
                 Op::Imm { .. } => (Kind::Op("Imm"), false, false, false),
                 Op::FrameAddress { .. } => (Kind::Op("FrameAddress"), false, false, false),
+                Op::JumpTable { .. } => (Kind::Op("JumpTable"), true, true, false),
                 Op::Call { .. } => (Kind::Op("Call"), false, false, true),
                 Op::Return { .. } => (Kind::Op("Return"), true, true, false),
             };
@@ -175,11 +178,16 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
             {
                 operands.push(Operand::Block(*target));
             }
+            if let Op::JumpTable { targets, .. } = &op {
+                operands
+                    .extend(targets.iter().filter_map(|label| labels.get(label.as_str())).map(|&b| Operand::Block(b)));
+            }
             if kind != Kind::Copy {
                 operands.push(Operand::Imm(content(&op)));
             }
             let mut inst = LirInst::new(kind, operands);
             inst.ties = ties;
+            inst.origin = origin;
             inst.terminator = terminator;
             inst.barrier = barrier;
             inst.call = call;
@@ -197,12 +205,16 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
                 op,
                 Op::I(Inst::Svc { .. } | Inst::Dmb { .. } | Inst::Atomic { .. })
             );
-            inst.early_clobber = matches!(op, Op::I(Inst::Atomic { .. }));
+            inst.early_clobber = matches!(op, Op::I(Inst::Atomic { .. }) | Op::JumpTable { .. });
             inst.rematerializable = matches!(
                 op,
                 Op::Imm { .. }
                     | Op::I(Inst::FpMoveImm { .. } | Inst::Adr { .. })
                     | Op::I(Inst::MoveWide { op: Wide::Zero | Wide::Not, .. })
+            );
+            inst.invariant_load = matches!(
+                &op,
+                Op::I(Inst::Load { mmo, .. }) if mmo.object == crate::mc::inst::MemObject::ConstantPool
             );
             inst.cheap_as_move = matches!(op, Op::Imm { .. } | Op::I(Inst::MoveWide { .. }));
             insts.push(inst);
@@ -225,6 +237,9 @@ pub fn rebuild(
     for op in function.blocks.iter().flat_map(|block| &block.ops) {
         originals.entry(content(op)).or_insert_with(|| op.clone());
     }
+    // The place of each operation, by the number `view` gave it.
+    let places: Vec<_> =
+        function.blocks.iter().flat_map(|block| (0..block.ops.len()).map(|at| block.ops.loc(at))).collect();
     let mut slots: HashMap<i32, u32> = HashMap::new();
     for (slot, class) in spill_slots {
         let (size, align) = if *class == Class::Quad { (16, 16) } else { (8, 8) };
@@ -241,7 +256,9 @@ pub fn rebuild(
     };
     for (block, lir_block) in function.blocks.iter_mut().zip(&lir.blocks) {
         let mut ops = Vec::with_capacity(lir_block.insts.len());
+        let mut locs = Vec::with_capacity(lir_block.insts.len());
         for inst in &lir_block.insts {
+            let before = ops.len();
             let registers: Vec<(LirReg, Class)> = inst
                 .operands
                 .iter()
@@ -283,8 +300,27 @@ pub fn rebuild(
                     ops.push(op);
                 }
             }
+            if ops.len() > before {
+                locs.push(if inst.origin == 0 { None } else { places[inst.origin as usize - 1] });
+            }
         }
-        block.ops = ops.into();
+        // What the allocator added stands where the operation after it does
+        // (`OpList::insert`), the last one's at the end.
+        let mut next = None;
+        for loc in locs.iter_mut().rev() {
+            match loc {
+                Some(_) => next = *loc,
+                None => *loc = next,
+            }
+        }
+        let mut last = None;
+        for loc in locs.iter_mut() {
+            match loc {
+                Some(_) => last = *loc,
+                None => *loc = last,
+            }
+        }
+        block.ops = ops.into_iter().zip(locs).collect();
     }
 }
 
@@ -313,6 +349,7 @@ pub fn written_callee_saved(function: &MFunc) -> Allocation {
 /// `function` with every register physical, by the shared greedy allocator.
 pub fn allocate(function: &mut MFunc) -> Result<Allocation, String> {
     let mut lir = view(function);
+    crate::licm::hoist(&mut lir);
     let (assignment, slots) = allocate_greedy::<Arm64>(&mut lir, Regs(&crate::REGISTER_INFO), false)?;
     rebuild(function, &lir, &assignment, &slots);
     Ok(written_callee_saved(function))
@@ -323,10 +360,31 @@ pub fn allocate(function: &mut MFunc) -> Result<Allocation, String> {
 /// registers come last).
 pub struct Arm64;
 
+/// Whether the target is Apple's: `x18` is the platform register there
+/// (`AArch64RegisterInfo::getReservedRegs`, `isTargetDarwin`), an ordinary
+/// caller-saved register on Linux.
+static DARWIN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Sets the target the next allocations are for.
+pub fn set_darwin(darwin: bool) {
+    DARWIN.store(darwin, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn darwin() -> bool {
+    DARWIN.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The caller-saved general registers the allocator hands out.
+pub fn gpr_caller_saved_count() -> usize {
+    15 + 1 + usize::from(!darwin())
+}
+
 fn gpr_order() -> Vec<RegId> {
-    // The caller-saved registers first, then x19..x28. x15..x17 are the frame
-    // lowerer's and the pair folder's scratch registers.
-    (9..=14u32).chain((0..=8).rev()).chain(19..=28).map(|n| id(Class::Gpr, n)).collect()
+    // The caller-saved registers first, then x19..x28. x16 and x17 are the
+    // frame lowerer's scratch registers; x15 and, off Darwin, x18 are
+    // allocatable (the pin's `getReservedRegs` reserves x18 on Darwin only).
+    let extra: Vec<u32> = if darwin() { vec![15] } else { vec![15, 18] };
+    (9..=14u32).chain((0..=8).rev()).chain(extra).chain(19..=28).map(|n| id(Class::Gpr, n)).collect()
 }
 
 fn callee_saved_fpr(id: RegId) -> bool {
@@ -377,11 +435,12 @@ impl AllocTarget for Arm64 {
     fn reserved(root: RegId) -> bool {
         // sp/xzr, the frame pointer, the link register and the platform
         // register.
-        [crate::reg::X18, crate::reg::X29, crate::reg::X30, crate::reg::SP, crate::reg::XZR].contains(&root)
+        [crate::reg::X29, crate::reg::X30, crate::reg::SP, crate::reg::XZR].contains(&root)
+            || (darwin() && root == crate::reg::X18)
     }
 
     fn caller_saved() -> Vec<RegId> {
-        let gprs = (0..=17u32).map(|n| id(Class::Gpr, n));
+        let gprs = (0..=18u32).map(|n| id(Class::Gpr, n));
         let fprs = (0..=7u32).chain(16..=31).map(|n| id(Class::Fpr, n));
         gprs.chain(fprs).collect()
     }
@@ -457,6 +516,25 @@ mod tests {
         assert_eq!(keep.ties, vec![(0, 1)], "{keep:?}");
         assert_eq!(lir.classes, vec![Class::Gpr, Class::Gpr, Class::Fpr]);
         assert_eq!(lir.blocks[0].insts[4].operands[0], Operand::Block(1));
+    }
+
+    /// Greedy rebuilt the operations without their source places, so `-g` with
+    /// the shared allocator gave a function one line row. Each operation keeps
+    /// its place; a copy that goes leaves the neighbours' alone.
+    #[test]
+    fn source_places_go_back_with_the_operations() {
+        use llrm_codegen::model::lir::SrcLoc;
+        let mut function = sample();
+        let ops = std::mem::take(&mut function.blocks[0].ops);
+        function.blocks[0].ops =
+            ops.into_iter().zip([7, 8, 9, 10, 11]).map(|((op, _), line)| (op, Some(SrcLoc::line(line)))).collect();
+        let lir = view(&function);
+        let mut back = function.clone();
+        let (x0, x5, v4) = (crate::reg::X0, crate::reg::X5, RegId::from_raw(crate::reg::V0.index() as u8 + 4));
+        rebuild(&mut back, &lir, &Assignment(vec![x0, x5, v4]), &[]);
+        let lines: Vec<_> =
+            (0..back.blocks[0].ops.len()).map(|at| back.blocks[0].ops.loc(at).map(|l| l.line)).collect();
+        assert_eq!(lines, [Some(8), Some(9), Some(10), Some(11)], "the copy of x0 into itself (line 7) goes");
     }
 
     /// The registers greedy chose go back into the original operations, a

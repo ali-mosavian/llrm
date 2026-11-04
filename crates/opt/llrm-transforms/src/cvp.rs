@@ -133,7 +133,13 @@ impl FunctionPass for Cvp {
             return PreservedAnalyses::all();
         }
         let globals = Rc::clone(&analyses.outer().globals);
-        let assumptions = AssumptionCache::of(unit.context, &globals, unit.metadata, unit.function);
+        let assumptions = AssumptionCache::of_declared(
+            unit.context,
+            &globals,
+            unit.metadata,
+            unit.function,
+            unit.declared.assume_declared(&globals),
+        );
 
         let shared = analyses.get::<llrm_mir::lazyvalueinfo::LviCache>(unit.context, unit.layout, unit.function);
         let mut pass = State { unit, analyses, globals, assumptions, lvi: shared.take(), cfg_changed: false };
@@ -2176,6 +2182,7 @@ impl State<'_, '_> {
             let declaration = GlobalValue {
                 name: name.into(),
                 linkage: Linkage::External,
+                visibility: llrm_mir::Visibility::Default,
                 unnamed_addr: Default::default(),
                 address_space: 0,
                 kind: GlobalKind::Function(Box::new(function)),

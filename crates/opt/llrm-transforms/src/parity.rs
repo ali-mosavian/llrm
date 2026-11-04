@@ -388,6 +388,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("flagscopy@5", Backend, "x86-flags-copy-lowering (X86FlagsCopyLowering.cpp)", Translated, ""),
     entry("leaopt@5", Backend, "x86-optimize-leas (X86OptimizeLEAs.cpp)", Translated, ""),
     entry("floatfold@6", Backend, "x86 isel float folding (target)", Old, ""),
+    entry("floatsink@6", Backend, "x86 float load sinking (target; DEVIATE SD-SINK, no pin pass)", Old, ""),
     partial(
         "pushfold@6",
         Backend,
@@ -640,6 +641,18 @@ pub const ANALYSES: &[AnalysisEntry] = &[
     ),
     old_analysis("declarations", "Declarations", "none", "none: DEVIATE or delete candidate"),
     old_analysis(
+        "assume-declared",
+        "AssumeDeclared",
+        "none",
+        "none: DEVIATE; LLVM's AssumptionCache walks the body, we skip it where no llvm.assume is declared",
+    ),
+    old_analysis(
+        "global-names",
+        "GlobalNames",
+        "none",
+        "none: DEVIATE; LLVM reads names off the module, which needs no snapshot",
+    ),
+    old_analysis(
         "callees",
         "counted(\"callees\")",
         "none",
@@ -756,6 +769,8 @@ pub const ABSENT_AT_O1: &[&str] = &[
     "gvn@787",
     "jumpthreading@668",
     "jumpthreading@809",
+    "cvp@669",
+    "cvp@810",
     "dfajumpthreading@806",
     "tailrec@688",
     "aggressive-instcombine@678",
@@ -879,6 +894,12 @@ pub(crate) fn check_old_slots(
 #[cfg(test)]
 const SOURCE_NAMES: &[(&str, &str)] = &[("constraintelim", "constraintelimination")];
 
+/// Missing entries whose source file is the IR-level stand-in, not the MIR
+/// pass: `stack-coloring` groups the allocas before the DAG is built
+/// (`backend/stackcoloring.rs`, DEVIATE SC1; exit: the MIR pass).
+#[cfg(test)]
+const IR_LEVEL_STAND_IN: &[&str] = &["stack-coloring"];
+
 /// A Missing entry whose pass has a source file (`shrinkwrap.rs` for
 /// `shrink-wrap`): the row undercounts. `stems` are the file stems of every
 /// `.rs` under `crates`; names compare by their letters and digits, without a
@@ -895,7 +916,7 @@ pub(crate) fn check_missing_has_no_file(
     };
     let lying: Vec<String> = registry
         .iter()
-        .filter(|one| one.kind == Missing)
+        .filter(|one| one.kind == Missing && !IR_LEVEL_STAND_IN.contains(&one.slot))
         .filter(|one| {
             stems
                 .iter()
