@@ -467,6 +467,7 @@ fn visitors(opcode: &Opcode) -> &'static [Visitor] {
         Opcode::Load { .. } => &[|c, inst| c.visit_load(inst)],
         Opcode::Select => &[|c, inst| c.visit_select(inst)],
         Opcode::Br => &[|c, inst| c.visit_cond_br(inst)],
+        Opcode::Switch => &[|c, inst| c.visit_switch(inst)],
         Opcode::Call(_) => &[|c, inst| c.visit_call(inst)],
         Opcode::Phi => &[|c, inst| c.visit_phi(inst)],
         _ => &[],
