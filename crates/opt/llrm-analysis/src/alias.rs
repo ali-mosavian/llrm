@@ -2453,7 +2453,8 @@ fn bounded(
     ranges: Option<Vec<(i64, i64)>>,
 ) -> Vec<MemRef> {
     let Some(ranges) = ranges else { return vec![place.clone()] };
-    // The pointer is not what is accessed once shifted: only its object and bytes are.
+    // The pointer is not what is accessed once shifted: only its object and
+    // bytes are.
     let Some(provenance) = place.provenance.as_ref() else { return vec![place.clone()] };
     ranges
         .into_iter()
@@ -2472,10 +2473,8 @@ fn bounded(
             shifted.pointer = None;
             shifted.disp = shifted.disp.checked_add(low)?;
             shifted.width = u32::try_from(high - low).ok()?;
-            shifted.provenance = Some(Provenance {
-                slices: slices.into_iter().collect(),
-                restrict: provenance.restrict.clone(),
-            });
+            shifted.provenance =
+                Some(Provenance { slices: slices.into_iter().collect(), restrict: provenance.restrict.clone() });
             Some(shifted)
         })
         .collect()

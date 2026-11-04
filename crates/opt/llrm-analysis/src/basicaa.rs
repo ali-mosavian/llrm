@@ -1222,7 +1222,8 @@ impl BasicAA<'_> {
                 if verdict != AliasResult::NoAlias {
                     let touched = arg.intersect(self.get_arg_mod_ref_info(call, at));
                     // The bytes the callee's body touches through the parameter
-                    // (DEVIATE I3, see `initializes::accessed`; the pin's loop here has no ranges).
+                    // (DEVIATE I3, see `initializes::accessed`; the pin's loop
+                    // here has no ranges).
                     let stated = |key| {
                         callee
                             .and_then(|one| one.parameter_attrs.get(at as usize))

@@ -60,11 +60,15 @@ fn the_unknown_access_stands_for_globals() {
     assert!(reads.unknown_read && !reads.unknown_write);
 }
 
-/// The `(low, high)` of the slices of parameter 0 in `slices`; `None` is the whole pointee.
+/// The `(low, high)` of the slices of parameter 0 in `slices`; `None` is the
+/// whole pointee.
 fn bytes(slices: &crate::sliceset::SliceSet) -> Vec<Option<(i64, i64)>> {
     slices
         .iter()
-        .map(|one| (one.low != crate::memory::WHOLE_LOW || one.high != crate::memory::WHOLE_HIGH).then_some((one.low, one.high)))
+        .map(|one| {
+            (one.low != crate::memory::WHOLE_LOW || one.high != crate::memory::WHOLE_HIGH)
+                .then_some((one.low, one.high))
+        })
         .collect()
 }
 
@@ -83,7 +87,9 @@ fn constant_stores_write_those_bytes_only() {
 
 #[test]
 fn a_load_reads_its_bytes_only() {
-    let text = format!("{PARAM}  %q = getelementptr i8, ptr %p, i16 6\n  %v = load i16, ptr %q\n  store i16 %v, ptr %p\n  ret void\n}}\n");
+    let text = format!(
+        "{PARAM}  %q = getelementptr i8, ptr %p, i16 6\n  %v = load i16, ptr %q\n  store i16 %v, ptr %p\n  ret void\n}}\n"
+    );
     let one = of(&text, "f");
     assert_eq!((bytes(&one.writes), bytes(&one.reads)), (vec![Some((0, 2))], vec![Some((6, 8))]));
 }

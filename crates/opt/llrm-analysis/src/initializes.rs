@@ -545,8 +545,9 @@ pub fn add_initializes(
     changed
 }
 
-/// States `accessed` as `llrm.reads` and `llrm.writes` on the pointer parameters
-/// of the members, and drops them where the body no longer bounds its access.
+/// States `accessed` as `llrm.reads` and `llrm.writes` on the pointer
+/// parameters of the members, and drops them where the body no longer bounds
+/// its access.
 pub fn add_access_ranges(
     module: &mut Module,
     layout: &DataLayout,
@@ -576,7 +577,10 @@ pub fn add_access_ranges(
             };
             let before = attrs.clone();
             attrs.retain(|attr| {
-                !matches!(attr, Attribute::Str(name, _) if name == llrm_mir::memory::READS || name == llrm_mir::memory::WRITES)
+                !matches!(
+                    attr,
+                    Attribute::Str(name, _) if name == llrm_mir::memory::READS || name == llrm_mir::memory::WRITES
+                )
             });
             if let Some(found) = found {
                 llrm_mir::memory::state_access_ranges(attrs, llrm_mir::memory::READS, &found.reads);

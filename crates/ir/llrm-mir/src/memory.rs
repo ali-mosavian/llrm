@@ -479,7 +479,8 @@ pub fn initializes(attrs: &[Attribute]) -> &[(i64, i64)] {
 }
 
 /// The string attributes stating the bytes a body reads and writes through a
-/// pointer parameter, as `lo:hi,lo:hi` (empty: none). Absent: the whole pointee.
+/// pointer parameter, as `lo:hi,lo:hi` (empty: none). Absent: the whole
+/// pointee.
 pub const READS: &str = "llrm.reads";
 pub const WRITES: &str = "llrm.writes";
 
@@ -489,10 +490,14 @@ pub fn access_ranges(
     attrs: &[Attribute],
     key: &str,
 ) -> Option<Vec<(i64, i64)>> {
-    let text = attrs.iter().find_map(|attr| match attr {
-        Attribute::Str(name, Some(value)) if name == key => Some(value.as_str()),
-        _ => None,
-    })?;
+    let text = attrs
+        .iter()
+        .find_map(
+            |attr| match attr {
+                Attribute::Str(name, Some(value)) if name == key => Some(value.as_str()),
+                _ => None,
+            },
+        )?;
     text.split(',')
         .filter(|one| !one.is_empty())
         .map(|one| {

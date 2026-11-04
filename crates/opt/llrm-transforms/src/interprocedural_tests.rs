@@ -355,8 +355,11 @@ b:
 #[test]
 fn a_field_is_kept_across_a_call_that_writes_other_fields_of_the_record() {
     let loads = |body: &str, frame: bool, which: u8| {
-        let (decl, record) =
-            if frame { ("", "%r = alloca [3 x i16]") } else { ("@r = global [3 x i16] zeroinitializer\n", "%r = getelementptr i8, ptr @r, i16 0") };
+        let (decl, record) = if frame {
+            ("", "%r = alloca [3 x i16]")
+        } else {
+            ("@r = global [3 x i16] zeroinitializer\n", "%r = getelementptr i8, ptr @r, i16 0")
+        };
         let mut module = parsed(&format!(
             "{decl}
 
@@ -388,10 +391,10 @@ b:
     };
     let x_and_y = "  store i16 1, ptr %p\n  %y = getelementptr i8, ptr %p, i16 2\n  store i16 2, ptr %y";
     for (frame, which) in [(false, 0), (true, 0), (true, 1), (true, 2)] {
-    assert_eq!(loads(x_and_y, frame, which), 0, "{frame} {which}");
-    let and_z = format!("{x_and_y}\n  %z = getelementptr i8, ptr %p, i16 4\n  store i16 3, ptr %z");
-    assert_eq!(loads(&and_z, frame, which), 1);
-    assert_eq!(loads("  %q = getelementptr i8, ptr %p, i16 %i\n  store i16 1, ptr %q", frame, which), 1);
+        assert_eq!(loads(x_and_y, frame, which), 0, "{frame} {which}");
+        let and_z = format!("{x_and_y}\n  %z = getelementptr i8, ptr %p, i16 4\n  store i16 3, ptr %z");
+        assert_eq!(loads(&and_z, frame, which), 1);
+        assert_eq!(loads("  %q = getelementptr i8, ptr %p, i16 %i\n  store i16 1, ptr %q", frame, which), 1);
     }
 }
 

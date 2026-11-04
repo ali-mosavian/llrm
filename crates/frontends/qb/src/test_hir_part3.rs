@@ -2121,7 +2121,9 @@ fn test_a_counter_stepped_before_other_work_is_tested_against_its_end() {
         .expect("the multiplying loop");
     let instructions = body.lines().filter(|line| line.starts_with("    ")).count();
     assert!(
-        (body.contains("cmp ax, 357") || body.contains(", 674") || regex::Regex::new(r"add bx, 2\n\s+jne \w+\s*$").unwrap().is_match(&body))
+        (body.contains("cmp ax, 357")
+            || body.contains(", 674")
+            || regex::Regex::new(r"add bx, 2\n\s+jne \w+\s*$").unwrap().is_match(&body))
             && !body.contains("or ax, ax")
             && instructions <= 8,
         "{body}"

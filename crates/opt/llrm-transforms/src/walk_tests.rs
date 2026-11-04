@@ -1070,9 +1070,9 @@ fn test_an_os_call_whose_stack_arguments_are_unknown_stays_a_call() {
 }
 
 /// `sum_three(&a, &b, &c)` on three stack records with far data pointers: the
-/// callee leaves `capacity` alone, so its stores go and the kept call counted 10
-/// units against 15 inlined. The call pushes three far pointers and the records
-/// need a frame, 114 bytes against 75: parity/sum_three/c -Os, +38 B.
+/// callee leaves `capacity` alone, so its stores go and the kept call counted
+/// 10 units against 15 inlined. The call pushes three far pointers and the
+/// records need a frame, 114 bytes against 75: parity/sum_three/c -Os, +38 B.
 #[test]
 fn test_an_os_call_on_stack_records_is_inlined_where_the_bytes_say_so() {
     let top = sized(
