@@ -370,12 +370,18 @@ impl Combiner<'_> {
             BinaryOp::UDiv | BinaryOp::SDiv if allow_rhs_constant => self.int(ty, 1),
             BinaryOp::FAdd | BinaryOp::FMul => {
                 let Type::Float(kind) = *self.context.types.get(ty) else { return None };
-                let sem = if kind == FloatKind::Float { IEEE_SINGLE } else { IEEE_DOUBLE };
+                let sem = match kind {
+                    FloatKind::Float => IEEE_SINGLE,
+                    FloatKind::F128 => llrm_mir::apfloat::IEEE_QUAD,
+                    _ => IEEE_DOUBLE,
+                };
                 let value =
                     if op == BinaryOp::FAdd { ApFloat::get_zero(sem, true) } else { ApFloat::get_one(sem, false) };
-                Operand::Constant(
-                    self.context.constant(Constant { ty, kind: ConstantKind::Float(value.to_bits() as u64) }),
-                )
+                let kind = match kind {
+                    FloatKind::F128 => ConstantKind::Float128(value.to_bits()),
+                    _ => ConstantKind::Float(value.to_bits() as u64),
+                };
+                Operand::Constant(self.context.constant(Constant { ty, kind }))
             }
             _ => return None,
         })
@@ -393,7 +399,7 @@ impl Combiner<'_> {
             let constant = self.context.get(id);
             match constant.kind {
                 ConstantKind::Null | ConstantKind::Zero => match self.context.types.get(constant.ty) {
-                    Type::Float(_) => ConstantKind::Float(0),
+                    Type::Float(kind) => ConstantKind::float_zero(*kind),
                     _ => ConstantKind::Int(0),
                 },
                 ref kind => kind.clone(),

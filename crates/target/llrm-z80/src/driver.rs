@@ -104,11 +104,8 @@ pub fn program(
         // byte compare (`cp #255`), not a word compare of its extension.
         options.extload = false;
         // The runtime's `strlen` (`cpir`): LoopIdiomRecognize may form a call.
-        options.library = vec![llrm_mir::libfunc::Routine {
-            standard: "strlen",
-            symbol: "_strlen".to_owned(),
-            calling_convention: 0,
-        }];
+        // and `memcmp` (SDCC's libc has no `bcmp`).
+        options.library = llrm_mir::libfunc::Routine::stated(["strlen", "memcmp"], |name| format!("_{name}"), 0);
         for flag in &request.passes {
             apply_pass_flag(&mut options, flag);
         }
@@ -124,6 +121,15 @@ pub fn selections(
     text: &str,
     request: &Request,
 ) -> Result<Vec<(String, Result<Selection, String>)>, String> {
+    Ok(selections_both(text, request)?.into_iter().map(|(name, source, _)| (name, source)).collect())
+}
+
+/// [`selections`] with the DAG scheduled by `Source` and again by `ILP`
+/// (DEVIATE Z80S1, in `dagisel/pipeline.rs`): the mid-end runs once.
+pub fn selections_both(
+    text: &str,
+    request: &Request,
+) -> Result<Vec<(String, Result<Selection, String>, Result<Selection, String>)>, String> {
     let mut program = program(text, request)?;
     program.modules.iter_mut().for_each(crate::prepare::split_phi_edges);
     let module = &program.modules[0];
@@ -136,8 +142,14 @@ pub fn selections(
     Ok(names
         .into_iter()
         .map(|name| {
-            let selected = select_function_with(module, &name, request.cpu, request.level != Level::O0);
-            (name, selected)
+            let select = |ilp: bool| {
+                crate::dagisel::pipeline::ILP.with(|one| one.set(ilp));
+                let one = select_function_with(module, &name, request.cpu, request.level != Level::O0);
+                crate::dagisel::pipeline::ILP.with(|one| one.set(false));
+                one
+            };
+            let (source, ilp) = (select(false), select(true));
+            (name, source, ilp)
         })
         .collect())
 }
