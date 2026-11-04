@@ -240,6 +240,8 @@ struct Folder<'a, C, J> {
     assignment: Option<&'a Assignment>,
     /// `getNumber` of each block, by id, as the sweep began.
     number: HashMap<u32, usize>,
+    /// Tail merging may join blocks of different loops.
+    across_loops: bool,
     jump: std::marker::PhantomData<J>,
 }
 
@@ -689,7 +691,7 @@ impl<C, T: Target<Class = C> + Jump> Folder<'_, C, T> {
 /// `BranchFolder::OptimizeFunction` without tail merging or hoisting: true
 /// when anything changed.
 pub fn branch_fold<T: Target + Jump>(function: &mut MFunction<T::Class>) -> bool {
-    fold::<T>(function, None)
+    fold::<T>(function, None, false)
 }
 
 /// [`branch_fold`] with `HoistCommonCodeInSuccs`, which needs to know which
@@ -698,18 +700,34 @@ pub fn branch_fold_hoisting<T: Target + Jump>(
     function: &mut MFunction<T::Class>,
     assignment: &Assignment,
 ) -> bool {
-    fold::<T>(function, Some(assignment))
+    fold::<T>(function, Some(assignment), false)
+}
+
+/// [`branch_fold_hoisting`] whose tail merging also joins blocks of different
+/// loops ([`crate::tailmerge::merge_tails_across_loops`]).
+pub fn branch_fold_hoisting_across_loops<T: Target + Jump>(
+    function: &mut MFunction<T::Class>,
+    assignment: &Assignment,
+) -> bool {
+    fold::<T>(function, Some(assignment), true)
 }
 
 fn fold<T: Target + Jump>(
     function: &mut MFunction<T::Class>,
     assignment: Option<&Assignment>,
+    across_loops: bool,
 ) -> bool {
-    let mut folder =
-        Folder::<T::Class, T> { function, assignment, number: HashMap::default(), jump: std::marker::PhantomData };
+    let mut folder = Folder::<T::Class, T> {
+        function,
+        assignment,
+        number: HashMap::default(),
+        across_loops,
+        jump: std::marker::PhantomData,
+    };
     let mut ever = false;
     loop {
-        let mut changed = crate::tailmerge::merge_tails::<T, _>(folder.function, folder.assignment);
+        let mut changed =
+            crate::tailmerge::merge_tails_across_loops::<T, _>(folder.function, folder.assignment, folder.across_loops);
         changed |= folder.optimize_branches();
         changed |= folder.hoist_common_code();
         if !changed {

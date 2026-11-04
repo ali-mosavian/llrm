@@ -212,7 +212,12 @@ fn layout(
     darwin: bool,
 ) -> Layout {
     let (slots, locals_end) = place_objects(function);
-    let record = function.calls || function.dynamic;
+    // `AArch64FrameLowering::hasFP`: `disableFramePointerElim` (the attribute)
+    // or a variable-sized object keeps the frame record; so does a call, which
+    // saves the link register beside it.
+    let keeps =
+        llrm_codegen::backend::framefree::keeps_frame_pointer(function.frame_pointer.as_deref(), function.calls);
+    let record = function.calls || function.dynamic || keeps;
     let pairs = paired(&saved_list(allocation, record, darwin));
     let registers: u64 = pairs.iter().map(|(_, second)| 1 + u64::from(second.is_some())).sum();
     let area = (8 * registers).next_multiple_of(16);

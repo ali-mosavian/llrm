@@ -20,7 +20,7 @@
 use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
 use llrm_codegen::backend::selectiondag::legalize_dag::Hooks;
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
-use llrm_codegen::backend::selectiondag::{Action, LoadExt, NodeData, SDValue, SelectionDAG};
+use llrm_codegen::backend::selectiondag::{Action, LoadExt, MemInfo, NodeData, SDValue, SelectionDAG};
 use llrm_codegen::backend::selectiondag::{TargetLowering, TargetLoweringInfo};
 
 use super::generated::ids::isd as ids;
@@ -99,12 +99,10 @@ pub fn target_lowering() -> TargetLowering {
     // variable ones expand to runtime calls where they are emitted.
     set(&[Mul, SDiv, SRem, Shl, Srl, Sra], Action::Legal);
     set(&[SDivRem, MulHS, MulHU, UMulLoHi, SMulLoHi], Action::Expand);
-    // A word multiply, or signed add and subtract, with overflow stays refused
-    // ("convert node to libcall"), as before the shared expansion of the
-    // overflow operations: expanded, their `i1` select/setcc makes the
-    // scheduler's dependence cycle (#6429). Exit: that cycle fixed
-    // (2026-11-12).
-    set(&[UMulO, SMulO, SAddO, SSubO], Action::LibCall);
+    // An unsigned word multiply with overflow stays refused ("convert node to
+    // libcall"): expanded wide, its flag's extension is not lowered
+    // (CannotSelect ZeroExtend). Exit: 2026-11-12.
+    set(&[UMulO], Action::LibCall);
     // an unsigned divide and remainder are the one runtime call that makes
     // both: the legalizer expands each to the `UDIVREM` node, and the pair
     // of one dividend and divisor is one node
@@ -130,6 +128,10 @@ pub fn target_lowering() -> TargetLowering {
     for op in [Mul, SDiv, UDiv, SRem, URem, Shl, Srl, Sra, Rotl, Rotr] {
         tl.set_operation_action(op, MVT::I32, Action::Custom);
     }
+    // i1 is a register type here, but its memory is a byte (`lower_bit_load`)
+    for op in [Load, Store] {
+        tl.set_operation_action(op, MVT::I1, Action::Custom);
+    }
     tl.set_operation_action(BrCond, MVT::Other, Action::Custom);
     tl.set_operation_action(GlobalAddress, MVT::I16, Action::Custom);
     for op in [SetCC, Select] {
@@ -138,14 +140,7 @@ pub fn target_lowering() -> TargetLowering {
         }
     }
     // softened floats: compiler-rt's routines
-    for (vt, names) in [
-        (MVT::F32, ["__addsf3", "__subsf3", "__mulsf3", "__divsf3"]),
-        (MVT::F64, ["__adddf3", "__subdf3", "__muldf3", "__divdf3"]),
-    ] {
-        for (op, name) in [FAdd, FSub, FMul, FDiv].into_iter().zip(names) {
-            tl.set_libcall_name(op, vt, name);
-        }
-    }
+    tl.set_soft_float_libcall_names();
     tl
 }
 
@@ -164,6 +159,8 @@ impl Hooks for MosLowering {
             ISD::Select => Some(lower_select(dag, node)),
             ISD::BrCond => Some(lower_brcond(dag, node)),
             ISD::GlobalAddress => lower_global_address(dag, node),
+            ISD::Load if dag.value_type(node) == EVT::I1 => lower_bit_load(dag, node),
+            ISD::Store if dag.value_type(dag.operand(node, 1)) == EVT::I1 => lower_bit_store(dag, node),
             ISD::ZeroExtend | ISD::AnyExtend | ISD::SignExtend => Some(lower_extend(dag, node)),
             ISD::Mul | ISD::SDiv | ISD::UDiv | ISD::SRem | ISD::URem | ISD::Shl | ISD::Srl | ISD::Sra
                 if dag.value_type(node) == EVT::I32 =>
@@ -321,6 +318,39 @@ fn lower_long(
     ))
 }
 
+/// A bit in memory is a byte with the upper bits zero, as the pin's type
+/// legalizer makes it where `i1` is not a register type (`PromoteIntRes_LOAD`,
+/// `LegalizeDAG`'s truncating store of a non-byte width). Left alone, a loaded
+/// bit that a `select` tests was selected into a compare of its own zero
+/// extension, forever. An extending load from it is promoted to a byte load by
+/// the legalizer (`promote_sub_byte_ext_load`).
+fn lower_bit_load(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let NodeData::Mem(info) = dag.node(node).data else { return None };
+    if info.ext.is_some() {
+        return None;
+    }
+    let (chain, ptr) = (dag.operand(node, 0), dag.operand(node, 1));
+    let byte = dag.get_load(EVT::I8, chain, ptr, MemInfo { mem_vt: EVT::I8, ..info });
+    let one = dag.get_constant(1, EVT::I8);
+    let masked = dag.get_node(ISD::And, EVT::I8, &[byte, one]);
+    let bit = dag.get_node(ISD::Truncate, EVT::I1, &[masked]);
+    Some(dag.get_node_multi(ISD::MergeValues, &[EVT::I1, EVT::OTHER], &[bit, SDValue { node: byte.node, res: 1 }]))
+}
+
+/// The store of a bit: the byte of 0 or 1 (`lower_bit_load`).
+fn lower_bit_store(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let NodeData::Mem(info) = dag.node(node).data else { return None };
+    let (chain, value, ptr) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let byte = condition_byte(dag, value);
+    Some(dag.get_store(chain, byte, ptr, MemInfo { mem_vt: EVT::I8, ..info }))
+}
+
 /// A condition widened to a byte or a word is `select cond, 1, 0`; any other
 /// extension is selected as it is.
 fn lower_extend(
@@ -329,6 +359,12 @@ fn lower_extend(
 ) -> SDValue {
     let condition = dag.operand(node, 0);
     if dag.value_type(condition) != EVT::I1 {
+        return node;
+    }
+    // the flag of an overflow op is not a condition yet: its expansion makes
+    // one, and the extension is lowered when that is done (`condition_byte` has
+    // no byte for it and would widen the flag with this very node)
+    if matches!(dag.opcode(condition), ISD::SAddO | ISD::SSubO | ISD::SMulO) {
         return node;
     }
     let vt = dag.value_type(node);
@@ -552,6 +588,12 @@ fn condition_byte(
                 Some(lowered) => lowered,
                 None => dag.get_node(ISD::ZeroExtend, EVT::I8, &[value]),
             },
+            // a multi-result lowering's wrapper (`lower_bit_load`): the bit it
+            // holds
+            ISD::MergeValues => {
+                let bit = dag.operand(value, value.res as usize);
+                condition_byte(dag, bit)
+            }
             ISD::Truncate if matches!(dag.value_type(dag.operand(value, 0)), EVT::I8 | EVT::I16) => {
                 let wide = dag.operand(value, 0);
                 let byte =
@@ -562,6 +604,17 @@ fn condition_byte(
             ISD::Freeze => {
                 let bit = dag.operand(value, 0);
                 condition_byte(dag, bit)
+            }
+            // the carry an add or subtract leaves in C: `0 + 0 + C`, and for
+            // a borrow `0 - 0 - C` (all ones) masked to the bit
+            op @ (ISD::UAddO | ISD::UAddOCarry | ISD::USubO | ISD::USubOCarry) if value.res == 1 => {
+                let zero = dag.get_constant(0, EVT::I8);
+                let adds = matches!(op, ISD::UAddO | ISD::UAddOCarry);
+                let widen = if adds { ISD::UAddOCarry } else { ISD::USubOCarry };
+                let pair = dag.get_node_multi(widen, &[EVT::I8, EVT::I1], &[zero, zero, value]);
+                let byte = SDValue { node: pair.node, res: 0 };
+                let one = dag.get_constant(1, EVT::I8);
+                if adds { byte } else { dag.get_node(ISD::And, EVT::I8, &[byte, one]) }
             }
             ISD::Select => {
                 let (test, a, b) = (dag.operand(value, 0), dag.operand(value, 1), dag.operand(value, 2));

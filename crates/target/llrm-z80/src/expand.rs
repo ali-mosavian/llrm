@@ -1589,9 +1589,16 @@ fn jump_of(text: &str) -> Option<(Option<&str>, &str)> {
 /// does not price.
 ///
 /// DEVIATE: `jr` is slower taken (12 T against 10) and faster not taken (7
-/// against 10); SDCC's choice, kept for the byte. Exit: block frequencies at
-/// this stage.
-pub fn relax(lines: Vec<Line>) -> Vec<Line> {
+/// against 10). At the size levels every jump within reach is a `jr`, SDCC's
+/// choice. Where speed comes first, an always-taken jump inside a loop stays a
+/// `jp`: a byte longer, 2 T faster each trip. A conditional jump is a `jr`
+/// (a back edge not taken once per loop costs 3 T there, which a short loop
+/// does not win back), and so is a jump outside every loop. Exit: block
+/// frequencies at this stage.
+pub fn relax(
+    lines: Vec<Line>,
+    speed: bool,
+) -> Vec<Line> {
     const REACH: i64 = 100;
     let mut at = 0;
     let mut starts = Vec::with_capacity(lines.len());
@@ -1603,6 +1610,19 @@ pub fn relax(lines: Vec<Line>) -> Vec<Line> {
         }
         at += i64::from(bytes_of(line));
     }
+    // the loops, as the spans of the back edges
+    let back_edges: Vec<(i64, i64)> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| match line {
+            Line::Inst(text) => {
+                let target = *labels.get(jump_of(text)?.1)?;
+                (target <= starts[index]).then_some((target, starts[index]))
+            }
+            _ => None,
+        })
+        .collect();
+    let in_loop = |at: i64| back_edges.iter().any(|&(head, edge)| head <= at && at <= edge);
     let mut out: Vec<Line> = Vec::with_capacity(lines.len());
     for (index, line) in lines.iter().enumerate() {
         let Line::Inst(text) = line else {
@@ -1614,18 +1634,30 @@ pub fn relax(lines: Vec<Line>) -> Vec<Line> {
             if cc.is_some_and(|cc| !reach(cc)) {
                 return None;
             }
-            let distance = labels.get(label)? - (starts[index] + 2);
+            let target = *labels.get(label)?;
+            if speed && cc.is_none() && in_loop(starts[index]) {
+                return None;
+            }
+            let distance = target - (starts[index] + 2);
             (distance.abs() <= REACH).then(|| (cc, label))
         });
         match relaxed {
             Some((cc, label)) => {
-                // `dec b; jr nz, L` is `djnz L`
-                // a row between the two does not part them
-                let before = out.iter().rposition(|line| !matches!(line, Line::Loc(_)));
-                let counted = cc == Some("nz")
-                    && before.is_some_and(|at| matches!(&out[at], Line::Inst(last) if last == "dec b"));
-                if counted {
-                    out.remove(before.expect("a dec b"));
+                // `dec b; jr nz, L` is `djnz L`, also past instructions that
+                // neither touch the flags nor use b; a row
+                // between does not part them
+                let counter = (cc == Some("nz"))
+                    .then(|| {
+                        out.iter().rposition(|line| match line {
+                            Line::Inst(text) => text == "dec b" || !flag_and_b_free(text),
+                            Line::Loc(_) => false,
+                            _ => true,
+                        })
+                    })
+                    .flatten()
+                    .filter(|&at| matches!(&out[at], Line::Inst(last) if last == "dec b"));
+                if let Some(at) = counter {
+                    out.remove(at);
                     out.push(Line::Inst(format!("djnz {label}")));
                 } else {
                     out.push(Line::Inst(match cc {
@@ -1638,6 +1670,22 @@ pub fn relax(lines: Vec<Line>) -> Vec<Line> {
         }
     }
     out
+}
+
+/// Whether `text` leaves the flags alone and does not read or write `b`: a
+/// load (`ld` sets no flag) or a 16-bit `inc`/`dec` (neither does), so a
+/// `dec b` before it may move behind it.
+fn flag_and_b_free(text: &str) -> bool {
+    let (mnemonic, operands) = text.split_once(' ').unwrap_or((text, ""));
+    let names_b = |operand: &str| {
+        let bare = operand.trim_matches(|c| c == '(' || c == ')');
+        bare == "b" || bare == "bc"
+    };
+    match mnemonic {
+        "ld" => !operands.split(", ").any(names_b),
+        "inc" | "dec" => matches!(operands, "hl" | "de" | "ix" | "iy"),
+        _ => false,
+    }
 }
 
 /// `call f; ret` is `jp f`: the callee returns to our caller with its result

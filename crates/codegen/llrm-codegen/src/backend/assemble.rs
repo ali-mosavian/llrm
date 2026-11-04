@@ -1204,6 +1204,11 @@ fn staged(
         registers.optional = false;
         registers.kept = true;
     }
+    // `noredzone`: the function is entered where the zone below the stack
+    // pointer is not safe (a kernel, an interrupt).
+    if llrm_mir::memory::has(function_attrs, "noredzone") {
+        registers.red_zone = 0;
+    }
     let classes: Rc<RegisterClasses> = if !(target.basic && (target.zeroed || target.cpu.size))
         && !crate::backend::framefree::has_fp(
             &body,

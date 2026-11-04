@@ -83,7 +83,7 @@ use crate::facts::Fact;
 use crate::hash::{HashMap, HashSet};
 use crate::knownbits::KnownBits;
 use crate::module::{
-    BlockId, Function, GlobalKind, GlobalValue, InstId, MetadataNode, MetadataOperand, Operand, Use, ValueDef,
+    BlockId, Function, GlobalValue, InstId, MetadataNode, MetadataOperand, Operand, Use, ValueDef,
 };
 use crate::opcode::{Attribute, BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use crate::types::{Type, TypeId};
@@ -116,6 +116,9 @@ pub struct Env<'a> {
     pub function: &'a Function,
     pub layout: &'a DataLayout,
     pub assumptions: &'a AssumptionCache,
+    /// Whether the module declares `llvm.experimental.guard`, where the caller
+    /// holds the answer for the module; else `LazyValueInfoImpl::new` looks.
+    pub guard_declared: Option<bool>,
 }
 
 impl<'a> Env<'a> {
@@ -127,7 +130,16 @@ impl<'a> Env<'a> {
         layout: &'a DataLayout,
         assumptions: &'a AssumptionCache,
     ) -> Self {
-        Self { context, globals, metadata, function, layout, assumptions }
+        Self { context, globals, metadata, function, layout, assumptions, guard_declared: None }
+    }
+
+    /// `self`, told whether the module declares `llvm.experimental.guard`.
+    pub fn with_guard_declared(
+        mut self,
+        declared: bool,
+    ) -> Self {
+        self.guard_declared = Some(declared);
+        self
     }
 
     /// A `SimplifyQuery(DL)`: no assumptions, no dominator tree.
@@ -739,10 +751,7 @@ fn get_argument_aliasing_to_returned_pointer(
 impl LazyValueInfoImpl {
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LazyValueInfo.cpp#L495>
     pub fn new(env: &Env) -> Self {
-        let guard_decl = env
-            .globals
-            .iter()
-            .any(|g| matches!(g.kind, GlobalKind::Function(_)) && g.name.as_deref() == Some("llvm.experimental.guard"));
+        let guard_decl = env.guard_declared.unwrap_or_else(|| crate::valuetracking::guard_declared(env.globals));
         Self {
             log: crate::passes::check_captures().then(Vec::new),
             the_cache: LazyValueInfoCache::default(),
@@ -2529,7 +2538,7 @@ fn zero_value(
     let kind = match context.types.get(ty) {
         Type::Int(_) => ConstantKind::Int(0),
         Type::Pointer(_) => ConstantKind::Null,
-        Type::Float(_) => ConstantKind::Float(0),
+        Type::Float(kind) => ConstantKind::float_zero(*kind),
         _ => ConstantKind::Zero,
     };
     context.constant(Constant { ty, kind })
@@ -2774,7 +2783,7 @@ impl crate::passes::Analysis for LviCache {
         analyses: &mut crate::passes::Analyses,
     ) {
         let outer = std::rc::Rc::clone(analyses.outer());
-        let assumptions = AssumptionCache::of(context, &outer.globals, &outer.metadata, function);
+        let assumptions = AssumptionCache::of_declared(context, &outer.globals, &outer.metadata, function, outer.assume_declared());
         let mut scratch = context.clone();
         let mut env = Env::new(&mut scratch, &outer.globals, &outer.metadata, function, layout, &assumptions);
         let stale = result.0.borrow_mut().disagreements(&mut env);
