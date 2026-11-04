@@ -99,6 +99,12 @@ pub fn target_lowering() -> TargetLowering {
     // variable ones expand to runtime calls where they are emitted.
     set(&[Mul, SDiv, SRem, Shl, Srl, Sra], Action::Legal);
     set(&[SDivRem, MulHS, MulHU, UMulLoHi, SMulLoHi], Action::Expand);
+    // A word multiply, or signed add and subtract, with overflow stays refused
+    // ("convert node to libcall"), as before the shared expansion of the
+    // overflow operations: expanded, their `i1` select/setcc makes the
+    // scheduler's dependence cycle (#6429). Exit: that cycle fixed
+    // (2026-11-12).
+    set(&[UMulO, SMulO, SAddO, SSubO], Action::LibCall);
     // an unsigned divide and remainder are the one runtime call that makes
     // both: the legalizer expands each to the `UDIVREM` node, and the pair
     // of one dividend and divisor is one node
@@ -132,14 +138,7 @@ pub fn target_lowering() -> TargetLowering {
         }
     }
     // softened floats: compiler-rt's routines
-    for (vt, names) in [
-        (MVT::F32, ["__addsf3", "__subsf3", "__mulsf3", "__divsf3"]),
-        (MVT::F64, ["__adddf3", "__subdf3", "__muldf3", "__divdf3"]),
-    ] {
-        for (op, name) in [FAdd, FSub, FMul, FDiv].into_iter().zip(names) {
-            tl.set_libcall_name(op, vt, name);
-        }
-    }
+    tl.set_soft_float_libcall_names();
     tl
 }
 
