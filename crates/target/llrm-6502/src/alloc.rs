@@ -11,7 +11,6 @@
 //! here; `select::function_text` falls back to the cell path. Exit: every
 //! opcode built.
 
-use llrm_support::hash::{HashMap, HashSet};
 use std::fmt::Write;
 
 use llrm_lir::registers::RegId;
@@ -21,6 +20,7 @@ use llrm_spike_mf::{
     Block, Inst, Jump, Kind, MFunction, Operand, Reg, Target, branch_fold, forward_reloads, machine_sink_in_place,
     remove_identity_copies, remove_redundant_copies_between, reschedule_kills,
 };
+use llrm_support::hash::{HashMap, HashSet};
 
 use crate::asm::{Asm, Inst as AsmInst, Line, Op as AsmOp};
 use crate::dagisel::generated::ids::opcode as op;
@@ -1068,7 +1068,8 @@ impl Builder {
             let source = self.pointer(a)?;
             self.define(d);
             let dest = self.pointer(d)?;
-            let operands = vec![Operand::Def(dest), Operand::Use(source), Operand::Imm(n), Operand::Def(Reg::Phys(reg::A))];
+            let operands =
+                vec![Operand::Def(dest), Operand::Use(source), Operand::Imm(n), Operand::Def(Reg::Phys(reg::A))];
             let mut bump = Inst::new(Kind::Op("PSUB"), operands);
             bump.ties = vec![(0, 1)];
             self.push(bump);
@@ -1186,8 +1187,9 @@ fn immediate(operand: &Machine) -> Result<i64, Unsupported> {
 /// access, or the address of a frame object.
 ///
 /// A pointer stays one through a copy and through an add of a constant
-/// 1..=255 or -1..=-255 (`p++`, `p += k`, `--p`), in both directions, so a pointer walked round a loop is
-/// bumped in its pair instead of unpacked, added and packed every trip.
+/// 1..=255 or -1..=-255 (`p++`, `p += k`, `--p`), in both directions, so a
+/// pointer walked round a loop is bumped in its pair instead of unpacked, added
+/// and packed every trip.
 ///
 /// DEVIATE (6502-7): pointer-ness is worked out from how the cells are used,
 /// and an add of a constant is found by following the cell that holds it; the
@@ -1202,7 +1204,10 @@ fn pointer_cells(
     let constant = |cell: &String| {
         let low = constants.get(cell).copied();
         let high = constants.get(&format!("{cell}+1")).copied();
-        matches!((low, high), (Some(1..=255), Some(0 | 255)) | (Some(0), Some(1)))
+        matches!(
+            (low, high),
+            (Some(1..=255), Some(0 | 255)) | (Some(0), Some(1))
+        )
     };
     // a cell read or written as plain bytes anywhere stays a word cell
     let mut plain: HashSet<String> = HashSet::default();
@@ -2172,12 +2177,15 @@ fn keep_carry_in_c(function: &mut MFunction<Class>) {
             let Some(cell) = saved(&block.insts, at) else {
                 // the byte was dropped as unread: the save is a write of A that
                 // the next load overwrites
-                let overwritten = block.insts.get(at + 1).is_some_and(|next| {
-                    matches!(
-                        (next.kind, &next.operands[..]),
-                        (Kind::Copy, [Operand::Def(to), Operand::Use(from)]) if *to == acc && *from != acc
-                    )
-                });
+                let overwritten = block
+                    .insts
+                    .get(at + 1)
+                    .is_some_and(
+                        |next| matches!(
+                            (next.kind, &next.operands[..]),
+                            (Kind::Copy, [Operand::Def(to), Operand::Use(from)]) if *to == acc && *from != acc
+                        ),
+                    );
                 if block.insts[at].kind == Kind::Op("SAVEC") && overwritten {
                     block.insts.remove(at);
                 } else {
@@ -2893,7 +2901,8 @@ fn emit_with<const STACK: bool>(
                         .unwrap();
                     }
                 }
-                // d := d + 1 on two cells: the high byte steps when the low wrapped
+                // d := d + 1 on two cells: the high byte steps when the low
+                // wrapped
                 (Kind::Op("INC16"), _) => {
                     made += 1;
                     let step = |r| match r {
@@ -2904,7 +2913,8 @@ fn emit_with<const STACK: bool>(
                     let (low, high) = (step(regs[0]), step(regs[1]));
                     writeln!(out, "  {low}\n  bne _pa{made}\n  {high}\n_pa{made}:").unwrap();
                 }
-                // d := d - 1 on two cells: the high byte steps when the low was 0
+                // d := d - 1 on two cells: the high byte steps when the low was
+                // 0
                 (Kind::Op("DEC16"), _) => {
                     made += 1;
                     // a byte in x or y is read through a and stepped by dex/dey
@@ -2921,7 +2931,8 @@ fn emit_with<const STACK: bool>(
                     let (load, low, high) = (read(regs[0]), step(regs[0]), step(regs[1]));
                     writeln!(out, "  {load}\n  bne _pa{made}\n  {high}\n_pa{made}:\n  {low}").unwrap();
                 }
-                // d := s - k on a pair: the low byte stepped down, the high on borrow
+                // d := s - k on a pair: the low byte stepped down, the high on
+                // borrow
                 (Kind::Op("PSUB"), [_, _, Operand::Imm(k), ..]) => {
                     let (d, s) = (regs[0], regs[1]);
                     parallel_move(&mut out, &[(lane(d, 0), lane(s, 0)), (lane(d, 1), lane(s, 1))], false);

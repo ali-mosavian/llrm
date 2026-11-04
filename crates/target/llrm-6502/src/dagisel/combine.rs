@@ -80,9 +80,8 @@ fn byte_sum_with_carry(
     let [x, y, z] = leaves[..] else { return None };
     let bit = |dag: &SelectionDAG, term: SDValue| masked_value_is_zero(dag, term, 0xFFFE);
     let byte = |dag: &SelectionDAG, term: SDValue| masked_value_is_zero(dag, term, 0xFF00);
-    let (a, b, c) = [(x, y, z), (x, z, y), (y, z, x)]
-        .into_iter()
-        .find(|&(a, b, c)| bit(dag, c) && byte(dag, a) && byte(dag, b))?;
+    let (a, b, c) =
+        [(x, y, z), (x, z, y), (y, z, x)].into_iter().find(|&(a, b, c)| bit(dag, c) && byte(dag, a) && byte(dag, b))?;
     let low = |dag: &mut SelectionDAG, term: SDValue| match dag.opcode(term) {
         ISD::ZeroExtend if dag.value_type(dag.operand(term, 0)) == EVT::I8 => dag.operand(term, 0),
         _ => dag.get_node(ISD::Truncate, EVT::I8, &[term]),
@@ -151,7 +150,10 @@ fn carry_in(
     }
     let made_by_add = bit.res == 1
         && dag.value_type(bit) == EVT::I1
-        && matches!(dag.opcode(bit), ISD::UAddO | ISD::UAddOCarry | ISD::USubO | ISD::USubOCarry);
+        && matches!(
+            dag.opcode(bit),
+            ISD::UAddO | ISD::UAddOCarry | ISD::USubO | ISD::USubOCarry
+        );
     if made_by_add {
         return bit;
     }

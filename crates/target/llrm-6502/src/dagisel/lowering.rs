@@ -371,7 +371,10 @@ fn lower_extend(
     // the carry an add or subtract leaves is `0 + 0 + C`, not a select on it
     if dag.opcode(node) != ISD::SignExtend
         && condition.res == 1
-        && matches!(dag.opcode(condition), ISD::UAddO | ISD::UAddOCarry | ISD::USubO | ISD::USubOCarry)
+        && matches!(
+            dag.opcode(condition),
+            ISD::UAddO | ISD::UAddOCarry | ISD::USubO | ISD::USubOCarry
+        )
     {
         let byte = condition_byte(dag, condition);
         return if vt == EVT::I8 { byte } else { dag.get_node(ISD::ZeroExtend, vt, &[byte]) };
