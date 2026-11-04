@@ -147,6 +147,10 @@ pub struct Profile {
     /// `CodeGenOptLevel::Aggressive` (-O3): tail duplication in placement
     /// copies blocks of four instructions, not two.
     pub aggressive: bool,
+    /// The most instructions placement's tail duplication copies where the
+    /// target states a smaller bound than the pin's (`timings.times`);
+    /// none: the pin's.
+    pub tail_dup_threshold: Option<usize>,
     /// `-fexcess-precision=standard` (`-ffloat-store`): a float conversion
     /// rounds to its type, where otherwise x87 keeps the wider value in its
     /// register, as gcc's `-fexcess-precision=fast` does.
@@ -330,6 +334,7 @@ impl Profile {
             search: true,
             optimized: true,
             aggressive: false,
+            tail_dup_threshold: None,
             float_store: false,
             rounds_float_spills: false,
             stable_loads: true,
@@ -516,6 +521,7 @@ fn _profile(
         _costs: table.clocks.clone(),
         _latencies: table.latency.clone(),
         address_prefix_stall: table.lcp_stall,
+        tail_dup_threshold: table.tail_dup_placement_threshold.map(|n| n.max(0) as usize),
         ..Profile::new(arch, name, table.issue, table.in_order, table.prefix, table.partial_stall)
     })
 }

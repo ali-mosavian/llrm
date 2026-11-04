@@ -581,3 +581,32 @@ fn a_gnu_long_divide_costs_what_the_two_operand_form_does() {
         assert!(clocks(cpu, &gnu) > 10, "{cpu:?}");
     }
 }
+
+/// objdump's `mulu.l %d1,%d4,%d0` (the 32 x 32 -> 64 form) was unpriced on the
+/// 68020 and the family CPUs: the manual's table has one `MUL.L EA,Dn` row, so
+/// the 64-bit form costs what the 32-bit one does (softfloat's 64-bit
+/// products were counted without their multiplies).
+#[test]
+fn a_gnu_wide_multiply_costs_what_the_two_operand_form_does() {
+    for cpu in [Cpu::M68020, Cpu::M68030, Cpu::M68040, Cpu::M68060] {
+        for (gnu, plain) in [("mulu.l %d1,%d4,%d0", "mulu.l %d1, %d0"), ("muls.l %d1,%d4,%d0", "muls.l %d1, %d0")] {
+            let text = llrm_m68k::timing::from_gnu(gnu).unwrap();
+            assert_eq!(clocks(cpu, &text), clocks(cpu, plain), "{cpu:?} {gnu}");
+        }
+        assert!(clocks(cpu, &llrm_m68k::timing::from_gnu("mulu.l %d1,%d4,%d0").unwrap()) > 0, "{cpu:?}");
+    }
+}
+
+/// memcpy (and structcopy at -Os) failed at `-mcpu=68040`: "`move.l (%sp)+,
+/// %a2` is not in the M68040 tables". The pop of a saved address register is
+/// printed `move.l`; the 68040 table has it as MOVEA.L (page 10-23).
+#[test]
+fn m68040_move_long_into_an_address_register_is_movea() {
+    for source in ["(%sp)+", "(%a0)", "%d0", "(4,%a0)"] {
+        assert_eq!(
+            clocks(Cpu::M68040, &format!("move.l {source}, %a2")),
+            clocks(Cpu::M68040, &format!("movea.l {source}, %a2")),
+            "{source}"
+        );
+    }
+}
