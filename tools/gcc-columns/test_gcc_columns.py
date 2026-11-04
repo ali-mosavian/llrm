@@ -100,3 +100,12 @@ def test_z80_tables_name_the_same_cc1():
     t = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tables")
     md5s = {re.search(r"cc1 md5 ([0-9a-f]{32})", open(os.path.join(t, n)).readline()).group(1) for n in ("z80-gcc.tsv", "softfloat-z80.tsv")}
     assert len(md5s) == 1, md5s
+
+
+def test_ice_corpus_tells_an_ice_from_a_source_error_and_a_hang():
+    """A cc1 swap must not lose a file the old cc1 compiles: an ICE and a timeout count against the new cc1, a missing header does not."""
+    import ice_corpus as C
+    assert C.classify(1, "x.c:3: internal compiler error: maximum number of LRA assignment passes") == "ice"
+    assert C.classify(1, "error: unable to find a register to spill") == "ice"
+    assert C.classify(1, "fatal error: stdint.h: No such file or directory") == "error"
+    assert C.classify(0, "") == "ok" and C.classify(1, "", True) == "timeout"
