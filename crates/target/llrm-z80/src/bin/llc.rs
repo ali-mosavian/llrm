@@ -4,8 +4,8 @@
 //! function the backend refuses is named on stderr and the exit status is 1;
 //! the others are still written.
 
-use llrm_z80::compile::text;
-use llrm_z80::driver::{Level, Request, selections};
+use llrm_z80::compile::{prepare, text_in};
+use llrm_z80::driver::{Level, Request};
 use llrm_z80::inline_rt::inline_sole_uses;
 
 fn main() {
@@ -51,18 +51,19 @@ fn run() -> i32 {
         }
     };
     let request = Request { debug, ..Request::new(level) };
-    let names: Vec<String> = match selections(&ir, &request) {
-        Ok(selected) => selected.into_iter().map(|(name, _)| name).collect(),
+    let prepared = match prepare(&ir, &request) {
+        Ok(prepared) => prepared,
         Err(why) => {
             eprintln!("llrm-z80-llc: {why}");
             return 1;
         }
     };
+    let names: Vec<String> = prepared.names().map(str::to_owned).collect();
     let mut status = 0;
     let mut module = String::from("\t.area _CODE\n");
     for (number, name) in names.iter().enumerate() {
         module.push_str(&format!("\t.globl {}\n", llrm_z80::data::symbol(name)));
-        match text(&ir, name, number, &request) {
+        match text_in(&ir, &prepared, name, number, &request) {
             Ok(text) => module.push_str(&text),
             Err(why) => {
                 eprintln!("llrm-z80-llc: REFUSED @{name}: {why}");

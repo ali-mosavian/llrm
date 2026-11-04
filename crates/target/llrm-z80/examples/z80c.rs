@@ -2,8 +2,8 @@
 //! sdasz80 assembly on stdout. A function the backend refuses is named on
 //! stderr and left out.
 
-use llrm_z80::compile::text;
-use llrm_z80::driver::{Level, Request, selections};
+use llrm_z80::compile::{prepare, text_in};
+use llrm_z80::driver::{Level, Request};
 use llrm_z80::inline_rt::inline_sole_uses;
 
 fn main() {
@@ -28,15 +28,12 @@ fn main() {
     }
     let ir = std::fs::read_to_string(path.expect("z80c [-O2] FILE.ll")).expect("reads the file");
     let request = Request { debug, ..Request::new(level) };
-    let names: Vec<String> = selections(&ir, &request)
-        .expect("the file compiles through the mid-end")
-        .into_iter()
-        .map(|(name, _)| name)
-        .collect();
+    let prepared = prepare(&ir, &request).expect("the file compiles through the mid-end");
+    let names: Vec<String> = prepared.names().map(str::to_owned).collect();
     let mut module = String::from("\t.area _CODE\n");
     for (number, name) in names.iter().enumerate() {
         module.push_str(&format!("\t.globl {}\n", llrm_z80::data::symbol(name)));
-        match text(&ir, name, number, &request) {
+        match text_in(&ir, &prepared, name, number, &request) {
             Ok(text) => module.push_str(&text),
             Err(why) => eprintln!("REFUSED @{name}: {why}"),
         }
