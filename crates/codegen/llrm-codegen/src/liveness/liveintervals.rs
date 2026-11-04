@@ -1657,6 +1657,32 @@ mod tests {
         assert!(lis.interval(1).range.live_at(&start), "the pair is live into the block of the high def");
     }
 
+    /// `x.lo := a` before a loop that reads `x` and then redefines `x.hi`: no
+    /// def of the high byte reaches the first pass, so the high byte is not
+    /// live there (`computeSubRangeUndefs`). It was live from the function's
+    /// entry, which made the low def of the preheader a partial one that
+    /// reloaded a stack slot nothing had written (lz4c -O2, +51 B).
+    #[test]
+    fn test_a_lane_no_def_reaches_is_not_live_before_its_first_def() {
+        let mut low = Insn::new(0, None, None, vec![1], Vec::new());
+        low.def_lanes = vec![(1, ValueLanes::at(0, 1))];
+        low.undef_super = true;
+        let mut high = Insn::new(0, None, None, vec![1], Vec::new());
+        high.def_lanes = vec![(1, ValueLanes::at(1, 1))];
+        high.partial_defs = vec![1];
+        let (low, high) = (Arc::new(low), Arc::new(high));
+        let body = blocks(&[
+            (&[Arc::clone(&low)], &[1]),
+            (&[insn(&[], &[1]), Arc::clone(&high)], &[1, 2]),
+            (&[insn(&[], &[1])], &[]),
+        ]);
+        let mut lis = LiveIntervals::new(&body);
+        let hi = lis.interval(1).range_for_lanes(ValueLanes::at(1, 1)).expect("the pair has sub-ranges");
+        let entry = lis.indexes.get_mbb_start_idx(0);
+        assert!(!hi.live_at(&entry), "premise: nothing defines the high byte yet");
+        assert!(hi.live_at(&lis.indexes.get_mbb_start_idx(1)), "it is live around the loop");
+    }
+
     /// `pruneValue` from the middle of a block that falls into a join: the
     /// value goes from the kill to the end of its block and from the join's
     /// start to its last read, and stays on the path that skips the block.

@@ -626,12 +626,73 @@ impl LiveIntervalCalc {
             self.create_dead_defs(&mut range, &mine, ctx);
             self.calc.reset_live_out_map(ctx.cfg.len());
             self.extend_to_uses(&mut range, &mine, ctx);
+            Self::drop_unreached(&mut range, ctx);
             li.create_sub_range(lanes).range = range;
         }
         self.calc.undef_ok = false;
         if by_lane {
             self.main_range_from_sub_ranges(li, operands, ctx);
         }
+    }
+
+    /// `computeSubRangeUndefs` (LiveIntervals.cpp#L1740): a lane is not live
+    /// where no def of it reaches. Extending a read up the CFG with
+    /// `undef_ok` runs on past the last def to the function's entry; what no
+    /// path from a def reaches is cut. DEVIATE: by blocks, not by operand
+    /// (the pin marks the reads `undef` and never extends them).
+    fn drop_unreached(
+        range: &mut LiveRange,
+        ctx: &Ctx,
+    ) {
+        let mut first_def: Vec<Option<SlotIndex>> = vec![None; ctx.cfg.len()];
+        let mut work: Vec<usize> = Vec::new();
+        for def in range.valnos.iter().filter(|vn| !vn.is_unused()).map(|vn| vn.def()) {
+            let block = ctx.indexes.get_mbb_from_index(&def);
+            let at = if def < ctx.indexes.get_mbb_start_idx(block) { ctx.indexes.get_mbb_start_idx(block) } else { def };
+            if first_def[block].is_none_or(|was| at < was) {
+                first_def[block] = Some(at);
+            }
+            work.push(block);
+        }
+        // Blocks a def reaches over at least one edge.
+        let mut reached = vec![false; ctx.cfg.len()];
+        while let Some(block) = work.pop() {
+            for &next in &ctx.cfg.succs[block] {
+                if !reached[next] {
+                    reached[next] = true;
+                    work.push(next);
+                }
+            }
+        }
+        let mut kept: Vec<Segment> = Vec::with_capacity(range.segments.len());
+        for segment in &range.segments {
+            let mut block = ctx.indexes.get_mbb_from_index(&segment.start);
+            loop {
+                let (block_start, block_end) = *ctx.indexes.get_mbb_range(block);
+                let from = if reached[block] { Some(block_start) } else { first_def[block] };
+                if let Some(from) = from {
+                    let (start, end) = (segment.start.max(from), segment.end.min(block_end));
+                    if start < end {
+                        match kept.last_mut() {
+                            Some(last) if last.end == start && match (&last.valno, &segment.valno) {
+                                (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+                                (None, None) => true,
+                                _ => false,
+                            } =>
+                            {
+                                last.end = end
+                            },
+                            _ => kept.push(Segment::new(start, end, segment.valno.clone())),
+                        }
+                    }
+                }
+                if segment.end <= block_end || block + 1 >= ctx.cfg.len() {
+                    break;
+                }
+                block += 1;
+            }
+        }
+        range.segments = kept;
     }
 
     /// `constructMainRangeFromSubranges`
