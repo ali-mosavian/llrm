@@ -154,7 +154,7 @@ impl<'a> LoopSafety<'a> {
             &self.outer.globals,
             self.function,
         );
-        self.accesses.writes_in(&unit, inst).is_none_or(|writes| !writes.is_empty())
+        self.accesses.writes_any_in(&unit, inst)
     }
 
     /// [`ICFLoopSafetyInfo::isGuaranteedToExecute`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MustExecute.cpp#L304).

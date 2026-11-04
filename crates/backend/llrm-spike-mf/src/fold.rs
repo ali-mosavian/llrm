@@ -625,6 +625,66 @@ impl<C, T: Target<Class = C> + Jump> Folder<'_, C, T> {
         Some((loc - 1, effects))
     }
 
+    /// HC1: moves the instruction of `two` (else of `one`) identical to the
+    /// other block's instruction at `run` up to `run`, past instructions that
+    /// neither read what it writes, write what it reads or writes, nor touch
+    /// the flags (the moved instruction touches no memory), within
+    /// [`Target::hoist_window`]. Whether it moved.
+    fn bring_twin_up(
+        &mut self,
+        one: usize,
+        two: usize,
+        run: usize,
+        assignment: &Assignment,
+    ) -> bool {
+        for (keep, move_in) in [(one, two), (two, one)] {
+            let Some(head) = self.function.blocks[keep].insts.get(run) else { continue };
+            if head.terminator
+                || head.call
+                || !safe_to_move(&self.function.fixed, head, &mut true)
+                || head.may_load
+                || head.may_store
+            {
+                continue;
+            }
+            let own = Effects::of::<T>(head, assignment);
+            let insts = &self.function.blocks[move_in].insts;
+            let end = insts.len().min(run + 1 + T::hoist_window());
+            let mut twin = None;
+            // an instruction that sets the flags is passed only where nothing
+            // reads what the twin set
+            let mut crossed_flags = false;
+            for at in run..end {
+                let inst = &insts[at];
+                if identical(head, inst, assignment) {
+                    twin = Some(at).filter(|&at| !(crossed_flags && flags_live_after(insts, at)));
+                    break;
+                }
+                let theirs = Effects::of::<T>(inst, assignment);
+                let apart = !inst.terminator
+                    && !inst.call
+                    && !inst.barrier
+                    && !inst.side_effects
+                    && !inst.reads_flags
+                    && !(inst.sets_flags && head.reads_flags)
+                    && theirs.defs.iter().all(|place| {
+                        *place == Place::Flags || !touches::<T>(&own.uses, *place) && !touches::<T>(&own.defs, *place)
+                    })
+                    && theirs.uses.iter().all(|place| !touches::<T>(&own.defs, *place));
+                if !apart {
+                    break;
+                }
+                crossed_flags |= inst.sets_flags;
+            }
+            if let Some(at) = twin.filter(|&at| at > run) {
+                let inst = self.function.blocks[move_in].insts.remove(at);
+                self.function.blocks[move_in].insts.insert(run, inst);
+                return true;
+            }
+        }
+        false
+    }
+
     /// `HoistCommonCodeInSuccs`.
     fn hoist_common(
         &mut self,
@@ -647,12 +707,23 @@ impl<C, T: Target<Class = C> + Jump> Folder<'_, C, T> {
         }
         let Some((loc, effects)) = self.hoisting_position(at, assignment) else { return false };
         let (one, two) = (position(self.function, taken), position(self.function, other));
-        let (first, second) = (&self.function.blocks[one].insts, &self.function.blocks[two].insts);
         let mut run = 0;
-        while let (Some(head), Some(tail)) = (first.get(run), second.get(run)) {
-            if !identical(head, tail, assignment) || !safe_to_move(&self.function.fixed, head, &mut true) {
+        loop {
+            let same = {
+                let (first, second) = (&self.function.blocks[one].insts, &self.function.blocks[two].insts);
+                let (Some(head), Some(tail)) = (first.get(run), second.get(run)) else { break };
+                identical(head, tail, assignment) && safe_to_move(&self.function.fixed, head, &mut true)
+            };
+            if !same {
+                // HC1: the twin of one head may sit a few independent
+                // instructions down the other block
+                if T::hoist_window() > 0 && self.bring_twin_up(one, two, run, assignment) {
+                    continue;
+                }
                 break;
             }
+            let (first, second) = (&self.function.blocks[one].insts, &self.function.blocks[two].insts);
+            let head = &first[run];
             let own = Effects::of::<T>(head, assignment);
             let defs_flags = own.defs.contains(&Place::Flags);
             // the flags it sets are nobody's: the compare sets them again

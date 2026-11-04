@@ -325,6 +325,10 @@ impl llrm_target::Target for M16 {
         llrm_x86::calling::frame(CALLING.native())
     }
 
+    fn frame_enter(&self) -> bool {
+        CALLING.native().frame_enter
+    }
+
     /// Past BP and a 2-byte return address, or a 4-byte far one.
     fn first_argument_offset(
         &self,

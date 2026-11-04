@@ -407,21 +407,13 @@ pub fn gcc_work(body: &Function) -> i64 {
     gcc_insns(body) + (LOOP_TRIPS - 1) * looped
 }
 
-/// What a copy of `body` into itself adds (gcc's edge growth,
-/// `want_inline_small_function_p`), in gcc's size units. The estimate is
-/// GPL-3.0-or-later (`llrm-gpl-gcc`, feature `gcc-gpl`); without it the growth
-/// is unbounded, so no bar that asks for it is met and no recursive callee is
-/// copied (DEVIATE REC-2 is inert).
+/// What a copy of `body` into itself adds to the caller in the bar's units:
+/// the callee's `gcc_insns`. gcc's bar is in its own size units (15 at -O2, 30
+/// at -O3, `want_inline_small_function_p`; edge growth is its size less the
+/// call, 6); the target states the bar already converted, calibrated on the
+/// twelve self-recursive functions of the corpus (`Tuning.recursive_edge_growth`).
 pub fn recursive_edge_growth(body: &Function) -> i64 {
-    #[cfg(feature = "gcc-gpl")]
-    {
-        llrm_gpl_gcc::recursive_edge_growth(body)
-    }
-    #[cfg(not(feature = "gcc-gpl"))]
-    {
-        let _ = body;
-        i64::MAX
-    }
+    gcc_insns(body)
 }
 
 fn semantic_count(body: &Function) -> i64 {
@@ -1219,6 +1211,7 @@ fn executed(
         _ => llrm_mir::opcode::Tail::None,
     };
     let stated = crate::inlineattrs::SiteAttrs::of(function, call);
+    let marked = crate::inlinemetadata::SiteMetadata::of(function, call);
     let made = spliced(context, function, call, &planned.candidate.body, anchor);
     if let Some(site) = located {
         inlined_at(function, &planned.candidate.body, &made.copies, site, metadata, declared);
@@ -1227,6 +1220,9 @@ fn executed(
     narrow_tail_calls(function, &made.copies, site);
     if let Some(stated) = &stated {
         crate::inlineattrs::propagated(function, stated, &planned.candidate.body, &made.copies);
+    }
+    if let Some(marked) = &marked {
+        crate::inlinemetadata::propagated(function, marked, &made.copies, metadata, declared);
     }
     placed.lifetimes.push(unmarked_allocas(context, function, layout, &planned.candidate.body, &made, declared));
     let copies = made.copies;

@@ -3693,22 +3693,31 @@ pub fn _signed(n: i64) -> String {
 /// than the block's first, or has no line at all. The pin reads each branch's
 /// own line; the last line of the block stands for them here.
 fn forced_statement_blocks(blocks: &[crate::model::lir::Block]) -> llrm_support::hash::HashSet<i64> {
-    let first_line = |block: &crate::model::lir::Block| {
-        block.insns.iter().find_map(|one| one.line.map(|place| place.line).filter(|&line| line != 0))
+    let line_of = |one: &Arc<lir::Insn>| {
+        #[cfg(test)]
+        LINES.with(|lines| lines.set(lines.get() + 1));
+        one.line.map(|place| place.line).filter(|&line| line != 0)
     };
-    let last_line = |block: &crate::model::lir::Block| {
-        block.insns.iter().rev().find_map(|one| one.line.map(|place| place.line).filter(|&line| line != 0))
-    };
+    let firsts: Vec<Option<u32>> = blocks.iter().map(|block| block.insns.iter().find_map(line_of)).collect();
+    let lasts: Vec<Option<u32>> = blocks.iter().map(|block| block.insns.iter().rev().find_map(line_of)).collect();
+    let place: llrm_support::hash::HashMap<i64, usize> =
+        blocks.iter().enumerate().rev().map(|(number, block)| (block.at, number)).collect();
     let mut forced = llrm_support::hash::HashSet::default();
-    for block in blocks {
+    for (number, block) in blocks.iter().enumerate() {
         for next in block.succ.iter() {
-            let Some(target) = blocks.iter().find(|one| one.at == *next) else { continue };
-            if first_line(target).is_some() && last_line(block) != first_line(target) {
-                forced.insert(target.at);
+            let Some(&target) = place.get(next) else { continue };
+            if firsts[target].is_some() && lasts[number] != firsts[target] {
+                forced.insert(blocks[target].at);
             }
         }
     }
     forced
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Instructions `forced_statement_blocks` read a line of.
+    static LINES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -3758,6 +3767,22 @@ mod tests {
         assert!(forced.contains(&3), "{forced:?}");
         // Block 4's one predecessor ends on its line.
         assert!(!forced.contains(&4), "{forced:?}");
+    }
+
+    /// Each edge of the body found its target by a scan of the blocks and read
+    /// the lines of both ends again: every `built` of memory_expansion spent
+    /// 11M instructions in `forced_statement_blocks` (and its two callers per
+    /// procedure). The lines of a block are read once.
+    #[test]
+    fn the_lines_of_a_block_are_read_once_whatever_leads_to_it() {
+        let count = 200i64;
+        let blocks: Vec<crate::model::lir::Block> =
+            (0..count).map(|at| lined(at, 1 + at as u32, &[(at + 1) % count, (at + 2) % count, (at + 3) % count])).collect();
+        LINES.with(|lines| lines.set(0));
+        let forced = forced_statement_blocks(&blocks);
+        assert_eq!(forced.len(), count as usize, "the premise: every block follows another line");
+        let read = LINES.with(|lines| lines.get());
+        assert!(read <= 2 * count as usize, "{read}");
     }
 
     fn no_names() -> IndexMap<(Space, i64), String> {

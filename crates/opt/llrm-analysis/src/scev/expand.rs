@@ -32,6 +32,12 @@ use super::expander::{Env, Expander};
 use super::expr::{Kind, Scev, Ty, Type, Use, flags};
 use super::{Flags, ScalarEvolution};
 
+/// `LLRM_NO_EXPAND_REUSE`, read once; set, the expander never reuses a value
+/// that computes the expression.
+fn reuse_enabled() -> bool {
+    !llrm_support::env_flag!("LLRM_NO_EXPAND_REUSE")
+}
+
 /// One call of the expander.
 pub(super) struct Run<'a> {
     pub x: &'a mut Expander,
@@ -644,12 +650,54 @@ impl Run<'_> {
         if let Some(&found) = self.x.expressions.get(&(s, at)) {
             return found;
         }
-        self.x.insert_point = Some(at);
-        let v = self.visit(s);
-        let v = self.fixup_lcssa_form_for(v);
-        self.x.insert_point = Some(here);
-        self.x.expressions.insert((s, at), v);
+        // Expand the expression into instructions, or reuse a value that
+        // computes it (`findExistingExpansionAndDropPoisonFlags`).
+        let mut cache_at = at;
+        let mut found = self.find_existing_expansion(s, at);
+        if found.is_none() && at != here && self.x.post_inc_loops.is_empty() {
+            // Hoisting the insertion point can move it above a value that
+            // already computes S. Such a value is still usable: it only has to
+            // dominate the point we were asked to expand at.
+            found = self.find_existing_expansion(s, here);
+            if found.is_some() {
+                cache_at = here;
+            }
+        }
+        let v = match found {
+            Some(v) => v,
+            None => {
+                self.x.insert_point = Some(at);
+                let v = self.visit(s);
+                let v = self.fixup_lcssa_form_for(v);
+                self.x.insert_point = Some(here);
+                v
+            }
+        };
+        self.x.expressions.insert((s, cache_at), v);
         v
+    }
+
+    /// `findExistingExpansionAndDropPoisonFlags`: a value that computes `s`
+    /// where it is used, its poison-generating flags dropped as reusing it
+    /// needs. (DEVIATE X1: the `nneg` re-inference of
+    /// `dropPoisonGeneratingAnnotationsAndReinfer` is not made; exit
+    /// 2026-11-20.)
+    fn find_existing_expansion(
+        &mut self,
+        s: Scev,
+        at: InstId,
+    ) -> Option<Operand> {
+        if !reuse_enabled() {
+            return None;
+        }
+        let (v, drop) = {
+            let cx = cx!(self);
+            self.x.find_value_in_expr_value_map(&cx, self.se, s, at)?
+        };
+        for inst in drop {
+            self.fixup_poison_flags(inst);
+        }
+        Some(v)
     }
 
     fn visit(

@@ -134,7 +134,7 @@ udivmod8:
 ; rs1 / rs2: the quotient in rc2:rc3, the remainder in rc6:rc7. Uses A and X only.
 udivmod16:
   lda rc5
-  bne @wide
+  bne udivmod16c
   ; a divisor under 256: the remainder is a byte, in A, with the carry of the shift as its ninth bit
   ldx #16
 @next8:
@@ -154,7 +154,8 @@ udivmod16:
   lda #0
   sta rc7
   rts
-@wide:
+; the bit loop alone: what the compact entry points run
+udivmod16c:
   lda #0
   sta rc6
   sta rc7
@@ -211,6 +212,21 @@ __udivhi3:                      ; rs1 / rs2 -> A:X, the remainder in rc6:rc7
 .export __umodhi3
 __umodhi3:                      ; rs1 % rs2 -> A:X
   jsr udivmod16
+  lda rc6
+  ldx rc7
+  rts
+
+; the compact variants, called where a byte is worth more than the clocks: no short-divisor path
+.export __udivhi3c
+__udivhi3c:                     ; rs1 / rs2 -> A:X, the remainder in rc6:rc7
+  jsr udivmod16c
+  lda rc2
+  ldx rc3
+  rts
+
+.export __umodhi3c
+__umodhi3c:                     ; rs1 % rs2 -> A:X
+  jsr udivmod16c
   lda rc6
   ldx rc7
   rts

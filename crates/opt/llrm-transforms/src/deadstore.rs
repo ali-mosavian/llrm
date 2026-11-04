@@ -399,7 +399,7 @@ impl<'a> Dse<'a> {
         if let Some(&(_, Some(writes))) = self.touches.borrow().get(&inst) {
             return writes;
         }
-        let writes = self.accesses.writes_in(self.aa.unit(), inst).is_none_or(|writes| !writes.is_empty());
+        let writes = self.accesses.writes_any_in(self.aa.unit(), inst);
         self.touches.borrow_mut().get_or_insert_with(inst, Default::default).1 = Some(writes);
         writes
     }
@@ -415,7 +415,7 @@ impl<'a> Dse<'a> {
         if let Some(&(Some(reads), _)) = self.touches.borrow().get(&inst) {
             return reads;
         }
-        let reads = self.accesses.reads_in(self.aa.unit(), inst).is_none_or(|reads| !reads.is_empty());
+        let reads = self.accesses.reads_any_in(self.aa.unit(), inst);
         self.touches.borrow_mut().get_or_insert_with(inst, Default::default).0 = Some(reads);
         reads
     }

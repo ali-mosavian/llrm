@@ -22,8 +22,8 @@ pub fn symbol(name: &str) -> String {
     out
 }
 
-/// Every defined variable with an initializer: constants in `_CONST`, the
-/// rest in `_DATA`.
+/// Every defined variable with an initializer: constants in `_CONST`, zeros
+/// in `_BSS`, the rest in `_DATA`.
 pub fn text(
     ir: &str,
     request: &Request,
@@ -39,9 +39,24 @@ pub fn text(
             continue;
         }
         let id = llrm_mir::GlobalId(at as u32);
-        out.push_str(if variable.constant { "\t.area _CONST\n" } else { "\t.area _DATA\n" });
-        for datum in globals::datums(module, id, &names)? {
+        let datums = globals::datums(module, id, &names)?;
+        // a variable of zeros is bss: space the program's start clears, not bytes of the image
+        let bss = !variable.constant
+            && datums.iter().all(|datum| match datum {
+                Datum::Label(_) | Datum::Object(_) => true,
+                Datum::Bytes(bytes) => bytes.iter().all(|byte| *byte == 0),
+                Datum::Fill(fill) => fill.byte.unwrap_or(0) == 0,
+                _ => false,
+            });
+        out.push_str(match (variable.constant, bss) {
+            (true, _) => "\t.area _CONST\n",
+            (false, true) => "\t.area _BSS\n",
+            (false, false) => "\t.area _DATA\n",
+        });
+        for datum in datums {
             match datum {
+                Datum::Bytes(bytes) if bss => out.push_str(&format!("\t.ds {}\n", bytes.len())),
+                Datum::Fill(fill) if bss => out.push_str(&format!("\t.ds {}\n", fill.size)),
                 Datum::Label(label) | Datum::Object(label) => {
                     out.push_str(&format!("\t.globl {0}\n{0}::\n", label.name));
                 }
