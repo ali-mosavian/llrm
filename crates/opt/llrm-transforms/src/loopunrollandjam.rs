@@ -743,7 +743,15 @@ pub(crate) fn unroll_remainder_loop(
     let capacity = run.function.block_capacity();
     let options = crate::loopunroll::Options { count, max_trip_count: count, max_or_zero, exits };
     if let Err(error) =
-        crate::loopunroll::unroll_loop_blocks(run.function, epilog_header, &body, &latches, &options, &mut run.emptied)
+        crate::loopunroll::unroll_loop_blocks(
+            run.function,
+            epilog_header,
+            &body,
+            &latches,
+            &options,
+            &mut run.emptied,
+            &mut |_, _, _| {},
+        )
     {
         panic!("remainder unroll: {error}");
     }

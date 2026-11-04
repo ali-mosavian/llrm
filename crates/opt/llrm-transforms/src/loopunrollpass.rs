@@ -1355,6 +1355,14 @@ fn why(
 }
 
 /// `tryToUnrollLoop`, for the full unroll pass.
+/// The instructions of `blocks`.
+fn body_instructions(
+    function: &Function,
+    blocks: impl IntoIterator<Item = BlockId>,
+) -> Vec<llrm_mir::module::InstId> {
+    blocks.into_iter().flat_map(|block| function.iter_block(block).collect::<Vec<_>>()).collect()
+}
+
 fn try_to_unroll_loop(
     run: &mut Run,
     analyzed: &Analyzed,
@@ -1551,8 +1559,25 @@ fn try_to_unroll_loop(
     if pp.peel_count != 0 {
         why(run, lp, &format!("peeling {} iterations", pp.peel_count));
         let loop_ = peelable(run.function, lp);
+        let scopes = crate::noaliasscopes::declared_scopes(
+            run.function,
+            body_instructions(run.function, lp.get_blocks().iter().copied()),
+        );
         return match crate::loopclone::peeled_any_latch(run.function, &loop_, i64::from(pp.peel_count)) {
-            Ok(Some(_)) => {
+            Ok(Some(labels)) => {
+                // `cloneAndAdaptNoAliasScopes` for each peeled iteration
+                // (LoopPeel.cpp:956).
+                for (iteration, blocks) in labels.iter().enumerate() {
+                    let copies = body_instructions(run.function, blocks.values().copied());
+                    crate::noaliasscopes::cloned_and_adapted(
+                        run.function,
+                        &scopes,
+                        &copies,
+                        &format!("Peel{}", iteration + 1),
+                        run.metadata,
+                        run.declared,
+                    );
+                }
                 let so_far = run.peeled.get(&header).copied().unwrap_or(0);
                 run.peeled.insert(header, so_far + pp.peel_count);
                 Unrolled::Peeled
@@ -1636,7 +1661,19 @@ fn try_to_unroll_loop(
             exits.into_iter().filter(|exit| exit.trip_count != 0).collect()
         },
     };
-    match unroll_loop_blocks(run.function, header, &body, &latches, &unroll_options, &mut run.emptied) {
+    let scopes = crate::noaliasscopes::declared_scopes(run.function, body_instructions(run.function, body.iter().copied()));
+    let (metadata, declared) = (run.metadata, &mut *run.declared);
+    let mut rescoped = |function: &mut Function, copies: &[llrm_mir::module::InstId], iteration: usize| {
+        crate::noaliasscopes::cloned_and_adapted(
+            function,
+            &scopes,
+            copies,
+            &format!("It{iteration}"),
+            metadata,
+            declared,
+        );
+    };
+    match unroll_loop_blocks(run.function, header, &body, &latches, &unroll_options, &mut run.emptied, &mut rescoped) {
         Ok(result) => result,
         Err(error) => panic!("loop unroll: {error}"),
     }
@@ -2117,7 +2154,7 @@ pub fn unroll_function(
         DataLayout::parse(module.datalayout.as_deref().unwrap_or("e-m:e-p:32:32-f64:32:64-f80:32-n8:16:32-S128"))?;
     let callees = llrm_mir::memory::callees(module);
     let outer = llrm_mir::passes::Outer::of(module, None);
-    let mut declared = llrm_mir::passes::Declared::default();
+    let mut declared = llrm_mir::passes::Declared::of(module);
     let globals = module.globals.clone();
     let metadata = module.metadata.clone();
     let id = module
@@ -2147,7 +2184,9 @@ pub fn unroll_function(
         created: Vec::new(),
         scev: ScalarEvolution::new(),
     };
-    Ok(unroll_loops(&mut run))
+    let unrolled = unroll_loops(&mut run);
+    declared.place(module)?;
+    Ok(unrolled)
 }
 
 #[cfg(test)]

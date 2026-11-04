@@ -740,6 +740,14 @@ fn rotate_loop(
     // For the rest of the instructions, either hoist to the old preheader if
     // possible or create a clone in the old preheader if not.
     let loop_entry_branch = run.function.terminator(orig_preheader).expect("a terminated preheader");
+    // The local scope declarations of the header: after the rotation they are
+    // duplicated and their scopes cloned (LoopRotationUtils.cpp:500).
+    let declarations: Vec<InstId> = header_instructions
+        .iter()
+        .copied()
+        .filter(|&inst| crate::noaliasscopes::declares(run.function, inst))
+        .collect();
+    let mut cloned_declarations: Vec<(InstId, InstId)> = Vec::new();
     for &inst in &header_instructions[rest..] {
         let operation = run.function.instruction(inst);
         // If the instruction's operands are invariant and it doesn't read or
@@ -801,8 +809,46 @@ fn rotate_loop(
                 if let (Some(original), Some(result)) = (original, run.function.instruction(copy).result) {
                     value_map.insert(original, Operand::Value(result));
                 }
+                if declarations.contains(&inst) {
+                    cloned_declarations.push((inst, copy));
+                }
             }
         }
+    }
+
+    // `ValueMap[*NoAliasDeclInstructions.begin()]` and what follows
+    // (LoopRotationUtils.cpp:625): the declarations again at the top of the new
+    // header, then the scopes of the header and of the preheader's copy cloned.
+    if let Some(&(_, first_copy)) = cloned_declarations.first() {
+        let scopes = crate::noaliasscopes::declared_scopes(run.function, declarations.iter().copied());
+        let at = run
+            .function
+            .iter_block(new_header)
+            .find(|&inst| run.function.instruction(inst).opcode != Opcode::Phi)
+            .expect("a terminator");
+        for &declaration in &declarations {
+            let again = run.function.clone_instruction(declaration);
+            run.function.insert(again, Position::Before(at)).expect("a placed new header");
+        }
+        let header_now = run.function.iter_block(orig_header).collect::<Vec<_>>();
+        crate::noaliasscopes::cloned_and_adapted(
+            run.function,
+            &scopes,
+            &header_now,
+            "h.rot",
+            run.metadata,
+            run.declared,
+        );
+        let tail: Vec<InstId> =
+            run.function.iter_block(orig_preheader).skip_while(|&inst| inst != first_copy).collect();
+        crate::noaliasscopes::cloned_and_adapted(
+            run.function,
+            &scopes,
+            &tail,
+            "pre.rot",
+            run.metadata,
+            run.declared,
+        );
     }
 
     // Along with all the other instructions, the header's terminator was cloned
