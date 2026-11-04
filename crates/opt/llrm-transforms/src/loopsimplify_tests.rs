@@ -736,3 +736,46 @@ out:
     // `cfg!(test)`.
     simplified(function);
 }
+
+/// n1 (rank 22): `a` carries `%i` unchanged to the header, `b` carries the
+/// next count, so the pin nests the loops; llrm merged both back edges into
+/// one latch. `findPHIToPartitionLoops` names the phi that tells them apart.
+#[test]
+fn test_a_header_phi_a_backedge_carries_unchanged_partitions_the_loops() {
+    let module = parsed(
+        "define i32 @f(i32 %n, ptr %p) {
+entry:
+  br label %h
+
+h:
+  %i = phi i32 [ 0, %entry ], [ %i, %a ], [ %i2, %b ]
+  %v = load i32, ptr %p
+  %c1 = icmp slt i32 %v, %n
+  br i1 %c1, label %a, label %b
+
+a:
+  %w = load volatile i32, ptr %p
+  %c2 = icmp eq i32 %w, 0
+  br i1 %c2, label %h, label %x
+
+b:
+  %i2 = add i32 %i, 1
+  %c3 = icmp slt i32 %i2, %n
+  br i1 %c3, label %h, label %x
+
+x:
+  %r = phi i32 [ %i, %a ], [ %i2, %b ]
+  ret i32 %r
+}
+",
+    );
+    let (_, _, function) = module.functions().next().unwrap();
+    let block =
+        |name: &str| *function.layout().iter().find(|&&one| function.block(one).name.as_deref() == Some(name)).unwrap();
+    let (h, a, b) = (block("h"), block("a"), block("b"));
+    let in_loop = |one| one == h || one == a || one == b;
+    let found = super::find_phi_to_partition_loops(function, h, &in_loop).expect("a phi");
+    assert_eq!(function.value(function.instruction(found).result.unwrap()).name.as_deref(), Some("i"));
+    // From outside the loop, or as another value, it is no mark.
+    assert_eq!(super::find_phi_to_partition_loops(function, h, &|one| one == h || one == b), None);
+}

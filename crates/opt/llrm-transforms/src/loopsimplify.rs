@@ -470,6 +470,38 @@ pub fn simplified(function: &mut Function) -> bool {
     _simplified(function, shape)
 }
 
+/// [`findPHIToPartitionLoops`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopSimplify.cpp#L297):
+/// a phi of `header` that a backedge carries unchanged (an incoming value of
+/// itself from a block of the loop), the mark of an inner loop whose back edge
+/// `separateNestedLoop` splits from the outer loop's. First of the translation
+/// (rank 22, w12): the pass still gives a loop one latch. DEVIATE: the pin
+/// first replaces a phi `simplifyInstruction` folds; that is left to the
+/// instsimplify the pipeline runs before (exit 2026-11-14).
+#[allow(dead_code)]
+pub(crate) fn find_phi_to_partition_loops(
+    function: &Function,
+    header: BlockId,
+    in_loop: &dyn Fn(BlockId) -> bool,
+) -> Option<InstId> {
+    edges::phis(function, header)
+        .into_iter()
+        .find(
+            |&phi| {
+                let result = function.instruction(phi).result;
+                function
+                    .instruction(phi)
+                    .operands
+                    .chunks(2)
+                    .any(
+                        |pair| matches!(
+                            (pair[0], pair[1]),
+                            (Operand::Value(value), Operand::Block(from)) if Some(value) == result && in_loop(from)
+                        ),
+                    )
+            },
+        )
+}
+
 /// `simplified`, `shape` being `function`'s.
 fn _simplified(
     function: &mut Function,
