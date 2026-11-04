@@ -182,6 +182,46 @@ entry:
     assert_eq!(lines(&text).len(), 1, "{text}");
 }
 
+/// `FindValueInExprValueMap` was only in the cost model: the expander wrote
+/// `x - (x & 3)` as `zext(trunc x)` again (a `trunc`, a `zext`) beside the
+/// `and` that already holds it, and recchop -O2 at wasm32 paid 12 B and 347
+/// instructions for the loop bound LSR rebuilt.
+#[test]
+fn test_a_value_that_computes_the_expression_is_reused() {
+    let body = "define i32 @f(i32 %a, i32 %b, i64 %w) {
+entry:
+  %x = and i32 %a, 3
+  ret i32 0
+}
+";
+    let text = expanded_in(body, |se, cx, args| {
+        let found = se.get_scev(cx, args[3]);
+        assert!(!matches!(se.node(found).kind, super::expr::Kind::Unknown(_)), "premise: and 3 is zext(trunc)");
+        found
+    });
+    assert_eq!(lines(&text).len(), 1, "{text}");
+}
+
+/// Reusing a value whose flags SCEV does not guarantee drops them: an `add nuw`
+/// that stands for the same sum without the proof.
+#[test]
+fn test_reusing_a_flagged_value_drops_the_flags_the_expression_does_not_carry() {
+    let body = "define i32 @f(i32 %a, i32 %b, i64 %w) {
+entry:
+  %x = add nuw i32 %a, %b
+  ret i32 0
+}
+";
+    let text = expanded_in(body, |se, cx, args| {
+        let a = unknown(se, cx, args[0]);
+        let b = unknown(se, cx, args[1]);
+        let _ = se.get_scev(cx, args[3]);
+        se.get_add_expr(cx, vec![a, b], Flags::default(), 0).scev
+    });
+    assert!(!text.contains("nuw"), "{text}");
+    assert_eq!(lines(&text).len(), 1, "{text}");
+}
+
 /// `isSafeToExpand` was `todo!`: a udiv by an unknown divisor may divide by
 /// zero, so it is not safe; by a nonzero constant it is.
 #[test]

@@ -1355,6 +1355,40 @@ fn a_compare_against_a_word_boundary_tests_only_the_high_word_in_both_polarities
     assert_eq!(instructions(&greater), instructions(&less), "the polarity changed the code:\n{greater}\n{less}");
 }
 
+/// A softened `double` bitcast to `i64` takes the halves of its softened
+/// integer (`ExpandIntRes_BITCAST`), not a stack slot. Guards the bytes of
+/// 0x3FF8000000000001: 0x3F on top, 0xF8 next, 0x01 at the bottom.
+#[test]
+fn a_double_bitcast_to_i64_keeps_its_bytes() {
+    let ir = module(
+        r#"@d = global double 0x3FF8000000000001
+define i8 @top() {
+  %x = load double, ptr @d
+  %i = bitcast double %x to i64
+  %t = lshr i64 %i, 56
+  %b = trunc i64 %t to i8
+  ret i8 %b
+}
+define i8 @mid() {
+  %x = load double, ptr @d
+  %i = bitcast double %x to i64
+  %t = lshr i64 %i, 48
+  %b = trunc i64 %t to i8
+  ret i8 %b
+}
+define i8 @bottom() {
+  %x = load double, ptr @d
+  %i = bitcast double %x to i64
+  %b = trunc i64 %i to i8
+  ret i8 %b
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert_eq!(exit_code_of(&text, "top"), 0x3F, "{text}");
+    assert_eq!(exit_code_of(&text, "mid"), 0xF8, "{text}");
+    assert_eq!(exit_code_of(&text, "bottom"), 0x01, "{text}");
+}
+
 /// A 64-bit add carried between its words by compares: the legalizer tested the
 /// carry operation at the 32-bit half, which is no legal type here, instead of
 /// the 16-bit piece it expands to, so `a + b` took 163 instructions with a
@@ -1627,4 +1661,55 @@ fn a_pointer_minus_one_borrows_by_branch() {
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(exit_code_of(&text, "g"), 20, "{text}");
     assert!(!text.contains("adc #255"), "{text}");
+}
+
+#[test]
+fn the_frame_address_at_offset_zero_is_the_stack_pointer_copied() {
+    // k_itoa's `tmp[n]`: `clc; lda rc0; adc #0; sta; lda rc1; adc #0; sta` (13 B)
+    // for the address of the first byte of the frame, a copy of the pair (8 B)
+    let ir = module(
+        "@n = global i8 5\n\
+         define i8 @g() {\n\
+         \x20 %a = alloca [16 x i8]\n  %n = load volatile i8, ptr @n\n\
+         \x20 %p = getelementptr inbounds [16 x i8], ptr %a, i8 0, i8 %n\n\
+         \x20 store volatile i8 42, ptr %p\n  %v = load volatile i8, ptr %p\n  ret i8 %v\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "g"), 42, "{text}");
+    assert!(!text.contains("lda rc0\n  adc #0"), "{text}");
+}
+
+#[test]
+fn a_word_plus_one_carries_by_branch() {
+    // strnlen's index: `clc; lda lo; adc #1; sta lo; lda hi; adc #0; sta hi`
+    // (13 B) where `inc lo; bne; inc hi` is 6
+    let ir = module(
+        "@n = global i16 300\n@sink = global i16 0\n\
+         define i8 @g() {\n\
+         \x20 %n = load volatile i16, ptr @n\n  br label %l\n\
+         l:\n\
+         \x20 %i = phi i16 [ 0, %0 ], [ %j, %l ]\n\
+         \x20 %j = add i16 %i, 1\n  store volatile i16 %j, ptr @sink\n\
+         \x20 %c = icmp ult i16 %j, %n\n  br i1 %c, label %l, label %x\n\
+         x:\n\
+         \x20 %r = trunc i16 %j to i8\n  ret i8 %r\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "g"), 44, "{text}");
+    assert!(!text.contains("adc #1\n"), "{text}");
+}
+
+#[test]
+fn a_zero_filled_variable_is_bss_not_image_bytes() {
+    // basic.c: prog[8192], tok, xv ... were `.byte 0,0,...` in DATA, 8721 B of
+    // image where gcc's BSS has none
+    let ir = module(
+        "@buf = global [4096 x i8] zeroinitializer\n@one = global i8 1\n\
+         define i8 @g() {\n  %p = getelementptr inbounds [4096 x i8], ptr @buf, i16 0, i16 4000\n\
+         \x20 %v = load volatile i8, ptr %p\n  %o = load volatile i8, ptr @one\n  %r = add i8 %v, %o\n  ret i8 %r\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O1)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "g"), 1, "{text}");
+    assert!(text.contains("buf: .res 4096"), "{text}");
+    assert!(!text.contains(".byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n  .byte 0,0,0,0"), "{text}");
 }

@@ -24,3 +24,28 @@ fn stores_with_a_value_computed_between_them_pair() {
 fn a_store_that_may_alias_keeps_them_apart() {
     assert!(!body("across_a_store_that_may_alias").contains("stp"), "{}", body("across_a_store_that_may_alias"));
 }
+
+/// Loads of neighbouring slots, each used before the next, were `ldp` for the
+/// first pair and two `ldr` after: the dead value's register was reused for
+/// the next load (matmul's checksum: 63 `ldr` where the pin has 33 `ldp`). The
+/// pin's scheduler clusters the loads.
+#[test]
+fn loads_with_work_between_them_pair() {
+    let text = body("a_chain_of_loads");
+    assert_eq!(text.matches("ldp").count(), 2, "{text}");
+}
+
+/// The same for a frame slot, which the checksum's accesses were.
+#[test]
+fn slot_loads_with_work_between_them_pair() {
+    let text = body("a_chain_of_slot_loads");
+    let data_pairs = text.lines().filter(|line| line.contains("ldp") && (line.contains("[sp]") || line.contains("[sp, #16]"))).count();
+    assert_eq!(data_pairs, 2, "{text}");
+}
+
+/// A store that may alias keeps the loads apart.
+#[test]
+fn a_store_that_may_alias_keeps_the_loads_apart() {
+    let text = body("loads_across_a_store_that_may_alias");
+    assert!(!text.contains("ldp"), "{text}");
+}
