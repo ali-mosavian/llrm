@@ -594,35 +594,8 @@ impl<'a> Builder<'a> {
         let tables = info
             .tables
             .get_or_insert_with(|| {
-                // `isOffsetFoldingLegal`: `shouldAssumeDSOLocal` holds for
-                // every symbol under the static relocation
-                // model, which these targets (DOS objects, no
-                // PIC) always use.
-                let (global_names, local_symbols) = module_tables.unwrap_or_else(|| {
-                    (
-                        std::rc::Rc::new(
-                            module
-                                .globals
-                                .iter()
-                                .map(|global| global.name.as_deref().unwrap_or("").to_string())
-                                .collect(),
-                        ),
-                        std::rc::Rc::new(if target.dag.dso_local_symbols {
-                            vec![true; module.globals.len()]
-                        } else {
-                            module
-                                .globals
-                                .iter()
-                                .map(|global| {
-                                    matches!(
-                                        global.linkage,
-                                        llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
-                                    )
-                                })
-                                .collect()
-                        }),
-                    )
-                });
+                let (global_names, local_symbols) = module_tables
+                    .unwrap_or_else(|| super::function_lowering::module_tables(module, target.dag.dso_local_symbols));
                 super::function_lowering::Tables {
                     global_names,
                     local_symbols,
@@ -2420,8 +2393,12 @@ impl Builder<'_> {
                             continue;
                         }
                         // A byte or word is promoted to `i32`, a dword goes
-                        // in the dword register (`EDI`, not `RDI`)
-                        let promoted = width.min(vt.size_in_bits().max(32));
+                        // in the dword register (`EDI`, not `RDI`); an
+                        // integer between a dword and the register is
+                        // promoted to the register (`i40` to `i64`, as
+                        // `getCopyToParts` does).
+                        let bits = vt.size_in_bits();
+                        let promoted = if bits > 32 && bits < width { width } else { width.min(bits.max(32)) };
                         let piece = if vt.is_integer() && vt.size_in_bits() < promoted {
                             let code = extends.get(at).copied().unwrap_or(ISD::AnyExtend);
                             self.dag.get_node(code, EVT::integer(promoted), &[piece])

@@ -193,6 +193,11 @@ pub struct Declared {
     /// declaration's attributes.
     named: Option<Rc<NameList>>,
     next: u32,
+    /// Whether the module declares `llvm.assume`, where the pass manager knows
+    /// it (`with_assume_declared`).
+    assume: Option<bool>,
+    /// Likewise for `llvm.experimental.guard`.
+    guard: Option<bool>,
     pending: Vec<Pending>,
     /// Metadata nodes made, numbered after the module's.
     nodes: Vec<crate::module::MetadataNode>,
@@ -227,6 +232,42 @@ impl Declared {
         self.sizes = referenced_sizes(module);
     }
 
+    /// `self`, told whether the module declares `llvm.assume`.
+    pub fn with_assume_declared(
+        mut self,
+        declared: bool,
+    ) -> Self {
+        self.assume = Some(declared);
+        self
+    }
+
+    /// `self`, told whether the module declares `llvm.experimental.guard`.
+    pub fn with_guard_declared(
+        mut self,
+        declared: bool,
+    ) -> Self {
+        self.guard = Some(declared);
+        self
+    }
+
+    /// Whether the module declares `llvm.experimental.guard`: what the manager
+    /// told, else a scan of `globals`.
+    pub fn guard_declared(
+        &self,
+        globals: &[GlobalValue],
+    ) -> bool {
+        self.guard.unwrap_or_else(|| crate::valuetracking::guard_declared(globals))
+    }
+
+    /// Whether the module declares `llvm.assume`: what the manager told, else
+    /// a scan of `globals`.
+    pub fn assume_declared(
+        &self,
+        globals: &[GlobalValue],
+    ) -> bool {
+        self.assume.unwrap_or_else(|| crate::valuetracking::assume_declared(globals))
+    }
+
     /// How many instructions function `id` has, if a constant names it and
     /// the pass `wants_sizes`.
     pub fn size_of(
@@ -249,6 +290,8 @@ impl Declared {
             held: None,
             named: None,
             next: module.globals.len() as u32,
+            assume: Some(crate::valuetracking::assume_declared(&module.globals)),
+            guard: Some(crate::valuetracking::guard_declared(&module.globals)),
             pending: Vec::new(),
             nodes: Vec::new(),
             special: Default::default(),
@@ -271,6 +314,8 @@ impl Declared {
             next: held.len() as u32,
             held: Some(held),
             named: None,
+            assume: None,
+            guard: None,
             pending: Vec::new(),
             nodes: Vec::new(),
             special: Default::default(),
@@ -292,6 +337,8 @@ impl Declared {
             next: named.len() as u32,
             held: None,
             named: Some(named),
+            assume: None,
+            guard: None,
             pending: Vec::new(),
             nodes: Vec::new(),
             special: Default::default(),
@@ -793,7 +840,10 @@ fn declared_as_before<A: 'static>(
     analyses.get::<Declarations>(module);
     let now = analyses.listing;
     let seen = analyses.memo::<Seen<A>>();
-    let same = seen.0 == Some(now);
+    // Listing 0 is no listing: a manager that was handed its declarations
+    // carried (accepted as they stand) has made none, and every analysis it
+    // worked from them is `Some(0)` alike, whatever the declarations were.
+    let same = now != 0 && seen.0 == Some(now);
     if working {
         seen.0 = Some(now);
     }
@@ -1028,6 +1078,29 @@ impl ModuleAnalysis for GlobalNames {
             previous.seen.set(made);
         }
         same
+    }
+}
+
+/// Whether the module declares `llvm.assume`, which the function passes read
+/// for each function they run on instead of scanning every global.
+pub struct AssumeDeclared;
+
+impl ModuleAnalysis for AssumeDeclared {
+    type Result = bool;
+    const NAME: &'static str = "assume-declared";
+    fn run(
+        module: &Module,
+        _: &mut ModuleAnalyses,
+    ) -> Self::Result {
+        crate::valuetracking::assume_declared(&module.globals)
+    }
+
+    fn unchanged(
+        module: &Module,
+        _: &mut ModuleAnalyses,
+        previous: &Self::Result,
+    ) -> bool {
+        crate::valuetracking::assume_declared(&module.globals) == *previous
     }
 }
 
@@ -1297,7 +1370,24 @@ impl Clone for Memo {
     }
 }
 
+/// The key of `Outer::assume_declared` in the memo.
+const ASSUME_DECLARED: u64 = 0x4153_5355_4d45;
+/// The key of `Outer::guard_declared`.
+const GUARD_DECLARED: u64 = 0x4755_4152_4445;
+
 impl Outer {
+    /// Whether the module declares `llvm.assume`, scanned once per `Outer`.
+    pub fn assume_declared(&self) -> bool {
+        *self.memo(ASSUME_DECLARED, || crate::valuetracking::assume_declared(&self.globals))
+    }
+
+    /// Whether the module declares `llvm.experimental.guard`, scanned once per
+    /// `Outer`.
+    pub fn guard_declared(&self) -> bool {
+        struct Guard(bool);
+        self.memo(GUARD_DECLARED, || Guard(crate::valuetracking::guard_declared(&self.globals))).0
+    }
+
     /// The `V` kept under `key`, made by `make` the first time it is asked.
     pub fn memo<V: 'static>(
         &self,

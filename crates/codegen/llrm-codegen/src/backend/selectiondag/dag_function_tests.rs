@@ -332,7 +332,7 @@ fn the_check_for_a_value_read_before_it_is_defined_is_linear_in_the_body() {
     let defining = |at: i64, defines: Vec<u32>, uses: Vec<u32>| {
         let what = Semantics {
             name: Some("mov".into()),
-            dests: vec![Loc::Held(Held { value: defines.first().copied().unwrap_or(0), width: 4 })],
+            dests: vec![Loc::Held(Held { value: defines.first().copied().unwrap_or(0), width: 4, offset: 0 })],
             sources: Vec::new(),
             ..Semantics::new(Operation::Move)
         };

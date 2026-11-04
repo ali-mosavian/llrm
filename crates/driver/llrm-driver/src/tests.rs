@@ -152,7 +152,7 @@ fn a_targets_pins_come_from_its_own_forms() {
     use llrm_codegen::backend::classes::RegisterClasses;
     use llrm_codegen::model::ir::{Held, Loc, Mem, Operation, Semantics};
 
-    let held = |value: u32| Loc::Held(Held { value, width: 2 });
+    let held = |value: u32| Loc::Held(Held { value, width: 2, offset: 0 });
     // `stosd` as real mode lowers it: a placeholder cell and the pointer after;
     // the value, the pointer, the selector.
     let store = Semantics {
@@ -951,7 +951,7 @@ fn an_operand_of_an_sse_form_is_confined_to_xmm_registers() {
     use llrm_codegen::backend::regclass::{Confinement, Sets, confinement_of};
     use llrm_codegen::model::ir::{Held, Loc, Operation, Semantics};
     use llrm_codegen::model::lir::Insn;
-    let held = |value, width| Loc::Held(Held { value, width });
+    let held = |value, width| Loc::Held(Held { value, width, offset: 0 });
     let add = |name: &str, width| {
         let what = Semantics {
             name: Some(name.into()),
@@ -2879,6 +2879,89 @@ fn an_x86_64_macho_frame_states_no_address_at_its_exit_but_elf_does() {
     // The CIE's initial rows state it once; an exit's rows are a second.
     assert_eq!(def_cfa_rsp_8("x86_64-unknown-linux-gnu", "e"), 2, "control: ELF states the address after the pop");
     assert_eq!(def_cfa_rsp_8("x86_64-apple-macosx", "o"), 1, "Mach-O states none");
+}
+
+/// A 64-bit function that calls nothing, or has no locals, pushed its
+/// callee-saved registers in the wrong order or after the space for its locals:
+/// `push rbx; push r14` where the pin has `push r14; push rbx`, and `sub rsp,
+/// 8; push rbx` where the pin has the register first. The unwind rows named
+/// other offsets for 16 of 130 functions of the x86-64 Mach-O corpus.
+#[test]
+fn a_64_bit_frame_pushes_its_registers_first_and_the_last_of_the_list_first() {
+    let ir = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+              target triple = \"x86_64-unknown-linux-gnu\"\n\
+              define i32 @fib(i32 %n) #0 {\n\
+              entry:\n  %c = icmp slt i32 %n, 2\n  br i1 %c, label %done, label %loop\n\
+              loop:\n  %i = phi i32 [ %i2, %loop ], [ %n, %entry ]\n  %acc = phi i32 [ %acc2, %loop ], [ 0, %entry ]\n\
+              \x20 %a = add nsw i32 %i, -1\n  %r = call i32 @fib(i32 %a)\n  %i2 = add nsw i32 %i, -2\n  %acc2 = add i32 %r, %acc\n\
+              \x20 %t = icmp ult i32 %i, 4\n  br i1 %t, label %done, label %loop\n\
+              done:\n  %x = phi i32 [ %n, %entry ], [ %i2, %loop ]\n  %y = phi i32 [ 0, %entry ], [ %acc2, %loop ]\n\
+              \x20 %z = add i32 %x, %y\n  ret i32 %z\n}\n\
+              attributes #0 = { nounwind \"frame-pointer\"=\"all\" }\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O2", "--isel=dag"]), ir, "fib").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let at = |text: &str| listing.find(text).unwrap_or_else(|| panic!("no `{text}` in\n{listing}"));
+    assert!(at("push r14") < at("push rbx"), "{listing}");
+}
+
+/// A one-slot frame after the saved registers was `sub rsp, 8` / `add rsp, 8`
+/// (4 bytes each), where the pin has `push rax` / `pop rcx` (1 byte each): the
+/// saved-first order lost the one-slot form, +6 bytes on 84 of 595 cells of the
+/// x86-64 corpus (fib -Os, bintree, histo, quicksort ...).
+#[test]
+fn a_one_slot_frame_after_the_saved_registers_is_push_rax_and_pop_rcx() {
+    let ir = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+              target triple = \"x86_64-unknown-linux-gnu\"\n\
+              define i32 @fib(i32 %n) #0 {\n\
+              entry:\n  %c = icmp slt i32 %n, 2\n  br i1 %c, label %done, label %loop\n\
+              loop:\n  %i = phi i32 [ %i2, %loop ], [ %n, %entry ]\n  %acc = phi i32 [ %acc2, %loop ], [ 0, %entry ]\n\
+              \x20 %a = add nsw i32 %i, -1\n  %r = call i32 @fib(i32 %a)\n  %i2 = add nsw i32 %i, -2\n  %acc2 = add i32 %r, %acc\n\
+              \x20 %t = icmp ult i32 %i, 4\n  br i1 %t, label %done, label %loop\n\
+              done:\n  %x = phi i32 [ %n, %entry ], [ %i2, %loop ]\n  %y = phi i32 [ 0, %entry ], [ %acc2, %loop ]\n\
+              \x20 %z = add i32 %x, %y\n  ret i32 %z\n}\n\
+              attributes #0 = { nounwind optsize }\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-Os", "--isel=dag"]), ir, "fib").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("push rbx") || listing.contains("push r14"), "premise: saved registers\n{listing}");
+    assert!(listing.contains("push rax") && listing.contains("pop rcx"), "{listing}");
+    assert!(!listing.contains("sub rsp, 8") && !listing.contains("add rsp, 8"), "{listing}");
+}
+
+/// A 64-bit function with saved registers and no locals got a slot only for
+/// alignment: a leaf with two pushed registers `push rax` (+2 B: mandel -Os), a
+/// caller with one `sub rsp, 16` (+8 B: sbb_wide_sub, memcpy_runtime -Os) where
+/// the pin has neither.
+#[test]
+fn a_frame_with_saved_registers_and_no_locals_has_no_alignment_slot() {
+    let head = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n";
+    let compiled = |text: &str, name: &str| {
+        let (built, _) = crate::llc::compiled(&flags(&["-Os", "--isel=dag"]), text, name).unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    // sbb_wide_sub's `main`: a volatile function pointer called twice, the
+    // result kept across the second call in a saved register, no locals.
+    let caller = format!(
+        "{head}@through = dso_local global ptr null, align 8\ndeclare void @report(i64)\n\
+         define dso_local i32 @main() #0 {{\n  %1 = load volatile ptr, ptr @through, align 8\n  %2 = tail call i64 %1(i64 5, i64 7)\n\
+         \x20 %3 = ashr i64 %2, 32\n  tail call void @report(i64 %3)\n  tail call void @report(i64 %2)\n  ret i32 0\n}}\n\
+         attributes #0 = {{ nounwind optsize uwtable }}\n"
+    );
+    let listing = compiled(&caller, "main");
+    assert!(listing.contains("push rbx"), "premise: one saved register\n{listing}");
+    assert!(!listing.contains("sub rsp") && !listing.contains("push rax"), "{listing}");
+    // A leaf that keeps twelve values live across a loop needs saved registers.
+    let phis: String = (0..12).map(|i| format!("  %v{i} = phi i64 [ {i}, %entry ], [ %n{i}, %loop ]\n")).collect();
+    let adds: String = (0..12).map(|i| format!("  %n{i} = add i64 %v{i}, %v{}\n", (i + 1) % 12)).collect();
+    let total: String = (1..12)
+        .map(|i| format!("  %s{i} = add i64 {}, %n{i}\n", if i == 1 { "%n0".into() } else { format!("%s{}", i - 1) }))
+        .collect();
+    let leaf = format!(
+        "{head}define i64 @h(i64 %a) #0 {{\nentry:\n  br label %loop\nloop:\n{phis}{adds}  %c = icmp ult i64 %n0, %a\n  br i1 %c, label %loop, label %done\ndone:\n{total}  ret i64 %s11\n}}\nattributes #0 = {{ nounwind optsize }}\n"
+    );
+    let listing = compiled(&leaf, "h");
+    assert!(listing.matches("push r").count() >= 2, "premise: two or more saved registers\n{listing}");
+    assert!(!listing.contains("push rax") && !listing.contains("sub rsp"), "{listing}");
 }
 
 /// `getOptimalMemOpType` gives 16 bytes (`v4i32`) with SSE2: a 16-byte clear

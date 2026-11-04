@@ -25,7 +25,7 @@ pub(crate) fn sem(
 }
 
 pub(crate) fn fl(value: u32) -> Loc {
-    Loc::Held(Held { value, width: 10 })
+    Loc::Held(Held { value, width: 10, offset: 0 })
 }
 
 pub(crate) fn m(cell: &Mem) -> Loc {
@@ -331,7 +331,7 @@ fn test_a_load_is_not_read_again_after_a_store_that_may_reach_it() {
         } else {
             Mem {
                 through: RegId::SI,
-                base: Some(Held { value: 9, width: 2 }),
+                base: Some(Held { value: 9, width: 2, offset: 0 }),
                 disp_width: 2,
                 ..Mem::new(Some(Addr { index: 5, ..Addr::new(Space::Segment, 0) }), 4)
             }
@@ -1104,5 +1104,5 @@ fn test_float_prep_asks_liveness_of_the_floating_values_only() {
 }
 
 fn int(value: u32) -> Loc {
-    Loc::Held(Held { value, width: 4 })
+    Loc::Held(Held { value, width: 4, offset: 0 })
 }

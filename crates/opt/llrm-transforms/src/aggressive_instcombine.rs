@@ -29,17 +29,17 @@
 //!     2026-11-21.
 //! 39. The target's `allowsMisalignedMemoryAccesses` is taken to be true and
 //!     fast for every size the data layout has as a legal integer (the X86
-//!     answer, `X86ISelLoweringCall.cpp#L356`). Owner: w2. Exit: a target-supplied
-//!     fact, 2026-11-28.
+//!     answer, `X86ISelLoweringCall.cpp#L356`). Owner: w2. Exit: a
+//!     target-supplied fact, 2026-11-28.
 //!
 //! 40. The pin ends `foldUnusualPatterns` with `SimplifyInstructionsInBlock`;
 //!     there is no public equivalent here, so the dead chain a fold leaves is
 //!     the next `dead` pass's. Owner: w2. Exit: 2026-11-21, expose the helper.
 //! 41. `foldConsecutiveStores` ends a run at any instruction that may read or
 //!     write memory, or throw; the pin asks `BatchAA` whether it touches the
-//!     run's base. The pass `Unit` carries no module globals, so a callee's
-//!     own attributes are not seen either. Sound, merges less. Owner: w2.
-//!     Exit: 2026-11-21, with deviation 38's `AliasQuery`.
+//!     run's base. The pass `Unit` carries no module globals, so a callee's own
+//!     attributes are not seen either. Sound, merges less. Owner: w2. Exit:
+//!     2026-11-21, with deviation 38's `AliasQuery`.
 //!
 //! # Example
 //! The pair above is one `load i16`; see `aggressive_instcombine_tests.rs`.
@@ -117,7 +117,8 @@ fn fold_unusual_patterns(
     reachable: &IdSet<BlockId>,
 ) -> bool {
     let mut changed = false;
-    let blocks: Vec<BlockId> = unit.function.layout().iter().copied().filter(|&block| reachable.contains(&block)).collect();
+    let blocks: Vec<BlockId> =
+        unit.function.layout().iter().copied().filter(|&block| reachable.contains(&block)).collect();
     for block in blocks {
         // Bottom up: a chain is matched from its end, and a partial pattern
         // is not matched.
@@ -172,7 +173,12 @@ fn shifted_extended_instruction(
     q: &Query,
     v: Operand,
 ) -> Option<(InstId, u64)> {
-    let one_use = |operand: Operand| matches!(operand, Operand::Value(value) if q.function.users(value).has_one_use());
+    let one_use = |operand: Operand| {
+        matches!(
+            operand,
+            Operand::Value(value) if q.function.users(value).has_one_use()
+        )
+    };
     if !one_use(v) {
         return None;
     }
@@ -201,7 +207,12 @@ fn fold_loads_recursive(
     is_root: bool,
 ) -> bool {
     // The root may have several uses; an intermediate value needs one.
-    if !is_root && !matches!(v, Operand::Value(value) if q.function.users(value).has_one_use()) {
+    if !is_root
+        && !matches!(
+            v,
+            Operand::Value(value) if q.function.users(value).has_one_use()
+        )
+    {
         return false;
     }
     // `m_c_Or(m_Value(X), <shifted extended load>)`, either order.
@@ -232,14 +243,18 @@ fn fold_loads_recursive(
 
     // The same load twice, a volatile one, or a different block or address
     // space.
-    let simple = |inst: InstId| matches!(q.function.instruction(inst).opcode, Opcode::Load { volatile: false, .. });
+    let simple = |inst: InstId| matches!(
+        q.function.instruction(inst).opcode,
+        Opcode::Load { volatile: false, .. }
+    );
     if li1 == li2 || !simple(li1) || !simple(li2) {
         return false;
     }
-    let space = |inst: InstId| match q.type_of(q.function.instruction(inst).operands[0]).map(|ty| q.context.types.get(ty)) {
-        Some(Type::Pointer(space)) => Some(*space),
-        _ => None,
-    };
+    let space =
+        |inst: InstId| match q.type_of(q.function.instruction(inst).operands[0]).map(|ty| q.context.types.get(ty)) {
+            Some(Type::Pointer(space)) => Some(*space),
+            _ => None,
+        };
     if space(li1) != space(li2) || space(li1).is_none() {
         return false;
     }
@@ -257,7 +272,8 @@ fn fold_loads_recursive(
         let shift = 128 - index_bits;
         ((offset << shift) as i128) >> shift
     };
-    let bits_of = |inst: InstId| u64::from(q.scalar_bits(Operand::Value(q.function.instruction(inst).result.expect("a load"))));
+    let bits_of =
+        |inst: InstId| u64::from(q.scalar_bits(Operand::Value(q.function.instruction(inst).result.expect("a load"))));
     let (mut load_size1, mut load_size2) = (bits_of(li1), bits_of(li2));
     if ptr1 != ptr2 {
         return false;
@@ -335,6 +351,23 @@ fn fold_loads_recursive(
     true
 }
 
+/// `DT.dominates(Value, Instruction)` for an address: an argument or constant
+/// always does; an instruction does when it is before `at` in its block, or
+/// its block dominates `at`'s.
+fn dominates_at(
+    function: &Function,
+    value: Operand,
+    at: InstId,
+) -> bool {
+    let Operand::Value(id) = value else { return true };
+    let llrm_mir::module::ValueDef::Instruction(def) = function.value(id).def else { return true };
+    let (Some(def_block), Some(at_block)) = (function.parent(def), function.parent(at)) else { return false };
+    if def_block == at_block {
+        return function.comes_before(def, at);
+    }
+    llrm_mir::domtree::DomTree::of(function).dominates(def_block, at_block)
+}
+
 /// `foldConsecutiveLoads`
 /// ([:1540](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L1540)).
 fn fold_consecutive_loads(
@@ -366,20 +399,43 @@ fn fold_consecutive_loads(
         return false;
     }
     let Opcode::Load { align, volatile } = function.instruction(li1).opcode.clone() else { return false };
-    let pointer = function.instruction(li1).operands[0];
+    let mut pointer = function.instruction(li1).operands[0];
+    // The wide load sits at `root_insert`, which may be the other load: the
+    // first load's address is used only if its definition dominates that
+    // point, else the stripped base plus the constant offset is (the pin's
+    // `CreatePtrAdd`, :1569).
+    if !dominates_at(function, pointer, root_insert) {
+        let space = match context.types.get(function.operand_type(context, pointer).expect("a typed pointer")) {
+            Type::Pointer(space) => *space,
+            _ => return false,
+        };
+        let index_bits = layout.pointer(space).index_bits;
+        let (base, offset) =
+            strip_and_accumulate_constant_offsets(&query(context, layout, function), pointer, index_bits, true);
+        let shift = 128 - index_bits;
+        let offset = ((offset << shift) as i128) >> shift;
+        let i8 = context.types.int(8);
+        let index_ty = context.types.int(index_bits);
+        let index = Operand::Constant(context.int(index_ty, offset));
+        let ptr_ty = function.operand_type(context, pointer).expect("a typed pointer");
+        let add = function.create_instruction(
+            Opcode::GetElementPtr { source: i8 },
+            ptr_ty,
+            vec![base, index],
+            Flags::default(),
+            None,
+        );
+        function.insert(add, Position::Before(root_insert)).expect("a placed instruction");
+        pointer = Operand::Value(function.instruction(add).result.expect("a value"));
+    }
     let wider = context.types.int(lops.load_size as u32);
     let new_load =
         function.create_instruction(Opcode::Load { align, volatile }, wider, vec![pointer], Flags::default(), None);
     function.insert(new_load, Position::Before(root_insert)).expect("a placed instruction");
     let mut value = Operand::Value(function.instruction(new_load).result.expect("a value"));
     if context.types.int_bits(zext_type) != Some(lops.load_size as u32) {
-        let extended = function.create_instruction(
-            Opcode::Cast(CastOp::ZExt),
-            zext_type,
-            vec![value],
-            Flags::default(),
-            None,
-        );
+        let extended =
+            function.create_instruction(Opcode::Cast(CastOp::ZExt), zext_type, vec![value], Flags::default(), None);
         function.insert(extended, Position::Before(root_insert)).expect("a placed instruction");
         value = Operand::Value(function.instruction(extended).result.expect("a value"));
     }
@@ -487,7 +543,13 @@ fn merge_consecutive_part_stores(
     let at = Position::Before(first.store);
     if first.val_offset != 0 {
         let amount = Operand::Constant(context.int(value_ty, i128::from(first.val_offset)));
-        let shifted = function.create_instruction(Opcode::Binary(BinaryOp::LShr), value_ty, vec![value, amount], Flags::default(), None);
+        let shifted = function.create_instruction(
+            Opcode::Binary(BinaryOp::LShr),
+            value_ty,
+            vec![value, amount],
+            Flags::default(),
+            None,
+        );
         function.insert(shifted, at).expect("a placed instruction");
         value = Operand::Value(function.instruction(shifted).result.expect("a value"));
     }
@@ -498,8 +560,13 @@ fn merge_consecutive_part_stores(
         function.insert(cast, at).expect("a placed instruction");
         value = Operand::Value(function.instruction(cast).result.expect("a value"));
     }
-    let store =
-        function.create_instruction(Opcode::Store { align, volatile: false }, void, vec![value, pointer], Flags::default(), None);
+    let store = function.create_instruction(
+        Opcode::Store { align, volatile: false },
+        void,
+        vec![value, pointer],
+        Flags::default(),
+        None,
+    );
     function.insert(store, at).expect("a placed instruction");
     for part in parts {
         function.erase(part.store).expect("a store nothing reads");
@@ -529,7 +596,8 @@ fn merge_part_stores(
         let ptr_from_first = part.offset - parts[first].offset;
         let val_from_first = i128::from(part.val_offset) - i128::from(parts[first].val_offset);
         if ptr_from_first * 8 != val_from_first || last_end_from_first != val_from_first {
-            changed |= merge_consecutive_part_stores(context, layout, function, &parts[first..at], last_end_from_first as u64);
+            changed |=
+                merge_consecutive_part_stores(context, layout, function, &parts[first..at], last_end_from_first as u64);
             first = at;
             last_end_from_first = i128::from(part.width);
             continue;
