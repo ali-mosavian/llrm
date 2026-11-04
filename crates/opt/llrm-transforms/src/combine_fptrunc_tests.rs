@@ -134,6 +134,23 @@ declare double @llvm.fabs.f64(double)
     assert!(after.contains("call float @llvm.fabs.f32(float %"), "{after}");
 }
 
+/// The tip stopped building when `FloatKind::F128` arrived (`unary_name` had no
+/// arm for it). `(double)(-q)` on an `fp128` hoists the `fneg` like any width.
+#[test]
+fn test_fptrunc_of_a_negated_quad_negates_the_narrow_value() {
+    let after = combined(
+        "define double @f(fp128 %q) {
+b0:
+  %n = fneg fp128 %q
+  %r = fptrunc fp128 %n to double
+  ret double %r
+}
+",
+    );
+    let (trunc, neg) = (after.find("fptrunc"), after.find("fneg double"));
+    assert!(trunc.is_some() && neg.is_some() && trunc < neg, "{after}");
+}
+
 /// A rounding intrinsic narrows only when its input is an `fpext` from the
 /// destination type: `(float)floor((double)f)`.
 #[test]

@@ -651,6 +651,42 @@ impl Tti for X86 {
         self.real_mode.as_ref().map_or(100, |real| real.float_code_size_percent)
     }
 
+    // X86TTIImpl::enableMemCmpExpansion
+    // (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L7513).
+    // DEVIATE X1 (exit 2026-11-30, same permalink): the 16-, 32- and 64-byte
+    // vector load sizes of an equality compare are left out (vectors are
+    // deferred); the pin takes them from `getPreferVectorWidth`.
+    fn enable_mem_cmp_expansion(
+        &self,
+        _opt_size: bool,
+        is_zero_cmp: bool,
+    ) -> Option<MemCmpExpansionOptions> {
+        let mut load_sizes = Vec::new();
+        if self.quad {
+            load_sizes.push(8);
+        }
+        load_sizes.extend([4, 2, 1]);
+        Some(MemCmpExpansionOptions {
+            load_sizes,
+            // X86ISelLowering.cpp#L2946: MaxLoadsPerMemcmp and its OptSize twin.
+            max_num_loads: 2,
+            num_loads_per_block: if is_zero_cmp { 2 } else { 1 },
+            allow_overlapping_loads: true,
+            allowed_tail_expansions: Vec::new(),
+        })
+    }
+
+    // X86TargetLowering::allowsMisalignedMemoryAccesses
+    // (X86ISelLoweringCall.cpp#L371): any size, but a non-temporal vector.
+    fn allows_misaligned_memory_accesses(
+        &self,
+        _bits: u32,
+        _address_space: u32,
+        _align: u64,
+    ) -> bool {
+        true
+    }
+
     // X86TTIImpl::hasDivRemOp (X86TargetTransformInfo.cpp#L7421) asks
     // `isOperationLegal(SDIVREM/UDIVREM, VT)`; X86ISelLowering sets the scalar
     // divides to `Expand` (L340) and leaves the two-result ones at the base

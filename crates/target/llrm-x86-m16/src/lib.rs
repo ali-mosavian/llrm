@@ -617,6 +617,7 @@ mod tuning_tests {
                 multiply_by_clocks: false,
                 price_pin_multiplies: false,
                 speed_milliclocks_per_byte: 0,
+                price_fills: false,
                 unroll_threshold: None,
                 unroll_max_percent_threshold_boost: None,
                 unroll_partial_threshold: None,

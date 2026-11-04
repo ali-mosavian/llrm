@@ -3,7 +3,7 @@
 //! between the two, so the view keeps the original [`MFunc`] and writes the
 //! allocator's registers into it.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use llrm_lir::registers::{RegId, Regs};
@@ -109,7 +109,7 @@ fn content(op: &Op) -> i64 {
 /// `add` and of its `adrp`. As one instruction the allocator can make the
 /// address again where it is needed instead of spilling it.
 fn address_pairs(function: &MFunc) -> Vec<HashMap<usize, usize>> {
-    let mut seen: HashMap<Reg, (u32, u32)> = HashMap::new();
+    let mut seen: HashMap<Reg, (u32, u32)> = HashMap::default();
     for op in function.blocks.iter().flat_map(|block| &block.ops) {
         let mut op = op.clone();
         op.visit(&mut |register, role| {
@@ -128,8 +128,8 @@ fn address_pairs(function: &MFunc) -> Vec<HashMap<usize, usize>> {
         .blocks
         .iter()
         .map(|block| {
-            let mut pages: HashMap<Reg, (usize, &Target)> = HashMap::new();
-            let mut pairs = HashMap::new();
+            let mut pages: HashMap<Reg, (usize, &Target)> = HashMap::default();
+            let mut pairs = HashMap::default();
             for (at, op) in block.ops.iter().enumerate() {
                 match op {
                     Op::I(Inst::Adr { page: true, rd, target, got: false })
@@ -294,13 +294,13 @@ pub fn rebuild(
     assignment: &Assignment,
     spill_slots: &[(i32, Class)],
 ) {
-    let mut originals: HashMap<i64, Op> = HashMap::new();
+    let mut originals: HashMap<i64, Op> = HashMap::default();
     for op in function.blocks.iter().flat_map(|block| &block.ops) {
         originals.entry(content(op)).or_insert_with(|| op.clone());
     }
     // The fused `MOVaddr`s stand under the content `view` gave them.
     let pairs = address_pairs(function);
-    let mut fused: HashMap<i64, Op> = HashMap::new();
+    let mut fused: HashMap<i64, Op> = HashMap::default();
     for (block, pairs) in function.blocks.iter().zip(&pairs) {
         for &add in pairs.keys() {
             fused.entry(content(&block.ops[add]).wrapping_add(1)).or_insert_with(|| block.ops[add].clone());
@@ -309,7 +309,7 @@ pub fn rebuild(
     // The place of each operation, by the number `view` gave it.
     let places: Vec<_> =
         function.blocks.iter().flat_map(|block| (0..block.ops.len()).map(|at| block.ops.loc(at))).collect();
-    let mut slots: HashMap<i32, u32> = HashMap::new();
+    let mut slots: HashMap<i32, u32> = HashMap::default();
     for (slot, class) in spill_slots {
         let (size, align) = if *class == Class::Quad { (16, 16) } else { (8, 8) };
         slots.insert(*slot, function.slot(size, align));

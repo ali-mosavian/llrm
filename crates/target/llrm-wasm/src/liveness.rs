@@ -2,7 +2,7 @@
 //! edge split, `RegStackify` and `RegColoring` ask (`LiveVariables` and
 //! `LiveIntervals` in the pin).
 
-use std::collections::HashSet;
+use llrm_support::hash::HashSet;
 
 use crate::mir::{Function, Operand, PHI, VReg};
 
@@ -11,7 +11,7 @@ use crate::mir::{Function, Operand, PHI, VReg};
 /// predecessor, and is live into it when defined before.
 pub fn liveness(f: &Function) -> (Vec<HashSet<VReg>>, Vec<HashSet<VReg>>) {
     let n = f.blocks.len();
-    let (mut used, mut defined) = (vec![HashSet::new(); n], vec![HashSet::new(); n]);
+    let (mut used, mut defined) = (vec![HashSet::default(); n], vec![HashSet::default(); n]);
     for (b, block) in f.blocks.iter().enumerate() {
         for inst in block {
             if inst.opcode != PHI {
@@ -42,7 +42,7 @@ pub fn liveness(f: &Function) -> (Vec<HashSet<VReg>>, Vec<HashSet<VReg>>) {
             }
         }
     }
-    let (mut live_in, mut live_out) = (used.clone(), vec![HashSet::new(); n]);
+    let (mut live_in, mut live_out) = (used.clone(), vec![HashSet::default(); n]);
     loop {
         let mut changed = false;
         for b in (0..n).rev() {
