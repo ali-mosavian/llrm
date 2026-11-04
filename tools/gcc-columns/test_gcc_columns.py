@@ -131,6 +131,31 @@ def test_gcc_leads_takes_the_lower_of_the_two_columns():
     assert [(x[1], [d[:3] for d in x[2]]) for x in L.leads(m, [a])] == [(("p", "Os"), [("B", 90, 100)])]
 
 
+def test_vs_6502_bar_is_the_lower_of_both_gcc_columns():
+    """vs_6502.py read only 6502-gcc.tsv: a cell the gcc-noivopts-Os column wins (memchr, minmax, sum16 -Os) showed the worse number."""
+    import subprocess
+    d = tempfile.mkdtemp()
+    h = "target\tprog\tlevel\tcompiler\tcode_bytes\tclocks\tinstrs\tnote\n"
+    open(f"{d}/6502.tsv", "w").write(h + "6502\tp\tOs\tours\t120\t1500\t300\t\n")
+    open(f"{d}/6502-gcc.tsv", "w").write(h + "6502\tp\tOs\tgcc\t100\t1200\t310\t\n")
+    open(f"{d}/6502-gcc.noivopts.tsv", "w").write(h + "6502\tp\tOs\tgcc-noivopts-Os\t110\t900\t320\t\n")
+    out = f"{d}/vs.md"
+    subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "vs_6502.py"), d, out, "2026-11-04"], check=True)
+    row = next(l for l in open(out) if l.startswith("| p |"))
+    assert row.split("|")[2:4] == [" 100 ", " 900 "], row
+
+
+def test_softfloat_z80_table_is_complete_and_current():
+    """The 11-03 table was measured from the removed monolithic sf32.c; it stayed in the repo marked STALE.
+    A table needs 32 gcc clk cells (2 variants x 2 levels x 8 ops), 4 library sizes and the cc1 md5, and no STALE mark."""
+    t = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "tables", "softfloat-z80.tsv")).read()
+    head = [l for l in t.splitlines() if l.startswith("#")]
+    assert not any("STALE" in l for l in head), "stale table"
+    assert re.search(r"cc1 md5 [0-9a-f]{32}", head[0]) and "runtime/compiler-rt" in head[0]
+    rows = [l.split("\t") for l in t.splitlines() if l.startswith("gcc\t")]
+    assert sum(r[3] == "clk" for r in rows) == 32 and sum(r[3] == "bytes" for r in rows) == 4
+
+
 def test_softfloat_6502_clocks_divide_by_the_records_run():
     """The 11-03 6502 softfloat table divided by 256 although add/sub/mul/div ran 361 records, and subtracted a base run that
     failed its records: hand add read 570 for 324. Records come from the vec.inc that ran, and the base run must pass."""

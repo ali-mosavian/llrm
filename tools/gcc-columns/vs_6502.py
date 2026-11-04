@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""gcc column vs the other NMOS columns of matrix/6502.tsv -> markdown. usage: vs_6502.py MATRIX_DIR OUT.md DATE"""
+"""gcc columns (best of 6502-gcc.tsv and 6502-gcc.noivopts.tsv) vs the other columns of 6502.tsv -> markdown. usage: vs_6502.py MATRIX_DIR OUT.md DATE [65c02]"""
 import collections, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 d, out, date = sys.argv[1:4]
@@ -13,21 +13,26 @@ def rows(p):
         f = l.rstrip('\n').split('\t'); yield f + [''] * (8 - len(f))
 g = collections.defaultdict(list)
 flagged = set()
-for t, p, l, c, b, k, i, n in rows(f'{d}/6502-gcc.tsv'):
-    if c != GCC or not b:
+# Both gcc columns (committed cc1, and gcc-noivopts-Os) go in: the bar is the lower of the two per metric.
+for gf in ('6502-gcc.tsv', '6502-gcc.noivopts.tsv'):
+    if not os.path.exists(f'{d}/{gf}'):
         continue
-    if n.startswith(("hand helper", "table")):
-        flagged.add(p)   # not a compiler win: left out of the comparison
-    else:
-        g[p].append((int(b), int(k), int(i) if i else None))
+    for t, p, l, c, b, k, i, n in rows(f'{d}/{gf}'):
+        if c.split('-noivopts')[0] != GCC or not b:
+            continue
+        if n.startswith(("hand helper", "table")):
+            flagged.add(p)   # not a compiler win: left out of the comparison
+        else:
+            g[p].append((int(b), int(k), int(i) if i else None))
 o = collections.defaultdict(dict)
 for t, p, l, c, b, k, i, n in rows(f'{d}/6502.tsv'):
     if c in NAMES.values() and b and k:
         c = {v: k_ for k_, v in NAMES.items()}[c]
         x = o[p].setdefault(c, [10**9, 10**9, 10**9]); x[0] = min(x[0], int(b)); x[1] = min(x[1], int(k))
         if i: x[2] = min(x[2], int(i))
+OURS = open(f"{d}/6502.tsv").readline().lstrip("# ").split(";")[0].strip()
 L = [f"# gcc 6502 vs the other {'65C02' if cmos else 'NMOS'} columns, {date}", "",
-     "gcc = best of -O1/-O2/-Os per metric (bytes and clocks separately), bytes include the helpers it calls; others = min over the levels in matrix/6502.tsv. Same corpus and method. Instruction counts: the sim65-insns column of each (llvm-mos has none).", "",
+     f"gcc = best of -O1/-O2/-Os and of both gcc columns (cc1 md5 4c91eb80 gcc, 75c808c2 gcc-noivopts-Os) per metric (bytes and clocks separately), bytes include the helpers it calls; others = min over the levels in matrix/6502.tsv ({OURS}). Same corpus and method. Instruction counts: the sim65-insns column of each (llvm-mos has none).", "",
      "| prog | gcc B | gcc clk | gcc insn | ours B/clk/insn | llvm-mos B/clk | sdcc B/clk/insn | cc65 B/clk/insn | gcc beats the best other |", "|---|---|---|---|---|---|---|---|---|"]
 wb = wc = n = 0
 for p in g:
