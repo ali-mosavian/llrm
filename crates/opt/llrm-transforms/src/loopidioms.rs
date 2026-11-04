@@ -198,6 +198,8 @@ impl FunctionPass for LoopIdioms {
 /// that a pair of constants is not made one dword store under `-Os`.
 pub struct Merge {
     pub size: bool,
+    /// Also the wider stores (`mergestores`), not only the memsets.
+    pub widen: bool,
 }
 
 impl FunctionPass for Merge {
@@ -213,7 +215,8 @@ impl FunctionPass for Merge {
         let memset =
             crate::memcpyoptimizer::run_impl(unit.context, unit.layout, unit.function, analyses.outer(), unit.declared);
         let bytes = analyses.outer().target().size_costs();
-        let copies = !llrm_support::env_flag!("LLRM_NO_MERGE_COPIES")
+        let copies = self.widen
+            && !llrm_support::env_flag!("LLRM_NO_MERGE_COPIES")
             && crate::mergestores::merged_copies(
                 unit.context,
                 unit.layout,
@@ -222,14 +225,15 @@ impl FunctionPass for Merge {
                 analyses.outer(),
                 self.size.then(|| (&mut *unit.declared, &bytes)),
             );
-        let constants = crate::mergestores::merged_constants(
-            unit.context,
-            unit.layout,
-            analyses.outer().callees(),
-            unit.function,
-            analyses.outer(),
-            self.size,
-        );
+        let constants = self.widen
+            && crate::mergestores::merged_constants(
+                unit.context,
+                unit.layout,
+                analyses.outer().callees(),
+                unit.function,
+                analyses.outer(),
+                self.size,
+            );
         if constants | memset | copies { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
 }
