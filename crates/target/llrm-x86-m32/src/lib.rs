@@ -94,6 +94,7 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // estimate becomes gcc's own size count (translated, not fitted).
         recursive_edge_growth: Some((12, 22)),
         peel_folded_entry: true,
+        sink_select_arms: true,
         ..llrm_mir::target::Tuning::PIN
     }
 }
