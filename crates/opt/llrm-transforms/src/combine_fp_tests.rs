@@ -191,3 +191,75 @@ join:
     assert!(after.contains("fmul float %x, 6.400000e+01"), "the other arm multiplies in its block: {after}");
     assert!(!after.contains("fmul float %p"), "{after}");
 }
+
+/// A chain `t += s_k` over guarded sums (x86_fp80, whose constants
+/// `computeKnownFPClass` did not know): `p = phi(+0.0, x + 0.0)` is never
+/// -0.0, so `0.0 + p` is `p` and `p + phi(+0.0, y + 0.0)` folds into the
+/// arm of the second phi (the pin's instcombine). Left alone, every add of an
+/// unrolled `t += ld_sum(..)` sank to the end of the function: 8 live x87
+/// sums, 3 spills where the pin has 1 (x_ld_sum -O2).
+#[test]
+fn a_sum_chain_over_zero_started_phis_folds_into_the_arms() {
+    let mut module = parsed(
+        "define x86_fp80 @f(i1 %g, x86_fp80 %x, x86_fp80 %y) {
+entry:
+  br i1 %g, label %l0, label %m0
+l0:
+  %a = fadd x86_fp80 %x, 0.0
+  br label %m0
+m0:
+  %p0 = phi x86_fp80 [ 0.0, %entry ], [ %a, %l0 ]
+  %t0 = fadd x86_fp80 0.0, %p0
+  br i1 %g, label %l1, label %m1
+l1:
+  %b = fadd x86_fp80 %y, 0.0
+  br label %m1
+m1:
+  %p1 = phi x86_fp80 [ 0.0, %m0 ], [ %b, %l1 ]
+  %t1 = fadd x86_fp80 %t0, %p1
+  ret x86_fp80 %t1
+}
+",
+    );
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit);
+    let after = printed(&module);
+    assert!(after.contains("fadd x86_fp80 %p0, %b"), "the add moved into the arm of the second phi: {after}");
+    assert!(!after.contains("%t1"), "{after}");
+}
+
+/// `fadd nsz p0, p1` where `p0` cannot take the operation (`p1` is defined
+/// below it) but `p1` can: operand 1 got no turn once operand 0 was a phi that
+/// did not fold, so a chain `t += phi(..)` of guarded sums kept all its adds
+/// at the end (x_ld_sum -O2: 8 live x87 sums, the pin's 7).
+#[test]
+fn a_binop_of_two_phis_tries_the_second_when_the_first_does_not_fold() {
+    let mut module = parsed(
+        "define float @f(i1 %g, float %x, float %y) {
+entry:
+  br i1 %g, label %l0, label %m0
+l0:
+  %a = fmul float %x, 3.0
+  br label %m0
+m0:
+  %p0 = phi float [ 0.0, %entry ], [ %a, %l0 ]
+  br i1 %g, label %l1, label %m1
+l1:
+  %b = fmul float %y, 3.0
+  br label %m1
+m1:
+  %p1 = phi float [ 0.0, %m0 ], [ %b, %l1 ]
+  %t = fadd nsz float %p0, %p1
+  ret float %t
+}
+",
+    );
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit);
+    let after = printed(&module);
+    assert!(after.contains("fadd nsz float %p0, %b"), "the add moved into the arm of the second phi: {after}");
+}
