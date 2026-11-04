@@ -9,6 +9,7 @@ use llrm_dagisel::x86_hooks::find_non_imm_use;
 
 use super::addr::{self, ADDR32, ADDR64};
 use super::generated::{instrinfo, wasm_wasm32, wasm_wasm64};
+use crate::features::Features;
 
 /// The CPUs the tables are generated for; they differ in the address width.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,11 +18,26 @@ pub enum Cpu {
     Wasm64,
 }
 
-/// No pattern predicate of the wasm tables is decided at selection time: the
-/// features are baked into each table.
-struct NoDynamicPredicates;
+pub struct WasmHooks {
+    cpu: Cpu,
+    features: Features,
+    /// `OptLevel == CodeGenOptLevel::None`: nothing folds.
+    opt_none: bool,
+}
 
-impl PatternContext for NoDynamicPredicates {
+impl WasmHooks {
+    pub fn new(
+        cpu: Cpu,
+        features: Features,
+        opt_none: bool,
+    ) -> WasmHooks {
+        WasmHooks { cpu, features, opt_none }
+    }
+}
+
+/// The wasm tables decide the subtarget features of the function when they
+/// select it.
+impl PatternContext for WasmHooks {
     fn should_opt_for_size(&self) -> bool {
         false
     }
@@ -34,20 +50,18 @@ impl PatternContext for NoDynamicPredicates {
     fn is_legal_to_call_immediate_addr(&self) -> bool {
         false
     }
-}
-
-pub struct WasmHooks {
-    cpu: Cpu,
-    /// `OptLevel == CodeGenOptLevel::None`: nothing folds.
-    opt_none: bool,
-}
-
-impl WasmHooks {
-    pub fn new(
-        cpu: Cpu,
-        opt_none: bool,
-    ) -> WasmHooks {
-        WasmHooks { cpu, opt_none }
+    fn has_feature(
+        &self,
+        name: &str,
+    ) -> bool {
+        let name = match name {
+            "BulkMemoryOpt" => "bulk-memory-opt",
+            "ReferenceTypes" => "reference-types",
+            "SignExt" => "sign-ext",
+            "NontrappingFPToInt" => "nontrapping-fptoint",
+            _ => panic!("the wasm tables name no feature {name}"),
+        };
+        self.features.has(name)
     }
 }
 
@@ -64,8 +78,8 @@ impl<D: AddrDag> Hooks<D> for WasmHooks {
         predicate: u16,
     ) -> bool {
         match self.cpu {
-            Cpu::Wasm32 => wasm_wasm32::pattern_predicate(&NoDynamicPredicates, predicate),
-            Cpu::Wasm64 => wasm_wasm64::pattern_predicate(&NoDynamicPredicates, predicate),
+            Cpu::Wasm32 => wasm_wasm32::pattern_predicate(self, predicate),
+            Cpu::Wasm64 => wasm_wasm64::pattern_predicate(self, predicate),
         }
     }
 

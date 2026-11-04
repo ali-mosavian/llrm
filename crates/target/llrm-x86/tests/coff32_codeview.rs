@@ -34,6 +34,7 @@ fn public(
         definition: Definition::Defined { section, offset },
         size: 0,
         group: None,
+        visibility: Default::default(),
     }
 }
 
@@ -130,6 +131,7 @@ fn object() -> Described {
         }],
         frame: Vec::new(),
         all_calls: false,
+        frame_base: None,
         calls: Vec::new(),
     };
     let info = Info {

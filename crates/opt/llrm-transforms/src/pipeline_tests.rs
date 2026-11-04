@@ -1047,6 +1047,73 @@ done:
     );
 }
 
+/// The jammed copies of a sweep are cleaned once (DEVIATE D8 of the jam): the
+/// copies read and write the same cells under three counters that count
+/// alike, so with the counters one and the repeats forwarded, a jammed trip
+/// stores each array once. Before, every copy kept its own load and store.
+#[test]
+fn a_jammed_sweep_is_one_add_of_the_repeated_cell() {
+    let cells = |base: i32| (0..100).map(|at| format!("i16 {}", base + at % 7)).collect::<Vec<_>>().join(", ");
+    let text = m16_ir(&format!(
+        "target datalayout = \"@m16-datalayout@\"
+@p = global [100 x i16] [{}]
+@v = global [100 x i16] [{}]
+
+define i16 @main() {{
+b0:
+  br label %outer
+
+outer:
+  %t = phi i16 [ 0, %b0 ], [ %tn, %outerlatch ]
+  %go = icmp slt i16 %t, 60
+  br i1 %go, label %pre, label %done
+
+pre:
+  br label %inner
+
+inner:
+  %j = phi i16 [ 0, %pre ], [ %jn, %body ]
+  %more = icmp slt i16 %j, 100
+  br i1 %more, label %body, label %outerlatch
+
+body:
+  %o = mul i16 %j, 2
+  %pp = getelementptr i8, ptr @p, i16 %o
+  %pv = getelementptr i8, ptr @v, i16 %o
+  %a = load i16, ptr %pp
+  %b = load i16, ptr %pv
+  %s = add i16 %a, %b
+  store i16 %s, ptr %pp
+  %jn = add i16 %j, 1
+  br label %inner
+
+outerlatch:
+  %tn = add i16 %t, 1
+  br label %outer
+
+done:
+  %q = getelementptr i8, ptr @p, i16 40
+  %w = load i16, ptr %q
+  ret i16 %w
+}}
+",
+        cells(1),
+        cells(3)
+    ));
+    let mut module = llrm_analysis::testing::parsed(&text);
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program| {
+        pipeline::applied(program, &Applied { options: pipeline::Options::speed(), ..Applied::default() })
+    })
+    .and_then(|done| done)
+    .unwrap();
+    let after = llrm_mir::print::module(&module);
+    // The eight sweeps of the jammed trip are one add of eight times the
+    // cell: `p += 8 * v`, one load and one store of each array's cell.
+    let body = after.split("\nbody:").nth(1).and_then(|rest| rest.split("\n\n").next()).unwrap_or_default();
+    assert!(body.contains("shl i16 %b, 3"), "{after}");
+    assert_eq!(body.matches("store i16").count(), 1, "{after}");
+}
+
 /// Reads what the module says each function does to memory, and finds nothing
 /// to do; counts how often it was asked.
 struct ReadsCallees {
@@ -2799,4 +2866,41 @@ fn cgpaddr_is_left_out_by_its_option_and_not_by_the_environment() {
     assert!(pipeline::Options::default().wanted("cgpaddr"));
     let options = pipeline::Options { cgpaddr: false, ..pipeline::Options::default() };
     assert!(!options.wanted("cgpaddr"));
+}
+
+/// The target's price of a code byte at speed counts at -O2 and -O3 only: at
+/// -O1 and -Os every metric is gated by itself. m32's derived price made the
+/// pattern fill at -O1 take lru 127 -> 148 clocks for 32 B (a net loss at the
+/// price).
+#[test]
+fn the_byte_price_at_speed_counts_at_o2_and_o3_only() {
+    use pipeline::Options;
+    assert!(Options::standard().prices_bytes() && Options::aggressive().prices_bytes());
+    assert!(!Options::basic().prices_bytes() && !Options::size().prices_bytes());
+}
+
+/// The pin's O1 function pipeline (PassBuilderPipelines.cpp L495) has no
+/// CorrelatedValuePropagation: recpow -O1 kept `srem i64 (mul nsw a, b), 30011`
+/// there, and ours narrowed it to i32 (arm64 -O1 recpow differed from the pin).
+#[test]
+fn test_o1_has_no_correlated_value_propagation() {
+    let text = "define i64 @f(i64 range(i64 -30010, 30011) %a, i64 range(i64 -30010, 30011) %b) {
+b:
+  %m = mul nsw i64 %a, %b
+  %r = srem i64 %m, 30011
+  ret i64 %r
+}
+";
+    let narrowed = |options: pipeline::Options| {
+        let mut module = crate::testing::parsed(text);
+        let applied = Applied { options, ..Applied::default() };
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program: &mut Program| {
+            pipeline::applied(program, &applied)
+        })
+        .and_then(|done| done)
+        .unwrap();
+        crate::testing::printed(&module).contains("srem i32")
+    };
+    assert!(narrowed(pipeline::Options::standard()), "premise: -O2 narrows it");
+    assert!(!narrowed(pipeline::Options::basic()), "-O1 narrowed with CVP, which the pin's O1 lacks");
 }

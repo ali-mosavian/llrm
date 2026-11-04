@@ -267,6 +267,7 @@ fn the_table_gives_the_effects_the_decoder_does() {
                             indirect: false,
                             table: Vec::new(),
                             repeat: false,
+                            table_id: None,
                             pops: None,
                         };
                         let one = Insn::new(0, None, None, vec![], vec![]);
@@ -346,6 +347,7 @@ fn the_table_follows_the_encoder_into_what_it_lowers_to() {
         indirect: false,
         table: Vec::new(),
         repeat: false,
+        table_id: None,
         pops: None,
     };
     let cases = [

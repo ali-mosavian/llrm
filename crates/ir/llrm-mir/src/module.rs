@@ -823,6 +823,14 @@ impl Function {
         self.uses.users(crate::uselist::Held::Value(value.0))
     }
 
+    /// The operand slots naming the interned `constant`.
+    pub fn constant_users(
+        &self,
+        constant: crate::context::ConstantId,
+    ) -> crate::uselist::Users<'_> {
+        self.uses.users(crate::uselist::Held::Constant(constant.index() as u32))
+    }
+
     /// The operand slots naming `block`: terminators'.
     pub fn block_users(
         &self,
@@ -1176,6 +1184,41 @@ pub const LINKAGE: [(Linkage, &str); 10] = [
     (Linkage::Appending, "appending"),
 ];
 
+/// A global's visibility (`GlobalValue::VisibilityTypes`): whether another
+/// module may bind the name once linking is done.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum Visibility {
+    #[default]
+    Default,
+    Hidden,
+    Protected,
+}
+
+pub const VISIBILITY: [(Visibility, &str); 2] = [(Visibility::Hidden, "hidden"), (Visibility::Protected, "protected")];
+
+/// `@name = linkage visibility alias type, ptr @aliasee`: a second name for a
+/// global (LLVM's `GlobalAlias`).
+///
+/// DEVIATE: a definition only. LLVM lets a `GlobalAlias` be a constant
+/// operand
+/// (https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/include/llvm/IR/GlobalAlias.h);
+/// the parser reads an operand that names an alias as its aliasee, which has
+/// the same address, and refuses one that names an alias a linker may replace
+/// (`weak`). No operand names an alias, so the analyses that say "MIR has no
+/// `GlobalAlias`" stay true. Exit: the first pass that must tell a call of an
+/// alias from a call of its aliasee.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Alias {
+    pub name: String,
+    pub linkage: Linkage,
+    pub visibility: Visibility,
+    pub unnamed_addr: UnnamedAddr,
+    pub address_space: u32,
+    /// The value type, as written before the comma.
+    pub ty: TypeId,
+    pub aliasee: GlobalId,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub enum UnnamedAddr {
     #[default]
@@ -1214,8 +1257,32 @@ pub struct GlobalName {
     intrinsic_id: Option<crate::valuetracking::pattern::IntrinsicId>,
 }
 
+/// Bumped each time a `GlobalName` is made from text: the fields are private,
+/// so a global's name changes only through one, and a table of names made at
+/// one count is current while the count stands.
+static NAMES_MADE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+static SYMBOL_BUILDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// How many symbol tables `Module::named` has made.
+pub fn symbol_builds() -> u64 {
+    SYMBOL_BUILDS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// `LLRM_CHECK_SYMBOLS` compares each lookup with a scan of the globals.
+fn checking_symbols() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_SYMBOLS"))
+}
+
+/// The count of `GlobalName`s made so far, in any module.
+pub fn names_made() -> u64 {
+    NAMES_MADE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 impl From<Option<String>> for GlobalName {
     fn from(text: Option<String>) -> Self {
+        NAMES_MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let intrinsic = text.as_deref().and_then(crate::intrinsics::Intrinsic::named);
         let intrinsic_id = text.as_deref().and_then(crate::valuetracking::pattern::intrinsic_id_of_name);
         GlobalName { text, intrinsic, intrinsic_id }
@@ -1252,17 +1319,30 @@ impl std::ops::Deref for GlobalName {
 pub struct GlobalValue {
     pub name: GlobalName,
     pub linkage: Linkage,
+    pub visibility: Visibility,
     pub unnamed_addr: UnnamedAddr,
     pub address_space: u32,
     pub kind: GlobalKind,
 }
 
+thread_local! {
+    static DECLARATIONS_MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many global declarations this thread has made, for a test that a
+/// pipeline does not list every global's for each function.
+pub fn declarations_made() -> usize {
+    DECLARATIONS_MADE.with(std::cell::Cell::get)
+}
+
 impl GlobalValue {
     /// This global as its declaration: a function without its body.
     pub fn declaration(&self) -> GlobalValue {
+        DECLARATIONS_MADE.with(|made| made.set(made.get() + 1));
         GlobalValue {
             name: self.name.clone(),
             linkage: self.linkage,
+            visibility: self.visibility,
             unnamed_addr: self.unnamed_addr,
             address_space: self.address_space,
             kind: match &self.kind {
@@ -1280,6 +1360,7 @@ impl GlobalValue {
     ) -> bool {
         self.name == declared.name
             && self.linkage == declared.linkage
+            && self.visibility == declared.visibility
             && self.unnamed_addr == declared.unnamed_addr
             && self.address_space == declared.address_space
             && match (&self.kind, &declared.kind) {
@@ -1338,12 +1419,43 @@ pub struct Metadata<'a> {
     pub special: &'a std::collections::BTreeMap<MetadataId, Special>,
 }
 
+/// The module's symbol table (LLVM's `ValueSymbolTable`): the first global of
+/// each name, made at the first lookup and used while no `GlobalName` has been
+/// made and no global added or removed since. A cache: never part of what two
+/// modules are equal by, and a clone starts without one.
+#[derive(Debug, Default)]
+pub struct SymbolIndex(std::sync::Mutex<Option<Symbols>>);
+
+#[derive(Debug)]
+struct Symbols {
+    made: u64,
+    len: usize,
+    ids: crate::hash::HashMap<String, GlobalId>,
+}
+
+impl Clone for SymbolIndex {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl PartialEq for SymbolIndex {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
+        true
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Module {
     pub context: Context,
     pub datalayout: Option<String>,
     /// Variables and functions, in definition order.
     pub globals: Vec<GlobalValue>,
+    /// The aliases, in definition order; no instruction names one.
+    pub aliases: Vec<Alias>,
     pub metadata: Vec<MetadataNode>,
     pub named_metadata: Vec<(String, Vec<MetadataId>)>,
     /// The nodes of `metadata` written as specialized metadata.
@@ -1354,6 +1466,8 @@ pub struct Module {
     /// The `section "NAME"` of a global, by its name (`#pragma data_seg`,
     /// `#pragma code_seg`). Printing does not carry it.
     pub sections: std::collections::BTreeMap<String, String>,
+    #[doc(hidden)]
+    pub symbols: SymbolIndex,
 }
 
 /// One operation of a `!DIExpression`.
@@ -1404,6 +1518,25 @@ pub enum DwUnary {
 }
 
 impl Module {
+    /// The line a function's `!DISubprogram` says its body starts at
+    /// (`scopeLine`, the line of the `{`): the line of the first row
+    /// (`DwarfDebug::beginFunctionImpl`).
+    pub fn subprogram_line(
+        &self,
+        function: &Function,
+    ) -> Option<u32> {
+        let (_, node) = function.metadata.iter().find(|(kind, _)| kind == "dbg")?;
+        let fields = &self.special.get(node)?.fields;
+        let at = fields.iter().position(|one| one == "scopeLine")?;
+        match self.metadata.get(node.0 as usize)?.operands.get(at)? {
+            MetadataOperand::Constant(value) => match self.context.get(*value).kind {
+                crate::context::ConstantKind::Int(number) => u32::try_from(number).ok(),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// The operations of the `!DIExpression` node `id`, `None` for any other
     /// node. An operation of a kind not listed stands as [`DwOp::Other`], with
     /// its operands.
@@ -1479,7 +1612,40 @@ impl Module {
         &self,
         name: &str,
     ) -> Option<GlobalId> {
-        self.globals.iter().position(|one| one.name.as_deref() == Some(name)).map(|at| GlobalId(at as u32))
+        let mut held = self.symbols.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (made, len) = (names_made(), self.globals.len());
+        let current = |table: &Symbols| table.made == made && table.len == len;
+        if held.as_ref().is_none_or(|table| !current(table)) {
+            *held = Some(self.symbols_made(made));
+        }
+        let mut found = held.as_ref().and_then(|table| table.ids.get(name).copied());
+        // A global that moved under a table made at this count and length:
+        // the table is made again.
+        if found.is_some_and(|id| self.globals[id.0 as usize].name.as_deref() != Some(name)) {
+            *held = Some(self.symbols_made(made));
+            found = held.as_ref().and_then(|table| table.ids.get(name).copied());
+        }
+        if checking_symbols() {
+            let scanned =
+                self.globals.iter().position(|one| one.name.as_deref() == Some(name)).map(|at| GlobalId(at as u32));
+            assert_eq!(found, scanned, "the symbol table differs from the globals for @{name}");
+        }
+        found
+    }
+
+    /// The first global of each name, at the count `made` of names made.
+    fn symbols_made(
+        &self,
+        made: u64,
+    ) -> Symbols {
+        SYMBOL_BUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut ids = crate::hash::HashMap::default();
+        for (at, global) in self.globals.iter().enumerate() {
+            if let Some(text) = global.name.as_deref() {
+                ids.entry(text.to_owned()).or_insert(GlobalId(at as u32));
+            }
+        }
+        Symbols { made, len: self.globals.len(), ids }
     }
 
     pub fn functions(&self) -> impl Iterator<Item = (GlobalId, &GlobalValue, &Function)> + '_ {
@@ -1529,11 +1695,31 @@ impl Module {
             }));
         }
         self.context.renumber_globals(&|global| renumbered[global.0 as usize]);
+        // An alias follows its aliasee, and goes with it.
+        self.aliases.retain_mut(|alias| match renumbered[alias.aliasee.0 as usize] {
+            Some(now) => {
+                alias.aliasee = now;
+                true
+            }
+            None => false,
+        });
         let mut at = 0;
         self.globals.retain(|_| {
             at += 1;
             renumbered[at - 1].is_some()
         });
+    }
+
+    /// An error where the module defines an alias and `target`'s writer emits
+    /// none: dropping the symbol would link as an undefined reference later.
+    pub fn refuse_aliases(
+        &self,
+        target: &str,
+    ) -> Result<(), String> {
+        match self.aliases.first() {
+            Some(alias) => Err(format!("{target} cannot emit the alias @{}", alias.name)),
+            None => Ok(()),
+        }
     }
 
     /// Whether the code is position independent: clang's "PIC Level" module

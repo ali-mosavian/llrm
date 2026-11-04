@@ -60,6 +60,8 @@ pub struct LoopIdiom {
     pub routines: Vec<llrm_mir::libfunc::Routine>,
     /// -Os or -Oz.
     pub for_size: bool,
+    /// -O2 and -O3: the target's byte price at speed counts.
+    pub speed_rate: bool,
 }
 
 impl LoopIdiom {
@@ -77,6 +79,7 @@ impl LoopIdiom {
             library: Library { memset: true, memset_pattern16: false, memcpy: true },
             routines,
             for_size: false,
+            speed_rate: true,
         }
     }
 }
@@ -126,13 +129,19 @@ impl FunctionPass for LoopIdiom {
         if headers.is_empty() {
             return PreservedAnalyses::all();
         }
-        let outer = std::rc::Rc::clone(analyses.outer());
+        let mut outer = std::rc::Rc::clone(analyses.outer());
         let name = unit
             .id
             .and_then(|id| outer.globals.get(id.0 as usize))
             .and_then(|global| global.name.owned())
             .unwrap_or_default();
-        let assumptions = AssumptionCache::of(unit.context, &outer.globals, unit.metadata, unit.function);
+        let assumptions = AssumptionCache::of_declared(
+            unit.context,
+            &outer.globals,
+            unit.metadata,
+            unit.function,
+            unit.declared.assume_declared(&outer.globals),
+        );
         let env = Env {
             globals: &outer.globals,
             metadata: unit.metadata,
@@ -142,14 +151,13 @@ impl FunctionPass for LoopIdiom {
             assumptions: &assumptions,
         };
         let tti = outer.target().tti();
-        let provider = BasicAaProvider { layout: unit.layout, metadata: unit.metadata, globals: &outer.globals };
         let mark = unit.function.mark();
         let held = analyses.get::<llrm_analysis::scev::analysis::Scevs>(unit.context, unit.layout, unit.function);
         let mut se = held.take();
         // DEVIATE: a target that weighs bytes against clocks at speed (m16:
         // 1 clock = 2 B) prices a fill by the bytes it adds as `-Os` does, and
         // its clocks at that rate. Exit: none.
-        let rate = tti.as_deref().map_or(0, |tti| tti.speed_milliclocks_per_byte());
+        let rate = tti.as_deref().filter(|_| self.speed_rate).map_or(0, |tti| tti.speed_milliclocks_per_byte());
         let size_costs = (self.for_size || rate > 0).then(|| outer.target().size_costs());
         let clock_costs = if self.for_size {
             Some((outer.target().costs(), outer.target().size_milliclocks_per_byte())).filter(|(_, rate)| *rate > 0)
@@ -160,6 +168,15 @@ impl FunctionPass for LoopIdiom {
         let mut changed = false;
         for header in headers {
             let cur_loop = loops.get_loop_for(header).expect("a loop");
+            let env = Env {
+                globals: &outer.globals,
+                metadata: unit.metadata,
+                layout: unit.layout,
+                loops: &loops,
+                tree: &tree,
+                assumptions: &assumptions,
+            };
+            let provider = BasicAaProvider { layout: unit.layout, metadata: unit.metadata, globals: &outer.globals };
             let mut run = Run {
                 name: &name,
                 env: &env,
@@ -188,6 +205,13 @@ impl FunctionPass for LoopIdiom {
                     se.forget_loop(&cx, header);
                 }
             }
+            // A function this loop declared (`llvm.memset`) is the callee of
+            // the calls it made, as `getOrInsertDeclaration` makes
+            // it at once: the loops after it read the call as the
+            // intrinsic it is, not as one that may throw and not
+            // return.
+            analyses.declared(&*unit.context, &*unit.declared);
+            outer = std::rc::Rc::clone(analyses.outer());
         }
         if changed && unit.function.mark() != mark {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()

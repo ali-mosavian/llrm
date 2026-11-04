@@ -172,11 +172,18 @@ impl Coalescer {
                 pins,
                 size: self.size,
                 keep_pinned: false,
+                joins_global_copies: true,
+                joins_pinned_copies: true,
+                joins_sub_registers: true,
                 aliases: Default::default(),
                 should_join: Box::new(|_| true),
                 freq: Vec::new(),
                 remat: None,
                 remat_wins: None,
+                regs: None,
+                kind_of: None,
+                kinds: Default::default(),
+                check_kinds: false,
             },
             depth,
         ))
@@ -209,7 +216,7 @@ mod tests {
         value: u32,
         width: u32,
     ) -> Loc {
-        Loc::Held(Held { value, width })
+        Loc::Held(Held { value, width, offset: 0 })
     }
 
     fn _move(

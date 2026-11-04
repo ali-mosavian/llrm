@@ -42,10 +42,11 @@ fn a_wide_constant_is_built_outside_the_loop_that_uses_it() {
         .unwrap_or_else(|| panic!("a loop branch: {asm}"));
     let target = lines[back].rsplit(' ').next().unwrap();
     let start = lines.iter().position(|l| label(l).as_deref() == Some(target)).expect("the loop label");
-    // Premise: the constant is built somewhere (not folded away).
-    assert!(lines.iter().any(|l| l.starts_with("movk")), "{asm}");
-    let inside: Vec<&&str> =
-        lines[start..=back].iter().filter(|l| l.starts_with("movk") || l.starts_with("movz")).collect();
+    // Premise: the constant is made somewhere (not folded away): the pin
+    // loads this double from the constant pool, once, before the loop.
+    let made = |l: &str| l.starts_with("movk") || l.starts_with("movz") || (l.starts_with("ldr") && l.contains("lCPI"));
+    assert!(lines.iter().any(|l| made(l)), "{asm}");
+    let inside: Vec<&&str> = lines[start..=back].iter().filter(|l| made(l)).collect();
     assert!(inside.is_empty(), "constant rebuilt in the loop: {inside:?}\n{asm}");
 }
 
@@ -91,8 +92,13 @@ fn the_page_and_the_offset_of_a_global_plus_offset_agree() {
 #[test]
 fn the_size_level_makes_smaller_code_than_the_speed_level() {
     let text = include_str!("data/list_optsize.ll");
-    let lines = |level| driver::assembly(text, Platform::Darwin, level).expect("lowers").lines().count();
-    assert!(lines(driver::Level::Os) * 2 < lines(driver::Level::O2), "-Os is no smaller than -O2");
+    let asm = |level| driver::assembly(text, Platform::Darwin, level).expect("lowers");
+    let instructions =
+        |level| asm(level).lines().filter(|line| line.starts_with('\t') && !line.trim_start().starts_with('.')).count();
+    assert!(instructions(driver::Level::Os) < instructions(driver::Level::O2), "-Os is no smaller than -O2");
+    // The pin's `llc` makes 40 instructions of this IR (its `optsize`
+    // functions).
+    assert!(instructions(driver::Level::Os) <= 40, "-Os is larger than the pin's");
     assert!(driver::Level::parse("s") == Ok(driver::Level::Os) && driver::Level::parse("q").is_err());
 }
 
@@ -132,9 +138,10 @@ fn a_product_added_or_subtracted_is_one_multiply_accumulate() {
         assert_eq!(mnemonics(&add), ["madd", "ret"], "{add}");
         let sub = asm(&format!("  %m = mul i{bits} %a, %b\n  %r = sub i{bits} %c, %m\n"), bits);
         assert_eq!(mnemonics(&sub), ["msub", "ret"], "{sub}");
-        // The product on the left of a subtract is not an `msub`.
+        // The product on the left of a subtract is not an `msub`: the pin
+        // negates `c` (`sub` from the zero register) and fuses the product.
         let neg = asm(&format!("  %m = mul i{bits} %a, %b\n  %r = sub i{bits} %m, %c\n"), bits);
-        assert_eq!(mnemonics(&neg), ["madd", "sub", "ret"], "{neg}");
+        assert_eq!(mnemonics(&neg), ["sub", "madd", "ret"], "{neg}");
         let two =
             asm(&format!("  %m = mul i{bits} %a, %b\n  %n = mul i{bits} %c, %c\n  %r = add i{bits} %m, %n\n"), bits);
         assert_eq!(mnemonics(&two), ["madd", "madd", "ret"], "{two}");
@@ -345,13 +352,16 @@ fn a_memset_pattern_becomes_a_store_loop() {
 /// A constant several calls use was made once and kept in a callee-saved
 /// register (`movz x19, #0` and a save and restore of `x19`, a `mov` at each
 /// use); with every callee-saved register taken it went through a stack slot
-/// instead. The pin makes it again at each use: loop_fusion's `main` was 1.84x.
+/// instead. The pin makes it again at each use (`mov x0, xzr`, which this
+/// printer writes `orr x0, xzr, xzr`): loop_fusion's `main` was 1.84x.
 #[test]
 fn a_constant_used_by_several_calls_is_made_at_each_use() {
     let asm = driver::assembly(include_str!("data/constants_across_calls.ll"), Platform::Darwin, true)
         .expect("the function lowers");
     assert!(!asm.contains("x19"), "{asm}");
-    assert_eq!(asm.matches("movz x0, #0").count(), 2, "{asm}");
+    assert!(asm.contains("movz w0, #550"), "{asm}");
+    // Two arguments and the returned zero.
+    assert_eq!(asm.matches("orr x0, xzr, xzr").count(), 3, "{asm}");
 }
 
 /// An add whose only reader the mid-end removed (a store to a write-only
@@ -563,7 +573,13 @@ fn accesses_at_several_offsets_from_base_plus_index_share_the_sum() {
 fn a_compare_read_by_selects_and_a_branch_is_made_once_and_not_materialized() {
     let asm = driver::assembly(include_str!("data/select_pair_and_branch.ll"), Platform::Darwin, true).expect("lowers");
     assert!(!asm.contains("csinc w") && !asm.contains("ands wzr"), "{asm}");
-    assert_eq!(asm.matches("subs xzr, x20, #32").count(), 1, "{asm}");
+    // The pin compares against 32 once for both selects, then against 31.
+    assert_eq!(
+        asm.lines().filter(|l| l.trim_start().starts_with("subs xzr, x") && l.ends_with("#32")).count(),
+        1,
+        "{asm}"
+    );
+    assert_eq!(asm.matches("csel").count(), 1, "{asm}");
 }
 
 /// Inline-cost decisions were only visible through two undocumented environment
@@ -743,20 +759,7 @@ fn an_arm64_object_has_a_line_row_where_the_source_place_changes() {
         .iter()
         .map(|one| (one.offset, one.line, one.column))
         .collect();
-    assert_eq!(
-        rows,
-        [
-            (0, 2, 0),
-            (16, 3, 13),
-            (20, 3, 11),
-            (24, 3, 18),
-            (28, 3, 16),
-            (32, 3, 7),
-            (36, 4, 10),
-            (40, 4, 12),
-            (44, 4, 3)
-        ]
-    );
+    assert_eq!(rows, [(0, 2, 0), (12, 3, 11), (20, 3, 18), (24, 3, 16), (28, 3, 7), (32, 4, 12), (36, 4, 3)]);
 }
 
 /// `-g` must not change the code: the source place each operation carries

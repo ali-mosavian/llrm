@@ -1,0 +1,24 @@
+# m68k's CPU timings, one column a CPU. Read by `llrm-target`; `cpu_table`
+# hands a column to the compiler and the judge.
+#
+# What a byte of code is worth at speed: the instruction fetch of one bus
+# line, `line_fill_clocks` over `cache_line` bytes (`CpuTable::byte_rate`), the
+# dearest a byte can be in tables that otherwise price it at nothing (the 020 and
+# later tables assume instruction-cache hits). It is a bar, not a rate: a trade of N
+# extra bytes per clock saved passes only at N <= 1000 / byte_rate clocks. The 000
+# and 010 tables already charge every executed fetch, so their row is the
+# footprint price of a byte executed once.
+# 68000/010: MC68000UM 5.8 (printed 5-35): a bus cycle is four clocks for a word.
+# 68020: M68020UM 1984 ed., ch. 5 (printed near 5-51): three clocks, no wait
+#   states, for a longword; no burst. The 3rd ed. clock tables are the repo's.
+# 68040: MC68040UM 7.4.2 (printed 7-12): a burst line read is five clocks for a
+#   16 byte line, eight burst-inhibited.
+# 68060: MC68060UM 7.7.2 (printed 7-15), 10.3.3 (10-13): five clocks, 16 bytes.
+# 68030: MC68030UM 7.3.7 (printed 7-59): a burst fill is S0-S3, the two-clock
+#   synchronous read, then S4-S9, three more longwords a clock each (states are
+#   half clocks): five clocks for a 16 byte line.
+default_cpu           m68000
+cpus                  m68000 m68010 m68020 m68030 m68040 m68060
+march                 68000  68010  68020  68030  68040  68060
+cache_line                 2      2      4     16     16     16
+line_fill_clocks           4      4      3      5      5      5

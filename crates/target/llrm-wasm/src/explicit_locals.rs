@@ -4,7 +4,7 @@
 //!
 //! DEVIATE W7: not translated are inline asm operands, `FAKE_USE` and debug
 //! values. Reason: QB produces none. Exit: with wasm inline asm and debug
-//! info.
+//! info (undated, none planned).
 //!
 //! # See also
 //! `WebAssemblyExplicitLocals.cpp`, pin d1106deb71cc: `explicitLocals` (L261),
@@ -111,10 +111,14 @@ pub fn explicit_locals(f: &mut Function) -> bool {
                 }
                 let ty = f.vreg_type(old);
                 let new = f.new_vreg(ty);
+                let line = f.blocks[block][at].line;
                 let post = if use_empty[old as usize] {
-                    Inst::new(ty.drop(), &[Operand::Use(new)])
+                    Inst { line, ..Inst::new(ty.drop(), &[Operand::Use(new)]) }
                 } else {
-                    Inst::new(ty.local_set(), &[Operand::Imm(locals.id(old).into()), Operand::Use(new)])
+                    Inst {
+                        line,
+                        ..Inst::new(ty.local_set(), &[Operand::Imm(locals.id(old).into()), Operand::Use(new)])
+                    }
                 };
                 f.blocks[block].insert(at + 1, post);
                 after += 1;
@@ -134,8 +138,11 @@ pub fn explicit_locals(f: &mut Function) -> bool {
                 let local = locals.id(old);
                 let ty = f.vreg_type(old);
                 let new = f.new_vreg(ty);
-                f.blocks[block]
-                    .insert(insert_at, Inst::new(ty.local_get(), &[Operand::Def(new), Operand::Imm(local.into())]));
+                let line = f.blocks[block][at].line;
+                f.blocks[block].insert(
+                    insert_at,
+                    Inst { line, ..Inst::new(ty.local_get(), &[Operand::Def(new), Operand::Imm(local.into())]) },
+                );
                 at += 1;
                 f.blocks[block][at].operands[k] = Operand::Use(new);
                 f.stackify(new);
@@ -184,13 +191,16 @@ fn tee(
     if !f.is_stackified(src) {
         let local = locals.id(src);
         let new = f.new_vreg(ty);
-        f.blocks[block].insert(at, Inst::new(ty.local_get(), &[Operand::Def(new), Operand::Imm(local.into())]));
+        let line = f.blocks[block][at].line;
+        f.blocks[block]
+            .insert(at, Inst { line, ..Inst::new(ty.local_get(), &[Operand::Def(new), Operand::Imm(local.into())]) });
         at += 1;
         f.stackify(new);
         src = new;
     }
     let local = locals.id(also);
+    let line = f.blocks[block][at].line;
     f.blocks[block][at] =
-        Inst::new(ty.local_tee(), &[Operand::Def(res), Operand::Imm(local.into()), Operand::Use(src)]);
+        Inst { line, ..Inst::new(ty.local_tee(), &[Operand::Def(res), Operand::Imm(local.into()), Operand::Use(src)]) };
     at + 1
 }

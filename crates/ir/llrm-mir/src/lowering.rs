@@ -100,6 +100,24 @@ pub trait Lowering {
         false
     }
 
+    /// Whether the target's `addCodeGenPrepare` runs the `TypePromotion` pass
+    /// (`AArch64TargetMachine`, `ARMTargetMachine`). The base class does not.
+    fn runs_type_promotion(&self) -> bool {
+        false
+    }
+
+    /// `isSExtCheaperThanZExt(EVT(iFROM), EVT(iTO))`
+    /// ([TargetLowering.h](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/include/llvm/CodeGen/TargetLowering.h)):
+    /// the base class says no.
+    fn is_sext_cheaper_than_zext(
+        &self,
+        from_bits: u32,
+        to_bits: u32,
+    ) -> bool {
+        let _ = (from_bits, to_bits);
+        false
+    }
+
     /// `enableExtLdPromotion` (TargetLowering.h#L977): whether CodeGenPrepare
     /// may promote the operands of an extension towards the load that feeds
     /// them. The base class says no.

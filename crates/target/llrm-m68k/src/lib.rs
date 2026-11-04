@@ -10,6 +10,7 @@ pub mod chain;
 pub mod cmpelim;
 pub mod compile;
 pub mod dagisel;
+pub mod data;
 pub mod divide;
 pub mod driver;
 pub mod elf;

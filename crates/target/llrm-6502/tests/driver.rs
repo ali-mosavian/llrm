@@ -451,7 +451,10 @@ fn exit_code_of(
     text: &str,
     function: &str,
 ) -> i32 {
-    let dir = std::env::temp_dir().join(format!("llrm6502-run-{}-{function}", std::process::id()));
+    // Tests share the process and often the function name: one directory each.
+    static RUN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let run = RUN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("llrm6502-run-{}-{run}-{function}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let main = format!(
         ".export _main\n_main:\n  lda #0\n  sta rc0\n  lda #$80\n  sta rc1\n  jsr {function}\n  ldx #0\n  rts\n"
@@ -936,4 +939,516 @@ fn a_split_that_leaves_a_range_without_uses_compiles() {
     let ir = include_str!("driver/range-left-without-uses.ll");
     let text = assembly(ir, &Request::new(Level::O2)).expect("compiles");
     assert!(text.contains("test:"), "{text}");
+}
+
+/// The flag of a signed word overflow op, widened to a byte, sent lowering into
+/// a dependence cycle: `lower_extend` made the widened flag a `select flag, 1,
+/// 0` before the op was expanded, `condition_byte` had no byte for the op's
+/// flag and widened it with the very node being replaced, so the `CMOV`'s flags
+/// were a compare of its own result (the scheduler's "never ordered", #6429).
+/// Each op's flag is right: `flags` adds the flags of four operand pairs, two
+/// that overflow and two that do not.
+fn flags_ir(
+    op: &str,
+    pairs: [(i16, i16); 4],
+) -> String {
+    let call = |n: usize| format!("  %f{n} = call i8 @flag(i16 {}, i16 {})\n", pairs[n].0, pairs[n].1);
+    let ir = module(&format!(
+        r#"declare {{ i16, i1 }} @llvm.{op}.with.overflow.i16(i16, i16)
+define internal i8 @flag(i16 %a, i16 %b) #0 {{
+  %r = call {{ i16, i1 }} @llvm.{op}.with.overflow.i16(i16 %a, i16 %b)
+  %o = extractvalue {{ i16, i1 }} %r, 1
+  %z = zext i1 %o to i8
+  ret i8 %z
+}}
+define i8 @flags() {{
+{}{}{}{}  %t = add i8 %f0, %f1
+  %u = add i8 %f2, %f3
+  %v = add i8 %t, %u
+  ret i8 %v
+}}
+attributes #0 = {{ noinline }}"#,
+        call(0),
+        call(1),
+        call(2),
+        call(3),
+    ));
+    ir
+}
+
+fn flags_sum(
+    op: &str,
+    pairs: [(i16, i16); 4],
+) -> i32 {
+    let text = assembly(&flags_ir(op, pairs), &Request::new(Level::O2)).unwrap();
+    exit_code_of(&text, "flags")
+}
+
+#[test]
+fn the_flag_of_a_signed_word_add_with_overflow_widens_to_a_byte_without_a_cycle() {
+    assert_eq!(flags_sum("sadd", [(30000, 30000), (-30000, -30000), (30000, -30000), (1, 2)]), 2);
+}
+
+#[test]
+fn the_flag_of_a_signed_word_subtract_with_overflow_widens_to_a_byte_without_a_cycle() {
+    assert_eq!(flags_sum("ssub", [(30000, -30000), (-30000, 30000), (30000, 30000), (1, 2)]), 2);
+}
+
+/// The multiply is a call to the runtime's `__mulhi3`, which the test's
+/// assembler has no copy of: it compiles, with the call, and is not run.
+#[test]
+fn the_flag_of_a_signed_word_multiply_with_overflow_widens_to_a_byte_without_a_cycle() {
+    let ir = flags_ir("smul", [(300, 300), (-300, 300), (30, 30), (-3, 4)]);
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(text.contains("__mulhi3"), "{text}");
+}
+
+/// `.export` named every function and no variable: two objects with a static
+/// `helper` collided at link time (softfloat's add_bits, cmp_bits, from_mag:
+/// ld65 "Duplicate external identifier"), and a global another object imports
+/// (`counter`) was "Unresolved external". An internal symbol is not exported,
+/// an external one is, function or variable.
+#[test]
+fn only_external_functions_and_variables_are_exported() {
+    let ir = module(
+        "@counter = global i16 0\n@hidden = internal global i16 0\n\
+define internal i8 @helper(i8 %a) #0 {\n  ret i8 %a\n}\n\
+define i8 @pub(i8 %a) {\n  %r = call i8 @helper(i8 %a)\n  ret i8 %r\n}\n\
+attributes #0 = { noinline }",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    let exported: Vec<&str> = text.lines().filter_map(|l| l.strip_prefix(".export ")).collect();
+    assert!(exported.contains(&"pub") && exported.contains(&"counter"), "exports {exported:?}:\n{text}");
+    assert!(!exported.contains(&"helper") && !exported.contains(&"hidden"), "exports {exported:?}:\n{text}");
+}
+
+/// A pair passed to a function and returned from it by value arrives member by
+/// member: `swap` returns (b, a), the caller keeps a - b = 7 - 3 of the
+/// swapped pair, 3 - 7 = 0xFC.
+#[test]
+fn an_aggregate_passed_and_returned_by_value_runs() {
+    let ir = module(
+        r#"define internal { i8, i8 } @swap({ i8, i8 } %s) #0 {
+  %a = extractvalue { i8, i8 } %s, 0
+  %b = extractvalue { i8, i8 } %s, 1
+  %x = insertvalue { i8, i8 } undef, i8 %b, 0
+  %y = insertvalue { i8, i8 } %x, i8 %a, 1
+  ret { i8, i8 } %y
+}
+define i8 @probe() {
+  %p = insertvalue { i8, i8 } undef, i8 7, 0
+  %q = insertvalue { i8, i8 } %p, i8 3, 1
+  %r = call { i8, i8 } @swap({ i8, i8 } %q)
+  %a = extractvalue { i8, i8 } %r, 0
+  %b = extractvalue { i8, i8 } %r, 1
+  %d = sub i8 %a, %b
+  ret i8 %d
+}
+attributes #0 = { noinline }"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "probe"), 0xFC, "{text}");
+}
+
+/// `x << n` of a 32-bit value by a variable called the bit loop at every level:
+/// 25 clocks a bit, 530 for the shift by 21 that f32 add makes on average (18%
+/// of that routine). At `-O2` the call is the speed variant, whole bytes first;
+/// at `-Os` it stays the 18-byte loop.
+#[test]
+fn a_variable_long_shift_calls_the_speed_variant_at_o2_only() {
+    let ir = module(
+        r#"define i32 @shl(i32 %x, i32 %n) {
+  %r = shl i32 %x, %n
+  ret i32 %r
+}
+define i32 @shr(i32 %x, i32 %n) {
+  %r = lshr i32 %x, %n
+  ret i32 %r
+}
+define i32 @sar(i32 %x, i32 %n) {
+  %r = ashr i32 %x, %n
+  ret i32 %r
+}"#,
+    );
+    let fast = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    for routine in ["__ashlsi3_fast", "__lshrsi3_fast", "__ashrsi3_fast"] {
+        assert!(fast.contains(&format!("{routine}\n")), "no call to {routine} at -O2:\n{fast}");
+    }
+    let small = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    for routine in ["__ashlsi3", "__lshrsi3", "__ashrsi3"] {
+        assert!(small.contains(&format!(" {routine}\n")), "no call to {routine} at -Os:\n{small}");
+    }
+    assert!(!small.contains("_fast"), "a speed variant at -Os:\n{small}");
+}
+
+/// A four-trip loop over a global stayed a loop at `-O2` (22 B, 98 clocks for
+/// `sum4`, against 13 B and 34 clocks unrolled): the driver turned the unroller
+/// off (DEVIATE 6502-5). The pin unrolls it fully at `-O2`; `buf` holds
+/// 1, 2, 3, 4 so the sum is 10.
+#[test]
+fn a_four_trip_loop_is_unrolled_at_o2() {
+    let ir = module(
+        r#"@buf = global [4 x i8] [i8 1, i8 2, i8 3, i8 4]
+define i8 @sum4() {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %next, %loop ]
+  %s = phi i8 [ 0, %entry ], [ %sum, %loop ]
+  %p = getelementptr inbounds i8, ptr @buf, i16 %i
+  %v = load volatile i8, ptr %p
+  %sum = add i8 %s, %v
+  %next = add nuw nsw i16 %i, 1
+  %done = icmp eq i16 %next, 4
+  br i1 %done, label %out, label %loop
+out:
+  ret i8 %sum
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(!text.contains("bne") && !text.contains("beq"), "the loop is still a loop:\n{text}");
+    assert_eq!(exit_code_of(&text, "sum4"), 10, "{text}");
+}
+
+/// `buf[n + 3]` and `buf[n - 1]` with a byte `n` took eleven instructions, a
+/// 16-bit add of the address and an indirect load: the constant had no place in
+/// the indexed form (fill's `buf[n - 1]`: 46 B against llvm-mos's 22). It is
+/// one `lda buf+3,x`.
+#[test]
+fn a_constant_offset_folds_into_the_indexed_load() {
+    let ir = module(
+        r#"@buf = external global [64 x i8]
+define i8 @plus(i8 %n) {
+  %z = zext i8 %n to i16
+  %m = add i16 %z, 3
+  %p = getelementptr inbounds i8, ptr @buf, i16 %m
+  %v = load i8, ptr %p
+  ret i8 %v
+}
+define i8 @minus(i8 %n) {
+  %z = zext i8 %n to i16
+  %m = add i16 %z, -1
+  %p = getelementptr inbounds i8, ptr @buf, i16 %m
+  %v = load i8, ptr %p
+  ret i8 %v
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("lda buf+3,x"), "no indexed load with the offset:\n{text}");
+    assert!(text.contains("lda buf-1,x"), "no indexed load with the negative offset:\n{text}");
+    assert!(!text.contains("adc"), "the address was added in 16 bits:\n{text}");
+}
+
+/// A float argument, result, load, store, select and negation compiled for a
+/// target with no floating-point registers: the float is the integer of its
+/// width (`TypeSoftenFloat`). `float f(float x, float y) { return x; }`
+/// panicked in the call lowering ("legal parts: F32"), so did every float
+/// parameter.
+#[test]
+fn a_float_is_carried_as_the_integer_of_its_width() {
+    let request = Request::new(Level::O2);
+    let pass = assembly(&module("define float @f(float %x, float %y) {\n  ret float %x\n}"), &request).unwrap();
+    assert!(pass.contains("ldy rc5"), "the high word moved down:\n{pass}");
+    let copy = "define void @g(ptr %p, ptr %q) {\n  %v = load float, ptr %p\n  store float %v, ptr %q\n  ret void\n}";
+    let copied = assembly(&module(copy), &request).unwrap();
+    assert_eq!(copied.matches("sta (").count(), 4, "four bytes stored:\n{copied}");
+    let negate = "define float @n(float %x) {\n  %r = fneg float %x\n  ret float %r\n}";
+    let negated = assembly(&module(negate), &request).unwrap();
+    assert!(negated.contains("eor #128"), "the sign bit flipped:\n{negated}");
+    let choose =
+        "define float @s(i1 %c, float %x, float %y) {\n  %r = select i1 %c, float %x, float %y\n  ret float %r\n}";
+    assembly(&module(choose), &request).unwrap();
+}
+
+/// A double live across a block is four i16 parts, not two: it stopped at
+/// "integer wider than two registers" (five corpus cells, e.g.
+/// float_in_place_update).
+#[test]
+fn a_double_crosses_a_block_as_four_words() {
+    let body = "declare void @g()\ndefine double @f(double %x, i16 %n) {\nentry:\n  br label %l\nl:\n  %v = phi double [ %x, %entry ], [ %w, %l ]\n  %i = phi i16 [ 0, %entry ], [ %j, %l ]\n  call void @g()\n  %w = fneg double %v\n  %j = add i16 %i, 1\n  %c = icmp ult i16 %j, %n\n  br i1 %c, label %l, label %x1\nx1:\n  ret double %w\n}";
+    assembly(&module(body), &Request::new(Level::O2)).unwrap();
+}
+
+/// A float or double global initializer is its bits, little-endian: it stopped
+/// at "a global initializer that is not an integer, pointer, array or struct"
+/// (five corpus cells, e.g. int_compared_with_float).
+#[test]
+fn a_float_global_is_emitted_as_its_bits() {
+    let text = "@d = global double 1.5\n@f = global float 2.0\ndefine ptr @p() {\n  ret ptr @d\n}\ndefine ptr @q() {\n  ret ptr @f\n}";
+    let asm = assembly(&module(text), &Request::new(Level::O2)).unwrap();
+    assert!(
+        asm.contains(".byte 0,0,0,0,0,0,248,63") && asm.contains(".byte 0,0,0,64"),
+        "the bits of 1.5 and 2.0:\n{asm}"
+    );
+}
+
+/// A float add, a multiply, an int-to-float and a compare are calls of the
+/// softfloat routines (`SoftenFloatRes_Binary`, `_XINT_TO_FP`, `softenSetCC`):
+/// each stopped at "the target names no routine" or, for the compare, at a
+/// `CALL` the selector cannot take (the call was built for x86).
+#[test]
+fn a_float_operation_is_a_call_of_its_softfloat_routine() {
+    let request = Request::new(Level::O2);
+    let call = |body: &str, routine: &str| {
+        let text = assembly(&module(body), &request).unwrap();
+        assert!(
+            text.contains(&format!("jsr {routine}")) || text.contains(&format!("jmp {routine}")),
+            "{routine}:\n{text}"
+        );
+    };
+    call("define float @f(float %a, float %b) {\n  %r = fadd float %a, %b\n  ret float %r\n}", "__addsf3");
+    call("define float @f(float %a, float %b) {\n  %r = fmul float %a, %b\n  ret float %r\n}", "__mulsf3");
+    call("define float @f(i32 %n) {\n  %r = sitofp i32 %n to float\n  ret float %r\n}", "__floatsisf");
+    call("define i1 @f(float %a, float %b) {\n  %r = fcmp olt float %a, %b\n  ret i1 %r\n}", "__ltsf2");
+    // An i32 result takes the `si` routines: `__fixsfdi` was called and never
+    // linked.
+    call("define i32 @f(float %a) {\n  %r = fptosi float %a to i32\n  ret i32 %r\n}", "__fixsfsi");
+    call("define i32 @f(float %a) {\n  %r = fptoui float %a to i32\n  ret i32 %r\n}", "__fixunssfsi");
+}
+
+/// The compiled `text` without its `rcN = $..` equates, which `run_with` states
+/// itself.
+fn without_equates(text: &str) -> String {
+    text.lines().filter(|l| !l.starts_with("rc") || !l.contains(" = $")).map(|l| format!("{l}\n")).collect()
+}
+
+/// `srem i32` of two sign-extended words called `__modsi3`, the long routine
+/// (recpow at -O1, +434 B): both operands fit a word, so it is `__modhi3`.
+/// -7 % 3 = -1 (0xFF), and -32768 % -1 is 0.
+#[test]
+fn a_remainder_of_two_sign_extended_words_is_the_word_routine() {
+    let ir = module(
+        r#"define i8 @rem(i16 %a, i16 %b) {
+  %x = sext i16 %a to i32
+  %y = sext i16 %b to i32
+  %r = srem i32 %x, %y
+  %t = trunc i32 %r to i8
+  ret i8 %t
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O1)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("__modhi3") && !text.contains("__modsi3"), "the long routine:\n{text}");
+    let function = without_equates(&text);
+    for (a, b, want) in [(-7i16, 3i16, 0xFF), (-32768, -1, 0), (1000, -7, 6)] {
+        let setup = format!(
+            "  lda #{}\n  sta rc2\n  lda #{}\n  sta rc3\n  lda #{}\n  sta rc4\n  lda #{}\n  sta rc5\n  jsr rem\n",
+            a as u16 & 0xFF,
+            (a as u16) >> 8,
+            b as u16 & 0xFF,
+            (b as u16) >> 8
+        );
+        assert_eq!(common::run_with(&format!("narrow-rem-{a}-{b}"), &setup, &function), want, "{a} % {b}");
+    }
+}
+
+/// -32768 / -1 is 32768 in 32 bits and overflows 16: a divide of two
+/// sign-extended words stays long (its high byte is 0x80).
+#[test]
+fn a_divide_of_sign_extended_words_keeps_the_long_quotient() {
+    let words = module(
+        r#"define i8 @high(i16 %a, i16 %b) {
+  %x = sext i16 %a to i32
+  %y = sext i16 %b to i32
+  %q = sdiv i32 %x, %y
+  %h = lshr i32 %q, 8
+  %t = trunc i32 %h to i8
+  ret i8 %t
+}"#,
+    );
+    let text = assembly(&words, &Request::new(Level::O1)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("__divsi3") && !text.contains("__divhi3"), "narrowed:\n{text}");
+    let setup =
+        "  lda #0\n  sta rc2\n  lda #$80\n  sta rc3\n  lda #$FF\n  sta rc4\n  lda #$FF\n  sta rc5\n  jsr high\n";
+    assert_eq!(common::run_with("narrow-div-min", setup, &without_equates(&text)), 0x80);
+}
+
+/// A call result whose callee returns `range(i32 -30010, 30011)` fits a word
+/// (recpow at -O1, whose `srem` of such results called `__modsi3`): the range
+/// is the sign bits of the result, so the remainder is the word routine. The
+/// callee is opaque (hand-written, returning -12345 in A, X, rc2, rc3) and the
+/// level is -O0, where no correlated-propagation narrows it first;
+/// -12345 % 1000 = -345, low byte 0xA7.
+#[test]
+fn a_remainder_of_a_result_with_a_signed_range_is_the_word_routine() {
+    let ir = module(
+        r#"declare range(i32 -30010, 30011) i32 @source()
+define i8 @rem() {
+  %v = call i32 @source()
+  %r = srem i32 %v, 1000
+  %t = trunc i32 %r to i8
+  ret i8 %t
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O0)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("__modhi3") && !text.contains("__modsi3"), "the long routine:\n{text}");
+    let source = "source:\n  ldx #$CF\n  lda #$FF\n  sta rc2\n  sta rc3\n  lda #$C7\n  rts\n";
+    let function = format!("{}{source}", without_equates(&text));
+    assert_eq!(common::run_with("narrow-range-rem", "  jsr rem\n", &function), 0xA7);
+}
+
+/// `x > 65535` and `x < 65536` are one test of the high word. The low word of
+/// the first was `65535 - lo` (`ldx #255` and a swapped `cmp`), of the second
+/// `lo - 0`: the pin folds `X > MAX` and `X < MIN` to false, and a half known
+/// false is dropped. The code of a softfloat `sf_clz32` caller changed with the
+/// polarity InstCombine happened to pick (`__divsf3` +14 lines).
+#[test]
+fn a_compare_against_a_word_boundary_tests_only_the_high_word_in_both_polarities() {
+    let branch = |compare: &str, then: &str, other: &str| {
+        module(&format!(
+            "declare i8 @g(i8)\ndefine i8 @f(i32 %x) {{\n  %c = icmp {compare}\n  br i1 %c, label %{then}, label %{other}\nt:\n  %a = call i8 @g(i8 1)\n  ret i8 %a\ne:\n  %b = call i8 @g(i8 2)\n  ret i8 %b\n}}"
+        ))
+    };
+    let instructions = |text: &str| without_equates(text).lines().filter(|l| l.starts_with("  ")).count();
+    let greater = assembly(&branch("ugt i32 %x, 65535", "t", "e"), &Request::new(Level::O1)).unwrap();
+    let less = assembly(&branch("ult i32 %x, 65536", "e", "t"), &Request::new(Level::O1)).unwrap();
+    for text in [&greater, &less] {
+        assert!(!text.contains("ldx #255") && !text.contains("sbc"), "a word compared with its bound:\n{text}");
+    }
+    assert_eq!(instructions(&greater), instructions(&less), "the polarity changed the code:\n{greater}\n{less}");
+}
+
+/// A 64-bit add carried between its words by compares: the legalizer tested the
+/// carry operation at the 32-bit half, which is no legal type here, instead of
+/// the 16-bit piece it expands to, so `a + b` took 163 instructions with a
+/// `cmp`/`bcc` pair per carry. It is an `adc` chain; `0x1_FFFF_FFFF + 1` has
+/// high word 2.
+#[test]
+fn a_64_bit_add_is_a_carry_chain_not_compares() {
+    let ir = module(
+        r#"@a = internal global i64 8589934591
+@b = internal global i64 1
+define i8 @probe() {
+  %x = load volatile i64, ptr @a
+  %y = load volatile i64, ptr @b
+  %s = add i64 %x, %y
+  %h = lshr i64 %s, 32
+  %t = trunc i64 %h to i8
+  ret i8 %t
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(!text.contains("cmp"), "a carry made by a compare:\n{text}");
+    assert_eq!(exit_code_of(&text, "probe"), 2, "{text}");
+}
+
+/// The subtract of the same: a borrow made by a compare in each limb, 165
+/// instructions for `a - b` of two arguments (119 as a chain).
+#[test]
+fn a_64_bit_subtract_of_arguments_is_a_borrow_chain_not_compares() {
+    let ir = module(
+        r#"define i64 @sub(i64 %a, i64 %b) {
+  %s = sub i64 %a, %b
+  ret i64 %s
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(!text.contains("cmp"), "a borrow made by a compare:\n{text}");
+}
+
+/// The overflow flag of a 64-bit add, returned: the scheduler panicked on a
+/// dependence cycle ("units [1, 2, 3, 4] are never ordered") once the add
+/// expanded into a carry chain, whose last carry the return reads as a byte.
+/// `2^64 - 1 + 1` overflows, `1 + 1` does not.
+#[test]
+fn the_overflow_flag_of_a_64_bit_add_is_read_from_the_carry_chain() {
+    let ir = module(
+        r#"declare { i64, i1 } @llvm.uadd.with.overflow.i64(i64, i64)
+@a = internal global i64 -1
+@b = internal global i64 1
+define i8 @wraps() {
+  %x = load volatile i64, ptr @a
+  %y = load volatile i64, ptr @b
+  %r = call { i64, i1 } @llvm.uadd.with.overflow.i64(i64 %x, i64 %y)
+  %o = extractvalue { i64, i1 } %r, 1
+  %z = zext i1 %o to i8
+  ret i8 %z
+}
+define i8 @fits() {
+  %y = load volatile i64, ptr @b
+  %r = call { i64, i1 } @llvm.uadd.with.overflow.i64(i64 %y, i64 %y)
+  %o = extractvalue { i64, i1 } %r, 1
+  %z = zext i1 %o to i8
+  ret i8 %z
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "wraps"), 1, "{text}");
+    assert_eq!(exit_code_of(&text, "fits"), 0, "{text}");
+}
+
+/// A loaded `i1` that a `select` or an extension tests was selected into a
+/// compare of its own zero extension: `llrm-6502-llc` ran until it had taken
+/// 217 GB. A bit in memory is a byte, `x & 1`. `pick` is 7 for a stored 1 and
+/// 9 for a stored 0; `mask` is a sign-extended 1; `bump` stores the bit back.
+#[test]
+fn a_loaded_bit_is_a_condition_a_select_and_an_extension_can_test() {
+    let ir = module(
+        r#"@t = global i8 1
+@f = global i8 0
+define i8 @pick() {
+  %c = load i1, ptr @t
+  %d = load i1, ptr @f
+  %a = select i1 %c, i16 7, i16 1
+  %b = select i1 %d, i16 100, i16 2
+  %s = add i16 %a, %b
+  %r = trunc i16 %s to i8
+  ret i8 %r
+}
+define i8 @mask() {
+  %c = load i1, ptr @t
+  %s = sext i1 %c to i8
+  %d = load i1, ptr @f
+  %z = zext i1 %d to i8
+  %r = add i8 %s, %z
+  ret i8 %r
+}
+define i8 @bump() {
+  %c = load i1, ptr @t
+  store i1 %c, ptr @f
+  %d = load i8, ptr @f
+  ret i8 %d
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "pick"), 9, "{text}");
+    assert_eq!(exit_code_of(&text, "mask"), 0xFF, "{text}");
+    assert_eq!(exit_code_of(&text, "bump"), 1, "{text}");
+}
+
+/// `llvm.uadd.with.overflow.i16` and `usub` aborted the compiler the same way:
+/// the overflow bit is an `i1` leaf. 65535 + 2 wraps to 1 and sets it.
+#[test]
+fn a_word_add_and_subtract_with_overflow_run() {
+    let ir = module(
+        r#"declare { i16, i1 } @llvm.uadd.with.overflow.i16(i16, i16)
+declare { i16, i1 } @llvm.usub.with.overflow.i16(i16, i16)
+@x = global i16 65535
+@y = global i16 2
+define i8 @add_overflow() {
+  %a = load i16, ptr @x
+  %b = load i16, ptr @y
+  %p = call { i16, i1 } @llvm.uadd.with.overflow.i16(i16 %a, i16 %b)
+  %v = extractvalue { i16, i1 } %p, 0
+  %o = extractvalue { i16, i1 } %p, 1
+  %lo = trunc i16 %v to i8
+  %ob = zext i1 %o to i8
+  %r = add i8 %lo, %ob
+  ret i8 %r
+}
+define i8 @sub_overflow() {
+  %a = load i16, ptr @y
+  %b = load i16, ptr @x
+  %p = call { i16, i1 } @llvm.usub.with.overflow.i16(i16 %a, i16 %b)
+  %v = extractvalue { i16, i1 } %p, 0
+  %o = extractvalue { i16, i1 } %p, 1
+  %lo = trunc i16 %v to i8
+  %ob = zext i1 %o to i8
+  %r = add i8 %lo, %ob
+  ret i8 %r
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    // 1 + 1; 2 - 65535 = 3 with a borrow: 3 + 1
+    assert_eq!(exit_code_of(&text, "add_overflow"), 2, "{text}");
+    assert_eq!(exit_code_of(&text, "sub_overflow"), 4, "{text}");
 }

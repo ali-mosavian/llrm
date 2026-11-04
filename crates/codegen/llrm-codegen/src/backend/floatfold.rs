@@ -1,6 +1,12 @@
 //! A float load that only one arithmetic instruction reads becomes that
 //! instruction's memory operand: `fld [m]; faddp` is `fadd [m]`.
 //!
+//! DEVIATE FF1 (owner m16, exit 2026-11-17): a volatile cell folds too; the
+//! fused instruction stays volatile and ordered against every other volatile
+//! access. The pin keeps `fld [m]` for it. Cost rule: the fold drops an `fld`
+//! and a stack slot and keeps the one memory read, so it never costs a byte or a
+//! clock; the exit is the pin's own fold, or this stays with the exit moved.
+//!
 //! # How it works
 //! x87 arithmetic has a memory form for a float or a double (`fadd qword ptr
 //! [m]`). Folding saves the load and the x87 register the loaded value held.
@@ -14,7 +20,7 @@
 //!
 //! - it is read exactly once in the body;
 //! - its defining instruction is the nearest earlier definition in the block, a
-//!   plain `fld` or `fild` of a memory cell, not volatile, with no clobbers and
+//!   plain `fld` or `fild` of a memory cell, with no clobbers and
 //!   not part of a group;
 //! - nothing between the load and the arithmetic is volatile, a call, a barrier
 //!   or an escape, or may write the cell (`storedhomes::may_write`);
@@ -264,7 +270,6 @@ fn _refolded(
                 && _loads_memory(one.what.as_ref())
                 && defs.get(&value) == Some(&1)
                 && uses.get(&value).is_some_and(|reads| *reads >= 1)
-                && !one.volatile
                 && one.clobbers.is_empty()
                 && one.group.is_none()
             {
@@ -342,11 +347,8 @@ fn _refolded(
             continue;
         }
         let bytes = loaded + held - folded_bytes;
-        let rate = if cpu.size || cpu.min_size {
-            cpu.size_milliclocks_per_byte()
-        } else {
-            cpu.target().tuning().speed_milliclocks_per_byte
-        };
+        let rate =
+            if cpu.size || cpu.min_size { cpu.size_milliclocks_per_byte() } else { cpu.speed_milliclocks_per_byte() };
         // A target with an exchange rate takes clocks for bytes at it, and
         // never grows code built for size; one without takes neither worse.
         let pays = if rate == 0 {
@@ -496,6 +498,9 @@ fn _fused(
 ) -> Arc<Insn> {
     let mut fused = (**one).clone();
     fused.what = Some(what);
+    // A volatile cell is still read once, by the fused instruction, and kept
+    // in order against every other volatile access (`_home_of`).
+    fused.volatile |= load.volatile;
     let foreign = |values: &[u32]| values.iter().copied().filter(|one| !floating.contains(one)).collect::<Vec<u32>>();
     fused.uses = one
         .uses
@@ -549,8 +554,8 @@ pub fn read_from_cell(
 }
 
 /// The load that defines `value`, if it may be read again at `at` as a memory
-/// operand: the nearest definition in the block, a plain load of a cell, not
-/// volatile, with no clobbers and not part of a group, and nothing between it
+/// operand: the nearest definition in the block, a plain load of a cell, with
+/// no clobbers and not part of a group, and nothing between it
 /// and `at` volatile, a call, a barrier or an escape, or able to write the
 /// cell.
 fn _home_of(
@@ -567,7 +572,7 @@ fn _home_of(
                 .is_some_and(|made| made.dests.iter().any(|d| matches!(d, Loc::Held(held) if held.value == value))),
         )?;
     let load = &insns[home];
-    if !_loads_memory(load.what.as_ref()) || load.volatile || !load.clobbers.is_empty() || load.group.is_some() {
+    if !_loads_memory(load.what.as_ref()) || !load.clobbers.is_empty() || load.group.is_some() {
         return None;
     }
     let cell = cell_of(load);
@@ -685,7 +690,7 @@ mod tests {
     const REGISTERS: usize = 6;
 
     fn held(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 10 })
+        Loc::Held(Held { value, width: 10, offset: 0 })
     }
 
     fn global(
@@ -786,6 +791,24 @@ mod tests {
         assert_eq!(names(&folded(&body, cpu, REGISTERS)), ["fld1", "fmul+m", "fadd+m", "fstp"]);
     }
 
+    /// int_compared_with_float -Os: a volatile float read once by a compare was
+    /// `fld [m]; fxch; fcompp` (+24 B over six sites); the compare reads the
+    /// cell itself, and stays volatile.
+    #[test]
+    fn test_a_volatile_load_a_compare_reads_once_is_its_memory_operand() {
+        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let volatile = {
+            let mut load = (*fld(1, 2, global(0, 0))).clone();
+            load.volatile = true;
+            Arc::new(load)
+        };
+        let compare = insn(2, Operation::Compare, "fcom", vec![], vec![held(1), held(2)]);
+        let body = one_block(vec![fld(0, 1, frame(-4)), volatile, compare]);
+        let done = folded(&body, cpu, REGISTERS);
+        assert_eq!(names(&done), ["fld", "fcom+m"]);
+        assert!(done.blocks[0].insns.last().expect("an instruction").volatile);
+    }
+
     /// A store to the cell between two reads changes the value the second one
     /// reads: the load stays.
     #[test]
@@ -830,7 +853,7 @@ mod tests {
         between: Vec<Arc<Insn>>,
         crowd: &[u32],
     ) -> LirBody {
-        let pointer = Mem { base: Some(Held { value: 9, width: 2 }), ..Mem::new(None, 4) };
+        let pointer = Mem { base: Some(Held { value: 9, width: 2, offset: 0 }), ..Mem::new(None, 4) };
         two_blocks_through(pointer, between, crowd)
     }
 
@@ -884,7 +907,7 @@ mod tests {
     #[test]
     fn test_a_load_is_kept_where_a_store_through_a_pointer_may_reach_its_cell_before_a_reader() {
         let cpu = crate::backend::cpu::profile("486").expect("a profile");
-        let other = Mem { base: Some(Held { value: 8, width: 2 }), ..Mem::new(None, 4) };
+        let other = Mem { base: Some(Held { value: 8, width: 2, offset: 0 }), ..Mem::new(None, 4) };
         let mut store = (*fstp(3, 2, other)).clone();
         store.uses = vec![8];
         let got = names(&folded(&two_blocks(vec![Arc::new(store)], &[]), cpu, REGISTERS));
@@ -912,8 +935,8 @@ mod tests {
     #[test]
     fn test_a_cell_with_an_index_and_a_dword_displacement_costs_seven_bytes_at_32_bits() {
         let pointer = Mem {
-            base: Some(Held { value: 9, width: 4 }),
-            index: Some(Held { value: 10, width: 4 }),
+            base: Some(Held { value: 9, width: 4, offset: 0 }),
+            index: Some(Held { value: 10, width: 4, offset: 0 }),
             offset: 320,
             ..Mem::new(None, 4)
         };
@@ -932,9 +955,9 @@ mod tests {
             None,
             Some(Semantics {
                 name: Some("add".into()),
-                dests: vec![Loc::Held(Held { value: 9, width: 2 })],
+                dests: vec![Loc::Held(Held { value: 9, width: 2, offset: 0 })],
                 sources: vec![
-                    Loc::Held(Held { value: 9, width: 2 }),
+                    Loc::Held(Held { value: 9, width: 2, offset: 0 }),
                     Loc::Imm(llrm_lir::Imm { value: 8, width: 2, address: None }),
                 ],
                 ..Semantics::new(Operation::Binary)
@@ -950,7 +973,7 @@ mod tests {
     #[test]
     fn test_a_load_is_kept_where_its_pointer_is_written_before_its_one_reader_in_the_block() {
         let cpu = crate::backend::cpu::profile("486").expect("a profile");
-        let pointer = Mem { base: Some(Held { value: 9, width: 2 }), ..Mem::new(None, 4) };
+        let pointer = Mem { base: Some(Held { value: 9, width: 2, offset: 0 }), ..Mem::new(None, 4) };
         let mut load = (*fld(0, 1, pointer)).clone();
         load.uses = vec![9];
         let step = Arc::new(Insn::new(
@@ -958,9 +981,9 @@ mod tests {
             None,
             Some(Semantics {
                 name: Some("add".into()),
-                dests: vec![Loc::Held(Held { value: 9, width: 2 })],
+                dests: vec![Loc::Held(Held { value: 9, width: 2, offset: 0 })],
                 sources: vec![
-                    Loc::Held(Held { value: 9, width: 2 }),
+                    Loc::Held(Held { value: 9, width: 2, offset: 0 }),
                     Loc::Imm(llrm_lir::Imm { value: 8, width: 2, address: None }),
                 ],
                 ..Semantics::new(Operation::Binary)

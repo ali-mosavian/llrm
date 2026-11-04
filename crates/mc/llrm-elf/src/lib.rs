@@ -45,6 +45,9 @@ pub trait Machine {
     /// ELFDATA2MSB: the file's own fields are big-endian. The section bytes
     /// are the target's.
     const BIG_ENDIAN: bool = false;
+    /// The least `sh_addralign` a section is given; the pin gives m68k's
+    /// `.rodata` and `.bss` their objects' own 2.
+    const MIN_SECTION_ALIGN: usize = 4;
     /// `e_flags`: the machine's own (llvm-mos writes its CPU there).
     const FLAGS: u32 = 0;
     /// `sh_type` of `.eh_frame`: `SHT_X86_64_UNWIND` on x86-64, else PROGBITS.
@@ -191,11 +194,11 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
     let mut strings = Strings::new();
     let symbol_size = if M::WIDE { 24 } else { 16 };
     let mut symtab: Vec<u8> = vec![0; symbol_size];
-    let symbol = |out: &mut Vec<u8>, name: u32, value: u64, size: u64, info: u8, section: u16| {
+    let symbol = |out: &mut Vec<u8>, name: u32, value: u64, size: u64, info: u8, other: u8, section: u16| {
         put32::<M>(out, name);
         if M::WIDE {
             out.push(info);
-            out.push(0);
+            out.push(other);
             put16::<M>(out, section);
             put64::<M>(out, value);
             put64::<M>(out, size);
@@ -203,14 +206,20 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
             put32::<M>(out, value as u32);
             put32::<M>(out, size as u32);
             out.push(info);
-            out.push(0);
+            out.push(other);
             put16::<M>(out, section);
         }
     };
+    // `st_other`: the visibility (`STV_*`).
+    let other = |one: &llrm_object::Symbol| match one.visibility {
+        llrm_object::Visibility::Default => 0,
+        llrm_object::Visibility::Hidden => 2,
+        llrm_object::Visibility::Protected => 3,
+    };
     let file = strings.add(&object.name);
-    symbol(&mut symtab, file, 0, 0, STB_LOCAL << 4 | STT_FILE, SHN_ABS);
+    symbol(&mut symtab, file, 0, 0, STB_LOCAL << 4 | STT_FILE, 0, SHN_ABS);
     for index in 0..object.sections.len() {
-        symbol(&mut symtab, 0, 0, 0, STB_LOCAL << 4 | STT_SECTION, index as u16 + 1);
+        symbol(&mut symtab, 0, 0, 0, STB_LOCAL << 4 | STT_SECTION, 0, index as u16 + 1);
     }
     // The locals come before the globals (`sh_info` is the first global), as
     // `ELFObjectWriter` lists them; relocations name a local through its
@@ -225,7 +234,15 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
             }
             let kind = if object.sections[section].role == Role::Text { STT_FUNC } else { STT_OBJECT };
             let name = strings.add(&one.name);
-            symbol(&mut symtab, name, offset as u64, one.size as u64, STB_LOCAL << 4 | kind, section as u16 + 1);
+            symbol(
+                &mut symtab,
+                name,
+                offset as u64,
+                one.size as u64,
+                STB_LOCAL << 4 | kind,
+                other(one),
+                section as u16 + 1,
+            );
             locals += 1;
         }
     }
@@ -245,11 +262,19 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
             Definition::Defined { section, offset } => {
                 let kind = if object.sections[section].role == Role::Text { STT_FUNC } else { STT_OBJECT };
                 let binding = if one.binding == Binding::Weak { STB_WEAK } else { STB_GLOBAL };
-                symbol(&mut symtab, name, offset as u64, one.size as u64, binding << 4 | kind, section as u16 + 1);
+                symbol(
+                    &mut symtab,
+                    name,
+                    offset as u64,
+                    one.size as u64,
+                    binding << 4 | kind,
+                    other(one),
+                    section as u16 + 1,
+                );
             }
             Definition::Undefined => {
                 let binding = if one.binding == Binding::Weak { STB_WEAK } else { STB_GLOBAL };
-                symbol(&mut symtab, name, 0, 0, binding << 4, 0)
+                symbol(&mut symtab, name, 0, 0, binding << 4, other(one), 0)
             }
         }
         elf_symbol[index] = Some(next);
@@ -306,7 +331,7 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
         vec![Header { name: 0, kind: 0, flags: 0, offset: 0, size: 0, link: 0, info: 0, align: 0, entry: 0 }];
     for (index, section) in object.sections.iter().enumerate() {
         let (_, kind, flags) = spelled[index];
-        let alignment = section.align.max(4).next_power_of_two();
+        let alignment = section.align.max(M::MIN_SECTION_ALIGN).next_power_of_two();
         align(&mut out, alignment);
         let offset = out.len() as u64;
         // Every type but NOBITS has its bytes in the file (`.eh_frame` is

@@ -75,7 +75,7 @@ impl Combiner<'_> {
     }
 
     /// The definition of `v`, if an instruction defines it.
-    fn definition(
+    pub(crate) fn definition(
         &self,
         v: Operand,
     ) -> Option<InstId> {

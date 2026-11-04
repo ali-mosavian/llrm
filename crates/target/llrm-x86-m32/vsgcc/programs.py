@@ -13,7 +13,7 @@ SKIPPED = {
     "textfill": ("16-bit only: writes the PC text screen", "gcc_rejects"),
     "grep": ("timed only: no instruction count (bench.toml timed_only)", "timed_only"),
 }
-LLRM_FLAGS = ["-m32", "-mabi=sysv", "-march=i486"]  # build.sh's
+LLRM_FLAGS = ["-m32", "-mabi=sysv", "-mlong-double-80", "-march=i486"]  # build.sh's: a 12-byte long double like gcc's and clang's, not Watcom's 8
 CC_FLAGS = ["-mabi=sysv"]  # llrm-cc's: the target is a row, named by llrmbin.c_args(32)
 
 
