@@ -64,13 +64,17 @@ Run the failing build under dosrun with a `:write` range over the damage, or `:m
 
 A bad segment (`lds`, `ss:` on data the program model places in DS) points at the machine model (`-m[no-]stack-is-data`), not a pass.
 
+## Inline costs
+
+`llrm-arm64-llc -debug-only=inline-cost f.ll` prints each inlining decision (`'callee' inlined into 'caller' with (cost=, threshold=)`) the callee's body as the costs were taken on it, and the cost of every instruction (`[inlinetrace]`), as LLVM's option of that name does; the pin's clang has none. The switches behind it are `LLRM_INLINE_REMARKS` and `LLRM_EXP_INLINETRACE`.
+
 ## 4. Which pass: dump and diff
 
 Compile the one module with every stage dumped:
 
     llrm-c -O2 -I ... module.c -o module.obj --dump dump
 
-`llrm-qb` and `llrm-nib` take `--dump` too; the variable `LLRM_MIR_STAGES=DIR` does the same for any driver. The directory must be on disk: a dump is thousands of small files, and the tools refuse a tmpfs such as `/tmp` or `/dev/shm` (it ran out of inodes once). The directory holds:
+`llrm-qb`, `llrm-nib` and `llrm-m68k-llc` take `--dump` too; the variable `LLRM_MIR_STAGES=DIR` does the same for any driver. The directory must be on disk: a dump is thousands of small files, and the tools refuse a tmpfs such as `/tmp` or `/dev/shm` (it ran out of inodes once). The directory holds:
 
 - `NN-<pass>.ll`: the module after each module-level pass, in order (`01-globalopt.ll`, `04-pipeline.ll`, `05-interprocedural.ll`, `12-lsr.ll`, ...);
 - `NN/MMM-<stage>.ll`: inside the module pass `pipeline`, the module after each step of the per-function pipeline, numbered by run (`01/003-r01-gvn.ll`: run 1, round 1, gvn), with `pipeline.body` the function in question;
@@ -87,6 +91,8 @@ If the MIR is right to the last dump, the fault is in the machine phases:
     ISEL_DUMP=1 llrm-c -O2 -I ... module.c -o module.obj
 
 prints the LIR after each machine phase (`=== PhiElimination`, `RegAlloc`, `ParallelCopy`, `Peephole`, `LoopSlots`, `Scheduler`, ...). The first phase whose output is wrong is the one.
+
+`llrm-arm64-llc` (and `llrm-cc` with `LLRM_CC_TARGET=arm64-macos`) takes the same variable and prints the operations, one per line, after `Select`, `Prepass`, `FlagCse`, `StoreCluster`, `SibCall`, `OrderCopies` and `RegAlloc` (spills and reloads are visible there).
 
 `llrm-mir FILE` reads, verifies and prints a `.ll` back; `llrm-mir --run [--entry NAME] [--fuel N] FILE` interprets its `@main`, so a reduced MIR program can be run before and after a pass.
 

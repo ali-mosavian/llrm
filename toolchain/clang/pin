@@ -1,2 +1,2 @@
 d1106deb71cc81016406a1917d0508d2df296266
-0f533437b640c6870f71c56795f9f7033d140199 # m16: ali-mosavian/llvm-project llrm/clang-i8086, built from the pin plus the i8086 commits (push with --no-thin)
+4b787ddb5b7f8e894de33d3c18ef1a78cd0a094a # m16: ali-mosavian/llvm-project llrm/clang-i8086, built from the pin plus the i8086 commits and a regcall-byval one (push with --no-thin)

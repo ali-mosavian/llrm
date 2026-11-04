@@ -102,30 +102,15 @@ impl Selector<'_> {
                 PhiSource::Value(src) => loads.push((copy.dst, src)),
             }
         }
-        while !moves.is_empty() {
-            // A move whose destination no other move reads.
-            let ready = moves.iter().position(|(dst, _)| !moves.iter().any(|(_, src)| src == dst));
-            match ready {
-                Some(at) => {
-                    let (dst, src) = moves.remove(at);
-                    self.emit(Op::Copy { dst, src });
-                }
-                None => {
-                    // A cycle: park one source in a new register.
-                    let (dst, src) = moves[0];
-                    let temporary = match src {
-                        Reg::Gpr(_) => Reg::Gpr(self.mf.gpr()),
-                        Reg::Fpr(_) => Reg::Fpr(self.mf.fpr()),
-                    };
-                    self.emit(Op::Copy { dst: temporary, src });
-                    for (_, reader) in moves.iter_mut() {
-                        if *reader == src {
-                            *reader = temporary;
-                        }
-                    }
-                    let _ = dst;
-                }
-            }
+        let ops = crate::mfunc::sequence_copies(moves, |src| {
+            let made = match src {
+                Reg::Gpr(_) => Reg::Gpr(self.mf.gpr()),
+                Reg::Fpr(_) => Reg::Fpr(self.mf.fpr()),
+            };
+            made
+        });
+        for op in ops {
+            self.emit(op);
         }
         for (dst, src) in loads {
             self.load_into(dst, src)?;
@@ -187,7 +172,7 @@ impl Selector<'_> {
         // branch.
         let saved = self.current;
         let edge_label = format!(".L{}.e{}", self.mf.name, self.mf.blocks.len());
-        self.mf.blocks.push(MBlock { label: edge_label.clone(), ops: Vec::new() });
+        self.mf.blocks.push(MBlock { label: edge_label.clone(), ops: Default::default() });
         self.current = self.mf.blocks.len() - 1;
         let result = self.emit_copies(copies);
         self.emit(branch_to(&label));
@@ -204,7 +189,7 @@ impl Selector<'_> {
     ) -> Selected<Test> {
         use llrm_mir::IntPredicate;
         if let Operand::Value(value) = operand
-            && self.fusable(value)
+            && (self.fusable(value) || self.chains.contains(value) || self.conjunctions.contains(value))
             && let Some(inst) = super::value_def(self.function, value)
             && let Opcode::ICmp(predicate) = self.function.instruction(inst).opcode
         {
@@ -242,7 +227,9 @@ impl Selector<'_> {
                     }
                     IntPredicate::Eq | IntPredicate::Ne => {
                         let g = self.operand_g(left)?;
-                        let g = self.extended(g, super::val::Known::Zero);
+                        // `cbz w` reads the low 32 bits: only a narrower value
+                        // has garbage above.
+                        let g = if bits < 32 { self.extended(g, super::val::Known::Zero) } else { g };
                         return Ok(Test::Zero {
                             reg: g.reg,
                             width: super::val::width_of(bits),
@@ -256,7 +243,7 @@ impl Selector<'_> {
         Ok(Test::Flags(self.condition(operand)?))
     }
 
-    fn is_zero_constant(
+    pub(super) fn is_zero_constant(
         &self,
         operand: Operand,
     ) -> bool {
@@ -349,8 +336,8 @@ impl Selector<'_> {
         self.emit(jump(Cond::Lo, &below));
         let saved = self.current;
         let right = format!(".L{}.s{}", self.mf.name, self.mf.blocks.len() + 1);
-        self.mf.blocks.push(MBlock { label: below.clone(), ops: Vec::new() });
-        self.mf.blocks.push(MBlock { label: right.clone(), ops: Vec::new() });
+        self.mf.blocks.push(MBlock { label: below.clone(), ops: Default::default() });
+        self.mf.blocks.push(MBlock { label: right.clone(), ops: Default::default() });
         let (left_index, right_index) = (self.mf.blocks.len() - 2, self.mf.blocks.len() - 1);
         self.emit(branch_to(&right));
         self.current = left_index;
@@ -381,9 +368,18 @@ impl Selector<'_> {
             return Ok(());
         }
         let (on_true, on_false) = (target(instruction.operands[1])?, target(instruction.operands[2])?);
-        let test = self.branch_test(instruction.operands[0])?;
-        let true_label = self.edge(from, on_true, 2)?;
-        let false_label = self.edge(from, on_false, 2)?;
+        let chain = match instruction.operands[0] {
+            Operand::Value(condition) => self.chains.roots.get(&condition).cloned(),
+            _ => None,
+        };
+        let leaves = chain
+            .as_ref()
+            .map_or_else(
+                || vec![instruction.operands[0]],
+                |chain| chain.leaves.iter().map(|&leaf| Operand::Value(leaf)).collect(),
+            );
+        let true_label = self.edge(from, on_true, leaves.len() + 1)?;
+        let false_label = self.edge(from, on_false, leaves.len() + 1)?;
         let jump = |test: &Test, label: &str| {
             let target = Target::Label(label.to_owned());
             Op::I(match *test {
@@ -392,6 +388,18 @@ impl Selector<'_> {
                 Test::Bit { reg, bit, nonzero } => Inst::TestBranch { nonzero, rt: reg, bit, target },
             })
         };
+        // Each comparison but the last leaves the chain as soon as it decides:
+        // a true `or` goes to the true side, a false `and` to the false side.
+        let (last, earlier) = leaves.split_last().expect("a branch tests something");
+        for &leaf in earlier {
+            let test = self.branch_test(leaf)?;
+            if chain.as_ref().is_some_and(|chain| chain.or) {
+                self.emit(jump(&test, &true_label));
+            } else {
+                self.emit(jump(&test.inverted(), &false_label));
+            }
+        }
+        let test = self.branch_test(*last)?;
         if next == Some(on_false) && !self.is_edge_label(&false_label) {
             self.emit(jump(&test, &true_label));
         } else if next == Some(on_true) && !self.is_edge_label(&true_label) {

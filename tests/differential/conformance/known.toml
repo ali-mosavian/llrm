@@ -1,8 +1,6 @@
 # A case that fails today -> the issue that tracks it. Here, not in a header: the sources
 # are CRLF and ERL-sensitive, and the parser goldens read them byte for byte.
 "qb45/binary-file-io" = "#338"
-"qb45/clear-state" = "#343"
-"pds71/pds-currency" = "#346"
 "pds71/pds-timer-event" = "#347"
 "vbdos/string_far_address" = "#349"
 "vbdos/date_serial_surface" = "#351"

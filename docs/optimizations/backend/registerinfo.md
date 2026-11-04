@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/registerinfo.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/registerinfo.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/registerinfo.rs sha256:1b8e7e8df4630a7dac78af60c09afbf1d7d1c9a49df6ea273fb6dd720697cc86 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/registerinfo.rs sha256:02eafa3a5eb7d0ee4dd8184fed16eea7e70889e6b3e44d5174587d124094d379 -->
 
 # registerinfo
 
@@ -32,6 +32,6 @@ None: it holds re-exports, so there is no before and after. Read
 `registers.regs` of a target for the table `Info` is generated from.
 
 ## Used by
-[`crate::backend::allocate`](allocate.md), [`crate::backend::coalesce`](coalesce.md),
+[`crate::backend::allocate`](allocate.md), `crate::coalescer::pass`,
 [`crate::backend::liveness`](liveness.md), [`crate::backend::loopslots`](loopslots.md),
 [`crate::backend::masm`](masm.md), [`crate::backend::objbuild`](objbuild.md) and the peephole.

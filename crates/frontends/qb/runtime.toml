@@ -1144,6 +1144,7 @@ like = "qb45"
 evidence = "rt/strfcn.asm B$FLEN: the length word of the descriptor."
 parameters = ["string"]
 result = "len($0)"
+inline = "always"
 
 [semantics."B$FASC"]
 evidence = "rt/strfcn.asm B$FASC: a null string is JZ ERRFC -> B$ERR_FC (error 5); otherwise the first byte, and B$STDALCTMP frees the argument if it is a temp."
@@ -1164,8 +1165,17 @@ check = { when = "$1 < 1 or $2 < 0", raise = 5 }
 [semantics."B$FCHR"]
 evidence = "rt/stcore.asm B$FCHR: OR AH,AH / JNZ ERRFC raises error 5 where the value is not a byte; otherwise a one-byte temporary string holds it."
 parameters = ["int"]
+inline = "always"
 view = { length = "1", data = "slot($0)" }
 check = { when = "$0 < 0 or 255 < $0", raise = 5 }
+
+[semantics."B$SMID"]
+evidence = "rt/mid.asm B$SMID (llrm: runtime/qb/smid.c): up to $3 bytes of the source over the string at $0 from $4 (counting from 1), forward one at a time, the string keeping its length ($1 bytes of a fixed-length string, else the descriptor's); a start below 1 or past the end, or a negative maximum, is error 5, raised before anything is copied."
+parameters = ["place", "int", "string", "int", "int"]
+check = { when = "$4 < 1 or $3 < 0 or if($1 == 0, len($0), $1) - ($4 - 1) < 1", raise = 5 }
+copy = { to = "if($1 == 0, data($0), near($0)) + ($4 - 1)", from = "data($2)", count = "min(min($3, len($2)), if($1 == 0, len($0), $1) - ($4 - 1))" }
+releases = [2]
+inline = "always"
 
 # Normal-return stack cleanup read directly from the matching entry in all
 # three shipped Microsoft runtimes.  This is deliberately only a stack ABI
@@ -1408,6 +1418,13 @@ QB45 rt/read.asm AssignStr consumes a far destination pointer plus a word fixed-
 '''
 
 [[pop]]
+names = ["B$RDFS"]
+bytes = 6
+evidence = '''
+The llrm runtime's entry for a fixed-string destination (runtime/qb/rdfs.c) takes B$RDSD's two arguments; a program for the Microsoft runtimes never calls it.
+'''
+
+[[pop]]
 names = ["B$FDR1"]
 bytes = 2
 evidence = '''
@@ -1542,6 +1559,12 @@ routines = ["B$DSEG", "B$DSG0", "B$SCLR", "B$RUNL", "B$StackReset", "B$Init", "B
 [llrm]
 stack_abi = ["B$CLOS", "B$COLR", "B$CSCN", "B$DDIM", "B$FERR", "B$LOCT", "B$OEGA", "B$RDIM", "B$RESN", "B$SERR"]
 
+# What a call of the llrm runtime does to the heaps a loop's cached array words live in. `moves_far_heap`: it reclaims the
+# far heap (shell.c: qb_shell_reclaim after the child returns). `moves_near_heap`: it compacts the local heap, which slides
+# a near array (file.c close_fdb and fre.c nh_compact: B$CLOS, B$FRSD, B$FRI2). DIM, REDIM and ERASE allocate by their tags.
+moves_far_heap = ["B$SSHL"]
+moves_near_heap = ["B$CLOS", "B$FRSD", "B$FRI2"]
+
 # The event trapping of the llrm runtime (runtime/qb/events.c), which has no counterpart in QB's: the front end numbers the
 # handlers and asks which are due, where QB jumps into a handler's address.
 
@@ -1609,6 +1632,51 @@ clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
 established = true
 inputs = []
 evidence = "runtime/qb/events.c, written for the llrm runtime; QB's counterpart is rt/gwaevt.asm, which jumps into the handler: the handler of that number has returned. Pascal, far, the arguments popped by the callee."
+
+# `^` on a target without an extended float (a description with no `f80`): the runtime's own pow, which QB's counterpart
+# (87btran.asm B$POW4, x87 operands) cannot be on such a target. Only a flat target defines it (runtime/qb/posix/mathops.c).
+["B$LPOW"]
+cleanup = 16
+control = "returns"
+enters_user_code = false
+raises_error = true
+error_handling = false
+writes = "OWN"
+reads = "OWN"
+clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
+established = true
+inputs = []
+evidence = "runtime/qb/posix/mathops.c, written for the llrm runtime; QB's counterpart is 87btran.asm B$POW4, which takes x87 operands: x then y as DOUBLEs, the address of the DOUBLE result in AX; error 5 for 0 ^ negative and a negative base with a fractional exponent, error 6 for y * log2|x| of 32767.5 or more, as B$POW4's. Pascal, far, the arguments popped by the callee."
+
+# A DOUBLE scaled to CURRENCY on a target without an extended float: QB's counterpart is B$FPCY, which pops the FP stack.
+# Only a flat target defines it (runtime/qb/posix/mathops.c).
+["B$LFPC"]
+cleanup = 8
+control = "returns"
+enters_user_code = false
+raises_error = false
+error_handling = false
+writes = "OWN"
+reads = "OWN"
+clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
+established = true
+inputs = []
+evidence = "runtime/qb/posix/mathops.c, written for the llrm runtime; QB's counterpart pops the x87 stack (B$FPCY): x * 10000 rounded to the extended format's 64 bits, then to the nearest integer, ties to even; a NaN or a product past 64 bits is the integer indefinite, no error. The DOUBLE is on the stack, the address of the CURRENCY result in AX. Pascal, far, the arguments popped by the callee."
+
+# The math pack a program's PRINT, STR$ and USING follow: 0 QB 4.5's and VBDOS's, 1 PDS 7.1's. Only the llrm runtime has it
+# (runtime/qb/fout.c); a Microsoft runtime has its own pack.
+["B$LMPK"]
+cleanup = 2
+control = "returns"
+enters_user_code = false
+raises_error = false
+error_handling = false
+writes = "OWN"
+reads = "OWN"
+clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
+established = true
+inputs = []
+evidence = "runtime/qb/fout.c, written for the llrm runtime; the Microsoft runtimes carry the pack in their libraries (QB 4.5 BCOM45 emfout, 16 digits; PDS 7.1 BCL71 emfout, 15). Pascal, far, the argument popped by the callee."
 
 ["B$FPLY"]
 cleanup = 2
@@ -1845,42 +1913,3 @@ established = false
 evidence = '''
 rt/grview.asm: `cProc B$PCPY,<PUBLIC,FAR>` with two ParmW (FromPage, ToPage), so it returns with `ret 4`. Only the cleanup is claimed: nothing else of the body was read, so every register and every byte of memory is conceded.
 '''
-
-["B$CHKEXP"]
-cleanup = 8
-control = "returns"
-enters_user_code = false
-raises_error = true
-error_handling = false
-writes = "NONE"
-reads = "NONE"
-clobbers = ["flags"]
-established = true
-inputs = []
-evidence = "POC: the llrm runtime's range check of EXP/LOG, one double in, the same double out."
-
-["B$CHKEX2"]
-cleanup = 8
-control = "returns"
-enters_user_code = false
-raises_error = true
-error_handling = false
-writes = "NONE"
-reads = "NONE"
-clobbers = ["flags"]
-established = true
-inputs = []
-evidence = "POC: the llrm runtime's range check of EXP/LOG, one double in, the same double out."
-
-["B$CHKLOG"]
-cleanup = 8
-control = "returns"
-enters_user_code = false
-raises_error = true
-error_handling = false
-writes = "NONE"
-reads = "NONE"
-clobbers = ["flags"]
-established = true
-inputs = []
-evidence = "POC: the llrm runtime's range check of EXP/LOG, one double in, the same double out."

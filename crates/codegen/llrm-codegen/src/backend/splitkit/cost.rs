@@ -403,7 +403,7 @@ impl<'a> Frame<'a> {
     pub(super) fn price(
         &self,
         held: &Held,
-        live: &dyn allocate::LiveAt,
+        live: &dyn liverows::LiveAt,
         placement: &spillplacement::Placement,
         saving: &dyn Fn(&Insn) -> f64,
     ) -> f64 {
@@ -439,7 +439,7 @@ impl<'a> Frame<'a> {
     fn copies(
         &self,
         held: &Held,
-        live: &dyn allocate::LiveAt,
+        live: &dyn liverows::LiveAt,
         placement: &spillplacement::Placement,
     ) -> f64 {
         let (body, graph) = (self.blocks.body, &self.blocks.graph);

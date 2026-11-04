@@ -54,10 +54,45 @@ pub fn layout_facts(datalayout: &str) -> BTreeMap<String, String> {
     facts
 }
 
+/// The sizes in bytes the C front end lays types out as (`[c]` of the
+/// description).
+#[derive(Clone, Debug, PartialEq)]
+pub struct CAbi {
+    pub int: u32,
+    pub long: u32,
+    pub long_long: u32,
+    pub pointer: u32,
+    pub function_pointer: u32,
+    pub size_t: u32,
+    pub ptrdiff_t: u32,
+    pub wchar_t: u32,
+    pub double: u32,
+    pub long_double: u32,
+    pub enumeration: u32,
+}
+
 /// Per-target facts; the file's header says what each field is.
 #[derive(Clone, Debug, Deserialize)]
 pub struct Target {
     pub triple: String,
+    /// The crate whose description (`crates/target/llrm-NAME`) states the C
+    /// sizes; `wchar_bytes` and `long_double_bytes` are this row's libc's
+    /// departures from it.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// The file of `description`'s `src/machines` that states the layout and
+    /// the C sizes, where it is not `datalayout.toml` (wasm's has a file per
+    /// pointer width).
+    #[serde(default)]
+    pub description_file: Option<String>,
+    #[serde(default)]
+    pub wchar_bytes: Option<u32>,
+    #[serde(default)]
+    pub long_double_bytes: Option<u32>,
+    /// `description`'s sizes with the row's departures applied (filled by
+    /// `targets`).
+    #[serde(skip)]
+    pub c_abi: Option<CAbi>,
     /// What llrm-llc is told the module's layout is (its target's
     /// `datalayout.toml`).
     pub datalayout: String,
@@ -76,6 +111,8 @@ pub struct Target {
     /// Whether the backend takes `-O<n>`.
     #[serde(default = "yes")]
     pub llc_level: bool,
+    /// Why the backend takes no `-O<n>`; required where `llc_level` is false.
+    pub llc_level_reason: Option<String>,
     pub object: String,
     pub link: Vec<String>,
     /// The command that runs an executable of the target, the executable last;
@@ -122,10 +159,49 @@ fn expanded(text: &str) -> Result<String, String> {
     Ok(out)
 }
 
+/// The description file of crate `llrm-NAME`: `file`, else `datalayout.toml`.
+fn description_path(
+    name: &str,
+    file: Option<&str>,
+) -> String {
+    format!("{ROOT}/crates/target/llrm-{name}/src/machines/{}", file.unwrap_or("datalayout.toml"))
+}
+
+fn c_abi_of(target: &Target) -> Result<Option<CAbi>, String> {
+    let Some(name) = &target.description else { return Ok(None) };
+    let path = description_path(name, target.description_file.as_deref());
+    let text = std::fs::read_to_string(&path).map_err(|error| format!("{path}: {error}"))?;
+    let table: toml::Table = text.parse().map_err(|error| format!("{path}: {error}"))?;
+    let c = table.get("c").and_then(toml::Value::as_table).ok_or(format!("{path}: no [c]"))?;
+    let size = |key: &str| -> Result<u32, String> {
+        c.get(key)
+            .and_then(toml::Value::as_integer)
+            .and_then(|bytes| u32::try_from(bytes).ok())
+            .ok_or(format!("{path}: [c] has no byte count `{key}`"))
+    };
+    let mut sizes = CAbi {
+        int: size("int")?,
+        long: size("long")?,
+        long_long: size("long_long")?,
+        pointer: size("pointer")?,
+        function_pointer: size("function_pointer")?,
+        size_t: size("size_t")?,
+        ptrdiff_t: size("ptrdiff_t")?,
+        wchar_t: size("wchar_t")?,
+        double: size("double")?,
+        long_double: size("long_double")?,
+        enumeration: size("enum")?,
+    };
+    sizes.wchar_t = target.wchar_bytes.unwrap_or(sizes.wchar_t);
+    sizes.long_double = target.long_double_bytes.unwrap_or(sizes.long_double);
+    Ok(Some(sizes))
+}
+
 pub fn targets(text: &str) -> Result<BTreeMap<String, Target>, String> {
     let mut table: BTreeMap<String, Target> = toml::from_str(text).map_err(|error| format!("targets.toml: {error}"))?;
     for target in table.values_mut() {
         target.datalayout = expanded(&target.datalayout)?;
+        target.c_abi = c_abi_of(target)?;
         target.clang_datalayout = target.clang_datalayout.take().map(|one| expanded(&one)).transpose()?;
         for word in target.clang.iter_mut().chain(&mut target.llc) {
             *word = word.replace("{root}", ROOT);
@@ -202,12 +278,15 @@ const LLC_FLAGS: &[&str] = &[
     "-mfar-bss",
     "-mno-far-bss",
     "-mregcall-default",
+    "-mc-library",
     "-mbss-begin",
     "-mno-bss-begin",
     "-fstack-usage",
     "-ffloat-store",
     "-fverify-ir",
     "-fno-float-store",
+    "-ffunction-sections",
+    "-fno-function-sections",
 ];
 const LLC_PREFIXES: &[&str] =
     &["--isel=", "-fobject-format=", "-mcode-segment=", "-fno-inline=", "-Wstack-usage=", "-fexcess-precision="];
@@ -302,14 +381,9 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
             // clang writes the debug metadata, the backend the format `flag`
             // names.
             if !build.clang.iter().any(|one| one == "-g") {
-                // No `#dbg_assign`: the importer reads `#dbg_value` and
-                // `#dbg_declare` only.
-                build
-                    .clang
-                    .extend(
-                        ["-g", "-fdebug-compilation-dir=.", "-Xclang", "-fexperimental-assignment-tracking=disabled"]
-                            .map(str::to_owned),
-                    );
+                // The backend makes the `#dbg_assign`s itself
+                // (`AssignmentTrackingPass`).
+                build.clang.extend(["-g", "-fdebug-compilation-dir=."].map(str::to_owned));
             }
             build.llc.push(flag.to_owned());
         } else if let Some(level) = flag.strip_prefix("-O") {
@@ -328,10 +402,13 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
             if flag == "-mabi=watcom" && !argv.iter().any(|one| one == "-fsigned-char") {
                 build.clang.push("-funsigned-char".to_owned());
             }
-            build.llc.push(flag.to_owned());
+            // Nib's generated header spells the convention `__watcall`; the
+            // backend takes the convention from this flag, and the
+            // rows without watcom.h do not know the word.
             if flag == "-mabi=watcom" {
-                build.clang.push("-funsigned-char".to_owned());
+                build.clang.push("-D__watcall=".to_owned());
             }
+            build.llc.push(flag.to_owned());
         } else if flag == "-funroll-loops" || flag == "-fno-unroll-loops" {
             build.clang.push(flag.to_owned());
             build.llc.push(flag.to_owned());

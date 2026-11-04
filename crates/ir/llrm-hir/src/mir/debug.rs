@@ -142,6 +142,7 @@ pub(super) fn emitted<'h>(
                         offset: place.offset - group.start,
                         parameter: variable.parameter,
                         argument: variable.argument,
+                        block: None,
                     };
                     variables.insert((function.id, place.id), di::add_variable(module, &node));
                 }
@@ -176,6 +177,8 @@ pub(super) fn emitted<'h>(
                 name: procedure.name.clone(),
                 r#type,
                 parameters,
+                all_calls: false,
+                scope_line: None,
             },
         );
     }

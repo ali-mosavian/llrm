@@ -116,6 +116,7 @@ spelled!(
 pub const LANGUAGE: &str = "llrm.dbg.language";
 pub const TYPES: &str = "llrm.dbg.types";
 pub const FUNCTIONS: &str = "llrm.dbg.functions";
+pub const DECLARATIONS: &str = "llrm.dbg.declarations";
 pub const GLOBALS: &str = "llrm.dbg.globals";
 pub const FILE: &str = "llrm.dbg.file";
 /// The attachment naming an `llvm.dbg.declare`'s variable.
@@ -154,6 +155,21 @@ pub struct Function {
     pub name: String,
     pub r#type: MetadataId,
     pub parameters: Vec<(i64, String, MetadataId)>,
+    /// The frontend described every call the function makes
+    /// (`DIFlagAllCallsDescribed`).
+    pub all_calls: bool,
+    /// The line the body's code starts at (`!DISubprogram`'s `scopeLine`): the
+    /// row of the function's first byte.
+    pub scope_line: Option<u32>,
+}
+
+/// A function the unit calls and does not define: MIR's `function`, its
+/// source `name` and procedure `type`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Declaration {
+    pub function: String,
+    pub name: String,
+    pub r#type: MetadataId,
 }
 
 /// A variable `offset` bytes into MIR's `global`; `scope` the function
@@ -179,6 +195,9 @@ pub struct Variable {
     pub parameter: bool,
     /// Of a parameter's home: the argument the function was passed it as.
     pub argument: Option<i64>,
+    /// The scope node (`!DILexicalBlock`) it is declared in, where it is
+    /// not the function's own.
+    pub block: Option<MetadataId>,
 }
 
 fn node(
@@ -368,9 +387,37 @@ pub fn add_function(
         .collect();
     let parameters = list(module, parameters);
     let flag = int(module, i64::from(one.module));
-    let id =
-        node(module, vec![text(&one.function), text(&one.name), MetadataOperand::Node(one.r#type), parameters, flag]);
+    let all_calls = int(module, i64::from(one.all_calls));
+    let scope_line = one.scope_line.map_or(MetadataOperand::Null, |line| int(module, i64::from(line)));
+    let id = node(
+        module,
+        vec![
+            text(&one.function),
+            text(&one.name),
+            MetadataOperand::Node(one.r#type),
+            parameters,
+            flag,
+            all_calls,
+            scope_line,
+        ],
+    );
     named(module, FUNCTIONS, id);
+}
+
+pub fn add_declaration(
+    module: &mut Module,
+    one: &Declaration,
+) {
+    let id = node(module, vec![text(&one.function), text(&one.name), MetadataOperand::Node(one.r#type)]);
+    named(module, DECLARATIONS, id);
+}
+
+pub fn declarations(module: &Module) -> Vec<Declaration> {
+    let read = |id: MetadataId| {
+        let one = Reader::of(module, id)?;
+        Some(Declaration { function: one.text(0)?, name: one.text(1)?, r#type: one.node(2)? })
+    };
+    listed(module, DECLARATIONS).filter_map(read).collect()
 }
 
 /// The module's source language.
@@ -423,6 +470,8 @@ pub fn functions(module: &Module) -> Vec<Function> {
             r#type: one.node(2)?,
             parameters: one.list(3, |parameter| Some((parameter.int(0)?, parameter.text(1)?, parameter.node(2)?)))?,
             module: one.int(4)? != 0,
+            all_calls: one.int(5).is_some_and(|flag| flag != 0),
+            scope_line: one.int(6).and_then(|line| u32::try_from(line).ok()),
         })
     };
     listed(module, FUNCTIONS).filter_map(read).collect()
@@ -460,11 +509,17 @@ pub fn add_variable(
     let offset = int(module, one.offset);
     let mut operands = vec![text(&one.scope), text(&one.name), MetadataOperand::Node(one.r#type), offset];
     // After the offset, only where true: a node without it is no parameter's.
-    if one.parameter {
-        operands.push(int(module, 1));
-        // And after that, only for a home whose argument is known.
+    if one.parameter || one.block.is_some() {
+        operands.push(int(module, i64::from(one.parameter)));
+        // And after that, only for a home whose argument is known (-1 where
+        // a scope follows and it is not).
         if let Some(argument) = one.argument {
             operands.push(int(module, argument));
+        } else if one.block.is_some() {
+            operands.push(int(module, -1));
+        }
+        if let Some(block) = one.block {
+            operands.push(MetadataOperand::Node(block));
         }
     }
     node(module, operands)
@@ -497,7 +552,11 @@ pub fn read_variable(
         r#type: one.node(2)?,
         offset: one.int(3)?,
         parameter: one.int(4).is_some_and(|flag| flag != 0),
-        argument: one.int(5),
+        argument: one.int(5).filter(|&argument| argument >= 0),
+        block: match one.operands.get(6) {
+            Some(MetadataOperand::Node(block)) => Some(*block),
+            _ => None,
+        },
     })
 }
 
@@ -644,14 +703,23 @@ mod tests {
             name: "F".into(),
             r#type: pt,
             parameters: vec![(1, "n".into(), int16)],
+            all_calls: false,
+            scope_line: Some(7),
         };
         add_function(&mut module, &function);
         assert_eq!(functions(&module), [function]);
         let global = Global { global: "g".into(), offset: 4, name: "G".into(), r#type: int16, scope: Some("f".into()) };
         add_global(&mut module, &global);
         assert_eq!(globals(&module), [global]);
-        let variable =
-            Variable { scope: "f".into(), name: "v".into(), r#type: pt, offset: -2, parameter: false, argument: None };
+        let variable = Variable {
+            scope: "f".into(),
+            name: "v".into(),
+            r#type: pt,
+            offset: -2,
+            parameter: false,
+            argument: None,
+            block: None,
+        };
         let id = add_variable(&mut module, &variable);
         assert_eq!(read_variable(&module, id), Some(variable));
     }
@@ -672,12 +740,50 @@ mod tests {
             spelling: None,
         };
         let int16 = add_type(&mut module, &scalar);
-        let home =
-            Variable { scope: "f".into(), name: "a".into(), r#type: int16, offset: 0, parameter: true, argument: None };
+        let home = Variable {
+            scope: "f".into(),
+            name: "a".into(),
+            r#type: int16,
+            offset: 0,
+            parameter: true,
+            argument: None,
+            block: None,
+        };
         let local = Variable { parameter: false, name: "l".into(), ..home.clone() };
         let (home_id, local_id) = (add_variable(&mut module, &home), add_variable(&mut module, &local));
         assert_eq!(module.metadata[local_id.0 as usize].operands.len(), 4, "a local's node is what it was");
         let reparsed = crate::parse::module(&crate::print::module(&module)).expect("parses");
         assert_eq!((read_variable(&reparsed, home_id), read_variable(&reparsed, local_id)), (Some(home), Some(local)));
+    }
+
+    /// A local declared in a lexical block lost the block: every variable was
+    /// the function's. The scope node survives printing and parsing the module,
+    /// and a local with none keeps its four-operand node.
+    #[test]
+    fn a_variable_keeps_the_block_it_is_declared_in() {
+        let mut module = Module::default();
+        let scalar = Type {
+            kind: Kind::Scalar,
+            name: "int16".into(),
+            size: 0,
+            reach: Reach::Near,
+            target: None,
+            members: Vec::new(),
+            spelling: None,
+        };
+        let int16 = add_type(&mut module, &scalar);
+        let block = node(&mut module, vec![text("block")]);
+        let inner = Variable {
+            scope: "f".into(),
+            name: "t".into(),
+            r#type: int16,
+            offset: -2,
+            parameter: false,
+            argument: None,
+            block: Some(block),
+        };
+        let id = add_variable(&mut module, &inner);
+        let reparsed = crate::parse::module(&crate::print::module(&module)).expect("parses");
+        assert_eq!(read_variable(&reparsed, id), Some(inner));
     }
 }

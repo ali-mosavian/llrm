@@ -29,6 +29,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import elfsize  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 HOME = Path.home()
 PIN = Path(os.environ.get("LLRM_PIN_CLANG", HOME / "scratch/llvm-build/bin/clang"))
@@ -85,10 +88,10 @@ def pin_same_ir(src: Path, level: str, march: str, includes: list[str], tmp: Pat
 
 
 def text_bytes(obj: Path) -> int:
-    for line in subprocess.run(["size", "-A", str(obj)], capture_output=True, text=True, check=True).stdout.splitlines():
-        if line.startswith(".text"):
-            return int(line.split()[1])
-    sys.exit(f"{obj} has no .text")
+    out = subprocess.run(["size", "-A", str(obj)], capture_output=True, text=True, check=True).stdout
+    if not any(elfsize.is_text(line.split()[0]) for line in out.splitlines() if line.split()):
+        sys.exit(f"{obj} has no .text")
+    return elfsize.text_bytes(out)
 
 
 def main() -> None:

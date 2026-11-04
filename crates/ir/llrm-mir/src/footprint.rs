@@ -58,6 +58,15 @@ impl std::ops::BitOr for Footprint {
     }
 }
 
+thread_local! {
+    static COMPUTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times [`of`] has run on this thread.
+pub fn computed() -> usize {
+    COMPUTED.with(std::cell::Cell::get)
+}
+
 /// The parts of `function` that `changes` reached. The function is as the
 /// changes left it: an instruction taken out reaches what read it,
 /// whose operands are changes of their own.
@@ -65,6 +74,7 @@ pub fn of(
     function: &Function,
     changes: &[Change],
 ) -> Footprint {
+    COMPUTED.with(|count| count.set(count.get() + 1));
     let mut found = Footprint::NONE;
     let mut seen: IdSet<u32> = IdSet::new();
     for change in changes {

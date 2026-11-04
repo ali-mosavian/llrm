@@ -12,7 +12,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent))
 
 import fit  # noqa: E402
-import gen  # noqa: E402
+import ladder_gen as gen  # noqa: E402
 import ladder  # noqa: E402
 
 

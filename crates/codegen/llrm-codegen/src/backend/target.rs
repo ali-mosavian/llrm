@@ -35,7 +35,7 @@
 //! show each answer.
 //!
 //! # Used by
-//! [`crate::backend::allocate`], [`crate::backend::coalesce`],
+//! [`crate::backend::allocate`], [`crate::coalescer::pass`],
 //! [`crate::backend::constrain`], [`crate::backend::datagroup`],
 //! [`crate::backend::regclass`], [`crate::backend::parcopy`],
 //! [`crate::backend::ssaspill`] and [`crate::backend::masm`] (register names).
@@ -340,9 +340,12 @@ pub static BASIC: std::sync::LazyLock<Segments> =
     std::sync::LazyLock::new(|| Segments::of(&llrm_x86_m16::machine::BASIC, Regs(&llrm_x86_m16::REGISTER_INFO), 2));
 
 /// Whether `one` needs the data segment register to hold the data group: it
-/// calls, returns, traps or is opaque; it is an x87 instruction, whose
-/// emulator fixup spells the segment itself; or it is a string instruction,
-/// which reads the data segment without naming it.
+/// calls, returns, traps or is opaque; it is a string instruction, which reads
+/// the data segment without naming it; or it is an x87 instruction with a
+/// memory operand `datagroup` cannot prefix. An x87 operand with an address
+/// is spelled `ss:` where DS holds a selector: the emulator's override form
+/// (`INT 3Ch`) takes the segment from the instruction's own bits, and the
+/// hardware path from its prefix, so neither reads DS.
 pub fn needs_data_group(one: &crate::model::lir::Insn) -> bool {
     let Some(what) = &one.what else {
         return true;
@@ -352,24 +355,44 @@ pub fn needs_data_group(one: &crate::model::lir::Insn) -> bool {
     }
     if matches!(
         what.op,
-        Operation::Call
-            | Operation::Return
-            | Operation::Escape
-            | Operation::Barrier
-            | Operation::Data
-            | Operation::FloatLoad
+        Operation::Call | Operation::Return | Operation::Escape | Operation::Barrier | Operation::Data
+    )
+    {
+        return true;
+    }
+    let name = what.name.as_deref().unwrap_or("");
+    let x87 = matches!(
+        what.op,
+        Operation::FloatLoad
             | Operation::FloatStore
             | Operation::FloatArith
             | Operation::FloatArithPop
             | Operation::FloatUnary
-    ) {
-        return true;
+    ) || name.starts_with('f');
+    if x87 {
+        return what.dests.iter().chain(&what.sources).any(reads_default_segment);
     }
-    named_for_data_group(what.name.as_deref().unwrap_or(""))
+    named_for_data_group(name)
 }
 
-/// Whether an instruction of this mnemonic is a string instruction, an x87 one,
-/// a trap or a wait. Prefixes are taken off by hand: `str::trim_start_matches`
+/// DEVIATE X87-DS (valid while no emulator-fixup form is emitted; revisit if
+/// one is added): the pin has no segment registers to hold. An x87 operand with
+/// an address is spelled `ss:` where DS holds a selector, which is a prefix
+/// byte on the real opcodes llrm emits. The emulator's `INT 34h-3Bh` forms
+/// (FIDRQQ) read the caller's DS for a default-segment operand and `INT 3Ch`
+/// (FIERQQ, FISRQQ) takes the override from its own bits; no compiler here
+/// emits either (`test_no_emulator_fixup_form_is_emitted`).
+/// Whether the operand is a memory cell no one can prefix: it names no selector
+/// and has no address, so `datagroup` cannot spell `ss:` for it and it reads
+/// DS. A cell with an address takes `ss:` where DS holds something else.
+fn reads_default_segment(place: &Loc) -> bool {
+    matches!(
+        place,
+        Loc::Mem(cell) if cell.selector.is_none() && cell.addr.is_none()
+    )
+}
+/// Whether an instruction of this mnemonic is a string instruction, a trap or a
+/// wait. Prefixes are taken off by hand: `str::trim_start_matches`
 /// with a `&str` pattern builds a substring searcher for each call, which was
 /// 2.4% of a large module's compile, asked of every instruction at every
 /// rebuild of the allocator's facts.
@@ -387,7 +410,6 @@ fn named_for_data_group(name: &str) -> bool {
     ["movs", "lods", "cmps", "outs", "stos", "scas", "ins", "xlat", "int", "wait", "fwait"]
         .iter()
         .any(|one| bare.starts_with(one))
-        || name.starts_with('f')
 }
 // One far load per selector register, as the register file states: its
 // selector result is in the class, not pinned, and the rewriter spells the
@@ -434,14 +456,13 @@ mod tests {
         ["movs", "lods", "cmps", "outs", "stos", "scas", "ins", "xlat", "int", "wait", "fwait"]
             .iter()
             .any(|one| bare.starts_with(one))
-            || name.starts_with('f')
     }
 
     /// Taking the prefixes off by hand must leave every mnemonic where it was:
     /// repeated prefixes, one prefix after another, and a prefix that is
     /// not one.
     #[test]
-    fn test_a_mnemonic_is_told_as_a_string_or_x87_instruction_as_it_always_was() {
+    fn test_a_mnemonic_is_told_as_a_string_or_trap_instruction_as_it_always_was() {
         let bases = [
             "mov",
             "movsb",
@@ -597,6 +618,66 @@ mod tests {
         sources: Vec<Loc>,
     ) -> Semantics {
         Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) }
+    }
+
+    /// The rule above holds only while llrm emits real x87 opcodes: an emitter
+    /// of the emulator's fixup forms must decide DS for them (DEVIATE X87-DS).
+    #[test]
+    fn test_no_emulator_fixup_form_is_emitted() {
+        fn walk(
+            dir: &std::path::Path,
+            hits: &mut Vec<String>,
+        ) {
+            for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, hits);
+                } else if path.extension().is_some_and(|e| e == "rs")
+                    && !path.file_name().is_some_and(|n| n.to_string_lossy().ends_with("_tests.rs"))
+                {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    for symbol in ["FIDRQQ", "FIERQQ", "FISRQQ", "FICRQQ", "FIARQQ", "FIWRQQ"] {
+                        // This test names them; nothing else may.
+                        if text.contains(symbol) && !path.ends_with("backend/target.rs") {
+                            hits.push(format!("{}: {symbol}", path.display()));
+                        }
+                    }
+                }
+            }
+        }
+        let mut hits = Vec::new();
+        walk(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut hits);
+        assert!(hits.is_empty(), "an emulator-fixup form is emitted; revisit DEVIATE X87-DS: {hits:?}");
+    }
+
+    /// fpbench -Os kept no selector in DS across a loop of `fstp dword ptr
+    /// es:[bx+24]`: every x87 instruction needed the data group, so four far
+    /// arrays shared three selector registers and the loop reloaded fs (21
+    /// segment loads, 14 before DS was lost to the rule). An operand that
+    /// names its segment, reaches the frame or has an address `datagroup`
+    /// prefixes never reads DS.
+    #[test]
+    fn test_an_x87_operand_that_names_its_segment_needs_no_data_group() {
+        use crate::objectfile::module::{Addr, Space};
+        let needs = |cell: ir::Mem| {
+            let what = semantics(Operation::FloatStore, "fstp", vec![Loc::Mem(cell)], vec![Loc::st(0)]);
+            needs_data_group(&crate::model::lir::Insn::new(0, None, Some(what), vec![], vec![]))
+        };
+        let global = ir::Mem::new(Some(Addr::new(Space::Segment, 8)), 4);
+        let by_register = ir::Mem { through: RegId::SI, ..ir::Mem::new(None, 4) };
+        assert!(
+            needs(by_register),
+            "premise: a cell with no address, `[si]`, is read through DS and cannot be prefixed"
+        );
+        assert!(!needs(global.clone()), "a data cell is spelled ss: where DS holds a selector");
+        let far = ir::Mem { selector: Some(llrm_lir::Held { value: 1, width: 2 }), ..global.clone() };
+        assert!(!needs(far), "a cell through a far pointer's selector names its segment");
+        let prefixed = ir::Mem::new(Some(Addr { segment: RegId::ES.iced(), ..Addr::new(Space::Segment, 8) }), 4);
+        assert!(!needs(prefixed), "and so does an es: prefix");
+        let frame = ir::Mem::new(Some(Addr::new(Space::Frame, -8)), 4);
+        assert!(!needs(frame), "a frame slot is reached through ss");
+        let register_only = semantics(Operation::FloatArith, "fadd", vec![Loc::st(0)], vec![Loc::st(1)]);
+        assert!(!needs_data_group(&crate::model::lir::Insn::new(0, None, Some(register_only), vec![], vec![])));
     }
 
     /// `add ax,[c]` is ax at two moments, not two places.

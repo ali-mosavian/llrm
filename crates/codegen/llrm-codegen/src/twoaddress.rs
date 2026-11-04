@@ -38,14 +38,14 @@
 //! TwoAddressInstructionPass.cpp#L801, #L1402): no copy of `a` is made, so the
 //! result can join a loop's register while `a` stays in its own.
 //!
-//! DEVIATE TA-4 (no exit while the target reads addresses through a prefix): a
-//! dword or 16-bit result of a `lea` at m16 is the 32-bit prefixed form
-//! (`lea ecx, [eax-1]`), which costs a prefix byte where the pin's `LEA32r` has
-//! none, and the 16-bit address registers (BX/BP, SI/DI) are not used; there
-//! the adds and subs convert and the shifts stay the peephole's, which fuses
-//! them with the add after them (`ThreeAddress::AddSub`).
-//! `upperzero::wide_roots` does not count a `lea` cell: it is arithmetic, not
-//! an address read.
+//! Where the target's dword address form is behind a prefix (m16;
+//! `Profile::three_address`, from the target's address forms) a dword or 16-bit
+//! result of a `lea` is the 32-bit prefixed form (`lea ecx, [eax-1]`), a byte
+//! longer than the pin's `LEA32r`, and the 16-bit address registers (BX/BP,
+//! SI/DI) are not used. There the adds and subs convert and the shifts stay the
+//! peephole's, which fuses them with the add after them
+//! (`ThreeAddress::AddSub`). `upperzero::wide_roots` does not count a `lea`
+//! cell: it is arithmetic, not an address read.
 //!
 //! `isProfitableToConv3Addr`: a source that dies is also converted when the
 //! sum is to end in a register other than the one the source arrives in
@@ -108,7 +108,10 @@ struct State {
     block_of: HashMap<InstrKey, usize>,
     /// The instructions that read or define each value, and whether each
     /// defines it (`use_def_nodbg_operands`).
-    operands: HashMap<u32, Vec<(InstrKey, bool)>>,
+    operands: HashMap<u32, indexmap::IndexSet<(InstrKey, bool)>>,
+    /// The instructions that define each value: a few, where a value read N
+    /// times lists N operands.
+    defs: HashMap<u32, indexmap::IndexSet<InstrKey>>,
     lv: crate::liveness::livevariables::LiveVariables,
 }
 
@@ -217,27 +220,41 @@ impl State {
         }
     }
 
-    /// `new` takes the place of `old`: a value both name the same way keeps its
-    /// kill, now at `new` (`replaceKillInstruction`); a value only one names,
-    /// or names as a use in one and a definition in the other, is made
-    /// again from the block (a full rescan of it for every value named was
-    /// 1.18 M Ir of `replace`).
+    /// `made` (one or more instructions, in order) takes the place of `old`.
+    /// A value `old` only reads and none of `made` defines keeps its kill: the
+    /// last of `made` to read it takes it (`replaceKillInstruction`, and the
+    /// kill a tied pair's copy takes from the source). One instruction in the
+    /// place of another that names a value the same way does the same. A value
+    /// named otherwise is made again from the block, once (a full rescan of it
+    /// for every value named was 1.18 M Ir of `replace`; one rescan per tied
+    /// pair of a value read N times was quadratic in N).
     fn retarget_kills(
         &mut self,
         old: &Insn,
-        new: &Insn,
+        made: &[Arc<Insn>],
         block: usize,
     ) {
-        let mut values: Vec<u32> =
-            old.uses.iter().chain(&old.defines).chain(&new.uses).chain(&new.defines).copied().collect();
+        let mut values: Vec<u32> = old
+            .uses
+            .iter()
+            .chain(&old.defines)
+            .chain(made.iter().flat_map(|one| one.uses.iter().chain(&one.defines)))
+            .copied()
+            .collect();
         values.sort_unstable();
         values.dedup();
         for value in values {
             let role = |one: &Insn| (one.uses.contains(&value), one.defines.contains(&value));
-            if role(old) == role(new) {
-                self.lv.replace_kill_instruction(value, old.id(), new.id());
-            } else {
-                self.refresh_kills(value, block);
+            let heir = match made {
+                [one] if role(old) == role(one) => Some(one),
+                _ if role(old) == (true, false) && made.iter().all(|one| !one.defines.contains(&value)) => {
+                    made.iter().rev().find(|one| one.uses.contains(&value))
+                }
+                _ => None,
+            };
+            match heir {
+                Some(one) => self.lv.replace_kill_instruction(value, old.id(), one.id()),
+                None => self.refresh_kills(value, block),
             }
         }
     }
@@ -247,10 +264,11 @@ impl State {
         one: &Insn,
     ) {
         for &value in &one.uses {
-            self.operands.entry(value).or_default().push((one.id(), false));
+            self.operands.entry(value).or_default().insert((one.id(), false));
         }
         for &value in &one.defines {
-            self.operands.entry(value).or_default().push((one.id(), true));
+            self.operands.entry(value).or_default().insert((one.id(), true));
+            self.defs.entry(value).or_default().insert(one.id());
         }
     }
 
@@ -258,9 +276,17 @@ impl State {
         &mut self,
         one: &Insn,
     ) {
+        for &value in &one.defines {
+            if let Some(list) = self.defs.get_mut(&value) {
+                list.swap_remove(&one.id());
+            }
+        }
         for &value in one.uses.iter().chain(&one.defines) {
             if let Some(list) = self.operands.get_mut(&value) {
-                list.retain(|(key, _)| *key != one.id());
+                // Both roles: an instruction that reads and defines a value is
+                // listed twice.
+                list.swap_remove(&(one.id(), false));
+                list.swap_remove(&(one.id(), true));
             }
         }
     }
@@ -276,6 +302,7 @@ impl BodyFacts {
             stamp_of: HashMap::default(),
             block_of: HashMap::default(),
             operands: HashMap::default(),
+            defs: HashMap::default(),
             lv: crate::liveness::livevariables::LiveVariables::from_dataflow(body),
         };
         for (at, block) in body.blocks.iter().enumerate() {
@@ -299,7 +326,7 @@ impl BodyFacts {
         &self,
         value: u32,
     ) -> Vec<(InstrKey, bool)> {
-        self.state.borrow().operands.get(&value).cloned().unwrap_or_default()
+        self.state.borrow().operands.get(&value).map(|list| list.iter().copied().collect()).unwrap_or_default()
     }
 
     fn block_of(
@@ -317,29 +344,38 @@ impl BodyFacts {
     }
 
     /// The last reader of `value` in `block` after `after`, when no definition
-    /// of it follows (the pin reads it from `LiveVariables::findKill`).
+    /// of it follows: the block's latest kill (`LiveVariables::findKill`, kept
+    /// as the pass edits), where the readers of a value read N times are not
+    /// walked. A reader that is no kill is no answer to the callers, which ask
+    /// `killed` of it.
     pub fn last_reader_after(
         &self,
         block: usize,
         after: InstrKey,
         value: u32,
     ) -> Option<InstrKey> {
+        use crate::liveness::livevariables::Site;
         let state = self.state.borrow();
         let floor = *state.stamp_of.get(&after)?;
-        let (mut reader, mut def): (Option<(u64, InstrKey)>, Option<u64>) = (None, None);
-        for &(key, defines) in state.operands.get(&value)? {
-            if state.block_of.get(&key) != Some(&block) {
-                continue;
-            }
-            let stamp = state.stamp_of[&key];
-            if defines {
-                def = def.max(Some(stamp));
-            } else if stamp > floor && reader.is_none_or(|(best, _)| stamp > best) {
-                reader = Some((stamp, key));
-            }
-        }
-        let (stamp, key) = reader?;
-        def.is_none_or(|def| def <= stamp).then_some(key)
+        let (stamp, key) = state
+            .lv
+            .var_info(value)?
+            .kills
+            .iter()
+            .filter(|kill| kill.block == block)
+            .filter_map(|kill| match kill.site {
+                Site::Insn(key) => state.stamp_of.get(&key).map(|stamp| (*stamp, key)),
+                Site::Phi(_) => None,
+            })
+            .max()?;
+        let reads = state.insns[&key].uses.contains(&value);
+        let defined_after = state
+            .defs
+            .get(&value)
+            .is_some_and(
+                |defs| defs.iter().any(|def| state.block_of.get(def) == Some(&block) && state.stamp_of[def] > stamp),
+            );
+        (stamp > floor && reads && !defined_after).then_some(key)
     }
 
     /// `isPlainlyKilled(MI, Reg)`: `MI` is the kill of `value` in its block
@@ -373,7 +409,7 @@ impl BodyFacts {
         state.block_of.insert(new.id(), block);
         state.add_operands(&new);
         state.insns.insert(new.id(), Arc::clone(&new));
-        state.retarget_kills(&before, &new, block);
+        state.retarget_kills(&before, std::slice::from_ref(&new), block);
     }
 
     /// The instruction `key` goes before `before` (the end of the block without
@@ -445,10 +481,7 @@ impl BodyFacts {
         state.block_of.insert(last.id(), block);
         state.add_operands(last);
         state.insns.insert(last.id(), Arc::clone(last));
-        state.retarget_kills(&before, last, block);
-        for new in rest {
-            state.refresh_named(new, block);
-        }
+        state.retarget_kills(&before, made, block);
     }
 
     /// The function as edited.
@@ -603,8 +636,8 @@ pub fn three_address(
         && one.requires.is_empty()
         && one.delivers.is_empty()
         && let (Loc::Held(into), Loc::Held(base)) = (&what.dests[0], &what.sources[0])
-        && into.width == 4
-        && base.width == 4
+        && (into.width == 4 || narrow_lea(mode, into.width))
+        && base.width == into.width
         && into.value != base.value
     {
         let offset = if name == "inc" { 1 } else { -1 };
@@ -612,7 +645,7 @@ pub fn three_address(
         made.what = Some(Semantics {
             op: Operation::Address,
             name: Some("lea".into()),
-            dests: vec![Loc::Held(*into)],
+            dests: vec![Loc::Held(Held { width: 4, ..*into })],
             sources: vec![Loc::Mem(Mem {
                 base: Some(if mode == ThreeAddress::Wide { Held { width: 8, ..*base } } else { *base }),
                 offset,
@@ -637,7 +670,10 @@ pub fn three_address(
     let word = width == 2
         && mode == ThreeAddress::AddSubWords
         && matches!(what.sources[1], Loc::Imm(Imm { address: None, .. }));
-    if !(width == 4 || word) || base.width != width || into.value == base.value {
+    // `ADD8ri`, `ADD16ri`, `ADD8rr`, `ADD16rr` (not `SUB8ri`, `SUB16ri`: the
+    // pin's FIXME) through `LEA64_32r`.
+    let narrow = narrow_lea(mode, width) && what.name.as_deref() == Some("add");
+    if !(width == 4 || word || narrow) || base.width != width || into.value == base.value {
         return None;
     }
     let wide = |held: &Held| if mode == ThreeAddress::Wide { Held { width: 8, ..*held } } else { *held };
@@ -658,6 +694,11 @@ pub fn three_address(
         }
         (_, Some("shl")) => return None,
         (Loc::Imm(Imm { value, address: None, .. }), name) => {
+            let value = &match width {
+                1 => i64::from(*value as i8),
+                2 if narrow => i64::from(*value as i16),
+                _ => *value,
+            };
             let step = if name == Some("sub") { value.checked_neg()? } else { *value };
             // A word unit step stays `inc`: with the source in an address
             // register the `lea` is three bytes against the INC's one, and
@@ -665,9 +706,9 @@ pub fn three_address(
             if word && step.abs() == 1 {
                 return None;
             }
-            Mem { base: Some(wide(base)), offset: step, ..Mem::new(None, width) }
+            Mem { base: Some(wide(base)), offset: step, ..Mem::new(None, if narrow { 4 } else { width }) }
         }
-        (Loc::Held(index), Some("add")) if index.width == 4 && index.value != into.value => {
+        (Loc::Held(index), Some("add")) if index.width == width && index.value != into.value => {
             Mem { base: Some(wide(base)), index: Some(wide(index)), scale: 1, offset: 0, ..Mem::new(None, 4) }
         }
         _ => return None,
@@ -676,11 +717,21 @@ pub fn three_address(
     made.what = Some(Semantics {
         op: Operation::Address,
         name: Some("lea".into()),
-        dests: vec![Loc::Held(*into)],
+        dests: vec![Loc::Held(if narrow { Held { width: 4, ..*into } } else { *into })],
         sources: vec![Loc::Mem(cell)],
         ..Semantics::new(Operation::Address)
     });
     Some(Arc::new(made))
+}
+
+/// `convertToThreeAddressWithLEA`: a byte or word `add`, `inc` or `dec` is a
+/// `LEA64_32r` of the source read whole, only where registers are 64 bits
+/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L1228>).
+fn narrow_lea(
+    mode: ThreeAddress,
+    width: u32,
+) -> bool {
+    mode == ThreeAddress::Wide && matches!(width, 1 | 2)
 }
 
 /// Whether the flags `insns[index]` writes are written again, in its block,
@@ -1529,7 +1580,15 @@ impl<'a> Commuter<'a> {
         }
         // `commuteInstruction`: the sources swap.
         let mut made = (**one).clone();
-        made.what = Some(Semantics { sources: vec![Loc::Held(*second), Loc::Held(*first)], ..what.clone() });
+        // A `cmov` also takes the opposite condition.
+        let name = what.name.as_deref().and_then(|name| {
+            (what.op == ir::Operation::Select).then(|| crate::backend::flagscopy::opposite_cmov(name)).flatten()
+        });
+        made.what = Some(Semantics {
+            sources: vec![Loc::Held(*second), Loc::Held(*first)],
+            name: name.map(Into::into).or_else(|| what.name.clone()),
+            ..what.clone()
+        });
         Some(Arc::new(made))
     }
 }
@@ -1542,6 +1601,29 @@ mod tests {
     use crate::model::ir::{Held, Operation, Semantics};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
+
+    /// A byte `add` of a constant is a `LEA64_32r` only where registers are 64
+    /// bits (`Wide`): the pin's `convertToThreeAddressWithLEA` returns null on
+    /// a 32-bit target, so the m16 and m32 listings are untouched.
+    #[test]
+    fn test_a_byte_add_is_a_lea_only_at_wide() {
+        let held = |value: u32| Held { value, width: 1 };
+        let what = Semantics {
+            name: Some("add".into()),
+            dests: vec![Loc::Held(held(2))],
+            sources: vec![Loc::Held(held(1)), Loc::Imm(crate::model::ir::Imm { value: 236, width: 1, address: None })],
+            ..Semantics::new(Operation::Binary)
+        };
+        let one = Insn::new(0, Some((0, 0)), Some(what), vec![2], vec![1]);
+        for mode in [ThreeAddress::AddSub, ThreeAddress::AddSubWords, ThreeAddress::All] {
+            assert!(three_address(&one, mode).is_none(), "{mode:?}");
+        }
+        let made = three_address(&one, ThreeAddress::Wide).expect("a lea at Wide");
+        let lea = made.what.as_ref().unwrap();
+        assert_eq!(lea.name.as_deref(), Some("lea"));
+        let Loc::Mem(cell) = &lea.sources[0] else { panic!("{lea:?}") };
+        assert_eq!(cell.offset, -20, "the byte immediate is signed");
+    }
 
     /// `process_copy` entered every instruction of a block in a std `HashSet`
     /// (SipHash, 409 Ir an insert, 0.86 M of d_faces' 11.7 M in TwoAddress)
@@ -1661,5 +1743,58 @@ mod tests {
         let (small, large) = (walked_in(250), walked_in(1000));
         assert!(small > 0, "the premise: the kills are remade");
         assert!(large <= 2 * small, "4x the block walked {large} against {small}: the whole block is walked");
+    }
+
+    fn tied_pairs_sharing_a_source(count: i64) -> (BodyFacts, Vec<Arc<Insn>>) {
+        let held = |value: u32| Held { value, width: 4 };
+        let make = |at: i64, op: Operation, name: &str, defines: Vec<u32>, uses: Vec<u32>| {
+            let what = Semantics {
+                name: Some(name.into()),
+                dests: defines.iter().map(|&value| Loc::Held(held(value))).collect(),
+                sources: uses.iter().map(|&value| Loc::Held(held(value))).collect(),
+                ..Semantics::new(op)
+            };
+            Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses))
+        };
+        let adds: Vec<Arc<Insn>> =
+            (0..count).map(|n| make(n, Operation::Binary, "add", vec![10 + n as u32], vec![1, 2])).collect();
+        let body =
+            LirBody::new("t", 0, vec![LirBlock::new(0, adds.clone()).into()], IndexMap::default(), IndexMap::default());
+        let facts = BodyFacts::of(&body);
+        let mut made = Vec::new();
+        for (n, one) in adds.iter().enumerate() {
+            let n = n as i64;
+            let copy = make(10_000 + 2 * n, Operation::Move, "mov", vec![1000 + n as u32], vec![1]);
+            let last = make(10_001 + 2 * n, Operation::Binary, "add", vec![10 + n as u32], vec![1000 + n as u32, 2]);
+            facts.replace(0, one, &[Arc::clone(&copy), Arc::clone(&last)]);
+            made.extend([copy, last]);
+        }
+        (facts, made)
+    }
+
+    /// N tied pairs read one source (the DAG's shifts and leas of one value,
+    /// `equal` at 4096): every replace made the source's kills again from its
+    /// N readers, 5.7 G Ir of twoaddr, x40 at 2N. The source keeps its kill by
+    /// moving it to the copy that reads it last.
+    #[test]
+    fn test_n_tied_pairs_reading_one_source_never_remake_its_kills() {
+        REFRESHED.with(|seen| seen.borrow_mut().clear());
+        let (facts, made) = tied_pairs_sharing_a_source(20);
+        let seen = REFRESHED.with(|seen| seen.borrow().clone());
+        assert!(!seen.is_empty(), "the premise: the copies' own values are remade");
+        assert!(!seen.contains(&1), "v1 is read by every copy: {seen:?}");
+        assert!(facts.killed(made[2 * 19].id(), 1), "the last copy is v1's kill");
+        assert!(!facts.killed(made[0].id(), 1), "the first is not");
+    }
+
+    /// `last_reader_after` walked every operand of a value read N times for
+    /// each tied pair; the answer is the block's latest kill (the pin's
+    /// `findKill`), and none once the value is defined after it.
+    #[test]
+    fn test_the_last_reader_is_the_latest_kill_unless_a_definition_follows() {
+        let (facts, made) = tied_pairs_sharing_a_source(6);
+        let first = made[0].id();
+        assert_eq!(facts.last_reader_after(0, first, 1), Some(made[2 * 5].id()));
+        assert_eq!(facts.last_reader_after(0, made[2 * 5].id(), 1), None, "nothing reads it after the last");
     }
 }

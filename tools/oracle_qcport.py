@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """QCport's C modules under every checking oracle, then built and run against the all-Borland build.
 
-    QCPORT=... QCPORT_INC=... QCPORT_BORLAND=... tools/oracle_qcport.py [--bin DIR] [--jobs N] [--levels=-O2,-Os]
+    QCPORT=... QCPORT_INC=... QCPORT_BORLAND=... LLRM_BORLAND_INC=... tools/oracle_qcport.py [--bin DIR] [--jobs N] [--levels=-O2,-Os]
 
 The oracle sweep (tools/oracle_sweep.py) compiles BASIC and Nib programs; the C corpus it lacked is where an unsound memory
 summary survived to main and was found only by running QCport's `sc`. Here each module of QCport's six source directories is
 compiled at each level with every `LLRM_CHECK_*` oracle on (a panic, or an exit with no message, is a finding, as there); the -O2
-objects, built with the oracles on, are linked and run by tools/qcport-run.py against the Borland build, which must draw the same
+objects, built with the oracles on, are linked and run by tools/qcport-run-cc.py against the Borland build, which must draw the same
 frames, polygons and picture. Premise: the run drew (its summary line names frames and polygons, both above zero); a run that
 printed nothing, or drew nothing, fails the tier whatever else it says. Exit 1 on a finding or a difference, 2 on a failed premise.
 """
@@ -28,11 +28,16 @@ import llrmbin  # noqa: E402
 import oracle_sweep  # noqa: E402
 
 MODULES = ("host", "render", "model", "game", "sound", "ui")
-SUMMARY = re.compile(r"(\d+) modules by llrm-c draw what the Borland build draws: (\d+) frames, (\d+) polys")
+SUMMARY = re.compile(r"(\d+) modules at \S+ draw what the Borland build draws: (\d+) frames, (\d+) polys")
+
+
+ROW = os.environ.get("QCPORT_CC_ROW", "x86_16-dos")
 
 
 def flags(qcport: Path, include: Path) -> list[str]:
-    return [f for part in (*MODULES, "qgl") for f in ("-I", str(qcport / part))] + ["-I", str(include)]
+    """llrm-cc's line for a QCport module (as tools/qcport-run-cc.py's): `include` is the lower-case mirror of Borland's headers."""
+    dirs = [f for part in (*MODULES, "qgl") for f in ("-I", str(qcport / part))]
+    return ["-c", "-fasm-blocks", "-D_asm=__asm", "-nostdinc", "-isystem", str(include), *dirs]
 
 
 def oracle_env(base: dict[str, str] | None = None) -> dict[str, str]:
@@ -45,29 +50,30 @@ def oracle_env(base: dict[str, str] | None = None) -> dict[str, str]:
 
 def compile_module(compiler: Path, source: Path, level: str, extra: list[str], out: Path) -> tuple[str | None, dict[str, int]]:
     """(the finding or None, the oracles reached) of one module at `level`; the object is `out`."""
-    done = subprocess.run([str(compiler), level, *extra, str(source), "-o", str(out)], capture_output=True, text=True, env=oracle_env())
+    done = subprocess.run([str(compiler), level, *extra, str(source), "-o", str(out)], capture_output=True, text=True, env={**oracle_env(), "LLRM_CC_TARGET": ROW})
     reached = {name: int(sites) for name, sites in oracle_sweep.REACHED.findall(done.stderr)}
     return oracle_sweep.classify(done.returncode, oracle_sweep.REACHED.sub("", done.stderr)), reached
 
 
 def drew(output: str) -> tuple[int, int] | None:
-    """(frames, polys) of qcport-run's summary line; None where it printed none, or the run drew nothing."""
+    """(frames, polys) of qcport-run-cc's summary line; None where it printed none, or the run drew nothing."""
     found = SUMMARY.search(output)
     return (int(found[2]), int(found[3])) if found and int(found[2]) and int(found[3]) else None
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--bin", type=Path, default=None, help="the llrm-c directory (default: LLRM_BIN, else the target dir's release)")
+    parser.add_argument("--bin", type=Path, default=None, help="the llrm-cc directory (default: LLRM_BIN, else the target dir's release)")
     parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "8")))
     parser.add_argument("--levels", default="-O2,-Os")
     args = parser.parse_args()
     try:
-        qcport, include = (Path(os.environ[name]).expanduser() for name in ("QCPORT", "QCPORT_INC"))
+        qcport, include = (Path(os.environ[name]).expanduser() for name in ("QCPORT", "LLRM_BORLAND_INC"))
+        os.environ["QCPORT_INC"]
         os.environ["QCPORT_BORLAND"]
     except KeyError as missing:
         sys.exit(f"{missing.args[0]} is not set; see the top of {Path(__file__).name}")
-    compiler = (args.bin or llrmbin.bin_dir()) / "llrm-c"
+    compiler = llrmbin.compiler(args.bin or llrmbin.bin_dir())
     extra = flags(qcport, include)
     sources = sorted(source for part in MODULES for source in (qcport / part).glob("*.c"))
     work = Path(tempfile.mkdtemp(prefix="oracle-qcport-", dir=os.environ.get("TMPDIR")))
@@ -100,7 +106,7 @@ def main() -> int:
     if "-O2" not in levels:
         print("the run needs -O2 objects: nothing to run")
         return 2
-    run = subprocess.run([sys.executable, str(HERE / "qcport-run.py"), str(compiler)], capture_output=True, text=True, env=oracle_env({**os.environ, "QCPORT_OBJECTS": str(objects)}))
+    run = subprocess.run([sys.executable, str(HERE / "qcport-run-cc.py")], capture_output=True, text=True, env=oracle_env({**os.environ, "QCPORT_OBJECTS": str(objects)}))
     print(run.stdout.strip())
     if run.returncode and not drew(run.stdout):
         print(run.stderr.strip()[-600:])

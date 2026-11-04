@@ -32,6 +32,18 @@ pub enum Kind {
     Far,
 }
 
+/// One operating system of a target (`[[platform]]` in `datalayout.toml`).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Platform {
+    pub triple: String,
+    pub datalayout: String,
+    /// The object format the system links, by its `object.toml` name.
+    pub format: String,
+    /// What of the system's ABI the target does not carry yet; the driver
+    /// refuses the system while this is set.
+    pub pending: Option<String>,
+}
+
 /// A target's data layout.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Layout {
@@ -42,6 +54,10 @@ pub struct Layout {
     /// The `target triple` of the LLVM IR this target takes, where it takes
     /// any.
     pub llvm_triple: Option<String>,
+    /// The other operating systems this target takes IR for: the triple a
+    /// module of theirs states, the datalayout clang prints for it, and the
+    /// object format the system links.
+    pub platforms: Vec<Platform>,
     pub spaces: AddressSpaces,
     /// The operations (`select`, `fptoui.i64`) the machine has no instruction
     /// for, which the compiler expands before selection: LLVM's
@@ -57,6 +73,11 @@ pub struct Layout {
     /// compiler prices this target with; none where the description names none.
     pub tti: Option<String>,
     pub llvm_cpu: Option<String>,
+}
+
+/// Whether the datalayout string `datalayout` states an x87 `f80`.
+pub fn states_extended_float(datalayout: &str) -> bool {
+    datalayout.split('-').any(|part| part.starts_with("f80:"))
 }
 
 impl AddressSpaces {
@@ -121,6 +142,12 @@ impl Layout {
     /// (`f80`). The one place the size is stated; a frontend reads it here.
     pub fn long_double_bytes(&self) -> u64 {
         self.data().float_alloc_size(FloatKind::X86Fp80)
+    }
+
+    /// Whether the datalayout states an x87 `f80`: a target without one has no
+    /// extended float, so no instruction for `pow` and its kin.
+    pub fn extended_float(&self) -> bool {
+        states_extended_float(&self.datalayout)
     }
 
     /// A `long double`'s alignment in bytes.
@@ -216,7 +243,23 @@ impl Layout {
             }
         };
         let llvm_triple = text("llvm_triple")?;
+        let mut platforms = Vec::new();
+        for one in value.get("platform").and_then(|list| list.as_array()).into_iter().flatten() {
+            let field = |name: &str| {
+                one.get(name)
+                    .and_then(|one| one.as_str())
+                    .map(str::to_owned)
+                    .ok_or(format!("a platform has no string `{name}`"))
+            };
+            platforms.push(Platform {
+                triple: field("triple")?,
+                datalayout: field("datalayout")?,
+                format: field("format")?,
+                pending: field("pending").ok(),
+            });
+        }
         Ok(Self {
+            platforms,
             mode,
             datalayout,
             llvm_triple,
@@ -249,6 +292,18 @@ mod tests {
 
     /// A target found by the triple a module states needs the triple read from
     /// its description.
+    #[test]
+    fn a_layout_reads_its_platforms() {
+        let text = format!(
+            "{FLAT}\n[[platform]]\ntriple = \"x86_64-pc-windows-msvc\"\ndatalayout = \"e-m:w\"\nformat = \"coff\"\npending = \"abi\"\n"
+        );
+        let platforms = Layout::parse(&text).unwrap().platforms;
+        assert_eq!(platforms.len(), 1);
+        assert_eq!((platforms[0].triple.as_str(), platforms[0].format.as_str()), ("x86_64-pc-windows-msvc", "coff"));
+        assert_eq!(platforms[0].pending.as_deref(), Some("abi"));
+        assert!(Layout::parse(FLAT).unwrap().platforms.is_empty());
+    }
+
     #[test]
     fn a_layout_reads_its_llvm_triple() {
         let text = format!("llvm_triple = \"x86_64-unknown-linux-gnu\"\n{FLAT}");
@@ -286,6 +341,16 @@ mod tests {
         assert_eq!((with("f80:16").long_double_bytes(), with("f80:16").long_double_align()), (10, 2));
         assert_eq!((with("f80:32").long_double_bytes(), with("f80:32").long_double_align()), (12, 4));
         assert_eq!(Layout::parse(FLAT).unwrap().long_double_bytes(), 10);
+    }
+
+    /// `^` takes the library's `pow` where the datalayout has no `f80`; a
+    /// layout that states one keeps the x87 sequence.
+    #[test]
+    fn a_layout_has_an_extended_float_when_it_states_f80() {
+        let with = |f80: &str| Layout::parse(&FLAT.replace("e-p:32:32", &format!("e-p:32:32-{f80}"))).unwrap();
+        assert!(with("f80:16").extended_float() && with("f80:32").extended_float());
+        assert!(!Layout::parse(FLAT).unwrap().extended_float());
+        assert!(!states_extended_float("e-m:e-p:32:32-i64:64-n32:64-S128"));
     }
 
     /// The segment size was the compiler's own 64K, cutting a flat program's

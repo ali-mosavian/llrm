@@ -107,6 +107,7 @@ fn listed(
         size: false,
         entry: 0,
         stack_check: None,
+        probe_stack: None,
         registers: llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
     };
     masm::_procedure(&procedure, &IndexMap::default(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect()
@@ -523,6 +524,48 @@ fn test_arms_that_end_differently_are_not_seen_whole() {
 
     let built = tailmerge::ITEMS_BUILT.with(|one| one.get());
     assert!(built <= 12, "{built} items built for two arms that cannot share a tail");
+}
+
+/// Each merge that split a block made the predecessor map again from every
+/// block: a body of N merging diamonds built N+1 maps (the pin's blocks keep
+/// their predecessor lists), and `lir jumps` grew x2.21 from 256 to 512
+/// branches.
+#[test]
+fn test_merges_that_split_blocks_do_not_make_the_predecessor_map_again() {
+    let diamonds: i64 = 12;
+    let mut blocks: Vec<Block> = Vec::new();
+    for k in 0..diamonds {
+        let at = 100 * (k + 1);
+        let arm = |arm: i64| {
+            let own = at + arm * 10;
+            block(
+                own,
+                vec![_compare(own + 1), _inserted(_move(own + 2, imm(0))), _inserted(_jump(own + 3, at + 50))],
+                vec![at + 50],
+            )
+            .into()
+        };
+        blocks.push(block(at, vec![_compare(at), _branch(at + 1, "je", at + 20)], vec![at + 20, at + 10]).into());
+        blocks.extend([arm(1), arm(2)]);
+        let next = if k + 1 < diamonds { 100 * (k + 2) } else { 0 };
+        blocks.push(
+            if next == 0 {
+                block(at + 50, vec![_compare(at + 51), _return(at + 52)], vec![])
+            } else {
+                block(at + 50, vec![_compare(at + 51), _jump(at + 52, next)], vec![next])
+            }
+            .into(),
+        );
+    }
+    let source = placed(&body("f", 100, blocks)).unwrap();
+    tailmerge::PREDECESSOR_MAPS.with(|one| one.set(0));
+
+    let merged = tailmerge::merged(&source, false, None).unwrap().expect("the diamonds merge");
+
+    let made = tailmerge::PREDECESSOR_MAPS.with(|one| one.get());
+    let moves = merged.insns().iter().filter(|one| one.what.as_ref().is_some_and(|w| w.op == Operation::Move)).count();
+    assert!(moves < 24, "premise: tails were merged ({moves} moves left of 24)");
+    assert!(made <= 6, "{made} predecessor maps made for {diamonds} diamonds");
 }
 
 /// qglsurf emitted the same zero-result tail from two failure arms.
@@ -1178,6 +1221,55 @@ fn test_return_duplication_rejects_growth_and_source_owned_tails() {
     // Python `is`: nothing changed, so the result equals the input.
     assert_eq!(duplicated_returns(large.clone(), &|| 1), large);
     assert_eq!(duplicated_returns(owned.clone(), &|| 1), owned);
+}
+
+/// A sibling call (a `jmp` return) names its callee by the instruction's id,
+/// which a copy takes from the jump it replaces: copied into two parents it
+/// had none, and `$QB$MAIN` of examples/dot/dot.bas -m32 failed with "a call
+/// with no callee". The tail stays shared.
+#[test]
+fn test_return_duplication_keeps_a_sibling_call_shared() {
+    let sibling = _inserted(_insn(30, Operation::Return, "jmp", vec![], vec![], None));
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20)], vec![20, 10]).into(),
+            block(10, vec![_move(10, imm(8))], vec![30]).into(),
+            block(30, vec![sibling], vec![]).into(),
+            block(20, vec![_move(20, imm(10)), _inserted(_jump(21, 30))], vec![30]).into(),
+        ],
+    );
+
+    assert_eq!(duplicated_returns(source.clone(), &|| 1), source);
+}
+
+/// Placement copied a sibling call's tail into the parents that jump to it,
+/// under the jump's id, and the callee table names the call by the original:
+/// `$QB$MAIN` of examples/dot/dot.bas -m32 failed with "a call with no
+/// callee". Every sibling call keeps the id it was selected with.
+#[test]
+fn test_placement_keeps_a_sibling_call_under_its_own_id() {
+    let sibling = _insn(30, Operation::Return, "jmp", vec![], vec![], None);
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20)], vec![20, 10]).into(),
+            block(10, vec![_move(10, imm(8)), _jump(11, 30)], vec![30]).into(),
+            block(30, vec![sibling], vec![]).into(),
+            block(20, vec![_move(20, imm(10)), _jump(21, 30)], vec![30]).into(),
+        ],
+    );
+    let ids: Vec<i64> = placed(&source)
+        .unwrap()
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Return))
+        .map(|one| one.at)
+        .collect();
+    assert!(ids.iter().all(|at| *at == 30), "{ids:?}");
 }
 
 /// The raise lays a C loop out test first, so entered at its body the
@@ -2310,4 +2402,149 @@ fn test_copy_propagation_runs_again_after_the_control_flow() {
     };
     let optimized = names("386");
     assert_eq!(&optimized[optimized.len() - 2..], ["ControlFlow", "CopyPropagation"]);
+}
+
+fn dword() -> Loc {
+    Loc::Reg(Reg { register: RegId::EAX, width: 4 })
+}
+
+/// `mov eax, value; <test|cmp> eax, ..; <cc> 3; jmp 2` in block 1, and the two
+/// ways out.
+fn constant_compare(
+    value: i64,
+    name: &str,
+    other: Loc,
+    cc: &str,
+) -> LirBody {
+    let load =
+        _insn(1, Operation::Move, "mov", vec![dword()], vec![Loc::Imm(Imm { value, width: 4, address: None })], None);
+    let compare = _insn(1, Operation::Compare, name, vec![], vec![dword(), other], None);
+    let mut source = body(
+        "f",
+        0,
+        vec![
+            block(0, vec![_branch(0, "jp", 2), _jump(0, 1)], vec![2, 1]).into(),
+            block(
+                1,
+                vec![load, compare, _branch(1, cc, 3), _jump(1, 2)].into_iter().map(_inserted).collect(),
+                vec![3, 2],
+            )
+            .into(),
+            block(2, vec![_move(2, imm(0)), _jump(2, 3)], vec![3]).into(),
+            block(3, vec![_return(3)], vec![]).into(),
+        ],
+    );
+    source.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+    source
+}
+
+fn names(result: &LirBody) -> Vec<String> {
+    result
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter(|one| !one.is_meta())
+        .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+        .collect()
+}
+
+/// qlight's byte clamp ended `mov eax, 255; test eax, eax; jg out` on the
+/// path that had just set eax to 255: a compare and a branch that always go
+/// one way, +5 bytes and 2 instructions on every clamped value.
+#[test]
+fn test_a_branch_on_a_compare_of_a_loaded_constant_goes_one_way() {
+    let eax = dword();
+    let cases = [
+        // (constant, compare, other operand, branch, taken)
+        (255, "test", eax.clone(), "jg", true),
+        (255, "test", eax.clone(), "jle", false),
+        (0, "test", eax.clone(), "je", true),
+        (-1, "test", eax.clone(), "js", true),
+        (-1, "test", eax.clone(), "jb", false),
+        (255, "cmp", Loc::Imm(Imm { value: 255, width: 4, address: None }), "jge", true),
+        (255, "cmp", Loc::Imm(Imm { value: 256, width: 4, address: None }), "jge", false),
+        // unsigned: 0xFFFFFFFF is above 1; signed it is below.
+        (-1, "cmp", Loc::Imm(Imm { value: 1, width: 4, address: None }), "ja", true),
+        (-1, "cmp", Loc::Imm(Imm { value: 1, width: 4, address: None }), "jl", true),
+        // signed overflow: i32::MIN < 1 though the difference is positive.
+        (i64::from(i32::MIN), "cmp", Loc::Imm(Imm { value: 1, width: 4, address: None }), "jl", true),
+        (i64::from(i32::MAX), "cmp", Loc::Imm(Imm { value: -1, width: 4, address: None }), "jg", true),
+    ];
+    for (value, name, other, cc, taken) in cases {
+        let result = threaded(&placed(&constant_compare(value, name, other, cc)).unwrap());
+        let got = names(&result);
+        assert!(!got.iter().any(|one| one == name), "{name} {cc} {value}: {got:?}");
+        // Nothing follows a jump: an anchor after it made `masm` refuse to
+        // free the frame register (qlight at -m32 kept `push ebp`).
+        for block in &result.blocks {
+            let ends = block
+                .insns
+                .iter()
+                .position(
+                    |one| one.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Jump | Operation::Return)),
+                );
+            assert!(ends.is_none_or(|at| at + 1 == block.insns.len()), "{name} {cc} {value}: {:?}", block.insns);
+        }
+        assert!(!got.iter().any(|one| one == cc), "{name} {cc} {value}: the branch stays {got:?}");
+        let jumps = got.iter().filter(|one| *one == "jmp").count();
+        assert_eq!(jumps > 0, taken, "{name} {cc} {value}: a decided branch is a jump or nothing {got:?}");
+    }
+}
+
+/// A write to the register between the load and the compare, or a compare
+/// that is not the one before the branch's flags, decides nothing.
+#[test]
+fn test_a_branch_after_the_constant_is_changed_keeps_its_compare() {
+    let mut source = constant_compare(255, "test", dword(), "jg");
+    let byte = _insn(
+        1,
+        Operation::Move,
+        "mov",
+        vec![Loc::Reg(Reg { register: RegId::AX, width: 1 })],
+        vec![Loc::Imm(Imm { value: 0, width: 1, address: None })],
+        None,
+    );
+    let block = source.blocks[1].clone();
+    let mut insns = block.insns.to_vec();
+    insns.insert(1, byte);
+    source.blocks[1] = block.with_insns(insns).into_inner().into();
+    let got = names(&threaded(&source));
+    assert!(got.iter().any(|one| one == "test"), "{got:?}");
+}
+
+/// Deciding a branch removed the flow into a block, and the blocks it led to
+/// kept their recorded runs: the verifier read "block 0x78 runs 0.009 times,
+/// its predecessors 0.001" and llrm-nib failed on jpeg_single at -Os.
+#[test]
+fn test_a_decided_branch_leaves_no_stale_frequency_downstream() {
+    let mut source = constant_compare(255, "test", dword(), "jg");
+    source.blocks[2] = block(2, vec![_move(2, imm(0)), _jump(2, 4)], vec![4]).into();
+    source.blocks.push(block(4, vec![_return(4)], vec![]).into());
+    let table = [(0, 1.0), (1, 0.5), (2, 1.0), (3, 1.0), (4, 3.0)].into_iter().collect();
+    source.frequencies = Some(Arc::new(crate::model::lir::BlockFrequencies(table)));
+
+    let result = threaded(&source);
+
+    assert_eq!(Frequency::violations(&result), Vec::<String>::new());
+}
+
+/// The tail merge sorts its candidates by `hash_of`, so a digest that moved
+/// with any field of `Semantics` reordered the merges: a field added for
+/// something else (`table_id`) swapped two landing labels of level.nib m16 -O2
+/// (objects fd6a6eb8 and ce3fe036). The pin's `HashMachineInstr` hashes the
+/// operation and the operands only.
+#[test]
+fn the_tail_merge_digest_ignores_what_is_no_operand_and_sees_what_is() {
+    let one = _insn(1, Operation::Move, "mov", vec![ax()], vec![imm(3)], None);
+    let with = |change: &dyn Fn(&mut Semantics)| {
+        let mut what = one.what.clone().expect("semantics");
+        change(&mut what);
+        tailmerge::hash_of(&Insn::new(1, Some((1, 1)), Some(what), Vec::new(), Vec::new()))
+    };
+    let base = tailmerge::hash_of(&one);
+    assert_eq!(base, with(&|what| what.repeat = true), "repeat is no operand");
+    assert_eq!(base, with(&|what| what.pops = Some(4)), "pops is no operand");
+    assert_ne!(base, with(&|what| what.sources = vec![imm(4)]), "an immediate is an operand");
+    assert_ne!(base, with(&|what| what.dests = vec![bx()]), "a register is an operand");
+    assert_ne!(base, with(&|what| what.name = Some("add".into())), "the opcode is hashed");
 }

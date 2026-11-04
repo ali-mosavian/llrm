@@ -1782,3 +1782,34 @@ b0:
     assert_eq!(shape(peek), (1, 0));
     assert!(found[&anything].stores.len() > 1 && found[&anything].loads.len() > 1, "unknown memory too");
 }
+
+/// A load asked its global's size through the whole object: capture state and
+/// an interner lookup (750 Ir each) for a number the type gives. fjoins N=64
+/// asked 63,024 times, 47 M of 991 M Ir.
+#[test]
+fn test_the_extent_of_a_global_is_read_without_interning_its_object() {
+    let parsed = Parsed::new(
+        "@g = global i32 7
+
+define void @f() {
+b0:
+  store i8 0, ptr @g
+  ret void
+}
+",
+    );
+    let unit = parsed.unit();
+    let root = unit
+        .function
+        .walk()
+        .flat_map(|(_, inst)| unit.function.instruction(inst).operands.iter().copied().collect::<Vec<_>>())
+        .find(|operand| matches!(
+            operand,
+            Operand::Constant(id) if matches!(unit.context.get(*id).kind, llrm_mir::context::ConstantKind::Global(_))
+        ))
+        .expect("the global's address");
+    let interner = ObjectInterner::of(unit.context);
+    let before = interner.lookups();
+    assert_eq!(memory::extent_of(&unit, root), Some(4));
+    assert_eq!(interner.lookups(), before, "extent_of interned the global's object");
+}

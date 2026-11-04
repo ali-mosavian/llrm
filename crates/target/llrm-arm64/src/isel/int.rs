@@ -27,6 +27,19 @@ fn mask(bits: u32) -> u64 {
     if bits >= 64 { u64::MAX } else { (1u64 << bits) - 1 }
 }
 
+/// What a comparison reads once its operands are in registers.
+pub(super) struct CompareOperands {
+    pub(super) predicate: IntPredicate,
+    width: Width,
+    left: Gpr,
+    right: CompareRight,
+}
+
+enum CompareRight {
+    Constant { constant: u64, signed_constant: i64, bits: u32 },
+    Register(Gpr),
+}
+
 pub(super) fn condition_of(predicate: IntPredicate) -> Cond {
     match predicate {
         IntPredicate::Eq => Cond::Eq,
@@ -166,6 +179,38 @@ impl Selector<'_> {
                 .insert(super::value_def(self.function, instruction.result.expect("checked")).expect("an instruction"));
             return Ok(());
         }
+        if op == BinaryOp::Mul && result.is_some_and(|result| self.is_widened_product(result)) {
+            // `smull` or `smaddl` reads the factors where the extension is.
+            self.fused.insert(super::value_def(self.function, result.expect("checked")).expect("an instruction"));
+            return Ok(());
+        }
+        if op == BinaryOp::Mul && result.is_some_and(|result| self.accumulated(result)) {
+            // `madd` or `msub` reads the operands where the add or subtract is.
+            self.fused.insert(super::value_def(self.function, result.expect("checked")).expect("an instruction"));
+            return Ok(());
+        }
+        if op == BinaryOp::Shl && self.folds_into_index(instruction) {
+            // The `getelementptr` that reads it indexes by the unshifted value.
+            let inst = super::value_def(self.function, result.expect("a shift has a result")).expect("an instruction");
+            self.fused.insert(inst);
+            self.indexed.insert(inst);
+            return Ok(());
+        }
+        if matches!(op, BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr) && self.folds_into_reader(instruction) {
+            // The reader shifts its operand itself.
+            self.fused.insert(
+                super::value_def(self.function, result.expect("a shift has a result")).expect("an instruction"),
+            );
+            return Ok(());
+        }
+        if let Some(done) = self.shifted_operand(op, bits, instruction)? {
+            return self.define(result, Src::Val(Val::Int(done)));
+        }
+        if matches!(op, BinaryOp::Add | BinaryOp::Sub)
+            && let Some(done) = self.multiply_accumulate(op == BinaryOp::Sub, bits, instruction)?
+        {
+            return self.define(result, Src::Val(Val::Int(done)));
+        }
         let (lhs, rhs) = (self.src(instruction.operands[0])?, self.src(instruction.operands[1])?);
         // Division by a constant is shifts and multiplies.
         if let (BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem, Src::Int { value, .. }) = (op, &rhs)
@@ -178,7 +223,7 @@ impl Selector<'_> {
         let value = match op {
             BinaryOp::Add | BinaryOp::Sub => self.add_sub(op == BinaryOp::Sub, bits, lhs, rhs)?,
             BinaryOp::And | BinaryOp::Or | BinaryOp::Xor => self.logic(op, bits, lhs, rhs)?,
-            BinaryOp::Mul => self.multiply(bits, lhs, rhs)?,
+            BinaryOp::Mul => self.multiply(bits, lhs, rhs, result)?,
             BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr => self.shift(op, bits, lhs, rhs)?,
             BinaryOp::UDiv | BinaryOp::SDiv => {
                 let signed = op == BinaryOp::SDiv;
@@ -249,6 +294,98 @@ impl Selector<'_> {
         Ok(G { reg: rd, bits, known })
     }
 
+    /// Whether the product `value` is read only by an `add` or `sub` of its own
+    /// block that can take it as the multiply of a `madd` or `msub`: 32 or
+    /// 64 bits, neither factor a constant (a constant factor is a shift or
+    /// an add), the other addend not a constant, and, for a `sub`, the
+    /// product subtracted.
+    pub(super) fn accumulated(
+        &self,
+        value: llrm_mir::ValueId,
+    ) -> bool {
+        if self.use_count(value) != 1 {
+            return false;
+        }
+        let Some(def) = super::value_def(self.function, value) else { return false };
+        let product = self.function.instruction(def);
+        if !matches!(self.types().int_bits(product.ty), Some(32 | 64))
+            || product.operands.iter().any(|one| matches!(one, Operand::Constant(_)))
+        {
+            return false;
+        }
+        let Some(user) = self.function.users(value).into_iter().next() else { return false };
+        let reader = self.function.instruction(user.user);
+        let [first, second] = reader.operands[..] else { return false };
+        let other = match reader.opcode {
+            // Of two products added, the second is the one accumulated onto the
+            // first.
+            llrm_mir::Opcode::Binary(BinaryOp::Add) if first == Operand::Value(value) && !self.is_product(second) => {
+                second
+            }
+            llrm_mir::Opcode::Binary(BinaryOp::Add | BinaryOp::Sub) if second == Operand::Value(value) => first,
+            _ => return false,
+        };
+        self.function.parent(def) == self.function.parent(user.user) && !matches!(other, Operand::Constant(_))
+    }
+
+    fn is_product(
+        &self,
+        operand: Operand,
+    ) -> bool {
+        let Operand::Value(value) = operand else { return false };
+        super::value_def(self.function, value)
+            .is_some_and(|def| self.function.instruction(def).opcode == llrm_mir::Opcode::Binary(BinaryOp::Mul))
+    }
+
+    /// `madd` or `msub` for an `add` or `sub` of a product left for it by
+    /// [`Self::accumulated`].
+    fn multiply_accumulate(
+        &mut self,
+        subtract: bool,
+        bits: u32,
+        instruction: &Instruction,
+    ) -> Selected<Option<G>> {
+        // A product, or the extension of a 32-bit one (`widemul`): its factors,
+        // and whether it widens.
+        let product = |operand: Operand| match operand {
+            Operand::Value(value) => super::value_def(self.function, value)
+                .filter(|def| self.fused.contains(def))
+                .map(|def| self.function.instruction(def).clone())
+                .and_then(|one| match one.opcode {
+                    llrm_mir::Opcode::Binary(BinaryOp::Mul) => Some((one, None)),
+                    llrm_mir::Opcode::Cast(llrm_mir::CastOp::SExt) => {
+                        self.widened_product(&one).map(|mul| (mul, Some(true)))
+                    }
+                    llrm_mir::Opcode::Cast(llrm_mir::CastOp::ZExt) => {
+                        self.widened_product(&one).map(|mul| (mul, Some(false)))
+                    }
+                    _ => None,
+                }),
+            _ => None,
+        };
+        let [first, second] = instruction.operands[..] else { return Ok(None) };
+        let ((found, wide), other) = match (product(first), product(second)) {
+            (Some(found), _) if !subtract => (found, second),
+            (_, Some(found)) => (found, first),
+            _ => return Ok(None),
+        };
+        let (lhs, rhs) = (self.src(found.operands[0])?, self.src(found.operands[1])?);
+        let (a, b) = (self.gpr_of(lhs)?, self.gpr_of(rhs)?);
+        let addend = self.src(other)?;
+        let c = self.gpr_of(addend)?;
+        let (rd, known) = self.result_g(bits);
+        let op = match (wide, subtract) {
+            (None, false) => Mul3::Madd,
+            (None, true) => Mul3::Msub,
+            (Some(true), false) => Mul3::Smaddl,
+            (Some(true), true) => Mul3::Smsubl,
+            (Some(false), false) => Mul3::Umaddl,
+            (Some(false), true) => Mul3::Umsubl,
+        };
+        self.inst(Inst::ThreeSource { op, width: width_of(bits), rd, rn: a.reg, rm: b.reg, ra: c.reg });
+        Ok(Some(G { reg: rd, bits, known }))
+    }
+
     fn logic(
         &mut self,
         op: BinaryOp,
@@ -317,6 +454,7 @@ impl Selector<'_> {
         bits: u32,
         lhs: Src,
         rhs: Src,
+        result: Option<llrm_mir::ValueId>,
     ) -> Selected<G> {
         let width = width_of(bits);
         let (lhs, rhs) = match (&lhs, &rhs) {
@@ -332,42 +470,133 @@ impl Selector<'_> {
                 self.shift_left_immediate(width, rd, a.reg, shift);
                 return Ok(G { reg: rd, bits, known });
             }
-            // `x * (2^k + 1)` and `x * (2^k - 1)` by one shifted add or
-            // subtract.
-            let a_shift = |plus: u64| plus.is_power_of_two().then(|| plus.trailing_zeros());
-            if let Some(k) = a_shift(value.wrapping_sub(1)) {
-                let a = self.gpr_of(lhs)?;
-                self.inst(Inst::AddSubShifted {
-                    op: AddSub { subtract: false, set_flags: false },
-                    width,
-                    rd,
-                    rn: a.reg,
-                    rm: a.reg,
-                    shift: Shift::Lsl,
-                    amount: k as u8,
-                });
-                return Ok(G { reg: rd, bits, known });
-            }
-            if let Some(k) = a_shift(value.wrapping_add(1) & mask(bits)) {
-                let a = self.gpr_of(lhs)?;
-                // rd = (a << k) - a
-                let shifted = self.mf.gpr();
-                self.shift_left_immediate(width, shifted, a.reg, k);
-                self.inst(Inst::AddSubShifted {
-                    op: AddSub { subtract: true, set_flags: false },
-                    width,
-                    rd,
-                    rn: shifted,
-                    rm: a.reg,
-                    shift: Shift::Lsl,
-                    amount: 0,
-                });
+            let a = self.gpr_of(lhs.clone())?;
+            let signed = llrm_mir::context::signed(value as u128, bits);
+            if !self.left_for_an_add(result, signed) && self.multiply_by_constant(bits, width, rd, a.reg, signed) {
                 return Ok(G { reg: rd, bits, known });
             }
         }
         let (a, b) = (self.gpr_of(lhs)?, self.gpr_of(rhs)?);
         self.inst(Inst::ThreeSource { op: Mul3::Madd, width, rd, rn: a.reg, rm: b.reg, ra: Gpr::R31 });
         Ok(G { reg: rd, bits, known })
+    }
+
+    /// A product with a shift left in it (`c` even) that one `add` or `sub`
+    /// reads is left a multiply: `performMulCombine` keeps it for the
+    /// `madd` or `msub` the add may fold into.
+    ///
+    /// DEVIATE: the pin spares a user that is only a memory address; an
+    /// integer `add` here is never one.
+    fn left_for_an_add(
+        &self,
+        result: Option<llrm_mir::ValueId>,
+        c: i128,
+    ) -> bool {
+        if c == 0 || c.trailing_zeros() == 0 {
+            return false;
+        }
+        let Some(result) = result.filter(|&result| self.use_count(result) == 1) else { return false };
+        self.function
+            .users(result)
+            .into_iter()
+            .next()
+            .is_some_and(
+                |user| matches!(
+                    self.function.instruction(user.user).opcode,
+                    llrm_mir::Opcode::Binary(BinaryOp::Add | BinaryOp::Sub)
+                ),
+            )
+    }
+
+    /// `performMulCombine`'s shift-and-add forms of `a * c`, as the pin
+    /// emits them: `(2^n + 1) * 2^m`, `2^n - 1`, `(2^n - 1) * 2^m` and the
+    /// negatives of those; false where `c` is none of them.
+    ///
+    /// DEVIATE: the `hasALULSLFast` forms (`(2^m + 1) * (2^n + 1)` and the
+    /// like, apple cores) are not made. Exit: the subtarget's features in the
+    /// selector.
+    fn multiply_by_constant(
+        &mut self,
+        bits: u32,
+        width: Width,
+        rd: Gpr,
+        a: Gpr,
+        c: i128,
+    ) -> bool {
+        if c == 0 {
+            return false;
+        }
+        let trailing = c.trailing_zeros();
+        let shifted = c >> trailing;
+        let log2 = |one: i128| (one > 0 && (one & (one - 1)) == 0).then(|| one.trailing_zeros());
+        let add_shifted = |this: &mut Self, rd: Gpr, rn: Gpr, rm: Gpr, subtract: bool, amount: u32| {
+            this.inst(Inst::AddSubShifted {
+                op: AddSub { subtract, set_flags: false },
+                width,
+                rd,
+                rn,
+                rm,
+                shift: Shift::Lsl,
+                amount: amount as u8,
+            });
+        };
+        let fits = |amount: u32| amount < bits;
+        if c > 0 {
+            if let Some(n) = log2(shifted - 1).filter(|&n| fits(n) && fits(trailing)) {
+                // (x + (x << n)) << m
+                let sum = if trailing == 0 { rd } else { self.mf.gpr() };
+                add_shifted(self, sum, a, a, false, n);
+                if trailing != 0 {
+                    self.shift_left_immediate(width, rd, sum, trailing);
+                }
+                return true;
+            }
+            if let Some(n) = log2(c + 1).filter(|&n| fits(n)) {
+                let high = self.mf.gpr();
+                self.shift_left_immediate(width, high, a, n);
+                add_shifted(self, rd, high, a, true, 0);
+                return true;
+            }
+            if let Some(n) = log2(shifted + 1).map(|n| n + trailing).filter(|&n| fits(n)) {
+                // (x << n) - (x << m)
+                let high = self.mf.gpr();
+                self.shift_left_immediate(width, high, a, n);
+                if trailing == 0 {
+                    add_shifted(self, rd, high, a, true, 0);
+                } else {
+                    let low = self.mf.gpr();
+                    self.shift_left_immediate(width, low, a, trailing);
+                    add_shifted(self, rd, high, low, true, 0);
+                }
+                return true;
+            }
+            return false;
+        }
+        if let Some(n) = log2(1 - c).filter(|&n| fits(n)) {
+            // x - (x << n)
+            add_shifted(self, rd, a, a, true, n);
+            return true;
+        }
+        if let Some(n) = log2(-c - 1).filter(|&n| fits(n)) {
+            // -((x << n) + x)
+            let sum = self.mf.gpr();
+            add_shifted(self, sum, a, a, false, n);
+            add_shifted(self, rd, Gpr::R31, sum, true, 0);
+            return true;
+        }
+        if let Some(n) = log2(1 - shifted).map(|n| n + trailing).filter(|&n| fits(n)) {
+            // (x << m) - (x << n)
+            let low = if trailing == 0 {
+                a
+            } else {
+                let low = self.mf.gpr();
+                self.shift_left_immediate(width, low, a, trailing);
+                low
+            };
+            add_shifted(self, rd, low, a, true, n);
+            return true;
+        }
+        false
     }
 
     /// `rd = rn << shift` (`lsl` is `ubfm`).
@@ -464,6 +693,21 @@ impl Selector<'_> {
     ) -> Selected<()> {
         let result = instruction.result;
         let to = instruction.ty;
+        if matches!(op, CastOp::FPToSI | CastOp::FPToUI) {
+            // Its operand may be a multiply left to it (`fixedpoint`), with no
+            // value.
+            return self.float_cast(op, instruction);
+        }
+        if let Some(product) = self.widened_product(instruction) {
+            let inst = super::value_def(self.function, result.expect("a cast has a result")).expect("an instruction");
+            if self.accumulated(result.expect("checked")) {
+                // `smaddl` or `smsubl` reads the product where the add or
+                // subtract is.
+                self.fused.insert(inst);
+                return Ok(());
+            }
+            return self.widening_multiply(instruction, &product);
+        }
         let from_type = self.operand_type(instruction.operands[0])?;
         let source = self.src(instruction.operands[0])?;
         match op {
@@ -477,6 +721,15 @@ impl Selector<'_> {
                 };
                 let known = if bits == 32 && known == Known::Hi32Zero { Known::Zero } else { known };
                 self.define(result, Src::Val(Val::Int(G { reg: g.reg, bits, known })))
+            }
+            CastOp::ZExt | CastOp::SExt if self.folds_into_index(instruction) => {
+                // The `getelementptr` that reads it extends the index in its
+                // addressing mode.
+                let inst =
+                    super::value_def(self.function, result.expect("a cast has a result")).expect("an instruction");
+                self.fused.insert(inst);
+                self.indexed.insert(inst);
+                Ok(())
             }
             CastOp::ZExt | CastOp::SExt => {
                 let (Some(from_bits), Some(bits)) = (self.types().int_bits(from_type), self.types().int_bits(to))
@@ -543,14 +796,16 @@ impl Selector<'_> {
         self.define(Some(result), Src::Val(Val::Int(G { reg: rd, bits: 1, known: Known::Zero })))
     }
 
-    /// Whether the comparison `value` is read only by the branch or select that
-    /// ends or follows it in its own block, so it is selected there. A float
+    /// Whether the comparison `value` is read only by branches and selects of
+    /// its own block, each as the condition, so it is selected at each of
+    /// them (`flagcse` drops the repeats the flags already hold, as the
+    /// pin's one `cmp` for the selects and the branch of one test). A float
     /// comparison needing two conditions is a value.
     pub(super) fn fusable(
         &self,
         value: llrm_mir::ValueId,
     ) -> bool {
-        if self.use_count(value) != 1 {
+        if self.use_count(value) == 0 {
             return false;
         }
         if let Some(inst) = super::value_def(self.function, value)
@@ -559,15 +814,19 @@ impl Selector<'_> {
         {
             return false;
         }
-        let Some(user) = self.function.users(value).into_iter().next() else { return false };
-        let reader = self.function.instruction(user.user);
         let own = super::value_def(self.function, value).and_then(|inst| self.function.parent(inst));
-        own == self.function.parent(user.user)
-            && match reader.opcode {
-                llrm_mir::Opcode::Br => reader.operands.len() == 3 && reader.operands[0] == Operand::Value(value),
-                llrm_mir::Opcode::Select => reader.operands[0] == Operand::Value(value),
-                _ => false,
-            }
+        let condition = Operand::Value(value);
+        self.function.users(value).into_iter().all(|user| {
+            let reader = self.function.instruction(user.user);
+            own == self.function.parent(user.user)
+                && match reader.opcode {
+                    llrm_mir::Opcode::Br => reader.operands.len() == 3 && reader.operands[0] == condition,
+                    llrm_mir::Opcode::Select => {
+                        reader.operands[0] == condition && reader.operands[1..].iter().all(|one| *one != condition)
+                    }
+                    _ => false,
+                }
+        })
     }
 
     /// Sets the flags for `a predicate b` and names the condition that holds.
@@ -584,6 +843,20 @@ impl Selector<'_> {
             self.test_bits(&and)?;
             return Ok(condition_of(predicate));
         }
+        let operands = self.compare_operands(predicate, a, b)?;
+        self.set_flags_of(&operands);
+        Ok(condition_of(operands.predicate))
+    }
+
+    /// The registers and constant a comparison of `a` with `b` reads, extended
+    /// as the predicate needs (a constant on the left is swapped to the
+    /// right, with the predicate).
+    pub(super) fn compare_operands(
+        &mut self,
+        predicate: IntPredicate,
+        a: Operand,
+        b: Operand,
+    ) -> Selected<CompareOperands> {
         let (mut left, mut right, mut predicate) = (self.src(a)?, self.src(b)?, predicate);
         if matches!(left, Src::Int { .. }) && !matches!(right, Src::Int { .. }) {
             std::mem::swap(&mut left, &mut right);
@@ -601,56 +874,100 @@ impl Selector<'_> {
         );
         let want = if signed { Known::Sign } else { Known::Zero };
         let width = width_of(bits);
+        // A 32 or 64-bit compare reads its register as it is: only a narrower
+        // value has garbage above.
         let l = self.gpr_of(left)?;
-        let l = self.extended(G { bits, ..l }, want);
-        if let Src::Int { value, .. } = right {
-            // `x cmp c` as `subs` of the constant, or `adds` of its negation.
-            // The constant is extended as the register is, so the
-            // flags agree.
+        let l = if bits >= 32 { G { bits, ..l } } else { self.extended(G { bits, ..l }, want) };
+        let right = if let Src::Int { value, .. } = right {
+            // The constant is extended as the register is, so the flags agree.
             let constant = if signed { llrm_mir::context::signed(value, bits) as i64 as u64 } else { value as u64 };
             let constant = constant & mask(width.bits());
             let signed_constant = if width == Width::W { i64::from(constant as u32 as i32) } else { constant as i64 };
-            let (add, magnitude) = if signed_constant < 0 && bits > 1 {
-                (true, signed_constant.unsigned_abs())
-            } else {
-                (false, constant)
-            };
-            if let Some((imm12, shift12)) = add_sub_immediate(magnitude) {
-                self.inst(Inst::AddSubImm {
-                    op: AddSub { subtract: !add, set_flags: true },
-                    width,
-                    rd: Gpr::R31,
-                    rn: l.reg,
-                    imm12,
-                    shift12,
-                });
-                return Ok(condition_of(predicate));
+            CompareRight::Constant { constant, signed_constant, bits }
+        } else {
+            let r = self.gpr_of(right)?;
+            CompareRight::Register(if bits >= 32 { r.reg } else { self.extended(G { bits, ..r }, want).reg })
+        };
+        Ok(CompareOperands { predicate, width, left: l.reg, right })
+    }
+
+    /// `x cmp c` as `subs` of the constant, or `adds` of its negation; else
+    /// `subs` of a register.
+    pub(super) fn set_flags_of(
+        &mut self,
+        operands: &CompareOperands,
+    ) {
+        let CompareOperands { width, left, .. } = *operands;
+        match operands.right {
+            CompareRight::Constant { constant, signed_constant, bits } => {
+                let (add, magnitude) = if signed_constant < 0 && bits > 1 {
+                    (true, signed_constant.unsigned_abs())
+                } else {
+                    (false, constant)
+                };
+                if let Some((imm12, shift12)) = add_sub_immediate(magnitude) {
+                    self.inst(Inst::AddSubImm {
+                        op: AddSub { subtract: !add, set_flags: true },
+                        width,
+                        rd: Gpr::R31,
+                        rn: left,
+                        imm12,
+                        shift12,
+                    });
+                    return;
+                }
+                let reg = self.mf.gpr();
+                self.load_immediate(reg, bits, constant);
+                self.subs_register(width, left, reg);
             }
-            let reg = self.mf.gpr();
-            self.load_immediate(reg, bits, constant);
-            self.inst(Inst::AddSubShifted {
-                op: AddSub { subtract: true, set_flags: true },
-                width,
-                rd: Gpr::R31,
-                rn: l.reg,
-                rm: reg,
-                shift: Shift::Lsl,
-                amount: 0,
-            });
-            return Ok(condition_of(predicate));
+            CompareRight::Register(right) => self.subs_register(width, left, right),
         }
-        let r = self.gpr_of(right)?;
-        let r = self.extended(G { bits, ..r }, want);
+    }
+
+    fn subs_register(
+        &mut self,
+        width: Width,
+        left: Gpr,
+        right: Gpr,
+    ) {
         self.inst(Inst::AddSubShifted {
             op: AddSub { subtract: true, set_flags: true },
             width,
             rd: Gpr::R31,
-            rn: l.reg,
-            rm: r.reg,
+            rn: left,
+            rm: right,
             shift: Shift::Lsl,
             amount: 0,
         });
-        Ok(condition_of(predicate))
+    }
+
+    /// `ccmp`/`ccmn`: where `cond` holds, the flags of the comparison; else
+    /// `nzcv`.
+    pub(super) fn set_flags_if(
+        &mut self,
+        operands: &CompareOperands,
+        nzcv: u8,
+        cond: Cond,
+    ) {
+        let CompareOperands { width, left, .. } = *operands;
+        let (negate, second) = match operands.right {
+            CompareRight::Constant { constant, signed_constant, bits } => {
+                let (negate, magnitude) = if signed_constant < 0 && bits > 1 {
+                    (true, signed_constant.unsigned_abs())
+                } else {
+                    (false, constant)
+                };
+                if magnitude <= 31 {
+                    (negate, CcOperand::Imm5(magnitude as u8))
+                } else {
+                    let reg = self.mf.gpr();
+                    self.load_immediate(reg, bits, constant);
+                    (false, CcOperand::Reg(reg))
+                }
+            }
+            CompareRight::Register(right) => (false, CcOperand::Reg(right)),
+        };
+        self.inst(Inst::CondCompare { negate, width, rn: left, rm_or_imm: second, nzcv, cond });
     }
 
     fn is_zero(
@@ -664,8 +981,9 @@ impl Selector<'_> {
     }
 
     /// Whether the `and` `value` is read only by a comparison with zero whose
-    /// predicate `tst`'s flags answer: equality and the signed orders (`tst`
-    /// leaves C and V clear, as a compare with zero leaves V).
+    /// predicate `tst`'s flags answer (and that is no leaf of a `ccmp` chain):
+    /// equality and the signed orders (`tst` leaves C and V clear, as a
+    /// compare with zero leaves V).
     pub(super) fn tested_by_compare(
         &self,
         value: llrm_mir::ValueId,
@@ -687,7 +1005,9 @@ impl Selector<'_> {
                     | IntPredicate::Sle
             )
         );
+        // A leaf of a `ccmp` chain compares a register: its `and` is made.
         eligible
+            && !reader.result.is_some_and(|result| self.conjunctions.contains(result))
             && own == self.function.parent(user.user)
             && reader.operands[0] == Operand::Value(value)
             && self.is_zero(reader.operands[1])
@@ -753,7 +1073,7 @@ impl Selector<'_> {
         operand: Operand,
     ) -> Selected<Cond> {
         if let Operand::Value(value) = operand
-            && self.fusable(value)
+            && (self.fusable(value) || self.chains.contains(value) || self.conjunctions.contains(value))
             && let Some(inst) = super::value_def(self.function, value)
         {
             let compare = self.function.instruction(inst).clone();
@@ -766,6 +1086,11 @@ impl Selector<'_> {
                 }
                 _ => {}
             }
+        }
+        if let Operand::Value(value) = operand
+            && self.is_conjunction_root(value)
+        {
+            return self.conjunction(value);
         }
         let g = self.operand_g(operand)?;
         // `tst w, #1`

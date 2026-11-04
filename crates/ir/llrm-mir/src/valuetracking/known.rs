@@ -1621,6 +1621,9 @@ fn constant_expression(
     let ConstantKind::Expr(expr) = &constant.kind else { return None };
     let (opcode, operands, flags) = match expr {
         ConstantExpr::Cast { op, value } => (Opcode::Cast(*op), vec![Operand::Constant(*value)], Flags::default()),
+        ConstantExpr::Binary { op, lhs, rhs } => {
+            (Opcode::Binary(*op), vec![Operand::Constant(*lhs), Operand::Constant(*rhs)], Flags::default())
+        }
         ConstantExpr::GetElementPtr { source, inbounds, operands, .. } => (
             Opcode::GetElementPtr { source: *source },
             operands.iter().map(|operand| Operand::Constant(*operand)).collect(),

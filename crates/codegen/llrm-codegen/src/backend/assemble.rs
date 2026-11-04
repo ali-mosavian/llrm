@@ -87,7 +87,7 @@ use crate::backend::cpu::{Profile, ProfileOrName};
 use crate::backend::isel::{self, Selected};
 use crate::backend::shadow::{self, Selector};
 use crate::backend::target::Segments;
-use crate::backend::{addressvalues, executed, frame, globals, jumps, masm, returnsplit, select};
+use crate::backend::{addressvalues, constrain, executed, frame, globals, jumps, masm, returnsplit, select};
 use crate::flow;
 use crate::model::ir::{Addr, AddressRef, Loc, Semantics, Space};
 use crate::model::lir::LirBody;
@@ -139,7 +139,7 @@ pub struct Registers {
 
 /// The address spaces the i8086 target gives far and huge pointers (clang's
 /// `address_space(1)` and `(3)`).
-const FAR_SPACE: u32 = 1;
+pub(crate) const FAR_SPACE: u32 = 1;
 const HUGE_SPACE: u32 = 3;
 
 /// `module` as masm, its code in the segment `code`, selected by the 16-bit x86
@@ -211,7 +211,7 @@ pub fn assembled_by(
         if global.function().is_some_and(|one| !one.is_declaration()) {
             let name = global.name.as_deref().unwrap_or_default();
             let made = llrm_support::debug::in_function(name, || machined(module, name, abi, &pool, &target))?;
-            facts.record(name, &made.body, &made.registers);
+            facts.record(name, &made.body, &made.registers, &made.calls);
             done.insert(id, made);
         }
     }
@@ -387,12 +387,16 @@ pub fn assembled_by(
                         .any(|one| Fact::of_attribute(one) == Some(Fact::StackCheck))
                         .then(|| abi.stack_check().cloned())
                         .flatten(),
+                    probe_stack: None,
                     registers,
                 };
                 // Copies of returns and split tails only make code better: -O0
                 // has neither.
                 let procedure = if !cpu.optimized {
-                    procedure
+                    if let Some(why) = masm::realign_refusal(&procedure) {
+                        return Err(why);
+                    }
+                    masm::realigned(procedure)
                 } else {
                     let procedure = timed("lir split returns", || returnsplit::split(procedure));
                     // Asked only by a tail a copy could save a jump for.
@@ -414,14 +418,19 @@ pub fn assembled_by(
                     if let Some(error) = unprintable.take() {
                         return Err(error);
                     }
-                    let procedure = masm::exits_inserted(masm::saved_first(masm::Procedure { body, ..procedure }));
-                    if procedure.body.frame_exit.is_some() {
+                    let procedure = masm::Procedure { body, ..procedure };
+                    if let Some(why) = masm::realign_refusal(&procedure) {
+                        return Err(why);
+                    }
+                    let procedure = masm::exits_inserted(masm::saved_first(procedure));
+                    let procedure = if procedure.body.frame_exit.is_some() {
                         let body = jumps::tails_merged_after_exits(procedure.body.clone(), cpu.size, Some(&calls))
                             .map_err(|error| error.to_string())?;
                         masm::Procedure { body, ..procedure }
                     } else {
                         procedure
-                    }
+                    };
+                    masm::tail_calls_folded(procedure)
                 };
                 procedures.push(procedure);
             }
@@ -439,13 +448,32 @@ pub fn assembled_by(
         // off it (Intel486 data sheet 240440-002, section 10.1 and
         // Table 2.1).
         // A 16-byte one is a bitwise SSE instruction's memory operand, which
-        // must be aligned.
-        if bytes.len() >= 8 {
-            data.push(masm::Datum::Align(masm::Align { to: if bytes.len() >= 16 { 16 } else { 8 } }));
+        // must be aligned. Every entry is aligned to its size, as the pin's
+        // `emitConstantPool` aligns each to its type
+        // (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp#L3383>):
+        // a dword after a 10-byte extended constant sat at 2 mod 4, 3 clocks a
+        // read.
+        let to = match bytes.len() {
+            16.. => 16,
+            8..16 => 8,
+            4..8 => 4,
+            2..4 => 2,
+            _ => 1,
+        };
+        // A dword or word entry already on its boundary asks for nothing: the
+        // `align` would still raise the segment to dword, and the linker pads
+        // the next module's data up to it (+2 B in the linked exe of nine
+        // programs at m16 -Os).
+        if to > 1 && (to >= 8 || masm::data_size(&data, 0) % to != 0) {
+            data.push(masm::Datum::Align(masm::Align { to }));
         }
         data.extend([masm::Datum::Label(masm::Label { name }), masm::Datum::Bytes(bytes.to_vec())]);
     }
-    data.extend(masm::jump_tables(&procedures, &mut names, module));
+    let (read_only, tables) = masm::split_read_only(masm::jump_tables(&procedures, &mut names, module));
+    data.extend(tables);
+    if !read_only.is_empty() {
+        sectioned.entry("CONST".to_owned()).or_default().extend(read_only);
+    }
     timed("stack checks", || {
         crate::backend::stackusage::elide_checks(&mut procedures, &masm::entered_directly(module, &names), &*arch)
     });
@@ -500,7 +528,12 @@ pub fn assembled_by(
     externs.sort();
     externs.dedup();
     let debug = timed("debug info", || {
-        crate::backend::debuginfo::described(module, &names, llrm_object::debug::Producer::Native, arch)
+        crate::backend::debuginfo::described(
+            module,
+            &names,
+            llrm_debug::Producer::Native,
+            &crate::backend::debuginfo::Machine::of(arch),
+        )
     })?;
     let code_segments: std::collections::BTreeMap<String, String> = procedures
         .iter()
@@ -516,12 +549,15 @@ pub fn assembled_by(
         }
     }
     let huge_names: Vec<String> = huge_segments.iter().map(|(name, _)| name.clone()).collect();
+    let (visibility, aliases) = globals::exports(module, &names, &|name| abi.linked(name));
     Ok(masm::Module {
         registers: Regs(arch.registers()),
         code: code.to_owned(),
         names,
         externs,
         publics: procedures.iter().filter(|one| one.public).map(|one| one.name.clone()).chain(data_publics).collect(),
+        visibility,
+        aliases,
         data: std::iter::once(("_DATA".to_owned(), data))
             .chain(has_far.then(|| (far_segment.clone(), far_data)))
             .chain(huge_segments)
@@ -658,7 +694,20 @@ pub fn machined(
     target: &Target<'_>,
 ) -> Result<Machined, String> {
     let first = staged(module, name, abi, pool, target, 0)?;
+    let _ = constrain::narrowed();
     let mut kept = machined_once(module, name, abi, pool, target, first.clone())?;
+    // A cold read of a narrowly confined value given a copy is kept only where
+    // the function costs less for it: the copy is a move executed where the
+    // read is, and pays only if the value's other references then find
+    // registers (sieve -O2: one move a trip, nothing gained).
+    if constrain::narrowed() {
+        let plain = constrain::narrowing(false, || machined_once(module, name, abi, pool, target, first.clone()))?;
+        if let Some((with, without)) = route_cost_if_priced(&kept, target).zip(route_cost_if_priced(&plain, target)) {
+            if without <= with {
+                kept = plain;
+            }
+        }
+    }
     // With -Omax, a function that calls one whose registers are known is made
     // without that too, and the cheaper kept: what the allocator costs is
     // an estimate, and a freer choice of registers is not always the better
@@ -682,6 +731,12 @@ pub fn machined(
             }
         }
     }
+    llrm_support::debug!(
+        "notes",
+        "{name} after allocation: {} of {} notes stand",
+        kept.body.notes_standing(),
+        kept.body.notes.len()
+    );
     // What the function's cost in `timefunc` is measured against.
     llrm_support::debug!("size", "{name} {}", kept.body.insns().len());
     // Reported once the choice is made: a rejected candidate is no function's
@@ -742,14 +797,17 @@ fn machined_once(
     // `PrologEpilogInserter` orders the frame objects by use density
     // (`X86FrameLowering::orderFrameObjects`); taken over the layouts below
     // where it brings fewer operands past a one-byte displacement than they do.
-    let far = far_frame(&first.body);
-    let ordered = if far > 0 {
-        crate::backend::relayout::ordered(&first, &frame, target.basic).map(|(ordered, _)| ordered)
+    let sp = first_stage.registers.free;
+    let far = far_frame(&first, sp);
+    // An over-aligned local lies on its alignment below the aligned top: a
+    // layout that moves objects would break it.
+    let ordered = if far > 0 && first.body.over_aligned.is_empty() {
+        crate::backend::relayout::ordered(&first, &frame, sp).map(|(ordered, _)| ordered)
     } else {
         None
     };
     let best = |chosen: Machined| match ordered {
-        Some(ordered) if far_frame(&ordered.body) < far_frame(&chosen.body) => ordered,
+        Some(ordered) if far_frame(&ordered, sp) < far_frame(&chosen, sp) => ordered,
         _ => chosen,
     };
     let spilled = frame.floor + first.reserve;
@@ -758,8 +816,8 @@ fn machined_once(
     // spill slots can end on a word, so a 4-aligned frame needs it too: the
     // backend run again aligns the allocas and the frame moved by the hole
     // did not (reserve 286 against 288).
-    let spilled =
-        if frame.align > 1 { (spilled + frame.align - 1).div_euclid(frame.align) * frame.align } else { spilled };
+    let align = frame.align.max(frame.alloca_align);
+    let spilled = if align > 1 { (spilled + align - 1).div_euclid(align) * align } else { spilled };
     if target.basic || frame.native.is_some() || spilled <= 0 || frame.floor == 0 || far == 0 {
         return Ok(best(first));
     }
@@ -782,7 +840,7 @@ fn machined_once(
         }
     }
     Ok(best(match laid {
-        Some((second, _)) if far_frame(&second.body) < far => second,
+        Some((second, _)) if far_frame(&second, sp) < far => second,
         _ => first,
     }))
 }
@@ -839,7 +897,16 @@ fn route_cost(
     made: &Machined,
     target: &Target<'_>,
 ) -> Option<f64> {
-    cost(made, target).map(|one| one + saves(made) as f64 * 2.0)
+    cost(made, target, true).map(|one| one + saves(made) as f64 * 2.0)
+}
+
+/// `route_cost` for a function with an instruction the encoder cannot price:
+/// None, as the routes cannot be compared, where the checked build stops.
+fn route_cost_if_priced(
+    made: &Machined,
+    target: &Target<'_>,
+) -> Option<f64> {
+    cost(made, target, false).map(|one| one + saves(made) as f64 * 2.0)
 }
 
 /// `what` with the stack and frame tokens of its register-addressed cells
@@ -876,6 +943,7 @@ fn stack_as_addressed(
 fn cost(
     made: &Machined,
     target: &Target<'_>,
+    checked: bool,
 ) -> Option<f64> {
     if target.cpu.size {
         made.body
@@ -890,7 +958,7 @@ fn cost(
                 // priced as nothing: its routes compare as
                 // unpriced and the first kept (nbody_fixed -Os: `lea esi,
                 // [ebx+ebx*2]` had no price).
-                if priced.is_none() && llrm_support::debug::verifying() {
+                if checked && priced.is_none() && llrm_support::debug::verifying() {
                     panic!("@{}: no byte price for {what:?}", made.body.name);
                 }
                 priced
@@ -901,14 +969,22 @@ fn cost(
     }
 }
 
-/// The frame operands a one-byte displacement does not reach.
-fn far_frame(body: &LirBody) -> usize {
-    body.insns()
+/// The frame operands a one-byte displacement does not reach. Through the
+/// frame register that is the cell's displacement; through the stack pointer
+/// (`sp`) the cell lies `reserve` bytes above it, so a cell near the top of the
+/// frame is far and one near the bottom is not.
+pub(crate) fn far_frame(
+    made: &Machined,
+    sp: bool,
+) -> usize {
+    let above = if sp { made.reserve } else { 0 };
+    made.body
+        .insns()
         .iter()
         .filter_map(|one| one.what.as_ref())
         .flat_map(|what| what.dests.iter().chain(&what.sources))
         .filter_map(|place| place.address().and_then(|one| one.addr))
-        .filter(|addr| addr.space == Space::Frame && !(-128..128).contains(&addr.disp))
+        .filter(|addr| addr.space == Space::Frame && !(-128..128).contains(&(addr.disp + above)))
         .count()
 }
 
@@ -954,7 +1030,8 @@ impl Staged {
     }
 }
 
-/// Whether `name` calls a function `llrm_mir::atomic::hidden` made.
+/// Whether `name` calls a function `llrm_mir::atomic::hidden` made that the
+/// DAG has no node for: all but an exchange and a store.
 fn calls_atomic(
     module: &Module,
     name: &str,
@@ -975,7 +1052,7 @@ fn calls_atomic(
                         matches!(instruction.opcode, Opcode::Call(_))
                             && matches!(
                                 instruction.operands.last(),
-                                Some(&Operand::Constant(callee)) if matches!(module.context.get(callee).kind, llrm_mir::context::ConstantKind::Global(one) if module.global(one).name.owned().is_some_and(|name| llrm_mir::atomic::decode(&name).is_some()))
+                                Some(&Operand::Constant(callee)) if matches!(module.context.get(callee).kind, llrm_mir::context::ConstantKind::Global(one) if module.global(one).name.owned().and_then(|name| llrm_mir::atomic::decode(&name)).is_some_and(|info| !matches!(info.kind, llrm_mir::opcode::AtomicKind::Rmw(llrm_mir::opcode::RmwOp::Xchg) | llrm_mir::opcode::AtomicKind::Store)))
                             )
                     },
                 ),
@@ -1001,14 +1078,15 @@ fn staged(
         runtime: abi.runtime_contracts(),
         frame_zeroed: zeroed,
         facts: Some(target.facts),
+        hole,
     });
     let dag = match target.selector {
         Selector::Old => None,
         // `LLRM_ISEL_ONLY=a,b`: the DAG path for those functions, the old
         // selector for the rest -- to bisect a wrong result to a function
-        // DEVIATE SD253: the DAG has no atomic nodes yet; a function calling a
-        // hidden atomic (`llrm_mir::atomic::hidden`) is selected by the old
-        // selector.
+        // DEVIATE SD253: the DAG has `ATOMIC_SWAP` only; a function calling any
+        // other hidden atomic (`llrm_mir::atomic::hidden`) is selected by the
+        // old selector.
         Selector::Dag | Selector::Shadow if !shadow::only(name) || calls_atomic(module, name) => None,
         Selector::Dag => Some(timed("dag isel", || {
             crate::backend::selectiondag::dag_function::selected_in_pool(
@@ -1074,10 +1152,27 @@ fn staged(
         far,
         pops,
         depth,
+        align: alloca_align,
         extents,
         temporaries,
+        over_aligned,
         landing,
     } = selected.map_err(|error| format!("@{name}: {}", error.0))?;
+    let mut body = LirBody { over_aligned, ..body };
+    // Where no callee pops, a call through a pointer takes nothing off the
+    // stack: the frame register is not pinned by not knowing.
+    if !target.arch.callee_pops() {
+        let open: Vec<i64> = body
+            .insns()
+            .iter()
+            .filter(|one| {
+                one.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Call && what.indirect)
+            })
+            .map(|one| one.at)
+            .filter(|at| !body.call_pops.contains_key(at))
+            .collect();
+        std::sync::Arc::make_mut(&mut body.call_pops).extend(open.into_iter().map(|at| (at, 0)));
+    }
     let mut registers =
         llrm_target::FrameRegisters { saved: convention.saved.clone(), ..target.arch.frame_registers() };
     // The convention's entry functions (`entry_clobbers_all`) keep nothing for
@@ -1100,6 +1195,15 @@ fn staged(
     // (`fsin` as bytes) touches no stack cell. Not where BASIC is tuned for
     // size: `[esp+d]` is a byte longer than `[ebp+d]`, and masm's comparison of
     // the two cannot run once the register holds a value (bq32 -Os grew 4-7%).
+    // `MachineFunction::disableFramePointerElim`: the function's own
+    // `"frame-pointer"` attribute keeps the frame register, in allocation and
+    // in the entry.
+    let function_attrs: &[llrm_mir::opcode::Attribute] =
+        module.named(name).and_then(|id| module.global(id).function()).map_or(&[], |function| &function.attrs);
+    if crate::backend::framefree::disable_frame_pointer_elim(function_attrs, !calls.is_empty()) {
+        registers.optional = false;
+        registers.kept = true;
+    }
     let classes: Rc<RegisterClasses> = if !(target.basic && (target.zeroed || target.cpu.size))
         && !crate::backend::framefree::has_fp(
             &body,
@@ -1133,6 +1237,13 @@ fn staged(
             )
         );
     }
+    llrm_support::debug!(
+        "notes",
+        "{} after selection: {} of {} notes stand",
+        body.name,
+        body.notes_standing(),
+        body.notes.len()
+    );
     let body = if llrm_support::debug::verifying() {
         timed("lir verify", || flow::verified(body, "isel", true, None, &target.arch.layout().spaces.roles))
             .map_err(|error| error.0)?
@@ -1144,6 +1255,7 @@ fn staged(
     frame.floor = frame.floor.min(-depth);
     frame.align = registers.align.max(registers.slot).max(frame.align);
     frame.hole = hole;
+    frame.alloca_align = alloca_align;
     frame.extents = extents;
     let body = frame.tagged(&body).map_err(|error| error.0)?;
     // DEVIATE D14: the pin gives each rounding store and reload its own
@@ -1204,6 +1316,7 @@ fn phased(
         classes,
         target.selection.rules(),
         &registers,
+        target.selector,
     )? {
         // masm writes the prologue from the frame's reserve.
         if phase.class_name() == "Prologue" {

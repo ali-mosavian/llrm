@@ -53,7 +53,9 @@ class Session:
             port = probe.getsockname()[1]
             probe.close()
             (work / "play.conf").write_text(conf + f"[autoexec]\nmount c {work}\nc:\n")
-            env = {**os.environ, "SDL_VIDEODRIVER": "dummy", "DOSBOX_DEBUG_PORT": str(port)}
+            # TZ is pinned: the fork turns "virtual time start" into the guest's time of day in the host's zone, and a program that seeds RND
+            # from TIMER (NIBBLES) then plays another game on a UTC runner than on a CET dev box.
+            env = {**os.environ, "TZ": "UTC", "SDL_VIDEODRIVER": "dummy", "DOSBOX_DEBUG_PORT": str(port)}
             self.process = subprocess.Popen(
                 [str(dosbatch.DOSBOX), "-nolog", "-conf", str(work / "play.conf")],
                 env=env,
@@ -189,6 +191,12 @@ class Session:
                 self.run_to_key(ms)
                 look = self.screen_hash()
                 same, picture = (same + 1 if look == picture else 1), look
+
+    def keys_timed(self, keys: list[str], gap_ms: int) -> None:
+        """Each key goes in where the guest is parked and the guest runs `gap_ms` emulated ms, whether or not it has asked for a key."""
+        for key in keys:
+            self.send({"cmd": "key", "key": key})
+            self.resume(gap_ms)
 
     def snap(self, path: Path) -> None:
         """Lockstep: a PNG of the screen as it is where the guest is parked: the fork draws it on the next frame, so the guest runs

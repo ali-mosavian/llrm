@@ -39,7 +39,10 @@ import envflag  # noqa: E402
 LANGUAGES = ("qb", "c", "nib")
 TREE_ONLY = {"fmt", "docs", "products"}  # steps that read the tree and build nothing: the `static` group
 NO_BINARIES = {"pytest", "pytest-perf", "fmt", "rfmt-post", "docs", "facts"}  # steps that do not run the release binaries, so need no build first
-SERIAL_STEPS = frozenset({"rfmt-post"})
+# Steps that run `tools/measure.py dist`: they share its build lock, and a waiter has no CPU of its own, so the stall check killed pytest-perf
+# and objsweep (gate 9a0cd57af1) while the measure step's dist build ran. The gate builds it once, before them.
+DIST_USERS = frozenset({"pytest-perf", "objsweep", "measure"})
+SERIAL_STEPS = frozenset({"rfmt-post", "qcport", "oracle-qcport"})  # the last two count frames in real time: starved by a step beside them, their runs differ from Borland's
 
 
 @functools.cache  # read once: a bisect checks out commits that predate this file
@@ -130,18 +133,35 @@ def verdict_line(tier: str, failed: list[str], cut: list[str], took: float, skip
 
 
 def failure_text(log: str, limit: int = 80) -> str:
-    """What the failing tests of a cargo test or pytest log printed, at most `limit` lines: the log's last 30 lines name the failed target
-    and not the failure (CI said "1 target failed: -p llrm --test dwarf" and nothing of why)."""
-    lines = log.splitlines()
-    out, keep = [], False
-    for line in lines:
-        if re.match(r"^---- .+ (stdout|stderr) ----$", line) or re.match(r"^_{3,} .+ _{3,}$", line) or re.match(r"^={3,} (FAILURES|ERRORS) ={3,}$", line):
-            keep = True
-        elif re.match(r"^(failures:|test result:|={3,} short test summary info ={3,})", line):
-            keep = False
-        if keep and line.strip():
-            out.append(line)
-    return "\n".join(out[:limit])
+    """What the failing tests of a cargo test or pytest log printed, at most `limit` lines a file (pytest_shards prints one
+    `######## file: exit N` section per failing file): the log's last 30 lines name the failed target and not the failure (CI said
+    "1 target failed: -p llrm --test dwarf" and nothing of why), and one cap over the whole log went to the files that sort first."""
+    out = []
+    for section in re.split(r"(?m)^(?=######## )", log):
+        shown, keep = [], False
+        for line in section.splitlines():
+            if re.match(r"^---- .+ (stdout|stderr) ----$", line) or re.match(r"^_{3,} .+ _{3,}$", line) or re.match(r"^={3,} (FAILURES|ERRORS) ={3,}$", line):
+                keep = True
+            elif re.match(r"^(failures:|test result:|={3,} short test summary info ={3,})", line):
+                keep = False
+            if keep and line.strip():
+                shown.append(line)
+        if shown:
+            out += ([section.splitlines()[0]] if section.startswith("########") else []) + shown[:limit]
+    return "\n".join(out)
+
+
+def diagnostic_lines(log: str, failed: bool) -> list[str]:
+    """The lines a step tags for the job log: `[diag!] ` ones always (the host's CPU, the emulator, a verdict), `[diag] ` ones only when the step
+    failed (hash tables). The job log shows a failed step's failing tests and the tail of its log, so a line printed before the tests was in
+    the step's own log file and never reached it (run 6's dos step printed neither lscpu nor the x87 verdict)."""
+    return [line for line in log.splitlines() if line.startswith("[diag!] ") or (failed and line.startswith("[diag] "))]
+
+
+def log_head(log: str, lines: int = 12) -> str:
+    """The first `lines` non-blank lines of a log: where a script that prints its verdict first (oracle-qcport's) says what failed,
+    and the tail shows only the emulator's logs under it."""
+    return "\n".join([line for line in log.splitlines() if line.strip()][:lines])
 
 
 def step_table(results: dict[str, tuple[int, float, float]]) -> str:
@@ -460,7 +480,8 @@ STEP_ENV = {"RUSTFLAGS": WARNING_FLAGS, "RUSTC_BOOTSTRAP": "1", "CARGO_INCREMENT
 BUILD = (
     f"{WARNINGS_AS_ERRORS} cargo check --workspace --all-targets -q && "
     f"{WARNINGS_AS_ERRORS} cargo check --release --workspace --all-targets -q && "
-    f"{WARNINGS_AS_ERRORS} cargo test --release -q --workspace --no-run"
+    # llrm-c is behind `c-legacy` (off by default): without the feature the test build does not make it, and the tests that guard the m16 bar through it skipped.
+    f"{WARNINGS_AS_ERRORS} cargo test --release -q --workspace --no-run --features c-legacy"
 )
 # Measurements compare two revisions, so their historical base is built without
 # today's warning policy.
@@ -498,7 +519,7 @@ def changed_tests(files: list[str]) -> str:
             python.append(str(beside.relative_to(ROOT)))
     commands = []
     if python:
-        commands.append("PYTHONPATH=tools/gate${PYTHONPATH:+:$PYTHONPATH} uv run -q --project tools python tools/gate/pytest_shards.py " + " ".join(sorted(set(python))) + " -- -q -p no:cacheprovider -p pytest_cpulimit -p pytest_qcport")
+        commands.append("PYTHONPATH=tools/gate${PYTHONPATH:+:$PYTHONPATH} uv run -q --project tools python tools/gate/pytest_shards.py " + " ".join(sorted(set(python))) + " -- -q -p no:cacheprovider -p pytest_cpulimit -p pytest_qcport -p pytest_strict_bins")
     if binaries:
         commands.append("cargo test --release -q --no-fail-fast " + " ".join(f"--test {b}" for b in sorted(set(binaries))))
     return " && ".join(commands) or "true"
@@ -511,6 +532,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
     # (with another crate that has one, the root crate stays in the scope: it turns on the features the others need)
     libs = scope if p.packages is None or any((ROOT / pkgs[n]["dir"] / "src/lib.rs").exists() for n in p.packages) else ""
     cargo = "cargo test --release -q --no-fail-fast"
+    # The root tests are named with -p llrm: a workspace member's test target of the same name (llrm-arm64's `run`) runs under a bare `--test run` too.
     split = cfg["split"]
     whole = set(cfg["whole"].values()) | set(cfg["exclusive"].values())
     skips = " ".join(f"--skip {s['filter']}" for s in split)
@@ -526,11 +548,11 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         # twice, 160 s of a loaded host)
         own = {"tests/test_programs_compile.py", "tests/test_loops.py"}
         tests = " ".join(sorted(f"tests/{one.name}" for one in (ROOT / "tests").glob("*.py") if f"tests/{one.name}" not in own | set(skipped)))
-        return f"PYTHONPATH=tools/gate${{PYTHONPATH:+:$PYTHONPATH}} uv run -q --project tools python tools/gate/pytest_shards.py --durations ${{CARGO_TARGET_DIR:-target}}/{durations}.json tools crates {tests}" + "".join(f" --ignore={f}" for f in skipped) + " -- -q -p no:cacheprovider -p pytest_cpulimit -p pytest_qcport"
+        return f"PYTHONPATH=tools/gate${{PYTHONPATH:+:$PYTHONPATH}} uv run -q --project tools python tools/gate/pytest_shards.py --durations ${{CARGO_TARGET_DIR:-target}}/{durations}.json tools crates {tests}" + "".join(f" --ignore={f}" for f in skipped) + " -- -q -p no:cacheprovider -p pytest_cpulimit -p pytest_qcport -p pytest_strict_bins"
 
     steps = {
         "build": BUILD,
-        "facts": f"{cargo} --test target_facts",
+        "facts": f"{cargo} -p llrm --test target_facts",
         # #1777 tracked d1.o, d4.o and d8.o and was smoke-green: the check of tests/tracked_build_products.rs, without a build.
         "products": "python3 -c \"import sys; sys.path.insert(0, 'tools/gate'); import gate; sys.exit(gate.products_main())\"",
         "docs": "python3 tools/docs/docsbuild/build.py --check && python3 tools/docs/passdocs.py --check",
@@ -538,7 +560,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         "lib": f"{cargo} {libs} --lib -- -Zunstable-options {shuffle()}" if libs else "true",
         # rustdoc over every crate costs 456 CPU-s to find no test: it runs when a doc comment has a fence to run.
         "doc": f"if python3 tools/gate/doctests.py crates src tests; then {cargo} {libs} --doc; else {SKIPPED_DOC}; fi" if libs else "true",
-        "integration": f"{cargo} {cheap_bins} -- {skips} --skip test_every_program_under_tests_run_prints_its_out",
+        "integration": f"{cargo} -p llrm {cheap_bins} -- {skips} --skip test_every_program_under_tests_run_prints_its_out",
         "crate-tests": f"{cargo} {ct}" if ct else "true",
         # Every scan runs, and any failing fails the step: the first red must not hide the others.
         "scans": "rc=0; "
@@ -548,7 +570,10 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         + "".join(f"; {cargo} --test {Path(one['file']).stem} || rc=1" for one in cfg["scan"] if p.tier == "smoke" and one.get("step") == "integration" and Path(one["file"]).stem != "target_facts")
         + "; exit $rc",
         "bench": bench,
-        "torture": "uv run -q --project tools python tools/torture/torture.py --gate --work $CARGO_TARGET_DIR/torture-work",
+        # The 64-bit sample is a plain regression sweep: it passes on the tree where tailmerge merged two sibling-call jumps (#6146), so a green line is no safety net for that class.
+        "torture": "uv run -q --project tools python tools/torture/torture.py --gate --work $CARGO_TARGET_DIR/torture-work || rc=1"
+        "; echo 'torture --bits 64 --gate (a plain regression sweep: passes on the pre-fix tree of #6146)'"
+        "; uv run -q --project tools python tools/torture/torture.py --bits 64 --gate --work $CARGO_TARGET_DIR/torture-work64 || rc=1; exit ${rc:-0}",
         # Every LLRM_CHECK_* oracle over the BASIC and Nib programs (needs perf: it first checks each oracle ran). Red on a finding nothing
         # expects, or on an expected one that stopped failing: tools/oracle_expected.toml.
         "oracle-sweep": 'uv run -q --project tools python tools/oracle_sweep.py --no-premise --jobs ${JOBS:-8} --expected tools/oracle_expected.toml ${ORACLE_SHARD:+--shard "$ORACLE_SHARD"}',
@@ -565,23 +590,24 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         # the build the cost gate measures (tools/measure.py).
         "pytest-perf": "LLRM_BIN=$(python3 tools/measure.py dist) PYTHONPATH=tools/gate${PYTHONPATH:+:$PYTHONPATH} uv run -q --project tools python tools/gate/pytest_shards.py --durations ${CARGO_TARGET_DIR:-target}/pytest-perf-durations.json "
         + " ".join(perf_files())
-        + " -- -q -p no:cacheprovider -p pytest_cpulimit -p pytest_qcport",
+        + " -- -q -p no:cacheprovider -p pytest_cpulimit -p pytest_qcport -p pytest_strict_bins",
         # The slow DOS tier (tools/dosbatch/conftest.py): the demos played on dos32 and the graphics sweeps. The demo sources are
         # Microsoft's and not in the repository, so without them the step is skipped (77), not passed.
-        "dos-slow": 'd="${QB45_DEMOS_DIR:-$HOME/scratch/gor}"; [ -f "$d/NIBBLES.BAS" ] || { echo "SKIPPED: no NIBBLES.BAS in $d (set QB45_DEMOS_DIR)"; exit 77; }; QB45_DEMOS_DIR="$d" uv run -q --project tools python tools/gate/pytest_shards.py --durations ${CARGO_TARGET_DIR:-target}/dos-durations.json tools/dosbatch -- -m slow_dos -q -p no:cacheprovider',
+        "dos-slow": 'd="${QB45_DEMOS_DIR:-$HOME/scratch/gor}"; [ -f "$d/NIBBLES.BAS" ] || { echo "SKIPPED: no NIBBLES.BAS in $d (set QB45_DEMOS_DIR)"; exit 77; }; rm -f "${CARGO_TARGET_DIR:-target}/gate-logs/demo-hashes.txt"; { lscpu | grep -E "Vendor ID|Model name"; rustc -vV | head -n 4; "${DOSBOX_BIN:-${CARGO_TARGET_DIR:-target}/release/dosbox-x}" --version 2>&1 | grep -m1 "DOSBox-X version"; uv run -q --project tools python -c "import sys; sys.path.insert(0, \'tools/dosbatch\'); import qb32; print(\'demo conf:\', \', \'.join(l for l in qb32.DEMO_CONF.splitlines() if l.startswith((\'core=\', \'cputype=\', \'virtual\'))))"; uv run -q --project tools python tools/dosbatch/x87probe.py || true; readelf -p .comment "${DOSBOX_BIN:-${CARGO_TARGET_DIR:-target}/release/dosbox-x}" | grep -m1 "GCC:" || true; } 2>&1 | sed \'s/^/[diag!] /\'; QB45_DEMOS_DIR="$d" uv run -q --project tools python tools/gate/pytest_shards.py --must-pass tools/dosbatch/test_qbdemos.py --rerun tools/dosbatch/test_qbdemos.py --durations ${CARGO_TARGET_DIR:-target}/dos-durations.json tools/dosbatch -- -m slow_dos -q -p no:cacheprovider; rc=$?; QB45_DEMOS_DIR="$d" uv run -q --project tools python tools/dosbatch/nibprobe.py 2>&1 | sed \'s/^/[diag!] /\'; sed \'s/^/[diag] /\' "${CARGO_TARGET_DIR:-target}/gate-logs/demo-hashes.txt" 2>/dev/null; exit $rc',
         # What the full tier's pytest step runs but for its slow files: #1765 and #1766 were smoke-green and failed tools/test_identical.py
         # and tests/test_readme.py in the train.
         "pytest-quick": cfg_pytest(skip_py + tuple(cfg["smoke"]["slow_pytest"]), "pytest-quick-durations"),
         "pytest-programs": "uv run -q --project tools python -m pytest tests/test_programs_compile.py tests/test_loops.py -q -p no:cacheprovider",
-        "qcport": '[ -f ~/scratch/qcport-env.sh ] && . ~/scratch/qcport-env.sh; : "${QCPORT:?QCPORT is not set}" "${QCPORT_INC:?QCPORT_INC is not set}" "${QCPORT_BORLAND:?QCPORT_BORLAND is not set}"; export JWLINK="${JWLINK:-$LLRM_BIN/jwlink}"; uv run -q --project tools python tools/qcport-run.py',
+        "qcport": '[ -f ~/scratch/qcport-env.sh ] && . ~/scratch/qcport-env.sh; : "${QCPORT:?QCPORT is not set}" "${QCPORT_INC:?QCPORT_INC is not set}" "${QCPORT_BORLAND:?QCPORT_BORLAND is not set}"; export JWLINK="${JWLINK:-$LLRM_BIN/jwlink}"; uv run -q --project tools python tools/qcport-run-cc.py',
         "oracle-qcport": '[ -f ~/scratch/qcport-env.sh ] && . ~/scratch/qcport-env.sh; : "${QCPORT:?QCPORT is not set}" "${QCPORT_INC:?QCPORT_INC is not set}" "${QCPORT_BORLAND:?QCPORT_BORLAND is not set}"; export JWLINK="${JWLINK:-$LLRM_BIN/jwlink}"; uv run -q --project tools python tools/oracle_qcport.py --jobs ${JOBS:-8}',
+        "objsweep": "python3 tools/pairs/objsweep_gate.py",
         "measure": "[ -f ~/scratch/qcport-env.sh ] && . ~/scratch/qcport-env.sh; python3 tools/measure.py check",
-        "run": f"LLRM_RUN_ONLY='{' '.join(p.languages)}' {cargo} --test run -- test_every_program_under_tests_run_prints_its_out",
+        "run": f"LLRM_RUN_ONLY='{' '.join(p.languages)}' {cargo} -p llrm --test run -- test_every_program_under_tests_run_prints_its_out",
     }
     for s in split:
-        steps[s["step"]] = f"{cargo} --test {s['bin']} -- {s['filter']}"
+        steps[s["step"]] = f"{cargo} -p llrm --test {s['bin']} -- {s['filter']}"
     for step, binary in {**cfg["whole"], **cfg["exclusive"]}.items():
-        steps[step] = f"{cargo} --test {binary}"
+        steps[step] = f"{cargo} -p llrm --test {binary}"
     return steps
 
 
@@ -699,13 +725,22 @@ def unusable(missing: dict[str, str]) -> tuple[list[str], frozenset[str]]:
 SHARDED = {"bench": ("bench", "BENCH_SHARD"), "oracle": ("oracle", "ORACLE_SHARD")}
 
 
+# Slices a sharded group has besides its numbered ones: `bench-base-I` measures slice I of the base, for the numbered slices' rows to be judged against.
+EXTRA_SLICES = {"bench": ("base",)}
+
+
 def shard_names(group: str) -> list[str]:
-    """`bench` as the CI jobs `bench-1` .. `bench-N` (likewise `oracle`): the step is cut into slices that run on their own runners; any other group as itself."""
-    return [f"{group}-{i}" for i in range(1, load()[SHARDED[group][0]]["shards"] + 1)] if group in SHARDED else [group]
+    """`bench` as the CI jobs `bench-base-1` .. `bench-base-N`, `bench-1` .. `bench-N` (likewise `oracle`, without a base): the step is cut into slices that run on their own runners; any other group as itself."""
+    if group not in SHARDED:
+        return [group]
+    count = load()[SHARDED[group][0]]["shards"]
+    return [f"{group}-{one}-{i}" for one in EXTRA_SLICES.get(group, ()) for i in range(1, count + 1)] + [f"{group}-{i}" for i in range(1, count + 1)]
 
 
 def shard_of(group: str | None) -> tuple[str | None, str | None]:
-    """(the group, its slice "I/N") for a job named `bench-I` or `oracle-I`; any other group as it is."""
+    """(the group, its slice "I/N") for a job named `bench-I` or `oracle-I`, (`bench`, "base:I/N") for `bench-base-I`; any other group as it is."""
+    if group and (one := re.fullmatch(r"bench-base-(\d+)", group)):
+        return "bench", f"base:{one[1]}/{load()['bench']['shards']}"
     if group and (one := re.fullmatch(r"(bench|oracle)-(\d+)", group)):
         return one[1], f"{one[2]}/{load()[SHARDED[one[1]][0]]['shards']}"
     return group, None
@@ -759,6 +794,34 @@ def kill_on_term() -> None:
         signal.signal(sig, die)
 
 
+# Steps whose log is also printed as it grows: the job log keeps a step's lines only if it ends, and a step cut by the job timeout left
+# none (gate run 7: bench-base cancelled at 90 minutes, no stage line to say where). A test step's thousands of lines stay in its file.
+STREAMED = ("bench",)
+
+
+class LogTail:
+    """The complete lines a step's log has gained since the last pump(), printed as `[step] line`."""
+
+    def __init__(self, path: Path, name: str):
+        self.path, self.name, self.at, self.rest = path, name, 0, b""
+
+    def pump(self) -> None:
+        if not self.path.is_file():
+            return
+        with open(self.path, "rb") as log:
+            log.seek(self.at)
+            data = log.read()
+        self.at += len(data)
+        *lines, self.rest = (self.rest + data).split(b"\n")
+        for line in lines:
+            print(f"[{self.name}] " + line.decode(errors="replace"), flush=True)
+
+
+def shared_builds(steps: list[str]) -> list[tuple[str, str]]:
+    """(name, command) of the builds several steps wait on, to run once before them."""
+    return [("measure-dist", "python3 tools/measure.py dist")] * bool(DIST_USERS & set(steps))
+
+
 def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | None, bool] | None = None, unset: tuple[str, ...] = (), stall: float | None = None) -> tuple[str, int, float, float]:
     """(name, exit code, wall seconds, CPU seconds): the CPU is user+sys of the step's process tree, which a loaded host does not stretch.
     A step that neither writes to its log nor uses CPU for `stall` seconds is killed (a pytest step sat 84 minutes on a hung test with
@@ -771,6 +834,7 @@ def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | 
     # A new file, not a truncated one: an orphan of a killed gate still writing to the old inode interleaves with this step's output
     # (NUL gaps and extra "test result" lines: #1758 "95 results of 83 test binaries").
     path.unlink(missing_ok=True)
+    tail = LogTail(path, name) if name in STREAMED else None
     with open(path, "w") as log:
         child = subprocess.Popen(["bash", "-c", prelude + command], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         LIVE.add(child.pid)
@@ -783,10 +847,13 @@ def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | 
                 if done:
                     break
                 time.sleep(min(1.0, stall / 4))
+                if tail:
+                    tail.pump()
                 grown, burned = path.stat().st_size, proctree.tree_cpu(child.pid)
                 if grown != seen or burned > used:  # any tick: a loaded host gives a computing step far less than 0.1 s a poll
                     seen, used, active = grown, burned, time.time()
                 elif time.time() - active > stall:
+                    doing = proctree.describe(child.pid)  # before the kill: what it was waiting on is the only evidence of the stall
                     os.killpg(child.pid, signal.SIGKILL)
                     _, status, usage = os.wait4(child.pid, 0)
                     stalled = True
@@ -795,10 +862,12 @@ def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | 
             os.killpg(child.pid, signal.SIGKILL)
             raise
         LIVE.discard(child.pid)
+        if tail:
+            tail.pump()
         child.returncode = code = STALL_CODE if stalled else os.waitstatus_to_exitcode(status)
         cpu = usage.ru_utime + usage.ru_stime
     if stalled:
-        path.open("a").write(f"\nSTALLED: no log growth and no CPU in the step's process tree for {stall / 60:g} min; killed\n")
+        path.open("a").write(f"\nSTALLED: no log growth and no CPU in the step's process tree for {stall / 60:g} min; killed\nthe tree when it was killed:\n" + "\n".join(doing) + "\n")
     if code == 0 and check and (why := incomplete(path.read_text(), *check)):
         path.open("a").write(f"\nINCOMPLETE: {why}\n")
         code = 78
@@ -829,7 +898,7 @@ def snapshot_binaries(release: Path, into: Path) -> Path:
 
 
 # The steps that run the compiler's binaries (the others build what they test, or read the tree).
-USES_BINARIES = ("pytest", "pytest-perf", "pytest-programs", "pytest-quick", "changed-tests", "bench", "run", "torture", "oracle-sweep", "oracle-premise", "oracle-qcport", "identity", "measure", "qcport", "turbo", "cv4", "dos-slow")
+USES_BINARIES = ("pytest", "pytest-perf", "pytest-programs", "pytest-quick", "changed-tests", "bench", "run", "torture", "oracle-sweep", "oracle-premise", "oracle-qcport", "identity", "measure", "objsweep", "qcport", "turbo", "cv4", "dos-slow")
 
 
 def group_plan(p: Plan, group: str) -> Plan:
@@ -867,10 +936,15 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
         results[name] = (code, took, cpu)
         verdict = "ok" if code == 0 else "SKIPPED" if code == 77 else "INCOMPLETE" if code == 78 else "FAIL"
         print(f"[time] {name} {verdict} {took:.0f}s wall {cpu:.0f}s cpu", flush=True)
+        if code != 77 and (logs / f"{name}.log").exists():
+            if tagged := diagnostic_lines((logs / f"{name}.log").read_text(), code != 0):
+                print("\n".join("    " + line for line in tagged), flush=True)
         if code not in (0, 77):
             text = (logs / f"{name}.log").read_text()
             if failures := failure_text(text):
                 print(f"    [{name}: what the failing tests printed]\n" + "\n".join("    " + line for line in failures.splitlines()), flush=True)
+            else:
+                print(f"    [{name}: the head of its log]\n" + "\n".join("    " + line for line in log_head(text).splitlines()), flush=True)
             print("\n".join("    " + line for line in text.splitlines()[-30:]), flush=True)
 
     for name, why in skipped.items():
@@ -899,12 +973,17 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
                 return 2, ["build"]
         else:
             env["LLRM_BIN"] = str(snapshot_binaries(Path(target) / "release", Path(target) / "gate-bins"))
+    for name, command in shared_builds(p.steps):
+        report(*run_step(name, command, logs, env, unset=unset))
+        if results[name][0]:
+            print(verdict_line(p.tier, [name], [], time.time() - start, [], head_state()[0]))
+            return 1, [name]
     alone = [s for s in p.steps if s in load()["exclusive"] or s in SERIAL_STEPS]
     rest = [s for s in p.steps if s != "build" and s not in alone]
     jobs = default_jobs(os.environ)
     with ThreadPoolExecutor(jobs) as pool:
         # The longest steps start first.
-        order = sorted(rest, key=lambda s: s not in ("run", "identity", "qcport", "oracle-qcport", "measure", "pytest-programs", "turbo", "bench", "dos-slow"))
+        order = sorted(rest, key=lambda s: s not in ("run", "identity", "measure", "pytest-programs", "turbo", "bench", "dos-slow"))
         for future in as_completed([pool.submit(run_step, s, cmds[s], logs, env, checks.get(s), unset) for s in order]):
             report(*future.result())
     for name in alone:
@@ -990,14 +1069,23 @@ def default_jobs(environ: dict, cpus: int | None = None) -> int:
 
 def scoped(argv: list[str], environ: dict | None = None, have: str | None = None) -> list[str] | None:
     """`argv` under its own systemd user scope with a high CPU weight, or None when it already is (GATE_SCOPED) or the host has no
-    systemd-run. Session builds share one scope with the gate by default and starve it; the weight is GATE_CPU_WEIGHT (1000). The scope is
+    systemd-run, or runs under GitHub Actions (a runner is no dev box: the self-hosted podman ones have no user bus, and the gate refused in 0 s).
+    Session builds share one scope with the gate by default and starve it; the weight is GATE_CPU_WEIGHT (1000). The scope is
     omitted from systemd-oomd: it killed two gates (SIGKILL, no verdict) for the host's memory pressure, not for their memory."""
     environ = os.environ if environ is None else environ
     have = shutil.which("systemd-run") if have is None else have
-    if environ.get("GATE_SCOPED") or not have or environ.get("GATE_CPU_WEIGHT") == "0":
+    if environ.get("GATE_SCOPED") or environ.get("GITHUB_ACTIONS") or not have or environ.get("GATE_CPU_WEIGHT") == "0":
         return None
     weight = environ.get("GATE_CPU_WEIGHT") or "1000"
     return [have, "--user", "--scope", "-q", "-p", f"CPUWeight={weight}", "-p", "ManagedOOMPreference=omit", "--setenv=GATE_SCOPED=1", *argv]
+
+
+def scope_refusal(environ: dict | None = None, have: str | None = None) -> str | None:
+    """Why `scoped` would fail: systemd-run --user needs a user bus. Without one it exited with only a dbus line and no verdict."""
+    environ = os.environ if environ is None else environ
+    if scoped(["x"], environ, have) is None or environ.get("XDG_RUNTIME_DIR") or environ.get("DBUS_SESSION_BUS_ADDRESS"):
+        return None
+    return "no systemd user bus (XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS unset): set GATE_SCOPED=1 to run without the scope"
 
 
 def main() -> int:
@@ -1038,6 +1126,9 @@ def main() -> int:
     if args.command == "run":
         head, dirty = head_state()
         if (why := refusal(head, dirty, args.expect, args.allow_dirty)) is not None:
+            print(f"gate: {why}")
+            return 2
+        if not args.json and (why := scope_refusal()):
             print(f"gate: {why}")
             return 2
         if not args.json and (wrapped := scoped([sys.executable, *sys.argv])):

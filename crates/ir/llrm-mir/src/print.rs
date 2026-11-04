@@ -7,8 +7,8 @@ use crate::context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, 
 use crate::hash::HashMap;
 use crate::lexer::is_name;
 use crate::module::{
-    BlockId, DebugWhat, Function, GlobalKind, GlobalValue, InstId, LINKAGE, Linkage, MetadataId, MetadataOperand,
-    Module, Operand, Special, UnnamedAddr, ValueId,
+    Alias, BlockId, DebugWhat, Function, GlobalKind, GlobalValue, InstId, LINKAGE, Linkage, MetadataId,
+    MetadataOperand, Module, Operand, Special, UnnamedAddr, VISIBILITY, ValueId, Visibility,
 };
 use crate::opcode::{
     AtomicKind, Attribute, CAST, Clause, FLOAT_PREDICATE, INT_PREDICATE, Opcode, RMW_OPS, Tail, spelling,
@@ -47,8 +47,18 @@ pub fn module(module: &Module) -> String {
             .iter()
             .enumerate()
             .filter(|(_, one)| matches!(one.kind, GlobalKind::Variable(_)))
-            .map(|(at, one)| printer.variable(at, one, module.global_metadata.get(&(at as u32)))),
+            .map(
+                |(at, one)| {
+                    printer.variable(
+                        at,
+                        one,
+                        module.global_metadata.get(&(at as u32)),
+                        one.name.owned().and_then(|name| module.sections.get(&name)),
+                    )
+                },
+            ),
     );
+    section(&mut out, module.aliases.iter().map(|one| printer.alias(one)));
     for (at, global) in module.globals.iter().enumerate() {
         if let GlobalKind::Function(function) = &global.kind {
             if !out.is_empty() {
@@ -231,6 +241,12 @@ pub fn fingerprint(function: &Function) -> u128 {
                         digest.write_u8(2);
                         operand(&mut digest, at);
                     }
+                    DebugWhat::Args(list) => {
+                        digest.write_u8(6);
+                        for &one in function.debug_args(list) {
+                            operand(&mut digest, one);
+                        }
+                    }
                     DebugWhat::Piece { value, offset, bytes } => {
                         digest.write_u8(3);
                         operand(&mut digest, value);
@@ -238,6 +254,15 @@ pub fn fingerprint(function: &Function) -> u128 {
                     }
                     DebugWhat::GonePiece { offset, bytes } => (4u8, offset, bytes).hash(&mut digest),
                     DebugWhat::Gone => digest.write_u8(5),
+                    DebugWhat::Assign { value, address, id, address_expression } => {
+                        digest.write_u8(7);
+                        value.is_some().hash(&mut digest);
+                        address.is_some().hash(&mut digest);
+                        for one in value.into_iter().chain(address) {
+                            operand(&mut digest, one);
+                        }
+                        (id, address_expression).hash(&mut digest);
+                    }
                 }
             }
             let instruction = function.instruction(inst);
@@ -442,6 +467,10 @@ impl Printer<'_> {
         (linkage != Linkage::External).then(|| spelling(&LINKAGE, linkage))
     }
 
+    fn visibility(visibility: Visibility) -> Option<&'static str> {
+        (visibility != Visibility::Default).then(|| spelling(&VISIBILITY, visibility))
+    }
+
     fn unnamed_addr(unnamed_addr: UnnamedAddr) -> Option<&'static str> {
         match unnamed_addr {
             UnnamedAddr::None => None,
@@ -465,11 +494,31 @@ impl Printer<'_> {
         (space != 0).then(|| format!("addrspace({space})"))
     }
 
+    fn alias(
+        &self,
+        alias: &Alias,
+    ) -> String {
+        let words: Vec<&str> =
+            [Self::linkage(alias.linkage), Self::visibility(alias.visibility), Self::unnamed_addr(alias.unnamed_addr)]
+                .into_iter()
+                .flatten()
+                .collect();
+        let space = Self::address_space(alias.address_space).map(|one| format!(" {one}")).unwrap_or_default();
+        format!(
+            "@{} = {}alias {}, ptr{space} {}\n",
+            quoted(&alias.name),
+            words.iter().map(|one| format!("{one} ")).collect::<String>(),
+            self.ty(alias.ty),
+            self.globals[alias.aliasee.0 as usize],
+        )
+    }
+
     fn variable(
         &self,
         at: usize,
         global: &GlobalValue,
         attached: Option<&Vec<(String, MetadataId)>>,
+        section: Option<&String>,
     ) -> String {
         let GlobalKind::Variable(variable) = &global.kind else { unreachable!("a variable") };
         let linkage = match (global.linkage, variable.initializer) {
@@ -477,7 +526,11 @@ impl Printer<'_> {
             (linkage, _) => Self::linkage(linkage),
         };
         let mut words: Vec<String> =
-            [linkage, Self::unnamed_addr(global.unnamed_addr)].into_iter().flatten().map(str::to_owned).collect();
+            [linkage, Self::visibility(global.visibility), Self::unnamed_addr(global.unnamed_addr)]
+                .into_iter()
+                .flatten()
+                .map(str::to_owned)
+                .collect();
         words.extend(Self::address_space(global.address_space));
         if variable.externally_initialized {
             words.push("externally_initialized".to_owned());
@@ -485,10 +538,11 @@ impl Printer<'_> {
         words.push((if variable.constant { "constant" } else { "global" }).to_owned());
         words.push(self.ty(variable.ty));
         words.extend(variable.initializer.map(|one| self.constant(one)));
+        let section = section.map(|one| format!(", section \"{one}\"")).unwrap_or_default();
         let align = variable.align.map(|one| format!(", align {one}")).unwrap_or_default();
         let attached: String =
             attached.into_iter().flatten().map(|(kind, node)| format!(", !{kind} !{}", node.0)).collect();
-        format!("{} = {}{align}{attached}\n", self.globals[at], words.join(" "))
+        format!("{} = {}{section}{align}{attached}\n", self.globals[at], words.join(" "))
     }
 
     fn function(
@@ -521,6 +575,7 @@ impl Printer<'_> {
         if !declaration {
             words.extend(Self::linkage(global.linkage).map(str::to_owned));
         }
+        words.extend(Self::visibility(global.visibility).map(str::to_owned));
         words.extend(Self::convention(function.calling_convention));
         let return_attrs = attributes(&self.context, &function.return_attrs);
         if !return_attrs.is_empty() {
@@ -592,6 +647,17 @@ impl Printer<'_> {
                             self.typed(function, slots, at),
                             record.variable.0
                         ),
+                        DebugWhat::Args(list) => writeln!(
+                            out,
+                            "  #dbg_value(!DIArgList({}), !{}{extra})",
+                            function
+                                .debug_args(list)
+                                .iter()
+                                .map(|&one| self.typed(function, slots, one))
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                            record.variable.0
+                        ),
                         DebugWhat::Piece { value, offset, bytes } => writeln!(
                             out,
                             "  #dbg_piece({}, !{}, {offset}, {bytes})",
@@ -602,6 +668,17 @@ impl Printer<'_> {
                             writeln!(out, "  #dbg_gonepiece(!{}, {offset}, {bytes})", record.variable.0)
                         }
                         DebugWhat::Gone => writeln!(out, "  #dbg_gone(!{})", record.variable.0),
+                        DebugWhat::Assign { value, address, id, address_expression } => writeln!(
+                            out,
+                            "  #dbg_assign({}, !{}, !{}, !{}, {}, !{}, !{})",
+                            value.map_or_else(|| "i1 poison".to_owned(), |one| self.typed(function, slots, one)),
+                            record.variable.0,
+                            record.expression.map_or(0, |one| one.0),
+                            id.0,
+                            address.map_or_else(|| "ptr poison".to_owned(), |one| self.typed(function, slots, one)),
+                            address_expression.0,
+                            record.location.map_or(0, |one| one.0)
+                        ),
                     };
                 }
                 out.push_str("  ");
@@ -856,6 +933,9 @@ impl Printer<'_> {
                 Type::Array { .. } => format!("[{}]", members(ids)),
                 Type::Vector { .. } => format!("<{}>", members(ids)),
                 Type::Struct { packed: true, .. } => format!("<{{ {} }}>", members(ids)),
+                Type::Named(name) if self.types().body(name).is_some_and(|body| body.packed) => {
+                    format!("<{{ {} }}>", members(ids))
+                }
                 _ if ids.is_empty() => "{}".to_owned(),
                 _ => format!("{{ {} }}", members(ids)),
             },
@@ -866,6 +946,14 @@ impl Printer<'_> {
                     gep_flag_words(*inbounds, *nusw, *nuw),
                     self.ty(*source),
                     rest.join(", ")
+                )
+            }
+            ConstantKind::Expr(ConstantExpr::Binary { op, lhs, rhs }) => {
+                format!(
+                    "{} ({}, {})",
+                    spelling(&crate::opcode::BINARY, *op),
+                    self.typed_constant(*lhs),
+                    self.typed_constant(*rhs)
                 )
             }
             ConstantKind::Expr(ConstantExpr::Cast { op, value }) => {

@@ -27,6 +27,64 @@ impl Width {
     }
 }
 
+use llrm_analysis::aa::AliasResult;
+use llrm_analysis::placealias::{Object, alias_of};
+
+/// The object an access is relative to, as far as telling two accesses apart:
+/// what `MachinePointerInfo` names.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub enum MemObject {
+    #[default]
+    Unknown,
+    /// A global, by symbol.
+    Global(String),
+    /// A frame object.
+    Slot(u32),
+    /// The function's constant pool: memory nothing writes.
+    ConstantPool,
+}
+
+/// What a load or store reaches (`MachineMemOperand`): its object and the byte
+/// offset in it, where both are known.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MemOperand {
+    pub object: MemObject,
+    pub offset: Option<i64>,
+    /// `MachineMemOperand::isVolatile`: the access is not made a writeback
+    /// form (`AArch64LoadStoreOpt::tryToMergeLdStUpdate`).
+    pub volatile: bool,
+}
+
+impl MemOperand {
+    /// Whether an access of `bytes` here and one of `other_bytes` at `other`
+    /// cannot touch the same byte (`AliasAnalysis`' `NoAlias`, as
+    /// `BaseIndexOffset::computeAliasing` reads it from the objects): two
+    /// different objects never overlap; one object's accesses do not when their
+    /// ranges do not.
+    pub fn disjoint(
+        &self,
+        bytes: i64,
+        other: &MemOperand,
+        other_bytes: i64,
+    ) -> bool {
+        fn object(memory: &MemOperand) -> Option<Object<&str>> {
+            match &memory.object {
+                MemObject::Unknown | MemObject::ConstantPool => None,
+                MemObject::Global(name) => Some(Object::Global(name.as_str())),
+                MemObject::Slot(slot) => Some(Object::Frame { id: i64::from(*slot), fixed: false }),
+            }
+        }
+        let distance = (self.object == other.object).then(|| Some(other.offset? - self.offset?)).flatten();
+        alias_of(
+            distance,
+            object(self).as_ref(),
+            u64::try_from(bytes).ok(),
+            object(other).as_ref(),
+            u64::try_from(other_bytes).ok(),
+        ) == AliasResult::NoAlias
+    }
+}
+
 /// A general-purpose register, `x0`..`x30`, or number 31, which is the zero
 /// register or the stack pointer as the operand's role says.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -305,6 +363,14 @@ pub enum Barrier {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Fill {
+    Zero,
+    Byte(u8),
+    /// The low byte of a general register.
+    Gpr(Gpr),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FpUnary {
     Mov,
     Abs,
@@ -357,8 +423,29 @@ pub enum FpConvert {
     Bits { to_fp: bool },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FrameMark {
+    PrologueEnd,
+    EpilogueBegin,
+}
+
+impl Inst {
+    /// A pseudo-instruction: it encodes to no word.
+    pub fn is_directive(&self) -> bool {
+        matches!(self, Inst::Cfi(_) | Inst::Mark(_) | Inst::Label(_))
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Inst {
+    /// Where the prologue ends or an epilogue begins: no bytes, it tells the
+    /// line table (`prologue_end`, `epilogue_begin`).
+    Mark(FrameMark),
+    /// A label inside a block (the base of a jump table's offsets): no bytes.
+    Label(String),
+    /// A `.cfi_*` directive (`CFI_INSTRUCTION`): no bytes, it states what the
+    /// instructions before it did to the frame.
+    Cfi(llrm_object::assembler::Cfi),
     AddSubImm {
         op: AddSub,
         width: Width,
@@ -497,10 +584,12 @@ pub enum Inst {
     Load {
         mem: Memory,
         addr: Addr,
+        mmo: MemOperand,
     },
     Store {
         mem: Memory,
         addr: Addr,
+        mmo: MemOperand,
     },
     LoadPair {
         first: Memory,
@@ -516,10 +605,19 @@ pub enum Inst {
         page: bool,
         rd: Gpr,
         target: Target,
+        /// `adrp` of the target's GOT slot (`@GOTPAGE`): the load that follows
+        /// reads it at `@GOTPAGEOFF`.
+        got: bool,
     },
     FpUnary {
         op: FpUnary,
         size: FpSize,
+        rd: Vreg,
+        rn: Vreg,
+    },
+    /// `mov vd.16b, vn.16b` (`orr`): all 128 bits, where `FpUnary::Mov` copies
+    /// 64.
+    VectorMov {
         rd: Vreg,
         rn: Vreg,
     },
@@ -569,6 +667,23 @@ pub enum Inst {
         gpr: Gpr,
         fpr: Vreg,
     },
+    /// `scvtf`/`ucvtf` from an integer or `fcvtzs`/`fcvtzu` to one, with
+    /// `fbits` fractional bits (the value scaled by 2^fbits); `op` is
+    /// `ToFp` or `ToIntZero`.
+    FpFixed {
+        op: FpConvert,
+        width: Width,
+        size: FpSize,
+        gpr: Gpr,
+        fpr: Vreg,
+        fbits: u8,
+    },
+    /// A 16-byte vector with every byte `fill`: `movi v.2d, #0`, `movi v.16b,
+    /// #imm`, `dup v.16b, w`.
+    VectorFill {
+        rd: Vreg,
+        fill: Fill,
+    },
     Svc {
         imm16: u16,
     },
@@ -596,6 +711,12 @@ pub enum Inst {
         imm16: u16,
     },
     Nop,
+    /// `prfm <op>, [<base>]`: a hint that the line at `base` is wanted; `op` is
+    /// the 5-bit prefetch operation.
+    Prefetch {
+        op: u8,
+        base: Gpr,
+    },
 }
 
 /// The second operand of a conditional compare.

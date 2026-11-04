@@ -97,7 +97,8 @@ frame_optional = true
 # A size build wraps a frame around a shared return too: the pin has no size check, and the jump over the epilogue stays short.
 frame_wrap_split_size = true
 stack = "esp"
-preserved = ["ebx", "esi", "edi", "ebp"]
+# In the pin's CSR_32 order (esi, edi, ebx, ebp): the frame pushes them last first.
+preserved = ["esi", "edi", "ebx", "ebp"]
 clobbered = ["eax", "ecx", "edx", "st0", "st1", "st2", "st3", "st4", "st5", "st6", "st7", "flags"]
 # Direction flag clear and the x87 stack empty on entry and on return.
 entry_state = ["df_clear", "x87_empty"]

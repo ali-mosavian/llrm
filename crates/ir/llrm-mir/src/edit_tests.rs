@@ -840,6 +840,28 @@ fn test_unannotate_logs_the_rewrite_of_the_instruction() {
     assert!(f.take_changes().is_empty(), "nothing was taken off the second time");
 }
 
+/// `!tbaa` is part of an access's reference: a pass that set or put one on an
+/// instruction logged nothing, and the kept `MemRef` of the load still named
+/// the old type (`LLRM_CHECK_REFERENCES` with `LLRM_CHECK_ORDER` panicked on
+/// idioms.c and memfuncs_runtime.c).
+#[test]
+fn test_set_metadata_and_annotate_log_the_rewrite_of_the_instruction() {
+    let mut module = module(
+        "define i16 @f(ptr %p) {\nentry:\n  %v = load i16, ptr %p, !range !0\n  ret i16 %v\n}\n\n!0 = !{i16 0, i16 -32768}\n",
+    );
+    let f = function(&mut module);
+    let (v, _) = named(f, "v");
+    let node = f.instruction(v).metadata[0].1;
+    f.take_changes();
+    f.set_metadata(v, "range", None);
+    assert!(f.instruction(v).metadata.is_empty(), "premise: the range is gone");
+    assert_eq!(f.take_changes(), vec![Change::Rewritten(v)]);
+    f.annotate(v, "range", node);
+    assert_eq!(f.take_changes(), vec![Change::Rewritten(v)]);
+    f.set_metadata(v, "tbaa", None);
+    assert!(f.take_changes().is_empty(), "nothing was taken off");
+}
+
 /// `take_name` is `Value::takeName`: the new value is named what the old one
 /// was and the old one has none, as SCCP's `sext` -> `zext nneg` keeps `%s`.
 #[test]
@@ -1042,4 +1064,80 @@ fn test_reserved_instructions_do_not_move_the_arena() {
         f.create_instruction(Opcode::Binary(BinaryOp::Add), i16, vec![operand, operand], Flags::default(), None);
     }
     assert_eq!(f.instruction_capacity(), at);
+}
+
+/// Asking whether a switch of 256 cases has one successor listed its 256
+/// targets (`Function::successors` 12 K Ir a call, 8,720 calls in a 256-state
+/// machine: SimplifyCFG x3.5 a doubling, the pin's x1.8). It stops at the
+/// second distinct target.
+#[test]
+fn the_sole_successor_of_a_switch_stops_at_a_second_target() {
+    let cases: String = (0..256).map(|i| format!("    i32 {i}, label %t{}\n", i % 2)).collect();
+    let text = format!(
+        "define void @f(i32 %x) {{\nentry:\n  switch i32 %x, label %t0 [\n{cases}  ]\nt0:\n  br label %t1\nt1:\n  ret void\n}}\n"
+    );
+    let mut module = module(&text);
+    let f = function(&mut module);
+    let layout = f.layout().to_vec();
+    crate::module::GENERIC_SUCCESSOR_SCANS.with(|scans| scans.set(0));
+    let (switch, jump) = (f.sole_successor(layout[0]), f.sole_successor(layout[1]));
+    let scans = crate::module::GENERIC_SUCCESSOR_SCANS.with(std::cell::Cell::get);
+    assert_eq!((switch, jump), (None, Some(layout[2])));
+    assert_eq!(scans, 0, "the successors of the switch were listed whole");
+}
+
+/// Removing one entry of a phi of 256 arms unlinked and linked all 512
+/// operands (`set_operands` 64 K Ir a call, 1,050 calls in a 256-state
+/// machine). The arms before the removed one keep their uses; the use lists
+/// stay consistent.
+#[test]
+fn rewriting_a_phi_after_its_first_arms_relinks_only_what_changed() {
+    let arms: String = (0..256).map(|i| format!("[ {i}, %e ], ")).collect();
+    let text = format!(
+        "define i32 @f() {{\nentry:\n  br label %m\ne:\n  br label %m\nm:\n  %p = phi i32 {}\n  ret i32 %p\n}}\n",
+        arms.trim_end_matches(", ")
+    );
+    let mut module = module(&text);
+    let f = function(&mut module);
+    let m = f.layout()[2];
+    let phi = f.iter_block(m).next().expect("the phi");
+    let mut operands = f.instruction(phi).operands.clone();
+    let last = operands.len();
+    operands.truncate(last - 2);
+    crate::uselist::LINKS.with(|links| links.set(0));
+    f.set_operands(phi, operands);
+    let links = crate::uselist::LINKS.with(std::cell::Cell::get);
+    assert!(links <= 4, "{links} operands relinked for a rewrite that changed the end");
+    assert!(f.check_uses().is_empty());
+}
+
+const ASSIGNED: &str = "define i16 @f(i16 %a) {\nentry:\n  %p = alloca i16, !DIAssignID !1\n  %x = add i16 %a, 1\n  store i16 %x, ptr %p, !DIAssignID !2\n  #dbg_assign(i16 %x, !0, !3, !2, ptr %p, !3, !4)\n  ret i16 %x\n}\n\n!0 = !{!\"v\"}\n!1 = distinct !{}\n!2 = distinct !{}\n!3 = !{}\n!4 = !{}\n";
+
+/// An assignment record follows its value and address like any other record:
+/// replaced where another value stands for them, and gone (not the whole
+/// record, whose id ties it to the store) once they are erased. `#dbg_assign`
+/// was refused by the parser, so no pass met one.
+#[test]
+fn an_assignment_record_follows_its_value_and_address_and_keeps_its_id() {
+    let mut parsed = module(ASSIGNED);
+    let f = function(&mut parsed);
+    let (x, value) = named(f, "x");
+    let (_, pointer) = named(f, "p");
+    let a = f.parameters()[0];
+    let assign = |f: &Function| match f
+        .debug_records()
+        .iter()
+        .map(|one| one.what)
+        .find(|one| matches!(one, crate::DebugWhat::Assign { .. }))
+    {
+        Some(crate::DebugWhat::Assign { value, address, id, .. }) => (value, address, id),
+        other => panic!("{other:?}"),
+    };
+    let (before, _, id) = (assign(f).0, (), assign(f).2);
+    assert_eq!(before, Some(Operand::Value(value)));
+    f.replace_value(value, Operand::Value(a));
+    assert_eq!(assign(f).0, Some(Operand::Value(a)));
+    assert_eq!(assign(f).1, Some(Operand::Value(pointer)));
+    assert_eq!(assign(f).2, id);
+    let _ = x;
 }

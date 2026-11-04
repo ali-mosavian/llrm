@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_or.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_or.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_or.rs sha256:e3a1b79fc01d38a45a079a72e75b1edb44d98190b40eacdfdbcfd7851112295d -->
+<!-- src: crates/opt/llrm-transforms/src/combine_or.rs sha256:6f7e9cccfb7ccb3821c998db4252a25e09f6a4b9cd2e5acab4a69df2ef0f9a55 -->
 
 # combine_or
 
@@ -35,4 +35,4 @@ mask fold, `matchSelectFromAndOr` and everything after it.
 ```
 
 ## Used by
-Named by `combine`.
+Named by `combine`, `combine_casted_logic`.

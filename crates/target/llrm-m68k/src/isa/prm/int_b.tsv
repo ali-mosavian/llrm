@@ -1,0 +1,82 @@
+EOR	all	EOR Dn,<ea>	B,W,L	1011xxxxxxxxxxxx	Dn:11-9; opmode:8-6 (100=B; 101=W; 110=L); ea:5-0 (mode:5-3, reg:2-0)	none	ea=Dn,(An),(An)+,-(An),(d16,An),(d8,An,Xn),abs.W,abs.L	4-100
+EORI	all	EORI #<data>,<ea>	B,W,L	00001010xxxxxxxx	size:7-6 (00=B; 01=W; 10=L); ea:5-0 (mode:5-3, reg:2-0)	immediate data: 1 word for B (low-order byte) or W; 2 words for L	ea=Dn,(An),(An)+,-(An),(d16,An),(d8,An,Xn),abs.W,abs.L	4-102
+EORI	all	EORI #<data>,CCR	B	0000101000111100	none	1 word: 8-bit immediate in bits 7-0 (bits 15-8 zero)	none	4-104
+EXG	all	EXG Dx,Dy	L	1100xxx101000xxx	Rx:11-9 (data reg); opmode:7-3 (01000 = data regs); Ry:2-0 (data reg)	none	none	4-105
+EXG	all	EXG Ax,Ay	L	1100xxx101001xxx	Rx:11-9 (addr reg); opmode:7-3 (01001 = addr regs); Ry:2-0 (addr reg)	none	none	4-105
+EXG	all	EXG Dx,Ay	L	1100xxx110001xxx	Rx:11-9 (data reg); opmode:7-3 (10001 = data and addr regs); Ry:2-0 (addr reg)	none	none	4-105
+EXT	all	EXT.W Dn	W	0100100010000xxx	Dn:2-0; opmode:8-6 = 010 (byte to word)	none	none	4-106
+EXT	all	EXT.L Dn	L	0100100011000xxx	Dn:2-0; opmode:8-6 = 011 (word to long)	none	none	4-106
+EXTB	MC68020,MC68030,MC68040,CPU32	EXTB.L Dn	L	0100100111000xxx	Dn:2-0; opmode:8-6 = 111 (byte to long)	none	none	4-106
+ILLEGAL	all	ILLEGAL	none	0100101011111100	none	none	none	4-107
+JMP	all	JMP <ea>	none	0100111011xxxxxx	ea:5-0 (mode:5-3, reg:2-0)	none	ea=(An),(d16,An),(d8,An,Xn),abs.W,abs.L,(d16,PC),(d8,PC,Xn)	4-108
+JSR	all	JSR <ea>	none	0100111010xxxxxx	ea:5-0 (mode:5-3, reg:2-0)	none	ea=(An),(d16,An),(d8,An,Xn),abs.W,abs.L,(d16,PC),(d8,PC,Xn)	4-109
+LEA	all	LEA <ea>,An	L	0100xxx111xxxxxx	An:11-9; ea:5-0 (mode:5-3, reg:2-0)	none	ea=(An),(d16,An),(d8,An,Xn),abs.W,abs.L,(d16,PC),(d8,PC,Xn)	4-110
+LINK	all	LINK An,#<displacement>	W	0100111001010xxx	An:2-0	1 word: sign-extended 16-bit displacement	none	4-111
+LINK	MC68020,MC68030,MC68040,CPU32	LINK An,#<displacement>	L	0100100000001xxx	An:2-0	2 words: 32-bit displacement (high-order word, then low-order word)	none	4-111
+LSL, LSR	all	LSd #<data>,Dy (d = L or R)	B,W,L	1110xxxxxx001xxx	count:11-9 (1-7 = 1-7; 0 = 8); dr:8 (0=right; 1=left); size:7-6 (00=B; 01=W; 10=L); i/r:5 = 0 (immediate count); Dy:2-0	none	none	4-114
+LSL, LSR	all	LSd Dx,Dy (d = L or R)	B,W,L	1110xxxxxx101xxx	Dx:11-9 (count/register, data reg); dr:8 (0=right; 1=left); size:7-6 (00=B; 01=W; 10=L); i/r:5 = 1 (register count, modulo 64); Dy:2-0	none	none	4-114
+LSL, LSR	all	LSd <ea> (d = L or R)	W	1110001x11xxxxxx	dr:8 (0=right; 1=left); ea:5-0 (mode:5-3, reg:2-0)	none	ea=(An),(An)+,-(An),(d16,An),(d8,An,Xn),abs.W,abs.L	4-115
+MOVE	all	MOVE <ea>,<ea>	B,W,L	00xxxxxxxxxxxxxx	size:13-12 (01=B; 11=W; 10=L); dst:11-6 (reg:11-9, mode:8-6); src:5-0 (mode:5-3, reg:2-0); An source not allowed for B	none	dst=Dn,(An),(An)+,-(An),(d16,An),(d8,An,Xn),abs.W,abs.L; src=Dn,An,(An),(An)+,-(An),(d16,An),(d8,An,Xn),abs.W,abs.L,#imm,(d16,PC),(d8,PC,Xn)	4-116
+MOVEA	all	MOVEA <ea>,An	W,L	00xxxxx001xxxxxx	size:13-12 (11=W; 10=L); An:11-9; ea:5-0 (mode:5-3, reg:2-0)	none	ea=Dn,An,(An),(An)+,-(An),(d16,An),(d8,An,Xn),abs.W,abs.L,#imm,(d16,PC),(d8,PC,Xn)	4-119
+MOVE	MC68010,MC68020,MC68030,MC68040,CPU32	MOVE CCR,<ea>	W	0100001011xxxxxx	ea:5-0 (mode:5-3, reg:2-0)	none	ea=Dn,(An),(An)+,-(An),(d16,An),(d8,An,Xn),abs.W,abs.L	4-121
+MOVE	all	MOVE <ea>,CCR	W	0100010011xxxxxx	ea:5-0 (mode:5-3, reg:2-0)	none	ea=Dn,(An),(An)+,-(An),(d16,An),(d8,An,Xn),abs.W,abs.L,#imm,(d16,PC),(d8,PC,Xn)	4-123
+MOVE	MC68000,MC68008	MOVE SR,<ea>	W	0100000011xxxxxx	ea:5-0 (mode:5-3, reg:2-0)	none	ea=Dn,(An),(An)+,-(An),(d16,An),(d8,An,Xn),abs.W,abs.L	4-125
+MOVE16	MC68040	MOVE16 (Ax)+,(Ay)+	none	1111011000100xxx	Ax:2-0 (source, postincrement)	2nd word: bit 15=1; Ay in bits 14-12; bits 11-0 zero	none	4-127
+MOVE16	MC68040	MOVE16 (Ay)+,(xxx).L	none	1111011000000xxx	Ay:2-0; opmode:4-3 = 00	2 words: 32-bit absolute address (high-order word, then low-order word)	none	4-127
+MOVE16	MC68040	MOVE16 (xxx).L,(Ay)+	none	1111011000001xxx	Ay:2-0; opmode:4-3 = 01	2 words: 32-bit absolute address (high-order word, then low-order word)	none	4-127
+MOVE16	MC68040	MOVE16 (Ay),(xxx).L	none	1111011000010xxx	Ay:2-0; opmode:4-3 = 10	2 words: 32-bit absolute address (high-order word, then low-order word)	none	4-127
+MOVE16	MC68040	MOVE16 (xxx).L,(Ay)	none	1111011000011xxx	Ay:2-0; opmode:4-3 = 11	2 words: 32-bit absolute address (high-order word, then low-order word)	none	4-127
+MOVEM	all	MOVEM <list>,<ea>	W,L	010010001xxxxxxx	size:6 (0=W; 1=L); ea:5-0 (mode:5-3, reg:2-0)	register list mask word: bit 0=D0 ... bit 7=D7; bit 8=A0 ... bit 15=A7; for -(An) bit 15=D0 ... bit 0=A7; then ea extension words	ea=(An),-(An),(d16,An),(d8,An,Xn),abs.W,abs.L	4-129
+MOVEM	all	MOVEM <ea>,<list>	W,L	010011001xxxxxxx	size:6 (0=W; 1=L); ea:5-0 (mode:5-3, reg:2-0)	register list mask word: bit 0=D0 ... bit 7=D7; bit 8=A0 ... bit 15=A7; then ea extension words	ea=(An),(An)+,(d16,An),(d8,An,Xn),abs.W,abs.L,(d16,PC),(d8,PC,Xn)	4-129
+MOVEP	all	MOVEP Dx,(d16,Ay)	W,L	0000xxx11x001xxx	Dx:11-9 (data reg); opmode:8-6 (110=W register to memory; 111=L register to memory); Ay:2-0 (addr reg)	1 word: 16-bit displacement	none	4-133
+MOVEP	all	MOVEP (d16,Ay),Dx	W,L	0000xxx10x001xxx	Dx:11-9 (data reg); opmode:8-6 (100=W memory to register; 101=L memory to register); Ay:2-0 (addr reg)	1 word: 16-bit displacement	none	4-133
+MOVEQ	all	MOVEQ #<data>,Dn	L	0111xxx0xxxxxxxx	Dn:11-9; data:7-0 (8-bit, sign-extended to long)	none	none	4-134
+MULS	all	MULS.W <ea>,Dn	W	1100xxx111xxxxxx	Dn:11-9; ea:5-0 (mode:5-3, reg:2-0)	none	ea=Dn,(An),(An)+,-(An),(d16,An),(d8,An,Xn),abs.W,abs.L,#imm,(d16,PC),(d8,PC,Xn)	4-136
+MULS	MC68020,MC68030,MC68040,CPU32	MULS.L <ea>,Dl	L	0100110000xxxxxx	ea:5-0 (mode:5-3, reg:2-0)	2nd word: bit 15=0; Dl in bits 14-12; bit 11=1; bit 10=0 (32-bit product); Dh in bits 2-0 unused	ea=Dn,(An),(An)+,-(An),(d16,An),(d8,An,Xn),abs.W,abs.L,#imm,(d16,PC),(d8,PC,Xn)	4-137
+MULS	MC68020,MC68030,MC68040,CPU32	MULS.L <ea>,Dh-Dl	L	0100110000xxxxxx	ea:5-0 (mode:5-3, reg:2-0)	2nd word: bit 15=0; Dl in bits 14-12; bit 11=1; bit 10=1 (64-bit product in Dh-Dl); Dh in bits 2-0	ea=Dn,(An),(An)+,-(An),(d16,An),(d8,An,Xn),abs.W,abs.L,#imm,(d16,PC),(d8,PC,Xn)	4-137
+MULU	all	MULU.W <ea>,Dn	W	1100xxx011xxxxxx	Dn:11-9; ea:5-0 (mode:5-3, reg:2-0)	none	ea=Dn,(An),(An)+,-(An),(d16,An),(d8,An,Xn),abs.W,abs.L,#imm,(d16,PC),(d8,PC,Xn)	4-139
+MULU	MC68020,MC68030,MC68040,CPU32	MULU.L <ea>,Dl	L	0100110000xxxxxx	ea:5-0 (mode:5-3, reg:2-0)	2nd word: bit 15=0; Dl in bits 14-12; bit 11=0; bit 10=0 (32-bit product); Dh in bits 2-0 unused	ea=Dn,(An),(An)+,-(An),(d16,An),(d8,An,Xn),abs.W,abs.L,#imm,(d16,PC),(d8,PC,Xn)	4-140
+MULU	MC68020,MC68030,MC68040,CPU32	MULU.L <ea>,Dh-Dl	L	0100110000xxxxxx	ea:5-0 (mode:5-3, reg:2-0)	2nd word: bit 15=0; Dl in bits 14-12; bit 11=0; bit 10=1 (64-bit product in Dh-Dl); Dh in bits 2-0	ea=Dn,(An),(An)+,-(An),(d16,An),(d8,An,Xn),abs.W,abs.L,#imm,(d16,PC),(d8,PC,Xn)	4-140
+NBCD	all	NBCD <ea>	B	0100100000xxxxxx	ea:5-0 (mode:5-3, reg:2-0)	none	ea=Dn,(An),(An)+,-(An),(d16,An),(d8,An,Xn),abs.W,abs.L	4-142
+NEG	all	NEG <ea>	B,W,L	01000100xxxxxxxx	size:7-6 (00=B; 01=W; 10=L); ea:5-0 (mode:5-3, reg:2-0)	none	ea=Dn,(An),(An)+,-(An),(d16,An),(d8,An,Xn),abs.W,abs.L	4-143
+NEGX	all	NEGX <ea>	B,W,L	01000000xxxxxxxx	size:7-6 (00=B; 01=W; 10=L); ea:5-0 (mode:5-3, reg:2-0)	none	ea=Dn,(An),(An)+,-(An),(d16,An),(d8,An,Xn),abs.W,abs.L	4-146
+NOP	all	NOP	none	0100111001110001	none	none	none	4-147
+NOT	all	NOT <ea>	B,W,L	01000110xxxxxxxx	size:7-6 (00=B; 01=W; 10=L); ea:5-0 (mode:5-3, reg:2-0)	none	ea=Dn,(An),(An)+,-(An),(d16,An),(d8,An,Xn),abs.W,abs.L	4-148
+OR	all	OR <ea>,Dn	B,W,L	1000xxx0xxxxxxxx	Dn:11-9; direction:8 = 0 (<ea> to Dn); size:7-6 (00=B; 01=W; 10=L); ea:5-0 (mode:5-3, reg:2-0)	none	ea=Dn,(An),(An)+,-(An),(d16,An),(d8,An,Xn),abs.W,abs.L,#imm,(d16,PC),(d8,PC,Xn)	4-150
+OR	all	OR Dn,<ea>	B,W,L	1000xxx1xxxxxxxx	Dn:11-9; direction:8 = 1 (Dn to <ea>); size:7-6 (00=B; 01=W; 10=L); ea:5-0 (mode:5-3, reg:2-0)	none	ea=(An),(An)+,-(An),(d16,An),(d8,An,Xn),abs.W,abs.L	4-150
+ORI	all	ORI #<data>,<ea>	B,W,L	00000000xxxxxxxx	size:7-6 (00=B; 01=W; 10=L); ea:5-0 (mode:5-3, reg:2-0)	immediate data: 1 word for B (low-order byte) or W; 2 words for L	ea=Dn,(An),(An)+,-(An),(d16,An),(d8,An,Xn),abs.W,abs.L	4-153
+ORI	all	ORI #<data>,CCR	B	0000000000111100	none	1 word: 8-bit immediate in bits 7-0 (bits 15-8 zero)	none	4-155
+PACK	MC68020,MC68030,MC68040	PACK Dx,Dy,#<adjustment>	none	1000xxx101000xxx	Dy/Ay:11-9 (data reg); R/M:3 = 0 (data reg to data reg); Dx/Ax:2-0 (data reg)	1 word: 16-bit adjustment	none	4-157
+PACK	MC68020,MC68030,MC68040	PACK -(Ax),-(Ay),#<adjustment>	none	1000xxx101001xxx	Dy/Ay:11-9 (addr reg, predecrement); R/M:3 = 1 (memory to memory); Dx/Ax:2-0 (addr reg, predecrement)	1 word: 16-bit adjustment	none	4-157
+PEA	all	PEA <ea>	L	0100100001xxxxxx	ea:5-0 (mode:5-3, reg:2-0)	none	ea=(An),(d16,An),(d8,An,Xn),abs.W,abs.L,(d16,PC),(d8,PC,Xn)	4-159
+ROL, ROR	all	ROd #<data>,Dy (d = L or R)	B,W,L	1110xxxxxx011xxx	count:11-9 (1-7 = 1-7; 0 = 8); dr:8 (0=right; 1=left); size:7-6 (00=B; 01=W; 10=L); i/r:5 = 0 (immediate count); Dy:2-0	none	none	4-161
+ROL, ROR	all	ROd Dx,Dy (d = L or R)	B,W,L	1110xxxxxx111xxx	Dx:11-9 (count/register, data reg); dr:8 (0=right; 1=left); size:7-6 (00=B; 01=W; 10=L); i/r:5 = 1 (register count, modulo 64); Dy:2-0	none	none	4-161
+ROL, ROR	all	ROd <ea> (d = L or R)	W	1110011x11xxxxxx	dr:8 (0=right; 1=left); ea:5-0 (mode:5-3, reg:2-0)	none	ea=(An),(An)+,-(An),(d16,An),(d8,An,Xn),abs.W,abs.L	4-162
+ROXL, ROXR	all	ROXd #<data>,Dy (d = L or R)	B,W,L	1110xxxxxx010xxx	count:11-9 (1-7 = 1-7; 0 = 8); dr:8 (0=right; 1=left); size:7-6 (00=B; 01=W; 10=L); i/r:5 = 0 (immediate count); Dy:2-0	none	none	4-164
+ROXL, ROXR	all	ROXd Dx,Dy (d = L or R)	B,W,L	1110xxxxxx110xxx	Dx:11-9 (count/register, data reg); dr:8 (0=right; 1=left); size:7-6 (00=B; 01=W; 10=L); i/r:5 = 1 (register count, modulo 64); Dy:2-0	none	none	4-164
+ROXL, ROXR	all	ROXd <ea> (d = L or R)	W	1110010x11xxxxxx	dr:8 (0=right; 1=left); ea:5-0 (mode:5-3, reg:2-0)	none	ea=(An),(An)+,-(An),(d16,An),(d8,An,Xn),abs.W,abs.L	4-165
+RTD	MC68010,MC68020,MC68030,MC68040,CPU32	RTD #<displacement>	none	0100111001110100	none	1 word: 16-bit displacement (sign-extended, added to SP)	none	4-166
+RTM	MC68020	RTM Rn	none	000001101100xxxx	D/A:3 (0=data reg; 1=address reg); Rn:2-0	none	none	4-167
+RTR	all	RTR	none	0100111001110111	none	none	none	4-168
+RTS	all	RTS	none	0100111001110101	none	none	none	4-169
+SBCD	all	SBCD Dx,Dy	B	1000xxx100000xxx	Dy:11-9 (data reg); R/M:3 = 0 (data reg to data reg); Dx:2-0 (data reg)	none	none	4-171
+SBCD	all	SBCD -(Ax),-(Ay)	B	1000xxx100001xxx	Dy/Ay:11-9 (addr reg, predecrement); R/M:3 = 1 (memory to memory); Dx/Ax:2-0 (addr reg, predecrement)	none	none	4-171
+Scc	all	Scc <ea>	B	0101xxxx11xxxxxx	cond:11-8 (binary cc code; code table not printed on page); ea:5-0 (mode:5-3, reg:2-0)	none	ea=Dn,(An),(An)+,-(An),(d16,An),(d8,An,Xn),abs.W,abs.L	4-173
+SUB	all	SUB <ea>,Dn	B,W,L	1001xxx0xxxxxxxx	Dn:11-9; direction:8 = 0 (<ea> to Dn); size:7-6 (00=B; 01=W; 10=L); ea:5-0 (mode:5-3, reg:2-0); An not for B	none	ea=Dn,An,(An),(An)+,-(An),(d16,An),(d8,An,Xn),abs.W,abs.L,#imm,(d16,PC),(d8,PC,Xn)	4-174
+SUB	all	SUB Dn,<ea>	B,W,L	1001xxx1xxxxxxxx	Dn:11-9; direction:8 = 1 (Dn to <ea>); size:7-6 (00=B; 01=W; 10=L); ea:5-0 (mode:5-3, reg:2-0)	none	ea=(An),(An)+,-(An),(d16,An),(d8,An,Xn),abs.W,abs.L	4-174
+SUBA	all	SUBA <ea>,An	W,L	1001xxxx11xxxxxx	An:11-9; size:8 (0=W; 1=L); ea:5-0 (mode:5-3, reg:2-0)	none	ea=Dn,An,(An),(An)+,-(An),(d16,An),(d8,An,Xn),abs.W,abs.L,#imm,(d16,PC),(d8,PC,Xn)	4-177
+SUBI	all	SUBI #<data>,<ea>	B,W,L	00000100xxxxxxxx	size:7-6 (00=B; 01=W; 10=L); ea:5-0 (mode:5-3, reg:2-0)	immediate data: 1 word for B (low-order byte) or W; 2 words for L	ea=Dn,(An),(An)+,-(An),(d16,An),(d8,An,Xn),abs.W,abs.L	4-179
+SUBQ	all	SUBQ #<data>,<ea>	B,W,L	0101xxx1xxxxxxxx	data:11-9 (1-7 = 1-7; 0 = 8); size:7-6 (00=B; 01=W; 10=L); ea:5-0 (mode:5-3, reg:2-0); An for W,L only	none	ea=Dn,An,(An),(An)+,-(An),(d16,An),(d8,An,Xn),abs.W,abs.L	4-181
+SUBX	all	SUBX Dx,Dy	B,W,L	1001xxx1xx000xxx	Dy:11-9 (data reg); size:7-6 (00=B; 01=W; 10=L); R/M:3 = 0 (data reg to data reg); Dx:2-0 (data reg)	none	none	4-184
+SUBX	all	SUBX -(Ax),-(Ay)	B,W,L	1001xxx1xx001xxx	Dy/Ay:11-9 (addr reg, predecrement); size:7-6 (00=B; 01=W; 10=L); R/M:3 = 1 (memory to memory); Dx/Ax:2-0 (addr reg, predecrement)	none	none	4-184
+SWAP	all	SWAP Dn	W	0100100001000xxx	Dn:2-0	none	none	4-185
+TAS	all	TAS <ea>	B	0100101011xxxxxx	ea:5-0 (mode:5-3, reg:2-0)	none	ea=Dn,(An),(An)+,-(An),(d16,An),(d8,An,Xn),abs.W,abs.L	4-186
+TRAP	all	TRAP #<vector>	none	010011100100xxxx	vector:3-0	none	none	4-188
+TRAPcc	MC68020,MC68030,MC68040,CPU32	TRAPcc	none	0101xxxx11111100	cond:11-8 (binary cc code; code table not printed on page); opmode:2-0 = 100 (no operand)	none	none	4-190
+TRAPcc	MC68020,MC68030,MC68040,CPU32	TRAPcc.W #<data>	W	0101xxxx11111010	cond:11-8 (binary cc code; code table not printed on page); opmode:2-0 = 010 (word-sized operand follows)	1 word: word-sized operand	none	4-190
+TRAPcc	MC68020,MC68030,MC68040,CPU32	TRAPcc.L #<data>	L	0101xxxx11111011	cond:11-8 (binary cc code; code table not printed on page); opmode:2-0 = 011 (long-word operand follows)	2 words: long-word operand	none	4-190
+TRAPV	all	TRAPV	none	0100111001110110	none	none	none	4-191
+TST	all	TST <ea>	B,W,L	01001010xxxxxxxx	size:7-6 (00=B; 01=W; 10=L); ea:5-0 (mode:5-3, reg:2-0); footnotes p.4-193: An W,L only; #<data> marked MC68020,MC68030,MC68040,CPU32; PC modes not on MC68000,MC68008,MC68010	none	ea=Dn,An,(An),(An)+,-(An),(d16,An),(d8,An,Xn),abs.W,abs.L,#imm,(d16,PC),(d8,PC,Xn)	4-192
+UNLK	all	UNLK An	none	0100111001011xxx	An:2-0	none	none	4-194
+UNPK	MC68020,MC68030,MC68040	UNPK Dx,Dy,#<adjustment>	none	1000xxx110000xxx	Dy/Ay:11-9 (data reg); R/M:3 = 0 (data reg to data reg); Dx/Ax:2-0 (data reg)	1 word: 16-bit adjustment	none	4-196
+UNPK	MC68020,MC68030,MC68040	UNPACK -(Ax),-(Ay),#<adjustment>	none	1000xxx110001xxx	Dy/Ay:11-9 (addr reg, predecrement); R/M:3 = 1 (memory to memory); Dx/Ax:2-0 (addr reg, predecrement)	1 word: 16-bit adjustment	none	4-196

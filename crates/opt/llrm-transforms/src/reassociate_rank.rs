@@ -35,6 +35,8 @@ pub struct Ranks {
     values: IdMap<ValueId, u32>,
     /// Turns of the operand walk, for the slope test.
     steps: u64,
+    /// Calls that missed the memo and built a query and a stack.
+    walks: u64,
 }
 
 /// One suspended `getRank` call: the instruction, the operand it waits on and
@@ -47,12 +49,17 @@ struct Frame {
 
 impl Ranks {
     pub fn empty() -> Self {
-        Self { blocks: IdMap::new(), values: IdMap::new(), steps: 0 }
+        Self { blocks: IdMap::new(), values: IdMap::new(), steps: 0, walks: 0 }
     }
 
     #[cfg(test)]
     pub fn steps(&self) -> u64 {
         self.steps
+    }
+
+    #[cfg(test)]
+    pub fn walks(&self) -> u64 {
+        self.walks
     }
 
     /// `ValueRankMap.contains(V)`: `V` has an entry, as every value `getRank`
@@ -113,6 +120,13 @@ impl Ranks {
         v: Operand,
     ) -> u32 {
         let Operand::Value(root) = v else { return 0 };
+        if let Some(&known) = self.values.get(&root)
+            && known != 0
+        {
+            self.steps += 1;
+            return known;
+        }
+        self.walks += 1;
         let query = Query::bare(context, function, layout);
         let mut stack = vec![Frame { value: root, next: 0, rank: 0 }];
         loop {

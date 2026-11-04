@@ -66,6 +66,9 @@ thread_local! {
     static TABLES: std::cell::Cell<Option<(ValueTable, LeaderMap)>> = const { std::cell::Cell::new(None) };
 }
 
+/// The frames the manager holds as exposed.
+type Exposed = <llrm_analysis::manager::ExposedFrames as llrm_mir::passes::Analysis>::Result;
+
 pub struct GvnPass<'a> {
     context: &'a mut Context,
     layout: &'a DataLayout,
@@ -74,7 +77,7 @@ pub struct GvnPass<'a> {
     /// The manager's `ExposedFrames`, taken at entry: removals only shrink
     /// exposure and GVN makes no allocas. Without it `object_of` walks an
     /// alloca's uses at every access asked of it.
-    exposed: Option<&'a std::collections::BTreeSet<llrm_mir::module::ValueId>>,
+    exposed: Option<&'a Exposed>,
     dt: std::borrow::Cow<'a, DomTree>,
     vn: ValueTable,
     leader_table: LeaderMap,
@@ -91,6 +94,9 @@ pub struct GvnPass<'a> {
     to_split: Vec<(BlockId, BlockId)>,
     /// A block was merged or an edge split.
     cfg_changed: bool,
+    /// `SimplifyQuery{DL, TLI, DT, AC}`: made at the first simplification and
+    /// dropped when the CFG changes.
+    simplifier: Option<llrm_mir::valuetracking::FunctionAnalyses>,
 }
 
 /// `runImpl`'s scalar part. Whether anything changed.
@@ -125,7 +131,7 @@ pub fn run_impl_exposed(
     outer: &Outer,
     pre: bool,
     dominators: Option<&DomTree>,
-    exposed: Option<&std::collections::BTreeSet<llrm_mir::module::ValueId>>,
+    exposed: Option<&Exposed>,
 ) -> (bool, bool) {
     let tables = TABLES.with(|pool| pool.take()).unwrap_or_else(|| (ValueTable::new(), LeaderMap::default()));
     let mut tables = tables;
@@ -147,6 +153,7 @@ pub fn run_impl_exposed(
         block_rpo_number: None,
         to_split: Vec::new(),
         cfg_changed: false,
+        simplifier: None,
     };
     let mark = pass.function.mark();
     let computed = pass.run_impl();
@@ -157,7 +164,7 @@ pub fn run_impl_exposed(
 /// `unit` told the frames the pass holds as exposed, when it holds them.
 pub(super) fn exposing<'b>(
     unit: llrm_analysis::memory::Unit<'b>,
-    exposed: Option<&'b std::collections::BTreeSet<llrm_mir::module::ValueId>>,
+    exposed: Option<&'b Exposed>,
 ) -> llrm_analysis::memory::Unit<'b> {
     exposed.map_or(unit, |set| unit.with_exposed(set))
 }
@@ -181,6 +188,7 @@ impl GvnPass<'_> {
 
     fn refresh_dominators(&mut self) {
         self.loops = None;
+        self.simplifier = None;
         self.dt = std::borrow::Cow::Owned(DomTree::of(self.function));
     }
 
@@ -803,21 +811,28 @@ impl GvnPass<'_> {
         // `simplifyInstruction` has no arm of MIR's for the other kinds, and
         // building its operands costs.
         let simplified = match self.function.instruction(inst).opcode {
-            Opcode::Binary(_) | Opcode::ICmp(_) | Opcode::Select | Opcode::Cast(_) => {
-                llrm_mir::simplify::simplify_instruction(self.context, self.layout, self.function, inst)
+            Opcode::Binary(_) | Opcode::ICmp(_) | Opcode::Select | Opcode::Cast(_) | Opcode::Call(_) | Opcode::Phi => {
+                // `simplifyCall` knows the callees by `globals`.
+                let analyses = self
+                    .simplifier
+                    .get_or_insert_with(
+                        || llrm_mir::valuetracking::FunctionAnalyses::of(
+                            self.context,
+                            &self.outer.globals,
+                            &self.outer.metadata,
+                            self.layout,
+                            self.function,
+                        ),
+                    );
+                llrm_mir::simplify::simplify_instruction_in(
+                    self.context,
+                    &self.outer.globals,
+                    self.layout,
+                    Some(analyses),
+                    self.function,
+                    inst,
+                )
             }
-            // A call to an intrinsic (`umax` of two constants a load
-            // forwarded):
-            // `simplifyCall` knows the callees by `globals`.
-            Opcode::Call(_) => llrm_mir::simplify::simplify_instruction_in(
-                self.context,
-                &self.outer.globals,
-                self.layout,
-                None,
-                self.function,
-                inst,
-            ),
-            Opcode::Phi => llrm_mir::simplify::simplify_instruction(self.context, self.layout, self.function, inst),
             _ => None,
         };
         if let Some(simplified) = simplified {

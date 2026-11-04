@@ -31,6 +31,13 @@ impl SDNodeFlags {
     pub const ALLOW_RECIPROCAL: SDNodeFlags = SDNodeFlags(1024);
     pub const ALLOW_CONTRACT: SDNodeFlags = SDNodeFlags(2048);
     pub const ALLOW_REASSOC: SDNodeFlags = SDNodeFlags(4096);
+    /// DEVIATE PAIR1 (no pin counterpart: the pin's pointers are one word
+    /// wide): a `BUILD_PAIR` of a far pointer's offset and selector, and the
+    /// `or` its expansion makes. Exit: none; the pin has no far pointer.
+    pub const PAIR_FAR: SDNodeFlags = SDNodeFlags(8192);
+    /// DEVIATE PAIR1: a `BUILD_PAIR` of the two words of a value the calling
+    /// convention returns or passes in two registers (`dx:ax`).
+    pub const PAIR_LONG: SDNodeFlags = SDNodeFlags(16384);
 
     pub fn union(
         self,
@@ -112,6 +119,9 @@ pub struct MemInfo {
     /// `MachinePointerInfo::getAddrSpace`: 0, or the segment-override space
     /// (`fs` 257, `gs` 256) the IR's pointer names.
     pub space: u32,
+    /// The ordering of an atomic access
+    /// (`MachineMemOperand::getSuccessOrdering`); none for a plain one.
+    pub ordering: Option<llrm_mir::opcode::AtomicOrdering>,
 }
 
 /// `MachinePointerInfo`'s value: what the access is relative to.
@@ -127,6 +137,20 @@ pub enum MemBase {
     ConstantPool(u32),
     /// A jump table entry (`MachinePointerInfo::getJumpTable`).
     JumpTable,
+    /// The IR pointer the access reads or writes (`MachinePointerInfo::V`):
+    /// an index into [`SelectionDAG::mem_locations`] (1-based). Only a target
+    /// whose `useAA` is true records it.
+    Value(std::num::NonZeroU32),
+}
+
+/// What alias analysis is asked about an access (`MachineMemOperand::getValue`
+/// and `getAAInfo`). The location holds only while the access is still `bytes`
+/// wide: a narrowed or merged access at another offset is not described by it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MemLocation {
+    pub pointer: llrm_mir::module::Operand,
+    pub tbaa: Option<llrm_mir::module::MetadataId>,
+    pub bytes: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -150,26 +174,114 @@ pub enum BooleanContents {
     Undefined,
 }
 
+/// What a target charges for the operations a divide by a constant is made of
+/// or replaced by: the divide's own price, and the multiply-high sequence's
+/// parts. `None` in [`DagConfig::div_prices`]: the pin's rule (`int_div_cheap`
+/// alone).
+#[derive(Clone, Debug)]
+pub struct DivPrices {
+    /// The target's own operand size in bytes: a value of another width runs
+    /// under the prefix.
+    pub operand: i64,
+    pub prefix: i64,
+    pub add: i64,
+    pub shift: i64,
+    pub extend: i64,
+    pub multiply: i64,
+    pub multiply_long: i64,
+    /// The multiply-high of the magic sequence
+    /// ([`OperationCosts::multiply_high`]).
+    pub multiply_high: i64,
+    pub divide: i64,
+    pub divide_long: i64,
+    /// Percent of the divide's price the multiply-high sequence must exceed it
+    /// by: below the spread of the sheet's own prices the pin's sequence
+    /// stays.
+    pub margin: i64,
+    /// The clocks of the product `q * d` a remainder subtracts, by `d`: what
+    /// the selector emits for it (`Machine::multiply_by`).
+    pub product: Option<ProductPrice>,
+}
+
+/// A price by the constant `d`.
+#[derive(Clone)]
+pub struct ProductPrice(pub std::rc::Rc<dyn Fn(i64) -> i64>);
+
+impl std::fmt::Debug for ProductPrice {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        f.write_str("ProductPrice")
+    }
+}
+
 /// The target facts `getNode` asks (`TLI->` in the pin), passed in rather
 /// than read from a global.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct DagConfig {
     pub boolean_contents: BooleanContents,
     /// `isOffsetFoldingLegal`: `(add GlobalAddress, c)` folds into the symbol.
     pub offset_folding: bool,
+    /// `isConstantIntBuildVectorOrConstantInt` counts a global address whose
+    /// offset folds as a constant: it goes to the right of a commutative node
+    /// and reassociation moves it outermost. DEVIATE: off by default so x86's
+    /// rows stay as they are until the judge has seen them. Exit: x86 judged.
+    pub global_addresses_constant: bool,
     /// Every symbol is `dso_local`, as clang marks them under `-fno-pic`: an
     /// `extern` symbol's offset then folds too. The pin takes the flag from
     /// the IR; its absence there is this field's default.
     pub dso_local_symbols: bool,
+    /// Static code (the pin's `PICStyle::None`): a symbol keeps a base and an
+    /// index in its address at 64 bits, as an absolute `disp32`, where
+    /// position-independent code reaches it from `%rip` alone.
+    pub absolute_symbols: bool,
     /// The pointer type (`TLI->getPointerTy`).
     pub pointer: EVT,
     /// `isIntDivCheap`: a divide by a constant stays a divide.
     pub int_div_cheap: bool,
+    /// Prices that decide `isIntDivCheap` per divisor and width; see
+    /// [`DivPrices`].
+    pub div_prices: Option<DivPrices>,
+    /// `TargetLowering::BuildSDIVPow2`'s default under `isIntDivCheap`: an
+    /// `sdiv` by a power of two stays an `sdiv`.
+    pub sdiv_pow2_stays: bool,
     /// The function evaluates floats at the x87's extended precision
     /// (`FP_EVAL`): a constant operation folds only where its result is exact,
     /// as the IR's folder does.
     pub fp_extended: bool,
+    /// `computeKnownBitsForTargetNode`: what the target knows of one of its
+    /// nodes, given the known bits of operand `n`; `None` for a node it
+    /// says nothing about.
+    pub known_bits_for_target_node: Option<TargetKnownBits>,
+    /// `DataLayout::isBigEndian`: a narrowed load's offset counts from the
+    /// other end.
+    pub big_endian: bool,
+    /// `isFMAFasterThanFMulAndFAdd`: `llvm.fmuladd` is one `FMA`.
+    pub fma_faster: bool,
+    /// `visitADD`'s `(add a, b)` -> `(or disjoint a, b)` where the operands
+    /// share no bits. DEVIATE: off by default so x86's rows stay as they are
+    /// until the judge has seen them. Exit: x86 judged, no later than
+    /// 2026-11-20.
+    pub add_to_or_disjoint: bool,
+    /// A signed divide or remainder whose operands fit this narrower legal
+    /// type is made at that type ([`super::narrow_divrem`]); `None` keeps the
+    /// wide divide. Set by the targets whose narrow routine is the cheaper.
+    pub narrow_divrem: Option<EVT>,
+    /// The narrow remainder routine is defined for `INT_MIN % -1` (it is 0, as
+    /// the wide one): a remainder then needs no spare bit, as the pin's
+    /// `narrowSDivOrSRem` bumps the width for. An x86 `idiv` traps there.
+    pub narrow_srem_overflow_defined: bool,
+    /// `TargetSubtargetInfo::useAA`: the builder records each load's and
+    /// store's IR pointer ([`MemBase::Value`]) for the combiner's alias
+    /// queries. DEVIATE: off by default (x86 and arm64 answer false). Exit:
+    /// none, the target's own answer.
+    pub use_aa: bool,
 }
+
+/// See [`DagConfig::known_bits_for_target_node`].
+pub type TargetKnownBits =
+    fn(&SelectionDAG, SDValue, &dyn Fn(usize) -> super::known_bits::KnownBits) -> Option<super::known_bits::KnownBits>;
 
 impl Default for DagConfig {
     /// x86: 0 or 1; symbol offsets do not fold (`isOffsetFoldingLegal` is false
@@ -178,10 +290,21 @@ impl Default for DagConfig {
         DagConfig {
             boolean_contents: BooleanContents::ZeroOrOne,
             offset_folding: false,
+            global_addresses_constant: false,
             dso_local_symbols: false,
+            absolute_symbols: false,
             pointer: EVT::I32,
             int_div_cheap: false,
+            div_prices: None,
+            sdiv_pow2_stays: false,
             fp_extended: false,
+            known_bits_for_target_node: None,
+            big_endian: false,
+            fma_faster: false,
+            add_to_or_disjoint: false,
+            narrow_divrem: None,
+            narrow_srem_overflow_defined: false,
+            use_aa: false,
         }
     }
 }
@@ -217,8 +340,20 @@ fn cse_hash(
     opcode.hash(&mut hasher);
     values.hash(&mut hasher);
     ops.hash(&mut hasher);
-    data.hash(&mut hasher);
+    cse_key(data).hash(&mut hasher);
     hasher.finish()
+}
+
+/// What `FoldingSetNodeID` sees of a node's payload: the pin's ID holds no
+/// `MachineMemOperand` value, so two accesses that differ only in their IR
+/// pointer are one node, the first one's.
+fn cse_key(data: &NodeData) -> NodeData {
+    match *data {
+        NodeData::Mem(info) if matches!(info.base, MemBase::Value(_)) => {
+            NodeData::Mem(MemInfo { base: MemBase::Unknown, ..info })
+        }
+        other => other,
+    }
 }
 
 /// `SelectionDAG`: nodes in an arena indexed by [`SDValue::node`].
@@ -227,6 +362,9 @@ pub struct SelectionDAG {
     /// Per node, the nodes that have read one of its results (may hold
     /// stale or repeated entries; `users` filters them).
     uses: Vec<Vec<u32>>,
+    /// Whether a node's use list was pushed out of order: a sorted one is
+    /// walked in place without checking it again for each query.
+    uses_unsorted: Vec<bool>,
     cse: Cse,
     /// Nodes `delete_dead` removed: they stay in the arena but no longer
     /// count as users.
@@ -240,6 +378,16 @@ pub struct SelectionDAG {
     /// The source line of the IR instruction at each `IROrder` (0: none), from
     /// the `!dbg` the builder read: `SDLoc`'s line.
     pub lines: Vec<Option<crate::model::lir::SrcLoc>>,
+    /// The IR instruction each `IROrder` was made for, in order: what a
+    /// debug record's `before` names.
+    pub inst_order: Vec<(llrm_mir::module::InstId, u32)>,
+
+    /// The (low, high) halves type legalization expanded each integer value
+    /// into (`ExpandedIntegers`): where a debug record's value went.
+    pub expanded_integers: llrm_support::hash::HashMap<SDValue, (SDValue, SDValue)>,
+    /// Each value `replace_all_uses_with` replaced, by what replaced it: where
+    /// a debug record's value went (`transferDbgValues`).
+    forwarded: llrm_support::hash::HashMap<SDValue, SDValue>,
     /// `CombineTo` calls a target hook made: the combiner replaces each and
     /// looks at the users again.
     replacements: Vec<(SDValue, SDValue)>,
@@ -263,12 +411,19 @@ pub struct SelectionDAG {
     /// The frame index the first stack temporary gets: the driver sets it past
     /// the builder's frame objects.
     pub first_temporary: i32,
+    /// The alignment of each static alloca's frame object, by frame index
+    /// (`MachineFrameInfo::getObjectAlign`): what the known bits of its
+    /// address say. Empty where the layout may place an object lower.
+    pub frame_alignments: Vec<u64>,
+    /// The IR pointers of the accesses ([`MemBase::Value`]).
+    pub mem_locations: Vec<MemLocation>,
     /// The frame index of the first variadic argument (`VarArgsFrameIndex`),
     /// set by the builder where the function takes `...`.
     pub var_args_frame_index: Option<i32>,
     /// The SysV x86-64 `va_list`'s other fields: the register save area's
-    /// frame index and `gp_offset`, the bytes of it the named arguments took.
-    pub var_args_save: Option<(i32, u32)>,
+    /// frame index, `gp_offset` (the bytes of it the named integer arguments
+    /// took) and `fp_offset` (48 plus 16 a named vector argument).
+    pub var_args_save: Option<(i32, u32, u32)>,
     /// The stack temporaries the legalizer asked for: size and alignment.
     pub temporaries: Vec<(u32, u32)>,
     /// Which globals (by symbol) are local to the object: only those fold a
@@ -324,11 +479,15 @@ impl SelectionDAG {
         let mut dag = SelectionDAG {
             nodes: Vec::new(),
             uses: Vec::new(),
+            uses_unsorted: Vec::new(),
             cse: Cse::default(),
             deleted: Vec::new(),
             dead_work: Vec::new(),
             cur_order: 0,
             lines: Vec::new(),
+            inst_order: Vec::new(),
+            expanded_integers: Default::default(),
+            forwarded: Default::default(),
             replacements: Vec::new(),
             config,
             entry: zero,
@@ -340,6 +499,8 @@ impl SelectionDAG {
             symbol_names: Vec::new(),
             constant_pool: Vec::new(),
             first_temporary: 0,
+            frame_alignments: Vec::new(),
+            mem_locations: Vec::new(),
             var_args_frame_index: None,
             var_args_save: None,
             temporaries: Vec::new(),
@@ -372,6 +533,19 @@ impl SelectionDAG {
         &self.config
     }
 
+    /// The jump table is position independent (`EK_LabelDifference32`, its
+    /// address a symbol operand folded into the jump's address): 64-bit code
+    /// with the "PIC Level" flag. Without it the table is the pin's static
+    /// one, a pointer per case.
+    /// DEVIATE: the pin folds the table into the address at any width
+    /// ([`matchWrapper`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L2022),
+    /// `jmpl *.LJTI0_0(,%eax,4)` at 32 bits). Reason: that changes the m16
+    /// and m32 output, which this change keeps as it was. Exit: the switch
+    /// lowering at m32 (x86-m32), 2026-11-20, with its own rows.
+    pub fn relative_jump_tables(&self) -> bool {
+        self.config.pointer == EVT::I64 && !self.config.absolute_symbols
+    }
+
     /// How many results of other nodes read `value`'s node (`use_size`).
     pub fn use_count(
         &self,
@@ -382,6 +556,31 @@ impl SelectionDAG {
             .sum()
     }
 
+    /// `use_count(node)` or `cap`, whichever is less: it stops reading the
+    /// use list there (`hasNUsesOrMore`/`hasOneUse` walk two entries, not all).
+    pub fn use_count_up_to(
+        &self,
+        node: u32,
+        cap: usize,
+    ) -> usize {
+        let mut seen = 0;
+        for user in self.live_users(node) {
+            seen += self.nodes[user as usize].ops.iter().filter(|op| op.node == node).count();
+            if seen >= cap {
+                return cap;
+            }
+        }
+        seen
+    }
+
+    /// `SDNode::hasOneUse`.
+    pub fn has_one_use(
+        &self,
+        node: u32,
+    ) -> bool {
+        self.use_count_up_to(node, 2) == 1
+    }
+
     /// The live nodes that read any result of `node`, in creation order, once
     /// each; the use list is usually sorted already and is then walked in
     /// place.
@@ -390,9 +589,11 @@ impl SelectionDAG {
         node: u32,
     ) -> LiveUsers<'_> {
         let list = self.uses.get(node as usize).map_or(&[][..], Vec::as_slice);
-        let inner = if list.windows(2).all(|pair| pair[0] <= pair[1]) {
+        let inner = if !self.uses_unsorted.get(node as usize).copied().unwrap_or(false) {
             UserList::Sorted(list.iter())
         } else {
+            #[cfg(test)]
+            USERS_SORTED.with(|n| n.set(n.get() + list.len()));
             let mut sorted = list.to_vec();
             sorted.sort_unstable();
             sorted.dedup();
@@ -413,12 +614,16 @@ impl SelectionDAG {
         work.push(node);
         while let Some(n) = work.pop() {
             // Chain and glue nodes stay: the builder keeps handles on some
-            // (the pin protects them with `HandleSDNode`).
+            // (the pin protects them with `HandleSDNode`). DEVIATE: an unused
+            // token factor goes like any node (`RemoveDeadNodes`): kept, it
+            // stays a user of its operands, `visitTokenFactor` cannot merge
+            // them and the chains nest past `GatherAllAliases` depth 18.
             if n == self.root.node
                 || n == self.entry.node
                 || self.is_deleted(n)
                 || self.nodes[n as usize].ops.is_empty()
-                || self.nodes[n as usize].values.iter().any(|&vt| vt == EVT::OTHER || vt == EVT::GLUE)
+                || (self.nodes[n as usize].opcode != ISD::TokenFactor
+                    && self.nodes[n as usize].values.iter().any(|&vt| vt == EVT::OTHER || vt == EVT::GLUE))
             {
                 continue;
             }
@@ -449,7 +654,10 @@ impl SelectionDAG {
         if node == self.root.node
             || node == self.entry.node
             || self.is_deleted(node)
-            || !matches!(self.nodes[node as usize].opcode, ISD::Load | ISD::Store)
+            || !matches!(
+                self.nodes[node as usize].opcode,
+                ISD::Load | ISD::Store | ISD::BrCond
+            )
         {
             return;
         }
@@ -523,8 +731,20 @@ impl SelectionDAG {
     ) {
         for at in 0..self.nodes[user as usize].ops.len() {
             let operand = self.nodes[user as usize].ops[at].node as usize;
-            self.uses[operand].push(user);
+            self.push_use(operand, user);
         }
+    }
+
+    fn push_use(
+        &mut self,
+        node: usize,
+        user: u32,
+    ) {
+        let list = &mut self.uses[node];
+        if list.last().is_some_and(|&last| last > user) {
+            self.uses_unsorted[node] = true;
+        }
+        list.push(user);
     }
 
     /// The hash `node` is filed under; none for a node with glue.
@@ -547,7 +767,8 @@ impl SelectionDAG {
         let mut at = *self.cse.head.get(&cse_hash(opcode, values, ops, data))?;
         while at != NONE {
             let node = &self.nodes[at as usize];
-            if node.opcode == opcode && node.values == values && node.ops == ops && node.data == *data {
+            if node.opcode == opcode && node.values == values && node.ops == ops && cse_key(&node.data) == cse_key(data)
+            {
                 return Some(at);
             }
             at = self.cse.next[at as usize];
@@ -641,6 +862,22 @@ impl SelectionDAG {
         std::mem::take(&mut self.replacements)
     }
 
+    /// `value` as the nodes built from it left it: followed through every
+    /// replacement.
+    pub fn resolve(
+        &self,
+        mut value: SDValue,
+    ) -> SDValue {
+        // The chain has no cycle: a value is replaced by a later one.
+        for _ in 0..self.forwarded.len() + 1 {
+            match self.forwarded.get(&value) {
+                Some(&next) if next != value => value = next,
+                _ => break,
+            }
+        }
+        value
+    }
+
     /// `ReplaceAllUsesWith(From, To)`: every operand `from` becomes `to`. A
     /// user that then equals an existing node is replaced by it in turn
     /// (`AddModifiedNodeToCSEMaps`); the arena only grows, so replaced nodes
@@ -656,6 +893,7 @@ impl SelectionDAG {
         }
         let mut work = vec![(from, to)];
         while let Some((from, to)) = work.pop() {
+            self.forwarded.insert(from, to);
             if self.root == from {
                 self.root = to;
             }
@@ -666,7 +904,7 @@ impl SelectionDAG {
                         *op = to;
                     }
                 }
-                self.uses[to.node as usize].push(user);
+                self.push_use(to.node as usize, user);
                 let Some(hash) = self.key_of(user) else {
                     events.push(Rauw::Updated(user));
                     continue;
@@ -856,7 +1094,7 @@ impl SelectionDAG {
         }
         let index = self.nodes.len() as u32;
         self.nodes.push(SDNode {
-            order: self.cur_order,
+            order: if has_no_ir_order(opcode) { 0 } else { self.cur_order },
             opcode,
             values: values.to_vec(),
             ops: ops.to_vec(),
@@ -864,6 +1102,7 @@ impl SelectionDAG {
             data,
         });
         self.uses.push(Vec::new());
+        self.uses_unsorted.push(false);
         self.note_uses(index);
         if shareable {
             self.cse_link(cse_hash(opcode, values, ops, &data), index);
@@ -915,6 +1154,15 @@ impl SelectionDAG {
     ) -> SDValue {
         assert!(vt.is_floating_point(), "FP constant of {vt:?}");
         self.intern(ISD::ConstantFP, &[vt], &[], SDNodeFlags::default(), NodeData::ConstFp { bits })
+    }
+
+    /// `getTargetConstantFP`: a float constant a pattern takes as an immediate.
+    pub fn get_target_constant_fp(
+        &mut self,
+        bits: u128,
+        vt: EVT,
+    ) -> SDValue {
+        self.intern(ISD::TargetConstantFP, &[vt], &[], SDNodeFlags::default(), NodeData::ConstFp { bits })
     }
 
     pub fn get_all_ones_constant(
@@ -1076,6 +1324,173 @@ impl SelectionDAG {
         store
     }
 
+    /// `getIndexedLoad`: `load` as `PRE_INC` or `POST_INC` of `offset` on
+    /// `base`. The values are the loaded value, the new base and the chain.
+    pub fn get_indexed_load(
+        &mut self,
+        load: SDValue,
+        base: SDValue,
+        offset: SDValue,
+        post: bool,
+    ) -> SDValue {
+        let NodeData::Mem(info) = self.node(load).data else { panic!("an indexed load of a load") };
+        let vt = self.value_type(load);
+        let chain = self.operand(load, 0);
+        let result = self.intern(
+            if post { ISD::LoadPost } else { ISD::LoadPre },
+            &[vt, self.value_type(base), EVT::OTHER],
+            &[chain, base, offset],
+            SDNodeFlags::default(),
+            NodeData::Mem(info),
+        );
+        if info.volatile {
+            self.volatile_accesses.insert(result.node);
+        }
+        result
+    }
+
+    /// `getIndexedStore`: `store` as `PRE_INC` or `POST_INC` of `offset` on
+    /// `base`. The values are the new base and the chain.
+    pub fn get_indexed_store(
+        &mut self,
+        store: SDValue,
+        base: SDValue,
+        offset: SDValue,
+        post: bool,
+    ) -> SDValue {
+        let NodeData::Mem(info) = self.node(store).data else { panic!("an indexed store of a store") };
+        let (chain, value) = (self.operand(store, 0), self.operand(store, 1));
+        let result = self.intern(
+            if post { ISD::StorePost } else { ISD::StorePre },
+            &[self.value_type(base), EVT::OTHER],
+            &[chain, value, base, offset],
+            SDNodeFlags::default(),
+            NodeData::Mem(info),
+        );
+        if info.volatile {
+            self.volatile_accesses.insert(result.node);
+        }
+        result
+    }
+
+    /// `getAtomic` of `ATOMIC_SWAP`: the old value at `ptr` and a chain,
+    /// `value` stored.
+    pub fn get_atomic_swap(
+        &mut self,
+        chain: SDValue,
+        ptr: SDValue,
+        value: SDValue,
+        info: MemInfo,
+    ) -> SDValue {
+        let vt = self.value_type(value);
+        let swap = self.intern(
+            ISD::AtomicSwap,
+            &[vt, EVT::OTHER],
+            &[chain, ptr, value],
+            SDNodeFlags::default(),
+            NodeData::Mem(info),
+        );
+        self.volatile_accesses.insert(swap.node);
+        swap
+    }
+
+    /// `getAtomic` of an `ATOMIC_LOAD_*` read-modify-write: the old value at
+    /// `ptr` and a chain, `value` combined into the memory by `op`.
+    pub fn get_atomic_rmw(
+        &mut self,
+        op: ISD,
+        chain: SDValue,
+        ptr: SDValue,
+        value: SDValue,
+        info: MemInfo,
+    ) -> SDValue {
+        debug_assert!(matches!(
+            op,
+            ISD::AtomicLoadAdd
+                | ISD::AtomicLoadSub
+                | ISD::AtomicLoadAnd
+                | ISD::AtomicLoadClr
+                | ISD::AtomicLoadOr
+                | ISD::AtomicLoadXor
+        ));
+        let vt = self.value_type(value);
+        let node =
+            self.intern(op, &[vt, EVT::OTHER], &[chain, ptr, value], SDNodeFlags::default(), NodeData::Mem(info));
+        self.volatile_accesses.insert(node.node);
+        node
+    }
+
+    /// `getAtomic` of `ATOMIC_CMP_SWAP_WITH_SUCCESS`, or of `ATOMIC_CMP_SWAP`
+    /// when `flag` is none: the old value at `ptr`, the success flag of
+    /// type `flag` if asked for, and a chain.
+    pub fn get_atomic_cmp_swap(
+        &mut self,
+        flag: Option<EVT>,
+        chain: SDValue,
+        ptr: SDValue,
+        expected: SDValue,
+        new: SDValue,
+        info: MemInfo,
+    ) -> SDValue {
+        let vt = self.value_type(expected);
+        let (op, types) = match flag {
+            Some(flag) => (ISD::AtomicCmpSwapWithSuccess, vec![vt, flag, EVT::OTHER]),
+            None => (ISD::AtomicCmpSwap, vec![vt, EVT::OTHER]),
+        };
+        let node = self.intern(op, &types, &[chain, ptr, expected, new], SDNodeFlags::default(), NodeData::Mem(info));
+        self.volatile_accesses.insert(node.node);
+        node
+    }
+
+    /// `ATOMIC_FENCE`: only a chain. The ordering (LLVM's numbering) and the
+    /// scope are target constants, as `SelectionDAGBuilder::visitFence`
+    /// builds them.
+    pub fn get_atomic_fence(
+        &mut self,
+        chain: SDValue,
+        ordering: u8,
+        single_thread: bool,
+    ) -> SDValue {
+        let ordering = self.get_constant_with(u128::from(ordering), EVT::I64, true, false);
+        let scope = self.get_constant_with(u128::from(!single_thread), EVT::I64, true, false);
+        self.intern(ISD::AtomicFence, &[EVT::OTHER], &[chain, ordering, scope], SDNodeFlags::default(), NodeData::None)
+    }
+
+    /// `getAtomic` of `ATOMIC_LOAD`: the value at `ptr` and a chain.
+    pub fn get_atomic_load(
+        &mut self,
+        vt: EVT,
+        chain: SDValue,
+        ptr: SDValue,
+        info: MemInfo,
+    ) -> SDValue {
+        let node =
+            self.intern(ISD::AtomicLoad, &[vt, EVT::OTHER], &[chain, ptr], SDNodeFlags::default(), NodeData::Mem(info));
+        self.volatile_accesses.insert(node.node);
+        node
+    }
+
+    /// `getAtomic` of `ATOMIC_STORE`: only a chain. The operands are `(chain,
+    /// value, ptr)`, as `SelectionDAGBuilder::visitAtomicStore` builds
+    /// them.
+    pub fn get_atomic_store(
+        &mut self,
+        chain: SDValue,
+        ptr: SDValue,
+        value: SDValue,
+        info: MemInfo,
+    ) -> SDValue {
+        let node = self.intern(
+            ISD::AtomicStore,
+            &[EVT::OTHER],
+            &[chain, value, ptr],
+            SDNodeFlags::default(),
+            NodeData::Mem(info),
+        );
+        self.volatile_accesses.insert(node.node);
+        node
+    }
+
     /// `getMemBasePlusOffset`: `add ptr, offset` (`PTRADD` only where the
     /// target asks to preserve pointer arithmetic, and ours does not).
     pub fn get_mem_base_plus_offset(
@@ -1113,7 +1528,7 @@ impl SelectionDAG {
                 &[low, step],
                 SDNodeFlags::NO_UNSIGNED_WRAP.union(SDNodeFlags::IN_BOUNDS),
             );
-            return self.get_node(ISD::BuildPair, vt, &[moved, high]);
+            return self.get_node_flags(ISD::BuildPair, vt, &[moved, high], SDNodeFlags::PAIR_FAR);
         }
         let index = self.get_constant(offset as u128, vt);
         self.get_mem_base_plus_offset(ptr, index, SDNodeFlags::NO_UNSIGNED_WRAP.union(SDNodeFlags::IN_BOUNDS))
@@ -1131,6 +1546,36 @@ impl SelectionDAG {
             self.get_node(ISD::Truncate, vt, &[value])
         } else {
             self.get_node(ISD::ZeroExtend, vt, &[value])
+        }
+    }
+
+    /// A boolean as the integer 1 or 0: `getZExtOrTrunc` where the target's
+    /// booleans are 0 or 1, else `getSelect(value, 1, 0)` (a 0 or -1 boolean
+    /// zero-extended is 255, not 1).
+    pub fn get_bool_as_bit(
+        &mut self,
+        value: SDValue,
+        vt: EVT,
+    ) -> SDValue {
+        if self.config.boolean_contents == BooleanContents::ZeroOrOne {
+            return self.get_zext_or_trunc(value, vt);
+        }
+        let (one, zero) = (self.get_constant(1, vt), self.get_constant(0, vt));
+        self.get_select(vt, value, one, zero)
+    }
+
+    pub fn get_any_ext_or_trunc(
+        &mut self,
+        value: SDValue,
+        vt: EVT,
+    ) -> SDValue {
+        let from = self.value_type(value);
+        if from == vt {
+            value
+        } else if from.bits_gt(vt) {
+            self.get_node(ISD::Truncate, vt, &[value])
+        } else {
+            self.get_node(ISD::AnyExtend, vt, &[value])
         }
     }
 
@@ -1288,6 +1733,15 @@ impl SelectionDAG {
         index: u32,
     ) -> SDValue {
         self.intern(ISD::JumpTable, &[vt], &[], SDNodeFlags::default(), NodeData::JumpTable(index))
+    }
+
+    /// `getTargetJumpTable`.
+    pub fn get_target_jump_table(
+        &mut self,
+        vt: EVT,
+        index: u32,
+    ) -> SDValue {
+        self.intern(ISD::TargetJumpTable, &[vt], &[], SDNodeFlags::default(), NodeData::JumpTable(index))
     }
 
     pub fn get_register_mask(&mut self) -> SDValue {
@@ -1475,6 +1929,19 @@ struct LiveUsers<'a> {
     last: Option<u32>,
 }
 
+// The users `LiveUsers` gave out, for a test that a one-use check reads two.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static USERS_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+// The use-list entries copied and sorted for a query, for a test that a list
+// pushed in order is not.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static USERS_SORTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl Iterator for LiveUsers<'_> {
     type Item = u32;
 
@@ -1489,8 +1956,42 @@ impl Iterator for LiveUsers<'_> {
             }
             self.last = Some(user);
             if !self.dag.is_deleted(user) && self.dag.nodes[user as usize].ops.iter().any(|op| op.node == self.node) {
+                #[cfg(test)]
+                USERS_READ.with(|n| n.set(n.get() + 1));
                 return Some(user);
             }
         }
     }
+}
+
+/// The nodes the pin makes with `IROrder` 0 whatever instruction is being
+/// visited (`ConstantSDNode`, `FrameIndexSDNode`, `RegisterSDNode`,
+/// `BasicBlockSDNode`, .. take no `SDLoc`; `getUNDEF` and `getPOISON` pass an
+/// empty one). The scheduler reads 0 as "no order" and ranks such a node
+/// differently from an ordered one.
+fn has_no_ir_order(opcode: ISD) -> bool {
+    use ISD::*;
+    matches!(
+        opcode,
+        Constant
+            | TargetConstant
+            | ConstantFP
+            | TargetConstantFP
+            | Register
+            | RegisterMask
+            | JumpTable
+            | TargetJumpTable
+            | SrcValue
+            | ExternalSymbol
+            | TargetExternalSymbolNode
+            | FrameIndex
+            | TargetFrameIndex
+            | ConstantPool
+            | TargetConstantPool
+            | BasicBlock
+            | ValueType
+            | CondCodeNode
+            | Undef
+            | Poison
+    )
 }

@@ -1071,11 +1071,11 @@ fn test_a_split_edge_asks_no_second_liveness() {
         block(32, vec![insn_of(32, _store(&out_b, 2))], vec![]).into(),
     ];
     let before = body.blocks.len();
-    crate::backend::allocate::SETS_BUILT.with(|one| one.set(0));
+    crate::backend::liverows::SETS_BUILT.with(|one| one.set(0));
     let converted =
         crate::backend::fpstack::converted(&body, &crate::backend::classes::RegisterClasses::of(&llrm_x86_m16::M16))
             .expect("a fork whose join reads fewer values than the fork holds");
-    let built = crate::backend::allocate::SETS_BUILT.with(|one| one.get());
+    let built = crate::backend::liverows::SETS_BUILT.with(|one| one.get());
     assert!(converted.blocks.len() > before, "an edge was split");
     assert_eq!(built, 2, "sets built: one liveness pass");
 }

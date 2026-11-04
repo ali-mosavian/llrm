@@ -41,3 +41,11 @@ that select to `setb al; shl eax, 12` (its `llc -O2`, i486, `uadd.with.overflow.
 `SETCC_CARRY` only fires for an all-ones select. The old selector's `sbb r, r; and r, 4096` prices 2 clocks against `setb`+`shl` 5 on a 486.
 `tests/run/huge/pairs.c` m16 -Os loop: dag 16 instructions (`setb dl; shl dx, 12; add dx, cx` twice), old 17 (`sbb dx, dx; and dx, 4096; add dx, cx` twice).
 Fix: a documented deviation for 486-class targets, priced from the CPU profile, with a fail-first isel test and the m16 -Os sweep in clocks.
+
+## Redo handler inlining with the runaway fixed
+
+Owner: w1. Do after switch-over. `94e1feee07` (#4851) let a QB error handler that only its registering owner calls be inlined into the owner's landing pad
+(`range_on_error.bas` m16 -Os -70 B). With the llrm runtime it made `RESUME NEXT` run forever: `B$RESN` and `B$FERR` called each other until the stack
+ended (gate run 2, `tools/dosbatch/test_qbstrblocks.py` at m16: "limit after 60000 ms"). Reverted. Redo: find why the inlined re-arm lands in the wrong
+frame, fix it, bring the rule back with `test_qbstrblocks` as its guard and the `range_on_error.bas` size as its price. `tests/run` does not show it: it
+runs the QB45 runtime, the hang needs `-fqb-runtime=llrm`.

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/local.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/local.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/local.rs sha256:3fcd438d61d2cfc0e2abe3728f4b653ff63e330f8866a40ee1a15b81582d657f -->
+<!-- src: crates/opt/llrm-transforms/src/local.rs sha256:aada91e94acf06850fc46b5b235cf2d80fad9b2d763a73cf06b68da02218d535 -->
 
 # local
 
@@ -75,6 +75,9 @@ DEVIATE, each with the fact MIR lacks:
     reach `STI`: redirected first, it names its own block and the records
     stay on the erased branch. Asserted by
     `merging_leaves_the_records_of_the_old_branch_before_the_new_terminator`.
+25. `!llrm.descriptor` (ours, no LLVM kind): kept where both instructions
+    carry it, dropped otherwise. LLVM's unknown-kind arm would drop it, and
+    the merged `inttoptr` then reads as a forged selector (`forging`).
 
 ## Example
 Two phis with the same arms in one block. Before:

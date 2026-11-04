@@ -4,7 +4,7 @@
 //! ```text
 //! llrm-qb SOURCE [--dialect D] [--runtime R] [--array-order O] [--dump-hir PATH]
 //!         [--huge-arrays] [--alternate-math]
-//!         [--mbf] [--whole-program] [--array-merging] [--runtime-frames] [--error-lines] [--bc-codeview] [--run-time-module] [--include DIR]... [--dump DIR] [OPTIONS]
+//!         [--mbf] [--whole-program] [--export NAME]... [--array-merging] [--frame-arrays] [--keep-far NAME]... [--no-placement] [--runtime-frames] [--error-lines] [--bc-codeview] [--run-time-module] [--include DIR]... [--dump DIR] [OPTIONS]
 //! ```
 //!
 //! OPTIONS are gcc's, as `llrm_codegen::driver::flags` takes them;
@@ -26,7 +26,7 @@ use super::qbstages;
 fn usage() -> String {
     format!(
         "usage: llrm-qb [-h] [--dialect DIALECT] [--runtime RUNTIME] [--array-order {{column-major,row-major}}] [--dump-hir DUMP_HIR] \
-[--huge-arrays] [--alternate-math] [--mbf] [--whole-program] [--array-merging] [--runtime-frames] [--error-lines] [--bc-codeview] [--run-time-module] \
+[--huge-arrays] [--alternate-math] [--mbf] [--whole-program] [--export NAME]... [--array-merging] [--frame-arrays] [--keep-far NAME]... [--no-placement] [--runtime-frames] [--error-lines] [--bc-codeview] [--run-time-module] \
 [--include INCLUDE] [--dump DUMP] {} source",
         flags::USAGE
     )
@@ -43,6 +43,8 @@ pub(super) struct Arguments {
     pub(super) codegen: codegen::Options,
     /// `--arm64=linux|darwin`: the object is arm64's, from the 64-bit lowering.
     pub(super) arm64: Option<llrm_arm64::machine::Platform>,
+    /// `--wasm32`: the object is wasm32's, from the 32-bit lowering.
+    pub(super) wasm32: bool,
 }
 
 pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
@@ -50,12 +52,14 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     // The runtime is llrm's unless `--runtime` or `-fqb-runtime=` names a
     // Microsoft one.
     let mut frontend = Frontend::new("vbdos", "llrm");
-    // BC stores every assignment to a SINGLE or DOUBLE variable rounded to its
-    // type, whatever the level: `-fexcess-precision=fast` asks for the other.
+    // An assignment to a SINGLE or DOUBLE variable is not rounded to its type,
+    // as in C: `-fexcess-precision=standard` asks for BC's rounding.
     let mut flags = Flags::default();
-    flags.float_store = true;
+    flags.float_store = false;
     let (mut dump_hir, mut dump) = (None, None);
     let mut arm64 = None;
+    let mut wasm32 = false;
+    let mut no_placement = false;
     let mut at = 0;
     while at < argv.len() {
         // The runtime the program calls: the Microsoft ones by their stack ABI,
@@ -98,7 +102,11 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             "--alternate-math" => frontend.alternate_math = true,
             "--mbf" => frontend.mbf = true,
             "--whole-program" => frontend.whole_program = true,
+            "--export" => frontend.exports.push(value("--export")?),
             "--array-merging" => frontend.array_merging = true,
+            "--frame-arrays" => frontend.frame_array_bytes = 8192,
+            "--keep-far" => frontend.keep_far.push(value("--keep-far")?),
+            "--no-placement" => no_placement = true,
             "--own-frames" => {}
             "--runtime-frames" => frontend.runtime_frames = true,
             "--error-lines" => frontend.error_lines = true,
@@ -118,6 +126,10 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
                 });
                 flags.take(&["-m64".to_owned()], &mut 0)?;
             }
+            "--wasm32" => {
+                wasm32 = true;
+                flags.take(&["-m32".to_owned()], &mut 0)?;
+            }
             _ if flag.starts_with('-') && flag.len() > 1 => return Err(format!("unrecognized arguments: {argument}")),
             _ if source.is_none() => source = Some(PathBuf::from(argument)),
             _ => return Err(format!("unrecognized arguments: {argument}")),
@@ -133,17 +145,57 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     frontend.checked_stack = flags.sanitize.stack;
     let bound = llrm_driver::target(&flags, None)?;
     frontend.segment_bytes = bound.target.layout().segment_bytes();
+    {
+        let cpu = bound.target.default_cpu();
+        let priced = llrm_codegen::backend::cpu::tuned_for(
+            &*bound.target,
+            cpu,
+            matches!(
+                flags.level,
+                llrm_codegen::driver::flags::Level::Os | llrm_codegen::driver::flags::Level::Oz
+            ),
+        )?
+        .target();
+        frontend.room = llrm_qb_room(
+            priced.registers(),
+            priced.address_registers(),
+            priced.segment_registers(),
+            usize::from(priced.two_address()),
+        );
+        if no_placement {
+            frontend.room = Default::default();
+        }
+    }
     // The bytes of the pointer that is the near space, and of the one that is
     // the far: a target with one space has the same for both.
     let spaces = &bound.target.layout().spaces;
     let width = |space: u32| spaces.unmarked.keys().copied().filter(|bytes| spaces.unmarked(*bytes) == Ok(space)).max();
     frontend.near_bytes = width(spaces.near).map_or(0, |bytes| bytes as usize);
     frontend.far_bytes = width(spaces.far).map_or(frontend.near_bytes, |bytes| bytes as usize);
+    // `--arm64` and `--wasm32` lower through an x86 target's mid-end, but the
+    // object is the host target's: its datalayout says whether it has `f80`.
+    let object_layout = match (arm64, wasm32) {
+        (Some(platform), _) => platform.datalayout().to_owned(),
+        (None, true) => llrm_wasm::driver::datalayout(llrm_wasm::Width::W32),
+        (None, false) => bound.target.layout().datalayout.clone(),
+    };
+    frontend.without_extended_float = !llrm_target::layout::states_extended_float(&object_layout);
     let codegen = llrm_codegen::driver::Options {
         spills_extended: true,
+        wasm_exceptions: wasm32,
         ..bound.options(&flags, flags.machine(&*bound.target, bound.target.machine().with_stack_in_data())?)
     };
-    Ok(Arguments { source, frontend, dump_hir, flags, dump, codegen, arm64 })
+    // A host (ELF, Mach-O) has no handler of the runtime's for the fault.
+    // Where the OS layer's runtime installs a handler that reports error 11
+    // for the divide fault (`divide_fault_error`), a divide's overflow needs
+    // no check of ours; a host's layer is the POSIX one.
+    let layer = if is_hosted(&codegen.object_format) {
+        Some(llrm_target::os::POSIX_LAYER)
+    } else {
+        bound.target.os_layer().map(|layer| layer.text)
+    };
+    frontend.idiv_overflow_traps = layer.and_then(llrm_target::os::divide_fault_error) == Some(11);
+    Ok(Arguments { source, frontend, dump_hir, flags, dump, codegen, arm64, wasm32 })
 }
 
 /// Whether the object format is a host's: an ELF or Mach-O object, whatever
@@ -153,7 +205,7 @@ fn is_hosted(object_format: &str) -> bool {
 }
 
 pub fn main(argv: &[String]) -> i32 {
-    let args = match parse_args(argv) {
+    let args = match llrm_codegen::support::debug::timed("parse args", || parse_args(argv)) {
         Ok(args) => args,
         Err(message) => {
             eprintln!("{}\nllrm-qb: error: {message}", usage());
@@ -181,7 +233,16 @@ pub fn main(argv: &[String]) -> i32 {
         let args = Arguments { codegen, ..args };
         // a host (an ELF or Mach-O object) has no memory at the PC's low
         // addresses: the object format states it, whatever the pointer width
-        program.promises.hosted = is_hosted(&args.codegen.object_format);
+        program.promises.hosted = args.wasm32 || is_hosted(&args.codegen.object_format);
+        // The Microsoft runtimes are segmented code with far pointers: on a
+        // flat target the object only failed later, "overlapping or
+        // pre-added relocations".
+        if !program.runtime.calls_natively() && args.codegen.arch.object().code_model().flat() {
+            return Err(format!(
+                "the {} runtime is segmented 16-bit code: build for a 32-bit target with -fqb-runtime=llrm",
+                args.frontend.runtime
+            ));
+        }
         if program.runtime.calls_natively() {
             // the `-mabi=` family's convention, else the target's default
             let native = args.codegen.arch.calling().chosen(args.codegen.abi.as_deref())?;
@@ -196,6 +257,10 @@ pub fn main(argv: &[String]) -> i32 {
             let bytes = super::arm64::object_bytes(&program, &args.source, &args.codegen, platform)
                 .map_err(|error| error.to_string())?;
             llrm_codegen::driver::flags::write_output(output, bytes).map_err(|error| error.to_string())?;
+        } else if let (true, Some(output)) = (args.wasm32, &args.flags.output) {
+            let bytes = super::wasm32::object_bytes(&program, &args.source, &args.codegen)
+                .map_err(|error| error.to_string())?;
+            llrm_codegen::driver::flags::write_output(output, bytes).map_err(|error| error.to_string())?;
         } else if let Some(output) = &args.flags.output {
             let bytes = compile::object_bytes(&program, &args.source, None, &args.codegen)
                 .map_err(|error| error.to_string())?;
@@ -206,6 +271,7 @@ pub fn main(argv: &[String]) -> i32 {
         } else if args.dump.is_none() {
             print!("{}", codec::encode(&program, None).map_err(|error| error.0)?);
         }
+        llrm_codegen::support::debug::timed("drop program", || drop(program));
         Ok(())
     })();
     match result {
@@ -241,12 +307,13 @@ mod tests {
         (parsed.frontend.float_store, parsed.flags.float_store)
     }
 
-    /// BC rounds what is stored to a SINGLE variable, so llrm-qb did not: the
-    /// promoted copies of nbody_single's positions kept the x87's precision
-    /// and the program printed 86015 where BC prints 86016.
+    /// The default was BC's rounding on every store, which cost fpbench/bas
+    /// 28% of its clocks against main; the default is C's fast mode.
+    /// nbody_single/bas still prints BC's 86016 under it (bench.py's output
+    /// check fails the row otherwise).
     #[test]
-    fn a_single_assignment_rounds_unless_fast_excess_precision_is_asked() {
-        assert_eq!(float_stores(&["p.bas"]), (true, true));
+    fn a_single_assignment_is_not_rounded_unless_standard_excess_precision_is_asked() {
+        assert_eq!(float_stores(&["p.bas"]), (false, false));
         assert_eq!(float_stores(&["p.bas", "-fexcess-precision=fast"]), (false, false));
         assert_eq!(float_stores(&["p.bas", "-fexcess-precision=standard"]), (true, true));
     }
@@ -258,5 +325,21 @@ mod tests {
         assert_eq!(runtime(&["p.bas"]), "llrm");
         assert_eq!(runtime(&["p.bas", "--runtime", "qb45"]), "qb45");
         assert_eq!(runtime(&["p.bas", "-fqb-runtime=pds71"]), "pds71");
+    }
+}
+
+/// The frame-array choice's view of the target: its integer, address and
+/// segment registers, and how many a two-address target keeps back.
+fn llrm_qb_room(
+    registers: i64,
+    addresses: i64,
+    segments: i64,
+    reserve: usize,
+) -> crate::semantic::Room {
+    crate::semantic::Room {
+        registers: registers.max(0) as usize,
+        addresses: addresses.max(0) as usize,
+        reserve,
+        segments: segments.max(0) as usize,
     }
 }

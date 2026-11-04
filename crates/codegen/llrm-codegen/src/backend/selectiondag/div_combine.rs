@@ -4,7 +4,7 @@
 //!
 //! DEVIATE SD206: integer types the target holds in a register only (no
 //! promoted-type multiply, no `BuildExactSDIV`/`BuildExactUDIV` for `exact`
-//! divides, no widened `MULHU` of an `i32`), no `DIVREM` merging, and
+//! divides), no `DIVREM` merging, and
 //! `BuildSDIVPow2` is the generic shift sequence: the pin's `cmov` form for a
 //! CPU with `cmov` (P6 and later) is not ported. `isIntDivCheap` is the
 //! configured `int_div_cheap` (the pin's `minsize`; the `-Os` rule of the
@@ -28,6 +28,19 @@ use super::div_const::{signed_magic, unsigned_magic};
 use super::isd::{CondCode, ISD};
 use super::mvt::EVT;
 
+/// One unit's prices for the divide-or-sequence choice (clocks or bytes).
+struct DivSet {
+    prefix: i64,
+    add: i64,
+    shift: i64,
+    extend: i64,
+    multiply: i64,
+    multiply_long: i64,
+    multiply_high: i64,
+    divide: i64,
+    divide_long: i64,
+}
+
 impl<H: CombineHooks> DagCombiner<'_, H> {
     /// `isOperationLegalOrCustom(op, vt, IsAfterLegalization)`, and the type
     /// legal; false without a table.
@@ -44,11 +57,13 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         }
     }
 
-    fn shift_amount(
+    pub(super) fn shift_amount(
         &mut self,
+        shifted: EVT,
         count: u32,
     ) -> SDValue {
-        self.dag.get_constant(u128::from(count), EVT::I8)
+        let ty = self.hooks.shift_amount_type(shifted);
+        self.dag.get_constant(u128::from(count), ty)
     }
 
     /// The high half of `x * y` (`GetMULHS`/`GetMULHU`): the node, or the
@@ -75,11 +90,11 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L6798
         let bits = vt.size_in_bits();
         let wide = EVT::integer(bits * 2);
-        if bits <= 16 && self.can_do(ISD::Mul, wide) {
+        if (bits <= 16 || self.hooks.widen_multiply_high_any_width()) && self.can_do(ISD::Mul, wide) {
             let extend = if signed { ISD::SignExtend } else { ISD::ZeroExtend };
             let (x, y) = (self.dag.get_node(extend, wide, &[x]), self.dag.get_node(extend, wide, &[y]));
             let product = self.dag.get_node(ISD::Mul, wide, &[x, y]);
-            let amount = self.shift_amount(bits);
+            let amount = self.shift_amount(wide, bits);
             let high = self.dag.get_node(ISD::Srl, wide, &[product, amount]);
             return Some(self.dag.get_node(ISD::Truncate, vt, &[high]));
         }
@@ -116,6 +131,11 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if self.sign_bit_is_zero(n1) && self.sign_bit_is_zero(n0) {
             return Some(self.dag.get_node(ISD::UDiv, vt, &[n0, n1]));
         }
+        if let Some(narrow) = self.dag.config().narrow_divrem
+            && let Some(narrowed) = super::narrow_divrem::narrow_sdivrem(self.dag, node, narrow)
+        {
+            return Some(narrowed);
+        }
         self.visit_sdiv_like(n0, n1, node)
     }
 
@@ -136,6 +156,96 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         self.dag.config().int_div_cheap && vt != EVT::I8
     }
 
+    /// `isIntDivCheap(VT)` priced per divisor: whether the target's
+    /// `div`/`idiv` of a `vt` value costs fewer clocks than `BuildSDIV`/
+    /// `BuildUDIV`'s multiply-high sequence for the constant `n1` (and, for a
+    /// remainder, the multiply and subtract that follow it). The sequence's
+    /// parts are counted from the same magic numbers the build uses, each
+    /// priced as the sheet prices it, with the operand-size prefix where the
+    /// width is not the target's own. O(1) per node: the magic numbers take
+    /// O(bits). DEVIATE SD445: the pin's hook is `minsize` alone. The target's
+    /// `divide_margin` keeps the sequence where the prices differ by less.
+    fn hardware_divide_wins(
+        &self,
+        vt: EVT,
+        n0: SDValue,
+        n1: SDValue,
+        signed: bool,
+        rem: bool,
+    ) -> bool {
+        let Some(p) = self.dag.config().div_prices.clone() else { return false };
+        let bits = vt.size_in_bits();
+        let width = i64::from(bits / 8);
+        // A byte divide has no selected form, and the double word of a pair is
+        // a call.
+        if !(2..=4).contains(&width) || bits % 8 != 0 {
+            return false;
+        }
+        let Some(d) = self.dag.constant(n1).map(|c| c & super::fold::mask(bits)) else { return false };
+        if d <= 1 || signed && d == super::fold::mask(bits) {
+            return false;
+        }
+        let known = super::known_bits::known_bits(self.dag, n0);
+        let zeros = (0..bits).rev().take_while(|&bit| known.zero >> bit & 1 == 1).count() as u32;
+        let clocks = Self::sequence_price(
+            &DivSet {
+                prefix: p.prefix,
+                add: p.add,
+                shift: p.shift,
+                extend: p.extend,
+                multiply: p.multiply,
+                multiply_long: p.multiply_long,
+                multiply_high: p.multiply_high,
+                divide: p.divide,
+                divide_long: p.divide_long,
+            },
+            p.operand,
+            p.product.as_ref().map(|price| (price.0)(d as i64)),
+            (bits, d, signed, rem, zeros),
+        );
+        clocks.0 + clocks.0 * p.margin / 100 < clocks.1
+    }
+
+    /// The divide's price and the multiply-high sequence's, in `set`'s unit:
+    /// `(hardware, sequence)`. `immediate` prices the `imul` by the divisor a
+    /// remainder subtracts (`None`: the multiply or a shift-add chain, the
+    /// cheaper).
+    fn sequence_price(
+        set: &DivSet,
+        operand: i64,
+        immediate: Option<i64>,
+        (bits, d, signed, rem, zeros): (u32, u128, bool, bool, u32),
+    ) -> (i64, i64) {
+        let width = i64::from(bits / 8);
+        let sized = |price: i64| price + if width != operand { set.prefix } else { 0 };
+        let wide = |price: i64| price + if 4 != operand { set.prefix } else { 0 };
+        let hardware =
+            sized(if width == 4 { set.divide_long } else { set.divide }) + if signed { set.extend } else { set.add };
+        // A multiply-high of a narrower value is the widened product, its high
+        // half taken.
+        let high = wide(set.multiply_high) + if width < 4 { set.extend + set.shift } else { 0 };
+        let (add, shift) = (sized(set.add), sized(set.shift));
+        let magic = if signed {
+            let found = signed_magic(d, bits);
+            let top = 1u128 << (bits - 1);
+            let factor = (d & top != 0) != (found.magic & top != 0);
+            high + if factor { add } else { 0 } + if found.shift != 0 { shift } else { 0 } + shift + add
+        } else {
+            let found = unsigned_magic(d, bits, zeros.min(bits - (128 - d.leading_zeros())), true, false);
+            (if found.pre_shift != 0 { shift } else { 0 })
+                + high
+                + if found.is_add { 2 * add + shift } else { 0 }
+                + if found.post_shift != 0 { shift } else { 0 }
+        };
+        // The remainder is `x - q * d`: the product by a constant, the `imul`
+        // the selector emits for it.
+        let product = immediate.map_or_else(
+            || sized(if width == 4 { set.multiply_long } else { set.multiply }).min(2 * shift + 2 * add),
+            sized,
+        );
+        (hardware, magic + if rem { product + add } else { 0 })
+    }
+
     /// `visitSDIVLike`.
     pub(super) fn visit_sdiv_like(
         &mut self,
@@ -150,12 +260,17 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if let Some(c) = divisor.filter(|&c| c != 0 && !exact) {
             let negated = c.wrapping_neg() & super::fold::mask(bits);
             if c.is_power_of_two() || negated.is_power_of_two() {
+                // `BuildSDIVPow2` of the default hook: `SDValue(N, 0)`, the
+                // divide as it is.
+                if self.dag.config().sdiv_pow2_stays {
+                    return Some(node);
+                }
                 // `Sign = x >> (bits-1)`, add `Sign >>> (bits - log2 |d|)`,
                 // shift right by `log2 |d|`; a negative divisor
                 // negates.
                 let log = c.trailing_zeros();
                 let (top, inexact, by) =
-                    (self.shift_amount(bits - 1), self.shift_amount(bits - log), self.shift_amount(log));
+                    (self.shift_amount(vt, bits - 1), self.shift_amount(vt, bits - log), self.shift_amount(vt, log));
                 let sign = self.dag.get_node(ISD::Sra, vt, &[n0, top]);
                 let srl = self.dag.get_node(ISD::Srl, vt, &[sign, inexact]);
                 let sum = self.dag.get_node(ISD::Add, vt, &[n0, srl]);
@@ -164,7 +279,10 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 return Some(if negative { self.dag.get_negative(quotient, vt) } else { quotient });
             }
         }
-        if self.dag.constant(n1).is_some() && !self.int_div_cheap(vt) {
+        if self.dag.constant(n1).is_some()
+            && !self.int_div_cheap(vt)
+            && !self.hardware_divide_wins(vt, n0, n1, true, false)
+        {
             return self.build_sdiv(n0, n1, node);
         }
         None
@@ -204,9 +322,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let factor = self.dag.get_constant(factor, vt);
         let scaled = self.dag.get_node(ISD::Mul, vt, &[n0, factor]);
         let sum = self.dag.get_node(ISD::Add, vt, &[high, scaled]);
-        let by = self.shift_amount(shift);
+        let by = self.shift_amount(vt, shift);
         let quotient = self.dag.get_node(ISD::Sra, vt, &[sum, by]);
-        let top = self.shift_amount(bits - 1);
+        let top = self.shift_amount(vt, bits - 1);
         let sign = self.dag.get_node(ISD::Srl, vt, &[quotient, top]);
         let sign_mask = self.dag.get_constant(sign_mask, vt);
         let sign = self.dag.get_node(ISD::And, vt, &[sign, sign_mask]);
@@ -228,6 +346,11 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             let (one, zero) = (self.dag.get_constant(1, vt), self.dag.get_constant(0, vt));
             return Some(self.dag.get_select(vt, test, one, zero));
         }
+        if let Some(narrow) = self.dag.config().narrow_divrem
+            && let Some(narrowed) = super::narrow_divrem::narrow_udivrem(self.dag, node, narrow)
+        {
+            return Some(narrowed);
+        }
         self.visit_udiv_like(n0, n1, node)
     }
 
@@ -241,7 +364,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let vt = self.dag.value_type(node);
         if let Some(c) = self.dag.constant(n1).filter(|_| !self.dag.is_opaque(n1)) {
             if c.is_power_of_two() {
-                let by = self.shift_amount(c.trailing_zeros());
+                let by = self.shift_amount(vt, c.trailing_zeros());
                 return Some(self.dag.get_node(ISD::Srl, vt, &[n0, by]));
             }
         }
@@ -255,14 +378,16 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 return Some(self.dag.get_node(ISD::Srl, vt, &[n0, total]));
             }
         }
-        if self.dag.constant(n1).is_some() && !self.int_div_cheap(vt) {
+        if self.dag.constant(n1).is_some()
+            && !self.int_div_cheap(vt)
+            && !self.hardware_divide_wins(vt, n0, n1, false, false)
+        {
             return self.build_udiv(n0, n1, node);
         }
         None
     }
 
-    /// `TargetLowering::BuildUDIV`, for a type the target holds. The pin's
-    /// widened `i32` multiply needs a legal `i64`, which this target has not.
+    /// `TargetLowering::BuildUDIV`, for a type the target holds.
     fn build_udiv(
         &mut self,
         n0: SDValue,
@@ -281,22 +406,45 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let known = super::known_bits::known_bits(self.dag, n0);
         let known_zeros = (0..bits).rev().take_while(|&bit| known.zero >> bit & 1 == 1).count() as u32;
         let leading = known_zeros.min(bits - (128 - d.leading_zeros()));
-        let found = unsigned_magic(d, bits, leading, true, false);
+        // [L7031][pin]: an `i32` divisor with no cheap magic is widened
+        // to `i64` when the wide high multiply exists. The even-divisor rewrite
+        // is kept unless the zero extension is free.
+        //
+        // [pin]:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L7031
+        let widened = self.hooks.widened_unsigned_divide_type(vt);
+        let wide = widened.unwrap_or(vt);
+        let has_wide_mulhu = widened.is_some() && self.can_do(ISD::MulHU, wide);
+        let has_wide_lohi = widened.is_some() && self.can_do(ISD::UMulLoHi, wide);
+        let allow_widen = has_wide_mulhu || has_wide_lohi;
+        let allow_even = !(allow_widen && self.hooks.zero_extend_i32_to_i64_free());
+        let found = unsigned_magic(d, bits, leading, allow_even, allow_widen);
+        if found.widen {
+            let extended = self.dag.get_node(ISD::ZeroExtend, wide, &[n0]);
+            let magic = self.dag.get_constant(found.magic, wide);
+            let high = if has_wide_mulhu {
+                self.dag.get_node(ISD::MulHU, wide, &[extended, magic])
+            } else {
+                let both = self.dag.get_node_multi(ISD::UMulLoHi, &[wide, wide], &[extended, magic]);
+                SDValue { node: both.node, res: 1 }
+            };
+            return Some(self.dag.get_node(ISD::Truncate, vt, &[high]));
+        }
         let mut quotient = n0;
         if found.pre_shift != 0 {
-            let by = self.shift_amount(found.pre_shift);
+            let by = self.shift_amount(vt, found.pre_shift);
             quotient = self.dag.get_node(ISD::Srl, vt, &[quotient, by]);
         }
         let magic = self.dag.get_constant(found.magic, vt);
         quotient = self.multiply_high(false, vt, quotient, magic)?;
         if found.is_add {
             let difference = self.dag.get_node(ISD::Sub, vt, &[n0, quotient]);
-            let one = self.shift_amount(1);
+            let one = self.shift_amount(vt, 1);
             let half = self.dag.get_node(ISD::Srl, vt, &[difference, one]);
             quotient = self.dag.get_node(ISD::Add, vt, &[half, quotient]);
         }
         if found.post_shift != 0 {
-            let by = self.shift_amount(found.post_shift);
+            let by = self.shift_amount(vt, found.post_shift);
             quotient = self.dag.get_node(ISD::Srl, vt, &[quotient, by]);
         }
         Some(quotient)
@@ -319,17 +467,26 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             if self.sign_bit_is_zero(n1) && self.sign_bit_is_zero(n0) {
                 return Some(self.dag.get_node(ISD::URem, vt, &[n0, n1]));
             }
+            if let Some(narrow) = self.dag.config().narrow_divrem
+                && let Some(narrowed) = super::narrow_divrem::narrow_sdivrem(self.dag, node, narrow)
+            {
+                return Some(narrowed);
+            }
         } else if self.dag.constant(n1).is_some_and(|c| c.is_power_of_two()) {
             let ones = self.dag.get_all_ones_constant(vt);
             let below = self.dag.get_node(ISD::Add, vt, &[n1, ones]);
             return Some(self.dag.get_node(ISD::And, vt, &[n0, below]));
+        } else if let Some(narrow) = self.dag.config().narrow_divrem
+            && let Some(narrowed) = super::narrow_divrem::narrow_udivrem(self.dag, node, narrow)
+        {
+            return Some(narrowed);
         }
         if self.dag.constant(n1).is_none_or(|c| c == 0) {
             return None;
         }
         // "Checking cheapness here makes sense since the simplification
         // results in fatter code."
-        if self.int_div_cheap(vt) {
+        if self.int_div_cheap(vt) || self.hardware_divide_wins(vt, n0, n1, signed, true) {
             return None;
         }
         let quotient = if signed { self.visit_sdiv_like(n0, n1, node) } else { self.visit_udiv_like(n0, n1, node) }?;

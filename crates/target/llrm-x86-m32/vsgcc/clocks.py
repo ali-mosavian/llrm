@@ -64,10 +64,12 @@ def audited(key: str) -> int:
 # favoured by a price it lacks), by the instruction's operands.
 UNTABLED = {
     "shift_cl": 3, "shift_cl_mem": 5, "shift_imm_mem": 4,       # SHL/SHR/SAR/ROL/ROR r,CL; m,CL; m,imm
+    "shld_imm": 2, "shld_imm_mem": 3, "shld_cl": 3, "shld_cl_mem": 4,  # SHLD/SHRD r,r,imm; m,r,imm; r,r,CL; m,r,CL (page of 240440-002 to cite)
     "div_b": 16, "idiv_b": 19,                                    # DIV/IDIV r/m8
     "enter": 14, "loads": 2, "scas": 6, "cmps": 7,   # ENTER; SAHF; LODS; SCAS and CMPS per iteration
     "scas_first": 5, "cmps_first": 5,                             # ... and once more for the first
     "fld_reg": 4, "fst_reg": 3, "fchs": 6, "fabs": 3, "fcom": 4, "fnstsw": 3, "fnstcw": 4, "fild": 13, "fist": 29, "fsqrt": 83,
+    "fld_m80": 6, "fstp_m80": 6, "fst_m32": 7,                    # FLD m80, FSTP m80, FST/FSTP m32 (Table 10.3: the table's x87_load 3 and x87_store 8 are the m32/m64 and m64 rows)
     "fiadd32": 19, "fiadd16": 20, "fimul32": 22, "fimul16": 23, "fidiv32": 84, "fidiv16": 85,
 }
 

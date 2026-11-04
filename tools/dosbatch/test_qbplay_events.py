@@ -166,8 +166,12 @@ def test_a_demo_that_cannot_be_played_fails_its_own_case_and_not_the_others(monk
         return {}
 
     monkeypatch.setattr(qbbuild, "build", build)
-    monkeypatch.setattr(qb32demos, "reference_shots", lambda name, source, work: {})
-    results = qb32demos.run({"NIBBLES": Path("NIBBLES.BAS"), "GORILLA": Path("GORILLA.BAS")}, tmp_path)
+    monkeypatch.setattr(qb32demos, "reference_shots", lambda name, source, work, conf=None: {})
+    # run() reads NIBBLES's source to seed it, so the demos are files (a host without the private demos has none)
+    nibbles, gorilla = tmp_path / "NIBBLES.BAS", tmp_path / "GORILLA.BAS"
+    nibbles.write_bytes(b"RANDOMIZE TIMER\r\n")
+    gorilla.write_bytes(b"PRINT 1\r\n")
+    results = qb32demos.run({"NIBBLES": nibbles, "GORILLA": gorilla}, tmp_path / "work")
     assert qb32demos.of(results, "NIBBLES") == {}
     with pytest.raises(TimeoutError, match="never settled for prompt3"):
         qb32demos.of(results, "GORILLA")

@@ -126,10 +126,29 @@ fn a_float_decimal_is_read_as_a_float_and_f0x_takes_the_types_width() {
     );
 }
 
+/// The pin writes `0.1L` as `x86_fp80 1.000000e-01`; the reader rounded that to
+/// a double, so `0.1L` was the double 0.1 widened (`0x3FFBCCCCCCCCCCCCD000`,
+/// the low 11 bits zero) in every x87 target's code. `f0x` is the form it
+/// writes for the values that decimal does not read back.
+#[test]
+fn an_x86_fp80_decimal_is_rounded_at_64_bits_not_through_a_double() {
+    for (decimal, hex) in [
+        ("1.000000e-01", "3FFBCCCCCCCCCCCCCCCD"),
+        ("1.100000e+00", "3FFF8CCCCCCCCCCCCCCD"),
+        ("2.500000e+00", "4000A0000000000000000"),
+    ] {
+        let hex = &hex[..20];
+        assert_eq!(
+            round(&format!("@a = global x86_fp80 {decimal}\n")),
+            round(&format!("@a = global x86_fp80 f0x{hex}\n")),
+            "{decimal}"
+        );
+    }
+}
+
 /// The pin writes a `long double` as `f0x` and the 20 digits of x87's format
 /// (sign and exponent, then the 64-bit significand); MIR refused it ("expected
-/// a constant"), so `double_to_uint64.c` never compiled through `llrm-cc`. A
-/// constant of the type holds the double nearest its value.
+/// a constant"), so `double_to_uint64.c` never compiled through `llrm-cc`.
 #[test]
 fn f0x_takes_the_twenty_digits_of_an_x86_fp80() {
     // 2^64 - 2048 is a double; 1.0 is exponent 0x3FFF with the integer bit set.
@@ -142,6 +161,22 @@ fn f0x_takes_the_twenty_digits_of_an_x86_fp80() {
     assert_eq!(
         refusal("@a = global double f0x3FFF8000000000000000\n"),
         "line 1: f0x3FFF8000000000000000 is not a double's 16 hex digits"
+    );
+}
+
+/// `f0x` of an x86_fp80 went through a double: `(long double)
+/// 0x7fffffffffffffffULL` (`f0x403DFFFFFFFFFFFFFFFE`) became 2^63, and
+/// gcc.c-torture conversion's `ull2ld(~0ULL >> 1) != (long double) (~0ULL >>
+/// 1)` aborted.
+#[test]
+fn f0x_of_an_x86_fp80_keeps_its_sixty_four_bit_significand() {
+    assert_eq!(
+        round("@a = global x86_fp80 f0x403DFFFFFFFFFFFFFFFE\n"),
+        round("@a = global x86_fp80 0xK403DFFFFFFFFFFFFFFFE\n")
+    );
+    assert_ne!(
+        round("@a = global x86_fp80 f0x403DFFFFFFFFFFFFFFFE\n"),
+        round("@a = global x86_fp80 f0x403E8000000000000000\n")
     );
 }
 
@@ -184,6 +219,14 @@ fn appending_linkage_is_read_and_printed_as_llvm_spells_it() {
     let once = round(text);
     assert!(once.contains("@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }]"), "{once}");
     assert_eq!(round(&once), once);
+}
+
+/// `@llvm.used`'s `section "llvm.metadata"` was read and then dropped by the
+/// printer, so a printed module lost it (the pipeline's text round trips).
+#[test]
+fn a_global_section_survives_printing() {
+    let text = "@llvm.used = appending global [1 x ptr] [ptr @f], section \"llvm.metadata\"\n\ndefine void @f() {\n  ret void\n}\n";
+    assert_eq!(round(text), text);
 }
 
 #[test]
@@ -412,6 +455,44 @@ fn a_bswap_of_an_odd_number_of_bytes_is_reported() {
         let found = problems(bits);
         assert!(found.iter().any(|one| one.contains("bswap must be an even number of bytes")), "i{bits}: {found:?}");
     }
+}
+
+/// `llvm.invariant.start` and `.end` are intrinsics MIR has (`Intrinsics.td`):
+/// a scope's call verifies, and the start's size is -1, 0 or positive
+/// (Verifier.cpp#L6072). MIR said "an intrinsic MIR does not have" of both.
+#[test]
+fn an_invariant_scope_verifies_and_a_size_below_minus_one_is_reported() {
+    let problems = |size: i64| {
+        crate::verify::verify(
+            &parse::module(&format!(
+                "declare ptr @llvm.invariant.start.p0(i64 immarg, ptr nocapture)\n\
+                 declare void @llvm.invariant.end.p0(ptr, i64 immarg, ptr nocapture)\n\
+                 define void @f(ptr %p) {{\nb0:\n  %s = call ptr @llvm.invariant.start.p0(i64 {size}, ptr %p)\n  \
+                 call void @llvm.invariant.end.p0(ptr %s, i64 {size}, ptr %p)\n  ret void\n}}\n"
+            ))
+            .unwrap_or_else(|error| panic!("{error}")),
+        )
+    };
+    for size in [-1, 0, 4] {
+        assert_eq!(problems(size), Vec::<String>::new(), "size {size}");
+    }
+    let found = problems(-2);
+    assert!(
+        found.iter().any(|one| one.contains("invariant_start parameter must be -1, 0 or a positive number")),
+        "{found:?}"
+    );
+}
+
+/// `Intrinsics.td` gives `invariant.start` the result `ptr`, whatever pointer
+/// it covers: an `i32` result is a wrong signature.
+#[test]
+fn an_invariant_start_with_a_wrong_result_is_a_wrong_signature() {
+    let found = crate::verify::verify(
+        &parse::module("declare i32 @llvm.invariant.start.p0(i64 immarg, ptr nocapture)\n")
+            .unwrap_or_else(|error| panic!("{error}")),
+    );
+    let error = found.join("\n");
+    assert!(error.contains("incorrect return type"), "{error}");
 }
 
 /// `llvm.fshl`, `llvm.fshr` and `llvm.abs` are intrinsics MIR has: a call of
@@ -880,6 +961,22 @@ fn the_sparse_containers_are_sanctioned_by_name_and_a_generic_alias_is_not() {
     assert_eq!(counts["hash.rs"], 0, "the alias lines themselves count none");
 }
 
+/// A ceiling for a file that moved or went away in the re-org stayed in
+/// `dense-keys.txt`: 8 of them were left, naming nothing, and a ceiling that
+/// names nothing guards nothing.
+#[test]
+fn every_dense_key_ceiling_names_a_file_that_exists() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let stale: Vec<&str> = include_str!("../dense-keys.txt")
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .filter_map(|line| line.split_once('\t'))
+        .map(|(file, _)| file)
+        .filter(|file| !root.join(file).exists())
+        .collect();
+    assert!(stale.is_empty(), "dense-keys.txt names files that are gone: {stale:?}");
+}
+
 #[test]
 fn no_file_gains_a_hash_or_tree_map_keyed_by_a_dense_id() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -1261,4 +1358,15 @@ fn a_flags_result_read_other_than_by_a_comparison_is_refused() {
         refused.len() == 1 && refused[0].contains("returns flags that something other than a comparison reads"),
         "{refused:?}"
     );
+}
+
+/// A constant of a packed identified struct printed as `{ .. }`, the unpacked
+/// spelling: the pin's llc refused the IR a `--dump` wrote
+/// ("packed'ness of initializer and type don't match") for 8 of QCport's 65
+/// modules, so their D-G1 count was missing.
+#[test]
+fn a_packed_named_struct_initializer_prints_packed() {
+    let text = "%s = type <{ i8, i16 }>\n@g = global %s <{ i8 1, i16 2 }>\n";
+    let printed = round(text);
+    assert!(printed.contains("global %s <{ i8 1, i16 2 }>"), "{printed}");
 }

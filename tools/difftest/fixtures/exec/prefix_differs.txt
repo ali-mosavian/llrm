@@ -1,0 +1,12 @@
+0 ladder
+1 ladder
+2 ladder
+2 loop_exit
+3 ladder
+4 ladder
+5 loop_exit
+6 ladder
+6 loop_exit
+7 ladder
+8 loop_exit
+9 loop_exit

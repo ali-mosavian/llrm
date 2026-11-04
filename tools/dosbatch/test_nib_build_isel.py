@@ -13,7 +13,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / "nib-build.sh"
 
 
 def compiles(text: str) -> list[str]:
-    return [line for line in text.splitlines() if re.search(r'"\$bin/llrm-(nib|c)" ', line) and " -o " in line]
+    return [line for line in text.splitlines() if re.search(r'"\$bin/llrm-(nib|c|cc)" ', line) and " -o " in line]
 
 
 class NibBuildSelectorTests(unittest.TestCase):

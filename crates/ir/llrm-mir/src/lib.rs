@@ -14,6 +14,7 @@ pub mod blocklist;
 pub mod blockorder;
 pub mod build;
 pub mod callgraph;
+pub mod callprice;
 pub mod codemetrics;
 pub mod constantfolding;
 pub mod constantfolding_dump;
@@ -28,6 +29,7 @@ pub mod cycleinfo;
 pub mod datalayout;
 pub mod dbgimport;
 pub mod debuginfo;
+pub mod decimal;
 pub mod dense;
 pub mod depends;
 pub mod domtree;
@@ -45,11 +47,13 @@ pub mod fp80;
 pub mod fpclass;
 pub mod hash;
 pub mod idf;
+pub mod image;
 pub mod inline;
 pub mod instructioncost;
 pub mod interpret;
 mod intrinsic_attrs;
 pub mod intrinsics;
+pub mod jumpmerge;
 pub mod knownbits;
 pub mod knownfpclass;
 pub mod lazyvalueinfo;
@@ -84,9 +88,9 @@ pub use context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, Glo
 pub use edit::Position;
 pub use lexer::ParseError;
 pub use module::{
-    Block, BlockId, Change, DebugRecord, DebugWhat, Function, GlobalKind, GlobalValue, GlobalVariable, InstId,
-    Instruction, Linkage, MetadataId, MetadataNode, MetadataOperand, Module, Operand, UnnamedAddr, Use, ValueData,
-    ValueDef, ValueId,
+    Alias, Block, BlockId, Change, DebugRecord, DebugWhat, DwOp, Function, GlobalKind, GlobalValue, GlobalVariable,
+    InstId, Instruction, Linkage, Metadata, MetadataId, MetadataNode, MetadataOperand, Module, Operand, UnnamedAddr,
+    Use, ValueData, ValueDef, ValueId, Visibility,
 };
 pub use opcode::{Attribute, BinaryOp, CallInfo, CastOp, Clause, Flags, FloatPredicate, IntPredicate, Opcode, Tail};
 pub use types::{FloatKind, Type, TypeId, Types};
@@ -129,3 +133,5 @@ mod tests;
 mod touched_tests;
 #[cfg(test)]
 mod valuetracking_tests;
+#[cfg(test)]
+mod visibility_tests;

@@ -43,7 +43,7 @@ use llrm_analysis::scev::{Cx, Flags, ScalarEvolution};
 use llrm_mir::context::GlobalId;
 use llrm_mir::module::{BlockId, InstId, Operand};
 use llrm_mir::opcode::{IntPredicate, Opcode};
-use llrm_mir::tti::Tti;
+use llrm_mir::tti::{AddressingMode, Tti};
 use llrm_mir::types::Type as MirType;
 use llrm_support::hash::{HashMap, HashSet, IndexSet};
 
@@ -379,6 +379,7 @@ pub fn get_access_type(
         }
         _ => {}
     }
+    access.bytes = access.mem_ty.map_or(0, |ty| cx.layout.size_bits(&cx.context.types, ty) / 8);
     access
 }
 
@@ -388,7 +389,7 @@ pub fn get_access_type(
 pub fn is_always_foldable(
     tti: &dyn Tti,
     kind: Kind,
-    addr_space: u32,
+    access: MemAccessTy,
     base_gv: bool,
     base_offset: Immediate,
     has_base_reg: bool,
@@ -405,7 +406,7 @@ pub fn is_always_foldable(
         scale = 0;
         has_base_reg = true;
     }
-    is_am_completely_folded_at(tti, kind, addr_space, base_gv, base_offset, has_base_reg, scale)
+    is_am_completely_folded_at(tti, kind, access, base_gv, base_offset, has_base_reg, scale)
 }
 
 /// `isAlwaysFoldable(TTI, SE, MinOffset, MaxOffset, Kind, AccessTy, S,
@@ -417,7 +418,7 @@ pub fn is_always_foldable_scev(
     min_offset: Immediate,
     max_offset: Immediate,
     kind: Kind,
-    addr_space: u32,
+    access: MemAccessTy,
     s: Scev,
     has_base_reg: bool,
 ) -> bool {
@@ -439,7 +440,7 @@ pub fn is_always_foldable_scev(
         min_offset,
         max_offset,
         kind,
-        addr_space,
+        access,
         base_gv.is_some(),
         base_offset,
         has_base_reg,
@@ -478,6 +479,18 @@ pub struct Collection<'a, 'b> {
     /// How many formulae were offered to `insert_formula`: the work generation
     /// did.
     pub insert_attempts: usize,
+    /// Registers (in the target's word) held across the whole loop by values
+    /// LSR does not manage: the accumulators and other loop-carried phis that
+    /// are not induction variables. The registers LSR may use are those the
+    /// target has less these.
+    pub other_register_units: u32,
+    /// Set by `solve` when no solution fits the registers left after
+    /// `other_register_units`: every one spills, and the count no longer tells
+    /// them apart (DEVIATE LU3b).
+    pub ignore_pressure: std::cell::Cell<bool>,
+    /// The compile is for size: a setup instruction costs a byte like a loop
+    /// one.
+    pub size: bool,
     /// How many formulae were rated: the work the filter, narrowing and solver
     /// did.
     pub rated: std::cell::Cell<usize>,
@@ -487,6 +500,11 @@ pub struct Collection<'a, 'b> {
 }
 
 impl<'a, 'b> Collection<'a, 'b> {
+    /// The registers other values of the loop hold, as the rating counts them.
+    pub fn pressure_units(&self) -> u32 {
+        if self.ignore_pressure.get() { 0 } else { self.other_register_units }
+    }
+
     pub fn new(
         cx: &'a Cx<'b>,
         tti: &'a dyn Tti,
@@ -513,6 +531,9 @@ impl<'a, 'b> Collection<'a, 'b> {
             changed: false,
             swapped_compares: Vec::new(),
             insert_attempts: 0,
+            other_register_units: 0,
+            ignore_pressure: std::cell::Cell::new(false),
+            size: false,
             rated: std::cell::Cell::new(0),
             chain_uses: HashSet::default(),
         }
@@ -543,13 +564,13 @@ impl<'a, 'b> Collection<'a, 'b> {
         // Conservatively, a base register is assumed.
         if new_offset < lu.min_offset {
             let span = Immediate(lu.max_offset.0.wrapping_sub(new_offset.0));
-            if !is_always_foldable(self.tti, kind, access_ty.addr_space, false, span, has_base_reg) {
+            if !is_always_foldable(self.tti, kind, access_ty, false, span, has_base_reg) {
                 return false;
             }
             new_min = new_offset;
         } else if new_offset > lu.max_offset {
             let span = Immediate(new_offset.0.wrapping_sub(lu.min_offset.0));
-            if !is_always_foldable(self.tti, kind, access_ty.addr_space, false, span, has_base_reg) {
+            if !is_always_foldable(self.tti, kind, access_ty, false, span, has_base_reg) {
                 return false;
             }
             new_max = new_offset;
@@ -573,7 +594,7 @@ impl<'a, 'b> Collection<'a, 'b> {
     ) -> (usize, Immediate, Scev) {
         let (mut offset, mut stripped) = extract_immediate(se, self.cx, expr);
         // A basic use cannot take any offset.
-        if !is_always_foldable(self.tti, kind, access_ty.addr_space, false, offset, true) {
+        if !is_always_foldable(self.tti, kind, access_ty, false, offset, true) {
             stripped = expr;
             offset = Immediate::ZERO;
         }
@@ -733,7 +754,7 @@ impl<'a, 'b> Collection<'a, 'b> {
         let lu = &self.uses[lu_idx];
         // A formula that cannot be expanded is not inserted.
         assert!(
-            is_legal_use_formula(self.tti, lu.min_offset, lu.max_offset, lu.kind, lu.access_ty.addr_space, f),
+            is_legal_use_formula(self.tti, lu.min_offset, lu.max_offset, lu.kind, lu.access_ty, f),
             "Formula is illegal"
         );
         if !self.uses[lu_idx].insert_formula(se, f, self.l) {
@@ -796,7 +817,7 @@ impl<'a, 'b> Collection<'a, 'b> {
                 continue;
             }
             let mut kind = Kind::Basic;
-            let mut access_ty = MemAccessTy { mem_ty: None, addr_space: 0 };
+            let mut access_ty = MemAccessTy::unknown(0);
             if is_address_use(cx, u.user, u.operand) {
                 kind = Kind::Address;
                 access_ty = get_access_type(cx, u.user, u.operand);
@@ -888,6 +909,8 @@ impl<'a, 'b> Collection<'a, 'b> {
                     tti: self.tti,
                     l: self.l,
                     hardware_loop_profitable: self.hardware_loop_profitable,
+                    as_written: true,
+                    other_register_units: self.pressure_units(),
                 };
                 self.baseline_cost.rate_formula(&mut rating, &f, &mut regs, &visited_regs, &self.uses[lu_idx], None);
                 visited_uses.insert(lu_idx);
@@ -908,6 +931,11 @@ impl<'a, 'b> Collection<'a, 'b> {
         &mut self,
         se: &mut ScalarEvolution,
     ) {
+        // Outside uses are not collected when post-indexed addressing is
+        // favored: the instructions in the loop matter more.
+        if self.tti.preferred_addressing_mode() == AddressingMode::PostIndexed {
+            return;
+        }
         let cx = self.cx;
         let lp = cx.loops.get_loop_for(self.l).expect("a loop");
         let mut worklist: Vec<Scev> = self.reg_uses.registers().to_vec();
@@ -986,8 +1014,7 @@ impl<'a, 'b> Collection<'a, 'b> {
                             continue;
                         }
 
-                        let (lu_idx, offset, stripped) =
-                            self.get_use(se, s, Kind::Basic, MemAccessTy { mem_ty: None, addr_space: 0 });
+                        let (lu_idx, offset, stripped) = self.get_use(se, s, Kind::Basic, MemAccessTy::unknown(0));
                         let _ = stripped;
                         let mut fixup = Fixup::new(u.user, Operand::Value(value));
                         fixup.offset = offset;
@@ -1005,4 +1032,48 @@ impl<'a, 'b> Collection<'a, 'b> {
             }
         }
     }
+}
+
+/// The registers the loop keeps live at once beside the
+/// recurrences LSR rewrites: the accumulators, the loaded values and the
+/// temporaries the body defines (an `i64` takes two on a 32-bit register file).
+/// They compete with the formulae for the target's registers, which the phis
+/// alone did not show (shellsort bas -Os: a third formula register spilled the
+/// `i32` chain).
+pub fn loop_register_units(
+    se: &mut ScalarEvolution,
+    cx: &Cx,
+    tti: &dyn Tti,
+    l: BlockId,
+) -> u32 {
+    let Some(lp) = cx.loops.get_loop_for(l) else { return 0 };
+    let word = tti.gpr_bits();
+    let mut weights: HashMap<llrm_mir::module::ValueId, usize> = HashMap::default();
+    for &block in lp.get_blocks() {
+        for inst in cx.function.iter_block(block) {
+            let Some(result) = cx.function.instruction(inst).result else { continue };
+            let value = Operand::Value(result);
+            if !se.is_value_scevable(cx, value) {
+                continue;
+            }
+            let s = se.get_scev(cx, value);
+            if se.addrec_header(s) == Some(l) {
+                continue;
+            }
+            let ty = se.type_of(s);
+            let bits = se.get_type_size_in_bits(cx, ty) as u32;
+            if bits <= 1 {
+                continue;
+            }
+            weights.insert(result, bits.div_ceil(word) as usize);
+        }
+    }
+    let blocks: Vec<BlockId> = lp.get_blocks().to_vec();
+    // DEVIATE LU7: the pin has no register-unit count here; this one follows
+    // only the loop's own values (and the phis that take them), so it costs the
+    // loop and not the function. Cells that need the count: shellsort -Os,
+    // stft, matmul.
+    llrm_analysis::liveness::pressure_weighted_made_in(cx.function, &blocks, &|one| {
+        weights.get(&one).copied().unwrap_or(0)
+    }) as u32
 }

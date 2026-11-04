@@ -27,10 +27,12 @@ import gate  # noqa: E402
 sys.path.insert(0, str(HERE.parent))
 from buildslot import slotted  # noqa: E402
 
+BRANCH = os.environ.get("LAND_BRANCH", "release/next")  # the integration branch (tools/landing/branch.sh)
+
 
 def selected(cfg: dict, only: list[str] | None = None) -> dict[str, str]:
     """name -> the shell command of every prepush step (the gate's own) and root test, in tiers.toml's order."""
-    base = subprocess.run("git merge-base HEAD origin/feat/parity 2>/dev/null || git merge-base HEAD origin/main", shell=True, capture_output=True, text=True, cwd=ROOT).stdout.strip() or "origin/main"
+    base = subprocess.run(f"git merge-base HEAD origin/{BRANCH} 2>/dev/null || git merge-base HEAD origin/main", shell=True, capture_output=True, text=True, cwd=ROOT).stdout.strip() or "origin/main"
     files = subprocess.run(["git", "diff", "--name-only", base], capture_output=True, text=True, cwd=ROOT).stdout.split()
     plan = gate.plan(files or ["README.md"], "smoke")
     commands = gate.commands(plan, cfg, gate.packages())

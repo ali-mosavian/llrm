@@ -22,19 +22,19 @@ x86 instructions write one of their sources. [`TwoAddress`](https://github.com/a
 
 ## Coalescing
 
-[`coalesce::joined`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/coalesce.rs#L81) is LLVM's `RegisterCoalescer`, conservative: there is no undo, so a join must be safe.
+`coalescer` (`register_coalescer.rs`, `joinvals.rs`, `driver.rs`) is LLVM's `RegisterCoalescer`; `backend/coalesce.rs` hands it the live intervals and the target's answers (which values may share a register). A join has no undo, so it must be safe.
 
-Copies are visited in the blocks of deepest loop first, and in a loop the blocks that run most. A copy of two values `x := y` is joined when:
+Copies are visited in block priority order (deepest loops first) by `copy_coalesce_in_mbb`; the ones that fail go on a work list and are retried until a round joins nothing. For a copy `x := y` `join_copy`:
 
-1. they are not already one web and do not interfere (a copy's own two sides do not);
-2. they are not pinned to different registers, and the registers both may take have a common member, taking each value's class and the registers no point in the merged range destroys;
-3. Briggs's test passes: fewer neighbours of significant degree than registers remain in the merged palette; or, where nothing is pinned, George's test passes for one side into the other.
+1. refuses it if the two registers have no common member (classes, pins) or are pinned to different registers;
+2. computes how each value of one interval relates to the other (`JoinVals::compute_assignment`: same value, erasable, conflicting) and refuses a conflict it cannot prune;
+3. joins the smaller interval into the larger (`LiveRange::join`), erases the copy and renames every occurrence.
 
-The merged web has the union of the two intervals, the wider width and the pin of whichever had one. A joined copy becomes an identity and is removed; every occurrence is renamed to the web's root. `LLRM_CHECK_COALESCE=1` recomputes the counts by scan after each join. Tests: [`test_a_source_redefined_while_its_copy_is_live_cannot_share`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/coalesce.rs#L1372), [`test_parallel_copy_sources_interfere_before_any_destination_is_written`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/coalesce.rs#L1387), [`test_coalescing_keeps_the_pinned_return_as_representative`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/coalesce.rs#L1506).
+The result keeps the wider width and the pin of whichever side had one. `LLRM_COALESCE_WHY=1` prints the reason each remaining copy was left; `LLRM_CHECK_LIVEINTERVALS=1` recomputes the intervals afresh after a join and compares.
 
 ## Hints
 
-A copy the coalescer refused stays a `mov` between two values. `_copy_hints` records both as partners of each other, and the assignment loop votes for the register a placed partner holds ([assignment](assignment.md)). `_wanted` carries a fixed register along chains of copies, so a loop's sum is seated in the register its return copy will want. After the queue empties `_recolored_hints` moves a value into a partner's register when that joins more of its copies. A hint never overrides a requirement ([`test_copy_hint_cannot_override_a_register_requirement`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/allocate.rs#L5258)).
+A copy the coalescer refused stays a `mov` between two values. The allocator takes its other end as a hint: `calculate_spill_weights_and_hints` records it, `try_assign` tries the partner's register first, and after the queue empties `try_hints_recoloring` moves a range into a partner's register when that removes more broken hints than it costs. A hint never overrides a requirement.
 
 ## After allocation
 

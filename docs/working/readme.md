@@ -16,6 +16,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [f2-plan](f2-plan.md) | F2 `emit_module`: profile, pin counterpart, four rows |
 | [alias-stack-plan](alias-stack-plan.md) | Alias stack: module-by-module route to the pin's BasicAA/TBAA/CaptureTracking structure, Ir budget per stage |
 | [count-to-zero-plan](count-to-zero-plan.md) | Count-to-zero cost term in LSR, read from the target cost table: findings and rows AM-CZ-1 (x_bubble m32), AM-CZ-2 (PLASMA m16) |
+| [wasm-libc-plan](wasm-libc-plan.md) | wasm: libc per platform and the shared .td generator; owner llrm-target-wasm, due 2026-11-08 |
 | [module-ipo-plan](module-ipo-plan.md) | Module walk and IPO against the pin: what `_sift` lacks in `-print-after-all`, rows by 2026-11-09 |
 | [frontend-bucket-plan](frontend-bucket-plan.md) | Front end compile-time bucket (qbq-llrm d_faces): attribution and rows F1-F4 (2026-10-23) |
 | [loop-bucket-callees](loop-bucket-callees.md) | Loop and scalar buckets: top 10 callees on d_faces -O2 with owner and date |
@@ -29,6 +30,15 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [bench-table-a33fdfff7](bench-table-a33fdfff7.md) | vsgcc bench table at tip a33fdfff7: old and dag selectors against min(gcc, clang) |
 | [flip-packet](flip-packet.md) | The default flip to `--isel=dag`: the five conditions, status and evidence per condition |
 | [greedy-switchover-plan](greedy-switchover-plan.md) | Switching over to the translated greedy allocator: what the old modules still provide (2026-10-22) |
+| [dagisel-target-seam](dagisel-target-seam.md) | The `DagTarget` seam: shared `select_units`, the x86 and m68k implementations, the proof |
+| [dagisel-seam-merge](dagisel-seam-merge.md) | Merge order and conflicts of the DAG seam with the shared legalizer stack |
+| [m68k-enabler-series](m68k-enabler-series.md) | The shared enablers the m68k backend needs, in landing order |
+| [m68k-block-placement-plan](m68k-block-placement-plan.md) | Block placement for m68k: the pin's `MachineBlockPlacement` over the spike's machine function |
+| [m68k parity](../../crates/target/llrm-m68k/PARITY.md) | m68k against the pin: numbered deviations, what the removed overlay bought per piece, open rows |
+| [m68k-isa](m68k-isa.md) | The 68k family opcode table: how it is checked against binutils and the manual, numbered limits, sources |
+| [m68k-timing](m68k-timing.md) | Clocks per CPU of the 68k family: tables used, how they were checked, numbered limits |
+| [m68k-timing-cycles](m68k-timing-cycles.md) | The kernels priced on each CPU of the 68k family |
+| [wasm-eh](wasm-eh.md) | Wasm exception handling for ON ERROR landing: the stages, the oracle, which touch shared crates |
 | [testing](testing.md) | Running the tests |
 | [pr-rules](pr-rules.md) | The goal, what a PR carries, how it lands, how to measure, safety |
 | [gate](gate.md) | What CI and the gate run, the tiers, what must pass |
@@ -95,6 +105,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [gate-coverage](gate-coverage.md) | What the landing gate runs, and what it does not |
 | [instruction-gap-vs-pin](instruction-gap-vs-pin.md) | Instructions against the pin's llc, on the same IR |
 | [irreducible-counts](irreducible-counts.md) | Irreducible cycles in the corpora (BRIDGE-1) |
+| [joins-window](joins-window.md) | joins/fjoins steps over the slope limit at N=128 and N=256 (2026-10-28); the N=64 window rows are in `tools/budgets.toml` |
 | [homes-spares](homes-spares.md) | Homes and Spares against the pin's InlineSpiller: what each decides, measured effect, plan to 11-17 |
 | [intervals-once](intervals-once.md) | Live intervals built once, as the pin does: three builders today, steps, owners, dates |
 | [ivusers-order](ivusers-order.md) | IVUsers user order (IU1) |
@@ -174,7 +185,12 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 
 A change to a pass, analysis, flag, level, tool, target or runtime updates its doc in the same PR. A pass's `//!` header is its doc; after editing one, run `tools/fmt.sh` (it rewraps header comments), then `python3 tools/docs/docsbuild/build.py --sync` and commit what it writes. A page of `docs/architecture/` joins its readme's Contents list by front matter (`architecture-index:` and `architecture-order:`, tools/docs/docsbuild/archindex.py); `build.py --sync` rewrites the list, and `--check` fails on a stale one. The tests (`pytest tools/docs/docsbuild`, `tests/header_mir.rs`) fail on a stale page, a missing section or a malformed MIR example.
 | [selectiondag-plan](selectiondag-plan.md) | Translating SelectionDAG selection (slot row 28): the pin's structure, what replaces each part, the generated matcher, shadow mode then switch then delete, with owners and dates |
+| [dag-assert-ext](dag-assert-ext.md) | `AssertZext`/`AssertSext` for extended arguments and results: why the DAG needs them, what drops them, SD43 |
 | [regalloc-matrix-profile](regalloc-matrix-profile.md) | LiveRegMatrix cost on d_faces m32 -O2 against the pin: ~10.8 M of the 77.6 M allocator, ~4.5 M over the pin |
 | [regpressure-plan](regpressure-plan.md) | Per-set register pressure for the pre-RA scheduler: tracker, limits, deltas; the half w2 calls |
 | [alloc-by-caller](alloc-by-caller.md) | Allocation and copy cost of d_faces -O2 by caller: flat, 9.4% of Ir, no single cut; successors/predecessors do not allocate |
 | [cgp-switch-type](cgp-switch-type.md) | `optimizeSwitchType`: a switch on i8/i16 is widened to i32 as the pin does; m16 keeps it narrow; byte evidence |
+| [scaling-gate-rebaseline-2026-10-28](scaling-gate-rebaseline-2026-10-28.md) | The 43 `test_scaling_gate` tests re-baselined per test against the current step names: old to new mapping, bounds |
+| [scev-persistent-se](scev-persistent-se.md) | One persistent SE across the loop passes: trip-count computes 7 -> 3, plan, files, risks |
+| [darwin-cause-cards-2026-11-03](darwin-cause-cards-2026-11-03.md) | arm64-macos: cells worse than the best of pin and gcc-13, same-IR check, cause per cell, DOS-flavoured programs (2026-11-03) |
+| [darwin-winners-2026-11-03](darwin-winners-2026-11-03.md) | arm64-macos winner table per level (bytes, clocks) from the 440-row matrix, with the cause card of each cell above best |

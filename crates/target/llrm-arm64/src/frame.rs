@@ -5,8 +5,19 @@
 //! arguments, frame objects, the callee-saved registers in pairs, and the frame
 //! record (`x29`, `x30`) at the top. Offsets are from the stack pointer, which
 //! does not move in the body.
+//!
+//! A frame of only saved registers moves the stack pointer in the first pair's
+//! store and last load (`stp [sp, #-N]!`, `ldp [sp], #N`). A `Return` that
+//! carries a callee is a sibling call ([`crate::sibcall`]): the epilogue, then
+//! `b`.
+//!
+//! Shrink wrapping: where the prologue and epilogue go is
+//! [`crate::shrinkwrap`]'s.
+
+use llrm_object::assembler::Cfi;
 
 use crate::mc::inst::*;
+use crate::mc::unwind;
 use crate::mc::visit::Reg;
 use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MFunc, Op};
 use crate::regalloc::Allocation;
@@ -16,6 +27,9 @@ use crate::regalloc::Allocation;
 pub struct Lowered {
     pub label: String,
     pub insts: Vec<Inst>,
+    /// The source line and column each instruction is from, parallel to
+    /// `insts`.
+    pub locs: Vec<Option<(u32, u32)>>,
 }
 
 #[derive(Debug)]
@@ -25,56 +39,223 @@ struct Layout {
     dynamic: bool,
     /// Each frame object's offset from the stack pointer.
     slots: Vec<u64>,
-    /// The register pairs saved, with their offsets.
+    /// The register pairs saved and the frame record, lowest address first.
     saves: Vec<(Save, u64)>,
     frame_record: Option<u64>,
 }
 
+/// One store of the callee-saved area: the register at the lower address
+/// first.
 #[derive(Clone, Copy, Debug)]
 enum Save {
     GprPair(u32, Option<u32>),
     FprPair(u32, Option<u32>),
+    /// `x29` and `x30`.
+    Record,
+}
+
+/// A callee-saved register, as the pin's list (`CalleeSavedInfo`) names it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Csr {
+    Lr,
+    Fp,
+    X(u32),
+    D(u32),
+}
+
+/// The registers `allocation` saves, the pin's list order, which is filled
+/// from the top of the area down. Darwin's list starts with the frame record
+/// (`CSR_Darwin_AArch64_AAPCS`), Linux's has it after `x28`
+/// (`CSR_AArch64_AAPCS`). Mach-O saves only pairs, so a register whose partner
+/// is not saved takes the partner too (`determineCalleeSaves`).
+fn saved_list(
+    allocation: &Allocation,
+    record: bool,
+    darwin: bool,
+) -> Vec<Csr> {
+    let pad = |list: &[u32], base: u32| -> Vec<u32> {
+        let mut all = list.to_vec();
+        if darwin {
+            all.extend(list.iter().map(|&n| base + ((n - base) ^ 1)));
+        }
+        all.sort_unstable();
+        all.dedup();
+        all
+    };
+    let gprs = pad(&allocation.saved_gprs, 19).into_iter().map(Csr::X);
+    let fprs = pad(&allocation.saved_fprs, 8).into_iter().map(Csr::D);
+    let frame = [Csr::Lr, Csr::Fp].into_iter().filter(|_| record);
+    if darwin { frame.chain(gprs).chain(fprs).collect() } else { gprs.chain(frame).chain(fprs).collect() }
+}
+
+/// The pairs and singles `list` is stored as, top first
+/// (`computeCalleeSaveRegisterPairs`): neighbours of one class pair, but
+/// nothing but `x29` pairs with `x30`.
+fn paired(list: &[Csr]) -> Vec<(Csr, Option<Csr>)> {
+    let class = |register: Csr| match register {
+        Csr::X(_) => 0,
+        Csr::D(_) => 1,
+        Csr::Lr | Csr::Fp => 2,
+    };
+    let mut out = Vec::new();
+    let mut at = 0;
+    while at < list.len() {
+        let first = list[at];
+        let second = list
+            .get(at + 1)
+            .copied()
+            .filter(|&next| next != Csr::Lr && (class(first) == class(next) || (first, next) == (Csr::Lr, Csr::Fp)));
+        out.push((first, second));
+        at += 1 + usize::from(second.is_some());
+    }
+    out
+}
+
+/// How many operations name each frame object.
+fn object_uses(function: &MFunc) -> Vec<u64> {
+    let mut uses = vec![0; function.slots.len()];
+    for block in &function.blocks {
+        for op in &block.ops {
+            match op {
+                Op::I(
+                    Inst::Load { addr: Addr::Slot { slot, .. }, .. }
+                    | Inst::Store { addr: Addr::Slot { slot, .. }, .. },
+                )
+                | Op::FrameAddress { slot, .. } => {
+                    if let Some(count) = uses.get_mut(*slot as usize) {
+                        *count += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    uses
+}
+
+/// Each frame object's offset from the stack pointer, and the locals' size.
+///
+/// The objects are in the order of `X86FrameLowering::orderFrameObjects`
+/// ([permalink](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FrameLowering.cpp#L4301)),
+/// which AArch64's own does not have: the densest (uses per byte) nearest the
+/// register they are addressed from, so that the offsets are the small ones
+/// and the first access can be the one at `[sp]` that the frame's allocation
+/// folds into (`str x, [sp, #-N]!`), the one the entry block touches first.
+/// From the stack pointer that means the alignment slack goes at the top of the
+/// locals; from the frame pointer, at the bottom, as
+/// `calculateFrameObjectOffsets` fills from the top. DEVIATE: the pin's AArch64
+/// order is the index order, the first object at the top, and its `sub sp; str
+/// [sp, #8]` is two instructions the fold makes one (exit: none, the rule is
+/// the better one).
+fn place_objects(function: &MFunc) -> (Vec<u64>, u64) {
+    let uses = object_uses(function);
+    let size = |at: usize| function.slots[at].size.max(1);
+    // Densest last, as the pin's list: ties go to the larger alignment.
+    let mut order: Vec<usize> = (0..function.slots.len()).collect();
+    order.sort_by(|&a, &b| {
+        (uses[a] * size(b)).cmp(&(uses[b] * size(a))).then(function.slots[a].align.cmp(&function.slots[b].align))
+    });
+    let mut slots = vec![0; function.slots.len()];
+    if function.dynamic {
+        // From the frame pointer, at the top: the densest first.
+        let mut down = 0;
+        let mut from_top = vec![0; slots.len()];
+        for &at in order.iter().rev() {
+            let slot = &function.slots[at];
+            down = (down + slot.size).next_multiple_of(slot.align.max(1));
+            from_top[at] = down;
+        }
+        let locals_end = (down + function.outgoing).next_multiple_of(16);
+        for (at, from) in from_top.iter().enumerate() {
+            slots[at] = locals_end - from;
+        }
+        return (slots, locals_end);
+    }
+    // The object the entry block touches first, at offset 0 of it, goes at
+    // `[sp]`: that access folds into the frame's allocation.
+    let first = function
+        .blocks
+        .first()
+        .and_then(
+            |block| block
+                .ops
+                .iter()
+                .find_map(
+                    |op| match op {
+                        Op::I(
+                            Inst::Load { addr: Addr::Slot { slot, offset }, .. }
+                            | Inst::Store { addr: Addr::Slot { slot, offset }, .. },
+                        ) => Some((*slot as usize, *offset)),
+                        _ => None,
+                    },
+                ),
+        );
+    if let Some((first, 0)) = first
+        && let Some(at) = order.iter().position(|&one| one == first)
+    {
+        order.remove(at);
+        order.push(first);
+    }
+    let mut at = function.outgoing;
+    for &index in order.iter().rev() {
+        let slot = &function.slots[index];
+        at = at.next_multiple_of(slot.align.max(1));
+        slots[index] = at;
+        at += slot.size;
+    }
+    (slots, at.next_multiple_of(16))
 }
 
 fn layout(
     function: &MFunc,
     allocation: &Allocation,
+    darwin: bool,
 ) -> Layout {
-    let outgoing = function.outgoing;
-    let mut at = outgoing;
-    let mut slots = vec![0; function.slots.len()];
-    for (index, slot) in function.slots.iter().enumerate() {
-        at = at.next_multiple_of(slot.align.max(1));
-        slots[index] = at;
-        at += slot.size;
-    }
-    let locals_end = at.next_multiple_of(16);
-    let pair = |list: &[u32]| -> Vec<(u32, Option<u32>)> {
-        list.chunks(2).map(|chunk| (chunk[0], chunk.get(1).copied())).collect()
-    };
+    let (slots, locals_end) = place_objects(function);
+    let record = function.calls || function.dynamic;
+    let pairs = paired(&saved_list(allocation, record, darwin));
+    let registers: u64 = pairs.iter().map(|(_, second)| 1 + u64::from(second.is_some())).sum();
+    let area = (8 * registers).next_multiple_of(16);
+    // Filled from the top; where the area has a spare word, the first single
+    // register that would leave a half pair below takes the gap under it.
+    let mut gap = area != 8 * registers;
+    let mut top = area;
     let mut saves = Vec::new();
-    let mut top = locals_end;
-    for (first, second) in pair(&allocation.saved_gprs) {
-        saves.push((Save::GprPair(first, second), top));
-        top += 16;
+    let mut frame_record = None;
+    for (first, second) in pairs {
+        top -= if second.is_some() { 16 } else { 8 };
+        if second.is_none() && gap && top % 16 != 0 {
+            top -= 8;
+            gap = false;
+        }
+        let at = locals_end + top;
+        // The register at the higher number goes at the lower address.
+        let save = match (first, second) {
+            (Csr::Lr, Some(Csr::Fp)) => {
+                frame_record = Some(at);
+                Save::Record
+            }
+            (Csr::X(low), Some(Csr::X(high))) => Save::GprPair(high, Some(low)),
+            (Csr::X(only), None) => Save::GprPair(only, None),
+            (Csr::D(low), Some(Csr::D(high))) => Save::FprPair(high, Some(low)),
+            (Csr::D(only), None) => Save::FprPair(only, None),
+            _ => unreachable!("a register pair of the frame"),
+        };
+        saves.push((save, at));
     }
-    for (first, second) in pair(&allocation.saved_fprs) {
-        saves.push((Save::FprPair(first, second), top));
-        top += 16;
-    }
-    let frame_record = function
-        .calls
-        .then(
-            || {
-                let at = top;
-                top += 16;
-                at
-            },
-        );
-    Layout { size: top, dynamic: function.dynamic, slots, saves, frame_record }
+    saves.reverse();
+    Layout { size: locals_end + area, dynamic: function.dynamic, slots, saves, frame_record }
 }
 
 impl Layout {
+    /// The bytes the first saved pair's store takes off the stack pointer
+    /// (`stp [sp, #-N]!`) where the frame is only saved registers and fits the
+    /// pair's offset (`AArch64FrameLowering`, the first CSR push).
+    fn folded_bump(&self) -> Option<i64> {
+        let first = self.saves.first().map(|(_, at)| *at).or(self.frame_record)?;
+        (first == 0 && self.size <= 512).then_some(self.size as i64)
+    }
+
     /// The register and the offset from it that address byte `offset` of frame
     /// object `slot` (or of the caller's argument area): the stack pointer, or
     /// the frame pointer where the stack pointer moves.
@@ -96,9 +277,36 @@ impl Layout {
 
 struct Emitter {
     insts: Vec<Inst>,
+    /// Parallel to `insts`, filled as each operation is done.
+    locs: Vec<Option<(u32, u32)>>,
+    /// The saves' `.cfi_offset`s, stated once the prologue has set the frame
+    /// register up (`AArch64PrologueEmitter::emitCalleeSavedGPRLocations`
+    /// follows `emitFramePointerSetup`).
+    saved: Vec<Cfi>,
 }
 
 impl Emitter {
+    fn new() -> Self {
+        Self { insts: Vec::new(), locs: Vec::new(), saved: Vec::new() }
+    }
+
+    /// The instructions made since the last call are from `loc`.
+    fn from_place(
+        &mut self,
+        loc: Option<(u32, u32)>,
+    ) {
+        self.locs.resize(self.insts.len(), loc);
+    }
+}
+
+impl Emitter {
+    fn cfi(
+        &mut self,
+        cfi: Cfi,
+    ) {
+        self.insts.push(Inst::Cfi(cfi));
+    }
+
     /// `sp = sp + delta` (a multiple of 16).
     fn adjust_sp(
         &mut self,
@@ -158,18 +366,52 @@ fn accessed_bytes(mem: &Memory) -> i64 {
 }
 
 /// `function`, its registers physical, as real instructions.
+/// Where each source variable that lives in a frame object is, in bytes from
+/// the canonical frame address (the stack pointer once the prologue has run,
+/// plus the frame's size), below it; none where the stack pointer moves in the
+/// body.
+pub fn variable_offsets(
+    function: &MFunc,
+    allocation: &Allocation,
+    darwin: bool,
+) -> Vec<(llrm_mir::MetadataId, i64)> {
+    let frame = layout(function, allocation, darwin);
+    if frame.dynamic {
+        return Vec::new();
+    }
+    function
+        .declared
+        .iter()
+        .map(|&(variable, slot)| (variable, frame.slots[slot as usize] as i64 - frame.size as i64))
+        .collect()
+}
+
 pub fn lower(
     function: &MFunc,
     allocation: &Allocation,
+    darwin: bool,
 ) -> Result<Vec<Lowered>, String> {
-    let frame = layout(function, allocation);
+    let frame = layout(function, allocation, darwin);
+    let wrapped = crate::shrinkwrap::place(function).filter(|_| frame.size > 0);
+    let save = wrapped.as_ref().map_or(0, |one| one.save);
     let mut out = Vec::new();
     for (index, block) in function.blocks.iter().enumerate() {
-        let mut emitter = Emitter { insts: Vec::new() };
-        if index == 0 {
+        let mut emitter = Emitter::new();
+        if index == save {
             prologue(&frame, &mut emitter);
         }
-        for op in &block.ops {
+        // The entry block is where the source begins, whichever block the
+        // frame is built in.
+        if index == 0 {
+            emitter.insts.push(Inst::Mark(FrameMark::PrologueEnd));
+        }
+        emitter.from_place(None);
+        // Without a placement every return takes the frame down; with one, the
+        // Restore's return does, or the blocks that end the frame at
+        // their end.
+        let framed = wrapped.as_ref().is_none_or(|one| !one.at_end && one.restores.contains(&index));
+        for (at, op) in block.ops.iter().enumerate() {
+            let place = block.ops.loc(at).map(|one| one.row());
             match op {
                 Op::I(inst) => lower_inst(inst, &frame, &mut emitter)?,
                 Op::Copy { dst, src } => match (dst, src) {
@@ -195,17 +437,50 @@ pub fn lower(
                     }
                     Callee::Register(register) => Inst::BranchReg { link: true, rn: *register },
                 }),
-                Op::Return { .. } => {
-                    epilogue(&frame, &mut emitter);
-                    emitter.insts.push(Inst::Ret { rn: Gpr::LR });
+                Op::Return { tail, .. } => {
+                    if framed {
+                        epilogue(&frame, &mut emitter);
+                    }
+                    emitter.insts.push(match tail {
+                        None => Inst::Ret { rn: Gpr::LR },
+                        Some(Callee::Symbol(name)) => {
+                            Inst::Branch { link: false, target: Target::Symbol { name: name.clone(), addend: 0 } }
+                        }
+                        Some(Callee::Register(register)) => Inst::BranchReg { link: false, rn: *register },
+                    });
+                }
+                Op::JumpTable { dst, scratch, table, index, id, .. } => {
+                    emitter.insts.extend(crate::jumptable::dest32(&function.name, *id, *dst, *scratch, *table, *index));
                 }
                 Op::FrameAddress { dst, slot, offset } => {
                     let (base, total) = frame.place(*slot, *offset);
                     emitter.add_to(*dst, base, total < 0, total.unsigned_abs(), Gpr(16));
                 }
             }
+            emitter.from_place(place);
         }
-        out.push(Lowered { label: block.label.clone(), insts: emitter.insts });
+        if wrapped.as_ref().is_some_and(|one| one.at_end && one.restores.contains(&index)) {
+            // Before the branches that leave.
+            let at = emitter
+                .insts
+                .iter()
+                .rposition(|inst| {
+                    !matches!(
+                        inst,
+                        Inst::Branch { link: false, .. }
+                            | Inst::BranchCond { .. }
+                            | Inst::CompareBranch { .. }
+                            | Inst::TestBranch { .. }
+                    )
+                })
+                .map_or(0, |i| i + 1);
+            let mut tail = Emitter::new();
+            epilogue(&frame, &mut tail);
+            emitter.locs.splice(at..at, vec![None; tail.insts.len()]);
+            emitter.insts.splice(at..at, tail.insts);
+        }
+        emitter.from_place(None);
+        out.push(Lowered { label: block.label.clone(), insts: emitter.insts, locs: emitter.locs });
     }
     Ok(out)
 }
@@ -214,10 +489,24 @@ fn prologue(
     frame: &Layout,
     emitter: &mut Emitter,
 ) {
-    emitter.adjust_sp(-(frame.size as i64));
-    save_registers(frame, emitter, true);
+    let bump = frame.folded_bump();
+    if bump.is_none() && frame.size > 0 {
+        emitter.adjust_sp(-(frame.size as i64));
+        emitter.cfi(Cfi::DefCfaOffset { offset: frame.size as i64 });
+    }
+    save_registers(frame, emitter, true, bump);
     if let Some(at) = frame.frame_record {
         emitter.add_to(Gpr::FP, Gpr::R31, false, at, Gpr(16));
+        emitter.cfi(Cfi::DefCfa { register: unwind::FP, offset: (frame.size - at) as i64 });
+    }
+    // Highest address first: the order of the pin's frame indices.
+    let mut saved = std::mem::take(&mut emitter.saved);
+    saved.sort_by_key(|cfi| match cfi {
+        Cfi::Offset { offset, .. } => std::cmp::Reverse(*offset),
+        _ => std::cmp::Reverse(0),
+    });
+    for cfi in saved {
+        emitter.cfi(cfi);
     }
 }
 
@@ -225,12 +514,33 @@ fn epilogue(
     frame: &Layout,
     emitter: &mut Emitter,
 ) {
+    let first = emitter.insts.len();
+    take_down(frame, emitter);
+    // Only an epilogue that does something is marked.
+    if emitter.insts.len() > first {
+        emitter.insts.insert(first, Inst::Mark(FrameMark::EpilogueBegin));
+    }
+}
+
+fn take_down(
+    frame: &Layout,
+    emitter: &mut Emitter,
+) {
     // A moving stack pointer is put back from the frame pointer first.
     if let (true, Some(record)) = (frame.dynamic, frame.frame_record) {
         emitter.add_to(Gpr::R31, Gpr::FP, true, record, Gpr(16));
     }
-    save_registers(frame, emitter, false);
-    emitter.adjust_sp(frame.size as i64);
+    // The frame address is the stack pointer's again, before the registers
+    // come back from under it.
+    if frame.frame_record.is_some() {
+        emitter.cfi(Cfi::DefCfa { register: unwind::SP, offset: frame.size as i64 });
+    }
+    let bump = frame.folded_bump();
+    save_registers(frame, emitter, false, bump);
+    if bump.is_none() && frame.size > 0 {
+        emitter.adjust_sp(frame.size as i64);
+        emitter.cfi(Cfi::DefCfaOffset { offset: 0 });
+    }
 }
 
 /// The stores (`store`) or loads of the saved pairs and the frame record.
@@ -238,31 +548,43 @@ fn save_registers(
     frame: &Layout,
     emitter: &mut Emitter,
     store: bool,
+    bump: Option<i64>,
 ) {
+    let int = |reg: Gpr| Memory::Int { width: Width::X, bytes: 8, sign: false, reg };
     let mut accesses: Vec<(Memory, Option<Memory>, u64, i64)> = Vec::new();
     for (save, offset) in &frame.saves {
         accesses.push(match *save {
-            Save::GprPair(a, b) => (
-                Memory::Int { width: Width::X, bytes: 8, sign: false, reg: Gpr(a) },
-                b.map(|b| Memory::Int { width: Width::X, bytes: 8, sign: false, reg: Gpr(b) }),
-                *offset,
-                8,
-            ),
+            Save::GprPair(a, b) => (int(Gpr(a)), b.map(|b| int(Gpr(b))), *offset, 8),
             Save::FprPair(a, b) => {
                 (Memory::Fp { bytes: 8, reg: Vreg(a) }, b.map(|b| Memory::Fp { bytes: 8, reg: Vreg(b) }), *offset, 8)
             }
+            Save::Record => (int(Gpr::FP), Some(int(Gpr::LR)), *offset, 8),
         });
     }
-    if let Some(at) = frame.frame_record {
-        accesses.push((
-            Memory::Int { width: Width::X, bytes: 8, sign: false, reg: Gpr::FP },
-            Some(Memory::Int { width: Width::X, bytes: 8, sign: false, reg: Gpr::LR }),
-            at,
-            8,
-        ));
+    // Lowest address first to store; the loads go from the highest down, so
+    // that the one that also moves the stack pointer comes last (`ldp [sp],
+    // #N`), as the pin's.
+    if !store {
+        accesses.reverse();
     }
     for (first, second, offset, _) in accesses {
-        let addr = Addr::Offset { base: Gpr::R31, imm: offset as i64 };
+        let moves = bump.filter(|_| offset == 0);
+        let addr = match moves {
+            Some(by) if store => Addr::Pre { base: Gpr::R31, imm: -by },
+            Some(by) => Addr::Post { base: Gpr::R31, imm: by },
+            None => Addr::Offset { base: Gpr::R31, imm: offset as i64 },
+        };
+        if moves.is_some() {
+            let inst = match (second, store) {
+                (Some(second), true) => Inst::StorePair { first, second, addr },
+                (Some(second), false) => Inst::LoadPair { first, second, addr },
+                (None, true) => Inst::Store { mem: first, addr, mmo: MemOperand::default() },
+                (None, false) => Inst::Load { mem: first, addr, mmo: MemOperand::default() },
+            };
+            emitter.insts.push(inst);
+            declare(frame, emitter, store, &first, second.as_ref(), offset, true);
+            continue;
+        }
         // A pair reaches 504 bytes from the base; further, the address is made.
         let (base, imm) = if offset <= 504 {
             (Gpr::R31, offset as i64)
@@ -275,10 +597,44 @@ fn save_registers(
         let inst = match (second, store) {
             (Some(second), true) => Inst::StorePair { first, second, addr },
             (Some(second), false) => Inst::LoadPair { first, second, addr },
-            (None, true) => Inst::Store { mem: first, addr },
-            (None, false) => Inst::Load { mem: first, addr },
+            (None, true) => Inst::Store { mem: first, addr, mmo: MemOperand::default() },
+            (None, false) => Inst::Load { mem: first, addr, mmo: MemOperand::default() },
         };
         emitter.insts.push(inst);
+        declare(frame, emitter, store, &first, second.as_ref(), offset, false);
+    }
+}
+
+/// The call frame information of a save (`store`) or a restore of `first` and
+/// `second` at `offset` from the bottom of the frame; `moves` where the access
+/// also moved the stack pointer.
+fn declare(
+    frame: &Layout,
+    emitter: &mut Emitter,
+    store: bool,
+    first: &Memory,
+    second: Option<&Memory>,
+    offset: u64,
+    moves: bool,
+) {
+    let number = |memory: &Memory| match memory {
+        Memory::Int { reg, .. } => reg.0 as u16,
+        Memory::Fp { reg, .. } => 64 + reg.0 as u16,
+    };
+    let size = frame.size as i64;
+    if store && moves {
+        emitter.cfi(Cfi::DefCfaOffset { offset: size });
+    }
+    for (index, memory) in std::iter::once(first).chain(second).enumerate() {
+        let register = number(memory);
+        if store {
+            emitter.saved.push(Cfi::Offset { register, offset: offset as i64 + 8 * index as i64 - size });
+        } else {
+            emitter.cfi(Cfi::Restore { register });
+        }
+    }
+    if !store && moves {
+        emitter.cfi(Cfi::DefCfaOffset { offset: 0 });
     }
 }
 
@@ -291,7 +647,7 @@ fn lower_inst(
 ) -> Result<(), String> {
     let mut inst = inst.clone();
     match &mut inst {
-        Inst::Load { mem, addr } | Inst::Store { mem, addr } => {
+        Inst::Load { mem, addr, .. } | Inst::Store { mem, addr, .. } => {
             if let Addr::Slot { slot, offset } = *addr {
                 let bytes = accessed_bytes(mem);
                 let (base, total) = frame.place(slot, offset);

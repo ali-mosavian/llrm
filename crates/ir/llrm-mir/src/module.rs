@@ -259,6 +259,11 @@ pub enum DebugWhat {
     /// The variable is this value, from here until the next record of the
     /// variable (`llvm.dbg.value`).
     Value(Operand),
+    /// The variable is what its expression makes of these values, from here
+    /// until the next record of the variable (`llvm.dbg.value` with a
+    /// `!DIArgList`, `DW_OP_LLVM_arg n` naming the n-th): the list is
+    /// [`Function::debug_args`].
+    Args(u32),
     /// `bytes` of the variable from byte `offset` are this value, from here on
     /// (`DW_OP_piece`): an aggregate the optimiser split.
     Piece { value: Operand, offset: u32, bytes: u32 },
@@ -266,6 +271,11 @@ pub enum DebugWhat {
     GonePiece { offset: u32, bytes: u32 },
     /// Nothing says where it is: its value was deleted.
     Gone,
+    /// The variable's assignment `id` stored `value`, or is in memory at
+    /// `address` (`#dbg_assign`, assignment tracking): `value` is the
+    /// record's value and the expression the record's own; a deleted value or
+    /// address, or one written `poison` or `undef`, is none.
+    Assign { value: Option<Operand>, address: Option<Operand>, id: MetadataId, address_expression: MetadataId },
 }
 
 /// One such statement, standing before the instruction it names. The variable
@@ -493,6 +503,8 @@ pub struct Function {
     /// The variables a record of which went with the code it stood in (a block
     /// erased): what is said of them is not all that was.
     pub(crate) debug_dropped: Vec<MetadataId>,
+    /// The values of each `!DIArgList` a record names ([`DebugWhat::Args`]).
+    pub(crate) debug_arglists: Vec<Vec<Operand>>,
     /// The position each parameter had when the function was made, once one was
     /// removed or added; empty while none moved.
     pub(crate) parameter_origins: Vec<Option<usize>>,
@@ -551,6 +563,7 @@ impl Function {
             taken: 0,
             debug_records: Vec::new(),
             debug_dropped: Vec::new(),
+            debug_arglists: Vec::new(),
             parameter_origins: Vec::new(),
             lineage: Lineage::default(),
             names: NameIndex::default(),
@@ -878,6 +891,28 @@ impl Function {
         out
     }
 
+    /// The one block `block`'s terminator names, if it names no other: LLVM's
+    /// `getSingleSuccessor`, which stops at the first block that differs
+    /// where `successors` lists a switch of N cases whole.
+    pub fn sole_successor(
+        &self,
+        block: BlockId,
+    ) -> Option<BlockId> {
+        let last = self.terminator(block)?;
+        let mut blocks = self
+            .instruction(last)
+            .operands
+            .iter()
+            .filter_map(
+                |operand| match operand {
+                    Operand::Block(target) => Some(*target),
+                    _ => None,
+                },
+            );
+        let first = blocks.next()?;
+        blocks.all(|other| other == first).then_some(first)
+    }
+
     /// The blocks `operands` name, once each, by a set: a switch of N cases
     /// named N blocks, and a scan of what was listed for each was N^2.
     #[cold]
@@ -1115,6 +1150,19 @@ pub enum Linkage {
     Appending,
 }
 
+impl Linkage {
+    /// `GlobalValue::isInterposable` by linkage: another definition of the name
+    /// may replace this one at link time, so no pass may rely on its body
+    /// (`weak`, `linkonce`, `common`, `extern_weak`; the `_odr` forms
+    /// promise an equivalent body).
+    pub fn is_interposable(self) -> bool {
+        matches!(
+            self,
+            Linkage::Weak | Linkage::LinkOnce | Linkage::Common | Linkage::ExternWeak
+        )
+    }
+}
+
 pub const LINKAGE: [(Linkage, &str); 10] = [
     (Linkage::Internal, "internal"),
     (Linkage::Private, "private"),
@@ -1127,6 +1175,41 @@ pub const LINKAGE: [(Linkage, &str); 10] = [
     (Linkage::AvailableExternally, "available_externally"),
     (Linkage::Appending, "appending"),
 ];
+
+/// A global's visibility (`GlobalValue::VisibilityTypes`): whether another
+/// module may bind the name once linking is done.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum Visibility {
+    #[default]
+    Default,
+    Hidden,
+    Protected,
+}
+
+pub const VISIBILITY: [(Visibility, &str); 2] = [(Visibility::Hidden, "hidden"), (Visibility::Protected, "protected")];
+
+/// `@name = linkage visibility alias type, ptr @aliasee`: a second name for a
+/// global (LLVM's `GlobalAlias`).
+///
+/// DEVIATE: a definition only. LLVM lets a `GlobalAlias` be a constant
+/// operand
+/// (https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/include/llvm/IR/GlobalAlias.h);
+/// the parser reads an operand that names an alias as its aliasee, which has
+/// the same address, and refuses one that names an alias a linker may replace
+/// (`weak`). No operand names an alias, so the analyses that say "MIR has no
+/// `GlobalAlias`" stay true. Exit: the first pass that must tell a call of an
+/// alias from a call of its aliasee.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Alias {
+    pub name: String,
+    pub linkage: Linkage,
+    pub visibility: Visibility,
+    pub unnamed_addr: UnnamedAddr,
+    pub address_space: u32,
+    /// The value type, as written before the comma.
+    pub ty: TypeId,
+    pub aliasee: GlobalId,
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub enum UnnamedAddr {
@@ -1204,17 +1287,30 @@ impl std::ops::Deref for GlobalName {
 pub struct GlobalValue {
     pub name: GlobalName,
     pub linkage: Linkage,
+    pub visibility: Visibility,
     pub unnamed_addr: UnnamedAddr,
     pub address_space: u32,
     pub kind: GlobalKind,
 }
 
+thread_local! {
+    static DECLARATIONS_MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many global declarations this thread has made, for a test that a
+/// pipeline does not list every global's for each function.
+pub fn declarations_made() -> usize {
+    DECLARATIONS_MADE.with(std::cell::Cell::get)
+}
+
 impl GlobalValue {
     /// This global as its declaration: a function without its body.
     pub fn declaration(&self) -> GlobalValue {
+        DECLARATIONS_MADE.with(|made| made.set(made.get() + 1));
         GlobalValue {
             name: self.name.clone(),
             linkage: self.linkage,
+            visibility: self.visibility,
             unnamed_addr: self.unnamed_addr,
             address_space: self.address_space,
             kind: match &self.kind {
@@ -1232,6 +1328,7 @@ impl GlobalValue {
     ) -> bool {
         self.name == declared.name
             && self.linkage == declared.linkage
+            && self.visibility == declared.visibility
             && self.unnamed_addr == declared.unnamed_addr
             && self.address_space == declared.address_space
             && match (&self.kind, &declared.kind) {
@@ -1282,12 +1379,22 @@ pub struct Special {
     pub fields: Vec<String>,
 }
 
+/// The metadata of a [`Module`] borrowed apart from its functions, so a pass
+/// can read it while it edits one.
+#[derive(Clone, Copy)]
+pub struct Metadata<'a> {
+    pub nodes: &'a [MetadataNode],
+    pub special: &'a std::collections::BTreeMap<MetadataId, Special>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Module {
     pub context: Context,
     pub datalayout: Option<String>,
     /// Variables and functions, in definition order.
     pub globals: Vec<GlobalValue>,
+    /// The aliases, in definition order; no instruction names one.
+    pub aliases: Vec<Alias>,
     pub metadata: Vec<MetadataNode>,
     pub named_metadata: Vec<(String, Vec<MetadataId>)>,
     /// The nodes of `metadata` written as specialized metadata.
@@ -1300,7 +1407,132 @@ pub struct Module {
     pub sections: std::collections::BTreeMap<String, String>,
 }
 
+/// One operation of a `!DIExpression`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DwOp {
+    /// `DW_OP_plus_uconst, n`.
+    PlusUconst(u64),
+    /// `DW_OP_stack_value`: the expression's result is the variable's value,
+    /// not its address.
+    StackValue,
+    /// `DW_OP_LLVM_fragment, offset, size`, in bits.
+    Fragment { offset: u64, size: u64 },
+    /// `DW_OP_LLVM_arg, n`: the `n`th value of the record's `!DIArgList`.
+    Arg(u32),
+    /// `DW_OP_constu, n`.
+    Constu(u64),
+    /// `DW_OP_consts, n`.
+    Consts(i64),
+    /// `DW_OP_deref`.
+    Deref,
+    /// An operation of two stack entries.
+    Binary(DwBinary),
+    /// An operation of one stack entry.
+    Unary(DwUnary),
+    /// Any other operation: not read.
+    Other,
+}
+
+/// `DW_OP_plus` and its kin.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DwBinary {
+    Plus,
+    Minus,
+    Mul,
+    And,
+    Or,
+    Xor,
+    Shl,
+    Shr,
+    Shra,
+}
+
+/// `DW_OP_not`, `DW_OP_neg`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DwUnary {
+    Not,
+    Neg,
+}
+
 impl Module {
+    /// The line a function's `!DISubprogram` says its body starts at
+    /// (`scopeLine`, the line of the `{`): the line of the first row
+    /// (`DwarfDebug::beginFunctionImpl`).
+    pub fn subprogram_line(
+        &self,
+        function: &Function,
+    ) -> Option<u32> {
+        let (_, node) = function.metadata.iter().find(|(kind, _)| kind == "dbg")?;
+        let fields = &self.special.get(node)?.fields;
+        let at = fields.iter().position(|one| one == "scopeLine")?;
+        match self.metadata.get(node.0 as usize)?.operands.get(at)? {
+            MetadataOperand::Constant(value) => match self.context.get(*value).kind {
+                crate::context::ConstantKind::Int(number) => u32::try_from(number).ok(),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// The operations of the `!DIExpression` node `id`, `None` for any other
+    /// node. An operation of a kind not listed stands as [`DwOp::Other`], with
+    /// its operands.
+    pub fn expression(
+        &self,
+        id: MetadataId,
+    ) -> Option<Vec<DwOp>> {
+        if self.special.get(&id)?.kind != "DIExpression" {
+            return None;
+        }
+        let operands = &self.metadata[id.0 as usize].operands;
+        let number = |at: usize| match operands.get(at) {
+            Some(MetadataOperand::Constant(value)) => match self.context.get(*value).kind {
+                crate::ConstantKind::Int(number) => u64::try_from(number).ok(),
+                _ => None,
+            },
+            _ => None,
+        };
+        let mut ops = Vec::new();
+        let mut at = 0;
+        while at < operands.len() {
+            let MetadataOperand::Ident(name) = &operands[at] else {
+                ops.push(DwOp::Other);
+                at += 1;
+                continue;
+            };
+            at += 1;
+            let wanted = match name.as_str() {
+                "DW_OP_plus_uconst" | "DW_OP_LLVM_arg" | "DW_OP_constu" | "DW_OP_consts" => 1,
+                "DW_OP_LLVM_fragment" => 2,
+                _ => 0,
+            };
+            let op = match (name.as_str(), number(at), number(at + 1)) {
+                ("DW_OP_plus_uconst", Some(n), _) => DwOp::PlusUconst(n),
+                ("DW_OP_stack_value", ..) => DwOp::StackValue,
+                ("DW_OP_LLVM_arg", Some(n), _) => u32::try_from(n).map_or(DwOp::Other, DwOp::Arg),
+                ("DW_OP_constu", Some(n), _) => DwOp::Constu(n),
+                ("DW_OP_consts", Some(n), _) => DwOp::Consts(n as i64),
+                ("DW_OP_deref", ..) => DwOp::Deref,
+                ("DW_OP_plus", ..) => DwOp::Binary(DwBinary::Plus),
+                ("DW_OP_minus", ..) => DwOp::Binary(DwBinary::Minus),
+                ("DW_OP_mul", ..) => DwOp::Binary(DwBinary::Mul),
+                ("DW_OP_and", ..) => DwOp::Binary(DwBinary::And),
+                ("DW_OP_or", ..) => DwOp::Binary(DwBinary::Or),
+                ("DW_OP_xor", ..) => DwOp::Binary(DwBinary::Xor),
+                ("DW_OP_shl", ..) => DwOp::Binary(DwBinary::Shl),
+                ("DW_OP_shr", ..) => DwOp::Binary(DwBinary::Shr),
+                ("DW_OP_shra", ..) => DwOp::Binary(DwBinary::Shra),
+                ("DW_OP_not", ..) => DwOp::Unary(DwUnary::Not),
+                ("DW_OP_neg", ..) => DwOp::Unary(DwUnary::Neg),
+                ("DW_OP_LLVM_fragment", Some(offset), Some(size)) => DwOp::Fragment { offset, size },
+                _ => DwOp::Other,
+            };
+            ops.push(op);
+            at += wanted;
+        }
+        Some(ops)
+    }
+
     pub fn global(
         &self,
         id: GlobalId,
@@ -1339,6 +1571,19 @@ impl Module {
         }
     }
 
+    /// `function_mut`, with the module's metadata apart from it.
+    pub fn function_and_metadata_mut(
+        &mut self,
+        name: &str,
+    ) -> Option<(&mut Context, &mut Function, Metadata<'_>)> {
+        let Module { context, globals, metadata, special, .. } = self;
+        let global = globals.iter_mut().find(|one| one.name.as_deref() == Some(name))?;
+        match &mut global.kind {
+            GlobalKind::Function(function) => Some((context, function, Metadata { nodes: metadata, special })),
+            GlobalKind::Variable(_) => None,
+        }
+    }
+
     /// The module without the globals `keep` refuses, the rest renumbered
     /// in their order; a constant naming one gone becomes poison.
     pub fn retain_globals(
@@ -1354,11 +1599,44 @@ impl Module {
             }));
         }
         self.context.renumber_globals(&|global| renumbered[global.0 as usize]);
+        // An alias follows its aliasee, and goes with it.
+        self.aliases.retain_mut(|alias| match renumbered[alias.aliasee.0 as usize] {
+            Some(now) => {
+                alias.aliasee = now;
+                true
+            }
+            None => false,
+        });
         let mut at = 0;
         self.globals.retain(|_| {
             at += 1;
             renumbered[at - 1].is_some()
         });
+    }
+
+    /// An error where the module defines an alias and `target`'s writer emits
+    /// none: dropping the symbol would link as an undefined reference later.
+    pub fn refuse_aliases(
+        &self,
+        target: &str,
+    ) -> Result<(), String> {
+        match self.aliases.first() {
+            Some(alias) => Err(format!("{target} cannot emit the alias @{}", alias.name)),
+            None => Ok(()),
+        }
+    }
+
+    /// Whether the code is position independent: clang's "PIC Level" module
+    /// flag is set. A module that carries no flags at all (not clang's) is.
+    pub fn position_independent(&self) -> bool {
+        let Some((_, flags)) = self.named_metadata.iter().find(|(name, _)| name == "llvm.module.flags") else {
+            return true;
+        };
+        let named = |id: &MetadataId| match self.metadata[id.0 as usize].operands.get(1) {
+            Some(MetadataOperand::String(name)) => name == "PIC Level",
+            _ => false,
+        };
+        flags.iter().any(named)
     }
 
     /// A function type's return type and parameters.

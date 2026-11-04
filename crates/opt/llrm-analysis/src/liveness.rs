@@ -219,6 +219,100 @@ pub fn pressure_of(
     peak
 }
 
+/// `pressure_of` over the `blocks` alone, solving liveness for the counted
+/// values only.
+pub fn pressure_in(
+    function: &Function,
+    blocks: &[BlockId],
+    counted: &dyn Fn(ValueId) -> bool,
+) -> usize {
+    let found = live_where(function, counted);
+    let mut peak = 0;
+    for &block in blocks {
+        let mut alive = found.live_out[&id(block)].clone();
+        let size = |alive: &IdSet<ValueId>| alive.iter().filter(|&one| counted(one)).count();
+        peak = peak.max(size(&alive));
+        for op in split(function, block).1.into_iter().rev() {
+            if let Some(one) = op.result {
+                alive.remove(&one);
+            }
+            alive.extend(reads(op));
+            peak = peak.max(size(&alive));
+        }
+    }
+    peak
+}
+
+/// `pressure_in`, each value weighing `weight` (zero: not counted) -- the
+/// registers a value takes, an `i32` being two words on a 16-bit target.
+pub fn pressure_weighted(
+    function: &Function,
+    blocks: &[BlockId],
+    weight: &dyn Fn(ValueId) -> usize,
+) -> usize {
+    let found = live_where(function, &|one| weight(one) > 0);
+    let mut peak = 0;
+    for &block in blocks {
+        let mut alive = found.live_out[&id(block)].clone();
+        let size = |alive: &IdSet<ValueId>| alive.iter().map(|one| weight(one)).sum::<usize>();
+        peak = peak.max(size(&alive));
+        for op in split(function, block).1.into_iter().rev() {
+            if let Some(one) = op.result {
+                alive.remove(&one);
+            }
+            alive.extend(reads(op));
+            peak = peak.max(size(&alive));
+        }
+    }
+    peak
+}
+
+/// `pressure_weighted` for weights that are zero but for values made in
+/// `blocks`: their live ranges are followed from their reads, and those of the
+/// phis that take them, so the work is the size of the ranges and not of the
+/// function (a loop's values with a use past its exits are followed there).
+pub fn pressure_weighted_made_in(
+    function: &Function,
+    blocks: &[BlockId],
+    weight: &dyn Fn(ValueId) -> usize,
+) -> usize {
+    let mut needed: IdSet<ValueId> = IdSet::new();
+    for &block in blocks {
+        for inst in function.iter_block(block) {
+            if let Some(result) = function.instruction(inst).result.filter(|&one| weight(one) > 0) {
+                needed.insert(result);
+            }
+        }
+    }
+    let mut work: Vec<ValueId> = needed.iter().collect();
+    while let Some(value) = work.pop() {
+        for user in function.users(value) {
+            let taker = function.instruction(user.user);
+            if let Some(result) = taker.result.filter(|_| is_phi(taker)) {
+                if needed.insert(result) {
+                    work.push(result);
+                }
+            }
+        }
+    }
+    let found = live_of(function, &needed);
+    let none = IdSet::new();
+    let mut peak = 0;
+    for &block in blocks {
+        let mut alive = found.live_out.get(&id(block)).unwrap_or(&none).clone();
+        let size = |alive: &IdSet<ValueId>| alive.iter().map(|one| weight(one)).sum::<usize>();
+        peak = peak.max(size(&alive));
+        for op in split(function, block).1.into_iter().rev() {
+            if let Some(one) = op.result {
+                alive.remove(&one);
+            }
+            alive.extend(reads(op));
+            peak = peak.max(size(&alive));
+        }
+    }
+    peak
+}
+
 /// An instruction, the values live before it and those live across it.
 pub struct LivePoint {
     pub inst: InstId,
@@ -989,6 +1083,58 @@ pub(crate) fn live_dense(function: &Function) -> Liveness {
 mod tests {
     use super::*;
     use crate::testing::{block, function, parsed, value};
+
+    /// `pressure_weighted_made_in` follows only the loop's values (the cost
+    /// that took 294 s on memory_expansion at m68k) and is the whole-function
+    /// answer, with a value read past an exit in a plain instruction and not in
+    /// an exit phi.
+    #[test]
+    fn test_loop_local_pressure_is_the_whole_function_pressure() {
+        let module = parsed(
+            "define i32 @f(i32 %n, ptr %p) {
+entry:
+  br label %outer
+outer:
+  %o = phi i32 [ 0, %entry ], [ %o2, %outer_latch ]
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %outer ], [ %next, %loop ]
+  %a = phi i32 [ 0, %outer ], [ %a2, %loop ]
+  %v = load i32, ptr %p
+  %w = mul i32 %v, %i
+  %x = add i32 %w, %o
+  %a2 = add i32 %a, %x
+  %next = add i32 %i, 1
+  %c = icmp eq i32 %next, %n
+  br i1 %c, label %after, label %loop
+after:
+  %q = add i32 %a2, %x
+  br label %outer_latch
+outer_latch:
+  %o2 = add i32 %o, %w
+  %d = icmp eq i32 %o2, 100
+  br i1 %d, label %exit, label %outer
+exit:
+  ret i32 %q
+}
+",
+        );
+        let function = function(&module, "f");
+        for names in [&["loop"][..], &["outer", "loop", "after", "outer_latch"][..]] {
+            let blocks: Vec<BlockId> = names.iter().map(|name| block(function, name)).collect();
+            let made: IdSet<ValueId> = blocks
+                .iter()
+                .flat_map(|&one| function.iter_block(one))
+                .filter_map(|inst| function.instruction(inst).result)
+                .collect();
+            let weight = |one: ValueId| usize::from(made.contains(&one)) * (1 + usize::from(one.0 % 2 == 0));
+            assert_eq!(
+                pressure_weighted_made_in(function, &blocks, &weight),
+                pressure_weighted(function, &blocks, &weight),
+                "{names:?}"
+            );
+        }
+    }
 
     /// PARITYCONTROL's dead join-flag phis kept ADD/ADC live as word
     /// operations.

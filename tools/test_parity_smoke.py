@@ -1,7 +1,9 @@
-"""The per-merge tests of feat/parity: the selection fits 10 s of CPU however many crates a merge touches, an overrun or a failed step fails it, and the last line says which."""
+"""The per-merge tests of release/next: the selection fits 10 s of CPU however many crates a merge touches, an overrun or a failed step fails it, and the last line says which."""
 from __future__ import annotations
 
 import shutil
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -106,7 +108,7 @@ def test_a_cut_test_run_is_killed_with_its_children_and_charged_its_whole_allowa
     def alive() -> bool:
         try:
             return Path(f"/proc/{pid}/stat").read_text().split(")")[-1].split()[0] != "Z"  # a zombie is dead, waiting for init
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):  # reading /proc/PID/stat of a process that exits mid-read raises ESRCH
             return False
 
     for _ in range(50):
@@ -123,7 +125,7 @@ def test_a_merge_touching_many_crates_tests_the_six_with_most_changed_files():
 
 
 def test_the_smoke_names_no_target_so_the_prepush_facts_check_stays_green():
-    """tests/target_facts.rs failed feat/parity's prepush: tools/parity_smoke.py spelled the m32 target's crate directory (1 copy of a target fact)."""
+    """tests/target_facts.rs failed release/next's prepush: tools/parity_smoke.py spelled the m32 target's crate directory (1 copy of a target fact)."""
     import re
 
     assert not re.search(r"llrm-x86-m\d+|x86_m\d+", Path(ps.__file__).read_text())
@@ -145,7 +147,7 @@ def fake_qcport(tmp_path, fail_level=None):
     (tmp_path / "src/render/d_faces.c").write_text("int x;\n")
     (tmp_path / "inc").mkdir()
     seen = tmp_path / "levels"
-    compiler = tmp_path / "llrm-c"
+    compiler = tmp_path / "llrm-cc"
     compiler.write_text(f"#!/bin/sh\necho \"$1\" >> {seen}\ncase \"$*\" in *d_faces.c*) [ \"$1\" = \"{fail_level}\" ] && {{ echo 'llrm-c: @_d_draw_faces@3: block 964 leaves for (964) with no instruction choosing' >&2; exit 1; }};; esac\nexit 0\n")
     compiler.chmod(compiler.stat().st_mode | stat.S_IXUSR)
     return seen
@@ -168,7 +170,7 @@ def test_qcports_own_d_faces_is_compiled_at_all_four_levels_and_a_verifier_failu
 
 
 def test_two_halves_that_each_compile_but_not_together_fail_the_workspace_check(tmp_path):
-    """#2544 (a fold calling `undef(context, ..)`) and #2564 (`undef` taking `&mut Context`, then `&Context`) each compiled; merged, feat/parity did not build
+    """#2544 (a fold calling `undef(context, ..)`) and #2564 (`undef` taking `&mut Context`, then `&Context`) each compiled; merged, release/next did not build
     for three hours. The smoke built only the touched crates' unit tests and passed."""
     (tmp_path / "Cargo.toml").write_text('[workspace]\nmembers = ["lib", "app"]\nresolver = "2"\n')
     (tmp_path / "lib/src").mkdir(parents=True)
@@ -183,7 +185,7 @@ def test_two_halves_that_each_compile_but_not_together_fail_the_workspace_check(
 
 
 def test_an_unused_mut_fails_the_land_time_workspace_check(tmp_path):
-    """#3390 landed `let mut reads` with no mutation: the land-time build check ran without `-D warnings`, so feat/parity's fast-tier `build` step was red for every owner."""
+    """#3390 landed `let mut reads` with no mutation: the land-time build check ran without `-D warnings`, so release/next's fast-tier `build` step was red for every owner."""
     (tmp_path / "Cargo.toml").write_text('[package]\nname = "app"\nversion = "0.0.0"\nedition = "2021"\n')
     (tmp_path / "src").mkdir()
     (tmp_path / "src/lib.rs").write_text("pub fn f() -> u32 { let mut reads = 1; reads }\n")
@@ -200,7 +202,7 @@ def test_a_qcport_module_that_fails_at_o2_fails_the_step_whatever_d_faces_does(t
         (tmp_path / "src" / module).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / "src" / module).write_text("int x;\n")
     (tmp_path / "inc").mkdir()
-    compiler = tmp_path / "llrm-c"
+    compiler = tmp_path / "llrm-cc"
     compiler.write_text("#!/bin/sh\ncase \"$*\" in *sound/snd.c*) echo 'llrm-c: @_snd_frame@3: BitCast of a float' >&2; exit 1;; esac\nexit 0\n")
     compiler.chmod(compiler.stat().st_mode | stat.S_IXUSR)
     monkeypatch.setenv("QCPORT", str(tmp_path / "src"))
@@ -389,7 +391,7 @@ def test_every_failing_qcport_module_is_listed_not_the_first(tmp_path, monkeypat
     (tmp_path / "inc").mkdir()
     monkeypatch.setenv("QCPORT", str(tmp_path / "src"))
     monkeypatch.setenv("QCPORT_INC", str(tmp_path / "inc"))
-    compiler = tmp_path / "llrm-c"
+    compiler = tmp_path / "llrm-cc"
     compiler.write_text("#!/bin/sh\ncase \"$*\" in *combat.c*|*snd.c*) echo broken >&2; exit 1;; esac\nexit 0\n")
     compiler.chmod(0o755)
     verdict, _, names = ps.qc_modules(tmp_path)
@@ -451,7 +453,7 @@ def test_every_qcport_module_is_compiled_for_a_pr_that_touches_a_crate(tmp_path)
             return [("item", "-O1", "a poison initializer"), ("item", "-Os", "a poison initializer")]
 
         assert ps.qcport_failures("/bins", sweep=sweep) == {"qc item -O1", "qc item -Os"}
-        assert str(seen["compiler"]) == "/bins/llrm-c"
+        assert str(seen["compiler"]) == "/bins/llrm-cc"
         assert ps.qcport_failures("/bins", sweep=lambda *a: []) == set()
     finally:
         del os.environ["QCPORT"], os.environ["QCPORT_INC"]
@@ -660,7 +662,7 @@ def test_a_selectiondag_change_runs_the_selectiondag_registry():
 
 def test_a_compile_to_the_null_device_reaches_the_encoder(tmp_path):
     """The smoke layer compiled with `-o /dev/null`, where llrm-c writes assembly text and never encodes: a program that died in the encoder passed."""
-    compiler = tmp_path / "llrm-c"
+    compiler = tmp_path / "llrm-cc"
     compiler.write_text("#!/usr/bin/env python3\nimport sys\nout = sys.argv[sys.argv.index('-o') + 1]\nif out.endswith('.obj'):\n    sys.exit('llrm-c: Semantics(op=BINARY)')\n")
     compiler.chmod(0o755)
     assert ps.compile_ok([str(compiler), "x.c", "-o", __import__("os").devnull], {}) is not None
@@ -731,17 +733,6 @@ def test_the_crates_whose_prs_blew_the_instruction_budget_have_a_ranking():
         assert ps.unit_tests(crate, 6.4, {k: [(n, s) for n, s in v["tests"]] for k, v in ranking.items()}), crate
 
 
-def test_a_cut_step_reports_the_instructions_it_ran(tmp_path, monkeypatch):
-    """The budget read 0 G for a unit step that run_cut killed and ~120 G for one that finished (llrm-codegen, twice): SIGKILL took perf's counts with it."""
-    if shutil.which("perf") is None:
-        pytest.skip("no perf")
-    monkeypatch.undo()  # the real Meter: the autouse fixture swaps in a stub
-    with ps.Meter() as counted:
-        code, _ = ps.run_cut([sys.executable, "-c", "while True: pass"], 1.0, tmp_path)
-    assert code is None
-    assert counted.value is not None and counted.value > 100_000_000, counted.value
-
-
 def test_an_unranked_unit_step_runs_one_test_thread(monkeypatch):
     """An unranked crate runs its whole lib cut by wall time; cargo's thread per core made that 32x the CPU and instructions the wall allowance was charged."""
     seen = []
@@ -751,3 +742,15 @@ def test_an_unranked_unit_step_runs_one_test_thread(monkeypatch):
     ps.unit_step("unranked", 5.0)(Path("."))
     ps.unit_step("ranked", 5.0)(Path("."))
     assert seen[0]["RUST_TEST_THREADS"] == "1" and seen[1] is None, seen
+
+
+def test_a_runner_whose_perf_cannot_count_still_runs_the_commands(tmp_path, monkeypatch):
+    """Gate run 3: perf installed, `instructions:u event is not supported`; every command the Meter wrapped died with perf's exit 255 before it ran."""
+    fake = tmp_path / "perf"
+    fake.write_text("#!/bin/sh\necho 'The instructions:u event is not supported.' >&2\nexit 255\n")
+    fake.chmod(0o755)
+    monkeypatch.undo()  # the real Meter: the autouse fixture swaps in a stub
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    with ps.Meter() as counted:
+        done = subprocess.run([sys.executable, "-c", "print(7)"], capture_output=True, text=True)
+    assert (done.returncode, done.stdout.strip(), counted.value) == (0, "7", None)

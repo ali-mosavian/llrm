@@ -43,13 +43,17 @@ impl Builder<'_> {
                 let second = self.get_value(instruction.operands[1])?;
                 self.dag.get_node(if *signed { ISD::SCmp } else { ISD::UCmp }, dest, &[first, second])
             }
-            // `visitIntrinsicCall`: x86 has no fused multiply-add before FMA3
-            // (`isFMAFasterThanFMulAndFAdd`), so a multiply and an add
+            // `visitIntrinsicCall`: an `FMA` where `isFMAFasterThanFMulAndFAdd`
+            // (arm64); x86 has none before FMA3, so a multiply and an add
             Intrinsic::FMulAdd => {
                 let second = self.get_value(instruction.operands[1])?;
                 let third = self.get_value(instruction.operands[2])?;
-                let product = self.dag.get_node_flags(ISD::FMul, dest, &[first, second], flags);
-                self.dag.get_node_flags(ISD::FAdd, dest, &[product, third], flags)
+                if self.dag.config().fma_faster {
+                    self.dag.get_node_flags(ISD::FMA, dest, &[first, second, third], flags)
+                } else {
+                    let product = self.dag.get_node_flags(ISD::FMul, dest, &[first, second], flags);
+                    self.dag.get_node_flags(ISD::FAdd, dest, &[product, third], flags)
+                }
             }
             Intrinsic::CopySign => {
                 let second = self.get_value(instruction.operands[1])?;
@@ -114,6 +118,13 @@ impl Builder<'_> {
                 };
                 self.dag.get_node(code, dest, &[first])
             }
+            // `visitIntrinsicCall`: an AND with the mask taken to the pointer's
+            // width
+            Intrinsic::PtrMask => {
+                let mask = self.get_value(instruction.operands[1])?;
+                let mask = self.dag.get_zext_or_trunc(mask, dest);
+                self.dag.get_node(ISD::And, dest, &[first, mask])
+            }
             Intrinsic::ByteSwap => self.dag.get_node(ISD::BSwap, dest, &[first]),
             Intrinsic::BitReverse => self.dag.get_node(ISD::BitReverse, dest, &[first]),
             Intrinsic::Abs => {
@@ -124,6 +135,7 @@ impl Builder<'_> {
                 self.dag.get_node(if poison { ISD::AbsMinPoison } else { ISD::Abs }, dest, &[first])
             }
             Intrinsic::LRint => self.dag.get_node_flags(ISD::LRint, dest, &[first], flags),
+            Intrinsic::LLRint => self.dag.get_node_flags(ISD::LLRint, dest, &[first], flags),
             Intrinsic::Unary(function) => {
                 let code = match function {
                     FloatFunction::Fabs => ISD::FAbs,

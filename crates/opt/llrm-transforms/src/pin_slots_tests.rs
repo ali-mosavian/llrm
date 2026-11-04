@@ -128,13 +128,12 @@ fn group_of(slot: &str) -> String {
 }
 
 fn applied(level: &str) -> Applied {
-    let mut options = match level {
+    let options = match level {
         "-O1" => Options::basic(),
         "-O3" => Options::speed(),
         "-Os" => Options::size(),
         _ => Options::standard(),
     };
-    options.llvm_order = true;
     Applied { options, ..Applied::default() }
 }
 
@@ -300,13 +299,6 @@ const ROWS: &[Disposition] = &[
     row(
         Late,
         "loop-vectorize",
-        NA,
-        "vectors deferred (user ruling 10-20), -sse target Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out.",
-        "",
-    ),
-    row(
-        Late,
-        "slp-vectorizer",
         NA,
         "vectors deferred (user ruling 10-20), -sse target Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out.",
         "",
@@ -531,15 +523,7 @@ const OURS_ONLY: &[(&str, &str)] = &[
     ),
     ("772: loopsimplify@772 + lcssa@772", "as 764"),
     (
-        "669: cvp@669",
-        "-O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot)",
-    ),
-    (
         "787: inferspace@787",
-        "-O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot)",
-    ),
-    (
-        "810: cvp@810",
         "-O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot)",
     ),
     (

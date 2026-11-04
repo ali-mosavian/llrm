@@ -38,7 +38,9 @@ fn linked(
 ) -> Vec<u8> {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codeview");
     std::fs::copy(fixtures.join("m.c"), scratch.join("m.c")).unwrap();
+    // Borland's C0M and CM name their symbols with a leading underscore.
     let made = common::cc::llrm_c()
+        .env("LLRM_CC_TARGET", "x86_16-bcc")
         .args(["-m16", "-g", "-O0"])
         .arg(scratch.join("m.c"))
         .arg("-o")
@@ -87,6 +89,14 @@ fn microsoft_link_and_cvpack_take_the_object_and_codeview_reads_its_variables() 
         skipped("needs the DOSBox-X this crate builds");
         return;
     }
+    if std::env::var_os("LLRM_BORLAND_INC").is_none() {
+        // llrm-cc compiles for x86_16-bcc against Borland's headers; with the
+        // tools above present but these absent the test
+        // was red ("the target needs the environment variable
+        // LLRM_BORLAND_INC") instead of skipped.
+        skipped("needs Borland's C headers (LLRM_BORLAND_INC)");
+        return;
+    }
     let scratch = tempfile::tempdir().unwrap();
     let exe = linked(&microsoft, &borland, scratch.path());
     assert_eq!(&exe[exe.len() - 8..exe.len() - 4], b"NB08", "CVPACK packed the table");
@@ -111,8 +121,8 @@ fn microsoft_link_and_cvpack_take_the_object_and_codeview_reads_its_variables() 
 /// A small-model program the model describes and no frontend does: an enum, a
 /// `const`, a variable in a register, a block with a variable of its own.
 /// `main` is 28 bytes: `e = GREEN; si = 42; { k = 7 }; return 0`.
-fn synthetic() -> (llrm_object::Object, String) {
-    use llrm_object::debug::{
+fn synthetic() -> (llrm_debug::Described, String) {
+    use llrm_debug::{
         Block, Enumerator, File, Function, Info, Kind, Language, Line, Location, Range, Register, Scalar, Type,
         Variable,
     };
@@ -155,14 +165,21 @@ fn synthetic() -> (llrm_object::Object, String) {
             ranges: vec![Range { section: 0, offset: 14, length: 8 }],
             variables: vec![variable("k", 2, Location::Frame { disp: -4 })],
             blocks: Vec::new(),
+            inlined: None,
         }],
         frame: Vec::new(),
+        all_calls: false,
+        frame_base: None,
+        calls: Vec::new(),
     };
     let info = Info {
         language: Language::C,
-        options: llrm_object::debug::DebugOptions { dialect: llrm_object::debug::Dialect::Cv4, ..Default::default() },
-        frame_register: "bp".into(),
-        registers: vec![Register { name: "si".into(), bits: 16, dwarf: None, codeview: Some(15) }],
+        options: llrm_debug::DebugOptions { dialect: llrm_debug::Dialect::Cv4, ..Default::default() },
+        target: Some(llrm_x86::mc::fixup::debug_target(16).with_registers(
+            "bp",
+            "",
+            vec![Register { name: "si".into(), bits: 16, dwarf: None, codeview: Some(15) }],
+        )),
         code: vec![whole],
         types: vec![
             Type::Scalar(Scalar::Int { bytes: 2, signed: true }),
@@ -177,30 +194,34 @@ fn synthetic() -> (llrm_object::Object, String) {
             .to_vec(),
         ..Info::default()
     };
-    let object = Object {
-        name: "syn.c".into(),
-        bits: 16,
-        sections: vec![text],
-        symbols: vec![
-            Symbol {
-                name: "_main".into(),
-                binding: Binding::Public,
-                definition: Definition::Defined { section: 0, offset: 0 },
-                size: 0,
-                group: None,
-            },
-            Symbol {
-                name: "_isatty".into(),
-                binding: Binding::Public,
-                definition: Definition::Defined { section: 0, offset: length },
-                size: 0,
-                group: None,
-            },
-        ],
-        omf_groups: Vec::new(),
-        omf_comdat: Vec::new(),
-        frames: Vec::new(),
+    let object = llrm_debug::Described {
         debug: Some(info),
+        object: Object {
+            name: "syn.c".into(),
+            bits: 16,
+            sections: vec![text],
+            symbols: vec![
+                Symbol {
+                    name: "_main".into(),
+                    binding: Binding::Public,
+                    definition: Definition::Defined { section: 0, offset: 0 },
+                    size: 0,
+                    group: None,
+                    visibility: Default::default(),
+                },
+                Symbol {
+                    name: "_isatty".into(),
+                    binding: Binding::Public,
+                    definition: Definition::Defined { section: 0, offset: length },
+                    size: 0,
+                    group: None,
+                    visibility: Default::default(),
+                },
+            ],
+            omf_groups: Vec::new(),
+            omf_comdat: Vec::new(),
+            frames: Vec::new(),
+        },
     };
     (object, "int main(void)\n{\n    enum color e = GREEN;\n    register int r = 42;\n    { const int k = 7;\n      r = k; }\n    return 0;\n}\n".to_owned())
 }
@@ -229,7 +250,8 @@ fn codeview_reads_an_enum_a_const_a_register_variable_and_a_block_scope() {
     std::fs::write(scratch.path().join("syn.c"), source).unwrap();
     std::fs::write(
         scratch.path().join("syn.obj"),
-        llrm_codegen::objectfile::write::write(&object, &llrm_x86::mc::omf::X86Omf).unwrap(),
+        llrm_codegen::objectfile::write::write(&object.object, object.debug.as_ref(), &llrm_x86::mc::omf::X86Omf)
+            .unwrap(),
     )
     .unwrap();
     dosbox::run(
@@ -279,13 +301,14 @@ fn codeview_debugs_a_nib_program_as_it_does_a_c_one() {
     let Some(screen) = nib_in_codeview("p", &["-O0"], &["bp add", "g", "p"]) else { return };
     // `add`'s parameters arrive in registers (regparm3); `-g` stores them to no
     // cell (it changes no code). `a` is overwritten by the first instruction
-    // and `b`'s EDX is reused for `t` (`add edx, eax`: a load-defined value
-    // is not tied), so neither has one place over the function and neither is
-    // a variable of CodeView's. The locals are in cells.
-    for expected in ["long s = 2"] {
+    // (`movsx ecx, ax` ends its register, then `lea eax, ...` takes it), so it
+    // has no one place over the function and is not a variable of CodeView's.
+    // `b` stays in EDX through the whole function (the DAG selector adds into
+    // a fresh register, `lea eax, [edx+ecx]`), so it is a register variable.
+    // The locals are in cells.
+    for expected in ["long s = 2", "EDX reg long b = 3"] {
         assert!(screen.contains(expected), "no {expected:?} in CodeView's screen:\n{screen}");
     }
-    assert!(!screen.contains("reg long b"), "`b`, its register reused for `t`, is a register variable:\n{screen}");
     assert!(!screen.contains("short a ="), "`a`, in no one place, is in CodeView's screen:\n{screen}");
 }
 
@@ -472,4 +495,53 @@ fn nib_in_codeview(
         std::thread::sleep(Duration::from_secs(1));
     }
     Some(locals(&session, commands).join("\n"))
+}
+
+/// A lexical block in two pieces (optimised code puts other code between them)
+/// made the whole object unwritable: "CodeView 4: a lexical block in pieces",
+/// so every optimised `-g` OMF compile with a nested scope failed. A format
+/// with no list of ranges writes it over its first byte to its last.
+#[test]
+fn a_block_in_two_pieces_is_written_over_its_hull() {
+    let (mut object, _) = synthetic();
+    let function = &mut object.debug.as_mut().unwrap().functions[0];
+    function.blocks[0].ranges = vec![
+        llrm_debug::Range { section: 0, offset: 14, length: 3 },
+        llrm_debug::Range { section: 0, offset: 19, length: 3 },
+    ];
+    let written =
+        llrm_codegen::objectfile::write::write(&object.object, object.debug.as_ref(), &llrm_x86::mc::omf::X86Omf);
+    let bytes = written.unwrap_or_else(|error| panic!("{error}"));
+    let shape = llrm_codegen::objectfile::cv4info::shape(&llrm_codegen::objectfile::omf::parse(&bytes).unwrap());
+    assert!(shape.iter().any(|one| one.contains("k")), "{shape:#?}");
+}
+
+/// `-g` shape of `regvar.nib` built optimised with the selector `isel`.
+fn regvar_shape(isel: &str) -> Vec<String> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let bin = Path::new(env!("CARGO_BIN_EXE_llrm-cc")).parent().unwrap().to_owned();
+    let scratch = tempfile::tempdir().unwrap();
+    let object = scratch.path().join("p.obj");
+    let made = Command::new(bin.join("llrm-nib"))
+        .args(["-m16", "-g", "-O2", "-fno-inline-functions", "-fno-inline-functions-called-once"])
+        .arg(format!("--isel={isel}"))
+        .arg(root.join("tests/fixtures/codeview/regvar.nib"))
+        .arg("-o")
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let records = llrm_codegen::objectfile::omf::parse(&std::fs::read(&object).unwrap()).unwrap();
+    llrm_codegen::objectfile::cv4info::shape(&records)
+}
+
+/// The DAG selector kept no `dbg_value` (`k = a * 3` became `imul cx, ax, 3`
+/// and its record had no instruction to stand before): `k` was in no
+/// CodeView record, where the old selector wrote it as a register variable.
+#[test]
+fn a_nib_register_variable_is_in_the_object_under_the_dag_selector() {
+    let (old, dag) = (regvar_shape("old"), regvar_shape("dag"));
+    let has_k = |shape: &[String]| shape.iter().any(|one| one.starts_with("REGISTER work.k"));
+    assert!(has_k(&old), "{old:#?}");
+    assert!(has_k(&dag), "the DAG selector wrote no `k`:\n{dag:#?}\nthe old one wrote:\n{old:#?}");
 }

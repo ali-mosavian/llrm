@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_compares.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_compares.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_compares.rs sha256:93afc98269ca5a03ea51876d230d17aac59877d14b11aeac01c9d2a691bfc7dd -->
+<!-- src: crates/opt/llrm-transforms/src/combine_compares.rs sha256:640e0e46a06a3ce03f1e1d909bdeb588e40ec2aea748eacb5bba750da743b658 -->
 
 # combine_compares
 
@@ -32,11 +32,6 @@ the producing fold unidentified (not `foldICmpAndConstConst`,
 `getDemandedBitsLHSMask`; a known-bits or range fold in the icmp visitor is
 the lead). `(a & -4) == C` folds at C = 0 and signmin only
 (`a s< -32764` at i16); `((b + M) & M) u< b` is `b != 0` for M = 3, 7.
-
-DEVIATE 1 (permanent): `samesign` is not a flag of MIR's `icmp`; the folds
-that read or set it are left out (the unsigned-to-`samesign` step of
-`foldICmpUsingKnownBits`; the signed-to-unsigned step is made, which is what
-sets the flag in LLVM).
 
 DEVIATE 2 (temporary): `foldICmpUsingKnownBits` computes the known bits of
 the operands, where LLVM first runs `SimplifyDemandedBits` on them

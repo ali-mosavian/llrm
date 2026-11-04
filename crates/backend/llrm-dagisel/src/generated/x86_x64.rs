@@ -4,7 +4,7 @@
 
 #![allow(clippy::all, unused_imports)]
 
-use crate::dag::{Dag, Hooks, PatternContext, SDValue};
+use crate::dag::{Dag, Hooks, PatternContext, SDValue, X86Predicates};
 use crate::matcher::{Emit, Matcher::*, Slice, Table, Vt};
 use crate::predicates;
 
@@ -9389,7 +9389,7 @@ pub static ITEMS: [crate::matcher::Matcher; 20208] = [
     TypeCase { size: 0, vt: Vt(0) },
     OpcodeCase { size: 0, opcode: 0 },
     Alt(7),
-    CheckChildType { child: 1, vt: Vt(7) },
+    CheckChildType { child: 1, vt: Vt(8) },
     RecordChild(2),
     MoveChild(2),
     CheckOpcode(37),
@@ -13961,9 +13961,9 @@ pub static ITEMS: [crate::matcher::Matcher; 20208] = [
     RecordNode,
     MoveParent,
     EmitMergeInputChains(Slice { start: 0, len: 1 }),
-    EmitRegister { vt: Vt(7), register: 58 },
+    EmitRegister { vt: Vt(8), register: 58 },
     EmitInteger { vt: Vt(5), value: 1 },
-    EmitRegister { vt: Vt(7), register: 0 },
+    EmitRegister { vt: Vt(8), register: 0 },
     EmitRegister { vt: Vt(6), register: 0 },
     MorphNodeTo(Emit { opcode: 4981, flags: 51, vts: [Vt(0), Vt(0)], num_vts: 0, operands: Slice { start: 263, len: 6 } }),
     OpcodeCase { size: 26, opcode: 953 },
@@ -20237,7 +20237,7 @@ pub fn pattern_predicate<C: PatternContext>(ctx: &C, id: u16) -> bool {
 }
 
 /// The node predicates the table checks.
-pub fn node_predicate<D: Dag, H: Hooks<D>>(dag: &D, hooks: &H, value: SDValue, id: u16) -> bool {
+pub fn node_predicate<D: Dag, H: X86Predicates<D>>(dag: &D, hooks: &H, value: SDValue, id: u16) -> bool {
     let args = (dag, hooks, value);
     match id {
         1 => predicates::non_extending_load(args),

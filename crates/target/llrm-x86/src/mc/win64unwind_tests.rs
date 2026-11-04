@@ -22,10 +22,10 @@ fn with(code: &[u8]) -> Object {
             definition: Definition::Defined { section: 0, offset: 0 },
             size: code.len(),
             group: None,
+            visibility: Default::default(),
         }],
         omf_groups: Vec::new(),
         omf_comdat: Vec::new(),
-        debug: None,
         frames: Vec::new(),
     }
 }
@@ -70,6 +70,14 @@ const PIN: &[(&str, &str, &str)] = &[
         "nofp_xmm",
         "4883ec68440f294c2450440f294424400f297c24300f29742420660f28f1660f28f8e80000000066440f28c0660f28c6e80000000066440f28c8660f28c7f20f58c6e800000000f2450f59c8f2410f58c1f20f58c7f20f58c60f287424200f287c2430440f28442440440f284c24504883c468c3",
         "011a09001a68020015780300108804000a98050004c20000",
+    ),
+    // Doubles in xmm6/xmm7 are saved with `movapd` (66 0f 29), not `movaps`; a
+    // decoder that knew only the latter stopped after `sub rsp` and wrote
+    // `07 01 15 00` with no xmm saves.
+    (
+        "nofp_movapd",
+        "4881eca8000000660f29bc2490000000660f29b4248000000048b8000000000000f0bf488944242048ba000000000000f03f4889542428660f57c0660f11442430660f29042448894424104889542418660f2944244048b89a9999999999893f488944245048ba9a999999999989bf488954245848895424604889442468660f114424706685c90f843901000031c0f20f100500000000f20f100d000000009031d2eb196666662e0f1f84000000000048ffc24883fa040f84c30000004883fa0277edf20f1054d420f20f101cd44989d06666666666662e0f1f840000000000f2420f1064c428f20f5ce2f2420f106cc408f20f5ceb660f28f5f20f59f5660f28fcf20f59fcf20f58fef20f58f8660f28f1f20f5ef7f20f59e6f20f107cd440f20f58fcf20f117cd440f20f59f5f20f106cd460f20f58eef20f116cd460f2420f106cc448f20f5cecf2420f116cc448f2420f1064c468f20f5ce6f2420f1164c46849ffc04983f8030f8571ffffffe93cffffff6666662e0f1f84000000000031d266666666662e0f1f840000000000f20f1054d440f20f5854d420f20f105cd460f20f581cd4f20f1154d420f20f111cd448ffc24883fa0475d5ffc06639c80f85dafefffff20f10442420f20f58442408f20f58442430f20f58442418f20f590500000000f20f2cc00f28b424800000000f28bc24900000004881c4a8000000c3",
+        "01190600196808001078090007011500",
     ),
 ];
 
@@ -157,4 +165,67 @@ fn the_object_file_carries_pdata_and_xdata_with_addr32nb_relocations() {
     let types: Vec<u16> =
         (0..3).map(|n| u16::from_le_bytes([bytes[relocs + 10 * n + 8], bytes[relocs + 10 * n + 9]])).collect();
     assert_eq!(types, [3, 3, 3]);
+}
+
+/// Directives a producer declares give the `.xdata` the pin's assembler writes
+/// for the same `.seh_*`: a pushed register and a stack allocation, a frame
+/// register with a push of the frame's own, and xmm saves below an allocation.
+#[test]
+fn declared_directives_are_encoded_as_the_pins_assembler_does() {
+    use llrm_object::Seh::*;
+    let cases: [(&str, Vec<(usize, llrm_object::Seh)>, &str); 3] = [
+        ("plain", vec![(1, PushReg(6)), (5, StackAlloc(64))], "0105020005720160"),
+        (
+            "frame",
+            vec![(1, PushReg(5)), (2, PushReg(6)), (6, StackAlloc(72)), (0xb, SetFrame(5, 64))],
+            "010b04450b03068202600150",
+        ),
+        (
+            "xmm",
+            vec![(7, StackAlloc(168)), (0x10, SaveXmm(7, 0x90)), (0x19, SaveXmm(6, 0x80))],
+            "01190600196808001078090007011500",
+        ),
+    ];
+    for (name, directives, expected) in cases {
+        let info = from_seh(name, &directives).unwrap();
+        assert_eq!(info.bytes().unwrap(), bytes(expected), "{name}");
+    }
+}
+
+/// A declared prologue wins over the bytes: code whose bytes say nothing
+/// (here a lone `ret`) still gets the declared codes.
+#[test]
+fn a_declared_prologue_is_not_read_back_from_the_bytes() {
+    use llrm_object::{Frame, Seh};
+    let mut object = with(&[0xC3]);
+    object
+        .frames
+        .push(
+            Frame {
+                section: 0,
+                offset: 0,
+                length: 1,
+                rows: Vec::new(),
+                cfi: Vec::new(),
+                seh: vec![(1, Seh::PushReg(6))],
+            },
+        );
+    let written = expanded(&object).unwrap();
+    let xdata = written.sections.iter().find(|one| one.name == ".xdata").unwrap();
+    assert_eq!(xdata.image, bytes("0101010001600000"));
+}
+
+/// A frame over 4 KiB is probed (`mov eax, N; call __chkstk; sub rsp, rax`) and
+/// the pin's `.seh_stackalloc N` follows the `sub`. The call ends the run
+/// `from_prologue` reads, so the declared directive is the only way to describe
+/// it; the large forms are 16-bit units of 8 up to 512 KiB, then 32-bit bytes.
+#[test]
+fn a_probed_frame_declares_its_allocation_after_the_sub() {
+    use llrm_object::Seh::StackAlloc;
+    let probed = bytes("b8484e0000e8000000004829c4488d4c2428e800000000904881c4484e0000c3");
+    assert!(from_prologue("f", &probed).unwrap().codes.is_empty(), "the call ends the prologue run");
+    for (size, expected) in [(20040, "010d02000d01c909"), (600040, "010d03000d11e82709000000")] {
+        let info = from_seh("f", &[(0xd, StackAlloc(size))]).unwrap();
+        assert_eq!(info.bytes().unwrap(), bytes(expected), "{size}");
+    }
 }

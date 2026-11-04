@@ -2,7 +2,7 @@
 
     python3 tools/sizes.py BASE_BIN_DIR [NEW_BIN_DIR] [-O2|-Os|-Oz|-O3]... [--frames]
 
-Each directory holds llrm-qb, llrm-c and llrm-nib, each one whole compiler (NEW
+Each directory holds llrm-qb, llrm-cc (with llrm-llc) and llrm-nib, each one whole compiler (NEW
 defaults to target/release). A program is tests/run/qb, bench and examples, plus the
 QuickBASIC demos in $QBDEMOS (~/work/qbdemos/orig). Bytes are the OMF object's code segments' (`code_bytes`).
 There is no instruction or memory-operand column: the backend's per-call `cost` estimate, summed, moved 3x between
@@ -24,6 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 import llrmbin  # noqa: E402
+import elfsize  # noqa: E402
 import benchlist  # noqa: E402
 DEMOS = Path(environ.get("QBDEMOS", Path.home() / "work/qbdemos/orig"))
 
@@ -31,6 +32,9 @@ DEMOS = Path(environ.get("QBDEMOS", Path.home() / "work/qbdemos/orig"))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "dosbatch"))
 
 import cpulimit  # noqa: E402
+
+sys.path.insert(0, str(ROOT / "crates/target/llrm-x86/bench"))
+from padding import is_pad, pad_of, padding  # noqa: E402,F401: the x86 decoder is the target's
 from run_tests import compiler_arguments as settings, header  # noqa: E402
 
 
@@ -50,8 +54,15 @@ def isel() -> list[str]:
     return [f"--isel={environ['SIZES_ISEL']}"] if environ.get("SIZES_ISEL") else []
 
 
+def c_command(compiler: str, source: str) -> list[str]:
+    """llrm-cc's line for a C program: the Watcom row of the width its header asks for (`-m32`), the rest of its flags as they are."""
+    flags = settings(source)
+    wide = "-m32" in flags
+    return [compiler, f"--target={llrmbin.C_ROWS[32 if wide else 16][0]}", str(source), *(one for one in flags if one not in ("-m16", "-m32")), *isel()]
+
+
 def programs(bins: Path, demos: bool = True) -> list[tuple[str, list[str]]]:
-    qb, cc, nib = (str(bins / name) for name in ("llrm-qb", "llrm-c", "llrm-nib"))
+    qb, cc, nib = (str(bins / name) for name in ("llrm-qb", "llrm-cc", "llrm-nib"))
     out = []
     if demos:
         if not DEMOS.is_dir():
@@ -59,7 +70,7 @@ def programs(bins: Path, demos: bool = True) -> list[tuple[str, list[str]]]:
         out = [(f"demo-{one}", [qb, str(DEMOS / one / "TSC.BAS"), "--dialect", "qb45", "--runtime", "qb45"]) for one in ("qbdemo", "oimad", "deedlines")]
     for files, tool in ((sorted(glob.glob(str(ROOT / "tests/run/qb/*.bas"))), qb), (benchlist.sources(".bas", ROOT / "bench"), qb), (benchlist.sources(".c", ROOT / "bench"), cc),
                         (benchlist.sources(".nib", ROOT / "bench"), nib), (sorted(glob.glob(str(ROOT / "examples/*.nib"))), nib)):
-        out += [(f"{Path(file).parent.name}/{Path(file).name}", [tool, str(file), *dialect(tool == qb, str(file)), *settings(str(file)), *excess(tool == qb), *isel()]) for file in files]
+        out += [(f"{Path(file).parent.name}/{Path(file).name}", [tool, str(file), *dialect(tool == qb, str(file)), *settings(str(file)), *excess(tool == qb), *isel()] if tool != cc else c_command(tool, file)) for file in files]
     return out
 
 
@@ -76,6 +87,8 @@ class Segment:
     klass: str
     size: int
     loaded: int  # bytes an LEDATA or LIDATA record carries; the rest of the segment is uninitialised
+    bits: int = 16
+    pieces: tuple = ()  # (offset, bytes) of each LEDATA record and COMDAT: the segment's content, to tell padding from code
 
 
 # Classes the program does not contribute: the linker's stack, and the debugger's symbol and type records.
@@ -135,12 +148,15 @@ def segments(obj: Path) -> list[Segment]:
                 size = 1 << 16  # the 'big' bit: a full segment
             name, i = omf_index(body, i)
             klass, i = omf_index(body, i)
-            found.append([names[name - 1], names[klass - 1], size, 0])
+            found.append([names[name - 1], names[klass - 1], size, 0, 32 if attributes & 1 else 16, []])
         elif kind in (0xA0, 0xA1, 0xA2, 0xA3):  # LEDATA, LIDATA
             wide = kind & 1 == 1
             segment, i = omf_index(body, 0)
+            offset_at = i
             i += 4 if wide else 2  # the offset
             found[segment - 1][3] += len(body) - i if kind < 0xA2 else expanded(body, i, wide)
+            if kind < 0xA2:
+                found[segment - 1][5].append((int.from_bytes(body[offset_at : offset_at + (4 if wide else 2)], "little"), bytes(body[i:])))
         elif kind in (0xC2, 0xC3):  # COMDAT: a function's bytes, in the segment it is explicitly placed in
             wide = kind == 0xC3
             flags, allocation = body[0], body[1] & 0x0F
@@ -153,22 +169,61 @@ def segments(obj: Path) -> list[Segment]:
             length = expanded(body, i, wide) if flags & 2 else len(body) - i
             found[segment - 1][2] += length
             found[segment - 1][3] += length
-    return [Segment(name, klass, size, min(loaded, size)) for name, klass, size, loaded in found]
+            if not flags & 2:
+                found[segment - 1][5].append((None, bytes(body[i:])))  # a function of its own: aligned at 0 within itself
+    return [Segment(name, klass, size, min(loaded, size), bits, tuple(pieces)) for name, klass, size, loaded, bits, pieces in found]
+
+
+def is_elf(obj: Path) -> bool:
+    with open(obj, "rb") as file:
+        return file.read(4) == b"\x7fELF"
 
 
 def is_code(segment: Segment) -> bool:
     return segment.klass.upper().endswith("CODE")  # CODE, and the BASIC runtime's BC_CODE
 
 
+@dataclass(frozen=True)
+class CodeSize:
+    code: int  # bytes of the code segments, without alignment padding
+    align: int  # the padding left out
+    unread: int = 0  # bytes that start no instruction (data inside code), counted as code
+
+
+def code_size(obj: Path) -> CodeSize:
+    """The object's code bytes without alignment padding (a layout move of a few bytes before an aligned loop is not growth), and the padding
+    apart. `unread`: bytes the decoder skipped as no instruction; they stay in `code`."""
+    if is_elf(obj):
+        return CodeSize(*elfsize.code_size(obj, padding))
+    code = align = unread = 0
+    for one in segments(obj):
+        if not is_code(one):
+            continue
+        whole = bytearray(one.size - sum(len(data) for at, data in one.pieces if at is None))
+        for at, data in one.pieces:
+            if at is not None:
+                whole[at : at + len(data)] = data
+        parts = ([bytes(whole)] if whole else []) + [data for at, data in one.pieces if at is None]
+        code += one.size
+        for part in parts:
+            found, skipped = padding(part, one.bits)
+            code -= found
+            align += found
+            unread += skipped
+    return CodeSize(code, align, unread)
+
+
 def code_bytes(obj: Path) -> int:
-    """Bytes of the object's code segments (a class named ...CODE): its SEGDEF lengths. The file's size counts
+    """Bytes of the object's code segments (a class named ...CODE): its SEGDEF lengths, less alignment padding (`code_size`). The file's size counts
     the fixup, symbol and debug records as well, which the linker consumes and the program lacks."""
-    return sum(one.size for one in segments(obj) if is_code(one))
+    return code_size(obj).code
 
 
 def data_bytes(obj: Path) -> tuple[int, int]:
     """(initialised, uninitialised) bytes of the object's data segments, whatever their class (DATA, CONST, FAR_BSS, BC_VARS,
     BC_SEGS): the bytes its LEDATA and LIDATA records carry, and the rest of each SEGDEF. Not the stack, nor debug records."""
+    if is_elf(obj):
+        return elfsize.data_bytes(obj)
     kept = [one for one in segments(obj) if not is_code(one) and one.klass.upper() not in NOT_THE_PROGRAMS]
     return sum(one.loaded for one in kept), sum(one.size - one.loaded for one in kept)
 
@@ -179,11 +234,21 @@ def selected(command: list[str]) -> list[str]:
     return [command[0], f"--isel={mode}", *command[1:]] if mode else command
 
 
+def stop(command: list[str]) -> list[str]:
+    """llrm-cc links unless told `-c`; the object is what is measured."""
+    return ["-c"] if Path(command[0]).name == "llrm-cc" else []
+
+
+def environment(command: list[str]) -> dict[str, str]:
+    """The caller's, with llrm-cc's variables (its clang, Open Watcom's headers) for llrm-cc."""
+    return {**environ, **(llrmbin.cc_environment() if Path(command[0]).name == "llrm-cc" else {})}
+
+
 def measure(command: list[str], level: str) -> int | None:
     """The code bytes of the program's object, or None where it does not compile."""
     with tempfile.TemporaryDirectory() as directory:
         obj = f"{directory}/x.obj"
-        cpulimit.run(selected([*command, level, "-o", obj]), 300, capture_output=True, text=True)
+        cpulimit.run(selected([*command, level, *stop(command), "-o", obj]), 300, capture_output=True, text=True, env=environment(command))
         return code_bytes(Path(obj)) if Path(obj).exists() else None
 
 
@@ -194,7 +259,7 @@ def frame(command: list[str], level: str) -> int | None:
     """Bytes the program's procedures reserve below BP: every `sub sp, N` of its listing."""
     with tempfile.TemporaryDirectory() as directory:
         listing = f"{directory}/x.s"
-        cpulimit.run(selected([*command, level, "-S", "-o", listing]), 300, capture_output=True, text=True)
+        cpulimit.run(selected([*command, level, "-S", "-o", listing]), 300, capture_output=True, text=True, env=environment(command))
         return sum(int(one) for one in SUB_SP.findall(Path(listing).read_text())) if Path(listing).exists() else None
 
 

@@ -1,20 +1,32 @@
 //! The arm64 target. Its descriptions are the files beside this one.
 
 pub mod cc;
+pub mod cfi;
+pub mod combine;
+pub mod dag;
 pub mod data;
+pub mod debug;
 pub mod divconst;
 pub mod driver;
 pub mod emit;
 pub mod expand_imm;
+pub mod flagcse;
 pub mod frame;
 pub mod isel;
+pub mod jumptable;
 pub mod layout;
+pub mod ldst_update;
+pub mod licm;
+pub mod lir_view;
 pub mod machine;
 pub mod mc;
 pub mod mfunc;
 pub mod pairs;
 pub mod prepass;
 pub mod regalloc;
+pub mod shrinkwrap;
+pub mod sibcall;
+pub mod storecluster;
 pub mod tti;
 #[cfg(test)]
 mod tti_tests;

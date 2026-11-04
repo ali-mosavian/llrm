@@ -8,7 +8,7 @@
 #include "nheap.h"
 #include "device.h"
 
-enum { SEGMENT = 0x10000UL };
+#define SEGMENT 0x10000UL
 
 int ad_allocated(const AD *ad)
 {

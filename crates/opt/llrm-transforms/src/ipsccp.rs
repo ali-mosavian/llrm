@@ -86,10 +86,6 @@
 //! CGSCC walk, where the pin's `buildModuleSimplificationPipeline` runs
 //! `IPSCCPPass`.
 //!
-//! Under `LLRM_NO_LLVM_ORDER` (the legacy rounds) it does not run:
-//! `ModuleIpo` is `llvm_order` only, and the stand-in the rounds fell back on
-//! (`ipa-args`, `ipa-range`) is deleted.
-//!
 //! # See also
 //! - Uses: [`crate::sccpsolver`], [`crate::sccp`]'s rewrites,
 //!   [`crate::predicateinfo`]

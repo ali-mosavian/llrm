@@ -17,7 +17,7 @@
 //! (`fabs`, `minnum`, `canonicalize`...: need #2209),
 //! `foldSelectValueEquivalence`, the rest of `foldSelectInstWithICmp`
 //! (its `canonicalizeSPF` step is `combine_select_spf`),
-//! `foldSelectICmpAndAnd`, `foldSelectBitTest`, `foldAddSubSelect`,
+//! `foldAddSubSelect`,
 //! `foldOverflowingAddSubSelect`, `foldSetClearBits`,
 //! `foldSelectZeroOrFixedOp`, `foldSelectIntrinsic`,
 //! `foldSelectWithSRem`, the
@@ -45,6 +45,7 @@ use llrm_mir::valuetracking::pattern;
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_phi::UB_IMPLYING;
+use crate::combine_select_bit_test::{select_bit_test, select_icmp_and_and};
 use crate::combine_select_bools::select_of_bools;
 use crate::combine_select_ext_const::select_ext_const;
 use crate::combine_select_into_op::select_into_op;
@@ -69,6 +70,8 @@ const FOLDS: &[Fold] = &[
     select_of_bools,
     bool_to_extension,
     select_with_icmp,
+    select_icmp_and_and,
+    select_bit_test,
     select_op_op,
     select_ext_const,
     select_of_gep,

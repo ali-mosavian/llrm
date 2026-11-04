@@ -52,6 +52,17 @@ fn generated_marked(
     post_inc: bool,
     body: impl FnOnce(&Cx, &mut ScalarEvolution, &mut Collection, BlockId),
 ) {
+    generated_sized(cpu, text, post_inc, false, body)
+}
+
+/// [`generated_marked`], for a compile for size where `size`.
+fn generated_sized(
+    cpu: &str,
+    text: &str,
+    post_inc: bool,
+    size: bool,
+    body: impl FnOnce(&Cx, &mut ScalarEvolution, &mut Collection, BlockId),
+) {
     let module = llrm_mir::parse::module(text).expect("a module");
     let (_, _, function) = module.functions().next().expect("a function");
     let layout = DataLayout::parse("e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32").unwrap();
@@ -93,6 +104,7 @@ fn generated_marked(
     let tti = X86::of_cpu(cpu).unwrap();
     let safe = |_: &mut ScalarEvolution, _: Scev| true;
     let mut lsr = Collection::new(&cx, &tti, header, &safe, false, latch_terminator);
+    lsr.size = size;
     lsr.collect_interesting_types_and_factors(&mut se, &users);
     lsr.collect_fixups_and_initial_formulae(&mut se, &users);
     lsr.collect_loop_invariant_fixups_and_formulae(&mut se);
@@ -166,10 +178,7 @@ fn every_generated_formula_is_legal_canonical_and_distinct() {
             let mut keys = llrm_support::hash::HashSet::default();
             for f in &lu.formulae {
                 assert!(f.is_canonical(se, header), "{f:?}");
-                assert!(
-                    is_legal_use_formula(&tti, lu.min_offset, lu.max_offset, lu.kind, lu.access_ty.addr_space, f),
-                    "{f:?}"
-                );
+                assert!(is_legal_use_formula(&tti, lu.min_offset, lu.max_offset, lu.kind, lu.access_ty, f), "{f:?}");
                 let mut key = f.base_regs.clone();
                 key.extend(f.scaled_reg);
                 key.sort_unstable();
@@ -238,27 +247,37 @@ fn too_many_formulae_are_narrowed_to_the_shared_register() {
 
 /// `opt -passes=loop-reduce` (LLVM 20, i386) on this loop gives a pointer
 /// advancing by 4 for the store and a counter from `%n` down to zero for the
-/// exit test: each use keeps its first formula, one register each, where
-/// sharing one induction variable would take a scaled index and a base.
+/// exit test. DEVIATE LG3: the address also takes the exit test's counter,
+/// `(p + 4n) + 4 * {-n,+,1}`, which ends at zero: one recurrence and no
+/// pointer walk, where the scaled index and a base are as cheap as the walk.
 #[test]
-fn the_solver_keeps_the_pointer_walk_and_counts_the_exit_down() {
+fn the_solver_shares_the_exit_counter_with_the_store() {
     generated_for("i486", STORE, |_, se, lsr, _| {
         let solution = lsr.solve(se);
         assert_eq!(solution.len(), 2);
-        for (lu, &f_idx) in lsr.uses.iter().zip(&solution) {
-            let f = &lu.formulae[f_idx];
-            assert_eq!((f.base_regs.len(), f.scaled_reg, f.scale), (1, None, 0), "{:?} {f:?}", lu.kind);
-            let reg = f.base_regs[0];
-            let step = se.as_constant(se.operands(reg)[1].scev).map(|c| c.sext_value());
-            match lu.kind {
-                Kind::Address => assert_eq!(step, Some(4)),
-                Kind::ICmpZero => {
-                    assert_eq!(step, Some(-1));
-                    assert!(f.counts_down_to_zero(se));
-                }
-                other => panic!("{other:?}"),
-            }
-        }
+        let chosen: Vec<_> = lsr.uses.iter().zip(&solution).map(|(lu, &f)| (lu.kind, &lu.formulae[f])).collect();
+        let (_, exit) = chosen.iter().find(|(kind, _)| *kind == Kind::ICmpZero).expect("the exit test");
+        let (_, store) = chosen.iter().find(|(kind, _)| *kind == Kind::Address).expect("the store");
+        assert!(exit.has_zero_end(), "{exit:?}");
+        assert_eq!((store.scaled_reg, store.scale), (Some(exit.base_regs[0]), 4), "{store:?}");
+    });
+}
+
+/// The shared exit counter saves a loop instruction and costs setup ones; at
+/// -Os that is bytes lost (jpeg_single c -Os +76 B, jpeg_fixed c +60 B), so
+/// the store keeps its own recurrence there.
+#[test]
+fn at_size_the_store_does_not_take_the_exit_counter() {
+    generated_sized("i486", STORE, false, true, |_, se, lsr, _| {
+        let solution = lsr.solve(se);
+        let (_, store) = lsr
+            .uses
+            .iter()
+            .zip(&solution)
+            .find(|(lu, _)| lu.kind == Kind::Address)
+            .map(|(lu, &f)| (lu.kind, &lu.formulae[f]))
+            .expect("the store");
+        assert_eq!(store.scaled_reg, None, "{store:?}");
     });
 }
 
@@ -305,7 +324,7 @@ fn the_whole_search_is_linear_in_the_uses() {
         text
     };
     let mut work = Vec::new();
-    for n in [8usize, 16, 32] {
+    for n in [8usize, 16, 32, 64] {
         generated_for("i486", &looped(n), |_, se, lsr, _| {
             lsr.filter_out_undesirable_dedicated_registers(se);
             lsr.narrow_search_space_using_heuristics(se);
@@ -317,4 +336,29 @@ fn the_whole_search_is_linear_in_the_uses() {
     for pair in work.windows(2) {
         assert!(pair[1].0 <= 2 * pair[0].0 + 8 && pair[1].1 <= 2 * pair[0].1 + 8, "{work:?}");
     }
+}
+
+/// LSR's register budget counted the registers of the target as free for its
+/// own values although the loop keeps others live (bench/shellsort at -Os
+/// spilled a sum when LSR dropped a compare). The values live beside the
+/// recurrences are the pressure: the sum and the extended load, one register
+/// each as an `i32`, two as an `i64`.
+#[test]
+fn loop_carried_values_that_are_not_recurrences_take_registers() {
+    let looped = |acc: &str| {
+        // An `i32` sum takes the load as it is: a `zext` to the same type is
+        // not IR (the SCEV of it asserts in debug builds).
+        let widen = if acc == "i32" { "%w = add i32 %v, 0".to_string() } else { format!("%w = zext i32 %v to {acc}") };
+        format!(
+            "define {acc} @f(ptr %p, i32 %n) {{\nentry:\n  br label %loop\nloop:\n  %i = phi i32 [ 0, %entry ], [ %next, %loop ]\n  %s = phi {acc} [ 0, %entry ], [ %s2, %loop ]\n  %a = getelementptr i32, ptr %p, i32 %i\n  %v = load i32, ptr %a\n  {widen}\n  %s2 = add {acc} %s, %w\n  %next = add nuw i32 %i, 1\n  %c = icmp eq i32 %next, %n\n  br i1 %c, label %exit, label %loop\nexit:\n  ret {acc} %s2\n}}\n"
+        )
+    };
+    let mut units = Vec::new();
+    for acc in ["i32", "i64"] {
+        generated(&looped(acc), |cx, se, _, header| {
+            units.push(crate::lsr_collect::loop_register_units(se, cx, &X86::of_cpu("i486").unwrap(), header));
+        });
+    }
+    // The index is a recurrence LSR rewrites; the sum is not.
+    assert_eq!(units, [2, 4]);
 }

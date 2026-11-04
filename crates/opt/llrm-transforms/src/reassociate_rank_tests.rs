@@ -89,3 +89,20 @@ e:
     );
     assert_eq!(r, [(5 << 16) + 1, (5 << 16) + 2]);
 }
+
+/// A rank asked twice is walked once: the second ask used to build a query
+/// and an operand stack again (118M Ir against the pin's 37M at 512 chained
+/// adds).
+#[test]
+fn test_a_cached_rank_builds_no_query_or_stack() {
+    let module = parsed("define i32 @f(i32 %x) {\nb0:\n  %a = add i32 %x, 1\n  %b = add i32 %a, 2\n  ret i32 %b\n}\n");
+    let function = module.global(module.named("f").expect("@f")).function().expect("a function");
+    let layout = DataLayout::default();
+    let order: Vec<BlockId> = function.layout().to_vec();
+    let mut ranks = Ranks::build(function, &order, |_| false);
+    let b = value(function, "b");
+    let first = ranks.of(&module.context, &layout, function, b);
+    let walks = ranks.walks();
+    assert_eq!(ranks.of(&module.context, &layout, function, b), first);
+    assert_eq!(ranks.walks(), walks);
+}

@@ -1,6 +1,6 @@
 //! x86's `MCAsmBackend`.
 
-use llrm_object::assembler::AsmBackend;
+use llrm_object::assembler::{AsmBackend, Cfi};
 use llrm_object::{FixupKind, FixupKindInfo};
 
 use super::fixup;
@@ -9,8 +9,14 @@ use super::fixup;
 /// none past `nop`).
 pub struct X86Backend {
     pub sixteen: bool,
+    /// x86-64: the only width that has a compact unwind encoding here.
+    pub wide: bool,
     pub longest: usize,
 }
+
+/// The backend the object writers ask to fill a field: the field facts do not
+/// depend on the mode (the nop and unwind facts, which do, are layout's).
+pub static FIELDS: X86Backend = X86Backend { sixteen: false, wide: false, longest: 1 };
 
 impl AsmBackend for X86Backend {
     fn kind_info(
@@ -27,6 +33,13 @@ impl AsmBackend for X86Backend {
     ) -> bool {
         out.extend(nops(count, self.longest, self.sixteen));
         true
+    }
+
+    fn generate_compact_unwind_encoding(
+        &self,
+        cfi: &[Cfi],
+    ) -> u32 {
+        if self.wide { super::compact_unwind::encoding(cfi) } else { 0 }
     }
 }
 
@@ -89,7 +102,7 @@ mod tests {
     #[test]
     fn the_backend_writes_what_nops_writes() {
         let mut out = Vec::new();
-        assert!(X86Backend { sixteen: false, longest: 10 }.write_nop_data(&mut out, 3));
+        assert!(X86Backend { sixteen: false, wide: false, longest: 10 }.write_nop_data(&mut out, 3));
         assert_eq!(out, [0x0f, 0x1f, 0x00]);
     }
 }

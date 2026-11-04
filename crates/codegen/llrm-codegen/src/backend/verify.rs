@@ -139,7 +139,7 @@ pub fn verify(
 }
 
 /// After allocation, what the machine form reads: no register lane is read
-/// before every path to it has written it, unless the entry delivers it (an
+/// that no path to it has written, unless the entry delivers it (an
 /// argument), the function preserves it (its epilogue reads it) or it is
 /// machine state (stack, frame and segment registers; flags are not checked).
 /// The checks of [`_values`] are of virtual values, which the machine form does
@@ -169,8 +169,11 @@ pub fn physical(
     let everything = liveness::_universe(regs);
     let effects: IndexMap<i64, Vec<Option<liveness::Effect>>> =
         body.blocks.iter().map(|block| (block.at, liveness::_effects(regs, body.bits, block))).collect();
-    // Forward, must: a lane is defined on entry to a block when it is defined
-    // at the end of every predecessor. Walked to a fixed point from "all".
+    // Forward, may: a lane is defined on entry to a block when it is defined
+    // at the end of some predecessor (a value undefined on one path, a
+    // maybe-uninitialized `phi [undef, ..]`, is the program's; the pin's
+    // MachineVerifier has no path-wise rule). Walked to a fixed point from
+    // "none".
     let preds = {
         let mut preds: IndexMap<i64, Vec<i64>> = body.blocks.iter().map(|block| (block.at, Vec::new())).collect();
         for block in &body.blocks {
@@ -179,6 +182,12 @@ pub fn physical(
             }
         }
         preds
+    };
+    // At 64 bits a read of RAX also reaches the lane above EAX, which no
+    // 32-bit view of the register names.
+    let whole = |register: RegId| {
+        let lanes = _lanes(regs, register);
+        regs.view(regs.root(register), body.bits).map_or(lanes, |all| lanes.or(&_lanes(regs, all)))
     };
     let walked = |at: i64, defined: Lanes, complaint: &mut Lanes| -> Lanes {
         let mut defined = defined;
@@ -199,27 +208,44 @@ pub fn physical(
                 Some(effect) => {
                     // A register with some lane defined is read whole: its
                     // other lanes are the consumer's to ignore (a short
-                    // argument is read as the dword that holds it).
+                    // argument is read as the register that holds it: at m64 a
+                    // word argument is read as the quadword).
                     let touched: Lanes = effect
                         .reads
                         .iter()
                         .filter(|&&(register, _)| !_lanes(regs, register).is_disjoint(&defined))
-                        .fold(Lanes::new(), |all, &(register, _)| all.or(&_lanes(regs, register)));
-                    *complaint = complaint.or(&effect.reads.minus(&defined).minus(&touched));
-                    defined = defined.or(&effect.writes);
+                        .fold(Lanes::new(), |all, &(register, _)| all.or(&whole(register)));
+                    // A tied source flagged undef (`TwoAddressInstruction`: the
+                    // pass-through of a `bsr`, its destination read as undef)
+                    // is no read: the pin's MachineVerifier skips it. After
+                    // allocation the flag stays on the value the instruction
+                    // defines, at the destination of the same position.
+                    let mut undef = Lanes::new();
+                    if let Some(what) = one.what.as_ref().filter(|what| what.dests.len() == one.defines.len()) {
+                        for (value, dest) in one.defines.iter().zip(&what.dests) {
+                            if let (true, Loc::Reg(reg)) = (one.undefs.contains(value), dest) {
+                                undef = undef.or(&_lanes(regs, regs.named(reg.register, i64::from(reg.width))));
+                            }
+                        }
+                    }
+                    *complaint = complaint.or(&effect.reads.minus(&defined).minus(&touched).minus(&undef));
+                    // The destination it defines is defined, though the table
+                    // calls the write of a `bsr` conditional (a zero source
+                    // leaves it): the value is the pin's `BSR32rr` def.
+                    defined = defined.or(&effect.writes).or(&undef);
                 }
             }
         }
         defined
     };
-    let mut out_of: IndexMap<i64, Lanes> = body.blocks.iter().map(|block| (block.at, everything)).collect();
+    let mut out_of: IndexMap<i64, Lanes> = body.blocks.iter().map(|block| (block.at, Lanes::new())).collect();
     loop {
         let mut changed = false;
         for block in &body.blocks {
             let defined = if block.at == body.entry {
                 entering
             } else {
-                preds[&block.at].iter().fold(everything, |all, pred| all.and(&out_of[pred]))
+                preds[&block.at].iter().fold(Lanes::new(), |all, pred| all.or(&out_of[pred]))
             };
             let after = walked(block.at, defined, &mut Lanes::new());
             if after != out_of[&block.at] {
@@ -236,7 +262,7 @@ pub fn physical(
         let defined = if block.at == body.entry {
             entering
         } else {
-            preds[&block.at].iter().fold(everything, |all, pred| all.and(&out_of[pred]))
+            preds[&block.at].iter().fold(Lanes::new(), |all, pred| all.or(&out_of[pred]))
         };
         walked(block.at, defined, &mut complaint);
     }
@@ -247,7 +273,7 @@ pub fn physical(
     }
     let names: Vec<String> = seen.iter().map(|one| regs.name(*one).unwrap_or("?").to_owned()).collect();
     vec![format!(
-        "{} reads {} before every path writes it, and the entry does not deliver it",
+        "{} reads {} before any path writes it, and the entry does not deliver it",
         body.name,
         names.join(", ")
     )]
@@ -822,7 +848,7 @@ mod tests {
             vec![],
         );
         let said = physical(&physical_body(vec![read]), &BTreeSet::new());
-        assert!(said.iter().any(|complaint| complaint.contains("reads ebx before every path writes it")), "{said:?}");
+        assert!(said.iter().any(|complaint| complaint.contains("reads ebx before any path writes it")), "{said:?}");
     }
 
     /// `movzx ebx, bx` before a loop that writes the word (STATIC.BAS -O2,
@@ -846,7 +872,60 @@ mod tests {
         let none = BTreeSet::new();
         assert!(physical(&physical_body(vec![widen.clone(), writes]), &none).is_empty());
         let said = physical(&physical_body(vec![widen, reads]), &none);
-        assert!(said.iter().any(|complaint| complaint.contains("reads ebx before every path writes it")), "{said:?}");
+        assert!(said.iter().any(|complaint| complaint.contains("reads ebx before any path writes it")), "{said:?}");
+    }
+
+    /// `bsr eax, ecx` whose pass-through (the tied EAX) is flagged undef, as
+    /// `__builtin_clz` makes it: `LLRM_VERIFY=1` refused "reads eax before any
+    /// path writes it" for every `ctlz` of a word (the `xor` after it read EAX
+    /// as unwritten, the table calling a `bsr`'s write conditional). Only EAX
+    /// is exempt: ECX, the real source, is still a read.
+    #[test]
+    fn test_an_undef_pass_through_is_not_a_read() {
+        let scan = |undef: bool| {
+            let mut one = Insn::new(
+                1,
+                Some((1, 1)),
+                Some(semantics(
+                    Operation::Binary,
+                    "bsr",
+                    vec![register(RegId::EAX, 4)],
+                    vec![register(RegId::EAX, 4), register(RegId::ECX, 4)],
+                )),
+                vec![],
+                vec![],
+            );
+            one.defines = vec![7];
+            if undef {
+                one.undefs = vec![7];
+            }
+            let load = Insn::new(
+                0,
+                Some((0, 0)),
+                Some(semantics(
+                    Operation::Move,
+                    "mov",
+                    vec![register(RegId::ECX, 4)],
+                    vec![Loc::Imm(ir::Imm { value: 1, width: 4, address: None })],
+                )),
+                vec![],
+                vec![],
+            );
+            let after = Insn::new(
+                2,
+                Some((2, 2)),
+                Some(semantics(Operation::Move, "mov", vec![register(RegId::EDX, 4)], vec![register(RegId::EAX, 4)])),
+                vec![],
+                vec![],
+            );
+            physical(&physical_body(vec![load, one, after]), &BTreeSet::new())
+        };
+        assert!(scan(true).is_empty(), "{:?}", scan(true));
+        assert!(
+            scan(false).iter().any(|said| said.contains("reads eax before any path writes it")),
+            "{:?}",
+            scan(false)
+        );
     }
 
     /// The same read is fine where the function preserves BX (its epilogue
@@ -877,5 +956,55 @@ mod tests {
             physical(&physical_body(vec![read]), &BTreeSet::from([physical_body(vec![]).regs().root(RegId::BX)]))
                 .is_empty()
         );
+    }
+
+    /// `mov ax, 1` then `mov rcx, rax` at 64 bits (`load volatile i16` and
+    /// word stores, `LLRM_VERIFY=1 -m64 -O2 --isel=dag`): the quadword read
+    /// reached the high-dword lane of RAX, which the "read whole" allowance
+    /// left out, and a valid program was refused.
+    #[test]
+    fn test_a_word_written_register_readwhole_at_64_bits_is_not_refused() {
+        let mov = |at: i64, to: Loc, from: Loc| {
+            Insn::new(at, Some((at, at)), Some(semantics(Operation::Move, "mov", vec![to], vec![from])), vec![], vec![])
+        };
+        let one = Loc::Imm(ir::Imm { value: 1, width: 2, address: None });
+        let mut made = physical_body(vec![
+            mov(1, register(RegId::AX, 2), one),
+            mov(2, register(RegId::RCX, 8), register(RegId::RAX, 8)),
+        ]);
+        made.bits = 64;
+        made.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m64::REGISTER_INFO));
+        let said = physical(&made, &BTreeSet::new());
+        assert!(said.is_empty(), "{said:?}");
+    }
+
+    /// `phi [undef, entry], [x, loop]` read after the loop (gcc torture
+    /// pr34415, `LLRM_VERIFY=1 -O2` at m64): the allocator's copy writes the
+    /// register on one path and `ExpandPostRAPseudos` has erased the
+    /// `implicit_def` of the other. The pin's MachineVerifier has no path-wise
+    /// rule for physical registers; a valid program was refused with "reads
+    /// edx before any path writes it". Written on some path is not refused.
+    #[test]
+    fn test_a_register_written_on_one_path_only_is_not_refused() {
+        let mov = |at: i64, to: Loc, from: Loc| {
+            Insn::new(at, Some((at, at)), Some(semantics(Operation::Move, "mov", vec![to], vec![from])), vec![], vec![])
+        };
+        let one = Loc::Imm(ir::Imm { value: 1, width: 2, address: None });
+        let block = |at: i64, insns: Vec<Insn>, succ: Vec<i64>| {
+            let mut made = LirBlock::new(at, insns.into_iter().map(Arc::new).collect());
+            made.succ = succ.into();
+            made.into()
+        };
+        let made = body(
+            "diamond",
+            vec![
+                block(1, vec![mov(1, register(RegId::AX, 2), one.clone())], vec![2, 3]),
+                block(2, vec![mov(2, register(RegId::BX, 2), one)], vec![4]),
+                block(3, vec![], vec![4]),
+                block(4, vec![mov(4, register(RegId::AX, 2), register(RegId::BX, 2))], vec![]),
+            ],
+        );
+        let said = physical(&made, &BTreeSet::new());
+        assert!(said.is_empty(), "{said:?}");
     }
 }

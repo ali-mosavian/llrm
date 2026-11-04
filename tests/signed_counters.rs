@@ -42,7 +42,7 @@ fn a_short_counter_read_as_an_index_is_not_extended_each_trip() {
 #[test]
 fn a_global_row_and_a_scaled_counter_are_one_address() {
     let text = listing(
-        "static short tile[64][64];\nint sum(int y) { int t = 0; short x; for (x = 0; x < 40; x++) t += tile[y & 63][(x + 7) & 63]; return t; }\n",
+        "short tile[64][64];\nint sum(int y) { int t = 0; short x; for (x = 0; x < 40; x++) t += tile[y & 63][(x + 7) & 63]; return t; }\n",
     );
     // One access a trip: the row, the base and the counter, which is stepped
     // by 2 (the pin's strength reduction), so no `*2` and no doubling.

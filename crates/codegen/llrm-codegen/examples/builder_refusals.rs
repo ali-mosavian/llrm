@@ -48,7 +48,7 @@ fn main() {
             let mut info = FunctionLoweringInfo::new(function);
             for &block in function.layout() {
                 blocks += 1;
-                if let Err(why) = build_block(&module, function, &layout, &target, arch, &convention, &mut info, block)
+                if let Err(why) = build_block(&module, function, &layout, &target, &arch, &convention, &mut info, block)
                 {
                     refused += 1;
                     println!("REFUSED {name}:{} {}", function.block(block).name.as_deref().unwrap_or(""), why.0);

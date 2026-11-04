@@ -406,6 +406,11 @@ pub(crate) fn gather_unrolling_preferences_of_target(
     };
     // Override with any target specific settings.
     run.tti.get_unrolling_preferences(has_calls, &mut up);
+    // The target's tuning table.
+    let (threshold, boost) = run.tti.unroll_threshold_overrides();
+    up.threshold = threshold.unwrap_or(up.threshold);
+    up.max_percent_threshold_boost = boost.unwrap_or(up.max_percent_threshold_boost);
+    up.partial_threshold = run.tti.unroll_partial_threshold_override().unwrap_or(up.partial_threshold);
     // Apply size attributes.
     if run.options.opt_size {
         up.threshold = up.opt_size_threshold;
@@ -1232,6 +1237,20 @@ fn try_to_unroll_loop(
         return Unrolled::Unmodified;
     }
 
+    // DEVIATE U3: on a float stack, copies of a body whose floats do not fit
+    // twice are interleaved past the stack and spill. The aggressive bar's
+    // extra growth is where that cost more than the loop (nbody_single and
+    // fpbench -O3: 57 stores and 90 reloads against 30 and 30 rolled), while
+    // within the default bar the unrolled loop won (-O2: nbody_single -2.5%,
+    // fpbench -4.0%), so such a body is held to the default bar. Owner
+    // llrm-target-x86-m32, exit 2026-11-20.
+    if let Some(peak) = float_stack_overflow(run, lp) {
+        if up.threshold > UNROLL_THRESHOLD_DEFAULT {
+            why(run, lp, &format!("{peak} floats live in a body, past half the float stack: the default bar"));
+            up.threshold = UNROLL_THRESHOLD_DEFAULT;
+        }
+    }
+
     let eph = ephemeral_values(run, analyzed, lp);
     let uce = cost_estimator(run, lp, &eph, up.be_insns);
     if !uce.can_unroll() {
@@ -1391,6 +1410,26 @@ fn try_to_unroll_loop(
 }
 
 /// Whether the loop calls something the target lowers to a call.
+/// The most floats live at once in the body of `lp`, if the target computes
+/// them on a stack and twice that many do not fit it.
+fn float_stack_overflow(
+    run: &Run,
+    lp: Loop,
+) -> Option<usize> {
+    let depth = run.tti.x87_stack_slots()? as usize;
+    let blocks = lp.get_blocks();
+    let is_float = |value: llrm_mir::module::ValueId| {
+        llrm_mir::tti::Ty::of(&run.context.types, run.function.value(value).ty).is_some_and(|ty| ty.is_float())
+    };
+    if !blocks.iter().any(|&block| {
+        run.function.iter_block(block).any(|inst| run.function.instruction(inst).result.is_some_and(&is_float))
+    }) {
+        return None;
+    }
+    let peak = llrm_analysis::liveness::pressure_in(run.function, blocks, &is_float);
+    (2 * peak > depth).then_some(peak)
+}
+
 pub(crate) fn loop_has_calls(
     run: &Run,
     lp: Loop,

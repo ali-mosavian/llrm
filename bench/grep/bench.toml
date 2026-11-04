@@ -2,6 +2,7 @@ description = "Aho-Corasick grep of ten patterns over the 10 MB Silesia dickens 
 repetitions = 1
 timed_only = true
 ci_bytes = 1048576
+emulated = true
 
 [region]
 bas = "BenchGrep"

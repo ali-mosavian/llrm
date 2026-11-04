@@ -90,9 +90,7 @@ fn each_level_selects_gcc_s_passes() {
     assert_eq!(row("-O2"), (scalar, true, true, true, true, true, false, false, false, true));
     assert_eq!(row("-O3"), (scalar, true, true, true, true, true, true, true, true, true));
     assert_eq!(pipeline(&["-O"]), pipeline(&["-O1"]));
-    // -Og keeps the four rounds that only -O1 gave up (two, measured at -O1).
-    assert_eq!(pipeline(&["-Og"]), Options { loopidioms: false, rounds: 4, ..pipeline(&["-O1"]) });
-    assert_eq!(pipeline(&["-O1"]).rounds, 2);
+    assert_eq!(pipeline(&["-Og"]), Options { loopidioms: false, ..pipeline(&["-O1"]) });
     assert_eq!(pipeline(&[]), pipeline(&["-O2"]));
     // `-fipa-cp-clone` is gcc's -O3 (opts.cc:676); the pin's default<O3> has no
     // IPA-CP cloning, so -O3 leaves it off (recchop 1380 lines).
@@ -118,7 +116,7 @@ fn each_level_selects_gcc_s_passes() {
     let oz = pipeline(&["-Oz"]);
     assert_eq!(
         (oz.limits.grows, oz.inline, oz.unroll, oz.peel),
-        (false, Threshold::default().for_size(), false, false)
+        (false, Threshold::default().for_min_size(), false, false)
     );
     assert!(parsed(&["-O4"]).is_err());
 }
@@ -398,7 +396,7 @@ fn test_no_inline_names_each_function_and_is_not_the_inline_functions_pass() {
 
 /// `--isel=` takes `dag`, `old` and `shadow`, inline or as the next argument;
 /// anything else is an error. With none, a target gets the DAG selector where
-/// it selects (16- and 32-bit x86) and the old one elsewhere.
+/// it selects (x86 at every width) and the old one elsewhere.
 #[test]
 fn test_isel_names_the_selector() {
     assert_eq!(parsed(&[]).unwrap().isel, None);
@@ -408,7 +406,7 @@ fn test_isel_names_the_selector() {
     assert!(parsed(&["--isel=fast"]).unwrap_err().contains("unknown --isel=fast"));
     assert_eq!(Selector::for_target(&llrm_x86_m16::M16), Selector::Dag);
     assert_eq!(Selector::for_target(&llrm_x86_m32::M32), Selector::Dag);
-    assert_eq!(Selector::for_target(&llrm_x86_m64::M64), Selector::Old);
+    assert_eq!(Selector::for_target(&llrm_x86_m64::M64), Selector::Dag);
 }
 
 /// `-fallocation-routes` chose between the allocator alone and a second route
@@ -422,4 +420,28 @@ fn test_the_removed_allocation_routes_flags_are_not_flags() {
         let refused = Flags::default().take(&argv, &mut at).expect_err(&format!("{flag} is still taken"));
         assert!(refused.contains("unknown option"), "{refused}");
     }
+}
+
+#[test]
+fn a_pass_flag_applies_to_given_options_and_unknown_ones_change_nothing() {
+    let mut options = Options::none();
+    options.unroll = false;
+    assert!(apply_pass_flag(&mut options, "-funroll-loops"));
+    assert!(options.unroll);
+    assert!(apply_pass_flag(&mut options, "-fno-unroll-loops"));
+    assert!(!options.unroll);
+    let before = format!("{options:?}");
+    assert!(!apply_pass_flag(&mut options, "-fno-such-pass"));
+    assert!(!apply_pass_flag(&mut options, "-O2"));
+    assert_eq!(format!("{options:?}"), before);
+}
+
+/// A pin `llc` runs its own CodeGenPrepare, so a shadow run leaves cgpaddr out
+/// to hand it the module before ours; the flag was an environment variable.
+#[test]
+fn the_llrm_cgpaddr_flag_leaves_the_pass_out() {
+    let mut options = Options::default();
+    assert!(options.cgpaddr);
+    assert!(apply_pass_flag(&mut options, "-fno-llrm-cgpaddr"));
+    assert!(!options.cgpaddr);
 }

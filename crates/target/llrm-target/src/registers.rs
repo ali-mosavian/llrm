@@ -68,7 +68,18 @@ pub fn asm_names(text: &str) -> Vec<String> {
         .collect()
 }
 
+thread_local! {
+    static PARSED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many register files this thread has parsed, for a test that a compile
+/// does not parse one per block.
+pub fn parsed() -> usize {
+    PARSED.with(std::cell::Cell::get)
+}
+
 pub fn parse(text: &str) -> Result<Vec<Register>, String> {
+    PARSED.with(|parsed| parsed.set(parsed.get() + 1));
     let mut registers = Vec::new();
     for (index, raw) in text.lines().enumerate() {
         let line = raw.split('#').next().unwrap_or("").trim();

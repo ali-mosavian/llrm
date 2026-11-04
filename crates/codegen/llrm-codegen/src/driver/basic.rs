@@ -409,6 +409,18 @@ pub fn _basic_listing(
     if !runtime_frame && !module_body {
         return Ok(listing);
     }
+    // The shell is compared and stripped as instructions: the unwind
+    // directives the listing declares for it describe a frame the runtime
+    // builds, and an OMF object has no place for them.
+    let listing: Vec<masm::Item> = listing
+        .into_iter()
+        .filter(|item| {
+            !matches!(
+                item,
+                masm::Item::Cfi(_) | masm::Item::Seh(_) | masm::Item::Mark(masm::Mark::Declared)
+            )
+        })
+        .collect();
     // The procedure's first line stands before its prologue.
     let (mut stripped, listing): (Vec<masm::Item>, &[masm::Item]) = match listing.split_first() {
         Some((line @ masm::Item::Mark(_), rest)) => (vec![line.clone()], rest),
@@ -479,8 +491,9 @@ pub fn written_basic(
     module: &masm::Module,
     header: Vec<u8>,
     name: &str,
+    objects: &dyn llrm_debug::DebugObjectTarget,
 ) -> Result<Vec<u8>, String> {
-    written_basic_in(module, header, name, llrm_target::object::Format::Omf)
+    written_basic_in(module, header, name, llrm_target::object::Format::Omf, objects)
 }
 
 /// `written_basic` in the object format of a host: the header and data
@@ -490,8 +503,9 @@ pub fn written_basic_in(
     header: Vec<u8>,
     name: &str,
     format: llrm_target::object::Format,
+    objects: &dyn llrm_debug::DebugObjectTarget,
 ) -> Result<Vec<u8>, String> {
-    timed("object write", || written_basic_inner(module, header, name, format))
+    timed("object write", || written_basic_inner(module, header, name, format, objects))
 }
 
 fn written_basic_inner(
@@ -499,6 +513,7 @@ fn written_basic_inner(
     header: Vec<u8>,
     name: &str,
     format: llrm_target::object::Format,
+    objects: &dyn llrm_debug::DebugObjectTarget,
 ) -> Result<Vec<u8>, String> {
     // Build the same semantic segments as backend.objbuild.written, then add
     // the BASIC-owned MODULE_CODE envelope before asking its canonical record
@@ -534,7 +549,7 @@ fn written_basic_inner(
         &every,
         &mut symbols,
         &mut Default::default(),
-        objbuild::asm_info(format).pref_align,
+        objbuild::asm_info(objects, format).pref_align,
         |procedure, number| _basic_listing(procedure, number),
     )
     .map_err(|error| error.to_string())?;
@@ -596,7 +611,7 @@ fn written_basic_inner(
     let externs: IndexMap<String, String> = module.externs.iter().cloned().collect();
     let object = objbuild::object_of(module, name, segments, &symbols, &Default::default(), &externs)
         .map_err(|error| error.to_string())?;
-    if objbuild::asm_info(format).hosted {
+    if objbuild::asm_info(objects, format).hosted {
         // A host's linker and C spell the runtime's `B$PESD` as `B_PESD`.
         let mut object = object;
         for symbol in &mut object.symbols {
@@ -614,11 +629,13 @@ fn written_basic_inner(
                     definition: llrm_object::Definition::Defined { section: code, offset: 0 },
                     size: header_size,
                     group: None,
+                    visibility: Default::default(),
                 },
             );
-        return objbuild::serialized(&object, format).map_err(|error| error.to_string());
+        return objbuild::serialized(objects, &object, format).map_err(|error| error.to_string());
     }
-    let emitted = llrm_omf::write::write(&object, &llrm_x86::mc::omf::X86Omf).map_err(|error| error.to_string())?;
+    let emitted = llrm_omf::write::write(&object.object, object.debug.as_ref(), &llrm_x86::mc::omf::X86Omf)
+        .map_err(|error| error.to_string())?;
     // QB's classes and combine modes shape a real-mode link; a flat object
     // keeps the ones its writer gave.
     if module.object.bitness != 16 {
@@ -646,6 +663,14 @@ pub fn finalized(
 ) -> Result<Finalized, String> {
     let body = masm::cleaned_returns(body, parameter_bytes, 2)?;
     let mut sites: IndexMap<i64, masm::Callee> = IndexMap::default();
+    // A site is found by its instruction's address, which the DAG route gives
+    // every instruction of one statement alike: `fcos` and `fln` of two
+    // statements' one address were both the later one's bytes.
+    let mut shared: IndexMap<i64, usize> = IndexMap::default();
+    for instruction in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        *shared.entry(instruction.at).or_default() += 1;
+    }
+    let mut next_at = shared.keys().copied().max().unwrap_or(0);
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut instructions = Vec::new();
@@ -662,8 +687,14 @@ pub fn finalized(
             if what.op != Operation::FloatUnary || what.dests != st0 || what.sources != st0 {
                 return Err(format!("{name} must be allocated as st(0) -> st(0)"));
             }
+            let at = if shared[&instruction.at] > 1 {
+                next_at += 1;
+                next_at
+            } else {
+                instruction.at
+            };
             sites.insert(
-                instruction.at,
+                at,
                 masm::Callee {
                     name: format!("$inline_{name}"),
                     far: false,
@@ -673,6 +704,7 @@ pub fn finalized(
                 },
             );
             let mut replaced = (**instruction).clone();
+            replaced.at = at;
             replaced.what = Some(Semantics { name: Some(name), ..Semantics::new(Operation::Call) });
             instructions.push(Arc::new(replaced));
         }
@@ -879,7 +911,7 @@ pub fn object(
     options: &Options,
     name: &str,
 ) -> Result<Vec<u8>, String> {
-    written_basic(&assembled(module, object, runtime, options)?, object.header.clone(), name)
+    written_basic(&assembled(module, object, runtime, options)?, object.header.clone(), name, options.arch.objects())
 }
 
 /// The calls of the BASIC module object `object` lays out: its runtime's,
@@ -968,7 +1000,9 @@ pub fn assembled(
                 })
             })?;
         main_frame += statics;
-        for callee in procedure.callees.values() {
+        // A call laid down as inline code (the landing pad's `cld`) names
+        // no routine to link.
+        for callee in procedure.callees.values().filter(|callee| callee.code.is_empty()) {
             referenced.insert(callee.name.clone(), callee.far);
         }
         rows.extend(procedure.body.blocks.first().map(|entry| super::entry_row(procedures.len(), entry.at)));
@@ -1068,12 +1102,11 @@ pub fn assembled(
     externs.extend(masm::stack_externs(&procedures, &mut names));
     externs.sort();
     externs.dedup();
-    let producer = if runtime == model::RuntimeProfile::Qb45 {
-        llrm_object::debug::Producer::Qb45
-    } else {
-        llrm_object::debug::Producer::Native
-    };
-    let mut debug = timed("debug info", || debuginfo::described(module, &names, producer, &*options.arch))?;
+    let producer =
+        if runtime == model::RuntimeProfile::Qb45 { llrm_debug::Producer::Qb45 } else { llrm_debug::Producer::Native };
+    let mut debug = timed("debug info", || {
+        debuginfo::described(module, &names, producer, &debuginfo::Machine::of(&*options.arch))
+    })?;
     if let Some(debug) = debug.as_mut() {
         debug.format = options.debug_format;
         debug.cfa = options.cfa_locations();
@@ -1085,6 +1118,8 @@ pub fn assembled(
         names,
         externs,
         publics: procedures.iter().filter(|one| one.public).map(|one| one.name.clone()).collect(),
+        visibility: Default::default(),
+        aliases: Vec::new(),
         data,
         procedures,
         private: object.private.clone(),
@@ -1198,6 +1233,7 @@ fn procedure(
         size: target.cpu.size,
         entry,
         stack_check,
+        probe_stack: None,
         // What allocation used: a freed frame register and the registers saved.
         registers: machined.registers.clone(),
     };
@@ -1295,7 +1331,7 @@ pub fn ends_program(
             if let Some(what) = instruction.what.as_ref().filter(|what| what.op == Operation::Return) {
                 exits = true;
                 let mut replaced = (*instruction).clone();
-                if what.name.as_deref() == Some("jmp") {
+                if what.is_sibling_call() {
                     // A sibling call (the DAG selector's, for a last statement
                     // that calls the runtime) is a call
                     // here: the exit follows it.

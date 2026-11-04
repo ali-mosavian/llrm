@@ -43,6 +43,16 @@ fn stamp() {
     let dirty = git(&["status", "--porcelain", "--untracked-files=no"]).is_some_and(|out| !out.is_empty());
     println!("cargo:rustc-env=LLRM_BUILD_SHA={sha}");
     println!("cargo:rustc-env=LLRM_BUILD_DIRTY={}", u8::from(dirty));
+    // Cargo gives a build script no flag for incremental compilation:
+    // CARGO_INCREMENTAL=0 in the environment (the cost gate's build) or the
+    // `dist` profile are the cold builds, anything else is the profile's own
+    // `incremental = true`. An incremental build runs ~13% more
+    // instructions in the object writer (#5744 round 1), so a count measured on
+    // one is not the gate's.
+    println!("cargo:rerun-if-env-changed=CARGO_INCREMENTAL");
+    let cold = std::env::var("CARGO_INCREMENTAL").is_ok_and(|value| value == "0")
+        || std::env::var("OUT_DIR").is_ok_and(|dir| dir.contains("/dist/"));
+    println!("cargo:rustc-env=LLRM_BUILD_INCREMENTAL={}", u8::from(!cold));
     // HEAD moves with a checkout; the sources change the dirty flag.
     for path in ["HEAD", "index"] {
         if let Some(out) = git(&["rev-parse", "--git-path", path]) {

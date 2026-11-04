@@ -80,6 +80,9 @@ pub struct RegisterClasses {
     status_word: Option<RegId>,
     /// The register file of the target these classes are of.
     pub registers: llrm_lir::registers::Regs,
+    /// The register the frame register follows in the order once it is free
+    /// (`frame_follows` in the register file).
+    frame_after: Option<RegId>,
     /// The pressure sets and limits of the target, where it has them.
     pub pressure: Option<(&'static llrm_target::pressure::PressureSets, Vec<u32>)>,
 }
@@ -164,6 +167,7 @@ impl RegisterClasses {
             },
             status_word: None,
             registers: llrm_lir::registers::Regs(arch.registers()),
+            frame_after: file.iter().find(|one| one.is("frame_follows")).map(|one| named(&one.name)),
             pressure: arch.pressure(),
         };
         classes.status_word = classes.found_status_word();
@@ -174,10 +178,19 @@ impl RegisterClasses {
     /// false): the frame register is one more general register, the last to
     /// be given out, and an address may be made of its word.
     pub fn with_frame_free(&self) -> Self {
-        let whole = self.frame;
+        // The root the register file names a family by (`ebp`, whatever the
+        // target calls its frame register: `rbp` in long mode).
+        let whole = self.registers.root(self.frame);
         let mut free = self.clone();
         if !free.available.contains(&whole) {
-            free.available.push(whole);
+            // The pin's order (`X86RegisterInfo.td`): the frame register
+            // follows the register the file names, ahead of the rest.
+            let at = free
+                .available
+                .iter()
+                .position(|one| Some(*one) == self.frame_after)
+                .map_or(free.available.len(), |kept| kept + 1);
+            free.available.insert(at, whole);
         }
         if let Some(word) = llrm_x86::registers::word_of(whole) {
             free.word_bases.insert(word);
@@ -305,5 +318,16 @@ mod tests {
         assert_eq!(classes.frame, llrm_x86_m16::FRAME);
         assert_eq!(classes.encodable_bases, llrm_x86::addressing16::BASES.into_iter().collect());
         assert_eq!(classes.addressing, [RegId::BX, RegId::BP, RegId::SI, RegId::DI].into_iter().collect());
+    }
+
+    /// `is_encodable` puts a spill cell through the target's own frame register
+    /// when that register is wider than 16 bits: m16 must keep the abstract
+    /// one.
+    #[test]
+    fn only_m16_has_a_sixteen_bit_frame_register() {
+        let wide = |classes: &RegisterClasses| classes.registers.width_of(classes.frame).is_some_and(|width| width > 2);
+        assert!(!wide(&RegisterClasses::of(&llrm_x86_m16::M16)));
+        assert!(wide(&RegisterClasses::of(&llrm_x86_m32::M32)));
+        assert!(wide(&RegisterClasses::of(&llrm_x86_m64::M64)));
     }
 }

@@ -50,18 +50,14 @@
 //! 263235 -> 263448 (+213 B, +0.081%, 40 modules changed; -O1 to -O3
 //! identical). The rule had bought -85 B of QCport -Os on the old allocator.
 //!
-//! DEVIATE M5 (#2903): in a build for size no edge is broken, except where the
-//! instruction is in a loop (row M6, below); the pin breaks it at any size
-//! (`isWorthBreakingCriticalEdge`, MachineSink.cpp:1040-1105, has no size
-//! check). Without the rule m16 -Os grows 66 B in 22 objects (recgcd +5,
-//! recsum +5, switch +4, bintree +4), m32 79 B. The block
-//! costs a jump (`bench/recpow` -Os +5 bytes with the edge split; over the
-//! 834-object sweep at head 1b78847ae, breaking it at -Os is 37 objects larger,
-//! +228 bytes, and 26 smaller, -106 bytes). `bench/hanoi` -Os m32 keeps the
-//! `xor` and a copy before its test, and a frame, where the pin sinks the
-//! constant (195 bytes against 190 with the edge broken). Exit, decided
-//! 2026-10-22 with jumps' block-by-block diff: a placement rule jumps names,
-//! or sinking with shrink-wrapping (lir-cleanup-port for the sinking half).
+//! Row M5 (was DEVIATE M5 #2903, retired 2026-10-28): a build for size breaks
+//! a critical edge as the pin does (`isWorthBreakingCriticalEdge` has no size
+//! check). Measured (llrm-cc, bench and tests/run C programs, -Os, own
+//! binaries a pair): m16 179 programs +42 B (8 smaller, 12 larger by at most
+//! 7, one by 24), every changed program within +9 B of main's figure; m32 182
+//! programs +82 B (18 larger by 4 to 12, one by 24, none smaller): each
+//! split edge costs a jump. QB `parity/branch` -Os bq32 kept the `shl`, `sub`
+//! and `add` of one arm above the test (47 instructions against 30).
 //!
 //! Row M6: an edge of a loop is broken in a build for size too (x_collatz -Os
 //! m32 313 -> 309 B, m16 340 -> 334, no object grows): the
@@ -88,9 +84,11 @@
 //! (a divide: `ax`, `dx`) still sinks: the pin's does not, but holding a divide
 //! in its block grew switch.c 16 B at m16 -Os. Exit: none.
 //!
-//! DEVIATE M3 (#2903): no `PerformSinkAndFold`, no sinking into cycles
-//! (`SinkInstsIntoCycle`, off by default), no debug-value handling (an
-//! instruction has none).
+//! Not ported, and not a deviation on x86 (#2903): `PerformSinkAndFold` runs
+//! in the pin only where the target sets `EnableSinkAndFold` (AArch64, RISC-V,
+//! LoongArch; `TargetPassConfig.h:136`, false by default), `SinkInstsIntoCycle`
+//! is off by default, and an instruction here has no debug values. A target
+//! here that enables sink-and-fold gets it as a per-target hook, default off.
 //!
 //! # Example
 //! `b1: v = mov 0; cmp x, 0; je b4` and `b4: r = phi [b1: v] [b2: w]` leave
@@ -199,6 +197,12 @@ fn safe_to_move(
         && one.delivers.is_empty()
         && one.spread.is_empty()
         && !one.defines.is_empty()
+}
+
+/// Whether `lane` is a bit of EFLAGS: the other lanes of `RegId::None` are
+/// x87 state, which `fld` writes without touching the flags.
+fn is_flag(lane: crate::backend::lanes::Lane) -> bool {
+    lane.0 == llrm_lir::registers::RegId::None && lane.1 < 6
 }
 
 /// `MBPI->getEdgeProbability(From, To)` of every edge of `body`, by block
@@ -575,9 +579,7 @@ impl Sinker {
         block: usize,
         index: usize,
     ) -> bool {
-        let flags = |lanes: &crate::backend::lanes::Lanes| {
-            lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
-        };
+        let flags = |lanes: &crate::backend::lanes::Lanes| lanes.iter().any(|&lane| is_flag(lane));
         let physical = |lanes: &crate::backend::lanes::Lanes| {
             lanes.iter().any(|&(register, _)| register != llrm_lir::registers::RegId::None)
         };
@@ -591,11 +593,36 @@ impl Sinker {
         // spelled through is not a read of one.
         let fixed_stack = one.defines.first().is_some_and(|value| self.arguments.contains(value));
         let reads = effect.all_reads();
+        // DEVIATE (segment-reads): an access through the default data segment
+        // names no register in the pin (`MOV32rm` carries `$noreg`), so its
+        // load sinks; here it reads DS. Not while a later instruction of the
+        // block sets DS. A load of a global stayed above the branch that used
+        // it only on one arm (`mov edx,[g]` for `cmp [g],0`).
+        let default_segment = one.what.as_ref().is_some_and(|what| {
+            let mut places = what
+                .sources
+                .iter()
+                .chain(&what.dests)
+                .filter_map(
+                    |place| match place {
+                        Loc::Mem(mem) => Some(mem),
+                        _ => None,
+                    },
+                );
+            places.clone().next().is_some()
+                && places.all(|mem| {
+                    mem.addr.as_ref().is_none_or(|addr| addr.segment == llrm_lir::registers::RegId::None.iced())
+                })
+        }) && !self.insns[block][index + 1..].iter().any(|later| {
+            liveness::effect(self.regs, self.bits, later)
+                .is_none_or(|found| found.writes.iter().any(|&(register, _)| self.regs.is_data_segment(register)))
+        });
         let physical_reads = reads
             .iter()
             .any(
                 |&(register, _)| register != llrm_lir::registers::RegId::None
-                    && !(fixed_stack && (self.regs.is_frame(register) || self.regs.is_stack_segment(register))),
+                    && !(fixed_stack && (self.regs.is_frame(register) || self.regs.is_stack_segment(register)))
+                    && !(default_segment && self.regs.is_data_segment(register)),
             );
         if physical_reads || physical(&effect.writes) || flags(&reads) {
             return true;
@@ -621,18 +648,14 @@ impl Sinker {
         &self,
         one: &Insn,
     ) -> bool {
-        liveness::effect(self.regs, self.bits, one).is_none_or(|effect| {
-            effect.writes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
-        })
+        liveness::effect(self.regs, self.bits, one).is_none_or(|effect| effect.writes.iter().any(|&lane| is_flag(lane)))
     }
 
     /// The flags live at each block's entry: read before written there, or
     /// untouched there and live at a successor's.
     fn solve_flags(&self) -> Vec<bool> {
         let n = self.cfg.len();
-        let flags = |lanes: &crate::backend::lanes::Lanes| {
-            lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
-        };
+        let flags = |lanes: &crate::backend::lanes::Lanes| lanes.iter().any(|&lane| is_flag(lane));
         // What each block does first: reads the flags (live in), writes them
         // (not), or neither (as its successors). An unknown effect reads them.
         let first: Vec<Option<bool>> = (0..n)
@@ -890,12 +913,6 @@ impl Sinker {
         to: usize,
         deferred: &mut Option<usize>,
     ) -> bool {
-        // A block on an edge costs a jump the size build does not get back,
-        // unless the instruction runs in a loop: there the other path stops
-        // paying for it every trip.
-        if self.size && self.cycle[from].is_none() {
-            return false;
-        }
         // An edge already considered this walk: sink several cheap
         // instructions into one block.
         if !self.considered.insert((from, to)) {
@@ -1475,6 +1492,67 @@ mod tests {
             .collect();
         assert!(!header.iter().any(|name| &**name == "shr"), "the shr left the header: {header:?}");
         assert_eq!(moved.blocks.len(), 6, "and went into a block of its own on the edge to the join");
+    }
+
+    /// QB `parity/branch` -Os bq32: `v < 0 ? v * 7 + 3 : v * 5 - 9` computed
+    /// the `shl`, `sub` and `add` of the first arm above the test, because
+    /// a size build broke no edge outside a loop; the pin splits the
+    /// critical edge and sinks them (47 instructions against 30 in the old
+    /// selector's listing).
+    #[test]
+    fn test_in_a_size_build_an_instruction_outside_a_loop_sinks_onto_its_critical_edge() {
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let phi = |result: u32, incoming: Vec<(i64, u32)>| crate::model::lir::Phi { result, incoming };
+        let entry = block(
+            1,
+            vec![2, 3],
+            vec![
+                insn(10, Operation::Binary, "shl", vec![held(3)], vec![held(2), imm(3)], vec![3], vec![2]),
+                insn(13, Operation::Binary, "add", vec![held(6)], vec![held(3), imm(3)], vec![6], vec![3]),
+                insn(11, Operation::Compare, "test", vec![], vec![held(2), imm(1)], vec![], vec![2]),
+                insn(12, Operation::Branch, "je", vec![], vec![], vec![], vec![]),
+            ],
+        );
+        let join = LirBlock {
+            phis: vec![phi(5, vec![(2, 4), (1, 6)])].into(),
+            ..block(
+                3,
+                vec![4],
+                vec![
+                    insn(30, Operation::Compare, "cmp", vec![], vec![held(5), imm(1)], vec![], vec![5]),
+                    insn(31, Operation::Branch, "jne", vec![], vec![], vec![], vec![]),
+                ],
+            )
+        };
+        let mut body = LirBody::new(
+            "branch",
+            1,
+            vec![
+                entry.into(),
+                block(
+                    2,
+                    vec![3],
+                    vec![insn(20, Operation::Binary, "lea", vec![held(4)], vec![held(2), imm(1)], vec![4], vec![2])],
+                )
+                .into(),
+                join.into(),
+                block(4, vec![], vec![insn(41, Operation::Return, "ret", vec![], vec![], vec![], vec![])]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [2].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let moved = sunk(&body, true);
+        let above: Vec<_> = moved.blocks[0]
+            .insns
+            .iter()
+            .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+            .collect();
+        assert!(!above.iter().any(|name| &**name == "shl"), "the shl left the block of the test: {above:?}");
+        assert_eq!(moved.blocks.len(), 5, "and went into a block of its own on the edge to the join");
     }
 
     /// `x > 65520 ? x - 65521 : x` in a build for size: the `add` was computed

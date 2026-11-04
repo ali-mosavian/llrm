@@ -7,14 +7,14 @@
 //! at d1106deb71cc. A `sdiv` or `udiv` and a `srem`, `urem` or expanded
 //! remainder `x - (x / y) * y` with the same dividend, divisor and signedness
 //! are a pair. Where the target has a divide that makes both
-//! (`TargetTransformInfo::hasDivRemOp`: x86 on every register type), the
-//! expanded remainder is first written as the real `srem`/`urem`, and the
-//! pair is put side by side so the backend finds one divide: the one in a
-//! block the other's block follows is moved after it, and a pair in two arms
-//! of one branch goes to the block before the branch when nothing before
-//! either can fail to reach it. Where the target has none, a `srem`/`urem`
-//! becomes `x - (x / y) * y` of the quotient already made, and the quotient
-//! moves up to the remainder when it stood below it.
+//! (`TargetTransformInfo::hasDivRemOp`: x86 on every register type, as its
+//! `Tti` states it), the expanded remainder is first written as the real
+//! `srem`/`urem`, and the pair is put side by side so the backend finds one
+//! divide: the one in a block the other's block follows is moved after it, and
+//! a pair in two arms of one branch goes to the block before the branch when
+//! nothing before either can fail to reach it. Where the target has none, a
+//! `srem`/`urem` becomes `x - (x / y) * y` of the quotient already made, and
+//! the quotient moves up to the remainder when it stood below it.
 //!
 //! # Example
 //! ```text
@@ -42,10 +42,10 @@ use llrm_mir::context::Context;
 use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::Position;
 use llrm_mir::hash::HashMap;
-use llrm_mir::lowering::Lowering;
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses, Unit};
+use llrm_mir::tti::Tti;
 use llrm_mir::valuetracking::Query;
 use llrm_mir::valuetracking::guarantee::is_guaranteed_not_to_be_undef;
 
@@ -177,7 +177,7 @@ fn worklist(function: &Function) -> Vec<Entry> {
 struct DivRem<'a> {
     context: &'a Context,
     globals: &'a [GlobalValue],
-    lowering: Option<&'a dyn Lowering>,
+    tti: Option<&'a dyn Tti>,
 }
 
 impl DivRem<'_> {
@@ -187,7 +187,7 @@ impl DivRem<'_> {
         bits: u32,
         signed: bool,
     ) -> bool {
-        self.lowering.is_some_and(|lowering| lowering.has_div_rem_op(bits, signed))
+        self.tti.is_some_and(|tti| tti.has_div_rem_op(bits, signed))
     }
 
     /// `isGuaranteedToTransferExecutionToSuccessor` of every instruction
@@ -440,9 +440,9 @@ impl FunctionPass for DivRemPairs {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let outer = analyses.outer().clone();
-        let lowering = outer.target().lowering();
+        let tti = outer.target().tti();
         let tree = analyses.get::<Dominators>(unit.context, unit.layout, unit.function);
-        let pass = DivRem { context: unit.context, globals: &outer.globals, lowering: lowering.as_deref() };
+        let pass = DivRem { context: unit.context, globals: &outer.globals, tti: tti.as_deref() };
         if pass.run(unit.function, &tree, unit.layout) {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else {

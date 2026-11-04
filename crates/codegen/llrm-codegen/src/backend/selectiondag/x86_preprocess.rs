@@ -65,7 +65,7 @@ fn truncating_stores(
     let mut folded = Vec::new();
     for node in dag.node_ids().collect::<Vec<_>>() {
         let value = SDValue { node, res: 0 };
-        if dag.opcode(value) != ISD::FpRound || dag.node(value).ops.len() != 2 || dag.use_count(node) != 1 {
+        if dag.opcode(value) != ISD::FpRound || dag.node(value).ops.len() != 2 || !dag.has_one_use(node) {
             continue;
         }
         let source = dag.operand(value, 0);
@@ -129,8 +129,15 @@ pub fn preprocess(
         let size = mem.size_in_bits().div_ceil(8);
         let index = frame.create_stack_temporary(size, size);
         let slot = dag.get_frame_index(dag.config().pointer, index);
-        let info =
-            MemInfo { mem_vt: mem, align: size, volatile: false, base: MemBase::Stack(index), ext: None, space: 0 };
+        let info = MemInfo {
+            mem_vt: mem,
+            align: size,
+            volatile: false,
+            base: MemBase::Stack(index),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
         let chain = dag.entry_node();
         let store = dag.get_store(chain, source, slot, info);
         let reloaded = if mem == to {

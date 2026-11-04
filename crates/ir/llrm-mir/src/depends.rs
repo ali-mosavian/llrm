@@ -65,6 +65,13 @@ impl Depends {
                     return false;
                 }
                 Change::Operand { .. } | Change::Operands { .. } | Change::Substituted { .. } => {}
+                // A terminator replaced, not retargeted, leaves no `Operand`
+                // entry.
+                Change::Inserted { inst, .. } | Change::Erased { inst, .. } | Change::Moved { inst, .. }
+                    if self.edges && function.instruction(inst).opcode.is_terminator() =>
+                {
+                    return false;
+                }
                 Change::Erased { inst, .. } => {
                     if (self.keyed)(context, function, inst)
                         || (effectful(&function.instruction(inst).opcode) && (self.models)(context, function, inst))

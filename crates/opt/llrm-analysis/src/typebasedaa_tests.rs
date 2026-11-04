@@ -22,6 +22,19 @@ const TREE: &str = "!5 = !{!\"Simple C/C++ TBAA\"}
 !18 = !{!10, !10, i64 0, i64 1}
 ";
 
+/// `matchAccessTags` over the module's metadata and constants.
+fn may_alias(
+    module: &llrm_mir::module::Module,
+    a: Option<MetadataId>,
+    b: Option<MetadataId>,
+) -> bool {
+    let offset = |id| match module.context.get(id).kind {
+        llrm_mir::context::ConstantKind::Int(bits) => u64::try_from(bits).ok(),
+        _ => None,
+    };
+    aliases(&module.metadata, &offset, a, b)
+}
+
 fn module(extra: &str) -> llrm_mir::module::Module {
     parsed(&format!(
         "define void @f(ptr %p, ptr %q) {{\nb:\n  %a = load i32, ptr %p, !tbaa !11\n  %b = load i32, ptr %q, !tbaa !13\n  %c = load i32, ptr %q, !tbaa !7\n  %d = load i32, ptr %q\n  %e = load i32, ptr %q, !tbaa !16\n  %g = load i32, ptr %q, !tbaa !17\n  %h = load i32, ptr %q, !tbaa !18\n  ret void\n}}\n{TREE}{extra}"
@@ -43,27 +56,26 @@ fn tags(module: &llrm_mir::module::Module) -> Vec<Option<MetadataId>> {
 #[test]
 fn unrelated_scalar_types_are_apart_and_an_ancestor_is_not() {
     let module = module("");
-    let metadata = &module.metadata;
     let [int, float, chr, none, other, _, _] = tags(&module)[..] else { panic!() };
     // Premise: the loads carry their tags.
     assert!(int.is_some() && float.is_some() && chr.is_some() && none.is_none() && other.is_some());
-    assert!(!aliases(metadata, int, float), "int4 and float4 are apart");
-    assert!(aliases(metadata, int, chr), "char is int4's ancestor");
-    assert!(aliases(metadata, float, chr));
-    assert!(aliases(metadata, int, int));
-    assert!(aliases(metadata, int, none), "no tag says nothing");
-    assert!(aliases(metadata, int, other), "another root says nothing");
+    assert!(!may_alias(&module, int, float), "int4 and float4 are apart");
+    assert!(may_alias(&module, int, chr), "char is int4's ancestor");
+    assert!(may_alias(&module, float, chr));
+    assert!(may_alias(&module, int, int));
+    assert!(may_alias(&module, int, none), "no tag says nothing");
+    assert!(may_alias(&module, int, other), "another root says nothing");
 }
 
-/// A tag whose base type differs from its access type, or a type with fields,
-/// is beyond the scalar form: it says nothing.
+/// A struct-path tag whose field is of a type unrelated to the other access
+/// stays apart from it, and one whose field is the other's ancestor or the same
+/// type does not (`!17` is `float4` at offset 4 of `int4`).
 #[test]
-fn a_struct_path_tag_may_alias_everything() {
+fn a_struct_path_tag_is_compared_by_its_field_type() {
     let module = module("");
-    let metadata = &module.metadata;
     let [int, float, _, _, _, path, _] = tags(&module)[..] else { panic!() };
-    assert!(aliases(metadata, path, float));
-    assert!(aliases(metadata, path, int));
+    assert!(may_alias(&module, path, float));
+    assert!(may_alias(&module, path, int));
 }
 
 #[test]
@@ -142,7 +154,7 @@ fn every_corpus_tag_pair_agrees_with_the_name_rule() {
                 };
                 pairs += 1;
                 apart += usize::from(old_apart);
-                assert_eq!(!aliases(&module.metadata, Some(one), Some(other)), old_apart, "{name}: {one:?} {other:?}");
+                assert_eq!(!may_alias(&module, Some(one), Some(other)), old_apart, "{name}: {one:?} {other:?}");
             }
         }
     }
@@ -178,4 +190,70 @@ fn a_store_and_a_load_of_unrelated_types_do_not_touch_through_the_aggregate() {
     let aaqi = &mut AAQueryInfo::default();
     assert_eq!(chain.get_mod_ref_info(store, Some(&load("b")), aaqi), ModRefInfo::NoModRef, "int against float");
     assert_eq!(chain.get_mod_ref_info(store, Some(&load("c")), aaqi), ModRefInfo::Mod, "int against char");
+}
+
+/// QB's `LhEntry`, as clang emits it: a `long`, two `char`s and an `any
+/// pointer` at 16, with a global of `p1 omnipotent char` (a pointer to a char)
+/// beside it.
+const ENTRY: &str = "define void @g(ptr %p, ptr %q) {
+b:
+  %heap_top = load ptr, ptr %q, !tbaa !101
+  %size = load i64, ptr %p, !tbaa !105
+  %kind = load i8, ptr %p, !tbaa !106
+  %next = load ptr, ptr %p, !tbaa !107
+  %scalar_ptr = load ptr, ptr %q, !tbaa !103
+  %scalar_long = load i64, ptr %q, !tbaa !104
+  ret void
+}
+!100 = !{!\"Simple C/C++ TBAA\"}
+!108 = !{!\"omnipotent char\", !100, i64 0}
+!109 = !{!\"any pointer\", !108, i64 0}
+!110 = !{!\"p1 omnipotent char\", !109, i64 0}
+!111 = !{!\"long\", !108, i64 0}
+!112 = !{!\"LhEntry\", !111, i64 0, !108, i64 8, !108, i64 9, !109, i64 16}
+!101 = !{!110, !110, i64 0}
+!103 = !{!109, !109, i64 0}
+!104 = !{!111, !111, i64 0}
+!105 = !{!112, !111, i64 0}
+!106 = !{!112, !108, i64 8}
+!107 = !{!112, !109, i64 16}
+";
+
+fn entry_tags() -> (llrm_mir::module::Module, Vec<(String, Option<MetadataId>)>) {
+    let module = parsed(ENTRY);
+    let f = function(&module, "g");
+    let tags = ["heap_top", "size", "kind", "next", "scalar_ptr", "scalar_long"]
+        .iter()
+        .map(|name| {
+            let llrm_mir::module::ValueDef::Instruction(inst) = f.value(value(f, name)).def else { panic!() };
+            (name.to_string(), AAInfo::of(f.instruction(inst)).tbaa)
+        })
+        .collect();
+    (module, tags)
+}
+
+/// `heap_top` (a `p1 omnipotent char` global) and a store of `LhEntry`'s `any
+/// pointer` field were taken to alias because a struct-path tag "said nothing":
+/// `first_fit` reloaded `heap_top` every trip of its loop (one more priced
+/// load, 235 against the pin's 230).
+#[test]
+fn a_field_of_any_pointer_is_apart_from_a_pointer_to_char_and_from_the_other_fields() {
+    let (module, tags) = entry_tags();
+    let tag = |name: &str| tags.iter().find(|(n, _)| n == name).unwrap().1;
+    assert!(!may_alias(&module, tag("heap_top"), tag("next")), "p1 omnipotent char vs LhEntry.next");
+    assert!(!may_alias(&module, tag("size"), tag("next")), "LhEntry.size vs LhEntry.next");
+    assert!(!may_alias(&module, tag("kind"), tag("next")));
+    assert!(!may_alias(&module, tag("heap_top"), tag("size")));
+}
+
+/// A field and a scalar access of its own type, or of an ancestor of it, may
+/// alias.
+#[test]
+fn a_field_may_alias_a_scalar_of_its_type_or_an_ancestor_of_it() {
+    let (module, tags) = entry_tags();
+    let tag = |name: &str| tags.iter().find(|(n, _)| n == name).unwrap().1;
+    assert!(may_alias(&module, tag("size"), tag("scalar_long")), "LhEntry.size vs long");
+    assert!(may_alias(&module, tag("next"), tag("scalar_ptr")), "LhEntry.next vs any pointer");
+    assert!(may_alias(&module, tag("next"), tag("next")));
+    assert!(!may_alias(&module, tag("next"), tag("scalar_long")), "any pointer vs long");
 }

@@ -136,3 +136,60 @@ fn a_naive_same_sign_test_is_an_xor() {
         &["xor i16 %a, %b", "icmp sgt i16 %", ", -1"],
     );
 }
+
+/// fin.c's `c >= 'a' && c <= 'z'` stayed two compares, a `cset` each, an `and`
+/// and a `tst` (`fin_number` +119 instructions over clang): the range of the
+/// pair is one `sub` and one compare.
+#[test]
+fn a_lower_case_range_test_is_one_unsigned_compare() {
+    let out = combined("i8 %c", "  %a = icmp sgt i8 %c, 96\n  %b = icmp slt i8 %c, 123\n  %r = and i1 %a, %b\n");
+    assert!(out.contains("add i8 %c, -97") && out.contains("icmp ult i8 %") && out.contains(", 26"), "{out}");
+    assert_eq!(out.matches("icmp").count(), 1, "{out}");
+}
+
+#[test]
+fn two_outside_range_tests_ored_are_one_unsigned_compare() {
+    let out = combined("i8 %c", "  %a = icmp slt i8 %c, 97\n  %b = icmp sgt i8 %c, 122\n  %r = or i1 %a, %b\n");
+    // The wrapped range [123, 97): `getEquivalentICmp` is `(c - 123) u< 230`.
+    assert!(out.contains("add i8 %c, -123") && out.contains("icmp ult i8 %") && out.contains(", -26"), "{out}");
+    assert_eq!(out.matches("icmp").count(), 1, "{out}");
+}
+
+#[test]
+fn two_equality_tests_that_differ_in_one_bit_are_one_masked_test() {
+    check(
+        "i32 %x",
+        "  %a = icmp eq i32 %x, 0\n  %b = icmp eq i32 %x, 4\n  %r = or i1 %a, %b\n",
+        &["and i32 %x, -5", "icmp eq i32 %", ", 0"],
+    );
+}
+
+#[test]
+fn a_range_with_a_lower_bound_of_zero_and_a_non_negative_end_is_one_unsigned_compare() {
+    check(
+        "i32 %x, i32 %m",
+        "  %n = and i32 %m, 255\n  %a = icmp sge i32 %x, 0\n  %b = icmp slt i32 %x, %n\n  %r = and i1 %a, %b\n",
+        &["icmp ult i32 %x, %n"],
+    );
+}
+
+#[test]
+fn a_range_end_that_may_be_negative_is_left_alone() {
+    let out =
+        combined("i32 %x, i32 %n", "  %a = icmp sge i32 %x, 0\n  %b = icmp slt i32 %x, %n\n  %r = and i1 %a, %b\n");
+    assert_eq!(out.matches("icmp").count(), 2, "{out}");
+}
+
+/// `c == 37 || c == 38 || c == 33 || c == 35` (t3.c's `suffix` test) left
+/// the last two compares apart behind the range: `(A | B) | C` was never
+/// regrouped, so `c == 33 || c == 35` stayed two compares and SimplifyCFG
+/// found no switch to make.
+#[test]
+fn an_or_chain_of_equalities_regroups_to_fold_the_last_pair() {
+    let out = combined(
+        "i8 %c",
+        "  %a = icmp eq i8 %c, 37\n  %b = icmp eq i8 %c, 38\n  %o1 = or i1 %a, %b\n  %d = icmp eq i8 %c, 33\n  %o2 = or i1 %o1, %d\n  %e = icmp eq i8 %c, 35\n  %r = or i1 %o2, %e\n",
+    );
+    assert!(out.contains("and i8 %c, -3") && out.contains("icmp ult i8 %"), "{out}");
+    assert_eq!(out.matches("icmp").count(), 2, "{out}");
+}

@@ -311,6 +311,12 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "simplifycfg",
         "translated SimplifyCfg at hoistCommonInsts, sinkCommonInsts and no canonical loops runs here; The jam follows at L1474 as at the pin; untranslated: speculateUnpredictables and hoistLoadsStoresWithCondFaulting; criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: those translated (llrm-w-4, 2026-10-30)",
     ),
+    partial(
+        "slp@1455",
+        Late,
+        "slp-vectorizer",
+        "slpcompares.rs makes the wide compare the pin's SLP, VectorCombine and InstCombine leave of an and-chain of equalities of adjacent bytes; no vectors; criterion: the chain of eight bytes is one ldr and one cmp as the pin's (tests/slp_compares.rs); exit: vector types in the backend",
+    ),
     entry("infer-alignment@1362", Late, "infer-alignment", Translated, ""),
     entry("infer-alignment@1498", Late, "infer-alignment", Translated, ""),
     entry("float2int@1594", Late, "float2int", Translated, ""),
@@ -333,7 +339,12 @@ pub(crate) const REGISTRY: &[Entry] = &[
     // before `lsr`: `canonfreeze::CanonicalizeFreezeInLoops`.
     entry("canonfreeze", Module, "canon-freeze", Translated, ""),
     entry("rotate@728", Simplify, "loop-rotate<header-duplication>", Translated, ""),
-    entry("indvars@753", Simplify, "indvars (LPM2 worklist: the loops the unroll made)", Translated, ""),
+    partial(
+        "indvars@753",
+        Simplify,
+        "indvars (LPM2 worklist: the loops the unroll made)",
+        "the same pass as indvars@738, whose module (indvars.rs) translates rewriteLoopExitValues and widenIV; criterion: as indvars@738; exit: as indvars@738",
+    ),
     entry("vector-combine", Simplify, "vector-combine", Missing, ""),
     // The machine phases of `llc`, one slot per phase of `flow::machine_with`
     // (`module@row`, the row of the table in `backend/mod.rs`).
@@ -629,6 +640,12 @@ pub const ANALYSES: &[AnalysisEntry] = &[
     ),
     old_analysis("declarations", "Declarations", "none", "none: DEVIATE or delete candidate"),
     old_analysis(
+        "global-names",
+        "GlobalNames",
+        "none",
+        "none: DEVIATE; LLVM reads names off the module, which needs no snapshot",
+    ),
+    old_analysis(
         "callees",
         "counted(\"callees\")",
         "none",
@@ -745,12 +762,15 @@ pub const ABSENT_AT_O1: &[&str] = &[
     "gvn@787",
     "jumpthreading@668",
     "jumpthreading@809",
+    "cvp@669",
+    "cvp@810",
     "dfajumpthreading@806",
     "tailrec@688",
     "aggressive-instcombine@678",
     "jumptableswitch@672",
     "constraint-elimination@699",
     "mldst-motion@783",
+    "slp@1455",
 ];
 
 /// Run counts LLVM does not match yet, stated and not checked:
@@ -867,6 +887,12 @@ pub(crate) fn check_old_slots(
 #[cfg(test)]
 const SOURCE_NAMES: &[(&str, &str)] = &[("constraintelim", "constraintelimination")];
 
+/// Missing entries whose source file is the IR-level stand-in, not the MIR
+/// pass: `stack-coloring` groups the allocas before the DAG is built
+/// (`backend/stackcoloring.rs`, DEVIATE SC1; exit: the MIR pass).
+#[cfg(test)]
+const IR_LEVEL_STAND_IN: &[&str] = &["stack-coloring"];
+
 /// A Missing entry whose pass has a source file (`shrinkwrap.rs` for
 /// `shrink-wrap`): the row undercounts. `stems` are the file stems of every
 /// `.rs` under `crates`; names compare by their letters and digits, without a
@@ -883,7 +909,7 @@ pub(crate) fn check_missing_has_no_file(
     };
     let lying: Vec<String> = registry
         .iter()
-        .filter(|one| one.kind == Missing)
+        .filter(|one| one.kind == Missing && !IR_LEVEL_STAND_IN.contains(&one.slot))
         .filter(|one| {
             stems
                 .iter()

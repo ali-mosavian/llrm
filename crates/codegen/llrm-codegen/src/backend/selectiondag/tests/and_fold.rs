@@ -9,7 +9,15 @@ fn byte(
 ) -> SDValue {
     let ptr = dag.get_register(EVT::I32, 7);
     let chain = dag.entry_node();
-    let info = MemInfo { mem_vt: EVT::I8, align: 1, volatile: false, base: MemBase::Stack(slot), ext: None, space: 0 };
+    let info = MemInfo {
+        mem_vt: EVT::I8,
+        align: 1,
+        volatile: false,
+        base: MemBase::Stack(slot),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     dag.get_load(EVT::I8, chain, ptr, info)
 }
 
@@ -94,4 +102,48 @@ fn and_of_an_extended_value_with_another_mask_stays() {
         combine(&mut dag, &mut NoCombines, CombineLevel::AfterLegalizeTypes);
         assert_eq!(dag.opcode(dag.get_root()), ISD::And, "mask {mask:#x}");
     }
+}
+
+/// `umax`/`umin` of two zero-extended bytes is a byte: the `and x, 0xff` of a
+/// promoted `umax i8` stayed, so `umax(a, b) - b` was not seen after type
+/// legalization (`w8`: `subs`, `csel`, `subs` where the pin has `subs`,
+/// `csel`).
+#[test]
+fn the_mask_of_a_umax_of_bytes_is_dropped_and_the_subtract_becomes_a_usubsat() {
+    let mut dag = dag();
+    let (a, b) = (byte(&mut dag, 1), byte(&mut dag, 2));
+    let (wa, wb) = (dag.get_node(ISD::ZeroExtend, EVT::I32, &[a]), dag.get_node(ISD::ZeroExtend, EVT::I32, &[b]));
+    let max = dag.get_node(ISD::UMax, EVT::I32, &[wa, wb]);
+    assert_eq!(known_bits(&dag, max).zero, 0xFFFF_FF00);
+    let min = dag.get_node(ISD::UMin, EVT::I32, &[wa, wb]);
+    assert_eq!(known_bits(&dag, min).zero, 0xFFFF_FF00);
+    let ff = dag.get_constant(0xff, EVT::I32);
+    let masked = dag.get_node(ISD::And, EVT::I32, &[max, ff]);
+    let diff = dag.get_node(ISD::Sub, EVT::I32, &[masked, wb]);
+    dag.set_root(diff);
+    combine(&mut dag, &mut NoCombines, CombineLevel::AfterLegalizeTypes);
+    assert_eq!(dag.opcode(dag.get_root()), ISD::USubSat);
+}
+
+/// An unknown operand makes the `umax` unknown above what the other operand
+/// bounds.
+#[test]
+fn a_umax_with_an_unknown_operand_keeps_nothing_it_cannot_prove() {
+    let mut dag = dag();
+    let a = byte(&mut dag, 1);
+    let wa = dag.get_node(ISD::ZeroExtend, EVT::I32, &[a]);
+    let ptr = dag.get_register(EVT::I32, 7);
+    let chain = dag.entry_node();
+    let info = MemInfo {
+        mem_vt: EVT::I32,
+        align: 4,
+        volatile: false,
+        base: MemBase::Stack(9),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
+    let wide = dag.get_load(EVT::I32, chain, ptr, info);
+    let max = dag.get_node(ISD::UMax, EVT::I32, &[wa, wide]);
+    assert_eq!(known_bits(&dag, max).zero, 0);
 }

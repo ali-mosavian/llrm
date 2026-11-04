@@ -94,10 +94,13 @@ pub fn laid_again(
     if frame.native.is_some() || frame.hole != 0 {
         return None;
     }
-    let (again, homes) = replayed(frame, hole)?;
+    let (mut again, homes) = replayed(frame, hole)?;
+    again.call_area = frame.call_area;
     let moved = Moves { frame: Some(frame), homes: &homes, hole };
     let mut machined = shifted(first, frame, &moved)?;
-    machined.reserve = -std::cmp::min(again.slots.values().copied().min().unwrap_or(0), again.floor);
+    // The area `ReserveCallFrame` set aside lies below the locals, as in
+    // `assemble.rs`.
+    machined.reserve = -std::cmp::min(again.slots.values().copied().min().unwrap_or(0), again.floor) + again.call_area;
     Some((machined, again))
 }
 
@@ -156,17 +159,23 @@ struct Object {
     uses: u64,
 }
 
-/// `X86FrameLowering::orderFrameObjects` for a frame-pointer frame: the indices
-/// of `objects` (in creation order) nearest BP first. The pin sorts ascending
-/// by `uses / size` (compared cross-multiplied, a tie by alignment), stable,
-/// and flips the list for an FP frame.
-fn order(objects: &[Object]) -> Vec<usize> {
+/// `X86FrameLowering::orderFrameObjects`: the indices of `objects` (in
+/// creation order) in the order they are laid from the top of the frame. The
+/// pin sorts ascending by `uses / size` (compared cross-multiplied, a tie by
+/// alignment), stable, and flips the list for an FP frame (hottest nearest BP);
+/// a frame addressed from the stack pointer keeps it (hottest nearest SP).
+fn order(
+    objects: &[Object],
+    sp: bool,
+) -> Vec<usize> {
     let mut sorted: Vec<usize> = (0..objects.len()).collect();
     sorted.sort_by(|&a, &b| {
         let (a, b) = (&objects[a], &objects[b]);
         (a.uses * b.size as u64).cmp(&(b.uses * a.size as u64)).then(a.align.cmp(&b.align))
     });
-    sorted.reverse();
+    if !sp {
+        sorted.reverse();
+    }
     sorted
 }
 
@@ -196,7 +205,7 @@ fn laid(
 pub fn ordered(
     first: &Machined,
     frame: &Frame,
-    basic: bool,
+    sp: bool,
 ) -> Option<(Machined, Frame)> {
     if frame.native.is_some() || frame.hole != 0 {
         return None;
@@ -215,7 +224,7 @@ pub fn ordered(
     for (start, size) in extents {
         objects.push(Object { home: start, size: if size == 0 { 4 } else { size }, align: align_of(start), uses: 0 });
     }
-    if !basic {
+    {
         let mut spills = std::collections::BTreeSet::new();
         for home in frame.slots.values() {
             if spills.insert(*home) {
@@ -246,11 +255,15 @@ pub fn ordered(
     }
     let top = -objects.iter().map(|one| one.home + one.size).max()?;
     let old_low = objects.iter().map(|one| one.home).min()?;
-    let placed = order(&objects);
+    let placed = order(&objects, sp);
     let mut homes: IndexMap<i64, i64> = laid(&objects, &placed, top.max(0)).into_iter().collect();
-    if homes.values().copied().min()? < old_low || homes.iter().all(|(old, new)| old == new) {
+    // The pin's order pads each object to its alignment and the frame grows to
+    // hold it (`calculateFrameObjectOffsets`); the reserve follows.
+    if homes.iter().all(|(old, new)| old == new) {
         return None;
     }
+    let grown = (old_low - homes.values().copied().min()?).max(0);
+    let grown = (grown + reach.max(4) - 1).div_euclid(reach.max(4)) * reach.max(4);
     // spill slots the order leaves where they are
     for home in frame.slots.values() {
         homes.entry(*home).or_insert(*home);
@@ -263,8 +276,46 @@ pub fn ordered(
     again.stacks = frame.stacks.iter().map(|(home, ranges)| (moved(home), ranges.clone())).collect();
     let moves = Moves { frame: Some(frame), homes: &homes, hole: 0 };
     let mut machined = shifted(first, frame, &moves)?;
-    machined.reserve = first.reserve;
+    machined.reserve = first.reserve + grown;
+    again.floor -= grown;
+    if llrm_support::env_flag!("LLRM_CHECK_SLOTS") && llrm_support::env_flag!("LLRM_COUNT_RELAYOUT_SKIPS") {
+        eprintln!("RELAYOUT-CHECKED");
+    }
+    if llrm_support::env_flag!("LLRM_CHECK_SLOTS")
+        && let Some(cell) = reaching_past_its_slot(&machined.body, &again)
+    {
+        panic!("the frame laid again has a cell reaching past its spill slot: {cell:?}");
+    }
     Some((machined, again))
+}
+
+/// A frame cell of `body` longer than the spill slot it is tagged with in
+/// `frame`: it reads or writes the bytes of the next slot.
+fn reaching_past_its_slot(
+    body: &LirBody,
+    frame: &Frame,
+) -> Option<Mem> {
+    body.blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter_map(|one| one.what.as_ref())
+        .flat_map(|what| what.dests.iter().chain(&what.sources))
+        .filter_map(|place| match place {
+            Loc::Mem(cell) => Some(cell),
+            _ => None,
+        })
+        .find(|cell| {
+            cell.addr.is_some_and(|addr| {
+                addr.space == Space::Frame
+                    && addr.slot_home().is_some_and(|home| {
+                        frame
+                            .capacities
+                            .get(&home)
+                            .is_some_and(|capacity| home != 0 && addr.disp - home + i64::from(cell.width) > *capacity)
+                    })
+            })
+        })
+        .cloned()
 }
 
 /// `body` with every cell moved by `moved`.
@@ -314,6 +365,19 @@ fn replayed(
     again.extents = frame.extents.iter().map(|(start, size)| (start - hole, *size)).collect();
     let mut homes: IndexMap<i64, i64> = IndexMap::default();
     for (key, home) in &frame.slots {
+        // A rounding temporary is laid with the allocas, below them: it moves
+        // by the hole as they do, and is no filler of it.
+        if matches!(
+            key,
+            crate::backend::frame::SlotKey::Named(name, _) if name == "temporary"
+        ) {
+            let moved = home - hole;
+            again.slots.insert(key.clone(), moved);
+            again.capacities.insert(moved, *frame.capacities.get(home)?);
+            again.scratch.insert(moved);
+            homes.insert(*home, moved);
+            continue;
+        }
         match homes.get(home) {
             Some(found) => {
                 again.slots.insert(key.clone(), *found);
@@ -400,6 +464,18 @@ impl Moves<'_> {
         cell: &Mem,
     ) -> Option<Mem> {
         let Some(addr) = cell.addr else { return Some(cell.clone()) };
+        // The replay hands each spill slot out alone, so a cell reaching past
+        // its slot (a `les` over the two word slots of a far pointer) would
+        // read whatever lies next to it in the new layout.
+        if let (Some(frame), Space::Frame, Some(home)) = (self.frame, addr.space, addr.slot_home())
+            && let Some(capacity) = frame.capacities.get(&home).filter(|_| self.homes.contains_key(&home))
+            && addr.disp - home + i64::from(cell.width) > *capacity
+        {
+            if llrm_support::env_flag!("LLRM_COUNT_RELAYOUT_SKIPS") {
+                eprintln!("RELAYOUT-SKIP");
+            }
+            return None;
+        }
         let (addr, offset) = self.addr(addr, cell.offset)?;
         Some(Mem { addr: Some(addr), offset, ..cell.clone() })
     }
@@ -674,6 +750,24 @@ mod tests {
         assert_eq!((incoming.disp, incoming.slot_home()), (8, Some(0)));
     }
 
+    /// A `les` over the two word spill slots of a far pointer was moved by its
+    /// first slot alone, so the second layout read its selector from whatever
+    /// lay after the offset slot: d_faces -O2 loaded ES from an unwritten
+    /// slot and drew the wrong picture (oracle-qcport).
+    #[test]
+    fn test_a_cell_reaching_past_its_spill_slot_is_not_moved() {
+        use super::Moves;
+        use crate::backend::frame::Frame;
+        let mut frame = Frame::new(0);
+        frame.capacities.insert(-12, 2);
+        let homes = [(-12, -20)].into_iter().collect();
+        let moves = Moves { frame: Some(&frame), homes: &homes, hole: 8 };
+        let cell =
+            |width| Mem { through: RegId::EBP, ..Mem::new(Some(Addr::new(Space::Frame, -12).in_slot(-12)), width) };
+        assert!(moves.mem(&cell(2)).is_some(), "premise: a word in its word slot moves");
+        assert_eq!(moves.mem(&cell(4)), None);
+    }
+
     #[global_allocator]
     static COUNTING: llrm_support::alloc_count::Counting = llrm_support::alloc_count::Counting;
 
@@ -701,6 +795,19 @@ mod tests {
         let (moved, made) = llrm_support::alloc_count::counted(|| moves.insn(&one));
         assert!(Arc::ptr_eq(&moved.expect("nothing to refuse"), &one));
         assert!(made <= 2, "{made} allocations for an instruction that does not move");
+    }
+
+    /// `LLRM_CHECK_SLOTS` finds a dword read of a word slot, and passes one of
+    /// a dword slot.
+    #[test]
+    fn test_the_slot_check_finds_a_cell_reaching_past_its_slot() {
+        use crate::backend::frame::Frame;
+        let body = reading(&[(-12, -12)]);
+        let mut frame = Frame::new(0);
+        frame.capacities.insert(-12, 4);
+        assert_eq!(super::reaching_past_its_slot(&body, &frame), None);
+        frame.capacities.insert(-12, 2);
+        assert!(super::reaching_past_its_slot(&body, &frame).is_some());
     }
 
     /// The body of one block that reads each of `disps` once, tagged with the
@@ -747,6 +854,8 @@ mod tests {
                 wrap_split_size: false,
                 slot_scratch: None,
                 free: false,
+                kept: false,
+                exit_cfi: true,
             },
             landing: None,
         }
@@ -777,15 +886,53 @@ mod tests {
         let body =
             reading(&[(-46, -46), (-132, -132), (-132, -132), (-132, -132), (-132, -132), (-132, -132), (-132, -132)]);
         assert_eq!(far_cells(&body), 6, "the premise");
-        let (done, again) = ordered(&machined(body), &frame, true).expect("the order fits");
+        let (done, again) = ordered(&machined(body), &frame, false).expect("the order fits");
         assert_eq!(far_cells(&done.body), 0);
         let word = again.extents.iter().find(|(_, size)| *size == 2).expect("the word");
         assert_eq!(word.0, -2);
     }
 
-    /// An order that would need more room than the objects have is not taken.
+    /// bc_circle_aspect at m32 -Os printed 4 pixels for 100: `B$CIRC` reserves
+    /// a 12-byte call area, took the second layout, and that layout dropped
+    /// the area, so `c.cx` and `c.cy` lay where the `octet` call stores its
+    /// stack arguments. The reserve must still hold the area below the
+    /// locals.
     #[test]
-    fn test_an_order_that_does_not_fit_leaves_the_frame_alone() {
+    fn test_the_second_layout_keeps_the_reserved_call_area() {
+        use super::laid_again;
+        use crate::backend::frame::Frame;
+        let mut frame = Frame::new(-8);
+        frame.align = 4;
+        frame.call_area = 12;
+        let home = frame.slot(7_i64, 4).expect("a spill slot");
+        let (done, again) = laid_again(&machined(reading(&[(home, home)])), &frame, 8).expect("it can be laid again");
+        let lowest = again.slots.values().copied().chain([again.floor]).min().expect("a floor");
+        assert_eq!(again.call_area, 12);
+        assert_eq!(done.reserve, -lowest + 12, "the locals lie above the outgoing area");
+    }
+
+    /// matmul bq32 -O2 (no frame pointer) laid its hot spill slots at the top
+    /// of the frame, `[esp+148..196]`, and the cold ones at `[esp+24]`: the
+    /// FP order on an SP-addressed frame, +200 bytes. The hot word lies
+    /// lowest, nearest SP.
+    #[test]
+    fn test_a_frame_addressed_from_sp_lays_the_hot_word_lowest() {
+        use super::ordered;
+        use crate::backend::frame::Frame;
+        let mut frame = Frame::new(-132);
+        frame.align = 2;
+        frame.extents = vec![(-46, 46), (-92, 46), (-132, 2)];
+        let body = reading(&[(-46, -46), (-132, -132), (-132, -132), (-132, -132)]);
+        let (_, again) = ordered(&machined(body), &frame, true).expect("the order fits");
+        let word = again.extents.iter().find(|(_, size)| *size == 2).expect("the word");
+        assert_eq!(word.0, -94, "below both arrays");
+    }
+
+    /// An order that needs more room than the objects have (padding) grows
+    /// the reserve instead of being dropped: jpeg_fixed bq32 -Os kept 294 far
+    /// operands and 342 bytes over the pin when the order was refused.
+    #[test]
+    fn test_an_order_that_needs_padding_grows_the_frame() {
         use super::ordered;
         use crate::backend::frame::Frame;
         let mut frame = Frame::new(-7);
@@ -793,8 +940,29 @@ mod tests {
         // laid densest first, byte, word, dword need 8 bytes with the padding;
         // the three lie in 7
         frame.extents = vec![(-4, 4), (-6, 2), (-7, 1)];
-        let body = reading(&[(-7, -7), (-7, -7), (-7, -7), (-6, -6), (-6, -6), (-6, -6), (-4, -4)]);
-        assert!(ordered(&machined(body), &frame, true).is_none());
+        let first = machined(reading(&[(-7, -7), (-7, -7), (-7, -7), (-6, -6), (-6, -6), (-6, -6), (-4, -4)]));
+        let reserve = first.reserve;
+        let (done, again) = ordered(&first, &frame, false).expect("the order is taken");
+        assert_eq!(done.reserve, reserve + 4);
+        assert_eq!(again.floor, frame.floor - 4);
+    }
+
+    /// A spill slot read often lies past the one-byte displacement behind a
+    /// large array (jpeg_fixed bq32 -Os: spill slots at `[ebp-300]`); the pin
+    /// orders them with the other frame objects and puts the hot slot nearest.
+    #[test]
+    fn test_a_hot_spill_slot_is_laid_within_the_short_displacement() {
+        use super::ordered;
+        use crate::backend::frame::Frame;
+        let mut frame = Frame::new(-304);
+        frame.align = 4;
+        frame.extents = vec![(-300, 300)];
+        let home = frame.slot(7_i64, 4).expect("a spill slot");
+        assert!(home < -128, "the premise: {home}");
+        let first = machined(reading(&[(home, home), (home, home), (home, home), (-300, -300)]));
+        assert_eq!(far_cells(&first.body), 4, "the premise");
+        let (done, _) = ordered(&first, &frame, false).expect("the order fits");
+        assert_eq!(far_cells(&done.body), 1, "only the array is far");
     }
 
     /// The pin's comparator: uses per byte, highest first; a tie by alignment,
@@ -806,6 +974,24 @@ mod tests {
         // 3 uses of 2 bytes beat 5 of 8; equal density 1: the wider alignment
         // first; then the later
         let objects = [one(8, 2, 5), one(2, 2, 3), one(4, 2, 4), one(4, 4, 4), one(4, 4, 4)];
-        assert_eq!(order(&objects), [1, 4, 3, 2, 0]);
+        assert_eq!(order(&objects, false), [1, 4, 3, 2, 0]);
+        assert_eq!(order(&objects, true), [0, 2, 3, 4, 1], "no frame pointer: the hottest is laid last, nearest SP");
+    }
+
+    /// A function addressed from the stack pointer got the hole layout because
+    /// its spill and control-word cells were counted near the frame register:
+    /// they moved to the top of the frame, `[esp+168]` and `[esp+170]` with a
+    /// four-byte displacement each (nbody m32 -Os, 13 bytes over gcc). From the
+    /// stack pointer the bottom of the frame is near.
+    #[test]
+    fn test_a_cell_at_the_bottom_of_a_stack_pointer_frame_is_near_and_one_at_the_top_is_far() {
+        use crate::backend::assemble::far_frame;
+        let mut made = machined(reading(&[(-168, -168), (-8, -8)]));
+        made.reserve = 168;
+        assert_eq!(far_frame(&made, false), 1, "from the frame register the cell at the bottom is far");
+        assert_eq!(far_frame(&made, true), 1, "from the stack pointer the cell at the top is far");
+        let mut bottom = machined(reading(&[(-168, -168)]));
+        bottom.reserve = 168;
+        assert_eq!(far_frame(&bottom, true), 0, "from the stack pointer the bottom cell is near");
     }
 }

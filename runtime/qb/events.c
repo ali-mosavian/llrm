@@ -8,7 +8,9 @@
 #include "error.h"
 #include "qb.h"
 
-enum { HUNDREDTHS = 100, DAY = 8640000L, LONGEST = 86400 };
+#define DAY 8640000L
+#define LONGEST 86400L
+enum { HUNDREDTHS = 100 };
 
 enum {
     DEVICE_TIMER = 1,
@@ -72,6 +74,18 @@ static Trap *trap_of(short device, long number)
 #pragma aux B_EVPD "B$EVPD"
 #pragma aux B_EVDN "B$EVDN"
 #pragma aux B_FPLY "B$FPLY"
+
+/* CLEAR switches every trap off and forgets the events it kept; the handlers stay (clear.c). */
+void events_clear(void)
+{
+    unsigned at;
+
+    for (at = 0; at < TRAPS; at++) {
+        traps[at].state = OFF;
+        traps[at].due = 0;
+        traps[at].running = 0;
+    }
+}
 
 /* B$EVAR: ON device(number) GOSUB the handler of that number; 0 takes the
    trap away. */

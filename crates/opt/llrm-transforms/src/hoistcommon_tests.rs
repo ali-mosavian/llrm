@@ -231,3 +231,44 @@ b2:
     assert!(!crate::hoistcommon::hoisted(context, &spec, function, branch, true));
     assert_eq!(crate::hoistcommon::BODY_COLLECTS.with(|count| count.get()), before);
 }
+
+/// Two arms making an array's own segment, each with its own `!llrm.descriptor`
+/// node, were hoisted into one `inttoptr` without the mark; the module then
+/// forged a data-segment pointer, and globals-aa's frozen result was stale
+/// (`LLRM_CHECK_STALE` failed bintree.bas -O2 -m16).
+#[test]
+fn hoisting_two_array_selectors_leaves_the_module_unforged() {
+    let mut module = parsed(
+        "define i16 @f(i16 %x, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %a = inttoptr i16 %x to ptr addrspace(2), !llrm.descriptor !0
+  br label %b3
+
+b2:
+  %b = inttoptr i16 %x to ptr addrspace(2), !llrm.descriptor !1
+  br label %b3
+
+b3:
+  %p = phi ptr addrspace(2) [ %a, %b1 ], [ %b, %b2 ]
+  %v = load i16, ptr addrspace(2) %p
+  ret i16 %v
+}
+
+!0 = !{}
+!1 = !{!\"x\"}
+",
+    );
+    let spaces = llrm_mir::spaces::Spaces { segment: Some(2), ..llrm_mir::spaces::Spaces::FLAT };
+    assert!(!llrm_analysis::forging::forges_selector(&module, spaces));
+    let outer = Outer::of(&module, None);
+    let layout = DataLayout::default();
+    let spec = Speculation { tti: &llrm_mir::tti::Basic, layout: &layout, outer: &outer };
+    let mut declared = Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    assert!(simplified_with(&branching(true), context, &spec, &mut declared, function));
+    assert_eq!(printed(&module).matches("inttoptr").count(), 1, "{}", printed(&module));
+    assert!(!llrm_analysis::forging::forges_selector(&module, spaces), "{}", printed(&module));
+}

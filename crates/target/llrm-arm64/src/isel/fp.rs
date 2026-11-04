@@ -32,7 +32,7 @@ pub(super) fn conditions(predicate: FloatPredicate) -> (Cond, Option<Cond>) {
 }
 
 impl Selector<'_> {
-    fn float_operand(
+    pub(super) fn float_operand(
         &mut self,
         operand: Operand,
     ) -> Selected<(Vreg, FpSize)> {
@@ -48,6 +48,19 @@ impl Selector<'_> {
         op: BinaryOp,
         instruction: &Instruction,
     ) -> Selected<()> {
+        if op == BinaryOp::FMul {
+            if self.mul_folds_into_conversion(instruction) {
+                // The float-to-integer conversion that reads it scales the
+                // value itself.
+                let inst = super::value_def(self.function, instruction.result.expect("a multiply has a result"))
+                    .expect("an instruction");
+                self.fused.insert(inst);
+                return Ok(());
+            }
+            if self.fixed_from_integer(instruction)? {
+                return Ok(());
+            }
+        }
         let fp = match op {
             BinaryOp::FAdd => FpBinary::Add,
             BinaryOp::FSub => FpBinary::Sub,
@@ -166,6 +179,14 @@ impl Selector<'_> {
                 let (reg, size) = self.float_operand(source)?;
                 self.define(result, Src::Val(Val::Float { reg, size }))
             }
+            CastOp::SIToFP | CastOp::UIToFP if self.conversion_folds_into_mul(instruction) => {
+                // The multiply that reads it converts with fractional bits.
+                let inst = super::value_def(self.function, result.expect("a conversion has a result"))
+                    .expect("an instruction");
+                self.fused.insert(inst);
+                Ok(())
+            }
+            CastOp::FPToSI | CastOp::FPToUI if self.fixed_to_integer(instruction)? => Ok(()),
             CastOp::SIToFP | CastOp::UIToFP => {
                 let signed = op == CastOp::SIToFP;
                 let g = self.operand_g(source)?;

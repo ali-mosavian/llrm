@@ -257,6 +257,9 @@ impl<'m> Machine<'m> {
                 let from = self.module.context.get(*value).ty;
                 cast(self.types(), &self.layout, *op, self.constant(*value)?, from, constant.ty, Flags::default())?
             }
+            ConstantKind::Expr(ConstantExpr::Binary { op, lhs, rhs }) => {
+                binary(*op, Flags::default(), self.constant(*lhs)?, self.constant(*rhs)?)?
+            }
             ConstantKind::Expr(ConstantExpr::GetElementPtr { source, operands, .. }) => {
                 let values: Vec<Val> = operands.iter().map(|&one| self.constant(one)).collect::<Run<_>>()?;
                 self.gep(*source, constant.ty, &values)?
@@ -451,6 +454,10 @@ impl<'m> Machine<'m> {
                 }
                 Val::Int { bits: count.apply(bits, width), width }
             }
+            Intrinsic::PtrMask => match (argument(0), argument(1)) {
+                (Val::Ptr(address), Val::Int { bits, .. }) => Val::Ptr(address & bits as u64),
+                _ => Val::Poison,
+            },
             Intrinsic::ByteSwap => {
                 let Val::Int { bits, width } = argument(0) else { return Ok(Val::Poison) };
                 Val::Int { bits: bits.swap_bytes() >> (128 - width), width }
@@ -566,7 +573,7 @@ impl<'m> Machine<'m> {
                 }
                 _ => Val::Poison,
             },
-            Intrinsic::LRint => {
+            Intrinsic::LRint | Intrinsic::LLRint => {
                 let Val::Float(kind, bits) = argument(0) else { return Ok(Val::Poison) };
                 let x = match kind {
                     FloatKind::Float => f64::from(f32::from_bits(bits as u32)),
@@ -634,10 +641,13 @@ impl<'m> Machine<'m> {
             }
             Intrinsic::LifetimeStart
             | Intrinsic::LifetimeEnd
+            | Intrinsic::InvariantEnd
             | Intrinsic::Assume
             | Intrinsic::Prefetch
             | Intrinsic::FakeUse => void,
             Intrinsic::Expect => argument(0),
+            // The scope is a token no code reads: the address it covers.
+            Intrinsic::InvariantStart => argument(1),
             // Flat memory: the address difference, wrapped to the result.
             Intrinsic::PtrDiff => match (argument(0), argument(1), self.types().int_bits(returns)) {
                 (Val::Ptr(a), Val::Ptr(b), Some(width)) => {
@@ -655,6 +665,7 @@ impl<'m> Machine<'m> {
             Intrinsic::Code => return unsupported("inline code"),
             Intrinsic::Asm => return unsupported("inline assembly"),
             Intrinsic::IsConstant => return unsupported("a test for a constant"),
+            Intrinsic::ObjectSize => return unsupported("the size of an object"),
         })
     }
 

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopsimplify.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopsimplify.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopsimplify.rs sha256:dc4c6b2dedd2664835c3d6602a2d8e68bcea75737eb20c05bee49171374000ad -->
+<!-- src: crates/opt/llrm-transforms/src/loopsimplify.rs sha256:618ef40628d24fe9868696ddf56961cf240b6120e32045b5a4948aaead2c1818 -->
 
 # loopsimplify
 
@@ -79,8 +79,9 @@ out from the edges of its blocks and of the targets, and every grouping is
 checked before the first is made, so a refused one leaves the body as it
 was. No copy of the function and no graph of it is made. The loops of
 the shape are updated for the new blocks rather than found again
-(`LLRM_CHECK_SHAPE` compares them with a new shape). A function with an
-irreducible loop is left alone.
+(`LLRM_CHECK_SHAPE` compares them with a new shape). The loops are the
+natural ones, as LoopInfo finds them: an irreducible cycle is no loop, and
+its function's natural loops are simplified all the same.
 
 ## Example
 Before:

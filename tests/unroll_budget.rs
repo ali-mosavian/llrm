@@ -39,7 +39,7 @@ fn verdict(
     (threshold, line.contains("unrolling by 8"))
 }
 
-/// -O3 and -Omax unroll to LLVM's -O3 threshold, 300, for every target (the
+/// -O3 and -Omax unroll to LLVM's -O3 threshold, 300, for m32 (the
 /// pin's `LoopUnrollPass` full-unroll analysis: the unrolled cost against the
 /// threshold, `unrolled 293 rolled 320` is admitted, `unrolled 389` is not).
 /// Before the translated pass each target's description stated a budget
@@ -48,9 +48,7 @@ fn verdict(
 /// the same threshold for each, admits the small loops and refuses the next.
 #[test]
 fn test_each_target_unrolls_to_the_threshold_the_pin_states() {
-    for (flags, budget) in
-        [(&["-m32", "-O3", "-march=i486"][..], 300), (&["-m32", "-Omax", "-march=i486"][..], 300), (&["-O3"][..], 300)]
-    {
+    for (flags, budget) in [(&["-m32", "-O3", "-march=i486"][..], 300), (&["-m32", "-Omax", "-march=i486"][..], 300)] {
         let sweep: Vec<_> = (1..=10).map(|steps| verdict(flags, steps)).collect();
         for (steps, &(named, _)) in sweep.iter().enumerate() {
             assert_eq!(named, budget, "{flags:?} x{}: the threshold the pass states", steps + 1);
@@ -82,4 +80,7 @@ fn test_each_target_unrolls_to_the_threshold_the_pin_states() {
             .count()
     };
     assert_eq!(rolled(&["-O2"]), 1, "gcc's -O2 copies a loop out only where the code does not grow");
+    // m16's table states the pin's size threshold, 0, at every level: no
+    // full unroll, whatever the budget the pin's -O3 would have.
+    assert_eq!(rolled(&["-O3"]), 1, "m16 keeps the loop at -O3");
 }

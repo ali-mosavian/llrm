@@ -1,0 +1,77 @@
+# x86-64 Mach-O compact unwind: the encoding pin clang writes (__compact_unwind) for the
+# call frame instructions it emits. One line per function: <encoding hex> <ops; ...>, ops
+# `offset N` (.cfi_def_cfa_offset), `register R` (.cfi_def_cfa_register, DWARF number),
+# `save R N` (.cfi_offset). Made with:
+#   clang --target=x86_64-apple-macos11 -O1 {-fno-omit-frame-pointer|-fomit-frame-pointer} -c f.c
+# over `int f(int x){ volatile char a[N]; a[x]=1; asm volatile("":::"rbx",...); return g(x)+1; }`,
+# N in {0,16,64,300,3000}; encoding 00000000 is a function with no instructions (no entry).
+01000000 offset 16;save 6 -16;register 6
+01010001 offset 16;save 6 -16;register 6;save 3 -24
+01010002 offset 16;save 6 -16;register 6;save 12 -24
+0102002c offset 16;save 6 -16;register 6;save 14 -32;save 15 -24
+01020011 offset 16;save 6 -16;register 6;save 3 -32;save 12 -24
+01030161 offset 16;save 6 -16;register 6;save 3 -40;save 14 -32;save 15 -24
+0103011a offset 16;save 6 -16;register 6;save 12 -40;save 13 -32;save 14 -24
+010408d1 offset 16;save 6 -16;register 6;save 3 -48;save 12 -40;save 13 -32;save 14 -24
+010558d1 offset 16;save 6 -16;register 6;save 3 -56;save 12 -48;save 13 -40;save 14 -32;save 15 -24
+01010003 offset 16;save 6 -16;register 6;save 13 -24
+01010005 offset 16;save 6 -16;register 6;save 15 -24
+00000000 
+02020000 offset 16
+02040000 offset 32
+020a0000 offset 80
+02280000 offset 320
+03032000 offset 3024
+02020400 offset 16;save 3 -16
+02060400 offset 16;offset 48;save 3 -16
+020c0400 offset 16;offset 96;save 3 -16
+022a0400 offset 16;offset 336;save 3 -16
+03044400 offset 16;offset 3024;save 3 -16
+02020401 offset 16;save 12 -16
+02060401 offset 16;offset 48;save 12 -16
+020c0401 offset 16;offset 96;save 12 -16
+022a0401 offset 16;offset 336;save 12 -16
+03054401 offset 16;offset 3024;save 12 -16
+02030812 offset 16;offset 24;save 14 -24;save 15 -16
+02040812 offset 16;offset 24;offset 32;save 14 -24;save 15 -16
+02060812 offset 16;offset 24;offset 48;save 14 -24;save 15 -16
+020c0812 offset 16;offset 24;offset 96;save 14 -24;save 15 -16
+022a0812 offset 16;offset 24;offset 336;save 14 -24;save 15 -16
+03076812 offset 16;offset 24;offset 3040;save 14 -24;save 15 -16
+02030800 offset 16;offset 24;save 3 -24;save 12 -16
+02040800 offset 16;offset 24;offset 32;save 3 -24;save 12 -16
+02060800 offset 16;offset 24;offset 48;save 3 -24;save 12 -16
+020c0800 offset 16;offset 24;offset 96;save 3 -24;save 12 -16
+022a0800 offset 16;offset 24;offset 336;save 3 -24;save 12 -16
+03066800 offset 16;offset 24;offset 3040;save 3 -24;save 12 -16
+02040c0a offset 16;offset 24;offset 32;save 3 -32;save 14 -24;save 15 -16
+02080c0a offset 16;offset 24;offset 32;offset 64;save 3 -32;save 14 -24;save 15 -16
+020e0c0a offset 16;offset 24;offset 32;offset 112;save 3 -32;save 14 -24;save 15 -16
+022c0c0a offset 16;offset 24;offset 32;offset 352;save 3 -32;save 14 -24;save 15 -16
+03088c0a offset 16;offset 24;offset 32;offset 3040;save 3 -32;save 14 -24;save 15 -16
+02040c19 offset 16;offset 24;offset 32;save 12 -32;save 13 -24;save 14 -16
+02080c19 offset 16;offset 24;offset 32;offset 64;save 12 -32;save 13 -24;save 14 -16
+020e0c19 offset 16;offset 24;offset 32;offset 112;save 12 -32;save 13 -24;save 14 -16
+022c0c19 offset 16;offset 24;offset 32;offset 352;save 12 -32;save 13 -24;save 14 -16
+03098c19 offset 16;offset 24;offset 32;offset 3040;save 12 -32;save 13 -24;save 14 -16
+02051000 offset 16;offset 24;offset 32;offset 40;save 3 -40;save 12 -32;save 13 -24;save 14 -16
+02061000 offset 16;offset 24;offset 32;offset 40;offset 48;save 3 -40;save 12 -32;save 13 -24;save 14 -16
+02081000 offset 16;offset 24;offset 32;offset 40;offset 64;save 3 -40;save 12 -32;save 13 -24;save 14 -16
+020e1000 offset 16;offset 24;offset 32;offset 40;offset 112;save 3 -40;save 12 -32;save 13 -24;save 14 -16
+022c1000 offset 16;offset 24;offset 32;offset 40;offset 352;save 3 -40;save 12 -32;save 13 -24;save 14 -16
+030ab000 offset 16;offset 24;offset 32;offset 40;offset 3056;save 3 -40;save 12 -32;save 13 -24;save 14 -16
+02061400 offset 16;offset 24;offset 32;offset 40;offset 48;save 3 -48;save 12 -40;save 13 -32;save 14 -24;save 15 -16
+020a1400 offset 16;offset 24;offset 32;offset 40;offset 48;offset 80;save 3 -48;save 12 -40;save 13 -32;save 14 -24;save 15 -16
+02101400 offset 16;offset 24;offset 32;offset 40;offset 48;offset 128;save 3 -48;save 12 -40;save 13 -32;save 14 -24;save 15 -16
+022e1400 offset 16;offset 24;offset 32;offset 40;offset 48;offset 368;save 3 -48;save 12 -40;save 13 -32;save 14 -24;save 15 -16
+030cd400 offset 16;offset 24;offset 32;offset 40;offset 48;offset 3056;save 3 -48;save 12 -40;save 13 -32;save 14 -24;save 15 -16
+02020402 offset 16;save 13 -16
+02060402 offset 16;offset 48;save 13 -16
+020c0402 offset 16;offset 96;save 13 -16
+022a0402 offset 16;offset 336;save 13 -16
+03054402 offset 16;offset 3024;save 13 -16
+02020404 offset 16;save 15 -16
+02060404 offset 16;offset 48;save 15 -16
+020c0404 offset 16;offset 96;save 15 -16
+022a0404 offset 16;offset 336;save 15 -16
+03054404 offset 16;offset 3024;save 15 -16

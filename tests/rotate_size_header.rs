@@ -20,15 +20,15 @@ const WALK: &str =
     "extern void use(int);\nvoid walk(const char *p) { while (((*p ^ 5) + 3) * 7 != 0) { use(*p); p++; } }\n";
 const COUNT: &str = "extern void use(int);\nvoid count(int n) { int i; for (i = 0; i < n; i++) use(i); }\n";
 
-/// x_hash, lru, x_rle and sieve at m16 -Os grew 10 to 60 bytes each because
-/// a long header (load, arithmetic, compare, branch) was copied above the loop.
-///
-/// llrm-cc: the pointer arrives in `ax` and lives in `bx`, not `si`; the loads
-/// of the byte are counted whatever register holds the pointer (pin-shape).
+/// The pin copies the header above the loop at -Os too: clang -Os -m32
+/// -march=i386 on this loop loads the byte before it and again at its end
+/// (`movb (%esi), %al; cmpb $-8; je` ... `movb (%esi), %al; cmpb $-8; jne`),
+/// so the count is the pin's, two. The earlier bound of one kept a header with
+/// a load out of the copy, which LoopRotate does not.
 #[test]
-fn at_os_a_header_with_a_load_is_not_copied() {
+fn at_os_a_header_with_a_load_is_copied_as_the_pin_does() {
     let text = rotate_size_listing(WALK, &["-m16", "-march=i386", "-Os"]);
-    assert_eq!(text.matches("byte ptr [").count(), 1, "{text}");
+    assert_eq!(text.matches("byte ptr [").count(), 2, "{text}");
 }
 
 /// llrm-cc: counts the loads of the byte, as above.

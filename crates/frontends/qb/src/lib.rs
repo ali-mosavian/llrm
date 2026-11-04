@@ -26,6 +26,7 @@ pub mod cli;
 pub mod compile;
 pub mod driver;
 pub mod qbstages;
+pub mod wasm32;
 mod zero_fill;
 
 #[cfg(test)]
@@ -53,6 +54,9 @@ mod test_stack_check;
 
 #[cfg(test)]
 mod test_intrinsics;
+
+#[cfg(test)]
+mod test_frame_arrays;
 
 #[cfg(test)]
 mod test_inline_runtime;

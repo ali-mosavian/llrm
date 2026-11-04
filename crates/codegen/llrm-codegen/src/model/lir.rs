@@ -91,6 +91,11 @@ pub struct DebugTags {
     pub defines: Vec<u32>,
     /// The notes (`LirBody::notes`) that stand before it.
     pub before: Vec<u32>,
+    /// The slot index the allocator counted this instruction at, when it
+    /// worked out where the variables are for the writer. A pass that changes
+    /// the instruction (`..clone()`) keeps it; one that makes a new one has
+    /// none.
+    pub slot: Option<i64>,
 }
 
 impl PartialEq for DebugTags {
@@ -103,6 +108,13 @@ impl PartialEq for DebugTags {
 }
 
 impl Eq for DebugTags {}
+
+/// What a word-pair join (`Insn::pair`) joins.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PairKind {
+    Far,
+    Long,
+}
 
 /// One machine instruction, as the thing that emits it needs it.
 ///
@@ -121,6 +133,12 @@ pub struct Insn {
     /// in `uses`, no live range starts at them, and the allocator gives them
     /// any register of their class.
     pub undefs: Vec<u32>,
+    /// Values it defines a narrower part of and keeps the rest of: the def
+    /// also reads the value (a sub-register def without `undef`,
+    /// `MachineOperand::readsReg`), so the value is live into it. Nothing sets
+    /// it before the coalescer joins copies of different widths; a narrow def
+    /// not listed starts the value, as it always has.
+    pub partial_defs: Vec<u32>,
     /// It defines a narrower part of a value than the value is read at, and the
     /// value is not live before it: the rest of the register is undefined (the
     /// `implicit-def` `VirtRegRewriter` puts on a sub-register def whose other
@@ -147,6 +165,10 @@ pub struct Insn {
     pub invariant: bool,
     /// A return that reads only its `requires` and the epilogue's registers.
     pub reads_complete: bool,
+    /// It joins two words into one dword (DEVIATE PAIR1: the `or`/`shrd` of a
+    /// far pointer's offset and selector, or of a long's halves), as the DAG's
+    /// `PAIR_FAR`/`PAIR_LONG` marked it at selection.
+    pub pair: Option<PairKind>,
     /// The source line of the MIR instruction it was selected from (`!dbg`).
     pub line: Option<SrcLoc>,
     pub debug: DebugTags,
@@ -233,7 +255,15 @@ impl LirBody {
     pub fn named_values(&self) -> BTreeSet<u32> {
         self.notes
             .iter()
-            .filter_map(|note| if let NoteValue::Value(value) = note.value { Some(value) } else { None })
+            .flat_map(|note| match &note.value {
+                NoteValue::Value(value) | NoteValue::Offset(value, _) | NoteValue::Arrived(value, _) => vec![*value],
+                NoteValue::Expr(expr) => expr
+                    .args
+                    .iter()
+                    .filter_map(|arg| if let NoteArg::Value(value) = arg { Some(*value) } else { None })
+                    .collect(),
+                _ => Vec::new(),
+            })
             .collect()
     }
 
@@ -300,6 +330,31 @@ impl LirBody {
             })
             .collect();
         if changed { self.with_blocks(blocks) } else { self.clone() }
+    }
+
+    /// `self` with each instruction told its slot (`DebugTags::slot`), by
+    /// the identity it has now; one not in `slots` is left as it is.
+    #[must_use]
+    pub fn with_slots(
+        &self,
+        slots: &crate::support::hash::HashMap<u64, i64>,
+    ) -> LirBody {
+        let blocks = self
+            .blocks
+            .iter()
+            .map(|block| {
+                let insns = block
+                    .insns
+                    .iter()
+                    .map(|one| match slots.get(&one.id()) {
+                        Some(&slot) => one.retagged(DebugTags { slot: Some(slot), ..one.debug.clone() }),
+                        None => Arc::clone(one),
+                    })
+                    .collect();
+                block.with_insns(insns)
+            })
+            .collect();
+        self.with_blocks(blocks)
     }
 
     /// `self`, a pass's result from `old`, with the values the instructions the
@@ -412,16 +467,25 @@ impl LirBody {
     }
 }
 
-/// A source position (`DILocation`'s line and column; column 0 is unknown).
+/// A source position (`DILocation`: line, column, the scope it is in and the
+/// call it was inlined at). Column 0 is unknown; `scope` and `inlined_at` are
+/// the MIR module's metadata ids plus one, 0 for none.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct SrcLoc {
     pub line: u32,
     pub column: u32,
+    pub scope: u32,
+    pub inlined_at: u32,
 }
 
 impl SrcLoc {
     pub const fn line(line: u32) -> Self {
-        Self { line, column: 0 }
+        Self { line, column: 0, scope: 0, inlined_at: 0 }
+    }
+
+    /// The row a line table has for this place: its scopes do not change it.
+    pub const fn row(self) -> (u32, u32) {
+        (self.line, self.column)
     }
 }
 
@@ -468,7 +532,7 @@ impl Insn {
         llrm_mir::counts::bump(llrm_mir::counts::Event::LirRenameAsks);
         let moves = |value: u32| -> Result<bool, E> { Ok(rename(value)? != value) };
         let mut any = false;
-        for &value in self.defines.iter().chain(&self.uses).chain(&self.undefs) {
+        for &value in self.defines.iter().chain(&self.uses).chain(&self.undefs).chain(&self.partial_defs) {
             any |= moves(value)?;
         }
         for (held, _) in self.requires.iter().chain(&self.delivers) {
@@ -511,6 +575,7 @@ impl Insn {
         made.defines = self.defines.iter().map(value).collect::<Result<_, E>>()?;
         made.uses = self.uses.iter().map(value).collect::<Result<_, E>>()?;
         made.undefs = self.undefs.iter().map(value).collect::<Result<_, E>>()?;
+        made.partial_defs = self.partial_defs.iter().map(value).collect::<Result<_, E>>()?;
         let wants = |side: &[(Held, RegId)]| -> Result<Vec<(Held, RegId)>, E> {
             side.iter()
                 .map(|(held, register)| Ok((Held { value: rename(held.value)?, width: held.width }, *register)))
@@ -560,6 +625,7 @@ impl Insn {
             defines,
             uses,
             undefs: Vec::new(),
+            partial_defs: Vec::new(),
             undef_super: false,
             clobbers: BTreeSet::new(),
             clobbers_high: BTreeSet::new(),
@@ -577,6 +643,7 @@ impl Insn {
             volatile: false,
             invariant: false,
             reads_complete: false,
+            pair: None,
             line: None,
             debug: DebugTags::default(),
             effect: Derived::default(),
@@ -1061,6 +1128,9 @@ pub struct DebugVariable {
     /// The register that argument arrives in, where one does: it holds the
     /// value until the function stores it into the home.
     pub arrives: Option<RegId>,
+    /// The lexical block (`!DILexicalBlock`) it is declared in; none for the
+    /// function's own scope.
+    pub scope: Option<llrm_mir::MetadataId>,
 }
 
 /// Where a `-g` variable is.
@@ -1092,13 +1162,38 @@ pub struct DebugNote {
 }
 
 /// What a note says a variable (or a piece of it) is.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum NoteValue {
     /// Nothing: its value was deleted.
     Nothing,
     /// The value, by the number its register had in SSA.
     Value(u32),
     /// A constant.
+    Constant(i64),
+    /// The value plus a constant (`DW_OP_plus_uconst, n, DW_OP_stack_value`).
+    Offset(u32, i64),
+    /// What the operations make of the arguments.
+    Expr(Arc<NoteExpr>),
+    /// A parameter's own value, which arrived in the register: where no
+    /// register holds it, it is what the function was entered with
+    /// (`DW_OP_entry_value`).
+    Arrived(u32, RegId),
+}
+
+/// A value made of other values (`!DIArgList` with a `!DIExpression`).
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct NoteExpr {
+    pub args: Vec<NoteArg>,
+    pub ops: Vec<llrm_debug::ExprOp>,
+    /// The result is the value, not the address of it.
+    pub value: bool,
+}
+
+/// An argument of a [`NoteExpr`].
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum NoteArg {
+    /// The value, by the number its register had in SSA.
+    Value(u32),
     Constant(i64),
 }
 
@@ -1192,6 +1287,14 @@ pub struct LirBody {
     /// allocated (the pin's order), so every local lies that much lower
     /// (`masm::saved_first`).
     pub saved_first: bool,
+    /// A `saved_first` frame whose frame register is omitted: the cell it
+    /// would have held is not reserved, the locals lie directly below the
+    /// pushed registers.
+    pub slot_dropped: bool,
+    /// The locals wanting more than the stack's alignment, as (displacement
+    /// below BP, alignment): the frame realigns the stack pointer for them
+    /// and they lie that far below the aligned top, not below BP.
+    pub over_aligned: Vec<(i64, i64)>,
     /// What each return takes back is instructions of the body, made while the
     /// frame register was omitted (`true`) or kept (`false`)
     /// (`masm::exits_inserted`); the printer adds nothing at a return.
@@ -1202,6 +1305,9 @@ pub struct LirBody {
     /// What `-g` says of its variables at points in the code, by the numbers
     /// `DebugTags::before` holds.
     pub notes: Arc<Vec<DebugNote>>,
+    /// Where each variable is over the code (`LiveDebugValues`), when the
+    /// allocator worked it out for the writer.
+    pub placed: Arc<crate::backend::livedebugvariables::Placed>,
     /// The values (by number) that arrive in a cell above the frame, with the
     /// cell's displacement and size: arguments the caller pushed.
     pub arguments_in_cells: Arc<Vec<(u32, i64, u32)>>,
@@ -1322,6 +1428,19 @@ impl BlockOdds {
 }
 
 impl LirBody {
+    /// How many of `notes` stand before some instruction: the others were
+    /// lost by a pass (or belonged to code that was deleted).
+    #[must_use]
+    pub fn notes_standing(&self) -> usize {
+        let standing: std::collections::BTreeSet<u32> = self
+            .blocks
+            .iter()
+            .flat_map(|block| &block.insns)
+            .flat_map(|one| one.debug.before.iter().copied())
+            .collect();
+        standing.len()
+    }
+
     /// The edges from a block with more than one successor into a block with
     /// more than one predecessor: code that must run on one of them has no
     /// block of its own to go in until one is made.
@@ -1382,9 +1501,12 @@ impl LirBody {
             slotted: false,
             cfa_variables: false,
             saved_first: false,
+            slot_dropped: false,
+            over_aligned: Vec::new(),
             frame_exit: None,
             frame_saved: None,
             notes: Arc::default(),
+            placed: Arc::default(),
             arguments_in_cells: Arc::default(),
             call_pops: Arc::default(),
             facts: Default::default(),
@@ -1451,9 +1573,12 @@ impl LirBody {
             slotted: self.slotted,
             cfa_variables: self.cfa_variables,
             saved_first: self.saved_first,
+            slot_dropped: self.slot_dropped,
+            over_aligned: self.over_aligned.clone(),
             frame_exit: self.frame_exit,
             frame_saved: self.frame_saved.clone(),
             notes: Arc::clone(&self.notes),
+            placed: Arc::clone(&self.placed),
             arguments_in_cells: Arc::clone(&self.arguments_in_cells),
             call_pops: Arc::clone(&self.call_pops),
             facts: self.facts.clone(),
@@ -1635,6 +1760,25 @@ mod tests {
         let walked: Vec<_> = body.iter_insns().collect();
         assert_eq!(walked.len(), 5);
         assert!(listed.iter().zip(&walked).all(|(one, other)| Arc::ptr_eq(one, other)));
+    }
+
+    /// `-g`'s notes stand before instructions: a count of those that still do
+    /// is what the `notes` debug channel reports, so a pass that drops them
+    /// shows in the sweep.
+    #[test]
+    fn test_notes_standing_counts_the_notes_some_instruction_still_has() {
+        let tagged = |at: i64, before: Vec<u32>| {
+            let one = instruction(at, None);
+            Arc::new(super::Insn { debug: super::DebugTags { defines: vec![], before, slot: None }, ..(*one).clone() })
+        };
+        let body = LirBody::new(
+            "f",
+            0,
+            vec![LirBlock::new(0, vec![tagged(0, vec![0, 2]), tagged(1, vec![2]), tagged(2, vec![])]).into()],
+            Default::default(),
+            Default::default(),
+        );
+        assert_eq!(body.notes_standing(), 2);
     }
 
     /// A table kept past the instruction it named answered for whatever was

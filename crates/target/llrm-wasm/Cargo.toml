@@ -1,0 +1,27 @@
+[package]
+name = "llrm-wasm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "The WebAssembly target: its descriptions and DAG selector tables, generated from LLVM's WebAssembly .td"
+
+[dependencies]
+llrm-target = { workspace = true }
+llrm-dagisel = { path = "../../backend/llrm-dagisel" }
+llrm-codegen = { workspace = true }
+llrm-lir = { workspace = true }
+llrm-mir = { workspace = true }
+llrm-analysis = { workspace = true }
+llrm-transforms = { workspace = true }
+llrm-spike-mf = { workspace = true }
+llrm-object = { workspace = true }
+llrm-debug = { workspace = true }
+llrm-dwarf = { workspace = true }
+
+[build-dependencies]
+llrm-target = { workspace = true }
+llrm-lir = { workspace = true }
+
+[[bin]]
+name = "llrm-wasm-llc"
+path = "src/bin/llc.rs"

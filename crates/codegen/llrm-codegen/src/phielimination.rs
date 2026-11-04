@@ -45,7 +45,7 @@
 //!
 //! DEVIATE P3 (no number): `MachineLoopInfo::getLoopFor` is the innermost loop
 //! of the body's loop forest; `isLiveIn` and `isLiveOutPastPHIs` read the
-//! values live at a block's entry (`allocate::live`), where
+//! values live at a block's entry (`liverows::live`), where
 //! `LiveIntervals::liveAt` reads the interval. A phi's operand is read at the
 //! end of its predecessor, so it is not live into the successor by that phi, as
 //! in `LiveIntervals`.
@@ -98,9 +98,9 @@ fn edges_to_split(
         let rows = rows.get_or_init(|| {
             #[cfg(test)]
             ROWS_SOLVED.with(|one| one.set((one.get().0 + 1, one.get().1 + asked.len())));
-            crate::backend::allocate::live_rows_by(body, |one| asked.contains(&one))
+            crate::backend::liverows::live_rows_by(body, |one| asked.contains(&one))
         });
-        crate::backend::allocate::LiveAt::live_in(rows, at, value)
+        crate::backend::liverows::LiveAt::live_in(rows, at, value)
     };
     let mut split: Vec<(i64, i64)> = Vec::new();
     for block in &body.blocks {
@@ -457,11 +457,11 @@ mod tests {
 
     /// `SplitPHIEdges` asks whether one value is live into one block, and was
     /// answered by the sets of every block's entry and exit (two per body,
-    /// 14 M of d_faces -O2's 19.6 M in `allocate::live` over the pass's three
+    /// 14 M of d_faces -O2's 19.6 M in `liverows::live` over the pass's three
     /// calls); the rows answer it with no set made.
     #[test]
     fn test_lowering_builds_no_block_sets() {
-        use crate::backend::allocate::SETS_BUILT;
+        use crate::backend::liverows::SETS_BUILT;
         let phis = vec![Phi { result: 10, incoming: vec![(0, 1), (1, 12)] }];
         let was = body(vec![
             block(0, vec![def(1), jump(1)], &[1], vec![]),

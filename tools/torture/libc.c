@@ -6,6 +6,8 @@ typedef unsigned size_t_;
 void exit(int code) { llrm_os_exit((unsigned char)code); for (;;) {} }
 void abort(void) { llrm_os_exit(134); for (;;) {} }
 
+/* The target's runtime defines these (its c.toml `libcalls`); torture.py passes -DRUNTIME_HAS_NAME for each. */
+#ifndef RUNTIME_HAS_MEMCPY
 void *memcpy(void *to, const void *from, size_t_ n)
 {
     unsigned char *d = to;
@@ -13,7 +15,9 @@ void *memcpy(void *to, const void *from, size_t_ n)
     while (n--) *d++ = *s++;
     return to;
 }
+#endif
 
+#ifndef RUNTIME_HAS_MEMMOVE
 void *memmove(void *to, const void *from, size_t_ n)
 {
     unsigned char *d = to;
@@ -22,13 +26,16 @@ void *memmove(void *to, const void *from, size_t_ n)
     else { size_t_ i = n; while (i) { --i; d[i] = s[i]; } }  /* not `*--d = *--s`: #811 */
     return to;
 }
+#endif
 
+#ifndef RUNTIME_HAS_MEMSET
 void *memset(void *to, int c, size_t_ n)
 {
     unsigned char *d = to;
     while (n--) *d++ = (unsigned char)c;
     return to;
 }
+#endif
 
 int memcmp(const void *a, const void *b, size_t_ n)
 {
@@ -97,21 +104,3 @@ void *calloc(size_t_ n, size_t_ size) { void *p = malloc(n * size); if (p) memse
 void free(void *p) { (void)p; }
 void *realloc(void *p, size_t_ n) { void *q = malloc(n); if (q && p) memcpy(q, p, n); return q; }
 
-/* GCC's builtins, which Open Watcom's front end calls as the externals they are named. */
-void *__builtin_memcpy(void *to, const void *from, size_t_ n) { return memcpy(to, from, n); }
-void *__builtin_memmove(void *to, const void *from, size_t_ n) { return memmove(to, from, n); }
-void *__builtin_memset(void *to, int c, size_t_ n) { return memset(to, c, n); }
-int __builtin_memcmp(const void *a, const void *b, size_t_ n) { return memcmp(a, b, n); }
-size_t_ __builtin_strlen(const char *s) { return strlen(s); }
-int __builtin_strcmp(const char *a, const char *b) { return strcmp(a, b); }
-int __builtin_strncmp(const char *a, const char *b, size_t_ n) { return strncmp(a, b, n); }
-char *__builtin_strcpy(char *to, const char *from) { return strcpy(to, from); }
-char *__builtin_strchr(const char *s, int c) { return strchr(s, c); }
-void __builtin_abort(void) { abort(); }
-void __builtin_trap(void) { abort(); }
-void __builtin_exit(int code) { exit(code); }
-void *__builtin_malloc(size_t_ n) { return malloc(n); }
-void *__builtin_calloc(size_t_ n, size_t_ size) { return calloc(n, size); }
-void __builtin_free(void *p) { free(p); }
-int __builtin_abs(int x) { return abs(x); }
-char *__builtin_strncpy(char *to, const char *from, size_t_ n) { return strncpy(to, from, n); }

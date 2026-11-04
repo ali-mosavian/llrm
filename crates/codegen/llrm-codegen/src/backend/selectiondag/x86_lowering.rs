@@ -130,15 +130,115 @@ pub mod cond {
 }
 
 /// The custom lowerings, for a CPU with or without CMOV.
-pub struct X86Lowering {
+pub struct X86Lowering<'a> {
     pub cmov: bool,
     /// Scalar floats live in xmm registers (`isScalarFPTypeInSSEReg`).
     pub sse2: bool,
     /// `hasMinSize`: llrm's `-Os` as well as `-Oz`.
     pub min_size: bool,
+    /// The pin chains an `i16` multiply by a constant: it promotes it to `i32`
+    /// ([L64277][promote]) and `combineMul` builds the `lea`/shift chain there.
+    /// Where `i16` is not promoted (m16, `is_desirable_to_promote_op`) the same
+    /// chain is built at `i16`, without the promotion's `66h`/`67h` prefixes.
+    /// Consequence of DEVIATE SD441, which holds the exit.
+    ///
+    /// [promote]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L64277
+    pub i16_mul_chains: bool,
+    /// What prices a constant multiply that `combineMul` leaves an `imul`
+    /// (DEVIATE SD446); none keeps the pin's `imul`.
+    pub profile: Option<MulPricing<'a>>,
 }
 
-impl CombineHooks for X86Lowering {
+/// The sheet, the target and the block a constant multiply is priced against.
+#[derive(Clone, Copy)]
+pub struct MulPricing<'a> {
+    pub cpu: &'a crate::backend::cpu::Profile,
+    pub arch: &'a dyn llrm_target::Target,
+    /// The block's frequency over the entry's.
+    pub freq: f64,
+    /// `Tti::speed_milliclocks_per_byte`.
+    pub milliclocks_per_byte: i64,
+    /// `Tuning::multiply_by_clocks`: the fewest clocks, no byte term.
+    pub by_clocks: bool,
+}
+
+impl CombineHooks for X86Lowering<'_> {
+    /// Where `i16` is native (`i16_mul_chains`: m16) a dword's halves are the
+    /// registers it is returned and passed in.
+    fn split_dword_loads(&self) -> bool {
+        self.i16_mul_chains
+    }
+
+    fn pack_word_pairs(&self) -> bool {
+        true
+    }
+
+    fn is_compare_with_flags(
+        &self,
+        user: ISD,
+    ) -> bool {
+        user == x86isd::CMP
+    }
+
+    /// DEVIATE G1 (x87 only: with SSE the conversion is in registers): the
+    /// `fist` to a scratch slot, the load of the slot and the store of it
+    /// become one `fist` to the store's address.
+    ///
+    /// Taken only when the slot is the pair's alone (the `fist` is read by
+    /// that load, the slot node by those two), the load's value is the store's
+    /// only input, all three are plain accesses of one width, and the
+    /// conversion does not widen (an unsigned `i32` goes through an `i64` slot
+    /// and is left). The new `fist` takes the store's chain, so it runs where
+    /// the store did and orders against every access as the store did.
+    /// O(1) per store.
+    fn store_of_converted_slot(
+        &self,
+        dag: &mut SelectionDAG,
+        store: SDValue,
+    ) -> Option<SDValue> {
+        if self.sse2 {
+            return None;
+        }
+        let (chain, value, address) = (dag.operand(store, 0), dag.operand(store, 1), dag.operand(store, 2));
+        let NodeData::Mem(stored) = dag.node(store).data else { return None };
+        let plain = |info: &MemInfo| !info.volatile && info.ordering.is_none() && info.ext.is_none();
+        if dag.opcode(value) != ISD::Load || !dag.has_one_use(value.node) || !plain(&stored) {
+            return None;
+        }
+        let NodeData::Mem(loaded) = dag.node(value).data else { return None };
+        if !plain(&loaded) || loaded.mem_vt != stored.mem_vt || dag.value_type(value) != stored.mem_vt {
+            return None;
+        }
+        let fist = dag.operand(value, 0);
+        if fist.res != 0 || !matches!(dag.opcode(fist), x86isd::FIST | x86isd::FP_TO_INT_IN_MEM) {
+            return None;
+        }
+        let NodeData::Mem(converted) = dag.node(fist).data else { return None };
+        let slot = dag.operand(fist, 2);
+        if !plain(&converted)
+            || converted.mem_vt != loaded.mem_vt
+            || dag.opcode(slot) != ISD::FrameIndex
+            || dag.operand(value, 1) != slot
+            || !dag.has_one_use(fist.node)
+            || dag.use_count_up_to(slot.node, 3) != 2
+        {
+            return None;
+        }
+        let info = MemInfo { align: stored.align, base: stored.base, space: stored.space, ..converted };
+        let opcode = dag.opcode(fist);
+        let converted_value = dag.operand(fist, 1);
+        // Chained where the store was, so every access that came before it in
+        // the program still comes before the `fist`, whatever it aliases.
+        Some(dag.intern(
+            opcode,
+            &[EVT::OTHER],
+            &[chain, converted_value, address],
+            SDNodeFlags::default(),
+            NodeData::Mem(info),
+        ))
+    }
+
     fn has_target_combine(
         &self,
         op: ISD,
@@ -163,7 +263,7 @@ impl CombineHooks for X86Lowering {
         level: CombineLevel,
     ) -> Option<SDValue> {
         match dag.opcode(node) {
-            ISD::Mul => combine_mul(dag, node, level, self.min_size),
+            ISD::Mul => combine_mul(dag, node, level, self.min_size, self.i16_mul_chains, self.profile),
             ISD::Add => combine_add(dag, node),
             ISD::Sub => combine_sub(dag, node),
             x86isd::ADD | x86isd::SUB => combine_x86_add_sub(dag, node),
@@ -181,6 +281,7 @@ impl CombineHooks for X86Lowering {
         dag: &mut SelectionDAG,
         op: SDValue,
         demanded: u128,
+        _level: CombineLevel,
     ) -> Option<Option<SDValue>> {
         x86_shrink_demanded_constant(dag, op, demanded)
     }
@@ -227,10 +328,22 @@ fn x86_shrink_demanded_constant(
     Some(Some(dag.get_node(ISD::And, vt, &[x, new_mask])))
 }
 
+/// Whether this target promotes `i16` (and `i8` multiply) operations to `i32`
+/// (SD441: not at m16). `is_desirable_to_promote_op` and the `i16` multiply
+/// chain both ask this, so the chain is built exactly where nothing promotes.
+pub fn promotes_i16(tli: &TargetLowering) -> bool {
+    !tli.types.has_far_pointer()
+}
+
 /// `isTypeDesirableForOp` (undesirable) and `IsDesirableToPromoteOp`: an `i16`
 /// operation, or an `i8` multiply by a constant, is done in `i32` unless an
-/// operand is a load the operation could fold. m32 only: the 16-bit target
-/// has no wider register to promote into.
+/// operand is a load the operation could fold.
+///
+/// DEVIATE SD441: not at m16. The pin promotes there too; in real mode each
+/// promoted op carries a `66h` prefix (a `lea` of it `67h` as well), which
+/// grows every `i16` op and breaks the m16 -Os rule. Exit: promotion priced
+/// against those prefix bytes and clocks. Until then `i16_mul_chains` builds
+/// the multiply's chain at `i16`.
 fn is_desirable_to_promote_op(
     dag: &SelectionDAG,
     tli: &TargetLowering,
@@ -238,7 +351,7 @@ fn is_desirable_to_promote_op(
 ) -> Option<EVT> {
     let vt = dag.value_type(op);
     let opcode = dag.opcode(op);
-    if tli.types.has_far_pointer() || !tli.types.is_type_legal(vt) {
+    if !promotes_i16(tli) || !tli.types.is_type_legal(vt) {
         return None;
     }
     let is8_mul_by_constant = vt == EVT::I8 && opcode == ISD::Mul && dag.constant(dag.operand(op, 1)).is_some();
@@ -301,7 +414,7 @@ fn is_desirable_to_promote_op(
     Some(EVT::I32)
 }
 
-impl Hooks for X86Lowering {
+impl Hooks for X86Lowering<'_> {
     fn lower_operation(
         &mut self,
         dag: &mut SelectionDAG,
@@ -317,7 +430,7 @@ impl Hooks for X86Lowering {
             ISD::GlobalAddress => lower_global_address(dag, node),
             ISD::VAStart => lower_vastart(dag, node),
             ISD::FpToSInt | ISD::FpToUInt => lower_fp_to_int(dag, node, self.sse2),
-            ISD::LRint => lower_lrint(dag, node),
+            ISD::LRint | ISD::LLRint => lower_lrint(dag, node),
             ISD::SIntToFp | ISD::UIntToFp => lower_int_to_fp(dag, node, self.sse2),
             ISD::ConstantPool => lower_constant_pool(dag, node),
             ISD::JumpTable => lower_jump_table(dag, node),
@@ -330,11 +443,11 @@ impl Hooks for X86Lowering {
             ISD::DynamicStackAlloc => lower_dynamic_stackalloc(dag, node),
             ISD::StackSave => {
                 let (chain, vt) = (dag.operand(node, 0), dag.value_type(node));
-                Some(dag.get_copy_from_phys_reg_plain(chain, llrm_lir::registers::RegId::SP, vt))
+                Some(dag.get_copy_from_phys_reg_plain(chain, stack_register(vt), vt))
             }
             ISD::StackRestore => {
                 let (chain, saved) = (dag.operand(node, 0), dag.operand(node, 1));
-                let sp = dag.get_phys_register(dag.value_type(saved), llrm_lir::registers::RegId::SP);
+                let sp = dag.get_phys_register(dag.value_type(saved), stack_register(dag.value_type(saved)));
                 Some(dag.get_node(ISD::CopyToReg, EVT::OTHER, &[chain, sp, saved]))
             }
             // `LowerFP_EXTEND`: the Custom arm exists for `f16`; a scalar
@@ -386,6 +499,17 @@ fn translate_cc(
                 return cond::NS;
             }
             CondCode::SetLt if bits == 0 => return cond::S,
+            // The pin gets this from `x <= C` -> `x < C + 1` ([L5358][pin]);
+            // x86's
+            // `canonicalize_ge_le` is off (DEVIATE in `dag_combiner`), so this
+            // is that rewrite's sign-test case. Exit: that hook on.
+            //
+            // [pin]:
+            // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L5358
+            CondCode::SetLe if all_ones => {
+                *rhs = dag.get_constant(0, vt);
+                return cond::S;
+            }
             CondCode::SetGe if bits == 0 => return cond::NS,
             CondCode::SetLt if bits == 1 => {
                 *rhs = dag.get_constant(0, vt);
@@ -1094,7 +1218,7 @@ fn combine_add(
     }
     // `m_Add` matches either operand as the difference.
     let hidden_lea = |difference: SDValue, z: SDValue| {
-        if dag.opcode(difference) != ISD::Sub || dag.use_count(difference.node) != 1 || dag.constant(z).is_some() {
+        if dag.opcode(difference) != ISD::Sub || !dag.has_one_use(difference.node) || dag.constant(z).is_some() {
             return None;
         }
         let (shift, y) = (dag.operand(difference, 0), dag.operand(difference, 1));
@@ -1221,11 +1345,11 @@ fn combine_sub_setcc(
     let (op0, op1) = (dag.operand(node, 0), dag.operand(node, 1));
     let vt = dag.value_type(node);
     let constant = dag.constant(op0).filter(|c| *c != 0)?;
-    if dag.opcode(op1) != ISD::ZeroExtend || dag.use_count(op1.node) != 1 {
+    if dag.opcode(op1) != ISD::ZeroExtend || !dag.has_one_use(op1.node) {
         return None;
     }
     let setcc = dag.operand(op1, 0);
-    if dag.opcode(setcc) != x86isd::SETCC || dag.use_count(setcc.node) != 1 {
+    if dag.opcode(setcc) != x86isd::SETCC || !dag.has_one_use(setcc.node) {
         return None;
     }
     let code = dag.constant(dag.operand(setcc, 0))?;
@@ -1298,10 +1422,14 @@ fn combine_cmov(
     None
 }
 
-/// `getGlobalWrapperKind`: every symbol is addressed from `%rip` in 64-bit
-/// mode (small code model), the absolute `Wrapper` elsewhere.
-fn wrapper_kind(vt: EVT) -> ISD {
-    if vt == EVT::I64 { x86isd::WRAPPER_RIP } else { x86isd::WRAPPER }
+/// `getGlobalWrapperKind`: a symbol is addressed from `%rip` in 64-bit
+/// position-independent code (small code model), the absolute `Wrapper`
+/// elsewhere.
+fn wrapper_kind(
+    dag: &SelectionDAG,
+    vt: EVT,
+) -> ISD {
+    if vt == EVT::I64 && !dag.config().absolute_symbols { x86isd::WRAPPER_RIP } else { x86isd::WRAPPER }
 }
 
 /// `LowerGlobalOrExternal` for a static, non-PIC global: `Wrapper
@@ -1321,7 +1449,7 @@ fn lower_global_address(
         SDNodeFlags::default(),
         NodeData::Global { symbol, offset: folded },
     );
-    let wrapped = dag.get_node(wrapper_kind(vt), vt, &[target]);
+    let wrapped = dag.get_node(wrapper_kind(dag, vt), vt, &[target]);
     Some(if rest == 0 {
         wrapped
     } else {
@@ -1339,7 +1467,7 @@ fn lower_constant_pool(
     let vt = dag.value_type(node);
     let target =
         dag.intern(ISD::TargetConstantPool, &[vt], &[], SDNodeFlags::default(), NodeData::PoolIndex(index, offset));
-    Some(dag.get_node(wrapper_kind(vt), vt, &[target]))
+    Some(dag.get_node(wrapper_kind(dag, vt), vt, &[target]))
 }
 
 /// `LowerJumpTable`: `Wrapper (TargetJumpTable)`.
@@ -1350,7 +1478,7 @@ fn lower_jump_table(
     let NodeData::JumpTable(index) = dag.node(node).data else { return None };
     let vt = dag.value_type(node);
     let target = dag.intern(ISD::TargetJumpTable, &[vt], &[], SDNodeFlags::default(), NodeData::JumpTable(index));
-    Some(dag.get_node(wrapper_kind(vt), vt, &[target]))
+    Some(dag.get_node(wrapper_kind(dag, vt), vt, &[target]))
 }
 
 /// `LowerXALUO`: the flags of `X86ISD::ADD`/`SUB`/`UMUL`/`SMUL`, and the
@@ -1496,8 +1624,15 @@ fn lower_fp_to_int(
         value = shifted;
         adjust = Some(flip);
     }
-    let info =
-        MemInfo { mem_vt: stored_vt, align: size, volatile: false, base: MemBase::Stack(index), ext: None, space: 0 };
+    let info = MemInfo {
+        mem_vt: stored_vt,
+        align: size,
+        volatile: false,
+        base: MemBase::Stack(index),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     let fist = dag.intern(
         x86isd::FP_TO_INT_IN_MEM,
         &[EVT::OTHER],
@@ -1526,8 +1661,15 @@ fn lower_lrint(
     let index = dag.create_stack_temporary(size, size);
     let slot = dag.get_frame_index(dag.config().pointer, index);
     let chain = dag.entry_node();
-    let info =
-        MemInfo { mem_vt: result_vt, align: size, volatile: false, base: MemBase::Stack(index), ext: None, space: 0 };
+    let info = MemInfo {
+        mem_vt: result_vt,
+        align: size,
+        volatile: false,
+        base: MemBase::Stack(index),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     let fist =
         dag.intern(x86isd::FIST, &[EVT::OTHER], &[chain, value, slot], SDNodeFlags::default(), NodeData::Mem(info));
     Some(dag.get_load(result_vt, fist, slot, info))
@@ -1583,6 +1725,19 @@ fn lower_int_to_fp(
             return Some(dag.get_node(ISD::SIntToFp, dst, &[wide]));
         }
     }
+    // DEVIATE SD332 (exit: the pin gains it; re-check at each pin bump): a
+    // plain one-use load of an `i16` or `i32` is `fild`ed from its own
+    // address, as combineSIntToFP does for `i64` only. The stack slot's store
+    // and reload are gone and `fimul`/`fiadd` read the operand in place.
+    if signed && matches!(src_vt, EVT::I16 | EVT::I32) && is_non_ext_load(dag, src) && dag.users(src).count() == 1 {
+        let NodeData::Mem(info) = dag.node(src).data else { return None };
+        if !info.volatile && info.ordering.is_none() && info.mem_vt == src_vt {
+            let (load_chain, address) = (dag.operand(src, 0), dag.operand(src, 1));
+            let fild = build_fild(dag, dst, src_vt, load_chain, address, info);
+            dag.replace_all_uses_with(SDValue { node: src.node, res: 1 }, SDValue { node: fild.node, res: 1 });
+            return Some(fild);
+        }
+    }
     let chain = dag.entry_node();
     let store_info = |index: i32, vt: EVT, size: u32| MemInfo {
         mem_vt: vt,
@@ -1591,6 +1746,7 @@ fn lower_int_to_fp(
         base: MemBase::Stack(index),
         ext: None,
         space: 0,
+        ordering: None,
     };
     if signed || (src_vt != EVT::I32 && src_vt != EVT::I64) {
         let size = src_vt.size_in_bits() / 8;
@@ -1631,6 +1787,7 @@ fn lower_int_to_fp(
         base: MemBase::ConstantPool(entry),
         ext: Some(super::actions::LoadExt::ExtLoad),
         space: 0,
+        ordering: None,
     };
     let fudge_value = dag.get_load(EVT::Simple(MVT::F80), SDValue { node: fild.node, res: 1 }, fudge_ptr, fudge_info);
     let sum = dag.get_node(ISD::FAdd, EVT::Simple(MVT::F80), &[fild, fudge_value]);
@@ -1659,23 +1816,29 @@ fn lower_vastart(
     };
     if pointer != EVT::I64 {
         let first = dag.get_frame_index(pointer, index);
-        let info =
-            MemInfo { mem_vt: pointer, align: pointer.size_in_bits() / 8, volatile: false, base, ext: None, space: 0 };
+        let info = MemInfo {
+            mem_vt: pointer,
+            align: pointer.size_in_bits() / 8,
+            volatile: false,
+            base,
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
         return Some(dag.get_store(chain, first, list, info));
     }
-    let (save, gp_offset) = dag.var_args_save?;
+    let (save, gp_offset, fp_offset) = dag.var_args_save?;
     let mut stores = Vec::new();
     let fields: [(u128, EVT, SDValue); 4] = [
         (0, EVT::I32, dag.get_constant(u128::from(gp_offset), EVT::I32)),
-        // 6 * 8: the vector registers' part of the area starts there
-        (4, EVT::I32, dag.get_constant(48, EVT::I32)),
+        (4, EVT::I32, dag.get_constant(u128::from(fp_offset), EVT::I32)),
         (8, pointer, dag.get_frame_index(pointer, index)),
         (16, pointer, dag.get_frame_index(pointer, save)),
     ];
     for (offset, vt, value) in fields {
         let at = dag.get_constant(offset, pointer);
         let address = dag.get_node(ISD::Add, pointer, &[list, at]);
-        let info = MemInfo { mem_vt: vt, align: 4, volatile: false, base, ext: None, space: 0 };
+        let info = MemInfo { mem_vt: vt, align: 4, volatile: false, base, ext: None, space: 0, ordering: None };
         stores.push(dag.get_store(chain, value, address, info));
     }
     Some(dag.get_node(ISD::TokenFactor, EVT::OTHER, &stores))
@@ -1689,6 +1852,24 @@ fn log2(value: u128) -> u128 {
     u128::from(127 - value.leading_zeros())
 }
 
+/// `X86ISD::MUL_IMM` by 3, 5 or 9: the `lea` the matcher folds it into. An
+/// `i16` has no such `lea` pattern, so it is written as the add of a shift
+/// (`x + (x << 1)`), which the same matcher turns into one.
+fn mul_imm_node(
+    dag: &mut SelectionDAG,
+    x: SDValue,
+    by: u128,
+    vt: EVT,
+) -> SDValue {
+    if vt == EVT::I16 && matches!(by, 3 | 5 | 9) {
+        let amount = dag.get_constant(log2(by - 1), EVT::I8);
+        let shifted = dag.get_node(ISD::Shl, vt, &[x, amount]);
+        return dag.get_node(ISD::Add, vt, &[x, shifted]);
+    }
+    let by = dag.get_constant(by, vt);
+    dag.get_node(x86isd::MUL_IMM, vt, &[x, by])
+}
+
 /// `combineMulSpecial`: `x * c` for the constants that are a `lea` and a
 /// shift or an add.
 fn combine_mul_special(
@@ -1698,17 +1879,14 @@ fn combine_mul_special(
     vt: EVT,
 ) -> Option<SDValue> {
     let shl_add_or_sub = |dag: &mut SelectionDAG, mult: u128, shift: u128, add: bool| {
-        let by = dag.get_constant(mult, vt);
-        let product = dag.get_node(x86isd::MUL_IMM, vt, &[x, by]);
+        let product = mul_imm_node(dag, x, mult, vt);
         let amount = dag.get_constant(shift, EVT::I8);
         let shifted = dag.get_node(ISD::Shl, vt, &[product, amount]);
         dag.get_node(if add { ISD::Add } else { ISD::Sub }, vt, &[shifted, x])
     };
     let mul_mul_add = |dag: &mut SelectionDAG, first: u128, second: u128| {
-        let a = dag.get_constant(first, vt);
-        let once = dag.get_node(x86isd::MUL_IMM, vt, &[x, a]);
-        let b = dag.get_constant(second, vt);
-        let twice = dag.get_node(x86isd::MUL_IMM, vt, &[once, b]);
+        let once = mul_imm_node(dag, x, first, vt);
+        let twice = mul_imm_node(dag, once, second, vt);
         dag.get_node(ISD::Add, vt, &[twice, x])
     };
     match amount {
@@ -1751,9 +1929,11 @@ fn combine_mul(
     node: SDValue,
     level: CombineLevel,
     min_size: bool,
+    i16_chains: bool,
+    profile: Option<MulPricing<'_>>,
 ) -> Option<SDValue> {
     let vt = dag.value_type(node);
-    if vt != EVT::I32 {
+    if vt != EVT::I32 && !(vt == EVT::I16 && i16_chains) {
         return None;
     }
     let (x, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
@@ -1769,17 +1949,14 @@ fn combine_mul(
     if is_pow2(bits) || min_size || level == CombineLevel::BeforeLegalizeTypes {
         return None;
     }
-    let signed = i128::from(bits as u32 as i32);
+    let signed = if vt == EVT::I16 { i128::from(bits as u16 as i16) } else { i128::from(bits as u32 as i32) };
     let abs = signed.unsigned_abs();
     let negate = |dag: &mut SelectionDAG, value: SDValue| if signed < 0 { dag.get_negative(value, vt) } else { value };
     let shift = |dag: &mut SelectionDAG, value: SDValue, by: u128| {
         let by = dag.get_constant(by, EVT::I8);
         dag.get_node(ISD::Shl, vt, &[value, by])
     };
-    let mul_imm = |dag: &mut SelectionDAG, value: SDValue, by: u128| {
-        let by = dag.get_constant(by, vt);
-        dag.get_node(x86isd::MUL_IMM, vt, &[value, by])
-    };
+    let mul_imm = |dag: &mut SelectionDAG, value: SDValue, by: u128| mul_imm_node(dag, value, by, vt);
     if matches!(abs, 3 | 5 | 9) {
         let product = mul_imm(dag, x, abs);
         return Some(negate(dag, product));
@@ -1827,7 +2004,74 @@ fn combine_mul(
             new_mul = Some(dag.get_node(ISD::Sub, vt, &[shifted, twice]));
         }
     }
+    // DEVIATE SD446: where the pin keeps `imul`, the sheet's cheaper chain.
+    if new_mul.is_none() {
+        new_mul = profile.and_then(|profile| priced_chain(dag, x, signed as i64, vt, profile));
+    }
     new_mul
+}
+
+/// `x * c` as the chain `arithmetic::chain_at_speed` accepts (the clocks it
+/// saves pay for its bytes at the block's frequency; the search is cached per
+/// constant, O(1) here), built from shifts, adds, subtracts and
+/// the `lea` forms. An `i16` has no `lea`: the narrow chain.
+///
+/// DEVIATE SD446: the pin's `combineMul` leaves an `imul` for a constant none
+/// of its cases covers (75, 251, 10000); on the 486 that is 13-42 clocks
+/// (Intel 240440-002 Table 10.1) against 2-4 for a chain. The search is
+/// GCC's `synth_mult`
+/// ([expmed.cc](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/expmed.cc)),
+/// the same as DEVIATE M1 in `arithmetic.rs`. Only where the target trades
+/// bytes for clocks at speed (m16: `speed_milliclocks_per_byte`); the block's
+/// frequency is the IR `BlockFrequencies` (the machine one does not exist at
+/// DAG time). Exit: none while the clocks decide. Owner sdag-d.
+fn priced_chain(
+    dag: &mut SelectionDAG,
+    x: SDValue,
+    c: i64,
+    vt: EVT,
+    pricing: MulPricing<'_>,
+) -> Option<SDValue> {
+    use crate::backend::arithmetic;
+    let width = if vt == EVT::I16 { 2 } else { 4 };
+    let MulPricing { cpu, arch, freq, milliclocks_per_byte, by_clocks } = pricing;
+    let chain = if by_clocks {
+        arithmetic::chain_by_clocks(c, width, cpu)
+    } else {
+        arithmetic::chain_at_speed(c, width, cpu, arch, freq, milliclocks_per_byte)
+    }
+    .ok()??;
+    let shift = |dag: &mut SelectionDAG, value: SDValue, by: i64| {
+        let by = dag.get_constant(by as u128, EVT::I8);
+        dag.get_node(ISD::Shl, vt, &[value, by])
+    };
+    let mut value = x;
+    for (step, count) in chain {
+        value = match step {
+            "shl" => shift(dag, value, count),
+            "add" => dag.get_node(ISD::Add, vt, &[value, x]),
+            "sub" => dag.get_node(ISD::Sub, vt, &[value, x]),
+            "rsub" => dag.get_node(ISD::Sub, vt, &[x, value]),
+            "neg" => dag.get_negative(value, vt),
+            // `x + value * count`
+            "lea" => {
+                let scaled = shift(dag, value, i64::from(count.trailing_zeros()));
+                dag.get_node(ISD::Add, vt, &[scaled, x])
+            }
+            // `value + value * count`
+            "flea" => mul_imm_node(dag, value, count as u128 + 1, vt),
+            "fadd" => {
+                let scaled = shift(dag, value, count);
+                dag.get_node(ISD::Add, vt, &[value, scaled])
+            }
+            "fsub" => {
+                let scaled = shift(dag, value, count);
+                dag.get_node(ISD::Sub, vt, &[scaled, value])
+            }
+            _ => return None,
+        };
+    }
+    Some(value)
 }
 
 /// `LowerFunnelShift`, the scalar part ([L32188][pin]). An `i8` by a variable
@@ -1990,7 +2234,7 @@ fn mask_address(
     let splat = (0..128 / lane).fold(0u128, |all, at| all | mask << (at * lane));
     let pointer = dag.config().pointer;
     let pool = dag.get_constant_pool(pointer, splat, EVT::Simple(MVT::I128), true);
-    dag.get_node(wrapper_kind(pointer), pointer, &[pool])
+    dag.get_node(wrapper_kind(dag, pointer), pointer, &[pool])
 }
 
 /// `LowerFCOPYSIGN` for a scalar: `(mag & ~sign) | (sgn & sign)`, the sign
@@ -2024,6 +2268,12 @@ fn lower_fcopysign(
     Some(dag.get_node(x86isd::FOR, vt, &[magnitude, sign_bit]))
 }
 
+/// The stack pointer a pointer of type `vt` is saved from and restored to
+/// (`getStackPointerRegisterToSaveRestore`): `rsp` at 64 bits.
+fn stack_register(vt: EVT) -> llrm_lir::registers::RegId {
+    if vt == EVT::I64 { llrm_lir::registers::RegId::RSP } else { llrm_lir::registers::RegId::SP }
+}
+
 /// `LowerDYNAMIC_STACKALLOC` without probes or split stacks: the stack pointer
 /// lowered by the size, rounded down to the alignment when that is more than
 /// the stack's (operand 2, else 0), is the address. Bracketed by a
@@ -2036,14 +2286,14 @@ fn lower_dynamic_stackalloc(
     let (chain, size) = (dag.operand(node, 0), dag.operand(node, 1));
     let alignment = dag.constant(dag.operand(node, 2)).unwrap_or(0);
     let start = dag.get_callseq_start(chain, 0);
-    let sp = dag.get_copy_from_phys_reg_plain(SDValue { node: start.node, res: 0 }, llrm_lir::registers::RegId::SP, vt);
+    let sp = dag.get_copy_from_phys_reg_plain(SDValue { node: start.node, res: 0 }, stack_register(vt), vt);
     let mut result = dag.get_node(ISD::Sub, vt, &[sp, size]);
     let mut chain = SDValue { node: sp.node, res: 1 };
     if alignment != 0 {
         let mask = dag.get_constant(!(alignment - 1) & ((1u128 << vt.size_in_bits()) - 1), vt);
         result = dag.get_node(ISD::And, vt, &[result, mask]);
     }
-    chain = dag.get_copy_to_phys_reg(chain, llrm_lir::registers::RegId::SP, result, None);
+    chain = dag.get_copy_to_phys_reg(chain, stack_register(vt), result, None);
     let chain = SDValue { node: chain.node, res: 0 };
     let end = dag.get_callseq_end(chain, 0, 0, SDValue { node: chain.node, res: 1 });
     Some(dag.get_node_multi(ISD::MergeValues, &[vt, EVT::OTHER], &[result, SDValue { node: end.node, res: 0 }]))

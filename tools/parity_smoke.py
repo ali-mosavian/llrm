@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The per-merge tests of the integration branch feat/parity: the touched crates' fastest unit tests, a few fast run tests and a compile smoke, 10 s of CPU in all.
+"""The per-merge tests of the integration branch release/next: the touched crates' fastest unit tests, a few fast run tests and a compile smoke, 10 s of CPU in all.
 First, untimed, `cargo check --workspace --all-targets` of the merged tree and every source-scan ratchet (whatever the merge touches).
 
     tools/parity_smoke.py [--bin DIR] [--base REF] [--rank CRATE...]
@@ -42,13 +42,15 @@ sys.path.insert(0, str(HERE / "dosbatch"))
 import cpulimit  # noqa: E402
 from buildslot import slotted  # noqa: E402
 
+BRANCH = os.environ.get("LAND_BRANCH", "release/next")  # the integration branch (tools/landing/branch.sh)
+
 SELECTION = HERE / "parity_smoke.toml"
 BUDGET = 15.0  # CPU seconds (user+sys of this process and its children, never wall); the user's rule is a fast set within 10-15 s
 INSTRUCTIONS = 60_000_000_000  # user-space instructions of the steps. Today's set (a tools-only merge, one unit crate) is 50.9 G, repeating to 0.1 %, in 12.6-13.4 s CPU at load 31-33: 4.0 G/s at best, so 15 s is 60 G
 CARGO_OVERHEAD = 0.3  # cargo's own CPU to find the test binary up to date, per crate
 MAX_CRATES = 2  # a merge touching more is tested in the 3 crates with most changed files: each crate costs its cargo start before any test
 UNIT_FLOOR = 2.0  # the seconds the fixed steps always leave for unit tests
-ORACLES = ("DATAFLOW", "FACTS", "CLOBBERED", "COALESCE", "REPLAY", "INTERN", "SKIPPED", "STALE")
+ORACLES = ("DATAFLOW", "FACTS", "CLOBBERED", "REPLAY", "INTERN", "STALE")
 PROGRAM = ROOT / "bench" / "bintree"
 # d_faces.c as the scoreboard reads it (sha256 prefix), and the six reports `env.c` printed for gcc -O0: an llrm build must print the same.
 DFACES_SHA = "1ab72e38cab4fbd2"
@@ -65,6 +67,14 @@ def cpu() -> float:
     return t.user + t.system + t.children_user + t.children_system + _charged[0]
 
 
+def perf_counts() -> bool:
+    """Whether `perf stat` can count `instructions:u` here: a runner with perf installed and no counters fails every wrapped command before it runs."""
+    if shutil.which("perf") is None:
+        return False
+    probe = subprocess.run(["perf", "stat", "-x,", "-e", "instructions:u", "-o", os.devnull, "--", "true"], capture_output=True)
+    return probe.returncode == 0
+
+
 class Meter:
     """User-space instructions of every command the steps start while open: each is run under `perf stat -e instructions:u -- COMMAND` (load-independent, where CPU
     seconds stretch with contention) and the counts are summed. `perf stat -p PID` was tried first: it read 74 G, 799 G and 893 G for the same set, more than the
@@ -76,7 +86,7 @@ class Meter:
         self._popen = None
 
     def __enter__(self) -> "Meter":
-        if shutil.which("perf") is None:
+        if not perf_counts():
             return self
         import tempfile
 
@@ -136,7 +146,7 @@ def run_cut(command: list[str], seconds: float, cwd: Path, env: dict[str, str] |
 
 def workspace_check(root: Path = ROOT, target: Path | None = None) -> str:
     """"" when the whole workspace, tests and benches included, compiles under `-D warnings` (the fast tier's `build` step); else the first errors. Built before the clock
-    starts, like the unit tests: two halves that each compile can fail together (a `&mut Context` parameter called with a `&Context` broke feat/parity's head for every
+    starts, like the unit tests: two halves that each compile can fail together (a `&mut Context` parameter called with a `&Context` broke release/next's head for every
     build). Under `-D warnings` because the land-time check once lacked it: #3390 landed an unused `mut` that failed the fast tier for everyone. Its own target directory:
     other RUSTFLAGS would rebuild the shared one."""
     target = target or Path(os.environ.get("LLRM_WARN_TARGET", Path.home() / ".cache/llrm/warn-target"))
@@ -594,13 +604,8 @@ RUNTIME_C = {
     "posix_os": "the POSIX os layer",
     "qb_dev_interface": "the device interface headers",
     "qb_sdl": "the SDL device",
-}
-# Targets that build the runtime's C sources with cc and import no crate: run on a PR that changes runtime/ or tests/qbhost/.
-RUNTIME_C = {
-    "posix_os": "the POSIX os layer",
-    "qb_dev_interface": "the device interface headers",
-    "qb_sdl": "the SDL device",
     "qb_dirty": "the dirty-line protocol under ThreadSanitizer (its child lifts testcap's soft data limit)",
+    "qb_runtime_pin_clang": "the runtime's C sources through the pinned clang",
 }
 # Targets that read files, not crates: scans of sources and docs, run on every PR (all together about 2 s).
 SCANNERS = {
@@ -620,7 +625,7 @@ SCANNERS = {
     "no_todo": "scans sources",
     "tracked_build_products": "lists tracked files",
 }
-TOOL_COMPILERS = ("llrm-c", "llrm-qb", "llrm-nib", "nibfront")  # what tools/dosbatch and the run_tests scripts build programs with
+TOOL_COMPILERS = ("llrm-cc", "llrm-llc", "llrm-qb", "llrm-nib", "nibfront")  # what tools/dosbatch and the run_tests scripts build programs with
 
 
 def with_common(
@@ -897,7 +902,7 @@ def dump(data: dict) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--bin", type=Path, default=None, help="the llrm-c, llrm-qb and llrm-nib directory (default: LLRM_BIN, else the target dir's release)")
-    parser.add_argument("--base", default="origin/feat/parity", help="what the merge result is compared with to find the touched crates")
+    parser.add_argument("--base", default=f"origin/{BRANCH}", help="what the merge result is compared with to find the touched crates")
     parser.add_argument("--skip", action="append", default=[], metavar="STEP", help="a step known red (tools/parity_squash.py --known-red): not run, named as skipped in the line")
     parser.add_argument("--rank", nargs="+", metavar="CRATE", help="measure these crates' unit tests once and write the ranking")
     args = parser.parse_args()

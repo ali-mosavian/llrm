@@ -858,7 +858,7 @@ impl SlotIndexes {
         &mut self,
         dense: bool,
     ) {
-        let boundaries: std::collections::HashSet<EntryId> = self
+        let boundaries: llrm_support::hash::HashSet<EntryId> = self
             .mbb_ranges
             .iter()
             .flat_map(|(start, end)| [start.list_entry(), end.list_entry()])

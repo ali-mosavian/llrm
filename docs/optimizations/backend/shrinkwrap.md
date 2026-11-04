@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/shrinkwrap.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/shrinkwrap.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/shrinkwrap.rs sha256:3014d7772f33bc2aa20bfd16ad320a3eabafc0e6ce9eeaae0d0ed2f4c64ea053 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/shrinkwrap.rs sha256:baea2126aef247c945d89e12371ebbff73dd661ddd6a6867ec35aa216769438d -->
 
 # shrinkwrap
 
@@ -9,7 +9,7 @@ not at the entry, and takes them back only on the returns that path reaches.
 ## How it works
 The frame and the registers a procedure keeps are one piece of work: set up
 at the top of one Save block, taken back before the return of one Restore
-block. [`crate::backend::saverestore`](saverestore.md) finds the two blocks as LLVM's
+block. [`crate::backend::saverestore`](../analyses/saverestore.md) finds the two blocks as LLVM's
 `ShrinkWrapImpl` does (the nearest blocks that dominate and post-dominate
 every use, outside any loop, no hotter than the entry); this module says
 which blocks use the frame or a kept register and lays the result out for
@@ -102,13 +102,16 @@ at the end of each block that was to get the split block: before its jump to
 the restore, or where it falls into it. A block that reaches the restore any
 other way refuses the placement (`saverestore`'s DEVIATE 2).
 
-DEVIATE 2: under `size` (the m16 `-Os` targets) a restore that needs the
-epilogue on an edge, or that does not end in a return, is refused; the
-registers stay saved at the entry. The pin wraps those and duplicates the
-`ret` into each early exit, which costs a byte per exit, and the branch that
-skips the epilogue grows past its short form (QCport m16 -Os +9 B, nothing
-smaller). Exit: the placement is made as the pin does once jumps are sized
-after the epilogue is placed.
+DEVIATE 2: under `size` (the m16 `-Os` targets) a restore is wrapped only
+where it adds no byte: one epilogue, on the late path's fall-through or
+unconditional jump, that pushes no short branch past its range (127 forward,
+128 back; sizes from the encoder). Two epilogues, a landing pad for a taken
+edge, or a branch that would grow keep the registers saved at the entry. The
+pin wraps all of those and duplicates the `ret` into each early exit, which
+costs a byte per exit (QCport m16 -Os +9 B; queens bq16 +12 B with three
+exits). Before: every split refused (fib bq16 -Os 1017956 clocks); now fib
+908496 at the same bytes. Exit: the placement is made as the pin does once
+jumps are sized after the epilogue is placed.
 
 ## See also
 LLVM's

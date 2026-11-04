@@ -79,6 +79,12 @@ pub fn optimized(body: &LirBody) -> Result<LirBody, String> {
     Ok(body)
 }
 
+// The rounds `optimized` made, for a test that independent changes share one.
+#[cfg(test)]
+thread_local! {
+    static ROUNDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// What a round learns about the body.
 struct Facts {
     phis: IndexMap<u32, Vec<(i64, u32)>>,
@@ -163,28 +169,43 @@ impl Facts {
     }
 }
 
-/// The body after the first change a round finds, or `None`.
+/// The body after the changes a round finds, or `None`. A change that touches
+/// a phi an earlier one of the round touched waits for the next round: the pin
+/// walks its blocks once and replaces in place, and each change here rebuilt
+/// the facts and the body (a switch of N cases with N phis took N rounds).
 fn round(body: &LirBody) -> Result<Option<LirBody>, String> {
+    #[cfg(test)]
+    ROUNDS.with(|n| n.set(n.get() + 1));
     let facts = Facts::of(body);
+    let placed: BTreeSet<i64> = body.blocks.iter().map(|one| one.at).collect();
+    let mut rename: IndexMap<u32, u32> = IndexMap::default();
+    let mut gone: BTreeSet<u32> = BTreeSet::new();
     for block in &body.blocks {
         for phi in block.phis.iter() {
-            if phi.incoming.iter().any(|(at, _)| !body.blocks.iter().any(|one| one.at == *at)) {
+            if phi.incoming.iter().any(|(at, _)| !placed.contains(at)) || gone.contains(&phi.result) {
                 continue;
             }
             let (mut single, mut seen) = (None, BTreeSet::new());
             if facts.single(phi.result, &mut single, &mut seen)
                 && let Some(value) = single
             {
-                let rename: IndexMap<u32, u32> = IndexMap::from_iter([(phi.result, value)]);
-                return renamed(body, &rename, &BTreeSet::from([phi.result])).map(Some);
+                rename.insert(phi.result, value);
+                gone.insert(phi.result);
+                continue;
             }
             let mut seen = BTreeSet::new();
-            if facts.dead(phi.result, &mut seen) {
-                return renamed(body, &IndexMap::default(), &seen).map(Some);
+            if facts.dead(phi.result, &mut seen)
+                && seen.is_disjoint(&gone)
+                && seen.iter().all(|one| !rename.contains_key(one))
+            {
+                gone.extend(seen);
             }
         }
     }
-    Ok(None)
+    if gone.is_empty() {
+        return Ok(None);
+    }
+    renamed(body, &rename, &gone).map(Some)
 }
 
 /// `body` with `rename` applied everywhere and the phis `gone` removed.
@@ -364,5 +385,18 @@ mod tests {
         // 3 and 4 differ, but 3 is read by the add: only 5 and 6 are dead.
         let left: Vec<u32> = done.blocks[1].phis.iter().map(|phi| phi.result).collect();
         assert_eq!(left, vec![3, 4]);
+    }
+
+    /// A switch of N cases left N phis that each carry one value: every change
+    /// rebuilt the facts and the body (N rounds; `cases` at 256, x2.31 per
+    /// doubling). Changes that touch different phis share a round.
+    #[test]
+    fn independent_phis_that_feed_themselves_are_removed_in_one_round() {
+        let phis: Vec<Phi> = (0..300).map(|k| Phi { result: 100 + k, incoming: vec![(0, 1), (20, 100 + k)] }).collect();
+        ROUNDS.with(|n| n.set(0));
+        let done = optimized(&looped(phis)).unwrap();
+        assert!(done.blocks.iter().all(|one| one.phis.is_empty()), "the phis are gone");
+        let rounds = ROUNDS.with(std::cell::Cell::get);
+        assert!(rounds <= 3, "{rounds} rounds for 300 independent phis");
     }
 }

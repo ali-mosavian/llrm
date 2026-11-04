@@ -37,6 +37,10 @@ Measured with `tools/targets/arm64_compare.py` (modes `whole`, `backend`, `compi
 3. `prepass.rs`: CSE and loop hoisting of constants and addresses, a small version of `MachineCSE`/`MachineLICM`.
 4. `driver.rs`: newer clang's `ptrtoaddr` is read as `ptrtoint`; MIR refuses it by design.
 
+## Numbered gaps
+
+- ARM64-EIC-1: no `MachineEarlyIfConversion`/`MachineTraceMetrics` (pin: `aarch64-enable-early-ifcvt` on). `div_constants_long`: pin IR has 28 selects, the asm 121 `csel`/`cset`/`cinc`-family instructions, ours 35 and 35; the extra ones are made by the machine pass from `br` chains the pin IR still has. Programs with more in the pin than ours: 9 of 159 built (7 FAIL rows excluded); `div_constants_{long,short,ulong}` hold 284 of the 298 pin instructions, the other six 14. Exit: step 6 (~3,000 pin lines, not worth writing twice).
+
 ## Order of work
 
 1. Pin build with AArch64. Done.
@@ -80,3 +84,5 @@ Until step 5 the Mac builds and runs the existing test suite only; the first use
 ## Risk
 
 Step 2 decides cost: if LIR cannot carry 3-address and NZCV, the generic layer changes first.
+
+`llrm-arm64-llc` takes `-O0`..`-O3`, `-Os` and `-Oz` (default `-O2`); `llrm-cc` passes the level of the `arm64-macos` target row, and `tools/targets/qb-runtime-check.sh` builds the QB host runtime through it.

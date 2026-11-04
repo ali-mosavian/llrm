@@ -1,3 +1,4 @@
+' flags: -fexcess-precision=standard
 ' Hundreds of SINGLE and DOUBLE values across the exponent range, printed:
 ' the digit extraction must agree with BCOM45's to the last place.
 DIM d AS DOUBLE, e AS DOUBLE, s AS SINGLE

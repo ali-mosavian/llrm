@@ -111,6 +111,7 @@ pub mod combine_bitorder;
 pub mod combine_branch;
 pub mod combine_build;
 pub mod combine_castcall;
+pub mod combine_casted_logic;
 pub mod combine_casts;
 #[cfg(test)]
 mod combine_casts_tests;
@@ -122,14 +123,18 @@ pub mod combine_distribute;
 #[cfg(test)]
 mod combine_flags_result_tests;
 pub mod combine_fp;
+pub mod combine_fp_int_casts;
 pub mod combine_funnel;
 pub mod combine_gep;
+pub mod combine_gep_base;
 pub mod combine_gep_index;
 pub mod combine_gep_merge;
 pub mod combine_gep_phi;
 pub mod combine_icmp_binop;
 pub mod combine_icmp_const;
+pub mod combine_icmp_equality;
 pub mod combine_icmp_logic;
+pub mod combine_icmp_ranges;
 pub mod combine_invert;
 pub mod combine_loadstore;
 pub mod combine_memintrinsics;
@@ -137,12 +142,15 @@ pub mod combine_minmax;
 pub mod combine_muldivrem;
 #[cfg(test)]
 mod combine_muldivrem_tests;
+pub mod combine_narrow;
 pub mod combine_negator;
+pub mod combine_not;
 pub mod combine_or;
 pub mod combine_pass;
 pub mod combine_phi;
 pub mod combine_phi_args;
 pub mod combine_select;
+pub mod combine_select_bit_test;
 pub mod combine_select_bools;
 pub mod combine_select_ext_const;
 pub mod combine_select_into_op;
@@ -167,6 +175,9 @@ pub mod constraintelim;
 pub mod constraintelim_induction;
 #[cfg(test)]
 mod constraintelim_tests;
+pub mod copyback;
+#[cfg(test)]
+mod copyback_tests;
 #[cfg(test)]
 mod corpus_tests;
 pub mod counting;
@@ -186,6 +197,7 @@ pub mod divrempairs;
 pub mod earlycse;
 pub mod edges;
 pub mod emptyblocks;
+pub mod exitne;
 pub mod exitopt;
 pub mod exitpredicate;
 pub mod exitsink;
@@ -285,17 +297,25 @@ pub mod lsr_solve;
 pub mod lsr_use;
 #[cfg(test)]
 mod lsr_use_tests;
+pub mod maskscale;
 pub mod mem2reg;
 pub mod memcpyopt;
 pub mod memcpyoptimizer;
+pub mod memloops;
+#[cfg(test)]
+mod memloops_tests;
 pub mod memsetpattern;
 #[cfg(test)]
 mod memsetpattern_tests;
 pub mod mergestores;
+mod mirror;
 pub mod mldstmotion;
 pub mod narrowspace;
 #[cfg(test)]
 mod narrowspace_tests;
+pub mod pageindex;
+#[cfg(test)]
+mod pageindex_tests;
 pub mod parity;
 #[cfg(test)]
 mod parity_tests;
@@ -304,6 +324,7 @@ mod pin_slots_tests;
 pub mod pipeline;
 #[cfg(test)]
 mod pipeline_ported_tests;
+pub mod pipeline_text;
 pub mod ports;
 pub mod predicateinfo;
 pub mod profit;
@@ -328,8 +349,10 @@ pub mod settled;
 pub mod simpleloopunswitch;
 pub mod simplifycfg;
 pub mod simplifyindvar;
+pub mod simplifylibcalls;
 pub mod sinkcast;
 pub mod sinkcommon;
+pub mod slpcompares;
 pub mod spares;
 pub mod speculate;
 pub mod spill;
@@ -357,6 +380,9 @@ pub mod trivialunswitch;
 pub mod trunc_inst_combine;
 pub mod twoentryphi;
 pub mod typepromotion;
+pub mod typepromotion_pass;
+#[cfg(test)]
+mod typepromotion_pass_tests;
 pub mod uncondicmp;
 pub mod undefpred;
 pub mod uremloop;

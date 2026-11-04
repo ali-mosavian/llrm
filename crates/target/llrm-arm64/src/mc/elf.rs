@@ -12,6 +12,7 @@ use super::fixup;
 const EM_AARCH64: u16 = 183;
 const R_AARCH64_ABS64: u32 = 257;
 const R_AARCH64_ABS32: u32 = 258;
+const R_AARCH64_PREL32: u32 = 261;
 const R_AARCH64_ADR_PREL_PG_HI21: u32 = 275;
 const R_AARCH64_ADD_ABS_LO12_NC: u32 = 277;
 const R_AARCH64_LDST8_ABS_LO12_NC: u32 = 278;
@@ -31,6 +32,10 @@ impl Machine for Arm64 {
     const NUMBER: u16 = EM_AARCH64;
     const ADDEND: bool = true;
 
+    fn backend() -> &'static dyn llrm_object::assembler::AsmBackend {
+        &super::backend::BACKEND
+    }
+
     fn relocation(reloc: &Reloc) -> Result<Relocation, Unsupported> {
         // Every instruction relocation computes its value from the symbol and
         // the addend alone (`from` is 0): the page and branch kinds subtract
@@ -39,6 +44,8 @@ impl Machine for Arm64 {
         let (kind, width) = match (reloc.kind, reloc.pc_rel, got) {
             (FixupKind::DATA_8, false, _) => (R_AARCH64_ABS64, 8),
             (FixupKind::DATA_4, false, _) => (R_AARCH64_ABS32, 4),
+            // An `.eh_frame` entry's pointer to its function.
+            (FixupKind::DATA_4, true, _) => (R_AARCH64_PREL32, 4),
             (fixup::BRANCH26, _, _) => (R_AARCH64_CALL26, 4),
             (fixup::PAGE21, _, false) => (R_AARCH64_ADR_PREL_PG_HI21, 4),
             (fixup::ADD_IMM12, _, _) => (R_AARCH64_ADD_ABS_LO12_NC, 4),
@@ -51,7 +58,7 @@ impl Machine for Arm64 {
             (fixup::LDST_IMM12_SCALE8, _, true) => (R_AARCH64_LD64_GOT_LO12_NC, 4),
             other => return Err(Unsupported(format!("ELF arm64 has no relocation for {other:?}"))),
         };
-        Ok(Relocation { kind, width, from: 0 })
+        Ok(Relocation { kind, width })
     }
 }
 
@@ -104,6 +111,7 @@ mod tests {
             definition: Definition::Defined { section, offset: 0 },
             size: 0,
             group: None,
+            visibility: Default::default(),
         }
     }
 
@@ -147,8 +155,17 @@ mod tests {
             omf_groups: Vec::new(),
             omf_comdat: Vec::new(),
             frames: Vec::new(),
-            debug: None,
         }
+    }
+
+    /// `.eh_frame` points at the code with 4-byte place-relative fields, which
+    /// the writer had no relocation for: every function with unwind rows
+    /// refused to write ("ELF arm64 has no relocation for ...").
+    #[test]
+    fn a_four_byte_place_relative_field_is_prel32() {
+        let reloc = Reloc::new(0, Fix::pc_rel(4, 0), Target::Section(0), 0);
+        let relocation = Arm64::relocation(&reloc).expect("a relocation");
+        assert_eq!((relocation.kind, relocation.width), (261, 4));
     }
 
     /// The pinned `llvm-readobj` reads the object, and its relocations are

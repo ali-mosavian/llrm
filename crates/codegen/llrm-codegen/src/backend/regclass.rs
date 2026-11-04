@@ -87,7 +87,7 @@
 //! # Provides
 //! One answer to "which registers may this value be in", owned here (#441).
 //! Read by [`crate::backend::ssaspill`], [`crate::backend::allocate`],
-//! [`crate::backend::coalesce`], [`crate::backend::constrain`],
+//! [`crate::coalescer::pass`], [`crate::backend::constrain`],
 //! and `target.rs`.
 //!
 //! # Needs
@@ -96,17 +96,18 @@
 //! intervals and clobber masks (`allocate`).
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
 use llrm_lir::registers::Regs;
 
 use crate::analysis::intervals as ranges;
-use crate::backend::allocate::{_clobbered, _masks};
 use crate::backend::classes::RegisterClasses;
+use crate::backend::masks::{_clobbered, _masks};
 use crate::backend::target::{self, Segments};
-use crate::model::ir::{Loc, Operation, Space};
+use crate::model::ir::{Addr, Held, Loc, Mem, Operation, Semantics, Space};
 use crate::model::lir::{Insn, LirBody};
-use crate::support::hash::{HashSet, IndexMap};
+use crate::support::hash::{HashSet, IndexMap, IndexSet};
 
 pub type Classes = IndexMap<u32, BTreeSet<RegId>>;
 
@@ -138,8 +139,9 @@ pub fn classes(
 /// instructions that name it, which a value made from another by the spiller or
 /// a split does not inherit. None where its instructions confine it to nothing.
 ///
-/// DEVIATE CF-1: the m16 `[base+index]` pairs colour base {BX} and index
-/// {SI,DI}; the pin has no such model. A pair member keeps its side.
+/// A `[base+index]` pair member keeps its side: the bases and indexes are the
+/// target's (`RegisterClasses::word_bases`, `word_indexes`: m16's {BX} and
+/// {SI,DI}), a fact of the encoding, not a deviation.
 /// DEVIATE CF-4: the answer comes from `classes` over the whole body, so a call
 /// costs a body; a caller that makes many values asks `classes` once.
 ///
@@ -174,7 +176,7 @@ pub fn classes_with(
 /// number the body and find both again.
 pub struct Found<'a> {
     pub live: &'a dyn crate::backend::live::Ranges,
-    pub masks: &'a crate::backend::allocate::Masks,
+    pub masks: &'a crate::backend::masks::Masks,
 }
 
 /// `classes`, given the body's intervals and masks.
@@ -208,6 +210,10 @@ pub struct Use {
     pub role: Role,
     /// The instruction writes the value there, rather than reads it.
     pub defining: bool,
+    /// A half of an address pair the roles left registers for: it confines the
+    /// value to the addressing registers, and only `distinct_classes`' cold
+    /// reads use it.
+    pub spare: bool,
 }
 
 /// Every read that confines a value on its own, a byte operand or an address
@@ -740,7 +746,15 @@ fn collected(
                         // The reads are kept only for a caller that asks for
                         // them.
                         if let Some(uses) = uses.as_deref_mut() {
-                            uses.push(Use { block: at, insn: position, value, class: choices.clone(), role, defining });
+                            uses.push(Use {
+                                block: at,
+                                insn: position,
+                                value,
+                                class: choices.clone(),
+                                role,
+                                defining,
+                                spare: false,
+                            });
                         }
                         _restrict(&mut out, value, choices);
                     }
@@ -785,16 +799,20 @@ fn collected(
     if let Some(uses) = uses.as_deref_mut() {
         for (block, insn, base, index) in pair_sites {
             for (value, role, kind) in [(base, Role::Base, Kind::WordBases), (index, Role::Index, Kind::WordIndexes)] {
-                if out.get(&value).is_some_and(BTreeSet::is_empty) {
-                    uses.push(Use {
-                        block,
-                        insn,
-                        value,
-                        class: kind.registers(registers).clone(),
-                        role,
-                        defining: false,
-                    });
-                }
+                let none = out.get(&value).is_some_and(BTreeSet::is_empty);
+                uses.push(Use {
+                    block,
+                    insn,
+                    value,
+                    class: if none {
+                        kind.registers(registers).clone()
+                    } else {
+                        registers.word_bases.union(&registers.word_indexes).copied().collect()
+                    },
+                    role,
+                    defining: false,
+                    spare: !none,
+                });
             }
         }
     }
@@ -1013,7 +1031,7 @@ fn _word_address_roles(
     let word_base = *registers.word_bases.iter().next().expect("one word base");
 
     let base_penalty = |values: &BTreeSet<u32>| -> i64 {
-        let (live, masks): (&dyn crate::backend::live::Ranges, &crate::backend::allocate::Masks) = match found {
+        let (live, masks): (&dyn crate::backend::live::Ranges, &crate::backend::masks::Masks) = match found {
             Some(found) => (found.live, found.masks),
             None => {
                 let (live, masks) = own.get_or_init(|| {
@@ -1180,22 +1198,19 @@ pub fn violations(
     skip: &BTreeSet<u32>,
 ) -> Vec<Violation> {
     let confined = classes_with(body, &BTreeSet::new(), segments, registers, true);
-    let (_, live_out) = crate::backend::allocate::live(body);
-    let general: BTreeSet<RegId> =
-        registers.available.iter().map(|one| crate::backend::allocate::_whole(*one)).collect();
+    let (_, live_out) = crate::backend::liverows::live(body);
+    let general: BTreeSet<RegId> = registers.available.iter().map(|one| crate::backend::masks::_whole(*one)).collect();
     let selectors: BTreeSet<RegId> = segments.selectors.iter().copied().collect();
     let files: [(&'static str, &BTreeSet<RegId>); 2] = [("general", &general), ("selector", &selectors)];
     let in_file = |value: u32, file: &BTreeSet<RegId>, general_file: bool| match confined.get(&value) {
-        Some(class) => class.iter().any(|one| file.contains(&crate::backend::allocate::_whole(*one))),
+        Some(class) => class.iter().any(|one| file.contains(&crate::backend::masks::_whole(*one))),
         None => general_file,
     };
     let class_in = |value: u32, file: &BTreeSet<RegId>| -> BTreeSet<RegId> {
         match confined.get(&value) {
-            Some(class) => class
-                .iter()
-                .map(|one| crate::backend::allocate::_whole(*one))
-                .filter(|one| file.contains(one))
-                .collect(),
+            Some(class) => {
+                class.iter().map(|one| crate::backend::masks::_whole(*one)).filter(|one| file.contains(one)).collect()
+            }
             None => file.clone(),
         }
     };
@@ -1478,11 +1493,20 @@ pub(crate) fn untouchable(body: &LirBody) -> BTreeSet<u32> {
     out
 }
 
-/// Values no general register holds: x87 values and wider ones, and every phi
-/// web they join.
+/// Values no general register holds: x87 values, those wider than the widest
+/// general register (4 bytes at least: a pair), those an instruction fills
+/// into an xmm register, and every phi web they join.
 pub(crate) fn floating(body: &LirBody) -> BTreeSet<u32> {
     let regs = body.regs();
+    let widest = regs
+        .entries()
+        .filter(|(_, one)| one.classes & (llrm_lir::registers::class::GPR | llrm_lir::registers::class::INT) != 0)
+        .map(|(_, one)| one.bits / 8)
+        .max()
+        .unwrap_or(0)
+        .max(4);
     let mut out: BTreeSet<u32> = BTreeSet::new();
+    let mut items: Vec<Item> = Vec::new();
     for one in body.insns() {
         if one.what.as_ref().is_some_and(|what| target::_on_the_stack(regs, what) || what.op.is_x87()) {
             out.extend(one.uses.iter().chain(&one.defines).copied());
@@ -1490,9 +1514,16 @@ pub(crate) fn floating(body: &LirBody) -> BTreeSet<u32> {
         // A value no general register holds: a float, whatever reads it.
         for place in one.what.iter().flat_map(|what| what.dests.iter().chain(&what.sources)) {
             for held in crate::model::ir::values(place) {
-                if held.width > 4 {
+                if held.width > widest {
                     out.insert(held.value);
                 }
+            }
+        }
+        items.clear();
+        contribution(regs, &*one, &mut items);
+        for item in &items {
+            if let Item::Restrict { value, kind: Kind::Xmm, .. } = item {
+                out.insert(*value);
             }
         }
     }
@@ -1516,4 +1547,93 @@ pub(crate) fn floating(body: &LirBody) -> BTreeSet<u32> {
         }
     }
     out
+}
+
+/// Each far cell whose selector is also read as a number, or pinned to a
+/// general register, reached through ES: None where no cell is rewritten.
+pub fn explicit_selectors_given(
+    body: &LirBody,
+    pinned: Option<&IndexMap<u32, RegId>>,
+    segments: &Segments,
+    confined: &Classes,
+) -> Option<LirBody> {
+    let regs = body.regs();
+    let selectors: BTreeSet<RegId> = segments.selectors.iter().copied().collect();
+    let empty = IndexMap::default();
+    let pinned = pinned.unwrap_or(&empty);
+    let mut conflicted: BTreeSet<u32> = BTreeSet::new();
+    for block in &body.blocks {
+        for one in &block.insns {
+            let Some(what) = &one.what else {
+                continue;
+            };
+            for place in what.dests.iter().chain(&what.sources) {
+                if let Loc::Mem(cell) = place {
+                    if let Some(selector) = cell.selector {
+                        if confined.get(&selector.value) != Some(&selectors)
+                            || !regs.is_segment(*pinned.get(&selector.value).unwrap_or(&regs.far()))
+                        {
+                            conflicted.insert(selector.value);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if conflicted.is_empty() {
+        return None;
+    }
+
+    let through_es = |place: &Loc| -> Loc {
+        if let Loc::Mem(cell) = place {
+            if cell.selector.is_some_and(|selector| conflicted.contains(&selector.value)) {
+                let addr = cell.addr.expect("a far cell has an address");
+                return Loc::Mem(Mem {
+                    selector: None,
+                    addr: Some(Addr { segment: regs.far().iced(), ..addr }),
+                    ..cell.clone()
+                });
+            }
+        }
+        place.clone()
+    };
+
+    let mut blocks = Vec::new();
+    for block in &body.blocks {
+        let mut insns = Vec::new();
+        for one in &block.insns {
+            let named: Vec<Held> = match &one.what {
+                None => Vec::new(),
+                Some(what) => what
+                    .dests
+                    .iter()
+                    .chain(&what.sources)
+                    .filter_map(|place| match place {
+                        Loc::Mem(cell) => cell.selector.filter(|selector| conflicted.contains(&selector.value)),
+                        _ => None,
+                    })
+                    .collect(),
+            };
+            if named.is_empty() {
+                insns.push(Arc::clone(one));
+                continue;
+            }
+            let what = one.what.as_ref().expect("named is empty without semantics");
+            let what = Semantics {
+                dests: what.dests.iter().map(&through_es).collect(),
+                sources: what.sources.iter().map(&through_es).collect(),
+                ..what.clone()
+            };
+            let requires: IndexSet<(Held, RegId)> =
+                one.requires.iter().copied().chain(named.iter().map(|held| (*held, regs.far()))).collect();
+            let uses: IndexSet<u32> = one.uses.iter().copied().chain(named.iter().map(|held| held.value)).collect();
+            let mut made = (**one).clone();
+            made.what = Some(what);
+            made.requires = requires.into_iter().collect();
+            made.uses = uses.into_iter().collect();
+            insns.push(Arc::new(made));
+        }
+        blocks.push(block.with_insns(insns));
+    }
+    Some(body.with_blocks(blocks))
 }

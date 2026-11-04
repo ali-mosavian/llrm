@@ -1,0 +1,19 @@
+#title,"10.6 INTEGER UNIT INSTRUCTION TIMINGS: BTST | CAS [b] | CHK [c,d] (<ea>, Dn)",page,10-17,notes,a. Bit instruction <ea> calculate and execute times T1/T2 apply to #<xxx>/Dn bit numbers. b. Times listed are typical. This instruction interlocks the <ea> calculate and execute stages and synchronizes some portions of the processor before execution. c. This instruction interlocks the <ea> calculate and execute stages. d. Times listed are for Dn within bounds. This instruction interlocks the <ea> calculate and execute stages.
+Addressing Mode,BTST <ea> Calculate,BTST Execute,CAS [b] <ea> Calculate,CAS [b] Execute,"CHK [c,d] (<ea>, Dn) <ea> Calculate","CHK [c,d] (<ea>, Dn) Execute"
+Dn,1,1/2 [a],—,—,8,1L + 7
+An,—,—,—,—,—,—
+(An),1,1/2,36,6L + 31,9,2L + 7
+(An)+,1,1/2,37,5L + 31,9,2L + 7
+–(An),1,1/2,37,5L + 31,9,2L + 7
+"(d 16,An)",2/1,1L + 1/2,37,5L + 31,9,2L + 7
+"(d 16,PC)",3,2L + 1/2L + 2,—,—,10,3L + 7
+"(xxx).W, (xxx).L",2/1,1L + 1/2,36,5L + 31,9,2L + 7
+#<xxx>,—,—,—,—,8,1L + 7
+"(d 8,An,Xn)",3,3/4,36,36,10,10
+"(d 8,PC,Xn)",5,1L + 4/1L + 5,—,—,11,1L + 10
+"(BR,Xn)",7/6,1L + 6/1L + 7,36,1L + 35,12,1L + 11
+"(bd,BR,Xn)",8/7,1L + 7/1L + 8,37,1L + 36,13,1L + 12
+"([bd,BR,Xn])",10/9,1L + 9/1L + 10,42,40,16,1L + 15
+"([bd,BR,Xn],od)",11/10,1L + 10/1L + 11,42,1L + 41,17,1L + 16
+"([bd,BR],Xn)",11/10,3L + 8/3L + 9,42,3L + 38,17,3L + 14
+"([bd,BR],Xn,od)",12/11,3L + 9/3L + 10,42,3L + 39,18,3L + 15

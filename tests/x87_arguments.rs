@@ -22,6 +22,6 @@ fn test_a_float_argument_is_stored_into_the_space_made_for_it() {
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
-    assert!(text.contains("fstp qword ptr [esp]") && text.contains("fstp dword ptr [esp]"), "{text}");
+    assert!(text.contains("fstp qword ptr [esp]") && text.contains("fstp dword ptr [esp+8]"), "{text}");
     assert!(!text.contains("push dword ptr [esp+"), "an argument was pushed from a cell: {text}");
 }

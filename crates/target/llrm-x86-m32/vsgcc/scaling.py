@@ -253,7 +253,7 @@ def measured_environment(env: dict | None = None) -> dict:
     peephole` read 157.0 or 168.8 Minstr of cells(224) by 4 bytes of environment alone: base and head must be given the same bytes."""
     # The compiler reads LLRM_BIN too: the pinned directory stands for it always, of one length wherever the binaries are and whether
     # the caller set it or not (llrmbin.pinned).
-    where = {"LLRM_BIN": str(llrmbin.pinned(llrmbin.bin_dir() / "llrm-c").parent)}
+    where = {"LLRM_BIN": str(llrmbin.pinned(llrmbin.bin_dir() / "llrm-cc").parent), **llrmbin.cc_environment()}
     kept = {"PATH": "/usr/bin:/bin", **where, **(env or {})}
     used = sum(len(k) + len(v) + 2 for k, v in kept.items())
     return {**kept, "LLRM_PAD": "x" * max(0, ENVIRONMENT_BYTES - used - len("LLRM_PAD") - 2)}
@@ -283,7 +283,7 @@ def sample(cmd: list[str], env: dict | None = None, timeout: float = 120) -> tup
     The child sees no LLRM_ variable of the caller's but LLRM_BIN (and `env`'s own): LLRM_CHECK_*, LLRM_VERIFY and the like add work to
     the step they check, and a count taken under them is not the compiler's (regparm16: 'lir peephole' read 4.5 Minstr over at every size).
 
-    A source file is compiled from a directory of its own under /tmp, as `src.c`, and an llrm binary is run as `./llrm-c` through a
+    A source file is compiled from a directory of its own under /tmp, as `src.c`, and an llrm binary is run as `./llrm-cc` through a
     link: the length of the paths the compiler is given (its own name as run, the source's) moves the allocator's pages, and `lir
     peephole` read 173.7 or 159.0 Minstr of cells(224) by that length alone (mimalloc: a block that lives all run in a size class's
     page, or none, decides whether the page is given back and made again at every free). Base and head, and one run and the next,

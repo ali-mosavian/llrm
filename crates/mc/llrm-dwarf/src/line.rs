@@ -1,7 +1,7 @@
 //! `.debug_line`: the line program, one sequence per section of code with
 //! lines.
 
-use llrm_object::debug::{ChecksumKind, Info};
+use llrm_debug::{ChecksumKind, Info};
 use llrm_object::{Object, Unsupported};
 
 use crate::buffer::{Buf, Done};
@@ -18,6 +18,7 @@ const LNS_ADVANCE_PC: u8 = 2;
 const LNS_ADVANCE_LINE: u8 = 3;
 const LNS_SET_FILE: u8 = 4;
 const LNS_SET_COLUMN: u8 = 5;
+const LNS_NEGATE_STMT: u8 = 6;
 const LNS_PROLOGUE_END: u8 = 10;
 const LNS_EPILOGUE_BEGIN: u8 = 11;
 const LNE_END_SEQUENCE: u8 = 1;
@@ -61,6 +62,7 @@ struct Row {
     column: u32,
     prologue_end: bool,
     epilogue_begin: bool,
+    is_stmt: bool,
 }
 
 pub fn program(
@@ -159,7 +161,18 @@ pub fn program(
         }
     }
     let address = usize::from(out.address);
+    // A sequence per section, or per function with a range in it.
+    let mut units: Vec<(usize, Option<&llrm_debug::Function>)> = Vec::new();
     for section in sections {
+        if out.sequence_per_function {
+            let own =
+                info.functions.iter().filter(|one| one.ranges.first().is_some_and(|range| range.section == section));
+            units.extend(own.map(|function| (section, Some(function))));
+        } else {
+            units.push((section, None));
+        }
+    }
+    for (section, only) in units {
         let mut rows: Vec<Row> = info
             .lines
             .iter()
@@ -171,6 +184,7 @@ pub fn program(
                 column: one.column,
                 prologue_end: false,
                 epilogue_begin: false,
+                is_stmt: !info.not_stmt.contains(&(section, one.offset)),
             })
             .collect();
         rows.sort_by_key(|one| one.offset);
@@ -194,12 +208,26 @@ pub fn program(
                 };
                 if prologue {
                     rows[at_row].prologue_end = true;
+                    rows[at_row].is_stmt = true;
                 } else {
                     rows[at_row].epilogue_begin = true;
                 }
             }
         }
-        let (symbol, base) = crate::anchor(object, section)?;
+        let (symbol, base) = match only {
+            Some(function) => {
+                let range = function.ranges[0];
+                rows.retain(|one| (range.offset..range.offset + range.length).contains(&one.offset));
+                let llrm_object::Definition::Defined { offset, .. } = object.symbols[function.symbol].definition else {
+                    return refused(format!("function {} has no defined symbol", function.name));
+                };
+                (function.symbol, offset)
+            }
+            None => crate::anchor(object, section)?,
+        };
+        if rows.is_empty() {
+            continue;
+        }
         let start = rows[0].offset;
         if address == 2 {
             // Open Watcom's extended opcode 4: the segment the addresses are
@@ -213,7 +241,7 @@ pub fn program(
         buf.uleb(1 + address as u64);
         buf.u8(LNE_SET_ADDRESS);
         buf.address(address, symbol, start as i64 - base as i64);
-        let (mut at, mut line, mut file, mut column) = (start, 1i64, 1u64, 0u64);
+        let (mut at, mut line, mut file, mut column, mut stmt) = (start, 1i64, 1u64, 0u64, true);
         for row in rows {
             if number(row.file) != file {
                 file = number(row.file);
@@ -235,6 +263,10 @@ pub fn program(
                 buf.uleb((row.offset - at) as u64);
                 at = row.offset;
             }
+            if row.is_stmt != stmt {
+                buf.u8(LNS_NEGATE_STMT);
+                stmt = row.is_stmt;
+            }
             if row.prologue_end {
                 buf.u8(LNS_PROLOGUE_END);
             }
@@ -247,7 +279,7 @@ pub fn program(
         let end = info
             .code
             .iter()
-            .filter(|range| range.section == section)
+            .filter(|range| range.section == section && only.is_none_or(|one| one.ranges[0].offset == range.offset))
             .map(|range| range.offset + range.length)
             .max()
             .unwrap_or(object.sections[section].image.len());

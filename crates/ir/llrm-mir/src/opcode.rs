@@ -167,6 +167,27 @@ impl IntPredicate {
         }
     }
 
+    /// `CmpInst::isSigned`.
+    pub fn is_signed(self) -> bool {
+        matches!(self, Self::Sgt | Self::Sge | Self::Slt | Self::Sle)
+    }
+
+    /// `CmpInst::getSignedPredicate`: an unsigned predicate's signed twin.
+    pub fn signed(self) -> Self {
+        match self {
+            Self::Ugt => Self::Sgt,
+            Self::Uge => Self::Sge,
+            Self::Ult => Self::Slt,
+            Self::Ule => Self::Sle,
+            same => same,
+        }
+    }
+
+    /// `CmpInst::isTrueWhenEqual`.
+    pub fn true_when_equal(self) -> bool {
+        matches!(self, Self::Eq | Self::Uge | Self::Ule | Self::Sge | Self::Sle)
+    }
+
     /// The predicate that holds with the operands exchanged.
     pub fn swapped(self) -> Self {
         match self {
@@ -612,12 +633,13 @@ pub const FLAG_ATTRIBUTES: [&str; 46] = [
 /// Attributes the pin's clang states that no pass here reads (stack protection,
 /// unwind tables, `dead_on_return`...), kept as flags; `uwtable` may carry its
 /// kind in parentheses (`uwtable(sync)`).
-pub const TARGET_FLAG_ATTRIBUTES: [&str; 9] = [
+pub const TARGET_FLAG_ATTRIBUTES: [&str; 10] = [
     "allockind",
     "allocsize",
     "dead_on_return",
     "nocreateundeforpoison",
     "nofreeobj",
+    "noimplicitfloat",
     "ssp",
     "sspreq",
     "sspstrong",

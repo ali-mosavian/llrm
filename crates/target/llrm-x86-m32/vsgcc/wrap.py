@@ -1,7 +1,7 @@
 """wrap.py PROG SOURCE: SOURCE with the kernel `bench_PROG` called from `main` through a volatile pointer.
 
 Every compiler then keeps the kernel a call (nothing can inline it into `main` or clone it for `main`'s constants) and still
-inlines everything else, so the table measures inlining. `__attribute__((noinline))` does the same for gcc and clang but llrm-c's
+inlines everything else, so the table measures inlining. `__attribute__((noinline))` does the same for gcc and clang but llrm-cc's
 front end (Watcom's) does not take it.
 """
 import re

@@ -12,7 +12,7 @@ pub mod target;
 pub mod timings;
 
 pub use cycles::report;
-pub use target::{Dos, ENCODABLE_BASES, FRAME, GENERAL, PRESERVED, WORD_INDEXES, word_bases};
+pub use target::{Dos, ENCODABLE_BASES, FRAME, GENERAL, PRESERVED, WORD_INDEXES, with_pin_tuning, word_bases};
 pub use timings::ARCHS;
 
 /// Real mode's data layout and address spaces: `machines/datalayout.toml`.
@@ -87,6 +87,14 @@ fn cost_model(prices: &llrm_target::CpuPrices) -> std::rc::Rc<dyn llrm_mir::targ
 }
 
 impl llrm_target::Target for M16 {
+    fn objects(&self) -> &'static dyn llrm_debug::DebugObjectTarget {
+        &llrm_x86::mc::X86Objects
+    }
+
+    fn debug_target(&self) -> llrm_debug::DebugTarget {
+        llrm_x86::mc::fixup::debug_target(16)
+    }
+
     fn registers(&self) -> &'static llrm_lir::registers::Info {
         &REGISTER_INFO
     }
@@ -569,5 +577,57 @@ mod pressure_tests {
         assert_eq!(sets.sets.len(), limits.len());
         let limit = |name: &str| limits[sets.sets.iter().position(|set| set.name == name).expect(name)];
         assert_eq!((limit("GR8"), limit("GR16"), limit("GR32_BPSP")), (10, 10, 6));
+    }
+}
+
+#[cfg(test)]
+mod tuning_tests {
+    use llrm_mir::target::{Machine, Tuning};
+
+    /// m16's table overrides the size limits and the clock price of a byte and
+    /// nothing else: before the table they were sentinels in the DAG builder
+    /// (4 and 2) and a trait method (10_000), the pin's numbers literals beside
+    /// them.
+    #[test]
+    fn m16_overrides_only_the_size_limits_and_the_rate() {
+        let table = super::Dos::default().tuning();
+        assert_eq!((table.max_stores_per_memset, table.max_stores_per_memcpy, table.max_stores_per_memmove), (4, 2, 2));
+        assert_eq!(table.max_stores_per_memset_opt_size, 4);
+        assert_eq!((table.max_stores_per_memcpy_opt_size, table.max_stores_per_memmove_opt_size), (2, 2));
+        assert_eq!(table.size_milliclocks_per_byte, 10_000);
+        assert_eq!(
+            table.speed_milliclocks_per_byte,
+            crate::timings::speed_milliclocks_per_byte(),
+            "the compiler reads the judge's row"
+        );
+        assert_eq!(table.speed_milliclocks_per_byte, 500, "policy: user 2026-10-31, 1 clk = 2 B");
+        assert_eq!((table.unroll_threshold, table.unroll_max_percent_threshold_boost), (Some(0), Some(100)));
+        assert_eq!(table.unroll_partial_threshold, Some(0));
+        assert_eq!(table.x87_stack_slots, Some(8));
+        assert_eq!(table.unswitch_threshold, Some(0));
+        assert_eq!(
+            Tuning {
+                max_stores_per_memset: 16,
+                max_stores_per_memcpy: 8,
+                max_stores_per_memmove: 8,
+                max_stores_per_memset_opt_size: 8,
+                max_stores_per_memcpy_opt_size: 4,
+                max_stores_per_memmove_opt_size: 4,
+                size_milliclocks_per_byte: 0,
+                multiply_by_clocks: false,
+                speed_milliclocks_per_byte: 0,
+                unroll_threshold: None,
+                unroll_max_percent_threshold_boost: None,
+                unroll_partial_threshold: None,
+                x87_stack_slots: None,
+                unswitch_threshold: None,
+                inline_threshold: None,
+                split_merged_conditions: false,
+                inline_size_guard_at_size: false,
+                keep_constant_displacements: false,
+                ..table
+            },
+            Tuning::PIN
+        );
     }
 }

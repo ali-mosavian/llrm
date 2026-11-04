@@ -177,6 +177,9 @@ pub struct Frame {
     /// dword or a quad is not left across a doubleword boundary, which a 486
     /// charges 3 clocks for (`WORD` where BC's frame is word-aligned).
     pub align: i64,
+    /// The widest alignment of an alloca or stack temporary: a hole above them
+    /// that is not a multiple of it moves them by more than itself.
+    pub alloca_align: i64,
     /// The largest outgoing-argument area of a call, reserved in the
     /// prologue where no call is pushed
     /// (`backend::callframe::ReserveCallFrame`;
@@ -202,6 +205,7 @@ impl Frame {
             defer_colours: false,
             stacks: IndexMap::default(),
             align: WORD,
+            alloca_align: 1,
             call_area: 0,
             scratch: Default::default(),
         }
@@ -394,6 +398,54 @@ impl Frame {
             disp_width: 2,
             ..Mem::new(Some(Addr::new(Space::Frame, disp).in_slot(disp)), width as u32)
         })
+    }
+}
+
+/// What the spiller asks of the target's stack frame (`MachineFrameInfo`):
+/// where a spilled value lives, and the cell that names it.
+pub trait FrameInfo {
+    /// The slot a spilled value was given, once it has one.
+    fn home(
+        &self,
+        key: u32,
+    ) -> Option<i64>;
+
+    /// A cell of `width` bytes for the value `key`, giving it a slot if it
+    /// has none (`CreateSpillStackObject`).
+    fn cell(
+        &mut self,
+        key: u32,
+        width: u32,
+    ) -> Result<Mem, Refused>;
+
+    /// `LiveStacks`: each home's segments, as `InlineSpiller` wrote them.
+    fn set_stacks(
+        &mut self,
+        stacks: IndexMap<i64, Vec<(i64, i64)>>,
+    );
+}
+
+impl FrameInfo for Frame {
+    fn home(
+        &self,
+        key: u32,
+    ) -> Option<i64> {
+        self.slots.get(&SlotKey::from(key)).copied()
+    }
+
+    fn cell(
+        &mut self,
+        key: u32,
+        width: u32,
+    ) -> Result<Mem, Refused> {
+        Frame::cell(self, key, width)
+    }
+
+    fn set_stacks(
+        &mut self,
+        stacks: IndexMap<i64, Vec<(i64, i64)>>,
+    ) {
+        self.stacks = stacks;
     }
 }
 

@@ -98,7 +98,7 @@ Every step exits 0 to pass, 77 when SKIPPED, and anything else to fail. A cargo 
 | `identity` | `tests/toolchain.rs` `test_the_identity_gate_passes` | the compiler built against itself makes identical objects | identity |
 | `turbo` | Turbo Debugger sessions (`tests/turbo.rs`) | the debugger shows the same values | reference |
 | `cv4` | Microsoft LINK and CodeView sessions (`tests/cv4.rs`) | pass | reference |
-| `qcport` | `tools/qcport-run.py` | QCport built by llrm-c draws what the Borland build draws | reference |
+| `qcport` | `tools/qcport-run-cc.py` | QCport built by llrm-cc draws what the Borland build draws | reference |
 | `dos-slow` | `tools/dosbatch` tests marked `slow_dos` | pass | dos |
 | `measure` | `tools/measure.py check` | no compile-cost or growth rise past `[measure]` | cost |
 

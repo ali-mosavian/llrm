@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_casts.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_casts.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_casts.rs sha256:a359e532fa6fef350cba4c5c8c133ec1c6e49201a26da600b53dc91a31706273 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_casts.rs sha256:971cea0b94141704f6d5e88d4ea564b7a0e974d7fb0182c91fbce664741fc215 -->
 
 # combine_casts
 
@@ -25,15 +25,8 @@ DEVIATE 1: MIR has no vectors and no `vscale`: `foldVecTruncToExtElt`,
 `foldExtractionOfVectorDeinterleave`, the shuffle step of
 `commonCastTransforms` and the `vscale` folds are not translated.
 
-DEVIATE 2 (temporary): `FoldOpIntoSelect`, the select step of
-`commonCastTransforms`, is left out until the select family lands it.
-
-DEVIATE 4 (temporary): the folds that build an intrinsic call (`uadd.sat`,
-`usub.sat`, `smin`, `smax`, `ctlz`, `scmp`, `ucmp`, `fshl`, `fshr`) are
-left out until the Builder can declare an intrinsic (`combine_build`
-DEVIATE 2). So is the `llvm.abs` and min/max call case of
-`canEvaluateTruncated` and `EvaluateInDifferentType`: a call is not
-evaluable in the narrow type here.
+DEVIATE 4: the folds that build `uadd.sat` are not made: the selector has
+no `uadd.sat` lowering (`trunc(u/smin(zext a + zext b, MAX))`).
 
 DEVIATE 5: integers wider than 128 bits are left alone (masks are `u128`);
 a constant `ConstantExpr` would keep as an expression, or a shift amount

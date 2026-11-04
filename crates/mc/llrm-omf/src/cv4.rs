@@ -7,7 +7,7 @@
 //!
 //! BASIC's compilers write a different, older dialect: `cvwrite` is that one.
 
-use llrm_object::debug::{self as model, Info, Location, Reach, Scalar, Type, TypeId};
+use llrm_debug::{self as model, Info, Location, Reach, Scalar, Type, TypeId};
 use llrm_object::{Binding, DebugSection, Fix, Object, Reloc, Role, Section, Target};
 use llrm_support::leaf::{numeric, pad};
 
@@ -594,7 +594,7 @@ fn register_number(
     info: &Info,
     name: &str,
 ) -> Result<u16, Error> {
-    match info.registers.iter().find(|one| one.name == name).and_then(|one| one.codeview) {
+    match info.registers().codeview(name) {
         Some(number) => Ok(number),
         None => refused(format!("register {name} has no CodeView number")),
     }
@@ -662,10 +662,17 @@ impl Symbols<'_> {
                 self.record(if self.wide { 0x020C } else { 0x010C }, &data)?;
                 Ok(())
             }
-            Location::List(_) | Location::Constant(_) | Location::Pieces(_) => Ok(()),
+            Location::List(_)
+            | Location::Constant(_)
+            | Location::Offset(..)
+            | Location::Expression { .. }
+            | Location::EntryValue(_)
+            | Location::WasmLocal(_)
+            | Location::WasmStack(_)
+            | Location::Pieces(_) => Ok(()),
             Location::Frame { disp } => {
                 let mut data = Vec::new();
-                let frame = &self.info.frame_register;
+                let frame = &self.info.registers().frame;
                 // The frame register is BP's, or another's, which a
                 // register-relative record names.
                 let based = matches!(frame.as_str(), "ebp" | "bp");
@@ -717,7 +724,7 @@ impl Symbols<'_> {
         types: &mut Types,
         block: &model::Block,
     ) -> Result<(), Error> {
-        let [range] = block.ranges[..] else { return refused("a lexical block in pieces") };
+        let Some(range) = block.hull() else { return refused("a lexical block in several sections") };
         let mut data = Vec::new();
         self.scope_prefix(&mut data);
         data.truncate(8);

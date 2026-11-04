@@ -16,7 +16,7 @@ use crate::testing::{parsed, printed, results};
 fn pipe(module: &mut Module) {
     let applied =
         Applied { options: pipeline::Options { copy_headers: false, ..Default::default() }, ..Applied::default() };
-    Program::lend(module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| {
+    Program::lend(module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program: &mut Program| {
         pipeline::applied(program, &applied)
     })
     .and_then(|done| done)

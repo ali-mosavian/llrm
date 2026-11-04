@@ -1,6 +1,9 @@
 # Copies of target facts left in shared code, per file: count path. Only shrinks.
 1 crates/backend/llrm-dagisel-gen/src/inc.rs
 8 crates/backend/llrm-dagisel-gen/src/main.rs
+2 crates/backend/llrm-dagisel/src/aarch64_predicates.rs
+10 crates/backend/llrm-dagisel/src/generated/aarch64/aarch64_apple_m1.rs
+1 crates/backend/llrm-dagisel/src/generated/aarch64/ids.rs
 158 crates/backend/llrm-dagisel/src/generated/instrinfo.rs
 1 crates/backend/llrm-dagisel/src/generated/mod.rs
 2 crates/backend/llrm-dagisel/src/generated/x86_i486.rs
@@ -35,15 +38,15 @@
 2 crates/codegen/llrm-codegen/src/backend/isel/wide.rs
 1 crates/codegen/llrm-codegen/src/backend/leaopt.rs
 6 crates/codegen/llrm-codegen/src/backend/machinecp.rs
-16 crates/codegen/llrm-codegen/src/backend/masm.rs
+15 crates/codegen/llrm-codegen/src/backend/masm.rs
 21 crates/codegen/llrm-codegen/src/backend/mirprint.rs
 6 crates/codegen/llrm-codegen/src/backend/peep/guards.rs
 4 crates/codegen/llrm-codegen/src/backend/peep/make.rs
-13 crates/codegen/llrm-codegen/src/backend/peephole.rs
+12 crates/codegen/llrm-codegen/src/backend/peephole.rs
 2 crates/codegen/llrm-codegen/src/backend/pushfold.rs
 1 crates/codegen/llrm-codegen/src/backend/rewriter.rs
 16 crates/codegen/llrm-codegen/src/backend/selectiondag/builder.rs
-14 crates/codegen/llrm-codegen/src/backend/selectiondag/builder/memops.rs
+13 crates/codegen/llrm-codegen/src/backend/selectiondag/builder/memops.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/builder/switch.rs
 3 crates/codegen/llrm-codegen/src/backend/selectiondag/builder/tailcall.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/dag.rs
@@ -51,10 +54,10 @@
 17 crates/codegen/llrm-codegen/src/backend/selectiondag/dagisel_adapter.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/div_combine.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/dump.rs
-60 crates/codegen/llrm-codegen/src/backend/selectiondag/emit.rs
+57 crates/codegen/llrm-codegen/src/backend/selectiondag/emit.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/opcodes.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/schedule.rs
-4 crates/codegen/llrm-codegen/src/backend/selectiondag/x86_lowering.rs
+2 crates/codegen/llrm-codegen/src/backend/selectiondag/x86_lowering.rs
 1 crates/codegen/llrm-codegen/src/backend/slots.rs
 2 crates/codegen/llrm-codegen/src/backend/storecombine.rs
 1 crates/codegen/llrm-codegen/src/backend/upperzero.rs
@@ -91,7 +94,6 @@
 2 crates/support/llrm-support/src/pyrepr.rs
 1 crates/support/llrm-support/src/pyset.rs
 7 tools/analysis/runtime_writes.py
-2 tools/targets/arm64_fuzz.py
 1 tools/bench/flatcount.py
 3 tools/bench/maps.py
 2 tools/debug-matrix.py
@@ -109,7 +111,8 @@
 9 tools/loops/oracle.py
 9 tools/loops/quality.py
 1 tools/loops/run.py
-4 tools/targets/msp430.py
 1 tools/pairs/bench_pin.py
 1 tools/pairs/pinclocks.sh
 1 tools/pairs/pindiff.py
+2 tools/targets/arm64_fuzz.py
+4 tools/targets/msp430.py

@@ -12,8 +12,15 @@ fn quotient_of(
     let ptr = dag.get_register(EVT::I32, 7);
     let chain = dag.entry_node();
     let mut dword = |slot: i32| {
-        let info =
-            MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Stack(slot), ext: None, space: 0 };
+        let info = MemInfo {
+            mem_vt: EVT::I32,
+            align: 4,
+            volatile: false,
+            base: MemBase::Stack(slot),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
         dag.get_load(EVT::I32, chain, ptr, info)
     };
     let (a, b, c, d) = (dword(1), dword(2), dword(3), dword(4));

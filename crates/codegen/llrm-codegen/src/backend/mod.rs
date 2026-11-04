@@ -128,6 +128,11 @@ pub mod addressforms;
 pub mod addressvalues;
 pub mod affine;
 pub mod allocate;
+pub mod allocresult;
+pub mod assignment_tracking;
+pub mod livedebugvalues;
+pub mod livedebugvariables;
+
 pub mod arithmetic;
 pub mod arrival;
 pub mod asm;
@@ -138,7 +143,6 @@ pub mod calleefacts;
 pub mod callregs;
 pub mod cfi;
 pub mod classes;
-pub mod coalesce;
 pub mod combiner;
 pub mod comparefold;
 pub mod compares;
@@ -160,6 +164,7 @@ pub mod floatalloc;
 pub mod floatassign;
 pub mod floatfold;
 pub mod floatregions;
+pub mod fmuladd;
 pub mod fpconvert;
 pub mod fpcopyprop;
 pub mod fpregs;
@@ -172,6 +177,8 @@ pub mod funnel;
 pub mod globals;
 pub mod inline_asm;
 pub mod isel;
+pub mod liverows;
+pub mod masks;
 pub mod valuefacts;
 
 /// Every target's peephole rules, as its definition directory is named.
@@ -199,6 +206,8 @@ pub mod incremental;
 pub mod intbits;
 #[cfg(test)]
 mod isel_tests;
+pub mod ivshare;
+pub mod ivzero;
 pub mod jumps;
 pub mod lanes;
 pub mod latecleanup;
@@ -208,6 +217,7 @@ pub mod legalize;
 pub mod libmcalls;
 #[cfg(test)]
 mod libmcalls_tests;
+pub mod licm_core;
 pub mod lifetimes;
 pub mod lirtext;
 pub mod live;
@@ -251,7 +261,7 @@ pub mod regthrash;
 pub mod relayout;
 pub mod returnsplit;
 pub mod rmw;
-pub mod saverestore;
+pub use llrm_analysis::saverestore;
 pub mod schedule;
 pub mod selectconstants;
 pub mod selectiondag;
@@ -262,6 +272,7 @@ mod shadow_tests;
 pub mod shrinkwrap;
 pub mod slotcopies;
 pub mod slots;
+pub mod stackcoloring;
 pub mod stackusage;
 pub mod stepflags;
 pub mod valuetrack;
@@ -329,6 +340,7 @@ pub mod select {
     }
 }
 pub mod bodyfacts;
+pub mod deadspills;
 pub mod regclass;
 pub mod registerinfo;
 pub mod repbsf;
@@ -342,6 +354,7 @@ pub mod timing;
 pub mod twoaddr;
 pub mod upperzero;
 pub mod verify;
+pub mod widths;
 
 #[cfg(test)]
 mod pricing_tests;

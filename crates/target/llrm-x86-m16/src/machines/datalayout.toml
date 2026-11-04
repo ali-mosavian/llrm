@@ -38,3 +38,20 @@ fixed = 4
 [pointers]
 2 = "near"
 4 = "far"
+
+# What the C front end lays types out as, in bytes: the one place sizeof(int), sizeof(void *) and the rest are stated
+# Medium model: near data, far code (-mcmodel names the others).
+# (llrm-cc checks its clang against it; the triple's default decides nothing). A row names its libc's departures
+# (`wchar_bytes`, `long_double_bytes` in targets.toml).
+[c]
+int = 2
+long = 4
+long_long = 8
+pointer = 2
+function_pointer = 4
+size_t = 2
+ptrdiff_t = 2
+wchar_t = 2
+double = 8
+long_double = 10
+enum = 2

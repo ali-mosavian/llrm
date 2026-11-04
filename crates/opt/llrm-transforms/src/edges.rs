@@ -346,6 +346,10 @@ pub fn split_block_predecessors_of(
     has_loop_exit: bool,
 ) -> BlockId {
     assert!(!preds.is_empty(), "predecessors to split off");
+    // `SplitBlockPredecessorsImpl`: a landing pad is split by its own routine.
+    if starts_with_landing_pad(function, bb) {
+        return split_landing_pad_predecessors(function, bb, preds, "", ".split-lp", has_loop_exit)[0];
+    }
     let void = function.instruction(function.terminator(bb).expect("a terminated block")).ty;
     let new = function.create_block(None);
     // Right before `bb`, as the pin lays it out (BasicBlockUtils.cpp:1331).
@@ -356,6 +360,22 @@ pub fn split_block_predecessors_of(
         let term = function.terminator(pred).expect("a terminated predecessor");
         retarget(function, term, bb, new);
     }
+    update_phi_nodes(function, bb, new, preds, jump, has_loop_exit);
+    new
+}
+
+/// `UpdatePHINodes`
+/// ([BasicBlockUtils.cpp:1241](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/BasicBlockUtils.cpp#L1241)):
+/// each phi of `bb` reads `new` for the inputs of `preds`, the value they agree
+/// on, else a phi in `new` (before `jump`) gathering theirs.
+fn update_phi_nodes(
+    function: &mut Function,
+    bb: BlockId,
+    new: BlockId,
+    preds: &[BlockId],
+    jump: InstId,
+    has_loop_exit: bool,
+) {
     for phi in phis(function, bb) {
         let mut incoming = arms(function, phi);
         let coming: Vec<Operand> = incoming.iter().filter(|(_, from)| preds.contains(from)).map(|&(v, _)| v).collect();
@@ -387,7 +407,74 @@ pub fn split_block_predecessors_of(
         incoming.push((value, new));
         function.set_operands(phi, from_arms(&incoming));
     }
-    new
+}
+
+/// `SplitLandingPadPredecessors`
+/// ([BasicBlockUtils.cpp:1418](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/BasicBlockUtils.cpp#L1418)):
+/// `bb` starts with a landing pad, which only an unwind edge may reach, so it
+/// cannot take a bridge. The edges of `preds` go to a new block `bb{suffix1}`
+/// and all the others to `bb{suffix2}`, each with a copy of the landing pad
+/// and a jump to `bb`; `bb` keeps its phis and reads the pads through a phi
+/// where both blocks exist. The new blocks, the second only where edges
+/// remain; `preds` is not empty.
+pub fn split_landing_pad_predecessors(
+    function: &mut Function,
+    bb: BlockId,
+    preds: &[BlockId],
+    suffix1: &str,
+    suffix2: &str,
+    has_loop_exit: bool,
+) -> Vec<BlockId> {
+    let void = function.instruction(function.terminator(bb).expect("a terminated block")).ty;
+    let mut made = Vec::new();
+    // Right before `bb`, the unwind edges of `preds` first and then the rest.
+    let bridge = |function: &mut Function, edges: &[BlockId]| {
+        let new = function.create_block(None);
+        function.insert_block_before(new, bb).expect("a new block");
+        let jump = function.create_instruction(Opcode::Br, void, vec![Operand::Block(bb)], Flags::default(), None);
+        function.insert(jump, Position::End(new)).expect("a placed block");
+        for &pred in edges {
+            let term = function.terminator(pred).expect("a terminated predecessor");
+            retarget(function, term, bb, new);
+        }
+        update_phi_nodes(function, bb, new, edges, jump, has_loop_exit);
+        new
+    };
+    let first = bridge(function, preds);
+    made.push(first);
+    let rest: Vec<BlockId> = function.predecessors(bb).into_iter().filter(|&one| one != first).collect();
+    if !rest.is_empty() {
+        made.push(bridge(function, &rest));
+    }
+    let pad =
+        function.iter_block(bb).find(|&one| function.instruction(one).opcode != Opcode::Phi).expect("the landing pad");
+    let (ty, result) = (function.instruction(pad).ty, function.instruction(pad).result.expect("a pad's value"));
+    let mut copies = Vec::new();
+    for (&new, suffix) in made.iter().zip([suffix1, suffix2]) {
+        let copy = function.clone_instruction(pad);
+        let jump = function.terminator(new).expect("a jump");
+        function.insert(copy, Position::Before(jump)).expect("a placed pad");
+        let value = function.instruction(copy).result.expect("a pad's value");
+        function.set_name(value, &format!("lpad{suffix}"));
+        copies.push((Operand::Value(value), new));
+    }
+    let merged = if let [(_, _), (_, _)] = copies[..] {
+        if function.users(result).is_empty() {
+            None
+        } else {
+            let gather =
+                function.create_instruction(Opcode::Phi, ty, from_arms(&copies), Flags::default(), Some("lpad.phi"));
+            function.insert(gather, Position::Before(pad)).expect("a placed phi");
+            Some(Operand::Value(function.instruction(gather).result.expect("a phi's value")))
+        }
+    } else {
+        Some(copies[0].0)
+    };
+    if let Some(with) = merged {
+        function.replace_all_uses_with(result, with);
+    }
+    function.erase(pad).expect("a pad without users");
+    made
 }
 
 /// The edge's own phi uses: a phi in one arm of a `br i1` that takes the

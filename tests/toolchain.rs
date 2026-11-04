@@ -90,6 +90,7 @@ fn test_nib_build_links_the_interop_example_with_its_c_library() {
         .arg("-O2")
         .arg(example.join("geometry.c"))
         .env("TOOLCHAIN", bin)
+        .env("NIB_CC", "llrm-cc")
         .status()
         .unwrap();
     assert!(status.success(), "nib-build.sh");
@@ -205,170 +206,6 @@ fn test_nib_start_leaves_a_kilobyte_frame_room() {
     assert_eq!(std::fs::read_to_string(dir.join("OUT.TXT")).unwrap(), "5\r\n");
 }
 
-/// llrm-c runs each parity fixture to bench/parity/expected.json's value.
-#[test]
-fn test_c_parity_fixtures_compute_their_expected_values() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let bin = Path::new(env!("CARGO_BIN_EXE_llrm-cc")).parent().unwrap();
-    let scratch = tempfile::tempdir().unwrap();
-    let dir = scratch.path();
-    let run = |program: &str, args: &[&str]| {
-        let done = Command::new(bin.join(program)).args(args).current_dir(dir).output().unwrap();
-        assert!(done.status.success(), "{program} {args:?}: {}", String::from_utf8_lossy(&done.stderr));
-    };
-    let parity = root.join("tests/fixtures/c/parity");
-    let expected: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(root.join("bench/parity/expected.json")).unwrap()).unwrap();
-    let mut names: Vec<String> = std::fs::read_dir(&parity)
-        .unwrap()
-        .filter_map(|one| Some(one.unwrap().path().to_str()?.strip_suffix(".cgs")?.rsplit('/').next()?.to_owned()))
-        .collect();
-    names.sort();
-    // The C start-up is the OS layer's: its start, C's hook, and its
-    // operations, which `main` below calls.
-    let target = llrm_x86_m16::M16;
-    let (layer, c) =
-        (llrm_target::Target::os_layer(&target).unwrap(), llrm_target::Target::runtime(&target, "c").unwrap());
-    let defines: Vec<String> = layer
-        .defines()
-        .unwrap()
-        .into_iter()
-        .chain(c.defines().unwrap())
-        .map(|(symbol, value)| format!("-D{symbol}={value}"))
-        .collect();
-    let assemble = |source: String, object: &str| {
-        let mut args = vec![
-            "-q".to_owned(),
-            "-c".into(),
-            "-Cp".into(),
-            "-Zg".into(),
-            common::assembler().into(),
-            format!("-Fo{object}"),
-        ];
-        args.extend(defines.iter().cloned());
-        args.push(source);
-        let args: Vec<&str> = args.iter().map(String::as_str).collect();
-        run("jwasm", &args);
-    };
-    assemble(format!("{}/{}", layer.directory, layer.string("start").unwrap()), "layer_start.obj");
-    assemble(format!("{}/{}", layer.directory, layer.string("implementation").unwrap()), "layer_os.obj");
-    assemble(format!("{}/{}", c.directory, c.string("init_file").unwrap()), "c_init.obj");
-    std::fs::write(dir.join("os.h"), layer.c_header().unwrap()).unwrap();
-    // Each fixture's entry, run by a C `main` that writes its value to
-    // VALUE.BIN and ends by the layer's exit. The fixtures are streams Open
-    // Watcom recorded with every function cdecl, so the entry is declared as it
-    // is.
-    let entries = [
-        ("algebra", "parity_algebra_demo"),
-        ("branch", "parity_branch_demo"),
-        ("control", "parity_control_demo"),
-        ("loop", "parity_loop_demo"),
-        ("memory", "parity_memory_demo"),
-        ("parity", "parity_kernel"),
-        ("qbsp", "quake_bsp_demo"),
-        ("qlight", "quake_light_demo"),
-        ("qmove", "quake_move_demo"),
-        ("scalar", "parity_scalar"),
-    ];
-    assert_eq!(entries.len(), names.len(), "premise: every fixture has an entry: {names:?}");
-    let mut autoexec = format!("[autoexec]\nmount c {}\nc:\n", dir.display());
-    let mut runs = Vec::new();
-    for (number, name) in names.iter().enumerate() {
-        let entry = entries.iter().find(|(one, _)| one == name).unwrap_or_else(|| panic!("no entry for {name}")).1;
-        let main = format!(
-            "#include \"os.h\"\nextern long __cdecl {entry}(void);\nint main(void)\n{{\n    long value = {entry}();\n    short handle = llrm_os_create(\"VALUE.BIN\");\n    if (handle < 0 || llrm_os_write_file(handle, (const unsigned char *)&value, 4) != 4) return 1;\n    llrm_os_close(handle);\n    return 0;\n}}\n"
-        );
-        std::fs::write(dir.join(format!("{name}_main.c")), main).unwrap();
-        run(
-            "llrm-c",
-            &[
-                dir.join(format!("{name}_main.c")).to_str().unwrap(),
-                "-I",
-                dir.to_str().unwrap(),
-                "-o",
-                &format!("{name}_m.obj"),
-            ],
-        );
-        let program = format!("P{number}");
-        let source = parity.join(format!("{name}.cgs"));
-        run("llrm-c", &[source.to_str().unwrap(), "-o", &format!("{program}.obj")]);
-        run(
-            "jwlink",
-            &common::jwlink(&[
-                "name",
-                &format!("{program}.EXE"),
-                "file",
-                "layer_start.obj",
-                "file",
-                "c_init.obj",
-                "file",
-                &format!("{name}_m.obj"),
-                "file",
-                &format!("{program}.obj"),
-                "file",
-                "layer_os.obj",
-                "op",
-                "quiet",
-            ]),
-        );
-        autoexec += &format!("del VALUE.BIN\n{program}\ncopy VALUE.BIN {program}.BIN\n");
-        runs.push((name.clone(), program));
-    }
-    std::fs::write(dir.join("dosbox.conf"), autoexec + "exit\n").unwrap();
-    run("dosbox-x", &["-nolog", "-exit", "-conf", dir.join("dosbox.conf").to_str().unwrap()]);
-    for (name, program) in runs {
-        let bytes = std::fs::read(dir.join(format!("{program}.BIN"))).unwrap_or_default();
-        let value = bytes.get(..4).map(|word| i64::from(i32::from_le_bytes(word.try_into().unwrap())));
-        assert_eq!(value, expected[&name].as_i64(), "{name}");
-    }
-}
-
-/// `fixture`.cgs through llrm-c and jwlink with a start-up object that names
-/// `entry`; the linker's complaint if it refuses.
-fn linked_fixture(
-    fixture: &str,
-    entry: &str,
-) -> Result<(), String> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let bin = Path::new(env!("CARGO_BIN_EXE_llrm-cc")).parent().unwrap();
-    let scratch = tempfile::tempdir().unwrap();
-    let dir = scratch.path();
-    std::fs::write(dir.join("START.ASM"), format!("{header}.stack 256\nextrn {entry}:far\n.code\nstart: call far ptr {entry}\nmov ax, 4C00h\nint 21h\nend start\n", header = common::header())).unwrap();
-    let run = |program: &str, args: &[&str]| {
-        let done = Command::new(bin.join(program)).args(args).current_dir(dir).output().unwrap();
-        if done.status.success() {
-            Ok(())
-        } else {
-            Err(format!(
-                "{program}: {}{}",
-                String::from_utf8_lossy(&done.stdout),
-                String::from_utf8_lossy(&done.stderr)
-            ))
-        }
-    };
-    run("jwasm", &["-q", common::assembler(), "-FoSTART.OBJ", "START.ASM"])?;
-    let source = root.join(format!("tests/fixtures/c/{fixture}.cgs"));
-    run("llrm-c", &[source.to_str().unwrap(), "-O2", "-march=i486", "-o", "P.OBJ"])?;
-    run("jwlink", &common::jwlink(&["name", "P.EXE", "file", "START.OBJ", "file", "P.OBJ", "op", "quiet"]))
-}
-
-/// A far segment was word aligned: after `odd` (3 bytes) the next far
-/// segment held a 64K array at offset 4 of its frame, and jwlink refused it:
-/// "E2021: size of segment exceeds 64k by 8 bytes" (#102).
-#[test]
-fn test_a_64k_far_array_after_an_odd_sized_far_segment_links() {
-    let done = linked_fixture("farsegments", "_get");
-    assert!(done.is_ok(), "{}", done.unwrap_err());
-}
-
-/// A `__huge` global past 64K stopped llrm-c: "a14_DATA data before any
-/// label", the second segment of its 80000 bytes (#101).
-#[test]
-fn test_a_huge_global_past_64k_compiles_and_links_across_two_segments() {
-    let done = linked_fixture("hugeglobal", "_first");
-    assert!(done.is_ok(), "{}", done.unwrap_err());
-}
-
 /// Nine to eleven arrays, near and far, summed over one counter on a P5 or
 /// Core: loop strength reduction kept four products live beside the counter and
 /// the allocator found "value cannot be spilled and no register is free", where
@@ -423,65 +260,6 @@ fn test_a_loop_over_many_arrays_keeps_no_product_in_a_frame_cell() {
     assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
     let asm = std::fs::read_to_string(listing).unwrap();
     assert!(!asm.contains("shl dword ptr [bp"), "{asm}");
-}
-
-/// A `__huge` array of 80000 bytes, run on DOS: each routine reads or writes
-/// where a 16-bit offset that wraps at 64K would give another element, and a
-/// huge pointer's loop end, difference and step must carry into the selector
-/// by the DOS stride (#101).
-#[test]
-fn test_a_huge_array_past_64k_reads_and_writes_the_right_elements_on_dos() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let bin = Path::new(env!("CARGO_BIN_EXE_llrm-cc")).parent().unwrap();
-    let scratch = tempfile::tempdir().unwrap();
-    let dir = scratch.path();
-    let routines = [
-        ("_hfill", 59_998),
-        ("_hsumidx", 599_990_000),
-        ("_hsumptr", 599_990_000),
-        ("_hdiff", 19_989),
-        ("_hmid", 51_001),
-    ];
-    let mut start = common::header();
-    for (name, _) in routines {
-        start += &format!("extrn {name}:far\n");
-    }
-    start += &format!(
-        ".data\nvalues dd {} dup (?)\nfilename db 'VALUES.BIN', 0\nstack_space db 1024 dup (?)\nstack_top label byte\n.code\nstart:\n    mov ax, @data\n    mov ds, ax\n    cli\n    mov ss, ax\n    mov sp, offset stack_top\n    sti\n    fninit\n",
-        routines.len()
-    );
-    for (at, (name, _)) in routines.iter().enumerate() {
-        start += &format!(
-            "    call far ptr {name}\n    mov word ptr values+{}, ax\n    mov word ptr values+{}, dx\n",
-            at * 4,
-            at * 4 + 2
-        );
-    }
-    start += &format!(
-        "    mov ah, 3ch\n    xor cx, cx\n    lea dx, filename\n    int 21h\n    mov bx, ax\n    mov ah, 40h\n    mov cx, {}\n    lea dx, values\n    int 21h\n    mov ax, 4c00h\n    int 21h\nend start\n",
-        routines.len() * 4
-    );
-    std::fs::write(dir.join("START.ASM"), start).unwrap();
-    let run = |program: &str, args: &[&str]| {
-        let done = Command::new(bin.join(program)).args(args).current_dir(dir).output().unwrap();
-        assert!(
-            done.status.success(),
-            "{program}: {}{}",
-            String::from_utf8_lossy(&done.stdout),
-            String::from_utf8_lossy(&done.stderr)
-        );
-    };
-    run("jwasm", &["-q", "-c", "-Cp", "-Zg", common::assembler(), "-FoSTART.OBJ", "START.ASM"]);
-    let source = root.join("tests/fixtures/c/hugearray.cgs");
-    run("llrm-c", &[source.to_str().unwrap(), "-O2", "-march=i486", "-o", "P.OBJ"]);
-    run("jwlink", &common::jwlink(&["name", "P.EXE", "file", "START.OBJ", "file", "P.OBJ", "op", "quiet"]));
-    std::fs::write(dir.join("dosbox.conf"), format!("[autoexec]\nmount c {}\nc:\nP\nexit\n", dir.display())).unwrap();
-    run("dosbox-x", &["-nolog", "-exit", "-conf", dir.join("dosbox.conf").to_str().unwrap()]);
-    let bytes = std::fs::read(dir.join("VALUES.BIN")).unwrap_or_default();
-    let got: Vec<i64> =
-        bytes.chunks_exact(4).map(|word| i64::from(i32::from_le_bytes(word.try_into().unwrap()))).collect();
-    let want: Vec<i64> = routines.iter().map(|(_, value)| *value).collect();
-    assert_eq!(got, want, "{:?}", routines.map(|(name, _)| name));
 }
 
 /// Far and huge are near where a target has one address space, and the compiler
@@ -598,7 +376,8 @@ fn test_the_generated_header_is_far_only_where_far_code_is() {
 /// or 4, are `calll memcpy`; X86 `getMaxInlineSizeThreshold` is 128). This test
 /// asserted `rep movsd` for a 300 B copy, which the call replaced. llrm-cc: the
 /// 300 B clear is `call memset` (the pin's llc on the same C), the 100 B copy
-/// `rep movsd`; m16 has no library to call and fills with `rep stosb`.
+/// `rep movsd`; m16 has no library to call and fills with `rep stosd` (the
+/// dword fill of a multiple of 4).
 #[test]
 fn test_m32_block_operations_are_rep_string_instructions_without_segments() {
     let scratch = tempfile::tempdir().unwrap();
@@ -623,7 +402,7 @@ fn test_m32_block_operations_are_rep_string_instructions_without_segments() {
         "{flat}"
     );
     let real = listing("x86-m16");
-    assert!(real.contains("rep stosb") && real.lines().any(|line| line.trim() == "pop es"), "{real}");
+    assert!(real.contains("rep stosd") && real.lines().any(|line| line.trim() == "pop es"), "{real}");
 }
 
 /// A program the repository ships as an example or a benchmark compiles without

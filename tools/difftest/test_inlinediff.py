@@ -1,6 +1,7 @@
 """The inline-decision comparison on a hand-made module: a call LLVM refuses over a threshold that llrm inlined shows as llrm-only; at the default
 threshold both inline it and the module is all agree."""
 
+import os
 import sys
 from pathlib import Path
 
@@ -11,7 +12,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 import difftest  # noqa: E402
 import inlinediff  # noqa: E402
 
-needs_opt = pytest.mark.skipif(not (difftest.LLVM_BIN / "opt").is_file(), reason="no opt at LLVM_BIN")
+# Red, not skipped, where the gate requires the pin's tools (LLRM_REQUIRE_PINTOOLS): a missing opt then fails the test that needs it.
+needs_opt = pytest.mark.skipif(not (difftest.LLVM_BIN / "opt").is_file() and not os.environ.get("LLRM_REQUIRE_PINTOOLS"), reason="no opt at LLVM_BIN")
 
 CHAIN = "".join(f"  %a{i} = add i32 %a{i - 1}, 1\n" for i in range(1, 31))
 BEFORE = (

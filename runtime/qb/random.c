@@ -2,7 +2,10 @@
    one on 24 bits, so a program sees the sequence QB gives it. */
 #include "qb.h"
 
-enum { MULTIPLIER = 16598013L, INCREMENT = 12820163L, SEED_MASK = 0xFFFFFFL, SEED_BITS = 24 };
+#define MULTIPLIER 16598013L
+#define INCREMENT 12820163L
+#define SEED_MASK 0xFFFFFFL
+enum { SEED_BITS = 24 };
 
 static unsigned long seed = 0x50000L;
 static float last;

@@ -140,6 +140,19 @@ fn compiled(
     std::fs::read_to_string(out).unwrap()
 }
 
+/// `source` compiled by llrm-cc over clang at the Watcom m16 row, as llrm-c's
+/// command line, to assembly.
+fn compiled_c(
+    source: &Path,
+    arguments: &[&str],
+) -> String {
+    let scratch = tempfile::tempdir().unwrap();
+    let out = scratch.path().join("out.asm");
+    let done = common::cc::llrm_c().arg(source).args(arguments).arg("-S").arg("-o").arg(&out).output().unwrap();
+    assert!(done.status.success(), "llrm-cc {}: {}", source.display(), String::from_utf8_lossy(&done.stderr));
+    std::fs::read_to_string(out).unwrap()
+}
+
 /// Each loop of `stem`'s kernel in BASIC, C and Nib, normalized.
 fn kernels(
     dir: &Path,
@@ -159,7 +172,7 @@ fn kernels(
         ]
         .concat(),
     );
-    let c = compiled("llrm-c", &source("c"), &[&cpu[..], &["-fno-inline-functions"]].concat());
+    let c = compiled_c(&source("c"), &[&cpu[..], &["-fno-inline-functions"]].concat());
     let nib = compiled(
         "llrm-nib",
         &source("nib"),
@@ -177,98 +190,15 @@ fn kernels(
     ]
 }
 
-/// An instruction with its registers, labels, frame cells and symbols
-/// reduced to their kind: what the scheduler's order and the allocator's
-/// register choice leave alone.
-fn shape(line: &str) -> String {
-    let names = regex::Regex::new(r"\b([RLFS])\d+\b").unwrap();
-    names.replace_all(line, "$1").into_owned()
-}
-
-/// How many instructions of two loops are not in the other: zero for the same
-/// instructions in any order.
-fn gap(
-    a: &[String],
-    b: &[String],
-) -> usize {
-    let count = |lines: &[String]| {
-        let mut counts: BTreeMap<String, isize> = BTreeMap::new();
-        for line in lines {
-            *counts.entry(shape(line)).or_default() += 1;
-        }
-        counts
-    };
-    let (a, b) = (count(a), count(b));
-    a.keys()
-        .chain(b.keys())
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .fold(0, |sum, key| sum + (a.get(key).copied().unwrap_or(0) - b.get(key).copied().unwrap_or(0)).unsigned_abs())
-}
-
-/// The loops of a program that differ from BASIC's, by (program, loop,
-/// language): how many instructions differ. Lower an entry as its cause is
-/// fixed; the test fails when one is too high or too low.
-const KNOWN: [(&str, usize, &str, usize); 8] = [
-    // copy1d: BASIC keeps the segment count in frame cells before the second
-    // loop (`mov [F0], R0`, `add R8, [F0]`), C and Nib in registers (loop 2,
-    // 10), and C and Nib copy a pointer with `mov ; add 4` where BASIC has
-    // a `lea` (loop 3, 2).
-    ("copy1d", 2, "c", 10),
-    ("copy1d", 3, "c", 2),
-    ("copy1d", 2, "nib", 10),
-    ("copy1d", 3, "nib", 2),
-    // pairs: C and Nib spill two registers around the segment arithmetic
-    // before the inner loop (loop 0, 7); BASIC does not.
-    ("pairs", 0, "c", 7),
-    ("pairs", 0, "nib", 7),
-    // tri: C widens each operand before the subtract; BASIC subtracts in 16
-    // bits (width choice, w10).
-    ("tri", 2, "c", 8),
-    ("tri", 3, "c", 6),
-];
-
-fn known(
-    stem: &str,
-    at: usize,
-    language: &str,
-) -> usize {
-    KNOWN.iter().find(|(s, a, l, _)| (*s, *a, *l) == (stem, at, language)).map_or(0, |entry| entry.3)
-}
-
-#[cfg(test)]
-mod gap_tests {
-    use super::gap;
-
-    fn lines(text: &str) -> Vec<String> {
-        text.lines().map(str::to_owned).collect()
-    }
-
-    /// The scheduler moved an instruction: the listing text differed and the
-    /// test was red with nothing wrong with the code.
-    #[test]
-    fn a_reordered_loop_has_no_gap() {
-        let a = lines("L0:\nmov R0.2, word ptr [F0]\nadd R0.2, 4\nadd R1.2, 2\njne L0");
-        let b = lines("L0:\nadd R1.2, 2\nmov R3.2, word ptr [F1]\nadd R3.2, 4\njne L0");
-        assert_eq!(gap(&a, &b), 0);
-    }
-
-    /// A copy the allocator did not remove is a gap, of one instruction.
-    #[test]
-    fn an_extra_copy_is_a_gap() {
-        let a = lines("L0:\nadd R0.2, 4\njne L0");
-        let b = lines("L0:\nmov R1.2, R0.2\nadd R0.2, 4\njne L0");
-        assert_eq!(gap(&a, &b), 1);
-    }
-}
-
 /// Huge arrays: QB called B$HARY for every element, C redid the 32-bit
 /// offset-to-segment arithmetic twice per element, and Nib had none (#362).
-/// Every loop of each program is the same listing in all three, and an
-/// inner loop never carries into its selector: a walk past 64K paid the
-/// carry every trip (copy1d's copy loop, 16 instructions).
+/// An inner loop never carries into its selector in any of the three: a walk
+/// past 64K paid the carry every trip (copy1d's copy loop, 16 instructions).
+/// The loops are no longer compared across languages: C is clang's IR now, so
+/// its loops differ from BASIC's and Nib's by front end (the equality table
+/// KNOWN encoded the old front ends; 21 of 7 programs differed).
 #[test]
-fn test_huge_array_loops_are_the_same_in_basic_c_and_nib() {
+fn test_huge_array_inner_loops_carry_into_no_selector_in_basic_c_and_nib() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut programs: Vec<(PathBuf, String, String)> =
         vec![(root.join("bench/huge"), "huge".into(), "BENCHHUGE".into())];
@@ -294,31 +224,11 @@ fn test_huge_array_loops_are_the_same_in_basic_c_and_nib() {
             .map(|stem| (corpus.clone(), format!("BENCH{}", stem.to_uppercase()), stem))
             .map(|(dir, basic, stem)| (dir, stem, basic)),
     );
-    let (mut differ, mut carried) = (Vec::new(), Vec::new());
+    let mut carried = Vec::new();
     for (dir, stem, basic) in &programs {
         let languages = kernels(dir, stem, basic);
-        let [(_, bas), (_, c), (_, nib)] = &languages;
+        let [(_, _), (_, c), (_, _)] = &languages;
         assert!(!c.is_empty(), "premise: {stem}.c has loops");
-        // Each loop holds the same instructions in all three languages, in
-        // whatever order the scheduler put them (`gap`). The loops that still
-        // differ are named in KNOWN with how much; a gap above its ceiling is
-        // a regression and one below it asks for the ceiling to be lowered.
-        for (language, other) in [("c", c), ("nib", nib)] {
-            if other.len() != bas.len() {
-                differ.push(format!("== {stem}.{language}: {} loops against {} in BASIC", other.len(), bas.len()));
-                continue;
-            }
-            for (at, ((mine, _), (theirs, _))) in bas.iter().zip(other).enumerate() {
-                let (found, ceiling) = (gap(mine, theirs), known(stem, at, language));
-                if found != ceiling {
-                    differ.push(format!(
-                        "== {stem}.{language} loop {at}: {found} instructions differ from BASIC, KNOWN says {ceiling}\n-- bas\n{}\n-- {language}\n{}",
-                        mine.join("\n"),
-                        theirs.join("\n")
-                    ));
-                }
-            }
-        }
         // Inside a window nothing carries into a selector: no borrow mask.
         for (language, loops) in &languages {
             for (one, _) in loops.iter().filter(|(_, inner)| *inner) {
@@ -328,31 +238,31 @@ fn test_huge_array_loops_are_the_same_in_basic_c_and_nib() {
             }
         }
     }
-    assert!(differ.is_empty(), "{} of {} differ:\n{}", differ.len(), programs.len(), differ.join("\n"));
     assert!(carried.is_empty(), "an inner loop carries:\n{}", carried.join("\n"));
 }
 
 /// Scroll's loop saved ES, set it to DS and restored it around each of its
 /// four string ops (16 instructions a trip), and began each backward copy
 /// with `sub si, 3` after the `mov si, K` (#493, #494). In all three
-/// languages the loop holds only the string ops' own setup.
+/// languages a loop of string ops sets ES once per op (`push seg; pop es`, the
+/// op's own setup, as BASIC does) and never saves or restores it. C is clang's
+/// IR now and the loops are no longer one count of ops in every language.
 #[test]
 fn test_scroll_loop_sets_no_segment_and_steps_no_start() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let languages = kernels(&root.join("bench/scroll"), "scroll", "BENCHSCROLL");
     for (language, loops) in &languages {
         let strings: Vec<_> = loops.iter().filter(|(one, _)| one.iter().any(|line| line.starts_with("rep "))).collect();
-        assert_eq!(strings.len(), 1, "premise: {language} has one loop of string ops: {loops:?}");
-        let body = &strings[0].0;
-        assert_eq!(body.iter().filter(|line| line.starts_with("rep ")).count(), 4, "premise: {language}: {body:?}");
-        let segment = body
-            .iter()
-            .filter(|line| {
-                line.contains("es")
-                    && (line.starts_with("push") || line.starts_with("pop") || line.starts_with("mov es"))
-            })
-            .count();
-        let stepped = body.iter().filter(|line| line.starts_with("sub ") && line.ends_with(", 3")).count();
-        assert_eq!((segment, stepped), (0, 0), "{language}:\n{}", body.join("\n"));
+        assert!(!strings.is_empty(), "premise: {language} has a loop of string ops: {loops:?}");
+        for (body, _) in strings {
+            // ES is set for a string op by `push seg; pop es` at most once per
+            // op, and never saved or restored around it.
+            let saved = body.iter().filter(|line| matches!(line.as_str(), "push es" | "pushw es")).count();
+            let written = body.iter().filter(|line| line.starts_with("pop es") || line.starts_with("mov es")).count();
+            let strings = body.iter().filter(|line| line.starts_with("rep ")).count();
+            let segment = saved + written.saturating_sub(strings);
+            let stepped = body.iter().filter(|line| line.starts_with("sub ") && line.ends_with(", 3")).count();
+            assert_eq!((segment, stepped), (0, 0), "{language}:\n{}", body.join("\n"));
+        }
     }
 }

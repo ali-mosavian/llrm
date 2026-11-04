@@ -54,11 +54,12 @@ use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdMap;
 use llrm_mir::edit::Position;
-use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
+use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, Outer, PreservedAnalyses, Unit};
 use llrm_mir::types::{Type, TypeId};
 use llrm_mir::valuetracking::{Query, pattern};
+use llrm_support::hash::HashMap;
 
 use crate::reassociate_pairs::Pairs;
 use crate::reassociate_rank::Ranks;
@@ -70,37 +71,29 @@ pub(crate) struct ValueEntry {
     pub op: Operand,
 }
 
-/// A map from a value or a constant, by id.
+/// A map from a value or a constant. Hashed: built per tree, so a table paged
+/// by id would cost the function's size each time (`SmallDenseMap` upstream).
 pub(crate) struct OperandMap<V> {
-    values: IdMap<ValueId, V>,
-    constants: IdMap<usize, V>,
+    entries: HashMap<Operand, V>,
 }
 
 impl<V> OperandMap<V> {
     pub fn new() -> Self {
-        Self { values: IdMap::new(), constants: IdMap::new() }
+        Self { entries: HashMap::default() }
     }
 
     pub fn get(
         &self,
         v: Operand,
     ) -> Option<&V> {
-        match v {
-            Operand::Value(value) => self.values.get(&value),
-            Operand::Constant(constant) => self.constants.get(&constant.index()),
-            Operand::Block(_) => None,
-        }
+        self.entries.get(&v)
     }
 
     pub fn get_mut(
         &mut self,
         v: Operand,
     ) -> Option<&mut V> {
-        match v {
-            Operand::Value(value) => self.values.get_mut(&value),
-            Operand::Constant(constant) => self.constants.get_mut(&constant.index()),
-            Operand::Block(_) => None,
-        }
+        self.entries.get_mut(&v)
     }
 
     pub fn insert(
@@ -108,14 +101,8 @@ impl<V> OperandMap<V> {
         v: Operand,
         entry: V,
     ) {
-        match v {
-            Operand::Value(value) => {
-                self.values.insert(value, entry);
-            }
-            Operand::Constant(constant) => {
-                self.constants.insert(constant.index(), entry);
-            }
-            Operand::Block(_) => {}
+        if !matches!(v, Operand::Block(_)) {
+            self.entries.insert(v, entry);
         }
     }
 
@@ -123,15 +110,7 @@ impl<V> OperandMap<V> {
         &mut self,
         v: Operand,
     ) {
-        match v {
-            Operand::Value(value) => {
-                self.values.remove(&value);
-            }
-            Operand::Constant(constant) => {
-                self.constants.remove(&constant.index());
-            }
-            Operand::Block(_) => {}
-        }
+        self.entries.remove(&v);
     }
 
     /// The entry of `v`, `default` where it has none.

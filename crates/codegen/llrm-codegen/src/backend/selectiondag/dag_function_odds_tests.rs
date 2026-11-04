@@ -185,3 +185,34 @@ fn a_back_edge_of_a_block_split_by_a_select_keeps_the_ir_odds() {
         .expect("a back edge with odds");
     assert!(f64::from(back) > 0.9 * f64::from(crate::model::lir::BlockOdds::CERTAIN), "the back edge is {back}");
 }
+
+/// A loop of 8 trips `induction` proves had no trips in the DAG body (only the
+/// old route set them), so the executed-work estimate read it as 31 in 32 and
+/// `matmul`'s allocation test counted 28328 memory operands for ~2400 (the old
+/// route: 2269).
+#[test]
+fn a_counted_loop_has_its_proven_trips_in_the_dag_body() {
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %j, %loop ]
+  %s = phi i32 [ %a, %entry ], [ %t, %loop ]
+  %t = add i32 %s, %i
+  %j = add i32 %i, 1
+  %more = icmp ne i32 %j, 8
+  br i1 %more, label %loop, label %done
+done:
+  ret i32 %t
+}
+",
+    )
+    .expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let body = &done.body;
+    let looped = body.blocks.iter().find(|block| block.succ.contains(&block.at)).expect("a block that loops");
+    assert_eq!(body.loop_trip_counts, vec![(looped.at, 8)], "{:?}", body.loop_trip_counts);
+}

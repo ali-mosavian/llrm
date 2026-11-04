@@ -49,11 +49,18 @@ pub struct X86 {
     /// X86.td lists it); `branchfusion` is a Bulldozer-and-newer feature none
     /// of the profiles has.
     pub macro_fusion: bool,
+    /// `FeatureCMOV` (X86.td): the i386, i486, pentium, k5 and k6 have none.
+    pub cmov: bool,
     /// Long mode: the integer registers are 64 bits wide (`is64Bit`).
     pub quad: bool,
     /// What real mode's addressing and register file make of the hooks LSR
     /// reads (T6); none: the 32-bit mode's.
     pub real_mode: Option<RealMode>,
+    /// General registers a value may sit in, where the target's description
+    /// states them (frame and stack pointers excluded); none: the pin's count.
+    pub registers: Option<u32>,
+    /// The target's tuning table (`Machine::tuning`); the pin's by default.
+    pub tuning: llrm_mir::target::Tuning,
 }
 
 /// T6: the 16-bit target's address forms and registers, from its description
@@ -71,6 +78,10 @@ pub struct RealMode {
     /// The space of huge pointers: an offset there carries into the selector,
     /// so an address is one register and no more.
     pub huge_space: Option<u32>,
+    /// Registers the target's cheapest address form can name (a base and an
+    /// index of its classes, the frame's excluded); none: any general
+    /// register.
+    pub address_registers: Option<u32>,
     /// The target's `-Os` growth guard for inlining (SZ1, D11): a callee that
     /// stays is inlined into an `optsize` caller only if its code does not
     /// outgrow the call. The pin has none (its `OptSizeThreshold` 50 counts
@@ -84,6 +95,12 @@ pub struct RealMode {
     /// (trips, bar): an `optsize` loop of at most that many trips is fully
     /// unrolled under that unrolled size (DEVIATE U1). (0, 0): the pin's.
     pub unroll_size_few_trips: (u32, u32),
+    /// DEVIATE REC-1: (depth, callee size) of the recursion taken at speed;
+    /// none: the pin's.
+    pub recursive_inlining: Option<(u32, i64)>,
+    /// DEVIATE REC-1: the ceilings of the priced copies of a function in
+    /// itself (`Tti::priced_self_inlining`); none: `recursive_inlining`.
+    pub priced_self_inlining: Option<(u32, i64)>,
 }
 
 impl RealMode {
@@ -101,16 +118,55 @@ impl X86 {
         if self.quad { 64 } else { 32 }
     }
 
+    /// The profile of the baseline cpu of `triple`'s architecture: the 32-bit
+    /// ones by their `-march` (`i686` is `pentiumpro`), `x86_64` long mode.
+    pub fn of_triple(triple: &str) -> Option<X86> {
+        let cpu = match triple.split('-').next()? {
+            "x86_64" => "x86-64",
+            "i386" => "i386",
+            "i486" => "i486",
+            "i586" => "pentium",
+            "i686" => "pentiumpro",
+            _ => return None,
+        };
+        X86::of_cpu(cpu)
+    }
+
     /// The profile of a `-march` llrm supports.
     pub fn of_cpu(cpu: &str) -> Option<X86> {
         match cpu {
-            "i386" | "i486" | "pentium" | "pentiumpro" | "k5" | "k6" | "athlon" => {
-                Some(X86 { sse1: false, sse2: false, macro_fusion: false, quad: false, real_mode: None })
-            }
-            "core2" => Some(X86 { sse1: true, sse2: true, macro_fusion: true, quad: false, real_mode: None }),
+            "i386" | "i486" | "pentium" | "pentiumpro" | "k5" | "k6" | "athlon" => Some(X86 {
+                cmov: !matches!(cpu, "i386" | "i486" | "pentium" | "k5" | "k6"),
+                sse1: false,
+                sse2: false,
+                macro_fusion: false,
+                quad: false,
+                real_mode: None,
+                registers: None,
+                tuning: llrm_mir::target::Tuning::PIN,
+            }),
+            "core2" => Some(X86 {
+                cmov: true,
+                sse1: true,
+                sse2: true,
+                macro_fusion: true,
+                quad: false,
+                real_mode: None,
+                registers: None,
+                tuning: llrm_mir::target::Tuning::PIN,
+            }),
             // `-march=x86-64`: the baseline of long mode, SSE2
             // and `TuningMacroFusion` (X86.td `X86_64V1Tuning`).
-            "x86-64" => Some(X86 { sse1: true, sse2: true, macro_fusion: true, quad: true, real_mode: None }),
+            "x86-64" => Some(X86 {
+                cmov: true,
+                sse1: true,
+                sse2: true,
+                macro_fusion: true,
+                quad: true,
+                real_mode: None,
+                registers: None,
+                tuning: llrm_mir::target::Tuning::PIN,
+            }),
             _ => None,
         }
     }
@@ -133,6 +189,22 @@ impl X86 {
         real_mode: RealMode,
     ) -> X86 {
         X86 { real_mode: Some(real_mode), ..self.clone() }
+    }
+
+    /// The registers the target's description allocates.
+    pub fn with_registers(
+        &self,
+        registers: u32,
+    ) -> X86 {
+        X86 { registers: Some(registers), ..self.clone() }
+    }
+
+    /// The target's tuning table.
+    pub fn with_tuning(
+        &self,
+        tuning: llrm_mir::target::Tuning,
+    ) -> X86 {
+        X86 { tuning, ..self.clone() }
     }
 }
 
@@ -480,6 +552,53 @@ impl Tti for X86 {
         "X86"
     }
 
+    fn inline_threshold_override(&self) -> Option<i64> {
+        self.tuning.inline_threshold
+    }
+
+    fn speed_milliclocks_per_byte(&self) -> i64 {
+        self.tuning.speed_milliclocks_per_byte
+    }
+
+    fn multiply_by_clocks(&self) -> bool {
+        self.tuning.multiply_by_clocks
+    }
+
+    fn has_cmov(&self) -> bool {
+        self.cmov
+    }
+
+    fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
+        (self.tuning.unroll_threshold, self.tuning.unroll_max_percent_threshold_boost)
+    }
+
+    fn x87_stack_slots(&self) -> Option<u32> {
+        self.tuning.x87_stack_slots.filter(|_| !self.sse2)
+    }
+
+    fn unroll_partial_threshold_override(&self) -> Option<u32> {
+        self.tuning.unroll_partial_threshold
+    }
+
+    fn unswitch_threshold_override(&self) -> Option<i64> {
+        self.tuning.unswitch_threshold
+    }
+
+    fn recursive_inlining(&self) -> Option<(u32, i64)> {
+        match self.real_mode.as_ref() {
+            Some(real) => real.recursive_inlining,
+            None => self.tuning.recursive_inlining,
+        }
+    }
+
+    fn recursive_edge_growth(&self) -> Option<(i64, i64)> {
+        self.tuning.recursive_edge_growth
+    }
+
+    fn priced_self_inlining(&self) -> Option<(u32, i64)> {
+        self.real_mode.as_ref()?.priced_self_inlining
+    }
+
     fn unroll_size_few_trips(&self) -> Option<(u32, u32)> {
         let real = self.real_mode.as_ref().filter(|real| real.unroll_size_few_trips.0 != 0)?;
         Some(real.unroll_size_few_trips)
@@ -489,7 +608,15 @@ impl Tti for X86 {
     /// says so (`RealMode::inline_size_guard`): at m32 -Os follows the pin
     /// (crc, tile and recchop grow 52, 42 and 15 bytes there).
     fn opt_size_inline_by_code_size(&self) -> bool {
-        self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard)
+        self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard) || self.tuning.inline_size_guard_at_size
+    }
+
+    fn opt_size_inline_guard_min_sites(&self) -> i64 {
+        if self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard) { 1 } else { 2 }
+    }
+
+    fn constant_offset_phi_is_cheap(&self) -> bool {
+        !self.tuning.keep_constant_displacements
     }
 
     /// A call is 5 bytes and the push of an argument 1 to 4, against 2 to 3 for
@@ -502,6 +629,18 @@ impl Tti for X86 {
 
     fn float_code_size_percent(&self) -> i64 {
         self.real_mode.as_ref().map_or(100, |real| real.float_code_size_percent)
+    }
+
+    // X86TTIImpl::hasDivRemOp (X86TargetTransformInfo.cpp#L7421) asks
+    // `isOperationLegal(SDIVREM/UDIVREM, VT)`; X86ISelLowering sets the scalar
+    // divides to `Expand` (L340) and leaves the two-result ones at the base
+    // class's `Legal`, so every register type has one.
+    fn has_div_rem_op(
+        &self,
+        bits: u32,
+        _signed: bool,
+    ) -> bool {
+        self.is_type_legal(Ty::Int(bits))
     }
 
     fn is_type_legal(
@@ -551,6 +690,36 @@ impl Tti for X86 {
         (kind != CostKind::RecipThroughput).then(|| Cost::of(2))
     }
 
+    /// X86's `getJumpConditionMergingParams`: `x86-br-merging-base-cost` 2,
+    /// one more for `a == b && a == c` (a fast pattern); an `or` of two `==`
+    /// splits (no CCMP on these targets). Likely bias 0, unlikely bias -1.
+    fn jump_condition_merging_params(
+        &self,
+        query: &llrm_mir::jumpmerge::JumpMergeQuery,
+    ) -> llrm_mir::jumpmerge::CondMerging {
+        use llrm_mir::jumpmerge::{CondMerging, Logic};
+        use llrm_mir::module::{Operand, ValueDef};
+        use llrm_mir::opcode::{IntPredicate, Opcode};
+        let is_eq = |operand: Operand| match operand {
+            Operand::Value(value) => match query.function.value(value).def {
+                ValueDef::Instruction(inst) => {
+                    matches!(
+                        query.function.instruction(inst).opcode,
+                        Opcode::ICmp(IntPredicate::Eq)
+                    )
+                }
+                _ => false,
+            },
+            _ => false,
+        };
+        let both_eq = is_eq(query.lhs) && is_eq(query.rhs);
+        match query.logic {
+            Logic::Or if both_eq => CondMerging::SPLIT,
+            Logic::And if both_eq => CondMerging { base_cost: 3, likely_bias: 0, unlikely_bias: -1 },
+            _ => CondMerging { base_cost: 2, likely_bias: 0, unlikely_bias: -1 },
+        }
+    }
+
     fn intrinsic_cost(
         &self,
         name: &str,
@@ -570,7 +739,7 @@ impl Tti for X86 {
             Some(Some(cost)) => Cost::of(cost),
             Some(None) => Cost::INVALID,
             None if is_free_intrinsic(name) => Cost::FREE,
-            None => Cost::INVALID,
+            None => base_intrinsic_cost(name).unwrap_or(Cost::INVALID),
         }
     }
 
@@ -838,17 +1007,55 @@ impl Tti for X86 {
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L173
     /// Eight general registers, sixteen in long mode (`getNumberOfRegisters`).
     fn number_of_gpr_registers(&self) -> u32 {
-        self.real_mode.as_ref().map_or(if self.quad { 16 } else { 8 }, |real| real.registers)
+        self.real_mode.as_ref().map_or(self.registers.unwrap_or(if self.quad { 16 } else { 8 }), |real| real.registers)
     }
 
-    /// `lea` forms `base + index + displacement` in one instruction.
-    fn address_form_adds_offsets(&self) -> bool {
+    /// `[bp+disp]` and `[esp+disp]` reach a stack slot with no register to hold
+    /// it.
+    fn frame_address_is_free(&self) -> bool {
         true
+    }
+
+    /// 64 in long mode, else 32 (also at m16, on a 386 or later).
+    fn gpr_bits(&self) -> u32 {
+        if self.quad { 64 } else { 32 }
+    }
+
+    /// `lea` forms `base + index + displacement` in one instruction, from 16
+    /// bits up: there is no 8-bit `lea`.
+    fn address_form_adds_offsets(
+        &self,
+        bits: u32,
+    ) -> bool {
+        bits >= 16
+    }
+
+    /// DEVIATE LU4: real mode keeps the loop as written where LSR's own model
+    /// rates its rewrite worse (`shouldDropLSRSolutionIfLessProfitable`, which
+    /// the pin's X86 leaves off). Six registers and a prefix on every scaled
+    /// index make the model's best answer a loss in bytes and clocks too.
+    fn should_drop_lsr_solution_if_less_profitable(&self) -> bool {
+        self.real_mode.is_some()
+    }
+
+    fn lsr_charges_outer_nonaffine_ivs(&self) -> bool {
+        self.real_mode.is_some()
+    }
+
+    fn mirrors_conditional_counters(&self) -> bool {
+        self.real_mode.is_some()
     }
 
     /// Real mode forms a scaled index with an address-size prefix.
     fn lsr_drops_spilling_solution(&self) -> bool {
         self.real_mode.is_some()
+    }
+
+    fn address_registers(&self) -> u32 {
+        self.real_mode
+            .as_ref()
+            .and_then(|real| real.address_registers)
+            .unwrap_or_else(|| self.number_of_gpr_registers())
     }
 
     fn scaled_index_insns(&self) -> u32 {

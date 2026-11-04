@@ -155,8 +155,8 @@
 //!   while `Options::loop_form_kept` is on, because rounds repeat until nothing
 //!   changes and `loopsimplify` runs in them: LLVM's passes run once, and
 //!   without this the two undid each other each round ("cycle after 3 rounds"
-//!   on the `deedlines` demo). The LLVM-order pipeline (the default) turns it
-//!   off at every slot; exit: the rounds pipeline (`LLRM_NO_LLVM_ORDER`) goes.
+//!   on the `deedlines` demo). The LLVM-order pipeline turns it off at every
+//!   slot.
 //!
 //! # Runs
 //! Once per round of the function fixed point, before `decide`: the branches
@@ -286,6 +286,11 @@ impl Options {
         convert_switch_to_lookup_table: true,
         no_jump_tables: false,
     };
+
+    /// [`AArch64PassConfig::addIRPasses`](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/AArch64/AArch64TargetMachine.cpp#L666):
+    /// the pass the target adds after AtomicExpand.
+    pub const ATOMIC_TIDY: Options =
+        Options { convert_switch_to_arithmetic: false, no_jump_tables: false, ..Options::L1438 };
 
     /// The slot at
     /// [L1682](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L1682),

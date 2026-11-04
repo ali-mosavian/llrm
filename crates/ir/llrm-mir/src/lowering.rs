@@ -28,6 +28,19 @@ pub enum Ext {
     FpExt,
 }
 
+/// How an extension's user reads it, for `is_ext_free_impl`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExtUser {
+    /// A `shl` by a constant.
+    ConstShl,
+    /// An index of a `getelementptr` whose indexed type is `store_bits` wide.
+    Gep { store_bits: u64 },
+    /// A `trunc` back to the extended value's own type.
+    SameTypeTrunc,
+    /// Any other user.
+    Other,
+}
+
 /// The operations of `ISD` that an IR instruction becomes
 /// (`TargetLowering::InstructionOpcodeToISD`), for the legality hook.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -87,15 +100,21 @@ pub trait Lowering {
         false
     }
 
-    /// `TargetTransformInfo::hasDivRemOp(iN, IsSigned)`: whether the target
-    /// has one divide that makes the quotient and the remainder
-    /// (`isOperationLegal(SDIVREM/UDIVREM)`). The base class has none.
-    fn has_div_rem_op(
+    /// Whether the target's `addCodeGenPrepare` runs the `TypePromotion` pass
+    /// (`AArch64TargetMachine`, `ARMTargetMachine`). The base class does not.
+    fn runs_type_promotion(&self) -> bool {
+        false
+    }
+
+    /// `isSExtCheaperThanZExt(EVT(iFROM), EVT(iTO))`
+    /// ([TargetLowering.h](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/include/llvm/CodeGen/TargetLowering.h)):
+    /// the base class says no.
+    fn is_sext_cheaper_than_zext(
         &self,
-        bits: u32,
-        signed: bool,
+        from_bits: u32,
+        to_bits: u32,
     ) -> bool {
-        let _ = (bits, signed);
+        let _ = (from_bits, to_bits);
         false
     }
 
@@ -182,6 +201,17 @@ pub trait Lowering {
             Ext::ZExt => self.is_zext_free(from_bits, to_bits),
             Ext::SExt => false,
         }
+    }
+
+    /// `isExtFreeImpl(const Instruction*)` (TargetLowering.h#L3245), asked
+    /// after `is_ext_free` says no, with how each user reads the extension.
+    /// The base class says no.
+    fn is_ext_free_impl(
+        &self,
+        users: &[ExtUser],
+    ) -> bool {
+        let _ = users;
+        false
     }
 
     /// `isMaskAndCmp0FoldingBeneficial` (TargetLowering.h): whether an `and`

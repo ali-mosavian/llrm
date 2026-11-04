@@ -1,8 +1,9 @@
 //! The host runtime on arm64 Linux: the headless tests of tests/qb_headless.rs
-//! built with clang for aarch64 against a private sysroot
+//! built by llrm-cc for aarch64 against a private sysroot
 //! (tools/targets/build-arm64-sysroot.sh) and run under qemu-aarch64. A machine
-//! without clang, lld or qemu fails here by name; it does not skip. An arm64
-//! Mac runs the same C natively (docs/working/qb-host.md, "Mac session").
+//! without the pinned clang, lld or qemu fails here by name; it does not skip.
+//! An arm64 Mac runs the same C natively (docs/working/qb-host.md, "Mac
+//! session").
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -16,6 +17,15 @@ fn root() -> &'static Path {
 }
 
 fn sysroot() -> PathBuf {
+    static MADE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    MADE.get_or_init(make_sysroot).clone()
+}
+
+fn make_sysroot() -> PathBuf {
+    for tool in ["ld.lld", "qemu-aarch64"] {
+        let found = Command::new("which").arg(tool).output().is_ok_and(|out| out.status.success());
+        assert!(found, "qb_arm64 needs `{tool}` on the PATH");
+    }
     let made = Command::new(root().join("tools/targets/build-arm64-sysroot.sh"))
         .output()
         .expect("tools/targets/build-arm64-sysroot.sh runs");
@@ -43,21 +53,12 @@ fn build_and_run_with(
     out: &Path,
     environment: &[(&str, &str)],
 ) -> String {
-    let sysroot = sysroot();
-    let libc = sysroot.join("usr/aarch64-linux-gnu");
-    let gcc = sysroot.join("usr/lib/gcc-cross/aarch64-linux-gnu/15");
     let qb = root().join("runtime/qb");
-    let mut build = Command::new("clang");
-    build.args(["--target=aarch64-linux-gnu", "-fuse-ld=lld", "-static", "-std=gnu11", "-w", "-g", "-pthread"]);
-    // the root, not the libc directory: libm.a is a linker script that names
-    // /usr/aarch64-linux-gnu/lib/libm-2.42.a
-    build.arg(format!("--sysroot={}", sysroot.display())).arg(format!("-B{}", gcc.display()));
-    build
-        .arg(format!("-L{}", gcc.display()))
-        .arg(format!("-L{}", libc.join("lib").display()))
-        .arg("-isystem")
-        .arg(libc.join("include"))
-        .arg("-D__cdecl=");
+    // llrm-cc over the arm64-glibc row: the sysroot's headers, libc, libm and
+    // libgcc by path (targets.toml, tools/targets/arm64-glibc-link.sh)
+    let mut build = Command::new(env!("CARGO_BIN_EXE_llrm-cc"));
+    build.args(["-target", "arm64-glibc", "-std=gnu11", "-w", "-D__cdecl="]);
+    build.env("LLRM_ARM64_SYSROOT", sysroot());
     for include in ["posix", ".", "dev", "dev/headless", "dev/host", "../shared/posix"] {
         build.arg("-I").arg(qb.join(include));
     }
@@ -65,8 +66,8 @@ fn build_and_run_with(
         build.arg(root().join(source));
     }
     build.args(object);
-    build.arg("-lm").arg("-o").arg(out);
-    let built = build.output().expect("clang runs");
+    build.arg("-o").arg(out);
+    let built = build.output().expect("llrm-cc runs");
     assert!(built.status.success(), "{name}: {}", String::from_utf8_lossy(&built.stderr));
     let done = Command::new("qemu-aarch64")
         .arg(out)
@@ -199,16 +200,29 @@ fn print_hello_runs_on_arm64() {
     assert_eq!(run_basic("hello", b"PRINT \"HELLO\"\nEND\n").trim_end(), "HELLO");
 }
 
+/// NIBBLES and GORILLA come from `QB45_DEMOS_DIR`; where it is unset the test
+/// is a no-op locally and an error in CI, which has them (both returned Ok
+/// without running when gate run 4 had the directory, and the crash they would
+/// have shown went unseen here).
+fn demos_dir(name: &str) -> Option<std::ffi::OsString> {
+    let dir = std::env::var_os("QB45_DEMOS_DIR");
+    assert!(
+        dir.is_some() || std::env::var_os("GITHUB_ACTIONS").is_none(),
+        "QB45_DEMOS_DIR is not set in CI: {name} would not run"
+    );
+    if dir.is_none() {
+        eprintln!("QB45_DEMOS_DIR is not set: {name} is not in the tree");
+    }
+    dir
+}
+
 /// NIBBLES (QB 4.5's demo, from `QB45_DEMOS_DIR`) typed through its questions
 /// on arm64: its READ/DATA colour table, the SINGLE and DOUBLE arithmetic of
 /// its speed calibration, INPUT and the graphics-free screen. The level screen
 /// it reaches says "Level 1, Push Space".
 #[test]
 fn nibbles_reaches_its_first_level_on_arm64() {
-    let Some(dir) = std::env::var_os("QB45_DEMOS_DIR") else {
-        eprintln!("QB45_DEMOS_DIR is not set: NIBBLES is not in the tree");
-        return;
-    };
+    let Some(dir) = demos_dir("NIBBLES") else { return };
     let source = std::fs::read(Path::new(&dir).join("NIBBLES.BAS")).expect("NIBBLES.BAS");
     let screen = run_basic_with(
         "nibbles",
@@ -223,10 +237,7 @@ fn nibbles_reaches_its_first_level_on_arm64() {
 /// text. A shot in the city (SCREEN 9, floats) was checked by eye, not here.
 #[test]
 fn gorilla_reaches_its_menu_on_arm64() {
-    let Some(dir) = std::env::var_os("QB45_DEMOS_DIR") else {
-        eprintln!("QB45_DEMOS_DIR is not set: GORILLA is not in the tree");
-        return;
-    };
+    let Some(dir) = demos_dir("GORILLA") else { return };
     let source = std::fs::read(Path::new(&dir).join("GORILLA.BAS")).expect("GORILLA.BAS");
     let screen = run_basic_with(
         "gorilla",
@@ -265,7 +276,7 @@ fn a_handled_function_may_start_with_a_loop_on_arm64() {
 /// passed `i16 -1` bare: the clang-built runtime read 65535 and NIBBLES died on
 /// VIEW PRINT with "Illegal function call" on the Mac. Only a Mac can run it;
 /// this reads the text the backend gets: Darwin marks the runtime's `i16`
-/// arguments `signext`, Linux (callee extends) does not.
+/// arguments `signext` in the declaration, Linux (callee extends) does not.
 #[test]
 fn darwin_callers_extend_narrow_arguments_to_the_runtime() {
     let dir = std::env::temp_dir().join(format!("signext_{}", std::process::id()));
@@ -285,8 +296,14 @@ fn darwin_callers_extend_narrow_arguments_to_the_runtime() {
         assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
         std::fs::read_to_string(path).unwrap()
     };
-    assert!(text("darwin").contains("@B_PEI2(i16 signext -1)"));
-    assert!(text("linux").contains("@B_PEI2(i16 -1)"));
+    // The caller extends a 16-bit argument wherever the word is wider (the HIR
+    // marks the call); Darwin adds the mark to the declaration and to any
+    // call the HIR left bare, and none twice.
+    let darwin = text("darwin");
+    assert!(darwin.contains("@B_PEI2(i16 signext -1)") && !darwin.contains("signext signext"), "{darwin}");
+    assert!(darwin.contains("declare void @B_PEI2(i16 signext)"), "{darwin}");
+    let linux = text("linux");
+    assert!(linux.contains("declare void @B_PEI2(i16)"), "{linux}");
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -297,4 +314,104 @@ fn darwin_callers_extend_narrow_arguments_to_the_runtime() {
 fn int_of_a_single_sum_over_a_constant_keeps_the_sum() {
     let source = b"row = 3\r\nPRINT INT((row + 1) / 2); INT((row - 1) / 2); INT((row + 1) / 4)\r\nEND\r\n";
     assert_eq!(run_basic("intsum", source).split_whitespace().collect::<Vec<_>>(), ["2", "1", "1"]);
+}
+
+/// COLOR, LOCATE, SCREEN, CLOSE and DIM pass their words to the runtime as a
+/// block, in memory order (count first). arm64 reversed them a second time:
+/// COLOR 15 arrived as count 1 with a flag and no value, `arguments()` ran off
+/// the block and NIBBLES and GORILLA died with SIGSEGV under qemu.
+#[test]
+fn statements_with_a_block_of_words_run_on_arm64() {
+    let source = b"SCREEN 0\r\nCOLOR 15, 1\r\nLOCATE 3, 5\r\nPRINT \"AB\"\r\nDIM a(5)\r\na(3) = 7\r\nPRINT a(3)\r\nCLOSE\r\nPRINT \"done\"\r\nEND\r\n";
+    let screen = run_basic("blocks", source);
+    let rows: Vec<&str> = screen.lines().collect();
+    assert_eq!(rows.first().map(|row| row.trim_end()), Some("    AB"), "{screen}");
+    assert_eq!(rows[1..].iter().flat_map(|row| row.split_whitespace()).collect::<Vec<_>>(), ["7", "done"], "{screen}");
+}
+
+/// The hand-over text of a program with an error handler reached its landing
+/// pad by a branch after `_setjmp`, and kept `landingpad` and `invoke`: the
+/// pinned LLVM's verifier refused it ("Block containing LandingPadInst must be
+/// jumped to only by the unwind edge of an invoke"; GORILLA.BAS: 647 invokes,
+/// 21 landing pads), so the text could not be diffed against the pin.
+#[test]
+fn the_hand_over_of_a_handled_program_passes_the_pins_verifier() {
+    let dir = std::env::temp_dir().join(format!("handover_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let small = dir.join("h.bas");
+    std::fs::write(
+        &small,
+        b"DECLARE SUB s ()\r\nON ERROR GOTO h\r\ns\r\nPRINT \"back\"\r\nEND\r\nh:\r\nPRINT \"mod\"; ERR\r\nRESUME NEXT\r\nSUB s\r\nERROR 7\r\nPRINT \"in s\"\r\nEND SUB\r\n",
+    )
+    .unwrap();
+    let gorillas = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/basic/gorillas.bas");
+    for bas in [small, gorillas] {
+        let text_path = dir.join("h.ll");
+        let done = Command::new(env!("CARGO_BIN_EXE_llrm-qb"))
+            .args(["--arm64=linux", "-O2"])
+            .arg(&bas)
+            .arg("-o")
+            .arg(dir.join("h.o"))
+            .env("LLRM_ARM64_TEXT", &text_path)
+            .output()
+            .expect("llrm-qb runs");
+        assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+        let text = std::fs::read_to_string(&text_path).unwrap();
+        assert!(!text.contains("landingpad") && !text.contains("invoke "), "{}", bas.display());
+        let clang = std::env::var_os("LLRM_PIN_CLANG").expect("LLRM_PIN_CLANG names the pinned clang");
+        let opt = std::path::Path::new(&clang).with_file_name("opt");
+        let verified = Command::new(&opt)
+            .args(["-passes=verify", "-disable-output"])
+            .arg(&text_path)
+            .output()
+            .unwrap_or_else(|error| panic!("{}: {error}", opt.display()));
+        assert!(verified.status.success(), "{}: {}", bas.display(), String::from_utf8_lossy(&verified.stderr));
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// ON LOCAL ERROR called B$OEGP, which no flat runtime defined: the program did
+/// not link. An error in a procedure below the one with the handler lands in
+/// the handler, and RESUME NEXT goes on after the call (ownf_local_pds71).
+#[test]
+fn on_local_error_lands_in_the_callers_handler_on_arm64() {
+    let source = std::fs::read(root().join("tests/run/qb/ownf_local_pds71.bas")).unwrap();
+    let mut source = source;
+    source.extend_from_slice(b"\r\nEND\r\n");
+    assert_eq!(
+        run_basic("ownf_local", &source).split_whitespace().collect::<Vec<_>>(),
+        ["handler", "11", "top", "1", "done"]
+    );
+}
+
+/// CURRENCY as text (currency_text_pds71): INPUT, READ, PRINT, STR$, MKC$, CVC,
+/// USING and WRITE, none of which had a flat definition.
+#[test]
+fn currency_text_matches_the_microsoft_output_on_arm64() {
+    let root = root();
+    let mut source = std::fs::read(root.join("tests/run/qb/currency_text_pds71.bas")).unwrap();
+    source.extend_from_slice(b"\r\nEND\r\n");
+    let screen = run_basic_with(
+        "currency_text",
+        &source,
+        &[
+            ("QB_HEADLESS_KEYS", "12.5\\r-0.0001, 922337203685477.5807\\r3\\r"),
+            ("QB_HEADLESS_GAP", "30"),
+            ("QB_HEADLESS_SECONDS", "20"),
+        ],
+    );
+    let want = std::fs::read_to_string(root.join("tests/run/qb/currency_text_pds71.out")).unwrap();
+    let trimmed = |text: &str| text.lines().map(|line| line.trim_end().to_owned()).collect::<Vec<_>>();
+    assert_eq!(trimmed(&screen), trimmed(&want));
+}
+
+/// CLEAR called B$SCLR, which no flat runtime defined (clear_variables).
+#[test]
+fn clear_zeroes_the_module_variables_on_arm64() {
+    let mut source = std::fs::read(root().join("tests/run/qb/clear_variables.bas")).unwrap();
+    source.extend_from_slice(b"\r\nEND\r\n");
+    let screen = run_basic("clear_variables", &source);
+    let want = std::fs::read_to_string(root().join("tests/run/qb/clear_variables.out")).unwrap();
+    let trimmed = |text: &str| text.lines().map(|line| line.trim_end().to_owned()).collect::<Vec<_>>();
+    assert_eq!(trimmed(&screen), trimmed(&want));
 }

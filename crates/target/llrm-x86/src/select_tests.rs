@@ -511,6 +511,22 @@ fn test_a_word_funnel_shift_emits_the_16_bit_form() {
     }
 }
 
+/// A 64-bit `shrd` (`(u128 product) >> 63` at m64) had no encoding: the
+/// object builder stopped with "Semantics(op=FUNNEL, name='shrd' ...)".
+#[test]
+fn test_a_quad_funnel_shift_emits_the_rex_w_form() {
+    let quad = sem(
+        Operation::Funnel,
+        Some("shrd"),
+        vec![rg(RegId::RAX, 8)],
+        vec![rg(RegId::RAX, 8), rg(RegId::RDX, 8), imm(63, 1)],
+        None,
+        false,
+    );
+    let code = emit_in(64, &quad, 0, None, false, false, None).expect("a 64-bit funnel shift");
+    assert_eq!(hex(&code.code), "480facd03f");
+}
+
 #[test]
 fn test_a_left_funnel_shift_emits_shld() {
     assert_eq!(hex(&made(emitted(&funnel_of(imm(16, 1), "shld"))).code), "660fa4d010");
@@ -1126,6 +1142,15 @@ fn test_a_jump_through_a_register_is_jmp_rm() {
 fn test_bt_of_a_register_and_an_immediate_encodes() {
     let bt = sem(Operation::Compare, Some("bt"), vec![], vec![rg(RegId::EDX, 4), imm(1, 1)], None, false);
     assert_eq!(hex(&made(emitted(&bt)).code), "660fbae201");
+}
+
+/// `bt dword [bp-4], imm8` had no form: a union of one-bit bit-fields tested
+/// from memory (pr40493 at -O0) stopped `--isel=dag` on `BT32mi8`.
+#[test]
+fn test_bt_of_a_cell_and_an_immediate_encodes() {
+    let cell = Loc::Mem(ir::Mem { through: RegId::BP, disp_width: 2, ..frame(-4, 4) });
+    let bt = sem(Operation::Compare, Some("bt"), vec![], vec![cell, imm(1, 1)], None, false);
+    assert_eq!(hex(&made(emitted(&bt)).code), "660fba66fc01");
 }
 
 /// `dec byte [bp-4]` was unprintable: the memory form took words only, so

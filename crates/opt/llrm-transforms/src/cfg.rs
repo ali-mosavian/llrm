@@ -150,11 +150,7 @@ pub(crate) fn emptied_into(
     first: llrm_mir::module::BlockId,
     entry: llrm_mir::module::BlockId,
 ) -> Option<llrm_mir::module::BlockId> {
-    let successors = function.successors(first);
-    if successors.len() != 1 {
-        return None;
-    }
-    let target = successors[0];
+    let target = function.sole_successor(first)?;
     if target == entry || target == first {
         return None;
     }
@@ -235,8 +231,7 @@ pub fn merge_block_into_predecessor(
         return false;
     }
     // Can't merge if there are multiple distinct successors.
-    let successors = function.successors(pred);
-    if !with_two_successors && successors[..] != [bb] {
+    if !with_two_successors && function.sole_successor(pred) != Some(bb) {
         return false;
     }
     let mut fall_through = 0;

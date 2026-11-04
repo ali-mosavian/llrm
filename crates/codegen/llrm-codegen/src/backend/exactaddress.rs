@@ -571,7 +571,7 @@ fn folds(
 ) -> Vec<Fold> {
     let regs = body.regs();
     let exits = liveness::dead_at_exit(body);
-    let (_, live_out) = crate::backend::allocate::live(body);
+    let (_, live_out) = crate::backend::liverows::live(body);
     let mut found = Vec::new();
     for block in &body.blocks {
         let dead_after = regthrash::_dead_after(regs, body.bits, block, exits[&block.at].clone());

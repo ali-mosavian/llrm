@@ -398,10 +398,24 @@ def platform_sources() -> list[Path]:
     return platform_sources_of(platform_directory())
 
 
-def _compile_c(source: Path, obj: Path, include: Path) -> None:
+# The row the runtime's C is built on; the object cache names it.
+RUNTIME_ROW = "x86_16-wat"
+
+
+def c_flags() -> list[str]:
+    # No -I include: its llrm_os.h is llrm-c's, with a plain `__cdecl` the fork clang ignores (borland.h erases it); the row's own header has the attribute that keeps the OS layer's stack convention.
     # An empty BSSB ahead of each object's _BSS: start.asm zeroes from it (the objects' order is the linker's).
-    flags = ["-mbss-begin", "-I", str(include), "-I", str(RUNTIME), "-I", str(platform_directory()), *device_includes()]
-    dosbatch._host(*dosbatch.c_compile(source, obj, dosbatch.REAL_MODE, "-Os", include, [], flags))
+    return ["-mbss-begin", "-I", str(RUNTIME), "-I", str(platform_directory()), *device_includes()]
+
+
+def c_build_key() -> str:
+    """What the runtime's C is compiled with, for the object cache: the row and the command dosbatch.c_compile makes of it, the checkout's own path left out."""
+    command, env = dosbatch.c_compile(Path("runtime.c"), Path("runtime.obj"), dosbatch.REAL_MODE, "-Os", None, [], c_flags())  # the command, as the builds make it
+    return RUNTIME_ROW + " " + " ".join(command[1:]).replace(str(dosbatch.ROOT), "") + " " + repr(sorted(env.items())) + " " + dosbatch.clang_identity()
+
+
+def _compile_c(source: Path, obj: Path, include: Path) -> None:
+    dosbatch._host(*dosbatch.c_compile(source, obj, dosbatch.REAL_MODE, "-Os", None, [], c_flags()))
 
 
 def remove_existing_archive(work: Path) -> None:

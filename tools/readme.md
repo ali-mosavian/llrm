@@ -23,3 +23,12 @@ It prints how many programs came out SAME, and each one that is not: `DIFF` (the
 way). A DIFF is a finding, or a base older than the change's branch: compare against `origin/main`
 as it is. `test_the_identity_gate_passes_a_build_against_itself_and_fails_a_different_one` (`tests/toolchain.rs`)
 keeps the instrument honest.
+
+## Compile-time measurement
+
+`measure.py`, `compile-cost.py`, `abmeasure.py` and `vsgcc/scaling_gate.py` time one thing: a compile by
+`llrm-cc`, which is clang's front end (`-S -emit-llvm`, no passes) plus `llrm-llc`, the driver's whole process tree.
+The cost is user-space instructions (`perf stat -e instructions:u`, children included) with the binary on a
+fixed-length path and a constant-size environment (`llrmbin.pinned`, `measured_environment`), so a loaded host does not
+move it. A step's own cost is `llrm-llc`'s `LLRM_DEBUG=time` `[instr]` rows. A target is a row of `llrm-cc`'s table
+(`llrmbin.c_args`); it needs `LLRM_PIN_CLANG`, `LLRM_OW` and, at 16 bits, `LLRM_CLANG_M16`.

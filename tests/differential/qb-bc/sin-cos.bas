@@ -1,4 +1,5 @@
 ' bc: /O /E /X
+' flags: -fexcess-precision=standard
 ' SIN and COS of 40 arguments to 11 decimals. llrm computes them with the x87 (fsin, fcos), BC calls B$SIN8
 ' and B$COS8; their results differ in the last bits (docs/frontends/qb/divergences.md), and so does the fsin of one
 ' dosbox-x build from the next (the bytes of the DOUBLEs changed by up to 21 ulps between builds). 11 decimals are

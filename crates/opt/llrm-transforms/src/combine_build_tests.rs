@@ -106,3 +106,23 @@ fn the_builder_declares_the_intrinsic_it_calls() {
     assert_eq!(out.matches("call i16 @llvm.umax.i16").count(), 2, "{out}");
     assert_eq!(out.matches("declare").count(), 1, "{out}");
 }
+
+/// `Builder.SetInsertPoint(&I)` takes `I`'s debug location: the `shl` made for
+/// a `mul x, 2` had none, so inlining gave it the call's line (nib's
+/// `scale(counter)`, line 11, where the `return factor * 2` is line 6).
+#[test]
+fn an_instruction_the_builder_makes_has_the_debug_location_of_the_visited_one() {
+    fn visit(
+        c: &mut Combiner,
+        inst: InstId,
+    ) -> Visit {
+        if c.function.instruction(inst).opcode != Opcode::Binary(BinaryOp::Sub) {
+            return Visit::None;
+        }
+        let (x, y) = (c.function.instruction(inst).operands[0], c.function.instruction(inst).operands[1]);
+        Visit::Replace(c.create_add(inst, x, y))
+    }
+    let text = "define i16 @f(i16 %x, i16 %y) {\nb0:\n  %s = sub i16 %x, %y, !dbg !5\n  ret i16 %s\n}\n!5 = !{i32 6}\n";
+    let made = combined(text, visit);
+    assert!(made.lines().any(|line| line.contains("= add i16 %x, %y") && line.contains(", !dbg !")), "{made}");
+}

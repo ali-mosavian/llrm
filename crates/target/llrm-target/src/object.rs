@@ -52,6 +52,16 @@ pub fn record_writer(
     let _ = std::fs::write(dir.join(format!("{}.bin", format.name())), bytes);
 }
 
+/// Writes why a writer refused the object as `<format>.err`: a refusal the
+/// sweep cannot see reads as two sides agreeing on nothing.
+pub fn record_refusal(
+    dir: &std::path::Path,
+    format: Format,
+    why: &str,
+) {
+    let _ = std::fs::write(dir.join(format!("{}.err", format.name())), why);
+}
+
 /// A target's object format.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ObjectFormat {
@@ -248,5 +258,16 @@ mod tests {
         let real = ObjectFormat::parse("formats = [\"omf\"]\ndefault = \"omf\"\nbitness = 16\nheader = []\n").unwrap();
         assert_eq!(real.choose("x86-m16", None), Ok(Format::Omf));
         assert_eq!(real.choose("x86-m16", Some(Format::Elf)).unwrap_err(), "x86-m16 cannot write elf; it writes omf");
+    }
+
+    /// A writer that refused an object left no trace for the sweep, so a
+    /// refusal on one side compared equal to a refusal on the other.
+    #[test]
+    fn a_refusing_writer_leaves_its_reason_in_the_sweep_directory() {
+        let dir = std::env::temp_dir().join(format!("refusal-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        record_refusal(&dir, Format::MachO, "no name");
+        assert_eq!(std::fs::read_to_string(dir.join("macho.err")).unwrap(), "no name");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

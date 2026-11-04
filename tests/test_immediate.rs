@@ -17,12 +17,12 @@ fn listing(
 
 /// `if (x & 1)` was `mov ecx, eax; and ecx, 1; jne`: a copy made only to be
 /// `and`ed for its flags (x_collatz, 1.32x of gcc's clocks); the mask is
-/// `test`'s immediate.
+/// `test`'s immediate (the pin's `testb $1, %al`).
 #[test]
 fn a_mask_compared_with_zero_is_test_with_an_immediate() {
     let text = listing(
         "int f(unsigned x) { if (x & 1) return 3 * x + 1; return x >> 1; }\n",
         &["-m32", "-mabi=sysv", "-O2", "-march=i486"],
     );
-    assert!(text.contains("test eax, 1") && !text.contains("and "), "{text}");
+    assert!(text.contains("test al, 1") && !text.contains("and "), "{text}");
 }

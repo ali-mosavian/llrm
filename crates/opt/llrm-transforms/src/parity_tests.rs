@@ -13,7 +13,7 @@ fn names(
 /// unnoticed: the registry said joined and the stand-in kept running.
 #[test]
 fn test_a_translated_slot_that_is_not_run_under_the_parity_switch_fails() {
-    let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
+    let on = Applied { options: pipeline::Options { ..Default::default() }, ..Applied::default() };
     let built = names(&on, Phase::Simplify);
     // The rotate slot follows the option, as in the pipeline's own check.
     let rotate = pipeline::Options::default().rotate_slot;
@@ -60,7 +60,7 @@ fn test_a_slot_that_runs_and_is_not_registered_fails() {
 #[test]
 fn test_the_built_lists_satisfy_the_registry_at_every_level() {
     for options in [pipeline::Options::basic(), pipeline::Options::standard(), pipeline::Options::size()] {
-        let on = Applied { options: pipeline::Options { llvm_order: true, ..options }, ..Applied::default() };
+        let on = Applied { options: pipeline::Options { ..options }, ..Applied::default() };
         for phase in [Phase::Early, Phase::Cleanup, Phase::Simplify] {
             let built = names(&on, phase);
             let level = if on.options.pre { parity::Level::O2 } else { parity::Level::O1 };
@@ -75,10 +75,7 @@ fn test_the_built_lists_satisfy_the_registry_at_every_level() {
 /// cleanup slot; only `dead@1242` finds work (48 of 1480 runs).
 #[test]
 fn test_no_dead_pass_follows_instcombine_in_the_simplify_slots() {
-    let on = Applied {
-        options: pipeline::Options { llvm_order: true, ..pipeline::Options::standard() },
-        ..Applied::default()
-    };
+    let on = Applied { options: pipeline::Options { ..pipeline::Options::standard() }, ..Applied::default() };
     let built = names(&on, Phase::Simplify);
     let dead: Vec<_> = built.iter().filter(|name| name.starts_with("dead@")).collect();
     assert!(dead.is_empty(), "{dead:?}");
@@ -227,17 +224,9 @@ fn runs_of(applied: &Applied) -> Vec<String> {
 /// repeats a body until nothing changes), clang 11: once per function. Under
 /// the LLVM order it is once per body.
 #[test]
-fn test_the_llvm_order_runs_gvn_once_per_body_and_the_rounds_do_not() {
+fn test_the_llvm_order_runs_gvn_once_per_body() {
     let order = runs_of(&Applied::default());
     assert_eq!(parity::check_run_counts(&order, 3, parity::Level::O2), Ok(()), "{order:?}");
-    let rounds = runs_of(&Applied {
-        options: pipeline::Options { llvm_order: false, ..Default::default() },
-        ..Applied::default()
-    });
-    assert!(
-        parity::check_run_counts(&rounds, 3, parity::Level::O2).is_err(),
-        "premise: the rounds run gvn more than once per body: {rounds:?}"
-    );
 }
 
 /// `LLRM_DEBUG=counts` said nothing of who asked for an analysis under the
@@ -261,8 +250,7 @@ fn test_the_default_order_prints_callers_lines_split_by_joined_slots() {
 /// per body.
 #[test]
 fn test_the_llvm_order_has_no_gvn_at_o1_as_the_pin_has_none() {
-    let o1 =
-        Applied { options: pipeline::Options { llvm_order: true, ..pipeline::Options::basic() }, ..Applied::default() };
+    let o1 = Applied { options: pipeline::Options { ..pipeline::Options::basic() }, ..Applied::default() };
     let lines = runs_of(&o1);
     assert_eq!(parity::check_run_counts(&lines, 3, parity::Level::O1), Ok(()), "{lines:?}");
     let o2 = runs_of(&Applied::default());
@@ -315,10 +303,7 @@ fn test_the_tally_lines_of_the_real_registry_add_up() {
 /// slot was missing from the -O2 list, so its output never reached later slots.
 #[test]
 fn test_bdce_stands_between_gvn_and_the_next_fold() {
-    let on = Applied {
-        options: pipeline::Options { llvm_order: true, ..pipeline::Options::standard() },
-        ..Applied::default()
-    };
+    let on = Applied { options: pipeline::Options { ..pipeline::Options::standard() }, ..Applied::default() };
     let built = names(&on, Phase::Simplify);
     let at = |name: &str| built.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name} missing"));
     assert!(at("gvn@787") < at("bdce@797") && at("bdce@797") < at("combine@801"), "{built:?}");
@@ -328,7 +313,7 @@ fn test_bdce_stands_between_gvn_and_the_next_fold() {
 /// (`PassBuilderPipelines.cpp` l.815).
 #[test]
 fn test_adce_stands_between_cvp_and_memcpyopt() {
-    let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
+    let on = Applied { options: pipeline::Options { ..Default::default() }, ..Applied::default() };
     let built = names(&on, Phase::Simplify);
     let at = |name: &str| built.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name} not built"));
     assert_eq!((at("cvp@810") + 1, at("adce@815") + 1), (at("adce@815"), at("memcpyopt@818")));
@@ -337,10 +322,7 @@ fn test_adce_stands_between_cvp_and_memcpyopt() {
 /// LLVM runs SCCP after GVN and before BDCE.
 #[test]
 fn test_sccp_stands_between_gvn_and_bdce() {
-    let on = Applied {
-        options: pipeline::Options { llvm_order: true, ..pipeline::Options::standard() },
-        ..Applied::default()
-    };
+    let on = Applied { options: pipeline::Options { ..pipeline::Options::standard() }, ..Applied::default() };
     let built = names(&on, Phase::Simplify);
     let at = |name: &str| built.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name} missing"));
     assert_eq!((at("gvn@787") + 1, at("sccp@792") + 1), (at("sccp@792"), at("bdce@797")));
@@ -443,7 +425,7 @@ fn test_an_old_slot_that_runs_a_translated_pass_fails() {
 #[test]
 fn test_no_old_slot_of_the_built_lists_runs_a_translated_pass() {
     for options in [pipeline::Options::basic(), pipeline::Options::standard(), pipeline::Options::size()] {
-        let on = Applied { options: pipeline::Options { llvm_order: true, ..options }, ..Applied::default() };
+        let on = Applied { options: pipeline::Options { ..options }, ..Applied::default() };
         for phase in [Phase::Early, Phase::Cleanup, Phase::Simplify, Phase::Late] {
             let passes = pipeline::llvm_order(&on, phase);
             let held: Vec<_> = passes.iter().map(|one| (one.name(), one.translations())).collect();
@@ -565,10 +547,7 @@ fn test_moving_a_row_changes_the_recount_and_no_literal() {
 /// translated pass Old in a copy of the registry, and the check names it.
 #[test]
 fn test_marking_a_wired_row_old_is_caught_on_the_real_lists() {
-    let on = Applied {
-        options: pipeline::Options { llvm_order: true, ..pipeline::Options::standard() },
-        ..Applied::default()
-    };
+    let on = Applied { options: pipeline::Options { ..pipeline::Options::standard() }, ..Applied::default() };
     let mut checked = 0;
     for phase in [Phase::Early, Phase::Cleanup, Phase::Simplify, Phase::Late] {
         let passes = pipeline::llvm_order(&on, phase);
@@ -649,8 +628,135 @@ fn test_a_missing_entry_whose_pass_has_a_source_file_fails() {
 /// 3 or 4 of 65 objects, +5 to +24 B. The slot is gone.
 #[test]
 fn test_the_simplify_list_has_no_decide_after_jump_threading() {
-    let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
+    let on = Applied { options: pipeline::Options { ..Default::default() }, ..Applied::default() };
     let built = names(&on, Phase::Simplify);
     assert!(!built.contains(&"decide@809"), "decide@809 runs again: {built:?}");
     assert!(built.contains(&"jumpthreading@809") && built.contains(&"cvp@810"));
+}
+
+/// The module that implements each `Translated` slot. A name starting with
+/// `codegen:` is a file or directory under `llrm-codegen/src`.
+const IMPLEMENTED_BY: &[(&str, &str)] = &[
+    ("lowerexpect@1177", "lowerexpect"),
+    ("sroa@1179", "sroa"),
+    ("earlycse@1180", "earlycse"),
+    ("promote@1241", "mem2reg"),
+    ("sroa@646", "sroa"),
+    ("earlycse@649", "earlycse"),
+    ("cvp@669", "cvp"),
+    ("jumptableswitch@672", "jumptableswitch"),
+    ("tailrec@688", "tailcallelim"),
+    ("reassociate@696", "reassociate"),
+    ("constraint-elimination@699", "constraintelim"),
+    ("loop-instsimplify@715", "loopinstsimplify"),
+    ("loop-simplifycfg@716", "loopsimplifycfg"),
+    ("licm@724", "licm"),
+    ("rotate@728", "looprotate"),
+    ("licm@730", "licm"),
+    ("trivialunswitch@732", "simpleloopunswitch"),
+    ("loopidiom@737", "loopidiom"),
+    ("loopdeletion@749", "loopdeletion"),
+    ("sroa@776", "sroa"),
+    ("mldst-motion@783", "mldstmotion"),
+    ("gvn@787", "gvn"),
+    ("sccp@792", "sccp"),
+    ("bdce@797", "bdce"),
+    ("dfajumpthreading@806", "dfajumpthreading"),
+    ("cvp@810", "cvp"),
+    ("adce@815", "adce"),
+    ("memcpyopt@818", "memcpyopt"),
+    ("licm@823", "licm"),
+    ("infer-alignment@1362", "inferalignment"),
+    ("sroa@1494", "sroa"),
+    ("infer-alignment@1498", "inferalignment"),
+    ("licm@1508", "licm"),
+    ("float2int@1594", "float2int"),
+    ("lower-constant-intrinsics@1597", "lowerconstantintrinsics"),
+    ("instsimplify@1662", "instsimplify"),
+    ("divrempairs@1667", "divrempairs"),
+    ("tailrec@1677", "tailcallelim"),
+    ("jumpthreading@668", "jumpthreading"),
+    ("unroll@753", "loopunrollpass"),
+    ("jumpthreading@809", "jumpthreading"),
+    ("loop-interchange@1631", "loopinterchange"),
+    ("loop-unroll-and-jam@1474", "loopunrollandjam"),
+    ("cmpsub@1", "codegen:backend/cmpsub"),
+    ("optimizephis@1", "codegen:backend/optimizephis"),
+    ("deadmi@1", "codegen:backend/deadmi"),
+    ("processimpdefs@2", "codegen:processimpdefs"),
+    ("machinelicm@4", "codegen:backend/machinelicm"),
+    ("combiner@4", "codegen:backend/combiner"),
+    ("liverangeshrink@4", "codegen:backend/liverangeshrink"),
+    ("fixupsetcc@5", "codegen:backend/fixupsetcc"),
+    ("callframe@5", "codegen:backend/callframe"),
+    ("flagscopy@5", "codegen:backend/flagscopy"),
+    ("leaopt@5", "codegen:backend/leaopt"),
+    ("floatalloc@8", "codegen:backend/fpstack"),
+    ("latecleanup@13", "codegen:backend/latecleanup"),
+    ("fixupbw@14", "codegen:backend/fixupbw"),
+    ("fixupleas@14", "codegen:backend/fixupleas"),
+    ("copyprop@18", "codegen:backend/machinecp"),
+    ("lsr", "lsr_pass"),
+    ("canonfreeze", "canonfreeze"),
+];
+
+/// Every source line of the module `name`: its file and its directory.
+fn module_text(name: &str) -> String {
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let (src, name) = match name.strip_prefix("codegen:") {
+        Some(rest) => (manifest.join("../../codegen/llrm-codegen/src"), rest),
+        None => (manifest.join("src"), name),
+    };
+    let mut text = std::fs::read_to_string(src.join(format!("{name}.rs"))).unwrap_or_default();
+    if let Ok(dir) = std::fs::read_dir(src.join(name)) {
+        for file in dir.flatten() {
+            text += &std::fs::read_to_string(file.path()).unwrap_or_default();
+        }
+    }
+    text
+}
+
+/// The first `Translated` slot whose module is not named
+/// in `implemented_by` or does not cite the pin, as `reason`.
+fn untranslated_slot(
+    registry: &[Entry],
+    implemented_by: &[(&str, &str)],
+    text: &dyn Fn(&str) -> String,
+) -> Result<(), String> {
+    for one in registry.iter().filter(|one| one.kind == SlotKind::Translated) {
+        let Some((_, module)) = implemented_by.iter().find(|(slot, _)| *slot == one.slot) else {
+            return Err(format!("{}: Translated, but no module is named for it", one.slot));
+        };
+        if !text(module).contains("d1106deb71cc") {
+            return Err(format!("{}: Translated, but module `{module}` cites no pin source", one.slot));
+        }
+    }
+    Ok(())
+}
+
+/// The registry marked indvars@753 `Translated` while its module translates
+/// only `rewriteLoopExitValues` and `widenIV`; a slot is Translated only
+/// where its module cites the pin source it translates.
+#[test]
+fn test_every_translated_slot_names_a_module_that_cites_the_pin() {
+    untranslated_slot(parity::REGISTRY, IMPLEMENTED_BY, &module_text).expect("the registry");
+}
+
+#[test]
+fn test_a_translated_slot_whose_module_cites_no_pin_source_is_refused() {
+    let mut registry = parity::REGISTRY.to_vec();
+    registry.push(Entry {
+        slot: "standin@1",
+        phase: Phase::Simplify,
+        llvm: "standin",
+        kind: SlotKind::Translated,
+        replaced_by: "",
+        note: "",
+    });
+    let table: Vec<(&str, &str)> = IMPLEMENTED_BY.iter().copied().chain([("standin@1", "standin")]).collect();
+    let text = |module: &str| if module == "standin" { "gcc's pass".to_string() } else { module_text(module) };
+    let why = untranslated_slot(&registry, &table, &text).expect_err("a stand-in under a pin name");
+    assert!(why.contains("standin@1"), "{why}");
+    let why = untranslated_slot(&registry, IMPLEMENTED_BY, &module_text).expect_err("an unmapped slot");
+    assert!(why.contains("no module is named"), "{why}");
 }

@@ -4,11 +4,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
 mod absolute;
+mod allocation;
 mod assignment;
 mod bounds;
 mod debug;
+mod exclusive;
 mod format_spec;
+mod invariance;
 mod merging;
+mod near;
+mod placement;
+pub use placement::Room;
 mod shapes;
 mod tags;
 
@@ -286,9 +292,21 @@ struct Function {
     // Each element pointer into a far array: the place of the descriptor
     // owning the allocation it stays inside.
     allocations: BTreeMap<u32, u32>,
+    // Each element pointer of any array, whichever descriptor it came from.
+    elements: BTreeSet<u32>,
+    // Each descriptor-word load nothing rewrites: `!invariant.load`.
+    invariant: BTreeSet<u32>,
+    // Reference parameters (by index) nothing else reaches: `noalias`.
+    no_alias: BTreeSet<usize>,
+    // Back-edge blocks of loops that reach no far
+    // allocation: `NoFarAllocation`.
+    quiet_loops: BTreeSet<u32>,
     // Each POKE's far pointer whose DEF SEG is a literal on every path in:
     // the place of the segment cell, which names the memory it addresses.
     absolute: BTreeMap<u32, u32>,
+    // The POKE pointers among them whose segment is a literal: memory no
+    // variable of the program lives in (`Region::Absolute`).
+    unowned: BTreeSet<u32>,
 }
 
 struct Compiler {
@@ -363,8 +381,31 @@ struct Compiler {
     next_block: u32,
     data_offset: usize,
     implicit_storage: &'static str,
+    /// The array names the current procedure REDIMs or ERASEs.
+    resized: BTreeSet<String>,
+    /// The element pointers of arrays BC keeps in the far heap that are near
+    /// here: an element passed by reference is still copied in and out.
+    /// The procedure being compiled, as `array_key` spells it.
+    procedure_key: String,
+    // Every element access and array handed on, for `placement`.
+    usage: placement::Usage,
+    /// The next array declared lives in the frame.
+    frame_next: bool,
+    /// Each frame array's descriptor place, and the place of its elements.
+    frame_arrays: BTreeMap<u32, u32>,
+    /// Some procedure REDIMs or ERASEs an array parameter, which may be any
+    /// caller's array.
+    resized_formals: bool,
+    /// How deep in the procedure body `declarations_in` is.
+    declaring_depth: usize,
     next_data: u32,
     next_module_data: u32,
+    /// CLEAR on a flat target: the data object listing every module variable
+    /// (`clear_row`), once a CLEAR is seen.
+    clear_table: Option<u32>,
+    /// CLEAR in a procedure: the object whose header says it is not the main
+    /// module.
+    clear_procedure: Option<u32>,
     def_segment_symbol: Option<u32>,
     def_segment_base_symbol: Option<u32>,
     far_string_segment_symbol: Option<u32>,
@@ -497,7 +538,7 @@ impl AdLayout {
 }
 
 /// How BC was told to compile the module.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Options {
     /// /R.
     pub row_major: bool,
@@ -517,6 +558,8 @@ pub struct Options {
     /// /D's overflow check: INTEGER + - * and negation, LONG + - and
     /// negation, and LONG to INTEGER raise error 6.
     pub checked_overflow: bool,
+    /// See `Frontend::idiv_overflow_traps`.
+    pub idiv_overflow_traps: bool,
     /// /MBF.
     pub mbf: bool,
     /// /FPa.
@@ -524,8 +567,24 @@ pub struct Options {
     /// Nothing outside the module calls its procedures: they get internal
     /// linkage, and no PUBDEF, so such a call fails to link.
     pub whole_program: bool,
+    /// Procedures `whole_program` keeps public: the program's entry points
+    /// for whatever links with it (`--export`).
+    pub exports: Vec<String>,
     /// Lay out dynamic arrays read together in one allocation.
     pub array_merging: bool,
+    /// The most bytes of a procedure's constant-bound array the frame holds,
+    /// where the runtime would allocate it (0: none).
+    pub frame_array_bytes: usize,
+    /// Upper-case names of arrays that stay the runtime's.
+    pub keep_far: BTreeSet<String>,
+    /// What the target holds, for `placement`: none leaves the model off.
+    pub room: placement::Room,
+    /// Every array is in DGROUP, so a formal reaches its elements near: set by
+    /// the compile itself, where `all_near` holds.
+    pub near_arrays: bool,
+    /// The procedures (`array_key`) that keep their arrays in the runtime's
+    /// heap: set by the compile itself.
+    pub frame_deny: BTreeSet<String>,
     pub run_time_module: bool,
     /// Every procedure uses the runtime's frame entry and exit.
     pub runtime_frames: bool,
@@ -540,6 +599,10 @@ pub struct Options {
     /// one as wide as the near one is the same space: a flat target.
     pub near_bytes: usize,
     pub far_bytes: usize,
+    /// The target has no extended float to run the x87 sequence on: `x ^ y`
+    /// that squaring does not reach is a call to the runtime's `pow`
+    /// (`B$LPOW`), and a float scaled to CURRENCY a call to `B$LFPC`.
+    pub without_extended_float: bool,
     /// `-g` writes BC's own CodeView layout (what its /Zi writes) instead of
     /// standard CodeView 4, which debuggers other than BASIC's read.
     pub bc_codeview: bool,
@@ -554,6 +617,15 @@ impl Options {
     /// The bytes of a far pointer.
     pub fn far(&self) -> usize {
         if self.far_bytes == 0 { 4 } else { self.far_bytes }
+    }
+
+    /// Whether the procedure `name` is public: BASIC names are case-blind and a
+    /// type suffix is no part of one.
+    pub fn is_public(
+        &self,
+        name: &str,
+    ) -> bool {
+        !self.whole_program || self.exports.iter().any(|one| canonical(one).eq_ignore_ascii_case(canonical(name)))
     }
 
     /// Whether far pointers are near ones: the target has one address space.
@@ -586,6 +658,7 @@ pub fn compile_with_warnings(
 
 /// The source `-g` describes: each expanded line's text, and its line in
 /// the main file.
+#[derive(Clone)]
 pub struct DebugSource {
     /// Each expanded line's text, for names' spelling; empty unless `debug`.
     pub text: Vec<String>,
@@ -605,12 +678,29 @@ pub fn compile_debugged(
     options: &Options,
     source: Option<DebugSource>,
 ) -> Result<(String, Vec<String>), SemanticError> {
-    let mut compiler = built_from(module, module_name, dialect, runtime, options, source)?;
+    let mut compiler = built_from(module, module_name, dialect, runtime, options, source.clone())?;
+    if options.frame_array_bytes > 0 {
+        let mut options = options.clone();
+        let denied = near::denied(&compiler);
+        let far = placement::kept_far(&compiler);
+        if !denied.is_empty() || !far.is_empty() {
+            options.frame_deny = denied;
+            options.keep_far.extend(far);
+            compiler = built_from(module, module_name, dialect, runtime, &options, source.clone())?;
+        }
+        if near::all_near(&compiler) {
+            options.near_arrays = true;
+            compiler = built_from(module, module_name, dialect, runtime, &options, source)?;
+        }
+    }
     // /Ah and /D address every element through the descriptor at run time.
     if options.array_merging && !options.huge_arrays && !options.checked_arrays {
         merging::applied(&mut compiler);
     }
     shapes::applied(&mut compiler);
+    invariance::applied(&mut compiler);
+    exclusive::applied(&mut compiler);
+    allocation::applied(&mut compiler);
     absolute::applied(&mut compiler);
     absolute::varseg(&mut compiler);
     Ok((compiler.json(), std::mem::take(&mut compiler.warnings)))
@@ -654,9 +744,22 @@ fn built_from(
     }
     let detached_results = detach_results(&mut module, dialect);
     let module = &module;
-    let mut compiler = Compiler::new(module_name, dialect, runtime, *options);
+    let mut compiler = Compiler::new(module_name, dialect, runtime, options.clone());
     compiler.source = source;
     compiler.detached_results = detached_results;
+    compiler.resized_formals = module
+        .procedures
+        .iter()
+        .any(
+            |procedure| {
+                let mut names = BTreeSet::new();
+                resized(&procedure.body, &mut names);
+                procedure
+                    .parameters
+                    .iter()
+                    .any(|one| one.declaration.array && names.contains(&array_key(&one.declaration.name)))
+            },
+        );
     compiler.record_default_types(module)?;
     compiler.apply_option_base(&module.statements)?;
     compiler.type_declarations(module)?;
@@ -695,6 +798,7 @@ fn built_from(
             module_places.clone(),
         );
         compiler.implicit_storage = if procedure.is_static { "static" } else { "local" };
+        compiler.procedure_key = array_key(&procedure.name);
         compiler.position = source_position(procedure.span);
         compiler.current_source_line = procedure.span.line;
         let mut parameters = Vec::new();
@@ -740,6 +844,13 @@ fn built_from(
                     .fail(format!("{}: VOLATILE is not supported on an array parameter", parameter.declaration.name));
             }
             if is_array {
+                compiler
+                    .usage
+                    .formals
+                    .insert(
+                        (compiler.procedure_key.clone(), array_key(&parameter.declaration.name)),
+                        parameters.len() - 1,
+                    );
                 compiler.debug_parameter(
                     parameters.len() - 1,
                     &parameter.declaration.name,
@@ -771,7 +882,7 @@ fn built_from(
                             // element data may live outside DGROUP. Microsoft
                             // keeps that pointer split: selector at +2 and
                             // adjusted offset at +0Ah.
-                            descriptor_data: if parameter_type == STRING {
+                            descriptor_data: if parameter_type == STRING || compiler.options.near_arrays {
                                 "near"
                             } else if compiler.options.huge_arrays {
                                 "split_huge"
@@ -852,6 +963,8 @@ fn built_from(
             compiler.result_name = Some(canonical(&procedure.name).into());
         }
         compiler.each_declared.clear();
+        compiler.resized.clear();
+        resized(&procedure.body, &mut compiler.resized);
         compiler.declarations_in(&procedure.body, compiler.implicit_storage)?;
         compiler.reserve_labels(&procedure.body)?;
         compiler.handles_errors = handles_errors(&procedure.body);
@@ -876,7 +989,7 @@ fn built_from(
             parameters,
             procedure.cdecl,
             parameter_bytes,
-            if procedure.exported && !procedure.private && !compiler.options.whole_program {
+            if procedure.exported && !procedure.private && compiler.options.is_public(&procedure.name) {
                 "external"
             } else {
                 "internal"
@@ -1081,6 +1194,37 @@ fn slice_call(
     arguments.push(step.as_deref().cloned().unwrap_or(integer(1)));
     arguments.extend(extra);
     Expr::Apply { name: format!("{PRELUDE_PREFIX}{name}"), arguments, span }
+}
+
+/// How a procedure's array is named in `resized`.
+pub(super) fn array_key(name: &str) -> String {
+    canonical(name).to_ascii_uppercase()
+}
+
+/// The arrays `statements` REDIM or ERASE, nested blocks included.
+fn resized(
+    statements: &[Statement],
+    out: &mut BTreeSet<String>,
+) {
+    for statement in statements {
+        match statement {
+            Statement::Redim(items) | Statement::RedimPreserve(items) => {
+                out.extend(items.iter().map(|one| array_key(&one.name)));
+            }
+            Statement::Erase(items) => {
+                for item in items {
+                    if let Expr::Name(name, _) | Expr::Apply { name, .. } = item {
+                        out.insert(array_key(name));
+                    }
+                }
+            }
+            nested => {
+                for body in nested.bodies() {
+                    resized(body, out);
+                }
+            }
+        }
+    }
 }
 
 /// QuickrBASIC arrays start at 0: no `lower TO upper`, no `OPTION BASE 1`.
@@ -1723,7 +1867,7 @@ impl Compiler {
         Self {
             dialect,
             runtime: runtime.into(),
-            options,
+            options: options.clone(),
             module_name: module_name.into(),
             types,
             variables: BTreeMap::new(),
@@ -1793,12 +1937,21 @@ impl Compiler {
             next_block: 2,
             data_offset: 0,
             implicit_storage: "module",
+            resized: BTreeSet::new(),
+            procedure_key: String::new(),
+            usage: placement::Usage::default(),
+            frame_next: false,
+            frame_arrays: BTreeMap::new(),
+            resized_formals: false,
+            declaring_depth: 0,
             next_data: 3,
             // Source globals need their own stable data identity so their
             // names survive to the OMF listing. Keep them outside the
             // compiler-data sequence: BC's GORILLA$D<n> labels retain their
             // measured ordinals while globals use BASIC's typed spelling.
             next_module_data: 1_000_000,
+            clear_table: None,
+            clear_procedure: None,
             def_segment_symbol: None,
             def_segment_base_symbol: None,
             far_string_segment_symbol: None,
@@ -1838,6 +1991,7 @@ impl Compiler {
     ) {
         self.variables = variables;
         self.seen.clear();
+        self.frame_arrays.clear();
         self.constants = constants;
         self.next_place = places.iter().map(|place| place.id).max().unwrap_or(0) + 1;
         self.places = places;
@@ -1935,7 +2089,12 @@ impl Compiler {
             promises: Vec::new(),
             origins: BTreeMap::new(),
             allocations: BTreeMap::new(),
+            elements: BTreeSet::new(),
+            invariant: BTreeSet::new(),
+            no_alias: BTreeSet::new(),
+            quiet_loops: BTreeSet::new(),
             absolute: BTreeMap::new(),
+            unowned: BTreeSet::new(),
         });
     }
 
@@ -1988,7 +2147,18 @@ impl Compiler {
         entries: &[u32],
     ) {
         let scalar = |place: &Place| integral(place.type_id) || matches!(place.type_id, SINGLE | DOUBLE);
-        let locals: Vec<Place> = self.places.iter().filter(|place| place.storage == "local").cloned().collect();
+        // A frame array's descriptor is written whole where its DIM stands, so
+        // a zero beside it would only mix word and pointer stores in
+        // one field and cost the pointer its provenance; /D reads it to
+        // tell an array not yet dimensioned.
+        let framed: BTreeSet<u32> =
+            if self.options.checked_arrays { BTreeSet::new() } else { self.frame_arrays.keys().copied().collect() };
+        let locals: Vec<Place> = self
+            .places
+            .iter()
+            .filter(|place| place.storage == "local" && !framed.contains(&place.id))
+            .cloned()
+            .collect();
         let tracked = locals.iter().filter(|place| scalar(place)).map(|place| place.id).collect();
         let unassigned: BTreeSet<u32> =
             assignment::unassigned_reads(&self.blocks, &tracked, &BTreeSet::new(), entries, assignment::Named::MayRead)
@@ -2490,6 +2660,43 @@ impl Compiler {
         Ok(())
     }
 
+    /// Whether a procedure's array can live in its frame, as C's does: no
+    /// B$DDIM and B$ERAS, near data, a descriptor of constants.
+    ///
+    /// The DIM must run once, at the top of the procedure, on the llrm
+    /// runtime, in a program that is all in this module (`--whole-program`).
+    /// Then no array's descriptor is resized behind its back: nothing REDIMs
+    /// or ERASEs it here or through an array parameter.
+    fn in_frame(
+        &self,
+        item: &Declaration,
+    ) -> bool {
+        let bytes = item.bounds.iter().try_fold(1usize, |total, one| {
+            let low = one.lower.as_ref().map_or(Some(self.option_base), |bound| self.constant_integer(bound).ok())?;
+            let high = self.constant_integer(&one.upper).ok()?;
+            total.checked_mul(usize::try_from(high.checked_sub(low)?.checked_add(1)?).ok()?)
+        });
+        let width = match item.type_name.as_ref() {
+            Some(TypeName::String) => return false,
+            _ => self.named_type(&item.name, item.type_name.as_ref()).map(|one| self.width(one)),
+        };
+        self.options.frame_array_bytes > 0
+            && self.options.whole_program
+            && self.runtime == "llrm"
+            && !item.dynamic
+            && !self.resized_formals
+            && !self.options.frame_deny.contains(&self.procedure_key)
+            && !self.options.keep_far.contains(&array_key(&item.name))
+            && !self.options.keep_far.contains(&format!("{}/{}", self.procedure_key, array_key(&item.name)))
+            && self.declaring_depth == 0
+            && !self.resized.contains(&array_key(&item.name))
+            && self.constant_bounds(item)
+            && matches!(
+                (bytes, width),
+                (Some(count), Ok(width)) if count.saturating_mul(width) <= self.options.frame_array_bytes
+            )
+    }
+
     fn declarations_in(
         &mut self,
         statements: &[Statement],
@@ -2556,6 +2763,7 @@ impl Compiler {
                             // regardless of the module's $STATIC default.
                             let mut dynamic = item.clone();
                             dynamic.dynamic = true;
+                            self.frame_next = self.in_frame(item);
                             self.declare_as(&dynamic, storage)?;
                         } else {
                             self.declaring_common =
@@ -2632,11 +2840,17 @@ impl Compiler {
                     {
                         self.declare_each_item(name, iterable, *span, storage)?;
                     }
-                    self.declarations_in(body, storage)?;
+                    self.declaring_depth += 1;
+                    let declared = self.declarations_in(body, storage);
+                    self.declaring_depth -= 1;
+                    declared?;
                 }
                 nested => {
                     for body in nested.bodies() {
-                        self.declarations_in(body, storage)?;
+                        self.declaring_depth += 1;
+                        let declared = self.declarations_in(body, storage);
+                        self.declaring_depth -= 1;
+                        declared?;
                     }
                 }
             }
@@ -2760,10 +2974,144 @@ impl Compiler {
         let bounds = self.bounds(declaration)?;
         let stated = bounds.clone();
         let (operands, records) = self.dimensioned(bounds, element, descriptor);
-        self.emit_runtime_call("B$DDIM", Vec::new(), operands);
+        if let Some(&data) = self.frame_arrays.get(&descriptor_place) {
+            self.describe_frame(descriptor, data, element, &records);
+        } else {
+            self.emit_runtime_call("B$DDIM", Vec::new(), operands);
+        }
         self.holds(bounds::Held::Place(descriptor_place), Some(stated));
-        self.tag_last(Tag::Allocate(Shape { descriptor, records, element }));
+        self.tag_last(Tag::Allocate(Shape {
+            frame: self.frame_arrays.contains_key(&descriptor_place),
+            name: array_key(&declaration.name),
+            descriptor,
+            records,
+            element,
+        }));
         Ok(())
+    }
+
+    /// The bytes of the frame array `shape` allocates.
+    pub(super) fn frame_bytes(
+        &self,
+        shape: &Shape,
+    ) -> usize {
+        let count: i64 = shape
+            .records
+            .iter()
+            .map(|(lower, upper)| match (lower, upper) {
+                (Operand::Constant(_, Number::Integer(lower)), Operand::Constant(_, Number::Integer(upper))) => {
+                    upper - lower + 1
+                }
+                _ => 0,
+            })
+            .product();
+        count.max(0) as usize * self.width(shape.element)
+    }
+
+    /// The frame object that holds the elements of the constant-bound array
+    /// `declaration`, whose descriptor is `descriptor_place`.
+    fn frame_data(
+        &mut self,
+        declaration: &Declaration,
+        element: u32,
+        descriptor_place: u32,
+    ) -> Result<(), SemanticError> {
+        let count = self
+            .bounds(declaration)?
+            .iter()
+            .try_fold(
+                1usize,
+                |total, (lower, upper)| {
+                    let (Operand::Constant(_, Number::Integer(lower)), Operand::Constant(_, Number::Integer(upper))) =
+                        (lower, upper)
+                    else {
+                        return None;
+                    };
+                    total.checked_mul(usize::try_from(upper - lower + 1).ok()?)
+                },
+            );
+        let Some(extent) = count.map(|count| count * self.width(element)) else {
+            return self.fail(format!("{}: a frame array has constant bounds", declaration.name));
+        };
+        let type_id = self.opaque_type(format!("{} elements", declaration.name), extent);
+        if self.beyond_segment(self.data_offset + extent) {
+            return self.fail(format!(
+                "{} does not fit: the near data segment (DGROUP, {} KiB) is full",
+                declaration.name,
+                self.segment_kib()
+            ));
+        }
+        let place = self.next_place;
+        self.next_place += 1;
+        self.places.push(Place {
+            volatile: false,
+            id: place,
+            name: format!("{}$frame", declaration.name),
+            type_id,
+            offset: self.place_offset("local", extent),
+            extent,
+            storage: "local",
+            symbol: 0,
+        });
+        self.data_offset += extent;
+        self.frame_arrays.insert(descriptor_place, place);
+        Ok(())
+    }
+
+    /// What B$DDIM would store in `descriptor` for an array of constant
+    /// `records` whose elements are the frame object `data`: the elements are
+    /// zero already (every local is, at entry), and nothing frees them.
+    /// FADF_STATIC says the runtime does not own them.
+    fn describe_frame(
+        &mut self,
+        descriptor: u32,
+        data: u32,
+        element: u32,
+        records: &[(Operand, Operand)],
+    ) {
+        let layout = self.ad();
+        let word = self.word_type();
+        let constant = |value: i64| Operand::Constant(word, Number::Integer(value));
+        let integer = |operand: &Operand| match operand {
+            Operand::Constant(_, Number::Integer(value)) => *value,
+            _ => unreachable!("a frame array has constant bounds"),
+        };
+        let store = |this: &mut Self, offset: usize, type_id: u32, value: Operand| {
+            let target = Operand::Indirect { base: descriptor, offset, type_id, volatile: false, inbounds: false };
+            this.emit("store", Vec::new(), vec![target, value]);
+        };
+        store(self, layout.rank, BYTE, Operand::Constant(BYTE, Number::Integer(records.len() as i64)));
+        store(self, layout.features, BYTE, Operand::Constant(BYTE, Number::Integer(0x40)));
+        store(self, layout.element, word, constant(self.width(element) as i64));
+        let mut lower_linear = 0;
+        for (record, (lower, upper)) in records.iter().enumerate() {
+            let (lower, upper) = (integer(lower), integer(upper));
+            store(self, layout.count(record), word, constant(upper - lower + 1));
+            store(self, layout.lower(record), word, constant(lower));
+            lower_linear = if record == 0 { lower } else { lower_linear * (upper - lower + 1) + lower };
+        }
+        let near_type = self.pointer_type(VOID);
+        let near = self.value(near_type);
+        self.emit("address", vec![near], vec![Operand::Place(data)]);
+        let far = self.far_address(Operand::Place(data), VOID);
+        let offset = self.value(INTEGER);
+        self.emit("pointer_offset", vec![offset], vec![Operand::Value(far)]);
+        let segment = self.value(INTEGER);
+        self.emit("pointer_segment", vec![segment], vec![Operand::Value(far)]);
+        store(self, layout.data, INTEGER, Operand::Value(offset));
+        if let Some(selector) = layout.selector {
+            store(self, selector, INTEGER, Operand::Value(segment));
+        }
+        // As the static descriptor: the data address less the lower bounds'
+        // elements, a near pointer so that element access folds to the frame.
+        let origin = self.value(near_type);
+        let bias = -lower_linear * self.width(element) as i64;
+        self.emit(
+            "ptr_offset",
+            vec![origin],
+            vec![Operand::Value(near), Operand::Constant(INTEGER, Number::Integer(bias))],
+        );
+        store(self, layout.origin, near_type, Operand::Value(origin));
     }
 
     /// BC runs the DIM of a scalar the program already used: it stores the
@@ -2905,6 +3253,7 @@ impl Compiler {
             self.named_type(&declaration.name, declaration.type_name.as_ref())?
         };
         let module_symbol = self.basic_global_name(&declaration.name, selected, element);
+        let framed = std::mem::take(&mut self.frame_next);
         let spills = storage == "module" && self.spills_to_far(declaration, element)?;
         let runtime_bounds = declaration.array
             && !declaration.bounds.is_empty()
@@ -2966,6 +3315,9 @@ impl Compiler {
             if matches!(storage, "local" | "parameter") {
                 self.data_offset += descriptor_extent;
             }
+            if framed && storage == "local" {
+                self.frame_data(declaration, element, descriptor_place)?;
+            }
             self.pending_allocations.insert(
                 (self.position, key.clone()),
                 (declaration.clone(), descriptor_place, descriptor_type, element),
@@ -2987,7 +3339,7 @@ impl Compiler {
                     // Microsoft AD+2 supplies the allocation selector and
                     // AD+0Ah its offset. Treating these as DGROUP wrote the
                     // first MOD_TEX record through selector zero/DGROUP.
-                    descriptor_data: if element == STRING {
+                    descriptor_data: if element == STRING || self.frame_arrays.contains_key(&descriptor_place) {
                         "near"
                     } else if self.options.huge_arrays {
                         "split_huge"
@@ -3231,7 +3583,84 @@ impl Compiler {
             address: "near",
             common: self.declaring_common,
         });
+        if let Some(table) = self.clear_table {
+            self.clear_row(table, symbol, extent);
+        }
         symbol
+    }
+
+    /// One row of the CLEAR table: the address of module variable `symbol` and
+    /// its bytes. The table is a count after a main-module flag, then the
+    /// rows, each two words of the target's.
+    fn clear_row(
+        &mut self,
+        table: u32,
+        symbol: u32,
+        extent: usize,
+    ) {
+        let word = self.options.near();
+        let index = self.data.iter().position(|object| object.id == table).expect("the CLEAR table exists");
+        let object = &mut self.data[index];
+        let at = object.bytes.len();
+        object.bytes.resize(at + 2 * word, 0);
+        object.bytes[at + word..at + 2 * word].copy_from_slice(&(extent as u64).to_le_bytes()[..word]);
+        object.relocations.push(DataRelocation { at, target: symbol, addend: 0, address: "near" });
+        let count = (at - 2 * word) / (2 * word) + 1;
+        object.bytes[word..2 * word].copy_from_slice(&(count as u64).to_le_bytes()[..word]);
+    }
+
+    /// The address of the CLEAR table of the main module (one with the module
+    /// variables so far and those declared after), or of the object that
+    /// says a procedure CLEARs.
+    fn clear_table_address(&mut self) -> u32 {
+        let main = self.implicit_storage == "module";
+        let existing = if main { self.clear_table } else { self.clear_procedure };
+        let symbol = existing.unwrap_or_else(|| {
+            let word = self.options.near();
+            let symbol = self.next_data;
+            self.next_data += 1;
+            let mut bytes = vec![0; 2 * word];
+            bytes[..word].copy_from_slice(&u64::from(main).to_le_bytes()[..word]);
+            self.data.push(DataObject {
+                align: word as u32,
+                id: symbol,
+                name: if main { "$clearTable".into() } else { "$clearProcedure".into() },
+                bytes,
+                readonly: true,
+                relocations: Vec::new(),
+                linkage: "internal",
+                address: "near",
+                common: false,
+            });
+            if main {
+                self.clear_table = Some(symbol);
+                let rows: Vec<(u32, usize)> = self
+                    .data
+                    .iter()
+                    .filter(|object| object.id >= 1_000_000 && object.id < self.next_module_data)
+                    .map(|object| (object.id, object.bytes.len()))
+                    .collect();
+                for (id, extent) in rows {
+                    self.clear_row(symbol, id, extent);
+                }
+            } else {
+                self.clear_procedure = Some(symbol);
+            }
+            symbol
+        });
+        let place = self.next_place;
+        self.next_place += 1;
+        self.places.push(Place {
+            volatile: false,
+            id: place,
+            name: format!("$clear{symbol}"),
+            type_id: BYTE,
+            offset: 0,
+            extent: 2 * self.options.near(),
+            storage: "static",
+            symbol,
+        });
+        self.far_address(Operand::Place(place), BYTE)
     }
 
     fn basic_global_name(
@@ -3408,6 +3837,11 @@ impl Compiler {
         module: &Module,
     ) -> Result<(), SemanticError> {
         self.handles_errors = handles_errors(&module.statements);
+        // The llrm runtime has one math pack for the digits of a number; PDS
+        // 7.1's is not QB 4.5's, and the Microsoft runtimes bring their own.
+        if self.runtime == "llrm" && self.dialect == Dialect::Pds71 {
+            self.emit_runtime_call("B$LMPK", Vec::new(), vec![Operand::Constant(INTEGER, Number::Integer(1))]);
+        }
         self.statement_list(&module.statements)
     }
 
@@ -3695,7 +4129,15 @@ impl Compiler {
                             }
                             _ => (Operand::Constant(INTEGER, Number::Integer(0)), Number::Integer(0)),
                         };
-                        self.emit_runtime_call("B$SCLR", Vec::new(), vec![stack, Operand::Constant(INTEGER, given)]);
+                        let mut operands = vec![stack, Operand::Constant(INTEGER, given)];
+                        // The flat runtime zeroes the module's variables from a
+                        // table; the Microsoft one knows its
+                        // own data segment.
+                        if self.options.one_space() {
+                            let table = self.clear_table_address();
+                            operands.push(Operand::Value(table));
+                        }
+                        self.emit_runtime_call("B$SCLR", Vec::new(), operands);
                     }
                     "STOP" | "RESET" => {
                         if !arguments.is_empty() {
@@ -4084,7 +4526,7 @@ impl Compiler {
                             _ if self.string_width(type_id).is_some() => {
                                 let width = self.string_width(type_id).unwrap_or(0);
                                 (
-                                    "B$RDSD",
+                                    self.read_string_entry(width),
                                     vec![
                                         Operand::Value(address),
                                         Operand::Constant(INTEGER, Number::Integer(width as i64)),
@@ -4129,7 +4571,7 @@ impl Compiler {
                             _ if self.string_width(type_id).is_some() => {
                                 let width = self.string_width(type_id).unwrap_or(0);
                                 (
-                                    "B$RDSD",
+                                    self.read_string_entry(width),
                                     vec![
                                         Operand::Value(address),
                                         Operand::Constant(INTEGER, Number::Integer(width as i64)),
@@ -5431,6 +5873,7 @@ impl Compiler {
                 if has_descriptor && variable.bounds.is_empty() {
                     let descriptor = self.descriptor_pointer(&variable)?;
                     let pointer = self.descriptor_element(descriptor, element, arguments, variable.descriptor_data)?;
+                    self.note_access(pointer, name, &variable, arguments);
                     return Ok((
                         Operand::Indirect {
                             base: pointer,
@@ -5511,6 +5954,7 @@ impl Compiler {
                 if has_descriptor && variable.bounds.is_empty() {
                     let descriptor = self.descriptor_pointer(&variable)?;
                     let pointer = self.descriptor_element(descriptor, element, arguments, variable.descriptor_data)?;
+                    self.note_access(pointer, name, &variable, arguments);
                     return Ok((ProjectionBase::Indirect(pointer, false, true), 0, element));
                 }
                 if arguments.len() != variable.bounds.len() {
@@ -5644,6 +6088,38 @@ impl Compiler {
         let pointer = self.value(element_pointer_type);
         self.emit("ptr_offset", vec![pointer], vec![Operand::Value(array_pointer), Operand::Value(bytes)]);
         Ok((pointer, element))
+    }
+
+    /// The array `variable`, named `name` in this procedure, as the placement
+    /// model knows it.
+    fn array_identity(
+        &self,
+        name: &str,
+        variable: &Variable,
+    ) -> placement::Array {
+        let procedure = self.procedure_key.clone();
+        let formal = variable.descriptor_place.is_none() && variable.descriptor.is_some();
+        match self.usage.formals.get(&(procedure.clone(), array_key(name))) {
+            Some(&position) if formal => placement::Array::Formal(procedure, position),
+            _ => placement::Array::Local(procedure, array_key(name)),
+        }
+    }
+
+    fn note_access(
+        &mut self,
+        pointer: u32,
+        name: &str,
+        variable: &Variable,
+        subscripts: &[Expr],
+    ) {
+        let array = self.array_identity(name, variable);
+        let (mut names, composite) = placement::subscripts(subscripts);
+        // A named constant is no register.
+        names.retain(|name| {
+            !self.constants.contains_key(name.as_str()) && !self.constants.contains_key(&name.to_ascii_lowercase())
+        });
+        let procedure = self.procedure_key.clone();
+        self.usage.accesses.push(placement::Access { procedure, pointer, array, names, composite });
     }
 
     fn descriptor_element(
@@ -5933,6 +6409,18 @@ impl Compiler {
         let pointer = self.value(pointer_type);
         self.emit("address", vec![pointer], vec![Operand::Place(place)]);
         Ok(pointer)
+    }
+
+    /// The runtime entry that reads a string item into a string of `width`
+    /// bytes (0: a variable one). The Microsoft runtimes' B$RDSD takes
+    /// both; the llrm C runtime keeps B$RDSD for the variable string, so a
+    /// program without a fixed-string READ links nothing more, and reads a
+    /// fixed one with B$RDFS.
+    fn read_string_entry(
+        &self,
+        width: usize,
+    ) -> &'static str {
+        if width > 0 && self.runtime == "llrm" { "B$RDFS" } else { "B$RDSD" }
     }
 
     fn string_width(
@@ -6664,7 +7152,7 @@ impl Compiler {
         if let Some(held) = bounds::Held::of(&variable) {
             self.holds(held, Some(stated));
         }
-        self.tag_last(Tag::Reallocate(Shape { descriptor, records, element }));
+        self.tag_last(Tag::Reallocate(Shape { frame: false, name: String::new(), descriptor, records, element }));
         Ok(())
     }
 
@@ -8451,7 +8939,9 @@ impl Compiler {
         let mut string_cleanups = Vec::new();
         let mut string_copybacks = Vec::new();
         let mut byref_copybacks = Vec::new();
-        for (argument, (parameter_type, by_value, segmented, array)) in arguments.iter().zip(&signature.parameters) {
+        for (position, (argument, (parameter_type, by_value, segmented, array))) in
+            arguments.iter().zip(&signature.parameters).enumerate()
+        {
             if *segmented {
                 if *array || *by_value {
                     return self.fail(format!("SEG parameter for {name} must be scalar BYREF"));
@@ -8490,6 +8980,8 @@ impl Compiler {
                 if *parameter_type != ANY && variable.element != Some(*parameter_type) {
                     return self.fail(format!("array argument type does not match {name}"));
                 }
+                let from = self.array_identity(array_name, &variable);
+                self.usage.flows.push((from, placement::Array::Formal(array_key(name), position)));
                 let descriptor = self.descriptor_pointer(&variable)?;
                 operands.push(Operand::Value(descriptor));
                 passing.push(Passing::Array(descriptor));
@@ -8731,6 +9223,20 @@ impl Compiler {
             && matches!(op, Binary::Modulo | Binary::IntegerDivide)
             && !matches!(left_type, SINGLE | DOUBLE | LONG)
             && !matches!(right_type, SINGLE | DOUBLE | LONG);
+        // Where the processor's divide faults on an overflowing quotient and
+        // the runtime reports it as error 11, an INTEGER divide is the 16-bit
+        // `idiv` BC emits and `-32768 \ -1` needs no check of ours. Not where
+        // an ON ERROR handler is active (the trap names no statement to
+        // RESUME: the runtime takes the first statement row after the fault's
+        // address, and our block layout does not keep the rows in address
+        // order; differential overflow-ops ran the divide again to the 120 s
+        // limit), nor by the constant -1, which the optimizer turns into a
+        // negation.
+        let hardware_idiv = narrow_divmod
+            && self.options.idiv_overflow_traps
+            && !(self.handles_errors || self.module_handled)
+            && !matches!(&right_operand, Operand::Constant(_, Number::Integer(-1)));
+        let narrow_divmod = narrow_divmod && !hardware_idiv;
         let integral = matches!(
             op,
             Binary::And | Binary::Or | Binary::Xor | Binary::Eqv | Binary::Imp | Binary::Modulo | Binary::IntegerDivide
@@ -8750,7 +9256,7 @@ impl Compiler {
             // QB rounds floating operands before every integral/logical
             // operator. Any floating operand selects LONG evaluation; BYTE is
             // promoted to INTEGER. Keep both conversions explicit in HIR.
-            let target = if matches!(op, Binary::Modulo | Binary::IntegerDivide)
+            let target = if (matches!(op, Binary::Modulo | Binary::IntegerDivide) && !hardware_idiv)
                 || matches!(left_type, SINGLE | DOUBLE)
                 || matches!(right_type, SINGLE | DOUBLE)
                 || left_type == LONG
@@ -8810,7 +9316,7 @@ impl Compiler {
         // -fsanitize=integer-divide-by-zero made it.
         if matches!(op, Binary::Modulo | Binary::IntegerDivide) && !matches!(common, SINGLE | DOUBLE) {
             self.division_checked(&left_operand, &right_operand, common, narrow_divmod, true)?;
-            if !narrow_divmod {
+            if !narrow_divmod && !hardware_idiv {
                 self.wrapped_division(op, operation, result, left_operand, right_operand, common)?;
                 return Ok((Operand::Value(result), result_type));
             }
@@ -8979,16 +9485,6 @@ impl Compiler {
         type_id: u32,
     ) -> Result<Operand, SemanticError> {
         let Some(check) = intrinsics::argument_check(routine) else { return Ok(operand) };
-        if std::env::var_os("QB_POC_CHK").is_some() && check.range != intrinsics::Range::AbsAbove {
-            let name = match routine {
-                "fln" => "B$CHKLOG",
-                "fexp" => "B$CHKEXP",
-                _ => "B$CHKEX2",
-            };
-            let result = self.value(type_id);
-            self.emit_runtime_call(name, vec![result], vec![operand]);
-            return Ok(Operand::Value(result));
-        }
         // The operand is compared where it is and read again after the branch:
         // a cell would round it to the variable's width (D-RFP5).
         let mut tested = operand.clone();
@@ -9301,6 +9797,10 @@ impl Compiler {
             }
         }
 
+        if self.options.without_extended_float {
+            return self.library_power(left, right);
+        }
+
         // x87 has no single POW instruction. Keep the mathematical structure
         // visible as log2(base), exponent multiply, exp2. That identity holds
         // for a positive base, which a constant one proves here.
@@ -9337,6 +9837,84 @@ impl Compiler {
         let result = self.value(common);
         self.emit("fexp2", vec![result], vec![product]);
         Ok((Operand::Value(result), common))
+    }
+
+    /// `x ^ y` as a call to the runtime's `pow` (`B$LPOW`), which raises the
+    /// errors of B$POW4 itself. Each operand goes through a DOUBLE cell as it
+    /// is evaluated, so none crosses the other's blocks.
+    fn library_power(
+        &mut self,
+        left: &Expr,
+        right: &Expr,
+    ) -> Result<(Operand, u32), SemanticError> {
+        let (base, base_type) = self.expression(left)?;
+        let base = self.convert(base, base_type, DOUBLE)?;
+        let x = self.temporary(DOUBLE)?;
+        self.emit("store", Vec::new(), vec![Operand::Place(x), base]);
+        let (exponent, exponent_type) = self.expression(right)?;
+        let common = common_type(base_type, exponent_type, Binary::Power)?;
+        let exponent = self.convert(exponent, exponent_type, DOUBLE)?;
+        let y = self.temporary(DOUBLE)?;
+        self.emit("store", Vec::new(), vec![Operand::Place(y), exponent]);
+        let pointer_type = self.pointer_type(DOUBLE);
+        let pointer = self.value(pointer_type);
+        self.emit_runtime_call("B$LPOW", vec![pointer], vec![Operand::Place(x), Operand::Place(y)]);
+        let power = self.value(DOUBLE);
+        self.emit(
+            "load",
+            vec![power],
+            vec![Operand::Indirect { base: pointer, offset: 0, type_id: DOUBLE, volatile: false, inbounds: false }],
+        );
+        Ok((self.convert(Operand::Value(power), DOUBLE, common)?, common))
+    }
+
+    /// A DOUBLE rounded to the integer type `to` as the x87's `fist` does: to
+    /// nearest, ties to even, and a value past the type the integer
+    /// indefinite (its lowest value), with no error. A target without the x87
+    /// leaves that conversion's overflow to its own `lrint`. The test is on the
+    /// double, before the rounding: the highest value of the type is odd, so
+    /// half past it rounds up and out, and the lowest is even, so half below it
+    /// rounds in.
+    fn indefinite_integer(
+        &mut self,
+        operand: Operand,
+        to: u32,
+    ) -> Result<Operand, SemanticError> {
+        let Some(range) = integer_range(to).filter(|range| *range.start() < 0) else {
+            return self.convert(operand, DOUBLE, to);
+        };
+        let top = self.floating_literal(&format!("{}.5", range.end()), DOUBLE)?;
+        let bottom = self.floating_literal(&format!("{}.5", range.start()), DOUBLE)?;
+        let above = self.computed("ge", BOOLEAN, vec![operand.clone(), top]);
+        let below = self.computed("lt", BOOLEAN, vec![operand.clone(), bottom]);
+        let past = self.computed("or", BOOLEAN, vec![above, below]);
+        let rounded = self.convert(operand, DOUBLE, to)?;
+        let wide = self.computed("convert", CURRENCY, vec![rounded]);
+        let chosen = self.conditional_value(past, Operand::Constant(CURRENCY, Number::Integer(*range.start())), wide);
+        let narrow = self.value(to);
+        self.emit("convert", vec![narrow], vec![chosen]);
+        Ok(Operand::Value(narrow))
+    }
+
+    /// A DOUBLE scaled to CURRENCY by the runtime (`B$LFPC`), which does what
+    /// the x87 does for B$FPCY with integers: the product rounded to 64 bits,
+    /// then to the nearest integer, ties to even.
+    fn library_scaled_float(
+        &mut self,
+        operand: Operand,
+    ) -> Result<Operand, SemanticError> {
+        let x = self.temporary(DOUBLE)?;
+        self.emit("store", Vec::new(), vec![Operand::Place(x), operand]);
+        let pointer_type = self.pointer_type(CURRENCY);
+        let pointer = self.value(pointer_type);
+        self.emit_runtime_call("B$LFPC", vec![pointer], vec![Operand::Place(x)]);
+        let scaled = self.value(CURRENCY);
+        self.emit(
+            "load",
+            vec![scaled],
+            vec![Operand::Indirect { base: pointer, offset: 0, type_id: CURRENCY, volatile: false, inbounds: false }],
+        );
+        Ok(Operand::Value(scaled))
     }
 
     /// `x ^ y` over B$POW4's whole domain, measured under BC 4.5: 2^.5 is
@@ -9512,6 +10090,9 @@ impl Compiler {
             }
             if matches!(from, SINGLE | DOUBLE) {
                 let operand = self.convert(operand, from, DOUBLE)?;
+                if self.options.without_extended_float {
+                    return self.library_scaled_float(operand);
+                }
                 let wide = self.computed("convert", EXTENDED, vec![operand]);
                 // A SINGLE holds 10000 exactly, and a 4-byte constant is the
                 // pin's pool entry for it where a 10-byte one
@@ -9525,6 +10106,9 @@ impl Compiler {
             let wide = self.computed("convert", DOUBLE, vec![operand]);
             let factor = scale(self)?;
             let quotient = self.computed("fdiv", DOUBLE, vec![wide, factor]);
+            if integral(to) && self.options.without_extended_float {
+                return self.indefinite_integer(quotient, to);
+            }
             return if to == DOUBLE { Ok(quotient) } else { self.convert(quotient, DOUBLE, to) };
         }
         self.fail(format!("cannot convert {} to {} here", self.name(from), self.name(to)))
@@ -10502,7 +11086,7 @@ impl Compiler {
             .filter_map(|(place, element)| {
                 self.places
                     .iter()
-                    .find(|one| one.id == place && one.storage == "local")
+                    .find(|one| one.id == place && one.storage == "local" && !self.frame_arrays.contains_key(&place))
                     .map(|one| (place, one.type_id, if element == Some(STRING) { strings } else { "B$ERAS" }))
             })
             .collect();
@@ -10617,6 +11201,24 @@ impl Compiler {
                                 llrm_hir::facts::Fact::InBounds,
                             );
                         }
+                    }
+                    if function.invariant.contains(&instruction.id) {
+                        facts.state(
+                            llrm_hir::facts::Subject::Instruction {
+                                function: i64::from(function.id),
+                                id: i64::from(instruction.id),
+                            },
+                            llrm_hir::facts::Fact::Invariant,
+                        );
+                    }
+                    if let Some(region) = region(instruction, function) {
+                        facts.state(
+                            llrm_hir::facts::Subject::Instruction {
+                                function: i64::from(function.id),
+                                id: i64::from(instruction.id),
+                            },
+                            llrm_hir::facts::Fact::Access(region),
+                        );
                     }
                     out.push_str("],\"pure\":false,\"results\":[");
                     numbers(&mut out, &instruction.results);
@@ -10828,6 +11430,45 @@ impl Compiler {
                 facts.state(
                     llrm_hir::facts::Subject::Param { function: i64::from(function.id), index },
                     llrm_hir::facts::Fact::Dereferenceable(bytes as u64),
+                );
+                // A reference is the address of a variable its caller names:
+                // never null, never an undefined value.
+                let at = llrm_hir::facts::Subject::Param { function: i64::from(function.id), index };
+                facts.state(at, llrm_hir::facts::Fact::NonNull).state(at, llrm_hir::facts::Fact::NoUndef);
+                if function.no_alias.contains(&(index as usize)) {
+                    facts.state(at, llrm_hir::facts::Fact::NoAlias);
+                }
+            }
+        }
+        // `mustprogress` deletes a side-effect-free loop it cannot prove ends,
+        // which BASIC's delay and wait loops (`FOR i = 1 TO n: NEXT`,
+        // `DO WHILE flag = 0: LOOP` for an ON KEY handler) must survive: only
+        // a routine with no loop at all, and no call of a routine of the
+        // program (which may recurse or loop), states it.
+        for function in &self.functions {
+            let calls_program = function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .filter_map(|instruction| instruction.callee.as_deref())
+                .any(|callee| self.functions.iter().any(|one| one.name == callee));
+            if has_loop(function) || calls_program {
+                continue;
+            }
+            if let Some(callable) = self.callables.iter().find(|one| one.name == function.name) {
+                facts.state(
+                    llrm_hir::facts::Subject::Callable(i64::from(callable.id)),
+                    llrm_hir::facts::Fact::MustProgress,
+                );
+            }
+        }
+        // A loop that reaches no far allocation keeps every far descriptor's
+        // words.
+        for function in &self.functions {
+            for &block in &function.quiet_loops {
+                facts.state(
+                    llrm_hir::facts::Subject::Terminator { function: i64::from(function.id), block: i64::from(block) },
+                    llrm_hir::facts::Fact::NoFarAllocation,
                 );
             }
         }
@@ -11444,6 +12085,45 @@ fn numbers(
     }
 }
 
+/// The region of memory a load or store reaches, where the frontend knows it:
+/// a descriptor's field, or an element of an array (its subscripts are in
+/// range, which an access promises).
+fn region(
+    instruction: &Instruction,
+    function: &Function,
+) -> Option<llrm_hir::facts::Region> {
+    use llrm_hir::facts::Region;
+    if !matches!(instruction.op, "load" | "store") {
+        return None;
+    }
+    if matches!(instruction.tag, Some(Tag::DescriptorField { .. })) {
+        return Some(Region::Descriptor);
+    }
+    // A literal segment is memory the program owns nothing in; a reference
+    // parameter points at a variable (a near pointer into DS) or an element of
+    // an array of the program, so a routine that writes such memory states the
+    // two apart.
+    if let [Operand::Indirect { base, .. }, ..] = instruction.operands.as_slice() {
+        if function.unowned.contains(base) {
+            return Some(Region::Absolute);
+        }
+        if !function.unowned.is_empty() && function.promises.iter().any(|&(value, _)| value == *base) {
+            return Some(Region::Referent);
+        }
+    }
+    instruction
+        .operands
+        .iter()
+        .any(|operand| match operand {
+            Operand::Indirect { base, inbounds: true, .. } => function.elements.contains(base),
+            // A named array's element, which a parameter may be bound to.
+            Operand::Element(..) => true,
+            Operand::Projection { indices, .. } => !indices.is_empty(),
+            _ => false,
+        })
+        .then_some(Region::Element)
+}
+
 fn operand_json(
     out: &mut String,
     operand: &Operand,
@@ -11526,4 +12206,24 @@ fn plural(
     noun: &str,
 ) -> String {
     if count == 1 { format!("1 {noun}") } else { format!("{count} {noun}s") }
+}
+
+/// Whether the blocks of a routine hold a cycle: a jump back to a block on the
+/// path to it.
+fn has_loop(function: &Function) -> bool {
+    fn visit(
+        function: &Function,
+        id: u32,
+        state: &mut BTreeMap<u32, bool>,
+    ) -> bool {
+        match state.get(&id) {
+            Some(&on_path) => return on_path,
+            None => state.insert(id, true),
+        };
+        let targets = function.blocks.iter().find(|block| block.id == id).and_then(|block| block.terminator.as_ref());
+        let cyclic = targets.is_some_and(|one| one.targets.iter().any(|&next| visit(function, next, state)));
+        state.insert(id, false);
+        cyclic
+    }
+    function.blocks.first().is_some_and(|entry| visit(function, entry.id, &mut BTreeMap::new()))
 }

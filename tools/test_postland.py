@@ -28,7 +28,7 @@ def test_the_culprit_search_runs_log_n_probes():
 
 def test_a_squash_subject_names_its_pr_and_a_body_its_owner():
     assert postland.pr_of("fix(gate): the sigterm test waits (#1755)") == 1755
-    assert postland.pr_of("merge: origin/feat/parity") is None
+    assert postland.pr_of("merge: origin/release/next") is None
     assert postland.owner_of("TL;DR: x\n\nOwner: bench-instruments-2206\n") == "bench-instruments-2206"
     assert postland.owner_of("no owner here") == "unknown"
 
@@ -114,10 +114,12 @@ def test_the_premise_line_names_a_program_combine_changed_and_says_when_the_bina
     bins, built = tmp_path / "bins", tmp_path / "built"
     for one in (bins, built):
         one.mkdir()
-        (one / "llrm-c").write_text('#!/bin/sh\nout=""\nwhile [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done\necho "${LLRM_NO_COMBINE:-on}" > "$out"\n')
-        (one / "llrm-c").chmod(0o755)
+        (one / "llrm-cc").write_text('#!/bin/sh\nout=""\nwhile [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done\necho "${LLRM_NO_COMBINE:-on}" > "$out"\n')
+        (one / "llrm-cc").chmod(0o755)
+        (one / "llrm-llc").write_text("#!/bin/sh\n")
+        (one / "llrm-llc").chmod(0o755)
     assert "equals" in postland.combine_premise(tmp_path, bins, built) and "a.c differs" in postland.combine_premise(tmp_path, bins, built)
-    (built / "llrm-c").write_text("#!/bin/sh\nexit 0\n")
+    (built / "llrm-llc").write_text("#!/bin/sh\nexit 0\n")
     assert "DIFFERS FROM" in postland.combine_premise(tmp_path, bins, built)
 
 

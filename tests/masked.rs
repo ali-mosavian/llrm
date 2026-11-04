@@ -6,6 +6,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod common;
+
 fn compiled(
     tool: &str,
     source: &str,
@@ -15,13 +17,15 @@ fn compiled(
     let bin = Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap();
     let scratch = tempfile::tempdir().unwrap();
     let out = scratch.path().join("out.asm");
-    let done = Command::new(bin.join(tool))
-        .arg(root.join("tests/inputs/masked").join(source))
-        .args(arguments)
-        .args(["--isel=dag", "-O2", "-march=i486", "-S", "-o"])
-        .arg(&out)
-        .output()
-        .unwrap();
+    let input = root.join("tests/inputs/masked").join(source);
+    let flags = ["--isel=dag", "-O2", "-march=i486", "-S", "-o"];
+    // llrm-c is gone: its command line is served by llrm-cc over the pinned
+    // clang.
+    let done = if tool == "llrm-c" {
+        common::cc::llrm_c().arg(&input).args(arguments).args(flags).arg(&out).output().unwrap()
+    } else {
+        Command::new(bin.join(tool)).arg(&input).args(arguments).args(flags).arg(&out).output().unwrap()
+    };
     assert!(done.status.success(), "{tool} {source}: {}", String::from_utf8_lossy(&done.stderr));
     std::fs::read_to_string(out).unwrap()
 }

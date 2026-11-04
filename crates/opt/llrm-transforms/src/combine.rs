@@ -331,6 +331,8 @@ pub enum Visit {
 /// What `visit` reads besides the function.
 pub struct Env<'a> {
     pub globals: &'a [GlobalValue],
+    /// The module's metadata nodes, which ValueTracking reads (`!range`).
+    pub metadata: &'a [MetadataNode],
     /// What each callee does to memory, for `isInstructionTriviallyDead`.
     pub callees: &'a Callees,
     pub layout: &'a DataLayout,
@@ -387,6 +389,13 @@ impl Combiner<'_> {
     ) -> InstId {
         let new = self.function.create_instruction(opcode, ty, operands, flags, None);
         self.function.insert(new, Position::Before(at)).expect("a placed instruction");
+        // The builder's insertion point is `at`: `Builder.SetInsertPoint(&I)`
+        // takes its debug location.
+        let place =
+            self.function.instruction(at).metadata.iter().find(|(kind, _)| kind == "dbg").map(|&(_, node)| node);
+        if place.is_some() {
+            self.function.set_metadata(new, "dbg", place);
+        }
         self.worklist.add(new);
         new
     }
@@ -662,7 +671,7 @@ pub(crate) fn combine_with_sinking(
     // InstCombine's `SQ.DC`: what the branches dominating an instruction say,
     // those visited so far.
     let analyses = FunctionAnalyses::of(context, globals, metadata, layout, function).with_lazy_dom_conditions();
-    let env = Env { globals, callees, layout, analyses, sinking, back_edges: Default::default() };
+    let env = Env { globals, metadata, callees, layout, analyses, sinking, back_edges: Default::default() };
     let mut c = Combiner { context, function, env: &env, worklist: InstWorklist::default(), declared };
     let mut changed = prepare(&env, c.context, c.function, &mut c.worklist);
     changed |= drain(&mut c, visit);

@@ -10,11 +10,11 @@
 //! DEVIATE 1: no vectors: `foldVectorBinop` and the `vector_reduce_add` fold
 //! (:2602) are not translated.
 //!
-//! DEVIATE 2: `narrowMathIfNoOverflow` (in `TryToNarrowDeduceFlags`),
-//! `isFreeToInvert` (`~X - ~Y`, :2587),
+//! DEVIATE 2: `isFreeToInvert` (`~X - ~Y`, :2587),
 //! `tryFoldInstWithCtpopWithNot`, `foldSubOfMinMax` and everything from the
-//! select-of-sub fold (:2799) on are the next strip, but the `usub.sat`,
-//! `umin` and `umax` identities (:2978-3006).
+//! select-of-sub fold (:2799) on are the next strip, but the pointer
+//! differences (:2894-2931) and the `usub.sat`, `umin` and `umax` identities
+//! (:2978-3006).
 //!
 //! DEVIATE 3: constant expressions are skipped (`combine_addsub` DEVIATE 4).
 //!
@@ -153,12 +153,11 @@ fn fold_with_negator(
     if !is_negation {
         return None;
     }
-    // Should have been handled in Negator: infer the flags (DEVIATE 2:
-    // narrowMathIfNoOverflow).
+    // Should have been handled in Negator: narrow, else infer the flags.
     Some(infer_sub_flags(c, inst, op0, op1, flags))
 }
 
-/// `TryToNarrowDeduceFlags` without the narrowing: `nsw`/`nuw` when
+/// `TryToNarrowDeduceFlags`: the narrowing, else `nsw`/`nuw` when
 /// `willNotOverflow{Signed,Unsigned}Sub`.
 fn infer_sub_flags(
     c: &mut Combiner,
@@ -168,6 +167,9 @@ fn infer_sub_flags(
     flags: Flags,
 ) -> Visit {
     use llrm_mir::valuetracking::range::{OverflowResult, compute_overflow_for_unsigned_sub};
+    if let Some(narrowed) = c.narrow_math_if_no_overflow(inst) {
+        return narrowed;
+    }
     let mut new = flags;
     if !flags.contains(Flags::NSW) && will_not_overflow_signed_sub(c, inst, op0, op1) {
         new.insert(Flags::NSW);
@@ -565,6 +567,57 @@ fn fold_xor_of_sext_bool(
     Some(c.replace_with_new(inst, Opcode::Select, ty, vec![cond, t, f], Flags::default()))
 }
 
+/// Pointer differences into one object as a size (:2894-2931): `&A[10] -
+/// &A[0]` is `10`. `ptrtoint` pairs, `trunc` of them, and a `zext` pair whose
+/// minuend is a GEP of the subtrahend.
+fn fold_pointer_difference(
+    c: &mut Combiner,
+    inst: InstId,
+    op0: Operand,
+    op1: Operand,
+) -> Option<Visit> {
+    let ty = c.type_of(op0);
+    let is_nuw = c.function.instruction(inst).flags.contains(Flags::NUW);
+    let ptr_to_int = |c: &Combiner, v: Operand| match c.cast_parts(v)? {
+        (CastOp::PtrToInt, source, _) => Some(source),
+        _ => None,
+    };
+    let through = |c: &Combiner, v: Operand, outer: CastOp| match c.cast_parts(v)? {
+        (op, inner, _) if op == outer => Some(inner),
+        _ => None,
+    };
+    if let (Some(lhs), Some(rhs)) = (ptr_to_int(c, op0), ptr_to_int(c, op1)) {
+        if let Some(found) = c.optimize_pointer_difference(inst, lhs, rhs, ty, is_nuw) {
+            return Some(Visit::Replace(found));
+        }
+    }
+    // trunc(p)-trunc(q) -> trunc(p-q)
+    let truncated = |c: &Combiner, v: Operand| through(c, v, CastOp::Trunc).and_then(|inner| ptr_to_int(c, inner));
+    if let (Some(lhs), Some(rhs)) = (truncated(c, op0), truncated(c, op1)) {
+        if let Some(found) = c.optimize_pointer_difference(inst, lhs, rhs, ty, false) {
+            return Some(Visit::Replace(found));
+        }
+    }
+    let widened = |c: &Combiner, v: Operand| through(c, v, CastOp::ZExt).and_then(|inner| ptr_to_int(c, inner));
+    let (lhs, rhs) = (widened(c, op0)?, widened(c, op1)?);
+    let gep = c.defining_gep(lhs)?;
+    let found = c.gep_of(gep).expect("a getelementptr");
+    if found.ptr != rhs {
+        return None;
+    }
+    let flags = crate::combine_gep::GepFlags::of(found.flags);
+    if !(flags.nuw || flags.nusw) {
+        return None;
+    }
+    let offset = c.emit_gep_offset_at(inst, gep, false);
+    let (op, wrap) = if flags.nuw {
+        (CastOp::ZExt, if flags.nusw { Flags::NNEG } else { Flags::default() })
+    } else {
+        (CastOp::SExt, Flags::default())
+    };
+    Some(Visit::Replace(c.create_cast(inst, op, offset, ty, wrap)))
+}
+
 /// `InstCombinerImpl::visitSub` (:2413).
 /// The `usub.sat`/`umin`/`umax` identities of a difference (:2978-3006).
 fn fold_saturating_difference(
@@ -664,16 +717,20 @@ pub fn visit_sub(
         return found;
     }
     // DEVIATE 2: isFreeToInvert (~X - ~Y); DEVIATE 1: vector_reduce_add.
-    let steps: [fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>; 7] = [
+    let steps: [fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>; 8] = [
         fold_constant_minuend,
         fold_constant_mask_minuend,
         fold_negated_remainder,
         fold_bitwise_difference,
         fold_and_difference,
         fold_xor_of_sext_bool,
+        fold_pointer_difference,
         fold_saturating_difference,
     ];
-    steps.iter().find_map(|step| step(c, inst, op0, op1)).unwrap_or(Visit::None)
+    if let Some(found) = steps.iter().find_map(|step| step(c, inst, op0, op1)) {
+        return found;
+    }
+    infer_sub_flags(c, inst, op0, op1, flags)
 }
 
 #[cfg(test)]

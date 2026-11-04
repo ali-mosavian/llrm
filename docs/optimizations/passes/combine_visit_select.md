@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_visit_select.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_visit_select.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_visit_select.rs sha256:1c5936de54c3ecfed1f7e4ba13d32aae4b94b19bd8183ea2ced58bea65cc0908 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_visit_select.rs sha256:0dc9f6a6eb5decadd77c545ea6f4eb5c7c8304da50dc3f857c7dd5b6df18bf02 -->
 
 # combine_visit_select
 
@@ -22,7 +22,7 @@ left out, each named where it stood: `foldSelectOfBools`,
 (`fabs`, `minnum`, `canonicalize`...: need #2209),
 `foldSelectValueEquivalence`, the rest of `foldSelectInstWithICmp`
 (its `canonicalizeSPF` step is `combine_select_spf`),
-`foldSelectICmpAndAnd`, `foldSelectBitTest`, `foldAddSubSelect`,
+`foldAddSubSelect`,
 `foldOverflowingAddSubSelect`, `foldSetClearBits`,
 `foldSelectZeroOrFixedOp`, `foldSelectIntrinsic`,
 `foldSelectWithSRem`, the
@@ -43,4 +43,4 @@ are dropped, not swapped.
 ```
 
 ## Used by
-Named by `combine_select_bools`, `combine_select_ext_const`, `combine_select_into_op`, `combine_select_op_op`, `combine_select_spf`.
+Named by `combine_select_bit_test`, `combine_select_bools`, `combine_select_ext_const`, `combine_select_into_op`, `combine_select_op_op`, `combine_select_spf`.

@@ -10,9 +10,10 @@
 //! proves disjoint, and the aliases it gathers are joined by a token factor.
 //! `visitTokenFactor` is `combine_token_factor.rs`.
 //!
-//! DEVIATE CC2: `mayAlias` has no `MachineMemOperand` offset, base alignment
-//! or IR value: the relatively-aligned-offsets test and the alias analysis
-//! (`useAA`, false for x86) are not run; and there are no atomics or
+//! DEVIATE CC2: `mayAlias` has no `MachineMemOperand` offset or base
+//! alignment: the relatively-aligned-offsets test is not run. The alias
+//! analysis (`useAA`) runs only where the builder records the IR pointer
+//! ([`MemBase::Value`], wasm), on whole accesses; and there are no atomics or
 //! lifetime nodes. A pair the address analysis cannot decide is a may-alias.
 //! Exit: `MemInfo` carrying the pointer info. Owner: w12.
 //!
@@ -26,12 +27,23 @@
 use llrm_support::hash::HashSet;
 
 use super::address_analysis::{BaseIndexOffset, compute_aliasing};
-use super::dag::{NodeData, Rauw, SDValue};
+use super::dag::{MemBase, MemLocation, NodeData, Rauw, SDValue};
 use super::dag_combiner::{CombineHooks, DagCombiner};
 use super::isd::ISD;
 
-/// `GatherAllAliasesMaxDepth`.
-const GATHER_ALL_ALIASES_MAX_DEPTH: usize = 6;
+/// `BatchAA`: whether two accesses cannot touch the same bytes, from their IR
+/// pointers and `!tbaa` tags.
+pub trait AliasOracle {
+    fn no_alias(
+        &self,
+        a: MemLocation,
+        b: MemLocation,
+    ) -> bool;
+}
+
+/// `GatherAllAliasesMaxDepth`: 18, `TargetLoweringBase`; x86 does not set its
+/// own.
+const GATHER_ALL_ALIASES_MAX_DEPTH: usize = 18;
 
 impl<H: CombineHooks> DagCombiner<'_, H> {
     /// The bytes a load or store moves, and its memory info.
@@ -71,7 +83,19 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if (invariant(op0) && is_store(op1)) || (invariant(op1) && is_store(op0)) {
             return false;
         }
-        compute_aliasing(self.dag, op0, Some(size0), op1, Some(size1)).unwrap_or(true)
+        if let Some(alias) = compute_aliasing(self.dag, op0, Some(size0), op1, Some(size1)) {
+            return alias;
+        }
+        // `UseAA`: alias analysis on the IR pointers and `!tbaa` tags.
+        if let (Some(oracle), MemBase::Value(a), MemBase::Value(b)) = (self.alias, info0.base, info1.base) {
+            let (a, b) = (self.dag.mem_locations[a.get() as usize - 1], self.dag.mem_locations[b.get() as usize - 1]);
+            // A location describes the access as built: a narrowed or merged
+            // one is not.
+            if u64::from(a.bytes) == size0 && u64::from(b.bytes) == size1 && oracle.no_alias(a, b) {
+                return false;
+            }
+        }
+        true
     }
 
     /// `GatherAllAliases`: walk up the chain from `original` past the nodes
@@ -138,6 +162,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         node: SDValue,
         old: SDValue,
     ) -> SDValue {
+        if self.opt_none {
+            return old;
+        }
         let aliases = self.gather_all_aliases(node, old);
         match aliases[..] {
             [] => self.dag.entry_node(),
@@ -198,7 +225,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         while self.dag.opcode(self.dag.operand(last, 0)) == ISD::Store {
             let chain = self.dag.operand(last, 0);
             // More than one use: the memory operations cannot be reordered.
-            if self.dag.use_count(chain.node) != 1 {
+            if !self.dag.has_one_use(chain.node) {
                 break;
             }
             let (_, length, chain_info) = self.access(chain)?;
@@ -275,6 +302,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         &mut self,
         store: SDValue,
     ) -> Option<SDValue> {
+        if self.opt_none {
+            return None;
+        }
         let base_ptr = BaseIndexOffset::matching(self.dag, store);
         let base = base_ptr.base?;
         if self.dag.is_undef(base) {
@@ -307,7 +337,15 @@ mod tests {
     use crate::backend::selectiondag::dag_combiner::{CombineLevel, NoCombines, combine};
 
     fn info() -> MemInfo {
-        MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Unknown, ext: None, space: 0 }
+        MemInfo {
+            mem_vt: EVT::I32,
+            align: 4,
+            volatile: false,
+            base: MemBase::Unknown,
+            ext: None,
+            space: 0,
+            ordering: None,
+        }
     }
 
     /// The root after one combine, from a token factor made of `build`'s

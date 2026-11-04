@@ -307,7 +307,7 @@ pub fn filled_with(
                 _fill(&unit.with_registers(facts), callees, &loop_, &costs, &bytes, size)
             };
             if let Some(found) = found {
-                _filled(context, declared, function, &found);
+                _filled(context, layout, declared, function, &found);
                 standing.changed();
                 changed = true;
                 continue 'again;
@@ -822,7 +822,11 @@ pub(crate) fn fills_pay(
     stores: i64,
     fills: i64,
     kept: i64,
+    at_speed: bool,
+    clocks: Option<(&OperationCosts, i64, Option<i64>, Option<i64>)>,
 ) -> bool {
+    // `clocks`' last entry is the cells the fill stores in all: a cell is a
+    // `stos` of a dword, or the pattern's own cell.
     // The loop stays for the stores of computed values: a fill saves one
     // store, less than itself.
     if kept > 0 {
@@ -831,8 +835,33 @@ pub(crate) fn fills_pay(
     // The table doubles an operation that becomes more than one instruction;
     // a fill's three immediate loads are 2 to 3 bytes each, not 6: three
     // quarters of `fill` is its real size (12 to 13 of 18 bytes at m16).
-    stores < 2
-        || fills_cheaper(trip_cost(context, layout, function, callees, blocks.iter(), costs, true), fills, costs.fill)
+    let loop_bytes = trip_cost(context, layout, function, callees, blocks.iter(), costs, true);
+    // At speed under a clock price (m16 -O2: 1 clock = 2 B) with the trips
+    // known, the bytes are in the price: a fill larger than the loop still pays
+    // for the clocks it saves. At -Os, or for unknown trips, the bytes decide.
+    let priced = at_speed && clocks.is_some_and(|(_, _, trips, cells)| trips.is_some() && cells.is_some());
+    (stores < 2 || priced || fills_cheaper(loop_bytes, fills, costs.fill))
+        && clocks.is_none_or(|(clocks, rate, trips, width)| {
+            // The clocks the fill adds against the bytes it saves, as the
+            // backend prices a memset's fill against its stores. The loop
+            // stays when its extra bytes buy fewer clocks than that.
+            let (Some(trips), Some(cells)) = (trips, width) else { return true };
+            let each = trip_cost(context, layout, function, callees, blocks.iter(), clocks, true);
+            let fill = fills * clocks.fill + cells * clocks.fill_cell;
+            let saved = loop_bytes - 3 * fills * costs.fill / 4;
+            clocks_pay(saved, rate, fill, trips * each)
+        })
+}
+
+/// Whether the `saved` bytes of the fill are worth the clocks it adds over
+/// the loop, at `rate` thousandths of a clock a byte.
+fn clocks_pay(
+    saved: i64,
+    rate: i64,
+    fill: i64,
+    looped: i64,
+) -> bool {
+    saved * rate >= (fill - looped) * 1000
 }
 
 /// Whether a loop of `loop_bytes` is more than `fills` fills of `fill` bytes by
@@ -978,6 +1007,7 @@ pub(crate) fn _copy(
 /// The loop made one trip that fills.
 fn _filled(
     context: &mut Context,
+    layout: &DataLayout,
     declared: &mut Declared,
     function: &mut Function,
     found: &_Found,
@@ -1091,11 +1121,33 @@ fn _filled(
         off,
         Operand::Constant(seeds.context.constant(Constant { ty: pointer, kind: ConstantKind::Global(callee) })),
     ]);
+    // A memset's destination keeps the alignment its stores had, the least of
+    // them: without it the backend fills by bytes (`rep stosb`).
+    let dest_align = matches!(found.stored, Stored::Fill(..))
+        .then(|| {
+            std::iter::once(found.effect)
+                .chain(found.absorbed.iter().copied())
+                .map(|store| match function.instruction(store).opcode {
+                    // No `align` is the type's ABI alignment.
+                    Opcode::Store { align, .. } => align.or_else(|| {
+                        let ty = function.operand_type(context, function.instruction(store).operands[0])?;
+                        Some(layout.align(&context.types, ty))
+                    }),
+                    _ => None,
+                })
+                .try_fold(u64::MAX, |least, align| align.map(|align| least.min(align)))
+        })
+        .flatten()
+        .filter(|align| *align != u64::MAX);
+    let mut argument_attrs = vec![Vec::new(); 4];
+    if let Some(align) = dest_align {
+        argument_attrs[0].push(llrm_mir::opcode::Attribute::Int("align".to_owned(), align));
+    }
     let info = CallInfo {
         function_type,
         calling_convention: 0,
         return_attrs: Vec::new(),
-        argument_attrs: vec![Vec::new(); 4],
+        argument_attrs,
         attrs: Vec::new(),
         tail: Default::default(),
     };
@@ -1286,8 +1338,11 @@ fn _stored(
         return Some((pointer, Byte::Number(byte), bytes));
     }
     // LLVM's memset_pattern16: the cell is a word or dword; the stored value
-    // need not be a constant.
-    matches!(width, 16 | 32).then_some((pointer, Byte::Pattern(value), bytes))
+    // need not be a constant. Not over a pointer whose index is wider than the
+    // default space's (a huge array): the count would be wider than the
+    // target's `rep stos` takes, and isel cannot lower it.
+    let counted = unit.layout.pointer(unit.space(pointer)?).index_bits <= unit.layout.pointer(0).index_bits;
+    (matches!(width, 16 | 32) && counted).then_some((pointer, Byte::Pattern(value), bytes))
 }
 
 /// The store and load of `one` and `other`, where the store writes the loaded

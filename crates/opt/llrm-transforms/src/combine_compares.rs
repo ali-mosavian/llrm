@@ -28,11 +28,6 @@
 //! the lead). `(a & -4) == C` folds at C = 0 and signmin only
 //! (`a s< -32764` at i16); `((b + M) & M) u< b` is `b != 0` for M = 3, 7.
 //!
-//! DEVIATE 1 (permanent): `samesign` is not a flag of MIR's `icmp`; the folds
-//! that read or set it are left out (the unsigned-to-`samesign` step of
-//! `foldICmpUsingKnownBits`; the signed-to-unsigned step is made, which is what
-//! sets the flag in LLVM).
-//!
 //! DEVIATE 2 (temporary): `foldICmpUsingKnownBits` computes the known bits of
 //! the operands, where LLVM first runs `SimplifyDemandedBits` on them
 //! (InstCombineSimplifyDemanded.cpp, not translated): the same facts or fewer.
@@ -58,13 +53,17 @@ use llrm_mir::context::{mask, signed};
 use llrm_mir::knownbits::KnownBits;
 use llrm_mir::module::{InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
-use llrm_mir::simplify::simplify_instruction_in;
+use llrm_mir::simplify::{simplify_icmp_operands, simplify_instruction_in};
+use llrm_mir::valuetracking::context::is_implied_condition_cmp;
+use llrm_mir::valuetracking::nonzero::strip_and_accumulate_constant_offsets;
+use llrm_mir::valuetracking::pattern::{CmpPredicate, Side};
 use llrm_mir::valuetracking::range::{self, SelectOperand, SelectPatternFlavor};
 use llrm_mir::valuetracking::{Query, known, pattern};
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_icmp_binop::fold_icmp_bin_op;
 use crate::combine_icmp_const::fold_icmp_inst_with_constant;
+use crate::combine_icmp_equality::fold_icmp_equality;
 use crate::combine_shared::{get_complexity, has_one_use, query};
 
 /// `ICmpInst::isSigned`.
@@ -231,6 +230,9 @@ pub fn visit_icmp(
     if let Some(r) = fold_icmp_with_cast_op_of_constant(c, inst, pred, op0, op1) {
         return r;
     }
+    if let Some(r) = fold_icmp_with_pointer_cast(c, inst, pred, op0, op1) {
+        return r;
+    }
     for operand in [op0, op1] {
         if let Operand::Value(value) = operand
             && let ValueDef::Instruction(phi) = c.function.value(value).def
@@ -249,19 +251,80 @@ pub fn visit_icmp(
     if let Some(r) = fold_gep_icmp(c, inst, pred.swapped(), op1, op0) {
         return r;
     }
-    // OWED: foldICmpInstWithConstantNotInt, foldICmpCommutative,
+    if let Some(r) = fold_select_icmp(c, inst, pred, op0, op1) {
+        return r;
+    }
+    if let Some(r) = fold_select_icmp(c, inst, pred.swapped(), op1, op0) {
+        return r;
+    }
+    if let Some(r) = fold_icmp_equality(c, inst, pred, op0, op1) {
+        return r;
+    }
+    // OWED: foldICmpInstWithConstantNotInt, the rest of foldICmpCommutative,
     // matchSymmetricPair, foldCmpSelectOfConstants and the two-select fold.
     if changed { Visit::Changed } else { Visit::None }
 }
 
-/// `foldGEPICmp`
-/// ([:`foldGEPICmp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp)),
-/// its first arm: `icmp (gep Ptr, OFFSET), Ptr` is `icmp OFFSET, 0`, for an
-/// equality or an unsigned predicate on a GEP with a no-wrap flag.
+/// `foldSelectICmp`
+/// ([:4497](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L4497)):
+/// `icmp (select c, a, b), rhs` is `select c, (icmp a, rhs), (icmp b, rhs)`
+/// when an arm's compare simplifies, or the select's condition decides it,
+/// and the select has no other user.
 ///
-/// DEVIATE 1: one GEP between the compare and `Ptr` (`CommonPointerBase`
-/// walks a chain). Exit: translate `CommonPointerBase`.
-/// DEVIATE 2: the null arm and the GEP-against-GEP arms are not made.
+/// DEVIATE: the "global case" (`replacedSelectWithOperand`, a select with
+/// several users) and the `ucmp`/`scmp` arms are not made.
+fn fold_select_icmp(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    select_operand: Operand,
+    rhs: Operand,
+) -> Option<Visit> {
+    let select = c.definition_of(select_operand).filter(|&def| c.function.instruction(def).opcode == Opcode::Select)?;
+    let [condition, on_true, on_false] = c.function.instruction(select).operands[..] else { return None };
+    let i1 = c.context.types.int(1);
+    // Try to fold the comparison into the select arms, which will cause the
+    // select to be converted into a logical and/or.
+    let simplify_op = |c: &Combiner, op: Operand, select_cond_is_true: bool| -> Option<Operand> {
+        if let Some(found) = simplify_icmp_operands(c.context, c.env.layout, c.function, pred, op, rhs) {
+            return Some(found);
+        }
+        let q = query(c, Some(inst));
+        let implied = is_implied_condition_cmp(
+            &q,
+            condition,
+            CmpPredicate::new(pred),
+            Side::of(&q, op),
+            Side::of(&q, rhs),
+            select_cond_is_true,
+            0,
+        )?;
+        Some(c.int(i1, u128::from(implied)))
+    };
+    let on_true_cmp = simplify_op(c, on_true, true);
+    let on_false_cmp = simplify_op(c, on_false, false);
+    // We only want to perform this transformation if it will not lead to
+    // additional code: both sides fold (the icmp becomes a select that
+    // usually simplifies), or this is the select's only user.
+    if !(on_true_cmp.is_some() && on_false_cmp.is_some())
+        && !(on_true_cmp.or(on_false_cmp).is_some() && has_one_use(c, select_operand))
+    {
+        return None;
+    }
+    let on_true_cmp = on_true_cmp.unwrap_or_else(|| c.create_icmp(inst, pred, on_true, rhs));
+    let on_false_cmp = on_false_cmp.unwrap_or_else(|| c.create_icmp(inst, pred, on_false, rhs));
+    Some(c.replace_with_new(inst, Opcode::Select, i1, vec![condition, on_true_cmp, on_false_cmp], Flags::default()))
+}
+
+/// `foldGEPICmp`
+/// ([:`foldGEPICmp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp)):
+/// a compare of two pointers off one base is a compare of the offsets, for an
+/// equality or an unsigned predicate on GEPs with a no-wrap flag.
+///
+/// DEVIATE 1: pointer casts are not looked through (`stripPointerCasts` of the
+/// right side, and the arm for two bases that differ only by casts). Exit:
+/// `strip_pointer_casts_same_representation` in the query.
+/// DEVIATE 2: the null arm and `transformToIndexedCompare` are not made.
 fn fold_gep_icmp(
     c: &mut Combiner,
     inst: InstId,
@@ -272,33 +335,92 @@ fn fold_gep_icmp(
     use crate::combine_gep::GepFlags;
     // Signed compares of GEPs are not index compares: the final add of the
     // base can overflow.
-    if matches!(
-        pred,
-        IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle
-    ) {
+    if pred.is_signed() {
         return None;
     }
-    let def = c.definition_of(gep_operand)?;
-    let gep = c.gep_of(def)?;
-    if gep.ptr != rhs {
-        return None;
-    }
-    let flags = GepFlags::of(gep.flags);
+    let lhs_gep = c.defining_gep(gep_operand).and_then(|def| c.gep_of(def))?;
     let equality = matches!(pred, IntPredicate::Eq | IntPredicate::Ne);
-    if !equality && !(flags.in_bounds || flags.nusw || flags.nuw) {
-        return None;
-    }
-    let offset = c.emit_gep_offset(def, false);
-    let zero = c.int(c.type_of(offset), 0);
-    // Without nuw the offset can wrap the address space: compare it as signed.
-    let pred = match (flags.nuw, pred) {
-        (false, IntPredicate::Ugt) => IntPredicate::Sgt,
-        (false, IntPredicate::Uge) => IntPredicate::Sge,
-        (false, IntPredicate::Ult) => IntPredicate::Slt,
-        (false, IntPredicate::Ule) => IntPredicate::Sle,
-        (_, same) => same,
+    // Unsigned predicates can be folded if the GEPs have any nowrap flag.
+    let can_fold = |flags: GepFlags| equality || flags != GepFlags::default();
+    // Without nuw the offsets can wrap the address space: compare them signed.
+    let new_icmp_of = |c: &mut Combiner, flags: GepFlags, a: Operand, b: Operand| {
+        if !flags.nuw {
+            return new_icmp(c, inst, pred.signed(), a, b);
+        }
+        let i1 = c.context.types.int(1);
+        let same_sign = if flags.nusw { Flags::SAMESIGN } else { Flags::default() };
+        c.replace_with_new(inst, Opcode::ICmp(pred), i1, vec![a, b], same_sign)
     };
-    Some(new_icmp(c, inst, pred, offset, zero))
+
+    let base = c.common_pointer_base(gep_operand, rhs);
+    let index_ty = c.index_type(lhs_gep.ty);
+    if base.ptr == Some(rhs) && can_fold(base.lhs_flags) && !c.is_expensive(&base) {
+        // ((gep Ptr, OFFSET) cmp Ptr) ---> (OFFSET cmp 0)
+        let offset = c.emit_gep_offsets(inst, &base.lhs_geps, base.lhs_flags, index_ty, true);
+        let zero = c.int(c.type_of(offset), 0);
+        return Some(new_icmp_of(c, base.lhs_flags, offset, zero));
+    }
+
+    let rhs_gep = c.defining_gep(rhs).and_then(|def| c.gep_of(def))?;
+    let flags = GepFlags::of(lhs_gep.flags).and(GepFlags::of(rhs_gep.flags));
+    let same_shape = lhs_gep.indices.len() == rhs_gep.indices.len() && lhs_gep.source == rhs_gep.source;
+
+    if lhs_gep.ptr != rhs_gep.ptr {
+        // If all indices are the same, just compare the base pointers.
+        if same_shape
+            && c.type_of(lhs_gep.ptr) == c.type_of(rhs_gep.ptr)
+            && lhs_gep.indices == rhs_gep.indices
+            && can_fold(flags)
+        {
+            let i1 = c.context.types.int(1);
+            let operands = vec![lhs_gep.ptr, rhs_gep.ptr];
+            return Some(c.replace_with_new(inst, Opcode::ICmp(pred), i1, operands, Flags::default()));
+        }
+    } else if same_shape {
+        // If the GEPs only differ by one index, compare it.
+        let mut differing = lhs_gep.indices.iter().zip(&rhs_gep.indices).filter(|(l, r)| l != r);
+        let first = differing.next();
+        let irreconcilable = first.is_some_and(|(l, r)| c.type_of(*l) != c.type_of(*r));
+        match (first, differing.next()) {
+            // The same GEP: no comparison is needed.
+            (None, _) => {
+                let i1 = c.context.types.int(1);
+                return Some(Visit::Replace(c.int(i1, u128::from(pred.true_when_equal()))));
+            }
+            // Note that nowrap flags are always needed when comparing two
+            // indices.
+            (Some((&l, &r)), None) if !irreconcilable && flags != GepFlags::default() => {
+                return Some(new_icmp_of(c, flags, l, r));
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(ptr) = base.ptr.filter(|_| !c.is_expensive(&base)) {
+        // ((gep Ptr, OFFSET1) cmp (gep Ptr, OFFSET2)  --->  (OFFSET1 cmp
+        // OFFSET2)
+        let mut fold = can_fold(base.lhs_flags.and(base.rhs_flags));
+        if !fold {
+            // Without the flags, the offsets still compare when both cross the
+            // base's alignment boundary the same number of times: either both
+            // arguments wrap, or none does.
+            let q = query(c, Some(inst));
+            let width = c.env.layout.pointer(0).index_bits;
+            let (l_base, l_offset) = strip_and_accumulate_constant_offsets(&q, gep_operand, width, true);
+            let (r_base, r_offset) = strip_and_accumulate_constant_offsets(&q, rhs, width, true);
+            if l_base == ptr && r_base == ptr {
+                let alignment = i128::from(known::pointer_alignment(&q, ptr));
+                let floor = |offset: u128| signed(offset, width).div_euclid(alignment);
+                fold = floor(l_offset) == floor(r_offset);
+            }
+        }
+        if fold {
+            let l = c.emit_gep_offsets(inst, &base.lhs_geps, base.lhs_flags, index_ty, true);
+            let r = c.emit_gep_offsets(inst, &base.rhs_geps, base.rhs_flags, index_ty, true);
+            return Some(new_icmp_of(c, base.lhs_flags.and(base.rhs_flags), l, r));
+        }
+    }
+    None
 }
 
 /// `foldSignBitTest`
@@ -482,6 +604,72 @@ fn fold_icmp_with_cast_op_of_constant(
     None
 }
 
+/// `foldICmpWithCastOp`'s pointer arms
+/// ([:6663](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp)):
+/// `icmp pred (inttoptr X), (inttoptr Y | null)` is the compare of the
+/// integers, and so is `icmp pred (ptrtoint P), (ptrtoint Q | null)` of the
+/// pointers, when the integer is as wide as the pointer.
+///
+/// DEVIATE: the right side is a cast or the null constant, not any constant
+/// (the pin folds a constant expression to the other type).
+fn fold_icmp_with_pointer_cast(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    op0: Operand,
+    op1: Operand,
+) -> Option<Visit> {
+    use llrm_mir::context::ConstantKind;
+    use llrm_mir::opcode::CastOp;
+    use llrm_mir::types::Type;
+    let q = query(c, Some(inst));
+    let is_null = |c: &Combiner| match op1 {
+        Operand::Constant(id) => matches!(c.context.get(id).kind, ConstantKind::Null),
+        _ => false,
+    };
+    let compatible = |c: &Combiner, ptr: llrm_mir::types::TypeId, int: llrm_mir::types::TypeId| match (
+        c.context.types.get(ptr),
+        c.context.types.int_bits(int),
+    ) {
+        (Type::Pointer(space), Some(bits)) => c.env.layout.pointer(*space).bits == bits,
+        _ => false,
+    };
+    if let Some((_, _, x)) = pattern::cast(&q, op0, CastOp::IntToPtr) {
+        let ptr = c.type_of(op0);
+        let int = c.type_of(x);
+        if !compatible(c, ptr, int) {
+            return None;
+        }
+        let y = if is_null(c) {
+            c.int(int, 0)
+        } else {
+            let (_, _, y) = pattern::cast(&query(c, Some(inst)), op1, CastOp::IntToPtr)?;
+            if c.type_of(y) != int {
+                return None;
+            }
+            y
+        };
+        return Some(new_icmp(c, inst, pred, x, y));
+    }
+    if let Some((_, _, p)) = pattern::cast(&q, op0, CastOp::PtrToInt) {
+        let ptr = c.type_of(p);
+        if !compatible(c, ptr, c.type_of(op0)) {
+            return None;
+        }
+        let q_ = if constant(c, op1).is_some_and(|(bits, _)| bits == 0) {
+            Operand::Constant(llrm_mir::constfold::null_value(c.context, ptr))
+        } else {
+            let (_, _, y) = pattern::cast(&query(c, Some(inst)), op1, CastOp::PtrToInt)?;
+            if c.type_of(y) != ptr {
+                return None;
+            }
+            y
+        };
+        return Some(new_icmp(c, inst, pred, p, q_));
+    }
+    None
+}
+
 /// The one user of `inst`'s result.
 fn only_user(
     c: &Combiner,
@@ -576,43 +764,12 @@ fn canonicalize_icmp_predicate(
     if is_canonical_predicate(pred) {
         return None;
     }
-    let result = c.function.instruction(inst).result?;
-    let users: Vec<(InstId, u32)> = c.function.users(result).iter().map(|one| (one.user, one.index)).collect();
-    for &(user, index) in &users {
-        let one = c.function.instruction(user);
-        let ok = match &one.opcode {
-            // Only as the condition, and not a logical and/or: absorbing the
-            // not would hide that pattern.
-            Opcode::Select => {
-                index == 0 && {
-                    let q = query(c, None);
-                    let value = Operand::Value(one.result?);
-                    pattern::logical_and(&q, value).is_none() && pattern::logical_or(&q, value).is_none()
-                }
-            }
-            Opcode::Br => one.operands.len() == 3,
-            Opcode::Binary(BinaryOp::Xor) => pattern::not(&query(c, None), Operand::Value(one.result?)).is_some(),
-            _ => false,
-        };
-        if !ok {
-            return None;
-        }
+    if !c.can_freely_invert_all_users_of(inst, None) {
+        return None;
     }
     c.function.set_icmp_predicate(inst, pred.inverse());
-    for (user, _) in users {
-        match c.function.instruction(user).opcode {
-            Opcode::Select | Opcode::Br => {
-                let mut operands = c.function.instruction(user).operands.clone();
-                operands.swap(1, 2);
-                c.function.set_operands(user, operands);
-                c.add_to_worklist(user);
-            }
-            _ => {
-                c.replace_inst_with(user, Operand::Value(result));
-                c.add_to_worklist(user);
-            }
-        }
-    }
+    let result = c.function.instruction(inst).result?;
+    c.freely_invert_all_users_of(Operand::Value(result), None);
     Some(Visit::Changed)
 }
 
@@ -769,7 +926,7 @@ fn ceil_log2(
 
 /// `foldICmpUsingKnownBits`
 /// ([:7106](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L7106)).
-/// DEVIATE 2: no `SimplifyDemandedBits` first; DEVIATE 1: no `samesign`.
+/// DEVIATE 2: no `SimplifyDemandedBits` first.
 fn fold_icmp_using_known_bits(
     c: &mut Combiner,
     inst: InstId,
@@ -970,12 +1127,16 @@ fn fold_icmp_using_known_bits(
         _ => {}
     }
     // Turn a signed comparison into an unsigned one if both operands are known
-    // to have the same sign.
+    // to have the same sign. Set samesign if possible (not for equality).
     let sign = 1u128 << (width - 1);
-    if is_signed(pred)
+    let mut flags = c.function.instruction(inst).flags;
+    let is_unsigned = !is_signed(pred) && !matches!(pred, IntPredicate::Eq | IntPredicate::Ne);
+    if (is_signed(pred) || (is_unsigned && !flags.contains(Flags::SAMESIGN)))
         && ((known0.zero & sign != 0 && known1.zero & sign != 0) || (known0.one & sign != 0 && known1.one & sign != 0))
     {
         c.function.set_icmp_predicate(inst, unsigned_predicate(pred));
+        flags.insert(Flags::SAMESIGN);
+        c.function.set_flags(inst, flags);
         c.add_to_worklist(inst);
         return Some(Visit::Changed);
     }

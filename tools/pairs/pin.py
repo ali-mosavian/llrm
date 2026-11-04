@@ -95,6 +95,10 @@ def retarget(text: str, of: Target) -> str:
     if not re.search(r"^target triple", text, re.M):
         text = re.sub(r"^(target datalayout = .*)$", rf'\1\ntarget triple = "{of.triple}"', text, count=1, flags=re.M)
     text = re.sub(r"^(define [^\n]*?) \{$", r"\1 #9999 {", text, flags=re.M)
+    # An intrinsic lives in address space 0 in LLVM; ours declares and calls it in the code space (m16 `addrspace(1)` after the
+    # parameters of a declare and after `call cc N`). A pointer parameter in that space stays.
+    text = re.sub(r"^(declare [^\n]*@llvm\.[^\n]*?\)) addrspace\(1\)(?= [a-z]|$)", r"\1", text, flags=re.M)
+    text = re.sub(r"^(\s+(?:%\S+ = )?(?:(?:tail|musttail|notail) )?call(?: cc \d+)?) addrspace\(1\)( [^\n]*@llvm\.)", r"\1\2", text, flags=re.M)
     text = _with_stack_alignment(text, of)
     group = f'"target-cpu"="{of.cpu}" "target-features"="{of.features}"' + (" optsize" if of.optsize else "")
     return text + f"\nattributes #9999 = {{ {group} }}\n"

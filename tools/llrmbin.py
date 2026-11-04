@@ -12,13 +12,34 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-STAMPED = ("llrm-c", "llrm-llc")
+STAMPED = ("llrm-llc",)
+
+
+# llrm-cc's table row and CPU for a C compile at `bits`, and the variables it reads to find its clang and Open Watcom headers.
+C_ROWS = {16: ("x86_16-wat", "-march=i386"), 32: ("x86_32-wat", "-march=i486")}
+CC_ENV = ("LLRM_OW", "LLRM_PIN_CLANG", "LLRM_CLANG_M16")
+
+
+def c_args(bits: int) -> list[str]:
+    """What names the target to llrm-cc: its row (a flag, so the measured environment needs no variable for it) and the CPU."""
+    row, cpu = C_ROWS[bits]
+    return [f"--target={row}", cpu]
+
+
+def cc_environment() -> dict[str, str]:
+    """The variables llrm-cc needs, from the caller's, with the usual default for the Open Watcom tree."""
+    env = {name: os.environ[name] for name in CC_ENV if name in os.environ}
+    env.setdefault("LLRM_OW", str(Path.home() / "scratch/ow-src"))
+    pin = REPO / "toolchain/clang/pin"
+    lines = pin.read_text().splitlines() if pin.exists() else []
+    if len(lines) > 1 and "LLRM_CLANG_M16" not in env and (m16 := Path.home() / "scratch/clang-by-sha" / lines[1].split()[0] / "bin/clang").exists():
+        env["LLRM_CLANG_M16"] = str(m16)
+    return env
 
 
 def compiler(found: Path) -> Path:
-    """The C compiler in the binaries directory `found`: llrm-cc where it is built, else llrm-c (until it is deleted).
-    Every tool names it through here."""
-    return found / "llrm-cc" if (found / "llrm-cc").is_file() else found / "llrm-c"
+    """The C compiler in the binaries directory `found`: llrm-cc. Every tool names it through here."""
+    return found / "llrm-cc"
 
 
 def bin_dir(env: dict | None = None, repo: Path = REPO) -> Path:
@@ -37,7 +58,7 @@ def bin_dir(env: dict | None = None, repo: Path = REPO) -> Path:
 
 
 def stamped(found: Path) -> None:
-    """Prints the commit the binaries were built from (llrm-c's or llrm-llc's stamp); refuses another than LLRM_EXPECT_SHA names. A tree with changes is the gate's own, so it is not refused here."""
+    """Prints the commit the binaries were built from (llrm-llc's stamp); refuses another than LLRM_EXPECT_SHA names. A tree with changes is the gate's own, so it is not refused here."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import stamp
 
@@ -53,11 +74,22 @@ def stamped(found: Path) -> None:
 
 
 def declared(repo: Path) -> set[str]:
-    """The binaries `cargo build --bins` builds: the root package's [[bin]] names (others in target/ are leftovers)."""
+    """The binaries a plain `cargo build --bins` builds: the root package's [[bin]] names whose `required-features` the default features enable (others in target/ are leftovers: llrm-c
+    needs `c-legacy`, so the runner's rebuild left a day-old llrm-c in place and refused every PR as "binaries still older than the merged tree after a rebuild")."""
     import tomllib
 
     manifest = repo / "Cargo.toml"
-    return {one["name"] for one in tomllib.loads(manifest.read_text()).get("bin", [])} if manifest.is_file() else set()
+    if not manifest.is_file():
+        return set()
+    data = tomllib.loads(manifest.read_text())
+    table = data.get("features", {})
+    enabled, todo = set(), list(table.get("default", []))
+    while todo:
+        name = todo.pop()
+        if name not in enabled:
+            enabled.add(name)
+            todo += [one for one in table.get(name, []) if not one.startswith("dep:") and "/" not in one]
+    return {one["name"] for one in data.get("bin", []) if set(one.get("required-features", [])) <= enabled}
 
 
 def built_from(directory: Path, default: Path) -> Path:
@@ -187,7 +219,7 @@ OBJECT_BYTES = 100
 
 @contextlib.contextmanager
 def with_object(command: list[str]):
-    """`command` with the `OBJECT` placeholder made a path to write the object to. llrm-c encodes only for an `.o` or `.obj` output; `-o /dev/null` gets
+    """`command` with the `OBJECT` placeholder made a path to write the object to. llrm-cc encodes only for an `.o` or `.obj` output; `-o /dev/null` gets
     the assembly text, so a cost measured there leaves out the encoder and the object write (emit: 4 M of 22 M Ir on d_faces, 2026-10-23). The path is
     OBJECT_BYTES long whatever the directory: a longer argv moved an instruction count (see `pinned`)."""
     if OBJECT not in command:

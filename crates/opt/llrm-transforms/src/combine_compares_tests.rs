@@ -78,14 +78,14 @@ fn a_compare_one_short_of_the_known_maximum_is_an_equality() {
     );
 }
 
-/// A signed compare of two values of one known sign is unsigned (`opt` adds
-/// `samesign`, which MIR's `icmp` has no flag for).
+/// A signed compare of two values of one known sign is unsigned, with
+/// `samesign`.
 #[test]
 fn a_signed_compare_of_non_negative_values_is_unsigned() {
     check(
         "i16 %x, i16 %y",
         "  %a = and i16 %x, 255\n  %b = and i16 %y, 255\n  %r = icmp slt i16 %a, %b\n  ret i1 %r\n",
-        "  %a = and i16 %x, 255\n  %b = and i16 %y, 255\n  %r = icmp ult i16 %a, %b\n  ret i1 %r\n",
+        "  %a = and i16 %x, 255\n  %b = and i16 %y, 255\n  %r = icmp samesign ult i16 %a, %b\n  ret i1 %r\n",
     );
 }
 
@@ -455,14 +455,15 @@ fn two_operators_with_a_shared_second_operand_compare_their_first_operands() {
     );
 }
 
-/// `foldICmpBinOp`, `X * C == Y * C` for an even `C` compares the low bits
-/// (`opt` goes on to `icmp eq i32 (xor %a, %b) & 1073741823, 0`).
+/// `foldICmpBinOp`, `X * C == Y * C` for an even `C` compares the low bits,
+/// and `foldICmpEquality` makes it `icmp eq i32 (xor %a, %b) & 1073741823, 0`
+/// as `opt` does.
 #[test]
 fn an_even_shared_multiplier_in_an_equality_compares_the_low_bits() {
     check(
         "i32 %a, i32 %b",
         "  %p = mul i32 %a, 12\n  %q = mul i32 %b, 12\n  %r = icmp eq i32 %p, %q\n  ret i1 %r\n",
-        "  %0 = and i32 %a, 1073741823\n  %1 = and i32 %b, 1073741823\n  %2 = icmp eq i32 %0, %1\n  ret i1 %2\n",
+        "  %0 = xor i32 %a, %b\n  %1 = and i32 %0, 1073741823\n  %2 = icmp eq i32 %1, 0\n  ret i1 %2\n",
     );
 }
 
@@ -733,4 +734,201 @@ fn test_a_product_with_a_constant_against_a_constant_divides_the_constant() {
         "  %m = mul nsw i16 %x, -3\n  %r = icmp slt i16 %m, 0\n  ret i1 %r\n",
         "  %0 = icmp sgt i16 %x, 0\n  ret i1 %0\n",
     );
+}
+
+/// `foldGEPICmp`, `CommonPointerBase`'s two-GEP arm: `zero()` of the QB heap
+/// compared `p + 24` with `p + x - 8` as pointers, so loop-idiom's memset
+/// length was three instructions where the pin's is eight and `lh_alloc`
+/// inlined `first_fit` (311 instructions against the pin's 90).
+#[test]
+fn test_two_geps_off_one_base_compare_their_offsets() {
+    let after = combined(
+        "define i1 @f(ptr %p, i64 %x) {
+b0:
+  %a = getelementptr inbounds nuw i8, ptr %p, i64 24
+  %b = getelementptr inbounds nuw i8, ptr %p, i64 %x
+  %c = getelementptr inbounds i8, ptr %b, i64 -8
+  %r = icmp ult ptr %a, %c
+  ret i1 %r
+}
+",
+    );
+    assert!(after.contains("icmp sgt i64 %x, 32") && !after.contains("getelementptr"), "{after}");
+}
+
+/// Two GEPs of one base that differ in one index compare that index.
+#[test]
+fn test_two_geps_that_differ_in_one_index_compare_it() {
+    let after = combined(
+        "define i1 @f(ptr %p, i64 %a, i64 %b) {
+b0:
+  %x = getelementptr inbounds nuw i32, ptr %p, i64 %a
+  %y = getelementptr inbounds nuw i32, ptr %p, i64 %b
+  %r = icmp ult ptr %x, %y
+  ret i1 %r
+}
+",
+    );
+    assert!(after.contains("icmp samesign ult i64 %a, %b") && !after.contains("getelementptr"), "{after}");
+}
+
+/// A GEP compared with itself needs no compare.
+#[test]
+fn test_a_gep_compared_with_an_equal_gep_is_decided() {
+    let after = combined(
+        "define i1 @f(ptr %p, i64 %a) {
+b0:
+  %x = getelementptr inbounds nuw i32, ptr %p, i64 %a
+  %y = getelementptr inbounds nuw i32, ptr %p, i64 %a
+  %r = icmp ule ptr %x, %y
+  ret i1 %r
+}
+",
+    );
+    assert!(after.contains("ret i1 true") && !after.contains("icmp"), "{after}");
+}
+
+/// GEPs of different bases and the same indices compare the bases.
+#[test]
+fn test_geps_of_two_bases_with_the_same_indices_compare_the_bases() {
+    let after = combined(
+        "define i1 @f(ptr %p, ptr %q, i64 %a) {
+b0:
+  %x = getelementptr inbounds nuw i32, ptr %p, i64 %a
+  %y = getelementptr inbounds nuw i32, ptr %q, i64 %a
+  %r = icmp ult ptr %x, %y
+  ret i1 %r
+}
+",
+    );
+    assert!(after.contains("icmp ult ptr %p, %q") && !after.contains("getelementptr"), "{after}");
+}
+
+/// Without flags the offsets still compare when both cross the base's
+/// alignment boundary the same number of times: `p + 1 < p + 3` on a base
+/// aligned to 16.
+#[test]
+fn test_constant_offsets_inside_one_alignment_unit_compare_without_flags() {
+    let after = combined(
+        "define i1 @f(ptr align 16 %p) {
+b0:
+  %x = getelementptr i8, ptr %p, i64 1
+  %y = getelementptr i8, ptr %p, i64 3
+  %r = icmp ult ptr %x, %y
+  ret i1 %r
+}
+",
+    );
+    assert!(!after.contains("icmp ult ptr"), "{after}");
+    let across = combined(
+        "define i1 @f(ptr align 16 %p) {
+b0:
+  %x = getelementptr i8, ptr %p, i64 15
+  %y = getelementptr i8, ptr %p, i64 17
+  %r = icmp ult ptr %x, %y
+  ret i1 %r
+}
+",
+    );
+    assert!(across.contains("icmp ult ptr"), "offsets on two sides of the boundary are left: {across}");
+}
+
+/// `foldSelectICmp`: `(c ? 0 : y) == 0` with `c = y u< 32` is `c`: the compare
+/// folds into the arms (`true`, and `y == 0` which `c` implies), and the select
+/// into a logical or. Left alone, QB `carve` kept a priced `icmp` the pin's
+/// does not (first_fit 240 against 230, so it was not inlined as the pin's is).
+#[test]
+fn test_a_compare_of_a_select_folds_into_its_arms() {
+    let after = combined(
+        "define i1 @f(i64 %y) {
+b0:
+  %c = icmp ult i64 %y, 32
+  %s = select i1 %c, i64 0, i64 %y
+  %r = icmp eq i64 %s, 0
+  ret i1 %r
+}
+",
+    );
+    // `c` implies `y != 0` when false: both arms fold to constants (the select
+    // itself is `visitSelectInst`'s).
+    assert!(after.contains("select i1 %c, i1 true, i1 false") && !after.contains("select i1 %c, i64"), "{after}");
+}
+
+/// With a single use the compare is moved into both arms: `(c ? a : b) < 5` is
+/// `c ? a < 5 : b < 5`.
+#[test]
+fn test_a_compare_of_a_one_use_select_with_a_folding_arm_becomes_a_select_of_compares() {
+    let after = combined(
+        "define i1 @f(i1 %c, i64 %y) {
+b0:
+  %s = select i1 %c, i64 0, i64 %y
+  %r = icmp ult i64 %s, 5
+  ret i1 %r
+}
+",
+    );
+    assert!(after.contains("select i1 %c, i1 true, i1 %") && after.contains("icmp ult i64 %y, 5"), "{after}");
+}
+
+/// An unsigned compare of two operands with a known-clear sign bit stayed
+/// plain `ult`, so ConstraintElimination could not use it and quicksort's
+/// `a[j]` bounds check stayed in the loop (+13% clocks at -Os).
+#[test]
+fn test_an_unsigned_compare_of_two_non_negative_values_is_samesign() {
+    let after = combined(
+        "define i1 @f(i16 %x, i16 %y) {
+b0:
+  %a = and i16 %x, 255
+  %b = and i16 %y, 255
+  %c = icmp ult i16 %a, %b
+  ret i1 %c
+}
+",
+    );
+    assert!(after.contains("icmp samesign ult"), "{after}");
+}
+
+/// InstCombine's queries read no metadata, so a load's `!range` told it
+/// nothing: `icmp ult %i, %len` never got `samesign` and quicksort's `a[j]`
+/// check stayed in the loop.
+#[test]
+fn test_a_load_range_makes_an_unsigned_compare_samesign() {
+    let after = combined(
+        "define i1 @f(ptr %p, ptr %q) {
+b0:
+  %a = load i16, ptr %p, !range !0
+  %b = load i16, ptr %q, !range !0
+  %c = icmp ult i16 %a, %b
+  ret i1 %c
+}
+!0 = !{i16 0, i16 -32768}
+",
+    );
+    assert!(after.contains("icmp samesign ult"), "{after}");
+}
+
+/// `foldICmpWithCastOp`'s pointer arms (pinned by `opt -passes=instcombine`):
+/// `icmp eq (inttoptr %x), null` stays a pointer compare here, so QCport's
+/// `sprite_load` carried a far-pointer null test (`%p = inttoptr i32; icmp eq
+/// ptr addrspace(1) %p, null`) where the pin tests the integer: +10
+/// instructions.
+#[test]
+fn test_a_compare_of_a_same_width_inttoptr_is_the_integer_compare() {
+    let out = combined(
+        "define i1 @f(i64 %x, i64 %y) {\nb0:\n  %p = inttoptr i64 %x to ptr\n  %q = inttoptr i64 %y to ptr\n  %a = icmp eq ptr %p, null\n  %b = icmp ult ptr %p, %q\n  %r = and i1 %a, %b\n  ret i1 %r\n}\n",
+    );
+    assert!(out.contains("icmp eq i64 %x, 0") && out.contains("icmp ult i64 %x, %y"), "{out}");
+    let out = combined(
+        "define i1 @f(ptr %p) {\nb0:\n  %i = ptrtoint ptr %p to i64\n  %r = icmp eq i64 %i, 0\n  ret i1 %r\n}\n",
+    );
+    assert!(out.contains("icmp eq ptr %p, null"), "{out}");
+}
+
+/// A narrower integer than the pointer is not the same compare.
+#[test]
+fn test_a_compare_of_a_narrower_inttoptr_is_kept() {
+    let out = combined(
+        "define i1 @f(i32 %x) {\nb0:\n  %p = inttoptr i32 %x to ptr\n  %r = icmp eq ptr %p, null\n  ret i1 %r\n}\n",
+    );
+    assert!(out.contains("icmp eq ptr"), "{out}");
 }

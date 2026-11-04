@@ -162,11 +162,9 @@ def test_a_dist_binary_not_matching_its_recorded_md5_is_stale_with_a_fresh_mtime
     assert llrmbin.stale_binaries(dist, repo) == ["llrm-c"]
 
 
-def test_the_compiler_is_llrm_cc_where_it_is_built_else_llrm_c(tmp_path):
-    """C2: every tool names the C compiler through `compiler`, so deleting llrm-c moves them all at once."""
+def test_the_compiler_is_llrm_cc(tmp_path):
+    """Every tool names the C compiler through `compiler`; a directory that still holds an llrm-c is not read as having it."""
     (tmp_path / "llrm-c").write_text("")
-    assert llrmbin.compiler(tmp_path) == tmp_path / "llrm-c"
-    (tmp_path / "llrm-cc").write_text("")
     assert llrmbin.compiler(tmp_path) == tmp_path / "llrm-cc"
 
 
@@ -186,3 +184,19 @@ def test_the_stamp_is_read_from_llrm_llc_when_there_is_no_llrm_c(tmp_path, monke
         (tmp_path / name).write_text("")
     llrmbin.stamped(tmp_path)
     assert seen == ["llrm-llc"]
+
+
+def test_a_binary_that_needs_a_feature_the_rebuild_lacks_is_not_judged_stale(tmp_path):
+    """The runner rebuilds with `cargo build --release --bins`, which skips llrm-c (required-features c-legacy): a llrm-c left from an earlier build was older than a source, and every PR was REFUSED
+    "binaries still older than the merged tree after a rebuild: llrm-c" (#6302, 01:00). A binary the rebuild does build is still judged."""
+    repo, release = tmp_path / "repo", tmp_path / "t" / "release"
+    release.mkdir(parents=True)
+    repo.mkdir()
+    (repo / "Cargo.toml").write_text('[features]\ndefault = ["toolchain"]\ntoolchain = []\nc-legacy = []\n[[bin]]\nname = "llrm-c"\npath = "x.rs"\nrequired-features = ["c-legacy"]\n[[bin]]\nname = "llrm-cc"\npath = "y.rs"\n')
+    source = repo / "lib.rs"
+    source.write_text("")
+    for name in ("llrm-c", "llrm-cc"):
+        (release / name).write_text("")
+        (release / f"{name}.d").write_text(f"{release}/{name}: {source}\n")
+        os.utime(release / name, (1000, 1000))
+    assert llrmbin.stale_binaries(release, repo) == ["llrm-cc"]

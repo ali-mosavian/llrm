@@ -5,8 +5,8 @@ RUNS runs, one process each, source to object (`-m32`, no assembler or linker st
 
 Writes $VSGCC_WORK/levels_time.json and prints the tables. `--extra DIR` adds the `*.c` under DIR that gcc and clang both
 accept; the x_* kernels in `kernels/` are always in. What each side times, as `perf stat -e instructions:u` counts it (children included):
-  llrm-c   C front end (its preprocessor included), HIR, MIR passes, instruction selection, register allocation, OMF object
-           writer; one process.
+  llrm-cc  the driver, clang's front end (the preprocessor included), then llrm-llc: MIR passes, instruction selection, register
+           allocation, OMF object writer; three processes.
   gcc -c   the driver, cc1 (preprocessor and compiler) and `as`; three processes.
   clang -c the driver and the cc1 process with its integrated assembler.
 `empty.c` is compiled the same way at every level: what a compiler spends on nothing, to read the rest against.
@@ -19,9 +19,9 @@ sys.path.insert(0, str(R / "tools"))
 import llrmbin
 import pin_clang
 import benchlist
+import programs
 
 O = Path(os.environ.get("VSGCC_WORK", Path.home() / "scratch/vsgcc-work"))
-SKIP = {"readme.md", "parity", "huge", "textfill", "grep"}
 LEVELS = ["O0", "O1", "O2", "O3", "Os"]
 FLAGS = ["-m32", "-march=i486", "-fno-pic", "-fno-stack-protector", "-fcf-protection=none", "-Dfar="]
 
@@ -34,7 +34,7 @@ UNRANDOMIZED = ["setarch", "-R"]
 
 def command(compiler: str, level: str, source: Path, bits: int = 32) -> list[str]:
     if compiler == "llrm":
-        return [str(llrmbin.pinned(llrmbin.bin_dir() / "llrm-c")), f"-m{bits}", *(["-march=i486"] if bits == 32 else []), f"-{level}", "-o", llrmbin.OBJECT, str(source)]
+        return [str(llrmbin.pinned(llrmbin.bin_dir() / "llrm-cc")), *llrmbin.c_args(bits), f"-{level}", "-c", "-o", llrmbin.OBJECT, str(source)]
     if compiler == "clang":
         compiler = pin_clang.path()  # not PATH's: the distro's 20.1.8 is not the pin
     return [compiler, *FLAGS, f"-{level}", "-c", "-o", "/dev/null", str(source)]
@@ -106,14 +106,25 @@ def geomean(values: list[float]) -> float:
     return math.exp(sum(math.log(v) for v in values) / len(values))
 
 
-def main() -> None:
-    # What a user's compile does: no check of each pass and phase (the cargo environment of a test run would turn it on).
+def setup() -> None:
+    """What a user's compile does: no check of each pass and phase (the cargo environment of a test run would turn it on), and llrm-cc
+    given its Open Watcom tree and pinned clang (without them the -O0 bench/bintree compile exited 1)."""
     os.environ["LLRM_VERIFY"] = "0"
+    os.environ.update(llrmbin.cc_environment())
+
+
+def bench_sources() -> dict[str, Path]:
+    """The bench programs gcc and clang also build: not the ones that include bench_io.h (`programs.sources`' own filter)."""
+    return {name: path for name, path in programs.sources().items() if path.is_relative_to(R / "bench")}
+
+
+def main() -> None:
+    setup()
     parser = argparse.ArgumentParser()
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--extra", nargs="*", default=[])
     args = parser.parse_args()
-    sources = {p.name: p / f"{p.name}.c" for p in benchlist.directories(R / "bench", parity=False) if p.name not in SKIP}
+    sources = bench_sources()
     kernels = Path(__file__).resolve().parent / "kernels"
     for directory in ([kernels] if kernels.is_dir() else []) + [Path(d) for d in args.extra]:
         for source in sorted(Path(directory).glob("**/*.c")):

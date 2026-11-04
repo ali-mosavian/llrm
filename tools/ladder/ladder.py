@@ -18,7 +18,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from gen import SHAPES, generate  # noqa: E402
+from ladder_gen import SHAPES, generate  # noqa: E402
 
 FLAGS = ["-w", "-m32", "-march=i486", "-fno-inline-functions"]
 

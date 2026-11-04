@@ -15,7 +15,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from gen import generate  # noqa: E402
+from ladder_gen import generate  # noqa: E402
 from ladder import FLAGS, ir_count  # noqa: E402
 
 

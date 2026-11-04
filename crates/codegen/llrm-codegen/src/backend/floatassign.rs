@@ -41,11 +41,11 @@ use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
 
-use crate::backend::allocate::{Live, live_among};
 use crate::backend::constpool::{self, Pool};
 use crate::backend::floatalloc::{_loads_memory, inserted, name_is, semantics, unlowered, width_of};
 use crate::backend::floatregions::Raised;
 use crate::backend::frame::Frame;
+use crate::backend::liverows::{Live, live_among};
 use crate::backend::overlap;
 use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
 use crate::model::lir::{Insn, LirBody};

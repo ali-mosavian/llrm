@@ -62,7 +62,8 @@ def test_the_offender_is_the_one_backend_pr_or_the_one_that_is_red_alone():
 
     files = {"4146": ["crates/codegen/llrm-codegen/src/backend/machinesched.rs"], "4170": ["docs/a.md"], "4171": ["crates/codegen/llrm-codegen/src/backend/coalesce.rs"]}
     probed = []
-    assert ps.behavioural_culprits(["4146", "4170"], files.__getitem__, lambda n: probed.append(n) or True) == ["4146"] and not probed, "one backend PR: it is the offender, no build"
+    assert ps.behavioural_culprits(["4146", "4170"], files.__getitem__, lambda n: probed.append(n) or True) == ["4146"] and probed == ["4146"], "one backend PR: blamed only after it is run alone"
+    assert ps.behavioural_culprits(["4146", "4170"], files.__getitem__, lambda n: False) == [], "green alone: the batch's red was not its"
     assert ps.behavioural_culprits(["4146", "4170", "4171"], files.__getitem__, lambda n: n == "4146") == ["4146"], "two backend PRs: each merged alone and asked"
 
 
@@ -127,3 +128,19 @@ def test_the_set_covers_all_ten_wrong_outputs_of_4146_across_frontends():
     assert wrong == ["bounds", "channels", "grep", "level", "memfuncs_runtime", "range_power", "regparm3_matrix_22", "regparm3_matrix_31", "regparm3_matrix_4"]
     assert set(wrong) <= set(b.PROGRAMS)
     assert FOUR_ONE_FOUR_SIX.count("\nFAIL") + 1 == 10
+
+
+def test_a_red_that_is_green_on_the_second_run_refuses_nothing():
+    """#5785 was refused for 23 wrong programs 100 s after the same tree ran 0 wrong (LLRM_OW missing in one run): one red run is no proof."""
+    import parity_squash as ps
+
+    runs = iter([RED, GREEN])
+    assert ps.pre_merge_behavioural(["crates/codegen/llrm-codegen/src/backend/machinesched.rs"], build=lambda: None, run=lambda: next(runs)) == []
+
+
+def test_a_red_both_times_names_a_missing_open_watcom_tree(monkeypatch, capsys):
+    import parity_squash as ps
+
+    monkeypatch.delenv("LLRM_OW", raising=False)
+    assert ps.pre_merge_behavioural(["crates/codegen/llrm-codegen/src/backend/machinesched.rs"], build=lambda: None, run=lambda: RED)
+    assert "LLRM_OW" in capsys.readouterr().out

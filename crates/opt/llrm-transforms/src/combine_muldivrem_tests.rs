@@ -891,3 +891,232 @@ fn a_division_by_a_select_with_a_zero_arm_uses_the_other_arm() {
         "  %r = udiv i16 %x, %y\n  ret i16 %r\n",
     );
 }
+
+/// `narrowMathIfNoOverflow` in `visitMul`: `zext (and X, 7) * 5` fits in 8
+/// bits.
+#[test]
+fn an_extended_value_times_a_constant_that_cannot_wrap_is_multiplied_narrow() {
+    check(
+        "i32",
+        "i8 %x",
+        "  %m = and i8 %x, 7\n  %a = zext i8 %m to i32\n  %r = mul i32 %a, 5\n  ret i32 %r\n",
+        "  %m = and i8 %x, 7\n  %0 = mul nuw nsw i8 %m, 5\n  %1 = zext i8 %0 to i32\n  ret i32 %1\n",
+    );
+}
+
+/// `C sdiv (select c, C1, C2)` is the select of the two quotients
+/// (`FoldOpIntoSelect`, multi-use allowed).
+#[test]
+fn a_constant_divided_by_a_select_of_constants_is_a_select_of_quotients() {
+    check(
+        "i32",
+        "i1 %c",
+        "  %s = select i1 %c, i32 5, i32 10\n  %r = sdiv i32 100, %s\n  ret i32 %r\n",
+        "  %0 = select i1 %c, i32 20, i32 10\n  ret i32 %0\n",
+    );
+}
+
+/// `urem (select c, 7, 9), 4` is `select c, 3, 1` (`FoldOpIntoSelect`).
+#[test]
+fn a_remainder_of_a_select_of_constants_is_a_select_of_remainders() {
+    check(
+        "i32",
+        "i1 %c",
+        "  %s = select i1 %c, i32 7, i32 9\n  %r = urem i32 %s, 4\n  ret i32 %r\n",
+        "  %0 = select i1 %c, i32 3, i32 1\n  ret i32 %0\n",
+    );
+}
+
+/// `udiv (select c, 7, 9), 3` is `select c, 2, 3` (`foldBinOpIntoSelectOrPhi`).
+#[test]
+fn a_division_of_a_select_of_constants_is_a_select_of_quotients() {
+    check(
+        "i32",
+        "i1 %c",
+        "  %s = select i1 %c, i32 7, i32 9\n  %r = udiv i32 %s, 3\n  ret i32 %r\n",
+        "  %0 = select i1 %c, i32 2, i32 3\n  ret i32 %0\n",
+    );
+}
+
+/// `foldBinopWithPhiOperands` in `visitMul`: a product of two phis whose
+/// pairs are constants in one predecessor folds there and moves the multiply
+/// to the other. Stayed a multiply of two phis before.
+#[test]
+fn a_product_of_two_phis_moves_to_the_predecessor_with_the_unknowns() {
+    let text = "define i16 @f(i1 %c, i16 %i, i16 %j) {
+b0:
+  br i1 %c, label %a, label %b
+
+a:
+  br label %m
+
+b:
+  br label %m
+
+m:
+  %p = phi i16 [ 3, %a ], [ %i, %b ]
+  %q = phi i16 [ 4, %a ], [ %j, %b ]
+  %r = mul i16 %p, %q
+  ret i16 %r
+}
+";
+    let want = "define i16 @f(i1 %c, i16 %i, i16 %j) {
+b0:
+  br i1 %c, label %a, label %b
+
+a:
+  br label %m
+
+b:
+  %0 = mul i16 %i, %j
+  br label %m
+
+m:
+  %1 = phi i16 [ %0, %b ], [ 12, %a ]
+  ret i16 %1
+}
+";
+    assert_eq!(combined(text), want);
+}
+
+/// `@f` after the visits alone, the intrinsics the fold calls declared.
+fn combined_declaring(text: &str) -> String {
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    crate::combine::combine_with_declared(
+        context,
+        &globals,
+        &metadata,
+        &DataLayout::default(),
+        function,
+        visit,
+        &mut declared,
+    );
+    declared.place(&mut module).unwrap();
+    printed(&module)
+}
+
+/// `Op0 udiv Op1` with `Op1` a power of two or zero by its bits is `lshr Op0,
+/// cttz(Op1)`. Stayed a divide before.
+#[test]
+fn a_division_by_a_lowest_set_bit_is_a_shift_by_its_count() {
+    let after = combined_declaring(
+        "define i32 @f(i32 %x, i32 %y) {
+b0:
+  %n = sub i32 0, %y
+  %p = and i32 %y, %n
+  %r = udiv i32 %x, %p
+  ret i32 %r
+}
+",
+    );
+    assert!(after.contains("call i32 @llvm.cttz.i32(i32 %p, i1 true)"), "{after}");
+    assert!(after.contains("lshr i32 %x,"), "{after}");
+    assert!(!after.contains("udiv"), "{after}");
+}
+
+/// `abs(X) * abs(Y)` with `nsw` is `abs(X * Y)`.
+#[test]
+fn a_product_of_two_abs_is_the_abs_of_the_product() {
+    let after = combined_declaring(
+        "declare i32 @llvm.abs.i32(i32, i1)
+
+define i32 @f(i32 %x, i32 %y) {
+b0:
+  %a = call i32 @llvm.abs.i32(i32 %x, i1 true)
+  %b = call i32 @llvm.abs.i32(i32 %y, i1 true)
+  %r = mul nsw i32 %a, %b
+  ret i32 %r
+}
+",
+    );
+    assert!(after.contains("mul nsw i32 %x, %y"), "{after}");
+    assert!(after.contains("call i32 @llvm.abs.i32(i32 %0, i1 true)"), "{after}");
+}
+
+/// `((ashr X, 31) | 1) * X` is `abs(X)`.
+#[test]
+fn a_sign_or_one_times_the_value_is_its_abs() {
+    let after = combined_declaring(
+        "define i32 @f(i32 %x) {
+b0:
+  %s = ashr i32 %x, 31
+  %o = or i32 %s, 1
+  %r = mul i32 %o, %x
+  ret i32 %r
+}
+",
+    );
+    assert!(after.contains("call i32 @llvm.abs.i32(i32 %x, i1 false)"), "{after}");
+    assert!(!after.contains("mul"), "{after}");
+}
+
+/// `log2(umax(X, Y))` is `umax(log2(X), log2(Y))`: a divide by the larger of
+/// two powers of two is a shift by the larger exponent. Stayed a divide.
+#[test]
+fn a_division_by_a_max_of_two_powers_of_two_is_a_shift_by_the_max_exponent() {
+    let after = combined_declaring(
+        "declare i32 @llvm.umax.i32(i32, i32)
+
+define i32 @f(i32 %x, i32 %a, i32 %b) {
+b0:
+  %p = shl nuw i32 1, %a
+  %q = shl nuw i32 1, %b
+  %m = call i32 @llvm.umax.i32(i32 %p, i32 %q)
+  %r = udiv i32 %x, %m
+  ret i32 %r
+}
+",
+    );
+    assert!(after.contains("call i32 @llvm.umax.i32(i32 %a, i32 %b)"), "{after}");
+    assert!(after.contains("lshr i32 %x,"), "{after}");
+    assert!(!after.contains("udiv"), "{after}");
+}
+
+/// `(A - B) * -4` sank the negation into the subtraction: `(B - A) * 4`, then
+/// the shift. Without `Negator` the product stayed a multiply by `-4`.
+#[test]
+fn a_difference_times_a_negated_power_of_two_swaps_the_difference() {
+    check(
+        "i16",
+        "i16 %a, i16 %b",
+        "  %s = sub i16 %a, %b\n  %r = mul i16 %s, -4\n  ret i16 %r\n",
+        "  %0 = sub i16 %b, %a\n  %1 = shl i16 %0, 2\n  ret i16 %1\n",
+    );
+}
+
+/// `(-X * Y) * -X` is `(X * Y) * X` when `-X` has another use. Without
+/// `Negator` the first operand stayed negated.
+#[test]
+fn a_negated_product_times_the_same_negation_cancels() {
+    check(
+        "i16",
+        "i16 %x, i16 %y",
+        "  %n = sub i16 0, %x\n  %p = mul i16 %n, %y\n  %r = mul i16 %p, %n\n  %t = add i16 %r, %n\n  ret i16 %t\n",
+        "  %n = sub i16 0, %x\n  %0 = mul i16 %x, %y\n  %1 = mul i16 %0, %x\n  %t = add i16 %1, %n\n  ret i16 %t\n",
+    );
+}
+
+/// `SimplifyDemandedInstructionBits` in `commonIDivTransforms`: a divide by
+/// four does not read the low two bits of the dividend, so the mask loses them
+/// (`opt` agrees). Left at 255 before.
+#[test]
+fn a_divide_by_four_drops_the_dividend_bits_it_does_not_read() {
+    check(
+        "i32",
+        "i32 %x",
+        "  %a = and i32 %x, 255\n  %r = udiv i32 %a, 4\n  ret i32 %r\n",
+        "  %a = and i32 %x, 252\n  %0 = lshr i32 %a, 2\n  ret i32 %0\n",
+    );
+}
+
+/// `SimplifyDemandedInstructionBits` in `commonIRemTransforms`: the bits a
+/// remainder by 256 of a shifted value reads are all zero, so it is zero.
+/// Stayed an `and` before.
+#[test]
+fn a_remainder_of_shifted_out_bits_is_zero() {
+    check("i32", "i32 %x", "  %a = shl i32 %x, 8\n  %r = urem i32 %a, 256\n  ret i32 %r\n", "  ret i32 0\n");
+}

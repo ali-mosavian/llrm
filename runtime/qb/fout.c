@@ -3,7 +3,15 @@
 #include "fout.h"
 #include "i8out.h"
 
-enum { SINGLE_DIGITS = 7, DOUBLE_DIGITS = 16 };
+enum { SINGLE_DIGITS = 7 };
+
+#pragma aux B_LMPK "B$LMPK"
+
+/* B$LMPK: the math pack the program's dialect has, 1 for PDS 7.1's (15 digits, rounding half up) and 0 for QB 4.5's. */
+void B_LMPK(short pds)
+{
+    i8_select_pack(pds);
+}
 
 /* B$ASCRND: round the digits to `want` places, half up, and drop the zeros that
    leaves at the end.  `exponent` is that of the last digit. */
@@ -104,13 +112,13 @@ void fout_digits(double v, int is_double, Decimal *d, int *exponent)
     *exponent = d->exponent;
     if (!(d->count == 1 && d->text[0] == '0'))
         *exponent -= d->count;
-    round_digits(d, exponent, is_double ? DOUBLE_DIGITS : SINGLE_DIGITS);
+    round_digits(d, exponent, is_double ? (int)i8_digits() : SINGLE_DIGITS);
 }
 
 unsigned fout_real(double v, int is_double, char *out)
 {
     Decimal d;
-    int limit = is_double ? DOUBLE_DIGITS : SINGLE_DIGITS, exponent;
+    int limit = is_double ? (int)i8_digits() : SINGLE_DIGITS, exponent;
     int magnitude;
 
     fout_digits(v, is_double, &d, &exponent);

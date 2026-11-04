@@ -180,6 +180,12 @@ pub struct InlineParams {
     /// `AllowRecursiveCall`: a callee that calls itself is priced, not
     /// refused. The pin's is false; D10 (`-finline-recursive`) sets it.
     pub allow_recursive_call: bool,
+    /// With `allow_recursive_call`, the largest recursive callee (`gcc_insns`)
+    /// priced rather than refused.
+    pub recursive_callee_limit: i64,
+    /// With `allow_recursive_call`, the most a recursive callee may grow its
+    /// caller (`recursive_edge_growth`, gcc's `max-inline-insns-auto`).
+    pub recursive_edge_growth: i64,
     /// The `LastCallToStatic` bonus applies. The pin's always does;
     /// `-fno-inline-functions-called-once` turns it off.
     pub last_call_to_static: bool,
@@ -212,6 +218,8 @@ impl InlineParams {
             opt_size_threshold: OPT_SIZE_THRESHOLD,
             compute_full_inline_cost: false,
             allow_recursive_call: false,
+            recursive_callee_limit: i64::MAX,
+            recursive_edge_growth: i64::MAX,
             last_call_to_static: true,
             tti: Tti::Generic,
         }
@@ -251,6 +259,11 @@ pub struct Site<'a> {
     /// The callee has local linkage and this call is its only use
     /// (`isSoleCallToLocalFunction`).
     pub sole_call_to_local: bool,
+    /// The direct calls to the callee in the module.
+    pub callee_calls: i64,
+    /// The callee has local linkage and its address is not taken: its body
+    /// goes once every call of it is inlined.
+    pub callee_dies: bool,
     /// The caller calls itself (`IsCallerRecursive`).
     pub caller_recursive: bool,
     pub caller_size: CallerSize,
@@ -304,26 +317,6 @@ fn frame_bound(
     module.global(id).function().is_some_and(|function| has_flag(&function.attrs, "frame_bound"))
 }
 
-/// Whether the caller makes a `frame_bound` call itself: it registers an error
-/// handler, so it is the frame that runs the callee's re-arm.
-fn registers_a_handler(site: &Site) -> bool {
-    site.caller
-        .layout()
-        .iter()
-        .any(
-            |&block| site.caller
-                .iter_block(block)
-                .any(
-                    |inst| matches!(
-                        site.caller.instruction(inst).opcode,
-                        Opcode::Call(_) | Opcode::Invoke(_)
-                    )
-                        && llrm_mir::memory::callee(&site.module.context, site.caller, inst)
-                            .is_some_and(|target| frame_bound(site.module, target)),
-                ),
-        )
-}
-
 fn call_info(
     function: &Function,
     inst: InstId,
@@ -356,6 +349,11 @@ pub fn attribute_decision(site: &Site) -> Option<Result<(), String>> {
     }
     if has_flag(&call.attrs, "noinline") {
         return Some(Err("noinline call site attribute".into()));
+    }
+    // Don't inline what can be interposed at link time: the body is not the
+    // definition that runs.
+    if site.module.global(site.callee_id).linkage.is_interposable() {
+        return Some(Err("interposable".into()));
     }
     None
 }
@@ -1478,7 +1476,11 @@ impl<'a> Analyzer<'a> {
         };
         // `F == Call.getCalledFunction()`: "This flag will fully abort the
         // analysis" unless the params allow a recursive call (:2481).
-        if target == self.site.callee_id && !self.params.allow_recursive_call {
+        if target == self.site.callee_id
+            && (!self.params.allow_recursive_call
+                || crate::inline::gcc_work(self.callee) > self.params.recursive_callee_limit
+                || crate::inline::recursive_edge_growth(self.callee) > self.params.recursive_edge_growth)
+        {
             self.is_recursive_call = true;
             return false;
         }
@@ -1488,9 +1490,7 @@ impl<'a> Analyzer<'a> {
         // registration): its effect belongs to the frame that runs it, so the
         // callee is not copied into another frame (the `returns_twice` rule of
         // `visitCallBase`, InlineCost.cpp:2473).
-        // Not a handler its owner alone calls: its re-arm then runs in the
-        // frame that registered it (the owner's landing pad), not another.
-        if frame_bound(self.site.module, target) && !(self.site.sole_call_to_local && registers_a_handler(self.site)) {
+        if frame_bound(self.site.module, target) {
             self.has_uninlineable_intrinsic = true;
             return false;
         }
@@ -1858,6 +1858,7 @@ impl<'a> Analyzer<'a> {
                 self.site.module.global(self.site.callee_id).name.as_deref().unwrap_or("?"),
                 self.site.module.global(self.site.caller_id).name.as_deref().unwrap_or("?")
             );
+            eprint!("{}", llrm_mir::print::body(self.context, self.callee));
         }
         self.start()?;
         if self.callee.layout().is_empty() {
@@ -2006,6 +2007,17 @@ impl<'a> Analyzer<'a> {
         (size * tti.call_code_size_percent() + 50) / 100
     }
 
+    /// Whether inlining leaves the module's code bigger. A callee that stays
+    /// grows it by its unfolded size less the call it replaces, per site. One
+    /// that dies with its calls (local, address not taken) is also removed:
+    /// all `k` calls inlined cost `k * size` against `size + k * call`, so
+    /// `(k - 1) * size > k * call` (two calls of a 19-unit callee, 10-unit
+    /// calls: 19 > 20 does not grow).
+    fn grows_the_code(&self) -> bool {
+        let (size, call, k) = (self.size_units, self.call_size(), self.site.callee_calls);
+        if self.site.callee_dies && k >= 2 { (k - 1) * size > k * call } else { size > call }
+    }
+
     fn finalize(&mut self) -> Result<(), String> {
         if self.site.caller_size == CallerSize::MinSize {
             let loops = loop_headers(self.callee).iter().filter(|header| !self.dead_blocks.contains(&header.0)).count();
@@ -2019,10 +2031,12 @@ impl<'a> Analyzer<'a> {
         // D11: the analysis above stops at LLVM's threshold; at -Os the verdict
         // is also held to the callee's code size against the call's.
         let pin = self.threshold.max(1);
-        let grows = self.site.caller_size == CallerSize::OptSize
+        let grows = self.site.caller_size != CallerSize::Speed
             && !self.site.sole_call_to_local
-            && self.site.tti.is_some_and(|tti| tti.opt_size_inline_by_code_size())
-            && self.size_units > self.call_size();
+            && self.site.tti.is_some_and(|tti| {
+                tti.opt_size_inline_by_code_size() && self.site.callee_calls >= tti.opt_size_inline_guard_min_sites()
+            })
+            && self.grows_the_code();
         self.blocked_by_bound = grows && self.cost < pin;
         if grows {
             // The verdict is `cost < threshold`: the call stays.
@@ -2302,6 +2316,8 @@ pub fn shadow(
                     sole_call_to_local: local_linkage(callee_global.linkage)
                         && counts.get(&callee_id).copied() == Some(1)
                         && !addressed.contains(&callee_id),
+                    callee_calls: counts.get(&callee_id).copied().unwrap_or(0),
+                    callee_dies: local_linkage(callee_global.linkage) && !addressed.contains(&callee_id),
                     caller_recursive,
                     caller_size: CallerSize::Speed,
                     relative_frequency: caller.parent(inst).and_then(|block| relative_to_entry(&frequencies, block)),
@@ -2623,20 +2639,13 @@ pub fn sites_with_trials(
             }
         }
     }
-    let goes = |callee: GlobalId| {
-        local_linkage(module.global(callee).linkage)
-            && !addressed.contains(&callee)
-            && counts.get(&callee).is_some_and(|all| here.get(&callee) == Some(all))
-    };
     for (_, inst) in caller.walk() {
         let Some(decision) = decide(module, layout, caller_id, inst, &context, &frequencies) else { continue };
         if let Some(decided) = decided.as_deref_mut() {
             decided.push((inst, decision.callee, decision.cost.clone()));
         }
         let blocked = matches!(decision.cost, InlineCost::Cost { blocked: true, .. });
-        let worth = blocked
-            && trials.is_some()
-            && (goes(decision.callee) || worth_a_trial(module, caller, inst, decision.callee));
+        let worth = blocked && trials.is_some() && if size == CallerSize::Speed { !always_only } else { true };
         if !decision.inline && !worth {
             continue;
         }
@@ -2669,122 +2678,6 @@ pub fn sites_with_trials(
         }
     }
     out
-}
-
-/// The stack slot or the parameter a pointer is made from, through casts and
-/// offsets.
-enum Root {
-    Slot(InstId),
-    Parameter(llrm_mir::module::ValueId),
-}
-
-fn root_of(
-    function: &llrm_mir::module::Function,
-    operand: llrm_mir::module::Operand,
-) -> Option<Root> {
-    let llrm_mir::module::Operand::Value(mut at) = operand else { return None };
-    loop {
-        match function.value(at).def {
-            llrm_mir::module::ValueDef::Argument(_) => return Some(Root::Parameter(at)),
-            llrm_mir::module::ValueDef::Instruction(def) => {
-                let instruction = function.instruction(def);
-                match instruction.opcode {
-                    Opcode::Alloca { .. } => return Some(Root::Slot(def)),
-                    Opcode::GetElementPtr { .. } | Opcode::Cast(_) => match instruction.operands[0] {
-                        llrm_mir::module::Operand::Value(next) => at = next,
-                        _ => return None,
-                    },
-                    _ => return None,
-                }
-            }
-        }
-    }
-}
-
-/// The global a constant pointer is the address of, or a step or a cast of.
-fn global_of(
-    context: &llrm_mir::context::Context,
-    operand: llrm_mir::module::Operand,
-) -> Option<GlobalId> {
-    use llrm_mir::context::{ConstantExpr, ConstantKind};
-    let llrm_mir::module::Operand::Constant(mut at) = operand else { return None };
-    loop {
-        match &context.get(at).kind {
-            ConstantKind::Global(global) => return Some(*global),
-            ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => at = *operands.first()?,
-            ConstantKind::Expr(ConstantExpr::Cast { value, .. }) => at = *value,
-            _ => return None,
-        }
-    }
-}
-
-/// SZ2: whether a site refused by the -Os bound is worth inlining to see: the
-/// call passes the address of a stack slot (or of a global) the caller wrote a
-/// constant to, and the callee reads through that parameter, which the cost
-/// model does not follow (a constant argument it folds itself).
-fn worth_a_trial(
-    module: &Module,
-    caller: &llrm_mir::module::Function,
-    call: InstId,
-    callee_id: GlobalId,
-) -> bool {
-    let GlobalKind::Function(callee) = &module.global(callee_id).kind else { return false };
-    let operands = &caller.instruction(call).operands;
-    let arguments = &operands[..operands.len().saturating_sub(1)];
-    let written = |slot: InstId| {
-        caller
-            .walk()
-            .any(
-                |(_, inst)| {
-                    let store = caller.instruction(inst);
-                    matches!(store.opcode, Opcode::Store { .. })
-                        && matches!(store.operands[0], llrm_mir::module::Operand::Constant(_))
-                        && matches!(
-                            root_of(caller, store.operands[1]),
-                            Some(Root::Slot(one)) if one == slot
-                        )
-                },
-            )
-    };
-    // A gate, not dataflow: the store may be to another field, or after the
-    // call; the trial decides on bytes.
-    let written_global = |global: GlobalId| {
-        caller
-            .walk()
-            .any(
-                |(_, inst)| {
-                    let store = caller.instruction(inst);
-                    matches!(store.opcode, Opcode::Store { .. })
-                        && matches!(store.operands[0], llrm_mir::module::Operand::Constant(_))
-                        && global_of(&module.context, store.operands[1]) == Some(global)
-                },
-            )
-    };
-    let read_through: Vec<llrm_mir::module::ValueId> = callee
-        .walk()
-        .filter_map(|(_, inst)| {
-            let load = callee.instruction(inst);
-            match (&load.opcode, root_of(callee, *load.operands.first()?)) {
-                (Opcode::Load { .. }, Some(Root::Parameter(parameter))) => Some(parameter),
-                _ => None,
-            }
-        })
-        .collect();
-    // A callee that reads a global directly (its pointer arguments were
-    // propagated into it), one the caller has stored a constant to.
-    let reads_written_global = callee.walk().any(|(_, inst)| {
-        let load = callee.instruction(inst);
-        matches!(load.opcode, Opcode::Load { .. })
-            && load.operands.first().and_then(|ptr| global_of(&module.context, *ptr)).is_some_and(written_global)
-    });
-    reads_written_global
-        || arguments.iter().zip(callee.parameters()).any(|(argument, parameter)| {
-            read_through.contains(parameter)
-                && (matches!(
-                    root_of(caller, *argument),
-                    Some(Root::Slot(slot)) if written(slot)
-                ) || global_of(&module.context, *argument).is_some_and(written_global))
-        })
 }
 
 /// What `decide` reads of the module besides the site.
@@ -2841,6 +2734,8 @@ pub fn decide(
         sole_call_to_local: local_linkage(callee_global.linkage)
             && context.counts.get(&callee_id).copied() == Some(1)
             && !context.addressed.contains(&callee_id),
+        callee_calls: context.counts.get(&callee_id).copied().unwrap_or(0),
+        callee_dies: local_linkage(callee_global.linkage) && !context.addressed.contains(&callee_id),
         caller_recursive: context.recursive.contains(&caller_id),
         caller_size: context.size,
         relative_frequency: caller.parent(call).and_then(|block| relative_to_entry(frequencies, block)),

@@ -14,6 +14,7 @@ indexmap = "2"
 # The compilers' allocator: glibc's malloc and free were a quarter of a compile's instructions.
 mimalloc = { version = "0.1", default-features = false }
 llrm-alloc = { path = "crates/support/llrm-alloc" }
+llrm-cgen = { path = "crates/support/llrm-cgen" }
 llrm-env = { path = "crates/support/llrm-env" }
 num-bigint = "0.4"
 num-traits = "0.2"
@@ -30,13 +31,16 @@ llrm-x86-m16 = { path = "crates/target/llrm-x86-m16" }
 llrm-x86-m16-select = { path = "crates/target/llrm-x86-m16-select" }
 llrm-target = { path = "crates/target/llrm-target" }
 llrm-x86 = { path = "crates/target/llrm-x86" }
+llrm-sdag = { path = "crates/codegen/llrm-sdag" }
 llrm-x86-m32 = { path = "crates/target/llrm-x86-m32" }
 llrm-arm64 = { path = "crates/target/llrm-arm64" }
+llrm-wasm = { path = "crates/target/llrm-wasm" }
 llrm-x86-m32-select = { path = "crates/target/llrm-x86-m32-select" }
 llrm-x86-m64 = { path = "crates/target/llrm-x86-m64" }
 llrm-x86-m64-select = { path = "crates/target/llrm-x86-m64-select" }
 llrm-omf = { path = "crates/mc/llrm-omf" }
 llrm-object = { path = "crates/mc/llrm-object" }
+llrm-debug = { path = "crates/mc/llrm-debug" }
 llrm-elf = { path = "crates/mc/llrm-elf" }
 llrm-dwarf = { path = "crates/mc/llrm-dwarf" }
 llrm-codeview = { path = "crates/mc/llrm-codeview" }
@@ -47,8 +51,10 @@ llrm-bcdriver = { path = "crates/driver/llrm-bcdriver" }
 llrm-hir = { path = "crates/ir/llrm-hir" }
 llrm-mir = { path = "crates/ir/llrm-mir" }
 llrm-lir = { path = "crates/ir/llrm-lir" }
+llrm-spike-mf = { path = "crates/backend/llrm-spike-mf" }
 llrm-analysis = { path = "crates/opt/llrm-analysis" }
 llrm-transforms = { path = "crates/opt/llrm-transforms" }
+llrm-gpl-gcc = { path = "crates/opt/llrm-gpl-gcc" }
 llrm-codegen = { path = "crates/codegen/llrm-codegen" }
 llrm-driver = { path = "crates/driver/llrm-driver" }
 llrm-cc = { path = "crates/driver/llrm-cc" }
@@ -85,6 +91,8 @@ tempfile = { workspace = true }
 
 [features]
 default = ["toolchain"]
+# gcc-derived estimates (GPL-3.0-or-later): REC-2 recursion copies. Off by default.
+gcc-gpl = ["llrm-transforms/gcc-gpl"]
 # What the build scripts bootstrap: Open Watcom's wccq (llrm-c), jwasm and jwlink, and DOSBox-X.
 # The lib tests need only wccq.
 toolchain = ["jw", "dosrun"]
@@ -100,6 +108,7 @@ llrm-target = { workspace = true }
 llrm-x86-m16 = { workspace = true }
 llrm-x86-m32 = { workspace = true }
 llrm-object = { workspace = true }
+llrm-debug = { workspace = true }
 regex = { workspace = true }
 toml = { workspace = true }
 

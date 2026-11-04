@@ -176,7 +176,8 @@ use crate::backend::{addressforms, division};
 use crate::model::ir::{self, Addr, AddressRef, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::SrcLoc;
 use crate::model::lir::{
-    Block, BlockOdds, DebugNote, DebugPlace, DebugTags, DebugVariable, Insn, LirBlock, LirBody, NoteValue, Phi,
+    Block, BlockOdds, DebugNote, DebugPlace, DebugTags, DebugVariable, Insn, LirBlock, LirBody, NoteArg, NoteExpr,
+    NoteValue, Phi,
 };
 use crate::model::passes::AddressForm;
 use crate::support::hash::IndexMap;
@@ -226,6 +227,28 @@ pub mod api {
 mod unwind;
 
 pub use matcher::Compiled;
+/// Each loop of `shape` with a trip count `induction` proves, as (the LIR
+/// address of its header, the trips): what the executed-work estimate scales
+/// the loop by. `header_at` names the LIR block a MIR block became.
+pub(crate) fn proven_trips(
+    unit: &Unit,
+    shape: &llrm_analysis::cfg::Shape,
+    facts: &IndexMap<llrm_mir::module::ValueId, llrm_analysis::consts::Known>,
+    header_at: impl Fn(BlockId) -> Option<i64>,
+) -> Vec<(i64, i64)> {
+    let mut counts: Vec<(i64, i64)> = shape
+        .loops
+        .iter()
+        .filter_map(|one| {
+            let header = header_at(cfg::block(one.header))?;
+            let count = llrm_analysis::induction::trip_count(unit, one, facts)?;
+            Some((header, i64::try_from(count).expect("a trip count fits an int64")))
+        })
+        .collect();
+    counts.sort();
+    counts
+}
+
 #[cfg(test)]
 pub(crate) use matcher::OPCODE_SCANS;
 pub(crate) use matcher::reads_invariant_memory;
@@ -477,7 +500,7 @@ pub fn convention(
     };
     let param_types: Vec<TypeId> = function.parameters().iter().map(|&one| function.value(one).ty).collect();
     let (result, _, variadic) = module.signature(function.ty);
-    convention_for(
+    convention_for_abi(
         module,
         layout,
         arch,
@@ -487,6 +510,7 @@ pub fn convention(
         variadic,
         &param_types,
         &function.parameter_attrs,
+        soft_float(&function.attrs),
     )
 }
 
@@ -504,6 +528,52 @@ pub fn convention_for(
     variadic: bool,
     param_types: &[TypeId],
     parameter_attrs: &[Vec<llrm_mir::Attribute>],
+) -> Result<Convention, Unselected> {
+    convention_for_abi(
+        module,
+        layout,
+        arch,
+        first,
+        calling_convention,
+        result,
+        variadic,
+        param_types,
+        parameter_attrs,
+        false,
+    )
+}
+
+/// Whether `attrs` ask for no FPU: clang's `-mno-80387` states `-x87` among
+/// the target features (`X86Subtarget::hasX87`), and `"use-soft-float"="true"`
+/// or `+soft-float` is the generic spelling. The floats of such a function
+/// travel as the integers of their width.
+pub fn soft_float(attrs: &[llrm_mir::Attribute]) -> bool {
+    attrs
+        .iter()
+        .any(
+            |one| match one {
+                llrm_mir::Attribute::Str(key, Some(value)) if key == "use-soft-float" => value == "true",
+                llrm_mir::Attribute::Str(key, Some(value)) if key == "target-features" => {
+                    value.split(',').any(|feature| feature == "-x87" || feature == "+soft-float")
+                }
+                _ => false,
+            },
+        )
+}
+
+/// `convention_for`, where `soft_float` makes a `float` or `double` an integer
+/// of its width for the registers and the result.
+pub fn convention_for_abi(
+    module: &Module,
+    layout: &DataLayout,
+    arch: &dyn llrm_target::Target,
+    first: i64,
+    calling_convention: u32,
+    result: TypeId,
+    variadic: bool,
+    param_types: &[TypeId],
+    parameter_attrs: &[Vec<llrm_mir::Attribute>],
+    soft_float: bool,
 ) -> Result<Convention, Unselected> {
     in_the_frame(parameter_attrs)?;
     let interrupt = calling_convention == llrm_mir::opcode::X86_INTR;
@@ -536,7 +606,9 @@ pub fn convention_for(
             .zip(&sizes)
             .zip(&classes)
             .filter(|(_, class)| **class != Some(llrm_mir::opcode::RESULT_POINTER))
-            .map(|((&ty, &size), class)| entry.kind(argument_of(types, ty, size, *class), arch.stack_slot_bytes()))
+            .map(|((&ty, &size), class)| {
+                entry.kind(argument_of(types, ty, size, *class, soft_float), arch.stack_slot_bytes())
+            })
             .collect();
         // A struct result's address held in a register is not one of the
         // arguments, but takes that register.
@@ -596,8 +668,18 @@ pub fn convention_for(
     }
     // A float leaves in st(0), which no register names.
     let described = entry(arch, calling_convention, variadic);
-    let returns = if types.is_void(result) || matches!(types.get(result), Type::Float(_)) {
+    let answer = lone_float(types, result);
+    // A convention with address registers names one for a pointer result
+    // (m68k's `a0`, class `address`); `pointer` is the width-keyed x86 entry,
+    // which a far pointer's two words outgrow.
+    let pointer_result = described
+        .filter(|_| matches!(types.get(answer), Type::Pointer(_)))
+        .and_then(|one| one.results.get("address"))
+        .map(|names| names.iter().map(|name| arch.register_named(name)).collect::<Vec<_>>());
+    let returns = if types.is_void(result) || (!soft_float && matches!(types.get(answer), Type::Float(_))) {
         Vec::new()
+    } else if let Some(registers) = pointer_result {
+        registers
     } else {
         results(arch, described, size_of(module, layout, result)?)
     };
@@ -622,7 +704,7 @@ pub fn convention_for(
         .and_then(|one| one.float_result_register())
         .filter(|_| {
             matches!(
-                types.get(result),
+                types.get(answer),
                 Type::Float(llrm_mir::types::FloatKind::Float | llrm_mir::types::FloatKind::Double)
             )
         })
@@ -631,6 +713,18 @@ pub fn convention_for(
             llrm_lir::registers::Regs(arch.registers()).in_class(*register, llrm_lir::registers::class::XMM)
         });
     Ok(Convention { parameters, returns, float_result, popped, saved, stack_arguments: cursor, first })
+}
+
+/// What a result is answered as: a struct of one float is that float
+/// (`ComputeValueVTs` gives it one leaf, which leaves where a lone float does).
+fn lone_float(
+    types: &llrm_mir::types::Types,
+    ty: TypeId,
+) -> TypeId {
+    match (types.get(ty), types.fields(ty)) {
+        (Type::Struct { .. } | Type::Named(_), Some([only])) if matches!(types.get(*only), Type::Float(_)) => *only,
+        _ => ty,
+    }
 }
 
 /// The stack bytes the address of a struct result takes where `entry` passes it
@@ -665,12 +759,24 @@ fn argument_of(
     ty: TypeId,
     size: u32,
     class: Option<&str>,
+    soft_float: bool,
 ) -> llrm_mir::target::Argument {
+    let soft = soft_float
+        && matches!(
+            types.get(ty),
+            Type::Float(kind) if !matches!(kind, llrm_mir::types::FloatKind::X86Fp80)
+        );
     llrm_mir::target::Argument {
         bytes: i64::from(size),
-        integer: types.int_bits(ty).is_some(),
+        integer: soft || types.int_bits(ty).is_some(),
         pointer: matches!(types.get(ty), Type::Pointer(_)),
-        floating: matches!(types.get(ty), Type::Float(_)),
+        // An extended real is not a vector-register float: it travels in
+        // memory.
+        floating: !soft
+            && matches!(
+                types.get(ty),
+                Type::Float(kind) if !matches!(kind, llrm_mir::types::FloatKind::X86Fp80)
+            ),
         memory: class == Some(llrm_mir::opcode::MEMORY),
     }
 }
@@ -736,6 +842,9 @@ pub struct Selected {
     /// The bytes below BP its allocas and stack temporaries take: an
     /// indexed access names no frame slot the frame could find it by.
     pub depth: i64,
+    /// The widest alignment of what it laid out below BP: the hole above them
+    /// is a multiple of it, or laying them again moves them further.
+    pub align: i64,
     /// The slots it laid out below BP, as (first byte, size): allocas, homes of
     /// arguments, stack temporaries. Temporaries of different statements
     /// may share bytes.
@@ -745,6 +854,9 @@ pub struct Selected {
     /// `depth` and are handed to the frame as spill slots, which
     /// `slots::slots_colored` shares by their live ranges.
     pub temporaries: usize,
+    /// The locals wanting more than the stack's alignment: (displacement,
+    /// alignment).
+    pub over_aligned: Vec<(i64, i64)>,
     /// The `at` of what starts the landing pad, which the runtime enters.
     pub landing: Option<i64>,
 }
@@ -843,6 +955,13 @@ pub(super) fn width_of(
         // it is two halves (`is_wide`).
         (TypeClass::I64, _) if layout.largest_legal_integer() >= 64 => Ok(8),
         (TypeClass::Ptr, Type::Pointer(space)) => Ok(layout.pointer(*space).bits / 8),
+        // An integer between the legal widths (`i24`, a three-byte struct
+        // coerced) is promoted to the next one.
+        (TypeClass::Other, Type::Int(bits))
+            if *bits > 0 && bits.next_power_of_two() <= layout.largest_legal_integer() =>
+        {
+            Ok(bits.next_power_of_two().max(8) / 8)
+        }
         // An x87 register holds any float, extended.
         (TypeClass::Float, Type::Float(FloatKind::Float | FloatKind::Double | FloatKind::X86Fp80)) => Ok(FLOAT),
         _ => refuse(format!("a {} value", types.display(ty))),
@@ -949,7 +1068,7 @@ pub(super) fn size_of(
         (TypeClass::Float, Type::Float(FloatKind::X86Fp80)) => Ok(10),
         // An aggregate of scalars answered in registers is as big as it is in
         // memory.
-        (_, Type::Struct { .. }) => {
+        (_, Type::Struct { .. } | Type::Named(_)) => {
             u32::try_from(layout.store_size(&module.context.types, ty)).map_err(|_| Unselected("a struct".into()))
         }
         _ => width_of(module, layout, ty),
@@ -1112,8 +1231,10 @@ pub fn selected_with<'c>(
         folded: BTreeSet::new(),
         depth: hole,
         extents: Vec::new(),
+        alloca_align: 1,
         allocas: 0,
         frame_objects: Vec::new(),
+        over_aligned: Vec::new(),
         scratch: 0,
         ats: IndexMap::default(),
         fused: BTreeSet::new(),
@@ -1189,8 +1310,12 @@ pub fn selected_with<'c>(
     }
     body.variables = parameters(module, function, name, &convention, &selector.homes);
     body.cfa_variables = true;
-    let mut body =
-        noted(module, function, name, &selector.ats, &selector.values, &selector.wides, &selector.variables, body);
+    let mut body = {
+        let ats = selector.ats.iter().map(|(&inst, &at)| (inst, at)).collect();
+        let values = selector.values.iter().map(|(&id, &vreg)| (id, vreg)).collect();
+        let wides = selector.wides.iter().map(|(&id, &pair)| (id, pair)).collect();
+        noted(module, function, name, &ats, &values, &wides, &selector.variables, body)
+    };
     // An argument the caller pushed is in its cell from the entry.
     let named = body.named_values();
     let cells: Vec<(u32, i64, u32)> = function
@@ -1229,11 +1354,16 @@ pub fn selected_with<'c>(
         far: selector.far,
         pops: selector.pops,
         depth: selector.depth,
+        align: selector.alloca_align,
         extents: selector.extents,
         temporaries: 0,
+        over_aligned: selector.over_aligned,
         landing: selector.landing,
     })
 }
+
+/// The alignment the frame keeps a local to without realigning the stack.
+pub(crate) const OVER_ALIGNED: i64 = 16;
 
 /// `-g`'s parameters of the function `name`, in the cells `convention` passes
 /// them in.
@@ -1285,7 +1415,7 @@ pub(crate) fn parameters(
                 ),
                 _ => None,
             };
-            Some(DebugVariable { name, r#type, place, parameter: true, argument, arrives: None })
+            Some(DebugVariable { name, r#type, place, parameter: true, argument, arrives: None, scope: None })
         })
         .collect()
 }
@@ -1381,7 +1511,7 @@ fn homed(
 }
 
 /// The source line the `!dbg` of `inst` names.
-pub(crate) fn dbg_line(
+pub fn dbg_line(
     module: &Module,
     function: &Function,
     inst: InstId,
@@ -1397,7 +1527,16 @@ pub(crate) fn dbg_line(
     };
     let named =
         |field: &str| module.special.get(node).and_then(|special| special.fields.iter().position(|one| one == field));
-    Some(SrcLoc { line: number(named("line").unwrap_or(0))?, column: named("column").and_then(number).unwrap_or(0) })
+    let node_of = |field: &str| match named(field).and_then(|at| operands.get(at)) {
+        Some(llrm_mir::MetadataOperand::Node(id)) => id.0 + 1,
+        _ => 0,
+    };
+    Some(SrcLoc {
+        line: number(named("line").unwrap_or(0))?,
+        column: named("column").and_then(number).unwrap_or(0),
+        scope: node_of("scope"),
+        inlined_at: node_of("inlinedAt"),
+    })
 }
 
 /// `body` with each instruction's source line: that of the MIR instruction
@@ -1437,18 +1576,88 @@ fn lined(
     body.with_blocks(blocks)
 }
 
+/// What `ops` make of `args`, as a note: the part of the variable they say (a
+/// trailing `DW_OP_LLVM_fragment`) and the value. Without `listed`, the
+/// one argument is pushed first. A leading `DW_OP_deref` of the lone argument
+/// makes the place it addresses, not a value.
+pub(crate) fn expression_note(
+    args: Vec<NoteValue>,
+    ops: Vec<llrm_mir::DwOp>,
+    listed: bool,
+) -> (NoteValue, Option<(u32, u32)>) {
+    use llrm_debug::ExprOp as E;
+    use llrm_mir::DwOp;
+    use llrm_mir::module::{DwBinary as B, DwUnary as U};
+    let nothing = (NoteValue::Nothing, None);
+    let mut ops = ops.as_slice();
+    let piece = match ops {
+        [rest @ .., DwOp::Fragment { offset, size }] if offset % 8 == 0 && size % 8 == 0 => {
+            let (Ok(offset), Ok(bytes)) = (u32::try_from(offset / 8), u32::try_from(size / 8)) else { return nothing };
+            ops = rest;
+            Some((offset, bytes))
+        }
+        _ => None,
+    };
+    let stacked = ops.last() == Some(&DwOp::StackValue);
+    if stacked {
+        ops = &ops[..ops.len() - 1];
+    }
+    let place = !stacked && !listed && ops.first() == Some(&DwOp::Deref);
+    if place {
+        ops = &ops[1..];
+    }
+    let mut made = Vec::new();
+    if !listed {
+        made.push(E::Arg(0));
+    }
+    for op in ops {
+        made.push(match *op {
+            DwOp::Arg(n) => E::Arg(n),
+            DwOp::Constu(n) => E::Constu(n),
+            DwOp::Consts(n) => E::Consts(n),
+            DwOp::PlusUconst(n) => E::PlusUconst(n),
+            DwOp::Deref => E::Deref,
+            DwOp::Binary(B::Plus) => E::Plus,
+            DwOp::Binary(B::Minus) => E::Minus,
+            DwOp::Binary(B::Mul) => E::Mul,
+            DwOp::Binary(B::And) => E::And,
+            DwOp::Binary(B::Or) => E::Or,
+            DwOp::Binary(B::Xor) => E::Xor,
+            DwOp::Binary(B::Shl) => E::Shl,
+            DwOp::Binary(B::Shr) => E::Shr,
+            DwOp::Binary(B::Shra) => E::Shra,
+            DwOp::Unary(U::Not) => E::Not,
+            DwOp::Unary(U::Neg) => E::Neg,
+            _ => return nothing,
+        });
+    }
+    let mut named = Vec::new();
+    for arg in args {
+        named.push(match arg {
+            NoteValue::Value(vreg) => NoteArg::Value(vreg),
+            NoteValue::Constant(value) => NoteArg::Constant(value),
+            _ => return nothing,
+        });
+    }
+    let uses = |n: u32| (n as usize) < named.len();
+    if made.iter().any(|op| matches!(op, E::Arg(n) if !uses(*n))) {
+        return nothing;
+    }
+    (NoteValue::Expr(Arc::new(NoteExpr { args: named, ops: made, value: !place })), piece)
+}
+
 /// `body` with what `-g` says of the values a variable has, as notes: each
 /// `dbg_value` record is a note, standing before the first instruction selected
 /// from the MIR instruction it stands before; and each instruction that defines
 /// a value a note names is told so. A variable a note names that no frame cell
 /// holds is a variable of the body, found over the code from the notes.
-fn noted(
+pub(crate) fn noted(
     module: &Module,
     function: &Function,
     name: &str,
-    ats: &IndexMap<InstId, i64>,
-    values: &IndexMap<ValueId, u32>,
-    wides: &IndexMap<ValueId, (Held, Held)>,
+    ats: &llrm_mir::dense::IdMap<InstId, i64>,
+    values: &llrm_mir::dense::IdMap<ValueId, u32>,
+    wides: &llrm_mir::dense::IdMap<ValueId, (Held, Held)>,
     declared: &[(String, DebugVariable)],
     body: LirBody,
 ) -> LirBody {
@@ -1514,7 +1723,46 @@ fn noted(
         }
         let (value, piece) = match record.what {
             llrm_mir::DebugWhat::Declare(_) => continue,
-            llrm_mir::DebugWhat::Value(one) => (said(one), None),
+            // Read by the assignment tracking analysis, not by the notes.
+            llrm_mir::DebugWhat::Assign { .. } => continue,
+            llrm_mir::DebugWhat::Value(one) => {
+                // What the expression does to the value: nothing, add to it, or
+                // say a part of the variable; any other is not read, and the
+                // value it would make is not said.
+                let ops_all = record.expression.and_then(|node| module.expression(node)).unwrap_or_default();
+                let ops = ops_all.strip_suffix(&[llrm_mir::DwOp::StackValue]).unwrap_or(&ops_all);
+                let ops_all = ops_all.clone();
+                match (ops, said(one)) {
+                    ([], value) => (value, None),
+                    ([llrm_mir::DwOp::PlusUconst(add)], NoteValue::Value(vreg)) => {
+                        (i64::try_from(*add).map_or(NoteValue::Nothing, |add| NoteValue::Offset(vreg, add)), None)
+                    }
+                    ([llrm_mir::DwOp::PlusUconst(add)], NoteValue::Constant(value)) => {
+                        (i64::try_from(*add).map_or(NoteValue::Nothing, |add| NoteValue::Constant(value + add)), None)
+                    }
+                    ([llrm_mir::DwOp::Fragment { offset, size }], value) if offset % 8 == 0 && size % 8 == 0 => {
+                        match (u32::try_from(offset / 8), u32::try_from(size / 8)) {
+                            (Ok(offset), Ok(bytes)) => (value, Some((offset, bytes))),
+                            _ => (NoteValue::Nothing, None),
+                        }
+                    }
+                    _ => expression_note(vec![said(one)], ops_all, false),
+                }
+            }
+            llrm_mir::DebugWhat::Args(list) => {
+                let ops = record.expression.and_then(|node| module.expression(node)).unwrap_or_default();
+                let operands = function.debug_args(list);
+                if operands.iter().any(|operand| {
+                    matches!(
+                        operand,
+                        llrm_mir::Operand::Value(one) if wides.contains_key(one)
+                    )
+                }) {
+                    (NoteValue::Nothing, None)
+                } else {
+                    expression_note(operands.iter().map(|&operand| said(operand)).collect(), ops, true)
+                }
+            }
             llrm_mir::DebugWhat::Piece { value, offset, bytes } => (said(value), Some((offset, bytes))),
             llrm_mir::DebugWhat::GonePiece { offset, bytes } => (NoteValue::Nothing, Some((offset, bytes))),
             llrm_mir::DebugWhat::Gone => (NoteValue::Nothing, None),
@@ -1528,31 +1776,63 @@ fn noted(
     // last is no longer known) say nothing of it.
     let mut seen: BTreeSet<(i64, u32, Option<(u32, u32)>, NoteValue)> = BTreeSet::new();
     let mut unsure: BTreeSet<(i64, u32)> = BTreeSet::new();
-    for &(at, variable, piece, value) in &said_at {
+    for (at, variable, piece, value) in &said_at {
+        let (at, variable, piece) = (*at, *variable, *piece);
         let clash = said_at
             .iter()
             .any(
-                |&(other_at, other_variable, other_piece, other_value)| other_at == at
-                    && other_variable == variable
-                    && (other_piece, other_value) != (piece, value)
-                    && (other_piece == piece || other_piece.is_none() || piece.is_none()),
+                |(other_at, other_variable, other_piece, other_value)| *other_at == at
+                    && *other_variable == variable
+                    && (*other_piece, other_value) != (piece, value)
+                    && (*other_piece == piece || other_piece.is_none() || piece.is_none()),
             );
         if clash {
             unsure.insert((at, variable));
         }
     }
+    // The register each parameter arrives in, by the number its value has.
+    let arrivals: Vec<(RegId, u32)> = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .find(|one| one.arrival())
+        .map(|one| one.delivers.iter().map(|(held, register)| (*register, held.value)).collect())
+        .unwrap_or_default();
     for (at, variable, piece, value) in said_at {
         let (piece, value) = if unsure.contains(&(at, variable)) { (None, NoteValue::Nothing) } else { (piece, value) };
         // Said twice by two passes: said once.
-        if !seen.insert((at, variable, piece, value)) {
+        // A parameter said to be its own value, whole, is also what it arrived
+        // as: where it is held nowhere, it is the value the function was
+        // entered with.
+        let value = match value {
+            NoteValue::Value(vreg)
+                if piece.is_none()
+                    && llrm_mir::debuginfo::read_variable(module, llrm_mir::MetadataId(variable))
+                        .is_some_and(|one| one.parameter) =>
+            {
+                arrivals
+                    .iter()
+                    .find(|(_, arrived)| *arrived == vreg)
+                    .map_or(NoteValue::Value(vreg), |&(register, _)| NoteValue::Arrived(vreg, register))
+            }
+            other => other,
+        };
+        if !seen.insert((at, variable, piece, value.clone())) {
             continue;
         }
         let note = u32::try_from(notes.len()).expect("a few notes");
+        match &value {
+            NoteValue::Value(vreg) | NoteValue::Offset(vreg, _) | NoteValue::Arrived(vreg, _) => {
+                named.insert(*vreg);
+            }
+            NoteValue::Expr(expr) => named.extend(expr.args.iter().filter_map(|arg| match arg {
+                NoteArg::Value(vreg) => Some(*vreg),
+                NoteArg::Constant(_) => None,
+            })),
+            _ => {}
+        }
         notes.push(DebugNote { variable, piece, value });
         before.entry(at).or_default().push(note);
-        if let NoteValue::Value(vreg) = value {
-            named.insert(vreg);
-        }
     }
     // A variable some of whose records went with deleted code is said to be
     // nowhere: a note that stands before no instruction is one that was
@@ -1565,22 +1845,16 @@ fn noted(
     // register from the entry, as a note, and the tracking that follows a
     // variable the code moves says for how long. Its number is past the
     // metadata's.
-    let arrivals: Vec<(RegId, u32)> = body
-        .blocks
-        .iter()
-        .flat_map(|block| block.insns.iter())
-        .find(|one| one.arrival())
-        .map(|one| one.delivers.iter().map(|(held, register)| (*register, held.value)).collect())
-        .unwrap_or_default();
     let mut entry_notes: Vec<u32> = Vec::new();
     for (index, variable) in body.variables.iter_mut().enumerate() {
         let (DebugPlace::Register(_), Some(delivered)) = (&variable.place, variable.argument) else { continue };
-        let Some(&(_, vreg)) = usize::try_from(delivered).ok().and_then(|delivered| arrivals.get(delivered)) else {
+        let Some(&(register, vreg)) = usize::try_from(delivered).ok().and_then(|delivered| arrivals.get(delivered))
+        else {
             continue;
         };
         let node = u32::MAX - u32::try_from(index).expect("a few variables");
         entry_notes.push(u32::try_from(notes.len()).expect("a few notes"));
-        notes.push(DebugNote { variable: node, piece: None, value: NoteValue::Value(vreg) });
+        notes.push(DebugNote { variable: node, piece: None, value: NoteValue::Arrived(vreg, register) });
         named.insert(vreg);
         variable.place = DebugPlace::Tracked(node);
     }
@@ -1590,17 +1864,31 @@ fn noted(
     // A note stands before the first instruction selected from its MIR
     // instruction, or else from the next one that was.
     let mut taken: BTreeSet<i64> = BTreeSet::new();
+    // A note of a value some instruction of the block defines stands right
+    // after that instruction, where the pin emits a `DBG_VALUE` of an SDNode's
+    // value (`InstrEmitter::EmitDbgValue`, after the node), not before the
+    // instruction selected from the record's own place: a two-address
+    // instruction in between has overwritten the register by then.
+    let mut anchored: BTreeSet<u32> = BTreeSet::new();
     let blocks = body
         .blocks
         .iter()
         .map(|block| {
+            let after_definer = after_definers(&block.insns, &before, &notes);
+            anchored.extend(after_definer.values().flatten());
             let insns = block
                 .insns
                 .iter()
-                .map(|one| {
+                .enumerate()
+                .map(|(index, one)| {
                     let ats_here: Vec<i64> =
                         before.keys().copied().filter(|&at| at <= one.at && !taken.contains(&at)).collect();
-                    let mut ahead: Vec<u32> = ats_here.iter().flat_map(|at| before[at].iter().copied()).collect();
+                    let mut ahead: Vec<u32> = ats_here
+                        .iter()
+                        .flat_map(|at| before[at].iter().copied())
+                        .filter(|id| !anchored.contains(id))
+                        .collect();
+                    ahead.extend(after_definer.get(&index).into_iter().flatten());
                     if one.arrival() {
                         ahead.extend(&entry_notes);
                     }
@@ -1627,7 +1915,10 @@ fn noted(
                         return Arc::clone(one);
                     }
                     taken.extend(ats_here);
-                    Arc::new(Insn { debug: DebugTags { defines: defined, before: ahead }, ..(**one).clone() })
+                    Arc::new(Insn {
+                        debug: DebugTags { defines: defined, before: ahead, slot: None },
+                        ..(**one).clone()
+                    })
                 })
                 .collect();
             block.with_insns(insns)
@@ -1656,6 +1947,7 @@ fn noted(
                 parameter: variable.parameter,
                 argument: variable.argument,
                 arrives: None,
+                scope: variable.block,
             });
         }
     }
@@ -1745,10 +2037,14 @@ pub struct Selector<'m, 'c, 'p> {
     folded: BTreeSet<u32>,
     depth: i64,
     extents: Vec<(i64, i64)>,
+    /// The widest alignment of the groups laid out.
+    alloca_align: i64,
     /// Where the allocas end, below which the stack temporaries go.
     allocas: i64,
     /// Each alloca's frame displacement and size.
     frame_objects: Vec<(i64, i64)>,
+    /// The groups' slots wanting more than the stack's alignment.
+    over_aligned: Vec<(i64, i64)>,
     /// The temporaries' bytes the instruction being selected has taken:
     /// a temporary lives only within the instruction that made it.
     scratch: i64,
@@ -1931,13 +2227,17 @@ impl Selector<'_, '_, '_> {
         let mut align_of = IndexMap::<usize, i64>::default();
         for &block in layout {
             for inst in function.iter_block(block) {
-                if let (&Opcode::Alloca { allocated, .. }, Some(size)) =
+                if let (&Opcode::Alloca { allocated, align: wanted, .. }, Some(size)) =
                     (&function.instruction(inst).opcode, self.alloca_bytes(inst))
                 {
                     let align = natural_align(&self.module.context.types, &self.layout, allocated)
                         .max(size & size.wrapping_neg())
                         .min(kept.max(i64::from(self.arch.stack_slot_bytes())))
                         .max(1);
+                    // More than the frame keeps the stack aligned to: the frame
+                    // realigns the stack pointer for it.
+                    let wanted = wanted.map_or(0, |one| one as i64);
+                    let align = if wanted > OVER_ALIGNED { wanted } else { align };
                     let widest = align_of.entry(group_of[&inst]).or_insert(1);
                     *widest = (*widest).max(align);
                 }
@@ -1948,6 +2248,7 @@ impl Selector<'_, '_, '_> {
         // gap; a later, smaller one takes it.
         let mut holes = Vec::<(i64, i64)>::new();
         for (group, align) in order {
+            self.alloca_align = self.alloca_align.max(align);
             let size = capacity[group];
             let fit = holes.iter().position(|&(low, high)| (high - size).div_euclid(align) * align >= low);
             let disp = if let Some(at) = fit {
@@ -1969,6 +2270,9 @@ impl Selector<'_, '_, '_> {
                 -self.depth
             };
             self.extents.push((disp, size));
+            if align > OVER_ALIGNED {
+                self.over_aligned.push((disp, align));
+            }
             homes.insert(group, disp);
         }
         for &block in layout {
@@ -2471,19 +2775,7 @@ impl Selector<'_, '_, '_> {
             .with_shape(&self.shape);
         let exposed = llrm_analysis::memory::exposed_frames(&unit);
         let unit = unit.with_exposed(&exposed);
-        let facts = unit.registers();
-        let mut counts: Vec<(i64, i64)> = self
-            .shape
-            .loops
-            .iter()
-            .filter_map(|one| {
-                let header = block_at.get(&cfg::block(one.header))?;
-                let count = llrm_analysis::induction::trip_count(&unit, one, &facts)?;
-                Some((*header, i64::try_from(count).expect("a trip count fits an int64")))
-            })
-            .collect();
-        counts.sort();
-        counts
+        proven_trips(&unit, &self.shape, &self.registers, |block| block_at.get(&block).copied())
     }
 
     /// Blocks from which every path ends in `unreachable`, as the old
@@ -2820,7 +3112,11 @@ impl Selector<'_, '_, '_> {
             .name
             .as_deref()
             .is_some_and(
-                |name| llrm_mir::intrinsics::is_reserved(name) && Intrinsic::named(name) == Some(Intrinsic::LRint),
+                |name| llrm_mir::intrinsics::is_reserved(name)
+                    && matches!(
+                        Intrinsic::named(name),
+                        Some(Intrinsic::LRint | Intrinsic::LLRint)
+                    ),
             )
     }
 
@@ -3682,6 +3978,7 @@ impl Selector<'_, '_, '_> {
                     parameter: variable.parameter,
                     argument: variable.argument,
                     arrives: None,
+                    scope: variable.block,
                 },
             ));
         }
@@ -6121,7 +6418,7 @@ impl Selector<'_, '_, '_> {
                     Ok(())
                 }
                 // Rounds as the machine's default mode does: fistp.
-                Some(Intrinsic::LRint) => {
+                Some(Intrinsic::LRint | Intrinsic::LLRint) => {
                     let result = instruction.result.expect("lrint's value");
                     self.float_to_integer(arguments[0], "fistp", result, instruction.ty, false, at, out)
                 }
@@ -6175,6 +6472,9 @@ impl Selector<'_, '_, '_> {
                 Some(Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd) => Ok(()),
                 // A fact for the passes: no code.
                 Some(Intrinsic::Assume) => Ok(()),
+                // A fact for the passes (SelectionDAGBuilder.cpp#L7680): no
+                // code.
+                Some(Intrinsic::InvariantStart | Intrinsic::InvariantEnd) => Ok(()),
                 // A hint; the 386 and 486 have no prefetch instruction.
                 Some(Intrinsic::Prefetch | Intrinsic::FakeUse) => Ok(()),
                 _ => refuse(format!("@{name}")),
@@ -6426,7 +6726,9 @@ impl Selector<'_, '_, '_> {
                     Some(bytes) => byval_bytes(self.module, &self.layout, self.arch, bytes)?,
                     None => self.size(ty)?,
                 };
-                kinds.push(entry.kind(argument_of(self.types(), ty, size, class(index)), self.arch.stack_slot_bytes()));
+                kinds.push(
+                    entry.kind(argument_of(self.types(), ty, size, class(index), false), self.arch.stack_slot_bytes()),
+                );
             }
             let mut placement = entry.place(&kinds);
             let mut next = placement.places.clone().into_iter();
@@ -8240,5 +8542,55 @@ fn swapped(predicate: IntPredicate) -> IntPredicate {
         Ule => Uge,
         Ugt => Ult,
         Uge => Ule,
+    }
+}
+
+/// The notes of a value an instruction of the block defines, by the index of
+/// the instruction they stand before: the one after the definer, if the
+/// definer is not the last. `before` is each note's place (`at`).
+fn after_definers(
+    insns: &[Arc<Insn>],
+    before: &IndexMap<i64, Vec<u32>>,
+    notes: &[DebugNote],
+) -> IndexMap<usize, Vec<u32>> {
+    let mut stands: IndexMap<usize, Vec<u32>> = IndexMap::default();
+    let (Some(first), Some(last)) = (insns.first(), insns.last()) else { return stands };
+    for (&at, ids) in before {
+        if at < first.at || at > last.at {
+            continue;
+        }
+        for &id in ids {
+            let (NoteValue::Value(value) | NoteValue::Offset(value, _)) = notes[id as usize].value else { continue };
+            let definer = insns.iter().position(|one| one.at < at && one.defines.contains(&value));
+            if let Some(next) = definer.map(|index| index + 1).filter(|&next| next < insns.len()) {
+                stands.entry(next).or_default().push(id);
+            }
+        }
+    }
+    stands
+}
+
+#[cfg(test)]
+mod anchoring_tests {
+    use super::*;
+    use crate::model::ir::{Operation, Semantics};
+
+    /// The record of `l` (gdb.c, x86 -O2) stood before the `shl`'s place, and
+    /// the note went before whatever was selected from the instruction after
+    /// it: past the `add v4, v4` that overwrites `l`, so `l` was listed from
+    /// the wrong instruction (ours 7..11 against the pin's 5..7). It stands
+    /// right after the instruction that defines it.
+    #[test]
+    fn test_a_note_of_a_defined_value_stands_after_its_definer() {
+        let insn = |at: i64, defines: Vec<u32>| {
+            Arc::new(Insn::new(at, None, Some(Semantics::new(Operation::Move)), defines, Vec::new()))
+        };
+        let insns = vec![insn(1, vec![2]), insn(2, vec![4]), insn(3, vec![5]), insn(4, vec![6])];
+        let notes = vec![DebugNote { variable: 9, piece: None, value: NoteValue::Value(4) }];
+        // the record's place is the fourth instruction's: past the one that
+        // doubles `l`
+        let before: IndexMap<i64, Vec<u32>> = [(4, vec![0])].into_iter().collect();
+        let stands = after_definers(&insns, &before, &notes);
+        assert_eq!(stands.get(&2), Some(&vec![0]), "{stands:?}");
     }
 }

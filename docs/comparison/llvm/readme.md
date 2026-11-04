@@ -60,7 +60,7 @@ flowchart LR
 
 ## The ladder
 
-Generated C, the same text compiled by both (`tools/ladder/gen.py SHAPE N`, five shapes: `arith` straight-line arithmetic with repeated sub-expressions; `mem` loads and stores through one pointer parameter; `loop` a counted loop with an invariant and an induction use; `diamond` a chain of if/else that make phis; `calls` calls to an external function). N is the statement count, 25 to 1,600. Optimizer is `opt -passes='default<O2>'` against llrm's `mir pipeline`; backend is `llc -O2` against llrm's `assemble` (`LLRM_DEBUG=time`). Slopes fit N up to 200, where both are near linear; the unit is thousand instructions per IR instruction before optimization.
+Generated C, the same text compiled by both (`tools/ladder/ladder_gen.py SHAPE N`, five shapes: `arith` straight-line arithmetic with repeated sub-expressions; `mem` loads and stores through one pointer parameter; `loop` a counted loop with an invariant and an induction use; `diamond` a chain of if/else that make phis; `calls` calls to an external function). N is the statement count, 25 to 1,600. Optimizer is `opt -passes='default<O2>'` against llrm's `mir pipeline`; backend is `llc -O2` against llrm's `assemble` (`LLRM_DEBUG=time`). Slopes fit N up to 200, where both are near linear; the unit is thousand instructions per IR instruction before optimization.
 
 | shape | optimizer, k instr per IR instr (LLVM / llrm) | backend (LLVM / llrm) | optimizer exponent N 25-1600 (LLVM / llrm) | backend exponent |
 |---|---:|---:|---:|---:|

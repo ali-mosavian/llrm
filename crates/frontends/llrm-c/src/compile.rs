@@ -757,7 +757,13 @@ pub fn main(argv: &[String]) -> i32 {
                 Some("obj" | "o")
             )
         {
-            let bytes = objbuild::written_in(&built, name, objbuild::CodeLayout::OneSegment, format)?;
+            let bytes = objbuild::written_in(
+                &built,
+                name,
+                objbuild::CodeLayout::OneSegment,
+                format,
+                args.codegen.arch.objects(),
+            )?;
             llrm_codegen::support::debug::timed("write output", || {
                 llrm_codegen::driver::flags::write_output(&output, bytes)
             })?;
@@ -892,10 +898,10 @@ mod tests {
             .collect()
     }
 
-    /// Two arrays off one stepped offset beside the counter: two steps by
-    /// constants, one by the element size (2) and one by one (the
-    /// counter, `inc`, or counting to zero `add -1` with no compare), and at
-    /// most one compare. A pointer per array is a third step.
+    /// Two arrays off one stepped offset: either beside the counter (two
+    /// steps by constants, one by the element size (2) and one by one, and at
+    /// most one compare), or the offset is the counter (LG3: one step by 2
+    /// that ends the loop, no compare). A pointer per array is another step.
     fn shares_one_stepped_offset(counting: &[String]) {
         let steps: Vec<&String> = counting.iter().filter(|one| !one.starts_with("cmp ")).collect();
         let compares = counting.len() - steps.len();
@@ -906,7 +912,8 @@ mod tests {
         };
         let counter = steps.iter().any(|one| by(one, "1") || by(one, "-1"));
         let offset = steps.iter().any(|one| by(one, "2"));
-        assert!(steps.len() == 2 && counter && offset && compares <= 1, "{counting:?}");
+        let shared = steps.len() == 1 && compares == 0;
+        assert!(offset && (shared || steps.len() == 2 && counter && compares <= 1), "{counting:?}");
     }
 
     /// `dot` indexes `a[i]` and `b[i]`: both arrays share one stepped offset
@@ -922,11 +929,12 @@ mod tests {
     /// (`inc; cmp`).
     #[test]
     fn test_a_counter_read_only_as_offsets_counts_to_zero() {
-        // The counter is the offset: one step by one and one compare with `n`
-        // (a register or its stack slot), nothing else.
+        // The counter is the offset: one step by one, ending the loop (LG3) or
+        // followed by one compare with `n` (a register or its stack slot).
         let counting = loop_counting("bytes");
         assert!(
-            counting.len() == 2 && counting[0].starts_with("inc ") && counting[1].starts_with("cmp "),
+            counting[0].starts_with("inc ")
+                && (counting.len() == 1 || counting.len() == 2 && counting[1].starts_with("cmp ")),
             "{counting:?}"
         );
     }
@@ -2940,7 +2948,11 @@ mod tests {
             .iter()
             .filter(|one| one.starts_with("mov") && one.contains("ptr [bp-") && one.contains("],"))
             .collect();
-        assert!(stored.len() >= 3, "{body:#?}");
+        // Or the array is the constant table it was copied from, read where it
+        // lies (`visitAllocaInst`, 77fa49769a): its bytes are the initializer.
+        let table = asm.lines().any(|one| one.trim() == "db 001h,001h,001h,002h,001h,004h,007h,000h,001h,007h");
+        let from_table = body.iter().any(|one| one.contains("word ptr G$"));
+        assert!(stored.len() >= 3 || (table && from_table), "{body:#?}");
     }
 
     /// Each float-to-int conversion switched the rounding mode to chop and
@@ -3530,7 +3542,9 @@ mod tests {
         // among them; the flip's are `flat_listing`'s.
         args.codegen.libcalls.clear();
         let built = super::selected(&text, fixture, None, &args.codegen).unwrap();
-        let bytes = llrm_codegen::backend::objbuild::written(&built, "x.c").unwrap();
+        let bytes =
+            llrm_codegen::backend::objbuild::written(&built, "x.c", llrm_target::Target::objects(&llrm_x86_m32::M32))
+                .unwrap();
         let (mut at, mut out) = (0, Vec::new());
         while at < bytes.len() {
             let length = usize::from(u16::from_le_bytes([bytes[at + 1], bytes[at + 2]]));
@@ -3814,7 +3828,7 @@ mod tests {
         // The load is the add's operand, addressed by a 32-bit register; the
         // pointer or the index steps by a constant and a conditional
         // jump ends the loop (llc lists `inc; cmp; jl` or, counting to zero,
-        // `add -1; jne`).
+        // `add -1; jne`); sharing the exit counter (LG3) leaves one step.
         let at = body.iter().position(|line| line.starts_with("add e") && line.contains("dword ptr [e"));
         let at = at.unwrap_or_else(|| panic!("{body:#?}"));
         let jump = body[at..].iter().position(|line| line.starts_with('j') && !line.starts_with("jmp")).map(|k| at + k);
@@ -3828,7 +3842,8 @@ mod tests {
                         && line.rsplit(", ").next().is_some_and(|last| last.parse::<i64>().is_ok()))
             })
             .count();
-        assert!(steps >= 2, "the pointer or index and the counter step by constants: {body:#?}");
+        let ends_loop = steps == 1 && jump > 0 && body[jump - 1].starts_with("inc e");
+        assert!(steps >= 2 || ends_loop, "the pointer or index and the counter step by constants: {body:#?}");
         assert!(
             body.iter().all(|line| !line.contains(" bp")
                 && !line.contains("[bx")

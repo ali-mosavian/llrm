@@ -48,11 +48,21 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         node: SDValue,
     ) -> bool {
         let vt = self.dag.value_type(node);
+        self.simplify_demanded_bits_of(node, mask(vt.size_in_bits()))
+    }
+
+    /// `SimplifyDemandedBits(Op, DemandedBits)`.
+    pub(super) fn simplify_demanded_bits_of(
+        &mut self,
+        node: SDValue,
+        demanded: u128,
+    ) -> bool {
+        let vt = self.dag.value_type(node);
         if !vt.is_integer() || vt.size_in_bits() > 64 {
             return false;
         }
         let mut tlo = None;
-        if self.sdb(node, mask(vt.size_in_bits()), 0, false, &mut tlo).is_ok() {
+        if self.sdb(node, demanded, 0, false, &mut tlo).is_ok() {
             return false;
         }
         let Some((old, new)) = tlo else { return false };
@@ -86,7 +96,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let Some(c) = self.dag.constant(rhs) else { return Ok(()) };
         // `targetShrinkDemandedConstant` first: the target may keep the
         // constant (X86 keeps an `and` mask a `movzx` matches).
-        if let Some(handled) = self.hooks.target_shrink_demanded_constant(self.dag, op, demanded) {
+        if let Some(handled) = self.hooks.target_shrink_demanded_constant(self.dag, op, demanded, self.level) {
             return match handled {
                 Some(new) => Self::combine_to(tlo, op, new).map(|_| ()),
                 None => Ok(()),
@@ -107,7 +117,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
     /// `SimplifyMultipleUseDemandedBits`: a value that reads the same on the
     /// demanded bits and has no other effect, found without touching the
     /// other users of `op`.
-    fn simplify_multiple_use_demanded_bits(
+    pub(super) fn simplify_multiple_use_demanded_bits(
         &mut self,
         op: SDValue,
         demanded: u128,
@@ -191,7 +201,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             return Ok(KnownBits::constant(bits, width));
         }
         let mut demanded = demanded_in & all;
-        if !assume_single_use && self.dag.use_count(op.node) != 1 {
+        if !assume_single_use && !self.dag.has_one_use(op.node) {
             if depth >= MAX_DEPTH {
                 return Ok(unknown);
             }
@@ -479,6 +489,29 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 let swap = |v: u128| v.swap_bytes() >> (128 - width);
                 let k = self.sdb(src, swap(demanded), depth + 1, false, tlo)?;
                 KnownBits { zero: swap(k.zero), one: swap(k.one), width }
+            }
+            // `SimplifyDemandedBits` of `ADD`, `SUB` and `MUL`: they demand
+            // nothing above their highest demanded bit; a constant addend whose
+            // low bits are all ones becomes -1.
+            ISD::Add | ISD::Sub | ISD::Mul if self.hooks.simplify_demanded_add_sub_mul() => {
+                let (op0, op1) = (self.dag.operand(op, 0), self.dag.operand(op, 1));
+                let length = 128 - demanded.leading_zeros();
+                let low = mask(length);
+                let k1 = self.sdb(op1, low, depth + 1, false, tlo)?;
+                let lhs_demanded =
+                    if opcode == ISD::Mul { low & mask(width - k1.zero.trailing_ones().min(width)) } else { low };
+                self.sdb(op0, lhs_demanded, depth + 1, false, tlo)?;
+                if opcode != ISD::Mul && !self.dag.is_opaque(op1) {
+                    if let Some(c) = self.dag.constant(op1) {
+                        let high = all & !low;
+                        if c != all && c != 1 && (c | high) == all {
+                            let minus_one = self.dag.get_constant(all, vt);
+                            let new = self.dag.get_node(opcode, vt, &[op0, minus_one]);
+                            return Self::combine_to(tlo, op, new);
+                        }
+                    }
+                }
+                known_bits(self.dag, op)
             }
             _ => known_bits(self.dag, op),
         };

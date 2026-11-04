@@ -2,6 +2,8 @@
 import sys
 from pathlib import Path
 
+import os
+
 import pytest
 
 REQUIRES = ["qcport"]  # d_faces.c and its headers are QCport's, which the repository does not hold
@@ -51,6 +53,7 @@ def test_a_build_that_computes_something_else_is_caught(work, tmp_path):
     assert not run.agree(different, run.run("gccO1")["reports"])
 
 
+@pytest.mark.skipif("LLRM_CLANG_M16" not in os.environ, reason="needs LLRM_CLANG_M16")
 def test_the_16_bit_build_does_what_the_reference_does(work):
     """llrm -m16 is held to what gcc and clang do in 32 bits, so its answer is judged against the flat reference. Its first run
     differed from every flat build, and the cause was the scene: a face whose `side >> 1` named a fourth brush model that the

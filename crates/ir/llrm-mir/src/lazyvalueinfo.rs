@@ -425,10 +425,24 @@ pub struct Steps {
     pub solved: u64,
 }
 
+/// What a cache was asked or told, for [`LazyValueInfo::disagreements`].
+#[derive(Clone, Debug)]
+enum Event {
+    Block(Operand, BlockId, Option<InstId>),
+    Edge(Operand, BlockId, BlockId, Option<InstId>),
+    Forget(Operand),
+    EraseBlock(BlockId),
+    ThreadEdge(BlockId, BlockId, BlockId),
+    Clear,
+}
+
 /// The actual implementation of the lazy analysis and update.
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LazyValueInfo.cpp#L376>
 pub struct LazyValueInfoImpl {
+    /// Every query and update made, in order, under `LLRM_CHECK_CAPTURES`:
+    /// the audit replays them on the body as it stands.
+    log: Option<Vec<Event>>,
     /// Cached results from previous queries
     the_cache: LazyValueInfoCache,
     /// This stack holds the state of the value solver during a query.
@@ -730,6 +744,7 @@ impl LazyValueInfoImpl {
             .iter()
             .any(|g| matches!(g.kind, GlobalKind::Function(_)) && g.name.as_deref() == Some("llvm.experimental.guard"));
         Self {
+            log: crate::passes::check_captures().then(Vec::new),
             the_cache: LazyValueInfoCache::default(),
             block_value_stack: Vec::new(),
             block_value_set: HashSet::default(),
@@ -2130,6 +2145,9 @@ impl LazyValueInfoImpl {
         cxt_i: Option<InstId>,
     ) -> Lattice {
         debug_assert!(self.block_value_stack.is_empty() && self.block_value_set.is_empty());
+        if let Some(log) = &mut self.log {
+            log.push(Event::Block(v, bb, cxt_i));
+        }
         let mut opt_result = self.get_block_value(env, v, bb, cxt_i);
         if opt_result.is_none() {
             self.solve(env);
@@ -2168,6 +2186,9 @@ impl LazyValueInfoImpl {
         to_bb: BlockId,
         cxt_i: Option<InstId>,
     ) -> Lattice {
+        if let Some(log) = &mut self.log {
+            log.push(Event::Edge(v, from_bb, to_bb, cxt_i));
+        }
         let mut result = self.get_edge_value(env, v, from_bb, to_bb, cxt_i);
         while result.is_none() {
             // As the worklist only explicitly tracks block values (but not edge
@@ -2274,6 +2295,9 @@ impl LazyValueInfoImpl {
         old_succ: BlockId,
         new_succ: BlockId,
     ) {
+        if let Some(log) = &mut self.log {
+            log.push(Event::ThreadEdge(_pred_bb, old_succ, new_succ));
+        }
         self.the_cache.thread_edge_impl(env.function, old_succ, new_succ);
     }
 }
@@ -2758,17 +2782,60 @@ impl crate::passes::Analysis for LviCache {
 }
 
 impl LazyValueInfo {
-    /// The memoised `(block, value)` pairs whose answer a fresh
-    /// `LazyValueInfo` gives differently.
+    /// The memoised `(block, value)` pairs whose answer differs from the one
+    /// a fresh `LazyValueInfo` gives when asked what this one was asked and
+    /// told, in that order, on the body as it stands. The cache is path
+    /// dependent (a range holds one of several gaps by which question came
+    /// first), so a fresh lone query is not what a sound cache holds; the same
+    /// questions in the same order are.
     pub fn disagreements(
         &mut self,
         env: &mut Env,
     ) -> Vec<(BlockId, Operand)> {
         let Some(imp) = self.get_impl() else { return Vec::new() };
         let held = imp.memoised();
+        let Some(events) = imp.log.clone() else { return Vec::new() };
+        let function = env.function;
+        let mut blocks = crate::dense::IdSet::<BlockId>::new();
+        for &bb in function.layout() {
+            blocks.insert(bb);
+        }
+        let placed = |inst: InstId| !function.is_erased(inst) && function.parent(inst).is_some();
+        let alive = |v: Operand, cxt: Option<InstId>| {
+            let value = match v {
+                Operand::Value(value) => match function.value(value).def {
+                    ValueDef::Instruction(inst) => placed(inst),
+                    ValueDef::Argument(_) => true,
+                },
+                _ => true,
+            };
+            value && cxt.is_none_or(placed)
+        };
         let mut fresh = LazyValueInfo::new();
+        let replay = fresh.get_or_create_impl(env);
+        for event in events {
+            match event {
+                Event::Block(v, bb, cxt) if blocks.contains(&bb) && alive(v, cxt) => {
+                    replay.get_value_in_block(env, v, bb, cxt);
+                }
+                Event::Edge(v, from, to, cxt) if blocks.contains(&from) && blocks.contains(&to) && alive(v, cxt) => {
+                    replay.get_value_on_edge(env, v, from, to, cxt);
+                }
+                Event::Forget(v) => replay.forget_value(v),
+                Event::EraseBlock(bb) => replay.erase_block(bb),
+                Event::ThreadEdge(pred, old, new) if [pred, old, new].iter().all(|bb| blocks.contains(bb)) => {
+                    replay.thread_edge(env, pred, old, new);
+                }
+                Event::Clear => replay.clear(),
+                _ => {}
+            }
+        }
+        let replayed: HashMap<(BlockId, Operand), Lattice> =
+            replay.memoised().into_iter().map(|(bb, v, answer)| ((bb, v), answer)).collect();
+        // An entry the replay did not make is laziness: a question about a
+        // value or block the body no longer holds.
         held.into_iter()
-            .filter(|(bb, v, answer)| fresh.get_or_create_impl(env).get_value_in_block(env, *v, *bb, None) != *answer)
+            .filter(|(bb, v, answer)| replayed.get(&(*bb, *v)).is_some_and(|again| again != answer))
             .map(|(bb, v, _)| (bb, v))
             .collect()
     }
@@ -3198,6 +3265,9 @@ impl LazyValueInfoImpl {
     ///
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LazyValueInfo.cpp#L497>
     pub fn clear(&mut self) {
+        if let Some(log) = &mut self.log {
+            log.push(Event::Clear);
+        }
         self.the_cache.clear();
     }
 
@@ -3209,6 +3279,9 @@ impl LazyValueInfoImpl {
         &mut self,
         v: Operand,
     ) {
+        if let Some(log) = &mut self.log {
+            log.push(Event::Forget(v));
+        }
         self.the_cache.erase_value(v);
     }
 
@@ -3220,6 +3293,9 @@ impl LazyValueInfoImpl {
         &mut self,
         bb: BlockId,
     ) {
+        if let Some(log) = &mut self.log {
+            log.push(Event::EraseBlock(bb));
+        }
         self.the_cache.erase_block(bb);
     }
 

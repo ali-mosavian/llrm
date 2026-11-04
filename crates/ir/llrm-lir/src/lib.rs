@@ -503,7 +503,7 @@ impl fmt::Display for Operation {
 }
 
 /// Typed selected semantics for one instruction.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Semantics {
     pub op: Operation,
     pub name: Option<std::sync::Arc<str>>,
@@ -514,6 +514,10 @@ pub struct Semantics {
     /// A table jump (`indirect`, its one source the table's cell): the block
     /// each index of the table goes to. Empty for any other instruction.
     pub table: Vec<i64>,
+    /// A table jump through a register (`table` set, its one source the
+    /// register): the id of the data object that holds the table, which the
+    /// jump's cell names when the table is read from memory.
+    pub table_id: Option<i64>,
     /// A `rep` prefix on an instruction that is not a string operation
     /// (`IP_HAS_REPEAT`): `bsf` as `tzcnt` on a processor that has it.
     pub repeat: bool,
@@ -522,6 +526,26 @@ pub struct Semantics {
     /// `None` where unknown, which an indirect call keeps the frame register
     /// for.
     pub pops: Option<i64>,
+}
+
+impl std::hash::Hash for Semantics {
+    fn hash<H: std::hash::Hasher>(
+        &self,
+        state: &mut H,
+    ) {
+        // `table_id` is left out: a field added to the derived hash reordered
+        // a hash-keyed container (two edge landings swapped their labels in
+        // `level.nib` at m16). Equal values still hash alike.
+        self.op.hash(state);
+        self.name.hash(state);
+        self.dests.hash(state);
+        self.sources.hash(state);
+        self.target.hash(state);
+        self.indirect.hash(state);
+        self.table.hash(state);
+        self.repeat.hash(state);
+        self.pops.hash(state);
+    }
 }
 
 impl Semantics {
@@ -544,10 +568,72 @@ impl Semantics {
             && self.target == other.target
             && self.indirect == other.indirect
             && self.table == other.table
+            && self.table_id == other.table_id
             && self.repeat == other.repeat
             && self.pops == other.pops
             && same(&self.dests, &other.dests)
             && same(&self.sources, &other.sources)
+    }
+
+    /// `HashMachineInstr` ([BranchFolding.cpp L322][pin]): a hash of the
+    /// operation and of what its operands are, which the tail merge sorts its
+    /// candidates by. Explicit and fixed, as the pin's is ("we can't use
+    /// MachineOperand's hash_code here because it's not deterministic and we
+    /// sort by hash value later"): a field added to `Semantics` that is no
+    /// operand cannot move it, and so cannot reorder the merges.
+    ///
+    /// [pin]:
+    ///     https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/BranchFolding.cpp#L322
+    pub fn machine_hash(&self) -> u64 {
+        // The opcode: the mnemonic where there is one, else the operation.
+        let mut hash = match &self.name {
+            Some(name) => {
+                name.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3))
+            }
+            None => self.op as u64,
+        };
+        let mut place = 0u32;
+        let mut operand = |value: u64, kind: u64| {
+            hash = hash.wrapping_add(((value << 3) | kind) << (place & 31));
+            place += 1;
+        };
+        for loc in self.dests.iter().chain(&self.sources) {
+            match loc {
+                Loc::Reg(reg) => operand(reg.register.index() as u64, 1),
+                Loc::Imm(imm) => operand(imm.value as u64, 2),
+                // The pin's memory operand is five: base, scale, index,
+                // displacement and segment; a symbol is too hard, only its
+                // offset.
+                Loc::Mem(cell) => {
+                    operand(cell.through.index() as u64, 1);
+                    operand(cell.scale as u64, 2);
+                    operand(cell.index_through.index() as u64, 1);
+                    operand(cell.offset as u64, 2);
+                }
+                Loc::Address(address) => {
+                    operand(address.through.index() as u64, 1);
+                    operand(address.scale as u64, 2);
+                    operand(address.index_through.index() as u64, 1);
+                    operand(address.offset as u64, 2);
+                }
+                Loc::Held(held) => operand(u64::from(held.value), 3),
+                Loc::Field(field) => operand(u64::from(field.code), 4),
+            }
+        }
+        if let Some(target) = self.target {
+            operand(target as u64, 5);
+        }
+        for block in &self.table {
+            operand(*block as u64, 5);
+        }
+        hash
+    }
+
+    /// A call that is also the return: the epilogue, then a `jmp` to the
+    /// callee. The callee is named by the instruction's id in a side table, so
+    /// a copy of it has none (DEVIATE TD1).
+    pub fn is_sibling_call(&self) -> bool {
+        self.op == Operation::Return && self.name.as_deref() == Some("jmp")
     }
 
     /// The blocks a branch or jump names (its target, or each index of its
@@ -574,6 +660,7 @@ impl Semantics {
             target: None,
             indirect: false,
             table: Vec::new(),
+            table_id: None,
             repeat: false,
             pops: None,
         }
@@ -592,6 +679,7 @@ pub static RESTORE_IDIOM: LazyLock<Semantics> = LazyLock::new(|| Semantics {
     target: None,
     indirect: false,
     table: Vec::new(),
+    table_id: None,
     repeat: false,
     pops: None,
 });
@@ -689,6 +777,7 @@ pub fn restoring(
         target: None,
         indirect: false,
         table: Vec::new(),
+        table_id: None,
         repeat: false,
         pops: None,
     }
@@ -708,6 +797,17 @@ pub fn barrier(semantics: &Semantics) -> bool {
 mod tests {
     use super::root;
     use super::*;
+
+    /// Only a `jmp` return is a sibling call: a plain `ret`, and a `jmp` that
+    /// is a jump, are not (a copy of the first has no callee; neither of
+    /// the others needs one).
+    #[test]
+    fn only_a_jmp_return_is_a_sibling_call() {
+        let named = |op, name: &str| Semantics { name: Some(name.into()), ..Semantics::new(op) };
+        assert!(named(Operation::Return, "jmp").is_sibling_call());
+        assert!(!named(Operation::Return, "ret").is_sibling_call());
+        assert!(!named(Operation::Jump, "jmp").is_sibling_call());
+    }
 
     /// An indexed access through a register that holds a value (`[ebp+edx-16]`,
     /// the frame register freed) is not a frame cell: relayout moved its

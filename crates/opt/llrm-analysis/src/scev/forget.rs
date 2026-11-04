@@ -171,7 +171,7 @@ impl ScalarEvolution {
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L8690
     /// `visitAndClearUsers`: the SCEVs of the instructions on `worklist` and
     /// of all their users, collected in `to_forget` and dropped from the value
-    /// map. (`ConstantEvolutionLoopExitValue` is DEVIATE 10.)
+    /// map. (`ConstantEvolutionLoopExitValue` is not cached: DEVIATE 10.)
     pub fn visit_and_clear_users(
         &mut self,
         cx: &Cx,

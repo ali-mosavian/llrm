@@ -71,7 +71,7 @@ def test_the_profile_directory_is_made_before_the_merge_writes_into_it(monkeypat
     (tmp_path / "repo").mkdir()
     root, _ = repo(tmp_path / "repo")
 
-    def instrumented(root, target, flags, binary="llrm-c"):
+    def instrumented(root, target, flags, binary="llrm-llc"):
         raw = Path(flags.split("=", 1)[1])
         (raw / "a.profraw").write_bytes(b"x")
         return subprocess.CompletedProcess([], 0, stdout="", stderr="")
@@ -183,19 +183,19 @@ def test_the_corpus_for_llrm_llc_leaves_out_what_llrm_cc_cannot_build_and_the_ot
     assert unbuilt <= names(pgo.corpus()) and not unbuilt & names(pgo.corpus(driver=True))
 
 
-def test_llrm_c_is_built_with_its_feature_and_llrm_llc_without(monkeypatch, tmp_path):
-    """`cargo build --bin llrm-c` alone fails "target llrm-c requires the features: c-legacy": the pgo job was red on parity."""
+def test_no_binary_is_built_with_the_legacy_feature(monkeypatch, tmp_path):
+    """The c-legacy/wccq feature goes with the Watcom frontend: a build that still asks for it fails once the feature is gone."""
     asked = []
     monkeypatch.setattr(pgo.subprocess, "run", lambda command, **_: asked.append(command))
     pgo.cargo(tmp_path, tmp_path, "", "llrm-c")
     pgo.cargo(tmp_path, tmp_path, "", "llrm-llc")
-    assert asked[0][-2:] == ["--features", "wccq"] and "--features" not in asked[1]
-    builds = [line for line in (pgo.ROOT / ".github/workflows/pgo.yml").read_text().splitlines() if "cargo build" in line and ("--bin llrm-c" in line or "--bins" in line)]
-    assert builds and all("--features wccq" in line for line in builds), builds
+    assert all("--features" not in command for command in asked), asked
+    builds = [line for line in (pgo.ROOT / ".github/workflows/pgo.yml").read_text().splitlines() if "cargo build" in line]
+    assert builds and all("--bin llrm-llc" in line or "--bins" in line for line in builds) and not any("wccq" in line for line in builds), builds
 
 
 def test_the_build_command_the_ci_job_runs_parses(monkeypatch):
     """CI's `pgo.py build --out .. --profile-dir .. --siblings ..` died in main(): `--binary` is a name, and its default str was resolved like a path ('str' object has no attribute 'resolve')."""
     monkeypatch.chdir(pgo.ROOT)
     args = pgo.parse(["build", "--out", "target/pgo-out", "--profile-dir", "target/pgo-profile", "--siblings", "target/plain"])
-    assert args.binary == "llrm-c" and args.out == pgo.ROOT / "target/pgo-out" and args.siblings == pgo.ROOT / "target/plain"
+    assert args.binary == "llrm-llc" and args.out == pgo.ROOT / "target/pgo-out" and args.siblings == pgo.ROOT / "target/plain"

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/allocate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/allocate.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/allocate.rs sha256:f776b7a6aedfa65c4aa480e02c7e94a5af91b0102d9b85ba01ac5959ba76f3a4 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/allocate.rs sha256:9350dbde0ba96258fc3cab9f753db333a8c0c3e9f0d9736673bea2540f06a463 -->
 
 # allocate
 
@@ -119,8 +119,7 @@ When a split or a spill changes the body, the facts are recomputed from
 what changed, pins are found again for the changed blocks, the union is
 refreshed, any placed value that now overlaps another or has a clobber in
 its range is unplaced, and every new, moved or unplaced value re-enters
-the queue. The loop stops when the queue is empty (`BUDGET` visits at
-most, 200000).
+the queue. The loop stops when the queue is empty.
 
 The last chance before a value is spilled is recoloring
 (`greedy::greedy`'s `try_last_chance_recoloring`).

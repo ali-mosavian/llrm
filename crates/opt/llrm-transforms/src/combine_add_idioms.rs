@@ -12,8 +12,7 @@
 //! DEVIATE 1: `SimplifyAddWithRemainder` (:1739), the align-up and
 //! `(A & -A) - 1` idioms, `~(A*C)+A`, signum, `select` of `icmp eq`,
 //! ceiling division, `~X + ~Y` (`isFreeToInvert`) and everything after
-//! `canonicalizeLowbitMask` are the next strip; `narrowMathIfNoOverflow`
-//! (:1790) waits on the shared helper.
+//! `canonicalizeLowbitMask` are the next strip.
 //!
 //! DEVIATE 2: `sext(A<B) + zext(A>B)` (:1766) and `X + (or X, -X)`'s
 //! sibling folds that build `umax`/`scmp` need `CreateIntrinsic`
@@ -344,6 +343,16 @@ fn fold_no_common_bits(
     Some(c.replace_with_binop(inst, BinaryOp::Or, lhs, rhs, flags))
 }
 
+/// `narrowMathIfNoOverflow` (:1683).
+fn fold_narrow_math(
+    c: &mut Combiner,
+    inst: InstId,
+    _lhs: Operand,
+    _rhs: Operand,
+) -> Option<Visit> {
+    c.narrow_math_if_no_overflow(inst)
+}
+
 /// `(xor A, B) + (and A, B)` is `or A, B`; `(or A, B) + (and A, B)` is
 /// `add A, B` in place (:1795).
 fn fold_bitwise_pair(
@@ -386,7 +395,7 @@ pub fn fold_add_rest(
     if let Some(value) = check_for_negative_operand(c, inst, lhs, rhs) {
         return Visit::Replace(value);
     }
-    let folds: [fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>; 8] = [
+    let folds: [fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>; 9] = [
         fold_add_one_not,
         fold_add_const_not,
         fold_reassociated_add,
@@ -394,6 +403,7 @@ pub fn fold_add_rest(
         fold_masked_sign_bit,
         fold_extended_pair,
         fold_no_common_bits,
+        fold_narrow_math,
         fold_bitwise_pair,
     ];
     folds.iter().find_map(|fold| fold(c, inst, lhs, rhs)).unwrap_or(Visit::None)

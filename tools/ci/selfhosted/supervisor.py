@@ -47,6 +47,35 @@ def backoff(elapsed: float) -> float:
     return 30.0 if elapsed < 20 else 0.0
 
 
+def container_flags() -> list[str]:
+    """What every container runs with, the preflight's and each job's: one place, so no slot's environment differs from another's."""
+    return ["--cgroup-manager=cgroupfs", "run", "--rm", f"--memory={MEMORY}", "--security-opt=seccomp=/opt/ghrunner/seccomp.json", "--pids-limit=8192"]
+
+
+COUNTER_PROBE = ["perf", "stat", "-x,", "-e", "instructions:u", "true"]
+
+
+def counters_missing(output: str) -> str | None:
+    """None when `perf stat -x, -e instructions:u true` counted instructions, else why not (`<not supported>`, `<not counted>`, an error, or no line)."""
+    for line in output.splitlines():
+        fields = line.split(",")
+        if len(fields) > 2 and fields[2].startswith("instructions"):
+            return None if fields[0].strip().isdigit() and int(fields[0]) > 0 else f"instructions:u read {fields[0].strip()!r}"
+    return output.strip().splitlines()[-1] if output.strip() else "perf printed nothing"
+
+
+def preflight(n: int) -> bool:
+    """Whether a container of this slot has the instruction counters the cost and perf jobs measure with. A slot without them would take those jobs and
+    fail them (or measure nothing): it prints the reason and stays out of the pool instead."""
+    done = subprocess.run(["podman", *container_flags(), IMAGE, *COUNTER_PROBE], capture_output=True, text=True, check=False)
+    why = counters_missing(done.stdout + done.stderr)
+    if why:
+        print(f"slot {n}: PREFLIGHT FAILED, no instruction counters in the runner container: {why}", flush=True)
+        return False
+    print(f"slot {n}: preflight ok, instructions:u counted", flush=True)
+    return True
+
+
 def stale(runners: list[dict], earlier: set[str]) -> list[int]:
     """Ids of tinytim registrations offline now and at the last beat: a runner just started is offline for a moment, a dead one stays so."""
     return [r["id"] for r in runners if r["name"].startswith("tinytim-") and r["status"] == "offline" and r["name"] in earlier]
@@ -75,13 +104,15 @@ def heartbeat() -> None:
 
 def slot(n: int) -> None:
     while True:
+        if not preflight(n):
+            time.sleep(300)
+            continue
         name = f"tinytim-{n}-{os.urandom(3).hex()}"
         started = time.time()
         try:
             jit = api("POST", "actions/runners/generate-jitconfig", {"name": name, "runner_group_id": 1, "labels": LABELS, "work_folder": WORK})
             subprocess.run(
-                ["podman", "--cgroup-manager=cgroupfs", "run", "--rm", "--name", name, f"--memory={MEMORY}",
-                 "--security-opt=seccomp=/opt/ghrunner/seccomp.json", "--pids-limit=8192", "--env-file=/dev/stdin", IMAGE],
+                ["podman", *container_flags(), "--name", name, "--env-file=/dev/stdin", IMAGE],
                 input=f"ACTIONS_RUNNER_INPUT_JITCONFIG={jit['encoded_jit_config']}\n", text=True, check=False,
             )
         except Exception as e:

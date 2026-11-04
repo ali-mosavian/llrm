@@ -44,7 +44,8 @@ use std::sync::Arc;
 use llrm_lir::registers::RegId;
 
 use crate::analysis::intervals as ranges;
-use crate::backend::allocate::{_g, Assignment, Error, Spilled, Unplaced};
+use crate::backend::allocate::_g;
+use crate::backend::allocresult::{Assignment, Error, Spilled, Unplaced};
 use crate::backend::classes::RegisterClasses;
 use crate::backend::target;
 use crate::model::ir::{Addr, Held, Loc, Mem, Operation, Reg, Space};

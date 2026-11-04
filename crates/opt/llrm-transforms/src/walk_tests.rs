@@ -28,7 +28,7 @@ fn pipeline_runs(
     crate::pipeline::capturing_runs(|| {
         llrm_mir::program::Program::lend(
             &mut module,
-            std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+            std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
             |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, applied),
         )
         .and_then(|done| done)
@@ -172,7 +172,7 @@ fn test_a_loop_around_a_call_is_unrolled_only_after_the_call_is_inlined() {
     let mut module = parsed(&loop_around_a_call());
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
             crate::pipeline::applied(program, &crate::pipeline::Applied::default())
         },
@@ -220,7 +220,7 @@ b0:
     );
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
             let mut options = crate::pipeline::Options::default();
             options.inline.recursive = true;
@@ -252,18 +252,23 @@ fn test_a_recursion_with_copies_runs_the_simplify_list_twice() {
         let counted = std::rc::Rc::clone(&seen);
         llrm_mir::program::Program::lend(
             &mut module,
-            std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+            std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
             |program: &mut llrm_mir::program::Program| {
                 let mut analyses = Default::default();
                 let mut walk = crate::walk::Walk {
+                    speed_rate: true,
                     inline: crate::inline::Threshold { recursive: true, ..Default::default() },
                     simplify: Box::new(|_, _, _, _| {}),
                 };
                 walk.run(program, &mut analyses)?;
                 let mut modules = super::managers(program, &mut analyses);
                 let mut late = crate::walk::SelfInline {
+                    speed_rate: true,
                     simplify: Box::new(move |_, _, _, _| counted.set(counted.get() + 1)),
                     for_size: false,
+                    flag: true,
+                    o3: false,
+                    inlining: true,
                 };
                 late.apply(program, &mut modules)
             },
@@ -310,10 +315,11 @@ fn test_a_caller_of_a_peeled_recursion_is_a_body_with_self_copies() {
         let mut module = parsed(FIB_TOP);
         llrm_mir::program::Program::lend(
             &mut module,
-            std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+            std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
             |program: &mut llrm_mir::program::Program| {
                 let mut analyses = Default::default();
                 let mut walk = crate::walk::Walk {
+                    speed_rate: true,
                     inline: crate::inline::Threshold { recursive: true, ..Default::default() },
                     simplify: Box::new(|_, _, _, _| {}),
                 };
@@ -418,7 +424,7 @@ exit:
     );
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
             crate::pipeline::applied(program, &crate::pipeline::Applied::default())
         },
@@ -459,9 +465,10 @@ b0:
     );
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
             let mut walk = crate::walk::Walk {
+                speed_rate: true,
                 inline: crate::inline::Threshold { recursive: true, ..Default::default() },
                 simplify: Box::new(|_, _, _, _| {}),
             };
@@ -510,7 +517,7 @@ b0:
     );
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
             crate::pipeline::applied(program, &crate::pipeline::Applied::default())
         },
@@ -555,7 +562,7 @@ b0:
     let applied = crate::pipeline::Applied { options: crate::pipeline::Options::size(), ..Default::default() };
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
     )
     .and_then(|done| done)
@@ -609,7 +616,7 @@ b0:
     );
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
             crate::pipeline::applied(program, &crate::pipeline::Applied::default())
         },
@@ -679,9 +686,10 @@ fn test_only_a_tree_recursion_waits_for_its_tail_call_elimination() {
         let mut module = parsed(text);
         llrm_mir::program::Program::lend(
             &mut module,
-            std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+            std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
             |program: &mut llrm_mir::program::Program| {
                 let mut walk = crate::walk::Walk {
+                    speed_rate: true,
                     inline: crate::inline::Threshold { recursive, ..Default::default() },
                     simplify: Box::new(|_, _, _, _| {}),
                 };
@@ -779,9 +787,10 @@ b0:
         );
         llrm_mir::program::Program::lend(
             &mut module,
-            std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+            std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
             |program: &mut llrm_mir::program::Program| {
                 let mut walk = crate::walk::Walk {
+                    speed_rate: true,
                     inline: crate::inline::Threshold { recursive, ..Default::default() },
                     simplify: Box::new(|_, _, _, _| {}),
                 };
@@ -808,7 +817,7 @@ fn test_ipa_cp_clones_a_tree_recursion_before_it_is_copied_into_itself() {
     let applied = crate::pipeline::Applied { options, ..Default::default() };
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
     )
     .and_then(|done| done)
@@ -832,9 +841,10 @@ fn walked_top_with(
     let mut module = parsed(text);
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
             let mut walk = crate::walk::Walk {
+                speed_rate: true,
                 inline: crate::inline::Threshold { recursive, ..Default::default() },
                 simplify: Box::new(|_, _, _, _| {}),
             };
@@ -1031,7 +1041,7 @@ b0:
     let applied = crate::pipeline::Applied { options: crate::pipeline::Options::size(), ..Default::default() };
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
     )
     .and_then(|done| done)
@@ -1068,7 +1078,7 @@ fn sized(
     let applied = crate::pipeline::Applied { options: crate::pipeline::Options::size(), ..Default::default() };
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
     )
     .and_then(|done| done)
@@ -1214,10 +1224,11 @@ b0:
     let seen = std::rc::Rc::clone(&stale);
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         move |program: &mut llrm_mir::program::Program| {
             let seen = std::rc::Rc::clone(&seen);
             let mut walk = crate::walk::Walk {
+                speed_rate: true,
                 inline: crate::inline::Threshold { limit: 0, ..Default::default() },
                 simplify: Box::new(move |module, analyses, _, _| {
                     let held = analyses.get::<llrm_mir::passes::Declarations>(module);
@@ -1244,7 +1255,7 @@ fn test_module_ipo_states_the_argument_ranges_the_pins_ipsccp_does() {
     let mut module = parsed(crate::ipsccp::tests::AM_BD_6);
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
             let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none() };
             ipo.run(program, &mut Default::default())
@@ -1358,13 +1369,328 @@ fn at_o2(
     let applied = crate::pipeline::Applied { options: crate::pipeline::Options::default(), ..Default::default() };
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
     )
     .and_then(|done| done)
     .expect("the pipeline runs");
     let printed = llrm_mir::print::module(&module);
     printed.split("define").find(|one| one.contains(name)).expect("the function").to_owned()
+}
+
+/// `@top` after the -O2 pipeline over `text`, on `target`.
+fn at_o2_on(
+    target: llrm_x86_m16::Dos,
+    text: &str,
+    name: &str,
+) -> String {
+    let mut module = parsed(text);
+    let applied = crate::pipeline::Applied { options: crate::pipeline::Options::default(), ..Default::default() };
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(target),
+        |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let printed = llrm_mir::print::module(&module);
+    printed.split("define").find(|one| one.contains(name)).expect("the function").to_owned()
+}
+
+const GROWS: &str = "@g = global i32 0
+
+define i32 @callee(i32 %x) {
+b0:
+  %a = load i32, ptr @g
+  %b = add i32 %a, %x
+  %c = add i32 %b, %a
+  %d = mul i32 %c, %x
+  %e = add i32 %d, %b
+  %f = mul i32 %e, %a
+  %g = add i32 %f, %c
+  %h = mul i32 %g, %d
+  %i = add i32 %h, %a
+  %j = mul i32 %i, %x
+  %k = add i32 %j, %c
+  %l = mul i32 %k, %b
+  %m = add i32 %l, %e
+  store i32 %m, ptr @g
+  ret i32 %m
+}
+";
+
+/// A speed caller at m16 follows the pin's threshold, as main does: a callee
+/// that grows the code is copied. A guard that held it to the callee's size
+/// kept qlight's four `ls_scale_byte` calls at -O2 (472 clocks against main's
+/// 463, and a size bound that priced the copy at 1.4 to 1.8 times its bytes).
+#[test]
+fn test_an_o2_call_of_a_callee_that_grows_the_code_is_inlined_at_m16_as_the_pin_does() {
+    let mut big = String::from("@g = global i32 0\n\ndefine i32 @callee(i32 %x) {\nb0:\n");
+    let steps = 10;
+    for step in 0..steps {
+        let before = if step == 0 { "%x".to_owned() } else { format!("%w{}", step - 1) };
+        big.push_str(&format!("  %v{step} = load volatile i32, ptr @g\n  %w{step} = add i32 {before}, %v{step}\n"));
+    }
+    big.push_str(&format!("  ret i32 %w{}\n}}\n", steps - 1));
+    let text = format!("{big}\ndefine i32 @top(i32 %y) {{\nb0:\n  %r = call i32 @callee(i32 %y)\n  ret i32 %r\n}}\n");
+    let pin = at_o2_on(llrm_x86_m16::Dos::pin_tuned(), &text, "@top(");
+    let m16 = at_o2_on(llrm_x86_m16::Dos::default(), &text, "@top(");
+    assert!(!pin.contains("call i32 @callee"), "premise: the pin inlines it:\n{pin}");
+    assert!(!m16.contains("call i32 @callee"), "m16 kept the call:\n{m16}");
+}
+
+/// A callee that grows the code a little is copied into a speed caller at m16
+/// (the 13-operation `GROWS`).
+#[test]
+fn test_an_o2_call_of_a_callee_whose_clocks_pay_for_its_growth_is_inlined_at_m16() {
+    let text = format!("{GROWS}\ndefine i32 @top(i32 %y) {{\nb0:\n  %r = call i32 @callee(i32 %y)\n  ret i32 %r\n}}\n");
+    let m16 = at_o2_on(llrm_x86_m16::Dos::default(), &text, "@top(");
+    assert!(!m16.contains("call i32 @callee"), "the call stayed:\n{m16}");
+}
+
+/// The same callee with a constant argument folds in the caller once inlined
+/// (algebra, control, memory: 15 clocks inlined, 143 to 283 as calls), so
+/// the blocked site's trial keeps the inline.
+#[test]
+fn test_an_o2_call_that_folds_once_inlined_is_inlined_at_m16() {
+    let text = "define i32 @callee(i32 %n) {
+b0:
+  br label %h
+h:
+  %i = phi i32 [ 0, %b0 ], [ %i1, %h ]
+  %a = phi i32 [ 1, %b0 ], [ %a1, %h ]
+  %m = mul i32 %a, 31
+  %x = xor i32 %m, %i
+  %a1 = add i32 %x, 7
+  %i1 = add i32 %i, 1
+  %c = icmp ult i32 %i1, %n
+  br i1 %c, label %h, label %e
+e:
+  ret i32 %a1
+}
+
+define i32 @top() {
+b0:
+  %r = call i32 @callee(i32 6)
+  ret i32 %r
+}
+";
+    let m16 = at_o2_on(llrm_x86_m16::Dos::default(), text, "@top(");
+    assert!(!m16.contains("call i32 @callee"), "the folding call stayed:\n{m16}");
+}
+
+/// qmove c at m16 -O2: `pl_ground_accel` writes `.x` and `.y` of a vector whose
+/// `.z` the caller set and reads back through `(long)`. Inlined (the pin does,
+/// cost 5 of 225) the read folds to a constant and the call goes: the code
+/// grows 30 -> 42 but 43 clocks go (`fld`+`fistp`), worth it at 1 clock = 2
+/// bytes. Held to bytes alone it stayed a call: +41 clk against 854.
+#[test]
+fn test_an_o2_call_that_grows_the_code_but_saves_clocks_is_inlined_at_m16() {
+    let text = "@g = global float 3.0
+
+define void @callee(ptr %v, ptr %w, float %s, float %dt) {
+b0:
+  %x = load float, ptr %v
+  %wx = load float, ptr %w
+  %vy.p = getelementptr i8, ptr %v, i32 4
+  %y = load float, ptr %vy.p
+  %wy.p = getelementptr i8, ptr %w, i32 4
+  %wy = load float, ptr %wy.p
+  %a = fmul float %x, %wx
+  %b = fmul float %y, %wy
+  %c = fadd float %a, %b
+  %add = fsub float %s, %c
+  %le = fcmp ole float %add, 0.0
+  br i1 %le, label %out, label %go
+go:
+  %acc = fmul float %s, %dt
+  %big = fcmp ogt float %acc, %add
+  %use = select i1 %big, float %add, float %acc
+  %dx = fmul float %use, %wx
+  %nx = fadd float %x, %dx
+  store float %nx, ptr %v
+  %dy = fmul float %use, %wy
+  %ny = fadd float %y, %dy
+  store float %ny, ptr %vy.p
+  %e1 = fmul float %nx, %ny
+  %e2 = fadd float %e1, %dx
+  store float %e2, ptr %w
+  br label %out
+out:
+  ret void
+}
+
+define i32 @top(float %g0, float %g1, float %s) {
+b0:
+  %vel = alloca [12 x i8]
+  %wish = alloca [12 x i8]
+  store float %g0, ptr %vel
+  store float %g1, ptr %wish
+  %wy.s = getelementptr i8, ptr %wish, i32 4
+  store float %g1, ptr %wy.s
+  %vy.s = getelementptr i8, ptr %vel, i32 4
+  store float %g0, ptr %vy.s
+  %vz = getelementptr i8, ptr %vel, i32 8
+  store float 5.0, ptr %vz
+  call void @callee(ptr %vel, ptr %wish, float %s, float %g1)
+  %z = load float, ptr %vz
+  %i = fptosi float %z to i32
+  %vx = load float, ptr %vel
+  %j = fptosi float %vx to i32
+  %k = add i32 %i, %j
+  %vy.q = getelementptr i8, ptr %vel, i32 4
+  %vy = load float, ptr %vy.q
+  %l = fptosi float %vy to i32
+  %m = add i32 %k, %l
+  ret i32 %m
+}
+";
+    let m16 = at_o2_on(llrm_x86_m16::Dos::default(), text, "@top(");
+    assert!(!m16.contains("call void @callee"), "the call stayed:\n{m16}");
+}
+
+/// qlight c at m16 -O2: `ls_scale_byte` (a clamped multiply and a divide by
+/// 255) four times. Kept as calls it ran 472 clocks, above main's 463 (main
+/// inlines it); inlined it ran 388 clocks.
+#[test]
+fn test_an_o2_call_of_a_clamped_divide_by_a_constant_is_inlined_at_m16_where_main_inlines_it() {
+    let text = "@raw = global i16 200
+@low = global i16 -20
+@s1 = global i16 120
+@s2 = global i16 60
+@s3 = global i16 30
+
+define i16 @scale(i16 %raw, i16 %s) {
+b0:
+  %a = sext i16 %raw to i32
+  %b = sext i16 %s to i32
+  %m = mul i32 %a, %b
+  %d = sdiv i32 %m, 255
+  %hi = icmp sgt i32 %d, 255
+  %c1 = select i1 %hi, i32 255, i32 %d
+  %lo = icmp slt i32 %c1, 0
+  %c2 = select i1 %lo, i32 0, i32 %c1
+  %r = trunc i32 %c2 to i16
+  ret i16 %r
+}
+
+define i32 @top() {
+b0:
+  %x = load volatile i16, ptr @raw
+  %y = load volatile i16, ptr @s1
+  %p = call i16 @scale(i16 %x, i16 %y)
+  %x2 = load volatile i16, ptr @raw
+  %z = load volatile i16, ptr @s2
+  %q = call i16 @scale(i16 %x2, i16 %z)
+  %x3 = load volatile i16, ptr @raw
+  %w = load volatile i16, ptr @s3
+  %r = call i16 @scale(i16 %x3, i16 %w)
+  %x4 = load volatile i16, ptr @low
+  %y4 = load volatile i16, ptr @s1
+  %t = call i16 @scale(i16 %x4, i16 %y4)
+  %a = sext i16 %p to i32
+  %b = sext i16 %q to i32
+  %c = sext i16 %r to i32
+  %d = sext i16 %t to i32
+  %am = mul i32 %a, 1000000
+  %bm = mul i32 %b, 1000
+  %ab = add i32 %am, %bm
+  %cd = add i32 %c, %d
+  %s = add i32 %ab, %cd
+  ret i32 %s
+}
+";
+    let m16 = at_o2_on(llrm_x86_m16::Dos::default(), text, "@top(");
+    assert_eq!(m16.matches("call i16 @scale").count(), 0, "the calls stayed:\n{m16}");
+}
+
+/// qbsp/loop/branch at m16 -O2: a call in a loop that saves a few clocks and
+/// grows the code a few bytes was refused (+126 B for -298 clk against 854),
+/// for its saving was counted once where the site runs per trip. The same
+/// callee as the qlight test, called from a loop, is inlined.
+#[test]
+fn test_an_o2_call_in_a_loop_saves_its_clocks_per_trip_at_m16() {
+    let text = "@raw = global i16 200
+@s1 = global i16 120
+
+define i16 @scale(i16 %raw, i16 %s) {
+b0:
+  %a = sext i16 %raw to i32
+  %b = sext i16 %s to i32
+  %m = mul i32 %a, %b
+  %d = sdiv i32 %m, 255
+  %hi = icmp sgt i32 %d, 255
+  %c1 = select i1 %hi, i32 255, i32 %d
+  %lo = icmp slt i32 %c1, 0
+  %c2 = select i1 %lo, i32 0, i32 %c1
+  %r = trunc i32 %c2 to i16
+  ret i16 %r
+}
+
+define i32 @top(i32 %n) {
+b0:
+  br label %h
+h:
+  %i = phi i32 [ 0, %b0 ], [ %i1, %h ]
+  %acc = phi i32 [ 0, %b0 ], [ %acc1, %h ]
+  %x = load volatile i16, ptr @raw
+  %y = load volatile i16, ptr @s1
+  %p = call i16 @scale(i16 %x, i16 %y)
+  %e = sext i16 %p to i32
+  %acc1 = add i32 %acc, %e
+  %i1 = add i32 %i, 1
+  %c = icmp ult i32 %i1, %n
+  br i1 %c, label %h, label %out
+out:
+  ret i32 %acc1
+}
+";
+    let m16 = at_o2_on(llrm_x86_m16::Dos::default(), text, "@top(");
+    assert!(!m16.contains("call i16 @scale"), "the call stayed:\n{m16}");
+}
+
+/// A call that folds once inlined stays a call with inlining off
+/// (`-fno-inline-functions`): the trial of a blocked site at a speed caller
+/// ignored the switch, and 6 llrm-nib tests lost their out-of-line callees
+/// (`_kdiv proc near` not in the listing) and every bench kernel folded into
+/// `main`.
+#[test]
+fn test_an_o2_call_that_folds_once_inlined_stays_a_call_with_inlining_off() {
+    let text = "define i32 @callee(i32 %n) {
+b0:
+  br label %h
+h:
+  %i = phi i32 [ 0, %b0 ], [ %i1, %h ]
+  %a = phi i32 [ 1, %b0 ], [ %a1, %h ]
+  %m = mul i32 %a, 31
+  %x = xor i32 %m, %i
+  %a1 = add i32 %x, 7
+  %i1 = add i32 %i, 1
+  %c = icmp ult i32 %i1, %n
+  br i1 %c, label %h, label %e
+e:
+  ret i32 %a1
+}
+
+define i32 @top() {
+b0:
+  %r = call i32 @callee(i32 6)
+  ret i32 %r
+}
+";
+    let mut module = parsed(text);
+    let options = crate::pipeline::Options { inline: crate::inline::Threshold::none(), ..Default::default() };
+    let applied = crate::pipeline::Applied { options, ..Default::default() };
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let printed = llrm_mir::print::module(&module);
+    let top = printed.split("define").find(|one| one.contains("@top(")).expect("the function");
+    assert!(top.contains("call i32 @callee"), "inlining off, the call was inlined:\n{top}");
 }
 
 /// `@top` after the -Os pipeline over `text`.
@@ -1376,7 +1702,7 @@ fn at_os(
     let applied = crate::pipeline::Applied { options: crate::pipeline::Options::size(), ..Default::default() };
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
     )
     .and_then(|done| done)
@@ -1525,7 +1851,7 @@ b0:
     );
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
             let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none() };
             ipo.run(program, &mut Default::default())
@@ -1566,7 +1892,7 @@ b0:
     );
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
             let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none() };
             ipo.run(program, &mut Default::default())
@@ -1613,7 +1939,7 @@ b0:
     );
     llrm_mir::program::Program::lend(
         &mut module,
-        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
             let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none() };
             ipo.run(program, &mut Default::default())
@@ -1624,4 +1950,626 @@ b0:
     let text = crate::testing::printed(&module);
     let body = text.split("define").nth(1).unwrap_or_default();
     assert!(!body.contains("ptr @n") && body.contains("alloca i16"), "{text}");
+}
+
+/// -Oz walked its calls as -Os: the threshold said `optsize` and never
+/// `minsize`, so a call was held to `OptSizeThreshold` (50), not
+/// `OptMinSizeThreshold` (5). `next` of `div_constants_long` was inlined 40
+/// times and the object was 12% larger than the pin's.
+#[test]
+fn test_minsize_is_walked_as_a_minsize_caller() {
+    use crate::inlinecost::CallerSize;
+    use crate::pipeline::Options;
+    assert_eq!(Options::min_size().inline.caller_size(), CallerSize::MinSize);
+    assert_eq!(Options::size().inline.caller_size(), CallerSize::OptSize);
+    assert_eq!(Options::default().inline.caller_size(), CallerSize::Speed);
+}
+
+/// A tree recursion (two calls of itself, a `report` at the leaf) with `extra`
+/// more additions in its body.
+fn tree_recursion(extra: usize) -> String {
+    let mut body = String::new();
+    let mut last = "%s".to_owned();
+    for at in 0..extra {
+        body += &format!("  %q{at} = shl i32 %n, {}\n  %p{at} = xor i32 {last}, %q{at}\n", at + 1);
+        last = format!("%p{at}");
+    }
+    format!(
+        "define internal i32 @tree(i32 %n) {{
+b0:
+  %small = icmp slt i32 %n, 2
+  br i1 %small, label %base, label %rec
+
+base:
+  ret i32 %n
+
+rec:
+  %a = sub i32 %n, 1
+  %b = sub i32 %n, 2
+  %x = call i32 @tree(i32 %a)
+  %y = call i32 @tree(i32 %b)
+  %s = add i32 %x, %y
+{body}  ret i32 {last}
+}}
+
+define i32 @main() {{
+b0:
+  %r = call i32 @tree(i32 30)
+  ret i32 %r
+}}
+"
+    )
+}
+
+/// Calls of `tree` after the default pipeline on the real-mode target, tuned
+/// (`pin_tuned`: the pin's) or not.
+fn calls_of_tree(
+    extra: usize,
+    pin: bool,
+) -> usize {
+    calls_of_tree_with(extra, pin, crate::inline::Threshold::default())
+}
+
+fn calls_of_tree_with(
+    extra: usize,
+    pin: bool,
+    inline: crate::inline::Threshold,
+) -> usize {
+    calls_of("tree", &tree_recursion(extra), pin, inline)
+}
+
+/// Calls of `@name` in `text` after the default pipeline on the real-mode
+/// target.
+fn calls_of(
+    name: &str,
+    text: &str,
+    pin: bool,
+    inline: crate::inline::Threshold,
+) -> usize {
+    calls_of_copying(name, text, pin, inline, None)
+}
+
+/// The recursion REC-1 took at m16 before the target's entry was none: depth
+/// 2, bodies of at most 14 `gcc_insns`.
+const REC_1: Option<(u32, i64)> = Some((2, 14));
+
+/// `calls_of` on a target that copies `recursion`.
+fn calls_of_copying(
+    name: &str,
+    text: &str,
+    pin: bool,
+    inline: crate::inline::Threshold,
+    recursion: Option<(u32, i64)>,
+) -> usize {
+    let mut module = parsed(text);
+    let target = if pin { llrm_x86_m16::Dos::pin_tuned() } else { llrm_x86_m16::Dos::default() };
+    let target = llrm_x86_m16::Dos { recursive_inlining: recursion, ..target };
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(target),
+        |program: &mut llrm_mir::program::Program| {
+            let mut applied = crate::pipeline::Applied::default();
+            applied.options.inline = inline;
+            crate::pipeline::applied(program, &applied)
+        },
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let text = llrm_mir::print::module(&module);
+    text.lines().filter(|line| line.contains("call") && line.contains(&format!("@{name}("))).count()
+}
+
+/// bench fib, rectwo and frames at m16 -O2 were 152, 259 and 338 bytes with a
+/// small recursion copied into itself (REC-1, depth 2), past Borland C's 83,
+/// 104 and 251: the real-mode target copies none by default,
+/// `-finline-recursive` still does.
+#[test]
+fn test_the_real_mode_target_copies_no_tree_recursion_by_default() {
+    assert!(calls_of_tree(0, false) <= 3, "copies of a tree recursion in itself: {}", calls_of_tree(0, false));
+    let flagged = crate::inline::Threshold { recursive: true, ..crate::inline::Threshold::default() };
+    assert!(calls_of_tree_with(0, false, flagged) > 3, "control: the flag copies it");
+}
+
+/// A tree recursion (`@walk`) with `work` between its entry and its two
+/// calls: nothing (`none`), a loop summing `%n` terms (`sum`), or a loop that
+/// halves a value until it is below 2 (`halve`).
+fn looped_recursion(work: &str) -> String {
+    let (head, body) = match work {
+        "sum" => (
+            "  br label %loop
+
+loop:
+  %i = phi i32 [ 0, %rec ], [ %i1, %loop ]
+  %t = phi i32 [ 0, %rec ], [ %t1, %loop ]
+  %t1 = add i32 %t, %i
+  %i1 = add i32 %i, 1
+  %more = icmp slt i32 %i1, %n
+  br i1 %more, label %loop, label %calls
+
+calls:
+",
+            "%t",
+        ),
+        "halve" => (
+            "  br label %loop
+
+loop:
+  %v = phi i32 [ %n, %rec ], [ %v1, %loop ]
+  %v1 = lshr i32 %v, 1
+  %more = icmp ugt i32 %v1, 1
+  br i1 %more, label %loop, label %calls
+
+calls:
+",
+            "%v1",
+        ),
+        _ => ("", "%n"),
+    };
+    format!(
+        "define internal i32 @walk(i32 %n) {{
+b0:
+  %small = icmp slt i32 %n, 2
+  br i1 %small, label %base, label %rec
+
+base:
+  ret i32 %n
+
+rec:
+{head}  %a = sub i32 %n, 1
+  %b = sub i32 %n, 2
+  %x = call i32 @walk(i32 %a)
+  %y = call i32 @walk(i32 %b)
+  %s = add i32 %x, %y
+  %r = add i32 %s, {body}
+  ret i32 %r
+}}
+
+define i32 @main() {{
+b0:
+  %r = call i32 @walk(i32 30)
+  ret i32 %r
+}}
+"
+    )
+}
+
+/// bench recchop at m16 -O2 ran 11310 clocks against 10242 without the copy
+/// (main 10960): its loop between the entry and the calls is run again in
+/// every copy, which saved only the calls. The budget is the callee's work per
+/// call (`gcc_work`, a loop at its trips), so a loop-bearing recursion is
+/// not copied, whatever the loop, and the same recursion without it is.
+#[test]
+fn test_the_real_mode_target_does_not_copy_a_recursion_whose_work_is_a_loop() {
+    let on = crate::inline::Threshold::new(225);
+    assert!(
+        calls_of_copying("walk", &looped_recursion("none"), false, on, REC_1) > 3,
+        "control: copied without the loop"
+    );
+    for work in ["sum", "halve"] {
+        let calls = calls_of_copying("walk", &looped_recursion(work), false, on, REC_1);
+        assert!(calls <= 3, "{work}: a recursion with a loop was copied into itself: {calls} calls");
+    }
+}
+
+/// bench recchop at m16 -O2 ran 11310 clocks against 10242: the real-mode
+/// target deferred its tail-call elimination for copies the callee cap refuses,
+/// so the loop it makes was built late and its sum spilled. Only a body within
+/// the cap waits.
+#[test]
+fn test_a_recursion_the_cap_refuses_keeps_its_tail_call_elimination_slot() {
+    use llrm_mir::program::ProgramPass;
+    let marked = |work: &str| {
+        let mut module = parsed(&looped_recursion(work));
+        llrm_mir::program::Program::lend(
+            &mut module,
+            std::rc::Rc::new(llrm_x86_m16::Dos { recursive_inlining: REC_1, ..llrm_x86_m16::Dos::default() }),
+            |program: &mut llrm_mir::program::Program| {
+                let mut walk = crate::walk::Walk {
+                    speed_rate: true,
+                    inline: crate::inline::Threshold::new(225),
+                    simplify: Box::new(|_, _, _, _| {}),
+                };
+                walk.run(program, &mut Default::default())
+            },
+        )
+        .and_then(|done| done)
+        .expect("the walk runs");
+        llrm_mir::print::module(&module).contains(crate::tailcallelim::DEFERRED)
+    };
+    assert!(marked("none"), "control: a body within the cap waits");
+    assert!(!marked("halve"), "a loop-bearing body waits for copies it will not get");
+}
+
+/// `walk` over `n` with `loop_body` per trip of a loop before its two calls
+/// (none: fib's), run through the pipeline at the unpinned DOS target, which
+/// prices the copies; the calls of it left.
+fn calls_left_of_a_priced_recursion(loop_body: Option<&str>) -> usize {
+    let Some(loop_body) = loop_body else {
+        return calls_left_in(&parsed(FIB_WALK));
+    };
+    calls_left_in(&parsed(&format!(
+        "define i32 @walk(i32 %n, ptr %p) {{
+b0:
+  %small = icmp slt i32 %n, 2
+  br i1 %small, label %base, label %loop
+
+base:
+  ret i32 %n
+
+loop:
+  %i = phi i32 [ 0, %b0 ], [ %i1, %loop ]
+  %acc = phi i32 [ 0, %b0 ], [ %acc1, %loop ]
+{loop_body}
+  %i1 = add nsw i32 %i, 1
+  %more = icmp slt i32 %i1, %n
+  br i1 %more, label %loop, label %rec
+
+rec:
+  %a = sub i32 %n, 1
+  %b = sub i32 %n, 2
+  %x = call i32 @walk(i32 %a, ptr %p)
+  %y = call i32 @walk(i32 %b, ptr %p)
+  %s = add i32 %x, %y
+  %t = add i32 %s, %acc1
+  ret i32 %t
+}}
+
+define i32 @main(ptr %p) {{
+b0:
+  %r = call i32 @walk(i32 30, ptr %p)
+  ret i32 %r
+}}
+"
+    )))
+}
+
+const FIB_WALK: &str = "define i32 @walk(i32 %n, ptr %p) {
+b0:
+  %small = icmp slt i32 %n, 2
+  br i1 %small, label %base, label %rec
+
+base:
+  ret i32 %n
+
+rec:
+  %a = sub i32 %n, 1
+  %b = sub i32 %n, 2
+  %x = call i32 @walk(i32 %a, ptr %p)
+  %y = call i32 @walk(i32 %b, ptr %p)
+  %s = add i32 %x, %y
+  ret i32 %s
+}
+
+define i32 @main(ptr %p) {
+b0:
+  %r = call i32 @walk(i32 30, ptr %p)
+  ret i32 %r
+}
+";
+
+fn calls_left_in(source: &llrm_mir::module::Module) -> usize {
+    let mut module = source.clone();
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos { recursive_inlining: REC_1, ..llrm_x86_m16::Dos::default() }),
+        |program: &mut llrm_mir::program::Program| {
+            let mut options = crate::pipeline::Options::default();
+            options.inline.recursive = true;
+            crate::pipeline::applied(program, &crate::pipeline::Applied { options, ..Default::default() })
+        },
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    llrm_mir::print::module(&module).matches("call i32 @walk").count()
+}
+
+/// A flat 16-bit recursion's copies were sized by the literals 14 and 2: a
+/// body with a loop in it was copied like fib (quicksort c: 522 B at 306644
+/// clocks against 389 B at 283450 uncopied). A level is made only when the
+/// calls it removes are worth four times its bytes, so the loop-bodied
+/// recursion keeps its two calls and the call-bound one is copied.
+#[test]
+fn test_a_recursion_with_a_loop_in_it_is_not_copied_for_its_calls() {
+    let flat = calls_left_of_a_priced_recursion(None);
+    assert!(flat > 2, "the flat recursion was not copied: {flat} calls");
+    let heavy = calls_left_of_a_priced_recursion(Some(
+        "  %q = getelementptr i32, ptr %p, i32 %i
+  %v = load i32, ptr %q
+  %w = mul i32 %v, %i
+  %z = xor i32 %w, %acc
+  store i32 %z, ptr %q
+  %acc1 = add i32 %z, %v",
+    ));
+    assert!(heavy == 2, "the loop-bodied recursion was copied: {heavy} calls");
+}
+
+const CALL_BOUND: &str = "define i32 @fib(i32 %n) {
+b0:
+  %small = icmp slt i32 %n, 2
+  br i1 %small, label %base, label %rec
+
+base:
+  ret i32 %n
+
+rec:
+  %a = sub i32 %n, 1
+  %b = sub i32 %n, 2
+  %x = call i32 @fib(i32 %a)
+  %y = call i32 @fib(i32 %b)
+  %s = add i32 %x, %y
+  ret i32 %s
+}
+";
+
+const LOOP_BODIED: &str = "define i32 @walk(i32 %n, ptr %p) {
+b0:
+  %small = icmp slt i32 %n, 2
+  br i1 %small, label %base, label %scan
+
+base:
+  ret i32 %n
+
+scan:
+  %i = phi i32 [ 0, %b0 ], [ %next, %scan ]
+  %acc = phi i32 [ 0, %b0 ], [ %sum, %scan ]
+  %slot = getelementptr i32, ptr %p, i32 %i
+  %v = load i32, ptr %slot
+  %sum = add i32 %acc, %v
+  %next = add i32 %i, 1
+  %more = icmp slt i32 %next, %n
+  br i1 %more, label %scan, label %rec
+
+rec:
+  %a = sub i32 %n, 1
+  %b = sub i32 %n, 2
+  %x = call i32 @walk(i32 %a, ptr %p)
+  %y = call i32 @walk(i32 %b, ptr %p)
+  %s = add i32 %x, %y
+  %t = add i32 %s, %sum
+  ret i32 %t
+}
+";
+
+/// The depth of copies `priced_copy_depth` gives `name` in `text`, at m16's
+/// sheet and the ceilings (3, 150).
+fn priced_depth(
+    text: &str,
+    name: &str,
+) -> usize {
+    let mut module = parsed(text);
+    let mut depth = 0;
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| {
+            let module = &program.modules[0];
+            let id = module
+                .functions()
+                .find(|(_, global, _)| global.name.as_deref() == Some(name))
+                .map(|(id, _, _)| id)
+                .unwrap();
+            let frequencies = crate::walk::self_calls(module, &program.layout, id, false).expect("a tree");
+            let tti = program.target.tti().expect("a cost model");
+            depth = crate::walk::priced_copy_depth(
+                module,
+                &program.layout,
+                &*program.target,
+                &*tti,
+                id,
+                &frequencies,
+                (3, 150),
+            );
+            Ok::<(), String>(())
+        },
+    )
+    .and_then(|done| done)
+    .expect("the program lends");
+    depth
+}
+
+/// The first level of copies is made where its clocks are worth `COPY_MARGIN`
+/// times its bytes: a call-bound tree (fib) takes copies, a body whose time is
+/// a loop (the call overhead is a small share of it) takes none.
+#[test]
+fn test_the_priced_depth_copies_a_call_bound_tree_and_not_a_loop_bodied_one() {
+    let (bound, looped) = (priced_depth(CALL_BOUND, "fib"), priced_depth(LOOP_BODIED, "walk"));
+    assert!(bound >= 1, "a call-bound tree got {bound} levels");
+    assert_eq!(looped, 0, "a loop-bodied tree got {looped} levels");
+}
+
+/// parity/branch and parity/loop c at m16 -O2 kept a static scratch variable
+/// (`demo_value`, 2 and 4 bytes of .bss against 0 in main) because the call
+/// that took its address stayed a call; inlined, the variable is promoted and
+/// the global is gone.
+#[test]
+fn test_an_o2_inline_at_m16_leaves_no_global_for_a_scratch_variable_whose_address_was_passed() {
+    let text = "@demo = internal global i16 0
+@low = internal global i16 -13
+@high = internal global i16 21
+
+define i32 @kernel(ptr %p) {
+b0:
+  %v = load i16, ptr %p
+  %neg = icmp slt i16 %v, 0
+  %w = sext i16 %v to i32
+  br i1 %neg, label %n, label %q
+n:
+  %a = mul i32 %w, 7
+  %r1 = add i32 %a, 3
+  ret i32 %r1
+q:
+  %b = mul i32 %w, 5
+  %r2 = sub i32 %b, 9
+  ret i32 %r2
+}
+
+define i32 @top() {
+b0:
+  %x = load volatile i16, ptr @low
+  store i16 %x, ptr @demo
+  %first = call i32 @kernel(ptr @demo)
+  %y = load volatile i16, ptr @high
+  store i16 %y, ptr @demo
+  %second = call i32 @kernel(ptr @demo)
+  %m = mul i32 %first, 1000
+  %s = add i32 %m, %second
+  ret i32 %s
+}
+";
+    let m16 = at_o2_on(llrm_x86_m16::Dos::default(), text, "@top(");
+    assert!(!m16.contains("call i32 @kernel"), "the calls stayed:\n{m16}");
+    let mut module = parsed(text);
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| {
+            let mut options = crate::pipeline::Options::default();
+            options.inline.recursive = false;
+            crate::pipeline::applied(program, &crate::pipeline::Applied { options, ..Default::default() })
+        },
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    assert!(!llrm_mir::print::module(&module).contains("@demo"), "demo is still a global");
+}
+
+/// Calls of `@fib` after the default pipeline on x86-m32 with `options`.
+fn m32_fib_calls(options: crate::pipeline::Options) -> usize {
+    m32_tree_calls(0, options)
+}
+
+fn m32_tree_calls(
+    extra: usize,
+    options: crate::pipeline::Options,
+) -> usize {
+    let mut module =
+        parsed(&tree_recursion(extra).replace("@tree", "@fib").replace("define internal i32 @fib", "define i32 @fib"));
+    llrm_mir::program::Program::lend(
+        &mut module,
+        crate::indvars::tests::m32(),
+        |program: &mut llrm_mir::program::Program| {
+            crate::pipeline::applied(program, &crate::pipeline::Applied { options, ..Default::default() })
+        },
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    llrm_mir::print::module(&module).matches("call i32 @fib").count()
+}
+
+/// bench fib at m32 -O2 was 334151 clocks against gcc's 210636: the pin's
+/// inliner copies no recursive callee, gcc's `recursive_inlining` copies fib
+/// into itself to depth 8 (REC-2).
+#[cfg(feature = "gcc-gpl")]
+#[test]
+fn test_m32_copies_a_tree_recursion_into_itself_at_speed() {
+    let calls = m32_fib_calls(crate::pipeline::Options::default());
+    assert!(calls > 8, "fib was not copied into itself, {calls} calls of it");
+}
+
+/// gcc rejects the recursive edge of quicksort and bintree at -O2
+/// ("max-inline-insns-auto limit reached", growth 25-28 and 15-22 against 15)
+/// and takes it at -O3 (30): a body that grows past 15 is copied at -O3 only.
+#[cfg(feature = "gcc-gpl")]
+#[test]
+fn test_m32_copies_a_recursion_whose_edge_grows_past_15_only_at_o3() {
+    let o2 = m32_tree_calls(6, crate::pipeline::Options::default());
+    let o3 = m32_tree_calls(6, crate::pipeline::Options::speed());
+    assert!(o2 <= 3, "copied at -O2, {o2} calls");
+    assert!(o3 > 8, "not copied at -O3, {o3} calls");
+}
+
+/// gcc's dump sizes fib at 12 (edge growth 6; 13 and 7 here, before the
+/// pipeline merges its returns): the bar of the recursive edge
+/// is read in those units, not in `gcc_insns` (fib 8, quicksort 18 against
+/// gcc's 34, which let quicksort and bintree grow 490 -> 1218 and 449 -> 1464
+/// bytes at m32 -O2).
+#[cfg(feature = "gcc-gpl")]
+#[test]
+fn test_gcc_size_counts_a_branch_a_call_and_its_arguments_as_gcc_does() {
+    let module = parsed(&tree_recursion(0).replace("@tree", "@fib"));
+    let (_, _, fib) =
+        module.functions().find(|(_, _, f)| !f.is_declaration() && f.parameters().len() == 1).expect("fib");
+    assert_eq!((llrm_gpl_gcc::gcc_size(fib), crate::inline::recursive_edge_growth(fib)), (13, 7));
+}
+
+/// bench bintree's `insert` (three parameters, gcc size 22, edge growth 16 by
+/// gcc's dump) was peeled into its caller at m32 -O2 (code 257 -> 299 bytes)
+/// where gcc rejects it ("max-inline-insns-auto limit reached"): the call
+/// term of the bar scaled with the parameters, 10 for three, which gave it
+/// growth 12.
+#[cfg(feature = "gcc-gpl")]
+#[test]
+fn test_the_edge_growth_of_a_three_parameter_recursion_is_its_size_less_the_call() {
+    let module = parsed(
+        "define void @insert(ptr %t, i32 %at, i32 %node) {
+b0:
+  %n3 = mul i32 %node, 3
+  %p = getelementptr i32, ptr %t, i32 %n3
+  %k = load i32, ptr %p
+  %a3 = mul i32 %at, 3
+  %q = getelementptr i32, ptr %t, i32 %a3
+  %k2 = load i32, ptr %q
+  %lt = icmp slt i32 %k, %k2
+  %side = select i1 %lt, i32 1, i32 2
+  %i = add i32 %a3, %side
+  %s = getelementptr i32, ptr %t, i32 %i
+  %c = load i32, ptr %s
+  %z = icmp eq i32 %c, 0
+  br i1 %z, label %put, label %rec
+
+put:
+  store i32 %node, ptr %s
+  ret void
+
+rec:
+  call void @insert(ptr %t, i32 %c, i32 %node)
+  ret void
+}
+",
+    );
+    let (_, _, insert) = module.functions().next().expect("insert");
+    let size = llrm_gpl_gcc::gcc_size(insert);
+    assert_eq!(crate::inline::recursive_edge_growth(insert), size - 6);
+    assert!(size - crate::inline::recursive_edge_growth(insert) == 6, "the call term scales with parameters");
+}
+
+/// Without `gcc-gpl` the edge bar cannot be computed: m32 copies no recursion
+/// and its code equals the pin's (REC-2 is inert).
+#[cfg(not(feature = "gcc-gpl"))]
+#[test]
+fn test_m32_copies_no_recursion_without_the_gcc_feature() {
+    let calls = m32_fib_calls(crate::pipeline::Options::default());
+    assert!(calls <= 3, "fib was copied into itself without gcc-gpl, {calls} calls of it");
+}
+
+/// gcc-derived code (`llrm-gpl-gcc`, GPL-3.0-or-later) is optional and off: a
+/// default build must link none of it. Reads the manifests: the dependency is
+/// `optional`, no `default` feature set names `gcc-gpl`, and no other crate
+/// depends on the crate.
+#[test]
+fn test_the_default_build_links_no_gcc_derived_crate() {
+    let here = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let root = here.join("../../..");
+    let transforms = std::fs::read_to_string(here.join("Cargo.toml")).unwrap();
+    let workspace = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    let dependency =
+        transforms.lines().find(|line| line.starts_with("llrm-gpl-gcc = ")).expect("the optional dependency");
+    assert!(dependency.contains("optional = true"), "llrm-gpl-gcc is a plain dependency: {dependency}");
+    for (name, text) in [("llrm-transforms", &transforms), ("the workspace root", &workspace)] {
+        let default = text.lines().find(|line| line.trim_start().starts_with("default = ")).unwrap_or("");
+        assert!(!default.contains("gcc-gpl"), "{name} enables gcc-gpl by default: {default}");
+    }
+    for entry in std::fs::read_dir(root.join("crates"))
+        .unwrap()
+        .flatten()
+        .flat_map(|group| std::fs::read_dir(group.path()).unwrap().flatten())
+    {
+        let manifest = entry.path().join("Cargo.toml");
+        let Ok(text) = std::fs::read_to_string(&manifest) else { continue };
+        let owner = entry.file_name();
+        if owner == "llrm-gpl-gcc" || owner == "llrm-transforms" {
+            continue;
+        }
+        assert!(!text.contains("llrm-gpl-gcc"), "{} depends on the GPL crate", manifest.display());
+    }
 }

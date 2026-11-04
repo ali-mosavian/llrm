@@ -1,0 +1,18 @@
+#title,11.6.13 Bit Manipulation Instructions,page,11-46,notes,*Add Fetch Effective Address Time. #Add Fetch Immediate Effective Address Time.
+Group,Mark,Instruction or Address Mode,Operands or Condition,Head,Tail,I-Cache Case,No-Cache Case
+,,BTST,"#<data>,Dn",4,0,4(0/0/0),4(0/1/0)
+,,BTST,"Dn,Dn",4,0,4(0/0/0),4(0/1/0)
+,#,BTST,"#<data>,Mem",0,0,4(0/0/0),4(0/1/0)
+,*,BTST,"Dn,Mem",0,0,4(0/0/0),4(0/1/0)
+,,BCHG,"#<data>,Dn",6,0,6(0/0/0),6(0/1/0)
+,,BCHG,"Dn,Dn",6,0,6(0/0/0),6(0/1/0)
+,#,BCHG,"#<data>,Mem",0,0,6(0/0/1),6(0/1/1)
+,*,BCHG,"Dn,Mem",0,0,6(0/0/1),6(0/1/1)
+,,BCLR,"#<data>,Dn",6,0,6(0/0/0),6(0/1/0)
+,,BCLR,"Dn,Dn",6,0,6(0/0/0),6(0/1/0)
+,#,BCLR,"#<data>,Mem",0,0,6(0/0/1),6(0/1/1)
+,*,BCLR,"Dn,Mem",0,0,6(0/0/1),6(0/1/1)
+,,BSET,"#<data>,Dn",6,0,6(0/0/0),6(0/1/0)
+,,BSET,"Dn,Dn",6,0,6(0/0/0),6(0/1/0)
+,#,BSET,"#<data>,Mem",0,0,6(0/0/1),6(0/1/1)
+,*,BSET,"Dn,Mem",0,0,6(0/0/1),6(0/1/1)

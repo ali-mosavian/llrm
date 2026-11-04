@@ -404,9 +404,9 @@ pub fn place_operand(
     match addr.space {
         // Long mode reaches a symbol through the instruction pointer: `[rip +
         // disp32]`, the displacement a PC32 relocation. A symbol plus a
-        // register has no such form.
-        Space::Segment | Space::External if bits == 64 => {
-            (!based && addr.base == (RegId::None).iced()).then(|| (rip_operand(), true))
+        // register is the absolute disp32 of static code (`sym(%rax)`).
+        Space::Segment | Space::External if bits == 64 && !based => {
+            (addr.base == (RegId::None).iced()).then(|| (rip_operand(), true))
         }
         Space::Segment | Space::External => {
             // Once a pass makes a value of the offset, `through` is where the
@@ -840,6 +840,7 @@ pub fn lowered(what: &Semantics) -> Option<Vec<Semantics>> {
         target: None,
         indirect: false,
         table: Vec::new(),
+        table_id: None,
         repeat: false,
         pops: None,
     };
@@ -1521,7 +1522,7 @@ pub fn address_operand(
     if cell.addr.is_some() && cell.index_through == RegId::None {
         return place_operand(
             &ir::AddressRef { through: cell.through, ..ir::AddressRef::new(cell.addr) },
-            false,
+            bits == 64 && cell.through != RegId::None,
             false,
             bits,
         );
@@ -1556,6 +1557,21 @@ pub fn bit_test_immediate(
     let code = code_of!("BT_RM", width * 8, "_IMM8")?;
     let bit = u32::try_from(bit).ok().filter(|bit| *bit < 256)?;
     _assemble(&raised(Instruction::with2(code, register.iced(), bit).map_err(|error| error.to_string())), at, true)
+}
+
+/// `bt [cell], imm8`: the carry is the bit.
+pub fn bit_test_memory(
+    cell: &ir::Mem,
+    bit: i64,
+    at: At,
+) -> Option<Emitted> {
+    if ![2, 4].contains(&cell.width) {
+        return None;
+    }
+    let (r#where, relocated) = operand_of(cell, at.bits)?;
+    let code = code_of!("BT_RM", cell.width * 8, "_IMM8")?;
+    let bit = u32::try_from(bit).ok().filter(|bit| *bit < 256)?;
+    _assemble(&raised(Instruction::with2(code, r#where, bit).map_err(|error| error.to_string())), at, relocated)
 }
 
 /// `cmp a,b` or `test a,b` -- both flags-only, and not the same question.
@@ -1642,6 +1658,7 @@ pub fn fill(
         "stosb" => Instruction::with_stosb,
         "stosw" => Instruction::with_stosw,
         "stosd" => Instruction::with_stosd,
+        "stosq" => Instruction::with_stosq,
         _ => return None,
     };
     let prefix = if repeated { RepPrefixKind::Repe } else { RepPrefixKind::None };
@@ -1660,6 +1677,7 @@ pub fn copy(
         "movsb" => Instruction::with_movsb,
         "movsw" => Instruction::with_movsw,
         "movsd" => Instruction::with_movsd,
+        "movsq" => Instruction::with_movsq,
         _ => return None,
     };
     let prefix = if repeated { RepPrefixKind::Repe } else { RepPrefixKind::None };
@@ -1677,7 +1695,7 @@ pub fn funnel(
     count: Option<i64>,
     at: At,
 ) -> Option<Emitted> {
-    let width = width_of(dest).filter(|bytes| matches!(bytes, 2 | 4) && width_of(other) == Some(*bytes))?;
+    let width = width_of(dest).filter(|bytes| matches!(bytes, 2 | 4 | 8) && width_of(other) == Some(*bytes))?;
     if !["shld", "shrd"].contains(&name) {
         return None;
     }
@@ -2259,7 +2277,7 @@ fn scalar_sse(
             let code = code_of!(upper, "_XMM_XMMM", bits(second))?;
             _assemble(&raised(create_reg_reg(code, into.register, outof.register)), at, true)
         }
-        (Loc::Reg(into), Loc::Mem(cell)) if xmm(first) => {
+        (Loc::Reg(into), Loc::Mem(cell)) if xmm(first) && !name.starts_with("cvtsi2") => {
             let code = code_of!(upper, "_XMM_XMMM", bits(second))?;
             let (built, relocated) = operand_of(cell, at.bits)?;
             _assemble(&raised(create_reg_mem(code, into.register, built)), at, relocated)
@@ -2554,6 +2572,20 @@ pub fn emit_in(
             return arith(name, into, outof, at);
         }
         if let (Some(into), Some(value)) = (reg_of(dest), imm_of(source)) {
+            if let Some(code) = ["btc", "bts", "btr"].iter().position(|bit| name == *bit) {
+                let width = width_of(into)?;
+                let bit = u32::try_from(value).ok().filter(|bit| *bit < 256)?;
+                let code = match code {
+                    0 => code_of!("BTC_RM", width * 8, "_IMM8")?,
+                    1 => code_of!("BTS_RM", width * 8, "_IMM8")?,
+                    _ => code_of!("BTR_RM", width * 8, "_IMM8")?,
+                };
+                return _assemble(
+                    &raised(Instruction::with2(code, into.iced(), bit).map_err(|error| error.to_string())),
+                    at,
+                    true,
+                );
+            }
             return arith_imm(name, into, value, at, relocated);
         }
         if let (Some(into), Some(cell)) = (reg_of(dest), mem_of(source)) {
@@ -2796,6 +2828,7 @@ pub fn emit_in(
         return match (&sources[0], &sources[1]) {
             (_, Loc::Imm(imm)) if what.name.as_deref() == Some("test") => test_immediate(&sources[0], imm.value, at),
             (Loc::Reg(into), Loc::Imm(bit)) if named == "bt" => bit_test_immediate(into.register, bit.value, at),
+            (Loc::Mem(cell), Loc::Imm(bit)) if named == "bt" => bit_test_memory(cell, bit.value, at),
             (_, Loc::Imm(imm)) if named == "cmp" => compare(&sources[0], imm.value, at, relocated),
             (Loc::Reg(into), Loc::Mem(cell)) if named == "cmp" => compare_mem(into.register, cell, at),
             (Loc::Reg(into), Loc::Reg(outof)) => compare_registers(named, into.register, outof.register, at),
@@ -3033,6 +3066,7 @@ mod sweep_support {
             indirect,
             table: Vec::new(),
             repeat: false,
+            table_id: None,
             pops: None,
         }
     }

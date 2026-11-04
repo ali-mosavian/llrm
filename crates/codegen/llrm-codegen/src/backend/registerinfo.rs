@@ -27,7 +27,7 @@
 //! `registers.regs` of a target for the table `Info` is generated from.
 //!
 //! # Used by
-//! [`crate::backend::allocate`], [`crate::backend::coalesce`],
+//! [`crate::backend::allocate`], [`crate::coalescer::pass`],
 //! [`crate::backend::liveness`], [`crate::backend::loopslots`],
 //! [`crate::backend::masm`], [`crate::backend::objbuild`] and the peephole.
 

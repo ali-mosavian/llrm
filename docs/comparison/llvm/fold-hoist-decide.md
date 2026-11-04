@@ -127,7 +127,7 @@ Instructions, `d_faces.c` of qbq-llrm at `-O2 -m32 -march=i486 -fno-inline-funct
 
 `fold` by body (M, with the analyses it asks first; four runs unless noted): `d_draw_faces` 156.0 (runs 55.7, 41.8, 34.0, 24.5), the body before it 8.5, the rest 0.1 to 1.5 each. Inside `fold` over the file (266.5 M, 48 runs): `_numbers` 137.9 (`ThroughMemory` 70.0, `Held::of` 35.9, the float solver 26.1 in two runs), the float half 94.4 over 20 runs (`Annotated` 44.1, `floatfacts::solved_over` 41.4, `PlainAccesses` 3.8). `d_draw_faces` after its first pass: 1,198 MIR instructions, 175 loads, 73 stores, 38 calls, 112 phis, 112 float operations.
 
-Bisect on the `mixed` shape (`tools/ladder/gen.py mixed 200`: a loop over two struct pointers with field loads and stores, diamonds, double arithmetic and calls to an external function; the same C text for both compilers). llrm M, LLVM M, with one feature removed:
+Bisect on the `mixed` shape (`tools/ladder/ladder_gen.py mixed 200`: a loop over two struct pointers with field loads and stores, diamonds, double arithmetic and calls to an external function; the same C text for both compilers). llrm M, LLVM M, with one feature removed:
 
 | variant | llrm `fold` | LLVM InstCombine | llrm `gvn` | LLVM GVN | llrm `hoist` | LLVM LICM | llrm `decide` | LLVM SimplifyCFG |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|

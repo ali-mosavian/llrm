@@ -103,6 +103,26 @@ fn lifetime_markers_with_a_size(line: &str) -> String {
     line.to_owned()
 }
 
+/// `setFunctionAttributes` of `CommandFlags.cpp`
+/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/CommandFlags.cpp#L664>):
+/// `-frame-pointer=` gives each function without a `"frame-pointer"` attribute
+/// that policy.
+fn with_frame_pointer(
+    module: &mut llrm_mir::module::Module,
+    policy: &str,
+) {
+    use llrm_mir::opcode::Attribute;
+    for global in &mut module.globals {
+        let llrm_mir::module::GlobalKind::Function(function) = &mut global.kind else { continue };
+        if function.is_declaration()
+            || function.attrs.iter().any(|one| matches!(one, Attribute::Str(key, _) if key == "frame-pointer"))
+        {
+            continue;
+        }
+        function.attrs.push(Attribute::Str("frame-pointer".to_owned(), Some(policy.to_owned())));
+    }
+}
+
 fn bound(
     flags: &Flags,
     triple: Option<&str>,
@@ -215,6 +235,9 @@ fn decorate(
 /// no convention: here the one `-mabi` chose, in the functions and in their
 /// calls. LLVM's and llrm's own intrinsics stay as they are.
 ///
+/// With `c_library` the library's functions (`cos`, `strlen`) keep their C
+/// convention, as the Borland library the program links has them.
+///
 /// With `regcall_default` the front end marked the unmarked ones
 /// `x86_regcallcc` itself, so those take the ABI's convention and `ccc` is an
 /// explicit `__cdecl`, which stays C's. A variadic function stays on the ABI's:
@@ -223,6 +246,7 @@ fn with_default_convention(
     module: &mut llrm_mir::module::Module,
     default: &llrm_target::calling::Convention,
     regcall_default: bool,
+    c_library: bool,
 ) {
     let Some(number) = llrm_target::calling::Calling::number_of(default.cc.as_deref()).filter(|number| *number != 0)
     else {
@@ -239,7 +263,7 @@ fn with_default_convention(
     let main_is_watcom = default.cc.as_deref() == Some("regparm3");
     // Where the ABI is the register-size one, the library's functions are Open
     // Watcom's whichever way the front end marks the rest.
-    let library_is_watcom = !regcall_default || main_is_watcom;
+    let library_is_watcom = (!regcall_default || main_is_watcom) && !c_library;
     // clang gives the library functions it knows (`strlen`, `atan`) their C
     // convention whatever the default is, so `_strlen` was called where the
     // library has `strlen_`: a declaration or a definition of one (the float
@@ -274,6 +298,7 @@ fn with_default_convention(
             continue;
         }
         let llrm_mir::module::GlobalKind::Function(function) = &mut global.kind else { continue };
+        let kept_c = c_library && library.contains(&llrm_mir::context::GlobalId(at as u32));
         // `main` is the ABI's, as the start-up calls it; clang leaves it `ccc`.
         let entry = global.name.as_deref() == Some("main");
         // A function the front end marked `regcall` where the default is not
@@ -281,11 +306,12 @@ fn with_default_convention(
         let watcom = (entry && main_is_watcom)
             || (!regcall_default && function.calling_convention == llrm_mir::opcode::REGCALL)
             || (library_is_watcom && library.contains(&llrm_mir::context::GlobalId(at as u32)));
-        if watcom
-            || takes(
-                function.calling_convention,
-                is_variadic(function.ty) || entry || library.contains(&llrm_mir::context::GlobalId(at as u32)),
-            )
+        if !kept_c
+            && (watcom
+                || takes(
+                    function.calling_convention,
+                    is_variadic(function.ty) || entry || library.contains(&llrm_mir::context::GlobalId(at as u32)),
+                ))
         {
             // clang spells a regcall function `__regcall3__NAME`.
             if function.calling_convention == llrm_mir::opcode::REGCALL {
@@ -322,13 +348,16 @@ fn with_default_convention(
             .walk()
             .filter_map(|(_, inst)| match &function.instruction(inst).opcode {
                 llrm_mir::opcode::Opcode::Call(info) | llrm_mir::opcode::Opcode::Invoke(info)
-                    if takes(
-                        info.calling_convention,
-                        is_variadic(info.function_type)
-                            || (regcall_default
-                                && llrm_mir::memory::callee(&module.context, function, inst)
-                                    .is_some_and(|one| library.contains(&one))),
-                    ) =>
+                    if !(c_library
+                        && llrm_mir::memory::callee(&module.context, function, inst)
+                            .is_some_and(|one| library.contains(&one)))
+                        && takes(
+                            info.calling_convention,
+                            is_variadic(info.function_type)
+                                || (regcall_default
+                                    && llrm_mir::memory::callee(&module.context, function, inst)
+                                        .is_some_and(|one| library.contains(&one))),
+                        ) =>
                 {
                     Some(inst)
                 }
@@ -361,7 +390,33 @@ pub fn compiled_dumping(
 ) -> Result<(masm::Module, llrm_target::object::Format), String> {
     let (triple, text) = without_triple(text);
     let bound = bound(flags, triple.as_deref())?;
+    // The system the module's triple names writes its own object format unless
+    // `-fobject-format=` says otherwise.
+    let system = bound
+        .target
+        .layout()
+        .platforms
+        .into_iter()
+        .find(|one| triple.as_deref().is_some_and(|stated| crate::same_system(&one.triple, stated)));
+    if let Some(why) = system.as_ref().and_then(|one| one.pending.as_ref()).filter(|_| !flags.allow_pending_abi) {
+        return Err(format!("{}: {why}; -fallow-pending-abi emits it anyway", triple.as_deref().unwrap_or_default()));
+    }
+    let mut flags = flags.clone();
+    if let (None, Some(system)) = (flags.object_format, system) {
+        flags.object_format = Some(llrm_target::object::Format::parse(&system.format)?);
+    }
+    let flags = &flags;
     let mut module = llrm_mir::parse::module(&text).map_err(|error| format!("{name}: {error}"))?;
+    module.refuse_aliases("x86").map_err(|error| format!("{name}: {error}"))?;
+    if llrm_codegen::support::debug::enabled("mir") {
+        // The size of the program as read, before any pass: what the other
+        // front ends report as they link their MIR.
+        let bodies =
+            || module.globals.iter().filter_map(|global| global.function()).filter(|one| !one.is_declaration());
+        let instructions: usize =
+            bodies().map(|one| one.layout().iter().map(|&block| one.block(block).len()).sum::<usize>()).sum();
+        eprintln!("[mir] functions {} instructions {}", bodies().count(), instructions);
+    }
     let machine = flags.machine(&*bound.target, bound.target.machine())?;
     let format = flags.format(&*bound.target)?;
     let default = flags.convention(&*bound.target)?;
@@ -369,7 +424,10 @@ pub fn compiled_dumping(
     refuse_weak(&module, format.name())?;
     refuse_foreign_conventions(&module)?;
     allow_near_calls(&mut module);
-    with_default_convention(&mut module, default, flags.regcall_default);
+    if let Some(policy) = &flags.frame_pointer {
+        with_frame_pointer(&mut module, policy);
+    }
+    with_default_convention(&mut module, default, flags.regcall_default, flags.c_library);
     crate::coerce::small_structs_as_scalars(&mut module, bound.target.calling())?;
     let spellings = decorate(&mut module, bound.target.calling(), default, format.name());
     // After the rename: the debug info names the symbols the object has.
@@ -395,6 +453,9 @@ pub fn compiled_dumping(
         .and_then(|_| bound.target.calling().by_number(llrm_mir::opcode::WATCALL))
         .unwrap_or(default);
     options.libcalls.extend(libm_calls(library, format.name()));
+    // The soft-float routines are C compiled under the program's own
+    // convention, not the Watcom library's.
+    options.libcalls.extend(soft_float_calls(default, format.name()));
     Ok((llrm_codegen::driver::compiled_module(module, name, &options)?, format))
 }
 
@@ -417,6 +478,40 @@ fn libm_calls(
         .collect()
 }
 
+/// The soft-float routines, spelled as the C compiler spells a definition of
+/// them: what a function with no x87 calls for a float operation. The runtime
+/// (`runtime/compiler-rt`) is C, so its objects carry the convention's
+/// spelling.
+fn soft_float_calls(
+    default: &llrm_target::calling::Convention,
+    format: &str,
+) -> Vec<(String, u32, String)> {
+    let number = llrm_target::calling::Calling::number_of(default.cc.as_deref()).unwrap_or(0);
+    let mut names: Vec<String> = Vec::new();
+    for width in ["s", "d"] {
+        for op in ["add", "sub", "mul", "div"] {
+            names.push(format!("__{op}{width}f3"));
+        }
+        for cmp in ["eq", "ne", "lt", "le", "ge", "gt", "unord"] {
+            names.push(format!("__{cmp}{width}f2"));
+        }
+        for int in ["s", "d"] {
+            names.push(format!("__float{int}i{}", if width == "s" { "sf" } else { "df" }));
+            names.push(format!("__floatun{int}i{}", if width == "s" { "sf" } else { "df" }));
+            names.push(format!("__fix{}{int}i", if width == "s" { "sf" } else { "df" }));
+            names.push(format!("__fixuns{}{int}i", if width == "s" { "sf" } else { "df" }));
+        }
+    }
+    names.extend(["__extendsfdf2".to_owned(), "__truncdfsf2".to_owned()]);
+    names
+        .into_iter()
+        .map(|name| {
+            let symbol = default.decorated(format, &name).unwrap_or_else(|| name.clone());
+            (name, number, symbol)
+        })
+        .collect()
+}
+
 /// `-gcodeview` and `-gtd` where the object format cannot carry them, with the
 /// words the debug writers use: an object that holds another flavor than the
 /// one asked for must not be written.
@@ -425,7 +520,7 @@ fn refuse_debug_format(
     format: &str,
     bitness: u32,
 ) -> Result<(), String> {
-    use llrm_object::debug::Format;
+    use llrm_debug::Format;
     if !flags.debug {
         return Ok(());
     }
@@ -609,7 +704,7 @@ mod options_tests {
     }
 }
 
-fn compile(
+pub(crate) fn compile(
     flags: &Flags,
     source: &Path,
     dump: Option<&Path>,
@@ -622,7 +717,8 @@ fn compile(
     if flags.assembly {
         write_output(&output, masm::text(&built).map_err(|error| error.to_string())?)
     } else {
-        let bytes = objbuild::written_in(&built, file, objbuild::CodeLayout::OneSegment, format)
+        let objects = bound(flags, without_triple(&text).0.as_deref())?.target.objects();
+        let bytes = objbuild::written_in(&built, file, layout_of(flags, format), format, objects)
             .map_err(|error| error.to_string())?;
         write_output(&output, bytes)
     }
@@ -689,5 +785,18 @@ mod text_tests {
             "@x = global i32 0\ndeclare void @llvm.lifetime.start.p0(i64 immarg, ptr)\n  %1 = call i16 @llvm.ia16.in.i16(i16 %0)\n"
                 .replace("llvm.ia16", "llrm.ia16")
         );
+    }
+}
+
+/// One COMDAT per function where `-ffunction-sections` asks for it and the
+/// format has them (OMF); one segment for the module's code otherwise.
+fn layout_of(
+    flags: &Flags,
+    format: llrm_target::object::Format,
+) -> objbuild::CodeLayout {
+    if flags.function_sections && format == llrm_target::object::Format::Omf {
+        objbuild::CodeLayout::PerProcedure
+    } else {
+        objbuild::CodeLayout::OneSegment
     }
 }

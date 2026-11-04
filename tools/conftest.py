@@ -2,6 +2,10 @@
 parity_squash.py assert, and #5681 was refused at the tool-tests stage for a test that passes in a plain shell."""
 
 import os
+import shutil
+from pathlib import Path
+
+import pytest
 
 RUNNER_ENV = (
     "HEAD_MIN_AGE",
@@ -24,3 +28,23 @@ RUNNER_ENV = (
 
 for name in RUNNER_ENV:
     os.environ.pop(name, None)
+
+
+def _stub(directory, name, body):
+    path = directory / name
+    path.write_text("#!/bin/sh\n" + body)
+    path.chmod(0o755)
+
+
+@pytest.fixture(autouse=True)
+def _host_tools(tmp_path_factory, monkeypatch):
+    """A host without buildslot or rustc (the hosted gate image) failed 5 xfail and 4 buildslot tests: stubs stand in for the ones the tests only need to find."""
+    stubs = tmp_path_factory.mktemp("stubs")
+    if not (shutil.which("buildslot") or (Path.home() / ".local/bin/buildslot").exists()):
+        _stub(stubs, "buildslot", 'exec "$@"\n')
+    if not shutil.which("rustc"):
+        _stub(stubs, "rustc", "echo 'host: x86_64-unknown-linux-gnu'\n")
+    monkeypatch.setenv("PATH", f"{stubs}{os.pathsep}{os.environ['PATH']}")
+    for who in ("AUTHOR", "COMMITTER"):  # a merge commit needs an identity; a bare host has none: 6 push_tip/parity_squash tests read "does not merge"
+        monkeypatch.setenv(f"GIT_{who}_NAME", "t")
+        monkeypatch.setenv(f"GIT_{who}_EMAIL", "t@t")

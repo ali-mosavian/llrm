@@ -17,7 +17,9 @@
 //! (`N_WEAK_DEF`) replaces only itself, and each reference between two symbols
 //! is a relocation.
 
-use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Target, Unsupported, apply_fixup};
+use llrm_object::{
+    Binding, Definition, Object, Reloc, Role, Section, Target, Unsupported, Visibility, assembler::AsmBackend,
+};
 
 const MH_MAGIC_64: u32 = 0xFEED_FACF;
 const MH_OBJECT: u32 = 1;
@@ -28,11 +30,16 @@ const LC_SEGMENT_64: u32 = 0x19;
 pub const LC_BUILD_VERSION: u32 = 0x32;
 pub const PLATFORM_MACOS: u32 = 1;
 const S_ZEROFILL: u32 = 1;
+const S_COALESCED: u32 = 0xB;
+const S_ATTR_NO_TOC: u32 = 0x4000_0000;
+const S_ATTR_STRIP_STATIC_SYMS: u32 = 0x2000_0000;
+const S_ATTR_LIVE_SUPPORT: u32 = 0x0800_0000;
 const S_MOD_INIT_FUNC_POINTERS: u32 = 9;
 const S_ATTR_PURE_INSTRUCTIONS: u32 = 0x8000_0000;
 const S_ATTR_SOME_INSTRUCTIONS: u32 = 0x0000_0400;
 const S_ATTR_DEBUG: u32 = 0x0200_0000;
 pub const N_EXT: u8 = 1;
+pub const N_PEXT: u8 = 0x10;
 pub const N_WEAK_DEF: u16 = 0x80;
 const N_SECT: u8 = 0xE;
 /// `ARM64_RELOC_ADDEND`, the one entry Mach-O has for an addend a field cannot
@@ -107,6 +114,12 @@ fn spelling(section: &Section) -> Result<(&'static str, &'static str, u32), Unsu
         // `.debug_info` is `__debug_info` of the segment `__DWARF`.
         Role::InitFunctions => ("__DATA", "__mod_init_func", S_MOD_INIT_FUNC_POINTERS),
         Role::Debug(_) => ("__DWARF", debug_name(&section.name)?, S_ATTR_DEBUG),
+        // `__eh_frame` is coalesced, the linker drops what nothing keeps live;
+        // `__compact_unwind` is the linker's input and not part of the image.
+        Role::Unwind if section.name == "__eh_frame" => {
+            ("__TEXT", "__eh_frame", S_COALESCED | S_ATTR_NO_TOC | S_ATTR_STRIP_STATIC_SYMS | S_ATTR_LIVE_SUPPORT)
+        }
+        Role::Unwind if section.name == "__compact_unwind" => ("__LD", "__compact_unwind", S_ATTR_DEBUG),
         Role::Unwind => {
             return Err(unsupported(format!("{}: Mach-O unwind is __compact_unwind and __eh_frame", section.name)));
         }
@@ -119,8 +132,9 @@ pub struct Described {
     /// log2 of the field's bytes.
     pub length: u32,
     pub pcrel: bool,
-    /// The bytes between the field's end and the place it is relative to.
-    pub beyond: i64,
+    /// What the field holds of the distance to the place it is relative to,
+    /// past the addend: a pc-relative `rel32` field is relative to its own end.
+    pub baked: i64,
     /// Whether the field holds the addend. The fields of arm64's instructions
     /// do not: the instruction keeps its zeros, and an addend travels in an
     /// `ARM64_RELOC_ADDEND` entry before the relocation.
@@ -130,6 +144,10 @@ pub struct Described {
 /// What a target says of the Mach-O object it writes (LLVM's
 /// `MCMachObjectTargetWriter`).
 pub trait MachTargetWriter {
+    /// The target's assembler backend, which fills the fields the file keeps
+    /// (`MCAsmBackend::applyFixup`).
+    fn backend(&self) -> &dyn AsmBackend;
+
     /// `cputype` and `cpusubtype`.
     fn cpu(&self) -> (u32, u32);
 
@@ -235,7 +253,15 @@ pub fn write<W: MachTargetWriter>(
         put32(&mut nlist, name);
         match symbol.definition {
             Definition::Defined { section, offset } => {
-                let external = if symbol.binding == Binding::Local { 0 } else { N_EXT };
+                // A hidden symbol is private to the image: `N_PEXT` (not
+                // `N_EXT` alone).
+                let external = if symbol.binding == Binding::Local {
+                    0
+                } else if symbol.visibility == Visibility::Hidden {
+                    N_EXT | N_PEXT
+                } else {
+                    N_EXT
+                };
                 nlist.extend([N_SECT | external, ordinal(section) as u8]);
                 nlist.extend((if symbol.binding == Binding::Weak { N_WEAK_DEF } else { 0 }).to_le_bytes());
                 put64(&mut nlist, (address[section] + offset) as u64);
@@ -255,27 +281,24 @@ pub fn write<W: MachTargetWriter>(
         let mut image = section.image.clone();
         let mut made: Vec<(usize, [u32; 2])> = Vec::new();
         for one in &section.relocs {
-            let Described { kind, length, pcrel, beyond, addend_in_field } = flavor.relocation(one)?;
-            let width = one.width();
+            // The unwind sections name code by its place in the object: a
+            // pc-relative reference from them to a section is resolved here, as
+            // LLVM resolves a difference of two sections' symbols (no entry).
+            if section.role == Role::Unwind && one.pc_rel && matches!(one.target, Target::Section(_)) {
+                let Target::Section(home) = one.target else { unreachable!("matched") };
+                let value = address[home] as i64 + one.addend - (address[index] + one.at) as i64;
+                flavor.backend().apply_fixup(&mut image, one.at, one.kind, true, value, &section.name)?;
+                continue;
+            }
+            let Described { kind, length, pcrel, baked, addend_in_field } = flavor.relocation(one)?;
             // A section's start is a local symbol at offset 0 of it.
             let (target, home) = match one.target {
                 Target::Symbol(target) => (Some(target), None),
                 Target::Section(section) => (None, Some(section)),
                 Target::OmfGroup(_) => return Err(unsupported("a reference to a group is OMF's")),
             };
-            // One debug section's offset into another is not relocated:
-            // dsymutil reads the object's own sections, where it is
-            // the offset itself.
-            if matches!(section.role, Role::Debug(_))
-                && home.is_some_and(|home| matches!(object.sections[home].role, Role::Debug(_)))
-            {
-                let offset = u32::try_from(one.addend)
-                    .map_err(|_| unsupported(format!("{}: an offset of {} does not fit", section.name, one.addend)))?;
-                image[one.at..one.at + width].copy_from_slice(&u64::from(offset).to_le_bytes()[..width]);
-                continue;
-            }
             let (symbolnum, external, field) = match target.and_then(|target| index_of[target]) {
-                Some(symbol) => (symbol, true, one.addend - beyond),
+                Some(symbol) => (symbol, true, one.addend + baked),
                 None if !addend_in_field => {
                     return Err(unsupported(format!(
                         "{}: an instruction field refers to a section, not to a symbol",
@@ -295,7 +318,7 @@ pub fn write<W: MachTargetWriter>(
                         (None, None) => unreachable!("a target is a symbol or a section"),
                     };
                     let place = if pcrel { (address[index] + one.at + 4) as i64 } else { 0 };
-                    (ordinal(home), false, (address[home] + offset) as i64 + one.addend - beyond - place)
+                    (ordinal(home), false, (address[home] + offset) as i64 + one.addend + baked - place)
                 }
             };
             if !addend_in_field {
@@ -319,7 +342,7 @@ pub fn write<W: MachTargetWriter>(
                 ));
                 continue;
             }
-            apply_fixup(&mut image, one.at, width, pcrel, field, &section.name)?;
+            flavor.backend().apply_fixup(&mut image, one.at, one.kind, pcrel, field, &section.name)?;
             made.push((
                 one.at,
                 [

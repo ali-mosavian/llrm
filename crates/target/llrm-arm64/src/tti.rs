@@ -19,9 +19,10 @@
 //!   reciprocal throughput 1/2 (what the Cyclone scheduling model gives `LDR`);
 //!   the scheduling model is not read. `generic` has the formula's fixed
 //!   latency 4 (`FeatureFixedLoadLatency4`).
-//! - DEVIATE 3: `isLegalAddressingMode` takes the access type; the trait does
-//!   not, so the access is 8 bytes, a register
-//!   ([`AArch64::is_legal_addressing_mode_for`] takes the size).
+//! - DEVIATE 3: `isLegalAddressingMode` takes the access type; the trait's
+//!   typed queries (`*_at`, which LSR asks of a use) take its size in bytes,
+//!   but the untyped ones (`is_legal_addressing_mode`) assume 8 bytes, a
+//!   register ([`AArch64::is_legal_addressing_mode_for`] takes the size).
 //! - DEVIATE 4: `isMaskAndCmp0FoldingBeneficial` takes the mask; the trait does
 //!   not, so the answer is the base class's `false`
 //!   ([`AArch64Lowering::is_mask_and_cmp0_folding_beneficial_for`] takes the
@@ -30,7 +31,8 @@
 //!   one`/`ueq` are not seen.
 //! - DEVIATE 6: no instruction context (T4): an extension absorbed by a
 //!   widening user, `isExtFree`, a `fneg` beside an `fmul`, an `icmp` of an
-//!   `and` with zero, an extending load, are not seen free.
+//!   `and` with zero are not seen free; an extending load is, by
+//!   `cast_of_load_cost`.
 //! - DEVIATE 7: the unrolling preferences that read the loop (nesting depth,
 //!   exit blocks, Apple's runtime heuristics, the multi-exit search loops) are
 //!   not reached through the trait.
@@ -49,7 +51,7 @@
 //! # See also
 //! `llrm_mir::tti`, the interface; `llrm_x86::tti`, the x86 model.
 
-use llrm_mir::lowering::Lowering;
+use llrm_mir::lowering::{ExtUser, Lowering};
 use llrm_mir::tti::*;
 
 use crate::expand_imm::mov_imm;
@@ -244,7 +246,7 @@ fn int_imm_chunk(value: i64) -> i64 {
 
 /// `isLegalArithImmed`:
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/MCTargetDesc/AArch64AddressingModes.h#L355
-fn is_legal_arith_immediate(c: u64) -> bool {
+pub(crate) fn is_legal_arith_immediate(c: u64) -> bool {
     c >> 12 == 0 || (c & 0xfff == 0 && c >> 24 == 0)
 }
 
@@ -282,6 +284,125 @@ impl Tti for AArch64 {
         "AArch64"
     }
 
+    /// A `sext`/`zext` of a load is the extending load (`ldrsb`, `ldrh`, ...)
+    /// when the loaded type is a byte, half or word and both types are one
+    /// register (`BasicTTIImplBase::getCastInstrCost`, BasicTTIImpl.h:1297).
+    fn cast_of_load_cost(
+        &self,
+        op: CastKind,
+        dst: Ty,
+        src: Ty,
+        _kind: CostKind,
+    ) -> Option<Cost> {
+        self.ext_load_free(op, dst, src).then_some(Cost::FREE)
+    }
+
+    fn ext_load_free(
+        &self,
+        op: CastKind,
+        dst: Ty,
+        src: Ty,
+    ) -> bool {
+        matches!(op, CastKind::SExt | CastKind::ZExt)
+            && matches!(src, Ty::Int(8 | 16 | 32))
+            && matches!(dst, Ty::Int(bits) if bits > bits_of(src))
+            && matches!(
+                (legalize(src), legalize(dst)),
+                (Some(a), Some(b)) if a.count == b.count
+            )
+    }
+
+    fn vector_register_bits(&self) -> u32 {
+        128
+    }
+
+    /// `AArch64TargetLowering::getJumpConditionMergingParams`: a base of
+    /// `aarch64-br-merging-base-cost` 2 plus the `ccmp` bias 6, less the
+    /// cbz/tbnz bias 6 where one side is already a single compare-and-branch
+    /// and split where both are (or both compare a loaded value, or a side
+    /// is a float compare). Likely bias 0, unlikely bias -1.
+    fn jump_condition_merging_params(
+        &self,
+        query: &llrm_mir::jumpmerge::JumpMergeQuery,
+    ) -> llrm_mir::jumpmerge::CondMerging {
+        use llrm_mir::context::{ConstantKind, mask};
+        use llrm_mir::jumpmerge::CondMerging;
+        use llrm_mir::module::{Operand, ValueDef};
+        use llrm_mir::opcode::{CastOp, IntPredicate, Opcode};
+        const BIAS: i64 = 6;
+        let (context, function) = (query.context, query.function);
+        let def = |operand: Operand| match operand {
+            Operand::Value(value) => match function.value(value).def {
+                ValueDef::Instruction(inst) => Some(inst),
+                _ => None,
+            },
+            _ => None,
+        };
+        let opcode = |operand: Operand| def(operand).map(|inst| function.instruction(inst).opcode.clone());
+        if [query.lhs, query.rhs].iter().any(|&one| matches!(opcode(one), Some(Opcode::FCmp(_)))) {
+            return CondMerging::SPLIT;
+        }
+        // An integer compare whose operand, under casts, is a load.
+        let compares_loaded = |operand: Operand| {
+            let Some(inst) = def(operand).filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::ICmp(_)))
+            else {
+                return false;
+            };
+            function
+                .instruction(inst)
+                .operands
+                .iter()
+                .any(
+                    |&one| {
+                        let mut at = one;
+                        while let Some(inst) = def(at) {
+                            match function.instruction(inst).opcode {
+                                Opcode::Cast(_) => at = function.instruction(inst).operands[0],
+                                Opcode::Load { .. } => return true,
+                                _ => break,
+                            }
+                        }
+                        false
+                    },
+                )
+        };
+        if compares_loaded(query.lhs) && compares_loaded(query.rhs) {
+            return CondMerging::SPLIT;
+        }
+        let constant = |operand: Operand| match operand {
+            Operand::Constant(id) => {
+                let one = context.get(id);
+                let bits = match one.kind {
+                    ConstantKind::Int(bits) => Some(bits),
+                    ConstantKind::Zero | ConstantKind::Null => Some(0),
+                    _ => None,
+                };
+                bits.map(|bits| (bits, context.types.int_bits(one.ty).unwrap_or(0)))
+            }
+            _ => None,
+        };
+        // A condition that lowers to cbz/cbnz or tbz/tbnz alone.
+        let fused = |operand: Operand| {
+            let Some(inst) = def(operand) else { return false };
+            let one = function.instruction(inst);
+            match one.opcode {
+                Opcode::Cast(CastOp::Trunc) => true,
+                Opcode::ICmp(predicate) => match (predicate, constant(one.operands[1])) {
+                    (IntPredicate::Eq | IntPredicate::Ne | IntPredicate::Slt, Some((0, _))) => true,
+                    (IntPredicate::Sgt, Some((bits, width))) => width != 0 && bits == mask(width),
+                    _ => false,
+                },
+                _ => false,
+            }
+        };
+        let (left, right) = (fused(query.lhs), fused(query.rhs));
+        if left && right {
+            return CondMerging::SPLIT;
+        }
+        let base = 2 + BIAS - if left || right { BIAS } else { 0 };
+        CondMerging { base_cost: base, likely_bias: 0, unlikely_bias: -1 }
+    }
+
     fn is_type_legal(
         &self,
         ty: Ty,
@@ -304,7 +425,12 @@ impl Tti for AArch64 {
             Some(Some(cost)) => Cost::of(*cost),
             Some(None) => Cost::INVALID,
             None if is_free_intrinsic(name) => Cost::FREE,
-            None => Cost::INVALID,
+            // A scalar intrinsic with no case of its own (`stacksave`) is
+            // "turned into a library call":
+            // BasicTTIImplBase::getTypeBasedIntrinsicInstrCost's
+            // `SingleCallCost`.
+            // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L2323
+            None => base_intrinsic_cost(name).unwrap_or(Cost::of(if kind == CostKind::CodeSize { 1 } else { 10 })),
         }
     }
 
@@ -477,6 +603,34 @@ impl Tti for AArch64 {
         AArch64::is_legal_addressing_mode_for(ACCESS_BYTES, base_gv, base_offset, has_base_reg, scale)
     }
 
+    fn is_legal_addressing_mode_at(
+        &self,
+        _addr_space: u32,
+        access_bytes: u64,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> bool {
+        AArch64::is_legal_addressing_mode_for(access_bytes, base_gv, base_offset, has_base_reg, scale)
+    }
+
+    fn is_legal_addressing_mode_for(
+        &self,
+        access_bytes: u64,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> bool {
+        AArch64::is_legal_addressing_mode_for(access_bytes, base_gv, base_offset, has_base_reg, scale)
+    }
+
+    /// `AArch64TTIImpl::getRegisterBitWidth(RGK_Scalar)`: 64.
+    fn scalar_register_bits(&self) -> u32 {
+        64
+    }
+
     /// `isLegalAddImmediate`: 12-bit optionally shifted immediates, the same
     /// encoding for add and sub:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L20177
@@ -506,7 +660,18 @@ impl Tti for AArch64 {
         has_base_reg: bool,
         scale: i64,
     ) -> Cost {
-        if self.is_legal_addressing_mode(base_gv, base_offset, has_base_reg, scale) {
+        self.scaling_factor_cost_at(ACCESS_BYTES, base_gv, base_offset, has_base_reg, scale)
+    }
+
+    fn scaling_factor_cost_at(
+        &self,
+        access_bytes: u64,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> Cost {
+        if AArch64::is_legal_addressing_mode_for(access_bytes, base_gv, base_offset, has_base_reg, scale) {
             Cost::of(i64::from(scale != 0 && scale != 1))
         } else {
             Cost::INVALID
@@ -718,4 +883,72 @@ impl AArch64Lowering {
     }
 }
 
-impl Lowering for AArch64Lowering {}
+impl Lowering for AArch64Lowering {
+    // The register classes: GPR32 and GPR64 (AArch64ISelLowering.cpp,
+    // addRegisterClass).
+    fn is_type_legal(
+        &self,
+        bits: u32,
+    ) -> bool {
+        matches!(bits, 32 | 64)
+    }
+
+    // AArch64TargetMachine.cpp, `addCodeGenPrepare`: `TypePromotion` at -O1 and
+    // up.
+    fn runs_type_promotion(&self) -> bool {
+        true
+    }
+
+    // AArch64ISelLowering.h, `isSExtCheaperThanZExt`: `w` to `x` is one `sxtw`.
+    fn is_sext_cheaper_than_zext(
+        &self,
+        from_bits: u32,
+        to_bits: u32,
+    ) -> bool {
+        from_bits == 32 && to_bits == 64
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L18942
+    fn is_truncate_free(
+        &self,
+        from_bits: u32,
+        to_bits: u32,
+    ) -> bool {
+        from_bits > to_bits
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L18984
+    fn is_zext_free(
+        &self,
+        from_bits: u32,
+        to_bits: u32,
+    ) -> bool {
+        from_bits == 32 && to_bits == 64
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L19014
+    fn is_ext_free_impl(
+        &self,
+        users: &[ExtUser],
+    ) -> bool {
+        users
+            .iter()
+            .all(
+                |user| match *user {
+                    ExtUser::ConstShl | ExtUser::SameTypeTrunc => true,
+                    // A shift of 1..=4 folds into the addressing mode.
+                    ExtUser::Gep { store_bits } => (4..=7).contains(&store_bits.trailing_zeros()),
+                    ExtUser::Other => false,
+                },
+            )
+    }
+
+    // The base class (TargetLoweringBase.cpp#L1813): the register type, i32 for
+    // a narrower integer.
+    fn preferred_switch_condition_bits(
+        &self,
+        bits: u32,
+    ) -> u32 {
+        bits.max(32)
+    }
+}

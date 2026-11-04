@@ -18,9 +18,10 @@ use crate::backend::frame::Frame;
 use crate::backend::target::Segments;
 use crate::backend::verify::{self, Malformed};
 use crate::backend::{
-    allocate, coalesce, farcall, floatalloc, floatassign, jumps, loopslots, parcopy, peephole, phielim, prologue,
-    schedule, twoaddr,
+    allocate, farcall, floatalloc, floatassign, jumps, loopslots, parcopy, peephole, phielim, prologue, schedule,
+    twoaddr,
 };
+use crate::coalescer::pass::Coalescer;
 use crate::model::lir::LirBody;
 use crate::model::passes::LIRTransform;
 use crate::support::hash::IndexMap;
@@ -52,6 +53,7 @@ pub fn machine<'a>(
         &crate::backend::classes::RegisterClasses::m16(),
         &crate::backend::targets::x86_m16::RULES,
         &llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
+        crate::backend::shadow::Selector::Old,
     )
 }
 
@@ -75,6 +77,8 @@ const UNOPTIMIZED: &[&str] = &[
     "LiveRangeShrink",
     "X86OptimizeLEAs",
     "MachineLICM",
+    "IvShare",
+    "IvZero",
     "FixupBW",
     "FixupLEAs",
     "CmpAsSub",
@@ -93,6 +97,8 @@ const SLOTS: &[(&str, &str)] = &[
     ("ProcessImplicitDefs", "processimpdefs@2"),
     ("PhiElimination", "phielim@4"),
     ("MachineLICM", "machinelicm@4"),
+    ("IvShare", "machinelicm@4"),
+    ("IvZero", "machinelicm@4"),
     ("MachineCSE", "machinecse@4"),
     ("MachineSink", "machinesink@4"),
     ("PeepholeOptimizer", "peepholeopt@4"),
@@ -137,6 +143,7 @@ pub fn machine_with<'a>(
     classes: &Rc<crate::backend::classes::RegisterClasses>,
     rules: &'static crate::backend::peep::Rules,
     registers: &llrm_target::FrameRegisters,
+    selector: crate::backend::shadow::Selector,
 ) -> Result<Vec<Box<dyn LIRTransform + 'a>>, String> {
     let target = targets::profile(cpu)?;
     let mut pinned = pinned.clone();
@@ -175,7 +182,15 @@ pub fn machine_with<'a>(
         Box::new(crate::backend::combiner::MachineCombiner),
         // On SSA, a loop-invariant computation in the preheader (the pin:
         // EarlyMachineLICM, ahead of MachineCSE).
-        Box::new(crate::backend::machinelicm::MachineLicm { classes: Rc::clone(classes) }),
+        Box::new(crate::backend::machinelicm::MachineLicm {
+            classes: Rc::clone(classes),
+            size: target.size || target.min_size,
+        }),
+        // After the loop-invariant values are in the preheader: streams that
+        // share one index share one pointer (DEVIATE LSR2).
+        Box::new(crate::backend::ivshare::IvShare { classes: Rc::clone(classes) }),
+        // A counted loop's index ends at zero (DEVIATE LSR3).
+        Box::new(crate::backend::ivzero::IvZero { classes: Rc::clone(classes) }),
         // On SSA, a repeated computation once (the pin: MachineCSE, then
         // MachineSink).
         Box::new(crate::backend::precse::MachineCse { classes: Rc::clone(classes) }),
@@ -222,7 +237,7 @@ pub fn machine_with<'a>(
         Box::new(crate::backend::fixupsetcc::FixupSetCc),
         // A float load only one arithmetic instruction reads is its memory
         // operand.
-        Box::new(crate::backend::floatfold::FloatFold { cpu: target }),
+        Box::new(crate::backend::floatfold::FloatFold { cpu: target, registers: classes.available.len() }),
         // After phi elimination: a phi's copies are where the stack shuffles.
         Box::new(floatassign::FloatPrep {
             frame: frame.clone(),
@@ -231,17 +246,8 @@ pub fn machine_with<'a>(
             status_word: classes.status_word(),
         }),
         Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes) }),
-        Box::new(twoaddr::TwoAddress {
-            lea: match target.dword_address_form() {
-                None if target.address_forms.iter().any(|form| form.index_width == 8) => {
-                    crate::twoaddress::ThreeAddress::Wide
-                }
-                None => crate::twoaddress::ThreeAddress::Off,
-                Some(form) if form.secondary => crate::twoaddress::ThreeAddress::AddSubWords,
-                Some(_) => crate::twoaddress::ThreeAddress::All,
-            },
-        }),
-        Box::new(coalesce::Coalescer { size: target.size, ..coalesce::Coalescer::new(None, segments, classes) }),
+        Box::new(twoaddr::TwoAddress { lea: target.three_address() }),
+        Box::new(Coalescer { size: target.size, ..Coalescer::new(None, segments, classes) }),
         // After TwoAddress and the coalescer, before any value is placed: the
         // pin's pre-RA scheduler, bottom-up by pressure.
         Box::new(crate::backend::machinesched::MachineScheduler {
@@ -250,7 +256,9 @@ pub fn machine_with<'a>(
         }),
         Box::new(
             allocate::RegAlloc::new(Some(&pinned), frame.clone(), ProfileOrName::Profile(target), segments, classes)?
-                .with_saved(registers.saved.iter().map(|(whole, _)| *whole).collect()),
+                .with_saved(registers.saved.iter().map(|(whole, _)| *whole).collect())
+                .with_size(target.size)
+                .with_basic_semantics(basic_semantics),
         ),
         // After allocation: which moves in a phi's copy conflict is a question
         // about locations.
@@ -275,9 +283,14 @@ pub fn machine_with<'a>(
             rules,
             registers.saved.iter().map(|(whole, _)| *whole).collect(),
             Rc::clone(classes),
+            selector,
         )?),
         // After the peephole, as the pin runs it late (X86FixupBWInsts).
-        Box::new(crate::backend::fixupbw::FixupBw { size: target.size }),
+        Box::new(crate::backend::fixupbw::FixupBw {
+            size: target.size,
+            widens_byte: target.widens_load(1)?,
+            widens_word: target.widens_load(2)?,
+        }),
         Box::new(crate::backend::fixupleas::FixupLeas {
             slow_3ops: target.slow_3ops_lea(),
             size: target.size,

@@ -215,7 +215,7 @@ def run_m16(level):
     compiled = {}
     for name, source, flag in (("d", D_FACES, f"-{level}"), ("e", HERE / "env.c", "-O1")):
         obj = work / f"{name}.obj"
-        sh([dosbatch.BIN / "llrm-c", "-m16", flag, "-march=i486", *INCLUDES, "-o", obj, source])
+        sh([dosbatch.BIN / "llrm-cc", *harness.llrmbin.c_args(16), flag, *INCLUDES, "-c", "-o", obj, source], env={**os.environ, **harness.llrmbin.cc_environment()})
         compiled[name] = obj
     exe, listing = work / "d.exe", work / "d.map"
     dosbatch.link_c(compiled["d"], exe, work, listing, after=("file", str(compiled["e"])))

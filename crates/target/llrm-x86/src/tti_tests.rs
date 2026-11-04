@@ -319,3 +319,54 @@ fn the_x86_lsr_hooks_are_those_of_the_pin() {
     assert!(!i486.can_macro_fuse_cmp() && core2.can_macro_fuse_cmp());
     assert_eq!(i486.number_of_gpr_registers(), 8);
 }
+
+/// A real-mode loop LSR rewrites to something its own model rates worse (the
+/// `(i + j) % 3` of bench matmul at -Os: +13 B, +355 executed instructions)
+/// stayed rewritten because the pin's X86 never drops such a solution.
+#[test]
+fn real_mode_drops_an_lsr_solution_the_model_rates_worse_and_flat_code_keeps_it() {
+    let real = crate::tti::RealMode {
+        scale_costs: vec![(1, 0), (2, 2), (4, 2), (8, 2)],
+        registers: 6,
+        scaled_index_insns: 2,
+        huge_space: None,
+        address_registers: None,
+        inline_size_guard: false,
+        float_code_size_percent: 100,
+        unroll_size_few_trips: (0, 0),
+        recursive_inlining: None,
+        priced_self_inlining: None,
+    };
+    assert!(X86::of_cpu("i486").unwrap().in_real_mode(real).should_drop_lsr_solution_if_less_profitable());
+    assert!(!X86::of_cpu("i486").unwrap().should_drop_lsr_solution_if_less_profitable());
+}
+
+#[test]
+fn a_triple_picks_the_baseline_cpu_of_its_architecture() {
+    assert!(X86::of_triple("x86_64-unknown-linux-gnu").unwrap().native() == 64);
+    assert!(X86::of_triple("i686-pc-linux-gnu").unwrap().native() == 32);
+    assert!(X86::of_triple("aarch64-unknown-linux-gnu").is_none());
+}
+
+/// `X86TTIImpl::hasDivRemOp` is `isOperationLegal(SDIVREM)`: every register
+/// type has one. It was stated on the lowering, so a pass that asked the `Tti`
+/// (DivRemPairs) found none until it consulted both (#6152's DEVIATE).
+#[test]
+fn the_tti_states_a_divide_remainder_op_on_every_register_type() {
+    let tti = X86::of_cpu("i486").unwrap();
+    for bits in [8, 16, 32] {
+        assert!(tti.has_div_rem_op(bits, true) && tti.has_div_rem_op(bits, false), "i{bits}");
+    }
+    assert!(!tti.has_div_rem_op(64, true), "no i64 register on a 32-bit target");
+    assert!(!tti.has_div_rem_op(24, false));
+}
+
+/// The loop unroll counts float values against the x87 stack only where the
+/// subtarget keeps floats there: `-march=i486` has the 8 slots the tuning
+/// states, `core2` (SSE2 floating point) none.
+#[test]
+fn test_the_x87_stack_slots_reach_the_unroll_query_only_without_sse2() {
+    let tuning = llrm_mir::target::Tuning { x87_stack_slots: Some(8), ..llrm_mir::target::Tuning::PIN };
+    let slots = |cpu: &str| X86::of_cpu(cpu).expect("a cpu").with_tuning(tuning.clone()).x87_stack_slots();
+    assert_eq!((slots("i486"), slots("pentium"), slots("core2")), (Some(8), Some(8), None));
+}

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Growth of llrm-c's cost with size: the cost at N/2, N and 2N on generated programs, per axis and level and per step of the compile.
+"""Growth of llrm-cc's cost with size: the cost at N/2, N and 2N on generated programs, per axis and level and per step of the compile.
 
     python3 scaling_gate.py [--jobs N]        print the costs as JSON (tools/measure.py compares them with the merge-base's)
 
-Cost is user-space instructions (`perf stat`), less what llrm-c spends on an empty file: work done, so the ratio is the same on a
+Cost is user-space instructions (`perf stat`), less what llrm-cc spends on an empty file: work done, so the ratio is the same on a
 loaded host. tools/measure.py gates D = c(2N) - 3c(N) + 2c(N/2) = 1.5kN^2 of c = a + bN + kN^2: nil for fixed and linear work, so a
-saving of either does not move it and a pass that goes quadratic does. Per step, llrm-c's LLRM_DEBUG=time
+saving of either does not move it and a pass that goes quadratic does. Per step, llrm-cc's LLRM_DEBUG=time
 [instr] rows give each step's own instructions; a step with LOW or more of the work is read. Exit 77 without a counter.
 The generated programs are scaling.py's AXES; SIZES holds the N per axis.
 """
@@ -101,16 +101,21 @@ def measure(jobs: int, axes=tuple(SIZES), levels=LEVELS) -> dict[str, tuple[int,
             return dict(zip((f"{a} {l}" for a, l in todo), pool.map(lambda t: costs(*t, Path(tmp)), todo)))
 
 
+RUN_AT = re.compile(r"@\d+$")
 INSTR = re.compile(r"^\[instr\]\s+([\d.]+) (Minstr|Mcpu-ns) own\s+[\d.]+ \S+ total\s+\d+x (.+)$", re.M)
 
 
 def own_work(command: list[str]) -> dict[str, float]:
-    """Each step's own user-space Minstr from llrm-c's `LLRM_DEBUG=time` [instr] rows. CPU time instead of a count is no count."""
+    """Each step's own user-space Minstr from llrm-llc's `LLRM_DEBUG=time` [instr] rows (llrm-cc runs it). CPU time instead of a count is no count."""
     text = scaling.sample(command, {"LLRM_DEBUG": "time", "LLRM_TIME_TOP": "100000"})[2]
     rows = INSTR.findall(text)
     if not rows or any(unit != "Minstr" for _, unit, _ in rows):
-        raise NoCounter("llrm-c printed no instruction counts per step")
-    return {name: float(own) for own, _, name in rows}
+        raise NoCounter("llrm-llc printed no instruction counts per step")
+    # A pass that runs more than once, or is named by the line that makes it (`mir gvn@787`), is one step.
+    steps: dict[str, float] = {}
+    for own, _, name in rows:
+        steps[RUN_AT.sub("", name)] = steps.get(RUN_AT.sub("", name), 0.0) + float(own)
+    return steps
 
 
 def pass_costs(axis: str, level: str, work: Path, command=levels_time.command, compiler: str = "llrm") -> dict[str, tuple[float, float, float, float]]:

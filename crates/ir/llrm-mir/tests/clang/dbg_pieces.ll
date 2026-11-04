@@ -1,10 +1,9 @@
 ; ModuleID = 't3.c'
 source_filename = "t3.c"
 target datalayout = "e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32"
-target triple = "i386-pc-none-elf"
 
 ; Function Attrs: nounwind
-define dso_local i64 @f(i64 noundef %0, i32 noundef %1) local_unnamed_addr #0 !dbg !13 {
+define i64 @f(i64 noundef %0, i32 noundef %1) #0 !dbg !13 {
     #dbg_value(i64 %0, !19, !DIExpression(), !24)
     #dbg_value(i32 %1, !20, !DIExpression(), !24)
     #dbg_value(i64 %0, !21, !DIExpression(), !24)
@@ -32,7 +31,7 @@ define dso_local i64 @f(i64 noundef %0, i32 noundef %1) local_unnamed_addr #0 !d
   br i1 %14, label %4, label %6, !dbg !37, !llvm.loop !38
 }
 
-declare !dbg !42 dso_local i64 @g(i64 noundef) local_unnamed_addr #1
+declare !dbg !42 i64 @g(i64 noundef) #1
 
 attributes #0 = { nounwind "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="pentium4" "target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87" "tune-cpu"="generic" }
 attributes #1 = { "frame-pointer"="all" "no-builtins" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="pentium4" "target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87" "tune-cpu"="generic" }

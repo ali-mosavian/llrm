@@ -4,7 +4,7 @@
 //! prologue analysis has nothing to go on (a frameless function, registers
 //! saved where first needed).
 
-use llrm_object::debug::{FrameRow, Info};
+use llrm_debug::{FrameRow, Info};
 use llrm_object::{Object, Unsupported};
 
 use crate::buffer::{Buf, Done};
@@ -13,6 +13,8 @@ use crate::refused;
 const DW_CFA_ADVANCE_LOC: u8 = 0x40;
 const DW_CFA_OFFSET: u8 = 0x80;
 const DW_CFA_RESTORE: u8 = 0xC0;
+const DW_CFA_OFFSET_EXTENDED: u8 = 0x05;
+const DW_CFA_RESTORE_EXTENDED: u8 = 0x06;
 const DW_CFA_ADVANCE_LOC1: u8 = 0x02;
 const DW_CFA_ADVANCE_LOC2: u8 = 0x03;
 const DW_CFA_ADVANCE_LOC4: u8 = 0x04;
@@ -43,7 +45,7 @@ fn number(
     info: &Info,
     name: &str,
 ) -> Result<u64, Unsupported> {
-    match info.registers.iter().find(|one| one.name == name).and_then(|one| one.dwarf) {
+    match info.registers().dwarf(name) {
         Some(number) => Ok(u64::from(number)),
         None => refused(format!("register {name} has no DWARF number, which a frame rule names")),
     }
@@ -75,9 +77,11 @@ pub(crate) fn changes(
         if !from.saved.iter().any(|(one, was)| one == register && was == at) {
             let register = number(register)?;
             if register >= 0x40 {
-                return refused(format!("register {register} is past the short form of DW_CFA_offset"));
+                buf.u8(DW_CFA_OFFSET_EXTENDED);
+                buf.uleb(register);
+            } else {
+                buf.u8(DW_CFA_OFFSET | register as u8);
             }
-            buf.u8(DW_CFA_OFFSET | register as u8);
             buf.uleb((at / alignment) as u64);
         }
     }
@@ -85,9 +89,11 @@ pub(crate) fn changes(
         if !to.saved.iter().any(|(one, _)| one == register) {
             let register = number(register)?;
             if register >= 0x40 {
-                return refused(format!("register {register} is past the short form of DW_CFA_restore"));
+                buf.u8(DW_CFA_RESTORE_EXTENDED);
+                buf.uleb(register);
+            } else {
+                buf.u8(DW_CFA_RESTORE | register as u8);
             }
-            buf.u8(DW_CFA_RESTORE | register as u8);
         }
     }
     Ok(())
@@ -123,10 +129,11 @@ pub fn section(
     address: usize,
 ) -> Result<Option<Done>, Unsupported> {
     let Some(entry) = info.functions.iter().find_map(|one| one.frame.first()) else { return Ok(None) };
-    if info.return_register.is_empty() {
+    let return_register = &info.registers().return_register;
+    if return_register.is_empty() {
         return Ok(None);
     }
-    let return_column = number(info, &info.return_register)?;
+    let return_column = number(info, return_register)?;
     let mut buf = Buf::default();
     // The CIE: the frame address at entry, and the return address in its slot
     // just below it.

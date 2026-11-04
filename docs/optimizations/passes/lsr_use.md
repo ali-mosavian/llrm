@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lsr_use.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lsr_use.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lsr_use.rs sha256:b845cb41d4a1544daf85184650ef214e04005f8a23d9d70f5e6a51526ac1aeec -->
+<!-- src: crates/opt/llrm-transforms/src/lsr_use.rs sha256:3616f9a13c39d0f0b016c08e6a3e18db75dc5dee451667839fb7cf44bf217824 -->
 
 # lsr_use
 
@@ -59,6 +59,7 @@ is row DFACES-DYN-1, not LU1's.
 
 DEVIATE: the target hooks have no access type or address space on the
 legality call, and no per-instruction query (`LSRWithInstrQueries`); x86 has
-neither. `getPreferredAddressingMode` is none on x86, so the pre- and
-post-indexed branches of `RateRegister` never apply and are not ported. A
+neither. `getPreferredAddressingMode` is none on x86; the post-indexed
+branch of `RateRegister` is ported (m68k prefers it), the pre-indexed one
+is not, nor are the post-indexed sites in the other LSR modules. A
 scalable `Immediate` does not exist (see [`crate::lsr_formula`](lsr_formula.md)).

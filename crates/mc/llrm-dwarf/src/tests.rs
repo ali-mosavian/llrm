@@ -1,5 +1,5 @@
-use llrm_object::debug::{
-    DebugOptions, Function, Info, Kind, Line, Location, Range, Reach, Register, Scalar, Type, Variable,
+use llrm_debug::{
+    DebugOptions, Described, Function, Info, Kind, Line, Location, Range, Reach, Register, Scalar, Type, Variable,
 };
 use llrm_object::{Binding, Object, Section, Symbol, Target};
 
@@ -15,7 +15,7 @@ fn object(
     variables: Vec<Variable>,
     mut types: Vec<Type>,
     format: Format,
-) -> Object {
+) -> Described {
     types.push(Type::Procedure { result: Some(0), parameters: vec![0], convention: None });
     let procedure = types.len() - 1;
     let text = Section {
@@ -38,15 +38,21 @@ fn object(
         variables,
         blocks: Vec::new(),
         frame: Vec::new(),
+        all_calls: false,
+        frame_base: None,
+        calls: Vec::new(),
     };
     let register = |name: &str, dwarf| Register { name: name.into(), bits: 32, dwarf, codeview: None };
     let info = Info {
         options: DebugOptions { format, ..Default::default() },
-        language: llrm_object::debug::Language::C,
-        frame_register: "ebp".into(),
-        registers: vec![register("ebp", Some(5)), register("eax", Some(0)), register("ah", None)],
+        language: llrm_debug::Language::C,
+        target: Some(llrm_debug::DebugTarget::of(32).with_registers(
+            "ebp",
+            "",
+            vec![register("ebp", Some(5)), register("eax", Some(0)), register("ah", None)],
+        )),
         code: vec![Range { section: 0, offset: 0, length: 16 }],
-        files: vec![llrm_object::debug::File { name: "f.c".into(), checksum: None }],
+        files: vec![llrm_debug::File { name: "f.c".into(), checksum: None }],
         types,
         functions: vec![function],
         lines: vec![
@@ -55,21 +61,24 @@ fn object(
         ],
         ..Info::default()
     };
-    Object {
-        name: "f.c".into(),
-        bits: 32,
-        sections: vec![text],
-        symbols: vec![Symbol {
-            name: "_f".into(),
-            binding: Binding::Public,
-            definition: Definition::Defined { section: 0, offset: 0 },
-            size: 0,
-            group: None,
-        }],
-        omf_groups: Vec::new(),
-        omf_comdat: Vec::new(),
-        frames: Vec::new(),
+    Described {
         debug: Some(info),
+        object: Object {
+            name: "f.c".into(),
+            bits: 32,
+            sections: vec![text],
+            symbols: vec![Symbol {
+                name: "_f".into(),
+                binding: Binding::Public,
+                definition: Definition::Defined { section: 0, offset: 0 },
+                size: 0,
+                group: None,
+                visibility: Default::default(),
+            }],
+            omf_groups: Vec::new(),
+            omf_comdat: Vec::new(),
+            frames: Vec::new(),
+        },
     }
 }
 
@@ -304,8 +313,8 @@ fn llvm_dwarfdump_verifies_the_unit_in_either_class_and_version() {
                     name: "pt".into(),
                     bytes: 8,
                     fields: vec![
-                        llrm_object::debug::Field { name: "x".into(), r#type: 0, offset: 0, bits: None },
-                        llrm_object::debug::Field { name: "f".into(), r#type: 0, offset: 4, bits: Some((3, 5)) },
+                        llrm_debug::Field { name: "x".into(), r#type: 0, offset: 0, bits: None },
+                        llrm_debug::Field { name: "f".into(), r#type: 0, offset: 4, bits: Some((3, 5)) },
                     ],
                     union: false,
                 },
@@ -400,7 +409,7 @@ fn a_removed_variable_has_no_location_and_the_others_have_theirs() {
     let made = written(vec![removed, frame("x", 8)], vec![int()], Format::Default).unwrap();
     let scratch = tempfile::tempdir().unwrap();
     let path = scratch.path().join("x.o");
-    std::fs::write(&path, objects("elf", &made).unwrap()).unwrap();
+    std::fs::write(&path, objects("elf", &Described::from(made.clone())).unwrap()).unwrap();
     let said = std::process::Command::new(&dump).arg("--verify").arg(&path).output().unwrap();
     assert!(
         String::from_utf8_lossy(&said.stdout).trim_end().ends_with("No errors."),
@@ -427,11 +436,11 @@ fn a_frame_cell_is_found_from_the_canonical_frame_address_where_the_code_keeps_n
         return;
     };
     let mut made = object(vec![frame("x", -4)], vec![int()], Format::Default);
-    made.debug.as_mut().unwrap().frame_base = llrm_object::debug::FrameBase::Cfa { bias: 8, far_bias: 8 };
+    made.debug.as_mut().unwrap().frame_base = llrm_debug::FrameBase::Cfa { bias: 8, far_bias: 8 };
     let made = expanded(&made, made.debug.as_ref().unwrap()).unwrap();
     let scratch = tempfile::tempdir().unwrap();
     let path = scratch.path().join("x.o");
-    std::fs::write(&path, objects("elf", &made).unwrap()).unwrap();
+    std::fs::write(&path, objects("elf", &Described::from(made.clone())).unwrap()).unwrap();
     let shown = std::process::Command::new(&dump).arg("--debug-info").arg(&path).output().unwrap();
     let shown = String::from_utf8_lossy(&shown.stdout).into_owned();
     assert!(shown.contains("DW_AT_frame_base\t(DW_OP_call_frame_cfa)"), "{shown}");
@@ -452,12 +461,12 @@ fn a_function_called_far_finds_its_cells_from_the_longer_frame_address() {
     let fbreg = |far: bool| {
         let mut made = object(vec![frame("x", -2)], vec![int()], Format::Default);
         let info = made.debug.as_mut().unwrap();
-        info.frame_base = llrm_object::debug::FrameBase::Cfa { bias: 4, far_bias: 6 };
+        info.frame_base = llrm_debug::FrameBase::Cfa { bias: 4, far_bias: 6 };
         info.functions[0].far = far;
         let made = expanded(&made, made.debug.as_ref().unwrap()).unwrap();
         let scratch = tempfile::tempdir().unwrap();
         let path = scratch.path().join("x.o");
-        std::fs::write(&path, objects("elf", &made).unwrap()).unwrap();
+        std::fs::write(&path, objects("elf", &Described::from(made.clone())).unwrap()).unwrap();
         let shown = std::process::Command::new(&dump).arg("--debug-info").arg(&path).output().unwrap();
         String::from_utf8_lossy(&shown.stdout).into_owned()
     };
@@ -472,7 +481,7 @@ fn a_function_called_far_finds_its_cells_from_the_longer_frame_address() {
 /// of -4) and restored.
 #[test]
 fn a_functions_frame_rows_are_the_cfa_instructions_the_dwarf_standard_gives() {
-    use llrm_object::debug::FrameRow;
+    use llrm_debug::FrameRow;
     let row = |offset, register: &str, cfa, saved: &[(&str, i64)]| FrameRow {
         offset,
         cfa_register: register.into(),
@@ -482,8 +491,9 @@ fn a_functions_frame_rows_are_the_cfa_instructions_the_dwarf_standard_gives() {
     let mut made = object(Vec::new(), vec![int()], Format::Dwarf { version: 4 });
     let info = made.debug.as_mut().unwrap();
     let register = |name: &str, number| Register { name: name.into(), bits: 32, dwarf: Some(number), codeview: None };
-    info.registers.extend([register("esp", 4), register("eip", 8)]);
-    info.return_register = "eip".into();
+    let file = info.registers_mut(32);
+    file.registers.extend([register("esp", 4), register("eip", 8)]);
+    file.return_register = "eip".into();
     info.functions[0].frame = vec![
         row(0, "esp", 4, &[]),
         row(1, "esp", 8, &[("ebp", -8)]),
@@ -526,16 +536,32 @@ fn a_base_type_is_named_as_the_source_spells_it() {
 /// The unit header's address size was `object.arch.bits() / 8`, so a machine
 /// with no `Arch` variant could not be written: a target says it in
 /// `Info::target`.
+/// `target` as the machine, with the registers the information had.
+fn retarget(
+    info: &mut Info,
+    mut target: llrm_debug::DebugTarget,
+) {
+    target.registers = info.registers_mut(0).clone().into();
+    info.target = Some(target);
+}
+
 #[test]
 fn a_target_with_three_byte_addresses_writes_dwarf_with_three_byte_addresses() {
     let mut made = object(vec![frame("x", 8)], vec![int()], Format::Dwarf { version: 5 });
-    made.debug.as_mut().unwrap().target = Some(llrm_object::debug::DebugTarget {
-        address_bytes: 3,
-        segmented: false,
-        codeview_machine: None,
-        segment_base: None,
-        far_pointer: None,
-    });
+    retarget(
+        made.debug.as_mut().unwrap(),
+        llrm_debug::DebugTarget {
+            address_bytes: 3,
+            segmented: false,
+            codeview_machine: None,
+            segment_base: None,
+            far_pointer: None,
+            registers: Default::default(),
+            entry_values: false,
+            call_arguments: Vec::new(),
+            call_preserved: Vec::new(),
+        },
+    );
     let written = expanded(&made, made.debug.as_ref().unwrap()).unwrap();
     let (_, info) = named(&written, ".debug_info");
     assert_eq!(info.image[7], 3, "the unit header's address size");
@@ -549,12 +575,14 @@ fn a_segmented_address_takes_the_targets_segment_fixup() {
     let mut made = object(vec![frame("x", 8)], vec![int()], Format::Dwarf { version: 4 });
     made.bits = 16;
     let info = made.debug.as_mut().unwrap();
-    info.target = Some(llrm_object::debug::DebugTarget::of(16));
+    retarget(info, llrm_debug::DebugTarget::of(16));
     let error = expanded(&made, made.debug.as_ref().unwrap()).unwrap_err();
     assert!(error.0.contains("segment fixup"), "{error:?}");
     let kind = llrm_object::FixupKind(llrm_object::FixupKind::FIRST_TARGET.0 + 9);
-    made.debug.as_mut().unwrap().target =
-        Some(llrm_object::debug::DebugTarget { segment_base: Some(kind), ..llrm_object::debug::DebugTarget::of(16) });
+    retarget(
+        made.debug.as_mut().unwrap(),
+        llrm_debug::DebugTarget { segment_base: Some(kind), ..llrm_debug::DebugTarget::of(16) },
+    );
     let written = expanded(&made, made.debug.as_ref().unwrap()).unwrap();
     assert!(written.sections.iter().flat_map(|one| &one.relocs).any(|one| one.kind == kind));
 }
@@ -563,10 +591,10 @@ fn a_segmented_address_takes_the_targets_segment_fixup() {
 /// information first.
 fn objects(
     format: &str,
-    object: &Object,
+    object: &Described,
 ) -> Result<Vec<u8>, llrm_object::Unsupported> {
-    use llrm_object::ObjectTarget;
-    llrm_x86::mc::X86Objects.write_object(format, object)
+    use llrm_debug::DebugObjectTarget;
+    llrm_x86::mc::X86Objects.write_described(format, &object.object, object.debug.as_ref())
 }
 
 /// `f` in two pieces of one section (0..6 and 10..16), and the unit's code the
@@ -576,7 +604,7 @@ fn objects(
 fn split(
     version: u16,
     unit: bool,
-) -> Object {
+) -> Described {
     let mut made = object(vec![frame("x", 8)], vec![int()], Format::Dwarf { version });
     let pieces = vec![Range { section: 0, offset: 0, length: 6 }, Range { section: 0, offset: 10, length: 6 }];
     let info = made.debug.as_mut().unwrap();
@@ -646,6 +674,231 @@ fn a_unit_of_two_code_ranges_has_ranges_and_a_base_of_zero() {
 fn a_segmented_function_of_two_ranges_is_refused_by_name() {
     let mut made = split(4, false);
     made.bits = 16;
+    retarget(made.debug.as_mut().unwrap(), llrm_debug::DebugTarget::of(16));
     let why = expanded(&made, made.debug.as_ref().unwrap()).err().expect("refused");
     assert!(why.0.contains("segmented"), "{}", why.0);
+}
+
+/// A lexical block in two pieces on a segmented target was refused ("a DIE of
+/// several code ranges on a segmented target"), so every optimised 16-bit
+/// `-g` compile with a nested scope failed. It is written over its first byte
+/// to its last, as the formats with no list of ranges do.
+#[test]
+fn a_segmented_block_of_two_ranges_is_written_over_its_hull() {
+    let mut made = object(vec![frame("x", 8)], vec![int()], Format::Dwarf { version: 4 });
+    made.bits = 16;
+    let kind = llrm_object::FixupKind(llrm_object::FixupKind::FIRST_TARGET.0 + 9);
+    retarget(
+        made.debug.as_mut().unwrap(),
+        llrm_debug::DebugTarget { segment_base: Some(kind), ..llrm_debug::DebugTarget::of(16) },
+    );
+    let pieces = vec![Range { section: 0, offset: 2, length: 2 }, Range { section: 0, offset: 6, length: 2 }];
+    made.debug.as_mut().unwrap().functions[0].blocks =
+        vec![llrm_debug::Block { ranges: pieces, variables: Vec::new(), blocks: Vec::new(), inlined: None }];
+    let written = expanded(&made, made.debug.as_ref().unwrap());
+    assert!(written.is_ok(), "{:?}", written.err().map(|why| why.0));
+}
+
+/// Mach-O's writer found the offsets of one debug section into another among
+/// the relocations and put them in the fields itself; the DWARF writer says
+/// where a format has none (`doesDwarfUseRelocationsAcrossSections`), so the
+/// fields hold the offsets and no relocation names a debug section.
+#[test]
+fn a_format_without_relocations_across_sections_gets_the_offsets_in_the_fields() {
+    let made = object(vec![frame("x", 8)], vec![int()], Format::Default);
+    let info = made.debug.as_ref().unwrap();
+    let relocated = expanded_for(&made, info, true).unwrap();
+    let plain = expanded_for(&made, info, false).unwrap();
+    let (_, relocated_info) = named(&relocated, ".debug_info");
+    let first = made.sections.len();
+    let (_, plain_info) = named(&plain, ".debug_info");
+    let across = |section: &Section| {
+        section.relocs.iter().filter(|one| matches!(one.target, Target::Section(home) if home >= first)).count()
+    };
+    assert!(across(relocated_info) >= 5 && across(plain_info) == 0, "{:?}", plain_info.relocs);
+    assert_ne!(relocated_info.image, plain_info.image, "the strings' offsets are in the fields");
+    assert_eq!(
+        relocated_info.relocs.len() - across(relocated_info),
+        plain_info.relocs.len(),
+        "addresses stay relocated"
+    );
+}
+
+/// A function that lists its calls gets `call_all_calls`, a declaration DIE
+/// for the callee it does not define, and one call-site DIE per call with the
+/// return pc, the origin and the arguments; the unit verifies. Without the
+/// writer there were none, so a debugger could not show the arguments of a
+/// caller's callee.
+#[test]
+fn call_sites_are_dies_with_origin_return_pc_and_arguments() {
+    use llrm_debug::{CallOrigin, CallParameter, CallSite, CallValue, Declaration};
+    let Some(dump) = dwarfdump() else {
+        skipped("llvm-dwarfdump is not installed");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    for version in [4u16, 5] {
+        let mut made = object(Vec::new(), vec![int()], Format::Dwarf { version });
+        let info = made.debug.as_mut().unwrap();
+        info.declarations = vec![Declaration { name: "g".into(), r#type: 1, external: true }];
+        info.functions[0].all_calls = true;
+        info.functions[0].calls = vec![CallSite {
+            section: 0,
+            offset: 8,
+            origin: Some(CallOrigin::Declaration(0)),
+            parameters: vec![
+                CallParameter { register: "eax".into(), value: CallValue::Constant(7) },
+                CallParameter { register: "eax".into(), value: CallValue::Entry("eax".into()) },
+                CallParameter { register: "eax".into(), value: CallValue::Register { name: "ebp".into(), offset: 0 } },
+            ],
+        }];
+        let path = scratch.path().join("x.o");
+        std::fs::write(&path, objects("elf", &made).unwrap()).unwrap();
+        let said = std::process::Command::new(&dump).arg("--verify").arg(&path).output().unwrap();
+        let text = format!("{}{}", String::from_utf8_lossy(&said.stdout), String::from_utf8_lossy(&said.stderr));
+        assert!(said.status.success() && text.trim_end().ends_with("No errors."), "DWARF {version}:\n{text}");
+        let shown = std::process::Command::new(&dump).arg("--debug-info").arg(&path).output().unwrap();
+        let shown = String::from_utf8_lossy(&shown.stdout);
+        let entry = if version >= 5 { "DW_OP_entry_value" } else { "DW_OP_GNU_entry_value" };
+        let (site, param, all, origin, ret, value) = if version >= 5 {
+            (
+                "DW_TAG_call_site\n",
+                "DW_TAG_call_site_parameter",
+                "DW_AT_call_all_calls",
+                "DW_AT_call_origin",
+                "DW_AT_call_return_pc",
+                "DW_AT_call_value",
+            )
+        } else {
+            (
+                "DW_TAG_GNU_call_site\n",
+                "DW_TAG_GNU_call_site_parameter",
+                "DW_AT_GNU_all_call_sites",
+                "DW_AT_abstract_origin",
+                "DW_AT_low_pc",
+                "DW_AT_GNU_call_site_value",
+            )
+        };
+        for expected in [site, param, all, origin, ret, value, "DW_AT_declaration", "DW_OP_lit7", entry, "DW_OP_breg5"]
+        {
+            assert!(shown.contains(expected), "DWARF {version}: no {expected:?} in\n{shown}");
+        }
+    }
+}
+
+/// A row in `Info::not_stmt` is written without `is_stmt`: the table made
+/// every row a statement, so a debugger stopped at each column of a line.
+#[test]
+fn a_row_that_is_not_a_statement_is_written_without_the_flag() {
+    let Some(dump) = dwarfdump() else {
+        skipped("llvm-dwarfdump is not installed");
+        return;
+    };
+    let mut made = object(vec![frame("x", 8)], vec![int()], Format::Dwarf { version: 5 });
+    made.debug.as_mut().unwrap().not_stmt.insert((0, 8));
+    let scratch = tempfile::tempdir().unwrap();
+    let path = scratch.path().join("x.o");
+    std::fs::write(&path, objects("elf", &made).unwrap()).unwrap();
+    let shown = std::process::Command::new(&dump).arg("--debug-line").arg(&path).output().unwrap();
+    let shown = String::from_utf8_lossy(&shown.stdout);
+    let rows: Vec<&str> = shown.lines().filter(|one| one.starts_with("0x")).collect();
+    assert!(rows[0].contains("is_stmt"), "{rows:?}");
+    assert!(rows.iter().any(|one| one.contains(" 4 ") && !one.contains("is_stmt")), "{rows:?}");
+}
+
+/// Two functions in one section got one sequence, addressed by the section's
+/// first symbol: a format with no such symbol (WebAssembly's function offsets)
+/// could not relocate it. Per function, each sequence is addressed by its own
+/// function's symbol.
+#[test]
+fn a_sequence_per_function_is_addressed_by_its_own_symbol() {
+    let mut made = object(vec![frame("x", 8)], vec![int()], Format::Default);
+    let mut info = made.debug.take().unwrap();
+    let mut second = info.functions[0].clone();
+    second.name = "g".into();
+    second.symbol = 1;
+    second.ranges = vec![Range { section: 0, offset: 8, length: 8 }];
+    second.body = None;
+    info.functions[0].ranges = vec![Range { section: 0, offset: 0, length: 8 }];
+    info.functions[0].body = None;
+    info.functions.push(second);
+    let mut symbol = made.object.symbols[0].clone();
+    symbol.name = "_g".into();
+    symbol.definition = Definition::Defined { section: 0, offset: 8 };
+    made.object.symbols.push(symbol);
+    let targets = |written: &Object| -> Vec<usize> {
+        let (_, line) = named(written, ".debug_line");
+        line.relocs
+            .iter()
+            .filter_map(|one| match one.target {
+                Target::Symbol(symbol) => Some(symbol),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(targets(&expanded(&made.object, &info).unwrap()), [0]);
+    assert_eq!(targets(&expanded_per_function(&made.object, &info).unwrap()), [0, 1]);
+}
+
+/// WebAssembly keeps a variable in a local and the frame address in another:
+/// the writer refused both, so no wasm variable could be described.
+#[test]
+fn a_wasm_local_is_a_wasm_location_and_a_frame_base() {
+    let mut made = object(
+        vec![
+            frame("x", 8),
+            Variable { name: "y".into(), r#type: 0, kind: Kind::Local, location: Location::WasmLocal(5) },
+        ],
+        vec![int()],
+        Format::Default,
+    );
+    made.debug.as_mut().unwrap().frame_base = llrm_debug::FrameBase::WasmLocal(3);
+    let written = expanded(&made.object, made.debug.as_ref().unwrap()).unwrap();
+    let (_, info) = named(&written, ".debug_info");
+    let has = |needle: &[u8]| info.image.windows(needle.len()).any(|window| window == needle);
+    assert!(has(&[0xED, 0x00, 3, 0x9F]), "the frame base, local 3");
+    assert!(has(&[0xED, 0x00, 5, 0x9F]), "y, local 5");
+    // x is still an offset from the frame base: DW_OP_fbreg 8.
+    assert!(has(&[0x91, 8]), "x");
+}
+
+/// A stackified wasm value has no local; the writer refused it, so `-O2` locals
+/// in the operand stack had no description.
+#[test]
+fn a_wasm_stack_slot_is_a_wasm_location_of_kind_two() {
+    let made = object(
+        vec![Variable { name: "t".into(), r#type: 0, kind: Kind::Local, location: Location::WasmStack(4) }],
+        vec![int()],
+        Format::Default,
+    );
+    let written = expanded(&made.object, made.debug.as_ref().unwrap()).unwrap();
+    let (_, info) = named(&written, ".debug_info");
+    assert!(info.image.windows(4).any(|window| window == [0xED, 0x02, 4, 0x9F]), "t, stack slot 4");
+}
+
+/// WebAssembly's frame pointer is a local of its own in each function:
+/// `Info::frame_base` alone gave every subprogram the same one.
+#[test]
+fn a_function_states_its_own_frame_base() {
+    let mut made = object(vec![frame("x", 8)], vec![int()], Format::Default);
+    let mut info = made.debug.take().unwrap();
+    let mut second = info.functions[0].clone();
+    second.name = "g".into();
+    second.symbol = 1;
+    second.ranges = vec![Range { section: 0, offset: 8, length: 8 }];
+    second.body = None;
+    info.functions[0].ranges = vec![Range { section: 0, offset: 0, length: 8 }];
+    info.functions[0].body = None;
+    info.functions[0].frame_base = Some(llrm_debug::FrameBase::WasmLocal(1));
+    second.frame_base = Some(llrm_debug::FrameBase::WasmLocal(3));
+    info.functions.push(second);
+    let mut symbol = made.object.symbols[0].clone();
+    symbol.name = "_g".into();
+    symbol.definition = Definition::Defined { section: 0, offset: 8 };
+    made.object.symbols.push(symbol);
+    let written = expanded(&made.object, &info).unwrap();
+    let (_, debug) = named(&written, ".debug_info");
+    let has = |needle: &[u8]| debug.image.windows(needle.len()).any(|window| window == needle);
+    assert!(has(&[0xED, 0x00, 1, 0x9F]), "f's frame base, local 1");
+    assert!(has(&[0xED, 0x00, 3, 0x9F]), "g's frame base, local 3");
 }

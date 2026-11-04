@@ -32,8 +32,20 @@ def source_dir(prog):
     return KERNELS / prog if (KERNELS / prog).is_dir() else BENCH / prog
 sys.path.insert(0, str(REPO / "tools"))
 import llrmbin  # noqa: E402
+import sizes  # noqa: E402
 
-LLRM = llrmbin.bin_dir() / "llrm-c"   # where cargo put it; build.sh and ctime.py use the same
+LLRM = llrmbin.bin_dir() / "llrm-cc"   # where cargo put it; build.sh and ctime.py use the same
+
+
+def cc_env(bits=32):
+    """The environment to run `LLRM` in: the caller's, with what llrm-cc needs. LLRM_CLANG_M16 is for 16-bit compiles
+    only: a 32-bit one given it refuses its clang as not the pinned one."""
+    env = {**os.environ, **llrmbin.cc_environment()}
+    if bits != 16:
+        env.pop("LLRM_CLANG_M16", None)
+    return env
+
+
 STUB, SENT, STACK_TOP, MEM = 0x8000, 0x7000, 0x7F0000, 0x800000
 # main is entered as after a call from code that keeps the System V stack boundary: esp + 4, the caller's, a multiple of 16.
 ENTRY_ESP = STACK_TOP - 4
@@ -246,7 +258,8 @@ def cost(ins, taken, first_rep, mem, multiplier=None, prefixes=0):
     """The 486's clocks of `ins`, each from the compiler's own `timings.times` (clocks.py), and `prefixes` operand- and address-size
     prefixes (clocks.prefixes of its bytes) at the table's clock each. A branch is `taken` or not; a string instruction is the
     `first_rep` of its repeat or one more; `multiplier` is the operand a MUL reads."""
-    return _form_clocks(ins, taken, first_rep, multiplier) + prefixes * clocks.PREFIX
+    # The prefix is decoded once: a repeated string instruction pays it with its first iteration, not each.
+    return _form_clocks(ins, taken, first_rep, multiplier) + (prefixes * clocks.PREFIX if first_rep else 0)
 
 
 def _form_clocks(ins, taken, first_rep, multiplier):
@@ -277,6 +290,9 @@ def _form_clocks(ins, taken, first_rep, multiplier):
         if k0 == OpKind.REGISTER and RegisterExt.is_segment_register(ins.op_register(0)):
             return clocks.clocks("pop_seg")
         return clocks.clocks("pop_m" if dst_mem else "pop_r")
+    if m in (Mnemonic.SHLD, Mnemonic.SHRD):
+        by_cl = ins.op_kind(2) == OpKind.REGISTER
+        return clocks.UNTABLED["shld_" + ("cl" if by_cl else "imm") + ("_mem" if dst_mem else "")]
     if m in SHIFTS:
         if k1 is not None and k1 == OpKind.REGISTER:
             return clocks.UNTABLED["shift_cl_mem" if dst_mem else "shift_cl"]
@@ -323,9 +339,15 @@ def _form_clocks(ins, taken, first_rep, multiplier):
     if m in (Mnemonic.LODSB, Mnemonic.LODSW, Mnemonic.LODSD):
         return clocks.UNTABLED["loads"]
     if m in (Mnemonic.FLD, Mnemonic.FLD1, Mnemonic.FLDZ):
-        return clocks.clocks("x87_load") if m == Mnemonic.FLD and dst_mem else clocks.UNTABLED["fld_reg"]
+        if m == Mnemonic.FLD and dst_mem:
+            return clocks.UNTABLED["fld_m80"] if ins.memory_size == MemorySize.FLOAT80 else clocks.clocks("x87_load")
+        return clocks.UNTABLED["fld_reg"]
     if m in (Mnemonic.FST, Mnemonic.FSTP):
-        return clocks.clocks("x87_store") if dst_mem else clocks.UNTABLED["fst_reg"]
+        if not dst_mem:
+            return clocks.UNTABLED["fst_reg"]
+        if ins.memory_size == MemorySize.FLOAT80:
+            return clocks.UNTABLED["fstp_m80"]
+        return clocks.UNTABLED["fst_m32"] if ins.memory_size == MemorySize.FLOAT32 else clocks.clocks("x87_store")
     if m in (Mnemonic.FADD, Mnemonic.FSUB, Mnemonic.FSUBR, Mnemonic.FADDP, Mnemonic.FSUBP, Mnemonic.FSUBRP):
         return clocks.clocks("x87_add_m" if dst_mem else "x87_add")
     if m in (Mnemonic.FMUL, Mnemonic.FMULP):
@@ -370,6 +392,13 @@ def built_abi():
     """The convention build.sh compiled llrm's side in, as it recorded it: a work directory of an earlier build says so too."""
     record = OUT / "abi"
     return record.read_text().strip() if record.exists() else "watcom"
+
+
+def built_ld():
+    """The long double width, 80 or 64 bits, build.sh compiled both sides at, as it recorded it (a directory of an earlier build has 8
+    bytes in llrm and 12 in gcc: the 64 of Watcom's side was beside the 80 of the reference)."""
+    record = OUT / "ld"
+    return int(record.read_text()) if record.exists() else 64
 
 
 def stub_digest():
@@ -496,25 +525,45 @@ def run(prog, variant, hot=False, limit=300_000_000):
                 hits=hits, edges=edges, kern=kern, main=main, code_end=code_end, uc=uc, cache=cache, syms=syms)
 
 
-def code_bytes(prog, variant):
-    """Size of the kernel's code: the CODE-class segments (OMF) or .text (ELF) of its object, like tools/sizes.py, and for
-    gcc and clang the runtime members they pulled in, so that a divide they send to libgcc is counted and not left out."""
+def omf_segments(prog, variant):
+    """(size, class name) of each segment of llrm's OMF object."""
+    data = (OUT / "o" / f"{prog}.{variant}.obj").read_bytes()
+    lnames, classes, sizes = [""], [], []
+    at = 0
+    while at < len(data):
+        kind, size = data[at], int.from_bytes(data[at + 1: at + 3], "little")
+        body = data[at + 3: at + 2 + size]; at += 3 + size
+        if kind == 0x96:
+            i = 0
+            while i < len(body):
+                lnames.append(body[i + 1: i + 1 + body[i]].decode("latin-1")); i += 1 + body[i]
+        elif kind == 0x99:
+            sizes.append(int.from_bytes(body[1:5], "little")); classes.append(lnames[body[6]])
+    return list(zip(sizes, classes))
+
+
+def data_bytes(prog, variant):
+    """Initialised data of the object: the DATA-class segments (OMF) or .data and .rodata* (ELF). bss, .comment, .eh_frame are not data;
+    the constants gcc puts in .rodata.cst* and llrm in _DATA are the same thing, so code_bytes alone favoured whoever keeps constants out of .text."""
     if variant in OMF_VARIANTS:
-        data = (OUT / "o" / f"{prog}.{variant}.obj").read_bytes()
-        lnames, classes, sizes = [""], [], []
-        at = 0
-        while at < len(data):
-            kind, size = data[at], int.from_bytes(data[at + 1: at + 3], "little")
-            body = data[at + 3: at + 2 + size]; at += 3 + size
-            if kind == 0x96:
-                i = 0
-                while i < len(body):
-                    lnames.append(body[i + 1: i + 1 + body[i]].decode("latin-1")); i += 1 + body[i]
-            elif kind == 0x99:
-                sizes.append(int.from_bytes(body[1:5], "little")); classes.append(lnames[body[6]])
-        return sum(s for s, c in zip(sizes, classes) if c.endswith("CODE"))
+        return sum(s for s, c in omf_segments(prog, variant) if c.endswith("DATA"))
     out = subprocess.run(["size", "-A", str(OUT / "b" / f"{prog}.{variant}.o")], capture_output=True, text=True).stdout
-    return sum(int(l.split()[1]) for l in out.splitlines() if l.startswith(".text")) + archive_code(prog, variant)
+    return sum(int(l.split()[1]) for l in out.splitlines() if l.startswith((".data", ".rodata")))
+
+
+def code_size(prog, variant):
+    """(code bytes without alignment padding, the padding) of the kernel's object: the executable sections as tools/sizes.py reads them
+    (the gate's definition: a loop aligned by nops is not growth). For gcc and clang `code_bytes` adds the runtime members they pulled in."""
+    obj = OUT / "o" / f"{prog}.{variant}.obj" if variant in OMF_VARIANTS else OUT / "b" / f"{prog}.{variant}.o"
+    size = sizes.code_size(obj)
+    return size.code, size.align
+
+
+def code_bytes(prog, variant):
+    """Size of the kernel's code without alignment padding (`code_size`), and for gcc and clang the runtime members they pulled in, so
+    that a divide they send to libgcc is counted and not left out."""
+    code = code_size(prog, variant)[0]
+    return code if variant in OMF_VARIANTS else code + archive_code(prog, variant)
 
 
 def archive_code(prog, variant):
@@ -534,7 +583,7 @@ def main():
     prog, variant = sys.argv[1], sys.argv[2]
     r = run(prog, variant)
     expect = [int(x) for x in (source_dir(prog) / f"{prog}.out").read_text().split()]
-    print(json.dumps(dict(prog=prog, variant=variant, ins=r["ins"], mem=r["mem"], misaligned=r["misaligned"], nops=r["nops"], clocks=r["clocks"], code=code_bytes(prog, variant), ok=r["reports"] == expect, got=r["reports"][:4])))
+    print(json.dumps(dict(prog=prog, variant=variant, ld=built_ld(), ins=r["ins"], mem=r["mem"], misaligned=r["misaligned"], nops=r["nops"], clocks=r["clocks"], code=code_bytes(prog, variant), align=code_size(prog, variant)[1], data=data_bytes(prog, variant), ok=r["reports"] == expect, got=r["reports"][:4])))
 
 
 if __name__ == "__main__":

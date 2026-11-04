@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/argpromotion.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/argpromotion.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/argpromotion.rs sha256:ba518f47b10d919c0b0e8221a4bc3543f934e3956a5b1150e6299a4b0cc9e985 -->
+<!-- src: crates/opt/llrm-transforms/src/argpromotion.rs sha256:9ff5fb73ff7ef8843fed570116ccd5c95ee2b3e83e738c28d2ec6e24c47578cc -->
 
 # argpromotion
 
@@ -27,7 +27,8 @@ they must be safe there and read what the function would have read:
   the same load, or
 - the parameter is `dereferenceable` for the field's bytes and nothing
   writes them while the function runs (the pointer is `memory::invariant`,
-  or the function writes no memory).
+  the function writes no memory, or every load of the field is
+  `!invariant.load`).
 
 ```text
  caller:  call f(ptr %d, i16 %k)           %n = load i16, ptr %d+4
@@ -46,7 +47,9 @@ Profitability is priced by the target for the level being built
 loads each caller gains (`load`), against the loads the function loses. At
 -Os the price is in bytes and the loads count at every call; otherwise in
 clocks, where a call inside a loop whose pointer the loop does not change
-counts no loads (they will be hoisted). A recursive function is promoted
+counts no loads (they will be hoisted), and a call passing the address of
+the caller's own alloca counts none at either level (the load is the
+caller's store). A recursive function is promoted
 when the extra words cost no more than the loads it saves.
 
 A slice descriptor read for its length (a Nib `&mut [T]`, a struct by

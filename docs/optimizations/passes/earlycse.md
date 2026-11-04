@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/earlycse.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/earlycse.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/earlycse.rs sha256:711bc783b6d6e60c378ee6ee68a5e220341fffc64082fddf71772b0f23873086 -->
+<!-- src: crates/opt/llrm-transforms/src/earlycse.rs sha256:3dda26bdc455afea05115d13455888b70e5f32bc2b192672010bd41f47b81837 -->
 
 # earlycse
 
@@ -11,12 +11,11 @@ A translation of `llvm/lib/Transforms/Scalar/EarlyCSE.cpp` at d1106deb71cc;
 each function carries the permalink of the one it translates. What is not
 translated is marked DEVIATE with its reason:
 
-- DEVIATE no `invariant.start`, `guard`, `sideeffect`, `pseudoprobe`, masked
-  or target memory intrinsics, memset forwarding, fences or atomics: MIR has
-  none (or `fill` makes them later). `llvm.assume` is handled.
+- DEVIATE no `guard`, `sideeffect`, `pseudoprobe`, masked or target memory
+  intrinsics, memset forwarding, fences or atomics: MIR has none (or `fill`
+  makes them later). `llvm.assume` is handled.
 - DEVIATE flags are intersected whenever a value is reused (`combineIRFlags`
-  does it only when poison-generating flags remain); a load's metadata not
-  shared by both loads is dropped (`combineMetadataForCSE` merges it).
+  does it only when poison-generating flags remain).
 - DEVIATE a call's attributes are not intersected; a call that only reads or
   only writes memory (`memory::of`, which counts every location including
   `inaccessiblemem`) is numbered unless it is an `llvm.`/`llrm.` marker.
@@ -70,6 +69,4 @@ b0:
 ```
 
 ## Used by
-[`crate::pipeline`](pipeline.md)'s `llvm_order` lists (`earlycse@649`, `earlycse@1180`),
-under `Options::llvm_order`, on by default (`LLRM_NO_LLVM_ORDER` turns it
-off).
+[`crate::pipeline`](pipeline.md)'s `llvm_order` lists (`earlycse@649`, `earlycse@1180`).

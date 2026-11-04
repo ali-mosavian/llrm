@@ -367,7 +367,7 @@ pub fn effects(
     found.writes = writes;
     for (list, into) in [(row.reads, &mut found.reads), (row.writes, &mut found.writes)] {
         for entry in list {
-            if ["rep", "idiom", "count", "self", "narrow", "same"].contains(entry) {
+            if ["rep", "idiom", "count", "self", "narrow", "same", "cond"].contains(entry) {
                 continue;
             }
             let (dropped, entry) = entry.strip_prefix('-').map_or((false, *entry), |rest| (true, rest));
@@ -390,6 +390,11 @@ pub fn effects(
     if row.writes.contains(&"rep") {
         let (count, rest) = found.writes.iter().partition(|one| one.full_register() == root("cx", 32).full_register());
         (found.writes, found.maybe_writes) = (count, rest);
+    }
+    // `bsf ax, bx` leaves AX as it was when BX is zero: nothing is written for
+    // certain.
+    if row.writes.contains(&"cond") {
+        found.maybe_writes.append(&mut found.writes);
     }
     Some(Served::Known(found))
 }

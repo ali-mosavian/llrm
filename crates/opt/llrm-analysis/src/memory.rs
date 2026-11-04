@@ -2237,6 +2237,9 @@ pub fn extent_of(
         let ConstantKind::Global(global) = unit.context.get(id).kind else { return None };
         let GlobalKind::Variable(variable) = &unit.globals.get(global.0 as usize)?.kind else { return None };
         variable.initializer?;
+        // The size alone: making the object (its capture state, interning)
+        // for it was 47 M Ir of fjoins' 991 M, asked 63,024 times.
+        return Some(unit.layout.alloc_size(&unit.context.types, variable.ty) as i64);
     }
     object_of(unit, root)?.extent
 }

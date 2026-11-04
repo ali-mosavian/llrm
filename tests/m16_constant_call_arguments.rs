@@ -18,7 +18,19 @@ fn test_a_constant_argument_of_two_calls_is_pushed_as_an_immediate() {
     std::fs::write(scratch.path().join("a.c"), KERNEL).unwrap();
     let output = common::cc::llrm_c()
         .current_dir(scratch.path())
-        .args(["-m16", "-march=i386", "-mabi=cdecl", "--isel=dag", "-Os", "-S", "-o", "-", "a.c"])
+        .args([
+            "-m16",
+            "-march=i386",
+            "-mabi=cdecl",
+            "-Xclang",
+            "-fdefault-calling-conv=cdecl",
+            "--isel=dag",
+            "-Os",
+            "-S",
+            "-o",
+            "-",
+            "a.c",
+        ])
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));

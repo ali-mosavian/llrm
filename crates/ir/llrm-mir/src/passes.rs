@@ -189,10 +189,18 @@ pub struct Declared {
     /// Where the names come from while `ids` is not made: the module's
     /// `Declarations`.
     held: Option<Rc<Vec<GlobalValue>>>,
+    /// Or the module's `GlobalNames`, which stand through a change of a
+    /// declaration's attributes.
+    named: Option<Rc<Vec<Option<String>>>>,
     next: u32,
     pending: Vec<Pending>,
     /// Metadata nodes made, numbered after the module's.
     nodes: Vec<crate::module::MetadataNode>,
+    /// What the nodes made that are specialized (`DILocation`) are.
+    special: std::collections::BTreeMap<crate::module::MetadataId, crate::module::Special>,
+    /// The location made of an inlined body's location and the call it was
+    /// inlined at.
+    located: HashMap<(crate::module::MetadataId, crate::module::MetadataId), crate::module::MetadataId>,
     first_node: u32,
     /// The live instructions of the functions a constant names, while a pass
     /// that `wants_sizes` runs (`size_of`).
@@ -239,9 +247,12 @@ impl Declared {
         Self {
             ids: Some(ids),
             held: None,
+            named: None,
             next: module.globals.len() as u32,
             pending: Vec::new(),
             nodes: Vec::new(),
+            special: Default::default(),
+            located: HashMap::default(),
             first_node: module.metadata.len() as u32,
             sizes: HashMap::default(),
         }
@@ -259,22 +270,52 @@ impl Declared {
             ids: None,
             next: held.len() as u32,
             held: Some(held),
+            named: None,
             pending: Vec::new(),
             nodes: Vec::new(),
+            special: Default::default(),
+            located: HashMap::default(),
+            first_node: metadata as u32,
+            sizes: HashMap::default(),
+        }
+    }
+
+    /// As `over`, from the names of the module's globals alone: a pass that
+    /// declares needs those, and they stand where a function's attributes
+    /// change.
+    pub fn over_names(
+        named: Rc<Vec<Option<String>>>,
+        metadata: usize,
+    ) -> Self {
+        Self {
+            ids: None,
+            next: named.len() as u32,
+            held: None,
+            named: Some(named),
+            pending: Vec::new(),
+            nodes: Vec::new(),
+            special: Default::default(),
+            located: HashMap::default(),
             first_node: metadata as u32,
             sizes: HashMap::default(),
         }
     }
 
     fn names(&mut self) -> &mut HashMap<String, GlobalId> {
-        let held = &self.held;
+        let (held, named) = (&self.held, &self.named);
         self.ids.get_or_insert_with(|| {
             counted("declared names", false);
-            held.iter()
-                .flat_map(|all| all.iter())
-                .enumerate()
-                .filter_map(|(at, one)| Some((one.name.owned()?, GlobalId(at as u32))))
-                .collect()
+            match (held, named) {
+                (Some(all), _) => all
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(at, one)| Some((one.name.owned()?, GlobalId(at as u32))))
+                    .collect(),
+                (None, Some(all)) => {
+                    all.iter().enumerate().filter_map(|(at, one)| Some((one.clone()?, GlobalId(at as u32)))).collect()
+                }
+                (None, None) => HashMap::default(),
+            }
         })
     }
 
@@ -295,6 +336,7 @@ impl Declared {
                 Pending::Function(name, ty) => GlobalValue {
                     name: name.clone().into(),
                     linkage: crate::module::Linkage::External,
+                    visibility: crate::module::Visibility::Default,
                     unnamed_addr: Default::default(),
                     address_space: 0,
                     kind: GlobalKind::Function(Box::new(
@@ -308,6 +350,7 @@ impl Declared {
                     GlobalValue {
                         name: name.clone().into(),
                         linkage: crate::module::Linkage::External,
+                        visibility: crate::module::Visibility::Default,
                         unnamed_addr: Default::default(),
                         address_space: 0,
                         kind: GlobalKind::Function(Box::new(function)),
@@ -316,6 +359,7 @@ impl Declared {
                 Pending::Table(name, variable) => GlobalValue {
                     name: name.clone().into(),
                     linkage: crate::module::Linkage::Private,
+                    visibility: crate::module::Visibility::Default,
                     unnamed_addr: Default::default(),
                     address_space: 0,
                     kind: GlobalKind::Variable(variable.clone()),
@@ -353,6 +397,55 @@ impl Declared {
     ) -> crate::module::MetadataId {
         self.nodes.push(node);
         crate::module::MetadataId(self.first_node + self.nodes.len() as u32 - 1)
+    }
+
+    /// `loc`, a `DILocation` of an inlined body, as seen from the call it was
+    /// inlined at, `call`: the same line, column and scope with `inlinedAt`
+    /// ending in `call` (`fixupLineNumbers`, LLVM's inliner), one node per
+    /// pair. Not a `DILocation` with named fields: `call` alone.
+    pub fn inlined_at(
+        &mut self,
+        module: crate::module::Metadata<'_>,
+        loc: crate::module::MetadataId,
+        call: crate::module::MetadataId,
+    ) -> crate::module::MetadataId {
+        use crate::module::{MetadataId, MetadataNode, MetadataOperand, Special};
+        if let Some(&made) = self.located.get(&(loc, call)) {
+            return made;
+        }
+        let made_here = loc.0.checked_sub(self.first_node);
+        let (node, special): (&MetadataNode, &Special) = match made_here {
+            Some(at) => match (self.nodes.get(at as usize), self.special.get(&loc)) {
+                (Some(node), Some(special)) => (node, special),
+                _ => return loc,
+            },
+            None => match (module.nodes.get(loc.0 as usize), module.special.get(&loc)) {
+                (Some(node), Some(special)) => (node, special),
+                _ => return loc,
+            },
+        };
+        if special.kind != "DILocation" || special.fields.len() != node.operands.len() {
+            return loc;
+        }
+        let mut fields = special.fields.clone();
+        let mut operands = node.operands.clone();
+        let distinct = node.distinct;
+        let at = fields.iter().position(|one| one == "inlinedAt");
+        let outer = match at.and_then(|at| operands.get(at).cloned()) {
+            Some(MetadataOperand::Node(prev)) => self.inlined_at(module, prev, call),
+            _ => call,
+        };
+        match at {
+            Some(at) => operands[at] = MetadataOperand::Node(outer),
+            None => {
+                fields.push("inlinedAt".to_owned());
+                operands.push(MetadataOperand::Node(outer));
+            }
+        }
+        let id: MetadataId = self.node(MetadataNode { distinct, operands });
+        self.special.insert(id, Special { kind: "DILocation".to_owned(), fields });
+        self.located.insert((loc, call), id);
+        id
     }
 
     /// `Module::getFunction`: the global `name`, declared by the module or by
@@ -472,6 +565,8 @@ impl Declared {
         }
         assert_eq!(module.metadata.len() as u32, self.first_node, "nodes numbered after the module's");
         module.metadata.append(&mut self.nodes);
+        module.special.append(&mut self.special);
+        self.located.clear();
         self.first_node = module.metadata.len() as u32;
         Ok(made)
     }
@@ -676,9 +771,11 @@ pub trait ModuleAnalysis: 'static {
     }
 }
 
-/// The declarations an analysis last worked from: its result stands while
-/// `Declarations` is the same result.
-struct Seen<A>(Option<Rc<Vec<GlobalValue>>>, std::marker::PhantomData<A>);
+/// The declarations an analysis last worked from, as the number of the listing:
+/// its result stands while `Declarations` is the same listing. A number, not
+/// the listing, so that the analysis holds none (a listing nothing else holds
+/// is brought up to date in place).
+struct Seen<A>(Option<u64>, std::marker::PhantomData<A>);
 
 impl<A> Default for Seen<A> {
     fn default() -> Self {
@@ -693,13 +790,24 @@ fn declared_as_before<A: 'static>(
     analyses: &mut ModuleAnalyses,
     working: bool,
 ) -> bool {
-    let now = analyses.get::<Declarations>(module);
+    analyses.get::<Declarations>(module);
+    let now = analyses.listing;
     let seen = analyses.memo::<Seen<A>>();
-    let same = seen.0.as_ref().is_some_and(|then| Rc::ptr_eq(then, &now));
+    let same = seen.0 == Some(now);
     if working {
         seen.0 = Some(now);
     }
     same
+}
+
+thread_local! {
+    static SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread's `CalleeEffects` summarized every function of
+/// a module, not just the ones whose declaration moved.
+pub fn callee_scans() -> usize {
+    SCANS.with(std::cell::Cell::get)
 }
 
 /// What each function does to memory, as its attributes state it: of its
@@ -713,7 +821,37 @@ impl ModuleAnalysis for CalleeEffects {
         module: &Module,
         analyses: &mut ModuleAnalyses,
     ) -> Self::Result {
+        let then = analyses.memo::<Seen<Self>>().0;
         declared_as_before::<Self>(module, analyses, true);
+        // The last map with the summaries of the declarations that moved
+        // since put in place, when nothing else holds it, so that each
+        // function does not summarize every global again.
+        if let Some(then) = then
+            && let Some(moved) = analyses.declarations_moved_since(then)
+            && analyses.dropped.contains_key(&TypeId::of::<Self>())
+        {
+            analyses.release_outer_holders();
+            if let Some(last) = analyses.take_dropped::<Self>() {
+                match Rc::try_unwrap(last) {
+                    Ok(mut callees) => {
+                        for id in moved {
+                            let global = module.global(id);
+                            match &global.kind {
+                                GlobalKind::Function(function) => {
+                                    callees.insert(id, crate::memory::global_summary(global.name.as_deref(), function));
+                                }
+                                GlobalKind::Variable(_) => {
+                                    callees.remove(&id);
+                                }
+                            }
+                        }
+                        return callees;
+                    }
+                    Err(_) => {}
+                }
+            }
+        }
+        SCANS.with(|scans| scans.set(scans.get() + 1));
         crate::memory::callees(module)
     }
 
@@ -819,6 +957,31 @@ impl ModuleAnalysis for TypeAncestry {
     }
 }
 
+/// The name of every global, by id: what a pass that declares a function looks
+/// the module up by. A change of a function's attributes leaves it as it was,
+/// where `Declarations` is made again.
+pub struct GlobalNames;
+
+impl ModuleAnalysis for GlobalNames {
+    type Result = Vec<Option<String>>;
+    const NAME: &'static str = "global-names";
+    fn run(
+        module: &Module,
+        _: &mut ModuleAnalyses,
+    ) -> Self::Result {
+        module.globals.iter().map(|one| one.name.owned()).collect()
+    }
+
+    fn unchanged(
+        module: &Module,
+        _: &mut ModuleAnalyses,
+        previous: &Self::Result,
+    ) -> bool {
+        module.globals.len() == previous.len()
+            && module.globals.iter().zip(previous).all(|(global, name)| global.name.as_deref() == name.as_deref())
+    }
+}
+
 /// Every global as its declaration, by id: what a function may read of
 /// the others.
 pub struct Declarations;
@@ -830,8 +993,58 @@ impl ModuleAnalysis for Declarations {
         module: &Module,
         analyses: &mut ModuleAnalyses,
     ) -> Self::Result {
+        let before = analyses.listing;
+        let listing = NEXT_LISTING.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        analyses.listing = listing;
+        if before == 0 {
+            analyses.unknown_until = listing;
+        }
+        // Brought up to date: the last listing with the declarations of the
+        // bodies edited since put in its place, when nothing else holds it,
+        // so that each function does not list every global again.
+        let mut held = None;
+        if let Some(edited) = analyses.declarations_edits().cloned()
+            && analyses.dropped.get(&TypeId::of::<Declarations>()).is_some_and(|last| {
+                last.downcast_ref::<Vec<GlobalValue>>().is_some_and(|last| last.len() == module.globals.len())
+            })
+        {
+            analyses.release_outer_holders();
+            if let Some(last) = analyses.take_dropped::<Declarations>() {
+                match Rc::try_unwrap(last) {
+                    Ok(mut patched) => {
+                        for id in edited {
+                            let now = module.global(id).declaration();
+                            if patched[id.0 as usize] != now {
+                                patched[id.0 as usize] = now;
+                                analyses.declaration_moves.insert(id, listing);
+                            }
+                        }
+                        analyses.declarations_verified();
+                        return patched;
+                    }
+                    Err(last) => held = Some(last),
+                }
+            }
+        }
         analyses.declarations_verified();
-        module.declarations()
+        let fresh = module.declarations();
+        let last = held.or_else(|| {
+            analyses
+                .dropped
+                .get(&TypeId::of::<Declarations>())
+                .and_then(|last| Rc::clone(last).downcast::<Vec<GlobalValue>>().ok())
+        });
+        match last.filter(|last| last.len() == fresh.len()) {
+            Some(last) => {
+                for (at, (then, now)) in last.iter().zip(&fresh).enumerate() {
+                    if then != now {
+                        analyses.declaration_moves.insert(GlobalId(at as u32), listing);
+                    }
+                }
+            }
+            None => analyses.unknown_until = listing,
+        }
+        fresh
     }
 
     fn unchanged(
@@ -1232,6 +1445,11 @@ trait Cached {
     fn incremental(&self) -> bool;
     /// Whether the result reads facts of the outer manager.
     fn reads_outer(&self) -> bool;
+    /// The outer manager it stands under now, a stale one that nothing reads.
+    fn rebase(
+        &mut self,
+        outer: &Rc<Outer>,
+    );
     /// `still_true`, as `covers` has it, for a result kept as sound.
     fn still_covered(
         &self,
@@ -1292,6 +1510,13 @@ impl<A: Analysis> Cached for Entry<A> {
 
     fn reads_outer(&self) -> bool {
         A::READS_OUTER
+    }
+
+    fn rebase(
+        &mut self,
+        outer: &Rc<Outer>,
+    ) {
+        self.outer = Rc::clone(outer);
     }
 
     fn still_covered(
@@ -1406,14 +1631,26 @@ fn check_modules() -> bool {
     *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_MODULES"))
 }
 
-fn check_captures() -> bool {
+pub(crate) fn check_captures() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_CAPTURES").is_some())
 }
 
 fn check_replay() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_REPLAY"))
+    let on = *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_REPLAY"));
+    if on {
+        REPLAY_CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    on
+}
+
+static REPLAY_CHECKS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// How many times a `LLRM_CHECK_REPLAY` site asked and found it on: reported by
+/// `LLRM_DEBUG=checks` like `stale_checks_run`, which the premise step reads.
+pub fn replay_checks_run() -> u32 {
+    REPLAY_CHECKS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Whether `changes` only keep every live value's meaning, as a result that
@@ -1947,6 +2184,20 @@ impl Analyses {
     /// Drops what reads facts of the outer manager, where that is not the one
     /// the results were derived under: the results that read the function
     /// alone stand.
+    /// Lets go of the outer manager it stands under, for `stale`, which nothing
+    /// reads: what read the facts is dropped, as it is where the outer manager
+    /// changes, and what did not stands as it was.
+    fn release_outer(
+        &mut self,
+        stale: &Rc<Outer>,
+    ) {
+        self.drop_reading_outer();
+        for entry in self.cache.values_mut().chain(self.kept.values_mut()).chain(self.evicted.values_mut()) {
+            entry.rebase(stale);
+        }
+        self.outer = Rc::clone(stale);
+    }
+
     fn drop_reading_outer(&mut self) {
         self.attributes = None;
         let gone: Vec<TypeId> =
@@ -2161,6 +2412,9 @@ pub struct ModuleAnalyses {
     /// Results dropped, reused when computed again the same, so that an
     /// outer proxy holding them stays the same.
     dropped: HashMap<TypeId, Rc<dyn Any>>,
+    /// The results `take_dropped` handed over, for `why` to tell a result
+    /// brought up to date from one made from nothing.
+    taken: HashSet<TypeId>,
     outer: Option<Rc<Outer>>,
     functions: HashMap<GlobalId, Analyses>,
     /// The bodies reported edited since the declarations were last checked
@@ -2176,6 +2430,17 @@ pub struct ModuleAnalyses {
     /// analyses made over it, not to ones carried from before.
     log_epoch: u64,
     declarations_open: bool,
+    /// Which listing `Declarations` holds: a new number for each one made,
+    /// none shared with another module's analyses or an earlier run's.
+    listing: u64,
+    /// The listing that last changed each global's declaration, where it is
+    /// known (`declaration_moved`).
+    declaration_moves: std::collections::BTreeMap<GlobalId, u64>,
+    /// Listings before this are not described by `declaration_moves`.
+    unknown_until: u64,
+    /// How often `invalidate` has said anything may have changed: a result that
+    /// trusts the log of edits for what moved must be of the same count.
+    resets: u64,
     metadata_open: bool,
     /// What an analysis keeps for its next run, by its type: the working of an
     /// update that reuses the last.
@@ -2204,6 +2469,8 @@ impl Carried {
     }
 }
 
+static NEXT_LISTING: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 static NEXT_LOG_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 impl ModuleAnalyses {
@@ -2214,12 +2481,17 @@ impl ModuleAnalyses {
             stateless: Vec::new(),
             results: HashMap::default(),
             dropped: HashMap::default(),
+            taken: HashSet::default(),
             outer: None,
             functions: HashMap::default(),
             edited: BTreeSet::new(),
             edit_log: Vec::new(),
             log_epoch: NEXT_LOG_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             declarations_open: true,
+            listing: 0,
+            declaration_moves: std::collections::BTreeMap::new(),
+            unknown_until: 0,
+            resets: 0,
             metadata_open: true,
             memos: HashMap::default(),
             scratch: false,
@@ -2313,6 +2585,57 @@ impl ModuleAnalyses {
         }
     }
 
+    /// The result of `M` a pass dropped, handed over to the run that brings it
+    /// up to date: not kept, so that it is the only holder where nothing else
+    /// holds it. A run that does not take it leaves it to be compared.
+    pub fn take_dropped<M: ModuleAnalysis>(&mut self) -> Option<Rc<M::Result>> {
+        let one = self.dropped.remove(&TypeId::of::<M>())?;
+        self.taken.insert(TypeId::of::<M>());
+        Some(one.downcast::<M::Result>().expect("keyed by its type"))
+    }
+
+    /// Lets go of every outer manager the functions' analyses stand under, for
+    /// a stale one with no facts: what a listing nothing else holds needs to be
+    /// brought up to date in place.
+    fn release_outer_holders(&mut self) {
+        self.outer = None;
+        let stale = Rc::new(Outer {
+            metadata: Vec::new(),
+            globals: Rc::default(),
+            program: Rc::clone(&self.program),
+            modules: HashMap::default(),
+            memo: Memo::default(),
+        });
+        for analyses in self.functions.values_mut() {
+            analyses.release_outer(&stale);
+        }
+    }
+
+    /// Which listing `Declarations` holds: a new number for each one made.
+    pub fn listing(&self) -> u64 {
+        self.listing
+    }
+
+    /// The globals whose declaration moved since listing `since`, or `None`
+    /// where that is not known.
+    pub fn declarations_moved_since(
+        &self,
+        since: u64,
+    ) -> Option<Vec<GlobalId>> {
+        (since != 0 && since >= self.unknown_until)
+            .then(|| self.declaration_moves.iter().filter(|(_, at)| **at > since).map(|(id, _)| *id).collect())
+    }
+
+    /// Whether `id`'s declaration may differ from what it was in listing
+    /// `since`, an analysis having kept the number and not the listing.
+    pub fn declaration_moved(
+        &self,
+        since: u64,
+        id: GlobalId,
+    ) -> bool {
+        since == 0 || since < self.unknown_until || self.declaration_moves.get(&id).is_some_and(|at| *at > since)
+    }
+
     /// Whether `M` is made only at its points (`PassManager::require_cached`).
     pub fn is_stateless<M: ModuleAnalysis>(&self) -> bool {
         self.stateless.iter().any(|one| one.id == TypeId::of::<M>())
@@ -2371,10 +2694,12 @@ impl ModuleAnalyses {
                         "diff"
                     }
                 }
+                None if self.taken.contains(&kind.id) => "diff",
                 None => "first",
             };
             record("mod", kind.name, class);
         }
+        self.taken.remove(&kind.id);
         let result = self.dropped.remove(&kind.id).filter(|old| (kind.agree)(&**old, &*fresh)).unwrap_or(fresh);
         self.results.insert(kind.id, (kind, Rc::clone(&result)));
         result
@@ -2386,6 +2711,32 @@ impl ModuleAnalyses {
         preserved: &PreservedAnalyses,
     ) {
         self.declarations_open = true;
+        self.resets += 1;
+        self.metadata_open = true;
+        self.invalidate_bodies(preserved);
+    }
+
+    /// `invalidate` for a function pass: it edited the bodies of `moved` and of
+    /// no other function, so the declarations are checked against those alone
+    /// (a function pass declares a global through `Declared`, which changes the
+    /// number of globals and is told that way). It may have added metadata.
+    pub fn invalidate_functions(
+        &mut self,
+        preserved: &PreservedAnalyses,
+        moved: &[GlobalId],
+    ) {
+        self.edited.extend(moved.iter().copied());
+        self.metadata_open = true;
+        self.invalidate_bodies(preserved);
+    }
+
+    /// `invalidate` for a pass that changed the declarations of the bodies it
+    /// reported to `changed` and of no other global: what trusts the log of
+    /// edits for what moved may go on trusting it.
+    pub fn invalidate_logged(
+        &mut self,
+        preserved: &PreservedAnalyses,
+    ) {
         self.metadata_open = true;
         self.invalidate_bodies(preserved);
     }
@@ -2476,6 +2827,11 @@ impl ModuleAnalyses {
     /// The bodies reported edited so far, oldest first.
     pub fn edit_log(&self) -> &[GlobalId] {
         &self.edit_log
+    }
+
+    /// How often a pass has said anything may have changed (`invalidate`).
+    pub fn resets(&self) -> u64 {
+        self.resets
     }
 
     /// Which `edit_log` this is, for an analysis that keeps a position in it: a
@@ -3050,6 +3406,7 @@ impl PassManager {
             // The module analyses every run of the pass preserved.
             let mut kept: HashSet<TypeId> = analyses.results.keys().copied().collect();
             let mut declared = Declared::of(module);
+            let mut moved_ids: Vec<GlobalId> = Vec::new();
             // The sizes a pass that `wants_sizes` reads: of the functions a
             // constant names (a table of them), the only ones it can ask about.
             let sized = pass.wants_sizes();
@@ -3111,6 +3468,7 @@ impl PassManager {
                 stages.push(Stage { pass: name, module: index, function: id, changes: function.take_changes() });
                 if moved {
                     analyses.edit_log.push(id);
+                    moved_ids.push(id);
                 }
 
                 if declared.tables_pending() {
@@ -3137,7 +3495,7 @@ impl PassManager {
             }
             let mut preserved = PreservedAnalyses::none();
             preserved.kept = kept;
-            analyses.invalidate(&preserved);
+            analyses.invalidate_functions(&preserved, &moved_ids);
             let mut checked = self.stateless.clone();
             if !pass.adds_memory_operations() {
                 checked.extend(frozen.iter().copied());

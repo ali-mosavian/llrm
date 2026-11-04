@@ -3,6 +3,7 @@
 use std::path::Path;
 use std::process::Command;
 
+use llrm_debug::DebugObjectTarget;
 use llrm_macho::{
     LC_BUILD_VERSION, LC_SYMTAB, MachTargetWriter, N_EXT, N_WEAK_DEF, PLATFORM_MACOS, write as write_with,
 };
@@ -23,6 +24,10 @@ fn write_arm64(object: &Object) -> Result<Vec<u8>, Unsupported> {
 struct Made;
 
 impl MachTargetWriter for Made {
+    fn backend(&self) -> &dyn llrm_object::assembler::AsmBackend {
+        &llrm_object::assembler::GenericBackend
+    }
+
     fn cpu(&self) -> (u32, u32) {
         (0x0100_4242, 7)
     }
@@ -35,9 +40,9 @@ impl MachTargetWriter for Made {
         &self,
         reloc: &Reloc,
     ) -> Result<llrm_macho::Described, Unsupported> {
-        match (reloc.fix(), reloc.pc_rel) {
-            (fix, _) if fix == Fix::abs(8) => {
-                Ok(llrm_macho::Described { kind: 0, length: 3, pcrel: false, beyond: 0, addend_in_field: true })
+        match (reloc.kind, reloc.pc_rel) {
+            (kind, false) if kind == Fix::abs(8).kind => {
+                Ok(llrm_macho::Described { kind: 0, length: 3, pcrel: false, baked: 0, addend_in_field: true })
             }
             (other, _) => Err(Unsupported(format!("{other:?}"))),
         }
@@ -82,11 +87,19 @@ fn defined(
         definition: Definition::Defined { section, offset },
         size: 0,
         group: None,
+        visibility: Default::default(),
     }
 }
 
 fn external(name: &str) -> Symbol {
-    Symbol { name: name.into(), binding: Binding::Public, definition: Definition::Undefined, size: 0, group: None }
+    Symbol {
+        name: name.into(),
+        binding: Binding::Public,
+        definition: Definition::Undefined,
+        size: 0,
+        group: None,
+        visibility: Default::default(),
+    }
 }
 
 fn reloc(
@@ -134,7 +147,6 @@ fn program() -> Object {
         omf_groups: Vec::new(),
         omf_comdat: Vec::new(),
         frames: Vec::new(),
-        debug: None,
     }
 }
 
@@ -299,7 +311,6 @@ fn arm64_program() -> Object {
         omf_groups: vec![],
         omf_comdat: vec![],
         frames: Vec::new(),
-        debug: None,
     }
 }
 
@@ -389,12 +400,12 @@ fn ld64_links_it_with_a_clang_object() {
                 definition: Definition::Defined { section: 1, offset: 0 },
                 size: 0,
                 group: None,
+                visibility: Default::default(),
             },
         ],
         omf_groups: Vec::new(),
         omf_comdat: Vec::new(),
         frames: Vec::new(),
-        debug: None,
     };
     std::fs::write(dir.join("mine.o"), write(&made).unwrap()).unwrap();
     std::fs::write(dir.join("ext.c"), "int ext(void) { return 3; }\n").unwrap();
@@ -469,7 +480,10 @@ fn what_mach_o_cannot_say_is_refused() {
     };
     assert!(with(Fix::plain(llrm_x86::mc::fixup::SEGMENT_BASE)).is_err());
     assert!(with(Fix::plain(llrm_x86::mc::fixup::FAR_POINTER)).is_err());
-    assert!(with(Fix::pc_rel(4, 7)).is_err());
+    // A pc-relative field at any distance is a SIGNED relocation, never
+    // refused (the pin writes `movb $1, x+3(%rip)` and `cmpl $1, x+2(%rip)` as
+    // type 1); it was refused until the writer picked SIGNED_n by the total.
+    assert!(with(Fix::pc_rel(4, 7)).is_ok());
     let mut far = program();
     far.sections[1].near = false;
     assert!(write(&far).unwrap_err().0.contains("selector"));
@@ -483,16 +497,15 @@ fn what_mach_o_cannot_say_is_refused() {
 /// in its place.
 #[test]
 fn a_debug_format_this_object_cannot_carry_is_refused() {
-    for (format, name) in [
-        (llrm_object::debug::Format::CodeView, "CodeView"),
-        (llrm_object::debug::Format::TurboDebugger, "Turbo Debugger"),
-    ] {
-        let mut made = program();
-        made.debug = Some(llrm_object::debug::Info {
-            options: llrm_object::debug::DebugOptions { format, ..Default::default() },
+    for (format, name) in
+        [(llrm_debug::Format::CodeView, "CodeView"), (llrm_debug::Format::TurboDebugger, "Turbo Debugger")]
+    {
+        let made = program();
+        let debug = llrm_debug::Info {
+            options: llrm_debug::DebugOptions { format, ..Default::default() },
             ..Default::default()
-        });
-        let why = write(&made).unwrap_err().0;
+        };
+        let why = llrm_x86::mc::X86Objects.write_described("macho", &made, Some(&debug)).unwrap_err().0;
         assert!(why.contains("cannot carry") && why.contains(name), "{why}");
     }
 }
@@ -560,4 +573,99 @@ fn a_weak_symbol_is_a_weak_definition() {
     }
     found.sort();
     assert_eq!(found, [("_hook".to_owned(), true, true), ("_strong".to_owned(), true, false)]);
+}
+
+/// A hidden symbol is `N_PEXT`: written as plain `N_EXT`, `ld` exported what
+/// the source kept private to the image.
+#[test]
+fn a_hidden_symbol_is_private_external() {
+    let mut object = program();
+    object.sections = vec![section("text", Role::Text, vec![0xC0, 0x03, 0x5F, 0xD6], vec![])];
+    object.symbols = vec![
+        defined("_shown", 0, 0),
+        Symbol { visibility: llrm_object::Visibility::Hidden, ..defined("_hidden", 0, 0) },
+    ];
+    let written = write_arm64(&object).unwrap();
+    let word = |at: usize| u32::from_le_bytes(written[at..at + 4].try_into().unwrap()) as usize;
+    let symtab = commands_of(&written).into_iter().find(|(cmd, _)| *cmd == LC_SYMTAB).unwrap().1;
+    let field = |at: usize| u32::from_le_bytes(symtab[at..at + 4].try_into().unwrap()) as usize;
+    let (symbols_at, count, strings_at) = (field(8), field(12), field(16));
+    let mut found = Vec::new();
+    for index in 0..count {
+        let entry = symbols_at + index * 16;
+        let name_at = strings_at + word(entry);
+        let name =
+            written[name_at..].iter().take_while(|byte| **byte != 0).map(|byte| *byte as char).collect::<String>();
+        found.push((name, written[entry + 4] & llrm_macho::N_PEXT != 0));
+    }
+    found.sort();
+    assert_eq!(found, [("_hidden".to_owned(), true), ("_shown".to_owned(), false)]);
+}
+
+/// A backend that marks the fields it is asked to fill.
+struct Marking;
+
+impl llrm_object::assembler::AsmBackend for Marking {
+    fn kind_info(
+        &self,
+        kind: llrm_object::FixupKind,
+    ) -> llrm_object::FixupKindInfo {
+        kind.info()
+    }
+
+    fn write_nop_data(
+        &self,
+        _: &mut Vec<u8>,
+        _: usize,
+    ) -> bool {
+        false
+    }
+
+    fn apply_fixup(
+        &self,
+        image: &mut [u8],
+        at: usize,
+        _: llrm_object::FixupKind,
+        _: bool,
+        _: i64,
+        _: &str,
+    ) -> Result<(), Unsupported> {
+        image[at..at + 8].fill(0xEE);
+        Ok(())
+    }
+}
+
+struct MarkingMade;
+
+impl MachTargetWriter for MarkingMade {
+    fn backend(&self) -> &dyn llrm_object::assembler::AsmBackend {
+        &Marking
+    }
+
+    fn cpu(&self) -> (u32, u32) {
+        Made.cpu()
+    }
+
+    fn lists_locals(&self) -> bool {
+        Made.lists_locals()
+    }
+
+    fn relocation(
+        &self,
+        reloc: &Reloc,
+    ) -> Result<llrm_macho::Described, Unsupported> {
+        Made.relocation(reloc)
+    }
+}
+
+/// The container wrote a field's bytes itself, so a target's backend never saw
+/// the fixups it was made to fill (`applyFixup` is the target's).
+#[test]
+fn a_field_is_filled_by_the_targets_backend() {
+    let mut made = program();
+    made.sections[0].relocs.clear();
+    let plain = write_with(&made, &Made).unwrap();
+    let marked = write_with(&made, &MarkingMade).unwrap();
+    let marks = |bytes: &[u8]| bytes.windows(8).any(|window| window == [0xEE; 8]);
+    assert!(!marks(&plain) && marks(&marked));
 }
