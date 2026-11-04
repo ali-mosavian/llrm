@@ -50,14 +50,14 @@ fn pipeline_runs(
 }
 
 /// The passes a body ran, per `LLRM_DEBUG=runs` line, for the lines of a run
-/// that a stage of the interprocedural step (`ipa-...`, `promote.`, `ipsccp.`)
-/// asked for.
+/// that a stage of the interprocedural step (`ipa-...`, `ipsccp.`) asked for.
+/// `promote.` keeps the full list on purpose (the minimal one left Nib
+/// quicksort's far sort arguments unfolded; `recorded`).
 fn passes_run_by_ipa_stages(lines: &[String]) -> Vec<(String, usize)> {
     lines
         .iter()
         .filter(|line| {
-            line.starts_with("body ")
-                && ["trigger \"ipa-", "trigger \"promote.", "trigger \"ipsccp."].iter().any(|one| line.contains(one))
+            line.starts_with("body ") && ["trigger \"ipa-", "trigger \"ipsccp."].iter().any(|one| line.contains(one))
         })
         .map(|line| {
             let runs = line.split(" pass runs").next().and_then(|head| head.rsplit(' ').next());
@@ -119,6 +119,93 @@ fn test_the_late_list_is_a_bodys_last_run() {
     }
     assert!(!late.is_empty(), "no body ran the late list: {lines:?}");
     assert!(after_late.is_empty(), "bodies run again after the late list: {after_late:?}");
+}
+
+/// `check_locals` calls the two functions it is handed through its own
+/// stack slots: inlined into `main` the calls become direct only after the
+/// simplification, so a second round inlines them (`DevirtSCCRepeatedPass`).
+const APPLY_TWO: &str = "@x = internal global [700 x i8] zeroinitializer
+@y = internal global [700 x i8] zeroinitializer
+@src = internal global [700 x i8] zeroinitializer
+declare i16 @memcmp(ptr, ptr, i16)
+
+define internal void @lc(ptr %d, ptr %s) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %i1, %loop ]
+  %sp = getelementptr inbounds i8, ptr %s, i16 %i
+  %v = load i8, ptr %sp
+  %dp = getelementptr inbounds i8, ptr %d, i16 %i
+  store i8 %v, ptr %dp
+  %i1 = add nuw nsw i16 %i, 1
+  %c = icmp slt i16 %i1, 700
+  br i1 %c, label %loop, label %done
+done:
+  ret void
+}
+
+define internal void @lr(ptr %d, ptr %s) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %i1, %loop ]
+  %sp = getelementptr inbounds i8, ptr %s, i16 %i
+  %v = load i8, ptr %sp
+  %dp = getelementptr inbounds i8, ptr %d, i16 %i
+  store i8 %v, ptr %dp
+  %i1 = add nuw nsw i16 %i, 1
+  %c = icmp slt i16 %i1, 700
+  br i1 %c, label %loop, label %done
+done:
+  ret void
+}
+
+define internal i16 @differ(ptr %a, ptr %b, i16 %n) noinline {
+  %c = call i16 @memcmp(ptr %a, ptr %b, i16 %n)
+  ret i16 %c
+}
+
+define internal i16 @check_locals(ptr %f, ptr %g) {
+  %f.addr = alloca ptr
+  %g.addr = alloca ptr
+  store ptr %f, ptr %f.addr
+  store ptr %g, ptr %g.addr
+  %f1 = load ptr, ptr %f.addr
+  call void %f1(ptr @x, ptr @src)
+  %g1 = load ptr, ptr %g.addr
+  call void %g1(ptr @y, ptr @src)
+  %d = call i16 @differ(ptr @x, ptr @y, i16 700)
+  ret i16 %d
+}
+
+define i16 @top() {
+  %r = call i16 @check_locals(ptr @lc, ptr @lr)
+  ret i16 %r
+}
+";
+
+/// A body took the inliner's calls and then the function passes twice when the
+/// callee's calls became direct only after the simplification: `main` of
+/// memory_expansion ran the list twice where the pin's inliner worklist takes
+/// the new calls before the function passes run once.
+#[test]
+fn test_calls_that_a_splice_exposes_are_inlined_before_the_list_runs() {
+    let lines = pipeline_runs(
+        &format!("{}{APPLY_TWO}", llrm_analysis::testing::DOS),
+        &crate::pipeline::Applied { options: crate::pipeline::Options::speed(), ..Default::default() },
+    );
+    let walks = |name: &str| {
+        lines
+            .iter()
+            .filter(|line| {
+                line.starts_with("body ")
+                    && line.contains("trigger \"walk.\"")
+                    && line.ends_with(&format!("name {name}"))
+            })
+            .count()
+    };
+    assert_eq!(walks("top"), 1, "the list ran again over top: {lines:?}");
 }
 
 const TWO_CONSTANTS: &str = "define internal i16 @g(i16 %k, i16 %x) noinline {
