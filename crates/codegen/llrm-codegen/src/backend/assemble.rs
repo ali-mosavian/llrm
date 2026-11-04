@@ -275,7 +275,7 @@ pub fn assembled_by(
             GlobalKind::Function(function) if !function.is_declaration() => {
                 let unselected = |error: isel::Unselected| format!("@{name}: {}", error.0);
                 let Machined { body, reserve, calls, inline, inline_symbols, far, pops, popped, registers, .. } =
-                    done.shift_remove(&id).expect("every function with a body was machined");
+                    done.swap_remove(&id).expect("every function with a body was machined");
                 let body = timed("masm cleaned returns", || {
                     masm::cleaned_returns(
                         &addressvalues::converted(&body),

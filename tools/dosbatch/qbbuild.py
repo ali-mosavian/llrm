@@ -49,7 +49,7 @@ def runtime16(work: Path) -> dict[str, Path]:
         made[name] = obj
 
     shared = qbruntime.shared_sources()
-    for source in qbruntime.portable_sources():
+    for source in qbruntime.portable_not_replaced(qbruntime.portable_sources(), qbruntime.platform_sources()):
         make(source.stem, source, lambda obj, source=source: qbruntime._compile_c(source, obj, include))
     for source in [*qbruntime.platform_sources(), *shared]:
         if source.suffix == ".c":

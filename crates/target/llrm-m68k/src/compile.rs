@@ -141,6 +141,12 @@ pub fn items_with(
     }
     remove_identity_copies(&mut function, &assignment);
     remove_redundant_copies(&mut function, &assignment);
+    llrm_spike_mf::spill::remove_dead_slot_stores::<crate::regalloc::M68kRegisters>(
+        &mut function,
+        &assignment,
+        &crate::REGISTER_INFO,
+        &slots,
+    );
     preserve_flags(&mut function, &assignment)?;
     branch_fold(&mut function, &assignment);
     crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size);

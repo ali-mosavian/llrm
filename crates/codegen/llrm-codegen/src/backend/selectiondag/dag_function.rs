@@ -801,6 +801,7 @@ fn selected_in(
     let bytes_beat_clocks = cpu.size && layout.pointer(0).bits < layout.largest_legal_integer();
     let convention = crate::backend::isel::convention(module, &layout, id, arch)?;
     let mut info = FunctionLoweringInfo::new(function);
+    info.module_tables = pool.symbols.clone();
     if contracts.is_some_and(|contracts| contracts.frame_zeroed) {
         info.prezeroed = crate::backend::prezeroed::prezeroed(module, function);
     }
@@ -928,10 +929,10 @@ fn selected_in(
         };
         let align =
             crate::backend::isel::natural_align(types, &layout, allocated).max(size & size.wrapping_neg()).clamp(1, 4);
-        // More than the frame keeps the stack aligned to: the frame realigns
-        // the stack pointer for it.
-        let wanted = wanted.map_or(0, |one| one as i64);
-        let align = if wanted > crate::backend::isel::OVER_ALIGNED { wanted } else { align };
+        // The declared alignment wins over the natural one; above what the
+        // frame keeps the stack aligned to, the frame realigns the stack
+        // pointer.
+        let align = align.max(wanted.map_or(0, |one| one as i64));
         sizes.push((value, size, align));
     }
     sizes.sort_by_key(|(value, _, _)| info.static_allocas[value]);
@@ -1001,6 +1002,9 @@ fn selected_in(
     for (at, (size, align)) in info.objects.iter().enumerate() {
         let made = Temporaries(&frame).create_stack_temporary(*size, *align);
         debug_assert_eq!(made, alloca_count + at as i32, "frame objects are numbered as the builder numbered them");
+    }
+    if let Some(tables) = &info.tables {
+        pool.symbols.get_or_insert_with(|| (tables.global_names.clone(), tables.local_symbols.clone()));
     }
     // Each jump table is a data object the pool names; its entries are the
     // addresses of the blocks.

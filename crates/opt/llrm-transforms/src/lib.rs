@@ -123,6 +123,10 @@ pub mod combine_distribute;
 #[cfg(test)]
 mod combine_flags_result_tests;
 pub mod combine_fp;
+pub mod combine_fp_int_casts;
+pub mod combine_fptoint;
+#[cfg(test)]
+mod combine_fptoint_tests;
 pub mod combine_funnel;
 pub mod combine_gep;
 pub mod combine_gep_base;
