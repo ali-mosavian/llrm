@@ -79,9 +79,9 @@ fn a_word_minus_one_borrows_by_branch() {
 }
 
 /// A byte added to an accumulator from a global indexed by a byte loaded the
-/// element, then added a cell (`lda g,x; clc; adc rc2; sta rc2`), where the
-/// 6502 has `adc g,x` and the accumulator can stay in A: sum4 at -Os 22 B
-/// against llvm-mos's 13, sum_arr, sum16, schr. The sum of 1 2 3 4 is 10.
+/// element, then added a cell (`lda g,x; clc; adc rc2; sta rc2`), where the 6502
+/// has `adc g,x` and the accumulator can stay in A: sum4 at -Os 22 B against
+/// llvm-mos's 13, sum_arr, sum16, schr. The sum of 1 2 3 4 is 10.
 #[test]
 fn an_indexed_global_is_the_operand_of_the_add() {
     let ir = module(
@@ -111,9 +111,8 @@ done:
 }
 
 /// `t[(a + b) >> 1]` on bytes is a pointer plus an `i16` whose high byte is
-/// known zero. Selected as a 16-bit add into the pointer and `ldy #0; lda
-/// (rc),y` (bsearch8: 78 B against llvm-mos's 53) instead of the byte index in
-/// Y.
+/// known zero. Selected as a 16-bit add into the pointer and `ldy #0; lda (rc),y`
+/// (bsearch8: 78 B against llvm-mos's 53) instead of the byte index in Y.
 #[test]
 fn an_index_with_a_known_zero_high_byte_is_the_y_of_the_load() {
     let ir = module(
@@ -1604,11 +1603,10 @@ define i8 @sub_overflow() {
     assert_eq!(exit_code_of(&text, "sub_overflow"), 4, "{text}");
 }
 
-/// `__builtin_clz` and `__builtin_ctz` (`llvm.ctlz.i32`, `llvm.cttz.i32`)
-/// failed to compile for the 6502 ("CtLzZeroPoison ... convert node to
-/// libcall"): any C program using them was lost. `check` counts the results
-/// that are wrong for 0, 1, 0x80000000 and 0xFFFFFFFF, with and without the
-/// zero-is-poison flag.
+/// `__builtin_clz` and `__builtin_ctz` (`llvm.ctlz.i32`, `llvm.cttz.i32`) failed
+/// to compile for the 6502 ("CtLzZeroPoison ... convert node to libcall"): any C
+/// program using them was lost. `check` counts the results that are wrong for
+/// 0, 1, 0x80000000 and 0xFFFFFFFF, with and without the zero-is-poison flag.
 #[test]
 fn a_32_bit_clz_and_ctz_count_correctly() {
     let ir = module(
@@ -1703,8 +1701,8 @@ fn a_loop_right_after_an_empty_entry_block_is_not_the_entry() {
 
 #[test]
 fn a_pointer_minus_one_borrows_by_branch() {
-    // a backward copy (k_memmove): `--p` was `clc; adc #255; adc #255` through
-    // a pack/unpack, 885 clocks against the hand routine's 418
+    // a backward copy (k_memmove): `--p` was `clc; adc #255; adc #255` through a
+    // pack/unpack, 885 clocks against the hand routine's 418
     let ir = module(
         "@n = global i8 4\n\
          define i8 @g() {\n\
@@ -1735,9 +1733,8 @@ fn a_pointer_minus_one_borrows_by_branch() {
 
 #[test]
 fn the_frame_address_at_offset_zero_is_the_stack_pointer_copied() {
-    // k_itoa's `tmp[n]`: `clc; lda rc0; adc #0; sta; lda rc1; adc #0; sta` (13
-    // B) for the address of the first byte of the frame, a copy of the pair
-    // (8 B)
+    // k_itoa's `tmp[n]`: `clc; lda rc0; adc #0; sta; lda rc1; adc #0; sta` (13 B)
+    // for the address of the first byte of the frame, a copy of the pair (8 B)
     let ir = module(
         "@n = global i8 5\n\
          define i8 @g() {\n\
@@ -1800,12 +1797,11 @@ fn a_word_divide_calls_the_compact_routine_at_size_and_the_fast_one_at_speed() {
     assert!(size.contains("jsr __udivhi3c"), "{size}");
     let speed = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
     assert!(speed.contains("jsr __udivhi3\n"), "{speed}");
-    // 50000 / 7 = 7142 r 6: 7148 = 0x1BEC, 0x1B ^ 0x1BEC low byte 0xEC ^ 0x1B =
-    // 0xF7
+    // 50000 / 7 = 7142 r 6: 7148 = 0x1BEC, 0x1B ^ 0x1BEC low byte 0xEC ^ 0x1B = 0xF7
     for text in [&size, &speed] {
         let linked = format!("{text}\n{}", common::pipeline::reachable_runtime(text));
         assert_eq!(exit_code_of(&linked, "g"), 0xF7, "{linked}");
-    }
+}
 }
 
 #[test]
@@ -1827,9 +1823,9 @@ fn a_word_step_never_holds_a_byte_in_a_on_the_plain_6502() {
 
 #[test]
 fn a_word_global_is_loaded_and_stored_by_absolute_address() {
-    // x16basic-c: 270 sites loaded a u16 global through a pointer cell, `ldx
-    // #<(g); ldy #>(g); stx; sty; ldy #0; lda (p),y; ldy #1; lda (p),y` (19
-    // B) where `lda g; ldx g+1` is 5
+    // x16basic-c: 270 sites loaded a u16 global through a pointer cell, `ldx #<(g);
+    // ldy #>(g); stx; sty; ldy #0; lda (p),y; ldy #1; lda (p),y` (19 B) where
+    // `lda g; ldx g+1` is 5
     let ir = module(
         "@w = global i16 300\n@v = global i16 0\n\
          define i8 @g() {\n\
