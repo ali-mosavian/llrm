@@ -37,6 +37,8 @@ pub const CALL: ISD = ISD::Target(ids::CALL);
 pub const RET_GLUE: ISD = ISD::Target(ids::RET_GLUE);
 /// A store to SP + offset in the call frame.
 pub const STSP: ISD = ISD::Target(ids::STSP);
+/// `ldir` behind a test of the count.
+pub const LDIRG: ISD = ISD::Target(ids::LDIRG);
 
 pub use llrm_codegen::backend::selectiondag::target_calling::{Ext, FixedObject, In, Out};
 use llrm_codegen::backend::selectiondag::target_calling::{LiveIn, Site, TargetCalling};
@@ -156,17 +158,25 @@ pub fn lower_call(
         })
         .collect();
     let mut glue = None;
+    // `call (iy)` takes its target in IY: copied first, the pointer is not a
+    // pair-sized value live while the arguments fill HL, DE and BC
+    let callee = match (dag.opcode(callee), dag.node(callee).data) {
+        (ISD::GlobalAddress, NodeData::Global { symbol, offset }) => {
+            dag.get_target_global_address(EVT::I16, symbol, offset)
+        }
+        (ISD::TargetGlobalAddress | ISD::TargetExternalSymbolNode | ISD::ExternalSymbol, _) => callee,
+        _ => {
+            let copy = dag.get_copy_to_phys_reg(chain, crate::reg::IY, callee, glue);
+            chain = SDValue { node: copy.node, res: 0 };
+            glue = Some(SDValue { node: copy.node, res: 1 });
+            dag.get_phys_register(EVT::I16, crate::reg::IY)
+        }
+    };
     for &(out, register) in &in_registers {
         let copy = dag.get_copy_to_phys_reg(chain, register, out.value, glue);
         chain = SDValue { node: copy.node, res: 0 };
         glue = Some(SDValue { node: copy.node, res: 1 });
     }
-    let callee = match (dag.opcode(callee), dag.node(callee).data) {
-        (ISD::GlobalAddress, NodeData::Global { symbol, offset }) => {
-            dag.get_target_global_address(EVT::I16, symbol, offset)
-        }
-        _ => callee,
-    };
     let mut operands = vec![chain, callee];
     for &(out, register) in &in_registers {
         let vt = dag.value_type(out.value);
@@ -328,6 +338,41 @@ impl TargetCalling for Z80Calling {
         live_in: LiveIn,
     ) -> Vec<SDValue> {
         lower_formal_arguments(dag, chain, ins, fixed, live_in).expect("legal parts")
+    }
+
+    /// `EmitTargetCodeForMemcpy`, as X86's is `rep movs`: `ldir` behind a test
+    /// of the count (7 B and 19 T before the copy), where `__memcpy` is a
+    /// call (3 B) and a push, a swap, the same test, the same `ldir`, a pop and
+    /// a return, about 60 T more. A function tuned for size keeps the call:
+    /// 4 B less at each site.
+    fn emit_memcpy_sized(
+        &self,
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        dst: SDValue,
+        src: SDValue,
+        size: SDValue,
+        opt_size: bool,
+    ) -> Option<SDValue> {
+        if opt_size {
+            return None;
+        }
+        let size = dag.get_zext_or_trunc(size, EVT::I16);
+        Some(dag.get_node(LDIRG, EVT::OTHER, &[chain, dst, src, size]))
+    }
+
+    /// Not `ldir`: a `memmove` whose destination is above its source overlaps
+    /// the wrong way for a forward copy, and the runtime's `__memmove`
+    /// picks the direction.
+    fn emit_memmove(
+        &self,
+        _dag: &mut SelectionDAG,
+        _chain: SDValue,
+        _dst: SDValue,
+        _src: SDValue,
+        _size: SDValue,
+    ) -> Option<SDValue> {
+        None
     }
 
     fn lower_return(

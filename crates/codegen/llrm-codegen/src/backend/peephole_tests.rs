@@ -4955,6 +4955,44 @@ fn test_an_instruction_equal_to_one_already_answered_is_not_worked_out_again() {
     );
 }
 
+/// Both hashes of an ask walked its operands, each its own time: 26M Ir of
+/// memory_expansion -O2 in `EffectKey::hashes`. One walk feeds both.
+#[test]
+fn test_the_operands_of_an_ask_are_walked_once_for_both_hashes() {
+    let regs = crate::backend::registerinfo::test_regs();
+    let add = insn(
+        0,
+        Some((0, 2)),
+        Some(sem(Operation::Binary, "add", vec![rl(RegId::AX, 2)], vec![rl(RegId::AX, 2), rl(RegId::BX, 2)])),
+        vec![],
+        vec![],
+    );
+    let before = shapes_walked();
+    _register_effects(regs, 16, &add, false, true);
+    assert_eq!(shapes_walked() - before, 1, "the operands were walked once for each hash");
+}
+
+/// The flags an instruction reads and writes were picked out of its lanes one
+/// lane at a time, a copy of each set first: `_flag_effect` was 27M Ir of
+/// memory_expansion -O2. The flag lanes are the low bits of the set.
+#[test]
+fn test_the_flags_of_an_effect_are_taken_without_walking_its_lanes() {
+    let regs = crate::backend::registerinfo::test_regs();
+    let add = insn(
+        0,
+        Some((0, 2)),
+        Some(sem(Operation::Binary, "add", vec![rl(RegId::AX, 2)], vec![rl(RegId::AX, 2), rl(RegId::BX, 2)])),
+        vec![],
+        vec![],
+    );
+    let _ = liveness::effect(regs, 16, &add);
+    let before = crate::backend::lanes::WALKS.with(std::cell::Cell::get);
+    let (reads, writes) = _flag_effect(regs, 16, &add);
+    assert_eq!(crate::backend::lanes::WALKS.with(std::cell::Cell::get), before, "the lanes were walked");
+    assert!(reads.is_empty(), "add reads no flag");
+    assert_eq!(writes, _flag_lanes(_ARITHMETIC), "add writes every arithmetic flag");
+}
+
 /// `dead_at_exit` was worked out for the body ten passes in a row, though all
 /// but one of them left it as it was (#924). A body that is the same is
 /// answered from the last; one whose instruction changed is not.
@@ -5486,6 +5524,30 @@ fn store_then_reload(between: Vec<Insn>) -> usize {
     )));
     let done = forwarded_reloads(rules(), &body("forwarded-reload", 0, vec![block(0, insns, vec![]).into()]));
     whats(&done.blocks[0].insns).iter().filter(|what| what.name.as_deref() == Some("mov")).count()
+}
+
+/// nbody -O3 at m64: `movsd [rsp-0x20], xmm13 ; movsd xmm13, [rsp-0x20]` stood
+/// in the loop four times a trip (800 of 27.6k instructions); the pin's code has
+/// no such pair, and the rule that drops it knew `mov` and nothing wider than a
+/// dword.
+#[test]
+fn test_a_float_reload_of_the_register_that_filled_the_cell_is_dropped_at_m64() {
+    let cell = || Loc::Mem(mem(frame(-16), 8, RegId::RSP, -16, 1));
+    let movsd = |at: i64, dests: Vec<Loc>, sources: Vec<Loc>| Insn {
+        spill_store: dests.iter().any(|d| matches!(d, Loc::Mem(_))),
+        ..insn(at, Some((at, at + 2)), Some(sem(Operation::Move, "movsd_x", dests, sources)), vec![], vec![])
+    };
+    let insns = vec![
+        Arc::new(movsd(0, vec![cell()], vec![rl(RegId::XMM13, 8)])),
+        Arc::new(movsd(100, vec![rl(RegId::XMM13, 8)], vec![cell()])),
+        Arc::new(insn(200, Some((200, 200)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![])),
+    ];
+    let done = forwarded_float_reloads(
+        &crate::backend::targets::x86_m64::RULES,
+        &body("forwarded-float-reload", 0, vec![block(0, insns, vec![]).into()]),
+    );
+    let moves = whats(&done.blocks[0].insns).iter().filter(|what| what.name.as_deref() == Some("movsd_x")).count();
+    assert_eq!(moves, 1, "the store stays, the reload goes");
 }
 
 /// huge_copy.c at m16 -Os: the forwarding dropped the reload `mov bl, [bp-2]`

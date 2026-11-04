@@ -376,6 +376,12 @@ impl Printer<'_> {
                 }
                 self.push(format!("and a, #{}", 0xFFu32 >> count));
             }
+            // the sign of the accumulator: its bit 7 into the carry and
+            // out again (`sra a` seven times is 14 B)
+            "SRA8" if shift_count(inst)? == 7 && name_of(self, 0)? == "a" => {
+                self.push("add a, a");
+                self.push("sbc a, a");
+            }
             "SHL8" | "SRL8" | "SRA8" => {
                 let to = name_of(self, 0)?;
                 let mnemonic = match op {
@@ -547,6 +553,21 @@ impl Printer<'_> {
                 // `dec` would change the zero flag a later reader of the same
                 // compare wants
                 self.push(if self.flags_dead(rest) { format!("dec {to}") } else { format!("ld {to}, #0") });
+                self.out.push(Line::Label(skip));
+            }
+            // destination hl, source de, count bc: `ex de,hl` makes them
+            // `ldir`'s. A count of zero is 65536 here; `LDIRG` skips it.
+            "LDIR" => {
+                self.push("ex de, hl");
+                self.push("ldir");
+            }
+            "LDIRG" => {
+                let skip = format!("{}$", self.out.iter().filter(|line| !matches!(line, Line::Loc(_))).count());
+                self.push("ld a, b");
+                self.push("or a, c");
+                self.push(format!("jr z, {skip}"));
+                self.push("ex de, hl");
+                self.push("ldir");
                 self.out.push(Line::Label(skip));
             }
             "AND16i" | "OR16i" | "XOR16i" => {
@@ -734,6 +755,15 @@ impl Printer<'_> {
                     format!("ld {register}, {slot}")
                 });
             }
+            "SPILL8L" => {
+                let index = self.frame_index(inst, 0)?;
+                let register = name_of(self, 1)?;
+                let Some(Operand::Imm(offset)) = inst.operands.get(2) else {
+                    return Err("a lane spill with no offset".to_owned());
+                };
+                let slot = self.frame_slots(index, *offset, 1)?.remove(0);
+                self.push(format!("ld {slot}, {register}"));
+            }
             "SPILL16" | "RELOAD16" => {
                 let (index, register) =
                     if op == "SPILL16" { (self.frame_index(inst, 0)?, 1) } else { (self.frame_index(inst, 1)?, 0) };
@@ -764,6 +794,7 @@ impl Printer<'_> {
                 }
                 self.push(format!("ret {}", op[3..].to_lowercase()));
             }
+            "UNREACHABLE" => {}
             "RET" => {
                 if self.frame.active {
                     self.push("ld sp, ix");
@@ -1208,23 +1239,35 @@ fn layout(
     slots: &[(i32, usize)],
 ) -> Frame {
     let mut frame = Frame::default();
-    for &(index, size, _) in &function.locals {
-        frame.size += size;
-        frame.offsets.insert(index, -frame.size);
-    }
     // Slots alone: bytes first, then the words, so the last word lies at SP and
     // each word is one `push`.
     let aligned = function.locals.is_empty() && slots.iter().all(|&(_, size)| size == 1 || size == 2);
-    let mut ordered = slots.to_vec();
     if aligned {
+        let mut ordered = slots.to_vec();
         ordered.sort_by_key(|&(_, size)| size);
-    }
-    for (index, size) in ordered {
-        if aligned && size == 2 && frame.size % 2 == 1 {
-            frame.size += 1;
+        for (index, size) in ordered {
+            if size == 2 && frame.size % 2 == 1 {
+                frame.size += 1;
+            }
+            frame.size += size as i64;
+            frame.offsets.insert(index, -frame.size);
         }
-        frame.size += size as i64;
-        frame.offsets.insert(index, -frame.size);
+    } else {
+        // The smallest objects lie nearest IX: `ld -n(ix), r` reaches 128 bytes
+        // below it, and past that every access is `ld iy, #n; add iy, sp`.
+        // Spill slots and scalars came after a local array and lay beyond its
+        // 8 KB (tests/run/c/fill_nest).
+        let mut objects: Vec<(i32, i64)> = function.locals.iter().map(|&(index, size, _)| (index, size)).collect();
+        objects.extend(slots.iter().map(|&(index, size)| (index, size as i64)));
+        // A frame within IX's reach keeps its locals first and its slots last,
+        // the last slot lying at SP (`pop` then `push` for a reload).
+        if objects.iter().map(|&(_, size)| size).sum::<i64>() > 127 {
+            objects.sort_by_key(|&(_, size)| size);
+        }
+        for (index, size) in objects {
+            frame.size += size;
+            frame.offsets.insert(index, -frame.size);
+        }
     }
     for (&index, &offset) in &function.fixed {
         frame.offsets.insert(index, FIRST_ARGUMENT + offset);

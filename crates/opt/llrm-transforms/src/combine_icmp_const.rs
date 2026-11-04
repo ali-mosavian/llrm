@@ -987,9 +987,27 @@ fn fold_icmp_add_constant(
         let bound = c.int(ty, wrap(!value));
         return Some(new_icmp(c, inst, IntPredicate::Ult, shifted, bound));
     }
-    // OWED: zext(V) + C2 pred C -> V + C3 pred' C4 (needs
-    // `ConstantRange::truncate` with the no-unsigned-wrap kind, and
-    // `shouldChangeType`).
+    // zext(V) + C2 pred C -> V + C3 pred' C4
+    let narrow = {
+        let q = query(c, Some(inst));
+        pattern::cast(&q, x, CastOp::ZExt).map(|(_, _, v)| v)
+    };
+    if let Some(v) = narrow {
+        let new_ty = c.type_of(v);
+        let new_width = c.context.types.int_bits(new_ty)?;
+        if crate::combine_shared::should_change_type(c.env.layout, width, new_width) {
+            let source = region.truncate(new_width, llrm_mir::constantrange::NO_UNSIGNED_WRAP);
+            let (equivalent, bound, offset) = source.get_equivalent_icmp_offset();
+            let lhs = if offset == 0 {
+                v
+            } else {
+                let offset = c.int(new_ty, offset);
+                c.create_binop(inst, BinaryOp::Add, v, offset, Flags::default())
+            };
+            let bound = c.int(new_ty, bound);
+            return Some(new_icmp(c, inst, equivalent, lhs, bound));
+        }
+    }
     None
 }
 

@@ -15,8 +15,9 @@ static int SF_N(sf_cmp_bits)(SF_T a, SF_T b)
     if (SF_N(is_nan)(a) || SF_N(is_nan)(b)) return 1;
     if (!((a | b) << 1)) return 0;
     SF_S x = (SF_S)a, y = (SF_S)b;
-    if (x < 0) x = (SF_S)SF_SIGN - x;
-    if (y < 0) y = (SF_S)SF_SIGN - y;
-    return x < y ? -1 : x > y;
+    if ((x & y) < 0) { SF_S t = x; x = y; y = t; } /* both negative: reversed order */
+    if (x < y) return -1;
+    if (x == y) return 0;
+    return 1;
 }
 #endif

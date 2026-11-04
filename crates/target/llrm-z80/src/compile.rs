@@ -131,6 +131,7 @@ fn machine_function_with(
     let mut function = emit(name, selection)?;
     function.returns_twice = selection.returns_twice;
     expand_cmov(&mut function)?;
+    crate::ldir::copy_loops_to_ldir(&mut function);
     if duplicate {
         tail_duplicate_returns(&mut function);
     }
@@ -345,10 +346,19 @@ fn allocate_once(
     strict: bool,
     level: Level,
 ) -> Result<(Allocated, bool), String> {
+    if std::env::var("LLRM_NO_Z80_NARROW").is_err() {
+        crate::narrow::narrow_low_only_pairs(&mut function);
+    }
     two_address(&mut function);
     let held = read_bytes_through_their_pairs(&mut function, strict);
     use_the_shift_carry(&mut function);
     sink_copies_before_allocation(&mut function);
+    if std::env::var("LLRM_NO_Z80_FORWARD").is_err() {
+        crate::forward::read_pairs_from_their_registers(&mut function);
+        if std::env::var("LLRM_NO_Z80_CARRY").is_err() {
+            crate::forward::carry_pairs_across_edges(&mut function);
+        }
+    }
     if std::env::var("LLRM_Z80_DUMP").is_ok_and(|one| one == name) {
         dump(&function);
     }

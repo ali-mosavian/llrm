@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/fpstack.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/fpstack.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/fpstack.rs sha256:03e0bb40d3529124c547f76c7e19200017f20d6ed0ed2aa1e17350bb6a753352 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/fpstack.rs sha256:622b7fc01f87e2f68f2ddcd1160b4ce0753203bce292804e03c25249497b991a -->
 
 # fpstack
 
@@ -56,6 +56,12 @@ DEVIATE 7 (temporary,
 edges into a block that reads fewer floating values than its bundle holds
 are split first, as `floatalloc` does (`_split_for_the_stack`): the values
 are popped on that edge only.
+
+DEVIATE 9 (owner x87, exit 2026-11-20): a memory-form operation (`fadd
+[m]`) whose other operand dies below the top is `fld [m]` and the popping
+operation (`faddp st(i)`) where the target prices `fxch` and the memory
+form above them, not `fxch` and `fadd [m]` (`unfold_memory_form`). The pin
+keeps the memory form and exchanges.
 
 DEVIATE 4: an unreachable block with live floating values has no predecessor
 to fix its entry; its live values are taken in ascending order (LLVM

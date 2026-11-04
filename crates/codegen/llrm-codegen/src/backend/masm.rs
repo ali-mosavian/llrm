@@ -1238,7 +1238,10 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
         && procedure.interrupt.is_none()
         && !procedure.far
         && matches!(procedure.body.bits, 32 | 64)
-        && (procedure.reserve != 0 || moves_stack(&procedure.body) || procedure.registers.saved_first)
+        && (procedure.reserve != 0
+            || moves_stack(&procedure.body)
+            || procedure.registers.saved_first
+            || !procedure.body.vector_saves.is_empty())
         && procedure.callees.values().all(|one| one.code.is_empty())
         && [false, true].iter().all(|omit| {
             // Nothing wrapped, or the frame and every register at the one Save
@@ -1269,7 +1272,7 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
             procedure
         };
     }
-    if !eligible || (pushed == 0 && !rebuilt) {
+    if !eligible || (pushed == 0 && !rebuilt && procedure.body.vector_saves.is_empty()) {
         return procedure;
     }
     // The locals keep their alignment from BP (an 8-byte cell at 4 mod 8
@@ -1447,6 +1450,25 @@ fn lowered(
         Op::SubSp(bytes) => adjust("sub", bytes),
         Op::AddSp(bytes) => adjust("add", bytes),
     };
+    // The vector registers are kept with `movaps` into their cells once the
+    // stack is down, and reloaded before it is taken back (`.seh_savexmm`
+    // declares the stores). After an `alloca` the stack pointer is not where
+    // the entry left it: the frame register is.
+    let depth = info.stack_size as i64;
+    let vector = |to_cell: bool, register: RegId, cell: &ir::Mem, by_frame: bool| {
+        let disp = cell.addr.map_or(0, |addr| addr.disp);
+        let place = if by_frame {
+            ir::Mem { through: FRAME, offset: disp + slot, disp_width: 2, ..ir::Mem::new(None, 16) }
+        } else {
+            ir::Mem { through: STACK, offset: disp + depth, disp_width: 2, ..ir::Mem::new(None, 16) }
+        };
+        let xmm = Loc::Reg(ir::Reg { register, width: 16 });
+        if to_cell {
+            semantics(Operation::Move, "movaps", vec![Loc::Mem(place)], vec![xmm])
+        } else {
+            semantics(Operation::Move, "movaps", vec![xmm], vec![Loc::Mem(place)])
+        }
+    };
     let mut enter: Vec<Semantics> = Vec::new();
     for op in emit_prologue(&info, EAX) {
         let allocates = matches!(op, Op::SubSp(_) | Op::Push(EAX));
@@ -1455,8 +1477,18 @@ fn lowered(
             enter.extend(stack_check(procedure, reserve));
         }
     }
+    enter.extend(procedure.body.vector_saves.iter().map(|(register, cell)| vector(true, *register, cell, false)));
     let dead = scratch.map(|_| DEAD);
-    let leave = emit_epilogue(&info, dead).into_iter().map(lower).collect();
+    let mut leave: Vec<Semantics> = Vec::new();
+    for op in emit_epilogue(&info, dead) {
+        if leave.is_empty() && matches!(op, Op::AddSp(_) | Op::LeaSpFp(_) | Op::MovSpFp) {
+            let by_frame = info.has_var_sized_objects;
+            leave.extend(
+                procedure.body.vector_saves.iter().map(|(register, cell)| vector(false, *register, cell, by_frame)),
+            );
+        }
+        leave.push(lower(op));
+    }
     (enter, leave)
 }
 
@@ -1548,6 +1580,8 @@ fn parts(
             .iter()
             .flat_map(|block| block.insns.iter())
             .any(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Call));
+    // `movaps` of a saved vector register needs the frame on the boundary too.
+    let calls = calls || (align > slot && !procedure.body.vector_saves.is_empty());
     let mut reserve = reserve;
     if calls {
         let below =
@@ -3659,22 +3693,31 @@ pub fn _signed(n: i64) -> String {
 /// than the block's first, or has no line at all. The pin reads each branch's
 /// own line; the last line of the block stands for them here.
 fn forced_statement_blocks(blocks: &[crate::model::lir::Block]) -> llrm_support::hash::HashSet<i64> {
-    let first_line = |block: &crate::model::lir::Block| {
-        block.insns.iter().find_map(|one| one.line.map(|place| place.line).filter(|&line| line != 0))
+    let line_of = |one: &Arc<lir::Insn>| {
+        #[cfg(test)]
+        LINES.with(|lines| lines.set(lines.get() + 1));
+        one.line.map(|place| place.line).filter(|&line| line != 0)
     };
-    let last_line = |block: &crate::model::lir::Block| {
-        block.insns.iter().rev().find_map(|one| one.line.map(|place| place.line).filter(|&line| line != 0))
-    };
+    let firsts: Vec<Option<u32>> = blocks.iter().map(|block| block.insns.iter().find_map(line_of)).collect();
+    let lasts: Vec<Option<u32>> = blocks.iter().map(|block| block.insns.iter().rev().find_map(line_of)).collect();
+    let place: llrm_support::hash::HashMap<i64, usize> =
+        blocks.iter().enumerate().rev().map(|(number, block)| (block.at, number)).collect();
     let mut forced = llrm_support::hash::HashSet::default();
-    for block in blocks {
+    for (number, block) in blocks.iter().enumerate() {
         for next in block.succ.iter() {
-            let Some(target) = blocks.iter().find(|one| one.at == *next) else { continue };
-            if first_line(target).is_some() && last_line(block) != first_line(target) {
-                forced.insert(target.at);
+            let Some(&target) = place.get(next) else { continue };
+            if firsts[target].is_some() && lasts[number] != firsts[target] {
+                forced.insert(blocks[target].at);
             }
         }
     }
     forced
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Instructions `forced_statement_blocks` read a line of.
+    static LINES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -3724,6 +3767,22 @@ mod tests {
         assert!(forced.contains(&3), "{forced:?}");
         // Block 4's one predecessor ends on its line.
         assert!(!forced.contains(&4), "{forced:?}");
+    }
+
+    /// Each edge of the body found its target by a scan of the blocks and read
+    /// the lines of both ends again: every `built` of memory_expansion spent
+    /// 11M instructions in `forced_statement_blocks` (and its two callers per
+    /// procedure). The lines of a block are read once.
+    #[test]
+    fn the_lines_of_a_block_are_read_once_whatever_leads_to_it() {
+        let count = 200i64;
+        let blocks: Vec<crate::model::lir::Block> =
+            (0..count).map(|at| lined(at, 1 + at as u32, &[(at + 1) % count, (at + 2) % count, (at + 3) % count])).collect();
+        LINES.with(|lines| lines.set(0));
+        let forced = forced_statement_blocks(&blocks);
+        assert_eq!(forced.len(), count as usize, "the premise: every block follows another line");
+        let read = LINES.with(|lines| lines.get());
+        assert!(read <= 2 * count as usize, "{read}");
     }
 
     fn no_names() -> IndexMap<(Space, i64), String> {
@@ -4419,6 +4478,7 @@ mod tests {
             IndexMap::default(),
         );
         let registers = llrm_target::FrameRegisters {
+            vector_saved: Vec::new(),
             pointer: RegId::EBP,
             stack: RegId::ESP,
             saved: Vec::new(),
@@ -4475,6 +4535,7 @@ mod tests {
         };
         let listing = |enter: bool, size: bool| {
             let registers = llrm_target::FrameRegisters {
+                vector_saved: Vec::new(),
                 pointer: RegId::EBP,
                 stack: RegId::ESP,
                 saved: Vec::new(),
@@ -4550,6 +4611,7 @@ mod tests {
             ..lir::LirBody::new("get", 1, blocks, IndexMap::default(), IndexMap::default())
         };
         let registers = llrm_target::FrameRegisters {
+            vector_saved: Vec::new(),
             pointer: RegId::EBP,
             stack: RegId::ESP,
             saved: Vec::new(),
@@ -4727,6 +4789,7 @@ mod tests {
             IndexMap::default(),
         );
         let registers = llrm_target::FrameRegisters {
+            vector_saved: Vec::new(),
             pointer: RegId::EBP,
             stack: RegId::ESP,
             saved: Vec::new(),
@@ -4915,6 +4978,7 @@ mod tests {
                 body = body.with_slots(&slots);
             }
             let registers = llrm_target::FrameRegisters {
+                vector_saved: Vec::new(),
                 pointer: RegId::EBP,
                 stack: RegId::ESP,
                 saved: Vec::new(),

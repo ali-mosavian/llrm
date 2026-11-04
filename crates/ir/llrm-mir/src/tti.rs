@@ -390,6 +390,14 @@ pub trait Tti {
         1
     }
 
+    /// Whether the bound above stands down where the pin's own cost, net of
+    /// the instructions it folds, is below zero: the pin counts that inline as
+    /// shrinking the caller (a one-instruction wrapper, a callee whose body
+    /// folds away). False: the bound holds whatever the cost.
+    fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {
+        false
+    }
+
     /// Whether a constant address offset may become a phi: false where the
     /// access folds it as a displacement and the target says to keep it. A
     /// boolean as the pin's `replacingOperandWithVariableIsCheap` is: a
@@ -492,7 +500,14 @@ pub trait Tti {
         None
     }
 
-    /// DEVIATE REC-2: gcc's growth bar of the recursive edge at (-O2, -O3);
+    /// DEVIATE PL6: whether a loop's first iteration is peeled where its entry
+    /// constants fold enough of it to pay the copy at the speed rate.
+    fn peels_folded_entry(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE REC-2: gcc's growth bar of the recursive edge at (-O2, -O3),
+    /// in `gcc_insns` of the callee;
     /// none: no bar.
     fn recursive_edge_growth(&self) -> Option<(i64, i64)> {
         None
@@ -857,6 +872,24 @@ pub trait Tti {
         false
     }
 
+    /// Beyond the pin (AArch64 and ARM step by any small immediate): whether a
+    /// post-increment access of `access_bytes` may step its pointer by `step`
+    /// bytes. m68k's `(An)+` steps by the access size and no other amount.
+    fn is_post_inc_step_legal(
+        &self,
+        _access_bytes: i64,
+        _step: i64,
+    ) -> bool {
+        true
+    }
+
+    /// Beyond the pin: whether a size build keeps a loop whose closed form
+    /// (`rewriteLoopExitValues`) costs more code than the loop, as the 16-bit
+    /// targets do. m68k's wide multiplies are library calls.
+    fn sizes_exit_values(&self) -> bool {
+        false
+    }
+
     /// Beyond the pin: whether a strict exit compare of a unit-stride counter
     /// that never passes its bound should become `!=` (`exitne`). Counting to
     /// zero and testing `!=` is cheap where a decrement sets the flags and one
@@ -865,6 +898,17 @@ pub trait Tti {
     /// default; a target opts in where it measured a win.
     fn prefers_exit_ne(&self) -> bool {
         false
+    }
+
+    /// A target's value of the pin's `cl::opt` `SCEVCheapExpansionBudget`
+    /// (default 4), for a function built for size or not: the operations
+    /// `IndVarSimplify`'s test replacement may spend on a loop's exit limit.
+    /// [pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L41)
+    fn lftr_expansion_budget(
+        &self,
+        _optsize: bool,
+    ) -> u32 {
+        4
     }
 
     /// `isNumRegsMajorCostOfLSR`.
@@ -941,6 +985,18 @@ pub trait Tti {
     /// also counts what the loop keeps live (DEVIATE LU3c); the pin's one.
     fn lsr_reserved_registers(&self) -> u32 {
         1
+    }
+
+    /// `TCC_Basic` in this target's cost units for `kind` (DEVIATE TB1; the
+    /// pin's is the constant 1): the SCEV expansion budgets
+    /// (`isHighCostExpansion`, 4 of them) are counted in it. A target whose
+    /// costs are not about one per instruction (the Z80 prices in machine
+    /// cycles) says what a basic instruction costs.
+    fn tcc_basic(
+        &self,
+        _kind: CostKind,
+    ) -> Cost {
+        Cost::BASIC
     }
 
     /// DEVIATE LU12: whether the adds of a use whose fixups all lie after the
@@ -1088,6 +1144,16 @@ pub trait Tti {
             ty,
             Ty::Int(8 | 16 | 32) | Ty::Float | Ty::Double | Ty::Pointer
         )
+    }
+
+    /// `haveFastSqrt`: a legal `FSQRT` on `ty`
+    /// ([BasicTTIImpl.h:674](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L674)).
+    /// Default: none, for a target without an FPU or a sqrt instruction.
+    fn have_fast_sqrt(
+        &self,
+        _ty: Ty,
+    ) -> bool {
+        false
     }
 
     /// `shouldBuildLookupTables`: whether the target jumps through a table

@@ -673,12 +673,13 @@ pub struct CallInfo {
 }
 
 /// The calling conventions LLVM names, by number; any other is `ccN`.
-pub const CONVENTIONS: [(&str, u32); 12] = [
+pub const CONVENTIONS: [(&str, u32); 13] = [
     ("ccc", 0),
     ("fastcc", 8),
     ("coldcc", 9),
     ("x86_stdcallcc", 64),
     ("x86_fastcallcc", 65),
+    ("win64cc", WIN64),
     ("x86_intrcc", 83),
     ("x86_regcallcc", REGCALL),
     ("watcallcc", WATCALL),
@@ -718,6 +719,9 @@ pub const REGPARM3: u32 = 1005;
 
 /// `regparm3popcc`: `regparm3cc` whose callee removes the stack arguments.
 pub const REGPARM3POP: u32 = 1006;
+
+/// LLVM's `win64cc`: the Microsoft x64 convention.
+pub const WIN64: u32 = 79;
 
 /// `ia16cc`: gcc-ia16's convention.
 pub const IA16: u32 = 1004;

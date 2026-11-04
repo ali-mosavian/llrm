@@ -247,6 +247,53 @@ impl PartialEq for OrderCache {
     }
 }
 
+/// Each block's index in the layout, by block number (`u32::MAX`: not
+/// placed), made on the first ask after an edit of the layout. Not part of what
+/// a function is: a copy starts with none and two functions compare equal
+/// whatever they hold.
+#[derive(Default)]
+pub(crate) struct BlockPlaces(pub(crate) std::cell::RefCell<Option<Vec<u32>>>);
+
+impl BlockPlaces {
+    pub(crate) fn invalidate(&self) {
+        *self.0.borrow_mut() = None;
+    }
+}
+
+impl Clone for BlockPlaces {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl std::fmt::Debug for BlockPlaces {
+    fn fmt(
+        &self,
+        out: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        out.write_str("BlockPlaces")
+    }
+}
+
+impl PartialEq for BlockPlaces {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
+        true
+    }
+}
+
+thread_local! {
+    static PLACES_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread made a function's block places, for a test that
+/// asking for k blocks' places does not walk the layout k times.
+pub fn block_places_built() -> usize {
+    PLACES_BUILT.with(std::cell::Cell::get)
+}
+
 /// What a debugger is told of a source variable, from a point of the code on:
 /// where it lives in memory, what it is, or that nothing says. Not an
 /// instruction: no pass counts it, and a use of a value in one keeps nothing
@@ -491,6 +538,9 @@ pub struct Function {
     /// Each instruction's (previous, next) in its block, as an id + 1 (0:
     /// none): the block lists' links.
     pub(crate) order: OrderCache,
+    /// Each placed block's index in `layout`, made when asked and dropped by an
+    /// edit of the layout.
+    pub(crate) places: BlockPlaces,
     pub(crate) changes: ChangeLog,
     /// How many edits of each kind the function has had: no part of what it is.
     pub(crate) epochs: crate::touched::Epochs,
@@ -558,6 +608,7 @@ impl Function {
             layout: Vec::new(),
             uses: Default::default(),
             order: OrderCache::default(),
+            places: BlockPlaces::default(),
             changes: ChangeLog::default(),
             epochs: crate::touched::Epochs::default(),
             taken: 0,
@@ -782,6 +833,24 @@ impl Function {
 
     pub fn layout(&self) -> &[BlockId] {
         &self.layout
+    }
+
+    /// `block`'s index in the layout: one walk of the layout after an edit of
+    /// it, however many blocks are asked.
+    pub fn layout_index(
+        &self,
+        block: BlockId,
+    ) -> Option<usize> {
+        let mut places = self.places.0.borrow_mut();
+        let places = places.get_or_insert_with(|| {
+            PLACES_BUILT.with(|built| built.set(built.get() + 1));
+            let mut made = vec![u32::MAX; self.blocks.len()];
+            for (at, one) in self.layout.iter().enumerate() {
+                made[one.0 as usize] = at as u32;
+            }
+            made
+        });
+        places.get(block.0 as usize).copied().filter(|&at| at != u32::MAX).map(|at| at as usize)
     }
 
     /// Whether `block` is in the layout.
@@ -1262,11 +1331,14 @@ pub struct GlobalName {
 /// one count is current while the count stands.
 static NAMES_MADE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-static SYMBOL_BUILDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+thread_local! {
+    static SYMBOL_BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
 
-/// How many symbol tables `Module::named` has made.
+/// How many symbol tables `Module::named` has made on this thread: a test
+/// that counts them is not told of the tables other tests make beside it.
 pub fn symbol_builds() -> u64 {
-    SYMBOL_BUILDS.load(std::sync::atomic::Ordering::Relaxed)
+    SYMBOL_BUILDS.with(std::cell::Cell::get)
 }
 
 /// `LLRM_CHECK_SYMBOLS` compares each lookup with a scan of the globals.
@@ -1638,7 +1710,7 @@ impl Module {
         &self,
         made: u64,
     ) -> Symbols {
-        SYMBOL_BUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        SYMBOL_BUILDS.with(|builds| builds.set(builds.get() + 1));
         let mut ids = crate::hash::HashMap::default();
         for (at, global) in self.globals.iter().enumerate() {
             if let Some(text) = global.name.as_deref() {

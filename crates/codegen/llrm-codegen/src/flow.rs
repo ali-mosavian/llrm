@@ -109,6 +109,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("MachineScheduler", "machinesched@5"),
     ("FixupSetCC", "fixupsetcc@5"),
     ("CallFrameOpt", "callframe@5"),
+    ("VectorSaves", "callframe@5"),
     ("ReserveCallFrame", "callframe@5"),
     ("FlagsCopy", "flagscopy@5"),
     ("X86OptimizeLEAs", "leaopt@5"),
@@ -255,7 +256,7 @@ pub fn machine_with<'a>(
             basic_semantics,
             status_word: classes.status_word(),
         }),
-        Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes) }),
+        Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes), cpu: Some(target) }),
         Box::new(twoaddr::TwoAddress { lea: target.three_address() }),
         Box::new(Coalescer { size: target.size, ..Coalescer::new(None, segments, classes) }),
         // After TwoAddress and the coalescer, before any value is placed: the
@@ -276,6 +277,13 @@ pub fn machine_with<'a>(
             prices: parcopy::CyclePrices::of(target),
             available: classes.available.clone(),
             saved: registers.saved.iter().map(|(whole, _)| *whole).collect(),
+        }),
+        // The callee-saved vector registers the body writes get their frame
+        // cells before the call frame is reserved below them.
+        Box::new(crate::backend::vectorsaves::VectorSaves {
+            frame: frame.clone(),
+            saved: registers.vector_saved.iter().map(|(whole, _)| *whole).collect(),
+            bias: registers.slot,
         }),
         // The pin's PEI: the call frame is reserved, or each call adjusts.
         Box::new(crate::backend::callframe::ReserveCallFrame {

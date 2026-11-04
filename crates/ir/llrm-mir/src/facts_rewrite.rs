@@ -614,8 +614,12 @@ mod tests {
             "typepromotion_pass.rs",
             // AggressiveInstCombine.cpp's `tryToRecognizeTableBasedPatterns`
             // takes `nusw` (`hasNoUnsignedSignedWrap`; `inbounds` implies it)
-            // of the table's GEP as the proof its index does not wrap. It
-            // reads no other flag and sets none.
+            // of the table's GEP as the proof its index does not wrap, and
+            // `foldICmpOrChain` takes `nsw` or `nuw` of a `shl` in an or chain
+            // compared with zero as the proof the shift loses no
+            // bit; `foldSqrt` takes a call's `nnan` as the proof of a
+            // non-negative argument and copies the call's flags onto
+            // the `llvm.sqrt` it makes. It reads no other flag.
             "aggressive_instcombine.rs",
             // CodeGenPrepare.cpp's `AddrMode.InBounds`: a mode stays in
             // bounds while every GEP it folds is, and the sunk address is made

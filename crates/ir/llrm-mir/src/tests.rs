@@ -1389,13 +1389,58 @@ fn module_of_functions(count: usize) -> crate::module::Module {
 #[test]
 fn test_a_module_makes_one_symbol_table_for_all_its_lookups() {
     let module = module_of_functions(600);
-    let before = crate::module::symbol_builds();
+    let (builds, names) = (crate::module::symbol_builds(), crate::module::names_made());
     for round in 0..2 {
         for at in 0..600 {
             assert_eq!(module.named(&format!("f{at}")), Some(crate::context::GlobalId(at as u32)), "round {round}");
         }
     }
     assert_eq!(module.named("missing"), None);
+    // A name made on any thread (a parallel test parsing text) stales every
+    // table once, so the tables are one and one per name made meanwhile; a
+    // table per lookup would be 1201, and a scan of the globals (the 90 M Ir
+    // bug) makes none.
+    let made = crate::module::names_made() - names;
+    let tables = crate::module::symbol_builds() - builds;
+    assert!((1..=1 + made).contains(&tables), "{tables} tables, {made} names made");
+}
+
+/// A name made on another thread between two lookups staled the table, and
+/// the guard above asked for exactly one table: red in 3 of 3 full runs of the
+/// suite at the tip, green alone. The table is made again, once.
+#[test]
+fn a_name_made_on_another_thread_costs_one_table() {
+    let module = module_of_functions(600);
+    let (builds, names) = (crate::module::symbol_builds(), crate::module::names_made());
+    assert_eq!(module.named("f0"), Some(crate::context::GlobalId(0)));
+    std::thread::spawn(|| drop(crate::module::GlobalName::from("elsewhere".to_owned()))).join().unwrap();
+    for at in 0..600 {
+        assert_eq!(module.named(&format!("f{at}")), Some(crate::context::GlobalId(at as u32)));
+    }
+    // Another test parsing beside this one may stale it again: bounded by the
+    // names made, never by the lookups.
+    let made = crate::module::names_made() - names;
+    let tables = crate::module::symbol_builds() - builds;
+    assert!((2..=1 + made).contains(&tables), "{tables} tables, {made} names made");
+}
+
+/// The count of tables made was one for the whole process: a test that made
+/// a module's table beside `test_a_module_makes_one_symbol_table_for_all_its_lookups`
+/// failed it (5 of 40 runs red at the tip). A table made on another thread is
+/// not this thread's.
+#[test]
+fn a_table_made_on_another_thread_is_not_counted() {
+    let module = module_of_functions(3);
+    let before = crate::module::symbol_builds();
+    std::thread::spawn(|| {
+        let other = module_of_functions(3);
+        assert_eq!(other.named("f1"), Some(crate::context::GlobalId(1)));
+        assert_eq!(crate::module::symbol_builds(), 1);
+    })
+    .join()
+    .unwrap();
+    assert_eq!(crate::module::symbol_builds(), before);
+    assert_eq!(module.named("f2"), Some(crate::context::GlobalId(2)));
     assert_eq!(crate::module::symbol_builds() - before, 1);
 }
 

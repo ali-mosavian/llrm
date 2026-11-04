@@ -173,6 +173,10 @@ impl Machine {
                     let result = if count == 0 { left } else { left << count | source >> (32 - count) };
                     self.write(one, result)
                 }
+                Mnemonic::Bsr => {
+                    assert!(right != 0, "bsr of zero");
+                    self.write(one, 31 - right.leading_zeros())
+                }
                 Mnemonic::Mul => {
                     let product = u64::from(self.registers[0]) * u64::from(left);
                     (self.registers[0], self.registers[2]) = (product as u32, (product >> 32) as u32);
@@ -351,6 +355,18 @@ fn a_wide_divide_is_bounded_not_a_round_per_bit() {
         let routine = divide(signed, true, 16).expect("assembles");
         let (_, steps) = divided(&routine, 16, dividend, divisor);
         assert!(steps < 160, "{} took {steps} instructions", routine.name);
+    }
+}
+
+/// At 32 bits the divisor is normalized by one `bsr`, not a shift per leading
+/// zero: a divisor of 1:00000001 took 144 instructions (x_ll_div -O2, 17.8k
+/// clocks over gcc's).
+#[test]
+fn a_flat_wide_divide_normalizes_in_one_step() {
+    for signed in [false, true] {
+        let routine = divide(signed, true, 32).expect("assembles");
+        let (_, steps) = divided(&routine, 32, u64::MAX >> 1, 0x1_0000_0001);
+        assert!(steps < 80, "{} took {steps} instructions", routine.name);
     }
 }
 

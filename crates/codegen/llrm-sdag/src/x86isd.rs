@@ -58,6 +58,14 @@ pub const LLRM_ZERO128: ISD = ISD::Target(24591);
 /// the chain. Selected as a 16-byte load and store. Same deviation as
 /// [`LLRM_ZERO128`].
 pub const LLRM_COPY128: ISD = ISD::Target(24592);
+/// `llrm.x86.udiv64by32`: `hi, lo, divisor` (all `i32`), giving the quotient
+/// and the remainder of `hi:lo / divisor`. Selected as `DIV32r` with `hi` in
+/// `EDX` and `lo` in `EAX`; a quotient over 32 bits is the hardware's `#DE`.
+///
+/// DEVIATE DV1: the pin has no such builtin (libgcc divides this way with
+/// `divl`). Exit 2026-11-12: none planned; m68k `divu.l` takes the same
+/// shape. Owner m32.
+pub const LLRM_UDIV64BY32: ISD = ISD::Target(24593);
 /// `X86ISD::VASTART_SAVE_XMM_REGS` (the pin's number): `chain, al, frame index
 /// of the register save area, offset of the first vector register's slot`,
 /// the vector argument registers not taken by named parameters stored there
@@ -93,6 +101,7 @@ pub fn private_name(code: u16) -> Option<&'static str> {
         24583 => "X86ISD::LLRM_PTRDIFF",
         24591 => "X86ISD::LLRM_ZERO128",
         24592 => "X86ISD::LLRM_COPY128",
+        24593 => "X86ISD::LLRM_UDIV64BY32",
         _ => return None,
     })
 }

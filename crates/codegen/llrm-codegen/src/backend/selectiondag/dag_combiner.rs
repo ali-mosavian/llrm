@@ -646,9 +646,6 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 self.add_to_worklist_with_users(new.node);
                 self.dag.delete_dead(old.node);
             }
-            for made in before..self.dag.node_count() {
-                self.add_to_worklist(made as u32);
-            }
             let Some(result) = result else { continue };
             if result.node == n && result.res == 0 {
                 continue;
@@ -782,14 +779,14 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::SetCC => self.visit_setcc(node),
             ISD::Xor => self.visit_xor(node).or_else(|| self.simplify_demanded(node)),
             ISD::BrCond => self.visit_brcond(node),
-            ISD::Mul => self.visit_mul(node),
+            ISD::Mul => self.visit_mul(node).or_else(|| self.simplify_demanded(node)),
             ISD::And => self
                 .visit_and(node)
                 .or_else(|| self.reduce_load_width_of(node))
                 .or_else(|| self.simplify_demanded(node))
                 .or_else(|| self.and_of_extload(node)),
             ISD::Or => self.visit_or(node).or_else(|| self.simplify_demanded(node)),
-            ISD::Add => self.visit_add(node),
+            ISD::Add => self.visit_add(node).or_else(|| self.simplify_demanded(node)),
             ISD::Sub => self.visit_sub(node),
             ISD::FAdd => self.visit_fadd(node),
             ISD::FSub => self.visit_fsub(node),
@@ -804,20 +801,27 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 .visit_shift(node)
                 .or_else(|| if op_is_srl(self.dag.opcode(node)) { self.reduce_load_width_of(node) } else { None })
                 .or_else(|| self.simplify_demanded(node)),
-            ISD::Sra => {
-                self.visit_sra(node).or_else(|| self.visit_shift(node)).or_else(|| self.reduce_load_width_of(node))
-            }
+            ISD::Sra => self
+                .visit_sra(node)
+                .or_else(|| self.visit_shift(node))
+                .or_else(|| self.reduce_load_width_of(node))
+                .or_else(|| self.simplify_demanded(node)),
             // `visitFunnelShift`, closing with `SimplifyDemandedBits(N)`.
             ISD::FShl | ISD::FShr => self.visit_funnel_shift(node).or_else(|| self.simplify_demanded(node)),
             ISD::BSwap => self.visit_bswap(node),
             ISD::Abs | ISD::AbsMinPoison => self.visit_abs(node),
             ISD::CtLz | ISD::CtTz => self.visit_ctlz_cttz(node),
             ISD::CtPop => self.visit_ctpop(node),
-            ISD::Rotl | ISD::Rotr => self.visit_rotate(node),
-            ISD::SMin | ISD::SMax | ISD::UMin | ISD::UMax => self.visit_iminmax(node),
+            ISD::Rotl | ISD::Rotr => self.visit_rotate(node).or_else(|| self.simplify_demanded(node)),
+            ISD::SMin | ISD::SMax | ISD::UMin | ISD::UMax => {
+                self.visit_iminmax(node).or_else(|| self.simplify_demanded(node))
+            }
             ISD::BitReverse => self.visit_bitreverse(node),
             ISD::SDiv => self.visit_sdiv(node),
-            ISD::UDiv => self.visit_udiv(node),
+            ISD::UDiv => self.visit_udiv(node).or_else(|| self.simplify_demanded(node)),
+            // `visitMULHU`: only its closing `SimplifyDemandedBits` (constant
+            // folding by known bits) is translated.
+            ISD::MulHU => self.simplify_demanded(node),
             ISD::SRem | ISD::URem => self.visit_rem(node),
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => self
                 .fold_extend_of_cast(node)
@@ -1683,6 +1687,26 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             (ISD::SignExtend, ISD::SignExtend | ISD::AnyExtend) => Some(self.dag.get_node(ISD::SignExtend, vt, &[x])),
             (ISD::AnyExtend, ISD::Truncate) => Some(self.any_ext_or_trunc(x, vt)),
             (ISD::ZeroExtend, ISD::Truncate) => {
+                // `zext (trunc x)` is `x` resized when the bits the truncate
+                // drops are zero, which `nuw` promises
+                // ([L2474](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L2474)).
+                let (op_bits, mid_bits, dest_bits) = (
+                    self.dag.value_type(x).size_in_bits(),
+                    self.dag.value_type(n0).size_in_bits(),
+                    vt.size_in_bits(),
+                );
+                let dropped = if op_bits == mid_bits {
+                    0
+                } else {
+                    super::fold::mask(op_bits.min(dest_bits)) & !super::fold::mask(mid_bits)
+                };
+                let mut zero = super::known_bits::known_bits(self.dag, x).zero;
+                if self.dag.node(n0).flags.has(super::dag::SDNodeFlags::NO_UNSIGNED_WRAP) {
+                    zero |= super::fold::mask(op_bits) & !super::fold::mask(mid_bits);
+                }
+                if dropped & !zero == 0 {
+                    return Some(self.dag.get_zext_or_trunc(x, vt));
+                }
                 // `zext nneg (trunc x)` of an `x` with sign bits to spare is
                 // `x` widened by `sext`, or truncated
                 // ([L16459](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L16459)).
@@ -2016,6 +2040,49 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     /// query: a constant moves right, `x + ~x` is -1, constants merge through
     /// a `sub` or an `add`, and an `add` of a negation or of a `sub` of the
     /// other operand is a `sub` or the operand itself.
+    /// The two forms of `visitADDLike`'s `add(mul(add(A, CA), CM), CB)`:
+    /// `n0` is the mul, or a one-use add of it and a `B`; `cb` is `n1`.
+    fn fold_add_of_mul_of_add(
+        &mut self,
+        n0: SDValue,
+        n1: SDValue,
+        vt: EVT,
+    ) -> Option<SDValue> {
+        let ones = super::fold::mask(vt.size_in_bits());
+        let cb = self.dag.constant(n1)?;
+        // `m_OneUse(m_Mul(m_Add(m_Value(A), m_ConstInt(CA)), m_ConstInt(CM)))`.
+        let product = |this: &Self, v: SDValue| -> Option<(SDValue, u128, u128)> {
+            if this.dag.opcode(v) != ISD::Mul || !this.dag.has_one_use(v.node) {
+                return None;
+            }
+            let (inner, cm) = (this.dag.operand(v, 0), this.dag.constant(this.dag.operand(v, 1))?);
+            if this.dag.opcode(inner) != ISD::Add {
+                return None;
+            }
+            let ca = this.dag.constant(this.dag.operand(inner, 1))?;
+            Some((this.dag.operand(inner, 0), ca, cm))
+        };
+        if let Some((a, ca, cm)) = product(self, n0) {
+            let imm = ca.wrapping_mul(cm).wrapping_add(cb) & ones;
+            let (cm, imm) = (self.dag.get_constant(cm, vt), self.dag.get_constant(imm, vt));
+            let mul = self.dag.get_node(ISD::Mul, vt, &[a, cm]);
+            return Some(self.dag.get_node(ISD::Add, vt, &[mul, imm]));
+        }
+        if self.dag.opcode(n0) == ISD::Add && self.dag.has_one_use(n0.node) {
+            let (x, y) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+            for (mul, b) in [(x, y), (y, x)] {
+                if let Some((a, ca, cm)) = product(self, mul) {
+                    let imm = ca.wrapping_mul(cm).wrapping_add(cb) & ones;
+                    let (cm, imm) = (self.dag.get_constant(cm, vt), self.dag.get_constant(imm, vt));
+                    let product = self.dag.get_node(ISD::Mul, vt, &[a, cm]);
+                    let sum = self.dag.get_node(ISD::Add, vt, &[product, b]);
+                    return Some(self.dag.get_node(ISD::Add, vt, &[sum, imm]));
+                }
+            }
+        }
+        None
+    }
+
     fn visit_add(
         &mut self,
         node: SDValue,
@@ -2045,6 +2112,18 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 if plain(self.dag, n00) {
                     let sum = self.dag.get_node(ISD::Add, vt, &[n1, n00]);
                     return Some(self.dag.get_node(ISD::Sub, vt, &[sum, n01]));
+                }
+            }
+            // `visitADDLike`: `add(mul(add(A, CA), CM), CB)` is `add(mul(A,
+            // CM), CM*CA + CB)`, also through an intermediate add; "this can
+            // help if the inner add has multiple uses"
+            // ([pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L3179)).
+            // DEVIATE: the wrap flags of the result are not kept, and
+            // `isLegalAddImmediate` is the pin's default (true). Exit
+            // 2026-11-12.
+            if vt.size_in_bits() <= 64 {
+                if let Some(found) = self.fold_add_of_mul_of_add(n0, n1, vt) {
+                    return Some(found);
                 }
             }
             // `(add (add x, c0), c1)` is `(add x, c0 + c1)` (`reassociateOps`).
@@ -2087,6 +2166,17 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
             if c == b {
                 return Some(self.dag.get_node(ISD::Sub, vt, &[a, d]));
+            }
+        }
+        // `visitADDLikeCommutative`: a one-use `(c - x)` of a plain constant
+        // added to `y` is `(y - x) + c`, which the compare folds then see.
+        for (sub, other) in [(n0, n1), (n1, n0)] {
+            if self.dag.opcode(sub) == ISD::Sub
+                && self.dag.has_one_use(sub.node)
+                && plain(self.dag, self.dag.operand(sub, 0))
+            {
+                let diff = self.dag.get_node(ISD::Sub, vt, &[other, self.dag.operand(sub, 1)]);
+                return Some(self.dag.get_node(ISD::Add, vt, &[diff, self.dag.operand(sub, 0)]));
             }
         }
         if !self.reassociation_can_break_addressing_mode_pattern(node, n0, n1)

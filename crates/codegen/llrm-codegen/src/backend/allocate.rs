@@ -568,6 +568,10 @@ impl RegAlloc {
         self.pinned.retain(|value, register| !(regs.is_segment(*register) && confined.get(value) == Some(&selectors)));
         let (constrained_body, fixed) = constrain::constrained(&body, Some(&self.pinned), &self.classes);
         body = constrain::hoisted(&constrained_body, &fixed);
+        // A copy of an undefined value the constraints made is undefined too.
+        if body.insns().iter().any(|one| crate::processimpdefs::implicit_def_of(one).is_some()) {
+            body = crate::processimpdefs::processed_before_allocation(&body);
+        }
         let clash: BTreeSet<u32> = fixed
             .keys()
             .copied()

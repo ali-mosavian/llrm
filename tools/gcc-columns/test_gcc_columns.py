@@ -83,10 +83,11 @@ def test_z80_16bit_result_is_charged_the_de_store():
     assert Z.result_charge(Z.U8) == (0, 0, 0)
 
 
-def test_z80_table_header_names_the_single_tu_ice():
-    """The shipped z80 cc1 ICEs on a single-TU softfloat build at -O2; the table says so, so no gcc cell is added for such a build."""
-    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tables", "z80-gcc.tsv")
-    assert "single-translation-unit softfloat build" in open(root).readline()
+def test_z80_table_header_names_the_single_tu_fix():
+    """A single-TU softfloat build ICEd the z80 cc1 at -O2 (LRA passes) until sp += n went through IX/IY; the softfloat header says which cc1 compiles it."""
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tables", "softfloat-z80.tsv")
+    head = open(root).readline()
+    assert "compiles at -O2 since the sp += n fix" in head and "KNOWN ISSUE" not in head
 
 
 def test_a_hung_fork_call_is_a_failed_call_not_a_cell():
@@ -224,9 +225,26 @@ def test_z80_mul16_o2_uses_the_early_exit_helper_and_it_is_exact():
         assert got == a * b & 0xFFFF, (a, b, got)
 
 
+def test_6502_runtime_has_the_indirect_call_helper():
+    """cc65's basic.c (a dispatch table) did not compile with the 6502 cc1: a call through a pointer was an ICE. The cc1 now stores the
+    pointer in __icv and does jsr __icall; both must be defined by the runtime the bench links, or the cell is a link failure."""
+    text = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "rt-6502", "icall.s")).read()
+    assert re.search(r"\.export\s+__icall\s*,\s*__icv", text) and "__icall:" in text and "jmp (__icv)" in text
+
+
+def test_z80_runtime_has_the_iy_indirect_call_helper():
+    """The z80 cc1 calls through a pointer as `call ___call_iy` (hl carries the first word argument; a call through hl looped in LRA on
+    static_pointers). Without rt-z80/__call_iy.s the cell is a link failure, and a hand-helper cell must be noted as such."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    text = open(os.path.join(here, "rt-z80", "__call_iy.s")).read()
+    assert ".globl\t___call_iy" in text and "___call_iy:\n\tjp\t(iy)" in text
+    assert "call_iy" in open(os.path.join(here, "gcc_z80_bench.py")).read()
+
+
 if __name__ == "__main__":
     # every test_*: a hand-kept list ran 4 of 17 and let "ok" stand for all of them
     tests = [f for n, f in sorted(globals().items()) if n.startswith("test_")]
     for t in tests:
         t()
     print(f"ok ({len(tests)} tests)")
+

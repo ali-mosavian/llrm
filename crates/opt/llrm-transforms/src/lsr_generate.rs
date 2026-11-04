@@ -309,7 +309,7 @@ impl Collection<'_, '_> {
         base: Formula,
         depth: u32,
     ) {
-        assert!(base.is_canonical(se, self.l), "Input must be in the canonical form");
+        debug_assert!(base.is_canonical(se, self.l), "Input must be in the canonical form");
         // Capped, to protect compile time.
         if depth >= 3 {
             return;
@@ -1035,7 +1035,6 @@ impl Collection<'_, '_> {
             }
         }
         self.generate_cross_use_constant_offsets(se);
-        self.generate_end_biased(se);
     }
 
     /// `GenerateEndBiased` (DEVIATE LG3, gcc's `ubase - ratio * cbase`,
@@ -1225,6 +1224,7 @@ impl Collection<'_, '_> {
             hardware_loop_profitable: self.hardware_loop_profitable,
             as_written: false,
             other_register_units: self.pressure_units(),
+            size: self.size,
         };
         cost.rate_formula(&mut rating, f, regs, visited, &self.uses[lu_idx], losers);
     }

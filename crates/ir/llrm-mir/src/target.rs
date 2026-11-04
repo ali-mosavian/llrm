@@ -78,11 +78,16 @@ pub struct Tuning {
     /// `max-inline-insns-recursive` (`Tti::recursive_inlining`); none: the
     /// pin's inliner.
     pub recursive_inlining: Option<(u32, i64)>,
-    /// gcc's `max-inline-insns-auto` at -O2 and -O3 (15, 30): the most a copy
-    /// of the recursive callee may grow its caller
-    /// (`want_inline_small_function_p`) for `recursive_inlining` to run on
-    /// it; none: no such bar.
+    /// gcc's `max-inline-insns-auto` at -O2 and -O3 (15, 30 of its size
+    /// units) as the most `gcc_insns` a recursive callee may have for
+    /// `recursive_inlining` to run on it, calibrated per target; none: no
+    /// such bar.
     pub recursive_edge_growth: Option<(i64, i64)>,
+    /// DEVIATE PL6: the first iteration of an innermost loop is peeled where
+    /// its entry constants fold enough of the body to pay the copy at the
+    /// speed rate (`Tti::peels_folded_entry`). false: the pin's
+    /// `computePeelCount`.
+    pub peel_folded_entry: bool,
 }
 
 impl Tuning {
@@ -110,7 +115,22 @@ impl Tuning {
         keep_constant_displacements: false,
         recursive_inlining: None,
         recursive_edge_growth: None,
+        peel_folded_entry: false,
     };
+}
+
+/// What a target says of `GlobalMerge`
+/// ([GlobalMerge.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/GlobalMerge.cpp));
+/// a target that merges nothing answers none.
+#[derive(Clone, Copy, Debug)]
+pub struct GlobalMerge {
+    /// The reach of a base register's immediate: `MaxOffset`.
+    pub max_offset: u64,
+    /// `OnlyOptimizeForSize`: only uses in `minsize` functions count.
+    pub size_only: bool,
+    /// The object format is Mach-O: the merged struct is `internal`, not
+    /// `private`.
+    pub mach_o: bool,
 }
 
 /// Where the target keeps no program data, as linear addresses: old
@@ -171,6 +191,13 @@ pub trait Machine {
     /// overrides. A target with no entry here takes `Tuning::PIN`.
     fn tuning(&self) -> Tuning {
         Tuning::PIN
+    }
+
+    /// Whether IPSCCP runs a second time after ArgumentPromotion changed a body
+    /// (DEVIATE SD443, exit 2026-11-07: interprocedural.rs). The pin runs it
+    /// once; a target that matches the pin's output turns it off.
+    fn second_ipsccp(&self) -> bool {
+        true
     }
 
     /// Clocks a byte of code is worth, in thousandths, where a decision is
@@ -299,6 +326,15 @@ pub trait Machine {
 
     /// The indexed addresses a memory access may use, native form first.
     fn address_forms(&self) -> Vec<AddressForm>;
+
+    /// How `GlobalMerge` runs at `-O3` (`aggressive`) or below; none where
+    /// the target does not run it.
+    fn global_merge(
+        &self,
+        _aggressive: bool,
+    ) -> Option<GlobalMerge> {
+        None
+    }
 
     /// Whether a `width`-byte load at an address a multiple of `align` may
     /// trap wherever it points. By default any may: only one known
@@ -472,6 +508,9 @@ pub struct OperationCosts {
     pub pieces_clear: i64,
     pub pieces_set_size: i64,
     pub pieces_clear_size: i64,
+    /// Bytes of the widest store a constant memset expands to; 0: the
+    /// target's pointer width, a dword at least.
+    pub memset_store: i64,
     /// The fewest case values for which a switch is a jump table (gcc's
     /// `case_values_threshold`); 0: the target has no table jump.
     pub jump_table: i64,
@@ -594,6 +633,7 @@ impl Default for OperationCosts {
             pieces_clear: 0,
             pieces_set_size: 0,
             pieces_clear_size: 0,
+            memset_store: 0,
             jump_table: 0,
             cache_line: 0,
             line_fill_clocks: 0,

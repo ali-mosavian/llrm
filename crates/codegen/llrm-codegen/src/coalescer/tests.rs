@@ -109,6 +109,21 @@ fn test_a_copy_between_values_that_do_not_overlap_is_joined_and_removed() {
     assert_consistent(&lis, &was, 1);
 }
 
+/// A join renamed the instruction that named the absorbed value into a new
+/// one (a new identity, a rebuilt slot index): the pin's `setReg` edits the
+/// operand where the instruction stands. Both survivors keep their identity.
+#[test]
+fn test_a_join_renames_the_instructions_that_name_the_absorbed_value_in_place() {
+    let (a, c, r) = (def(1), copy(2, 1), read(2));
+    let was = body(&[(&[Arc::clone(&a), Arc::clone(&c), Arc::clone(&r)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(1);
+    lis.interval(2);
+    join_copy(&mut lis, &AnyClass, &mut State::new(), &mut Default::default(), c.id());
+    let ids: Vec<u64> = lis.blocks().iter().flatten().map(|one| one.id()).collect();
+    assert_eq!(ids, vec![a.id(), r.id()], "the def and the read are the instructions they were");
+}
+
 /// `v1 := def; v2 := mov v1` and nothing reads `v2`: the copy is dead, and so
 /// then is the definition it alone read. Only the copy went, leaving a `v1`
 /// that nothing reads (C5: `eliminateDeadDefs` was not run).
@@ -663,13 +678,14 @@ fn test_a_constant_the_target_names_its_own_way_is_made_again() {
         size: false,
         keep_pinned: false,
         aliases: Default::default(),
-        should_join: Box::new(|_| true),
+        should_join: None,
         freq: Vec::new(),
         remat: Some(Box::new(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("CONST_I32")))),
         remat_wins: None,
         joins_global_copies: false,
         joins_pinned_copies: true,
         joins_sub_registers: true,
+        joins_lanes: false,
         regs: None,
         kind_of: None,
         kinds: Default::default(),
@@ -702,13 +718,14 @@ fn test_a_constant_dearer_than_the_copy_it_replaces_is_not_made_again() {
         size: false,
         keep_pinned: false,
         aliases: Default::default(),
-        should_join: Box::new(|_| true),
+        should_join: None,
         freq: Vec::new(),
         remat: Some(Box::new(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("CONST_I32")))),
         remat_wins: Some(Box::new(|_, _, _, _| false)),
         joins_global_copies: false,
         joins_pinned_copies: true,
         joins_sub_registers: true,
+        joins_lanes: false,
         regs: None,
         kind_of: None,
         kinds: Default::default(),
@@ -783,12 +800,13 @@ fn test_a_join_narrows_the_class_the_next_join_is_judged_against() {
         joins_global_copies: true,
         joins_pinned_copies: true,
         joins_sub_registers: true,
+        joins_lanes: false,
         palettes: palettes.into(),
         pins: IndexMap::default(),
         size: false,
         keep_pinned: false,
         aliases: Default::default(),
-        should_join: Box::new(|_| true),
+        should_join: None,
         freq: Vec::new(),
         remat: None,
         remat_wins: None,
@@ -1249,8 +1267,9 @@ fn env_with_palettes(palettes: &[(u32, &[RegId])]) -> TargetEnv {
         joins_global_copies: false,
         joins_pinned_copies: true,
         joins_sub_registers: true,
+        joins_lanes: true,
         aliases: Default::default(),
-        should_join: Box::new(|_| true),
+        should_join: None,
         freq: Vec::new(),
         regs: Some(body(&[]).regs()),
         kind_of: None,
@@ -1304,9 +1323,10 @@ fn test_a_copy_from_a_pinned_argument_is_left_to_the_allocator_when_the_target_s
             size: false,
             keep_pinned: true,
             aliases: Default::default(),
-            should_join: Box::new(|_| true),
+            should_join: None,
             freq: Vec::new(),
             joins_sub_registers: true,
+            joins_lanes: false,
             regs: None,
             kind_of: None,
             kinds: Default::default(),
@@ -1510,4 +1530,151 @@ fn test_both_bytes_of_a_pair_join_into_their_lanes() {
     let dests = |insn: &Arc<Insn>| insn.what.as_ref().unwrap().dests.clone();
     assert_eq!(dests(&kept[0]), vec![Loc::Held(Held { value: 2, width: 1, offset: 0 })]);
     assert_eq!(dests(&kept[1]), vec![Loc::Held(Held { value: 2, width: 1, offset: 1 })]);
+}
+
+/// The high byte joins before the low one, while the pair is not yet live at
+/// the byte's def: the def still keeps the other lane (the copy it replaces
+/// read it). It started the pair, so the low lane was dead there and a
+/// reload of the pair was given its registers (lz4c -Oz returned 0x3131).
+#[test]
+fn test_a_byte_joined_into_a_lane_before_the_pair_is_live_keeps_the_other_lane() {
+    let (d1, d3) = (def_at(1, 1), def_at(3, 1));
+    let (lo, hi) = (lane_copy(2, 0, 1), lane_copy(2, 1, 3));
+    let was = body(&[(&[d1, d3, Arc::clone(&lo), Arc::clone(&hi), read_at(2, 2)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    for v in 1..=3 {
+        lis.interval(v);
+    }
+    let mut state = State::new();
+    let result = join_copy(&mut lis, &LaneViews, &mut state, &mut Default::default(), hi.id());
+    assert_eq!(result, JoinResult::Joined);
+    let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
+    let definer = kept.iter().find(|insn| insn.def_lanes.iter().any(|(v, _)| *v == 2)).expect("the byte's def");
+    assert_eq!(definer.partial_defs, vec![2], "premise: the def is of a lane of the pair; it keeps the rest");
+}
+
+/// The high byte is computed before the low one's copy, which starts the pair
+/// (`undef_super`). Once the high byte joins its lane the pair is live at the
+/// low copy: it must keep the high lane, else the high byte's def reads dead
+/// and is deleted (lz4c -Oz returned 0x57b3).
+#[test]
+fn test_a_lane_def_after_a_joined_lane_keeps_it() {
+    let (d3, d1) = (def_at(3, 1), def_at(1, 1));
+    let (lo, hi) = (lane_copy(2, 0, 1), lane_copy(2, 1, 3));
+    let mut starts = (*lo).clone();
+    starts.undef_super = true;
+    let lo = Arc::new(starts);
+    let was = body(&[(&[d3, d1, Arc::clone(&lo), Arc::clone(&hi), read_at(2, 2)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    for v in 1..=3 {
+        lis.interval(v);
+    }
+    let mut state = State::new();
+    let result = join_copy(&mut lis, &LaneViews, &mut state, &mut Default::default(), hi.id());
+    assert_eq!(result, JoinResult::Joined);
+    let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
+    let low = kept.iter().find(|insn| insn.def_lanes.iter().any(|(_, lanes)| *lanes == llrm_lir::valuelanes::ValueLanes::at(0, 1))).expect("the low copy");
+    assert!(!low.undef_super && low.partial_defs == vec![2], "{low:?}");
+}
+
+/// The low lane copy of a pair that an earlier join left plain (no
+/// `undef_super`, nothing kept) stands over the high lane once that joins:
+/// it must keep it too, else the low def is the only one the high lane's
+/// readers see and the main range loses the high lane's stretch (lz4c -O2
+/// asserted "Inconsistent LiveInterval" in the union).
+#[test]
+fn test_a_plain_lane_def_keeps_a_lane_joined_after_it() {
+    let (d3, d1) = (def_at(3, 1), def_at(1, 1));
+    let (lo, hi) = (lane_copy(2, 0, 1), lane_copy(2, 1, 3));
+    assert!(!lo.undef_super && !lo.partial_defs.contains(&2), "premise: the low copy keeps nothing");
+    let was = body(&[(&[d3, d1, Arc::clone(&lo), Arc::clone(&hi), read_at(2, 2)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    for v in 1..=3 {
+        lis.interval(v);
+    }
+    let mut state = State::new();
+    let result = join_copy(&mut lis, &LaneViews, &mut state, &mut Default::default(), hi.id());
+    assert_eq!(result, JoinResult::Joined);
+    let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
+    let low = kept.iter().find(|insn| insn.def_lanes.iter().any(|(_, lanes)| *lanes == llrm_lir::valuelanes::ValueLanes::at(0, 1))).expect("the low copy");
+    assert!(low.partial_defs == vec![2], "{low:?}");
+}
+
+/// A byte copied into the low lane of a pair names the same width at the same
+/// offset as a copy between two bytes, so it was taken for one: the byte (`al`)
+/// shares no palette with the pair (`ax`) whole, and the copy stayed (crc16 -Oz
+/// round-tripped a byte through `h`). Its lane def says it is a lane.
+#[test]
+fn test_a_byte_copied_into_the_low_lane_is_a_lane_copy_not_a_byte_copy() {
+    let env = env_with_palettes(&[(1, &[RegId::AL]), (2, &[RegId::AX])]);
+    assert!(!env.can_share(1, 2), "premise: the byte and the pair share no registers whole");
+    assert!(env.can_share_sub(1, 2), "premise: al is the low byte of ax");
+    let lane = lane_copy(2, 0, 1);
+    let pair = super::pair::CoalescerPair::set_registers(&lane, &env).expect("a lane of the pair");
+    assert!(pair.is_partial() && pair.lane_offset() == 0, "the byte is the pair's low lane");
+    assert!(super::pair::full_copy(&lane).is_none(), "a lane def is not a full copy");
+}
+
+/// A byte joins the lane of a pair only where some register of the pair's
+/// palette has a register of the byte's palette at that offset: `ah` is the
+/// byte above `al` in `ax`, and `al` is not. Before, `can_share_lane` had no
+/// answer and every copy into a high byte stayed.
+#[test]
+fn test_a_byte_joins_the_lane_of_the_pair_that_has_that_byte_at_that_offset() {
+    let env = env_with_palettes(&[(1, &[RegId::AX]), (2, &[RegId::AH]), (3, &[RegId::AL])]);
+    assert!(env.can_share_lane(2, 1, 1), "ah is the byte above al");
+    assert!(!env.can_share_lane(3, 1, 1), "al is the low byte, not the high one");
+    assert!(env.can_share_sub(3, 1), "premise: al is the low byte of ax");
+}
+
+/// A target that does not join lanes says no whatever the registers.
+#[test]
+fn test_a_target_without_lane_joins_leaves_every_lane_copy() {
+    let mut env = env_with_palettes(&[(1, &[RegId::AX]), (2, &[RegId::AH])]);
+    env.joins_lanes = false;
+    assert!(!env.can_share_lane(2, 1, 1));
+}
+
+/// `TargetEnv::should_coalesce` built a `Join` (two palette clones, use-kind
+/// sums) for every copy and handed it to a `should_join` that said yes: 13 M of
+/// the 88 M the coalescer costs on jpeg_fixed (1839 calls, 7 K instructions
+/// each). A target with no opinion builds none.
+#[test]
+fn test_a_target_with_no_opinion_on_a_join_is_not_asked_to_build_one() {
+    use std::collections::BTreeSet;
+
+    use llrm_lir::registers::RegId;
+
+    use super::env::{JOINS_BUILT, TargetEnv};
+    let run = |should_join: Option<Box<dyn Fn(&super::env::Join) -> bool>>| {
+        let c = copy(2, 1);
+        let was = body(&[(&[constant_named(1, "CONST_I32"), Arc::clone(&c)], &[1]), (&[read(2)], &[])]);
+        let palette: BTreeSet<RegId> = [RegId::AX, RegId::BX].into_iter().collect();
+        let env = TargetEnv {
+            palettes: IndexMap::from_iter([(1, palette.clone()), (2, palette)]).into(),
+            pins: IndexMap::default(),
+            size: false,
+            keep_pinned: false,
+            aliases: Default::default(),
+            should_join,
+            freq: Vec::new(),
+            remat: None,
+            remat_wins: None,
+            joins_global_copies: false,
+            joins_pinned_copies: true,
+            joins_sub_registers: true,
+            joins_lanes: false,
+            regs: None,
+            kind_of: None,
+            kinds: Default::default(),
+            check_kinds: false,
+        };
+        let mut lis = LiveIntervals::new(&was);
+        let before = JOINS_BUILT.with(std::cell::Cell::get);
+        let result = join_copy(&mut lis, &env, &mut State::new(), &mut Default::default(), c.id());
+        assert_eq!(result, JoinResult::Joined);
+        JOINS_BUILT.with(std::cell::Cell::get) - before
+    };
+    assert_eq!(run(Some(Box::new(|_| true))), 1, "premise: an opinion is built a join for");
+    assert_eq!(run(None), 0);
 }

@@ -698,7 +698,7 @@ pub fn optimized_with<E: From<String>>(
     // refuses this descriptor) merges and this call goes; if #6140 cannot
     // land by 2026-11-05 the alternative exit is reported on the 5th.
     // tests/nearcalls.rs holds the folded shape and, ignored, the pin's.
-    if promoted_any {
+    if promoted_any && program.target.second_ipsccp() {
         for (at, id) in crate::ipsccp::run_ipsccp_with(program, modules) {
             edited(&mut modules[at], &[id]);
             reoptimised(&mut program.modules[at], &mut modules[at], id, "ipsccp.")?;
