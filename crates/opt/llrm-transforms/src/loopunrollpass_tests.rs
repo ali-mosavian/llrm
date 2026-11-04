@@ -488,3 +488,15 @@ exit:
     assert_eq!(results(&module, inputs), before, "{after}");
     assert!(after.contains("%b = phi") || after.matches("phi i32 [ 0").count() > 0, "the outer loop is gone: {after}");
 }
+
+/// mandel -O2 ran its first trip (x = y = 0: two multiplies and a compare that
+/// fold) 768 times at 25k of 660k clocks. The peel is made where the clocks
+/// the fold saves repay the bytes of the copy at the 486's rate (312).
+#[test]
+fn a_first_iteration_is_peeled_only_where_its_folded_clocks_repay_the_copy() {
+    // 15 units are 45 bytes: 14040 milliclocks at 312, 14 clocks.
+    assert!(super::folded_entry_pays(39, 15, 312));
+    assert!(super::folded_entry_pays(15, 15, 312));
+    assert!(!super::folded_entry_pays(14, 15, 312));
+    assert!(!super::folded_entry_pays(0, 15, 312));
+}

@@ -160,6 +160,14 @@ impl CombineHooks for WasmCombines {
         true
     }
 
+    /// `visitMUL`'s `(mul (add x, c1), c2)` is `(add (mul x, c2), c1*c2)`
+    /// (DAGCombiner.cpp#L5080), for a single-use add where
+    /// `isMulAddWithConstProfitable` holds, which is the pin's default for
+    /// wasm.
+    fn fold_mul_of_add_with_constant(&self) -> bool {
+        true
+    }
+
     fn merge_stores_after_legalization(
         &self,
         _mem: EVT,

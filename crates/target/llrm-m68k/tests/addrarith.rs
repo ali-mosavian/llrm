@@ -188,3 +188,15 @@ fn the_cpu_that_prefers_adda_to_lea_allocates_as_the_one_that_does_not() {
     assert!(m68040.contains("adda.l"), "the 68040 takes adda somewhere");
     assert_eq!(as_lea(&m68040), as_lea(&m68020));
 }
+
+/// A pointer plus a register that only addresses read was added in a data
+/// register and copied into each address register that used it
+/// (`move.l %a0, %d0; add.l %d2, %d0; move.l %d0, %a1`, bench/library/partition
+/// kept six saved registers). It is `lea (0,%a0,%d2)`.
+#[test]
+fn a_pointer_plus_a_register_read_only_as_an_address_is_an_indexed_lea() {
+    let ir = include_str!("../bench/library/partition.ll");
+    let m = llrm_mir::parse::module(ir).expect("parses");
+    let out = text_with(&m, "k", Cpu::M68000, Options { size: true, ..Options::default() }).expect("compiles");
+    assert!(out.contains("lea\t(0,%a"), "no indexed lea:\n{out}");
+}

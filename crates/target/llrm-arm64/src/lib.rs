@@ -27,7 +27,7 @@ pub mod prepass;
 pub mod regalloc;
 pub mod shrinkwrap;
 pub mod sibcall;
-pub mod storecluster;
+pub mod memcluster;
 pub mod tti;
 #[cfg(test)]
 mod tti_tests;

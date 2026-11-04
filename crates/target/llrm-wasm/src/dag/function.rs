@@ -86,6 +86,7 @@ pub fn builder_target(
             use_aa: true,
             ..DagConfig::default()
         },
+        tuning: crate::machine::TUNING,
         shift_amount: pointer(width),
         shift_amount_of: Some(shift_amount_of),
         legal_ints: vec![32, 64],

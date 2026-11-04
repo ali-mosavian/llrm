@@ -32,7 +32,8 @@ fn a_loop_of_unknown_trips_is_unrolled_by_four_with_a_remainder() {
     let muls = String::from_utf8_lossy(&out.stdout).matches("f64.mul").count();
     assert_eq!(muls, 5, "{muls} multiplies: four in the body, one in the remainder");
     // The loop keeps its back edge and tests the exit once per four copies; a
-    // complete unroll (no back edge) mis-summed every n but 4 (object_extent_loop).
+    // complete unroll (no back edge) mis-summed every n but 4
+    // (object_extent_loop).
     let text = String::from_utf8_lossy(&out.stdout);
     let body = text.split("\tloop").nth(1).and_then(|rest| rest.split("end_loop").next()).expect("a loop");
     assert_eq!((body.matches("f64.mul").count(), body.matches("br_if").count()), (4, 1), "{body}");
@@ -52,4 +53,40 @@ fn the_remainder_of_a_run_time_unroll_is_not_unrolled_again() {
     assert!(out.status.success());
     let muls = String::from_utf8_lossy(&out.stdout).matches("f64.mul").count();
     assert_eq!(muls, 5, "{muls} multiplies: four in the body, one in the remainder");
+}
+
+/// A loop of 101 trips unrolled by two got an epilog loop for the odd trip
+/// (a run-time unroll of a known trip count): bench/particle's sum loop was
+/// 12 B over what the pin's `UP.Runtime &= TripCount == 0` leaves, a copy of
+/// the body after the loop. The pin keeps the exit in the first copy.
+#[test]
+fn a_loop_of_an_odd_known_trip_count_has_no_epilog() {
+    let ir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ir/unroll_odd_trips.ll");
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-wasm-llc"))
+        .args(["-S", "-O2", "-o", "-"])
+        .env("LLRM_WASM_IR", "1")
+        .arg(ir)
+        .output()
+        .expect("llrm-wasm-llc");
+    assert!(out.status.success());
+    let mid_end = String::from_utf8_lossy(&out.stderr);
+    assert!(!mid_end.contains(".epil"), "{mid_end}");
+}
+
+/// The late `LoopRotate` (PassBuilderPipelines.cpp#L1621) ran after the unroll,
+/// where the pin runs it before: the 101-trip loop unrolled by two, its exit
+/// in the first copy, was rotated into a copied first iteration before the
+/// loop (particle -O2: 21 B over the pin).
+#[test]
+fn a_loop_unrolled_with_its_exit_in_the_middle_is_not_rotated_afterwards() {
+    let ir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ir/unroll_odd_trips.ll");
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-wasm-llc"))
+        .args(["-S", "-O2", "-o", "-"])
+        .arg(ir)
+        .output()
+        .expect("llrm-wasm-llc");
+    assert!(out.status.success());
+    let text = String::from_utf8_lossy(&out.stdout);
+    let before_loop = text.split("\tloop").next().expect("a loop");
+    assert!(!before_loop.contains("i32.load16_s"), "a copy of the first iteration before the loop: {text}");
 }

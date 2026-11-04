@@ -454,6 +454,7 @@ pub fn finish_with(
                 });
             }
             Kind::Op("ADJCALLSTACKDOWN" | "ADJCALLSTACKUP") => {}
+            Kind::Op("UNREACHABLE") => {}
             Kind::Op("RET") => {
                 closing.iter().for_each(|op| frame_op(op, &mut out, short));
                 out.push(mc::Inst { opcode: "RTS", operands: vec![] });

@@ -7,9 +7,11 @@ static inline sf64 mul_core(uint64_t sign, int ea, int eb, uint64_t ma, uint64_t
     uint64_t hi, lo;
     mul64(ma, mb, &hi, &lo);
     /* The product has its top bit at 105 or 104; keep 56 bits and fold the rest. */
-    int e = ea + eb - 1023, sh = 49;
-    if (hi >> 41) { sh = 50; e++; }
-    uint64_t m = (hi << (64 - sh)) | (lo >> sh) | ((lo << (64 - sh)) != 0);
+    int e = ea + eb - 1023;
+    uint64_t m;
+    /* Constant shift counts in both arms: a variable 64-bit shift costs a double-shift pair and a count test per use on a 32-bit target. */
+    if (hi >> 41) { e++; m = (hi << 14) | (lo >> 50) | ((lo << 14) != 0); }
+    else m = (hi << 15) | (lo >> 49) | ((lo << 15) != 0);
     return SF_PACK(sign, e, m);
 }
 

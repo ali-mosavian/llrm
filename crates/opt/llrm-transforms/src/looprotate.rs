@@ -146,6 +146,9 @@ pub struct Run<'a> {
     /// Blocks emptied by a merge, erased together by `finish` (R3's twin:
     /// erasing one scans the layout).
     pub dead: IdSet<BlockId>,
+    /// The expressions `profitable_to_rotate_loop_exiting_latch` asks about,
+    /// kept while no loop has changed (R7); a rotation drops them.
+    scev: std::cell::RefCell<Option<llrm_analysis::scev::analysis::ScevSession>>,
 }
 
 impl Run<'_> {
@@ -508,10 +511,13 @@ fn profitable_to_rotate_loop_exiting_latch(
         return false;
     }
     // DEVIATE R7: expressions made for this one question (the pass keeps no
-    // ScalarEvolution); exit 2026-11-20 with a session the driver holds.
+    // ScalarEvolution), one session for the loops until a rotation changes the
+    // function; exit 2026-11-20 with a session the driver holds.
     let Some(latch) = lp.get_loop_latch(run.function) else { return false };
-    let mut session =
-        llrm_analysis::scev::analysis::ScevSession::within(run.context, run.globals, run.metadata, run.function);
+    let mut held = run.scev.borrow_mut();
+    let session = held.get_or_insert_with(|| {
+        llrm_analysis::scev::analysis::ScevSession::within(run.context, run.globals, run.metadata, run.function)
+    });
     let (se, env) = session.split(run.layout, run.globals, run.metadata);
     let cx = env.cx(&*run.context, &*run.function);
     use llrm_analysis::scev::backedge::ExitCountKind::Exact;
@@ -951,7 +957,11 @@ pub fn process_loop(
     {
         run.function.set_metadata(term, "llvm.loop", Some(md));
     }
-    rotated_latch.is_some() || simplified_latch.is_some()
+    let changed = rotated_latch.is_some() || simplified_latch.is_some();
+    if changed {
+        run.scev.take();
+    }
+    changed
 }
 
 /// `LoopRotatePass` over a function: every loop, each after the loops it holds,
@@ -1059,6 +1069,7 @@ impl FunctionPass for LoopRotate {
             options,
             has_one_live_use: &|_| false,
             dead: IdSet::new(),
+            scev: Default::default(),
         };
         if rotate_loops(&mut run) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
@@ -1120,6 +1131,7 @@ pub fn rotate_function_knowing(
             options,
             has_one_live_use: &|_| false,
             dead: IdSet::new(),
+            scev: Default::default(),
         };
         rotate_loops(&mut run)
     };

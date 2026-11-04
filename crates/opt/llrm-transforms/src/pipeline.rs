@@ -742,10 +742,13 @@ pub(crate) fn llvm_order(
     let write_through = || -> Vec<Box<dyn FunctionPass>> {
         if applied.options.pre { Vec::new() } else { vec![Box::new(promote::Promote), Box::new(promote::DeadSlots)] }
     };
+    // `SROAPass(ModifyCFG)` everywhere but the late slot, which the pin builds
+    // with `PreserveCFG` (PassBuilderPipelines.cpp L1393, L1494).
     let sroa = |name: &'static str| -> Box<dyn FunctionPass> {
         let parts: Vec<Box<dyn FunctionPass>> = if translated {
-            let mut parts: Vec<Box<dyn FunctionPass>> =
-                vec![Box::new(crate::sroa::Sroa), Box::new(crate::mem2reg::Mem2Reg)];
+            let pass: Box<dyn FunctionPass> =
+                if name == "sroa@1494" { Box::new(crate::sroa::Sroa) } else { Box::new(crate::sroa::SroaModifyCfg) };
+            let mut parts: Vec<Box<dyn FunctionPass>> = vec![pass, Box::new(crate::mem2reg::Mem2Reg)];
             parts.extend(write_through());
             parts
         } else {
@@ -825,6 +828,18 @@ pub(crate) fn llvm_order(
             slot("float2int@1594", Box::new(crate::float2int::Float2Int)),
             // `LowerConstantIntrinsicsPass` (l.1597), right after Float2Int.
             slot("lower-constant-intrinsics@1597", Box::new(crate::lowerconstantintrinsics::LowerConstantIntrinsics)),
+            // LoopRotatePass (l.1621): the loop pass manager that holds
+            // LoopInterchange runs before `addVectorPasses` and its unroll
+            // (l.1476), so a loop the unroll leaves with its exit in the
+            // middle is not rotated after it.
+            slot(
+                "rotate@1621",
+                Box::new(looprotate::LoopRotate {
+                    duplicate_headers: applied.options.copy_headers && !applied.options.has_min_size,
+                    size: applied.options.prefers_size(),
+                    check_exit_count: true,
+                }),
+            ),
             // LoopInterchangePass (l.1631), in the loop pass manager after
             // LoopRotate (l.1621) and LoopDeletion (l.1628).
             slot("loop-interchange@1631", Box::new(loopinterchange::Interchange::default())),
@@ -1213,7 +1228,8 @@ pub fn recorded(
     // PassBuilderPipelines.cpp#L1241) and runs the function simplification
     // pipeline once per body, in the CGSCC walk: these stages leave a body to
     // the walk's run, not a second full one (GVN ran five times on `main` of
-    // memory_expansion, the pin's twice).
+    // memory_expansion, the pin's twice). `promote.` keeps the full list: the
+    // minimal one left the far sort arguments of Nib quicksort unfolded.
     let mut cleaned = Fixed::linear(&again_applied, Phase::Cleanup);
     // The copies of a tree recursion in itself and then its tail-call
     // elimination, after the clones ipa-cp made (D10).
@@ -1243,7 +1259,7 @@ pub fn recorded(
                     module,
                     analyses,
                     id,
-                    if matches!(stage, "promote." | "ipsccp." | "ipa-deadargs.") { &mut cleaned } else { &mut again },
+                    if matches!(stage, "ipsccp." | "ipa-deadargs.") { &mut cleaned } else { &mut again },
                     stage == "globalsra.",
                 )
                 .unwrap_or_else(|error| panic!("pipeline: {error}"));
@@ -1267,15 +1283,6 @@ pub fn recorded(
     // It reads the live-outs from exit phis, so the bodies are closed first.
     manager.add(loopsimplify::LoopSimplify);
     manager.add(lcssa::LoopClosedSSA);
-    // First, the pin's `LoopRotatePass(header duplication, check-exit-count)`
-    // for loops the passes since undid (PassBuilderPipelines.cpp#L1621).
-    if applied.options.copy_headers && !applied.options.has_min_size {
-        manager.add(looprotate::LoopRotate {
-            duplicate_headers: true,
-            size: applied.options.prefers_size(),
-            check_exit_count: true,
-        });
-    }
     manager.add(loopdeletion::LoopDeletion);
     // What no live code names any more goes before selection, as LLVM runs
     // GlobalDCE after inlining.

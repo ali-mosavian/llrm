@@ -957,7 +957,7 @@ impl Run<'_> {
 
     /// `FixupPoisonFlags` of `hoistIVInc`: drop the flags inferred from the old
     /// context and infer them again in the new one.
-    fn fixup_poison_flags(
+    pub(super) fn fixup_poison_flags(
         &mut self,
         inst: InstId,
     ) {

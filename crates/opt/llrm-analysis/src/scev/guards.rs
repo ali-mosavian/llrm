@@ -13,7 +13,8 @@
 //! # Example
 //! Under `if (n != 0)` the preheader's guards rewrite `%n` to `umax(1, %n)`.
 
-use llrm_mir::constantrange::{ConstantRange, PreferredRangeType};
+use super::ConstantRange;
+use llrm_mir::constantrange::PreferredRangeType;
 use llrm_mir::module::{BlockId, Operand};
 use llrm_mir::opcode::{IntPredicate, Opcode};
 use llrm_mir::valuetracking::pattern;
@@ -535,8 +536,8 @@ fn collect_condition(
     if let Some((c1, lhs_unknown)) = match_c1_plus_unknown(se, lhs)
         && let Some(c2) = se.match_apint(rhs)
     {
-        let exact_region = ConstantRange::make_exact_icmp_region(predicate, c2.width, c2.bits)
-            .sub(&ConstantRange::single(c1.width, c1.bits));
+        let exact_region = ConstantRange::make_exact_icmp_region(predicate, c2.width, c2.word())
+            .sub(&ConstantRange::single(c1.width, c1.word()));
 
         // Tighten the raw range with what we already know about LHSUnknown
         // from prior guards recorded in RewriteMap, or from SCEV's own range
@@ -550,8 +551,8 @@ fn collect_condition(
         if exact_region.is_empty_set() || exact_region.is_wrapped_set() || exact_region.is_full_set() {
             // The idiom did not apply: go on to the general rules.
         } else {
-            let region_min = se.get_constant(Ap::new(exact_region.width, exact_region.get_unsigned_min()));
-            let region_max = se.get_constant(Ap::new(exact_region.width, exact_region.get_unsigned_max()));
+            let region_min = se.get_constant(Ap::from_word(exact_region.width, exact_region.get_unsigned_min()));
+            let region_max = se.get_constant(Ap::from_word(exact_region.width, exact_region.get_unsigned_max()));
             let low = se.get_umin_expr(cx, vec![Use::of(rewritten_lhs), Use::of(region_max)], false);
             let clamped_lhs = se.get_umax_expr(cx, vec![Use::of(region_min), Use::of(low)]);
             add_rewrite(guards, exprs_to_rewrite, lhs_unknown, rewritten_lhs, clamped_lhs);

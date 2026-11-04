@@ -1543,6 +1543,7 @@ impl Function {
                     + 1
             }
         };
+        self.places.invalidate();
         self.layout.insert(at, block);
         self.blocks[block.0 as usize].placed = true;
         Ok(())
@@ -1563,6 +1564,7 @@ impl Function {
             .iter()
             .position(|one| *one == before)
             .ok_or_else(|| format!("block {} is not placed", before.0))?;
+        self.places.invalidate();
         self.layout.insert(at, block);
         self.blocks[block.0 as usize].placed = true;
         Ok(())
@@ -1583,12 +1585,14 @@ impl Function {
             .iter()
             .position(|one| *one == block)
             .ok_or_else(|| format!("block {} is not placed", block.0))?;
+        self.places.invalidate();
         self.layout.remove(from);
         let at = self
             .layout
             .iter()
             .position(|one| *one == before)
             .ok_or_else(|| format!("block {} is not placed", before.0))?;
+        self.places.invalidate();
         self.layout.insert(at, block);
         Ok(())
     }
@@ -1608,12 +1612,14 @@ impl Function {
             .iter()
             .position(|one| *one == block)
             .ok_or_else(|| format!("block {} is not placed", block.0))?;
+        self.places.invalidate();
         self.layout.remove(from);
         let at = self
             .layout
             .iter()
             .position(|one| *one == after)
             .ok_or_else(|| format!("block {} is not placed", after.0))?;
+        self.places.invalidate();
         self.layout.insert(at + 1, block);
         Ok(())
     }
@@ -1631,6 +1637,7 @@ impl Function {
             self.log(Change::BlockErased(block));
         }
         self.names = NameIndex::default();
+        self.places.invalidate();
         self.layout.clear();
         self.debug_records.clear();
         self.erased.fill(true);
@@ -1761,6 +1768,7 @@ impl Function {
             gone.insert(block);
         }
         LAYOUT_SCANNED.with(|scanned| scanned.set(scanned.get() + self.layout.len()));
+        self.places.invalidate();
         self.layout.retain(|one| !gone.contains(one));
         for &block in blocks {
             self.release_name(block);
