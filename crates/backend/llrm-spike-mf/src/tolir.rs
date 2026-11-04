@@ -88,6 +88,17 @@ impl<T: Target> Converted<T> {
         registers: Regs,
         size: bool,
     ) {
+        self.coalesce_pinned(registers, size, T::joins_pinned_copies());
+    }
+
+    /// [`Converted::coalesce`], with `joins_pinned` stating whether a copy
+    /// to or from a pinned value joins (`Target::joins_pinned_copies`).
+    pub fn coalesce_pinned(
+        &mut self,
+        registers: Regs,
+        size: bool,
+        joins_pinned: bool,
+    ) {
         let infos = self.tii.infos.clone();
         let kind_infos = infos.clone();
         let kinds = Rc::new(RefCell::new(UseKindTable::default()));
@@ -103,7 +114,7 @@ impl<T: Target> Converted<T> {
             self.body.pins.clone(),
             size,
             T::joins_global_copies(),
-            T::joins_pinned_copies(),
+            joins_pinned,
             T::joins_sub_registers(),
             registers,
             Box::new(move |join| {
@@ -1746,15 +1757,35 @@ pub fn from_lir<T: Target>(
 /// `function` allocated by greedy: converted, its copies joined by the
 /// coalescer (`size` joins what saves bytes first), allocated with the spills
 /// written into it, their slots shared, and written back.
+///
+/// DEVIATE PJ1: a target that joins pinned copies (`joins_pinned_copies`; the
+/// pin never joins into an allocatable register) is allocated again without
+/// them when greedy finds no register, as the pin's allocator would have
+/// spilled the pinned value. Exit: the target states false.
 pub fn allocate_greedy<T: Target>(
     function: &mut MFunction<T::Class>,
     registers: Regs,
     size: bool,
 ) -> Result<(Assignment, Vec<(i32, T::Class)>), String> {
+    let first = allocate_greedy_pinned::<T>(function, registers, size, T::joins_pinned_copies());
+    match first {
+        Err(why) if T::joins_pinned_copies() && why.ends_with("greedy could not allocate") => {
+            allocate_greedy_pinned::<T>(function, registers, size, false).map_err(|_| why)
+        }
+        other => other,
+    }
+}
+
+fn allocate_greedy_pinned<T: Target>(
+    function: &mut MFunction<T::Class>,
+    registers: Regs,
+    size: bool,
+    joins_pinned: bool,
+) -> Result<(Assignment, Vec<(i32, T::Class)>), String> {
     use llrm_codegen::greedy::shadow::{Mode, decide_with_split};
     let mut converted = to_lir::<T>(function, registers)?;
     if !llrm_support::env_flag!("LLRM_NO_COALESCE") {
-        converted.coalesce(registers, size);
+        converted.coalesce_pinned(registers, size, joins_pinned);
     }
     if T::schedules_before_allocation() && !llrm_support::env_flag!("LLRM_NO_PRESCHED") {
         converted.schedule(function, registers);
