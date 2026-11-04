@@ -32,8 +32,7 @@ fn a_loop_of_unknown_trips_is_unrolled_by_four_with_a_remainder() {
     let muls = String::from_utf8_lossy(&out.stdout).matches("f64.mul").count();
     assert_eq!(muls, 5, "{muls} multiplies: four in the body, one in the remainder");
     // The loop keeps its back edge and tests the exit once per four copies; a
-    // complete unroll (no back edge) mis-summed every n but 4
-    // (object_extent_loop).
+    // complete unroll (no back edge) mis-summed every n but 4 (object_extent_loop).
     let text = String::from_utf8_lossy(&out.stdout);
     let body = text.split("\tloop").nth(1).and_then(|rest| rest.split("end_loop").next()).expect("a loop");
     assert_eq!((body.matches("f64.mul").count(), body.matches("br_if").count()), (4, 1), "{body}");

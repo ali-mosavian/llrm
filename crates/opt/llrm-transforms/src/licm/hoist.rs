@@ -80,8 +80,10 @@ pub fn hoist_region(
             // be done out of loop.
             } else if let Some(one) = hoist_min_max(unit, ctx, inst)
                 .or_else(|| hoist_gep(unit, ctx, inst))
-                .or_else(|| hoist_bo_association(unit, ctx, inst))
+                .or_else(|| hoist_add_sub(unit, ctx, inst))
                 .or_else(|| hoist_mul_add_association(unit, ctx, inst))
+                .or_else(|| hoist_bo_association(unit, ctx, inst))
+                .or_else(|| hoist_sub_add_association(unit, ctx, inst))
             {
                 ctx.state.gone.borrow_mut().extend([one.inst()].into_iter().chain(one.erased()));
                 // The preheader gets it where the visit reached it, after the
@@ -116,6 +118,31 @@ pub fn may_reassociate(
             Operand::Value(ptr) if matches!(function.value(ptr).def, ValueDef::Instruction(def) if matches!(function.instruction(def).opcode, Opcode::GetElementPtr { .. }))
         );
     }
+    // `hoistSubAddAssociation`: a `sub` of an `add` or `sub`, an `add` of a
+    // `sub`.
+    let defined_by = |wanted: &[BinaryOp]| {
+        bo.operands
+            .iter()
+            .any(
+                |&operand| {
+                    let Operand::Value(value) = operand else { return false };
+                    matches!(
+                        function.value(value).def,
+                        ValueDef::Instruction(def) if matches!(function.instruction(def).opcode, Opcode::Binary(op) if wanted.contains(&op))
+                    )
+                },
+            )
+    };
+    match bo.opcode {
+        // `hoistAddSub`: a compare of an `add` or `sub`.
+        Opcode::ICmp(_) if defined_by(&[BinaryOp::Add, BinaryOp::Sub]) => return true,
+        // `hoistMulAddAssociation`: a product with an operand an instruction
+        // defines.
+        Opcode::Binary(BinaryOp::Mul) if defined_by(&[BinaryOp::Add, BinaryOp::Mul]) => return true,
+        Opcode::Binary(BinaryOp::Sub) if defined_by(&[BinaryOp::Add, BinaryOp::Sub]) => return true,
+        Opcode::Binary(BinaryOp::Add) if defined_by(&[BinaryOp::Sub]) => return true,
+        _ => {}
+    }
     matches!(
         bo.opcode,
         Opcode::Binary(BinaryOp::Add | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor)
@@ -125,9 +152,6 @@ pub fn may_reassociate(
             matches!(
                 function.value(value).def,
                 ValueDef::Instruction(def) if function.instruction(def).opcode == bo.opcode
-                    // `hoistMulAddAssociation`: a product of a sum.
-                    || (bo.opcode == Opcode::Binary(BinaryOp::Mul)
-                        && function.instruction(def).opcode == Opcode::Binary(BinaryOp::Add))
             )
         })
 }
@@ -147,12 +171,25 @@ pub enum Reassociation {
         /// The flags both the new instructions get (`OverflowTracking`).
         flags: Wrap,
     },
-    /// [`hoist_mul_add_association`]: `mul` of a sum of products by the
-    /// invariant `factor` becomes the sum with each product's invariant
-    /// operand multiplied by `factor` in the preheader. `leaves` are the
-    /// products and the index of the invariant operand of each; `adds` the
-    /// sums looked through, which lose their poison flags.
-    MulAdd { mul: InstId, factor: Operand, variant: Operand, leaves: Vec<(InstId, usize)>, adds: Vec<InstId> },
+    /// [`hoist_sub_add_association`]: `i` becomes `lv result_op (c1 inv_op
+    /// c2)`, the inner one made in the preheader, and `bo` goes.
+    SubAdd { i: InstId, bo: InstId, inv_op: BinaryOp, result_op: BinaryOp, lv: Operand, c1: Operand, c2: Operand },
+    /// [`hoist_add_sub`]: `icmp pred (variant op inv), rhs` becomes `icmp pred
+    /// variant, (inv' op' rhs)`, the new operand made in the preheader, and
+    /// `dead`, the `add` or `sub`, goes.
+    IcmpAddSub {
+        icmp: InstId,
+        dead: InstId,
+        pred: IntPredicate,
+        variant: Operand,
+        op: BinaryOp,
+        a: Operand,
+        b: Operand,
+    },
+    /// [`hoist_mul_add_association`]: `i` is `variant * factor`, the `variant`
+    /// a tree of `adds` over products; each product `ins` gets the factor on
+    /// its invariant operand `slot` (`factor.op.mul`, made in the preheader).
+    MulAdd { i: InstId, variant: Operand, factor: Operand, changes: Vec<(InstId, usize, Operand)>, adds: Vec<InstId> },
     /// [`hoist_gep`]: `gep (gep ptr, inner), outer` becomes
     /// `gep (gep ptr, outer), inner`, the new inner one made in the preheader.
     Gep { gep: InstId, src: InstId, in_bounds: bool },
@@ -180,19 +217,22 @@ impl Reassociation {
     pub fn inst(&self) -> InstId {
         match *self {
             Self::BinaryOp { bo, .. } => bo,
-            Self::MulAdd { mul, .. } => mul,
             Self::Gep { gep, .. } => gep,
             Self::MinMax { logic, .. } => logic,
+            Self::SubAdd { i, .. } | Self::MulAdd { i, .. } => i,
+            Self::IcmpAddSub { dead, .. } => dead,
         }
     }
 
     /// The instructions it also erases.
     pub fn erased(&self) -> Vec<InstId> {
-        match *self {
-            Self::BinaryOp { bo0, .. } => vec![bo0],
-            Self::MulAdd { ref leaves, .. } => leaves.iter().map(|&(leaf, _)| leaf).collect(),
-            Self::Gep { src, .. } => vec![src],
-            Self::MinMax { cond1, cond2, .. } => vec![cond1, cond2],
+        match self {
+            Self::BinaryOp { bo0, .. } => vec![*bo0],
+            Self::Gep { src, .. } => vec![*src],
+            Self::MinMax { cond1, cond2, .. } => vec![*cond1, *cond2],
+            Self::SubAdd { bo, .. } => vec![*bo],
+            Self::IcmpAddSub { .. } => vec![],
+            Self::MulAdd { changes, .. } => changes.iter().map(|&(ins, ..)| ins).collect(),
         }
     }
 }
@@ -439,75 +479,278 @@ fn hoist_bo_association(
     Some(Reassociation::BinaryOp { bo: inst, bo0: bo0_inst, op, lv, c1, c2, flags })
 }
 
-/// [`hoistMulAddAssociation`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L2583):
-/// `((A1 * B1) + (A2 * B2) + ...) * C` with the `Ai` and `C` loop invariant
-/// is `(A1 * C) * B1 + ...`, the invariant `Ai * C` made in the preheader.
-/// Integer only, DEVIATE: the floating-point form (`fmul` with fast-math
-/// flags) is not translated. Exit 2026-11-12. An instruction another
-/// reassociation of the loop has replaced is left alone, as for
-/// [`hoist_bo_association`].
+/// [`hoistAddSub`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L2538)
+/// with `hoistAdd` and `hoistSub`: `LV + C1 < C2` to `LV < C2 - C1`,
+/// `LV - C1 < C2` to `LV < C1 + C2`, `C1 - LV < C2` to `LV > C1 - C2`, where
+/// the overflow checks prove the move. DEVIATE: the operation is an `add` or
+/// `sub` with the wrap flag, not `m_NSWAddLike` (`or disjoint`), and the
+/// overflow queries have no dominator tree or assumptions (exit 2026-11-20).
+fn hoist_add_sub(
+    unit: &passes::Unit,
+    ctx: &LoopCtx,
+    inst: InstId,
+) -> Option<Reassociation> {
+    use llrm_mir::valuetracking::range::{
+        OverflowResult, compute_overflow_for_signed_add, compute_overflow_for_signed_sub,
+        compute_overflow_for_unsigned_add, compute_overflow_for_unsigned_sub,
+    };
+    let function = &*unit.function;
+    let icmp = function.instruction(inst);
+    let Opcode::ICmp(mut pred) = icmp.opcode else { return None };
+    let (mut lhs, mut rhs) = (icmp.operands[0], icmp.operands[1]);
+    // Put the variant operand to the left.
+    if ctx.is_loop_invariant(lhs) {
+        std::mem::swap(&mut lhs, &mut rhs);
+        pred = pred.swapped();
+    }
+    // The initial operation goes after the reassociation: only with no other
+    // use.
+    let Operand::Value(lhs_value) = lhs else { return None };
+    if ctx.is_loop_invariant(lhs) || !ctx.is_loop_invariant(rhs) || function.users(lhs_value).iter().count() != 1 {
+        return None;
+    }
+    let ValueDef::Instruction(dead) = function.value(lhs_value).def else { return None };
+    if ctx.state.gone.borrow().contains(&dead) {
+        return None;
+    }
+    let operation = function.instruction(dead);
+    let Opcode::Binary(op @ (BinaryOp::Add | BinaryOp::Sub)) = operation.opcode else { return None };
+    let signed = pred.is_signed();
+    if !operation.flags.contains(if signed { Wrap::NSW } else { Wrap::NUW }) {
+        return None;
+    }
+    let (mut variant_op, mut invariant_op) = (operation.operands[0], operation.operands[1]);
+    let mut subtracted = false;
+    if ctx.is_loop_invariant(variant_op) {
+        std::mem::swap(&mut variant_op, &mut invariant_op);
+        // `hoistAdd` swaps the operands of a sum and keeps the predicate; of a
+        // difference the variant one is then subtracted.
+        if op == BinaryOp::Sub {
+            subtracted = true;
+            pred = pred.swapped();
+        }
+    }
+    if ctx.is_loop_invariant(variant_op) || !ctx.is_loop_invariant(invariant_op) {
+        return None;
+    }
+    let query = llrm_mir::valuetracking::Query {
+        context: unit.context,
+        globals: &[],
+        metadata: &[],
+        function,
+        layout: unit.layout,
+        dt: None,
+        assumptions: None,
+        dom_conditions: None,
+        cond_context: None,
+        cxt: Some(inst),
+    };
+    let (new_op, a, b, overflow) = match (op, subtracted) {
+        // LV + C1 < C2: LV < C2 - C1.
+        (BinaryOp::Add, _) => (
+            BinaryOp::Sub,
+            rhs,
+            invariant_op,
+            if signed {
+                compute_overflow_for_signed_sub(&query, rhs, invariant_op)
+            } else {
+                compute_overflow_for_unsigned_sub(&query, rhs, invariant_op)
+            },
+        ),
+        // C1 - LV < C2: LV > C1 - C2.
+        (_, true) => (
+            BinaryOp::Sub,
+            invariant_op,
+            rhs,
+            if signed {
+                compute_overflow_for_signed_sub(&query, invariant_op, rhs)
+            } else {
+                compute_overflow_for_unsigned_sub(&query, invariant_op, rhs)
+            },
+        ),
+        // LV - C1 < C2: LV < C1 + C2.
+        (_, false) => (
+            BinaryOp::Add,
+            invariant_op,
+            rhs,
+            if signed {
+                compute_overflow_for_signed_add(&query, invariant_op, rhs)
+            } else {
+                compute_overflow_for_unsigned_add(&query, invariant_op, rhs)
+            },
+        ),
+    };
+    if overflow != OverflowResult::NeverOverflows {
+        return None;
+    }
+    // A value an earlier reassociation of the loop has erased is not read.
+    let erased = |operand: Operand| match operand {
+        Operand::Value(value) => match function.value(value).def {
+            ValueDef::Instruction(def) => ctx.state.gone.borrow().contains(&def),
+            ValueDef::Argument(_) => false,
+        },
+        _ => false,
+    };
+    if erased(variant_op) || erased(a) || erased(b) {
+        return None;
+    }
+    Some(Reassociation::IcmpAddSub { icmp: inst, dead, pred, variant: variant_op, op: new_op, a, b })
+}
+
+/// [`hoistMulAddAssociation`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L2583)
+/// for integers: `((A1 * B1) + (A2 * B2) + ...) * C` with `A1`, `A2`, ... and
+/// `C` invariant becomes `((A1 * C) * B1) + ((A2 * C) * B2) + ...`, the
+/// invariant products made in the preheader. At most 5 of them
+/// (`licm-max-num-int-reassociations`). DEVIATE: as for
+/// [`hoist_bo_association`], an instruction another reassociation of the loop
+/// has replaced is left alone.
 fn hoist_mul_add_association(
     unit: &passes::Unit,
     ctx: &LoopCtx,
     inst: InstId,
 ) -> Option<Reassociation> {
+    const INT_ASSOCIATION_UPPER_LIMIT: usize = 5;
     let function = &*unit.function;
-    let mul = function.instruction(inst);
-    if mul.opcode != Opcode::Binary(BinaryOp::Mul) {
+    let i = function.instruction(inst);
+    if i.opcode != Opcode::Binary(BinaryOp::Mul) {
         return None;
     }
-    let (mut variant, mut factor) = (mul.operands[0], mul.operands[1]);
+    let (mut variant, mut invariant) = (i.operands[0], i.operands[1]);
     if ctx.is_loop_invariant(variant) {
-        std::mem::swap(&mut variant, &mut factor);
+        std::mem::swap(&mut variant, &mut invariant);
     }
-    if ctx.is_loop_invariant(variant) || !ctx.is_loop_invariant(factor) {
+    if ctx.is_loop_invariant(variant) || !ctx.is_loop_invariant(invariant) {
         return None;
     }
-    let gone = |inst: InstId| ctx.state.gone.borrow().contains(&inst);
-    let binary = |operand: Operand| -> Option<InstId> {
+    let factor = invariant;
+    let binary_def = |operand: Operand| -> Option<InstId> {
         let Operand::Value(value) = operand else { return None };
         let ValueDef::Instruction(def) = function.value(value).def else { return None };
-        (matches!(function.instruction(def).opcode, Opcode::Binary(_)) && !gone(def)).then_some(def)
+        matches!(function.instruction(def).opcode, Opcode::Binary(_)).then_some(def)
     };
-    let (mut leaves, mut adds) = (Vec::new(), Vec::new());
-    let mut worklist: Vec<InstId> = binary(variant).into_iter().collect();
+    let gone = |def: InstId| ctx.state.gone.borrow().contains(&def);
+    let mut changes = Vec::new();
+    let mut adds = Vec::new();
+    let mut worklist: Vec<InstId> = binary_def(variant).into_iter().collect();
     while let Some(bo) = worklist.pop() {
         let instruction = function.instruction(bo);
         let result = instruction.result?;
-        if !function.users(result).has_one_use() {
+        if function.users(result).iter().count() != 1 || gone(bo) {
             return None;
         }
         if instruction.opcode == Opcode::Binary(BinaryOp::Add)
-            && let (Some(lhs), Some(rhs)) = (binary(instruction.operands[0]), binary(instruction.operands[1]))
+            && let (Some(a), Some(b)) = (binary_def(instruction.operands[0]), binary_def(instruction.operands[1]))
         {
-            worklist.extend([lhs, rhs]);
+            worklist.extend([a, b]);
             adds.push(bo);
             continue;
         }
-        if instruction.opcode != Opcode::Binary(BinaryOp::Mul) || ctx.is_loop_invariant(Operand::Value(result)) {
+        if instruction.opcode != Opcode::Binary(BinaryOp::Mul) || !ctx.contains(bo) {
             return None;
         }
-        let at = if ctx.is_loop_invariant(instruction.operands[0]) {
+        let slot = if ctx.is_loop_invariant(instruction.operands[0]) {
             0
         } else if ctx.is_loop_invariant(instruction.operands[1]) {
             1
         } else {
             return None;
         };
-        leaves.push((bo, at));
-        // `IntAssociationUpperLimit`.
-        if leaves.len() > INT_ASSOCIATION_UPPER_LIMIT {
+        changes.push((bo, slot, instruction.operands[slot]));
+        if changes.len() > INT_ASSOCIATION_UPPER_LIMIT {
             return None;
         }
     }
-    if leaves.is_empty() {
+    if changes.is_empty() {
         return None;
     }
-    Some(Reassociation::MulAdd { mul: inst, factor, variant, leaves, adds })
+    // A value an earlier reassociation of the loop has erased is not read.
+    let erased = |operand: Operand| match operand {
+        Operand::Value(value) => match function.value(value).def {
+            ValueDef::Instruction(def) => gone(def),
+            ValueDef::Argument(_) => false,
+        },
+        _ => false,
+    };
+    if erased(factor) || changes.iter().any(|&(_, _, inv)| erased(inv)) {
+        return None;
+    }
+    Some(Reassociation::MulAdd { i: inst, variant, factor, changes, adds })
 }
 
-/// `licm-max-num-int-reassociations`.
-const INT_ASSOCIATION_UPPER_LIMIT: usize = 5;
+/// [`hoistSubAddAssociation`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L2762):
+/// `(LV + C1) - C2` to `LV + (C1 - C2)`, `(LV - C1) - C2` to `LV - (C1 + C2)`,
+/// `(LV - C1) + C2` to `LV + (C2 - C1)`; no wrap flags on the new
+/// instructions. DEVIATE: as for [`hoist_bo_association`], an instruction
+/// another reassociation of the loop has replaced is left alone.
+fn hoist_sub_add_association(
+    unit: &passes::Unit,
+    ctx: &LoopCtx,
+    inst: InstId,
+) -> Option<Reassociation> {
+    let function = &*unit.function;
+    let i = function.instruction(inst);
+    let Opcode::Binary(op) = i.opcode else { return None };
+    // The one-use operand `BO` defined by one of `wanted`, and the operand
+    // that is not it.
+    let one_use_def = |operand: Operand, wanted: &[BinaryOp]| -> Option<(InstId, BinaryOp)> {
+        let Operand::Value(value) = operand else { return None };
+        let ValueDef::Instruction(def) = function.value(value).def else { return None };
+        let Opcode::Binary(bo_op) = function.instruction(def).opcode else { return None };
+        (wanted.contains(&bo_op)
+            && function.users(value).iter().count() == 1
+            && !ctx.state.gone.borrow().contains(&def))
+        .then_some((def, bo_op))
+    };
+    let (bo, lv, c1, c2, inv_op, result_op);
+    match op {
+        BinaryOp::Sub => {
+            let (def, bo_op) = one_use_def(i.operands[0], &[BinaryOp::Add, BinaryOp::Sub])?;
+            let (mut a, mut b) = (function.instruction(def).operands[0], function.instruction(def).operands[1]);
+            c2 = i.operands[1];
+            if bo_op == BinaryOp::Add {
+                // Case 1.
+                if ctx.is_loop_invariant(a) && !ctx.is_loop_invariant(b) {
+                    std::mem::swap(&mut a, &mut b);
+                }
+                (inv_op, result_op) = (BinaryOp::Sub, BinaryOp::Add);
+            } else {
+                // Case 2.
+                (inv_op, result_op) = (BinaryOp::Add, BinaryOp::Sub);
+            }
+            (bo, lv, c1) = (def, a, b);
+        }
+        BinaryOp::Add => {
+            // Case 3, `m_c_Add`: the `sub` on either side.
+            let (def, other) = if let Some((def, _)) = one_use_def(i.operands[0], &[BinaryOp::Sub]) {
+                (def, i.operands[1])
+            } else if let Some((def, _)) = one_use_def(i.operands[1], &[BinaryOp::Sub]) {
+                (def, i.operands[0])
+            } else {
+                return None;
+            };
+            let sub = function.instruction(def);
+            // `C1 = C2; C2 = sub's C1`: the invariant is `C2 - C1`.
+            (bo, lv, c1, c2) = (def, sub.operands[0], other, sub.operands[1]);
+            (inv_op, result_op) = (BinaryOp::Sub, BinaryOp::Add);
+        }
+        _ => return None,
+    }
+    if ctx.is_loop_invariant(lv) || !ctx.is_loop_invariant(c1) || !ctx.is_loop_invariant(c2) {
+        return None;
+    }
+    // A value an earlier reassociation of the loop has erased is not read.
+    let erased = |operand: Operand| match operand {
+        Operand::Value(value) => match function.value(value).def {
+            ValueDef::Instruction(def) => ctx.state.gone.borrow().contains(&def),
+            ValueDef::Argument(_) => false,
+        },
+        _ => false,
+    };
+    if erased(lv) || erased(c1) || erased(c2) {
+        return None;
+    }
+    Some(Reassociation::SubAdd { i: inst, bo, inv_op, result_op, lv, c1, c2 })
+}
 
 /// [`isSafeToExecuteUnconditionally`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L1507)
 /// (`AllowSpeculation` is the run's, `LoopSafety::allow_speculation`).

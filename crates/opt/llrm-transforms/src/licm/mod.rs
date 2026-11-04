@@ -216,33 +216,6 @@ pub struct Decisions {
     pub rebuilt_instructions: usize,
 }
 
-impl Decisions {
-    /// What a later round over the function decided as well.
-    fn absorb(
-        &mut self,
-        later: Decisions,
-    ) {
-        self.hoisted.extend(later.hoisted);
-        self.reassociated.extend(later.reassociated);
-        self.sunk.extend(later.sunk);
-        self.erased.extend(later.erased);
-        self.promotion_candidates += later.promotion_candidates;
-        self.promoted.extend(later.promoted);
-        self.moved_loads += later.moved_loads;
-        self.moved_calls += later.moved_calls;
-        self.rebuilds += later.rebuilds;
-        self.max_rebuilds = self.max_rebuilds.max(later.max_rebuilds);
-        self.rebuilt_instructions += later.rebuilt_instructions;
-    }
-}
-
-/// The rounds over a function while the last reassociated something: LLVM
-/// reassociates in one visit an instruction that reads another it has just
-/// reassociated (`hoistMulAddAssociation` over the four products of an
-/// unrolled recurrence), where a round here decides on the function as it
-/// stood. DEVIATE: bounded. Exit: none.
-const REASSOCIATION_ROUNDS: usize = 8;
-
 fn found_changed(found: &Decisions) -> bool {
     !found.hoisted.is_empty()
         || !found.reassociated.is_empty()
@@ -800,18 +773,7 @@ impl FunctionPass for Licm {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        let mut found = if self.apply { run(unit, analyses, self.speculate) } else { decide(unit, analyses) };
-        if self.apply {
-            let mut last = found.reassociated.len();
-            for _ in 1..REASSOCIATION_ROUNDS {
-                if last == 0 {
-                    break;
-                }
-                let later = run(unit, analyses, self.speculate);
-                last = later.reassociated.len();
-                found.absorb(later);
-            }
-        }
+        let found = if self.apply { run(unit, analyses, self.speculate) } else { decide(unit, analyses) };
         let changed = found_changed(&found);
         let only_moved = found.reassociated.is_empty()
             && found.sunk.is_empty()

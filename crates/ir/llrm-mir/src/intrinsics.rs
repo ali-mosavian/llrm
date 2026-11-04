@@ -917,6 +917,7 @@ fn mangle(
         Type::Float(FloatKind::Float) => "f32".to_owned(),
         Type::Float(FloatKind::Double) => "f64".to_owned(),
         Type::Float(FloatKind::X86Fp80) => "f80".to_owned(),
+        Type::Float(FloatKind::F128) => "f128".to_owned(),
         Type::Pointer(space) => format!("p{space}"),
         _ => types.display(ty),
     }

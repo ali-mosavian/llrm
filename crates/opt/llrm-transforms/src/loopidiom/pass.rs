@@ -28,6 +28,7 @@ use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{BlockId, Function, GlobalValue, MetadataNode};
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses, Unit};
+use llrm_mir::target::OperationCosts;
 use llrm_mir::valuetracking::AssumptionCache;
 
 use super::process::{AaProvider, Run};
@@ -158,13 +159,22 @@ impl FunctionPass for LoopIdiom {
         // 1 clock = 2 B) prices a fill by the bytes it adds as `-Os` does, and
         // its clocks at that rate. Exit: none.
         let rate = tti.as_deref().filter(|_| self.speed_rate).map_or(0, |tti| tti.speed_milliclocks_per_byte());
-        let size_costs = (self.for_size || rate > 0).then(|| outer.target().size_costs());
+        // A target that prices its fills weighs them at every level: by the
+        // rate where it has one, strictly (neither metric may grow) where not.
+        let tuning = outer.target().tuning();
+        let priced = tuning.price_fills;
+        let inline_stores =
+            if self.for_size { tuning.max_stores_per_memset_opt_size } else { tuning.max_stores_per_memset } as i64;
+        let size_costs = (self.for_size || rate > 0 || priced)
+            .then(|| OperationCosts { memset_stores: inline_stores, ..outer.target().size_costs() });
         let clock_costs = if self.for_size {
-            Some((outer.target().costs(), outer.target().size_milliclocks_per_byte())).filter(|(_, rate)| *rate > 0)
+            Some((outer.target().costs(), outer.target().size_milliclocks_per_byte()))
         } else {
-            Some((outer.target().costs(), rate)).filter(|(_, rate)| *rate > 0)
-        };
-        let speed_costs = (!self.for_size && rate == 0).then(|| outer.target().costs());
+            Some((outer.target().costs(), rate))
+        }
+        .map(|(costs, rate)| (OperationCosts { memset_stores: inline_stores, ..costs }, rate))
+        .filter(|(_, rate)| *rate > 0 || priced);
+        let speed_costs = (!self.for_size && rate == 0 && !priced).then(|| outer.target().costs());
         let mut changed = false;
         for header in headers {
             let cur_loop = loops.get_loop_for(header).expect("a loop");
@@ -189,6 +199,7 @@ impl FunctionPass for LoopIdiom {
                 bytes: size_costs.as_ref().map(|costs| (costs, outer.callees())),
                 clocks: clock_costs.as_ref().map(|(costs, rate)| (costs, *rate)),
                 speed: speed_costs.as_ref(),
+                memset_stores: inline_stores,
                 tti: tti.as_deref(),
             };
             let mut options = self.options;
@@ -219,5 +230,45 @@ impl FunctionPass for LoopIdiom {
             held.put(se);
             PreservedAnalyses::all()
         }
+    }
+}
+
+/// `LoopDeletion` and then `LoopIdiom` again on the loops it freed.
+///
+/// DEVIATE (owner w2, 2026-11-02; exit: a per-loop pass adaptor): the pin's
+/// loop pass manager runs LoopIdiom, IndVarSimplify and LoopDeletion on a
+/// nest's inner loop before it visits the parent
+/// (PassBuilderPipelines.cpp:737-753), so a loop whose body is only the
+/// memset its inner loop became is a loop the idiom pass sees as a memset in a
+/// loop (`processLoopMemSet`, LoopIdiomRecognize.cpp:897). The slots here run
+/// each pass over every loop in turn, and the dead inner loop is still there
+/// when the parent is visited. The second visit runs only when a loop was
+/// deleted.
+pub struct AfterDeletion {
+    pub deletion: crate::loopdeletion::LoopDeletion,
+    pub idiom: LoopIdiom,
+}
+
+impl FunctionPass for AfterDeletion {
+    fn name(&self) -> &'static str {
+        "loopdeletion"
+    }
+
+    fn translation(&self) -> Option<&'static str> {
+        Some("loop-deletion")
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let deleted = self.deletion.run(unit, analyses);
+        if deleted.are_all_preserved() {
+            return deleted;
+        }
+        analyses.invalidate(unit.function, &deleted);
+        self.idiom.run(unit, analyses);
+        PreservedAnalyses::none()
     }
 }

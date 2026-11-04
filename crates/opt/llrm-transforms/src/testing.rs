@@ -162,6 +162,13 @@ pub struct Tuned {
     pub no_global_base: bool,
     /// `Tti::prefers_exit_ne`.
     pub exit_ne: bool,
+    /// `ctlz` costs one unit, as on a target with a count-leading-zeros
+    /// instruction.
+    pub cheap_ctlz: bool,
+    /// `Tuning::price_fills`.
+    pub price_fills: bool,
+    /// No constant memset is stored inline: every fill is a `rep stos`.
+    pub rep_fills: bool,
 }
 
 use llrm_mir::tti;
@@ -170,6 +177,9 @@ use llrm_mir::tti;
 #[derive(Default)]
 pub struct Flagged {
     pub exit_ne: bool,
+    /// `ctlz` costs one unit, as on a target with a count-leading-zeros
+    /// instruction.
+    pub cheap_ctlz: bool,
     pub no_cmov: bool,
     pub no_global_base: bool,
 }
@@ -181,6 +191,19 @@ impl llrm_mir::tti::Tti for Flagged {
 
     fn has_cmov(&self) -> bool {
         !self.no_cmov
+    }
+
+    fn intrinsic_cost(
+        &self,
+        name: &str,
+        ret: Option<tti::Ty>,
+        args: &[tti::Ty],
+        kind: tti::CostKind,
+    ) -> tti::Cost {
+        if self.cheap_ctlz && name.starts_with("llvm.ctlz.") {
+            return tti::Cost::BASIC;
+        }
+        tti::Basic.intrinsic_cost(name, ret, args, kind)
     }
 
     fn cmp_sel_cost(
@@ -280,9 +303,25 @@ impl llrm_mir::lowering::Lowering for FoldsMasks {
 }
 
 impl llrm_mir::target::Machine for Tuned {
+    fn tuning(&self) -> llrm_mir::target::Tuning {
+        let inline = if self.rep_fills { 0 } else { llrm_mir::target::Tuning::PIN.max_stores_per_memset };
+        let inline_size = if self.rep_fills { 0 } else { llrm_mir::target::Tuning::PIN.max_stores_per_memset_opt_size };
+        llrm_mir::target::Tuning {
+            price_fills: self.price_fills,
+            max_stores_per_memset: inline,
+            max_stores_per_memset_opt_size: inline_size,
+            ..llrm_mir::target::Tuning::PIN
+        }
+    }
+
     fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
-        (self.exit_ne || self.no_global_base).then(|| {
-            std::rc::Rc::new(Flagged { exit_ne: self.exit_ne, no_cmov: false, no_global_base: self.no_global_base })
+        (self.exit_ne || self.no_global_base || self.cheap_ctlz).then(|| {
+            std::rc::Rc::new(Flagged {
+                exit_ne: self.exit_ne,
+                no_cmov: false,
+                no_global_base: self.no_global_base,
+                cheap_ctlz: self.cheap_ctlz,
+            })
                 as _
         })
     }

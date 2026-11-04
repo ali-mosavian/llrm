@@ -162,3 +162,32 @@ fn test_a_fmuladd_with_a_zero_factor_and_a_finite_non_negative_other_folds_to_it
         "x may be infinite or NaN: the call stays: {kept}"
     );
 }
+
+/// `fmul` of a phi with a constant left the multiply after the phi: no
+/// `foldBinOpIntoSelectOrPhi` in `visit_fadd_or_fmul`. bench fpbench kept 11
+/// float phis the pin's instcombine removes (the multiply and `fptosi` of
+/// each fold into the phi arms).
+#[test]
+fn an_fmul_of_a_phi_with_a_constant_is_a_phi_of_the_products() {
+    let mut module = parsed(
+        "define float @f(i1 %c, float %x) {
+b0:
+  br i1 %c, label %join, label %exit
+exit:
+  br label %join
+join:
+  %p = phi float [ 2.000000e+00, %b0 ], [ %x, %exit ]
+  %r = fmul float %p, 6.400000e+01
+  ret float %r
+}
+",
+    );
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit);
+    let after = printed(&module);
+    assert!(after.contains("phi float [ 1.280000e+02, %b0 ]"), "the constant arm is the product: {after}");
+    assert!(after.contains("fmul float %x, 6.400000e+01"), "the other arm multiplies in its block: {after}");
+    assert!(!after.contains("fmul float %p"), "{after}");
+}

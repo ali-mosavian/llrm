@@ -44,7 +44,7 @@ struct Frame {
     /// Bytes below IX.
     size: i64,
     /// The offset from IX of each object, by frame index.
-    offsets: std::collections::HashMap<i32, i64>,
+    offsets: llrm_support::hash::HashMap<i32, i64>,
     /// Whether the function sets IX up at all.
     active: bool,
 }
@@ -69,7 +69,7 @@ struct Printer<'a> {
     /// The blocks that are only a `ret`.
     returns_bare: Vec<u32>,
     /// How many times each virtual register is read.
-    reads: std::collections::HashMap<u32, usize>,
+    reads: llrm_support::hash::HashMap<u32, usize>,
     /// A reload the next instruction reads from the frame itself: the register
     /// it would have gone to, and the cell.
     folded: Option<(RegId, String)>,
@@ -973,7 +973,7 @@ impl Printer<'_> {
             _ => return Ok(false),
         };
         // nothing but these reads the registers' virtual values
-        let mut inside: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+        let mut inside: llrm_support::hash::HashMap<u32, usize> = llrm_support::hash::HashMap::default();
         for inst in &rest[..taken] {
             for operand in &inst.operands {
                 if let Operand::Use(Reg::Virt(v)) = operand {
@@ -1317,8 +1317,8 @@ fn entry_pushes(
 /// The instructions of `function` with the registers `assignment` gave them.
 /// `slots` are the spill slots and their sizes in bytes.
 /// How many times each virtual register is read, copies included.
-pub fn reads(function: &MFunction) -> std::collections::HashMap<u32, usize> {
-    let mut reads = std::collections::HashMap::new();
+pub fn reads(function: &MFunction) -> llrm_support::hash::HashMap<u32, usize> {
+    let mut reads = llrm_support::hash::HashMap::default();
     for inst in function.blocks.iter().flat_map(|block| &block.insts) {
         for operand in &inst.operands {
             if let Operand::Use(Reg::Virt(v)) = operand {
@@ -1336,7 +1336,7 @@ pub fn finish(
     assignment: &Assignment,
     number: usize,
     slots: &[(i32, usize)],
-    reads: std::collections::HashMap<u32, usize>,
+    reads: llrm_support::hash::HashMap<u32, usize>,
 ) -> Result<Vec<Line>, String> {
     let mut function = tail_calls(function);
     let frame = layout(&function, slots);
@@ -1406,7 +1406,7 @@ fn ends_flow(text: &str) -> bool {
 /// leaves the block with no reader: the code after an unconditional `ret` or
 /// jump, up to the next label something names, never runs.
 fn drop_unreachable(lines: Vec<Line>) -> Vec<Line> {
-    let named: std::collections::HashSet<&str> = lines
+    let named: llrm_support::hash::HashSet<&str> = lines
         .iter()
         .filter_map(|line| match line {
             Line::Inst(text) => Some(text.split([' ', ',']).filter(|word| !word.is_empty())),
@@ -1527,7 +1527,7 @@ pub fn price(lines: &[Line]) -> (u32, u32) {
 /// loop it is in, a loop being the lines from a label to a jump back to it:
 /// what two allocations of a loop are compared by.
 pub fn price_in_loops(lines: &[Line]) -> (u32, u64) {
-    let labels: std::collections::HashMap<&str, usize> = lines
+    let labels: llrm_support::hash::HashMap<&str, usize> = lines
         .iter()
         .enumerate()
         .filter_map(|(at, line)| match line {
@@ -1602,7 +1602,7 @@ pub fn relax(
     const REACH: i64 = 100;
     let mut at = 0;
     let mut starts = Vec::with_capacity(lines.len());
-    let mut labels = std::collections::HashMap::new();
+    let mut labels = llrm_support::hash::HashMap::default();
     for line in &lines {
         starts.push(at);
         if let Line::Label(name) = line {

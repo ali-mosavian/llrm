@@ -708,7 +708,9 @@ pub(crate) fn unroll_remainder_loop(
     }
     let tree = DomTree::of(run.function);
     let loops = LoopInfo::analyze(run.function, || &tree);
-    let assumptions = AssumptionCache::of_declared(run.context, &globals, run.metadata, run.function, run.outer.assume_declared());
+    // `globals` gained the `llvm.assume` declaration the epilog guard needs, which
+    // the module's memoized `Outer::assume_declared` does not know.
+    let assumptions = AssumptionCache::of(run.context, &globals, run.metadata, run.function);
     let Some(lp) = loops.get_loop_for(epilog_header) else { return };
     let mut se = ScalarEvolution::new();
     let cx = Cx {
