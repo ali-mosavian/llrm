@@ -1,0 +1,15 @@
+# A float table at module level: static data as C's `static float table[64]`, not a frame zeroed with rep stos on every call.
+var table: f32[64] = [0.0] * 64
+var bias: f32 = 1.5
+
+fn total(n: i16) -> f32:
+    for i in 0..64:
+        table[i] = f32(i) * bias
+    let mut sum: f32 = 0.0
+    for i in 0..n:
+        sum += table[i]
+    return sum
+
+fn main() -> i16:
+    print(i32(total(60)))
+    return 0

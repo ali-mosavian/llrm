@@ -453,3 +453,29 @@ fn test_an_exported_symbol_is_spelled_as_the_object_format_asks() {
     assert!(spelled(&[]).contains(&"f_".to_owned()));
     assert!(spelled(&[("watcall32", "*")]).contains(&"f".to_owned()));
 }
+
+/// `var table: f32[64]` was refused ("a module variable starts as an integer,
+/// char or bool"), so every Nib float table was a local, zeroed by `rep stos`
+/// and addressed through the frame on every call (stft_single: five of them, a
+/// kernel 1.6x C's `static float` bytes).
+#[test]
+fn test_a_float_module_variable_is_static_data_not_a_zeroed_frame() {
+    let function = _nib("floatvar", "total", "_total");
+    assert!(!function.contains("rep stos"), "{function}");
+    assert!(!function.contains("[bp-"), "{function}");
+}
+
+/// A zeroed module variable (`var table: f32[64]`) was stored as 256 bytes of
+/// `db 000h` in the image, where C's `static float table[64]` is `_BSS`
+/// (grep, jpeg, stft, histo, scroll, tile: 4 B to 17 KB of data per cell).
+#[test]
+fn test_a_zeroed_module_variable_is_bss_not_stored_zeros() {
+    use crate::test_nib_frontend as nib;
+
+    let program = nib::parsed(&nib::fixture("floatvar.nib"));
+    let listing = nib::listing(&program, "main", &nib::O2());
+    assert!(listing.contains(".data?"), "{listing}");
+    assert!(listing.contains("db 256 dup (?)"), "{listing}");
+    assert!(!listing.contains("db 000h,000h,000h,000h,000h,000h,000h,000h"), "{listing}");
+    assert!(listing.contains("db 000h,000h,0c0h,03fh"), "bias (1.5) stays in data: {listing}");
+}
