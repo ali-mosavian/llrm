@@ -127,6 +127,14 @@ impl Target for Z80Registers {
         true
     }
 
+    fn read_lanes(inst: &Inst) -> Option<(usize, u32, u32)> {
+        match inst.kind {
+            Kind::Op("BIT7_16" | "HI") => Some((1, 1, 1)),
+            Kind::Op("LO") => Some((1, 0, 1)),
+            _ => None,
+        }
+    }
+
     fn joins_lanes() -> bool {
         true
     }

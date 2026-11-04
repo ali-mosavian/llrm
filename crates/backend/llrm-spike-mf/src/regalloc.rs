@@ -155,6 +155,13 @@ pub trait Target {
         true
     }
 
+    /// The bytes of a use operand `inst` reads, where it reads less than the
+    /// whole: `(operand, byte offset, bytes)`. The sign test of a pair reads
+    /// its high byte; liveness takes the rest of the pair as not read there.
+    fn read_lanes(_inst: &Inst) -> Option<(usize, u32, u32)> {
+        None
+    }
+
     /// Whether `lane_moves`' building instruction (a `PACK`) is converted to
     /// one copy per part into its lane of the whole (`eliminateRegSequence`),
     /// which the coalescer then joins. False: it stays one instruction and the

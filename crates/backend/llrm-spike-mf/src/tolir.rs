@@ -859,6 +859,12 @@ impl<T: Target> Made<'_, T> {
         }
         insn.symbol = symbol.then_some(true);
         insn.volatile = inst.side_effects;
+        if T::lowers_lanes()
+            && let Some((operand, offset, bytes)) = T::read_lanes(inst)
+            && let Some(Operand::Use(Reg::Virt(from))) = inst.operands.get(operand)
+        {
+            insn.use_lanes.push((from + 1, ValueLanes::at(offset, bytes)));
+        }
         // the lanes of the whole each part is copied into
         if let Some((whole, parts)) = T::lane_moves(inst)
             && let Some(Operand::Def(Reg::Virt(to)) | Operand::Use(Reg::Virt(to))) = inst.operands.get(whole)

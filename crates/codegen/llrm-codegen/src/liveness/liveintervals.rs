@@ -1281,6 +1281,9 @@ fn read_lanes(
     one: &Insn,
     value: u32,
 ) -> ValueLanes {
+    if let Some((_, lanes)) = one.use_lanes.iter().find(|(v, _)| *v == value) {
+        return *lanes;
+    }
     let Some(what) = &one.what else { return Operand::ALL };
     let mut found = ValueLanes::NONE;
     for place in &what.sources {
@@ -1566,6 +1569,38 @@ mod tests {
         let interval = lis.interval(1);
         assert!(interval.range.live_at(&between), "the high byte is live across the low byte's def");
         assert_eq!(interval.range.segments.len(), 1, "one stretch from the first lane def to the read");
+    }
+
+
+    /// `x.lo := a; x.hi := b; use x.hi; use x.hi`: both reads name the high
+    /// byte, so the low byte's value is never read and is not live past its
+    /// def. Read whole, it was live to the last read, and a copy into the low
+    /// byte could not join past it (crc16 O2: an extra `ld h, e` / `ld e, h`
+    /// round the xor).
+    #[test]
+    fn test_a_read_of_one_lane_does_not_keep_the_other_lane_live() {
+        let lane = |byte: u32| {
+            let mut def = Insn::new(0, None, None, vec![1], Vec::new());
+            def.def_lanes = vec![(1, ValueLanes::at(byte, 1))];
+            Arc::new(def)
+        };
+        let low_live_at_first_read = |named: bool| {
+            let read = || {
+                let mut read = Insn::new(0, None, None, Vec::new(), vec![1]);
+                if named {
+                    read.use_lanes = vec![(1, ValueLanes::at(1, 1))];
+                }
+                Arc::new(read)
+            };
+            let first = read();
+            let insns = [lane(0), lane(1), Arc::clone(&first), read()];
+            let mut lis = LiveIntervals::new(&body(&insns));
+            let at = lis.indexes.get_instruction_index(first.id()).get_reg_slot(false);
+            let interval = lis.interval(1);
+            interval.range_for_lanes(ValueLanes::at(0, 1)).is_some_and(|low| low.live_at(&at))
+        };
+        assert!(low_live_at_first_read(false), "premise: read whole, the low byte is live to the reads");
+        assert!(!low_live_at_first_read(true), "read by lane, the low byte is dead after its def");
     }
 
     /// Renaming the value renames the marker with it.
