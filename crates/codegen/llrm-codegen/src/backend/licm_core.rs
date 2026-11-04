@@ -68,7 +68,7 @@ pub trait Inst: Clone {
 /// `one` reading `to` where it read `from`, for each pair of `renamed`.
 fn rename_uses<I: Inst>(
     one: &mut I,
-    renamed: &std::collections::HashMap<u32, u32>,
+    renamed: &llrm_support::hash::HashMap<u32, u32>,
 ) {
     if !one.uses().iter().any(|used| renamed.contains_key(used)) {
         return;
@@ -256,7 +256,7 @@ pub fn hoist<I: Inst, P: Policy<I>>(
             // definition and a `to` a kept one's, so no rename feeds another
             // (the pin's `replaceRegWith` follows the use list of each).
             if !renames.is_empty() {
-                let renamed: std::collections::HashMap<u32, u32> = renames.into_iter().collect();
+                let renamed: llrm_support::hash::HashMap<u32, u32> = renames.into_iter().collect();
                 for block in blocks.iter_mut() {
                     for one in block.insns.iter_mut() {
                         rename_uses(one, &renamed);

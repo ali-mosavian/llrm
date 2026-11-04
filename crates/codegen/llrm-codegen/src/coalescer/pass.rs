@@ -178,6 +178,8 @@ impl Coalescer {
                 aliases: Default::default(),
                 should_join: Box::new(|_| true),
                 freq: Vec::new(),
+                remat: None,
+                remat_wins: None,
                 regs: None,
                 kind_of: None,
                 kinds: Default::default(),
