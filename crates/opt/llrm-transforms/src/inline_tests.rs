@@ -37,9 +37,21 @@ fn inline_with(
     _call: i64,
     _threshold: Threshold,
 ) -> bool {
+    inline_known(module, caller, false)
+}
+
+/// `inline_into`, the memory effects of the module's functions from
+/// `GlobalsAA` when `known`.
+fn inline_known(
+    module: &mut Module,
+    caller: &str,
+    known: bool,
+) -> bool {
     let layout = DataLayout::default();
+    let effects = known.then(|| llrm_analysis::globalsmodref::compute(module));
     let by = Caller {
         layout: &layout,
+        effects: effects.as_ref(),
         recursive: recursive(module).contains(&id(module, caller)),
         self_inlining: None,
         peeling: false,
@@ -613,6 +625,7 @@ fn self_inlined(ops: usize) -> (usize, i64) {
     let frequencies = SparseIdMap::default();
     let by = Caller {
         layout: &layout,
+        effects: None,
         recursive: true,
         self_inlining: Some(&frequencies),
         peeling: false,
@@ -917,8 +930,7 @@ b1:
     let layout = DataLayout::default();
     let main = module.global(id(&module, "main")).function().unwrap();
     let unit = Unit::of(&module, &layout, main);
-    let access: Vec<MemoryLocation> =
-        main.walk().filter_map(|(_, inst)| MemoryLocation::get(&unit, inst)).collect();
+    let access: Vec<MemoryLocation> = main.walk().filter_map(|(_, inst)| MemoryLocation::get(&unit, inst)).collect();
     // store %a, load %b, store %b, load %a
     assert_eq!(access.len(), 4, "{}", printed(&module));
     let mut chain = AggregateAA::new();
@@ -1008,7 +1020,10 @@ b1:
     let unit = Unit::of(&module, &layout, main);
     let stores: Vec<MemoryLocation> = main
         .walk()
-        .filter(|&(_, inst)| matches!(main.instruction(inst).opcode, llrm_mir::opcode::Opcode::Store { .. }))
+        .filter(|&(_, inst)| matches!(
+            main.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Store { .. }
+        ))
         .filter_map(|(_, inst)| MemoryLocation::get(&unit, inst))
         .collect();
     assert_eq!(stores.len(), 3, "{}", printed(&module));
@@ -1050,4 +1065,46 @@ b1:
     assert!(main.contains("b1:\n  %zero = icmp eq i16 %x, 0\n  br i1"), "{after}");
     assert_eq!(run(&module, "main", &[0]), Val::Int { bits: 1, width: 16 });
     assert_eq!(run(&module, "main", &[5]), Val::Int { bits: 2, width: 16 });
+}
+
+/// A call in an inlined body to a function that touches no memory (`GlobalsAA`
+/// shows it, no attribute does) got `!noalias` for the call site's arguments
+/// as if it could write through them (`CalleeAAR`'s memory effects).
+#[test]
+fn test_a_call_the_globals_analysis_shows_pure_gets_no_scopes() {
+    let ir = "define internal i32 @pure(i32 %x) {
+b1:
+  %c = icmp eq i32 %x, 0
+  br i1 %c, label %t, label %e
+
+t:
+  ret i32 0
+
+e:
+  %m = sub i32 %x, 1
+  %r = call i32 @pure(i32 %m)
+  ret i32 %r
+}
+
+define internal i32 @callee(ptr noalias %p, i32 %v) {
+b1:
+  store i32 %v, ptr %p
+  %r = call i32 @pure(i32 %v)
+  ret i32 %r
+}
+
+define i32 @main(ptr %a) {
+b1:
+  %x = call i32 @callee(ptr %a, i32 3)
+  ret i32 %x
+}
+";
+    for (known, scoped_calls) in [(false, 1), (true, 0)] {
+        let mut module = parsed(ir);
+        assert!(inline_known(&mut module, "main", known));
+        let after = printed(&module);
+        let main = after.split("define i32 @main").nth(1).unwrap();
+        let calls = main.lines().filter(|line| line.contains("call i32 @pure") && line.contains("!noalias")).count();
+        assert_eq!(calls, scoped_calls, "known={known}\n{after}");
+    }
 }

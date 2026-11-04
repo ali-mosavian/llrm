@@ -15,10 +15,11 @@
 //! `p`'s scope and the load is `!noalias` it.
 //!
 //! # Deviations
-//! - IA2 (owner w9, exit 2026-11-30): the effects of a call in the callee are
-//!   its own attributes and its callee's declaration, not a memory-effects
-//!   query of the callee's alias analysis (`CalleeAAR`); names are the
-//!   callee's where the module's declarations are at hand, else generic.
+//! - names are the callee's where the module's declarations are at hand, else
+//!   generic.
+//! - IA2 (owner w9, exit 2026-12-15): `CalleeAAR` is the call's and the
+//!   callee's attributes and `GlobalsAA`'s function effects (where the walk has
+//!   them), not a query of every alias analysis of the callee.
 //! - A copy is never simplified while it is made (`isSimplified`).
 //!
 //! # Provides
@@ -29,6 +30,8 @@
 
 use llrm_analysis::aa::{IRMemLocation, MemoryEffects};
 use llrm_analysis::capturetracking::{CaptureComponents, pointer_may_be_captured_before};
+use llrm_analysis::globalsmodref::GlobalsModRef;
+use llrm_mir::Context;
 use llrm_mir::context::{Constant, ConstantExpr, ConstantKind};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::domtree::DomTree;
@@ -42,9 +45,8 @@ use llrm_mir::passes::Declared;
 use llrm_mir::types::Type;
 use llrm_mir::valuetracking::Query;
 use llrm_mir::valuetracking::underlying::{MAX_LOOKUP_SEARCH_DEPTH, get_underlying_objects};
-use llrm_mir::Context;
 
-use crate::inlinemetadata::{DECL, NOALIAS, SCOPE, Nodes};
+use crate::inlinemetadata::{DECL, NOALIAS, Nodes, SCOPE};
 
 /// The scope made for each `noalias` argument of a call, by parameter.
 pub struct Scopes(Vec<(usize, MetadataId)>);
@@ -80,7 +82,10 @@ pub fn declare_scopes(
         return None;
     }
     let callee = llrm_mir::memory::callee(context, function, call).and_then(|id| {
-        declared.declarations().and_then(|all| all.get(id.0 as usize)).and_then(|one| one.name.as_deref().map(str::to_owned))
+        declared
+            .declarations()
+            .and_then(|all| all.get(id.0 as usize))
+            .and_then(|one| one.name.as_deref().map(str::to_owned))
     });
     let callee = names(declared, callee.as_deref());
     let this = declared.next_node();
@@ -152,10 +157,12 @@ fn escape_source(
                 _ => false,
             }
         }
-        Operand::Constant(id) => matches!(
-            &context.get(id).kind,
-            ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::IntToPtr, .. })
-        ),
+        Operand::Constant(id) => {
+            matches!(
+                &context.get(id).kind,
+                ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::IntToPtr, .. })
+            )
+        }
         Operand::Block(_) => false,
     }
 }
@@ -174,12 +181,17 @@ fn identified(
                 _ => false,
             },
             _ => body.parameters().iter().position(|&one_| one_ == one).is_some_and(|at| {
-                body.parameter_attrs.get(at).is_some_and(|attrs| {
-                    Fact::NoAlias.stated_by(attrs)
-                        || attrs.iter().any(|a| {
-                            matches!(a, llrm_mir::opcode::Attribute::Flag(n) | llrm_mir::opcode::Attribute::Type(n, _) if n == "byval")
-                        })
-                })
+                body.parameter_attrs
+                    .get(at)
+                    .is_some_and(
+                        |attrs| Fact::NoAlias.stated_by(attrs)
+                            || attrs.iter().any(|a| {
+                                matches!(
+                                    a,
+                                    llrm_mir::opcode::Attribute::Flag(n) | llrm_mir::opcode::Attribute::Type(n, _) if n == "byval"
+                                )
+                            }),
+                    )
             }),
         },
         Operand::Constant(id) => matches!(context.get(id).kind, ConstantKind::Global(_)),
@@ -192,14 +204,21 @@ fn call_effects(
     body: &Function,
     context: &Context,
     globals: &[GlobalValue],
+    known: Option<&GlobalsModRef>,
     inst: InstId,
 ) -> MemoryEffects {
     let (Opcode::Call(info) | Opcode::Invoke(info)) = &body.instruction(inst).opcode else {
         return MemoryEffects::unknown();
     };
     let site = MemoryEffects::of_attrs(&info.attrs);
-    match llrm_mir::memory::callee(context, body, inst).and_then(|id| globals.get(id.0 as usize)).and_then(|one| one.function())
-    {
+    let direct = llrm_mir::memory::callee(context, body, inst);
+    // `AAResults::getMemoryEffects(Call)`: the call's, the callee's, and what
+    // `GlobalsAA` worked out.
+    let site = match (direct, known) {
+        (Some(id), Some(known)) => site.intersect(known.get_memory_effects(id)),
+        _ => site,
+    };
+    match direct.and_then(|id| globals.get(id.0 as usize)).and_then(|one| one.function()) {
         Some(callee) => site.intersect(MemoryEffects::of_attrs(&callee.attrs)),
         None => site,
     }
@@ -215,6 +234,7 @@ pub fn scoped(
     copies: &[InstId],
     scopes: &Scopes,
     module: &[MetadataNode],
+    effects: Option<&GlobalsModRef>,
     declared: &mut Declared,
 ) {
     let globals = declared.declarations().map(<[GlobalValue]>::to_vec).unwrap_or_default();
@@ -257,7 +277,7 @@ pub fn scoped(
                 AtomicKind::Store => pointers.push(op.operands[1]),
             },
             Opcode::Call(_) | Opcode::Invoke(_) => {
-                let effects = call_effects(body, context, &globals, original);
+                let effects = call_effects(body, context, &globals, effects, original);
                 if effects.does_not_access_memory() {
                     continue;
                 }

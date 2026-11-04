@@ -149,6 +149,7 @@ pub fn items_with(
         crate::narrow::merge_logic_immediates(&mut function, &assignment);
         crate::narrow::narrow_logic_immediates(&mut function, &assignment);
         crate::consts::materialize_constants(&mut function, &assignment, cpu, wants_size);
+        crate::constreg::constant_into_destination(&mut function, &assignment);
     }
     remove_identity_copies(&mut function, &assignment);
     remove_redundant_copies(&mut function, &assignment);
@@ -158,6 +159,9 @@ pub fn items_with(
         &crate::REGISTER_INFO,
         &slots,
     );
+    if options.short {
+        crate::cmpdup::drop_repeated_compares(&mut function, &assignment);
+    }
     preserve_flags(&mut function, &assignment)?;
     branch_fold(&mut function, &assignment);
     crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size);

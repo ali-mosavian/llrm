@@ -3001,6 +3001,33 @@ fn a_16_byte_clear_is_xorps_and_one_16_byte_store_at_m64() {
     assert!(!listing.contains("qword"), "{listing}");
 }
 
+/// m64 never stated `pref_loop_alignment`, so its loops were laid out
+/// unaligned where the pin pads every loop header to 16 bytes (not in
+/// size-tuned code).
+#[test]
+fn a_loop_header_is_16_aligned_at_m64_unless_tuned_for_size() {
+    let ir = || {
+        format!(
+            "target datalayout = \"@m64-datalayout@\"\n\
+             target triple = \"x86_64-unknown-linux-gnu\"\n\
+             define i64 @f(ptr %p, i64 %n) {{\n\
+             entry:\n  br label %l\n\
+             l:\n  %i = phi i64 [ 0, %entry ], [ %j, %l ]\n  %s = phi i64 [ 0, %entry ], [ %t, %l ]\n\
+             \x20 %q = getelementptr i64, ptr %p, i64 %i\n  %v = load i64, ptr %q\n  %t = add i64 %s, %v\n\
+             \x20 %j = add i64 %i, 1\n  %c = icmp ult i64 %j, %n\n  br i1 %c, label %l, label %x\n\
+             x:\n  ret i64 %t\n}}\n"
+        )
+    };
+    let listing = |level: &str| {
+        let (built, _) = compiled(&flags(&["-m64", level, "--isel=dag"]), &ir(), "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let plain = listing("-O2");
+    assert!(plain.contains("    align 16\n"), "{plain}");
+    let small = listing("-Os");
+    assert!(!small.contains("    align 16\n"), "{small}");
+}
+
 /// A local declared `align 16` sat at `[rsp+4]`: the frame clamped every
 /// alignment to 4 (bintree's array; a 16-byte `movaps` clear of it would
 /// fault).

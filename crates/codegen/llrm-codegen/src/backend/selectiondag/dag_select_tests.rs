@@ -144,6 +144,7 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
             .map_err(|r| r.0.to_owned())?;
         let before = built.dag.dump();
         let emitted = select_block(
+            &mut info,
             &mut built.dag,
             &tli,
             &mut X86Lowering {

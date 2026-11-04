@@ -271,6 +271,9 @@ pub struct Candidate {
 /// What a caller says of itself that bounds what may be copied into it.
 pub struct Caller<'a> {
     pub layout: &'a DataLayout,
+    /// `CalleeAAR`: what the module analysis knows of the functions' memory
+    /// effects, for the scopes a copy's calls get.
+    pub effects: Option<&'a llrm_analysis::globalsmodref::GlobalsModRef>,
     pub recursive: bool,
     /// The copies are of the caller itself: they stop at the recursion limits,
     /// and this is the frequency of each call of the function's own body
@@ -418,7 +421,8 @@ pub fn gcc_work(body: &Function) -> i64 {
 /// the callee's `gcc_insns`. gcc's bar is in its own size units (15 at -O2, 30
 /// at -O3, `want_inline_small_function_p`; edge growth is its size less the
 /// call, 6); the target states the bar already converted, calibrated on the
-/// twelve self-recursive functions of the corpus (`Tuning.recursive_edge_growth`).
+/// twelve self-recursive functions of the corpus
+/// (`Tuning.recursive_edge_growth`).
 pub fn recursive_edge_growth(body: &Function) -> i64 {
     gcc_insns(body)
 }
@@ -1203,6 +1207,7 @@ fn executed(
     layout: &DataLayout,
     call: InstId,
     planned: &Planned,
+    effects: Option<&llrm_analysis::globalsmodref::GlobalsModRef>,
     declared: &mut Declared,
     placed: &mut Placed,
     metadata: Metadata,
@@ -1236,6 +1241,7 @@ fn executed(
             &made.copies,
             noalias,
             metadata.nodes,
+            effects,
             declared,
         );
     }
@@ -1267,7 +1273,7 @@ fn executed(
         placed.stack.insert(seq, copy);
     }
     for (place, nested) in planned.nested.iter().rev() {
-        executed(context, function, layout, copies[*place], nested, declared, placed, metadata)?;
+        executed(context, function, layout, copies[*place], nested, effects, declared, placed, metadata)?;
     }
     Ok(())
 }
@@ -1356,14 +1362,15 @@ pub fn expanded_all(
     let mut placed =
         Placed { base: function.entry().and_then(|entry| function.block(entry).first()), ..Placed::default() };
     for (call, planned) in sites.iter().rev() {
-        executed(context, function, caller.layout, *call, planned, declared, &mut placed, metadata)?;
+        executed(context, function, caller.layout, *call, planned, caller.effects, declared, &mut placed, metadata)?;
     }
     assert_eq!(end.0, semantic_count(function), "the size kept is not the body's");
     assert_eq!(end.1, frame(context, caller.layout, function), "the stack kept is not the body's");
     for lifetimes in &placed.lifetimes {
         insert_lifetimes(context, function, caller.layout, lifetimes, declared);
     }
-    // A site made inside an entry joins it first, that entry then the block before it.
+    // A site made inside an entry joins it first, that entry then the block
+    // before it.
     for &(block, entry) in placed.entries.iter().rev() {
         merge_entry(function, block, entry);
     }
