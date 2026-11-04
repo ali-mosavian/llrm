@@ -167,7 +167,6 @@ pub enum Change {
 }
 
 /// `LiveIntervals` (LiveIntervals.h).
-
 pub struct LiveIntervals {
     pub indexes: SlotIndexes,
     pub cfg: Cfg,
