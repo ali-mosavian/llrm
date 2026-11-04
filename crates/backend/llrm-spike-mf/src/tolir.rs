@@ -252,7 +252,7 @@ impl<T: Target> Converted<T> {
         // What allocation reads is the original instruction, in the order the
         // scheduler chose.
         // By identity: the coalescer's clones of an instruction share its `at`.
-        let original: std::collections::HashMap<u64, Arc<Insn>> = allocatable
+        let original: llrm_support::hash::HashMap<u64, Arc<Insn>> = allocatable
             .blocks
             .iter()
             .flat_map(|block| block.insns.iter().map(|one| (one.id(), Arc::clone(one))))
