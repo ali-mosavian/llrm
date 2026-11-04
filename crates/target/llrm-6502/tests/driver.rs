@@ -1581,3 +1581,18 @@ define i8 @check() {
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(exit_code_of(&text, "check"), 0, "{text}");
 }
+
+#[test]
+fn a_loop_right_after_an_empty_entry_block_is_not_the_entry() {
+    // -O0 `while (*tp) tp++;` (basic.c st_rem): the empty entry and the loop
+    // header shared block 0 and "entry block is a loop header" panicked
+    let ir = module(
+        "@s = global [3 x i8] c\"ab\\00\"\n@tp = internal global ptr @s\n\
+         define i8 @g() {\n  br label %h\n\
+         h:\n  %p = load ptr, ptr @tp\n  %c = load i8, ptr %p\n  %z = icmp ne i8 %c, 0\n  br i1 %z, label %b, label %x\n\
+         b:\n  %q = getelementptr inbounds i8, ptr %p, i32 1\n  store ptr %q, ptr @tp\n  br label %h\n\
+         x:\n  ret i8 7\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O0)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "g"), 7, "{text}");
+}

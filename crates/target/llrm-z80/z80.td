@@ -33,6 +33,8 @@ def GR8 : RegisterClass<"Z80", [i8], 8, (add A, B, C, D, E, H, L)>;
 def ACC : RegisterClass<"Z80", [i8], 8, (add A)>;
 def GR16 : RegisterClass<"Z80", [i16], 8, (add BC, DE, HL)>;
 def HLR : RegisterClass<"Z80", [i16], 8, (add HL)>;
+def DER : RegisterClass<"Z80", [i16], 8, (add DE)>;
+def BCR : RegisterClass<"Z80", [i16], 8, (add BC)>;
 def IDX : RegisterClass<"Z80", [i16], 8, (add IX, IY)>;
 def IYR : RegisterClass<"Z80", [i16], 8, (add IY)>;
 def SPR : RegisterClass<"Z80", [i16], 8, (add SP)>;
@@ -54,6 +56,12 @@ def Z80callseq_start : SDNode<"ISD::CALLSEQ_START", SDT_Z80CallSeqStart, [SDNPHa
 def Z80callseq_end : SDNode<"ISD::CALLSEQ_END", SDT_Z80CallSeqEnd, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
 def SDT_Z80Call : SDTypeProfile<0, -1, [SDTCisVT<0, i16>]>;
 def Z80call : SDNode<"Z80ISD::CALL", SDT_Z80Call, [SDNPHasChain, SDNPOutGlue, SDNPOptInGlue, SDNPVariadic]>;
+// ldir: copy BC bytes from (HL) to (DE), forward one byte at a time (so an overlap repeats), leaving HL and DE after
+// the last byte and BC zero. These take the destination in HL and the source in DE, as the runtime's memcpy does, and
+// swap them with `ex de,hl` (1 B, 4 T) when emitted. LDIRG skips the copy when BC is zero (the bare ldir would copy
+// 65536 bytes).
+def SDTZ80Ldir : SDTypeProfile<0, 3, [SDTCisVT<0, i16>, SDTCisVT<1, i16>, SDTCisVT<2, i16>]>;
+def Z80ldirg : SDNode<"Z80ISD::LDIRG", SDTZ80Ldir, [SDNPHasChain, SDNPMayLoad, SDNPMayStore]>;
 // A store to SP + offset in the call frame the callseq opens. The Z80 has no SP-relative store, so the pseudo is
 // expanded after frame layout; PUSH, one byte and 11 T, is the later call-frame optimization.
 def SDT_Z80StSP : SDTypeProfile<0, 2, [SDTCisInt<0>, SDTCisVT<1, i16>]>;
@@ -298,6 +306,13 @@ def : Pat<(i16 (anyext GR8:$a)), (ZEXT8 GR8:$a)>;
 // A signed byte widens by its sign: ld lo,a; rla; sbc a,a; ld hi,a.
 let Defs = [F, A] in
   def SEXT8 : Z80Inst<(outs GR16:$d), (ins ACC:$a), "sext $d, $a", [(set i16:$d, (sext i8:$a))]>;
+
+// ldir copies (hl) to (de) bc times. The guarded form tests bc first (a, f clobbered); the bare one is for a count
+// known to be nonzero.
+let mayLoad = 1, mayStore = 1, Defs = [HL, DE, BC, F, A] in
+  def LDIRG : Z80Inst<(outs), (ins HLR:$d, DER:$s, BCR:$n), "ldirg $d, $s, $n", [(Z80ldirg i16:$d, i16:$s, i16:$n)]>;
+let mayLoad = 1, mayStore = 1, Defs = [HL, DE, BC, F] in
+  def LDIR : Z80Inst<(outs), (ins HLR:$d, DER:$s, BCR:$n), "ldir $d, $s, $n", []>;
 
 // A global's address is a 16-bit immediate the linker fills in.
 def : Pat<(i16 (Z80wrapper tglobaladdr:$a)), (LD16ri tglobaladdr:$a)>;

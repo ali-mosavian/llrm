@@ -51,7 +51,8 @@ fn a_word_compared_after_its_copy_reads_the_copys_source() {
 fn a_spill_of_a_copy_reads_the_copys_source() {
     unjoined();
     let ir = include_str!("kernels/ir/crc16.ll");
-    let out = text(ir, "crc16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let request = Request { passes: vec!["-fno-unroll-loops".into()], ..Request::new(Level::O2) };
+    let out = text(ir, "crc16", 0, &request).unwrap_or_else(|why| panic!("{why}"));
     assert!(!out.contains("(ix), b"), "{out}");
     let lines: Vec<&str> = out.lines().map(str::trim).collect();
     assert!(lines.windows(2).any(|pair| pair == ["push af", "push hl"]), "{out}");

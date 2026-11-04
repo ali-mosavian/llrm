@@ -1303,14 +1303,16 @@ pub fn build_with_places(
     items: &[Item],
     places: Vec<llrm_codegen::model::lir::SrcLoc>,
 ) -> Result<(MFunction<Class>, Vec<Vec<String>>), Unsupported> {
-    // A block starts at a label that follows an instruction (or the first).
+    // A block starts at a label that follows an instruction (or the first). The
+    // entry block stays apart from a loop header that follows it directly: the
+    // entry has no predecessors.
     let mut labels: Vec<Vec<String>> = vec![Vec::new()];
     let mut block_of = HashMap::default();
     let mut after_inst = false;
     for item in items {
         match item {
             Item::Label(l) => {
-                if after_inst {
+                if after_inst || labels.len() == 1 && !labels[0].is_empty() {
                     labels.push(Vec::new());
                     after_inst = false;
                 }
@@ -1338,14 +1340,16 @@ pub fn build_with_places(
         b.function.blocks.push(Block { id: id as u32, ..Block::default() });
     }
     let mut after_inst = false;
+    let mut entry_labeled = false;
     for item in items {
         let inst = match item {
             Item::Label(_) => {
-                if after_inst {
+                if after_inst || b.current == 0 && entry_labeled {
                     b.current += 1;
                     after_inst = false;
                     b.pending = None;
                 }
+                entry_labeled = true;
                 continue;
             }
             // the flags are not kept across the phi copies: a compare is redone

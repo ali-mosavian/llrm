@@ -293,3 +293,26 @@ fn a_funnel_shift_guarded_against_a_zero_amount_is_an_fshl() {
     let inputs: &[&[i128]] = &[&[1, 2, 0], &[1, 2, 4], &[305419896, 2596069104, 8], &[-1, 5, 31]];
     assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
 }
+
+const SHIFTED_OR_IS_ZERO: &str = "define i1 @f(i32 %a, i32 %b) {
+b0:
+  %s = shl nuw i32 %a, 3
+  %o = or i32 %s, %b
+  %c = icmp eq i32 %o, 0
+  ret i1 %c
+}
+";
+
+/// A no-wrap shift inside an or chain compared with zero changes nothing the
+/// compare sees; the pin's `foldICmpOrChain` drops it, so the shift is not
+/// computed.
+#[test]
+fn a_no_wrap_shift_in_an_or_chain_compared_with_zero_is_dropped() {
+    let before = parsed(&format!("{DOS}{SHIFTED_OR_IS_ZERO}"));
+    let mut module = before.clone();
+    managed(&mut module, AggressiveInstCombine);
+    let after = managed(&mut module, crate::dead::Dead);
+    assert!(!after.contains("shl"), "{after}");
+    let inputs: &[&[i128]] = &[&[0, 0], &[1, 0], &[0, 1], &[5, 7]];
+    assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
+}
