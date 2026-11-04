@@ -1082,7 +1082,8 @@ pub fn loop_register_units(
     let Some(outer) = lp.get_parent_loop() else { return made };
     let outer_header = outer.get_header();
     let mut through: llrm_mir::dense::IdMap<llrm_mir::module::ValueId, usize> = llrm_mir::dense::IdMap::new();
-    let carried = cx.function.iter_block(outer_header).take_while(|&inst| cx.function.instruction(inst).opcode == Opcode::Phi);
+    let carried =
+        cx.function.iter_block(outer_header).take_while(|&inst| cx.function.instruction(inst).opcode == Opcode::Phi);
     for result in carried.filter_map(|inst| cx.function.instruction(inst).result) {
         // Only a value read past this loop can live across it.
         let read_beyond = cx
