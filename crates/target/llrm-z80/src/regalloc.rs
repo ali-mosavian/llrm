@@ -139,6 +139,8 @@ impl Target for Z80Registers {
     // `reads_flags_set_just_before` stays false: every copy, spill and reload
     // the allocator inserts is an `ld`, which leaves the flags alone, so
     // nothing needs to be kept off the window between a compare and its branch.
+    // (A far frame slot is reached by `add iy, sp`, which sets the carry: the
+    // expander keeps the flags across it, `Printer::iy_to_stack`.)
 
     fn reserved(root: RegId) -> bool {
         matches!(root, r if r == reg::SP || r == reg::IX || r == reg::FLAGS)

@@ -1,4 +1,5 @@
 // flags: -O2 -march=i486 | -O2 -march=i486 -m32
+// targets: dos
 /* The OS layer's memory request: two grants are not null, writable, and do not overlap. */
 #include "llrm_os.h"
 extern void report(long value);

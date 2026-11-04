@@ -1,4 +1,4 @@
-# usage: gen8.py op chunk -> ca65 table for a in [16*chunk, 16*chunk+16), b in 0..255 (OCP FP8 E5M2, RNE; any NaN passes as $7e)
+# usage: [FP8_ROWS=16] gen8.py op chunk -> ca65 table for a in [ROWS*chunk, ROWS*chunk+ROWS), b in 0..255; ROWS*256 records run (OCP FP8 E5M2, RNE; any NaN passes as $7e)
 import sys
 from fractions import Fraction as F
 op, chunk = (sys.argv[1], int(sys.argv[2])) if len(sys.argv) > 2 else ('mul', 0)
@@ -56,7 +56,9 @@ def ref(a, b):
     if y == 0: return QNAN if (x == 0 and SPECIAL) else ((INF | 0x80) if neg else INF)
     return rnd(F(x) / F(y), neg)
 if __name__ == '__main__':
-    print("A0 = %d" % (16 * chunk))
+    rows = int(os.environ.get('FP8_ROWS', 16))
+    print("ROWS = %d" % rows)
+    print("A0 = %d" % (rows * chunk))
     print("exp8:")
-    for a in range(16 * chunk, 16 * chunk + 16):
+    for a in range(rows * chunk, rows * chunk + rows):
         print("  .byte " + ",".join(str(ref(a, b)) for b in range(256)))

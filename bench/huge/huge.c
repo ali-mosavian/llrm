@@ -1,3 +1,4 @@
+// targets: dos
 /* 200x201 short array (80400 bytes) in __huge memory */
 extern void report(long value);
 
