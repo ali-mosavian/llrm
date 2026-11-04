@@ -78,6 +78,13 @@ pub trait CoalescerEnv {
     ) {
     }
 
+    /// Whether the env keeps a summary of what names each value, so the
+    /// intervals record the instructions put in and taken out for it
+    /// (DEVIATE C14).
+    fn tracks_uses(&self) -> bool {
+        false
+    }
+
     /// `TRI->shouldCoalesce(CopyMI, SrcRC, DstRC, NewRC, LIS)`: whether the
     /// join of `src` and `dst` across `copy` goes ahead.
     fn should_coalesce(
