@@ -10,15 +10,26 @@ use std::process::Command;
 const SOURCE: &str = "int bias(int a, int b) { return (a + b) / 256; }\n\
                       unsigned mask(unsigned a, unsigned b) { return (a + b) & 255; }\n";
 
+/// A missing tool path fails the test: a silent skip reported these tests
+/// green on 2026-11-04 without running them.
+fn require_env(is_set: impl Fn(&str) -> bool) {
+    for name in ["LLRM_OW", "LLRM_CLANG_M16"] {
+        assert!(is_set(name), "{name} is not set: this test needs it and does not skip");
+    }
+}
+
+#[test]
+#[should_panic(expected = "LLRM_OW is not set")]
+fn a_missing_tool_path_fails_instead_of_skipping() {
+    require_env(|_| false);
+}
+
 fn asm(
     target: &str,
     level: &str,
     tag: &str,
 ) -> Option<String> {
-    if std::env::var_os("LLRM_OW").is_none() || std::env::var_os("LLRM_CLANG_M16").is_none() {
-        eprintln!("skipped: LLRM_OW or LLRM_CLANG_M16 is not set");
-        return None;
-    }
+    require_env(|name| std::env::var_os(name).is_some());
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("maskand-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
