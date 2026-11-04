@@ -64,8 +64,13 @@ pub fn is_trivially_re_materializable(
         // generic `isReallyTriviallyReMaterializable` takes a virtual-register
         // use; `allUsesAvailableAt` asks at the use whether the registers still
         // hold.
+        //
+        // DEVIATE RM16 (owner m16, exit 2026-11-12): the pin flags only `LEA32r` and `LEA64r`
+        // `isReMaterializable` (X86InstrArithmetic.td#L21, #L40); `LEA16r` is the real-mode form of the same
+        // instruction, and a 16-bit result of registers is made again at its late use like the 32-bit one
+        // (quicksort's `hi * 2` was spilled and reloaded on every swap).
         (Operation::Address, Some("lea"), [Loc::Mem(cell)]) if !def.uses.is_empty() => {
-            into.width == 4 && cell.width == 4 && def.spread.is_empty() && !def.volatile
+            matches!((into.width, cell.width), (2, 2) | (4, 4)) && def.spread.is_empty() && !def.volatile
         }
         (Operation::Address, Some("lea"), [source]) => {
             let (addr, through, index) = match source {
@@ -331,6 +336,21 @@ mod tests {
         let what = Semantics {
             name: Some("lea".into()),
             dests: vec![Loc::Held(Held { value: 1, width: 4, offset: 0 })],
+            sources: vec![Loc::Mem(cell)],
+            ..Semantics::new(Operation::Address)
+        };
+        let lea = Insn::new(0, None, Some(what), vec![1], vec![2]);
+        assert!(is_trivially_re_materializable(&lea, false));
+    }
+
+    /// quicksort bq16 -O2: `lea si, [edi+edi]` (`hi * 2`) was spilled before the partition loop and reloaded for
+    /// every swap, memory operands 51961 -> 67195; the pin's `LEA16r` is not `isReMaterializable`.
+    #[test]
+    fn test_a_16_bit_lea_of_registers_is_made_again() {
+        let cell = Mem { base: Some(Held { value: 2, width: 4, offset: 0 }), ..Mem::new(None, 2) };
+        let what = Semantics {
+            name: Some("lea".into()),
+            dests: vec![Loc::Held(Held { value: 1, width: 2, offset: 0 })],
             sources: vec![Loc::Mem(cell)],
             ..Semantics::new(Operation::Address)
         };

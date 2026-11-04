@@ -1,7 +1,7 @@
 //! `MemorySSA::buildMemorySSA` and what it calls, from
 //! [`MemorySSA.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MemorySSA.cpp).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, BinaryHeap};
 
 use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::module::{BlockId, Function, InstId};
@@ -226,23 +226,54 @@ impl Mssa {
 
     /// `ForwardIDFCalculator::calculate`: the blocks of the iterated dominance
     /// frontier of `defining_blocks`, in the function's block order.
+    ///
+    /// [`IDFCalculatorBase::calculate`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/GenericIteratedDominanceFrontier.h#L131):
+    /// the DJ-graph walk over the dominator tree, so no frontier of every block
+    /// is made (the map was a third of a build). The order it finds them in is
+    /// LLVM's DFS number tie-break; the set is the same, put in block order as
+    /// before.
     pub(crate) fn iterated_dominance_frontier(
         &self,
         function: &Function,
         defining_blocks: &BTreeSet<i64>,
     ) -> Vec<BlockId> {
-        let frontiers = self.dominance.frontiers(function);
-        let mut placed: BTreeSet<i64> = BTreeSet::new();
-        let mut work: Vec<i64> = defining_blocks.iter().copied().collect();
-        let mut queued: BTreeSet<i64> = defining_blocks.clone();
-        while let Some(at) = work.pop() {
-            for &frontier in &frontiers[&at] {
-                if placed.insert(frontier) && queued.insert(frontier) {
-                    work.push(frontier);
+        let tree = self.dominance.tree(function);
+        // Handled from the bottom of the dominator tree upwards.
+        let mut queue: BinaryHeap<(u32, i64)> = BinaryHeap::new();
+        let (mut visited_pq, mut visited_worklist) = (IdSet::<BlockId>::default(), IdSet::<BlockId>::default());
+        for &at in defining_blocks {
+            let block = cfg::block(at);
+            if let Some(level) = tree.level(block) {
+                queue.push((level, at));
+                visited_worklist.insert(block);
+            }
+        }
+        let mut placed = IdSet::<BlockId>::default();
+        let mut worklist: Vec<BlockId> = Vec::new();
+        while let Some((root_level, root)) = queue.pop() {
+            // Walk all dominator tree children of Root, inspecting their CFG
+            // edges with targets elsewhere on the dominator tree. Only targets
+            // whose level is at most Root's level are in the IDF.
+            worklist.push(cfg::block(root));
+            while let Some(node) = worklist.pop() {
+                for succ in function.successors(node) {
+                    let Some(level) = tree.level(succ) else { continue };
+                    if level > root_level || !visited_pq.insert(succ) {
+                        continue;
+                    }
+                    placed.insert(succ);
+                    if !defining_blocks.contains(&cfg::id(succ)) {
+                        queue.push((level, cfg::id(succ)));
+                    }
+                }
+                for child in tree.children(Some(node)) {
+                    if visited_worklist.insert(child) {
+                        worklist.push(child);
+                    }
                 }
             }
         }
-        function.layout().iter().copied().filter(|block| placed.contains(&cfg::id(*block))).collect()
+        function.layout().iter().copied().filter(|block| placed.contains(block)).collect()
     }
 
     /// [`MemorySSA::placePHINodes`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MemorySSA.cpp#L1508):
