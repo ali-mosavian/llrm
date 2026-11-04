@@ -89,10 +89,19 @@ fn constant_array(
     env: Env,
     operand: Operand,
 ) -> Option<Vec<u8>> {
+    constant_array_in(unit.context, env, operand)
+}
+
+/// `constant_array` over a context alone.
+pub(crate) fn constant_array_in(
+    context: &llrm_mir::context::Context,
+    env: Env,
+    operand: Operand,
+) -> Option<Vec<u8>> {
     let Operand::Constant(id) = operand else { return None };
-    let ConstantKind::Global(global) = unit.context.get(id).kind else { return None };
-    let bytes = read_byte_array_from_global(unit.context, env, global, 0)?;
-    let ConstantKind::Bytes(raw) = &unit.context.get(bytes).kind else { return None };
+    let ConstantKind::Global(global) = context.get(id).kind else { return None };
+    let bytes = read_byte_array_from_global(context, env, global, 0)?;
+    let ConstantKind::Bytes(raw) = &context.get(bytes).kind else { return None };
     Some(raw.to_vec())
 }
 

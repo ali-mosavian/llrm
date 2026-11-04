@@ -111,9 +111,13 @@ impl FunctionPass for AggressiveInstCombine {
         let outer = std::rc::Rc::clone(analyses.outer());
         let tti = outer.target().tti();
         let info = crate::simplifylibcalls::target_library_info(&outer, unit.layout.pointer(0).index_bits);
-        let folded = fold_unusual_patterns(unit, &reachable, &outer.globals, &info, tti.as_deref());
+        let mut cfg_changed = false;
+        let folded = fold_unusual_patterns(unit, &reachable, &outer.globals, &info, tti.as_deref(), &mut cfg_changed);
         if truncs.are_all_preserved() && !folded {
             return PreservedAnalyses::all();
+        }
+        if cfg_changed {
+            return PreservedAnalyses::none();
         }
         PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>().preserve::<llrm_analysis::cfg::Shape>()
     }
@@ -128,6 +132,7 @@ fn fold_unusual_patterns(
     globals: &[llrm_mir::module::GlobalValue],
     info: &llrm_mir::libfunc::TargetLibraryInfo,
     tti: Option<&dyn llrm_mir::tti::Tti>,
+    cfg_changed: &mut bool,
 ) -> bool {
     let mut changed = false;
     let blocks: Vec<BlockId> =
@@ -151,7 +156,7 @@ fn fold_unusual_patterns(
             changed |= fold_consecutive_loads(unit.context, unit.layout, unit.function, inst);
             changed |= fold_icmp_or_chain(unit.context, unit.layout, unit.function, inst);
             changed |= fold_mul_high(unit.context, unit.layout, unit.function, inst);
-            changed |= fold_lib_calls(unit, globals, info, tti, inst);
+            changed |= fold_lib_calls(unit, globals, info, tti, cfg_changed, inst);
         }
         // Done separately to scan the stores once.
         changed |= fold_consecutive_stores(unit.context, unit.layout, unit.function, block);
@@ -1413,25 +1418,11 @@ fn fold_sqrt(
     layout: &DataLayout,
     function: &mut Function,
     declared: &mut llrm_mir::passes::Declared,
-    globals: &[llrm_mir::module::GlobalValue],
-    info: &llrm_mir::libfunc::TargetLibraryInfo,
     tti: Option<&dyn llrm_mir::tti::Tti>,
     inst: InstId,
 ) -> bool {
-    use llrm_mir::libfunc::LibFunc;
     use llrm_mir::types::FloatKind;
     let Some(tti) = tti else { return false };
-    if !matches!(function.instruction(inst).opcode, Opcode::Call(_)) {
-        return false;
-    }
-    let Some(global) = llrm_mir::memory::callee(context, function, inst) else { return false };
-    let Some(func) = globals.get(global.0 as usize).and_then(|one| info.get_lib_func_of(&context.types, one)) else {
-        return false;
-    };
-    // `isLibFuncEmittable`.
-    if !matches!(func, LibFunc::Sqrt | LibFunc::Sqrtf | LibFunc::Sqrtl) || !info.has(func) {
-        return false;
-    }
     let ty = function.instruction(inst).ty;
     let (suffix, tti_ty) = match context.types.get(ty) {
         Type::Float(FloatKind::Float) => ("f32", llrm_mir::tti::Ty::Float),
@@ -1470,16 +1461,144 @@ fn fold_sqrt(
 /// `foldLibCalls`
 /// ([:2192](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L2192)).
 ///
-/// DEVIATE 46: only the `sqrt` arm; `strcmp`, `strncmp` and `memchr` are not
-/// translated. Owner: w2. Exit: 2026-11-21.
+/// DEVIATE 46: the `strcmp` and `strncmp` arms are not translated; `memchr`
+/// reads a pointer that is a constant global itself, not a constant offset
+/// into one, and its switch has no branch weights (as DEVIATE 42). Owner: w2.
+/// Exit: 2026-11-21.
 fn fold_lib_calls(
     unit: &mut Unit,
     globals: &[llrm_mir::module::GlobalValue],
     info: &llrm_mir::libfunc::TargetLibraryInfo,
     tti: Option<&dyn llrm_mir::tti::Tti>,
+    cfg_changed: &mut bool,
     inst: InstId,
 ) -> bool {
-    fold_sqrt(unit.context, unit.layout, unit.function, unit.declared, globals, info, tti, inst)
+    use llrm_mir::libfunc::LibFunc;
+    if !matches!(unit.function.instruction(inst).opcode, Opcode::Call(_)) {
+        return false;
+    }
+    let Some(global) = llrm_mir::memory::callee(unit.context, unit.function, inst) else { return false };
+    let Some(func) = globals.get(global.0 as usize).and_then(|one| info.get_lib_func_of(&unit.context.types, one))
+    else {
+        return false;
+    };
+    // `isLibFuncEmittable`.
+    if !info.has(func) {
+        return false;
+    }
+    match func {
+        LibFunc::Sqrt | LibFunc::Sqrtf | LibFunc::Sqrtl => {
+            fold_sqrt(unit.context, unit.layout, unit.function, unit.declared, tti, inst)
+        }
+        LibFunc::Memchr => {
+            let folded = fold_mem_chr(unit.context, unit.layout, unit.function, globals, inst);
+            *cfg_changed |= folded;
+            folded
+        }
+        _ => false,
+    }
+}
+
+/// `MemChrInlineThreshold`.
+const MEM_CHR_INLINE_THRESHOLD: u64 = 3;
+
+/// `foldMemChr`
+/// ([:2113](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L2113)):
+/// `memchr` of a short constant string with a variable byte is a switch on the
+/// byte, to the index of its first occurrence.
+fn fold_mem_chr(
+    context: &mut llrm_mir::context::Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    globals: &[llrm_mir::module::GlobalValue],
+    inst: InstId,
+) -> bool {
+    let operands = function.instruction(inst).operands.clone();
+    let [base, byte, length, _callee] = operands[..] else { return false };
+    if matches!(byte, Operand::Constant(_)) {
+        return false;
+    }
+    let env = llrm_mir::constantfolding::Env { globals, layout };
+    let Some(string) = crate::simplifylibcalls::constant_array_in(context, env, base) else { return false };
+    let Some((count, _)) = query(context, layout, function).int_constant(length) else { return false };
+    // A length past the string is left to the library.
+    if count > string.len() as u128 || count > u128::from(MEM_CHR_INLINE_THRESHOLD) {
+        return false;
+    }
+    let n = count as usize;
+    let call_ty = function.instruction(inst).ty;
+    let Some(result) = function.instruction(inst).result else { return false };
+    let Some(block) = function.parent(inst) else { return false };
+    let i8 = context.types.int(8);
+    let index_ty = context.types.int(layout.pointer(0).index_bits);
+    let void = context.types.void();
+
+    let next = crate::edges::split_block_at(function, block, inst);
+    let jump = function.terminator(block).expect("the split's branch");
+    function.erase(jump).expect("a terminator defines nothing");
+    let narrow = function.create_instruction(Opcode::Cast(CastOp::Trunc), i8, vec![byte], Flags::default(), None);
+    function.insert(narrow, Position::End(block)).expect("a placed block");
+    let narrow = Operand::Value(function.instruction(narrow).result.expect("a value"));
+
+    let success = function.create_block(Some("memchr.success"));
+    let mut cases: Vec<(u8, BlockId)> = Vec::new();
+    let mut incoming: Vec<(Operand, BlockId)> = Vec::new();
+    let mut previous = block;
+    for (at, &value) in string[..n].iter().enumerate() {
+        if cases.iter().any(|&(seen, _)| seen == value) {
+            continue;
+        }
+        let case = function.create_block(Some("memchr.case"));
+        function.insert_block(case, Some(previous)).expect("a new block");
+        previous = case;
+        let jump = function.create_instruction(Opcode::Br, void, vec![Operand::Block(success)], Flags::default(), None);
+        function.insert(jump, Position::End(case)).expect("a placed block");
+        incoming.push((Operand::Constant(context.int(index_ty, at as i128)), case));
+        cases.push((value, case));
+    }
+    function.insert_block(success, Some(previous)).expect("a new block");
+
+    let mut switch = vec![narrow, Operand::Block(next)];
+    for &(value, case) in &cases {
+        switch.extend([Operand::Constant(context.int(i8, i128::from(value))), Operand::Block(case)]);
+    }
+    let switch = function.create_instruction(Opcode::Switch, void, switch, Flags::default(), None);
+    function.insert(switch, Position::End(block)).expect("a placed block");
+
+    let index = function.create_instruction(
+        Opcode::Phi,
+        index_ty,
+        llrm_analysis::occurrence::from_arms(&incoming),
+        Flags::default(),
+        Some("memchr.idx"),
+    );
+    function.insert(index, Position::End(success)).expect("a placed block");
+    let index = Operand::Value(function.instruction(index).result.expect("a value"));
+    let place = function.create_instruction(
+        Opcode::GetElementPtr { source: i8 },
+        call_ty,
+        vec![base, index],
+        Flags::INBOUNDS,
+        None,
+    );
+    function.insert(place, Position::End(success)).expect("a placed block");
+    let place = Operand::Value(function.instruction(place).result.expect("a value"));
+    let jump = function.create_instruction(Opcode::Br, void, vec![Operand::Block(next)], Flags::default(), None);
+    function.insert(jump, Position::End(success)).expect("a placed block");
+
+    let null = Operand::Constant(context.constant(Constant { ty: call_ty, kind: ConstantKind::Null }));
+    let found = function.create_instruction(
+        Opcode::Phi,
+        call_ty,
+        llrm_analysis::occurrence::from_arms(&[(null, block), (place, success)]),
+        Flags::default(),
+        None,
+    );
+    function.insert(found, Position::Before(inst)).expect("a placed instruction");
+    let found = Operand::Value(function.instruction(found).result.expect("a value"));
+    function.replace_all_uses_with(result, found);
+    function.erase(inst).expect("a call nothing uses");
+    true
 }
 
 /// `tryToRecognizePopCount`
