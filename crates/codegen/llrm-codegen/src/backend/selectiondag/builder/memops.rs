@@ -83,7 +83,8 @@ impl Builder<'_> {
                 }
                 Ok(())
             }
-            Intrinsic::Assume | Intrinsic::Prefetch | Intrinsic::FakeUse => Ok(()),
+            // `case Intrinsic::experimental_noalias_scope_decl: return;`
+            Intrinsic::Assume | Intrinsic::Prefetch | Intrinsic::FakeUse | Intrinsic::NoAliasScopeDecl => Ok(()),
             // `SelectionDAGBuilder.cpp#L7680`: the region information is
             // discarded; the scope is an undefined pointer.
             Intrinsic::InvariantEnd => Ok(()),
