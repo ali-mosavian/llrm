@@ -238,30 +238,21 @@ impl LiveIntervals {
         &mut self,
         one: &Insn,
     ) {
-        self.add_operands_of(one, &|_| true);
-    }
-
-    /// [`Self::add_operands`] for the values `keep` names only.
-    fn add_operands_of(
-        &mut self,
-        one: &Insn,
-        keep: &dyn Fn(u32) -> bool,
-    ) {
         let instr = one.id();
         // A def that keeps the rest of the value reads it (`readsReg()`).
-        for &value in one.defines.iter().filter(|&&value| keep(value)) {
+        for &value in &one.defines {
             let reads_reg = one.partial_defs.contains(&value);
             let lanes = one.def_lanes.iter().find(|(v, _)| *v == value).map_or(Operand::ALL, |(_, lanes)| *lanes);
             let early_clobber = one.early_clobbers.contains(&value);
             self.push_operand(value, Operand { instr, is_def: true, reads_reg, early_clobber, lanes });
         }
-        for &value in one.uses.iter().filter(|&&value| keep(value)) {
+        for &value in &one.uses {
             let lanes = read_lanes(one, value);
             self.push_operand(value, Operand { instr, is_def: false, reads_reg: true, early_clobber: false, lanes });
         }
         // An operand flagged undef names the register and reads nothing
         // (`MachineOperand::isUndef`): it starts and extends no live range.
-        for &value in one.undefs.iter().filter(|&&value| keep(value)) {
+        for &value in &one.undefs {
             self.push_operand(
                 value,
                 Operand { instr, is_def: false, reads_reg: false, early_clobber: false, lanes: Operand::ALL },
@@ -289,18 +280,9 @@ impl LiveIntervals {
         &mut self,
         one: &Insn,
     ) {
-        self.remove_operands_of(one, &|_| true);
-    }
-
-    /// [`Self::remove_operands`] for the values `keep` names only.
-    fn remove_operands_of(
-        &mut self,
-        one: &Insn,
-        keep: &dyn Fn(u32) -> bool,
-    ) {
         llrm_mir::counts::bump(llrm_mir::counts::Event::LirOperandListEdits);
         let instr = one.id();
-        for &value in one.defines.iter().chain(&one.uses).chain(&one.undefs).filter(|&&value| keep(value)) {
+        for &value in one.defines.iter().chain(&one.uses).chain(&one.undefs) {
             // A value named twice finds its slots gone the second time.
             let Some(mine) = self.slots.remove(&(value, instr)) else { continue };
             let list = self.operands.get_mut(&value).expect("a slot names a listed operand");
@@ -804,24 +786,22 @@ impl LiveIntervals {
 
     /// `new` takes the place of `old` with the identity `old` has, the way
     /// `MachineOperand::setReg` rewrites an instruction where it stands: the
-    /// slot index, the block position and the operand lists of every value but
-    /// `changed` are untouched. `new` names the same values as `old` except
-    /// those in `changed`, and carries the identity of `old`.
+    /// slot index and the maps keyed by identity are untouched, the operand
+    /// lists are rebuilt as [`Self::rewrite_instr`] does.
     pub fn rename_instr(
         &mut self,
         block: usize,
         old: InstrKey,
         new: Arc<Insn>,
-        changed: &[u32],
     ) {
         debug_assert_eq!(new.id(), old);
         llrm_mir::counts::bump(llrm_mir::counts::Event::LirRewrites);
         let pos = self.position_of(block, old);
         let before = Arc::clone(&self.blocks[block][pos]);
-        let among = |value: u32| changed.contains(&value);
-        self.remove_operands_of(&before, &among);
+        self.remove_operands(&before);
         self.note(|| Change::Took(block, Arc::clone(&before)));
-        self.add_operands_of(&new, &among);
+        llrm_mir::counts::bump(llrm_mir::counts::Event::LirOperandListEdits);
+        self.add_operands(&new);
         self.note(|| Change::Put(block, Arc::clone(&new)));
         self.insns.insert(old, Arc::clone(&new));
         self.blocks[block][pos] = new;

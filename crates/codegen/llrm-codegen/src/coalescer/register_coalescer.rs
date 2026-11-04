@@ -442,9 +442,9 @@ fn update_reg_defs_uses(
             renamed = Arc::new(made);
         }
         // `setReg` rewrites the operand where it stands: the instruction keeps
-        // its identity, and only `src` and `dst` change their operand lists.
+        // its identity.
         let renamed = Arc::new(Arc::unwrap_or_clone(renamed).standing_for(&old));
-        lis.rename_instr(block, key, renamed, &[src, dst]);
+        lis.rename_instr(block, key, renamed);
     }
 }
 
