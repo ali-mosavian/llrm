@@ -10,6 +10,8 @@ use llrm_transforms::inferalignment::InferAlignment;
 use llrm_transforms::instsimplify::InstSimplify;
 use llrm_transforms::jumpthreading::{JumpThreading, JumpThreadingOptions};
 use llrm_transforms::loopinstsimplify::LoopInstSimplify;
+use llrm_transforms::loopunrollpass::LoopFullUnroll;
+use llrm_transforms::simpleloopunswitch::SimpleLoopUnswitch;
 
 /// Scans of the globals for `llvm.assume` and for `llvm.experimental.guard`
 /// (each function's lazy value info looked) while `Combine`, `Cvp`,
@@ -41,4 +43,33 @@ fn test_the_globals_are_scanned_for_an_assume_once_per_module() {
     eprintln!("600 functions: {few:?} scans, 1200 functions: {many:?}");
     assert_eq!(few, many, "the scans grew with the functions");
     assert!(many.0 < 20 && many.1 < 20, "{many:?} scans");
+}
+
+/// `LoopFullUnroll` and `SimpleLoopUnswitch` built each loop's assumption cache
+/// with `AssumptionCache::of`, which scanned every global: 1.64x and 2.23x per
+/// call from 600 to 2400 functions (tiny, x86).
+#[test]
+fn test_the_loop_passes_do_not_scan_the_globals_for_each_loop() {
+    let scans = |functions: usize| {
+        let mut text = String::new();
+        for at in 0..functions {
+            text += &format!(
+                "define i32 @f{at}(ptr %p, i32 %n) {{\nentry:\n  br label %l\nl:\n  %i = phi i32 [ 0, %entry ], [ %j, %l ]\n  %s = phi i32 [ 0, %entry ], [ %t, %l ]\n  %q = getelementptr i32, ptr %p, i32 %i\n  %v = load i32, ptr %q\n  %t = add i32 %s, %v\n  %j = add i32 %i, 1\n  %c = icmp slt i32 %j, %n\n  br i1 %c, label %l, label %x\nx:\n  ret i32 %t\n}}\n"
+            );
+        }
+        let mut module = llrm_mir::parse::module(&text).unwrap_or_else(|why| panic!("{why:?}"));
+        let mut manager = PassManager::default();
+        manager.add(LoopFullUnroll {
+            opt_level: 2,
+            opt_size: false,
+            only_when_forced: false,
+            created: Default::default(),
+        });
+        manager.add(SimpleLoopUnswitch { non_trivial: true });
+        let before = assume_scans();
+        manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("runs");
+        assume_scans() - before
+    };
+    let (few, many) = (scans(300), scans(600));
+    assert_eq!(few, many, "the scans grew with the functions: {few} then {many}");
 }
