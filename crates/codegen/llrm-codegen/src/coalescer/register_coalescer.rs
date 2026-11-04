@@ -441,9 +441,10 @@ fn update_reg_defs_uses(
             made.def_lanes.push((dst, lanes));
             renamed = Arc::new(made);
         }
-        let new = renamed.id();
-        lis.rewrite_instr(block, key, renamed);
-        state.moved.insert(key, new);
+        // `setReg` rewrites the operand where it stands: the instruction keeps
+        // its identity, and only `src` and `dst` change their operand lists.
+        let renamed = Arc::new(Arc::unwrap_or_clone(renamed).standing_for(&old));
+        lis.rename_instr(block, key, renamed, &[src, dst]);
     }
 }
 
