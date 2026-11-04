@@ -125,6 +125,10 @@ impl CombineHooks for Aarch64Lowering {
         true
     }
 
+    fn sub_algebra_folds(&self) -> bool {
+        true
+    }
+
     fn widened_unsigned_divide_type(
         &self,
         vt: EVT,
@@ -182,6 +186,18 @@ impl CombineHooks for Aarch64Lowering {
 
     fn simplify_demanded_add_sub_mul(&self) -> bool {
         true
+    }
+
+    /// `AArch64TargetLowering::isTruncateFree(EVT, EVT)` (an integer narrowing)
+    /// and `isZExtFree(EVT, EVT)` (32 to 64 bits only, as a `w` write clears
+    /// the upper half):
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L17540>
+    fn free_narrowing(
+        &self,
+        wide: EVT,
+        narrow: EVT,
+    ) -> bool {
+        narrow.is_integer() && wide.is_integer() && narrow.size_in_bits() == 32 && wide.size_in_bits() == 64
     }
 
     fn reassociate_compare_pairs(&self) -> bool {

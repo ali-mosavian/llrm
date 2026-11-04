@@ -5,11 +5,11 @@
 //! DEVIATE SD206: integer types the target holds in a register only (no
 //! promoted-type multiply, no `BuildExactSDIV`/`BuildExactUDIV` for `exact`
 //! divides), no `DIVREM` merging, and
-//! `BuildSDIVPow2` is the generic shift sequence: the pin's `cmov` form for a
-//! CPU with `cmov` (P6 and later) is not ported. `isIntDivCheap` is the
+//! `BuildSDIVPow2` is the generic shift sequence except where the target's
+//! `sdiv_pow2_with_cmov` makes the pin's `cmov` form (x86 with `cmov`, divisor
+//! not 2 or -2). `isIntDivCheap` is the
 //! configured `int_div_cheap` (the pin's `minsize`; the `-Os` rule of the
-//! target is not wired). Exit: the promoted and exact forms, the `cmov`
-//! sequence, the `-Os` rule.
+//! target is not wired). Exit: the promoted and exact forms, the `-Os` rule.
 //! Owner sdag-b. Review 2026-11-27.
 //!
 //! # See also
@@ -265,10 +265,26 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 if self.dag.config().sdiv_pow2_stays {
                     return Some(node);
                 }
+                // `X86TargetLowering::BuildSDIVPow2` ->
+                // `buildSDIVPow2WithCMov` (TargetLowering.cpp#L6710): a
+                // divisor of 2, -2, 1 or -1 keeps the default expansion.
+                let log = c.trailing_zeros();
+                if self.tli.is_some_and(|tli| tli.sdiv_pow2_with_cmov(vt)) && c != 1 && negated != 1 && log > 1 {
+                    // `(x < 0 ? x + (2^log - 1) : x) >> log`, negated for a
+                    // negative divisor.
+                    let zero = self.dag.get_constant(0, vt);
+                    let low = self.dag.get_constant((1u128 << log) - 1, vt);
+                    let negative_x = self.dag.get_setcc(EVT::I8, n0, zero, CondCode::SetLt);
+                    let biased = self.dag.get_node(ISD::Add, vt, &[n0, low]);
+                    let chosen = self.dag.get_select(vt, negative_x, biased, n0);
+                    let by = self.shift_amount(vt, log);
+                    let quotient = self.dag.get_node(ISD::Sra, vt, &[chosen, by]);
+                    let negative_divisor = c >> (bits - 1) & 1 == 1;
+                    return Some(if negative_divisor { self.dag.get_negative(quotient, vt) } else { quotient });
+                }
                 // `Sign = x >> (bits-1)`, add `Sign >>> (bits - log2 |d|)`,
                 // shift right by `log2 |d|`; a negative divisor
                 // negates.
-                let log = c.trailing_zeros();
                 let (top, inexact, by) =
                     (self.shift_amount(vt, bits - 1), self.shift_amount(vt, bits - log), self.shift_amount(vt, log));
                 let sign = self.dag.get_node(ISD::Sra, vt, &[n0, top]);

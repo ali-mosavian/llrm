@@ -91,7 +91,6 @@ pub fn program(
     let (_, text) = without_triple(text);
     let text = if platform == Platform::Darwin { without_va_arg(&text) } else { text };
     let mut module = llrm_mir::parse::module(&text).map_err(|error| error.to_string())?;
-    module.refuse_aliases("arm64")?;
     llrm_mir::parse::upgrade_lifetimes(&mut module);
     // Atomics are calls the mid-end moves nothing across; the selector makes
     // them instructions.
@@ -202,10 +201,8 @@ pub fn optimized_at(
 /// The routines the C link of this target resolves, by their IR names (the
 /// object writer decorates them): what `SimplifyLibCalls` may form.
 fn c_library() -> Vec<llrm_mir::libfunc::Routine> {
-    ["puts", "putchar", "fwrite", "fputc", "fputs"]
-        .into_iter()
-        .map(|name| llrm_mir::libfunc::Routine { standard: name, symbol: name.to_owned(), calling_convention: 0 })
-        .collect()
+    let names = ["puts", "putchar", "fwrite", "fputc", "fputs"].into_iter().chain(llrm_mir::libfunc::HOSTED_COMPARE);
+    llrm_mir::libfunc::Routine::stated(names, str::to_owned, 0)
 }
 
 /// Which instruction selector makes the machine function (`--isel=`).
@@ -416,6 +413,8 @@ pub fn assembly(
     level: impl Into<Level>,
 ) -> Result<String, String> {
     let mut program = program(text, platform)?;
+    // The text carries no alias: refuse it rather than drop the symbol.
+    program.modules[0].refuse_aliases("arm64")?;
     let level = level.into();
     if level != Level::O0 {
         optimized_at(&mut program, level)?;

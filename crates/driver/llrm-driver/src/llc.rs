@@ -637,12 +637,20 @@ fn options_for(
             .filter_map(|one| one.as_str())
             .map(|name| (name.to_owned(), number, pattern.replace('*', name)))
             .collect();
-        if default.cc.as_deref() == Some("sysv") && default.symbol.contains_key(format) {
-            options.pipeline.library = vec![llrm_mir::libfunc::Routine {
-                standard: "strlen",
-                symbol: pattern.replace('*', "strlen"),
-                calling_convention: number,
-            }];
+        // `strlen` where the convention is System V's (DEVIATE D11 of
+        // `pipeline::Options::library`); the compare routines wherever the
+        // object is ELF, whose C library is a hosted one (`bcmp` is not in
+        // Watcom's or DOS's).
+        let stated: Option<Vec<&'static str>> = match default.cc.as_deref() {
+            Some("sysv") if default.symbol.contains_key(format) => {
+                Some(["strlen"].into_iter().chain(llrm_mir::libfunc::HOSTED_COMPARE).collect())
+            }
+            _ if format == "elf" => Some(llrm_mir::libfunc::HOSTED_COMPARE.to_vec()),
+            _ => None,
+        };
+        if let Some(names) = stated {
+            options.pipeline.library =
+                llrm_mir::libfunc::Routine::stated(names, |name| pattern.replace('*', name), number);
         }
     }
     options
@@ -703,8 +711,14 @@ mod options_tests {
             "{:?}",
             sysv.libcalls
         );
-        assert_eq!(sysv.pipeline.library.len(), 1);
-        assert_eq!(sysv.pipeline.library[0].symbol, "_strlen");
+        let symbols: Vec<_> = sysv.pipeline.library.iter().map(|routine| routine.symbol.as_str()).collect();
+        assert_eq!(symbols, ["_strlen", "_memcmp", "_bcmp"]);
+        // x86-64 Linux: `memcmp` and `bcmp` (`memcmp(p, q, n) == 0` stayed a
+        // `memcmp` call there); its `strlen` is not stated. A DOS object states
+        // none: Watcom's library has no `bcmp`.
+        let long = options(&["-m64", "-mabi=sysv"], "elf");
+        let symbols: Vec<_> = long.pipeline.library.iter().map(|routine| routine.symbol.as_str()).collect();
+        assert_eq!(symbols, ["memcmp", "bcmp"]);
     }
 }
 

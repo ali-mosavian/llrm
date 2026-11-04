@@ -93,6 +93,7 @@ fn mangled(
             llrm_mir::types::FloatKind::Float => "f32".to_owned(),
             llrm_mir::types::FloatKind::Double => "f64".to_owned(),
             llrm_mir::types::FloatKind::X86Fp80 => "f80".to_owned(),
+            llrm_mir::types::FloatKind::F128 => "f128".to_owned(),
         },
         other => panic!("a pattern of an int, float or pointer, not {other:?}"),
     }

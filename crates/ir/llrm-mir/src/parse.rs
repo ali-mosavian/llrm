@@ -31,8 +31,7 @@ pub fn module(text: &str) -> Parsed<Module> {
 }
 
 /// Constructs llrm has no producer for, named so the refusal says why.
-const OUTSIDE_SUBSET: [&str; 8] =
-    ["fp128", "ppc_fp128", "half", "bfloat", "blockaddress", "indirectbr", "dso_local", "triple"];
+const OUTSIDE_SUBSET: [&str; 7] = ["ppc_fp128", "half", "bfloat", "blockaddress", "indirectbr", "dso_local", "triple"];
 
 struct Parser {
     tokens: Vec<(Token, usize)>,
@@ -623,6 +622,7 @@ impl Parser {
             | Token::FloatBits { .. }
             | Token::HexFloat(_)
             | Token::Float80(_)
+            | Token::Float128(_)
             | Token::Bytes(_)
             | Token::Global(_) => !matches!(self.peek_at(1), Token::Punct('=')),
             Token::Punct('[' | '{' | '<') => true,
@@ -906,6 +906,7 @@ impl Parser {
                 "float" => Type::Float(FloatKind::Float),
                 "double" => Type::Float(FloatKind::Double),
                 "x86_fp80" => Type::Float(FloatKind::X86Fp80),
+                "fp128" => Type::Float(FloatKind::F128),
                 "ptr" => Type::Pointer(self.address_space()?),
                 _ => match word.strip_prefix('i').and_then(|bits| bits.parse::<u32>().ok()) {
                     Some(bits) if (1..=128).contains(&bits) => Type::Int(bits),
@@ -1048,8 +1049,9 @@ impl Parser {
                 }
                 ConstantKind::Int(u128::from(word == "true"))
             }
-            Token::Float(value, narrow, wide) => match shape {
+            Token::Float(value, narrow, wide, quad) => match shape {
                 Type::Float(FloatKind::Float) => ConstantKind::Float(u64::from(narrow.to_bits())),
+                Type::Float(FloatKind::F128) => ConstantKind::Float128(quad),
                 Type::Float(FloatKind::X86Fp80) => {
                     crate::fp80::kind(&crate::apfloat::ApFloat::from_bits(crate::apfloat::X87_DOUBLE_EXTENDED, wide))
                 }
@@ -1061,11 +1063,13 @@ impl Parser {
                 Type::Float(FloatKind::X86Fp80) if digits == 20 => {
                     crate::fp80::kind(&crate::apfloat::ApFloat::from_bits(crate::apfloat::X87_DOUBLE_EXTENDED, bits))
                 }
+                Type::Float(FloatKind::F128) if digits == 32 => ConstantKind::Float128(bits),
                 Type::Float(kind) => {
                     let (name, width) = match kind {
                         FloatKind::Float => ("float", 8),
                         FloatKind::Double => ("double", 16),
                         FloatKind::X86Fp80 => ("x86_fp80", 20),
+                        FloatKind::F128 => ("fp128", 32),
                     };
                     return self.fail_on(line, format!("f0x{bits:0digits$X} is not a {name}'s {width} hex digits"));
                 }
@@ -1076,6 +1080,10 @@ impl Parser {
                     crate::fp80::kind(&crate::apfloat::ApFloat::from_bits(crate::apfloat::X87_DOUBLE_EXTENDED, bits))
                 }
                 _ => return self.fail_on(line, "`0xK` is an x86_fp80"),
+            },
+            Token::Float128(bits) => match shape {
+                Type::Float(FloatKind::F128) => ConstantKind::Float128(bits),
+                _ => return self.fail_on(line, "`0xL` is an fp128"),
             },
             Token::HexFloat(bits) => self.float(&shape, f64::from_bits(bits), line)?,
             Token::Word(word) if word == "null" => {
@@ -1207,6 +1215,18 @@ impl Parser {
         line: usize,
     ) -> Parsed<ConstantKind> {
         match shape {
+            // `+inf`, `-inf` and the default quiet NaN, widened; a NaN with a
+            // payload would land in the wrong bits.
+            Type::Float(FloatKind::F128) => {
+                let canonical = value.is_nan() && value.to_bits() & !(1 << 63) == 0x7FF8_0000_0000_0000;
+                if value.is_nan() && !canonical || value.is_finite() {
+                    return self.fail_on(line, "an fp128 given as a 0x double literal");
+                }
+                let mut wide =
+                    crate::apfloat::ApFloat::from_bits(crate::apfloat::IEEE_DOUBLE, u128::from(value.to_bits()));
+                wide.convert(crate::apfloat::IEEE_QUAD, crate::fpclass::RoundingMode::NearestTiesToEven);
+                Ok(ConstantKind::Float128(wide.to_bits()))
+            }
             Type::Float(FloatKind::Double | FloatKind::X86Fp80) => Ok(ConstantKind::Float(value.to_bits())),
             Type::Float(FloatKind::Float) => {
                 let narrow = value as f32;
