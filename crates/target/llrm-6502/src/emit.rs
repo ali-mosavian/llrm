@@ -252,6 +252,18 @@ pub fn expand(
             };
             byte3(&mut out, carry, mnemonic, reg(&o[0])?, reg(&o[1])?, &address(&o[2], &o[3])?);
         }
+        op::ADD8MX | op::SUB8MX | op::AND8MX | op::OR8MX | op::XOR8MX => {
+            let (carry, mnemonic) = match inst.opcode {
+                op::ADD8MX => ("clc", "adc"),
+                op::SUB8MX => ("sec", "sbc"),
+                op::AND8MX => ("", "and"),
+                op::OR8MX => ("", "ora"),
+                _ => ("", "eor"),
+            };
+            writeln!(out, "  ldx {}", reg(&o[4])?).unwrap();
+            let symbol = format!("{},x", indexed_address(&o[2], &o[3])?);
+            byte3(&mut out, carry, mnemonic, reg(&o[0])?, reg(&o[1])?, &symbol);
+        }
         op::ADD16 => wide(&mut out, "adc", "adc", &o[0], &o[1], &o[2])?,
         op::SUB16 => wide(&mut out, "sbc", "sbc", &o[0], &o[1], &o[2])?,
         op::ADDO16 => wide(&mut out, "adc", "adc", &o[0], &o[2], &o[3])?,

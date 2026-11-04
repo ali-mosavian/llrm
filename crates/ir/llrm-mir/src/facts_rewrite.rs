@@ -544,6 +544,24 @@ mod tests {
             // `inbounds` GEP into the CRC table it just created, indexed by
             // a byte. It reads no flag off an existing instruction.
             "crc.rs",
+            // InstCombineCalls.cpp's `Intrinsic::abs` reads the `nsw` of a
+            // negation (`abs(-x)` is `abs(x)` with the minimum poison when the
+            // negation was `nsw`) and of a multiply by another `abs`, and
+            // gives the new multiply `nsw` only when both the old one and
+            // the intrinsic's flag promised it. No instruction gets a flag
+            // its operands did not already promise.
+            "combine_abs.rs",
+            // InstructionCombining.cpp's `visitSwitchInst` reads the `nuw`/
+            // `nsw` of a shift in the condition: with either, the shifted-out
+            // bits are zero or a copy of the sign, so the condition is the
+            // operand and the cases shift down; without, it masks them. It
+            // sets no flag.
+            "combine_switch.rs",
+            // InstCombineCasts.cpp's `foldPtrToIntOrAddrOfGEP` reads the `nuw`
+            // of each GEP in the chain it turns into integer additions, and
+            // gives the add that flag: the GEP promised the offset did not
+            // wrap. It grants no flag to an instruction that had none.
+            "combine_ptrcast.rs",
             // The `nsw` of a counter's `add phi, 1` bounds the counter to its
             // start and the loop's end, for the range of a fixed-point
             // product; the interval is worked out afresh when asked and kept
@@ -596,9 +614,26 @@ mod tests {
             "typepromotion_pass.rs",
             // AggressiveInstCombine.cpp's `tryToRecognizeTableBasedPatterns`
             // takes `nusw` (`hasNoUnsignedSignedWrap`; `inbounds` implies it)
-            // of the table's GEP as the proof its index does not wrap. It
-            // reads no other flag and sets none.
+            // of the table's GEP as the proof its index does not wrap, and
+            // `foldICmpOrChain` takes `nsw` or `nuw` of a `shl` in an or chain
+            // compared with zero as the proof the shift loses no bit. It reads
+            // no other flag and sets none.
             "aggressive_instcombine.rs",
+            // CodeGenPrepare.cpp's `AddrMode.InBounds`: a mode stays in
+            // bounds while every GEP it folds is, and the sunk address is made
+            // `inbounds` on that (`CreatePtrAdd(.., "sunkaddr",
+            // AddrMode.InBounds)`); it puts the flag on new GEPs and takes
+            // none off an instruction.
+            "cgpaddr.rs",
+            // InstCombineCalls.cpp's `abs` folds read a `neg`'s and a `mul`'s
+            // `nsw` and set it on the new instruction only.
+            "combine_abs.rs",
+            // `ptrtoint` of a GEP chain is adds carrying the GEP's `nuw`
+            // (`EmitGEPOffsets`); the GEP is read, not changed.
+            "combine_ptrcast.rs",
+            // `visitSwitchInst`'s `switch (X << C)` is `switch X` when the
+            // `shl` is `nuw` or `nsw`; the `shl` is read, never rewritten.
+            "combine_switch.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =
