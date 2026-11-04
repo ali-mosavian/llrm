@@ -58,7 +58,7 @@
 //! # See also
 //! [`crate::backend::masm`] for the items, `asm` for the encoder.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fmt;
 
 use llrm_debug::{DebugObjectTarget, Described};
@@ -649,6 +649,21 @@ fn stack_probed(
     module
 }
 
+/// The pin states no frame address at an exit on Darwin or Windows
+/// (`X86FrameLowering::emitEpilogue`: `NeedsDwarfCFI` is off for them); the
+/// format decides, as the triple does.
+fn exits_unstated(
+    mut module: masm::Module,
+    format: Format,
+) -> masm::Module {
+    if matches!(format, Format::MachO | Format::Coff) {
+        for procedure in &mut module.procedures {
+            procedure.registers.exit_cfi = false;
+        }
+    }
+    module
+}
+
 /// [`built`] for the writer of `format`: what that format's object holds.
 pub fn built_for(
     module: &masm::Module,
@@ -667,7 +682,7 @@ fn built_inner(
     format: Format,
     objects: &dyn DebugObjectTarget,
 ) -> Result<Described, Error> {
-    let module = &stack_probed(live(module)?, format);
+    let module = &exits_unstated(stack_probed(live(module)?, format), format);
     // A procedure the program put in a segment of its own naming (`code_seg`)
     // is in that one, the rest in `code`.
     let segment_of = |procedure: usize| -> &str {
@@ -1341,11 +1356,12 @@ pub fn object_of(
         segments.iter().enumerate().filter(|(_, segment)| grouped(segment)).map(|(index, _)| index).collect();
     let omf_groups = if members.is_empty() { Vec::new() } else { vec![OmfGroup { name: "DGROUP".into(), members }] };
 
+    let publics: HashSet<&String> = module.publics.iter().collect();
     let mut table: Vec<Symbol> = symbols
         .iter()
         .map(|(name, &(section, offset))| Symbol {
             name: name.clone(),
-            binding: if module.publics.contains(name) { Binding::Public } else { Binding::Local },
+            binding: if publics.contains(name) { Binding::Public } else { Binding::Local },
             definition: Definition::Defined { section, offset },
             size: sizes.get(name).copied().unwrap_or(0),
             group: None,
@@ -1826,6 +1842,47 @@ mod tests {
                  07004809000302010a9807004800000504010f9a040006ff025b8c0900025f6400025f6600df900b000001045f676574\
                  000000c1a00d00010000a100009a00000000cb4c9c0a00c401160101cc045602558a02000074")
         );
+    }
+
+    /// `object_of` looked each symbol up in the module's public list, a
+    /// `Vec`: 4x the symbols cost about 16x the time (2400 tiny functions
+    /// spent 27% of the object write there).
+    #[test]
+    fn test_the_symbol_table_is_linear_in_the_symbols() {
+        let time = |count: usize| -> std::time::Duration {
+            let names: Vec<String> = (0..count).map(|at| format!("f{at}")).collect();
+            let module = masm::Module {
+                registers: crate::backend::registerinfo::test_regs(),
+                code: "M_TEXT".into(),
+                names: IndexMap::default(),
+                externs: vec![],
+                publics: names.clone(),
+                visibility: Default::default(),
+                aliases: vec![],
+                data: vec![],
+                procedures: vec![],
+                private: BTreeSet::new(),
+                far_bss: BTreeSet::new(),
+                code_segments: Default::default(),
+                padding: Default::default(),
+                object: llrm_target::Target::object(&llrm_x86_m16::M16),
+                requests: BTreeSet::new(),
+                stack: 0,
+                debug: None,
+            };
+            let symbols: IndexMap<String, (usize, usize)> = names.into_iter().map(|name| (name, (0, 0))).collect();
+            (0..3)
+                .map(|_| {
+                    let start = std::time::Instant::now();
+                    object_of(&module, "t.c", Vec::new(), &symbols, &IndexMap::default(), &IndexMap::default())
+                        .unwrap();
+                    start.elapsed()
+                })
+                .min()
+                .unwrap()
+        };
+        let (small, large) = (time(8000), time(32000));
+        assert!(large < small * 8, "4x the symbols took {large:?} against {small:?}");
     }
 
     /// A second name and a hidden export reach the object's symbol table: the

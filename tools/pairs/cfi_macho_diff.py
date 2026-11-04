@@ -15,6 +15,10 @@ from pathlib import Path
 from dwarf_loc_diff import run
 
 
+# macOS 11: LLVM writes no `__compact_unwind` for an OS older than 10.6, and clang's bare `x86_64-apple-macosx` is 10.4.
+TRIPLE = "x86_64-apple-macos11"
+
+
 def frames_of(text: str) -> list[list[str]]:
     """The instructions of each FDE in `llvm-objdump --dwarf=frames` text, in order; the CIE's are not repeated. Padding (`DW_CFA_nop`) is not a
     row, and an advance is its delta: the address it reaches (`to 0x84`) is where the code put it, and the code is the object's own."""
@@ -47,7 +51,7 @@ def main() -> int:
     for source in map(Path, args.sources):
         try:
             ir, opt = work / f"{source.stem}.ll", work / f"{source.stem}.opt.ll"
-            run([f"{args.pin}/clang", "--target=x86_64-apple-macosx", "-O2", "-S", "-emit-llvm", "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone", str(source), "-o", str(ir)])
+            run([f"{args.pin}/clang", f"--target={TRIPLE}", "-O2", "-S", "-emit-llvm", "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone", str(source), "-o", str(ir)])
             run([f"{args.pin}/opt", "-O2", "-vectorize-loops=false", "-vectorize-slp=false", str(ir), "-S", "-o", str(opt)])
             pin_o, our_o = work / f"{source.stem}.pin.o", work / f"{source.stem}.our.o"
             run([f"{args.pin}/llc", "-O2", "-filetype=obj", str(opt), "-o", str(pin_o)])

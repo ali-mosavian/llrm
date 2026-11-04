@@ -170,6 +170,47 @@ exit:
     assert!(after.contains("IV.S."), "{after}");
 }
 
+/// `OptimizeShadowIV` on the outer loop of a nest: `(double) r` is taken in
+/// the outer loop's own body and read by the inner loop. x_ld_div at -Os kept
+/// `fiadd [r]` in every inner trip (19+ clocks on a 486) where the pin's loop
+/// has `fadd st(3)` of a variable counting in floating point: 29,293 clocks
+/// against clang's 26,528.
+#[test]
+fn an_outer_counter_converted_in_its_loop_gets_a_floating_counter() {
+    let (changed, after) = reduced_on(
+        FLAT,
+        "define i32 @f(i32 %n) {
+entry:
+  br label %outer
+outer:
+  %r = phi i32 [ 0, %entry ], [ %rnext, %latch ]
+  %t = phi double [ 0.0, %entry ], [ %t2, %latch ]
+  %d = sitofp i32 %r to double
+  br label %inner
+inner:
+  %i = phi i32 [ 0, %outer ], [ %inext, %inner ]
+  %s = phi double [ %t, %outer ], [ %s2, %inner ]
+  %s2 = fadd double %s, %d
+  %inext = add nsw i32 %i, 1
+  %ic = icmp eq i32 %inext, %n
+  br i1 %ic, label %latch, label %inner
+latch:
+  %t2 = phi double [ %s2, %inner ]
+  %rnext = add nuw nsw i32 %r, 1
+  %rc = icmp eq i32 %rnext, 4
+  br i1 %rc, label %exit, label %outer
+exit:
+  %q = fptosi double %t2 to i32
+  ret i32 %q
+}
+",
+        "i486",
+        &[&[1], &[5], &[17]],
+    );
+    assert!(changed, "{after}");
+    assert!(after.contains("IV.S."), "{after}");
+}
+
 /// Stores at `i`, `i + x` and `i + 2x`: `opt-20` shares the one counter `i`
 /// and gives each address its own base, with no chain; so do we, and the
 /// interpreter agrees.
@@ -983,7 +1024,8 @@ b6:
 /// The first look at a loop whose exit test is edited made the users, the
 /// second made them again over the edited loop, the third (after the edge
 /// split) once more: 3 constructions for 1 loop. The edit moves no compare, so
-/// the second look keeps the first's users.
+/// the second look keeps the first's users. The module's outer loop is looked
+/// at once, for its shadow variables and exit tests as the pin does: 2 + 1.
 #[test]
 fn the_users_of_a_loop_are_kept_through_the_edit_of_its_exit_test() {
     let mut module = parsed(include_str!("lsr_insertion.ll"));
@@ -994,7 +1036,7 @@ fn the_users_of_a_loop_are_kept_through_the_edit_of_its_exit_test() {
     crate::ivusers::BUILDS.with(|made| made.set(0));
     crate::lsr_pass::reduced(context, &layout, function, &mut declared, &outer, &tti);
     let built = crate::ivusers::BUILDS.with(|made| made.get());
-    assert_eq!(built, 2, "{}", printed(&module));
+    assert_eq!(built, 3, "{}", printed(&module));
 }
 
 /// The values LSR has analysed over `loops` loops it rewrites.
@@ -1136,7 +1178,10 @@ fn the_temporaries_of_the_body_count_against_the_registers() {
     manager.add(crate::lsr_pass::LoopStrengthReduce { size: true });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
     let after = printed(&module);
-    assert!(after.contains("7013"), "the exit moved off the i32 recurrence: {after}");
+    // At LU3c the live count is exact at m16, so the offset that ends at zero
+    // takes the exit: bench/shellsort -Os keeps its bytes and memory operands
+    // (927 B, 28261) and runs 64 fewer instructions.
+    assert!(!after.contains("7013") && after.contains("icmp eq i16"), "the exit stayed on the i32 recurrence: {after}");
 }
 
 const SHELLSORT_INIT: &str = "
@@ -1414,4 +1459,52 @@ e:
     manager.run_module(&mut module, crate::indvars::tests::m32()).unwrap();
     let after = printed(&module);
     assert!(after.contains("phi ptr") && after.contains(", 7013"), "{after}");
+}
+
+/// switch_table_holes (m32 -O2): `buf[t[i - 7]] += (i8)(i + 1)` made the byte
+/// add one `lea` with the offset in the wide formula, so the i32 counter
+/// plus 25 won and the store paid a zext, an add and a trunc. The pin keeps
+/// the byte counter `{1,+,1}` and adds it as a byte.
+#[test]
+fn a_byte_sum_with_the_counter_keeps_a_byte_counter() {
+    let text = "@buf = internal global [256 x i8] zeroinitializer
+@t = internal constant [14 x i8] [i8 1, i8 2, i8 3, i8 4, i8 5, i8 6, i8 7, i8 8, i8 9, i8 10, i8 11, i8 12, i8 13, i8 14]
+
+define i32 @f(i32 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %latch ]
+  %acc = phi i32 [ 0, %entry ], [ %acc2, %latch ]
+  %next = add nuw nsw i32 %i, 1
+  %k = add i32 %i, -7
+  %in = icmp ult i32 %k, 14
+  %k16 = trunc i32 %k to i16
+  %bit = lshr i16 8707, %k16
+  %hit = trunc i16 %bit to i1
+  %go = select i1 %in, i1 %hit, i1 false
+  br i1 %go, label %body, label %latch
+body:
+  %slot = getelementptr inbounds i8, ptr @t, i32 %k
+  %idx8 = load i8, ptr %slot
+  %idx = zext i8 %idx8 to i32
+  %p = getelementptr inbounds i8, ptr @buf, i32 %idx
+  %old = load i8, ptr %p
+  %step = trunc nuw nsw i32 %next to i8
+  %sum = add i8 %old, %step
+  store i8 %sum, ptr %p
+  br label %latch
+latch:
+  %one = phi i32 [ 1, %body ], [ 0, %loop ]
+  %acc2 = add i32 %acc, %one
+  %c = icmp eq i32 %next, 24
+  br i1 %c, label %exit, label %loop
+exit:
+  ret i32 %acc2
+}
+";
+    let (changed, after) = reduced_on(FLAT, text, "i486", &[&[0]]);
+    assert!(changed, "{after}");
+    assert!(after.contains("phi i8"), "{after}");
+    assert!(!after.contains(" to i8"), "{after}");
 }

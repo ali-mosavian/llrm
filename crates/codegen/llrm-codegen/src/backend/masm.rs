@@ -1475,6 +1475,7 @@ fn parts(
         !omit
             && procedure.entry == 0
             && (reserve != 0
+                || procedure.registers.kept
                 || roots.contains(&procedure.body.regs().root(procedure.registers.pointer))
                 || procedure.callees.values().any(|one| may_address_frame(&one.code)))
     };
@@ -2262,7 +2263,9 @@ fn built(
                     let marks = cfi.after(what, &bp);
                     let ends = matches!(what.op, Operation::Return | Operation::Jump);
                     out.push(item);
-                    out.extend(marks);
+                    if procedure.registers.exit_cfi {
+                        out.extend(marks);
+                    }
                     ends
                 }
                 Item::Callee(Callee { tail: true, .. }) => {
@@ -2272,7 +2275,9 @@ fn built(
                 Item::Mark(Mark::Pops(bytes)) => {
                     let marks = cfi.after_pops(*bytes);
                     out.push(item);
-                    out.extend(marks);
+                    if procedure.registers.exit_cfi {
+                        out.extend(marks);
+                    }
                     false
                 }
                 _ => {
@@ -2284,7 +2289,7 @@ fn built(
                 cfi = done.clone();
                 // Nothing in this function follows its last exit: a directive
                 // there would open the next function's frame.
-                if last_label.is_some_and(|label| label > at) {
+                if procedure.registers.exit_cfi && last_label.is_some_and(|label| label > at) {
                     out.push(done.restate());
                 }
             }
@@ -4272,6 +4277,8 @@ mod tests {
             wrap_split_size: false,
             slot_scratch: None,
             free: false,
+            kept: false,
+            exit_cfi: true,
         };
         let procedure = Procedure {
             name: "_get".into(),
@@ -4324,6 +4331,8 @@ mod tests {
                 wrap_split_size: false,
                 slot_scratch: None,
                 free: false,
+                kept: false,
+                exit_cfi: true,
             };
             let procedure = Procedure {
                 name: "_get".into(),
@@ -4395,6 +4404,8 @@ mod tests {
             wrap_split_size: false,
             slot_scratch: None,
             free: false,
+            kept: false,
+            exit_cfi: true,
         };
         let procedure = Procedure {
             name: "_get".into(),
@@ -4568,6 +4579,8 @@ mod tests {
             wrap_split_size: false,
             slot_scratch: None,
             free: false,
+            kept: false,
+            exit_cfi: true,
         };
         let procedure = Procedure {
             name: "_get".into(),
@@ -4752,6 +4765,8 @@ mod tests {
                 wrap_split_size: false,
                 slot_scratch: None,
                 free: false,
+                kept: false,
+                exit_cfi: true,
             };
             let procedure = Procedure {
                 name: "_get".into(),

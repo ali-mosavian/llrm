@@ -272,8 +272,8 @@ pub fn slice(
     own_parts.hash(&mut own);
     let named = named(context, function, unit.metadata);
     let mut cache = FACTS.with(|cache| cache.take());
-    if !cache.outer.as_ref().is_some_and(|then| std::rc::Rc::ptr_eq(then, held)) {
-        cache = Facts { outer: Some(std::rc::Rc::clone(held)), ..Facts::default() };
+    if !cache.outer.as_ref().and_then(std::rc::Weak::upgrade).is_some_and(|then| std::rc::Rc::ptr_eq(&then, held)) {
+        cache = Facts { outer: Some(std::rc::Rc::downgrade(held)), ..Facts::default() };
     }
     unit.id.is_some_and(|id| named.contains(&id)).hash(&mut own);
     let summaries = outer.cached_ref::<Summaries>().and_then(|one| one.as_ref().ok());
@@ -374,7 +374,9 @@ pub fn slice(
 /// for the bodies that ask.
 #[derive(Default)]
 struct Facts {
-    outer: Option<std::rc::Rc<Outer>>,
+    /// Weak: the proxy's listing of declarations is brought up to date in
+    /// place only while nothing else holds it.
+    outer: Option<std::rc::Weak<Outer>>,
     /// Its declaration's number, what the callee does to memory and its
     /// summary.
     each: HashMap<GlobalId, (u64, Option<u64>, Option<u64>)>,

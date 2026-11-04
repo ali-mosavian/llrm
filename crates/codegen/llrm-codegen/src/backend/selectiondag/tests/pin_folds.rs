@@ -67,6 +67,9 @@ impl CombineHooks for Asks {
     fn rebuild_brcond_condition(&self) -> bool {
         true
     }
+    fn fold_bin_op_into_select(&self) -> bool {
+        true
+    }
 }
 
 fn xor_of_masked(dag: &mut SelectionDAG) {
@@ -878,4 +881,38 @@ fn a_compare_of_a_compare_with_one_is_the_inverse_compare() {
     assert_eq!(dag.opcode(cond), ISD::SetCC);
     assert_eq!(dag.operand(cond, 0), x);
     assert!(matches!(dag.node(dag.operand(cond, 2)).data, NodeData::CondCode(CondCode::SetUGe)));
+}
+
+/// `shl (select c, 1, 2), 2` stayed a shift of a select; the pin folds the
+/// constant into the select, `select c, 4, 8` (bintree -O2, 2200 instructions).
+#[test]
+fn a_shift_of_a_select_of_constants_is_a_select_of_shifted_constants() {
+    let mut dag = dag();
+    let c = dag.get_register(EVT::I1, 5);
+    let (one, two) = (dag.get_constant(1, EVT::I32), dag.get_constant(2, EVT::I32));
+    let sel = dag.get_node(ISD::Select, EVT::I32, &[c, one, two]);
+    let root = dag.get_node(ISD::Shl, EVT::I32, &[sel, two]);
+    dag.set_root(root);
+    DagCombiner::new(&mut dag, &mut Asks, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::Select);
+    assert_eq!(dag.constant(dag.operand(root, 1)), Some(4));
+    assert_eq!(dag.constant(dag.operand(root, 2)), Some(8));
+}
+
+/// `and (select c, 0, -1), x` took no part of x into the select; the pin
+/// makes it `select c, 0, x`.
+#[test]
+fn an_and_of_a_select_of_zero_and_all_ones_takes_the_operand_into_the_select() {
+    let mut dag = dag();
+    let (c, x) = (dag.get_register(EVT::I1, 5), dag.get_register(EVT::I32, 6));
+    let (zero, ones) = (dag.get_constant(0, EVT::I32), dag.get_constant(u64::MAX as u128, EVT::I32));
+    let sel = dag.get_node(ISD::Select, EVT::I32, &[c, zero, ones]);
+    let root = dag.get_node(ISD::And, EVT::I32, &[sel, x]);
+    dag.set_root(root);
+    DagCombiner::new(&mut dag, &mut Asks, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::Select);
+    assert_eq!(dag.constant(dag.operand(root, 1)), Some(0));
+    assert_eq!(dag.operand(root, 2), x);
 }

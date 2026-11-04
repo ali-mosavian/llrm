@@ -1,4 +1,5 @@
 """Regression tests of the instrument: each name says what went wrong and what it produced."""
+import re
 import os
 import json
 from pathlib import Path
@@ -273,6 +274,7 @@ def test_long_double_is_one_width_in_llrm_and_the_reference(tmp_path, built):
         work, done = build_ld(tmp_path, width, built)
         assert done.returncode == 0 and "FAIL" not in done.stdout, (width, done.stdout, done.stderr)
         assert (work / "ld").read_text() == str(width)
+        assert re.fullmatch(r"[0-9a-f]{12}\+[0-9a-f]{12}", (work / "o" / "x_ldmath.cc").read_text()), "build.sh stamps the llrm-cc and llrm-llc it used"
         assert bss_bytes(work) == bss_bytes(work, "gccO2") == 3 * 48 * element, (width, bss_bytes(work), bss_bytes(work, "gccO2"))
 
 

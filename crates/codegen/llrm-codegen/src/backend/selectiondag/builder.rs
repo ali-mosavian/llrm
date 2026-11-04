@@ -90,6 +90,9 @@ pub struct BuilderTarget {
     pub trap_unreachable: bool,
     /// The integer widths with a register class, ascending.
     pub legal_ints: Vec<u32>,
+    /// The target description has no floating-point registers: the same as
+    /// `use-soft-float` on every function (`TypeSoftenFloat`).
+    pub soft_float: bool,
     /// The library routines the target's runtime has, each with the calling
     /// convention and the symbol a call of it uses (`options.libcalls`); none
     /// given, the names its `c.toml` states.
@@ -334,6 +337,7 @@ impl BuilderTarget {
             switch_optimize: true,
             trap_unreachable: false,
             legal_ints: vec![8, 16, 32],
+            soft_float: false,
             libcalls: None,
             stack_align: None,
             float_store: false,
@@ -358,6 +362,7 @@ impl BuilderTarget {
         BuilderTarget {
             dag: DagConfig { pointer: EVT::I64, offset_folding: true, ..DagConfig::default() },
             legal_ints: vec![8, 16, 32, 64],
+            soft_float: false,
             ..BuilderTarget::m32()
         }
     }
@@ -373,6 +378,7 @@ impl BuilderTarget {
             switch_optimize: true,
             trap_unreachable: false,
             legal_ints: vec![8, 16, 32],
+            soft_float: false,
             libcalls: None,
             stack_align: None,
             float_store: false,
@@ -584,6 +590,7 @@ impl<'a> Builder<'a> {
                 ),
             );
         let mut dag = SelectionDAG::new(DagConfig { fp_extended, ..target.dag.clone() });
+        let module_tables = info.module_tables.clone();
         let tables = info
             .tables
             .get_or_insert_with(|| {
@@ -591,24 +598,34 @@ impl<'a> Builder<'a> {
                 // every symbol under the static relocation
                 // model, which these targets (DOS objects, no
                 // PIC) always use.
+                let (global_names, local_symbols) = module_tables.unwrap_or_else(|| {
+                    (
+                        std::rc::Rc::new(
+                            module
+                                .globals
+                                .iter()
+                                .map(|global| global.name.as_deref().unwrap_or("").to_string())
+                                .collect(),
+                        ),
+                        std::rc::Rc::new(if target.dag.dso_local_symbols {
+                            vec![true; module.globals.len()]
+                        } else {
+                            module
+                                .globals
+                                .iter()
+                                .map(|global| {
+                                    matches!(
+                                        global.linkage,
+                                        llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
+                                    )
+                                })
+                                .collect()
+                        }),
+                    )
+                });
                 super::function_lowering::Tables {
-                    global_names: std::rc::Rc::new(
-                        module.globals.iter().map(|global| global.name.as_deref().unwrap_or("").to_string()).collect(),
-                    ),
-                    local_symbols: std::rc::Rc::new(if target.dag.dso_local_symbols {
-                        vec![true; module.globals.len()]
-                    } else {
-                        module
-                            .globals
-                            .iter()
-                            .map(|global| {
-                                matches!(
-                                    global.linkage,
-                                    llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
-                                )
-                            })
-                            .collect()
-                    }),
+                    global_names,
+                    local_symbols,
                     block_names: std::rc::Rc::new(
                         (0..function.block_capacity())
                             .map(|at| {
@@ -845,7 +862,19 @@ impl Builder<'_> {
         if vt == MVT::Far.into() {
             return Ok((EVT::I16, 2));
         }
+        if let Some(int) = self.soft_float_integer(vt) {
+            return self.parts(int);
+        }
         self.parts(vt)
+    }
+
+    /// Under soft float a float crosses blocks in the integer registers of
+    /// its width; none of the float types has a register.
+    fn soft_float_integer(
+        &self,
+        vt: EVT,
+    ) -> Option<EVT> {
+        (self.soft_float() && vt.is_floating_point()).then(|| EVT::integer(vt.size_in_bits()))
     }
 
     /// `getNumRegistersForCallingConv`: an integer a convention returns in
@@ -1010,7 +1039,15 @@ impl Builder<'_> {
         }
         let mut fixed = 0;
         for (at, &arg) in self.function.parameters().to_vec().iter().enumerate() {
-            let vt = self.type_of(self.function.value(arg).ty)?;
+            let declared = self.type_of(self.function.value(arg).ty)?;
+            // No FPU: a float in registers arrives as the integer of its width.
+            let soft = self.soft_float()
+                && declared.is_floating_point()
+                && matches!(
+                    self.convention.parameters.get(at),
+                    Some(Parameter::Registers(_))
+                );
+            let vt = if soft { EVT::integer(declared.size_in_bits()) } else { declared };
             // the registers a convention names split a value as
             // `getNumRegisters` does
             let (mut part_vt, parts) = match self.convention.parameters.get(at) {
@@ -1117,6 +1154,7 @@ impl Builder<'_> {
             } else {
                 pieces[0]
             };
+            let value = if soft { self.dag.get_node(ISD::BitCast, declared, &[value]) } else { value };
             self.node_map.insert(arg, value);
             if self.function.parameter_attrs.get(at).is_some_and(|attrs| {
                 attrs
@@ -1686,7 +1724,7 @@ impl Builder<'_> {
                 first: 0,
             }
         } else {
-            convention_for(
+            crate::backend::isel::convention_for_abi(
                 self.module,
                 self.layout,
                 self.full_arch()?,
@@ -1696,6 +1734,7 @@ impl Builder<'_> {
                 variadic,
                 &arg_types,
                 &info.argument_attrs,
+                self.soft_float(),
             )
             .map_err(|_| Refused("call the convention does not describe"))?
         };
@@ -1717,7 +1756,7 @@ impl Builder<'_> {
         if let Some(declared) =
             declared.filter(|declared| !runtime && *declared < arg_types.len() && !variadic && plan.popped > 0)
         {
-            plan.popped = convention_for(
+            plan.popped = crate::backend::isel::convention_for_abi(
                 self.module,
                 self.layout,
                 self.full_arch()?,
@@ -1727,6 +1766,7 @@ impl Builder<'_> {
                 variadic,
                 &arg_types[..declared],
                 &info.argument_attrs,
+                self.soft_float(),
             )
             .map_err(|_| Refused("call the convention does not describe"))?
             .popped;
@@ -1739,9 +1779,17 @@ impl Builder<'_> {
             None => called,
         };
         let mut values = Vec::new();
-        for argument in arguments {
+        for (at, argument) in arguments.iter().enumerate() {
             let value = self.get_value(*argument)?;
-            let value = self.pass_float_bits(*argument, value);
+            // The dword is for a stack cell or an integer register; a target
+            // that owns the call (`calling`) or an xmm argument takes the
+            // float.
+            let integer = self.calling().is_none()
+                && !matches!(
+                    plan.parameters.get(at),
+                    Some(Parameter::Registers(regs)) if regs.iter().any(|reg| reg.is_xmm())
+                );
+            let value = if integer { self.pass_float_bits(*argument, value) } else { value };
             self.parts(self.dag.value_type(value))?;
             values.push(value);
         }
@@ -1880,7 +1928,10 @@ impl Builder<'_> {
     /// (its load has no other user) is passed as the dword it is. The pin
     /// loads it onto the x87 stack and stores it to the argument slot (`fld;
     /// fstp`); the integer load folds (`visit_bitcast`) and the store becomes
-    /// `push dword ptr [m]`.
+    /// `push dword ptr [m]`. Only for an argument the convention passes in a
+    /// stack cell or an integer register: in a float register (xmm0, s0) the
+    /// bits are the wrong class
+    /// (`movd xmm0, xmm0`; arm64 `fmov w0, s16`; wasm an `i32` for an `f32`).
     fn pass_float_bits(
         &mut self,
         argument: Operand,
@@ -1928,6 +1979,8 @@ impl Builder<'_> {
         &self,
         vt: EVT,
     ) -> Result<Vec<EVT>, Refused> {
+        // Without floating-point registers a float is the integer of its width.
+        let vt = self.soft_float_integer(vt).unwrap_or(vt);
         // A float is one part, in a register of its own class: the target's
         // `accepts` says which.
         if vt.is_floating_point() {
@@ -1954,7 +2007,13 @@ impl Builder<'_> {
         value: SDValue,
         ext: Ext,
     ) -> Result<Vec<SDValue>, Refused> {
-        let vt = self.dag.value_type(value);
+        let mut value = value;
+        let mut vt = self.dag.value_type(value);
+        if let Some(int) = self.soft_float_integer(vt) {
+            // `getCopyToParts` of a softened float: its bits as an integer.
+            vt = int;
+            value = self.dag.get_node(ISD::BitCast, vt, &[value]);
+        }
         let parts = self.calling_parts(vt)?;
         if parts.len() == 1 {
             let narrow = vt.size_in_bits() < parts[0].size_in_bits();
@@ -1977,6 +2036,11 @@ impl Builder<'_> {
         assert: Option<ISD>,
         pointer: bool,
     ) -> SDValue {
+        if let Some(int) = self.soft_float_integer(vt) {
+            // `getCopyFromParts` of a softened float: the integer, bitcast.
+            let bits = self.join_from_calling(parts, int, None, false);
+            return self.dag.get_node(ISD::BitCast, vt, &[bits]);
+        }
         if let [one] = parts {
             if self.dag.value_type(*one) == vt {
                 return *one;
@@ -2477,9 +2541,13 @@ impl Builder<'_> {
             let flags = SDValue { node: flags.node, res: 0 };
             return Ok(Some(self.dag.get_node(super::x86isd::LLRM_CALL_FLAGS, vt, &[flags])));
         }
-        if vt.is_floating_point() {
+        // No FPU: a float comes back as the integer of its width.
+        let soft = self.soft_float() && vt.is_floating_point();
+        if vt.is_floating_point() && !soft {
             return Ok(Some(self.float_call_result(vt, plan.float_result, chain, glue)));
         }
+        let float_vt = vt;
+        let vt = if soft { EVT::integer(vt.size_in_bits()) } else { vt };
         let (part_vt, parts) = self.parts_in(vt, plan.returns.len())?;
         Self::at_most_two(parts)?;
         if plan.returns.len() != parts {
@@ -2501,7 +2569,7 @@ impl Builder<'_> {
         } else {
             pieces[0]
         };
-        Ok(Some(result))
+        Ok(Some(if soft { self.dag.get_node(ISD::BitCast, float_vt, &[result]) } else { result }))
     }
 
     /// The convention names a result register by its widest view; the DAG
@@ -2613,6 +2681,11 @@ impl Builder<'_> {
         Ok(())
     }
 
+    /// `useSoftFloat()` of the function being built.
+    fn soft_float(&self) -> bool {
+        self.target.soft_float || crate::backend::isel::soft_float(&self.function.attrs)
+    }
+
     fn visit_ret(
         &mut self,
         instruction: &llrm_mir::module::Instruction,
@@ -2674,6 +2747,13 @@ impl Builder<'_> {
         } else if let Some(&operand) = instruction.operands.first() {
             let value = self.get_value(operand)?;
             let vt = self.dag.value_type(value);
+            // No FPU: a float leaves as the integer of its width.
+            let (value, vt) = if self.soft_float() && vt.is_floating_point() {
+                let int = EVT::integer(vt.size_in_bits());
+                (self.dag.get_node(ISD::BitCast, int, &[value]), int)
+            } else {
+                (value, vt)
+            };
             if let (true, Some(xmm)) = (vt.is_floating_point(), self.convention.float_result) {
                 // `LowerReturn` with SSE: copied to the vector register
                 let copy = self.dag.get_copy_to_phys_reg(chain, xmm, value, glue);
@@ -2881,6 +2961,10 @@ impl Builder<'_> {
         vt: EVT,
         pointer: bool,
     ) -> Result<SDValue, Refused> {
+        if let Some(int) = self.soft_float_integer(vt) {
+            let bits = self.copy_from_reg(reg, int, false)?;
+            return Ok(self.dag.get_node(ISD::BitCast, vt, &[bits]));
+        }
         let (reg_vt, parts) = self.register_parts(vt)?;
         let entry = self.dag.entry_node();
         if parts > 1 {
@@ -2918,7 +3002,12 @@ impl Builder<'_> {
         reg: u32,
         extend: ISD,
     ) -> Result<(), Refused> {
-        let vt = self.dag.value_type(value);
+        let mut vt = self.dag.value_type(value);
+        let mut value = value;
+        if let Some(int) = self.soft_float_integer(vt) {
+            value = self.dag.get_node(ISD::BitCast, int, &[value]);
+            vt = int;
+        }
         let (reg_vt, parts) = self.register_parts(vt)?;
         let entry = self.dag.entry_node();
         if parts > 1 {
@@ -2996,7 +3085,7 @@ impl Builder<'_> {
             Opcode::ExtractValue(indices) => self.visit_extract_value(&instruction, indices)?,
             Opcode::InsertValue(indices) => self.visit_insert_value(&instruction, indices)?,
             Opcode::Load { align, volatile } => self.visit_load(inst, &instruction, *align, *volatile)?,
-            Opcode::Store { align, volatile } => self.visit_store(&instruction, *align, *volatile)?,
+            Opcode::Store { align, volatile } => self.visit_store(inst, &instruction, *align, *volatile)?,
             Opcode::GetElementPtr { source } => self.visit_gep(&instruction, *source)?,
             Opcode::Br => self.visit_br(&instruction)?,
             Opcode::Alloca { .. }
@@ -3521,6 +3610,27 @@ impl Builder<'_> {
         Ok(MemInfo { mem_vt, align, volatile, base, ext: None, space, ordering: None })
     }
 
+    /// `MachinePointerInfo::V` and the `!tbaa` tag, for a target whose
+    /// `useAA` is true: where the access has no better base.
+    fn with_location(
+        &mut self,
+        info: MemInfo,
+        inst: llrm_mir::module::InstId,
+        pointer: Operand,
+    ) -> MemInfo {
+        if !self.dag.config().use_aa || info.base != MemBase::Unknown {
+            return info;
+        }
+        let location = super::dag::MemLocation {
+            pointer,
+            tbaa: llrm_mir::alias::tag(self.function, inst),
+            bytes: info.mem_vt.size_in_bits().div_ceil(8),
+        };
+        self.dag.mem_locations.push(location);
+        let id = std::num::NonZeroU32::new(self.dag.mem_locations.len() as u32).expect("one location pushed");
+        MemInfo { base: MemBase::Value(id), ..info }
+    }
+
     fn visit_load(
         &mut self,
         inst: llrm_mir::module::InstId,
@@ -3533,6 +3643,7 @@ impl Builder<'_> {
         }
         let ptr = self.get_value(instruction.operands[0])?;
         let info = self.mem_info(instruction.ty, align, volatile, instruction.operands[0])?;
+        let info = self.with_location(info, inst, instruction.operands[0]);
         // `DAG.getRoot()`, not the builder's: a non-volatile load leaves the
         // pending loads alone
         let root = if volatile { self.root() } else { self.dag.get_root() };
@@ -3554,6 +3665,7 @@ impl Builder<'_> {
 
     fn visit_store(
         &mut self,
+        inst: llrm_mir::module::InstId,
         instruction: &llrm_mir::module::Instruction,
         align: Option<u64>,
         volatile: bool,
@@ -3572,6 +3684,7 @@ impl Builder<'_> {
         let src = self.get_value(instruction.operands[0])?;
         let ptr = self.get_value(instruction.operands[1])?;
         let info = self.mem_info(value_type, align, volatile, instruction.operands[1])?;
+        let info = self.with_location(info, inst, instruction.operands[1]);
         let root = if volatile { self.root() } else { self.memory_root() };
         let address = self.dag.get_object_ptr_offset(ptr, 0);
         let store = self.dag.get_store(root, src, address, info);
@@ -4026,6 +4139,7 @@ mod f80_tests {
         let mut info = FunctionLoweringInfo::new(function);
         let target = BuilderTarget {
             legal_ints: vec![8],
+            soft_float: false,
             target_nodes: Some(TargetNodes {
                 call: super::super::x86isd::CALL,
                 ret: super::super::x86isd::RET_GLUE,
@@ -4151,6 +4265,7 @@ mod f80_tests {
         let mut info = FunctionLoweringInfo::new(function);
         let target = BuilderTarget {
             legal_ints: vec![8],
+            soft_float: false,
             target_nodes: Some(TargetNodes {
                 call: super::super::x86isd::CALL,
                 ret: super::super::x86isd::RET_GLUE,
@@ -4257,6 +4372,7 @@ mod f80_tests {
         let mut info = FunctionLoweringInfo::new(function);
         let target = BuilderTarget {
             legal_ints: vec![8],
+            soft_float: false,
             target_nodes: Some(TargetNodes {
                 call: super::super::x86isd::CALL,
                 ret: super::super::x86isd::RET_GLUE,

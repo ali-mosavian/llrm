@@ -1299,6 +1299,35 @@ define i32 @f(i32 %a, i32 %b) {
     assert!(places.contains(&(7, 5)) && places.contains(&(8, 12)), "{places:?}");
 }
 
+/// Every function rebuilt the module's global-name table, so N functions in
+/// a module of N globals cost N^2 (27% of the 2400-function assemble).
+#[test]
+fn the_functions_of_a_module_share_one_table_of_global_names() {
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a) {
+entry:
+  ret i32 %a
+}
+define i32 @g(i32 %a) {
+entry:
+  ret i32 %a
+}
+",
+    )
+    .expect("parses");
+    let mut pool = crate::backend::constpool::Pool::new(module.globals.len() as i64);
+    let cpu = crate::backend::cpu::profile("386").expect("a cpu");
+    let mut select = |name: &str| {
+        super::dag_function::selected_in_pool(&module, name, &llrm_x86_m16::M16, cpu, &[], None, &mut pool)
+            .unwrap_or_else(|why| panic!("{}", why.0));
+        pool.symbols.clone().expect("the tables are kept for the next function")
+    };
+    let first = select("f");
+    let second = select("g");
+    assert!(std::rc::Rc::ptr_eq(&first.0, &second.0), "g rebuilt the table f made");
+}
+
 /// The scope and inlining call of a `!DILocation` were dropped: a function
 /// inlined twice left no way to tell the two bodies' instructions apart.
 #[test]
