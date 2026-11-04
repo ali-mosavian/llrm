@@ -469,7 +469,8 @@ mod tests {
     #[test]
     fn test_the_operands_of_one_instruction_need_not_be_adjacent() {
         use crate::liveness::liverangecalc::Operand;
-        let operand = |instr, is_def, reads_reg| Operand { instr, is_def, reads_reg, early_clobber: false };
+        let operand =
+            |instr, is_def, reads_reg| Operand { instr, is_def, reads_reg, early_clobber: false, lanes: Operand::ALL };
         let got = by_instruction(&[operand(7, false, true), operand(9, false, true), operand(7, true, false)]);
         assert_eq!(got, vec![(7, true, true), (9, true, false)]);
     }

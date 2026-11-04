@@ -830,7 +830,12 @@ pub(crate) fn llvm_order(
                 Box::new(loopunrollandjam::LoopUnrollAndJam {
                     opt_level: if applied.options.limits.target_percent >= 200 { 3 } else { 2 },
                     opt_size: size,
-                    options: loopunrollandjam::JamOptions { on: true, ..Default::default() },
+                    options: loopunrollandjam::JamOptions {
+                        on: true,
+                        clean: true,
+                        pre: applied.options.pre,
+                        ..Default::default()
+                    },
                 }),
             ),
             // LoopUnrollPass (l.1476) with the full unroll the target allows
@@ -1165,6 +1170,13 @@ pub fn recorded(
     let again_applied =
         Applied { dump: applied.dump.as_ref().map(|one| one.join("interprocedural")), ..applied.clone() };
     let mut again = Fixed::linear(&again_applied, Phase::Simplify);
+    // The pin follows IPSCCP, ArgumentPromotion and DeadArgumentElimination
+    // with `GlobalCleanup` (PromotePass, InstCombine, SimplifyCFG,
+    // PassBuilderPipelines.cpp#L1241) and runs the function simplification
+    // pipeline once per body, in the CGSCC walk: these stages leave a body to
+    // the walk's run, not a second full one (GVN ran five times on `main` of
+    // memory_expansion, the pin's twice).
+    let mut cleaned = Fixed::linear(&again_applied, Phase::Cleanup);
     // The copies of a tree recursion in itself and then its tail-call
     // elimination, after the clones ipa-cp made (D10).
     let late = Some({
@@ -1189,8 +1201,14 @@ pub fn recorded(
             let done =
                 // The stage that only retargets loads and stores of globals
                 // keeps GlobalsAA past its bodies, as the walk's runs do.
-                rerun(module, analyses, id, &mut again, stage == "globalsra.")
-                    .unwrap_or_else(|error| panic!("pipeline: {error}"));
+                rerun(
+                    module,
+                    analyses,
+                    id,
+                    if matches!(stage, "promote." | "ipsccp." | "ipa-deadargs.") { &mut cleaned } else { &mut again },
+                    stage == "globalsra.",
+                )
+                .unwrap_or_else(|error| panic!("pipeline: {error}"));
             TRIGGER.with(|trigger| trigger.borrow_mut().clear());
             done
         }),
@@ -1385,7 +1403,9 @@ fn rerun(
 ) -> Result<(), String> {
     let layout = analyses.program().layout.clone();
     let outer = analyses.outer(module);
-    let mut declared = Declared::over(std::rc::Rc::clone(&outer.globals), module.metadata.len());
+    let mut declared = Declared::over(std::rc::Rc::clone(&outer.globals), module.metadata.len())
+        .with_assume_declared(outer.assume_declared())
+        .with_guard_declared(outer.guard_declared());
     if fixed.wants_sizes() {
         declared.count_referenced(module);
     }

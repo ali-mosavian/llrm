@@ -8,6 +8,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod tempdir;
+
 use llrm_m68k::compile::{Item, Options, items, items_with};
 use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::kernels::{Arg, data, library_data, library_table, program_with_data, source_in, table};
@@ -132,8 +134,7 @@ fn gcc(
 
 fn main() {
     let llvm = PathBuf::from(std::env::var("LLVM_M68K").expect("LLVM_M68K: the pin's m68k build, its bin directory"));
-    let dir = std::env::temp_dir().join(format!("llrm-m68k-bench-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = tempdir::Scratch::new("bench");
     let set = std::env::args().nth(1).unwrap_or_else(|| "kernels".to_owned());
     let kernel_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("bench").join(&set);
     let (rows, block): (Vec<(&str, Vec<Arg>, i32, bool)>, Vec<u8>) = if set == "library" {
@@ -252,5 +253,4 @@ fn main() {
             if verdicts.iter().all(|one| one == "ok") { format!("{expected} all") } else { verdicts.join(" / ") };
         println!("| {name} | {} | {} |", cells.join(" | "), counts.join(" | ") + " | " + &verdict);
     }
-    std::fs::remove_dir_all(&dir).ok();
 }

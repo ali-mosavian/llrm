@@ -91,7 +91,6 @@ pub fn program(
     let (_, text) = without_triple(text);
     let text = if platform == Platform::Darwin { without_va_arg(&text) } else { text };
     let mut module = llrm_mir::parse::module(&text).map_err(|error| error.to_string())?;
-    module.refuse_aliases("arm64")?;
     llrm_mir::parse::upgrade_lifetimes(&mut module);
     // Atomics are calls the mid-end moves nothing across; the selector makes
     // them instructions.
@@ -412,6 +411,8 @@ pub fn assembly(
     level: impl Into<Level>,
 ) -> Result<String, String> {
     let mut program = program(text, platform)?;
+    // The text carries no alias: refuse it rather than drop the symbol.
+    program.modules[0].refuse_aliases("arm64")?;
     let level = level.into();
     if level != Level::O0 {
         optimized_at(&mut program, level)?;

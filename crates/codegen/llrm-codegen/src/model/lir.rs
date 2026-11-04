@@ -144,6 +144,10 @@ pub struct Insn {
     /// `eliminateRegSequence` makes from a `REG_SEQUENCE`. Liveness still takes
     /// the destination whole; the lane model reads this (C1 step 1).
     pub lane_copies: Vec<(u32, u32, llrm_lir::valuelanes::ValueLanes)>,
+    /// The lanes of a value it defines, where it defines less than all of
+    /// them (the `:subN` on a def operand); a value not listed is defined
+    /// whole.
+    pub def_lanes: Vec<(u32, llrm_lir::valuelanes::ValueLanes)>,
     /// It defines a narrower part of a value than the value is read at, and the
     /// value is not live before it: the rest of the register is undefined (the
     /// `implicit-def` `VirtRegRewriter` puts on a sub-register def whose other
@@ -177,6 +181,11 @@ pub struct Insn {
     /// The source line of the MIR instruction it was selected from (`!dbg`).
     pub line: Option<SrcLoc>,
     pub debug: DebugTags,
+    /// What the target says it reads and writes, as lanes: the decoder answers
+    /// with it before it looks at the instruction's name. A target whose
+    /// instructions the decoder cannot read (arm64's, which the spike
+    /// converter names by their variant) states each one's effect here.
+    pub declared: Option<(crate::backend::lanes::Lanes, crate::backend::lanes::Lanes)>,
     /// What it does to the registers (`liveness::effect`), worked out once for
     /// everything that asks.
     pub effect: Derived<(u32, Option<crate::backend::liveness::Effect>)>,
@@ -540,6 +549,9 @@ impl Insn {
         for &value in self.defines.iter().chain(&self.uses).chain(&self.undefs).chain(&self.partial_defs) {
             any |= moves(value)?;
         }
+        for &(value, _) in &self.def_lanes {
+            any |= moves(value)?;
+        }
         for &(from, to, _) in &self.lane_copies {
             any |= moves(from)? | moves(to)?;
         }
@@ -584,6 +596,7 @@ impl Insn {
         made.uses = self.uses.iter().map(value).collect::<Result<_, E>>()?;
         made.undefs = self.undefs.iter().map(value).collect::<Result<_, E>>()?;
         made.partial_defs = self.partial_defs.iter().map(value).collect::<Result<_, E>>()?;
+        made.def_lanes = self.def_lanes.iter().map(|&(v, lanes)| Ok((rename(v)?, lanes))).collect::<Result<_, E>>()?;
         made.lane_copies = self
             .lane_copies
             .iter()
@@ -642,6 +655,7 @@ impl Insn {
             undefs: Vec::new(),
             partial_defs: Vec::new(),
             lane_copies: Vec::new(),
+            def_lanes: Vec::new(),
             undef_super: false,
             clobbers: BTreeSet::new(),
             clobbers_high: BTreeSet::new(),
@@ -662,6 +676,7 @@ impl Insn {
             pair: None,
             line: None,
             debug: DebugTags::default(),
+            declared: None,
             effect: Derived::default(),
             register_effects: Default::default(),
             ident: Derived::default(),
@@ -680,6 +695,17 @@ impl Insn {
     pub fn id(&self) -> u64 {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         *self.ident.get_or_init(|| NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+
+    /// `self`, an edited copy of `of`, standing for it: it keeps `of`'s
+    /// identity, for a caller that puts the original back by it.
+    #[must_use]
+    pub fn standing_for(
+        self,
+        of: &Insn,
+    ) -> Insn {
+        let _ = self.ident.0.set(of.id());
+        self
     }
 
     /// `self` told other `-g` tags. Still the same instruction, so it keeps

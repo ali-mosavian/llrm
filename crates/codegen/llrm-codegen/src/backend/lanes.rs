@@ -134,9 +134,9 @@ impl Table {
 /// built once and kept.
 fn table_of(regs: Regs) -> &'static Table {
     static FILES: Mutex<Vec<(usize, &'static Table)>> = Mutex::new(Vec::new());
-    // A file with byte registers (`al`, `ah`) has byte lanes; one without
-    // writes a root whole (arm64's `w` write clears the `x`).
-    if !regs.0.bytes.is_empty() {
+    // A file with an integer view under four bytes (`al`, `ax`) has byte lanes;
+    // one without writes a root whole (arm64's `w` write clears the `x`).
+    if regs.0.entries().any(|(_, entry)| entry.bits / 8 < 4 && entry.classes & llrm_lir::registers::class::INT != 0) {
         return &X86;
     }
     let key = regs.0 as *const _ as usize;
@@ -502,6 +502,27 @@ mod tests {
             let _file = enter(regs);
             assert_eq!(Lanes::count(), X86.lanes.len());
         }
+    }
+
+    /// An instruction the decoder cannot read (a name no table has) is of
+    /// unknown effect, so a scheduler cannot move anything across it; one
+    /// that declares its effect answers with it.
+    #[test]
+    fn a_declared_effect_answers_for_an_instruction_the_decoder_cannot_read() {
+        use std::sync::Arc;
+
+        use crate::backend::liveness;
+        use crate::model::ir::{Operation, Semantics};
+        use crate::model::lir::Insn;
+
+        let regs = Regs(&llrm_x86_m32::REGISTER_INFO);
+        let what = Semantics { name: Some("NoSuchOp".into()), ..Semantics::new(Operation::Binary) };
+        let mut one = Insn::new(0, None, Some(what), vec![1], vec![2]);
+        assert!(liveness::effect(regs, 32, &Arc::new(one.clone())).is_none(), "premise: the name is unknown");
+        let (reads, writes) = (Lanes::flags(0b1), Lanes::flags(0b10));
+        one.declared = Some((reads, writes));
+        let effect = liveness::effect(regs, 32, &Arc::new(one)).expect("declared");
+        assert_eq!((effect.reads, effect.writes), (reads, writes));
     }
 
     #[test]

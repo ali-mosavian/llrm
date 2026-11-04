@@ -40,6 +40,7 @@
 use llrm_support::hash::HashMap;
 
 use super::isd::{CondCode, ISD};
+use super::libcalls::{self, Libcall};
 use super::lowering::TargetLoweringInfo;
 use super::mvt::{EVT, MVT};
 
@@ -125,6 +126,9 @@ pub struct TargetLowering {
     /// `isSExtCheaperThanZExt`: `i32` to `i64` where the target extends signed
     /// for free (AArch64's `sxtw` in an addressing mode); no x86 override.
     sext_cheaper_i32_i64: bool,
+    /// `X86TargetLowering::BuildSDIVPow2` builds the `cmov` form of a signed
+    /// divide by a power of two: `Some(is64)`, `i64` too where `is64`.
+    sdiv_pow2_cmov: Option<bool>,
 }
 
 impl TargetLowering {
@@ -145,6 +149,24 @@ impl TargetLowering {
             libcall_names: HashMap::default(),
             libcall_symbols: HashMap::default(),
             sext_cheaper_i32_i64: false,
+            sdiv_pow2_cmov: None,
+        }
+    }
+
+    /// `RTLIB::ADD_F32` and the rest: compiler-rt's names for the `f32` and
+    /// `f64` arithmetic a soft-float target calls.
+    pub fn set_soft_float_libcall_names(&mut self) {
+        let arithmetic: [(ISD, fn(MVT) -> Libcall); 4] = [
+            (ISD::FAdd, Libcall::Add),
+            (ISD::FSub, Libcall::Sub),
+            (ISD::FMul, Libcall::Mul),
+            (ISD::FDiv, Libcall::Div),
+        ];
+        for (op, call) in arithmetic {
+            for vt in [MVT::F32, MVT::F64] {
+                let name = libcalls::name(call(vt)).expect("the pin names f32 and f64 arithmetic");
+                self.set_libcall_name(op, vt, name);
+            }
         }
     }
 
@@ -367,6 +389,23 @@ impl TargetLowering {
         self.cmov
     }
 
+    /// Whether `X86TargetLowering::BuildSDIVPow2` makes the `cmov` form for
+    /// `vt`: `canUseCMOV`, and `i16`, `i32` or (`is64Bit`) `i64` (no `i8`).
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L24348>
+    pub fn sdiv_pow2_with_cmov(
+        &self,
+        vt: EVT,
+    ) -> bool {
+        let Some(is64) = self.sdiv_pow2_cmov else {
+            return false;
+        };
+        match vt {
+            EVT::Simple(MVT::I16 | MVT::I32) => true,
+            EVT::Simple(MVT::I64) => is64,
+            _ => false,
+        }
+    }
+
     /// `isOperationLegal`.
     pub fn is_operation_legal(
         &self,
@@ -382,6 +421,19 @@ impl TargetLowering {
         vt: EVT,
     ) -> bool {
         self.types.is_type_legal(vt) && matches!(self.operation_action(op, vt), Action::Legal | Action::Custom)
+    }
+
+    /// `isOperationLegalOrCustomOrPromote`.
+    pub fn is_operation_legal_or_custom_or_promote(
+        &self,
+        op: ISD,
+        vt: EVT,
+    ) -> bool {
+        self.types.is_type_legal(vt)
+            && matches!(
+                self.operation_action(op, vt),
+                Action::Legal | Action::Custom | Action::Promote
+            )
     }
 
     /// `getTypeToPromoteTo`: the recorded type, else the next wider integer
@@ -485,10 +537,7 @@ impl TargetLowering {
         t.set_ops(&[Select, SetCC, FpExtend], &[MVT::F32, MVT::F64], Action::Expand);
         t.set_ops(&[FpToSInt, FpToUInt, SIntToFp, UIntToFp], &[MVT::I8, MVT::I16, MVT::I32, MVT::I64], Action::Expand);
         // `RTLIB::ADD_F32` and the rest: compiler-rt's names.
-        for (op, stem) in [(FAdd, "add"), (FSub, "sub"), (FMul, "mul"), (FDiv, "div")] {
-            t.set_libcall_name(op, MVT::F32, Box::leak(format!("__{stem}sf3").into_boxed_str()));
-            t.set_libcall_name(op, MVT::F64, Box::leak(format!("__{stem}df3").into_boxed_str()));
-        }
+        t.set_soft_float_libcall_names();
         t
     }
 
@@ -597,6 +646,7 @@ impl TargetLowering {
         use ISD::*;
         let mut t = TargetLowering::empty(types);
         t.cmov = features.cmov;
+        t.sdiv_pow2_cmov = features.cmov.then_some(is64);
         t.init_actions();
         let ints = [MVT::I8, MVT::I16, MVT::I32];
         // `if (VT == MVT::i64 && !Subtarget.is64Bit()) continue;`
