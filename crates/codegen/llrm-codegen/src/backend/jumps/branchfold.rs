@@ -198,8 +198,6 @@ fn flags_dead_after(
     true
 }
 
-/// An instruction `isSafeToMove` allows above a branch: a move or arithmetic
-/// on registers and constants, with nothing else it does.
 /// The two ways of a branch with the instructions both can run first moved to
 /// the front, so `hoist_common` sees them as a leading run.
 ///
@@ -209,22 +207,26 @@ fn flags_dead_after(
 /// of the kind it hoists that is the same on both ways, but sits behind an
 /// instruction of its own way that has nothing to do with it (`mov esi, 1`
 /// before `xor ecx, ecx`), is moved up first: it reads and writes nothing
-/// that any instruction ahead of it reads or writes, flags included; a call ahead
-/// of it has effects that name what it clobbers, and an instruction whose
+/// that any instruction ahead of it reads or writes, flags included; a call
+/// ahead of it has effects that name what it clobbers, and an instruction whose
 /// effects are unknown ends the scan (an -Os sweep with and without an explicit
 /// call stop: identical). One scan of each way; matching compares the liftable
-/// ones only.
+/// ones only. An instruction inside the tail both ways end with is left where
+/// it is: tail merging takes the whole tail, and a lift out of it leaves tails
+/// that no longer merge (m16 sfm16_*: a duplicated join, +4 to +7 B).
 fn lifted_pair(
     regs: llrm_lir::registers::Regs,
     bits: u32,
     first: Block,
     second: Block,
 ) -> (Block, Block) {
-    let (ours, theirs) = (liftable(regs, bits, &first), liftable(regs, bits, &second));
+    let shared = common_tail(&first, &second);
+    let (ours, theirs) = (liftable(regs, bits, &first, shared), liftable(regs, bits, &second, shared));
     let mut taken = vec![false; theirs.len()];
     let mut matched: Vec<(usize, usize)> = Vec::new();
     for &at in &ours {
-        let hit = (0..theirs.len()).find(|&slot| !taken[slot] && first.insns[at].what == second.insns[theirs[slot]].what);
+        let hit =
+            (0..theirs.len()).find(|&slot| !taken[slot] && first.insns[at].what == second.insns[theirs[slot]].what);
         if let Some(slot) = hit {
             taken[slot] = true;
             matched.push((at, theirs[slot]));
@@ -238,11 +240,28 @@ fn lifted_pair(
         let mut insns: Vec<Arc<Insn>> = block.insns[..head].to_vec();
         insns.extend(picks.iter().map(|&at| Arc::clone(&block.insns[at])));
         insns.extend(
-            block.insns.iter().enumerate().skip(head).filter(|(at, _)| !picks.contains(at)).map(|(_, insn)| Arc::clone(insn)),
+            block
+                .insns
+                .iter()
+                .enumerate()
+                .skip(head)
+                .filter(|(at, _)| !picks.contains(at))
+                .map(|(_, insn)| Arc::clone(insn)),
         );
         block.with_insns(insns)
     };
     (front(first, matched.iter().map(|m| m.0).collect()), front(second, matched.iter().map(|m| m.1).collect()))
+}
+
+/// How many real instructions both blocks end with, the same ones in the same
+/// order.
+fn common_tail(
+    first: &LirBlock,
+    second: &LirBlock,
+) -> usize {
+    let real =
+        |block: &LirBlock| -> Vec<Arc<Insn>> { block.insns.iter().filter(|insn| !insn.is_meta()).cloned().collect() };
+    real(first).iter().rev().zip(real(second).iter().rev()).take_while(|(one, two)| one.what == two.what).count()
 }
 
 /// The positions of the instructions of `block` that `hoist_common` would hoist
@@ -251,14 +270,18 @@ fn liftable(
     regs: llrm_lir::registers::Regs,
     bits: u32,
     block: &LirBlock,
+    shared: usize,
 ) -> Vec<usize> {
+    let real = block.insns.iter().filter(|insn| !insn.is_meta()).count();
+    let open = real.saturating_sub(shared);
     let (mut read, mut written) = (crate::backend::lanes::Lanes::new(), crate::backend::lanes::Lanes::new());
     let mut found = Vec::new();
-    for (at, insn) in block.insns.iter().enumerate().filter(|(_, insn)| !insn.is_meta()) {
+    for (rank, (at, insn)) in block.insns.iter().enumerate().filter(|(_, insn)| !insn.is_meta()).enumerate() {
         let Some((reads, writes)) = crate::backend::peephole::_register_effects(regs, bits, insn, true, true) else {
             break;
         };
-        if insn.inserted()
+        if rank < open
+            && insn.inserted()
             && pure(insn)
             && reads.is_disjoint(&written)
             && writes.is_disjoint(&read)
@@ -272,6 +295,8 @@ fn liftable(
     found
 }
 
+/// An instruction `isSafeToMove` allows above a branch: a move or arithmetic
+/// on registers and constants, with nothing else it does.
 fn pure(insn: &Insn) -> bool {
     insn.what.as_ref().is_some_and(|what| {
         matches!(
@@ -699,7 +724,8 @@ impl<'a> Folder<'a> {
                 }
             }
         }
-        // The blocks as `lifted_pair` left them: the indices of `run` are theirs.
+        // The blocks as `lifted_pair` left them: the indices of `run` are
+        // theirs.
         self.set(one, first.clone().into_inner());
         self.set(two, second.clone().into_inner());
         let mut insns: Vec<Arc<Insn>> = block.insns.iter().cloned().collect();

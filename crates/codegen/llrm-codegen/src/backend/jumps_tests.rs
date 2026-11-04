@@ -26,6 +26,14 @@ fn cx() -> Loc {
     Loc::Reg(Reg { register: RegId::CX, width: 2 })
 }
 
+fn dx() -> Loc {
+    Loc::Reg(Reg { register: RegId::DX, width: 2 })
+}
+
+fn si() -> Loc {
+    Loc::Reg(Reg { register: RegId::SI, width: 2 })
+}
+
 fn imm(value: i64) -> Loc {
     Loc::Imm(Imm { value, width: 2, address: None })
 }
@@ -2301,21 +2309,51 @@ fn test_a_zeroing_xor_both_ways_begin_with_is_hoisted_above_the_compare() {
 }
 
 /// One way puts an unrelated move ahead of the zeroing `xor` both ways need
-/// (`for (...) sum += ...; return sum` at -Os: `mov esi, 1` before `xor ecx, ecx`
-/// in the loop's entry, the bare `xor` on the skip edge): the leading-run hoist
-/// saw different first instructions and left two xors, 4 B over main/gcc (idiv_loop_os,
-/// recgcd 114 B against 110 B).
+/// (`for (...) sum += ...; return sum` at -Os: `mov esi, 1` before `xor ecx,
+/// ecx` in the loop's entry, the bare `xor` on the skip edge): the leading-run
+/// hoist saw different first instructions and left two xors, 4 B over main/gcc
+/// (idiv_loop_os, recgcd 114 B against 110 B).
 #[test]
 fn test_a_zeroing_xor_behind_an_unrelated_move_is_hoisted_above_the_compare() {
     let zero = |at| _inserted(_insn(at, Operation::Binary, "xor", vec![cx()], vec![cx(), cx()], None));
     let lines = _printed(vec![
         block(1, vec![_compare(1), _branch(2, "je", 9)], vec![9, 4]).into(),
-        block(4, vec![_inserted(_insn(4, Operation::Move, "mov", vec![bx()], vec![imm(1)], None)), zero(5), _move(6, bx()), _return(7)], vec![]).into(),
-        block(9, vec![zero(9), _move(10, bx()), _return(11)], vec![]).into(),
+        block(
+            4,
+            vec![
+                _inserted(_insn(4, Operation::Move, "mov", vec![bx()], vec![imm(1)], None)),
+                zero(5),
+                _move(6, bx()),
+                _return(7),
+            ],
+            vec![],
+        )
+        .into(),
+        block(9, vec![zero(9), _move(10, ax()), _return(11)], vec![]).into(),
     ]);
     assert_eq!(lines.iter().filter(|line| line.as_str() == "xor cx, cx").count(), 1, "{lines:?}");
     let at = lines.iter().position(|line| line.as_str() == "xor cx, cx").unwrap();
     assert!(at < lines.iter().position(|line| line.starts_with("cmp")).unwrap(), "{lines:?}");
+}
+
+/// The ways end with the same tail, the move both have behind an unrelated one
+/// (a duplicated join, m16 sfm16_float_add -O2): tail merging takes the whole
+/// tail, and lifting the move out left tails that no longer merged, +4 B.
+#[test]
+fn test_a_move_inside_the_tail_both_ways_end_with_is_not_lifted() {
+    let copy = |at| _inserted(_insn(at, Operation::Move, "mov", vec![cx()], vec![si()], None));
+    let lines = _printed(vec![
+        block(1, vec![_compare(1), _branch(2, "je", 9)], vec![9, 4]).into(),
+        block(
+            4,
+            vec![_inserted(_insn(4, Operation::Move, "mov", vec![dx()], vec![imm(1)], None)), copy(5), _return(7)],
+            vec![],
+        )
+        .into(),
+        block(9, vec![copy(9), _return(11)], vec![]).into(),
+    ]);
+    let at = lines.iter().position(|line| line.as_str() == "mov cx, si").unwrap();
+    assert!(at > lines.iter().position(|line| line.starts_with("cmp")).unwrap(), "{lines:?}");
 }
 
 /// The move the `xor` would pass is what the `xor` reads: it stays behind it.
@@ -2323,8 +2361,22 @@ fn test_a_zeroing_xor_behind_an_unrelated_move_is_hoisted_above_the_compare() {
 fn test_a_def_that_reads_what_the_move_before_it_writes_is_not_lifted() {
     let lines = _printed(vec![
         block(1, vec![_compare(1), _branch(2, "je", 9)], vec![9, 4]).into(),
-        block(4, vec![_inserted(_insn(4, Operation::Move, "mov", vec![cx()], vec![imm(1)], None)), _inserted(_insn(5, Operation::Binary, "add", vec![bx()], vec![bx(), cx()], None)), _return(7)], vec![]).into(),
-        block(9, vec![_inserted(_insn(9, Operation::Binary, "add", vec![bx()], vec![bx(), cx()], None)), _return(11)], vec![]).into(),
+        block(
+            4,
+            vec![
+                _inserted(_insn(4, Operation::Move, "mov", vec![cx()], vec![imm(1)], None)),
+                _inserted(_insn(5, Operation::Binary, "add", vec![bx()], vec![bx(), cx()], None)),
+                _return(7),
+            ],
+            vec![],
+        )
+        .into(),
+        block(
+            9,
+            vec![_inserted(_insn(9, Operation::Binary, "add", vec![bx()], vec![bx(), cx()], None)), _return(11)],
+            vec![],
+        )
+        .into(),
     ]);
     assert_eq!(lines.iter().filter(|line| line.as_str() == "add bx, cx").count(), 2, "{lines:?}");
 }
