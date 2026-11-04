@@ -348,6 +348,7 @@ pub fn functions_with(
             &mut tables,
             &crate::layout::edge_odds(module, function, &program.layout, &machine),
             optsize,
+            &crate::mfunc::returned_registers(&machine),
         );
         let blocks = crate::pairs::fold(blocks);
         let mut blocks = crate::ldst_update::fold(blocks, &crate::mfunc::returned_registers(&machine));

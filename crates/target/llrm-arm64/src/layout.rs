@@ -155,50 +155,10 @@ pub fn fold(
     tables: &mut [Table],
     odds: &Odds,
     optsize: bool,
+    exits: &[crate::mc::visit::Reg],
 ) -> Vec<Lowered> {
     if blocks.is_empty() {
         return blocks;
-    }
-    // A jump to a block that only returns is that return (`TailDuplicator`).
-    // DEVIATE: the pin copies any block of `TailDupSize` (2; 4 at -O3; 1 at
-    // optsize) instructions, and its copy meets `MachineCopyPropagation`;
-    // copying two without that grows `recgcd` by 4 B. Exit: 11-12 with AP1.
-    let dup_size = 1;
-    let returns: HashMap<String, (Vec<Inst>, Vec<Option<(u32, u32)>>)> = blocks
-        .iter()
-        .filter(|block| {
-            block.insts.len() <= dup_size
-                && matches!(block.insts.last(), Some(Inst::Ret { .. }))
-                && block.insts[..block.insts.len() - 1].iter().all(|inst| {
-                    !matches!(
-                        inst,
-                        Inst::Label(_)
-                            | Inst::Branch { .. }
-                            | Inst::BranchCond { .. }
-                            | Inst::CompareBranch { .. }
-                            | Inst::TestBranch { .. }
-                            | Inst::BranchReg { .. }
-                            | Inst::Brk { .. }
-                    )
-                })
-        })
-        .map(|block| (block.label.clone(), (block.insts.clone(), block.locs.clone())))
-        .collect();
-    for at in 0..blocks.len() {
-        let copy = match blocks[at].insts.last() {
-            Some(Inst::Branch { link: false, target: Target::Label(label) }) if label != &blocks[at].label => {
-                returns.get(label).cloned()
-            }
-            _ => None,
-        };
-        // The copy keeps the return block's own source places.
-        if let Some((insts, locs)) = copy {
-            let Lowered { insts: mine, locs: places, .. } = &mut blocks[at];
-            mine.pop();
-            places.pop();
-            mine.extend(insts);
-            places.extend(locs);
-        }
     }
     // A fall-through becomes a branch, so that blocks can move.
     for at in 0..blocks.len() - 1 {
@@ -244,6 +204,9 @@ pub fn fold(
             *entry = found.clone();
         }
     }
+    // After `BranchFolder` (the threading above), as in the pin's order.
+    crate::taildup::tail_duplicate(&mut blocks, optsize);
+    crate::taildup::propagate_backward(&mut blocks, exits);
     let table_of: HashMap<&str, &Table> = tables.iter().map(|table| (table.base.as_str(), table)).collect();
     // Reachable blocks, in `MachineBlockPlacement`'s order.
     let index: HashMap<&str, usize> = blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at)).collect();
@@ -397,7 +360,7 @@ mod tests {
             block("b", vec![ret()]),
             block("c", vec![ret()]),
         ];
-        let out = fold(blocks, &mut [], &Odds::default(), false);
+        let out = fold(blocks, &mut [], &Odds::default(), false, &[]);
         let rets = out.iter().flat_map(|block| &block.insts).filter(|inst| matches!(inst, Inst::Ret { .. })).count();
         let targets: Vec<_> = out
             .iter()

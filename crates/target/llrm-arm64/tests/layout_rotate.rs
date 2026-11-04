@@ -44,7 +44,7 @@ fn a_loop_runs_no_unconditional_branch_per_trip() {
     odds.insert((1, 2), (BranchProbability::new(31, 32), 1));
     odds.insert((1, 3), (BranchProbability::new(1, 32), 0));
     let early = block(".Lf.4", vec![Inst::Ret { rn: Gpr(29) }]);
-    let out = fold(vec![entry, head, body, exit, early], &mut [], &odds, false);
+    let out = fold(vec![entry, head, body, exit, early], &mut [], &odds, false, &[]);
     let in_loop = |name: &str| name == ".Lf.1" || name == ".Lf.2";
     let jumps = out
         .iter()
