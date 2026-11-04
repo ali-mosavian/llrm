@@ -234,7 +234,7 @@ fn fold_one(
 
 /// The readers of the codes after a compare, as they read once its operands
 /// change places, with their offsets; `None` when one cannot.
-fn swapped_readers(after: &[Inst]) -> Option<Vec<(usize, Inst)>> {
+pub(crate) fn swapped_readers(after: &[Inst]) -> Option<Vec<(usize, Inst)>> {
     let mut found = Vec::new();
     for (offset, inst) in after.iter().enumerate() {
         if inst.sets_flags || inst.call {
