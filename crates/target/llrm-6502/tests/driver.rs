@@ -1733,5 +1733,22 @@ fn a_word_divide_calls_the_compact_routine_at_size_and_the_fast_one_at_speed() {
     for text in [&size, &speed] {
         let linked = format!("{text}\n{}", common::pipeline::reachable_runtime(text));
         assert_eq!(exit_code_of(&linked, "g"), 0xF7, "{linked}");
+}
+}
+
+#[test]
+fn a_word_step_never_holds_a_byte_in_a_on_the_plain_6502() {
+    // the high byte of x + 1, returned: it came out in A and the carry step was
+    // `inc a`, a 65C02 opcode ca65 --cpu 6502 refuses (x16basic-c: seven sites)
+    let ir = module(
+        "@n = global i16 255\n\
+         define i8 @g() {\n\
+         \x20 %x = load volatile i16, ptr @n\n  %y = add i16 %x, 1\n\
+         \x20 %h = lshr i16 %y, 8\n  %r = trunc i16 %h to i8\n  ret i8 %r\n}",
+    );
+    for level in [Level::O2, Level::Os] {
+        let text = assembly(&ir, &Request::new(level)).unwrap_or_else(|e| panic!("{e}"));
+        assert!(!text.contains("inc a") && !text.contains("dec a"), "{text}");
+        assert_eq!(exit_code_of(&text, "g"), 1, "{text}");
     }
 }
