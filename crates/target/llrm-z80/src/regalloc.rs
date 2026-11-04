@@ -134,7 +134,7 @@ impl Target for Z80Registers {
     // editor copies by lane (a pair built across blocks lost its stack copy:
     // lz4c -Oz returned 0x3131).
     fn lowers_lanes() -> bool {
-        std::env::var("LLRM_Z80_LANES").is_ok()
+        false
     }
 
     fn read_lanes(inst: &Inst) -> Option<(usize, u32, u32)> {
@@ -146,7 +146,7 @@ impl Target for Z80Registers {
     }
 
     fn joins_lanes() -> bool {
-        std::env::var("LLRM_Z80_LANES").is_ok()
+        false
     }
 
     fn read_part(
