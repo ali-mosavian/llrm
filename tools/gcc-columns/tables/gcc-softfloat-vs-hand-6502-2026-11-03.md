@@ -1,5 +1,7 @@
 # Softfloat C through gcc vs hand 6502 asm, 2026-11-03
 
+**STALE 2026-11-04: measured from runtime/softfloat/src (the monolithic sf32.c), which a286a52c00 moved into runtime/compiler-rt (one file per operation); re-measure on compiler-rt due 2026-11-06.**
+
 TL;DR: gcc is 3.0-6.9x slower than `src/6502/sf32*.s` per op and 2.1x larger as a library (-Os); every gcc result is bit-exact. Cells: `softfloat-6502.tsv` (fork SHA and cc1 md5 in its header).
 
 Method: `runtime/softfloat/src/sf32*.c` + `int32.c` (`sf32` generic, `sf32_6502` 6502-shaped), `-DSF_INTABI`, -O2/-Os, against `sf32.s`, `sf32_muldiv.s`, `sf32_conv.s`.

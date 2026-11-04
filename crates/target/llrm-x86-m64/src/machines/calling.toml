@@ -32,6 +32,8 @@ return_address_bytes = 8
 first_argument_offset = 16
 frame = "rbp"
 frame_optional = true
+# The pin pushes the registers a function keeps before the space for its locals, call or none.
+frame_saved_first = true
 frame_wrap_split_size = true
 # System V: a leaf function keeps up to 128 bytes of locals below rsp (X86FrameLowering::has128ByteRedZone).
 frame_red_zone = 128

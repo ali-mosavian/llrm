@@ -1048,7 +1048,7 @@ pub fn loop_register_units(
 ) -> u32 {
     let Some(lp) = cx.loops.get_loop_for(l) else { return 0 };
     let word = tti.gpr_bits();
-    let mut weights: HashMap<llrm_mir::module::ValueId, usize> = HashMap::default();
+    let mut weights: llrm_mir::dense::IdMap<llrm_mir::module::ValueId, usize> = llrm_mir::dense::IdMap::new();
     for &block in lp.get_blocks() {
         for inst in cx.function.iter_block(block) {
             let Some(result) = cx.function.instruction(inst).result else { continue };
@@ -1069,6 +1069,44 @@ pub fn loop_register_units(
         }
     }
     let blocks: Vec<BlockId> = lp.get_blocks().to_vec();
-    llrm_analysis::liveness::pressure_weighted(cx.function, &blocks, &|one| weights.get(&one).copied().unwrap_or(0))
-        as u32
+    // DEVIATE LU7: the pin has no register-unit count here; this one follows
+    // only the loop's own values (and the phis that take them), so it costs the
+    // loop and not the function. Cells that need the count: shellsort -Os,
+    // stft, matmul.
+    let made = llrm_analysis::liveness::pressure_weighted_made_in(cx.function, &blocks, &|one| {
+        weights.get(&one).copied().unwrap_or(0)
+    }) as u32;
+    // DEVIATE LU3c: the enclosing loop's carried values (its header phis) that
+    // live across this loop hold registers too, or spill on every trip of the
+    // outer loop (nibbles -Os). A top-level loop has none.
+    let Some(outer) = lp.get_parent_loop() else { return made };
+    let outer_header = outer.get_header();
+    let mut through: llrm_mir::dense::IdMap<llrm_mir::module::ValueId, usize> = llrm_mir::dense::IdMap::new();
+    let carried =
+        cx.function.iter_block(outer_header).take_while(|&inst| cx.function.instruction(inst).opcode == Opcode::Phi);
+    for result in carried.filter_map(|inst| cx.function.instruction(inst).result) {
+        // Only a value read past this loop can live across it.
+        let read_beyond = cx
+            .function
+            .users(result)
+            .into_iter()
+            .any(|user| cx.function.parent(user.user).is_some_and(|block| !lp.contains(block)));
+        if !read_beyond {
+            continue;
+        }
+        let value = Operand::Value(result);
+        if !se.is_value_scevable(cx, value) {
+            continue;
+        }
+        let s = se.get_scev(cx, value);
+        let ty = se.type_of(s);
+        let bits = se.get_type_size_in_bits(cx, ty) as u32;
+        if bits > 1 {
+            through.insert(result, bits.div_ceil(word) as usize);
+        }
+    }
+    let candidates: llrm_mir::dense::IdSet<llrm_mir::module::ValueId> = through.keys().collect();
+    made + llrm_analysis::liveness::live_through_weighted(cx.function, l, &blocks, &candidates, &|one| {
+        through.get(&one).copied().unwrap_or(0)
+    }) as u32
 }

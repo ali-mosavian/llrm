@@ -81,11 +81,15 @@ pub fn builder_target(
             // level: `isIntDivCheap`.
             int_div_cheap: true,
             sdiv_pow2_stays: true,
+            add_to_or_disjoint: true,
+            // `WebAssemblySubtarget::useAA`
+            use_aa: true,
             ..DagConfig::default()
         },
         shift_amount: pointer(width),
         shift_amount_of: Some(shift_amount_of),
         legal_ints: vec![32, 64],
+        soft_float: false,
         stack_align: Some(16),
         jump_tables: true,
         // WebAssemblyTargetLowering: setMinimumJumpTableEntries(2); the
@@ -203,6 +207,7 @@ pub fn select_function(
     width: Width,
     unwinding: bool,
     optimize: bool,
+    facts: &super::ModuleFacts,
 ) -> Result<Vec<Selected>, String> {
     let layout = DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
@@ -240,6 +245,10 @@ pub fn select_function(
         function,
     );
     let mut info = FunctionLoweringInfo::new(function);
+    info.with_module_tables(facts.tables(module, target.dag.dso_local_symbols));
+    let (statics, stack_colors) = static_frame(module, function, &layout, &info)?;
+    let alignments: Vec<u64> = statics.iter().map(|&(_, align)| align).collect();
+    let alias = super::alias::IrAlias::new(module, function, &layout);
     let mut selected = Vec::new();
     let mut machine_layout = Vec::new();
     let mut visited = std::collections::HashSet::new();
@@ -284,8 +293,10 @@ pub fn select_function(
         let mut group = vec![(block, block, built, phis)];
         group.extend(extras.into_iter().map(|(id, one)| (id, block, one, Vec::new())));
         for (n, (id, origin, mut one, phis)) in group.into_iter().enumerate() {
+            one.dag.frame_alignments.clone_from(&alignments);
             let Scheduled { units, mem_refs, accesses } =
-                select_block(&mut one.dag, cpu, features, &mut info, optimize).map_err(|why| format!("{why:?}"))?;
+                select_block(&mut one.dag, cpu, features, &mut info, &alias, optimize)
+                    .map_err(|why| format!("{why:?}"))?;
             machine_layout.push(id.0);
             // `addSuccessorWithProb`: the edges the builder made of a switch
             // are the machine blocks' own; the IR's apply to a block it left
@@ -321,7 +332,7 @@ pub fn select_function(
             });
         }
     }
-    let (mut frame, stack_colors) = static_frame(module, function, &layout, &info)?;
+    let mut frame = statics;
     frame.extend(info.objects.iter().map(|&(size, align)| (u64::from(size), u64::from(align))));
     let declared: Vec<(u32, i32)> = function
         .debug_records()

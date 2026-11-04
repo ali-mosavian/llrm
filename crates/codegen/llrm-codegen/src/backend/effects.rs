@@ -75,7 +75,10 @@ mod tests {
     fn the_rows_are_those_of_the_register_file_asked() {
         let load = Semantics {
             name: Some("les".into()),
-            dests: vec![Loc::Held(Held { value: 1, width: 2 }), Loc::Held(Held { value: 2, width: 2 })],
+            dests: vec![
+                Loc::Held(Held { value: 1, width: 2, offset: 0 }),
+                Loc::Held(Held { value: 2, width: 2, offset: 0 }),
+            ],
             sources: vec![Loc::Mem(Mem::new(None, 4))],
             ..Semantics::new(Operation::Move)
         };
@@ -95,13 +98,13 @@ mod tests {
     #[test]
     fn test_a_load_of_a_symbol_indexed_by_an_unplaced_value_has_known_effects() {
         let cell = Mem {
-            index: Some(Held { value: 2, width: 4 }),
+            index: Some(Held { value: 2, width: 4, offset: 0 }),
             scale: 4,
             ..Mem::new(Some(crate::model::ir::Addr::new(crate::model::ir::Space::Segment, 4)), 4)
         };
         let load = Semantics {
             name: Some("mov".into()),
-            dests: vec![Loc::Held(Held { value: 1, width: 4 })],
+            dests: vec![Loc::Held(Held { value: 1, width: 4, offset: 0 })],
             sources: vec![Loc::Mem(cell)],
             ..Semantics::new(Operation::Move)
         };
@@ -116,14 +119,14 @@ mod tests {
     #[test]
     fn test_a_frame_cell_indexed_by_an_unplaced_value_has_known_effects() {
         let cell = Mem {
-            index: Some(Held { value: 2, width: 4 }),
+            index: Some(Held { value: 2, width: 4, offset: 0 }),
             through: llrm_lir::registers::RegId::EBP,
             scale: 1,
             ..Mem::new(Some(crate::model::ir::Addr::new(crate::model::ir::Space::Frame, -1024)), 1)
         };
         let load = Semantics {
             name: Some("movsx".into()),
-            dests: vec![Loc::Held(Held { value: 1, width: 4 })],
+            dests: vec![Loc::Held(Held { value: 1, width: 4, offset: 0 })],
             sources: vec![Loc::Mem(cell)],
             ..Semantics::new(Operation::Move)
         };
