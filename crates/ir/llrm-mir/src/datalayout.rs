@@ -593,6 +593,7 @@ pub fn float_bits(kind: FloatKind) -> u32 {
         FloatKind::Float => 32,
         FloatKind::Double => 64,
         FloatKind::X86Fp80 => 80,
+        FloatKind::F128 => 128,
     }
 }
 

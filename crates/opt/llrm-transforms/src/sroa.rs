@@ -193,12 +193,19 @@ fn can_convert_value(
     if int_bits(context, old).is_some() && int_bits(context, new).is_some() {
         return false;
     }
-    // DEVIATE: a float is not reinterpreted as an integer or a pointer, nor an
-    // integer as a float: isel selects no such bitcast (x87 has no register
-    // move to a general register).
+    // DEVIATE: a float is reinterpreted only as a native integer of its width
+    // on a target with 64-bit general registers (a register move from SSE):
+    // elsewhere isel selects no such bitcast (x87 has no register move to a
+    // general register).
     let is_float = |ty: TypeId| matches!(context.types.get(ty), Type::Float(_));
     if is_float(old) || is_float(new) {
-        return false;
+        let (float, other) = if is_float(old) { (old, new) } else { (new, old) };
+        let native = layout.largest_legal_integer() >= 64
+            && int_bits(context, other).is_some_and(|bits| layout.legal_integer(bits));
+        if !native || is_float(other) || layout.size_bits(&context.types, float) != layout.size_bits(&context.types, other) {
+            return false;
+        }
+        return true;
     }
     if layout.size_bits(&context.types, new) != layout.size_bits(&context.types, old) {
         return false;

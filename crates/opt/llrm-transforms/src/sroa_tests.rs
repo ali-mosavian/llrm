@@ -664,3 +664,36 @@ b0:
     assert!(after.contains("= addrspacecast ptr %s.sroa.1 to ptr addrspace(1)"), "{after}");
     assert!(!after.contains("memcpy.p1.p1.i16(ptr %"), "{after}");
 }
+
+/// A double stored whole and its upper half read as an i32 (`union { double d;
+/// uint32_t w[2]; }`): the pin widens the alloca to i64 (`canConvertValue` of a
+/// double) and extracts the half. Left in memory, `hi(d)` kept a frame slot at
+/// -O1, where there is no GVN to forward the store (float_bits: 25
+/// instructions to the pin's 18).
+#[test]
+fn test_a_double_stored_whole_and_read_by_halves_is_widened_and_promoted() {
+    let after = managed(
+        &mut parsed(&format!("{X64}{F}")),
+        Sroa,
+    );
+    assert!(!after.contains("alloca") && !after.contains("store") && !after.contains("load"), "{after}");
+    // 16-bit: i64 is not native, the slot stays.
+    let after = sroa(F);
+    assert!(after.contains("alloca"), "{after}");
+}
+
+const X64: &str = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
+
+const F: &str = "define i32 @f(double %d) {
+b0:
+  %s = alloca double
+  call void @llvm.lifetime.start.p0(i64 8, ptr %s)
+  store double %d, ptr %s
+  %p = getelementptr inbounds i8, ptr %s, i64 4
+  %w = load i32, ptr %p
+  call void @llvm.lifetime.end.p0(i64 8, ptr %s)
+  ret i32 %w
+}
+declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture)
+declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture)
+";
