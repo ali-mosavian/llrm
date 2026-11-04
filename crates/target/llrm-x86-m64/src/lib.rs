@@ -317,6 +317,11 @@ impl llrm_target::Target for M64 {
         4
     }
 
+    /// X86ISelLowering.cpp: `setPrefLoopAlignment(Align(16))`.
+    fn pref_loop_alignment(&self) -> u8 {
+        4
+    }
+
     /// Every x86-64 has `nopl` (`FeatureNOPL`): X86AsmBackend uses up to ten
     /// bytes.
     fn max_nop_bytes(&self) -> u8 {
