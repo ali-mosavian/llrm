@@ -796,7 +796,7 @@ mod tests {
             |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
         let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
         let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
-        let wide = |value: u32| Loc::Held(Held { value, width: 10 });
+        let wide = |value: u32| Loc::Held(Held { value, width: 10, offset: 0 });
         // `reader`: what takes the flipped constant; `nested`: the loop has a
         // loop inside it.
         let run = |reader: &str, nested: bool, size: bool, extra: &str| {
@@ -868,7 +868,7 @@ mod tests {
             |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
         let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
         let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
-        let wide = |value: u32| Loc::Held(Held { value, width: 10 });
+        let wide = |value: u32| Loc::Held(Held { value, width: 10, offset: 0 });
         // `others`: floating values the loop reads from outside it, besides the
         // accumulator.
         let run = |others: u32, call: bool, truncating: bool, width: u32, size: bool| {

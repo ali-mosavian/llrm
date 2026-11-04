@@ -1042,7 +1042,7 @@ mod tests {
     /// where the pin made it four.
     #[test]
     fn test_a_symbol_address_only_a_call_argument_reads_is_not_shared() {
-        let wide = |value: u32| Loc::Held(Held { value, width: 8 });
+        let wide = |value: u32| Loc::Held(Held { value, width: 8, offset: 0 });
         let symbol = || {
             Loc::Imm(llrm_lir::Imm {
                 value: 0,
@@ -1063,7 +1063,7 @@ mod tests {
             };
             if call_reads || fixed_reader {
                 Arc::get_mut(&mut reader).unwrap().requires =
-                    vec![(Held { value: 11, width: 8 }, llrm_lir::registers::RegId::EAX)];
+                    vec![(Held { value: 11, width: 8, offset: 0 }, llrm_lir::registers::RegId::EAX)];
             }
             let entry = LirBlock {
                 succ: vec![1].into(),
