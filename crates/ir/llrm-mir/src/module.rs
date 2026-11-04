@@ -1416,7 +1416,7 @@ pub struct Metadata<'a> {
 /// made and no global added or removed since. A cache: never part of what two
 /// modules are equal by, and a clone starts without one.
 #[derive(Debug, Default)]
-pub(crate) struct SymbolIndex(std::sync::Mutex<Option<Symbols>>);
+pub struct SymbolIndex(std::sync::Mutex<Option<Symbols>>);
 
 #[derive(Debug)]
 struct Symbols {
@@ -1458,7 +1458,8 @@ pub struct Module {
     /// The `section "NAME"` of a global, by its name (`#pragma data_seg`,
     /// `#pragma code_seg`). Printing does not carry it.
     pub sections: std::collections::BTreeMap<String, String>,
-    pub(crate) symbols: SymbolIndex,
+    #[doc(hidden)]
+    pub symbols: SymbolIndex,
 }
 
 /// One operation of a `!DIExpression`.
