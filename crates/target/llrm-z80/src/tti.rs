@@ -134,6 +134,15 @@ impl Tti for Z80Tti {
         "z80"
     }
 
+    /// The target's tuning table for the full unroll: the copy of a loop may
+    /// cost 24 bytes, boosted by nothing. Measured on the 60 kernel cells, 24
+    /// unrolls sum4 alone (+5 B, -56 T); the pin's 300 also copies crc16's
+    /// 8-trip bit loop (+67 B, -2490 T). The size levels keep the pin's rule:
+    /// no copy bigger than the loop.
+    fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
+        (Some(24), Some(100))
+    }
+
     fn cmp_sel_cost(
         &self,
         op: CmpSel,

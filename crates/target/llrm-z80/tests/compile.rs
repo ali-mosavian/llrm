@@ -346,10 +346,11 @@ fn an_add_after_the_loop_is_rated_once_not_every_trip() {
 
 /// `sum4`'s rotated loop was `dec b; inc hl; jr nz`: the pointer step sat
 /// between the decrement and the branch, so no `djnz` formed (12 B, 172 T, 22
-/// instructions at -O2; 11 B, 160 T, 18 with it).
+/// instructions at -O2; 11 B, 160 T, 18 with it). sum4 is unrolled at -O2 now;
+/// sum_arr has the same loop.
 #[test]
 fn a_decrement_behind_a_pointer_step_is_a_djnz() {
-    let out = text(include_str!("kernels/ir/sum4.ll"), "sum4", 0, &Request::new(Level::O2)).expect("compiles");
+    let out = text(include_str!("kernels/ir/sum_arr.ll"), "sum_arr", 0, &Request::new(Level::O2)).expect("compiles");
     assert!(out.contains("djnz") && !out.contains("dec b"), "{out}");
 }
 
@@ -1398,6 +1399,18 @@ fn an_always_taken_jump_is_jp_when_speed_comes_first_and_jr_when_size_does() {
 fn a_jump_outside_every_loop_is_jr_even_when_speed_comes_first() {
     let out = text(include_str!("kernels/ir/scmp.ll"), "scmp", 0, &Request::new(Level::O2)).expect("compiles");
     assert!(!out.lines().any(|line| line.trim_start().starts_with("jp ")), "{out}");
+}
+
+/// The driver turned the unroller off: sum4's four-trip loop ran 160 clocks at
+/// -O2, 104 unrolled. A loop of four trips is copied out where speed comes
+/// first, and stays a loop at -Oz.
+#[test]
+fn a_four_trip_loop_is_unrolled_where_speed_comes_first_and_not_at_oz() {
+    let ir = include_str!("kernels/ir/sum4.ll");
+    let fast = text(ir, "sum4", 0, &Request::new(Level::O2)).expect("compiles");
+    let small = text(ir, "sum4", 0, &Request::new(Level::Oz)).expect("compiles");
+    assert!(!fast.contains("djnz") && !fast.contains(" L0_"), "{fast}");
+    assert!(small.contains("djnz"), "{small}");
 }
 
 /// lz4's match copy kept the source as `dst + offset` (a base add, `pop bc;
