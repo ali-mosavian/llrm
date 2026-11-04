@@ -442,8 +442,10 @@ fn sunk(
         function.insert(back, Position::End(side)).expect("an unplaced instruction");
         (side, Operand::Block(side))
     };
-    let (yes_from, yes_target) = side_of(function, yes);
+    // The true arm's block first after `home`: it is the branch's fallthrough, as
+    // `EmitLoweredSelect` places the false copy after the branch to the join.
     let (no_from, no_target) = side_of(function, no);
+    let (yes_from, yes_target) = side_of(function, yes);
     let branch = function.create_instruction(
         Opcode::Br,
         void,
