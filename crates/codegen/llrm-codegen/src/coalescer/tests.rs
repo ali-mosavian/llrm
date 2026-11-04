@@ -648,7 +648,7 @@ fn test_a_constant_the_target_names_its_own_way_is_made_again() {
         size: false,
         keep_pinned: false,
         aliases: Default::default(),
-        should_join: Box::new(|_| true),
+        should_join: None,
         freq: Vec::new(),
         remat: Some(Box::new(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("CONST_I32")))),
         remat_wins: None,
@@ -688,7 +688,7 @@ fn test_a_constant_dearer_than_the_copy_it_replaces_is_not_made_again() {
         size: false,
         keep_pinned: false,
         aliases: Default::default(),
-        should_join: Box::new(|_| true),
+        should_join: None,
         freq: Vec::new(),
         remat: Some(Box::new(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("CONST_I32")))),
         remat_wins: Some(Box::new(|_, _, _, _| false)),
@@ -776,7 +776,7 @@ fn test_a_join_narrows_the_class_the_next_join_is_judged_against() {
         size: false,
         keep_pinned: false,
         aliases: Default::default(),
-        should_join: Box::new(|_| true),
+        should_join: None,
         freq: Vec::new(),
         remat: None,
         remat_wins: None,
@@ -1239,7 +1239,7 @@ fn env_with_palettes(palettes: &[(u32, &[RegId])]) -> TargetEnv {
         joins_sub_registers: true,
         joins_lanes: true,
         aliases: Default::default(),
-        should_join: Box::new(|_| true),
+        should_join: None,
         freq: Vec::new(),
         regs: Some(body(&[]).regs()),
         kind_of: None,
@@ -1293,7 +1293,7 @@ fn test_a_copy_from_a_pinned_argument_is_left_to_the_allocator_when_the_target_s
             size: false,
             keep_pinned: true,
             aliases: Default::default(),
-            should_join: Box::new(|_| true),
+            should_join: None,
             freq: Vec::new(),
             joins_sub_registers: true,
             joins_lanes: false,
@@ -1541,4 +1541,48 @@ fn test_a_target_without_lane_joins_leaves_every_lane_copy() {
     let mut env = env_with_palettes(&[(1, &[RegId::AX]), (2, &[RegId::AH])]);
     env.joins_lanes = false;
     assert!(!env.can_share_lane(2, 1, 1));
+}
+
+/// `TargetEnv::should_coalesce` built a `Join` (two palette clones, use-kind
+/// sums) for every copy and handed it to a `should_join` that said yes: 13 M of
+/// the 88 M the coalescer costs on jpeg_fixed (1839 calls, 7 K instructions
+/// each). A target with no opinion builds none.
+#[test]
+fn test_a_target_with_no_opinion_on_a_join_is_not_asked_to_build_one() {
+    use std::collections::BTreeSet;
+
+    use llrm_lir::registers::RegId;
+
+    use super::env::{JOINS_BUILT, TargetEnv};
+    let run = |should_join: Option<Box<dyn Fn(&super::env::Join) -> bool>>| {
+        let c = copy(2, 1);
+        let was = body(&[(&[constant_named(1, "CONST_I32"), Arc::clone(&c)], &[1]), (&[read(2)], &[])]);
+        let palette: BTreeSet<RegId> = [RegId::AX, RegId::BX].into_iter().collect();
+        let env = TargetEnv {
+            palettes: IndexMap::from_iter([(1, palette.clone()), (2, palette)]).into(),
+            pins: IndexMap::default(),
+            size: false,
+            keep_pinned: false,
+            aliases: Default::default(),
+            should_join,
+            freq: Vec::new(),
+            remat: None,
+            remat_wins: None,
+            joins_global_copies: false,
+            joins_pinned_copies: true,
+            joins_sub_registers: true,
+            joins_lanes: false,
+            regs: None,
+            kind_of: None,
+            kinds: Default::default(),
+            check_kinds: false,
+        };
+        let mut lis = LiveIntervals::new(&was);
+        let before = JOINS_BUILT.with(std::cell::Cell::get);
+        let result = join_copy(&mut lis, &env, &mut State::new(), &mut Default::default(), c.id());
+        assert_eq!(result, JoinResult::Joined);
+        JOINS_BUILT.with(std::cell::Cell::get) - before
+    };
+    assert_eq!(run(Some(Box::new(|_| true))), 1, "premise: an opinion is built a join for");
+    assert_eq!(run(None), 0);
 }

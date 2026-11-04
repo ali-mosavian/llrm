@@ -29,6 +29,13 @@
 //! A source that is not a value (an immediate) is copied the same way. The
 //! inserted copies own no bytes of the input.
 //!
+//! DEVIATE TA-9 (owner x87, exit 2026-11-20): an x87 load that kills the source
+//! of a tied add goes above it before the `lea` is made (`rescheduleKillAboveMI`
+//! tried first for that kill only). The pin makes the `lea` and its pre-RA
+//! scheduler puts the load above it; the loads are in stack form here, which
+//! the scheduler treats as a boundary. A horner loop's `p -= 12` was `lea; fld
+//! [p]; mov p, q` a trip, now `fld [p]; add p, -12`.
+//!
 //! # Example
 //! The body of a counted loop, before and after. Update in place made `v4 :=
 //! add v5, v7; v5 := mov v4` into `v5 := add v5, v7`, leaving self-moves for
@@ -145,6 +152,14 @@ pub fn tied(
             if commuted.is_none() && walk.reschedule_mi_below_kill(&mut work, place, body.regs(), body.bits) {
                 continue;
             }
+            // DEVIATE TA-9 (exit 2026-11-20): an x87 load that kills the
+            // source goes above the tied instruction before the `lea` is made.
+            // The pin makes the `lea` too, and its pre-RA scheduler then puts
+            // the load above it (`LD_Fp80m` is a pseudo there); the x87 loads
+            // are in stack form here, which the scheduler treats as a boundary.
+            if commuted.is_none() && walk.reschedule_kill_above_mi(&mut work, place, body.regs(), body.bits, true) {
+                continue;
+            }
             // `convertInstTo3Addr`: a tied add whose source lives on and whose
             // flags nothing reads makes no copy.
             if let Some(three) = crate::twoaddress::three_address(&one, lea)
@@ -180,7 +195,7 @@ pub fn tied(
             }
             // `rescheduleKillAboveMI`: the reader that kills the source goes
             // above the tied instruction.
-            if commuted.is_none() && walk.reschedule_kill_above_mi(&mut work, place, body.regs(), body.bits) {
+            if commuted.is_none() && walk.reschedule_kill_above_mi(&mut work, place, body.regs(), body.bits, false) {
                 continue;
             }
             // An instruction with a load folded into it whose first source
@@ -1377,6 +1392,56 @@ mod tests {
         // `live_source_add` reads v7 and defines v8.
         let got = tied(&of(insns), Off);
         assert!(position(&got, "lea") < position(&got, "add"), "{:?}", names_of(&got));
+    }
+
+    /// `fld [v7]`: an x87 load whose pointer `v7` dies there.
+    fn fld_of(
+        at: i64,
+        base: u32,
+    ) -> Arc<Insn> {
+        use crate::model::ir::Mem;
+        let cell = Mem { base: Some(Held { value: base, width: 4, offset: 0 }), ..Mem::new(None, 10) };
+        let what = Semantics {
+            name: Some("fld".into()),
+            dests: vec![Loc::Held(Held { value: 16, width: 10, offset: 0 })],
+            sources: vec![Loc::Mem(cell)],
+            ..Semantics::new(Operation::FloatLoad)
+        };
+        Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![], vec![base]))
+    }
+
+    /// x_ldmath's horner loop: `p' := p - 12; i' := i - 1; fld [p]` ran `add;
+    /// dec; fld; faddp; mov p, p'`, a copy a trip, because the `fld` that
+    /// kills `p` was no instruction the pass moved. It goes above the step
+    /// (the pin: `fld [ecx]; add ecx, -12; dec eax`), so the step is in place.
+    #[test]
+    fn test_an_x87_load_that_kills_the_pointer_of_a_tied_add_goes_above_it() {
+        let add = live_source_add(5, "add")[1].clone();
+        let insns = vec![imm_def(0, 7), add, imm_def(2, 9), fld_of(3, 7), read(4, 8), read(5, 9)];
+        let got = tied(&of(insns), Off);
+        assert!(position(&got, "fld") < position(&got, "add"), "{:?}", names_of(&got));
+    }
+
+    /// An x87 instruction between keeps the load in place: the stack order is
+    /// not the pass's to change.
+    #[test]
+    fn test_an_x87_load_stays_below_an_x87_instruction_between() {
+        let add = live_source_add(5, "add")[1].clone();
+        let fmul = Arc::new(Insn::new(
+            2,
+            Some((2, 2)),
+            Some(Semantics {
+                name: Some("fmul".into()),
+                dests: vec![Loc::st(0)],
+                sources: vec![Loc::st(0), Loc::st(1)],
+                ..Semantics::new(Operation::FloatArith)
+            }),
+            vec![],
+            vec![],
+        ));
+        let insns = vec![imm_def(0, 7), add, fmul, fld_of(3, 7), read(4, 8)];
+        let got = tied(&of(insns), Off);
+        assert!(position(&got, "add") < position(&got, "fld"), "{:?}", names_of(&got));
     }
 
     /// `rescheduleKillAboveMI`: an add with a memory operand cannot move down
