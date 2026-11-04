@@ -430,3 +430,28 @@ fn test_a_memory_form_below_the_top_keeps_its_exchange_where_exchange_is_free() 
     assert_eq!(stores, vec![100.0, 100.0, 3.0, -90.0], "{:?}", names(&result));
     assert_eq!(count(&result, "fxch"), 2, "{:?}", names(&result));
 }
+
+/// x_ld_max and x_ld_axpy at a 64-bit `long double` (+2 B each, axpy +3
+/// clocks): the result is stored first, so the exchange that brought the
+/// operand up also put the result on top, and the unfolded form added a `fld`
+/// and a `faddp` for nothing.
+#[test]
+fn test_a_memory_form_whose_result_is_read_first_keeps_its_exchange() {
+    let cells = [frame_cell(-8, 8), frame_cell(-16, 8), frame_cell(-24, 8), frame_cell(-32, 8), frame_cell(-40, 8)];
+    let body = _body(vec![
+        _load(1, &cells[0]),
+        _load(2, &cells[1]),
+        _load(3, &cells[2]),
+        _store(&cells[0], 3),
+        _store(&cells[1], 3),
+        sem(Operation::FloatArith, "fsub", vec![fl(4)], vec![fl(1), m(&cells[2])]),
+        _store(&cells[3], 4),
+        _store(&cells[4], 2),
+    ]);
+    let result = fps_priced(&body, "486");
+    let insns = result.insns();
+    let (_, stack, stores) = _x87_traced(&insns, &[(&cells[0], 10.0), (&cells[1], 3.0), (&cells[2], 100.0)]);
+    assert!(stack.is_empty());
+    assert_eq!(stores.iter().map(|(_, value)| *value).collect::<Vec<_>>(), vec![100.0, 100.0, -90.0, 3.0]);
+    assert_eq!(count(&result, "fld"), 3, "{:?}", names(&result));
+}

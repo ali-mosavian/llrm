@@ -197,6 +197,8 @@ struct Fps<'a> {
     /// DEVIATE 9: per operation (add, mul, div), whether the target prices
     /// `fxch` and the memory form above `fld` and the register form.
     unfold: [bool; 3],
+    /// The order (`st(0)` first) the block's exit bundle is already fixed to.
+    exit_order: Option<Vec<u32>>,
 }
 
 /// `getNextFPInstruction`-free `PopTable` of the names this port emits: the
@@ -701,6 +703,7 @@ impl Fps<'_> {
             || slot == 0
             || !step.kills(kept)
             || self.values.len() >= self.depth
+            || !self.leaves_the_top_wanted(step, slot, result)
         {
             return Ok(false);
         }
@@ -720,6 +723,34 @@ impl Fps<'_> {
         self.pop_stack_after();
         self.values[slot] = result;
         Ok(true)
+    }
+
+    /// The two layouts the memory form can leave differ in `result` and the
+    /// current top `top` having changed places (the form exchanges `result` up,
+    /// the unfolded one leaves it in `slot`). The unfolded one is the one to
+    /// take when what comes next wants `top` first: the next read in the
+    /// block, else the order the exit bundle is fixed to. An exchange the
+    /// later code needs anyway is not saved by it.
+    fn leaves_the_top_wanted(
+        &self,
+        step: &Step,
+        slot: usize,
+        result: u32,
+    ) -> bool {
+        let top = self.values[0];
+        match (step.next_read.get(&top), step.next_read.get(&result)) {
+            (Some(top_at), Some(result_at)) => top_at < result_at,
+            (Some(_), None) => true,
+            (None, Some(_)) => false,
+            (None, None) => {
+                let Some(order) = &self.exit_order else { return false };
+                let wants =
+                    |value: u32, place: usize| order.iter().position(|one| *one == value).is_some_and(|at| at != place);
+                let old = usize::from(wants(result, 0)) + usize::from(wants(top, slot));
+                let new = usize::from(wants(top, 0)) + usize::from(wants(result, slot));
+                new < old
+            }
+        }
     }
 
     /// `handleOneArgFPRW`: the top replaced by a value computed from it.
@@ -1275,6 +1306,7 @@ pub(super) fn converted(
         deferred: None,
         next: None,
         swallowed: BTreeSet::new(),
+        exit_order: None,
         unfold: ["add", "mul", "div"].map(|class| {
             let price = |key: String| cpu.and_then(|cpu| cpu.cost(&key).ok());
             match (
@@ -1300,6 +1332,7 @@ pub(super) fn converted(
         let entered = fps.setup_block_stack(&mut bundle, &floats(&live_in[&at]));
         live_bundles.insert(entry, bundle);
         entered?;
+        fps.exit_order = live_bundles.get(&exit).and_then(|bundle| bundle.fixed.clone());
         let cut = _terminators(block);
         let steps = steps(block, cut, &floats(&live_out[&at]));
         for (at_step, step) in steps.iter().enumerate() {
