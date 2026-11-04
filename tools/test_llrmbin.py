@@ -219,3 +219,26 @@ def test_two_dists_with_one_llrm_llc_are_refused_whatever_their_llrm_cc_is(tmp_p
     llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc")
     (base / "llrm-llc").unlink()  # no llrm-llc to compare: nothing to refuse
     llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc")
+
+
+def test_two_dists_with_one_llrm_wasm_llc_are_refused_though_their_llrm_llc_differ(tmp_path):
+    """llrm-cc runs the sibling llrm-wasm-llc for wasm32: /tmp/rm/fp_m10_base and fp_m10 held byte-identical ones, and the wasm identity run read 0 DIFF for a fold that
+    moves nbody -O2 939 -> 910 B. The llrm-llc check alone passed that pair."""
+    import pytest
+
+    base, head = tmp_path / "base", tmp_path / "head"
+    for folder, llc in ((base, b"llc one"), (head, b"llc two")):
+        folder.mkdir()
+        (folder / "llrm-cc").write_bytes(folder.name.encode())
+        (folder / "llrm-llc").write_bytes(llc)
+        (folder / "llrm-wasm-llc").write_bytes(b"wasm one")
+    names = ("llrm-llc", "llrm-wasm-llc")
+    llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc")  # the default names pass it, as before
+    with pytest.raises(SystemExit, match="same llrm-wasm-llc"):
+        llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc", names=names)
+    (head / "llrm-wasm-llc").write_bytes(b"wasm two")
+    llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc", names=names)
+    (base / "llrm-wasm-llc").unlink()
+    llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc", names=names)
+    with pytest.raises(SystemExit, match="missing llrm-wasm-llc"):
+        llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc", names=names, required=True)
