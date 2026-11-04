@@ -211,7 +211,7 @@ fn allocate(
     let has_loop = !Cfg::new(&function).loops().is_empty();
     let with = |unjoined: Option<bool>, strict: bool, function: MFunction| {
         crate::regalloc::UNJOINED.with(|one| one.set(unjoined));
-        let done = allocate_once(function, name, strict);
+        let done = allocate_once(function, name, strict, level);
         crate::regalloc::UNJOINED.with(|one| one.set(None));
         done
     };
@@ -257,6 +257,7 @@ fn allocate_once(
     mut function: MFunction,
     name: &str,
     strict: bool,
+    level: Level,
 ) -> Result<(Allocated, bool), String> {
     two_address(&mut function);
     let held = read_bytes_through_their_pairs(&mut function, strict);
@@ -274,7 +275,14 @@ fn allocate_once(
     remove_identity_copies(&mut function, &assignment);
     tidy_copies(&mut function, &assignment);
     use_lanes_in_place(&mut function, &assignment);
-    llrm_spike_mf::branch_fold_hoisting::<Z80Registers>(&mut function, &assignment);
+    // The merged guard and latch of a loop cost one entry jump: bytes for
+    // clocks.
+    let bytes_first = matches!(level, Level::Os | Level::Oz);
+    if bytes_first {
+        llrm_spike_mf::branch_fold_hoisting_across_loops::<Z80Registers>(&mut function, &assignment);
+    } else {
+        llrm_spike_mf::branch_fold_hoisting::<Z80Registers>(&mut function, &assignment);
+    }
     place_copies_where_needed(&mut function, &assignment);
     read_copies_at_their_source(&mut function, &assignment);
     return_conditionally(&mut function);

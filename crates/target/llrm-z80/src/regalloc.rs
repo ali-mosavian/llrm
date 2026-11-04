@@ -190,11 +190,6 @@ impl llrm_spike_mf::Jump for Z80Registers {
         inst
     }
 
-    /// The pin's rule: before block placement tail merging crosses loops.
-    fn merge_across_loops() -> bool {
-        true
-    }
-
     /// `reverseBranchCondition`: `jp nz` and `jp z` swap, as do `jp nc` and `jp
     /// c`.
     fn reverse(branch: &Inst) -> Option<Inst> {

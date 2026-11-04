@@ -51,13 +51,6 @@ pub trait Jump {
     fn reverse(_branch: &Inst) -> Option<Inst> {
         None
     }
-
-    /// Whether tail merging may join blocks of different loops, as the pin's
-    /// `BranchFolder` does before block placement; false keeps the DEVIATE in
-    /// `tailmerge.rs`.
-    fn merge_across_loops() -> bool {
-        false
-    }
 }
 
 /// Where a virtual register is read: the block holding the instruction or

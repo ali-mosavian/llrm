@@ -842,6 +842,18 @@ pub fn merge_tails<J: Jump, C>(
     function: &mut MFunction<C>,
     assignment: Option<&Assignment>,
 ) -> bool {
+    merge_tails_across_loops::<J, C>(function, assignment, false)
+}
+
+/// [`merge_tails`], and with `across_loops` blocks of different loops merge as
+/// the pin's `BranchFolder` does before block placement. The merged guard and
+/// latch of a loop leave its test at the bottom behind one entry jump: bytes
+/// for clocks, so the caller says where bytes outrank clocks.
+pub fn merge_tails_across_loops<J: Jump, C>(
+    function: &mut MFunction<C>,
+    assignment: Option<&Assignment>,
+    across_loops: bool,
+) -> bool {
     if function.blocks.iter().any(|block| !block.phis.is_empty()) {
         return false;
     }
@@ -852,7 +864,7 @@ pub fn merge_tails<J: Jump, C>(
         loops: std::collections::HashMap::new(),
         jump: std::marker::PhantomData,
     };
-    if !J::merge_across_loops() {
+    if !across_loops {
         mf.loops = innermost_loops(&mf.blocks(), |block| mf.successors(block));
     }
     tail_merge_blocks(&mut mf)

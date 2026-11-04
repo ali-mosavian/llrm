@@ -35,14 +35,12 @@ fn the_convention_states_whether_the_argument_copies_are_joined() {
 /// `de` at entry for the first compare, and the loop head copied it back: the
 /// compare reads `hl` where the copy is made, the loop head's copy moves to the
 /// back edge (an `ex de, hl` there), and the entry copy has no reader left.
-/// With the guard and latch tests merged the loop is entered at its test, so
-/// the entry swap is an `ex de, hl` too, and the test is emitted once.
 #[test]
 fn a_word_compared_after_its_copy_reads_the_copys_source() {
     unjoined();
     let ir = include_str!("kernels/ir/digits.ll");
     let out = text(ir, "digits", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
-    assert!(!out.contains("ld e, l") && out.matches("sbc a, #0").count() == 1, "{out}");
+    assert!(!out.contains("ld e, l") && out.matches("ex de, hl").count() == 1, "{out}");
 }
 
 /// With the argument copy left in place, crc16 copied `a` to `b` to store it
