@@ -617,6 +617,21 @@ mod tests {
             // of the table's GEP as the proof its index does not wrap. It
             // reads no other flag and sets none.
             "aggressive_instcombine.rs",
+            // CodeGenPrepare.cpp's `AddrMode.InBounds`: a mode stays in
+            // bounds while every GEP it folds is, and the sunk address is made
+            // `inbounds` on that (`CreatePtrAdd(.., "sunkaddr",
+            // AddrMode.InBounds)`); it puts the flag on new GEPs and takes
+            // none off an instruction.
+            "cgpaddr.rs",
+            // InstCombineCalls.cpp's `abs` folds read a `neg`'s and a `mul`'s
+            // `nsw` and set it on the new instruction only.
+            "combine_abs.rs",
+            // `ptrtoint` of a GEP chain is adds carrying the GEP's `nuw`
+            // (`EmitGEPOffsets`); the GEP is read, not changed.
+            "combine_ptrcast.rs",
+            // `visitSwitchInst`'s `switch (X << C)` is `switch X` when the
+            // `shl` is `nuw` or `nsw`; the `shl` is read, never rewritten.
+            "combine_switch.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =
