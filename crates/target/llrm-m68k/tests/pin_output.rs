@@ -317,7 +317,7 @@ fn after_pinned_mid_end(ir: &str) -> String {
     use std::rc::Rc;
     let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses");
     let tti = llrm_m68k::machine::M68k::default();
-    let done = llrm_m68k::compile::mid_end_described_by(&module, &tti, Some(Rc::new(llrm_m68k::machine::M68kMachine)))
+    let done = llrm_m68k::compile::mid_end_described_by(&module, &tti, Some(Rc::new(llrm_m68k::machine::M68kMachine::default())))
         .expect("the mid-end runs");
     llrm_mir::print::module(&done)
 }

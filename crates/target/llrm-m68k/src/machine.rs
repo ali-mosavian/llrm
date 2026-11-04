@@ -21,8 +21,12 @@ use llrm_mir::tti::{
 };
 
 /// The m68k cost model the passes of the mid-end read.
-#[derive(Clone, Debug, Default)]
-pub struct M68kMachine;
+#[derive(Clone, Copy, Debug, Default)]
+pub struct M68kMachine {
+    /// The processor the code is for: a fact of the target description, read
+    /// by the cost model through [`M68k::cpu`].
+    pub cpu: crate::dagisel::hooks::Cpu,
+}
 
 impl Machine for M68kMachine {
     fn foreign_span(
@@ -35,7 +39,7 @@ impl Machine for M68kMachine {
     }
 
     fn tti(&self) -> Option<Rc<dyn Tti>> {
-        Some(Rc::new(M68k::default()))
+        Some(Rc::new(M68k::for_cpu(self.cpu)))
     }
 
     fn spaces(&self) -> Spaces {
@@ -72,8 +76,17 @@ impl Machine for M68kMachine {
 /// The m68k `TargetTransformInfo`: the base class's answers.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct M68k {
+    /// The processor the code is for; the 68000 where none is given.
+    pub cpu: crate::dagisel::hooks::Cpu,
     /// The 68020's scaled index, `(d8, An, Xn*2/4/8)`; the 68000 has none.
     pub scaled_index: bool,
+}
+
+impl M68k {
+    /// The cost model of `cpu`.
+    pub fn for_cpu(cpu: crate::dagisel::hooks::Cpu) -> M68k {
+        M68k { cpu, ..M68k::default() }
+    }
 }
 
 impl Tti for M68k {
