@@ -1,4 +1,4 @@
-# 6502 gcc matrix, fork spike/backends d4bcf8861 (column gcc-noivopts-Os: -fno-ivopts at -Os only; O1/O2 run the same cc1 without it, with the (zp)+byte address fix) (gcc 17.0.0 master d77bceec), 2026-11-03, cc1 md5 75c808c2b62e3a06aabf99276ca3c010, sim65 = cc65 V2.19 source (sha256 157b8051…, fetched 2026-11-03T00:17:22Z) with an instruction counter, md5 880101364fa9dec38179c326ebff21fe, cl65 -t sim6502 (gcc) / sim65c02 (gcc-65c02, -m65c02); levels gcc -O1/-O2/-Os as run; clocks=(T101-T1)/100-9 and instrs=(I101-I1)/100-2 incl. argument set-up, return and helper calls; code_bytes=CODE+RODATA+DATA of the kernel object plus the plain hand-written helpers it calls. RESULT CONVENTION: the other columns return in A (A:X); gcc returns in rc2 (rc2:rc3), so every gcc cell is charged the caller's move into A (A:X): QI +2 B +3 clk +1 insn, 16-bit +4 B +6 clk +2 insn (lda rc2; ldx rc3); the note says so. Cells noted 'hand helper, not codegen' (mul/div/mem* helpers written by hand) or 'table, not codegen' (gcc-made constant table) are not compiler wins. ABI otherwise: args in zero-page rc2.. like ours, A/X/Y scratch; a cell that links cc65 library code is n/a
+# 6502 gcc matrix, fork spike/mos-shift-fuse 8a6bd42f0 (the first step of a copying 16-bit shift goes through A) (column gcc-noivopts-Os: -fno-ivopts at -Os only; O1/O2 run the same cc1 without it, with the (zp)+byte address fix) (gcc 17.0.0 master d77bceec), 2026-11-04, cc1 md5 e11cc55f6c97f038ed4c911731f21d55, sim65 = cc65 V2.19 source (sha256 157b8051…, fetched 2026-11-04T00:17:22Z) with an instruction counter, md5 880101364fa9dec38179c326ebff21fe, cl65 -t sim6502 (gcc) / sim65c02 (gcc-65c02, -m65c02); levels gcc -O1/-O2/-Os as run; clocks=(T101-T1)/100-9 and instrs=(I101-I1)/100-2 incl. argument set-up, return and helper calls; code_bytes=CODE+RODATA+DATA of the kernel object plus the plain hand-written helpers it calls. RESULT CONVENTION: the other columns return in A (A:X); gcc returns in rc2 (rc2:rc3), so every gcc cell is charged the caller's move into A (A:X): QI +2 B +3 clk +1 insn, 16-bit +4 B +6 clk +2 insn (lda rc2; ldx rc3); the note says so. Cells noted 'hand helper, not codegen' (mul/div/mem* helpers written by hand) or 'table, not codegen' (gcc-made constant table) are not compiler wins. ABI otherwise: args in zero-page rc2.. like ours, A/X/Y scratch; a cell that links cc65 library code is n/a
 target	prog	level	compiler	code_bytes	clocks	instrs	note
 6502	zero	O1	gcc-noivopts-Os	7	20	5	incl. result move +2 B +3 clk +1 insn
 6502	zero	O2	gcc-noivopts-Os	7	20	5	incl. result move +2 B +3 clk +1 insn
@@ -84,9 +84,9 @@ target	prog	level	compiler	code_bytes	clocks	instrs	note
 6502	fletcher	O1	gcc-noivopts-Os	129	964	333	incl. result move +4 B +6 clk +2 insn
 6502	fletcher	O2	gcc-noivopts-Os	145	1022	347	incl. result move +4 B +6 clk +2 insn
 6502	fletcher	Os	gcc-noivopts-Os	100	939	324	incl. result move +4 B +6 clk +2 insn
-6502	hash16	O1	gcc-noivopts-Os	110	1469	416	incl. result move +4 B +6 clk +2 insn
-6502	hash16	O2	gcc-noivopts-Os	104	1472	417	incl. result move +4 B +6 clk +2 insn
-6502	hash16	Os	gcc-noivopts-Os	100	1569	449	incl. result move +4 B +6 clk +2 insn
+6502	hash16	O1	gcc-noivopts-Os	108	1403	416	incl. result move +4 B +6 clk +2 insn
+6502	hash16	O2	gcc-noivopts-Os	102	1406	417	incl. result move +4 B +6 clk +2 insn
+6502	hash16	Os	gcc-noivopts-Os	98	1503	449	incl. result move +4 B +6 clk +2 insn
 6502	dotx	O1	gcc-noivopts-Os	84	550	169	incl. result move +2 B +3 clk +1 insn
 6502	dotx	O2	gcc-noivopts-Os	88	556	171	incl. result move +2 B +3 clk +1 insn
 6502	dotx	Os	gcc-noivopts-Os	93	886	293	incl. result move +2 B +3 clk +1 insn
@@ -96,9 +96,9 @@ target	prog	level	compiler	code_bytes	clocks	instrs	note
 6502	k_asrax4	O1	gcc-noivopts-Os	35	79	25	incl. result move +4 B +6 clk +2 insn
 6502	k_asrax4	O2	gcc-noivopts-Os	35	79	25	incl. result move +4 B +6 clk +2 insn
 6502	k_asrax4	Os	gcc-noivopts-Os	35	79	25	incl. result move +4 B +6 clk +2 insn
-6502	k_atoi	O1	gcc-noivopts-Os	231	772	250	incl. result move +4 B +6 clk +2 insn
-6502	k_atoi	O2	gcc-noivopts-Os	261	731	237	incl. result move +4 B +6 clk +2 insn
-6502	k_atoi	Os	gcc-noivopts-Os	191	758	245	incl. result move +4 B +6 clk +2 insn
+6502	k_atoi	O1	gcc-noivopts-Os	226	744	250	incl. result move +4 B +6 clk +2 insn
+6502	k_atoi	O2	gcc-noivopts-Os	259	707	237	incl. result move +4 B +6 clk +2 insn
+6502	k_atoi	Os	gcc-noivopts-Os	189	730	245	incl. result move +4 B +6 clk +2 insn
 6502	k_imul8x8r16	O1	gcc-noivopts-Os	73	652	183	hand helper, not codegen; incl. result move +4 B +6 clk +2 insn; body 26 B + __mulhi3 43 B
 6502	k_imul8x8r16	O2	gcc-noivopts-Os	73	652	183	hand helper, not codegen; incl. result move +4 B +6 clk +2 insn; body 26 B + __mulhi3 43 B
 6502	k_imul8x8r16	Os	gcc-noivopts-Os	73	652	183	hand helper, not codegen; incl. result move +4 B +6 clk +2 insn; body 26 B + __mulhi3 43 B
@@ -135,30 +135,30 @@ target	prog	level	compiler	code_bytes	clocks	instrs	note
 6502	k_memset	O1	gcc-noivopts-Os	56	991	289	incl. result move +4 B +6 clk +2 insn
 6502	k_memset	O2	gcc-noivopts-Os	101	1324	407	hand helper, not codegen; incl. result move +4 B +6 clk +2 insn; body 60 B + __memset 37 B
 6502	k_memset	Os	gcc-noivopts-Os	42	1412	407	incl. result move +4 B +6 clk +2 insn
-6502	k_mul20	O1	gcc-noivopts-Os	46	100	27	incl. result move +4 B +6 clk +2 insn
-6502	k_mul20	O2	gcc-noivopts-Os	46	100	27	incl. result move +4 B +6 clk +2 insn
-6502	k_mul20	Os	gcc-noivopts-Os	46	100	27	incl. result move +4 B +6 clk +2 insn
-6502	k_mul40	O1	gcc-noivopts-Os	50	110	29	incl. result move +4 B +6 clk +2 insn
-6502	k_mul40	O2	gcc-noivopts-Os	50	110	29	incl. result move +4 B +6 clk +2 insn
-6502	k_mul40	Os	gcc-noivopts-Os	50	110	29	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax10	O1	gcc-noivopts-Os	38	90	25	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax10	O2	gcc-noivopts-Os	38	90	25	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax10	Os	gcc-noivopts-Os	38	90	25	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax3	O1	gcc-noivopts-Os	30	70	21	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax3	O2	gcc-noivopts-Os	30	70	21	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax3	Os	gcc-noivopts-Os	30	70	21	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax5	O1	gcc-noivopts-Os	34	80	23	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax5	O2	gcc-noivopts-Os	34	80	23	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax5	Os	gcc-noivopts-Os	34	80	23	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax6	O1	gcc-noivopts-Os	34	80	23	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax6	O2	gcc-noivopts-Os	34	80	23	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax6	Os	gcc-noivopts-Os	34	80	23	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax7	O1	gcc-noivopts-Os	38	90	25	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax7	O2	gcc-noivopts-Os	38	90	25	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax7	Os	gcc-noivopts-Os	38	90	25	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax9	O1	gcc-noivopts-Os	38	90	25	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax9	O2	gcc-noivopts-Os	38	90	25	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax9	Os	gcc-noivopts-Os	38	90	25	incl. result move +4 B +6 clk +2 insn
+6502	k_mul20	O1	gcc-noivopts-Os	44	94	27	incl. result move +4 B +6 clk +2 insn
+6502	k_mul20	O2	gcc-noivopts-Os	44	94	27	incl. result move +4 B +6 clk +2 insn
+6502	k_mul20	Os	gcc-noivopts-Os	44	94	27	incl. result move +4 B +6 clk +2 insn
+6502	k_mul40	O1	gcc-noivopts-Os	48	104	29	incl. result move +4 B +6 clk +2 insn
+6502	k_mul40	O2	gcc-noivopts-Os	48	104	29	incl. result move +4 B +6 clk +2 insn
+6502	k_mul40	Os	gcc-noivopts-Os	48	104	29	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax10	O1	gcc-noivopts-Os	36	84	25	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax10	O2	gcc-noivopts-Os	36	84	25	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax10	Os	gcc-noivopts-Os	36	84	25	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax3	O1	gcc-noivopts-Os	28	64	21	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax3	O2	gcc-noivopts-Os	28	64	21	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax3	Os	gcc-noivopts-Os	28	64	21	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax5	O1	gcc-noivopts-Os	32	74	23	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax5	O2	gcc-noivopts-Os	32	74	23	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax5	Os	gcc-noivopts-Os	32	74	23	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax6	O1	gcc-noivopts-Os	32	74	23	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax6	O2	gcc-noivopts-Os	32	74	23	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax6	Os	gcc-noivopts-Os	32	74	23	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax7	O1	gcc-noivopts-Os	36	84	25	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax7	O2	gcc-noivopts-Os	36	84	25	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax7	Os	gcc-noivopts-Os	36	84	25	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax9	O1	gcc-noivopts-Os	36	84	25	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax9	O2	gcc-noivopts-Os	36	84	25	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax9	Os	gcc-noivopts-Os	36	84	25	incl. result move +4 B +6 clk +2 insn
 6502	k_shrax3	O1	gcc-noivopts-Os	17	58	14	incl. result move +4 B +6 clk +2 insn
 6502	k_shrax3	O2	gcc-noivopts-Os	17	58	14	incl. result move +4 B +6 clk +2 insn
 6502	k_shrax3	Os	gcc-noivopts-Os	17	58	14	incl. result move +4 B +6 clk +2 insn
@@ -327,9 +327,9 @@ target	prog	level	compiler	code_bytes	clocks	instrs	note
 6502	fletcher	O1	gcc-65c02-noivopts-Os	112	923	313	incl. result move +4 B +6 clk +2 insn
 6502	fletcher	O2	gcc-65c02-noivopts-Os	127	979	326	incl. result move +4 B +6 clk +2 insn
 6502	fletcher	Os	gcc-65c02-noivopts-Os	88	930	320	incl. result move +4 B +6 clk +2 insn
-6502	hash16	O1	gcc-65c02-noivopts-Os	104	1423	393	incl. result move +4 B +6 clk +2 insn
-6502	hash16	O2	gcc-65c02-noivopts-Os	98	1426	394	incl. result move +4 B +6 clk +2 insn
-6502	hash16	Os	gcc-65c02-noivopts-Os	94	1490	415	incl. result move +4 B +6 clk +2 insn
+6502	hash16	O1	gcc-65c02-noivopts-Os	102	1357	393	incl. result move +4 B +6 clk +2 insn
+6502	hash16	O2	gcc-65c02-noivopts-Os	96	1360	394	incl. result move +4 B +6 clk +2 insn
+6502	hash16	Os	gcc-65c02-noivopts-Os	92	1424	415	incl. result move +4 B +6 clk +2 insn
 6502	dotx	O1	gcc-65c02-noivopts-Os	78	530	159	incl. result move +2 B +3 clk +1 insn
 6502	dotx	O2	gcc-65c02-noivopts-Os	78	533	160	incl. result move +2 B +3 clk +1 insn
 6502	dotx	Os	gcc-65c02-noivopts-Os	85	828	268	incl. result move +2 B +3 clk +1 insn
@@ -339,9 +339,9 @@ target	prog	level	compiler	code_bytes	clocks	instrs	note
 6502	k_asrax4	O1	gcc-65c02-noivopts-Os	35	79	25	incl. result move +4 B +6 clk +2 insn
 6502	k_asrax4	O2	gcc-65c02-noivopts-Os	35	79	25	incl. result move +4 B +6 clk +2 insn
 6502	k_asrax4	Os	gcc-65c02-noivopts-Os	35	79	25	incl. result move +4 B +6 clk +2 insn
-6502	k_atoi	O1	gcc-65c02-noivopts-Os	208	725	231	incl. result move +4 B +6 clk +2 insn
-6502	k_atoi	O2	gcc-65c02-noivopts-Os	239	700	222	incl. result move +4 B +6 clk +2 insn
-6502	k_atoi	Os	gcc-65c02-noivopts-Os	177	714	227	incl. result move +4 B +6 clk +2 insn
+6502	k_atoi	O1	gcc-65c02-noivopts-Os	206	701	231	incl. result move +4 B +6 clk +2 insn
+6502	k_atoi	O2	gcc-65c02-noivopts-Os	237	676	222	incl. result move +4 B +6 clk +2 insn
+6502	k_atoi	Os	gcc-65c02-noivopts-Os	175	690	227	incl. result move +4 B +6 clk +2 insn
 6502	k_imul8x8r16	O1	gcc-65c02-noivopts-Os	73	652	183	hand helper, not codegen; incl. result move +4 B +6 clk +2 insn; body 26 B + __mulhi3 43 B
 6502	k_imul8x8r16	O2	gcc-65c02-noivopts-Os	73	652	183	hand helper, not codegen; incl. result move +4 B +6 clk +2 insn; body 26 B + __mulhi3 43 B
 6502	k_imul8x8r16	Os	gcc-65c02-noivopts-Os	73	652	183	hand helper, not codegen; incl. result move +4 B +6 clk +2 insn; body 26 B + __mulhi3 43 B
@@ -378,30 +378,30 @@ target	prog	level	compiler	code_bytes	clocks	instrs	note
 6502	k_memset	O1	gcc-65c02-noivopts-Os	54	895	257	incl. result move +4 B +6 clk +2 insn
 6502	k_memset	O2	gcc-65c02-noivopts-Os	97	1319	405	hand helper, not codegen; incl. result move +4 B +6 clk +2 insn; body 56 B + __memset 37 B
 6502	k_memset	Os	gcc-65c02-noivopts-Os	40	1316	375	incl. result move +4 B +6 clk +2 insn
-6502	k_mul20	O1	gcc-65c02-noivopts-Os	44	98	26	incl. result move +4 B +6 clk +2 insn
-6502	k_mul20	O2	gcc-65c02-noivopts-Os	44	98	26	incl. result move +4 B +6 clk +2 insn
-6502	k_mul20	Os	gcc-65c02-noivopts-Os	44	98	26	incl. result move +4 B +6 clk +2 insn
-6502	k_mul40	O1	gcc-65c02-noivopts-Os	48	108	28	incl. result move +4 B +6 clk +2 insn
-6502	k_mul40	O2	gcc-65c02-noivopts-Os	48	108	28	incl. result move +4 B +6 clk +2 insn
-6502	k_mul40	Os	gcc-65c02-noivopts-Os	48	108	28	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax10	O1	gcc-65c02-noivopts-Os	38	90	25	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax10	O2	gcc-65c02-noivopts-Os	38	90	25	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax10	Os	gcc-65c02-noivopts-Os	38	90	25	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax3	O1	gcc-65c02-noivopts-Os	30	70	21	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax3	O2	gcc-65c02-noivopts-Os	30	70	21	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax3	Os	gcc-65c02-noivopts-Os	30	70	21	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax5	O1	gcc-65c02-noivopts-Os	34	80	23	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax5	O2	gcc-65c02-noivopts-Os	34	80	23	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax5	Os	gcc-65c02-noivopts-Os	34	80	23	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax6	O1	gcc-65c02-noivopts-Os	34	80	23	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax6	O2	gcc-65c02-noivopts-Os	34	80	23	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax6	Os	gcc-65c02-noivopts-Os	34	80	23	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax7	O1	gcc-65c02-noivopts-Os	38	90	25	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax7	O2	gcc-65c02-noivopts-Os	38	90	25	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax7	Os	gcc-65c02-noivopts-Os	38	90	25	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax9	O1	gcc-65c02-noivopts-Os	38	90	25	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax9	O2	gcc-65c02-noivopts-Os	38	90	25	incl. result move +4 B +6 clk +2 insn
-6502	k_mulax9	Os	gcc-65c02-noivopts-Os	38	90	25	incl. result move +4 B +6 clk +2 insn
+6502	k_mul20	O1	gcc-65c02-noivopts-Os	42	92	26	incl. result move +4 B +6 clk +2 insn
+6502	k_mul20	O2	gcc-65c02-noivopts-Os	42	92	26	incl. result move +4 B +6 clk +2 insn
+6502	k_mul20	Os	gcc-65c02-noivopts-Os	42	92	26	incl. result move +4 B +6 clk +2 insn
+6502	k_mul40	O1	gcc-65c02-noivopts-Os	46	102	28	incl. result move +4 B +6 clk +2 insn
+6502	k_mul40	O2	gcc-65c02-noivopts-Os	46	102	28	incl. result move +4 B +6 clk +2 insn
+6502	k_mul40	Os	gcc-65c02-noivopts-Os	46	102	28	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax10	O1	gcc-65c02-noivopts-Os	36	84	25	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax10	O2	gcc-65c02-noivopts-Os	36	84	25	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax10	Os	gcc-65c02-noivopts-Os	36	84	25	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax3	O1	gcc-65c02-noivopts-Os	28	64	21	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax3	O2	gcc-65c02-noivopts-Os	28	64	21	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax3	Os	gcc-65c02-noivopts-Os	28	64	21	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax5	O1	gcc-65c02-noivopts-Os	32	74	23	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax5	O2	gcc-65c02-noivopts-Os	32	74	23	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax5	Os	gcc-65c02-noivopts-Os	32	74	23	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax6	O1	gcc-65c02-noivopts-Os	32	74	23	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax6	O2	gcc-65c02-noivopts-Os	32	74	23	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax6	Os	gcc-65c02-noivopts-Os	32	74	23	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax7	O1	gcc-65c02-noivopts-Os	36	84	25	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax7	O2	gcc-65c02-noivopts-Os	36	84	25	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax7	Os	gcc-65c02-noivopts-Os	36	84	25	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax9	O1	gcc-65c02-noivopts-Os	36	84	25	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax9	O2	gcc-65c02-noivopts-Os	36	84	25	incl. result move +4 B +6 clk +2 insn
+6502	k_mulax9	Os	gcc-65c02-noivopts-Os	36	84	25	incl. result move +4 B +6 clk +2 insn
 6502	k_shrax3	O1	gcc-65c02-noivopts-Os	17	58	14	incl. result move +4 B +6 clk +2 insn
 6502	k_shrax3	O2	gcc-65c02-noivopts-Os	17	58	14	incl. result move +4 B +6 clk +2 insn
 6502	k_shrax3	Os	gcc-65c02-noivopts-Os	17	58	14	incl. result move +4 B +6 clk +2 insn

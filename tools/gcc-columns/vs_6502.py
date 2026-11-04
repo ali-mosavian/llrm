@@ -30,9 +30,15 @@ for t, p, l, c, b, k, i, n in rows(f'{d}/6502.tsv'):
         c = {v: k_ for k_, v in NAMES.items()}[c]
         x = o[p].setdefault(c, [10**9, 10**9, 10**9]); x[0] = min(x[0], int(b)); x[1] = min(x[1], int(k))
         if i: x[2] = min(x[2], int(i))
+def md5_of(name):
+    import re
+    m = re.search(r"cc1 md5 ([0-9a-f]{8})", open(f"{d}/{name}").readline())
+    return m.group(1) if m else "?"
+
+
 OURS = open(f"{d}/6502.tsv").readline().lstrip("# ").split(";")[0].strip()
 L = [f"# gcc 6502 vs the other {'65C02' if cmos else 'NMOS'} columns, {date}", "",
-     f"gcc = best of -O1/-O2/-Os and of both gcc columns (cc1 md5 4c91eb80 gcc, 75c808c2 gcc-noivopts-Os) per metric (bytes and clocks separately), bytes include the helpers it calls; others = min over the levels in matrix/6502.tsv ({OURS}). Same corpus and method. Instruction counts: the sim65-insns column of each (llvm-mos has none).", "",
+     f"gcc = best of -O1/-O2/-Os and of both gcc columns (cc1 md5 {md5_of('6502-gcc.tsv')} gcc, {md5_of('6502-gcc.noivopts.tsv')} gcc-noivopts-Os) per metric (bytes and clocks separately), bytes include the helpers it calls; others = min over the levels in matrix/6502.tsv ({OURS}). Same corpus and method. Instruction counts: the sim65-insns column of each (llvm-mos has none).", "",
      "| prog | gcc B | gcc clk | gcc insn | ours B/clk/insn | llvm-mos B/clk | sdcc B/clk/insn | cc65 B/clk/insn | gcc beats the best other |", "|---|---|---|---|---|---|---|---|---|"]
 wb = wc = n = 0
 for p in g:
