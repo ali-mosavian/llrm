@@ -225,6 +225,9 @@ pub fn pin_vt(vt: EVT) -> Vt {
         EVT::Simple(MVT::F32) => mvt::f32,
         EVT::Simple(MVT::F64) => mvt::f64,
         EVT::Simple(MVT::F80) => mvt::f80,
+        // The opaque 16 bytes of an SSE move (`LLRM_ZERO128`, `LLRM_COPY128`);
+        // no pattern asks for it (SD540).
+        EVT::Simple(MVT::I128) => mvt::v4i32,
         EVT::Simple(MVT::Other) => mvt::Other,
         EVT::Simple(MVT::Glue) => mvt::Glue,
         _ => Vt(u16::MAX),
@@ -242,6 +245,7 @@ fn our_vt(vt: Vt) -> EVT {
         (mvt::f32, EVT::Simple(MVT::F32)),
         (mvt::f64, EVT::Simple(MVT::F64)),
         (mvt::f80, EVT::Simple(MVT::F80)),
+        (mvt::v4i32, EVT::Simple(MVT::I128)),
         (mvt::Other, EVT::OTHER),
         (mvt::Glue, EVT::GLUE),
     ]

@@ -2880,3 +2880,91 @@ fn an_x86_64_macho_frame_states_no_address_at_its_exit_but_elf_does() {
     assert_eq!(def_cfa_rsp_8("x86_64-unknown-linux-gnu", "e"), 2, "control: ELF states the address after the pop");
     assert_eq!(def_cfa_rsp_8("x86_64-apple-macosx", "o"), 1, "Mach-O states none");
 }
+
+/// `getOptimalMemOpType` gives 16 bytes (`v4i32`) with SSE2: a 16-byte clear
+/// is `xorps` and one 16-byte store (5 B), not two `mov qword [..], 0` (18 B);
+/// nbody O2 was +31 B over the pin on four of them.
+#[test]
+fn a_16_byte_clear_is_xorps_and_one_16_byte_store_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @g = global [16 x i8] zeroinitializer, align 16\n\
+                declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\n\
+                define void @f() {\n  call void @llvm.memset.p0.i64(ptr @g, i8 0, i64 16, i1 false)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let has = |start: &str| listing.lines().any(|line| line.trim().starts_with(start));
+    assert!(has("xorps") && has("movaps"), "{listing}");
+    assert!(!listing.contains("qword"), "{listing}");
+}
+
+/// A local declared `align 16` sat at `[rsp+4]`: the frame clamped every
+/// alignment to 4 (bintree's array; a 16-byte `movaps` clear of it would fault).
+#[test]
+fn a_local_declared_align_16_is_16_aligned_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @use(ptr)\n\
+                define void @f() {\n  %a = alloca [28 x i8], align 16\n  call void @use(ptr %a)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("lea rdi, [rsp]\n"), "{listing}");
+}
+
+/// A 28-byte clear of an `align 16` local used `movaps` at `[rsp+4]`, which
+/// faults; every `movaps` must now sit at a 16-aligned offset from `rsp`.
+#[test]
+fn a_clear_of_an_align_16_local_never_movaps_a_misaligned_address_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @use(ptr)\n\
+                declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\n\
+                define void @f() {\n  %a = alloca [28 x i8], align 16\n  call void @llvm.memset.p0.i64(ptr %a, i8 0, i64 28, i1 false)\n  call void @use(ptr %a)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let stores: Vec<&str> = listing.lines().map(str::trim).filter(|line| line.starts_with("movaps")).collect();
+    assert!(!stores.is_empty(), "{listing}");
+    for line in stores {
+        let disp = line.split("[rsp").nth(1).and_then(|rest| rest.split(']').next()).unwrap_or("");
+        let disp: i64 = disp.trim_start_matches('+').parse().unwrap_or(0);
+        assert_eq!(disp % 16, 0, "{listing}");
+    }
+}
+
+/// Tuned for size, a 128-byte clear is `rep stosq` (13 B), not `xorps` and
+/// eight `movaps` (up to 72 B); a 32-byte clear stays two stores. The pin's
+/// store count made it eight `movaps`: pattern_fill -Os +50 B, huffman_decode
+/// +12 B over the `rep stosq` the port had.
+#[test]
+fn a_128_byte_clear_at_m64_os_is_rep_stosq_and_a_32_byte_one_is_stores() {
+    let ir = |size: u32| {
+        format!(
+            "target datalayout = \"@m64-datalayout@\"\n\
+             target triple = \"x86_64-unknown-linux-gnu\"\n\
+             @g = global [{size} x i8] zeroinitializer, align 16\n\
+             declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\n\
+             define void @f() optsize {{\n  call void @llvm.memset.p0.i64(ptr @g, i8 0, i64 {size}, i1 false)\n  ret void\n}}\n"
+        )
+    };
+    let listing = |size: u32| {
+        let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), &ir(size), "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let large = listing(128);
+    assert!(large.contains("rep stosq") && !large.contains("movaps"), "{large}");
+    let small = listing(32);
+    assert!(small.contains("xorps") && !small.contains("rep stos"), "{small}");
+}
+
+/// A 16-byte copy of unaligned memory is `movups` load and store.
+#[test]
+fn an_unaligned_16_byte_copy_is_movups_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
+                define void @f(ptr %d, ptr %s) {\n  call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 16, i1 false)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let count = listing.lines().filter(|line| line.trim().starts_with("movups")).count();
+    assert_eq!(count, 2, "{listing}");
+}
