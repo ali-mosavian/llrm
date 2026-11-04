@@ -335,7 +335,7 @@ impl CombineHooks for X86Lowering<'_> {
         demanded: u128,
         _level: CombineLevel,
     ) -> Option<Option<SDValue>> {
-        x86_shrink_demanded_constant(dag, op, demanded)
+        x86_shrink_demanded_constant(dag, op, demanded, self.i16_mul_chains)
     }
 
     fn promote_type(
@@ -356,6 +356,7 @@ fn x86_shrink_demanded_constant(
     dag: &mut SelectionDAG,
     op: SDValue,
     demanded: u128,
+    keep_imm8: bool,
 ) -> Option<Option<SDValue>> {
     if dag.opcode(op) != ISD::And {
         return None;
@@ -373,11 +374,26 @@ fn x86_shrink_demanded_constant(
         return Some(None);
     }
     if zero_extend & !(mask | !demanded) != 0 {
-        return None;
+        // DEVIATE SD212c, m16 only (`keep_imm8` is `i16_mul_chains`, the
+        // DEVIATE M1 / SD441 switch): the generic shrink would turn an imm8
+        // mask (`-64`) into an imm32 (`0x0FFFFFC0`), 3 B longer for the same
+        // work. Keep it. Exit: with the M1 review, 2026-12-01; owner
+        // llrm-target-wasm.
+        return (keep_imm8 && mask & !demanded != 0 && is_imm8_mask(mask, vt.size_in_bits())).then_some(None);
     }
     let new_mask = dag.get_constant(zero_extend, vt);
     let x = dag.operand(op, 0);
     Some(Some(dag.get_node(ISD::And, vt, &[x, new_mask])))
+}
+
+/// A mask of 16 bits or more that an `and` encodes as a sign-extended imm8.
+fn is_imm8_mask(mask: u128, bits: u32) -> bool {
+    if bits < 16 {
+        return false;
+    }
+    let sign = 1u128 << (bits - 1);
+    let signed = if mask & sign != 0 { (mask as i128) - (1i128 << bits) } else { mask as i128 };
+    (-128..=127).contains(&signed)
 }
 
 /// Whether this target promotes `i16` (and `i8` multiply) operations to `i32`
