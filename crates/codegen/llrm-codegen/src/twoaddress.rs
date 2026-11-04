@@ -566,6 +566,35 @@ fn movable(one: &Insn) -> bool {
         })
 }
 
+/// An `fld` of a memory cell onto the x87 stack: the one reader of a pointer
+/// that is safe to move above an integer instruction (the pin's
+/// `isSafeToMove` of a load, `rescheduleKillAboveMI`).
+fn is_x87_load(one: &Insn) -> bool {
+    use crate::model::ir::Operation as Op;
+    let Some(what) = one.what.as_ref() else { return false };
+    what.op == Op::FloatLoad
+        && what.name.as_deref() == Some("fld")
+        && !barrier(one)
+        && matches!(what.sources.as_slice(), [Loc::Mem(_)])
+        && what.dests.iter().all(|place| matches!(place, Loc::Held(held) if held.width == 10))
+}
+
+/// Whether `one` reads or writes the x87 stack or a memory cell.
+fn touches_x87_or_memory(one: &Insn) -> bool {
+    use crate::model::ir::Operation as Op;
+    let Some(what) = one.what.as_ref() else { return true };
+    matches!(
+        what.op,
+        Op::FloatLoad | Op::FloatStore | Op::FloatArith | Op::FloatArithPop | Op::FloatUnary
+    )
+        || what
+            .dests
+            .iter()
+            .chain(&what.sources)
+            .any(|place| place.st_index().is_some() || matches!(place, Loc::Held(held) if held.width == 10))
+        || what.dests.iter().any(|place| matches!(place, Loc::Mem(_)))
+}
+
 fn flag_lanes(
     one: &Insn,
     regs: llrm_lir::registers::Regs,
@@ -713,9 +742,13 @@ pub fn three_address(
             }
             Mem { base: Some(wide(base)), offset: step, ..Mem::new(None, if narrow { 4 } else { width }) }
         }
-        (Loc::Held(index), Some("add")) if index.width == width && index.value != into.value => {
-            Mem { base: Some(wide(base)), index: Some(wide(index)), scale: 1, offset: 0, ..Mem::new(None, width.max(4)) }
-        }
+        (Loc::Held(index), Some("add")) if index.width == width && index.value != into.value => Mem {
+            base: Some(wide(base)),
+            index: Some(wide(index)),
+            scale: 1,
+            offset: 0,
+            ..Mem::new(None, width.max(4))
+        },
         _ => return None,
     };
     let mut made = one.clone();
@@ -1469,6 +1502,7 @@ impl<'a> Commuter<'a> {
         at: usize,
         regs: llrm_lir::registers::Regs,
         bits: u32,
+        only_x87_load: bool,
     ) -> bool {
         let mi = Arc::clone(&work[at]);
         let Some(what) = mi.what.as_ref().filter(|what| crate::backend::twoaddr::ties(what)) else { return false };
@@ -1487,7 +1521,11 @@ impl<'a> Commuter<'a> {
         let kill = self.facts.insn(kill_key);
         // A copy is left to the coalescer (the pin moves one only for a folded
         // load, which has no case here).
-        if crate::coalescer::pair::full_copy(&kill).is_some() || !movable(&kill) {
+        let x87_load = is_x87_load(&kill);
+        if (only_x87_load && !x87_load)
+            || crate::coalescer::pair::full_copy(&kill).is_some()
+            || !(movable(&kill) || x87_load)
+        {
             return false;
         }
         if let Some(what) = kill.what.as_ref()
@@ -1514,7 +1552,8 @@ impl<'a> Commuter<'a> {
                 kills.push(value);
             }
         }
-        let touches_flags = flags_touched(&kill, regs, bits);
+        // An x87 load reads no integer flags, whatever the decoder knows of it.
+        let touches_flags = !x87_load && flags_touched(&kill, regs, bits);
         // The kill is within the eleven instructions the walk below allows.
         let Some(found) = work[at + 1..].iter().take(11).position(|one| {
             #[cfg(test)]
@@ -1531,6 +1570,11 @@ impl<'a> Commuter<'a> {
             }
             visited += 1;
             if barrier(other) {
+                return false;
+            }
+            // A load of the x87 stack moves up past integer instructions
+            // only: nothing that touches the stack or writes memory.
+            if x87_load && (touches_x87_or_memory(other)) {
                 return false;
             }
             if touches_flags && !flags_untouched(other, regs, bits) {
