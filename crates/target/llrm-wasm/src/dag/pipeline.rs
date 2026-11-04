@@ -175,12 +175,6 @@ impl CombineHooks for WasmCombines {
         // The pin's default; EVT holds no vectors yet.
         true
     }
-
-    /// The pin runs `SimplifyDemandedBits` of `ADD`/`SUB`/`MUL` for every
-    /// target.
-    fn simplify_demanded_add_sub_mul(&self) -> bool {
-        true
-    }
 }
 
 /// `WebAssemblyDAGToDAGISel::Select` for `CALL` and `RET_CALL`.

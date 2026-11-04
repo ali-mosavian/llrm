@@ -327,3 +327,24 @@ fn a_product_of_two_shifted_values_whose_low_word_is_clear_is_zero() {
     DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
     assert_eq!(dag.constant(dag.get_root()), Some(0));
 }
+
+/// `(x + 0xFFFF) & 0xFFFF`: only the low 16 bits are read, and the addend has
+/// them all set, so the pin makes it `x + -1` (`ADD` case of
+/// `SimplifyDemandedBits`, [L3013]). A target that did not ask kept the
+/// 16-bit constant (m68k, z80, 6502, x86 m16/m32).
+///
+/// [L3013]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L3013
+#[test]
+fn an_addend_with_every_demanded_bit_set_is_minus_one_for_any_target() {
+    let mut dag = dag();
+    let x = dag.get_register(EVT::I32, 5);
+    let low = dag.get_constant(0xFFFF, EVT::I32);
+    let sum = dag.get_node(ISD::Add, EVT::I32, &[x, low]);
+    let root = dag.get_node(ISD::And, EVT::I32, &[sum, low]);
+    dag.set_root(root);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    let add = dag.operand(root, 0);
+    assert_eq!(dag.opcode(add), ISD::Add, "root {:?}", dag.opcode(root));
+    assert_eq!(dag.constant(dag.operand(add, 1)), Some(0xFFFF_FFFF));
+}

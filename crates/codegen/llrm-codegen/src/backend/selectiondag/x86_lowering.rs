@@ -224,13 +224,6 @@ impl CombineHooks for X86Lowering<'_> {
         !(wide == EVT::I32 && narrow == EVT::I16)
     }
 
-    /// DEVIATE: the `ADD`/`SUB`/`MUL` case of `SimplifyDemandedBits` runs where
-    /// the target narrows (it carries `ShrinkDemandedOp`); the 16 and 32-bit
-    /// targets are judged later. Exit 2026-11-20.
-    fn simplify_demanded_add_sub_mul(&self) -> bool {
-        self.zext_free
-    }
-
     fn is_compare_with_flags(
         &self,
         user: ISD,

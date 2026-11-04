@@ -184,10 +184,6 @@ impl CombineHooks for Aarch64Lowering {
         vt.is_integer() && ok(vt.size_in_bits()) && ok(kept_bits)
     }
 
-    fn simplify_demanded_add_sub_mul(&self) -> bool {
-        true
-    }
-
     /// `AArch64TargetLowering::isTruncateFree(EVT, EVT)` (an integer narrowing)
     /// and `isZExtFree(EVT, EVT)` (32 to 64 bits only, as a `w` write clears
     /// the upper half):
