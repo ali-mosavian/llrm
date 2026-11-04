@@ -108,10 +108,10 @@ struct State {
     block_of: HashMap<InstrKey, usize>,
     /// The instructions that read or define each value, and whether each
     /// defines it (`use_def_nodbg_operands`).
-    operands: HashMap<u32, indexmap::IndexSet<(InstrKey, bool)>>,
+    operands: HashMap<u32, indexmap::IndexSet<(InstrKey, bool), rustc_hash::FxBuildHasher>>,
     /// The instructions that define each value: a few, where a value read N
     /// times lists N operands.
-    defs: HashMap<u32, indexmap::IndexSet<InstrKey>>,
+    defs: HashMap<u32, indexmap::IndexSet<InstrKey, rustc_hash::FxBuildHasher>>,
     lv: crate::liveness::livevariables::LiveVariables,
 }
 
