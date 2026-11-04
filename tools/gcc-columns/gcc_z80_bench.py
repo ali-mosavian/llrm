@@ -50,8 +50,11 @@ _lzout:\t.ds 640
 """
 
 
+TIMEOUT = int(os.environ.get("GCC_COLUMNS_TIMEOUT", "120"))  # seconds per tool call; a timeout exits 124 = a failed call, never a cell
+
+
 def sh(cmd, cwd, inp=None):
-    return subprocess.run(["bash", "-c", "ulimit -v 16000000; exec timeout 120 \"$@\"", "x"] + cmd, cwd=cwd,
+    return subprocess.run(["bash", "-c", f"ulimit -v 16000000; exec timeout {TIMEOUT} \"$@\"", "x"] + cmd, cwd=cwd,
                           input=inp, capture_output=True, text=True)
 
 
