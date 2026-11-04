@@ -624,8 +624,8 @@ mod tests {
         let mut copy = (*Arc::new(Insn::new(0, None, None, vec![1], vec![]))).clone();
         copy.what = Some(crate::model::ir::Semantics {
             name: Some("mov".into()),
-            dests: vec![crate::model::ir::Loc::Held(crate::model::ir::Held { value: 1, width: 4 })],
-            sources: vec![crate::model::ir::Loc::Held(crate::model::ir::Held { value: 1, width: 4 })],
+            dests: vec![crate::model::ir::Loc::Held(crate::model::ir::Held { value: 1, width: 4, offset: 0 })],
+            sources: vec![crate::model::ir::Loc::Held(crate::model::ir::Held { value: 1, width: 4, offset: 0 })],
             ..crate::model::ir::Semantics::new(crate::model::ir::Operation::Move)
         });
         let body = body(vec![vec![Arc::new(copy), insn(vec![], vec![1])], vec![]]);
@@ -642,8 +642,8 @@ mod tests {
         let mut copy = (*Arc::new(Insn::new(0, None, None, vec![2], vec![1]))).clone();
         copy.what = Some(crate::model::ir::Semantics {
             name: Some("mov".into()),
-            dests: vec![crate::model::ir::Loc::Held(crate::model::ir::Held { value: 2, width: 4 })],
-            sources: vec![crate::model::ir::Loc::Held(crate::model::ir::Held { value: 1, width: 4 })],
+            dests: vec![crate::model::ir::Loc::Held(crate::model::ir::Held { value: 2, width: 4, offset: 0 })],
+            sources: vec![crate::model::ir::Loc::Held(crate::model::ir::Held { value: 1, width: 4, offset: 0 })],
             ..crate::model::ir::Semantics::new(crate::model::ir::Operation::Move)
         });
         let body = body(vec![
