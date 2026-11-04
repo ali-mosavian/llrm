@@ -1698,3 +1698,18 @@ fn a_word_plus_one_carries_by_branch() {
     assert_eq!(exit_code_of(&text, "g"), 44, "{text}");
     assert!(!text.contains("adc #1\n"), "{text}");
 }
+
+#[test]
+fn a_zero_filled_variable_is_bss_not_image_bytes() {
+    // basic.c: prog[8192], tok, xv ... were `.byte 0,0,...` in DATA, 8721 B of
+    // image where gcc's BSS has none
+    let ir = module(
+        "@buf = global [4096 x i8] zeroinitializer\n@one = global i8 1\n\
+         define i8 @g() {\n  %p = getelementptr inbounds [4096 x i8], ptr @buf, i16 0, i16 4000\n\
+         \x20 %v = load volatile i8, ptr %p\n  %o = load volatile i8, ptr @one\n  %r = add i8 %v, %o\n  ret i8 %r\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O1)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "g"), 1, "{text}");
+    assert!(text.contains("buf: .res 4096"), "{text}");
+    assert!(!text.contains(".byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n  .byte 0,0,0,0"), "{text}");
+}
