@@ -2009,3 +2009,33 @@ b2:
     assert!(body.iter().all(|line| !line.contains("%t = ")), "{after}");
     assert!(body.iter().any(|line| line.contains("%x.reass = mul i16 %factor.op.mul1, %i")), "{after}");
 }
+
+/// `Instruction::mayHaveSideEffects` of a call was the list of every location
+/// it writes (a `Vec` of `MemRef`s, `memory::stated` read three times over)
+/// asked for a yes: 1 M Ir of a jpeg_fixed -O2 compile in `sink_region` alone.
+/// Whether it writes is derived from its attributes, with no list.
+#[test]
+fn test_whether_a_call_in_a_loop_has_side_effects_derives_no_list() {
+    let text = "declare i16 @g(i16) nounwind willreturn
+define void @f(i16 %n) {
+b0:
+  br label %head
+head:
+  %i = phi i16 [ 0, %b0 ], [ %j, %head ]
+  %u = call i16 @g(i16 %i)
+  %v = call i16 @g(i16 %n)
+  %j = add i16 %i, 1
+  %t = icmp slt i16 %j, %n
+  br i1 %t, label %head, label %exit
+exit:
+  ret void
+}
+";
+    let before = llrm_analysis::memoryssa::lazy_lists();
+    let mut module = parsed(text);
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(Licm { apply: true, speculate: true });
+    passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("licm");
+    let made = llrm_analysis::memoryssa::lazy_lists() - before;
+    assert_eq!(made, 0, "{made} access lists made for a loop of calls");
+}

@@ -1013,6 +1013,12 @@ impl Builder {
         let (dl, dh) = self.write_word(d)?;
         self.copy(dl, al);
         self.copy(dh, ah);
+        // `inc` has no accumulator form on the 6502 (`dec` loads through it)
+        if up {
+            for r in [dl, dh] {
+                self.require(r, Class(Class::X | Class::Y | Class::M))?;
+            }
+        }
         let mut operands = vec![Operand::Def(dl), Operand::Def(dh), Operand::Use(dl), Operand::Use(dh)];
         if !up {
             operands.push(Operand::Def(Reg::Phys(reg::A)));
