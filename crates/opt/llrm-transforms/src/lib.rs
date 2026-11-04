@@ -109,6 +109,7 @@ pub mod combine_addsub;
 pub mod combine_and;
 pub mod combine_and_select;
 pub mod combine_assume;
+pub mod combine_bitcast;
 pub mod combine_bitorder;
 pub mod combine_branch;
 pub mod combine_build;
@@ -130,6 +131,9 @@ pub mod combine_fpcast;
 #[cfg(test)]
 mod combine_fpcast_tests;
 pub mod combine_fptoint;
+pub mod combine_fptrunc;
+#[cfg(test)]
+mod combine_fptrunc_tests;
 #[cfg(test)]
 mod combine_fptoint_tests;
 pub mod combine_funnel;

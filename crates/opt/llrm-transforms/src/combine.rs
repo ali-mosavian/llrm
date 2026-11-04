@@ -456,6 +456,8 @@ fn visitors(opcode: &Opcode) -> &'static [Visitor] {
         Opcode::Cast(CastOp::SExt) => &[visit_sext],
         Opcode::Cast(CastOp::UIToFP) => &[crate::combine_fpcast::visit_uitofp],
         Opcode::Cast(CastOp::SIToFP) => &[crate::combine_fpcast::visit_sitofp],
+        Opcode::Cast(CastOp::BitCast) => &[crate::combine_bitcast::visit_bitcast],
+        Opcode::Cast(CastOp::FPTrunc) => &[crate::combine_fptrunc::visit_fptrunc],
         Opcode::Cast(CastOp::FPExt) => &[crate::combine_fpcast::visit_fpext],
         Opcode::Cast(CastOp::FPToUI | CastOp::FPToSI) => &[crate::combine_fptoint::visit_fptoi],
         Opcode::ICmp(_) => &[visit_icmp],

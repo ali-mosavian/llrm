@@ -66,7 +66,7 @@ pub(crate) fn def_of(
 }
 
 /// `Type::getFPMantissaWidth`: the precision of a float type.
-fn mantissa_width(
+pub(crate) fn mantissa_width(
     c: &Combiner,
     ty: TypeId,
 ) -> Option<u32> {
@@ -77,7 +77,7 @@ fn mantissa_width(
 }
 
 /// `canBeCastedExactlyIntToFP(V, FPTy, IsSigned, CxtI)`.
-fn can_be_casted_exactly_int_to_fp(
+pub(crate) fn can_be_casted_exactly_int_to_fp(
     c: &Combiner,
     v: Operand,
     fp_ty: TypeId,
