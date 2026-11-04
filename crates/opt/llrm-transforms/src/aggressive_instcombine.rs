@@ -147,6 +147,7 @@ fn fold_unusual_patterns(
                 inst,
             );
             changed |= fold_consecutive_loads(unit.context, unit.layout, unit.function, inst);
+            changed |= fold_icmp_or_chain(unit.context, unit.layout, unit.function, inst);
         }
         // Done separately to scan the stores once.
         changed |= fold_consecutive_stores(unit.context, unit.layout, unit.function, block);
@@ -945,6 +946,97 @@ fn fold_guarded_funnel_shift(
     );
     let result = function.instruction(inst).result.expect("a value");
     function.replace_all_uses_with(result, value);
+    true
+}
+
+/// `optimizeShiftInOrChain`
+/// ([:1762](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L1762)):
+/// the chain of one-use ors `v` with the `shl nsw`/`shl nuw` operands taken
+/// out, built before `before`; none where nothing changes. A shifted value is
+/// zero exactly when the value is, so the chain compared with zero is the
+/// same.
+fn optimize_shift_in_or_chain(
+    context: &llrm_mir::context::Context,
+    function: &mut Function,
+    v: Operand,
+    before: InstId,
+) -> Option<Operand> {
+    let Operand::Value(result) = v else { return None };
+    let llrm_mir::module::ValueDef::Instruction(def) = function.value(result).def else { return None };
+    let instruction = function.instruction(def);
+    if instruction.opcode != Opcode::Binary(BinaryOp::Or) || !function.users(result).has_one_use() {
+        return None;
+    }
+    let ty = instruction.ty;
+    let operands = [instruction.operands[0], instruction.operands[1]];
+    let mut changed = false;
+    let mut new = operands;
+    for (at, &op) in operands.iter().enumerate() {
+        let shifted = match op {
+            Operand::Value(value) => match function.value(value).def {
+                llrm_mir::module::ValueDef::Instruction(shl) => {
+                    let one = function.instruction(shl);
+                    (one.opcode == Opcode::Binary(BinaryOp::Shl)
+                        && (one.flags.contains(Flags::NSW) || one.flags.contains(Flags::NUW)))
+                    .then(|| one.operands[0])
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(inner) = shifted {
+            new[at] = inner;
+            changed = true;
+        } else if let Some(deeper) = optimize_shift_in_or_chain(context, function, op, before) {
+            new[at] = deeper;
+            changed = true;
+        }
+    }
+    if !changed {
+        return None;
+    }
+    let or = function.create_instruction(Opcode::Binary(BinaryOp::Or), ty, new.to_vec(), Flags::default(), None);
+    function.insert(or, Position::Before(before)).expect("a placed instruction");
+    Some(Operand::Value(function.instruction(or).result.expect("a value")))
+}
+
+/// `foldICmpOrChain`
+/// ([:1798](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L1798)):
+/// `icmp eq/ne (or ...), 0`: loads in the chain are merged first, then the
+/// no-wrap shifts are dropped.
+fn fold_icmp_or_chain(
+    context: &mut llrm_mir::context::Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
+    use llrm_mir::valuetracking::pattern;
+    let (op0, zero, equality) = {
+        let q = query(context, layout, function);
+        let Some(result) = function.instruction(inst).result else { return false };
+        let Some((_, _, pred, op0, zero)) = pattern::icmp(&q, Operand::Value(result)) else { return false };
+        if !q.int_constant(zero).is_some_and(|(bits, _)| bits == 0)
+            || !matches!(pred.pred, llrm_mir::opcode::IntPredicate::Eq | llrm_mir::opcode::IntPredicate::Ne)
+        {
+            return false;
+        }
+        (op0, zero, pred.pred)
+    };
+    // If the chain of ors matches loads, combine to that before removing
+    // shifts.
+    if let Operand::Value(value) = op0
+        && let llrm_mir::module::ValueDef::Instruction(def) = function.value(value).def
+        && function.instruction(def).opcode == Opcode::Binary(BinaryOp::Or)
+        && fold_consecutive_loads(context, layout, function, def)
+    {
+        return true;
+    }
+    let Some(chain) = optimize_shift_in_or_chain(context, function, op0, inst) else { return false };
+    let i1 = function.instruction(inst).ty;
+    let cmp = function.create_instruction(Opcode::ICmp(equality), i1, vec![chain, zero], Flags::default(), None);
+    function.insert(cmp, Position::Before(inst)).expect("a placed instruction");
+    let result = function.instruction(inst).result.expect("a value");
+    function.replace_all_uses_with(result, Operand::Value(function.instruction(cmp).result.expect("a value")));
     true
 }
 
