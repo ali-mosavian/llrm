@@ -1783,7 +1783,8 @@ fn _redundant_masks(
             .invalidate_if_edited(function, &PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
     }
     // CVP's `processAnd`: LazyValueInfo's range at the use first.
-    let assumptions = AssumptionCache::of(context, &outer.globals, &outer.metadata, function);
+    let assumptions =
+        AssumptionCache::of_declared(context, &outer.globals, &outer.metadata, function, outer.assume_declared());
     let tree = DomTree::of(function);
     let mut lvi = LazyValueInfo::new();
     let mut settled: Vec<(InstId, Operand)> = Vec::new();
@@ -2014,7 +2015,8 @@ fn _unsigned_divisions(
             .invalidate_if_edited(function, &PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
     }
     // CVP's `processSDivOrSRem`: LazyValueInfo's range of the dividend first.
-    let assumptions = AssumptionCache::of(context, &outer.globals, &outer.metadata, function);
+    let assumptions =
+        AssumptionCache::of_declared(context, &outer.globals, &outer.metadata, function, outer.assume_declared());
     let mut lvi = LazyValueInfo::new();
     let non_negative: Vec<bool> = candidates
         .iter()

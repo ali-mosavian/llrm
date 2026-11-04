@@ -43,7 +43,7 @@ static COUNTING: Counting = Counting;
 
 /// `v1 := mov 1; v2 := add v1, v1; v3 := add v2, v2; ...`
 fn chain(length: u32) -> LirBody {
-    let held = |value| Loc::Held(Held { value, width: 4 });
+    let held = |value| Loc::Held(Held { value, width: 4, offset: 0 });
     let insns: Vec<Arc<Insn>> = (1..=length)
         .map(|value| {
             let what = Semantics {

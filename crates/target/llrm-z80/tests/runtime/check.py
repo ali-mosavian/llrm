@@ -53,6 +53,16 @@ SIGS = {
     load="\tld\tl,6(ix)\n\tld\th,7(ix)\n\tpush\thl\n\tld\tl,0(ix)\n\tld\th,1(ix)\n\tld\te,2(ix)\n\tld\td,3(ix)\n\tld\tc,4(ix)\n\tld\tb,5(ix)\n",
     pre="\tpop\taf\n\tld\t(0x8010),de\n\tld\t(0x8012),hl\n",
     store="\tld\thl,#0x8010\n\tld\tde,(0x8000)\n\tld\tbc,#4\n\tldir\n\tdec\tde\n\tex\tde,hl\n"),
+  # long long: the result through hl (0x8020), the first operand in de, bc and the stack, the second operand's four
+  # words, or a count byte, on the stack after them (runtime/z80_rt.s)
+  "QQ>Q": dict(isz=16, osz=8,
+    load="".join("\tld\tl,%d(ix)\n\tld\th,%d(ix)\n\tpush\thl\n" % (k + 8, k + 9) for k in (6, 4, 2, 0)) + "\tld\tl,6(ix)\n\tld\th,7(ix)\n\tpush\thl\n\tld\tl,4(ix)\n\tld\th,5(ix)\n\tpush\thl\n\tld\te,0(ix)\n\tld\td,1(ix)\n\tld\tc,2(ix)\n\tld\tb,3(ix)\n\tld\thl,#0x8020\n",
+    pre="\tpop\taf\n" * 6,
+    store="\tld\thl,#0x8020\n\tld\tde,(0x8000)\n\tld\tbc,#8\n\tldir\n\tdec\tde\n\tex\tde,hl\n"),
+  "QA>Q": dict(isz=9, osz=8,
+    load="\tld\tl,8(ix)\n\tld\th,#0\n\tpush\thl\n\tld\tl,6(ix)\n\tld\th,7(ix)\n\tpush\thl\n\tld\tl,4(ix)\n\tld\th,5(ix)\n\tpush\thl\n\tld\te,0(ix)\n\tld\td,1(ix)\n\tld\tc,2(ix)\n\tld\tb,3(ix)\n\tld\thl,#0x8020\n",
+    pre="\tpop\taf\n" * 3,
+    store="\tld\thl,#0x8020\n\tld\tde,(0x8000)\n\tld\tbc,#8\n\tldir\n\tdec\tde\n\tex\tde,hl\n"),
   "HL,A>DE": dict(isz=3, osz=2, load="\tld\tl,0(ix)\n\tld\th,1(ix)\n\tld\ta,2(ix)\n", store="\tld\t(hl),e\n\tinc\thl\n\tld\t(hl),d\n"),
 }
 
@@ -110,6 +120,8 @@ table:
 def enc(sig, v):
     if sig == "LL>L": return tuple((v[0] >> (8 * k)) & 255 for k in range(4)) + tuple((v[1] >> (8 * k)) & 255 for k in range(4))
     if sig == "L,A>L": return (v[0] & 255, v[0] >> 8 & 255, v[0] >> 16 & 255, v[0] >> 24, v[1])
+    if sig == "QQ>Q": return tuple((v[0] >> (8 * k)) & 255 for k in range(8)) + tuple((v[1] >> (8 * k)) & 255 for k in range(8))
+    if sig == "QA>Q": return tuple((v[0] >> (8 * k)) & 255 for k in range(8)) + (v[1],)
     if sig == "A,L>A": return v
     if sig == "HL,DE>DE": return (v[0] & 255, v[0] >> 8, v[1] & 255, v[1] >> 8)
     return (v[0] & 255, v[0] >> 8, v[1])
@@ -121,6 +133,19 @@ def cost(name, sig, args):
     """T-states of one call incl. its call+ret: run with the call minus without."""
     regs = {"A,L>A": "\tld a,#%d\n\tld l,#%d\n", "HL,DE>DE": "\tld hl,#%d\n\tld de,#%d\n", "HL,A>DE": "\tld hl,#%d\n\tld a,#%d\n", "LL>L": "\tld hl,#0\n\tpush hl\n\tld hl,#%d\n\tld de,#0\n\tld bc,#%d\n", "L,A>L": "\tld hl,#%d\n\tld de,#0\n\tld a,#%d\n"}[sig] % args
     base = f"\t.area _HEADER (ABS)\n\t.org 0\n\tld sp,#0\n{regs}"
+    t = {}
+    for tag, call in (("with", f"\tcall {name}\n"), ("without", "")):
+        rel = build("c", base + call + "\thalt\n\t.area _CODE\n\t.globl "+name+"\n")
+        ihx = link(rel, "c")
+        t[tag], _ = run(ihx)
+    return t["with"] - t["without"]
+
+def cost64(name, a, b, count=False):
+    """T-states of one long long call incl. its argument set-up, call and ret, minus the bare set-up."""
+    w = lambda v, k: (v >> (16 * k)) & 0xFFFF
+    pushes = "".join("\tld\thl,#%d\n\tpush\thl\n" % w(b, k) for k in (3, 2, 1, 0)) if not count else "\tld\thl,#%d\n\tpush\thl\n" % b
+    pushes += "".join("\tld\thl,#%d\n\tpush\thl\n" % w(a, k) for k in (3, 2))
+    base = f"\t.area _HEADER (ABS)\n\t.org 0\n\tld sp,#0\n{pushes}\tld de,#%d\n\tld bc,#%d\n\tld hl,#0x8020\n" % (w(a, 0), w(a, 1))
     t = {}
     for tag, call in (("with", f"\tcall {name}\n"), ("without", "")):
         rel = build("c", base + call + "\thalt\n\t.area _CODE\n\t.globl "+name+"\n")
@@ -174,8 +199,24 @@ def main():
     allok &= check("__umodsi3", "LL>L", lambda a, b: a % b, lp)
     allok &= check("__divsi3", "LL>L", lambda a, b: tdiv32(s32c(a), s32c(b)) & 0xFFFFFFFF, lp)
     allok &= check("__modsi3", "LL>L", lambda a, b: (s32c(a) - tdiv32(s32c(a), s32c(b)) * s32c(b)) & 0xFFFFFFFF, lp)
+    q64 = [0, 1, 255, 256, 65535, 65536, 0xFFFFFFFF, 1 << 32, (1 << 63) - 1, 1 << 63, (1 << 64) - 1, 0x0123456789ABCDEF, 10, 1000000007]
+    q64 += [rnd.getrandbits(64) for _ in range(12)] + [rnd.getrandbits(rnd.choice([5, 17, 33, 49])) for _ in range(8)]
+    s64 = lambda x: x - (1 << 64) if x >> 63 else x
+    def tdiv64(a, b): q = abs(a) // abs(b); return q if (a < 0) == (b < 0) else -q
+    qp = [(a, b) for a in q64 for b in q64 if b][::3]
+    qp += [(a, b) for a in q64 for b in (1, 2, 10, 3)]
+    allok &= check("__udivdi3", "QQ>Q", lambda a, b: a // b, qp)
+    allok &= check("__umoddi3", "QQ>Q", lambda a, b: a % b, qp)
+    # the quotient of the most negative value by -1 overflows in C
+    sq = [p for p in qp if not (p[0] == 1 << 63 and p[1] == (1 << 64) - 1)]
+    allok &= check("__divdi3", "QQ>Q", lambda a, b: tdiv64(s64(a), s64(b)) & ((1 << 64) - 1), sq)
+    allok &= check("__moddi3", "QQ>Q", lambda a, b: (s64(a) - tdiv64(s64(a), s64(b)) * s64(b)) & ((1 << 64) - 1), sq)
+    for nm, f in (("__ashldi3", lambda a, b: a << b & ((1 << 64) - 1)), ("__lshrdi3", lambda a, b: a >> b), ("__ashrdi3", lambda a, b: s64(a) >> b & ((1 << 64) - 1))):
+        allok &= check(nm, "QA>Q", f, [(a, b) for a in q64 for b in (0, 1, 7, 8, 9, 15, 16, 31, 32, 33, 47, 56, 63)])
     print("ALL OK" if allok else "FAILURES")
     for nm, sig, args in (("__mulqi3", "A,L>A", (7, 6)), ("__mulqi3", "A,L>A", (200, 255)), ("__udivqi3", "A,L>A", (200, 7)), ("__mulhi3", "HL,DE>DE", (1234, 56)), ("__mulhi3", "HL,DE>DE", (56, 1234)), ("__udivhi3", "HL,DE>DE", (40000, 10)), ("__umodhi3", "HL,DE>DE", (40000, 10)), ("__ashlhi3", "HL,A>DE", (1, 5)), ("__divqi3", "A,L>A", (200, 7)), ("__divhi3", "HL,DE>DE", (40000, 10)), ("__ashlsi3", "L,A>L", (1, 20)), ("__udivsi3", "LL>L", (1000000, 10)), ("__divsi3", "LL>L", (1000000, 10))):
         print(f"{nm}{args}: {cost(nm, sig, args)} T")
+    for nm, a, b, count in (("__udivdi3", 0x123456789ABCDEF0, 1000003, False), ("__divdi3", 0x123456789ABCDEF0, 1000003, False), ("__udivdi3", 1000000, 10, False), ("__ashldi3", 1, 13, True), ("__lshrdi3", 0x123456789ABCDEF0, 37, True), ("__ashrdi3", 1 << 63, 63, True)):
+        print(f"{nm}({a:#x}, {b}): {cost64(nm, a, b, count)} T")
     sys.exit(0 if allok else 1)
 main()

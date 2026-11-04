@@ -83,7 +83,7 @@
 //! # See also
 //! The model, the writers and what each can say: `docs/formats/debug-info.md`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_debug::{self as model, DebugOptions, ExprOp, Info, Kind, Location, Variable};
 use llrm_lir::registers::RegId;
@@ -680,6 +680,55 @@ fn located(at: super::valuetrack::Where) -> Location {
     }
 }
 
+/// The result of `valuetrack::tracked`, read from the ranges the allocator
+/// left for the writer (`LLRM_LDV_EMIT`): entries, then the ranges the writer
+/// makes of them, as offsets into the function. `marks` are the offsets the
+/// instructions start at.
+fn flowed(
+    placed: &super::livedebugvariables::Placed,
+    marks: &[(usize, masm::Mark)],
+    length: usize,
+) -> BTreeMap<(u32, Option<(u32, u32)>), Vec<(usize, usize, Vec<super::valuetrack::Where>)>> {
+    use super::livedebugvariables::{Place, Where};
+    use super::valuetrack::Where as Held;
+
+    // The anchors name an instruction by its slot (`DebugTags::slot`).
+    let slot_of: BTreeMap<u64, i64> = placed.insns.iter().map(|&(slot, id)| (id, slot)).collect();
+    let starts: BTreeMap<u64, usize> = marks
+        .iter()
+        .rev()
+        .filter_map(|&(at, mark)| if let masm::Mark::Insn(id) = mark { Some((id, at)) } else { None })
+        .collect();
+    let place = |place: Place| match place {
+        Place::Register(register) => masm::Place::Register(register),
+        Place::Cell(disp) => masm::Place::Cell { disp, bytes: 0 },
+    };
+    super::livedebugvalues::history::in_code(
+        &placed.ranges,
+        &placed.insns,
+        &|id| starts.get(&(*slot_of.get(&id)? as u64)).copied(),
+        length,
+    )
+    .into_iter()
+    .map(|(var, ranges)| {
+        let ranges = ranges
+            .into_iter()
+            .filter_map(|(from, to, at)| {
+                let held = match at {
+                    Where::Place(one) => Held::Place(place(one)),
+                    Where::Offset(one, add) => Held::Offset(place(one), add),
+                    Where::Constant(value) => Held::Constant(value),
+                    Where::Entry(register) => Held::Entry(register),
+                    Where::Undef => return None,
+                };
+                Some((from, to, vec![held]))
+            })
+            .collect();
+        ((var.variable, var.piece), ranges)
+    })
+    .collect()
+}
+
 /// The one place that holds a value in every range of `ranges`, which must run
 /// on from the first without a gap to the code `until`: the place, and the
 /// offset the first range starts at.
@@ -803,6 +852,7 @@ pub fn laid_out(
     source: &str,
     segments: &[Segment],
     symbols: &IndexMap<String, (usize, usize)>,
+    sizes: &IndexMap<String, usize>,
     ids: &IndexMap<String, usize>,
 ) -> Result<Info, String> {
     let defined = |name: &str| symbols.contains_key(name);
@@ -869,8 +919,11 @@ pub fn laid_out(
             continue;
         };
         let code = &segments[section];
-        let end =
+        // The code alone: the padding up to the next function is not in the
+        // function (`.size`).
+        let next =
             starts.iter().find(|&&(at, one)| at == section && one > start).map_or(code.image.len(), |&(_, one)| one);
+        let end = sizes.get(&procedure.name).map_or(next, |size| (start + size).min(next));
         // Its own statics, then each variable of its body.
         let mut variables: Vec<Variable> = debug
             .globals
@@ -982,6 +1035,8 @@ pub fn laid_out(
                         .any(|(note, said)| said.variable == node && !emitted.contains(&(note as u32)));
                     let found = if lost {
                         Default::default()
+                    } else if llrm_support::env_flag!("LLRM_LDV_EMIT") && !procedure.body.placed.ranges.is_empty() {
+                        flowed(&procedure.body.placed, &marks, end - start)
                     } else {
                         super::valuetrack::tracked(
                             &code.image[start..end],
@@ -998,6 +1053,21 @@ pub fn laid_out(
                             debug.target.entry_values,
                         )
                     };
+                    if llrm_support::env_flag!("LLRM_LDV_DUMP") {
+                        for (at, mark) in &marks {
+                            if let masm::Mark::Note(note) = mark {
+                                eprintln!("VTNOTE\t{}\t{note}\t{at}", procedure.body.name);
+                            }
+                        }
+                        for ((variable, piece), ranges) in &found {
+                            for (from, to, places) in ranges {
+                                eprintln!(
+                                    "VT\t{}\t{variable}\t{piece:?}\t{from}\t{to}\t{places:?}",
+                                    procedure.body.name
+                                );
+                            }
+                        }
+                    }
                     let parts: Vec<_> = found
                         .into_iter()
                         .filter(|((variable, _), _)| *variable == node)
@@ -1095,6 +1165,9 @@ pub fn laid_out(
                                         entry: entry[usize::from(procedure.far)],
                                         from_cfa: addr.disp - if procedure.far { far_bias } else { bias },
                                     },
+                                    // no register arrives in a stack cell on a
+                                    // wasm local
+                                    model::FrameBase::WasmLocal(_) => return None,
                                 };
                                 super::arrival::stored(&code.image[start..end], cell, register).map(|at| (register, at))
                             },
@@ -1204,6 +1277,7 @@ pub fn laid_out(
             ranges: vec![model::Range { section, offset: start, length: end - start }],
             body: Some(body),
             far: procedure.far,
+            frame_base: None,
             module: described.module,
             variables,
             blocks,

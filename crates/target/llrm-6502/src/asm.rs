@@ -242,18 +242,32 @@ impl fmt::Display for Operand {
 }
 
 /// One instruction.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, Debug)]
 pub struct Inst {
     pub op: Op,
     pub operand: Operand,
+    /// The source place it came from (`MInst::origin`, numbered from 1; 0 for
+    /// none). Not part of equality, so `-g` changes no pass's decision.
+    pub place: u32,
 }
+
+impl PartialEq for Inst {
+    fn eq(
+        &self,
+        other: &Inst,
+    ) -> bool {
+        self.op == other.op && self.operand == other.operand
+    }
+}
+
+impl Eq for Inst {}
 
 impl Inst {
     pub fn new(
         op: Op,
         operand: Operand,
     ) -> Inst {
-        Inst { op, operand }
+        Inst { op, operand, place: 0 }
     }
 
     /// What it does to the zero and sign flags.
@@ -356,6 +370,8 @@ impl fmt::Display for Line {
 #[derive(Clone, Default, PartialEq, Eq, Debug)]
 pub struct Asm {
     pub lines: Vec<Line>,
+    /// The place the instructions written from now on get.
+    pub place: u32,
     /// What was written since the last newline.
     pending: String,
 }
@@ -380,7 +396,11 @@ impl Asm {
         self.pending.push_str(text);
         while let Some(end) = self.pending.find('\n') {
             let line: String = self.pending.drain(..=end).collect();
-            self.lines.push(Line::parse(&line[..line.len() - 1]));
+            let mut line = Line::parse(&line[..line.len() - 1]);
+            if let Line::Inst(inst) = &mut line {
+                inst.place = self.place;
+            }
+            self.lines.push(line);
         }
     }
 
@@ -419,5 +439,22 @@ impl fmt::Display for Asm {
             writeln!(f, "{line}")?;
         }
         f.write_str(&self.pending)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A place on an instruction must not change what any pass sees: the
+    /// peepholes compare instructions, and `-g` may not change the code.
+    #[test]
+    fn a_written_instruction_has_the_current_place_and_equals_one_without() {
+        let mut asm = Asm::new();
+        asm.place = 3;
+        asm.push_str("  lda #1\n");
+        let Line::Inst(inst) = &asm.lines[0] else { panic!("{:?}", asm.lines) };
+        assert_eq!(inst.place, 3);
+        assert_eq!(*inst, Inst::new(Op::Lda, Operand::parse("#1")));
     }
 }

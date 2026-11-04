@@ -596,3 +596,19 @@ fn test_asking_for_a_constant_again_makes_no_node() {
         first
     });
 }
+
+/// `a - (a /u 11) * 11` is the canonical remainder; the pin's
+/// `visitAddExpr` writes it as `urem` (wasm recsum -O2 kept `udiv; mul; sub`:
+/// 42032 instructions against the pin's 30030 on the same IR).
+#[test]
+fn test_a_canonical_remainder_is_a_urem() {
+    let text = expanded(|se, cx, args| {
+        let a = unknown(se, cx, args[0]);
+        let eleven = constant(se, 32, 11);
+        let minus_eleven = constant(se, 32, u32::MAX as u128 - 10);
+        let quotient = Use::of(se.get_udiv_expr(cx, a.clone(), eleven));
+        let scaled = se.get_mul_expr(cx, vec![minus_eleven, quotient], Flags::default(), 0);
+        se.get_add_expr(cx, vec![a, scaled], Flags::default(), 0).scev
+    });
+    assert_eq!(lines(&text), ["%0 = urem i32 %a, 11"], "{text}");
+}

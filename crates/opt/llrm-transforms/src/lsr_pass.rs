@@ -187,16 +187,15 @@ fn plan_loop(
     marked: Option<&[InstId]>,
     carried: Option<IvUsers>,
     stress_chains: bool,
+    size: bool,
 ) -> Outcome {
     let planned = |plan| Outcome::Planned(plan);
     let cx = env.cx(context, function);
     let Some(lp) = cx.loops.get_loop_for(header) else { return planned(None) };
-    // Loop simplify form, or stay out of trouble; and the innermost loops
-    // only: the outer ones wait for a model of them.
+    // Loop simplify form, or stay out of trouble.
     if lp.get_loop_preheader(function).is_none()
         || lp.get_loop_latch(function).is_none()
         || !lp.has_dedicated_exits(function)
-        || !lp.is_innermost()
     {
         return planned(None);
     }
@@ -245,6 +244,13 @@ fn plan_loop(
         }
     }
 
+    // Skip nested loops until we can model them better with formulae: the
+    // shadow variables and the exit tests above are made on every loop, as the
+    // pin's constructor does before it looks at the nesting.
+    if !lp.is_innermost() {
+        return planned(None);
+    }
+
     // Chains are looked for where the number of registers is what costs.
     let chains = if tti.is_num_regs_major_cost_of_lsr() {
         crate::lsr_chain::collect_chains(se, &cx, header, &users, &is_ephemeral, stress_chains)
@@ -253,6 +259,9 @@ fn plan_loop(
     };
     let safe_to_expand = |se: &mut ScalarEvolution, s: Scev| rewriter.is_safe_to_expand(&cx, se, s);
     let mut lsr = Collection::new(&cx, tti, header, &safe_to_expand, false, iv_inc_insert_pos);
+    lsr.other_register_units = crate::lsr_collect::loop_register_units(se, &cx, tti, header);
+    lsr.size = size;
+    llrm_support::debug!("lsr", "  other registers: {}", lsr.other_register_units);
     lsr.chain_uses = chains.inc_set.clone();
     lsr.collect_interesting_types_and_factors(se, &users);
     lsr.collect_fixups_and_initial_formulae(se, &users);
@@ -262,8 +271,13 @@ fn plan_loop(
     }
     // The formulae for each use, and the search space made small enough.
     lsr.generate_all_reuse_formulae(se);
+    let counts =
+        |lsr: &Collection| lsr.uses.iter().map(|one| one.formulae.len().to_string()).collect::<Vec<_>>().join(" ");
+    llrm_support::debug!("lsr", "  formulae per use: {}", counts(&lsr));
     lsr.filter_out_undesirable_dedicated_registers(se);
+    llrm_support::debug!("lsr", "  after filtering: {}", counts(&lsr));
     lsr.narrow_search_space_using_heuristics(se);
+    llrm_support::debug!("lsr", "  after narrowing: {}", counts(&lsr));
     let solution = lsr.solve(se);
     if solution.is_empty() {
         return planned(None);
@@ -367,6 +381,7 @@ pub fn reduced_held(
                     marked.as_deref(),
                     carried.take(),
                     stress_chains,
+                    size,
                 ) {
                     Outcome::Planned(None) => break,
                     Outcome::Edit(edits, mut users) => {
