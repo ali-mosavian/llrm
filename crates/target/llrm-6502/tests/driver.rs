@@ -451,7 +451,10 @@ fn exit_code_of(
     text: &str,
     function: &str,
 ) -> i32 {
-    let dir = std::env::temp_dir().join(format!("llrm6502-run-{}-{function}", std::process::id()));
+    // Tests share the process and often the function name: one directory each.
+    static RUN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let run = RUN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("llrm6502-run-{}-{run}-{function}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let main = format!(
         ".export _main\n_main:\n  lda #0\n  sta rc0\n  lda #$80\n  sta rc1\n  jsr {function}\n  ldx #0\n  rts\n"
