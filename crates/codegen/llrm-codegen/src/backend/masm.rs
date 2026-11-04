@@ -1458,7 +1458,7 @@ fn lowered(
     let vector = |to_cell: bool, register: RegId, cell: &ir::Mem, by_frame: bool| {
         let disp = cell.addr.map_or(0, |addr| addr.disp);
         let place = if by_frame {
-            ir::Mem { through: FRAME, offset: disp + depth - slot, disp_width: 2, ..ir::Mem::new(None, 16) }
+            ir::Mem { through: FRAME, offset: disp + slot, disp_width: 2, ..ir::Mem::new(None, 16) }
         } else {
             ir::Mem { through: STACK, offset: disp + depth, disp_width: 2, ..ir::Mem::new(None, 16) }
         };

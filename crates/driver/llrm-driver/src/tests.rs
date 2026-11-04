@@ -3485,3 +3485,28 @@ fn a_win64_function_saves_the_xmm_registers_it_keeps_across_a_call() {
     let sysv = listing_of("-mabi=sysv");
     assert!(!sysv.contains("movaps"), "{sysv}");
 }
+
+/// With an `alloca` the stack pointer moves after the prologue, so the xmm
+/// reloads must address the saves from the frame register, not `rsp`.
+#[test]
+fn a_win64_function_with_alloca_reloads_its_xmm_saves_through_the_frame_register() {
+    let body = "declare double @g(double, ptr)\ndefine double @f(double %a, double %b, i64 %n) {\n  %p = alloca i8, i64 %n, align 16\n  %x = call double @g(double %a, ptr %p)\n  %y = call double @g(double %b, ptr %p)\n  %s = fadd double %x, %y\n  %t = fadd double %s, %a\n  %u = fadd double %t, %b\n  ret double %u\n}\n";
+    let text = format!("{SYSV}{body}");
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag", "-mabi=win64"]), &text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    // The frame register lies the pushes and the `sub` above the stack pointer.
+    let pushes = lines.iter().take_while(|l| !l.starts_with("sub rsp")).filter(|l| l.starts_with("push") && **l != "push rbp").count() as i64;
+    let sub: i64 = lines.iter().find_map(|l| l.strip_prefix("sub rsp, ")?.parse().ok()).unwrap();
+    let distance = 8 * pushes + sub;
+    let number = |l: &str, open: &str| -> i64 {
+        let rest = &l[l.find(open).unwrap() + open.len()..];
+        rest.split(']').next().unwrap().replace('+', "").parse().unwrap()
+    };
+    let saves: Vec<i64> =
+        lines.iter().filter(|l| l.starts_with("movaps xmmword ptr [rsp+")).map(|l| number(l, "[rsp")).collect();
+    let reloads: Vec<i64> =
+        lines.iter().filter(|l| l.starts_with("movaps xmm") && l.contains(", xmmword ptr [rbp")).map(|l| number(l, "[rbp")).collect();
+    assert!(!saves.is_empty(), "{listing}");
+    assert_eq!(reloads, saves.iter().map(|at| at - distance).collect::<Vec<_>>(), "{listing}");
+}
