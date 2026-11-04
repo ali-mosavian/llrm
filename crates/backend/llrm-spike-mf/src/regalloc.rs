@@ -155,6 +155,14 @@ pub trait Target {
         true
     }
 
+    /// Whether `lane_moves`' building instruction (a `PACK`) is converted to
+    /// one copy per part into its lane of the whole (`eliminateRegSequence`),
+    /// which the coalescer then joins. False: it stays one instruction and the
+    /// parts are hinted.
+    fn lowers_lanes() -> bool {
+        false
+    }
+
     /// Whether a copy into or out of a byte above the low one of a wider value
     /// is joined (`CoalescerPair` with a `SubIdx`). False: such a copy stays.
     fn joins_lanes() -> bool {

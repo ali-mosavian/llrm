@@ -42,7 +42,9 @@ use super::eqclasses::{ConnectedVNInfoEqClasses, distribute_range};
 use super::liverange::{LiveInterval, LiveRange, Segment, VNInfo, Vn};
 use super::liverangecalc::{Ctx, LiveIntervalCalc, Operand};
 use super::slotindex::{InstrKey, SlotIndex, SlotIndexes};
+use crate::model::ir::Loc;
 use crate::model::lir::{Insn, LirBody};
+use llrm_lir::valuelanes::ValueLanes;
 use crate::support::hash::{HashMap, HashSet};
 
 // How many `LiveIntervals` this thread has built, for a test that a phase that
@@ -244,10 +246,8 @@ impl LiveIntervals {
             self.push_operand(value, Operand { instr, is_def: true, reads_reg, early_clobber: false, lanes });
         }
         for &value in &one.uses {
-            self.push_operand(
-                value,
-                Operand { instr, is_def: false, reads_reg: true, early_clobber: false, lanes: Operand::ALL },
-            );
+            let lanes = read_lanes(one, value);
+            self.push_operand(value, Operand { instr, is_def: false, reads_reg: true, early_clobber: false, lanes });
         }
         // An operand flagged undef names the register and reads nothing
         // (`MachineOperand::isUndef`): it starts and extends no live range.
@@ -1274,6 +1274,32 @@ impl LiveIntervals {
     }
 }
 
+/// The bytes of `value` that `one` reads: what its operands name of it, or all
+/// of them where it names none (an implicit read). A read of one lane of a
+/// value some def writes by lane needs only that lane defined.
+fn read_lanes(
+    one: &Insn,
+    value: u32,
+) -> ValueLanes {
+    let Some(what) = &one.what else { return Operand::ALL };
+    let mut found = ValueLanes::NONE;
+    for place in &what.sources {
+        for held in llrm_lir::values(place) {
+            if held.value == value {
+                found = found.union(held.lanes());
+            }
+        }
+    }
+    for place in what.dests.iter().filter(|place| matches!(place, Loc::Mem(_))) {
+        for held in llrm_lir::values(place) {
+            if held.value == value {
+                found = found.union(held.lanes());
+            }
+        }
+    }
+    if found.is_empty() { Operand::ALL } else { found }
+}
+
 #[cfg(test)]
 mod tests {
     use llrm_lir::valuelanes::ValueLanes;
@@ -1518,6 +1544,28 @@ mod tests {
         let plain = [insn(&[1], &[]), insn(&[], &[1])];
         let mut lis = LiveIntervals::new(&body(&plain));
         assert!(!lis.interval(1).has_sub_ranges(), "no lane def, no sub-range");
+    }
+
+
+    /// `x.hi := a; x.lo := b; use x.hi; use x`: the high byte is defined
+    /// before the low one, as joining the bytes' own defs into a pair puts
+    /// them. A lane def does not end the other lanes: the pair is live from
+    /// the first def to the last read. Taken as whole-value defs, the second
+    /// def ended the first's value and the range had a gap between them.
+    #[test]
+    fn test_a_value_defined_by_lanes_in_either_order_is_live_from_its_first_lane_def() {
+        let lane = |byte: u32| {
+            let mut def = Insn::new(0, None, None, vec![1], Vec::new());
+            def.def_lanes = vec![(1, ValueLanes::at(byte, 1))];
+            Arc::new(def)
+        };
+        let (high, low) = (lane(1), lane(0));
+        let insns = [Arc::clone(&high), Arc::clone(&low), insn(&[], &[1])];
+        let mut lis = LiveIntervals::new(&body(&insns));
+        let between = lis.indexes.get_instruction_index(low.id()).get_reg_slot(false);
+        let interval = lis.interval(1);
+        assert!(interval.range.live_at(&between), "the high byte is live across the low byte's def");
+        assert_eq!(interval.range.segments.len(), 1, "one stretch from the first lane def to the read");
     }
 
     /// Renaming the value renames the marker with it.

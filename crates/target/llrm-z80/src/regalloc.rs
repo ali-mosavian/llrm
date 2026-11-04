@@ -121,6 +121,14 @@ impl Target for Z80Registers {
         matches!(inst.kind, Kind::Op("PACK")).then(|| (0, vec![(1, 0, 1), (2, 1, 1)]))
     }
 
+    fn lowers_lanes() -> bool {
+        true
+    }
+
+    fn joins_lanes() -> bool {
+        true
+    }
+
     fn read_part(
         inst: &Inst,
         operand: usize,

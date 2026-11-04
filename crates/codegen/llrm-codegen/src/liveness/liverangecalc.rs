@@ -545,21 +545,27 @@ impl LiveIntervalCalc {
         operands: &[Operand],
         ctx: &Ctx,
     ) {
-        // Step 1: Create minimal live segments for every definition of Reg.
-        // Visit all def operands. If the same instruction has multiple defs of
-        // Reg, createDeadDef() will deduplicate.
-        for mo in operands {
-            if !mo.is_def && !mo.reads_reg {
-                continue;
+        // A value some def writes by lane has its main range made from its
+        // sub-ranges (`constructMainRangeFromSubranges`): a lane def does not
+        // end the other lanes, which one whole range cannot say.
+        let by_lane = operands.iter().any(|mo| mo.is_def && mo.lanes != Operand::ALL);
+        if !by_lane {
+            // Step 1: Create minimal live segments for every definition of Reg.
+            // Visit all def operands. If the same instruction has multiple defs of
+            // Reg, createDeadDef() will deduplicate.
+            for mo in operands {
+                if !mo.is_def && !mo.reads_reg {
+                    continue;
+                }
+                if mo.is_def {
+                    Self::create_dead_def(ctx.indexes, &mut li.range, mo);
+                }
             }
-            if mo.is_def {
-                Self::create_dead_def(ctx.indexes, &mut li.range, mo);
-            }
+            // Step 2: Extend live segments to all uses, constructing SSA form as
+            // necessary.
+            self.calc.reset_live_out_map(ctx.cfg.len());
+            self.extend_to_uses(&mut li.range, operands, ctx);
         }
-        // Step 2: Extend live segments to all uses, constructing SSA form as
-        // necessary.
-        self.calc.reset_live_out_map(ctx.cfg.len());
-        self.extend_to_uses(&mut li.range, operands, ctx);
         // The sub-ranges (LiveIntervalCalc.cpp#L43,
         // `MRI->shouldTrackSubRegLiveness`): one per lane mask some def
         // names alone. DEVIATE: the masks are not refined to disjoint
@@ -574,12 +580,14 @@ impl LiveIntervalCalc {
         }
         // The lanes no def names alone keep their own sub-range, so the
         // sub-ranges cover the value (the pin's refined sub-ranges do).
+        let mut rest_mask = None;
         if let Some(rest) =
             masks.iter().fold(None, |all: Option<ValueLanes>, one| Some(all.map_or(*one, |a| a.union(*one))))
         {
             let rest = ValueLanes(!rest.0);
             if !rest.is_empty() {
                 masks.push(rest);
+                rest_mask = Some(rest);
             }
         }
         for lanes in masks {
@@ -591,7 +599,12 @@ impl LiveIntervalCalc {
                 if mo.is_def && mo.lanes.overlaps(lanes) {
                     mine.push(Operand { reads_reg: false, ..*mo });
                 }
-                if mo.reads_reg && reads.overlaps(lanes) {
+                // The lanes no lane def names are read by a partial def only
+                // where an earlier whole def defined them: a read with no def
+                // above it is of an undefined lane (`computeSubRangeUndefs`),
+                // and is left out of their range.
+                let undef_read = mo.is_def && rest_mask == Some(lanes);
+                if mo.reads_reg && reads.overlaps(lanes) && !undef_read {
                     mine.push(Operand { is_def: false, ..*mo });
                 }
             }
@@ -606,6 +619,40 @@ impl LiveIntervalCalc {
             self.extend_to_uses(&mut range, &mine, ctx);
             li.create_sub_range(lanes).range = range;
         }
+        if by_lane {
+            Self::main_range_from_sub_ranges(li);
+        }
+    }
+
+    /// `constructMainRangeFromSubranges`: the live points of the sub-ranges
+    /// (and of what the range already held, a parameter's dead def), one value
+    /// for each stretch of them that runs together.
+    fn main_range_from_sub_ranges(li: &mut LiveInterval) {
+        let mut stretches: Vec<(SlotIndex, SlotIndex)> = li
+            .range
+            .segments
+            .iter()
+            .chain(li.sub_ranges().iter().flat_map(|sub| sub.range.segments.iter()))
+            .map(|segment| (segment.start.clone(), segment.end.clone()))
+            .collect();
+        stretches.sort();
+        let mut range = LiveRange::new();
+        let mut merged: Vec<(SlotIndex, SlotIndex)> = Vec::new();
+        for (start, end) in stretches {
+            match merged.last_mut() {
+                Some((_, last)) if start <= *last => {
+                    if end > *last {
+                        *last = end;
+                    }
+                }
+                _ => merged.push((start, end)),
+            }
+        }
+        for (start, end) in merged {
+            let vn = range.get_next_value(start.clone());
+            range.add_segment(Segment::new(start, end, Some(vn)));
+        }
+        li.range = range;
     }
 
     /// `createDeadDefs` (LiveIntervalCalc.cpp#L128).

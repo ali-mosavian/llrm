@@ -418,6 +418,18 @@ pub fn to_lir<T: Target>(
         let mut position = 0;
         while reachable[at] && position < block.insts.len() {
             let inst = &block.insts[position];
+            if let Some(lanes) = made.pack_lanes(inst) {
+                // one copy per part, each with the origin of the `PACK`
+                for lane in lanes {
+                    let ordinal = made.origin.len() as i64;
+                    made.origin.push((at, position));
+                    foldable.push(None);
+                    infos.push(("", Vec::new()));
+                    insns.push(Arc::new(made.lane_copy(lane, 2 * ordinal)));
+                }
+                position += 1;
+                continue;
+            }
             let ordinal = made.origin.len() as i64;
             made.origin.push((at, position));
             foldable.push(foldable_source::<T>(inst));
@@ -652,6 +664,53 @@ impl<T: Target> Made<'_, T> {
         insn
     }
 
+    /// The copies a lane-built instruction is converted to, where the target
+    /// lowers lanes: one per part, into its lane of the whole.
+    fn pack_lanes(
+        &self,
+        inst: &Inst,
+    ) -> Option<Vec<LaneCopy>> {
+        if !T::lowers_lanes() {
+            return None;
+        }
+        let (whole, parts) = T::lane_moves(inst)?;
+        let Some(Operand::Def(Reg::Virt(to))) = inst.operands.get(whole) else { return None };
+        let mut copies = Vec::new();
+        for (k, (part, offset, bytes)) in parts.into_iter().enumerate() {
+            let Some(Operand::Use(Reg::Virt(from))) = inst.operands.get(part) else { return None };
+            copies.push(LaneCopy {
+                copy: Inst::new(Kind::Copy, vec![Operand::Def(Reg::Virt(*to)), Operand::Use(Reg::Virt(*from))]),
+                whole: *to + 1,
+                offset,
+                bytes,
+                first: k == 0,
+            });
+        }
+        Some(copies)
+    }
+
+    /// `undef whole:lo = COPY lo`, then `whole:hi = COPY hi`: the lane the copy
+    /// defines is its destination's `offset`, and every one after the first
+    /// keeps the lanes before it.
+    fn lane_copy(
+        &mut self,
+        lane: LaneCopy,
+        at: i64,
+    ) -> Insn {
+        let mut insn = self.insn(&lane.copy, at);
+        if let Some(Loc::Held(held)) = insn.what.as_mut().and_then(|what| what.dests.first_mut()) {
+            held.width = lane.bytes;
+            held.offset = lane.offset;
+        }
+        insn.def_lanes = vec![(lane.whole, ValueLanes::at(lane.offset, lane.bytes))];
+        if lane.first {
+            insn.undef_super = true;
+        } else {
+            insn.partial_defs = vec![lane.whole];
+        }
+        insn
+    }
+
     fn insn(
         &mut self,
         inst: &Inst,
@@ -796,6 +855,15 @@ impl<T: Target> Made<'_, T> {
         }
         insn
     }
+}
+
+/// One part of a lane-built value, copied into its lane of the whole.
+struct LaneCopy {
+    copy: Inst,
+    whole: u32,
+    offset: u32,
+    bytes: u32,
+    first: bool,
 }
 
 /// The name of `inst` and the index, among the sources the converter gives it,
@@ -1493,20 +1561,37 @@ fn entry_live<T: Target>(
     names.iter().enumerate().filter(|(n, _)| live_in[0][n / 64] >> (n % 64) & 1 == 1).map(|(_, r)| *r).collect()
 }
 
+/// The register of `wide`'s root that is the `bytes` bytes `offset` above
+/// `wide`'s own lowest.
+fn lane_register(
+    registers: &Regs,
+    wide: RegId,
+    offset: u32,
+    bytes: u32,
+) -> Option<RegId> {
+    let want = ((1_i64 << bytes) - 1) << (registers.lanes(wide).trailing_zeros() + offset);
+    (0..256).map(RegId::from_index).find(|&register| {
+        registers.known(register)
+            && registers.root(register) == registers.root(wide)
+            && registers.lanes(register) == want
+            && registers.bytes(register) == Some(i64::from(bytes))
+    })
+}
+
 /// `source` with the registers greedy chose: its definitions take the
 /// destinations in order, its reads the sources.
 fn substitute<'a, T: Target>(
     source: &Inst,
     dests: &mut impl Iterator<Item = &'a Loc>,
     sources: &mut impl Iterator<Item = &'a Loc>,
-    number: &mut dyn FnMut(u32) -> Reg,
+    number: &mut dyn FnMut(&Held) -> Reg,
     folds: &mut Vec<(Reg, i32)>,
 ) -> Result<Inst, String> {
     let mut made = source.clone();
     for operand in &mut made.operands {
         *operand = match operand.clone() {
             Operand::Def(Reg::Virt(_)) => match dests.next() {
-                Some(Loc::Held(held)) => Operand::Def(number(held.value)),
+                Some(Loc::Held(held)) => Operand::Def(number(held)),
                 _ => return Err("a definition that is not a register".into()),
             },
             Operand::Def(Reg::Phys(r)) => {
@@ -1516,11 +1601,11 @@ fn substitute<'a, T: Target>(
                 Operand::Def(Reg::Phys(r))
             }
             Operand::Use(Reg::Virt(_)) => match sources.next() {
-                Some(Loc::Held(held)) => Operand::Use(number(held.value)),
+                Some(Loc::Held(held)) => Operand::Use(number(held)),
                 // a read taken from its frame slot: a register stands in for
                 // it until the target writes the folded form
                 Some(Loc::Mem(cell)) => {
-                    let stand_in = number(u32::MAX - folds.len() as u32);
+                    let stand_in = number(&Held { value: u32::MAX - folds.len() as u32, width: 0, offset: 0 });
                     folds.push((stand_in, slot_of(cell)));
                     Operand::Use(stand_in)
                 }
@@ -1591,6 +1676,34 @@ pub fn from_lir<T: Target>(
             None => Reg::Virt(numbered(value, classes)),
         }
     };
+    // The values some instruction defines by lane (a pair built from its
+    // bytes) are named by lane, in the register of that lane, wherever an
+    // instruction names them.
+    let lane_values: llrm_support::hash::HashSet<u32> = edited
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .flat_map(|insn| insn.def_lanes.iter().map(|(value, _)| *value))
+        .collect();
+    let placed_at: IndexMap<u32, RegId> = decided.placed.iter().copied().collect();
+    let lane_failed: std::cell::RefCell<Option<String>> = Default::default();
+    let lane_or_number = |held: &Held,
+                          classes: &mut Vec<T::Class>,
+                          number: &mut dyn FnMut(u32, &mut Vec<T::Class>) -> Reg|
+     -> Reg {
+        if lane_values.contains(&held.value) && !pinned.contains_key(&held.value) {
+            let found = placed_at
+                .get(&held.value)
+                .and_then(|wide| lane_register(&registers, *wide, held.offset, held.width));
+            match found {
+                Some(register) => return Reg::Phys(register),
+                None => {
+                    lane_failed.borrow_mut().get_or_insert(format!("no register for a lane of value {}", held.value));
+                }
+            }
+        }
+        number(held.value, classes)
+    };
     // The literal and address definitions of the function by what they set:
     // the spiller makes one again where it is read, or puts it in place of a
     // copy of the value, and that instruction stands at another one's place.
@@ -1653,7 +1766,7 @@ pub fn from_lir<T: Target>(
                         source,
                         &mut dests,
                         &mut sources,
-                        &mut |value| number(value, &mut classes),
+                        &mut |held| lane_or_number(held, &mut classes, &mut number),
                         &mut folds,
                     )?);
                     if !folds.is_empty() {
@@ -1677,6 +1790,16 @@ pub fn from_lir<T: Target>(
                     .ok_or_else(|| format!("an instruction that is no definition of the function: {what:?}"))?;
             }
             let source = &original.blocks[from].insts[inst];
+            // a copy into a lane of a pair: a move into the register of that lane
+            if name == Some(COPY) && !insn.def_lanes.is_empty() {
+                let (Some(Loc::Held(to)), Some(Loc::Held(source))) = (what.dests.first(), what.sources.first()) else {
+                    return Err("a lane copy that does not move a value".into());
+                };
+                let dest = lane_or_number(to, &mut classes, &mut number);
+                let from = lane_or_number(source, &mut classes, &mut number);
+                insts.push(Inst::new(Kind::Copy, vec![Operand::Def(dest), Operand::Use(from)]));
+                continue;
+            }
             // a copy a split made stands beside an instruction and claims none
             // of its bytes, whatever that instruction is
             let made_by_split = insn.covers.is_some_and(|(from, to)| from == to);
@@ -1697,7 +1820,7 @@ pub fn from_lir<T: Target>(
                 source,
                 &mut dests,
                 &mut sources,
-                &mut |value| number(value, &mut classes),
+                &mut |held| lane_or_number(held, &mut classes, &mut number),
                 &mut folds,
             )?;
             for (stand_in, slot) in folds {
@@ -1706,6 +1829,9 @@ pub fn from_lir<T: Target>(
             insts.push(made);
         }
         blocks.push(Block { id: original.blocks[at].id, insts, phis: Vec::new() });
+    }
+    if let Some(failed) = lane_failed.take() {
+        return Err(failed);
     }
     let mut assignment = vec![None; classes.len()];
     for (value, register) in &decided.placed {
