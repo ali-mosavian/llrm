@@ -48,7 +48,8 @@ use llrm_analysis::blockfreq::BlockFrequencies;
 use llrm_mir::context::{ConstantId, ConstantKind, Context, mask, signed};
 use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::Position;
-use llrm_mir::hash::{HashMap, HashSet};
+use llrm_mir::dense::{IdMap, IdSet};
+use llrm_mir::hash::HashMap;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Flags, Opcode};
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses, Unit};
@@ -118,7 +119,7 @@ struct Adjustment {
 #[derive(Default)]
 struct SetVec {
     items: Vec<BlockId>,
-    seen: HashSet<BlockId>,
+    seen: IdSet<BlockId>,
 }
 
 impl SetVec {
@@ -150,7 +151,7 @@ struct Hoister<'a> {
     candidates: Vec<Candidate>,
     infos: Vec<Info>,
     /// `ClonedCastMap`, in the order the clones were made.
-    cloned_casts: HashMap<InstId, InstId>,
+    cloned_casts: IdMap<InstId, InstId>,
     cloned_order: Vec<InstId>,
 }
 
@@ -285,7 +286,7 @@ impl Hoister<'_> {
         let entry = self.entry;
         // Candidates: each block of `blocks` no other strictly dominates, and
         // the dominator tree's path from the entry to it.
-        let mut candidates: HashSet<BlockId> = HashSet::default();
+        let mut candidates: IdSet<BlockId> = IdSet::new();
         for &block in &blocks.items {
             if !self.tree.is_reachable_from_entry(block) {
                 continue;
@@ -324,7 +325,7 @@ impl Hoister<'_> {
 
         // Bottom-up: each block's best insertion points for the subtree below
         // it, and their total frequency.
-        let position: HashMap<BlockId, usize> = orders.iter().enumerate().map(|(at, &block)| (block, at)).collect();
+        let position: IdMap<BlockId, usize> = orders.iter().enumerate().map(|(at, &block)| (block, at)).collect();
         let mut best: Vec<(SetVec, u64)> = orders.iter().map(|_| (SetVec::default(), 0)).collect();
         let freq = |block| self.freqs.get_block_freq(block).get_frequency();
         for &node in orders.iter().rev() {
@@ -825,7 +826,7 @@ impl FunctionPass for ConstantHoisting {
             min_size,
             candidates: Vec::new(),
             infos: Vec::new(),
-            cloned_casts: HashMap::default(),
+            cloned_casts: IdMap::new(),
             cloned_order: Vec::new(),
         };
         hoister.collect_candidates(unit.function);
