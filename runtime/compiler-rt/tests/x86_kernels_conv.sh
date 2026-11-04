@@ -33,7 +33,7 @@ for op in cmp floatsi fixsi; do
   gcc -m32 -O0 -w $K/$n/$n.c $T/rep.c -o $T/r_$n && $T/r_$n > $K/$n/$n.out
   n=x_crt_$op; mkdir -p $K/$n
   { echo 'extern void report(long value);'
-    $P -ffreestanding -m32 -E -P -I$CRT $CRT/${CRTF[$op]}.c | sed "/Qcomplex/d; /COMPILER_RT_ALIAS/d"
+    $P -ffreestanding -m32 -E -P -I$CRT $CRT/${CRTF[$op]}.c | sed '/Qcomplex/d; /__alias__/d'
     echo 'int __fe_getround(void) { return 0; }'; echo 'int __fe_raise_inexact(void) { return 0; }'
     sed 's/uint32_t/unsigned int/' $T/vectors.h; echo "$FLOATIO"
     echo "long bench_$n(long n) { long i; unsigned int acc = 0; for (i = 0; i < n; ++i) { ${F_BODY[$op]} } return (long)acc; }"
