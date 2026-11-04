@@ -54,7 +54,7 @@ pub fn visit_fptoi(
 }
 
 /// The instruction that defines `v`.
-fn def_of(
+pub(crate) fn def_of(
     c: &Combiner,
     v: Operand,
 ) -> Option<InstId> {
@@ -134,7 +134,7 @@ fn can_be_casted_exactly_int_to_fp(
 }
 
 /// `isKnownExactCastIntToFP(I)`.
-fn is_known_exact_cast_int_to_fp(
+pub(crate) fn is_known_exact_cast_int_to_fp(
     c: &Combiner,
     cast: InstId,
 ) -> bool {

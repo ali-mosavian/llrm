@@ -125,6 +125,9 @@ pub mod combine_distribute;
 mod combine_flags_result_tests;
 pub mod combine_fp;
 pub mod combine_fp_int_casts;
+pub mod combine_fpcast;
+#[cfg(test)]
+mod combine_fpcast_tests;
 pub mod combine_fptoint;
 #[cfg(test)]
 mod combine_fptoint_tests;
