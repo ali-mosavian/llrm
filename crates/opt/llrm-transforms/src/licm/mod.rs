@@ -604,7 +604,8 @@ fn seeded(
                     && instruction
                         .result
                         .is_some_and(|result| function.users(result).iter().any(|one| !ctx.contains(one.user)));
-                let reassociable = hoist::may_reassociate(function, inst);
+                let reassociable =
+                    hoist::may_reassociate(function, inst) || hoist::may_hoist_min_max(function, &ctx, inst);
                 let access = match instruction.opcode {
                     llrm_mir::opcode::Opcode::Load { .. } => Some(instruction.operands[0]),
                     llrm_mir::opcode::Opcode::Store { .. } => Some(instruction.operands[1]),

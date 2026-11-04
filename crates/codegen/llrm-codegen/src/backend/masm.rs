@@ -1198,13 +1198,16 @@ pub fn realign_refusal(procedure: &Procedure) -> Option<String> {
 /// locals' space), except where it calls: its outgoing arguments are stored at
 /// `[sp]` and up, where registers pushed after the space would be.
 pub fn realigned(procedure: Procedure) -> Procedure {
-    let calls = matches!(procedure.body.bits, 32 | 64)
-        && procedure
-            .body
-            .blocks
-            .iter()
-            .flat_map(|block| block.insns.iter())
-            .any(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Call));
+    // The pin's 64-bit frame pushes its registers before the space for the
+    // locals whether or not it calls.
+    let calls = procedure.registers.saved_first
+        || (matches!(procedure.body.bits, 32 | 64)
+            && procedure
+                .body
+                .blocks
+                .iter()
+                .flat_map(|block| block.insns.iter())
+                .any(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Call)));
     if realign_of(&procedure.body) == 0 && !calls { procedure } else { saved_first(procedure) }
 }
 
@@ -1218,7 +1221,7 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
         && procedure.interrupt.is_none()
         && !procedure.far
         && matches!(procedure.body.bits, 32 | 64)
-        && (procedure.reserve != 0 || moves_stack(&procedure.body))
+        && (procedure.reserve != 0 || moves_stack(&procedure.body) || procedure.registers.saved_first)
         && procedure.callees.values().all(|one| one.code.is_empty())
         && [false, true].iter().all(|omit| {
             // Nothing wrapped, or the frame and every register at the one Save
@@ -1266,7 +1269,10 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
         (!procedure.size || held || procedure.registers.free) && stack_addressed(&procedure, 0).is_some()
     };
     let above = if dropped { slot } else { 0 };
-    let gap = (align - (above + pushed) % align) % align;
+    // Nothing is aligned where there are no locals: a leaf with two pushed
+    // registers had a `push rax` slot, and a caller with one had `sub rsp, 16`
+    // (the call alignment is `frame`'s, below), where the pin has neither.
+    let gap = if procedure.reserve == 0 { 0 } else { (align - (above + pushed) % align) % align };
     match crate::backend::relayout::pushed_down(&procedure.body, pushed + gap - above) {
         Some(body) => Procedure {
             body: lir::LirBody { saved_first: true, slot_dropped: dropped, ..body },
@@ -1373,6 +1379,7 @@ fn lowered(
     let saved = &saved[..];
     const FP: u32 = u32::MAX - 1;
     const EAX: u32 = u32::MAX;
+    const DEAD: u32 = u32::MAX - 2;
     let slot = procedure.registers.slot;
     let info = FrameInfo {
         has_fp: framed,
@@ -1383,7 +1390,16 @@ fn lowered(
         realign_to: Some(realign_of(&procedure.body)).filter(|&align| align != 0).map(|align| align as u64),
         has_var_sized_objects: !omit && framed && moves_stack(&procedure.body),
     };
-    let register = |reg_number: u32| if reg_number == FP { reg(FRAME) } else { reg(saved[reg_number as usize]) };
+    // A one-slot frame is `push rax` / `pop rcx` where no return is a sibling
+    // call (`emitSPUpdate` with `findDeadCallerSavedReg`), after the saved
+    // registers as before them.
+    let scratch =
+        procedure.registers.slot_scratch.filter(|_| omit && reserve == slot && !sibling_calls(&procedure.body));
+    let register = |reg_number: u32| match reg_number {
+        FP => reg(FRAME),
+        DEAD => reg(scratch.expect("a dead register is popped for a scratch frame").1),
+        _ => reg(saved[reg_number as usize]),
+    };
     let adjust = |name: &str, bytes: u64| {
         semantics(
             Operation::Binary,
@@ -1393,7 +1409,10 @@ fn lowered(
         )
     };
     let lower = |op: Op| match op {
-        Op::Push(EAX) => adjust("sub", slot as u64),
+        Op::Push(EAX) => match scratch {
+            Some((push, _)) => semantics(Operation::Push, "push", vec![], vec![reg(push)]),
+            None => adjust("sub", slot as u64),
+        },
         Op::Push(number) => semantics(Operation::Push, "push", vec![], vec![register(number)]),
         Op::Pop(number) => semantics(Operation::Pop, "pop", vec![register(number)], vec![]),
         Op::MovFpSp => semantics(Operation::Move, "mov", vec![reg(FRAME)], vec![reg(STACK)]),
@@ -1419,7 +1438,8 @@ fn lowered(
             enter.extend(stack_check(procedure, reserve));
         }
     }
-    let leave = emit_epilogue(&info, None).into_iter().map(lower).collect();
+    let dead = scratch.map(|_| DEAD);
+    let leave = emit_epilogue(&info, dead).into_iter().map(lower).collect();
     (enter, leave)
 }
 
@@ -1507,6 +1527,7 @@ fn parts(
     }
     let framed = framed_by(reserve);
     let reserve = held(reserve);
+    let reserve = reserve - red_zone(procedure, omit);
     let (bp, sp) = (reg(FRAME), reg(STACK));
     if procedure.body.saved_first {
         return lowered(procedure, &saved, reserve, framed, omit);
@@ -1575,6 +1596,87 @@ fn parts(
         leave.extend(after);
     }
     (enter, leave)
+}
+
+/// The bytes of a leaf function's frame that live in the red zone, below the
+/// stack pointer, with no `sub` for them: `X86FrameLowering::emitPrologue`
+/// takes `has128ByteRedZone` bytes off `StackSize` where the function makes no
+/// call, keeps no frame register, realigns nothing and has no variable-sized
+/// object. `omit` is whether the frame register is left out. The registers
+/// are pushed above the locals (`saved_first`) or there are none. A push in
+/// the body would write over the zone, so a body with one has none (its pops
+/// are not asked: `exits_inserted` puts the saved registers' there, and the
+/// answer must not change once it has).
+fn red_zone(
+    procedure: &Procedure,
+    omit: bool,
+) -> i64 {
+    let slot = procedure.registers.slot;
+    let rounded = (procedure.reserve + slot - 1) / slot * slot;
+    if !omit
+        || procedure.registers.red_zone == 0
+        || rounded == 0
+        || procedure.stack_check.is_some()
+        || procedure.probe_stack.is_some()
+        || !(procedure.body.saved_first || saved_of(procedure).is_empty())
+    {
+        return 0;
+    }
+    let in_zone = |what: &Semantics| matches!(what.op, Operation::Call | Operation::Push);
+    if procedure.body.insns().iter().any(|one| one.what.as_ref().is_some_and(in_zone)) {
+        return 0;
+    }
+    let total = if procedure.body.slot_dropped { rounded } else { rounded + slot };
+    let zone = procedure.registers.red_zone.min(total);
+    // The zone must pay in bytes: it moves every local's displacement down by
+    // `zone`, which can cost a disp8 where there was none, against the
+    // `sub`/`add` (or `push`/`pop`) it removes, which is about a clock.
+    // DEVIATE: the pin has no such test (`has128ByteRedZone`). Exit: a
+    // frame-cost hook on the target description.
+    if zone_costs_bytes(procedure, total, zone) {
+        return 0;
+    }
+    zone
+}
+
+/// Whether the red zone adds more displacement bytes to the body's frame
+/// operands than the stack adjustment it saves: a cell's displacement is
+/// `disp + depth - slot` (`through_stack`), `depth` being the whole frame, and
+/// the zone takes `zone` off it.
+fn zone_costs_bytes(
+    procedure: &Procedure,
+    total: i64,
+    zone: i64,
+) -> bool {
+    let slot = procedure.registers.slot;
+    let frame = total + slot * saved_of(procedure).len() as i64;
+    let encoded = |disp: i64| match disp {
+        0 => 0,
+        -128..=127 => 1,
+        _ => 4,
+    };
+    // `sub`/`add` of an imm8 are 4 bytes each, of an imm32 7; one slot is a
+    // `push`/`pop` pair.
+    let adjust = |bytes: i64| match bytes {
+        0 => 0,
+        _ if bytes == slot => 2,
+        1..=127 => 8,
+        _ => 14,
+    };
+    let saved = adjust(total) - adjust(total - zone);
+    let added: i64 = procedure
+        .body
+        .insns()
+        .iter()
+        .filter_map(|one| one.what.as_ref())
+        .flat_map(|what| what.dests.iter().chain(what.sources.iter()))
+        .filter_map(|place| place.address()?.addr.filter(|addr| addr.space == Space::Frame))
+        .map(|addr| {
+            let before = addr.disp + frame - slot;
+            encoded(before - zone) - encoded(before)
+        })
+        .sum();
+    added > saved
 }
 
 /// Where the frame an interrupt handler saved starts above its own BP: the
@@ -4275,10 +4377,12 @@ mod tests {
             optional: false,
             enter: false,
             wrap_split_size: false,
+            red_zone: 0,
             slot_scratch: None,
             free: false,
             kept: false,
             exit_cfi: true,
+            saved_first: false,
         };
         let procedure = Procedure {
             name: "_get".into(),
@@ -4329,10 +4433,12 @@ mod tests {
                 optional: false,
                 enter,
                 wrap_split_size: false,
+                red_zone: 0,
                 slot_scratch: None,
                 free: false,
                 kept: false,
                 exit_cfi: true,
+                saved_first: false,
             };
             let procedure = Procedure {
                 name: "_get".into(),
@@ -4402,10 +4508,12 @@ mod tests {
             optional,
             enter: false,
             wrap_split_size: false,
+            red_zone: 0,
             slot_scratch: None,
             free: false,
             kept: false,
             exit_cfi: true,
+            saved_first: false,
         };
         let procedure = Procedure {
             name: "_get".into(),
@@ -4577,10 +4685,12 @@ mod tests {
             optional: false,
             enter: false,
             wrap_split_size: false,
+            red_zone: 0,
             slot_scratch: None,
             free: false,
             kept: false,
             exit_cfi: true,
+            saved_first: false,
         };
         let procedure = Procedure {
             name: "_get".into(),
@@ -4767,6 +4877,8 @@ mod tests {
                 free: false,
                 kept: false,
                 exit_cfi: true,
+                red_zone: 0,
+                saved_first: false,
             };
             let procedure = Procedure {
                 name: "_get".into(),

@@ -324,6 +324,46 @@ fn test_the_pass_turns_a_byte_fill_loop_into_a_memset() {
     assert!(after.contains("call void @llvm.memset.p0.i64(ptr align 1 %p, i8 0, i64 %1, i1 false)"), "{after}");
 }
 
+/// A row-by-row clear (8 rows of 16 bytes): the inner loop becomes a memset,
+/// and the outer loop, which then holds a call to an intrinsic the pass has
+/// just declared, becomes one memset of 128 bytes. The call read as one that
+/// may throw and not return until the declaration reached the pass's later
+/// loops, so the nest stayed 8 memsets of 16 (matmul nib -Os: three row loops
+/// of `rep stosb`, +11 B and +721 clocks over the bar).
+#[test]
+fn test_a_nest_of_row_clears_becomes_one_memset() {
+    let text = "define void @f(ptr %p) {
+entry:
+  br label %outer
+
+outer:
+  %i = phi i32 [ 0, %entry ], [ %i2, %latch ]
+  %row = mul nuw nsw i32 %i, 16
+  %rp = getelementptr inbounds i8, ptr %p, i32 %row
+  br label %inner
+
+inner:
+  %j = phi i32 [ 0, %outer ], [ %j2, %inner ]
+  %q = getelementptr inbounds i16, ptr %rp, i32 %j
+  store i16 0, ptr %q
+  %j2 = add nuw nsw i32 %j, 1
+  %jc = icmp eq i32 %j2, 8
+  br i1 %jc, label %latch, label %inner
+
+latch:
+  %i2 = add nuw nsw i32 %i, 1
+  %ic = icmp eq i32 %i2, 8
+  br i1 %ic, label %exit, label %outer
+
+exit:
+  ret void
+}
+";
+    let after = pass_output(text);
+    assert_eq!(after.matches("call void @llvm.memset").count(), 1, "{after}");
+    assert!(after.contains("i8 0, i64 128, i1 false)"), "{after}");
+}
+
 /// A function with `"no-builtins"` has every library function disabled in the
 /// pin's `TargetLibraryInfo`: x_radix (Open Watcom, `-fno-builtin`) had its
 /// zeroing loop made a memset, which the pin leaves a loop, and the unroll
@@ -465,4 +505,48 @@ exit:
 ";
     let after = pass_output(text);
     assert!(!after.contains("llvm.memcpy") && !after.contains("llvm.memmove"), "{after}");
+}
+
+/// `a[i] = p[i], b[i] = 0xEE` over 700 trips at speed: the pin makes the copy
+/// a memcpy and the fill a memset in one run. The fill was judged beside the
+/// copy's store, a computed one, and left a loop until a second run; only the
+/// full-pipeline reruns after IPO stages gave it (memory_expansion `lr1`,
+/// x86_32 -O2: a 700-trip byte loop, not a memset call).
+#[test]
+fn test_a_fill_beside_a_copy_is_a_memset_in_the_run_that_makes_the_memcpy() {
+    let text = format!(
+        "{}define void @f(ptr %p) {{
+entry:
+  %a = alloca [700 x i8], align 1
+  %b = alloca [700 x i8], align 1
+  br label %h
+
+h:
+  %i = phi i16 [ 0, %entry ], [ %i2, %h ]
+  %s = getelementptr inbounds i8, ptr %p, i16 %i
+  %v = load i8, ptr %s, align 1
+  %da = getelementptr inbounds i8, ptr %a, i16 %i
+  store i8 %v, ptr %da, align 1
+  %db = getelementptr inbounds i8, ptr %b, i16 %i
+  store i8 -18, ptr %db, align 1
+  %i2 = add nuw nsw i16 %i, 1
+  %c = icmp ne i16 %i2, 700
+  br i1 %c, label %h, label %exit
+
+exit:
+  call void @sink(ptr %a, ptr %b)
+  ret void
+}}
+
+declare void @sink(ptr, ptr)
+",
+        llrm_analysis::testing::DOS
+    );
+    let mut module = crate::testing::parsed(&text);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(super::pass::LoopIdiom::new());
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default())).unwrap();
+    let after = llrm_mir::print::module(&module);
+    assert!(after.contains("llvm.memcpy"), "premise: the copy is a memcpy\n{after}");
+    assert!(after.contains("llvm.memset"), "{after}");
 }
