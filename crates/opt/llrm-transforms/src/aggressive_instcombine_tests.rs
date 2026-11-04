@@ -445,6 +445,8 @@ fn a_chain_of_shifted_bits_is_one_masked_compare() {
         let after = merged(text);
         assert!(after.contains(compare), "{after}");
         assert!(!after.contains("lshr"), "{after}");
+    }
+}
 
 const STRCMP: &str = "@buf = global [3 x i8] c\"xb\\00\"
 @s = constant [3 x i8] c\"ab\\00\"
