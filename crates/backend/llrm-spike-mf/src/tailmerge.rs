@@ -25,8 +25,9 @@
 //! entry jump costs more than the short loops save). Exit: 2026-11-14, when
 //! odds and rotation price the entry jump against the trips.
 
-use std::collections::HashSet;
 use std::hash::Hash;
+
+use llrm_support::hash::{HashMap, HashSet};
 
 use crate::fold::{self, Branches};
 use crate::mfunc::{Block, Inst, MFunction, Operand};
@@ -189,7 +190,7 @@ struct Merger<'a, F: TailMergeFunction> {
 
 /// `TailMergeBlocks`: `true` when anything merged.
 pub fn tail_merge_blocks<F: TailMergeFunction>(function: &mut F) -> bool {
-    let mut merger = Merger { function, potentials: Vec::new(), same_tails: Vec::new(), tried: HashSet::new() };
+    let mut merger = Merger { function, potentials: Vec::new(), same_tails: Vec::new(), tried: HashSet::default() };
     merger.run()
 }
 
@@ -537,7 +538,7 @@ impl<F: TailMergeFunction> Merger<'_, F> {
             }
             let pred_bb = self.layout_prev(ibb);
             self.potentials.clear();
-            let mut unique = HashSet::new();
+            let mut unique = HashSet::default();
             for pbb in self.function.predecessors(ibb) {
                 if self.potentials.len() == TAIL_MERGE_THRESHOLD {
                     break;
@@ -594,10 +595,10 @@ struct Mf<'a, C, J> {
     assignment: Option<&'a Assignment>,
     /// The unconditional jump `remove_branch` took off a block, to put back as
     /// it was: the target's own opcode for it (the 65C02's `bra`), not `J`'s.
-    removed: std::collections::HashMap<u32, Inst>,
+    removed: HashMap<u32, Inst>,
     /// Block to the header of its innermost loop, from the blocks at the start;
     /// a split block takes its origin's.
-    loops: std::collections::HashMap<u32, u32>,
+    loops: HashMap<u32, u32>,
     jump: std::marker::PhantomData<J>,
 }
 
@@ -848,8 +849,8 @@ pub fn merge_tails<J: Jump, C>(
     let mut mf = Mf::<C, J> {
         function,
         assignment,
-        removed: std::collections::HashMap::new(),
-        loops: std::collections::HashMap::new(),
+        removed: HashMap::default(),
+        loops: HashMap::default(),
         jump: std::marker::PhantomData,
     };
     mf.loops = innermost_loops(&mf.blocks(), |block| mf.successors(block));
@@ -862,11 +863,10 @@ pub fn merge_tails<J: Jump, C>(
 fn innermost_loops(
     blocks: &[u32],
     successors: impl Fn(u32) -> Vec<u32>,
-) -> std::collections::HashMap<u32, u32> {
-    use std::collections::{HashMap, HashSet};
-    let Some(&entry) = blocks.first() else { return HashMap::new() };
+) -> HashMap<u32, u32> {
+    let Some(&entry) = blocks.first() else { return HashMap::default() };
     let succ: HashMap<u32, Vec<u32>> = blocks.iter().map(|&b| (b, successors(b))).collect();
-    let mut preds: HashMap<u32, Vec<u32>> = HashMap::new();
+    let mut preds: HashMap<u32, Vec<u32>> = HashMap::default();
     for (&b, out) in &succ {
         for &s in out {
             preds.entry(s).or_default().push(b);
@@ -874,7 +874,7 @@ fn innermost_loops(
     }
     let mut back_edges: Vec<(u32, u32)> = Vec::new();
     // true while on the stack
-    let mut state: HashMap<u32, bool> = HashMap::new();
+    let mut state: HashMap<u32, bool> = HashMap::default();
     let mut stack: Vec<(u32, usize)> = vec![(entry, 0)];
     state.insert(entry, true);
     while let Some(&mut (b, ref mut next)) = stack.last_mut() {
@@ -893,7 +893,7 @@ fn innermost_loops(
             stack.pop();
         }
     }
-    let mut bodies: HashMap<u32, HashSet<u32>> = HashMap::new();
+    let mut bodies: HashMap<u32, HashSet<u32>> = HashMap::default();
     for (latch, header) in back_edges {
         let body = bodies.entry(header).or_default();
         body.insert(header);
@@ -904,7 +904,7 @@ fn innermost_loops(
             }
         }
     }
-    let mut innermost: HashMap<u32, u32> = HashMap::new();
+    let mut innermost: HashMap<u32, u32> = HashMap::default();
     for (&header, body) in &bodies {
         for &b in body {
             let smaller = innermost.get(&b).is_none_or(|current| body.len() < bodies[current].len());
