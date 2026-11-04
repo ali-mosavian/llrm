@@ -158,11 +158,12 @@ fn calls_select_adjcallstack_bl_and_blr() {
     );
 }
 
-/// `AArch64TargetLowering` makes `ctpop` Custom, which is not translated.
-/// `NoHooks` would silently expand it; the block is refused instead.
+/// `AArch64TargetLowering` makes `fcopysign` Custom, which is not translated.
+/// `NoHooks` would silently expand it; the block is refused instead. (`ctpop`
+/// was the example until it became the scalar expansion, DEVIATE SD533.)
 #[test]
 fn a_custom_operation_is_refused_not_expanded() {
-    let ir = "declare i32 @llvm.ctpop.i32(i32)\ndefine i32 @f(i32 %a) {\n  %r = call i32 @llvm.ctpop.i32(i32 %a)\n  ret i32 %r\n}";
+    let ir = "declare double @llvm.copysign.f64(double, double)\ndefine double @f(double %a) {\n  %r = call double @llvm.copysign.f64(double %a, double -1.0)\n  ret double %r\n}";
     let why = selected(ir).expect_err("refused");
     assert!(why.contains("custom lowering"), "{why}");
 }

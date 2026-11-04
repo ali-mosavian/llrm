@@ -109,7 +109,7 @@ pub fn drop_zero_compares(asm: &mut Asm) {
     let keep: Vec<bool> = (0..lines.len())
         .map(|at| {
             let compared = match &lines[at] {
-                Line::Inst(Inst { op, operand: Operand::Imm(v) }) if v == "0" => match op {
+                Line::Inst(Inst { op, operand: Operand::Imm(v), .. }) if v == "0" => match op {
                     Op::Cmp => Some(Registers::A),
                     Op::Cpx => Some(Registers::X),
                     Op::Cpy => Some(Registers::Y),
@@ -151,7 +151,7 @@ pub fn drop_known_loads(asm: &mut Asm) {
     let mut known: [Option<&str>; 3] = [None; 3];
     let mut keep = vec![true; asm.lines.len()];
     for (at, line) in asm.lines.iter().enumerate() {
-        let Line::Inst(Inst { op, operand }) = line else {
+        let Line::Inst(Inst { op, operand, .. }) = line else {
             known = [None; 3];
             continue;
         };
@@ -197,7 +197,7 @@ fn leaves_cell_and_registers(
     line: &Line,
     load: &Operand,
 ) -> bool {
-    let Line::Inst(Inst { op, operand }) = line else { return false };
+    let Line::Inst(Inst { op, operand, .. }) = line else { return false };
     match op {
         Op::Clc | Op::Sec | Op::Nop => true,
         Op::Sta | Op::Stx | Op::Sty => operand.is_cell() && operand != load,
@@ -213,7 +213,7 @@ pub fn drop_reloads(asm: &mut Asm) {
     let lines = &asm.lines;
     let keep: Vec<bool> = (0..lines.len())
         .map(|at| {
-            let Line::Inst(Inst { op: load, operand }) = &lines[at] else { return true };
+            let Line::Inst(Inst { op: load, operand, .. }) = &lines[at] else { return true };
             let store = match load {
                 Op::Lda => Op::Sta,
                 Op::Ldx => Op::Stx,
@@ -485,12 +485,12 @@ fn carry_branch(
     };
     // what the test reads, the register it sets, and its first line
     let (source, tested, from) = if shape.masked {
-        let Line::Inst(Inst { op: Op::And, operand: Operand::Imm(one) }) = &asm.lines[at - 1] else { return None };
+        let Line::Inst(Inst { op: Op::And, operand: Operand::Imm(one), .. }) = &asm.lines[at - 1] else { return None };
         if one != "1" {
             return None;
         }
         match asm.lines.get(at - 2) {
-            Some(Line::Inst(Inst { op: Op::Lda, operand })) if operand.is_cell() => {
+            Some(Line::Inst(Inst { op: Op::Lda, operand, .. })) if operand.is_cell() => {
                 (Source::Cell(operand), Registers::A, at - 2)
             }
             Some(Line::Inst(Inst { op: Op::Txa, .. })) => (Source::Register(Registers::X), Registers::A, at - 2),
@@ -499,7 +499,7 @@ fn carry_branch(
             _ => (Source::Register(Registers::A), Registers::A, at - 1),
         }
     } else {
-        let Line::Inst(Inst { op: read, operand }) = &asm.lines[at - 1] else { return None };
+        let Line::Inst(Inst { op: read, operand, .. }) = &asm.lines[at - 1] else { return None };
         match read {
             Op::Lda if operand.is_cell() => (Source::Cell(operand), Registers::A, at - 1),
             Op::Ldx if operand.is_cell() => (Source::Cell(operand), Registers::X, at - 1),

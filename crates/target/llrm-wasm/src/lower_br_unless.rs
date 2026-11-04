@@ -52,6 +52,7 @@ pub fn lower_br_unless(f: &mut Function) -> bool {
             let [dst, Operand::Use(mut cond)] = f.blocks[b][i].operands[..] else {
                 unreachable!("BR_UNLESS dst, cond")
             };
+            let line = f.blocks[b][i].line;
             let mut inverted = false;
             if f.is_stackified(cond) {
                 // A stackified register is defined by the instruction just
@@ -72,12 +73,13 @@ pub fn lower_br_unless(f: &mut Function) -> bool {
             }
             if !inverted {
                 let tmp = f.new_vreg(ValType::I32);
-                f.blocks[b].insert(i, Inst::new(op::EQZ_I32, &[Operand::Def(tmp), Operand::Use(cond)]));
+                f.blocks[b]
+                    .insert(i, Inst { line, ..Inst::new(op::EQZ_I32, &[Operand::Def(tmp), Operand::Use(cond)]) });
                 i += 1;
                 f.stackify(tmp);
                 cond = tmp;
             }
-            f.blocks[b][i] = Inst::new(op::BR_IF, &[dst, Operand::Use(cond)]);
+            f.blocks[b][i] = Inst { line, ..Inst::new(op::BR_IF, &[dst, Operand::Use(cond)]) };
             i += 1;
         }
     }

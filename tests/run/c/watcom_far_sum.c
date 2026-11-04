@@ -1,5 +1,6 @@
 // flags: -O2 -march=i486 -mabi=watcom
 // link: watcom_far_sum_callee.c
+// targets: dos
 /* `*p + a + b` with a far pointer in AX:DX, a in BX and b in CX under -mabi=watcom. The sum may be made as (*p + a) + b or as *p + (a + b),
    clobbering CX; the caller reads b again after the call, so a convention that keeps CX would show here. */
 extern void report(long value);

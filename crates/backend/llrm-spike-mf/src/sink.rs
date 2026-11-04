@@ -120,12 +120,20 @@ struct Sink<'a, T: Target> {
     considered: HashSet<(u32, u32)>,
     merge: HashMap<(u32, u32), u32>,
     to_split: Vec<(u32, u32)>,
-    live_out: Option<Vec<HashSet<u32>>>,
+    live_out: Option<Vec<Vec<u64>>>,
     /// Whether an edge may get a block of its own for an instruction to land
     /// in.
     allow_split: bool,
     /// Whether a copy or a rematerializable instruction stays where it is.
     keep_cheap: bool,
+}
+
+/// Whether bit `v` of the set is on.
+fn has(
+    bits: &[u64],
+    v: u32,
+) -> bool {
+    bits.get(v as usize / 64).is_some_and(|word| word >> (v % 64) & 1 != 0)
 }
 
 fn virt(reg: Reg) -> Option<u32> {
@@ -274,78 +282,117 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
         if self.live_out.is_none() {
             self.live_out = Some(self.liveness());
         }
-        let mut live: HashSet<u32> = self.live_out.as_ref().unwrap()[block].clone();
-        let mut peak: Vec<(T::Class, usize)> = Vec::new();
-        let mut note = |live: &HashSet<u32>, classes: &[T::Class]| {
-            let mut now: Vec<(T::Class, usize)> = Vec::new();
-            for v in live {
-                let class = classes[*v as usize];
-                match now.iter_mut().find(|(one, _)| *one == class) {
-                    Some((_, count)) => *count += 1,
-                    None => now.push((class, 1)),
-                }
+        let classes = &self.function.classes;
+        let mut live: Vec<u64> = self.live_out.as_ref().unwrap()[block].clone();
+        // live registers per class, kept as registers come and go
+        let mut counts: Vec<(T::Class, usize)> = Vec::new();
+        let bump = |counts: &mut Vec<(T::Class, usize)>, v: u32, up: bool| {
+            let class = classes[v as usize];
+            match counts.iter_mut().find(|(one, _)| *one == class) {
+                Some((_, count)) => *count = if up { *count + 1 } else { *count - 1 },
+                None => counts.push((class, 1)),
             }
-            for (class, count) in now {
+        };
+        for (word, bits) in live.iter().enumerate() {
+            let mut bits = *bits;
+            while bits != 0 {
+                bump(&mut counts, (word * 64) as u32 + bits.trailing_zeros(), true);
+                bits &= bits - 1;
+            }
+        }
+        let mut peak = counts.clone();
+        let mut note = |counts: &[(T::Class, usize)]| {
+            for &(class, count) in counts {
                 match peak.iter_mut().find(|(one, _)| *one == class) {
                     Some((_, most)) => *most = (*most).max(count),
                     None => peak.push((class, count)),
                 }
             }
         };
-        note(&live, &self.function.classes);
         for inst in self.function.blocks[block].insts.iter().rev() {
             for reg in defs_of(inst) {
-                if let Some(v) = virt(reg) {
-                    live.remove(&v);
+                if let Some(v) = virt(reg)
+                    && has(&live, v)
+                {
+                    live[v as usize / 64] &= !(1 << (v % 64));
+                    bump(&mut counts, v, false);
                 }
             }
             for reg in uses_of(inst) {
-                if let Some(v) = virt(reg) {
-                    live.insert(v);
+                if let Some(v) = virt(reg)
+                    && !has(&live, v)
+                {
+                    if v as usize / 64 >= live.len() {
+                        live.resize(v as usize / 64 + 1, 0);
+                    }
+                    live[v as usize / 64] |= 1 << (v % 64);
+                    bump(&mut counts, v, true);
                 }
             }
-            note(&live, &self.function.classes);
+            note(&counts);
         }
         peak
     }
 
-    /// The virtual registers live out of each block.
-    fn liveness(&self) -> Vec<HashSet<u32>> {
-        let count = self.function.blocks.len();
-        let mut live_in: Vec<HashSet<u32>> = vec![HashSet::default(); count];
-        let mut live_out: Vec<HashSet<u32>> = vec![HashSet::default(); count];
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for block in (0..count).rev() {
-                let mut out: HashSet<u32> = HashSet::default();
-                for &succ in &self.cfg.succs[block] {
-                    let results: HashSet<u32> =
-                        self.function.blocks[succ].phis.iter().filter_map(|phi| virt(phi.result)).collect();
-                    out.extend(live_in[succ].iter().filter(|v| !results.contains(v)));
-                    for phi in &self.function.blocks[succ].phis {
-                        for (pred, reg) in &phi.incoming {
-                            if *pred == block {
-                                out.extend(virt(*reg));
-                            }
-                        }
+    /// The virtual registers live out of each block, as bit sets.
+    fn liveness(&self) -> Vec<Vec<u64>> {
+        let blocks = self.function.blocks.len();
+        let words = self.function.classes.len().div_ceil(64);
+        if words == 0 {
+            return vec![Vec::new(); blocks];
+        }
+        // one table per kind, `words` to a block
+        let set = |table: &mut [u64], block: usize, v: u32| table[block * words + v as usize / 64] |= 1 << (v % 64);
+        // what each block reads before it writes, what it writes, what its
+        // phis define, and what it hands to its successors' phis (an input is
+        // live out of the block it comes from, and of no other)
+        let mut gen_ = vec![0u64; blocks * words];
+        let mut kill = vec![0u64; blocks * words];
+        let mut phi_defs = vec![0u64; blocks * words];
+        let mut handed = vec![0u64; blocks * words];
+        for (at, block) in self.function.blocks.iter().enumerate() {
+            for phi in &block.phis {
+                if let Some(result) = virt(phi.result) {
+                    set(&mut phi_defs, at, result);
+                }
+                for (pred, reg) in &phi.incoming {
+                    if let Some(v) = virt(*reg) {
+                        set(&mut handed, *pred, v);
                     }
                 }
-                let mut live = out.clone();
-                for inst in self.function.blocks[block].insts.iter().rev() {
-                    for reg in defs_of(inst) {
-                        live.remove(&virt(reg).unwrap_or(u32::MAX));
-                    }
-                    live.extend(uses_of(inst).filter_map(virt));
+            }
+            for inst in block.insts.iter().rev() {
+                for reg in defs_of(inst).filter_map(virt) {
+                    gen_[at * words + reg as usize / 64] &= !(1 << (reg % 64));
+                    set(&mut kill, at, reg);
                 }
-                if out != live_out[block] || live != live_in[block] {
-                    live_out[block] = out;
-                    live_in[block] = live;
-                    changed = true;
+                for reg in uses_of(inst).filter_map(virt) {
+                    set(&mut gen_, at, reg);
                 }
             }
         }
-        live_out
+        let mut live_in = vec![0u64; blocks * words];
+        let mut live_out = vec![0u64; blocks * words];
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for block in (0..blocks).rev() {
+                for w in 0..words {
+                    let mut out = handed[block * words + w];
+                    for &succ in &self.cfg.succs[block] {
+                        out |= live_in[succ * words + w] & !phi_defs[succ * words + w];
+                    }
+                    let at = block * words + w;
+                    let input = gen_[at] | (out & !kill[at]);
+                    if out != live_out[at] || input != live_in[at] {
+                        live_out[at] = out;
+                        live_in[at] = input;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        live_out.chunks(words).map(<[u64]>::to_vec).collect()
     }
 
     /// `registerPressureSetExceedsLimit(1, class, block)`.

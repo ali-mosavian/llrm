@@ -44,6 +44,12 @@ use llrm_target::Target as _;
 
 use crate::target::Mos;
 
+/// The most the unrolled copy of a loop may cost, in the units above. A trip
+/// of a loop costs its counter add, its compare and its branch beyond the body
+/// (one unit each); unrolling pays for itself while the whole copy is no more
+/// than a few trips of that control.
+const FULL_UNROLL_UNITS: u32 = 24;
+
 /// The cost model of the 6502 and 65C02.
 #[derive(Clone, Copy, Debug)]
 pub struct Mos6502 {
@@ -116,6 +122,20 @@ impl Tti for Mos6502 {
 
     // The 6502 has no conditional move: `selects.rs` expands every select to a
     // branch.
+    /// `getUnrollingPreferences`: full unrolling only. The pin's default
+    /// threshold (300) unrolls an 8-trip bit loop to 222 bytes where the
+    /// rolled loop is 88; partial and runtime unrolling stay off
+    /// (`loop_micro_op_buffer_size` is 0). At `-Os` the pin's zero
+    /// `OptSizeThreshold` lets a loop go only where the unrolled body costs
+    /// nothing more than the rolled one.
+    fn get_unrolling_preferences(
+        &self,
+        _has_calls: bool,
+        up: &mut UnrollingPreferences,
+    ) {
+        up.threshold = FULL_UNROLL_UNITS;
+    }
+
     fn has_cmov(&self) -> bool {
         false
     }

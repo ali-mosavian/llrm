@@ -90,6 +90,11 @@ pub struct Convention {
     /// What a call's arguments in registers are the callee's to change;
     /// everything else it keeps.
     pub arguments_clobbered: bool,
+    /// The allocator leaves a copy between a value and the register an
+    /// argument arrives in to itself, as the pin does for a register that is
+    /// not reserved (`canJoinPhys`), instead of joining it away. Off where the
+    /// file does not say.
+    pub pinned_copies_unjoined: bool,
     /// The same for the registers a result leaves in.
     pub results_clobbered: bool,
     /// Functions of this name that no function of the module calls and whose
@@ -119,6 +124,10 @@ pub struct Convention {
     /// addressed through the stack pointer, and the frame register is not
     /// set. gcc's `-fomit-frame-pointer`.
     pub frame_optional: bool,
+    /// The registers a function keeps are pushed before the space for its
+    /// locals whether or not it calls (`X86FrameLowering` on x86-64); left
+    /// false where a frame with no call keeps them after.
+    pub frame_saved_first: bool,
     /// A frame tuned for size is opened with `enter N,0` (4 bytes against 6).
     /// Left false where the target prices it above `push bp; mov bp,sp; sub
     /// sp,N`: the 486 takes 14 clocks against 3 (Intel 240440-002), and neither
@@ -128,6 +137,10 @@ pub struct Convention {
     /// return with the late path (the exit then jumps over the epilogue). Left
     /// false where that jump outgrows its short form (QCport m16 -Os +9 B).
     pub frame_wrap_split_size: bool,
+    /// Bytes below the stack pointer the ABI keeps safe from signal handlers
+    /// (the System V red zone): a leaf function's locals live there, with
+    /// no `sub`.
+    pub frame_red_zone: i64,
     /// The registers a frame of one stack slot pushes and pops instead of a
     /// `sub`/`add` of the stack pointer: the pushed one holds nothing a
     /// push may not read, the popped one is a caller-saved register no result
@@ -215,6 +228,7 @@ const KEYS: &[&str] = &[
     "skip_memory",
     "aggregate_arguments_in_memory",
     "arguments_clobbered",
+    "pinned_copies_unjoined",
     "results_clobbered",
     "entry_clobbers_all",
     "variadic",
@@ -233,8 +247,10 @@ const KEYS: &[&str] = &[
     "first_argument_offset_far",
     "frame",
     "frame_optional",
+    "frame_saved_first",
     "frame_enter",
     "frame_wrap_split_size",
+    "frame_red_zone",
     "frame_slot_push",
     "frame_slot_pop",
     "stack",
@@ -644,6 +660,7 @@ impl Convention {
             skip_memory: flag("skip_memory")?,
             aggregate_arguments_in_memory: flag("aggregate_arguments_in_memory")?,
             arguments_clobbered: flag("arguments_clobbered")?,
+            pinned_copies_unjoined: flag("pinned_copies_unjoined")?,
             results_clobbered: flag("results_clobbered")?,
             entry_clobbers_all: match table.get("entry_clobbers_all") {
                 Some(_) => names(table.get("entry_clobbers_all"), "entry_clobbers_all")?,
@@ -669,8 +686,14 @@ impl Convention {
                 .transpose()?,
             frame: text("frame")?,
             frame_optional: flag("frame_optional")?,
+            frame_saved_first: flag("frame_saved_first")?,
             frame_enter: flag("frame_enter")?,
             frame_wrap_split_size: flag("frame_wrap_split_size")?,
+            frame_red_zone: table
+                .contains_key("frame_red_zone")
+                .then(|| integer("frame_red_zone"))
+                .transpose()?
+                .unwrap_or(0),
             frame_slot_scratch: table
                 .contains_key("frame_slot_push")
                 .then(|| Ok::<_, String>((text("frame_slot_push")?, text("frame_slot_pop")?)))

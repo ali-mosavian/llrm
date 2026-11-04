@@ -3,6 +3,7 @@
 pub mod abi;
 pub mod compile;
 pub mod dagisel;
+pub mod data;
 pub mod driver;
 pub mod expand;
 pub mod inline_rt;
