@@ -1090,6 +1090,16 @@ pub trait Tti {
         )
     }
 
+    /// `haveFastSqrt`: a legal `FSQRT` on `ty`
+    /// ([BasicTTIImpl.h:674](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L674)).
+    /// Default: none, for a target without an FPU or a sqrt instruction.
+    fn have_fast_sqrt(
+        &self,
+        _ty: Ty,
+    ) -> bool {
+        false
+    }
+
     /// `shouldBuildLookupTables`: whether the target jumps through a table
     /// (X86 and AArch64: `BRIND` is legal).
     fn should_build_lookup_tables(&self) -> bool {
