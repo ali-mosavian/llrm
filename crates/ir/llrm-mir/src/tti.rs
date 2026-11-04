@@ -961,6 +961,18 @@ pub trait Tti {
         1
     }
 
+    /// `TCC_Basic` in this target's cost units for `kind` (DEVIATE TB1; the
+    /// pin's is the constant 1): the SCEV expansion budgets
+    /// (`isHighCostExpansion`, 4 of them) are counted in it. A target whose
+    /// costs are not about one per instruction (the Z80 prices in machine
+    /// cycles) says what a basic instruction costs.
+    fn tcc_basic(
+        &self,
+        _kind: CostKind,
+    ) -> Cost {
+        Cost::BASIC
+    }
+
     /// DEVIATE LU12: whether the adds of a use whose fixups all lie after the
     /// loop are rated as run once, not every trip (the pin rates them every
     /// trip). Off: they cost the loop an add each, as in the pin.
