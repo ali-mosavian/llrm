@@ -888,7 +888,7 @@ fn eliminate_undef_copy(
         made.what = Some(crate::model::ir::Semantics {
             op: crate::model::ir::Operation::Nothing,
             name: Some(crate::processimpdefs::IMPLICIT_DEF.into()),
-            dests: vec![Loc::Held(crate::model::ir::Held { value: dst, width })],
+            dests: vec![Loc::Held(crate::model::ir::Held { value: dst, width, offset: 0 })],
             sources: Vec::new(),
             ..crate::model::ir::Semantics::new(crate::model::ir::Operation::Nothing)
         });

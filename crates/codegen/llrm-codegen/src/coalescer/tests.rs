@@ -22,7 +22,7 @@ impl CoalescerEnv for AnyClass {
 }
 
 fn held(value: u32) -> Loc {
-    Loc::Held(Held { value, width: 4 })
+    Loc::Held(Held { value, width: 4, offset: 0 })
 }
 
 fn copy(
@@ -131,7 +131,7 @@ fn test_a_dead_copy_takes_the_definition_only_it_read() {
 fn test_a_dead_copy_does_not_take_a_call_that_delivered_its_source() {
     let what = Semantics { name: Some("call".into()), ..Semantics::new(Operation::Call) };
     let mut call = Insn::new(0, None, Some(what), vec![1], vec![]);
-    call.delivers = vec![(Held { value: 1, width: 4 }, llrm_lir::registers::RegId::EAX)];
+    call.delivers = vec![(Held { value: 1, width: 4, offset: 0 }, llrm_lir::registers::RegId::EAX)];
     let (call, c) = (Arc::new(call), copy(2, 1));
     let was = body(&[(&[Arc::clone(&call), Arc::clone(&c)], &[])]);
     let mut lis = LiveIntervals::new(&was);
@@ -429,7 +429,7 @@ fn test_two_copies_into_one_value_leave_every_read_defined() {
 #[test]
 fn test_a_coalesced_address_keeps_its_memory_operand_defined() {
     use crate::model::ir::Mem;
-    let memory = Mem { base: Some(Held { value: 2, width: 2 }), ..Mem::new(None, 2) };
+    let memory = Mem { base: Some(Held { value: 2, width: 2, offset: 0 }), ..Mem::new(None, 2) };
     let what = Semantics {
         name: Some("mov".into()),
         dests: vec![held(3)],
@@ -905,7 +905,7 @@ fn held_at(
     value: u32,
     width: u32,
 ) -> Loc {
-    Loc::Held(Held { value, width })
+    Loc::Held(Held { value, width, offset: 0 })
 }
 
 /// `dst := mov src` between two widths.
