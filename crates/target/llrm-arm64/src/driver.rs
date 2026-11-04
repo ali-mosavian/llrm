@@ -306,6 +306,8 @@ pub fn functions_with(
             crate::combine::run(&mut machine, optsize);
             dump("Combine", &machine);
         }
+        crate::cmpzero::run(&mut machine);
+        dump("CmpZero", &machine);
         crate::flagcse::run(&mut machine);
         dump("FlagCse", &machine);
         crate::storecluster::run(&mut machine);
