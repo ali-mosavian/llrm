@@ -2279,7 +2279,7 @@ impl LazyValueInfoImpl {
             // values from different cycle iterations (PR60629).
             let single_use = curr_inst.result.and_then(|r| function.users(r).only().copied());
             let Some(next_use) = single_use else { break };
-            if !is_safe_to_speculatively_execute_with_variable_replaced(env, curr_i, false) {
+            if !is_safe_to_speculatively_execute_with_variable_replaced(&env.query(), env.function.instruction(curr_i), false) {
                 break;
             }
             curr_u = next_use;
@@ -2535,13 +2535,11 @@ fn zero_value(
 /// IgnoreUBImplyingAttrs)`.
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L7575>
-fn is_safe_to_speculatively_execute_with_variable_replaced(
-    env: &Env,
-    inst: InstId,
+pub fn is_safe_to_speculatively_execute_with_variable_replaced(
+    q: &Query,
+    instruction: &crate::module::Instruction,
     ignore_ub_implying_attrs: bool,
 ) -> bool {
-    let instruction = env.function.instruction(inst);
-    let q = env.query();
     match &instruction.opcode {
         Opcode::Binary(BinaryOp::UDiv | BinaryOp::URem) => {
             // x / y is undefined if y == 0.
@@ -2570,7 +2568,7 @@ fn is_safe_to_speculatively_execute_with_variable_replaced(
         // !UseVariableInfo
         Opcode::Load { .. } => false,
         Opcode::Call(_) => {
-            let Some(callee) = pattern::called_function(&q, instruction) else { return false };
+            let Some(callee) = pattern::called_function(q, instruction) else { return false };
             // The called function could have undefined behavior or
             // side-effects, even if marked readnone nounwind.
             if !callee.attrs.iter().any(|a| matches!(a, Attribute::Flag(name) if name == "speculatable")) {
@@ -2579,7 +2577,7 @@ fn is_safe_to_speculatively_execute_with_variable_replaced(
             // Since the operands may be changed after hoisting, undefined
             // behavior may be triggered by some UB-implying
             // attributes.
-            ignore_ub_implying_attrs || !has_ub_implying_attrs(env, instruction)
+            ignore_ub_implying_attrs || !has_ub_implying_attrs(q, instruction)
         }
         Opcode::Alloca { .. }
         | Opcode::Invoke(_)
@@ -2599,10 +2597,9 @@ fn is_safe_to_speculatively_execute_with_variable_replaced(
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Instruction.cpp#L595>
 fn has_ub_implying_attrs(
-    env: &Env,
+    q: &Query,
     instruction: &crate::module::Instruction,
 ) -> bool {
-    let q = env.query();
     let Some(info) = pattern::call_info(instruction) else { return false };
     let named = |attrs: &[Attribute]| {
         attrs
@@ -2615,7 +2612,7 @@ fn has_ub_implying_attrs(
                 },
             )
     };
-    let callee = pattern::called_function(&q, instruction);
+    let callee = pattern::called_function(q, instruction);
     for arg_no in 0..call_arguments(instruction).len() {
         // CallBase::isPassingUndefUB
         if info.argument_attrs.get(arg_no).is_some_and(|a| named(a))

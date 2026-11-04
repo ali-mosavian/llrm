@@ -34,6 +34,7 @@
 
 use llrm_mir::context::ConstantKind;
 use llrm_mir::intrinsics::Intrinsic;
+use llrm_mir::lazyvalueinfo::is_safe_to_speculatively_execute_with_variable_replaced;
 use llrm_mir::module::{InstId, Operand};
 use llrm_mir::opcode::{Attribute, Flags, Opcode};
 use llrm_mir::valuetracking::known::pointer_alignment;
@@ -47,14 +48,55 @@ impl Combiner<'_> {
         &mut self,
         call: InstId,
     ) -> Visit {
-        match self.intrinsic_of(call) {
+        let visited = match self.intrinsic_of(call) {
             Some(Intrinsic::MemCpy | Intrinsic::MemMove) => self.simplify_any_mem_transfer(call),
             Some(Intrinsic::MemSet) => self.raise_alignments(call, 1),
             Some(Intrinsic::MinMax { signed, max }) => self.narrow_min_max(call, signed, max),
             Some(Intrinsic::FMulAdd) => crate::combine_fp::visit_fmuladd(self, call),
-            None => self.transform_const_expr_cast_call(call),
+            None => return self.transform_const_expr_cast_call(call),
             _ => Visit::None,
+        };
+        if visited != Visit::None {
+            return visited;
         }
+        self.fold_intrinsic_into_select_or_phi(call)
+    }
+
+    /// The tail of `visitCallInst` (InstCombineCalls.cpp:4561): a speculatable
+    /// intrinsic folds into the select or phi it reads, where the arms
+    /// simplify. Scalar selects only.
+    fn fold_intrinsic_into_select_or_phi(
+        &mut self,
+        call: InstId,
+    ) -> Visit {
+        let safe = {
+            let q = query(self, Some(call));
+            is_safe_to_speculatively_execute_with_variable_replaced(&q, self.function.instruction(call), false)
+        };
+        if !safe {
+            return Visit::None;
+        }
+        let operands = self.function.instruction(call).operands.to_vec();
+        // The last operand is the callee.
+        for &argument in &operands[..operands.len().saturating_sub(1)] {
+            let Some(def) = self.definition(argument) else { continue };
+            match self.function.instruction(def).opcode {
+                Opcode::Select => {
+                    let folded = self.fold_op_into_select(call, def, false, false);
+                    if folded != Visit::None {
+                        return folded;
+                    }
+                }
+                Opcode::Phi => {
+                    let folded = self.fold_op_into_phi(call, def, false);
+                    if folded != Visit::None {
+                        return folded;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Visit::None
     }
 
     /// The first step of `SimplifyAnyMemTransfer` and `SimplifyAnyMemSet`: the
