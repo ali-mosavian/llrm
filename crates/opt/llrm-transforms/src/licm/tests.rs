@@ -1639,3 +1639,132 @@ fn test_a_promotion_past_the_target_register_count_is_refused() {
     assert_eq!(counters_promoted(llrm_x86_m16::Dos::default()), 3);
     assert_eq!(counters_promoted(I486(llrm_mir::target::Neutral)), 5);
 }
+
+/// The dot loop of a Nib zip (`i < a && i < b`, both bounds invariant) tested
+/// both bounds on every trip: the pin's LICM (`hoistMinMax`) makes one compare
+/// against `umin(a, b)`, the `umin` in the preheader.
+#[test]
+fn test_two_invariant_upper_bounds_become_one_compare_against_their_min() {
+    let after = licm_printed(
+        "define i16 @f(i16 %a, i16 %b) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %i1 = add nuw i16 %i, 1
+  %c1 = icmp ult i16 %i1, %a
+  %c2 = icmp ult i16 %i1, %b
+  %c = select i1 %c1, i1 %c2, i1 false
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}
+",
+    );
+    let entry = block_of(&after, "b0");
+    assert!(entry.iter().any(|line| line.contains("%invariant.umin = call i16 @llvm.umin.i16")), "{after}");
+    let body = block_of(&after, "b1");
+    assert_eq!(body.iter().filter(|line| line.contains("icmp")).count(), 1, "{after}");
+    assert!(body.iter().any(|line| line.contains("icmp ult i16 %i1, %invariant.umin")), "{after}");
+}
+
+/// A select does not evaluate its second compare on every path, so the bound
+/// the preheader now reads is frozen; the logical `and` form needs no freeze.
+#[test]
+fn test_a_select_freezes_the_second_bound_and_an_and_does_not() {
+    let select = "  %c = select i1 %c1, i1 %c2, i1 false\n";
+    let and = "  %c = and i1 %c1, %c2\n";
+    for (logic, frozen) in [(select, true), (and, false)] {
+        let text = format!(
+            "define i16 @f(i16 %a, i16 %b) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %i1 = add nuw i16 %i, 1
+  %c1 = icmp ult i16 %i1, %a
+  %c2 = icmp ult i16 %i1, %b
+{logic}  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}}
+"
+        );
+        let after = licm_printed(&text);
+        let entry = block_of(&after, "b0");
+        assert_eq!(entry.iter().any(|line| line.contains("freeze")), frozen, "{after}");
+        assert!(entry.iter().any(|line| line.contains("llvm.umin.i16")), "{after}");
+    }
+}
+
+/// `||` of two upper-bound tests is the min's inverse: exit when `i >= min`.
+/// Signed lower bounds take the max.
+#[test]
+fn test_or_of_bounds_and_signed_lower_bounds() {
+    let or = licm_printed(
+        "define i16 @f(i16 %a, i16 %b) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %i1 = add nuw i16 %i, 1
+  %c1 = icmp uge i16 %i1, %a
+  %c2 = icmp uge i16 %i1, %b
+  %c = or i1 %c1, %c2
+  br i1 %c, label %b2, label %b1
+
+b2:
+  ret i16 %i1
+}
+",
+    );
+    assert!(block_of(&or, "b0").iter().any(|line| line.contains("llvm.umin.i16")), "{or}");
+    let max = licm_printed(
+        "define i16 @f(i16 %a, i16 %b) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %i1 = add nuw i16 %i, 1
+  %c1 = icmp sgt i16 %i1, %a
+  %c2 = icmp sgt i16 %i1, %b
+  %c = and i1 %c1, %c2
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}
+",
+    );
+    assert!(block_of(&max, "b0").iter().any(|line| line.contains("llvm.smax.i16")), "{max}");
+}
+
+/// Mixed directions (`i < a && i > b`) have no single bound: untouched.
+#[test]
+fn test_opposite_directions_are_not_merged() {
+    let after = licm_printed(
+        "define i16 @f(i16 %a, i16 %b) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %i1 = add nuw i16 %i, 1
+  %c1 = icmp ult i16 %i1, %a
+  %c2 = icmp ugt i16 %i1, %b
+  %c = and i1 %c1, %c2
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}
+",
+    );
+    assert!(!after.contains("llvm.umin") && !after.contains("llvm.umax"), "{after}");
+}

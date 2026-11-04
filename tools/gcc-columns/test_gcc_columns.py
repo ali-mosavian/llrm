@@ -82,3 +82,20 @@ def test_z80_table_header_names_the_single_tu_ice():
     """The shipped z80 cc1 ICEs on a single-TU softfloat build at -O2; the table says so, so no gcc cell is added for such a build."""
     root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tables", "z80-gcc.tsv")
     assert "single-translation-unit softfloat build" in open(root).readline()
+
+
+def test_a_hung_fork_call_is_a_failed_call_not_a_cell():
+    """compiler-rt f64/mul.c O1 hangs the native-long cc1 (>300 s): every cc1/tool call of both benches runs under a timeout and a timeout
+    returns 124, which the benches count as a failed compile (n/a); a missing or zero-byte cell would read as a number."""
+    import time
+    import gcc_6502_bench as B6
+    os.environ["GCC_COLUMNS_TIMEOUT"] = "1"
+    try:
+        for mod in (Z, B6):
+            mod.TIMEOUT = 1
+            t0 = time.time()
+            p = mod.sh(["sleep", "5"], ".")
+            assert p.returncode == 124 and time.time() - t0 < 4, (mod.__name__, p.returncode)
+    finally:
+        del os.environ["GCC_COLUMNS_TIMEOUT"]
+        Z.TIMEOUT = B6.TIMEOUT = 120

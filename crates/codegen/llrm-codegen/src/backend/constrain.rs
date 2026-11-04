@@ -178,7 +178,7 @@ pub fn constrained(
     let source = |value: u32, width: u32| -> Loc {
         match constants.get(&value) {
             Some(constant) if constant.width == width => Loc::Imm(constant.clone()),
-            _ => Loc::Held(Held { value, width }),
+            _ => Loc::Held(Held { value, width, offset: 0 }),
         }
     };
 
@@ -204,7 +204,7 @@ pub fn constrained(
                     continue;
                 }
                 let distinct = if slots.keys().any(|(value, _width, _register)| *value == held.value) {
-                    let distinct = Held { value: fresh, width: held.width };
+                    let distinct = Held { value: fresh, width: held.width, offset: 0 };
                     insns.push(_move(&one, distinct, source(held.value, held.width)));
                     pins.insert(fresh, *register);
                     pinned.insert(fresh, *register);
@@ -258,7 +258,7 @@ pub fn constrained(
             let mut ordered = wanted;
             ordered.sort_by_key(|got| got.value);
             for Wanted { value, register, places } in ordered {
-                let held = Held { value: fresh, width: _declared(&widths, &one, value) };
+                let held = Held { value: fresh, width: _declared(&widths, &one, value), offset: 0 };
                 let read_only = places.iter().all(|(side, _)| *side == "source");
                 let key = (value, regs.root(register));
                 if let Some(kept) = carried.get(&key).copied().filter(|kept| read_only && kept.width == held.width) {
@@ -296,7 +296,7 @@ pub fn constrained(
                     before.push(_move(&one, held, source(value, held.width)));
                 }
                 if places.iter().any(|(side, _)| *side == "dest") {
-                    after.push(_move(&one, Held { value, width: held.width }, Loc::Held(held)));
+                    after.push(_move(&one, Held { value, width: held.width, offset: 0 }, Loc::Held(held)));
                 }
                 for (side, index) in places {
                     if side == "dest" {
@@ -315,8 +315,8 @@ pub fn constrained(
             delivered.sort_by_key(|(value, _register)| *value);
             for (value, register) in delivered {
                 // Behind the instruction, not in front of it.
-                let held = Held { value: fresh, width: _declared(&widths, &one, value) };
-                after.push(_move(&one, Held { value, width: held.width }, Loc::Held(held)));
+                let held = Held { value: fresh, width: _declared(&widths, &one, value), offset: 0 };
+                after.push(_move(&one, Held { value, width: held.width, offset: 0 }, Loc::Held(held)));
                 pins.insert(fresh, register);
                 defines = defines.iter().map(|v| if *v == value { held.value } else { *v }).collect();
                 swap.insert(value, held.value);
@@ -332,6 +332,7 @@ pub fn constrained(
                 ir::mapped(&operand, |value| Held {
                     value: swap.get(&value.value).copied().unwrap_or(value.value),
                     width: value.width,
+                    offset: 0,
                 })
             };
 
@@ -351,7 +352,11 @@ pub fn constrained(
                 .iter()
                 .map(|(held, register)| {
                     (
-                        Held { value: input_values.get(&held.value).copied().unwrap_or(held.value), width: held.width },
+                        Held {
+                            value: input_values.get(&held.value).copied().unwrap_or(held.value),
+                            width: held.width,
+                            offset: 0,
+                        },
                         *register,
                     )
                 })
@@ -364,6 +369,7 @@ pub fn constrained(
                         Held {
                             value: output_values.get(&held.value).copied().unwrap_or(held.value),
                             width: held.width,
+                            offset: 0,
                         },
                         *register,
                     )
@@ -569,7 +575,7 @@ pub fn distinct_classes_given(
                     .or_insert_with(
                         || {
                             fresh += 1;
-                            Held { value: fresh - 1, width: wide }
+                            Held { value: fresh - 1, width: wide, offset: 0 }
                         },
                     );
             }
@@ -578,7 +584,7 @@ pub fn distinct_classes_given(
             };
             let swap = |held: Held, role: regclass::Role| -> Held {
                 match copies.get(&held.value) {
-                    Some(copy) if is(held.value, role) => Held { value: copy.value, width: held.width },
+                    Some(copy) if is(held.value, role) => Held { value: copy.value, width: held.width, offset: 0 },
                     _ => held,
                 }
             };
@@ -602,7 +608,7 @@ pub fn distinct_classes_given(
                 })
                 .collect();
             for (value, copy) in &copies {
-                insns.push(_move(one, *copy, Loc::Held(Held { value: *value, width: copy.width })));
+                insns.push(_move(one, *copy, Loc::Held(Held { value: *value, width: copy.width, offset: 0 })));
             }
             let mut made = (**one).clone();
             made.what = Some(Semantics { dests, sources, ..what.clone() });
@@ -939,7 +945,7 @@ mod tests {
         value: u32,
         width: u32,
     ) -> Loc {
-        Loc::Held(Held { value, width })
+        Loc::Held(Held { value, width, offset: 0 })
     }
 
     fn imm(
@@ -1004,7 +1010,7 @@ mod tests {
     /// became v143.
     #[test]
     fn test_runtime_requirement_renames_its_explicit_source() {
-        let value = Held { value: 20, width: 2 };
+        let value = Held { value: 20, width: 2, offset: 0 };
         let mut call = _insn(semantics(Operation::Call, "call", vec![], vec![Loc::Held(value)]), &[], &[20], 0x100);
         call.requires = vec![(value, RegId::AX)];
         let (got, _) = constrained(&_body(vec![call]), None, &crate::backend::classes::RegisterClasses::m16());
@@ -1018,7 +1024,7 @@ mod tests {
     #[test]
     fn test_shared_zero_is_supplied_to_every_runtime_input() {
         for registers in [vec![RegId::BX, RegId::CX], vec![RegId::AX, RegId::BX, RegId::CX]] {
-            let value = Held { value: 1, width: 2 };
+            let value = Held { value: 1, width: 2, offset: 0 };
             let constant =
                 _insn(semantics(Operation::Move, "mov", vec![Loc::Held(value)], vec![imm(0, 2)]), &[1], &[], 0x100);
             let mut call = _insn(semantics(Operation::Call, "call", vec![], vec![]), &[], &[1], 0x108);
@@ -1052,7 +1058,7 @@ mod tests {
     /// v1036.
     #[test]
     fn test_fixed_address_requirement_renames_memory_base() {
-        let value = Held { value: 20, width: 2 };
+        let value = Held { value: 20, width: 2, offset: 0 };
         let cell = Mem { base: Some(value), ..Mem::new(Some(Addr::new(Space::Literal, 0)), 2) };
         let mut instruction = _insn(
             semantics(Operation::FloatArith, "fidiv", vec![Loc::st(0)], vec![Loc::st(0), Loc::Mem(cell)]),
@@ -1234,8 +1240,11 @@ mod tests {
     /// PROCS-P-OT crashed rebuilding TWICE's `rep stosw`.
     #[test]
     fn test_an_explicit_word_requirement_and_its_root_are_one_register() {
-        let (value, count, address) =
-            (Held { value: 11, width: 2 }, Held { value: 8, width: 2 }, Held { value: 9, width: 2 });
+        let (value, count, address) = (
+            Held { value: 11, width: 2, offset: 0 },
+            Held { value: 8, width: 2, offset: 0 },
+            Held { value: 9, width: 2, offset: 0 },
+        );
         let fill = semantics(
             Operation::Fill,
             "stosw",
@@ -1269,7 +1278,7 @@ mod tests {
     fn test_a_value_a_call_reads_in_a_register_it_names_nowhere() {
         let call = semantics(Operation::Call, "call", vec![], vec![]);
         let mut call = Insn::new(0x106, Some((0x106, 0x10B)), Some(call), vec![11], vec![2]);
-        call.requires = vec![(Held { value: 2, width: 2 }, RegId::CX)];
+        call.requires = vec![(Held { value: 2, width: 2, offset: 0 }, RegId::CX)];
         let (got, pins) = constrained(&_body(vec![call]), None, &crate::backend::classes::RegisterClasses::m16());
         let insns = &got.blocks[0].insns;
         assert_eq!(insns.len(), 2, "expected one copy before the call");
@@ -1281,7 +1290,7 @@ mod tests {
         assert_eq!(after.uses, vec![fresh], "the call still reads the argument");
         assert_eq!(
             after.requires,
-            vec![(Held { value: fresh, width: 2 }, RegId::CX)],
+            vec![(Held { value: fresh, width: 2, offset: 0 }, RegId::CX)],
             "a later spill must retain the ABI slot"
         );
 
@@ -1294,7 +1303,7 @@ mod tests {
     fn test_a_value_already_in_the_register_a_call_needs_is_not_split() {
         let call = semantics(Operation::Call, "call", vec![], vec![]);
         let mut call = Insn::new(0x10, Some((0x10, 0x15)), Some(call), vec![], vec![11]);
-        call.requires = vec![(Held { value: 11, width: 2 }, RegId::CX)];
+        call.requires = vec![(Held { value: 11, width: 2, offset: 0 }, RegId::CX)];
         let (got, pins) = constrained(
             &_body(vec![call]),
             Some(&pinned(&[(11, RegId::ECX)])),
@@ -1315,7 +1324,7 @@ mod tests {
     fn test_a_value_already_in_the_register_an_idiom_wants_is_not_copied() {
         let restore = semantics(Operation::Restore, "restore", vec![], vec![]);
         let mut one = Insn::new(0x10, Some((0x10, 0x14)), Some(restore), vec![], vec![2]);
-        one.requires = vec![(Held { value: 2, width: 4 }, RegId::EAX)];
+        one.requires = vec![(Held { value: 2, width: 4, offset: 0 }, RegId::EAX)];
         let body = LirBody::new(
             "one",
             0x10,
@@ -1336,7 +1345,7 @@ mod tests {
     #[test]
     fn test_a_byte_read_of_a_frame_index_reads_a_copy() {
         let cell = Mem {
-            index: Some(Held { value: 1, width: 2 }),
+            index: Some(Held { value: 1, width: 2, offset: 0 }),
             through: RegId::BP,
             ..Mem::new(Some(Addr::new(Space::Frame, -70)), 1)
         };
@@ -1396,8 +1405,8 @@ mod tests {
     #[test]
     fn test_a_byte_read_value_in_a_two_register_address_reads_a_copy_there() {
         let cell = Mem {
-            base: Some(Held { value: 1, width: 2 }),
-            index: Some(Held { value: 2, width: 2 }),
+            base: Some(Held { value: 1, width: 2, offset: 0 }),
+            index: Some(Held { value: 2, width: 2, offset: 0 }),
             ..Mem::new(Some(Addr::new(Space::Literal, 0)), 2)
         };
         let byte_read = |into: u32, from: u32, at: i64| {
@@ -1494,7 +1503,7 @@ mod tests {
             &[value],
             at,
         );
-        one.requires = vec![(Held { value, width: 2 }, register)];
+        one.requires = vec![(Held { value, width: 2, offset: 0 }, register)];
         one
     }
 

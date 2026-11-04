@@ -15,6 +15,7 @@
 
 pub mod actions;
 pub mod isd;
+pub mod libcalls;
 pub mod lowering;
 pub mod mvt;
 pub mod x86isd;
