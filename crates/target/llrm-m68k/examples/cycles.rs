@@ -100,7 +100,7 @@ fn qemu_cpu_for(path: &str) -> &'static str {
 mod tests {
     use std::process::Command;
 
-    use super::{qemu_cpu_for, trace};
+    use super::{parse_listing, qemu_cpu_for, trace};
 
     /// A 68020 program (`divu.l`) assembled and linked with the m68k binutils;
     /// `None` without `$GCC_M68K`.
@@ -161,11 +161,12 @@ fn functions() -> Vec<String> {
 }
 
 /// `(address, text)` of every instruction of `objdump -d`, and the address
-/// ranges of the priced functions.
+/// ranges of the priced functions: `callees` besides the wanted ones.
 fn listing(
     gcc: &Path,
     exe: &Path,
     harness: bool,
+    callees: &[&str],
 ) -> (Vec<(u32, String)>, Vec<std::ops::Range<u32>>) {
     let out = Command::new(gcc.join("usr/bin/m68k-linux-gnu-objdump"))
         .env("LD_LIBRARY_PATH", gcc.join("usr/lib/x86_64-linux-gnu"))
@@ -173,11 +174,21 @@ fn listing(
         .arg(exe)
         .output()
         .expect("m68k-linux-gnu-objdump runs");
-    let wanted = functions();
+    let mut wanted = functions();
+    wanted.extend(callees.iter().map(|name| (*name).to_owned()));
+    parse_listing(&String::from_utf8_lossy(&out.stdout), &wanted, harness)
+}
+
+/// [`listing`] of the text `objdump -d` printed.
+fn parse_listing(
+    objdump: &str,
+    wanted: &[String],
+    harness: bool,
+) -> (Vec<(u32, String)>, Vec<std::ops::Range<u32>>) {
     let mut lines = Vec::new();
     let mut ranges = Vec::new();
     let mut open: Option<u32> = None;
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
+    for line in objdump.lines() {
         if let Some((address, name)) = line.split_once(" <").and_then(|(a, rest)| Some((a, rest.strip_suffix(">:")?))) {
             let address = u32::from_str_radix(address, 16).unwrap();
             if let Some(start) = open.take() {
@@ -212,8 +223,9 @@ fn price(
     exe: &Path,
     models: &[Model],
     harness: bool,
+    callees: &[&str],
 ) -> Total {
-    let (lines, ranges) = listing(gcc, exe, harness);
+    let (lines, ranges) = listing(gcc, exe, harness, callees);
     let at: HashMap<u32, (usize, &str)> = lines
         .iter()
         .enumerate()
@@ -367,7 +379,7 @@ fn main() {
             .collect();
         println!("| exe | insns | {} |", heads.join(" | "));
         for path in std::env::args().skip(2) {
-            let total = price(&gcc, Path::new(&path), &models, true);
+            let total = price(&gcc, Path::new(&path), &models, true, &[]);
             let mark = if total.partial { "*" } else { "" };
             let unknown = if total.unknown > 0 { format!(" ?{}", total.unknown) } else { String::new() };
             let cells: Vec<String> =
@@ -378,7 +390,7 @@ fn main() {
         return;
     }
     if let Some(exe) = std::env::var_os("CYCLES_EXE") {
-        let total = price(&gcc, Path::new(&exe), &models, false);
+        let total = price(&gcc, Path::new(&exe), &models, false, &[]);
         let clocks: Vec<String> = models.iter().zip(&total.clocks).map(|(cpu, clk)| format!("{cpu:?} {clk}")).collect();
         println!(
             "insns {} clocks {} unpriced {} partial {}",
@@ -443,12 +455,25 @@ fn main() {
                     Command::new("timeout").args(["10", "qemu-m68k", "-cpu", "m68000"]).arg(&exe).status().unwrap();
                 assert_eq!(status.code(), Some(expected), "{name}: the llc's code gives another result");
             }
-            let total = price(&gcc, &exe, &models, false);
+            let total = price(&gcc, &exe, &models, false, &runtime_names);
             let mark = if total.partial { "*" } else { "" };
             let unknown = if total.unknown > 0 { format!(" ?{}", total.unknown) } else { String::new() };
             let clocks: Vec<String> = total.clocks.iter().map(|one| format!("{one}{mark}{unknown}")).collect();
             cells.push(format!("{size} | {} | {}", total.insns, clocks.join(" | ")));
         }
         println!("| {name} | {} |", cells.join(" | "));
+    }
+
+    /// A kernel that calls a runtime routine laid out after it priced only
+    /// `k`: the routine's instructions were in no range, so muldiv's clocks and
+    /// instruction count left out every multiply and divide.
+    #[test]
+    fn a_priced_function_brings_the_routines_it_calls() {
+        let objdump =
+            "00000100 <k>:\n 100:\tjsr 200\n 106:\trts\n\n00000200 <__mulsi3>:\n 200:\tmulu.w d1,d0\n 202:\trts\n";
+        let only_k = parse_listing(objdump, &["k".to_owned()], false).1;
+        let with_callee = parse_listing(objdump, &["k".to_owned(), "__mulsi3".to_owned()], false).1;
+        assert!(!only_k.iter().any(|range| range.contains(&0x200)), "{only_k:?}");
+        assert!(with_callee.iter().any(|range| range.contains(&0x200)), "{with_callee:?}");
     }
 }
