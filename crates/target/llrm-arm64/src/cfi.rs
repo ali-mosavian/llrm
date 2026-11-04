@@ -6,7 +6,7 @@
 //! row is written wherever the code changes the state or enters a block in
 //! another one.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use llrm_debug::FrameRow;
 use llrm_object::assembler::Cfi;

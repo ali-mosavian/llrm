@@ -40,6 +40,10 @@
 //!     run's base. The pass `Unit` carries no module globals, so a callee's own
 //!     attributes are not seen either. Sound, merges less. Owner: w2. Exit:
 //!     2026-11-21, with deviation 38's `AliasQuery`.
+//! 42. `tryToRecognizeTableBasedCttz` marks the select it makes for a table
+//!     whose zero entry is not the width with unlikely branch weights; MIR has
+//!     no `!prof` on a select here, so none is set. Owner: w2. Exit:
+//!     2026-11-21, with select weights.
 //!
 //! # Example
 //! The pair above is one `load i16`; see `aggressive_instcombine_tests.rs`.
@@ -101,7 +105,8 @@ impl FunctionPass for AggressiveInstCombine {
             .filter(|&block| shape.dominance.tree(unit.function).is_reachable_from_entry(block))
             .collect();
         drop(shape);
-        let folded = fold_unusual_patterns(unit, &reachable);
+        let outer = std::rc::Rc::clone(analyses.outer());
+        let folded = fold_unusual_patterns(unit, &reachable, &outer.globals);
         if truncs.are_all_preserved() && !folded {
             return PreservedAnalyses::all();
         }
@@ -115,6 +120,7 @@ impl FunctionPass for AggressiveInstCombine {
 fn fold_unusual_patterns(
     unit: &mut Unit,
     reachable: &IdSet<BlockId>,
+    globals: &[llrm_mir::module::GlobalValue],
 ) -> bool {
     let mut changed = false;
     let blocks: Vec<BlockId> =
@@ -125,6 +131,14 @@ fn fold_unusual_patterns(
         let insts: Vec<InstId> = unit.function.iter_block(block).collect();
         for &inst in insts.iter().rev() {
             changed |= try_to_recognize_pop_count(unit.context, unit.layout, unit.function, unit.declared, inst);
+            changed |= try_to_recognize_table_based_patterns(
+                unit.context,
+                unit.layout,
+                unit.function,
+                unit.declared,
+                globals,
+                inst,
+            );
             changed |= fold_consecutive_loads(unit.context, unit.layout, unit.function, inst);
         }
         // Done separately to scan the stores once.
@@ -818,6 +832,195 @@ fn try_to_recognize_pop_count(
         root
     };
     replace_with_pop_count(context, function, declared, inst, root);
+    true
+}
+
+
+/// `isCTTZTable`
+/// ([:887](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L887)):
+/// every one-bit input, through the multiply, the shift and the mask, indexes
+/// the table at its own bit position.
+#[allow(clippy::too_many_arguments)]
+fn is_cttz_table(
+    context: &llrm_mir::context::Context,
+    layout: &DataLayout,
+    table: llrm_mir::context::ConstantId,
+    mul: u128,
+    shift: u128,
+    and_mask: u128,
+    access: TypeId,
+    input_bits: u32,
+    scale: u128,
+) -> bool {
+    let all = if input_bits == 128 { u128::MAX } else { (1u128 << input_bits) - 1 };
+    (0..input_bits).all(|at| {
+        let index = ((1u128 << at).wrapping_mul(mul) & all).checked_shr(shift as u32).unwrap_or(0) & and_mask;
+        let offset = index.wrapping_mul(scale) & all;
+        llrm_mir::constantfolding::constant_fold_load_from_const(context, layout, table, access, offset as u64)
+            .and_then(|folded| match context.get(folded).kind {
+                ConstantKind::Int(bits) => Some(bits),
+                _ => None,
+            })
+            == Some(u128::from(at))
+    })
+}
+
+/// `tryToRecognizeTableBasedCttz`
+/// ([:966](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L966)),
+/// reached from `tryToRecognizeTableBasedPatterns`
+/// ([:1329](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L1329)):
+/// a load from a constant table at `((x & -x) * mul) >> shift` is `cttz x`.
+fn try_to_recognize_table_based_patterns(
+    context: &mut llrm_mir::context::Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    declared: &mut llrm_mir::passes::Declared,
+    globals: &[llrm_mir::module::GlobalValue],
+    inst: InstId,
+) -> bool {
+    use llrm_mir::module::GlobalKind;
+    use llrm_mir::valuetracking::pattern;
+    let found = {
+        let q = query(context, layout, function);
+        let instruction = function.instruction(inst);
+        let (Opcode::Load { volatile: false, .. }, Some(result)) = (&instruction.opcode, instruction.result) else {
+            return false;
+        };
+        let access = instruction.ty;
+        let Some(access_bits) = context.types.int_bits(access) else { return false };
+        let _ = access_bits;
+        let Some((_, gep)) = q.instruction_of(instruction.operands[0]) else { return false };
+        let Opcode::GetElementPtr { source } = gep.opcode else { return false };
+        if !gep.flags.contains(Flags::NUSW) && !gep.flags.contains(Flags::INBOUNDS) {
+            return false;
+        }
+        let Operand::Constant(base) = gep.operands[0] else { return false };
+        let ConstantKind::Global(table) = context.get(base).kind else { return false };
+        let Some(GlobalKind::Variable(variable)) = globals.get(table.0 as usize).map(|global| &global.kind) else {
+            return false;
+        };
+        let (true, Some(initializer)) = (variable.constant, variable.initializer) else { return false };
+        let indices: Vec<Option<i128>> =
+            gep.operands[1..].iter().map(|&index| q.int_constant(index).map(|(bits, _)| bits as i128)).collect();
+        let (constant, variable_indices) = layout.collect_offset(&context.types, source, &indices);
+        let [(at, scale)] = variable_indices[..] else { return false };
+        if constant != 0 {
+            return false;
+        }
+        let gep_index = gep.operands[1 + at];
+        // `m_CastOrSelf`: the index may be extended or truncated.
+        let mut inner = gep_index;
+        if let Some((_, cast)) = q.instruction_of(inner)
+            && matches!(cast.opcode, Opcode::Cast(CastOp::ZExt | CastOp::SExt | CastOp::Trunc))
+        {
+            inner = cast.operands[0];
+        }
+        // `((x & -x) * mul) >> shift`, or that masked.
+        let mut and_mask = None;
+        let mut lshr = inner;
+        if let Some((_, _, a, b)) = pattern::binary(&q, inner, BinaryOp::And)
+            && let Some((bits, _)) = q.int_constant(b)
+            && pattern::binary(&q, a, BinaryOp::LShr).is_some()
+        {
+            and_mask = Some(bits);
+            lshr = a;
+        }
+        let Some((_, _, product, shift)) = pattern::binary(&q, lshr, BinaryOp::LShr) else { return false };
+        let Some((shift, _)) = q.int_constant(shift) else { return false };
+        let Some((_, _, isolate, mul)) = pattern::binary(&q, product, BinaryOp::Mul) else { return false };
+        let Some((mul, _)) = q.int_constant(mul) else { return false };
+        // `x & -x`, in either order.
+        let Some((_, _, left, right)) = pattern::binary(&q, isolate, BinaryOp::And) else { return false };
+        let negated = |neg: Operand, x: Operand| {
+            pattern::binary(&q, neg, BinaryOp::Sub)
+                .is_some_and(|(_, _, zero, minus)| q.int_constant(zero).is_some_and(|(bits, _)| bits == 0) && minus == x)
+        };
+        let x = if negated(left, right) {
+            right
+        } else if negated(right, left) {
+            left
+        } else {
+            return false;
+        };
+        let Some(x_ty) = q.type_of(x) else { return false };
+        let Some(input_bits) = context.types.int_bits(x_ty) else { return false };
+        if !matches!(input_bits, 16 | 32 | 64 | 128) {
+            return false;
+        }
+        let all = if input_bits == 128 { u128::MAX } else { (1u128 << input_bits) - 1 };
+        if u128::from(scale) > all {
+            return false;
+        }
+        if !is_cttz_table(
+            context,
+            layout,
+            initializer,
+            mul,
+            shift,
+            and_mask.unwrap_or(all),
+            access,
+            input_bits,
+            u128::from(scale),
+        ) {
+            return false;
+        }
+        let zero_elem = llrm_mir::constantfolding::constant_fold_load_from_const(context, layout, initializer, access, 0)
+            .filter(|&folded| matches!(context.get(folded).kind, ConstantKind::Int(_)));
+        let Some(zero_elem) = zero_elem else { return false };
+        let ConstantKind::Int(zero_bits) = context.get(zero_elem).kind else { return false };
+        (result, x, x_ty, input_bits, access, zero_elem, zero_bits == u128::from(input_bits))
+    };
+    let (result, x, x_ty, input_bits, access, zero_elem, defined_for_zero) = found;
+    let i1 = context.types.int(1);
+    let flag = Operand::Constant(context.int(i1, i128::from(!defined_for_zero)));
+    let function_type = context.types.intern(Type::Function { returns: x_ty, parameters: vec![x_ty, i1], variadic: false });
+    let callee = declared.declare(&format!("llvm.cttz.i{input_bits}"), function_type);
+    let pointer = context.types.ptr(0);
+    let callee = Operand::Constant(context.constant(Constant { ty: pointer, kind: ConstantKind::Global(callee) }));
+    let info = CallInfo {
+        function_type,
+        calling_convention: 0,
+        return_attrs: Vec::new(),
+        argument_attrs: vec![Vec::new(), Vec::new()],
+        attrs: Vec::new(),
+        tail: Tail::default(),
+    };
+    let call =
+        function.create_instruction(Opcode::Call(Box::new(info)), x_ty, vec![x, flag, callee], Flags::default(), None);
+    function.insert(call, Position::Before(inst)).expect("a placed instruction");
+    let mut value = Operand::Value(function.instruction(call).result.expect("a value"));
+    let access_bits = context.types.int_bits(access).expect("an integer");
+    if access_bits != input_bits {
+        let op = if access_bits > input_bits { CastOp::ZExt } else { CastOp::Trunc };
+        let cast = function.create_instruction(Opcode::Cast(op), access, vec![value], Flags::default(), None);
+        function.insert(cast, Position::Before(inst)).expect("a placed instruction");
+        value = Operand::Value(function.instruction(cast).result.expect("a value"));
+    }
+    if !defined_for_zero {
+        // The table's own element for zero; the pin marks this select's
+        // branch unlikely (DEVIATE 42: MIR has no branch weights here).
+        let i1_ty = i1;
+        let zero = Operand::Constant(context.int(x_ty, 0));
+        let cmp = function.create_instruction(
+            Opcode::ICmp(llrm_mir::opcode::IntPredicate::Eq),
+            i1_ty,
+            vec![x, zero],
+            Flags::default(),
+            None,
+        );
+        function.insert(cmp, Position::Before(inst)).expect("a placed instruction");
+        let cond = Operand::Value(function.instruction(cmp).result.expect("a value"));
+        let select = function.create_instruction(
+            Opcode::Select,
+            access,
+            vec![cond, Operand::Constant(zero_elem), value],
+            Flags::default(),
+            None,
+        );
+        function.insert(select, Position::Before(inst)).expect("a placed instruction");
+        value = Operand::Value(function.instruction(select).result.expect("a value"));
+    }
+    function.replace_all_uses_with(result, value);
     true
 }
 

@@ -13,6 +13,11 @@ fn compiled(
     text(&ir, name, 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"))
 }
 
+/// -O2 without the full unroll, for the tests that need crc16's spills.
+fn unrolled_off() -> Request {
+    Request { passes: vec!["-fno-unroll-loops".into()], ..Request::new(Level::O2) }
+}
+
 #[test]
 fn dump() {
     for (name, ir) in [
@@ -146,24 +151,26 @@ fn the_prologue_pushes_the_arguments_a_function_keeps_in_its_frame() {
     assert!(!insts.iter().any(|line| line.starts_with("ld -") && line.contains("(ix), ")), "{insts:?}");
 }
 
-/// crc16 reloaded its pointer from the slot at SP with `ld c, -3(ix)` / `ld b,
+/// crc16 (loops not unrolled, which would free the registers it spilled)
+/// reloaded its pointer from the slot at SP with `ld c, -3(ix)` / `ld b,
 /// -2(ix)`, 6 B and 38 T-states on each of its trips; `pop bc` / `push bc` is 2
 /// B and 21.
 #[test]
 fn the_slot_at_sp_is_reloaded_by_pop_and_push() {
     let ir = include_str!("kernels/ir/crc16.ll");
-    let out = text(ir, "crc16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let out = text(ir, "crc16", 0, &unrolled_off()).unwrap_or_else(|why| panic!("{why}"));
     let lines: Vec<&str> = out.lines().map(str::trim).collect();
     assert!(lines.windows(2).any(|pair| pair == ["pop bc", "push bc"]), "{out}");
 }
 
-/// A spilled byte was reloaded into a register just to be compared
+/// A spilled byte (crc16, loops not unrolled) was reloaded into a register
+/// just to be compared
 /// (`ld c, -1(ix)` / `cp a, c`): a byte more and 4 T-states than `cp a,
 /// -1(ix)`.
 #[test]
 fn a_reloaded_operand_is_read_from_the_frame() {
     let ir = include_str!("kernels/ir/crc16.ll");
-    let out = text(ir, "crc16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let out = text(ir, "crc16", 0, &unrolled_off()).unwrap_or_else(|why| panic!("{why}"));
     assert!(out.lines().any(|line| line.trim().starts_with("cp a, ") && line.ends_with("(ix)")), "{out}");
 }
 
@@ -346,10 +353,11 @@ fn an_add_after_the_loop_is_rated_once_not_every_trip() {
 
 /// `sum4`'s rotated loop was `dec b; inc hl; jr nz`: the pointer step sat
 /// between the decrement and the branch, so no `djnz` formed (12 B, 172 T, 22
-/// instructions at -O2; 11 B, 160 T, 18 with it).
+/// instructions at -O2; 11 B, 160 T, 18 with it). sum4 is unrolled at -O2 now;
+/// sum_arr has the same loop.
 #[test]
 fn a_decrement_behind_a_pointer_step_is_a_djnz() {
-    let out = text(include_str!("kernels/ir/sum4.ll"), "sum4", 0, &Request::new(Level::O2)).expect("compiles");
+    let out = text(include_str!("kernels/ir/sum_arr.ll"), "sum_arr", 0, &Request::new(Level::O2)).expect("compiles");
     assert!(out.contains("djnz") && !out.contains("dec b"), "{out}");
 }
 
@@ -427,7 +435,7 @@ fn a_pointer_read_through_hl_in_a_loop_is_not_copied_into_hl_each_trip() {
     let out = text(include_str!("kernels/ir/scmp.ll"), "scmp", 0, &Request::new(Level::O2))
         .unwrap_or_else(|why| panic!("{why}"));
     let start = out.find("L0_2:").expect("the loop label");
-    let end = out[start..].find("jr nz, L0_2").expect("the back edge") + start;
+    let end = out[start..].find("nz, L0_2").expect("the back edge") + start;
     assert!(!out[start..end].contains("ld l,"), "{out}");
 }
 
@@ -1378,6 +1386,40 @@ fn two_modules_compiled_in_turn_do_not_share_the_cache() {
     assert_eq!(first, again);
 }
 
+/// gcd -O2 ended its subtract arm with `jr` (12 T taken, always taken): 275
+/// clocks against gcc's `jp` at 274. Where speed comes first an always-taken
+/// jump stays a `jp`; at -Oz it is a `jr`, a byte less.
+#[test]
+fn an_always_taken_jump_is_jp_when_speed_comes_first_and_jr_when_size_does() {
+    let ir = include_str!("kernels/ir/gcd.ll");
+    let fast = text(ir, "gcd", 0, &Request::new(Level::O2)).expect("compiles");
+    let small = text(ir, "gcd", 0, &Request::new(Level::Oz)).expect("compiles");
+    let unconditional = |asm: &str, op: &str| asm.lines().any(|line| line.trim_start().starts_with(&format!("{op} L")));
+    assert!(unconditional(&fast, "jp") && !unconditional(&fast, "jr"), "{fast}");
+    assert!(unconditional(&small, "jr") && !unconditional(&small, "jp"), "{small}");
+}
+
+/// An always-taken jump outside every loop ran once: scmp -O2's empty-string
+/// exit was a `jp` for 1 B and no clocks saved on any input. Only a jump inside
+/// a loop stays a `jp` where speed comes first.
+#[test]
+fn a_jump_outside_every_loop_is_jr_even_when_speed_comes_first() {
+    let out = text(include_str!("kernels/ir/scmp.ll"), "scmp", 0, &Request::new(Level::O2)).expect("compiles");
+    assert!(!out.lines().any(|line| line.trim_start().starts_with("jp ")), "{out}");
+}
+
+/// The driver turned the unroller off: sum4's four-trip loop ran 160 clocks at
+/// -O2, 104 unrolled. A loop of four trips is copied out where speed comes
+/// first, and stays a loop at -Oz.
+#[test]
+fn a_four_trip_loop_is_unrolled_where_speed_comes_first_and_not_at_oz() {
+    let ir = include_str!("kernels/ir/sum4.ll");
+    let fast = text(ir, "sum4", 0, &Request::new(Level::O2)).expect("compiles");
+    let small = text(ir, "sum4", 0, &Request::new(Level::Oz)).expect("compiles");
+    assert!(!fast.contains("djnz") && !fast.contains(" L0_"), "{fast}");
+    assert!(small.contains("djnz"), "{small}");
+}
+
 /// lz4's match copy kept the source as `dst + offset` (a base add, `pop bc;
 /// push bc; add hl,bc`) and its pointers in ix slots: 102905 clocks at -O2,
 /// gcc's end-pointer loop 35781. Both copies, the literals and the match, are
@@ -1407,4 +1449,17 @@ fn reverse_at_oz_does_not_live_in_the_frame() {
     let out = text(include_str!("kernels/ir/reverse.ll"), "reverse", 0, &Request::new(Level::Oz)).expect("compiles");
     let frame = out.lines().filter(|line| line.contains("(ix)")).count();
     assert!(frame <= 10, "{frame} frame accesses\n{out}");
+}
+
+/// crc16's inner loop of eight trips kept its counter and branch: `dec h; jr
+/// nz` is 16 T a bit, 7135 T for 12 bytes against gcc's 5134. Where speed
+/// comes first it is copied out (the pin's threshold: +67 B, -2490 T, past 1 B
+/// = 3 T); at -Oz it stays a loop.
+#[test]
+fn an_eight_trip_loop_is_unrolled_where_speed_comes_first_and_not_at_oz() {
+    let ir = include_str!("kernels/ir/crc16.ll");
+    let fast = text(ir, "crc16", 0, &Request::new(Level::O2)).expect("compiles");
+    let small = text(ir, "crc16", 0, &Request::new(Level::Oz)).expect("compiles");
+    assert!(!fast.contains("dec h"), "{fast}");
+    assert!(small.contains("dec h"), "{small}");
 }

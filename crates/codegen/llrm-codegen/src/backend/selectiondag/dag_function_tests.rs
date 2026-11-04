@@ -1531,3 +1531,36 @@ fn four_byte_stores_of_a_value_high_byte_first_are_a_bswap_and_one_store() {
     assert!(names.iter().any(|n| n == "bswap"), "{names:?}");
     assert!(!names.iter().any(|n| n == "shr" || n == "shld"), "{names:?}");
 }
+
+const LOADS_BIG_ENDIAN: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(ptr %p) {
+  %p1 = getelementptr i8, ptr %p, i32 1
+  %p2 = getelementptr i8, ptr %p, i32 2
+  %p3 = getelementptr i8, ptr %p, i32 3
+  %l0 = load i8, ptr %p
+  %l1 = load i8, ptr %p1
+  %l2 = load i8, ptr %p2
+  %l3 = load i8, ptr %p3
+  %z0 = zext i8 %l0 to i32
+  %z1 = zext i8 %l1 to i32
+  %z2 = zext i8 %l2 to i32
+  %z3 = zext i8 %l3 to i32
+  %s0 = shl i32 %z0, 24
+  %s1 = shl i32 %z1, 16
+  %s2 = shl i32 %z2, 8
+  %o1 = or i32 %s0, %s1
+  %o2 = or i32 %o1, %s2
+  %o3 = or i32 %o2, %z3
+  ret i32 %o3
+}
+";
+
+/// A 32-bit value read a byte at a time, high byte first, was four byte loads
+/// and shifts and ors (`get_be32`); the pin's `MatchLoadCombine` makes it one
+/// load and a `bswap`.
+#[test]
+fn four_byte_loads_combined_high_byte_first_are_one_load_and_a_bswap() {
+    let names = names(LOADS_BIG_ENDIAN).expect("selects");
+    assert!(names.iter().any(|n| n == "bswap"), "{names:?}");
+    assert!(!names.iter().any(|n| n == "shl" || n == "or"), "{names:?}");
+}
