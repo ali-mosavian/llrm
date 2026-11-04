@@ -119,6 +119,20 @@ impl Tuning {
     };
 }
 
+/// What a target says of `GlobalMerge`
+/// ([GlobalMerge.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/GlobalMerge.cpp));
+/// a target that merges nothing answers none.
+#[derive(Clone, Copy, Debug)]
+pub struct GlobalMerge {
+    /// The reach of a base register's immediate: `MaxOffset`.
+    pub max_offset: u64,
+    /// `OnlyOptimizeForSize`: only uses in `minsize` functions count.
+    pub size_only: bool,
+    /// The object format is Mach-O: the merged struct is `internal`, not
+    /// `private`.
+    pub mach_o: bool,
+}
+
 /// Where the target keeps no program data, as linear addresses: old
 /// `abi::machine::Machine::foreign_span`. A real-mode target has some (its
 /// video memory and ROM); any other none.
@@ -312,6 +326,15 @@ pub trait Machine {
 
     /// The indexed addresses a memory access may use, native form first.
     fn address_forms(&self) -> Vec<AddressForm>;
+
+    /// How `GlobalMerge` runs at `-O3` (`aggressive`) or below; none where
+    /// the target does not run it.
+    fn global_merge(
+        &self,
+        _aggressive: bool,
+    ) -> Option<GlobalMerge> {
+        None
+    }
 
     /// Whether a `width`-byte load at an address a multiple of `align` may
     /// trap wherever it points. By default any may: only one known

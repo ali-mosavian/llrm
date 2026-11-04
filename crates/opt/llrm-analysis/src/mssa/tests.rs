@@ -1067,3 +1067,38 @@ b0:
     let def = mssa.get_memory_access(start).expect("the start is a def");
     assert!(!super::walker::instruction_clobbers_query(&mssa, &aa, def, None, Some(ext)), "a marker clobbers nothing");
 }
+
+/// Placing the memory phis made the dominance frontier of every block (a map
+/// of sets) for each build: a third of `Mssa::build`, 2.5 M of a jpeg_fixed
+/// compile. They are the iterated frontier of the blocks that define, by the
+/// walk of the dominator tree LLVM's `IDFCalculator` makes.
+#[test]
+fn the_memory_phis_are_placed_without_the_frontier_of_every_block() {
+    let parsed = Parsed::new(
+        "define void @f(i1 %c, i1 %d) {
+entry:
+  br i1 %c, label %left, label %right
+left:
+  store i8 1, ptr @g
+  br label %join
+right:
+  br i1 %d, label %loop, label %join
+loop:
+  store i8 2, ptr @g
+  br i1 %d, label %loop, label %join
+join:
+  store i8 3, ptr @g
+  ret void
+}
+",
+    );
+    crate::cfg::FRONTIERS.with(|count| count.set(0));
+    let (mssa, _) = translated(&parsed.unit());
+    let made = crate::cfg::FRONTIERS.with(std::cell::Cell::get);
+    assert_eq!(made, 0, "{made} frontier maps for one build");
+    // Phis of `loop` and `join`, as the frontier of the stores' blocks says.
+    let function = function(&parsed.module, "f");
+    let phis = function.layout().iter().filter(|&&block| mssa.get_memory_phi(block).is_some()).count();
+    assert_eq!(phis, 2, "memory phis of the loop header and the join");
+    same_as_today("define void @f(i1 %c) {\nentry:\n  store i8 1, ptr @g\n  ret void\n}\n");
+}

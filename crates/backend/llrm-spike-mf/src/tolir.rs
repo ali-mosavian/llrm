@@ -118,7 +118,7 @@ impl<T: Target> Converted<T> {
             T::joins_sub_registers(),
             T::joins_lanes(),
             registers,
-            Box::new(move |join| {
+            Some(Box::new(move |join| {
                 let joined: Vec<RegId> = join.joined.iter().copied().collect();
                 let side = |side: &llrm_codegen::coalescer::env::JoinSide| {
                     let before: Vec<RegId> = side.palette.iter().copied().collect();
@@ -170,7 +170,7 @@ impl<T: Target> Converted<T> {
                     joined: &joined,
                     copy_frequency: join.copy_frequency,
                 })
-            }),
+            })),
             Some(Box::new(is_literal_move)),
             Some(Box::new(|literal, source, destination, size| {
                 let (source, destination): (Vec<RegId>, Vec<RegId>) =
@@ -858,6 +858,9 @@ impl<T: Target> Made<'_, T> {
         let mut insn = Insn::new(at, Some((at, at + 1)), Some(what), defines, uses);
         insn.requires = requires;
         insn.delivers = delivers;
+        if T::greedy_early_clobber() && inst.early_clobber {
+            insn.early_clobbers = insn.defines.clone();
+        }
         if inst.call {
             insn.clobbers = T::caller_saved().into_iter().collect();
             // The call writes each clobbered register it names: a value that

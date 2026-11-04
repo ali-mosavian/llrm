@@ -93,6 +93,10 @@ impl Target for M68kRegisters {
         CALLER_SAVED.to_vec()
     }
 
+    fn greedy_early_clobber() -> bool {
+        true
+    }
+
     /// `copyPhysReg`: a copy into a data register is a `move`, which sets the
     /// codes.
     fn copy_sets_flags(

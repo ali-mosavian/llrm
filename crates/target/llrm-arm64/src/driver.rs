@@ -195,7 +195,14 @@ pub fn optimized_at(
     llrm_transforms::pipeline::applied(program, &Applied { dump, options, ..Applied::default() })?;
     // The pin's PreISelIntrinsicLowering: the selector never sees the
     // intrinsic.
-    program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)
+    program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
+    // `addIRPasses`: GlobalMerge, after the mid-end, before selection.
+    if let Some(merge) = program.target.global_merge(level == Level::O3) {
+        for module in &mut program.modules {
+            llrm_transforms::globalmerge::merged(module, &program.layout, &merge)?;
+        }
+    }
+    Ok(())
 }
 
 /// The routines the C link of this target resolves, by their IR names (the

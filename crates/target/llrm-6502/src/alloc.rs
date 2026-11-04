@@ -1013,6 +1013,12 @@ impl Builder {
         let (dl, dh) = self.write_word(d)?;
         self.copy(dl, al);
         self.copy(dh, ah);
+        // `inc` has no accumulator form on the 6502 (`dec` loads through it)
+        if up {
+            for r in [dl, dh] {
+                self.require(r, Class(Class::X | Class::Y | Class::M))?;
+            }
+        }
         let mut operands = vec![Operand::Def(dl), Operand::Def(dh), Operand::Use(dl), Operand::Use(dh)];
         if !up {
             operands.push(Operand::Def(Reg::Phys(reg::A)));
@@ -1495,6 +1501,25 @@ pub fn build_with_places(
                     let value = b.byte(name(&o[0])?)?;
                     b.copy(acc, value);
                     b.push(Inst::new(Kind::Op("STM"), vec![Operand::Use(acc), Operand::Symbol(symbol, 0)]));
+                }
+            }
+            // a word global: its two halves, g and g+1
+            op::LDABS16 | op::STABS16 => {
+                let symbol = address(&o[1], &o[2]).map_err(Unsupported)?;
+                let acc = Reg::Phys(reg::A);
+                let halves = [symbol.clone(), format!("{symbol}+1")];
+                if inst.opcode == op::LDABS16 {
+                    let (low, high) = b.write_word(name(&o[0])?)?;
+                    for (d, half) in [low, high].into_iter().zip(halves) {
+                        b.push(Inst::new(Kind::Op("LDM"), vec![Operand::Def(acc), Operand::Symbol(half, 0)]));
+                        b.copy(d, acc);
+                    }
+                } else {
+                    let (low, high) = b.read_word(name(&o[0])?)?;
+                    for (value, half) in [low, high].into_iter().zip(halves) {
+                        b.copy(acc, value);
+                        b.push(Inst::new(Kind::Op("STM"), vec![Operand::Use(acc), Operand::Symbol(half, 0)]));
+                    }
                 }
             }
             op::LDAX | op::STAX => {
@@ -2102,6 +2127,21 @@ fn narrow_remainder_calls(function: &mut MFunction<Class>) {
     }
 }
 
+/// At size, a call of a runtime routine that has a compact variant calls it
+/// (`routines.toml`'s `[compact]`).
+fn call_compact_routines(function: &mut MFunction<Class>) {
+    for inst in function.blocks.iter_mut().flat_map(|block| &mut block.insts) {
+        if inst.kind != Kind::Op("JSR") {
+            continue;
+        }
+        if let Some(Operand::Symbol(name, _)) = inst.operands.first_mut()
+            && let Some(compact) = crate::routines::compact_variant(name)
+        {
+            *name = compact.to_owned();
+        }
+    }
+}
+
 fn remove_dead(function: &mut MFunction<Class>) {
     loop {
         let mut read: HashSet<u32> = HashSet::default();
@@ -2647,6 +2687,9 @@ fn emit_with<const STACK: bool>(
     // an instruction goes to the one path that reads it; a bump of a pointer is
     // then done in place, and the read of the old pointer that follows it
     // goes first
+    if TUNING.with(|t| t.get()) == Tuning::SIZE {
+        call_compact_routines(&mut function);
+    }
     let sunk = sink && machine_sink_in_place::<Mos<STACK>>(&mut function);
     let shared = share && crate::sharecmp::share_compares(&mut function);
     reschedule_kills::<Mos<STACK>>(&mut function);

@@ -39,13 +39,31 @@ pub(crate) fn mask_bit(root: RegId) -> Option<u32> {
         )
 }
 
-fn is_address(register: RegId) -> bool {
+pub(crate) fn is_address(register: RegId) -> bool {
     mask_bit(REGISTER_INFO.root(register)).is_some_and(|bit| bit >= 8)
+}
+
+/// `%sp` moved by `bytes`: the pin's `adda.l`/`suba.l` (6 bytes), or where
+/// `short` `addq` (1 to 8, 2 bytes) or `lea (d16,%sp), %sp` (4 bytes). No
+/// `subq` to an address register has a row yet (`SUBQ32ai` is not built).
+pub(crate) fn sp_adjust(
+    bytes: i64,
+    short: bool,
+) -> mc::Inst {
+    use mc::Operand::{Imm, Reg as R};
+    let sp = || R(reg::SP);
+    match bytes {
+        1..=8 if short => mc::Inst { opcode: "ADDQ32ai", operands: vec![sp(), sp(), Imm(bytes)] },
+        -32768..=32767 if short => mc::Inst { opcode: "LEA32p", operands: vec![sp(), Imm(bytes), sp()] },
+        0.. => mc::Inst { opcode: "ADD32ai", operands: vec![sp(), sp(), Imm(bytes)] },
+        _ => mc::Inst { opcode: "SUB32ai", operands: vec![sp(), sp(), Imm(-bytes)] },
+    }
 }
 
 fn frame_op(
     op: &FrameOp,
     out: &mut Vec<mc::Inst>,
+    short: bool,
 ) {
     use mc::Operand::{Imm, Reg as R};
     let base = |base: &Base| R(if *base == Base::Sp { reg::SP } else { reg::A6 });
@@ -55,8 +73,8 @@ fn frame_op(
     out.push(match op {
         FrameOp::Link { bytes } => mc::Inst { opcode: "LINK16", operands: vec![R(reg::A6), Imm(-bytes)] },
         FrameOp::Unlink => mc::Inst { opcode: "UNLK", operands: vec![R(reg::A6)] },
-        FrameOp::SubSp(bytes) => mc::Inst { opcode: "SUB32ai", operands: vec![R(reg::SP), R(reg::SP), Imm(*bytes)] },
-        FrameOp::AddSp(bytes) => mc::Inst { opcode: "ADD32ai", operands: vec![R(reg::SP), R(reg::SP), Imm(*bytes)] },
+        FrameOp::SubSp(bytes) => sp_adjust(-bytes, short),
+        FrameOp::AddSp(bytes) => sp_adjust(*bytes, short),
         FrameOp::Save { registers, base: at, offset } => {
             mc::Inst { opcode: "MOVM32pm", operands: vec![Imm(*offset), base(at), Imm(mask(registers))] }
         }
@@ -86,8 +104,17 @@ pub fn frame_cost(
     ops: &[FrameOp],
     cpu: crate::dagisel::hooks::Cpu,
 ) -> Result<(usize, u32), String> {
+    frame_cost_with(ops, cpu, false)
+}
+
+/// [`frame_cost`] with the short stack-pointer adjusts where `short`.
+pub fn frame_cost_with(
+    ops: &[FrameOp],
+    cpu: crate::dagisel::hooks::Cpu,
+    short: bool,
+) -> Result<(usize, u32), String> {
     let mut insts = Vec::new();
-    ops.iter().for_each(|op| frame_op(op, &mut insts));
+    ops.iter().for_each(|op| frame_op(op, &mut insts, short));
     let (mut bytes, mut clocks) = (0, 0);
     for inst in &insts {
         let size = crate::encode::encode(inst)?.bytes.len();
@@ -104,8 +131,9 @@ fn frame_ops(
     layout: &frame::Layout,
     cpu: crate::dagisel::hooks::Cpu,
     push_frame: bool,
+    short: bool,
 ) -> Result<(Vec<FrameOp>, Vec<FrameOp>), String> {
-    frame_ops_priced(layout, push_frame, |ops| frame_cost(ops, cpu))
+    frame_ops_priced(layout, push_frame, |ops| frame_cost_with(ops, cpu, short))
 }
 
 /// [`frame_ops`] with the price of a sequence, `(bytes, clocks)`, given: a test
@@ -195,6 +223,21 @@ pub fn finish(
     cpu: crate::dagisel::hooks::Cpu,
     push_frame: bool,
 ) -> Result<Vec<Line>, String> {
+    finish_with(function, assignment, number, slots, cpu, push_frame, false, None)
+}
+
+/// [`finish`], with the outgoing arguments pushed where [`crate::callpush`]
+/// finds that cheaper: `pushes` is `Some(size)` to allow it.
+pub fn finish_with(
+    function: &MFunction,
+    assignment: &Assignment,
+    number: usize,
+    slots: &[i32],
+    cpu: crate::dagisel::hooks::Cpu,
+    push_frame: bool,
+    short: bool,
+    pushes: Option<bool>,
+) -> Result<Vec<Line>, String> {
     let kept: Vec<(usize, &crate::mfunc::Inst)> = function
         .blocks
         .iter()
@@ -216,15 +259,6 @@ pub fn finish(
         .collect();
     // a tail call has no call sequence: it leaves the frame it is in
     let has_calls = insts.iter().any(|inst| inst.call && inst.kind != Kind::Op("TCRETURNq"));
-    let max_call_frame = insts
-        .iter()
-        .filter(|inst| inst.kind == Kind::Op("ADJCALLSTACKDOWN"))
-        .filter_map(|inst| match inst.operands.first() {
-            Some(Operand::Imm(bytes)) => Some(*bytes),
-            _ => None,
-        })
-        .max()
-        .unwrap_or(0);
     // the callee-saved registers the allocation used, in `CSR_STD` order
     let used: Vec<RegId> = frame::callee_saved()
         .into_iter()
@@ -257,17 +291,39 @@ pub fn finish(
     objects.extend(slots.iter().map(|_| Object { size: 4, align: 4, offset: 0, callee_saved: false, dead: false }));
     let frame_indices: Vec<i32> =
         fixed.iter().copied().chain(function.locals.iter().map(|local| local.0)).chain(slots.iter().copied()).collect();
-    let layout = frame::layout(&Function {
-        fixed: fixed.len(),
-        objects,
-        saved: used,
-        max_call_frame,
-        adjusts_stack: has_calls,
-        ..Function::default()
-    });
+    let call_area = |kept_sequences: &dyn Fn(usize) -> bool| -> i64 {
+        insts
+            .iter()
+            .enumerate()
+            .filter(|(at, inst)| inst.kind == Kind::Op("ADJCALLSTACKDOWN") && kept_sequences(*at))
+            .filter_map(|(_, inst)| match inst.operands.first() {
+                Some(Operand::Imm(bytes)) => Some(*bytes),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0)
+    };
+    let frame_of = |max_call_frame: i64| {
+        frame::layout(&Function {
+            fixed: fixed.len(),
+            objects: objects.clone(),
+            saved: used.clone(),
+            max_call_frame,
+            adjusts_stack: has_calls,
+            ..Function::default()
+        })
+    };
+    let pushes = match pushes {
+        Some(size) => crate::callpush::plan(&insts, assignment, cpu, size, short, |max_call_frame| {
+            let (opening, closing) = frame_ops(&frame_of(max_call_frame), cpu, push_frame, short)?;
+            frame_cost_with(&[opening, closing].concat(), cpu, short)
+        })?,
+        None => crate::callpush::Plan::default(),
+    };
+    let layout = frame_of(call_area(&|at| pushes.keeps_frame(at)));
     let mut out = Vec::new();
-    let (opening, closing) = frame_ops(&layout, cpu, push_frame)?;
-    opening.iter().for_each(|op| frame_op(op, &mut out));
+    let (opening, closing) = frame_ops(&layout, cpu, push_frame, short)?;
+    opening.iter().for_each(|op| frame_op(op, &mut out, short));
     let mut lines = Vec::new();
     // Where each place starts in `out`: only when it changes.
     let mut marks: Vec<(usize, Row)> = Vec::new();
@@ -280,7 +336,7 @@ pub fn finish(
     let mut pushed = 0i64;
     let mut block_of = kept.iter().map(|(at, _)| *at).peekable();
     let mut shown = 0usize;
-    for inst in insts.iter().copied() {
+    for (index, inst) in insts.iter().copied().enumerate() {
         let at = block_of.next().expect("a block per instruction");
         while shown <= at {
             if targeted.contains(&shown) {
@@ -336,6 +392,20 @@ pub fn finish(
             }
             converted
         };
+        if pushes.is_push(index) {
+            let value = operands.last().ok_or("a push of nothing")?;
+            out.push(crate::callpush::push_of(value));
+            pushed += 4;
+            continue;
+        }
+        if pushes.is_down(index) {
+            continue;
+        }
+        if let Some(bytes) = pushes.cleanup(index) {
+            frame_op(&FrameOp::AddSp(bytes), &mut out, short);
+            pushed -= bytes;
+            continue;
+        }
         match inst.kind {
             Kind::Copy => {
                 let [mc::Operand::Reg(dst), mc::Operand::Reg(src)] = operands[..] else {
@@ -386,12 +456,12 @@ pub fn finish(
             Kind::Op("ADJCALLSTACKDOWN" | "ADJCALLSTACKUP") => {}
             Kind::Op("UNREACHABLE") => {}
             Kind::Op("RET") => {
-                closing.iter().for_each(|op| frame_op(op, &mut out));
+                closing.iter().for_each(|op| frame_op(op, &mut out, short));
                 out.push(mc::Inst { opcode: "RTS", operands: vec![] });
             }
             Kind::Op("TCRETURNq") => {
                 let [target, _] = &operands[..] else { return Err("TCRETURNq operands".to_owned()) };
-                closing.iter().for_each(|op| frame_op(op, &mut out));
+                closing.iter().for_each(|op| frame_op(op, &mut out, short));
                 out.push(mc::Inst { opcode: "BRA16", operands: vec![target.clone()] });
             }
             Kind::Op("MOVM32pm_P") => {
@@ -433,7 +503,7 @@ pub fn finish(
                 out.extend(expand_any_extension(dst, src)?);
             }
             Kind::Op(name) if extension(name).is_some() => {
-                out.extend(expand_extension(name, &operands)?);
+                out.extend(expand_extension(name, &operands, cpu)?);
             }
             Kind::Op(name) if crate::dagisel::indexed::printed_as(name).is_some() => {
                 let (opcode, def, count) = crate::dagisel::indexed::printed_as(name).ok_or("a writeback")?;
@@ -551,6 +621,7 @@ fn inst(
 fn expand_extension(
     name: &str,
     operands: &[mc::Operand],
+    cpu: crate::dagisel::hooks::Cpu,
 ) -> Result<Vec<mc::Inst>, String> {
     use mc::Operand::{Imm, Reg as R};
     let (signed, to, mode, from) = extension(name).ok_or("not an extension")?;
@@ -560,6 +631,12 @@ fn expand_extension(
     let mut out = Vec::new();
     let extend = |out: &mut Vec<mc::Inst>| -> Result<(), String> {
         if signed {
+            // DEVIATE: `extb.l` from the 68020 on, where the pin has `ext.w`
+            // then `ext.l`; gcc -m68020 uses it. Exit: beyond pin.
+            if from == 8 && to == 32 && cpu.at_least(crate::dagisel::hooks::Cpu::M68020) {
+                out.push(inst("EXTB32", vec![R(view(32)?), R(view(32)?)]));
+                return Ok(());
+            }
             if from == 8 {
                 let word = view(16)?;
                 out.push(inst("EXT16", vec![R(word), R(word)]));
