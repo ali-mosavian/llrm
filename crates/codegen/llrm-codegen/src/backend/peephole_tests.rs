@@ -5482,10 +5482,11 @@ fn test_a_repeated_frame_address_after_allocation_is_made_again() {
 /// -Os m16 that main did not have.
 #[test]
 fn test_bsf_gets_the_rep_prefix_only_where_the_pin_gives_it() {
-    for (label, size, flags_read, expected) in [
-        ("speed, flags dead", false, false, true),
-        ("size, flags dead", true, false, false),
-        ("speed, flags read", false, true, false),
+    for (label, size, flags_read, prefix, expected) in [
+        ("speed, flags dead", false, false, true, true),
+        ("size, flags dead", true, false, true, false),
+        ("speed, flags read", false, true, true, false),
+        ("speed, flags dead, no tzcnt on the target", false, false, false, false),
     ] {
         let scan = sem(Operation::Binary, "bsf", vec![rl(RegId::EAX, 4)], vec![rl(RegId::EAX, 4), rl(RegId::ECX, 4)]);
         let first = Arc::new(insn(10, Some((10, 11)), Some(scan), vec![], vec![]));
@@ -5496,8 +5497,7 @@ fn test_bsf_gets_the_rep_prefix_only_where_the_pin_gives_it() {
         };
         let second = Arc::new(insn(11, Some((11, 12)), Some(next), vec![], vec![]));
         let input = body("scan", 0, vec![block(0, vec![first], vec![1]).into(), block(1, vec![second], vec![]).into()]);
-        let cpu = crate::backend::cpu::tuned("486", size).unwrap();
-        let result = crate::backend::repbsf::marked(&input, &cpu);
+        let result = crate::backend::repbsf::mark(&input, size, prefix);
         let got = result.blocks[0].insns[0].what.as_ref().unwrap().repeat;
         assert_eq!(got, expected, "{label}");
     }
