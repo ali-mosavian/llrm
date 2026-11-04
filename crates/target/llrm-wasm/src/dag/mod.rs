@@ -58,8 +58,7 @@ pub fn signature(
         return Err(format!("@{name} has no function type"));
     };
     let pointer = if width == Width::W32 { ValType::I32 } else { ValType::I64 };
-    // `canLowerReturn` is false for an `i128` (two parts, no multivalue ABI):
-    // the result goes through a pointer, the first parameter.
+    // `canLowerReturn` is false for an `i128` (two parts, no multivalue ABI): the result goes through a pointer, the first parameter.
     let returns_i128 = matches!(module.context.types.get(*returns), Type::Int(128));
     let mut params: Vec<ValType> = if returns_i128 { vec![pointer] } else { Vec::new() };
     for &ty in parameters {
@@ -192,7 +191,8 @@ pub fn compile_function_with(
     lower_memory_pseudos(&mut f);
     // A routine the legalizer or the builder calls (`fmod`, `memcpy`) is in no
     // module: its signature is what the call passes and returns.
-    let library_calls = library_callees(&f, module, if width == Width::W32 { ValType::I32 } else { ValType::I64 });
+    let library_calls =
+        library_callees(&f, module, if width == Width::W32 { ValType::I32 } else { ValType::I64 });
     argument_move(&mut f);
     set_p2align_operands(&mut f);
     fix_br_table_defaults(&mut f);
@@ -340,8 +340,7 @@ fn library_callees(
             .iter()
             .filter_map(|operand| match operand {
                 Operand::Use(reg) => Some(f.vreg_type(*reg)),
-                // A frame object's address, before the frame lowering gives it
-                // a register (an `sret` slot).
+                // A frame object's address, before the frame lowering gives it a register (an `sret` slot).
                 Operand::Frame(_) => Some(pointer),
                 _ => None,
             })

@@ -47,8 +47,7 @@ fn x86(
             sse2: false,
             min_size: false,
             i16_mul_chains: false,
-            sext_load: false,
-            zext_free: false,
+            sext_load: false, zext_free: false,
             profile: None,
         },
         level,
@@ -157,15 +156,8 @@ fn an_i16_multiply_is_a_chain_where_the_target_asks_and_an_imul_otherwise() {
         let k = dag.get_constant(c, EVT::I16);
         let product = dag.get_node(ISD::Mul, EVT::I16, &[x, k]);
         dag.set_root(product);
-        let mut lowering = X86Lowering {
-            cmov: false,
-            sse2: false,
-            min_size,
-            i16_mul_chains: chains,
-            sext_load: false,
-            zext_free: false,
-            profile: None,
-        };
+        let mut lowering =
+            X86Lowering { cmov: false, sse2: false, min_size, i16_mul_chains: chains, sext_load: false, zext_free: false, profile: None };
         DagCombiner::new(&mut dag, &mut lowering, CombineLevel::AfterLegalizeTypes).run();
         dag.opcode(dag.get_root())
     };
@@ -182,8 +174,7 @@ fn an_i16_multiply_is_a_chain_where_the_target_asks_and_an_imul_otherwise() {
             sse2: false,
             min_size: false,
             i16_mul_chains: true,
-            sext_load: false,
-            zext_free: false,
+            sext_load: false, zext_free: false,
             profile: None,
         };
         DagCombiner::new(&mut dag, &mut lowering, CombineLevel::AfterLegalizeTypes).run();
@@ -222,21 +213,14 @@ fn a_constant_the_pin_leaves_an_imul_is_the_chain_where_the_block_is_hot() {
         let product = mul_by(&mut dag, x, 43);
         dag.set_root(product);
         let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
-        let pricing = MulPricing {
-            cpu: m16,
-            arch: &llrm_x86_m16::M16,
-            freq,
-            milliclocks_per_byte: rate,
-            by_clocks: false,
-            price_pin: false,
-        };
+        let pricing =
+            MulPricing { cpu: m16, arch: &llrm_x86_m16::M16, freq, milliclocks_per_byte: rate, by_clocks: false, price_pin: false };
         let mut lowering = X86Lowering {
             cmov: false,
             sse2: false,
             min_size,
             i16_mul_chains: false,
-            sext_load: false,
-            zext_free: false,
+            sext_load: false, zext_free: false,
             profile: priced.then_some(pricing),
         };
         DagCombiner::new(&mut dag, &mut lowering, CombineLevel::AfterLegalizeTypes).with_tli(&tli).run();
@@ -270,8 +254,7 @@ fn the_i16_chain_is_built_exactly_where_i16_is_not_promoted() {
             sse2: false,
             min_size: false,
             i16_mul_chains: !promotes_i16(&tli),
-            sext_load: false,
-            zext_free: false,
+            sext_load: false, zext_free: false,
             profile: None,
         };
         assert_eq!(promotes_i16(&tli), promotes);
@@ -409,8 +392,7 @@ fn a_not_of_a_float_compare_does_not_make_a_code_the_target_expands() {
             sse2: false,
             min_size: false,
             i16_mul_chains: false,
-            sext_load: false,
-            zext_free: false,
+            sext_load: false, zext_free: false,
             profile: None,
         },
         CombineLevel::AfterLegalizeDag,

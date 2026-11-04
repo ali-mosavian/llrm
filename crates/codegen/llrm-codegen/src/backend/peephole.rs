@@ -2304,8 +2304,7 @@ pub fn widened_moves(
 }
 
 /// A sign-extending word load as the dword load and the in-place extension
-/// where the pair encodes in fewer bytes (`mov eax,[abs]; cwde`,
-/// `peephole.peep`).
+/// where the pair encodes in fewer bytes (`mov eax,[abs]; cwde`, `peephole.peep`).
 pub fn split_loads(
     rules: &peep::Rules,
     body: &LirBody,

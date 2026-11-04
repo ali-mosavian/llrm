@@ -61,9 +61,9 @@
 //! # Keeps
 //! The dominator tree and the loops: no block or edge changes.
 
-use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdSet;
+use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, CallInfo, CastOp, Flags, Opcode, Tail};
@@ -729,8 +729,7 @@ fn match_pop_count_bytes(
     let add2 = operand_pairs(q, sum, BinaryOp::Add)
         .into_iter()
         .find_map(|(shifted, same)| lshr_by(q, shifted, 4).filter(|&x| x == same))?;
-    // "x = (x & 0x33..) + ((x >> 2) & 0x33..)" or "x = x - 3*((x >> 2) &
-    // 0x33..)"
+    // "x = (x & 0x33..) + ((x >> 2) & 0x33..)" or "x = x - 3*((x >> 2) & 0x33..)"
     let sub1 = operand_pairs(q, add2, BinaryOp::Add)
         .into_iter()
         .find_map(|(shifted, plain)| {
@@ -800,8 +799,7 @@ fn replace_with_pop_count(
         attrs: Vec::new(),
         tail: Tail::default(),
     };
-    let call =
-        function.create_instruction(Opcode::Call(Box::new(info)), ty, vec![root, callee], Flags::default(), None);
+    let call = function.create_instruction(Opcode::Call(Box::new(info)), ty, vec![root, callee], Flags::default(), None);
     function.insert(call, Position::Before(inst)).expect("a placed instruction");
     let result = function.instruction(inst).result.expect("a value");
     function.replace_all_uses_with(result, Operand::Value(function.instruction(call).result.expect("a value")));

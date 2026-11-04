@@ -1972,7 +1972,10 @@ fn a_probed_frame_ending_in_a_sibling_call_gives_its_stack_back_first() {
     // The red zone may take some of the frame's bytes; what the prologue
     // takes the exit gives back.
     let taken = lines.iter().find_map(|line| line.strip_prefix("sub rsp, ")).unwrap_or_else(|| panic!("{listing}"));
-    assert!(lines[jmp - 1] == format!("add rsp, {taken}") || lines[jmp - 1].starts_with("mov rsp, rbp"), "{listing}");
+    assert!(
+        lines[jmp - 1] == format!("add rsp, {taken}") || lines[jmp - 1].starts_with("mov rsp, rbp"),
+        "{listing}"
+    );
 }
 
 /// The `.xdata` of an x86-64 module written as COFF, found by `.pdata`'s
@@ -3417,8 +3420,8 @@ fn a_register_fill_and_a_quadword_copy_at_m64_are_rep_string_instructions() {
 }
 
 /// `mov rdi, rbx` (3 B) of a value a dword write zeroed above bit 31 is `mov
-/// edi, ebx` (2 B): the pin emits the `movq`, gcc the dword (bench_io,
-/// os_files, os_find +1 B over release/next).
+/// edi, ebx` (2 B): the pin emits the `movq`, gcc the dword (bench_io, os_files,
+/// os_find +1 B over release/next).
 #[test]
 fn a_copy_of_a_zero_extended_dword_is_a_dword_copy_at_m64() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\

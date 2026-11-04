@@ -40,8 +40,6 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use llrm_lir::valuelanes::ValueLanes;
-
 use super::joinvals::JoinVals;
 use super::pair::{CoalescerEnv, CoalescerPair, full_copy};
 use crate::backend::twoaddr::commutative;
@@ -51,6 +49,7 @@ use crate::liveness::liverangecalc::Operand;
 use crate::liveness::slotindex::{InstrKey, SlotIndex};
 use crate::model::ir::{Held, Loc};
 use crate::model::lir::Insn;
+use llrm_lir::valuelanes::ValueLanes;
 use crate::support::hash::{HashMap, HashSet};
 
 /// Whether `one` does nothing but define its values: a copy or a definition
@@ -309,9 +308,7 @@ fn join_lane(
 ) -> JoinResult {
     // A def of `src` that names lanes of its own, or keeps the rest of it,
     // would need its lanes shifted too: left alone.
-    if has_lane_defs(lis, cp.src_reg())
-        || lis.operands(cp.src_reg()).iter().any(|operand| operand.reads_reg && operand.is_def)
-    {
+    if has_lane_defs(lis, cp.src_reg()) || lis.operands(cp.src_reg()).iter().any(|operand| operand.reads_reg && operand.is_def) {
         return JoinResult::Rejected;
     }
     let copy_at = lis.indexes.get_instruction_index(copy);
@@ -338,18 +335,12 @@ fn lanes_overlap(
     b: &LiveRange,
     copy_at: &SlotIndex,
 ) -> bool {
-    a.segments
-        .iter()
-        .any(
-            |x| b.segments
-                .iter()
-                .any(
-                    |y| {
-                        let start = std::cmp::max(&x.start, &y.start);
-                        start < std::cmp::min(&x.end, &y.end) && !SlotIndex::is_same_instr(start, copy_at)
-                    },
-                ),
-        )
+    a.segments.iter().any(|x| {
+        b.segments.iter().any(|y| {
+            let start = std::cmp::max(&x.start, &y.start);
+            start < std::cmp::min(&x.end, &y.end) && !SlotIndex::is_same_instr(start, copy_at)
+        })
+    })
 }
 
 /// `joinVirtRegs`.

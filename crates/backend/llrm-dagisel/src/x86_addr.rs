@@ -799,8 +799,7 @@ impl<D: AddrDag> Matcher<'_, D> {
                             let shl_src = self.operand(src, 0);
                             let svt = self.dag.value_type(shl_src);
                             let high = low_mask(src_bits) & !low_mask(src_bits - amount as u32) & mask;
-                            if self.dag.has_no_unsigned_wrap(src.node)
-                                || self.dag.known_zero_bits(shl_src) & high == high
+                            if self.dag.has_no_unsigned_wrap(src.node) || self.dag.known_zero_bits(shl_src) & high == high
                             {
                                 let vt = self.dag.value_type(n);
                                 let mut res = shl_src;
