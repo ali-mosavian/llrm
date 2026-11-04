@@ -1609,15 +1609,6 @@ impl<'a> TypeLegalizer<'a> {
                 let ((tl, th), (fl, fh)) = (self.expanded_integer(then), self.expanded_integer(other));
                 (self.dag.get_select(half, cond, tl, fl), self.dag.get_select(half, cond, th, fh))
             }
-            ISD::BitCast
-                if self.tli.types.type_action(self.dag.value_type(self.dag.operand(value, 0)))
-                    == TypeAction::SoftenFloat =>
-            {
-                // `ExpandRes_BITCAST` of a softened float: the halves of the
-                // integer that stands for it.
-                let soft = self.softened_float(self.dag.operand(value, 0));
-                self.split_integer(soft, half)
-            }
             ISD::BitCast if self.dag.value_type(self.dag.operand(value, 0)).is_floating_point() => {
                 // `ExpandRes_BITCAST` of a float: stored to a stack slot, the
                 // halves loaded from it.

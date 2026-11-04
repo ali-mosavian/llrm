@@ -2,6 +2,8 @@ double dadd(double,double),dsub(double,double),dmul(double,double),ddiv(double,d
 float fadd2(float,float),fmul2(float,float),trunc2(double),i2f(int);
 int d2i(double),flt(double,double),feq(double,double),fge(float,float);
 void st(double*,double);
+unsigned long long dbits(double);
+double bitsd(unsigned long long);
 static int bad;
 static long sys3(long n,long a,long b,long c){register long d0 __asm__("d0")=n,d1 __asm__("d1")=a,d2 __asm__("d2")=b,d3 __asm__("d3")=c;__asm__ volatile("trap #0":"+d"(d0):"d"(d1),"d"(d2),"d"(d3):"memory");return d0;}
 static int same(const void*a,const void*b,int n){const unsigned char*x=a,*y=b;while(n--)if(*x++!=*y++)return 0;return 1;}
@@ -34,6 +36,8 @@ int main(void){
   for(int n=-3;n<=9;n+=3){ double g=i2d(n), w=n; CHK("i2d",g,w); float fg=i2f(n), fw=n; CHK("i2f",fg,fw); }
   double s=dsum(a,7), sw=0; for(int i=0;i<7;i++)sw+=a[i]; CHK("dsum",s,sw);
   double box=0; st(&box,2.5); double want=2.5; CHK("st",box,want);
+  for(int i=0;i<7;i++){ unsigned long long g=dbits(a[i]), w; __builtin_memcpy(&w,&a[i],8); CHK("dbits",g,w);
+    double dg=bitsd(w); CHK("bitsd",dg,a[i]); }
   if(!bad) say("ALL OK\n");
   return bad!=0;
 }

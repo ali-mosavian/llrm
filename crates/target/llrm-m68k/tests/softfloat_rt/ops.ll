@@ -30,6 +30,8 @@ loop:
 done:
   ret double %acc1
 }
+define i64 @dbits(double %a) { %r = bitcast double %a to i64 ret i64 %r }
+define double @bitsd(i64 %a) { %r = bitcast i64 %a to double ret double %r }
 define void @st(ptr %p, double %v) { store double %v, ptr %p ret void }
 define double @mix(double %a, float %b, i32 %c) {
   %e = fpext float %b to double
