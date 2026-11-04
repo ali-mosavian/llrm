@@ -37,9 +37,21 @@ fn inline_with(
     _call: i64,
     _threshold: Threshold,
 ) -> bool {
+    inline_known(module, caller, false)
+}
+
+/// `inline_into`, the memory effects of the module's functions from
+/// `GlobalsAA` when `known`.
+fn inline_known(
+    module: &mut Module,
+    caller: &str,
+    known: bool,
+) -> bool {
     let layout = DataLayout::default();
+    let effects = known.then(|| llrm_analysis::globalsmodref::compute(module));
     let by = Caller {
         layout: &layout,
+        effects: effects.as_ref(),
         recursive: recursive(module).contains(&id(module, caller)),
         self_inlining: None,
         peeling: false,
@@ -613,6 +625,7 @@ fn self_inlined(ops: usize) -> (usize, i64) {
     let frequencies = SparseIdMap::default();
     let by = Caller {
         layout: &layout,
+        effects: None,
         recursive: true,
         self_inlining: Some(&frequencies),
         peeling: false,
@@ -880,6 +893,147 @@ b1:
     assert!(!main.contains("call void @callee"), "{after}");
 }
 
+/// A callee whose store is in a scope and whose load is `!noalias` it, inlined
+/// at two calls on the same two pointers, shared its scope between the copies:
+/// the first copy's store to `%a` and the second's load of `%a` were called
+/// apart by `ScopedNoAliasAA`, which a miscompile in waiting. Each copy has
+/// its own scope (`ScopedAliasMetadataDeepCloner`).
+#[test]
+fn test_two_copies_of_a_scoped_callee_are_not_in_one_scope() {
+    use llrm_analysis::aa::{AliasResult, BatchAAResults, MemoryLocation};
+    use llrm_analysis::aggregate::AggregateAA;
+    use llrm_analysis::memory::Unit;
+    use llrm_analysis::scopednoaliasaa::ScopedNoAliasAA;
+
+    let mut module = parsed(
+        "define internal i32 @callee(ptr %p, ptr %q) {
+b1:
+  store i32 1, ptr %p, !alias.scope !1
+  %v = load i32, ptr %q, !noalias !1
+  ret i32 %v
+}
+
+define i32 @main(ptr %a, ptr %b) {
+b1:
+  %x = call i32 @callee(ptr %a, ptr %b)
+  %y = call i32 @callee(ptr %b, ptr %a)
+  %r = add i32 %x, %y
+  ret i32 %r
+}
+
+!0 = distinct !{!0, !\"domain\"}
+!2 = distinct !{!2, !0, !\"scope\"}
+!1 = !{!2}
+",
+    );
+    assert!(inline_into(&mut module, "main", 1));
+    let layout = DataLayout::default();
+    let main = module.global(id(&module, "main")).function().unwrap();
+    let unit = Unit::of(&module, &layout, main);
+    let access: Vec<MemoryLocation> = main.walk().filter_map(|(_, inst)| MemoryLocation::get(&unit, inst)).collect();
+    // store %a, load %b, store %b, load %a
+    assert_eq!(access.len(), 4, "{}", printed(&module));
+    let mut chain = AggregateAA::new();
+    chain.add_aa_result(ScopedNoAliasAA::new(&unit));
+    let mut aa = BatchAAResults::new(&mut chain);
+    assert_eq!(aa.alias(&access[0], &access[1]), AliasResult::NoAlias, "premise: one copy's own pair");
+    assert_eq!(aa.alias(&access[0], &access[3]), AliasResult::MayAlias, "{}", printed(&module));
+}
+
+/// The aliasing of a `noalias` argument was lost at the call: inlined, `%p`'s
+/// store and `%q`'s load were two pointers of unknown origin to every pass
+/// (`AddAliasScopeMetadata`). With the attribute they are apart; without it
+/// they are not.
+#[test]
+fn test_a_noalias_argument_makes_its_accesses_apart_from_the_others_once_inlined() {
+    use llrm_analysis::aa::{AliasResult, BatchAAResults, MemoryLocation};
+    use llrm_analysis::aggregate::AggregateAA;
+    use llrm_analysis::memory::Unit;
+    use llrm_analysis::scopednoaliasaa::ScopedNoAliasAA;
+
+    let apart = |attribute: &str| {
+        let mut module = parsed(&format!(
+            "define internal i32 @callee(ptr {attribute} %p, ptr %q) {{
+b1:
+  store i32 1, ptr %p
+  %v = load i32, ptr %q
+  ret i32 %v
+}}
+
+define i32 @main(ptr %a, ptr %b) {{
+b1:
+  %r = call i32 @callee(ptr %a, ptr %b)
+  ret i32 %r
+}}
+"
+        ));
+        assert!(inline_into(&mut module, "main", 1));
+        printed(&module);
+        let layout = DataLayout::default();
+        let main = module.global(id(&module, "main")).function().unwrap();
+        let unit = Unit::of(&module, &layout, main);
+        let access: Vec<MemoryLocation> =
+            main.walk().filter_map(|(_, inst)| MemoryLocation::get(&unit, inst)).collect();
+        assert_eq!(access.len(), 2, "{}", printed(&module));
+        let mut chain = AggregateAA::new();
+        chain.add_aa_result(ScopedNoAliasAA::new(&unit));
+        BatchAAResults::new(&mut chain).alias(&access[0], &access[1])
+    };
+    assert_eq!(apart(""), AliasResult::MayAlias, "premise: without the attribute");
+    assert_eq!(apart("noalias"), AliasResult::NoAlias);
+}
+
+/// A pointer loaded from memory may be `%p` once `%p` was passed on: the store
+/// through it after the capture is not `!noalias` `%p`'s scope, the one before
+/// it is (`PointerMayBeCapturedBefore`).
+#[test]
+fn test_a_pointer_loaded_after_the_noalias_argument_was_captured_may_alias_it() {
+    use llrm_analysis::aa::{AliasResult, BatchAAResults, MemoryLocation};
+    use llrm_analysis::aggregate::AggregateAA;
+    use llrm_analysis::memory::Unit;
+    use llrm_analysis::scopednoaliasaa::ScopedNoAliasAA;
+
+    let mut module = parsed(
+        "declare void @leak(ptr)
+
+define internal void @callee(ptr noalias %p, ptr %q) {
+b1:
+  %g = load ptr, ptr %q
+  store i32 1, ptr %g
+  call void @leak(ptr %p)
+  store i32 2, ptr %g
+  store i32 3, ptr %p
+  ret void
+}
+
+define void @main(ptr %a, ptr %b) {
+b1:
+  call void @callee(ptr %a, ptr %b)
+  ret void
+}
+",
+    );
+    assert!(inline_into(&mut module, "main", 1));
+    printed(&module);
+    let layout = DataLayout::default();
+    let main = module.global(id(&module, "main")).function().unwrap();
+    let unit = Unit::of(&module, &layout, main);
+    let stores: Vec<MemoryLocation> = main
+        .walk()
+        .filter(|&(_, inst)| matches!(
+            main.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Store { .. }
+        ))
+        .filter_map(|(_, inst)| MemoryLocation::get(&unit, inst))
+        .collect();
+    assert_eq!(stores.len(), 3, "{}", printed(&module));
+    let mut chain = AggregateAA::new();
+    chain.add_aa_result(ScopedNoAliasAA::new(&unit));
+    let mut aa = BatchAAResults::new(&mut chain);
+    assert_eq!(aa.alias(&stores[0], &stores[2]), AliasResult::NoAlias, "before the capture");
+    assert_eq!(aa.alias(&stores[1], &stores[2]), AliasResult::MayAlias, "{}", printed(&module));
+}
+
 /// jpeg_fixed wasm -Os ran 132 bytes over the pin: each inlined body left its
 /// entry as a block of only `br`, 46 of 185 blocks after inlining. The entry
 /// belongs in the call's block, as `InlineFunction` splices it.
@@ -911,4 +1065,46 @@ b1:
     assert!(main.contains("b1:\n  %zero = icmp eq i16 %x, 0\n  br i1"), "{after}");
     assert_eq!(run(&module, "main", &[0]), Val::Int { bits: 1, width: 16 });
     assert_eq!(run(&module, "main", &[5]), Val::Int { bits: 2, width: 16 });
+}
+
+/// A call in an inlined body to a function that touches no memory (`GlobalsAA`
+/// shows it, no attribute does) got `!noalias` for the call site's arguments
+/// as if it could write through them (`CalleeAAR`'s memory effects).
+#[test]
+fn test_a_call_the_globals_analysis_shows_pure_gets_no_scopes() {
+    let ir = "define internal i32 @pure(i32 %x) {
+b1:
+  %c = icmp eq i32 %x, 0
+  br i1 %c, label %t, label %e
+
+t:
+  ret i32 0
+
+e:
+  %m = sub i32 %x, 1
+  %r = call i32 @pure(i32 %m)
+  ret i32 %r
+}
+
+define internal i32 @callee(ptr noalias %p, i32 %v) {
+b1:
+  store i32 %v, ptr %p
+  %r = call i32 @pure(i32 %v)
+  ret i32 %r
+}
+
+define i32 @main(ptr %a) {
+b1:
+  %x = call i32 @callee(ptr %a, i32 3)
+  ret i32 %x
+}
+";
+    for (known, scoped_calls) in [(false, 1), (true, 0)] {
+        let mut module = parsed(ir);
+        assert!(inline_known(&mut module, "main", known));
+        let after = printed(&module);
+        let main = after.split("define i32 @main").nth(1).unwrap();
+        let calls = main.lines().filter(|line| line.contains("call i32 @pure") && line.contains("!noalias")).count();
+        assert_eq!(calls, scoped_calls, "known={known}\n{after}");
+    }
 }
