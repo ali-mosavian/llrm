@@ -1182,6 +1182,82 @@ fn test_a_copy_from_a_pinned_argument_is_left_to_the_allocator_when_the_target_s
     assert_eq!(join(false), JoinResult::Rejected, "the copy joined the pin");
 }
 
+/// A target with a view of the wide value's high byte.
+struct LaneViews;
+
+impl CoalescerEnv for LaneViews {
+    fn can_share(
+        &self,
+        _a: u32,
+        _b: u32,
+    ) -> bool {
+        true
+    }
+
+    fn can_share_sub(
+        &self,
+        _narrow: u32,
+        _wide: u32,
+    ) -> bool {
+        true
+    }
+
+    fn can_share_lane(
+        &self,
+        _narrow: u32,
+        _wide: u32,
+        _offset: u32,
+    ) -> bool {
+        true
+    }
+}
+
+/// `v2:2@1 := mov v1:1` into the byte above the low one, as `read_at` sees it.
+fn copy_into_lane(offset: u32) -> Arc<Insn> {
+    let what = Semantics {
+        name: Some("mov".into()),
+        dests: vec![Loc::Held(Held { value: 2, width: 1, offset })],
+        sources: vec![held_at(1, 1)],
+        ..Semantics::new(Operation::Move)
+    };
+    Arc::new(Insn::new(0, None, Some(what), vec![2], vec![1]))
+}
+
+/// `v2.hi := mov v1` joined v1 into the low byte of v2 (the wide-copy case
+/// only knew the low part): a byte copied to the high byte of a pair was named
+/// at offset 0, so the pair's two bytes overlapped. The join puts v1's def at
+/// byte 1 of v2.
+#[test]
+fn test_a_copy_into_the_high_byte_joins_the_byte_at_its_offset() {
+    let (narrow, c, r) = (def_at(1, 1), copy_into_lane(1), read_at(2, 2));
+    let was = body(&[(&[narrow, Arc::clone(&c), r], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(1);
+    lis.interval(2);
+    let result = join_copy(&mut lis, &LaneViews, &mut State::new(), &mut Default::default(), c.id());
+    assert_eq!(result, JoinResult::Joined);
+    let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
+    assert_eq!(kept.len(), 2, "the copy is gone");
+    assert_eq!(
+        kept[0].what.as_ref().unwrap().dests,
+        vec![Loc::Held(Held { value: 2, width: 1, offset: 1 })],
+        "the byte def names the high byte of the pair"
+    );
+}
+
+/// A target with no view of the high byte leaves the copy: the pair needs
+/// `can_share_lane`.
+#[test]
+fn test_without_a_view_of_the_high_byte_the_copy_is_left() {
+    let (narrow, c, r) = (def_at(1, 1), copy_into_lane(1), read_at(2, 2));
+    let was = body(&[(&[narrow, Arc::clone(&c), r], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(1);
+    lis.interval(2);
+    let result = join_copy(&mut lis, &SubRegisters, &mut State::new(), &mut Default::default(), c.id());
+    assert_eq!(result, JoinResult::Rejected);
+}
+
 /// The kept uses of a value, summed by kind for the target's join price, must
 /// be the instructions' after every rewrite and erase the joins make
 /// (`LLRM_CHECK_USE_SUMMARY`'s check, on in `check_kinds`). A join took the
@@ -1246,4 +1322,50 @@ fn test_a_kind_with_no_instruction_left_is_not_kept_at_high_frequency() {
         lis.remove_instr(1, cold.id());
         assert!(env.should_coalesce(&lis, to.id(), 1, 2), "cycle {cycle}");
     }
+}
+
+/// `v2:1@l := mov x` with the lane the copy defines named, as tolir will.
+fn lane_copy(
+    dst: u32,
+    offset: u32,
+    src: u32,
+) -> Arc<Insn> {
+    let what = Semantics {
+        name: Some("mov".into()),
+        dests: vec![Loc::Held(Held { value: dst, width: 1, offset })],
+        sources: vec![held_at(src, 1)],
+        ..Semantics::new(Operation::Move)
+    };
+    let mut copy = Insn::new(0, None, Some(what), vec![dst], vec![src]);
+    copy.def_lanes = vec![(dst, llrm_lir::valuelanes::ValueLanes::at(offset, 1))];
+    // The lane above the first keeps the lanes already defined.
+    if offset != 0 {
+        copy.partial_defs = vec![dst];
+    }
+    Arc::new(copy)
+}
+
+/// A pair built from two bytes: `v2.lo := v1; v2.hi := v3; read v2`. The
+/// whole-value join of the second byte met `v2` live (its low byte) across
+/// `v3` and refused, so one byte copy stayed in every pair. Each byte joins
+/// into its own lane, and the two copies go.
+#[test]
+fn test_both_bytes_of_a_pair_join_into_their_lanes() {
+    let (d1, d3) = (def_at(1, 1), def_at(3, 1));
+    let (lo, hi) = (lane_copy(2, 0, 1), lane_copy(2, 1, 3));
+    let was = body(&[(&[d1, d3, Arc::clone(&lo), Arc::clone(&hi), read_at(2, 2)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    for v in 1..=3 {
+        lis.interval(v);
+    }
+    let mut state = State::new();
+    for copy in [lo.id(), hi.id()] {
+        let result = join_copy(&mut lis, &LaneViews, &mut state, &mut Default::default(), copy);
+        assert_eq!(result, JoinResult::Joined);
+    }
+    let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
+    assert_eq!(kept.len(), 3, "both copies are gone");
+    let dests = |insn: &Arc<Insn>| insn.what.as_ref().unwrap().dests.clone();
+    assert_eq!(dests(&kept[0]), vec![Loc::Held(Held { value: 2, width: 1, offset: 0 })]);
+    assert_eq!(dests(&kept[1]), vec![Loc::Held(Held { value: 2, width: 1, offset: 1 })]);
 }
