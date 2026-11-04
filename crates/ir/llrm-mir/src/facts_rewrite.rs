@@ -594,8 +594,10 @@ mod tests {
             // drops `nsw` off a trunc to i1 that is not also `nuw`. It sets no
             // flag.
             "typepromotion_pass.rs",
-            // AggressiveInstCombine.cpp's load-from-constant-table fold reads
-            // the GEP's `nusw`/`inbounds`; it drops none.
+            // AggressiveInstCombine.cpp's `tryToRecognizeTableBasedPatterns`
+            // takes `nusw` (`hasNoUnsignedSignedWrap`; `inbounds` implies it)
+            // of the table's GEP as the proof its index does not wrap. It
+            // reads no other flag and sets none.
             "aggressive_instcombine.rs",
             // CodeGenPrepare.cpp's `AddrMode.InBounds`: a mode stays in
             // bounds while every GEP it folds is, and the sunk address is made
