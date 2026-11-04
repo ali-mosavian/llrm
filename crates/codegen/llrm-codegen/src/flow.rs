@@ -109,6 +109,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("MachineScheduler", "machinesched@5"),
     ("FixupSetCC", "fixupsetcc@5"),
     ("CallFrameOpt", "callframe@5"),
+    ("VectorSaves", "callframe@5"),
     ("ReserveCallFrame", "callframe@5"),
     ("FlagsCopy", "flagscopy@5"),
     ("X86OptimizeLEAs", "leaopt@5"),
@@ -276,6 +277,13 @@ pub fn machine_with<'a>(
             prices: parcopy::CyclePrices::of(target),
             available: classes.available.clone(),
             saved: registers.saved.iter().map(|(whole, _)| *whole).collect(),
+        }),
+        // The callee-saved vector registers the body writes get their frame
+        // cells before the call frame is reserved below them.
+        Box::new(crate::backend::vectorsaves::VectorSaves {
+            frame: frame.clone(),
+            saved: registers.vector_saved.iter().map(|(whole, _)| *whole).collect(),
+            bias: registers.slot,
         }),
         // The pin's PEI: the call frame is reserved, or each call adjusts.
         Box::new(crate::backend::callframe::ReserveCallFrame {

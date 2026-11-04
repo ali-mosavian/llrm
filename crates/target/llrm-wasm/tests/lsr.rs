@@ -83,3 +83,18 @@ fn a_sum_over_a_buffer_keeps_the_pointer_and_the_down_counter() {
     let text = llrm_mir::print::module(&module);
     assert!(!text.contains("getelementptr i8, ptr %1, i32 %2"), "{text}");
 }
+
+/// Four streams stepped by a four-trip inner loop: the end-biased counter
+/// (LG3) compares against zero but needs four `base + 32` in the preheader,
+/// where the pin keeps the count up to 32 and the bases as they are (nbody and
+/// fpbench -O1: +25 B each).
+#[test]
+fn a_counter_keeps_the_bases_when_the_end_biased_one_costs_setup() {
+    let mut module = llrm_mir::parse::module(include_str!("lsr/four_streams.ll")).expect("parses");
+    let mut manager = PassManager::default();
+    let elements = llrm_transforms::pipeline_text::parse("loop-reduce").expect("pipeline");
+    llrm_transforms::pipeline_text::build(&elements, &mut manager).ok().expect("builds");
+    manager.run_module(&mut module, Rc::new(WasmMachine)).expect("runs");
+    let text = llrm_mir::print::module(&module);
+    assert!(text.contains(", 32\n") && !text.contains("i32 32\n  %scevgep"), "{text}");
+}
