@@ -126,6 +126,9 @@ pub struct TargetLowering {
     /// `isSExtCheaperThanZExt`: `i32` to `i64` where the target extends signed
     /// for free (AArch64's `sxtw` in an addressing mode); no x86 override.
     sext_cheaper_i32_i64: bool,
+    /// `X86TargetLowering::BuildSDIVPow2` builds the `cmov` form of a signed
+    /// divide by a power of two: `Some(is64)`, `i64` too where `is64`.
+    sdiv_pow2_cmov: Option<bool>,
 }
 
 impl TargetLowering {
@@ -146,6 +149,7 @@ impl TargetLowering {
             libcall_names: HashMap::default(),
             libcall_symbols: HashMap::default(),
             sext_cheaper_i32_i64: false,
+            sdiv_pow2_cmov: None,
         }
     }
 
@@ -383,6 +387,23 @@ impl TargetLowering {
     /// `Subtarget.canUseCMOV()`.
     pub fn can_use_cmov(&self) -> bool {
         self.cmov
+    }
+
+    /// Whether `X86TargetLowering::BuildSDIVPow2` makes the `cmov` form for
+    /// `vt`: `canUseCMOV`, and `i16`, `i32` or (`is64Bit`) `i64` (no `i8`).
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L24348>
+    pub fn sdiv_pow2_with_cmov(
+        &self,
+        vt: EVT,
+    ) -> bool {
+        let Some(is64) = self.sdiv_pow2_cmov else {
+            return false;
+        };
+        match vt {
+            EVT::Simple(MVT::I16 | MVT::I32) => true,
+            EVT::Simple(MVT::I64) => is64,
+            _ => false,
+        }
     }
 
     /// `isOperationLegal`.
@@ -625,6 +646,7 @@ impl TargetLowering {
         use ISD::*;
         let mut t = TargetLowering::empty(types);
         t.cmov = features.cmov;
+        t.sdiv_pow2_cmov = features.cmov.then_some(is64);
         t.init_actions();
         let ints = [MVT::I8, MVT::I16, MVT::I32];
         // `if (VT == MVT::i64 && !Subtarget.is64Bit()) continue;`
