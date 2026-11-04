@@ -139,6 +139,15 @@ pub struct Insn {
     /// it before the coalescer joins copies of different widths; a narrow def
     /// not listed starts the value, as it always has.
     pub partial_defs: Vec<u32>,
+    /// Where it copies one value into lanes of another, `(source, destination,
+    /// lanes of the destination)`: the `undef %d:sub0 = COPY` pairs
+    /// `eliminateRegSequence` makes from a `REG_SEQUENCE`. Liveness still takes
+    /// the destination whole; the lane model reads this (C1 step 1).
+    pub lane_copies: Vec<(u32, u32, llrm_lir::valuelanes::ValueLanes)>,
+    /// The lanes of a value it defines, where it defines less than all of
+    /// them (the `:subN` on a def operand); a value not listed is defined
+    /// whole.
+    pub def_lanes: Vec<(u32, llrm_lir::valuelanes::ValueLanes)>,
     /// It defines a narrower part of a value than the value is read at, and the
     /// value is not live before it: the rest of the register is undefined (the
     /// `implicit-def` `VirtRegRewriter` puts on a sub-register def whose other
@@ -535,6 +544,12 @@ impl Insn {
         for &value in self.defines.iter().chain(&self.uses).chain(&self.undefs).chain(&self.partial_defs) {
             any |= moves(value)?;
         }
+        for &(value, _) in &self.def_lanes {
+            any |= moves(value)?;
+        }
+        for &(from, to, _) in &self.lane_copies {
+            any |= moves(from)? | moves(to)?;
+        }
         for (held, _) in self.requires.iter().chain(&self.delivers) {
             any |= moves(held.value)?;
         }
@@ -559,7 +574,7 @@ impl Insn {
             let settled = |place: &Loc| -> Result<Loc, E> {
                 let mut failed = None;
                 let out = llrm_lir::mapped(place, |held| match rename(held.value) {
-                    Ok(value) => Held { value, width: held.width },
+                    Ok(value) => Held { value, width: held.width, offset: held.offset },
                     Err(error) => {
                         failed.get_or_insert(error);
                         *held
@@ -576,9 +591,17 @@ impl Insn {
         made.uses = self.uses.iter().map(value).collect::<Result<_, E>>()?;
         made.undefs = self.undefs.iter().map(value).collect::<Result<_, E>>()?;
         made.partial_defs = self.partial_defs.iter().map(value).collect::<Result<_, E>>()?;
+        made.def_lanes = self.def_lanes.iter().map(|&(v, lanes)| Ok((rename(v)?, lanes))).collect::<Result<_, E>>()?;
+        made.lane_copies = self
+            .lane_copies
+            .iter()
+            .map(|&(from, to, lanes)| Ok((rename(from)?, rename(to)?, lanes)))
+            .collect::<Result<_, E>>()?;
         let wants = |side: &[(Held, RegId)]| -> Result<Vec<(Held, RegId)>, E> {
             side.iter()
-                .map(|(held, register)| Ok((Held { value: rename(held.value)?, width: held.width }, *register)))
+                .map(|(held, register)| {
+                    Ok((Held { value: rename(held.value)?, width: held.width, offset: held.offset }, *register))
+                })
                 .collect()
         };
         made.requires = wants(&self.requires)?;
@@ -626,6 +649,8 @@ impl Insn {
             uses,
             undefs: Vec::new(),
             partial_defs: Vec::new(),
+            lane_copies: Vec::new(),
+            def_lanes: Vec::new(),
             undef_super: false,
             clobbers: BTreeSet::new(),
             clobbers_high: BTreeSet::new(),
@@ -1877,12 +1902,12 @@ mod tests {
         let mut untouched = (*instruction(0x10, None)).clone();
         untouched.defines = vec![2];
         untouched.uses = vec![1];
-        untouched.what.as_mut().unwrap().dests = vec![Loc::Held(Held { value: 2, width: 4 })];
+        untouched.what.as_mut().unwrap().dests = vec![Loc::Held(Held { value: 2, width: 4, offset: 0 })];
         let untouched = Arc::new(untouched);
         let mut named = (*untouched).clone();
         named.uses = vec![7];
         named.what.as_mut().unwrap().sources =
-            vec![Loc::Mem(Mem { base: Some(Held { value: 7, width: 4 }), ..Mem::new(None, 4) })];
+            vec![Loc::Mem(Mem { base: Some(Held { value: 7, width: 4, offset: 0 }), ..Mem::new(None, 4) })];
         let named = Arc::new(named);
         let to_nine = |value: u32| if value == 7 { 9 } else { value };
         assert!(Arc::ptr_eq(&untouched.renamed(&to_nine), &untouched), "nothing it names moves");
@@ -1905,7 +1930,7 @@ mod tests {
         source.defines = vec![2];
         source.uses = vec![1];
         source.group = Some(7);
-        source.requires = vec![(Held { value: 1, width: 2 }, RegId::DL)];
+        source.requires = vec![(Held { value: 1, width: 2, offset: 0 }, RegId::DL)];
         source.spill_reload = true;
         let source = Arc::new(source);
         let anchored = anchor(Arc::clone(&source));
@@ -2019,15 +2044,18 @@ mod tests {
             Some((16, 18)),
             Some(Semantics {
                 name: Some("call".into()),
-                sources: vec![Loc::Held(Held { value: 1, width: 2 })],
+                sources: vec![Loc::Held(Held { value: 1, width: 2, offset: 0 })],
                 target: Some(5),
                 ..Semantics::new(Operation::Call)
             }),
             Vec::new(),
             Vec::new(),
         );
-        one.requires = vec![(Held { value: 1, width: 2 }, RegId::CX), (Held { value: 7, width: 4 }, RegId::EBX)];
-        one.delivers = vec![(Held { value: 9, width: 1 }, RegId::AL)];
+        one.requires = vec![
+            (Held { value: 1, width: 2, offset: 0 }, RegId::CX),
+            (Held { value: 7, width: 4, offset: 0 }, RegId::EBX),
+        ];
+        one.delivers = vec![(Held { value: 9, width: 1, offset: 0 }, RegId::AL)];
         let line = |one: &Insn| {
             format!(
                 "  {:4} {} req={} del={}",

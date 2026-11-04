@@ -53,6 +53,7 @@ impl Combiner<'_> {
             Some(Intrinsic::MemSet) => self.raise_alignments(call, 1),
             Some(Intrinsic::MinMax { signed, max }) => self.narrow_min_max(call, signed, max),
             Some(Intrinsic::Compare { signed }) => self.visit_compare(call, signed),
+            Some(Intrinsic::Assume) => self.visit_assume(call),
             Some(Intrinsic::FMulAdd) => crate::combine_fp::visit_fmuladd(self, call),
             None => return self.transform_const_expr_cast_call(call),
             _ => Visit::None,

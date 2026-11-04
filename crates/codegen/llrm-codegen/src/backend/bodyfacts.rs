@@ -1097,14 +1097,14 @@ mod keeps_tests {
     #[test]
     fn test_a_store_through_a_register_does_not_keep_a_cell_of_its_symbol() {
         let symbol = |disp| Addr { index: 3, ..Addr::new(Space::Segment, disp) };
-        let held = |value| Held { value, width: 4 };
+        let held = |value| Held { value, width: 4, offset: 0 };
         let cell = Mem::new(Some(symbol(2)), 2);
         let load = Arc::new(Insn::new(
             1,
             None,
             Some(Semantics {
                 name: Some("mov".into()),
-                dests: vec![Loc::Held(Held { value: 9, width: 2 })],
+                dests: vec![Loc::Held(Held { value: 9, width: 2, offset: 0 })],
                 sources: vec![Loc::Mem(cell.clone())],
                 ..Semantics::new(Operation::Move)
             }),

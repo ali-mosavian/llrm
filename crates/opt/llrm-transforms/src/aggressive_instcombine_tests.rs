@@ -13,7 +13,7 @@ fn merged(text: &str) -> String {
     managed(&mut module, AggressiveInstCombine);
     // The pin leaves the old chain to dead-code elimination.
     let after = managed(&mut module, crate::dead::Dead);
-    let inputs: &[&[i128]] = &[&[0], &[1]];
+    let inputs: &[&[i128]] = &[&[0], &[1], &[4660]];
     assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
     after
 }
@@ -65,4 +65,43 @@ fn bytes_out_of_order_are_not_merged() {
     let text = BYTES.replace("shl i32 %z1, 8", "shl i32 %z1, 16").replace("shl i32 %z2, 16", "shl i32 %z2, 8");
     let after = merged(&text);
     assert_eq!(after.matches("load ").count(), 4, "{after}");
+}
+
+const HALVES: &str = "@g = global [4 x i8] zeroinitializer
+define i16 @f(i16 %x) {
+b0:
+  %lo = trunc i16 %x to i8
+  %h = lshr i16 %x, 8
+  %hi = trunc i16 %h to i8
+  store i8 %lo, ptr @g
+  %p = getelementptr i8, ptr @g, i16 1
+  store i8 %hi, ptr %p
+  %r = load i16, ptr @g
+  ret i16 %r
+}
+";
+
+/// Two byte stores of the halves of one value stayed two `mov`s; the pin
+/// makes them one `store i16`.
+#[test]
+fn the_two_bytes_of_a_value_stored_side_by_side_are_one_word_store() {
+    let after = merged(HALVES);
+    assert_eq!(after.matches("store ").count(), 1, "{after}");
+    assert!(after.contains("store i16"), "{after}");
+}
+
+/// A load of the object between the stores may see the first alone: no merge.
+#[test]
+fn a_read_between_the_stores_stops_the_merge() {
+    let text = HALVES.replace("  %p = getelementptr", "  %m = load i8, ptr @g\n  %p = getelementptr");
+    let after = merged(&text);
+    assert_eq!(after.matches("store ").count(), 2, "{after}");
+}
+
+/// Bytes two apart leave a gap the wider store would write.
+#[test]
+fn stores_with_a_gap_between_them_are_not_merged() {
+    let text = HALVES.replace("i16 1\n  store", "i16 2\n  store");
+    let after = merged(&text);
+    assert_eq!(after.matches("store ").count(), 2, "{after}");
 }
