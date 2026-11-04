@@ -1294,3 +1294,16 @@ fn a_jump_outside_every_loop_is_jr_even_when_speed_comes_first() {
     let out = text(include_str!("kernels/ir/scmp.ll"), "scmp", 0, &Request::new(Level::O2)).expect("compiles");
     assert!(!out.lines().any(|line| line.trim_start().starts_with("jp ")), "{out}");
 }
+
+/// The driver turned the unroller off: sum4's four-trip loop ran 160 clocks at
+/// -O2, 104 unrolled. A loop of four trips is copied out where speed comes
+/// first, and stays a loop at -Oz. (The fixture's `unroll.disable` is dropped:
+/// it was made with `-fno-unroll-loops`.)
+#[test]
+fn a_four_trip_loop_is_unrolled_where_speed_comes_first_and_not_at_oz() {
+    let ir = include_str!("kernels/ir/sum4.ll").replace("llvm.loop.unroll.disable", "llvm.loop.mustprogress");
+    let fast = text(&ir, "sum4", 0, &Request::new(Level::O2)).expect("compiles");
+    let small = text(&ir, "sum4", 0, &Request::new(Level::Oz)).expect("compiles");
+    assert!(!fast.contains("djnz") && !fast.contains(" L0_"), "{fast}");
+    assert!(small.contains("djnz"), "{small}");
+}

@@ -96,10 +96,6 @@ pub fn program(
     if request.level != Level::O0 {
         let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
         let mut options = request.level.options();
-        // Bytes over speed on an 8-bit target: no unrolling (the 6502's
-        // stand-in for the override table).
-        options.unroll = false;
-        options.loop_unrolling = false;
         // No zero- or sign-extending load: the compare of a loaded byte stays a
         // byte compare (`cp #255`), not a word compare of its extension.
         options.extload = false;
