@@ -1406,7 +1406,9 @@ fn test_the_symbol_table_follows_a_rename_and_a_new_global() {
     assert_eq!(module.named("f1"), None, "the old name");
     assert_eq!(module.named("renamed"), Some(crate::context::GlobalId(1)));
     let copy = module.globals[2].clone();
-    module.globals.push(crate::module::GlobalValue { name: crate::module::GlobalName::from("fresh".to_owned()), ..copy });
+    module
+        .globals
+        .push(crate::module::GlobalValue { name: crate::module::GlobalName::from("fresh".to_owned()), ..copy });
     assert_eq!(module.named("fresh"), Some(crate::context::GlobalId(3)));
     module.globals.swap(0, 2);
     assert_eq!(module.named("f2"), Some(crate::context::GlobalId(0)), "a moved global");

@@ -1022,11 +1022,8 @@ impl ModuleAnalysis for GlobalNames {
             return true;
         }
         NAME_COMPARES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let same = module
-            .globals
-            .iter()
-            .zip(&previous.names)
-            .all(|(global, name)| global.name.as_deref() == name.as_deref());
+        let same =
+            module.globals.iter().zip(&previous.names).all(|(global, name)| global.name.as_deref() == name.as_deref());
         if same {
             previous.seen.set(made);
         }
