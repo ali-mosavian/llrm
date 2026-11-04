@@ -39,7 +39,7 @@ fn cluster(mut ops: OpList) -> OpList {
             i += 1;
             continue;
         };
-        let Some(first) = access(inst).filter(|first| !first.load) else {
+        let Some(first) = access_of(inst).filter(|first| !first.load) else {
             i += 1;
             continue;
         };
@@ -48,7 +48,7 @@ fn cluster(mut ops: OpList) -> OpList {
         let base = Reg::Gpr(first.base);
         for j in i + 1..(i + 1 + WINDOW).min(ops.len()) {
             if let Op::I(other) = &ops[j]
-                && let Some(second) = access(other).filter(|second| !second.load)
+                && let Some(second) = access_of(other).filter(|second| !second.load)
                 && pair_of(&first, &second).is_some()
             {
                 if j > i + 1 {
