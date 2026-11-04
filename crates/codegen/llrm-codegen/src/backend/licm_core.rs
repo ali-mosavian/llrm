@@ -77,6 +77,12 @@ pub trait Inst: Clone {
 
 #[cfg(test)]
 thread_local! {
+    /// Blocks the policy read through `Facts::inside_blocks`.
+    pub(crate) static READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+thread_local! {
     /// Instructions the rename sweep looked at.
     pub(crate) static SWEPT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -128,8 +134,10 @@ impl<I> Node for Block<I> {
 pub struct Facts<'a, I> {
     /// The blocks of the loop, by `at`.
     pub inside: &'a BTreeSet<i64>,
-    /// The loop's blocks, by `at`, to read their instructions.
+    /// The function's blocks, to read their instructions.
     pub blocks: &'a [Block<I>],
+    /// The positions in `blocks` of the loop's blocks, in order.
+    pub members: &'a [usize],
     /// The values the loop reads from outside and its phis' results: the
     /// registers it holds across its trips (floating point values among them:
     /// the policy leaves out the ones it counts apart).
@@ -142,6 +150,18 @@ pub struct Facts<'a, I> {
     /// Whether the block runs on every trip of the loop
     /// (`IsGuaranteedToExecute`).
     pub every_trip: &'a dyn Fn(i64) -> bool,
+}
+
+impl<'a, I> Facts<'a, I> {
+    /// The loop's blocks, in the function's order.
+    pub fn inside_blocks(&self) -> impl Iterator<Item = &'a Block<I>> + use<'a, I> {
+        let blocks = self.blocks;
+        self.members.iter().map(move |&number| {
+            #[cfg(test)]
+            READ.with(|read| read.set(read.get() + 1));
+            &blocks[number]
+        })
+    }
 }
 
 /// The target's half.
@@ -221,15 +241,29 @@ pub fn hoist<I: Inst, P: Policy<I>>(
             }
         }
     }
+    // The blocks that branch to each block, in the function's order.
+    let mut entries: HashMap<i64, Vec<i64>> = HashMap::default();
+    for block in &blocks {
+        for &to in &block.succ {
+            let from = entries.entry(to).or_default();
+            if from.last() != Some(&block.at) {
+                from.push(block.at);
+            }
+        }
+    }
     let mut order: Vec<&loopy::Loop> = found.iter().collect();
     order.sort_by_key(|one| one.body.to_set().len());
     let mut changed = false;
     for lp in order {
         let inside = lp.body.to_set();
-        let outside_entries: Vec<i64> = blocks
-            .iter()
-            .filter(|block| !inside.contains(&block.at) && block.succ.contains(&lp.header))
-            .map(|block| block.at)
+        let mut members: Vec<usize> = inside.iter().map(|at| place[at]).collect();
+        members.sort_unstable();
+        let outside_entries: Vec<i64> = entries
+            .get(&lp.header)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|at| !inside.contains(at))
             .collect();
         let [pre] = outside_entries[..] else { continue };
         let pre_at = place[&pre];
@@ -246,6 +280,7 @@ pub fn hoist<I: Inst, P: Policy<I>>(
         policy.begin(&Facts {
             inside: &inside,
             blocks: &blocks,
+            members: &members,
             named: &named,
             copied: &copied,
             defs: &defs,
@@ -254,8 +289,8 @@ pub fn hoist<I: Inst, P: Policy<I>>(
         loop {
             let mut any = false;
             let mut renames: Vec<(u32, u32)> = Vec::new();
-            for at in blocks.iter().map(|block| block.at).filter(|at| inside.contains(at)).collect::<Vec<_>>() {
-                let number = place[&at];
+            for &number in &members {
+                let at = blocks[number].at;
                 let insns = blocks[number].insns.clone();
                 let mut keep: Vec<I> = Vec::new();
                 for (index, one) in insns.iter().enumerate() {
@@ -265,6 +300,7 @@ pub fn hoist<I: Inst, P: Policy<I>>(
                     let facts = Facts {
                         inside: &inside,
                         blocks: &blocks,
+                        members: &members,
                         named: &named,
                         copied: &copied,
                         defs: &defs,

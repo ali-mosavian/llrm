@@ -29,6 +29,7 @@ CRT0 = f"""\t.module crt0
 \t.area _CODE
 \t.area _CONST
 \t.area _DATA
+\t.area _BSS
 """
 REPORT = f"""\t.module report
 \t.globl _report
@@ -48,6 +49,17 @@ _report::
 \tld ({LOG:#x}),hl
 \tret
 """
+
+
+def zero_areas(link_map, areas=("_BSS",)):
+    """ucsim commands that zero the areas the program expects cleared at start (RAM starts as noise); a loader's job, not the program's clocks."""
+    commands = ""
+    for area in areas:
+        start = re.search(rf"([0-9A-F]{{8}})\s+s_{area}\b", link_map)
+        length = re.search(rf"([0-9A-F]{{8}})\s+l_{area}\b", link_map)
+        if start and length and int(length.group(1), 16):
+            commands += f"fill rom {int(start.group(1), 16):#x} {int(start.group(1), 16) + int(length.group(1), 16) - 1:#x} 0\n"
+    return commands
 
 
 def sh(cmd, cwd, inp=None, timeout=300):
@@ -124,13 +136,13 @@ def one(job):
         a = sh(["sdasz80", "-g", "-o", f"{stem}.rel", f"{stem}.s"], w)
         if a.returncode:
             return name, "ASM", (a.stdout + a.stderr).strip().splitlines()[-1][:100]
-    k = sh(["sdldz80", "-i", "-b", "_CODE=0x100", "x.ihx", "crt0.rel", "p.rel", "report.rel", "rt.rel", "-k", args.libc, "-l", "libc"], w)
+    k = sh(["sdldz80", "-i", "-m", "-b", "_CODE=0x100", "x.ihx", "crt0.rel", "p.rel", "report.rel", "rt.rel", "-k", args.libc, "-l", "libc"], w)
     if k.returncode or "?ASlink-W-Undefined" in k.stdout + k.stderr:
         undefined = sorted(set(re.findall(r"Undefined Global (\S+)", k.stdout + k.stderr)))
         return name, "LINK", " ".join(undefined)[:140] or (k.stdout + k.stderr)[-100:]
     try:
         r = sh(["ucsim_z80", "-t", "Z80", "-q", "-w", "x.ihx", "-c", "-"], w,
-               f"sp_limit=0\nrun\nstate\ndump rom {LOG:#x} {LOG + 0xFFF:#x}\nquit\n", timeout=args.timeout)
+               f"sp_limit=0\n{zero_areas((w / 'x.map').read_text())}run\nstate\ndump rom {LOG:#x} {LOG + 0xFFF:#x}\nquit\n", timeout=args.timeout)
     except subprocess.TimeoutExpired:
         return name, "HALT", f"no halt in {args.timeout} s"
     if "Halted" not in r.stdout:
