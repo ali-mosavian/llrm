@@ -425,12 +425,22 @@ pub fn to_lir<T: Target>(
         while reachable[at] && position < block.insts.len() {
             let inst = &block.insts[position];
             if let Some(lanes) = made.pack_lanes(inst) {
-                // one copy per part, each with the origin of the `PACK`
-                for lane in lanes {
+                // one copy per part, each with the origin of the `PACK`; the
+                // part is still hinted the lane of the register its whole is
+                // copied to (the join may not reach it: a loop's phi)
+                let (_, mut own, ..) = operand_infos::<T>(inst, &function.classes, &clobbered_by_spills);
+                hint_lanes::<T>(inst, &whole_homes, registers, &mut own);
+                for (k, lane) in lanes.into_iter().enumerate() {
                     let ordinal = made.origin.len() as i64;
                     made.origin.push((at, position));
                     foldable.push(None);
-                    infos.push(("", Vec::new()));
+                    let part = own
+                        .iter()
+                        .filter(|info| !info.def && info.index == k)
+                        .cloned()
+                        .map(|info| OperandInfo { index: 0, ..info })
+                        .collect();
+                    infos.push((COPY, part));
                     insns.push(Arc::new(made.lane_copy(lane, 2 * ordinal)));
                 }
                 position += 1;
