@@ -477,12 +477,39 @@ pub fn commutative(what: &Semantics) -> bool {
         || (what.op == Operation::Multiply && what.name.as_deref() == Some("imul"))
 }
 
+/// `SHLD B, C, I <-> SHRD C, B, (BitWidth - I)`: the immediate-count double
+/// shifts are commutable (`ShlrdOpRRI8U_R`, `isCommutable`;
+/// X86InstrShiftRotate.td#L350).
+fn funnel_commutable(what: &Semantics) -> bool {
+    what.op == Operation::Funnel
+        && matches!(what.name.as_deref(), Some("shld" | "shrd"))
+        && matches!(what.sources.get(2), Some(Loc::Imm(_)))
+}
+
+/// `commuteInstructionImpl` for the double shifts: the opposite shift of the
+/// swapped sources, by `Size - Amt`
+/// ([X86InstrInfo.cpp#L2327](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L2327)).
+pub(crate) fn commute_funnel(
+    what: &Semantics,
+    first: &Held,
+) -> Semantics {
+    let size = i64::from(first.width) * 8;
+    let name = if what.name.as_deref() == Some("shld") { "shrd" } else { "shld" };
+    let mut sources = vec![what.sources[1].clone(), what.sources[0].clone()];
+    sources.push(match &what.sources[2] {
+        Loc::Imm(count) => Loc::Imm(ir::Imm { value: size - count.value, ..count.clone() }),
+        other => other.clone(),
+    });
+    Semantics { name: Some(name.into()), sources, ..what.clone() }
+}
+
 pub(crate) fn swappable_held(one: &Insn) -> Option<(&Held, &Held, &Held)> {
     let what = one.what.as_ref()?;
     let cmov = what.op == Operation::Select && what.name.as_deref().and_then(super::flagscopy::opposite_cmov).is_some();
-    if !(commutative(what) || cmov)
+    let funnel = funnel_commutable(what);
+    if !(commutative(what) || cmov || funnel)
         || what.dests.len() != 1
-        || what.sources.len() != 2
+        || what.sources.len() != if funnel { 3 } else { 2 }
         || one.group.is_some()
         || !one.requires.is_empty()
         || !one.delivers.is_empty()
@@ -1068,6 +1095,29 @@ mod tests {
     fn test_noncommutative_or_implicit_arithmetic_is_not_swapped() {
         for name in ["sub", "sbb", "shl"] {
             assert!(commuted(dying_second(name, Operation::Binary), 2).is_none(), "{name}");
+        }
+    }
+
+    /// `shld a, b, k` with `b` dying and `a` live was left untied (copy of
+    /// `a`); the pin commutes it to `shrd b, a, Size - k`.
+    #[test]
+    fn test_a_double_shift_with_a_dying_second_source_swaps_to_the_opposite_shift() {
+        let count = |value| Loc::Imm(Imm { value, width: 1, address: None });
+        let shift = |name: &str, first: u32, second: u32, k: i64| {
+            let what = Semantics {
+                name: Some(name.into()),
+                dests: vec![held(3, 4)],
+                sources: vec![held(first, 4), held(second, 4), count(k)],
+                ..Semantics::new(Operation::Funnel)
+            };
+            Arc::new(Insn::new(2, Some((2, 2)), Some(what), vec![3], vec![first, second]))
+        };
+        for (name, swapped) in [("shld", "shrd"), ("shrd", "shld")] {
+            let insns = vec![imm_def(0, 1), imm_def(1, 2), shift(name, 1, 2, 9), read(3, 1), read(4, 3)];
+            let chosen = commuted(insns, 2).expect("swapped");
+            let what = chosen.what.as_ref().unwrap();
+            assert_eq!(what.name.as_deref(), Some(swapped));
+            assert_eq!(what.sources, vec![held(2, 4), held(1, 4), count(23)]);
         }
     }
 

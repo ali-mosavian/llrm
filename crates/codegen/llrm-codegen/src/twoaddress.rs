@@ -29,8 +29,10 @@
 //!
 //! DEVIATE TA-3 (exit: the translated pass owns the instruction list): the
 //! pin sees a tied use through `isRegTiedToUseOperand`; here only the
-//! commutative `Binary` `add`, `and`, `or`, `xor` and `Multiply` `imul`
-//! of three values of one width are candidates, as `_swappable` finds them.
+//! commutative `Binary` `add`, `adc`, `and`, `or`, `xor` and SSE ops,
+//! `Multiply` `imul`, `cmov` and the immediate `shld`/`shrd` (swapped as the
+//! other shift of `Size - Amt`) of values of one width are candidates, as
+//! `swappable_held` finds them.
 //!
 //! A tied `add` or `sub` of a dword, whose first source lives on past it and
 //! whose flags nothing reads, is made three-address: `d := lea [a + k]` or
@@ -1585,6 +1587,10 @@ impl<'a> Commuter<'a> {
         }
         // `commuteInstruction`: the sources swap.
         let mut made = (**one).clone();
+        if what.op == ir::Operation::Funnel {
+            made.what = Some(crate::backend::twoaddr::commute_funnel(what, first));
+            return Some(Arc::new(made));
+        }
         // A `cmov` also takes the opposite condition.
         let name = what.name.as_deref().and_then(|name| {
             (what.op == ir::Operation::Select).then(|| crate::backend::flagscopy::opposite_cmov(name)).flatten()
