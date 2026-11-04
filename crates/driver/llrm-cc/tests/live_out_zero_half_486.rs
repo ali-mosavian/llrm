@@ -7,7 +7,7 @@
 use std::path::Path;
 use std::process::Command;
 
-const SOURCE: &str = "typedef unsigned long long u64; typedef unsigned u32;\nextern u64 gv;\nu64 h(u64 mb, u32 d, u32 e, int c)\n{\n    u64 m = mb & 0x1FFFFF;\n    u64 r = (u64)d * m;\n    if (c) { gv = m; r += (u64)e * m; }\n    return r;\n}\n";
+const SOURCE: &str = "typedef unsigned long long u64; typedef unsigned u32;\nextern u64 gv;\nu64 h(u64 mb, u32 d, u32 e, int c)\n{\n    u64 m = mb & 0x1FFFFF;\n    u64 r = (u64)d * m;\n    if (c) { gv = m; r ^= (u64)e * m; }\n    return r;\n}\n";
 
 #[test]
 fn a_product_with_a_zero_extended_value_from_another_block_is_one_mul() {
