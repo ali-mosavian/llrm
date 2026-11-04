@@ -332,6 +332,11 @@ fn moved_body(
             .collect::<Option<std::collections::BTreeMap<_, _>>>()?,
     );
     out.variables = body.variables.iter().map(|one| moved.variable(one)).collect::<Option<Vec<_>>>()?;
+    out.vector_saves = body
+        .vector_saves
+        .iter()
+        .map(|(register, cell)| Some((*register, moved.mem(cell)?)))
+        .collect::<Option<Vec<_>>>()?;
     Some(out)
 }
 
@@ -837,6 +842,7 @@ mod tests {
             pops: Default::default(),
             popped: 0,
             registers: llrm_target::FrameRegisters {
+                vector_saved: Vec::new(),
                 pointer: RegId::BP,
                 stack: RegId::SP,
                 saved: Vec::new(),
