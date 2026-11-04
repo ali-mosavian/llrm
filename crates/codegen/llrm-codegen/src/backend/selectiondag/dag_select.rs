@@ -123,6 +123,19 @@ pub fn select_block(
     emit_in(dag, &units, ctx, state, first_at).map_err(Refusal::Emit)
 }
 
+/// `SelectCodeCommon` for `AssertSext` and `AssertZext`: each is its operand.
+/// DEVIATE SD43: the pin drops them while matching; here ahead of the matcher,
+/// which has no id for them. Same selected code.
+pub fn remove_assertions(dag: &mut SelectionDAG) {
+    for node in dag.node_ids().collect::<Vec<_>>() {
+        let value = SDValue { node, res: 0 };
+        if matches!(dag.opcode(value), ISD::AssertSext | ISD::AssertZext) {
+            let operand = dag.operand(value, 0);
+            dag.replace_all_uses_with(value, operand);
+        }
+    }
+}
+
 /// `CodeGenAndEmitDAG` up to selection: `Combine` at each of three levels
 /// around the two legalizers. The select shadow calls this same function.
 pub fn legalized(
@@ -204,7 +217,16 @@ pub fn do_instruction_selection_with(
     // refused ("operand Truncate before its definition").
     let mut made: Vec<u32> = Vec::new();
     let mut rest = order.into_iter();
-    while let Some(node) = made.pop().or_else(|| rest.next()) {
+    // `insertDAGNode` puts a node before the one being matched, which is
+    // an operand of the node being selected: the walk reaches it after that
+    // node's users. One whose users are not all selected waits.
+    let mut next = |adapter: &DagisAdapter<'_>, made: &mut Vec<u32>| {
+        match made.iter().rposition(|&m| adapter.is_dead(m) || !adapter.has_pending_user(m)) {
+            Some(at) => Some(made.remove(at)),
+            None => rest.next().or_else(|| made.pop()),
+        }
+    };
+    while let Some(node) = next(&adapter, &mut made) {
         // `Node->use_empty()`: a node selection left unused is dead.
         if adapter.is_dead(node) || !(node == adapter.dag.get_root().node || adapter.has_live_users(node)) {
             continue;
@@ -212,9 +234,11 @@ pub fn do_instruction_selection_with(
         if matches!(adapter.dag.nodes()[node as usize].opcode, ISD::Machine(_)) {
             continue;
         }
-        // `SelectCodeCommon`, `ISD::AssertSext`/`AssertZext`: each is its
-        // operand once its users are selected, so their predicates (the pin's
-        // `smullwithsignbits`) have read what it asserts.
+        // `SelectCodeCommon` for `AssertSext` and `AssertZext`: each is its
+        // operand, once the users that read what it asserts are selected
+        // (a pattern predicate sees the assertion; `smull` of a value
+        // another block extended). Targets that call `remove_assertions`
+        // first have none left.
         if matches!(
             adapter.dag.nodes()[node as usize].opcode,
             ISD::AssertSext | ISD::AssertZext

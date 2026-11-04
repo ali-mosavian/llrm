@@ -898,10 +898,10 @@ mod tests {
             .collect()
     }
 
-    /// Two arrays off one stepped offset beside the counter: two steps by
-    /// constants, one by the element size (2) and one by one (the
-    /// counter, `inc`, or counting to zero `add -1` with no compare), and at
-    /// most one compare. A pointer per array is a third step.
+    /// Two arrays off one stepped offset: either beside the counter (two
+    /// steps by constants, one by the element size (2) and one by one, and at
+    /// most one compare), or the offset is the counter (LG3: one step by 2
+    /// that ends the loop, no compare). A pointer per array is another step.
     fn shares_one_stepped_offset(counting: &[String]) {
         let steps: Vec<&String> = counting.iter().filter(|one| !one.starts_with("cmp ")).collect();
         let compares = counting.len() - steps.len();
@@ -912,7 +912,8 @@ mod tests {
         };
         let counter = steps.iter().any(|one| by(one, "1") || by(one, "-1"));
         let offset = steps.iter().any(|one| by(one, "2"));
-        assert!(steps.len() == 2 && counter && offset && compares <= 1, "{counting:?}");
+        let shared = steps.len() == 1 && compares == 0;
+        assert!(offset && (shared || steps.len() == 2 && counter && compares <= 1), "{counting:?}");
     }
 
     /// `dot` indexes `a[i]` and `b[i]`: both arrays share one stepped offset
@@ -928,11 +929,12 @@ mod tests {
     /// (`inc; cmp`).
     #[test]
     fn test_a_counter_read_only_as_offsets_counts_to_zero() {
-        // The counter is the offset: one step by one and one compare with `n`
-        // (a register or its stack slot), nothing else.
+        // The counter is the offset: one step by one, ending the loop (LG3) or
+        // followed by one compare with `n` (a register or its stack slot).
         let counting = loop_counting("bytes");
         assert!(
-            counting.len() == 2 && counting[0].starts_with("inc ") && counting[1].starts_with("cmp "),
+            counting[0].starts_with("inc ")
+                && (counting.len() == 1 || counting.len() == 2 && counting[1].starts_with("cmp ")),
             "{counting:?}"
         );
     }
@@ -3826,7 +3828,7 @@ mod tests {
         // The load is the add's operand, addressed by a 32-bit register; the
         // pointer or the index steps by a constant and a conditional
         // jump ends the loop (llc lists `inc; cmp; jl` or, counting to zero,
-        // `add -1; jne`).
+        // `add -1; jne`); sharing the exit counter (LG3) leaves one step.
         let at = body.iter().position(|line| line.starts_with("add e") && line.contains("dword ptr [e"));
         let at = at.unwrap_or_else(|| panic!("{body:#?}"));
         let jump = body[at..].iter().position(|line| line.starts_with('j') && !line.starts_with("jmp")).map(|k| at + k);
@@ -3840,7 +3842,8 @@ mod tests {
                         && line.rsplit(", ").next().is_some_and(|last| last.parse::<i64>().is_ok()))
             })
             .count();
-        assert!(steps >= 2, "the pointer or index and the counter step by constants: {body:#?}");
+        let ends_loop = steps == 1 && jump > 0 && body[jump - 1].starts_with("inc e");
+        assert!(steps >= 2 || ends_loop, "the pointer or index and the counter step by constants: {body:#?}");
         assert!(
             body.iter().all(|line| !line.contains(" bp")
                 && !line.contains("[bx")

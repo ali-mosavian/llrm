@@ -256,6 +256,35 @@ fn long_shifts_by_a_variable() {
     assert_eq!(long("shl-0", "__ashlsi3", 0x1234_5678, 0), 0x1234_5678);
 }
 
+/// The speed variants move whole bytes while the count is 8 or more, then
+/// shift the rest bit by bit. Every count from 0 to 40 against the shift a
+/// 32-bit integer does (a count of 32 or more empties the register, or fills it
+/// with the sign).
+#[test]
+fn the_fast_long_shifts_agree_with_the_bit_loops_for_every_count() {
+    let value = 0x8123_45E7u32;
+    for n in [0u32, 1, 7, 8, 9, 15, 16, 17, 23, 24, 25, 31, 32, 33, 40] {
+        let shl = if n < 32 { value << n } else { 0 };
+        let shr = if n < 32 { value >> n } else { 0 };
+        let sar = ((value as i32) >> n.min(31)) as u32;
+        assert_eq!(long(&format!("fshl-{n}"), "__ashlsi3_fast", value, n), shl, "{value:#x} << {n}");
+        assert_eq!(long(&format!("fshr-{n}"), "__lshrsi3_fast", value, n), shr, "{value:#x} >> {n}");
+        assert_eq!(long(&format!("fsar-{n}"), "__ashrsi3_fast", value, n), sar, "{value:#x} >>s {n}");
+    }
+}
+
+/// `__ashlsi3` shifted one bit per trip of a loop of 25 clocks: a shift by 21,
+/// the average one of f32 add (`__ashlsi3` was 18% of it), took about 530
+/// clocks. The speed variant is two byte moves and five bits, under 260.
+#[test]
+fn a_long_shift_by_21_takes_whole_byte_steps() {
+    let empty = common::cycles_with("fshl-empty", "", "");
+    let setup = "  lda #1\n  sta __sa\n  lda #21\n  sta __sb\n";
+    let setup_only = common::cycles_with("fshl-setup", setup, "") - empty;
+    let fast = common::cycles_with("fshl-21", &format!("{setup}  jsr __ashlsi3_fast\n"), "") - empty - setup_only;
+    assert!(fast < 260, "1 << 21 took {fast} clocks");
+}
+
 /// A word multiply by a small multiplier ran all sixteen iterations: 1234 * 56
 /// took about 640 cycles (bench set 2, `mul16`). It stops when the multiplier
 /// has no bits left.

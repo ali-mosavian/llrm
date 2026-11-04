@@ -49,6 +49,9 @@ const OPCODE_END: u8 = 0x0b;
 const SYMBOL_KIND_DATA: u8 = 1;
 const WASM_SEGMENT_INFO: u8 = 5;
 const SECTION_CUSTOM: u8 = 0;
+const SYMBOL_KIND_SECTION: u8 = 3;
+const R_WASM_FUNCTION_OFFSET_I32: u8 = 8;
+const R_WASM_SECTION_OFFSET_I32: u8 = 9;
 const LINKING_VERSION: u8 = 2;
 const WASM_SYMBOL_TABLE: u8 = 8;
 const SYMBOL_KIND_FUNCTION: u8 = 0;
@@ -273,6 +276,34 @@ fn symbol_flags(
     binding | if hidden { WASM_SYMBOL_VISIBILITY_HIDDEN } else { 0 }
 }
 
+/// What a relocation in a debug section names.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DebugTarget {
+    /// `R_WASM_FUNCTION_OFFSET_I32`: the function of this name, a byte offset
+    /// into its body (the field holds the offset, the addend repeats it).
+    Function(String),
+    /// `R_WASM_SECTION_OFFSET_I32`: the debug section of this index in the
+    /// list given to [`write_with_debug`], a byte offset into it.
+    Section(usize),
+}
+
+/// A four-byte field of a debug section the linker rewrites.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DebugReloc {
+    pub offset: usize,
+    pub target: DebugTarget,
+    pub addend: i64,
+}
+
+/// A custom `.debug_*` section and the relocations (`reloc..debug_*`) against
+/// it. `WasmObjectWriter::writeCustomSection` and `writeRelocSection`.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct DebugSection {
+    pub name: String,
+    pub bytes: Vec<u8>,
+    pub relocs: Vec<DebugReloc>,
+}
+
 /// A function after the passes, encoded: the body is the locals and the code.
 pub struct Encoded {
     pub name: String,
@@ -289,6 +320,16 @@ pub struct Encoded {
     /// The function has a personality: the pin keeps the indirect function
     /// table alive for it.
     pub personality: bool,
+    /// The body offset and source line of each instruction that has one.
+    pub lines: Vec<(usize, u32)>,
+    /// `-g`: the metadata record and the stack-pointer displacement of each
+    /// variable that lives in a stack object.
+    pub variables: Vec<(u32, i64)>,
+    /// The local that holds the stack pointer after the prologue.
+    pub frame_base: Option<u32>,
+    /// `-g`: the metadata record and the local of each variable that is an
+    /// argument the code never overwrites.
+    pub argument_variables: Vec<(u32, u32)>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -350,7 +391,11 @@ pub fn encode_function(f: &Function) -> Encoded {
         body.push(val_type(ty));
     }
     let mut relocs = Vec::new();
+    let mut lines = Vec::new();
     for inst in f.blocks.iter().flatten() {
+        if inst.line != 0 {
+            lines.push((body.len(), inst.line));
+        }
         encode_instruction(&mut body, inst, &f.symbols, &f.signatures, &mut relocs);
     }
     Encoded {
@@ -364,6 +409,54 @@ pub fn encode_function(f: &Function) -> Encoded {
         binding: f.binding,
         hidden: f.hidden,
         personality: f.personality,
+        lines,
+        variables: f.variables.iter().map(|one| (one.record, one.disp)).collect(),
+        frame_base: frame_base_local(f),
+        argument_variables: unwritten_arguments(f),
+    }
+}
+
+/// The variables that are arguments, whose local no instruction writes: the
+/// local holds the argument through the whole function.
+fn unwritten_arguments(f: &Function) -> Vec<(u32, u32)> {
+    use crate::dagisel::generated::ids::opcode as op;
+    let written: std::collections::BTreeSet<i64> = f
+        .blocks
+        .iter()
+        .flatten()
+        .filter_map(|inst| match (inst.opcode, &inst.operands[..]) {
+            (
+                op::LOCAL_SET_I32 | op::LOCAL_SET_I64 | op::LOCAL_SET_F32 | op::LOCAL_SET_F64,
+                [Operand::Imm(local), ..],
+            ) => Some(*local),
+            (code, [_, Operand::Imm(local), ..]) if is_local_tee(code) => Some(*local),
+            _ => None,
+        })
+        .collect();
+    f.argument_variables
+        .iter()
+        .filter(|&&(_, number)| (number as usize) < f.params.len() && !written.contains(&i64::from(number)))
+        .copied()
+        .collect()
+}
+
+fn is_local_tee(opcode: u16) -> bool {
+    use crate::dagisel::post_ids as post;
+    [post::LOCAL_TEE_I32, post::LOCAL_TEE_I64, post::LOCAL_TEE_F32, post::LOCAL_TEE_F64].contains(&opcode)
+}
+
+/// The local the prologue stores the lowered stack pointer in: the `local.set`
+/// after `global.get __stack_pointer; const N; sub`. None where the function
+/// has no frame of its own, or keeps the value on the stack.
+fn frame_base_local(f: &Function) -> Option<u32> {
+    use crate::dagisel::generated::ids::opcode as op;
+    let insts: Vec<&crate::mir::Inst> = f.blocks.iter().flatten().collect();
+    let at = insts.iter().position(|one| matches!(one.opcode, op::SUB_I32 | op::SUB_I64))?;
+    insts.get(at.checked_sub(2)?).filter(|one| matches!(one.opcode, op::GLOBAL_GET_I32 | op::GLOBAL_GET_I64))?;
+    let set = insts.get(at + 1).filter(|one| matches!(one.opcode, op::LOCAL_SET_I32 | op::LOCAL_SET_I64))?;
+    match set.operands.first().copied() {
+        Some(Operand::Imm(local)) => u32::try_from(local).ok(),
+        _ => None,
     }
 }
 
@@ -540,6 +633,17 @@ pub fn write(
     functions: &[Encoded],
     data: &Data,
     features: crate::features::Features,
+) -> Vec<u8> {
+    write_with_debug(functions, data, features, &[])
+}
+
+/// [`write`] with custom debug sections after the data: each one, its
+/// section symbol in the `linking` table, and its `reloc.` section.
+pub fn write_with_debug(
+    functions: &[Encoded],
+    data: &Data,
+    features: crate::features::Features,
+    debug: &[DebugSection],
 ) -> Vec<u8> {
     let objects = &data.objects;
     let mut symbols: Vec<Symbol> = Vec::new();
@@ -840,11 +944,14 @@ pub fn write(
         }
         section(&mut out, SECTION_DATA, &payload);
     }
+    for one in debug {
+        custom(&mut out, &one.name, &one.bytes);
+    }
 
     payload.clear();
     payload.push(LINKING_VERSION);
     let mut table = Vec::new();
-    uleb(&mut table, symbols.len() as u64);
+    uleb(&mut table, (symbols.len() + debug.len()) as u64);
     for (s, symbol) in symbols.iter().enumerate() {
         match symbol {
             Symbol::Function { name: function, defined, binding, hidden, .. } => {
@@ -888,6 +995,16 @@ pub fn write(
                 uleb(&mut table, u64::from(index_of[s]));
             }
         }
+    }
+    // The first section after the data is the first debug section.
+    let first_debug = SECTION_INDEX_CODE
+        + u64::from(!slots.is_empty())
+        + u64::from(!objects.is_empty())
+        + 1
+        + u64::from(!objects.is_empty());
+    for s in 0..debug.len() {
+        table.extend([SYMBOL_KIND_SECTION, WASM_SYMBOL_BINDING_LOCAL]);
+        uleb(&mut table, first_debug + s as u64);
     }
     payload.push(WASM_SYMBOL_TABLE);
     uleb_padded(&mut payload, table.len() as u32);
@@ -945,6 +1062,26 @@ pub fn write(
             }
         }
         custom(&mut out, "reloc.DATA", &payload);
+    }
+
+    for (s, one) in debug.iter().enumerate() {
+        if one.relocs.is_empty() {
+            continue;
+        }
+        payload.clear();
+        uleb(&mut payload, first_debug + s as u64);
+        uleb(&mut payload, one.relocs.len() as u64);
+        for reloc in &one.relocs {
+            let (code, symbol) = match &reloc.target {
+                DebugTarget::Function(function) => (R_WASM_FUNCTION_OFFSET_I32, position(function)),
+                DebugTarget::Section(i) => (R_WASM_SECTION_OFFSET_I32, symbols.len() + i),
+            };
+            payload.push(code);
+            uleb(&mut payload, reloc.offset as u64);
+            uleb(&mut payload, symbol as u64);
+            sleb(&mut payload, reloc.addend);
+        }
+        custom(&mut out, &format!("reloc.{}", one.name), &payload);
     }
 
     payload.clear();

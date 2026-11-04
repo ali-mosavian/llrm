@@ -31,7 +31,7 @@
 //! version over the arm64 selector's operations, standing in until the core
 //! machine passes run on arm64 (docs/architecture/arm64-spike.md).
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use crate::mc::inst::*;
 use crate::mc::visit::{Reg, RegRef, Role};
@@ -191,7 +191,7 @@ fn dominates(
 
 /// How many definitions each virtual register has.
 fn definitions(function: &MFunc) -> HashMap<Reg, usize> {
-    let mut count: HashMap<Reg, usize> = HashMap::new();
+    let mut count: HashMap<Reg, usize> = HashMap::default();
     for block in &function.blocks {
         for op in &block.ops {
             for register in op.defs_and_uses().0 {
@@ -270,7 +270,104 @@ pub fn run(function: &mut MFunc) {
     dead_definitions(function);
     non_flag_setting(function);
     redundant_zero_extends(function);
-    low_half_extends(function);
+    narrow_extension_uses(function);
+    dead_code(function);
+}
+
+/// The registers `op` reads as 32 bits: the operands of a `W` form and of the
+/// long multiplies.
+fn narrow_reads(op: &mut Op) -> Vec<&mut Gpr> {
+    match op {
+        Op::I(Inst::ThreeSource { op, width, rn, rm, ra, .. }) => match (op, width) {
+            (Mul3::Smaddl | Mul3::Smsubl | Mul3::Umaddl | Mul3::Umsubl, _) => vec![rn, rm],
+            (Mul3::Madd | Mul3::Msub, Width::W) => vec![rn, rm, ra],
+            _ => Vec::new(),
+        },
+        Op::I(Inst::AddSubImm { width: Width::W, rn, .. } | Inst::LogicImm { width: Width::W, rn, .. }) => vec![rn],
+        Op::I(
+            Inst::AddSubShifted { width: Width::W, rn, rm, .. } | Inst::LogicShifted { width: Width::W, rn, rm, .. },
+        ) => vec![rn, rm],
+        _ => Vec::new(),
+    }
+}
+
+/// `PeepholeOptimizer::optimizeExtInstr`
+/// ([PeepholeOptimizer.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/PeepholeOptimizer.cpp#L587),
+/// `AArch64InstrInfo::isCoalescableExtInstr`): a 32 to 64 bit extension whose
+/// result is only read as 32 bits (through copies) is not needed; the readers
+/// take its source. `switch`'s `digit * digit` kept `sxtw` for the `smull`
+/// that reads its low half.
+fn narrow_extension_uses(function: &mut MFunc) {
+    let definitions = definitions(function);
+    let copies = single_copies(function, &definitions);
+    let root = |mut register: Reg| {
+        while let Some(&next) = copies.get(&register) {
+            register = next;
+        }
+        register
+    };
+    let mut extensions: HashMap<Reg, Reg> = HashMap::default();
+    for op in function.blocks.iter().flat_map(|block| &block.ops) {
+        if let Op::I(Inst::BitfieldMove {
+            op: Bitfield::Sbfm | Bitfield::Ubfm,
+            width: Width::X,
+            rd,
+            rn,
+            immr: 0,
+            imms: 31,
+        }) = op
+            && rd.is_virtual()
+            && rn.is_virtual()
+            && definitions.get(&Reg::Gpr(*rd)) == Some(&1)
+            && definitions.get(&Reg::Gpr(*rn)) == Some(&1)
+        {
+            extensions.insert(Reg::Gpr(*rd), Reg::Gpr(*rn));
+        }
+    }
+    if extensions.is_empty() {
+        return;
+    }
+    // An extension is dropped only when every read of it, through copies, is
+    // a 32-bit one.
+    let mut blocked: HashSet<Reg> = HashSet::default();
+    for block in &mut function.blocks {
+        for op in &mut block.ops {
+            let is_copy = matches!(op, Op::Copy { .. });
+            let narrow: Vec<Gpr> = narrow_reads(op).into_iter().map(|slot| *slot).collect();
+            let uses = op.defs_and_uses().1;
+            let mut narrow_left = narrow;
+            for used in uses {
+                let at = root(used);
+                if !extensions.contains_key(&at) || is_copy && used == at {
+                    continue;
+                }
+                match used {
+                    Reg::Gpr(gpr) => match narrow_left.iter().position(|one| *one == gpr) {
+                        Some(index) if !is_copy => {
+                            narrow_left.remove(index);
+                        }
+                        _ if is_copy => {}
+                        _ => {
+                            blocked.insert(at);
+                        }
+                    },
+                    Reg::Fpr(_) => {
+                        blocked.insert(at);
+                    }
+                }
+            }
+        }
+    }
+    for block in &mut function.blocks {
+        for op in &mut block.ops {
+            for slot in narrow_reads(op) {
+                let at = root(Reg::Gpr(*slot));
+                if let Some(&Reg::Gpr(source)) = extensions.get(&at).filter(|_| !blocked.contains(&at)) {
+                    *slot = source;
+                }
+            }
+        }
+    }
 }
 
 /// A flag-setting instruction whose register nothing reads defines the zero
@@ -308,22 +405,6 @@ fn non_flag_setting(function: &mut MFunc) {
     }
 }
 
-/// The blocks each block can reach by one or more edges.
-fn reachable(cfg: &Cfg) -> Vec<HashSet<usize>> {
-    (0..cfg.successors.len())
-        .map(|start| {
-            let mut seen = HashSet::new();
-            let mut stack = cfg.successors[start].clone();
-            while let Some(block) = stack.pop() {
-                if seen.insert(block) {
-                    stack.extend(&cfg.successors[block]);
-                }
-            }
-            seen
-        })
-        .collect()
-}
-
 /// A pure value that is read only below the block making it is made at the
 /// start of the nearest block that dominates its readers, so the paths that
 /// skip them do not pay for it (`MachineSink`; a phi's constant is made on its
@@ -333,8 +414,9 @@ fn sink(function: &mut MFunc) {
     for _ in 0..16 {
         let cfg = cfg(function);
         let definitions = definitions(function);
-        let reach = reachable(&cfg);
-        let mut readers: HashMap<Reg, Vec<usize>> = HashMap::new();
+        let loops = natural_loops(function, &cfg);
+        let depth = |block: usize| loops.iter().filter(|(_, body)| body.contains(&block)).count();
+        let mut readers: HashMap<Reg, Vec<usize>> = HashMap::default();
         for (at, block) in function.blocks.iter().enumerate() {
             for op in &block.ops {
                 for register in op.defs_and_uses().1 {
@@ -365,12 +447,12 @@ fn sink(function: &mut MFunc) {
                         target = cfg.idom[target];
                     }
                 }
-                let in_cycle = |block: usize| reach[block].contains(&block);
-                let same_cycle = reach[from].contains(&target) && reach[target].contains(&from);
+                // "Don't sink into a deeper cycle": the work would repeat on
+                // each trip of an inner loop.
                 if target != from
                     && cfg.order.contains(&target)
                     && dominates(&cfg, from, target)
-                    && (!in_cycle(target) || same_cycle)
+                    && depth(target) <= depth(from)
                 {
                     moves.push((from, index, target));
                 }
@@ -379,7 +461,7 @@ fn sink(function: &mut MFunc) {
         if moves.is_empty() {
             return;
         }
-        let mut sunk: HashMap<usize, Vec<Op>> = HashMap::new();
+        let mut sunk: HashMap<usize, Vec<Op>> = HashMap::default();
         for &(from, index, target) in &moves {
             sunk.entry(target).or_default().push(function.blocks[from].ops[index].clone());
         }
@@ -476,9 +558,9 @@ fn cse(function: &mut MFunc) {
     for &block in cfg.order.iter().skip(1) {
         children[cfg.idom[block]].push(block);
     }
-    let mut rename: HashMap<Reg, Reg> = HashMap::new();
-    let mut removed: HashSet<(usize, usize)> = HashSet::new();
-    let mut table: HashMap<String, Reg> = HashMap::new();
+    let mut rename: HashMap<Reg, Reg> = HashMap::default();
+    let mut removed: HashSet<(usize, usize)> = HashSet::default();
+    let mut table: HashMap<String, Reg> = HashMap::default();
     let copies = single_copies(function, &definitions);
     let mut stack: Vec<(usize, usize, Vec<String>)> = vec![(0, 0, Vec::new())];
     // Depth-first over the tree, undoing a block's entries when it is left.
@@ -606,7 +688,7 @@ fn live_in(
     let count = function.blocks.len();
     let mut gen_kill: Vec<(HashSet<Reg>, HashSet<Reg>)> = Vec::with_capacity(count);
     for block in &function.blocks {
-        let (mut gen_set, mut kill) = (HashSet::new(), HashSet::new());
+        let (mut gen_set, mut kill) = (HashSet::default(), HashSet::default());
         for op in &block.ops {
             let (defs, uses) = op.defs_and_uses();
             gen_set.extend(uses.into_iter().filter(|used| used.is_virtual() && !kill.contains(used)));
@@ -614,7 +696,7 @@ fn live_in(
         }
         gen_kill.push((gen_set, kill));
     }
-    let mut live: Vec<HashSet<Reg>> = vec![HashSet::new(); count];
+    let mut live: Vec<HashSet<Reg>> = vec![HashSet::default(); count];
     let mut changed = true;
     while changed {
         changed = false;
@@ -678,7 +760,7 @@ fn within_pressure(
     use crate::regalloc::pool;
     let made: HashMap<Reg, &Op> =
         candidates.iter().filter_map(|op| defined(op).map(|register| (register, op))).collect();
-    let (mut reads, mut calls) = (HashMap::<Reg, usize>::new(), false);
+    let (mut reads, mut calls) = (HashMap::<Reg, usize>::default(), false);
     for op in blocks.iter().flat_map(|&block| &probe.blocks[block].ops) {
         calls |= matches!(op, Op::Call { .. });
         for used in op.defs_and_uses().1 {
@@ -691,7 +773,7 @@ fn within_pressure(
     // Across a call only the callee-saved registers keep a value.
     let room = |gpr: bool| {
         let (kept, rest) = if gpr {
-            (pool::GPR_CALLEE_SAVED.len(), pool::GPR_CALLER_SAVED.len())
+            (pool::GPR_CALLEE_SAVED.len(), crate::lir_view::gpr_caller_saved_count())
         } else {
             (pool::FPR_CALLEE_SAVED.len(), pool::FPR_CALLER_SAVED.len())
         };
@@ -699,7 +781,7 @@ fn within_pressure(
     };
     // Equal values made in different blocks are one value once hoisted (the
     // `cse` after it joins them): they cost one register, and are read by all.
-    let mut groups: HashMap<String, (Vec<Reg>, usize)> = HashMap::new();
+    let mut groups: HashMap<String, (Vec<Reg>, usize)> = HashMap::default();
     for (register, count) in reads {
         let group = groups.entry(keyed(made[&register])).or_default();
         group.0.push(register);
@@ -710,7 +792,7 @@ fn within_pressure(
         registers.sort();
     }
     roots.sort_by(|(a, x), (b, y)| y.cmp(x).then(a.cmp(b)));
-    let mut chosen: HashSet<Reg> = HashSet::new();
+    let mut chosen: HashSet<Reg> = HashSet::default();
     let (mut gprs, mut fprs) = (room(true), room(false));
     for (registers, _) in roots {
         let gpr = matches!(registers[0], Reg::Gpr(_));
@@ -730,17 +812,17 @@ fn within_pressure(
     chosen
 }
 
-/// Loop-invariant pure definitions move to the end of the loop's preheader.
-fn hoist(function: &mut MFunc) {
-    let cfg = cfg(function);
-    let definitions = definitions(function);
-    let live = live_in(function, &cfg);
-    // The natural loops: a back edge's header dominates its tail.
+/// The natural loops, each as its header and body: a back edge's header
+/// dominates its tail.
+fn natural_loops(
+    function: &MFunc,
+    cfg: &Cfg,
+) -> Vec<(usize, HashSet<usize>)> {
     let mut loops: Vec<(usize, HashSet<usize>)> = Vec::new();
     for tail in 0..function.blocks.len() {
         for &header in &cfg.successors[tail] {
-            if cfg.idom[tail] != usize::MAX && dominates(&cfg, header, tail) {
-                let mut body: HashSet<usize> = HashSet::from([header, tail]);
+            if cfg.idom[tail] != usize::MAX && dominates(cfg, header, tail) {
+                let mut body: HashSet<usize> = [header, tail].into_iter().collect();
                 let mut work = vec![tail];
                 while let Some(block) = work.pop() {
                     if block == header {
@@ -759,6 +841,15 @@ fn hoist(function: &mut MFunc) {
             }
         }
     }
+    loops
+}
+
+/// Loop-invariant pure definitions move to the end of the loop's preheader.
+fn hoist(function: &mut MFunc) {
+    let cfg = cfg(function);
+    let definitions = definitions(function);
+    let live = live_in(function, &cfg);
+    let mut loops = natural_loops(function, &cfg);
     // Innermost first, so a value hoisted out of an inner loop can go on out of
     // the outer one.
     loops.sort_by_key(|(_, body)| body.len());
@@ -766,7 +857,7 @@ fn hoist(function: &mut MFunc) {
         let outside: Vec<usize> = cfg.predecessors[header].iter().copied().filter(|one| !body.contains(one)).collect();
         let [preheader] = outside[..] else { continue };
         // What the loop defines.
-        let mut inside_defs: HashSet<Reg> = HashSet::new();
+        let mut inside_defs: HashSet<Reg> = HashSet::default();
         for &block in &body {
             for op in &function.blocks[block].ops {
                 inside_defs.extend(op.defs_and_uses().0);
@@ -872,6 +963,104 @@ mod tests {
         assert_eq!((movzs(0), movzs(1)), (2, 0), "{function:#?}");
     }
 
+    /// A loop of 15 constants kept two in the loop (`switch`: `mov w1, #37` on
+    /// every trip, +2177 executed over the pin): the allocatable set lacked x15
+    /// and x18, which the pin hands out on Linux, so hoisting had room for 13.
+    #[test]
+    fn fifteen_loop_constants_are_all_hoisted_on_linux() {
+        crate::lir_view::set_darwin(false);
+        let mut ops = Vec::new();
+        for n in 0..15u32 {
+            ops.push(movz(100 + n, n as u16 + 1));
+            ops.push(add(64, 64, 100 + n));
+        }
+        ops.push(Op::I(Inst::CompareBranch {
+            nonzero: true,
+            width: Width::X,
+            rt: Gpr(64),
+            target: Target::Label("loop".into()),
+        }));
+        ops.push(branch_to("exit"));
+        let mut function = MFunc::new("f");
+        function.next_register = 300;
+        function.blocks = vec![
+            MBlock { label: "entry".into(), ops: vec![movz(64, 0), branch_to("loop")].into() },
+            MBlock { label: "loop".into(), ops: ops.into() },
+            MBlock { label: "exit".into(), ops: vec![Op::Return { uses: vec![], tail: None }].into() },
+        ];
+        hoist(&mut function);
+        let made = |block: usize| {
+            function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
+        };
+        assert_eq!(made(1), 0, "{function:#?}");
+    }
+
+    /// `sxtw` was kept for a `smull` that reads only the low half of its
+    /// result (`switch`: `sbfm x15, x1, #0, #31` and +4 B). The pin's
+    /// `optimizeExtInstr` has the reader take the source.
+    #[test]
+    fn an_extension_read_only_as_32_bits_is_dropped() {
+        let sext = Op::I(Inst::BitfieldMove {
+            op: Bitfield::Sbfm,
+            width: Width::X,
+            rd: Gpr(71),
+            rn: Gpr(70),
+            immr: 0,
+            imms: 31,
+        });
+        let smull = Op::I(Inst::ThreeSource {
+            op: Mul3::Smaddl,
+            width: Width::X,
+            rd: Gpr(72),
+            rn: Gpr(71),
+            rm: Gpr(71),
+            ra: Gpr(31),
+        });
+        let mut function = MFunc::new("f");
+        function.next_register = 80;
+        function.blocks = vec![MBlock {
+            label: "entry".into(),
+            ops: vec![movz(70, 3), sext, smull, Op::Return { uses: vec![Reg::Gpr(Gpr(72))], tail: None }].into(),
+        }];
+        narrow_extension_uses(&mut function);
+        dead_code(&mut function);
+        let extensions =
+            function.blocks[0].ops.iter().filter(|op| matches!(op, Op::I(Inst::BitfieldMove { .. }))).count();
+        assert_eq!(extensions, 0, "{function:#?}");
+    }
+
+    /// A value made in an outer loop was sunk into the inner loop that reads it
+    /// and made on every trip of it (tile at -O1: `add x13, x11, x13, lsl #7`
+    /// in the inner loop, +975 executed, 3%). `MachineSink` does not sink into
+    /// a deeper cycle.
+    #[test]
+    fn a_value_is_not_sunk_into_a_deeper_loop() {
+        let back = |rt: u32, label: &str| {
+            Op::I(Inst::CompareBranch {
+                nonzero: true,
+                width: Width::X,
+                rt: Gpr(rt),
+                target: Target::Label(label.into()),
+            })
+        };
+        let mut function = MFunc::new("f");
+        function.next_register = 80;
+        function.blocks = vec![
+            MBlock { label: "entry".into(), ops: vec![movz(0, 0), branch_to("outer")].into() },
+            // outer loop: makes a constant, runs the inner loop
+            MBlock { label: "outer".into(), ops: vec![movz(71, 7), branch_to("inner")].into() },
+            // inner loop reads the copy
+            MBlock { label: "inner".into(), ops: vec![add(72, 71, 0), back(72, "inner"), branch_to("latch")].into() },
+            MBlock { label: "latch".into(), ops: vec![back(0, "outer"), branch_to("exit")].into() },
+            MBlock { label: "exit".into(), ops: vec![Op::Return { uses: vec![], tail: None }].into() },
+        ];
+        sink(&mut function);
+        let made = |block: usize| {
+            function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
+        };
+        assert_eq!((made(1), made(2)), (1, 0), "{function:#?}");
+    }
+
     /// `sp + 0` before a dynamic allocation and after it are different values:
     /// a `stacksave` and the object were made one (the array read the saved
     /// stack pointer, and a C variable-length array's loop printed
@@ -928,7 +1117,7 @@ mod tests {
 /// is one move, `x0 <- v; x1 <- v` two (the register coalescer's answer, by
 /// ordering).
 pub fn order_copies(function: &mut MFunc) {
-    let mut home: HashMap<Reg, Reg> = HashMap::new();
+    let mut home: HashMap<Reg, Reg> = HashMap::default();
     for block in &function.blocks {
         for op in &block.ops {
             if let Op::Copy { dst, src } = op
@@ -1081,7 +1270,7 @@ fn redundant_zero_extends(function: &mut MFunc) {
         .filter_map(defined)
         .filter(|register| definitions.get(register) == Some(&1))
         .collect();
-    let mut rename: HashMap<Reg, Reg> = HashMap::new();
+    let mut rename: HashMap<Reg, Reg> = HashMap::default();
     for block in &mut function.blocks {
         block.ops.retain(|op| {
             let Op::I(Inst::LogicShifted {
@@ -1118,109 +1307,6 @@ fn redundant_zero_extends(function: &mut MFunc) {
                 }
             });
         }
-    }
-}
-
-/// `PeepholeOptimizer::optimizeExtInstr`
-/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/PeepholeOptimizer.cpp#L784>)
-/// with `AArch64InstrInfo::isCoalescableExtInstr`: `sxtw` of a register whose
-/// every reader takes only the low 32 bits is the register itself, so the
-/// readers (a `smull` in a later block) read it and the extension goes.
-fn low_half_extends(function: &mut MFunc) {
-    let definitions = definitions(function);
-    let single = |register: Gpr| register.is_virtual() && definitions.get(&Reg::Gpr(register)) == Some(&1);
-    let mut sources: HashMap<Reg, Gpr> = HashMap::new();
-    for op in function.blocks.iter().flat_map(|block| &block.ops) {
-        if let Op::I(Inst::BitfieldMove { op: Bitfield::Sbfm, width: Width::X, rd, rn, immr: 0, imms: 31 }) = op
-            && single(*rd)
-            && single(*rn)
-        {
-            sources.insert(Reg::Gpr(*rd), *rn);
-        }
-    }
-    if sources.is_empty() {
-        return;
-    }
-    // A copy of the extension is the extension.
-    let copies: Vec<(Gpr, Gpr)> = function
-        .blocks
-        .iter()
-        .flat_map(|block| &block.ops)
-        .filter_map(|op| match op {
-            Op::Copy { dst: Reg::Gpr(dst), src: Reg::Gpr(src) } if single(*dst) => Some((*dst, *src)),
-            _ => None,
-        })
-        .collect();
-    while copies.iter().any(|(dst, src)| {
-        let Some(&origin) = sources.get(&Reg::Gpr(*src)) else { return false };
-        sources.insert(Reg::Gpr(*dst), origin).is_none()
-    }) {}
-    let is_copy_of_source = |op: &Op| {
-        matches!(
-            op,
-            Op::Copy { dst: Reg::Gpr(dst), src: Reg::Gpr(src) } if sources.contains_key(&Reg::Gpr(*dst)) && sources.contains_key(&Reg::Gpr(*src))
-        )
-    };
-    let mut blocked: HashSet<Reg> = HashSet::new();
-    for op in function.blocks.iter().flat_map(|block| &block.ops) {
-        if is_copy_of_source(op) {
-            continue;
-        }
-        let mut all = op.clone();
-        all.visit(&mut |slot, role| {
-            let key = slot.key();
-            if role.reads() && sources.contains_key(&key) && !reads_low_half_only(op, key) {
-                blocked.insert(key);
-            }
-        });
-    }
-    // A copy that stays reads all 64 bits of its source.
-    while function.blocks.iter().flat_map(|block| &block.ops).any(|op| {
-        matches!(
-            op,
-            Op::Copy { dst, src } if is_copy_of_source(op) && blocked.contains(dst) && blocked.insert(*src)
-        )
-    }) {}
-    sources.retain(|register, _| !blocked.contains(register));
-    if sources.is_empty() {
-        return;
-    }
-    for block in &mut function.blocks {
-        block.ops.retain(|op| !matches!(defined(op), Some(register) if sources.contains_key(&register)));
-        for op in &mut block.ops {
-            op.visit(&mut |slot, _| {
-                if let Some(new) = sources.get(&slot.key())
-                    && let RegRef::Gpr(slot) = slot
-                {
-                    *slot = *new;
-                }
-            });
-        }
-    }
-}
-
-/// Whether `op` reads `register` as a 32-bit value only.
-fn reads_low_half_only(
-    op: &Op,
-    register: Reg,
-) -> bool {
-    let Op::I(inst) = op else { return false };
-    match inst {
-        Inst::AddSubImm { width: Width::W, .. }
-        | Inst::AddSubShifted { width: Width::W, .. }
-        | Inst::LogicImm { width: Width::W, .. }
-        | Inst::LogicShifted { width: Width::W, .. }
-        | Inst::CondSelect { width: Width::W, .. }
-        | Inst::Divide { width: Width::W, .. }
-        | Inst::OneSource { width: Width::W, .. }
-        | Inst::Extract { width: Width::W, .. } => true,
-        Inst::ThreeSource { width: Width::W, .. } => true,
-        // `smaddl`, `umaddl` and the like multiply two 32-bit registers and add
-        // a 64-bit one.
-        Inst::ThreeSource { op: Mul3::Smaddl | Mul3::Smsubl | Mul3::Umaddl | Mul3::Umsubl, ra, .. } => {
-            Reg::Gpr(*ra) != register
-        }
-        _ => false,
     }
 }
 

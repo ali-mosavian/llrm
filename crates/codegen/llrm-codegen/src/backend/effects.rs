@@ -75,7 +75,10 @@ mod tests {
     fn the_rows_are_those_of_the_register_file_asked() {
         let load = Semantics {
             name: Some("les".into()),
-            dests: vec![Loc::Held(Held { value: 1, width: 2 }), Loc::Held(Held { value: 2, width: 2 })],
+            dests: vec![
+                Loc::Held(Held { value: 1, width: 2, offset: 0 }),
+                Loc::Held(Held { value: 2, width: 2, offset: 0 }),
+            ],
             sources: vec![Loc::Mem(Mem::new(None, 4))],
             ..Semantics::new(Operation::Move)
         };
@@ -88,6 +91,28 @@ mod tests {
             assert_eq!(served(Regs(info), bits, &load).is_some(), known, "{bits} bits");
         }
     }
+    /// `or eax, -1` read `eax` as `or eax, 5` does: the verifier called the
+    /// -Os `mov eax, -1` it replaced a read of an undefined register.
+    #[test]
+    fn test_or_of_all_ones_reads_nothing_and_or_of_five_reads_the_register() {
+        use crate::model::ir::Imm;
+        let eax = Loc::Reg(crate::model::ir::Reg { register: llrm_lir::registers::RegId::EAX, width: 4 });
+        let reads = |value: i64| {
+            let or = Semantics {
+                name: Some("or".into()),
+                dests: vec![eax.clone()],
+                sources: vec![eax.clone(), Loc::Imm(Imm { value, width: 4, address: None })],
+                ..Semantics::new(Operation::Binary)
+            };
+            match served(Regs(&llrm_x86_m32::REGISTER_INFO), 32, &or) {
+                Some(llrm_x86::effects::Served::Known(found)) => !found.reads.is_empty(),
+                other => panic!("{other:?}"),
+            }
+        };
+        assert!(!reads(-1) && !reads(0xffff_ffff));
+        assert!(reads(5));
+    }
+
     /// `mov edi, _a+4[v*4]` before registers are chosen: the effect was
     /// unknown (the index names no register to encode), so MachineSink kept
     /// every flag-setting instruction above such a load in its block
@@ -95,13 +120,13 @@ mod tests {
     #[test]
     fn test_a_load_of_a_symbol_indexed_by_an_unplaced_value_has_known_effects() {
         let cell = Mem {
-            index: Some(Held { value: 2, width: 4 }),
+            index: Some(Held { value: 2, width: 4, offset: 0 }),
             scale: 4,
             ..Mem::new(Some(crate::model::ir::Addr::new(crate::model::ir::Space::Segment, 4)), 4)
         };
         let load = Semantics {
             name: Some("mov".into()),
-            dests: vec![Loc::Held(Held { value: 1, width: 4 })],
+            dests: vec![Loc::Held(Held { value: 1, width: 4, offset: 0 })],
             sources: vec![Loc::Mem(cell)],
             ..Semantics::new(Operation::Move)
         };
@@ -116,14 +141,14 @@ mod tests {
     #[test]
     fn test_a_frame_cell_indexed_by_an_unplaced_value_has_known_effects() {
         let cell = Mem {
-            index: Some(Held { value: 2, width: 4 }),
+            index: Some(Held { value: 2, width: 4, offset: 0 }),
             through: llrm_lir::registers::RegId::EBP,
             scale: 1,
             ..Mem::new(Some(crate::model::ir::Addr::new(crate::model::ir::Space::Frame, -1024)), 1)
         };
         let load = Semantics {
             name: Some("movsx".into()),
-            dests: vec![Loc::Held(Held { value: 1, width: 4 })],
+            dests: vec![Loc::Held(Held { value: 1, width: 4, offset: 0 })],
             sources: vec![Loc::Mem(cell)],
             ..Semantics::new(Operation::Move)
         };

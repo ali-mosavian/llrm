@@ -1,4 +1,5 @@
 """The gate's objects leg: a leg passes on the changes it lists and on nothing else."""
+import subprocess
 import sys
 from pathlib import Path
 
@@ -50,3 +51,44 @@ def test_the_m16_clang_of_the_pin_reaches_llrm_cc(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.delenv("LLRM_CLANG_M16", raising=False)
     assert llrmbin.cc_environment()["LLRM_CLANG_M16"] == str(clang)
+
+
+def test_every_target_objsweep_compiles_has_a_gate_leg_or_a_named_reason():
+    """The gate swept m16, m32 and m64 only: a change to arm64's Mach-O or ELF bytes (or its -g sections) passed the objects step unseen."""
+    import objsweep
+
+    legs = {leg for leg, _, _ in gate.LEGS}
+    for target in objsweep.FLAGS:
+        if target in gate.PENDING:
+            assert gate.PENDING[target].strip(), target
+            continue
+        assert target in legs, target
+        assert (f"{target} debug" in legs) == (target in objsweep.DEBUG_LEGS), target
+
+
+def test_a_head_with_the_compilers_sources_of_its_base_is_not_swept(tmp_path, monkeypatch):
+    """A tools-only branch swept its compiler against itself: every leg died on VOID PAIR (1274 s of builds first, and an earlier PASS read as evidence)."""
+    run = lambda *a: subprocess.run(["git", "-C", str(tmp_path), *a], check=True, capture_output=True)
+    run("init", "-q"); run("config", "user.email", "a@b"); run("config", "user.name", "a")
+    (tmp_path / "crates").mkdir(); (tmp_path / "crates/a.rs").write_text("1"); (tmp_path / "tools.py").write_text("1")
+    run("add", "."); run("commit", "-qm", "base")
+    base = run("rev-parse", "HEAD").stdout.decode().strip()
+    (tmp_path / "tools.py").write_text("2"); run("commit", "-qam", "tools only")
+    monkeypatch.setattr(gate, "ROOT", tmp_path)
+    assert gate.same_compiler(base)
+    (tmp_path / "crates/a.rs").write_text("2"); run("commit", "-qam", "compiler")
+    assert not gate.same_compiler(base)
+
+
+def test_a_skipped_step_exits_with_the_gates_skipped_code_not_zero(monkeypatch, capsys):
+    """A skip that exited 0 would be counted ok in the gate summary, a PASS that swept nothing."""
+    import llrmbin
+    import measure
+
+    monkeypatch.setattr(llrmbin, "cc_environment", lambda: {})
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, "x\n", ""))
+    monkeypatch.setattr(measure, "base_of", lambda *a: "b" * 40)
+    monkeypatch.setattr(measure, "base_with_cc", lambda *a: "b" * 40)
+    monkeypatch.setattr(gate, "same_compiler", lambda *a: True)
+    assert gate.main() == 77 == gate.SKIPPED
+    assert "SKIPPED: no crates diff" in capsys.readouterr().out

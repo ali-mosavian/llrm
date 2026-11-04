@@ -103,7 +103,7 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         // The double-width shifts are lowered before selection; no pattern
         // names them.
         ShlParts | SraParts | SrlParts => u16::MAX,
-        // dropped when selection visits them
+        // dropped before matching (`remove_assertions`)
         AssertZext | AssertSext => u16::MAX,
         FShl => pin::FSHL,
         FShr => pin::FSHR,
@@ -225,6 +225,9 @@ pub fn pin_vt(vt: EVT) -> Vt {
         EVT::Simple(MVT::F32) => mvt::f32,
         EVT::Simple(MVT::F64) => mvt::f64,
         EVT::Simple(MVT::F80) => mvt::f80,
+        // The opaque 16 bytes of an SSE move (`LLRM_ZERO128`, `LLRM_COPY128`);
+        // no pattern asks for it (SD540).
+        EVT::Simple(MVT::I128) => mvt::v4i32,
         EVT::Simple(MVT::Other) => mvt::Other,
         EVT::Simple(MVT::Glue) => mvt::Glue,
         _ => Vt(u16::MAX),
@@ -242,6 +245,7 @@ fn our_vt(vt: Vt) -> EVT {
         (mvt::f32, EVT::Simple(MVT::F32)),
         (mvt::f64, EVT::Simple(MVT::F64)),
         (mvt::f80, EVT::Simple(MVT::F80)),
+        (mvt::v4i32, EVT::Simple(MVT::I128)),
         (mvt::Other, EVT::OTHER),
         (mvt::Glue, EVT::GLUE),
     ]
@@ -480,6 +484,18 @@ impl<'a> DagisAdapter<'a> {
         })
     }
 
+    /// Whether a live user of `node` is still to be selected: not a machine
+    /// node and not marked selected.
+    pub(super) fn has_pending_user(
+        &self,
+        node: u32,
+    ) -> bool {
+        self.live_user_nodes(node).into_iter().any(|user| {
+            !matches!(self.dag.nodes()[user as usize].opcode, ISD::Machine(_))
+                && self.node_id.get(user as usize).is_none_or(|id| *id != -1)
+        })
+    }
+
     /// The live nodes that read a result of `node`, in creation order, once
     /// each: the use list, not a scan of the arena.
     fn live_user_nodes(
@@ -548,16 +564,15 @@ impl<'a> DagisAdapter<'a> {
         out
     }
 
-    /// `SelectCodeCommon` for `AssertSext` and `AssertZext`: the node's uses
-    /// read its operand and it is removed.
-    pub(super) fn drop_assertion(
+    /// `ReplaceUses` of an `AssertSext` or `AssertZext` by its operand, the
+    /// assertion and what only it read gone.
+    pub fn drop_assertion(
         &mut self,
         node: u32,
     ) {
-        let value = SDValue { node, res: 0 };
-        let operand = self.dag.operand(value, 0);
-        self.dag.replace_all_uses_with(value, operand);
-        self.enforce_node_id_invariant(operand.node);
+        let asserted = SDValue { node, res: 0 };
+        let operand = self.dag.operand(asserted, 0);
+        self.dag.replace_all_uses_with(asserted, operand);
         self.remove(node);
     }
 
@@ -1321,7 +1336,7 @@ impl AddrDag for DagisAdapter<'_> {
 
 /// `SelectionDAG::haveNoCommonBitsSet`, by the known bits: every bit is known
 /// zero in one of the two.
-fn no_common_bits(
+pub(super) fn no_common_bits(
     dag: &SelectionDAG,
     a: SDValue,
     b: SDValue,

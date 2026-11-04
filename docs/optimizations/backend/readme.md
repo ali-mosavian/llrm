@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 141 documented, 0 undocumented.
+From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 143 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -55,6 +55,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 141 documen
 | floatassign | Makes the floating code ready for register allocation: x87 integer conversions and compares go through memory, and loads of one cell are one value. | Machine phase after `floatfold` and `phielim`, before `RegAlloc`, once per | [floatassign](floatassign.md) |
 | floatfold | A float load that only one arithmetic instruction reads becomes that instruction's memory operand: `fld [m]; faddp` is `fadd [m]`. | Machine phase after `machinesched` and before `floatassign`, once per | [floatfold](floatfold.md) |
 | floatregions | Where the x87 stack cannot reach, and the error type the x87 allocator raises. | `floatassign`, `floatalloc`. | [floatregions](floatregions.md) |
+| floatsink | A float load moves down to the instruction that reads it. | After `FloatFold` (so a load that folds has folded), before `FloatAssign`. | [floatsink](floatsink.md) |
 | fmuladd | Expands `llvm.fmuladd` into an `fmul` and an `fadd` in MIR before the old instruction selector, which has no fused multiply-add to select. | Once per module in `driver::optimized`, unless the selector is the DAG, | [fmuladd](fmuladd.md) |
 | fpconvert | Rewrites a float converted to an unsigned 64-bit integer as signed conversions and a select, in MIR before instruction selection. | `mir fp to unsigned` in `driver::optimized`, after `ehprepare` and before | [fpconvert](fpconvert.md) |
 | fpcopyprop | Copy propagation over the x87 registers FP0..FP6: LLVM's `MachineCopyPropagation` for the RFP class. | At the start of `FloatAlloc`, under RFP. | [fpcopyprop](fpcopyprop.md) |
@@ -135,6 +136,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 141 documen
 | slotcopies | Keeps one frame cell where a value is copied from a cell into a spill cell. | A sub-pass of [`crate::backend::peephole`](peephole.md), after `postrasink`. | [slotcopies](slotcopies.md) |
 | slots | Lets two values share one frame slot when they are never live together, so a frame holds the most that is live at once, not the sum of all spills. | - `crate::backend::spiller`, which shares spill slots by the live range of | [slots](slots.md) |
 | spillplacement | Decides, for each value being split, which edge bundles hold it in a register and which on the stack. | Not a pass: `crate::backend::splitkit` queries it for each value it | [spillplacement](spillplacement.md) |
+| stackcoloring | StackColoring ([source](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/StackColoring.cpp#L1)), shared by every target: the static allocas whose lifetimes never overlap share one frame object. | - [`crate::backend::selectiondag::dag_function`](selectiondag.md), which groups the allocas | [stackcoloring](stackcoloring.md) |
 | stackusage | How much stack a program may use, as gcc's `-fstack-usage` and `-Wstack-usage` report it. | `elide_checks` is the `stack checks` step of assembly, once per module. | [stackusage](stackusage.md) |
 | stepflags | Removes a compare of a value with a constant when a step of the same value already sets those flags. | Once per block in instruction selection, after `comparefold` and before | [stepflags](stepflags.md) |
 | storecombine | Packs two neighbouring literal word stores into one dword store. | A sub-pass of [`crate::backend::peephole`](peephole.md), once per body, after | [storecombine](storecombine.md) |

@@ -128,3 +128,15 @@ def test_expected_output_is_read_from_the_program_not_the_counted_source(tmp_pat
     (elsewhere / "g.wrapped.c").write_text(PROGRAM)
     row = native.measure_one("gcc64", tmp_path, directory, elsewhere / "g.wrapped.c", "O2", tmp_path / "w", tmp_path)
     assert "error" not in row, row
+
+
+def test_the_per_run_count_does_not_flip_with_the_counters_jitter(monkeypatch):
+    """crc c64 -O2 read 482 on most runs and 483 on some: the difference of two counts over 100 runs is 482.4 (cold first run), the counter's ~15
+    instructions of jitter moved it to 482.55, and rounding flipped the row. Over a wider window the same jitter stays under .5."""
+    for jitter in (0, 15, -15):
+        def count(exe, argument, cwd, repeats=7, jitter=jitter):
+            runs = int(argument)
+            return 190656 + (jitter if runs == 1 else 0) + round(482.4 * (runs - 1))
+
+        monkeypatch.setattr(native, "instructions_of", count)
+        assert native.instructions_per_run(Path("x"), Path(".")) == 482, jitter
