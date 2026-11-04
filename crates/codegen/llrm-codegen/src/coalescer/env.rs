@@ -647,6 +647,14 @@ pub(super) fn why_left(
             (Loc::Held(_), Loc::Held(_))
         ) {
             "physical register"
+        } else if !one.def_lanes.is_empty() {
+            match super::pair::CoalescerPair::set_registers(&one, env) {
+                None => "lane: can_share refused",
+                Some(cp) if cp.is_partial() => {
+                    super::register_coalescer::lane_join_blocker(lis, &cp, one.id()).unwrap_or("lane: joinable")
+                }
+                Some(_) => "lane: whole pair",
+            }
         } else if full_copy(&one).is_none() {
             "width differs"
         } else if super::pair::CoalescerPair::set_registers(&one, env).is_none() {

@@ -295,6 +295,28 @@ fn has_lane_defs(
     lis.operands(value).iter().any(|operand| operand.is_def && operand.lanes != Operand::ALL)
 }
 
+/// Why a lane copy cannot join yet, if it cannot: what `join_lane` refuses,
+/// named (`why_left` counts them).
+pub(super) fn lane_join_blocker(
+    lis: &mut LiveIntervals,
+    cp: &CoalescerPair,
+    copy: InstrKey,
+) -> Option<&'static str> {
+    // A def of `src` that names lanes of its own, or keeps the rest of it,
+    // would need its lanes shifted too: left alone.
+    if has_lane_defs(lis, cp.src_reg()) {
+        return Some("source has lane defs");
+    }
+    if lis.operands(cp.src_reg()).iter().any(|operand| operand.reads_reg && operand.is_def) {
+        return Some("source def keeps the rest");
+    }
+    let copy_at = lis.indexes.get_instruction_index(copy);
+    let src = lis.interval(cp.src_reg()).range.clone();
+    let dst = lis.interval(cp.dst_reg());
+    let dst = dst.range_for_lanes(cp.lanes()).unwrap_or_else(|| dst.range.clone());
+    lanes_overlap(&dst, &src, &copy_at).then_some("source overlaps the lane")
+}
+
 /// The join of a lane copy: `src` is the bytes `cp.lanes()` of `dst`. DEVIATE
 /// C14: the pin runs `JoinVals` once per sub-range of the destination
 /// (`mergeSubRangeInto`); here the join is refused where `src` is live
@@ -311,16 +333,7 @@ fn join_lane(
     copy: InstrKey,
     block: usize,
 ) -> JoinResult {
-    // A def of `src` that names lanes of its own, or keeps the rest of it,
-    // would need its lanes shifted too: left alone.
-    if has_lane_defs(lis, cp.src_reg()) || lis.operands(cp.src_reg()).iter().any(|operand| operand.reads_reg && operand.is_def) {
-        return JoinResult::Rejected;
-    }
-    let copy_at = lis.indexes.get_instruction_index(copy);
-    let src = lis.interval(cp.src_reg()).range.clone();
-    let dst = lis.interval(cp.dst_reg());
-    let dst = dst.range_for_lanes(cp.lanes()).unwrap_or_else(|| dst.range.clone());
-    if lanes_overlap(&dst, &src, &copy_at) {
+    if lane_join_blocker(lis, cp, copy).is_some() {
         return JoinResult::Rejected;
     }
     env.narrow_lane(cp.dst_reg(), cp.src_reg(), cp.lane_offset());
