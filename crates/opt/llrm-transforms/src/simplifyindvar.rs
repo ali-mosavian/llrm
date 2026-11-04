@@ -1107,7 +1107,7 @@ fn strengthen_right_shift(
     let iv_range = {
         let cx = e.env.cx(&*e.context, &*e.function);
         let s = e.se.get_scev(&cx, iv_op);
-        e.se.get_unsigned_range(&cx, s)
+        e.se.get_unsigned_range(&cx, s).to_word::<u128>()
     };
     let mut changed = false;
     let bo_op = value_op(e, bo);

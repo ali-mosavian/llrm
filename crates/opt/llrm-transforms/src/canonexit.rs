@@ -119,7 +119,7 @@ pub fn canonicalized_in(
                 let s = se.get_scev(&cx, rhs);
                 se.apply_loop_guards(&cx, s, header)
             };
-            let rhs_range = se.get_unsigned_range(&cx, guarded);
+            let rhs_range = se.get_unsigned_range(&cx, guarded).to_word::<u128>();
             if full.contains_range(&rhs_range) {
                 // We have now matched icmp signed-cond zext(X), zext(Y'), and
                 // can thus replace the signed condition with the unsigned
@@ -183,7 +183,7 @@ pub fn canonicalized_in(
                 let s = se.get_scev(&cx, rhs);
                 se.apply_loop_guards(&cx, s, header)
             };
-            let rhs_range = se.get_unsigned_range(&cx, guarded);
+            let rhs_range = se.get_unsigned_range(&cx, guarded).to_word::<u128>();
             if !full.contains_range(&rhs_range) {
                 continue;
             }

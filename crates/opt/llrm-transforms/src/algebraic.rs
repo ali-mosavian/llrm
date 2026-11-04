@@ -1819,7 +1819,7 @@ fn _redundant_masks(
         .filter_map(|(_, inst, value, mask, width)| {
             let range = scev.ask(context, layout, function, |se, cx| {
                 let s = se.get_scev(cx, value);
-                se.get_unsigned_range(cx, s)
+                se.get_unsigned_range(cx, s).to_word::<u128>()
             });
             let top = range.get_unsigned_max();
             let reach = if top == 0 { 0 } else { u128::MAX >> (top.leading_zeros()) };

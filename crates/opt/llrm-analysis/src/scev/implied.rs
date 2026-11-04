@@ -24,7 +24,7 @@
 //! After `br (icmp ult %i, %n), loop, exit`, `%i u< %n` is guarded at the
 //! loop's entry.
 
-use llrm_mir::constantrange::ConstantRange;
+use super::ConstantRange;
 use llrm_mir::module::{BlockId, GlobalKind, InstId, Operand};
 use llrm_mir::opcode::{IntPredicate, Opcode};
 use llrm_mir::valuetracking::pattern;
@@ -959,17 +959,17 @@ impl ScalarEvolution {
         // `FoundLHSRange` is the range we know `FoundLHS` to be in by virtue of
         // the antecedent "`FoundLHS` `FoundPred` `FoundRHS`".
         let found_lhs_range =
-            ConstantRange::make_exact_icmp_region(found_pred, const_found_rhs.width, const_found_rhs.bits);
+            ConstantRange::make_exact_icmp_region(found_pred, const_found_rhs.width, const_found_rhs.word());
 
         // Since `LHS` is `FoundLHS` + `Addend`, we can compute a range for
         // `LHS`:
-        let lhs_range = found_lhs_range.add(&ConstantRange::single(addend.width, addend.bits));
+        let lhs_range = found_lhs_range.add(&ConstantRange::single(addend.width, addend.word()));
 
         // We can also compute the range of values for `LHS` that satisfy the
         // consequent, "`LHS` `Pred` `RHS`". The antecedent implies the
         // consequent if every value of `LHS` that satisfies the antecedent
         // also satisfies the consequent.
-        lhs_range.icmp(pred, &ConstantRange::single(const_rhs.width, const_rhs.bits))
+        lhs_range.icmp(pred, &ConstantRange::single(const_rhs.width, const_rhs.word()))
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L12591
