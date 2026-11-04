@@ -47,6 +47,9 @@
 //! 43. `tryToRecognizeTableBasedLog2` asks the target's `getIntrinsicInstrCost`
 //!     for `ctlz`; a pass run with no `tti` has no answer and does not fold.
 //!     Owner: w2. Exit: 2026-11-21.
+//! 49. `tryToFPToSat` is not translated: MIR has no `llvm.fptosi.sat` (no
+//!     interpreter or lowering) and no target prices it. Owner: w2. Exit:
+//!     2026-11-30, when a corpus cell needs it.
 //!
 //! # Example
 //! The pair above is one `load i16`; see `aggressive_instcombine_tests.rs`.
