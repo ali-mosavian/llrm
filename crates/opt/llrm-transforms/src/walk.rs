@@ -180,14 +180,18 @@ pub struct Walk {
     pub speed_rate: bool,
     /// The Simplify list over one body, as the interprocedural step reruns it.
     pub simplify: Box<dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str)>,
+    /// The interprocedural step's byte-for-clock rate (None: bytes), which
+    /// prices an ArgumentPromotion.
+    pub promote_rate: Option<i64>,
 }
 
 /// DEVIATE REC-1: the recursion a program is given. `-finline-recursive` asks
 /// for gcc's (copies of a function in itself to depth 3, any size); a target
 /// that states bounds (`Tti::recursive_inlining`) takes those by default when
-/// optimizing for speed and inlining is on (`-fno-inline-functions` asks for
-/// no copies of a body, a recursive one included). None: the pin's inliner,
-/// which copies no recursive callee (`IsRecursiveCall`).
+/// optimizing for speed (-O2 and -O3: gcc inlines no function at -O1) and
+/// inlining is on (`-fno-inline-functions` asks for no copies of a body, a
+/// recursive one included). None: the pin's inliner, which copies no recursive
+/// callee (`IsRecursiveCall`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Recursion {
     pub depth: usize,
@@ -208,6 +212,27 @@ impl Recursion {
     }
 }
 
+/// Whether `id` has a pointer parameter: the only kind a promotion takes.
+fn has_pointer_parameter(
+    module: &Module,
+    id: GlobalId,
+) -> bool {
+    module
+        .global(id)
+        .function()
+        .is_some_and(
+            |function| function
+                .parameters()
+                .iter()
+                .any(
+                    |&parameter| matches!(
+                        module.context.types.get(function.value(parameter).ty),
+                        llrm_mir::types::Type::Pointer(_)
+                    ),
+                ),
+        )
+}
+
 impl ProgramPass for Walk {
     fn name(&self) -> &'static str {
         "walk"
@@ -223,7 +248,7 @@ impl ProgramPass for Walk {
         let recursion = Recursion::of(
             self.inline.recursive,
             self.inline.single,
-            self.inline.limit != 0,
+            self.inline.limit != 0 && self.speed_rate,
             program.target.tti().as_deref(),
         );
         let mut params = crate::inlinecost::InlineParams {
@@ -255,6 +280,7 @@ impl ProgramPass for Walk {
                 .map(|(members, _)| members.into_iter().filter(|id| wanted.contains(id)).collect())
                 .collect();
             let remarks = llrm_support::env_flag!("LLRM_INLINE_REMARKS");
+            let mut visited: BTreeSet<GlobalId> = BTreeSet::new();
             for members in components {
                 for &id in &members {
                     // `DevirtSCCRepeatedPass<4>`: a call the simplification
@@ -392,6 +418,27 @@ impl ProgramPass for Walk {
                             && function_mut(module, id).1.walk().count() <= TRIAL_CALLER)
                             .then(|| function_mut(module, id).1.clone());
                         let mid = calls_of(&module.context, module.global(id).function().expect("a procedure"));
+                        // The calls the splice brought go to the inliner's
+                        // worklist, priced and spliced before the function
+                        // passes run once (`InlinerPass::run`'s `Calls`).
+                        // DEVIATE: bounded by `DEVIRT_REPEATS` rounds; the
+                        // pin's worklist has no cap. Owner w2, exit 2026-11-12.
+                        let worklisted = spliced
+                            && trials.is_empty()
+                            && repeats + 1 < DEVIRT_REPEATS
+                            && mid.iter().any(|(callee, count)| {
+                                let before = was.iter().find(|(seen, _)| seen == callee).map_or(0, |&(_, count)| count);
+                                (before == 0 || (*count > before && !recursive.contains(callee)))
+                                    && module.global(*callee).function().is_some_and(|one| !one.layout().is_empty())
+                            });
+                        if worklisted {
+                            live.spliced(module, &mut modules[at], was, mid);
+                            if recursive.contains(&id) {
+                                recursive = crate::inline::recursive(module);
+                            }
+                            repeats += 1;
+                            continue;
+                        }
                         (self.simplify)(module, &mut modules[at], id, "walk.");
                         if let (Some(before), Some(tti)) = (spliced_body, tti.as_deref()) {
                             // SZ2: each refused site is inlined into the body
@@ -604,6 +651,31 @@ impl ProgramPass for Walk {
                         }
                     }
                 }
+                // `ArgumentPromotionPass` follows the inliner in the CGSCC
+                // pipeline: once per component, before its callers are
+                // visited, which then simplify once with the new arguments.
+                // A function already visited is simplified again.
+                // DEVIATE: the copy-out elision and the stamp that precede
+                // the module-wide promotion run after the walk; what they
+                // enable is promoted there. Owner w2, exit 2026-11-12.
+                visited.extend(members.iter().copied());
+                if !members.is_empty() && members.iter().any(|&id| has_pointer_parameter(module, id)) {
+                    let costs =
+                        if self.promote_rate.is_some() { program.target.size_costs() } else { program.target.costs() };
+                    let clocks = program.target.costs();
+                    let (priced, bytes) = match self.promote_rate {
+                        Some(rate) if rate > 0 => (&clocks, false),
+                        _ => (&costs, true),
+                    };
+                    for id in
+                        crate::argpromotion::promoted_among(module, &program.layout, priced, bytes, Some(&members))
+                    {
+                        modules[at].changed(id);
+                        if visited.contains(&id) {
+                            (self.simplify)(module, &mut modules[at], id, "promote.");
+                        }
+                    }
+                }
                 // `PostOrderFunctionAttrsPass`: once per component, after its
                 // bodies are simplified.
                 if !members.is_empty() {
@@ -807,7 +879,8 @@ impl SelfInline {
                     ),
                 )
         };
-        let Some(recursion) = Recursion::of(self.flag, self.for_size, self.inlining, program.target.tti().as_deref())
+        let Some(recursion) =
+            Recursion::of(self.flag, self.for_size, self.inlining && self.speed_rate, program.target.tti().as_deref())
         else {
             return Ok(());
         };

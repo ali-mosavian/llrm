@@ -58,6 +58,14 @@ def test_a_divide_gcc_sends_to_libgcc_is_counted_in_its_code(built):
     assert harness.code_bytes("x_ll_div", "gccO2") > object_text + 500, object_text
 
 
+def test_the_per_mnemonic_clocks_add_up_to_the_clocks_of_the_run(built):
+    """--hist prints which instruction kinds the clocks go to (f64 div: 800 IMULs at 31 clocks were the whole gap to libgcc); a table that
+    drops or double-counts an instruction would point at the wrong one, so its sum must be the run's clocks and its counts the instructions."""
+    r = harness.run("fib", "gccO2")
+    assert sum(clk for _, clk in r["by_op"].values()) + r["misaligned"] * harness.MISALIGNED == r["clocks"]
+    assert sum(count for count, _ in r["by_op"].values()) == r["ins"]
+
+
 def test_kernel_inlined_into_main_is_not_counted_as_zero(built):
     """gcc inlined bench_fib into main: the region was never entered and fib read 0 instructions for gcc."""
     assert harness.run("fib", "gccO2")["ins"] > 0

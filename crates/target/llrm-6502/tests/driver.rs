@@ -1355,6 +1355,40 @@ fn a_compare_against_a_word_boundary_tests_only_the_high_word_in_both_polarities
     assert_eq!(instructions(&greater), instructions(&less), "the polarity changed the code:\n{greater}\n{less}");
 }
 
+/// A softened `double` bitcast to `i64` takes the halves of its softened
+/// integer (`ExpandIntRes_BITCAST`), not a stack slot. Guards the bytes of
+/// 0x3FF8000000000001: 0x3F on top, 0xF8 next, 0x01 at the bottom.
+#[test]
+fn a_double_bitcast_to_i64_keeps_its_bytes() {
+    let ir = module(
+        r#"@d = global double 0x3FF8000000000001
+define i8 @top() {
+  %x = load double, ptr @d
+  %i = bitcast double %x to i64
+  %t = lshr i64 %i, 56
+  %b = trunc i64 %t to i8
+  ret i8 %b
+}
+define i8 @mid() {
+  %x = load double, ptr @d
+  %i = bitcast double %x to i64
+  %t = lshr i64 %i, 48
+  %b = trunc i64 %t to i8
+  ret i8 %b
+}
+define i8 @bottom() {
+  %x = load double, ptr @d
+  %i = bitcast double %x to i64
+  %b = trunc i64 %i to i8
+  ret i8 %b
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert_eq!(exit_code_of(&text, "top"), 0x3F, "{text}");
+    assert_eq!(exit_code_of(&text, "mid"), 0xF8, "{text}");
+    assert_eq!(exit_code_of(&text, "bottom"), 0x01, "{text}");
+}
+
 /// A 64-bit add carried between its words by compares: the legalizer tested the
 /// carry operation at the 32-bit half, which is no legal type here, instead of
 /// the 16-bit piece it expands to, so `a + b` took 163 instructions with a
@@ -1422,6 +1456,86 @@ define i8 @fits() {
     let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(exit_code_of(&text, "wraps"), 1, "{text}");
     assert_eq!(exit_code_of(&text, "fits"), 0, "{text}");
+}
+
+/// A borrow compared with a byte was loaded back into C for a `cmp` that takes
+/// a byte: `llrm-6502-llc` refused X16 BASIC's `fp_fin` at -O2 ("operand c"),
+/// and with it all of mathlib.c. The fixture is that function cut to the 60
+/// blocks that still refused; it compiles, and the compare reads the saved
+/// 0 or 1.
+#[test]
+fn a_borrow_compared_with_a_byte_is_the_saved_byte_not_c() {
+    let ir = module(include_str!("data/borrow_compared_with_a_byte.ll"));
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("fp_fin:"), "{text}");
+}
+
+/// The carry between the two halves of a 32-bit add was made into a byte and
+/// read back (`lda #0; rol a; lsr a`), and the carry out of the last half into
+/// a byte nothing read. `0x1FFFF + 1` has byte 2 equal to 2.
+#[test]
+fn a_wide_add_keeps_its_carry_in_c() {
+    let ir = module(
+        r#"@a = internal global i32 131071
+@b = internal global i32 1
+define i8 @probe() {
+  %x = load volatile i32, ptr @a
+  %y = load volatile i32, ptr @b
+  %s = add i32 %x, %y
+  %h = lshr i32 %s, 16
+  %t = trunc i32 %h to i8
+  ret i8 %t
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(!text.contains("rol a"), "a carry made into a byte:\n{text}");
+    assert_eq!(exit_code_of(&text, "probe"), 2, "{text}");
+}
+
+/// A word sum of two bytes and a carry (`s = a + b + c; c = s >> 8`, the
+/// extended-precision `adc` of a C helper) was two byte adds and a third for
+/// the carry, each carry a byte of its own: 100 instructions for a four-byte
+/// add, not 14. It is `adc` on the bytes. `0xFF + 1` carries into `0xFE + 1 +
+/// 1` = 0x100: low byte 0, carry 1; `1 + 1` does not, and `0xFE + 1` is 0xFF.
+#[test]
+fn a_word_sum_of_bytes_and_a_carry_is_an_adc() {
+    let probe = |name: &str, a0: u8, b0: u8, ret: &str| {
+        format!(
+            r#"define i8 @{name}() {{
+  %a0 = load volatile i8, ptr @a0
+  %b0 = load volatile i8, ptr @b0
+  %a1 = load volatile i8, ptr @a1
+  %b1 = load volatile i8, ptr @b1
+  %s0 = add i8 %a0, %b0
+  %o0 = icmp ult i8 %s0, %b0
+  %c0 = zext i1 %o0 to i16
+  %x = zext i8 %a1 to i16
+  %y = zext i8 %b1 to i16
+  %t = add nuw nsw i16 %c0, %x
+  %u = add nuw nsw i16 %t, %y
+  %hi = lshr i16 %u, 8
+  %lo = trunc i16 %u to i8
+  %c = trunc i16 %hi to i8
+  ret i8 %{ret}
+}}"#
+        )
+    };
+    let globals = |a0: u8, b0: u8| {
+        format!(
+            "@a0 = internal global i8 {a0}\n@b0 = internal global i8 {b0}\n@a1 = internal global i8 -2\n@b1 = internal global i8 1\n"
+        )
+    };
+    for (a0, b0, lo, carry) in [(255u8, 1u8, 0, 1), (1, 1, 255, 0)] {
+        for (name, ret, want) in [("lo", "lo", lo), ("carry", "c", carry)] {
+            let ir = module(&format!("{}{}", globals(a0, b0), probe(name, a0, b0, ret)));
+            let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(exit_code_of(&text, name), want, "{a0}+{b0}:\n{text}");
+            let body = text.split(&format!("{name}:")).nth(1).unwrap_or_default();
+            let body = body.split("rts").next().unwrap_or_default();
+            let count = body.lines().filter(|l| l.starts_with("  ") && !l.starts_with("  .")).count();
+            assert!(count <= 30, "{count} instructions for a carry through a word sum:\n{text}");
+        }
+    }
 }
 
 /// A loaded `i1` that a `select` or an extension tests was selected into a
@@ -1630,6 +1744,22 @@ fn a_pointer_minus_one_borrows_by_branch() {
 }
 
 #[test]
+fn the_frame_address_at_offset_zero_is_the_stack_pointer_copied() {
+    // k_itoa's `tmp[n]`: `clc; lda rc0; adc #0; sta; lda rc1; adc #0; sta` (13 B)
+    // for the address of the first byte of the frame, a copy of the pair (8 B)
+    let ir = module(
+        "@n = global i8 5\n\
+         define i8 @g() {\n\
+         \x20 %a = alloca [16 x i8]\n  %n = load volatile i8, ptr @n\n\
+         \x20 %p = getelementptr inbounds [16 x i8], ptr %a, i8 0, i8 %n\n\
+         \x20 store volatile i8 42, ptr %p\n  %v = load volatile i8, ptr %p\n  ret i8 %v\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "g"), 42, "{text}");
+    assert!(!text.contains("lda rc0\n  adc #0"), "{text}");
+}
+
+#[test]
 fn a_word_plus_one_carries_by_branch() {
     // strnlen's index: `clc; lda lo; adc #1; sta lo; lda hi; adc #0; sta hi`
     // (13 B) where `inc lo; bne; inc hi` is 6
@@ -1647,4 +1777,78 @@ fn a_word_plus_one_carries_by_branch() {
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(exit_code_of(&text, "g"), 44, "{text}");
     assert!(!text.contains("adc #1\n"), "{text}");
+}
+
+#[test]
+fn a_zero_filled_variable_is_bss_not_image_bytes() {
+    // basic.c: prog[8192], tok, xv ... were `.byte 0,0,...` in DATA, 8721 B of
+    // image where gcc's BSS has none
+    let ir = module(
+        "@buf = global [4096 x i8] zeroinitializer\n@one = global i8 1\n\
+         define i8 @g() {\n  %p = getelementptr inbounds [4096 x i8], ptr @buf, i16 0, i16 4000\n\
+         \x20 %v = load volatile i8, ptr %p\n  %o = load volatile i8, ptr @one\n  %r = add i8 %v, %o\n  ret i8 %r\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O1)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "g"), 1, "{text}");
+    assert!(text.contains("buf: .res 4096"), "{text}");
+    assert!(!text.contains(".byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n  .byte 0,0,0,0"), "{text}");
+}
+
+#[test]
+fn a_word_divide_calls_the_compact_routine_at_size_and_the_fast_one_at_speed() {
+    // k_itoa at -Os linked the divide's short-divisor path too: 89 B against
+    // sdcc's 64 for a bare divide
+    let ir = module(
+        "@a = global i16 50000\n@b = global i16 7\n\
+         define i8 @g() {\n\
+         \x20 %a = load volatile i16, ptr @a\n  %b = load volatile i16, ptr @b\n\
+         \x20 %q = udiv i16 %a, %b\n  %r = urem i16 %a, %b\n  %s = add i16 %q, %r\n\
+         \x20 %t = lshr i16 %s, 8\n  %u = xor i16 %s, %t\n  %v = trunc i16 %u to i8\n  ret i8 %v\n}",
+    );
+    let size = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(size.contains("jsr __udivhi3c"), "{size}");
+    let speed = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(speed.contains("jsr __udivhi3\n"), "{speed}");
+    // 50000 / 7 = 7142 r 6: 7148 = 0x1BEC, 0x1B ^ 0x1BEC low byte 0xEC ^ 0x1B = 0xF7
+    for text in [&size, &speed] {
+        let linked = format!("{text}\n{}", common::pipeline::reachable_runtime(text));
+        assert_eq!(exit_code_of(&linked, "g"), 0xF7, "{linked}");
+}
+}
+
+#[test]
+fn a_word_step_never_holds_a_byte_in_a_on_the_plain_6502() {
+    // the high byte of x + 1, returned: it came out in A and the carry step was
+    // `inc a`, a 65C02 opcode ca65 --cpu 6502 refuses (x16basic-c: seven sites)
+    let ir = module(
+        "@n = global i16 255\n\
+         define i8 @g() {\n\
+         \x20 %x = load volatile i16, ptr @n\n  %y = add i16 %x, 1\n\
+         \x20 %h = lshr i16 %y, 8\n  %r = trunc i16 %h to i8\n  ret i8 %r\n}",
+    );
+    for level in [Level::O2, Level::Os] {
+        let text = assembly(&ir, &Request::new(level)).unwrap_or_else(|e| panic!("{e}"));
+        assert!(!text.contains("inc a") && !text.contains("dec a"), "{text}");
+        assert_eq!(exit_code_of(&text, "g"), 1, "{text}");
+    }
+}
+
+#[test]
+fn a_word_global_is_loaded_and_stored_by_absolute_address() {
+    // x16basic-c: 270 sites loaded a u16 global through a pointer cell, `ldx #<(g);
+    // ldy #>(g); stx; sty; ldy #0; lda (p),y; ldy #1; lda (p),y` (19 B) where
+    // `lda g; ldx g+1` is 5
+    let ir = module(
+        "@w = global i16 300\n@v = global i16 0\n\
+         define i8 @g() {\n\
+         \x20 %a = load i16, ptr @w\n  %b = add i16 %a, 2\n  store i16 %b, ptr @v\n\
+         \x20 %c = load i16, ptr @v\n  %h = lshr i16 %c, 8\n  %hl = trunc i16 %h to i8\n  %l = trunc i16 %c to i8\n\
+         \x20 %r = add i8 %hl, %l\n  ret i8 %r\n}",
+    );
+    for level in [Level::O2, Level::Os] {
+        let text = assembly(&ir, &Request::new(level)).unwrap_or_else(|e| panic!("{e}"));
+        // 302 = 0x012E: 1 + 0x2E = 47
+        assert_eq!(exit_code_of(&text, "g"), 47, "{text}");
+        assert!(!text.contains("#<(w)") && !text.contains("#<(v)"), "{text}");
+    }
 }

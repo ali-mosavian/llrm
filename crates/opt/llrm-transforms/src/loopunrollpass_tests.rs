@@ -500,3 +500,64 @@ fn a_first_iteration_is_peeled_only_where_its_folded_clocks_repay_the_copy() {
     assert!(!super::folded_entry_pays(14, 15, 312));
     assert!(!super::folded_entry_pays(0, 15, 312));
 }
+
+/// A loop declaring a scope for its store and `!noalias` it on its load, unrolled
+/// four times, kept one scope for every copy: the first copy's store to `%p` and
+/// the second's load through `%q` were called apart by `ScopedNoAliasAA`, though
+/// `%p` and `%q` may be one address at each trip (`cloneAndAdaptNoAliasScopes`).
+#[test]
+fn test_each_unrolled_copy_of_a_loop_declaring_a_scope_has_its_own() {
+    use llrm_analysis::aa::{AliasResult, BatchAAResults, MemoryLocation};
+    use llrm_analysis::aggregate::AggregateAA;
+    use llrm_analysis::memory::Unit;
+    use llrm_analysis::scopednoaliasaa::ScopedNoAliasAA;
+
+    let mut module = parsed(
+        "declare void @llvm.experimental.noalias.scope.decl()
+
+define void @f(ptr %p, ptr %q) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %next, %b1 ]
+  call void @llvm.experimental.noalias.scope.decl(), !noalias.scope.decl !1
+  store i32 1, ptr %p, !alias.scope !1
+  %v = load i32, ptr %q, !noalias !1
+  store i32 %v, ptr %q
+  %next = add i32 %i, 1
+  %go = icmp slt i32 %next, 4
+  br i1 %go, label %b1, label %b2
+
+b2:
+  ret void
+}
+
+!0 = distinct !{!0, !\"domain\"}
+!2 = distinct !{!2, !0, !\"scope\"}
+!1 = !{!2}
+",
+    );
+    assert!(unrolled(&mut module), "{}", printed(&module));
+    printed(&module); // it verifies
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let function = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f").2;
+    let unit = Unit::of(&module, &layout, function);
+    let stores: Vec<MemoryLocation> = function
+        .walk()
+        .filter(|&(_, inst)| matches!(function.instruction(inst).opcode, llrm_mir::opcode::Opcode::Store { .. }))
+        .filter_map(|(_, inst)| MemoryLocation::get(&unit, inst))
+        .collect();
+    let loads: Vec<MemoryLocation> = function
+        .walk()
+        .filter(|&(_, inst)| matches!(function.instruction(inst).opcode, llrm_mir::opcode::Opcode::Load { .. }))
+        .filter_map(|(_, inst)| MemoryLocation::get(&unit, inst))
+        .collect();
+    // Per copy: the scoped store to %p, the load, the store to %q.
+    assert_eq!((stores.len(), loads.len()), (8, 4), "{}", printed(&module));
+    let mut chain = AggregateAA::new();
+    chain.add_aa_result(ScopedNoAliasAA::new(&unit));
+    let mut aa = BatchAAResults::new(&mut chain);
+    assert_eq!(aa.alias(&stores[0], &loads[0]), AliasResult::NoAlias, "premise: one copy's own pair");
+    assert_eq!(aa.alias(&stores[0], &loads[1]), AliasResult::MayAlias, "{}", printed(&module));
+}

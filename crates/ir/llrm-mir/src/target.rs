@@ -78,10 +78,10 @@ pub struct Tuning {
     /// `max-inline-insns-recursive` (`Tti::recursive_inlining`); none: the
     /// pin's inliner.
     pub recursive_inlining: Option<(u32, i64)>,
-    /// gcc's `max-inline-insns-auto` at -O2 and -O3 (15, 30): the most a copy
-    /// of the recursive callee may grow its caller
-    /// (`want_inline_small_function_p`) for `recursive_inlining` to run on
-    /// it; none: no such bar.
+    /// gcc's `max-inline-insns-auto` at -O2 and -O3 (15, 30 of its size
+    /// units) as the most `gcc_insns` a recursive callee may have for
+    /// `recursive_inlining` to run on it, calibrated per target; none: no
+    /// such bar.
     pub recursive_edge_growth: Option<(i64, i64)>,
     /// DEVIATE PL6: the first iteration of an innermost loop is peeled where
     /// its entry constants fold enough of the body to pay the copy at the
@@ -117,6 +117,20 @@ impl Tuning {
         recursive_edge_growth: None,
         peel_folded_entry: false,
     };
+}
+
+/// What a target says of `GlobalMerge`
+/// ([GlobalMerge.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/GlobalMerge.cpp));
+/// a target that merges nothing answers none.
+#[derive(Clone, Copy, Debug)]
+pub struct GlobalMerge {
+    /// The reach of a base register's immediate: `MaxOffset`.
+    pub max_offset: u64,
+    /// `OnlyOptimizeForSize`: only uses in `minsize` functions count.
+    pub size_only: bool,
+    /// The object format is Mach-O: the merged struct is `internal`, not
+    /// `private`.
+    pub mach_o: bool,
 }
 
 /// Where the target keeps no program data, as linear addresses: old
@@ -312,6 +326,15 @@ pub trait Machine {
 
     /// The indexed addresses a memory access may use, native form first.
     fn address_forms(&self) -> Vec<AddressForm>;
+
+    /// How `GlobalMerge` runs at `-O3` (`aggressive`) or below; none where
+    /// the target does not run it.
+    fn global_merge(
+        &self,
+        _aggressive: bool,
+    ) -> Option<GlobalMerge> {
+        None
+    }
 
     /// Whether a `width`-byte load at an address a multiple of `align` may
     /// trap wherever it points. By default any may: only one known

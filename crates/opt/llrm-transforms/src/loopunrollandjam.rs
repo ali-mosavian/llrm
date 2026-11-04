@@ -743,7 +743,15 @@ pub(crate) fn unroll_remainder_loop(
     let capacity = run.function.block_capacity();
     let options = crate::loopunroll::Options { count, max_trip_count: count, max_or_zero, exits };
     if let Err(error) =
-        crate::loopunroll::unroll_loop_blocks(run.function, epilog_header, &body, &latches, &options, &mut run.emptied)
+        crate::loopunroll::unroll_loop_blocks(
+            run.function,
+            epilog_header,
+            &body,
+            &latches,
+            &options,
+            &mut run.emptied,
+            &mut |_, _, _| {},
+        )
     {
         panic!("remainder unroll: {error}");
     }
@@ -1425,6 +1433,7 @@ impl LoopUnrollAndJam {
             let memory_unit = llrm_analysis::memory::Unit::within(&*run.context, run.layout, &*run.function, run.outer);
             let mut aa = AggregateAA::new();
             aa.add_aa_result(BasicAA::new(&memory_unit));
+            aa.add_aa_result(llrm_analysis::scopednoaliasaa::ScopedNoAliasAA::new(&memory_unit));
             aa.add_aa_result(TypeBasedAA::new(&memory_unit));
             let mut di = DependenceInfo::new(&mut aa, &memory_unit, &cx, self.options.da);
             is_safe_to_unroll_and_jam(&cx, se, &mut di, l)

@@ -355,6 +355,9 @@ struct EstimatedUnrollCost {
     /// counted: what the entry values make cheaper there is the peel's gain.
     heavy_rolled: u32,
     heavy_first: u32,
+    /// PL6: the clocks the first trip's multiplies and divides lose to its
+    /// entry values (folded away, or priced by a constant operand).
+    heavy_folded: u32,
 }
 
 /// The analyses of one state of the function, made again after a change.
@@ -501,6 +504,7 @@ fn analyze_loop_unroll_cost(
     let mut first_iteration = Cost::FREE;
     let mut heavy_rolled = Cost::FREE;
     let mut heavy_first = Cost::FREE;
+    let mut heavy_folded = 0_i64;
     let mut rolled_dynamic_cost = Cost::FREE;
     let mut inst_cost_map = llrm_support::hash::HashMap::<(InstId, u32), InstState>::default();
     let mut exit_worklist: Vec<(BlockId, BlockId)> = Vec::new();
@@ -594,6 +598,22 @@ fn analyze_loop_unroll_cost(
                     analyzer.visit(&mut env, &mut simplified_values, inst)
                 };
                 inst_cost_map.insert((inst, iteration), InstState { is_free, is_counted: false });
+                if iteration == 0 && is_heavy(&run.function.instruction(inst).opcode) {
+                    let operation = run.function.instruction(inst);
+                    let simplified: Vec<Operand> = operation
+                        .operands
+                        .iter()
+                        .map(|&operand| match operand {
+                            Operand::Value(value) => simplified_values.get(&value).copied().unwrap_or(operand),
+                            other => other,
+                        })
+                        .collect();
+                    if let Some(costs) = clocks {
+                        let before = simplified_clocks(run, inst, &operation.operands, costs).unwrap_or(0);
+                        let after = if is_free { 0 } else { simplified_clocks(run, inst, &simplified, costs).unwrap_or(before) };
+                        heavy_folded += (before - after).max(0);
+                    }
+                }
 
                 if is_free {
                     continue;
@@ -784,6 +804,7 @@ fn analyze_loop_unroll_cost(
         first_iteration: first_iteration.value as u32,
         heavy_rolled: heavy_rolled.value as u32,
         heavy_first: heavy_first.value as u32,
+        heavy_folded: heavy_folded as u32,
     })
 }
 
@@ -1130,14 +1151,13 @@ fn peels_folded_entry(
         return false;
     }
     let costs = crate::profit::costs(run.outer);
-    // Two trips: the first's instructions are counted where the second or a side
-    // effect needs them, so its cost against one rolled trip is what the entry values
-    // fold (a single trip would count what only feeds the next as dead).
-    let Some(cost) = analyze_loop_unroll_cost(run, analyzed, lp, 2, eph, u32::MAX, 2, Some(&costs)) else {
+    // One trip, read for what the entry values change in its multiplies and divides
+    // (what only feeds a next trip is not in that count).
+    let Some(cost) = analyze_loop_unroll_cost(run, analyzed, lp, 1, eph, u32::MAX, 1, Some(&costs)) else {
         return false;
     };
-    // Two trips were priced: the multiplies and divides of one are `heavy_rolled / 2`.
-    let saved = u64::from((cost.heavy_rolled / 2).saturating_sub(cost.heavy_first));
+    // The multiplies and divides the first trip's entry values remove or cheapen.
+    let saved = u64::from(cost.heavy_folded);
     why(run, lp, &format!("peel the first iteration: folds {saved} of {loop_size}, rate {rate}"));
     folded_entry_pays(saved, loop_size, rate)
 }
@@ -1335,6 +1355,14 @@ fn why(
 }
 
 /// `tryToUnrollLoop`, for the full unroll pass.
+/// The instructions of `blocks`.
+fn body_instructions(
+    function: &Function,
+    blocks: impl IntoIterator<Item = BlockId>,
+) -> Vec<llrm_mir::module::InstId> {
+    blocks.into_iter().flat_map(|block| function.iter_block(block).collect::<Vec<_>>()).collect()
+}
+
 fn try_to_unroll_loop(
     run: &mut Run,
     analyzed: &Analyzed,
@@ -1531,8 +1559,25 @@ fn try_to_unroll_loop(
     if pp.peel_count != 0 {
         why(run, lp, &format!("peeling {} iterations", pp.peel_count));
         let loop_ = peelable(run.function, lp);
+        let scopes = crate::noaliasscopes::declared_scopes(
+            run.function,
+            body_instructions(run.function, lp.get_blocks().iter().copied()),
+        );
         return match crate::loopclone::peeled_any_latch(run.function, &loop_, i64::from(pp.peel_count)) {
-            Ok(Some(_)) => {
+            Ok(Some(labels)) => {
+                // `cloneAndAdaptNoAliasScopes` for each peeled iteration
+                // (LoopPeel.cpp:956).
+                for (iteration, blocks) in labels.iter().enumerate() {
+                    let copies = body_instructions(run.function, blocks.values().copied());
+                    crate::noaliasscopes::cloned_and_adapted(
+                        run.function,
+                        &scopes,
+                        &copies,
+                        &format!("Peel{}", iteration + 1),
+                        run.metadata,
+                        run.declared,
+                    );
+                }
                 let so_far = run.peeled.get(&header).copied().unwrap_or(0);
                 run.peeled.insert(header, so_far + pp.peel_count);
                 Unrolled::Peeled
@@ -1616,7 +1661,19 @@ fn try_to_unroll_loop(
             exits.into_iter().filter(|exit| exit.trip_count != 0).collect()
         },
     };
-    match unroll_loop_blocks(run.function, header, &body, &latches, &unroll_options, &mut run.emptied) {
+    let scopes = crate::noaliasscopes::declared_scopes(run.function, body_instructions(run.function, body.iter().copied()));
+    let (metadata, declared) = (run.metadata, &mut *run.declared);
+    let mut rescoped = |function: &mut Function, copies: &[llrm_mir::module::InstId], iteration: usize| {
+        crate::noaliasscopes::cloned_and_adapted(
+            function,
+            &scopes,
+            copies,
+            &format!("It{iteration}"),
+            metadata,
+            declared,
+        );
+    };
+    match unroll_loop_blocks(run.function, header, &body, &latches, &unroll_options, &mut run.emptied, &mut rescoped) {
         Ok(result) => result,
         Err(error) => panic!("loop unroll: {error}"),
     }
@@ -2097,7 +2154,7 @@ pub fn unroll_function(
         DataLayout::parse(module.datalayout.as_deref().unwrap_or("e-m:e-p:32:32-f64:32:64-f80:32-n8:16:32-S128"))?;
     let callees = llrm_mir::memory::callees(module);
     let outer = llrm_mir::passes::Outer::of(module, None);
-    let mut declared = llrm_mir::passes::Declared::default();
+    let mut declared = llrm_mir::passes::Declared::of(module);
     let globals = module.globals.clone();
     let metadata = module.metadata.clone();
     let id = module
@@ -2127,7 +2184,9 @@ pub fn unroll_function(
         created: Vec::new(),
         scev: ScalarEvolution::new(),
     };
-    Ok(unroll_loops(&mut run))
+    let unrolled = unroll_loops(&mut run);
+    declared.place(module)?;
+    Ok(unrolled)
 }
 
 #[cfg(test)]

@@ -388,6 +388,12 @@ fn data_text(
         if crate::select::exported(global.linkage) && label == name {
             out.push_str(&format!(".export {label}\n"));
         }
+        // a variable of zeros is BSS, which the platform's startup clears: it
+        // costs no bytes in the image
+        if !variable.constant && words.is_empty() && bytes.iter().all(|&b| b == 0) {
+            out.push_str(&format!(".segment \"BSS\"\n{label}: .res {}\n.segment \"CODE\"\n", bytes.len().max(1)));
+            continue;
+        }
         out.push_str(&format!(".segment \"{}\"\n{label}:\n", if variable.constant { "RODATA" } else { "DATA" }));
         let mut at = 0;
         for (word_at, symbol, addend) in words {

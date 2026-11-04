@@ -200,6 +200,16 @@ impl CombineHooks for Aarch64Lowering {
         narrow.is_integer() && wide.is_integer() && narrow.size_in_bits() == 32 && wide.size_in_bits() == 64
     }
 
+    /// `AArch64TargetLowering::isNarrowingProfitable`: `isTypeLegal(DestVT) &&
+    /// DestVT.isVector()`. Vectors are deferred, so no scalar narrows.
+    fn narrowing_profitable(
+        &self,
+        _wide: EVT,
+        _narrow: EVT,
+    ) -> bool {
+        false
+    }
+
     fn reassociate_compare_pairs(&self) -> bool {
         true
     }
@@ -424,6 +434,14 @@ impl SchedInfo for Aarch64Sched {
         opcode: u32,
     ) -> bool {
         instrinfo::desc(opcode as u16).is_some_and(|desc| desc.has(flag::CALL))
+    }
+
+    fn call_frame_setup(&self) -> Option<u32> {
+        Some(u32::from(aarch64_ids::ADJCALLSTACKDOWN))
+    }
+
+    fn call_frame_destroy(&self) -> Option<u32> {
+        Some(u32::from(aarch64_ids::ADJCALLSTACKUP))
     }
 
     fn source_order(&self) -> bool {

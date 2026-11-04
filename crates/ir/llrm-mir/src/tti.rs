@@ -498,7 +498,8 @@ pub trait Tti {
         false
     }
 
-    /// DEVIATE REC-2: gcc's growth bar of the recursive edge at (-O2, -O3);
+    /// DEVIATE REC-2: gcc's growth bar of the recursive edge at (-O2, -O3),
+    /// in `gcc_insns` of the callee;
     /// none: no bar.
     fn recursive_edge_growth(&self) -> Option<(i64, i64)> {
         None
@@ -860,6 +861,24 @@ pub trait Tti {
         &self,
         _ty: Ty,
     ) -> bool {
+        false
+    }
+
+    /// Beyond the pin (AArch64 and ARM step by any small immediate): whether a
+    /// post-increment access of `access_bytes` may step its pointer by `step`
+    /// bytes. m68k's `(An)+` steps by the access size and no other amount.
+    fn is_post_inc_step_legal(
+        &self,
+        _access_bytes: i64,
+        _step: i64,
+    ) -> bool {
+        true
+    }
+
+    /// Beyond the pin: whether a size build keeps a loop whose closed form
+    /// (`rewriteLoopExitValues`) costs more code than the loop, as the 16-bit
+    /// targets do. m68k's wide multiplies are library calls.
+    fn sizes_exit_values(&self) -> bool {
         false
     }
 

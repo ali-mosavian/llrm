@@ -138,7 +138,7 @@ pub fn unroll_loop(
     let body = loop_.body.iter().map(|&at| cfg::block(at)).collect::<Vec<_>>();
     let latches = loop_.latches.iter().map(|&at| cfg::block(at)).collect::<Vec<_>>();
     let mut emptied = Vec::new();
-    let result = unroll_loop_blocks(function, cfg::block(loop_.header), &body, &latches, options, &mut emptied)?;
+    let result = unroll_loop_blocks(function, cfg::block(loop_.header), &body, &latches, options, &mut emptied, &mut |_, _, _| {})?;
     function.erase_blocks(&emptied)?;
     lcssa::closed(function)?;
     Ok(result)
@@ -157,6 +157,7 @@ pub fn unroll_loop_blocks(
     latches: &[BlockId],
     options: &Options,
     emptied_blocks: &mut Vec<BlockId>,
+    rescoped: &mut dyn FnMut(&mut Function, &[InstId], usize),
 ) -> Result<Unrolled, String> {
     if options.count == 0 || options.max_trip_count == 0 || options.count > options.max_trip_count {
         return Err("an unroll's count is at most the maximum trip count (D2)".to_owned());
@@ -216,6 +217,7 @@ pub fn unroll_loop_blocks(
     let mut after = latch;
     for it in 1..count {
         let mut fresh = Vec::<BlockId>::new();
+        let mut made = Vec::<InstId>::new();
         for &at in &order {
             let new = function.create_block(None);
             function.insert_block(new, Some(after))?;
@@ -247,6 +249,7 @@ pub fn unroll_loop_blocks(
                 }
                 let copy = function.clone_instruction(inst);
                 function.insert(copy, Position::End(new))?;
+                made.push(copy);
                 if let (Some(was), Some(now)) = (function.instruction(inst).result, function.instruction(copy).result) {
                     map.push((was, Operand::Value(now)));
                 }
@@ -282,6 +285,8 @@ pub fn unroll_loop_blocks(
             }
             fresh.push(new);
         }
+        // `cloneAndAdaptNoAliasScopes` for this iteration (LoopUnroll.cpp:1367).
+        rescoped(function, &made, it);
         for &new in &fresh {
             for inst in function.iter_block(new).collect::<Vec<_>>() {
                 // Only the operands that change: `set_operands` scans the

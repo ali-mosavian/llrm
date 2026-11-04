@@ -62,6 +62,7 @@ use crate::model::lir::{Block, Insn, LirBlock, LirBody, Phi};
 
 struct Info {
     source_order: bool,
+    m64: bool,
 }
 
 impl SchedInfo for Info {
@@ -95,6 +96,15 @@ impl SchedInfo for Info {
         reg: u16,
     ) -> bool {
         Some(reg) == super::dagisel_adapter::pin_register(super::dagisel_adapter::EFLAGS_ID)
+    }
+
+    // `ADJCALLSTACKDOWN32`/`64` and `ADJCALLSTACKUP32`/`64`, numbered alike in every x86 table.
+    fn call_frame_setup(&self) -> Option<u32> {
+        Some(if self.m64 { 768 } else { 767 })
+    }
+
+    fn call_frame_destroy(&self) -> Option<u32> {
+        Some(if self.m64 { 770 } else { 769 })
     }
 }
 
@@ -931,8 +941,16 @@ fn selected_in(
     // `LowerFormalArguments`: the first variadic argument is the next fixed
     // object, where the convention puts the first stack argument it does not
     // name.
+    // Under Win64 the unnamed register arguments are homed in the caller's
+    // shadow space, one cell each, contiguous with the stack ones.
+    let positional = arch.calling().by_number(function.calling_convention).filter(|found| found.positional);
     if module.signature(function.ty).2 {
-        cells.push(convention.stack_arguments);
+        match &positional {
+            Some(found) if convention.parameters.len() < found.argument_registers.len() => {
+                cells.extend((convention.parameters.len()..found.argument_registers.len()).map(|at| arch.first_argument_offset(false) + at as i64 * 8));
+            }
+            _ => cells.push(convention.stack_arguments),
+        }
     }
     let frame = Frame::new(cells, contracts.map_or(0, |one| one.hole));
     // The function's static allocas are frame objects 0, 1, ... in the order
@@ -987,7 +1005,7 @@ fn selected_in(
     }
     // `LowerFormalArguments`' register save area: 6 * 8 bytes of integer
     // registers and 8 * 16 of vector ones.
-    if m64 && module.signature(function.ty).2 {
+    if m64 && module.signature(function.ty).2 && positional.is_none() {
         info.variadic_save = Some(Temporaries(&frame).create_stack_temporary(176, 16));
     }
     let mut hooks = X86Hooks::new(Options {
@@ -1166,7 +1184,7 @@ fn selected_in(
             },
             &selector,
             &mut hooks,
-            &Info { source_order: true },
+            &Info { source_order: true, m64 },
             &ctx,
             &mut state,
             block_at[&block.0],
