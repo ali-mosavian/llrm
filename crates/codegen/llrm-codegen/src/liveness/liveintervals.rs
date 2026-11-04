@@ -1463,6 +1463,24 @@ mod tests {
         assert_eq!(renamed.def_lanes, vec![(7, ValueLanes::at(1, 1))]);
     }
 
+    /// `v1 := whole; v1.hi := byte; use v1.hi; use v1`: a value with a lane def
+    /// gets a sub-range for that lane, live from the lane def to the lane's
+    /// use only; a value without one has none.
+    #[test]
+    fn test_a_lane_def_makes_a_sub_range_live_between_the_lane_def_and_its_use() {
+        let mut high = Insn::new(0, None, None, vec![1], Vec::new());
+        high.def_lanes = vec![(1, ValueLanes::at(1, 1))];
+        let insns = [insn(&[1], &[]), Arc::new(high), insn(&[], &[1])];
+        let mut lis = LiveIntervals::new(&body(&insns));
+        let interval = lis.interval(1);
+        assert_eq!(interval.sub_ranges().len(), 1);
+        assert_eq!(interval.sub_ranges()[0].lanes, ValueLanes::at(1, 1));
+        assert!(!interval.sub_ranges()[0].range.segments.is_empty());
+        let plain = [insn(&[1], &[]), insn(&[], &[1])];
+        let mut lis = LiveIntervals::new(&body(&plain));
+        assert!(!lis.interval(1).has_sub_ranges(), "no lane def, no sub-range");
+    }
+
     /// Renaming the value renames the marker with it.
     #[test]
     fn test_renaming_a_value_renames_its_partial_def() {

@@ -560,6 +560,26 @@ impl LiveIntervalCalc {
         // necessary.
         self.calc.reset_live_out_map(ctx.cfg.len());
         self.extend_to_uses(&mut li.range, operands, ctx);
+        // The sub-ranges (LiveIntervalCalc.cpp#L43,
+        // `MRI->shouldTrackSubRegLiveness`): one per lane mask some def
+        // names alone. DEVIATE: the masks are not refined to disjoint
+        // ones (`refineSubRanges`); two defs of overlapping masks get a
+        // sub-range each. Exit: step 3 of the lane model, when lane
+        // defs exist outside the tests.
+        let mut masks: Vec<ValueLanes> = Vec::new();
+        for mo in operands.iter().filter(|mo| mo.is_def && mo.lanes != Operand::ALL) {
+            if !masks.contains(&mo.lanes) {
+                masks.push(mo.lanes);
+            }
+        }
+        for lanes in masks {
+            let mine: Vec<Operand> = operands.iter().filter(|mo| mo.lanes.overlaps(lanes)).copied().collect();
+            let mut range = LiveRange::new();
+            self.create_dead_defs(&mut range, &mine, ctx);
+            self.calc.reset_live_out_map(ctx.cfg.len());
+            self.extend_to_uses(&mut range, &mine, ctx);
+            li.create_sub_range(lanes).range = range;
+        }
     }
 
     /// `createDeadDefs` (LiveIntervalCalc.cpp#L128).
