@@ -41,12 +41,6 @@ def test_z80_kernels_cover_the_shared_source():
     assert in_source == {k[0] for k in Z.K}
 
 
-if __name__ == "__main__":
-    test_z80_kernels_cover_the_shared_source()
-    test_header_names_no_local_path()
-    test_table_in_data_is_counted()
-    test_driver_style_object_without_data_counts_zero()
-    print("ok")
 
 
 def test_noivopts_flag_only_at_os():
@@ -187,3 +181,38 @@ def test_ice_corpus_tells_an_ice_from_a_source_error_and_a_hang():
     assert C.classify(1, "error: unable to find a register to spill") == "ice"
     assert C.classify(1, "fatal error: stdint.h: No such file or directory") == "error"
     assert C.classify(0, "") == "ok" and C.classify(1, "", True) == "timeout"
+
+
+def test_z80_mul16_o2_uses_the_early_exit_helper_and_it_is_exact():
+    """The shipped __mulhi3 always ran 16 iterations: mul16 -O2 read 1016 T where ours (early exit) reads 481. O2 now links
+    rt-z80-speed/__mulhi3 (28 B, 508 T); O1/Os keep the small one. The helper must also be exact on edge operands."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    rows = {}
+    for l in open(os.path.join(here, "tables", "z80-gcc.tsv")):
+        f = l.rstrip("\n").split("\t")
+        if len(f) > 7 and f[1] == "mul16":
+            rows[f[2]] = (int(f[5]), f[7])
+    assert rows["O2"][0] < 600 and "speed helper" in rows["O2"][1], rows
+    assert rows["O1"][0] > 1000 and rows["Os"][0] > 1000 and "speed helper" not in rows["Os"][1], rows
+    import shutil
+    if not (shutil.which("sdasz80") and shutil.which("ucsim_z80")):
+        return
+    w = tempfile.mkdtemp(prefix="mulhi-")
+    assert Z.sh(["sdasz80", "-o", "m.rel", os.path.join(here, "rt-z80-speed", "__mulhi3.s")], w).returncode == 0
+    for a, b in ((0, 0), (0, 7), (7, 0), (1, 1), (1234, 56), (56, 1234), (0xFFFF, 0xFFFF), (0x8000, 2), (2, 0x8000), (0xFFFF, 1), (255, 255), (0x1234, 0x5678)):
+        open(f"{w}/h.s", "w").write(f"\t.globl ___mulhi3\n\t.area _CODE\n_main::\n\tld sp,#0\n\tld hl,#{a}\n\tld de,#{b}\n\tcall ___mulhi3\n\tld (0x{Z.R:x}),hl\n\thalt\n")
+        open(f"{w}/c.s", "w").write(Z.CRT0)
+        for s in ("h", "c"):
+            assert Z.sh(["sdasz80", "-o", f"{s}.rel", f"{s}.s"], w).returncode == 0
+        p = Z.sh(["sdldz80", "-i", "-b", "_HEADER=0", "-b", "_CODE=0x100", "-b", "_DATA=0x8000", "x", "c.rel", "h.rel", "m.rel"], w)
+        assert p.returncode == 0, p.stderr[-200:]
+        got = Z.run("x.ihx", w)[2]
+        assert got == a * b & 0xFFFF, (a, b, got)
+
+
+if __name__ == "__main__":
+    # every test_*: a hand-kept list ran 4 of 17 and let "ok" stand for all of them
+    tests = [f for n, f in sorted(globals().items()) if n.startswith("test_")]
+    for t in tests:
+        t()
+    print(f"ok ({len(tests)} tests)")
