@@ -215,6 +215,14 @@ impl CombineHooks for X86Lowering<'_> {
         self.zext_free && wide == EVT::I64 && narrow == EVT::I32
     }
 
+    fn narrow_select_through_truncate(&self) -> bool {
+        true
+    }
+
+    fn narrow_min_max_through_truncate(&self) -> bool {
+        self.i16_mul_chains
+    }
+
     /// `X86TargetLowering::isNarrowingProfitable`.
     fn narrowing_profitable(
         &self,

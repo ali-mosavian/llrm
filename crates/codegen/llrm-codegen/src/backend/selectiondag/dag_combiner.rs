@@ -306,6 +306,27 @@ pub trait CombineHooks {
         false
     }
 
+    /// `visitTRUNCATE`'s `(trunc (select c, a, b))` is `(select c, (trunc a),
+    /// (trunc b))` ([L17878]) where the narrowing is free, which x86's is for
+    /// every integer. Not through `free_narrowing`, which gates the
+    /// `SimplifyDemandedBits` shrinks and is judged separately. DEVIATE: off
+    /// by default, as above. Exit: x86 judged.
+    ///
+    /// [L17878]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L17878
+    fn narrow_select_through_truncate(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE: `(trunc (umin/umax/smin/smax x, c))` is the select of the
+    /// truncated operands, as the select fold above would make of the
+    /// expanded min/max; the pin leaves the min/max at the wide type, where
+    /// a constant is a wide `mov` (6 bytes at m16 with the operand-size
+    /// prefix, 2 for a byte). Off by default; per-target table (m16 on).
+    /// Exit 2026-11-12.
+    fn narrow_min_max_through_truncate(&self) -> bool {
+        false
+    }
+
     /// `isNarrowingProfitable(N, wide, narrow)`; X86: not i32 to i16.
     fn narrowing_profitable(
         &self,
@@ -1590,6 +1611,39 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 let narrow_l = self.dag.get_node(ISD::Truncate, vt, &[l]);
                 let narrow_r = self.dag.get_node(ISD::Truncate, vt, &[r]);
                 Some(self.dag.get_node(self.dag.opcode(n0), vt, &[narrow_l, narrow_r]))
+            }
+            ISD::Select
+                if self.level < CombineLevel::AfterLegalizeVectorOps
+                    && self.dag.has_one_use(n0.node)
+                    && vt.is_integer()
+                    && self.hooks.narrow_select_through_truncate() =>
+            {
+                let (cond, a, b) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1), self.dag.operand(n0, 2));
+                let narrow_a = self.dag.get_node(ISD::Truncate, vt, &[a]);
+                let narrow_b = self.dag.get_node(ISD::Truncate, vt, &[b]);
+                Some(self.dag.get_node(ISD::Select, vt, &[cond, narrow_a, narrow_b]))
+            }
+            ISD::UMin | ISD::UMax | ISD::SMin | ISD::SMax
+                if self.level < CombineLevel::AfterLegalizeVectorOps
+                    && self.dag.has_one_use(n0.node)
+                    && vt.is_integer()
+                    && self.hooks.narrow_min_max_through_truncate()
+                    && {
+                        let (l, r) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+                        self.dag.constant(l).is_some() || self.dag.constant(r).is_some()
+                    } =>
+            {
+                let (l, r) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+                let cond = match self.dag.opcode(n0) {
+                    ISD::UMin => CondCode::SetULt,
+                    ISD::UMax => CondCode::SetUGt,
+                    ISD::SMin => CondCode::SetLt,
+                    _ => CondCode::SetGt,
+                };
+                let compare = self.dag.get_setcc(EVT::I1, l, r, cond);
+                let narrow_l = self.dag.get_node(ISD::Truncate, vt, &[l]);
+                let narrow_r = self.dag.get_node(ISD::Truncate, vt, &[r]);
+                Some(self.dag.get_node(ISD::Select, vt, &[compare, narrow_l, narrow_r]))
             }
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => {
                 let (op, x) = (self.dag.opcode(n0), self.dag.operand(n0, 0));
