@@ -179,3 +179,36 @@ fn a_truncated_and_with_a_constant_is_the_and_of_the_truncation() {
     assert_eq!((dag.opcode(root), dag.value_type(root)), (ISD::And, EVT::I8));
     assert_eq!(dag.opcode(dag.operand(root, 0)), ISD::Truncate);
 }
+
+/// A `shl` narrowed to 32 bits took its amount in `i32`, not the target's
+/// `i8`, and no pattern matched it (`CannotSelect(Shl)`, bench `histo` at
+/// m64 once the narrowing ran after legalization).
+#[test]
+fn a_narrowed_shift_takes_the_targets_amount_type() {
+    use super::super::x86_lowering::X86Lowering;
+    let mut dag = dag();
+    let x = dag.get_register(EVT::I64, 5);
+    let (three, mask) = (dag.get_constant(3, EVT::I8), dag.get_constant(0xffff_ffff, EVT::I64));
+    let shl = dag.get_node(ISD::Shl, EVT::I64, &[x, three]);
+    let root = dag.get_node(ISD::And, EVT::I64, &[shl, mask]);
+    dag.set_root(root);
+    let mut hooks =
+        X86Lowering { cmov: true, sse2: false, min_size: false, i16_mul_chains: false, sext_load: true, zext_free: true, profile: None };
+    let tli = TargetLowering::x86_64(Features::default(), MVT::I64);
+    DagCombiner::new(&mut dag, &mut hooks, CombineLevel::AfterLegalizeDag).with_tli(&tli).run();
+    fn narrowed_shifts(
+        dag: &SelectionDAG,
+        v: SDValue,
+        out: &mut Vec<EVT>,
+    ) {
+        if dag.opcode(v) == ISD::Shl && dag.value_type(v) == EVT::I32 {
+            out.push(dag.value_type(dag.operand(v, 1)));
+        }
+        for i in 0..dag.node(v).ops.len() {
+            narrowed_shifts(dag, dag.operand(v, i), out);
+        }
+    }
+    let mut amounts = Vec::new();
+    narrowed_shifts(&dag, dag.get_root(), &mut amounts);
+    assert_eq!(amounts, [EVT::I8], "no i32 shl, or its amount is not i8");
+}

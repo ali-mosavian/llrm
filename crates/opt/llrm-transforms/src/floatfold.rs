@@ -270,6 +270,8 @@ fn exact_reciprocal(
         FloatKind::Double | FloatKind::X86Fp80 => {
             divisor.is_normal() && divisor.to_bits() & 0xf_ffff_ffff_ffff == 0 && (1.0 / divisor).is_normal()
         }
+        // No f64 stands for an fp128 divisor: nothing is rewritten.
+        FloatKind::F128 => false,
     }
 }
 

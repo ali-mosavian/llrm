@@ -236,6 +236,46 @@ impl Tti for Z80Tti {
         }
     }
 
+    /// AArch64's `isLSRCostLess`, not X86's: the base adds come before the
+    /// add-recurrences. The Z80 has no base+register address, so a base add
+    /// is an `add hl,rr` and two moves each trip while another induction
+    /// variable is one `inc rr`: lz4's copy loops kept `dst + off` as a base
+    /// add and their pointers in the frame (170569 clocks, gcc 35781).
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L7461
+    /// DEVIATE Z80L3: `num_base_adds` also comes before `num_regs`. Three
+    /// pairs hold three induction variables, but each base add is an `add
+    /// hl,rr` and moves every trip: reverse -Oz kept `p + i` and `p + j` as
+    /// base adds to save one register and spilled the rest (105 B, 1900 T);
+    /// SDCC's 68 B / 1270 T. Exit: none; the order is the target's.
+    /// Open: `find` -O2/-Oz is 2 B / 27 T worse than the pin's order (a second
+    /// induction variable for the returned index).
+    fn is_lsr_cost_less(
+        &self,
+        a: &LsrCost,
+        b: &LsrCost,
+    ) -> bool {
+        let key = |c: &LsrCost| {
+            (
+                c.num_base_adds,
+                c.num_regs,
+                c.insns,
+                c.add_rec_cost,
+                c.num_iv_muls,
+                c.scale_cost,
+                c.imm_cost,
+                c.setup_cost,
+            )
+        };
+        key(a) < key(b)
+    }
+
+    /// The adds of a use whose fixups all lie after the loop are rated as run
+    /// once (DEVIATE LU12, off in the pin): lz4 -Oz keeps 159 instructions
+    /// against 168 without it.
+    fn lsr_exit_use_adds_run_once(&self) -> bool {
+        true
+    }
+
     // There is no conditional move: a `select` is a branch on the Z80.
     fn has_cmov(&self) -> bool {
         false

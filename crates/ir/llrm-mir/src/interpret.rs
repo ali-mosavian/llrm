@@ -120,6 +120,9 @@ impl<'m> Machine<'m> {
             Some(text) => DataLayout::parse(text).map_err(Trap::Unsupported)?,
             None => DataLayout::default(),
         };
+        if module.context.types.contains(&Type::Float(FloatKind::F128)) {
+            return unsupported("an fp128: the interpreter evaluates floats as doubles");
+        }
         // Address 0 is null; nothing is allocated there.
         let end = NEAR_END as usize;
         let mut machine = Self {
@@ -236,6 +239,7 @@ impl<'m> Machine<'m> {
                 Type::Float(kind) => Val::Float(*kind, *bits),
                 _ => unreachable!("a floating constant"),
             },
+            ConstantKind::Float128(_) => unreachable!("Machine::new refuses a module with an fp128"),
             // The interpreter evaluates an x87 value as a double.
             ConstantKind::Float80(bits) => match types.get(constant.ty) {
                 Type::Float(kind) => Val::Float(*kind, crate::fp80::to_double_bits(*bits)),
@@ -578,6 +582,7 @@ impl<'m> Machine<'m> {
                 let x = match kind {
                     FloatKind::Float => f64::from(f32::from_bits(bits as u32)),
                     FloatKind::Double | FloatKind::X86Fp80 => f64::from_bits(bits),
+                    FloatKind::F128 => unreachable!("Machine::new refuses a module with an fp128"),
                 }
                 .round_ties_even();
                 let width = self.types().int_bits(returns).expect("an integer result");
@@ -1366,6 +1371,7 @@ fn to_f64(
     match kind {
         FloatKind::Float => f64::from(f32::from_bits(bits as u32)),
         FloatKind::Double | FloatKind::X86Fp80 => f64::from_bits(bits),
+        FloatKind::F128 => unreachable!("Machine::new refuses a module with an fp128"),
     }
 }
 
@@ -1376,6 +1382,7 @@ fn from_f64(
     match kind {
         FloatKind::Float => Val::Float(kind, u64::from((value as f32).to_bits())),
         FloatKind::Double | FloatKind::X86Fp80 => Val::Float(kind, value.to_bits()),
+        FloatKind::F128 => unreachable!("Machine::new refuses a module with an fp128"),
     }
 }
 
@@ -1409,6 +1416,7 @@ fn float_binary(
             };
             Val::Float(kind, value.to_bits())
         }
+        FloatKind::F128 => unreachable!("Machine::new refuses a module with an fp128"),
     }
 }
 

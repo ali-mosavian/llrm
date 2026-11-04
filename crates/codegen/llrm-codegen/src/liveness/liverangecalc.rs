@@ -38,6 +38,8 @@
 
 use std::rc::Rc;
 
+use llrm_lir::valuelanes::ValueLanes;
+
 use super::cfg::{Cfg, DomTree};
 use super::liverange::{LiveInterval, LiveRange, LiveRangeUpdater, Segment, VNInfo, Vn};
 use super::slotindex::{InstrKey, SlotIndex, SlotIndexes};
@@ -501,6 +503,14 @@ pub struct Operand {
     /// `readsReg()`: a use, or a def that also reads (tied, partial).
     pub reads_reg: bool,
     pub early_clobber: bool,
+    /// The lanes the operand names (its `:subN`); all of them for a whole
+    /// value.
+    pub lanes: ValueLanes,
+}
+
+impl Operand {
+    /// An operand that names the whole value.
+    pub const ALL: ValueLanes = ValueLanes(u16::MAX);
 }
 
 /// `LiveIntervalCalc` (LiveIntervalCalc.h): `LiveRangeCalc` for the live
@@ -550,6 +560,52 @@ impl LiveIntervalCalc {
         // necessary.
         self.calc.reset_live_out_map(ctx.cfg.len());
         self.extend_to_uses(&mut li.range, operands, ctx);
+        // The sub-ranges (LiveIntervalCalc.cpp#L43,
+        // `MRI->shouldTrackSubRegLiveness`): one per lane mask some def
+        // names alone. DEVIATE: the masks are not refined to disjoint
+        // ones (`refineSubRanges`); two defs of overlapping masks get a
+        // sub-range each. Exit: step 3 of the lane model, when lane
+        // defs exist outside the tests.
+        let mut masks: Vec<ValueLanes> = Vec::new();
+        for mo in operands.iter().filter(|mo| mo.is_def && mo.lanes != Operand::ALL) {
+            if !masks.contains(&mo.lanes) {
+                masks.push(mo.lanes);
+            }
+        }
+        // The lanes no def names alone keep their own sub-range, so the
+        // sub-ranges cover the value (the pin's refined sub-ranges do).
+        if let Some(rest) =
+            masks.iter().fold(None, |all: Option<ValueLanes>, one| Some(all.map_or(*one, |a| a.union(*one))))
+        {
+            let rest = ValueLanes(!rest.0);
+            if !rest.is_empty() {
+                masks.push(rest);
+            }
+        }
+        for lanes in masks {
+            // A def that keeps the rest of the value (`readsReg`) reads the
+            // lanes it does not define.
+            let mut mine: Vec<Operand> = Vec::new();
+            for mo in operands {
+                let reads = if mo.is_def && mo.reads_reg { ValueLanes(!mo.lanes.0) } else { mo.lanes };
+                if mo.is_def && mo.lanes.overlaps(lanes) {
+                    mine.push(Operand { reads_reg: false, ..*mo });
+                }
+                if mo.reads_reg && reads.overlaps(lanes) {
+                    mine.push(Operand { is_def: false, ..*mo });
+                }
+            }
+            // Lanes no def reaches are undefined (`computeSubRangeUndefs`):
+            // a read of the whole value has nothing to extend to there.
+            if !mine.iter().any(|mo| mo.is_def) {
+                continue;
+            }
+            let mut range = LiveRange::new();
+            self.create_dead_defs(&mut range, &mine, ctx);
+            self.calc.reset_live_out_map(ctx.cfg.len());
+            self.extend_to_uses(&mut range, &mine, ctx);
+            li.create_sub_range(lanes).range = range;
+        }
     }
 
     /// `createDeadDefs` (LiveIntervalCalc.cpp#L128).

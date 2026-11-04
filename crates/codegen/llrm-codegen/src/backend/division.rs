@@ -123,7 +123,7 @@ fn chain_product(
     let width = quotient.width;
     let mut product = quotient;
     for &(name, amount) in chain {
-        let into = ir::Held { value: fresh(), width };
+        let into = ir::Held { value: fresh(), width, offset: 0 };
         if name == "flea" {
             let cell =
                 ir::Mem { base: Some(product), index: Some(product), scale: amount, ..ir::Mem::new(None, width) };
@@ -137,7 +137,7 @@ fn chain_product(
             continue;
         }
         if name == "fadd" || name == "fsub" {
-            let shifted = ir::Held { value: fresh(), width };
+            let shifted = ir::Held { value: fresh(), width, offset: 0 };
             parts.push(ir::Semantics {
                 name: Some("shl".into()),
                 dests: vec![ir::Loc::Held(shifted)],
@@ -209,7 +209,7 @@ pub fn reciprocal<'a>(
         return positive_reciprocal(dividend, divisor, results, fresh, cpu, remainder, bits);
     }
     let width = dividend.width;
-    let magnitude = ir::Held { value: fresh(), width };
+    let magnitude = ir::Held { value: fresh(), width, offset: 0 };
     let Some(mut parts) =
         positive_reciprocal(dividend, -divisor, &[magnitude, results[1]], fresh, cpu, remainder, bits)?
     else {
@@ -248,7 +248,7 @@ fn power_of_two(
     let imm = |value: i64| ir::Loc::Imm(ir::Imm { value, width: 1, address: None });
     let mut parts = Vec::new();
     let mut emit = |name: &str, sources: Vec<ir::Loc>, into: Option<ir::Held>| -> ir::Held {
-        let into = into.unwrap_or_else(|| ir::Held { value: fresh(), width });
+        let into = into.unwrap_or_else(|| ir::Held { value: fresh(), width, offset: 0 });
         parts.push(ir::Semantics {
             name: Some(name.into()),
             dests: vec![ir::Loc::Held(into)],
@@ -359,7 +359,7 @@ fn positive_reciprocal<'a>(
                 sources: Vec<ir::Loc>,
                 into: Option<ir::Held>|
      -> ir::Held {
-        let into = into.unwrap_or_else(|| ir::Held { value: fresh(), width });
+        let into = into.unwrap_or_else(|| ir::Held { value: fresh(), width, offset: 0 });
         parts.push(ir::Semantics {
             name: Some(name.into()),
             dests: vec![ir::Loc::Held(into)],
@@ -371,8 +371,8 @@ fn positive_reciprocal<'a>(
     let imm = |value: i64, width: u32| ir::Loc::Imm(ir::Imm { value, width, address: None });
 
     let constant = emit(&mut parts, fresh, ir::Operation::Move, "mov", vec![imm(multiplier, width)], None);
-    let low = ir::Held { value: fresh(), width };
-    let mut high = ir::Held { value: fresh(), width };
+    let low = ir::Held { value: fresh(), width, offset: 0 };
+    let mut high = ir::Held { value: fresh(), width, offset: 0 };
     parts.push(ir::Semantics {
         name: Some("imul".into()),
         dests: vec![ir::Loc::Held(low), ir::Loc::Held(high)],
@@ -546,7 +546,7 @@ pub fn unsigned_reciprocal<'a>(
                 into: Option<ir::Held>,
                 fresh: &mut dyn FnMut() -> u32|
      -> ir::Held {
-        let into = into.unwrap_or_else(|| ir::Held { value: fresh(), width });
+        let into = into.unwrap_or_else(|| ir::Held { value: fresh(), width, offset: 0 });
         parts.push(ir::Semantics {
             name: Some(name.into()),
             dests: vec![ir::Loc::Held(into)],
@@ -556,8 +556,8 @@ pub fn unsigned_reciprocal<'a>(
         into
     };
     let constant = emit(&mut parts, ir::Operation::Move, "mov", vec![imm(multiplier as i64, width)], None, fresh);
-    let low = ir::Held { value: fresh(), width };
-    let high = ir::Held { value: fresh(), width };
+    let low = ir::Held { value: fresh(), width, offset: 0 };
+    let high = ir::Held { value: fresh(), width, offset: 0 };
     parts.push(ir::Semantics {
         name: Some("mul".into()),
         dests: vec![ir::Loc::Held(low), ir::Loc::Held(high)],
@@ -653,14 +653,22 @@ mod tests {
     #[test]
     fn test_a_remainders_product_makes_its_lea_step_as_an_address() {
         let m32 = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "P5", false).unwrap();
-        let results = [ir::Held { value: 2, width: 4 }, ir::Held { value: 3, width: 4 }];
+        let results = [ir::Held { value: 2, width: 4, offset: 0 }, ir::Held { value: 3, width: 4, offset: 0 }];
         let mut count = 4..;
         let mut fresh = || count.next().unwrap();
         for signed in [true, false] {
             let parts = if signed {
-                reciprocal(ir::Held { value: 1, width: 4 }, 10, &results, &mut fresh, m32, true, None)
+                reciprocal(ir::Held { value: 1, width: 4, offset: 0 }, 10, &results, &mut fresh, m32, true, None)
             } else {
-                unsigned_reciprocal(ir::Held { value: 1, width: 4 }, 10, &results, &mut fresh, m32, true, None)
+                unsigned_reciprocal(
+                    ir::Held { value: 1, width: 4, offset: 0 },
+                    10,
+                    &results,
+                    &mut fresh,
+                    m32,
+                    true,
+                    None,
+                )
             }
             .unwrap()
             .expect("a reciprocal");
@@ -682,8 +690,8 @@ mod tests {
     #[test]
     fn test_the_dividend_is_the_operand_the_early_out_reads() {
         let m32 = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).unwrap();
-        let results = [ir::Held { value: 2, width: 4 }, ir::Held { value: 3, width: 4 }];
-        let dividend = ir::Held { value: 1, width: 4 };
+        let results = [ir::Held { value: 2, width: 4, offset: 0 }, ir::Held { value: 3, width: 4, offset: 0 }];
+        let dividend = ir::Held { value: 1, width: 4, offset: 0 };
         for signed in [true, false] {
             let mut count = 4..;
             let mut fresh = || count.next().unwrap();
@@ -709,11 +717,11 @@ mod tests {
     #[test]
     fn test_a_signed_reciprocal_is_priced_by_the_dividends_length() {
         let m32 = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).unwrap();
-        let results = [ir::Held { value: 2, width: 4 }, ir::Held { value: 3, width: 4 }];
+        let results = [ir::Held { value: 2, width: 4, offset: 0 }, ir::Held { value: 3, width: 4, offset: 0 }];
         let attempt = |divisor: i64, bits: Option<i64>| {
             let mut count = 4..;
             let mut fresh = || count.next().unwrap();
-            reciprocal(ir::Held { value: 1, width: 4 }, divisor, &results, &mut fresh, m32, true, bits)
+            reciprocal(ir::Held { value: 1, width: 4, offset: 0 }, divisor, &results, &mut fresh, m32, true, bits)
                 .unwrap()
                 .is_some()
         };
@@ -733,12 +741,15 @@ mod tests {
     #[test]
     fn test_tuned_for_size_a_division_by_a_constant_stays_a_division() {
         let m32 = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", true).unwrap();
-        let results = [ir::Held { value: 2, width: 4 }, ir::Held { value: 3, width: 4 }];
+        let results = [ir::Held { value: 2, width: 4, offset: 0 }, ir::Held { value: 3, width: 4, offset: 0 }];
         let mut count = 4..;
         let mut fresh = || count.next().unwrap();
-        assert_eq!(reciprocal(ir::Held { value: 1, width: 4 }, 7, &results, &mut fresh, m32, true, None), Ok(None));
         assert_eq!(
-            unsigned_reciprocal(ir::Held { value: 1, width: 4 }, 7, &results, &mut fresh, m32, true, None),
+            reciprocal(ir::Held { value: 1, width: 4, offset: 0 }, 7, &results, &mut fresh, m32, true, None),
+            Ok(None)
+        );
+        assert_eq!(
+            unsigned_reciprocal(ir::Held { value: 1, width: 4, offset: 0 }, 7, &results, &mut fresh, m32, true, None),
             Ok(None)
         );
     }
@@ -749,16 +760,19 @@ mod tests {
     #[test]
     fn test_tuned_for_size_a_division_by_a_power_of_two_is_still_shifts() {
         let m16 = crate::backend::cpu::tuned_for(&llrm_x86_m16::M16, "486", true).unwrap();
-        let results = [ir::Held { value: 2, width: 2 }, ir::Held { value: 3, width: 2 }];
+        let results = [ir::Held { value: 2, width: 2, offset: 0 }, ir::Held { value: 3, width: 2, offset: 0 }];
         let mut count = 4..;
         let mut fresh = || count.next().unwrap();
-        let parts = reciprocal(ir::Held { value: 1, width: 2 }, 2, &results, &mut fresh, m16, false, None)
+        let parts = reciprocal(ir::Held { value: 1, width: 2, offset: 0 }, 2, &results, &mut fresh, m16, false, None)
             .unwrap()
             .expect("shifts");
         assert!(parts.iter().all(|one| one.op == ir::Operation::Binary), "{parts:?}");
         // The reciprocal still waits for the clocks: not at -Os.
-        let results = [ir::Held { value: 2, width: 4 }, ir::Held { value: 3, width: 4 }];
-        assert_eq!(reciprocal(ir::Held { value: 1, width: 4 }, 7, &results, &mut fresh, m16, false, None), Ok(None));
+        let results = [ir::Held { value: 2, width: 4, offset: 0 }, ir::Held { value: 3, width: 4, offset: 0 }];
+        assert_eq!(
+            reciprocal(ir::Held { value: 1, width: 4, offset: 0 }, 7, &results, &mut fresh, m16, false, None),
+            Ok(None)
+        );
     }
 
     /// LNGMXX's q+r needs both answers, including negative truncation and
@@ -767,8 +781,8 @@ mod tests {
     #[test]
     fn test_reciprocal_preserves_signed_quotient_and_remainder() {
         for divisor in [3, 7, 10, 31, 1000, 2147483647, -3, -7, -10, -31, -1000, -2147483647] {
-            let source = ir::Held { value: 1, width: 4 };
-            let results = [ir::Held { value: 2, width: 4 }, ir::Held { value: 3, width: 4 }];
+            let source = ir::Held { value: 1, width: 4, offset: 0 };
+            let results = [ir::Held { value: 2, width: 4, offset: 0 }, ir::Held { value: 3, width: 4, offset: 0 }];
             let mut count = 4..;
             let mut fresh = || count.next().unwrap();
             let parts =
@@ -823,8 +837,8 @@ mod tests {
             .map(|divisor| (4, divisor))
             .chain([2, 4, 16, 512, 1 << 14, -2, -16, -512].into_iter().map(|divisor| (2, divisor)))
         {
-            let source = ir::Held { value: 1, width };
-            let results = [ir::Held { value: 2, width }, ir::Held { value: 3, width }];
+            let source = ir::Held { value: 1, width, offset: 0 };
+            let results = [ir::Held { value: 2, width, offset: 0 }, ir::Held { value: 3, width, offset: 0 }];
             let bits = 8 * i64::from(width);
             let wrap = |value: i64| (value << (64 - bits)) >> (64 - bits);
             let mut count = 4..;
@@ -918,13 +932,20 @@ mod tests {
     #[test]
     fn test_unsigned_reciprocal_preserves_quotient_and_remainder() {
         for divisor in [3_i64, 5, 6, 7, 10, 19, 100, 641, 1000, 65537, 2147483647] {
-            let results = [ir::Held { value: 2, width: 4 }, ir::Held { value: 3, width: 4 }];
+            let results = [ir::Held { value: 2, width: 4, offset: 0 }, ir::Held { value: 3, width: 4, offset: 0 }];
             let mut count = 4..;
             let mut fresh = || count.next().unwrap();
-            let parts =
-                unsigned_reciprocal(ir::Held { value: 1, width: 4 }, divisor, &results, &mut fresh, "P5", true, None)
-                    .unwrap()
-                    .expect("a reciprocal on a Pentium");
+            let parts = unsigned_reciprocal(
+                ir::Held { value: 1, width: 4, offset: 0 },
+                divisor,
+                &results,
+                &mut fresh,
+                "P5",
+                true,
+                None,
+            )
+            .unwrap()
+            .expect("a reciprocal on a Pentium");
             for number in [
                 0_u64,
                 1,
@@ -954,11 +975,11 @@ mod tests {
     /// whatever the operand.
     #[test]
     fn test_unsigned_reciprocal_follows_the_cpu_and_the_dividends_length() {
-        let results = [ir::Held { value: 2, width: 4 }, ir::Held { value: 3, width: 4 }];
+        let results = [ir::Held { value: 2, width: 4, offset: 0 }, ir::Held { value: 3, width: 4, offset: 0 }];
         let attempt = |cpu: &str, bits: Option<i64>| {
             let mut count = 4..;
             let mut fresh = || count.next().unwrap();
-            unsigned_reciprocal(ir::Held { value: 1, width: 4 }, 10, &results, &mut fresh, cpu, false, bits)
+            unsigned_reciprocal(ir::Held { value: 1, width: 4, offset: 0 }, 10, &results, &mut fresh, cpu, false, bits)
                 .unwrap()
                 .is_some()
         };
@@ -973,9 +994,9 @@ mod tests {
     fn test_slow_multiply_keeps_division() {
         let mut count = 4..;
         let mut fresh = || count.next().unwrap();
-        let results = [ir::Held { value: 2, width: 4 }, ir::Held { value: 3, width: 4 }];
+        let results = [ir::Held { value: 2, width: 4, offset: 0 }, ir::Held { value: 3, width: 4, offset: 0 }];
         assert_eq!(
-            reciprocal(ir::Held { value: 1, width: 4 }, 7, &results, &mut fresh, "386", true, Some(32)),
+            reciprocal(ir::Held { value: 1, width: 4, offset: 0 }, 7, &results, &mut fresh, "386", true, Some(32)),
             Ok(None)
         );
     }
