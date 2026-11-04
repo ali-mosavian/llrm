@@ -221,6 +221,46 @@ llc_program = "llrm-m68k-llc"
 object = "elf"
 link = []
 
+[m68k-68010]
+description = "m68k"
+triple = "m68k-unknown-linux-gnu"
+datalayout = "{datalayout:m68k}"
+clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68010", "-ffreestanding"]
+llc = ["-mcpu=68010"]
+llc_program = "llrm-m68k-llc"
+object = "elf"
+link = []
+
+[m68k-68030]
+description = "m68k"
+triple = "m68k-unknown-linux-gnu"
+datalayout = "{datalayout:m68k}"
+clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68030", "-ffreestanding"]
+llc = ["-mcpu=68030"]
+llc_program = "llrm-m68k-llc"
+object = "elf"
+link = []
+
+[m68k-68040]
+description = "m68k"
+triple = "m68k-unknown-linux-gnu"
+datalayout = "{datalayout:m68k}"
+clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68040", "-ffreestanding"]
+llc = ["-mcpu=68040"]
+llc_program = "llrm-m68k-llc"
+object = "elf"
+link = []
+
+[m68k-68060]
+description = "m68k"
+triple = "m68k-unknown-linux-gnu"
+datalayout = "{datalayout:m68k}"
+clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68060", "-ffreestanding"]
+llc = ["-mcpu=68060"]
+llc_program = "llrm-m68k-llc"
+object = "elf"
+link = []
+
 # Z80, as far as sdasz80 text: clang's msp430 is only the C front end (16-bit int and pointers, as SDCC; unsigned char), its
 # datalayout replaced by the Z80's. A row stops at -S, which the tests assemble and link with sdasz80 and sdldz80.
 [z80-sdcc]
