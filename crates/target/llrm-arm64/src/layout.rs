@@ -159,25 +159,45 @@ pub fn fold(
     if blocks.is_empty() {
         return blocks;
     }
-    // A branch to a block that only returns is the return (`TailDuplicator`'s
-    // return blocks).
-    let returns: HashSet<String> = blocks
+    // A jump to a block that only returns is that return (`TailDuplicator`).
+    // DEVIATE: the pin copies any block of `TailDupSize` (2; 4 at -O3; 1 at
+    // optsize) instructions, and its copy meets `MachineCopyPropagation`;
+    // copying two without that grows `recgcd` by 4 B. Exit: 11-12 with AP1.
+    let dup_size = 1;
+    let returns: HashMap<String, (Vec<Inst>, Vec<Option<(u32, u32)>>)> = blocks
         .iter()
-        .filter(|block| matches!(block.insts.as_slice(), [Inst::Ret { .. }]))
-        .map(|block| block.label.clone())
+        .filter(|block| {
+            block.insts.len() <= dup_size
+                && matches!(block.insts.last(), Some(Inst::Ret { .. }))
+                && block.insts[..block.insts.len() - 1].iter().all(|inst| {
+                    !matches!(
+                        inst,
+                        Inst::Label(_)
+                            | Inst::Branch { .. }
+                            | Inst::BranchCond { .. }
+                            | Inst::CompareBranch { .. }
+                            | Inst::TestBranch { .. }
+                            | Inst::BranchReg { .. }
+                            | Inst::Brk { .. }
+                    )
+                })
+        })
+        .map(|block| (block.label.clone(), (block.insts.clone(), block.locs.clone())))
         .collect();
     for at in 0..blocks.len() {
-        let ret = match blocks[at].insts.last() {
-            Some(Inst::Branch { link: false, target: Target::Label(label) }) if returns.contains(label) => blocks
-                .iter()
-                .find(|block| &block.label == label)
-                .and_then(|block| Some((block.insts.first().cloned()?, block.locs.first().copied().flatten()))),
+        let copy = match blocks[at].insts.last() {
+            Some(Inst::Branch { link: false, target: Target::Label(label) }) if label != &blocks[at].label => {
+                returns.get(label).cloned()
+            }
             _ => None,
         };
-        // The copy keeps the return's own source place, not the branch's.
-        if let Some((ret, place)) = ret {
-            *blocks[at].insts.last_mut().expect("a branch") = ret;
-            *blocks[at].locs.last_mut().expect("a place per instruction") = place;
+        // The copy keeps the return block's own source places.
+        if let Some((insts, locs)) = copy {
+            let Lowered { insts: mine, locs: places, .. } = &mut blocks[at];
+            mine.pop();
+            places.pop();
+            mine.extend(insts);
+            places.extend(locs);
         }
     }
     // A fall-through becomes a branch, so that blocks can move.
