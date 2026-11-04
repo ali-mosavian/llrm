@@ -1,4 +1,4 @@
-/* __cmpdf2, __eqdf2, __nedf2, __ltdf2, __ledf2, __gedf2, __gtdf2. With SF_CMP_SPLIT each is built alone from cmp_<entry>.c (SF_CMP_ONLY_<ENTRY>): __cmpdf2 holds the ordering core, the others jump or call to it. */
+/* __cmpdf2, __eqdf2, __nedf2, __ltdf2, __ledf2, __gedf2, __gtdf2. With SF_CMP_SPLIT each is built alone from cmp_<entry>.c (SF_CMP_ONLY_<ENTRY>): __cmpdf2 holds the ordering core, eq, ne, lt and le are aliases of it (one OMF public name each), gt an alias of ge, which calls it. */
 #include "f64.h"
 #include "../cmp.inc"
 
@@ -13,23 +13,32 @@ int SF_NAME(cmpdf2)(sf_double a, sf_double b);
 #endif
 #if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_CMP)
 int SF_NAME(cmpdf2)(sf_double a, sf_double b) { return sf_cmp_bits_64(d2b(a), d2b(b)); }
+#ifdef SF_CMP_SPLIT
+int SF_NAME(eqdf2)(sf_double a, sf_double b) SF_CMP_ALIAS(SF_NAME(cmpdf2));
+int SF_NAME(nedf2)(sf_double a, sf_double b) SF_CMP_ALIAS(SF_NAME(cmpdf2));
+int SF_NAME(ltdf2)(sf_double a, sf_double b) SF_CMP_ALIAS(SF_NAME(cmpdf2));
+int SF_NAME(ledf2)(sf_double a, sf_double b) SF_CMP_ALIAS(SF_NAME(cmpdf2));
 #endif
-#if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_EQ)
+#endif
+#if !defined(SF_CMP_SPLIT)
 int SF_NAME(eqdf2)(sf_double a, sf_double b) { return SF_CMP_FWD(a, b); }
 #endif
-#if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_NE)
+#if !defined(SF_CMP_SPLIT)
 int SF_NAME(nedf2)(sf_double a, sf_double b) { return SF_CMP_FWD(a, b); }
 #endif
-#if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_LT)
+#if !defined(SF_CMP_SPLIT)
 int SF_NAME(ltdf2)(sf_double a, sf_double b) { return SF_CMP_FWD(a, b); }
 #endif
-#if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_LE)
+#if !defined(SF_CMP_SPLIT)
 int SF_NAME(ledf2)(sf_double a, sf_double b) { return SF_CMP_FWD(a, b); }
 #endif
 #if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_GE)
 int SF_NAME(gedf2)(sf_double a, sf_double b) { return SF_CMP_REV(a, b); }
+#ifdef SF_CMP_SPLIT
+int SF_NAME(gtdf2)(sf_double a, sf_double b) SF_CMP_ALIAS(SF_NAME(gedf2));
 #endif
-#if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_GT)
+#endif
+#if !defined(SF_CMP_SPLIT)
 int SF_NAME(gtdf2)(sf_double a, sf_double b) { return SF_CMP_REV(a, b); }
 #endif
 
