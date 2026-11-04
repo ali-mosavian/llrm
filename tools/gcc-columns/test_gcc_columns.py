@@ -225,6 +225,13 @@ def test_z80_mul16_o2_uses_the_early_exit_helper_and_it_is_exact():
         assert got == a * b & 0xFFFF, (a, b, got)
 
 
+def test_6502_runtime_has_the_indirect_call_helper():
+    """cc65's basic.c (a dispatch table) did not compile with the 6502 cc1: a call through a pointer was an ICE. The cc1 now stores the
+    pointer in __icv and does jsr __icall; both must be defined by the runtime the bench links, or the cell is a link failure."""
+    text = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "rt-6502", "icall.s")).read()
+    assert re.search(r"\.export\s+__icall\s*,\s*__icv", text) and "__icall:" in text and "jmp (__icv)" in text
+
+
 def test_z80_runtime_has_the_iy_indirect_call_helper():
     """The z80 cc1 calls through a pointer as `call ___call_iy` (hl carries the first word argument; a call through hl looped in LRA on
     static_pointers). Without rt-z80/__call_iy.s the cell is a link failure, and a hand-helper cell must be noted as such."""
@@ -240,3 +247,4 @@ if __name__ == "__main__":
     for t in tests:
         t()
     print(f"ok ({len(tests)} tests)")
+
