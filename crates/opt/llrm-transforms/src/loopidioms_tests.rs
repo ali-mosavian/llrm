@@ -1138,18 +1138,17 @@ b2:
 }
 ";
 
-/// The pin forms the memset of every constant-store loop. Weighing the loop
-/// against its fills is only for a target whose fill saves and restores a
-/// segment register; at m32 (`fill_segment` 0) the fills of lru's init loop at
-/// -Os were left a loop by the same test, +21 instructions and +45 clocks.
+/// lru -Os at m32 (no segment setup, no clock price) took the pin's memsets
+/// the loop was smaller than: five inline fills, +38 B over keeping the loop
+/// (815 against 777). A fill is taken when its stores are fewer bytes than the
+/// loop.
 #[test]
-fn a_target_with_no_segment_setup_forms_the_memsets_the_pin_forms() {
-    let sized = |segment: i64| {
+fn a_fill_stored_inline_is_taken_only_when_its_stores_are_fewer_bytes_than_the_loop() {
+    let sized = |store_immediate: i64| {
         let costs = crate::profit::OperationCosts {
             fill: 12,
-            fill_segment: segment,
             store: 6,
-            store_immediate: 6,
+            store_immediate,
             add: 4,
             branch: 2,
             ..Default::default()
@@ -1160,9 +1159,9 @@ fn a_target_with_no_segment_setup_forms_the_memsets_the_pin_forms() {
         pass.for_size = true;
         crate::testing::managed_on(&mut module, pass, machine)
     };
-    let (flat, setup) = (sized(0), sized(4));
-    assert!(flat.contains("call void @llvm.memset"), "no segment setup: the pin's memsets\n{flat}");
-    assert!(!setup.contains("call void @llvm.memset"), "ES around each fill: the loop is smaller\n{setup}");
+    let (cheap, dear) = (sized(1), sized(10));
+    assert!(cheap.contains("call void @llvm.memset"), "stores under the loop's bytes: the memsets\n{cheap}");
+    assert!(!dear.contains("call void @llvm.memset"), "stores over the loop's bytes: the loop\n{dear}");
 }
 
 const SMALL_INIT_LOOP: &str = "@a = global [3 x i16] zeroinitializer
@@ -1256,7 +1255,8 @@ ol:
   %id = icmp eq i16 %in, 8
   br i1 %id, label %b2, label %o
 b2:
-  ret i16 %s1
+  %r = phi i16 [ %s1, %ol ]
+  ret i16 %r
 }
 ";
 
@@ -1278,13 +1278,14 @@ fn through_the_loop_passes(text: &str) -> String {
 /// memset of the array). The pin's loop pass manager deletes the inner loop the
 /// idiom made dead before it visits the parent, which then holds a memset in a
 /// loop and promotes it (`processLoopMemSet`). At speed on the 486 the nest's
-/// row is inline dword stores (12 clocks a trip) against `rep stosd`'s 4 a
-/// dword (145 for the array, 96 for the nest: matmul nib -O2 +289 clocks), so
-/// the nest stays.
+/// row is inline dword stores against `rep stosd`'s 4 a dword: 144 clocks for
+/// the nest and 145 for the array, 36 bytes fewer, which pays at 1 clock = 2 B.
+/// Not measured on matmul nib -O2 since the loop passes see the intrinsic they
+/// declared (#6534): the nest is one memset.
 #[test]
-fn a_nest_of_zero_stores_stays_at_speed_once_the_inner_loop_is_deleted() {
+fn a_nest_of_zero_stores_is_one_memset_once_the_inner_loop_is_deleted() {
     let after = through_the_loop_passes(ZEROED_NEST);
-    assert!(!after.contains("i8 0, i16 128"), "{after}");
+    assert!(after.contains("i8 0, i16 128"), "{after}");
 }
 
 /// An inner loop that computes something the function returns is not dead: it
@@ -1292,8 +1293,8 @@ fn a_nest_of_zero_stores_stays_at_speed_once_the_inner_loop_is_deleted() {
 #[test]
 fn a_nest_whose_inner_loop_is_live_stays_a_nest() {
     let after = through_the_loop_passes(LIVE_NEST);
-    assert!(!after.contains("i8 0, i16 128"), "{after}");
     assert!(after.contains("phi"), "{after}");
+    assert!(!after.contains("ret i16 poison"), "{after}");
 }
 
 /// lru at m32 -O1: a fill of fewer bytes and more clocks than its loop (-32 B
@@ -1387,10 +1388,10 @@ fn a_loop_trip_is_priced_at_its_conditional_branch_only() {
         manager.run_module(&mut module, std::rc::Rc::new(machine)).unwrap();
         printed(&module).contains("i8 0, i16 128")
     };
-    // The loop is 8 trips of 9 clocks (the branch 3, the step 1, the row's 5
-    // stores).
+    // The loop is 8 trips of 13 clocks (the branch 3, the step 1, the row's
+    // memset and its address).
     assert!(merges(60), "a fill under the loop's clocks is taken");
-    assert!(!merges(90), "a fill over the loop's clocks is not: the loop ran 72, not 96");
+    assert!(!merges(120), "a fill over the loop's clocks is not: the loop ran 104");
 }
 
 /// A constant fill was priced at the register store's bytes; its immediate
@@ -1401,3 +1402,4 @@ fn inline_fill_stores_are_priced_as_immediate_stores() {
     let fill = super::InlineFills { max_stores: 8, bytes: 8 };
     assert_eq!(fill.price(&prices), 2 * (10 + 1));
 }
+
