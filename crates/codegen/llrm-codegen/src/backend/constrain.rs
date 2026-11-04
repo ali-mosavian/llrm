@@ -772,6 +772,7 @@ fn _move(
         uses,
     );
     made.call = beside.call.clone();
+    made.line = beside.line;
     Arc::new(made)
 }
 

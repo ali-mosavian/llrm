@@ -214,6 +214,12 @@ pub struct Options {
     /// `llc`, whose own CodeGenPrepare runs inside it, take the module
     /// before this one (`-fllrm-cgpaddr`).
     pub cgpaddr: bool,
+    /// `extload`, DAGCombiner's `ExtendUsesToFormExtLoad` and
+    /// `ExtendSetCCUses`: the compares of a loaded value compare its
+    /// extension. The pin forms the extending load only where the target
+    /// has it (`isLoadExtLegal`); off for a target that has not, where the
+    /// wider compare costs more than the extension saved.
+    pub extload: bool,
     /// `TypePromotion`, which the pin runs before CodeGenPrepare where the
     /// target asks (`-fllrm-typepromotion`).
     pub typepromotion: bool,
@@ -310,6 +316,7 @@ impl Default for Options {
             promote: true,
             strength: true,
             cgpaddr: true,
+            extload: true,
             typepromotion: true,
             lsr: true,
             unroll: true,
@@ -485,6 +492,7 @@ impl Options {
             "lsr" | "canonfreeze" | "maskscale" => self.strength && self.lsr,
             "indvars" | "window" | "gepoffset" => self.strength,
             "cgpaddr" => self.strength && self.cgpaddr,
+            "extload" => self.extload,
             "typepromotion" => self.strength && self.typepromotion,
             "unroll" => self.unroll,
             "peel" => self.peel,
@@ -871,7 +879,7 @@ pub(crate) fn llvm_order(
                 // the option is read by `simplifySwitch`, untranslated.
                 simplify_cfg("decide@675"),
                 combine("combine@677"),
-                slot("aggressive-instcombine@678", Box::new(crate::trunc_inst_combine::TruncInstCombine)),
+                slot("aggressive-instcombine@678", Box::new(crate::aggressive_instcombine::AggressiveInstCombine)),
                 slot("tailrec@688", Box::new(tailcallelim::TailCallElim)),
                 // SimplifyCFGOptions().convertSwitchRangeToICmp(true), L691:
                 // the option is read by `simplifySwitch`, untranslated.
@@ -1065,11 +1073,36 @@ pub(crate) fn function_stages(applied: &Applied) -> Vec<Fixed> {
     ]
 }
 
+/// The first value of a defined function that is a vector, where the target
+/// has no vector MIR: "a <4 x i32> value", as isel refuses a type it has no
+/// registers for. The mid-end assumes scalars (`combine_shared::width`).
+pub fn refuse_vectors(program: &Program) -> Result<(), String> {
+    if program.target.has_vector_mir() {
+        return Ok(());
+    }
+    for module in &program.modules {
+        for (_, global, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
+            for at in 0..function.value_count() {
+                let ty = function.value(llrm_mir::module::ValueId(at as u32)).ty;
+                if matches!(
+                    module.context.types.get(ty),
+                    llrm_mir::types::Type::Vector { .. }
+                ) {
+                    let name = global.name.as_deref().unwrap_or("?");
+                    return Err(format!("@{name}: a {} value", module.context.types.display(ty)));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `applied`, with what the pipeline did to each function.
 pub fn recorded(
     program: &mut Program,
     applied: &Applied,
 ) -> Result<Vec<Stage>, String> {
+    refuse_vectors(program)?;
     timed();
     let mut manager = PassManager::default();
     manager.verify_each = llrm_support::debug::verifying();
@@ -1148,6 +1181,7 @@ pub fn recorded(
             speed_rate: applied.options.prices_bytes(),
             inlining: applied.options.inline.limit != 0,
             flag: applied.options.inline.recursive,
+            o3: applied.options.inline.limit >= 250,
         }
     });
     manager.add_program(Interprocedural {
@@ -1851,6 +1885,7 @@ impl Run {
             sections: Default::default(),
             special: Default::default(),
             global_metadata: Default::default(),
+            ..Module::default()
         };
         std::fs::create_dir_all(file.parent().expect("a file in a directory"))
             .and_then(|()| std::fs::write(file, llrm_mir::print::module(&module)))

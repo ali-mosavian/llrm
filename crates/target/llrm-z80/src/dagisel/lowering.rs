@@ -14,9 +14,10 @@
 //! over all sixteen bits and C as the borrow.
 
 use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
+use llrm_codegen::backend::selectiondag::known_bits::masked_value_is_zero;
 use llrm_codegen::backend::selectiondag::legalize_dag::Hooks;
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
-use llrm_codegen::backend::selectiondag::{Action, LoadExt, NodeData, SDValue, SelectionDAG};
+use llrm_codegen::backend::selectiondag::{Action, LoadExt, MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
 use llrm_codegen::backend::selectiondag::{TargetLowering, TargetLoweringInfo};
 
 use super::generated::ids::isd as ids;
@@ -27,6 +28,7 @@ pub mod z80isd {
 
     pub const CMP: ISD = ISD::Target(ids::CMP);
     pub const WRAPPER: ISD = ISD::Target(ids::WRAPPER);
+    pub const SUBZX: ISD = ISD::Target(ids::SUBZX);
     pub const BRCOND: ISD = ISD::Target(ids::BRCOND);
     pub const SETCC: ISD = ISD::Target(ids::SETCC);
     pub const TSTS: ISD = ISD::Target(ids::TSTS);
@@ -43,7 +45,7 @@ pub mod cond {
 
 pub fn target_lowering() -> TargetLowering {
     use ISD::*;
-    let mut tl = TargetLowering::empty(TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false));
+    let mut tl = TargetLowering::empty(TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false).with_soft_float());
     tl.init_actions();
     for vt in [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64] {
         for ext in [LoadExt::SExtLoad, LoadExt::ZExtLoad, LoadExt::ExtLoad] {
@@ -80,7 +82,9 @@ pub fn target_lowering() -> TargetLowering {
         }
     };
     set(&[Add, Sub, And, Or, Xor], &[MVT::I8], Action::Legal);
-    set(&[Add, Sub, And, Or, Xor], &[MVT::I16], Action::Legal);
+    set(&[Add, And, Or, Xor], &[MVT::I16], Action::Legal);
+    // the difference of two bytes known to be widened (`lower_sub`)
+    set(&[Sub], &[MVT::I16], Action::Custom);
     // A shift by a constant is an instruction; by a variable it is a call
     // (`lower_shift`).
     set(&[Shl, Srl, Sra], &[MVT::I8, MVT::I16], Action::Custom);
@@ -95,6 +99,8 @@ pub fn target_lowering() -> TargetLowering {
     set(&[Undef, Poison], &[MVT::I1, MVT::I8, MVT::I16], Action::Expand);
     set(&[ZeroExtend, AnyExtend, SignExtend], &[MVT::I8, MVT::I16], Action::Custom);
     set(&[SetCC, Select], &[MVT::I8, MVT::I16], Action::Custom);
+    // i1 is a register type here, but its memory is a byte (`lower_bit_load`)
+    set(&[Load, Store], &[MVT::I1], Action::Custom);
     for (vt, names) in [
         (MVT::I8, ["__mulqi3", "__divqi3", "__udivqi3", "__modqi3", "__umodqi3"]),
         (MVT::I16, ["__mulhi3", "__divhi3", "__udivhi3", "__modhi3", "__umodhi3"]),
@@ -105,16 +111,22 @@ pub fn target_lowering() -> TargetLowering {
     }
     // the longs are expanded to words; a divide or a variable shift of one is
     // the call, not a word-wise expansion
-    for (op, name) in [SDiv, UDiv, SRem, URem, Shl, Srl, Sra].into_iter().zip([
-        "__divsi3",
-        "__udivsi3",
-        "__modsi3",
-        "__umodsi3",
-        "__ashlsi3",
-        "__lshrsi3",
-        "__ashrsi3",
-    ]) {
-        tl.set_libcall_name(op, MVT::I32, name);
+    for (vt, names) in [
+        (MVT::I32, ["__divsi3", "__udivsi3", "__modsi3", "__umodsi3", "__ashlsi3", "__lshrsi3", "__ashrsi3"]),
+        (MVT::I64, ["__divdi3", "__udivdi3", "__moddi3", "__umoddi3", "__ashldi3", "__lshrdi3", "__ashrdi3"]),
+    ] {
+        for (op, name) in [SDiv, UDiv, SRem, URem, Shl, Srl, Sra].into_iter().zip(names) {
+            tl.set_libcall_name(op, vt, name);
+        }
+    }
+    // softened floats: compiler-rt's routines
+    for (vt, names) in [
+        (MVT::F32, ["__addsf3", "__subsf3", "__mulsf3", "__divsf3"]),
+        (MVT::F64, ["__adddf3", "__subdf3", "__muldf3", "__divdf3"]),
+    ] {
+        for (op, name) in [FAdd, FSub, FMul, FDiv].into_iter().zip(names) {
+            tl.set_libcall_name(op, vt, name);
+        }
     }
     tl.set_operation_action(BrCond, MVT::Other, Action::Custom);
     tl.set_operation_action(GlobalAddress, MVT::I16, Action::Custom);
@@ -158,11 +170,14 @@ impl Hooks for Z80Lowering {
     ) -> Option<SDValue> {
         match dag.opcode(node) {
             ISD::Shl | ISD::Srl | ISD::Sra => self.lower_shift(dag, node),
+            ISD::Sub => Some(lower_sub(dag, node)),
             ISD::SetCC => lower_setcc(dag, node),
             ISD::Select => Some(lower_select(dag, node)),
             ISD::BrCond => Some(lower_brcond(dag, node)),
             ISD::ZeroExtend | ISD::AnyExtend | ISD::SignExtend => Some(lower_extend(dag, node)),
             ISD::GlobalAddress => lower_global_address(dag, node),
+            ISD::Load if dag.value_type(node) == EVT::I1 => lower_bit_load(dag, node),
+            ISD::Store if dag.value_type(dag.operand(node, 1)) == EVT::I1 => lower_bit_store(dag, node),
             _ => None,
         }
     }
@@ -181,16 +196,39 @@ impl Hooks for Z80Lowering {
         use super::call::{Ext, In, Out, lower_call};
         let ext = if signed { Ext::Sign } else { Ext::Zero };
         // `LowerCallTo` splits a type the target holds in no register: a long
-        // travels as two words, low first
+        // travels as two words and a long long as four, low first
         let mut outs = Vec::new();
+        // a result of no register is the pointer to its memory, the first
+        // argument (`CanLowerReturn` false: the hidden `sret` pointer)
+        let slot = (ret == EVT::I64).then(|| dag.create_stack_temporary(8, 1));
+        if let Some(cell) = slot {
+            outs.push(Out {
+                value: dag.get_frame_index(EVT::I16, cell),
+                ext: Ext::Any,
+                pointer: true,
+                arg_vt: EVT::I16,
+                split: false,
+                variadic: false,
+                sret: true,
+            });
+        }
         for &value in args {
             let vt = dag.value_type(value);
-            let parts = if vt == EVT::I32 {
-                let sixteen = dag.get_constant(16, EVT::I8);
-                let high = dag.get_node(ISD::Srl, vt, &[value, sixteen]);
-                vec![dag.get_node(ISD::Truncate, EVT::I16, &[value]), dag.get_node(ISD::Truncate, EVT::I16, &[high])]
-            } else {
+            let words = match vt {
+                EVT::I32 => 2,
+                EVT::I64 => 4,
+                _ => 1,
+            };
+            let parts: Vec<SDValue> = if words == 1 {
                 vec![value]
+            } else {
+                (0..words)
+                    .map(|word| {
+                        let by = dag.get_constant(16 * word as u128, EVT::I8);
+                        let shifted = if word == 0 { value } else { dag.get_node(ISD::Srl, vt, &[value, by]) };
+                        dag.get_node(ISD::Truncate, EVT::I16, &[shifted])
+                    })
+                    .collect()
             };
             let split = parts.len() > 1;
             outs.extend(parts.into_iter().map(|part| Out {
@@ -204,20 +242,69 @@ impl Hooks for Z80Lowering {
             }));
         }
         let part_vt = if ret == EVT::I32 { EVT::I16 } else { ret };
-        let ins =
-            vec![
-                In { vt: part_vt, pointer: false, arg_vt: ret, split: ret == EVT::I32, sret: false, ext: Ext::Any };
-                if ret == EVT::I32 { 2 } else { 1 }
-            ];
+        let ins = match ret {
+            EVT::I64 => Vec::new(),
+            _ => {
+                vec![
+                    In { vt: part_vt, pointer: false, arg_vt: ret, split: ret == EVT::I32, sret: false, ext: Ext::Any };
+                    if ret == EVT::I32 { 2 } else { 1 }
+                ]
+            }
+        };
         let callee = dag.get_target_external_symbol(EVT::I16, name);
         let root = dag.entry_node();
-        let (_chain, values) = lower_call(dag, root, callee, &outs, &ins).ok()?;
+        let (chain, values) = lower_call(dag, root, callee, &outs, &ins).ok()?;
+        if let Some(cell) = slot {
+            let address = dag.get_frame_index(EVT::I16, cell);
+            let info = MemInfo {
+                mem_vt: EVT::I64,
+                align: 1,
+                volatile: false,
+                base: MemBase::Stack(cell),
+                ext: None,
+                space: 0,
+                ordering: None,
+            };
+            return Some(dag.get_load(EVT::I64, chain, address, info));
+        }
         match values[..] {
             [one] => Some(one),
             [lo, hi] => Some(dag.get_node(ISD::BuildPair, ret, &[lo, hi])),
             _ => None,
         }
     }
+}
+
+/// A bit in memory is a byte with the upper bits zero, as the pin's type
+/// legalizer makes it where `i1` is not a register type (`PromoteIntRes_LOAD`,
+/// `LegalizeDAG`'s truncating store of a non-byte width). Left alone, a loaded
+/// bit tested by a branch and widened by a `select` was selected into a
+/// compare of its own conditional move.
+fn lower_bit_load(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let NodeData::Mem(info) = dag.node(node).data else { return None };
+    if info.ext.is_some() {
+        return None;
+    }
+    let (chain, ptr) = (dag.operand(node, 0), dag.operand(node, 1));
+    let byte = dag.get_load(EVT::I8, chain, ptr, MemInfo { mem_vt: EVT::I8, ..info });
+    let one = dag.get_constant(1, EVT::I8);
+    let masked = dag.get_node(ISD::And, EVT::I8, &[byte, one]);
+    let bit = dag.get_node(ISD::Truncate, EVT::I1, &[masked]);
+    Some(dag.get_node_multi(ISD::MergeValues, &[EVT::I1, EVT::OTHER], &[bit, SDValue { node: byte.node, res: 1 }]))
+}
+
+/// The store of a bit: the byte of 0 or 1 (`lower_bit_load`).
+fn lower_bit_store(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let NodeData::Mem(info) = dag.node(node).data else { return None };
+    let (chain, value, ptr) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let byte = condition_byte(dag, value);
+    Some(dag.get_store(chain, byte, ptr, MemInfo { mem_vt: EVT::I8, ..info }))
 }
 
 /// A condition widened to a byte or a word is `select cond, 1, 0`; any other
@@ -248,6 +335,30 @@ fn lower_extend(
     let (one, zero) = (dag.get_constant(set, vt), dag.get_constant(0, vt));
     let select = dag.get_node(ISD::Select, vt, &[condition, one, zero]);
     lower_select(dag, select)
+}
+
+/// A word difference whose operands both have a zero high byte is the
+/// difference of two zero-extended bytes (`SUBZX8`), whether or not the
+/// extension is in the DAG: a phi of a byte and a constant is a word register
+/// the extension was made before.
+fn lower_sub(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let (left, right) = (dag.operand(node, 0), dag.operand(node, 1));
+    let widened = |dag: &SelectionDAG, value| dag.opcode(value) == ISD::ZeroExtend;
+    if dag.value_type(node) != EVT::I16
+        || (widened(dag, left) && widened(dag, right))
+        || !masked_value_is_zero(dag, left, 0xFF00)
+        || !masked_value_is_zero(dag, right, 0xFF00)
+    {
+        return node;
+    }
+    let byte = |dag: &mut SelectionDAG, value| {
+        if widened(dag, value) { dag.operand(value, 0) } else { dag.get_node(ISD::Truncate, EVT::I8, &[value]) }
+    };
+    let (left, right) = (byte(dag, left), byte(dag, right));
+    dag.get_node(z80isd::SUBZX, EVT::I16, &[left, right])
 }
 
 /// `LowerGlobalAddress`: `WRAPPER` of the address, an immediate the linker
@@ -471,6 +582,12 @@ fn condition_byte(
                 Some(lowered) => lowered,
                 None => dag.get_node(ISD::ZeroExtend, EVT::I8, &[value]),
             },
+            // a multi-result lowering's wrapper (`lower_bit_load`): the bit it
+            // holds
+            ISD::MergeValues => {
+                let bit = dag.operand(value, value.res as usize);
+                condition_byte(dag, bit)
+            }
             ISD::Truncate if matches!(dag.value_type(dag.operand(value, 0)), EVT::I8 | EVT::I16) => {
                 let wide = dag.operand(value, 0);
                 let byte =

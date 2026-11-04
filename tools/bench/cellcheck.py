@@ -36,6 +36,18 @@ def check(head: dict, base: dict) -> list[str]:
     return lines
 
 
+def pad_parity(head: dict, base: dict) -> set[str]:
+    """Cells equal in bytes, instructions and memory operands whose clocks differ: a far call's NOP-or-3E pad flips by the parity of its address
+    (+-1 clock per call). A candidate to check in objdump, never a waiver: `check` still fails them."""
+    same = ("code_bytes", "instructions", "memory_operands")
+    return {
+        key
+        for key, want in base.items()
+        if (got := head.get(key)) and all(one in got and one in want and got[one] == want[one] for one in same)
+        and got.get("clocks") != want.get("clocks")
+    }
+
+
 def main(argv: list[str]) -> int:
     head_file, base_file = argv
     head, base = (json.load(open(f)) for f in (head_file, base_file))
@@ -46,7 +58,10 @@ def main(argv: list[str]) -> int:
         print(f"{cells}, ALL NOBASE: {'no .harness sidecar' if None in (one, two) else f'harness digests differ ({one} vs {two})'}")
         return 1
     lines = check(head, base)
-    print(*lines, f"{cells}, {len(lines)} fail", sep="\n")
+    pads = pad_parity(head, base)
+    padded = [one for one in lines if one.split(": ", 1)[0] in pads]
+    print("PAD-PARITY? (equal bytes+instrs, clocks differ; verify 3E vs NOP in objdump; still failing):", *padded, sep="\n") if padded else None
+    print(*[one for one in lines if one not in padded], f"{cells}, {len(lines)} fail", sep="\n")
     return bool(lines)
 
 

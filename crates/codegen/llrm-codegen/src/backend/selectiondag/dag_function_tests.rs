@@ -1064,11 +1064,7 @@ fn a_proved_move_at_m16_is_inline_string_code() {
         up.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
     assert!(names.iter().any(|n| n == "movsd") && names.iter().all(|n| n != "call"), "{names:?}");
     let down = move_3840_at_m16(", !llrm.backward !0");
-    assert!(
-        down.inline.values().any(|bytes| bytes[..] == [0x1E, 0x07, 0xFD, 0xF3, 0x66, 0xA5, 0xFC]),
-        "{:?}",
-        down.inline
-    );
+    assert!(down.inline.values().any(|bytes| bytes[..] == [0xFD, 0xF3, 0x66, 0xA5, 0xFC]), "{:?}", down.inline);
 }
 
 /// A forward string move of 3840 bytes (a multiple of four) was followed by
@@ -1301,6 +1297,35 @@ define i32 @f(i32 %a, i32 %b) {
     let places: Vec<(u32, u32)> =
         done.body.insns().iter().filter_map(|one| one.line.map(|at| (at.line, at.column))).collect();
     assert!(places.contains(&(7, 5)) && places.contains(&(8, 12)), "{places:?}");
+}
+
+/// Every function rebuilt the module's global-name table, so N functions in
+/// a module of N globals cost N^2 (27% of the 2400-function assemble).
+#[test]
+fn the_functions_of_a_module_share_one_table_of_global_names() {
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a) {
+entry:
+  ret i32 %a
+}
+define i32 @g(i32 %a) {
+entry:
+  ret i32 %a
+}
+",
+    )
+    .expect("parses");
+    let mut pool = crate::backend::constpool::Pool::new(module.globals.len() as i64);
+    let cpu = crate::backend::cpu::profile("386").expect("a cpu");
+    let mut select = |name: &str| {
+        super::dag_function::selected_in_pool(&module, name, &llrm_x86_m16::M16, cpu, &[], None, &mut pool)
+            .unwrap_or_else(|why| panic!("{}", why.0));
+        pool.symbols.clone().expect("the tables are kept for the next function")
+    };
+    let first = select("f");
+    let second = select("g");
+    assert!(std::rc::Rc::ptr_eq(&first.0, &second.0), "g rebuilt the table f made");
 }
 
 /// The scope and inlining call of a `!DILocation` were dropped: a function

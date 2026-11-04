@@ -352,6 +352,7 @@ pub fn expanded(object: &Object) -> Result<Object, Unsupported> {
                     definition: Definition::Defined { section: xdata, offset: at },
                     size: 0,
                     group: None,
+                    visibility: Default::default(),
                 },
             );
         let unwind_symbol = object.symbols.len() - 1;

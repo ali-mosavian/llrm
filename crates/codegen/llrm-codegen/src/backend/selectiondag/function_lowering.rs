@@ -35,6 +35,9 @@ pub struct FunctionLoweringInfo {
     pub prezeroed: llrm_mir::dense::IdSet<InstId>,
     /// The register the `sret` parameter is copied to, read back to return it.
     pub sret_reg: Option<u32>,
+    /// The register holding the hidden result pointer of a function whose
+    /// result does not fit in registers (`DemoteRegister`).
+    pub demote_reg: Option<u32>,
     /// The register a variadic function keeps the pointer to its variadic
     /// arguments in (`WebAssemblyFunctionInfo::VarargBufferVreg`).
     pub variadic_buffer: Option<u32>,
@@ -66,6 +69,8 @@ pub struct FunctionLoweringInfo {
     /// blocks, made at the first block and shared by the DAGs of the rest
     /// (a table per block was a quadratic share of the compile).
     pub(super) tables: Option<Tables>,
+    /// The module's part of the tables, when an earlier function made it.
+    pub(super) module_tables: Option<crate::backend::constpool::Symbols>,
 }
 
 /// What every block's DAG reads about the module and the function.
@@ -112,6 +117,7 @@ impl FunctionLoweringInfo {
             variadic_save: None,
             prezeroed: Default::default(),
             sret_reg: None,
+            demote_reg: None,
             variadic_buffer: None,
             variadic_area: None,
             bpi: None,
@@ -124,6 +130,7 @@ impl FunctionLoweringInfo {
             objects: Vec::new(),
             next_frame_index: 0,
             tables: None,
+            module_tables: None,
         };
         let entry = function.entry();
         for &block in function.layout() {
