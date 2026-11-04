@@ -4,18 +4,12 @@
 //! `llvm.compiler.used` are not laid out.
 
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::{ConstantId, ConstantKind, GlobalKind, Linkage, Module, Type, TypeId};
+/// A pointer in a global's bytes: where, to what, and the addend.
+pub use llrm_mir::image::Reloc as DataReloc;
+use llrm_mir::{Linkage, Module};
 use llrm_object::Binding;
 
 use crate::machine::Platform;
-
-/// A pointer in a global's bytes: where, to what, and the addend.
-#[derive(Clone, Debug)]
-pub struct DataReloc {
-    pub at: usize,
-    pub symbol: String,
-    pub addend: i64,
-}
 
 /// One global's contents.
 pub struct Placed {
@@ -35,15 +29,10 @@ pub struct Placed {
 /// How an object exports a global of `linkage`: not at all, or as a definition
 /// another may replace.
 pub fn binding_of(linkage: Linkage) -> Binding {
-    match linkage {
-        Linkage::Internal | Linkage::Private => Binding::Local,
-        Linkage::Weak
-        | Linkage::WeakOdr
-        | Linkage::LinkOnce
-        | Linkage::LinkOnceOdr
-        | Linkage::Common
-        | Linkage::ExternWeak => Binding::Weak,
-        _ => Binding::Public,
+    match llrm_mir::image::Export::of(linkage) {
+        llrm_mir::image::Export::Local => Binding::Local,
+        llrm_mir::image::Export::Weak => Binding::Weak,
+        llrm_mir::image::Export::Public => Binding::Public,
     }
 }
 
@@ -67,28 +56,14 @@ pub fn globals(
     layout: &DataLayout,
     platform: Platform,
 ) -> Result<Vec<Placed>, String> {
-    let types = &module.context.types;
+    let symbol_of = |name: &str| symbol_name(platform, name);
     let mut out = Vec::new();
-    for global in &module.globals {
-        let GlobalKind::Variable(variable) = &global.kind else { continue };
-        let Some(initializer) = variable.initializer else { continue };
-        let name = global.name.owned().ok_or("an unnamed variable")?;
-        let size = layout.alloc_size(types, variable.ty) as usize;
-        let mut bytes = vec![0u8; size];
-        let mut relocs = Vec::new();
-        let writer = Writer { module, layout, platform };
-        writer.write(initializer, variable.ty, &mut bytes, 0, &mut relocs)?;
-        let align = layout.global_align(types, variable.ty, variable.align, false, true, true) as usize;
-        let zero = relocs.is_empty() && bytes.iter().all(|byte| *byte == 0);
-        // LLVM keeps these two for the compiler and the linker only.
-        if matches!(name.as_str(), "llvm.used" | "llvm.compiler.used") {
-            continue;
-        }
-        if name == "llvm.global_dtors" {
+    for variable in llrm_mir::image::variables(module, layout, &symbol_of)? {
+        if variable.name == "llvm.global_dtors" {
             return Err("llvm.global_dtors: destructors are not supported".to_owned());
         }
-        if name == "llvm.global_ctors" {
-            let (bytes, relocs) = constructors(&bytes, &relocs);
+        if variable.name == "llvm.global_ctors" {
+            let (bytes, relocs) = constructors(&variable.bytes, &variable.relocs);
             out.push(Placed {
                 binding: Binding::Local,
                 name: String::new(),
@@ -102,13 +77,13 @@ pub fn globals(
             continue;
         }
         out.push(Placed {
-            binding: binding_of(global.linkage),
-            name: symbol_name(platform, &name),
-            bytes,
-            relocs,
-            align: align.max(1),
+            binding: binding_of(variable.linkage),
+            name: symbol_name(platform, &variable.name),
+            bytes: variable.bytes,
+            relocs: variable.relocs,
+            align: variable.align,
             constant: variable.constant,
-            zero,
+            zero: variable.zero,
             init_functions: false,
         });
     }
@@ -138,91 +113,4 @@ fn constructors(
         .map(|(index, (_, function))| DataReloc { at: index * 8, ..(*function).clone() })
         .collect();
     (vec![0; entries.len() * 8], relocs)
-}
-
-struct Writer<'a> {
-    module: &'a Module,
-    layout: &'a DataLayout,
-    platform: Platform,
-}
-
-impl Writer<'_> {
-    fn write(
-        &self,
-        id: ConstantId,
-        ty: TypeId,
-        out: &mut [u8],
-        at: usize,
-        relocs: &mut Vec<DataReloc>,
-    ) -> Result<(), String> {
-        let context = &self.module.context;
-        let types = &context.types;
-        let constant = context.get(id);
-        match (&constant.kind, types.get(ty)) {
-            (ConstantKind::Zero | ConstantKind::Null | ConstantKind::Undef | ConstantKind::Poison, _) => Ok(()),
-            (ConstantKind::Int(value), Type::Int(bits)) => {
-                let bytes = (*bits as usize).div_ceil(8);
-                out[at..at + bytes].copy_from_slice(&value.to_le_bytes()[..bytes]);
-                Ok(())
-            }
-            (ConstantKind::Float(bits), Type::Float(kind)) => {
-                let bytes = match kind {
-                    llrm_mir::FloatKind::Float => 4,
-                    llrm_mir::FloatKind::Double => 8,
-                    other => return Err(format!("a global of type {other:?}")),
-                };
-                out[at..at + bytes].copy_from_slice(&bits.to_le_bytes()[..bytes]);
-                Ok(())
-            }
-            (ConstantKind::Bytes(data), _) => {
-                out[at..at + data.len()].copy_from_slice(data);
-                Ok(())
-            }
-            (ConstantKind::Aggregate(members), Type::Array { element, .. }) => {
-                let stride = self.layout.alloc_size(types, *element) as usize;
-                for (index, member) in members.iter().enumerate() {
-                    self.write(*member, *element, out, at + index * stride, relocs)?;
-                }
-                Ok(())
-            }
-            (ConstantKind::Aggregate(members), _) if types.fields(ty).is_some() => {
-                let (_, offsets) = self.layout.struct_layout(types, ty);
-                let fields = types.fields(ty).expect("a struct").to_vec();
-                for (index, member) in members.iter().enumerate() {
-                    self.write(*member, fields[index], out, at + offsets[index] as usize, relocs)?;
-                }
-                Ok(())
-            }
-            (ConstantKind::Global(global), Type::Pointer(_)) => {
-                let name = self.module.global(*global).name.owned().ok_or("an unnamed global")?;
-                relocs.push(DataReloc { at, symbol: symbol_name(self.platform, &name), addend: 0 });
-                Ok(())
-            }
-            (ConstantKind::Expr(llrm_mir::ConstantExpr::GetElementPtr { source, operands, .. }), Type::Pointer(_)) => {
-                let base = context.get(operands[0]);
-                let ConstantKind::Global(global) = base.kind else {
-                    return Err("a constant gep on a non-global".into());
-                };
-                let mut indices = Vec::new();
-                for &index in &operands[1..] {
-                    let index = context.get(index);
-                    indices.push(match index.kind {
-                        ConstantKind::Int(value) => {
-                            Some(llrm_mir::context::signed(value, types.int_bits(index.ty).unwrap_or(64)))
-                        }
-                        ConstantKind::Zero => Some(0),
-                        _ => return Err("a constant gep with a variable index".into()),
-                    });
-                }
-                let (offset, variable) = self.layout.collect_offset(types, *source, &indices);
-                if !variable.is_empty() {
-                    return Err("a constant gep with a variable index".into());
-                }
-                let name = self.module.global(global).name.owned().ok_or("an unnamed global")?;
-                relocs.push(DataReloc { at, symbol: symbol_name(self.platform, &name), addend: offset as i64 });
-                Ok(())
-            }
-            (kind, ty) => Err(format!("the global initializer {kind:?} of type {ty:?}")),
-        }
-    }
 }

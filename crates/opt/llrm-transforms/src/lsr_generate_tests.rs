@@ -346,8 +346,11 @@ fn the_whole_search_is_linear_in_the_uses() {
 #[test]
 fn loop_carried_values_that_are_not_recurrences_take_registers() {
     let looped = |acc: &str| {
+        // An `i32` sum takes the load as it is: a `zext` to the same type is
+        // not IR (the SCEV of it asserts in debug builds).
+        let widen = if acc == "i32" { "%w = add i32 %v, 0".to_string() } else { format!("%w = zext i32 %v to {acc}") };
         format!(
-            "define {acc} @f(ptr %p, i32 %n) {{\nentry:\n  br label %loop\nloop:\n  %i = phi i32 [ 0, %entry ], [ %next, %loop ]\n  %s = phi {acc} [ 0, %entry ], [ %s2, %loop ]\n  %a = getelementptr i32, ptr %p, i32 %i\n  %v = load i32, ptr %a\n  %w = zext i32 %v to {acc}\n  %s2 = add {acc} %s, %w\n  %next = add nuw i32 %i, 1\n  %c = icmp eq i32 %next, %n\n  br i1 %c, label %exit, label %loop\nexit:\n  ret {acc} %s2\n}}\n"
+            "define {acc} @f(ptr %p, i32 %n) {{\nentry:\n  br label %loop\nloop:\n  %i = phi i32 [ 0, %entry ], [ %next, %loop ]\n  %s = phi {acc} [ 0, %entry ], [ %s2, %loop ]\n  %a = getelementptr i32, ptr %p, i32 %i\n  %v = load i32, ptr %a\n  {widen}\n  %s2 = add {acc} %s, %w\n  %next = add nuw i32 %i, 1\n  %c = icmp eq i32 %next, %n\n  br i1 %c, label %exit, label %loop\nexit:\n  ret {acc} %s2\n}}\n"
         )
     };
     let mut units = Vec::new();

@@ -2811,3 +2811,29 @@ fn the_byte_price_at_speed_counts_at_o2_and_o3_only() {
     assert!(Options::standard().prices_bytes() && Options::aggressive().prices_bytes());
     assert!(!Options::basic().prices_bytes() && !Options::size().prices_bytes());
 }
+
+/// The pin's O1 function pipeline (PassBuilderPipelines.cpp L495) has no
+/// CorrelatedValuePropagation: recpow -O1 kept `srem i64 (mul nsw a, b), 30011`
+/// there, and ours narrowed it to i32 (arm64 -O1 recpow differed from the pin).
+#[test]
+fn test_o1_has_no_correlated_value_propagation() {
+    let text = "define i64 @f(i64 range(i64 -30010, 30011) %a, i64 range(i64 -30010, 30011) %b) {
+b:
+  %m = mul nsw i64 %a, %b
+  %r = srem i64 %m, 30011
+  ret i64 %r
+}
+";
+    let narrowed = |options: pipeline::Options| {
+        let mut module = crate::testing::parsed(text);
+        let applied = Applied { options, ..Applied::default() };
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program: &mut Program| {
+            pipeline::applied(program, &applied)
+        })
+        .and_then(|done| done)
+        .unwrap();
+        crate::testing::printed(&module).contains("srem i32")
+    };
+    assert!(narrowed(pipeline::Options::standard()), "premise: -O2 narrows it");
+    assert!(!narrowed(pipeline::Options::basic()), "-O1 narrowed with CVP, which the pin's O1 lacks");
+}

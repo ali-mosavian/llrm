@@ -35,6 +35,7 @@ one and prints the driver and version).
 | 24 | `chain.rs`, `dagisel/function.rs` | accesses through one address register that step by their size are `(An)+` (the pin's `MOV*` row with the mode letter `o`), later accesses through it take the displacement less the chain; priced on the CPU, clocks then bytes (bytes first at `-Os`); an inline `memcpy`'s pairs are in address order (`ordered_copies`). The pin's `CombineToPostIndexedLoadStore` refuses a base whose other users fold into displacements, and M68k sets no indexed addressing. Off for `Options::PINNED` | none |
 | 25 | `narrow.rs` | `and`, `or` and `eor` of a long immediate whose upper half is all ones (`and`) or zero (`or`, `eor`) is the word row on the same register when no instruction reads the codes after it (4 bytes for 6, 8 clocks for 16 on the 68000). The pin keeps the 32-bit constant; gcc's `iorsi3`/`xorsi3` templates print `.w`. Off for `Options::PINNED` | none |
 | 26 | `regalloc.rs`, spike-mf `tolir.rs` | the pre-RA machine scheduler runs on m68k when `LLRM_M68K_PRESCHED` is set, off by default; the pin's `M68kSubtarget` leaves `enableMachineScheduler` false, so the pin schedules nothing here | convergence step 5 (m68k on the shared flow, `schedules_before_allocation` hosted); switched on when the same-script gate shows no larger cell and no slower cell at every level, or each one a numbered row with owner and exit |
+| 27 | `dagisel/hooks.rs` | the PC-relative forms (`PCD`, `PCI`, `PCIBD`) are refused for a compare with an immediate on the 68000 (`cmpi` has them from the 68010 on); the pin's `CMP*pi` and `CMP*qi` rows take them. binutils rejected 52 of 300 seeds before | none: an ISA fact |
 
 Items 4 to 6, 17, 18 and 19 are the only places the code differs from the pin's output on purpose; the rest is
 unfinished translation.
@@ -76,6 +77,12 @@ worst memcpy 36 -> 48 B and 50 -> 90 insns (508 -> 906 clk on the 68000), struct
 
 **M68K-OS-1: `bsearch` at `-Os` is 4 B over `llc -Os`** (106 against 102). Not yet diagnosed; the
 `size` flag of `place_blocks` is the first place to look. Exit: after the merge.
+
+**M68K-PCREL-DATA: data further than 32 KB from the code.** Globals are addressed `(sym,%pc)`, a
+16-bit displacement; `(from+70016,%pc)` cannot reach a 70 KB array, and the shared ELF writer
+refuses it (`memcpy_runtime`, `memfuncs_runtime` at `-c`; gas leaves it to `ld`, which would
+truncate). The pin has the same form. Owner: m68k. Exit 2026-11-12: absolute `.l` on the 68000, the
+68020's 32-bit PC displacement, picked by object size and clocks.
 
 ## Instruments
 
