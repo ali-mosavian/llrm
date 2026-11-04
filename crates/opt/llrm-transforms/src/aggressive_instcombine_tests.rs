@@ -67,6 +67,34 @@ fn bytes_out_of_order_are_not_merged() {
     assert_eq!(after.matches("load ").count(), 4, "{after}");
 }
 
+/// The high byte is loaded first and the low byte's address is made after it:
+/// the wide load went before the high byte's load with the low byte's address,
+/// which is not yet defined there ("does not dominate", the QB runtime's
+/// `B$BLOD` at -Os m16: isel died with "value with no register").
+#[test]
+fn a_wide_load_is_not_placed_before_the_definition_of_its_address() {
+    let text = "@g = global [4 x i8] zeroinitializer
+define i16 @f() {
+b0:
+  %p1 = getelementptr i8, ptr @g, i16 1
+  %hi = load i8, ptr %p1
+  %p0 = getelementptr i8, ptr @g, i16 0
+  %lo = load i8, ptr %p0
+  %zh = zext i8 %hi to i16
+  %zl = zext i8 %lo to i16
+  %sh = shl i16 %zh, 8
+  %r = or i16 %zl, %sh
+  ret i16 %r
+}
+";
+    let before = parsed(&format!("{DOS}{text}"));
+    let mut module = before.clone();
+    let after = managed(&mut module, AggressiveInstCombine);
+    assert!(after.contains("load i16"), "{after}");
+    let problems = llrm_mir::verify::verify(&module);
+    assert!(problems.is_empty(), "{problems:?}\n{after}");
+}
+
 const HALVES: &str = "@g = global [4 x i8] zeroinitializer
 define i16 @f(i16 %x) {
 b0:
