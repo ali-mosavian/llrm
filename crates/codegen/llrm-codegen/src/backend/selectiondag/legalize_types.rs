@@ -1623,7 +1623,11 @@ impl<'a> TypeLegalizer<'a> {
                 let pointer = self.dag.value_type(slot);
                 let offset = self.dag.get_constant(step, pointer);
                 let high_slot = self.dag.get_node(ISD::Add, pointer, &[slot, offset]);
-                (self.dag.get_load(half, store, slot, info), self.dag.get_load(half, store, high_slot, info))
+                let (lo, hi) =
+                    (self.dag.get_load(half, store, slot, info), self.dag.get_load(half, store, high_slot, info));
+                // `hasBigEndianPartOrdering`: the word at the slot is the high
+                // one
+                if self.dag.config().big_endian { (hi, lo) } else { (lo, hi) }
             }
             ISD::BitCast if self.tli.types.is_type_legal(self.dag.value_type(self.dag.operand(value, 0))) => {
                 // `ExpandIntRes_BITCAST` from a same-size integer: its low
@@ -1770,6 +1774,15 @@ impl<'a> TypeLegalizer<'a> {
                 )
             }
             ISD::FShl | ISD::FShr => self.expand_funnel_shift(value, half),
+            // `ExpandIntRes_Rotate`: delegate to the funnel shift of the value
+            // with itself.
+            op @ (ISD::Rotl | ISD::Rotr) => {
+                let funnel = if op == ISD::Rotl { ISD::FShl } else { ISD::FShr };
+                let x = self.dag.operand(value, 0);
+                let by = self.dag.operand(value, 1);
+                let whole = self.dag.get_node(funnel, vt, &[x, x, by]);
+                self.split_integer(whole, half)
+            }
             op => return Err(LegalizeError::Unsupported { op, ty: vt, what: "expand result" }),
         };
         self.set_expanded_integer(value, lo, hi);
@@ -2807,7 +2820,8 @@ impl<'a> TypeLegalizer<'a> {
                 .dag
                 .get_node_flags(ISD::BuildPair, pointer, &[moved, selector], super::dag::SDNodeFlags::PAIR_FAR);
         }
-        // `getObjectPtrOffset`: the offset stays inside the object, so the add cannot wrap.
+        // `getObjectPtrOffset`: the offset stays inside the object, so the add
+        // cannot wrap.
         self.dag.get_object_ptr_offset(ptr, step as i64)
     }
 
