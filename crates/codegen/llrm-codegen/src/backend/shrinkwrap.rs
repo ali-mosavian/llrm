@@ -282,6 +282,58 @@ pub fn wrapped(
     wrap
 }
 
+/// The placement `saverestore` made for a body and the registers and frame it
+/// was asked for: it does not depend on `stack_addressed` or `size`, which
+/// only refuse a placement afterwards, so the two asks a procedure's frame
+/// decision makes (with and without the stack addressing the cells) solve once.
+#[derive(Default)]
+struct Placed(Vec<PlacedAnswer>);
+
+struct PlacedAnswer {
+    stamp: crate::analysis::facts::Stamp,
+    shape: (i64, bool, u8, Vec<Vec<i64>>),
+    args: (BTreeSet<RegId>, Option<(RegId, RegId)>),
+    placement: Option<saverestore::Placement>,
+}
+
+fn placed_once(
+    body: &LirBody,
+    kept: &BTreeSet<RegId>,
+    frame: Option<(RegId, RegId)>,
+    solve: impl FnOnce() -> Option<saverestore::Placement>,
+) -> Option<saverestore::Placement> {
+    let shape = shape_of(body);
+    let args = (kept.clone(), frame);
+    let found = body.facts.0.stash::<Placed, _>(|placed| {
+        placed
+            .0
+            .iter()
+            .find(|answer| {
+                answer.args == args
+                    && answer.shape == shape
+                    && answer.stamp.differing(body).is_some_and(|changed| changed.is_empty())
+            })
+            .map(|answer| answer.placement.clone())
+    });
+    if let Some(placement) = found {
+        return placement;
+    }
+    let placement = solve();
+    let answer = PlacedAnswer {
+        stamp: crate::analysis::facts::Stamp::of(body),
+        shape,
+        args,
+        placement: placement.clone(),
+    };
+    body.facts.0.stash::<Placed, _>(|placed| {
+        if placed.0.len() == ASKS_KEPT {
+            placed.0.remove(0);
+        }
+        placed.0.push(answer);
+    });
+    placement
+}
+
 fn wrapped_afresh(
     body: &LirBody,
     kept: &BTreeSet<RegId>,
@@ -311,7 +363,11 @@ fn wrapped_afresh(
     }
     for with_frame in attempts {
         let uses = Uses::of(body, kept, frame.filter(|_| with_frame));
-        let Some(placement) = saverestore::run(&graph, &uses, &frequencies) else { continue };
+        let placed = placed_once(body, kept, frame.filter(|_| with_frame), || {
+            body.facts.0.bump("saverestore");
+            saverestore::run(&graph, &uses, &frequencies)
+        });
+        let Some(placement) = placed else { continue };
         // DEVIATE 1: the consumer makes no block to split the restore; it puts
         // the epilogue at the end of each predecessor, before its jump to the
         // restore or where it falls into it, and refuses any other.
@@ -922,6 +978,26 @@ mod tests {
         assert_eq!(body.facts.0.counted("shrinkwrap"), 1);
         let _ = wrapped(&body, &kept, None, false, true);
         assert_eq!(body.facts.0.counted("shrinkwrap"), 2, "another argument is another ask");
+    }
+
+    /// The frame decision asks a body's wrap with and without the stack
+    /// addressing its cells; the placement does not depend on that, and was
+    /// solved for each (59M Ir of `saverestore::run` in memory_expansion -O2,
+    /// every procedure twice). One solve serves both.
+    #[test]
+    fn test_the_placement_of_a_body_is_solved_once_for_both_stack_addressings() {
+        let blocks = vec![
+            block(0, vec![branch(2, 3)], vec![3, 2]),
+            block(2, vec![touch(20, RegId::ESI)], vec![3]),
+            block(3, vec![ret(30)], vec![]),
+        ];
+        let body = body(blocks);
+        let kept = BTreeSet::from([RegId::ESI]);
+        let plain = wrapped(&body, &kept, None, false, false);
+        let addressed = wrapped(&body, &kept, None, true, false);
+        assert_eq!(body.facts.0.counted("shrinkwrap"), 2, "the premise: two asks");
+        assert_eq!(body.facts.0.counted("saverestore"), 1, "the placement was solved again");
+        assert!(plain.is_some() && addressed.is_some());
     }
 
     /// The answer stands for the body it was made for: the same instructions
