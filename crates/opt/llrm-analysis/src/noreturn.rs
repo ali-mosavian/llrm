@@ -290,6 +290,26 @@ pub fn stranded(
     blocks.iter().map(|block| block.at).filter(|at| !returning.contains(at)).collect()
 }
 
+/// Whether every block of `starts` is in [`stranded`]: none reaches a return
+/// or `header`.
+pub fn all_stranded(
+    function: &Function,
+    header: i64,
+    starts: &IdSet<i64>,
+) -> bool {
+    let mut seen = IdSet::new();
+    let mut pending: Vec<i64> = starts.iter().collect();
+    while let Some(at) = pending.pop() {
+        if at == header || _returns(function, at) {
+            return false;
+        }
+        if seen.insert(at) {
+            pending.extend(function.successors(cfg::block(at)).into_iter().map(cfg::id));
+        }
+    }
+    true
+}
+
 pub fn _cannot_return(
     function: &Function,
     terminal_calls: &BTreeSet<InstId>,
