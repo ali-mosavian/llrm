@@ -6,7 +6,7 @@
 #define SF_DIV_HW32 1
 #define SF_ALIAS_PREFIX "__regcall3__" /* clang mangles regcall-default functions; an alias names the mangled symbol */
 #define SF_FIX_NAN_UNDEF 1 /* NaN to int is undefined in C and poison in IR: no caller can rely on 0; the check costs +16/+9 B over compiler-rt */
-/* SF_CMP_SPLIT (one file per compare entry, the core in __cmpsf2) is off: __ltsf2 reach 212 -> 111 B and all seven entries 172, but each compare gains a far jmp: +10 clk, +2 instr (Os kernel +7.4%). On when the entries can alias __cmpsf2 (OMF alias). */
+#define SF_CMP_SPLIT 1 /* one file per compare entry group, the core in __cmpsf2 with eq/ne/lt/le as aliases of it: __ltsf2 reach 216 -> 106 B (-O2 224 -> 114), no wrapper call */
 #ifdef __OPTIMIZE_SIZE__
 #define SF_CLZ_CALL 1 /* the 5-step ladder in every operation costs more than the call */
 #else
