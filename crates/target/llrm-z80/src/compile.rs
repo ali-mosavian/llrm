@@ -232,14 +232,29 @@ fn priced_in_loops(one: &Allocated) -> Option<(u32, u64)> {
     finish(function, assignment, 0, slots, reads.clone()).ok().map(|lines| expand::price_in_loops(&lines))
 }
 
-/// Whether the price `one` beats `other`: bytes first at the size levels,
-/// weighted clocks first otherwise.
+/// Whether the price `one` beats `other`: bytes first at the size levels;
+/// otherwise weighted clocks plus 3 clocks a byte (1 B = 3 T), so a variant
+/// that is bigger and no faster by that rate does not win on a clock alone.
 fn cheaper(
     level: Level,
     one: (u32, u64),
     other: (u32, u64),
 ) -> bool {
-    if matches!(level, Level::Os | Level::Oz) { one < other } else { (one.1, one.0) < (other.1, other.0) }
+    let priced = |(bytes, clocks): (u32, u64)| clocks + 3 * u64::from(bytes);
+    if matches!(level, Level::Os | Level::Oz) { one < other } else { priced(one) < priced(other) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A variant 61 B bigger for 107 clocks fewer won on the clocks alone
+    /// (tail_calls -O1, 4444 B to 4505 B); at 1 B = 3 T it loses.
+    #[test]
+    fn a_bigger_variant_does_not_win_on_fewer_clocks_alone() {
+        assert!(!cheaper(Level::O2, (4505, 85_000), (4444, 85_107)));
+        assert!(cheaper(Level::O2, (4440, 85_000), (4444, 85_107)));
+    }
 }
 
 /// Allocates `function`; where the first allocation fails, once more with the
@@ -250,9 +265,9 @@ fn cheaper(
 ///
 /// Where the choice can allocate better, the other choices are allocated too
 /// and the cheaper by the loop's weighted clocks stays, bytes first at the
-/// size levels and clocks first otherwise: the argument copies joined or not
-/// (a constant kept in a register of its own, or not), and a byte wanted both
-/// in `a` and in a register of its own loaded through `a` or through `hl`.
+/// size levels and clocks plus 3 a byte otherwise: the argument copies joined
+/// or not (a constant kept in a register of its own, or not), and a byte wanted
+/// both in `a` and in a register of its own loaded through `a` or through `hl`.
 fn allocate(
     function: MFunction,
     name: &str,

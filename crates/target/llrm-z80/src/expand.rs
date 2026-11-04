@@ -351,8 +351,10 @@ impl Printer<'_> {
                 self.push(format!("{mnemonic} {to}"));
             }
             "ADD16" => {
-                let source = name_of(self, 2)?;
-                self.push(format!("add hl, {source}"));
+                let source = self.register(inst, 2)?;
+                if !self.add_small_constant(source, rest) {
+                    self.push(format!("add hl, {}", name(source)));
+                }
             }
             "SUB16" => {
                 let source = name_of(self, 2)?;
@@ -796,6 +798,38 @@ impl Printer<'_> {
             other => return Err(format!("{other} is not expanded yet")),
         }
         Ok(())
+    }
+
+    /// `ld rr, #k` then `add hl, rr` with k in 2..=3 or -3..=-2, `rr` and the
+    /// carry dead after: `inc hl` / `dec hl` k times, 2-3 B against 4 B. It is
+    /// done here, not in selection, where a pointer that stays live needs a
+    /// copy and the allocation gets worse.
+    fn add_small_constant(
+        &mut self,
+        source: RegId,
+        rest: &[Inst],
+    ) -> bool {
+        let Some(Line::Inst(last)) = self.out.last() else { return false };
+        let Some(value) = last
+            .strip_prefix("ld ")
+            .and_then(|text| text.strip_prefix(name(source)))
+            .and_then(|text| text.strip_prefix(", #"))
+            .and_then(|text| text.parse::<i32>().ok())
+        else {
+            return false;
+        };
+        let value = if value >= 0x8000 { value - 0x1_0000 } else { value };
+        if !(2..=3).contains(&value.abs()) || !is_pair(source) || source == reg::HL {
+            return false;
+        }
+        if !self.flags_dead(rest) || !self.pair_dead_after(source, rest) {
+            return false;
+        }
+        self.out.pop();
+        for _ in 0..value.abs() {
+            self.push(if value > 0 { "inc hl" } else { "dec hl" });
+        }
+        true
     }
 
     /// [`Self::dead_after`] for both bytes of `pair`, and the pair itself.
@@ -1436,9 +1470,6 @@ fn ends_flow(text: &str) -> bool {
         || text.strip_prefix("jp ").or_else(|| text.strip_prefix("jr ")).is_some_and(|rest| !rest.contains(','))
 }
 
-/// `ret z` stands in for a branch to a block that is only a `ret`, which
-/// leaves the block with no reader: the code after an unconditional `ret` or
-/// jump, up to the next label something names, never runs.
 /// `dec rr` then `inc rr` of the same pair, or the reverse, is nothing: neither
 /// touches the flags. A word stored through a pointer leaves it where it was
 /// (`inc hl; ld (hl), d; dec hl`), and a pointer stepped by one after that
@@ -1466,6 +1497,9 @@ fn cancel_steps(lines: Vec<Line>) -> Vec<Line> {
     out
 }
 
+/// `ret z` stands in for a branch to a block that is only a `ret`, which
+/// leaves the block with no reader: the code after an unconditional `ret` or
+/// jump, up to the next label something names, never runs.
 fn drop_unreachable(lines: Vec<Line>) -> Vec<Line> {
     let named: llrm_support::hash::HashSet<&str> = lines
         .iter()
