@@ -886,7 +886,14 @@ mod tests {
         let module = parsed(&text);
         let (function, layout) = (function(&module, "f"), layout(&module));
         let unit = Unit::of(&module, &layout, function);
-        let call = function.walk().map(|(_, inst)| inst).find(|&inst| matches!(function.instruction(inst).opcode, llrm_mir::opcode::Opcode::Call(_))).unwrap();
+        let call = function
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| matches!(
+                function.instruction(inst).opcode,
+                llrm_mir::opcode::Opcode::Call(_)
+            ))
+            .unwrap();
         let before = llrm_mir::intrinsics::names_looked_up();
         for arg in 0..2 {
             let found = MemoryLocation::get_for_argument(&unit, call, arg).expect("an argument");

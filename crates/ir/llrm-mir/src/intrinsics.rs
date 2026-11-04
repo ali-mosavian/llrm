@@ -527,7 +527,8 @@ pub fn names_looked_up() -> usize {
 
 #[cfg(test)]
 thread_local! {
-    /// Names looked up by `named`, for a test that a lookup does not scan the table.
+    /// Names looked up by `named`, for a test that a lookup does not scan the
+    /// table.
     static PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -1098,8 +1099,9 @@ mod tests {
     use super::*;
 
     /// `named` compared the name with every one of the 76 table entries on each
-    /// call (2465 Ir a call, 211 M Ir in DSE of 600 memcpy/memset/store triples):
-    /// a lookup probes a name per `.`-cut, however long the table.
+    /// call (2465 Ir a call, 211 M Ir in DSE of 600 memcpy/memset/store
+    /// triples): a lookup probes a name per `.`-cut, however long the
+    /// table.
     #[test]
     fn naming_an_intrinsic_does_not_scan_the_table() {
         let before = PROBES.with(std::cell::Cell::get);
@@ -1117,7 +1119,11 @@ mod tests {
         for spec in TABLE.iter() {
             assert_eq!(Intrinsic::named(spec.name), Some(spec.intrinsic), "{}", spec.name);
             assert_eq!(Intrinsic::named(&format!("{}.p0.i32", spec.name)), Some(spec.intrinsic), "{}", spec.name);
-            assert!(Intrinsic::named(&format!("{}x", spec.name)).is_none_or(|got| got != spec.intrinsic), "{}", spec.name);
+            assert!(
+                Intrinsic::named(&format!("{}x", spec.name)).is_none_or(|got| got != spec.intrinsic),
+                "{}",
+                spec.name
+            );
         }
     }
 
