@@ -872,10 +872,9 @@ exit:
     let moves =
         body.lines().filter(|line| line.trim_start().starts_with("move.l\t%d") && line.contains(", %d")).count();
     assert!(moves <= 3, "{text}");
-    // the premise: the else path carries the copy, which is what the spike's
-    // join order removed (2 moves) and what greedy, like the pin, keeps
-    let else_path = text.split(".LBB0_3:").nth(1).and_then(|rest| rest.split(".LBB0_4:").next()).expect("else path");
-    assert!(else_path.contains("move.l\t%d"), "no copy on the else path:\n{text}");
+    // DEVIATE CO1 (see loop_carried_phi.rs) joins the carried copy first where
+    // that encodes smaller: the else path then carries no copy, below the pin's
+    // count.
 }
 
 /// Euclid's loop by subtraction: its guard and its latch compare the same

@@ -86,7 +86,7 @@ impl Target for M68kRegisters {
     }
 
     fn joins_carried_first() -> bool {
-        true
+        CARRIED_FIRST.with(std::cell::Cell::get)
     }
 
     fn caller_saved() -> Vec<RegId> {
@@ -186,6 +186,46 @@ const CONDITIONAL: [(&str, &str); 7] = [
     ("Bge8", "Blt8"),
     ("Bgt8", "Ble8"),
 ];
+
+thread_local! {
+    /// DEVIATE CO1: whether the function being allocated joins the copies of
+    /// loop-carried values first ([`Target::joins_carried_first`]).
+    static CARRIED_FIRST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Sets [`CARRIED_FIRST`] until dropped.
+pub struct CarriedFirst(bool);
+
+impl CarriedFirst {
+    pub fn set(on: bool) -> Self {
+        Self(CARRIED_FIRST.with(|flag| flag.replace(on)))
+    }
+}
+
+impl Drop for CarriedFirst {
+    fn drop(&mut self) {
+        CARRIED_FIRST.with(|flag| flag.set(self.0));
+    }
+}
+
+/// Whether a loop has a block between its header and its latch that is
+/// neither: where the order the carried copies join in can differ.
+pub fn has_loop_arm(function: &MFunction) -> bool {
+    let successors = successors(function);
+    let mut header = vec![false; successors.len()];
+    let mut latch = vec![false; successors.len()];
+    let mut spans = Vec::new();
+    for (from, to) in successors.iter().enumerate() {
+        for &to in to {
+            if to <= from {
+                header[to] = true;
+                latch[from] = true;
+                spans.push((to, from));
+            }
+        }
+    }
+    spans.iter().any(|&(head, tail)| (head + 1..tail).any(|block| !header[block] && !latch[block]))
+}
 
 /// `BranchFolder` over the m68k function.
 pub fn branch_fold(

@@ -129,51 +129,64 @@ pub fn items_with(
     fold_reserved_copies(&mut function);
     commute_tied(&mut function);
     two_address(&mut function);
-    // spill slots are numbered after the static allocas
-    let first_slot = function.locals.iter().map(|local| local.0 + 1).max().unwrap_or(0);
-    let (assignment, slots) = if std::env::var_os("LLRM_M68K_SPIKE").is_some() {
-        crate::regalloc::allocate_spilling_by_frequency(&mut function, first_slot)?
-    } else {
-        crate::regalloc::allocate_greedy(&mut function, wants_size)?
-    };
-    let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
-    if options.short {
-        crate::addrarith::refine_lea_round_trips(&mut function, &assignment, cpu, wants_size);
-        crate::addrarith::refine_address_adds(&mut function, &assignment, cpu, wants_size);
-        crate::chain::post_increment_chains(&mut function, &assignment, cpu, wants_size);
-        crate::narrow::merge_logic_immediates(&mut function, &assignment);
-        crate::narrow::narrow_logic_immediates(&mut function, &assignment);
+    // DEVIATE CO1: a function with a loop arm is allocated with the carried
+    // copies joined first as well, and the smaller encoding stands; ties keep
+    // the pin's order. Exit: 2026-11-12.
+    let allocated_and_printed =
+        |mut function: crate::mfunc::MFunction, carried_first: bool| -> Result<Vec<Item>, String> {
+            let _order = crate::regalloc::CarriedFirst::set(carried_first);
+            // spill slots are numbered after the static allocas
+            let first_slot = function.locals.iter().map(|local| local.0 + 1).max().unwrap_or(0);
+            let (assignment, slots) = if std::env::var_os("LLRM_M68K_SPIKE").is_some() {
+                crate::regalloc::allocate_spilling_by_frequency(&mut function, first_slot)?
+            } else {
+                crate::regalloc::allocate_greedy(&mut function, wants_size)?
+            };
+            let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
+            if options.short {
+                crate::addrarith::refine_lea_round_trips(&mut function, &assignment, cpu, wants_size);
+                crate::addrarith::refine_address_adds(&mut function, &assignment, cpu, wants_size);
+                crate::chain::post_increment_chains(&mut function, &assignment, cpu, wants_size);
+                crate::narrow::merge_logic_immediates(&mut function, &assignment);
+                crate::narrow::narrow_logic_immediates(&mut function, &assignment);
+            }
+            remove_identity_copies(&mut function, &assignment);
+            remove_redundant_copies(&mut function, &assignment);
+            llrm_spike_mf::spill::remove_dead_slot_stores::<crate::regalloc::M68kRegisters>(
+                &mut function,
+                &assignment,
+                &crate::REGISTER_INFO,
+                &slots,
+            );
+            preserve_flags(&mut function, &assignment)?;
+            branch_fold(&mut function, &assignment);
+            crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size);
+            let mut out = vec![Item::Label(name.to_owned())];
+            // The line the function is declared at starts its rows (the
+            // prologue is from no instruction).
+            if let Some(line) = module.subprogram_line(module.global(id).function().ok_or("not a function")?) {
+                out.push(Item::Loc(crate::expand::Row {
+                    place: llrm_codegen::model::lir::SrcLoc::line(line),
+                    block_top: false,
+                    prologue_end: false,
+                    epilogue_begin: false,
+                }));
+            }
+            for line in finish(&function, &assignment, number, &slots, cpu, options.push_frame)? {
+                out.push(match line {
+                    Line::Label(at) => Item::Label(format!(".LBB{number}_{at}")),
+                    Line::Inst(inst) => Item::Inst(inst),
+                    Line::Loc(place) => Item::Loc(place),
+                });
+            }
+            Ok(out)
+        };
+    if crate::regalloc::has_loop_arm(&function) {
+        let pins_order = allocated_and_printed(function.clone(), false)?;
+        let carried = allocated_and_printed(function, true)?;
+        return Ok(if encoded_bytes(&carried) < encoded_bytes(&pins_order) { carried } else { pins_order });
     }
-    remove_identity_copies(&mut function, &assignment);
-    remove_redundant_copies(&mut function, &assignment);
-    llrm_spike_mf::spill::remove_dead_slot_stores::<crate::regalloc::M68kRegisters>(
-        &mut function,
-        &assignment,
-        &crate::REGISTER_INFO,
-        &slots,
-    );
-    preserve_flags(&mut function, &assignment)?;
-    branch_fold(&mut function, &assignment);
-    crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size);
-    let mut out = vec![Item::Label(name.to_owned())];
-    // The line the function is declared at starts its rows (the prologue is
-    // from no instruction).
-    if let Some(line) = module.subprogram_line(module.global(id).function().ok_or("not a function")?) {
-        out.push(Item::Loc(crate::expand::Row {
-            place: llrm_codegen::model::lir::SrcLoc::line(line),
-            block_top: false,
-            prologue_end: false,
-            epilogue_begin: false,
-        }));
-    }
-    for line in finish(&function, &assignment, number, &slots, cpu, options.push_frame)? {
-        out.push(match line {
-            Line::Label(at) => Item::Label(format!(".LBB{number}_{at}")),
-            Line::Inst(inst) => Item::Inst(inst),
-            Line::Loc(place) => Item::Loc(place),
-        });
-    }
-    Ok(out)
+    allocated_and_printed(function, false)
 }
 
 /// The IR's branch probabilities by `(from, to)` block number
@@ -304,4 +317,16 @@ pub fn mid_end_described_by(
         declared.place(&mut module)?;
     }
     Ok(module)
+}
+
+/// The bytes the instructions of `items` encode to.
+fn encoded_bytes(items: &[Item]) -> usize {
+    items
+        .iter()
+        .map(|item| match item {
+            Item::Inst(inst) => crate::encode::encode(inst).map_or(0, |encoded| encoded.bytes.len()),
+            Item::Bytes(bytes) => bytes.len(),
+            _ => 0,
+        })
+        .sum()
 }
