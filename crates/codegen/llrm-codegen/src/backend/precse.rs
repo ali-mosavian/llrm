@@ -191,6 +191,16 @@ fn expression(what: &Semantics) -> Semantics {
     key
 }
 
+/// A qword symbol address, a `LEA64r` in the pin: no def as cheap as a move.
+fn qword_address(one: &Insn) -> bool {
+    one.what.as_ref().is_some_and(|what| {
+        matches!(
+            (what.dests.as_slice(), what.sources.as_slice()),
+            ([Loc::Held(held)], [Loc::Imm(llrm_lir::Imm { address: Some(_), .. })]) if held.width == 8
+        )
+    })
+}
+
 /// `TII->isAsCheapAsAMove`.
 fn cheap(one: &Insn) -> bool {
     crate::backend::machinesink::as_cheap_as_a_move(one)
@@ -356,8 +366,11 @@ impl Walk<'_> {
         // if shared, and its push and pop (2 executed per entry) cost more
         // than the one instruction sharing removes unless that runs often
         // enough. The pin shares it (heuristic 2 asks only for a register use
-        // or a non-copy reader). Exit 2026-11-20.
-        if !reads_value && self.freq[block] <= 2.0 && self.crosses_call(shared, shared_block, block, index) {
+        // or a non-copy reader). Not a qword symbol address (`LEA64r`): the
+        // pin's allocator holds it in a register it pushes for the other
+        // addresses too, and a later loop reads it from there. Exit
+        // 2026-11-20.
+        if !qword_address(one) && !reads_value && self.freq[block] <= 2.0 && self.crosses_call(shared, shared_block, block, index) {
             return false;
         }
         // Heuristic 3: a value a phi reads is not shared unless the block
@@ -652,6 +665,12 @@ fn pre_candidate(
         && !sets_flags(regs, bits, one)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Steps of the nearest-common-dominator climbs `hoisted` made.
+    static CLIMBS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// `PerformSimplePRE`
 /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineCSE.cpp#L901>),
 /// with `ProcessBlockPRE`
@@ -695,9 +714,15 @@ fn hoisted(
                 continue;
             };
             let (other_at, here) = (body.blocks[other].at, body.blocks[number].at);
-            // The nearest common dominator.
+            // The nearest common dominator. When the earlier block dominates
+            // this one it is that block, which hoists nothing: no climb.
+            if dominance.dominates(other_at, here) {
+                continue;
+            }
             let (mut up, mut down) = (other_at, here);
             while up != down {
+                #[cfg(test)]
+                CLIMBS.with(|climbs| climbs.set(climbs.get() + 1));
                 let order = |at: i64| dominance.preorder(at);
                 let climbing = if order(up) > order(down) { &mut up } else { &mut down };
                 let Some(parent) = dominance.immediate(*climbing) else { break };
@@ -1164,6 +1189,37 @@ mod tests {
             "{returning:?}"
         );
         assert_eq!(adds(&returning), 2);
+    }
+
+    /// An expression computed again in a block its first block dominates hoists
+    /// nothing (the nearest common dominator is the first block), yet each
+    /// repeat climbed the dominator tree from the later block: a chain of
+    /// 300 repeats made 44850 steps, and memory_expansion's `lir precse`
+    /// went from 54M to 421M instructions once symbol addresses became
+    /// candidates.
+    #[test]
+    fn test_a_repeat_in_a_dominated_block_does_not_climb_the_tree() {
+        let blocks = 300usize;
+        let not = |at: i64, result: u32| {
+            insn(at, Operation::Unary, "not", vec![held(result)], vec![held(1)], vec![result], vec![1])
+        };
+        let read = |at: i64, value: u32| {
+            insn(at, Operation::Compare, "cmp", vec![], vec![held(value), held(value)], vec![], vec![value])
+        };
+        let chain: Vec<Block> = (0..blocks)
+            .map(|number| {
+                let at = number as i64;
+                let work = vec![not(at * 2, 10 + number as u32), read(at * 2 + 1, 10 + number as u32)];
+                let succ = if number + 1 < blocks { vec![at + 1] } else { vec![] };
+                Block::from(LirBlock { succ: succ.into(), ..LirBlock::new(at, work) })
+            })
+            .collect();
+        let mut body = LirBody::new("chain", 0, chain, IndexMap::default(), IndexMap::default());
+        body.inputs = [1].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        CLIMBS.with(|climbs| climbs.set(0));
+        let _ = shared(&body, &RegisterClasses::m16());
+        assert_eq!(CLIMBS.with(|climbs| climbs.get()), 0);
     }
 
     /// `isProfitableToHoistInto` answers yes at once under `hasMinSize`

@@ -44,7 +44,10 @@ mod objectsize_tests;
 #[cfg(test)]
 mod power2_tests;
 
-pub use query::{AssumptionCache, CondContext, DomConditionCache, FunctionAnalyses, Query};
+pub use query::{
+    AssumptionCache, CondContext, DomConditionCache, FunctionAnalyses, Query, assume_declared, assume_scans,
+    guard_declared, guard_scans,
+};
 
 #[cfg(test)]
 mod range_tests;

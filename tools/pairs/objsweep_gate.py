@@ -3,7 +3,7 @@
 
     tools/pairs/objsweep_gate.py
 
-Two `llrm-cc` builds (the merge-base's with LLRM_MEASURE_REF, origin/main unless named, tools/measure.py's cached `dist`; this tree's), `objsweep.py` over m16, m32 and m64, plain and
+Two `llrm-cc` builds (the merge-base's with LLRM_MEASURE_REF, origin/main unless named, tools/measure.py's cached `dist`; this tree's), `objsweep.py` over m16, m32, m64, arm64 and wasm, plain and
 `--debug`, O2 and Os. Each leg must change as many objects as `objsweep_expected.toml` says (none where it says nothing): a PR that moves
 bytes on purpose lists the count and why, and the file is empty again once the base has the change. A leg that compiled too little
 proves nothing and fails, and a control (the same program at O2 and at Os must differ) shows the comparison sees a change.
@@ -23,7 +23,10 @@ ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT / "tools"))
 
-LEGS = [(f"{target}{suffix}", target, debug) for target in ("m32", "m16", "m64") for suffix, debug in (("", False), (" debug", True))]
+DEBUG_TARGETS = ("m32", "m16", "m64", "a64", "wasm")  # the others write no debug information (z80's llc takes no -g, 6502 has none)
+LEGS = [(f"{target}{suffix}", target, debug) for target in ("m32", "m16", "m64", "a64", "wasm", "mos", "z80", "m68k") for suffix, debug in (("", False), (" debug", True)) if not debug or target in DEBUG_TARGETS]
+# Targets objsweep compiles that the gate does not sweep yet, and why (11-03, tip compiler built twice per program, O2: a64 and wasm deterministic plain and -g; 6502 67, z80 70 and m68k 60 of 71 compile, all deterministic; the rest are named backend/frontend gaps).
+PENDING: dict[str, str] = {}  # target -> why objsweep compiles it but the gate does not sweep it yet
 LINE = re.compile(r"(\d+) objects changed \(([^)]*)\); (\d+) identical, (\d+) failed on both sides, (\d+) failed on one side of (\d+)")
 MIN_IDENTICAL = 0.5  # of the cells of a leg that must compile and match for it to say anything
 
@@ -70,17 +73,30 @@ def seeded(good: bytes) -> str | None:
     return None if verdict("seeded", line, {}) else "control: a leg with a changed object passed"
 
 
+SKIPPED = 77  # tools/gate/gate.py reads this exit code as the SKIPPED verdict, never ok
+COMPILER_SOURCES = ("crates", "Cargo.toml", "Cargo.lock")
+
+
+def same_compiler(base_sha: str, head: str = "HEAD") -> bool:
+    """No byte of the compiler's sources differs between the two commits: their builds are one binary, and a sweep of it against itself finds nothing."""
+    return subprocess.run(["git", "diff", "--quiet", base_sha, head, "--", *COMPILER_SOURCES], cwd=ROOT).returncode == 0
+
+
 def main() -> int:
     import llrmbin
     import measure
 
     os.environ.update(llrmbin.cc_environment())
     head = subprocess.run([sys.executable, str(ROOT / "tools/measure.py"), "dist"], capture_output=True, text=True, check=True).stdout.strip().splitlines()[-1]
+    subprocess.run(["bash", "-c", measure.OBJECTS_BUILD], cwd=ROOT, check=True)  # the other targets' llcs beside this tree's dist llrm-cc
     base_sha = measure.base_with_cc("HEAD", measure.base_of("HEAD", os.environ.get("LLRM_MEASURE_REF", "origin/main")))
     if base_sha is None:
         print("objsweep: no ancestor with llrm-cc to compare with")
         return 1
-    old, new = str(measure.built(base_sha, "dist") / "llrm-cc"), str(Path(head) / "llrm-cc")
+    if same_compiler(base_sha):
+        print(f"SKIPPED: no crates diff between {base_sha[:10]} and HEAD, so the objects cannot differ")
+        return SKIPPED
+    old, new = str(measure.built(base_sha, "objects") / "llrm-cc"), str(Path(head) / "llrm-cc")
     expected = tomllib.loads((HERE / "objsweep_expected.toml").read_text()).get("leg", {})
     failures = [why] if (why := control(new)) else []
     for leg, targets, debug in LEGS:
