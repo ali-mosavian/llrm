@@ -594,6 +594,11 @@ mod tests {
             // drops `nsw` off a trunc to i1 that is not also `nuw`. It sets no
             // flag.
             "typepromotion_pass.rs",
+            // AggressiveInstCombine.cpp's `tryToRecognizeTableBasedPatterns`
+            // takes `nusw` (`hasNoUnsignedSignedWrap`; `inbounds` implies it)
+            // of the table's GEP as the proof its index does not wrap. It
+            // reads no other flag and sets none.
+            "aggressive_instcombine.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =
