@@ -195,6 +195,9 @@ pub struct MFunction<C> {
     pub locals: Vec<(i32, i64, i64)>,
     /// The function is built for size (`shouldOptimizeForSize`).
     pub optimize_for_size: bool,
+    /// The function calls a routine that returns twice (`setjmp`): the
+    /// coalescer leaves it alone (`MachineFunction::exposesReturnsTwice`).
+    pub returns_twice: bool,
     /// The source places the instructions' [`Inst::origin`]s number, from 1.
     pub places: Vec<llrm_codegen::model::lir::SrcLoc>,
     /// `-g`: the source variables and where each is.
@@ -215,6 +218,7 @@ impl<C> MFunction<C> {
             fixed: BTreeMap::new(),
             locals: Vec::new(),
             optimize_for_size: false,
+            returns_twice: false,
             places: Vec::new(),
             variables: Vec::new(),
         }

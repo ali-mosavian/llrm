@@ -94,6 +94,7 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // estimate becomes gcc's own size count (translated, not fitted).
         recursive_edge_growth: Some((12, 22)),
         peel_folded_entry: true,
+        sink_select_arms: true,
         ..llrm_mir::target::Tuning::PIN
     }
 }
@@ -394,6 +395,12 @@ impl llrm_target::Target for M32 {
     /// X86ISelLowering.cpp: `setPrefFunctionAlignment(Align(16))`.
     fn pref_function_alignment(&self) -> u8 {
         4
+    }
+
+    /// DEVIATE SD543: no `rep` on `bsf`; the 386, 486 and Pentium have no
+    /// `tzcnt`, so the pin's prefix is a dead byte. Owner m16. Exit 2026-11-20.
+    fn bsf_rep_prefix(&self) -> bool {
+        false
     }
 
     /// X86ISelLowering.cpp: `setPrefLoopAlignment(Align(16))`.

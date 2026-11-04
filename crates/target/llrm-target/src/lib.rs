@@ -660,6 +660,14 @@ pub trait Target {
     /// The CPU a compile is priced for where none is asked.
     fn default_cpu(&self) -> &'static str;
 
+    /// Whether a `bsf` whose flags are dead carries the `rep` prefix, the
+    /// TZCNT encoding (`X86MCInstLower`). A processor without `tzcnt` runs it
+    /// as `bsf`, so the prefix is a dead byte there; the pin emits it for
+    /// compatibility with later processors.
+    fn bsf_rep_prefix(&self) -> bool {
+        true
+    }
+
     /// `TargetLowering::getPrefFunctionAlignment` as a power of two (X86: 16
     /// bytes, 4); 0: functions are not aligned.
     fn pref_function_alignment(&self) -> u8 {

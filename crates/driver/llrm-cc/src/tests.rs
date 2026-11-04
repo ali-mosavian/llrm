@@ -286,6 +286,19 @@ fn the_6502_rows_select_their_own_backend_and_cpu() {
     assert_eq!(table["x86_64-linux"].llc_program, "llrm-llc");
 }
 
+/// A C global `sp` collided with cc65's own `sp` at link. The cc65 rows name
+/// the platform whose C symbols take cc65's `_`; the sim65 rows keep bare
+/// names.
+#[test]
+fn the_cc65_rows_take_the_platform_with_cc65s_symbol_prefix() {
+    let table = targets(TARGETS).unwrap();
+    let one = built("-Os -S x.c");
+    for (row, cpu) in [("6502-cc65", "--cpu=6502"), ("65c02-cc65", "--cpu=65c02")] {
+        let args = llc_args(&table[row], &one, Path::new("x.ll"), Path::new("x.s"));
+        assert_eq!(args[..3], ["-Os", "--platform=sim65-cc65", cpu], "{row}: {args:?}");
+    }
+}
+
 /// `-ffp-contract=off` was put on every machine that fuses a multiply-add, so
 /// arm64 never formed `fmadd` where the pin's clang and gcc do. No row turns
 /// contraction off; a user who wants unfused results says so.

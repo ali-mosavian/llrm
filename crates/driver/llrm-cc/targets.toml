@@ -199,6 +199,30 @@ llc_program = "llrm-6502-llc"
 object = "ca65"
 link = ["sh", "-c", "echo 'llrm-cc: the 6502 rows stop at -S' >&2; exit 1"]
 
+# The 6502 rows for a program linked with cc65's sim6502 libraries: every C symbol takes cc65's `_` (`sp` is `_sp`, `main` is the `_main`
+# crt0 calls), so none meets a library symbol. The rows above keep bare names, which the runtime tests' hand glue names.
+[6502-cc65]
+description = "6502"
+triple = "msp430"
+datalayout = "{datalayout:6502}"
+clang_datalayout = "e-m:e-p:16:16-i32:16-i64:16-f32:16-f64:16-a:8-n8:16-S16"
+clang = ["-target", "msp430", "-funsigned-char", "-fpack-struct=1"]
+llc = ["--platform=sim65-cc65", "--cpu=6502"]
+llc_program = "llrm-6502-llc"
+object = "ca65"
+link = ["sh", "-c", "echo 'llrm-cc: the 6502 rows stop at -S' >&2; exit 1"]
+
+[65c02-cc65]
+description = "6502"
+triple = "msp430"
+datalayout = "{datalayout:6502}"
+clang_datalayout = "e-m:e-p:16:16-i32:16-i64:16-f32:16-f64:16-a:8-n8:16-S16"
+clang = ["-target", "msp430", "-funsigned-char", "-fpack-struct=1"]
+llc = ["--platform=sim65-cc65", "--cpu=65c02"]
+llc_program = "llrm-6502-llc"
+object = "ca65"
+link = ["sh", "-c", "echo 'llrm-cc: the 6502 rows stop at -S' >&2; exit 1"]
+
 # m68k Linux: -S is gas text, -c an ELF32 relocatable with .text and the data sections; no link line yet.
 # The pin's clang gives the target a 64-bit long double (`[c]` of the description).
 [m68k-68000]

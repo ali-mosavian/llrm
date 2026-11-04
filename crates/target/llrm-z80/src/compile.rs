@@ -127,7 +127,9 @@ fn machine_function_with(
     let (_, source, scheduled) =
         selected.iter().find(|(one, ..)| one == name).ok_or_else(|| format!("no function @{name}"))?;
     let selection = if crate::dagisel::pipeline::ILP.with(std::cell::Cell::get) { scheduled } else { source };
-    let mut function = emit(name, selection.as_ref().map_err(Clone::clone)?)?;
+    let selection = selection.as_ref().map_err(Clone::clone)?;
+    let mut function = emit(name, selection)?;
+    function.returns_twice = selection.returns_twice;
     expand_cmov(&mut function)?;
     crate::ldir::copy_loops_to_ldir(&mut function);
     if duplicate {

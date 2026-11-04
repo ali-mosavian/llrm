@@ -131,8 +131,12 @@ pub fn function_text(
             },
         );
     let (items, _, places) = function_items_with_places(module, name, selection)?;
-    let (function, labels) =
+    let (mut function, labels) =
         alloc::build_with_places(name, &items, places).map_err(|why| format!("{name}: {}", why.0))?;
+    function.returns_twice = module
+        .named(name)
+        .and_then(|id| module.global(id).function())
+        .is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
     let (code, slots) = alloc::emit(
         function,
         &labels,

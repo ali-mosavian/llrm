@@ -477,6 +477,11 @@ pub trait Tti {
         true
     }
 
+    /// `Tuning::sink_select_arms`.
+    fn sinks_select_arms(&self) -> bool {
+        false
+    }
+
     /// DEVIATE U1: the bar (unrolled size) an `optsize` loop of at most this
     /// many trips is fully unrolled under, where the target says so: its
     /// body's tests fold on the trip, and few copies cost little; none: the
@@ -888,6 +893,15 @@ pub trait Tti {
     /// targets do. m68k's wide multiplies are library calls.
     fn sizes_exit_values(&self) -> bool {
         false
+    }
+
+    /// Beyond the pin: whether a function built for size turns a store or
+    /// copy loop into a `memset` or `memcpy` call (`LoopIdiomRecognize`). The
+    /// pin does; a target whose call setup and library routine are more bytes
+    /// than the loop (m68k: three pushes, `jsr`, `lea` against a four
+    /// instruction loop) says false.
+    fn memory_idioms_at_optsize(&self) -> bool {
+        true
     }
 
     /// Beyond the pin: whether a strict exit compare of a unit-stride counter
