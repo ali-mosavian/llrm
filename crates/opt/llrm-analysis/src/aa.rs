@@ -138,8 +138,7 @@ impl MemoryLocation {
         // `memset`, `memcpy` and `memmove` name the bytes they touch through
         // their destination and source (`getForDest`, `getForSource`).
         let named = llrm_mir::memory::callee(unit.context, unit.function, call)
-            .and_then(|one| unit.globals.get(one.0 as usize)?.name.as_deref())
-            .and_then(llrm_mir::intrinsics::Intrinsic::named);
+            .and_then(|one| unit.globals.get(one.0 as usize)?.intrinsic());
         // `MemoryLocation.cpp#L200-L230`: the bytes an `invariant.start` or
         // `.end` covers are its constant size operand; the scope `.end` takes
         // first is a descriptor never dereferenced.
@@ -875,6 +874,26 @@ mod tests {
     use super::*;
     use crate::memory::Unit;
     use crate::testing::{DOS, function, layout, parsed};
+
+    /// `get_for_argument` named the callee from its text on every ask (2465 Ir,
+    /// 85,563 asks in DSE of 600 memcpy/memset/store triples). The name keeps
+    /// its intrinsic: asking again looks no name up.
+    #[test]
+    fn asking_for_a_calls_argument_looks_no_name_up() {
+        let text = format!(
+            "{DOS}declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)\n\ndefine void @f(ptr %d, ptr %s) {{\nb0:\n  call void @llvm.memcpy.p0.p0.i16(ptr %d, ptr %s, i16 8, i1 false)\n  ret void\n}}\n"
+        );
+        let module = parsed(&text);
+        let (function, layout) = (function(&module, "f"), layout(&module));
+        let unit = Unit::of(&module, &layout, function);
+        let call = function.walk().map(|(_, inst)| inst).find(|&inst| matches!(function.instruction(inst).opcode, llrm_mir::opcode::Opcode::Call(_))).unwrap();
+        let before = llrm_mir::intrinsics::names_looked_up();
+        for arg in 0..2 {
+            let found = MemoryLocation::get_for_argument(&unit, call, arg).expect("an argument");
+            assert_eq!(found.size, LocationSize::Precise(8), "arg {arg}");
+        }
+        assert_eq!(llrm_mir::intrinsics::names_looked_up(), before, "names looked up for 2 asks");
+    }
 
     /// An analysis that answers nothing: every pair may alias, every access
     /// does both.
