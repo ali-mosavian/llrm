@@ -15,19 +15,7 @@ use llrm_mir::passes::{Outer, Unit};
 use llrm_mir::types::TypeId;
 use llrm_mir::valuetracking::{self, Query, Sizes};
 
-use super::{NewCall, Rewrite, Site};
-
-/// `getConstantStringInfo(V, Str, TrimAtNul)` of a pointer that is a constant
-/// global.
-fn string_info(
-    unit: &Unit,
-    site: &Site,
-    operand: Operand,
-    trim_at_nul: bool,
-) -> Option<Vec<u8>> {
-    let bytes = super::constant_array(unit, site.env, operand)?;
-    Some(if trim_at_nul { bytes.into_iter().take_while(|&byte| byte != 0).collect() } else { bytes })
-}
+use super::{NewCall, Rewrite, Site, string_info};
 
 /// `std::clamp(A.compare(B), -1, 1)` as a constant of the call's type.
 fn ordering(

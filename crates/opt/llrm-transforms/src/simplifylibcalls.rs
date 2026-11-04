@@ -23,7 +23,9 @@
 //! integer compare for a legal `n * 8` and aligned pointers; `strcmp(p, "x")`
 //! and `strncmp` of a literal are `memcmp` where the bytes are readable and the
 //! result is only compared with zero, and `memcmp(p, q, n) == 0` is `bcmp`
-//! (`compare.rs`).
+//! (`compare.rs`). `strchr` of a constant string and character, `strpbrk`,
+//! `strspn`, `strcspn` and `strstr` over constant strings fold to an address
+//! into the first string, null or a length (`search.rs`).
 //!
 //! # Deviations
 //! - D1: `puts`, `putchar`, `fwrite`, `fputc`, `fputs`, `memcmp` and `bcmp` are
@@ -33,6 +35,10 @@
 //! - D2: the other arms (`sprintf`, `snprintf`, the other `str*`, `mem*`, math)
 //!   are untranslated, and so are `iprintf`/`__small_printf`,
 //!   `optimizeErrorReporting` and the argument annotations.
+//! - D4: the arms of `strchr`, `strpbrk`, `strcspn` and `strstr` that call a
+//!   routine (`memchr`, `strlen`, `strncmp`, `strchr`) are untranslated, as is
+//!   the character compare the pin makes of a `strchr` or `strstr` tested
+//!   against its own string: such a call is left as it is.
 //! - D3: `strcmp` of two strings whose lengths are known but whose contents are
 //!   not (a PHI or select of literals) is not rewritten: `GetStringLength` here
 //!   reads a constant global only.
@@ -56,6 +62,7 @@ use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, PreservedAnaly
 use llrm_mir::types::Type;
 
 mod compare;
+mod search;
 
 pub struct SimplifyLibCalls {
     routines: Vec<Routine>,
@@ -81,6 +88,18 @@ fn constant_array(
     let bytes = read_byte_array_from_global(unit.context, env, global, 0)?;
     let ConstantKind::Bytes(raw) = &unit.context.get(bytes).kind else { return None };
     Some(raw.to_vec())
+}
+
+/// `getConstantStringInfo(V, Str, TrimAtNul)` of a pointer that is a constant
+/// global.
+fn string_info(
+    unit: &Unit,
+    site: &Site,
+    operand: Operand,
+    trim_at_nul: bool,
+) -> Option<Vec<u8>> {
+    let bytes = constant_array(unit, site.env, operand)?;
+    Some(if trim_at_nul { bytes.into_iter().take_while(|&byte| byte != 0).collect() } else { bytes })
 }
 
 /// `getConstantStringInfo` of a pointer that is a constant global: the bytes
@@ -474,6 +493,11 @@ impl FunctionPass for SimplifyLibCalls {
                 LibFunc::Strncmp => compare::str_n_cmp(unit, &site, &outer),
                 LibFunc::Memcmp => compare::mem_cmp(unit, &site, true),
                 LibFunc::Bcmp => compare::mem_cmp(unit, &site, false),
+                LibFunc::Strchr => search::str_chr(unit, &site),
+                LibFunc::Strpbrk => search::str_pbrk(unit, &site),
+                LibFunc::Strspn => search::str_spn(unit, &site, true),
+                LibFunc::Strcspn => search::str_spn(unit, &site, false),
+                LibFunc::Strstr => search::str_str(unit, &site),
                 _ => None,
             };
             let Some(rewrite) = rewrite else { continue };
