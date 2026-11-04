@@ -420,6 +420,26 @@ fn asking_whether_a_load_or_store_writes_derives_no_list() {
     assert_eq!(llrm_analysis::memoryssa::lazy_lists(), before, "lists derived for loads and stores");
 }
 
+/// A store walked past every call between it and the next store and asked the
+/// call's attributes again each time (`memory::stated` 1.5 M calls, half of
+/// DSE's 1.5 G Ir on 600 memcpy/memset/store triples). Each call is asked about
+/// once, however many stores walk past it.
+#[test]
+fn a_call_walked_past_by_many_stores_is_asked_about_once() {
+    const CALLS: usize = 12;
+    let mut body = String::new();
+    for i in 0..CALLS {
+        body.push_str(&format!("  store i16 {i}, ptr @g\n  call void @h(ptr @o)\n"));
+    }
+    let text = format!(
+        "@g = global i16 0\n@o = global i16 0\n\ndeclare void @h(ptr)\n\ndefine void @f() {{\nb0:\n{body}  store i16 99, ptr @g\n  ret void\n}}\n"
+    );
+    let before = llrm_analysis::memoryssa::lazy_lists();
+    eliminated(&text, &[]);
+    let derived = llrm_analysis::memoryssa::lazy_lists() - before;
+    assert!(derived <= 2 * CALLS, "{derived} lists derived for {CALLS} calls");
+}
+
 /// A store's place was worked out again at every ask (603 times for about a
 /// hundred stores on d_faces). A chain of n stores works out at most one place
 /// for each of its instructions.

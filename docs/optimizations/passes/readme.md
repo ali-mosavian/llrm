@@ -2,13 +2,14 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 235 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 237 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
 | adce | Aggressive dead code elimination: a translation of LLVM's ADCE (`ADCE.cpp` at d1106deb71cc). | LLVM runs it after SCCP, BDCE and before MemCpyOpt (slot 35). Not in llrm's | [adce](adce.md) |
+| aggressive_instcombine | `AggressiveInstCombine`: `TruncInstCombine`, then the folds of `foldUnusualPatterns`, here `foldConsecutiveLoads`. | As `aggressive-instcombine@678`, after `instcombine` and before `tailrec` | [aggressive_instcombine](aggressive_instcombine.md) |
 | algebraic | Algebraic identities over integer values, as LLVM's InstCombine and, for a loop-carried operand, Reassociate. | `algebraic` runs once in each pass of the fixed point, after `indvars` and | [algebraic](algebraic.md) |
 | alwaysundef | Whether passing a constant into a phi is undefined behavior at a use of the phi: SimplifyCFG's `passingValueIsAlwaysUndefined`. | Named by `hoistcommon`, `speculate`, `undefpred`. | [alwaysundef](alwaysundef.md) |
 | argpromotion | Argument promotion (LLVM's ArgumentPromotion): a pointer parameter a function only reads at fixed offsets is replaced by the fields read. | In the interprocedural step, once, after its inlining loop and before | [argpromotion](argpromotion.md) |
@@ -71,6 +72,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_select_bit_test | `foldSelectBitTest`: `select (icmp eq (and x, 2^k), 0), TC, FC` as the `and` shifted and combined with a constant. | Named by `combine_visit_select`. | [combine_select_bit_test](combine_select_bit_test.md) |
 | combine_select_bools | `foldSelectOfBools`: a `select` of `i1` as a logical operation. | Named by `combine_visit_select`. | [combine_select_bools](combine_select_bools.md) |
 | combine_select_ext_const | `foldSelectExtConst`: `select c, (ext x), C` as `ext (select c, x, C')`. | Named by `combine_visit_select`. | [combine_select_ext_const](combine_select_ext_const.md) |
+| combine_select_fabs | `foldSelectWithFCmpToFabs`: `x < 0.0 ? -x : x` is `fabs(x)` where the user ignores the sign of zero and of a NaN. | Named by `combine_visit_select`. | [combine_select_fabs](combine_select_fabs.md) |
 | combine_select_into_op | `foldSelectIntoOp`: `select c, (op x, y), x` as `op x, (select c, y, identity)`. | Named by `combine_visit_select`. | [combine_select_into_op](combine_select_into_op.md) |
 | combine_select_op_op | `foldSelectOpOp`: `select c, (op x, a), (op x, b)` as `op x, (select c, a, b)`. | Named by `combine_visit_select`. | [combine_select_op_op](combine_select_op_op.md) |
 | combine_select_spf | `foldSelectInstWithICmp`'s first step: a select that is a min, a max or an absolute value of a compare becomes the intrinsic. | `visitSelectInst`. | [combine_select_spf](combine_select_spf.md) |
@@ -79,7 +81,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_shifts | InstCombine's `visitShl`, `visitLShr` and `visitAShr` and the helpers they call, from [`InstCombineShifts.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineShifts.cpp) at d1106deb71cc. | Not a pass: called by the combine driver once its slot is flipped. | [combine_shifts](combine_shifts.md) |
 | combine_sink | Sinking one instruction to the block that is its only user's, as InstCombine's driver does after popping it. | Not a pass: called by the combine driver once it lands. | [combine_sink](combine_sink.md) |
 | combine_sub | `InstCombinerImpl::visitSub`: the integer subtraction folds. | `combine::visit` (the `Sub` arm). | [combine_sub](combine_sub.md) |
-| combine_visit_select | `visitSelectInst`: the canonical forms of a `select`. | Named by `combine_select_bit_test`, `combine_select_bools`, `combine_select_ext_const`, `combine_select_into_op`, `combine_select_op_op`, `combine_select_spf`. | [combine_visit_select](combine_visit_select.md) |
+| combine_visit_select | `visitSelectInst`: the canonical forms of a `select`. | Named by `combine_select_bit_test`, `combine_select_bools`, `combine_select_ext_const`, `combine_select_fabs`, `combine_select_into_op`, `combine_select_op_op`, `combine_select_spf`. | [combine_visit_select](combine_visit_select.md) |
 | combine_xor | `InstCombinerImpl::visitXor`: the integer `xor` folds. | Named by `combine`, `combine_casted_logic`. | [combine_xor](combine_xor.md) |
 | condstores | Two conditional stores to one address, one in each of two if-then-else diamonds or triangles in a row, are one store after them, predicated on either condition: SimplifyCFG's `mergeConditionalStores`. | Named by `condtocond`, `simplifycfg`. | [condstores](condstores.md) |
 | condtocond | A conditional branch in an empty block that a conditional branch predecessor shares a destination with, folded into the predecessor: LLVM's [`SimplifyCondBranchToCondBranch`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L4773). | Named by `simplifycfg`. | [condtocond](condtocond.md) |
