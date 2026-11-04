@@ -1528,3 +1528,12 @@ fn lz4cs_checksum_loop_steps_a_pointer_in_hl_and_counts_down() {
     let body = checksum_loop(&out);
     assert!(!body.contains("add hl, bc") && !body.contains("(ix)"), "{out}");
 }
+
+/// scmp's exit merged `zext c` and `0` into a pair and subtracted its low
+/// byte: `ld c, a` / `ld b, #0` made a high byte nothing read, and `ld bc, #0`
+/// another, 33 B and 165 T against SDCC's 24 B and 147 T. The pair is a byte.
+#[test]
+fn a_pair_only_its_low_byte_is_read_from_is_a_byte() {
+    let out = text(include_str!("kernels/ir/scmp.ll"), "scmp", 0, &Request::new(Level::O2)).expect("compiles");
+    assert!(!out.contains("ld b, #0") && !out.contains("ld bc, #0"), "{out}");
+}
