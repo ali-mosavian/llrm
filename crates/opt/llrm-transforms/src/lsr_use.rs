@@ -628,7 +628,11 @@ impl Cost {
 
         // Every register past the target's, less one, is another instruction
         // (a fill).
-        let target_regs = (r.tti.number_of_gpr_registers() - 1).saturating_sub(r.other_register_units);
+        // DEVIATE LU3c: the pin keeps one register back for what it does not
+        // count; LU3b counts what the loop keeps live, so the reserve is
+        // taken only where nothing else is.
+        let reserve = u32::from(r.other_register_units == 0);
+        let target_regs = (r.tti.number_of_gpr_registers() - reserve).saturating_sub(r.other_register_units);
         if self.c.num_regs > target_regs {
             // Already past: only the newly added registers add instructions.
             if prev_regs > target_regs {
