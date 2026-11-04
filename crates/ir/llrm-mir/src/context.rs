@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use crate::arena::Arena;
 use crate::hash::HashMap;
 use crate::opcode::{BinaryOp, CastOp};
-use crate::types::{TypeId, Types};
+use crate::types::{FloatKind, TypeId, Types};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ConstantId(u32);
@@ -31,6 +31,9 @@ pub enum ConstantKind {
     /// An `x86_fp80` no double holds exactly: the 80 bits, the sign and 15-bit
     /// exponent above a 64-bit significand with its integer bit.
     Float80(u128),
+    /// An `fp128`: its 128 bits, the sign and 15-bit exponent above a 112-bit
+    /// trailing significand. Never `Float`: an `fp128` has one form.
+    Float128(u128),
     Null,
     /// `UndefValue`: any value, chosen per use.
     Undef,
@@ -43,6 +46,17 @@ pub enum ConstantKind {
     Bytes(Vec<u8>),
     Global(GlobalId),
     Expr(ConstantExpr),
+}
+
+impl ConstantKind {
+    /// +0.0 of a float type, in the form the type holds: an `fp128` is never
+    /// `Float`.
+    pub fn float_zero(kind: FloatKind) -> ConstantKind {
+        match kind {
+            FloatKind::F128 => ConstantKind::Float128(0),
+            _ => ConstantKind::Float(0),
+        }
+    }
 }
 
 /// The constant expressions MIR keeps, for global initializers only.
