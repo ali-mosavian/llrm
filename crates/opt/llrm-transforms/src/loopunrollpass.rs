@@ -353,7 +353,13 @@ impl Analyzed {
     pub(crate) fn of(run: &Run) -> Self {
         let tree = DomTree::of(run.function);
         let loops = LoopInfo::analyze(run.function, || &tree);
-        let assumptions = AssumptionCache::of(run.context, run.globals, run.metadata, run.function);
+        let assumptions = AssumptionCache::of_declared(
+            run.context,
+            run.globals,
+            run.metadata,
+            run.function,
+            run.outer.assume_declared(),
+        );
         Self { tree, loops, assumptions }
     }
 }
