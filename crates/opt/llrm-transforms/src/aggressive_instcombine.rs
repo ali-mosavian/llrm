@@ -408,12 +408,8 @@ fn fold_consecutive_loads(
             _ => return false,
         };
         let index_bits = layout.pointer(space).index_bits;
-        let (base, offset) = strip_and_accumulate_constant_offsets(
-            &query(context, layout, function),
-            pointer,
-            index_bits,
-            true,
-        );
+        let (base, offset) =
+            strip_and_accumulate_constant_offsets(&query(context, layout, function), pointer, index_bits, true);
         let shift = 128 - index_bits;
         let offset = ((offset << shift) as i128) >> shift;
         let i8 = context.types.int(8);

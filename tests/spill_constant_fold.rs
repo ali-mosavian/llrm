@@ -38,7 +38,8 @@ fn a_spilled_constant_is_one_store_of_the_immediate() {
 
 /// A word value defined by a dword zero was folded to `mov dword ptr [rsp], 0`
 /// and reloaded as a qword: the upper half was stack garbage, so the counter
-/// of a 3x8x64 byte-plane init loop ran wild and the program segfaulted (jpeg_single at -O2).
+/// of a 3x8x64 byte-plane init loop ran wild and the program segfaulted
+/// (jpeg_single at -O2).
 #[test]
 fn a_dword_constant_defining_a_qword_value_is_stored_as_a_qword() {
     let text = listing(
@@ -52,8 +53,13 @@ fn a_dword_constant_defining_a_qword_value_is_stored_as_a_qword() {
         let rest = line.trim().split(&format!("{width} ptr [")).nth(1)?;
         Some(rest.split(']').next()?.to_string())
     };
-    let dwords: Vec<String> = text.lines().filter(|line| line.trim().starts_with("mov dword ptr [rsp")).filter_map(|line| cell(line, "dword")).collect();
-    let torn: Vec<_> = dwords.iter().filter(|slot| text.lines().any(|line| cell(line, "qword").as_ref() == Some(*slot))).collect();
+    let dwords: Vec<String> = text
+        .lines()
+        .filter(|line| line.trim().starts_with("mov dword ptr [rsp"))
+        .filter_map(|line| cell(line, "dword"))
+        .collect();
+    let torn: Vec<_> =
+        dwords.iter().filter(|slot| text.lines().any(|line| cell(line, "qword").as_ref() == Some(*slot))).collect();
     assert!(torn.is_empty(), "dword store to a slot read as a qword: {torn:?}\n{text}");
 }
 
@@ -69,6 +75,10 @@ fn a_spilled_symbol_address_is_not_stored_as_an_immediate_at_m64() {
          }\n",
         "-O2",
     );
-    let stores: Vec<_> = text.lines().map(str::trim).filter(|line| line.starts_with("mov qword ptr [") && line.contains(", offset ")).collect();
+    let stores: Vec<_> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("mov qword ptr [") && line.contains(", offset "))
+        .collect();
     assert!(stores.is_empty(), "{stores:?}");
 }

@@ -3,9 +3,8 @@
 //! (`MachineFunction`), the frame objects it needs, and the pseudo
 //! instructions only the backend's own phases understand.
 
-use rustc_hash::FxHashMap as HashMap;
-
 use llrm_codegen::model::lir::SrcLoc;
+use rustc_hash::FxHashMap as HashMap;
 
 use crate::mc::inst::{Gpr, Inst, Target, Vreg};
 use crate::mc::visit::{Reg, RegRef, Role};
