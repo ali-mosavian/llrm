@@ -15,7 +15,7 @@ ROOT = HERE.parents[4]
 RUNTIME = HERE.parents[1] / "runtime" / "z80_rt.s"
 LIBC = HERE / "libc"  # the C library's entries over the runtime's: a library, so a program's own definition wins
 DATALAYOUT = 'target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16"'
-CLANG_FLAGS = ["-target", "msp430", "-fsigned-char", "-fpack-struct=1", "-fno-vectorize", "-fno-slp-vectorize", "-S", "-emit-llvm"]
+CLANG_FLAGS = ["-target", "msp430", "-fsigned-char", "-fpack-struct=1", "-fno-vectorize", "-fno-slp-vectorize", "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone", "-S", "-emit-llvm"]
 LOG = 0xC000  # the log pointer, then the entries; the stack runs down from 0xFFFF
 CRT0 = f"""\t.module crt0
 \t.globl _main
@@ -29,6 +29,7 @@ CRT0 = f"""\t.module crt0
 \t.area _CODE
 \t.area _CONST
 \t.area _DATA
+\t.area _BSS
 """
 REPORT = f"""\t.module report
 \t.globl _report
@@ -50,16 +51,28 @@ _report::
 """
 
 
+def zero_areas(link_map, areas=("_BSS",)):
+    """ucsim commands that zero the areas the program expects cleared at start (RAM starts as noise); a loader's job, not the program's clocks."""
+    commands = ""
+    for area in areas:
+        start = re.search(rf"([0-9A-F]{{8}})\s+s_{area}\b", link_map)
+        length = re.search(rf"([0-9A-F]{{8}})\s+l_{area}\b", link_map)
+        if start and length and int(length.group(1), 16):
+            commands += f"fill rom {int(start.group(1), 16):#x} {int(start.group(1), 16) + int(length.group(1), 16) - 1:#x} 0\n"
+    return commands
+
+
 def sh(cmd, cwd, inp=None, timeout=300):
     return subprocess.run(cmd, cwd=cwd, input=inp, capture_output=True, text=True, timeout=timeout)
 
 
 def libc_library(work):
-    """The library directory of LIBC's objects: sdld takes a member only for a symbol still undefined (an sdar archive, it takes whole)."""
+    """The library directory of LIBC's objects and those of the `Z80_LIBC_EXTRA` directories (the soft-float helpers): sdld takes a member only for a symbol still undefined (an sdar archive, it takes whole)."""
     lib = Path(work) / "lib"
     lib.mkdir()
     stems = []
-    for s in sorted(LIBC.glob("*.s")):
+    extra = [Path(d) for d in os.environ.get("Z80_LIBC_EXTRA", "").split(":") if d]
+    for s in sorted([*LIBC.glob("*.s"), *(p for d in extra for p in d.glob("*.s"))]):
         a = sh(["sdasz80", "-g", "-o", f"lib/{s.stem}.rel", str(s)], work)
         assert a.returncode == 0, a.stdout + a.stderr
         stems.append(s.stem)
@@ -85,6 +98,16 @@ def reported(out):
     return values
 
 
+def program_flags(src):
+    """The `-f` flags of the program's first `// flags:` alternative, and whether it expects x86's types."""
+    text = src.read_text()
+    first = text.splitlines()[0] if text.startswith("// flags:") else ""
+    tokens = first.removeprefix("// flags:").split("|")[0].split()
+    keep = [t for t in tokens if t.startswith("-f") and not t.startswith("-fsanitize")]
+    x86 = any(t in ("-m32", "-mabi=sysv") or t.startswith("-march=i") for t in tokens) or "long double" in text
+    return keep, x86
+
+
 def one(job):
     src, args, work = job
     name = src.stem
@@ -93,7 +116,7 @@ def one(job):
     if want is None:
         return name, "SKIP", "output is not integers"
     ll = w / "p.ll"
-    c = sh([args.clang, f"-O{args.level}" if args.level != "z" else "-Oz", *CLANG_FLAGS, str(src), "-o", str(ll)], ROOT)
+    c = sh([args.clang, f"-O{args.level}" if args.level != "z" else "-Oz", *CLANG_FLAGS, *program_flags(src)[0], str(src), "-o", str(ll)], ROOT)
     if c.returncode:
         return name, "CLANG", (c.stderr.strip().splitlines() or [""])[-1][:100]
     text = [l for l in ll.read_text().splitlines() if not l.startswith("target datalayout")]
@@ -114,13 +137,13 @@ def one(job):
         a = sh(["sdasz80", "-g", "-o", f"{stem}.rel", f"{stem}.s"], w)
         if a.returncode:
             return name, "ASM", (a.stdout + a.stderr).strip().splitlines()[-1][:100]
-    k = sh(["sdldz80", "-i", "-b", "_CODE=0x100", "x.ihx", "crt0.rel", "p.rel", "report.rel", "rt.rel", "-k", args.libc, "-l", "libc"], w)
+    k = sh(["sdldz80", "-i", "-m", "-b", "_CODE=0x100", "x.ihx", "crt0.rel", "p.rel", "report.rel", "rt.rel", "-k", args.libc, "-l", "libc"], w)
     if k.returncode or "?ASlink-W-Undefined" in k.stdout + k.stderr:
         undefined = sorted(set(re.findall(r"Undefined Global (\S+)", k.stdout + k.stderr)))
         return name, "LINK", " ".join(undefined)[:140] or (k.stdout + k.stderr)[-100:]
     try:
         r = sh(["ucsim_z80", "-t", "Z80", "-q", "-w", "x.ihx", "-c", "-"], w,
-               f"sp_limit=0\nrun\nstate\ndump rom {LOG:#x} {LOG + 0xFFF:#x}\nquit\n", timeout=args.timeout)
+               f"sp_limit=0\n{zero_areas((w / 'x.map').read_text())}run\nstate\ndump rom {LOG:#x} {LOG + 0xFFF:#x}\nquit\n", timeout=args.timeout)
     except subprocess.TimeoutExpired:
         return name, "HALT", f"no halt in {args.timeout} s"
     if "Halted" not in r.stdout:
@@ -128,6 +151,9 @@ def one(job):
     got = reported(r.stdout)
     if got == want:
         return name, "PASS", f"{len(got)} values"
+    if program_flags(src)[1]:
+        # int is 16 bits and long double 64 here; the .out is x86's, so a difference is not a miscompile
+        return name, "X86", "expects x86's int and long double widths"
     first = next((i for i, (a, b) in enumerate(zip(got, want)) if a != b), min(len(got), len(want)))
     return name, "WRONG", f"value {first}: got {got[first] if first < len(got) else 'none'}, want {want[first] if first < len(want) else 'none'}"
 

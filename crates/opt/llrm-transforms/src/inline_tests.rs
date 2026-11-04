@@ -127,13 +127,10 @@ b1:
 
 define i16 @main() {
 b1:
-  br label %0
-
-0:
   br label %b4
 
 b4:
-  %joined = phi i16 [ 37, %0 ]
+  %joined = phi i16 [ 37, %b1 ]
   ret i16 %joined
 }
 "
@@ -841,4 +838,77 @@ b1:
     assert!(inline_into(&mut module, "main", 1));
     let after = printed(&module);
     assert!(after.contains("call dereferenceable(16) nonnull ptr @make(i32 %n)"), "{after}");
+}
+
+/// A call site's `!alias.scope` and `!noalias` stopped at the call: the inlined
+/// store carried neither, so a scope the site states could not be read off it
+/// (`PropagateCallSiteMetadata`). The store has its own `!noalias`; the site's
+/// is added to it, and the load, which the site marks too, gets both kinds.
+#[test]
+fn test_the_scopes_of_a_call_site_go_to_the_memory_accesses_of_the_copy() {
+    let mut module = parsed(
+        "define internal void @callee(ptr %p, ptr %q) {
+b1:
+  store i32 1, ptr %p, !noalias !3
+  %v = load i32, ptr %q
+  %w = add i32 %v, 1
+  store i32 %w, ptr %q
+  ret void
+}
+
+define void @main(ptr %a, ptr %b) {
+b1:
+  call void @callee(ptr %a, ptr %b), !alias.scope !1, !noalias !2
+  ret void
+}
+
+!0 = distinct !{!0, !\"domain\"}
+!1 = !{!4}
+!2 = !{!5}
+!3 = !{!6}
+!4 = distinct !{!4, !0}
+!5 = distinct !{!5, !0}
+!6 = distinct !{!6, !0}
+",
+    );
+    assert!(inline_into(&mut module, "main", 1));
+    let after = printed(&module);
+    let main = after.split("define void @main").nth(1).unwrap();
+    assert_eq!(main.matches("!alias.scope").count(), 3, "{after}");
+    assert_eq!(main.matches("!noalias").count(), 3, "{after}");
+    assert!(main.contains("store i32 1, ptr %a"), "{after}");
+    assert!(!main.contains("call void @callee"), "{after}");
+}
+
+/// jpeg_fixed wasm -Os ran 132 bytes over the pin: each inlined body left its
+/// entry as a block of only `br`, 46 of 185 blocks after inlining. The entry
+/// belongs in the call's block, as `InlineFunction` splices it.
+#[test]
+fn test_inline_joins_the_callee_entry_to_the_call_block() {
+    let mut module = parsed(
+        "define internal i16 @pick(i16 %x) {
+b1:
+  %zero = icmp eq i16 %x, 0
+  br i1 %zero, label %t, label %e
+
+t:
+  ret i16 1
+
+e:
+  ret i16 2
+}
+
+define i16 @main(i16 %x) {
+b1:
+  %r = call i16 @pick(i16 %x)
+  ret i16 %r
+}
+",
+    );
+    assert!(inline_into(&mut module, "main", 1));
+    let after = printed(&module);
+    let main = after.split("define i16 @main").nth(1).unwrap();
+    assert!(main.contains("b1:\n  %zero = icmp eq i16 %x, 0\n  br i1"), "{after}");
+    assert_eq!(run(&module, "main", &[0]), Val::Int { bits: 1, width: 16 });
+    assert_eq!(run(&module, "main", &[5]), Val::Int { bits: 2, width: 16 });
 }

@@ -4955,6 +4955,23 @@ fn test_an_instruction_equal_to_one_already_answered_is_not_worked_out_again() {
     );
 }
 
+/// Both hashes of an ask walked its operands, each its own time: 26M Ir of
+/// memory_expansion -O2 in `EffectKey::hashes`. One walk feeds both.
+#[test]
+fn test_the_operands_of_an_ask_are_walked_once_for_both_hashes() {
+    let regs = crate::backend::registerinfo::test_regs();
+    let add = insn(
+        0,
+        Some((0, 2)),
+        Some(sem(Operation::Binary, "add", vec![rl(RegId::AX, 2)], vec![rl(RegId::AX, 2), rl(RegId::BX, 2)])),
+        vec![],
+        vec![],
+    );
+    let before = shapes_walked();
+    _register_effects(regs, 16, &add, false, true);
+    assert_eq!(shapes_walked() - before, 1, "the operands were walked once for each hash");
+}
+
 /// `dead_at_exit` was worked out for the body ten passes in a row, though all
 /// but one of them left it as it was (#924). A body that is the same is
 /// answered from the last; one whose instruction changed is not.

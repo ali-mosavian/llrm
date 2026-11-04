@@ -313,6 +313,8 @@ pub(super) fn clocks(
             memory => price(&name, "Mem", Some(memory), size, 0),
         },
         ("ext" | "nbcd", _) => price(&name, "Dn", None, size, 0),
+        // the manual's `EXT` row is `EXT, EXTB`
+        ("extb", _) => price("EXT", "Dn", None, size, 0),
         ("tas", [destination]) => match mode(destination)? {
             Mode::Dn => price("TAS", "Dn", None, size, 0),
             memory => price("TAS", "Mem", Some(memory), size, 0),

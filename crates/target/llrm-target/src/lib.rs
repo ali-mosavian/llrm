@@ -753,6 +753,7 @@ pub trait Target {
             pointer: self.frame_register(),
             stack: self.stack_pointer(),
             saved: self.callee_saved(),
+            vector_saved: Vec::new(),
             slot: self.stack_slot_bytes(),
             align: self.stack_alignment(),
             optional: self.frame_optional(),
@@ -821,6 +822,9 @@ pub struct FrameRegisters {
     pub stack: RegId,
     /// Each callee-saved register by its full register and the one pushed.
     pub saved: Vec<(RegId, RegId)>,
+    /// The callee-saved vector registers (Win64's xmm6-15), each by its full
+    /// register and itself: saved with `movaps` into the frame, not pushed.
+    pub vector_saved: Vec<(RegId, RegId)>,
     /// The bytes the stack is kept a multiple of.
     pub slot: i64,
     /// The bytes the stack pointer is a multiple of at a call, as the callee

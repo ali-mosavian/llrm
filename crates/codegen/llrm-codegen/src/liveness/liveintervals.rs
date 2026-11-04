@@ -243,7 +243,8 @@ impl LiveIntervals {
         for &value in &one.defines {
             let reads_reg = one.partial_defs.contains(&value);
             let lanes = one.def_lanes.iter().find(|(v, _)| *v == value).map_or(Operand::ALL, |(_, lanes)| *lanes);
-            self.push_operand(value, Operand { instr, is_def: true, reads_reg, early_clobber: false, lanes });
+            let early_clobber = one.early_clobbers.contains(&value);
+            self.push_operand(value, Operand { instr, is_def: true, reads_reg, early_clobber, lanes });
         }
         for &value in &one.uses {
             let lanes = read_lanes(one, value);

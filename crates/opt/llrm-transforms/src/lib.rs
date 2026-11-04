@@ -257,6 +257,7 @@ pub mod inferspace;
 mod inferspace_tests;
 pub mod inline;
 mod inlineattrs;
+mod inlinemetadata;
 pub mod inlinecost;
 #[cfg(test)]
 mod inlinecost_tests;
@@ -329,6 +330,7 @@ pub mod memcpyoptimizer;
 pub mod memloops;
 #[cfg(test)]
 mod memloops_tests;
+pub mod globalmerge;
 pub mod memsetpattern;
 #[cfg(test)]
 mod memsetpattern_tests;

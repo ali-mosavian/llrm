@@ -160,9 +160,11 @@ impl<W: Word> Range<W> {
         upper: W,
     ) -> Self {
         assert!((1..=W::BITS).contains(&width), "ConstantRange: width {width} is outside 1..={}", W::BITS);
-        let (lower, upper) = (lower & mask::<W>(width), upper & mask::<W>(width));
-        assert!(
-            lower != upper || lower == mask::<W>(width) || lower == W::ZERO,
+        let all = mask::<W>(width);
+        let (lower, upper) = (lower & all, upper & all);
+        // LLVM's `assert`, compiled out of its Release build.
+        debug_assert!(
+            lower != upper || lower == all || lower == W::ZERO,
             "Lower == Upper, but they aren't min or max value!"
         );
         Self { lower, upper, width }

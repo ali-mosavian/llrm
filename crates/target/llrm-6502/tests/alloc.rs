@@ -2910,3 +2910,14 @@ fn every_block_has_a_label_whatever_order_the_folding_laid_its_new_ones() {
         assert!(!all[block.id as usize].is_empty(), "block {} has no label: {all:?}", block.id);
     }
 }
+
+/// `lda #0; sta rc5; lda rc5; sta rc6; jmp` (x16basic-c mathlib): the reload
+/// stayed because the scan for who reads its flags stopped at the jump's target.
+#[test]
+fn a_reload_before_a_jump_goes() {
+    use llrm_6502::peephole::drop_reloads;
+    assert_eq!(
+        pass(drop_reloads, "  sta rc5\n  lda rc5\n  sta rc6\n  jmp L\n"),
+        "  sta rc5\n  sta rc6\n  jmp L\n"
+    );
+}

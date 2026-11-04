@@ -767,6 +767,26 @@ fn _move(
     into: Held,
     out_of: Loc,
 ) -> Arc<Insn> {
+    // A copy of what `beside` reads as undefined is undefined: the pin's `COPY` of an `IMPLICIT_DEF`, which
+    // `ProcessImplicitDefs` flags undef at the reads. Left a read of a value nothing defines, the live range of
+    // an undef far pointer had no reaching def and the allocator panicked.
+    if let Loc::Held(held) = &out_of
+        && beside.undefs.contains(&held.value)
+    {
+        let mut made = Insn::new(
+            beside.at,
+            Some((beside.at, beside.at)),
+            Some(Semantics {
+                name: Some(crate::processimpdefs::IMPLICIT_DEF.into()),
+                dests: vec![Loc::Held(into)],
+                ..Semantics::new(Operation::Nothing)
+            }),
+            vec![into.value],
+            Vec::new(),
+        );
+        made.line = beside.line;
+        return Arc::new(made);
+    }
     let uses = match &out_of {
         Loc::Held(held) => vec![held.value],
         _ => Vec::new(),

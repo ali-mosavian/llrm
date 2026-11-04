@@ -7,6 +7,9 @@ private = "sysv64"
 [abi.sysv]
 convention = "sysv64"
 
+[abi.win64]
+convention = "win64"
+
 # sysv64: the System V AMD64 ABI as gcc and clang emit it on Linux (X86CallingConv.td's CC_X86_64_C and
 # RetCC_X86_64_C). Integer and pointer arguments take RDI, RSI, RDX, RCX, R8, R9 in order, then the stack in
 # 8-byte slots pushed right to left, which the caller removes; the stack is 16-byte aligned at the call.
@@ -71,5 +74,59 @@ macho = "_*"
 4 = ["rax"]
 8 = ["rax"]
 16 = ["rax", "rdx"]
+pointer = ["rax"]
+float = ["xmm0"]
+
+# win64: the Microsoft x64 convention (X86CallingConv.td's CC_X86_Win64_C and RetCC_X86_64_C). Argument n takes RCX, RDX,
+# R8, R9 or XMM0-3 by its position, whichever file it belongs to, then the stack slot n; the caller reserves 32 bytes of
+# home area for the four registers in every call. RBX, RBP, RDI, RSI, R12-R15 and XMM6-15 are kept (the frame lowerer
+# saves an xmm with `movaps` and declares it with .seh_savexmm, a general register with `push`); there is no red zone. Variadic calls (a float in both files), aggregates
+# in registers and `va_list` are not modelled yet.
+[win64]
+cc = "win64"
+slot_bytes = 8
+stack_alignment = 16
+aligned_calls = true
+order = "right-to-left"
+cleanup = "caller"
+argument_registers = ["rcx", "rdx", "r8", "r9"]
+float_argument_registers = ["xmm0", "xmm1", "xmm2", "xmm3"]
+positional = true
+shadow_bytes = 32
+sized_arguments = true
+return_address_bytes = 8
+# From RBP after `push rbp; mov rbp, rsp`: saved RBP and the return address; the home area is stack slots 0-3.
+first_argument_offset = 16
+frame = "rbp"
+frame_optional = true
+frame_saved_first = true
+frame_wrap_split_size = true
+frame_slot_push = "rax"
+frame_slot_pop = "rcx"
+stack = "rsp"
+preserved = [["ebx", "rbx"], ["ebp", "rbp"], ["edi", "rdi"], ["esi", "rsi"], ["r12d", "r12"], ["r13d", "r13"], ["r14d", "r14"], ["r15d", "r15"], ["xmm6", "xmm6"], ["xmm7", "xmm7"], ["xmm8", "xmm8"], ["xmm9", "xmm9"], ["xmm10", "xmm10"], ["xmm11", "xmm11"], ["xmm12", "xmm12"], ["xmm13", "xmm13"], ["xmm14", "xmm14"], ["xmm15", "xmm15"]]
+clobbered = ["rax", "rcx", "rdx", "r8", "r9", "r10", "r11", "flags", "st0", "st1", "st2", "st3", "st4", "st5", "st6", "st7", "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5"]
+entry_state = ["df_clear", "x87_empty"]
+aggregate = "hidden-pointer"
+aggregate_in_register_bytes = []
+aggregate_pointer = "register"
+aggregate_pointer_register = "rcx"
+aggregate_pointer_returned = "rax"
+aggregate_pointer_popped_by = "caller"
+promotion = "slot"
+wide_slots = 1
+variadic_float = "double"
+
+# COFF takes the name as written.
+[win64.symbol]
+elf = "*"
+coff = "*"
+macho = "_*"
+
+[win64.result]
+1 = ["rax"]
+2 = ["rax"]
+4 = ["rax"]
+8 = ["rax"]
 pointer = ["rax"]
 float = ["xmm0"]
