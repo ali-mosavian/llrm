@@ -911,6 +911,7 @@ impl<'a, 'b> Collection<'a, 'b> {
                     hardware_loop_profitable: self.hardware_loop_profitable,
                     as_written: true,
                     other_register_units: self.pressure_units(),
+                    size: self.size,
                 };
                 self.baseline_cost.rate_formula(&mut rating, &f, &mut regs, &visited_regs, &self.uses[lu_idx], None);
                 visited_uses.insert(lu_idx);
