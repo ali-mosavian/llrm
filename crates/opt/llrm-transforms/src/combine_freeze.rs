@@ -130,7 +130,7 @@ impl Combiner<'_> {
         let ty = self.function.instruction(freeze).ty;
         let result = self.function.instruction(freeze).result.expect("a value");
         let null = self.int(ty, 0);
-        let users: Vec<InstId> = self.function.users(result).snapshot().into_iter().map(|used| used.user).collect();
+        let users: Vec<InstId> = self.function.users(result).iter().map(|used| used.user).collect();
         let mut best: Option<Operand> = None;
         for user in users {
             let instruction = self.function.instruction(user);

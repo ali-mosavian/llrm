@@ -544,6 +544,24 @@ mod tests {
             // `inbounds` GEP into the CRC table it just created, indexed by
             // a byte. It reads no flag off an existing instruction.
             "crc.rs",
+            // InstCombineCalls.cpp's `Intrinsic::abs` reads the `nsw` of a
+            // negation (`abs(-x)` is `abs(x)` with the minimum poison when the
+            // negation was `nsw`) and of a multiply by another `abs`, and
+            // gives the new multiply `nsw` only when both the old one and
+            // the intrinsic's flag promised it. No instruction gets a flag
+            // its operands did not already promise.
+            "combine_abs.rs",
+            // InstructionCombining.cpp's `visitSwitchInst` reads the `nuw`/
+            // `nsw` of a shift in the condition: with either, the shifted-out
+            // bits are zero or a copy of the sign, so the condition is the
+            // operand and the cases shift down; without, it masks them. It
+            // sets no flag.
+            "combine_switch.rs",
+            // InstCombineCasts.cpp's `foldPtrToIntOrAddrOfGEP` reads the `nuw`
+            // of each GEP in the chain it turns into integer additions, and
+            // gives the add that flag: the GEP promised the offset did not
+            // wrap. It grants no flag to an instruction that had none.
+            "combine_ptrcast.rs",
             // The `nsw` of a counter's `add phi, 1` bounds the counter to its
             // start and the loop's end, for the range of a fixed-point
             // product; the interval is worked out afresh when asked and kept
