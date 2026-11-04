@@ -194,6 +194,17 @@ fn walk(
             // The new high bits are zero.
             KnownBits { zero: inner.zero | (all & !mask(inner.width)), one: inner.one, width }
         }
+        // `computeKnownBitsForStackObjectPointer`: the low bits of an aligned
+        // object's address are zero.
+        ISD::FrameIndex | ISD::TargetFrameIndex => {
+            let aligned = match dag.node(value).data {
+                super::dag::NodeData::FrameIndex(index) => {
+                    usize::try_from(index).ok().and_then(|at| dag.frame_alignments.get(at))
+                }
+                _ => None,
+            };
+            KnownBits { zero: aligned.map_or(0, |align| mask(align.trailing_zeros()) & all), one: 0, width }
+        }
         ISD::Add => {
             // `KnownBits::computeForAddSub` without a carry in.
             let (lhs, rhs) = (operand(0), operand(1));

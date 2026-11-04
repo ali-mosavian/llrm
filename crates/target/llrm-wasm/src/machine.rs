@@ -129,6 +129,23 @@ impl Tti for Wasm {
         base_offset >= 0 && scale == 0
     }
 
+    /// `BasicTTIImplBase::isLegalAddImmediate` forwards to the lowering, whose
+    /// default (WebAssembly does not override it) accepts every immediate.
+    fn is_legal_add_immediate(
+        &self,
+        _imm: i64,
+    ) -> bool {
+        true
+    }
+
+    /// `BasicTTIImplBase::isLegalICmpImmediate`: as above.
+    fn is_legal_icmp_immediate(
+        &self,
+        _imm: i64,
+    ) -> bool {
+        true
+    }
+
     /// `WebAssemblyTTIImpl::getUnrollingPreferences`: partial and runtime
     /// unrolling to 30, unless the loop calls something lowered to a call.
     fn get_unrolling_preferences(
@@ -230,6 +247,10 @@ impl Tti for Wasm {
         legal.then_some(Cost::FREE)
     }
 
+    /// `BasicTTIImplBase::getArithmeticInstrCost` answers only the throughput
+    /// kind itself; every other kind is `TargetTransformInfoImplBase`'s: a
+    /// division or remainder is `TCC_Expensive`, a floating point operation
+    /// costs 3 for latency, the rest 1.
     fn arithmetic_cost(
         &self,
         op: ArithOp,
@@ -238,7 +259,16 @@ impl Tti for Wasm {
         left: OperandInfo,
         right: OperandInfo,
     ) -> Cost {
-        Basic.arithmetic_cost(op, ty, kind, left, right)
+        if kind == CostKind::RecipThroughput {
+            return Basic.arithmetic_cost(op, ty, kind, left, right);
+        }
+        match op {
+            ArithOp::SDiv | ArithOp::UDiv | ArithOp::SRem | ArithOp::URem | ArithOp::FDiv | ArithOp::FRem => {
+                Cost::EXPENSIVE
+            }
+            _ if kind == CostKind::Latency && matches!(ty, Ty::Float | Ty::Double) => Cost::of(3),
+            _ => Cost::BASIC,
+        }
     }
 
     /// `BasicTTIImplBase::getIntrinsicInstrCost`: the pin's `opt` priced each

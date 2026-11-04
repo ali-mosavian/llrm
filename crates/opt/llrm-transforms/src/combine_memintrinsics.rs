@@ -34,6 +34,7 @@
 
 use llrm_mir::context::ConstantKind;
 use llrm_mir::intrinsics::Intrinsic;
+use llrm_mir::lazyvalueinfo::is_safe_to_speculatively_execute_with_variable_replaced;
 use llrm_mir::module::{InstId, Operand};
 use llrm_mir::opcode::{Attribute, Flags, Opcode};
 use llrm_mir::valuetracking::known::pointer_alignment;
@@ -47,65 +48,53 @@ impl Combiner<'_> {
         &mut self,
         call: InstId,
     ) -> Visit {
-        let intrinsic = self.intrinsic_of(call);
-        let found = match intrinsic {
+        let visited = match self.intrinsic_of(call) {
             Some(Intrinsic::MemCpy | Intrinsic::MemMove) => self.simplify_any_mem_transfer(call),
             Some(Intrinsic::MemSet) => self.raise_alignments(call, 1),
             Some(Intrinsic::MinMax { signed, max }) => self.narrow_min_max(call, signed, max),
+            Some(Intrinsic::Compare { signed }) => self.visit_compare(call, signed),
+            Some(Intrinsic::Assume) => self.visit_assume(call),
             Some(Intrinsic::FMulAdd) => crate::combine_fp::visit_fmuladd(self, call),
-            None => self.transform_const_expr_cast_call(call),
+            None => return self.transform_const_expr_cast_call(call),
             _ => Visit::None,
         };
-        if !matches!(found, Visit::None) || intrinsic.is_none() {
-            return found;
+        if visited != Visit::None {
+            return visited;
         }
-        self.fold_arguments_into_select_or_phi(call)
+        self.fold_intrinsic_into_select_or_phi(call)
     }
 
-    /// The end of `visitCallInst` for an intrinsic
-    /// ([L4555](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstCombineCalls.cpp#L4555)):
-    /// where it is safe to speculate with a variable replaced, an argument that
-    /// is a scalar-condition select or a phi has the call folded into it.
-    /// `fmuladd(phi [0.0, %x], c, d)` at a loop exit is a phi of the calls.
-    fn fold_arguments_into_select_or_phi(
+    /// The tail of `visitCallInst` (InstCombineCalls.cpp:4561): a speculatable
+    /// intrinsic folds into the select or phi it reads, where the arms
+    /// simplify. Scalar selects only.
+    fn fold_intrinsic_into_select_or_phi(
         &mut self,
         call: InstId,
     ) -> Visit {
-        let speculatable = {
+        let safe = {
             let q = query(self, Some(call));
-            llrm_mir::lazyvalueinfo::is_safe_to_speculatively_execute_with_variable_replaced(&q, call, false)
+            is_safe_to_speculatively_execute_with_variable_replaced(&q, self.function.instruction(call), false)
         };
-        if !speculatable {
+        if !safe {
             return Visit::None;
         }
-        let arguments: Vec<Operand> =
-            llrm_mir::valuetracking::pattern::call_arguments(self.function.instruction(call)).to_vec();
-        for argument in arguments {
+        let operands = self.function.instruction(call).operands.to_vec();
+        // The last operand is the callee.
+        for &argument in &operands[..operands.len().saturating_sub(1)] {
             let Some(def) = self.definition(argument) else { continue };
             match self.function.instruction(def).opcode {
                 Opcode::Select => {
-                    let condition_is_vector = self
-                        .function
-                        .instruction(def)
-                        .operands
-                        .first()
-                        .and_then(|&op| self.function.operand_type(self.context, op))
-                        .is_some_and(|ty| matches!(
-                            self.context.types.get(ty),
-                            llrm_mir::types::Type::Vector { .. }
-                        ));
-                    if condition_is_vector {
-                        continue;
-                    }
-                    match self.fold_op_into_select(call, def, false, false) {
-                        Visit::None => {}
-                        found => return found,
+                    let folded = self.fold_op_into_select(call, def, false, false);
+                    if folded != Visit::None {
+                        return folded;
                     }
                 }
-                Opcode::Phi => match self.fold_op_into_phi(call, def, false) {
-                    Visit::None => {}
-                    found => return found,
-                },
+                Opcode::Phi => {
+                    let folded = self.fold_op_into_phi(call, def, false);
+                    if folded != Visit::None {
+                        return folded;
+                    }
+                }
                 _ => {}
             }
         }

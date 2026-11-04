@@ -50,7 +50,7 @@ use llrm_mir::valuetracking::FunctionAnalyses;
 
 use crate::combine_addsub::visit_add;
 use crate::combine_and::visit_and;
-use crate::combine_casts::{visit_fp_to_int, visit_sext, visit_trunc, visit_zext};
+use crate::combine_casts::{visit_sext, visit_trunc, visit_zext};
 use crate::combine_compares::visit_icmp;
 use crate::combine_muldivrem::{visit_mul, visit_sdiv, visit_srem, visit_udiv, visit_urem};
 use crate::combine_or::visit_or;
@@ -454,7 +454,7 @@ fn visitors(opcode: &Opcode) -> &'static [Visitor] {
         Opcode::Cast(CastOp::Trunc) => &[visit_trunc],
         Opcode::Cast(CastOp::ZExt) => &[visit_zext],
         Opcode::Cast(CastOp::SExt) => &[visit_sext],
-        Opcode::Cast(CastOp::FPToUI | CastOp::FPToSI) => &[visit_fp_to_int],
+        Opcode::Cast(CastOp::FPToUI | CastOp::FPToSI) => &[crate::combine_fptoint::visit_fptoi],
         Opcode::ICmp(_) => &[visit_icmp],
         Opcode::GetElementPtr { .. } => &[|c, inst| c.visit_get_element_ptr(inst)],
         Opcode::Alloca { .. } => &[|c, inst| c.visit_alloca(inst)],
@@ -671,7 +671,9 @@ pub(crate) fn combine_with_sinking(
 ) -> bool {
     // InstCombine's `SQ.DC`: what the branches dominating an instruction say,
     // those visited so far.
-    let analyses = FunctionAnalyses::of(context, globals, metadata, layout, function).with_lazy_dom_conditions();
+    let analyses =
+        FunctionAnalyses::of_declared(context, globals, metadata, layout, function, declared.assume_declared(globals))
+            .with_lazy_dom_conditions();
     let env = Env { globals, metadata, callees, layout, analyses, sinking, back_edges: Default::default() };
     let mut c = Combiner { context, function, env: &env, worklist: InstWorklist::default(), declared };
     let mut changed = prepare(&env, c.context, c.function, &mut c.worklist);

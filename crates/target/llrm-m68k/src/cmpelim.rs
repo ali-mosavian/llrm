@@ -126,11 +126,12 @@ pub fn flags_read_after(
 ) -> Option<u32> {
     let mut needed = 0;
     for after in &insts[at + 1..] {
+        // `subx` and `addx` read the extend flag and then set the codes
+        if after.reads_flags && !after.call {
+            needed |= read_by(after)?;
+        }
         if after.sets_flags || after.call {
             break;
-        }
-        if after.reads_flags {
-            needed |= read_by(after)?;
         }
     }
     Some(needed)

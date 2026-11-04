@@ -114,31 +114,81 @@ b0:
     assert!(after.contains("ptr align 8 @b"), "{after}");
 }
 
-/// A loop's result `fmuladd(phi [0.0, entry], [%x, exit], 1000.0, 0.5)` after
-/// the loop stayed a call on the phi where the pin's `visitCallInst` folds
-/// the call into the phi (InstCombineCalls.cpp L4555): the entry's value is
-/// the constant 0.5 and the exit block holds the call. wasm recfloat -Os was
-/// 236 B against the pin's 223.
+/// recfloat -Os (wasm, +13 B vs clang): `fmuladd(phi [0.0, %y], 1000.0, 0.5)`
+/// in the join stayed a call on a phi; the pin's `visitCallInst` tail folds a
+/// speculatable intrinsic into the phi, so the call moves to the predecessors.
 #[test]
-fn an_intrinsic_on_a_phi_is_folded_into_the_phi() {
+fn test_a_speculatable_intrinsic_on_a_phi_is_folded_into_the_phi() {
     let after = combined(
-        "declare double @llvm.fmuladd.f64(double, double, double) speculatable
+        "declare double @llvm.fmuladd.f64(double, double, double) nocallback nofree nosync nounwind speculatable willreturn memory(none)
 
-define double @f(i1 %c, double %x) {
+define double @f(double %x, i1 %c) {
 b0:
-  br i1 %c, label %join, label %exit
-exit:
-  br label %join
-join:
-  %p = phi double [ 0.0, %b0 ], [ %x, %exit ]
+  br i1 %c, label %a, label %m
+a:
+  %y = fadd double %x, 1.0
+  br label %m
+m:
+  %p = phi double [ 0.0, %b0 ], [ %y, %a ]
   %r = call double @llvm.fmuladd.f64(double %p, double 1000.0, double 0.5)
   ret double %r
 }
 ",
     );
-    let join = after.split("join:").nth(1).expect("the join block");
-    assert!(!join.contains("call double @llvm.fmuladd.f64(double %p"), "the call is not on the phi: {after}");
-    assert!(join.contains("phi double"), "the phi remains, of the calls: {after}");
-    let exit = after.split("exit:").nth(1).and_then(|rest| rest.split("join:").next()).expect("the exit block");
-    assert!(exit.contains("call double @llvm.fmuladd.f64(double %x"), "the call moved to the exit edge: {after}");
+    let join = after.split("m:").nth(1).expect("the join block");
+    assert!(!join.contains("call double @llvm.fmuladd"), "the call is still after the phi:\n{after}");
+}
+
+/// The tail is for speculatable callees only: a call that may trap or write
+/// stays after the phi.
+#[test]
+fn test_a_non_speculatable_call_on_a_phi_stays_after_the_phi() {
+    let after = combined(
+        "declare double @g(double)
+
+define double @f(double %x, i1 %c) {
+b0:
+  br i1 %c, label %a, label %m
+a:
+  %y = fadd double %x, 1.0
+  br label %m
+m:
+  %p = phi double [ 0.0, %b0 ], [ %y, %a ]
+  %r = call double @g(double %p)
+  ret double %r
+}
+",
+    );
+    let join = after.split("m:").nth(1).expect("the join block");
+    assert!(join.contains("call double @g"), "{after}");
+}
+
+/// recfloat -Os: after the intrinsic is folded into the phi, the `fptosi` of
+/// the new phi is a user of it and folds into the arms too (the pin ends with
+/// an `i32` phi and no `double` one).
+#[test]
+fn test_the_cast_of_a_folded_phi_follows_into_the_arms() {
+    let mut module = crate::testing::parsed(
+        "declare double @llvm.fmuladd.f64(double, double, double) nocallback nofree nosync nounwind speculatable willreturn memory(none)
+
+define i32 @f(double %x, i1 %c) {
+b0:
+  br i1 %c, label %a, label %m
+a:
+  %y = fadd double %x, 1.0
+  br label %m
+m:
+  %p = phi double [ 0.0, %b0 ], [ %y, %a ]
+  %r = call double @llvm.fmuladd.f64(double %p, double 1000.0, double 0.5)
+  %t = fptosi double %r to i32
+  ret i32 %t
+}
+",
+    );
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    crate::combine::combine_with(context, &globals, &metadata, &DataLayout::default(), function, crate::combine::visit);
+    let after = crate::testing::printed(&module);
+    assert!(!after.contains("phi double"), "{after}");
 }

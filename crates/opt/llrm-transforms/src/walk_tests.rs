@@ -1,20 +1,27 @@
 use crate::testing::parsed;
 
-const UNUSED_PARAMETER: &str = "define internal i16 @f(i16 %a, i16 %unused) noinline {
+/// A recursive function reading a slice descriptor's length: argument
+/// promotion takes the length in the descriptor's place (`promote.`), then the
+/// descriptor's unused data pointer goes (`ipa-deadargs.`).
+const DESCRIPTOR: &str =
+    "define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(6) nocapture %d, i16 %n) noinline {
 b0:
-  %done = icmp sle i16 %a, 0
+  %at = getelementptr i8, ptr addrspace(1) %d, i16 4
+  %len = load i16, ptr addrspace(1) %at
+  %done = icmp sle i16 %n, 0
   br i1 %done, label %out, label %again
 again:
-  %m = sub i16 %a, 1
-  %r = call i16 @f(i16 %m, i16 %unused)
-  ret i16 %r
+  %m = sub i16 %n, 1
+  %r = call i16 @sum(ptr addrspace(1) %d, i16 %m)
+  %s = add i16 %r, %len
+  ret i16 %s
 out:
-  ret i16 %a
+  ret i16 %len
 }
 
-define i16 @top(i16 %x) {
+define i16 @top(ptr addrspace(1) %p) {
 b0:
-  %r = call i16 @f(i16 %x, i16 12)
+  %r = call i16 @sum(ptr addrspace(1) %p, i16 3)
   ret i16 %r
 }
 ";
@@ -29,7 +36,12 @@ fn pipeline_runs(
         llrm_mir::program::Program::lend(
             &mut module,
             std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
-            |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, applied),
+            |program: &mut llrm_mir::program::Program| {
+                // Without an entry nothing is reachable, and no stage of the
+                // interprocedural step has a body to rerun.
+                program.exports.entries.insert("top".to_owned());
+                crate::pipeline::applied(program, applied)
+            },
         )
         .and_then(|done| done)
         .expect("the pipeline runs");
@@ -38,11 +50,15 @@ fn pipeline_runs(
 }
 
 /// The passes a body ran, per `LLRM_DEBUG=runs` line, for the lines of a run
-/// that a stage of the interprocedural step (`ipa-...`) asked for.
+/// that a stage of the interprocedural step (`ipa-...`, `promote.`, `ipsccp.`)
+/// asked for.
 fn passes_run_by_ipa_stages(lines: &[String]) -> Vec<(String, usize)> {
     lines
         .iter()
-        .filter(|line| line.starts_with("body ") && line.contains("trigger \"ipa-"))
+        .filter(|line| {
+            line.starts_with("body ")
+                && ["trigger \"ipa-", "trigger \"promote.", "trigger \"ipsccp."].iter().any(|one| line.contains(one))
+        })
         .map(|line| {
             let runs = line.split(" pass runs").next().and_then(|head| head.rsplit(' ').next());
             let name = line.rsplit("name ").next().unwrap_or_default();
@@ -58,8 +74,16 @@ fn passes_run_by_ipa_stages(lines: &[String]) -> Vec<(String, usize)> {
 /// (446, 293 and 287 M instructions).
 #[test]
 fn test_a_body_changed_by_an_interprocedural_stage_does_not_rerun_the_list() {
-    let lines = pipeline_runs(UNUSED_PARAMETER, &crate::pipeline::Applied::default());
+    let lines = pipeline_runs(
+        &format!("{}{DESCRIPTOR}", llrm_analysis::testing::DOS),
+        &crate::pipeline::Applied { options: crate::pipeline::Options::speed(), ..Default::default() },
+    );
     let reruns = passes_run_by_ipa_stages(&lines);
+    assert!(
+        !reruns.is_empty(),
+        "no stage reran a body: {:?}",
+        lines.iter().filter(|l| l.starts_with("body ")).map(|l| &l[..60.min(l.len())]).collect::<Vec<_>>()
+    );
     assert!(reruns.iter().all(|(_, runs)| *runs < 10), "the list ran again: {reruns:?}");
 }
 
@@ -267,6 +291,7 @@ fn test_a_recursion_with_copies_runs_the_simplify_list_twice() {
                     simplify: Box::new(move |_, _, _, _| counted.set(counted.get() + 1)),
                     for_size: false,
                     flag: true,
+                    o3: false,
                     inlining: true,
                 };
                 late.apply(program, &mut modules)
@@ -1066,6 +1091,96 @@ fn test_an_os_call_whose_stack_arguments_make_the_loop_a_constant_is_inlined() {
 fn test_an_os_call_whose_stack_arguments_are_unknown_stays_a_call() {
     let top = sized_top(7, 5, false);
     assert!(top.contains("call i32 @parity"), "parity was inlined for nothing:\n{top}");
+}
+
+/// `sum_three(&a, &b, &c)` on three stack records with far data pointers: the
+/// callee leaves `capacity` alone, so its stores go and the kept call counted
+/// 10 units against 15 inlined. The call pushes three far pointers and the
+/// records need a frame, 114 bytes against 75: parity/sum_three/c -Os, +38 B.
+#[test]
+fn test_an_os_call_on_stack_records_is_inlined_where_the_bytes_say_so() {
+    let top = sized(
+        r#"target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3"
+
+%struct.Slice = type { i16, i16, ptr addrspace(1) }
+
+@first = internal global [4 x i16] [i16 1, i16 2, i16 3, i16 4], align 2
+@second_data = internal global [4 x i16] [i16 10, i16 20, i16 30, i16 40], align 2
+@third_data = internal global [4 x i16] [i16 100, i16 200, i16 300, i16 400], align 2
+
+define signext i16 @sum(ptr addrspace(1) noundef %0, ptr addrspace(1) noundef %1, ptr addrspace(1) noundef %2) addrspace(1) nounwind optsize memory(read, inaccessiblemem: none) nofree nosync norecurse {
+  br label %4
+
+4:
+  %5 = phi i16 [ 0, %3 ], [ %25, %9 ]
+  %6 = phi i16 [ 0, %3 ], [ %24, %9 ]
+  %7 = load i16, ptr addrspace(1) %0, align 1
+  %8 = icmp ult i16 %5, %7
+  br i1 %8, label %9, label %26
+
+9:
+  %10 = getelementptr inbounds nuw i8, ptr addrspace(1) %0, i16 4
+  %11 = load ptr addrspace(1), ptr addrspace(1) %10, align 1
+  %12 = getelementptr inbounds nuw [2 x i8], ptr addrspace(1) %11, i16 %5
+  %13 = load i16, ptr addrspace(1) %12, align 2
+  %14 = add nsw i16 %6, %13
+  %15 = getelementptr inbounds nuw i8, ptr addrspace(1) %1, i16 4
+  %16 = load ptr addrspace(1), ptr addrspace(1) %15, align 1
+  %17 = getelementptr inbounds nuw [2 x i8], ptr addrspace(1) %16, i16 %5
+  %18 = load i16, ptr addrspace(1) %17, align 2
+  %19 = add nsw i16 %14, %18
+  %20 = getelementptr inbounds nuw i8, ptr addrspace(1) %2, i16 4
+  %21 = load ptr addrspace(1), ptr addrspace(1) %20, align 1
+  %22 = getelementptr inbounds nuw [2 x i8], ptr addrspace(1) %21, i16 %5
+  %23 = load i16, ptr addrspace(1) %22, align 2
+  %24 = add nsw i16 %19, %23
+  %25 = add i16 %5, 1
+  br label %4
+
+26:
+  ret i16 %6
+}
+
+declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture) addrspace(1) nocallback nofree nosync nounwind
+
+declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture) addrspace(1) nocallback nofree nosync nounwind
+
+define i32 @top() addrspace(1) nounwind optsize {
+  %1 = alloca %struct.Slice, align 1
+  %2 = alloca %struct.Slice, align 1
+  %3 = alloca %struct.Slice, align 1
+  call addrspace(1) void @llvm.lifetime.start.p0(i64 -1, ptr %1) nounwind
+  call addrspace(1) void @llvm.lifetime.start.p0(i64 -1, ptr %2) nounwind
+  call addrspace(1) void @llvm.lifetime.start.p0(i64 -1, ptr %3) nounwind
+  store i16 4, ptr %1, align 1
+  %4 = getelementptr inbounds nuw i8, ptr %1, i16 2
+  store i16 4, ptr %4, align 1
+  %5 = getelementptr inbounds nuw i8, ptr %1, i16 4
+  store ptr addrspace(1) addrspacecast (ptr @first to ptr addrspace(1)), ptr %5, align 1
+  store i16 4, ptr %2, align 1
+  %6 = getelementptr inbounds nuw i8, ptr %2, i16 2
+  store i16 4, ptr %6, align 1
+  %7 = getelementptr inbounds nuw i8, ptr %2, i16 4
+  store ptr addrspace(1) addrspacecast (ptr @second_data to ptr addrspace(1)), ptr %7, align 1
+  store i16 4, ptr %3, align 1
+  %8 = getelementptr inbounds nuw i8, ptr %3, i16 2
+  store i16 4, ptr %8, align 1
+  %9 = getelementptr inbounds nuw i8, ptr %3, i16 4
+  store ptr addrspace(1) addrspacecast (ptr @third_data to ptr addrspace(1)), ptr %9, align 1
+  %10 = addrspacecast ptr %1 to ptr addrspace(1)
+  %11 = addrspacecast ptr %2 to ptr addrspace(1)
+  %12 = addrspacecast ptr %3 to ptr addrspace(1)
+  %13 = call signext addrspace(1) i16 @sum(ptr addrspace(1) noundef %10, ptr addrspace(1) noundef %11, ptr addrspace(1) noundef %12) nobuiltin optsize
+  %14 = sext i16 %13 to i32
+  call addrspace(1) void @llvm.lifetime.end.p0(i64 -1, ptr %3) nounwind
+  call addrspace(1) void @llvm.lifetime.end.p0(i64 -1, ptr %2) nounwind
+  call addrspace(1) void @llvm.lifetime.end.p0(i64 -1, ptr %1) nounwind
+  ret i32 %14
+}
+"#,
+        "@top(",
+    );
+    assert!(!top.contains("@sum("), "sum stayed a call:\n{top}");
 }
 
 /// `@top` after the pipeline sized for bytes over `text`.
@@ -2430,4 +2545,145 @@ b0:
     .and_then(|done| done)
     .expect("the pipeline runs");
     assert!(!llrm_mir::print::module(&module).contains("@demo"), "demo is still a global");
+}
+
+/// Calls of `@fib` after the default pipeline on x86-m32 with `options`.
+fn m32_fib_calls(options: crate::pipeline::Options) -> usize {
+    m32_tree_calls(0, options)
+}
+
+fn m32_tree_calls(
+    extra: usize,
+    options: crate::pipeline::Options,
+) -> usize {
+    let mut module =
+        parsed(&tree_recursion(extra).replace("@tree", "@fib").replace("define internal i32 @fib", "define i32 @fib"));
+    llrm_mir::program::Program::lend(
+        &mut module,
+        crate::indvars::tests::m32(),
+        |program: &mut llrm_mir::program::Program| {
+            crate::pipeline::applied(program, &crate::pipeline::Applied { options, ..Default::default() })
+        },
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    llrm_mir::print::module(&module).matches("call i32 @fib").count()
+}
+
+/// bench fib at m32 -O2 was 334151 clocks against gcc's 210636: the pin's
+/// inliner copies no recursive callee, gcc's `recursive_inlining` copies fib
+/// into itself to depth 8 (REC-2).
+#[cfg(feature = "gcc-gpl")]
+#[test]
+fn test_m32_copies_a_tree_recursion_into_itself_at_speed() {
+    let calls = m32_fib_calls(crate::pipeline::Options::default());
+    assert!(calls > 8, "fib was not copied into itself, {calls} calls of it");
+}
+
+/// gcc rejects the recursive edge of quicksort and bintree at -O2
+/// ("max-inline-insns-auto limit reached", growth 25-28 and 15-22 against 15)
+/// and takes it at -O3 (30): a body that grows past 15 is copied at -O3 only.
+#[cfg(feature = "gcc-gpl")]
+#[test]
+fn test_m32_copies_a_recursion_whose_edge_grows_past_15_only_at_o3() {
+    let o2 = m32_tree_calls(6, crate::pipeline::Options::default());
+    let o3 = m32_tree_calls(6, crate::pipeline::Options::speed());
+    assert!(o2 <= 3, "copied at -O2, {o2} calls");
+    assert!(o3 > 8, "not copied at -O3, {o3} calls");
+}
+
+/// gcc's dump sizes fib at 12 (edge growth 6; 13 and 7 here, before the
+/// pipeline merges its returns): the bar of the recursive edge
+/// is read in those units, not in `gcc_insns` (fib 8, quicksort 18 against
+/// gcc's 34, which let quicksort and bintree grow 490 -> 1218 and 449 -> 1464
+/// bytes at m32 -O2).
+#[cfg(feature = "gcc-gpl")]
+#[test]
+fn test_gcc_size_counts_a_branch_a_call_and_its_arguments_as_gcc_does() {
+    let module = parsed(&tree_recursion(0).replace("@tree", "@fib"));
+    let (_, _, fib) =
+        module.functions().find(|(_, _, f)| !f.is_declaration() && f.parameters().len() == 1).expect("fib");
+    assert_eq!((llrm_gpl_gcc::gcc_size(fib), crate::inline::recursive_edge_growth(fib)), (13, 7));
+}
+
+/// bench bintree's `insert` (three parameters, gcc size 22, edge growth 16 by
+/// gcc's dump) was peeled into its caller at m32 -O2 (code 257 -> 299 bytes)
+/// where gcc rejects it ("max-inline-insns-auto limit reached"): the call
+/// term of the bar scaled with the parameters, 10 for three, which gave it
+/// growth 12.
+#[cfg(feature = "gcc-gpl")]
+#[test]
+fn test_the_edge_growth_of_a_three_parameter_recursion_is_its_size_less_the_call() {
+    let module = parsed(
+        "define void @insert(ptr %t, i32 %at, i32 %node) {
+b0:
+  %n3 = mul i32 %node, 3
+  %p = getelementptr i32, ptr %t, i32 %n3
+  %k = load i32, ptr %p
+  %a3 = mul i32 %at, 3
+  %q = getelementptr i32, ptr %t, i32 %a3
+  %k2 = load i32, ptr %q
+  %lt = icmp slt i32 %k, %k2
+  %side = select i1 %lt, i32 1, i32 2
+  %i = add i32 %a3, %side
+  %s = getelementptr i32, ptr %t, i32 %i
+  %c = load i32, ptr %s
+  %z = icmp eq i32 %c, 0
+  br i1 %z, label %put, label %rec
+
+put:
+  store i32 %node, ptr %s
+  ret void
+
+rec:
+  call void @insert(ptr %t, i32 %c, i32 %node)
+  ret void
+}
+",
+    );
+    let (_, _, insert) = module.functions().next().expect("insert");
+    let size = llrm_gpl_gcc::gcc_size(insert);
+    assert_eq!(crate::inline::recursive_edge_growth(insert), size - 6);
+    assert!(size - crate::inline::recursive_edge_growth(insert) == 6, "the call term scales with parameters");
+}
+
+/// Without `gcc-gpl` the edge bar cannot be computed: m32 copies no recursion
+/// and its code equals the pin's (REC-2 is inert).
+#[cfg(not(feature = "gcc-gpl"))]
+#[test]
+fn test_m32_copies_no_recursion_without_the_gcc_feature() {
+    let calls = m32_fib_calls(crate::pipeline::Options::default());
+    assert!(calls <= 3, "fib was copied into itself without gcc-gpl, {calls} calls of it");
+}
+
+/// gcc-derived code (`llrm-gpl-gcc`, GPL-3.0-or-later) is optional and off: a
+/// default build must link none of it. Reads the manifests: the dependency is
+/// `optional`, no `default` feature set names `gcc-gpl`, and no other crate
+/// depends on the crate.
+#[test]
+fn test_the_default_build_links_no_gcc_derived_crate() {
+    let here = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let root = here.join("../../..");
+    let transforms = std::fs::read_to_string(here.join("Cargo.toml")).unwrap();
+    let workspace = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    let dependency =
+        transforms.lines().find(|line| line.starts_with("llrm-gpl-gcc = ")).expect("the optional dependency");
+    assert!(dependency.contains("optional = true"), "llrm-gpl-gcc is a plain dependency: {dependency}");
+    for (name, text) in [("llrm-transforms", &transforms), ("the workspace root", &workspace)] {
+        let default = text.lines().find(|line| line.trim_start().starts_with("default = ")).unwrap_or("");
+        assert!(!default.contains("gcc-gpl"), "{name} enables gcc-gpl by default: {default}");
+    }
+    for entry in std::fs::read_dir(root.join("crates"))
+        .unwrap()
+        .flatten()
+        .flat_map(|group| std::fs::read_dir(group.path()).unwrap().flatten())
+    {
+        let manifest = entry.path().join("Cargo.toml");
+        let Ok(text) = std::fs::read_to_string(&manifest) else { continue };
+        let owner = entry.file_name();
+        if owner == "llrm-gpl-gcc" || owner == "llrm-transforms" {
+            continue;
+        }
+        assert!(!text.contains("llrm-gpl-gcc"), "{} depends on the GPL crate", manifest.display());
+    }
 }

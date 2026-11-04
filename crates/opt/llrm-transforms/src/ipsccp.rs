@@ -252,7 +252,7 @@ fn run_on_module(
         let Module { context, globals, metadata, .. } = &mut *module;
         let GlobalKind::Function(function) = &mut globals[id.0 as usize].kind else { unreachable!("a function") };
         let dt = DomTree::of(function);
-        let ac = AssumptionCache::of(context, &outer.globals, metadata, function);
+        let ac = AssumptionCache::of_declared(context, &outer.globals, metadata, function, outer.assume_declared());
         predicates.push(PredicateInfo::new(context, &outer.globals, metadata, function, &dt, &ac));
         tracks_returns.push(can_track_returns(linkage, function));
         tracks_arguments.push(private.contains(&id) && has_exact_definition(linkage, function));
