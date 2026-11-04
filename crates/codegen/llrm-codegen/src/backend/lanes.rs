@@ -149,6 +149,12 @@ fn table_of(regs: Regs) -> &'static Table {
     table
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Lane-by-lane walks of a set this thread has begun.
+    pub(crate) static WALKS: Cell<usize> = const { Cell::new(0) };
+}
+
 thread_local! {
     /// The table this thread's lanes read; none is x86's.
     static ACTIVE: Cell<Option<&'static Table>> = const { Cell::new(None) };
@@ -293,7 +299,17 @@ impl Lanes {
     }
 
     pub fn iter(&self) -> Iter {
+        #[cfg(test)]
+        WALKS.with(|walks| walks.set(walks.get() + 1));
         Iter(self.0, active())
+    }
+
+    /// The flag lanes among these (`RegId::None`'s), without walking the rest.
+    pub fn flag_part(&self) -> Self {
+        let table = active();
+        let slot = RegId::None.index();
+        let (first, count) = (u32::from(table.first[slot]), u32::from(table.count[slot]));
+        Self(self.0 & (((1u128 << count) - 1) << first))
     }
 
     // The set operations as `BTreeSet` spells them, yielding lanes in order.
