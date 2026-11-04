@@ -1,7 +1,7 @@
 #!/bin/sh
 # The binary128 entry points must have the signatures the pin's WebAssembly backend calls (WebAssemblyRuntimeLibcallSignatures.cpp): a value is two i64, a
 # result comes back through an sret pointer, float/double stay f32/f64. Reference = the pin clang's own libcall declarations for C code on long double;
-# ours = lib/fp/f128 built with -DSF_QUADBITS. Before SF_QUADBITS the conversions took and returned i64 for double (INTABI): a link-valid but wrong call.
+# ours = lib/fp/f128 built with. Before SF_QUADBITS the conversions took and returned i64 for double (INTABI): a link-valid but wrong call.
 # usage: [LLRM_CLANG_WASM=pin clang with the WebAssembly target] tests/f128_wasm_abi.sh
 cd "$(dirname "$0")/.." || exit 1
 C=${LLRM_CLANG_WASM:-$HOME/scratch/llvm-build-clang-wasm/bin/clang}
@@ -18,7 +18,7 @@ q fl_si(int a) { return a; } q fl_usi(unsigned a) { return a; } q fl_di(long lon
 q fl_ti(__int128 a) { return a; } q fl_uti(unsigned __int128 a) { return a; }
 E2
 $C --target=wasm32 -O2 -S $T/ref.c -o - | grep -E '^\s*\.functype\s+__[a-z0-9]*tf[a-z0-9]*' | sort -u > $T/ref.txt
-for f in $(tests/fp_sources.sh f128); do $C --target=wasm32 -O2 -Iinclude -DSF_QUADBITS -S $f -o - | grep -E '^\s*\.functype\s+__[a-z0-9]*tf[a-z0-9]*' ; done | sort -u > $T/ours.txt
+for f in $(tests/fp_sources.sh f128); do $C --target=wasm32 -O2 -Iinclude -S $f -o - | grep -E '^\s*\.functype\s+__[a-z0-9]*tf[a-z0-9]*' ; done | sort -u > $T/ours.txt
 [ -s $T/ref.txt ] || { echo "no reference signatures (is $C a wasm32 clang?)"; exit 2; }
 n=0; while read -r _ name sig; do n=$((n + 1)); grep -qF "$name $sig" $T/ours.txt || { echo "mismatch: pin calls $name $sig"; rc=1; }; done < $T/ref.txt
 [ $rc = 0 ] && echo "f128 wasm abi ok ($n libcalls)"; exit $rc

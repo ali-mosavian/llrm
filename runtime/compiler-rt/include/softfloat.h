@@ -36,17 +36,18 @@ static inline sf64 d2b(double f) { union { double f; sf64 b; } u; u.f = f; retur
 static inline double b2d(sf64 b) { union { double f; sf64 b; } u; u.b = b; return u.f; }
 #endif
 
-/* binary128 as bits (SF_INTABI, or SF_QUADBITS when only the quad type is missing from the backend: wasm32 has float and double but no fp128 in MIR): the
- * entry points take and return unsigned __int128, which wasm32 passes as two i64 and returns through an sret pointer, exactly the tf libcalls' convention. */
+/* binary128 is carried as bits (unsigned __int128) unless SF_QUAD_FLOAT128 asks for the host's __float128 (tests/host_f128.c; clang rejects __float128 on aarch64, so it
+ * is never the default). Bits are also what wasm32 needs: it has float and double but no fp128 in MIR, and passes unsigned __int128 as two i64 and returns it through an
+ * sret pointer, exactly the tf libcalls' convention. SF_INTABI makes float and double bits too. */
 #ifdef __SIZEOF_INT128__
-#if defined(SF_INTABI) || defined(SF_QUADBITS)
+#ifdef SF_QUAD_FLOAT128
+typedef __float128 sf_quad;
+static inline sf128 q2b(sf_quad f) { union { sf_quad f; sf128 b; } u; u.f = f; return u.b; }
+static inline sf_quad b2q(sf128 b) { union { sf_quad f; sf128 b; } u; u.b = b; return u.f; }
+#else
 typedef sf128 sf_quad;
 static inline sf128 q2b(sf_quad f) { return f; }
 static inline sf_quad b2q(sf128 b) { return b; }
-#else
-typedef __float128 sf_quad; /* long double is binary128 only on some targets: the host test and GCC use __float128 */
-static inline sf128 q2b(sf_quad f) { union { sf_quad f; sf128 b; } u; u.f = f; return u.b; }
-static inline sf_quad b2q(sf128 b) { union { sf_quad f; sf128 b; } u; u.b = b; return u.f; }
 #endif
 #endif
 

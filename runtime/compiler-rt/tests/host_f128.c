@@ -1,5 +1,5 @@
 /* binary128 against the host's __float128 (libgcc's tf routines): the library contract of add, sub, mul, div, neg, unord and every compare entry, NaN included.
- * cc -O2 -fno-builtin -ffp-contract=off -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_f128.c $(tests/fp_sources.sh f128) lib/fp/f32/pack.c lib/fp/f64/pack.c && ./a.out [n]
+ * cc -O2 -fno-builtin -ffp-contract=off -DSF_QUAD_FLOAT128 -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_f128.c $(tests/fp_sources.sh f128) lib/fp/f32/pack.c lib/fp/f64/pack.c && ./a.out [n]
  * Operands: random bit patterns, a third of them drawn from the edges (zeros, infinities, NaNs, denormals, the largest and smallest normals, one apart). */
 #include <stdio.h>
 #include <stdlib.h>
