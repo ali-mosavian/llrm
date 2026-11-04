@@ -29,9 +29,9 @@ fn status(
     code
 }
 
-/// `(a & c) + a` is the pin's `move.l a, d; and.l #c, d` for every `c`; the
-/// `moveq #c, d; and.l a, d` form, for a `c` within a signed byte, was a
-/// rewrite of it. The value must be the same at the edges of that range.
+/// `(a & c) + a` is the pin's `move.l a, d; and.l #c, d`; for a `c` a `moveq`
+/// makes it is `moveq #c, d; and.l a, d` (`constreg.rs`). The value must be the
+/// same at the edges of that range.
 #[test]
 fn a_mask_keeps_its_immediate_form_and_its_value() {
     for mask in [127, 128, -128, -129] {
@@ -39,7 +39,14 @@ fn a_mask_keeps_its_immediate_form_and_its_value() {
             format!("define i32 @f(i32 %a) {{\n  %m = and i32 %a, {mask}\n  %r = add i32 %m, %a\n  ret i32 %r\n}}");
         let asm = text_with(&module(&ir), "f", Cpu::M68000, Options::default()).unwrap();
         // A mask of ones above bit 15 is the word `and` (`narrow.rs`).
-        let form = if mask < 0 { format!("and.w\t#{},", mask & 0xFFFF) } else { format!("and.l\t#{mask},") };
+        // and a mask a `moveq` makes is built in the destination (`constreg.rs`)
+        let form = if mask < 0 {
+            format!("and.w\t#{},", mask & 0xFFFF)
+        } else if mask < 128 {
+            format!("moveq\t#{mask},")
+        } else {
+            format!("and.l\t#{mask},")
+        };
         assert!(asm.contains(&form), "mask {mask}: {asm}");
         if let Some(code) = status(&ir, &[0x85], Options::default()) {
             assert_eq!(code, ((0x85 & mask) + 0x85) & 0xFF, "mask {mask}: {asm}");

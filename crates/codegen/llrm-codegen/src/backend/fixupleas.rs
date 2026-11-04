@@ -71,9 +71,17 @@ impl LIRTransform for FixupLeas {
         body: LirBody,
     ) -> Result<LirBody, String> {
         let (regs, bits) = (body.regs(), body.bits);
+        // The pin visits LEAs only: a body with none is not solved for
+        // liveness (13M of memory_expansion -O2, whose blocks held few).
+        if !body.blocks.iter().any(|block| block.insns.iter().any(|one| is_lea(one))) {
+            return Ok(body);
+        }
         let exits = liveness::dead_at_exit(&body);
         let mut out = body.clone();
         for block in &mut out.blocks {
+            if !block.insns.iter().any(|one| is_lea(one)) {
+                continue;
+            }
             let dead = _dead_after(regs, bits, block, exits[&block.at].clone());
             let mut current = block.clone();
             let mut at = 0;
@@ -698,6 +706,25 @@ mod tests {
         succ: Vec<i64>,
     ) -> LirBlock {
         LirBlock { succ: succ.into(), ..LirBlock::new(0, insns) }
+    }
+
+    /// The pass solved lane liveness of every function and walked every block
+    /// for what is dead after each instruction, though the pin looks at LEAs
+    /// only: 13M Ir of memory_expansion -O2. A body with none asks nothing.
+    #[test]
+    fn a_body_with_no_lea_is_not_solved_for_liveness() {
+        let blocks = vec![block(vec![mov(0, RegId::EAX, RegId::ECX), load(1, RegId::EDX)], vec![])];
+        let body = LirBody::new(
+            "plain",
+            0,
+            crate::model::lir::shared(blocks),
+            crate::support::hash::IndexMap::default(),
+            crate::support::hash::IndexMap::default(),
+        );
+        let before = crate::backend::liveness::exits_computed();
+        let done = FixupLeas::default().transform(body.clone()).expect("a body");
+        assert_eq!(crate::backend::liveness::exits_computed(), before, "liveness was solved");
+        assert!(done.blocks.iter().zip(&body.blocks).all(|(one, two)| one.insns.same_insns(&two.insns)));
     }
 
     #[test]

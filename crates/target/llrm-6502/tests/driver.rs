@@ -1458,6 +1458,18 @@ define i8 @fits() {
     assert_eq!(exit_code_of(&text, "fits"), 0, "{text}");
 }
 
+/// A borrow compared with a byte was loaded back into C for a `cmp` that takes
+/// a byte: `llrm-6502-llc` refused X16 BASIC's `fp_fin` at -O2 ("operand c"),
+/// and with it all of mathlib.c. The fixture is that function cut to the 60
+/// blocks that still refused; it compiles, and the compare reads the saved
+/// 0 or 1.
+#[test]
+fn a_borrow_compared_with_a_byte_is_the_saved_byte_not_c() {
+    let ir = module(include_str!("data/borrow_compared_with_a_byte.ll"));
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("fp_fin:"), "{text}");
+}
+
 /// The carry between the two halves of a 32-bit add was made into a byte and
 /// read back (`lda #0; rol a; lsr a`), and the carry out of the last half into
 /// a byte nothing read. `0x1FFFF + 1` has byte 2 equal to 2.
@@ -1524,6 +1536,40 @@ fn a_word_sum_of_bytes_and_a_carry_is_an_adc() {
             assert!(count <= 30, "{count} instructions for a carry through a word sum:\n{text}");
         }
     }
+}
+
+/// A size build copied a 20-instruction callee into every caller: the pin's
+/// `OptSizeThreshold` allows growth, and the 6502 expands each i16 update to a
+/// dozen bytes where the call is three. On X16 BASIC, `chrget` went into nine
+/// callers (84 B each) and the 24 files were 34094 B, 28730 B with the bound.
+/// `step` is called from three places and stays one body.
+#[test]
+fn a_size_build_does_not_copy_a_callee_bigger_than_its_call() {
+    let updates: String = (0..6)
+        .map(|i| {
+            format!("  %v{i} = load i16, ptr @g{i}\n  %w{i} = add i16 %v{i}, {}\n  store i16 %w{i}, ptr @g{i}\n", 7 + i)
+        })
+        .collect();
+    let globals: String = (0..6).map(|i| format!("@g{i} = global i16 0\n")).collect();
+    let ir = module(&format!(
+        "{globals}define void @step() {{\n{updates}  ret void\n}}\ndefine void @one() {{\n  call void @step()\n  ret void\n}}\n\
+         define void @two() {{\n  call void @step()\n  call void @step()\n  ret void\n}}"
+    ));
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    let calls = text.matches("jsr step").count() + text.matches("jmp step").count();
+    assert_eq!(calls, 3, "step was copied into its callers:\n{text}");
+}
+
+/// The bound above stood in front of an inline the pin's own cost counts as
+/// shrinking (`to_double` at cost -30): `classify` kept its calls, so main
+/// could not fold its constants: 185 B grew to 1708 B (tests/run/c
+/// uint64_to_float). The fixture is that program's IR.
+#[test]
+fn a_size_build_still_inlines_what_the_cost_model_finds_negative() {
+    let ir = module(include_str!("data/uint64_to_float_chain.ll"));
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    let lines = text.lines().count();
+    assert!(lines < 300, "{lines} lines: classify kept its calls and main its constants unfolded:\n{text}");
 }
 
 /// A loaded `i1` that a `select` or an extension tests was selected into a

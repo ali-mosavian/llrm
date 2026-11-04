@@ -335,8 +335,10 @@ impl ProgramPass for Walk {
                             .filter(|one| one.self_calls.is_some() && !self.inline.single && recursion.is_some())
                             .filter_map(|one| Some((one.callee?, one.clone())))
                             .collect();
+                        let known = modules[at].cached::<llrm_analysis::manager::GlobalsModRefAnalysis>();
                         let by = crate::inline::Caller {
                             layout: &program.layout,
+                            effects: known.as_deref(),
                             recursive: recursive.contains(&id),
                             self_inlining: None,
                             peeling: !self.inline.single && recursion.is_some(),
@@ -927,8 +929,10 @@ impl SelfInline {
                         self_sites: 0,
                     };
                     let available = [(id, itself)].into_iter().collect();
+                    let known = modules[at].cached::<llrm_analysis::manager::GlobalsModRefAnalysis>();
                     let by = crate::inline::Caller {
                         layout: &program.layout,
+                        effects: known.as_deref(),
                         recursive: true,
                         self_inlining: Some(&frequencies),
                         peeling: false,
