@@ -58,7 +58,7 @@ pub struct TargetEnv {
     /// For each pinned value, the pinned values on overlapping registers.
     pub aliases: IndexMap<u32, Vec<u32>>,
     /// `TargetRegisterInfo::shouldCoalesce`: whether the join goes ahead.
-    pub should_join: Box<dyn Fn(&Join) -> bool>,
+    pub should_join: Option<Box<dyn Fn(&Join) -> bool>>,
     /// The frequency of each block relative to the entry block
     /// (`MBFI->getBlockFreqRelativeToEntryBlock`); a block it does not list
     /// runs once.
@@ -427,6 +427,9 @@ impl CoalescerEnv for TargetEnv {
         src: u32,
         dst: u32,
     ) -> bool {
+        // `TargetRegisterInfo::shouldCoalesce` is no work where the target has
+        // no opinion: no `Join` is built for it.
+        let Some(should_join) = &self.should_join else { return true };
         let palettes = self.palettes.borrow();
         let (Some(x), Some(y)) = (palettes.get(&src), palettes.get(&dst)) else { return true };
         let freq = |key: InstrKey| {
@@ -456,7 +459,8 @@ impl CoalescerEnv for TargetEnv {
         // the wide registers that have its registers as their low part.
         let widths = super::pair::move_copy(lis.instr(copy)).map(|(d, s)| d.width != s.width);
         let joined = if widths == Some(true) { self.hosts(y, x) } else { x.intersection(y).copied().collect() };
-        (self.should_join)(&Join { one: side(src, x), other: side(dst, y), joined, copy_frequency: freq(copy) })
+        JOINS_BUILT.with(|built| built.set(built.get() + 1));
+        should_join(&Join { one: side(src, x), other: side(dst, y), joined, copy_frequency: freq(copy) })
     }
 
     fn tracks_uses(&self) -> bool {
@@ -501,6 +505,12 @@ impl JoinMap {
     pub fn iter(&self) -> impl Iterator<Item = (u32, u32)> + '_ {
         self.0.keys().map(|&value| (value, self.survivor(value)))
     }
+}
+
+thread_local! {
+    /// How many [`Join`]s `should_coalesce` has built on this thread, for a
+    /// test that a target with no opinion costs none.
+    pub static JOINS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// `body` with its copies joined by the translated coalescer.
@@ -553,7 +563,7 @@ pub fn coalesce(
     joins_sub_registers: bool,
     joins_lanes: bool,
     regs: llrm_lir::registers::Regs,
-    should_join: Box<dyn Fn(&Join) -> bool>,
+    should_join: Option<Box<dyn Fn(&Join) -> bool>>,
     remat: Option<Box<dyn Fn(&Insn) -> bool>>,
     remat_wins: Option<RematWins>,
     kind_of: Box<dyn Fn(&Insn, u32) -> Option<u32>>,

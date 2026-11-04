@@ -1219,6 +1219,7 @@ fn executed(
         _ => llrm_mir::opcode::Tail::None,
     };
     let stated = crate::inlineattrs::SiteAttrs::of(function, call);
+    let marked = crate::inlinemetadata::SiteMetadata::of(function, call);
     let made = spliced(context, function, call, &planned.candidate.body, anchor);
     if let Some(site) = located {
         inlined_at(function, &planned.candidate.body, &made.copies, site, metadata, declared);
@@ -1227,6 +1228,9 @@ fn executed(
     narrow_tail_calls(function, &made.copies, site);
     if let Some(stated) = &stated {
         crate::inlineattrs::propagated(function, stated, &planned.candidate.body, &made.copies);
+    }
+    if let Some(marked) = &marked {
+        crate::inlinemetadata::propagated(function, marked, &made.copies, metadata, declared);
     }
     placed.lifetimes.push(unmarked_allocas(context, function, layout, &planned.candidate.body, &made, declared));
     let copies = made.copies;
