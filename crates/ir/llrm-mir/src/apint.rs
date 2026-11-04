@@ -972,7 +972,7 @@ fn magnitude<W: Word>(
 
 /// `APInt::sdiv` at any width: the quotient rounded towards zero
 /// (`INT_MIN / -1` wraps).
-pub fn sdiv_word<W: Word>(
+pub fn sdiv<W: Word>(
     a: W,
     b: W,
     width: u32,
@@ -983,7 +983,7 @@ pub fn sdiv_word<W: Word>(
 }
 
 /// `APInt::srem` at any width: the remainder with the sign of the dividend.
-pub fn srem_word<W: Word>(
+pub fn srem<W: Word>(
     a: W,
     b: W,
     width: u32,
@@ -993,7 +993,7 @@ pub fn srem_word<W: Word>(
 }
 
 /// `APIntOps::RoundingUDiv` at any width.
-pub fn rounding_udiv_word<W: Word>(
+pub fn rounding_udiv<W: Word>(
     a: W,
     b: W,
     up: bool,
@@ -1003,14 +1003,14 @@ pub fn rounding_udiv_word<W: Word>(
 }
 
 /// `APIntOps::RoundingSDiv` at any width, rounding up or down.
-pub fn rounding_sdiv_word<W: Word>(
+pub fn rounding_sdiv<W: Word>(
     a: W,
     b: W,
     width: u32,
     up: bool,
 ) -> W {
-    let quotient = sdiv_word(a, b, width);
-    let remainder = srem_word(a, b, width);
+    let quotient = sdiv(a, b, width);
+    let remainder = srem(a, b, width);
     let result = if remainder.is_zero() {
         quotient
     } else if (is_negative(remainder, width)) != is_negative(b, width) {
@@ -1023,8 +1023,21 @@ pub fn rounding_sdiv_word<W: Word>(
     result & mask::<W>(width)
 }
 
+/// `APInt::smul_sat` at any width.
+pub fn smul_sat<W: Word>(
+    a: W,
+    b: W,
+    width: u32,
+) -> W {
+    let (product, over) = smul_ov(a, b, width);
+    if !over {
+        return product;
+    }
+    if is_negative(a, width) != is_negative(b, width) { sign_bit::<W>(width) } else { sign_bit::<W>(width).wrapping_sub(W::ONE) }
+}
+
 /// `APInt::sadd_ov` at any width.
-pub fn sadd_ov_word<W: Word>(
+pub fn sadd_ov<W: Word>(
     a: W,
     b: W,
     width: u32,
@@ -1034,7 +1047,7 @@ pub fn sadd_ov_word<W: Word>(
 }
 
 /// `APInt::ssub_ov` at any width.
-pub fn ssub_ov_word<W: Word>(
+pub fn ssub_ov<W: Word>(
     a: W,
     b: W,
     width: u32,
@@ -1044,7 +1057,7 @@ pub fn ssub_ov_word<W: Word>(
 }
 
 /// `APInt::smul_ov` at any width.
-pub fn smul_ov_word<W: Word>(
+pub fn smul_ov<W: Word>(
     a: W,
     b: W,
     width: u32,
@@ -1073,93 +1086,6 @@ pub(crate) fn smin_of(width: u32) -> i128 {
 
 pub(crate) fn smax_of(width: u32) -> i128 {
     if width >= 128 { i128::MAX } else { (1_i128 << (width - 1)) - 1 }
-}
-
-/// `APInt::smul_ov`.
-pub(crate) fn smul_ov(
-    a: u128,
-    b: u128,
-    width: u32,
-) -> (u128, bool) {
-    let (x, y) = (signed(a, width), signed(b, width));
-    match x.checked_mul(y) {
-        Some(p) if (smin_of(width)..=smax_of(width)).contains(&p) => (p as u128 & mask::<u128>(width), false),
-        _ => (x.wrapping_mul(y) as u128 & mask::<u128>(width), true),
-    }
-}
-
-/// `APInt::smul_sat`.
-pub(crate) fn smul_sat(
-    a: u128,
-    b: u128,
-    width: u32,
-) -> u128 {
-    let (product, over) = smul_ov(a, b, width);
-    if !over {
-        return product;
-    }
-    let negative = bit(a, width - 1) != bit(b, width - 1);
-    (if negative { smin_of(width) } else { smax_of(width) }) as u128 & mask::<u128>(width)
-}
-
-/// `APInt::sdiv`: the quotient rounded towards zero (`INT_MIN / -1` wraps).
-pub(crate) fn sdiv(
-    a: u128,
-    b: u128,
-    width: u32,
-) -> u128 {
-    signed(a, width).wrapping_div(signed(b, width)) as u128 & mask::<u128>(width)
-}
-
-/// `APInt::srem`: the remainder with the sign of the dividend.
-pub(crate) fn srem(
-    a: u128,
-    b: u128,
-    width: u32,
-) -> u128 {
-    signed(a, width).wrapping_rem(signed(b, width)) as u128 & mask::<u128>(width)
-}
-
-/// `APIntOps::RoundingUDiv`.
-pub(crate) fn rounding_udiv(
-    a: u128,
-    b: u128,
-    up: bool,
-) -> u128 {
-    let (quotient, rem) = (a / b, a % b);
-    if up && rem != 0 { quotient + 1 } else { quotient }
-}
-
-/// `APIntOps::RoundingSDiv`, rounding up or down.
-pub(crate) fn rounding_sdiv(
-    a: u128,
-    b: u128,
-    width: u32,
-    up: bool,
-) -> u128 {
-    let (x, y) = (signed(a, width), signed(b, width));
-    let quotient = x.wrapping_div(y);
-    let rem = x.wrapping_rem(y);
-    let result = if rem == 0 {
-        quotient
-    } else if up {
-        if (rem < 0) != (y < 0) { quotient } else { quotient + 1 }
-    } else if (rem < 0) != (y < 0) {
-        quotient - 1
-    } else {
-        quotient
-    };
-    result as u128 & mask::<u128>(width)
-}
-
-/// `APInt::sqrtFloor`.
-pub(crate) fn sqrt_floor(v: u128) -> u128 {
-    let (mut low, mut high) = (0_u128, 1_u128 << 64);
-    while low + 1 < high {
-        let mid = low + (high - low) / 2;
-        if mid.checked_mul(mid).is_some_and(|square| square <= v) { low = mid } else { high = mid }
-    }
-    low
 }
 
 /// `APIntOps::fshl`: the top `width` bits of `(a:b) << (amt mod width)`.
