@@ -1349,6 +1349,10 @@ pub struct LirBody {
     /// The registers the frame saved, found before its exit was made: the
     /// exit's own pops name them and the frame register.
     pub frame_saved: Option<Vec<RegId>>,
+    /// The callee-saved vector registers the body writes and where its frame
+    /// keeps them: each with the displacement of a 16-byte cell. The entry
+    /// saves them with `movaps`, the exits reload them.
+    pub vector_saves: Vec<(RegId, crate::model::ir::Mem)>,
     /// What `-g` says of its variables at points in the code, by the numbers
     /// `DebugTags::before` holds.
     pub notes: Arc<Vec<DebugNote>>,
@@ -1552,6 +1556,7 @@ impl LirBody {
             over_aligned: Vec::new(),
             frame_exit: None,
             frame_saved: None,
+            vector_saves: Vec::new(),
             notes: Arc::default(),
             placed: Arc::default(),
             arguments_in_cells: Arc::default(),
@@ -1624,6 +1629,7 @@ impl LirBody {
             over_aligned: self.over_aligned.clone(),
             frame_exit: self.frame_exit,
             frame_saved: self.frame_saved.clone(),
+            vector_saves: self.vector_saves.clone(),
             notes: Arc::clone(&self.notes),
             placed: Arc::clone(&self.placed),
             arguments_in_cells: Arc::clone(&self.arguments_in_cells),

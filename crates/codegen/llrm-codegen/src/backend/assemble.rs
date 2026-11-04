@@ -1173,8 +1173,10 @@ fn staged(
             .collect();
         std::sync::Arc::make_mut(&mut body.call_pops).extend(open.into_iter().map(|at| (at, 0)));
     }
+    // Win64's xmm6-15 are kept too, but saved into the frame, not pushed.
+    let (vector_saved, pushed): (Vec<_>, Vec<_>) = convention.saved.iter().copied().partition(|(whole, _)| whole.is_xmm());
     let mut registers =
-        llrm_target::FrameRegisters { saved: convention.saved.clone(), ..target.arch.frame_registers() };
+        llrm_target::FrameRegisters { saved: pushed, vector_saved, ..target.arch.frame_registers() };
     // The convention's entry functions (`entry_clobbers_all`) keep nothing for
     // a caller that does not exist.
     let entry = module
@@ -1184,6 +1186,7 @@ fn staged(
     if target.facts.uncalled(name) && entry.is_some_and(|one| one.entry_clobbers_all.iter().any(|entry| entry == name))
     {
         registers.saved.clear();
+        registers.vector_saved.clear();
     }
     registers.align = target.facts.stack_alignment(target.arch, name);
     // LLVM's `hasFP`, before allocation: a function that can do without its

@@ -3460,3 +3460,28 @@ fn a_win64_function_takes_its_arguments_by_position_above_the_home_area() {
     assert!(lines.contains(&"mov rcx, qword ptr [rsp+96]"), "{listing}");
     assert!(!listing.contains("rdi") && !listing.contains("rsi"), "SysV registers: {listing}");
 }
+
+/// A Win64 function that keeps doubles in xmm6/xmm7 across a call must save
+/// and reload them (callee-saved there); with no save it clobbered the
+/// caller's xmm6/xmm7. SysV has none callee-saved and gets no `movaps`.
+#[test]
+fn a_win64_function_saves_the_xmm_registers_it_keeps_across_a_call() {
+    let body = "declare double @g(double)\ndefine double @f(double %a, double %b) {\n  %x = call double @g(double %a)\n  %y = call double @g(double %b)\n  %s = fadd double %x, %y\n  %t = fadd double %s, %a\n  %u = fadd double %t, %b\n  ret double %u\n}\n";
+    let text = format!("{SYSV}{body}");
+    let listing_of = |abi: &str| {
+        let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag", abi]), &text, "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let win = listing_of("-mabi=win64");
+    let lines: Vec<&str> = win.lines().map(str::trim).collect();
+    let offset = |line: &&str| -> Option<i64> {
+        let rest = line.strip_prefix("movaps xmmword ptr [rsp+")?;
+        rest.split(']').next()?.parse().ok()
+    };
+    let saves: Vec<i64> = lines.iter().filter_map(offset).collect();
+    let reloads = lines.iter().filter(|line| line.starts_with("movaps xmm") && line.contains(", xmmword ptr [rsp+")).count();
+    assert!(saves.len() >= 2 && reloads == saves.len(), "{win}");
+    assert!(saves.iter().all(|at| at % 16 == 0), "movaps faults off a 16-byte boundary: {win}");
+    let sysv = listing_of("-mabi=sysv");
+    assert!(!sysv.contains("movaps"), "{sysv}");
+}
