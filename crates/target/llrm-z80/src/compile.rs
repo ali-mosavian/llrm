@@ -1815,7 +1815,7 @@ fn sets_zero_by_result(inst: &Inst) -> bool {
 /// instruction that made the byte and set the flags by it is dropped when only
 /// the zero flag is read: `dec c; ld a, c; or a; jp nz` is `dec c; jp nz`.
 /// Every `ld` between leaves the flags alone, and so does `add hl, rr` (but
-/// for the carry).
+/// for C, H and N).
 fn eliminate_tests(function: &mut MFunction) {
     for block in &mut function.blocks {
         let mut at = 1;
@@ -1853,8 +1853,11 @@ fn eliminate_tests(function: &mut MFunction) {
                 at += 1;
                 continue;
             };
-            // `add hl, rr` sets the carry, half carry and subtract flags and
-            // leaves S, Z and P/V: the zero of the byte survives it
+            // `add hl, rr` (Z80 CPU User Manual UM0080, ADD HL,ss): C is the
+            // carry out of bit 15, H out of bit 11, N is reset; S,
+            // Z and P/V are not affected, so the zero of the byte
+            // survives it. (`adc hl, rr` and `sbc hl, rr` set all
+            // of them.)
             let flags_kept = block.insts[setter + 1..at - 1]
                 .iter()
                 .all(|inst| !inst.call && (!inst.sets_flags || inst.kind == Kind::Op("ADD16")));
