@@ -486,7 +486,7 @@ pub fn sequence_copies(
 /// The virtual registers some path reads before writing: a phi copy that
 /// missed an edge leaves one (`LLRM_ARM64_VERIFY`).
 pub fn undefined_reads(function: &MFunc) -> Vec<Reg> {
-    use std::collections::HashSet;
+    use llrm_support::hash::HashSet;
     let labels: HashMap<&str, usize> =
         function.blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at)).collect();
     let count = function.blocks.len();

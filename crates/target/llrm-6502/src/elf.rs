@@ -25,7 +25,7 @@
 
 mod opcodes;
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use llrm_elf::{Machine, Relocation};
 use llrm_object::assembler::AsmBackend;
@@ -244,8 +244,8 @@ pub fn object(
     name: &str,
     text: &str,
 ) -> Result<Object, String> {
-    let mut equates: HashMap<String, i64> = HashMap::new();
-    let mut zero_page: HashMap<String, ()> = HashMap::new();
+    let mut equates: HashMap<String, i64> = HashMap::default();
+    let mut zero_page: HashMap<String, ()> = HashMap::default();
     let mut sections: Vec<Piece> = Vec::new();
     let mut labels: Vec<(String, usize, usize)> = Vec::new();
     let mut exported: Vec<String> = Vec::new();
@@ -426,7 +426,7 @@ pub fn object(
 
     // Symbols: the labels, then the names fixups use that are not labels.
     let mut symbols: Vec<Symbol> = Vec::new();
-    let mut index_of: HashMap<String, usize> = HashMap::new();
+    let mut index_of: HashMap<String, usize> = HashMap::default();
     for (position, (label, at, offset)) in labels.iter().enumerate() {
         let end = labels
             .iter()

@@ -13,6 +13,11 @@ fn compiled(
     text(&ir, name, 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"))
 }
 
+/// -O2 without the full unroll, for the tests that need crc16's spills.
+fn unrolled_off() -> Request {
+    Request { passes: vec!["-fno-unroll-loops".into()], ..Request::new(Level::O2) }
+}
+
 #[test]
 fn dump() {
     for (name, ir) in [
@@ -146,24 +151,26 @@ fn the_prologue_pushes_the_arguments_a_function_keeps_in_its_frame() {
     assert!(!insts.iter().any(|line| line.starts_with("ld -") && line.contains("(ix), ")), "{insts:?}");
 }
 
-/// crc16 reloaded its pointer from the slot at SP with `ld c, -3(ix)` / `ld b,
+/// crc16 (loops not unrolled, which would free the registers it spilled)
+/// reloaded its pointer from the slot at SP with `ld c, -3(ix)` / `ld b,
 /// -2(ix)`, 6 B and 38 T-states on each of its trips; `pop bc` / `push bc` is 2
 /// B and 21.
 #[test]
 fn the_slot_at_sp_is_reloaded_by_pop_and_push() {
     let ir = include_str!("kernels/ir/crc16.ll");
-    let out = text(ir, "crc16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let out = text(ir, "crc16", 0, &unrolled_off()).unwrap_or_else(|why| panic!("{why}"));
     let lines: Vec<&str> = out.lines().map(str::trim).collect();
     assert!(lines.windows(2).any(|pair| pair == ["pop bc", "push bc"]), "{out}");
 }
 
-/// A spilled byte was reloaded into a register just to be compared
+/// A spilled byte (crc16, loops not unrolled) was reloaded into a register
+/// just to be compared
 /// (`ld c, -1(ix)` / `cp a, c`): a byte more and 4 T-states than `cp a,
 /// -1(ix)`.
 #[test]
 fn a_reloaded_operand_is_read_from_the_frame() {
     let ir = include_str!("kernels/ir/crc16.ll");
-    let out = text(ir, "crc16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let out = text(ir, "crc16", 0, &unrolled_off()).unwrap_or_else(|why| panic!("{why}"));
     assert!(out.lines().any(|line| line.trim().starts_with("cp a, ") && line.ends_with("(ix)")), "{out}");
 }
 
@@ -1442,4 +1449,17 @@ fn reverse_at_oz_does_not_live_in_the_frame() {
     let out = text(include_str!("kernels/ir/reverse.ll"), "reverse", 0, &Request::new(Level::Oz)).expect("compiles");
     let frame = out.lines().filter(|line| line.contains("(ix)")).count();
     assert!(frame <= 10, "{frame} frame accesses\n{out}");
+}
+
+/// crc16's inner loop of eight trips kept its counter and branch: `dec h; jr
+/// nz` is 16 T a bit, 7135 T for 12 bytes against gcc's 5134. Where speed
+/// comes first it is copied out (the pin's threshold: +67 B, -2490 T, past 1 B
+/// = 3 T); at -Oz it stays a loop.
+#[test]
+fn an_eight_trip_loop_is_unrolled_where_speed_comes_first_and_not_at_oz() {
+    let ir = include_str!("kernels/ir/crc16.ll");
+    let fast = text(ir, "crc16", 0, &Request::new(Level::O2)).expect("compiles");
+    let small = text(ir, "crc16", 0, &Request::new(Level::Oz)).expect("compiles");
+    assert!(!fast.contains("dec h"), "{fast}");
+    assert!(small.contains("dec h"), "{small}");
 }
