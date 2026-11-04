@@ -15,12 +15,6 @@
 //! has run, so every descriptor-word load after it is invariant. A load in
 //! the entry block itself is not stated: it may precede a DIM.
 //!
-//! Where the program's only far DIM is in a procedure called once, from
-//! `__main`'s entry block, the procedures that run only between that DIM and
-//! the array's release (the callees of its callers, all the way down) see
-//! its descriptor unmoved: their loads of an array parameter's words are
-//! invariant too (`confined_words`).
-//!
 //! A frame array (a constant-bound local DIM) may be DIM'd in any procedure:
 //! its descriptor is written by the stores at its DIM, which no loop or
 //! recursion repeats and every use follows, and nothing moves it.
@@ -36,7 +30,6 @@ const ENTRY: u32 = 1;
 
 pub(super) fn applied(compiler: &mut Compiler) {
     shape_words(compiler);
-    confined_words(compiler);
     if !proven(compiler) {
         return;
     }
@@ -139,159 +132,6 @@ fn defined(
     )
 }
 
-/// The loads of array parameters' descriptor words in the procedures that run
-/// only while the program's one far array is alive.
-///
-/// The program, all in this module on the llrm runtime, has no REDIM, ERASE,
-/// SHELL or error handler, and exactly one far DIM: in a procedure called once
-/// from `__main`'s entry block, in no cycle, whose only release is the one at
-/// its return. No other far allocation then moves the array between that DIM
-/// and the return, so a procedure whose every call is in that window (a call
-/// in the DIM's procedure after the DIM, or in another such procedure)
-/// reads words that do not change while it runs, and nothing inlines it
-/// outside the window.
-fn confined_words(compiler: &mut Compiler) {
-    if !compiler.options.whole_program
-        || compiler.runtime != "llrm"
-        || compiler.options.one_space()
-        || !all_far(compiler)
-    {
-        return;
-    }
-    let Some(main) = compiler.functions.iter().find(|function| function.name == "__main") else { return };
-    if entered(main) {
-        return;
-    }
-    let mut dims = Vec::new();
-    for function in &compiler.functions {
-        if function.error_handler.is_some() {
-            return;
-        }
-        for (block, one) in function.blocks.iter().flat_map(|block| block.instructions.iter().map(move |one| (block.id, one))) {
-            let moved = one.callee.as_deref().is_some_and(llrm_codegen::abi::runtime::semantics::moves_far_heap);
-            let unseen = matches!(&one.tag, Some(Tag::Invoke { .. }))
-                && one.callee.is_none()
-                && !defined(compiler, function, one.id);
-            match &one.tag {
-                _ if moved || unseen => return,
-                Some(Tag::Reallocate(_)) => return,
-                Some(Tag::Release { .. }) if !returns(function, block) => return,
-                Some(Tag::Allocate(shape)) if !shape.frame => dims.push((function.id, block, one.id)),
-                _ => {}
-            }
-        }
-    }
-    let [(dimmer, dim_block, dim)] = dims.as_slice() else { return };
-    let Some(owner) = compiler.functions.iter().find(|function| function.id == *dimmer) else { return };
-    if !once_called(compiler).contains(dimmer) || cyclic_block(owner, *dim_block) {
-        return;
-    }
-    let dominators = dominators(owner);
-    let order: Vec<(u32, u32)> =
-        owner.blocks.iter().flat_map(|block| block.instructions.iter().map(move |one| (block.id, one.id))).collect();
-    let position = |id: u32| order.iter().position(|(_, other)| *other == id);
-    let released = owner
-        .blocks
-        .iter()
-        .flat_map(|block| &block.instructions)
-        .filter(|one| matches!(one.tag, Some(Tag::Release { .. })))
-        .filter_map(|one| position(one.id))
-        .min();
-    // Whether a call at (`block`, `id`) of the DIM's procedure is inside the window.
-    let inside = |block: u32, id: u32| {
-        let after = if block == *dim_block {
-            position(*dim) < position(id)
-        } else {
-            dominators.get(&block).is_some_and(|set| set.contains(dim_block))
-        };
-        after && released.is_none_or(|end| position(id) < Some(end))
-    };
-    let sites = call_sites(compiler);
-    let mut confined: BTreeSet<u32> = compiler
-        .functions
-        .iter()
-        .filter(|function| function.name != "__main" && function.id != *dimmer)
-        .map(|function| function.id)
-        .collect();
-    loop {
-        let before = confined.len();
-        let current = confined.clone();
-        confined.retain(|id| {
-            let Some(symbol) = compiler
-                .functions
-                .iter()
-                .find(|function| function.id == *id)
-                .and_then(|function| compiler.signatures.get(super::canonical(&function.name)))
-                .map(|signature| signature.symbol)
-            else {
-                return false;
-            };
-            sites.get(&symbol).is_some_and(|calls| {
-                !calls.is_empty()
-                    && calls.iter().all(|&(caller, block, instruction)| {
-                        if caller == *dimmer { inside(block, instruction) } else { current.contains(&caller) }
-                    })
-            })
-        });
-        if confined.len() == before {
-            break;
-        }
-    }
-    for function in &mut compiler.functions {
-        if !confined.contains(&function.id) {
-            continue;
-        }
-        let pointers = pointers(function);
-        let words: Vec<u32> = function
-            .blocks
-            .iter()
-            .flat_map(|block| &block.instructions)
-            .filter(|one| {
-                one.op == "load"
-                    && matches!(
-                        &one.tag,
-                        Some(Tag::DescriptorField { descriptor, .. })
-                            if matches!(pointers.get(descriptor), Some(Identity::Parameter(..)))
-                    )
-            })
-            .map(|one| one.id)
-            .collect();
-        function.invariant.extend(words);
-    }
-}
-
-/// Every call of a procedure this module defines, by the callee's symbol: the
-/// caller, the block and the instruction.
-fn call_sites(compiler: &Compiler) -> BTreeMap<u32, Vec<(u32, u32, u32)>> {
-    let mut calls: BTreeMap<u32, Vec<(u32, u32, u32)>> = BTreeMap::new();
-    for caller in &compiler.functions {
-        for block in &caller.blocks {
-            for one in &block.instructions {
-                let Some(symbol) =
-                    caller.calls.iter().find(|call| call.instruction == one.id).and_then(|call| call.callee)
-                else {
-                    continue;
-                };
-                calls.entry(symbol).or_default().push((caller.id, block.id, one.id));
-            }
-        }
-    }
-    calls
-}
-
-/// Whether `block` of `function` is on a cycle.
-fn cyclic_block(
-    function: &Function,
-    block: u32,
-) -> bool {
-    function
-        .blocks
-        .iter()
-        .find(|one| one.id == block)
-        .and_then(|one| one.terminator.as_ref())
-        .is_some_and(|terminator| terminator.targets.iter().any(|&next| reaches(function, next, block)))
-}
-
 /// The shape words of a local array: rank, counts and lower bounds change
 /// only at that array's own DIM, REDIM and ERASE, and the data offset of a far
 /// array (which B$DDIM puts at 0 of its own segment) at the DIM. They hold
@@ -331,7 +171,19 @@ fn once_called(compiler: &Compiler) -> BTreeSet<u32> {
     if entered(main) || main.error_handler.is_some() {
         return BTreeSet::new();
     }
-    let calls = call_sites(compiler);
+    let mut calls: BTreeMap<u32, Vec<(u32, u32)>> = BTreeMap::new();
+    for caller in &compiler.functions {
+        for block in &caller.blocks {
+            for one in &block.instructions {
+                let Some(symbol) =
+                    caller.calls.iter().find(|call| call.instruction == one.id).and_then(|call| call.callee)
+                else {
+                    continue;
+                };
+                calls.entry(symbol).or_default().push((caller.id, block.id));
+            }
+        }
+    }
     compiler
         .functions
         .iter()
@@ -340,7 +192,7 @@ fn once_called(compiler: &Compiler) -> BTreeSet<u32> {
             let symbol = compiler.signatures.get(super::canonical(&function.name))?.symbol;
             matches!(
                 calls.get(&symbol)?.as_slice(),
-                [(caller, block, _)] if *caller == main.id && *block == ENTRY
+                [(caller, block)] if *caller == main.id && *block == ENTRY
             )
             .then_some(function.id)
         })
