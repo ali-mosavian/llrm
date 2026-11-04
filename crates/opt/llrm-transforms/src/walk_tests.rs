@@ -87,6 +87,40 @@ fn test_a_body_changed_by_an_interprocedural_stage_does_not_rerun_the_list() {
     assert!(reruns.iter().all(|(_, runs)| *runs < 10), "the list ran again: {reruns:?}");
 }
 
+/// The late list (loop-load-elim, slp, the late unroll) ran before the
+/// interprocedural stages, which then ran the simplification list again over
+/// the bodies it had grown: `main` of memory_expansion entered GVN at 6051,
+/// 6052 and 6058 instructions, and the whole module summed 30,988 at GVN
+/// where the pin's 8,332. The late list is a body's last run.
+#[test]
+fn test_the_late_list_is_a_bodys_last_run() {
+    let lines = pipeline_runs(
+        &format!("{}{DESCRIPTOR}", llrm_analysis::testing::DOS),
+        &crate::pipeline::Applied { options: crate::pipeline::Options::speed(), ..Default::default() },
+    );
+    // A run's steps come before its `body` line; the late list has the
+    // late unroll's slot.
+    let mut late: Vec<String> = Vec::new();
+    let mut steps_late = false;
+    let mut after_late: Vec<String> = Vec::new();
+    for line in &lines {
+        if line.starts_with("step ") {
+            steps_late |= line.contains("unroll@1476");
+        } else if line.starts_with("body ") {
+            let name = line.rsplit("name ").next().unwrap_or_default().to_owned();
+            if late.contains(&name) {
+                after_late.push(name.clone());
+            }
+            if steps_late {
+                late.push(name);
+            }
+            steps_late = false;
+        }
+    }
+    assert!(!late.is_empty(), "no body ran the late list: {lines:?}");
+    assert!(after_late.is_empty(), "bodies run again after the late list: {after_late:?}");
+}
+
 const TWO_CONSTANTS: &str = "define internal i16 @g(i16 %k, i16 %x) noinline {
 b0:
   br label %head
