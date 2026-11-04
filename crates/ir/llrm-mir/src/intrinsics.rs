@@ -903,6 +903,18 @@ pub fn window_name(
     format!("llrm.ia16.window.{}.{}", mangle(types, far), mangle(types, huge))
 }
 
+/// DEVIATE DV1: the 64 by 32 bit unsigned divides a target lowers by name
+/// (`unsigned long long f(unsigned hi, unsigned lo, unsigned d)`, the
+/// remainder in the high half of the result, the quotient in the low half):
+/// a plain declaration to every pass, a target's divide instruction in the
+/// backend. One table: a target adds its name as data.
+pub const WIDE_DIVIDES: &[&str] = &["llrm.x86.udiv64by32"];
+
+/// Whether `name` is one of [`WIDE_DIVIDES`].
+pub fn is_wide_divide(name: &str) -> bool {
+    WIDE_DIVIDES.contains(&name)
+}
+
 pub fn is_reserved(name: &str) -> bool {
     name.starts_with("llvm.") || name.starts_with("llrm.ia16.") || name.starts_with("llrm.noalias")
 }

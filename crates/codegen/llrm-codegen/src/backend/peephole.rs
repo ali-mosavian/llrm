@@ -1417,20 +1417,75 @@ struct EffectKey<'a> {
 }
 
 impl EffectKey<'_> {
-    /// Two hashes of the fields, the second seeded apart from the first.
+    /// Two hashes of the fields, the second seeded apart from the first, from
+    /// one walk of them: each walk of the operands was half of the cost.
     fn hashes(&self) -> (u64, u64) {
         use std::hash::{Hash, Hasher};
         #[cfg(test)]
         EFFECTS_HASHED.with(|count| count.set(count.get() + 1));
         let fields = (self.bits, self.may_write, self.flags, self.requires, self.delivers);
-        let mut first = rustc_hash::FxHasher::default();
-        fields.hash(&mut first);
-        shape(self.what, &mut first);
-        let mut second = rustc_hash::FxHasher::default();
-        0x9e37_79b9_7f4a_7c15_u64.hash(&mut second);
-        fields.hash(&mut second);
-        shape(self.what, &mut second);
-        (first.finish(), second.finish())
+        let mut both = Both(rustc_hash::FxHasher::default(), rustc_hash::FxHasher::default());
+        0x9e37_79b9_7f4a_7c15_u64.hash(&mut both.1);
+        fields.hash(&mut both);
+        shape(self.what, &mut both);
+        (both.0.finish(), both.1.finish())
+    }
+}
+
+/// Two hashers fed by the one walk of what they hash.
+struct Both(rustc_hash::FxHasher, rustc_hash::FxHasher);
+
+impl std::hash::Hasher for Both {
+    fn finish(&self) -> u64 {
+        std::hash::Hasher::finish(&self.0)
+    }
+
+    fn write(
+        &mut self,
+        bytes: &[u8],
+    ) {
+        self.0.write(bytes);
+        self.1.write(bytes);
+    }
+
+    fn write_u8(
+        &mut self,
+        value: u8,
+    ) {
+        self.0.write_u8(value);
+        self.1.write_u8(value);
+    }
+
+    fn write_u16(
+        &mut self,
+        value: u16,
+    ) {
+        self.0.write_u16(value);
+        self.1.write_u16(value);
+    }
+
+    fn write_u32(
+        &mut self,
+        value: u32,
+    ) {
+        self.0.write_u32(value);
+        self.1.write_u32(value);
+    }
+
+    fn write_u64(
+        &mut self,
+        value: u64,
+    ) {
+        self.0.write_u64(value);
+        self.1.write_u64(value);
+    }
+
+    fn write_usize(
+        &mut self,
+        value: usize,
+    ) {
+        self.0.write_usize(value);
+        self.1.write_usize(value);
     }
 }
 
@@ -1443,6 +1498,8 @@ fn shape<H: std::hash::Hasher>(
     into: &mut H,
 ) {
     use std::hash::Hash;
+    #[cfg(test)]
+    SHAPES_WALKED.with(|count| count.set(count.get() + 1));
     what.op.hash(into);
     what.name.hash(into);
     what.target.is_some().hash(into);
@@ -1515,6 +1572,14 @@ thread_local! {
     static EFFECTS_COMPUTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     #[cfg(test)]
     static EFFECTS_HASHED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    #[cfg(test)]
+    static SHAPES_WALKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has walked the operands of an ask to hash them.
+#[cfg(test)]
+pub fn shapes_walked() -> usize {
+    SHAPES_WALKED.with(std::cell::Cell::get)
 }
 
 /// How many times this thread has hashed an ask, for a test that a miss hashes

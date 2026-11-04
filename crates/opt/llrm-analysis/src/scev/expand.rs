@@ -679,9 +679,7 @@ impl Run<'_> {
 
     /// `findExistingExpansionAndDropPoisonFlags`: a value that computes `s`
     /// where it is used, its poison-generating flags dropped as reusing it
-    /// needs. (DEVIATE X1: the `nneg` re-inference of
-    /// `dropPoisonGeneratingAnnotationsAndReinfer` is not made; exit
-    /// 2026-11-20.)
+    /// needs.
     fn find_existing_expansion(
         &mut self,
         s: Scev,
@@ -695,7 +693,7 @@ impl Run<'_> {
             self.x.find_value_in_expr_value_map(&cx, self.se, s, at)?
         };
         for inst in drop {
-            self.fixup_poison_flags(inst);
+            self.drop_poison_generating_annotations_and_reinfer(inst);
         }
         Some(v)
     }
