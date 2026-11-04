@@ -3038,6 +3038,30 @@ fn a_loop_header_is_16_aligned_at_m64_unless_tuned_for_size() {
     assert!(!small.contains("    align 16\n"), "{small}");
 }
 
+/// A jump table's index register is copied by the switch lowering itself, not
+/// through `getCopyFromRegs`, so no live-out `AssertZext` wraps it. With one,
+/// the narrowed shift needed a `mov eax, edi` re-zero-extending the index in
+/// the table block (jpeg_fixed +3 B per table).
+#[test]
+fn a_jump_table_index_is_not_zero_extended_again_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @a()\ndeclare void @b()\ndeclare void @c()\ndeclare void @d()\n\
+                define void @f(i32 %x) {\n\
+                \x20 switch i32 %x, label %e [ i32 192, label %la\n i32 193, label %lb\n i32 194, label %lc\n i32 195, label %ld ]\n\
+                la:\n  call void @a()\n  ret void\nlb:\n  call void @b()\n  ret void\n\
+                lc:\n  call void @c()\n  ret void\nld:\n  call void @d()\n  ret void\ne:\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("movsx rcx, dword ptr"), "{listing}");
+    let moves: Vec<&str> = listing
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("mov e") && line.split(", ").nth(1).is_some_and(|r| r.starts_with('e')))
+        .collect();
+    assert!(moves.is_empty(), "{listing}");
+}
+
 /// A local declared `align 16` sat at `[rsp+4]`: the frame clamped every
 /// alignment to 4 (bintree's array; a 16-byte `movaps` clear of it would
 /// fault).
