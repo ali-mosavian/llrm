@@ -1208,3 +1208,37 @@ fn a_compare_against_a_word_boundary_tests_only_the_high_word_in_both_polarities
     }
     assert_eq!(instructions(&greater), instructions(&less), "the polarity changed the code:\n{greater}\n{less}");
 }
+
+/// A softened `double` bitcast to `i64` takes the halves of its softened
+/// integer (`ExpandIntRes_BITCAST`), not a stack slot. Guards the bytes of
+/// 0x3FF8000000000001: 0x3F on top, 0xF8 next, 0x01 at the bottom.
+#[test]
+fn a_double_bitcast_to_i64_keeps_its_bytes() {
+    let ir = module(
+        r#"@d = global double 0x3FF8000000000001
+define i8 @top() {
+  %x = load double, ptr @d
+  %i = bitcast double %x to i64
+  %t = lshr i64 %i, 56
+  %b = trunc i64 %t to i8
+  ret i8 %b
+}
+define i8 @mid() {
+  %x = load double, ptr @d
+  %i = bitcast double %x to i64
+  %t = lshr i64 %i, 48
+  %b = trunc i64 %t to i8
+  ret i8 %b
+}
+define i8 @bottom() {
+  %x = load double, ptr @d
+  %i = bitcast double %x to i64
+  %b = trunc i64 %i to i8
+  ret i8 %b
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert_eq!(exit_code_of(&text, "top"), 0x3F, "{text}");
+    assert_eq!(exit_code_of(&text, "mid"), 0xF8, "{text}");
+    assert_eq!(exit_code_of(&text, "bottom"), 0x01, "{text}");
+}
