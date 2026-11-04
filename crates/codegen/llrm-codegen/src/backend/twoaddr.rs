@@ -115,9 +115,17 @@ pub fn tied(
     // The pin's liveness: the intervals, whose ends are the kills
     // (`LiveIntervals`, TwoAddressInstructionPass.cpp#L394-L483).
     let facts = crate::twoaddress::BodyFacts::of(body);
-    let flags_out = crate::backend::peephole::_flags_live_out(body);
+    // Solved on the first instruction whose flags leave its block live-or-not:
+    // most bodies have no candidate for a three-address form.
+    let flags_out = std::cell::OnceCell::new();
     for (at, block) in body.blocks.iter().enumerate() {
-        let flags_dead_out = flags_out.entering.get(&block.at).is_some_and(crate::backend::lanes::Lanes::is_empty);
+        let flags_dead_out = || {
+            flags_out
+                .get_or_init(|| crate::backend::peephole::_flags_live_out(body))
+                .entering
+                .get(&block.at)
+                .is_some_and(crate::backend::lanes::Lanes::is_empty)
+        };
         let mut walk = crate::twoaddress::Commuter::sized(&facts, at, block.insns.len());
         let mut insns: Vec<Arc<Insn>> = Vec::with_capacity(block.insns.len() + block.insns.len() / 4);
         let mut work: Vec<Arc<Insn>> = block.insns.to_vec();
@@ -1690,6 +1698,23 @@ mod tests {
         super::ADDED.with(|count| count.set(0));
         let _ = super::_reused(&body);
         assert_eq!(super::ADDED.with(std::cell::Cell::get), 0);
+    }
+
+    /// The flags leaving every block were solved for each body (12.7 M Ir over
+    /// 221 bodies of memory_expansion) though only a three-address candidate
+    /// asks them.
+    #[test]
+    fn test_a_body_with_no_three_address_candidate_solves_no_flags() {
+        let body = LirBody::new(
+            "t",
+            0,
+            vec![LirBlock::new(0, vec![arrival(0, &[(1, RegId::EAX)])]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let before = crate::backend::peephole::flags_computed();
+        let _ = tied(&body, crate::twoaddress::ThreeAddress::All);
+        assert_eq!(crate::backend::peephole::flags_computed() - before, 0);
     }
 
     /// `_reused` kept where each value is read in a `BTreeSet` per value (2,862

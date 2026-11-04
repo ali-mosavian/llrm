@@ -725,13 +725,13 @@ pub fn flags_dead_after(
     index: usize,
     regs: llrm_lir::registers::Regs,
     bits: u32,
-    dead_out: bool,
+    dead_out: impl FnOnce() -> bool,
 ) -> bool {
     use crate::backend::precse::{Flags, flags_after};
     match flags_after(regs, bits, insns, index, false) {
         Flags::Read => false,
         Flags::Dead => true,
-        Flags::Out => dead_out,
+        Flags::Out => dead_out(),
     }
 }
 
