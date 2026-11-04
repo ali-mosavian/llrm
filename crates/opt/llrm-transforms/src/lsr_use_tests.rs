@@ -104,7 +104,27 @@ fn use_of(
         fixup.offset = Immediate(offset);
         lu.push_fixup(fixup);
     }
+    // A use in the loop; `a_use_after_the_loop_runs_its_adds_once` sets it.
+    lu.all_fixups_outside_loop = false;
     lu
+}
+
+/// z80 find: the exit value `i` of an 8-bit counter was taken from a second
+/// counter (regs 2, addrecs 2) because `base + i` and the `dec` after the loop
+/// were rated as adds of every trip (1 base add). A use whose fixups all lie
+/// after the loop runs its adds once, so they cost the loop nothing.
+#[test]
+fn a_use_after_the_loop_runs_its_adds_once() {
+    with_loop(|cx, se, a, b, header, _| {
+        let mut f = Formula { base_regs: vec![a, b], has_base_reg: true, ..Formula::default() };
+        f.canonicalize(se, header);
+        let mut after = use_of(Kind::Basic, &[0]);
+        let inside = rated(cx, se, header, &after, &f, &HashSet::default());
+        assert_eq!(inside.c.num_base_adds, 1, "in the loop the registers cost an add");
+        after.all_fixups_outside_loop = true;
+        let cost = rated(cx, se, header, &after, &f, &HashSet::default());
+        assert_eq!(cost.c.num_base_adds, 0, "after it they run once");
+    });
 }
 
 /// The loop's own recurrence is one register and one recurrence, and a start of

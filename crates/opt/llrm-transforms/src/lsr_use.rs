@@ -567,8 +567,14 @@ impl Cost {
         }
 
         // The unfolded adds inside the loop.
+        // DEVIATE LU12: the pin counts the adds of a use whose fixups all lie
+        // outside the loop as if they ran every trip; they run once, so they
+        // do not weigh against the formulae that share the loop's counter
+        // (z80 find: an exit value `i` taken from a second counter beat
+        // `base + i` and a `dec` after the loop).
+        let inside = !lu.all_fixups_outside_loop;
         let parts = f.num_regs();
-        if parts > 1 {
+        if parts > 1 && inside {
             // Not the base and a possible second register, if the target folds
             // two.
             let folded = f.scale != 0 && is_am_completely_folded(r.tti, lu, f);
@@ -582,7 +588,7 @@ impl Cost {
             && parts >= 2
             && r.tti.address_form_adds_offsets(narrowest_bits(r, lu, f))
             && r.tti.is_legal_addressing_mode(f.base_gv.is_some(), f.unfolded_offset.0, true, f.scale);
-        if !absorbed {
+        if !absorbed && inside {
             self.c.num_base_adds += u32::from(f.unfolded_offset.is_non_zero());
         }
 
@@ -611,6 +617,7 @@ impl Cost {
             }
             // The target may not support this offset for this instruction.
             if lu.kind == Kind::Address
+                && inside
                 && offset.is_non_zero()
                 && !is_am_completely_folded_at(
                     r.tti,
