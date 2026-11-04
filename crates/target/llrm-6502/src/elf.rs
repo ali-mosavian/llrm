@@ -441,6 +441,7 @@ pub fn object(
             definition: Definition::Defined { section: *at, offset: *offset },
             size: if public { end - offset } else { 0 },
             group: None,
+            visibility: Default::default(),
         });
     }
     let defined: HashMap<String, (usize, usize)> =
@@ -473,6 +474,7 @@ pub fn object(
                             definition: Definition::Undefined,
                             size: 0,
                             group: None,
+                            visibility: Default::default(),
                         });
                         symbols.len() - 1
                     },

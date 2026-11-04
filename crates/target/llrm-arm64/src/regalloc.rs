@@ -22,9 +22,9 @@
 //! docs/architecture/arm64-spike.md); it is not a translation.
 
 use std::collections::BTreeSet;
-use llrm_support::hash::{HashMap, HashSet};
 
 use llrm_codegen::model::lir::SrcLoc;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use crate::mc::inst::*;
 use crate::mc::visit::{Reg, RegRef, Role};
@@ -898,9 +898,16 @@ mod tests {
     #[test]
     fn a_spilled_value_used_at_once_is_not_reloaded() {
         let value = Reg::Gpr(Gpr(100));
-        let spilled = HashMap::from_iter([(value, 1)]);
+        let spilled = [(value, 1)].into_iter().collect::<HashMap<_, _>>();
         let mut function = function(vec![add(100, 0), add(1, 100)]);
-        rewrite(&mut function, &HashMap::default(), &spilled, &HashMap::default(), &HashSet::default(), &HashSet::default());
+        rewrite(
+            &mut function,
+            &HashMap::default(),
+            &spilled,
+            &HashMap::default(),
+            &HashSet::default(),
+            &HashSet::default(),
+        );
         assert_eq!(spill_loads(&function), 0, "{:?}", function.blocks[0].ops);
     }
 
@@ -909,9 +916,16 @@ mod tests {
     #[test]
     fn a_spilled_value_is_reloaded_after_a_call() {
         let value = Reg::Gpr(Gpr(100));
-        let spilled = HashMap::from_iter([(value, 1)]);
+        let spilled = [(value, 1)].into_iter().collect::<HashMap<_, _>>();
         let mut function = function(vec![add(100, 0), call(), add(1, 100)]);
-        rewrite(&mut function, &HashMap::default(), &spilled, &HashMap::default(), &HashSet::default(), &HashSet::default());
+        rewrite(
+            &mut function,
+            &HashMap::default(),
+            &spilled,
+            &HashMap::default(),
+            &HashSet::default(),
+            &HashSet::default(),
+        );
         assert_eq!(spill_loads(&function), 1, "{:?}", function.blocks[0].ops);
     }
 
@@ -921,9 +935,16 @@ mod tests {
     #[test]
     fn a_spilled_register_copied_to_itself_costs_nothing() {
         let value = Reg::Fpr(Vreg(100));
-        let spilled = HashMap::from_iter([(value, 1)]);
+        let spilled = [(value, 1)].into_iter().collect::<HashMap<_, _>>();
         let mut function = function(vec![Op::Copy { dst: value, src: value }]);
-        rewrite(&mut function, &HashMap::default(), &spilled, &HashMap::default(), &HashSet::default(), &HashSet::default());
+        rewrite(
+            &mut function,
+            &HashMap::default(),
+            &spilled,
+            &HashMap::default(),
+            &HashSet::default(),
+            &HashSet::default(),
+        );
         assert!(function.blocks[0].ops.is_empty(), "{:?}", function.blocks[0].ops);
     }
 

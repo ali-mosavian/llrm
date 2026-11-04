@@ -125,6 +125,17 @@ impl CombineHooks for Aarch64Lowering {
         true
     }
 
+    fn widened_unsigned_divide_type(
+        &self,
+        vt: EVT,
+    ) -> Option<EVT> {
+        (vt == EVT::I32).then_some(EVT::I64)
+    }
+
+    fn zero_extend_i32_to_i64_free(&self) -> bool {
+        true
+    }
+
     fn fold_xor_of_and_with_mask(&self) -> bool {
         true
     }
@@ -437,7 +448,6 @@ pub fn select_block(
     legal?;
     // `ComputeLiveOutVRegInfo`: after the legalizer, before the assertions go.
     llrm_codegen::backend::selectiondag::live_out::compute_live_out_vreg_info(dag, info);
-    llrm_codegen::backend::selectiondag::dag_select::remove_assertions(dag);
     let selector = Selector::new(table::TABLE);
     let mut hooks = super::hooks::Aarch64Hooks::new(globals.clone());
     do_instruction_selection_with(dag, &Aarch64Ids::new(), |adapter, node| {

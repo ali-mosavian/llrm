@@ -14,39 +14,52 @@ SHF_ALLOC, SHF_EXECINSTR = 0x2, 0x4
 SHT_NOBITS = 8
 
 
-def sections(body: bytes) -> list[tuple[str, int, int, int]]:
-    """(name, type, flags, size) of each section of a little-endian ELF64 object, from its section headers."""
+def headers(body: bytes) -> tuple[list[tuple[int, int, int, int, int]], int, int]:
+    """((name offset, type, flags, file offset, size) of each section header, the index of the name table, address bits) of a
+    little-endian ELF32 or ELF64 object."""
     import struct
 
+    if body[4] == 1:  # ELFCLASS32
+        shoff = struct.unpack_from("<I", body, 0x20)[0]
+        shentsize, shnum, shstrndx = struct.unpack_from("<HHH", body, 0x2E)
+        rows = [struct.unpack_from("<IIIIIIIIII", body, shoff + i * shentsize) for i in range(shnum)]
+        return [(h[0], h[1], h[2], h[4], h[5]) for h in rows], shstrndx, 32
     shoff = struct.unpack_from("<Q", body, 0x28)[0]
     shentsize, shnum, shstrndx = struct.unpack_from("<HHH", body, 0x3A)
-    headers = [struct.unpack_from("<IIQQQQIIQQ", body, shoff + i * shentsize) for i in range(shnum)]
-    names = headers[shstrndx][4]
+    rows = [struct.unpack_from("<IIQQQQIIQQ", body, shoff + i * shentsize) for i in range(shnum)]
+    return [(h[0], h[1], h[2], h[4], h[5]) for h in rows], shstrndx, 64
+
+
+def sections(body: bytes) -> list[tuple[str, int, int, int]]:
+    """(name, type, flags, size) of each section of a little-endian ELF32 or ELF64 object, from its section headers."""
+    rows, shstrndx, _ = headers(body)
+    names = rows[shstrndx][3]
 
     def name(at: int) -> str:
         return body[names + at : body.index(b"\0", names + at)].decode()
 
-    return [(name(h[0]), h[1], h[2], h[5]) for h in headers]
+    return [(name(h[0]), h[1], h[2], h[4]) for h in rows]
+
+
+def executable_sections(path) -> list[tuple[bytes, int]]:
+    """(bytes, address bits) of each executable section (SHF_EXECINSTR) of an ELF object."""
+    with open(path, "rb") as file:
+        body = file.read()
+    rows, _, bits = headers(body)
+    return [(body[h[3] : h[3] + h[4]], bits) for h in rows if h[2] & SHF_EXECINSTR and h[1] != SHT_NOBITS]
 
 
 def executable_contents(path) -> list[bytes]:
-    """The bytes of each executable section of an ELF64 object (SHF_EXECINSTR)."""
-    import struct
-
-    with open(path, "rb") as file:
-        body = file.read()
-    shoff = struct.unpack_from("<Q", body, 0x28)[0]
-    shentsize, shnum = struct.unpack_from("<HH", body, 0x3A)
-    headers = [struct.unpack_from("<IIQQQQIIQQ", body, shoff + i * shentsize) for i in range(shnum)]
-    return [body[h[4] : h[4] + h[5]] for h in headers if h[2] & SHF_EXECINSTR and h[1] != SHT_NOBITS]
+    """The bytes of each executable section of an ELF object (SHF_EXECINSTR)."""
+    return [content for content, _ in executable_sections(path)]
 
 
 def code_size(path, padding) -> tuple[int, int, int]:
     """(code bytes without alignment padding, the padding, bytes that start no instruction) of the object's executable sections; `padding(content, bits)` is sizes.padding,
-    each section read from its own start (its alignment is the section's)."""
+    each section read from its own start (its alignment is the section's) as 32- or 64-bit code, whichever the object is."""
     code = align = unread = 0
-    for content in executable_contents(path):
-        found, skipped = padding(content, 64)
+    for content, bits in executable_sections(path):
+        found, skipped = padding(content, bits)
         code += len(content) - found
         align += found
         unread += skipped

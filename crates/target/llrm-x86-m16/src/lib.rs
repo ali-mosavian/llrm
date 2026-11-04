@@ -615,6 +615,7 @@ mod tuning_tests {
                 max_stores_per_memmove_opt_size: 4,
                 size_milliclocks_per_byte: 0,
                 multiply_by_clocks: false,
+                price_pin_multiplies: false,
                 speed_milliclocks_per_byte: 0,
                 unroll_threshold: None,
                 unroll_max_percent_threshold_boost: None,
@@ -623,7 +624,7 @@ mod tuning_tests {
                 unswitch_threshold: None,
                 inline_threshold: None,
                 split_merged_conditions: false,
-                inline_size_guard_at_speed: false,
+                inline_size_guard_at_size: false,
                 keep_constant_displacements: false,
                 ..table
             },

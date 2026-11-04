@@ -136,6 +136,8 @@ pub struct Inst {
     /// Names a scope marker (`BLOCK`, `LOOP` and their ends) while CFGStackify
     /// works; 0 for any other.
     pub tag: u32,
+    /// The source line the instruction came from; 0 for none.
+    pub line: u32,
 }
 
 impl Inst {
@@ -143,7 +145,7 @@ impl Inst {
         opcode: u16,
         operands: &[Operand],
     ) -> Inst {
-        Inst { opcode, operands: operands.to_vec(), mem: None, tag: 0 }
+        Inst { opcode, operands: operands.to_vec(), mem: None, tag: 0, line: 0 }
     }
 
     pub fn with_mem(
@@ -250,15 +252,31 @@ pub struct Function {
     pub personality: bool,
     /// The callees that never throw (`Function::doesNotThrow`, and the
     /// libcalls `mayThrow` lists).
-    pub nothrow: llrm_support::hash::HashSet<String>,
+    pub nothrow: std::sync::Arc<llrm_support::hash::HashSet<String>>,
     /// What each callee does to memory, as `(reads, writes)`: `memory(...)`,
     /// `readnone` and `readonly` of the module's functions.
-    pub callee_memory: llrm_support::hash::HashMap<String, (bool, bool)>,
+    pub callee_memory: std::sync::Arc<llrm_support::hash::HashMap<String, (bool, bool)>>,
     /// The register holding the incoming stack pointer (`SP32`), when the
     /// prologue made one.
     pub sp: Option<VReg>,
+    /// `-g`: the variables whose home is a stack object.
+    pub variables: Vec<Variable>,
+    /// `-g`: the (metadata record, argument number) of each variable the IR
+    /// says is an argument.
+    pub argument_variables: Vec<(u32, u32)>,
     pub(crate) vregs: Vec<ValType>,
     stackified: Vec<bool>,
+}
+
+/// A source variable kept in a stack object.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Variable {
+    /// Its record in the module's metadata.
+    pub record: u32,
+    /// The frame index of the object.
+    pub frame: i32,
+    /// Its offset from the stack pointer once the frame is lowered.
+    pub disp: i64,
 }
 
 impl Function {

@@ -78,8 +78,17 @@ OURS_BASIC = ("bq16", "bq32")
 FLAT = "bq32"
 LOADERS: dict[Path, tuple[Path, ...]] = {}  # an exe -> the files that must sit beside it (DOS/32A)
 COUNTERS = ("instructions", "memory_operands")
+# A kernel that runs fewer instructions than this was folded to a constant (`mov eax, imm; ret` is 2): its row measures the compiler's
+# folding, not the kernel, and a column of such rows reads as an 8x-70x gap against languages that ran the work.
+FOLDED_BELOW = 8
 # Bytes of the program's own object (tools/sizes.py): code, initialised data, uninitialised data. Gated like the counters.
 SIZES = ("code_bytes", "data_bytes", "bss_bytes")
+JUDGED_SIZES = ("code_bytes", "data_bytes", "static_bytes")  # bss is judged through the footprint (data + bss), not alone
+
+
+def with_footprint(row: dict) -> dict:
+    """The row with `static_bytes` = data + bss: a zero table moved from data to bss shrinks the image and leaves the footprint."""
+    return {**row, "static_bytes": row["data_bytes"] + row["bss_bytes"]} if "data_bytes" in row and "bss_bytes" in row else row
 # DOSBox at a fixed 75000 cycles per millisecond: RDTSC cycles / 75000 is milliseconds, the same on any host.
 TIMING_CONF = dosbatch.CONF.replace(dosbatch.CYCLES, "cycles=fixed 75000")
 CYCLES_PER_MS = 75_000
@@ -201,12 +210,16 @@ def compile_flags(variant: Variant, opt: str, kept: bool = False) -> list[str]:
     flags = [f"-{opt}", *([] if kept else ["-fno-inline-functions"]), *os.environ.get("LLRM_BENCH_FLAGS", "").split()]
     if variant.language in (*BASIC_LANGUAGES, *OURS_BASIC):
         flags.append("-fno-inline-functions-called-once")
+        # The program is this module: only the kernel is linked to from outside (as a C helper is `static`), so the rest is internal, near, by value.
+        # Not on the flat target: there every call is near already, and queens (+6% instructions) and four more cells came out worse.
+        if variant.language != FLAT:
+            flags += ["--whole-program", "--export", variant.region]
     return flags
 
 
-def nib_flags() -> list[str]:
-    """What nib-build.sh is given for a Nib benchmark's compile."""
-    return ["-fno-inline-functions", "-fno-inline-functions-called-once", *os.environ.get("LLRM_BENCH_FLAGS", "").split()]
+def nib_flags(variant: Variant) -> list[str]:
+    """What nib-build.sh is given for a Nib benchmark's compile: only the kernel stays a call, helpers inline as they do in the C twin."""
+    return [f"-fno-inline={variant.region}", *os.environ.get("LLRM_BENCH_FLAGS", "").split()]
 
 
 def compiles(variant: Variant, opt: str, work: Path, stem: str) -> list[tuple[str, list[str], Path]]:
@@ -215,7 +228,7 @@ def compiles(variant: Variant, opt: str, work: Path, stem: str) -> list[tuple[st
     nib-build.sh gives llrm-nib; its runtime and foreign parts do not depend on the program."""
     obj = work / f"{stem}.obj"
     if variant.language == "nib":
-        return [("llrm-nib", [str(variant.source), "-o", str(obj), f"-{opt}", "--procedure-segments", *nib_flags()], obj)]
+        return [("llrm-nib", [str(variant.source), "-o", str(obj), f"-{opt}", "--procedure-segments", *nib_flags(variant)], obj)]
     if variant.language == FLAT:
         source = qbbuild.flat_source(variant.source)
         return [("llrm-qb", qbbuild.compile_arguments(source, (*compile_flags(variant, opt), "-g"), qbbuild.FLAT, obj), obj)]
@@ -249,7 +262,7 @@ def build(variant: Variant, opt: str, work: Path, stem: str, objects: dict | Non
             exe = work / f"{stem}.exe"
             extras = nib_extras(variant.source)
             done = cpulimit.run([str(ROOT / "tools" / "nib-build.sh"), str(variant.source), str(exe), f"-{opt}", *extras], 300, capture_output=True, text=True,
-                                env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(nib_flags())})
+                                env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(nib_flags(variant))})
             return (exe, listing) if done.returncode == 0 and exe.exists() else "build: " + (done.stderr or done.stdout).strip()[-300:]
         if variant.language == FLAT:
             # -g: the function's length, from the image's CodeView, is where the kernel's count ends (the map has none); the code is the same
@@ -303,9 +316,10 @@ def link_basic(objs: dict[str, tuple[Path, str]], work: Path) -> dict[str, str]:
 
 def code_fields(obj: Path) -> dict:
     """The object's code bytes without alignment padding, the padding apart (`align_bytes`, reported not gated), and why the padding could
-    not be told where the code is counted whole (`align_unread` bytes, printed by `align_lines`)."""
+    not be told where the code is counted whole (`align_unread` bytes, printed by `align_lines`). `lib_bytes`, reported not gated, is the
+    standard library's functions in the object, which `code_bytes` leaves out; absent where the object has none (C's I/O is extern)."""
     size = sizes.code_size(obj)
-    return {"code_bytes": size.code, "align_bytes": size.align, **({"align_unread": size.unread} if size.unread else {})}
+    return {"code_bytes": size.code, "align_bytes": size.align, **({"align_unread": size.unread} if size.unread else {}), **({"lib_bytes": size.library} if size.library else {})}
 
 
 def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
@@ -334,6 +348,8 @@ def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
     data, bss = sizes.data_bytes(obj)
     if result.region is None:  # main prints the kernel's value without calling it (the call folded to a constant): a folded row, not a failed one
         return {"instructions": 0, **code_fields(obj), "data_bytes": data, "bss_bytes": bss}
+    if result.region.instructions < FOLDED_BELOW:
+        return {"error": f"unmeasured: kernel folded away: {region} ran {result.region.instructions} instructions (a kernel that did its work runs {FOLDED_BELOW} or more)"}
     return {"instructions": result.region.instructions, "memory_operands": result.region.memory_operands, "clocks": result.region.clocks, **code_fields(obj), "data_bytes": data, "bss_bytes": bss}
 
 
@@ -794,6 +810,7 @@ def against(label: str, got: dict, want: dict | None, waived: list[dict] = (), r
         return [f"{label}: INVALID BASE: the base kernel executed 0 instructions (folded or never run), nothing to compare with"]
     if got.get("instructions") == 0 and want.get("instructions") and "error" not in got:  # the kernel never ran: not a win
         return [f"{label}: INVALID: the kernel executed 0 instructions (inlined or folded into the harness); base {want['instructions']}"]
+    got, want = with_footprint(got), with_footprint(want)
     problems = []
     priced = rate > 0 and all(one in got and one in want for one in ("clocks", "code_bytes"))
     if priced:
@@ -802,7 +819,7 @@ def against(label: str, got: dict, want: dict | None, waived: list[dict] = (), r
             problems.append(f"{label}: {clocks:+d} clocks {size:+d} code bytes at {rate} milliclocks/byte is worse")
     timed = not priced and all(one in side for one in ("clocks", "code_bytes") for side in (got, want))
     tied = timed and got["clocks"] == want["clocks"] and got["code_bytes"] == want["code_bytes"]
-    for counter in (*COUNTERS, "clocks", *SIZES):
+    for counter in (*COUNTERS, "clocks", *JUDGED_SIZES):
         if counter not in got:
             continue
         if counter not in want:
@@ -834,7 +851,8 @@ def ratio_problems(label: str, reference: str, got: dict, want: dict, ref: dict,
     a waiver excuses (its row, counter and this count) is excused here too: the ratio is the count over a constant, so a waived count
     always moved it and no waiver on a row with references could pass."""
     problems = []
-    for counter in (*COUNTERS, *SIZES, "kernel_ms"):
+    got, want, ref = with_footprint(got), with_footprint(want), with_footprint(ref)
+    for counter in (*COUNTERS, *JUDGED_SIZES, "kernel_ms"):
         if any(w["label"] == label and w["counter"] == counter and w["to"] == got.get(counter) for w in waived):
             continue
         if all(counter in one for one in (got, want, ref)) and ref[counter] > 0:
@@ -933,6 +951,16 @@ def clock_lines(measured: dict, selected: list[str]) -> list[str]:
         elif name in selected and language in (*LANGUAGES, *BASIC_LANGUAGES) and "clocks" in got:
             lines.append(f"{name} {language} -{opt}: {got['clocks']} clocks, {got['instructions']} instructions" + (f", {got['memory_operands']} memory operands" if "memory_operands" in got else ""))
     return lines
+
+
+def fold_lines(measured: dict) -> list[str]:
+    """Warnings, not failures: a Nib cell that executed under half of its C twin's instructions. Same algorithm, so the kernel's work folded away
+    (lru read 39 against C's 133 once its helpers inlined: an internal kernel, constant argument, local cache)."""
+    return [
+        f"SUSPECT-FOLD {name} nib -{opt}: {got['instructions']} instructions against C's {twin['instructions']}"
+        for (name, language, opt), got in sorted(measured.items())
+        if language == "nib" and (twin := measured.get((name, "c", opt))) and got.get("instructions") is not None and twin.get("instructions") and got["instructions"] * 2 < twin["instructions"]
+    ]
 
 
 def align_lines(measured: dict) -> list[str]:
@@ -1200,6 +1228,7 @@ def main() -> int:
         print("SKIP", why)
     print(*standing(measured, args.select, args.opt), sep="\n")
     print(*align_lines(measured), sep="\n")
+    print(*fold_lines(measured), sep="\n")
     if args.select:
         print(*clock_lines(measured, args.select), sep="\n")
     stale = [] if args.select else basecounts.judge(measured, base, basecounts.waivers(), same)[2]  # a selection leaves the other rows' waivers unused

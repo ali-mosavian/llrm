@@ -40,8 +40,6 @@
 //! `ConvertTruncs`; here only an integer constant is folded, anything else
 //! gets the instruction. Exit: none.
 
-use llrm_support::hash::HashSet;
-
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
@@ -51,6 +49,7 @@ use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, Loops, PreservedAnalyses};
 use llrm_mir::tti::Tti;
 use llrm_mir::types::{FloatKind, Type, TypeId};
+use llrm_support::hash::HashSet;
 
 /// The widths an integer may be promoted to, narrowest first.
 const WIDTHS: [u32; 5] = [8, 16, 32, 64, 128];
