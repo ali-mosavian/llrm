@@ -19,7 +19,9 @@ fn sources(
     for entry in fs::read_dir(dir).unwrap().flatten() {
         let path = entry.path();
         if path.is_dir() {
-            if path.file_name().is_some_and(|name| name != "target") {
+            // Cargo's own build directory only: `crates/target/` holds the
+            // target-description crates (arm64, m68k, 6502, wasm, z80).
+            if path != Path::new(ROOT).join("target") {
                 sources(&path, out);
             }
         } else if path.extension().is_some_and(|ext| ext == "rs") {

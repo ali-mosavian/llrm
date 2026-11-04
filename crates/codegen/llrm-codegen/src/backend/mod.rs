@@ -203,6 +203,7 @@ pub mod edges;
 pub mod fixupbw;
 pub mod fixupleas;
 pub mod fixupsetcc;
+pub mod maskbyand;
 pub mod flagscopy;
 pub mod incremental;
 pub mod intbits;
