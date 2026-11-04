@@ -13,8 +13,14 @@ fn unrolled(module: &mut Module) -> bool {
     crate::loopsimplify::simplified(function);
     crate::lcssa::closed(function).expect("closes");
     let tti = X86::of_cpu("i486").expect("a cpu");
-    let options =
-        Options { opt_level: 2, opt_size: false, min_size: false, only_when_forced: false, prepare_for_lto: false };
+    let options = Options {
+        opt_level: 2,
+        opt_size: false,
+        min_size: false,
+        only_when_forced: false,
+        prepare_for_lto: false,
+        target_unrolling: false,
+    };
     unroll_function(module, "f", &tti, options).expect("unrolls")
 }
 
@@ -188,8 +194,14 @@ b2:
     let function = module.function_mut("f").expect("@f").1;
     assert!(crate::loopsimplify::simplified(&mut function.clone()), "the input is in simplified form already");
     let tti = X86::of_cpu("i486").expect("a cpu");
-    let options =
-        Options { opt_level: 2, opt_size: false, min_size: false, only_when_forced: false, prepare_for_lto: false };
+    let options = Options {
+        opt_level: 2,
+        opt_size: false,
+        min_size: false,
+        only_when_forced: false,
+        prepare_for_lto: false,
+        target_unrolling: false,
+    };
     assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"), "{}", printed(&module));
     assert_eq!(results(&module, &[&[1, 0], &[1, 1], &[-3, 7]]), results(&before, &[&[1, 0], &[1, 1], &[-3, 7]]));
 }
@@ -307,6 +319,7 @@ fn a_full_unroll_hands_over_the_loops_it_made() {
             opt_level: 2,
             opt_size: false,
             only_when_forced: false,
+            target_unrolling: false,
             created: std::rc::Rc::clone(&created),
         },
     );
@@ -329,6 +342,7 @@ fn a_full_unroll_hands_over_the_inner_loop_of_its_first_trip() {
             opt_level: 2,
             opt_size: false,
             only_when_forced: false,
+            target_unrolling: false,
             created: std::rc::Rc::clone(&created),
         },
     );
@@ -461,8 +475,14 @@ exit:
     crate::loopsimplify::simplified(function);
     crate::lcssa::closed(function).expect("closes");
     let tti = X86::of_cpu("i486").expect("a cpu");
-    let options =
-        Options { opt_level: 3, opt_size: false, min_size: false, only_when_forced: false, prepare_for_lto: false };
+    let options = Options {
+        opt_level: 3,
+        opt_size: false,
+        min_size: false,
+        only_when_forced: false,
+        prepare_for_lto: false,
+        target_unrolling: false,
+    };
     assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"));
     let after = printed(&module);
     assert_eq!(results(&module, inputs), before, "{after}");

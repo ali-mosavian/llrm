@@ -40,6 +40,13 @@
 //!     run's base. The pass `Unit` carries no module globals, so a callee's own
 //!     attributes are not seen either. Sound, merges less. Owner: w2. Exit:
 //!     2026-11-21, with deviation 38's `AliasQuery`.
+//! 42. `tryToRecognizeTableBasedCttz` marks the select it makes for a table
+//!     whose zero entry is not the width with unlikely branch weights; MIR has
+//!     no `!prof` on a select here, so none is set. Owner: w2. Exit:
+//!     2026-11-21, with select weights.
+//! 43. `tryToRecognizeTableBasedLog2` asks the target's `getIntrinsicInstrCost`
+//!     for `ctlz`; a pass run with no `tti` has no answer and does not fold.
+//!     Owner: w2. Exit: 2026-11-21.
 //!
 //! # Example
 //! The pair above is one `load i16`; see `aggressive_instcombine_tests.rs`.
@@ -101,7 +108,9 @@ impl FunctionPass for AggressiveInstCombine {
             .filter(|&block| shape.dominance.tree(unit.function).is_reachable_from_entry(block))
             .collect();
         drop(shape);
-        let folded = fold_unusual_patterns(unit, &reachable);
+        let outer = std::rc::Rc::clone(analyses.outer());
+        let tti = outer.target().tti();
+        let folded = fold_unusual_patterns(unit, &reachable, &outer.globals, tti.as_deref());
         if truncs.are_all_preserved() && !folded {
             return PreservedAnalyses::all();
         }
@@ -115,6 +124,8 @@ impl FunctionPass for AggressiveInstCombine {
 fn fold_unusual_patterns(
     unit: &mut Unit,
     reachable: &IdSet<BlockId>,
+    globals: &[llrm_mir::module::GlobalValue],
+    tti: Option<&dyn llrm_mir::tti::Tti>,
 ) -> bool {
     let mut changed = false;
     let blocks: Vec<BlockId> =
@@ -125,6 +136,15 @@ fn fold_unusual_patterns(
         let insts: Vec<InstId> = unit.function.iter_block(block).collect();
         for &inst in insts.iter().rev() {
             changed |= try_to_recognize_pop_count(unit.context, unit.layout, unit.function, unit.declared, inst);
+            changed |= try_to_recognize_table_based_patterns(
+                unit.context,
+                unit.layout,
+                unit.function,
+                unit.declared,
+                globals,
+                tti,
+                inst,
+            );
             changed |= fold_consecutive_loads(unit.context, unit.layout, unit.function, inst);
         }
         // Done separately to scan the stores once.
@@ -819,6 +839,482 @@ fn try_to_recognize_pop_count(
     };
     replace_with_pop_count(context, function, declared, inst, root);
     true
+}
+
+
+/// `isCTTZTable`
+/// ([:887](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L887)):
+/// every one-bit input, through the multiply, the shift and the mask, indexes
+/// the table at its own bit position.
+#[allow(clippy::too_many_arguments)]
+fn is_cttz_table(
+    context: &llrm_mir::context::Context,
+    layout: &DataLayout,
+    table: llrm_mir::context::ConstantId,
+    mul: u128,
+    shift: u128,
+    and_mask: u128,
+    access: TypeId,
+    input_bits: u32,
+    scale: u128,
+) -> bool {
+    let all = if input_bits == 128 { u128::MAX } else { (1u128 << input_bits) - 1 };
+    (0..input_bits).all(|at| {
+        let index = ((1u128 << at).wrapping_mul(mul) & all).checked_shr(shift as u32).unwrap_or(0) & and_mask;
+        let offset = index.wrapping_mul(scale) & all;
+        llrm_mir::constantfolding::constant_fold_load_from_const(context, layout, table, access, offset as u64)
+            .and_then(|folded| match context.get(folded).kind {
+                ConstantKind::Int(bits) => Some(bits),
+                _ => None,
+            })
+            == Some(u128::from(at))
+    })
+}
+
+/// A load from a constant global table at one variable index: what the three
+/// table recognizers share (`tryToRecognizeTableBasedPatterns`
+/// ([:1329](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L1329))).
+struct TableLoad {
+    result: llrm_mir::module::ValueId,
+    access: TypeId,
+    initializer: llrm_mir::context::ConstantId,
+    index: Operand,
+    scale: u128,
+}
+
+fn match_table_load(
+    context: &llrm_mir::context::Context,
+    layout: &DataLayout,
+    function: &Function,
+    globals: &[llrm_mir::module::GlobalValue],
+    inst: InstId,
+) -> Option<TableLoad> {
+    use llrm_mir::module::GlobalKind;
+    let q = query(context, layout, function);
+    let instruction = function.instruction(inst);
+    let (Opcode::Load { volatile: false, .. }, Some(result)) = (&instruction.opcode, instruction.result) else {
+        return None;
+    };
+    let access = instruction.ty;
+    context.types.int_bits(access)?;
+    let (_, gep) = q.instruction_of(instruction.operands[0])?;
+    let Opcode::GetElementPtr { source } = gep.opcode else { return None };
+    if !gep.flags.contains(Flags::NUSW) && !gep.flags.contains(Flags::INBOUNDS) {
+        return None;
+    }
+    let Operand::Constant(base) = gep.operands[0] else { return None };
+    let ConstantKind::Global(table) = context.get(base).kind else { return None };
+    let GlobalKind::Variable(variable) = &globals.get(table.0 as usize)?.kind else { return None };
+    let (true, Some(initializer)) = (variable.constant, variable.initializer) else { return None };
+    let indices: Vec<Option<i128>> =
+        gep.operands[1..].iter().map(|&index| q.int_constant(index).map(|(bits, _)| bits as i128)).collect();
+    let (constant, variable_indices) = layout.collect_offset(&context.types, source, &indices);
+    let [(at, scale)] = variable_indices[..] else { return None };
+    if constant != 0 {
+        return None;
+    }
+    // `m_CastOrSelf`: the index may be extended or truncated.
+    let mut index = gep.operands[1 + at];
+    if let Some((_, cast)) = q.instruction_of(index)
+        && matches!(cast.opcode, Opcode::Cast(CastOp::ZExt | CastOp::SExt | CastOp::Trunc))
+    {
+        index = cast.operands[0];
+    }
+    Some(TableLoad { result, access, initializer, index, scale: u128::from(scale) })
+}
+
+fn low_mask(bits: u32) -> u128 {
+    if bits == 128 { u128::MAX } else { (1u128 << bits) - 1 }
+}
+
+/// `isLog2Table`
+/// ([:1098](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L1098)):
+/// the run of `at + 1` low ones indexes the table at `at`, and zero at 0.
+fn is_log2_table(
+    context: &llrm_mir::context::Context,
+    layout: &DataLayout,
+    table: llrm_mir::context::ConstantId,
+    mul: u128,
+    shift: u128,
+    access: TypeId,
+    input_bits: u32,
+    scale: u128,
+) -> bool {
+    let all = low_mask(input_bits);
+    let found = (0..input_bits).all(|at| {
+        let index = (low_mask(at + 1).wrapping_mul(mul) & all).checked_shr(shift as u32).unwrap_or(0);
+        let offset = index.wrapping_mul(scale) & all;
+        llrm_mir::constantfolding::constant_fold_load_from_const(context, layout, table, access, offset as u64)
+            .and_then(|folded| match context.get(folded).kind {
+                ConstantKind::Int(bits) => Some(bits),
+                _ => None,
+            })
+            == Some(u128::from(at))
+    });
+    // An input of zero selects index 0.
+    found && (mul & all).checked_shr(shift as u32).unwrap_or(0) == 0
+}
+
+/// Call `name(args...)` with `ret` before `inst`; its value.
+fn call_intrinsic_before(
+    context: &mut llrm_mir::context::Context,
+    function: &mut Function,
+    declared: &mut llrm_mir::passes::Declared,
+    inst: InstId,
+    name: &str,
+    ret: TypeId,
+    mut args: Vec<Operand>,
+    parameters: Vec<TypeId>,
+) -> Operand {
+    let function_type = context.types.intern(Type::Function { returns: ret, parameters, variadic: false });
+    let callee = declared.declare(name, function_type);
+    let pointer = context.types.ptr(0);
+    let callee = Operand::Constant(context.constant(Constant { ty: pointer, kind: ConstantKind::Global(callee) }));
+    let info = CallInfo {
+        function_type,
+        calling_convention: 0,
+        return_attrs: Vec::new(),
+        argument_attrs: vec![Vec::new(); args.len()],
+        attrs: Vec::new(),
+        tail: Tail::default(),
+    };
+    args.push(callee);
+    let call = function.create_instruction(Opcode::Call(Box::new(info)), ret, args, Flags::default(), None);
+    function.insert(call, Position::Before(inst)).expect("a placed instruction");
+    Operand::Value(function.instruction(call).result.expect("a value"))
+}
+
+/// `CreateZExtOrTrunc` before `inst`.
+fn zext_or_trunc_before(
+    context: &llrm_mir::context::Context,
+    function: &mut Function,
+    inst: InstId,
+    value: Operand,
+    from_bits: u32,
+    to: TypeId,
+) -> Operand {
+    let to_bits = context.types.int_bits(to).expect("an integer");
+    if to_bits == from_bits {
+        return value;
+    }
+    let op = if to_bits > from_bits { CastOp::ZExt } else { CastOp::Trunc };
+    let cast = function.create_instruction(Opcode::Cast(op), to, vec![value], Flags::default(), None);
+    function.insert(cast, Position::Before(inst)).expect("a placed instruction");
+    Operand::Value(function.instruction(cast).result.expect("a value"))
+}
+
+/// `tryToRecognizeTableBasedCttz`
+/// ([:966](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L966)):
+/// a load from a constant table at `((x & -x) * mul) >> shift` is `cttz x`.
+fn try_to_recognize_table_based_cttz(
+    context: &mut llrm_mir::context::Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    declared: &mut llrm_mir::passes::Declared,
+    inst: InstId,
+    load: &TableLoad,
+) -> bool {
+    use llrm_mir::valuetracking::pattern;
+    let (x, x_ty, input_bits, zero_elem, defined_for_zero) = {
+        let q = query(context, layout, function);
+        // `((x & -x) * mul) >> shift`, or that masked.
+        let mut and_mask = None;
+        let mut lshr = load.index;
+        if let Some((_, _, a, b)) = pattern::binary(&q, load.index, BinaryOp::And)
+            && let Some((bits, _)) = q.int_constant(b)
+            && pattern::binary(&q, a, BinaryOp::LShr).is_some()
+        {
+            and_mask = Some(bits);
+            lshr = a;
+        }
+        let Some((_, _, product, shift)) = pattern::binary(&q, lshr, BinaryOp::LShr) else { return false };
+        let Some((shift, _)) = q.int_constant(shift) else { return false };
+        let Some((_, _, isolate, mul)) = pattern::binary(&q, product, BinaryOp::Mul) else { return false };
+        let Some((mul, _)) = q.int_constant(mul) else { return false };
+        // `x & -x`, in either order.
+        let Some((_, _, left, right)) = pattern::binary(&q, isolate, BinaryOp::And) else { return false };
+        let negated = |neg: Operand, x: Operand| {
+            pattern::binary(&q, neg, BinaryOp::Sub)
+                .is_some_and(|(_, _, zero, minus)| q.int_constant(zero).is_some_and(|(bits, _)| bits == 0) && minus == x)
+        };
+        let x = if negated(left, right) {
+            right
+        } else if negated(right, left) {
+            left
+        } else {
+            return false;
+        };
+        let Some(x_ty) = q.type_of(x) else { return false };
+        let Some(input_bits) = context.types.int_bits(x_ty) else { return false };
+        if !matches!(input_bits, 16 | 32 | 64 | 128) || load.scale > low_mask(input_bits) {
+            return false;
+        }
+        if !is_cttz_table(
+            context,
+            layout,
+            load.initializer,
+            mul,
+            shift,
+            and_mask.unwrap_or(low_mask(input_bits)),
+            load.access,
+            input_bits,
+            load.scale,
+        ) {
+            return false;
+        }
+        let Some(zero_elem) =
+            llrm_mir::constantfolding::constant_fold_load_from_const(context, layout, load.initializer, load.access, 0)
+        else {
+            return false;
+        };
+        let ConstantKind::Int(zero_bits) = context.get(zero_elem).kind else { return false };
+        (x, x_ty, input_bits, zero_elem, zero_bits == u128::from(input_bits))
+    };
+    let i1 = context.types.int(1);
+    let flag = Operand::Constant(context.int(i1, i128::from(!defined_for_zero)));
+    let cttz = call_intrinsic_before(
+        context,
+        function,
+        declared,
+        inst,
+        &format!("llvm.cttz.i{input_bits}"),
+        x_ty,
+        vec![x, flag],
+        vec![x_ty, i1],
+    );
+    let mut value = zext_or_trunc_before(context, function, inst, cttz, input_bits, load.access);
+    if !defined_for_zero {
+        // The table's own element for zero; the pin marks this select's
+        // branch unlikely (DEVIATE 42).
+        value = select_zero_before(context, function, inst, x, x_ty, load.access, zero_elem, value);
+    }
+    function.replace_all_uses_with(load.result, value);
+    true
+}
+
+/// `x == 0 ? zero : value` before `inst`.
+fn select_zero_before(
+    context: &mut llrm_mir::context::Context,
+    function: &mut Function,
+    inst: InstId,
+    x: Operand,
+    x_ty: TypeId,
+    access: TypeId,
+    zero: llrm_mir::context::ConstantId,
+    value: Operand,
+) -> Operand {
+    let i1 = context.types.int(1);
+    let zero_x = Operand::Constant(context.int(x_ty, 0));
+    let cmp = function.create_instruction(
+        Opcode::ICmp(llrm_mir::opcode::IntPredicate::Eq),
+        i1,
+        vec![x, zero_x],
+        Flags::default(),
+        None,
+    );
+    function.insert(cmp, Position::Before(inst)).expect("a placed instruction");
+    let cond = Operand::Value(function.instruction(cmp).result.expect("a value"));
+    let select = function.create_instruction(
+        Opcode::Select,
+        access,
+        vec![cond, Operand::Constant(zero), value],
+        Flags::default(),
+        None,
+    );
+    function.insert(select, Position::Before(inst)).expect("a placed instruction");
+    Operand::Value(function.instruction(select).result.expect("a value"))
+}
+
+/// `tryToRecognizeTableBasedLog2`
+/// ([:1130](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L1130)):
+/// a load from a constant table at `(smear(x) * mul) >> shift`, or with the
+/// top bit isolated by `v - (v >> 1)`, is `bits - 1 - ctlz x`.
+///
+/// DEVIATE 43: no target `tti` is no `ctlz` cost, so no fold. Owner: w2.
+/// Exit: 2026-11-21.
+fn try_to_recognize_table_based_log2(
+    context: &mut llrm_mir::context::Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    declared: &mut llrm_mir::passes::Declared,
+    tti: Option<&dyn llrm_mir::tti::Tti>,
+    inst: InstId,
+    load: &TableLoad,
+) -> bool {
+    use llrm_mir::valuetracking::pattern;
+    let (mut x, x_ty, input_bits, zero_elem, isolated) = {
+        let q = query(context, layout, function);
+        let Some((_, _, product, shift)) = pattern::binary(&q, load.index, BinaryOp::LShr) else { return false };
+        let Some((shift, _)) = q.int_constant(shift) else { return false };
+        let Some((_, _, mut x, mul)) = pattern::binary(&q, product, BinaryOp::Mul) else { return false };
+        let Some((mul, _)) = q.int_constant(mul) else { return false };
+        // The most significant bit isolated first: `v - (v >> 1)`.
+        let mut isolated = false;
+        if let Some((_, _, v, half)) = pattern::binary(&q, x, BinaryOp::Sub)
+            && let Some((_, _, v2, one)) = pattern::binary(&q, half, BinaryOp::LShr)
+            && v2 == v
+            && q.int_constant(one).is_some_and(|(bits, _)| bits == 1)
+        {
+            isolated = true;
+            x = v;
+        }
+        let Some(x_ty) = q.type_of(x) else { return false };
+        let Some(input_bits) = context.types.int_bits(x_ty) else { return false };
+        if !matches!(input_bits, 16 | 32 | 64 | 128) || shift != u128::from(input_bits - input_bits.ilog2()) {
+            return false;
+        }
+        // The or cascade: `v | v >> 64`, ..., `v | v >> 1`.
+        let mut amount = input_bits / 2;
+        while amount != 0 {
+            let Some((_, _, a, b)) = pattern::binary(&q, x, BinaryOp::Or) else { return false };
+            let step = |shifted: Operand, y: Operand| {
+                pattern::binary(&q, shifted, BinaryOp::LShr).is_some_and(|(_, _, base, by)| {
+                    base == y && q.int_constant(by).is_some_and(|(bits, _)| bits == u128::from(amount))
+                })
+            };
+            x = if let Some((_, _, base, _)) = pattern::binary(&q, a, BinaryOp::LShr).filter(|_| step(a, b)) {
+                let _ = base;
+                b
+            } else if step(b, a) {
+                a
+            } else {
+                return false;
+            };
+            amount /= 2;
+        }
+        if load.scale > low_mask(input_bits) {
+            return false;
+        }
+        let table_ok = if isolated {
+            is_cttz_table(
+                context,
+                layout,
+                load.initializer,
+                mul,
+                shift,
+                low_mask(input_bits),
+                load.access,
+                input_bits,
+                load.scale,
+            )
+        } else {
+            is_log2_table(context, layout, load.initializer, mul, shift, load.access, input_bits, load.scale)
+        };
+        if !table_ok {
+            return false;
+        }
+        let Some(zero_elem) =
+            llrm_mir::constantfolding::constant_fold_load_from_const(context, layout, load.initializer, load.access, 0)
+        else {
+            return false;
+        };
+        (x, x_ty, input_bits, zero_elem, isolated)
+    };
+    let _ = isolated;
+    // The target needs an efficient ctlz (a lzcnt, not a bsr and a fix-up).
+    let Some(tti) = tti else { return false };
+    let cost = tti.intrinsic_cost(
+        &format!("llvm.ctlz.i{input_bits}"),
+        Some(llrm_mir::tti::Ty::Int(input_bits)),
+        &[llrm_mir::tti::Ty::Int(input_bits), llrm_mir::tti::Ty::Int(1)],
+        llrm_mir::tti::CostKind::SizeAndLatency,
+    );
+    if !cost.valid || cost.value > llrm_mir::tti::Cost::BASIC.value {
+        return false;
+    }
+    let ConstantKind::Int(zero_bits) = context.get(zero_elem).kind else { return false };
+    let i1 = context.types.int(1);
+    let bits_m1 = Operand::Constant(context.int(x_ty, i128::from(input_bits - 1)));
+    let result = if zero_bits == u128::from(input_bits - 1) {
+        let no = Operand::Constant(context.int(i1, 0));
+        let ctlz = call_intrinsic_before(
+            context,
+            function,
+            declared,
+            inst,
+            &format!("llvm.ctlz.i{input_bits}"),
+            x_ty,
+            vec![x, no],
+            vec![x_ty, i1],
+        );
+        // `~ctlz & (bits - 1)`.
+        let ones = Operand::Constant(context.int(x_ty, -1));
+        let not = function.create_instruction(
+            Opcode::Binary(BinaryOp::Xor),
+            x_ty,
+            vec![ctlz, ones],
+            Flags::default(),
+            None,
+        );
+        function.insert(not, Position::Before(inst)).expect("a placed instruction");
+        let not = Operand::Value(function.instruction(not).result.expect("a value"));
+        let and = function.create_instruction(
+            Opcode::Binary(BinaryOp::And),
+            x_ty,
+            vec![not, bits_m1],
+            Flags::default(),
+            None,
+        );
+        function.insert(and, Position::Before(inst)).expect("a placed instruction");
+        Operand::Value(function.instruction(and).result.expect("a value"))
+    } else {
+        let yes = Operand::Constant(context.int(i1, 1));
+        let ctlz = call_intrinsic_before(
+            context,
+            function,
+            declared,
+            inst,
+            &format!("llvm.ctlz.i{input_bits}"),
+            x_ty,
+            vec![x, yes],
+            vec![x_ty, i1],
+        );
+        let sub = function.create_instruction(
+            Opcode::Binary(BinaryOp::Sub),
+            x_ty,
+            vec![bits_m1, ctlz],
+            Flags::default(),
+            None,
+        );
+        function.insert(sub, Position::Before(inst)).expect("a placed instruction");
+        let sub = Operand::Value(function.instruction(sub).result.expect("a value"));
+        // The table gives the zero element for 0.
+        let zero_x = select_zero_before_ext(context, function, inst, x, x_ty, zero_bits, sub);
+        zero_x
+    };
+    let value = zext_or_trunc_before(context, function, inst, result, input_bits, load.access);
+    function.replace_all_uses_with(load.result, value);
+    true
+}
+
+/// `x == 0 ? zero : value` in `x`'s own type, before `inst`.
+fn select_zero_before_ext(
+    context: &mut llrm_mir::context::Context,
+    function: &mut Function,
+    inst: InstId,
+    x: Operand,
+    x_ty: TypeId,
+    zero_bits: u128,
+    value: Operand,
+) -> Operand {
+    let zero_const = context.constant(Constant { ty: x_ty, kind: ConstantKind::Int(zero_bits) });
+    select_zero_before(context, function, inst, x, x_ty, x_ty, zero_const, value)
+}
+
+/// `tryToRecognizeTableBasedPatterns`
+/// ([:1329](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L1329)).
+fn try_to_recognize_table_based_patterns(
+    context: &mut llrm_mir::context::Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    declared: &mut llrm_mir::passes::Declared,
+    globals: &[llrm_mir::module::GlobalValue],
+    tti: Option<&dyn llrm_mir::tti::Tti>,
+    inst: InstId,
+) -> bool {
+    let Some(load) = match_table_load(context, layout, function, globals, inst) else { return false };
+    try_to_recognize_table_based_cttz(context, layout, function, declared, inst, &load)
+        || try_to_recognize_table_based_log2(context, layout, function, declared, tti, inst, &load)
 }
 
 #[cfg(test)]

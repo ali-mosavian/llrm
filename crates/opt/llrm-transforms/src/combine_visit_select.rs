@@ -52,6 +52,7 @@ use crate::combine_select_fabs::select_fcmp_to_fabs;
 use crate::combine_select_into_op::select_into_op;
 use crate::combine_select_op_op::select_op_op;
 use crate::combine_select_spf::select_with_icmp;
+use crate::combine_select_tail::{nested_selects, select_of_symmetric_select};
 use crate::combine_shared::{has_one_use, query, replace_operand};
 
 /// The parts of a `select`.
@@ -83,6 +84,8 @@ const FOLDS: &[Fold] = &[
     nested_select_merged,
     binop_between_selects,
     absorb_not_condition,
+    select_of_symmetric_select,
+    nested_selects,
 ];
 
 impl Combiner<'_> {

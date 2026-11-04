@@ -42,7 +42,7 @@
 //! `rematerializeCheapDef` (L605), `moveAndTeeForMultiUse` (L669),
 //! `TreeWalkerState` (L725), `CommutingState` (L793).
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use crate::dagisel::generated::ids::opcode as op;
 use crate::dagisel::generated::instrinfo::{desc, flag};
@@ -352,7 +352,7 @@ impl Registers {
             }
         }
         let live_out = if optimize { crate::liveness::liveness(f).1 } else { Vec::new() };
-        Registers { optimize, live_out, defs, uses, first_def, positions: HashMap::new() }
+        Registers { optimize, live_out, defs, uses, first_def, positions: HashMap::default() }
     }
 
     /// `MRI.createVirtualRegister` with one definition and one use.
@@ -390,7 +390,7 @@ impl Registers {
             .entry(block)
             .or_insert_with(
                 || {
-                    let mut found = HashMap::new();
+                    let mut found = HashMap::default();
                     for (i, inst) in f.blocks[block].iter().enumerate() {
                         for r in inst.defs() {
                             found.entry(r).or_insert(i);

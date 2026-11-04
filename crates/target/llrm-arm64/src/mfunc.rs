@@ -355,6 +355,8 @@ pub struct MFunc {
     /// objects are addressed from the frame pointer and outgoing arguments are
     /// made room for around each call.
     pub dynamic: bool,
+    /// The function's `"frame-pointer"` attribute (`all`, `non-leaf`, ...).
+    pub frame_pointer: Option<String>,
     /// The frame object each source variable lives in (`llvm.dbg.declare` of
     /// an `alloca`), by the variable's metadata node.
     pub declared: Vec<(llrm_mir::MetadataId, u32)>,
@@ -484,7 +486,7 @@ pub fn sequence_copies(
 /// The virtual registers some path reads before writing: a phi copy that
 /// missed an edge leaves one (`LLRM_ARM64_VERIFY`).
 pub fn undefined_reads(function: &MFunc) -> Vec<Reg> {
-    use std::collections::HashSet;
+    use llrm_support::hash::HashSet;
     let labels: HashMap<&str, usize> =
         function.blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at)).collect();
     let count = function.blocks.len();
