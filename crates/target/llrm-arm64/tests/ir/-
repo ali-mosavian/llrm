@@ -1,4 +1,0 @@
-f:
-.Lf.0:
-	str xzr, [x0]
-	ret x30

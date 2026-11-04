@@ -259,6 +259,7 @@ impl Builder<'_> {
                 let pointer = self.target.dag.pointer;
                 let root = self.control_root();
                 let copy = self.dag.get_copy_from_reg(root, reg, pointer);
+                self.dag.direct_copies.insert(copy.node);
                 let table = self.dag.get_jump_table(pointer, index);
                 let chain = SDValue { node: copy.node, res: 1 };
                 let node = self.dag.get_node(ISD::BrJT, EVT::OTHER, &[chain, table, copy]);
@@ -356,6 +357,7 @@ impl Builder<'_> {
         let vt = self.bit_test_type(cond_type, header);
         let root = self.control_root();
         let shift_op = self.dag.get_copy_from_reg(root, header.reg, vt);
+        self.dag.direct_copies.insert(shift_op.node);
         let pop = mask.count_ones();
         let cmp = if pop == 1 {
             let bit = self.dag.get_constant(u128::from(mask.trailing_zeros()), vt);

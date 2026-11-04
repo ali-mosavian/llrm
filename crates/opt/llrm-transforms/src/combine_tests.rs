@@ -361,3 +361,31 @@ fn a_not_of_a_compare_with_invertible_users_is_the_inverse_compare() {
     assert!(!out.contains("xor i1"), "{out}");
     assert!(out.contains("icmp ne i64 %p, %q"), "{out}");
 }
+
+/// The profile of InstCombine's work had no counters: "visits at parity with
+/// the pin" was read from callgrind call counts. A function with nothing to
+/// fold is drained once and each instruction visited exactly once; a fold
+/// re-adds its users, so visits exceed the initial list.
+#[test]
+fn drains_visits_and_inserts_count_the_worklist() {
+    use llrm_mir::counts::{Event, get};
+    let counts = || [Event::CombineDrains, Event::CombineVisits, Event::CombineInitial, Event::CombineInserts].map(get);
+    let delta = |before: [u64; 4]| {
+        let now = counts();
+        [0, 1, 2, 3].map(|i| now[i] - before[i])
+    };
+    let before = counts();
+    let mut module = parsed("define i16 @f(i16 %x, i16 %y) {\nb0:\n  %a = add i16 %x, %y\n  ret i16 %a\n}\n");
+    assert!(!combined(&mut module));
+    let [drains, visits, initial, inserts] = delta(before);
+    assert_eq!((drains, visits, initial), (1, 2, 2));
+    assert_eq!(inserts, initial);
+
+    let before = counts();
+    let mut module = parsed(
+        "define i16 @f(i16 %x) {\nb0:\n  %a = add i16 %x, 0\n  %b = sub i16 %a, %x\n  ret i16 %b\n}\n",
+    );
+    assert!(combined(&mut module));
+    let [_, visits, initial, inserts] = delta(before);
+    assert!(visits > initial - 1 && inserts >= initial, "{visits} {initial} {inserts}");
+}
