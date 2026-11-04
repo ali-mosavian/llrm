@@ -475,7 +475,11 @@ pub fn joined_with_map(
     if env.tracks_uses() {
         lis.track_changes();
     }
-    let stats = driver::run(&mut lis, env, depth);
+    // `RegisterCoalescer::runOnMachineFunction` returns at once for a function
+    // that exposes `returns_twice`: after `longjmp` a joined variable would hold
+    // a value the first return never set
+    // (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L4338>).
+    let stats = if body.returns_twice { driver::Stats::default() } else { driver::run(&mut lis, env, depth) };
     let after = lis.body_like(body);
     if llrm_support::env_flag!("LLRM_COALESCE_WHY") {
         for reason in why_left(&mut lis, env) {

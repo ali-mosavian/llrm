@@ -105,6 +105,8 @@ pub struct Selection {
     pub widths: HashMap<u32, u32>,
     /// `-g`: the variables the debug info names and where each is (the `.adb`).
     pub variables: Vec<Variable>,
+    /// The function calls a routine that returns twice (`setjmp`).
+    pub returns_twice: bool,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -187,7 +189,8 @@ pub fn select_function_with(
     }
     let variables =
         variable_sites(module, function, name, &info, selected.first().map_or(&[][..], |b| &b.live_ins[..]));
-    Ok(Selection { blocks: selected, locals, cpu, widths, variables })
+    let returns_twice = llrm_mir::memory::calls_returns_twice(module, function);
+    Ok(Selection { blocks: selected, locals, cpu, widths, variables, returns_twice })
 }
 
 /// The variables of `function` (after the debug import): parameters in the

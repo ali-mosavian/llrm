@@ -311,6 +311,21 @@ fn test_the_join_map_names_the_survivor_of_each_absorbed_value() {
     assert_eq!((map.survivor(1), map.survivor(2)), (1, 2), "a copy left stays two values: {map:?}");
 }
 
+/// `RegisterCoalescer` returns at once for a function that exposes
+/// `returns_twice`: a copy joined across a `setjmp` merges a variable the first
+/// return never set with a predictable one. basic.c's `main` (a `setjmp`) was
+/// coalesced like any other function.
+#[test]
+fn test_a_function_that_returns_twice_keeps_its_copies() {
+    let (a, c, r) = (def(1), copy(2, 1), read(2));
+    let mut was = body(&[(&[a, c, r], &[])]);
+    let (_, joined) = super::env::joined_with_map(&was, &AnyClass, &[0]);
+    assert_ne!(joined.survivor(1), 1, "a plain copy joins: {joined:?}");
+    was.returns_twice = true;
+    let (_, kept) = super::env::joined_with_map(&was, &AnyClass, &[0]);
+    assert_eq!((kept.survivor(1), kept.survivor(2)), (1, 2), "{kept:?}");
+}
+
 /// wasm and m68k run the pin's coalescer with `JoinGlobalCopies` false
 /// (`enableMachineScheduler()` is false there): the copies of a block are
 /// tried top-down in one list, terminals last. The translation had only the
