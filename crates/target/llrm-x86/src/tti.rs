@@ -668,7 +668,8 @@ impl Tti for X86 {
         load_sizes.extend([4, 2, 1]);
         Some(MemCmpExpansionOptions {
             load_sizes,
-            // X86ISelLowering.cpp#L2946: MaxLoadsPerMemcmp and its OptSize twin.
+            // X86ISelLowering.cpp#L2946: MaxLoadsPerMemcmp and its OptSize
+            // twin.
             max_num_loads: 2,
             num_loads_per_block: if is_zero_cmp { 2 } else { 1 },
             allow_overlapping_loads: true,
@@ -697,6 +698,14 @@ impl Tti for X86 {
         _signed: bool,
     ) -> bool {
         self.is_type_legal(Ty::Int(bits))
+    }
+
+    /// `FSQRT` is legal on every scalar float: the SSE instruction, or x87's.
+    fn have_fast_sqrt(
+        &self,
+        ty: Ty,
+    ) -> bool {
+        matches!(ty, Ty::Float | Ty::Double | Ty::X87)
     }
 
     fn is_type_legal(

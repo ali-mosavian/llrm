@@ -1546,6 +1546,12 @@ pub fn build_with_places(
             op::SUBO16 => b.alu16("SBC", Some("SEC"), name(&o[0])?, name(&o[2])?, name(&o[3])?)?,
             op::ADDOC16 => b.alu16("ADC", None, name(&o[0])?, name(&o[2])?, name(&o[3])?)?,
             op::SUBOC16 => b.alu16("SBC", None, name(&o[0])?, name(&o[2])?, name(&o[3])?)?,
+            code if code == spill::UNREACHABLE => {
+                let mut end = Inst::new(Kind::Op("UNREACHABLE"), Vec::new());
+                end.terminator = true;
+                end.barrier = true;
+                b.push(end);
+            }
             // C into a byte and back: `lda #0; rol a` and `lsr a`
             code if code == spill::SAVE_CARRY => {
                 b.define(name(&o[0])?);
@@ -2973,6 +2979,7 @@ fn emit_with<const STACK: bool>(
                 (Kind::Op("INC" | "DEC"), _) => {
                     out.push_str(&form_text(inst.kind, &inst.operands, &regs, cmos, &slot_name).unwrap())
                 }
+                (Kind::Op("UNREACHABLE"), _) => {}
                 (Kind::Op("CLC"), _) => out.push_str("  clc\n"),
                 (Kind::Op("SEC"), _) => out.push_str("  sec\n"),
                 (Kind::Op("ADC" | "SBC" | "AND" | "ORA" | "EOR"), [_, _, _, ..]) => {

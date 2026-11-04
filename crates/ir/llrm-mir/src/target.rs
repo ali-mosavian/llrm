@@ -173,6 +173,13 @@ pub trait Machine {
         Tuning::PIN
     }
 
+    /// Whether IPSCCP runs a second time after ArgumentPromotion changed a body
+    /// (DEVIATE SD443, exit 2026-11-07: interprocedural.rs). The pin runs it
+    /// once; a target that matches the pin's output turns it off.
+    fn second_ipsccp(&self) -> bool {
+        true
+    }
+
     /// Clocks a byte of code is worth, in thousandths, where a decision is
     /// made for size: the smaller form is kept while the clocks it costs are
     /// under this per byte saved. None: bytes alone decide.

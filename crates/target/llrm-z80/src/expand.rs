@@ -779,6 +779,7 @@ impl Printer<'_> {
                 }
                 self.push(format!("ret {}", op[3..].to_lowercase()));
             }
+            "UNREACHABLE" => {}
             "RET" => {
                 if self.frame.active {
                     self.push("ld sp, ix");

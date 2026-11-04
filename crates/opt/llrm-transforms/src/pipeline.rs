@@ -1213,7 +1213,8 @@ pub fn recorded(
     // PassBuilderPipelines.cpp#L1241) and runs the function simplification
     // pipeline once per body, in the CGSCC walk: these stages leave a body to
     // the walk's run, not a second full one (GVN ran five times on `main` of
-    // memory_expansion, the pin's twice).
+    // memory_expansion, the pin's twice). `promote.` keeps the full list: the
+    // minimal one left the far sort arguments of Nib quicksort unfolded.
     let mut cleaned = Fixed::linear(&again_applied, Phase::Cleanup);
     // The copies of a tree recursion in itself and then its tail-call
     // elimination, after the clones ipa-cp made (D10).
@@ -1243,7 +1244,7 @@ pub fn recorded(
                     module,
                     analyses,
                     id,
-                    if matches!(stage, "promote." | "ipsccp." | "ipa-deadargs.") { &mut cleaned } else { &mut again },
+                    if matches!(stage, "ipsccp." | "ipa-deadargs.") { &mut cleaned } else { &mut again },
                     stage == "globalsra.",
                 )
                 .unwrap_or_else(|error| panic!("pipeline: {error}"));
