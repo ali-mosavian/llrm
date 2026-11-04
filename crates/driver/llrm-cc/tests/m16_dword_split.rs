@@ -25,7 +25,7 @@ fn compile(
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("d.c"), source).unwrap();
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_16-dos")
         .env(
             "LLRM_LLC",
@@ -87,7 +87,7 @@ fn one_half_of_a_dword_load_does_not_loop() {
         "struct S { long a; long b; };\nextern void use(short v);\nvoid f(struct S *p) { use((short)p->b); }\n",
     )
     .unwrap();
-    let mut run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let mut run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_16-dos")
         .env(
             "LLRM_LLC",

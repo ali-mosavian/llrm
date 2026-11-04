@@ -869,7 +869,7 @@ mod tests {
     use crate::support::hash::IndexMap;
 
     fn held(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 4 })
+        Loc::Held(Held { value, width: 4, offset: 0 })
     }
 
     fn insn(
@@ -1036,7 +1036,7 @@ mod tests {
         value: u32,
         width: u32,
     ) -> Loc {
-        Loc::Held(Held { value, width })
+        Loc::Held(Held { value, width, offset: 0 })
     }
 
     /// `v2 := shr v1, 2` (a dword) read as a word by `test v2w, v2w`: the
@@ -1217,7 +1217,11 @@ mod tests {
     }
 
     fn load_of(value: u32) -> Arc<Insn> {
-        let cell = llrm_lir::Mem { index: Some(Held { value: 7, width: 4 }), scale: 4, ..llrm_lir::Mem::new(None, 4) };
+        let cell = llrm_lir::Mem {
+            index: Some(Held { value: 7, width: 4, offset: 0 }),
+            scale: 4,
+            ..llrm_lir::Mem::new(None, 4)
+        };
         insn(0, Operation::Move, "mov", vec![held(value)], vec![Loc::Mem(cell)], vec![value], vec![7])
     }
 
@@ -1269,12 +1273,12 @@ mod tests {
             0,
             Operation::Move,
             "mov",
-            vec![Loc::Held(Held { value: 8, width: 2 })],
+            vec![Loc::Held(Held { value: 8, width: 2, offset: 0 })],
             vec![Loc::Mem(cell)],
             vec![8],
             vec![],
         );
-        let byte = |value| Loc::Held(Held { value, width: 1 });
+        let byte = |value| Loc::Held(Held { value, width: 1, offset: 0 });
         let body = body_of(vec![
             load,
             insn(1, Operation::Binary, "add", vec![byte(4)], vec![byte(3), byte(8)], vec![4], vec![3, 8]),
