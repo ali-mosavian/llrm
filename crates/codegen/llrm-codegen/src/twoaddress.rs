@@ -97,15 +97,20 @@ pub struct BodyFacts {
     state: std::cell::RefCell<State>,
 }
 
+struct Slot {
+    insn: Arc<Insn>,
+    /// The order stamp in `block`.
+    stamp: u64,
+    block: usize,
+}
+
 struct State {
-    insns: HashMap<InstrKey, Arc<Insn>>,
+    /// Each instruction with its place: one lookup, where three maps took three.
+    slots: HashMap<InstrKey, Slot>,
     /// The instructions of each block by order stamp: the stamps rise along the
     /// block, with gaps, so an instruction goes between two others (or moves)
     /// without renumbering the rest, as the pin's intrusive list does.
     blocks: Vec<std::collections::BTreeMap<u64, Arc<Insn>>>,
-    /// The stamp of each instruction in its block.
-    stamp_of: HashMap<InstrKey, u64>,
-    block_of: HashMap<InstrKey, usize>,
     /// The instructions that read or define each value, and whether each
     /// defines it (`use_def_nodbg_operands`).
     operands: HashMap<u32, indexmap::IndexSet<(InstrKey, bool), rustc_hash::FxBuildHasher>>,
@@ -152,8 +157,8 @@ impl State {
             .get(&value)
             .into_iter()
             .flatten()
-            .filter(|(key, _)| self.block_of.get(key) == Some(&block))
-            .map(|(key, _)| (self.stamp_of[key], &self.insns[key]))
+            .filter_map(|(key, _)| self.slots.get(key).filter(|slot| slot.block == block))
+            .map(|slot| (slot.stamp, &slot.insn))
             .collect();
         naming.sort_unstable_by_key(|(stamp, _)| *stamp);
         naming.dedup_by_key(|(stamp, _)| *stamp);
@@ -194,11 +199,14 @@ impl State {
                 let old = std::mem::take(&mut self.blocks[block]);
                 for (n, (_, one)) in old.into_iter().enumerate() {
                     let stamp = (n as u64 + 1) * GAP;
-                    self.stamp_of.insert(one.id(), stamp);
+                    // `one` of a `replace` is out of the slots already.
+                    if let Some(slot) = self.slots.get_mut(&one.id()) {
+                        slot.stamp = stamp;
+                    }
                     self.blocks[block].insert(stamp, one);
                 }
-                lo = lo_key.map(|one| self.stamp_of[&one.id()]);
-                hi = hi_key.map(|one| self.stamp_of[&one.id()]);
+                lo = lo_key.map(|one| self.slots[&one.id()].stamp);
+                hi = hi_key.map(|one| self.slots[&one.id()].stamp);
                 fits(lo, hi).expect("a renumbered block has room")
             }
         };
@@ -297,10 +305,8 @@ impl BodyFacts {
     /// as the pass edits.
     pub fn of(body: &LirBody) -> Self {
         let mut state = State {
-            insns: HashMap::default(),
+            slots: HashMap::default(),
             blocks: Vec::new(),
-            stamp_of: HashMap::default(),
-            block_of: HashMap::default(),
             operands: HashMap::default(),
             defs: HashMap::default(),
             lv: crate::liveness::livevariables::LiveVariables::from_dataflow(body),
@@ -310,9 +316,7 @@ impl BodyFacts {
             for (n, one) in block.insns.iter().enumerate() {
                 let stamp = (n as u64 + 1) << 20;
                 kept.insert(stamp, Arc::clone(one));
-                state.stamp_of.insert(one.id(), stamp);
-                state.insns.insert(one.id(), Arc::clone(one));
-                state.block_of.insert(one.id(), at);
+                state.slots.insert(one.id(), Slot { insn: Arc::clone(one), stamp, block: at });
                 state.add_operands(one);
             }
             state.blocks.push(kept);
@@ -333,14 +337,14 @@ impl BodyFacts {
         &self,
         key: InstrKey,
     ) -> Option<usize> {
-        self.state.borrow().block_of.get(&key).copied()
+        self.state.borrow().slots.get(&key).map(|slot| slot.block)
     }
 
     fn insn(
         &self,
         key: InstrKey,
     ) -> Arc<Insn> {
-        Arc::clone(&self.state.borrow().insns[&key])
+        Arc::clone(&self.state.borrow().slots[&key].insn)
     }
 
     /// The last reader of `value` in `block` after `after`, when no definition
@@ -356,7 +360,7 @@ impl BodyFacts {
     ) -> Option<InstrKey> {
         use crate::liveness::livevariables::Site;
         let state = self.state.borrow();
-        let floor = *state.stamp_of.get(&after)?;
+        let floor = state.slots.get(&after)?.stamp;
         let (stamp, key) = state
             .lv
             .var_info(value)?
@@ -364,16 +368,16 @@ impl BodyFacts {
             .iter()
             .filter(|kill| kill.block == block)
             .filter_map(|kill| match kill.site {
-                Site::Insn(key) => state.stamp_of.get(&key).map(|stamp| (*stamp, key)),
+                Site::Insn(key) => state.slots.get(&key).map(|slot| (slot.stamp, key)),
                 Site::Phi(_) => None,
             })
             .max()?;
-        let reads = state.insns[&key].uses.contains(&value);
+        let reads = state.slots[&key].insn.uses.contains(&value);
         let defined_after = state
             .defs
             .get(&value)
             .is_some_and(
-                |defs| defs.iter().any(|def| state.block_of.get(def) == Some(&block) && state.stamp_of[def] > stamp),
+                |defs| defs.iter().any(|def| state.slots.get(def).is_some_and(|slot| slot.block == block && slot.stamp > stamp)),
             );
         (stamp > floor && reads && !defined_after).then_some(key)
     }
@@ -399,16 +403,12 @@ impl BodyFacts {
         new: Arc<Insn>,
     ) {
         let mut state = self.state.borrow_mut();
-        let before = Arc::clone(&state.insns[&old]);
+        let gone = state.slots.remove(&old).expect("an instruction of the block");
+        let (before, at) = (gone.insn, gone.stamp);
         state.remove_operands(&before);
-        state.insns.remove(&old);
-        state.block_of.remove(&old);
-        let at = state.stamp_of.remove(&old).expect("an instruction of the block");
         state.blocks[block].insert(at, Arc::clone(&new));
-        state.stamp_of.insert(new.id(), at);
-        state.block_of.insert(new.id(), block);
         state.add_operands(&new);
-        state.insns.insert(new.id(), Arc::clone(&new));
+        state.slots.insert(new.id(), Slot { insn: Arc::clone(&new), stamp: at, block });
         state.retarget_kills(&before, std::slice::from_ref(&new), block);
     }
 
@@ -423,18 +423,19 @@ impl BodyFacts {
         before: Option<InstrKey>,
     ) {
         let mut state = self.state.borrow_mut();
-        let from = state.stamp_of.remove(&key).expect("an instruction of the block");
+        let from = state.slots[&key].stamp;
         let moved = state.blocks[block].remove(&from).expect("an instruction of the block");
         let after = match before {
-            Some(one) => state.stamp_of[&one],
+            Some(one) => state.slots[&one].stamp,
             None => u64::MAX,
         };
         let lo = state.blocks[block].range(..after).next_back().map(|(stamp, _)| *stamp);
         let hi = (after != u64::MAX).then_some(after);
         let (stamps, ..) = state.stamps_between(block, lo, hi, 1);
         state.blocks[block].insert(stamps[0], Arc::clone(&moved));
-        state.stamp_of.insert(key, stamps[0]);
-        let moved = Arc::clone(&state.insns[&key]);
+        let slot = state.slots.get_mut(&key).expect("an instruction of the block");
+        slot.stamp = stamps[0];
+        let moved = Arc::clone(&slot.insn);
         state.refresh_named(&moved, block);
     }
 
@@ -451,11 +452,9 @@ impl BodyFacts {
     ) {
         let (last, rest) = made.split_last().expect("an instruction replaced by none");
         let mut state = self.state.borrow_mut();
-        let before = Arc::clone(&state.insns[&one.id()]);
+        let gone = state.slots.remove(&one.id()).expect("an instruction of the block");
+        let (before, at) = (gone.insn, gone.stamp);
         state.remove_operands(&before);
-        state.insns.remove(&one.id());
-        state.block_of.remove(&one.id());
-        let at = state.stamp_of.remove(&one.id()).expect("an instruction of the block");
         let lo = state.blocks[block].range(..at).next_back().map(|(stamp, _)| *stamp);
         let (stamps, ..) = state.stamps_between(block, lo, Some(at), rest.len());
         // A renumbering moved `one` too: its stamp is read again.
@@ -470,17 +469,12 @@ impl BodyFacts {
         };
         for (new, stamp) in rest.iter().zip(&stamps) {
             state.blocks[block].insert(*stamp, Arc::clone(new));
-            state.stamp_of.insert(new.id(), *stamp);
-            state.block_of.insert(new.id(), block);
             state.add_operands(new);
-            state.insns.insert(new.id(), Arc::clone(new));
+            state.slots.insert(new.id(), Slot { insn: Arc::clone(new), stamp: *stamp, block });
         }
-        state.stamp_of.remove(&one.id());
         state.blocks[block].insert(at, Arc::clone(last));
-        state.stamp_of.insert(last.id(), at);
-        state.block_of.insert(last.id(), block);
         state.add_operands(last);
-        state.insns.insert(last.id(), Arc::clone(last));
+        state.slots.insert(last.id(), Slot { insn: Arc::clone(last), stamp: at, block });
         state.retarget_kills(&before, made, block);
     }
 
