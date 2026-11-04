@@ -275,6 +275,7 @@ dependencies = [
  "llrm-support",
  "llrm-target",
  "llrm-transforms",
+ "rustc-hash",
  "tempfile",
 ]
 
