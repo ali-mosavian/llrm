@@ -338,66 +338,61 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
     fn liveness(&self) -> Vec<Vec<u64>> {
         let blocks = self.function.blocks.len();
         let words = self.function.classes.len().div_ceil(64);
-        let set = |bits: &mut Vec<u64>, v: u32| {
-            if v as usize / 64 >= bits.len() {
-                bits.resize(v as usize / 64 + 1, 0);
-            }
-            bits[v as usize / 64] |= 1 << (v % 64);
-        };
-        // what each block reads before it writes, and what it writes
-        let mut gen_ = vec![vec![0u64; words]; blocks];
-        let mut kill = vec![vec![0u64; words]; blocks];
-        let mut phi_defs = vec![vec![0u64; words]; blocks];
+        if words == 0 {
+            return vec![Vec::new(); blocks];
+        }
+        // one table per kind, `words` to a block
+        let set = |table: &mut [u64], block: usize, v: u32| table[block * words + v as usize / 64] |= 1 << (v % 64);
+        // what each block reads before it writes, what it writes, what its
+        // phis define, and what it hands to its successors' phis (an input is
+        // live out of the block it comes from, and of no other)
+        let mut gen_ = vec![0u64; blocks * words];
+        let mut kill = vec![0u64; blocks * words];
+        let mut phi_defs = vec![0u64; blocks * words];
+        let mut handed = vec![0u64; blocks * words];
         for (at, block) in self.function.blocks.iter().enumerate() {
             for phi in &block.phis {
                 if let Some(result) = virt(phi.result) {
-                    set(&mut phi_defs[at], result);
+                    set(&mut phi_defs, at, result);
+                }
+                for (pred, reg) in &phi.incoming {
+                    if let Some(v) = virt(*reg) {
+                        set(&mut handed, *pred, v);
+                    }
                 }
             }
             for inst in block.insts.iter().rev() {
                 for reg in defs_of(inst).filter_map(virt) {
-                    if has(&gen_[at], reg) {
-                        gen_[at][reg as usize / 64] &= !(1 << (reg % 64));
-                    }
-                    set(&mut kill[at], reg);
+                    gen_[at * words + reg as usize / 64] &= !(1 << (reg % 64));
+                    set(&mut kill, at, reg);
                 }
                 for reg in uses_of(inst).filter_map(virt) {
-                    set(&mut gen_[at], reg);
+                    set(&mut gen_, at, reg);
                 }
             }
         }
-        let mut live_in = vec![vec![0u64; words]; blocks];
-        let mut live_out = vec![vec![0u64; words]; blocks];
+        let mut live_in = vec![0u64; blocks * words];
+        let mut live_out = vec![0u64; blocks * words];
         let mut changed = true;
         while changed {
             changed = false;
             for block in (0..blocks).rev() {
-                let mut out = vec![0u64; words];
-                for &succ in &self.cfg.succs[block] {
-                    for w in 0..words {
-                        out[w] |= live_in[succ][w] & !phi_defs[succ][w];
+                for w in 0..words {
+                    let mut out = handed[block * words + w];
+                    for &succ in &self.cfg.succs[block] {
+                        out |= live_in[succ * words + w] & !phi_defs[succ * words + w];
                     }
-                    // a phi's input is live out of the block it comes from, and
-                    // of no other
-                    for phi in &self.function.blocks[succ].phis {
-                        for (pred, reg) in &phi.incoming {
-                            if *pred == block
-                                && let Some(v) = virt(*reg)
-                            {
-                                set(&mut out, v);
-                            }
-                        }
+                    let at = block * words + w;
+                    let input = gen_[at] | (out & !kill[at]);
+                    if out != live_out[at] || input != live_in[at] {
+                        live_out[at] = out;
+                        live_in[at] = input;
+                        changed = true;
                     }
-                }
-                let live: Vec<u64> = (0..words).map(|w| gen_[block][w] | (out[w] & !kill[block][w])).collect();
-                if out != live_out[block] || live != live_in[block] {
-                    live_out[block] = out;
-                    live_in[block] = live;
-                    changed = true;
                 }
             }
         }
-        live_out
+        live_out.chunks(words).map(<[u64]>::to_vec).collect()
     }
 
     /// `registerPressureSetExceedsLimit(1, class, block)`.

@@ -2123,7 +2123,9 @@ impl Builder<'_> {
         if demoted {
             let types = &self.module.context.types;
             let size = self.layout.alloc_size(types, result_type) as u32;
-            let index = self.info.new_stack_object(size, 1);
+            // `LowerCallTo`: the object has the result type's preferred alignment.
+            let align = self.layout.pref_align(types, result_type) as u32;
+            let index = self.info.new_stack_object(size, align);
             let address = self.dag.get_frame_index(self.target.dag.pointer, index);
             let pointer = self.target.dag.pointer;
             let pieces = self.split_for_calling(address, Ext::Any)?;
@@ -2197,9 +2199,10 @@ impl Builder<'_> {
         self.dag.set_root(chain);
         if let Some((index, address)) = slot {
             let vt = self.type_of(result_type)?;
+            let align = self.layout.pref_align(&self.module.context.types, result_type) as u32;
             let info = MemInfo {
                 mem_vt: vt,
-                align: 1,
+                align,
                 volatile: false,
                 base: MemBase::Stack(index),
                 ext: None,
@@ -2598,9 +2601,14 @@ impl Builder<'_> {
             let vt = self.dag.value_type(value);
             let pointer = self.target.dag.pointer;
             let address = self.dag.get_copy_from_reg(chain, reg, pointer);
+            // `visitRet`: stored at the preferred alignment of the returned type.
+            let align = match self.function.operand_type(&self.module.context, operand) {
+                Some(ty) => self.layout.pref_align(&self.module.context.types, ty) as u32,
+                None => 1,
+            };
             let info = MemInfo {
                 mem_vt: vt,
-                align: 1,
+                align,
                 volatile: false,
                 base: MemBase::Unknown,
                 ext: None,
