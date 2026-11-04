@@ -15,7 +15,7 @@ use llrm_mir::passes::{Outer, Unit};
 use llrm_mir::types::TypeId;
 use llrm_mir::valuetracking::{self, Query, Sizes};
 
-use super::{NewCall, Rewrite, Site, build, string_info};
+use super::{NewCall, Rewrite, Site, build, string_info, string_length};
 
 /// `std::clamp(A.compare(B), -1, 1)` as a constant of the call's type.
 fn ordering(
@@ -49,19 +49,6 @@ fn first_byte(
     }
     let zero = Operand::Constant(unit.context.int(ty, 0));
     Rewrite::Value(build(unit, site, Opcode::Binary(BinaryOp::Sub), ty, vec![zero, wide]))
-}
-
-/// `GetStringLength`: the length with the NUL of a constant string, 0 where
-/// the array has no NUL.
-fn string_length(
-    unit: &Unit,
-    site: &Site,
-    operand: Operand,
-) -> u64 {
-    match super::constant_array(unit, site.env, operand) {
-        Some(bytes) => bytes.iter().position(|&byte| byte == 0).map_or(0, |end| end as u64 + 1),
-        None => 0,
-    }
 }
 
 /// `isOnlyUsedInComparisonWithZero`: every user is an `icmp` against zero.
