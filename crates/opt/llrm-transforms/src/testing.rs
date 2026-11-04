@@ -162,6 +162,10 @@ pub struct Tuned {
     pub no_global_base: bool,
     /// `Tti::prefers_exit_ne`.
     pub exit_ne: bool,
+    /// `Tuning::price_fills`.
+    pub price_fills: bool,
+    /// No constant memset is stored inline: every fill is a `rep stos`.
+    pub rep_fills: bool,
 }
 
 use llrm_mir::tti;
@@ -280,6 +284,17 @@ impl llrm_mir::lowering::Lowering for FoldsMasks {
 }
 
 impl llrm_mir::target::Machine for Tuned {
+    fn tuning(&self) -> llrm_mir::target::Tuning {
+        let inline = if self.rep_fills { 0 } else { llrm_mir::target::Tuning::PIN.max_stores_per_memset };
+        let inline_size = if self.rep_fills { 0 } else { llrm_mir::target::Tuning::PIN.max_stores_per_memset_opt_size };
+        llrm_mir::target::Tuning {
+            price_fills: self.price_fills,
+            max_stores_per_memset: inline,
+            max_stores_per_memset_opt_size: inline_size,
+            ..llrm_mir::target::Tuning::PIN
+        }
+    }
+
     fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
         (self.exit_ne || self.no_global_base).then(|| {
             std::rc::Rc::new(Flagged { exit_ne: self.exit_ne, no_cmov: false, no_global_base: self.no_global_base })

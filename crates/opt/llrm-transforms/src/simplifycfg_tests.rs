@@ -1391,3 +1391,34 @@ fn test_a_minsize_function_is_priced_by_code_size() {
         assert_eq!(crate::speculate::cost_kind(function), expected, "{attr}");
     }
 }
+
+/// `FoldInstsToUnreachable`: what follows a call to a `noreturn` function was kept (and the block it jumps to
+/// with it), though control never gets there.
+#[test]
+fn test_the_code_after_a_call_that_never_returns_is_cut_and_the_block_ends_in_unreachable() {
+    let mut module = parsed(
+        "declare void @die() noreturn
+
+define void @f(i16 %x) {
+b0:
+  call void @die()
+  br label %b1
+
+b1:
+  ret void
+}
+",
+    );
+    assert!(simplify(&mut module));
+    assert_eq!(
+        printed(&module),
+        "declare void @die() noreturn
+
+define void @f(i16 %x) {
+b0:
+  call void @die()
+  unreachable
+}
+"
+    );
+}

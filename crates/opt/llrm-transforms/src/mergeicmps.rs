@@ -800,7 +800,7 @@ impl FunctionPass for MergeICmps {
             .attrs
             .iter()
             .any(|attr| matches!(attr, Attribute::Flag(name) if name == "optsize" || name == "minsize"));
-        let expands = outer.target().tti().is_some_and(|tti| tti.enable_mem_cmp_expansion(opt_size, true));
+        let expands = outer.target().tti().is_some_and(|tti| tti.enable_mem_cmp_expansion(opt_size, true).is_some_and(|options| !options.load_sizes.is_empty()));
         if !expands || !self.routines.iter().any(|routine| routine.standard == "memcmp") {
             return PreservedAnalyses::all();
         }

@@ -282,6 +282,7 @@ impl Machine for Dos {
             // The user's rate for m16 at speed (one clock is two bytes): the
             // `timings.times` row the judge reads too.
             speed_milliclocks_per_byte: crate::timings::speed_milliclocks_per_byte(),
+            price_fills: true,
             // DEVIATE: real mode weighs code bytes over clocks at every level,
             // so the full unroll takes the pin's size threshold
             // (`OptSizeThreshold`,
@@ -614,6 +615,16 @@ mod encoding_tests {
         );
         let clocks = dos.costs();
         assert_eq!(clocks.argument, clocks.load + clocks.store);
+    }
+
+    /// A fill's bytes are the instructions it becomes as encoded: `rep stos`
+    /// 2, `push es` and `pop es` 1 each, two 3-byte loads of a word. The
+    /// doubled `mov_ri` estimate made it 18, which the loop-idiom pass then
+    /// cut by a fitted three quarters.
+    #[test]
+    fn a_fill_is_priced_at_its_encoded_bytes() {
+        use llrm_mir::target::Machine;
+        assert_eq!(super::Dos::default().size_costs().fill, 2 + 2 + 2 + 3 + 3);
     }
 
     /// The shared call price is read off the 486 table and the byte table:

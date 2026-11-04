@@ -10,6 +10,7 @@ pub mod divconst;
 pub mod driver;
 pub mod emit;
 pub mod expand_imm;
+pub mod cmpzero;
 pub mod flagcse;
 pub mod frame;
 pub mod isel;

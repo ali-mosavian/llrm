@@ -896,10 +896,11 @@ mod tests {
         assert_eq!(t.operation_action(ISD::FpExtend, EVT::Simple(MVT::F64)), Action::Custom);
     }
 
-    /// CSSC turns scalar `ctpop` from a vector sequence into one instruction.
+    /// CSSC turns scalar `ctpop` into one instruction; without it the node
+    /// is expanded until vector MIR lands (DEVIATE SD533), not `Custom`.
     #[test]
     fn aarch64_ctpop_follows_cssc() {
-        assert_eq!(a64().operation_action(ISD::CtPop, EVT::I32), Action::Custom);
+        assert_eq!(a64().operation_action(ISD::CtPop, EVT::I32), Action::Expand);
         let cssc = TargetLowering::aarch64(Aarch64Features { cssc: true, ..Default::default() });
         assert_eq!(cssc.operation_action(ISD::CtPop, EVT::I32), Action::Legal);
     }
