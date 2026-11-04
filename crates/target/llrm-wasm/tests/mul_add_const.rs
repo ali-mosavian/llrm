@@ -36,3 +36,22 @@ fn a_chain_of_sums_times_constants_reads_the_variable_not_the_shared_sum() {
     let asm = String::from_utf8_lossy(&out.stdout);
     assert_eq!(asm.matches("i32.mul").count(), 2, "{asm}");
 }
+
+/// Four stages of `x = x * a + c; total += x * k`: the combiner took a node the
+/// fold had just made after its users, not before them
+/// (`AddToWorklistWithUsers` puts the new node first), so the stage-3 sum kept
+/// its two users and six multiplies stayed where the pin has five
+/// (`mul_constants`, -O2 +497 B).
+#[test]
+fn a_node_a_fold_made_is_combined_before_its_users() {
+    let ir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ir/mul_add_four_stages.ll");
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-wasm-llc"))
+        .args(["-S", "-O2", "-o", "-"])
+        .arg(ir)
+        .env("LLRM_WASM_BACKEND_ONLY", "1")
+        .output()
+        .expect("llrm-wasm-llc");
+    assert!(out.status.success());
+    let asm = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(asm.matches("i32.mul").count(), 5, "{asm}");
+}

@@ -646,9 +646,6 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 self.add_to_worklist_with_users(new.node);
                 self.dag.delete_dead(old.node);
             }
-            for made in before..self.dag.node_count() {
-                self.add_to_worklist(made as u32);
-            }
             let Some(result) = result else { continue };
             if result.node == n && result.res == 0 {
                 continue;
