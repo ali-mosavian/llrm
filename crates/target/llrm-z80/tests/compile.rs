@@ -1481,3 +1481,47 @@ fn a_memmove_is_still_a_call() {
     let out = text(&ir, "mm", 0, &Request::new(Level::O2)).expect("compiles");
     assert!(out.contains("__memmove") && !out.contains("ldir"), "{out}");
 }
+
+/// The last block of `asm` that holds `add a, (hl)` and the loop's count step.
+fn checksum_loop(asm: &str) -> String {
+    asm.split("\nL0_")
+        .filter(|block| block.contains("add a, (hl)") && block.contains("dec bc"))
+        .last()
+        .unwrap_or_else(|| panic!("no checksum loop in\n{asm}"))
+        .to_owned()
+}
+
+/// A loop over `c[0..n]` after a loop that used up the registers: the pointer
+/// was copied into `hl` for `add a,(hl)` and stepped after it, so it overlapped
+/// `hl`'s range and could not be `hl`; the pointer, the count and both sums
+/// were in the frame, five `(ix)` accesses a trip against none.
+#[test]
+fn a_pointer_read_through_hl_and_stepped_after_stays_in_hl() {
+    let out = compiled(
+        "define i16 @rs1(ptr %a, ptr %b, ptr %c, i16 %n) {\n  %z = icmp eq i16 %n, 0\n  br i1 %z, label %out, label %l1\n\
+         l1:\n  %i = phi i16 [ 0, %0 ], [ %i1, %l1 ]\n  %pa = getelementptr inbounds nuw i8, ptr %a, i16 %i\n  \
+         %pb = getelementptr inbounds nuw i8, ptr %b, i16 %i\n  %pc = getelementptr inbounds nuw i8, ptr %c, i16 %i\n  \
+         %x = load i8, ptr %pa\n  %y = load i8, ptr %pb\n  %s = add i8 %x, %y\n  store i8 %s, ptr %pc\n  \
+         %i1 = add nuw i16 %i, 1\n  %c1 = icmp ult i16 %i1, %n\n  br i1 %c1, label %l1, label %l2\n\
+         l2:\n  %j = phi i16 [ 0, %l1 ], [ %j1, %l2 ]\n  %u = phi i8 [ 0, %l1 ], [ %u1, %l2 ]\n  \
+         %v = phi i8 [ 0, %l1 ], [ %v1, %l2 ]\n  %pj = getelementptr inbounds nuw i8, ptr %c, i16 %j\n  \
+         %w = load i8, ptr %pj\n  %u1 = add i8 %u, %w\n  %v1 = add i8 %v, %u1\n  %j1 = add nuw i16 %j, 1\n  \
+         %c2 = icmp ult i16 %j1, %n\n  br i1 %c2, label %l2, label %done\n\
+         done:\n  %hi = zext i8 %v1 to i16\n  %sh = shl i16 %hi, 8\n  %lo = zext i8 %u1 to i16\n  %r = or i16 %sh, %lo\n  \
+         ret i16 %r\nout:\n  ret i16 0\n}",
+        "rs1",
+    );
+    let body = checksum_loop(&out);
+    assert!(!body.contains("(ix)") && !body.contains("ld l, c"), "{out}");
+}
+
+/// lz4c's checksum loop over `out[i]` kept `out + i` as a base add with the
+/// bound and `out` read from the frame every trip, 150 T a byte against gcc's
+/// 106: the exit count `umax(1, n) - 1` cost 6 against a budget of 4 basic
+/// instructions. lz4c -O2 111095 T against gcc's 103309; 102805 stepping a
+/// pointer and counting down in `bc`.
+#[test]
+fn lz4cs_checksum_loop_steps_a_pointer_and_counts_down() {
+    let out = text(include_str!("kernels/ir/lz4c.ll"), "lz4c", 0, &Request::new(Level::O2)).expect("compiles");
+    assert!(!checksum_loop(&out).contains("add hl, bc"), "{out}");
+}
