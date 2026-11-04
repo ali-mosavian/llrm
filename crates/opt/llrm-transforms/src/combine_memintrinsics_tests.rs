@@ -188,14 +188,7 @@ m:
     let globals = module.globals.clone();
     let metadata = module.metadata.clone();
     let (context, function) = module.function_mut("f").expect("@f");
-    crate::combine::combine_with(
-        context,
-        &globals,
-        &metadata,
-        &DataLayout::default(),
-        function,
-        crate::combine::visit,
-    );
+    crate::combine::combine_with(context, &globals, &metadata, &DataLayout::default(), function, crate::combine::visit);
     let after = crate::testing::printed(&module);
     assert!(!after.contains("phi double"), "{after}");
 }

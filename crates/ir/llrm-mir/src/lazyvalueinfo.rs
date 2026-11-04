@@ -2279,7 +2279,11 @@ impl LazyValueInfoImpl {
             // values from different cycle iterations (PR60629).
             let single_use = curr_inst.result.and_then(|r| function.users(r).only().copied());
             let Some(next_use) = single_use else { break };
-            if !is_safe_to_speculatively_execute_with_variable_replaced(&env.query(), env.function.instruction(curr_i), false) {
+            if !is_safe_to_speculatively_execute_with_variable_replaced(
+                &env.query(),
+                env.function.instruction(curr_i),
+                false,
+            ) {
                 break;
             }
             curr_u = next_use;

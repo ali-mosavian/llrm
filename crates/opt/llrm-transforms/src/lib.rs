@@ -113,11 +113,8 @@ pub mod combine_build;
 pub mod combine_castcall;
 pub mod combine_casted_logic;
 pub mod combine_casts;
-pub mod combine_fptoint;
 #[cfg(test)]
 mod combine_casts_tests;
-#[cfg(test)]
-mod combine_fptoint_tests;
 pub mod combine_compares;
 pub mod combine_demanded;
 #[cfg(test)]
@@ -127,6 +124,9 @@ pub mod combine_distribute;
 mod combine_flags_result_tests;
 pub mod combine_fp;
 pub mod combine_fp_int_casts;
+pub mod combine_fptoint;
+#[cfg(test)]
+mod combine_fptoint_tests;
 pub mod combine_funnel;
 pub mod combine_gep;
 pub mod combine_gep_base;
