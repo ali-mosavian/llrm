@@ -346,6 +346,7 @@ fn a_dag_target_is_preprocessed_once_before_it_selects() {
             hooks(),
         );
         let x86 = X86Target {
+            live: &mut info,
             tli: &tli,
             lowering: &mut lowering,
             chooser: X86Chooser { selector: &selector, hooks: &mut hooks },
