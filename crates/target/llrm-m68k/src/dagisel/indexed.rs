@@ -23,6 +23,7 @@
 
 use std::sync::LazyLock;
 
+use llrm_codegen::backend::selectiondag::actions::LoadExt;
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{MemInfo, NodeData, SDValue as Value, SelectionDAG};
@@ -134,8 +135,42 @@ static WRITEBACKS: LazyLock<Vec<Writeback>> = LazyLock::new(|| {
             });
         }
     }
+    // a byte or word loaded through `(An)+` and extended: the pin's extension
+    // pseudo with the mode of `(An)+`, which `expand` makes a clear and a move
+    // (or a move and an extension)
+    for (signed, to, from) in EXTENSIONS {
+        let (kind, base) =
+            (if signed { "S" } else { "Z" }, leak(format!("MOV{}Xd{to}j{from}", if signed { "S" } else { "Z" })));
+        if code_of_pin(base).is_none() {
+            continue;
+        }
+        let printed = leak(format!("MOV{kind}Xd{to}o{from}"));
+        all.push(Writeback {
+            name: leak(format!("{printed}_WB")),
+            prints_as: printed,
+            load: true,
+            pre: false,
+            drop: 1,
+            base,
+            source: false,
+            memory_move: false,
+            drops: 1,
+        });
+    }
     all
 });
+
+/// `(sign extended, result bits, loaded bits)` of the extending loads that
+/// have a `(An)+` writeback.
+const EXTENSIONS: [(bool, u32, u32); 5] =
+    [(false, 16, 8), (false, 32, 8), (false, 32, 16), (true, 32, 8), (true, 32, 16)];
+
+/// The pseudo an extending writeback expands as (`MOVZXd32o8_WB` is
+/// `MOVZXd32o8`).
+pub fn extension_of(name: &str) -> Option<&'static str> {
+    let one = WRITEBACKS.iter().find(|one| one.name == name)?;
+    (one.prints_as.starts_with("MOVZX") || one.prints_as.starts_with("MOVSX")).then_some(one.prints_as)
+}
 
 fn leak(text: String) -> &'static str {
     Box::leak(text.into_boxed_str())
@@ -342,14 +377,38 @@ pub fn desc(code: u16) -> Option<&'static InstrDesc> {
     }
 }
 
+/// The extending writeback that loads `load`, if it has one.
+fn extension_row(
+    dag: &SelectionDAG,
+    load: Value,
+) -> Option<&'static str> {
+    let NodeData::Mem(MemInfo { mem_vt, ext: Some(ext), .. }) = dag.node(load).data else { return None };
+    if !matches!(dag.opcode(load), ISD::Load | ISD::LoadPost) {
+        return None;
+    }
+    let signed = match ext {
+        LoadExt::ZExtLoad => false,
+        LoadExt::SExtLoad => true,
+        _ => return None,
+    };
+    let (to, from) = (dag.value_type(load).size_in_bits() as u32, mem_vt.size_in_bits() as u32);
+    EXTENSIONS.contains(&(signed, to, from)).then_some(())?;
+    let wanted = format!("MOV{}Xd{to}o{from}", if signed { "S" } else { "Z" });
+    WRITEBACKS.iter().find(|one| one.prints_as == wanted).map(|one| one.name)
+}
+
 /// The bytes an access moves, when it is one the writeback forms cover: a plain
-/// load, or a store of a whole value, of a byte, word or long.
+/// load or an extending one the rows cover, or a store of a whole value, of a
+/// byte, word or long.
 fn width(
     dag: &SelectionDAG,
     access: Value,
 ) -> Option<i64> {
-    let NodeData::Mem(MemInfo { mem_vt, ext: None, .. }) = dag.node(access).data else { return None };
-    if dag.opcode(access) == ISD::Store && dag.value_type(dag.operand(access, 1)) != mem_vt {
+    let NodeData::Mem(MemInfo { mem_vt, ext, .. }) = dag.node(access).data else { return None };
+    if dag.opcode(access) == ISD::Store && (ext.is_some() || dag.value_type(dag.operand(access, 1)) != mem_vt) {
+        return None;
+    }
+    if ext.is_some() && extension_row(dag, access).is_none() {
         return None;
     }
     [(EVT::I8, 1), (EVT::I16, 2), (EVT::I32, 4)].into_iter().find(|(vt, _)| *vt == mem_vt).map(|(_, bytes)| bytes)
@@ -418,9 +477,16 @@ pub fn select(
     let operand = |index| adapter.operand(node, index);
     // loads read (chain, base, offset), stores (chain, value, base, offset)
     let (chain, base) = if load { (operand(0), operand(1)) } else { (operand(0), operand(2)) };
+    let extended = if load && !pre { extension_row(&adapter.dag, here).and_then(code_of) } else { None };
+    if load && info.ext.is_some() && extended.is_none() {
+        return None;
+    }
     let (selected, vts, operands) = if load {
         (
-            code(bytes, true, pre, false)?,
+            match extended {
+                Some(row) => row,
+                None => code(bytes, true, pre, false)?,
+            },
             vec![adapter.value_type(at(0)), adapter.value_type(at(1)), adapter.value_type(at(2))],
             vec![base, chain],
         )

@@ -76,3 +76,23 @@ define i64 @a_chain_of_slot_loads(i64 %s) {
   %t4 = add i64 %t3, %d9
   ret i64 %t4
 }
+
+define float @slot_stores_interleaved(float %x, float %y) {
+  %p = alloca [2 x float], align 4
+  %r = alloca [2 x float], align 4
+  call void @sink(ptr %p)
+  call void @sink(ptr %r)
+  %a = fadd float %x, 1.0
+  store float %a, ptr %p, align 4
+  %b = fadd float %y, 2.0
+  store float %b, ptr %r, align 4
+  %c = fmul float %x, %y
+  %p1 = getelementptr float, ptr %p, i64 1
+  store float %c, ptr %p1, align 4
+  %d = fsub float %x, %y
+  %r1 = getelementptr float, ptr %r, i64 1
+  store float %d, ptr %r1, align 4
+  call void @sink(ptr %p)
+  call void @sink(ptr %r)
+  ret float %a
+}

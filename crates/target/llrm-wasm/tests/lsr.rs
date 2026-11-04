@@ -52,3 +52,34 @@ fn an_immediate_offset_of_the_counter_is_legal() {
     let text = llrm_mir::print::module(&module);
     assert!(text.contains(", 41\n") && !text.contains(", 40\n"), "{text}");
 }
+
+/// `for (i < n) a[i] = b[i]` unrolled by four: the epilog's address base and
+/// its count-down are one counter in LG3's solution (`-2 * xtraiter` up to
+/// zero), which needs an add of the base to the counter in each of the two
+/// accesses; the pin's two counters need none (wasm32 -O2: 110 instructions
+/// against the pin's 102, idioms +310 B). LG3 adds a base to the counter in
+/// both accesses.
+#[test]
+fn the_epilog_of_a_copy_keeps_the_pins_two_counters() {
+    let mut module = llrm_mir::parse::module(include_str!("lsr/epilog_copy.ll")).expect("parses");
+    let mut manager = PassManager::default();
+    let elements = llrm_transforms::pipeline_text::parse("loop-reduce").expect("pipeline");
+    llrm_transforms::pipeline_text::build(&elements, &mut manager).ok().expect("builds");
+    manager.run_module(&mut module, Rc::new(WasmMachine)).expect("runs");
+    let text = llrm_mir::print::module(&module);
+    assert!(!text.contains("mul nsw i32 %xtraiter, -2"), "{text}");
+}
+
+/// jpeg_fixed `emit` (-O1): the loop counted `-len` up to zero and hoisted
+/// `ptr + len` for its address, +16 instructions on the pin's pointer and
+/// `len` counted down.
+#[test]
+fn a_sum_over_a_buffer_keeps_the_pointer_and_the_down_counter() {
+    let mut module = llrm_mir::parse::module(include_str!("lsr/adler_loop.ll")).expect("parses");
+    let mut manager = PassManager::default();
+    let elements = llrm_transforms::pipeline_text::parse("loop-reduce").expect("pipeline");
+    llrm_transforms::pipeline_text::build(&elements, &mut manager).ok().expect("builds");
+    manager.run_module(&mut module, Rc::new(WasmMachine)).expect("runs");
+    let text = llrm_mir::print::module(&module);
+    assert!(!text.contains("getelementptr i8, ptr %1, i32 %2"), "{text}");
+}
