@@ -255,6 +255,7 @@ pub mod inferspace;
 #[cfg(test)]
 mod inferspace_tests;
 pub mod inline;
+mod inlineattrs;
 pub mod inlinecost;
 #[cfg(test)]
 mod inlinecost_tests;
