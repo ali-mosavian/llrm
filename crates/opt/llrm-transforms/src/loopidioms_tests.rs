@@ -309,7 +309,7 @@ fn adjacent_stores_of_one_byte_are_one_memset() {
     let stores = "  store i16 0, ptr %a\n  store i16 0, ptr %p2\n  store i16 0, ptr %p4\n  store i8 0, ptr %p6\n  store i8 0, ptr %p7\n";
     let before = parsed(&format!("{DOS}{}", local(stores)));
     let mut module = before.clone();
-    let text = managed(&mut module, Merge { size: false });
+    let text = managed(&mut module, Merge { size: false, widen: true });
     assert!(
         text.contains("call void @llvm.memset.p0.i16(ptr align 2 %a, i8 0, i16 8, i1 false)")
             && !text.contains("store"),
@@ -326,7 +326,7 @@ fn stores_a_memset_would_not_reduce_are_kept() {
     let stores = "  store i16 0, ptr %p2\n  store i16 0, ptr %p4\n  store i16 0, ptr %p6\n";
     let before = parsed(&format!("{DOS}{}", local(stores)));
     let mut module = before.clone();
-    let text = managed(&mut module, Merge { size: false });
+    let text = managed(&mut module, Merge { size: false, widen: true });
     assert!(!text.contains("call void @llvm.memset"), "{text}");
 }
 
@@ -336,7 +336,7 @@ fn stores_that_are_not_one_fill_are_kept() {
     let unchanged = |stores: &str| {
         let before = parsed(&format!("{DOS}{}", local(stores)));
         let mut module = before.clone();
-        let text = managed(&mut module, Merge { size: false });
+        let text = managed(&mut module, Merge { size: false, widen: true });
         assert!(!text.contains("call void @llvm.memset"), "{text}");
         assert_eq!(results(&module, BYTES), results(&before, BYTES));
     };
@@ -760,7 +760,7 @@ fn adjacent_constants_are_stores_of_the_widest_integer() {
     let stores = |text: &str| {
         let before = parsed(&format!("{DOS}{}", local(text)));
         let mut module = before.clone();
-        let after = managed(&mut module, Merge { size: false });
+        let after = managed(&mut module, Merge { size: false, widen: true });
         assert_eq!(results(&module, BYTES), results(&before, BYTES), "{after}");
         after
     };
@@ -778,7 +778,7 @@ fn constants_that_cannot_be_one_wider_store_are_kept() {
     let kept = |text: &str, count: usize| {
         let before = parsed(&format!("{DOS}{}", local(text)));
         let mut module = before.clone();
-        let after = managed(&mut module, Merge { size: false });
+        let after = managed(&mut module, Merge { size: false, widen: true });
         assert_eq!(after.matches("store").count(), count, "{after}");
         assert_eq!(results(&module, BYTES), results(&before, BYTES));
     };
@@ -1113,4 +1113,19 @@ b2:
     let after = managed_fill(text, &[&[]]);
     assert!(after.contains("llvm.memset"), "{after}");
     assert!(after.contains("@llvm.memset.p0.i16(ptr align 2 "), "{after}");
+}
+
+/// A target whose backend merges stores (`widen: false`) keeps the stores the
+/// pin's IR has: wasm `scroll` -O3 inlined `bench_scroll` into `main` because
+/// 80 word stores had become 20 qword stores by the time the inliner priced
+/// them (cost under 250 where the pin's is 525), 2150 B for the pin's 1152.
+#[test]
+fn a_target_that_merges_stores_in_the_backend_keeps_adjacent_constants_apart() {
+    let text = "  store i8 18, ptr %a\n  store i8 52, ptr %p1\n";
+    let mut module = parsed(&format!("{DOS}{}", local(text)));
+    let kept = managed(&mut module, Merge { size: false, widen: false });
+    assert_eq!(kept.matches("store i8").count(), 2, "{kept}");
+    let mut module = parsed(&format!("{DOS}{}", local(text)));
+    let merged = managed(&mut module, Merge { size: false, widen: true });
+    assert_eq!(merged.matches("store i8").count(), 0, "{merged}");
 }
