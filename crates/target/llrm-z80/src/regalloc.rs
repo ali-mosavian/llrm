@@ -226,6 +226,27 @@ impl Target for Z80Registers {
         Some(Inst { may_store: true, ..Inst::new(Kind::Op(name), vec![Operand::Frame(slot), Operand::Use(register)]) })
     }
 
+    fn spills_lanes() -> bool {
+        true
+    }
+
+    fn spill_store_lane(
+        class: Class,
+        register: Reg,
+        slot: i32,
+        offset: u32,
+    ) -> Option<Inst> {
+        // a lane is a byte whatever class the value of the pair stands in
+        let _ = class;
+        Some(Inst {
+            may_store: true,
+            ..Inst::new(
+                Kind::Op("SPILL8L"),
+                vec![Operand::Frame(slot), Operand::Use(register), Operand::Imm(i64::from(offset))],
+            )
+        })
+    }
+
     fn spill_load(
         class: Class,
         register: Reg,
