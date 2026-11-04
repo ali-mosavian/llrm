@@ -29,8 +29,8 @@
 //!     2026-11-21.
 //! 39. The target's `allowsMisalignedMemoryAccesses` is taken to be true and
 //!     fast for every size the data layout has as a legal integer (the X86
-//!     answer, `X86ISelLoweringCall.cpp#L356`). Owner: w2. Exit: a target
-//!     fact when a target says otherwise.
+//!     answer, `X86ISelLoweringCall.cpp#L356`). Owner: w2. Exit: a target-supplied
+//!     fact, 2026-11-28.
 //!
 //! # Example
 //! The pair above is one `load i16`; see `aggressive_instcombine_tests.rs`.
