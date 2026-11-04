@@ -32,6 +32,15 @@
 //!     answer, `X86ISelLoweringCall.cpp#L356`). Owner: w2. Exit: a target-supplied
 //!     fact, 2026-11-28.
 //!
+//! 40. The pin ends `foldUnusualPatterns` with `SimplifyInstructionsInBlock`;
+//!     there is no public equivalent here, so the dead chain a fold leaves is
+//!     the next `dead` pass's. Owner: w2. Exit: 2026-11-21, expose the helper.
+//! 41. `foldConsecutiveStores` ends a run at any instruction that may read or
+//!     write memory, or throw; the pin asks `BatchAA` whether it touches the
+//!     run's base. The pass `Unit` carries no module globals, so a callee's
+//!     own attributes are not seen either. Sound, merges less. Owner: w2.
+//!     Exit: 2026-11-21, with deviation 38's `AliasQuery`.
+//!
 //! # Example
 //! The pair above is one `load i16`; see `aggressive_instcombine_tests.rs`.
 //!
@@ -53,7 +62,7 @@ use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses, Unit};
 use llrm_mir::types::{Type, TypeId};
 use llrm_mir::valuetracking::Query;
-use llrm_mir::valuetracking::guarantee::may_write_to_memory;
+use llrm_mir::valuetracking::guarantee::{may_read_from_memory, may_throw, may_write_to_memory};
 use llrm_mir::valuetracking::nonzero::strip_and_accumulate_constant_offsets;
 
 use crate::trunc_inst_combine::TruncInstCombine;
@@ -115,8 +124,30 @@ fn fold_unusual_patterns(
         for &inst in insts.iter().rev() {
             changed |= fold_consecutive_loads(unit.context, unit.layout, unit.function, inst);
         }
+        // Done separately to scan the stores once.
+        changed |= fold_consecutive_stores(unit.context, unit.layout, unit.function, block);
     }
     changed
+}
+
+/// A `Query` over `function` alone: no module, so no callee is named.
+fn query<'a>(
+    context: &'a llrm_mir::context::Context,
+    layout: &'a DataLayout,
+    function: &'a Function,
+) -> Query<'a> {
+    Query {
+        context,
+        globals: &[],
+        metadata: &[],
+        function,
+        layout,
+        dt: None,
+        assumptions: None,
+        dom_conditions: None,
+        cond_context: None,
+        cxt: None,
+    }
 }
 
 /// `LoadOps`
@@ -317,18 +348,7 @@ fn fold_consecutive_loads(
     }
     let mut lops = LoadOps::default();
     {
-        let q = Query {
-            context: &*context,
-            globals: &[],
-            metadata: &[],
-            function: &*function,
-            layout,
-            dt: None,
-            assumptions: None,
-            dom_conditions: None,
-            cond_context: None,
-            cxt: None,
-        };
+        let q = query(context, layout, function);
         if !fold_loads_recursive(&q, Operand::Value(result), &mut lops, true) || !lops.found_root {
             return false;
         }
@@ -375,6 +395,193 @@ fn fold_consecutive_loads(
     }
     function.replace_all_uses_with(result, value);
     true
+}
+
+/// `PartStore`
+/// ([:1597](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L1597)):
+/// `width` bits starting at `val_offset` of `val`, stored at `base + offset`.
+struct PartStore {
+    base: Operand,
+    offset: i128,
+    val: Operand,
+    val_offset: u64,
+    width: u64,
+    store: InstId,
+    space: u32,
+}
+
+impl PartStore {
+    /// `isCompatibleWith`.
+    fn is_compatible_with(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.base == other.base && self.val == other.val && self.space == other.space
+    }
+}
+
+/// `matchPartStore`
+/// ([:1618](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L1618)).
+fn match_part_store(
+    q: &Query,
+    inst: InstId,
+) -> Option<PartStore> {
+    let instruction = q.function.instruction(inst);
+    let Opcode::Store { volatile: false, .. } = instruction.opcode else { return None };
+    let stored = instruction.operands[0];
+    let pointer = instruction.operands[1];
+    let ty = q.type_of(stored)?;
+    if !matches!(q.context.types.get(ty), Type::Int(_))
+        || q.layout.size_bits(&q.context.types, ty) != 8 * q.layout.store_size(&q.context.types, ty)
+    {
+        return None;
+    }
+    let width = u64::from(q.scalar_bits(stored));
+    // `m_Trunc(m_LShrOrSelf(m_Value(Val), ValOffset))`
+    let (_, _, source) = llrm_mir::valuetracking::pattern::cast(q, stored, CastOp::Trunc)?;
+    let (val, val_offset) = match llrm_mir::valuetracking::pattern::binary(q, source, BinaryOp::LShr) {
+        Some((_, _, lhs, rhs)) => match q.int_constant(rhs) {
+            Some((amount, _)) => (lhs, u64::try_from(amount).ok()?),
+            None => (source, 0),
+        },
+        None => (source, 0),
+    };
+    let Some(Type::Pointer(space)) = q.type_of(pointer).map(|ty| q.context.types.get(ty).clone()) else { return None };
+    let index_bits = q.layout.pointer(space).index_bits;
+    let (base, offset) = strip_and_accumulate_constant_offsets(q, pointer, index_bits, true);
+    let shift = 128 - index_bits;
+    Some(PartStore { base, offset: ((offset << shift) as i128) >> shift, val, val_offset, width, store: inst, space })
+}
+
+/// `mergeConsecutivePartStores`
+/// ([:1644](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L1644)):
+/// whether `parts` become one store of `width` bits, and the store it
+/// replaces them with.
+fn merge_consecutive_part_stores(
+    context: &mut llrm_mir::context::Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    parts: &[PartStore],
+    width: u64,
+) -> bool {
+    if parts.len() < 2 {
+        return false;
+    }
+    // Profitable? (DEVIATE 39: a misaligned access of a legal width is fast.)
+    let allowed = width >= 16
+        && width.is_power_of_two()
+        && u32::try_from(width).is_ok_and(|bits| layout.fits_in_legal_integer(bits));
+    if !allowed {
+        return false;
+    }
+    let first = &parts[0];
+    let Opcode::Store { align, .. } = function.instruction(first.store).opcode.clone() else { return false };
+    let pointer = function.instruction(first.store).operands[1];
+    let new_ty = context.types.int(width as u32);
+    let void = function.instruction(first.store).ty;
+    let mut value = first.val;
+    let value_ty = query(context, layout, function).type_of(value).expect("a typed value");
+    let value_bits = u64::from(context.types.int_bits(value_ty).unwrap_or(0));
+    let at = Position::Before(first.store);
+    if first.val_offset != 0 {
+        let amount = Operand::Constant(context.int(value_ty, i128::from(first.val_offset)));
+        let shifted = function.create_instruction(Opcode::Binary(BinaryOp::LShr), value_ty, vec![value, amount], Flags::default(), None);
+        function.insert(shifted, at).expect("a placed instruction");
+        value = Operand::Value(function.instruction(shifted).result.expect("a value"));
+    }
+    // `CreateZExtOrTrunc`
+    if value_bits != width {
+        let op = if value_bits < width { CastOp::ZExt } else { CastOp::Trunc };
+        let cast = function.create_instruction(Opcode::Cast(op), new_ty, vec![value], Flags::default(), None);
+        function.insert(cast, at).expect("a placed instruction");
+        value = Operand::Value(function.instruction(cast).result.expect("a value"));
+    }
+    let store =
+        function.create_instruction(Opcode::Store { align, volatile: false }, void, vec![value, pointer], Flags::default(), None);
+    function.insert(store, at).expect("a placed instruction");
+    for part in parts {
+        function.erase(part.store).expect("a store nothing reads");
+    }
+    true
+}
+
+/// `mergePartStores`
+/// ([:1696](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L1696)).
+fn merge_part_stores(
+    context: &mut llrm_mir::context::Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    mut parts: Vec<PartStore>,
+) -> bool {
+    if parts.len() < 2 {
+        return false;
+    }
+    // Sorted by pointer offset, consistent with the value offsets, and
+    // covering the value with no overlap.
+    parts.sort_by_key(|part| part.offset);
+    let mut changed = false;
+    let mut last_end_from_first: i128 = 0;
+    let mut first = 0;
+    for at in 0..parts.len() {
+        let part = &parts[at];
+        let ptr_from_first = part.offset - parts[first].offset;
+        let val_from_first = i128::from(part.val_offset) - i128::from(parts[first].val_offset);
+        if ptr_from_first * 8 != val_from_first || last_end_from_first != val_from_first {
+            changed |= merge_consecutive_part_stores(context, layout, function, &parts[first..at], last_end_from_first as u64);
+            first = at;
+            last_end_from_first = i128::from(part.width);
+            continue;
+        }
+        last_end_from_first = val_from_first + i128::from(part.width);
+    }
+    changed |= merge_consecutive_part_stores(context, layout, function, &parts[first..], last_end_from_first as u64);
+    changed
+}
+
+/// `foldConsecutiveStores`
+/// ([:1762](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L1762)):
+/// stores of the parts of one value to adjacent bytes become one wider store.
+fn fold_consecutive_stores(
+    context: &mut llrm_mir::context::Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    block: BlockId,
+) -> bool {
+    // FIXME (pin): big endian.
+    if layout.big_endian {
+        return false;
+    }
+    // The runs are found over the block as it is, then merged: a merge only
+    // erases stores already passed and adds one before them.
+    let mut runs: Vec<Vec<PartStore>> = Vec::new();
+    {
+        let q = query(context, layout, function);
+        let mut parts: Vec<PartStore> = Vec::new();
+        for inst in function.iter_block(block) {
+            if let Some(part) = match_part_store(&q, inst) {
+                if parts.is_empty() || part.is_compatible_with(&parts[0]) {
+                    parts.push(part);
+                    continue;
+                }
+                runs.push(std::mem::take(&mut parts));
+                parts.push(part);
+                continue;
+            }
+            if parts.is_empty() {
+                continue;
+            }
+            // DEVIATE 41.
+            if may_throw(&q, inst) || may_read_from_memory(&q, inst) || may_write_to_memory(&q, inst) {
+                runs.push(std::mem::take(&mut parts));
+            }
+        }
+        runs.push(parts);
+    }
+    let mut changed = false;
+    for run in runs {
+        changed |= merge_part_stores(context, layout, function, run);
+    }
+    changed
 }
 
 #[cfg(test)]
