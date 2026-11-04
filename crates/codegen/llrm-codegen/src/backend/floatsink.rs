@@ -142,7 +142,7 @@ mod tests {
     use crate::model::ir::{Addr, Held, Mem, Semantics, Space};
 
     fn held(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 10 })
+        Loc::Held(Held { value, width: 10, offset: 0 })
     }
 
     fn global(symbol: i64) -> Mem {
