@@ -68,3 +68,17 @@ def test_sf_z80_harness_sources_exist():
     names = re.search(r'F="([^"]+)"', open(os.path.join(d, "build.sh")).read()).group(1).split()
     for f in names:
         assert os.path.exists(os.path.join(root, "runtime/compiler-rt/lib/fp/f32", f + ".c")), f
+
+
+def test_z80_16bit_result_is_charged_the_de_store():
+    """gcc's driver stored a 16-bit result with ld (nn),hl (16 T), the DE columns with ld (nn),de (20 T): every 16-bit gcc
+    cell was 4 T optimistic (add16 read 78, by hand 82). 16-bit = ex de,hl 4 T + store 4 T; 8-bit in A for both."""
+    assert Z.result_charge(Z.U16) == (1, 8, 1)
+    assert Z.result_charge("int") == (1, 8, 1)
+    assert Z.result_charge(Z.U8) == (0, 0, 0)
+
+
+def test_z80_table_header_names_the_single_tu_ice():
+    """The shipped z80 cc1 ICEs on a single-TU softfloat build at -O2; the table says so, so no gcc cell is added for such a build."""
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tables", "z80-gcc.tsv")
+    assert "single-translation-unit softfloat build" in open(root).readline()
