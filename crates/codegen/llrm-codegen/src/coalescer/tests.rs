@@ -1547,6 +1547,21 @@ fn test_a_lane_def_after_a_joined_lane_keeps_it() {
     assert!(!low.undef_super && low.partial_defs == vec![2], "{low:?}");
 }
 
+/// A byte copied into the low lane of a pair names the same width at the same
+/// offset as a copy between two bytes, so it was taken for one: the byte (`al`)
+/// shares no palette with the pair (`ax`) whole, and the copy stayed (crc16 -Oz
+/// round-tripped a byte through `h`). Its lane def says it is a lane.
+#[test]
+fn test_a_byte_copied_into_the_low_lane_is_a_lane_copy_not_a_byte_copy() {
+    let env = env_with_palettes(&[(1, &[RegId::AL]), (2, &[RegId::AX])]);
+    assert!(!env.can_share(1, 2), "premise: the byte and the pair share no registers whole");
+    assert!(env.can_share_sub(1, 2), "premise: al is the low byte of ax");
+    let lane = lane_copy(2, 0, 1);
+    let pair = super::pair::CoalescerPair::set_registers(&lane, &env).expect("a lane of the pair");
+    assert!(pair.is_partial() && pair.lane_offset() == 0, "the byte is the pair's low lane");
+    assert!(super::pair::full_copy(&lane).is_none(), "a lane def is not a full copy");
+}
+
 /// A byte joins the lane of a pair only where some register of the pair's
 /// palette has a register of the byte's palette at that offset: `ah` is the
 /// byte above `al` in `ax`, and `al` is not. Before, `can_share_lane` had no

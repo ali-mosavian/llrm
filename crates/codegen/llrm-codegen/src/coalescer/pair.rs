@@ -204,6 +204,10 @@ pub trait CoalescerEnv {
 /// The (destination, source) of a plain move between values of one width
 /// (`isMoveInstr` for a full copy).
 pub fn full_copy(insn: &Insn) -> Option<(Held, Held)> {
+    // A def of one lane is a sub-register copy (`isFullCopy` is false).
+    if !insn.def_lanes.is_empty() {
+        return None;
+    }
     let what = insn.what.as_ref()?;
     if what.op != Operation::Move || what.dests.len() != 1 || what.sources.len() != 1 {
         return None;
@@ -257,7 +261,10 @@ impl CoalescerPair {
         env: &dyn CoalescerEnv,
     ) -> Option<Self> {
         let (dst, src) = move_copy(copy)?;
-        if is_whole(dst, src) {
+        // A byte copied into the low lane of a pair is the same width as the
+        // operand it names, so only the copy's own lane def says it is a lane.
+        let lane_def = copy.def_lanes.iter().any(|(value, _)| *value == dst.value);
+        if is_whole(dst, src) && !lane_def {
             if !env.can_share(src.value, dst.value) {
                 return None;
             }
@@ -274,7 +281,10 @@ impl CoalescerPair {
         // copy goes.
         let truncates = dst.width < src.width || (dst.width == src.width && src.offset != 0);
         let (narrow, wide) = if truncates { (dst, src) } else { (src, dst) };
-        if narrow.offset != 0 || narrow.value == wide.value || (wide.offset == 0 && wide.width == narrow.width) {
+        if narrow.offset != 0
+            || narrow.value == wide.value
+            || (wide.offset == 0 && wide.width == narrow.width && !lane_def)
+        {
             return None;
         }
         let shareable = match wide.offset {

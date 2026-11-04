@@ -226,6 +226,11 @@ pub fn join_copy(
     if cp.is_partial() && (cp.lane_offset() != 0 || has_lane_defs(lis, cp.dst_reg())) {
         return join_lane(lis, env, state, current_erased, &cp, copy, block);
     }
+    // DEVIATE C14: `JoinVals` has no lane masks, so a join of whole values
+    // that have lane defs is refused (series step 4).
+    if !cp.is_partial() && (has_lane_defs(lis, cp.src_reg()) || has_lane_defs(lis, cp.dst_reg())) {
+        return JoinResult::Rejected;
+    }
     let result = join_virt_regs(lis, state, &cp);
     if result != JoinResult::Joined {
         // Coalescing failed. Try rematerializing the definition of the source
