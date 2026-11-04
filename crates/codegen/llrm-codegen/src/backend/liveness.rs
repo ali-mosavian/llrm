@@ -691,7 +691,7 @@ mod tests {
             vec![],
             vec![1],
         );
-        ret.requires = vec![(Held { value: 1, width: 2 }, RegId::AX)];
+        ret.requires = vec![(Held { value: 1, width: 2, offset: 0 }, RegId::AX)];
         ret.reads_complete = true;
         let block = LirBlock::new(
             1,
