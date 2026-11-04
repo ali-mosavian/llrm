@@ -143,3 +143,14 @@ def test_vs_6502_bar_is_the_lower_of_both_gcc_columns():
     subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "vs_6502.py"), d, out, "2026-11-04"], check=True)
     row = next(l for l in open(out) if l.startswith("| p |"))
     assert row.split("|")[2:4] == [" 100 ", " 900 "], row
+
+
+def test_softfloat_z80_table_is_complete_and_current():
+    """The 11-03 table was measured from the removed monolithic sf32.c; it stayed in the repo marked STALE.
+    A table needs 32 gcc clk cells (2 variants x 2 levels x 8 ops), 4 library sizes and the cc1 md5, and no STALE mark."""
+    t = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "tables", "softfloat-z80.tsv")).read()
+    head = [l for l in t.splitlines() if l.startswith("#")]
+    assert not any("STALE" in l for l in head), "stale table"
+    assert re.search(r"cc1 md5 [0-9a-f]{32}", head[0]) and "runtime/compiler-rt" in head[0]
+    rows = [l.split("\t") for l in t.splitlines() if l.startswith("gcc\t")]
+    assert sum(r[3] == "clk" for r in rows) == 32 and sum(r[3] == "bytes" for r in rows) == 4
