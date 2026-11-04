@@ -164,17 +164,16 @@ impl FunctionPass for LoopIdiom {
         // rate where it has one, strictly (neither metric may grow) where not.
         let tuning = outer.target().tuning();
         let priced = tuning.price_fills;
-        let size_costs = (self.for_size || rate > 0 || priced).then(|| {
-            let inline =
-                if self.for_size { tuning.max_stores_per_memset_opt_size } else { tuning.max_stores_per_memset };
-            OperationCosts { memset_stores: inline as i64, ..outer.target().size_costs() }
-        });
+        let inline_stores =
+            if self.for_size { tuning.max_stores_per_memset_opt_size } else { tuning.max_stores_per_memset } as i64;
+        let size_costs = (self.for_size || rate > 0 || priced)
+            .then(|| OperationCosts { memset_stores: inline_stores, ..outer.target().size_costs() });
         let clock_costs = if self.for_size {
             Some((outer.target().costs(), outer.target().size_milliclocks_per_byte()))
         } else {
             Some((outer.target().costs(), rate))
         }
-        .map(|(costs, rate)| (OperationCosts { memset_stores: tuning.max_stores_per_memset as i64, ..costs }, rate))
+        .map(|(costs, rate)| (OperationCosts { memset_stores: inline_stores, ..costs }, rate))
         .filter(|(_, rate)| *rate > 0 || priced);
         let speed_costs = (!self.for_size && rate == 0 && !priced).then(|| outer.target().costs());
         let mut changed = false;
@@ -192,7 +191,7 @@ impl FunctionPass for LoopIdiom {
                 bytes: size_costs.as_ref().map(|costs| (costs, outer.callees())),
                 clocks: clock_costs.as_ref().map(|(costs, rate)| (costs, *rate)),
                 speed: speed_costs.as_ref(),
-                memset_stores: outer.target().tuning().max_stores_per_memset as i64,
+                memset_stores: inline_stores,
                 tti: tti.as_deref(),
             };
             let mut options = self.options;

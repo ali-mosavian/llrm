@@ -885,7 +885,7 @@ pub(crate) fn fills_pay(
             let each = trip_clocks(context, layout, function, callees, blocks.iter(), clocks);
             // At speed the backend stores a small constant fill inline
             // (`MaxStoresPerMemset`) and uses `rep stos` for the rest.
-            let (fill, fill_bytes) = match inline.filter(|inline| at_speed && inline.stores() <= inline.max_stores) {
+            let (fill, fill_bytes) = match inline.filter(|inline| inline.stores() <= inline.max_stores) {
                 Some(inline) => (fills * inline.price(clocks), fills * inline.price(costs)),
                 None => (fills * clocks.fill + cells * clocks.fill_cell, fills * costs.fill),
             };
