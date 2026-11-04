@@ -104,6 +104,9 @@ pub struct LiveRangeCalc {
     touched: Vec<usize>,
     /// Reserved: a value that is known to be "undef" (`UndefVNI`).
     undef_vni: Vn,
+    /// A read no def reaches is of an undefined lane and extends nothing
+    /// (`computeSubRangeUndefs`), where it is otherwise a failed assertion.
+    undef_ok: bool,
 }
 
 impl Default for LiveRangeCalc {
@@ -120,6 +123,7 @@ impl LiveRangeCalc {
             live_in: Vec::new(),
             touched: Vec::new(),
             undef_vni: VNInfo::new(0xbad, SlotIndex::default()),
+            undef_ok: false,
         }
     }
 
@@ -330,7 +334,11 @@ impl LiveRangeCalc {
         // If a unique reaching def was found, blit in the live ranges
         // immediately.
         if unique_vni {
-            let the_vni = the_vni.expect("a unique value");
+            let Some(the_vni) = the_vni else {
+                assert!(self.undef_ok, "a unique value");
+                self.live_in.clear();
+                return true;
+            };
             assert!(!self.is_undef(&Some(the_vni.clone())));
             let mut updater = LiveRangeUpdater::new(Some(lr));
             for bn in work_list {
@@ -590,6 +598,7 @@ impl LiveIntervalCalc {
                 rest_mask = Some(rest);
             }
         }
+        self.calc.undef_ok = true;
         for lanes in masks {
             // A def that keeps the rest of the value (`readsReg`) reads the
             // lanes it does not define.
@@ -619,6 +628,7 @@ impl LiveIntervalCalc {
             self.extend_to_uses(&mut range, &mine, ctx);
             li.create_sub_range(lanes).range = range;
         }
+        self.calc.undef_ok = false;
         if by_lane {
             Self::main_range_from_sub_ranges(li);
         }
