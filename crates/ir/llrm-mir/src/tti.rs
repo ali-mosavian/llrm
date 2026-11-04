@@ -849,6 +849,13 @@ pub trait Tti {
         1
     }
 
+    /// DEVIATE LU12: whether the adds of a use whose fixups all lie after the
+    /// loop are rated as run once, not every trip (the pin rates them every
+    /// trip). Off: they cost the loop an add each, as in the pin.
+    fn lsr_exit_use_adds_run_once(&self) -> bool {
+        false
+    }
+
     /// Whether a stack slot's address is a displacement off the frame register
     /// in an addressing mode, so as the base of an address it costs no
     /// register of its own.

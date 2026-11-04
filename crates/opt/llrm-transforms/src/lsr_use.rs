@@ -568,11 +568,13 @@ impl Cost {
 
         // The unfolded adds inside the loop.
         // DEVIATE LU12: the pin counts the adds of a use whose fixups all lie
-        // outside the loop as if they ran every trip; they run once, so they
-        // do not weigh against the formulae that share the loop's counter
-        // (z80 find: an exit value `i` taken from a second counter beat
-        // `base + i` and a `dec` after the loop).
-        let inside = !lu.all_fixups_outside_loop;
+        // outside the loop as if they ran every trip; they run once. Where the
+        // target says so, they do not weigh against the formulae that share
+        // the loop's counter (z80 find: an exit value `i` taken from a second
+        // counter beat `base + i` and a `dec` after the loop). Off for x86: a
+        // short loop entered often (m16 fib, frames) pays the once-run adds
+        // on every entry.
+        let inside = !(lu.all_fixups_outside_loop && r.tti.lsr_exit_use_adds_run_once());
         let parts = f.num_regs();
         if parts > 1 && inside {
             // Not the base and a possible second register, if the target folds
