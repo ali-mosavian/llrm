@@ -48,6 +48,30 @@ fn reduced_stressed(
     (changed, after)
 }
 
+/// [`reduced_on`] under the flat cost model, where every cost is 1.
+fn reduced_flat(
+    text: &str,
+    inputs: &[&[i128]],
+) -> (bool, String) {
+    let mut module = parsed(&format!("{FLAT}{text}"));
+    let before = module.clone();
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let changed = crate::lsr_pass::reduced_with(
+        context,
+        &layout,
+        function,
+        &mut declared,
+        &outer,
+        &llrm_mir::tti::Basic,
+        false,
+    );
+    let after = printed(&module);
+    assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
+    (changed, after)
+}
+
 /// A local array filled and summed by one loop, the exit `i == n`.
 const ARRAY: &str = "define i32 @f(i32 %n) {
 entry:
@@ -170,15 +194,7 @@ exit:
     assert!(after.contains("IV.S."), "{after}");
 }
 
-/// Two conversions of one counter got two floating counters: the pin's
-/// `OptimizeShadowIV` makes one per loop and breaks. wasm x_matmul_f -O2 grew
-/// 29 B (1584 -> 1613) once both conversions were `uitofp nneg` and GVN had no
-/// pass left to merge them: each kept its own `IV.S.` and `fadd`.
-#[test]
-fn a_loop_gets_one_floating_counter_for_two_conversions() {
-    let (changed, after) = reduced_on(
-        FLAT,
-        "define double @f(i32 %n) {
+const TWO_CONVERSIONS: &str = "define double @f(i32 %n) {
 entry:
   br label %loop
 loop:
@@ -194,12 +210,33 @@ loop:
 exit:
   ret double %s3
 }
-",
-        "i486",
-        &[&[1], &[5], &[17]],
-    );
+";
+
+/// Two conversions of one counter got two floating counters off the x87
+/// stack: the pin's `OptimizeShadowIV` makes one per loop and breaks. wasm x_matmul_f -O2 grew 29 B (1584 -> 1613) once both
+/// conversions were `uitofp nneg` and GVN had no pass left to merge them.
+#[test]
+fn a_loop_gets_one_floating_counter_for_two_conversions_off_the_x87_stack() {
+    let (changed, after) = reduced_flat(TWO_CONVERSIONS, &[&[1], &[5], &[17]]);
     assert!(changed, "{after}");
     assert_eq!(after.matches("= phi double [ 0.000000e+00").count() - 1, 1, "{after}");
+}
+
+/// Where floats live on the x87 stack each conversion gets its own counter,
+/// as before: a conversion is a store and a `fild` every trip. m16 x_ldconv
+/// -O2 was 250 B and one `fild` fewer a trip with two (259 B with one).
+#[test]
+fn a_loop_gets_a_counter_per_conversion_where_floats_live_on_the_x87_stack() {
+    let tuning = llrm_mir::target::Tuning { x87_stack_slots: Some(8), ..llrm_mir::target::Tuning::PIN };
+    let mut module = parsed(&format!("{FLAT}{TWO_CONVERSIONS}"));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let tti = X86::of_cpu("i486").unwrap().with_tuning(tuning);
+    let changed = crate::lsr_pass::reduced_with(context, &layout, function, &mut declared, &outer, &tti, false);
+    let after = printed(&module);
+    assert!(changed, "{after}");
+    assert_eq!(after.matches("= phi double [ 0.000000e+00").count() - 1, 2, "{after}");
 }
 
 /// `OptimizeShadowIV` on the outer loop of a nest: `(double) r` is taken in

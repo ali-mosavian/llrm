@@ -229,8 +229,9 @@ fn plan_loop(
         function.terminator(lp.get_loop_latch(function).expect("a latch")).expect("a terminator");
     match marked {
         None => {
-            // `OptimizeShadowIV` makes one variable and breaks.
-            if !shadowed && let Some(shadow) = lsr_prepare::analyze_shadow(se, &cx, header, &users) {
+            // `OptimizeShadowIV` makes one variable and breaks (DEVIATE LS-SH: more
+            // where floats live on the x87 stack).
+            if let Some(shadow) = lsr_prepare::analyze_shadow(se, &cx, tti, header, &users, shadowed) {
                 return Outcome::Shadow(shadow);
             }
             let edits = lsr_prepare::analyze(se, &cx, tti, header, &users);
