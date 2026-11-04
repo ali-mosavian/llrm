@@ -330,6 +330,7 @@ pub mod memcpyoptimizer;
 pub mod memloops;
 #[cfg(test)]
 mod memloops_tests;
+pub mod globalmerge;
 pub mod memsetpattern;
 #[cfg(test)]
 mod memsetpattern_tests;
