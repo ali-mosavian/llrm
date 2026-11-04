@@ -134,7 +134,7 @@ impl<T: Target> Converted<T> {
             }),
             // `TargetInstrInfo::isReMaterializable`: the coalescer asks the
             // target, not the shared by-name rule.
-            Some(Box::new(remat_shape)),
+            T::coalescer_asks_target_for_remat().then(|| Box::new(remat_shape) as Box<dyn Fn(&Insn) -> bool>),
         );
         for (value, order) in self.orders.iter_mut() {
             if let Some(allowed) = palettes.get(value) {

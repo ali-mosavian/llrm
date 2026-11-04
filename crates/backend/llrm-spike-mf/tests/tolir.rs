@@ -40,6 +40,10 @@ impl Target for Flat {
         register
     }
 
+    fn coalescer_asks_target_for_remat() -> bool {
+        true
+    }
+
     fn reserved(root: RegId) -> bool {
         root == RegId::ESP
     }

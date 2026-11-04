@@ -92,6 +92,13 @@ pub trait Target {
         true
     }
 
+    /// Whether the coalescer asks the target which defs it may make again
+    /// (`TargetInstrInfo::isReMaterializable`), instead of the shared rule by
+    /// name. Off keeps a target's existing joins.
+    fn coalescer_asks_target_for_remat() -> bool {
+        false
+    }
+
     /// Whether `inst` only moves the lanes of one register into those of
     /// another (the 6502's `PACK` and `UNPACK`): its operands may share
     /// storage, a lane at a time.

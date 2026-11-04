@@ -443,6 +443,10 @@ impl AllocTarget for Arm64 {
             || (darwin() && root == crate::reg::X18)
     }
 
+    fn coalescer_asks_target_for_remat() -> bool {
+        true
+    }
+
     fn caller_saved() -> Vec<RegId> {
         let gprs = (0..=18u32).map(|n| id(Class::Gpr, n));
         let fprs = (0..=7u32).chain(16..=31).map(|n| id(Class::Fpr, n));
