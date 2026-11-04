@@ -47,6 +47,9 @@ pub mod spill {
     /// `cell := P` and `P := cell`.
     pub const SAVE_FLAGS: u16 = 0xF002;
     pub const LOAD_FLAGS: u16 = 0xF003;
+    /// The end of a block IR `unreachable` closes (a call that never
+    /// returns): control does not fall into the next block. Prints nothing.
+    pub const UNREACHABLE: u16 = 0xF004;
 }
 
 #[derive(Clone, Debug)]
@@ -590,6 +593,7 @@ pub fn expand(
         spill::LOAD_CARRY => writeln!(out, "  lda {}\n  lsr a", reg(&o[0])?).unwrap(),
         spill::SAVE_FLAGS => writeln!(out, "  php\n  pla\n  sta {}", reg(&o[0])?).unwrap(),
         spill::LOAD_FLAGS => writeln!(out, "  lda {}\n  pha\n  plp", reg(&o[0])?).unwrap(),
+        spill::UNREACHABLE => {}
         other => return Err(format!("opcode {other} has no expansion")),
     }
     Ok(out)
