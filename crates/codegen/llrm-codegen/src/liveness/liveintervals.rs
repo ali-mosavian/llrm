@@ -1557,18 +1557,25 @@ mod tests {
     /// def ended the first's value and the range had a gap between them.
     #[test]
     fn test_a_value_defined_by_lanes_in_either_order_is_live_from_its_first_lane_def() {
-        let lane = |byte: u32| {
+        let lane = |byte: u32, keeps_rest: bool| {
             let mut def = Insn::new(0, None, None, vec![1], Vec::new());
             def.def_lanes = vec![(1, ValueLanes::at(byte, 1))];
+            if keeps_rest {
+                def.partial_defs = vec![1];
+            }
             Arc::new(def)
         };
-        let (high, low) = (lane(1), lane(0));
+        // the second def keeps the first's lane, as the coalescer makes it
+        let (high, low) = (lane(1, false), lane(0, true));
         let insns = [Arc::clone(&high), Arc::clone(&low), insn(&[], &[1])];
         let mut lis = LiveIntervals::new(&body(&insns));
         let between = lis.indexes.get_instruction_index(low.id()).get_reg_slot(false);
         let interval = lis.interval(1);
         assert!(interval.range.live_at(&between), "the high byte is live across the low byte's def");
-        assert_eq!(interval.range.segments.len(), 1, "one stretch from the first lane def to the read");
+        // one value per def (the pin's main range), abutting: no gap
+        let segments = &interval.range.segments;
+        assert_eq!(segments.len(), 2, "a value for each lane def");
+        assert_eq!(segments[0].end, segments[1].start, "no gap between the lane defs' values");
     }
 
 

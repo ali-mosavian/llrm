@@ -630,38 +630,40 @@ impl LiveIntervalCalc {
         }
         self.calc.undef_ok = false;
         if by_lane {
-            Self::main_range_from_sub_ranges(li);
+            self.main_range_from_sub_ranges(li, operands, ctx);
         }
     }
 
-    /// `constructMainRangeFromSubranges`: the live points of the sub-ranges
-    /// (and of what the range already held, a parameter's dead def), one value
-    /// for each stretch of them that runs together.
-    fn main_range_from_sub_ranges(li: &mut LiveInterval) {
-        let mut stretches: Vec<(SlotIndex, SlotIndex)> = li
-            .range
-            .segments
-            .iter()
-            .chain(li.sub_ranges().iter().flat_map(|sub| sub.range.segments.iter()))
-            .map(|segment| (segment.start.clone(), segment.end.clone()))
-            .collect();
-        stretches.sort();
+    /// `constructMainRangeFromSubranges`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveIntervalCalc.cpp#L105>):
+    /// a dead def in the main range at every def of every sub-range (what the
+    /// range already held, a parameter's dead def, stays), then extended to
+    /// every read. One value per def, not per stretch: values that keep the
+    /// lanes of an earlier def are values of their own, which spill hoisting
+    /// and value mapping tell apart.
+    fn main_range_from_sub_ranges(
+        &mut self,
+        li: &mut LiveInterval,
+        operands: &[Operand],
+        ctx: &Ctx,
+    ) {
         let mut range = LiveRange::new();
-        let mut merged: Vec<(SlotIndex, SlotIndex)> = Vec::new();
-        for (start, end) in stretches {
-            match merged.last_mut() {
-                Some((_, last)) if start <= *last => {
-                    if end > *last {
-                        *last = end;
-                    }
-                }
-                _ => merged.push((start, end)),
-            }
+        let held: Vec<SlotIndex> =
+            li.range.valnos.iter().filter(|vn| !vn.is_unused() && !vn.is_phi_def()).map(|vn| vn.def()).collect();
+        let defs: Vec<SlotIndex> = li
+            .sub_ranges()
+            .iter()
+            .flat_map(|sub| sub.range.valnos.iter())
+            .filter(|vn| !vn.is_unused() && !vn.is_phi_def())
+            .map(|vn| vn.def())
+            .collect();
+        for def in held.into_iter().chain(defs) {
+            range.create_dead_def(def);
         }
-        for (start, end) in merged {
-            let vn = range.get_next_value(start.clone());
-            range.add_segment(Segment::new(start, end, Some(vn)));
-        }
+        self.calc.reset_live_out_map(ctx.cfg.len());
+        self.calc.undef_ok = true;
+        self.extend_to_uses(&mut range, operands, ctx);
+        self.calc.undef_ok = false;
         li.range = range;
     }
 
