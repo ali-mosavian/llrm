@@ -492,6 +492,12 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE PL6: whether a loop's first iteration is peeled where its entry
+    /// constants fold enough of it to pay the copy at the speed rate.
+    fn peels_folded_entry(&self) -> bool {
+        false
+    }
+
     /// DEVIATE REC-2: gcc's growth bar of the recursive edge at (-O2, -O3);
     /// none: no bar.
     fn recursive_edge_growth(&self) -> Option<(i64, i64)> {

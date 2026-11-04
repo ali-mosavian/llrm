@@ -599,6 +599,10 @@ impl Tti for X86 {
         self.tuning.recursive_edge_growth
     }
 
+    fn peels_folded_entry(&self) -> bool {
+        self.tuning.peel_folded_entry
+    }
+
     fn priced_self_inlining(&self) -> Option<(u32, i64)> {
         self.real_mode.as_ref()?.priced_self_inlining
     }
