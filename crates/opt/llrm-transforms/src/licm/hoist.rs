@@ -81,6 +81,7 @@ pub fn hoist_region(
             } else if let Some(one) = hoist_min_max(unit, ctx, inst)
                 .or_else(|| hoist_gep(unit, ctx, inst))
                 .or_else(|| hoist_bo_association(unit, ctx, inst))
+                .or_else(|| hoist_mul_add_association(unit, ctx, inst))
             {
                 ctx.state.gone.borrow_mut().extend([one.inst()].into_iter().chain(one.erased()));
                 // The preheader gets it where the visit reached it, after the
@@ -124,6 +125,9 @@ pub fn may_reassociate(
             matches!(
                 function.value(value).def,
                 ValueDef::Instruction(def) if function.instruction(def).opcode == bo.opcode
+                    // `hoistMulAddAssociation`: a product of a sum.
+                    || (bo.opcode == Opcode::Binary(BinaryOp::Mul)
+                        && function.instruction(def).opcode == Opcode::Binary(BinaryOp::Add))
             )
         })
 }
@@ -143,6 +147,12 @@ pub enum Reassociation {
         /// The flags both the new instructions get (`OverflowTracking`).
         flags: Wrap,
     },
+    /// [`hoist_mul_add_association`]: `mul` of a sum of products by the
+    /// invariant `factor` becomes the sum with each product's invariant
+    /// operand multiplied by `factor` in the preheader. `leaves` are the
+    /// products and the index of the invariant operand of each; `adds` the
+    /// sums looked through, which lose their poison flags.
+    MulAdd { mul: InstId, factor: Operand, variant: Operand, leaves: Vec<(InstId, usize)>, adds: Vec<InstId> },
     /// [`hoist_gep`]: `gep (gep ptr, inner), outer` becomes
     /// `gep (gep ptr, outer), inner`, the new inner one made in the preheader.
     Gep { gep: InstId, src: InstId, in_bounds: bool },
@@ -170,6 +180,7 @@ impl Reassociation {
     pub fn inst(&self) -> InstId {
         match *self {
             Self::BinaryOp { bo, .. } => bo,
+            Self::MulAdd { mul, .. } => mul,
             Self::Gep { gep, .. } => gep,
             Self::MinMax { logic, .. } => logic,
         }
@@ -179,6 +190,7 @@ impl Reassociation {
     pub fn erased(&self) -> Vec<InstId> {
         match *self {
             Self::BinaryOp { bo0, .. } => vec![bo0],
+            Self::MulAdd { ref leaves, .. } => leaves.iter().map(|&(leaf, _)| leaf).collect(),
             Self::Gep { src, .. } => vec![src],
             Self::MinMax { cond1, cond2, .. } => vec![cond1, cond2],
         }
@@ -427,6 +439,76 @@ fn hoist_bo_association(
     Some(Reassociation::BinaryOp { bo: inst, bo0: bo0_inst, op, lv, c1, c2, flags })
 }
 
+/// [`hoistMulAddAssociation`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L2583):
+/// `((A1 * B1) + (A2 * B2) + ...) * C` with the `Ai` and `C` loop invariant
+/// is `(A1 * C) * B1 + ...`, the invariant `Ai * C` made in the preheader.
+/// Integer only, DEVIATE: the floating-point form (`fmul` with fast-math
+/// flags) is not translated. Exit 2026-11-12. An instruction another
+/// reassociation of the loop has replaced is left alone, as for
+/// [`hoist_bo_association`].
+fn hoist_mul_add_association(
+    unit: &passes::Unit,
+    ctx: &LoopCtx,
+    inst: InstId,
+) -> Option<Reassociation> {
+    let function = &*unit.function;
+    let mul = function.instruction(inst);
+    if mul.opcode != Opcode::Binary(BinaryOp::Mul) {
+        return None;
+    }
+    let (mut variant, mut factor) = (mul.operands[0], mul.operands[1]);
+    if ctx.is_loop_invariant(variant) {
+        std::mem::swap(&mut variant, &mut factor);
+    }
+    if ctx.is_loop_invariant(variant) || !ctx.is_loop_invariant(factor) {
+        return None;
+    }
+    let gone = |inst: InstId| ctx.state.gone.borrow().contains(&inst);
+    let binary = |operand: Operand| -> Option<InstId> {
+        let Operand::Value(value) = operand else { return None };
+        let ValueDef::Instruction(def) = function.value(value).def else { return None };
+        (matches!(function.instruction(def).opcode, Opcode::Binary(_)) && !gone(def)).then_some(def)
+    };
+    let (mut leaves, mut adds) = (Vec::new(), Vec::new());
+    let mut worklist: Vec<InstId> = binary(variant).into_iter().collect();
+    while let Some(bo) = worklist.pop() {
+        let instruction = function.instruction(bo);
+        let result = instruction.result?;
+        if !function.users(result).has_one_use() {
+            return None;
+        }
+        if instruction.opcode == Opcode::Binary(BinaryOp::Add)
+            && let (Some(lhs), Some(rhs)) = (binary(instruction.operands[0]), binary(instruction.operands[1]))
+        {
+            worklist.extend([lhs, rhs]);
+            adds.push(bo);
+            continue;
+        }
+        if instruction.opcode != Opcode::Binary(BinaryOp::Mul) || ctx.is_loop_invariant(Operand::Value(result)) {
+            return None;
+        }
+        let at = if ctx.is_loop_invariant(instruction.operands[0]) {
+            0
+        } else if ctx.is_loop_invariant(instruction.operands[1]) {
+            1
+        } else {
+            return None;
+        };
+        leaves.push((bo, at));
+        // `IntAssociationUpperLimit`.
+        if leaves.len() > INT_ASSOCIATION_UPPER_LIMIT {
+            return None;
+        }
+    }
+    if leaves.is_empty() {
+        return None;
+    }
+    Some(Reassociation::MulAdd { mul: inst, factor, variant, leaves, adds })
+}
+
+/// `licm-max-num-int-reassociations`.
+const INT_ASSOCIATION_UPPER_LIMIT: usize = 5;
+
 /// [`isSafeToExecuteUnconditionally`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L1507)
 /// (`AllowSpeculation` is the run's, `LoopSafety::allow_speculation`).
 fn is_safe_to_execute_unconditionally(
@@ -591,7 +673,14 @@ fn speculatable(
                 // alignment must reach the load's own.
                 let wanted = align.unwrap_or_else(|| layout.align(&context.types, instruction.ty));
                 return pointer_alignment_at(context, layout, outer, function, pointer) >= wanted
-                    && llrm_mir::valuetracking::dereferenceable(context, layout, outer.sizes(), function, pointer, bytes);
+                    && llrm_mir::valuetracking::dereferenceable(
+                        context,
+                        layout,
+                        outer.sizes(),
+                        function,
+                        pointer,
+                        bytes,
+                    );
             }
             llrm_mir::valuetracking::dereferenceable(context, layout, outer.sizes(), function, pointer, bytes)
                 || !outer.target().load_may_trap(
