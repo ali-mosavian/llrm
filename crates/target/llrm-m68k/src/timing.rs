@@ -470,6 +470,9 @@ pub fn from_gnu(text: &str) -> Result<String, String> {
         .collect();
     let operands = match operands.as_slice() {
         [source, _, quotient] if long_divide => vec![source.clone(), quotient.clone()],
+        // `mulu.l %d1,%d4,%d0` is the 32 x 32 -> 64 product, `%d4` its high
+        // half: the manual's table has one `MUL.L` row for both forms
+        [source, _, low] if matches!(name.as_str(), "mulu.l" | "muls.l") => vec![source.clone(), low.clone()],
         _ => operands,
     };
     Ok(if operands.is_empty() { name } else { format!("{name} {}", operands.join(", ")) })
