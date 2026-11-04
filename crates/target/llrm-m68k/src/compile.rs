@@ -118,6 +118,8 @@ pub fn items_with(
         || module.global(id).function().is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
     let blocks = select_function_with(module, name, cpu, options.source_order, options.indexed, options.short)?;
     let mut function = emit(name, &blocks)?;
+    function.returns_twice =
+        module.global(id).function().is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
     if options.short {
         crate::cmpelim::eliminate_tests(&mut function);
         crate::negadd::negative_adds_to_subq(&mut function);
