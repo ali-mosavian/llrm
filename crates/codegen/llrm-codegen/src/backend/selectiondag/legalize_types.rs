@@ -1669,6 +1669,7 @@ impl<'a> TypeLegalizer<'a> {
             op @ (ISD::CtTz | ISD::CtTzZeroPoison) => self.expand_cttz(value, op, half),
             op @ (ISD::Add | ISD::Sub) => self.expand_add_sub(value, op, half)?,
             op @ (ISD::UAddO | ISD::USubO) => self.expand_addsub_overflow(value, op, half)?,
+            op @ (ISD::UAddOCarry | ISD::USubOCarry) => self.expand_addsub_carry(value, op, half),
             op @ (ISD::SAddO | ISD::SSubO) => self.expand_signed_addsub_overflow(value, op, half),
             ISD::SMulFix | ISD::UMulFix | ISD::SMulFixSat | ISD::UMulFixSat => self.expand_mulfix(value, half),
             ISD::SShlSat | ISD::UShlSat => {
@@ -2074,7 +2075,7 @@ impl<'a> TypeLegalizer<'a> {
         } else {
             (ISD::USubO, ISD::USubOCarry, ISD::Sub)
         };
-        if !self.tli.is_operation_legal_or_custom(carry_op, half) {
+        if !self.tli.is_operation_legal_or_custom(carry_op, self.tli.types.type_to_expand_to(half)) {
             // Without a carry operation: the plain halves, the carry (a borrow
             // for a subtract) a compare of the low result with its operand.
             let lo = self.dag.get_node(plain, half, &[ll, rl]);
@@ -2116,7 +2117,10 @@ impl<'a> TypeLegalizer<'a> {
             (ISD::USubOCarry, ISD::Sub, CondCode::SetUGt)
         };
         let overflow_vt = self.dag.node(value).values[1];
-        let (lo, hi, overflow) = if self.tli.is_operation_legal_or_custom(carry_op, half) {
+        let (lo, hi, overflow) = if self
+            .tli
+            .is_operation_legal_or_custom(carry_op, self.tli.types.type_to_expand_to(half))
+        {
             let lo = self.dag.get_node_multi(op, &[half, overflow_vt], &[ll, rl]);
             let hi =
                 self.dag.get_node_multi(carry_op, &[half, overflow_vt], &[lh, rh, SDValue { node: lo.node, res: 1 }]);
@@ -2129,6 +2133,24 @@ impl<'a> TypeLegalizer<'a> {
         };
         self.replace_value_with(SDValue { node: value.node, res: 1 }, overflow);
         Ok((lo, hi))
+    }
+
+    /// `ExpandIntRes_UADDSUBO_CARRY`: the low halves with the carry in, the
+    /// high halves with the low ones' carry out, whose overflow is the
+    /// whole one.
+    fn expand_addsub_carry(
+        &mut self,
+        value: SDValue,
+        op: ISD,
+        half: EVT,
+    ) -> (SDValue, SDValue) {
+        let (lhs, rhs, carry) = (self.dag.operand(value, 0), self.dag.operand(value, 1), self.dag.operand(value, 2));
+        let ((ll, lh), (rl, rh)) = (self.expanded_integer(lhs), self.expanded_integer(rhs));
+        let overflow_vt = self.dag.node(value).values[1];
+        let lo = self.dag.get_node_multi(op, &[half, overflow_vt], &[ll, rl, carry]);
+        let hi = self.dag.get_node_multi(op, &[half, overflow_vt], &[lh, rh, SDValue { node: lo.node, res: 1 }]);
+        self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: hi.node, res: 1 });
+        (SDValue { node: lo.node, res: 0 }, SDValue { node: hi.node, res: 0 })
     }
 
     /// `ExpandIntRes_SADDSUBO` without a signed carry operation: the plain sum
@@ -2785,8 +2807,8 @@ impl<'a> TypeLegalizer<'a> {
                 .dag
                 .get_node_flags(ISD::BuildPair, pointer, &[moved, selector], super::dag::SDNodeFlags::PAIR_FAR);
         }
-        let offset = self.dag.get_constant(step, pointer);
-        self.dag.get_node(ISD::Add, pointer, &[ptr, offset])
+        // `getObjectPtrOffset`: the offset stays inside the object, so the add cannot wrap.
+        self.dag.get_object_ptr_offset(ptr, step as i64)
     }
 
     /// `ExpandIntOp_STORE`, a plain store: the low dword, then the high at +4

@@ -251,6 +251,9 @@ pub fn select_block(
     optimize: bool,
 ) -> Result<Scheduled, Refusal> {
     let tli = target_lowering(cpu, features);
+    // The scratch objects the legalizers ask for (an `i128` libcall result's
+    // memory) are frame objects numbered after the function's.
+    dag.first_temporary = info.next_stack_object();
     let tables = &info.jump_tables;
     let mut lowering = WasmLowering { tables };
     if optimize {
@@ -264,6 +267,9 @@ pub fn select_block(
     legalized.map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
     combine(dag, CombineLevel::AfterLegalizeTypes, &tli, alias, optimize);
     DagLegalizer::new(dag, &tli, &mut lowering).run().map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
+    for (size, align) in std::mem::take(&mut dag.temporaries) {
+        info.new_stack_object(size, align);
+    }
     combine(dag, CombineLevel::AfterLegalizeDag, &tli, alias, optimize);
     if optimize {
         live_out::compute_live_out_vreg_info(dag, info);

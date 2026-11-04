@@ -302,6 +302,26 @@ fn a_widened_load_goes_to_the_pairs_low_half() {
     assert!(direct && !out.contains("ld c, b") && !out.contains("ld e, d"), "{out}");
 }
 
+/// `gcd`'s guard and latch both compare `cp a, l`; tail merging did not cross
+/// from the guard into the loop at -Oz, so the test was emitted twice (14
+/// instructions, 17 B); the pin merges across loops before placement: 13, 16 B.
+#[test]
+fn a_guard_and_a_latch_with_the_same_test_share_it_where_bytes_come_first() {
+    let out = text(include_str!("kernels/ir/gcd.ll"), "gcd", 0, &Request::new(Level::Oz)).expect("compiles");
+    let instructions = out.lines().filter(|line| line.starts_with('\t') && !line.starts_with("\t.")).count();
+    assert_eq!(instructions, 13, "{out}");
+}
+
+/// The merge leaves the loop's test at the bottom behind one entry jump (12 T
+/// per call): -3 B for xs8 at -O2 (25 B, 524 T against 28 B, 507 T), a trade
+/// speed does not make.
+#[test]
+fn a_loop_is_not_entered_by_a_jump_to_a_merged_test_at_o2() {
+    let out = text(include_str!("kernels/ir/xs8.ll"), "xs8", 0, &Request::new(Level::O2)).expect("compiles");
+    let first = out.lines().map(str::trim).find(|line| !line.starts_with('.') && !line.ends_with(':'));
+    assert!(first.is_some_and(|line| !line.starts_with("jr ")), "{out}");
+}
+
 /// `sum4`'s rotated loop was `dec b; inc hl; jr nz`: the pointer step sat
 /// between the decrement and the branch, so no `djnz` formed (12 B, 172 T, 22
 /// instructions at -O2; 11 B, 160 T, 18 with it).
@@ -1242,15 +1262,16 @@ fn a_difference_of_a_phi_of_bytes_and_a_byte_is_a_byte_subtract_with_the_borrow(
 /// copied or kept, constants hoisted or not, the argument copies joined or
 /// not): 16 greedy runs, 51% of a 1.3 G-instruction compile. Copied and kept
 /// gave the same code on all 60 kernel cells; only the copied one is made.
-/// lz4 -O2 took 16 runs. Each of the two schedulers (`Source`, `ILP`) makes
-/// its own: 16.
+/// lz4 -O2 took 16 runs. The choice of a byte loaded through `a` with the
+/// argument copies unjoined won on no kernel cell and none of the 105 corpus
+/// files: 6 per scheduler (`Source`, `ILP`), 12.
 #[test]
-fn a_function_is_allocated_at_most_eight_times_per_scheduler() {
+fn a_function_is_allocated_at_most_six_times_per_scheduler() {
     let ir = include_str!("kernels/ir/lz4.ll");
     llrm_z80::compile::take_allocations();
     text(ir, "lz4", 0, &Request::new(Level::O2)).expect("compiles");
     let runs = llrm_z80::compile::take_allocations();
-    assert!(runs <= 16, "lz4 -O2 was allocated {runs} times");
+    assert!(runs <= 12, "lz4 -O2 was allocated {runs} times");
 }
 
 fn many(
