@@ -873,6 +873,18 @@ pub trait Tti {
         false
     }
 
+    /// Beyond the pin: the operations `IndVarSimplify`'s test replacement may
+    /// spend on a loop's exit limit (`SCEVCheapExpansionBudget`, 4), for a
+    /// function built for size or not. Where the original test is one compare
+    /// against a value already in hand, a limit such as `smax(n, 1)` costs
+    /// more than the rewrite saves.
+    fn lftr_expansion_budget(
+        &self,
+        _optsize: bool,
+    ) -> u32 {
+        4
+    }
+
     /// `isNumRegsMajorCostOfLSR`.
     fn is_num_regs_major_cost_of_lsr(&self) -> bool {
         true
