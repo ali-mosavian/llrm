@@ -22,6 +22,9 @@ pub enum Class {
     Acc,
     Gr16,
     Hlr,
+    /// `de` and `bc` alone: the fixed operands of `ldir`.
+    Der,
+    Bcr,
     Iy,
     /// Unconstrained: any allocatable register.
     Any,
@@ -77,6 +80,8 @@ impl Target for Z80Registers {
             (Class::Any, one) | (one, Class::Any) => Some(one),
             (Class::Gr8, Class::Acc) | (Class::Acc, Class::Gr8) => Some(Class::Acc),
             (Class::Gr16, Class::Hlr) | (Class::Hlr, Class::Gr16) => Some(Class::Hlr),
+            (Class::Gr16, Class::Der) | (Class::Der, Class::Gr16) => Some(Class::Der),
+            (Class::Gr16, Class::Bcr) | (Class::Bcr, Class::Gr16) => Some(Class::Bcr),
             _ => None,
         }
     }
@@ -91,6 +96,8 @@ impl Target for Z80Registers {
             Class::Acc => vec![reg::A],
             Class::Gr16 => PAIRS.to_vec(),
             Class::Hlr => vec![reg::HL],
+            Class::Der => vec![reg::DE],
+            Class::Bcr => vec![reg::BC],
             Class::Iy => vec![reg::IY],
             Class::Any => BYTES.iter().chain(&PAIRS).chain(&[reg::IY]).copied().collect(),
         }
