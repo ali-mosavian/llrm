@@ -95,9 +95,9 @@ One loop in three languages, compiled with `-S` and compared: [examples/dot](exa
 
 One loop in three languages: a dot product of two `int` arrays, returned as a
 `long`. The sources are in [examples/dot](examples/dot); each listing is what `-S`
-prints with `-march=i486`, and the comments are added by hand. C is in the medium model.
+prints for an i486, and the comments are added by hand.
 
-C, `llrm-c dot.c -march=i486 -S`:
+C, `llrm-cc --target=x86_16-dos-rp3 -O2 dot.c -S` (medium model, regparm3; `LLRM_CLANG_M16` names the i8086 clang that `tools/build-clang-m16.sh` builds):
 
 ```c
 long dot(const int *a, const int *b, int n)
@@ -112,33 +112,36 @@ long dot(const int *a, const int *b, int n)
 
 ```asm
 _dot@3 proc far
-L0_0:
-    test cx, cx
-    jle L0_4294967297               ; [header copy] one guard for n <= 0, ahead of the prologue
-L0_17:
-    push si                         ; a is in ax, b in dx, n in cx (regparm3); si and di are callee-saved
-    push di
-    mov si, ax                      ; si = a, an address register: ax cannot address
-    mov di, dx                      ; di = b
-    add cx, cx                      ; cx = 2n, the byte length of each array
-    mov bx, cx
-    neg bx                          ; [one induction variable] bx = -2n is the counter and the offset
-    add si, cx                      ; [biased] a + 2n, so a[i] is at [bx+si]
-    add di, cx                      ; [biased] b + 2n
-    xor eax, eax                    ; total = 0
-L0_4:
-    movsx ecx, word ptr [bx+si]     ; a[i], sign-extended to 32 bits
-    movsx edx, word ptr [bx+di]     ; b[i]
-    imul ecx, edx                   ; (long)a[i] * b[i]: a 32-bit multiply, no runtime helper
-    add eax, ecx                    ; total += product
-    add bx, 2                       ; step one int; [flag reuse] its flags end the loop at 0
-    jne L0_4
+L0_1:
+    test cx, cx                   ; a is in ax, b in dx, n in cx (regparm3)
+    jle L0_2_1                    ; [header copy] one guard for n <= 0, ahead of the prologue
 L0_2:
-    pop di                          ; the long is already in eax: it returns there
-    pop si                          ; no frame: nothing is on the stack
+    push bp                       ; a frame pointer: nothing is addressed through it
+    mov bp, sp
+    push si                       ; si and di are callee-saved
+    push di
+    mov si, dx                    ; si = b: only bx, si, di and bp address
+    mov di, ax                    ; di = a
+    add cx, cx                    ; cx = 2n, the byte length of each array
+    mov bx, cx
+    neg bx                        ; [one induction variable] bx = -2n is the counter and the offset
+    add si, cx                    ; [biased] b + 2n, so b[i] is at [bx+si]
+    add di, cx                    ; [biased] a + 2n, so a[i] is at [bx+di]
+    xor eax, eax                  ; total = 0
+L0_3:
+    movsx ecx, word ptr [bx+di]   ; a[i], sign-extended to 32 bits
+    movsx edx, word ptr [bx+si]   ; b[i]
+    imul edx, ecx                 ; (long)a[i] * b[i]: a 32-bit multiply, no runtime helper
+    add eax, edx                  ; total += product
+    add bx, 2                     ; step one int; [flag reuse] its flags end the loop at 0
+    jne L0_3
+L0_4:
+    pop di
+    pop si
+    pop bp                        ; the long is already in eax: it returns there
     retf
-L0_4294967297:
-    xor eax, eax                    ; n <= 0: no saved registers were touched
+L0_2_1:
+    xor eax, eax                  ; n <= 0: no saved registers were touched
     retf
 _dot@3 endp
 ```
@@ -155,52 +158,51 @@ fn dot(a: &[i16], b: &[i16]) -> i32:
 
 ```asm
 _dot proc far
-    push bp                     ; a is the far pointer [bp+6], b [bp+10]
+    push bp                           ; a is the far pointer [bp+6], b [bp+10]
     mov bp, sp
-    sub sp, 6
+    sub sp, 10                        ; spill slots [bp-2] to [bp-10]
     push si
     push di
 L0_1:
-    les di, dword ptr [bp+6]
-    mov cx, word ptr es:[di]
-    lfs bx, dword ptr [bp+10]
-    mov ax, word ptr fs:[bx]
-    mov word ptr [bp-4], ax
-    test ax, ax
-    sete al
-    mov word ptr [bp-2], cx
+    les di, dword ptr [bp+6]          ; es:di = a, a descriptor
+    mov cx, word ptr es:[di]          ; cx = len(a)
+    lfs bx, dword ptr [bp+10]         ; fs:bx = b
+    mov si, word ptr fs:[bx]          ; si = len(b)
+    xor eax, eax                      ; 0, the result for an empty slice
     test cx, cx
-    sete cl
-    or cl, al
-    xor eax, eax
-    test cl, cl
-    jne L0_3
-L0_2:
-    mov cx, 1
-    mov ax, word ptr es:[di+4]
-    mov word ptr [bp-6], ax
-    mov es, word ptr es:[di+6]
-    mov di, word ptr fs:[bx+4]
-    mov fs, word ptr fs:[bx+6]
-    xor eax, eax
-L0_4:
-    mov edx, eax
-    lea bx, [ecx+ecx]
-    mov si, word ptr [bp-6]
-    movsx esi, word ptr es:[bx+si-2]
-    movsx eax, word ptr fs:[bx+di-2]
-    imul eax, esi
-    add eax, edx
-    cmp cx, word ptr [bp-2]
-    jae L0_3
+    je L0_3                           ; len(a) = 0
 L0_5:
+    test si, si
+    je L0_3                           ; len(b) = 0
+L0_2:
+    mov word ptr [bp-2], cx           ; len(a), spilled
+    mov ax, word ptr es:[di+4]
+    mov word ptr [bp-4], ax           ; a's data offset, spilled
+    mov es, word ptr es:[di+6]        ; es = a's data segment
+    mov ax, word ptr fs:[bx+4]
+    mov word ptr [bp-6], ax           ; b's data offset, spilled
+    mov fs, word ptr fs:[bx+6]        ; fs = b's data segment
+    xor eax, eax                      ; total = 0
+    mov cx, 1                         ; cx = i + 1
+L0_4:
+    mov dword ptr [bp-10], eax        ; total, spilled on every pass
+    lea bx, [ecx+ecx]                 ; bx = 2(i + 1)
+    mov di, word ptr [bp-4]           ; di = a's data offset
+    movsx edx, word ptr es:[bx+di-2]  ; a[i]
+    mov di, word ptr [bp-6]           ; di = b's data offset
+    movsx eax, word ptr fs:[bx+di-2]  ; b[i]
+    imul eax, edx
+    add eax, dword ptr [bp-10]        ; total += product, reloaded
+    cmp cx, word ptr [bp-2]
+    jae L0_3                          ; i + 1 reached len(a)
+L0_6:
     mov dx, cx
     inc dx
-    cmp cx, word ptr [bp-4]
-    mov cx, dx
-    jb L0_4
-L0_3:                           ; cx = min(len(a), len(b)): zip ends with the shorter slice,
-    pop di                      ; the long is in eax, where it returns
+    cmp cx, si
+    mov cx, dx                        ; i + 1; the flags are still the compare
+    jb L0_4                           ; until i + 1 reaches len(b)
+L0_3:
+    pop di                            ; the long is in eax, where it returns
     pop si
     leave
     retf
@@ -237,54 +239,50 @@ END FUNCTION
 ```asm
 DOT proc near
 L1_1:
-    mov ax, word ptr P%+14
-    mov dx, ax
-    dec dx
-    mov cx, word ptr Q%+14
-    mov bx, cx
-    dec bx
-    cmp dx, bx
+    mov ax, word ptr P%+14        ; ax = P's element count
+    mov cx, ax
+    dec cx                        ; cx = UBOUND(a)
+    mov bx, word ptr Q%+14        ; bx = Q's element count
+    lea dx, [bx-1]                ; dx = UBOUND(b)
+    cmp cx, dx
     jl L1_11
 L1_10:
-    mov dx, bx
-L1_11:
-    test dx, dx
-    js L1_2_1
+    mov cx, dx
+L1_11:                            ; cx = Min%(UBOUND(a), UBOUND(b)), inlined
+    test cx, cx
+    js L1_2_1                     ; the loop would not run: return 0
 L1_2:
-    dec cx                      ; UBOUND(b)
+    push si                       ; no frame, only the callee-saved registers
+    push di
+    mov di, word ptr P%+10        ; di = a's data offset
+    mov si, word ptr Q%+10        ; si = b's data offset
+    dec bx
     dec ax
-    cmp cx, ax
+    cmp bx, ax
     jl L1_25
 L1_24:
-    mov cx, ax
-L1_25:
-    push bp                     ; a plain frame, not B$ENRA; near, as --whole-program
-    mov bp, sp                  ; sees every caller. a() is [bp+6], b() [bp+4]
-    sub sp, 2
-    push si
-    push di
-    mov es, word ptr P%+2
-    mov ax, word ptr P%+10
-    mov word ptr [bp-2], ax
-    mov fs, word ptr Q%+2
-    mov di, word ptr Q%+10
-    inc cx
-    xor eax, eax
-    xor bx, bx
+    mov bx, ax
+L1_25:                            ; bx = the same minimum again
+    mov es, word ptr P%+2         ; es = a's segment
+    mov fs, word ptr Q%+2         ; fs = b's segment
+    mov cx, -1
+    sub cx, bx                    ; cx = -(min + 1), the negated count
+    add bx, bx
+    lea si, [bx+si+2]             ; [biased] the end of b
+    lea di, [bx+di+2]             ; [biased] the end of a
+    xor eax, eax                  ; total = 0
 L1_3:
-    mov si, word ptr [bp-2]
-    movsx edx, word ptr es:[bx+si]
-    movsx esi, word ptr fs:[bx+di]
-    imul esi, edx
-    add eax, esi
-    add bx, 2                   ; [flag reuse] the step's flags end the loop at 0
-    dec cx
+    lea bx, [ecx+ecx]             ; the byte offset, negative
+    movsx edx, word ptr es:[bx+di]  ; a(i)
+    movsx ebx, word ptr fs:[bx+si]  ; b(i)
+    imul ebx, edx
+    add eax, ebx                  ; total += product
+    inc cx                        ; [flag reuse] its flags end the loop at 0
     jne L1_3
 L1_4:
-    shld edx, eax, 16           ; the long returns in DX:AX
+    shld edx, eax, 16             ; the long returns in DX:AX
     pop di
     pop si
-    leave
     ret
 L1_2_1:
     xor eax, eax
@@ -299,16 +297,20 @@ slot is fixed, and nothing tests that the array is allocated, as BC does not wit
 `/D`. `-fsanitize=bounds` brings the test and the cold `B$UBND` call back, except
 where every caller passes an array a `DIM` or `REDIM` dominates, as here. Where a
 procedure's own `DIM` or `REDIM` states a bound, `UBOUND` is that value and reads nothing.
-The frame is a plain one, not the runtime's `B$ENRA` and `B$EXSA`.
+`DOT` has no frame, not even the runtime's `B$ENRA` and `B$EXSA`: it saves `si` and `di` and returns.
 `Min%` takes its arguments `BYVAL` and the build is `--whole-program`, which is what
 lets the inliner take it; by reference it stays a call
 ([#114](https://github.com/ali-mosavian/llrm/issues/114)).
 
-All three compile to the same loop: six instructions, one induction variable.
-Loop strength reduction ([#98](https://github.com/ali-mosavian/llrm/issues/98))
-biases each array's base by its byte length, so the counter, running from minus
-that length up to zero, is also the offset of every access, and its flags end the
-loop. The product is a 32-bit `imul` in `eax`, without a runtime call.
+C and BASIC compile to a reduced loop. Loop strength reduction
+([#98](https://github.com/ali-mosavian/llrm/issues/98)) biases each array's base to
+its end, so one counter, running up to zero, indexes both arrays and its flags end
+the loop. C's counter is the byte offset: six instructions. BASIC's counts elements,
+so a `lea` doubles it on each pass: seven. The product is a 32-bit `imul` in `eax`,
+without a runtime call.
+
+Nib's loop is not reduced. It indexes from 1, tests both lengths, spills `total` and
+reloads each array's data offset on every pass: fifteen instructions in two blocks.
 
 ## Validate
 

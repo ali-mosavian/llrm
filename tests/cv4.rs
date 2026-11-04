@@ -169,6 +169,7 @@ fn synthetic() -> (llrm_debug::Described, String) {
         }],
         frame: Vec::new(),
         all_calls: false,
+        frame_base: None,
         calls: Vec::new(),
     };
     let info = Info {
@@ -206,6 +207,7 @@ fn synthetic() -> (llrm_debug::Described, String) {
                     definition: Definition::Defined { section: 0, offset: 0 },
                     size: 0,
                     group: None,
+                    visibility: Default::default(),
                 },
                 Symbol {
                     name: "_isatty".into(),
@@ -213,6 +215,7 @@ fn synthetic() -> (llrm_debug::Described, String) {
                     definition: Definition::Defined { section: 0, offset: length },
                     size: 0,
                     group: None,
+                    visibility: Default::default(),
                 },
             ],
             omf_groups: Vec::new(),

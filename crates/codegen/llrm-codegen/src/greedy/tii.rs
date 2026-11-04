@@ -234,8 +234,8 @@ impl TargetInstrInfo for X86InstrInfo<'_> {
     ) -> Semantics {
         Semantics {
             name: Some("mov".into()),
-            dests: vec![Loc::Held(Held { value: to, width })],
-            sources: vec![Loc::Held(Held { value: from, width })],
+            dests: vec![Loc::Held(Held { value: to, width, offset: 0 })],
+            sources: vec![Loc::Held(Held { value: from, width, offset: 0 })],
             ..Semantics::new(Operation::Move)
         }
     }
@@ -382,14 +382,37 @@ pub fn fold_memory_operand(
     if narrow && !(what.op == Operation::Move && matches!(what.sources.as_slice(), [Loc::Imm(_)])) {
         return None;
     }
+    // A dword write in long mode also zeroes the register's upper half, which
+    // a dword store into a qword cell leaves stale for the qword reload. A
+    // constant is stored zero-extended at the cell's width; any other def is
+    // not folded.
+    let zeroes_upper = bits == 64
+        && what.dests.iter().any(|loc| {
+            matches!(
+                loc,
+                Loc::Held(held) if held.value == reg && held.width == 4 && cell.width == 8
+            )
+        });
+    let constant_move = what.op == Operation::Move
+        && matches!(
+            what.sources.as_slice(),
+            [Loc::Imm(imm)] if imm.address.is_none()
+        );
+    if zeroes_upper && !constant_move {
+        return None;
+    }
     let swap = |loc: &Loc| match loc {
         Loc::Held(held) if held.value == reg => {
-            Loc::Mem(Mem { width: (held.width as u32).min(cell.width), ..cell.clone() })
+            let width = if zeroes_upper { cell.width } else { (held.width as u32).min(cell.width) };
+            Loc::Mem(Mem { width, ..cell.clone() })
         }
         _ => loc.clone(),
     };
     let narrow_imm = |loc: &Loc| match loc {
         Loc::Imm(imm) if narrow => Loc::Imm(Imm { width: imm.width.min(cell.width), ..imm.clone() }),
+        Loc::Imm(imm) if zeroes_upper => {
+            Loc::Imm(Imm { value: imm.value as u32 as i64, width: cell.width, ..imm.clone() })
+        }
         _ => loc.clone(),
     };
     let made = Semantics {
@@ -397,6 +420,15 @@ pub fn fold_memory_operand(
         sources: what.sources.iter().map(swap).map(|loc| narrow_imm(&loc)).collect(),
         ..what.clone()
     };
+    // Long mode builds an address with a rip-relative `lea`; a store of the
+    // address to a cell has no encoding (the object writer dropped the
+    // displacement and used a PC32 fixup, or refused the instruction).
+    if bits == 64
+        && made.dests.iter().any(|loc| matches!(loc, Loc::Mem(_)))
+        && made.sources.iter().any(|loc| matches!(loc, Loc::Imm(imm) if imm.address.is_some()))
+    {
+        return None;
+    }
     if !sse_memory_source(&made, reg) && !is_encodable(bits, &made, classes).ok()? {
         return None;
     }
@@ -468,7 +500,7 @@ pub fn load_reg_from_stack_slot(
 ) -> Arc<Insn> {
     let inserted = _inserted(
         beside,
-        _mov(Loc::Held(Held { value: into, width: cell.width }), Loc::Mem(cell.clone())),
+        _mov(Loc::Held(Held { value: into, width: cell.width, offset: 0 }), Loc::Mem(cell.clone())),
         vec![into],
         Vec::new(),
     );
@@ -485,7 +517,7 @@ pub fn store_reg_to_stack_slot(
 ) -> Arc<Insn> {
     let inserted = _inserted(
         beside,
-        _mov(Loc::Mem(cell.clone()), Loc::Held(Held { value: out_of, width: cell.width })),
+        _mov(Loc::Mem(cell.clone()), Loc::Held(Held { value: out_of, width: cell.width, offset: 0 })),
         Vec::new(),
         vec![out_of],
     );
@@ -581,7 +613,7 @@ pub(crate) fn is_encodable(
 ) -> Result<bool, Error> {
     let regs = classes.registers;
     let mut taken: IndexMap<u32, RegId> = IndexMap::default();
-    let rows: IndexMap<u32, Vec<RegId>> = [1_u32, 2, 4]
+    let rows: IndexMap<u32, Vec<RegId>> = [1_u32, 2, 4, 8]
         .into_iter()
         .map(|width| {
             (
@@ -667,7 +699,7 @@ mod tests {
     /// spilled register as undef.
     #[test]
     fn test_a_fold_drops_the_spilled_register_from_the_undefs() {
-        let held = |value: u32| Loc::Held(Held { value, width: 2 });
+        let held = |value: u32| Loc::Held(Held { value, width: 2, offset: 0 });
         let what = Semantics {
             name: Some("add".into()),
             dests: vec![held(1)],
@@ -698,7 +730,7 @@ mod tests {
     ) -> Arc<Insn> {
         let what = Semantics {
             name: Some("fld".into()),
-            dests: vec![Loc::Held(Held { value, width: 10 })],
+            dests: vec![Loc::Held(Held { value, width: 10, offset: 0 })],
             sources: vec![Loc::Mem(cell)],
             ..Semantics::new(Operation::FloatLoad)
         };
@@ -713,7 +745,7 @@ mod tests {
         let what = Semantics {
             name: Some("fstp".into()),
             dests: vec![Loc::Mem(cell)],
-            sources: vec![Loc::Held(Held { value, width: 10 })],
+            sources: vec![Loc::Held(Held { value, width: 10, offset: 0 })],
             ..Semantics::new(Operation::FloatStore)
         };
         Arc::new(Insn::new(at, None, Some(what), vec![], vec![value]))

@@ -12,13 +12,22 @@ pub fn register(name: &str) -> RegId {
         .unwrap_or_else(|| panic!("calling.toml names no register {name}"))
 }
 
+static PARSED: std::sync::OnceLock<llrm_target::calling::Convention> = std::sync::OnceLock::new();
+
+fn parsed(text: &str) -> llrm_target::calling::Convention {
+    let calling = llrm_target::calling::Calling::parse(text).expect("calling.toml");
+    calling.conventions.into_iter().find(|one| one.name == "z80").expect("convention z80")
+}
+
 /// The `z80` convention, parsed once: every call lowering asks for it.
 pub fn z80() -> &'static llrm_target::calling::Convention {
-    static PARSED: std::sync::OnceLock<llrm_target::calling::Convention> = std::sync::OnceLock::new();
-    PARSED.get_or_init(|| {
-        let calling = llrm_target::calling::Calling::parse(crate::CALLING).expect("calling.toml");
-        calling.conventions.into_iter().find(|one| one.name == "z80").expect("convention z80")
-    })
+    PARSED.get_or_init(|| parsed(crate::CALLING))
+}
+
+/// States the `z80` convention from another `calling.toml` text, before
+/// anything has asked for it; an error once it has been parsed.
+pub fn use_calling(text: &str) -> Result<(), String> {
+    PARSED.set(parsed(text)).map_err(|_| "the z80 convention has been parsed already".to_owned())
 }
 
 /// The pair register that holds a byte register (`l` is half of `hl`): the

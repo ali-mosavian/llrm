@@ -126,6 +126,26 @@ fn a_float_decimal_is_read_as_a_float_and_f0x_takes_the_types_width() {
     );
 }
 
+/// The pin writes `0.1L` as `x86_fp80 1.000000e-01`; the reader rounded that to
+/// a double, so `0.1L` was the double 0.1 widened (`0x3FFBCCCCCCCCCCCCD000`,
+/// the low 11 bits zero) in every x87 target's code. `f0x` is the form it
+/// writes for the values that decimal does not read back.
+#[test]
+fn an_x86_fp80_decimal_is_rounded_at_64_bits_not_through_a_double() {
+    for (decimal, hex) in [
+        ("1.000000e-01", "3FFBCCCCCCCCCCCCCCCD"),
+        ("1.100000e+00", "3FFF8CCCCCCCCCCCCCCD"),
+        ("2.500000e+00", "4000A0000000000000000"),
+    ] {
+        let hex = &hex[..20];
+        assert_eq!(
+            round(&format!("@a = global x86_fp80 {decimal}\n")),
+            round(&format!("@a = global x86_fp80 f0x{hex}\n")),
+            "{decimal}"
+        );
+    }
+}
+
 /// The pin writes a `long double` as `f0x` and the 20 digits of x87's format
 /// (sign and exponent, then the 64-bit significand); MIR refused it ("expected
 /// a constant"), so `double_to_uint64.c` never compiled through `llrm-cc`.
@@ -1349,4 +1369,47 @@ fn a_packed_named_struct_initializer_prints_packed() {
     let text = "%s = type <{ i8, i16 }>\n@g = global %s <{ i8 1, i16 2 }>\n";
     let printed = round(text);
     assert!(printed.contains("global %s <{ i8 1, i16 2 }>"), "{printed}");
+}
+
+fn module_of_functions(count: usize) -> crate::module::Module {
+    let mut text = String::new();
+    for at in 0..count {
+        text += &format!("declare void @f{at}()\n");
+    }
+    parse::module(&text).unwrap_or_else(|error| panic!("{error}"))
+}
+
+/// `Module::named` scanned every global per lookup: the assembler, the
+/// selection-DAG lowering and the atomic expansion each asked it of every
+/// function, 90 M excess Ir over a 2400-function compile (x14 for x4 the
+/// functions). A thousand lookups cost one table.
+#[test]
+fn test_a_module_makes_one_symbol_table_for_all_its_lookups() {
+    let module = module_of_functions(600);
+    let before = crate::module::symbol_builds();
+    for round in 0..2 {
+        for at in 0..600 {
+            assert_eq!(module.named(&format!("f{at}")), Some(crate::context::GlobalId(at as u32)), "round {round}");
+        }
+    }
+    assert_eq!(module.named("missing"), None);
+    assert_eq!(crate::module::symbol_builds() - before, 1);
+}
+
+/// The table must not outlive a rename or a new global: a lookup after either
+/// finds what the globals now say.
+#[test]
+fn test_the_symbol_table_follows_a_rename_and_a_new_global() {
+    let mut module = module_of_functions(3);
+    assert_eq!(module.named("f1"), Some(crate::context::GlobalId(1)));
+    module.globals[1].name = crate::module::GlobalName::from("renamed".to_owned());
+    assert_eq!(module.named("f1"), None, "the old name");
+    assert_eq!(module.named("renamed"), Some(crate::context::GlobalId(1)));
+    let copy = module.globals[2].clone();
+    module
+        .globals
+        .push(crate::module::GlobalValue { name: crate::module::GlobalName::from("fresh".to_owned()), ..copy });
+    assert_eq!(module.named("fresh"), Some(crate::context::GlobalId(3)));
+    module.globals.swap(0, 2);
+    assert_eq!(module.named("f2"), Some(crate::context::GlobalId(0)), "a moved global");
 }

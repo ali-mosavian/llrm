@@ -6,9 +6,17 @@ use crate::testing::{parsed, printed};
 
 /// `text` after the pass, priced in clocks on the real-mode target.
 fn run(text: &str) -> String {
+    priced(text, false)
+}
+
+/// `text` after the pass, priced in bytes when `size`.
+fn priced(
+    text: &str,
+    size: bool,
+) -> String {
     let mut module = parsed(&format!("{}{text}", llrm_analysis::testing::DOS));
     let layout = DataLayout::parse(module.datalayout.as_deref().expect("a layout")).expect("parses");
-    promoted(&mut module, &layout, &llrm_x86_m16::Dos::default().costs(), false);
+    promoted(&mut module, &layout, &llrm_x86_m16::Dos::default().costs(), size);
     printed(&module)
 }
 
@@ -117,4 +125,63 @@ fn a_noipa_routine_keeps_its_pointer_parameter() {
     assert_ne!(marked, sum(READS, "internal ", ""));
     let after = run(&marked);
     assert!(after.contains("call i16 @sum(ptr addrspace(1)"), "{after}");
+}
+
+/// A function that writes memory and loads past a branch read a QB array's
+/// origin through the descriptor on every call (bq16 quicksort's `Sort`: the
+/// descriptor pointer and a load per call where C passes the array). The
+/// language states the load invariant, so the caller makes it.
+#[test]
+fn a_late_load_stated_invariant_is_promoted_though_the_function_writes() {
+    let late = |load: &str| {
+        format!(
+            "define internal i16 @get(ptr addrspace(1) dereferenceable(6) %d, ptr %q, i16 %n) {{
+b0:
+  store i16 1, ptr %q
+  %c = icmp sle i16 %n, 0
+  br i1 %c, label %out, label %read
+read:
+  %at = getelementptr i8, ptr addrspace(1) %d, i16 4
+  %len = load i16, ptr addrspace(1) %at{load}
+  ret i16 %len
+out:
+  ret i16 0
+}}
+define i16 @top(ptr addrspace(1) %p, ptr %q, i16 %n) {{
+b0:
+  %r = call i16 @get(ptr addrspace(1) %p, ptr %q, i16 %n)
+  ret i16 %r
+}}
+!0 = !{{}}
+"
+        )
+    };
+    assert!(run(&late("")).contains("@get(ptr addrspace(1)"));
+    assert!(run(&late(", !invariant.load !0")).contains("@get(i16 %"));
+}
+
+/// bq16 quicksort's `lo` and `hi` stayed by-reference parameters at -Os: the
+/// callers' stack slots read as a load per call, though each load is the
+/// store beside it and the slot goes away.
+#[test]
+fn at_size_a_caller_local_argument_costs_no_load() {
+    let text = "define internal i16 @get(ptr nocapture readonly noalias dereferenceable(2) %p) {
+b0:
+  %v = load i16, ptr %p
+  ret i16 %v
+}
+define i16 @top(i16 %x) {
+b0:
+  %slot = alloca i16
+  store i16 %x, ptr %slot
+  %r = call i16 @get(ptr %slot)
+  ret i16 %r
+}
+define i16 @other(ptr %q) {
+b0:
+  %r = call i16 @get(ptr %q)
+  ret i16 %r
+}
+";
+    assert!(priced(text, true).contains("@get(i16 %"));
 }
