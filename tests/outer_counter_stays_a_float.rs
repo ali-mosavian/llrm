@@ -24,7 +24,18 @@ fn test_the_outer_counter_is_not_converted_in_every_inner_trip() {
     std::fs::write(scratch.path().join("a.c"), SOURCE).unwrap();
     let output = common::cc::llrm_c()
         .current_dir(scratch.path())
-        .args(["--target=x86_32-wat", "-m32", "-mabi=sysv", "-mlong-double-80", "-march=i486", "-Os", "-S", "-o", "a.s", "a.c"])
+        .args([
+            "--target=x86_32-wat",
+            "-m32",
+            "-mabi=sysv",
+            "-mlong-double-80",
+            "-march=i486",
+            "-Os",
+            "-S",
+            "-o",
+            "a.s",
+            "a.c",
+        ])
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));

@@ -1024,8 +1024,8 @@ b6:
 /// The first look at a loop whose exit test is edited made the users, the
 /// second made them again over the edited loop, the third (after the edge
 /// split) once more: 3 constructions for 1 loop. The edit moves no compare, so
-/// the second look keeps the first's users. The module's outer loop is looked at
-/// once, for its shadow variables and exit tests as the pin does: 2 + 1.
+/// the second look keeps the first's users. The module's outer loop is looked
+/// at once, for its shadow variables and exit tests as the pin does: 2 + 1.
 #[test]
 fn the_users_of_a_loop_are_kept_through_the_edit_of_its_exit_test() {
     let mut module = parsed(include_str!("lsr_insertion.ll"));
