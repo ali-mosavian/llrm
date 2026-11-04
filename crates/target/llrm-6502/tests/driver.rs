@@ -1886,3 +1886,21 @@ fn a_word_global_is_loaded_and_stored_by_absolute_address() {
         assert!(!text.contains("#<(w)") && !text.contains("#<(v)"), "{text}");
     }
 }
+
+/// A C global named `sp` was exported as `sp`, which cc65's sim6502 library
+/// defines too: `ld65` stopped with "Duplicate external identifier: 'sp'" on
+/// x16basic-c's `prog.c`. On the cc65 row it is `_sp`, as cc65 names it; on
+/// plain sim65 the name is unchanged.
+#[test]
+fn a_c_global_takes_the_platforms_symbol_prefix() {
+    let ir = module("@sp = dso_local global i8 0\ndefine void @set(i8 %x) {\n  store i8 %x, ptr @sp\n  ret void\n}");
+    let on = |name: &str| {
+        let platform = llrm_6502::driver::platform_named(name).expect("a platform");
+        assembly(&ir, &Request { platform, ..Request::new(Level::O2) }).expect("compiles")
+    };
+    let cc65 = on("sim65-cc65");
+    assert!(cc65.contains(".export _sp") && cc65.contains("_sp: .res 1"), "{cc65}");
+    assert!(cc65.contains("sta _sp") && !cc65.contains("sta sp"), "{cc65}");
+    let plain = on("sim65");
+    assert!(plain.contains(".export sp") && plain.contains("sta sp"), "{plain}");
+}
