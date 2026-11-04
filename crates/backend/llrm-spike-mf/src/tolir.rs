@@ -118,7 +118,7 @@ impl<T: Target> Converted<T> {
             T::joins_sub_registers(),
             T::joins_lanes(),
             registers,
-            Box::new(move |join| {
+            Some(Box::new(move |join| {
                 let joined: Vec<RegId> = join.joined.iter().copied().collect();
                 let side = |side: &llrm_codegen::coalescer::env::JoinSide| {
                     let before: Vec<RegId> = side.palette.iter().copied().collect();
@@ -170,7 +170,7 @@ impl<T: Target> Converted<T> {
                     joined: &joined,
                     copy_frequency: join.copy_frequency,
                 })
-            }),
+            })),
             Some(Box::new(is_literal_move)),
             Some(Box::new(|literal, source, destination, size| {
                 let (source, destination): (Vec<RegId>, Vec<RegId>) =
