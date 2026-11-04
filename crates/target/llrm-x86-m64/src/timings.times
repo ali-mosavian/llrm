@@ -15,6 +15,7 @@ issue                   =
 in_order                =
 prefix                  =
 partial_stall           =
+mispredict_penalty      =
 lcp_stall               =
 set_ratio           =
 clear_ratio         =

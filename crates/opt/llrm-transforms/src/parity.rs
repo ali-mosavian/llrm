@@ -375,6 +375,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "criterion: a SUB nothing reads is a CMP before allocation (optimizeCompareInstr, first switch), x_heapsort cmp/sub as the pin's; exit: the rest of optimizeCompareInstr (flags of an earlier instruction reused, NewCC, InstsToUpdate) and the other PeepholeOptimizer rewrites",
     ),
     entry("combiner@4", Backend, "machine-combiner (MachineCombiner.cpp)", Translated, ""),
+    entry("cmovconversion@4", Backend, "x86-cmov-conversion (X86CmovConversion.cpp)", Translated, ""),
     entry("liverangeshrink@4", Backend, "lrshrink (LiveRangeShrink.cpp)", Translated, ""),
     entry("phielim@4", Backend, "phi-node-elimination", Old, "lir-cleanup-poc"),
     partial(

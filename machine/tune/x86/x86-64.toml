@@ -13,6 +13,8 @@ clear_ratio_size = 2
 jump_table = 0
 cache_line = 64
 pairing = 0
+# SandyBridgeModel, the pin's model for x86-64 (X86SchedSandyBridge.td).
+mispredict_penalty = 16
 
 [clocks]
 alu_rr = 1
