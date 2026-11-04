@@ -314,12 +314,16 @@ def link_basic(objs: dict[str, tuple[Path, str]], work: Path) -> dict[str, str]:
     return failed
 
 
+STARTUP_SYMBOLS = {"_big_code_", "_cstart_"}  # Open Watcom's start-up pulls, not helpers the program calls
+
+
 def code_fields(obj: Path) -> dict:
     """The object's code bytes without alignment padding, the padding apart (`align_bytes`, reported not gated), and why the padding could
     not be told where the code is counted whole (`align_unread` bytes, printed by `align_lines`). `lib_bytes`, reported not gated, is the
     standard library's functions in the object, which `code_bytes` leaves out; absent where the object has none (C's I/O is extern)."""
     size = sizes.code_size(obj)
-    return {"code_bytes": size.code, "align_bytes": size.align, **({"align_unread": size.unread} if size.unread else {}), **({"lib_bytes": size.library} if size.library else {})}
+    called = [name for name in sizes.externs(obj) if name not in STARTUP_SYMBOLS and "report" not in name] if not sizes.is_elf(obj) else []
+    return {"code_bytes": size.code, "align_bytes": size.align, **({"align_unread": size.unread} if size.unread else {}), **({"lib_bytes": size.library} if size.library else {}), **({"externs": called} if called else {})}
 
 
 def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
@@ -978,6 +982,12 @@ def align_lines(measured: dict) -> list[str]:
     return summary + mostly + lines
 
 
+def helper_lines(measured: dict) -> list[str]:
+    """Notes, not failures: a cell whose object calls library functions (`externs`). Their bytes are in no `code_bytes`, so that column
+    reads smaller than the program is where a reference calls a helper (a long divide) that another build inlines."""
+    return [f"HELPERS {name} {language} -{opt}: code_bytes excludes {', '.join(got['externs'])}" for (name, language, opt), got in sorted(measured.items()) if got.get("externs")]
+
+
 def geomean(values: list[float]) -> float:
     return math.exp(sum(map(math.log, values)) / len(values))
 
@@ -1228,6 +1238,7 @@ def main() -> int:
         print("SKIP", why)
     print(*standing(measured, args.select, args.opt), sep="\n")
     print(*align_lines(measured), sep="\n")
+    print(*helper_lines(measured), sep="\n")
     print(*fold_lines(measured), sep="\n")
     if args.select:
         print(*clock_lines(measured, args.select), sep="\n")

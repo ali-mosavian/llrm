@@ -65,6 +65,15 @@ pub trait Word:
     fn leading_zeros(self) -> u32;
     fn trailing_zeros(self) -> u32;
     fn count_ones(self) -> u32;
+    /// The value in four 128-bit limbs, the lowest first.
+    fn to_limbs(self) -> [u128; 4];
+    /// The word with those limbs, the ones it has no room for dropped.
+    fn from_limbs(limbs: [u128; 4]) -> Self;
+    /// The quotient and the remainder; panics on a zero divisor.
+    fn divrem(
+        self,
+        other: Self,
+    ) -> (Self, Self);
 
     fn wrapping_mul(
         self,
@@ -129,6 +138,21 @@ impl Word for u128 {
 
     fn count_ones(self) -> u32 {
         u128::count_ones(self)
+    }
+
+    fn divrem(
+        self,
+        other: Self,
+    ) -> (Self, Self) {
+        (self / other, self % other)
+    }
+
+    fn to_limbs(self) -> [u128; 4] {
+        [self, 0, 0, 0]
+    }
+
+    fn from_limbs(limbs: [u128; 4]) -> Self {
+        limbs[0]
     }
 }
 
@@ -326,10 +350,297 @@ impl Word for U256 {
     fn count_ones(self) -> u32 {
         self.hi.count_ones() + self.lo.count_ones()
     }
+
+    /// Shift and subtract: 256 steps at most, and only for a value or divisor
+    /// above 128 bits.
+    fn divrem(
+        self,
+        other: Self,
+    ) -> (Self, Self) {
+        assert!(!other.is_zero(), "attempt to divide by zero");
+        if self.hi == 0 && other.hi == 0 {
+            return (Self { hi: 0, lo: self.lo / other.lo }, Self { hi: 0, lo: self.lo % other.lo });
+        }
+        if self < other {
+            return (Self::ZERO, self);
+        }
+        let (mut quotient, mut remainder) = (Self::ZERO, Self::ZERO);
+        for at in (0..256 - self.leading_zeros()).rev() {
+            let carried = remainder.hi >> 127 == 1;
+            remainder = remainder << 1 | (self >> at) & Self::ONE;
+            if carried || remainder >= other {
+                remainder = remainder.wrapping_sub(other);
+                quotient |= Self::ONE << at;
+            }
+        }
+        (quotient, remainder)
+    }
+
+    fn to_limbs(self) -> [u128; 4] {
+        [self.lo, self.hi, 0, 0]
+    }
+
+    fn from_limbs(limbs: [u128; 4]) -> Self {
+        Self { hi: limbs[1], lo: limbs[0] }
+    }
+}
+
+/// 512 bits: the room for a product of two 256-bit integers.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct U512 {
+    limbs: [u128; 4],
+}
+
+impl U512 {
+    fn halves(self) -> [u64; 8] {
+        let mut out = [0_u64; 8];
+        for (at, limb) in self.limbs.iter().enumerate() {
+            out[at * 2] = *limb as u64;
+            out[at * 2 + 1] = (*limb >> 64) as u64;
+        }
+        out
+    }
+
+    fn of_halves(halves: [u64; 8]) -> Self {
+        let mut limbs = [0_u128; 4];
+        for (at, limb) in limbs.iter_mut().enumerate() {
+            *limb = u128::from(halves[at * 2]) | u128::from(halves[at * 2 + 1]) << 64;
+        }
+        Self { limbs }
+    }
+}
+
+impl Ord for U512 {
+    fn cmp(
+        &self,
+        other: &Self,
+    ) -> std::cmp::Ordering {
+        self.limbs.iter().rev().cmp(other.limbs.iter().rev())
+    }
+}
+
+impl PartialOrd for U512 {
+    fn partial_cmp(
+        &self,
+        other: &Self,
+    ) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Not for U512 {
+    type Output = Self;
+
+    fn not(self) -> Self {
+        Self { limbs: self.limbs.map(|limb| !limb) }
+    }
+}
+
+macro_rules! limbwise {
+    ($trait:ident, $method:ident, $assign_trait:ident, $assign:ident, $op:tt) => {
+        impl $trait for U512 {
+            type Output = Self;
+
+            fn $method(
+                self,
+                other: Self,
+            ) -> Self {
+                let mut limbs = self.limbs;
+                for (at, limb) in limbs.iter_mut().enumerate() {
+                    *limb = *limb $op other.limbs[at];
+                }
+                Self { limbs }
+            }
+        }
+
+        impl $assign_trait for U512 {
+            fn $assign(
+                &mut self,
+                other: Self,
+            ) {
+                *self = *self $op other;
+            }
+        }
+    };
+}
+
+limbwise!(BitAnd, bitand, BitAndAssign, bitand_assign, &);
+limbwise!(BitOr, bitor, BitOrAssign, bitor_assign, |);
+limbwise!(BitXor, bitxor, BitXorAssign, bitxor_assign, ^);
+
+impl Shl<u32> for U512 {
+    type Output = Self;
+
+    fn shl(
+        self,
+        by: u32,
+    ) -> Self {
+        if by >= 512 {
+            return Self::ZERO;
+        }
+        let (whole, part) = ((by / 128) as usize, by % 128);
+        let mut limbs = [0_u128; 4];
+        for at in whole..4 {
+            let source = self.limbs[at - whole];
+            limbs[at] |= source << part;
+            if part != 0 && at + 1 < 4 {
+                limbs[at + 1] |= source >> (128 - part);
+            }
+        }
+        Self { limbs }
+    }
+}
+
+impl Shr<u32> for U512 {
+    type Output = Self;
+
+    fn shr(
+        self,
+        by: u32,
+    ) -> Self {
+        if by >= 512 {
+            return Self::ZERO;
+        }
+        let (whole, part) = ((by / 128) as usize, by % 128);
+        let mut limbs = [0_u128; 4];
+        for at in 0..4 - whole {
+            let source = self.limbs[at + whole];
+            limbs[at] |= source >> part;
+            if part != 0 && at >= 1 {
+                limbs[at - 1] |= source << (128 - part);
+            }
+        }
+        Self { limbs }
+    }
+}
+
+impl Word for U512 {
+    const ZERO: Self = Self { limbs: [0; 4] };
+    const ONE: Self = Self { limbs: [1, 0, 0, 0] };
+    const BITS: u32 = 512;
+
+    fn from_u128(value: u128) -> Self {
+        Self { limbs: [value, 0, 0, 0] }
+    }
+
+    fn low_u128(self) -> u128 {
+        self.limbs[0]
+    }
+
+    fn wrapping_add(
+        self,
+        other: Self,
+    ) -> Self {
+        self.overflowing_add(other).0
+    }
+
+    fn wrapping_sub(
+        self,
+        other: Self,
+    ) -> Self {
+        let mut limbs = [0_u128; 4];
+        let mut borrow = false;
+        for (at, limb) in limbs.iter_mut().enumerate() {
+            let (difference, first) = self.limbs[at].overflowing_sub(other.limbs[at]);
+            let (difference, second) = difference.overflowing_sub(u128::from(borrow));
+            *limb = difference;
+            borrow = first || second;
+        }
+        Self { limbs }
+    }
+
+    fn overflowing_add(
+        self,
+        other: Self,
+    ) -> (Self, bool) {
+        let mut limbs = [0_u128; 4];
+        let mut carry = false;
+        for (at, limb) in limbs.iter_mut().enumerate() {
+            let (sum, first) = self.limbs[at].overflowing_add(other.limbs[at]);
+            let (sum, second) = sum.overflowing_add(u128::from(carry));
+            *limb = sum;
+            carry = first || second;
+        }
+        (Self { limbs }, carry)
+    }
+
+    fn overflowing_mul(
+        self,
+        other: Self,
+    ) -> (Self, bool) {
+        let (a, b) = (self.halves(), other.halves());
+        let mut product = [0_u64; 16];
+        for (i, x) in a.iter().enumerate() {
+            let mut carry = 0_u128;
+            for (j, y) in b.iter().enumerate() {
+                let t = u128::from(*x) * u128::from(*y) + u128::from(product[i + j]) + carry;
+                product[i + j] = t as u64;
+                carry = t >> 64;
+            }
+            product[i + 8] = carry as u64;
+        }
+        let mut low = [0_u64; 8];
+        low.copy_from_slice(&product[..8]);
+        (Self::of_halves(low), product[8..].iter().any(|limb| *limb != 0))
+    }
+
+    fn leading_zeros(self) -> u32 {
+        let mut zeros = 0;
+        for limb in self.limbs.iter().rev() {
+            if *limb != 0 {
+                return zeros + limb.leading_zeros();
+            }
+            zeros += 128;
+        }
+        zeros
+    }
+
+    fn trailing_zeros(self) -> u32 {
+        let mut zeros = 0;
+        for limb in self.limbs {
+            if limb != 0 {
+                return zeros + limb.trailing_zeros();
+            }
+            zeros += 128;
+        }
+        zeros
+    }
+
+    fn count_ones(self) -> u32 {
+        self.limbs.iter().map(|limb| limb.count_ones()).sum()
+    }
+
+    fn divrem(
+        self,
+        other: Self,
+    ) -> (Self, Self) {
+        assert!(!other.is_zero(), "attempt to divide by zero");
+        if self < other {
+            return (Self::ZERO, self);
+        }
+        let (mut quotient, mut remainder) = (Self::ZERO, Self::ZERO);
+        for at in (0..512 - self.leading_zeros()).rev() {
+            let carried = remainder.limbs[3] >> 127 == 1;
+            remainder = remainder << 1 | (self >> at) & Self::ONE;
+            if carried || remainder >= other {
+                remainder = remainder.wrapping_sub(other);
+                quotient |= Self::ONE << at;
+            }
+        }
+        (quotient, remainder)
+    }
+
+    fn to_limbs(self) -> [u128; 4] {
+        self.limbs
+    }
+
+    fn from_limbs(limbs: [u128; 4]) -> Self {
+        Self { limbs }
+    }
 }
 
 /// A power of two: one bit set.
-pub(crate) fn is_power_of_two<W: Word>(v: W) -> bool {
+pub fn is_power_of_two<W: Word>(v: W) -> bool {
     !v.is_zero() && (v & v.wrapping_sub(W::ONE)).is_zero()
 }
 
@@ -364,7 +675,7 @@ pub(crate) fn clear_range<W: Word>(
     if high <= low { v } else { v & !(mask::<W>(high) & !mask::<W>(low)) }
 }
 
-pub(crate) fn bit<W: Word>(
+pub fn bit<W: Word>(
     v: W,
     at: u32,
 ) -> bool {
@@ -379,7 +690,7 @@ pub(crate) fn with_bit<W: Word>(
     if on { v | (W::ONE << at) } else { v & !(W::ONE << at) }
 }
 
-pub(crate) fn countl_zero<W: Word>(
+pub fn countl_zero<W: Word>(
     v: W,
     width: u32,
 ) -> u32 {
@@ -393,7 +704,7 @@ pub(crate) fn countl_one<W: Word>(
     countl_zero(!v & mask::<W>(width), width)
 }
 
-pub(crate) fn countr_zero<W: Word>(
+pub fn countr_zero<W: Word>(
     v: W,
     width: u32,
 ) -> u32 {
@@ -411,12 +722,12 @@ pub(crate) fn popcount<W: Word>(v: W) -> u32 {
     v.count_ones()
 }
 
-pub(crate) fn sign_bit<W: Word>(width: u32) -> W {
+pub fn sign_bit<W: Word>(width: u32) -> W {
     W::ONE << (width - 1)
 }
 
 /// `a` as a signed number is below `b`.
-pub(crate) fn slt<W: Word>(
+pub fn slt<W: Word>(
     a: W,
     b: W,
     width: u32,
@@ -424,7 +735,7 @@ pub(crate) fn slt<W: Word>(
     (a ^ sign_bit::<W>(width)) < (b ^ sign_bit::<W>(width))
 }
 
-pub(crate) fn sgt<W: Word>(
+pub fn sgt<W: Word>(
     a: W,
     b: W,
     width: u32,
@@ -433,7 +744,7 @@ pub(crate) fn sgt<W: Word>(
 }
 
 /// Whether `v` is negative at `width`.
-pub(crate) fn is_negative<W: Word>(
+pub fn is_negative<W: Word>(
     v: W,
     width: u32,
 ) -> bool {
@@ -441,7 +752,7 @@ pub(crate) fn is_negative<W: Word>(
 }
 
 /// `v` extended from `from` bits to `to`, copying the sign.
-pub(crate) fn sext<W: Word>(
+pub fn sext<W: Word>(
     v: W,
     from: u32,
     to: u32,
@@ -449,7 +760,7 @@ pub(crate) fn sext<W: Word>(
     if is_negative(v, from) { (v | !mask::<W>(from)) & mask::<W>(to) } else { v }
 }
 
-pub(crate) fn ashr<W: Word>(
+pub fn ashr<W: Word>(
     v: W,
     width: u32,
     by: u32,
@@ -459,7 +770,7 @@ pub(crate) fn ashr<W: Word>(
     if is_negative(v, width) { shifted | (mask::<W>(width) & !mask::<W>(width - by)) } else { shifted }
 }
 
-pub(crate) fn lshr<W: Word>(
+pub fn lshr<W: Word>(
     v: W,
     by: u32,
 ) -> W {
@@ -467,7 +778,7 @@ pub(crate) fn lshr<W: Word>(
 }
 
 /// `APInt::shl(unsigned)`.
-pub(crate) fn shl<W: Word>(
+pub fn shl<W: Word>(
     v: W,
     width: u32,
     by: u32,
@@ -576,13 +887,13 @@ pub(crate) fn clmul<W: Word>(
 }
 
 /// `APInt::getActiveBits`: the bits up to the highest set one.
-pub(crate) fn active_bits<W: Word>(v: W) -> u32 {
+pub fn active_bits<W: Word>(v: W) -> u32 {
     W::BITS - v.leading_zeros()
 }
 
 /// `APInt::getSignificantBits`: the bits of the narrowest signed integer
 /// holding `v`.
-pub(crate) fn significant_bits<W: Word>(
+pub fn significant_bits<W: Word>(
     v: W,
     width: u32,
 ) -> u32 {
@@ -634,6 +945,130 @@ pub(crate) fn limited<W: Word>(
     if v > W::from_u128(u128::from(limit)) { limit } else { v.low_u128() as u32 }
 }
 
+/// `APInt::udiv`.
+pub fn udiv<W: Word>(
+    a: W,
+    b: W,
+) -> W {
+    a.divrem(b).0
+}
+
+/// `APInt::urem`.
+pub fn urem<W: Word>(
+    a: W,
+    b: W,
+) -> W {
+    a.divrem(b).1
+}
+
+/// The magnitude of `v` as a signed number of `width` bits (`INT_MIN` is its
+/// own magnitude, as an unsigned number).
+fn magnitude<W: Word>(
+    v: W,
+    width: u32,
+) -> W {
+    if is_negative(v, width) { W::ZERO.wrapping_sub(v) & mask::<W>(width) } else { v }
+}
+
+/// `APInt::sdiv` at any width: the quotient rounded towards zero
+/// (`INT_MIN / -1` wraps).
+pub fn sdiv<W: Word>(
+    a: W,
+    b: W,
+    width: u32,
+) -> W {
+    let quotient = udiv(magnitude(a, width), magnitude(b, width));
+    let negative = is_negative(a, width) != is_negative(b, width);
+    (if negative { W::ZERO.wrapping_sub(quotient) } else { quotient }) & mask::<W>(width)
+}
+
+/// `APInt::srem` at any width: the remainder with the sign of the dividend.
+pub fn srem<W: Word>(
+    a: W,
+    b: W,
+    width: u32,
+) -> W {
+    let remainder = urem(magnitude(a, width), magnitude(b, width));
+    (if is_negative(a, width) { W::ZERO.wrapping_sub(remainder) } else { remainder }) & mask::<W>(width)
+}
+
+/// `APIntOps::RoundingUDiv` at any width.
+pub fn rounding_udiv<W: Word>(
+    a: W,
+    b: W,
+    up: bool,
+) -> W {
+    let (quotient, remainder) = a.divrem(b);
+    if up && !remainder.is_zero() { quotient.wrapping_add(W::ONE) } else { quotient }
+}
+
+/// `APIntOps::RoundingSDiv` at any width, rounding up or down.
+pub fn rounding_sdiv<W: Word>(
+    a: W,
+    b: W,
+    width: u32,
+    up: bool,
+) -> W {
+    let quotient = sdiv(a, b, width);
+    let remainder = srem(a, b, width);
+    let result = if remainder.is_zero() {
+        quotient
+    } else if (is_negative(remainder, width)) != is_negative(b, width) {
+        if up { quotient } else { quotient.wrapping_sub(W::ONE) }
+    } else if up {
+        quotient.wrapping_add(W::ONE)
+    } else {
+        quotient
+    };
+    result & mask::<W>(width)
+}
+
+/// `APInt::smul_sat` at any width.
+pub fn smul_sat<W: Word>(
+    a: W,
+    b: W,
+    width: u32,
+) -> W {
+    let (product, over) = smul_ov(a, b, width);
+    if !over {
+        return product;
+    }
+    if is_negative(a, width) != is_negative(b, width) { sign_bit::<W>(width) } else { sign_bit::<W>(width).wrapping_sub(W::ONE) }
+}
+
+/// `APInt::sadd_ov` at any width.
+pub fn sadd_ov<W: Word>(
+    a: W,
+    b: W,
+    width: u32,
+) -> (W, bool) {
+    let sum = a.wrapping_add(b) & mask::<W>(width);
+    (sum, is_negative(a, width) == is_negative(b, width) && is_negative(sum, width) != is_negative(a, width))
+}
+
+/// `APInt::ssub_ov` at any width.
+pub fn ssub_ov<W: Word>(
+    a: W,
+    b: W,
+    width: u32,
+) -> (W, bool) {
+    let difference = a.wrapping_sub(b) & mask::<W>(width);
+    (difference, is_negative(a, width) != is_negative(b, width) && is_negative(difference, width) != is_negative(a, width))
+}
+
+/// `APInt::smul_ov` at any width.
+pub fn smul_ov<W: Word>(
+    a: W,
+    b: W,
+    width: u32,
+) -> (W, bool) {
+    let (product, over) = magnitude(a, width).overflowing_mul(magnitude(b, width));
+    let negative = is_negative(a, width) != is_negative(b, width);
+    let limit = if negative { sign_bit::<W>(width) } else { sign_bit::<W>(width).wrapping_sub(W::ONE) };
+    let result = (if negative { W::ZERO.wrapping_sub(product) } else { product }) & mask::<W>(width);
+    (result, over || product > limit)
+}
+
 // What follows is `u128` only: it divides, or needs a signed number wider than
 // the word.
 
@@ -651,93 +1086,6 @@ pub(crate) fn smin_of(width: u32) -> i128 {
 
 pub(crate) fn smax_of(width: u32) -> i128 {
     if width >= 128 { i128::MAX } else { (1_i128 << (width - 1)) - 1 }
-}
-
-/// `APInt::smul_ov`.
-pub(crate) fn smul_ov(
-    a: u128,
-    b: u128,
-    width: u32,
-) -> (u128, bool) {
-    let (x, y) = (signed(a, width), signed(b, width));
-    match x.checked_mul(y) {
-        Some(p) if (smin_of(width)..=smax_of(width)).contains(&p) => (p as u128 & mask::<u128>(width), false),
-        _ => (x.wrapping_mul(y) as u128 & mask::<u128>(width), true),
-    }
-}
-
-/// `APInt::smul_sat`.
-pub(crate) fn smul_sat(
-    a: u128,
-    b: u128,
-    width: u32,
-) -> u128 {
-    let (product, over) = smul_ov(a, b, width);
-    if !over {
-        return product;
-    }
-    let negative = bit(a, width - 1) != bit(b, width - 1);
-    (if negative { smin_of(width) } else { smax_of(width) }) as u128 & mask::<u128>(width)
-}
-
-/// `APInt::sdiv`: the quotient rounded towards zero (`INT_MIN / -1` wraps).
-pub(crate) fn sdiv(
-    a: u128,
-    b: u128,
-    width: u32,
-) -> u128 {
-    signed(a, width).wrapping_div(signed(b, width)) as u128 & mask::<u128>(width)
-}
-
-/// `APInt::srem`: the remainder with the sign of the dividend.
-pub(crate) fn srem(
-    a: u128,
-    b: u128,
-    width: u32,
-) -> u128 {
-    signed(a, width).wrapping_rem(signed(b, width)) as u128 & mask::<u128>(width)
-}
-
-/// `APIntOps::RoundingUDiv`.
-pub(crate) fn rounding_udiv(
-    a: u128,
-    b: u128,
-    up: bool,
-) -> u128 {
-    let (quotient, rem) = (a / b, a % b);
-    if up && rem != 0 { quotient + 1 } else { quotient }
-}
-
-/// `APIntOps::RoundingSDiv`, rounding up or down.
-pub(crate) fn rounding_sdiv(
-    a: u128,
-    b: u128,
-    width: u32,
-    up: bool,
-) -> u128 {
-    let (x, y) = (signed(a, width), signed(b, width));
-    let quotient = x.wrapping_div(y);
-    let rem = x.wrapping_rem(y);
-    let result = if rem == 0 {
-        quotient
-    } else if up {
-        if (rem < 0) != (y < 0) { quotient } else { quotient + 1 }
-    } else if (rem < 0) != (y < 0) {
-        quotient - 1
-    } else {
-        quotient
-    };
-    result as u128 & mask::<u128>(width)
-}
-
-/// `APInt::sqrtFloor`.
-pub(crate) fn sqrt_floor(v: u128) -> u128 {
-    let (mut low, mut high) = (0_u128, 1_u128 << 64);
-    while low + 1 < high {
-        let mid = low + (high - low) / 2;
-        if mid.checked_mul(mid).is_some_and(|square| square <= v) { low = mid } else { high = mid }
-    }
-    low
 }
 
 /// `APIntOps::fshl`: the top `width` bits of `(a:b) << (amt mod width)`.
@@ -769,3 +1117,7 @@ pub(crate) fn rotate_amount(
 ) -> u32 {
     (amt % u128::from(width)) as u32
 }
+
+#[cfg(test)]
+#[path = "apint_tests.rs"]
+mod tests;

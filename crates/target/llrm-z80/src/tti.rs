@@ -267,6 +267,18 @@ impl Tti for Z80Tti {
         true
     }
 
+    /// A word add, `add hl,bc`: the Z80 prices in machine cycles (and bytes),
+    /// so the expansion budget of four basic instructions counts word
+    /// operations. A 16-bit `umax` alone costs 6; the loop count of lz4c's
+    /// checksum loop (`umax` and an add) was refused, and the loop kept
+    /// `base + i` with its bound and base in the frame (132469 T).
+    fn tcc_basic(
+        &self,
+        kind: CostKind,
+    ) -> Cost {
+        priced(&["add hl;bc"], kind)
+    }
+
     // There is no conditional move: a `select` is a branch on the Z80.
     fn has_cmov(&self) -> bool {
         false

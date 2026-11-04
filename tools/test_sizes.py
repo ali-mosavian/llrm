@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import pytest  # noqa: E402
 import sizes  # noqa: E402
-from sizes import code_bytes, code_size, data_bytes, lib_bytes, selected  # noqa: E402
+from sizes import code_bytes, code_size, data_bytes, externs, lib_bytes, selected  # noqa: E402
 
 
 def record(kind: int, body: bytes) -> bytes:
@@ -276,3 +276,10 @@ def test_bytes_that_start_no_instruction_are_skipped_counted_and_the_padding_aft
         + record(0xA0, bytes([1, 0, 0]) + header) + record(0xA0, bytes([1, len(header), 0]) + code) + record(0x8A, b"\0")
     )
     assert code_size(path) == sizes.CodeSize(len(header) + 2, 2, 1)
+
+
+def test_the_library_functions_an_object_calls_are_named(tmp_path):
+    """qlight -O2 read 389 B against bcc's 216: bcc called long-divide helpers whose bytes are in no code_bytes, and nothing said so."""
+    path = tmp_path / "c.obj"
+    path.write_bytes(object_with(10, record(0x8C, name("__I4D") + b"\0" + name("_report@3") + b"\0")))
+    assert externs(path) == ["__I4D", "_report@3"]

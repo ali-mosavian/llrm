@@ -4,8 +4,8 @@
 use llrm_analysis::testing::DOS;
 use llrm_mir::module::Module;
 
-use super::Sroa;
-use crate::testing::{managed, parsed};
+use super::{Sroa, SroaModifyCfg};
+use crate::testing::{managed, parsed, results};
 
 fn module(body: &str) -> Module {
     parsed(&format!("{DOS}{body}"))
@@ -697,3 +697,104 @@ b0:
 declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture)
 declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture)
 ";
+
+fn sroa_modifying_cfg(body: &str) -> String {
+    managed(&mut module(body), SroaModifyCfg)
+}
+
+/// `sroa<modify-cfg>` of the early slots, against `preserve-cfg` of the late
+/// one, on `body`: the printed forms and `inputs` run before and after.
+fn both_modes(
+    body: &str,
+    inputs: &[&[i128]],
+) -> (String, String) {
+    let before = module(body);
+    let preserved = managed(&mut before.clone(), Sroa);
+    let mut modified = before.clone();
+    let after = managed(&mut modified, SroaModifyCfg);
+    assert_eq!(results(&modified, inputs), results(&before, inputs), "{after}");
+    (preserved, after)
+}
+
+/// A store through a select of two locals stayed in memory in every slot: the
+/// pin's early slots (`ModifyCFG`) make the store once on each path
+/// (`rewriteMemOpOfSelect`) and promote both allocas.
+#[test]
+fn test_a_store_through_a_select_of_two_locals_is_predicated_in_modify_cfg() {
+    let (preserved, after) = both_modes(
+        "define i32 @f(i1 %c, i32 %a, i32 %b) {
+b0:
+  %x = alloca i32
+  %y = alloca i32
+  store i32 %a, ptr %x
+  store i32 %b, ptr %y
+  %p = select i1 %c, ptr %x, ptr %y
+  store i32 7, ptr %p
+  %u = load i32, ptr %x
+  %v = load i32, ptr %y
+  %r = add i32 %u, %v
+  ret i32 %r
+}
+",
+        &[&[1, 3, 4], &[0, 3, 4]],
+    );
+    assert!(preserved.contains("alloca"), "{preserved}");
+    assert!(!after.contains("alloca") && !after.contains("store") && !after.contains("load"), "{after}");
+    assert!(after.contains("br i1 %c"), "{after}");
+}
+
+/// A load through a select whose one hand is a global (not known to be
+/// dereferenceable) was left with its alloca; modify-cfg loads it on its own
+/// path and joins the loads with a phi.
+#[test]
+fn test_a_load_through_a_select_with_an_unspeculatable_hand_is_split_in_modify_cfg() {
+    let (preserved, after) = both_modes(
+        "@g = global i32 9
+
+define i32 @f(i1 %c, i32 %a) {
+b0:
+  %x = alloca i32
+  store i32 %a, ptr %x
+  %p = select i1 %c, ptr %x, ptr @g
+  %v = load i32, ptr %p
+  ret i32 %v
+}
+",
+        &[&[1, 5], &[0, 5]],
+    );
+    assert!(preserved.contains("alloca"), "{preserved}");
+    assert!(!after.contains("alloca"), "{after}");
+    assert!(after.contains("phi i32"), "{after}");
+}
+
+/// A store through a phi whose predecessor has two successors needs the edge
+/// split (`SplitBlockPredecessors`, `.sroa.store`): preserve-cfg left the
+/// alloca.
+#[test]
+fn test_a_store_through_a_phi_on_a_critical_edge_is_moved_onto_the_edge_in_modify_cfg() {
+    let (preserved, after) = both_modes(
+        "define i32 @f(i1 %c, i32 %a, i32 %b) {
+b0:
+  %x = alloca i32
+  %y = alloca i32
+  store i32 %a, ptr %x
+  store i32 %b, ptr %y
+  br i1 %c, label %j, label %t
+
+t:
+  br label %j
+
+j:
+  %p = phi ptr [ %x, %b0 ], [ %y, %t ]
+  store i32 7, ptr %p
+  %u = load i32, ptr %x
+  %v = load i32, ptr %y
+  %r = add i32 %u, %v
+  ret i32 %r
+}
+",
+        &[&[1, 3, 4], &[0, 3, 4]],
+    );
+    assert!(preserved.contains("alloca"), "{preserved}");
+    assert!(!after.contains("alloca") && !after.contains("store"), "{after}");
+}
