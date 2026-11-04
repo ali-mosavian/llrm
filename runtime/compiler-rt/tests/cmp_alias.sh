@@ -10,5 +10,9 @@ for w in f32:sf2 f64:df2; do d=${w%:*}; s=${w#*:}
   own ge | grep -q "sfb_gt$s " || { echo "$d: sfb_gt$s not in ge object"; rc=1; }
   for e in eq ne lt le gt; do [ -z "$(own $e)" ] || { echo "$d: cmp_$e.o still defines $(own $e)"; rc=1; }; done
   a=$(nm $T/$d-cmp_cmp.o | awk -v e="sfb_eq$s" -v c="sfb_cmp$s" '$3==e{x=$1} $3==c{y=$1} END{print (x==y && x!="")}'); [ "$a" = 1 ] || { echo "$d: eq is not at cmp's address"; rc=1; }
+  # ge/gt call the core at -Os (bytes) and carry their own copy otherwise (a far call costs more than it saves)
+  for o in Os O2; do cc -$o -fno-builtin -ffp-contract=off -Iinclude '-DSF_NAME(n)=sfb_##n' -DSF_CMP_SPLIT -c lib/fp/$d/cmp_ge.c -o $T/ge-$o.o || exit 2
+    if nm -u $T/ge-$o.o | grep -q "sfb_cmp$s"; then c=call; else c=copy; fi
+    [ "$c" = "$([ $o = Os ] && echo call || echo copy)" ] || { echo "$d: -$o ge does a $c of the core"; rc=1; }; done
 done
 [ $rc = 0 ] && echo "cmp aliases ok"; exit $rc

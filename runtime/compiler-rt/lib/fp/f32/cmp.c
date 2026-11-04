@@ -6,7 +6,11 @@
 #ifdef SF_CMP_SPLIT
 int SF_NAME(cmpsf2)(sf_float a, sf_float b);
 #define SF_CMP_FWD(a, b) SF_NAME(cmpsf2)(a, b)
+#ifdef __OPTIMIZE_SIZE__
 #define SF_CMP_REV(a, b) -SF_NAME(cmpsf2)(b, a)
+#else
+#define SF_CMP_REV(a, b) -sf_cmp_bits(f2b(b), f2b(a))
+#endif
 #else
 #define SF_CMP_FWD(a, b) sf_cmp_bits(f2b(a), f2b(b))
 #define SF_CMP_REV(a, b) -sf_cmp_bits(f2b(b), f2b(a))
