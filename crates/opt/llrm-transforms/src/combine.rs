@@ -470,6 +470,7 @@ fn visitors(opcode: &Opcode) -> &'static [Visitor] {
         Opcode::Switch => &[|c, inst| c.visit_switch(inst)],
         Opcode::Call(_) => &[|c, inst| c.visit_call(inst)],
         Opcode::Phi => &[|c, inst| c.visit_phi(inst)],
+        Opcode::Freeze => &[|c, inst| c.visit_freeze(inst)],
         _ => &[],
     }
 }
