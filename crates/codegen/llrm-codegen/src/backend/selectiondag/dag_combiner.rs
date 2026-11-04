@@ -2632,6 +2632,14 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if let Some(direct) = self.hooks.store_of_converted_slot(&mut self.dag, node) {
             return Some(direct);
         }
+        // `mergeTruncStores`, before `findBetterNeighborChains` as the pin
+        // has it: the chain it walks is the program's order.
+        // `mergeTruncStores`: several stores of the parts of one value become
+        // a store of it (with a `bswap` or a rotate where the parts are in
+        // the other order).
+        if let Some(wide) = self.merge_trunc_stores(node) {
+            return Some(wide);
+        }
         // Walk up the chain skipping the memory nodes this store does not
         // alias, on it and on the stores chained below it.
         if let Some(better) = self.find_better_neighbor_chains(node) {
