@@ -357,7 +357,7 @@ impl Selector<'_, '_, '_> {
             Operand::Constant(id) => match self.module.context.get(id).kind {
                 ConstantKind::Int(_) | ConstantKind::Null | ConstantKind::Zero => 2,
                 ConstantKind::Poison | ConstantKind::Undef => 3,
-                ConstantKind::Float(_) | ConstantKind::Float80(_) => 4,
+                ConstantKind::Float(_) | ConstantKind::Float80(_) | ConstantKind::Float128(_) => 4,
                 _ => 5,
             },
         }
