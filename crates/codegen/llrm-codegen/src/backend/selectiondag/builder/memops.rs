@@ -387,6 +387,21 @@ impl Builder<'_> {
         if self.target.dag.pointer.size_in_bits() == 64 && size >= 8 { 8 } else { Self::WIDEST_MEM_OP }
     }
 
+    /// `getOptimalMemOpType` with SSE2: 16 bytes (`v4i32`, a `movups`/`movaps`
+    /// pair; a zero is `xorps`) for a piece of 16 or more bytes, else
+    /// [`Self::widest_mem_op`]. `integer_only` keeps the integer width: a
+    /// fill that is no zero, a volatile access or a constant source (stored as
+    /// immediates). x86-64 has SSE2 in its baseline; the 32-bit targets follow
+    /// with their CPU's feature set.
+    fn widest_mem_op_sse(
+        &self,
+        size: u64,
+        integer_only: bool,
+    ) -> u64 {
+        let sse2 = self.target.dag.pointer.size_in_bits() == 64 && self.target.target_nodes.is_none();
+        if sse2 && !integer_only && !self.volatile_memory && size >= 16 { 16 } else { self.widest_mem_op(size) }
+    }
+
     /// The alignment of a frame object a copy of `size` bytes fills, when the
     /// copy is expanded inline: the ABI alignment of the first piece's type if
     /// that is more, up to the natural stack alignment
@@ -401,7 +416,7 @@ impl Builder<'_> {
     ) -> u64 {
         let tuning = &self.target.tuning;
         let limit = if opt_size { tuning.max_stores_per_memcpy_opt_size } else { tuning.max_stores_per_memcpy };
-        let Some(first) = Self::mem_ops(size, self.widest_mem_op(size), limit, self.volatile_memory)
+        let Some(first) = Self::mem_ops(size, self.widest_mem_op_sse(size, false), limit, self.volatile_memory)
             .and_then(|ops| ops.first().copied())
         else {
             return align;
@@ -456,7 +471,7 @@ impl Builder<'_> {
         src_align: u64,
     ) -> Result<Option<SDValue>, Refused> {
         let slice = if self.volatile_memory { None } else { self.constant_slice(src) };
-        let widest = self.widest_mem_op(size);
+        let widest = self.widest_mem_op_sse(size, slice.is_some());
         let Some(ops) = Self::mem_ops(size, widest, limit, self.volatile_memory) else { return Ok(None) };
         let (mut src_off, mut dst_off, mut left) = (0u64, 0u64, size);
         let mut chains = Vec::new();
@@ -465,6 +480,21 @@ impl Builder<'_> {
             if width > left {
                 src_off -= width - left;
                 dst_off -= width - left;
+            }
+            if width == 16 {
+                let align = common_alignment(src_align, src_off).min(common_alignment(dst_align, dst_off));
+                let align = self.dag.get_constant(u128::from(align), EVT::I32);
+                let from = self.dag.get_object_ptr_offset(src, src_off as i64);
+                let to = self.dag.get_object_ptr_offset(dst, dst_off as i64);
+                let copy = self.dag.get_node(x86isd::LLRM_COPY128, EVT::OTHER, &[order, to, from, align]);
+                if self.target.ordered_copies {
+                    order = copy;
+                }
+                chains.push(copy);
+                src_off += width;
+                dst_off += width;
+                left = left.saturating_sub(width);
+                continue;
             }
             let vt = EVT::integer(width as u32 * 8);
             // `getMemsetStringVal`: the bytes from the source's offset, zero
@@ -596,6 +626,9 @@ impl Builder<'_> {
         opt_size: bool,
         zero: bool,
     ) -> bool {
+        if opt_size && zero && self.target.dag.pointer.size_in_bits() == 64 && self.target.target_nodes.is_none() {
+            return self.sse_fill_is_longer(length);
+        }
         if self.target.dag.pointer.size_in_bits() != 16 {
             return false;
         }
@@ -625,6 +658,32 @@ impl Builder<'_> {
         (stored - FILL_BYTES) as i64 * trade.milliclocks_per_byte >= (fill - stores) * 1000
     }
 
+    /// DEVIATE SD541 (x86-64, tuned for size): a constant zero fill whose
+    /// `xorps` and 16-byte stores take more bytes than a `rep stosq` fill is
+    /// the fill. The pin counts stores (`MaxStoresPerMemsetOptSize`), so a
+    /// 128-byte clear is eight `movaps` there (pattern_fill -Os +50 B,
+    /// huffman_decode +12 B over the `rep stosq` this port had). The sizes are
+    /// the encodings at a `[rsp+disp8]` address: `xorps` 3, `movaps` store 5,
+    /// `mov qword [m], 0` 8, and the fill `xor eax, eax`, `lea rdi`, `mov ecx`,
+    /// `rep stosq` 15. Owner m64. Exit 2026-11-20: a store-cost hook on the
+    /// target description, as for SD223. The pin: [`getMemset`][memset] tries
+    /// the stores first, within [`MaxStoresPerMemsetOptSize = 8`][limit].
+    ///
+    /// [memset]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L10376
+    /// [limit]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L2937
+    fn sse_fill_is_longer(
+        &self,
+        length: u64,
+    ) -> bool {
+        const FILL_BYTES_64: u64 = 2 + 5 + 5 + 3;
+        let Some(ops) = Self::mem_ops(length, 16, usize::MAX, self.volatile_memory) else { return false };
+        let wide = ops.iter().filter(|width| **width == 16).count() as u64;
+        let stored = if wide > 0 { 3 } else { 0 } + wide * 5 + (ops.len() as u64 - wide) * 8;
+        stored > FILL_BYTES_64
+    }
+
     /// `getMemsetStores`: the fill value splatted to the widest operation,
     /// truncated for the narrower ones.
     fn inline_memset(
@@ -636,9 +695,10 @@ impl Builder<'_> {
         limit: usize,
         align: u64,
     ) -> Result<Option<SDValue>, Refused> {
-        let widest = self.widest_mem_op(size);
+        let zero = self.dag.constant(value) == Some(0);
+        let widest = self.widest_mem_op_sse(size, !zero);
         let Some(ops) = Self::mem_ops(size, widest, limit, self.volatile_memory) else { return Ok(None) };
-        let largest = ops.iter().copied().max().expect("a store");
+        let largest = ops.iter().copied().filter(|width| *width != 16).max().unwrap_or(8);
         let largest_vt = EVT::integer(largest as u32 * 8);
         let splat = self.memset_value(value, largest_vt);
         let (mut off, mut left) = (0u64, size);
@@ -646,6 +706,14 @@ impl Builder<'_> {
         for width in ops {
             if width > left {
                 off -= width - left;
+            }
+            if width == 16 {
+                let align = self.dag.get_constant(u128::from(common_alignment(align, off)), EVT::I32);
+                let to = self.dag.get_object_ptr_offset(dst, off as i64);
+                chains.push(self.dag.get_node(x86isd::LLRM_ZERO128, EVT::OTHER, &[chain, to, align]));
+                off += width;
+                left = left.saturating_sub(width);
+                continue;
             }
             let vt = EVT::integer(width as u32 * 8);
             let fill = if width < largest { self.dag.get_node(ISD::Truncate, vt, &[splat]) } else { splat };

@@ -84,6 +84,23 @@ def test_z80_table_header_names_the_single_tu_ice():
     assert "single-translation-unit softfloat build" in open(root).readline()
 
 
+def test_a_hung_fork_call_is_a_failed_call_not_a_cell():
+    """compiler-rt f64/mul.c O1 hangs the native-long cc1 (>300 s): every cc1/tool call of both benches runs under a timeout and a timeout
+    returns 124, which the benches count as a failed compile (n/a); a missing or zero-byte cell would read as a number."""
+    import time
+    import gcc_6502_bench as B6
+    os.environ["GCC_COLUMNS_TIMEOUT"] = "1"
+    try:
+        for mod in (Z, B6):
+            mod.TIMEOUT = 1
+            t0 = time.time()
+            p = mod.sh(["sleep", "5"], ".")
+            assert p.returncode == 124 and time.time() - t0 < 4, (mod.__name__, p.returncode)
+    finally:
+        del os.environ["GCC_COLUMNS_TIMEOUT"]
+        Z.TIMEOUT = B6.TIMEOUT = 120
+
+
 def test_softfloat_z80_table_is_complete_and_current():
     """The 11-03 table was measured from the removed monolithic sf32.c; it stayed in the repo marked STALE.
     A table needs 32 gcc clk cells (2 variants x 2 levels x 8 ops), 4 library sizes and the cc1 md5, and no STALE mark."""
