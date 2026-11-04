@@ -13,8 +13,14 @@ fn unrolled(module: &mut Module) -> bool {
     crate::loopsimplify::simplified(function);
     crate::lcssa::closed(function).expect("closes");
     let tti = X86::of_cpu("i486").expect("a cpu");
-    let options =
-        Options { opt_level: 2, opt_size: false, min_size: false, only_when_forced: false, prepare_for_lto: false };
+    let options = Options {
+        opt_level: 2,
+        opt_size: false,
+        min_size: false,
+        only_when_forced: false,
+        prepare_for_lto: false,
+        target_unrolling: false,
+    };
     unroll_function(module, "f", &tti, options).expect("unrolls")
 }
 
@@ -188,8 +194,14 @@ b2:
     let function = module.function_mut("f").expect("@f").1;
     assert!(crate::loopsimplify::simplified(&mut function.clone()), "the input is in simplified form already");
     let tti = X86::of_cpu("i486").expect("a cpu");
-    let options =
-        Options { opt_level: 2, opt_size: false, min_size: false, only_when_forced: false, prepare_for_lto: false };
+    let options = Options {
+        opt_level: 2,
+        opt_size: false,
+        min_size: false,
+        only_when_forced: false,
+        prepare_for_lto: false,
+        target_unrolling: false,
+    };
     assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"), "{}", printed(&module));
     assert_eq!(results(&module, &[&[1, 0], &[1, 1], &[-3, 7]]), results(&before, &[&[1, 0], &[1, 1], &[-3, 7]]));
 }
@@ -307,6 +319,7 @@ fn a_full_unroll_hands_over_the_loops_it_made() {
             opt_level: 2,
             opt_size: false,
             only_when_forced: false,
+            target_unrolling: false,
             created: std::rc::Rc::clone(&created),
         },
     );
@@ -329,6 +342,7 @@ fn a_full_unroll_hands_over_the_inner_loop_of_its_first_trip() {
             opt_level: 2,
             opt_size: false,
             only_when_forced: false,
+            target_unrolling: false,
             created: std::rc::Rc::clone(&created),
         },
     );
@@ -461,10 +475,28 @@ exit:
     crate::loopsimplify::simplified(function);
     crate::lcssa::closed(function).expect("closes");
     let tti = X86::of_cpu("i486").expect("a cpu");
-    let options =
-        Options { opt_level: 3, opt_size: false, min_size: false, only_when_forced: false, prepare_for_lto: false };
+    let options = Options {
+        opt_level: 3,
+        opt_size: false,
+        min_size: false,
+        only_when_forced: false,
+        prepare_for_lto: false,
+        target_unrolling: false,
+    };
     assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"));
     let after = printed(&module);
     assert_eq!(results(&module, inputs), before, "{after}");
     assert!(after.contains("%b = phi") || after.matches("phi i32 [ 0").count() > 0, "the outer loop is gone: {after}");
+}
+
+/// mandel -O2 ran its first trip (x = y = 0: two multiplies and a compare that
+/// fold) 768 times at 25k of 660k clocks. The peel is made where the clocks
+/// the fold saves repay the bytes of the copy at the 486's rate (312).
+#[test]
+fn a_first_iteration_is_peeled_only_where_its_folded_clocks_repay_the_copy() {
+    // 15 units are 45 bytes: 14040 milliclocks at 312, 14 clocks.
+    assert!(super::folded_entry_pays(39, 15, 312));
+    assert!(super::folded_entry_pays(15, 15, 312));
+    assert!(!super::folded_entry_pays(14, 15, 312));
+    assert!(!super::folded_entry_pays(0, 15, 312));
 }

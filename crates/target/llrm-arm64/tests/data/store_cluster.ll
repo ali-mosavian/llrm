@@ -24,3 +24,55 @@ define void @across_a_store_that_may_alias(ptr %p, ptr %q, i64 %x) {
   store i64 %b, ptr %r, align 8
   ret void
 }
+
+define i64 @a_chain_of_loads(ptr %p, i64 %s) {
+  %a = load i64, ptr %p, align 8
+  %a3 = mul i64 %a, 3
+  %t1 = add i64 %s, %a3
+  %q1 = getelementptr i64, ptr %p, i64 1
+  %b = load i64, ptr %q1, align 8
+  %b5 = mul i64 %b, 5
+  %t2 = add i64 %t1, %b5
+  %q2 = getelementptr i64, ptr %p, i64 2
+  %c = load i64, ptr %q2, align 8
+  %c7 = mul i64 %c, 7
+  %t3 = add i64 %t2, %c7
+  %q3 = getelementptr i64, ptr %p, i64 3
+  %d = load i64, ptr %q3, align 8
+  %d9 = mul i64 %d, 9
+  %t4 = add i64 %t3, %d9
+  ret i64 %t4
+}
+
+define i64 @loads_across_a_store_that_may_alias(ptr %p, ptr %s) {
+  %a = load i64, ptr %p, align 8
+  %m = mul i64 %a, 3
+  store i64 7, ptr %s, align 8
+  %q = getelementptr i64, ptr %p, i64 1
+  %b = load i64, ptr %q, align 8
+  %n = mul i64 %b, 5
+  %r = add i64 %m, %n
+  ret i64 %r
+}
+
+declare void @sink(ptr)
+define i64 @a_chain_of_slot_loads(i64 %s) {
+  %p = alloca [4 x i64], align 8
+  call void @sink(ptr %p)
+  %a = load i64, ptr %p, align 8
+  %a3 = mul i64 %a, 3
+  %t1 = add i64 %s, %a3
+  %q1 = getelementptr i64, ptr %p, i64 1
+  %b = load i64, ptr %q1, align 8
+  %b5 = mul i64 %b, 5
+  %t2 = add i64 %t1, %b5
+  %q2 = getelementptr i64, ptr %p, i64 2
+  %c = load i64, ptr %q2, align 8
+  %c7 = mul i64 %c, 7
+  %t3 = add i64 %t2, %c7
+  %q3 = getelementptr i64, ptr %p, i64 3
+  %d = load i64, ptr %q3, align 8
+  %d9 = mul i64 %d, 9
+  %t4 = add i64 %t3, %d9
+  ret i64 %t4
+}

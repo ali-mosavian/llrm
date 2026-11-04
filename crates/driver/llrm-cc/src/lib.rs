@@ -584,10 +584,35 @@ fn run(
     }
 }
 
+/// What `clang --version` is not asked twice for: the clang's path, size and
+/// modification time, with the pin file it was judged against.
+fn pin_stamp(clang: &Path) -> Option<String> {
+    let meta = std::fs::metadata(clang).ok()?;
+    let modified = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
+    Some(format!("{}\n{}\n{}\n{PIN_FILE}", clang.display(), meta.len(), modified.as_nanos()))
+}
+
+/// Where the stamp of a clang found to be a pin is kept. Any read, write or
+/// mismatch falls back to asking the clang.
+fn pin_stamp_file(clang: &Path) -> PathBuf {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    clang.hash(&mut hasher);
+    std::env::temp_dir().join(format!("llrm-cc-pin-{:016x}", hasher.finish()))
+}
+
 fn check_pin(clang: &Path) -> Result<(), String> {
+    let stamp = pin_stamp(clang);
+    let file = pin_stamp_file(clang);
+    if stamp.as_deref().is_some_and(|stamp| std::fs::read_to_string(&file).is_ok_and(|kept| kept == stamp)) {
+        return Ok(());
+    }
     let out = Command::new(clang).arg("--version").output().map_err(|error| format!("{}: {error}", clang.display()))?;
     let said = String::from_utf8_lossy(&out.stdout);
     if PIN_FILE.lines().filter_map(|line| line.split_whitespace().next()).any(|sha| said.contains(sha)) {
+        if let Some(stamp) = stamp {
+            let _ = std::fs::write(&file, stamp);
+        }
         Ok(())
     } else {
         Err(format!("{} is not the pinned clang {}", clang.display(), pin()))

@@ -325,6 +325,10 @@ impl llrm_target::Target for M16 {
         llrm_x86::calling::frame(CALLING.native())
     }
 
+    fn frame_enter(&self) -> bool {
+        CALLING.native().frame_enter
+    }
+
     /// Past BP and a 2-byte return address, or a 4-byte far one.
     fn first_argument_offset(
         &self,
@@ -617,6 +621,7 @@ mod tuning_tests {
                 multiply_by_clocks: false,
                 price_pin_multiplies: false,
                 speed_milliclocks_per_byte: 0,
+                price_fills: false,
                 unroll_threshold: None,
                 unroll_max_percent_threshold_boost: None,
                 unroll_partial_threshold: None,

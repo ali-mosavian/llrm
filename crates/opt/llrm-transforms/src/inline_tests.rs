@@ -763,3 +763,122 @@ b1:
     let llrm_mir::MetadataOperand::Constant(line) = module.metadata[node.0 as usize].operands[0] else { panic!() };
     assert!(matches!(module.context.get(line).kind, llrm_mir::ConstantKind::Int(7)), "the callee's own line");
 }
+
+/// The attributes a call site states for a parameter, on the calls in the
+/// copy that pass it on: `nonnull` and `dereferenceable(8)` of `%q` were lost
+/// at the inner call (`AddParamAndFnBasicAttributes`).
+#[test]
+fn test_the_attributes_of_an_argument_go_to_the_inner_call_that_passes_it_on() {
+    let mut module = parsed(
+        "declare void @use(ptr)
+
+define internal void @callee(ptr %p) {
+b1:
+  call void @use(ptr %p)
+  ret void
+}
+
+define void @main(ptr %q) {
+b1:
+  call void @callee(ptr nonnull dereferenceable(8) %q)
+  ret void
+}
+",
+    );
+    assert!(inline_into(&mut module, "main", 1));
+    let after = printed(&module);
+    assert!(after.contains("call void @use(ptr nonnull dereferenceable(8) %q)"), "{after}");
+}
+
+/// A pointer into the parameter's object gets its access attributes, not its
+/// size: `readonly` goes through a `getelementptr`, `dereferenceable` does not.
+#[test]
+fn test_a_pointer_into_an_argument_gets_its_access_attributes_only() {
+    let mut module = parsed(
+        "declare void @use(ptr)
+
+define internal void @callee(ptr %p) {
+b1:
+  %f = getelementptr i8, ptr %p, i64 4
+  call void @use(ptr %f)
+  ret void
+}
+
+define void @main(ptr %q) {
+b1:
+  call void @callee(ptr readonly dereferenceable(8) %q)
+  ret void
+}
+",
+    );
+    assert!(inline_into(&mut module, "main", 1));
+    let after = printed(&module);
+    assert!(after.contains("call void @use(ptr readonly %f"), "{after}");
+    assert!(!after.contains("dereferenceable"), "{after}");
+}
+
+/// The return attributes a site states go to the call the callee returns:
+/// `nonnull dereferenceable(16)` of `@g`'s result were lost at `@make`
+/// (`AddReturnAttributes`; `nonnull` here as the call has one use).
+#[test]
+fn test_the_return_attributes_of_a_site_go_to_the_call_the_callee_returns() {
+    let mut module = parsed(
+        "declare ptr @make(i32)
+
+define internal ptr @g(i32 %n) {
+b1:
+  %r = call ptr @make(i32 %n)
+  ret ptr %r
+}
+
+define ptr @main(i32 %n) {
+b1:
+  %v = call nonnull dereferenceable(16) ptr @g(i32 %n)
+  ret ptr %v
+}
+",
+    );
+    assert!(inline_into(&mut module, "main", 1));
+    let after = printed(&module);
+    assert!(after.contains("call dereferenceable(16) nonnull ptr @make(i32 %n)"), "{after}");
+}
+
+/// A call site's `!alias.scope` and `!noalias` stopped at the call: the inlined
+/// store carried neither, so a scope the site states could not be read off it
+/// (`PropagateCallSiteMetadata`). The store has its own `!noalias`; the site's
+/// is added to it, and the load, which the site marks too, gets both kinds.
+#[test]
+fn test_the_scopes_of_a_call_site_go_to_the_memory_accesses_of_the_copy() {
+    let mut module = parsed(
+        "define internal void @callee(ptr %p, ptr %q) {
+b1:
+  store i32 1, ptr %p, !noalias !3
+  %v = load i32, ptr %q
+  %w = add i32 %v, 1
+  store i32 %w, ptr %q
+  ret void
+}
+
+define void @main(ptr %a, ptr %b) {
+b1:
+  call void @callee(ptr %a, ptr %b), !alias.scope !1, !noalias !2
+  ret void
+}
+
+!0 = distinct !{!0, !\"domain\"}
+!1 = !{!4}
+!2 = !{!5}
+!3 = !{!6}
+!4 = distinct !{!4, !0}
+!5 = distinct !{!5, !0}
+!6 = distinct !{!6, !0}
+",
+    );
+    assert!(inline_into(&mut module, "main", 1));
+    let after = printed(&module);
+    let main = after.split("define void @main").nth(1).unwrap();
+    assert_eq!(main.matches("!alias.scope").count(), 3, "{after}");
+    assert_eq!(main.matches("!noalias").count(), 3, "{after}");
+    assert!(main.contains("store i32 1, ptr %a"), "{after}");
+    assert!(!main.contains("call void @callee"), "{after}");
+}

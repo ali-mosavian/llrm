@@ -34,6 +34,8 @@ pub struct Summary {
     /// Its effects only reach what its pointer arguments point to.
     pub arguments_only: bool,
     pub returns: bool,
+    /// It states `noreturn`: control never comes back from a call to it.
+    pub no_return: bool,
     /// Each parameter it keeps no copy of.
     pub nocapture: Vec<bool>,
     /// It is `llvm.memset`: its first argument's bytes, as many as the
@@ -108,6 +110,7 @@ pub fn summary(function: &Function) -> Summary {
         accessible: stated_at(attrs, |location| location != Some("inaccessiblemem")),
         arguments_only: argument_memory_only(attrs),
         returns: returns(attrs),
+        no_return: Fact::NoReturn.stated_by(attrs),
         nocapture: function.parameter_attrs.iter().map(|one| Fact::NoCapture.stated_by(one)).collect(),
         memset: false,
         pattern: false,
@@ -342,10 +345,12 @@ pub fn stated_at(
     attrs: &[Attribute],
     counted: impl Fn(Option<&str>) -> bool,
 ) -> Effects {
+    // The flags say the same of every location: read once, not per location.
+    let flags = through(attrs);
     LOCATIONS
         .into_iter()
         .filter(|&one| counted(one))
-        .map(|one| at(attrs, one))
+        .map(|one| at_with(attrs, one, flags))
         .fold(
             Effects::NONE,
             |one, other| Effects { reads: one.reads || other.reads, writes: one.writes || other.writes },
@@ -423,34 +428,33 @@ fn at(
     attrs: &[Attribute],
     location: Option<&str>,
 ) -> Effects {
+    at_with(attrs, location, through(attrs))
+}
+
+/// [`at`] with the flags' effects (`through(attrs)`) already read.
+fn at_with(
+    attrs: &[Attribute],
+    location: Option<&str>,
+    flags: Effects,
+) -> Effects {
     let access = |one: &str| Effects {
         reads: one == "read" || one == "readwrite",
         writes: one == "write" || one == "readwrite",
     };
-    let mut effects = Effects::ANY;
+    let mut effects = flags;
     for attr in attrs {
-        let stated = match attr {
-            Attribute::Memory(locations) => {
-                let default =
-                    locations.iter().find(|(one, _)| one.is_none()).map_or(Effects::NONE, |(_, one)| access(one));
-                match location {
-                    Some(_) => locations
-                        .iter()
-                        .find(|(one, _)| one.as_deref() == location)
-                        .map_or(default, |(_, one)| access(one)),
-                    // Another named location, as `errnomem`, is part of the
-                    // rest.
-                    None => locations
-                        .iter()
-                        .filter(|(one, _)| one.is_some() && !LOCATIONS.contains(&one.as_deref()))
-                        .fold(default, |effects, (_, one)| {
-                            let one = access(one);
-                            Effects { reads: effects.reads || one.reads, writes: effects.writes || one.writes }
-                        }),
-                }
-            }
-            Attribute::Flag(_) => through(std::slice::from_ref(attr)),
-            _ => continue,
+        let Attribute::Memory(locations) = attr else { continue };
+        let default = locations.iter().find(|(one, _)| one.is_none()).map_or(Effects::NONE, |(_, one)| access(one));
+        let stated = match location {
+            Some(_) => locations.iter().find(|(one, _)| one.as_deref() == location).map_or(default, |(_, one)| access(one)),
+            // Another named location, as `errnomem`, is part of the rest.
+            None => locations
+                .iter()
+                .filter(|(one, _)| one.is_some() && !LOCATIONS.contains(&one.as_deref()))
+                .fold(default, |effects, (_, one)| {
+                    let one = access(one);
+                    Effects { reads: effects.reads || one.reads, writes: effects.writes || one.writes }
+                }),
         };
         effects = Effects { reads: effects.reads && stated.reads, writes: effects.writes && stated.writes };
     }
@@ -460,6 +464,8 @@ fn at(
 /// What `readnone`, `readonly` or `writeonly` among `attrs` allow, on a
 /// function or on one pointer parameter.
 pub fn through(attrs: &[Attribute]) -> Effects {
+    #[cfg(test)]
+    THROUGHS.with(|count| count.set(count.get() + 1));
     // Only the three flags matter: `Facts::of` over the whole list built a
     // vector of every fact for each of 12.5 K calls in d_faces.
     let stated = |fact: Fact| fact.stated_by(attrs);
@@ -641,6 +647,91 @@ mod stated_tests {
             assert_eq!(Fact::NoCapture.stated_by(attrs), facts.no_capture(), "{attrs:?}");
             assert_eq!(Fact::NoRetain.stated_by(attrs), facts.no_retain(), "{attrs:?}");
             assert_eq!(Fact::NoAlias.stated_by(attrs), facts.no_alias(), "{attrs:?}");
+        }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The times the flags among some attributes were read on this thread.
+    pub(crate) static THROUGHS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+mod effects_tests {
+    use super::*;
+
+    fn flag(name: &str) -> Attribute {
+        Attribute::Flag(name.to_owned())
+    }
+
+    /// `at` read the flags of the list once per attribute and location, and
+    /// `stated` asked it of three locations: 1.5 M Ir of a jpeg_fixed compile
+    /// in `LICM`'s write queries alone. The flags are read once per list, and
+    /// the answer is what the per-attribute fold gave.
+    #[test]
+    fn the_effects_a_list_states_read_its_flags_once() {
+        let memory = |list: &[(Option<&str>, &str)]| {
+            Attribute::Memory(list.iter().map(|(at, how)| (at.map(str::to_owned), (*how).to_owned())).collect())
+        };
+        let lists = [
+            vec![],
+            vec![flag("nounwind"), flag("willreturn"), flag("nosync"), flag("mustprogress"), flag("nofree")],
+            vec![flag("readnone"), flag("nounwind")],
+            vec![flag("readonly"), flag("nounwind"), flag("willreturn")],
+            vec![flag("writeonly"), flag("nounwind")],
+            vec![memory(&[(None, "read")]), flag("nounwind")],
+            vec![memory(&[(Some("argmem"), "readwrite"), (None, "read")]), flag("willreturn")],
+            vec![memory(&[(Some("inaccessiblemem"), "write"), (Some("errnomem"), "read"), (None, "none")])],
+            vec![memory(&[(None, "write")]), flag("readonly")],
+        ];
+        // The fold the list had: one `through` per flag attribute and location.
+        let reference = |attrs: &[Attribute], location: Option<&str>| {
+            let access = |one: &str| Effects {
+                reads: one == "read" || one == "readwrite",
+                writes: one == "write" || one == "readwrite",
+            };
+            let mut effects = Effects::ANY;
+            for attr in attrs {
+                let stated = match attr {
+                    Attribute::Memory(locations) => {
+                        let default = locations
+                            .iter()
+                            .find(|(one, _)| one.is_none())
+                            .map_or(Effects::NONE, |(_, one)| access(one));
+                        match location {
+                            Some(_) => locations
+                                .iter()
+                                .find(|(one, _)| one.as_deref() == location)
+                                .map_or(default, |(_, one)| access(one)),
+                            None => locations
+                                .iter()
+                                .filter(|(one, _)| one.is_some() && !LOCATIONS.contains(&one.as_deref()))
+                                .fold(default, |effects, (_, one)| {
+                                    let one = access(one);
+                                    Effects { reads: effects.reads || one.reads, writes: effects.writes || one.writes }
+                                }),
+                        }
+                    }
+                    Attribute::Flag(_) => through(std::slice::from_ref(attr)),
+                    _ => continue,
+                };
+                effects = Effects { reads: effects.reads && stated.reads, writes: effects.writes && stated.writes };
+            }
+            effects
+        };
+        for attrs in &lists {
+            for location in LOCATIONS {
+                assert_eq!(at(attrs, location), reference(attrs, location), "{attrs:?} at {location:?}");
+            }
+            let want = LOCATIONS.into_iter().map(|one| reference(attrs, one)).fold(Effects::NONE, |one, other| Effects {
+                reads: one.reads || other.reads,
+                writes: one.writes || other.writes,
+            });
+            THROUGHS.with(|count| count.set(0));
+            assert_eq!(stated(attrs), want, "{attrs:?}");
+            let reads = THROUGHS.with(std::cell::Cell::get);
+            assert_eq!(reads, 1, "{reads} flag reads for one `stated` of {attrs:?}");
         }
     }
 }

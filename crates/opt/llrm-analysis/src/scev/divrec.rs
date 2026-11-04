@@ -682,7 +682,7 @@ impl ScalarEvolution {
         let mut add_flags = flags::NONE;
         let rhs_range_min = self.get_signed_range(cx, rhs.scev).get_signed_min();
         let bits = self.get_type_size_in_bits(cx, self.type_of(rhs.scev));
-        let rhs_is_not_min_signed = !Ap::new(bits, rhs_range_min).is_signed_min();
+        let rhs_is_not_min_signed = !Ap::from_word(bits, rhs_range_min).is_signed_min();
         if f & flags::NSW == flags::NSW {
             // Let M be the minimum representable signed value. Then (-1)*RHS
             // signed-wraps if and only if RHS is M. That can happen even for a

@@ -67,6 +67,15 @@ pub trait Target {
     fn root(register: RegId) -> RegId;
     /// A root no allocator hands out (the frame and stack pointers).
     fn reserved(root: RegId) -> bool;
+    /// DEVIATE HC1: how many independent instructions `HoistCommonCodeInSuccs`
+    /// may look past for an identical one in the other successor. The pin
+    /// compares heads only, an intended rule
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/BranchFolding.cpp#L2043>). Reason: a constant both successors need, one of
+    /// them behind a load, stays twice (crc16: `move.l #65535,%d0` on both
+    /// sides of a guard). Exit: 2026-11-12, or when the pin hoists past them.
+    fn hoist_window() -> usize {
+        0
+    }
     /// The roots a call leaves unspecified.
     fn caller_saved() -> Vec<RegId>;
     /// Whether two allocatable registers share storage (a pair and its
@@ -153,6 +162,27 @@ pub trait Target {
     /// does). Exit for a target that says false: its profitability rule.
     fn joins_sub_registers() -> bool {
         true
+    }
+
+    /// The bytes of a use operand `inst` reads, where it reads less than the
+    /// whole: `(operand, byte offset, bytes)`. The sign test of a pair reads
+    /// its high byte; liveness takes the rest of the pair as not read there.
+    fn read_lanes(_inst: &Inst) -> Option<(usize, u32, u32)> {
+        None
+    }
+
+    /// Whether `lane_moves`' building instruction (a `PACK`) is converted to
+    /// one copy per part into its lane of the whole (`eliminateRegSequence`),
+    /// which the coalescer then joins. False: it stays one instruction and the
+    /// parts are hinted.
+    fn lowers_lanes() -> bool {
+        false
+    }
+
+    /// Whether a copy into or out of a byte above the low one of a wider value
+    /// is joined (`CoalescerPair` with a `SubIdx`). False: such a copy stays.
+    fn joins_lanes() -> bool {
+        false
     }
 
     /// `canJoinPhys`: whether a copy between an ordinary value and a pinned

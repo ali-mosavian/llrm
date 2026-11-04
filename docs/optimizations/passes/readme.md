@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 238 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 241 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -34,6 +34,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_and | `InstCombinerImpl::visitAnd`: the integer `and` folds. | `combine::visit` (the `And` arm, once wired). | [combine_and](combine_and.md) |
 | combine_and_select | `visitAnd` after the constant-mask folds: the xor/not identities and the folds of an `and` with a boolean extension, which become selects. | `combine_and::visit_and`. | [combine_and_select](combine_and_select.md) |
 | combine_assume | InstCombine's `llvm.assume`: the condition folds of `InstCombinerImpl::visitCallInst` ([InstCombineCalls.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCalls.cpp#L3837)). | `combine` (its `visit_call`, the `llvm.assume` intrinsic). | [combine_assume](combine_assume.md) |
+| combine_bitcast | InstCombine's `visitBitCast`, from [`InstCombineCasts.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCasts.cpp#L3426) at d1106deb71cc: its first step, a cast from a type to itself is its operand. | `combine` (its `visit`, the `BitCast` opcode). | [combine_bitcast](combine_bitcast.md) |
 | combine_bitorder | A byte or bit reversal written as shifts, masks and `or`s is the `bswap` or `bitreverse` intrinsic, and a bitwise operation on a reversed value is the reversal of the operation: LLVM's `matchBSwapOrBitReverse` (with `recognizeBSwapOrBitReverseIdiom` and `collectBitParts` of `Local.cpp`) and `foldBitwiseLogicWithIntrinsics` of InstCombine. | Named by `combine_and`, `combine_or`, `combine_xor`. | [combine_bitorder](combine_bitorder.md) |
 | combine_branch | `visitCondBrInst`: the canonical forms of a conditional branch. | `visit` in [`combine`](combine.md), which dispatches a `br` here | [combine_branch](combine_branch.md) |
 | combine_build | `InstCombiner::Builder`: the `IRBuilder` over `InstSimplifyFolder` that InstCombine's `visit*` functions build new instructions with. | `combine_addsub` and the families after it. | [combine_build](combine_build.md) |
@@ -45,7 +46,9 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_distribute | `InstCombinerImpl::foldUsingDistributiveLaws`: factor a common term out of two operands of a binary operator, or expand an operator over an operand it distributes over when both halves simplify. | `visit_and`, `visit_or`, `visit_xor`, `visit_add`, `visit_sub`, `visit_mul`. | [combine_distribute](combine_distribute.md) |
 | combine_fp | `visitFDiv`'s `foldFDivConstantDivisor`: a division by a constant is a multiply by its reciprocal. | `combine::visitors` for `fdiv`. | [combine_fp](combine_fp.md) |
 | combine_fp_int_casts | `foldFBinOpOfIntCasts`: a floating-point `fadd`, `fsub` or `fmul` of two integer conversions, or of one and a whole-number constant, is one integer operation and one conversion, if the conversions are exact and the integer operation cannot overflow. | `combine_fp::visit_fadd_or_fmul` and `visit_fsub`, at the pin's position | [combine_fp_int_casts](combine_fp_int_casts.md) |
+| combine_fpcast | InstCombine's `visitUIToFP`, `visitSIToFP` and `visitFPExt`, from [`InstCombineCasts.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCasts.cpp) at d1106deb71cc. | `combine` (its `visit`, the `UIToFP`, `SIToFP` and `FPExt` opcodes). | [combine_fpcast](combine_fpcast.md) |
 | combine_fptoint | InstCombine's `visitFPToUI` and `visitFPToSI`, from [`InstCombineCasts.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCasts.cpp) at d1106deb71cc. | `combine` (its `visit`, the `FPToUI` and `FPToSI` opcodes). | [combine_fptoint](combine_fptoint.md) |
+| combine_fptrunc | InstCombine's `visitFPTrunc`, from [`InstCombineCasts.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCasts.cpp#L2256) at d1106deb71cc. | `combine` (its `visit`, the `FPTrunc` opcode). | [combine_fptrunc](combine_fptrunc.md) |
 | combine_funnel | `convertOrOfShiftsToFunnelShift` and `matchFunnelShift`: an `or` of two opposite shifts, or of a pair of concatenations, is a funnel shift. | `visitOr` ([`crate::combine_or`](combine_or.md)), and by `SimplifyDemandedBits` | [combine_funnel](combine_funnel.md) |
 | combine_gep | `visitGetElementPtrInst`: canonical forms of a `getelementptr`. | Named by `combine_compares`, `combine_gep_base`, `combine_gep_index`, `combine_gep_merge`, `combine_gep_phi`, `combine_sub`. | [combine_gep](combine_gep.md) |
 | combine_gep_base | `CommonPointerBase` and `EmitGEPOffsets`: the pointer two GEP chains share and the offset each adds to it. | `foldGEPICmp` (`combine_compares.rs`). | [combine_gep_base](combine_gep_base.md) |

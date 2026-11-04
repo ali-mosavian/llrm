@@ -134,6 +134,24 @@ fn smin_of_two<W: Word>(
     if slt(b, a, width) { b } else { a }
 }
 
+/// Integer square root, digit by digit.
+fn isqrt<W: Word>(mut x: W) -> W {
+    let (mut result, mut bit) = (W::ZERO, W::ONE << (W::BITS - 2));
+    while bit > x {
+        bit = bit >> 2;
+    }
+    while bit != W::ZERO {
+        if x >= result.wrapping_add(bit) {
+            x = x.wrapping_sub(result.wrapping_add(bit));
+            result = (result >> 1).wrapping_add(bit);
+        } else {
+            result = result >> 1;
+        }
+        bit = bit >> 2;
+    }
+    result
+}
+
 impl<W: Word> Range<W> {
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L46>
     pub fn new(
@@ -142,9 +160,11 @@ impl<W: Word> Range<W> {
         upper: W,
     ) -> Self {
         assert!((1..=W::BITS).contains(&width), "ConstantRange: width {width} is outside 1..={}", W::BITS);
-        let (lower, upper) = (lower & mask::<W>(width), upper & mask::<W>(width));
-        assert!(
-            lower != upper || lower == mask::<W>(width) || lower == W::ZERO,
+        let all = mask::<W>(width);
+        let (lower, upper) = (lower & all, upper & all);
+        // LLVM's `assert`, compiled out of its Release build.
+        debug_assert!(
+            lower != upper || lower == all || lower == W::ZERO,
             "Lower == Upper, but they aren't min or max value!"
         );
         Self { lower, upper, width }
@@ -193,11 +213,7 @@ impl<W: Word> Range<W> {
 
     /// The same range in another word; the bounds fit it by construction.
     pub fn to_word<V: Word>(&self) -> Range<V> {
-        Range {
-            lower: V::from_u128(self.lower.low_u128()),
-            upper: V::from_u128(self.upper.low_u128()),
-            width: self.width,
-        }
+        Range { lower: V::from_limbs(self.lower.to_limbs()), upper: V::from_limbs(self.upper.to_limbs()), width: self.width }
     }
 
     fn w(&self) -> u32 {
@@ -1971,9 +1987,9 @@ impl<W: Word> Range<W> {
     }
 }
 
-impl Range<u128> {
+impl<W: Word> Range<W> {
     /// LLVM multiplies at twice the width: a `u128` holds that up to 64 bits, a
-    /// [`U256`] up to 128.
+    /// [`U256`] up to 128, a [`U512`] up to 256.
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1220>
     pub fn multiply(
         &self,
@@ -1981,32 +1997,35 @@ impl Range<u128> {
         no_wrap_kind: u32,
     ) -> Self {
         if self.width <= 64 {
-            return self.multiply_at_double_width(other, no_wrap_kind);
+            self.to_word::<u128>().multiply_at_double_width(&other.to_word(), no_wrap_kind).to_word()
+        } else if self.width <= 128 {
+            self.to_word::<U256>().multiply_at_double_width(&other.to_word(), no_wrap_kind).to_word()
+        } else {
+            self.to_word::<U512>().multiply_at_double_width(&other.to_word(), no_wrap_kind).to_word()
         }
-        self.to_word::<U256>().multiply_at_double_width(&other.to_word(), no_wrap_kind).to_word()
     }
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L298>
     fn make_exact_mul_nuw_region(
         width: u32,
-        v: u128,
+        v: W,
     ) -> Self {
-        if v == 0 {
+        if v == W::ZERO {
             return Self::full(width);
         }
-        Self::non_empty(width, rounding_udiv(0, v, true), add(rounding_udiv(mask::<u128>(width), v, false), 1, width))
+        Self::non_empty(width, rounding_udiv(W::ZERO, v, true), add(rounding_udiv(mask::<W>(width), v, false), W::ONE, width))
     }
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L311>
     fn make_exact_mul_nsw_region(
         width: u32,
-        v: u128,
+        v: W,
     ) -> Self {
-        if v == 0 {
+        if v == W::ZERO {
             return Self::full(width);
         }
         let (min_value, max_value) = (smin_val(width), smax_val(width));
-        if v == mask::<u128>(width) {
+        if v == mask::<W>(width) {
             return Self::new(width, neg(max_value, width), min_value);
         }
         let (lower, upper) = if is_negative(v, width) {
@@ -2014,7 +2033,7 @@ impl Range<u128> {
         } else {
             (rounding_sdiv(min_value, v, width, true), rounding_sdiv(max_value, v, width, false))
         };
-        Self::non_empty(width, lower, add(upper, 1, width))
+        Self::non_empty(width, lower, add(upper, W::ONE, width))
     }
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L335>
@@ -2029,7 +2048,7 @@ impl Range<u128> {
         match bin_op {
             BinaryOp::Add => {
                 if is_unsigned {
-                    return Self::non_empty(w, 0, neg(other.get_unsigned_max(), w));
+                    return Self::non_empty(w, W::ZERO, neg(other.get_unsigned_max(), w));
                 }
                 let signed_min_val = smin_val(w);
                 let (smin, smax) = (other.get_signed_min(), other.get_signed_max());
@@ -2041,7 +2060,7 @@ impl Range<u128> {
             }
             BinaryOp::Sub => {
                 if is_unsigned {
-                    return Self::non_empty(w, other.get_unsigned_max(), 0);
+                    return Self::non_empty(w, other.get_unsigned_max(), W::ZERO);
                 }
                 let signed_min_val = smin_val(w);
                 let (smin, smax) = (other.get_signed_min(), other.get_signed_max());
@@ -2065,15 +2084,15 @@ impl Range<u128> {
             }
             BinaryOp::Shl => {
                 let sh_amt =
-                    other.intersect_with(&Self::new(w, 0, add(u128::from(w - 1), 1, w)), PreferredRangeType::Smallest);
+                    other.intersect_with(&Self::new(w, W::ZERO, add(W::from_u32(w - 1), W::ONE, w)), PreferredRangeType::Smallest);
                 if sh_amt.is_empty_set() {
                     return Self::full(w);
                 }
                 let sh_amt_umax = limited(sh_amt.get_unsigned_max(), w);
                 if is_unsigned {
-                    return Self::non_empty(w, 0, add(lshr(mask::<u128>(w), sh_amt_umax), 1, w));
+                    return Self::non_empty(w, W::ZERO, add(lshr(mask::<W>(w), sh_amt_umax), W::ONE, w));
                 }
-                Self::non_empty(w, ashr(smin_val(w), w, sh_amt_umax), add(ashr(smax_val(w), w, sh_amt_umax), 1, w))
+                Self::non_empty(w, ashr(smin_val(w), w, sh_amt_umax), add(ashr(smax_val(w), w, sh_amt_umax), W::ONE, w))
             }
             _ => panic!("Unsupported binary op"),
         }
@@ -2083,7 +2102,7 @@ impl Range<u128> {
     pub fn make_exact_no_wrap_region(
         bin_op: BinaryOp,
         width: u32,
-        other: u128,
+        other: W,
         no_wrap_kind: u32,
     ) -> Self {
         Self::make_guaranteed_no_wrap_region(bin_op, &Self::single(width, other), no_wrap_kind)
@@ -2172,10 +2191,10 @@ impl Range<u128> {
         if muls.iter().any(|(_, over)| *over) {
             return Self::full(w);
         }
-        let values: Vec<u128> = muls.iter().map(|(v, _)| *v).collect();
+        let values: Vec<W> = muls.iter().map(|(v, _)| *v).collect();
         let lowest = values.iter().copied().fold(values[0], |m, c| smin_of_two(m, c, w));
         let highest = values.iter().copied().fold(values[0], |m, c| smax_of_two(m, c, w));
-        Self::non_empty(w, lowest, add(highest, 1, w))
+        Self::non_empty(w, lowest, add(highest, W::ONE, w))
     }
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1394>
@@ -2184,15 +2203,15 @@ impl Range<u128> {
         rhs: &Self,
     ) -> Self {
         let w = self.width;
-        if self.is_empty_set() || rhs.is_empty_set() || rhs.get_unsigned_max() == 0 {
+        if self.is_empty_set() || rhs.is_empty_set() || rhs.get_unsigned_max() == W::ZERO {
             return Self::empty(w);
         }
-        let lower = self.get_unsigned_min() / rhs.get_unsigned_max();
+        let lower = self.get_unsigned_min().divrem(rhs.get_unsigned_max()).0;
         let mut rhs_umin = rhs.get_unsigned_min();
-        if rhs_umin == 0 {
-            rhs_umin = if rhs.upper == 1 { rhs.lower } else { 1 };
+        if rhs_umin == W::ZERO {
+            rhs_umin = if rhs.upper == W::ONE { rhs.lower } else { W::ONE };
         }
-        let upper = add(self.get_unsigned_max() / rhs_umin, 1, w);
+        let upper = add(self.get_unsigned_max().divrem(rhs_umin).0, W::ONE, w);
         Self::non_empty(w, lower, upper)
     }
 
@@ -2211,39 +2230,39 @@ impl Range<u128> {
         if !pos_l.is_empty_set() && !pos_r.is_empty_set() {
             pos_res = Self::new(
                 w,
-                sdiv(pos_l.lower, sub(pos_r.upper, 1, w), w),
-                add(sdiv(sub(pos_l.upper, 1, w), pos_r.lower, w), 1, w),
+                sdiv(pos_l.lower, sub(pos_r.upper, W::ONE, w), w),
+                add(sdiv(sub(pos_l.upper, W::ONE, w), pos_r.lower, w), W::ONE, w),
             );
         }
         if !neg_l.is_empty_set() && !neg_r.is_empty_set() {
-            let lo = sdiv(sub(neg_l.upper, 1, w), neg_r.lower, w);
-            if neg_l.lower == signed_min && neg_r.upper == 0 {
-                if neg_r.lower != mask::<u128>(w) {
-                    let adj_neg_r_upper = if rhs.lower == mask::<u128>(w) { rhs.upper } else { sub(neg_r.upper, 1, w) };
+            let lo = sdiv(sub(neg_l.upper, W::ONE, w), neg_r.lower, w);
+            if neg_l.lower == signed_min && neg_r.upper == W::ZERO {
+                if neg_r.lower != mask::<W>(w) {
+                    let adj_neg_r_upper = if rhs.lower == mask::<W>(w) { rhs.upper } else { sub(neg_r.upper, W::ONE, w) };
                     pos_res = pos_res.union_with(
-                        &Self::new(w, lo, add(sdiv(neg_l.lower, sub(adj_neg_r_upper, 1, w), w), 1, w)),
+                        &Self::new(w, lo, add(sdiv(neg_l.lower, sub(adj_neg_r_upper, W::ONE, w), w), W::ONE, w)),
                         smallest,
                     );
                 }
-                if neg_l.upper != add(signed_min, 1, w) {
+                if neg_l.upper != add(signed_min, W::ONE, w) {
                     let adj_neg_l_lower =
-                        if self.upper == add(signed_min, 1, w) { self.lower } else { add(neg_l.lower, 1, w) };
+                        if self.upper == add(signed_min, W::ONE, w) { self.lower } else { add(neg_l.lower, W::ONE, w) };
                     pos_res = pos_res.union_with(
-                        &Self::new(w, lo, add(sdiv(adj_neg_l_lower, sub(neg_r.upper, 1, w), w), 1, w)),
+                        &Self::new(w, lo, add(sdiv(adj_neg_l_lower, sub(neg_r.upper, W::ONE, w), w), W::ONE, w)),
                         smallest,
                     );
                 }
             } else {
                 pos_res = pos_res
-                    .union_with(&Self::new(w, lo, add(sdiv(neg_l.lower, sub(neg_r.upper, 1, w), w), 1, w)), smallest);
+                    .union_with(&Self::new(w, lo, add(sdiv(neg_l.lower, sub(neg_r.upper, W::ONE, w), w), W::ONE, w)), smallest);
             }
         }
         let mut neg_res = Self::empty(w);
         if !pos_l.is_empty_set() && !neg_r.is_empty_set() {
             neg_res = Self::new(
                 w,
-                sdiv(sub(pos_l.upper, 1, w), sub(neg_r.upper, 1, w), w),
-                add(sdiv(pos_l.lower, neg_r.lower, w), 1, w),
+                sdiv(sub(pos_l.upper, W::ONE, w), sub(neg_r.upper, W::ONE, w), w),
+                add(sdiv(pos_l.lower, neg_r.lower, w), W::ONE, w),
             );
         }
         if !neg_l.is_empty_set() && !pos_r.is_empty_set() {
@@ -2251,14 +2270,14 @@ impl Range<u128> {
                 &Self::new(
                     w,
                     sdiv(neg_l.lower, pos_r.lower, w),
-                    add(sdiv(sub(neg_l.upper, 1, w), sub(pos_r.upper, 1, w), w), 1, w),
+                    add(sdiv(sub(neg_l.upper, W::ONE, w), sub(pos_r.upper, W::ONE, w), w), W::ONE, w),
                 ),
                 smallest,
             );
         }
         let mut res = neg_res.union_with(&pos_res, PreferredRangeType::Signed);
-        if self.contains(0) && (!pos_r.is_empty_set() || !neg_r.is_empty_set()) {
-            res = res.union_with(&Self::single(w, 0), smallest);
+        if self.contains(W::ZERO) && (!pos_r.is_empty_set() || !neg_r.is_empty_set()) {
+            res = res.union_with(&Self::single(w, W::ZERO), smallest);
         }
         res
     }
@@ -2269,22 +2288,22 @@ impl Range<u128> {
         rhs: &Self,
     ) -> Self {
         let w = self.width;
-        if self.is_empty_set() || rhs.is_empty_set() || rhs.get_unsigned_max() == 0 {
+        if self.is_empty_set() || rhs.is_empty_set() || rhs.get_unsigned_max() == W::ZERO {
             return Self::empty(w);
         }
         if let Some(rhs_int) = rhs.get_single_element() {
-            if rhs_int == 0 {
+            if rhs_int == W::ZERO {
                 return Self::empty(w);
             }
             if let Some(lhs_int) = self.get_single_element() {
-                return Self::single(w, lhs_int % rhs_int);
+                return Self::single(w, urem(lhs_int, rhs_int));
             }
         }
         if self.get_unsigned_max() < rhs.get_unsigned_min() {
             return *self;
         }
-        let upper = add(min(self.get_unsigned_max(), sub(rhs.get_unsigned_max(), 1, w)), 1, w);
-        Self::non_empty(w, 0, upper)
+        let upper = add(min(self.get_unsigned_max(), sub(rhs.get_unsigned_max(), W::ONE, w)), W::ONE, w);
+        Self::non_empty(w, W::ZERO, upper)
     }
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1518>
@@ -2297,7 +2316,7 @@ impl Range<u128> {
             return Self::empty(w);
         }
         if let Some(rhs_int) = rhs.get_single_element() {
-            if rhs_int == 0 {
+            if rhs_int == W::ZERO {
                 return Self::empty(w);
             }
             if let Some(lhs_int) = self.get_single_element() {
@@ -2307,29 +2326,29 @@ impl Range<u128> {
         let abs_rhs = rhs.abs(false);
         let mut min_abs_rhs = abs_rhs.get_unsigned_min();
         let max_abs_rhs = abs_rhs.get_unsigned_max();
-        if max_abs_rhs == 0 {
+        if max_abs_rhs == W::ZERO {
             return Self::empty(w);
         }
-        if min_abs_rhs == 0 {
-            min_abs_rhs = add(min_abs_rhs, 1, w);
+        if min_abs_rhs == W::ZERO {
+            min_abs_rhs = add(min_abs_rhs, W::ONE, w);
         }
         let (min_lhs, max_lhs) = (self.get_signed_min(), self.get_signed_max());
         if !is_negative(min_lhs, w) {
             if max_lhs < min_abs_rhs {
                 return *self;
             }
-            let upper = add(min(max_lhs, sub(max_abs_rhs, 1, w)), 1, w);
-            return Self::new(w, 0, upper);
+            let upper = add(min(max_lhs, sub(max_abs_rhs, W::ONE, w)), W::ONE, w);
+            return Self::new(w, W::ZERO, upper);
         }
         if is_negative(max_lhs, w) {
             if min_lhs > neg(min_abs_rhs, w) {
                 return *self;
             }
-            let lower = max(min_lhs, add(neg(max_abs_rhs, w), 1, w));
-            return Self::new(w, lower, add(0, 1, w));
+            let lower = max(min_lhs, add(neg(max_abs_rhs, w), W::ONE, w));
+            return Self::new(w, lower, add(W::ZERO, W::ONE, w));
         }
-        let lower = max(min_lhs, add(neg(max_abs_rhs, w), 1, w));
-        let upper = add(min(max_lhs, sub(max_abs_rhs, 1, w)), 1, w);
+        let lower = max(min_lhs, add(neg(max_abs_rhs, w), W::ONE, w));
+        let upper = add(min(max_lhs, sub(max_abs_rhs, W::ONE, w)), W::ONE, w);
         Self::new(w, lower, upper)
     }
 
@@ -2352,7 +2371,7 @@ impl Range<u128> {
         ];
         let lowest = l.iter().copied().fold(l[0], |m, c| smin_of_two(m, c, w));
         let highest = l.iter().copied().fold(l[0], |m, c| smax_of_two(m, c, w));
-        Self::non_empty(w, lowest, add(highest, 1, w))
+        Self::non_empty(w, lowest, add(highest, W::ONE, w))
     }
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L2197>
@@ -2361,7 +2380,7 @@ impl Range<u128> {
         if self.is_empty_set() {
             return Self::empty(w);
         }
-        Self::non_empty(w, sqrt_floor(self.get_unsigned_min()), add(sqrt_floor(self.get_unsigned_max()), 1, w))
+        Self::non_empty(w, isqrt(self.get_unsigned_min()), add(isqrt(self.get_unsigned_max()), W::ONE, w))
     }
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L2319>
@@ -2371,7 +2390,12 @@ impl Range<u128> {
         } else if self.is_empty_set() {
             "empty-set".to_owned()
         } else {
-            format!("[{},{})", signed(self.lower, self.width), signed(self.upper, self.width))
+            // Decimal only where the bounds fit `i128`; wider ranges print in hex.
+            if self.width <= 128 {
+                format!("[{},{})", signed(self.lower.low_u128(), self.width), signed(self.upper.low_u128(), self.width))
+            } else {
+                format!("[{:?},{:?})", self.lower, self.upper)
+            }
         }
     }
 }

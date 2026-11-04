@@ -335,7 +335,8 @@ impl llrm_target::Target for M64 {
         price: &dyn Fn(&str) -> i64,
         prefix: i64,
     ) -> OperationCosts {
-        OPCOSTS.operations(price, prefix)
+        // SSE2 is the baseline: a constant memset is stores of an xmm register.
+        OperationCosts { memset_store: 16, ..OPCOSTS.operations(price, prefix) }
     }
 
     fn register_capacity(&self) -> i64 {

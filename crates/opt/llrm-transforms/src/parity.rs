@@ -274,6 +274,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     // (`addPreInlinerPasses`, PGO instrumentation or use only) and #L1424
     // (`ExtraVectorizerPasses`, after the vectorizer) are not in the default
     // pipeline, and llrm has neither a profile nor a vectorizer.
+    entry("rotate@1621", Late, "loop-rotate<header-duplication;check-exit-count>", Translated, ""),
     entry(
         "loop-interchange@1631",
         Late,
@@ -317,12 +318,21 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "slp-vectorizer",
         "slpcompares.rs makes the wide compare the pin's SLP, VectorCombine and InstCombine leave of an and-chain of equalities of adjacent bytes; no vectors; criterion: the chain of eight bytes is one ldr and one cmp as the pin's (tests/slp_compares.rs); exit: vector types in the backend",
     ),
+    entry(
+        "drop-unnecessary-assumes@1360",
+        Late,
+        "drop-unnecessary-assumes<drop-deref>",
+        Translated,
+        "dropunnecessaryassumes.rs",
+    ),
     entry("infer-alignment@1362", Late, "infer-alignment", Translated, ""),
     entry("infer-alignment@1498", Late, "infer-alignment", Translated, ""),
+    entry("drop-unnecessary-assumes@1577", Late, "drop-unnecessary-assumes", Translated, "dropunnecessaryassumes.rs"),
     entry("float2int@1594", Late, "float2int", Translated, ""),
     entry("lower-constant-intrinsics@1597", Late, "lower-constant-intrinsics", Translated, ""),
     entry("instsimplify@1662", Late, "instsimplify", Translated, ""),
     entry("divrempairs@1667", Late, "div-rem-pairs", Translated, ""),
+    entry("expandmemcmp@1673", Late, "expand-memcmp", Translated, ""),
     entry("tailrec@1677", Late, "tailcallelim", Translated, ""),
     partial(
         "simplifycfg@1682",

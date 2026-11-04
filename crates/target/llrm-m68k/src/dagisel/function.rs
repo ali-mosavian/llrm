@@ -83,6 +83,10 @@ pub struct Selected {
     /// On the entry block: the function's static allocas, `(frame index, size,
     /// alignment)`.
     pub locals: Vec<(i32, i64, i64)>,
+    /// IR `unreachable` ends the block. The pin emits nothing for it (the
+    /// machine CFG comes from the IR); here a block with no terminator falls
+    /// into the next one, so emission states the end.
+    pub ends_unreachable: bool,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -131,7 +135,18 @@ pub fn select_function_with(
         let units = select_block_with(&mut built.dag, cpu, source_order, indexed, short, &mut temporaries)
             .map_err(|why| format!("{why:?}"))?;
         updates.push(built.phi_updates);
-        selected.push(Selected { block, parent: block, dag: built.dag, units, phis: Vec::new(), locals: Vec::new() });
+        let ends_unreachable = function
+            .terminator(block)
+            .is_some_and(|last| function.instruction(last).opcode == llrm_mir::opcode::Opcode::Unreachable);
+        selected.push(Selected {
+            block,
+            parent: block,
+            dag: built.dag,
+            units,
+            phis: Vec::new(),
+            locals: Vec::new(),
+            ends_unreachable,
+        });
         for (id, mut extra) in extras {
             let units = select_block_with(&mut extra.dag, cpu, source_order, indexed, short, &mut temporaries)
                 .map_err(|why| format!("{why:?}"))?;
@@ -143,6 +158,7 @@ pub fn select_function_with(
                 units,
                 phis: Vec::new(),
                 locals: Vec::new(),
+                ends_unreachable: false,
             });
         }
     }
