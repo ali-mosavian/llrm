@@ -577,41 +577,26 @@ pub(crate) fn is_encodable(
     classes: &RegisterClasses,
 ) -> Result<bool, Error> {
     let regs = classes.registers;
-    let mut taken: IndexMap<u32, RegId> = IndexMap::default();
-    let rows: IndexMap<u32, Vec<RegId>> = [1_u32, 2, 4, 8]
-        .into_iter()
-        .map(|width| {
-            (
-                width,
-                classes
-                    .available
-                    .iter()
-                    .copied()
-                    .filter(|one| {
-                        regs.width_of(regs.named(*one, i64::from(width)))
-                            .filter(|_| regs.integer(regs.named(*one, i64::from(width))))
-                            == Some(i64::from(width))
-                    })
-                    .collect(),
-            )
-        })
-        .collect();
-
-    let mut placed = |operand: &Loc| -> Loc {
-        let Loc::Held(held) = operand else {
-            return operand.clone();
-        };
-        if !taken.contains_key(&held.value) {
-            let row = rows.get(&held.width).cloned().unwrap_or_default();
-            if taken.len() >= row.len() {
-                // refuses below, which is the safe answer
-                return operand.clone();
-            }
-            taken.insert(held.value, row[taken.len()]);
+    // A scalar float operand (4 or 8 bytes) is an xmm register: the probe is
+    // priced with every operand in the integer registers first, then in the
+    // xmm ones. Vector widths are not probed (a legacy SSE memory operand
+    // must be 16-byte aligned, which a spill cell is not).
+    let pool = |xmm: bool, width: u32| -> Vec<RegId> {
+        if xmm {
+            if width == 4 || width == 8 { classes.xmm.clone() } else { Vec::new() }
+        } else {
+            classes
+                .available
+                .iter()
+                .copied()
+                .filter(|one| {
+                    regs.width_of(regs.named(*one, i64::from(width)))
+                        .filter(|_| regs.integer(regs.named(*one, i64::from(width))))
+                        == Some(i64::from(width))
+                })
+                .collect()
         }
-        Loc::Reg(Reg { register: regs.named(taken[&held.value], i64::from(held.width)), width: held.width })
     };
-
     // A spill cell is made through the 16-bit frame register; a target whose
     // frame register is wider addresses it through its own.
     let wide_frame = regs.width_of(classes.frame).is_some_and(|width| width > 2);
@@ -621,12 +606,30 @@ pub(crate) fn is_encodable(
         }
         other => other,
     };
-    let probe = Semantics {
-        dests: what.dests.iter().map(&mut placed).map(framed).collect(),
-        sources: what.sources.iter().map(&mut placed).map(framed).collect(),
-        ..what.clone()
+    let priced = |xmm: bool| -> bool {
+        let mut taken: IndexMap<u32, RegId> = IndexMap::default();
+        let mut placed = |operand: &Loc| -> Loc {
+            let Loc::Held(held) = operand else {
+                return operand.clone();
+            };
+            if !taken.contains_key(&held.value) {
+                let row = pool(xmm, u32::from(held.width));
+                if taken.len() >= row.len() {
+                    // refuses below, which is the safe answer
+                    return operand.clone();
+                }
+                taken.insert(held.value, row[taken.len()]);
+            }
+            Loc::Reg(Reg { register: regs.named(taken[&held.value], i64::from(held.width)), width: held.width })
+        };
+        let probe = Semantics {
+            dests: what.dests.iter().map(&mut placed).map(framed).collect(),
+            sources: what.sources.iter().map(&mut placed).map(framed).collect(),
+            ..what.clone()
+        };
+        crate::backend::select::priced_in(bits, &probe, 0, None, false, false, None).is_some()
     };
-    Ok(crate::backend::select::priced_in(bits, &probe, 0, None, false, false, None).is_some())
+    Ok(priced(false) || (!classes.xmm.is_empty() && priced(true)))
 }
 
 /// DEVIATE D-RFP4 (beyond LLVM: gcc's `REG_EQUIV`, 854's `floatassign`): the
@@ -676,6 +679,26 @@ mod tests {
         let cell = Mem::new(Some(Addr::new(Space::Frame, -2)), 2);
         let folded = fold_memory_operand(&Arc::new(add), 1, &cell, 16, &RegisterClasses::m16()).expect("folds");
         assert!(folded.undefs.is_empty(), "the folded add still names v1: {folded:?}");
+    }
+
+    /// nbody -O3 m64: the probe placed every operand in an integer register, so
+    /// no float arithmetic priced and a spilled double was reloaded with a
+    /// `movsd` of its own (146 instructions a trip against the pin's 132 on the
+    /// same IR); `mulsd xmm, [cell]` is the pin's fold.
+    #[test]
+    fn test_a_spilled_double_folds_into_the_scalar_float_arithmetic_that_reads_it() {
+        let held = |value: u32| Loc::Held(Held { value, width: 8, offset: 0 });
+        let what = Semantics {
+            name: Some("mulsd".into()),
+            dests: vec![held(1)],
+            sources: vec![held(1), held(2)],
+            ..Semantics::new(Operation::Binary)
+        };
+        let mulsd = Arc::new(Insn::new(0, None, Some(what), vec![1], vec![1, 2]));
+        let cell = Mem::new(Some(Addr::new(Space::Frame, -8)), 8);
+        let classes = RegisterClasses::of(&llrm_x86_m64::M64);
+        let folded = fold_memory_operand(&mulsd, 2, &cell, 64, &classes).expect("folds");
+        assert!(matches!(folded.what.as_ref().unwrap().sources.as_slice(), [Loc::Held(_), Loc::Mem(_)]), "{folded:?}");
     }
 
     fn x87_body(insns: Vec<Arc<Insn>>) -> crate::model::lir::LirBody {
