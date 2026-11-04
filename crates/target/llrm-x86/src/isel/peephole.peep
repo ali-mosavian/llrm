@@ -196,7 +196,7 @@ group forwarded_reloads
 
 rule forwarded_reload
     match   mov c:mem, r:reg ; ... holds_after(@0, *) ; mov r, c
-    when    free(@0, forwarded), free(@1, forwarded), same_width(r, c), width_in(r, [8, 16, 32])
+    when    free(@0, forwarded), free(@1, forwarded), same_width(r, c), width_in(r, [8, 16, 32, 64])
     rewrite @0 ; anchor @1
 
 

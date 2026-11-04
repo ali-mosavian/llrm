@@ -61,9 +61,9 @@
 //! # Keeps
 //! The dominator tree and the loops: no block or edge changes.
 
+use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdSet;
-use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, CallInfo, CastOp, Flags, Opcode, Tail};
@@ -110,7 +110,8 @@ impl FunctionPass for AggressiveInstCombine {
         drop(shape);
         let outer = std::rc::Rc::clone(analyses.outer());
         let tti = outer.target().tti();
-        let folded = fold_unusual_patterns(unit, &reachable, &outer.globals, tti.as_deref());
+        let info = crate::simplifylibcalls::target_library_info(&outer, unit.layout.pointer(0).index_bits);
+        let folded = fold_unusual_patterns(unit, &reachable, &outer.globals, &info, tti.as_deref());
         if truncs.are_all_preserved() && !folded {
             return PreservedAnalyses::all();
         }
@@ -125,6 +126,7 @@ fn fold_unusual_patterns(
     unit: &mut Unit,
     reachable: &IdSet<BlockId>,
     globals: &[llrm_mir::module::GlobalValue],
+    info: &llrm_mir::libfunc::TargetLibraryInfo,
     tti: Option<&dyn llrm_mir::tti::Tti>,
 ) -> bool {
     let mut changed = false;
@@ -147,6 +149,9 @@ fn fold_unusual_patterns(
                 inst,
             );
             changed |= fold_consecutive_loads(unit.context, unit.layout, unit.function, inst);
+            changed |= fold_icmp_or_chain(unit.context, unit.layout, unit.function, inst);
+            changed |= fold_mul_high(unit.context, unit.layout, unit.function, inst);
+            changed |= fold_lib_calls(unit, globals, info, tti, inst);
         }
         // Done separately to scan the stores once.
         changed |= fold_consecutive_stores(unit.context, unit.layout, unit.function, block);
@@ -729,7 +734,8 @@ fn match_pop_count_bytes(
     let add2 = operand_pairs(q, sum, BinaryOp::Add)
         .into_iter()
         .find_map(|(shifted, same)| lshr_by(q, shifted, 4).filter(|&x| x == same))?;
-    // "x = (x & 0x33..) + ((x >> 2) & 0x33..)" or "x = x - 3*((x >> 2) & 0x33..)"
+    // "x = (x & 0x33..) + ((x >> 2) & 0x33..)" or "x = x - 3*((x >> 2) &
+    // 0x33..)"
     let sub1 = operand_pairs(q, add2, BinaryOp::Add)
         .into_iter()
         .find_map(|(shifted, plain)| {
@@ -799,7 +805,8 @@ fn replace_with_pop_count(
         attrs: Vec::new(),
         tail: Tail::default(),
     };
-    let call = function.create_instruction(Opcode::Call(Box::new(info)), ty, vec![root, callee], Flags::default(), None);
+    let call =
+        function.create_instruction(Opcode::Call(Box::new(info)), ty, vec![root, callee], Flags::default(), None);
     function.insert(call, Position::Before(inst)).expect("a placed instruction");
     let result = function.instruction(inst).result.expect("a value");
     function.replace_all_uses_with(result, Operand::Value(function.instruction(call).result.expect("a value")));
@@ -821,9 +828,8 @@ fn match_funnel_shift(
         return None;
     }
     let width_minus = |sub: Operand, amount: Operand| {
-        pattern::binary(q, sub, BinaryOp::Sub).is_some_and(|(_, _, w, x)| {
-            q.int_constant(w).is_some_and(|(bits, _)| bits == width) && x == amount
-        })
+        pattern::binary(q, sub, BinaryOp::Sub)
+            .is_some_and(|(_, _, w, x)| q.int_constant(w).is_some_and(|(bits, _)| bits == width) && x == amount)
     };
     // `m_c_Or`: the shifts in either order.
     for (left, right) in [(a, b), (b, a)] {
@@ -948,6 +954,534 @@ fn fold_guarded_funnel_shift(
     true
 }
 
+/// `optimizeShiftInOrChain`
+/// ([:1762](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L1762)):
+/// the chain of one-use ors `v` with the `shl nsw`/`shl nuw` operands taken
+/// out, built before `before`; none where nothing changes. A shifted value is
+/// zero exactly when the value is, so the chain compared with zero is the
+/// same.
+fn optimize_shift_in_or_chain(
+    context: &llrm_mir::context::Context,
+    function: &mut Function,
+    v: Operand,
+    before: InstId,
+) -> Option<Operand> {
+    let Operand::Value(result) = v else { return None };
+    let llrm_mir::module::ValueDef::Instruction(def) = function.value(result).def else { return None };
+    let instruction = function.instruction(def);
+    if instruction.opcode != Opcode::Binary(BinaryOp::Or) || !function.users(result).has_one_use() {
+        return None;
+    }
+    let ty = instruction.ty;
+    let operands = [instruction.operands[0], instruction.operands[1]];
+    let mut changed = false;
+    let mut new = operands;
+    for (at, &op) in operands.iter().enumerate() {
+        let shifted = match op {
+            Operand::Value(value) => match function.value(value).def {
+                llrm_mir::module::ValueDef::Instruction(shl) => {
+                    let one = function.instruction(shl);
+                    (one.opcode == Opcode::Binary(BinaryOp::Shl)
+                        && (one.flags.contains(Flags::NSW) || one.flags.contains(Flags::NUW)))
+                    .then(|| one.operands[0])
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(inner) = shifted {
+            new[at] = inner;
+            changed = true;
+        } else if let Some(deeper) = optimize_shift_in_or_chain(context, function, op, before) {
+            new[at] = deeper;
+            changed = true;
+        }
+    }
+    if !changed {
+        return None;
+    }
+    let or = function.create_instruction(Opcode::Binary(BinaryOp::Or), ty, new.to_vec(), Flags::default(), None);
+    function.insert(or, Position::Before(before)).expect("a placed instruction");
+    Some(Operand::Value(function.instruction(or).result.expect("a value")))
+}
+
+/// `foldICmpOrChain`
+/// ([:1798](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L1798)):
+/// `icmp eq/ne (or ...), 0`: loads in the chain are merged first, then the
+/// no-wrap shifts are dropped.
+fn fold_icmp_or_chain(
+    context: &mut llrm_mir::context::Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
+    use llrm_mir::valuetracking::pattern;
+    let (op0, zero, equality) = {
+        let q = query(context, layout, function);
+        let Some(result) = function.instruction(inst).result else { return false };
+        let Some((_, _, pred, op0, zero)) = pattern::icmp(&q, Operand::Value(result)) else { return false };
+        if !q.int_constant(zero).is_some_and(|(bits, _)| bits == 0)
+            || !matches!(
+                pred.pred,
+                llrm_mir::opcode::IntPredicate::Eq | llrm_mir::opcode::IntPredicate::Ne
+            )
+        {
+            return false;
+        }
+        (op0, zero, pred.pred)
+    };
+    // If the chain of ors matches loads, combine to that before removing
+    // shifts.
+    if let Operand::Value(value) = op0
+        && let llrm_mir::module::ValueDef::Instruction(def) = function.value(value).def
+        && function.instruction(def).opcode == Opcode::Binary(BinaryOp::Or)
+        && fold_consecutive_loads(context, layout, function, def)
+    {
+        return true;
+    }
+    let Some(chain) = optimize_shift_in_or_chain(context, function, op0, inst) else { return false };
+    let i1 = function.instruction(inst).ty;
+    let cmp = function.create_instruction(Opcode::ICmp(equality), i1, vec![chain, zero], Flags::default(), None);
+    function.insert(cmp, Position::Before(inst)).expect("a placed instruction");
+    let result = function.instruction(inst).result.expect("a value");
+    function.replace_all_uses_with(result, Operand::Value(function.instruction(cmp).result.expect("a value")));
+    true
+}
+
+/// The matcher of `foldMulHigh`'s lambdas: what the pin's `PatternMatch`
+/// forms ask of the operands, over the function as it stands.
+struct MulHigh<'a> {
+    function: &'a Function,
+    q: Query<'a>,
+    half: u32,
+    mask: u128,
+}
+
+impl MulHigh<'_> {
+    fn bin(
+        &self,
+        v: Operand,
+        op: BinaryOp,
+    ) -> Option<(Operand, Operand)> {
+        llrm_mir::valuetracking::pattern::binary(&self.q, v, op).map(|(_, _, a, b)| (a, b))
+    }
+
+    /// `m_c_<op>(L, R)`: the first order `f` takes.
+    fn c_bin<T>(
+        &self,
+        v: Operand,
+        op: BinaryOp,
+        f: impl Fn(Operand, Operand) -> Option<T>,
+    ) -> Option<T> {
+        let (a, b) = self.bin(v, op)?;
+        f(a, b).or_else(|| f(b, a))
+    }
+
+    fn is_inst(
+        &self,
+        v: Operand,
+    ) -> bool {
+        self.q.instruction_of(v).is_some()
+    }
+
+    fn one_use(
+        &self,
+        v: Operand,
+    ) -> bool {
+        matches!(
+            v,
+            Operand::Value(value) if self.function.users(value).has_one_use()
+        )
+    }
+
+    /// `hasNUsesOrMore(3)`.
+    fn three_uses(
+        &self,
+        v: Operand,
+    ) -> bool {
+        matches!(
+            v,
+            Operand::Value(value) if self.function.users(value).has_n_uses_or_more(3)
+        )
+    }
+
+    fn is_const(
+        &self,
+        v: Operand,
+        value: u128,
+    ) -> bool {
+        self.q.int_constant(v).is_some_and(|(bits, _)| bits == value)
+    }
+
+    /// `m_LShr(m_Value(x), m_SpecificInt(BitWidth / 2))`: `x`.
+    fn lshr_half(
+        &self,
+        v: Operand,
+    ) -> Option<Operand> {
+        let (value, amount) = self.bin(v, BinaryOp::LShr)?;
+        self.is_const(amount, u128::from(self.half)).then_some(value)
+    }
+
+    /// `m_And(m_Value(x), m_SpecificInt(LowMask))`: `x`.
+    fn and_mask(
+        &self,
+        v: Operand,
+    ) -> Option<Operand> {
+        let (value, mask) = self.bin(v, BinaryOp::And)?;
+        self.is_const(mask, self.mask).then_some(value)
+    }
+
+    /// `CheckLoLo`: `xlyl` is `(x & mask) * (y & mask)`.
+    fn check_lo_lo(
+        &self,
+        xlyl: Operand,
+        x: Operand,
+        y: Operand,
+    ) -> bool {
+        self.c_bin(xlyl, BinaryOp::Mul, |a, b| {
+            (self.and_mask(a) == Some(x) && self.and_mask(b) == Some(y)).then_some(())
+        })
+        .is_some()
+    }
+
+    /// `CheckHiLo`: `xhyl` is `(x >> half) * (y & mask)`.
+    fn check_hi_lo(
+        &self,
+        xhyl: Operand,
+        x: Operand,
+        y: Operand,
+    ) -> bool {
+        self.c_bin(xhyl, BinaryOp::Mul, |a, b| {
+            (self.lshr_half(a) == Some(x) && self.and_mask(b) == Some(y)).then_some(())
+        })
+        .is_some()
+    }
+
+    /// `HiHi`: a one-use `(x >> half) * (y >> half)`.
+    fn hi_hi(
+        &self,
+        v: Operand,
+    ) -> Option<(Operand, Operand)> {
+        if !self.one_use(v) {
+            return None;
+        }
+        let (a, b) = self.bin(v, BinaryOp::Mul)?;
+        Some((self.lshr_half(a)?, self.lshr_half(b)?))
+    }
+
+    /// A one-use `select (icmp ult s, t), 1 << half, 0`: `(s, t)`.
+    fn carry_select(
+        &self,
+        v: Operand,
+    ) -> Option<(Operand, Operand)> {
+        if !self.one_use(v) {
+            return None;
+        }
+        let (_, select) = self.q.instruction_of(v)?;
+        let (Opcode::Select, [cond, then, otherwise]) = (&select.opcode, &select.operands[..]) else { return None };
+        if !self.one_use(*cond) || !self.is_const(*then, 1u128 << self.half) || !self.is_const(*otherwise, 0) {
+            return None;
+        }
+        let (_, _, pred, lhs, rhs) = llrm_mir::valuetracking::pattern::icmp(&self.q, *cond)?;
+        (pred.pred == llrm_mir::opcode::IntPredicate::Ult).then_some((lhs, rhs))
+    }
+
+    fn is_select(
+        &self,
+        v: Operand,
+    ) -> bool {
+        self.q.instruction_of(v).is_some_and(|(_, one)| one.opcode == Opcode::Select)
+    }
+
+    /// `FoldMulHighCarry`: `xh*yh + carry + lowsum >> half`, the carry a
+    /// select on `lowsum < xh*yl`.
+    fn carry(
+        &self,
+        mut x: Operand,
+        mut y: Operand,
+        mut carry: Operand,
+        mut b: Operand,
+    ) -> Option<(Operand, Operand)> {
+        if !self.is_select(carry) {
+            std::mem::swap(&mut carry, &mut b);
+        }
+        let (low_sum, xh_yl) = self.carry_select(carry)?;
+        // `xh_yl` can be `xh*yl` or `xl*yh`.
+        if !self.check_hi_lo(xh_yl, x, y) {
+            if self.check_hi_lo(xh_yl, y, x) {
+                std::mem::swap(&mut x, &mut y);
+            } else {
+                return None;
+            }
+        }
+        if self.three_uses(xh_yl) {
+            return None;
+        }
+        // `b` is `lowsum >> half`.
+        if !self.one_use(b) || self.lshr_half(b) != Some(low_sum) || self.three_uses(low_sum) {
+            return None;
+        }
+        // `lowsum = xh*yl + xl*yh + (xl*yl >> half)`, in any grouping.
+        let parts = |xl_yh: Operand, shifted: Operand| -> Option<(Operand, Operand)> {
+            Some((xl_yh, self.lshr_half(shifted)?))
+        };
+        let (xl_yh, xl_yl) = self
+            .c_bin(low_sum, BinaryOp::Add, |a, rest| {
+                if a != xh_yl || !self.one_use(rest) {
+                    return None;
+                }
+                self.c_bin(rest, BinaryOp::Add, |c, d| if self.one_use(c) { parts(c, d) } else { None })
+            })
+            .or_else(|| {
+                self.c_bin(low_sum, BinaryOp::Add, |a, rest| {
+                    if !self.one_use(a) || !self.one_use(rest) {
+                        return None;
+                    }
+                    self.c_bin(rest, BinaryOp::Add, |c, d| if c == xh_yl { parts(a, d) } else { None })
+                })
+            })
+            .or_else(|| {
+                self.c_bin(low_sum, BinaryOp::Add, |shifted, rest| {
+                    let xl_yl = self.lshr_half(shifted)?;
+                    if !self.one_use(rest) {
+                        return None;
+                    }
+                    self.c_bin(rest, BinaryOp::Add, |c, d| (c == xh_yl && self.one_use(d)).then_some((d, xl_yl)))
+                })
+            })?;
+        if !self.check_lo_lo(xl_yl, x, y) || !self.check_hi_lo(xl_yh, y, x) {
+            return None;
+        }
+        Some((x, y))
+    }
+
+    /// `FoldMulHighLadder`: `xh*yh + c2 >> half + c3 >> half`.
+    fn ladder(
+        &self,
+        x: Operand,
+        y: Operand,
+        a: Operand,
+        b: Operand,
+    ) -> Option<(Operand, Operand)> {
+        let (mut c2, mut c3) = (self.lshr_half(a)?, self.lshr_half(b)?);
+        // `m_c_Add(m_Add(), m_Value())`.
+        let add_of_add =
+            |v: Operand| self.c_bin(v, BinaryOp::Add, |l, _| self.bin(l, BinaryOp::Add).map(|_| ())).is_some();
+        if add_of_add(c3) {
+            std::mem::swap(&mut c2, &mut c3);
+        }
+        // `c2 = (xl*yh & mask) + xh*yl + (xl*yl >> half)`, `c3 = xh*yl`.
+        let first = |c2: Operand, c3: Operand| -> Option<(Operand, Operand)> {
+            let and_c3 = |v: Operand| self.and_mask(v) == Some(c3);
+            // (and + XlYh) + lshr(XlYl)
+            let form1 = self.c_bin(c2, BinaryOp::Add, |inner, shifted| {
+                let xl_yl = self.lshr_half(shifted)?;
+                self.c_bin(inner, BinaryOp::Add, |l, r| and_c3(l).then_some((r, xl_yl)))
+            });
+            // (and + lshr(XlYl)) + XlYh
+            let form2 =
+                || {
+                    self.c_bin(c2, BinaryOp::Add, |inner, xl_yh| {
+                        self.c_bin(inner, BinaryOp::Add, |l, r| {
+                            if and_c3(l) { Some((xl_yh, self.lshr_half(r)?)) } else { None }
+                        })
+                    })
+                };
+            // (lshr(XlYl) + XlYh) + and
+            let form3 = || {
+                self.c_bin(c2, BinaryOp::Add, |inner, and| {
+                    if !and_c3(and) {
+                        return None;
+                    }
+                    self.c_bin(inner, BinaryOp::Add, |l, r| Some((r, self.lshr_half(l)?)))
+                })
+            };
+            form1.or_else(form2).or_else(form3)
+        };
+        let (xl_yh, xh_yl, xl_yl);
+        if let Some((found_yh, found_yl)) = first(c2, c3) {
+            (xl_yh, xh_yl, xl_yl) = (found_yh, c3, found_yl);
+        } else {
+            // `c3 = c2 & mask + xl*yh`.
+            let c3_form = |c2: Operand, c3: Operand| {
+                self.c_bin(c3, BinaryOp::Add, |l, r| (self.and_mask(l) == Some(c2)).then_some(r))
+            };
+            if c3_form(c2, c3).is_none() {
+                std::mem::swap(&mut c2, &mut c3);
+            }
+            let found_yh =
+                self.c_bin(c3, BinaryOp::Add, |l, r| (self.one_use(l) && self.and_mask(l) == Some(c2)).then_some(r))?;
+            if !self.one_use(c3) || self.three_uses(c2) {
+                return None;
+            }
+            // `c2 = xh*yl + (xl*yl >> half)`.
+            let (found_yl, found_hl) =
+                self.c_bin(c2, BinaryOp::Add, |l, r| self.lshr_half(l).map(|inner| (inner, r)))?;
+            (xl_yh, xh_yl, xl_yl) = (found_yh, found_hl, found_yl);
+        }
+        // `xl_yh` and `xh_yl` can be either way round.
+        let (mut xl_yh, mut xh_yl) = (xl_yh, xh_yl);
+        if !self.check_hi_lo(xl_yh, y, x) {
+            std::mem::swap(&mut xl_yh, &mut xh_yl);
+        }
+        if !self.check_hi_lo(xl_yh, y, x) || !self.check_hi_lo(xh_yl, x, y) || !self.check_lo_lo(xl_yl, x, y) {
+            return None;
+        }
+        Some((x, y))
+    }
+
+    /// The first two shapes of the root: `xh*yh` and two more terms.
+    fn two_terms(
+        &self,
+        root: Operand,
+    ) -> Option<(Operand, Operand, Operand, Operand)> {
+        let first = self.c_bin(root, BinaryOp::Add, |p, rest| {
+            let (x, y) = self.hi_hi(p)?;
+            if !self.one_use(rest) {
+                return None;
+            }
+            let (a, b) = self.bin(rest, BinaryOp::Add)?;
+            (self.is_inst(a) && self.is_inst(b)).then_some((x, y, a, b))
+        });
+        let (x, y, a, b) = first.or_else(|| {
+            self.c_bin(root, BinaryOp::Add, |a, rest| {
+                if !self.is_inst(a) || !self.one_use(rest) {
+                    return None;
+                }
+                self.c_bin(rest, BinaryOp::Add, |p, b| {
+                    let (x, y) = self.hi_hi(p)?;
+                    self.is_inst(b).then_some((x, y, a, b))
+                })
+            })
+        })?;
+        (self.one_use(a) && self.one_use(b)).then_some((x, y, a, b))
+    }
+}
+
+/// `foldMulHigh`
+/// ([:2264](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L2264)):
+/// the high half of a long multiply built from half-width parts is a
+/// widening multiply, a shift and a truncate.
+///
+/// DEVIATE 44: the `Carry4` and `Ladder4` forms (four terms after `xh*yh`) are
+/// not translated. Owner: w2. Exit: 2026-11-21.
+fn fold_mul_high(
+    context: &mut llrm_mir::context::Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
+    let ty = function.instruction(inst).ty;
+    let Some(bits) = context.types.int_bits(ty) else { return false };
+    let Some(result) = function.instruction(inst).result else { return false };
+    if bits % 2 != 0 || bits < 4 {
+        return false;
+    }
+    let found = {
+        let matcher =
+            MulHigh { function, q: query(context, layout, function), half: bits / 2, mask: low_mask(bits / 2) };
+        let Some((x, y, a, b)) = matcher.two_terms(Operand::Value(result)) else { return false };
+        matcher.carry(x, y, a, b).or_else(|| matcher.ladder(x, y, a, b))
+    };
+    let Some((x, y)) = found else { return false };
+    let wide = context.types.int(bits * 2);
+    let mut build = |function: &mut Function, op: Opcode, ty: TypeId, operands: Vec<Operand>, flags: Flags| {
+        let one = function.create_instruction(op, ty, operands, flags, None);
+        function.insert(one, Position::Before(inst)).expect("a placed instruction");
+        Operand::Value(function.instruction(one).result.expect("a value"))
+    };
+    let x_wide = build(function, Opcode::Cast(CastOp::ZExt), wide, vec![x], Flags::default());
+    let y_wide = build(function, Opcode::Cast(CastOp::ZExt), wide, vec![y], Flags::default());
+    let product = build(function, Opcode::Binary(BinaryOp::Mul), wide, vec![x_wide, y_wide], Flags::NUW);
+    let amount = Operand::Constant(context.int(wide, i128::from(bits)));
+    let high = build(function, Opcode::Binary(BinaryOp::LShr), wide, vec![product, amount], Flags::default());
+    let narrow = build(function, Opcode::Cast(CastOp::Trunc), ty, vec![high], Flags::NUW);
+    function.replace_all_uses_with(result, narrow);
+    true
+}
+
+/// `foldSqrt`
+/// ([:855](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L855)):
+/// a `sqrt` libcall whose argument cannot be negative or NaN, on a target with
+/// a sqrt instruction, is `llvm.sqrt`: it sets no `errno`.
+///
+/// DEVIATE 45: the query has no dominator tree or assumption cache, so a fact
+/// that only an `llvm.assume` or a dominating branch states is not seen.
+/// Owner: w2. Exit: 2026-11-21.
+fn fold_sqrt(
+    context: &mut llrm_mir::context::Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    declared: &mut llrm_mir::passes::Declared,
+    globals: &[llrm_mir::module::GlobalValue],
+    info: &llrm_mir::libfunc::TargetLibraryInfo,
+    tti: Option<&dyn llrm_mir::tti::Tti>,
+    inst: InstId,
+) -> bool {
+    use llrm_mir::libfunc::LibFunc;
+    use llrm_mir::types::FloatKind;
+    let Some(tti) = tti else { return false };
+    if !matches!(function.instruction(inst).opcode, Opcode::Call(_)) {
+        return false;
+    }
+    let Some(global) = llrm_mir::memory::callee(context, function, inst) else { return false };
+    let Some(func) = globals.get(global.0 as usize).and_then(|one| info.get_lib_func_of(&context.types, one)) else {
+        return false;
+    };
+    // `isLibFuncEmittable`.
+    if !matches!(func, LibFunc::Sqrt | LibFunc::Sqrtf | LibFunc::Sqrtl) || !info.has(func) {
+        return false;
+    }
+    let ty = function.instruction(inst).ty;
+    let (suffix, tti_ty) = match context.types.get(ty) {
+        Type::Float(FloatKind::Float) => ("f32", llrm_mir::tti::Ty::Float),
+        Type::Float(FloatKind::Double) => ("f64", llrm_mir::tti::Ty::Double),
+        Type::Float(FloatKind::X86Fp80) => ("f80", llrm_mir::tti::Ty::X87),
+        _ => return false,
+    };
+    let Some(result) = function.instruction(inst).result else { return false };
+    let flags = function.instruction(inst).flags;
+    let argument = function.instruction(inst).operands[0];
+    if !tti.have_fast_sqrt(tti_ty) {
+        return false;
+    }
+    let never_negative = flags.contains(Flags::NNAN) || {
+        let q = query(context, layout, function);
+        llrm_mir::valuetracking::fp::compute_known_fp_class(
+            &q,
+            argument,
+            llrm_mir::knownfpclass::KnownFpClass::ORDERED_LESS_THAN_ZERO_MASK,
+            0,
+        )
+        .cannot_be_ordered_less_than_zero()
+    };
+    if !never_negative {
+        return false;
+    }
+    let name = format!("llvm.sqrt.{suffix}");
+    // `CreateIntrinsic(..., Call)` copies the call's fast-math flags.
+    let value =
+        call_intrinsic_with_flags_before(context, function, declared, inst, &name, ty, vec![argument], vec![ty], flags);
+    function.replace_all_uses_with(result, value);
+    function.erase(inst).expect("a call nothing uses");
+    true
+}
+
+/// `foldLibCalls`
+/// ([:2192](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L2192)).
+///
+/// DEVIATE 46: only the `sqrt` arm; `strcmp`, `strncmp` and `memchr` are not
+/// translated. Owner: w2. Exit: 2026-11-21.
+fn fold_lib_calls(
+    unit: &mut Unit,
+    globals: &[llrm_mir::module::GlobalValue],
+    info: &llrm_mir::libfunc::TargetLibraryInfo,
+    tti: Option<&dyn llrm_mir::tti::Tti>,
+    inst: InstId,
+) -> bool {
+    fold_sqrt(unit.context, unit.layout, unit.function, unit.declared, globals, info, tti, inst)
+}
+
 /// `tryToRecognizePopCount`
 /// ([:551](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L551)):
 /// `(i * 0x01010101) >> 24` of the parallel bit count.
@@ -984,7 +1518,6 @@ fn try_to_recognize_pop_count(
     replace_with_pop_count(context, function, declared, inst, root);
     true
 }
-
 
 /// `isCTTZTable`
 /// ([:887](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L887)):
@@ -1066,7 +1599,10 @@ fn match_table_load(
     let raw_index = gep.operands[1 + at];
     let mut index = raw_index;
     if let Some((_, cast)) = q.instruction_of(index)
-        && matches!(cast.opcode, Opcode::Cast(CastOp::ZExt | CastOp::SExt | CastOp::Trunc))
+        && matches!(
+            cast.opcode,
+            Opcode::Cast(CastOp::ZExt | CastOp::SExt | CastOp::Trunc)
+        )
     {
         index = cast.operands[0];
     }
@@ -1122,8 +1658,23 @@ fn call_intrinsic_before(
     inst: InstId,
     name: &str,
     ret: TypeId,
+    args: Vec<Operand>,
+    parameters: Vec<TypeId>,
+) -> Operand {
+    call_intrinsic_with_flags_before(context, function, declared, inst, name, ret, args, parameters, Flags::default())
+}
+
+/// `call_intrinsic_before` with the call's fast-math `flags`.
+fn call_intrinsic_with_flags_before(
+    context: &mut llrm_mir::context::Context,
+    function: &mut Function,
+    declared: &mut llrm_mir::passes::Declared,
+    inst: InstId,
+    name: &str,
+    ret: TypeId,
     mut args: Vec<Operand>,
     parameters: Vec<TypeId>,
+    flags: Flags,
 ) -> Operand {
     let function_type = context.types.intern(Type::Function { returns: ret, parameters, variadic: false });
     let callee = declared.declare(name, function_type);
@@ -1138,7 +1689,7 @@ fn call_intrinsic_before(
         tail: Tail::default(),
     };
     args.push(callee);
-    let call = function.create_instruction(Opcode::Call(Box::new(info)), ret, args, Flags::default(), None);
+    let call = function.create_instruction(Opcode::Call(Box::new(info)), ret, args, flags, None);
     function.insert(call, Position::Before(inst)).expect("a placed instruction");
     Operand::Value(function.instruction(call).result.expect("a value"))
 }
@@ -1193,8 +1744,9 @@ fn try_to_recognize_table_based_cttz(
         // `x & -x`, in either order.
         let Some((_, _, left, right)) = pattern::binary(&q, isolate, BinaryOp::And) else { return false };
         let negated = |neg: Operand, x: Operand| {
-            pattern::binary(&q, neg, BinaryOp::Sub)
-                .is_some_and(|(_, _, zero, minus)| q.int_constant(zero).is_some_and(|(bits, _)| bits == 0) && minus == x)
+            pattern::binary(&q, neg, BinaryOp::Sub).is_some_and(|(_, _, zero, minus)| {
+                q.int_constant(zero).is_some_and(|(bits, _)| bits == 0) && minus == x
+            })
         };
         let x = if negated(left, right) {
             right
@@ -1398,13 +1950,8 @@ fn try_to_recognize_table_based_log2(
         );
         // `~ctlz & (bits - 1)`.
         let ones = Operand::Constant(context.int(x_ty, -1));
-        let not = function.create_instruction(
-            Opcode::Binary(BinaryOp::Xor),
-            x_ty,
-            vec![ctlz, ones],
-            Flags::default(),
-            None,
-        );
+        let not =
+            function.create_instruction(Opcode::Binary(BinaryOp::Xor), x_ty, vec![ctlz, ones], Flags::default(), None);
         function.insert(not, Position::Before(inst)).expect("a placed instruction");
         let not = Operand::Value(function.instruction(not).result.expect("a value"));
         let and = function.create_instruction(
@@ -1515,12 +2062,22 @@ fn try_to_recognize_table_based_low_bits_mask(
         zext_or_trunc_before(context, function, inst, load.raw_index, index_bits, load.access)
     };
     let one = Operand::Constant(context.int(load.access, 1));
-    let shifted =
-        function.create_instruction(Opcode::Binary(BinaryOp::Shl), load.access, vec![one, index], Flags::default(), None);
+    let shifted = function.create_instruction(
+        Opcode::Binary(BinaryOp::Shl),
+        load.access,
+        vec![one, index],
+        Flags::default(),
+        None,
+    );
     function.insert(shifted, Position::Before(inst)).expect("a placed instruction");
     let shifted = Operand::Value(function.instruction(shifted).result.expect("a value"));
-    let mask =
-        function.create_instruction(Opcode::Binary(BinaryOp::Sub), load.access, vec![shifted, one], Flags::default(), None);
+    let mask = function.create_instruction(
+        Opcode::Binary(BinaryOp::Sub),
+        load.access,
+        vec![shifted, one],
+        Flags::default(),
+        None,
+    );
     function.insert(mask, Position::Before(inst)).expect("a placed instruction");
     let mask = Operand::Value(function.instruction(mask).result.expect("a value"));
     function.replace_all_uses_with(load.result, mask);

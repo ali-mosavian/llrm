@@ -255,7 +255,7 @@ pub fn machine_with<'a>(
             basic_semantics,
             status_word: classes.status_word(),
         }),
-        Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes) }),
+        Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes), cpu: Some(target) }),
         Box::new(twoaddr::TwoAddress { lea: target.three_address() }),
         Box::new(Coalescer { size: target.size, ..Coalescer::new(None, segments, classes) }),
         // After TwoAddress and the coalescer, before any value is placed: the

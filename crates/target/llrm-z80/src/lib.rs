@@ -7,6 +7,7 @@ pub mod data;
 pub mod driver;
 pub mod expand;
 pub mod inline_rt;
+pub mod ldir;
 pub mod mfunc;
 pub mod prepare;
 pub mod regalloc;

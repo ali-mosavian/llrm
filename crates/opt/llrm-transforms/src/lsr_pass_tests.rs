@@ -1577,3 +1577,76 @@ exit:
     assert!(after.contains("phi i8"), "{after}");
     assert!(!after.contains(" to i8"), "{after}");
 }
+
+/// bench/queens at m16 -O2: the inner `safe` loop reads `q[r]` and compares
+/// with `row - r` and `r - row`. The pin's formulae include a pointer walked
+/// by two bytes; DEVIATE LG3's end-biased formulae brought a register of their
+/// own, the solver's reuse rule then cut the pointer solution out of the
+/// search, and the solution left cost an instruction more than the loop as it
+/// stood, so LSR was dropped: 236848 clocks against 170823 at -Os, which
+/// finds the pointer. LG3 now joins after the pin's narrowing and is kept
+/// only where it costs less.
+const QUEENS_INNER: &str = "declare i16 @g(ptr, i16, i16)
+
+define i16 @f(ptr %q, i16 %row, i16 %n) {
+b0:
+  %e = icmp eq i16 %row, %n
+  br i1 %e, label %ret, label %b5
+b5:
+  %pos = icmp sgt i16 %n, 0
+  br i1 %pos, label %b7, label %ret
+b7:
+  %rp = icmp sgt i16 %row, 0
+  %slot = getelementptr inbounds [2 x i8], ptr %q, i16 %row
+  %row1 = add nsw i16 %row, 1
+  br label %b11
+b11:
+  %found = phi i16 [ 0, %b7 ], [ %found2, %b32 ]
+  %col = phi i16 [ 0, %b7 ], [ %col2, %b32 ]
+  br i1 %rp, label %b14, label %b28
+b14:
+  br label %b17
+b15:
+  %r2 = add nuw nsw i16 %r, 1
+  %exit = icmp eq i16 %r2, %row
+  br i1 %exit, label %b27, label %b17
+b17:
+  %r = phi i16 [ %r2, %b15 ], [ 0, %b14 ]
+  %p = getelementptr inbounds nuw [2 x i8], ptr %q, i16 %r
+  %v = load i16, ptr %p, align 2
+  %d = sub nsw i16 %v, %col
+  %z = icmp eq i16 %v, %col
+  %a = sub nuw nsw i16 %row, %r
+  %c1 = icmp eq i16 %d, %a
+  %o1 = select i1 %z, i1 true, i1 %c1
+  %b = sub nsw i16 %r, %row
+  %c2 = icmp eq i16 %d, %b
+  %o2 = select i1 %o1, i1 true, i1 %c2
+  br i1 %o2, label %b31, label %b15
+b27:
+  br label %b28
+b28:
+  store i16 %col, ptr %slot, align 2
+  %x = call i16 @g(ptr %q, i16 %row1, i16 %n)
+  %f1 = add nsw i16 %x, %found
+  br label %b32
+b31:
+  br label %b32
+b32:
+  %found2 = phi i16 [ %f1, %b28 ], [ %found, %b31 ]
+  %col2 = add nuw nsw i16 %col, 1
+  %exit2 = icmp eq i16 %col2, %n
+  br i1 %exit2, label %b35, label %b11
+b35:
+  br label %ret
+ret:
+  %res = phi i16 [ 1, %b0 ], [ 0, %b5 ], [ %found2, %b35 ]
+  ret i16 %res
+}
+";
+
+#[test]
+fn a_loop_the_pin_makes_a_pointer_of_stays_one_when_end_biased_formulae_exist_in_real_mode() {
+    let after = reduced_real(QUEENS_INNER, &six_registers());
+    assert!(after.contains("phi ptr"), "{after}");
+}
