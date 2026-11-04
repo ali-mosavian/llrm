@@ -1,4 +1,4 @@
-/* binary128 against the host's __float128 (libgcc's tf routines): the library contract of add, sub, neg, unord and every compare entry, NaN included.
+/* binary128 against the host's __float128 (libgcc's tf routines): the library contract of add, sub, mul, div, neg, unord and every compare entry, NaN included.
  * cc -O2 -fno-builtin -ffp-contract=off -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_f128.c $(tests/fp_sources.sh f128) && ./a.out [n]
  * Operands: random bit patterns, a third of them drawn from the edges (zeros, infinities, NaNs, denormals, the largest and smallest normals, one apart). */
 #include <stdio.h>
@@ -7,7 +7,7 @@
 #include <string.h>
 typedef unsigned __int128 u128;
 typedef __float128 q;
-q sfb_addtf3(q, q), sfb_subtf3(q, q), sfb_negtf2(q);
+q sfb_addtf3(q, q), sfb_subtf3(q, q), sfb_multf3(q, q), sfb_divtf3(q, q), sfb_negtf2(q);
 int sfb_cmptf2(q, q), sfb_eqtf2(q, q), sfb_netf2(q, q), sfb_lttf2(q, q), sfb_letf2(q, q), sfb_getf2(q, q), sfb_gttf2(q, q), sfb_unordtf2(q, q);
 static uint64_t rng = 0x9E3779B97F4A7C15ull;
 static uint64_t rnd(void) { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; return rng; }
@@ -45,6 +45,8 @@ int main(int argc, char **argv)
         q a = f(x), b = f(y);
         arith("add", x, y, bits(sfb_addtf3(a, b)), bits(a + b));
         arith("sub", x, y, bits(sfb_subtf3(a, b)), bits(a - b));
+        arith("mul", x, y, bits(sfb_multf3(a, b)), bits(a * b));
+        arith("div", x, y, bits(sfb_divtf3(a, b)), bits(a / b));
         n++; if (bits(sfb_negtf2(a)) != (x ^ ((u128)1 << 127))) bad("neg", x, y, bits(sfb_negtf2(a)), x ^ ((u128)1 << 127)); /* bit-exact, a signalling NaN stays one */
         int un = a != a || b != b;
         n++;
