@@ -496,3 +496,24 @@ fn an_overwritten_store_goes_past_invariant_end() {
     );
     assert!(!after.contains("store i16 1"), "{after}");
 }
+
+/// A walk back past a memcpy asked the alias analysis whether the memcpy reads
+/// the killing store's bytes, as it does a plain call; the pin skips an
+/// intrinsic there (`!isa<IntrinsicInst>(CurrentI)`, DSE.cpp:1737) and leaves
+/// it to the memcpy handling. 600 memcpy/memset/store triples asked 48.7 k
+/// times, four times the pin's 12.2 k. Each memcpy is a killing def too and
+/// its walk asks its direct users once each (pin :1744): n(n+1)/2 asks, 72
+/// with the clobber check as well.
+#[test]
+fn a_walk_past_intrinsics_does_not_ask_each_as_a_read_clobber() {
+    const COPIES: usize = 8;
+    let copies: String =
+        (0..COPIES).map(|_| "  call void @llvm.memcpy.p0.p0.i16(ptr @o, ptr @p, i16 2, i1 false)\n").collect();
+    let text = format!(
+        "@g = global i16 0\n@o = global i16 0\n@p = global i16 0\n\ndeclare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)\n\ndefine void @f() {{\nb0:\n  store i16 1, ptr @g\n{copies}  store i16 2, ptr @g\n  ret void\n}}\n"
+    );
+    let before = super::clobbers_asked();
+    eliminated(&text, &[]);
+    let asked = super::clobbers_asked() - before;
+    assert!(asked <= COPIES * (COPIES + 1) / 2, "{asked} read clobbers asked for {COPIES} memcpys");
+}

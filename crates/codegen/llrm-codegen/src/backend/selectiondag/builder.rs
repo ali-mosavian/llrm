@@ -594,35 +594,8 @@ impl<'a> Builder<'a> {
         let tables = info
             .tables
             .get_or_insert_with(|| {
-                // `isOffsetFoldingLegal`: `shouldAssumeDSOLocal` holds for
-                // every symbol under the static relocation
-                // model, which these targets (DOS objects, no
-                // PIC) always use.
-                let (global_names, local_symbols) = module_tables.unwrap_or_else(|| {
-                    (
-                        std::rc::Rc::new(
-                            module
-                                .globals
-                                .iter()
-                                .map(|global| global.name.as_deref().unwrap_or("").to_string())
-                                .collect(),
-                        ),
-                        std::rc::Rc::new(if target.dag.dso_local_symbols {
-                            vec![true; module.globals.len()]
-                        } else {
-                            module
-                                .globals
-                                .iter()
-                                .map(|global| {
-                                    matches!(
-                                        global.linkage,
-                                        llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
-                                    )
-                                })
-                                .collect()
-                        }),
-                    )
-                });
+                let (global_names, local_symbols) = module_tables
+                    .unwrap_or_else(|| super::function_lowering::module_tables(module, target.dag.dso_local_symbols));
                 super::function_lowering::Tables {
                     global_names,
                     local_symbols,

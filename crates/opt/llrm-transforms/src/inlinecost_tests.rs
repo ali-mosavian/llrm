@@ -265,6 +265,49 @@ fn test_an_optsize_caller_keeps_a_compare_loop_with_many_sites_when_the_target_g
     assert!(cost >= threshold, "{cost} against {threshold}");
 }
 
+/// D11 at speed on arm64: a callee with two sites that stays is not copied
+/// into a speed caller when its growth, at a byte's price in clocks, outweighs
+/// the call it saves (the pin's cost 45 against 50 inlined the compare loop;
+/// jpeg_fixed -O2 grew 7.9 KB -> 11 KB). x86 has no price: the pin's.
+#[test]
+fn a_speed_caller_keeps_a_compare_loop_with_two_sites_when_the_target_prices_bytes() {
+    let arm = llrm_arm64::tti::AArch64::of_cpu("generic").unwrap();
+    let x86 = llrm_x86::tti::X86::of_cpu("x86-64").unwrap();
+    let (cost, threshold) = priced_with(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&x86));
+    assert!(cost < threshold, "the premise: the pin inlines it ({cost} against {threshold})");
+    let (cost, threshold) = priced_with(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&arm));
+    assert!(cost >= threshold, "{cost} against {threshold}");
+}
+
+/// The speed guard leaves a dying callee whose growth is under one call's
+/// size to the pin: its sites fold differently, and refusing one of them kept
+/// the callee and a frame (recgcd -O2 on arm64: 136 B -> 188 B, +6.4% instrs).
+#[test]
+fn the_speed_guard_inlines_a_dying_callee_whose_growth_is_under_a_call() {
+    let text = "define internal i32 @callee(i32 %a, i32 %b) nounwind {
+entry:
+  %r = srem i32 %a, %b
+  %s = add i32 %r, %a
+  %t = mul i32 %s, %b
+  %u = xor i32 %t, %a
+  %v = sub i32 %u, %b
+  %w = or i32 %v, %r
+  ret i32 %w
+}
+define i32 @f(i32 %n) {
+entry:
+  %p = call i32 @callee(i32 %n, i32 36)
+  %q = call i32 @callee(i32 %n, i32 90)
+  %s = add i32 %p, %q
+  ret i32 %s
+}
+";
+    let arm = llrm_arm64::tti::AArch64::of_cpu("generic").unwrap();
+    let params = InlineParams { compute_full_inline_cost: true, ..InlineParams::from_level(2) };
+    let (cost, threshold) = priced_params(text, 0, false, CallerSize::Speed, Some(&arm), params, (2, true));
+    assert!(cost < threshold, "{cost} against {threshold}");
+}
+
 /// An external callee that stays after the inline is not copied into an
 /// `optsize` caller in 16-bit code (D11, the target's `inline_size_guard`):
 /// crc, tile and recchop grew 52, 42 and 15 bytes at -Os (cost 45, 30 and 40

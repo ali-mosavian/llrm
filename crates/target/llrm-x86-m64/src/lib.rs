@@ -209,6 +209,10 @@ impl llrm_target::Target for M64 {
         CALLING.native().frame_optional
     }
 
+    fn frame_saved_first(&self) -> bool {
+        CALLING.native().frame_saved_first
+    }
+
     fn frame_enter(&self) -> bool {
         CALLING.native().frame_enter
     }

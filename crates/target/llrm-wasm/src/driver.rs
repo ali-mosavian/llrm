@@ -2,7 +2,7 @@
 //! functions of a module, one after another.
 
 use crate::Width;
-use crate::dag::{Options, compile_function};
+use crate::dag::{ModuleFacts, Options, compile_function_with};
 use crate::print;
 
 /// The width `-mtriple=` names.
@@ -159,12 +159,14 @@ pub fn assembly(
     let module = prepared(text, width, options)?;
     let mut out = String::new();
     let mut labels = print::Labels::default();
+    let facts = ModuleFacts::of(&module);
     for (_, global, function) in module.functions() {
         if function.is_declaration() {
             continue;
         }
         let name = global.name.owned().ok_or("an unnamed function")?;
-        let f = compile_function(&module, &name, width, options).map_err(|why| format!("@{name}: {why}"))?;
+        let f =
+            compile_function_with(&module, &name, width, options, &facts).map_err(|why| format!("@{name}: {why}"))?;
         out.push_str(&print::function_in(&f, &mut labels));
     }
     Ok(out)
@@ -213,13 +215,15 @@ fn object_of(
     let mut functions = Vec::new();
     // `EmitTargetFeatures` reads the subtarget of the last function compiled.
     let mut features = crate::features::Features::default();
+    let facts = ModuleFacts::of(module);
     for (_, global, function) in module.functions() {
         if function.is_declaration() {
             continue;
         }
         let name = global.name.owned().ok_or("an unnamed function")?;
         features = crate::features::Features::of(function).map_err(|why| format!("@{name}: {why}"))?;
-        let f = compile_function(module, &name, width, options).map_err(|why| format!("@{name}: {why}"))?;
+        let f =
+            compile_function_with(module, &name, width, options, &facts).map_err(|why| format!("@{name}: {why}"))?;
         functions.push(crate::object::encode_function(&f));
     }
     if options.exception_model == crate::dag::ExceptionModel::Wasm {
