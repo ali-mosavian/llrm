@@ -438,7 +438,8 @@ b0:
     assert_eq!(late.matches("load i32").count(), 2, "{late}");
 }
 
-const UMIN: &str = "declare i16 @llvm.umin.i16(i16, i16) nocallback nofree nosync nounwind speculatable willreturn memory(none)\n";
+const UMIN: &str =
+    "declare i16 @llvm.umin.i16(i16, i16) nocallback nofree nosync nounwind speculatable willreturn memory(none)\n";
 
 /// The C zip dot loop (`i < na && i < nb`) kept `umin(%na, %nb)` from LICM and
 /// `umin(%nb, %na)` from the trip count: a second call the pin's EarlyCSE
@@ -460,8 +461,8 @@ b0:
     assert_eq!(after.matches("call i16 @llvm.umin").count(), 1, "{after}");
 }
 
-/// The same call twice is one, and `umin` is not `umax` and not a non-commutative
-/// intrinsic with its arguments swapped.
+/// The same call twice is one, and `umin` is not `umax` and not a
+/// non-commutative intrinsic with its arguments swapped.
 #[test]
 fn test_distinct_intrinsics_and_noncommutative_swaps_stay() {
     let after = run(

@@ -451,8 +451,9 @@ pub(super) fn _truncating(
     };
     // Python keys these slots by the 1-tuples ("control",) and ("chop",).
     let (saved, chop) = (frame.cell(("control", 0), 2)?, frame.cell(("chop", 0), 2)?);
-    // The rounding-control bits 10-11 live in the word's high byte: a byte `or` is
-    // shorter than the word one by its immediate (and the operand-size prefix).
+    // The rounding-control bits 10-11 live in the word's high byte: a byte `or`
+    // is shorter than the word one by its immediate (and the operand-size
+    // prefix).
     let chop_high = Mem {
         addr: chop.addr.map(|addr| addr.plus(1)),
         offset: if chop.addr.is_some() { chop.offset } else { chop.offset + 1 },

@@ -830,7 +830,12 @@ pub(crate) fn llvm_order(
                 Box::new(loopunrollandjam::LoopUnrollAndJam {
                     opt_level: if applied.options.limits.target_percent >= 200 { 3 } else { 2 },
                     opt_size: size,
-                    options: loopunrollandjam::JamOptions { on: true, ..Default::default() },
+                    options: loopunrollandjam::JamOptions {
+                        on: true,
+                        clean: true,
+                        pre: applied.options.pre,
+                        ..Default::default()
+                    },
                 }),
             ),
             // LoopUnrollPass (l.1476) with the full unroll the target allows
@@ -1399,7 +1404,8 @@ fn rerun(
     let layout = analyses.program().layout.clone();
     let outer = analyses.outer(module);
     let mut declared = Declared::over(std::rc::Rc::clone(&outer.globals), module.metadata.len())
-        .with_assume_declared(outer.assume_declared());
+        .with_assume_declared(outer.assume_declared())
+        .with_guard_declared(outer.guard_declared());
     if fixed.wants_sizes() {
         declared.count_referenced(module);
     }

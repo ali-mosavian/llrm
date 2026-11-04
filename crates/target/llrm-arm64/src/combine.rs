@@ -46,9 +46,8 @@
 //! After `prepass` (which sinks and drops dead flag settings) and before the
 //! copies are ordered, at every -O level but -O0.
 
-use rustc_hash::FxHashMap as HashMap;
-
 use llrm_codegen::combine::{self, CombinerIsa, Node, Replacement, Setting, Use};
+use rustc_hash::FxHashMap as HashMap;
 
 use crate::expand_imm;
 use crate::mc::inst::*;

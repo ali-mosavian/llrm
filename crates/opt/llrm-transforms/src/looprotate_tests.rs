@@ -14,7 +14,13 @@ fn rotated(module: &mut Module) -> bool {
     crate::loopsimplify::simplified(function);
     crate::lcssa::closed(function).expect("closes");
     let tti = X86::of_cpu("i486").expect("a cpu");
-    let options = Options { max_header_size: 16, priced_at_size: false, rotation_only: false, is_util_mode: false, prepare_for_lto: false };
+    let options = Options {
+        max_header_size: 16,
+        priced_at_size: false,
+        rotation_only: false,
+        is_util_mode: false,
+        prepare_for_lto: false,
+    };
     rotate_function(module, "f", &tti, options).expect("rotates")
 }
 
@@ -202,7 +208,13 @@ declare i16 @late(i16)
     crate::loopsimplify::simplified(function);
     crate::lcssa::closed(function).expect("closes");
     let tti = X86::of_cpu("i486").expect("a cpu");
-    let options = Options { max_header_size: 16, priced_at_size: false, rotation_only: false, is_util_mode: false, prepare_for_lto: false };
+    let options = Options {
+        max_header_size: 16,
+        priced_at_size: false,
+        rotation_only: false,
+        is_util_mode: false,
+        prepare_for_lto: false,
+    };
     let known = module.functions().position(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f") + 1;
     assert!(rotate_function_knowing(&mut module, "f", &tti, options, known).expect("rotates"), "{}", printed(&module));
 }
@@ -354,7 +366,13 @@ fn rotated_priced(module: &mut Module) -> bool {
     crate::loopsimplify::simplified(function);
     crate::lcssa::closed(function).expect("closes");
     let tti = llrm_arm64::tti::AArch64::of_cpu("generic").expect("a cpu");
-    let options = Options { max_header_size: 16, priced_at_size: true, rotation_only: false, is_util_mode: false, prepare_for_lto: false };
+    let options = Options {
+        max_header_size: 16,
+        priced_at_size: true,
+        rotation_only: false,
+        is_util_mode: false,
+        prepare_for_lto: false,
+    };
     rotate_function(module, "f", &tti, options).expect("rotates")
 }
 
@@ -365,9 +383,8 @@ fn rotated_priced(module: &mut Module) -> bool {
 fn test_a_size_build_copies_a_header_only_when_it_is_no_bigger_than_the_removed_branches() {
     let mut test_only = parsed(COUNTED);
     assert!(rotated_priced(&mut test_only), "{}", printed(&test_only));
-    let mut computing = parsed(&COUNTED.replace(
-        "  %go = icmp slt i16 %i, %n\n",
-        "  %t = add i16 %i, %acc\n  %go = icmp slt i16 %t, %n\n",
-    ));
+    let mut computing = parsed(
+        &COUNTED.replace("  %go = icmp slt i16 %i, %n\n", "  %t = add i16 %i, %acc\n  %go = icmp slt i16 %t, %n\n"),
+    );
     assert!(!rotated_priced(&mut computing), "{}", printed(&computing));
 }

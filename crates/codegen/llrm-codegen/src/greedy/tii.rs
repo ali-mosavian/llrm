@@ -369,11 +369,17 @@ pub fn fold_memory_operand(
     // constant is stored zero-extended at the cell's width; any other def is
     // not folded.
     let zeroes_upper = bits == 64
-        && what
-            .dests
-            .iter()
-            .any(|loc| matches!(loc, Loc::Held(held) if held.value == reg && held.width == 4 && cell.width == 8));
-    let constant_move = what.op == Operation::Move && matches!(what.sources.as_slice(), [Loc::Imm(imm)] if imm.address.is_none());
+        && what.dests.iter().any(|loc| {
+            matches!(
+                loc,
+                Loc::Held(held) if held.value == reg && held.width == 4 && cell.width == 8
+            )
+        });
+    let constant_move = what.op == Operation::Move
+        && matches!(
+            what.sources.as_slice(),
+            [Loc::Imm(imm)] if imm.address.is_none()
+        );
     if zeroes_upper && !constant_move {
         return None;
     }
@@ -386,7 +392,9 @@ pub fn fold_memory_operand(
     };
     let narrow_imm = |loc: &Loc| match loc {
         Loc::Imm(imm) if narrow => Loc::Imm(Imm { width: imm.width.min(cell.width), ..imm.clone() }),
-        Loc::Imm(imm) if zeroes_upper => Loc::Imm(Imm { value: imm.value as u32 as i64, width: cell.width, ..imm.clone() }),
+        Loc::Imm(imm) if zeroes_upper => {
+            Loc::Imm(Imm { value: imm.value as u32 as i64, width: cell.width, ..imm.clone() })
+        }
         _ => loc.clone(),
     };
     let made = Semantics {
@@ -570,7 +578,7 @@ pub(crate) fn is_encodable(
 ) -> Result<bool, Error> {
     let regs = classes.registers;
     let mut taken: IndexMap<u32, RegId> = IndexMap::default();
-    let rows: IndexMap<u32, Vec<RegId>> = [1_u32, 2, 4]
+    let rows: IndexMap<u32, Vec<RegId>> = [1_u32, 2, 4, 8]
         .into_iter()
         .map(|width| {
             (
