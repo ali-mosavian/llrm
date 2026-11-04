@@ -1523,6 +1523,30 @@ fn test_a_byte_joined_into_a_lane_before_the_pair_is_live_keeps_the_other_lane()
     assert_eq!(definer.partial_defs, vec![2], "premise: the def is of a lane of the pair; it keeps the rest");
 }
 
+/// The high byte is computed before the low one's copy, which starts the pair
+/// (`undef_super`). Once the high byte joins its lane the pair is live at the
+/// low copy: it must keep the high lane, else the high byte's def reads dead
+/// and is deleted (lz4c -Oz returned 0x57b3).
+#[test]
+fn test_a_lane_def_after_a_joined_lane_keeps_it() {
+    let (d3, d1) = (def_at(3, 1), def_at(1, 1));
+    let (lo, hi) = (lane_copy(2, 0, 1), lane_copy(2, 1, 3));
+    let mut starts = (*lo).clone();
+    starts.undef_super = true;
+    let lo = Arc::new(starts);
+    let was = body(&[(&[d3, d1, Arc::clone(&lo), Arc::clone(&hi), read_at(2, 2)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    for v in 1..=3 {
+        lis.interval(v);
+    }
+    let mut state = State::new();
+    let result = join_copy(&mut lis, &LaneViews, &mut state, &mut Default::default(), hi.id());
+    assert_eq!(result, JoinResult::Joined);
+    let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
+    let low = kept.iter().find(|insn| insn.def_lanes.iter().any(|(_, lanes)| *lanes == llrm_lir::valuelanes::ValueLanes::at(0, 1))).expect("the low copy");
+    assert!(!low.undef_super && low.partial_defs == vec![2], "{low:?}");
+}
+
 /// A byte joins the lane of a pair only where some register of the pair's
 /// palette has a register of the byte's palette at that offset: `ah` is the
 /// byte above `al` in `ax`, and `al` is not. Before, `can_share_lane` had no
