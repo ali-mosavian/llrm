@@ -12,8 +12,9 @@
 //! printed) or `reference` (the host could not build it). A program that does
 //! not agree is kept in `$DIFF_KEEP` (default `$TMPDIR/llrm-m68k-difftest`).
 //!
-//! `$DIFF_CPU=m68020` compiles for the 68020. `$DIFF_UBSAN=1` builds the host
-//! program with `-fsanitize=undefined`: one that trips it has no reference.
+//! `$DIFF_CPU=m68020` compiles for the 68020 (`m68010`, `m68030`, `m68040` and
+//! `m68060` too; qemu runs each). `$DIFF_UBSAN=1` builds the host program with
+//! `-fsanitize=undefined`: one that trips it has no reference.
 //!
 //! `$LLRM_PIN_CLANG` is the pin's clang; `$GCC_M68K` the unpacked cross
 //! toolchain.
@@ -69,20 +70,24 @@ fn options() -> Options {
     }
 }
 
-/// `$DIFF_CPU`: `m68020` selects 68020 code (the instructions the 68000 table
-/// hides: `mulu.l`, `divs.l`).
+/// `$DIFF_CPU`: the CPU to compile for (`m68020` selects the instructions the
+/// 68000 table hides: `mulu.l`, `divs.l`); the 68000 when unset.
 fn cpu() -> Cpu {
-    match std::env::var("DIFF_CPU").as_deref() {
-        Ok("m68020") => Cpu::M68020,
-        _ => Cpu::M68000,
+    match std::env::var("DIFF_CPU") {
+        Ok(name) => llrm_m68k::driver::cpu_of(&name).expect("DIFF_CPU"),
+        Err(_) => Cpu::M68000,
     }
 }
 
 /// The qemu model that runs what this compiler made.
 fn qemu_cpu() -> &'static str {
     match cpu() {
+        Cpu::M68000 => "m68000",
+        Cpu::M68010 => "m68010",
         Cpu::M68020 => "m68020",
-        _ => "m68000",
+        Cpu::M68030 => "m68030",
+        Cpu::M68040 => "m68040",
+        Cpu::M68060 => "m68060",
     }
 }
 

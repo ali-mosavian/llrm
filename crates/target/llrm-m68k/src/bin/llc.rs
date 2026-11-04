@@ -1,7 +1,7 @@
 //! `llrm-m68k-llc -S [-mcpu=68000|..|68060] [-O<n>] [--dump DIR] [-o OUT]
 //! FILE.ll`: LLVM IR from clang's front end alone through the mid-end and the
-//! m68k backend to assembly text. Stops at `-S`: there is no object writer
-//! behind this driver.
+//! m68k backend to assembly text with `-S`, else to an ELF32 relocatable
+//! object (`-c` is the same).
 
 use llrm_m68k::driver::{self, Level};
 
@@ -23,6 +23,7 @@ fn run() -> i32 {
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "-S" => assembly = true,
+            "-c" => assembly = false,
             "-g" => debug = true,
             "-o" => output = arguments.next(),
             "--dump" => dump = arguments.next().map(std::path::PathBuf::from),
@@ -46,9 +47,9 @@ fn run() -> i32 {
             }
         }
     }
-    let Some(input) = input.filter(|_| assembly) else {
+    let Some(input) = input else {
         eprintln!(
-            "usage: llrm-m68k-llc -S [-g] [-mcpu=68000|..|68060] [-O0|-O1|-O2|-O3|-Os|-Oz] [--dump DIR] [-o OUT] FILE.ll"
+            "usage: llrm-m68k-llc [-S|-c] [-g] [-mcpu=68000|..|68060] [-O0|-O1|-O2|-O3|-Os|-Oz] [--dump DIR] [-o OUT] FILE.ll"
         );
         return 2;
     };
@@ -60,13 +61,20 @@ fn run() -> i32 {
         }
     };
     let env = llrm_support::env_var("LLRM_MIR_STAGES").map(std::path::PathBuf::from);
-    let result = driver::cpu_of(&cpu)
-        .and_then(|cpu| driver::assembly_with(&text, cpu, level, debug, dump.as_deref().or(env.as_deref())));
+    let result: Result<Vec<u8>, String> = driver::cpu_of(&cpu).and_then(|cpu| {
+        if assembly {
+            driver::assembly_with(&text, cpu, level, debug, dump.as_deref().or(env.as_deref())).map(String::into_bytes)
+        } else {
+            driver::object(&text, cpu, level, &input)
+        }
+    });
     match result {
-        Ok(text) => {
-            let path = output
-                .unwrap_or_else(|| std::path::Path::new(&input).with_extension("s").to_string_lossy().into_owned());
-            if let Err(error) = std::fs::write(&path, text) {
+        Ok(bytes) => {
+            let extension = if assembly { "s" } else { "o" };
+            let path = output.unwrap_or_else(|| {
+                std::path::Path::new(&input).with_extension(extension).to_string_lossy().into_owned()
+            });
+            if let Err(error) = std::fs::write(&path, bytes) {
                 eprintln!("llrm-m68k-llc: {path}: {error}");
                 return 1;
             }

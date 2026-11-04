@@ -14,6 +14,7 @@
 //! over all sixteen bits and C as the borrow.
 
 use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
+use llrm_codegen::backend::selectiondag::known_bits::masked_value_is_zero;
 use llrm_codegen::backend::selectiondag::legalize_dag::Hooks;
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
 use llrm_codegen::backend::selectiondag::{Action, LoadExt, MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
@@ -27,6 +28,7 @@ pub mod z80isd {
 
     pub const CMP: ISD = ISD::Target(ids::CMP);
     pub const WRAPPER: ISD = ISD::Target(ids::WRAPPER);
+    pub const SUBZX: ISD = ISD::Target(ids::SUBZX);
     pub const BRCOND: ISD = ISD::Target(ids::BRCOND);
     pub const SETCC: ISD = ISD::Target(ids::SETCC);
     pub const TSTS: ISD = ISD::Target(ids::TSTS);
@@ -43,7 +45,7 @@ pub mod cond {
 
 pub fn target_lowering() -> TargetLowering {
     use ISD::*;
-    let mut tl = TargetLowering::empty(TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false));
+    let mut tl = TargetLowering::empty(TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false).with_soft_float());
     tl.init_actions();
     for vt in [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64] {
         for ext in [LoadExt::SExtLoad, LoadExt::ZExtLoad, LoadExt::ExtLoad] {
@@ -80,7 +82,9 @@ pub fn target_lowering() -> TargetLowering {
         }
     };
     set(&[Add, Sub, And, Or, Xor], &[MVT::I8], Action::Legal);
-    set(&[Add, Sub, And, Or, Xor], &[MVT::I16], Action::Legal);
+    set(&[Add, And, Or, Xor], &[MVT::I16], Action::Legal);
+    // the difference of two bytes known to be widened (`lower_sub`)
+    set(&[Sub], &[MVT::I16], Action::Custom);
     // A shift by a constant is an instruction; by a variable it is a call
     // (`lower_shift`).
     set(&[Shl, Srl, Sra], &[MVT::I8, MVT::I16], Action::Custom);
@@ -112,6 +116,15 @@ pub fn target_lowering() -> TargetLowering {
         (MVT::I64, ["__divdi3", "__udivdi3", "__moddi3", "__umoddi3", "__ashldi3", "__lshrdi3", "__ashrdi3"]),
     ] {
         for (op, name) in [SDiv, UDiv, SRem, URem, Shl, Srl, Sra].into_iter().zip(names) {
+            tl.set_libcall_name(op, vt, name);
+        }
+    }
+    // softened floats: compiler-rt's routines
+    for (vt, names) in [
+        (MVT::F32, ["__addsf3", "__subsf3", "__mulsf3", "__divsf3"]),
+        (MVT::F64, ["__adddf3", "__subdf3", "__muldf3", "__divdf3"]),
+    ] {
+        for (op, name) in [FAdd, FSub, FMul, FDiv].into_iter().zip(names) {
             tl.set_libcall_name(op, vt, name);
         }
     }
@@ -157,6 +170,7 @@ impl Hooks for Z80Lowering {
     ) -> Option<SDValue> {
         match dag.opcode(node) {
             ISD::Shl | ISD::Srl | ISD::Sra => self.lower_shift(dag, node),
+            ISD::Sub => Some(lower_sub(dag, node)),
             ISD::SetCC => lower_setcc(dag, node),
             ISD::Select => Some(lower_select(dag, node)),
             ISD::BrCond => Some(lower_brcond(dag, node)),
@@ -321,6 +335,30 @@ fn lower_extend(
     let (one, zero) = (dag.get_constant(set, vt), dag.get_constant(0, vt));
     let select = dag.get_node(ISD::Select, vt, &[condition, one, zero]);
     lower_select(dag, select)
+}
+
+/// A word difference whose operands both have a zero high byte is the
+/// difference of two zero-extended bytes (`SUBZX8`), whether or not the
+/// extension is in the DAG: a phi of a byte and a constant is a word register
+/// the extension was made before.
+fn lower_sub(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let (left, right) = (dag.operand(node, 0), dag.operand(node, 1));
+    let widened = |dag: &SelectionDAG, value| dag.opcode(value) == ISD::ZeroExtend;
+    if dag.value_type(node) != EVT::I16
+        || (widened(dag, left) && widened(dag, right))
+        || !masked_value_is_zero(dag, left, 0xFF00)
+        || !masked_value_is_zero(dag, right, 0xFF00)
+    {
+        return node;
+    }
+    let byte = |dag: &mut SelectionDAG, value| {
+        if widened(dag, value) { dag.operand(value, 0) } else { dag.get_node(ISD::Truncate, EVT::I8, &[value]) }
+    };
+    let (left, right) = (byte(dag, left), byte(dag, right));
+    dag.get_node(z80isd::SUBZX, EVT::I16, &[left, right])
 }
 
 /// `LowerGlobalAddress`: `WRAPPER` of the address, an immediate the linker

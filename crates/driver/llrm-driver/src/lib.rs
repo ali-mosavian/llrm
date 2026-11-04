@@ -42,7 +42,12 @@ pub fn same_system(
     listed: &str,
     stated: &str,
 ) -> bool {
-    let bare = |triple: &str| triple.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.').to_owned();
+    // `macos11` is LLVM's name for `macosx` from clang 11 on (Triple::getOS
+    // spells both Darwin).
+    let bare = |triple: &str| {
+        let bare = triple.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+        bare.strip_suffix("macos").map_or_else(|| bare.to_owned(), |head| format!("{head}macosx"))
+    };
     listed == stated || bare(listed) == bare(stated)
 }
 

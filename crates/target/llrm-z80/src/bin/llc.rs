@@ -1,7 +1,8 @@
-//! `llrm-z80-llc [-S] [-O<n>] [-o OUT] FILE.ll`: LLVM IR from clang's front end
-//! alone through the mid-end and the Z80 backend to sdasz80 text. `-S` is the
-//! only output. A function the backend refuses is named on stderr and the exit
-//! status is 1; the others are still written.
+//! `llrm-z80-llc [-S] [-g] [-O<n>] [-o OUT] FILE.ll`: LLVM IR from clang's
+//! front end alone through the mid-end and the Z80 backend to sdasz80 text.
+//! `-S` is the only output; `-g` adds SDCC's `C$` line symbols (no `.adb`). A
+//! function the backend refuses is named on stderr and the exit status is 1;
+//! the others are still written.
 
 use llrm_z80::compile::text;
 use llrm_z80::driver::{Level, Request, selections};
@@ -15,12 +16,14 @@ fn main() {
 
 fn run() -> i32 {
     let mut level = Level::O2;
+    let mut debug = false;
     let mut output = None;
     let mut input = None;
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "-S" => {}
+            "-g" => debug = true,
             "-o" => output = arguments.next(),
             other if other.starts_with("-O") => match Level::parse(&other[2..]) {
                 Ok(parsed) => level = parsed,
@@ -37,7 +40,7 @@ fn run() -> i32 {
         }
     }
     let Some(input) = input else {
-        eprintln!("usage: llrm-z80-llc [-S] [-O<n>] [-o OUT] FILE.ll");
+        eprintln!("usage: llrm-z80-llc [-S] [-g] [-O<n>] [-o OUT] FILE.ll");
         return 2;
     };
     let ir = match std::fs::read_to_string(&input) {
@@ -47,7 +50,7 @@ fn run() -> i32 {
             return 1;
         }
     };
-    let request = Request::new(level);
+    let request = Request { debug, ..Request::new(level) };
     let names: Vec<String> = match selections(&ir, &request) {
         Ok(selected) => selected.into_iter().map(|(name, _)| name).collect(),
         Err(why) => {
