@@ -200,6 +200,7 @@ pub mod earlytaildup;
 pub mod edges;
 pub mod fixupbw;
 pub mod fixupleas;
+pub mod maskbyand;
 pub mod fixupsetcc;
 pub mod flagscopy;
 pub mod incremental;
