@@ -1,3 +1,4 @@
+// targets: dos
 /* Text screen through a pointer made of the machine's physical address, which the target's description
    names (PHYSICAL_TEXT_SCREEN): a flat target uses it as it is, real mode builds segment:offset. */
 extern void report(long value);

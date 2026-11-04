@@ -31,7 +31,8 @@ fn run(
 }
 
 /// The selector was chosen by `LLRM_ISEL_DAG` / `LLRM_ISEL_SHADOW` that the
-/// option set in the environment: a stray variable changed any compile.
+/// option set in the environment: a stray variable changed any compile. The
+/// default is `shadow` (the DAG path), whatever the environment says.
 #[test]
 fn the_environment_does_not_choose_the_selector() {
     let hand = run(&["--isel=hand"], &[]);
@@ -40,8 +41,9 @@ fn the_environment_does_not_choose_the_selector() {
     let dag = run(&["--isel=dag"], &[]);
     assert!(dag.status.success(), "{}", String::from_utf8_lossy(&dag.stderr));
     assert_ne!(hand.stdout, dag.stdout);
-    for variable in ["LLRM_ISEL_DAG", "LLRM_ISEL_SHADOW"] {
-        assert_eq!(run(&[], &[(variable, "1")]).stdout, hand.stdout, "{variable}");
+    assert_eq!(run(&[], &[]).stdout, dag.stdout, "the default is the DAG path");
+    for variable in ["LLRM_ISEL_DAG", "LLRM_ISEL_SHADOW", "LLRM_ISEL_HAND"] {
+        assert_eq!(run(&[], &[(variable, "1")]).stdout, dag.stdout, "{variable}");
     }
 }
 

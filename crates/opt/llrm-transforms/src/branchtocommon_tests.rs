@@ -173,3 +173,43 @@ b4:
     assert!(!crate::branchtocommon::folded(context, &spec, function, bb));
     assert_eq!(crate::branchtocommon::SAFE_TO_MERGE_ASKS.with(|count| count.get()), before);
 }
+
+fn two_length_tests(param: &str) -> String {
+    format!(
+        "define i32 @f(ptr noalias readonly {param}dereferenceable(8) %a, ptr noalias readonly {param}dereferenceable(8) %b, i16 %i) {{
+b0:
+  %x = load i16, ptr %a
+  %c1 = icmp ult i16 %i, %x
+  br i1 %c1, label %b1, label %e
+b1:
+  %y = load i16, ptr %b
+  %c2 = icmp ult i16 %i, %y
+  br i1 %c2, label %t, label %e
+t:
+  ret i32 1
+e:
+  ret i32 0
+}}
+"
+    )
+}
+
+/// The second test's length load was speculated into the first block because
+/// the speculation rule did not ask the pointer's alignment ("x86 reads
+/// unaligned"): the zip loop `i < a.len && i < b.len` got a select, then
+/// `hoistMinMax` made it one compare against a `umin`, where the pin keeps two
+/// tests. `opt -passes=simplifycfg` keeps two branches for a parameter that is
+/// `dereferenceable(8)` and not `align 2`, and one select for `align 2`.
+#[test]
+fn test_a_load_through_a_pointer_of_unknown_alignment_is_not_speculated() {
+    let after = simplify(&two_length_tests(""));
+    assert_eq!(after.matches("br i1").count(), 2, "{after}");
+    assert!(!after.contains("select"), "{after}");
+}
+
+#[test]
+fn test_a_load_through_a_pointer_aligned_as_the_load_is_speculated() {
+    let after = simplify(&two_length_tests("align 2 "));
+    assert_eq!(after.matches("br i1").count(), 0, "{after}");
+    assert!(after.contains("select"), "{after}");
+}

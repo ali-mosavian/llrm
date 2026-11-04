@@ -32,7 +32,15 @@ exit:
 /// `body` with the SCEV of the invariants `%a` and `%b`, the loop's header and
 /// its recurrence `{0,+,1}`.
 fn with_loop(body: impl FnOnce(&Cx, &mut ScalarEvolution, Scev, Scev, BlockId, Scev)) {
-    let module = llrm_mir::parse::module(LOOP).expect("a module");
+    with_loop_of(LOOP, body)
+}
+
+/// `with_loop` over `source`, whose parameters are `%a` and `%b`.
+fn with_loop_of(
+    source: &str,
+    body: impl FnOnce(&Cx, &mut ScalarEvolution, Scev, Scev, BlockId, Scev),
+) {
+    let module = llrm_mir::parse::module(source).expect("a module");
     let (_, _, function) = module.functions().next().expect("a function");
     let layout = DataLayout::default();
     let tree = DomTree::of(function);
@@ -66,7 +74,15 @@ fn rated(
     visited: &HashSet<Scev>,
 ) -> Cost {
     let tti = X86::of_cpu("core2").unwrap();
-    let mut rating = Rating { se, cx, tti: &tti, l: header, hardware_loop_profitable: false, as_written: false };
+    let mut rating = Rating {
+        se,
+        cx,
+        tti: &tti,
+        l: header,
+        hardware_loop_profitable: false,
+        as_written: false,
+        other_register_units: 0,
+    };
     let (mut cost, mut regs) = (Cost::new(), HashSet::default());
     cost.rate_formula(&mut rating, f, &mut regs, visited, lu, None);
     cost
@@ -142,6 +158,22 @@ fn an_offset_beside_two_registers_is_the_displacement_of_the_lea() {
     });
 }
 
+/// DEVIATE LU2 holds from 16 bits up: x86 has no 8-bit `lea`, so `a + b + 1`
+/// in i8 is two adds. Charged as one, switch_table_holes (m32 -O2) lost its
+/// i8 counter `{1,+,1}` to an i32 one with a `+ 25` the store paid for.
+#[test]
+fn an_offset_beside_two_byte_registers_is_an_add_of_its_own() {
+    let byte_loop = LOOP.replace("i32", "i8");
+    with_loop_of(&byte_loop, |cx, se, a, b, header, _| {
+        let mut f = Formula { base_regs: vec![a, b], has_base_reg: true, ..Formula::default() };
+        f.unfolded_offset = Immediate(1);
+        f.canonicalize(se, header);
+        let basic = use_of(Kind::Basic, &[0]);
+        let cost = rated(cx, se, header, &basic, &f, &HashSet::default());
+        assert_eq!(cost.c.num_base_adds, 2, "the registers, then the offset");
+    });
+}
+
 /// A register a chosen formula already holds is not counted twice, and one that
 /// the caller marked visited makes the formula lose.
 #[test]
@@ -153,7 +185,15 @@ fn a_visited_register_loses_and_a_chosen_one_is_free() {
         assert!(rated(cx, se, header, &lu, &f, &visited).is_loser());
 
         let tti = X86::of_cpu("core2").unwrap();
-        let mut rating = Rating { se, cx, tti: &tti, l: header, hardware_loop_profitable: false, as_written: false };
+        let mut rating = Rating {
+            se,
+            cx,
+            tti: &tti,
+            l: header,
+            hardware_loop_profitable: false,
+            as_written: false,
+            other_register_units: 0,
+        };
         let (mut cost, mut regs) = (Cost::new(), [a].into_iter().collect::<HashSet<Scev>>());
         cost.rate_formula(&mut rating, &f, &mut regs, &HashSet::default(), &lu, None);
         assert_eq!(cost.c, LsrCost::default(), "a chosen register costs nothing more");
@@ -341,6 +381,7 @@ fn a_scaled_index_costs_its_instructions_once_for_each_scaled_register() {
             registers: 6,
             scaled_index_insns: 2,
             huge_space: None,
+            address_registers: None,
             inline_size_guard: false,
             float_code_size_percent: 100,
             unroll_size_few_trips: (0, 0),
@@ -363,7 +404,15 @@ fn a_scaled_index_costs_its_instructions_once_for_each_scaled_register() {
         };
         let (fa, fb) = (scaled(a), scaled(b));
         for (tti, first, both) in [(&real as &dyn llrm_mir::tti::Tti, 3, 3), (&flat, 1, 1)] {
-            let mut rating = Rating { se, cx, tti, l: header, hardware_loop_profitable: false, as_written: false };
+            let mut rating = Rating {
+                se,
+                cx,
+                tti,
+                l: header,
+                hardware_loop_profitable: false,
+                as_written: false,
+                other_register_units: 0,
+            };
             let (mut cost, mut regs, visited) = (Cost::new(), HashSet::default(), HashSet::default());
             cost.rate_formula(&mut rating, &fa, &mut regs, &visited, &lu, None);
             assert_eq!(cost.c.insns, first, "the recurrence and the prefixed index");
@@ -377,9 +426,14 @@ fn a_scaled_index_costs_its_instructions_once_for_each_scaled_register() {
 /// on the basic cost model.
 struct PostInc {
     favored: bool,
+    zero_test: u32,
 }
 
 impl Tti for PostInc {
+    fn zero_test_cost(&self) -> u32 {
+        self.zero_test
+    }
+
     fn cmp_sel_cost(
         &self,
         _: CmpSel,
@@ -495,12 +549,46 @@ fn a_pointer_stepping_by_a_constant_is_free_where_post_indexed_access_is_favored
         let f = Formula { base_regs: vec![walk], has_base_reg: true, ..Formula::default() };
         let lu = use_of(Kind::Address, &[0]);
         let rate = |tti: &dyn Tti, se: &mut ScalarEvolution| {
-            let mut rating = Rating { se, cx, tti, l: header, hardware_loop_profitable: false, as_written: false };
+            let mut rating = Rating {
+                se,
+                cx,
+                tti,
+                l: header,
+                hardware_loop_profitable: false,
+                as_written: false,
+                other_register_units: 0,
+            };
             let (mut cost, mut regs) = (Cost::new(), HashSet::default());
             cost.rate_formula(&mut rating, &f, &mut regs, &HashSet::default(), &lu, None);
             cost.c.add_rec_cost
         };
-        assert_eq!(rate(&PostInc { favored: false }, se), 1, "premise: the recurrence costs one");
-        assert_eq!(rate(&PostInc { favored: true }, se), 0);
+        assert_eq!(rate(&PostInc { favored: false, zero_test: 0 }, se), 1, "premise: the recurrence costs one");
+        assert_eq!(rate(&PostInc { favored: true, zero_test: 0 }, se), 0);
+    });
+}
+
+/// A counter that ends at zero was free to test on every target; where the
+/// zero test is an instruction of its own (z80's 16-bit `inc`), it costs one.
+#[test]
+fn a_zero_ending_counter_pays_the_targets_zero_test() {
+    with_loop(|cx, se, _, _, header, ar| {
+        let f = Formula { base_regs: vec![ar], has_base_reg: true, ..Formula::default() };
+        let lu = use_of(Kind::ICmpZero, &[0]);
+        let mut insns = |zero_test| {
+            let tti = PostInc { favored: false, zero_test };
+            let mut rating = Rating {
+                se,
+                cx,
+                tti: &tti,
+                l: header,
+                hardware_loop_profitable: false,
+                as_written: false,
+                other_register_units: 0,
+            };
+            let (mut cost, mut regs) = (Cost::new(), HashSet::default());
+            cost.rate_formula(&mut rating, &f, &mut regs, &HashSet::default(), &lu, None);
+            cost.c.insns
+        };
+        assert_eq!(insns(1), insns(0) + 1);
     });
 }

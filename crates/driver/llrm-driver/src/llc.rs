@@ -228,6 +228,27 @@ fn decorate(
             global.name = Some(spelled).into();
         }
     }
+    // An alias is spelled as what it names is.
+    for at in 0..module.aliases.len() {
+        let aliasee = module.aliases[at].aliasee;
+        let convention = match module.global(aliasee).function() {
+            Some(one) => calling.by_number(one.calling_convention).unwrap_or(default),
+            None => calling.by_number(0).unwrap_or(default),
+        };
+        let mut name = module.aliases[at].name.clone();
+        // clang spells a regcall alias `__regcall3__NAME`, as its function; the
+        // function lost the prefix above when it took the ABI's convention.
+        if let Some(plain) = name.strip_prefix("__regcall3__")
+            && module.global(aliasee).function().is_some_and(|one| one.calling_convention != llrm_mir::opcode::REGCALL)
+        {
+            name = plain.to_owned();
+        }
+        let spelled = match name.strip_prefix('\u{1}') {
+            Some(exact) => Some(exact.to_owned()),
+            None => convention.decorated(format, &name),
+        };
+        module.aliases[at].name = spelled.unwrap_or(name);
+    }
     spellings
 }
 
@@ -390,6 +411,22 @@ pub fn compiled_dumping(
 ) -> Result<(masm::Module, llrm_target::object::Format), String> {
     let (triple, text) = without_triple(text);
     let bound = bound(flags, triple.as_deref())?;
+    // The system the module's triple names writes its own object format unless
+    // `-fobject-format=` says otherwise.
+    let system = bound
+        .target
+        .layout()
+        .platforms
+        .into_iter()
+        .find(|one| triple.as_deref().is_some_and(|stated| crate::same_system(&one.triple, stated)));
+    if let Some(why) = system.as_ref().and_then(|one| one.pending.as_ref()).filter(|_| !flags.allow_pending_abi) {
+        return Err(format!("{}: {why}; -fallow-pending-abi emits it anyway", triple.as_deref().unwrap_or_default()));
+    }
+    let mut flags = flags.clone();
+    if let (None, Some(system)) = (flags.object_format, system) {
+        flags.object_format = Some(llrm_target::object::Format::parse(&system.format)?);
+    }
+    let flags = &flags;
     let mut module = llrm_mir::parse::module(&text).map_err(|error| format!("{name}: {error}"))?;
     if llrm_codegen::support::debug::enabled("mir") {
         // The size of the program as read, before any pass: what the other
@@ -436,6 +473,9 @@ pub fn compiled_dumping(
         .and_then(|_| bound.target.calling().by_number(llrm_mir::opcode::WATCALL))
         .unwrap_or(default);
     options.libcalls.extend(libm_calls(library, format.name()));
+    // The soft-float routines are C compiled under the program's own
+    // convention, not the Watcom library's.
+    options.libcalls.extend(soft_float_calls(default, format.name()));
     Ok((llrm_codegen::driver::compiled_module(module, name, &options)?, format))
 }
 
@@ -451,6 +491,24 @@ fn libm_calls(
     ["floor", "ceil", "trunc", "round", "roundeven", "nearbyint"]
         .iter()
         .flat_map(|op| ["", "f", "l"].map(|suffix| format!("{op}{suffix}")))
+        .map(|name| {
+            let symbol = default.decorated(format, &name).unwrap_or_else(|| name.clone());
+            (name, number, symbol)
+        })
+        .collect()
+}
+
+/// The soft-float routines, spelled as the C compiler spells a definition of
+/// them: what a function with no x87 calls for a float operation. The runtime
+/// (`runtime/compiler-rt`) is C, so its objects carry the convention's
+/// spelling.
+fn soft_float_calls(
+    default: &llrm_target::calling::Convention,
+    format: &str,
+) -> Vec<(String, u32, String)> {
+    let number = llrm_target::calling::Calling::number_of(default.cc.as_deref()).unwrap_or(0);
+    let names = llrm_codegen::backend::selectiondag::libcalls::names().map(str::to_owned);
+    names
         .map(|name| {
             let symbol = default.decorated(format, &name).unwrap_or_else(|| name.clone());
             (name, number, symbol)
@@ -650,7 +708,7 @@ mod options_tests {
     }
 }
 
-fn compile(
+pub(crate) fn compile(
     flags: &Flags,
     source: &Path,
     dump: Option<&Path>,
@@ -664,7 +722,7 @@ fn compile(
         write_output(&output, masm::text(&built).map_err(|error| error.to_string())?)
     } else {
         let objects = bound(flags, without_triple(&text).0.as_deref())?.target.objects();
-        let bytes = objbuild::written_in(&built, file, objbuild::CodeLayout::OneSegment, format, objects)
+        let bytes = objbuild::written_in(&built, file, layout_of(flags, format), format, objects)
             .map_err(|error| error.to_string())?;
         write_output(&output, bytes)
     }
@@ -731,5 +789,18 @@ mod text_tests {
             "@x = global i32 0\ndeclare void @llvm.lifetime.start.p0(i64 immarg, ptr)\n  %1 = call i16 @llvm.ia16.in.i16(i16 %0)\n"
                 .replace("llvm.ia16", "llrm.ia16")
         );
+    }
+}
+
+/// One COMDAT per function where `-ffunction-sections` asks for it and the
+/// format has them (OMF); one segment for the module's code otherwise.
+fn layout_of(
+    flags: &Flags,
+    format: llrm_target::object::Format,
+) -> objbuild::CodeLayout {
+    if flags.function_sections && format == llrm_target::object::Format::Omf {
+        objbuild::CodeLayout::PerProcedure
+    } else {
+        objbuild::CodeLayout::OneSegment
     }
 }

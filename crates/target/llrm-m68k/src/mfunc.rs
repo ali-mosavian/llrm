@@ -412,6 +412,26 @@ impl Emitter<'_> {
                 };
                 into.push(Inst::copy(dst, src));
             }
+            // `TargetOpcode::IMPLICIT_DEF` (10), which has no name in the pin's
+            // instruction table: an undefined value, a zero until MIR has
+            // `undef` (the pin's ProcessImplicitDefs drops it)
+            ISD::Machine(10) => {
+                let name = match n.values[0].size_in_bits() {
+                    8 => "MOVI8di",
+                    16 => "MOVI16di",
+                    _ => "MOVI32ri",
+                };
+                let desc =
+                    local::code_of(name).and_then(local::desc).ok_or_else(|| format!("{name}: no description"))?;
+                let class = desc
+                    .operands
+                    .first()
+                    .and_then(|one| Class::of_pin(one.reg_class))
+                    .unwrap_or_else(|| Class::of_type(n.values[0]));
+                let dst = self.new_reg(class);
+                self.values.insert((node, 0), dst);
+                into.push(op_inst(name, desc, vec![Operand::Def(dst), Operand::Imm(0)]));
+            }
             ISD::Machine(code) => {
                 let name = opcode_name(code).ok_or_else(|| {
                     let ops: Vec<String> = n
@@ -502,6 +522,7 @@ pub fn emit(
         saved: HashMap::new(),
     };
     emitter.function.locals.extend(first.locals.iter().copied());
+    let mut place_numbers: HashMap<llrm_codegen::model::lir::SrcLoc, usize> = HashMap::new();
     for one in blocks {
         emitter.dag = &one.dag;
         emitter.values.clear();
@@ -512,14 +533,39 @@ pub fn emit(
         // A unit lists its glued nodes last first.
         for unit in &one.units {
             for &node in unit.nodes.iter().rev() {
+                let before = insts.len();
                 emitter.emit(node, &mut insts)?;
+                // `SDLoc` to `DebugLoc`: what the node emitted is of its IR
+                // instruction's place.
+                let order = one.dag.node(SDValue { node, res: 0 }).order as usize;
+                if let Some(&Some(place)) = one.dag.lines.get(order) {
+                    let places = &mut emitter.function.places;
+                    let number = *place_numbers
+                        .entry(place)
+                        .or_insert_with(
+                            || {
+                                places.push(place);
+                                places.len()
+                            },
+                        );
+                    for made in &mut insts[before..] {
+                        if made.origin == 0 {
+                            made.origin = number as u32;
+                        }
+                    }
+                }
             }
         }
         emitter.function.fixed.extend(one.dag.fixed_offsets.clone());
-        emitter.function.blocks.push(Block { id: one.block.0, insts, phis: Vec::new() });
+        let mut block = Block { id: one.block.0, insts, phis: Vec::new() };
+        block.place_unlocated();
+        emitter.function.blocks.push(block);
     }
     // `HandlePHINodesInSuccessorBlocks`: each export is an input of a phi in
-    // the block the phi is in.
+    // the block the phi is in, from every block made for the exporting IR
+    // block that leaves for it (`FinishBasicBlock` gives the phi an input for
+    // each block a lowering split off).
+    let leaves = llrm_spike_mf::regalloc::successors(&emitter.function);
     for (pred, one) in blocks.iter().enumerate() {
         for update in &one.phis {
             let at = blocks.iter().position(|other| other.block == update.phi_block).ok_or("a phi in no block")?;
@@ -540,10 +586,19 @@ pub fn emit(
             };
             let result = register(&mut emitter, update.result);
             let incoming = register(&mut emitter, update.incoming);
-            let phis = &mut emitter.function.blocks[at].phis;
-            match phis.iter_mut().find(|phi| phi.result == result) {
-                Some(phi) => phi.incoming.push((pred, incoming)),
-                None => phis.push(Phi { result, incoming: vec![(pred, incoming)] }),
+            let mut edges: Vec<usize> = (0..blocks.len())
+                .filter(|&from| blocks[from].parent == one.block && leaves[from].contains(&at))
+                .collect();
+            if edges.is_empty() {
+                edges.push(pred);
+            }
+            for from in edges {
+                let phis = &mut emitter.function.blocks[at].phis;
+                match phis.iter_mut().find(|phi| phi.result == result) {
+                    Some(phi) if phi.incoming.iter().any(|(edge, _)| *edge == from) => {}
+                    Some(phi) => phi.incoming.push((from, incoming)),
+                    None => phis.push(Phi { result, incoming: vec![(from, incoming)] }),
+                }
             }
         }
     }

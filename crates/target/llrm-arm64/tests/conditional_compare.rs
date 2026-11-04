@@ -18,7 +18,8 @@ fn body(name: &str) -> String {
 fn an_or_of_compares_in_a_select_is_a_ccmp_chain() {
     let text = body("eq_or");
     assert!(text.contains("ccmp w0, w9, #4, ne"), "{text}");
-    assert!(!text.contains("csinc"), "no cset: {text}");
+    // The pin's `cinc w0, w8, eq` is this `csinc w0, w8, w8, ne`.
+    assert!(!text.contains("cset") && !text.contains("orr"), "no cset: {text}");
 }
 
 #[test]

@@ -63,6 +63,12 @@ jump_table              =    =    =    =    =    =    =    =
 # the Pentium's, Pentium Pro's, K5's and K6's 32 (Intel and AMD's manuals), the
 # Athlon's and Core 2's 64. The 386 has no cache on the chip.
 cache_line              -   =    =    =    =    =    =    = 
+# What a byte of code is worth in thousandths of a clock at speed: policy, user 2026-10-31, 1 clk = 2 B, -O2 only
+# (-Os counts bytes alone). The compiler's Tuning and the judge's rate both read this row.
+speed_milliclocks_per_byte 500 500  500  500  500  500  500  500
+# Clocks to fill one such line (a burst): the instruction cache's cost of a code byte once per run; 486 and Pentium state it
+# (their CPU files), later CPUs do not.
+line_fill_clocks       -   =    =    -    -    -    -    - 
 pairing                 =    =    =    =    =    =    =    =
 
 [clocks]

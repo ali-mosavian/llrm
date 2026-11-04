@@ -523,15 +523,7 @@ const OURS_ONLY: &[(&str, &str)] = &[
     ),
     ("772: loopsimplify@772 + lcssa@772", "as 764"),
     (
-        "669: cvp@669",
-        "-O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot)",
-    ),
-    (
         "787: inferspace@787",
-        "-O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot)",
-    ),
-    (
-        "810: cvp@810",
         "-O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot)",
     ),
     (

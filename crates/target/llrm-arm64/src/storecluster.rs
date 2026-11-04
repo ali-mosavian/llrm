@@ -58,7 +58,7 @@ fn cluster(mut ops: OpList) -> OpList {
                             || touch(between).is_some_and(|other| commutes(&touch_of(&first), &other)))
                 }
                 Op::Copy { .. } | Op::Imm { .. } | Op::FrameAddress { .. } => true,
-                Op::Call { .. } | Op::Return { .. } => false,
+                Op::Call { .. } | Op::Return { .. } | Op::JumpTable { .. } => false,
             };
             if !passable || defs.contains(&base) || defs.contains(&source) {
                 break;

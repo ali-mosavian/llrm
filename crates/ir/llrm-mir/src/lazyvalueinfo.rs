@@ -83,7 +83,7 @@ use crate::facts::Fact;
 use crate::hash::{HashMap, HashSet};
 use crate::knownbits::KnownBits;
 use crate::module::{
-    BlockId, Function, GlobalKind, GlobalValue, InstId, MetadataNode, MetadataOperand, Operand, Use, ValueDef,
+    BlockId, Function, GlobalValue, InstId, MetadataNode, MetadataOperand, Operand, Use, ValueDef,
 };
 use crate::opcode::{Attribute, BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use crate::types::{Type, TypeId};
@@ -116,6 +116,9 @@ pub struct Env<'a> {
     pub function: &'a Function,
     pub layout: &'a DataLayout,
     pub assumptions: &'a AssumptionCache,
+    /// Whether the module declares `llvm.experimental.guard`, where the caller
+    /// holds the answer for the module; else `LazyValueInfoImpl::new` looks.
+    pub guard_declared: Option<bool>,
 }
 
 impl<'a> Env<'a> {
@@ -127,7 +130,16 @@ impl<'a> Env<'a> {
         layout: &'a DataLayout,
         assumptions: &'a AssumptionCache,
     ) -> Self {
-        Self { context, globals, metadata, function, layout, assumptions }
+        Self { context, globals, metadata, function, layout, assumptions, guard_declared: None }
+    }
+
+    /// `self`, told whether the module declares `llvm.experimental.guard`.
+    pub fn with_guard_declared(
+        mut self,
+        declared: bool,
+    ) -> Self {
+        self.guard_declared = Some(declared);
+        self
     }
 
     /// A `SimplifyQuery(DL)`: no assumptions, no dominator tree.
@@ -739,10 +751,7 @@ fn get_argument_aliasing_to_returned_pointer(
 impl LazyValueInfoImpl {
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LazyValueInfo.cpp#L495>
     pub fn new(env: &Env) -> Self {
-        let guard_decl = env
-            .globals
-            .iter()
-            .any(|g| matches!(g.kind, GlobalKind::Function(_)) && g.name.as_deref() == Some("llvm.experimental.guard"));
+        let guard_decl = env.guard_declared.unwrap_or_else(|| crate::valuetracking::guard_declared(env.globals));
         Self {
             log: crate::passes::check_captures().then(Vec::new),
             the_cache: LazyValueInfoCache::default(),
@@ -2279,7 +2288,11 @@ impl LazyValueInfoImpl {
             // values from different cycle iterations (PR60629).
             let single_use = curr_inst.result.and_then(|r| function.users(r).only().copied());
             let Some(next_use) = single_use else { break };
-            if !is_safe_to_speculatively_execute_with_variable_replaced(env, curr_i, false) {
+            if !is_safe_to_speculatively_execute_with_variable_replaced(
+                &env.query(),
+                env.function.instruction(curr_i),
+                false,
+            ) {
                 break;
             }
             curr_u = next_use;
@@ -2535,13 +2548,11 @@ fn zero_value(
 /// IgnoreUBImplyingAttrs)`.
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L7575>
-fn is_safe_to_speculatively_execute_with_variable_replaced(
-    env: &Env,
-    inst: InstId,
+pub fn is_safe_to_speculatively_execute_with_variable_replaced(
+    q: &Query,
+    instruction: &crate::module::Instruction,
     ignore_ub_implying_attrs: bool,
 ) -> bool {
-    let instruction = env.function.instruction(inst);
-    let q = env.query();
     match &instruction.opcode {
         Opcode::Binary(BinaryOp::UDiv | BinaryOp::URem) => {
             // x / y is undefined if y == 0.
@@ -2570,7 +2581,7 @@ fn is_safe_to_speculatively_execute_with_variable_replaced(
         // !UseVariableInfo
         Opcode::Load { .. } => false,
         Opcode::Call(_) => {
-            let Some(callee) = pattern::called_function(&q, instruction) else { return false };
+            let Some(callee) = pattern::called_function(q, instruction) else { return false };
             // The called function could have undefined behavior or
             // side-effects, even if marked readnone nounwind.
             if !callee.attrs.iter().any(|a| matches!(a, Attribute::Flag(name) if name == "speculatable")) {
@@ -2579,7 +2590,7 @@ fn is_safe_to_speculatively_execute_with_variable_replaced(
             // Since the operands may be changed after hoisting, undefined
             // behavior may be triggered by some UB-implying
             // attributes.
-            ignore_ub_implying_attrs || !has_ub_implying_attrs(env, instruction)
+            ignore_ub_implying_attrs || !has_ub_implying_attrs(q, instruction)
         }
         Opcode::Alloca { .. }
         | Opcode::Invoke(_)
@@ -2599,10 +2610,9 @@ fn is_safe_to_speculatively_execute_with_variable_replaced(
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Instruction.cpp#L595>
 fn has_ub_implying_attrs(
-    env: &Env,
+    q: &Query,
     instruction: &crate::module::Instruction,
 ) -> bool {
-    let q = env.query();
     let Some(info) = pattern::call_info(instruction) else { return false };
     let named = |attrs: &[Attribute]| {
         attrs
@@ -2615,7 +2625,7 @@ fn has_ub_implying_attrs(
                 },
             )
     };
-    let callee = pattern::called_function(&q, instruction);
+    let callee = pattern::called_function(q, instruction);
     for arg_no in 0..call_arguments(instruction).len() {
         // CallBase::isPassingUndefUB
         if info.argument_attrs.get(arg_no).is_some_and(|a| named(a))

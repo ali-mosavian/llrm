@@ -877,10 +877,21 @@ pub fn lower_fp_round(
 }
 
 /// `isFPImmLegal`: a constant an `fmov` immediate holds, positive zero, or one
-/// that at most two `mov`s make (the pin's limit when not optimizing for size).
+/// that at most two `mov`s make ([pin][pin]).
+///
+/// DEVIATE FP1: the pin's limit is one `mov` when optimizing for size, which
+/// sends a two-`mov` constant to the pool: `adrp; ldr` and 8 bytes of data
+/// for the 12 bytes of `mov; movk; fmov`. Measured on the QB float kernels at
+/// `-Os` that is `floats` +20 B, `recfloat` +8 B, `x_nbody_f` +4 B and
+/// `fpbench` -8 B, so the limit stays 2 until a cost counts the pool's bytes
+/// and its sharing. Exit: that cost model, dated 2026-11-20.
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L14019-L14058
 pub fn fp_imm_legal(
     vt: llrm_codegen::backend::selectiondag::mvt::MVT,
     bits: u128,
+    _opt_for_size: bool,
 ) -> bool {
     use llrm_codegen::backend::selectiondag::mvt::MVT;
     let (value, width) = match vt {
@@ -908,6 +919,23 @@ pub fn lower_atomic_load_and(
     Some(dag.get_atomic_rmw(ISD::AtomicLoadClr, chain, ptr, complement, info))
 }
 
+/// `LowerABS`: `x` or `0 - x` selected by the sign of `SUBS x, 0`.
+pub fn lower_abs(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    if vt != EVT::I32 && vt != EVT::I64 {
+        return None;
+    }
+    let x = dag.operand(node, 0);
+    let zero = dag.get_constant(0, vt);
+    let negated = dag.get_node(ISD::Sub, vt, &[zero, x]);
+    let compare = dag.get_node_multi(ISD::Target(a64::SUBS), &[vt, EVT::I32], &[x, zero]);
+    let plus = cond_const(dag, cc::PL);
+    Some(dag.get_node(ISD::Target(a64::CSEL), vt, &[x, negated, plus, SDValue { node: compare.node, res: 1 }]))
+}
+
 /// `getAArch64XALUOOp` for the add and subtract forms: the value and flags of
 /// `ADDS`/`SUBS`, and the condition that says overflow. `None` for any other
 /// node, or a type that is not a register type.
@@ -916,20 +944,62 @@ fn xalu_flags(
     node: u32,
 ) -> Option<(SDValue, SDValue, u128)> {
     let op = SDValue { node, res: 0 };
-    let (opcode, code) = match dag.opcode(op) {
-        ISD::SAddO => (a64::ADDS, cc::VS),
-        ISD::UAddO => (a64::ADDS, cc::HS),
-        ISD::SSubO => (a64::SUBS, cc::VS),
-        ISD::USubO => (a64::SUBS, cc::LO),
-        _ => return None,
-    };
     let vt = dag.value_type(op);
     if vt != EVT::I32 && vt != EVT::I64 {
         return None;
     }
     let (lhs, rhs) = (dag.operand(op, 0), dag.operand(op, 1));
+    let (opcode, code) = match dag.opcode(op) {
+        ISD::SAddO => (a64::ADDS, cc::VS),
+        ISD::UAddO => (a64::ADDS, cc::HS),
+        ISD::SSubO => (a64::SUBS, cc::VS),
+        ISD::USubO => (a64::SUBS, cc::LO),
+        op @ (ISD::SMulO | ISD::UMulO) => return Some(multiply_flags(dag, op == ISD::SMulO, vt, lhs, rhs)),
+        _ => return None,
+    };
     let value = dag.get_node_multi(ISD::Target(opcode), &[vt, EVT::I32], &[lhs, rhs]);
     Some((SDValue { node: value.node, res: 0 }, SDValue { node: value.node, res: 1 }, code))
+}
+
+/// `getAArch64XALUOOp` for the multiplies: an `i32` product is made in 64
+/// bits and checked to fit (`cmp x, w, sxtw`; `tst x, #0xffffffff00000000`);
+/// an `i64` one is checked against the high half (`smulh`/`umulh`).
+fn multiply_flags(
+    dag: &mut SelectionDAG,
+    signed: bool,
+    vt: EVT,
+    lhs: SDValue,
+    rhs: SDValue,
+) -> (SDValue, SDValue, u128) {
+    let flags_of = |node: SDValue| SDValue { node: node.node, res: 1 };
+    if vt == EVT::I32 {
+        let extend = if signed { ISD::SignExtend } else { ISD::ZeroExtend };
+        let (lhs, rhs) = (dag.get_node(extend, EVT::I64, &[lhs]), dag.get_node(extend, EVT::I64, &[rhs]));
+        let product = dag.get_node(ISD::Mul, EVT::I64, &[lhs, rhs]);
+        let value = dag.get_node(ISD::Truncate, EVT::I32, &[product]);
+        let flags = if signed {
+            let widened = dag.get_node(ISD::SignExtend, EVT::I64, &[value]);
+            flags_of(dag.get_node_multi(ISD::Target(a64::SUBS), &[EVT::I64, EVT::I32], &[product, widened]))
+        } else {
+            let upper = dag.get_constant(0xFFFF_FFFF_0000_0000, EVT::I64);
+            flags_of(dag.get_node_multi(ISD::Target(a64::ANDS), &[EVT::I64, EVT::I32], &[product, upper]))
+        };
+        return (value, flags, cc::NE);
+    }
+    let value = dag.get_node(ISD::Mul, EVT::I64, &[lhs, rhs]);
+    let flags = if signed {
+        let upper = dag.get_node(ISD::MulHS, EVT::I64, &[lhs, rhs]);
+        let sixty_three = dag.get_constant(63, EVT::I64);
+        // The shifted half is the second operand, so the shift folds into
+        // the compare.
+        let lower = dag.get_node(ISD::Sra, EVT::I64, &[value, sixty_three]);
+        flags_of(dag.get_node_multi(ISD::Target(a64::SUBS), &[EVT::I64, EVT::I32], &[upper, lower]))
+    } else {
+        let upper = dag.get_node(ISD::MulHU, EVT::I64, &[lhs, rhs]);
+        let zero = dag.get_constant(0, EVT::I64);
+        flags_of(dag.get_node_multi(ISD::Target(a64::SUBS), &[EVT::I64, EVT::I32], &[zero, upper]))
+    };
+    (value, flags, cc::NE)
 }
 
 /// `LowerXALUO` for the add and subtract forms: the value of `ADDS`/`SUBS` and
@@ -954,7 +1024,7 @@ fn is_xalu_overflow(
     value.res == 1
         && matches!(
             dag.opcode(op),
-            ISD::SAddO | ISD::UAddO | ISD::SSubO | ISD::USubO
+            ISD::SAddO | ISD::UAddO | ISD::SSubO | ISD::USubO | ISD::SMulO | ISD::UMulO
         )
         && matches!(dag.value_type(op), EVT::I32 | EVT::I64)
 }
@@ -967,6 +1037,20 @@ pub fn lower_jump_table(
     let NodeData::JumpTable(index) = dag.node(node).data else { return None };
     let vt = dag.value_type(node);
     let target = dag.get_target_jump_table(vt, index);
+    let page = dag.get_node(ISD::Target(a64::ADRP), vt, &[target]);
+    Some(dag.get_node(ISD::Target(a64::ADDlow), vt, &[page, target]))
+}
+
+/// `LowerConstantPool` for the small code model: `getAddr` makes the page and
+/// the offset within it of the entry.
+pub fn lower_constant_pool(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let NodeData::PoolIndex(index, 0) = dag.node(node).data else { return None };
+    let vt = dag.value_type(node);
+    let (bits, entry) = dag.constant_pool[index as usize];
+    let target = dag.get_constant_pool(vt, bits, entry, true);
     let page = dag.get_node(ISD::Target(a64::ADRP), vt, &[target]);
     Some(dag.get_node(ISD::Target(a64::ADDlow), vt, &[page, target]))
 }

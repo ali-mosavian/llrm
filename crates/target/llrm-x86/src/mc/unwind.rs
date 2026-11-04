@@ -167,6 +167,7 @@ mod tests {
                 definition: Definition::Defined { section: 0, offset: 0 },
                 size: 0x36,
                 group: None,
+                visibility: Default::default(),
             }],
             omf_groups: Vec::new(),
             omf_comdat: Vec::new(),
