@@ -1285,6 +1285,7 @@ fn two_modules_compiled_in_turn_do_not_share_the_cache() {
     assert!(first.contains("#1000") && second.contains("#2000"), "{first}\n{second}");
     let again = text(&one, "f0", 0, &Request::new(Level::O2)).expect("compiles");
     assert_eq!(first, again);
+}
 
 /// lz4's match copy kept the source as `dst + offset` (a base add, `pop bc;
 /// push bc; add hl,bc`) and its pointers in ix slots: 102905 clocks at -O2,
