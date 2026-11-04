@@ -179,6 +179,9 @@ impl Coalescer {
                 should_join: Box::new(|_| true),
                 freq: Vec::new(),
                 regs: None,
+                kind_of: None,
+                kinds: Default::default(),
+                check_kinds: false,
             },
             depth,
         ))
