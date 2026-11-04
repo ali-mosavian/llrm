@@ -3023,9 +3023,20 @@ fn emit_with<const STACK: bool>(
                 (Kind::Op("LEA"), [_, _, _, Operand::Imm(n)]) => {
                     let n = i64::from(*n as u16);
                     let n = if n >= old { n + spilled } else { n };
-                    writeln!(out, "  clc\n  lda rc0\n  adc #{}", n & 0xFF).unwrap();
-                    move_byte(&mut out, regs[0], reg::A, false, None);
-                    writeln!(out, "  lda rc1\n  adc #{}", (n >> 8) & 0xFF).unwrap();
+                    // a low byte of 0 adds nothing and carries nothing
+                    if n & 0xFF == 0 {
+                        writeln!(out, "  lda rc0").unwrap();
+                        move_byte(&mut out, regs[0], reg::A, false, None);
+                        if n >> 8 == 0 {
+                            writeln!(out, "  lda rc1").unwrap();
+                        } else {
+                            writeln!(out, "  clc\n  lda rc1\n  adc #{}", (n >> 8) & 0xFF).unwrap();
+                        }
+                    } else {
+                        writeln!(out, "  clc\n  lda rc0\n  adc #{}", n & 0xFF).unwrap();
+                        move_byte(&mut out, regs[0], reg::A, false, None);
+                        writeln!(out, "  lda rc1\n  adc #{}", (n >> 8) & 0xFF).unwrap();
+                    }
                     move_byte(&mut out, regs[1], reg::A, false, None);
                 }
                 // against zero, a load or an ALU result has already set the
