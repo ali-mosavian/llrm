@@ -11,7 +11,7 @@ A .c is also built by GCC (`gcc-13`, its own front end and optimizer, so the IR 
 A .c also goes through `llrm-cc` (target arm64-macos: the pin's front end, then the backend), a third column: the driver end to end.
 Env: LLRM_PIN_ANY=1 (dry run with a non-pin clang), LLRM_PIN_BUILD (dir with bin/clang, bin/llc), LLRM_BIN (llrm binaries).
 """
-import argparse, hashlib, math, os, re, shutil, subprocess, sys, tempfile, time
+import argparse, hashlib, math, os, re, shutil, struct, subprocess, sys, tempfile, time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -25,17 +25,43 @@ def sh(cmd, **kw):
     return subprocess.run(cmd, capture_output=True, text=True, **kw)
 
 
-FRONT += ["-isysroot", sh(["xcrun", "--show-sdk-path"]).stdout.strip()]
-SDK = FRONT[-1]
+def sdk_path():
+    """LLRM_SYSROOT, else the macOS SDK `xcrun` names; empty where there is none (Linux)."""
+    if os.environ.get("LLRM_SYSROOT"):
+        return os.environ["LLRM_SYSROOT"]
+    if shutil.which("xcrun"):
+        return sh(["xcrun", "--show-sdk-path"]).stdout.strip()
+    return ""
+
+
+SDK = sdk_path()
+if SDK:
+    FRONT += ["-isysroot", SDK]
 FLOOR = 50e-9  # seconds per call below which a row is not counted
 
 
 def text_size(obj):
-    """__TEXT,__text size in bytes, from `size -m` (not the whole-file size)."""
-    out = sh(["size", "-m", str(obj)]).stdout
-    # Every code section: GCC puts `main` in __text_startup.
-    sizes = re.findall(r"Section \(__TEXT, (__text[a-z_]*)\):\s+(\d+)", out)
-    return sum(int(n) for _, n in sizes) if sizes else None
+    """__TEXT,__text size in bytes (not the whole-file size), read from the Mach-O itself so it works off macOS.
+
+    Every code section counts: GCC puts `main` in __text_startup."""
+    data = Path(obj).read_bytes()
+    if len(data) < 32 or struct.unpack_from("<I", data, 0)[0] != 0xFEEDFACF:  # MH_MAGIC_64
+        return None
+    ncmds = struct.unpack_from("<I", data, 16)[0]
+    at, total, found = 32, 0, False
+    for _ in range(ncmds):
+        cmd, size = struct.unpack_from("<II", data, at)
+        if cmd == 0x19:  # LC_SEGMENT_64
+            nsects = struct.unpack_from("<I", data, at + 64)[0]
+            for k in range(nsects):
+                base = at + 72 + 80 * k
+                sect = data[base : base + 16].split(b"\0")[0].decode()
+                seg = data[base + 16 : base + 32].split(b"\0")[0].decode()
+                if seg == "__TEXT" and sect.startswith("__text"):
+                    total += struct.unpack_from("<Q", data, base + 40)[0]
+                    found = True
+        at += size
+    return total if found else None
 
 
 def insn_count(obj):
@@ -221,4 +247,5 @@ def main():
     print(f"rows where ours is bigger than clang (bytes): {worse}; FAIL rows count against the corpus")
 
 
-main()
+if __name__ == "__main__":
+    main()

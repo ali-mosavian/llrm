@@ -90,7 +90,7 @@ def test_the_debug_leg_compiles_with_each_debug_format_of_the_target(tmp_path):
     (tmp_path / "x.c").write_text("")
     log = tmp_path / "log"
     stub = tmp_path / "cc"
-    stub.write_text(f'#!/bin/sh\necho "$*" >> {log}\nfor a in "$@"; do case $a in -o) next=1;; *) [ -n "$next" ] && {{ printf obj > "$a"; next=; }};; esac; done\n')
+    stub.write_text(f'#!/bin/sh\necho "$*" >> {log}\nfor a in "$@"; do case $a in -o) next=1;; *) [ -n "$next" ] && {{ printf obj > "$a"; next=; }};; esac; done\nexit 0\n')
     stub.chmod(0o755)
     args = type("A", (), {"old": str(stub), "new": str(stub), "targets": "m16", "levels": "O2", "jobs": 1, "debug": True})()
     assert objsweep.sweep(args, [tmp_path / "x.c"], "old") == 0
@@ -121,3 +121,85 @@ def test_an_llrm_cc_is_asked_for_an_object_and_given_its_target(tmp_path, monkey
     seen = {target: objsweep.compile_one(str(stub), tmp_path / "x.c", target, "O2", tmp_path / "x.o")[0].decode() for target in ("m64", "m32", "m16")}
     assert all(" -c " in text.split("|")[0] + " " for text in seen.values()), seen
     assert [text.split("|")[1:] for text in seen.values()] == [["", ""], ["x86_32-wat", ""], ["x86_16-wat", "m16clang"]], seen
+
+
+def test_a_sweep_where_no_cell_compiles_is_no_evidence_not_a_pass(tmp_path, capsys):
+    """An m64 -g sweep printed "0 objects changed" with every cell failed on both sides, and was read as identity."""
+    (tmp_path / "x.c").write_text("")
+    stub = tmp_path / "cc"
+    stub.write_text("#!/bin/sh\necho 'error: 20 errors generated.' >&2\nexit 1\n")
+    stub.chmod(0o755)
+    args = type("A", (), {"old": str(stub), "new": str(stub), "targets": "m16", "levels": "O2", "jobs": 1, "debug": True})()
+    assert objsweep.sweep(args, [tmp_path / "x.c"], "old") == 2
+    assert "NO EVIDENCE" in capsys.readouterr().out
+
+
+def test_the_arm64_debug_leg_passes_g_so_a_changed_debug_byte_is_a_changed_object(tmp_path):
+    """`--arm64 --debug` never passed -g: the .debug_* sections were not compared and a changed DW_FORM byte read 0 changed."""
+    (tmp_path / "x.ll").write_text("; DICompileUnit\n")
+
+    def llc(directory, byte):
+        (tmp_path / directory).mkdir()
+        stub = tmp_path / directory / "llrm-arm64-llc"
+        stub.write_text(f'#!/bin/sh\ng=0\nfor a in "$@"; do [ "$a" = -g ] && g=1; done\nfor a in "$@"; do case $a in -o) next=1;; *) [ -n "$next" ] && {{ [ $g = 1 ] && printf {byte} > "$a" || printf obj > "$a"; next=; }};; esac; done\nexit 0\n')
+        stub.chmod(0o755)
+        return str(tmp_path / directory / "llrm-cc")
+
+    args = type("A", (), {"old": llc("o", "A"), "new": llc("n", "B"), "jobs": 1, "debug": True})()
+    assert objsweep.sweep_arm64(args, [tmp_path / "x.ll"]) == 1
+
+
+def test_an_arm64_debug_leg_over_sources_without_debug_info_is_no_evidence(tmp_path, capsys):
+    """A -g leg over .ll files with no !DI nodes compares objects with no debug sections: identical, and proves nothing."""
+    (tmp_path / "x.ll").write_text("define void @f() { ret void }\n")
+    for directory in ("o", "n"):
+        (tmp_path / directory).mkdir()
+        stub = tmp_path / directory / "llrm-arm64-llc"
+        stub.write_text('#!/bin/sh\nfor a in "$@"; do case $a in -o) next=1;; *) [ -n "$next" ] && { printf obj > "$a"; next=; };; esac; done\nexit 0\n')
+        stub.chmod(0o755)
+    args = type("A", (), {"old": str(tmp_path / "o" / "llrm-cc"), "new": str(tmp_path / "n" / "llrm-cc"), "jobs": 1, "debug": True})()
+    assert objsweep.sweep_arm64(args, [tmp_path / "x.ll"]) == 2
+    assert "NO EVIDENCE" in capsys.readouterr().out
+
+
+def test_an_arm64_sweep_where_every_compile_is_refused_is_an_error_and_counts_what_compared(tmp_path, capsys):
+    """Every .ll refused on both sides printed '0 changed; 0 identical' and returned 0: a sweep that compared nothing read as a pass."""
+    (tmp_path / "x.ll").write_text("")
+    for directory in ("o", "n"):
+        (tmp_path / directory).mkdir()
+        stub = tmp_path / directory / "llrm-arm64-llc"
+        stub.write_text("#!/bin/sh\necho refused >&2\nexit 1\n")
+        stub.chmod(0o755)
+    args = type("A", (), {"old": str(tmp_path / "o" / "llrm-cc"), "new": str(tmp_path / "n" / "llrm-cc"), "jobs": 1})()
+    assert objsweep.sweep_arm64(args, [tmp_path / "x.ll"]) == 2
+    assert "0 compared, 1 refused of 1" in capsys.readouterr().out
+
+
+def test_a_compile_runs_under_a_16_gb_address_space_limit(tmp_path):
+    """One unbounded llc grew to 217 GB and took the box: every compile of a sweep is bounded by `ulimit -v`."""
+    stub = tmp_path / "cc"
+    stub.write_text('#!/bin/sh\nfor a in "$@"; do case $a in -o) next=1;; *) [ -n "$next" ] && { ulimit -v > "$a"; next=; };; esac; done\nexit 0\n')
+    stub.chmod(0o755)
+    out = tmp_path / "x.o"
+    data, _ = objsweep.run_compiler([str(stub), "-o", str(out)], out, None)
+    assert data is not None and data.strip().isdigit() and int(data) <= 16 * 1024 * 1024, data
+
+
+def test_the_header_names_the_exact_binaries_by_md5(tmp_path):
+    """A z80 llc found by name was a build older than the fix it was blamed for; the header gave no way to tell."""
+    for name, body in (("llrm-cc", b"cc"), ("llrm-z80-llc", b"z80"), ("llrm-llc", b"x86"), ("notes.txt", b"n")):
+        (tmp_path / name).write_bytes(body)
+    line = objsweep.binaries(str(tmp_path / "llrm-cc"))
+    assert line.count(", ") == 2 and "llrm-z80-llc " + objsweep.md5(str(tmp_path / "llrm-z80-llc"))[:12] in line and "notes" not in line
+
+
+def test_a_sweep_leaves_no_scratch_directory_behind(tmp_path, monkeypatch):
+    """Every sweep left /tmp/objsweep-XXXX with its objects: 2022 of them filled the inodes the landing runner needed."""
+    made = []
+    real = objsweep.tempfile.mkdtemp
+    monkeypatch.setattr(objsweep.tempfile, "mkdtemp", lambda *a, **k: made.append(real(*a, **k)) or made[-1])
+    (tmp_path / "x.c").write_text("")
+    stub = _stub(tmp_path, "same", "R_386_PC32")
+    args = type("A", (), {"old": stub, "new": _stub(tmp_path, "other", "R_386_PC32"), "targets": "m32", "levels": "O2", "jobs": 1})()
+    objsweep.sweep(args, [tmp_path / "x.c"], "old")
+    assert made and not any(Path(one).exists() for one in made), made

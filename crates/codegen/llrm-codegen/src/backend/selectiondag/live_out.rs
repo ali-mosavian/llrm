@@ -3,8 +3,14 @@
 //! after a block's DAG is legalized, what it knows of each integer it copies
 //! to a virtual register, for the blocks that read the register.
 //!
-//! DEVIATE: no `ComputePHILiveOutRegInfo`; a phi's register carries nothing.
-//! Exit: with the phi translation.
+//! [`compute_phi_live_out_reg_info`] is `ComputePHILiveOutRegInfo`: a phi's
+//! register knows what all its incoming values know. DEVIATE: x86 and arm64
+//! do not call it, so their phi registers carry nothing; the caller walks the
+//! blocks in layout order where the pin walks them in reverse post-order.
+//! Exit: x86 and arm64 judged, no later than 2026-11-20.
+
+use llrm_mir::context::ConstantKind;
+use llrm_mir::module::{Function, InstId, Module, Operand};
 
 use super::dag::{NodeData, SDValue, SelectionDAG};
 use super::function_lowering::{FIRST_VIRTUAL, FunctionLoweringInfo, LiveOut};
@@ -105,5 +111,57 @@ fn replace_uses_except(
             .map(|op| if op == from { to } else { op })
             .collect();
         dag.update_node_operands(user.node, &ops);
+    }
+}
+
+/// `FunctionLoweringInfo::ComputePHILiveOutRegInfo`
+/// ([L432](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/FunctionLoweringInfo.cpp#L432)):
+/// what a phi's register knows is what its incoming values know.
+/// `register_bits` is the width of the one register an integer of that many
+/// bits is held in, none where it takes several. A phi with an incoming value
+/// that is no integer constant and whose register knows nothing is left
+/// unknown, as is one with an incoming value of another kind (`undef`, a
+/// constant expression).
+pub fn compute_phi_live_out_reg_info(
+    module: &Module,
+    function: &Function,
+    phi: InstId,
+    register_bits: &dyn Fn(u32) -> Option<u32>,
+    info: &mut FunctionLoweringInfo,
+) {
+    let instruction = function.instruction(phi);
+    let Some(result) = instruction.result else { return };
+    let Some(&reg) = info.value_regs.get(&result) else { return };
+    let Some(width) = module.context.types.int_bits(instruction.ty).and_then(register_bits) else { return };
+    let all = super::fold::mask(width);
+    let mut known: Option<LiveOut> = None;
+    for pair in instruction.operands.chunks(2) {
+        let incoming = match pair[0] {
+            Operand::Constant(constant) => match module.context.get(constant).kind {
+                ConstantKind::Int(value) => {
+                    let value = value & all;
+                    let sign = value >> (width - 1) & 1 == 1;
+                    let same = (0..width).rev().take_while(|&bit| (value >> bit & 1 == 1) == sign).count() as u32;
+                    LiveOut { sign_bits: same, zero: !value & all, one: value }
+                }
+                _ => return,
+            },
+            Operand::Value(value) => {
+                let Some(source) = info.value_regs.get(&value).and_then(|reg| info.live_out.get(reg)) else { return };
+                *source
+            }
+            Operand::Block(_) => return,
+        };
+        known = Some(match known {
+            None => incoming,
+            Some(so_far) => LiveOut {
+                sign_bits: so_far.sign_bits.min(incoming.sign_bits),
+                zero: so_far.zero & incoming.zero,
+                one: so_far.one & incoming.one,
+            },
+        });
+    }
+    if let Some(known) = known {
+        info.add_live_out(reg, known);
     }
 }

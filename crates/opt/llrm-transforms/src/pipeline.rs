@@ -214,6 +214,12 @@ pub struct Options {
     /// `llc`, whose own CodeGenPrepare runs inside it, take the module
     /// before this one (`-fllrm-cgpaddr`).
     pub cgpaddr: bool,
+    /// `extload`, DAGCombiner's `ExtendUsesToFormExtLoad` and
+    /// `ExtendSetCCUses`: the compares of a loaded value compare its
+    /// extension. The pin forms the extending load only where the target
+    /// has it (`isLoadExtLegal`); off for a target that has not, where the
+    /// wider compare costs more than the extension saved.
+    pub extload: bool,
     /// `TypePromotion`, which the pin runs before CodeGenPrepare where the
     /// target asks (`-fllrm-typepromotion`).
     pub typepromotion: bool,
@@ -265,6 +271,10 @@ pub struct Options {
     /// complete copy of a loop may grow the code is `limits.grows`, which
     /// gcc lets only -O3 do.)
     pub for_size: bool,
+    /// The target's price of a code byte at speed counts
+    /// (`Tti::speed_milliclocks_per_byte`): -O2 and -O3. -O1 and -Os gate
+    /// every metric by itself.
+    pub speed_rate: bool,
     /// `Function::hasMinSize`: -Oz. The only level where `LoopRotate` copies no
     /// header
     /// ([LoopRotation.cpp#L80](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/LoopRotation.cpp#L80)).
@@ -306,6 +316,7 @@ impl Default for Options {
             promote: true,
             strength: true,
             cgpaddr: true,
+            extload: true,
             typepromotion: true,
             lsr: true,
             unroll: true,
@@ -322,6 +333,7 @@ impl Default for Options {
             licm: !llrm_support::env_flag!("LLRM_NO_LICM"),
             copy_headers: true,
             for_size: false,
+            speed_rate: true,
             has_min_size: false,
             expensive: true,
             switch_conversion: true,
@@ -360,6 +372,7 @@ impl Options {
             unswitch: false,
             expensive: false,
             switch_conversion: false,
+            speed_rate: false,
             ..Self::default()
         }
     }
@@ -436,6 +449,11 @@ impl Options {
         self.for_size
     }
 
+    /// Whether the target's byte price at speed counts: -O2 and -O3.
+    pub fn prices_bytes(&self) -> bool {
+        self.speed_rate && !self.for_size
+    }
+
     /// Whether the code generator may grow code for speed: -O3 and -Omax
     /// (`CodeGenOptLevel::Aggressive`).
     pub fn aggressive_codegen(&self) -> bool {
@@ -474,6 +492,7 @@ impl Options {
             "lsr" | "canonfreeze" | "maskscale" => self.strength && self.lsr,
             "indvars" | "window" | "gepoffset" => self.strength,
             "cgpaddr" => self.strength && self.cgpaddr,
+            "extload" => self.extload,
             "typepromotion" => self.strength && self.typepromotion,
             "unroll" => self.unroll,
             "peel" => self.peel,
@@ -811,7 +830,12 @@ pub(crate) fn llvm_order(
                 Box::new(loopunrollandjam::LoopUnrollAndJam {
                     opt_level: if applied.options.limits.target_percent >= 200 { 3 } else { 2 },
                     opt_size: size,
-                    options: loopunrollandjam::JamOptions { on: true, ..Default::default() },
+                    options: loopunrollandjam::JamOptions {
+                        on: true,
+                        clean: true,
+                        pre: applied.options.pre,
+                        ..Default::default()
+                    },
                 }),
             ),
             // LoopUnrollPass (l.1476) with the full unroll the target allows
@@ -859,7 +883,7 @@ pub(crate) fn llvm_order(
                 // the option is read by `simplifySwitch`, untranslated.
                 simplify_cfg("decide@675"),
                 combine("combine@677"),
-                slot("aggressive-instcombine@678", Box::new(crate::trunc_inst_combine::TruncInstCombine)),
+                slot("aggressive-instcombine@678", Box::new(crate::aggressive_instcombine::AggressiveInstCombine)),
                 slot("tailrec@688", Box::new(tailcallelim::TailCallElim)),
                 // SimplifyCFGOptions().convertSwitchRangeToICmp(true), L691:
                 // the option is read by `simplifySwitch`, untranslated.
@@ -917,6 +941,7 @@ pub(crate) fn llvm_order(
                     "loopidiom@737",
                     Box::new(crate::loopidiom::pass::LoopIdiom {
                         for_size: size,
+                        speed_rate: applied.options.prices_bytes(),
                         ..crate::loopidiom::pass::LoopIdiom::with_routines(applied.options.library.clone())
                     }),
                 ),
@@ -1051,11 +1076,36 @@ pub(crate) fn function_stages(applied: &Applied) -> Vec<Fixed> {
     ]
 }
 
+/// The first value of a defined function that is a vector, where the target
+/// has no vector MIR: "a <4 x i32> value", as isel refuses a type it has no
+/// registers for. The mid-end assumes scalars (`combine_shared::width`).
+pub fn refuse_vectors(program: &Program) -> Result<(), String> {
+    if program.target.has_vector_mir() {
+        return Ok(());
+    }
+    for module in &program.modules {
+        for (_, global, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
+            for at in 0..function.value_count() {
+                let ty = function.value(llrm_mir::module::ValueId(at as u32)).ty;
+                if matches!(
+                    module.context.types.get(ty),
+                    llrm_mir::types::Type::Vector { .. }
+                ) {
+                    let name = global.name.as_deref().unwrap_or("?");
+                    return Err(format!("@{name}: a {} value", module.context.types.display(ty)));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `applied`, with what the pipeline did to each function.
 pub fn recorded(
     program: &mut Program,
     applied: &Applied,
 ) -> Result<Vec<Stage>, String> {
+    refuse_vectors(program)?;
     timed();
     let mut manager = PassManager::default();
     manager.verify_each = llrm_support::debug::verifying();
@@ -1100,6 +1150,7 @@ pub fn recorded(
             let mut simplify = Fixed::linear(&walked("walk"), Phase::Simplify);
             manager.add_program(crate::walk::Walk {
                 inline: applied.options.inline,
+                speed_rate: applied.options.prices_bytes(),
                 simplify: Box::new(move |module, analyses, id, stage| {
                     TRIGGER.with(|trigger| *trigger.borrow_mut() = stage.to_owned());
                     rerun(module, analyses, id, &mut simplify, true)
@@ -1119,6 +1170,13 @@ pub fn recorded(
     let again_applied =
         Applied { dump: applied.dump.as_ref().map(|one| one.join("interprocedural")), ..applied.clone() };
     let mut again = Fixed::linear(&again_applied, Phase::Simplify);
+    // The pin follows IPSCCP, ArgumentPromotion and DeadArgumentElimination
+    // with `GlobalCleanup` (PromotePass, InstCombine, SimplifyCFG,
+    // PassBuilderPipelines.cpp#L1241) and runs the function simplification
+    // pipeline once per body, in the CGSCC walk: these stages leave a body to
+    // the walk's run, not a second full one (GVN ran five times on `main` of
+    // memory_expansion, the pin's twice).
+    let mut cleaned = Fixed::linear(&again_applied, Phase::Cleanup);
     // The copies of a tree recursion in itself and then its tail-call
     // elimination, after the clones ipa-cp made (D10).
     let late = Some({
@@ -1130,8 +1188,10 @@ pub fn recorded(
                 TRIGGER.with(|trigger| trigger.borrow_mut().clear());
             }),
             for_size: applied.options.prefers_size(),
+            speed_rate: applied.options.prices_bytes(),
             inlining: applied.options.inline.limit != 0,
             flag: applied.options.inline.recursive,
+            o3: applied.options.inline.limit >= 250,
         }
     });
     manager.add_program(Interprocedural {
@@ -1141,8 +1201,14 @@ pub fn recorded(
             let done =
                 // The stage that only retargets loads and stores of globals
                 // keeps GlobalsAA past its bodies, as the walk's runs do.
-                rerun(module, analyses, id, &mut again, stage == "globalsra.")
-                    .unwrap_or_else(|error| panic!("pipeline: {error}"));
+                rerun(
+                    module,
+                    analyses,
+                    id,
+                    if matches!(stage, "promote." | "ipsccp." | "ipa-deadargs.") { &mut cleaned } else { &mut again },
+                    stage == "globalsra.",
+                )
+                .unwrap_or_else(|error| panic!("pipeline: {error}"));
             TRIGGER.with(|trigger| trigger.borrow_mut().clear());
             done
         }),
@@ -1337,7 +1403,9 @@ fn rerun(
 ) -> Result<(), String> {
     let layout = analyses.program().layout.clone();
     let outer = analyses.outer(module);
-    let mut declared = Declared::over(std::rc::Rc::clone(&outer.globals), module.metadata.len());
+    let mut declared = Declared::over(std::rc::Rc::clone(&outer.globals), module.metadata.len())
+        .with_assume_declared(outer.assume_declared())
+        .with_guard_declared(outer.guard_declared());
     if fixed.wants_sizes() {
         declared.count_referenced(module);
     }
@@ -1820,6 +1888,7 @@ impl Run {
         globals.push(GlobalValue {
             name: "pipeline.body".to_owned().into(),
             linkage: Linkage::Internal,
+            visibility: llrm_mir::Visibility::Default,
             unnamed_addr: UnnamedAddr::default(),
             address_space: 0,
             kind: GlobalKind::Function(Box::new(unit.function.clone())),
@@ -1828,11 +1897,13 @@ impl Run {
             context: unit.context.clone(),
             datalayout: None,
             globals,
+            aliases: Vec::new(),
             metadata: unit.metadata.to_vec(),
             named_metadata: Vec::new(),
             sections: Default::default(),
             special: Default::default(),
             global_metadata: Default::default(),
+            ..Module::default()
         };
         std::fs::create_dir_all(file.parent().expect("a file in a directory"))
             .and_then(|()| std::fs::write(file, llrm_mir::print::module(&module)))

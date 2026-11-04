@@ -319,7 +319,7 @@ impl Combiner<'_> {
     }
 
     /// `Builder.CreateIntCast(v, ty, /*isSigned=*/true)`.
-    fn int_cast(
+    pub(crate) fn int_cast(
         &mut self,
         at: InstId,
         v: Operand,

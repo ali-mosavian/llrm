@@ -20,6 +20,8 @@
 
 use std::collections::HashMap;
 
+use llrm_object::assembler::Cfi;
+
 use crate::frame::Lowered;
 use crate::layout::label_of;
 use crate::mc::inst::*;
@@ -116,11 +118,42 @@ fn update_of(
     (offset == 0 || offset == amount).then_some(amount)
 }
 
+/// Whether `inst` reads or writes `sp`: register 31 in a slot that means the
+/// stack pointer, not the zero register (`orr x9, xzr, x0` does not).
+fn touches_sp(inst: &Inst) -> bool {
+    let sp = |register: &Gpr| *register == Gpr::R31;
+    let based = |addr: &Addr| match addr {
+        Addr::Offset { base, .. }
+        | Addr::PageOffset { base, .. }
+        | Addr::Pre { base, .. }
+        | Addr::Post { base, .. }
+        | Addr::Register { base, .. } => sp(base),
+        Addr::Slot { .. } => false,
+    };
+    match inst {
+        Inst::AddSubImm { op, rd, rn, .. } | Inst::AddSubExtended { op, rd, rn, .. } => {
+            sp(rn) || (!op.set_flags && sp(rd))
+        }
+        Inst::AddPageOffset { rd, rn, .. } => sp(rd) || sp(rn),
+        Inst::LogicImm { rd, .. } => sp(rd),
+        Inst::Load { addr, .. }
+        | Inst::Store { addr, .. }
+        | Inst::LoadPair { addr, .. }
+        | Inst::StorePair { addr, .. } => based(addr),
+        Inst::Atomic { rn, .. } => sp(rn),
+        Inst::Prefetch { base, .. } => sp(base),
+        _ => false,
+    }
+}
+
 /// Whether `inst` reads or writes `register`.
 fn touches(
     inst: &Inst,
     register: Reg,
 ) -> bool {
+    if register == Reg::Gpr(Gpr::R31) {
+        return touches_sp(inst);
+    }
     let (defs, uses) = inst.defs_and_uses();
     defs.contains(&register) || uses.contains(&register)
 }
@@ -177,6 +210,8 @@ fn written_back(
 /// The blocks of a function, their instructions optionally deleted.
 struct Function<'a> {
     blocks: Vec<Vec<Option<Inst>>>,
+    /// The source place of each instruction, parallel to `blocks`.
+    locs: Vec<Vec<Option<(u32, u32)>>>,
     labels: HashMap<&'a str, usize>,
     /// The registers the function leaves live: what it returns and passes to a
     /// tail call.
@@ -331,6 +366,37 @@ impl Function<'_> {
     }
 }
 
+impl Function<'_> {
+    /// `maybeMoveCFI`: the stack pointer now moves at the merged access, so
+    /// the `DW_CFA_def_cfa*` that followed the deleted update at `update`
+    /// follows the access at `at` instead; the frame it states is the one the
+    /// instructions between do not yet have.
+    fn move_cfi(
+        &mut self,
+        block: usize,
+        update: usize,
+        at: usize,
+    ) {
+        let insts = &self.blocks[block];
+        let Some(cfi) = (update + 1..insts.len()).find(|&index| insts[index].is_some()) else { return };
+        if cfi == at || !matches!(
+            &insts[cfi],
+            Some(Inst::Cfi(Cfi::DefCfaOffset { .. } | Cfi::DefCfa { .. }))
+        ) {
+            return;
+        }
+        // Past the access, whichever side the update was on.
+        let (blocks, locs) = (&mut self.blocks[block], &mut self.locs[block]);
+        if cfi < at {
+            blocks[cfi..=at].rotate_left(1);
+            locs[cfi..=at].rotate_left(1);
+        } else {
+            blocks[at + 1..=cfi].rotate_right(1);
+            locs[at + 1..=cfi].rotate_right(1);
+        }
+    }
+}
+
 /// `tryToMergeLdStUpdate`.
 fn merge_in(
     function: &mut Function<'_>,
@@ -355,6 +421,9 @@ fn merge_in(
         let written = written_back(function.blocks[block][at].as_ref().expect("the access"), pre, amount);
         function.blocks[block][at] = Some(written);
         function.blocks[update_block][update] = None;
+        if access.base == Gpr::R31 && update_block == block {
+            function.move_cfi(block, update, at);
+        }
         // The deleted update was a base change the liveness may have seen.
         function.live.clear();
     }
@@ -369,6 +438,7 @@ pub fn fold(
     let labels: Vec<String> = blocks.iter().map(|block| block.label.clone()).collect();
     let mut function = Function {
         blocks: blocks.iter().map(|block| block.insts.iter().cloned().map(Some).collect()).collect(),
+        locs: blocks.iter().map(|block| block.locs.clone()).collect(),
         labels: labels.iter().enumerate().map(|(at, label)| (label.as_str(), at)).collect(),
         exits,
         live: HashMap::new(),
@@ -376,12 +446,12 @@ pub fn fold(
     for block in 0..function.blocks.len() {
         merge_in(&mut function, block);
     }
-    let kept = function.blocks;
+    let kept = function.blocks.into_iter().zip(function.locs);
     blocks
         .into_iter()
         .zip(kept)
-        .map(|(block, insts)| {
-            let (insts, locs) = insts.into_iter().zip(block.locs).filter_map(|(inst, loc)| Some((inst?, loc))).unzip();
+        .map(|(block, (insts, places))| {
+            let (insts, locs) = insts.into_iter().zip(places).filter_map(|(inst, loc)| Some((inst?, loc))).unzip();
             Lowered { label: block.label, insts, locs }
         })
         .collect()
@@ -432,6 +502,49 @@ mod tests {
         fold(vec![block], &[]).remove(0).insts
     }
 
+    /// The folded stack bump of QB `floats` sat after two ALU instructions
+    /// while the frame was stated before them (`cfi_check`: the rows said
+    /// `sp+16` over pc 0..12, where `sp` had not moved). As `maybeMoveCFI`,
+    /// the frame follows the access that moves the stack pointer.
+    #[test]
+    fn a_frame_stated_after_an_update_follows_the_access_it_merges_into() {
+        let out = merged(vec![
+            step(31, -16),
+            Inst::Cfi(Cfi::DefCfaOffset { offset: 16 }),
+            Inst::Nop,
+            at(int(8, 10), false, 31, 0),
+        ]);
+        let cfi = out.iter().position(|inst| matches!(inst, Inst::Cfi(_))).expect("the frame is stated");
+        let store = out
+            .iter()
+            .position(|inst| matches!(
+                inst,
+                Inst::Store { addr: Addr::Pre { base: Gpr(31), imm: -16 }, .. }
+            ))
+            .expect("the bump is folded");
+        assert!(cfi > store, "{out:?}");
+    }
+
+    /// The same for the epilogue: the frame is gone at the access that pops it.
+    #[test]
+    fn a_frame_dropped_after_an_update_follows_the_post_index_it_merges_into() {
+        let out = merged(vec![
+            at(int(8, 10), true, 31, 0),
+            Inst::Nop,
+            step(31, 16),
+            Inst::Cfi(Cfi::DefCfaOffset { offset: 0 }),
+        ]);
+        let cfi = out.iter().position(|inst| matches!(inst, Inst::Cfi(_))).expect("the frame is stated");
+        let load = out
+            .iter()
+            .position(|inst| matches!(
+                inst,
+                Inst::Load { addr: Addr::Post { base: Gpr(31), imm: 16 }, .. }
+            ))
+            .expect("the pop is folded");
+        assert_eq!(cfi, load + 1, "{out:?}");
+    }
+
     /// `ldr x0, [x20]; add x20, x20, #32` stayed two instructions.
     #[test]
     fn an_add_after_a_load_is_a_post_index() {
@@ -451,6 +564,25 @@ mod tests {
     fn an_add_before_an_access_at_zero_is_a_pre_index() {
         let out = merged(vec![step(0, 8), at(int(8, 1), true, 0, 0)]);
         assert!(matches!(&out[..], [Inst::Load { addr: Addr::Pre { imm: 8, .. }, .. }]), "{out:?}");
+    }
+
+    /// `sub sp, sp, #96; orr x9, xzr, x0; str x10, [sp]` stayed apart: register
+    /// 31 of the `orr` (the zero register) read as `sp`, which cost 4 bytes on
+    /// fpbench; the pin makes `str x10, [sp, #-96]!`.
+    #[test]
+    fn a_move_from_the_zero_register_does_not_stop_a_stack_pre_index() {
+        let mov = Inst::LogicShifted {
+            op: Logic::Orr,
+            invert: false,
+            width: Width::X,
+            rd: Gpr(9),
+            rn: Gpr(31),
+            rm: Gpr(0),
+            shift: Shift::Lsl,
+            amount: 0,
+        };
+        let out = merged(vec![step(31, -96), mov, at(int(8, 10), false, 31, 0)]);
+        assert!(matches!(&out[1], Inst::Store { addr: Addr::Pre { imm: -96, .. }, .. }), "{out:?}");
     }
 
     #[test]

@@ -46,9 +46,8 @@
 //! After `prepass` (which sinks and drops dead flag settings) and before the
 //! copies are ordered, at every -O level but -O0.
 
-use std::collections::HashMap;
-
 use llrm_codegen::combine::{self, CombinerIsa, Node, Replacement, Setting, Use};
+use rustc_hash::FxHashMap as HashMap;
 
 use crate::expand_imm;
 use crate::mc::inst::*;
@@ -263,7 +262,10 @@ impl CombinerIsa for Block<'_> {
             let Some((a, b)) = self.product_at(mul, product, width) else { continue };
             // The zero register is the same value everywhere.
             let readable = |reg: Gpr| reg.is_virtual() || reg == Gpr::R31;
-            let stable = [a, b, other].iter().all(|reg| readable(*reg) && !self.defined_between(mul, root, *reg));
+            // Only the product's operands are read later than the `mul` read
+            // them; `other` is read by the root where it stands.
+            let stable =
+                readable(other) && [a, b].iter().all(|reg| readable(*reg) && !self.defined_between(mul, root, *reg));
             if stable {
                 found.push(Pattern { kind, mul, other, width });
             }

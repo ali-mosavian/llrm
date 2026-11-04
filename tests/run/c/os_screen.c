@@ -1,4 +1,5 @@
 // flags: -O2 -march=i486 | -O2 -march=i486 -m32
+// targets: dos
 /* The OS layer's text screen is the colour text memory: a cell written reads back, and is put back. */
 #include "llrm_os.h"
 extern void report(long value);

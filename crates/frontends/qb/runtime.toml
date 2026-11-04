@@ -1131,7 +1131,7 @@ red_zone = 0
 like = "qb45"
 
 # `parameters`: `string` is a descriptor's address, `int` a word. `result`
-# is a word, or a `view`: a string made of a `length` and a `data` address,
+# is a word (`result_bits` states another width: ASC answers an INTEGER), or a `view`: a string made of a `length` and a `data` address,
 # which the runtime allocates a temporary descriptor for. `check` raises
 # error `raise` where `when` holds; it is emitted only where the program
 # asks for run-time checks or handles errors. `releases` lists the string
@@ -1150,6 +1150,7 @@ inline = "always"
 evidence = "rt/strfcn.asm B$FASC: a null string is JZ ERRFC -> B$ERR_FC (error 5); otherwise the first byte, and B$STDALCTMP frees the argument if it is a temp."
 parameters = ["string"]
 result = "byte(data($0))"
+result_bits = 16
 releases = [0]
 inline = "always"
 check = { when = "len($0) == 0", raise = 5 }
@@ -1168,6 +1169,14 @@ parameters = ["int"]
 inline = "always"
 view = { length = "1", data = "slot($0)" }
 check = { when = "$0 < 0 or 255 < $0", raise = 5 }
+
+[semantics."B$SMID"]
+evidence = "rt/mid.asm B$SMID (llrm: runtime/qb/smid.c): up to $3 bytes of the source over the string at $0 from $4 (counting from 1), forward one at a time, the string keeping its length ($1 bytes of a fixed-length string, else the descriptor's); a start below 1 or past the end, or a negative maximum, is error 5, raised before anything is copied."
+parameters = ["place", "int", "string", "int", "int"]
+check = { when = "$4 < 1 or $3 < 0 or if($1 == 0, len($0), $1) - ($4 - 1) < 1", raise = 5 }
+copy = { to = "if($1 == 0, data($0), near($0)) + ($4 - 1)", from = "data($2)", count = "min(min($3, len($2)), if($1 == 0, len($0), $1) - ($4 - 1))" }
+releases = [2]
+inline = "always"
 
 # Normal-return stack cleanup read directly from the matching entry in all
 # three shipped Microsoft runtimes.  This is deliberately only a stack ABI

@@ -40,9 +40,8 @@
 //! `ConvertTruncs`; here only an integer constant is folded, anything else
 //! gets the instruction. Exit: none.
 
-use std::collections::{HashMap, HashSet};
-
 use llrm_mir::context::{Constant, ConstantKind, Context};
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
 use llrm_mir::lowering::Lowering;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
@@ -50,6 +49,7 @@ use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, Loops, PreservedAnalyses};
 use llrm_mir::tti::Tti;
 use llrm_mir::types::{FloatKind, Type, TypeId};
+use llrm_support::hash::HashSet;
 
 /// The widths an integer may be promoted to, narrowest first.
 const WIDTHS: [u32; 5] = [8, 16, 32, 64, 128];
@@ -109,7 +109,7 @@ struct Ordered<T: Copy + Eq + std::hash::Hash> {
 
 impl<T: Copy + Eq + std::hash::Hash> Ordered<T> {
     fn new() -> Self {
-        Self { items: Vec::new(), seen: HashSet::new() }
+        Self { items: Vec::new(), seen: HashSet::default() }
     }
 
     fn insert(
@@ -151,8 +151,8 @@ struct Promotion<'a> {
     type_size: u32,
     register_bits: u32,
     all_visited: HashSet<Node>,
-    safe_to_promote: HashSet<InstId>,
-    safe_wrap: HashSet<InstId>,
+    safe_to_promote: IdSet<InstId>,
+    safe_wrap: IdSet<InstId>,
     insts_to_remove: Ordered<InstId>,
 }
 
@@ -197,9 +197,9 @@ impl<'a> Promotion<'a> {
             in_loop,
             type_size: 0,
             register_bits: tti.scalar_register_bits(),
-            all_visited: HashSet::new(),
-            safe_to_promote: HashSet::new(),
-            safe_wrap: HashSet::new(),
+            all_visited: HashSet::default(),
+            safe_to_promote: IdSet::new(),
+            safe_wrap: IdSet::new(),
             insts_to_remove: Ordered::new(),
         }
     }
@@ -620,9 +620,9 @@ impl<'a> Promotion<'a> {
         sinks: &Ordered<InstId>,
     ) {
         let ext_ty = self.context.types.int(width);
-        let mut new_insts: HashSet<Node> = HashSet::new();
-        let mut promoted: HashSet<Node> = HashSet::new();
-        let mut trunc_tys: HashMap<InstId, Vec<Option<TypeId>>> = HashMap::new();
+        let mut new_insts: HashSet<Node> = HashSet::default();
+        let mut promoted: HashSet<Node> = HashSet::default();
+        let mut trunc_tys: IdMap<InstId, Vec<Option<TypeId>>> = IdMap::new();
         let mut removed: Vec<InstId> = Vec::new();
 
         // Cache the original types of the values that will likely need
@@ -988,7 +988,7 @@ impl<'a> Promotion<'a> {
         let mut non_free_args = 0usize;
         let mut non_loop_sources = 0usize;
         let mut loop_sinks = 0usize;
-        let mut blocks: HashSet<BlockId> = HashSet::new();
+        let mut blocks: IdSet<BlockId> = IdSet::new();
         for node in visited.iter() {
             let block = match node {
                 Node::Inst(inst) => self.function.parent(inst),
