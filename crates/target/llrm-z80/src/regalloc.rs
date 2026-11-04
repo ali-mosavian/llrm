@@ -6,10 +6,13 @@
 //! `ix` and `sp` (`calling.toml`), so every allocatable register is
 //! caller-saved.
 
+use llrm_codegen::model::ir::Loc;
+use llrm_codegen::model::lir::Insn;
 use llrm_lir::registers::RegId;
 use llrm_spike_mf::regalloc::Target;
 use llrm_spike_mf::{Inst, Kind, Operand, Reg};
 
+use crate::expand::lanes;
 use crate::{REGISTER_INFO, reg};
 
 /// A virtual register's class.
@@ -45,7 +48,24 @@ impl Z80Registers {
     }
 }
 
+thread_local! {
+    /// Set while a function is allocated a second time, after the first
+    /// allocation failed or to price the other choice: whether the copies from
+    /// the argument registers are left unjoined, instead of what the
+    /// convention says (`Target::joins_pinned_copies`).
+    pub static UNJOINED: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
 impl Target for Z80Registers {
+    /// The pin joins a copy with a physical register only when it is reserved
+    /// (`canJoinPhys`); an argument pair is not, so the copy stays and the
+    /// word can spill instead of holding its pair to its last use. The
+    /// convention states whether the z80 leaves them
+    /// (`pinned_copies_unjoined`).
+    fn joins_pinned_copies() -> bool {
+        !UNJOINED.with(std::cell::Cell::get).unwrap_or(crate::abi::z80().pinned_copies_unjoined)
+    }
+
     type Class = Class;
 
     fn meet(
@@ -99,9 +119,58 @@ impl Target for Z80Registers {
         crate::mfunc::operand_class(name, index)
     }
 
+    fn lane_moves(inst: &Inst) -> Option<(usize, Vec<(usize, u32, u32)>)> {
+        matches!(inst.kind, Kind::Op("PACK")).then(|| (0, vec![(1, 0, 1), (2, 1, 1)]))
+    }
+
+    fn read_part(
+        inst: &Inst,
+        operand: usize,
+        register: RegId,
+    ) -> RegId {
+        // the sign test of a pair, and the byte halves taken from one, read a
+        // single byte
+        let half = match inst.kind {
+            Kind::Op("BIT7_16" | "HI") if operand == 1 => 1,
+            Kind::Op("LO") if operand == 1 => 0,
+            _ => return register,
+        };
+        lanes(register).map_or(register, |lanes| [lanes.0, lanes.1][half])
+    }
+
+    /// A literal in a byte register costs `ld r, n` (7 T, 2 B) against the
+    /// copy `ld r, r'` (4 T, 1 B), a word `ld rr, nn` (10 T, 3 B) against two
+    /// copies (8 T, 2 B): making it again loses to the copy, except a zero in
+    /// `a`, which is `xor a` (4 T, 1 B). Unpriced, `fletcher` -O2 made its zero
+    /// in the loop every trip.
+    fn literal_move_wins(
+        literal: &Insn,
+        _source: &[RegId],
+        destination: &[RegId],
+        size: bool,
+    ) -> bool {
+        let Some(what) = literal.what.as_ref() else { return false };
+        let ([Loc::Held(into)], [Loc::Imm(imm)]) = (what.dests.as_slice(), what.sources.as_slice()) else {
+            return false;
+        };
+        if into.width == 1 && imm.value == 0 && destination == [reg::A] {
+            return true;
+        }
+        let cost = |form: &str| crate::timing::cost(form).map_or((u32::MAX, u32::MAX), |c| (c.bytes, c.taken));
+        let (copy, load) = if into.width == 1 {
+            (cost("ld b;c"), cost("ld b;n"))
+        } else {
+            let (bytes, taken) = cost("ld b;c");
+            ((2 * bytes, 2 * taken), cost("ld bc;nn"))
+        };
+        if size { load.0 <= copy.0 } else { load.1 <= copy.1 }
+    }
+
     // `reads_flags_set_just_before` stays false: every copy, spill and reload
     // the allocator inserts is an `ld`, which leaves the flags alone, so
     // nothing needs to be kept off the window between a compare and its branch.
+    // (A far frame slot is reached by `add iy, sp`, which sets the carry: the
+    // expander keeps the flags across it, `Printer::iy_to_stack`.)
 
     fn reserved(root: RegId) -> bool {
         matches!(root, r if r == reg::SP || r == reg::IX || r == reg::FLAGS)

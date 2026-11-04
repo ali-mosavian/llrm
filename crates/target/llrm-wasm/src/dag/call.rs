@@ -14,7 +14,7 @@
 //! DEVIATE W3: integers and floats only, one returned part, no tail call, swift
 //! or funcref call, and no variadic function body (`va_start`);
 //! `accepts` refuses what it can see. Reason: the callers the runtime needs.
-//! Exit: the varargs definition step.
+//! Exit: the varargs definition step, no later than 2026-11-20.
 //!
 //! # See also
 //! `WebAssemblyISelLowering.cpp` at the pin d1106deb71cc: `LowerCall` (L1281),
@@ -44,6 +44,8 @@ pub const RET_CALL: u16 = CALL + 1;
 pub struct WasmCalling {
     /// The pointer type: `i32` for wasm32, `i64` for wasm64.
     pub pointer: EVT,
+    /// `Subtarget.hasBulkMemoryOpt()`: `memory.copy` and `memory.fill` exist.
+    pub bulk_memory_opt: bool,
 }
 
 fn is_value(vt: EVT) -> bool {
@@ -70,6 +72,16 @@ impl TargetCalling for WasmCalling {
     ) -> Option<TargetIntrinsic> {
         let id = EH_INTRINSICS.iter().position(|(known, _)| *known == name)?;
         Some(TargetIntrinsic { id: id as u32, chained: EH_INTRINSICS[id].1 })
+    }
+
+    /// `WebAssemblyTargetLowering::CanLowerReturn`: more than one result part
+    /// needs the multivalue ABI, which the pin does not default to; the
+    /// result then goes through an `sret` pointer.
+    fn can_lower_return(
+        &self,
+        parts: &[EVT],
+    ) -> bool {
+        parts.len() <= 1
     }
 
     fn accepts(
@@ -201,6 +213,9 @@ impl TargetCalling for WasmCalling {
         src: SDValue,
         size: SDValue,
     ) -> Option<SDValue> {
+        if !self.bulk_memory_opt {
+            return None;
+        }
         let memory = dag.get_constant(0, EVT::I32);
         let length = dag.get_zext_or_trunc(size, self.pointer);
         Some(dag.get_node(ISD::Target(isd::MEMCPY), EVT::OTHER, &[chain, memory, memory, dst, src, length]))
@@ -215,6 +230,9 @@ impl TargetCalling for WasmCalling {
         value: SDValue,
         size: SDValue,
     ) -> Option<SDValue> {
+        if !self.bulk_memory_opt {
+            return None;
+        }
         let memory = dag.get_constant(0, EVT::I32);
         let value = dag.get_any_ext_or_trunc(value, EVT::I32);
         let length = dag.get_zext_or_trunc(size, self.pointer);

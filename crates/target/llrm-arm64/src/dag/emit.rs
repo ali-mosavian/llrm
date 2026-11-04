@@ -703,6 +703,9 @@ struct Emitter<'a> {
     ops: Vec<Op>,
     /// The constant pool entries the function has used so far.
     pool: std::cell::RefCell<Vec<PoolEntry>>,
+    /// The register each phi's edges copy into, by the phi's register
+    /// (`PHIElimination`'s `IncomingReg`): the block's first copies read it.
+    incoming: HashMap<u32, Reg>,
 }
 
 impl Emitter<'_> {
@@ -715,6 +718,19 @@ impl Emitter<'_> {
         }
         let one = self.mf.gpr();
         self.vregs.insert(number, one);
+        one
+    }
+
+    /// The register the edges of `phi` copy into, made on first use.
+    fn incoming_of(
+        &mut self,
+        phi: &super::function::PhiCopy,
+    ) -> Reg {
+        if let Some(&one) = self.incoming.get(&phi.dst) {
+            return one;
+        }
+        let one = if phi.float { Reg::Fpr(self.mf.fpr()) } else { Reg::Gpr(self.mf.gpr()) };
+        self.incoming.insert(phi.dst, one);
         one
     }
 
@@ -960,11 +976,8 @@ impl Emitter<'_> {
                 .iter()
                 .filter(|p| p.to == to)
                 .map(|p| {
-                    if p.float {
-                        (Reg::Fpr(this.fvreg(p.dst)), Reg::Fpr(this.fvreg(p.src)))
-                    } else {
-                        (Reg::Gpr(this.vreg(p.dst)), Reg::Gpr(this.vreg(p.src)))
-                    }
+                    let src = if p.float { Reg::Fpr(this.fvreg(p.src)) } else { Reg::Gpr(this.vreg(p.src)) };
+                    (this.incoming_of(p), src)
                 })
                 .filter(|(dst, src)| dst != src)
                 .collect();
@@ -1779,6 +1792,7 @@ pub fn emit(
         fvalues: HashMap::new(),
         ops: Vec::new(),
         pool: std::cell::RefCell::new(Vec::new()),
+        incoming: HashMap::new(),
     };
     for &(size, align) in &first.frame {
         emitter.mf.slot(size, align);
@@ -1792,6 +1806,18 @@ pub fn emit(
         for &(reg, vreg) in &block.live_ins {
             let dst = if is_fpr(reg) { Reg::Fpr(emitter.fvreg(vreg)) } else { Reg::Gpr(emitter.vreg(vreg)) };
             emitter.ops.push(Op::Copy { dst, src: reg_of(reg)? });
+        }
+        // `PHIElimination`: each phi of this block reads the register its edges
+        // copied into.
+        let mut headed: Vec<u32> = Vec::new();
+        for phi in blocks.iter().flat_map(|one| one.phis.iter()).filter(|phi| Some(&phi.to) == block.layout.get(at)) {
+            if headed.contains(&phi.dst) {
+                continue;
+            }
+            headed.push(phi.dst);
+            let src = emitter.incoming_of(phi);
+            let dst = if phi.float { Reg::Fpr(emitter.fvreg(phi.dst)) } else { Reg::Gpr(emitter.vreg(phi.dst)) };
+            emitter.ops.push(Op::Copy { dst, src });
         }
         let mut places: Vec<Option<SrcLoc>> = Vec::new();
         for unit in &block.units {

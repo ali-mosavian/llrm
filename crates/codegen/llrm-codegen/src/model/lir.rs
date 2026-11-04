@@ -91,6 +91,11 @@ pub struct DebugTags {
     pub defines: Vec<u32>,
     /// The notes (`LirBody::notes`) that stand before it.
     pub before: Vec<u32>,
+    /// The slot index the allocator counted this instruction at, when it
+    /// worked out where the variables are for the writer. A pass that changes
+    /// the instruction (`..clone()`) keeps it; one that makes a new one has
+    /// none.
+    pub slot: Option<i64>,
 }
 
 impl PartialEq for DebugTags {
@@ -128,6 +133,21 @@ pub struct Insn {
     /// in `uses`, no live range starts at them, and the allocator gives them
     /// any register of their class.
     pub undefs: Vec<u32>,
+    /// Values it defines a narrower part of and keeps the rest of: the def
+    /// also reads the value (a sub-register def without `undef`,
+    /// `MachineOperand::readsReg`), so the value is live into it. Nothing sets
+    /// it before the coalescer joins copies of different widths; a narrow def
+    /// not listed starts the value, as it always has.
+    pub partial_defs: Vec<u32>,
+    /// Where it copies one value into lanes of another, `(source, destination,
+    /// lanes of the destination)`: the `undef %d:sub0 = COPY` pairs
+    /// `eliminateRegSequence` makes from a `REG_SEQUENCE`. Liveness still takes
+    /// the destination whole; the lane model reads this (C1 step 1).
+    pub lane_copies: Vec<(u32, u32, llrm_lir::valuelanes::ValueLanes)>,
+    /// The lanes of a value it defines, where it defines less than all of
+    /// them (the `:subN` on a def operand); a value not listed is defined
+    /// whole.
+    pub def_lanes: Vec<(u32, llrm_lir::valuelanes::ValueLanes)>,
     /// It defines a narrower part of a value than the value is read at, and the
     /// value is not live before it: the rest of the register is undefined (the
     /// `implicit-def` `VirtRegRewriter` puts on a sub-register def whose other
@@ -161,6 +181,11 @@ pub struct Insn {
     /// The source line of the MIR instruction it was selected from (`!dbg`).
     pub line: Option<SrcLoc>,
     pub debug: DebugTags,
+    /// What the target says it reads and writes, as lanes: the decoder answers
+    /// with it before it looks at the instruction's name. A target whose
+    /// instructions the decoder cannot read (arm64's, which the spike
+    /// converter names by their variant) states each one's effect here.
+    pub declared: Option<(crate::backend::lanes::Lanes, crate::backend::lanes::Lanes)>,
     /// What it does to the registers (`liveness::effect`), worked out once for
     /// everything that asks.
     pub effect: Derived<(u32, Option<crate::backend::liveness::Effect>)>,
@@ -319,6 +344,31 @@ impl LirBody {
             })
             .collect();
         if changed { self.with_blocks(blocks) } else { self.clone() }
+    }
+
+    /// `self` with each instruction told its slot (`DebugTags::slot`), by
+    /// the identity it has now; one not in `slots` is left as it is.
+    #[must_use]
+    pub fn with_slots(
+        &self,
+        slots: &crate::support::hash::HashMap<u64, i64>,
+    ) -> LirBody {
+        let blocks = self
+            .blocks
+            .iter()
+            .map(|block| {
+                let insns = block
+                    .insns
+                    .iter()
+                    .map(|one| match slots.get(&one.id()) {
+                        Some(&slot) => one.retagged(DebugTags { slot: Some(slot), ..one.debug.clone() }),
+                        None => Arc::clone(one),
+                    })
+                    .collect();
+                block.with_insns(insns)
+            })
+            .collect();
+        self.with_blocks(blocks)
     }
 
     /// `self`, a pass's result from `old`, with the values the instructions the
@@ -496,8 +546,14 @@ impl Insn {
         llrm_mir::counts::bump(llrm_mir::counts::Event::LirRenameAsks);
         let moves = |value: u32| -> Result<bool, E> { Ok(rename(value)? != value) };
         let mut any = false;
-        for &value in self.defines.iter().chain(&self.uses).chain(&self.undefs) {
+        for &value in self.defines.iter().chain(&self.uses).chain(&self.undefs).chain(&self.partial_defs) {
             any |= moves(value)?;
+        }
+        for &(value, _) in &self.def_lanes {
+            any |= moves(value)?;
+        }
+        for &(from, to, _) in &self.lane_copies {
+            any |= moves(from)? | moves(to)?;
         }
         for (held, _) in self.requires.iter().chain(&self.delivers) {
             any |= moves(held.value)?;
@@ -523,7 +579,7 @@ impl Insn {
             let settled = |place: &Loc| -> Result<Loc, E> {
                 let mut failed = None;
                 let out = llrm_lir::mapped(place, |held| match rename(held.value) {
-                    Ok(value) => Held { value, width: held.width },
+                    Ok(value) => Held { value, width: held.width, offset: held.offset },
                     Err(error) => {
                         failed.get_or_insert(error);
                         *held
@@ -539,9 +595,18 @@ impl Insn {
         made.defines = self.defines.iter().map(value).collect::<Result<_, E>>()?;
         made.uses = self.uses.iter().map(value).collect::<Result<_, E>>()?;
         made.undefs = self.undefs.iter().map(value).collect::<Result<_, E>>()?;
+        made.partial_defs = self.partial_defs.iter().map(value).collect::<Result<_, E>>()?;
+        made.def_lanes = self.def_lanes.iter().map(|&(v, lanes)| Ok((rename(v)?, lanes))).collect::<Result<_, E>>()?;
+        made.lane_copies = self
+            .lane_copies
+            .iter()
+            .map(|&(from, to, lanes)| Ok((rename(from)?, rename(to)?, lanes)))
+            .collect::<Result<_, E>>()?;
         let wants = |side: &[(Held, RegId)]| -> Result<Vec<(Held, RegId)>, E> {
             side.iter()
-                .map(|(held, register)| Ok((Held { value: rename(held.value)?, width: held.width }, *register)))
+                .map(|(held, register)| {
+                    Ok((Held { value: rename(held.value)?, width: held.width, offset: held.offset }, *register))
+                })
                 .collect()
         };
         made.requires = wants(&self.requires)?;
@@ -588,6 +653,9 @@ impl Insn {
             defines,
             uses,
             undefs: Vec::new(),
+            partial_defs: Vec::new(),
+            lane_copies: Vec::new(),
+            def_lanes: Vec::new(),
             undef_super: false,
             clobbers: BTreeSet::new(),
             clobbers_high: BTreeSet::new(),
@@ -608,6 +676,7 @@ impl Insn {
             pair: None,
             line: None,
             debug: DebugTags::default(),
+            declared: None,
             effect: Derived::default(),
             register_effects: Default::default(),
             ident: Derived::default(),
@@ -626,6 +695,17 @@ impl Insn {
     pub fn id(&self) -> u64 {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         *self.ident.get_or_init(|| NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+
+    /// `self`, an edited copy of `of`, standing for it: it keeps `of`'s
+    /// identity, for a caller that puts the original back by it.
+    #[must_use]
+    pub fn standing_for(
+        self,
+        of: &Insn,
+    ) -> Insn {
+        let _ = self.ident.0.set(of.id());
+        self
     }
 
     /// `self` told other `-g` tags. Still the same instruction, so it keeps
@@ -1267,6 +1347,9 @@ pub struct LirBody {
     /// What `-g` says of its variables at points in the code, by the numbers
     /// `DebugTags::before` holds.
     pub notes: Arc<Vec<DebugNote>>,
+    /// Where each variable is over the code (`LiveDebugValues`), when the
+    /// allocator worked it out for the writer.
+    pub placed: Arc<crate::backend::livedebugvariables::Placed>,
     /// The values (by number) that arrive in a cell above the frame, with the
     /// cell's displacement and size: arguments the caller pushed.
     pub arguments_in_cells: Arc<Vec<(u32, i64, u32)>>,
@@ -1465,6 +1548,7 @@ impl LirBody {
             frame_exit: None,
             frame_saved: None,
             notes: Arc::default(),
+            placed: Arc::default(),
             arguments_in_cells: Arc::default(),
             call_pops: Arc::default(),
             facts: Default::default(),
@@ -1536,6 +1620,7 @@ impl LirBody {
             frame_exit: self.frame_exit,
             frame_saved: self.frame_saved.clone(),
             notes: Arc::clone(&self.notes),
+            placed: Arc::clone(&self.placed),
             arguments_in_cells: Arc::clone(&self.arguments_in_cells),
             call_pops: Arc::clone(&self.call_pops),
             facts: self.facts.clone(),
@@ -1726,7 +1811,7 @@ mod tests {
     fn test_notes_standing_counts_the_notes_some_instruction_still_has() {
         let tagged = |at: i64, before: Vec<u32>| {
             let one = instruction(at, None);
-            Arc::new(super::Insn { debug: super::DebugTags { defines: vec![], before }, ..(*one).clone() })
+            Arc::new(super::Insn { debug: super::DebugTags { defines: vec![], before, slot: None }, ..(*one).clone() })
         };
         let body = LirBody::new(
             "f",
@@ -1834,12 +1919,12 @@ mod tests {
         let mut untouched = (*instruction(0x10, None)).clone();
         untouched.defines = vec![2];
         untouched.uses = vec![1];
-        untouched.what.as_mut().unwrap().dests = vec![Loc::Held(Held { value: 2, width: 4 })];
+        untouched.what.as_mut().unwrap().dests = vec![Loc::Held(Held { value: 2, width: 4, offset: 0 })];
         let untouched = Arc::new(untouched);
         let mut named = (*untouched).clone();
         named.uses = vec![7];
         named.what.as_mut().unwrap().sources =
-            vec![Loc::Mem(Mem { base: Some(Held { value: 7, width: 4 }), ..Mem::new(None, 4) })];
+            vec![Loc::Mem(Mem { base: Some(Held { value: 7, width: 4, offset: 0 }), ..Mem::new(None, 4) })];
         let named = Arc::new(named);
         let to_nine = |value: u32| if value == 7 { 9 } else { value };
         assert!(Arc::ptr_eq(&untouched.renamed(&to_nine), &untouched), "nothing it names moves");
@@ -1862,7 +1947,7 @@ mod tests {
         source.defines = vec![2];
         source.uses = vec![1];
         source.group = Some(7);
-        source.requires = vec![(Held { value: 1, width: 2 }, RegId::DL)];
+        source.requires = vec![(Held { value: 1, width: 2, offset: 0 }, RegId::DL)];
         source.spill_reload = true;
         let source = Arc::new(source);
         let anchored = anchor(Arc::clone(&source));
@@ -1976,15 +2061,18 @@ mod tests {
             Some((16, 18)),
             Some(Semantics {
                 name: Some("call".into()),
-                sources: vec![Loc::Held(Held { value: 1, width: 2 })],
+                sources: vec![Loc::Held(Held { value: 1, width: 2, offset: 0 })],
                 target: Some(5),
                 ..Semantics::new(Operation::Call)
             }),
             Vec::new(),
             Vec::new(),
         );
-        one.requires = vec![(Held { value: 1, width: 2 }, RegId::CX), (Held { value: 7, width: 4 }, RegId::EBX)];
-        one.delivers = vec![(Held { value: 9, width: 1 }, RegId::AL)];
+        one.requires = vec![
+            (Held { value: 1, width: 2, offset: 0 }, RegId::CX),
+            (Held { value: 7, width: 4, offset: 0 }, RegId::EBX),
+        ];
+        one.delivers = vec![(Held { value: 9, width: 1, offset: 0 }, RegId::AL)];
         let line = |one: &Insn| {
             format!(
                 "  {:4} {} req={} del={}",

@@ -63,9 +63,20 @@ pub struct Frontend {
     pub alternate_math: bool,
     /// Nothing outside the source calls its procedures: `--whole-program`.
     pub whole_program: bool,
+    /// Procedures `--whole-program` keeps public: `--export NAME`.
+    pub exports: Vec<String>,
     /// Lay out dynamic arrays read together in one allocation:
     /// `--array-merging`.
     pub array_merging: bool,
+    /// A procedure's constant-bound array of at most this many bytes lives in
+    /// its frame: `--frame-arrays`.
+    pub frame_array_bytes: usize,
+    /// Arrays (by name) that stay the runtime's whatever `--frame-arrays`
+    /// says: `--keep-far NAME`, for calibrating the frame-array choice.
+    pub keep_far: Vec<String>,
+    /// What the target holds, for the frame-array choice: `registers` 0 keeps
+    /// every candidate in the frame.
+    pub room: crate::semantic::Room,
     /// Every procedure uses the runtime's frame entry and exit:
     /// `--runtime-frames`.
     pub runtime_frames: bool,
@@ -110,7 +121,11 @@ impl Frontend {
             mbf: false,
             alternate_math: false,
             whole_program: false,
+            exports: Vec::new(),
             array_merging: false,
+            frame_array_bytes: 0,
+            keep_far: Vec::new(),
+            room: Default::default(),
             runtime_frames: false,
             error_lines: false,
             bc_codeview: false,
@@ -154,7 +169,13 @@ fn _options(
             mbf: frontend.mbf,
             alternate_math: frontend.alternate_math,
             whole_program: frontend.whole_program,
+            exports: frontend.exports.clone(),
             array_merging: frontend.array_merging,
+            frame_array_bytes: frontend.frame_array_bytes,
+            keep_far: frontend.keep_far.iter().map(|name| name.to_ascii_uppercase()).collect(),
+            room: frontend.room,
+            near_arrays: false,
+            frame_deny: Default::default(),
             runtime_frames: frontend.runtime_frames,
             error_lines: frontend.error_lines,
             segment_bytes: frontend.segment_bytes,

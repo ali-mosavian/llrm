@@ -7,8 +7,8 @@ use crate::context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, 
 use crate::hash::HashMap;
 use crate::lexer::is_name;
 use crate::module::{
-    BlockId, DebugWhat, Function, GlobalKind, GlobalValue, InstId, LINKAGE, Linkage, MetadataId, MetadataOperand,
-    Module, Operand, Special, UnnamedAddr, ValueId,
+    Alias, BlockId, DebugWhat, Function, GlobalKind, GlobalValue, InstId, LINKAGE, Linkage, MetadataId,
+    MetadataOperand, Module, Operand, Special, UnnamedAddr, VISIBILITY, ValueId, Visibility,
 };
 use crate::opcode::{
     AtomicKind, Attribute, CAST, Clause, FLOAT_PREDICATE, INT_PREDICATE, Opcode, RMW_OPS, Tail, spelling,
@@ -58,6 +58,7 @@ pub fn module(module: &Module) -> String {
                 },
             ),
     );
+    section(&mut out, module.aliases.iter().map(|one| printer.alias(one)));
     for (at, global) in module.globals.iter().enumerate() {
         if let GlobalKind::Function(function) = &global.kind {
             if !out.is_empty() {
@@ -338,6 +339,7 @@ fn float(
     let value = match kind {
         FloatKind::Double | FloatKind::X86Fp80 => f64::from_bits(bits),
         FloatKind::Float => f64::from(f32::from_bits(bits as u32)),
+        FloatKind::F128 => unreachable!("an fp128 constant is Float128, printed in hex"),
     };
     if value.is_finite() {
         let text = format!("{value:.6e}");
@@ -466,6 +468,10 @@ impl Printer<'_> {
         (linkage != Linkage::External).then(|| spelling(&LINKAGE, linkage))
     }
 
+    fn visibility(visibility: Visibility) -> Option<&'static str> {
+        (visibility != Visibility::Default).then(|| spelling(&VISIBILITY, visibility))
+    }
+
     fn unnamed_addr(unnamed_addr: UnnamedAddr) -> Option<&'static str> {
         match unnamed_addr {
             UnnamedAddr::None => None,
@@ -489,6 +495,25 @@ impl Printer<'_> {
         (space != 0).then(|| format!("addrspace({space})"))
     }
 
+    fn alias(
+        &self,
+        alias: &Alias,
+    ) -> String {
+        let words: Vec<&str> =
+            [Self::linkage(alias.linkage), Self::visibility(alias.visibility), Self::unnamed_addr(alias.unnamed_addr)]
+                .into_iter()
+                .flatten()
+                .collect();
+        let space = Self::address_space(alias.address_space).map(|one| format!(" {one}")).unwrap_or_default();
+        format!(
+            "@{} = {}alias {}, ptr{space} {}\n",
+            quoted(&alias.name),
+            words.iter().map(|one| format!("{one} ")).collect::<String>(),
+            self.ty(alias.ty),
+            self.globals[alias.aliasee.0 as usize],
+        )
+    }
+
     fn variable(
         &self,
         at: usize,
@@ -502,7 +527,11 @@ impl Printer<'_> {
             (linkage, _) => Self::linkage(linkage),
         };
         let mut words: Vec<String> =
-            [linkage, Self::unnamed_addr(global.unnamed_addr)].into_iter().flatten().map(str::to_owned).collect();
+            [linkage, Self::visibility(global.visibility), Self::unnamed_addr(global.unnamed_addr)]
+                .into_iter()
+                .flatten()
+                .map(str::to_owned)
+                .collect();
         words.extend(Self::address_space(global.address_space));
         if variable.externally_initialized {
             words.push("externally_initialized".to_owned());
@@ -547,6 +576,7 @@ impl Printer<'_> {
         if !declaration {
             words.extend(Self::linkage(global.linkage).map(str::to_owned));
         }
+        words.extend(Self::visibility(global.visibility).map(str::to_owned));
         words.extend(Self::convention(function.calling_convention));
         let return_attrs = attributes(&self.context, &function.return_attrs);
         if !return_attrs.is_empty() {
@@ -892,6 +922,7 @@ impl Printer<'_> {
                 _ => unreachable!("a floating constant has a floating type"),
             },
             ConstantKind::Float80(bits) => format!("0xK{bits:020X}"),
+            ConstantKind::Float128(bits) => format!("0xL{:016X}{:016X}", *bits as u64, (*bits >> 64) as u64),
             ConstantKind::Null => "null".to_owned(),
             ConstantKind::Poison => "poison".to_owned(),
             ConstantKind::Undef => "undef".to_owned(),

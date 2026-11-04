@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/fixupbw.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/fixupbw.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/fixupbw.rs sha256:38e33892b20f321ccc84d677ccc7645369ec58b1434799a2568689645322ce75 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/fixupbw.rs sha256:7ce1f42f9532b7b562afeb23e8095c125988b21760ea08dbfb76ec3692bc704c -->
 
 # fixupbw
 
@@ -35,6 +35,9 @@ were undefined) is `Insn::undef_super`, which `rewriter::rewrite` sets on a
 narrow definition of a value that is read wider and not live before it: a
 32-bit user of the loaded word reads the upper lanes, which `dead_after`
 counts as live though nothing ever defined them.
+
+DEVIATE FB1 (see `Profile::widens_load`): a load is widened only where the
+target prices the extension no higher than the load.
 
 DEVIATE W1 (no number yet): in real mode the dword form takes the 0x66
 prefix, so the pin's claim that the size is the same is false there; the

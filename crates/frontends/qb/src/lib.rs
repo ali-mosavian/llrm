@@ -56,6 +56,9 @@ mod test_stack_check;
 mod test_intrinsics;
 
 #[cfg(test)]
+mod test_frame_arrays;
+
+#[cfg(test)]
 mod test_inline_runtime;
 
 #[cfg(test)]

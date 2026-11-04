@@ -66,6 +66,9 @@ impl Reg {
 pub struct Held {
     pub value: u32,
     pub width: u32,
+    /// The byte of the value the operand starts at (a sub-register index:
+    /// `AH` is byte 1); 0 for the low part.
+    pub offset: u32,
 }
 
 impl Held {
@@ -73,7 +76,7 @@ impl Held {
     /// byte of a register, AH, is not yet a way to spell an operand; C1
     /// step 1).
     pub const fn lanes(&self) -> valuelanes::ValueLanes {
-        valuelanes::ValueLanes::low(self.width)
+        valuelanes::ValueLanes::at(self.offset, self.width)
     }
 }
 
@@ -575,6 +578,60 @@ impl Semantics {
             && same(&self.sources, &other.sources)
     }
 
+    /// `HashMachineInstr` ([BranchFolding.cpp L322][pin]): a hash of the
+    /// operation and of what its operands are, which the tail merge sorts its
+    /// candidates by. Explicit and fixed, as the pin's is ("we can't use
+    /// MachineOperand's hash_code here because it's not deterministic and we
+    /// sort by hash value later"): a field added to `Semantics` that is no
+    /// operand cannot move it, and so cannot reorder the merges.
+    ///
+    /// [pin]:
+    ///     https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/BranchFolding.cpp#L322
+    pub fn machine_hash(&self) -> u64 {
+        // The opcode: the mnemonic where there is one, else the operation.
+        let mut hash = match &self.name {
+            Some(name) => {
+                name.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3))
+            }
+            None => self.op as u64,
+        };
+        let mut place = 0u32;
+        let mut operand = |value: u64, kind: u64| {
+            hash = hash.wrapping_add(((value << 3) | kind) << (place & 31));
+            place += 1;
+        };
+        for loc in self.dests.iter().chain(&self.sources) {
+            match loc {
+                Loc::Reg(reg) => operand(reg.register.index() as u64, 1),
+                Loc::Imm(imm) => operand(imm.value as u64, 2),
+                // The pin's memory operand is five: base, scale, index,
+                // displacement and segment; a symbol is too hard, only its
+                // offset.
+                Loc::Mem(cell) => {
+                    operand(cell.through.index() as u64, 1);
+                    operand(cell.scale as u64, 2);
+                    operand(cell.index_through.index() as u64, 1);
+                    operand(cell.offset as u64, 2);
+                }
+                Loc::Address(address) => {
+                    operand(address.through.index() as u64, 1);
+                    operand(address.scale as u64, 2);
+                    operand(address.index_through.index() as u64, 1);
+                    operand(address.offset as u64, 2);
+                }
+                Loc::Held(held) => operand(u64::from(held.value), 3),
+                Loc::Field(field) => operand(u64::from(field.code), 4),
+            }
+        }
+        if let Some(target) = self.target {
+            operand(target as u64, 5);
+        }
+        for block in &self.table {
+            operand(*block as u64, 5);
+        }
+        hash
+    }
+
     /// A call that is also the return: the epilogue, then a `jmp` to the
     /// callee. The callee is named by the instruction's id in a side table, so
     /// a copy of it has none (DEVIATE TD1).
@@ -670,7 +727,7 @@ impl IntoIterator for Values {
 
 /// Python `values`: every SSA value named by one selected operand.
 pub fn values(where_: &Loc) -> Values {
-    let nothing = Held { value: 0, width: 0 };
+    let nothing = Held { value: 0, width: 0, offset: 0 };
     let mut found = Values { held: [nothing; 3], len: 0 };
     let mut named = |held: &Held| {
         found.held[found.len] = *held;
@@ -764,7 +821,7 @@ mod tests {
     fn a_frame_cell_is_the_frames_by_its_space_not_by_its_register() {
         let table = |space| Mem {
             through: RegId::EBP,
-            index: Some(Held { value: 2, width: 4 }),
+            index: Some(Held { value: 2, width: 4, offset: 0 }),
             index_through: RegId::EDX,
             ..Mem::new(Some(Addr::new(space, -16)), 4)
         };
@@ -785,7 +842,7 @@ mod tests {
     /// of equality made [p] and [p+2] one cell.
     #[test]
     fn two_addressless_cells_at_different_displacements_are_different_cells() {
-        let at = |offset| Mem { base: Some(Held { value: 1, width: 2 }), offset, ..Mem::new(None, 2) };
+        let at = |offset| Mem { base: Some(Held { value: 1, width: 2, offset: 0 }), offset, ..Mem::new(None, 2) };
         assert_ne!(at(0), at(2));
         let address = |offset| AddressRef { offset, ..AddressRef::new(None) };
         assert_ne!(address(0), address(2));
@@ -796,10 +853,10 @@ mod tests {
         // Port of tests/test_ir.
         // py::test_two_cells_reached_by_different_values_are_different_cells.
         let mut left = Mem::new(None, 2);
-        left.base = Some(Held { value: 1, width: 2 });
+        left.base = Some(Held { value: 1, width: 2, offset: 0 });
         left.through = RegId::BX;
         let mut right = left.clone();
-        right.base = Some(Held { value: 2, width: 2 });
+        right.base = Some(Held { value: 2, width: 2, offset: 0 });
         right.through = RegId::SI;
 
         assert_ne!(left, right);
@@ -813,7 +870,7 @@ mod tests {
     #[test]
     fn how_a_memory_operand_is_spelled_is_part_of_its_identity() {
         let mut left = Mem::new(Some(Addr::new(Space::Segment, 4)), 2);
-        left.base = Some(Held { value: 4, width: 2 });
+        left.base = Some(Held { value: 4, width: 2, offset: 0 });
         let hash = |memory: &Mem| {
             use std::hash::Hasher;
             let mut state = std::collections::hash_map::DefaultHasher::new();
@@ -839,14 +896,17 @@ mod tests {
     #[test]
     fn values_finds_a_held_wherever_it_is() {
         // Port of tests/test_ir.py::test_values_finds_a_held_wherever_it_is.
-        let held = Held { value: 7, width: 2 };
+        let held = Held { value: 7, width: 2, offset: 0 };
         assert_eq!(values(&Loc::Held(held)), vec![held]);
 
         let mut memory = Mem::new(None, 4);
         memory.base = Some(held);
-        memory.index = Some(Held { value: 8, width: 2 });
-        memory.selector = Some(Held { value: 9, width: 2 });
-        assert_eq!(values(&Loc::Mem(memory)), vec![held, Held { value: 8, width: 2 }, Held { value: 9, width: 2 }],);
+        memory.index = Some(Held { value: 8, width: 2, offset: 0 });
+        memory.selector = Some(Held { value: 9, width: 2, offset: 0 });
+        assert_eq!(
+            values(&Loc::Mem(memory)),
+            vec![held, Held { value: 8, width: 2, offset: 0 }, Held { value: 9, width: 2, offset: 0 }],
+        );
     }
 
     #[test]
@@ -854,19 +914,21 @@ mod tests {
         // Port of tests/test_ir.
         // py::test_mapped_replaces_a_nested_base_and_leaves_the_rest.
         let mut memory = Mem::new(Some(Addr::new(Space::Far, 8)), 4);
-        memory.base = Some(Held { value: 1, width: 2 });
-        memory.selector = Some(Held { value: 2, width: 2 });
-        memory.index = Some(Held { value: 3, width: 2 });
+        memory.base = Some(Held { value: 1, width: 2, offset: 0 });
+        memory.selector = Some(Held { value: 2, width: 2, offset: 0 });
+        memory.index = Some(Held { value: 3, width: 2, offset: 0 });
         memory.through = RegId::BX;
 
-        let Loc::Mem(mapped_memory) =
-            mapped(&Loc::Mem(memory.clone()), |held| Held { value: held.value + 10, width: held.width })
-        else {
+        let Loc::Mem(mapped_memory) = mapped(&Loc::Mem(memory.clone()), |held| Held {
+            value: held.value + 10,
+            width: held.width,
+            offset: held.offset,
+        }) else {
             panic!("a memory operand remains memory");
         };
-        assert_eq!(mapped_memory.base, Some(Held { value: 11, width: 2 }));
-        assert_eq!(mapped_memory.index, Some(Held { value: 13, width: 2 }));
-        assert_eq!(mapped_memory.selector, Some(Held { value: 12, width: 2 }));
+        assert_eq!(mapped_memory.base, Some(Held { value: 11, width: 2, offset: 0 }));
+        assert_eq!(mapped_memory.index, Some(Held { value: 13, width: 2, offset: 0 }));
+        assert_eq!(mapped_memory.selector, Some(Held { value: 12, width: 2, offset: 0 }));
         assert_eq!(mapped_memory.through, memory.through);
         assert_eq!(mapped_memory.addr, memory.addr);
     }
@@ -874,9 +936,9 @@ mod tests {
     #[test]
     fn restoring_and_modelled_barrier_keep_the_python_contract() {
         let restored = restoring(
-            Loc::Held(Held { value: 1, width: 4 }),
-            Loc::Held(Held { value: 2, width: 2 }),
-            Loc::Held(Held { value: 3, width: 2 }),
+            Loc::Held(Held { value: 1, width: 4, offset: 0 }),
+            Loc::Held(Held { value: 2, width: 2, offset: 0 }),
+            Loc::Held(Held { value: 3, width: 2, offset: 0 }),
         );
         assert_eq!(restored.op, Operation::Restore);
         assert_eq!(restored.name.as_deref(), Some("restore"));
@@ -1102,7 +1164,7 @@ mod repr_tests {
             AddressRef::new(None).repr(),
             "Address(addr=None, through=0, index=0, scale=1, offset=0, disp_width=0)"
         );
-        assert_eq!(Held { value: 3, width: 2 }.repr(), "Held(value=3, width=2)");
+        assert_eq!(Held { value: 3, width: 2, offset: 0 }.repr(), "Held(value=3, width=2)");
         let semantics = Semantics {
             name: Some("mov".into()),
             dests: vec![Loc::Reg(Reg { register: RegId::AX, width: 2 })],

@@ -201,10 +201,8 @@ pub fn optimized_at(
 /// The routines the C link of this target resolves, by their IR names (the
 /// object writer decorates them): what `SimplifyLibCalls` may form.
 fn c_library() -> Vec<llrm_mir::libfunc::Routine> {
-    ["puts", "putchar", "fwrite", "fputc", "fputs"]
-        .into_iter()
-        .map(|name| llrm_mir::libfunc::Routine { standard: name, symbol: name.to_owned(), calling_convention: 0 })
-        .collect()
+    let names = ["puts", "putchar", "fwrite", "fputc", "fputs"].into_iter().chain(llrm_mir::libfunc::HOSTED_COMPARE);
+    llrm_mir::libfunc::Routine::stated(names, str::to_owned, 0)
 }
 
 /// Which instruction selector makes the machine function (`--isel=`).
@@ -266,6 +264,7 @@ pub fn functions_with(
 ) -> Result<Vec<crate::emit::Function>, String> {
     let module = &program.modules[0];
     let platform = platform_of_machine(program);
+    crate::lir_view::set_darwin(platform == Platform::Darwin);
     let mut out = Vec::new();
     for (id, global, function) in module.functions() {
         if function.is_declaration() {
@@ -325,8 +324,9 @@ pub fn functions_with(
             None => crate::regalloc::allocate(&mut machine),
         };
         dump("RegAlloc", &machine);
-        let variables = crate::frame::variable_offsets(&machine, &allocation);
-        let blocks = crate::frame::lower(&machine, &allocation).map_err(|why| format!("@{name}: {why}"))?;
+        let variables = crate::frame::variable_offsets(&machine, &allocation, platform == Platform::Darwin);
+        let blocks = crate::frame::lower(&machine, &allocation, platform == Platform::Darwin)
+            .map_err(|why| format!("@{name}: {why}"))?;
         let mut tables = crate::jumptable::tables_of(&machine);
         let blocks = crate::layout::fold(blocks, &mut tables);
         let blocks = crate::pairs::fold(blocks);
@@ -411,6 +411,8 @@ pub fn assembly(
     level: impl Into<Level>,
 ) -> Result<String, String> {
     let mut program = program(text, platform)?;
+    // The text carries no alias: refuse it rather than drop the symbol.
+    program.modules[0].refuse_aliases("arm64")?;
     let level = level.into();
     if level != Level::O0 {
         optimized_at(&mut program, level)?;

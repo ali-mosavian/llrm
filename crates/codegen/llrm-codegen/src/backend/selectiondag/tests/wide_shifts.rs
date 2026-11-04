@@ -120,7 +120,14 @@ fn shl_parts_is_a_funnel_shift_a_shift_and_a_cmov_on_bit_five() {
     DagLegalizer::new(
         &mut dag,
         &tli,
-        &mut X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, profile: None },
+        &mut X86Lowering {
+            cmov: false,
+            sse2: false,
+            min_size: false,
+            i16_mul_chains: false,
+            sext_load: false, zext_free: false,
+            profile: None,
+        },
     )
     .run()
     .unwrap();
@@ -156,4 +163,116 @@ fn a_variable_shift_without_the_parts_node_is_refused() {
     dag.set_root(low);
     let error = TypeLegalizer::new(&mut dag, &tli).run().unwrap_err();
     assert!(matches!(error, LegalizeError::Unsupported { op: ISD::Shl, .. }), "{error:?}");
+}
+
+/// A target with no `shl_parts` and no libcall row of its own reached
+/// "expand shift to a library call" for an `i64` shifted by a variable: the
+/// pin's `SHL_I64` is `__ashldi3` on every target. It was refused (6502
+/// `u64.c`); it is now one call of two operands.
+#[test]
+fn a_variable_i64_shift_without_parts_is_the_pins_default_libcall() {
+    use super::super::legalize_dag::Hooks;
+    #[derive(Default)]
+    struct Calls(Vec<(&'static str, usize)>);
+    impl Hooks for Calls {
+        fn lower_operation(
+            &mut self,
+            _dag: &mut SelectionDAG,
+            _node: SDValue,
+        ) -> Option<SDValue> {
+            None
+        }
+        fn make_lib_call(
+            &mut self,
+            dag: &mut SelectionDAG,
+            name: &'static str,
+            args: &[SDValue],
+            ret: EVT,
+            _signed: bool,
+        ) -> Option<SDValue> {
+            self.0.push((name, args.len()));
+            let (lo, hi) = (dag.get_register(EVT::I32, 90), dag.get_register(EVT::I32, 91));
+            Some(dag.get_node(ISD::BuildPair, ret, &[lo, hi]))
+        }
+    }
+    let mut tli = TargetLowering::empty(TargetLoweringInfo::x86_32());
+    tli.set_operation_action(ISD::ShlParts, MVT::I32, Action::Expand);
+    let mut dag = dag();
+    let x = dag.get_constant_with(5, EVT::I64, false, true);
+    let ptr = dag.get_register(EVT::I32, 7);
+    let chain = dag.entry_node();
+    let info = MemInfo {
+        mem_vt: EVT::I8,
+        align: 1,
+        volatile: false,
+        base: MemBase::Stack(1),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
+    let amount = dag.get_load(EVT::I8, chain, ptr, info);
+    let moved = dag.get_node(ISD::Shl, EVT::I64, &[x, amount]);
+    let low = dag.get_node(ISD::Truncate, EVT::I32, &[moved]);
+    dag.set_root(low);
+    let mut calls = Calls::default();
+    TypeLegalizer::new(&mut dag, &tli).with_hooks(&mut calls).run().unwrap();
+    assert_eq!(calls.0, vec![("__ashldi3", 2)]);
+}
+
+fn funnel_value(
+    dag: &SelectionDAG,
+    v: SDValue,
+) -> u64 {
+    let arg = |i: usize| funnel_value(dag, dag.operand(v, i));
+    let bits = dag.value_type(v).size_in_bits();
+    let mask = if bits >= 64 { u64::MAX } else { (1u64 << bits) - 1 };
+    let funnel = |left: bool| {
+        let (a, b, z) = (arg(0), arg(1), arg(2) % u64::from(bits));
+        let both = (u128::from(a) << bits) | u128::from(b);
+        let r = if left { both << z >> bits } else { both >> z };
+        (r as u64) & mask
+    };
+    match dag.opcode(v) {
+        ISD::Constant => dag.constant(v).unwrap() as u64 & mask,
+        ISD::FShl => funnel(true),
+        ISD::FShr => funnel(false),
+        ISD::Truncate => arg(0) & mask,
+        ISD::BuildPair => arg(0) | (arg(1) << (bits / 2)),
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+/// An `i32` funnel shift on a target whose widest register is 16 bits had no
+/// expansion ("Unsupported FShl, expand result"; 6502). Each half of the
+/// result must equal the funnel shift of the whole, for amounts either side
+/// of the half width, at both directions.
+#[test]
+fn an_i32_funnel_shift_expands_to_two_half_width_funnel_shifts() {
+    let tli = TargetLowering::empty(TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false));
+    for op in [ISD::FShl, ISD::FShr] {
+        for amount in [1u128, 5, 15, 16, 17, 31] {
+            let (x, y) = (0x1234_5678u128, 0x9ABC_DEF0u128);
+            let mut dag = dag();
+            let (xn, yn) =
+                (dag.get_constant_with(x, EVT::I32, false, true), dag.get_constant_with(y, EVT::I32, false, true));
+            let zn = dag.get_constant(amount, EVT::I8);
+            let funnel = dag.get_node(op, EVT::I32, &[xn, yn, zn]);
+            let low = dag.get_node(ISD::Truncate, EVT::I16, &[funnel]);
+            let sixteen = dag.get_constant(16, EVT::I8);
+            let upper = dag.get_node(ISD::Srl, EVT::I32, &[funnel, sixteen]);
+            let high = dag.get_node(ISD::Truncate, EVT::I16, &[upper]);
+            let both = dag.get_node(ISD::Add, EVT::I16, &[low, high]);
+            dag.set_root(both);
+            TypeLegalizer::new(&mut dag, &tli).run().unwrap_or_else(|e| panic!("{op:?} by {amount}: {e:?}"));
+            let root = dag.get_root();
+            let got = |v: SDValue| funnel_value(&dag, v);
+            let whole = {
+                let both = (x << 32) | y;
+                let r = if op == ISD::FShl { both << amount >> 32 } else { both >> amount };
+                r as u32
+            };
+            let (l, h) = (got(dag.operand(root, 0)) as u32, got(dag.operand(root, 1)) as u32);
+            assert_eq!((l, h), (whole & 0xFFFF, whole >> 16), "{op:?} by {amount}");
+        }
+    }
 }

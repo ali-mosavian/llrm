@@ -194,10 +194,60 @@ fn a_gnu_operand_is_the_pins_addressing_syntax() {
     assert_eq!(clocks(Cpu::M68000, &gnu("bras 80000074 <k+0x8>")), 10);
 }
 
+/// objdump prints an absolute address bare, as it prints a branch target; the
+/// bare hex of a non-branch was read as a target and the instruction was
+/// "unpriced": libgcc's `lea 80023c20,%a0` (4146 of 173773 executed
+/// instructions of its add routine) was left out of a total.
+#[test]
+fn a_bare_hex_operand_of_a_non_branch_is_an_absolute_address() {
+    assert_eq!(gnu("lea 80023c20,%a0"), "lea 0x80023c20:l, %a0");
+    assert_eq!(clocks(Cpu::M68000, &gnu("lea 80023c20,%a0")), 12);
+    assert_eq!(gnu("jsr 80000200 <foo>"), "jsr 0x80000200:l");
+    assert_eq!(gnu("bsrs 80000200"), "bsr 80000200");
+}
+
 /// Cost through the conversion, the way the cycles tool prices code.
 #[test]
 fn a_gnu_line_is_priced_after_conversion() {
     let line = gnu("addql #1,%d0");
     assert_eq!(clocks(Cpu::M68000, &line), 8);
     assert_eq!(clocks(Cpu::M68020, &line), 2);
+}
+
+/// objdump prints the 32 / 32 `divu.l %d5, %d2` as `divull %d5,%d2,%d2`, three
+/// operands. The model took only the two-operand form, so every long divide in
+/// a disassembled executable was unpriced and the hardware-divide routines of
+/// softfloat looked 3-4x cheaper than they are (68020: 720 clocks per f32
+/// division, the divides' own 76 each missing).
+#[test]
+fn a_gnu_long_divide_is_the_two_operand_form() {
+    assert_eq!(gnu("divull %d5,%d2,%d2"), "divu.l %d5, %d2");
+    assert_eq!(gnu("divsll %d5,%d2,%d2"), "divs.l %d5, %d2");
+    assert_eq!(gnu("divul %d5,%d2,%d3"), "divu.l %d5, %d3");
+    assert_eq!(gnu("divsl %a0@,%d2,%d3"), "divs.l (%a0), %d3");
+    // the cache-case cell (MC68020UM 8.2.8: 78 for DIVU.L, 90 for DIVS.L) plus
+    // the extension word the `**` mark adds
+    assert_eq!(clocks(Cpu::M68020, &gnu("divull %d5,%d2,%d2")), 78 + 2);
+    assert_eq!(clocks(Cpu::M68020, &gnu("divsll %d5,%d2,%d2")), 90 + 2);
+    assert_eq!(clocks(Cpu::M68020, &gnu("divull %d5,%d2,%d2")), clocks(Cpu::M68020, "divu.l %d5, %d2"));
+}
+
+/// objdump prints the target of a PC-relative `lea` as an absolute address,
+/// `lea %pc@(80010000),%a0`; the bare hex was not a displacement the model
+/// knows, so 6972 of 63218 instructions of a 68020 program were "unpriced".
+#[test]
+fn a_gnu_pc_relative_target_address_is_a_displacement() {
+    assert_eq!(gnu("lea %pc@(80010000),%a0"), "lea (0,%pc), %a0");
+    assert_eq!(clocks(Cpu::M68020, &gnu("lea %pc@(80010000),%a0")), clocks(Cpu::M68020, "lea (0x20,%pc), %a0"));
+    assert_eq!(clocks(Cpu::M68000, &gnu("lea %pc@(80010000),%a0")), clocks(Cpu::M68000, "lea (0x20,%pc), %a0"));
+}
+
+/// objdump annotates an operand with its symbol in mid-line,
+/// `lea %pc@(80000062) <a>,%a0`; the text from `<` on was dropped, destination
+/// included, and the `lea` stayed unpriced.
+#[test]
+fn a_symbol_annotation_inside_the_operands_keeps_the_rest() {
+    assert_eq!(gnu("lea %pc@(80000062) <a>,%a0"), "lea (0,%pc), %a0");
+    assert_eq!(gnu("jsr 80004064 <kmain>"), "jsr 0x80004064:l");
+    assert_eq!(clocks(Cpu::M68020, &gnu("lea %pc@(80000062) <a>,%a0")), clocks(Cpu::M68020, "lea (0x20,%pc), %a0"));
 }

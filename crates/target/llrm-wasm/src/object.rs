@@ -10,7 +10,24 @@
 //! DEVIATE W12: no `name` or debug sections; the feature list is LLVM 20's
 //! generic CPU, not the pin's. Reason: QB carries no debug info and the pin
 //! build has no WebAssembly target to state its list. Exit: DWARF for wasm, and
-//! the pin build with the target.
+//! the pin build with the target (undated, none planned).
+//!
+//! DEVIATE W23: at `-O0`, and for IR given straight to the backend, a call
+//! naming an alias is a call of its aliasee (the text IR parser resolves the
+//! operand, llrm-mir `parse.rs`), so its `R_WASM_FUNCTION_INDEX_LEB` is against
+//! `impl`'s symbol; the pin keeps `call other` with the relocation against the
+//! alias symbol
+//! ([`GetGlobalAddressSymbol`](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/WebAssembly/WebAssemblyMCInstLower.cpp#L71)
+//! prints the symbol of the global it is given). At `-O1` and up the pin's own
+//! pipeline makes the same call:
+//! [`OptimizeGlobalAliases`](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/IPO/GlobalOpt.cpp#L2260)
+//! replaces the uses of a non-interposable alias with its aliasee (pin clang
+//! `-O1/-O2/-Os` call `@impl`, `-O0` calls `@other`). The alias symbol itself
+//! is the pin's. A weak alias, which a linker may replace, is refused by the
+//! parser. Exit: the shared model gets alias globals (object-refactor's
+//! GlobalAlias work), no later than 2026-11-30, else re-ruled that day;
+//! `a_call_naming_an_alias_relocates_against_its_aliasee` pins the form until
+//! then and flips with it.
 //!
 //! # See also
 //! `WasmObjectWriter.cpp` (`writeObject`, `writeTypeSection`,
@@ -20,19 +37,6 @@
 
 use crate::asm_strings::find;
 use crate::mir::{Binding, Function, Operand, ValType};
-
-/// The features `llc -mtriple=wasm32` of LLVM 20.1.8 writes for the generic
-/// CPU.
-const TARGET_FEATURES: [&str; 8] = [
-    "bulk-memory",
-    "bulk-memory-opt",
-    "call-indirect-overlong",
-    "multivalue",
-    "mutable-globals",
-    "nontrapping-fptoint",
-    "reference-types",
-    "sign-ext",
-];
 
 const SECTION_TYPE: u8 = 1;
 const SECTION_IMPORT: u8 = 2;
@@ -45,6 +49,9 @@ const OPCODE_END: u8 = 0x0b;
 const SYMBOL_KIND_DATA: u8 = 1;
 const WASM_SEGMENT_INFO: u8 = 5;
 const SECTION_CUSTOM: u8 = 0;
+const SYMBOL_KIND_SECTION: u8 = 3;
+const R_WASM_FUNCTION_OFFSET_I32: u8 = 8;
+const R_WASM_SECTION_OFFSET_I32: u8 = 9;
 const LINKING_VERSION: u8 = 2;
 const WASM_SYMBOL_TABLE: u8 = 8;
 const SYMBOL_KIND_FUNCTION: u8 = 0;
@@ -60,6 +67,7 @@ const EXTERNAL_GLOBAL: u8 = 3;
 const SYMBOL_KIND_GLOBAL: u8 = 2;
 const WASM_SYMBOL_BINDING_WEAK: u8 = 1;
 const WASM_SYMBOL_BINDING_LOCAL: u8 = 2;
+const WASM_SYMBOL_VISIBILITY_HIDDEN: u8 = 4;
 const R_WASM_MEMORY_ADDR_I32: u8 = 5;
 const R_WASM_TABLE_INDEX_I32: u8 = 2;
 const PAGE: u32 = 65536;
@@ -159,6 +167,10 @@ pub fn encode_instruction(
     if inst.opcode == crate::mir::EH_LABEL {
         return;
     }
+    // The implicit return is the function's last `end`.
+    if inst.opcode == crate::dagisel::post_ids::FALLTHROUGH_RETURN {
+        return;
+    }
     let asm = find(inst.opcode).unwrap_or_else(|| panic!("opcode {} has no encoding", inst.opcode));
     let binary = asm.binary;
     if binary < 1 << 8 {
@@ -252,12 +264,44 @@ pub fn encode_instruction(
     }
 }
 
-fn binding_flag(binding: Binding) -> u8 {
-    match binding {
+fn symbol_flags(
+    binding: Binding,
+    hidden: bool,
+) -> u8 {
+    let binding = match binding {
         Binding::Global => 0,
         Binding::Weak => WASM_SYMBOL_BINDING_WEAK,
         Binding::Local => WASM_SYMBOL_BINDING_LOCAL,
-    }
+    };
+    binding | if hidden { WASM_SYMBOL_VISIBILITY_HIDDEN } else { 0 }
+}
+
+/// What a relocation in a debug section names.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DebugTarget {
+    /// `R_WASM_FUNCTION_OFFSET_I32`: the function of this name, a byte offset
+    /// into its body (the field holds the offset, the addend repeats it).
+    Function(String),
+    /// `R_WASM_SECTION_OFFSET_I32`: the debug section of this index in the
+    /// list given to [`write_with_debug`], a byte offset into it.
+    Section(usize),
+}
+
+/// A four-byte field of a debug section the linker rewrites.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DebugReloc {
+    pub offset: usize,
+    pub target: DebugTarget,
+    pub addend: i64,
+}
+
+/// A custom `.debug_*` section and the relocations (`reloc..debug_*`) against
+/// it. `WasmObjectWriter::writeCustomSection` and `writeRelocSection`.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct DebugSection {
+    pub name: String,
+    pub bytes: Vec<u8>,
+    pub relocs: Vec<DebugReloc>,
 }
 
 /// A function after the passes, encoded: the body is the locals and the code.
@@ -272,9 +316,20 @@ pub struct Encoded {
     /// The wasm globals the body names.
     pub globals: Vec<(String, ValType)>,
     pub binding: Binding,
+    pub hidden: bool,
     /// The function has a personality: the pin keeps the indirect function
     /// table alive for it.
     pub personality: bool,
+    /// The body offset and source line of each instruction that has one.
+    pub lines: Vec<(usize, u32)>,
+    /// `-g`: the metadata record and the stack-pointer displacement of each
+    /// variable that lives in a stack object.
+    pub variables: Vec<(u32, i64)>,
+    /// The local that holds the stack pointer after the prologue.
+    pub frame_base: Option<u32>,
+    /// `-g`: the metadata record and the local of each variable that is an
+    /// argument the code never overwrites.
+    pub argument_variables: Vec<(u32, u32)>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -336,7 +391,11 @@ pub fn encode_function(f: &Function) -> Encoded {
         body.push(val_type(ty));
     }
     let mut relocs = Vec::new();
+    let mut lines = Vec::new();
     for inst in f.blocks.iter().flatten() {
+        if inst.line != 0 {
+            lines.push((body.len(), inst.line));
+        }
         encode_instruction(&mut body, inst, &f.symbols, &f.signatures, &mut relocs);
     }
     Encoded {
@@ -348,7 +407,56 @@ pub fn encode_function(f: &Function) -> Encoded {
         callees: f.callees.clone(),
         globals: f.globals.clone(),
         binding: f.binding,
+        hidden: f.hidden,
         personality: f.personality,
+        lines,
+        variables: f.variables.iter().map(|one| (one.record, one.disp)).collect(),
+        frame_base: frame_base_local(f),
+        argument_variables: unwritten_arguments(f),
+    }
+}
+
+/// The variables that are arguments, whose local no instruction writes: the
+/// local holds the argument through the whole function.
+fn unwritten_arguments(f: &Function) -> Vec<(u32, u32)> {
+    use crate::dagisel::generated::ids::opcode as op;
+    let written: std::collections::BTreeSet<i64> = f
+        .blocks
+        .iter()
+        .flatten()
+        .filter_map(|inst| match (inst.opcode, &inst.operands[..]) {
+            (
+                op::LOCAL_SET_I32 | op::LOCAL_SET_I64 | op::LOCAL_SET_F32 | op::LOCAL_SET_F64,
+                [Operand::Imm(local), ..],
+            ) => Some(*local),
+            (code, [_, Operand::Imm(local), ..]) if is_local_tee(code) => Some(*local),
+            _ => None,
+        })
+        .collect();
+    f.argument_variables
+        .iter()
+        .filter(|&&(_, number)| (number as usize) < f.params.len() && !written.contains(&i64::from(number)))
+        .copied()
+        .collect()
+}
+
+fn is_local_tee(opcode: u16) -> bool {
+    use crate::dagisel::post_ids as post;
+    [post::LOCAL_TEE_I32, post::LOCAL_TEE_I64, post::LOCAL_TEE_F32, post::LOCAL_TEE_F64].contains(&opcode)
+}
+
+/// The local the prologue stores the lowered stack pointer in: the `local.set`
+/// after `global.get __stack_pointer; const N; sub`. None where the function
+/// has no frame of its own, or keeps the value on the stack.
+fn frame_base_local(f: &Function) -> Option<u32> {
+    use crate::dagisel::generated::ids::opcode as op;
+    let insts: Vec<&crate::mir::Inst> = f.blocks.iter().flatten().collect();
+    let at = insts.iter().position(|one| matches!(one.opcode, op::SUB_I32 | op::SUB_I64))?;
+    insts.get(at.checked_sub(2)?).filter(|one| matches!(one.opcode, op::GLOBAL_GET_I32 | op::GLOBAL_GET_I64))?;
+    let set = insts.get(at + 1).filter(|one| matches!(one.opcode, op::LOCAL_SET_I32 | op::LOCAL_SET_I64))?;
+    match set.operands.first().copied() {
+        Some(Operand::Imm(local)) => u32::try_from(local).ok(),
+        _ => None,
     }
 }
 
@@ -372,6 +480,7 @@ pub struct DataObject {
     pub bytes: Vec<u8>,
     /// `WASM_SYMBOL_BINDING_*`.
     pub binding: Binding,
+    pub hidden: bool,
     /// A mergeable C string: `WASM_SEGMENT_FLAG_STRINGS`.
     pub strings: bool,
     /// The pointers in `bytes`: `R_WASM_MEMORY_ADDR_I32` at each.
@@ -396,6 +505,16 @@ pub struct Data {
     /// `llvm.global_ctors`: the priority and function of each entry, by
     /// ascending priority.
     pub init_funcs: Vec<(u16, String)>,
+    /// `@a = alias ..., ptr @f`, the assembler's `a = f`.
+    pub aliases: Vec<Alias>,
+}
+
+/// A second name for a defined function: a symbol of the same index.
+pub struct Alias {
+    pub name: String,
+    pub target: String,
+    pub binding: Binding,
+    pub hidden: bool,
 }
 
 impl DataObject {
@@ -418,6 +537,7 @@ enum Symbol<'a> {
         /// The position in `functions` of its definition, `None` for an import.
         defined: Option<usize>,
         binding: Binding,
+        hidden: bool,
         params: &'a [ValType],
         results: &'a [ValType],
     },
@@ -486,9 +606,23 @@ fn introduce<'a>(
     } else if let Some((_, ty)) = f.and_then(|f| f.globals.iter().find(|(one, _)| one == name)) {
         symbols.push(Symbol::Global { name, ty: *ty });
     } else if let Some((_, params, results)) = f.and_then(|f| f.callees.iter().find(|(one, ..)| one == name)) {
-        symbols.push(Symbol::Function { name, defined: None, binding: Binding::Global, params, results });
+        symbols.push(Symbol::Function {
+            name,
+            defined: None,
+            binding: Binding::Global,
+            hidden: false,
+            params,
+            results,
+        });
     } else if let Some((_, params, results)) = data.functions.iter().find(|(one, ..)| one == name) {
-        symbols.push(Symbol::Function { name, defined: None, binding: Binding::Global, params, results });
+        symbols.push(Symbol::Function {
+            name,
+            defined: None,
+            binding: Binding::Global,
+            hidden: false,
+            params,
+            results,
+        });
     } else {
         panic!("symbol {name} is no variable, global or called function");
     }
@@ -498,7 +632,18 @@ fn introduce<'a>(
 pub fn write(
     functions: &[Encoded],
     data: &Data,
-    exceptions: bool,
+    features: crate::features::Features,
+) -> Vec<u8> {
+    write_with_debug(functions, data, features, &[])
+}
+
+/// [`write`] with custom debug sections after the data: each one, its
+/// section symbol in the `linking` table, and its `reloc.` section.
+pub fn write_with_debug(
+    functions: &[Encoded],
+    data: &Data,
+    features: crate::features::Features,
+    debug: &[DebugSection],
 ) -> Vec<u8> {
     let objects = &data.objects;
     let mut symbols: Vec<Symbol> = Vec::new();
@@ -510,6 +655,7 @@ pub fn write(
             name: &f.name,
             defined: Some(at),
             binding: f.binding,
+            hidden: f.hidden,
             params: &f.params,
             results: &f.results,
         };
@@ -533,6 +679,26 @@ pub fn write(
     }
     for (_, name) in &data.init_funcs {
         introduce(&mut symbols, data, None, name);
+    }
+    // `emitGlobalAlias` follows every function and variable.
+    for alias in &data.aliases {
+        let target = symbols
+            .iter()
+            .find_map(|s| match s {
+                Symbol::Function { name, defined: Some(at), params, results, .. } if *name == alias.target => {
+                    Some((*at, *params, *results))
+                }
+                _ => None,
+            })
+            .expect("an alias of a defined function");
+        symbols.push(Symbol::Function {
+            name: &alias.name,
+            defined: Some(target.0),
+            binding: alias.binding,
+            hidden: alias.hidden,
+            params: target.1,
+            results: target.2,
+        });
     }
     let symbol_named = |symbols: &[Symbol], name: &str| {
         symbols
@@ -563,8 +729,12 @@ pub fn write(
         }
     }
     // `emitEndOfAsmFile`: a function whose address is taken, a constructor
-    // included, keeps the table alive.
-    let address_taken = !slots.is_empty() || !data.init_funcs.is_empty() || functions.iter().any(|f| f.personality);
+    // included, keeps the table alive. An alias names its function, which
+    // `Function::hasAddressTaken` counts.
+    let address_taken = !slots.is_empty()
+        || !data.init_funcs.is_empty()
+        || !data.aliases.is_empty()
+        || functions.iter().any(|f| f.personality);
     if address_taken {
         introduce(&mut symbols, data, None, crate::INDIRECT_FUNCTION_TABLE);
     }
@@ -774,19 +944,22 @@ pub fn write(
         }
         section(&mut out, SECTION_DATA, &payload);
     }
+    for one in debug {
+        custom(&mut out, &one.name, &one.bytes);
+    }
 
     payload.clear();
     payload.push(LINKING_VERSION);
     let mut table = Vec::new();
-    uleb(&mut table, symbols.len() as u64);
+    uleb(&mut table, (symbols.len() + debug.len()) as u64);
     for (s, symbol) in symbols.iter().enumerate() {
         match symbol {
-            Symbol::Function { name: function, defined, binding, .. } => {
+            Symbol::Function { name: function, defined, binding, hidden, .. } => {
                 table.push(SYMBOL_KIND_FUNCTION);
                 if defined.is_some() {
                     // Flags (binding, default visibility, defined), index,
                     // name.
-                    table.push(binding_flag(*binding));
+                    table.push(symbol_flags(*binding, *hidden));
                     uleb(&mut table, u64::from(index_of[s]));
                     name(&mut table, function);
                 } else {
@@ -801,7 +974,7 @@ pub fn write(
             Symbol::Data { object } => {
                 // Flags, name, segment, offset in it, size.
                 let one = &objects[*object];
-                table.extend([SYMBOL_KIND_DATA, binding_flag(one.binding)]);
+                table.extend([SYMBOL_KIND_DATA, symbol_flags(one.binding, one.hidden)]);
                 name(&mut table, &one.name);
                 uleb(&mut table, *object as u64);
                 uleb(&mut table, 0);
@@ -822,6 +995,16 @@ pub fn write(
                 uleb(&mut table, u64::from(index_of[s]));
             }
         }
+    }
+    // The first section after the data is the first debug section.
+    let first_debug = SECTION_INDEX_CODE
+        + u64::from(!slots.is_empty())
+        + u64::from(!objects.is_empty())
+        + 1
+        + u64::from(!objects.is_empty());
+    for s in 0..debug.len() {
+        table.extend([SYMBOL_KIND_SECTION, WASM_SYMBOL_BINDING_LOCAL]);
+        uleb(&mut table, first_debug + s as u64);
     }
     payload.push(WASM_SYMBOL_TABLE);
     uleb_padded(&mut payload, table.len() as u32);
@@ -881,17 +1064,36 @@ pub fn write(
         custom(&mut out, "reloc.DATA", &payload);
     }
 
+    for (s, one) in debug.iter().enumerate() {
+        if one.relocs.is_empty() {
+            continue;
+        }
+        payload.clear();
+        uleb(&mut payload, first_debug + s as u64);
+        uleb(&mut payload, one.relocs.len() as u64);
+        for reloc in &one.relocs {
+            let (code, symbol) = match &reloc.target {
+                DebugTarget::Function(function) => (R_WASM_FUNCTION_OFFSET_I32, position(function)),
+                DebugTarget::Section(i) => (R_WASM_SECTION_OFFSET_I32, symbols.len() + i),
+            };
+            payload.push(code);
+            uleb(&mut payload, reloc.offset as u64);
+            uleb(&mut payload, symbol as u64);
+            sleb(&mut payload, reloc.addend);
+        }
+        custom(&mut out, &format!("reloc.{}", one.name), &payload);
+    }
+
     payload.clear();
-    // Sorted by name: `exception-handling` follows `call-indirect-overlong`.
-    let mut features = TARGET_FEATURES.to_vec();
-    if exceptions {
-        features.insert(3, "exception-handling");
+    // No feature, no section.
+    let features: Vec<&str> = features.names().collect();
+    if !features.is_empty() {
+        uleb(&mut payload, features.len() as u64);
+        for feature in features {
+            payload.push(b'+');
+            name(&mut payload, feature);
+        }
+        custom(&mut out, "target_features", &payload);
     }
-    uleb(&mut payload, features.len() as u64);
-    for feature in features {
-        payload.push(b'+');
-        name(&mut payload, feature);
-    }
-    custom(&mut out, "target_features", &payload);
     out
 }

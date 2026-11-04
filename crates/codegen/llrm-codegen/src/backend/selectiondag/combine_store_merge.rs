@@ -36,7 +36,7 @@ const MAX_SEARCH_NODES: usize = 1024;
 
 /// What an address is relative to: `BaseIndexOffset`'s base.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Base {
+pub(super) enum Base {
     Global(u32),
     Frame(i32),
     Node(u32),
@@ -61,7 +61,7 @@ struct Link {
 
 impl<H: CombineHooks> DagCombiner<'_, H> {
     /// `BaseIndexOffset::match`: the base of `ptr` and its constant offset.
-    fn match_address(
+    pub(super) fn match_address(
         &self,
         ptr: SDValue,
     ) -> (Base, i64) {
@@ -72,6 +72,16 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 (ISD::Add, _) => {
                     let Some(c) = self.dag.constant(self.dag.operand(at, 1)) else { break };
                     let bits = self.dag.value_type(at).size_in_bits();
+                    offset = offset.wrapping_add(((c << (128 - bits)) as i128 >> (128 - bits)) as i64);
+                    at = self.dag.operand(at, 0);
+                }
+                // Only consider ORs which act as adds.
+                (ISD::Or, _) => {
+                    let Some(c) = self.dag.constant(self.dag.operand(at, 1)) else { break };
+                    let bits = self.dag.value_type(at).size_in_bits();
+                    if !super::known_bits::masked_value_is_zero(self.dag, self.dag.operand(at, 0), c) {
+                        break;
+                    }
                     offset = offset.wrapping_add(((c << (128 - bits)) as i128 >> (128 - bits)) as i64);
                     at = self.dag.operand(at, 0);
                 }
@@ -239,14 +249,17 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         &mut self,
         st: SDValue,
     ) -> bool {
-        // "Always perform this optimization before types are legal"; no
-        // x86 type asks to merge after (`mergeStoresAfterLegalization`).
-        if self.level >= CombineLevel::AfterLegalizeTypes || self.opt_none {
+        if self.opt_none {
             return false;
         }
         let Some(tli) = self.tli else { return false };
         let NodeData::Mem(info) = self.dag.node(st).data else { return false };
         let mem = info.mem_vt;
+        // "Always perform this optimization before types are legal. If the
+        // target prefers, also try this after legalization".
+        if self.level >= CombineLevel::AfterLegalizeTypes && !self.hooks.merge_stores_after_legalization(mem) {
+            return false;
+        }
         let widest = [8u32, 16, 32, 64]
             .into_iter()
             .filter(|&bits| tli.types.is_type_legal(EVT::integer(bits)))

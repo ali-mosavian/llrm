@@ -1,6 +1,6 @@
-@init = global i32 5, align 4
-@zero = global i32 0, align 4
-@arr = global [3 x i32] [i32 1, i32 2, i32 3], align 4
+@init = dso_local global i32 5, align 4
+@zero = dso_local global i32 0, align 4
+@arr = dso_local global [3 x i32] [i32 1, i32 2, i32 3], align 4
 define i32 @f() {
   %a = load i32, ptr @init
   %b = load i32, ptr @zero
