@@ -191,6 +191,16 @@ fn expression(what: &Semantics) -> Semantics {
     key
 }
 
+/// A qword symbol address, a `LEA64r` in the pin: no def as cheap as a move.
+fn qword_address(one: &Insn) -> bool {
+    one.what.as_ref().is_some_and(|what| {
+        matches!(
+            (what.dests.as_slice(), what.sources.as_slice()),
+            ([Loc::Held(held)], [Loc::Imm(llrm_lir::Imm { address: Some(_), .. })]) if held.width == 8
+        )
+    })
+}
+
 /// `TII->isAsCheapAsAMove`.
 fn cheap(one: &Insn) -> bool {
     crate::backend::machinesink::as_cheap_as_a_move(one)
@@ -356,8 +366,11 @@ impl Walk<'_> {
         // if shared, and its push and pop (2 executed per entry) cost more
         // than the one instruction sharing removes unless that runs often
         // enough. The pin shares it (heuristic 2 asks only for a register use
-        // or a non-copy reader). Exit 2026-11-20.
-        if !reads_value && self.freq[block] <= 2.0 && self.crosses_call(shared, shared_block, block, index) {
+        // or a non-copy reader). Not a qword symbol address (`LEA64r`): the
+        // pin's allocator holds it in a register it pushes for the other
+        // addresses too, and a later loop reads it from there. Exit
+        // 2026-11-20.
+        if !qword_address(one) && !reads_value && self.freq[block] <= 2.0 && self.crosses_call(shared, shared_block, block, index) {
             return false;
         }
         // Heuristic 3: a value a phi reads is not shared unless the block

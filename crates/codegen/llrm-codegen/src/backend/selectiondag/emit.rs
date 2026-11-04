@@ -4168,6 +4168,11 @@ impl Emitter<'_, '_> {
         }
         let [Loc::Held(into)] = what.dests.as_slice() else { return held };
         let source = match what.sources.as_slice() {
+            // Not a qword symbol address: the pin rematerialises a copy only
+            // of a def that is as cheap as a move
+            // (`RegisterCoalescer::reMaterializeDef`, L1323), and `LEA64r`
+            // is not.
+            [Loc::Imm(imm)] if imm.address.is_some() && imm.width == 8 => return held,
             [Loc::Imm(imm)] => Loc::Imm(imm.clone()),
             [Loc::Held(from)] => {
                 let again = self.made_again_for_fixed_use(*from);

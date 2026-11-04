@@ -177,7 +177,13 @@ pub fn constrained(
 
     let source = |value: u32, width: u32| -> Loc {
         match constants.get(&value) {
-            Some(constant) if constant.width == width => Loc::Imm(constant.clone()),
+            // Not a qword symbol address: the pin rematerialises a copy to a
+            // fixed register only from a def as cheap as a move
+            // (`RegisterCoalescer::reMaterializeDef`, L1323), and `LEA64r` is
+            // not.
+            Some(constant) if constant.width == width && !(constant.address.is_some() && width == 8) => {
+                Loc::Imm(constant.clone())
+            }
             _ => Loc::Held(Held { value, width }),
         }
     };
