@@ -729,7 +729,12 @@ impl Cost {
             if r.tti.preferred_addressing_mode().has_post_indexed()
                 && (r.tti.is_post_inc_load_legal(ty) || r.tti.is_post_inc_store_legal(ty))
                 && let Some((start, step, _)) = r.se.match_affine_add_rec(reg)
-                && r.se.as_constant(step).is_some()
+                && let Some(step_bytes) = r.se.as_constant(step).map(|c| c.sext_value() as i64)
+                && lu
+                    .access_ty
+                    .mem_ty
+                    .and_then(|t| r.cx.context.types.int_bits(t))
+                    .is_none_or(|bits| r.tti.is_post_inc_step_legal(i64::from(bits / 8), step_bytes))
                 && r.se.as_constant(start).is_none()
                 && r.se.is_loop_invariant(r.cx, start, Some(r.l))
                 && lu.all_fixups_unconditional
@@ -799,16 +804,13 @@ pub fn may_use_post_inc_mode(
     s: Scev,
     l: BlockId,
 ) -> bool {
-    let int_access = lu.access_ty.mem_ty.is_some_and(|ty| cx.context.types.int_bits(ty).is_some());
-    if lu.kind != Kind::Address || !int_access {
-        return false;
-    }
+    let access_bits = lu.access_ty.mem_ty.and_then(|ty| cx.context.types.int_bits(ty));
+    let Some(access_bits) = access_bits.filter(|_| lu.kind == Kind::Address) else { return false };
     let Some((start, step, _)) = se.match_affine_add_rec(s) else { return false };
-    if se.as_constant(step).is_none() {
-        return false;
-    }
+    let Some(step_bytes) = se.as_constant(step).map(|c| c.sext_value() as i64) else { return false };
     let ty = crate::lsr_generate::tti_ty(se.type_of(s));
     (tti.is_post_inc_load_legal(ty) || tti.is_post_inc_store_legal(ty))
+        && tti.is_post_inc_step_legal(i64::from(access_bits / 8), step_bytes)
         && se.as_constant(start).is_none()
         && se.is_loop_invariant(cx, start, Some(l))
 }

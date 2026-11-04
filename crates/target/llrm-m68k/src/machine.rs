@@ -16,7 +16,9 @@ use std::rc::Rc;
 
 use llrm_mir::spaces::Spaces;
 use llrm_mir::target::{AddressForm, Machine, OperationCosts};
-use llrm_mir::tti::{ArithOp, Basic, CastKind, CmpSel, Cost, CostKind, ImmUser, MemoryOp, OperandInfo, Tti, Ty};
+use llrm_mir::tti::{
+    AddressingMode, ArithOp, Basic, CastKind, CmpSel, Cost, CostKind, ImmUser, MemoryOp, OperandInfo, Tti, Ty,
+};
 
 /// The m68k cost model the passes of the mid-end read.
 #[derive(Clone, Debug, Default)]
@@ -97,6 +99,36 @@ impl Tti for M68k {
             2 | 4 | 8 => self.scaled_index,
             _ => false,
         }
+    }
+
+    /// DEVIATE: the pin's M68k states no preference; `(An)+` steps a pointer
+    /// by the access size for free (descriptors in `indexed.rs`), so LSR keeps
+    /// a pointer walk rather than an index beside a counter. Exit: none.
+    fn preferred_addressing_mode(&self) -> AddressingMode {
+        AddressingMode::PostIndexed
+    }
+
+    fn is_post_inc_load_legal(
+        &self,
+        ty: Ty,
+    ) -> bool {
+        matches!(ty, Ty::Int(8 | 16 | 32) | Ty::Pointer)
+    }
+
+    fn is_post_inc_store_legal(
+        &self,
+        ty: Ty,
+    ) -> bool {
+        matches!(ty, Ty::Int(8 | 16 | 32) | Ty::Pointer)
+    }
+
+    /// `(An)+` steps by the access size: a walk by 1, 2 or 4 bytes, upward.
+    fn is_post_inc_step_legal(
+        &self,
+        access_bytes: i64,
+        step: i64,
+    ) -> bool {
+        step == access_bytes
     }
 
     fn cmp_sel_cost(

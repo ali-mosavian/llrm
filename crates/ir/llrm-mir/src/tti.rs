@@ -784,6 +784,17 @@ pub trait Tti {
         false
     }
 
+    /// Beyond the pin (AArch64 and ARM step by any small immediate): whether a
+    /// post-increment access of `access_bytes` may step its pointer by `step`
+    /// bytes. m68k's `(An)+` steps by the access size and no other amount.
+    fn is_post_inc_step_legal(
+        &self,
+        _access_bytes: i64,
+        _step: i64,
+    ) -> bool {
+        true
+    }
+
     /// Beyond the pin: whether a strict exit compare of a unit-stride counter
     /// that never passes its bound should become `!=` (`exitne`). Counting to
     /// zero and testing `!=` is cheap where a decrement sets the flags and one
