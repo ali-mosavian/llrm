@@ -92,3 +92,16 @@ fn test_a_whole_number_constant_joins_the_integer_sum() {
     );
     assert!(out.contains("add nsw i16 %a, 3") && !out.contains("fadd"), "{out}");
 }
+
+/// Pinned `opt -passes=instcombine`: two conversions of integers of different
+/// widths are not folded (`IntTy != IntOps[1]->getType()`, L1650). Folded, the
+/// sum was `add i16 %a, %b` with an `i32` operand.
+#[test]
+fn test_conversions_of_integers_of_different_widths_stay_floating_point() {
+    let out = combined(
+        "x86_fp80",
+        "i8 %p, i16 %q",
+        "  %a = sext i8 %p to i16\n  %b = sext i16 %q to i32\n  %x = sitofp i16 %a to x86_fp80\n  %y = sitofp i32 %b to x86_fp80\n  %r = fadd x86_fp80 %x, %y\n  ret x86_fp80 %r\n",
+    );
+    assert!(out.contains("fadd x86_fp80"), "{out}");
+}

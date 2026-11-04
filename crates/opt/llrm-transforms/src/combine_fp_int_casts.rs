@@ -14,6 +14,10 @@
 //! DEVIATE 1: an `x86_fp80` constant is held as a double, so it joins only if
 //! that double is a whole number the integer type holds exactly.
 //!
+//! DEVIATE 2: `half`, `bfloat` and `fp128` (pin precisions 11, 8 and 113) never
+//! fold: MIR has no such types, only `float`, `double` and `x86_fp80`. Exit:
+//! the fold takes the precision of each type MIR gains.
+//!
 //! # Used by
 //! `combine_fp::visit_fadd_or_fmul` and `visit_fsub`, at the pin's position
 //! less the folds before it that are not translated.
@@ -138,6 +142,10 @@ fn fold_from_sign(
 ) -> Option<Visit> {
     let max_bits = precision(c, shape.fp_ty)?;
     let int_sz = c.context.types.int_bits(shape.int_ty)?;
+    // Ensure lhs/rhs integer types match.
+    if shape.constant.is_none() && c.type_of(shape.ops[1]) != shape.int_ty {
+        return None;
+    }
     let mut ops = shape.ops;
     let mut used = [int_sz; 2];
     let int_op = match shape.op {
