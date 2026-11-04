@@ -16,7 +16,8 @@
 //!
 //! DEVIATE W2: no `TRY_TABLE` or `RETHROW`, and no `fixCatchUnwindMismatches`,
 //! which acts only on typed `catch` pads (`CATCH_LEGACY`); the pads here are
-//! `catch_all` (W18), which catch everything and never mismatch. Exit: W18.
+//! `catch_all` (W18), which catch everything and never mismatch. Exit: W18
+//! (undated, none planned).
 //!
 //! # See also
 //! `WebAssemblyCFGStackify.cpp` (`placeBlockMarker` L295, `placeLoopMarker`

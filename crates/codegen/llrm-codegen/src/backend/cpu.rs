@@ -147,6 +147,10 @@ pub struct Profile {
     /// `CodeGenOptLevel::Aggressive` (-O3): tail duplication in placement
     /// copies blocks of four instructions, not two.
     pub aggressive: bool,
+    /// The most instructions placement's tail duplication copies where the
+    /// target states a smaller bound than the pin's (`timings.times`);
+    /// none: the pin's.
+    pub tail_dup_threshold: Option<usize>,
     /// `-fexcess-precision=standard` (`-ffloat-store`): a float conversion
     /// rounds to its type, where otherwise x87 keeps the wider value in its
     /// register, as gcc's `-fexcess-precision=fast` does.
@@ -330,6 +334,7 @@ impl Profile {
             search: true,
             optimized: true,
             aggressive: false,
+            tail_dup_threshold: None,
             float_store: false,
             rounds_float_spills: false,
             stable_loads: true,
@@ -386,6 +391,26 @@ impl Profile {
     pub fn clears_before_byte_load(&self) -> Result<bool, String> {
         Ok(!self.size
             && self.cost("alu_rr")? + self.cost("mov_rm")? + self.partial_register_stall < self.cost("movzx")?)
+    }
+
+    /// Whether X86FixupBWInsts' `movzx r32,m` is no slower than the partial
+    /// load it replaces, `mov r8,m` or `mov r16,m` with its 66h prefix; a CPU
+    /// that stalls on the partial register pays for the stall besides. The
+    /// 486 and the Pentium take three clocks for the extension and one for
+    /// the byte load.
+    ///
+    /// DEVIATE FB1 (owner x86-m16, 2026-11-02; permanent per-CPU price from
+    /// the timing table): the pin widens on every x86, with no feature gate
+    /// ([`runOnMachineFunction`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FixupBWInsts.cpp#L165)).
+    /// gcc keeps `mov dl,[buf+eax]` in x_strlen's copy loop; the pin's
+    /// `movzx edx,[buf+eax]` costs 2 extra clocks per byte copied, +348 k clk
+    /// at -O2 m32.
+    pub fn widens_load(
+        &self,
+        width: u8,
+    ) -> Result<bool, String> {
+        let narrow = self.cost("mov_rm")? + if width == 2 { self.prefix_cost } else { 0 };
+        Ok(self.cost("movzx")? <= narrow + self.partial_register_stall)
     }
 
     /// Whether `and r,255` and `and r,65535` are better as the `movzx` of the
@@ -496,6 +521,7 @@ fn _profile(
         _costs: table.clocks.clone(),
         _latencies: table.latency.clone(),
         address_prefix_stall: table.lcp_stall,
+        tail_dup_threshold: table.tail_dup_placement_threshold.map(|n| n.max(0) as usize),
         ..Profile::new(arch, name, table.issue, table.in_order, table.prefix, table.partial_stall)
     })
 }
@@ -918,6 +944,25 @@ mod zeroed_load_tests {
         for (name, pair) in [("386", false), ("486", true), ("P5", true), ("P6", false), ("Core", false)] {
             let cpu = profile(name).expect("a cpu");
             assert_eq!(cpu.clears_before_byte_load(), Ok(pair), "{name}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod widen_load_tests {
+    use super::*;
+
+    /// `mov dl,[m]` became `movzx edx,[m]` on the 486, three clocks for one
+    /// (x_strlen -O2 m32, +348 k clk over gcc). Priced from the description:
+    /// the 386 loads in four clocks, so it widens;
+    /// the Pentium Pro and later stall on the partial register, so widen there.
+    #[test]
+    fn test_a_load_widens_only_where_the_extension_is_no_slower() {
+        for (name, byte, word) in [("386", true, true), ("486", false, false), ("P5", false, false), ("P6", true, true)]
+        {
+            let cpu = profile(name).expect("a cpu");
+            assert_eq!(cpu.widens_load(1), Ok(byte), "{name} byte");
+            assert_eq!(cpu.widens_load(2), Ok(word), "{name} word");
         }
     }
 }

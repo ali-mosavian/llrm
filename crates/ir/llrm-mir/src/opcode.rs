@@ -581,7 +581,7 @@ impl Attribute {
     }
 }
 
-pub const FLAG_ATTRIBUTES: [&str; 46] = [
+pub const FLAG_ATTRIBUTES: [&str; 47] = [
     "alwaysinline",
     "builtin",
     "cold",
@@ -608,6 +608,7 @@ pub const FLAG_ATTRIBUTES: [&str; 46] = [
     "nomerge",
     "nonnull",
     "norecurse",
+    "noredzone",
     "noretain",
     "noreturn",
     "nosync",
@@ -633,12 +634,13 @@ pub const FLAG_ATTRIBUTES: [&str; 46] = [
 /// Attributes the pin's clang states that no pass here reads (stack protection,
 /// unwind tables, `dead_on_return`...), kept as flags; `uwtable` may carry its
 /// kind in parentheses (`uwtable(sync)`).
-pub const TARGET_FLAG_ATTRIBUTES: [&str; 9] = [
+pub const TARGET_FLAG_ATTRIBUTES: [&str; 10] = [
     "allockind",
     "allocsize",
     "dead_on_return",
     "nocreateundeforpoison",
     "nofreeobj",
+    "noimplicitfloat",
     "ssp",
     "sspreq",
     "sspstrong",

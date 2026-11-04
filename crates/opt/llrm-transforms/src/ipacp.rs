@@ -314,6 +314,7 @@ pub fn cloned(
                 GlobalValue {
                     name: called.into(),
                     linkage: Linkage::Internal,
+                    visibility: llrm_mir::Visibility::Default,
                     unnamed_addr: unnamed,
                     address_space: space,
                     kind: GlobalKind::Function(Box::new(copy)),

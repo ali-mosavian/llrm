@@ -107,7 +107,10 @@ DIST_BUILD = gate.DIST_BUILD
 # What a measurement needs is llrm-cc and the llrm-llc it runs (the compile cost is theirs); the other binaries would each be a fat-LTO link.
 # The profile the bench's base is built in: its tools are all of the binaries (llrm-qb, llrm-nib ...), which the dist build above does not make.
 BENCH_BASE_PROFILE = "release"
-MEASURE_BUILDS = {"dist": "env -u RUSTFLAGS cargo build --profile dist -q --bin llrm-cc --bin llrm-llc", "release": gate.MEASURE_BUILD}
+EXTRA_LLCS = ("llrm-arm64-llc", "llrm-m68k-llc", "llrm-6502-llc", "llrm-z80-llc", "llrm-wasm-llc")
+OBJECTS_BUILD = "env -u RUSTFLAGS cargo build --profile dist -q --bin llrm-cc --bin llrm-llc " + " ".join(f"--bin {b}" for b in EXTRA_LLCS)
+# "objects": the dist build plus the other targets' llcs, which objsweep's gate step compares; the cost gate's "dist" stays the compiler alone.
+MEASURE_BUILDS = {"dist": "env -u RUSTFLAGS cargo build --profile dist -q --bin llrm-cc --bin llrm-llc", "objects": OBJECTS_BUILD, "release": gate.MEASURE_BUILD}
 
 _spec = importlib.util.spec_from_file_location("compile_cost", HERE / "compile-cost.py")
 compile_cost = importlib.util.module_from_spec(_spec)
@@ -342,7 +345,7 @@ def built(sha: str, profile: str | None = None) -> Path:
         done = subprocess.run(["bash", "-c", MEASURE_BUILDS[profile]], cwd=tree, env=env, capture_output=True, text=True)
         if done.returncode:
             raise SystemExit(f"measure: the base {sha[:9]} does not build:\n{done.stderr[-2000:]}")
-        return snapshot(BUILD / "target" / profile, sha, profile)
+        return snapshot(BUILD / "target" / ("dist" if profile == "objects" else profile), sha, profile)
 
 
 SYSTEM_BUILD = f"env -u RUSTFLAGS cargo build {'--profile dist' if PROFILE == 'dist' else '--release'} -q --bin llrm-cc --bin llrm-llc --features system-alloc"

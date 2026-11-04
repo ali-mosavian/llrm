@@ -268,7 +268,7 @@ class SizeTests(unittest.TestCase):
             obj, exe = Path(where) / "p.obj", Path(where) / "p.exe"
             obj.write_bytes(test_sizes.object_with(12))
             exe.write_bytes(b"MZ" + bytes(3000))
-            run = mock.Mock(error=None, output=b"1\n", region=mock.Mock(instructions=5, memory_operands=2))
+            run = mock.Mock(error=None, output=b"1\n", region=mock.Mock(instructions=50, memory_operands=2))
             with mock.patch.object(bench.maps, "locate", return_value=0), mock.patch.object(bench.icount, "run", return_value=run):
                 got = bench.measure(("p", exe, exe, "f", ["1"], obj))
         self.assertEqual((got["code_bytes"], got["data_bytes"], got["bss_bytes"]), (12, 0, 40))
@@ -935,6 +935,29 @@ def test_a_function_marked_by_name_stays_a_call_while_the_runtime_helpers_inline
     assert calls(crc, "BENCHCRC") == 1 and calls(kernel, r"B\$FMID") + calls(kernel, r"B\$FASC") == 0
 
 
+def test_a_basic_row_is_built_as_the_whole_program_with_only_its_kernel_public():
+    """Every BASIC SUB was public, so fib's recursion stayed far, by reference and in memory: 2.55x the C clocks (908,496 against 356,059), hanoi 4,487x.
+    The harness builds the program as one module (C's helpers are `static`) and exports the kernel, which the map is searched for."""
+    import subprocess
+    import tempfile
+
+    fib = next(v for v in bench.variants(bench.BENCH / "fib") if v.language == "bq16")
+    with tempfile.TemporaryDirectory() as where:
+        out = Path(where) / "p.s"
+        done = subprocess.run(
+            [str(bench.BIN / "llrm-qb"), str(fib.source), "--dialect", "qb45", "-fqb-runtime=llrm", *bench.compile_flags(fib, "O2"), "-S", "-o", str(out)],
+            capture_output=True,
+            text=True,
+        )
+        assert done.returncode == 0, done.stderr
+        text = out.read_text()
+    assert "public BENCHFIB" in text and "public FIB" not in text
+    assert "FIB proc near" in text and "call far ptr FIB" not in text
+    # The flat target's calls are near already: queens read +6% instructions and four more cells worse with the flag.
+    flat = next(v for v in bench.variants(bench.BENCH / "fib") if v.language == "bq32")
+    assert "--whole-program" not in bench.compile_flags(flat, "O2")
+
+
 def test_a_name_no_function_has_is_an_error_not_a_flag_that_did_nothing():
     import subprocess
 
@@ -946,11 +969,23 @@ def test_a_name_no_function_has_is_an_error_not_a_flag_that_did_nothing():
     assert done.returncode != 0 and "defines no function of that name" in done.stderr
 
 
+def test_a_nib_helper_called_once_inlines_as_it_does_in_c(tmp_path):
+    """Nib was built with -fno-inline-functions and -fno-inline-functions-called-once, so dot's helper stayed a call that C inlines: 269 bytes at -Os against 153 for C,
+    a gap of the harness's flags. Only the kernel is kept a call: dot has no object segment of its own, `bench_dot` and `main` have."""
+    import subprocess
+
+    dot = next(v for v in bench.variants(bench.BENCH / "dot") if v.language == "nib")
+    _, arguments, obj = bench.compiles(dot, "Os", tmp_path, "dot")[0]
+    done = subprocess.run([str(bench.BIN / "llrm-nib"), *arguments], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    assert len([one for one in bench.sizes.segments(obj) if one.name.endswith("_TEXT")]) == 2
+
+
 def test_a_float_nib_row_is_compiled_in_fast_mode_as_main_measured_it():
     """ed700f10ce built float Nib rows with -fexcess-precision=standard: against main's rows (compiled fast; the flag recorded in them did nothing there) fpbench read 203869 clocks against 156348,
     a "regression" of the flag. The rows are measured fast, like main's."""
     float_nib = next(v for v in bench.variants(bench.BENCH / "nbody_single") if v.language == "nib")
-    assert not any("excess-precision" in one for one in bench.nib_flags())
+    assert not any("excess-precision" in one for one in bench.nib_flags(float_nib))
     assert not any("excess-precision" in one for one in bench.compiles(float_nib, "Os", Path("w"), "nbody_single")[0][1])
 
 
@@ -1029,6 +1064,35 @@ def test_a_row_whose_kernel_never_ran_is_invalid_not_a_win_over_a_base_that_ran_
     assert bench.against("control bas -Os", {"instructions": 150}, {"instructions": 156}) == []
 
 
+def test_a_kernel_folded_to_a_constant_is_an_error_not_a_row(tmp_path, monkeypatch):
+    """parity/control, algebra and memory in C ran 2 instructions each (`mov eax, 15007; retf`): the sources set constants and called the kernel,
+    so clang folded it. The rows read 8x to 70x better than bq16, which ran the work, and the gap was taken for a compiler's."""
+    exe = tmp_path / "V0.exe"
+    exe.write_bytes(b"")
+
+    def run(instructions):
+        region = types.SimpleNamespace(instructions=instructions, memory_operands=0, clocks=15)
+        return lambda *a, **k: types.SimpleNamespace(output=b"15007\n", error="", region=region)
+
+    monkeypatch.setattr(bench.maps, "locate", lambda *_: 0)
+    monkeypatch.setattr(bench.run_tests, "lines", lambda text: ["15007"])
+    monkeypatch.setattr(bench.sizes, "data_bytes", lambda obj: (0, 0))
+    monkeypatch.setattr(bench.sizes, "code_size", lambda obj: bench.sizes.CodeSize(0, 0))
+    job = ("V0", exe, tmp_path / "x.map", "bench_control", ["15007"], tmp_path / "x.obj")
+    monkeypatch.setattr(bench.icount, "run", run(2))
+    assert "kernel folded away" in bench.measure(job)["error"]
+    monkeypatch.setattr(bench.icount, "run", run(bench.FOLDED_BELOW))
+    assert bench.measure(job)["instructions"] == bench.FOLDED_BELOW
+
+
+def test_no_c_parity_source_hands_its_kernel_constants():
+    """The same fault at the source: every parity C file that calls its kernel must read the inputs through volatile, as branch, loop, qlight and qmove do."""
+    for source in sorted((bench.BENCH / "parity").glob("*/*.c")):
+        text = source.read_text()
+        if "demo_" in text:
+            assert "volatile" in text, f"{source.name} sets its kernel's inputs from constants: clang folds the call"
+
+
 def test_a_file_program_is_counted_with_its_declared_files_in_a_folder_of_its_own(tmp_path, monkeypatch):
     """jpeg_fixed, jpeg_single, stft_fixed and stft_single were timed only: 40 m16 rows had no instructions or clocks. Counted with no
     input file, stft_fixed printed -1 for 30825279; the emulator now gets the files the source's `data:` header names."""
@@ -1063,6 +1127,15 @@ def test_grep_is_counted_on_the_cut_of_dickens_the_default_bench_times(tmp_path)
         assert [f.stat().st_size for f in fed["files"]] == [1048576] and fed["want"] == ["115", "494962839"]
 
 
+def test_an_x86_64_row_above_the_base_fails_and_one_that_could_not_run_says_why():
+    """Larger executable sections or more user instructions than the base fail like any count; a host without perf skips the row and an error fails."""
+    base = {"instructions": 1000, "code_bytes": 100, "data_bytes": 0, "bss_bytes": 0}
+    assert bench.native_problems("fib c64 -O2", {**base, "code_bytes": 101}, base, []) == ["fib c64 -O2: code_bytes 101 > 100 (worse)"]
+    assert bench.native_problems("fib c64 -O2", {**base, "instructions": 999}, base, []) == []
+    assert bench.native_problems("fib c64 -O2", {**base, "instructions": 1001}, base, []) == []  # the rounding of the mean
+    assert bench.native_problems("fib c64 -O2", {**base, "instructions": 1002}, base, []) == ["fib c64 -O2: instructions 1002 > 1001 (worse)"]
+    assert bench.native_problems("fib c64 -O2", {"skip": "no perf"}, base, []) == []
+    assert bench.native_problems("fib c64 -O2", {"error": "compile: x"}, base, []) == ["fib c64 -O2: compile: x"]
 def test_the_gate_counts_cells_that_hold_code_it_could_not_read_and_names_padding_at_a_size_level():
     """Counting code without alignment padding must not hide records it could not read, nor padding where none is expected (-Os)."""
     got = {
@@ -1077,6 +1150,39 @@ def test_the_gate_counts_cells_that_hold_code_it_could_not_read_and_names_paddin
     ]
 
 
+def test_a_nib_cell_that_ran_under_half_of_its_c_twins_instructions_is_named():
+    """lru's Nib kernel read 39 instructions against C's 133 once its helpers inlined, and only reading the table showed it."""
+    got = {
+        ("lru", "c", "O2"): {"instructions": 133},
+        ("lru", "nib", "O2"): {"instructions": 39},
+        ("dot", "c", "O2"): {"instructions": 100},
+        ("dot", "nib", "O2"): {"instructions": 50},
+        ("fib", "nib", "O2"): {"instructions": 1},
+    }
+    assert bench.fold_lines(got) == ["SUSPECT-FOLD lru nib -O2: 39 instructions against C's 133"]
+
+
+def test_the_lru_nib_kernel_keeps_the_stores_its_c_twin_makes(tmp_path):
+    """lru's kernel was an internal function with a constant argument and a local cache, so with its helpers inlined every store to bord, bstamp, bprev
+    and bnext folded away: 39 instructions against C's 133, a row that measured nothing. It is exported, as C's is extern."""
+    import subprocess
+
+    lru = next(v for v in bench.variants(bench.BENCH / "lru") if v.language == "nib")
+    _, arguments, _ = bench.compiles(lru, "O2", tmp_path, "lru")[0]
+    out = tmp_path / "lru.s"
+    done = subprocess.run([str(bench.BIN / "llrm-nib"), *arguments, "-S", "-o", str(out)], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    kernel = out.read_text().split("bench_lru proc")[1].split("bench_lru endp")[0]
+    assert all(name in kernel for name in ("$var_bord", "$var_bstamp", "$var_bprev", "$var_bnext"))
+
+
+def test_native_sources_exist_when_only_the_x86_64_language_is_selected(tmp_path, monkeypatch):
+    """`--lang c64` left no C variant, so no c64 row got the call-keeping pair: crc read 21 instructions, and -fno-inline-functions crashed llc on parity/qmove -Os."""
+    monkeypatch.setattr(bench, "ONLY", ["c64"])
+    directory = next(one for one in bench.benchmarks(["crc"]))
+    assert bench.native_sources("crc", directory, tmp_path) is not None
+
+
 def test_a_priced_cell_passes_when_the_clocks_it_saves_pay_for_the_bytes_it_adds():
     """m16 -O2 (500 milliclocks/byte): +13 B and -12 clocks passes (6500 - 12000 <= 0), +13 B and -5 clocks fails; the same cell at a level without a rate fails on its bytes."""
     base = {"instructions": 10, "memory_operands": 4, "code_bytes": 100, "data_bytes": 0, "bss_bytes": 0, "clocks": 50}
@@ -1084,7 +1190,7 @@ def test_a_priced_cell_passes_when_the_clocks_it_saves_pay_for_the_bytes_it_adds
     assert bench.against("a c -O2", {**more, "clocks": 38}, base, rate=500) == []
     assert bench.against("a c -O2", {**more, "clocks": 45}, base, rate=500) == ["a c -O2: -5 clocks +13 code bytes at 500 milliclocks/byte is worse"]
     assert bench.against("a c -Os", {**more, "clocks": 38}, base) == ["a c -Os: code_bytes 113 > 100 (worse)"]
-    assert bench.against("a c -O2", {**base, "data_bytes": 1}, base, rate=500) == ["a c -O2: data_bytes 1 > 0 (worse)"]
+    assert bench.against("a c -O2", {**base, "data_bytes": 1}, base, rate=500) == ["a c -O2: data_bytes 1 > 0 (worse)", "a c -O2: static_bytes 1 > 0 (worse)"]
 
 
 def test_the_flat_target_prices_a_byte_by_the_486s_line_fill_at_o2_and_o3_only(tmp_path, monkeypatch):
@@ -1156,3 +1262,14 @@ def test_at_a_size_level_bytes_and_clocks_gate_and_the_counts_only_on_a_tie():
     assert bench.against("a c -Os", {**base, "memory_operands": 5}, base) == ["a c -Os: memory_operands 5 > 4 (worse)"]
     untimed = {k: v for k, v in base.items() if k != "clocks"}
     assert bench.against("a c -Os", {**untimed, "memory_operands": 5, "code_bytes": 92}, untimed) == ["a c -Os: memory_operands 5 > 4 (worse)"]
+
+
+def test_bss_is_judged_through_the_footprint_not_alone():
+    """Moving a zero table from data to bss (Nib's statics) lowered data_bytes and raised bss_bytes by the same amount: bss alone failed it.
+    data is strict, data+bss (static_bytes) is strict, bss alone is not judged."""
+    base = {"instructions": 10, "code_bytes": 100, "data_bytes": 30, "bss_bytes": 4}
+    move = {**base, "data_bytes": 10, "bss_bytes": 24}
+    assert bench.against("n nib -O2", move, base) == []  # pure DATA -> BSS: data down, footprint equal
+    assert bench.against("n nib -O2", {**base, "bss_bytes": 5}, base) == ["n nib -O2: static_bytes 35 > 34 (worse)"]  # bss growth grows the footprint
+    assert bench.against("n nib -O2", {**base, "data_bytes": 31, "bss_bytes": 3}, base) == ["n nib -O2: data_bytes 31 > 30 (worse)"]  # data growth, footprint equal
+    assert bench.against("n nib -O2", {**base, "data_bytes": 20, "bss_bytes": 24}, base) == ["n nib -O2: static_bytes 44 > 34 (worse)"]  # data down 10, bss up 20

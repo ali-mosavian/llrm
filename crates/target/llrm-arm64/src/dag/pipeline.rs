@@ -125,6 +125,17 @@ impl CombineHooks for Aarch64Lowering {
         true
     }
 
+    fn widened_unsigned_divide_type(
+        &self,
+        vt: EVT,
+    ) -> Option<EVT> {
+        (vt == EVT::I32).then_some(EVT::I64)
+    }
+
+    fn zero_extend_i32_to_i64_free(&self) -> bool {
+        true
+    }
+
     fn fold_xor_of_and_with_mask(&self) -> bool {
         true
     }
@@ -177,12 +188,12 @@ impl CombineHooks for Aarch64Lowering {
     /// and `isZExtFree(EVT, EVT)` (32 to 64 bits only, as a `w` write clears
     /// the upper half):
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L17540>
-    fn is_shrink_type_free(
+    fn free_narrowing(
         &self,
-        small: EVT,
-        vt: EVT,
+        wide: EVT,
+        narrow: EVT,
     ) -> bool {
-        small.is_integer() && vt.is_integer() && small.size_in_bits() == 32 && vt.size_in_bits() == 64
+        narrow.is_integer() && wide.is_integer() && narrow.size_in_bits() == 32 && wide.size_in_bits() == 64
     }
 
     fn reassociate_compare_pairs(&self) -> bool {
@@ -449,7 +460,6 @@ pub fn select_block(
     legal?;
     // `ComputeLiveOutVRegInfo`: after the legalizer, before the assertions go.
     llrm_codegen::backend::selectiondag::live_out::compute_live_out_vreg_info(dag, info);
-    llrm_codegen::backend::selectiondag::dag_select::remove_assertions(dag);
     let selector = Selector::new(table::TABLE);
     let mut hooks = super::hooks::Aarch64Hooks::new(globals.clone());
     do_instruction_selection_with(dag, &Aarch64Ids::new(), |adapter, node| {

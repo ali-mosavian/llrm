@@ -49,18 +49,34 @@ pub mod spill {
     pub const LOAD_FLAGS: u16 = 0xF003;
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct MInst {
     pub opcode: u16,
     pub operands: Vec<Operand>,
+    /// The source place it came from, numbered from 1 into the function's
+    /// places (`select::function_items_with_places`); 0 for none. Not a part
+    /// of what the instruction is: two that say the same are equal, so `-g`
+    /// changes no comparison a pass makes.
+    pub origin: u32,
 }
+
+impl PartialEq for MInst {
+    fn eq(
+        &self,
+        other: &MInst,
+    ) -> bool {
+        self.opcode == other.opcode && self.operands == other.operands
+    }
+}
+
+impl Eq for MInst {}
 
 impl MInst {
     pub fn new(
         opcode: u16,
         operands: Vec<Operand>,
     ) -> MInst {
-        MInst { opcode, operands }
+        MInst { opcode, operands, origin: 0 }
     }
 }
 
@@ -100,6 +116,21 @@ fn branch_on(code: u128) -> Result<&'static str, String> {
         5 => "bpl",
         other => return Err(format!("{other} is not a condition code")),
     })
+}
+
+/// `symbol+offset` (or `symbol-k` for an offset above $7FFF, which the access
+/// wraps to) for an indexed access.
+pub fn indexed_address(
+    symbol: &Operand,
+    offset: &Operand,
+) -> Result<String, String> {
+    match offset {
+        Operand::Imm(offset) if *offset > 0x7FFF => match symbol {
+            Operand::Label(symbol) => Ok(format!("{symbol}-{}", 0x1_0000 - offset)),
+            other => Err(format!("{other:?} is not an absolute address")),
+        },
+        _ => address(symbol, offset),
+    }
 }
 
 /// `symbol+offset` for an absolute access.
@@ -286,11 +317,8 @@ pub fn expand(
         }
         op::LDAX | op::STAX => {
             let load = inst.opcode == op::LDAX;
-            let (value, symbol, index) = if load { (&o[0], &o[1], &o[2]) } else { (&o[0], &o[1], &o[2]) };
-            let Operand::Label(symbol) = symbol else {
-                return Err(format!("an indexed access takes a symbol, not {symbol:?}"));
-            };
-            let (value, index) = (reg(value)?, reg(index)?);
+            let (value, index) = (reg(&o[0])?, reg(&o[3])?);
+            let symbol = indexed_address(&o[1], &o[2])?;
             if load {
                 writeln!(out, "  ldx {index}\n  lda {symbol},x\n  sta {value}").unwrap();
             } else {
