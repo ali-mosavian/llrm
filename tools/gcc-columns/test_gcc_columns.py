@@ -114,6 +114,23 @@ def test_host_check_catches_a_wrong_expect():
         Z.K[:] = saved
 
 
+def test_gcc_leads_takes_the_lower_of_the_two_columns():
+    """The bar is the lower gcc column per metric: a lead by one column only (memmove clk by gcc, B by noivopts) must show both."""
+    import gcc_leads as L
+    h = "target\tprog\tlevel\tcompiler\tcode_bytes\tclocks\tinstrs\tnote\n"
+    def tsv(name, body):
+        f = tempfile.NamedTemporaryFile("w", suffix=".tsv", delete=False)
+        f.write(h + body)
+        f.close()
+        return f.name
+    m = tsv("m", "6502\tp\tOs\tours\t100\t1000\t300\t\n")
+    a = tsv("a", "6502\tp\tOs\tgcc\t90\t1200\t310\t\n")
+    b = tsv("b", "6502\tp\tOs\tgcc-noivopts-Os\t110\t900\t320\t\n")
+    (r,) = L.leads(m, [a, b])
+    assert r[1] == ("p", "Os") and [d[:3] for d in r[2]] == [("B", 90, 100), ("clk", 900, 1000)]
+    assert [(x[1], [d[:3] for d in x[2]]) for x in L.leads(m, [a])] == [(("p", "Os"), [("B", 90, 100)])]
+
+
 def test_softfloat_z80_table_is_complete_and_current():
     """The 11-03 table was measured from the removed monolithic sf32.c; it stayed in the repo marked STALE.
     A table needs 32 gcc clk cells (2 variants x 2 levels x 8 ops), 4 library sizes and the cc1 md5, and no STALE mark."""
