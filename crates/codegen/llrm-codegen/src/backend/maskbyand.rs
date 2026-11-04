@@ -120,7 +120,7 @@ fn masked(
     let ([Loc::Held(dest)], [Loc::Held(source)]) = (what.dests.as_slice(), what.sources.as_slice()) else {
         return None;
     };
-    if dest.width != 4 || source.width != 1 || dest.value == source.value {
+    if dest.width != 4 || source.width != 1 || source.offset != 0 || dest.value == source.value {
         return None;
     }
     // The `and` overwrites its source's register: a source read elsewhere
@@ -134,7 +134,7 @@ fn masked(
     made.name = Some("and".into());
     made.op = Operation::Binary;
     made.sources =
-        vec![Loc::Held(Held { value: source.value, width: 4 }), Loc::Imm(Imm { value: mask, width: 4, address: None })];
+        vec![Loc::Held(Held { value: source.value, width: 4, offset: 0 }), Loc::Imm(Imm { value: mask, width: 4, address: None })];
     new.widths.retain(|(value, _)| *value != source.value);
     Some(new)
 }
