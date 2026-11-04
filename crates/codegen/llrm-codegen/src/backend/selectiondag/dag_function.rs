@@ -1677,7 +1677,7 @@ impl Values {
 /// (`addSuccessorWithProb`: a conditional branch's two, a merged condition's
 /// cases), on the blocks whose machine edges they are. An edge nobody stated
 /// has none.
-fn set_odds(
+pub(super) fn set_odds(
     body: &mut LirBody,
     edges: &[(llrm_mir::module::BlockId, llrm_mir::module::BlockId, u32)],
     block_at: &HashMap<u32, i64>,
@@ -1696,20 +1696,25 @@ fn set_odds(
             piece_of.insert(one.at, current);
         }
     }
+    // The blocks that end in a branch, by the piece they belong to: an edge
+    // looks in its piece, not in every block of the body.
+    let mut branching: HashMap<i64, Vec<(i64, &[i64])>> = HashMap::default();
+    for one in body.blocks.iter().filter(|one| one.succ.len() >= 2) {
+        if let Some(&piece) = piece_of.get(&one.at) {
+            branching.entry(piece).or_default().push((one.at, one.succ.as_slice()));
+        }
+    }
     for &(from, to, probability) in edges {
         let (Some(&first), Some(&to_at)) = (block_at.get(&from.0), block_at.get(&to.0)) else { continue };
         // A select made into branches splits the block, and the branch ends
         // the last piece (`transferSuccessorsAndUpdatePHIs`): the edges are
         // that piece's.
-        let Some(lir) = body
-            .blocks
-            .iter()
-            .filter(|one| piece_of.get(&one.at) == Some(&first) && one.succ.len() >= 2 && one.succ.contains(&to_at))
-            .last()
-        else {
+        let candidates = branching.get(&first).map_or(&[][..], Vec::as_slice);
+        body.facts.0.bump_by("odds-examined", candidates.len());
+        let Some(&(at, _)) = candidates.iter().rfind(|(_, succ)| succ.contains(&to_at)) else {
             continue;
         };
-        *stated.entry((lir.at, to_at)).or_insert(0) += u64::from(probability);
+        *stated.entry((at, to_at)).or_insert(0) += u64::from(probability);
     }
     // `normalizeSuccProbs`: the edges of a block share one.
     let mut total: IndexMap<i64, u64> = IndexMap::default();
