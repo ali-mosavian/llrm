@@ -364,14 +364,37 @@ pub fn fold_memory_operand(
     if narrow && !(what.op == Operation::Move && matches!(what.sources.as_slice(), [Loc::Imm(_)])) {
         return None;
     }
+    // A dword write in long mode also zeroes the register's upper half, which
+    // a dword store into a qword cell leaves stale for the qword reload. A
+    // constant is stored zero-extended at the cell's width; any other def is
+    // not folded.
+    let zeroes_upper = bits == 64
+        && what.dests.iter().any(|loc| {
+            matches!(
+                loc,
+                Loc::Held(held) if held.value == reg && held.width == 4 && cell.width == 8
+            )
+        });
+    let constant_move = what.op == Operation::Move
+        && matches!(
+            what.sources.as_slice(),
+            [Loc::Imm(imm)] if imm.address.is_none()
+        );
+    if zeroes_upper && !constant_move {
+        return None;
+    }
     let swap = |loc: &Loc| match loc {
         Loc::Held(held) if held.value == reg => {
-            Loc::Mem(Mem { width: (held.width as u32).min(cell.width), ..cell.clone() })
+            let width = if zeroes_upper { cell.width } else { (held.width as u32).min(cell.width) };
+            Loc::Mem(Mem { width, ..cell.clone() })
         }
         _ => loc.clone(),
     };
     let narrow_imm = |loc: &Loc| match loc {
         Loc::Imm(imm) if narrow => Loc::Imm(Imm { width: imm.width.min(cell.width), ..imm.clone() }),
+        Loc::Imm(imm) if zeroes_upper => {
+            Loc::Imm(Imm { value: imm.value as u32 as i64, width: cell.width, ..imm.clone() })
+        }
         _ => loc.clone(),
     };
     let made = Semantics {
@@ -379,6 +402,15 @@ pub fn fold_memory_operand(
         sources: what.sources.iter().map(swap).map(|loc| narrow_imm(&loc)).collect(),
         ..what.clone()
     };
+    // Long mode builds an address with a rip-relative `lea`; a store of the
+    // address to a cell has no encoding (the object writer dropped the
+    // displacement and used a PC32 fixup, or refused the instruction).
+    if bits == 64
+        && made.dests.iter().any(|loc| matches!(loc, Loc::Mem(_)))
+        && made.sources.iter().any(|loc| matches!(loc, Loc::Imm(imm) if imm.address.is_some()))
+    {
+        return None;
+    }
     if !is_encodable(bits, &made, classes).ok()? {
         return None;
     }

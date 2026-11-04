@@ -25,12 +25,17 @@ fn no_runtime_source_leaves_a_use_before_its_definition_at_os_m16() {
         for include in ["", "dos/m16", "dev", "dev/dos/m16", "dev/dos"] {
             command.arg("-I").arg(qb.join(include));
         }
-        let output = command.env("LLRM_VERIFY", "1").arg(source).arg("-o").arg(scratch.path().join("a.obj")).output().unwrap();
+        let output =
+            command.env("LLRM_VERIFY", "1").arg(source).arg("-o").arg(scratch.path().join("a.obj")).output().unwrap();
         let text = String::from_utf8_lossy(&output.stderr);
         compiled += usize::from(output.status.success());
         // Other refusals (a header this flag set lacks) are not this test's.
         if text.contains("does not dominate") || text.contains("no register") {
-            broken.push(format!("{}: {}", source.display(), text.lines().find(|l| l.contains("dominate") || l.contains("register")).unwrap_or("")));
+            broken.push(format!(
+                "{}: {}",
+                source.display(),
+                text.lines().find(|l| l.contains("dominate") || l.contains("register")).unwrap_or("")
+            ));
         }
     }
     assert!(broken.is_empty(), "{}", broken.join("\n"));
