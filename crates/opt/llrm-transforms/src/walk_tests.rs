@@ -3,7 +3,8 @@ use crate::testing::parsed;
 /// A recursive function reading a slice descriptor's length: argument
 /// promotion takes the length in the descriptor's place (`promote.`), then the
 /// descriptor's unused data pointer goes (`ipa-deadargs.`).
-const DESCRIPTOR: &str = "define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(6) nocapture %d, i16 %n) noinline {
+const DESCRIPTOR: &str =
+    "define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(6) nocapture %d, i16 %n) noinline {
 b0:
   %at = getelementptr i8, ptr addrspace(1) %d, i16 4
   %len = load i16, ptr addrspace(1) %at
@@ -24,7 +25,6 @@ b0:
   ret i16 %r
 }
 ";
-
 
 /// The pipeline the compilers run over `text`, the `runs` lines of it.
 fn pipeline_runs(
@@ -55,7 +55,10 @@ fn pipeline_runs(
 fn passes_run_by_ipa_stages(lines: &[String]) -> Vec<(String, usize)> {
     lines
         .iter()
-        .filter(|line| line.starts_with("body ") && ["trigger \"ipa-", "trigger \"promote.", "trigger \"ipsccp."].iter().any(|one| line.contains(one)))
+        .filter(|line| {
+            line.starts_with("body ")
+                && ["trigger \"ipa-", "trigger \"promote.", "trigger \"ipsccp."].iter().any(|one| line.contains(one))
+        })
         .map(|line| {
             let runs = line.split(" pass runs").next().and_then(|head| head.rsplit(' ').next());
             let name = line.rsplit("name ").next().unwrap_or_default();
@@ -71,9 +74,16 @@ fn passes_run_by_ipa_stages(lines: &[String]) -> Vec<(String, usize)> {
 /// (446, 293 and 287 M instructions).
 #[test]
 fn test_a_body_changed_by_an_interprocedural_stage_does_not_rerun_the_list() {
-    let lines = pipeline_runs(&format!("{}{DESCRIPTOR}", llrm_analysis::testing::DOS), &crate::pipeline::Applied { options: crate::pipeline::Options::speed(), ..Default::default() });
+    let lines = pipeline_runs(
+        &format!("{}{DESCRIPTOR}", llrm_analysis::testing::DOS),
+        &crate::pipeline::Applied { options: crate::pipeline::Options::speed(), ..Default::default() },
+    );
     let reruns = passes_run_by_ipa_stages(&lines);
-    assert!(!reruns.is_empty(), "no stage reran a body: {:?}", lines.iter().filter(|l| l.starts_with("body ")).map(|l| &l[..60.min(l.len())]).collect::<Vec<_>>());
+    assert!(
+        !reruns.is_empty(),
+        "no stage reran a body: {:?}",
+        lines.iter().filter(|l| l.starts_with("body ")).map(|l| &l[..60.min(l.len())]).collect::<Vec<_>>()
+    );
     assert!(reruns.iter().all(|(_, runs)| *runs < 10), "the list ran again: {reruns:?}");
 }
 

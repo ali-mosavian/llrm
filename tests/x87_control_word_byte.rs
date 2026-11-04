@@ -10,7 +10,18 @@ fn test_the_truncating_control_word_is_set_with_a_byte_or() {
     std::fs::write(scratch.path().join("a.c"), "int f(long double x) { return (int)x; }\n").unwrap();
     let output = common::cc::llrm_c()
         .current_dir(scratch.path())
-        .args(["--target=x86_32-wat", "-m32", "-mabi=sysv", "-mlong-double-80", "-march=i486", "-Os", "-S", "-o", "a.s", "a.c"])
+        .args([
+            "--target=x86_32-wat",
+            "-m32",
+            "-mabi=sysv",
+            "-mlong-double-80",
+            "-march=i486",
+            "-Os",
+            "-S",
+            "-o",
+            "a.s",
+            "a.c",
+        ])
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
