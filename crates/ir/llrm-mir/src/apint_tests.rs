@@ -100,9 +100,13 @@ fn a_mask_and_a_range_of_a_wide_word_need_no_wide_shift() {
     assert_eq!(mask::<U256>(256), !U256::ZERO);
     assert_eq!(mask::<u128>(0), 0);
     assert_eq!(mask::<u128>(127), u128::MAX >> 1);
+    for width in 1..=256 {
+        assert_eq!(sign_bit::<U256>(width), U256::ONE << (width - 1), "sign bit {width}");
+    }
     SHIFTS.with(|count| count.set(0));
     let range = crate::constantrange::Range::<U256>::new(32, U256::from_u128(5), U256::from_u128(9));
-    let _ = (range, mask::<U256>(64), mask::<U256>(160));
+    let _ = (range, mask::<U256>(64), mask::<U256>(160), sign_bit::<U256>(40));
+    let _ = (range.get_signed_min(), range.get_signed_max());
     let shifts = SHIFTS.with(std::cell::Cell::get);
-    assert_eq!(shifts, 0, "{shifts} wide shifts to make a range and two masks");
+    assert_eq!(shifts, 0, "{shifts} wide shifts to make a range, two masks and a sign bit and read its signed ends");
 }

@@ -52,6 +52,11 @@ pub trait Word:
         (Self::ONE << bits).wrapping_sub(Self::ONE)
     }
 
+    /// Bit `at` alone, `at` below `BITS`.
+    fn bit(at: u32) -> Self {
+        Self::ONE << at
+    }
+
     fn wrapping_add(
         self,
         other: Self,
@@ -100,6 +105,10 @@ impl Word for u128 {
 
     fn low_mask(bits: u32) -> Self {
         if bits == 0 { 0 } else { u128::MAX >> (128 - bits) }
+    }
+
+    fn bit(at: u32) -> Self {
+        1 << at
     }
 
     fn from_u128(value: u128) -> Self {
@@ -300,17 +309,43 @@ impl Shr<u32> for U256 {
     }
 }
 
+/// `low_mask` and `bit` of every width, looked up: a width is asked for more
+/// than once per range operation, and a shift of the whole word is 50 Ir.
+const U256_LOW_MASKS: [U256; 256] = {
+    let mut table = [U256 { hi: 0, lo: 0 }; 256];
+    let mut bits = 1;
+    while bits < 256 {
+        table[bits] = if bits <= 128 {
+            U256 { hi: 0, lo: u128::MAX >> (128 - bits) }
+        } else {
+            U256 { hi: u128::MAX >> (256 - bits), lo: u128::MAX }
+        };
+        bits += 1;
+    }
+    table
+};
+
+const U256_BITS: [U256; 256] = {
+    let mut table = [U256 { hi: 0, lo: 0 }; 256];
+    let mut at = 0;
+    while at < 256 {
+        table[at] = if at < 128 { U256 { hi: 0, lo: 1 << at } } else { U256 { hi: 1 << (at - 128), lo: 0 } };
+        at += 1;
+    }
+    table
+};
+
 impl Word for U256 {
     const ZERO: Self = Self { hi: 0, lo: 0 };
     const ONE: Self = Self { hi: 0, lo: 1 };
     const BITS: u32 = 256;
 
     fn low_mask(bits: u32) -> Self {
-        match bits {
-            0 => Self::ZERO,
-            1..=128 => Self { hi: 0, lo: u128::MAX >> (128 - bits) },
-            _ => Self { hi: u128::MAX >> (256 - bits), lo: u128::MAX },
-        }
+        U256_LOW_MASKS[bits as usize]
+    }
+
+    fn bit(at: u32) -> Self {
+        U256_BITS[at as usize]
     }
 
     fn from_u128(value: u128) -> Self {
@@ -750,7 +785,7 @@ pub(crate) fn popcount<W: Word>(v: W) -> u32 {
 }
 
 pub fn sign_bit<W: Word>(width: u32) -> W {
-    W::ONE << (width - 1)
+    W::bit(width - 1)
 }
 
 /// `a` as a signed number is below `b`.
