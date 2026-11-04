@@ -395,6 +395,7 @@ impl Peephole {
         };
         let body = if self.zeroed_loads { zeroed_loads(self.rules, &body, &self.cpu)? } else { body };
         let body = split_loads(self.rules, &body);
+        let body = narrowed_copies(self.rules, &body);
         let body = sharedstores::shared(&body, &self.cpu, &self.saved, &self.classes);
         let body = zero_compares(
             self.rules,
@@ -2303,6 +2304,15 @@ pub fn split_loads(
     body: &LirBody,
 ) -> LirBody {
     peep::rewritten(rules.split_loads, body, &Facts::new(body, None))
+}
+
+/// A 64-bit register copy of a register that a 32-bit write left zero above bit
+/// 31 as the 32-bit copy: no REX prefix (`peephole.peep`).
+pub fn narrowed_copies(
+    rules: &peep::Rules,
+    body: &LirBody,
+) -> LirBody {
+    peep::rewritten(rules.narrowed_copies, body, &Facts::new(body, None))
 }
 
 /// The extension of a word whose register is zero above it as a copy of the

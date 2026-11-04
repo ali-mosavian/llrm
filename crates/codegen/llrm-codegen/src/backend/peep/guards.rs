@@ -218,6 +218,41 @@ pub fn no_longer(
     )
 }
 
+/// The nearest write before `one` to the root of `source` is a 32-bit write
+/// (which zeroes bits 32 to 63), with nothing unknown between: the instructions
+/// walked of this block, nothing earlier than its start.
+pub fn zero_above_dword(
+    cx: &Cx,
+    one: &Arc<Insn>,
+    source: Reg,
+) -> bool {
+    let regs = cx.regs();
+    let root = ir::root(source.register);
+    let touched: Lanes = _lanes(regs, source.register).into_iter().collect();
+    for prev in cx.insns[..cx.place(one)].iter().rev() {
+        let Some((_, writes)) = _register_effects(regs, cx.bits(), prev, true, false) else { return false };
+        if writes.is_disjoint(&touched) {
+            continue;
+        }
+        // A dword write, or the `movzx` of a dword to the whole register (the
+        // same instruction, written wide).
+        let dword_write = prev.what.as_ref().is_some_and(|what| {
+            let from_dword = what.name.as_deref() == Some("movzx")
+                && what.sources.first().is_some_and(|source| match source {
+                    Loc::Reg(Reg { width, .. }) => *width == 4,
+                    Loc::Mem(Mem { width, .. }) => *width == 4,
+                    _ => false,
+                });
+            what.dests.iter().any(|dest| match dest {
+                Loc::Reg(Reg { register, width }) if ir::root(*register) == root => *width == 4 || from_dword,
+                _ => false,
+            })
+        });
+        return dword_write;
+    }
+    false
+}
+
 /// Both encode, the pair `first` then `second` in fewer bytes than `before`.
 pub fn shorter_pair(
     cx: &Cx,

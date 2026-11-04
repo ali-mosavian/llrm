@@ -118,6 +118,16 @@ rule split_sign_extending_load
     when    free(@0, widening_load), width_in(src, [16]), shorter_pair(@0, $0, $1)
     rewrite @0: mov d, dword_cell(src) ; @0: movsx d, low_word(d)
 
+// `mov r64, r64` of a register a 32-bit write left zero above bit 31 is the dword copy: no REX
+// prefix (3 bytes to 2). Beyond the pin, which emits the `movq` (gcc emits `mov edi, eax`).
+group narrowed_copies
+    walk window
+
+rule narrowed_copy
+    match   mov d:reg, s:reg
+    when    width_in(d, [64]), width_in(s, [64]), !same_root(d, s), zero_above_dword(@0, s)
+    rewrite @0: mov dword_of(d), dword_of(s)
+
 group pushed_constants
     walk window
 
