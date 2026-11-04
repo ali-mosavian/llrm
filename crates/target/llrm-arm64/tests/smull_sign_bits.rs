@@ -40,3 +40,23 @@ fn a_multiply_of_two_values_with_more_than_32_sign_bits_is_a_smull() {
     assert!(ops.contains(&"SMADDLrrr"), "{ops:?}");
     assert!(!ops.contains(&"MADDXrrr"), "{ops:?}");
 }
+
+/// A value another block extended reaches the multiply as a register with an
+/// `AssertSext`; the assertion was dropped before matching, so the predicate
+/// saw no sign bits and `switch`'s `digit * digit` stayed a `MADDXrrr` (the
+/// pin has `SMADDLrrr`).
+#[test]
+fn a_multiply_of_a_value_another_block_sign_extended_is_a_smull() {
+    let ir = "define i64 @f(i32 %n) {\n\
+        br label %h\n\
+        h:\n %i = phi i32 [ 0, %0 ], [ %in, %j ]\n %acc = phi i64 [ 0, %0 ], [ %r, %j ]\n\
+        %q = srem i32 %i, 10\n %s = sext i32 %q to i64\n %c = icmp ult i32 %q, 5\n br i1 %c, label %t, label %j\n\
+        t:\n br label %j\n\
+        j:\n %m = mul nsw i64 %s, %s\n %r = add i64 %m, %acc\n %in = add i32 %i, 1\n\
+        %e = icmp eq i32 %in, %n\n br i1 %e, label %x, label %h\n\
+        x:\n ret i64 %r\n}";
+    let blocks = selected(ir).unwrap();
+    let ops: Vec<&str> = blocks.concat();
+    assert!(ops.contains(&"SMADDLrrr"), "{ops:?}");
+    assert!(!ops.contains(&"MADDXrrr"), "{ops:?}");
+}

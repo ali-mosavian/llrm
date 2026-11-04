@@ -163,10 +163,11 @@ fn every_libcall_a_c_toml_names_is_in_its_runtime() {
     }
 }
 
-/// Inline memset width at x86-64: the pin's `getOptimalMemOpType` gives `i64`
-/// for eight bytes or more there, so a 16-byte clear is two stores, not four.
+/// Inline memset width at x86-64: the pin's `getOptimalMemOpType` gives `v4i32`
+/// for sixteen bytes with SSE2, so a 16-byte clear is one `xorps` and one
+/// 16-byte store, not two `mov qword [..], 0` (9 B each; nbody O2 +31 B).
 #[test]
-fn a_16_byte_clear_at_m64_is_two_qword_stores() {
+fn a_16_byte_clear_at_m64_is_one_16_byte_store() {
     let ir = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"\n\
         @g = global [16 x i8] zeroinitializer\n\
         declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\n\
@@ -191,5 +192,6 @@ fn a_16_byte_clear_at_m64_is_two_qword_stores() {
     )
     .map(|built| built.dag.dump())
     .unwrap_or_else(|why| panic!("{}", why.0));
-    assert_eq!(dump.matches("store (s64)").count(), 2, "{dump}");
+    assert_eq!(dump.matches("store (s64)").count(), 0, "{dump}");
+    assert_eq!(dump.matches("LLRM_ZERO128").count(), 1, "{dump}");
 }

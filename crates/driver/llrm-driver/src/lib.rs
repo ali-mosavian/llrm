@@ -24,7 +24,31 @@ pub fn all() -> Vec<Rc<dyn Target>> {
 /// The target whose description states `triple` as its `llvm_triple`: the one a
 /// module's `target triple` names.
 pub fn by_triple(triple: &str) -> Option<Rc<dyn Target>> {
-    all().into_iter().find(|one| one.layout().llvm_triple.as_deref() == Some(triple))
+    all()
+        .into_iter()
+        .find(
+            |one| {
+                let layout = one.layout();
+                layout.llvm_triple.as_deref() == Some(triple)
+                    || layout.platforms.iter().any(|system| same_system(&system.triple, triple))
+            },
+        )
+}
+
+/// Whether `stated`, the triple of a module, names the system `listed` does:
+/// clang writes the OS version into it (`x86_64-apple-macosx10.4.0`), which the
+/// description leaves out.
+pub fn same_system(
+    listed: &str,
+    stated: &str,
+) -> bool {
+    // `macos11` is LLVM's name for `macosx` from clang 11 on (Triple::getOS
+    // spells both Darwin).
+    let bare = |triple: &str| {
+        let bare = triple.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+        bare.strip_suffix("macos").map_or_else(|| bare.to_owned(), |head| format!("{head}macosx"))
+    };
+    listed == stated || bare(listed) == bare(stated)
 }
 
 /// What a tool's `--mode N` stands for: the datalayout of the target whose

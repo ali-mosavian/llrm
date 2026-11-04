@@ -157,6 +157,9 @@ pub struct Tuned {
     pub folds_masks: bool,
     /// `Machine::two_address`.
     pub two_address: bool,
+    /// A global is never a base, and a register and an index are the only
+    /// forms.
+    pub no_global_base: bool,
     /// `Tti::prefers_exit_ne`.
     pub exit_ne: bool,
 }
@@ -168,6 +171,7 @@ use llrm_mir::tti;
 pub struct Flagged {
     pub exit_ne: bool,
     pub no_cmov: bool,
+    pub no_global_base: bool,
 }
 
 impl llrm_mir::tti::Tti for Flagged {
@@ -239,6 +243,9 @@ impl llrm_mir::tti::Tti for Flagged {
         base: bool,
         scale: i64,
     ) -> bool {
+        if self.no_global_base {
+            return !global && scale <= 1;
+        }
         tti::Basic.is_legal_addressing_mode(global, offset, base, scale)
     }
 
@@ -274,7 +281,10 @@ impl llrm_mir::lowering::Lowering for FoldsMasks {
 
 impl llrm_mir::target::Machine for Tuned {
     fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
-        self.exit_ne.then(|| std::rc::Rc::new(Flagged { exit_ne: true, no_cmov: false }) as _)
+        (self.exit_ne || self.no_global_base).then(|| {
+            std::rc::Rc::new(Flagged { exit_ne: self.exit_ne, no_cmov: false, no_global_base: self.no_global_base })
+                as _
+        })
     }
 
     fn lowering(&self) -> Option<std::rc::Rc<dyn llrm_mir::lowering::Lowering>> {

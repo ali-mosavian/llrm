@@ -511,6 +511,22 @@ fn test_a_word_funnel_shift_emits_the_16_bit_form() {
     }
 }
 
+/// A 64-bit `shrd` (`(u128 product) >> 63` at m64) had no encoding: the
+/// object builder stopped with "Semantics(op=FUNNEL, name='shrd' ...)".
+#[test]
+fn test_a_quad_funnel_shift_emits_the_rex_w_form() {
+    let quad = sem(
+        Operation::Funnel,
+        Some("shrd"),
+        vec![rg(RegId::RAX, 8)],
+        vec![rg(RegId::RAX, 8), rg(RegId::RDX, 8), imm(63, 1)],
+        None,
+        false,
+    );
+    let code = emit_in(64, &quad, 0, None, false, false, None).expect("a 64-bit funnel shift");
+    assert_eq!(hex(&code.code), "480facd03f");
+}
+
 #[test]
 fn test_a_left_funnel_shift_emits_shld() {
     assert_eq!(hex(&made(emitted(&funnel_of(imm(16, 1), "shld"))).code), "660fa4d010");
@@ -609,8 +625,8 @@ fn test_a_frame_slots_displacement_is_not_a_relocatable_field() {
 fn test_a_global_cell_reached_through_base_and_index_keeps_its_relocation() {
     let cell = ir::Mem {
         through: RegId::BX,
-        base: Some(ir::Held { value: 1, width: 2 }),
-        index: Some(ir::Held { value: 2, width: 2 }),
+        base: Some(ir::Held { value: 1, width: 2, offset: 0 }),
+        index: Some(ir::Held { value: 2, width: 2, offset: 0 }),
         index_through: RegId::DI,
         scale: 1,
         ..ir::Mem::new(Some(at(Space::Segment, 0x6, RegId::None, RegId::None)), 2)

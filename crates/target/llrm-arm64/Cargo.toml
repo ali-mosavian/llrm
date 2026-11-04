@@ -6,6 +6,7 @@ rust-version.workspace = true
 description = "The arm64 (AArch64) target: its descriptions, translated from LLVM's AArch64 backend"
 
 [dependencies]
+rustc-hash = { workspace = true }
 llrm-lir = { workspace = true }
 llrm-object = { workspace = true }
 llrm-debug = { workspace = true }
