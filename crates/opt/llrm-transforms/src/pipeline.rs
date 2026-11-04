@@ -187,6 +187,11 @@ pub struct Options {
     /// builder lowers them as `SelectionDAGBuilder::visitSwitch` (it needs the
     /// switch, with its `unreachable` default, as the pin's passes leave it).
     pub lower_switches: bool,
+    /// `loopidioms::Merge` also makes adjacent stores wider ones (LLVM's
+    /// `DAGCombiner::mergeConsecutiveStores`, DEVIATE `parity.rs`); off for a
+    /// target whose backend merges them, so the inliner and the passes after
+    /// it price the stores the pin's IR has.
+    pub merge_stores: bool,
     pub drop_stores: bool,
     /// Work read below a branch moves below it: gcc's `-ftree-sink`.
     pub sink: bool,
@@ -339,6 +344,7 @@ impl Default for Options {
             switch_conversion: true,
             jump_tables: true,
             lower_switches: true,
+            merge_stores: true,
             search: false,
             exhaustive: false,
         }
@@ -567,7 +573,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(algebraic::Algebraic { size: applied.options.prefers_size(), llvm: false }),
         Box::new(dead::Dead),
         Box::new(loopidioms::LoopIdioms { size: applied.options.prefers_size() }),
-        Box::new(loopidioms::Merge { size: applied.options.prefers_size() }),
+        Box::new(loopidioms::Merge { size: applied.options.prefers_size(), widen: applied.options.merge_stores }),
         Box::new(memcpyopt::MemCpyOpt),
     ];
     every.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
@@ -938,6 +944,7 @@ pub(crate) fn llvm_order(
                     Box::new(looprotate::LoopRotate {
                         duplicate_headers: applied.options.copy_headers && !applied.options.has_min_size,
                         size: applied.options.prefers_size(),
+                        check_exit_count: false,
                     }),
                 ));
             }
@@ -1018,7 +1025,7 @@ pub(crate) fn llvm_order(
                 slot("cvp@810", Box::new(crate::cvp::Cvp)),
                 slot("adce@815", Box::new(adce::Adce)),
                 slot("memcpyopt@818", Box::new(memcpyopt::MemCpyOpt)),
-                slot("merge@818", Box::new(loopidioms::Merge { size })),
+                slot("merge@818", Box::new(loopidioms::Merge { size, widen: applied.options.merge_stores })),
                 slot("dse@820", Box::new(deadstore::DeadStoreElimination)),
             ]);
             list.extend(canonical("loopsimplify@823", "lcssa@823"));
@@ -1260,6 +1267,15 @@ pub fn recorded(
     // It reads the live-outs from exit phis, so the bodies are closed first.
     manager.add(loopsimplify::LoopSimplify);
     manager.add(lcssa::LoopClosedSSA);
+    // First, the pin's `LoopRotatePass(header duplication, check-exit-count)`
+    // for loops the passes since undid (PassBuilderPipelines.cpp#L1621).
+    if applied.options.copy_headers && !applied.options.has_min_size {
+        manager.add(looprotate::LoopRotate {
+            duplicate_headers: true,
+            size: applied.options.prefers_size(),
+            check_exit_count: true,
+        });
+    }
     manager.add(loopdeletion::LoopDeletion);
     // What no live code names any more goes before selection, as LLVM runs
     // GlobalDCE after inlining.

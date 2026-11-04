@@ -130,15 +130,14 @@ impl Combiner<'_> {
                 Opcode::ICmp(_) | Opcode::Cast(CastOp::PtrToInt)
             )
         };
-        self.function.users(result).snapshot().into_iter().all(|used| {
+        self.function.users(result).iter().all(|used| {
             let user = used.user;
             if is_int_use(user) {
                 return true;
             }
             if self.function.instruction(user).opcode == Opcode::Phi {
                 let phi = self.function.instruction(user).result.expect("a value");
-                let users = self.function.users(phi).snapshot();
-                return users.len() == 1 && is_int_use(users[0].user);
+                return self.function.users(phi).only().is_some_and(|only| is_int_use(only.user));
             }
             false
         })
