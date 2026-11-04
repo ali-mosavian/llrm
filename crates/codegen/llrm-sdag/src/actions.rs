@@ -97,6 +97,7 @@ const FLOATS: [MVT; 3] = [MVT::F32, MVT::F64, MVT::F80];
 const ALL: [MVT; 10] =
     [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64, MVT::I128, MVT::F32, MVT::F64, MVT::F80, MVT::Other];
 
+#[derive(Clone)]
 pub struct TargetLowering {
     pub types: TargetLoweringInfo,
     operations: HashMap<(ISD, MVT), Action>,
@@ -896,10 +897,11 @@ mod tests {
         assert_eq!(t.operation_action(ISD::FpExtend, EVT::Simple(MVT::F64)), Action::Custom);
     }
 
-    /// CSSC turns scalar `ctpop` from a vector sequence into one instruction.
+    /// CSSC turns scalar `ctpop` into one instruction; without it the node
+    /// is expanded until vector MIR lands (DEVIATE SD533), not `Custom`.
     #[test]
     fn aarch64_ctpop_follows_cssc() {
-        assert_eq!(a64().operation_action(ISD::CtPop, EVT::I32), Action::Custom);
+        assert_eq!(a64().operation_action(ISD::CtPop, EVT::I32), Action::Expand);
         let cssc = TargetLowering::aarch64(Aarch64Features { cssc: true, ..Default::default() });
         assert_eq!(cssc.operation_action(ISD::CtPop, EVT::I32), Action::Legal);
     }

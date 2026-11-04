@@ -23,3 +23,12 @@ fn a_pack_records_the_lane_each_byte_fills_in_the_pair() {
     assert_eq!(insn.lane_copies, vec![(1, 3, ValueLanes::at(0, 1)), (2, 3, ValueLanes::at(1, 1))]);
     assert_eq!(insn.defines, vec![3], "liveness still takes the pair whole");
 }
+
+/// DEVIATE 3b-1: with lane lowering on, lz4c -Oz returned 0x3131 and crc16 -Oz
+/// was 82 B (58 B with the `lane_moves` hint). The hint stays until the split
+/// editor copies by lane.
+#[test]
+fn z80_keeps_the_lane_hint_until_the_split_copies_by_lane() {
+    use llrm_spike_mf::regalloc::Target;
+    assert!(!Z80Registers::lowers_lanes() && !Z80Registers::joins_lanes());
+}

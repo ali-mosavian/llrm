@@ -101,6 +101,17 @@ impl Tti for M68k {
         }
     }
 
+    /// The per-target override of `SCEVCheapExpansionBudget`: a limit that
+    /// costs any operation (`smax(n, 1)` for `i + 1 < n`) is not worth
+    /// replacing a compare with in a function built for size; the guard and
+    /// the second counter cost more bytes than the compare saved.
+    fn lftr_expansion_budget(
+        &self,
+        optsize: bool,
+    ) -> u32 {
+        if optsize { 0 } else { 4 }
+    }
+
     /// DEVIATE: the pin's M68k states no preference; `(An)+` steps a pointer
     /// by the access size for free (descriptors in `indexed.rs`), so LSR keeps
     /// a pointer walk rather than an index beside a counter. Exit: none.

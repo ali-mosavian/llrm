@@ -1026,8 +1026,19 @@ impl Builder<'_> {
                     Some(bytes) => self.inline_memmove(root, dst, other, bytes, limit, dst_align, src_align)?,
                     _ => None,
                 };
+                // a target with string instructions of its own
+                // (`EmitTargetCodeForMemcpy`) copies what is
+                // left past the inline limit with them, where the pin would
+                // call `memcpy`
+                let hooked = match (&inline, which) {
+                    (None, Intrinsic::MemCpy) if !strings_exist => self
+                        .calling()
+                        .and_then(|calling| calling.emit_memcpy_sized(&mut self.dag, root, dst, other, size, opt_size)),
+                    _ => None,
+                };
                 match (inline, which, constant) {
                     (Some(chain), _, _) => chain,
+                    (None, Intrinsic::MemCpy, _) if hooked.is_some() => hooked.expect("checked"),
                     (None, Intrinsic::MemCpy, Some(bytes)) if strings_exist && self.has_min_size() => {
                         self.rep_movs(root, dst, other, bytes, 1, dst_align, src_align)?
                     }
@@ -1127,18 +1138,16 @@ impl Builder<'_> {
                     {
                         self.rep_stos(root, dst, other, bytes, if bytes % 4 == 0 { 4 } else { 2 })?
                     }
-                    // Tuned for size, a fill of whole words at word alignment
-                    // is words where a word takes no prefix (real mode): the
-                    // same bytes as `rep stosb`'s and half the iterations.
+                    // for size, whole pointer-width units at that alignment: a
+                    // `rep stosb` runs a clock per byte (matmul.nib -Os +669)
                     (None, Some(bytes))
                         if strings_exist
                             && opt_size
-                            && self.target.dag.pointer.size_in_bits() == 16
                             && !self.runtime_has("memset")
-                            && bytes % 2 == 0
-                            && alignment >= 2 =>
+                            && alignment >= self.pointer_bytes()
+                            && bytes % self.pointer_bytes() == 0 =>
                     {
-                        self.rep_stos(root, dst, other, bytes, 2)?
+                        self.rep_stos(root, dst, other, bytes, self.pointer_bytes())?
                     }
                     _ if strings_exist && !self.runtime_has("memset") => self.rep_stosb(root, dst, other, size),
                     _ => self.mem_libcall("memset", root, &[dst, other], size)?,
@@ -1191,7 +1200,7 @@ impl Builder<'_> {
                 };
                 let hooked = |dag: &mut _| {
                     if copy {
-                        calling.emit_memcpy(dag, root, dst, other, size)
+                        calling.emit_memcpy_sized(dag, root, dst, other, size, opt_size)
                     } else {
                         calling.emit_memmove(dag, root, dst, other, size)
                     }
@@ -1794,6 +1803,10 @@ impl Builder<'_> {
     /// (`emitConstantSizeRepmovs` takes `i64` at 8-byte alignment on x86-64).
     fn string_block(&self) -> u64 {
         u64::from(self.target.dag.pointer.size_in_bits() / 8).max(4)
+    }
+
+    fn pointer_bytes(&self) -> u64 {
+        u64::from(self.target.dag.pointer.size_in_bits() / 8)
     }
 
     /// `emitConstantSizeRepstos`.

@@ -284,6 +284,22 @@ pub trait TargetCalling: Debug + Sync {
         None
     }
 
+    /// [`Self::emit_memcpy`] for a function tuned for size or not
+    /// (`hasOptSize`, which the pin's hook reads off the function): a
+    /// target that prices the two apart overrides this.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_memcpy_sized(
+        &self,
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        dst: SDValue,
+        src: SDValue,
+        size: SDValue,
+        _opt_size: bool,
+    ) -> Option<SDValue> {
+        self.emit_memcpy(dag, chain, dst, src, size)
+    }
+
     /// `SelectionDAGTargetInfo::EmitTargetCodeForMemmove`; a target that has
     /// no separate one routes it to [`Self::emit_memcpy`].
     fn emit_memmove(

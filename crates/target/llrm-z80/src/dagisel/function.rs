@@ -12,7 +12,7 @@
 //! calls) needs none. Reason: frame objects wait for the Z80 machine function.
 //! Exit: M4.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use llrm_codegen::backend::isel;
 use llrm_codegen::backend::registerinfo::RegId;
@@ -105,6 +105,10 @@ pub struct Selection {
     pub widths: HashMap<u32, u32>,
     /// `-g`: the variables the debug info names and where each is (the `.adb`).
     pub variables: Vec<Variable>,
+    /// The blocks IR `unreachable` ends. The pin emits nothing for it (the
+    /// machine CFG comes from the IR); here a block with no terminator falls
+    /// into the next one, so emission states the end.
+    pub unreachable: llrm_support::hash::HashSet<BlockId>,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -142,7 +146,7 @@ pub fn select_function_with(
     let mut info = FunctionLoweringInfo::new(function);
     let mut locals = alloca_sizes(module, function, &layout, &info)?;
     let mut selected = Vec::new();
-    let mut visited = std::collections::HashSet::new();
+    let mut visited = llrm_support::hash::HashSet::default();
     for &block in function.layout() {
         if optimize {
             // `SelectAllBasicBlocks`: a phi knows what its incoming values do
@@ -187,7 +191,15 @@ pub fn select_function_with(
     }
     let variables =
         variable_sites(module, function, name, &info, selected.first().map_or(&[][..], |b| &b.live_ins[..]));
-    Ok(Selection { blocks: selected, locals, cpu, widths, variables })
+    let unreachable = function
+        .layout()
+        .iter()
+        .copied()
+        .filter(|&block| {
+            function.terminator(block).is_some_and(|last| function.instruction(last).opcode == Opcode::Unreachable)
+        })
+        .collect();
+    Ok(Selection { blocks: selected, locals, cpu, widths, variables, unreachable })
 }
 
 /// The variables of `function` (after the debug import): parameters in the

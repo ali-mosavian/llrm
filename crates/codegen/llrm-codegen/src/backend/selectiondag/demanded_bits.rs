@@ -32,7 +32,7 @@ use super::dag::SDValue;
 use super::dag_combiner::{CombineHooks, CombineLevel, DagCombiner};
 use super::fold::mask;
 use super::isd::ISD;
-use super::known_bits::{KnownBits, known_bits};
+use super::known_bits::{KnownBits, known_bits, num_sign_bits};
 use super::mvt::EVT;
 
 /// `TargetLoweringOpt`: the value to replace and what replaces it.
@@ -591,6 +591,57 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 let swap = |v: u128| v.swap_bytes() >> (128 - width);
                 let k = self.sdb(src, swap(demanded), depth + 1, false, tlo)?;
                 KnownBits { zero: swap(k.zero), one: swap(k.one), width }
+            }
+            // `SimplifyDemandedBits` of `SRA` (TargetLowering.cpp#L2146): a
+            // shift that only moves sign bits into the demanded ones is
+            // dropped; one whose demanded bits cannot come from the sign is a
+            // logical shift. Not translated: the `shl`/`sra` pair as
+            // `sign_extend_inreg`, the exact flag, the multi-use operand and
+            // the average patterns.
+            ISD::Sra => {
+                let (op0, op1) = (self.dag.operand(op, 0), self.dag.operand(op, 1));
+                if num_sign_bits(self.dag, op0) >= width - demanded.trailing_zeros().min(width) {
+                    return Self::combine_to(tlo, op, op0);
+                }
+                if demanded == 1 {
+                    let new = self.dag.get_node(ISD::Srl, vt, &[op0, op1]);
+                    return Self::combine_to(tlo, op, new);
+                }
+                let Some(amount) = self.dag.constant(op1).filter(|&a| a < u128::from(width)) else {
+                    return self.finish(op, demanded, known_bits(self.dag, op), tlo);
+                };
+                let amount = amount as u32;
+                if amount == 0 {
+                    return Self::combine_to(tlo, op, op0);
+                }
+                let leading = demanded.leading_zeros() - (128 - width);
+                let sign = 1u128 << (width - 1);
+                let from = ((demanded << amount) & all) | if leading < amount { sign } else { 0 };
+                let k = self.sdb(op0, from, depth + 1, false, tlo)?;
+                if k.zero & sign != 0 || leading >= amount {
+                    let new = self.dag.get_node(ISD::Srl, vt, &[op0, op1]);
+                    return Self::combine_to(tlo, op, new);
+                }
+                if demanded.is_power_of_two() {
+                    let by = self
+                        .dag
+                        .get_constant(u128::from(width - 1 - demanded.trailing_zeros()), self.dag.value_type(op1));
+                    let new = self.dag.get_node(ISD::Srl, vt, &[op0, by]);
+                    return Self::combine_to(tlo, op, new);
+                }
+                let high = if k.one & sign != 0 { all & !(all >> amount) } else { 0 };
+                KnownBits { zero: k.zero >> amount, one: (k.one >> amount) | high, width }
+            }
+            // `SimplifyDemandedBits` of `SELECT` and `SELECT_CC`
+            // (TargetLowering.cpp#L1758-L1797): the arms are asked for the
+            // same bits, and what is known is what both arms agree on. Not
+            // translated: `ShrinkDemandedConstant` of the arms.
+            ISD::Select | ISD::SelectCC => {
+                let (a, b) = if opcode == ISD::Select { (1, 2) } else { (2, 3) };
+                let (a, b) = (self.dag.operand(op, a), self.dag.operand(op, b));
+                let known_b = self.sdb(b, demanded, depth + 1, false, tlo)?;
+                let known_a = self.sdb(a, demanded, depth + 1, false, tlo)?;
+                known_a.intersect(known_b)
             }
             // `SimplifyDemandedBits` of `ADD`, `SUB` and `MUL`: they demand
             // nothing above their highest demanded bit; a constant addend whose

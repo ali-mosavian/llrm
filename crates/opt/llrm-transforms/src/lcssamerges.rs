@@ -128,7 +128,7 @@ use crate::lcssa::{arms, exit_phi, from_arms, operations, outside_reads, place_p
 #[derive(Default)]
 pub struct Flow {
     pub dominance: Option<cfg::Dominance>,
-    graph: Option<(Vec<cfg::Block>, llrm_support::graph::Predecessors)>,
+    graph: Option<(Vec<cfg::Block>, llrm_support::graph::Predecessors, BTreeSet<i64>)>,
 }
 
 impl Flow {
@@ -145,16 +145,17 @@ pub fn closed(
     exiting: &[(i64, i64)],
     flow: &mut Flow,
 ) -> Result<bool, String> {
-    let (graph, predecessors) = flow
+    let (_, predecessors, reachable) = flow
         .graph
         .get_or_insert_with(
             || {
                 let graph = cfg::graph(function);
                 let predecessors = loops::predecessors(&graph);
-                (graph, predecessors)
+                let reachable = graph.iter().map(|block| block.at).collect();
+                (graph, predecessors, reachable)
             },
         );
-    let (graph, predecessors) = (&*graph, &*predecessors);
+    let (predecessors, reachable) = (&*predecessors, &*reachable);
     let entry = function.entry().map(cfg::id);
     let dominance = &*flow.dominance.get_or_insert_with(|| cfg::Dominance::of(function));
     let exits = exiting.iter().map(|&(_, to)| to).collect::<BTreeSet<_>>();
@@ -165,7 +166,6 @@ pub fn closed(
     }) {
         return Ok(false);
     }
-    let reachable = graph.iter().map(|block| block.at).collect::<BTreeSet<_>>();
     let mut sites: BTreeMap<ValueId, (i64, BTreeSet<i64>)> = BTreeMap::new();
     for (value, home, reads) in outside_reads(function, &loop_.body) {
         for read in reads {
@@ -324,10 +324,9 @@ pub fn _merged(
         .flat_map(|&at| cfg::successors_of(function, at))
         .chain(replacements.keys().copied())
         .collect::<BTreeSet<_>>();
-    for block in function.layout().to_vec() {
-        if !reading.contains(&cfg::id(block)) {
-            continue;
-        }
+    // Each block's edits stay in the block, so the order does not matter; only
+    // the blocks that read are visited, not the whole layout for each value.
+    for block in reading.iter().copied().map(cfg::block) {
         for phi in edges::phis(function, block) {
             let incoming = arms(function, phi)
                 .into_iter()
