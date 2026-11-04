@@ -23,14 +23,54 @@ pub fn qemu() -> Option<PathBuf> {
 
 /// A path no other call in this process has been given. Naming it by the IR's
 /// length gave two tests whose programs had the same length one file, and each
-/// ran the other's.
-pub fn unique_path(kind: &str) -> PathBuf {
+/// ran the other's. The file at it is deleted when the value is dropped, a
+/// failed test included.
+pub fn unique_path(kind: &str) -> Scratch {
     static RUNS: AtomicUsize = AtomicUsize::new(0);
-    std::env::temp_dir().join(format!(
+    Scratch(std::env::temp_dir().join(format!(
         "llrm-m68k-{kind}-{}-{}",
         std::process::id(),
         RUNS.fetch_add(1, Ordering::Relaxed)
-    ))
+    )))
+}
+
+/// A scratch path whose file goes with it.
+pub struct Scratch(PathBuf);
+
+impl Scratch {
+    pub fn to_path_buf(&self) -> PathBuf {
+        self.0.clone()
+    }
+}
+
+impl std::ops::Deref for Scratch {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl AsRef<Path> for Scratch {
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl AsRef<std::ffi::OsStr> for Scratch {
+    fn as_ref(&self) -> &std::ffi::OsStr {
+        self.0.as_os_str()
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        if self.0.is_dir() {
+            std::fs::remove_dir_all(&self.0).ok();
+        } else {
+            std::fs::remove_file(&self.0).ok();
+        }
+    }
 }
 
 /// Exit status of `qemu args... exe`, `None` if a signal ended it. `timeout`'s

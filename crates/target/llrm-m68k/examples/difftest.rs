@@ -21,6 +21,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod tempdir;
+
 use llrm_cgen::{DataModel, Options as Gen, program};
 use llrm_m68k::compile::{Item, Options, items_with};
 use llrm_m68k::dagisel::hooks::Cpu;
@@ -467,7 +469,7 @@ static INDEXED_FORMS: std::sync::Mutex<std::collections::BTreeMap<String, usize>
 /// `difftest DIR`: every `DIR/*.c` (a reduced program that once failed, with a
 /// `test`) must agree.
 fn corpus(dir: &Path) -> bool {
-    let work = std::env::temp_dir().join(format!("llrm-m68k-corpus-{}", std::process::id()));
+    let work = tempdir::Scratch::new("corpus");
     let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
         .unwrap()
         .filter_map(|entry| Some(entry.ok()?.path()))
