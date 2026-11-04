@@ -3581,3 +3581,25 @@ fn a_win64_variadic_function_with_alloca_homes_through_the_frame_register() {
     }
     assert!(!listing.contains("[rsp-"), "{listing}");
 }
+
+/// Row W64-1: Win64 shapes with their own ABI rules (a 128-bit integer, a
+/// vector, a by-value struct) are refused, not passed in SysV's way.
+#[test]
+fn a_win64_function_with_an_unprobed_shape_is_refused() {
+    // (function, whether it is the Win64 refusal that stops it: the selector
+    // refuses a 128-bit integer and a vector under SysV too)
+    let cases = [
+        ("define i128 @f(i128 %a) {\n  ret i128 %a\n}\n", false),
+        ("define <4 x i32> @f(<4 x i32> %a) {\n  ret <4 x i32> %a\n}\n", false),
+        ("define i64 @f(ptr byval([3 x i64]) align 8 %p) {\n  %v = load i64, ptr %p\n  ret i64 %v\n}\n", true),
+    ];
+    for (body, by_row) in cases {
+        let text = format!("{SYSV}{body}");
+        let refused = compiled(&flags(&["-m64", "-O2", "--isel=dag", "-mabi=win64"]), &text, "f").err();
+        assert!(refused.is_some(), "silently compiled: {body}");
+        if by_row {
+            assert!(refused.as_ref().is_some_and(|why| why.contains("W64-1")), "{refused:?} for {body}");
+            assert!(compiled(&flags(&["-m64", "-O2", "--isel=dag", "-mabi=sysv"]), &text, "f").is_ok(), "{body}");
+        }
+    }
+}
