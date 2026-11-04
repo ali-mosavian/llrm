@@ -938,6 +938,7 @@ pub(crate) fn llvm_order(
                     Box::new(looprotate::LoopRotate {
                         duplicate_headers: applied.options.copy_headers && !applied.options.has_min_size,
                         size: applied.options.prefers_size(),
+                        check_exit_count: false,
                     }),
                 ));
             }
@@ -1261,6 +1262,15 @@ pub fn recorded(
     // It reads the live-outs from exit phis, so the bodies are closed first.
     manager.add(loopsimplify::LoopSimplify);
     manager.add(lcssa::LoopClosedSSA);
+    // First, the pin's `LoopRotatePass(header duplication, check-exit-count)`
+    // for loops the passes since undid (PassBuilderPipelines.cpp#L1621).
+    if applied.options.copy_headers && !applied.options.has_min_size {
+        manager.add(looprotate::LoopRotate {
+            duplicate_headers: true,
+            size: applied.options.prefers_size(),
+            check_exit_count: true,
+        });
+    }
     manager.add(loopdeletion::LoopDeletion);
     // What no live code names any more goes before selection, as LLVM runs
     // GlobalDCE after inlining.
