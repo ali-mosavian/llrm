@@ -99,3 +99,75 @@ def test_a_hung_fork_call_is_a_failed_call_not_a_cell():
     finally:
         del os.environ["GCC_COLUMNS_TIMEOUT"]
         Z.TIMEOUT = B6.TIMEOUT = 120
+
+
+def test_host_check_catches_a_wrong_expect():
+    """The kernel expects were hand-derived; host_check must flag one that is off by one, and pass the shipped list."""
+    import host_check as H
+    assert H.main() == 0
+    saved = Z.K[:]
+    try:
+        n, r, a, w = Z.K[-1]
+        Z.K[-1] = (n, r, a, w + 1)
+        assert H.main() == 1
+    finally:
+        Z.K[:] = saved
+
+
+def test_gcc_leads_takes_the_lower_of_the_two_columns():
+    """The bar is the lower gcc column per metric: a lead by one column only (memmove clk by gcc, B by noivopts) must show both."""
+    import gcc_leads as L
+    h = "target\tprog\tlevel\tcompiler\tcode_bytes\tclocks\tinstrs\tnote\n"
+    def tsv(name, body):
+        f = tempfile.NamedTemporaryFile("w", suffix=".tsv", delete=False)
+        f.write(h + body)
+        f.close()
+        return f.name
+    m = tsv("m", "6502\tp\tOs\tours\t100\t1000\t300\t\n")
+    a = tsv("a", "6502\tp\tOs\tgcc\t90\t1200\t310\t\n")
+    b = tsv("b", "6502\tp\tOs\tgcc-noivopts-Os\t110\t900\t320\t\n")
+    (r,) = L.leads(m, [a, b])
+    assert r[1] == ("p", "Os") and [d[:3] for d in r[2]] == [("B", 90, 100), ("clk", 900, 1000)]
+    assert [(x[1], [d[:3] for d in x[2]]) for x in L.leads(m, [a])] == [(("p", "Os"), [("B", 90, 100)])]
+
+
+def test_vs_6502_bar_is_the_lower_of_both_gcc_columns():
+    """vs_6502.py read only 6502-gcc.tsv: a cell the gcc-noivopts-Os column wins (memchr, minmax, sum16 -Os) showed the worse number."""
+    import subprocess
+    d = tempfile.mkdtemp()
+    h = "target\tprog\tlevel\tcompiler\tcode_bytes\tclocks\tinstrs\tnote\n"
+    open(f"{d}/6502.tsv", "w").write(h + "6502\tp\tOs\tours\t120\t1500\t300\t\n")
+    open(f"{d}/6502-gcc.tsv", "w").write(h + "6502\tp\tOs\tgcc\t100\t1200\t310\t\n")
+    open(f"{d}/6502-gcc.noivopts.tsv", "w").write(h + "6502\tp\tOs\tgcc-noivopts-Os\t110\t900\t320\t\n")
+    out = f"{d}/vs.md"
+    subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "vs_6502.py"), d, out, "2026-11-04"], check=True)
+    row = next(l for l in open(out) if l.startswith("| p |"))
+    assert row.split("|")[2:4] == [" 100 ", " 900 "], row
+
+
+def test_softfloat_z80_table_is_complete_and_current():
+    """The 11-03 table was measured from the removed monolithic sf32.c; it stayed in the repo marked STALE.
+    A table needs 32 gcc clk cells (2 variants x 2 levels x 8 ops), 4 library sizes and the cc1 md5, and no STALE mark."""
+    t = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "tables", "softfloat-z80.tsv")).read()
+    head = [l for l in t.splitlines() if l.startswith("#")]
+    assert not any("STALE" in l for l in head), "stale table"
+    assert re.search(r"cc1 md5 [0-9a-f]{32}", head[0]) and "runtime/compiler-rt" in head[0]
+    rows = [l.split("\t") for l in t.splitlines() if l.startswith("gcc\t")]
+    assert sum(r[3] == "clk" for r in rows) == 32 and sum(r[3] == "bytes" for r in rows) == 4
+
+
+def test_softfloat_6502_clocks_divide_by_the_records_run():
+    """The 11-03 6502 softfloat table divided by 256 although add/sub/mul/div ran 361 records, and subtracted a base run that
+    failed its records: hand add read 570 for 324. Records come from the vec.inc that ran, and the base run must pass."""
+    d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sf-6502")
+    for n in ("run.sh", "hand.sh", "../sf-z80/run.sh"):
+        t = open(os.path.join(d, n)).read()
+        assert "/nv" in t and "/256" not in t and not re.search(r"/\$N\b", t), n
+        assert "base run must pass" in t, n
+    t = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "tables", "softfloat-6502.tsv")).read()
+    head = [l for l in t.splitlines() if l.startswith("#")]
+    assert len(head) == 1 and "withdrawn" not in head[0] and "STALE" not in head[0] and re.search(r"cc1 md5 [0-9a-f]{32}", head[0])
+    rows = [l.split("\t") for l in t.splitlines() if l.startswith("gcc\t")]
+    assert sum(r[3] == "clk" for r in rows) == 32 and sum(r[3] == "bytes" for r in rows) == 32
+    hand_add = next(l.split("\t")[5] for l in t.splitlines() if l.startswith("hand\t-\t-\tclk\tadd\t"))
+    assert int(hand_add) < 400, hand_add

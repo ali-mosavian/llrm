@@ -271,6 +271,22 @@ fn check_assume_skip() -> bool {
     *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_ASSUME_SKIP"))
 }
 
+static SCANS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// How many times `assume_declared` has scanned a module's globals.
+pub fn assume_scans() -> u64 {
+    SCANS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Whether `globals` declare `llvm.assume`. A call reaches it only through a
+/// function of that name: with none declared no body holds an assume.
+pub fn assume_declared(globals: &[GlobalValue]) -> bool {
+    SCANS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    globals
+        .iter()
+        .any(|global| matches!(global.kind, GlobalKind::Function(_)) && global.intrinsic() == Some(Intrinsic::Assume))
+}
+
 impl AssumptionCache {
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/AssumptionCache.cpp#L261>
     pub fn new(
@@ -287,13 +303,21 @@ impl AssumptionCache {
         metadata: &[MetadataNode],
         function: &Function,
     ) -> Self {
+        Self::of_declared(context, globals, metadata, function, assume_declared(globals))
+    }
+
+    /// `of`, told whether the module declares `llvm.assume`
+    /// (`assume_declared`): a pass that holds the answer for the module
+    /// does not scan every global for each function.
+    pub fn of_declared(
+        context: &Context,
+        globals: &[GlobalValue],
+        metadata: &[MetadataNode],
+        function: &Function,
+        declared: bool,
+    ) -> Self {
         let layout = DataLayout::default();
         let query = Query { globals, metadata, ..Query::bare(context, function, &layout) };
-        // A call reaches `llvm.assume` only through a function of that name:
-        // with none declared there is nothing to find in the body.
-        let declared = globals.iter().any(|global| {
-            matches!(global.kind, GlobalKind::Function(_)) && global.intrinsic() == Some(Intrinsic::Assume)
-        });
         let check = !declared && check_assume_skip();
         let assumes: Vec<InstId> = if declared || check {
             function
@@ -450,10 +474,22 @@ impl FunctionAnalyses {
         layout: &DataLayout,
         function: &Function,
     ) -> Self {
+        Self::of_declared(context, globals, metadata, layout, function, assume_declared(globals))
+    }
+
+    /// `of`, told whether the module declares `llvm.assume`.
+    pub fn of_declared(
+        context: &Context,
+        globals: &[GlobalValue],
+        metadata: &[MetadataNode],
+        layout: &DataLayout,
+        function: &Function,
+        assume_declared: bool,
+    ) -> Self {
         Self {
             layout: layout.clone(),
             dt: DomTree::of(function),
-            assumptions: AssumptionCache::of(context, globals, metadata, function),
+            assumptions: AssumptionCache::of_declared(context, globals, metadata, function, assume_declared),
             dom_conditions: None,
         }
     }
