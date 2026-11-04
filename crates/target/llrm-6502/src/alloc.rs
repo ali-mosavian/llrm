@@ -1047,6 +1047,25 @@ impl Builder {
             self.push(bump);
             return Ok(());
         }
+        // a pointer minus a small constant: the low byte steps down, the high
+        // on borrow
+        if self.in_pair(d)
+            && self.in_pair(a)
+            && let Some(n) = match (mnemonic, self.word_constant(b)) {
+                ("ADC", Some([lo, 255])) if lo > 0 => Some(256 - lo),
+                ("SBC", Some([n, 0])) if n > 0 => Some(n),
+                _ => None,
+            }
+        {
+            let source = self.pointer(a)?;
+            self.define(d);
+            let dest = self.pointer(d)?;
+            let operands = vec![Operand::Def(dest), Operand::Use(source), Operand::Imm(n), Operand::Def(Reg::Phys(reg::A))];
+            let mut bump = Inst::new(Kind::Op("PSUB"), operands);
+            bump.ties = vec![(0, 1)];
+            self.push(bump);
+            return Ok(());
+        }
         // a pointer plus a page: the high byte steps, in place
         if mnemonic == "ADC"
             && self.in_pair(d)
@@ -1158,8 +1177,8 @@ fn immediate(operand: &Machine) -> Result<i64, Unsupported> {
 /// The word cells that are a pointer somewhere: the base of a `(zp),y`
 /// access, or the address of a frame object.
 ///
-/// A pointer stays one through a copy and through an add of a constant 1..=255
-/// (`p++`, `p += k`), in both directions, so a pointer walked round a loop is
+/// A pointer stays one through a copy and through an add of a constant
+/// 1..=255 or -1..=-255 (`p++`, `p += k`, `--p`), in both directions, so a pointer walked round a loop is
 /// bumped in its pair instead of unpacked, added and packed every trip.
 ///
 /// DEVIATE (6502-7): pointer-ness is worked out from how the cells are used,
@@ -1175,7 +1194,7 @@ fn pointer_cells(
     let constant = |cell: &String| {
         let low = constants.get(cell).copied();
         let high = constants.get(&format!("{cell}+1")).copied();
-        matches!((low, high), (Some(1..=255), Some(0)) | (Some(0), Some(1)))
+        matches!((low, high), (Some(1..=255), Some(0 | 255)) | (Some(0), Some(1)))
     };
     // a cell read or written as plain bytes anywhere stays a word cell
     let mut plain: HashSet<String> = HashSet::default();
@@ -2774,6 +2793,22 @@ fn emit_with<const STACK: bool>(
                     };
                     let (load, low, high) = (read(regs[0]), step(regs[0]), step(regs[1]));
                     writeln!(out, "  {load}\n  bne _pa{made}\n  {high}\n_pa{made}:\n  {low}").unwrap();
+                }
+                // d := s - k on a pair: the low byte stepped down, the high on borrow
+                (Kind::Op("PSUB"), [_, _, Operand::Imm(k), ..]) => {
+                    let (d, s) = (regs[0], regs[1]);
+                    parallel_move(&mut out, &[(lane(d, 0), lane(s, 0)), (lane(d, 1), lane(s, 1))], false);
+                    made += 1;
+                    let (low, high) = (register_name(lane(d, 0)), register_name(lane(d, 1)));
+                    if *k == 1 {
+                        writeln!(out, "  lda {low}\n  bne _pa{made}\n  dec {high}\n_pa{made}:\n  dec {low}").unwrap();
+                    } else {
+                        writeln!(
+                            out,
+                            "  sec\n  lda {low}\n  sbc #{k}\n  sta {low}\n  bcs _pa{made}\n  dec {high}\n_pa{made}:"
+                        )
+                        .unwrap();
+                    }
                 }
                 (Kind::Op("PINCH"), _) => {
                     let (d, s) = (regs[0], regs[1]);
