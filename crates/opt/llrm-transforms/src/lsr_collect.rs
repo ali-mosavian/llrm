@@ -1073,7 +1073,37 @@ pub fn loop_register_units(
     // only the loop's own values (and the phis that take them), so it costs the
     // loop and not the function. Cells that need the count: shellsort -Os,
     // stft, matmul.
-    llrm_analysis::liveness::pressure_weighted_made_in(cx.function, &blocks, &|one| {
+    let made = llrm_analysis::liveness::pressure_weighted_made_in(cx.function, &blocks, &|one| {
         weights.get(&one).copied().unwrap_or(0)
+    }) as u32;
+    // DEVIATE LU3c: the values that live across this loop without being read
+    // in it (the enclosing loop's, or the function's parameters and entry
+    // block) hold registers too, or spill on every trip of the outer loop
+    // (nibbles -Os).
+    let scope: Vec<BlockId> = match lp.get_parent_loop() {
+        Some(outer) => outer.get_blocks().iter().copied().filter(|&block| !lp.contains(block)).collect(),
+        None => cx.function.entry().into_iter().collect(),
+    };
+    let mut through: HashMap<llrm_mir::module::ValueId, usize> = HashMap::default();
+    let defined = scope
+        .iter()
+        .flat_map(|&block| cx.function.iter_block(block))
+        .filter_map(|inst| cx.function.instruction(inst).result)
+        .chain(if lp.get_parent_loop().is_none() { cx.function.parameters().to_vec() } else { Vec::new() });
+    for result in defined {
+        let value = Operand::Value(result);
+        if !se.is_value_scevable(cx, value) {
+            continue;
+        }
+        let s = se.get_scev(cx, value);
+        let ty = se.type_of(s);
+        let bits = se.get_type_size_in_bits(cx, ty) as u32;
+        if bits > 1 {
+            through.insert(result, bits.div_ceil(word) as usize);
+        }
+    }
+    let candidates: llrm_mir::dense::IdSet<llrm_mir::module::ValueId> = through.keys().copied().collect();
+    made + llrm_analysis::liveness::live_through_weighted(cx.function, l, &blocks, &candidates, &|one| {
+        through.get(&one).copied().unwrap_or(0)
     }) as u32
 }
