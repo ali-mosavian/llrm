@@ -164,6 +164,12 @@ pub fn named(
     found
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Walks of an instruction's operands by `any_named`.
+    static NAMED_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Whether `test` holds of a register `one` names (`named`'s, as it finds
 /// them, none collected): what `useOrDefCSROrFI` asks of each operand.
 fn any_named(
@@ -171,6 +177,8 @@ fn any_named(
     one: &Insn,
     mut test: impl FnMut(RegId) -> bool,
 ) -> bool {
+    #[cfg(test)]
+    NAMED_WALKS.with(|walks| walks.set(walks.get() + 1));
     if one.call.iter().flat_map(|call| call.disturbs.iter()).any(|register| test(regs.root(*register))) {
         return true;
     }
@@ -600,9 +608,10 @@ impl<'a> Uses<'a> {
         one: &Insn,
     ) -> bool {
         let regs = self.body.regs();
-        (self.framed
-            && (touches_frame(one) || any_named(regs, one, |register| self.frame_registers.contains(&register))))
-            || any_named(regs, one, |register| self.kept.contains(&register))
+        (self.framed && touches_frame(one))
+            || any_named(regs, one, |register| {
+                (self.framed && self.frame_registers.contains(&register)) || self.kept.contains(&register)
+            })
     }
 
     fn block(
@@ -748,6 +757,21 @@ mod tests {
         let uses = Uses::of(&body, &kept, None);
         assert!(uses.touches(BlockId(0), false) && uses.touches(BlockId(0), true));
         assert_eq!(uses.scans.get(), 1);
+    }
+
+    /// A framed ask walked the operands of an instruction twice, once for the
+    /// frame's registers and once for the kept ones: `insn_needs` was 28M Ir
+    /// of memory_expansion -O2. One walk tests both.
+    #[test]
+    fn test_an_instruction_is_walked_once_to_see_if_it_needs_the_frame_or_a_kept_register() {
+        let one = touch(0, RegId::EBX);
+        let kept = BTreeSet::from([RegId::EBX]);
+        let body = body(vec![block(0, vec![one.clone(), ret(2)], vec![])]);
+        let uses = Uses::of(&body, &kept, Some((RegId::EBP, RegId::ESP)));
+        assert!(uses.framed, "the premise: a framed ask");
+        let before = NAMED_WALKS.with(std::cell::Cell::get);
+        assert!(uses.insn_needs(&one));
+        assert_eq!(NAMED_WALKS.with(std::cell::Cell::get) - before, 1, "the operands were walked more than once");
     }
 
     /// A register named only as the base or the index of a memory operand is
