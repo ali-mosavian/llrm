@@ -155,6 +155,7 @@ fn fold_unusual_patterns(
                 inst,
             );
             changed |= fold_consecutive_loads(unit.context, unit.layout, unit.function, inst);
+            changed |= fold_patterned_loads(unit.context, unit.layout, unit.function, globals, inst);
             changed |= fold_icmp_or_chain(unit.context, unit.layout, unit.function, inst);
             changed |= fold_mul_high(unit.context, unit.layout, unit.function, inst);
             changed |= fold_lib_calls(unit, globals, info, tti, cfg_changed, inst);
@@ -1863,6 +1864,119 @@ fn fold_any_or_all_bits_set(
     };
     let replacement = if trunc { compare } else { build(function, Opcode::Cast(CastOp::ZExt), x_ty, vec![compare]) };
     function.replace_all_uses_with(result, replacement);
+    true
+}
+
+/// `getStrideAndModOffsetOfGEP`
+/// ([:1823](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L1823)):
+/// the smallest step of the variable indices of the GEPs under `pointer`, and
+/// the constant offset modulo it; `(1, 0)` where it does not reach a global.
+fn stride_and_mod_offset(
+    q: &Query,
+    layout: &DataLayout,
+    mut pointer: Operand,
+) -> (u128, u128) {
+    let index_bits = layout.pointer(0).index_bits;
+    let mask = low_mask(index_bits);
+    let mut stride: Option<u128> = None;
+    let mut mod_offset: u128 = 0;
+    while let Some((_, gep)) = q.instruction_of(pointer)
+        && let Opcode::GetElementPtr { source } = gep.opcode
+    {
+        let indices: Vec<Option<i128>> =
+            gep.operands[1..].iter().map(|&index| q.int_constant(index).map(|(bits, _)| bits as i128)).collect();
+        let (constant, variable) = layout.collect_offset(&q.context().types, source, &indices);
+        mod_offset = mod_offset.wrapping_add(constant as u128) & mask;
+        for (_, scale) in variable {
+            let mut scale = u128::from(scale) & mask;
+            if scale == 0 {
+                continue;
+            }
+            // Only a power of two factor is kept without `nusw`.
+            if !gep.flags.contains(Flags::NUSW) && !gep.flags.contains(Flags::INBOUNDS) {
+                scale = 1u128 << scale.trailing_zeros();
+            }
+            stride = Some(stride.map_or(scale, |stride| gcd(stride, scale)));
+        }
+        pointer = gep.operands[0];
+    }
+    let reaches_global = matches!(
+        pointer,
+        Operand::Constant(id) if matches!(q.context().get(id).kind, ConstantKind::Global(_))
+    );
+    let Some(stride) = stride.filter(|_| reaches_global) else { return (1, 0) };
+    // A negative offset is the remainder of a division by the stride.
+    let negative = mod_offset >> (index_bits - 1) & 1 == 1;
+    let signed = if negative { (mod_offset | !mask) as i128 } else { mod_offset as i128 };
+    let remainder = signed.rem_euclid(stride as i128) as u128;
+    (stride, remainder)
+}
+
+fn gcd(
+    mut a: u128,
+    mut b: u128,
+) -> u128 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
+}
+
+/// `foldPatternedLoads`
+/// ([:1868](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L1868)):
+/// a load from a constant array whose every reachable element is the same is
+/// that constant.
+///
+/// DEVIATE 48: a GEP that is a constant expression is not looked through;
+/// only GEP instructions are. Owner: w2. Exit: 2026-11-21.
+fn fold_patterned_loads(
+    context: &mut llrm_mir::context::Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    globals: &[llrm_mir::module::GlobalValue],
+    inst: InstId,
+) -> bool {
+    let Opcode::Load { align, volatile: false } = function.instruction(inst).opcode else { return false };
+    let load_ty = function.instruction(inst).ty;
+    let Some(result) = function.instruction(inst).result else { return false };
+    let pointer = function.instruction(inst).operands[0];
+    let q = Query { globals, ..query(context, layout, function) };
+    let Operand::Constant(object) = llrm_mir::valuetracking::underlying::get_underlying_object(&q, pointer, 6) else {
+        return false;
+    };
+    let ConstantKind::Global(table) = context.get(object).kind else { return false };
+    let Some(global) = globals.get(table.0 as usize) else { return false };
+    let llrm_mir::module::GlobalKind::Variable(variable) = &global.kind else { return false };
+    // A definitive initializer: the global is not interposable.
+    let (true, Some(initializer), false) = (variable.constant, variable.initializer, global.linkage.is_interposable())
+    else {
+        return false;
+    };
+    // Bail for large initializers in excess of 4K to avoid too many scans.
+    let size = layout.alloc_size(&context.types, context.get(initializer).ty);
+    if size == 0 || size > 4096 {
+        return false;
+    }
+    let (mut stride, mut offset) = stride_and_mod_offset(&q, layout, pointer);
+    // Any valid offset is a multiple of the load's alignment, so checking the
+    // multiples of the bigger of it and the stride is enough.
+    let load_align = align.unwrap_or_else(|| layout.align(&context.types, load_ty));
+    if load_align <= variable.align.unwrap_or(1) && u64::try_from(stride).unwrap_or(u64::MAX) < load_align {
+        offset = 0;
+        stride = u128::from(load_align);
+    }
+    let fold = |at: u128| {
+        llrm_mir::constantfolding::constant_fold_load_from_const(context, layout, initializer, load_ty, at as u64)
+    };
+    let Some(constant) = fold(offset) else { return false };
+    let last = size.wrapping_sub(layout.store_size(&context.types, load_ty));
+    while offset <= u128::from(last) {
+        if fold(offset) != Some(constant) {
+            return false;
+        }
+        offset += stride;
+    }
+    function.replace_all_uses_with(result, Operand::Constant(constant));
     true
 }
 
