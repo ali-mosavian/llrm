@@ -304,6 +304,16 @@ fn a_loop_is_not_entered_by_a_jump_to_a_merged_test_at_o2() {
     assert!(first.is_some_and(|line| !line.starts_with("jr ")), "{out}");
 }
 
+/// `fib`'s loop counted `a` down with `dec a`, added with `add hl, bc` and then
+/// tested `a` again with `or a, a` before `ret z`: `add hl, rr` leaves the zero
+/// flag, so `dec a`'s still stood (23 B, 685 T, 112 instructions; 22, 637, 100
+/// without the test).
+#[test]
+fn a_zero_flag_stands_through_a_16_bit_add() {
+    let out = text(include_str!("kernels/ir/fib.ll"), "fib", 0, &Request::new(Level::O2)).expect("compiles");
+    assert!(out.contains("add hl, bc\n\tret z") && !out.contains("add hl, bc\n\tor a, a"), "{out}");
+}
+
 /// `sum4`'s rotated loop was `dec b; inc hl; jr nz`: the pointer step sat
 /// between the decrement and the branch, so no `djnz` formed (12 B, 172 T, 22
 /// instructions at -O2; 11 B, 160 T, 18 with it).
