@@ -1733,14 +1733,16 @@ pub fn from_lir<T: Target>(
                           classes: &mut Vec<T::Class>,
                           number: &mut dyn FnMut(u32, &mut Vec<T::Class>) -> Reg|
      -> Reg {
-        // The register the value is in whole: a pinned one (the return pair)
-        // is in the one it is pinned to.
-        let wide = pinned.get(&held.value).copied().or_else(|| placed_at.get(&held.value).copied());
         // A clone of such a value (a reload of the pair) has no lane def of
         // its own: a byte of a wider register is named by lane the same way.
-        let narrower = wide.is_some_and(|wide| registers.bytes(wide).is_some_and(|bytes| bytes > i64::from(held.width)));
-        if lane_values.contains(&held.value) || narrower {
-            match wide.and_then(|wide| lane_register(&registers, wide, held.offset, held.width)) {
+        let narrower = placed_at
+            .get(&held.value)
+            .is_some_and(|wide| registers.bytes(*wide).is_some_and(|bytes| bytes > i64::from(held.width)));
+        if (lane_values.contains(&held.value) || narrower) && !pinned.contains_key(&held.value) {
+            let found = placed_at
+                .get(&held.value)
+                .and_then(|wide| lane_register(&registers, *wide, held.offset, held.width));
+            match found {
                 Some(register) => return Reg::Phys(register),
                 None => {
                     lane_failed.borrow_mut().get_or_insert(format!("no register for a lane of value {}", held.value));
