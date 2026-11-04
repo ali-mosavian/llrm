@@ -57,6 +57,20 @@ fn the_size_level_is_priced_in_bytes() {
     assert!(!speed.contains("dex") && !speed.contains("dey"), "-O2:\n{speed}");
 }
 
+/// `t[(a + b) >> 1]` on bytes is a pointer plus an `i16` whose high byte is
+/// known zero. Selected as a 16-bit add into the pointer and `ldy #0; lda (rc),y`
+/// (bsearch8: 78 B against llvm-mos's 53) instead of the byte index in Y.
+#[test]
+fn an_index_with_a_known_zero_high_byte_is_the_y_of_the_load() {
+    let ir = module(
+        "define i8 @ldm(ptr %t, i8 %a, i8 %b) {\n  %x = zext i8 %a to i16\n  %y = zext i8 %b to i16\n  \
+         %s = add nuw nsw i16 %x, %y\n  %m = lshr i16 %s, 1\n  %p = getelementptr inbounds i8, ptr %t, i16 %m\n  \
+         %v = load i8, ptr %p\n  ret i8 %v\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(text.contains(",y") && !text.contains("ldy #0"), "the pointer was added in 16 bits:\n{text}");
+}
+
 /// `LLRM_6502_ZERO_PAGE` sets the platform's zero page, whichever way the
 /// platform is named. It was read before the row's own `--platform=sim65`,
 /// which put the 26 back: a sweep of 16..26 read flat, 4362 bytes at every
