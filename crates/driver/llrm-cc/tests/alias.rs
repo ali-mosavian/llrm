@@ -26,3 +26,24 @@ fn a_c_alias_is_a_public_name_in_the_m16_object() {
     let has = |name: &[u8]| bytes.windows(name.len()).any(|window| window == name);
     assert!(has(b"_real") && has(b"_other"), "a name is missing from the object");
 }
+
+/// A regcall alias kept clang's `__regcall3__` in its public name
+/// (`___regcall3____ltsf2@3`) while its function lost it, so a link needing
+/// `__ltsf2` failed E2028.
+#[test]
+fn a_watcom_alias_has_no_regcall_prefix_in_the_m16_object() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let object = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("alias-wat-{}.o", std::process::id()));
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_16-wat")
+        .env("LLRM_LLC", target_dir::of(&root).join("release/llrm-llc"))
+        .args(["-O2", "-w", "-c", "-march=i386", "-o"])
+        .arg(&object)
+        .arg(root.join("tests/cc/alias/alias_wat.c"))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let bytes = std::fs::read(&object).unwrap();
+    let has = |name: &[u8]| bytes.windows(name.len()).any(|window| window == name);
+    assert!(has(b"eq") && has(b"gt") && !has(b"regcall3"), "the alias keeps clang's prefix");
+}

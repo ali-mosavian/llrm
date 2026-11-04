@@ -235,14 +235,19 @@ fn decorate(
             Some(one) => calling.by_number(one.calling_convention).unwrap_or(default),
             None => calling.by_number(0).unwrap_or(default),
         };
-        let name = module.aliases[at].name.clone();
+        let mut name = module.aliases[at].name.clone();
+        // clang spells a regcall alias `__regcall3__NAME`, as its function; the
+        // function lost the prefix above when it took the ABI's convention.
+        if let Some(plain) = name.strip_prefix("__regcall3__")
+            && module.global(aliasee).function().is_some_and(|one| one.calling_convention != llrm_mir::opcode::REGCALL)
+        {
+            name = plain.to_owned();
+        }
         let spelled = match name.strip_prefix('\u{1}') {
             Some(exact) => Some(exact.to_owned()),
             None => convention.decorated(format, &name),
         };
-        if let Some(spelled) = spelled {
-            module.aliases[at].name = spelled;
-        }
+        module.aliases[at].name = spelled.unwrap_or(name);
     }
     spellings
 }
