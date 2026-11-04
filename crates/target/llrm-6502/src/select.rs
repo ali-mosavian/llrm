@@ -13,7 +13,7 @@
 //! checks selection and emission, not allocation. Exit: the shared allocator
 //! takes the 6502 (post-parity).
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 use std::fmt::Write;
 
 use llrm_codegen::backend::frameobjects::Object;
@@ -74,7 +74,7 @@ struct Cells<'a> {
     deferred: Vec<MInst>,
     /// The successors the current block branches to by label, for the edge
     /// blocks.
-    branched_to: std::collections::HashSet<u32>,
+    branched_to: llrm_support::hash::HashSet<u32>,
 }
 
 impl Cells<'_> {
@@ -195,7 +195,7 @@ pub fn function_items_with_places(
     selection: &Selection,
 ) -> Result<(Vec<Item>, (Vec<String>, Vec<String>), Vec<llrm_codegen::model::lir::SrcLoc>), String> {
     let mut places: Vec<llrm_codegen::model::lir::SrcLoc> = Vec::new();
-    let mut number_of: HashMap<llrm_codegen::model::lir::SrcLoc, u32> = HashMap::new();
+    let mut number_of: HashMap<llrm_codegen::model::lir::SrcLoc, u32> = HashMap::default();
     let blocks = &selection.blocks;
     let (laid_out, fixed) = lay_out_frame(blocks, &selection.locals);
     let mut cells = Cells {
@@ -203,11 +203,11 @@ pub fn function_items_with_places(
         next: 0,
         bytes: Vec::new(),
         words: Vec::new(),
-        virtual_regs: HashMap::new(),
+        virtual_regs: HashMap::default(),
         widths: selection.widths.clone(),
         frame: laid_out,
         fixed,
-        saved: HashMap::new(),
+        saved: HashMap::default(),
         deferred: Vec::new(),
         branched_to: Default::default(),
     };
@@ -218,7 +218,7 @@ pub fn function_items_with_places(
     }
     for one in blocks {
         body.push(Item::Label(block_label(name, one.block.0)));
-        let mut values: HashMap<(u32, u8), Operand> = HashMap::new();
+        let mut values: HashMap<(u32, u8), Operand> = HashMap::default();
         for &(register, vreg) in &one.live_ins {
             let from = REGISTER_INFO.name(register).ok_or("a live-in with no name")?;
             let bits = if from.starts_with("rs") { 16 } else { 8 };
