@@ -18,7 +18,7 @@ runner=CARGO_TARGET_${triple}_RUNNER
 # Anything but cargo/rustc runs under testcap's memory cap and a timeout, so a script that forgets its own guard cannot take the host: two unbounded llrm-6502-llc (217 and 190 GB) did at 21:55 and 22:07.
 # cargo is exempt (its test binaries get the cap through the runner above); BUILDSLOT_TIMEOUT seconds (default 3 h, 0 = none).
 guard=()
-case ${1##*/} in cargo|rustc|rustup) ;; *) guard=("$here/testcap"); t=${BUILDSLOT_TIMEOUT:-10800}; [ "$t" != 0 ] && guard=(timeout "$t" "${guard[@]}");; esac
+case ${1##*/} in cargo|rustc|rustup) ;; *) guard=(env TEST_MEM_CAP_GB="${BUILDSLOT_CMD_CAP_GB:-${TEST_MEM_CAP_GB:-96}}" "$here/testcap"); t=${BUILDSLOT_TIMEOUT:-10800}; [ "$t" != 0 ] && guard=(timeout "$t" "${guard[@]}");; esac
 # First come, first served: a waiter takes a ticket (BUILDSLOT_PRIORITY=0 sorts before the default 1) and only the N oldest live tickets may try the N slots. Random polling let short tests
 # keep beating a dist build that held the shared dist lock: 44 minutes at 0% CPU, 11 pair_builds queued behind it.
 poll=${BUILDSLOT_POLL:-0.5}

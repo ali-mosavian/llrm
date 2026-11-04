@@ -23,6 +23,7 @@
 use std::collections::BTreeMap;
 
 use llrm_codegen::backend::registerinfo::RegId;
+use llrm_codegen::backend::selectiondag::chain_combine::AliasOracle;
 use llrm_codegen::backend::selectiondag::dag_combiner::{CombineHooks, CombineLevel, DagCombiner};
 use llrm_codegen::backend::selectiondag::dag_select::do_instruction_selection_with;
 use llrm_codegen::backend::selectiondag::dagisel_adapter::{DagisAdapter, PinRegisters};
@@ -30,6 +31,7 @@ use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo
 use llrm_codegen::backend::selectiondag::legalize_dag::DagLegalizer;
 use llrm_codegen::backend::selectiondag::legalize_types::TypeLegalizer;
 use llrm_codegen::backend::selectiondag::live_out;
+use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::schedule::{SchedInfo, Unit, schedule};
 use llrm_codegen::backend::selectiondag::{MemInfo, NodeData, SDValue, SelectionDAG, TargetLowering};
 use llrm_dagisel::dag::{Dag, SDValue as PinValue};
@@ -73,7 +75,10 @@ impl PinRegisters for WasmPins {
 }
 
 /// What the scheduler reads of the instruction descriptions.
-pub struct WasmSched;
+pub struct WasmSched {
+    /// Not `-O0`: `createDefaultScheduler` is source order at `-O0` only.
+    pub optimize: bool,
+}
 
 impl SchedInfo for WasmSched {
     fn pin_register(
@@ -104,10 +109,13 @@ impl SchedInfo for WasmSched {
         instrinfo::desc(opcode as u16).is_some_and(|desc| desc.has(flag::CALL))
     }
 
-    /// `createDefaultScheduler` at `-O0` (`OptLevel == None`) is the
-    /// source-order list scheduler.
+    /// `createDefaultScheduler` is the source-order list scheduler at `-O0`
+    /// (`OptLevel == None`); above it, `WebAssemblyTargetLowering` asks for
+    /// `Sched::RegPressure` (`setSchedulingPreference`) and the subtarget
+    /// disables the machine scheduler (`enableMachineScheduler` is false), so
+    /// the register-reduction scheduler (`createBURRListDAGScheduler`) runs.
     fn source_order(&self) -> bool {
-        true
+        !self.optimize
     }
 }
 
@@ -123,11 +131,46 @@ pub enum Refusal {
 struct WasmCombines;
 
 impl CombineHooks for WasmCombines {
+    /// `TargetLowering::convertSelectOfConstantsToMath`: wasm keeps the pin's
+    /// default, so `(shl (select c, 1, 2), 2)` folds into one `select 4, 8`.
+    fn convert_select_of_constants_to_math(
+        &self,
+        _vt: EVT,
+    ) -> bool {
+        false
+    }
+
     fn canonicalize_ge_le(&self) -> bool {
         true
     }
 
     fn fold_and_of_extload(&self) -> bool {
+        true
+    }
+
+    fn fold_sext_in_reg_of_load(&self) -> bool {
+        true
+    }
+
+    fn rebuild_brcond_condition(&self) -> bool {
+        true
+    }
+
+    fn fold_bin_op_into_select(&self) -> bool {
+        true
+    }
+
+    fn merge_stores_after_legalization(
+        &self,
+        _mem: EVT,
+    ) -> bool {
+        // The pin's default; EVT holds no vectors yet.
+        true
+    }
+
+    /// The pin runs `SimplifyDemandedBits` of `ADD`/`SUB`/`MUL` for every
+    /// target.
+    fn simplify_demanded_add_sub_mul(&self) -> bool {
         true
     }
 }
@@ -190,10 +233,11 @@ fn combine(
     dag: &mut SelectionDAG,
     level: CombineLevel,
     tli: &TargetLowering,
+    alias: &dyn AliasOracle,
     optimize: bool,
 ) {
     let mut hooks = WasmCombines;
-    let combiner = DagCombiner::new(dag, &mut hooks, level).with_tli(tli);
+    let combiner = DagCombiner::new(dag, &mut hooks, level).with_tli(tli).with_alias(alias);
     if optimize { combiner } else { combiner.with_opt_none() }.run();
 }
 
@@ -203,6 +247,7 @@ pub fn select_block(
     cpu: Cpu,
     features: Features,
     info: &mut FunctionLoweringInfo,
+    alias: &dyn AliasOracle,
     optimize: bool,
 ) -> Result<Scheduled, Refusal> {
     let tli = target_lowering(cpu, features);
@@ -211,15 +256,15 @@ pub fn select_block(
     if optimize {
         live_out::assert_live_out_copies(dag, info);
     }
-    combine(dag, CombineLevel::BeforeLegalizeTypes, &tli, optimize);
+    combine(dag, CombineLevel::BeforeLegalizeTypes, &tli, alias, optimize);
     let legalized = TypeLegalizer::new(dag, &tli).with_hooks(&mut lowering).run();
     if legalized.is_err() && llrm_codegen::support::env_var("LLRM_DAGDUMP").is_some() {
         eprintln!("{}", dag.dump());
     }
     legalized.map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
-    combine(dag, CombineLevel::AfterLegalizeTypes, &tli, optimize);
+    combine(dag, CombineLevel::AfterLegalizeTypes, &tli, alias, optimize);
     DagLegalizer::new(dag, &tli, &mut lowering).run().map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
-    combine(dag, CombineLevel::AfterLegalizeDag, &tli, optimize);
+    combine(dag, CombineLevel::AfterLegalizeDag, &tli, alias, optimize);
     if optimize {
         live_out::compute_live_out_vreg_info(dag, info);
     }
@@ -254,5 +299,5 @@ pub fn select_block(
     })
     .map_err(|why| Refusal::CannotSelect(format!("{why:?}")))?;
     let root: SDValue = dag.get_root();
-    Ok(Scheduled { units: schedule(dag, root, &WasmSched), mem_refs, accesses })
+    Ok(Scheduled { units: schedule(dag, root, &WasmSched { optimize }), mem_refs, accesses })
 }

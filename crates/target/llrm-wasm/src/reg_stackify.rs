@@ -252,7 +252,11 @@ fn query(
 ) -> Effects {
     let mut found = Effects::default();
     let Some(info) = desc(inst.opcode) else {
-        // A marker: it does nothing to memory.
+        // `CALL` and `CALL_INDIRECT` are in no table (variadic defs): a call.
+        if crate::branch::is_call(inst) {
+            query_callee(f, inst, &mut found);
+        }
+        // Otherwise a marker: it does nothing to memory.
         return found;
     };
     if info.has(flag::TERMINATOR) {

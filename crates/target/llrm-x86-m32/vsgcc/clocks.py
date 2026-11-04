@@ -69,6 +69,7 @@ UNTABLED = {
     "enter": 14, "loads": 2, "scas": 6, "cmps": 7,   # ENTER; SAHF; LODS; SCAS and CMPS per iteration
     "scas_first": 5, "cmps_first": 5,                             # ... and once more for the first
     "fld_reg": 4, "fst_reg": 3, "fchs": 6, "fabs": 3, "fcom": 4, "fnstsw": 3, "fnstcw": 4, "fild": 13, "fist": 29, "fsqrt": 83,
+    "fld_m80": 6, "fstp_m80": 6, "fst_m32": 7,                    # FLD m80, FSTP m80, FST/FSTP m32 (Table 10.3: the table's x87_load 3 and x87_store 8 are the m32/m64 and m64 rows)
     "fiadd32": 19, "fiadd16": 20, "fimul32": 22, "fimul16": 23, "fidiv32": 84, "fidiv16": 85,
 }
 

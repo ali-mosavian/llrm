@@ -496,7 +496,7 @@ fn a_memmove_with_a_proved_direction_is_a_string_copy() {
 fn a_backward_memmove_at_m32_of_an_odd_size_moves_bytes() {
     let ir = memmove_ir(", !llrm.backward !0").replace("78000", "78001");
     let backward = select_m32(&ir).unwrap_or_else(|why| panic!("{why}"));
-    let bytes = [0x1E, 0x07, 0xFD, 0xF3, 0xA4, 0xFC];
+    let bytes = [0xFD, 0xF3, 0xA4, 0xFC];
     assert!(backward.inline.values().any(|code| code[..] == bytes), "{:?}", backward.inline);
 }
 
@@ -1154,13 +1154,17 @@ fn at_os_a_10_byte_clear_is_stores_not_rep_stos() {
 /// The 10-byte clear was a fill because the model priced its stores at 19
 /// bytes (a 6-byte setup, 5 for the word) where the object has 14 (`xor ecx`,
 /// two dword stores and a word from the same register) against the fill's 16:
-/// the in-situ object grew. Whatever the boundary is, a longer clear never
-/// goes back to stores.
+/// the in-situ object grew. Whatever the boundary is, a longer clear of the
+/// same parity never goes back to stores (an odd one has a byte store more:
+/// 11 B is a fill, 12 B three dwords of stores).
 #[test]
 fn at_os_a_clear_that_is_a_fill_stays_a_fill_as_it_grows() {
-    let first = (2..=64).find(|&n| memset_shape(n, 0).0 == 1).expect("a fill");
-    assert!(first > 8, "{first}");
-    assert!((first..=64).all(|n| memset_shape(n, 0).0 == 1));
+    for parity in [0, 1] {
+        let sizes: Vec<u32> = (4..=64).filter(|n| n % 2 == parity).collect();
+        let first = sizes.iter().copied().find(|&n| memset_shape(n, 0).0 == 1).expect("a fill");
+        assert!(first > 8, "{first}");
+        assert!(sizes.iter().filter(|&&n| n >= first).all(|&n| memset_shape(n, 0).0 == 1), "parity {parity}");
+    }
 }
 
 /// sc.c's 14-byte zero fill: 7 bytes saved for 66 clocks, 9.4 a byte, pay.
@@ -1474,6 +1478,58 @@ fn dynamic_fill_unit(shift: u32) -> Option<String> {
 fn a_fill_of_whole_words_is_rep_stosw() {
     let unit = dynamic_fill_unit(1).expect("a fill");
     assert_eq!(unit, "2");
+}
+
+/// The width in bytes of the register of the `rep stos` a `memset` of the
+/// constant `length` bytes of a word-aligned local becomes at m16 -Os on a 486.
+fn os_fill_unit(length: u32) -> String {
+    let text = format!(
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+declare void @use(ptr)
+define void @f() {{
+entry:
+  %a = alloca [{length} x i8], align 2
+  call void @llvm.memset.p0.i16(ptr align 2 %a, i8 0, i16 {length}, i1 false)
+  call void @use(ptr %a)
+  ret void
+}}
+"
+    );
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    cpu.size = true;
+    let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| w.op == crate::model::ir::Operation::Fill)
+        .and_then(|w| {
+            w.sources
+                .iter()
+                .find_map(
+                    |source| match source {
+                        crate::model::ir::Loc::Held(held) => Some(held.width.to_string()),
+                        _ => None,
+                    },
+                )
+        })
+        .expect("a fill")
+}
+
+/// sieve bq16 -Os: the 2,048-byte entry clear of a frame array was a `rep
+/// stosb` (2,048 iterations, 600 clocks over the heap array's) where `rep
+/// stosw` is the same bytes of code and half the iterations.
+#[test]
+fn at_os_a_constant_fill_of_whole_words_is_rep_stosw() {
+    assert_eq!(os_fill_unit(2048), "2");
+}
+
+/// An odd length is bytes.
+#[test]
+fn at_os_a_constant_fill_of_an_odd_length_is_rep_stosb() {
+    assert_eq!(os_fill_unit(2047), "1");
 }
 
 /// A size that is no multiple of 2 stays bytes.

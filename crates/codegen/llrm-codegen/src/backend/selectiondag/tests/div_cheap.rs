@@ -67,6 +67,7 @@ const I486_REAL_MODE: DivPrices = DivPrices {
     extend: 3,
     multiply: 13,
     multiply_long: 26,
+    multiply_high: 26,
     divide: 24,
     divide_long: 43,
     margin: 25,
@@ -147,4 +148,23 @@ fn the_remainders_product_is_priced_as_what_the_selector_emits() {
     };
     assert_ne!(priced(ISD::SRem, EVT::I32, 14, Some(flat(0))), ISD::SRem);
     assert_eq!(priced(ISD::SRem, EVT::I32, 14, Some(flat(100))), ISD::SRem);
+}
+
+/// With no margin the multiply-high is priced as the dividend-multiplier's
+/// early-out (`multiply_high`, the sheet's shortest multiply), not the midpoint
+/// of 13..42 (`multiply_long`): at the midpoint a 32-bit remainder by 7 or 14
+/// chose `idiv` (the sheet's 43) on its own, where the sequence is what recmany
+/// and switch run faster.
+#[test]
+fn a_32_bit_remainder_is_the_sequence_when_the_multiply_high_is_the_shortest_multiply() {
+    let flat = DivPrices { margin: 0, multiply_high: 13, ..I486_REAL_MODE };
+    for (op, d) in [(ISD::SRem, 7), (ISD::SRem, 14), (ISD::URem, 7), (ISD::URem, 97)] {
+        assert_ne!(priced(op, EVT::I32, d, Some(flat.clone())), op, "{op:?} {d}");
+    }
+    let midpoint = DivPrices { margin: 0, ..I486_REAL_MODE };
+    assert_eq!(
+        priced(ISD::SRem, EVT::I32, 14, Some(midpoint)),
+        ISD::SRem,
+        "the premise: at the midpoint it was the divide"
+    );
 }

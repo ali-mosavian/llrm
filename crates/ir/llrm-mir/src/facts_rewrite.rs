@@ -567,6 +567,18 @@ mod tests {
             // `willNotOverflow` has shown the math cannot wrap at that width.
             // It reads no flag off an existing instruction.
             "combine_narrow.rs",
+            // InstructionCombining.cpp's `foldFBinOpOfIntCasts` gives the
+            // integer op it builds `nsw` (signed) or `nuw` (unsigned) once
+            // `willNotOverflow` has shown the math cannot wrap. It reads no
+            // flag off an existing instruction.
+            "combine_fp_int_casts.rs",
+            // InstCombineCalls.cpp's `min`/`max`/`cmp` arms read `nuw` of the
+            // `shl`/`mul` under a `umax` (`foldMaxMulShift`), `nsw` of both
+            // negations under a `min`/`max` and `nsw` of a `sub` under an
+            // `scmp`, each as the proof the pin takes. The `nsw` it sets is on
+            // the `sub 0, X` it builds, where the negations it replaced
+            // already had it (or `abs` is poison at the minimum).
+            "combine_minmax.rs",
             // InstCombineAndOrXor.cpp's `foldCastedBitwiseLogic` reads the
             // `nuw`/`nsw` of the two truncs it merges: `trunc nuw` of an and
             // needs one operand `nuw`, of an or both, and `nsw` needs both.
