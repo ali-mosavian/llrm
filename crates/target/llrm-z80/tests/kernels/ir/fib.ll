@@ -59,6 +59,5 @@ attributes #2 = { nounwind }
 !4 = !{!"Simple C/C++ TBAA"}
 !5 = !{!6, !6, i64 0}
 !6 = !{!"int", !3, i64 0}
-!7 = distinct !{!7, !8, !9}
+!7 = distinct !{!7, !8}
 !8 = !{!"llvm.loop.mustprogress"}
-!9 = !{!"llvm.loop.unroll.disable"}
