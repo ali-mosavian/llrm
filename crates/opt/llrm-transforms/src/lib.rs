@@ -161,6 +161,7 @@ pub mod combine_select_fabs;
 pub mod combine_select_into_op;
 pub mod combine_select_op_op;
 pub mod combine_select_spf;
+pub mod combine_select_tail;
 #[cfg(test)]
 mod combine_semantics_tests;
 pub mod combine_shared;
