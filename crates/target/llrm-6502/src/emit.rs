@@ -356,6 +356,15 @@ pub fn expand(
             address(&o[1], &o[2])?
         )
         .unwrap(),
+        op::LDABS16 | op::STABS16 => {
+            let symbol = address(&o[1], &o[2])?;
+            let (lo, hi) = word(&o[0])?;
+            if inst.opcode == op::LDABS16 {
+                writeln!(out, "  lda {symbol}\n  sta {lo}\n  lda {symbol}+1\n  sta {hi}").unwrap();
+            } else {
+                writeln!(out, "  lda {lo}\n  sta {symbol}\n  lda {hi}\n  sta {symbol}+1").unwrap();
+            }
+        }
         op::STZABS => writeln!(out, "  stz {}", address(&o[0], &o[1])?).unwrap(),
         op::STZP => {
             let ((lo, hi), off) = (word(&o[0])?, imm(&o[1])?);

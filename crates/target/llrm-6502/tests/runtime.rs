@@ -145,6 +145,32 @@ fn unsigned_word_division() {
     }
 }
 
+/// The compact word divide (`__udivhi3c`, `__umodhi3c`: the bit loop alone,
+/// picked at -Os) agrees with the fast one for every case above, divisors of a
+/// byte and under, a divisor of 0x8000 and over (the remainder carries out of
+/// 16 bits), and zero (the all-ones quotient, the dividend as remainder).
+#[test]
+fn the_compact_word_division_agrees_with_the_fast_one() {
+    for (a, b, quotient, remainder) in [
+        (50000, 7, 7142, 6),
+        (60000, 40000, 1, 20000),
+        (65535, 256, 255, 255),
+        (12345, 10, 1234, 5),
+        (65535, 1, 65535, 0),
+        (65535, 255, 257, 0),
+        (65535, 129, 508, 3),
+        (255, 255, 1, 0),
+        (0, 9, 0, 0),
+        (65535, 32768, 1, 32767),
+        (65535, 65535, 1, 0),
+        (40000, 0, 65535, 40000),
+    ] {
+        let n = format!("c{a}-{b}");
+        assert_eq!(word(&format!("udivhic-{n}"), &two_words(a, b), "__udivhi3c"), quotient, "{a} / {b}");
+        assert_eq!(word(&format!("umodhic-{n}"), &two_words(a, b), "__umodhi3c"), remainder, "{a} % {b}");
+    }
+}
+
 /// Division truncates toward zero and the remainder has the dividend's sign: -7
 /// / 2 = -3 r -1, 7 / -2 = -3 r 1, -7 / -2 = 3 r -1. As bytes: -7 = 249, -3 =
 /// 253, -1 = 255, -2 = 254.

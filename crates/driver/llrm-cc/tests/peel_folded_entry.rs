@@ -94,3 +94,12 @@ fn at_speed_a_constant_divisor_the_loop_already_has_does_not_pay_for_a_peel() {
     let source = "int digits(long v)\n{\n    int total = 0;\n    long rest = v;\n    while (rest > 0) {\n        total += (int)(rest % 10);\n        rest /= 10;\n    }\n    return total;\n}\n";
     assert!(!peels_source(source, "-O2"), "the digit loop was peeled");
 }
+
+/// nbody_fixed: the inner loop's divides and multiplies read their operands from
+/// arrays, so the entry values fold nothing. A two-trip count that took the next
+/// trip's work as folded peeled it (-O2: +8999 clocks, +122 B). It is not peeled.
+#[test]
+fn at_speed_a_loop_whose_multiplies_read_memory_does_not_peel() {
+    let source = "static long px[6], py[6];\nlong f(void)\n{\n    long ax = 0, ay = 0, dx, dy, d2, fo;\n    int b, o;\n    for (b = 0; b < 6; ++b) {\n        ax = ay = 0;\n        for (o = 0; o < 6; ++o) {\n            if (o != b) {\n                dx = px[o] - px[b];\n                dy = py[o] - py[b];\n                d2 = dx * dx + dy * dy + 262144L;\n                fo = 512L / (d2 / 262144L + 1);\n                ax += (dx * fo) / 512L;\n                ay += (dy * fo) / 512L;\n            }\n        }\n        px[b] += ax;\n        py[b] += ay;\n    }\n    return px[0] + py[0];\n}\n";
+    assert!(!peels_source(source, "-O2"), "the n-body inner loop was peeled");
+}

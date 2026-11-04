@@ -2039,3 +2039,29 @@ exit:
     let made = llrm_analysis::memoryssa::lazy_lists() - before;
     assert_eq!(made, 0, "{made} access lists made for a loop of calls");
 }
+
+/// A loop with nothing to promote priced its register pressure anyway: 1.6 M
+/// Ir of a jpeg_fixed -O2 compile, in 121 loops. It is priced only for a loop
+/// with a candidate.
+#[test]
+fn test_a_loop_with_nothing_to_promote_prices_no_register_pressure() {
+    let text = "define i16 @f(i16 %n) {
+b0:
+  br label %head
+head:
+  %i = phi i16 [ 0, %b0 ], [ %j, %head ]
+  %j = add i16 %i, 1
+  %t = icmp slt i16 %j, %n
+  br i1 %t, label %head, label %exit
+exit:
+  ret i16 %j
+}
+";
+    let before = super::pressure::COUNTED.with(std::cell::Cell::get);
+    let mut module = parsed(text);
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(Licm { apply: true, speculate: true });
+    passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("licm");
+    let priced = super::pressure::COUNTED.with(std::cell::Cell::get) - before;
+    assert_eq!(priced, 0, "pressure priced {priced} times for a loop with no memory access");
+}

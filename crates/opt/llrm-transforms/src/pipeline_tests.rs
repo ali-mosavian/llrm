@@ -2308,6 +2308,31 @@ fn test_the_write_through_promote_runs_after_sroa_only_where_gvn_has_no_pre() {
     }
 }
 
+/// `write_through: false` leaves the write-through `Promote` out at -O1 too:
+/// wasm32 jpeg_fixed -O1 forwarded 29 `@inpos` loads across blocks, which the
+/// pin's -O1 (no GVN) does not, and was 259 B over.
+#[test]
+fn test_the_write_through_promote_is_left_out_at_o1_when_the_option_is_off() {
+    let parts = |applied: &Applied| {
+        let mut slots = Vec::new();
+        for phase in [crate::parity::Phase::Early, crate::parity::Phase::Cleanup, crate::parity::Phase::Simplify] {
+            for one in pipeline::llvm_order(applied, phase) {
+                if matches!(one.name(), "sroa@1179" | "promote@1241" | "sroa@646" | "sroa@776") {
+                    slots.push((one.name(), one.parts()));
+                }
+            }
+        }
+        slots
+    };
+    let options = |write_through| pipeline::Options { pre: false, write_through, ..Default::default() };
+    let on = Applied { options: options(true), ..Applied::default() };
+    let off = Applied { options: options(false), ..Applied::default() };
+    assert!(parts(&on).iter().all(|(_, parts)| parts.contains(&"promote")));
+    for (slot, parts) in &parts(&off) {
+        assert!(!parts.contains(&"promote") && !parts.contains(&"deadslots"), "{slot} {parts:?}");
+    }
+}
+
 /// `llrm-pass -O3 --order SLOT` ran the peeler in the slot's place:
 /// `transacted` runs a peeler first when `only`, and `Fixed::slot` kept it.
 /// Every oracle comparing a Simplify-phase slot at -O3 or -Omax compared the
