@@ -1206,6 +1206,49 @@ impl Function {
         self.log(Change::Parameters);
     }
 
+    /// The function returns nothing: every `ret` loses its value, and the
+    /// type and the return attributes follow. The caller changes its calls
+    /// with `drop_call_result`.
+    pub fn drop_return_value(
+        &mut self,
+        context: &mut crate::context::Context,
+    ) {
+        let void = context.types.void();
+        let rets: Vec<InstId> =
+            self.walk().map(|(_, inst)| inst).filter(|&inst| self.instruction(inst).opcode == Opcode::Ret).collect();
+        for inst in rets {
+            self.set_operands(inst, Vec::new());
+            self.instructions[inst.0 as usize].ty = void;
+            self.log(Change::Rewritten(inst));
+        }
+        let Type::Function { parameters, variadic, .. } = context.types.get(self.ty).clone() else {
+            panic!("a function type")
+        };
+        self.ty = context.types.intern(Type::Function { returns: void, parameters, variadic });
+        self.return_attrs.clear();
+        self.log(Change::Parameters);
+    }
+
+    /// The call `inst`, whose result nothing reads, returns nothing under
+    /// `function_type`.
+    pub fn drop_call_result(
+        &mut self,
+        context: &crate::context::Context,
+        inst: InstId,
+        function_type: TypeId,
+    ) {
+        let result = self.instructions[inst.0 as usize].result.expect("a call with a result");
+        assert!(self.users(result).is_empty(), "a result dropped is unused");
+        self.forget_debug_value(result);
+        let instruction = &mut self.instructions[inst.0 as usize];
+        instruction.result = None;
+        instruction.ty = context.types.void();
+        let Opcode::Call(info) = &mut instruction.opcode else { panic!("a call") };
+        info.function_type = function_type;
+        info.return_attrs.clear();
+        self.log(Change::Rewritten(inst));
+    }
+
     /// From the first change of the parameters on, each one's origin is kept.
     fn track_parameters(&mut self) {
         if self.parameter_origins.is_empty() {
