@@ -309,7 +309,7 @@ impl Collection<'_, '_> {
         base: Formula,
         depth: u32,
     ) {
-        assert!(base.is_canonical(se, self.l), "Input must be in the canonical form");
+        debug_assert!(base.is_canonical(se, self.l), "Input must be in the canonical form");
         // Capped, to protect compile time.
         if depth >= 3 {
             return;
