@@ -292,3 +292,38 @@ fn the_arms_of_a_select_are_asked_for_the_demanded_bits() {
     // One arm is rewritten per visit; the select's user is not asked again.
     assert!(count(&dag, root, ISD::And) < 2, "both arms kept their mask");
 }
+
+/// `mulhu (and x, 255), 255` is below 2^16, so its high word is 0. The pin
+/// asks `SimplifyDemandedBits` from `visitMULHU` ([L5821]) just to fold such a
+/// node by known bits; ours never asked, and the multiply stayed (m68k, x86
+/// m16: a `mul` of two masked bytes kept as a call/long multiply).
+///
+/// [L5821]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L5821
+#[test]
+fn a_high_multiply_of_two_masked_bytes_is_zero() {
+    let mut dag = dag();
+    let x = dag.get_register(EVT::I32, 5);
+    let ff = dag.get_constant(0xFF, EVT::I32);
+    let masked = dag.get_node(ISD::And, EVT::I32, &[x, ff]);
+    let root = dag.get_node(ISD::MulHU, EVT::I32, &[masked, ff]);
+    dag.set_root(root);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.constant(dag.get_root()), Some(0));
+}
+
+/// `(x << 16) * (y << 16)` has no bit set in 32: `visitMUL` ends in
+/// `SimplifyDemandedBits` ([L5155]), which finds all 32 bits known.
+///
+/// [L5155]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L5155
+#[test]
+fn a_product_of_two_shifted_values_whose_low_word_is_clear_is_zero() {
+    let mut dag = dag();
+    let (x, y) = (dag.get_register(EVT::I32, 5), dag.get_register(EVT::I32, 6));
+    let sixteen = dag.get_constant(16, EVT::I32);
+    let a = dag.get_node(ISD::Shl, EVT::I32, &[x, sixteen]);
+    let b = dag.get_node(ISD::Shl, EVT::I32, &[y, sixteen]);
+    let root = dag.get_node(ISD::Mul, EVT::I32, &[a, b]);
+    dag.set_root(root);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.constant(dag.get_root()), Some(0));
+}
