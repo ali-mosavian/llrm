@@ -283,10 +283,10 @@ impl LiveRegMatrix {
         self.num_unassigned += 1;
     }
 
-    /// What `virt` holds in `unit` when it sits in `phys` (`foreachUnit`'s
+    /// What `virt` holds in `unit` when it sits in `phys`
+    /// ([`foreachUnit`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveRegMatrix.cpp#L89)'s
     /// range): the sub-ranges that name the lanes of the value this unit
-    /// covers. None where the value has no sub-ranges: its range is read
-    /// whole.
+    /// covers. None where the value has no sub-ranges: its range is read whole.
     fn unit_range(
         &self,
         virt: &LiveInterval,
