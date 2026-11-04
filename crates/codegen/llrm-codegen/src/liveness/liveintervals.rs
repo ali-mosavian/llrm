@@ -1629,6 +1629,26 @@ mod tests {
         lis.indexes.get_instruction_index(insn.id()).get_reg_slot(false)
     }
 
+    /// `x.lo := a` in one block, `x.hi := b` (keeping the low lane) in the
+    /// next, `use x` after: the pair is live into the second block, because
+    /// the high def keeps the low byte. Taken as a def that starts the pair, it
+    /// was not, and a split put the old low byte and the new pair in different
+    /// registers with no copy (lz4c -Oz returned 0x3131).
+    #[test]
+    fn test_a_partial_lane_def_keeps_the_pair_live_into_its_block() {
+        let mut low = Insn::new(0, None, None, vec![1], Vec::new());
+        low.def_lanes = vec![(1, ValueLanes::at(0, 1))];
+        low.undef_super = true;
+        let mut high = Insn::new(0, None, None, vec![1], Vec::new());
+        high.def_lanes = vec![(1, ValueLanes::at(1, 1))];
+        high.partial_defs = vec![1];
+        let (low, high) = (Arc::new(low), Arc::new(high));
+        let body = blocks(&[(&[Arc::clone(&low)], &[1]), (&[Arc::clone(&high)], &[2]), (&[insn(&[], &[1])], &[])]);
+        let mut lis = LiveIntervals::new(&body);
+        let start = lis.indexes.get_mbb_start_idx(1);
+        assert!(lis.interval(1).range.live_at(&start), "the pair is live into the block of the high def");
+    }
+
     /// `pruneValue` from the middle of a block that falls into a join: the
     /// value goes from the kill to the end of its block and from the join's
     /// start to its last read, and stays on the path that skips the block.
