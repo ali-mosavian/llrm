@@ -10,6 +10,7 @@ pub mod forward;
 pub mod inline_rt;
 pub mod ldir;
 pub mod mfunc;
+pub mod narrow;
 pub mod prepare;
 pub mod regalloc;
 pub mod target;
