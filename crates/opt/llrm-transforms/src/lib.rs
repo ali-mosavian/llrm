@@ -258,6 +258,7 @@ mod inferspace_tests;
 pub mod inline;
 mod inlineattrs;
 mod inlinemetadata;
+mod noaliasscopes;
 pub mod inlinecost;
 #[cfg(test)]
 mod inlinecost_tests;

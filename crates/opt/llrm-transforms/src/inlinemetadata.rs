@@ -24,8 +24,8 @@ use llrm_mir::passes::Declared;
 
 const PARALLEL: &str = "llvm.mem.parallel_loop_access";
 const GROUP: &str = "llvm.access.group";
-const SCOPE: &str = "alias.scope";
-const NOALIAS: &str = "noalias";
+pub(crate) const SCOPE: &str = "alias.scope";
+pub(crate) const NOALIAS: &str = "noalias";
 
 /// What a call site states, taken before the call is replaced.
 pub struct SiteMetadata {

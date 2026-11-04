@@ -1616,7 +1616,22 @@ fn try_to_unroll_loop(
             exits.into_iter().filter(|exit| exit.trip_count != 0).collect()
         },
     };
-    match unroll_loop_blocks(run.function, header, &body, &latches, &unroll_options, &mut run.emptied) {
+    let scopes = crate::noaliasscopes::declared_scopes(
+        run.function,
+        body.iter().flat_map(|&block| run.function.iter_block(block)).collect::<Vec<_>>(),
+    );
+    let (metadata, declared) = (run.metadata, &mut *run.declared);
+    let mut rescoped = |function: &mut Function, copies: &[llrm_mir::module::InstId], iteration: usize| {
+        crate::noaliasscopes::cloned_and_adapted(
+            function,
+            &scopes,
+            copies,
+            &iteration.to_string(),
+            metadata,
+            declared,
+        );
+    };
+    match unroll_loop_blocks(run.function, header, &body, &latches, &unroll_options, &mut run.emptied, &mut rescoped) {
         Ok(result) => result,
         Err(error) => panic!("loop unroll: {error}"),
     }
@@ -2097,7 +2112,7 @@ pub fn unroll_function(
         DataLayout::parse(module.datalayout.as_deref().unwrap_or("e-m:e-p:32:32-f64:32:64-f80:32-n8:16:32-S128"))?;
     let callees = llrm_mir::memory::callees(module);
     let outer = llrm_mir::passes::Outer::of(module, None);
-    let mut declared = llrm_mir::passes::Declared::default();
+    let mut declared = llrm_mir::passes::Declared::of(module);
     let globals = module.globals.clone();
     let metadata = module.metadata.clone();
     let id = module
@@ -2127,7 +2142,9 @@ pub fn unroll_function(
         created: Vec::new(),
         scev: ScalarEvolution::new(),
     };
-    Ok(unroll_loops(&mut run))
+    let unrolled = unroll_loops(&mut run);
+    declared.place(module)?;
+    Ok(unrolled)
 }
 
 #[cfg(test)]
