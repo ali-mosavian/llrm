@@ -368,6 +368,14 @@ fn lower_extend(
         return node;
     }
     let vt = dag.value_type(node);
+    // the carry an add or subtract leaves is `0 + 0 + C`, not a select on it
+    if dag.opcode(node) != ISD::SignExtend
+        && condition.res == 1
+        && matches!(dag.opcode(condition), ISD::UAddO | ISD::UAddOCarry | ISD::USubO | ISD::USubOCarry)
+    {
+        let byte = condition_byte(dag, condition);
+        return if vt == EVT::I8 { byte } else { dag.get_node(ISD::ZeroExtend, vt, &[byte]) };
+    }
     // a logic op over compares is a byte of 0 or 1 already (`condition_byte`):
     // widened, it is that byte, not a select that tests the byte it was
     // just made into

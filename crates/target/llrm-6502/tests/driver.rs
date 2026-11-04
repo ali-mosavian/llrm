@@ -1458,6 +1458,72 @@ define i8 @fits() {
     assert_eq!(exit_code_of(&text, "fits"), 0, "{text}");
 }
 
+/// The carry between the two halves of a 32-bit add was made into a byte and
+/// read back (`lda #0; rol a; lsr a`), and the carry out of the last half into a
+/// byte nothing read. `0x1FFFF + 1` has byte 2 equal to 2.
+#[test]
+fn a_wide_add_keeps_its_carry_in_c() {
+    let ir = module(
+        r#"@a = internal global i32 131071
+@b = internal global i32 1
+define i8 @probe() {
+  %x = load volatile i32, ptr @a
+  %y = load volatile i32, ptr @b
+  %s = add i32 %x, %y
+  %h = lshr i32 %s, 16
+  %t = trunc i32 %h to i8
+  ret i8 %t
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(!text.contains("rol a"), "a carry made into a byte:\n{text}");
+    assert_eq!(exit_code_of(&text, "probe"), 2, "{text}");
+}
+
+/// A word sum of two bytes and a carry (`s = a + b + c; c = s >> 8`, the
+/// extended-precision `adc` of a C helper) was two byte adds and a third for
+/// the carry, each carry a byte of its own: 100 instructions for a four-byte
+/// add, not 14. It is `adc` on the bytes. `0xFF + 1` carries into `0xFE + 1 + 1`
+/// = 0x100: low byte 0, carry 1; `1 + 1` does not, and `0xFE + 1` is 0xFF.
+#[test]
+fn a_word_sum_of_bytes_and_a_carry_is_an_adc() {
+    let probe = |name: &str, a0: u8, b0: u8, ret: &str| {
+        format!(
+            r#"define i8 @{name}() {{
+  %a0 = load volatile i8, ptr @a0
+  %b0 = load volatile i8, ptr @b0
+  %a1 = load volatile i8, ptr @a1
+  %b1 = load volatile i8, ptr @b1
+  %s0 = add i8 %a0, %b0
+  %o0 = icmp ult i8 %s0, %b0
+  %c0 = zext i1 %o0 to i16
+  %x = zext i8 %a1 to i16
+  %y = zext i8 %b1 to i16
+  %t = add nuw nsw i16 %c0, %x
+  %u = add nuw nsw i16 %t, %y
+  %hi = lshr i16 %u, 8
+  %lo = trunc i16 %u to i8
+  %c = trunc i16 %hi to i8
+  ret i8 %{ret}
+}}"#
+        )
+    };
+    let globals = |a0: u8, b0: u8| {
+        format!("@a0 = internal global i8 {a0}\n@b0 = internal global i8 {b0}\n@a1 = internal global i8 -2\n@b1 = internal global i8 1\n")
+    };
+    for (a0, b0, lo, carry) in [(255u8, 1u8, 0, 1), (1, 1, 255, 0)] {
+        for (name, ret, want) in [("lo", "lo", lo), ("carry", "c", carry)] {
+            let ir = module(&format!("{}{}", globals(a0, b0), probe(name, a0, b0, ret)));
+            let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(exit_code_of(&text, name), want, "{a0}+{b0}:\n{text}");
+            let body = text.split(&format!("{name}:")).nth(1).unwrap_or_default();
+            let body = body.split("rts").next().unwrap_or_default();
+            let count = body.lines().filter(|l| l.starts_with("  ") && !l.starts_with("  .")).count();
+            assert!(count <= 30, "{count} instructions for a carry through a word sum:\n{text}");
+        }
+    }
+}
+
 /// A loaded `i1` that a `select` or an extension tests was selected into a
 /// compare of its own zero extension: `llrm-6502-llc` ran until it had taken
 /// 217 GB. A bit in memory is a byte, `x & 1`. `pick` is 7 for a stored 1 and

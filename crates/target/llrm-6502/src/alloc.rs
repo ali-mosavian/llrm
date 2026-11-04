@@ -2142,6 +2142,70 @@ fn call_compact_routines(function: &mut MFunction<Class>) {
     }
 }
 
+/// A carry made into a byte and read back with only moves and loads between
+/// (`SAVEC; copy; ..; copy; LOADC`) stays in C: the 32-bit add paid
+/// `lda #0; rol a; lsr a` between its two halves. A byte nothing reads goes
+/// too.
+///
+/// Every producer of a carry saves it and every consumer loads it, so that
+/// nothing the scheduler or allocator puts between the two can lose it; the
+/// moves and loads here do not touch C.
+fn keep_carry_in_c(function: &mut MFunction<Class>) {
+    let mut reads: HashMap<u32, usize> = HashMap::default();
+    for operand in function.blocks.iter().flat_map(|b| &b.insts).flat_map(|i| &i.operands) {
+        if let Operand::Use(Reg::Virt(v)) = operand {
+            *reads.entry(*v).or_default() += 1;
+        }
+    }
+    let acc = Reg::Phys(reg::A);
+    let saved = |insts: &[Inst], at: usize| match (insts.get(at).map(|i| i.kind), insts.get(at + 1)) {
+        (Some(Kind::Op("SAVEC")), Some(next)) => match (next.kind, &next.operands[..]) {
+            (Kind::Copy, [Operand::Def(Reg::Virt(v)), Operand::Use(from)]) if *from == acc => Some(*v),
+            _ => None,
+        },
+        _ => None,
+    };
+    let moves = |inst: &Inst| matches!(inst.kind, Kind::Copy | Kind::Op("LDM" | "LDI" | "STM"));
+    for block in &mut function.blocks {
+        let mut at = 0;
+        while at < block.insts.len() {
+            let Some(cell) = saved(&block.insts, at) else {
+                // the byte was dropped as unread: the save is a write of A that
+                // the next load overwrites
+                let overwritten = block.insts.get(at + 1).is_some_and(|next| {
+                    matches!(
+                        (next.kind, &next.operands[..]),
+                        (Kind::Copy, [Operand::Def(to), Operand::Use(from)]) if *to == acc && *from != acc
+                    )
+                });
+                if block.insts[at].kind == Kind::Op("SAVEC") && overwritten {
+                    block.insts.remove(at);
+                } else {
+                    at += 1;
+                }
+                continue;
+            };
+            let count = reads.get(&cell).copied().unwrap_or(0);
+            let load = (at + 2..block.insts.len().saturating_sub(1)).find(|&j| {
+                matches!(
+                    (block.insts[j].kind, &block.insts[j].operands[..]),
+                    (Kind::Copy, [Operand::Def(to), Operand::Use(Reg::Virt(v))]) if *to == acc && *v == cell
+                ) && block.insts[j + 1].kind == Kind::Op("LOADC")
+            });
+            match (count, load) {
+                (0, _) => {
+                    block.insts.drain(at..at + 2);
+                }
+                (1, Some(j)) if block.insts[at + 2..j].iter().all(moves) => {
+                    block.insts.drain(j..j + 2);
+                    block.insts.drain(at..at + 2);
+                }
+                _ => at += 1,
+            }
+        }
+    }
+}
+
 fn remove_dead(function: &mut MFunction<Class>) {
     loop {
         let mut read: HashSet<u32> = HashSet::default();
@@ -2690,6 +2754,7 @@ fn emit_with<const STACK: bool>(
     if TUNING.with(|t| t.get()) == Tuning::SIZE {
         call_compact_routines(&mut function);
     }
+    keep_carry_in_c(&mut function);
     let sunk = sink && machine_sink_in_place::<Mos<STACK>>(&mut function);
     let shared = share && crate::sharecmp::share_compares(&mut function);
     reschedule_kills::<Mos<STACK>>(&mut function);
