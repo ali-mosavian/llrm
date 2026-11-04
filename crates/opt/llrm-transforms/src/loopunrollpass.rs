@@ -861,7 +861,7 @@ fn add_cost_recursively(
                     .collect();
                 *unrolled_cost = *unrolled_cost
                     + clocks
-                        .and_then(|costs| crate::profit::operation(run.context, run.layout, run.function, run.callees, inst, costs))
+                        .and_then(|costs| simplified_clocks(run, inst, &operands, costs))
                         .map_or_else(
                             || {
                                 instruction_cost_with(
@@ -1035,6 +1035,26 @@ fn should_partial_unroll(
     Some(count)
 }
 
+/// What `inst` costs in clocks once `operands` are what its operands simplified
+/// to: a divide or remainder by a constant is the `and` or the multiply-high
+/// sequence the backend makes of it, not a `div` (x_primes: `i % d` at `d = 2`).
+fn simplified_clocks(
+    run: &Run,
+    inst: InstId,
+    operands: &[Operand],
+    costs: &llrm_mir::target::OperationCosts,
+) -> Option<i64> {
+    use llrm_mir::opcode::BinaryOp;
+    let operation = run.function.instruction(inst);
+    if let (Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem), Some(&Operand::Constant(divisor))) =
+        (&operation.opcode, operands.get(1))
+        && let ConstantKind::Int(bits) = run.context.get(divisor).kind
+    {
+        return Some(if bits.is_power_of_two() { costs.add } else { costs.multiply + costs.shift + costs.add });
+    }
+    crate::profit::operation(run.context, run.layout, run.function, run.callees, inst, costs)
+}
+
 /// DEVIATE PL6 (owner x86-m32; exit 2026-12-10: the pin's `computePeelCount`
 /// grows a count for folding phis, or gcc's header threading is translated):
 /// the first iteration of an innermost loop is peeled where its entry
@@ -1053,7 +1073,10 @@ fn peels_folded_entry(
     loop_size: u32,
     up: &UnrollingPreferences,
 ) -> bool {
-    if !run.tti.peels_folded_entry() || run.options.opt_size || run.options.min_size || run.options.opt_level < 2 || loop_size.saturating_mul(2) > up.threshold {
+    // The late pass only: the pin counts peels in loop metadata (`llvm.loop.peeled.count`),
+    // which this port keeps for one run (PL1), and the entry constants of the residual
+    // loop fold again (x_primes: d = 2, then d = 3).
+    if !run.tti.peels_folded_entry() || !run.options.target_unrolling || run.options.opt_size || run.options.min_size || run.options.opt_level < 2 || loop_size.saturating_mul(2) > up.threshold {
         return false;
     }
     let rate = run.tti.speed_milliclocks_per_byte().max(0) as u64;
