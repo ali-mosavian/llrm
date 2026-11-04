@@ -1522,6 +1522,7 @@ impl Run<'_, '_> {
                 memory::Unit::within(&*self.unit.context, self.unit.layout, &*self.unit.function, &self.outer);
             let mut aa = AggregateAA::new();
             aa.add_aa_result(BasicAA::new(&memory_unit));
+            aa.add_aa_result(llrm_analysis::scopednoaliasaa::ScopedNoAliasAA::new(&memory_unit));
             aa.add_aa_result(TypeBasedAA::new(&memory_unit));
             let mut info = DependenceInfo::new(&mut aa, &memory_unit, &cx, self.options.da);
             if !populate_dependency_matrix(&mut matrix, depth, outermost, &mut info, se, &cx, self.options) {
