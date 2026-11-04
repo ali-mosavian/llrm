@@ -715,6 +715,44 @@ pub trait Tti {
         }
     }
 
+    /// `getIntImmCodeSizeCost`: the code size of the constant at operand
+    /// `index` of an `op`; the base class has none.
+    fn int_imm_code_size_cost(
+        &self,
+        op: ImmUser,
+        index: u32,
+        imm: i128,
+        bits: u32,
+    ) -> Cost {
+        let _ = (op, index, imm, bits);
+        Cost::FREE
+    }
+
+    /// `getIntImmCostIntrin`: the constant at operand `index` of a call to the
+    /// intrinsic `name`; the base class makes it free.
+    fn int_imm_cost_intrin(
+        &self,
+        name: &str,
+        index: u32,
+        imm: i128,
+        bits: u32,
+    ) -> Cost {
+        let _ = (name, index, imm, bits);
+        Cost::FREE
+    }
+
+    /// `preferToKeepConstantsAttached` (`BasicTTIImpl`): a divide or remainder
+    /// by a constant keeps it unless `isIntDivCheap`, which the base class
+    /// says it is not. `min_size`: the function is `minsize`.
+    fn prefer_to_keep_constants_attached(
+        &self,
+        div_rem_by_constant: bool,
+        min_size: bool,
+    ) -> bool {
+        let _ = min_size;
+        div_rem_by_constant
+    }
+
     /// `TargetTransformInfoImplBase::isLegalAddImmediate`: none.
     fn is_legal_add_immediate(
         &self,
