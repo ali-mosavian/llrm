@@ -122,6 +122,19 @@ impl Combiner<'_> {
         ty: TypeId,
         args: &[Operand],
     ) -> Operand {
+        let call = self.insert_intrinsic_call(at, name, ty, args);
+        self.value_of(call)
+    }
+
+    /// [`Self::create_intrinsic_named`] for any return type, `void` included:
+    /// the call instruction.
+    pub fn insert_intrinsic_call(
+        &mut self,
+        at: InstId,
+        name: &str,
+        ty: TypeId,
+        args: &[Operand],
+    ) -> InstId {
         let parameters: Vec<TypeId> = args.iter().map(|&arg| self.type_of(arg)).collect();
         let function_type = self.context.types.intern(Type::Function { returns: ty, parameters, variadic: false });
         let callee = self.declared.declare(name, function_type);
@@ -138,8 +151,7 @@ impl Combiner<'_> {
         };
         let mut operands = args.to_vec();
         operands.push(callee);
-        let new = self.insert_before(at, Opcode::Call(Box::new(info)), ty, operands, Flags::default());
-        self.value_of(new)
+        self.insert_before(at, Opcode::Call(Box::new(info)), ty, operands, Flags::default())
     }
 
     /// `Builder.CreateIntrinsic(umul/smul.with.overflow, {a, b})`: the call,

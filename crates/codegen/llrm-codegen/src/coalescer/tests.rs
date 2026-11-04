@@ -22,7 +22,7 @@ impl CoalescerEnv for AnyClass {
 }
 
 fn held(value: u32) -> Loc {
-    Loc::Held(Held { value, width: 4 })
+    Loc::Held(Held { value, width: 4, offset: 0 })
 }
 
 fn copy(
@@ -131,7 +131,7 @@ fn test_a_dead_copy_takes_the_definition_only_it_read() {
 fn test_a_dead_copy_does_not_take_a_call_that_delivered_its_source() {
     let what = Semantics { name: Some("call".into()), ..Semantics::new(Operation::Call) };
     let mut call = Insn::new(0, None, Some(what), vec![1], vec![]);
-    call.delivers = vec![(Held { value: 1, width: 4 }, llrm_lir::registers::RegId::EAX)];
+    call.delivers = vec![(Held { value: 1, width: 4, offset: 0 }, llrm_lir::registers::RegId::EAX)];
     let (call, c) = (Arc::new(call), copy(2, 1));
     let was = body(&[(&[Arc::clone(&call), Arc::clone(&c)], &[])]);
     let mut lis = LiveIntervals::new(&was);
@@ -429,7 +429,7 @@ fn test_two_copies_into_one_value_leave_every_read_defined() {
 #[test]
 fn test_a_coalesced_address_keeps_its_memory_operand_defined() {
     use crate::model::ir::Mem;
-    let memory = Mem { base: Some(Held { value: 2, width: 2 }), ..Mem::new(None, 2) };
+    let memory = Mem { base: Some(Held { value: 2, width: 2, offset: 0 }), ..Mem::new(None, 2) };
     let what = Semantics {
         name: Some("mov".into()),
         dests: vec![held(3)],
@@ -656,6 +656,9 @@ fn test_a_join_narrows_the_class_the_next_join_is_judged_against() {
         freq: Vec::new(),
         regs: None,
         is_rematerializable: None,
+        kind_of: None,
+        kinds: Default::default(),
+        check_kinds: false,
     };
     let (base, index) = (copy(2, 1), copy(3, 1));
     // `v1` has two values to `v2`'s one, so the join keeps it as the surviving
@@ -906,7 +909,7 @@ fn held_at(
     value: u32,
     width: u32,
 ) -> Loc {
-    Loc::Held(Held { value, width })
+    Loc::Held(Held { value, width, offset: 0 })
 }
 
 /// `dst := mov src` between two widths.
@@ -1113,6 +1116,9 @@ fn env_with_palettes(palettes: &[(u32, &[RegId])]) -> TargetEnv {
         should_join: Box::new(|_| true),
         freq: Vec::new(),
         regs: Some(body(&[]).regs()),
+        kind_of: None,
+        kinds: Default::default(),
+        check_kinds: false,
     }
 }
 
@@ -1164,6 +1170,9 @@ fn test_a_copy_from_a_pinned_argument_is_left_to_the_allocator_when_the_target_s
             joins_sub_registers: true,
             regs: None,
             is_rematerializable: None,
+            kind_of: None,
+            kinds: Default::default(),
+            check_kinds: false,
         };
         let mut lis = LiveIntervals::new(&was);
         lis.interval(1);
@@ -1173,4 +1182,70 @@ fn test_a_copy_from_a_pinned_argument_is_left_to_the_allocator_when_the_target_s
     };
     assert_eq!(join(true), JoinResult::Joined, "premise: the copy joins when the target allows it");
     assert_eq!(join(false), JoinResult::Rejected, "the copy joined the pin");
+}
+
+/// The kept uses of a value, summed by kind for the target's join price, must
+/// be the instructions' after every rewrite and erase the joins make
+/// (`LLRM_CHECK_USE_SUMMARY`'s check, on in `check_kinds`). A join took the
+/// dead definition a copy alone read (C5), moved a copy to a loop's
+/// preheader, or extended a value over a copy back, and left a kept list
+/// with an instruction that is gone or without the one that replaced it, so
+/// the next join was priced on uses that were not there.
+#[test]
+fn test_the_kept_uses_of_a_value_follow_the_rewrites_and_erases_of_the_joins() {
+    let palette: &[(u32, &[RegId])] =
+        &[(1, &[RegId::AX, RegId::BX]), (2, &[RegId::AX, RegId::BX]), (3, &[RegId::AX, RegId::BX])];
+    let checked = || {
+        let mut env = env_with_palettes(palette);
+        env.kind_of = Some(Box::new(|_, _| Some(0)));
+        env.check_kinds = true;
+        env.freq = vec![1.0, 4.0, 1.0];
+        env
+    };
+    // a dead copy and the definition only it read, with a copy after them
+    let (a, c, d, e) = (def(1), copy(2, 1), load(3), copy(1, 3));
+    let dead_copy = body(&[(&[Arc::clone(&a), Arc::clone(&c), Arc::clone(&d), Arc::clone(&e), read(1)], &[])]);
+    // a copy back of a copy
+    let (first, to, back, redefined) = (load(1), copy(2, 1), copy(1, 2), load(2));
+    let copy_back = body(&[(&[first, to, back, redefined, read(1), read(2)], &[])]);
+    // a copy at a loop entry that the latch reverses
+    let (first, to, user, back) = (load(1), copy(2, 1), read(2), copy(1, 2));
+    let (again, kept, after) = (load(1), read(2), read(1));
+    let loop_entry = body(&[(&[first], &[1]), (&[to, user, back], &[1, 2]), (&[again, kept, after], &[])]);
+    for (name, was) in [("dead copy", dead_copy), ("copy back", copy_back), ("loop entry", loop_entry)] {
+        let env = checked();
+        let depth = vec![0; was.blocks.len()];
+        let _ = super::env::joined(&was, &env, &depth);
+        eprintln!("{name}: kept lists checked at {} prices", env.kinds.borrow().len());
+    }
+}
+
+/// A kind's kept sum is f32: put and taken at blocks of frequency 1e5 and 0.7
+/// (the hot one taken first) it ends near 0.003, not 0, so a kind whose last
+/// instruction was taken stayed in the list and the next join was priced on a
+/// use that was not there (`LLRM_CHECK_USE_SUMMARY` saw one kind too many).
+/// The kind goes with its last instruction.
+#[test]
+fn test_a_kind_with_no_instruction_left_is_not_kept_at_high_frequency() {
+    let palette: &[(u32, &[RegId])] = &[(1, &[RegId::AX, RegId::BX]), (2, &[RegId::AX, RegId::BX])];
+    let (first, to, here, there) = (load(1), copy(2, 1), read(1), read(2));
+    let was = body(&[(&[first, Arc::clone(&to), here, there], &[1]), (&[read(1)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.track_changes();
+    let mut env = env_with_palettes(palette);
+    // the probes are the instructions named "use": a kind of their own
+    env.kind_of = Some(Box::new(|insn, _| {
+        Some(if insn.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("use")) { 1 } else { 0 })
+    }));
+    env.check_kinds = true;
+    env.freq = vec![1.0e5, 0.7];
+    assert!(env.should_coalesce(&lis, to.id(), 1, 2), "premise: the kept lists are made");
+    for cycle in 0..5 {
+        let (hot, cold) = (read_at(1, 4), read_at(1, 4));
+        lis.insert_instr_before_at(0, None, Arc::clone(&hot), false);
+        lis.insert_instr_before_at(1, None, Arc::clone(&cold), false);
+        lis.remove_instr(0, hot.id());
+        lis.remove_instr(1, cold.id());
+        assert!(env.should_coalesce(&lis, to.id(), 1, 2), "cycle {cycle}");
+    }
 }

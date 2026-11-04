@@ -763,6 +763,33 @@ fn test_a_call_that_reads_a_pair_and_clobbers_its_byte_is_no_conflict() {
     assert!(decide_with_split(&inputs, Mode::Simple, true).is_some(), "greedy refused the function");
 }
 
+/// A call that reads a pair, clobbers it, and returns in one of its bytes: the
+/// pair's argument range and the call's clobber of it are one range by the time
+/// the result's range starts at the call, so the clobber was no longer "a range
+/// of its own" and the result looked like a second value meeting in the
+/// register. Greedy refused bench_nbody -Os, bintree, grep, wc_mixed
+/// ("greedy refused"): `PIN-CONFLICT` at every call returning in a byte it also
+/// clobbered.
+#[test]
+fn test_a_call_that_reads_a_pair_and_returns_in_its_byte_is_no_conflict() {
+    let mut f = MFunction::<()>::new("returns");
+    f.classes = vec![(); 1];
+    let mut only = Block { id: 0, ..Block::default() };
+    only.insts.push(op("set", vec![Operand::Def(Reg::Phys(RegId::EBX))]));
+    let mut with_result = call();
+    with_result.operands.push(Operand::Use(Reg::Phys(RegId::EBX)));
+    with_result.operands.push(Operand::Def(Reg::Phys(RegId::BL)));
+    only.insts.push(with_result);
+    only.insts.push(op("get", vec![Operand::Def(v(0)), Operand::Use(Reg::Phys(RegId::BL))]));
+    only.insts.push(op("store", vec![Operand::Use(v(0))]));
+    only.insts.push(ret());
+    f.blocks = vec![only];
+    let converted = to_lir::<Flat>(&lowered(f), regs()).expect("converts");
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    assert!(decide_with_split(&inputs, Mode::Simple, true).is_some(), "greedy refused the function");
+}
+
 /// A value copied out of a pair is not joined into the pair when one of its
 /// bytes is written while the value lives: the join would make the value hold
 /// the byte's cell. crc16's pointer, joined into `rs1` while `rc3` carried a
@@ -1071,7 +1098,7 @@ fn test_a_literal_made_again_beside_another_literal_keeps_its_own_immediate() {
                 again.spill_reload = true;
                 again.rematerialized = true;
                 let what = again.what.as_mut().expect("semantics");
-                what.dests = vec![Loc::Held(Held { value: 3, width: 1 })];
+                what.dests = vec![Loc::Held(Held { value: 3, width: 1, offset: 0 })];
                 let store = insns.iter().position(|one| one.uses == [1]).expect("the read");
                 insns[store] = insns[store].renamed(&|name| if name == 1 { 3 } else { name });
                 insns.insert(nine + 1, std::sync::Arc::new(again));
@@ -1128,7 +1155,7 @@ fn test_a_zero_made_again_is_not_taken_for_a_symbol() {
                 again.defines = vec![3];
                 again.spill_reload = true;
                 again.rematerialized = true;
-                again.what.as_mut().expect("semantics").dests = vec![Loc::Held(Held { value: 3, width: 1 })];
+                again.what.as_mut().expect("semantics").dests = vec![Loc::Held(Held { value: 3, width: 1, offset: 0 })];
                 let store = insns.iter().position(|one| one.uses == [2]).expect("the read");
                 insns[store] = insns[store].renamed(&|name| if name == 2 { 3 } else { name });
                 insns.insert(address + 1, std::sync::Arc::new(again));
@@ -1842,7 +1869,7 @@ fn test_the_scheduler_puts_back_each_instruction_not_the_first_with_its_position
             |insns| {
                 let mut again = (*insns[0]).clone();
                 again.defines = vec![3];
-                again.what.as_mut().expect("semantics").dests = vec![Loc::Held(Held { value: 3, width: 1 })];
+                again.what.as_mut().expect("semantics").dests = vec![Loc::Held(Held { value: 3, width: 1, offset: 0 })];
                 insns.insert(1, std::sync::Arc::new(again));
             },
         );
@@ -1888,4 +1915,45 @@ fn test_a_literal_copied_into_two_loop_values_is_made_again_by_the_coalescer() {
     let literals = entry_insts.iter().filter(|i| i.kind == Kind::Op("ldi")).count();
     let copies = entry_insts.iter().filter(|i| i.kind == Kind::Copy).count();
     assert_eq!((literals, copies), (2, 0), "each loop value starts from its own literal: {entry_insts:?}");
+}
+
+/// One value read by `reads` instructions over several blocks, then copied
+/// `copies` times: every join priced all of the surviving value's uses again,
+/// so the pricing cost `copies x reads` operand visits (the 6502's `switch`
+/// spent 38% of its compile in it). The uses are summed by kind once, and the
+/// instructions a join rewrites move from one value's sum to the other's.
+#[test]
+fn test_pricing_the_joins_of_a_value_does_not_read_its_uses_again() {
+    let (blocks, per_block, copies) = (6, 10, 10);
+    let reads = blocks * per_block;
+    let mut f = MFunction::<()>::new("hot");
+    f.classes = vec![(); 1 + copies];
+    let mut all = Vec::new();
+    for id in 0..blocks as u32 {
+        let mut block = Block { id, ..Block::default() };
+        if id == 0 {
+            block.insts.push(op("load", vec![Operand::Def(v(0))]));
+        }
+        for _ in 0..per_block {
+            block.insts.push(op("store", vec![Operand::Use(v(0))]));
+        }
+        if id + 1 < blocks as u32 {
+            block.insts.push(branch(id + 1));
+        } else {
+            for copy in 1..=copies as u32 {
+                block.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(copy)), Operand::Use(v(0))]));
+                block.insts.push(op("store", vec![Operand::Use(v(copy))]));
+            }
+            block.insts.push(ret());
+        }
+        all.push(block);
+    }
+    f.blocks = all;
+    let f = lowered(f);
+    let mut converted = to_lir::<Flat>(&f, regs()).expect("converts");
+    let before = llrm_spike_mf::tolir::operand_visits();
+    converted.coalesce(regs(), false);
+    let visits = llrm_spike_mf::tolir::operand_visits() - before;
+    assert_eq!(converted.joined().iter().count(), copies, "premise: every copy joins");
+    assert!(visits <= copies, "{visits} operand scans for {reads} reads and {copies} joins");
 }

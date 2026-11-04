@@ -427,3 +427,34 @@ b2:
     let b1 = after.split("b1:").nth(1).expect("b1");
     assert!(!b1.contains("icmp"), "{after}");
 }
+
+/// `@g + i` read in another block: a target with a legal global-plus-register
+/// mode has it made where it is read; one that refuses a global base reads
+/// the register as an index again and still sinks it (m68k/arm64 grep went 4-7
+/// instructions longer when the register was only ever a base).
+const GLOBAL_PLUS_INDEX_IN_ANOTHER_BLOCK: &str = "define i16 @f(i16 %i, i16 %c) {
+b0:
+  %p = getelementptr i8, ptr @g, i16 %i
+  %q = getelementptr i8, ptr %p, i16 2
+  %x = load i16, ptr %q
+  %t = icmp ne i16 %c, 0
+  br i1 %t, label %b1, label %b2
+
+b1:
+  %r = getelementptr i8, ptr %p, i16 4
+  %y = load i16, ptr %r
+  %z = add i16 %x, %y
+  ret i16 %z
+
+b2:
+  ret i16 %x
+}
+";
+
+#[test]
+fn test_a_global_plus_index_still_sinks_where_the_target_refuses_a_global_base() {
+    let machine = crate::testing::Tuned { no_global_base: true, ..Default::default() };
+    let after = sunk_on(GLOBAL_PLUS_INDEX_IN_ANOTHER_BLOCK, &[&[0, 1], &[2, 0]], machine);
+    let second = after.split("b1:").nth(1).unwrap();
+    assert!(second.contains("getelementptr i8, ptr @g"), "{after}");
+}

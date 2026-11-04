@@ -1607,7 +1607,7 @@ mod tests {
     /// a 32-bit target, so the m16 and m32 listings are untouched.
     #[test]
     fn test_a_byte_add_is_a_lea_only_at_wide() {
-        let held = |value: u32| Held { value, width: 1 };
+        let held = |value: u32| Held { value, width: 1, offset: 0 };
         let what = Semantics {
             name: Some("add".into()),
             dests: vec![Loc::Held(held(2))],
@@ -1630,7 +1630,7 @@ mod tests {
     /// though only an instruction that carries a copy has anything to read.
     #[test]
     fn test_process_copy_remembers_only_an_instruction_that_carries_a_copy() {
-        let held = |value: u32| Held { value, width: 4 };
+        let held = |value: u32| Held { value, width: 4, offset: 0 };
         let plain = {
             let what = Semantics {
                 name: Some("mov".into()),
@@ -1677,7 +1677,7 @@ mod tests {
     /// the same way before and after keeps its kill at the new instruction.
     #[test]
     fn test_replacing_a_tied_pair_remakes_only_the_kills_whose_naming_changed() {
-        let held = |value: u32| Held { value, width: 4 };
+        let held = |value: u32| Held { value, width: 4, offset: 0 };
         let make = |at: i64, op: Operation, name: &str, defines: Vec<u32>, uses: Vec<u32>| {
             let what = Semantics {
                 name: Some(name.into()),
@@ -1711,7 +1711,7 @@ mod tests {
     #[test]
     fn test_replacing_tied_pairs_walks_the_instructions_naming_the_value_not_the_block() {
         use crate::liveness::livevariables::WALKED;
-        let held = |value: u32| Held { value, width: 4 };
+        let held = |value: u32| Held { value, width: 4, offset: 0 };
         let make = |at: i64, op: Operation, name: &str, defines: Vec<u32>, uses: Vec<u32>| {
             let what = Semantics {
                 name: Some(name.into()),
@@ -1746,7 +1746,7 @@ mod tests {
     }
 
     fn tied_pairs_sharing_a_source(count: i64) -> (BodyFacts, Vec<Arc<Insn>>) {
-        let held = |value: u32| Held { value, width: 4 };
+        let held = |value: u32| Held { value, width: 4, offset: 0 };
         let make = |at: i64, op: Operation, name: &str, defines: Vec<u32>, uses: Vec<u32>| {
             let what = Semantics {
                 name: Some(name.into()),
