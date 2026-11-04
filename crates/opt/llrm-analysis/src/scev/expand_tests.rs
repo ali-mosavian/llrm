@@ -52,7 +52,11 @@ fn expanded_in(
     let entry = function.entry().expect("an entry");
     arguments.extend(function.iter_block(entry).filter_map(|one| function.instruction(one).result.map(Operand::Value)));
     let s = build(&mut se, &env.cx(&context, &function), &arguments);
-    let ret = function.terminator(function.entry().expect("an entry")).expect("a ret");
+    let ret = function
+        .layout()
+        .iter()
+        .find_map(|&block| function.terminator(block).filter(|&t| matches!(function.instruction(t).opcode, Opcode::Ret)))
+        .expect("a ret");
     let mut expander = Expander::new("t");
     expander.set_insert_point(ret);
     let mut declared = Declared::of(&module);
@@ -220,6 +224,33 @@ entry:
     });
     assert!(!text.contains("nuw"), "{text}");
     assert_eq!(lines(&text).len(), 1, "{text}");
+}
+
+/// Reusing a `zext nneg` drops the flag; the pin infers it again from the
+/// dominating `icmp sgt`. LSR rebuilt `fillw`'s `zext nneg i16 %n` without it
+/// and wasm32 -O2 masked the signext parameter with `i32.const 65535`.
+#[test]
+fn test_reusing_a_zext_keeps_nneg_a_dominating_condition_proves() {
+    let body = "define i32 @f(i32 %a, i32 %b, i64 %w) {
+entry:
+  %c = icmp sgt i32 %a, 0
+  br i1 %c, label %then, label %out
+then:
+  %x = zext nneg i32 %a to i64
+  ret i32 0
+out:
+  ret i32 1
+}
+";
+    let text = expanded_in(body, |se, cx, args| {
+        let a = unknown(se, cx, args[0]);
+        let then = cx.function.layout()[1];
+        let x = cx.function.instruction(cx.function.iter_block(then).next().expect("%x")).result.expect("a value");
+        let _ = se.get_scev(cx, Operand::Value(x));
+        se.get_zero_extend_expr(cx, a, Ty::Int(64), 0)
+    });
+    assert!(text.contains("zext nneg"), "{text}");
+    assert_eq!(text.matches("zext").count(), 1, "{text}");
 }
 
 /// `isSafeToExpand` was `todo!`: a udiv by an unknown divisor may divide by
