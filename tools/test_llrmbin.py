@@ -200,3 +200,22 @@ def test_a_binary_that_needs_a_feature_the_rebuild_lacks_is_not_judged_stale(tmp
         (release / f"{name}.d").write_text(f"{release}/{name}: {source}\n")
         os.utime(release / name, (1000, 1000))
     assert llrmbin.stale_binaries(release, repo) == ["llrm-cc"]
+
+
+def test_two_dists_with_one_llrm_llc_are_refused_whatever_their_llrm_cc_is(tmp_path):
+    """llrm-cc only drives; the mid-end and the backends are in the llrm-llc beside it. A base and a head sharing one llrm-llc read SAME on every row (the wasm identity run of
+    #6710 read 0 DIFF where nbody -O2 moves 939 -> 910 B); the cause of that run is unproven, this is the check that would have stopped it."""
+    import pytest
+
+    base, head = tmp_path / "base", tmp_path / "head"
+    for folder, cc in ((base, b"cc one"), (head, b"cc two")):
+        folder.mkdir()
+        (folder / "llrm-cc").write_bytes(cc)
+        (folder / "llrm-llc").write_bytes(b"llc one")
+    with pytest.raises(SystemExit, match="same llrm-llc"):
+        llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc")
+    llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc", same_llc=True)
+    (head / "llrm-llc").write_bytes(b"llc two")
+    llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc")
+    (base / "llrm-llc").unlink()  # no llrm-llc to compare: nothing to refuse
+    llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc")

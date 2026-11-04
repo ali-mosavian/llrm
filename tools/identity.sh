@@ -12,6 +12,7 @@ ulimit -v "${LLRM_MEMORY_LIMIT_KB:-8000000}"  # a runaway compile dies at 8 GB i
 #       qcport llrm-c over QCport's modules at -O2 and -Os; QCPORT names its src/ and QCPORT_INC the
 #              Borland headers it builds with (neither is in this repository)
 # IDENTITY_SAME_SOURCE=1 allows BASE_BIN and NEW_BIN to be one binary (a build against itself).
+# c, qcport: the llrm-llc beside each llrm-cc must differ too (IDENTITY_SAME_LLC=1 for a frontend-only change).
 # The -m flag is passed to the compiler (default: its own, m16).
 #
 # Prints a count of each outcome and the programs that are not SAME; exit 1 if any DIFF or STATUS.
@@ -19,6 +20,7 @@ export LLRM_VERIFY=${LLRM_VERIFY:-1}  # the gate checks each pass and phase
 set -u
 kind=${1:?kind: nib, c or qcport}; base=${2:?base compiler}; new=${3:?new compiler}; shift 3
 python3 -c "import sys; sys.path.insert(0, '$(dirname "$0")'); import llrmbin; print(llrmbin.assert_distinct(sys.argv[1], sys.argv[2], bool(sys.argv[3])))" "$base" "$new" "${IDENTITY_SAME_SOURCE:-}" || exit 2
+case $kind in c|qcport) python3 -c "import sys; sys.path.insert(0, '$(dirname "$0")'); import llrmbin; llrmbin.assert_distinct_llc(sys.argv[1], sys.argv[2], bool(sys.argv[3]))" "$base" "$new" "${IDENTITY_SAME_LLC:-}" || exit 2 ;; esac
 target=()
 case "${1:-}" in -m[0-9]*) target=("$1") ;; esac
 root=$(cd "$(dirname "$0")/.." && pwd)
