@@ -26,6 +26,15 @@ fn ret() -> Inst {
     inst
 }
 
+/// A return of its own: two ways that end alike are one tail, which tail
+/// merging shares before the hoist this test is about.
+fn rti() -> Inst {
+    let mut inst = op("RTI", vec![]);
+    inst.terminator = true;
+    inst.barrier = true;
+    inst
+}
+
 /// Both ways of `cmp; (reads the flags); beq` begin with the same copy. The
 /// copy into `x` is a `tax`, which sets N and Z: run above the branch it
 /// replaced the compare's flags, and `beq` took the copy's. It stays below.
@@ -39,7 +48,7 @@ fn a_copy_into_a_register_stays_below_the_branch_that_reads_the_compare() {
     branch.terminator = true;
     branch.reads_flags = true;
     let mut function = MFunction::new("f");
-    let blocks = [vec![compare, set, branch], vec![copy(1, 0), ret()], vec![copy(2, 0), ret()]];
+    let blocks = [vec![compare, set, branch], vec![copy(1, 0), ret()], vec![copy(2, 0), rti()]];
     for (id, insts) in blocks.into_iter().enumerate() {
         function.blocks.push(Block { id: id as u32, insts, phis: vec![] });
     }

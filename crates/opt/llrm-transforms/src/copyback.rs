@@ -3,9 +3,8 @@
 //! call.
 //!
 //! # How it works
-//! A store to an element of a BASIC array (an address built on an
-//! `inttoptr` the frontend marks `!llrm.descriptor`) of the value just loaded
-//! from that same address, with one direct call in between, is dropped when
+//! A store of the value just loaded from the same address, with one direct
+//! call in between, is dropped when
 //!
 //! - the call hands the callee a slot the value was copied into, in a parameter
 //!   that is `readonly nocapture`, and
@@ -39,8 +38,8 @@ use std::collections::BTreeSet;
 use llrm_mir::context::GlobalId;
 use llrm_mir::facts::Facts;
 use llrm_mir::memory;
-use llrm_mir::module::{DESCRIPTOR_WORD, Function, InstId, Module, Operand, ValueDef};
-use llrm_mir::opcode::{CastOp, Opcode};
+use llrm_mir::module::{Function, InstId, Module, Operand, ValueDef};
+use llrm_mir::opcode::Opcode;
 
 /// The copy-outs dropped from every function of `module`; the functions
 /// changed.
@@ -183,9 +182,6 @@ fn is_copy_out(
     else {
         return false;
     };
-    if !on_array_element(function, address) {
-        return false;
-    }
     // The load the value comes from, of the same address, earlier in the block.
     let ValueDef::Instruction(load) = function.value(value).def else { return false };
     let Some(from) = insts[..at].iter().position(|&one| one == load) else { return false };
@@ -252,31 +248,6 @@ fn is_copy_out(
         }
         if copied_in && only_ours {
             return true;
-        }
-    }
-    false
-}
-
-/// Whether `address` is built on the segment the frontend made from an array
-/// descriptor: an element of a BASIC array.
-fn on_array_element(
-    function: &Function,
-    address: Operand,
-) -> bool {
-    let mut at = address;
-    for _ in 0..16 {
-        let Operand::Value(value) = at else { return false };
-        let ValueDef::Instruction(inst) = function.value(value).def else { return false };
-        let instruction = function.instruction(inst);
-        match &instruction.opcode {
-            Opcode::GetElementPtr { .. } | Opcode::Cast(CastOp::AddrSpaceCast) => match instruction.operands.first() {
-                Some(&next) => at = next,
-                None => return false,
-            },
-            Opcode::Cast(CastOp::IntToPtr) => {
-                return instruction.metadata.iter().any(|(kind, _)| kind == DESCRIPTOR_WORD);
-            }
-            _ => return false,
         }
     }
     false

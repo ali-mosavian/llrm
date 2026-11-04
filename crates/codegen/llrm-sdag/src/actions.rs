@@ -40,6 +40,7 @@
 use llrm_support::hash::HashMap;
 
 use super::isd::{CondCode, ISD};
+use super::libcalls::{self, Libcall};
 use super::lowering::TargetLoweringInfo;
 use super::mvt::{EVT, MVT};
 
@@ -64,6 +65,9 @@ pub struct Features {
     pub shld_slow: bool,
     /// `hasSSE2()`: f32 and f64 live in xmm registers (m64; D64-4).
     pub sse2: bool,
+    /// `useSoftFloat()`: `f32` and `f64` have no register class; their
+    /// arithmetic is a call (m16).
+    pub soft_float: bool,
 }
 
 /// The CPU features the AArch64 constructor's scalar arms test.
@@ -116,6 +120,9 @@ pub struct TargetLowering {
     /// like): the runtime routine a `LibCall` action calls. Empty unless the
     /// target fills it.
     libcall_names: HashMap<(ISD, MVT), &'static str>,
+    /// The object spelling of a routine's name where the convention decorates
+    /// it (`___addsf3@3`).
+    libcall_symbols: HashMap<String, (String, u32)>,
     /// `isSExtCheaperThanZExt`: `i32` to `i64` where the target extends signed
     /// for free (AArch64's `sxtw` in an addressing mode); no x86 override.
     sext_cheaper_i32_i64: bool,
@@ -137,6 +144,7 @@ impl TargetLowering {
             keeps_f64_constants: false,
             cmov: false,
             libcall_names: HashMap::default(),
+            libcall_symbols: HashMap::default(),
             sext_cheaper_i32_i64: false,
         };
         table.set_default_integer_libcalls();
@@ -165,6 +173,23 @@ impl TargetLowering {
         }
     }
 
+    /// `RTLIB::ADD_F32` and the rest: compiler-rt's names for the `f32` and
+    /// `f64` arithmetic a soft-float target calls.
+    pub fn set_soft_float_libcall_names(&mut self) {
+        let arithmetic: [(ISD, fn(MVT) -> Libcall); 4] = [
+            (ISD::FAdd, Libcall::Add),
+            (ISD::FSub, Libcall::Sub),
+            (ISD::FMul, Libcall::Mul),
+            (ISD::FDiv, Libcall::Div),
+        ];
+        for (op, call) in arithmetic {
+            for vt in [MVT::F32, MVT::F64] {
+                let name = libcalls::name(call(vt)).expect("the pin names f32 and f64 arithmetic");
+                self.set_libcall_name(op, vt, name);
+            }
+        }
+    }
+
     /// `setLibcallName` for the integer operation `op` of `vt`.
     pub fn set_libcall_name(
         &mut self,
@@ -177,6 +202,33 @@ impl TargetLowering {
 
     /// `getLibcallName` of the routine `op` of `vt` calls, if the target has
     /// one.
+    /// The routine `name` is spelled `symbol` in the object.
+    pub fn set_libcall_symbol(
+        &mut self,
+        name: &str,
+        symbol: String,
+        convention: u32,
+    ) {
+        self.libcall_symbols.insert(name.to_owned(), (symbol, convention));
+    }
+
+    /// The calling convention number the routine `name` was defined under.
+    pub fn libcall_convention(
+        &self,
+        name: &str,
+    ) -> Option<u32> {
+        self.libcall_symbols.get(name).map(|(_, number)| *number)
+    }
+
+    /// How a call to the routine `name` spells it: as the C compiler spelled
+    /// the definition, else the name.
+    pub fn libcall_symbol(
+        &self,
+        name: &str,
+    ) -> String {
+        self.libcall_symbols.get(name).map_or_else(|| name.to_owned(), |(symbol, _)| symbol.clone())
+    }
+
     pub fn libcall_name(
         &self,
         op: ISD,
@@ -374,6 +426,19 @@ impl TargetLowering {
         self.types.is_type_legal(vt) && matches!(self.operation_action(op, vt), Action::Legal | Action::Custom)
     }
 
+    /// `isOperationLegalOrCustomOrPromote`.
+    pub fn is_operation_legal_or_custom_or_promote(
+        &self,
+        op: ISD,
+        vt: EVT,
+    ) -> bool {
+        self.types.is_type_legal(vt)
+            && matches!(
+                self.operation_action(op, vt),
+                Action::Legal | Action::Custom | Action::Promote
+            )
+    }
+
     /// `getTypeToPromoteTo`: the recorded type, else the next wider integer
     /// (or float) type that is legal and handles `op`.
     pub fn type_to_promote_to(
@@ -465,7 +530,18 @@ impl TargetLowering {
         features: Features,
         ptr: MVT,
     ) -> TargetLowering {
-        Self::x86(TargetLoweringInfo::x86_16(), features, ptr, false)
+        if !features.soft_float {
+            return Self::x86(TargetLoweringInfo::x86_16(), features, ptr, false);
+        }
+        use ISD::*;
+        let mut t = Self::x86(TargetLoweringInfo::x86_16().with_soft_float(), features, ptr, false);
+        // The x87 lowerings of a compare, a select and an extension have no
+        // registers to work in: the type legalizer softens them first.
+        t.set_ops(&[Select, SetCC, FpExtend], &[MVT::F32, MVT::F64], Action::Expand);
+        t.set_ops(&[FpToSInt, FpToUInt, SIntToFp, UIntToFp], &[MVT::I8, MVT::I16, MVT::I32, MVT::I64], Action::Expand);
+        // `RTLIB::ADD_F32` and the rest: compiler-rt's names.
+        t.set_soft_float_libcall_names();
+        t
     }
 
     /// AArch64: `initActions`, then the scalar integer arms of
@@ -506,7 +582,13 @@ impl TargetLowering {
             t.set_ops(&[CtPop, Parity], &[MVT::I128], Expand);
             t.set_ops(&[CtTz], &[MVT::I128], Expand);
         } else {
-            t.set_ops(&[CtPop, Abs], &words, Custom);
+            // DEVIATE SD533 (exit: NEON `cnt` + `addv` when vector MIR lands):
+            // the pin's `LowerCTPOP` is `Custom` (v8i8 `cnt`, `uaddlv`); with
+            // no vector MIR the population count is the scalar
+            // bit-twiddle (`expandCTPOP`), so that the node is
+            // expanded, not refused.
+            t.set_ops(&[CtPop], &words, Expand);
+            t.set_ops(&[Abs], &words, Custom);
             t.set_ops(&[CtPop, Parity], &[MVT::I128], Custom);
             t.set_ops(&[Parity], &[MVT::I64], Custom);
         }

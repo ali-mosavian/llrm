@@ -354,6 +354,22 @@ pub trait Tti {
         false
     }
 
+    /// What a byte of growth is worth, in thousandths of a clock, to a speed
+    /// caller's inline (D11 at speed): the growth is refused when it costs
+    /// more than the call's latency saves, weighted by the site's frequency.
+    /// 0: the pin's threshold alone.
+    fn speed_inline_milliclocks_per_byte(&self) -> i64 {
+        0
+    }
+
+    /// Whether a size build's loop rotation copies a header only when the copy
+    /// is no bigger than the branches the rotation removes: the loop-closing
+    /// jump and the header's own exit test, in `CodeSize`. False: the pass's
+    /// header limit alone.
+    fn rotation_header_priced_at_size(&self) -> bool {
+        false
+    }
+
     /// The fewest calls a callee has in the module for the bound above to hold
     /// its sites (a callee called once is the pin's: the copy
     /// meets constants the cost model follows, and folds with the sites around
@@ -431,6 +447,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::price_pin_multiplies`.
+    fn price_pin_multiplies(&self) -> bool {
+        false
+    }
+
     /// `Subtarget.canUseCMOV()`: false where a `select` is lowered to a branch.
     fn has_cmov(&self) -> bool {
         true
@@ -456,6 +477,12 @@ pub trait Tti {
     /// pin's inliner, which copies no recursive callee (`-finline-recursive`
     /// asks for gcc's).
     fn recursive_inlining(&self) -> Option<(u32, i64)> {
+        None
+    }
+
+    /// DEVIATE REC-2: gcc's growth bar of the recursive edge at (-O2, -O3);
+    /// none: no bar.
+    fn recursive_edge_growth(&self) -> Option<(i64, i64)> {
         None
     }
 
@@ -837,6 +864,19 @@ pub trait Tti {
         8
     }
 
+    /// The registers LSR keeps back from `number_of_gpr_registers` when it
+    /// also counts what the loop keeps live (DEVIATE LU3c); the pin's one.
+    fn lsr_reserved_registers(&self) -> u32 {
+        1
+    }
+
+    /// DEVIATE LU12: whether the adds of a use whose fixups all lie after the
+    /// loop are rated as run once, not every trip (the pin rates them every
+    /// trip). Off: they cost the loop an add each, as in the pin.
+    fn lsr_exit_use_adds_run_once(&self) -> bool {
+        false
+    }
+
     /// Whether a stack slot's address is a displacement off the frame register
     /// in an addressing mode, so as the base of an address it costs no
     /// register of its own.
@@ -861,8 +901,12 @@ pub trait Tti {
 
     /// Whether the target adds registers and an immediate in one instruction
     /// whatever the use (x86's `lea`): an unfolded offset beside two or more
-    /// registers then costs no add of its own. DEVIATE LU2 (`lsr_use.rs`).
-    fn address_form_adds_offsets(&self) -> bool {
+    /// registers then costs no add of its own, for a value of `bits` bits.
+    /// DEVIATE LU2 (`lsr_use.rs`).
+    fn address_form_adds_offsets(
+        &self,
+        _bits: u32,
+    ) -> bool {
         false
     }
 

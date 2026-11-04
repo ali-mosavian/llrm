@@ -11,7 +11,8 @@ import argparse, hashlib, os, re, subprocess, sys, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 U8, U16 = "unsigned char", "unsigned"
-BUF, STR, TAB, R = 0x9000, 0x9010, 0x9020, 0x8F00
+BUF, STR, TAB, LZ, LZOUT, R = 0x9000, 0x9010, 0x9020, 0x9100, 0x9400, 0x8F00
+CU8 = "const unsigned char*"
 K = [
     ("zero", U8, [], 0), ("add8", U8, [(U8, "200"), (U8, "100")], 44),
     ("add16", U16, [(U16, "300"), (U16, "5000")], 5300), ("max8", U8, [(U8, "3"), (U8, "9")], 9),
@@ -27,21 +28,33 @@ K = [
     ("reverse", U8, [(U8 + "*", "buf"), (U8, "8")], 6),
     ("bsearch8", U8, [("const " + U8 + "*", "tab"), (U8, "8"), (U8, "17")], 5),
     ("sum16", U16, [("const " + U8 + "*", "buf"), (U8, "16")], 80), ("schr", U8, [("const char*", "str"), (U8, "111")], 4),
+    ("lz4", U16, [(CU8, "lz"), (U8 + "*", "lzout"), (U16, "634")], 634),
+    ("lz4c", U16, [(CU8, "lz"), (U8 + "*", "lzout"), (U16, "634")], 52785),
+    ("xs8", U8, [(U8, "0xA5"), (U8, "5")], 107), ("minmax", U8, [(CU8, "buf"), (U8, "16")], 8),
+    ("fletcher", U16, [(CU8, "buf"), (U8, "16")], 15952), ("hash16", U16, [("const char*", "str")], 51393),
+    ("dotx", U8, [(CU8, "buf"), (CU8, "tab"), (U8, "8")], 101),
 ]
 CRT0 = "\t.module crt0\n\t.globl _main\n\t.area _HEADER (ABS)\n\t.org 0\n\tld sp,#0\n\tcall _main\n\thalt\n\t.area _CODE\n\t.area _DATA\n"
 DATA = f"""\t.module data
 \t.area _DABS (ABS)
 \t.org 0x{BUF:x}
-\t.globl _buf, _str, _tab
+\t.globl _buf, _str, _tab, _lz, _lzout
 _buf:\t.db 3,1,4,1,5,9,2,6,5,3,5,8,9,7,9,3
 _str:\t.ascii "hello world"
 \t.db 0,0,0,0,0
 _tab:\t.db 2,5,8,11,14,17,20,23
+\t.org 0x{LZ:x}
+_lz:\t.db {open(os.path.join(HERE, "lz.txt")).read().strip()}
+\t.org 0x{LZOUT:x}
+_lzout:\t.ds 640
 """
 
 
+TIMEOUT = int(os.environ.get("GCC_COLUMNS_TIMEOUT", "120"))  # seconds per tool call; a timeout exits 124 = a failed call, never a cell
+
+
 def sh(cmd, cwd, inp=None):
-    return subprocess.run(["bash", "-c", "ulimit -v 16000000; exec timeout 120 \"$@\"", "x"] + cmd, cwd=cwd,
+    return subprocess.run(["bash", "-c", f"ulimit -v 16000000; exec timeout {TIMEOUT} \"$@\"", "x"] + cmd, cwd=cwd,
                           input=inp, capture_output=True, text=True)
 
 
@@ -81,9 +94,17 @@ def run(ihx, cwd):
     return clks, inst, int(m.group(1), 16) | int(m.group(2), 16) << 8
 
 
+def result_charge(ret):
+    """(bytes, T, insns) charged to a gcc cell so it is priced like the DE-returning columns.
+    16-bit: the caller's ex de,hl (1 B, 4 T, 1 insn), and the driver stores through DE (ld (nn),de, 20 T)
+    where gcc's driver stores through HL (ld (nn),hl, 16 T): 4 T more. The store was uncharged until 2026-11-04:
+    add16 read 78 T against 82 by hand."""
+    return (1, 8, 1) if ret != U8 else (0, 0, 0)
+
+
 def driver(name, ret, args):
     protos = ", ".join(t for t, _ in args) or "void"
-    s = "extern unsigned char buf[]; extern char str[]; extern unsigned char tab[];\n"
+    s = "extern unsigned char buf[]; extern char str[]; extern unsigned char tab[]; extern unsigned char lz[]; extern unsigned char lzout[];\n"
     s += f"extern {ret} {name}({protos});\n#define RES (*(volatile {ret} *)0x{R:x})\n"
     s += "void main(void) {\n#ifndef EMPTY\n  RES = " + f"{name}({', '.join(a for _, a in args)});\n#endif\n}}\n"
     return s
@@ -95,6 +116,7 @@ def main():
     ap.add_argument("--kernels", default="")
     ap.add_argument("--levels", default="O1,O2,Os")
     ap.add_argument("--rt", default=os.path.join(HERE, "rt-z80"), help="dir of libgcc helper .s files, one routine each")
+    ap.add_argument("--rt-speed", default=os.path.join(HERE, "rt-z80-speed"), help="helpers that replace the --rt ones of the same name at the speed levels (O2, O3)")
     ap.add_argument("--src", default=os.path.join(HERE, "..", "..", "crates/target/llrm-6502/tests/bench/kernels.c"))
     ap.add_argument("--out", default="")
     ap.add_argument("--tsv", default="", help="matrix TSV rows (target prog level compiler bytes clocks instrs note)")
@@ -114,12 +136,19 @@ def main():
                 rts.append(f[:-2] + ".rel")
     # selective library: sdldz80 pulls members of a text list only when referenced
     open(f"{w}/rt.lib", "w").write("".join(f"{r}\n" for r in rts))
+    # speed levels: the helpers of --rt-speed stand in for the same-named ones
+    sp = sorted(f for f in os.listdir(a.rt_speed) if f.endswith(".s")) if os.path.isdir(a.rt_speed) else []
+    for f in sp:
+        assert sh(["sdasz80", "-o", "sp_" + f[:-2] + ".rel", os.path.join(a.rt_speed, f)], w).returncode == 0, f
+    open(f"{w}/rtsp.lib", "w").write("".join(f"{r}\n" for r in rts if r[:-4] + ".s" not in sp) + "".join(f"sp_{f[:-2]}.rel\n" for f in sp))
+    SPEED = ("O2", "O3")
     open(f"{w}/empty.c", "w").write("")
     r = sh([a.cc1, "-version", "-quiet", "empty.c", "-o", "/dev/null"], w)
     ver = next(l for l in (r.stdout + r.stderr).splitlines() if "version" in l)
     hdr = [cc1_line(a.cc1), f"version: {ver}",
            "assembler/linker: sdasz80/sdldz80 (SDCC 4.5.0), ucsim_z80",
-           "flags: cc1 -quiet -<level> -DK_<name> kernels.c; driver cc1 -quiet -O1"]
+           "flags: cc1 -quiet -<level> -DK_<name> kernels.c; driver cc1 -quiet -O1",
+           "helpers: rt-z80/ at O1/Os; rt-z80-speed/ replaces the same-named ones at O2/O3 (early-exit __mulhi3: +4 B, -508 T on mul16)"]
     base_flags = ["-quiet"]
     rows, bad, cnotes = {}, [], {}
     for name, ret, args, want_v in K:
@@ -130,9 +159,9 @@ def main():
             p = sh([a.cc1, *base_flags, "-O1", *defs, "d.c", "-o", f"{tag}.s"], w)
             assert p.returncode == 0, p.stderr[-400:]
             assert sh(["sdasz80", "-o", f"{tag}.rel", f"{tag}.s"], w).returncode == 0
-        def link(objs, out):
+        def link(objs, out, lib="rt"):
             lk = ["-i", "-m", "-b", "_HEADER=0", "-b", "_CODE=0x100", "-b", "_DATA=0x8000", out]
-            return sh(["sdldz80", *lk, "-k", w, "-l", "rt", *objs] if rts else ["sdldz80", *lk, *objs], w)
+            return sh(["sdldz80", *lk, "-k", w, "-l", lib, *objs] if rts else ["sdldz80", *lk, *objs], w)
         # sdldz80 takes: options, output name, then object files
         p = link(["crt0.rel", "data.rel", "e.rel"], "e")
         if p.returncode:
@@ -145,7 +174,7 @@ def main():
                 bad.append((*cell, "compile: " + (p.stderr or p.stdout)[-200:].replace("\n", " "))); continue
             if sh(["sdasz80", "-o", "k.rel", "k.s"], w).returncode:
                 bad.append((*cell, "assemble")); continue
-            p = link(["crt0.rel", "data.rel", "d.rel", "k.rel"], "x")
+            p = link(["crt0.rel", "data.rel", "d.rel", "k.rel"], "x", "rtsp" if lvl in SPEED and sp else "rt")
             if p.returncode:
                 bad.append((*cell, "link: " + p.stderr[-200:].replace("\n", " "))); continue
             try:
@@ -156,18 +185,22 @@ def main():
             if got & mask != want_v & mask:
                 bad.append((*cell, f"WRONG result {got & mask:#x}, hand-derived {want_v & mask:#x}")); continue
             b = linked_code(f"{w}/x.map") - code_size(f"{w}/crt0.rel") - code_size(f"{w}/d.rel")
-            # Result convention: ours returns 16-bit values in DE, gcc in HL, so the caller's
-            # ex de,hl is charged to gcc: +1 B +4 T +1 insn for 16-bit results (8-bit: A in both).
-            mv = (1, 4, 1) if ret != U8 else (0, 0, 0)
+            mv = result_charge(ret)
             tab = data_size(f"{w}/k.rel")
             b += tab
             rows[cell] = (b + mv[0], t - bt + mv[1], i - bi + mv[2])
-            note = f"incl. result move +{mv[0]} B +{mv[1]} T +{mv[2]} insn" if mv[0] else "8-bit result in A, no move"
+            note = f"incl. result move +{mv[0]} B +{mv[1]} T +{mv[2]} insn (ex de,hl 4 T + store via DE 4 T)" if mv[0] else "8-bit result in A, no move"
             if re.search(r"___(mulqi3|mulhi3|udivhi3|call_hl)\b", open(f"{w}/k.s").read()):
                 note = "hand helper, not codegen; " + note
+            if lvl in SPEED and any(f"___{f[2:-2]}" in open(f"{w}/k.s").read() for f in sp):
+                note = f"speed helper ({', '.join(f[:-2] for f in sp)}) at {lvl}; " + note
             if tab >= 64:
                 note = f"table, not codegen; {tab} B table counted; " + note
             cnotes[cell] = note
+    # Guard, by hand: add16(300,5000) = ld hl 10 + ld de 10 + call 17 + add hl,de 11 + ret 10 + ld (nn),hl 16 + ex de,hl 4 + 4 = 82.
+    for lvl in a.levels.split(","):
+        if ("add16", lvl) in rows:
+            assert rows[("add16", lvl)][1] == 82, rows[("add16", lvl)]
     lv = a.levels.split(",")
     out = ["# gcc z80 spike column", ""] + hdr + ["", "| kernel | " + " | ".join(f"{l} B/T/insn" for l in lv) + " | best B | best T |", "|---|" + "---|" * (len(lv) + 2)]
     for name, *_ in K:

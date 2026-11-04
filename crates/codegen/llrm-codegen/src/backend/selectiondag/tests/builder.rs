@@ -263,37 +263,34 @@ fn an_i32_is_one_register_and_an_i64_two_at_m16() {
     );
 }
 
-/// The pin halves an illegal integer until the halves are legal and carries it
-/// in 2^k registers (`RegsForValue`). At real mode an `i128` is four `i32`
-/// registers across a block edge; it was refused at "integer wider than two
-/// registers" (and an `i64` on a 16-bit-widest target, four `i16`s, likewise).
+/// With only `i8` and `i16` legal an `i64` is four registers
+/// (`getNumRegisters`), not two: a value carried to the next block was refused
+/// at "integer wider than two registers", so no 8- or 16-bit target could
+/// compile a `long long`.
 #[test]
-fn an_i128_carried_across_a_block_edge_is_four_registers_at_m16() {
+fn an_i64_carried_across_blocks_is_four_i16_registers_when_only_i16_is_legal() {
     let text = "target datalayout = \"e-p:16:16-i32:16-i64:16-f80:16-n8:16:32\"\n\
-        define i16 @f(i16 %n, i1 %c) {\nb0:\n  %a = zext i16 %n to i128\n  br i1 %c, label %x, label %z\n\
-        x:\n  %r = add i128 %a, 1\n  br label %z\n\
-        z:\n  %p = phi i128 [ %r, %x ], [ %a, %b0 ]\n  %t = trunc i128 %p to i16\n  ret i16 %t\n}\n";
+        define i16 @f(ptr %p) {\n  %v = load i64, ptr %p\n  br label %next\nnext:\n  %t = trunc i64 %v to i16\n  ret i16 %t\n}\n";
     let module = llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}"));
     let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
     let (id, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).unwrap();
     let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m16::M16).expect("a convention");
     let mut info = FunctionLoweringInfo::new(function);
-    let block = function.layout().iter().copied().nth(1).expect("the block that adds");
-    let dump = build_block(
+    let mut target = BuilderTarget::m16();
+    target.legal_ints = vec![8, 16];
+    let entry = build_block(
         &module,
         function,
         &layout,
-        &BuilderTarget::m16(),
+        &target,
         &llrm_x86_m16::M16,
         &convention,
         &mut info,
-        block,
+        function.entry().unwrap(),
     )
-    .unwrap_or_else(|why| panic!("{}", why.0))
-    .dag
-    .dump();
-    let copies = dump.lines().filter(|line| line.contains("CopyToReg") && !line.contains(" $")).count();
-    assert_eq!(copies, 4, "four i32 registers carry the i128:\n{dump}");
+    .unwrap_or_else(|why| panic!("{}", why.0));
+    let dump = entry.dag.dump();
+    assert_eq!(dump.matches("CopyToReg").count(), 4, "{dump}");
 }
 
 /// At real mode the default convention returns an `i32` in `dx:ax` though

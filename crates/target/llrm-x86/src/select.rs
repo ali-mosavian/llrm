@@ -1695,7 +1695,7 @@ pub fn funnel(
     count: Option<i64>,
     at: At,
 ) -> Option<Emitted> {
-    let width = width_of(dest).filter(|bytes| matches!(bytes, 2 | 4) && width_of(other) == Some(*bytes))?;
+    let width = width_of(dest).filter(|bytes| matches!(bytes, 2 | 4 | 8) && width_of(other) == Some(*bytes))?;
     if !["shld", "shrd"].contains(&name) {
         return None;
     }
@@ -2985,7 +2985,7 @@ mod sweep_support {
         value: u32,
         width: u32,
     ) -> ir::Held {
-        ir::Held { value, width }
+        ir::Held { value, width, offset: 0 }
     }
 
     pub fn hd(
