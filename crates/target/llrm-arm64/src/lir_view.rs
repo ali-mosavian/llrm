@@ -424,10 +424,10 @@ pub fn written_callee_saved(function: &MFunc) -> Allocation {
 }
 
 /// `function` with every register physical, by the shared greedy allocator.
-pub fn allocate(function: &mut MFunc) -> Result<Allocation, String> {
+pub fn allocate(function: &mut MFunc, size: bool) -> Result<Allocation, String> {
     let mut lir = view(function);
     crate::licm::hoist(&mut lir);
-    let (assignment, slots) = allocate_greedy::<Arm64>(&mut lir, Regs(&crate::REGISTER_INFO), false)?;
+    let (assignment, slots) = allocate_greedy::<Arm64>(&mut lir, Regs(&crate::REGISTER_INFO), size)?;
     rebuild(function, &lir, &assignment, &slots);
     Ok(written_callee_saved(function))
 }
