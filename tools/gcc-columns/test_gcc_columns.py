@@ -68,3 +68,20 @@ def test_sf_z80_harness_sources_exist():
     names = re.search(r'F="([^"]+)"', open(os.path.join(d, "build.sh")).read()).group(1).split()
     for f in names:
         assert os.path.exists(os.path.join(root, "runtime/compiler-rt/lib/fp/f32", f + ".c")), f
+
+
+def test_softfloat_6502_clocks_divide_by_the_records_run():
+    """The 11-03 6502 softfloat table divided by 256 although add/sub/mul/div ran 361 records, and subtracted a base run that
+    failed its records: hand add read 570 for 324. Records come from the vec.inc that ran, and the base run must pass."""
+    d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sf-6502")
+    for n in ("run.sh", "hand.sh"):
+        t = open(os.path.join(d, n)).read()
+        assert "/nv" in t and "/256" not in t and "/$N" not in t, n
+        assert "base run must pass" in t, n
+    t = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "tables", "softfloat-6502.tsv")).read()
+    head = [l for l in t.splitlines() if l.startswith("#")]
+    assert len(head) == 1 and "withdrawn" not in head[0] and "STALE" not in head[0] and re.search(r"cc1 md5 [0-9a-f]{32}", head[0])
+    rows = [l.split("\t") for l in t.splitlines() if l.startswith("gcc\t")]
+    assert sum(r[3] == "clk" for r in rows) == 32 and sum(r[3] == "bytes" for r in rows) == 32
+    hand_add = next(l.split("\t")[5] for l in t.splitlines() if l.startswith("hand\t-\t-\tclk\tadd\t"))
+    assert int(hand_add) < 400, hand_add
