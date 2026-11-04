@@ -111,6 +111,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("FlagsCopy", "flagscopy@5"),
     ("X86OptimizeLEAs", "leaopt@5"),
     ("FloatFold", "floatfold@6"),
+    ("FloatSink", "floatsink@6"),
     ("PushFold", "pushfold@6"),
     ("FloatAssign", "floatassign@7"),
     ("FloatPrep", "floatassign@7"),
@@ -238,6 +239,8 @@ pub fn machine_with<'a>(
         // A float load only one arithmetic instruction reads is its memory
         // operand.
         Box::new(crate::backend::floatfold::FloatFold { cpu: target, registers: classes.available.len() }),
+        // A float load waits for its reader where that saves an exchange.
+        Box::new(crate::backend::floatsink::FloatSink { cpu: target, basic_semantics }),
         // After phi elimination: a phi's copies are where the stack shuffles.
         Box::new(floatassign::FloatPrep {
             frame: frame.clone(),
@@ -624,8 +627,8 @@ mod tests {
     fn test_the_machine_phase_gate_names_the_phase_that_made_bad_lir() {
         let what = ir::Semantics {
             name: Some("mov".into()),
-            dests: vec![Loc::Held(ir::Held { value: 2, width: 2 })],
-            sources: vec![Loc::Held(ir::Held { value: 1, width: 2 })],
+            dests: vec![Loc::Held(ir::Held { value: 2, width: 2, offset: 0 })],
+            sources: vec![Loc::Held(ir::Held { value: 1, width: 2, offset: 0 })],
             ..ir::Semantics::new(Operation::Move)
         };
         let source = Insn::new(1, Some((1, 1)), Some(what), vec![2], vec![1]);

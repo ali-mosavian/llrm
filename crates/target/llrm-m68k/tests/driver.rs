@@ -19,7 +19,7 @@ fn unoptimized_clang_ir_compiles_to_the_optimized_function() {
          %r = add nsw i32 %x, %y\n  ret i32 %r\n}}\n"
     );
     let text = assembly(&ir, Cpu::M68000, Level::O2).expect("compiles");
-    assert_eq!(text, "f:\n\tmove.l\t(8,%sp), %d0\n\tadd.l\t(4,%sp), %d0\n\trts\n");
+    assert_eq!(text, "\t.globl\tf\nf:\n\tmove.l\t(8,%sp), %d0\n\tadd.l\t(4,%sp), %d0\n\trts\n");
     // the same IR with no mid-end keeps its slots
     let raw = assembly(&ir, Cpu::M68000, Level::O0).expect("compiles");
     assert!(raw.len() > text.len(), "{raw}");

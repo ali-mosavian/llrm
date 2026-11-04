@@ -179,6 +179,9 @@ impl Coalescer {
                 should_join: Box::new(|_| true),
                 freq: Vec::new(),
                 regs: None,
+                kind_of: None,
+                kinds: Default::default(),
+                check_kinds: false,
             },
             depth,
         ))
@@ -211,7 +214,7 @@ mod tests {
         value: u32,
         width: u32,
     ) -> Loc {
-        Loc::Held(Held { value, width })
+        Loc::Held(Held { value, width, offset: 0 })
     }
 
     fn _move(

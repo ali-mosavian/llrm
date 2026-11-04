@@ -57,7 +57,7 @@ triple = "i386-unknown-unknown-code16"
 datalayout = "{datalayout:x86-m16}-ni:2:3"
 clang_env = "LLRM_CLANG_M16"
 clang = [
-  "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-mms-bitfields", "-fno-pic",
+  "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-mms-bitfields", "-fno-pic", "-fomit-frame-pointer",
   "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-DPHYSICAL_TEXT_SCREEN=0xB8000UL", "-U__STDC__", "-Wno-builtin-macro-redefined", "-std=gnu89", "-fborland-extensions", "-include", "{root}/toolchain/clang/borland.h",
 ]
 llc = ["-mabi=cdecl"]
@@ -76,7 +76,7 @@ triple = "i386-unknown-unknown-code16"
 datalayout = "{datalayout:x86-m16}-ni:2:3"
 clang_env = "LLRM_CLANG_M16"
 clang = [
-  "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-mms-bitfields", "-fno-pic",
+  "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-mms-bitfields", "-fno-pic", "-fomit-frame-pointer",
   "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-U__STDC__", "-Wno-builtin-macro-redefined", "-std=gnu89", "-fborland-extensions", "-include", "{root}/toolchain/clang/borland.h",
 ]
 llc = ["-mabi=regparm3", "-mc-library"]
@@ -92,7 +92,7 @@ triple = "i386-unknown-unknown-code16"
 datalayout = "{datalayout:x86-m16}-ni:2:3"
 clang_env = "LLRM_CLANG_M16"
 clang = [
-  "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-mms-bitfields", "-fno-pic",
+  "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-mms-bitfields", "-fno-pic", "-fomit-frame-pointer",
   "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-U__STDC__", "-Wno-builtin-macro-redefined", "-std=gnu99", "-fborland-extensions", "-include", "{root}/toolchain/clang/borland.h",
   "-nostdinc", "-isystem", "{env:LLRM_BORLAND_INC}", "-include", "{root}/toolchain/clang/floatm.h",
 ]
@@ -111,7 +111,7 @@ triple = "i386-unknown-unknown-code16"
 datalayout = "{datalayout:x86-m16}-ni:2:3"
 clang_env = "LLRM_CLANG_M16"
 clang = [
-  "-target", "i386-unknown-unknown-code16", "-march=i486", "-fhosted", "-fpack-struct=1", "-mms-bitfields", "-fno-pic",
+  "-target", "i386-unknown-unknown-code16", "-march=i486", "-fhosted", "-fpack-struct=1", "-mms-bitfields", "-fno-pic", "-fomit-frame-pointer",
   "-D__I86__=1", "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-DPHYSICAL_TEXT_SCREEN=0xB8000UL", "-std=gnu99", "-Xclang", "-fdefault-calling-conv=regcall",
   "-fborland-extensions", "-fshort-wchar", "-mlong-double-64", "-include", "{root}/toolchain/clang/borland.h", "-fdeclspec", "-Wno-array-bounds", "-Wno-unknown-attributes", "-Wno-error=incompatible-function-pointer-types", "-Wno-ignored-attributes", "-include", "{root}/toolchain/clang/watcom.h", "-include", "{root}/toolchain/clang/floatm.h", "-nostdinc", "-isystem", "{root}/toolchain/clang/watcom", "-isystem", "{root}/toolchain/clang/os/x86-m16", "-isystem", "{env:LLRM_OW}/bld/hdr/dos/h",
 ]
@@ -199,7 +199,7 @@ llc_program = "llrm-6502-llc"
 object = "ca65"
 link = ["sh", "-c", "echo 'llrm-cc: the 6502 rows stop at -S' >&2; exit 1"]
 
-# m68k Linux, as far as assembly text: the backend has no object writer behind llrm-cc, so a row stops at -S.
+# m68k Linux: -S is gas text, -c an ELF32 relocatable with .text and the data sections; no link line yet.
 # The pin's clang gives the target a 64-bit long double (`[c]` of the description).
 [m68k-68000]
 description = "m68k"
@@ -208,7 +208,7 @@ datalayout = "{datalayout:m68k}"
 clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68000", "-ffreestanding"]
 llc = ["-mcpu=68000"]
 llc_program = "llrm-m68k-llc"
-object = "asm"
+object = "elf"
 link = []
 
 [m68k-68020]
@@ -218,7 +218,47 @@ datalayout = "{datalayout:m68k}"
 clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68020", "-ffreestanding"]
 llc = ["-mcpu=68020"]
 llc_program = "llrm-m68k-llc"
-object = "asm"
+object = "elf"
+link = []
+
+[m68k-68010]
+description = "m68k"
+triple = "m68k-unknown-linux-gnu"
+datalayout = "{datalayout:m68k}"
+clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68010", "-ffreestanding"]
+llc = ["-mcpu=68010"]
+llc_program = "llrm-m68k-llc"
+object = "elf"
+link = []
+
+[m68k-68030]
+description = "m68k"
+triple = "m68k-unknown-linux-gnu"
+datalayout = "{datalayout:m68k}"
+clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68030", "-ffreestanding"]
+llc = ["-mcpu=68030"]
+llc_program = "llrm-m68k-llc"
+object = "elf"
+link = []
+
+[m68k-68040]
+description = "m68k"
+triple = "m68k-unknown-linux-gnu"
+datalayout = "{datalayout:m68k}"
+clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68040", "-ffreestanding"]
+llc = ["-mcpu=68040"]
+llc_program = "llrm-m68k-llc"
+object = "elf"
+link = []
+
+[m68k-68060]
+description = "m68k"
+triple = "m68k-unknown-linux-gnu"
+datalayout = "{datalayout:m68k}"
+clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68060", "-ffreestanding"]
+llc = ["-mcpu=68060"]
+llc_program = "llrm-m68k-llc"
+object = "elf"
 link = []
 
 # Z80, as far as sdasz80 text: clang's msp430 is only the C front end (16-bit int and pointers, as SDCC; unsigned char), its

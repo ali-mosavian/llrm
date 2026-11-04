@@ -34,8 +34,10 @@
 //! loop branch heuristic); every other branch is even. Exit: the odds the
 //! front end knows (the IR's branch weights).
 
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::marker::PhantomData;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use llrm_codegen::backend::allocresult::Error;
@@ -45,6 +47,7 @@ use llrm_codegen::greedy::targetinfo::TargetRegisterInfo;
 use llrm_codegen::greedy::tii::TargetInstrInfo;
 use llrm_codegen::model::lir::{Block as LirBlockRef, Insn, LirBlock, LirBody};
 use llrm_lir::registers::{RegId, Regs};
+use llrm_lir::valuelanes::ValueLanes;
 use llrm_lir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
 use llrm_support::hash::IndexMap;
 
@@ -86,6 +89,9 @@ impl<T: Target> Converted<T> {
         size: bool,
     ) {
         let infos = self.tii.infos.clone();
+        let kind_infos = infos.clone();
+        let kinds = Rc::new(RefCell::new(UseKindTable::default()));
+        let priced = Rc::clone(&kinds);
         let palettes = self
             .orders
             .iter()
@@ -104,24 +110,45 @@ impl<T: Target> Converted<T> {
                 let joined: Vec<RegId> = join.joined.iter().copied().collect();
                 let side = |side: &llrm_codegen::coalescer::env::JoinSide| {
                     let before: Vec<RegId> = side.palette.iter().copied().collect();
-                    // an instruction is priced once however many operands name
-                    // the value
+                    // a kind is one instruction's operands that name the value:
+                    // priced once however many of them there are
+                    let worst = |operands: &[OperandInfo]| {
+                        operands
+                            .iter()
+                            .filter_map(|info| {
+                                let (was, will) = (info.cheapest(&before)?, info.cheapest(&joined)?);
+                                Some(will.saturating_sub(was))
+                            })
+                            .max()
+                            .unwrap_or(0)
+                    };
+                    let kinds = priced.borrow();
                     let extra = side
-                        .uses
+                        .kinds
                         .iter()
-                        .map(|(one, freq)| {
-                            let worst = operands_in(&infos, one)
-                                .into_iter()
-                                .filter(|(value, _)| *value == side.value)
-                                .filter_map(|(_, info)| {
-                                    let (was, will) = (info.cheapest(&before)?, info.cheapest(&joined)?);
-                                    Some(will.saturating_sub(was))
-                                })
-                                .max()
-                                .unwrap_or(0);
-                            *freq * worst as f32
-                        })
+                        .map(|(kind, freq)| *freq * worst(&kinds.operands[*kind as usize]) as f32)
                         .sum::<f32>();
+                    if !side.uses.is_empty() {
+                        // LLRM_CHECK_USE_SUMMARY: the list of every instruction
+                        // prices the same
+                        let slow = side
+                            .uses
+                            .iter()
+                            .map(|(one, freq)| {
+                                let named: Vec<OperandInfo> = operands_in(&infos, one)
+                                    .into_iter()
+                                    .filter(|(value, _)| *value == side.value)
+                                    .map(|(_, info)| info.clone())
+                                    .collect();
+                                *freq * worst(&named) as f32
+                            })
+                            .sum::<f32>();
+                        assert!(
+                            (slow - extra).abs() <= 1e-3 * (1.0 + slow.abs()),
+                            "value {}: the instructions price {slow}, the summary {extra}",
+                            side.value
+                        );
+                    }
                     (before, extra)
                 };
                 let ((source, source_extra), (destination, destination_extra)) = (side(&join.one), side(&join.other));
@@ -131,6 +158,42 @@ impl<T: Target> Converted<T> {
                     joined: &joined,
                     copy_frequency: join.copy_frequency,
                 })
+            }),
+            Box::new(move |one, value| {
+                // which of the instruction's operand slots name the value: the
+                // same instruction shape and slots are one kind, however many
+                // instructions have them
+                let shape = (one.at / 2) as usize;
+                let (_, slots) = kind_infos.get(shape)?;
+                let what = one.what.as_ref()?;
+                if what.name.as_deref() != Some(kind_infos[shape].0) {
+                    return None;
+                }
+                let mut named = 0u64;
+                for (at, info) in slots.iter().enumerate().take(64) {
+                    let loc = if info.def { what.dests.get(info.index) } else { what.sources.get(info.index) };
+                    if matches!(loc, Some(Loc::Held(held)) if held.value == value) {
+                        named |= 1 << at;
+                    }
+                }
+                if named == 0 {
+                    return None;
+                }
+                let mut table = kinds.borrow_mut();
+                if let Some(id) = table.by_shape.get(&(shape, named)) {
+                    return Some(*id);
+                }
+                let mut operands: Vec<OperandInfo> = slots
+                    .iter()
+                    .enumerate()
+                    .filter(|(at, _)| named & (1 << at) != 0)
+                    .map(|(_, info)| info.clone())
+                    .collect();
+                operands.sort_by(|a, b| (&a.order, &a.costs).cmp(&(&b.order, &b.costs)));
+                operands.dedup_by(|a, b| (&a.order, &a.costs) == (&b.order, &b.costs));
+                let id = table.intern(operands);
+                table.by_shape.insert((shape, named), id);
+                Some(id)
             }),
         );
         for (value, order) in self.orders.iter_mut() {
@@ -188,15 +251,16 @@ impl<T: Target> Converted<T> {
         });
         // What allocation reads is the original instruction, in the order the
         // scheduler chose.
-        let original: std::collections::HashMap<i64, Arc<Insn>> = allocatable
+        // By identity: the coalescer's clones of an instruction share its `at`.
+        let original: std::collections::HashMap<u64, Arc<Insn>> = allocatable
             .blocks
             .iter()
-            .flat_map(|block| block.insns.iter().map(|one| (one.at, Arc::clone(one))))
+            .flat_map(|block| block.insns.iter().map(|one| (one.id(), Arc::clone(one))))
             .collect();
         let blocks = scheduled
             .blocks
             .iter()
-            .map(|block| block.with_insns(block.insns.iter().map(|one| Arc::clone(&original[&one.at])).collect()))
+            .map(|block| block.with_insns(block.insns.iter().map(|one| Arc::clone(&original[&one.id()])).collect()))
             .collect();
         self.body = allocatable.with_blocks(blocks);
         self.body.registers = before;
@@ -252,7 +316,7 @@ impl<T: Target> Converted<T> {
                             writes.extend(memory.iter().copied());
                             reads.extend(memory.iter().copied());
                         }
-                        let mut made = (**one).clone();
+                        let mut made = (**one).clone().standing_for(one);
                         made.volatile = made.volatile || inst.side_effects;
                         if let Some(what) = made.what.as_mut() {
                             if what.op == Operation::Nothing && inst.may_store {
@@ -601,7 +665,7 @@ impl<T: Target> Made<'_, T> {
         for operand in &inst.operands {
             match operand {
                 Operand::Use(Reg::Virt(v)) => {
-                    let held = Held { value: v + 1, width: self.widths[*v as usize] };
+                    let held = Held { value: v + 1, width: self.widths[*v as usize], offset: 0 };
                     uses.push(held.value);
                     sources.push(Loc::Held(held));
                 }
@@ -611,7 +675,7 @@ impl<T: Target> Made<'_, T> {
                     }
                     let value = self.pinned(*register).0;
                     let width = self.registers.bytes(*register).map_or(1, |bytes| bytes as u32);
-                    let held = Held { value, width };
+                    let held = Held { value, width, offset: 0 };
                     uses.push(value);
                     requires.push((held, *register));
                     sources.push(Loc::Held(held));
@@ -646,7 +710,7 @@ impl<T: Target> Made<'_, T> {
         for operand in &inst.operands {
             match operand {
                 Operand::Def(Reg::Virt(v)) => {
-                    let held = Held { value: v + 1, width: self.widths[*v as usize] };
+                    let held = Held { value: v + 1, width: self.widths[*v as usize], offset: 0 };
                     defines.push(held.value);
                     dests.push(Loc::Held(held));
                 }
@@ -655,7 +719,7 @@ impl<T: Target> Made<'_, T> {
                         continue;
                     }
                     let (value, width) = self.pinned(*register);
-                    let held = Held { value, width };
+                    let held = Held { value, width, offset: 0 };
                     defines.push(value);
                     delivers.push((held, *register));
                     dests.push(Loc::Held(held));
@@ -719,6 +783,16 @@ impl<T: Target> Made<'_, T> {
         }
         insn.symbol = symbol.then_some(true);
         insn.volatile = inst.side_effects;
+        // the lanes of the whole each part is copied into
+        if let Some((whole, parts)) = T::lane_moves(inst)
+            && let Some(Operand::Def(Reg::Virt(to)) | Operand::Use(Reg::Virt(to))) = inst.operands.get(whole)
+        {
+            for (part, offset, bytes) in parts {
+                if let Some(Operand::Def(Reg::Virt(from)) | Operand::Use(Reg::Virt(from))) = inst.operands.get(part) {
+                    insn.lane_copies.push((from + 1, to + 1, ValueLanes::at(offset, bytes)));
+                }
+            }
+        }
         insn
     }
 }
@@ -742,6 +816,46 @@ fn foldable_source<T: Target>(inst: &Inst) -> Option<(&'static str, usize)> {
         }
     }
     None
+}
+
+thread_local! {
+    static OPERAND_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many instructions this thread has read the whole operand table of (the
+/// scan the coalescer's join pricing made of every use of a value at every
+/// attempt), for a test to bound it.
+pub fn operand_visits() -> usize {
+    OPERAND_VISITS.with(std::cell::Cell::get)
+}
+
+/// The operand sets the instructions of a body name a value by, one id each
+/// (a kind of use the coalescer sums).
+#[derive(Default)]
+struct UseKindTable {
+    ids: std::collections::BTreeMap<Vec<(Vec<RegId>, Vec<u32>)>, u32>,
+    /// The kind of an instruction shape (its index in the target's operand
+    /// table) and the slots of it that name the value.
+    by_shape: llrm_support::hash::HashMap<(usize, u64), u32>,
+    operands: Vec<Vec<OperandInfo>>,
+}
+
+impl UseKindTable {
+    /// The id of `operands`, sorted and without repeats.
+    fn intern(
+        &mut self,
+        operands: Vec<OperandInfo>,
+    ) -> u32 {
+        let key: Vec<(Vec<RegId>, Vec<u32>)> =
+            operands.iter().map(|one| (one.order.clone(), one.costs.clone())).collect();
+        if let Some(id) = self.ids.get(&key) {
+            return *id;
+        }
+        let id = self.operands.len() as u32;
+        self.operands.push(operands);
+        self.ids.insert(key, id);
+        id
+    }
 }
 
 /// What the target says of one virtual-register operand of an instruction:
@@ -801,6 +915,7 @@ fn operands_in<'a>(
     infos: &'a [(&'static str, Vec<OperandInfo>)],
     one: &Insn,
 ) -> Vec<(u32, &'a OperandInfo)> {
+    OPERAND_VISITS.with(|visits| visits.set(visits.get() + 1));
     let Some((name, infos)) = infos.get((one.at / 2) as usize) else { return Vec::new() };
     let Some(what) = one.what.as_ref() else { return Vec::new() };
     if what.name.as_deref() != Some(name) {
@@ -822,7 +937,7 @@ fn operands_in<'a>(
 /// The register each value is copied to or from, through the chain of copies
 /// between values, where the chain meets one register only: where a
 /// lane-built value ends up whole.
-fn whole_homes<T: Target>(function: &MFunction<T::Class>) -> std::collections::HashMap<u32, RegId> {
+fn whole_homes<T: Target>(function: &MFunction<T::Class>) -> llrm_support::hash::HashMap<u32, RegId> {
     let mut parent: Vec<u32> = (0..=function.classes.len() as u32).collect();
     fn find(
         parent: &mut [u32],
@@ -857,7 +972,7 @@ fn whole_homes<T: Target>(function: &MFunction<T::Class>) -> std::collections::H
             _ => {}
         }
     }
-    let mut homes: std::collections::HashMap<u32, Option<RegId>> = std::collections::HashMap::new();
+    let mut homes: llrm_support::hash::HashMap<u32, Option<RegId>> = Default::default();
     for (v, p) in touched {
         let root = find(&mut parent, v);
         homes
@@ -878,7 +993,7 @@ fn whole_homes<T: Target>(function: &MFunction<T::Class>) -> std::collections::H
 /// hint the lane of the register its whole is copied to or from.
 fn hint_lanes<T: Target>(
     inst: &Inst,
-    homes: &std::collections::HashMap<u32, RegId>,
+    homes: &llrm_support::hash::HashMap<u32, RegId>,
     registers: Regs,
     infos: &mut [OperandInfo],
 ) {
@@ -984,11 +1099,11 @@ impl<T: Target> SpikeInstrInfo<T> {
             match operand {
                 Operand::Def(Reg::Virt(_)) => {
                     defines.push(value);
-                    dests.push(Loc::Held(Held { value, width }));
+                    dests.push(Loc::Held(Held { value, width, offset: 0 }));
                 }
                 Operand::Use(Reg::Virt(_)) => {
                     uses.push(value);
-                    sources.push(Loc::Held(Held { value, width }));
+                    sources.push(Loc::Held(Held { value, width, offset: 0 }));
                 }
                 Operand::Frame(slot) => {
                     let cell = Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, i64::from(*slot))), width));
@@ -1051,8 +1166,8 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
     ) -> Semantics {
         Semantics {
             name: Some(COPY.into()),
-            dests: vec![Loc::Held(Held { value: to, width })],
-            sources: vec![Loc::Held(Held { value: from, width })],
+            dests: vec![Loc::Held(Held { value: to, width, offset: 0 })],
+            sources: vec![Loc::Held(Held { value: from, width, offset: 0 })],
             ..Semantics::new(Operation::Move)
         }
     }

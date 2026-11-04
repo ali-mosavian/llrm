@@ -15,7 +15,7 @@
 //! not translated.
 //!
 //! DEVIATE 3: `visitFSub` stops after `X - (-Y) --> X + Y`: the
-//! `foldFNegIntoConstant`, `foldFBinOpOfIntCasts`, cast-of-fneg, `fmul`/`fdiv`
+//! `foldFNegIntoConstant`, cast-of-fneg, `fmul`/`fdiv`
 //! of a negated factor and the `reassoc nsz` arms are not translated; a half or
 //! `x86_fp80` constant is not negated.
 //!
@@ -50,7 +50,10 @@ pub fn visit_fadd_or_fmul(
     if let Some(found) = simplify_first(c, inst) {
         return Visit::Replace(found);
     }
-    if simplify_associative_or_commutative(c, inst) { Visit::Changed } else { Visit::None }
+    if simplify_associative_or_commutative(c, inst) {
+        return Visit::Changed;
+    }
+    crate::combine_fp_int_casts::fold_fbinop_of_int_casts(c, inst).unwrap_or(Visit::None)
 }
 
 /// `visitFSub` (InstCombineAddSub.cpp:3322), up to `X - (-Y) --> X + Y`: the
@@ -81,7 +84,7 @@ pub fn visit_fsub(
     if let Some(y) = fneg_operand(c, op1) {
         return c.replace_with_binop(inst, BinaryOp::FAdd, op0, y, instruction.flags);
     }
-    Visit::None
+    crate::combine_fp_int_casts::fold_fbinop_of_int_casts(c, inst).unwrap_or(Visit::None)
 }
 
 /// `visitCallInst`'s `Intrinsic::fmuladd`
