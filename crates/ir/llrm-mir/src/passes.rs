@@ -793,7 +793,10 @@ fn declared_as_before<A: 'static>(
     analyses.get::<Declarations>(module);
     let now = analyses.listing;
     let seen = analyses.memo::<Seen<A>>();
-    let same = seen.0 == Some(now);
+    // Listing 0 is no listing: a manager that was handed its declarations
+    // carried (accepted as they stand) has made none, and every analysis it
+    // worked from them is `Some(0)` alike, whatever the declarations were.
+    let same = now != 0 && seen.0 == Some(now);
     if working {
         seen.0 = Some(now);
     }
