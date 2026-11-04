@@ -25,13 +25,9 @@
 //!    takes the layout; there is no TLI.
 //!
 //! DEVIATE, stated facts:
-//! 3. A constant has no use list, so the scan of a base's users for an equal
-//!    GEP is a scan of the blocks that dominate the predecessor (the users the
-//!    C++ keeps are those in this function in such a block): the same GEPs,
-//!    found by walking the dominator chain, the newest (the highest instruction
-//!    id, a stand-in for use-list order) returned. The scan of a cast's users
-//!    ends at once for a constant (it folds first). Exit: a use-list model for
-//!    constants. `test_a_gep_off_a_global_base_is_found_in_a_dominating_block`.
+//! 3. Removed: constants keep use lists, so the scan of a constant base's
+//!    users is the C++'s.
+//!    `test_a_gep_off_a_global_base_is_found_in_a_dominating_block`.
 //! 4. Users come newest first, as LLVM's use list does; any match is an equal
 //!    value and the newest is returned.
 //!    `test_the_newest_of_two_equal_casts_is_returned`.
@@ -59,6 +55,13 @@ pub struct Env<'a> {
 
 /// `SelectAddr::SelectAddrs`: the address on the true side and on the false.
 pub type SelectAddrs = (Option<Operand>, Option<Operand>);
+
+#[cfg(test)]
+thread_local! {
+    /// Instructions looked at to find an available GEP, for a test that the
+    /// look is at the base's users and not at the blocks.
+    pub(super) static GEPS_SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 /// [`PHITransAddr`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/PHITransAddr.h#L68).
 #[derive(Clone, Debug)]
@@ -369,10 +372,12 @@ impl PhiTransAddr {
                     remove_inst_inputs(function, translated, &mut self.inputs);
                     return Some(self.add_as_input(function, simplified));
                 }
-                // A constant has no use list here (DEVIATE 3).
-                let Operand::Value(base) = translated else { return None };
-                function
-                    .users(base)
+                let users = match translated {
+                    Operand::Value(base) => function.users(base),
+                    Operand::Constant(base) => function.constant_users(base),
+                    Operand::Block(_) => return None,
+                };
+                users
                     .iter()
                     .find_map(
                         |user| {
@@ -412,37 +417,18 @@ impl PhiTransAddr {
                     }
                     return Some(self.add_as_input(function, simplified));
                 }
-                // Is this GEP available? A constant base has no use list here
-                // (DEVIATE 3): its users that the C++ keeps are the GEPs of
-                // this function in a block that dominates `pred`, the blocks
-                // of `pred`'s dominator chain; the newest is returned, as from
-                // a use list.
-                let Operand::Value(base) = translated[0] else {
-                    let dt = env.dt?;
-                    let mut newest: Option<InstId> = None;
-                    let mut block = Some(pred);
-                    while let Some(here) = block {
-                        for candidate_id in function.iter_block(here) {
-                            let candidate = function.instruction(candidate_id);
-                            if matches!(
-                                candidate.opcode,
-                                Opcode::GetElementPtr { source: other } if other == source
-                            ) && candidate.ty == ty
-                                && candidate.operands == translated
-                                && newest.is_none_or(|best| candidate_id.0 > best.0)
-                            {
-                                newest = Some(candidate_id);
-                            }
-                        }
-                        block = dt.immediate_dominator(here);
-                    }
-                    return newest.map(|found| result_of(function, found));
+                // Is this GEP available? Its base's use list, as the C++ walks.
+                let users = match translated[0] {
+                    Operand::Value(base) => function.users(base),
+                    Operand::Constant(base) => function.constant_users(base),
+                    Operand::Block(_) => return None,
                 };
-                function
-                    .users(base)
+                users
                     .iter()
                     .find_map(
                         |user| {
+                            #[cfg(test)]
+                            GEPS_SCANNED.with(|n| n.set(n.get() + 1));
                             let candidate = function.instruction(user.user);
                             let block = function.parent(user.user)?;
                             (matches!(
