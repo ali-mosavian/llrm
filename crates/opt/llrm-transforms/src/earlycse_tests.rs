@@ -437,3 +437,52 @@ b0:
     let late = with(false, true);
     assert_eq!(late.matches("load i32").count(), 2, "{late}");
 }
+
+const UMIN: &str = "declare i16 @llvm.umin.i16(i16, i16) nocallback nofree nosync nounwind speculatable willreturn memory(none)\n";
+
+/// The C zip dot loop (`i < na && i < nb`) kept `umin(%na, %nb)` from LICM and
+/// `umin(%nb, %na)` from the trip count: a second call the pin's EarlyCSE
+/// numbers with the first (`llvm.` calls that touch no memory are values,
+/// commutative ones with their arguments in either order). +4 B in the
+/// preheader at m16.
+#[test]
+fn test_umin_with_swapped_arguments_is_the_one_before() {
+    let after = run(&format!(
+        "{UMIN}define i16 @f(i16 %a, i16 %b) {{
+b0:
+  %x = call i16 @llvm.umin.i16(i16 %a, i16 %b)
+  %y = call i16 @llvm.umin.i16(i16 %b, i16 %a)
+  %z = add i16 %x, %y
+  ret i16 %z
+}}
+"
+    ));
+    assert_eq!(after.matches("call i16 @llvm.umin").count(), 1, "{after}");
+}
+
+/// The same call twice is one, and `umin` is not `umax` and not a non-commutative
+/// intrinsic with its arguments swapped.
+#[test]
+fn test_distinct_intrinsics_and_noncommutative_swaps_stay() {
+    let after = run(
+        "declare i16 @llvm.umin.i16(i16, i16) nocallback nofree nosync nounwind speculatable willreturn memory(none)
+declare i16 @llvm.umax.i16(i16, i16) nocallback nofree nosync nounwind speculatable willreturn memory(none)
+declare i16 @llvm.usub.sat.i16(i16, i16) nocallback nofree nosync nounwind speculatable willreturn memory(none)
+
+define i16 @f(i16 %a, i16 %b) {
+b0:
+  %x = call i16 @llvm.umin.i16(i16 %a, i16 %b)
+  %y = call i16 @llvm.umax.i16(i16 %b, i16 %a)
+  %s = call i16 @llvm.usub.sat.i16(i16 %a, i16 %b)
+  %t = call i16 @llvm.usub.sat.i16(i16 %b, i16 %a)
+  %u = add i16 %x, %y
+  %v = add i16 %s, %t
+  %z = add i16 %u, %v
+  ret i16 %z
+}
+",
+    );
+    assert_eq!(after.matches("call i16 @llvm.umin").count(), 1, "{after}");
+    assert_eq!(after.matches("call i16 @llvm.umax").count(), 1, "{after}");
+    assert_eq!(after.matches("call i16 @llvm.usub.sat").count(), 2, "{after}");
+}

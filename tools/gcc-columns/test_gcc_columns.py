@@ -101,6 +101,19 @@ def test_a_hung_fork_call_is_a_failed_call_not_a_cell():
         Z.TIMEOUT = B6.TIMEOUT = 120
 
 
+def test_host_check_catches_a_wrong_expect():
+    """The kernel expects were hand-derived; host_check must flag one that is off by one, and pass the shipped list."""
+    import host_check as H
+    assert H.main() == 0
+    saved = Z.K[:]
+    try:
+        n, r, a, w = Z.K[-1]
+        Z.K[-1] = (n, r, a, w + 1)
+        assert H.main() == 1
+    finally:
+        Z.K[:] = saved
+
+
 def test_vs_6502_bar_is_the_lower_of_both_gcc_columns():
     """vs_6502.py read only 6502-gcc.tsv: a cell the gcc-noivopts-Os column wins (memchr, minmax, sum16 -Os) showed the worse number."""
     import subprocess

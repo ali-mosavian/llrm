@@ -1348,7 +1348,9 @@ b1:
 
 /// A call names its callee as the procedure is defined: runtime.nib's
 /// `buffers.allocate`, no assembler symbol, was defined as `G$0` but called
-/// as `_buffers.allocate`, and the runtime did not link.
+/// as `_buffers.allocate`, and the runtime did not link. The private name keeps
+/// the source name, cleaned (`G$0$buffers$allocate`), so an object says where a
+/// function came from.
 #[test]
 fn test_a_call_names_an_internal_callee_as_it_is_defined() {
     let text = "define internal i16 @buffers.allocate() addrspace(1) {
@@ -1360,8 +1362,26 @@ define i16 @f() addrspace(1) {
 }
 ";
     let text = assembled(text);
-    assert!(text.contains("G$0 proc far"), "{text}");
-    assert!(text.lines().any(|line| line.trim() == "call far ptr G$0"), "{text}");
+    assert!(text.contains("G$0$buffers$allocate proc far"), "{text}");
+    assert!(text.lines().any(|line| line.trim() == "call far ptr G$0$buffers$allocate"), "{text}");
+}
+
+/// A library function's private name starts with the library it came from:
+/// `std.io.File.open` is `G$0$std$io$File$open`. The size tool counts a Nib
+/// object's standard-library instantiations apart from the program's own by it;
+/// they were `G$n` alone, and stft_fixed read 560 library bytes as its code.
+#[test]
+fn test_a_library_function_keeps_its_origin_in_its_private_name() {
+    let text = "define internal i16 @std.io.File.open() addrspace(1) {
+  ret i16 1
+}
+define i16 @f() addrspace(1) {
+  %v = call addrspace(1) i16 @std.io.File.open()
+  ret i16 %v
+}
+";
+    let text = assembled(text);
+    assert!(text.contains("G$0$std$io$File$open proc far"), "{text}");
 }
 
 /// Constant folding leaves `br i1 true` and a float constant as an operand,
