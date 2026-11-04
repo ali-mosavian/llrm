@@ -923,7 +923,7 @@ impl Builder {
 
     /// `d := a - 1` on a word: the low byte steps, the high only when the low
     /// was 0 (`lda lo; bne; dec hi; dec lo`, 11 clocks against 22 for the
-    /// carry chain). Not for a pointer, which has its own pair bump.
+    /// carry chain; a byte in x or y steps by dex/dey). Not for a pointer, which has its own pair bump.
     fn word_minus_one(
         &mut self,
         mnemonic: &str,
@@ -937,8 +937,6 @@ impl Builder {
         }
         let (al, ah) = self.read_word(a)?;
         let (dl, dh) = self.write_word(d)?;
-        // `lda lo` needs a cell for the low byte; the high steps in a cell, x or y
-        self.require(dl, Class::MEM)?;
         self.copy(dl, al);
         self.copy(dh, ah);
         let operands = vec![
@@ -2679,13 +2677,19 @@ fn emit_with<const STACK: bool>(
                 // d := d - 1 on two cells: the high byte steps when the low was 0
                 (Kind::Op("DEC16"), _) => {
                     made += 1;
-                    let low = register_name(regs[0]);
-                    let step = match regs[1] {
+                    // a byte in x or y is read through a and stepped by dex/dey
+                    let read = |r| match r {
+                        reg::X => "txa".to_owned(),
+                        reg::Y => "tya".to_owned(),
+                        cell => format!("lda {}", register_name(cell)),
+                    };
+                    let step = |r| match r {
                         reg::X => "dex".to_owned(),
                         reg::Y => "dey".to_owned(),
-                        high => format!("dec {}", register_name(high)),
+                        cell => format!("dec {}", register_name(cell)),
                     };
-                    writeln!(out, "  lda {low}\n  bne _pa{made}\n  {step}\n_pa{made}:\n  dec {low}").unwrap();
+                    let (load, low, high) = (read(regs[0]), step(regs[0]), step(regs[1]));
+                    writeln!(out, "  {load}\n  bne _pa{made}\n  {high}\n_pa{made}:\n  {low}").unwrap();
                 }
                 (Kind::Op("PINCH"), _) => {
                     let (d, s) = (regs[0], regs[1]);
