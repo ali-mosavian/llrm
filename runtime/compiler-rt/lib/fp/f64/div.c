@@ -1,4 +1,4 @@
-/* __divdf3. SF_DIV_NEWTON is the reciprocal form, else one quotient bit per step. */
+/* __divdf3. SF_DIV_NEWTON is the reciprocal form, SF_DIV64_HW32 digits by 32/32 hardware division, else one quotient bit per step. */
 #include "f64.h"
 #include "mul64.h"
 
@@ -40,6 +40,24 @@ static inline sf64 div_core(uint64_t sign, int ea, int eb, uint64_t ma, uint64_t
     sf_d64_mb = mb;
     __sf_div64();
     q = sf_d64_q, r = sf_d64_r;
+    inexact = r != 0;
+#elif defined(SF_DIV64_HW32)
+    /* The integer bit, then 56 fraction bits as five digits of 11 and one of 1. A digit is a 32/32 hardware division of the top words
+     * of the shifted remainder by the top word of mb (21 bits), off by at most 2 either way, and settled against the full divisor.
+     * d * mb may wrap past 2^64 on an overshoot; the remainder is right modulo 2^64 and small. */
+    uint32_t mbh = (uint32_t)(mb >> 32);
+    r = ma;
+    q = r >= mb;
+    if (q) r -= mb;
+#define DIV_STEP(w) do { \
+        uint64_t t = r << (w); \
+        uint32_t d = (uint32_t)(t >> 32) / mbh; \
+        int64_t rem = (int64_t)(t - (uint64_t)d * mb); \
+        while (rem < 0) { d--; rem += (int64_t)mb; } \
+        while ((uint64_t)rem >= mb) { d++; rem -= (int64_t)mb; } \
+        q = (q << (w)) | d; r = (uint64_t)rem; } while (0)
+    DIV_STEP(11); DIV_STEP(11); DIV_STEP(11); DIV_STEP(11); DIV_STEP(11); DIV_STEP(1);
+#undef DIV_STEP
     inexact = r != 0;
 #else
     /* One quotient bit per step. */
