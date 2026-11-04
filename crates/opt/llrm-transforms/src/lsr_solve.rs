@@ -208,6 +208,15 @@ impl Collection<'_, '_> {
         &self,
         se: &mut ScalarEvolution,
     ) -> Vec<usize> {
+        self.solve_with_cost(se).0
+    }
+
+    /// `solve`, and what the solution it returns costs (nothing to compare for
+    /// the empty one).
+    pub fn solve_with_cost(
+        &self,
+        se: &mut ScalarEvolution,
+    ) -> (Vec<usize>, Cost) {
         if llrm_support::debug::enabled("lsr-all") {
             self.trace_candidates(se);
         }
@@ -243,7 +252,7 @@ impl Collection<'_, '_> {
             self.ignore_pressure.set(true);
         }
         if solution.is_empty() {
-            return solution;
+            return (solution, solution_cost);
         }
         assert_eq!(solution.len(), self.uses.len(), "Malformed solution!");
         llrm_support::debug!("lsr", "chosen {:?} against {:?} as it stands", solution_cost.c, self.baseline_cost.c);
@@ -262,6 +271,6 @@ impl Collection<'_, '_> {
         {
             solution.clear();
         }
-        solution
+        (solution, solution_cost)
     }
 }

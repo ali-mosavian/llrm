@@ -25,7 +25,7 @@ pub(crate) fn sem(
 }
 
 pub(crate) fn fl(value: u32) -> Loc {
-    Loc::Held(Held { value, width: 10 })
+    Loc::Held(Held { value, width: 10, offset: 0 })
 }
 
 pub(crate) fn m(cell: &Mem) -> Loc {
@@ -331,7 +331,7 @@ fn test_a_load_is_not_read_again_after_a_store_that_may_reach_it() {
         } else {
             Mem {
                 through: RegId::SI,
-                base: Some(Held { value: 9, width: 2 }),
+                base: Some(Held { value: 9, width: 2, offset: 0 }),
                 disp_width: 2,
                 ..Mem::new(Some(Addr { index: 5, ..Addr::new(Space::Segment, 0) }), 4)
             }
@@ -814,6 +814,16 @@ fn switched(shape: &[(i64, &str, Vec<i64>)]) -> Vec<(i64, Vec<String>)> {
                             'r' => sem(Operation::Return, "ret", vec![], vec![]),
                             'b' => sem(Operation::Branch, "jne", vec![], vec![]),
                             'a' => sem(Operation::FloatArith, "fadd", vec![st(0)], vec![st(0), st(1)]),
+                            // `fnstsw ax`, the answer of a compare
+                            'm' => sem(Operation::FloatStore, "fstp", vec![m(&cell)], vec![st(0)]),
+                            's' => sem(
+                                Operation::Barrier,
+                                "fnstsw",
+                                vec![Loc::Reg(llrm_lir::Reg { register: RegId::AX, width: 2 })],
+                                vec![],
+                            ),
+                            // `fstp st(1)`, a release into a stack register
+                            'p' => sem(Operation::FloatStore, "fstp", vec![st(1)], vec![st(0)]),
                             _ => sem(Operation::Nothing, "", vec![], vec![]),
                         },
                     )
@@ -983,9 +993,12 @@ fn test_a_plain_move_of_a_float_to_and_from_a_cell_is_stored_and_loaded() {
     to_cell.op = Operation::Move;
     let from_cell = sem(Operation::Move, "mov", vec![fl(2)], vec![m(&spill)]);
     let body = _body(vec![_load(1, &source), to_cell, from_cell, _store(&source, 2)]);
-    let result =
-        crate::backend::fpstack::converted(&body, &crate::backend::classes::RegisterClasses::of(&llrm_x86_m16::M16))
-            .expect("converts");
+    let result = crate::backend::fpstack::converted(
+        &body,
+        &crate::backend::classes::RegisterClasses::of(&llrm_x86_m16::M16),
+        None,
+    )
+    .expect("converts");
     let insns = result.insns();
     let names: Vec<&str> = insns.iter().map(|one| name(one)).filter(|name| !name.is_empty()).collect();
     assert!(!names.contains(&"mov"), "{names:?}");
@@ -1012,7 +1025,7 @@ fn test_a_block_ahead_is_scanned_once_however_many_blocks_ask_for_it() {
     blocks.push(block(16 * n, vec![moved(16 * n)], vec![]).into());
     body.blocks = blocks;
     let before = crate::backend::fpstack::RENAME_SCANS.with(std::cell::Cell::get);
-    crate::backend::fpstack::converted(&body, &crate::backend::classes::RegisterClasses::of(&llrm_x86_m16::M16))
+    crate::backend::fpstack::converted(&body, &crate::backend::classes::RegisterClasses::of(&llrm_x86_m16::M16), None)
         .expect("a chain of blocks carrying a float");
     let scans = crate::backend::fpstack::RENAME_SCANS.with(std::cell::Cell::get) - before;
     assert!(scans <= n as usize + 1, "{scans} scans for {} blocks", n + 1);
@@ -1039,9 +1052,12 @@ fn test_a_reload_before_the_pseudo_that_takes_a_calls_result_leaves_the_result_b
         _arithmetic("fadd", 4, fl(2), fl(3)),
         _store(out, 4),
     ]);
-    let converted =
-        crate::backend::fpstack::converted(&body, &crate::backend::classes::RegisterClasses::of(&llrm_x86_m16::M16))
-            .expect("the result arrives under the reload");
+    let converted = crate::backend::fpstack::converted(
+        &body,
+        &crate::backend::classes::RegisterClasses::of(&llrm_x86_m16::M16),
+        None,
+    )
+    .expect("the result arrives under the reload");
     let insns = converted.insns();
     let names: Vec<&str> = insns.iter().map(|one| name(one)).filter(|name| !name.is_empty()).collect();
     assert!(names.contains(&"faddp"), "{names:?}");
@@ -1072,9 +1088,12 @@ fn test_a_split_edge_asks_no_second_liveness() {
     ];
     let before = body.blocks.len();
     crate::backend::liverows::SETS_BUILT.with(|one| one.set(0));
-    let converted =
-        crate::backend::fpstack::converted(&body, &crate::backend::classes::RegisterClasses::of(&llrm_x86_m16::M16))
-            .expect("a fork whose join reads fewer values than the fork holds");
+    let converted = crate::backend::fpstack::converted(
+        &body,
+        &crate::backend::classes::RegisterClasses::of(&llrm_x86_m16::M16),
+        None,
+    )
+    .expect("a fork whose join reads fewer values than the fork holds");
     let built = crate::backend::liverows::SETS_BUILT.with(|one| one.get());
     assert!(converted.blocks.len() > before, "an edge was split");
     assert_eq!(built, 2, "sets built: one liveness pass");
@@ -1104,5 +1123,28 @@ fn test_float_prep_asks_liveness_of_the_floating_values_only() {
 }
 
 fn int(value: u32) -> Loc {
-    Loc::Held(Held { value, width: 4 })
+    Loc::Held(Held { value, width: 4, offset: 0 })
+}
+
+/// A loop that converts twice a trip with a compare's `fnstsw` and a `fstp
+/// st(1)` between the conversions rounds nothing: both are exact. Counted as
+/// rounding they put the caller's word back around each conversion, six `fldcw`
+/// where two do (x_ldcmp -Os: 345 B and 207247 clocks against 327 B and
+/// 195735).
+#[test]
+fn test_a_status_word_read_and_a_register_release_between_conversions_do_not_round() {
+    let result = switched(&[(0, ".", vec![5]), (5, "cspcsb", vec![5, 9]), (9, "r", vec![])]);
+    let words = result.iter().flat_map(|(_, names)| names).filter(|name| *name == "fldcw").count();
+    assert_eq!(words, 2, "{result:?}");
+    let loop_words = result.iter().find(|(at, _)| *at == 5).unwrap().1.iter().filter(|name| *name == "fldcw").count();
+    assert_eq!(loop_words, 0, "no switch inside the loop: {result:?}");
+}
+
+/// Control: a store to memory rounds to the memory's width, so a loop that
+/// stores a double between conversions still puts the caller's word back.
+#[test]
+fn test_a_store_to_memory_between_conversions_still_rounds() {
+    let result = switched(&[(0, ".", vec![5]), (5, "cmcmb", vec![5, 9]), (9, "r", vec![])]);
+    let loop_words = result.iter().find(|(at, _)| *at == 5).unwrap().1.iter().filter(|name| *name == "fldcw").count();
+    assert!(loop_words > 0, "{result:?}");
 }

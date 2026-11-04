@@ -969,11 +969,23 @@ def test_a_name_no_function_has_is_an_error_not_a_flag_that_did_nothing():
     assert done.returncode != 0 and "defines no function of that name" in done.stderr
 
 
+def test_a_nib_helper_called_once_inlines_as_it_does_in_c(tmp_path):
+    """Nib was built with -fno-inline-functions and -fno-inline-functions-called-once, so dot's helper stayed a call that C inlines: 269 bytes at -Os against 153 for C,
+    a gap of the harness's flags. Only the kernel is kept a call: dot has no object segment of its own, `bench_dot` and `main` have."""
+    import subprocess
+
+    dot = next(v for v in bench.variants(bench.BENCH / "dot") if v.language == "nib")
+    _, arguments, obj = bench.compiles(dot, "Os", tmp_path, "dot")[0]
+    done = subprocess.run([str(bench.BIN / "llrm-nib"), *arguments], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    assert len([one for one in bench.sizes.segments(obj) if one.name.endswith("_TEXT")]) == 2
+
+
 def test_a_float_nib_row_is_compiled_in_fast_mode_as_main_measured_it():
     """ed700f10ce built float Nib rows with -fexcess-precision=standard: against main's rows (compiled fast; the flag recorded in them did nothing there) fpbench read 203869 clocks against 156348,
     a "regression" of the flag. The rows are measured fast, like main's."""
     float_nib = next(v for v in bench.variants(bench.BENCH / "nbody_single") if v.language == "nib")
-    assert not any("excess-precision" in one for one in bench.nib_flags())
+    assert not any("excess-precision" in one for one in bench.nib_flags(float_nib))
     assert not any("excess-precision" in one for one in bench.compiles(float_nib, "Os", Path("w"), "nbody_single")[0][1])
 
 
@@ -1136,6 +1148,32 @@ def test_the_gate_counts_cells_that_hold_code_it_could_not_read_and_names_paddin
         "ALIGN-UNREAD b c -Os: 7 of 7 bytes are counted with their padding",
         "ALIGN a c -Os: 3 bytes of alignment padding at a size level",
     ]
+
+
+def test_a_nib_cell_that_ran_under_half_of_its_c_twins_instructions_is_named():
+    """lru's Nib kernel read 39 instructions against C's 133 once its helpers inlined, and only reading the table showed it."""
+    got = {
+        ("lru", "c", "O2"): {"instructions": 133},
+        ("lru", "nib", "O2"): {"instructions": 39},
+        ("dot", "c", "O2"): {"instructions": 100},
+        ("dot", "nib", "O2"): {"instructions": 50},
+        ("fib", "nib", "O2"): {"instructions": 1},
+    }
+    assert bench.fold_lines(got) == ["SUSPECT-FOLD lru nib -O2: 39 instructions against C's 133"]
+
+
+def test_the_lru_nib_kernel_keeps_the_stores_its_c_twin_makes(tmp_path):
+    """lru's kernel was an internal function with a constant argument and a local cache, so with its helpers inlined every store to bord, bstamp, bprev
+    and bnext folded away: 39 instructions against C's 133, a row that measured nothing. It is exported, as C's is extern."""
+    import subprocess
+
+    lru = next(v for v in bench.variants(bench.BENCH / "lru") if v.language == "nib")
+    _, arguments, _ = bench.compiles(lru, "O2", tmp_path, "lru")[0]
+    out = tmp_path / "lru.s"
+    done = subprocess.run([str(bench.BIN / "llrm-nib"), *arguments, "-S", "-o", str(out)], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    kernel = out.read_text().split("bench_lru proc")[1].split("bench_lru endp")[0]
+    assert all(name in kernel for name in ("$var_bord", "$var_bstamp", "$var_bprev", "$var_bnext"))
 
 
 def test_native_sources_exist_when_only_the_x86_64_language_is_selected(tmp_path, monkeypatch):

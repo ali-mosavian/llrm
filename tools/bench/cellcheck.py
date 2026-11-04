@@ -32,6 +32,10 @@ def check(head: dict, base: dict) -> list[str]:
         _, language, level = key.rsplit("/", 2)
         if level == "O1":
             continue
+        broken = [side for side, one in (("head", got), ("base", want)) if "error" in one]
+        if broken:  # a row that did not compile has no counts: it is a void measurement, not a comparison
+            lines.append(f"{key}: ERROR in {' and '.join(broken)}: {(got.get('error') or want.get('error')).splitlines()[-1][:120]}")
+            continue
         lines += bench.against(key, got, want, rate=bench.rate_for(language, level))
     return lines
 

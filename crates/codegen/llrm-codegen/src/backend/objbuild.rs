@@ -64,6 +64,7 @@ use std::fmt;
 use llrm_debug::{DebugObjectTarget, Described};
 use llrm_lir::registers::Regs;
 use llrm_object::assembler::AsmBackend;
+use llrm_support::hash::HashSet;
 use llrm_object::{Binding, Definition, Fix, Object, ObjectTarget, OmfGroup, Reloc, Role, Section, Symbol, Target};
 use llrm_target::object::{CodeModel, Format};
 use llrm_x86::mc::backend::X86Backend;
@@ -638,30 +639,32 @@ pub fn built_in(
 /// does for LLVM. Only a target whose description names the probe's scratch
 /// register has the probe.
 fn stack_probed(
-    mut module: masm::Module,
+    module: &mut masm::Module,
     format: Format,
-) -> masm::Module {
+) {
     if format == Format::Coff {
         for procedure in module.procedures.iter_mut().filter(|one| one.registers.slot_scratch.is_some()) {
             procedure.probe_stack = Some("__chkstk".to_owned());
         }
+        // Win64 has no red zone.
+        for procedure in module.procedures.iter_mut() {
+            procedure.registers.red_zone = 0;
+        }
     }
-    module
 }
 
 /// The pin states no frame address at an exit on Darwin or Windows
 /// (`X86FrameLowering::emitEpilogue`: `NeedsDwarfCFI` is off for them); the
 /// format decides, as the triple does.
 fn exits_unstated(
-    mut module: masm::Module,
+    module: &mut masm::Module,
     format: Format,
-) -> masm::Module {
+) {
     if matches!(format, Format::MachO | Format::Coff) {
         for procedure in &mut module.procedures {
             procedure.registers.exit_cfi = false;
         }
     }
-    module
 }
 
 /// [`built`] for the writer of `format`: what that format's object holds.
@@ -675,6 +678,18 @@ pub fn built_for(
     built_inner(module, source, layout, format, objects)
 }
 
+/// Whether `format` drops the data no code reaches: an OMF object does; the
+/// jump tables of the others are read by the procedure that has them.
+fn drops_unreached_data(format: Format) -> bool {
+    format == Format::Omf
+}
+
+/// Whether `format` rewrites the procedures before they are encoded
+/// (`stack_probed`, `exits_unstated`).
+fn changes_procedures(format: Format) -> bool {
+    matches!(format, Format::Coff | Format::MachO)
+}
+
 fn built_inner(
     module: &masm::Module,
     source: &str,
@@ -682,7 +697,18 @@ fn built_inner(
     format: Format,
     objects: &dyn DebugObjectTarget,
 ) -> Result<Described, Error> {
-    let module = &exits_unstated(stack_probed(live(module)?, format), format);
+    // Only an OMF object drops data no code reaches (a jump table is always
+    // read by the procedure that has it), and only COFF and Mach-O change the
+    // procedures: the module is copied for those alone.
+    let mut adjusted = std::borrow::Cow::Borrowed(module);
+    if drops_unreached_data(format) {
+        adjusted = std::borrow::Cow::Owned(live(module)?);
+    }
+    if changes_procedures(format) {
+        stack_probed(adjusted.to_mut(), format);
+        exits_unstated(adjusted.to_mut(), format);
+    }
+    let module = &*adjusted;
     // A procedure the program put in a segment of its own naming (`code_seg`)
     // is in that one, the rest in `code`.
     let segment_of = |procedure: usize| -> &str {
@@ -1356,11 +1382,12 @@ pub fn object_of(
         segments.iter().enumerate().filter(|(_, segment)| grouped(segment)).map(|(index, _)| index).collect();
     let omf_groups = if members.is_empty() { Vec::new() } else { vec![OmfGroup { name: "DGROUP".into(), members }] };
 
+    let publics: HashSet<&String> = module.publics.iter().collect();
     let mut table: Vec<Symbol> = symbols
         .iter()
         .map(|(name, &(section, offset))| Symbol {
             name: name.clone(),
-            binding: if module.publics.contains(name) { Binding::Public } else { Binding::Local },
+            binding: if publics.contains(name) { Binding::Public } else { Binding::Local },
             definition: Definition::Defined { section, offset },
             size: sizes.get(name).copied().unwrap_or(0),
             group: None,
@@ -1469,15 +1496,15 @@ fn declared_frames(
     for (section, segment) in segments.iter().enumerate() {
         for (symbol, &(home, start)) in symbols {
             let Some(&length) = sizes.get(symbol).filter(|_| home == section) else { continue };
-            let within = |at: &usize| (start..start + length).contains(at);
-            if !segment.declared.iter().any(within) {
+            let range = start..start + length;
+            if within(&segment.declared, |at| *at, &range).is_empty() {
                 continue;
             }
             let entry = llrm_x86::mc::unwind::entry_row(bits);
             let mut state = entry.clone();
             let mut rows: Vec<FrameRow> = Vec::new();
             let mut ops = Vec::new();
-            for &(cfi, at) in segment.cfi.iter().filter(|(_, at)| within(at)) {
+            for &(cfi, at) in within(&segment.cfi, |one| one.1, &range) {
                 ops.push(cfi);
                 match cfi {
                     Cfi::DefCfa { register, offset } => {
@@ -1506,11 +1533,19 @@ fn declared_frames(
                     kept.push(row);
                 }
             }
-            let seh = segment.seh.iter().filter(|(_, at)| within(at)).map(|&(seh, at)| (at - start, seh)).collect();
+            let seh = within(&segment.seh, |one| one.1, &range).iter().map(|&(seh, at)| (at - start, seh)).collect();
             frames.push(llrm_object::Frame { section, offset: start, length, rows: kept, cfi: ops, seh });
         }
     }
     frames
+}
+
+/// The items whose offset lies in `range`. Items are pushed at the image's
+/// length, so they are sorted by offset: a search per function, not a scan.
+fn within<'a, T>(items: &'a [T], at: impl Fn(&T) -> usize, range: &std::ops::Range<usize>) -> &'a [T] {
+    let from = items.partition_point(|item| at(item) < range.start);
+    let to = items.partition_point(|item| at(item) < range.end);
+    &items[from..to]
 }
 
 pub fn _target(name: &str) -> &str {
@@ -1685,7 +1720,7 @@ mod tests {
     /// a `KeyError` at print. A jump through a cell keeps pointer-wide entries.
     #[test]
     fn test_a_register_table_jump_gets_a_table_of_differences() {
-        let held = Loc::Held(llrm_lir::Held { value: 1, width: 8 });
+        let held = Loc::Held(llrm_lir::Held { value: 1, width: 8, offset: 0 });
         let jump = Semantics {
             indirect: true,
             table: vec![1, 2],
@@ -1841,6 +1876,47 @@ mod tests {
                  07004809000302010a9807004800000504010f9a040006ff025b8c0900025f6400025f6600df900b000001045f676574\
                  000000c1a00d00010000a100009a00000000cb4c9c0a00c401160101cc045602558a02000074")
         );
+    }
+
+    /// `object_of` looked each symbol up in the module's public list, a
+    /// `Vec`: 4x the symbols cost about 16x the time (2400 tiny functions
+    /// spent 27% of the object write there).
+    #[test]
+    fn test_the_symbol_table_is_linear_in_the_symbols() {
+        let time = |count: usize| -> std::time::Duration {
+            let names: Vec<String> = (0..count).map(|at| format!("f{at}")).collect();
+            let module = masm::Module {
+                registers: crate::backend::registerinfo::test_regs(),
+                code: "M_TEXT".into(),
+                names: IndexMap::default(),
+                externs: vec![],
+                publics: names.clone(),
+                visibility: Default::default(),
+                aliases: vec![],
+                data: vec![],
+                procedures: vec![],
+                private: BTreeSet::new(),
+                far_bss: BTreeSet::new(),
+                code_segments: Default::default(),
+                padding: Default::default(),
+                object: llrm_target::Target::object(&llrm_x86_m16::M16),
+                requests: BTreeSet::new(),
+                stack: 0,
+                debug: None,
+            };
+            let symbols: IndexMap<String, (usize, usize)> = names.into_iter().map(|name| (name, (0, 0))).collect();
+            (0..3)
+                .map(|_| {
+                    let start = std::time::Instant::now();
+                    object_of(&module, "t.c", Vec::new(), &symbols, &IndexMap::default(), &IndexMap::default())
+                        .unwrap();
+                    start.elapsed()
+                })
+                .min()
+                .unwrap()
+        };
+        let (small, large) = (time(8000), time(32000));
+        assert!(large < small * 8, "4x the symbols took {large:?} against {small:?}");
     }
 
     /// A second name and a hidden export reach the object's symbol table: the
@@ -2058,7 +2134,7 @@ mod tests {
         let regs = crate::backend::registerinfo::test_regs();
         let cell = ir::Mem {
             addr: Some(Addr { index: 3, ..Addr::new(Space::Segment, 1280) }),
-            index: Some(ir::Held { value: 1, width: 4 }),
+            index: Some(ir::Held { value: 1, width: 4, offset: 0 }),
             index_through: RegId::ESI,
             scale: 2,
             ..ir::Mem::new(None, 2)
@@ -2188,5 +2264,52 @@ mod tests {
             frames.iter().map(|frame| (frame.offset, frame.seh.clone())).collect::<Vec<_>>(),
             vec![(8, vec![(1, llrm_object::Seh::PushReg(6)), (5, llrm_object::Seh::StackAlloc(32))])]
         );
+    }
+
+    /// `declared_frames` scanned every declared mark, CFI and SEH entry of a
+    /// segment for each function: four times the functions cost sixteen
+    /// times the work (object write 1.08/1.16 per doubling at 600/2400).
+    #[test]
+    fn the_frames_of_a_segment_are_linear_in_its_functions() {
+        let frames_of = |functions: usize| {
+            let mut segment = Segment::new("A_TEXT", Role::Text, true);
+            let mut symbols = IndexMap::default();
+            let mut sizes = IndexMap::default();
+            for at in 0..functions {
+                let name = format!("f{at}");
+                segment.declared.push(16 * at);
+                segment.cfi.push((llrm_object::assembler::Cfi::DefCfaOffset { offset: 16 }, 16 * at + 1));
+                symbols.insert(name.clone(), (0, 16 * at));
+                sizes.insert(name, 16);
+            }
+            let segments = [segment];
+            let best = (0..3)
+                .map(|_| {
+                    let started = std::time::Instant::now();
+                    let frames = declared_frames(64, &segments, &symbols, &sizes);
+                    assert_eq!(frames.len(), functions);
+                    started.elapsed()
+                })
+                .min()
+                .unwrap();
+            best
+        };
+        let (small, large) = (frames_of(4_000), frames_of(16_000));
+        assert!(large < small * 8, "4x the functions cost {:?} against {:?}", large, small);
+    }
+}
+
+#[cfg(test)]
+mod copy_tests {
+    use super::*;
+
+    /// An ELF x86-64 object ran `live`, which encoded every procedure and
+    /// cloned the module, to find no table dead: 13 M of jpeg_fixed's 27 M
+    /// instructions in `object write`. Only OMF reads a module that way.
+    #[test]
+    fn test_only_an_omf_object_looks_for_unreached_data_and_only_two_formats_change_procedures() {
+        let formats = [Format::Omf, Format::Coff, Format::MachO, Format::Elf];
+        assert_eq!(formats.map(drops_unreached_data), [true, false, false, false]);
+        assert_eq!(formats.map(changes_procedures), [false, true, true, false]);
     }
 }

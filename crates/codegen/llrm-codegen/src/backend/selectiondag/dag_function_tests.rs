@@ -332,7 +332,7 @@ fn the_check_for_a_value_read_before_it_is_defined_is_linear_in_the_body() {
     let defining = |at: i64, defines: Vec<u32>, uses: Vec<u32>| {
         let what = Semantics {
             name: Some("mov".into()),
-            dests: vec![Loc::Held(Held { value: defines.first().copied().unwrap_or(0), width: 4 })],
+            dests: vec![Loc::Held(Held { value: defines.first().copied().unwrap_or(0), width: 4, offset: 0 })],
             sources: Vec::new(),
             ..Semantics::new(Operation::Move)
         };
@@ -1299,6 +1299,35 @@ define i32 @f(i32 %a, i32 %b) {
     assert!(places.contains(&(7, 5)) && places.contains(&(8, 12)), "{places:?}");
 }
 
+/// Every function rebuilt the module's global-name table, so N functions in
+/// a module of N globals cost N^2 (27% of the 2400-function assemble).
+#[test]
+fn the_functions_of_a_module_share_one_table_of_global_names() {
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a) {
+entry:
+  ret i32 %a
+}
+define i32 @g(i32 %a) {
+entry:
+  ret i32 %a
+}
+",
+    )
+    .expect("parses");
+    let mut pool = crate::backend::constpool::Pool::new(module.globals.len() as i64);
+    let cpu = crate::backend::cpu::profile("386").expect("a cpu");
+    let mut select = |name: &str| {
+        super::dag_function::selected_in_pool(&module, name, &llrm_x86_m16::M16, cpu, &[], None, &mut pool)
+            .unwrap_or_else(|why| panic!("{}", why.0));
+        pool.symbols.clone().expect("the tables are kept for the next function")
+    };
+    let first = select("f");
+    let second = select("g");
+    assert!(std::rc::Rc::ptr_eq(&first.0, &second.0), "g rebuilt the table f made");
+}
+
 /// The scope and inlining call of a `!DILocation` were dropped: a function
 /// inlined twice left no way to tell the two bodies' instructions apart.
 #[test]
@@ -1471,4 +1500,67 @@ fn urem_mul_operands(cpu: &str) -> (bool, bool) {
 fn on_a_486_the_magic_is_the_accumulator_and_the_dividend_the_multiplier() {
     assert_eq!(urem_mul_operands("486"), (true, false));
     assert_eq!(urem_mul_operands("P5"), (false, true));
+}
+
+const STORES_BIG_ENDIAN: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define void @f(ptr %p, i32 %x) {
+  %b3 = trunc i32 %x to i8
+  %s2 = lshr i32 %x, 8
+  %b2 = trunc i32 %s2 to i8
+  %s1 = lshr i32 %x, 16
+  %b1 = trunc i32 %s1 to i8
+  %s0 = lshr i32 %x, 24
+  %b0 = trunc i32 %s0 to i8
+  %p1 = getelementptr i8, ptr %p, i32 1
+  %p2 = getelementptr i8, ptr %p, i32 2
+  %p3 = getelementptr i8, ptr %p, i32 3
+  store i8 %b0, ptr %p
+  store i8 %b1, ptr %p1
+  store i8 %b2, ptr %p2
+  store i8 %b3, ptr %p3
+  ret void
+}
+";
+
+/// A 32-bit value stored a byte at a time, high byte first, was shifts and
+/// four byte stores (`put_be32`: 8 instructions); the pin's `mergeTruncStores`
+/// makes it `bswap` and one store.
+#[test]
+fn four_byte_stores_of_a_value_high_byte_first_are_a_bswap_and_one_store() {
+    let names = names(STORES_BIG_ENDIAN).expect("selects");
+    assert!(names.iter().any(|n| n == "bswap"), "{names:?}");
+    assert!(!names.iter().any(|n| n == "shr" || n == "shld"), "{names:?}");
+}
+
+const LOADS_BIG_ENDIAN: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(ptr %p) {
+  %p1 = getelementptr i8, ptr %p, i32 1
+  %p2 = getelementptr i8, ptr %p, i32 2
+  %p3 = getelementptr i8, ptr %p, i32 3
+  %l0 = load i8, ptr %p
+  %l1 = load i8, ptr %p1
+  %l2 = load i8, ptr %p2
+  %l3 = load i8, ptr %p3
+  %z0 = zext i8 %l0 to i32
+  %z1 = zext i8 %l1 to i32
+  %z2 = zext i8 %l2 to i32
+  %z3 = zext i8 %l3 to i32
+  %s0 = shl i32 %z0, 24
+  %s1 = shl i32 %z1, 16
+  %s2 = shl i32 %z2, 8
+  %o1 = or i32 %s0, %s1
+  %o2 = or i32 %o1, %s2
+  %o3 = or i32 %o2, %z3
+  ret i32 %o3
+}
+";
+
+/// A 32-bit value read a byte at a time, high byte first, was four byte loads
+/// and shifts and ors (`get_be32`); the pin's `MatchLoadCombine` makes it one
+/// load and a `bswap`.
+#[test]
+fn four_byte_loads_combined_high_byte_first_are_one_load_and_a_bswap() {
+    let names = names(LOADS_BIG_ENDIAN).expect("selects");
+    assert!(names.iter().any(|n| n == "bswap"), "{names:?}");
+    assert!(!names.iter().any(|n| n == "shl" || n == "or"), "{names:?}");
 }

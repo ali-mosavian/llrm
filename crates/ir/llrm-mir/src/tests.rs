@@ -87,7 +87,10 @@ fn unnamed_values_count_the_entry_block() {
 
 #[test]
 fn constructs_outside_the_subset_are_refused() {
-    assert_eq!(refusal("@x = global fp128 zeroinitializer\n"), "line 1: `fp128` is outside MIR's subset of LLVM");
+    assert_eq!(
+        refusal("@x = global ppc_fp128 zeroinitializer\n"),
+        "line 1: `ppc_fp128` is outside MIR's subset of LLVM"
+    );
     assert_eq!(refusal("target triple = \"i386\"\n"), "line 1: `triple` is outside MIR's subset of LLVM");
 }
 
@@ -1369,4 +1372,92 @@ fn a_packed_named_struct_initializer_prints_packed() {
     let text = "%s = type <{ i8, i16 }>\n@g = global %s <{ i8 1, i16 2 }>\n";
     let printed = round(text);
     assert!(printed.contains("global %s <{ i8 1, i16 2 }>"), "{printed}");
+}
+
+fn module_of_functions(count: usize) -> crate::module::Module {
+    let mut text = String::new();
+    for at in 0..count {
+        text += &format!("declare void @f{at}()\n");
+    }
+    parse::module(&text).unwrap_or_else(|error| panic!("{error}"))
+}
+
+/// `Module::named` scanned every global per lookup: the assembler, the
+/// selection-DAG lowering and the atomic expansion each asked it of every
+/// function, 90 M excess Ir over a 2400-function compile (x14 for x4 the
+/// functions). A thousand lookups cost one table.
+#[test]
+fn test_a_module_makes_one_symbol_table_for_all_its_lookups() {
+    let module = module_of_functions(600);
+    let (builds, names) = (crate::module::symbol_builds(), crate::module::names_made());
+    for round in 0..2 {
+        for at in 0..600 {
+            assert_eq!(module.named(&format!("f{at}")), Some(crate::context::GlobalId(at as u32)), "round {round}");
+        }
+    }
+    assert_eq!(module.named("missing"), None);
+    // A name made on any thread (a parallel test parsing text) stales every
+    // table once, so the tables are one and one per name made meanwhile; a
+    // table per lookup would be 1201, and a scan of the globals (the 90 M Ir
+    // bug) makes none.
+    let made = crate::module::names_made() - names;
+    let tables = crate::module::symbol_builds() - builds;
+    assert!((1..=1 + made).contains(&tables), "{tables} tables, {made} names made");
+}
+
+/// A name made on another thread between two lookups staled the table, and
+/// the guard above asked for exactly one table: red in 3 of 3 full runs of the
+/// suite at the tip, green alone. The table is made again, once.
+#[test]
+fn a_name_made_on_another_thread_costs_one_table() {
+    let module = module_of_functions(600);
+    let (builds, names) = (crate::module::symbol_builds(), crate::module::names_made());
+    assert_eq!(module.named("f0"), Some(crate::context::GlobalId(0)));
+    std::thread::spawn(|| drop(crate::module::GlobalName::from("elsewhere".to_owned()))).join().unwrap();
+    for at in 0..600 {
+        assert_eq!(module.named(&format!("f{at}")), Some(crate::context::GlobalId(at as u32)));
+    }
+    // Another test parsing beside this one may stale it again: bounded by the
+    // names made, never by the lookups.
+    let made = crate::module::names_made() - names;
+    let tables = crate::module::symbol_builds() - builds;
+    assert!((2..=1 + made).contains(&tables), "{tables} tables, {made} names made");
+}
+
+/// The count of tables made was one for the whole process: a test that made
+/// a module's table beside `test_a_module_makes_one_symbol_table_for_all_its_lookups`
+/// failed it (5 of 40 runs red at the tip). A table made on another thread is
+/// not this thread's.
+#[test]
+fn a_table_made_on_another_thread_is_not_counted() {
+    let module = module_of_functions(3);
+    let before = crate::module::symbol_builds();
+    std::thread::spawn(|| {
+        let other = module_of_functions(3);
+        assert_eq!(other.named("f1"), Some(crate::context::GlobalId(1)));
+        assert_eq!(crate::module::symbol_builds(), 1);
+    })
+    .join()
+    .unwrap();
+    assert_eq!(crate::module::symbol_builds(), before);
+    assert_eq!(module.named("f2"), Some(crate::context::GlobalId(2)));
+    assert_eq!(crate::module::symbol_builds() - before, 1);
+}
+
+/// The table must not outlive a rename or a new global: a lookup after either
+/// finds what the globals now say.
+#[test]
+fn test_the_symbol_table_follows_a_rename_and_a_new_global() {
+    let mut module = module_of_functions(3);
+    assert_eq!(module.named("f1"), Some(crate::context::GlobalId(1)));
+    module.globals[1].name = crate::module::GlobalName::from("renamed".to_owned());
+    assert_eq!(module.named("f1"), None, "the old name");
+    assert_eq!(module.named("renamed"), Some(crate::context::GlobalId(1)));
+    let copy = module.globals[2].clone();
+    module
+        .globals
+        .push(crate::module::GlobalValue { name: crate::module::GlobalName::from("fresh".to_owned()), ..copy });
+    assert_eq!(module.named("fresh"), Some(crate::context::GlobalId(3)));
+    module.globals.swap(0, 2);
+    assert_eq!(module.named("f2"), Some(crate::context::GlobalId(0)), "a moved global");
 }

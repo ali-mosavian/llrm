@@ -48,6 +48,30 @@ fn reduced_stressed(
     (changed, after)
 }
 
+/// [`reduced_on`] under the flat cost model, where every cost is 1.
+fn reduced_flat(
+    text: &str,
+    inputs: &[&[i128]],
+) -> (bool, String) {
+    let mut module = parsed(&format!("{FLAT}{text}"));
+    let before = module.clone();
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let changed = crate::lsr_pass::reduced_with(
+        context,
+        &layout,
+        function,
+        &mut declared,
+        &outer,
+        &llrm_mir::tti::Basic,
+        false,
+    );
+    let after = printed(&module);
+    assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
+    (changed, after)
+}
+
 /// A local array filled and summed by one loop, the exit `i == n`.
 const ARRAY: &str = "define i32 @f(i32 %n) {
 entry:
@@ -167,6 +191,92 @@ exit:
     );
     assert!(changed, "{after}");
     assert!(!after.contains("sitofp"), "{after}");
+    assert!(after.contains("IV.S."), "{after}");
+}
+
+const TWO_CONVERSIONS: &str = "define double @f(i32 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %s = phi double [ 0.0, %entry ], [ %s3, %loop ]
+  %d = sitofp i32 %i to double
+  %e = uitofp nneg i32 %i to double
+  %s2 = fadd double %s, %d
+  %s3 = fmul double %s2, %e
+  %next = add nuw nsw i32 %i, 1
+  %c = icmp eq i32 %next, %n
+  br i1 %c, label %exit, label %loop
+exit:
+  ret double %s3
+}
+";
+
+/// Two conversions of one counter got two floating counters off the x87
+/// stack: the pin's `OptimizeShadowIV` makes one per loop and breaks. wasm x_matmul_f -O2 grew 29 B (1584 -> 1613) once both
+/// conversions were `uitofp nneg` and GVN had no pass left to merge them.
+#[test]
+fn a_loop_gets_one_floating_counter_for_two_conversions_off_the_x87_stack() {
+    let (changed, after) = reduced_flat(TWO_CONVERSIONS, &[&[1], &[5], &[17]]);
+    assert!(changed, "{after}");
+    assert_eq!(after.matches("= phi double [ 0.000000e+00").count() - 1, 1, "{after}");
+}
+
+/// Where floats live on the x87 stack each conversion gets its own counter,
+/// as before: a conversion is a store and a `fild` every trip. m16 x_ldconv
+/// -O2 was 250 B and one `fild` fewer a trip with two (259 B with one).
+#[test]
+fn a_loop_gets_a_counter_per_conversion_where_floats_live_on_the_x87_stack() {
+    let tuning = llrm_mir::target::Tuning { x87_stack_slots: Some(8), ..llrm_mir::target::Tuning::PIN };
+    let mut module = parsed(&format!("{FLAT}{TWO_CONVERSIONS}"));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let tti = X86::of_cpu("i486").unwrap().with_tuning(tuning);
+    let changed = crate::lsr_pass::reduced_with(context, &layout, function, &mut declared, &outer, &tti, false);
+    let after = printed(&module);
+    assert!(changed, "{after}");
+    assert_eq!(after.matches("= phi double [ 0.000000e+00").count() - 1, 2, "{after}");
+}
+
+/// `OptimizeShadowIV` on the outer loop of a nest: `(double) r` is taken in
+/// the outer loop's own body and read by the inner loop. x_ld_div at -Os kept
+/// `fiadd [r]` in every inner trip (19+ clocks on a 486) where the pin's loop
+/// has `fadd st(3)` of a variable counting in floating point: 29,293 clocks
+/// against clang's 26,528.
+#[test]
+fn an_outer_counter_converted_in_its_loop_gets_a_floating_counter() {
+    let (changed, after) = reduced_on(
+        FLAT,
+        "define i32 @f(i32 %n) {
+entry:
+  br label %outer
+outer:
+  %r = phi i32 [ 0, %entry ], [ %rnext, %latch ]
+  %t = phi double [ 0.0, %entry ], [ %t2, %latch ]
+  %d = sitofp i32 %r to double
+  br label %inner
+inner:
+  %i = phi i32 [ 0, %outer ], [ %inext, %inner ]
+  %s = phi double [ %t, %outer ], [ %s2, %inner ]
+  %s2 = fadd double %s, %d
+  %inext = add nsw i32 %i, 1
+  %ic = icmp eq i32 %inext, %n
+  br i1 %ic, label %latch, label %inner
+latch:
+  %t2 = phi double [ %s2, %inner ]
+  %rnext = add nuw nsw i32 %r, 1
+  %rc = icmp eq i32 %rnext, 4
+  br i1 %rc, label %exit, label %outer
+exit:
+  %q = fptosi double %t2 to i32
+  ret i32 %q
+}
+",
+        "i486",
+        &[&[1], &[5], &[17]],
+    );
+    assert!(changed, "{after}");
     assert!(after.contains("IV.S."), "{after}");
 }
 
@@ -983,7 +1093,8 @@ b6:
 /// The first look at a loop whose exit test is edited made the users, the
 /// second made them again over the edited loop, the third (after the edge
 /// split) once more: 3 constructions for 1 loop. The edit moves no compare, so
-/// the second look keeps the first's users.
+/// the second look keeps the first's users. The module's outer loop is looked
+/// at once, for its shadow variables and exit tests as the pin does: 2 + 1.
 #[test]
 fn the_users_of_a_loop_are_kept_through_the_edit_of_its_exit_test() {
     let mut module = parsed(include_str!("lsr_insertion.ll"));
@@ -994,7 +1105,7 @@ fn the_users_of_a_loop_are_kept_through_the_edit_of_its_exit_test() {
     crate::ivusers::BUILDS.with(|made| made.set(0));
     crate::lsr_pass::reduced(context, &layout, function, &mut declared, &outer, &tti);
     let built = crate::ivusers::BUILDS.with(|made| made.get());
-    assert_eq!(built, 2, "{}", printed(&module));
+    assert_eq!(built, 3, "{}", printed(&module));
 }
 
 /// The values LSR has analysed over `loops` loops it rewrites.
@@ -1136,7 +1247,10 @@ fn the_temporaries_of_the_body_count_against_the_registers() {
     manager.add(crate::lsr_pass::LoopStrengthReduce { size: true });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
     let after = printed(&module);
-    assert!(after.contains("7013"), "the exit moved off the i32 recurrence: {after}");
+    // At LU3c the live count is exact at m16, so the offset that ends at zero
+    // takes the exit: bench/shellsort -Os keeps its bytes and memory operands
+    // (927 B, 28261) and runs 64 fewer instructions.
+    assert!(!after.contains("7013") && after.contains("icmp eq i16"), "the exit stayed on the i32 recurrence: {after}");
 }
 
 const SHELLSORT_INIT: &str = "
@@ -1513,4 +1627,77 @@ exit:
     let after = reduced_real(text, &three_address_registers());
     let in_loop = &after[after.find("loop:").expect("the loop")..];
     assert!(!in_loop.contains("shl i16"), "{after}");
+}
+
+/// bench/queens at m16 -O2: the inner `safe` loop reads `q[r]` and compares
+/// with `row - r` and `r - row`. The pin's formulae include a pointer walked
+/// by two bytes; DEVIATE LG3's end-biased formulae brought a register of their
+/// own, the solver's reuse rule then cut the pointer solution out of the
+/// search, and the solution left cost an instruction more than the loop as it
+/// stood, so LSR was dropped: 236848 clocks against 170823 at -Os, which
+/// finds the pointer. LG3 now joins after the pin's narrowing and is kept
+/// only where it costs less.
+const QUEENS_INNER: &str = "declare i16 @g(ptr, i16, i16)
+
+define i16 @f(ptr %q, i16 %row, i16 %n) {
+b0:
+  %e = icmp eq i16 %row, %n
+  br i1 %e, label %ret, label %b5
+b5:
+  %pos = icmp sgt i16 %n, 0
+  br i1 %pos, label %b7, label %ret
+b7:
+  %rp = icmp sgt i16 %row, 0
+  %slot = getelementptr inbounds [2 x i8], ptr %q, i16 %row
+  %row1 = add nsw i16 %row, 1
+  br label %b11
+b11:
+  %found = phi i16 [ 0, %b7 ], [ %found2, %b32 ]
+  %col = phi i16 [ 0, %b7 ], [ %col2, %b32 ]
+  br i1 %rp, label %b14, label %b28
+b14:
+  br label %b17
+b15:
+  %r2 = add nuw nsw i16 %r, 1
+  %exit = icmp eq i16 %r2, %row
+  br i1 %exit, label %b27, label %b17
+b17:
+  %r = phi i16 [ %r2, %b15 ], [ 0, %b14 ]
+  %p = getelementptr inbounds nuw [2 x i8], ptr %q, i16 %r
+  %v = load i16, ptr %p, align 2
+  %d = sub nsw i16 %v, %col
+  %z = icmp eq i16 %v, %col
+  %a = sub nuw nsw i16 %row, %r
+  %c1 = icmp eq i16 %d, %a
+  %o1 = select i1 %z, i1 true, i1 %c1
+  %b = sub nsw i16 %r, %row
+  %c2 = icmp eq i16 %d, %b
+  %o2 = select i1 %o1, i1 true, i1 %c2
+  br i1 %o2, label %b31, label %b15
+b27:
+  br label %b28
+b28:
+  store i16 %col, ptr %slot, align 2
+  %x = call i16 @g(ptr %q, i16 %row1, i16 %n)
+  %f1 = add nsw i16 %x, %found
+  br label %b32
+b31:
+  br label %b32
+b32:
+  %found2 = phi i16 [ %f1, %b28 ], [ %found, %b31 ]
+  %col2 = add nuw nsw i16 %col, 1
+  %exit2 = icmp eq i16 %col2, %n
+  br i1 %exit2, label %b35, label %b11
+b35:
+  br label %ret
+ret:
+  %res = phi i16 [ 1, %b0 ], [ 0, %b5 ], [ %found2, %b35 ]
+  ret i16 %res
+}
+";
+
+#[test]
+fn a_loop_the_pin_makes_a_pointer_of_stays_one_when_end_biased_formulae_exist_in_real_mode() {
+    let after = reduced_real(QUEENS_INNER, &six_registers());
+    assert!(after.contains("phi ptr"), "{after}");
 }

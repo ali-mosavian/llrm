@@ -13,7 +13,7 @@
 //! A `*` marks a total that holds a data-dependent term at its bound; `?`
 //! counts executed instructions the tables do not cover.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -59,6 +59,13 @@ fn trace(
         .expect("timeout runs qemu-m68k");
     let mut pcs = Vec::new();
     for line in BufReader::new(child.stderr.take().unwrap()).lines().map_while(Result::ok) {
+        // a trace that ends in a fault is a short program, not a cheap one
+        assert!(
+            !line.contains("uncaught target signal"),
+            "{} faulted on {cpu} after {} instructions: {line} (CYCLES_QEMU_CPU names the CPU to run on)",
+            exe.display(),
+            pcs.len()
+        );
         let Some(fields) = line.split_once('[').and_then(|(_, rest)| rest.split_once(']')) else { continue };
         if let Some(pc) = fields.0.split('/').nth(1).and_then(|pc| u32::from_str_radix(pc, 16).ok()) {
             pcs.push(pc);
@@ -70,6 +77,80 @@ fn trace(
     }
     child.wait().ok();
     pcs
+}
+
+/// The qemu CPU an executable runs on: the newest of 68020, 68030, 68040 and
+/// 68060 its path names, else the 68000.
+fn qemu_cpu_for(path: &str) -> &'static str {
+    ["68060", "68040", "68030", "68020"]
+        .into_iter()
+        .find(|tag| path.contains(tag))
+        .map_or(
+            "m68000",
+            |tag| match tag {
+                "68060" => "m68060",
+                "68040" => "m68040",
+                "68030" => "m68030",
+                _ => "m68020",
+            },
+        )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::process::Command;
+
+    use super::{qemu_cpu_for, trace};
+
+    /// A 68020 program (`divu.l`) assembled and linked with the m68k binutils;
+    /// `None` without `$GCC_M68K`.
+    fn program_with_divu_l() -> Option<std::path::PathBuf> {
+        let root = std::env::var("GCC_M68K").ok().filter(|root| !root.is_empty())?;
+        let dir = std::env::temp_dir().join(format!("cycles-fault-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (source, object, exe) = (dir.join("p.s"), dir.join("p.o"), dir.join("p.exe"));
+        std::fs::write(
+            &source,
+            ".globl _start\n_start:\n\tmoveq #5,%d0\n\tmoveq #3,%d1\n\tdivu.l %d1,%d0\n\tmoveq #1,%d0\n\tmoveq #0,%d1\n\ttrap #0\n",
+        )
+        .unwrap();
+        let tool = |name: &str| {
+            let mut command = Command::new(format!("{root}/usr/bin/m68k-linux-gnu-{name}"));
+            command.env("LD_LIBRARY_PATH", format!("{root}/usr/lib/x86_64-linux-gnu"));
+            command
+        };
+        assert!(tool("as").args(["-m68020", "-o"]).arg(&object).arg(&source).status().unwrap().success());
+        assert!(tool("ld").arg("-o").arg(&exe).arg(&object).status().unwrap().success());
+        Some(exe)
+    }
+
+    /// The 68020 program on `m68000` faulted at `divu.l`; its trace of three
+    /// instructions was priced as the whole program, with no error.
+    #[test]
+    #[should_panic(expected = "faulted on m68000")]
+    fn a_trace_that_ends_in_a_fault_is_refused() {
+        let Some(exe) = program_with_divu_l() else { panic!("faulted on m68000 (skipped: no GCC_M68K)") };
+        trace(&exe, 1000, "m68000");
+    }
+
+    #[test]
+    fn the_same_program_traces_on_the_cpu_it_needs() {
+        let Some(exe) = program_with_divu_l() else { return };
+        assert!(trace(&exe, 1000, "m68020").len() >= 6);
+    }
+
+    /// A 68040 or 68060 program ran on `m68000`, faulted at its first 68020+
+    /// instruction and was priced for the few it had executed (339
+    /// instructions, 0.1 clock a call), with no error.
+    #[test]
+    fn a_path_naming_a_newer_cpu_runs_on_it() {
+        assert_eq!(qemu_cpu_for("/t/f.68000"), "m68000");
+        assert_eq!(qemu_cpu_for("/t/f.68020"), "m68020");
+        assert_eq!(qemu_cpu_for("/t/f.68030"), "m68030");
+        assert_eq!(qemu_cpu_for("/t/f.68040.exe"), "m68040");
+        assert_eq!(qemu_cpu_for("/t/sf32-68060"), "m68060");
+        assert_eq!(qemu_cpu_for("/t/plain"), "m68000");
+    }
 }
 
 /// `CYCLES_EXE=program CYCLES_FUNCS=a,b,c`: price a whole program (a
@@ -141,15 +222,14 @@ fn price(
         })
         .collect();
     let (cap, cpu) = if harness {
-        let cpu = std::env::var("CYCLES_QEMU_CPU")
-            .unwrap_or_else(|_| if exe.to_string_lossy().contains("68020") { "m68020" } else { "m68000" }.to_owned());
+        let cpu = std::env::var("CYCLES_QEMU_CPU").unwrap_or_else(|_| qemu_cpu_for(&exe.to_string_lossy()).to_owned());
         (200_000_000, cpu)
     } else {
         (CAP, "m68000".to_owned())
     };
     let pcs = trace(exe, cap, &cpu);
     let mut total = Total { insns: 0, clocks: vec![0; models.len()], partial: false, unknown: 0 };
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = llrm_support::hash::HashSet::default();
     // CYCLES_LISTING=1: each distinct executed instruction, its count and
     // clocks
     let mut counts: std::collections::BTreeMap<u32, usize> = std::collections::BTreeMap::new();
@@ -246,10 +326,35 @@ fn assembled(
     Some(std::fs::read(raw).unwrap())
 }
 
+/// The run's directory, deleted when the run ends however it ends. Not the
+/// shared `scratch` module: `matrix` includes this file as a module of its own.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new() -> Scratch {
+        let dir = std::env::temp_dir().join(format!("llrm-m68k-cycles-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        Scratch(dir)
+    }
+}
+
+impl std::ops::Deref for Scratch {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0).ok();
+    }
+}
+
 fn main() {
     let gcc = PathBuf::from(std::env::var("GCC_M68K").expect("GCC_M68K: the unpacked m68k binutils root"));
-    let dir = std::env::temp_dir().join(format!("llrm-m68k-cycles-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new();
     let models = models();
     if std::env::args().nth(1).as_deref() == Some("--exe") {
         let calls: f64 = std::env::var("CYCLES_CALLS").ok().and_then(|n| n.parse().ok()).unwrap_or(3000.0);
@@ -346,5 +451,4 @@ fn main() {
         }
         println!("| {name} | {} |", cells.join(" | "));
     }
-    std::fs::remove_dir_all(&dir).ok();
 }

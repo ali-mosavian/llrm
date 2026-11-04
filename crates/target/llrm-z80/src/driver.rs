@@ -96,19 +96,12 @@ pub fn program(
     if request.level != Level::O0 {
         let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
         let mut options = request.level.options();
-        // Bytes over speed on an 8-bit target: no unrolling (the 6502's
-        // stand-in for the override table).
-        options.unroll = false;
-        options.loop_unrolling = false;
         // No zero- or sign-extending load: the compare of a loaded byte stays a
         // byte compare (`cp #255`), not a word compare of its extension.
         options.extload = false;
         // The runtime's `strlen` (`cpir`): LoopIdiomRecognize may form a call.
-        options.library = vec![llrm_mir::libfunc::Routine {
-            standard: "strlen",
-            symbol: "_strlen".to_owned(),
-            calling_convention: 0,
-        }];
+        // and `memcmp` (SDCC's libc has no `bcmp`).
+        options.library = llrm_mir::libfunc::Routine::stated(["strlen", "memcmp"], |name| format!("_{name}"), 0);
         for flag in &request.passes {
             apply_pass_flag(&mut options, flag);
         }
@@ -124,6 +117,15 @@ pub fn selections(
     text: &str,
     request: &Request,
 ) -> Result<Vec<(String, Result<Selection, String>)>, String> {
+    Ok(selections_both(text, request)?.into_iter().map(|(name, source, _)| (name, source)).collect())
+}
+
+/// [`selections`] with the DAG scheduled by `Source` and again by `ILP`
+/// (DEVIATE Z80S1, in `dagisel/pipeline.rs`): the mid-end runs once.
+pub fn selections_both(
+    text: &str,
+    request: &Request,
+) -> Result<Vec<(String, Result<Selection, String>, Result<Selection, String>)>, String> {
     let mut program = program(text, request)?;
     program.modules.iter_mut().for_each(crate::prepare::split_phi_edges);
     let module = &program.modules[0];
@@ -136,8 +138,14 @@ pub fn selections(
     Ok(names
         .into_iter()
         .map(|name| {
-            let selected = select_function_with(module, &name, request.cpu, request.level != Level::O0);
-            (name, selected)
+            let select = |ilp: bool| {
+                crate::dagisel::pipeline::ILP.with(|one| one.set(ilp));
+                let one = select_function_with(module, &name, request.cpu, request.level != Level::O0);
+                crate::dagisel::pipeline::ILP.with(|one| one.set(false));
+                one
+            };
+            let (source, ilp) = (select(false), select(true));
+            (name, source, ilp)
         })
         .collect())
 }
@@ -186,16 +194,43 @@ impl llrm_mir::target::Machine for Z80Machine {
     }
 }
 
+thread_local! {
+    /// Parses of a module's text for its source file since the last
+    /// [`take_source_parses`].
+    static SOURCE_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The parses made by [`source_of`] and [`sources_of`] on this thread since
+/// the last call.
+pub fn take_source_parses() -> usize {
+    SOURCE_PARSES.with(|one| one.replace(0))
+}
+
 /// The source file of the unit's `!DICompileUnit` and the line function `name`
 /// starts at (its `!DISubprogram`'s `scopeLine`), if `text` has them.
 pub fn source_of(
     text: &str,
     name: &str,
 ) -> Option<(String, Option<u32>)> {
+    SOURCE_PARSES.with(|one| one.set(one.get() + 1));
     let module = llrm_mir::parse::module(&without_triple(text)).ok()?;
     let (file, _) = llrm_mir::dbgimport::unit_file(&module)?;
     let line = module.named(name).and_then(|id| module.subprogram_line(module.global(id).function()?));
     Some((file, line))
+}
+
+/// [`source_of`] for every function of the module, from one parse.
+pub fn sources_of(text: &str) -> llrm_support::hash::HashMap<String, (String, Option<u32>)> {
+    SOURCE_PARSES.with(|one| one.set(one.get() + 1));
+    let mut out = llrm_support::hash::HashMap::default();
+    let Ok(module) = llrm_mir::parse::module(&without_triple(text)) else { return out };
+    let Some((file, _)) = llrm_mir::dbgimport::unit_file(&module) else { return out };
+    for global in &module.globals {
+        let Some(name) = global.name.as_deref() else { continue };
+        let Some(function) = global.function() else { continue };
+        out.insert(name.to_owned(), (file.clone(), module.subprogram_line(function)));
+    }
+    out
 }
 
 /// SDCC's size and spelling of a debug type, as the `.adb` writes it: the class

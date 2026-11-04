@@ -295,6 +295,18 @@ pub struct UnrollingPreferences {
     pub unroll_and_jam_inner_loop_threshold: u32,
 }
 
+/// `TTI::MemCmpExpansionOptions`.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MemCmpExpansionOptions {
+    /// Load sizes in bytes, largest first.
+    pub load_sizes: Vec<u32>,
+    pub max_num_loads: u32,
+    pub num_loads_per_block: u32,
+    pub allow_overlapping_loads: bool,
+    /// Sizes a run of loads may be merged into (three-way compares only).
+    pub allowed_tail_expansions: Vec<u32>,
+}
+
 /// The target a cost is for.
 pub trait Tti {
     /// The implementation's name, for what reports which target priced a
@@ -351,6 +363,22 @@ pub trait Tti {
     /// inline cost did not fold, against the call and the pushes of its
     /// arguments (SZ1). The pin's `OptSizeThreshold` 50 allows growth.
     fn opt_size_inline_by_code_size(&self) -> bool {
+        false
+    }
+
+    /// What a byte of growth is worth, in thousandths of a clock, to a speed
+    /// caller's inline (D11 at speed): the growth is refused when it costs
+    /// more than the call's latency saves, weighted by the site's frequency.
+    /// 0: the pin's threshold alone.
+    fn speed_inline_milliclocks_per_byte(&self) -> i64 {
+        0
+    }
+
+    /// Whether a size build's loop rotation copies a header only when the copy
+    /// is no bigger than the branches the rotation removes: the loop-closing
+    /// jump and the header's own exit test, in `CodeSize`. False: the pass's
+    /// header limit alone.
+    fn rotation_header_priced_at_size(&self) -> bool {
         false
     }
 
@@ -414,8 +442,8 @@ pub trait Tti {
     }
 
     /// `getSchedModel().LoopMicroOpBufferSize`: the micro-ops the target's loop
-    /// buffer holds; 0 where its scheduling model has none (T11: only the
-    /// models of the cpus the plan page pins are known, and none has one).
+    /// buffer holds; 0 where its scheduling model has none (X86: 28 for the
+    /// `SandyBridgeModel` cpus; the others' models are not known here).
     fn loop_micro_op_buffer_size(&self) -> u32 {
         0
     }
@@ -428,6 +456,11 @@ pub trait Tti {
 
     /// `Tuning::multiply_by_clocks`.
     fn multiply_by_clocks(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::price_pin_multiplies`.
+    fn price_pin_multiplies(&self) -> bool {
         false
     }
 
@@ -607,6 +640,29 @@ pub trait Tti {
         false
     }
 
+    /// `enableMemCmpExpansion(OptSize, IsZeroCmp)`: how a `memcmp` may be
+    /// expanded to loads and compares; none (the base class) leaves the call.
+    fn enable_mem_cmp_expansion(
+        &self,
+        opt_size: bool,
+        is_zero_cmp: bool,
+    ) -> Option<MemCmpExpansionOptions> {
+        let _ = (opt_size, is_zero_cmp);
+        None
+    }
+
+    /// `allowsMisalignedMemoryAccesses` of an `bits`-wide integer access in
+    /// `address_space` at `align` bytes. The base class has none.
+    fn allows_misaligned_memory_accesses(
+        &self,
+        bits: u32,
+        address_space: u32,
+        align: u64,
+    ) -> bool {
+        let _ = (bits, address_space, align);
+        false
+    }
+
     /// `isLegalAddressingMode`: `base_gv + base_offset + base_reg + scale *
     /// index`.
     fn is_legal_addressing_mode(
@@ -692,6 +748,44 @@ pub trait Tti {
         } else {
             Cost::INVALID
         }
+    }
+
+    /// `getIntImmCodeSizeCost`: the code size of the constant at operand
+    /// `index` of an `op`; the base class has none.
+    fn int_imm_code_size_cost(
+        &self,
+        op: ImmUser,
+        index: u32,
+        imm: i128,
+        bits: u32,
+    ) -> Cost {
+        let _ = (op, index, imm, bits);
+        Cost::FREE
+    }
+
+    /// `getIntImmCostIntrin`: the constant at operand `index` of a call to the
+    /// intrinsic `name`; the base class makes it free.
+    fn int_imm_cost_intrin(
+        &self,
+        name: &str,
+        index: u32,
+        imm: i128,
+        bits: u32,
+    ) -> Cost {
+        let _ = (name, index, imm, bits);
+        Cost::FREE
+    }
+
+    /// `preferToKeepConstantsAttached` (`BasicTTIImpl`): a divide or remainder
+    /// by a constant keeps it unless `isIntDivCheap`, which the base class
+    /// says it is not. `min_size`: the function is `minsize`.
+    fn prefer_to_keep_constants_attached(
+        &self,
+        div_rem_by_constant: bool,
+        min_size: bool,
+    ) -> bool {
+        let _ = min_size;
+        div_rem_by_constant
     }
 
     /// `TargetTransformInfoImplBase::isLegalAddImmediate`: none.
@@ -843,6 +937,19 @@ pub trait Tti {
         8
     }
 
+    /// The registers LSR keeps back from `number_of_gpr_registers` when it
+    /// also counts what the loop keeps live (DEVIATE LU3c); the pin's one.
+    fn lsr_reserved_registers(&self) -> u32 {
+        1
+    }
+
+    /// DEVIATE LU12: whether the adds of a use whose fixups all lie after the
+    /// loop are rated as run once, not every trip (the pin rates them every
+    /// trip). Off: they cost the loop an add each, as in the pin.
+    fn lsr_exit_use_adds_run_once(&self) -> bool {
+        false
+    }
+
     /// Whether a stack slot's address is a displacement off the frame register
     /// in an addressing mode, so as the base of an address it costs no
     /// register of its own.
@@ -981,6 +1088,16 @@ pub trait Tti {
             ty,
             Ty::Int(8 | 16 | 32) | Ty::Float | Ty::Double | Ty::Pointer
         )
+    }
+
+    /// `haveFastSqrt`: a legal `FSQRT` on `ty`
+    /// ([BasicTTIImpl.h:674](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L674)).
+    /// Default: none, for a target without an FPU or a sqrt instruction.
+    fn have_fast_sqrt(
+        &self,
+        _ty: Ty,
+    ) -> bool {
+        false
     }
 
     /// `shouldBuildLookupTables`: whether the target jumps through a table

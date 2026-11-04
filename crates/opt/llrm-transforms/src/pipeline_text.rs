@@ -132,7 +132,12 @@ fn add(
         ("loop-reduce", None) => manager.add(crate::lsr_pass::LoopStrengthReduce { size: false }),
         ("indvars", None) => manager.add(crate::indvars::IndVars { lftr: true, size: false }),
         ("indvars", Some("no-lftr")) => manager.add(crate::indvars::IndVars { lftr: false, size: false }),
-        ("loop-rotate", None) => manager.add(crate::looprotate::LoopRotate { duplicate_headers: true, size: false }),
+        ("loop-rotate", None) => {
+            manager.add(crate::looprotate::LoopRotate { duplicate_headers: true, size: false, check_exit_count: false })
+        }
+        ("loop-rotate", Some("header-duplication;no-prepare-for-lto;check-exit-count")) => {
+            manager.add(crate::looprotate::LoopRotate { duplicate_headers: true, size: false, check_exit_count: true })
+        }
         ("loop-deletion", None) => manager.add(crate::loopdeletion::LoopDeletion),
         ("loop-simplify", None) => manager.add(crate::loopsimplify::LoopSimplify),
         ("loop-instsimplify", None) => manager.add(crate::loopinstsimplify::LoopInstSimplify),

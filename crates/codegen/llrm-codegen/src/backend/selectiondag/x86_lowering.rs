@@ -145,6 +145,12 @@ pub struct X86Lowering<'a> {
     /// [promote]:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L64277
     pub i16_mul_chains: bool,
+    /// `visitSIGN_EXTEND_INREG`'s `(sext_inreg (extload x))` is `(sextload x)`
+    /// (`movsx r, [m]`, not a load, `movsx`, `movsxd`). On for the x86 targets
+    /// (the 2026-11-03 A/B at m16, m32 and m64 has no larger cell from it).
+    pub sext_load: bool,
+    /// `X86TargetLowering::isZExtFree(i32, i64)`: `Subtarget.is64Bit()`.
+    pub zext_free: bool,
     /// What prices a constant multiply that `combineMul` leaves an `imul`
     /// (DEVIATE SD446); none keeps the pin's `imul`.
     pub profile: Option<MulPricing<'a>>,
@@ -161,9 +167,30 @@ pub struct MulPricing<'a> {
     pub milliclocks_per_byte: i64,
     /// `Tuning::multiply_by_clocks`: the fewest clocks, no byte term.
     pub by_clocks: bool,
+    /// `Tuning::price_pin_multiplies`: the pin's decompositions are priced
+    /// too, and a tie keeps the `imul`.
+    pub price_pin: bool,
 }
 
 impl CombineHooks for X86Lowering<'_> {
+    /// `foldBinOpIntoSelect`, `visitXOR`'s `(xor (and x, y), y)` and `SimplifySetCC`'s
+    /// GE/LE canonicalization: the pin runs them on x86. Judged on `bintree`, `jpeg_*`
+    /// and `particle` (m16 and C, `-Os`/`-O2`): fewer bytes or clocks, none worse. The
+    /// other default-off combines either changed nothing there or cost a byte
+    /// (`rebuild_brcond_condition`, `fold_mul_of_add_with_constant`) and stay off.
+    /// DEVIATE: the remaining pin combines stay off for x86. Exit 2026-12-01.
+    fn fold_bin_op_into_select(&self) -> bool {
+        true
+    }
+
+    fn fold_xor_of_and_with_mask(&self) -> bool {
+        true
+    }
+
+    fn canonicalize_ge_le(&self) -> bool {
+        true
+    }
+
     /// Where `i16` is native (`i16_mul_chains`: m16) a dword's halves are the
     /// registers it is returned and passed in.
     fn split_dword_loads(&self) -> bool {
@@ -172,6 +199,36 @@ impl CombineHooks for X86Lowering<'_> {
 
     fn pack_word_pairs(&self) -> bool {
         true
+    }
+
+    fn fold_sext_in_reg_of_load(&self) -> bool {
+        self.sext_load
+    }
+
+    /// `X86TargetLowering::isTruncateFree` (any narrowing of integers) and
+    /// `isZExtFree` (i32 to i64 on x86-64).
+    fn free_narrowing(
+        &self,
+        wide: EVT,
+        narrow: EVT,
+    ) -> bool {
+        self.zext_free && wide == EVT::I64 && narrow == EVT::I32
+    }
+
+    /// `X86TargetLowering::isNarrowingProfitable`.
+    fn narrowing_profitable(
+        &self,
+        wide: EVT,
+        narrow: EVT,
+    ) -> bool {
+        !(wide == EVT::I32 && narrow == EVT::I16)
+    }
+
+    /// DEVIATE: the `ADD`/`SUB`/`MUL` case of `SimplifyDemandedBits` runs where
+    /// the target narrows (it carries `ShrinkDemandedOp`); the 16 and 32-bit
+    /// targets are judged later. Exit 2026-11-20.
+    fn simplify_demanded_add_sub_mul(&self) -> bool {
+        self.zext_free
     }
 
     fn is_compare_with_flags(
@@ -244,6 +301,7 @@ impl CombineHooks for X86Lowering<'_> {
         op: ISD,
     ) -> bool {
         op == ISD::Mul
+            || op == ISD::SetCC
             || op == ISD::Add
             || op == ISD::Sub
             || op == x86isd::ADD
@@ -264,6 +322,7 @@ impl CombineHooks for X86Lowering<'_> {
     ) -> Option<SDValue> {
         match dag.opcode(node) {
             ISD::Mul => combine_mul(dag, node, level, self.min_size, self.i16_mul_chains, self.profile),
+            ISD::SetCC => combine_integer_setcc(dag, node, level),
             ISD::Add => combine_add(dag, node),
             ISD::Sub => combine_sub(dag, node),
             x86isd::ADD | x86isd::SUB => combine_x86_add_sub(dag, node),
@@ -1103,6 +1162,44 @@ fn check_bool_test(
     Some((dag.operand(test, 1), if opposite { inner ^ 1 } else { inner }))
 }
 
+/// `combineSetCC` ([L58770][pin]): `cmpeq(trunc(x), C)` is `cmpeq(x, C)` when
+/// the upper bits of `x` are zero, in the legal type `x` has: a `zeroext`
+/// `i16` argument is compared as the register it arrived in (`cmpl $5, %edi`,
+/// not `cmpw`, which takes a 66h prefix). Only the equality forms; the pin
+/// leaves `ult` and `ugt` at the narrow type.
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L58770-L58782
+fn combine_integer_setcc(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+    level: CombineLevel,
+) -> Option<SDValue> {
+    let NodeData::CondCode(cond) = dag.node(dag.operand(node, 2)).data else { return None };
+    let (lhs, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
+    if !matches!(cond, CondCode::SetEq | CondCode::SetNe)
+        || level == CombineLevel::BeforeLegalizeTypes
+        || dag.opcode(lhs) != ISD::Truncate
+        || dag.constant(rhs).is_none()
+    {
+        return None;
+    }
+    let source = dag.operand(lhs, 0);
+    let (source_vt, op_vt) = (dag.value_type(source), dag.value_type(lhs));
+    // A type the target holds in a register: not a pair (m16's dword).
+    let legal =
+        source_vt.size_in_bits() >= 32 && source_vt.size_in_bits() <= dag.config().pointer.size_in_bits().max(32);
+    if !legal {
+        return None;
+    }
+    let upper = super::fold::mask(source_vt.size_in_bits()) & !super::fold::mask(op_vt.size_in_bits());
+    if !super::known_bits::masked_value_is_zero(dag, source, upper) {
+        return None;
+    }
+    let constant = dag.get_zext_or_trunc(rhs, source_vt);
+    Some(dag.get_setcc(dag.value_type(node), source, constant, cond))
+}
+
 /// `combineX86SetCC`: a `setcc` of a boolean test reads the inner flags.
 fn combine_setcc(
     dag: &mut SelectionDAG,
@@ -1425,7 +1522,7 @@ fn combine_cmov(
 /// `getGlobalWrapperKind`: a symbol is addressed from `%rip` in 64-bit
 /// position-independent code (small code model), the absolute `Wrapper`
 /// elsewhere.
-fn wrapper_kind(
+pub(super) fn wrapper_kind(
     dag: &SelectionDAG,
     vt: EVT,
 ) -> ISD {
@@ -1961,6 +2058,21 @@ fn combine_mul(
         let product = mul_imm(dag, x, abs);
         return Some(negate(dag, product));
     }
+    // DEVIATE SD447: where the target prices the pin's decompositions, the
+    // sheet's chain decides alone: the pin's cases (`lea` pairs, `shl; sub`)
+    // cost an instruction and bytes the `imul` does not, and a tie keeps it.
+    // The pin: <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L51191>.
+    // A product `{3,5,9} << {1,2,3}` summed into an `add` keeps the pin's
+    // chain: its last step folds into the `add` as a scaled `lea`, which the
+    // sheet does not price.
+    // Exit 2026-11-20. Owner llrm-target-x86-m64.
+    let summed = signed > 0
+        && [3u128, 5, 9].iter().any(|base| abs % base == 0 && matches!(abs / base, 2 | 4 | 8))
+        && dag.has_one_use(node.node)
+        && dag.users(node).next().is_some_and(|user| dag.opcode(SDValue { node: user, res: 0 }) == ISD::Add);
+    if let Some(pricing) = profile.filter(|pricing| pricing.price_pin && !summed) {
+        return priced_chain(dag, x, signed as i64, vt, pricing);
+    }
     let (mut first, mut second) = (0u128, 0u128);
     for divisor in [9u128, 5, 3] {
         if abs % divisor == 0 {
@@ -2034,11 +2146,11 @@ fn priced_chain(
 ) -> Option<SDValue> {
     use crate::backend::arithmetic;
     let width = if vt == EVT::I16 { 2 } else { 4 };
-    let MulPricing { cpu, arch, freq, milliclocks_per_byte, by_clocks } = pricing;
+    let MulPricing { cpu, arch, freq, milliclocks_per_byte, by_clocks, price_pin } = pricing;
     let chain = if by_clocks {
         arithmetic::chain_by_clocks(c, width, cpu)
     } else {
-        arithmetic::chain_at_speed(c, width, cpu, arch, freq, milliclocks_per_byte)
+        arithmetic::priced_chain_at_speed(c, width, cpu, arch, freq, milliclocks_per_byte, price_pin)
     }
     .ok()??;
     let shift = |dag: &mut SelectionDAG, value: SDValue, by: i64| {

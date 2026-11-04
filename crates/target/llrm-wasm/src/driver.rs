@@ -2,7 +2,7 @@
 //! functions of a module, one after another.
 
 use crate::Width;
-use crate::dag::{Options, compile_function};
+use crate::dag::{ModuleFacts, Options, compile_function_with};
 use crate::print;
 
 /// The width `-mtriple=` names.
@@ -60,7 +60,8 @@ impl Level {
             Self::Os => MidEnd::size(),
             Self::Oz => MidEnd::min_size(),
         };
-        MidEnd { lower_switches: false, ..options }
+        // The DAG's `mergeConsecutiveStores` widens the stores, as in the pin.
+        MidEnd { lower_switches: false, merge_stores: false, ..options }
     }
 }
 
@@ -79,7 +80,7 @@ fn optimized(
     let options = if std::env::var_os("LLRM_WASM_BACKEND_ONLY").is_some() {
         MidEnd::none()
     } else {
-        MidEnd { library: Vec::new(), ..level.mid_end() }
+        MidEnd { library: c_library(), ..level.mid_end() }
     };
     // `LLRM_WASM_DUMP=DIR`: every mid-end step that changed a body, written to
     // DIR.
@@ -159,12 +160,14 @@ pub fn assembly(
     let module = prepared(text, width, options)?;
     let mut out = String::new();
     let mut labels = print::Labels::default();
+    let facts = ModuleFacts::of(&module);
     for (_, global, function) in module.functions() {
         if function.is_declaration() {
             continue;
         }
         let name = global.name.owned().ok_or("an unnamed function")?;
-        let f = compile_function(&module, &name, width, options).map_err(|why| format!("@{name}: {why}"))?;
+        let f =
+            compile_function_with(&module, &name, width, options, &facts).map_err(|why| format!("@{name}: {why}"))?;
         out.push_str(&print::function_in(&f, &mut labels));
     }
     Ok(out)
@@ -213,13 +216,15 @@ fn object_of(
     let mut functions = Vec::new();
     // `EmitTargetFeatures` reads the subtarget of the last function compiled.
     let mut features = crate::features::Features::default();
+    let facts = ModuleFacts::of(module);
     for (_, global, function) in module.functions() {
         if function.is_declaration() {
             continue;
         }
         let name = global.name.owned().ok_or("an unnamed function")?;
         features = crate::features::Features::of(function).map_err(|why| format!("@{name}: {why}"))?;
-        let f = compile_function(module, &name, width, options).map_err(|why| format!("@{name}: {why}"))?;
+        let f =
+            compile_function_with(module, &name, width, options, &facts).map_err(|why| format!("@{name}: {why}"))?;
         functions.push(crate::object::encode_function(&f));
     }
     if options.exception_model == crate::dag::ExceptionModel::Wasm {
@@ -349,4 +354,10 @@ fn data(
         });
     }
     Ok(out)
+}
+
+/// The compare routines of the platform's C library, by their IR names:
+/// what `SimplifyLibCalls` may form.
+fn c_library() -> Vec<llrm_mir::libfunc::Routine> {
+    llrm_mir::libfunc::Routine::stated(llrm_mir::libfunc::HOSTED_COMPARE, str::to_owned, 0)
 }
