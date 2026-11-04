@@ -1407,6 +1407,7 @@ fn test_instsimplify_closes_the_function_pipeline_and_its_slot_is_translated() {
             "licm@1508",
             "instsimplify@1662",
             "divrempairs@1667",
+            "expandmemcmp@1673",
             "tailrec@1677",
             "simplifycfg@1682"
         ]
@@ -2235,6 +2236,7 @@ fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
             "licm@1508",
             "instsimplify@1662",
             "divrempairs@1667",
+            "expandmemcmp@1673",
             "tailrec@1677",
             "simplifycfg@1682"
         ]

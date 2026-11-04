@@ -295,6 +295,18 @@ pub struct UnrollingPreferences {
     pub unroll_and_jam_inner_loop_threshold: u32,
 }
 
+/// `TTI::MemCmpExpansionOptions`.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MemCmpExpansionOptions {
+    /// Load sizes in bytes, largest first.
+    pub load_sizes: Vec<u32>,
+    pub max_num_loads: u32,
+    pub num_loads_per_block: u32,
+    pub allow_overlapping_loads: bool,
+    /// Sizes a run of loads may be merged into (three-way compares only).
+    pub allowed_tail_expansions: Vec<u32>,
+}
+
 /// The target a cost is for.
 pub trait Tti {
     /// The implementation's name, for what reports which target priced a
@@ -625,6 +637,29 @@ pub trait Tti {
         signed: bool,
     ) -> bool {
         let _ = (bits, signed);
+        false
+    }
+
+    /// `enableMemCmpExpansion(OptSize, IsZeroCmp)`: how a `memcmp` may be
+    /// expanded to loads and compares; none (the base class) leaves the call.
+    fn enable_mem_cmp_expansion(
+        &self,
+        opt_size: bool,
+        is_zero_cmp: bool,
+    ) -> Option<MemCmpExpansionOptions> {
+        let _ = (opt_size, is_zero_cmp);
+        None
+    }
+
+    /// `allowsMisalignedMemoryAccesses` of an `bits`-wide integer access in
+    /// `address_space` at `align` bytes. The base class has none.
+    fn allows_misaligned_memory_accesses(
+        &self,
+        bits: u32,
+        address_space: u32,
+        align: u64,
+    ) -> bool {
+        let _ = (bits, address_space, align);
         false
     }
 

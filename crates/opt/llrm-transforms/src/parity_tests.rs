@@ -676,6 +676,7 @@ const IMPLEMENTED_BY: &[(&str, &str)] = &[
     ("lower-constant-intrinsics@1597", "lowerconstantintrinsics"),
     ("instsimplify@1662", "instsimplify"),
     ("divrempairs@1667", "divrempairs"),
+    ("expandmemcmp@1673", "expandmemcmp"),
     ("tailrec@1677", "tailcallelim"),
     ("jumpthreading@668", "jumpthreading"),
     ("unroll@753", "loopunrollpass"),
