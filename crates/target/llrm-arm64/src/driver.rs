@@ -294,17 +294,17 @@ pub fn functions_with(
         }
         crate::prepass::run(&mut machine);
         dump("Prepass", &machine);
+        let optsize = function
+            .attrs
+            .iter()
+            .any(
+                |attr| matches!(
+                    attr,
+                    llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
+                ),
+            );
         if !llrm_support::env_flag!("LLRM_ARM64_NO_COMBINE") {
-            let size = function
-                .attrs
-                .iter()
-                .any(
-                    |attr| matches!(
-                        attr,
-                        llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
-                    ),
-                );
-            crate::combine::run(&mut machine, size);
+            crate::combine::run(&mut machine, optsize);
             dump("Combine", &machine);
         }
         crate::flagcse::run(&mut machine);
@@ -317,7 +317,7 @@ pub fn functions_with(
         dump("OrderCopies", &machine);
         // The shared greedy allocator, unless `LLRM_ARM64_LINEAR` asks for the
         // linear scan; a function greedy refuses goes to the scan, reported.
-        let greedy = (!llrm_support::env_flag!("LLRM_ARM64_LINEAR")).then(|| crate::lir_view::allocate(&mut machine));
+        let greedy = (!llrm_support::env_flag!("LLRM_ARM64_LINEAR")).then(|| crate::lir_view::allocate(&mut machine, optsize));
         let allocation = match greedy {
             Some(Ok(allocation)) => allocation,
             Some(Err(why)) => {
