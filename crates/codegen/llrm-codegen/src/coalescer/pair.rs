@@ -45,6 +45,29 @@ pub trait CoalescerEnv {
         false
     }
 
+    /// `getMatchingSuperRegClass(WideRC, NarrowRC, SubIdx)` for the
+    /// sub-register at byte `offset` of the wide value (`SubIdx` other than
+    /// the low one): the registers `wide` may take have, at that offset,
+    /// registers `narrow` may take. A target without such a view answers
+    /// no, and a copy to or from a lane above the low one is left alone.
+    fn can_share_lane(
+        &self,
+        _narrow: u32,
+        _wide: u32,
+        _offset: u32,
+    ) -> bool {
+        false
+    }
+
+    /// `narrow_sub` for the lane at byte `offset` of `wide`.
+    fn narrow_lane(
+        &self,
+        _wide: u32,
+        _narrow_value: u32,
+        _offset: u32,
+    ) {
+    }
+
     /// `narrow` for a partial pair: `narrow_value` was merged into `wide`,
     /// which may now take only the registers whose low part `narrow_value`
     /// could.
@@ -184,12 +207,24 @@ pub fn move_copy(insn: &Insn) -> Option<(Held, Held)> {
     }
 }
 
+/// A copy between two whole values of one width. A lane (an offset above the
+/// low byte) makes a pair partial whatever the widths.
+fn is_whole(
+    dst: Held,
+    src: Held,
+) -> bool {
+    dst.width == src.width && dst.offset == 0 && src.offset == 0
+}
+
 #[derive(Clone, Debug)]
 pub struct CoalescerPair {
     src_reg: u32,
     dst_reg: u32,
     flipped: bool,
     partial: bool,
+    /// The pin's `SrcIdx`/`DstIdx` of a partial pair: the byte of `dst_reg`
+    /// that `src_reg` is. Zero for every pair of the low part.
+    lane_offset: u32,
 }
 
 impl CoalescerPair {
@@ -200,20 +235,39 @@ impl CoalescerPair {
         env: &dyn CoalescerEnv,
     ) -> Option<Self> {
         let (dst, src) = move_copy(copy)?;
-        if dst.width == src.width {
+        if is_whole(dst, src) {
             if !env.can_share(src.value, dst.value) {
                 return None;
             }
-            return Some(Self { src_reg: src.value, dst_reg: dst.value, flipped: false, partial: false });
+            return Some(Self {
+                src_reg: src.value,
+                dst_reg: dst.value,
+                flipped: false,
+                partial: false,
+                lane_offset: 0,
+            });
         }
         // The narrow value is merged into the wide one, whichever way the
         // copy goes.
-        let truncates = dst.width < src.width;
+        let truncates = dst.width < src.width || (dst.width == src.width && src.offset != 0);
         let (narrow, wide) = if truncates { (dst, src) } else { (src, dst) };
-        if narrow.value == wide.value || !env.can_share_sub(narrow.value, wide.value) {
+        if narrow.offset != 0 || narrow.value == wide.value || (wide.offset == 0 && wide.width == narrow.width) {
             return None;
         }
-        Some(Self { src_reg: narrow.value, dst_reg: wide.value, flipped: truncates, partial: true })
+        let shareable = match wide.offset {
+            0 => env.can_share_sub(narrow.value, wide.value),
+            offset => env.can_share_lane(narrow.value, wide.value, offset),
+        };
+        if !shareable {
+            return None;
+        }
+        Some(Self {
+            src_reg: narrow.value,
+            dst_reg: wide.value,
+            flipped: truncates,
+            partial: true,
+            lane_offset: wide.offset,
+        })
     }
 
     /// `isPartial`: one value is a sub-register of the other.
@@ -227,6 +281,11 @@ impl CoalescerPair {
 
     pub fn dst_reg(&self) -> u32 {
         self.dst_reg
+    }
+
+    /// The byte of `dst_reg` that `src_reg` is (`DstIdx`).
+    pub fn lane_offset(&self) -> u32 {
+        self.lane_offset
     }
 
     pub fn is_flipped(&self) -> bool {
@@ -246,7 +305,10 @@ impl CoalescerPair {
         insn: &Insn,
     ) -> bool {
         let Some((dst, src)) = move_copy(insn) else { return false };
-        if self.partial != (dst.width != src.width) {
+        if self.partial == is_whole(dst, src) {
+            return false;
+        }
+        if self.partial && dst.offset.max(src.offset) != self.lane_offset {
             return false;
         }
         let (mut src, mut dst) = (src.value, dst.value);

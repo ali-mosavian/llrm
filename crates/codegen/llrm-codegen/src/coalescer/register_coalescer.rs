@@ -46,7 +46,8 @@ use crate::backend::twoaddr::commutative;
 use crate::liveness::liveintervals::LiveIntervals;
 use crate::liveness::liverange::{LiveInterval, Segment, Vn};
 use crate::liveness::slotindex::InstrKey;
-use crate::model::ir::Loc;
+use crate::model::ir::{Held, Loc};
+use crate::model::lir::Insn;
 use crate::support::hash::{HashMap, HashSet};
 
 /// Whether `one` does nothing but define its values: a copy or a definition
@@ -254,7 +255,9 @@ pub fn join_copy(
     // other. Make sure the resulting register is set to the right register
     // class.
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/RegisterCoalescer.cpp#L2244-L2247
-    if cp.is_partial() {
+    if cp.is_partial() && cp.lane_offset() != 0 {
+        env.narrow_lane(cp.dst_reg(), cp.src_reg(), cp.lane_offset());
+    } else if cp.is_partial() {
         env.narrow_sub(cp.dst_reg(), cp.src_reg());
     } else {
         env.narrow(cp.dst_reg(), cp.src_reg());
@@ -267,7 +270,7 @@ pub fn join_copy(
         current_erased.insert(copy);
     }
     // Rewrite all SrcReg operands to DstReg.
-    update_reg_defs_uses(lis, state, cp.src_reg(), cp.dst_reg(), cp.is_partial());
+    update_reg_defs_uses(lis, state, cp.src_reg(), cp.dst_reg(), cp.is_partial().then_some(cp.lane_offset()));
     // SrcReg is guaranteed to be the register whose live interval that is
     // being merged.
     lis.remove_interval(cp.src_reg());
@@ -337,7 +340,7 @@ fn update_reg_defs_uses(
     state: &mut State,
     src: u32,
     dst: u32,
-    partial: bool,
+    partial: Option<u32>,
 ) {
     lis.rename_input(src, dst);
     state.renames.push((src, dst));
@@ -347,8 +350,12 @@ fn update_reg_defs_uses(
     for key in keys {
         let block = lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(key));
         let old = Arc::clone(lis.instr(key));
-        let mut renamed = old.renamed(&|value| if value == src { dst } else { value });
-        if partial && old.defines.contains(&src) {
+        let at_lane = match partial {
+            Some(offset) if offset != 0 => at_lane(&old, src, offset),
+            _ => Arc::clone(&old),
+        };
+        let mut renamed = at_lane.renamed(&|value| if value == src { dst } else { value });
+        if partial.is_some() && old.defines.contains(&src) {
             let at = lis.indexes.get_instruction_index(key);
             let reads = old.uses.contains(&src) || lis.interval(dst).live_at(&at);
             if reads && !renamed.partial_defs.contains(&dst) {
@@ -361,6 +368,29 @@ fn update_reg_defs_uses(
         lis.rewrite_instr(block, key, renamed);
         state.moved.insert(key, new);
     }
+}
+
+/// `src` is the lane of a wider value at byte `offset` (`SrcIdx`/`DstIdx`):
+/// the operands that name it name that byte, so that renamed to the wide value
+/// they stay the same bytes.
+fn at_lane(
+    insn: &Arc<Insn>,
+    src: u32,
+    offset: u32,
+) -> Arc<Insn> {
+    let Some(what) = &insn.what else { return Arc::clone(insn) };
+    let mut made = (**insn).clone();
+    let shift =
+        |place: &Loc| {
+            llrm_lir::mapped(place, |held| {
+                if held.value == src { Held { offset: held.offset + offset, ..*held } } else { *held }
+            })
+        };
+    let mut moved = what.clone();
+    moved.dests = what.dests.iter().map(shift).collect();
+    moved.sources = what.sources.iter().map(shift).collect();
+    made.what = Some(moved);
+    Arc::new(made)
 }
 
 /// `reMaterializeDef`

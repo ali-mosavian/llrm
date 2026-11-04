@@ -1172,3 +1172,79 @@ fn test_a_copy_from_a_pinned_argument_is_left_to_the_allocator_when_the_target_s
     assert_eq!(join(true), JoinResult::Joined, "premise: the copy joins when the target allows it");
     assert_eq!(join(false), JoinResult::Rejected, "the copy joined the pin");
 }
+
+/// A target with a view of the wide value's high byte.
+struct LaneViews;
+
+impl CoalescerEnv for LaneViews {
+    fn can_share(
+        &self,
+        _a: u32,
+        _b: u32,
+    ) -> bool {
+        true
+    }
+
+    fn can_share_sub(
+        &self,
+        _narrow: u32,
+        _wide: u32,
+    ) -> bool {
+        true
+    }
+
+    fn can_share_lane(
+        &self,
+        _narrow: u32,
+        _wide: u32,
+        _offset: u32,
+    ) -> bool {
+        true
+    }
+}
+
+/// `v2:2@1 := mov v1:1` into the byte above the low one, as `read_at` sees it.
+fn copy_into_lane(offset: u32) -> Arc<Insn> {
+    let what = Semantics {
+        name: Some("mov".into()),
+        dests: vec![Loc::Held(Held { value: 2, width: 1, offset })],
+        sources: vec![held_at(1, 1)],
+        ..Semantics::new(Operation::Move)
+    };
+    Arc::new(Insn::new(0, None, Some(what), vec![2], vec![1]))
+}
+
+/// `v2.hi := mov v1` joined v1 into the low byte of v2 (the wide-copy case
+/// only knew the low part): a byte copied to the high byte of a pair was named
+/// at offset 0, so the pair's two bytes overlapped. The join puts v1's def at
+/// byte 1 of v2.
+#[test]
+fn test_a_copy_into_the_high_byte_joins_the_byte_at_its_offset() {
+    let (narrow, c, r) = (def_at(1, 1), copy_into_lane(1), read_at(2, 2));
+    let was = body(&[(&[narrow, Arc::clone(&c), r], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(1);
+    lis.interval(2);
+    let result = join_copy(&mut lis, &LaneViews, &mut State::new(), &mut Default::default(), c.id());
+    assert_eq!(result, JoinResult::Joined);
+    let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
+    assert_eq!(kept.len(), 2, "the copy is gone");
+    assert_eq!(
+        kept[0].what.as_ref().unwrap().dests,
+        vec![Loc::Held(Held { value: 2, width: 1, offset: 1 })],
+        "the byte def names the high byte of the pair"
+    );
+}
+
+/// A target with no view of the high byte leaves the copy: the pair needs
+/// `can_share_lane`.
+#[test]
+fn test_without_a_view_of_the_high_byte_the_copy_is_left() {
+    let (narrow, c, r) = (def_at(1, 1), copy_into_lane(1), read_at(2, 2));
+    let was = body(&[(&[narrow, Arc::clone(&c), r], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(1);
+    lis.interval(2);
+    let result = join_copy(&mut lis, &SubRegisters, &mut State::new(), &mut Default::default(), c.id());
+    assert_eq!(result, JoinResult::Rejected);
+}
