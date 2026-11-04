@@ -74,9 +74,9 @@ def test_softfloat_6502_clocks_divide_by_the_records_run():
     """The 11-03 6502 softfloat table divided by 256 although add/sub/mul/div ran 361 records, and subtracted a base run that
     failed its records: hand add read 570 for 324. Records come from the vec.inc that ran, and the base run must pass."""
     d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sf-6502")
-    for n in ("run.sh", "hand.sh"):
+    for n in ("run.sh", "hand.sh", "../sf-z80/run.sh"):
         t = open(os.path.join(d, n)).read()
-        assert "/nv" in t and "/256" not in t and "/$N" not in t, n
+        assert "/nv" in t and "/256" not in t and not re.search(r"/\$N\b", t), n
         assert "base run must pass" in t, n
     t = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "tables", "softfloat-6502.tsv")).read()
     head = [l for l in t.splitlines() if l.startswith("#")]

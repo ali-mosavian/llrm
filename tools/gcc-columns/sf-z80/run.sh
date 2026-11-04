@@ -29,6 +29,7 @@ os=$(run s); b=$(echo "$os" | sed -n 's/.*(\([0-9]*\) clks).*/\1/p' | head -1)
 o=$(run r);  c=$(echo "$o"  | sed -n 's/.*(\([0-9]*\) clks).*/\1/p' | head -1)
 fb=$(echo "$os" | sed -n 's/^0xcf00 *\([0-9a-f][0-9a-f]\) *\([0-9a-f][0-9a-f]\).*/\2\1/p' | head -1)
 f2=$(echo "$o"  | sed -n 's/^0xcf00 *\([0-9a-f][0-9a-f]\) *\([0-9a-f][0-9a-f]\).*/\2\1/p' | head -1)
+[ "${fb:-ffff}" = 0000 ] || { echo "base run must pass its records"; exit 1; }
 bytes=$(( $(code 3 r.map | { read h; echo $((16#$h)); }) - $(code 3 s.map | { read h; echo $((16#$h)); }) + 1 ))
 [ "${f2:-ffff}" != 0000 ] && echo "$o" | grep -E "^0xcf1" | head -3
 echo "$d $V $op stubfails=$((0x${fb:-ffff})) fails=$((0x${f2:-ffff})) cycles/call=$(( (c-b)/nv )) lib_bytes=$bytes nv=$nv nan_dropped=$dropped"
