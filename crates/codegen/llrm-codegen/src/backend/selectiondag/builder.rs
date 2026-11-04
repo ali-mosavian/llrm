@@ -1174,6 +1174,8 @@ impl Builder<'_> {
             return Ok(false);
         }
         let vt = self.type_of(result)?;
+        // Under soft float a float result is the integer of its width.
+        let vt = self.soft_float_integer(vt).unwrap_or(vt);
         if vt.is_floating_point() || !vt.is_integer() {
             return Ok(false);
         }
