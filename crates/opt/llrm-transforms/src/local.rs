@@ -1245,8 +1245,12 @@ fn same_node(
     a: MetadataId,
     b: MetadataId,
 ) -> bool {
-    let (x, y) = (&metadata[a.0 as usize], &metadata[b.0 as usize]);
-    a == b || (!x.distinct && !y.distinct && x == y)
+    // A node this pass made is not in `metadata` yet: it is itself and no other.
+    match (metadata.get(a.0 as usize), metadata.get(b.0 as usize)) {
+        _ if a == b => true,
+        (Some(x), Some(y)) => !x.distinct && !y.distinct && x == y,
+        _ => false,
+    }
 }
 
 /// The metadata of `kind` on `inst`.
