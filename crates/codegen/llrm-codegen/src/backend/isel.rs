@@ -8561,7 +8561,7 @@ fn after_definers(
         }
         for &id in ids {
             let (NoteValue::Value(value) | NoteValue::Offset(value, _)) = notes[id as usize].value else { continue };
-            let definer = insns.iter().position(|one| one.at <= at && one.defines.contains(&value));
+            let definer = insns.iter().position(|one| one.at < at && one.defines.contains(&value));
             if let Some(next) = definer.map(|index| index + 1).filter(|&next| next < insns.len()) {
                 stands.entry(next).or_default().push(id);
             }

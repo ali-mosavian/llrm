@@ -3,7 +3,7 @@
 type Q = fixed i32, fraction=9
 type P = fixed i32, fraction=18
 
-const BODIES: i32 = 6
+const BODIES: i16 = 6
 
 var pos_x: Q[6] = [0, 0, 0, 0, 0, 0]
 var pos_y: Q[6] = [0, 0, 0, 0, 0, 0]

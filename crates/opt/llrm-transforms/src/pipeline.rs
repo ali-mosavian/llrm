@@ -1858,6 +1858,7 @@ impl Run {
             sections: Default::default(),
             special: Default::default(),
             global_metadata: Default::default(),
+            ..Module::default()
         };
         std::fs::create_dir_all(file.parent().expect("a file in a directory"))
             .and_then(|()| std::fs::write(file, llrm_mir::print::module(&module)))
