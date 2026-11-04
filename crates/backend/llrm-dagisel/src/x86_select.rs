@@ -97,6 +97,10 @@ pub fn select_node<D: AddrDag>(
                 return Outcome::Selected;
             }
         }
+        x86isd::LLRM_UDIV64BY32 => {
+            crate::x86_divrem::select_udiv64by32(dag, node);
+            return Outcome::Selected;
+        }
         x86isd::LLRM_ZERO128 | x86isd::LLRM_COPY128 => {
             if select_mem128(dag, hooks, node) {
                 return Outcome::Selected;

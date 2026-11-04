@@ -49,3 +49,13 @@ fn a_store_that_may_alias_keeps_the_loads_apart() {
     let text = body("loads_across_a_store_that_may_alias");
     assert!(!text.contains("ldp"), "{text}");
 }
+
+/// Stores to neighbouring offsets of a frame slot, with the other slot's
+/// store between them, were four `str`: `cluster` looked at registers only
+/// and never saw a slot as a base (fpbench's checksum: 12 `str s` where the
+/// pin has 6 `stp`).
+#[test]
+fn interleaved_slot_stores_pair() {
+    let text = body("slot_stores_interleaved");
+    assert_eq!(text.matches("stp s").count(), 2, "{text}");
+}

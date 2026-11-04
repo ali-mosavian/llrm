@@ -156,3 +156,17 @@ pub(crate) fn copy_results<D: AddrDag>(
     }
     dag.remove_dead_node(node);
 }
+
+/// `X86ISD::LLRM_UDIV64BY32 hi, lo, divisor`: `DIV32r` over `EDX:EAX`, the
+/// quotient and the remainder copied out of `EAX` and `EDX`.
+pub fn select_udiv64by32<D: AddrDag>(
+    dag: &mut D,
+    node: u32,
+) {
+    let (hi, lo, divisor) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let entry = dag.entry_node();
+    let low = dag.copy_to_reg(entry, x86::EAX, lo, None);
+    let high = dag.copy_to_reg(entry, x86::EDX, hi, Some(SDValue::new(low, 1)));
+    let div = dag.machine_node(x86::DIV32r, &[mvt::Glue], &[divisor, SDValue::new(high, 1)]);
+    copy_results(dag, node, mvt::i32, x86::EAX, x86::EDX, SDValue::new(div, 0));
+}

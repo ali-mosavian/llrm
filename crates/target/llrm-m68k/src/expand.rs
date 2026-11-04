@@ -505,6 +505,15 @@ pub fn finish_with(
             Kind::Op(name) if extension(name).is_some() => {
                 out.extend(expand_extension(name, &operands, cpu)?);
             }
+            Kind::Op(name) if crate::dagisel::indexed::extension_of(name).is_some() => {
+                let (_, def, count) = crate::dagisel::indexed::printed_as(name).ok_or("a writeback")?;
+                let mut operands = operands;
+                for _ in 0..count {
+                    operands.remove(def);
+                }
+                let plain = crate::dagisel::indexed::extension_of(name).ok_or("an extension writeback")?;
+                out.extend(expand_extension(plain, &operands, cpu)?);
+            }
             Kind::Op(name) if crate::dagisel::indexed::printed_as(name).is_some() => {
                 let (opcode, def, count) = crate::dagisel::indexed::printed_as(name).ok_or("a writeback")?;
                 let mut operands = operands;
@@ -668,11 +677,13 @@ fn expand_extension(
         return Ok(out);
     }
     let load: &'static str = match (from, mode) {
+        (8, 'o') => "MOV8do",
         (8, 'j') => "MOV8dj",
         (8, 'p') => "MOV8dp",
         (8, 'f') => "MOV8df",
         (8, 'q') => "MOV8dq",
         (8, 'k') => "MOV8dk",
+        (16, 'o') => "MOV16do",
         (16, 'j') => "MOV16rj",
         (16, 'p') => "MOV16rp",
         (16, 'f') => "MOV16rf",

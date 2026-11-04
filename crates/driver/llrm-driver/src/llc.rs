@@ -653,6 +653,12 @@ fn options_for(
                 llrm_mir::libfunc::Routine::stated(names, |name| pattern.replace('*', name), number);
         }
     }
+    // The pin's clang IR at 16 bits has the forwarding of a global's store the
+    // write-through `Promote` stands in for at -O1 (lru -29 B, -16 clk at
+    // m16 -O1). Nib and BASIC build their options by `m16_options` and keep it.
+    if bound.target.layout().mode == 16 {
+        options.pipeline.write_through = false;
+    }
     options
 }
 
@@ -675,6 +681,16 @@ mod options_tests {
         let machine = flags.machine(&*bound.target, bound.target.machine()).unwrap();
         let default = flags.convention(&*bound.target).unwrap();
         options_for(&bound, &flags, machine, format, default)
+    }
+
+    /// The write-through `Promote` ran on the pin's clang IR at m16 -O1 and made
+    /// `lru` 29 B larger; the frontends that build for m16 alone (Nib, BASIC)
+    /// have no GVN there and keep it.
+    #[test]
+    fn clang_ir_at_m16_has_no_write_through_and_the_m16_frontends_keep_it() {
+        assert!(!options(&["-m16"], "omf").pipeline.write_through);
+        assert!(options(&["-m32"], "omf").pipeline.write_through);
+        assert!(crate::m16_options(crate::m16_machine()).pipeline.write_through);
     }
 
     /// `llrm-cc --dump DIR` reached the backend as an input file: "cannot
