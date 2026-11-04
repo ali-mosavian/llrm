@@ -298,6 +298,12 @@ impl Tti for AArch64 {
         250_000
     }
 
+    /// The same price for a full unroll at speed (DEVIATE U4, exit
+    /// 2026-11-12).
+    fn speed_unroll_milliclocks_per_byte(&self) -> i64 {
+        250_000
+    }
+
     /// A `sext`/`zext` of a load is the extending load (`ldrsb`, `ldrh`, ...)
     /// when the loaded type is a byte, half or word and both types are one
     /// register (`BasicTTIImplBase::getCastInstrCost`, BasicTTIImpl.h:1297).

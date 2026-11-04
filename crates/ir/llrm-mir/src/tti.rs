@@ -374,6 +374,14 @@ pub trait Tti {
         0
     }
 
+    /// The price of a byte of code growth in milliclocks for a full unroll at
+    /// speed (DEVIATE U4): the copies must save at least this many clocks per
+    /// unit of `CodeSize` they add, in the loop control they remove. 0: the
+    /// pin's threshold alone.
+    fn speed_unroll_milliclocks_per_byte(&self) -> i64 {
+        0
+    }
+
     /// Whether a size build's loop rotation copies a header only when the copy
     /// is no bigger than the branches the rotation removes: the loop-closing
     /// jump and the header's own exit test, in `CodeSize`. False: the pass's

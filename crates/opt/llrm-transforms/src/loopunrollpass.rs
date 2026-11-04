@@ -885,8 +885,34 @@ fn add_cost_recursively(
     }
 }
 
-/// `shouldFullUnroll`.
+/// `shouldFullUnroll`, then DEVIATE U4 (exit 2026-11-12, llrm-target-arm64): at
+/// speed, a target that prices a byte in clocks
+/// ([`Tti::speed_unroll_milliclocks_per_byte`]) keeps the loop when the copies
+/// grow the code by more than the loop control they remove saves (the
+/// iteration's compare, branch and induction update, once per trip). The pin
+/// unrolls to its size threshold alone: a 40-trip loop of one load grew 296 B
+/// to save 2000 instructions.
 fn should_full_unroll(
+    run: &mut Run,
+    analyzed: &Analyzed,
+    lp: Loop,
+    eph: &IdSet<InstId>,
+    full_unroll_trip_count: u32,
+    uce: &UnrollCostEstimator,
+    up: &UnrollingPreferences,
+) -> Option<u32> {
+    let count = should_full_unroll_at_threshold(run, analyzed, lp, eph, full_unroll_trip_count, uce, up)?;
+    let rate = run.tti.speed_unroll_milliclocks_per_byte();
+    if rate == 0 || run.options.opt_size {
+        return Some(count);
+    }
+    let growth = uce.unrolled_loop_size(up, count).saturating_sub(u64::from(uce.rolled_loop_size()));
+    let saved = u64::from(count) * (u64::from(up.be_insns) + 1);
+    (growth.saturating_mul(rate as u64) <= saved.saturating_mul(1000)).then_some(count)
+}
+
+/// `shouldFullUnroll`.
+fn should_full_unroll_at_threshold(
     run: &mut Run,
     analyzed: &Analyzed,
     lp: Loop,
