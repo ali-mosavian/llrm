@@ -879,7 +879,12 @@ struct TableLoad {
     access: TypeId,
     initializer: llrm_mir::context::ConstantId,
     index: Operand,
+    /// The index as the GEP has it, before `m_CastOrSelf`.
+    raw_index: Operand,
     scale: u128,
+    inbounds: bool,
+    /// The global's value type.
+    table_type: TypeId,
 }
 
 fn match_table_load(
@@ -914,13 +919,23 @@ fn match_table_load(
         return None;
     }
     // `m_CastOrSelf`: the index may be extended or truncated.
-    let mut index = gep.operands[1 + at];
+    let raw_index = gep.operands[1 + at];
+    let mut index = raw_index;
     if let Some((_, cast)) = q.instruction_of(index)
         && matches!(cast.opcode, Opcode::Cast(CastOp::ZExt | CastOp::SExt | CastOp::Trunc))
     {
         index = cast.operands[0];
     }
-    Some(TableLoad { result, access, initializer, index, scale: u128::from(scale) })
+    Some(TableLoad {
+        result,
+        access,
+        initializer,
+        index,
+        raw_index,
+        scale: u128::from(scale),
+        inbounds: gep.flags.contains(Flags::INBOUNDS),
+        table_type: variable.ty,
+    })
 }
 
 fn low_mask(bits: u32) -> u128 {
@@ -1301,6 +1316,73 @@ fn select_zero_before_ext(
     select_zero_before(context, function, inst, x, x_ty, x_ty, zero_const, value)
 }
 
+/// `tryToRecognizeTableBasedLowBitsMask`
+/// ([:1255](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L1255)):
+/// a load of `tbl[i]` where `tbl[j] == (1 << j) - 1` is `(1 << i) - 1`.
+fn try_to_recognize_table_based_low_bits_mask(
+    context: &mut llrm_mir::context::Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    inst: InstId,
+    load: &TableLoad,
+) -> bool {
+    // The table is `[K x AccessType]` of integers.
+    let Type::Array { element, count } = context.types.get(load.table_type).clone() else { return false };
+    let Some(bits) = context.types.int_bits(load.access) else { return false };
+    if element != load.access {
+        return false;
+    }
+    let bytes = layout.alloc_size(&context.types, load.access);
+    // The element fits a legal integer, so the shift is cheap and no libcall.
+    if !layout.fits_in_legal_integer(bits) {
+        return false;
+    }
+    // `nusw` keeps the address from wrapping but not inside the object; with
+    // `inbounds` every executed load has 0 <= i < K.
+    if !load.inbounds {
+        return false;
+    }
+    // K <= bits then keeps i < bits: `1 << i` never shifts out of range.
+    if count == 0 || count > u64::from(bits) {
+        return false;
+    }
+    // The index steps by one element, so it is the shift amount.
+    if load.scale != u128::from(bytes) {
+        return false;
+    }
+    // Every element is the low-bits mask of its position.
+    for at in 0..count {
+        let folded = llrm_mir::constantfolding::constant_fold_load_from_const(
+            context,
+            layout,
+            load.initializer,
+            load.access,
+            at * bytes,
+        );
+        let want = if at == 0 { 0 } else { low_mask(at as u32) };
+        if folded.map(|folded| context.get(folded).kind.clone()) != Some(ConstantKind::Int(want)) {
+            return false;
+        }
+    }
+    // `(1 << i) - 1` in the element type.
+    let index = {
+        let index_bits = function.operand_type(context, load.raw_index).and_then(|ty| context.types.int_bits(ty));
+        let Some(index_bits) = index_bits else { return false };
+        zext_or_trunc_before(context, function, inst, load.raw_index, index_bits, load.access)
+    };
+    let one = Operand::Constant(context.int(load.access, 1));
+    let shifted =
+        function.create_instruction(Opcode::Binary(BinaryOp::Shl), load.access, vec![one, index], Flags::default(), None);
+    function.insert(shifted, Position::Before(inst)).expect("a placed instruction");
+    let shifted = Operand::Value(function.instruction(shifted).result.expect("a value"));
+    let mask =
+        function.create_instruction(Opcode::Binary(BinaryOp::Sub), load.access, vec![shifted, one], Flags::default(), None);
+    function.insert(mask, Position::Before(inst)).expect("a placed instruction");
+    let mask = Operand::Value(function.instruction(mask).result.expect("a value"));
+    function.replace_all_uses_with(load.result, mask);
+    true
+}
+
 /// `tryToRecognizeTableBasedPatterns`
 /// ([:1329](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L1329)).
 fn try_to_recognize_table_based_patterns(
@@ -1315,6 +1397,7 @@ fn try_to_recognize_table_based_patterns(
     let Some(load) = match_table_load(context, layout, function, globals, inst) else { return false };
     try_to_recognize_table_based_cttz(context, layout, function, declared, inst, &load)
         || try_to_recognize_table_based_log2(context, layout, function, declared, tti, inst, &load)
+        || try_to_recognize_table_based_low_bits_mask(context, layout, function, inst, &load)
 }
 
 #[cfg(test)]
