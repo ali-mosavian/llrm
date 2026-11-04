@@ -83,8 +83,10 @@ fn a_copy_between_the_two_bytes_of_a_pair_is_kept() {
 fn a_byte_of_a_pair_is_read_in_place() {
     let ir = include_str!("kernels/ir/fill.ll");
     let out = text(ir, "fill", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
-    assert!(out.contains("ld (hl), c") && out.contains("cp a, c"), "{out}");
-    assert!(!out.contains("ld d, c"), "{out}");
+    // the byte is stored and compared from the register it lives in, `c`
+    // or, with the induction variable in `b`, `b`
+    assert!(out.contains("ld (hl), ") && out.contains("cp a, "), "{out}");
+    assert!(!out.contains("ld d, c") && !out.contains("ld d, b"), "{out}");
 }
 
 /// The loaded byte went to a spare pair and the running sum to `hl`, so the
