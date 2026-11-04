@@ -507,7 +507,8 @@ fn an_overwritten_store_goes_past_invariant_end() {
 #[test]
 fn a_walk_past_intrinsics_does_not_ask_each_as_a_read_clobber() {
     const COPIES: usize = 8;
-    let copies: String = (0..COPIES).map(|_| "  call void @llvm.memcpy.p0.p0.i16(ptr @o, ptr @p, i16 2, i1 false)\n").collect();
+    let copies: String =
+        (0..COPIES).map(|_| "  call void @llvm.memcpy.p0.p0.i16(ptr @o, ptr @p, i16 2, i1 false)\n").collect();
     let text = format!(
         "@g = global i16 0\n@o = global i16 0\n@p = global i16 0\n\ndeclare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)\n\ndefine void @f() {{\nb0:\n  store i16 1, ptr @g\n{copies}  store i16 2, ptr @g\n  ret void\n}}\n"
     );
