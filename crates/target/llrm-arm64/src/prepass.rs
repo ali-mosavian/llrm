@@ -190,7 +190,7 @@ fn dominates(
 }
 
 /// How many definitions each virtual register has.
-fn definitions(function: &MFunc) -> HashMap<Reg, usize> {
+pub(crate) fn definitions(function: &MFunc) -> HashMap<Reg, usize> {
     let mut count: HashMap<Reg, usize> = HashMap::default();
     for block in &function.blocks {
         for op in &block.ops {

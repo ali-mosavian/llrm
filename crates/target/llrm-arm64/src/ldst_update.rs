@@ -18,7 +18,7 @@
 //! DEVIATE LU3: a call ends the forward scan; the pin goes on over one when
 //! the base survives it (callee-saved). Exit: none, a missed merge.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use llrm_object::assembler::Cfi;
 
@@ -441,7 +441,7 @@ pub fn fold(
         locs: blocks.iter().map(|block| block.locs.clone()).collect(),
         labels: labels.iter().enumerate().map(|(at, label)| (label.as_str(), at)).collect(),
         exits,
-        live: HashMap::new(),
+        live: HashMap::default(),
     };
     for block in 0..function.blocks.len() {
         merge_in(&mut function, block);
