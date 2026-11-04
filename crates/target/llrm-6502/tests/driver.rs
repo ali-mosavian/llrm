@@ -71,6 +71,20 @@ fn an_index_with_a_known_zero_high_byte_is_the_y_of_the_load() {
     assert!(text.contains(",y") && !text.contains("ldy #0"), "the pointer was added in 16 bits:\n{text}");
 }
 
+/// A pointer a call returns (a and x) was copied into its cell a byte at a
+/// time, and the load through it asked the cell for a pair: "a value needed in
+/// two places". `*p()`, `char *q = malloc(4); *q = 1` and cc65's basic.c
+/// `factor` did not compile at any level. The byte at `val` is 42.
+#[test]
+fn a_pointer_a_call_returns_is_loaded_through() {
+    let ir = module(
+        "@val = global i8 42\ndefine weak noinline ptr @p() {\n  ret ptr @val\n}\n\
+         define i8 @g() {\n  %q = call ptr @p()\n  %v = load i8, ptr %q\n  ret i8 %v\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O1)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "g"), 42, "{text}");
+}
+
 /// `LLRM_6502_ZERO_PAGE` sets the platform's zero page, whichever way the
 /// platform is named. It was read before the row's own `--platform=sim65`,
 /// which put the 26 back: a sweep of 16..26 read flat, 4362 bytes at every

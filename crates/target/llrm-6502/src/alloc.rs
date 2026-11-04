@@ -407,6 +407,9 @@ struct Builder {
     /// Pointers written as two bytes, packed into their pair after the
     /// instruction.
     packs: Vec<(Reg, Reg, Reg)>,
+    /// The half of a pointer cell a byte copy wrote, until the other half
+    /// arrives and the pair is packed (a pointer returned in a and x).
+    halves: HashMap<String, (bool, Reg)>,
     /// Cells defined once, by an immediate load: they fold into the user.
     constants: HashMap<String, i64>,
     /// Cells loaded once from a global and read once by an add, subtract or
@@ -510,6 +513,47 @@ impl Builder {
         unpack.early_clobber = true;
         self.push(unpack);
         Ok((low, high))
+    }
+
+    /// `d := s` for bytes, where either may be a half of a pointer cell: a
+    /// half read is unpacked from the pair, and the two halves written are
+    /// packed into it when the second arrives.
+    fn copy_byte(
+        &mut self,
+        d: &str,
+        s: &str,
+    ) -> Result<(), Unsupported> {
+        let half = |b: &Builder, n: &str| {
+            let word = n.strip_suffix("+1").unwrap_or(n);
+            b.pointers.contains(word).then(|| (word.to_owned(), n.ends_with("+1")))
+        };
+        let source = match half(self, s) {
+            Some((word, high)) => {
+                let (low, top) = self.read_word(&word)?;
+                if high { top } else { low }
+            }
+            None => self.byte(s)?,
+        };
+        let Some((word, high)) = half(self, d) else {
+            self.define(d);
+            let d = self.byte(d)?;
+            self.copy(d, source);
+            return Ok(());
+        };
+        let Some((other_high, other)) = self.halves.remove(&word) else {
+            self.halves.insert(word, (high, source));
+            return Ok(());
+        };
+        if other_high == high {
+            return Err(Unsupported(format!("half of {word} written twice")));
+        }
+        let (low, top) = if high { (other, source) } else { (source, other) };
+        self.define(&word);
+        let pair = self.pointer(&word)?;
+        let mut pack = Inst::new(Kind::Op("PACK"), vec![Operand::Def(pair), Operand::Use(low), Operand::Use(top)]);
+        pack.early_clobber = true;
+        self.push(pack);
+        Ok(())
     }
 
     /// The bytes to write a word through: a pointer cell gets two new bytes
@@ -1228,6 +1272,7 @@ pub fn build_with_places(
         bytes: HashMap::default(),
         pointers: pointer_cells(items, &constants(items)),
         packs: Vec::new(),
+        halves: HashMap::default(),
         constants: constants(items),
         block_of,
         versions: HashMap::default(),
@@ -1259,11 +1304,7 @@ pub fn build_with_places(
         after_inst = true;
         let o = &inst.operands;
         match inst.opcode {
-            op::COPY8 => {
-                b.define(name(&o[0])?);
-                let (d, s) = (b.byte(name(&o[0])?)?, b.byte(name(&o[1])?)?);
-                b.copy(d, s);
-            }
+            op::COPY8 => b.copy_byte(name(&o[0])?, name(&o[1])?)?,
             op::COPY16 => {
                 let (d, src) = (name(&o[0])?, name(&o[1])?);
                 if b.in_pair(d) && b.in_pair(src) {
@@ -1864,6 +1905,9 @@ pub fn build_with_places(
             other => return Err(Unsupported(format!("opcode {other}"))),
         }
         b.flush_packs();
+    }
+    if let Some(word) = b.halves.keys().next() {
+        return Err(Unsupported(format!("one half of {word} written alone")));
     }
     remove_dead(&mut b.function);
     narrow_remainder_calls(&mut b.function);
