@@ -124,7 +124,7 @@ pub fn object(
     name: &str,
     items: &[Item],
 ) -> Result<Object, String> {
-    object_with(name, items, &HashMap::new(), &[])
+    object_with(name, items, &HashMap::default(), &[])
 }
 
 /// [`object`] with the module's globals: `.rodata`, `.data` and `.bss` hold

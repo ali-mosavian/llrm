@@ -522,7 +522,7 @@ pub fn emit(
         saved: HashMap::default(),
     };
     emitter.function.locals.extend(first.locals.iter().copied());
-    let mut place_numbers: HashMap<llrm_codegen::model::lir::SrcLoc, usize> = HashMap::new();
+    let mut place_numbers: HashMap<llrm_codegen::model::lir::SrcLoc, usize> = HashMap::default();
     for one in blocks {
         emitter.dag = &one.dag;
         emitter.values.clear();

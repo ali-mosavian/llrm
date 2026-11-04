@@ -400,7 +400,7 @@ fn read_bytes_through_their_pairs(
     };
     // the values wanted in `a`: some use is a copy into `a` or into such a
     // value
-    let mut in_a = llrm_support::hash::HashSet::<u32>::new();
+    let mut in_a = llrm_support::hash::HashSet::<u32>::default();
     loop {
         let before = in_a.len();
         for inst in function.blocks.iter().flat_map(|block| &block.insts) {
@@ -760,7 +760,7 @@ pub fn sink_copies_to_the_branch(
 /// the branch, so it lived beside the value it replaces and the two could not
 /// share a register (minmax's `lo`: a register more, spilled).
 pub fn sink_copies_before_allocation(function: &mut MFunction) {
-    let mut defs = llrm_support::hash::HashMap::<u32, u32>::new();
+    let mut defs = llrm_support::hash::HashMap::<u32, u32>::default();
     for inst in function.blocks.iter().flat_map(|block| &block.insts) {
         for operand in &inst.operands {
             if let Operand::Def(Reg::Virt(v)) = operand {

@@ -630,7 +630,7 @@ pub fn emit(
     // the frame objects the selector made; the allocas came first, at their
     // index
     emitter.function.locals.extend(selection.locals.iter().enumerate().map(|(at, size)| (at as i32, *size, 1)));
-    let mut place_numbers = HashMap::new();
+    let mut place_numbers = HashMap::default();
     let width_class = |bits: u32| if bits > 8 { Class::Gr16 } else { Class::Gr8 };
     for one in &selection.blocks {
         emitter.dag = &one.dag;

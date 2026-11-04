@@ -195,7 +195,7 @@ pub fn function_items_with_places(
     selection: &Selection,
 ) -> Result<(Vec<Item>, (Vec<String>, Vec<String>), Vec<llrm_codegen::model::lir::SrcLoc>), String> {
     let mut places: Vec<llrm_codegen::model::lir::SrcLoc> = Vec::new();
-    let mut number_of: HashMap<llrm_codegen::model::lir::SrcLoc, u32> = HashMap::new();
+    let mut number_of: HashMap<llrm_codegen::model::lir::SrcLoc, u32> = HashMap::default();
     let blocks = &selection.blocks;
     let (laid_out, fixed) = lay_out_frame(blocks, &selection.locals);
     let mut cells = Cells {
