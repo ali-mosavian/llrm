@@ -22,6 +22,55 @@ pub fn machine_function(
     machine_function_with(ir, name, request, true)
 }
 
+thread_local! {
+    /// Times the mid-end and selection ran since the last
+    /// [`take_selection_runs`].
+    static SELECTION_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The runs of the mid-end and selection on this thread since the last call.
+pub fn take_selection_runs() -> usize {
+    SELECTION_RUNS.with(|one| one.replace(0))
+}
+
+type SelectionKey = (String, Vec<(String, String)>);
+
+type Selections = std::rc::Rc<Vec<(String, Result<crate::dagisel::function::Selection, String>)>>;
+
+thread_local! {
+    /// The module most recently run through the mid-end and selection, with
+    /// what it was run for.
+    static SELECTED: std::cell::RefCell<Option<(String, SelectionKey, Selections)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// [`selections`] of `ir`, kept for the next function of the same module:
+/// every function was run through the whole mid-end and the selection of every
+/// function once for each time it was built (twice, with the return block
+/// copied or kept), so a module of N functions cost N squared.
+fn cached_selections(
+    ir: &str,
+    request: &Request,
+) -> Result<Selections, String> {
+    // everything the result reads: the text, the request, and the LLRM_ and
+    // Z80_ switches of the environment. Compared whole: hashing the text of a
+    // large module for each of its functions was a tenth of the compile.
+    let mut environment: Vec<(String, String)> =
+        std::env::vars().filter(|(name, _)| name.starts_with("LLRM_") || name.starts_with("Z80_")).collect();
+    environment.sort();
+    let key = (format!("{:?}", (request.level, &request.passes, request.debug, request.cpu as u8)), environment);
+    let held = SELECTED.with(|held| {
+        held.borrow().as_ref().filter(|(text, was, _)| text == ir && *was == key).map(|(_, _, one)| one.clone())
+    });
+    if let Some(one) = held {
+        return Ok(one);
+    }
+    SELECTION_RUNS.with(|runs| runs.set(runs.get() + 1));
+    let one = Selections::new(selections(ir, request)?);
+    SELECTED.with(|held| *held.borrow_mut() = Some((ir.to_owned(), key, one.clone())));
+    Ok(one)
+}
+
 /// [`machine_function`], with or without the return blocks copied into their
 /// predecessors.
 fn machine_function_with(
@@ -30,10 +79,9 @@ fn machine_function_with(
     request: &Request,
     duplicate: bool,
 ) -> Result<MFunction, String> {
-    let selected = selections(ir, request)?;
-    let (_, selection) =
-        selected.into_iter().find(|(one, _)| one == name).ok_or_else(|| format!("no function @{name}"))?;
-    let mut function = emit(name, &selection?)?;
+    let selected = cached_selections(ir, request)?;
+    let (_, selection) = selected.iter().find(|(one, _)| one == name).ok_or_else(|| format!("no function @{name}"))?;
+    let mut function = emit(name, selection.as_ref().map_err(Clone::clone)?)?;
     expand_cmov(&mut function)?;
     if duplicate {
         tail_duplicate_returns(&mut function);
@@ -194,6 +242,16 @@ fn allocate(
     }
 }
 
+thread_local! {
+    /// Full allocations run since the last [`take_allocations`].
+    static ALLOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The allocations run on this thread since the last call.
+pub fn take_allocations() -> usize {
+    ALLOCATIONS.with(|one| one.replace(0))
+}
+
 /// One allocation, and whether `strict` held a byte back from `a`.
 fn allocate_once(
     mut function: MFunction,
@@ -207,6 +265,7 @@ fn allocate_once(
     if std::env::var("LLRM_Z80_DUMP").is_ok_and(|one| one == name) {
         dump(&function);
     }
+    ALLOCATIONS.with(|one| one.set(one.get() + 1));
     let (assignment, slots) = allocate_greedy::<Z80Registers>(&mut function, Regs(&REGISTER_INFO), false)?;
     let reads = expand::reads(&function);
     if std::env::var("LLRM_Z80_DUMP_RA").is_ok_and(|one| one == name) {
@@ -1161,7 +1220,17 @@ pub fn lines(
     // move, or costs a copy of the block: the smaller result, then the faster,
     // is kept.
     let copied = compile(true);
-    let kept = compile(false);
+    // Where copying changes nothing (no small return block with an
+    // unconditional predecessor) the two are one function: allocated once.
+    let alike = || {
+        let (one, other) =
+            (machine_function_with(ir, name, request, true), machine_function_with(ir, name, request, false));
+        matches!(
+            (one, other),
+            (Ok(one), Ok(other)) if format!("{one:?}") == format!("{other:?}")
+        )
+    };
+    let kept = if copied.is_ok() && alike() { copied.clone() } else { compile(false) };
     match (copied, kept) {
         (Ok(one), Ok(two)) => Ok(if expand::price(&one) <= expand::price(&two) { one } else { two }),
         (Ok(one), Err(_)) | (Err(_), Ok(one)) => Ok(one),
@@ -1499,8 +1568,13 @@ fn tail_duplicate_returns(function: &mut MFunction) {
         let reaches_unconditionally = |function: &MFunction, p: usize| {
             let last = function.blocks[p].insts.last();
             match last {
+                // a conditional branch ahead of it to the same block keeps the
+                // original alive
                 Some(inst) if inst.barrier => {
-                    matches!(inst.kind, Kind::Op("JP")) && inst.operands == [Operand::Block(id)]
+                    let insts = &function.blocks[p].insts;
+                    matches!(inst.kind, Kind::Op("JP"))
+                        && inst.operands == [Operand::Block(id)]
+                        && !insts[..insts.len() - 1].iter().any(|one| one.operands.contains(&Operand::Block(id)))
                 }
                 // falls through: no branch at all, or a conditional one that
                 // goes elsewhere

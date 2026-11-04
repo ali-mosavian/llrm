@@ -254,92 +254,148 @@ fn a_dword_add_that_keeps_its_source_is_a_lea_at_m64() {
     assert!(listing.lines().any(|line| line.trim().starts_with("lea e") && line.contains("+5]")), "{listing}");
 }
 
-/// `getOptimalMemOpType` gives 16 bytes (`v4i32`) with SSE2: a 16-byte clear
-/// is `xorps` and one 16-byte store (5 B), not two `mov qword [..], 0` (18 B);
-/// nbody O2 was +31 B over the pin on four of them.
+/// A symbol's address made before a call, once more after it ahead of a loop,
+/// is made again there (`DEVIATE CSE4`): sharing keeps it in a callee-saved
+/// register across the call, a push and pop for the one instruction saved
+/// (memcpy_libcall m64 -O2 shares it in the pin, three bytes smaller).
 #[test]
-fn a_16_byte_clear_is_xorps_and_one_16_byte_store_at_m64() {
+fn a_symbol_address_before_a_loop_is_made_again_after_a_call_at_m64() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
-                @g = global [16 x i8] zeroinitializer, align 16\n\
-                declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\n\
-                define void @f() {\n  call void @llvm.memset.p0.i64(ptr @g, i8 0, i64 16, i1 false)\n  ret void\n}\n";
+                @g = global [64 x i8] zeroinitializer\n\
+                declare void @h(ptr)\n\
+                define i32 @f(i64 %n) {\nentry:\n  call void @h(ptr @g)\n  br label %loop\n\
+                loop:\n  %i = phi i64 [ 0, %entry ], [ %j, %loop ]\n  %s = phi i32 [ 0, %entry ], [ %t, %loop ]\n\
+                  %p = getelementptr i8, ptr @g, i64 %i\n  %b = load volatile i8, ptr %p\n  %w = zext i8 %b to i32\n\
+                  %t = add i32 %s, %w\n  %j = add i64 %i, 1\n  %c = icmp ult i64 %j, %n\n  br i1 %c, label %loop, label %done\n\
+                done:\n  call void @h(ptr @g)\n  ret i32 %t\n}\n";
     let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    let has = |start: &str| listing.lines().any(|line| line.trim().starts_with(start));
-    assert!(has("xorps") && has("movaps"), "{listing}");
-    assert!(!listing.contains("qword"), "{listing}");
+    // Each call's argument and the loop's address.
+    let made = listing.lines().filter(|line| line.contains("offset g")).count();
+    assert_eq!(made, 3, "{listing}");
 }
 
-/// A local declared `align 16` sat at `[rsp+4]`: the frame clamped every
-/// alignment to 4 (bintree's array; a 16-byte `movaps` clear of it would fault).
+/// The same symbol address hoisted twice out of a loop stayed two registers
+/// (`mov r14, offset a+32; mov r15, offset a+32`), both callee-saved across the
+/// calls: the pin's MachineLICM makes it once (`EliminateCSE`). scroll m64 -O2
+/// was 56 bytes over the pin with five pushes instead of three. Here the loop
+/// reads through the address, so hoisting it pays.
 #[test]
-fn a_local_declared_align_16_is_16_aligned_at_m64() {
+fn a_symbol_address_hoisted_twice_out_of_a_loop_is_made_once_at_m64() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
-                declare void @use(ptr)\n\
-                define void @f() {\n  %a = alloca [28 x i8], align 16\n  call void @use(ptr %a)\n  ret void\n}\n";
+                @a = global [4096 x i8] zeroinitializer\n\
+                declare void @h()\n\
+                define i32 @f(i64 %n) {\nentry:\n  br label %loop\n\
+                loop:\n  %i = phi i64 [ 0, %entry ], [ %j, %loop ]\n  %s = phi i32 [ 0, %entry ], [ %t, %loop ]\n\
+                  %b1 = getelementptr i8, ptr @a, i64 160\n  %p1 = getelementptr i8, ptr %b1, i64 %i\n\
+                  %v1 = load volatile i8, ptr %p1\n  call void @h()\n\
+                  %b2 = getelementptr i8, ptr @a, i64 160\n  %p2 = getelementptr i8, ptr %b2, i64 %i\n\
+                  %v2 = load volatile i8, ptr %p2\n  %w1 = zext i8 %v1 to i32\n  %w2 = zext i8 %v2 to i32\n\
+                  %u = add i32 %w1, %w2\n  %t = add i32 %s, %u\n\
+                  %j = add i64 %i, 1\n  %c = icmp ult i64 %j, %n\n  br i1 %c, label %loop, label %done\n\
+                done:\n  ret i32 %t\n}\n";
     let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(listing.contains("lea rdi, [rsp]\n"), "{listing}");
+    let made = listing.lines().filter(|line| line.contains("offset a")).count();
+    assert_eq!(made, 1, "{listing}");
 }
 
-/// A 28-byte clear of an `align 16` local used `movaps` at `[rsp+4]`, which
-/// faults; every `movaps` must now sit at a 16-aligned offset from `rsp`.
+/// A symbol address that every use in a call-bearing loop copies into an
+/// argument register was hoisted into a callee-saved register: its push and pop
+/// and a copy per use for the one instruction the address is made with in the
+/// loop. os_find m64 -O2 was 12 bytes over release/next, memory_expansion -Os
+/// 11, histo two instructions more.
 #[test]
-fn a_clear_of_an_align_16_local_never_movaps_a_misaligned_address_at_m64() {
+fn a_symbol_address_only_passed_to_calls_in_a_loop_is_made_in_the_loop_at_m64() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
-                declare void @use(ptr)\n\
-                declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\n\
-                define void @f() {\n  %a = alloca [28 x i8], align 16\n  call void @llvm.memset.p0.i64(ptr %a, i8 0, i64 28, i1 false)\n  call void @use(ptr %a)\n  ret void\n}\n";
+                @a = global [4096 x i8] zeroinitializer\n\
+                declare void @h(ptr, ptr, i64)\n\
+                define void @f(i64 %n) {\nentry:\n  br label %loop\n\
+                loop:\n  %i = phi i64 [ 0, %entry ], [ %j, %loop ]\n  %b = getelementptr i8, ptr @a, i64 160\n\
+                  call void @h(ptr @a, ptr %b, i64 3840)\n  call void @h(ptr %b, ptr @a, i64 3840)\n\
+                  %j = add i64 %i, 1\n  %c = icmp ult i64 %j, %n\n  br i1 %c, label %loop, label %done\n\
+                done:\n  ret void\n}\n";
     let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    let stores: Vec<&str> = listing.lines().map(str::trim).filter(|line| line.starts_with("movaps")).collect();
-    assert!(!stores.is_empty(), "{listing}");
-    for line in stores {
-        let disp = line.split("[rsp").nth(1).and_then(|rest| rest.split(']').next()).unwrap_or("");
-        let disp: i64 = disp.trim_start_matches('+').parse().unwrap_or(0);
-        assert_eq!(disp % 16, 0, "{listing}");
-    }
+    assert!(!listing.lines().any(|line| line.trim().starts_with("push r1")), "{listing}");
+    let loop_start = listing.find("L0_2:").expect("the loop");
+    let made = listing[loop_start..].lines().filter(|line| line.contains("offset a")).count();
+    assert_eq!(made, 4, "{listing}");
 }
 
-/// Tuned for size, a 128-byte clear is `rep stosq` (13 B), not `xorps` and
-/// eight `movaps` (up to 72 B); a 32-byte clear stays two stores. The pin's
-/// store count made it eight `movaps`: pattern_fill -Os +50 B, huffman_decode
-/// +12 B over the `rep stosq` the port had.
+/// A constant used in a loop whose call keeps the caller-saved registers
+/// (a local function's known clobbers) is held in one of them: no callee-saved
+/// register, so hoisting costs nothing. div_constants_ulong m64 -Os made the
+/// divisor in the loop, 32 bytes over release/next.
 #[test]
-fn a_128_byte_clear_at_m64_os_is_rep_stosq_and_a_32_byte_one_is_stores() {
-    let ir = |size: u32| {
-        format!(
+fn a_constant_across_a_call_that_keeps_a_caller_saved_register_is_made_before_the_loop_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @s = internal global i64 1\n\
+                define internal i64 @next() noinline {\n  %v = load i64, ptr @s\n  %w = add i64 %v, 7\n  store i64 %w, ptr @s\n  ret i64 %w\n}\n\
+                define i64 @f(i64 %n) {\nentry:\n  br label %loop\n\
+                loop:\n  %i = phi i64 [ 0, %entry ], [ %j, %loop ]\n  %acc = phi i64 [ 0, %entry ], [ %t, %loop ]\n\
+                  %x = call i64 @next()\n  %q = udiv i64 %x, %n\n  %r = urem i64 %x, 3\n  %t0 = add i64 %acc, %q\n  %t = add i64 %t0, %r\n\
+                  %j = add i64 %i, 1\n  %c = icmp ult i64 %j, %n\n  br i1 %c, label %loop, label %done\n\
+                done:\n  ret i64 %t\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let loop_start = listing.find("L1_2:").expect("the loop");
+    let made = listing[loop_start..].lines().filter(|line| line.trim_end().ends_with(", 3")).count();
+    assert_eq!(made, 0, "{listing}");
+}
+
+/// A symbol address made before a call and again after it, once each, was
+/// made once and kept in a callee-saved register across the call: the push and
+/// pop (two executed instructions) cost more than the one made again
+/// (histo m64 -O2 was two instructions over release/next).
+#[test]
+fn a_symbol_address_made_again_after_a_call_once_is_made_again_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @a = global [4096 x i8] zeroinitializer\n\
+                declare void @h()\n\
+                define void @f(i64 %k, i1 %c) {\nentry:\n  %p = getelementptr i8, ptr @a, i64 %k\n  store volatile i8 0, ptr %p\n\
+                  call void @h()\n  br i1 %c, label %then, label %done\n\
+                then:\n  %q = getelementptr i8, ptr @a, i64 %k\n  store volatile i8 1, ptr %q\n  br label %done\n\
+                done:\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let made = listing.lines().filter(|line| line.contains("offset a")).count();
+    assert_eq!(made, 2, "{listing}");
+}
+
+/// A `zeroext` argument compared for (in)equality with a constant is compared
+/// in the register it arrived in: the pin's `combineSetCC` turns
+/// `cmpeq(trunc(x), C)` into `cmpeq(x, C)` where the upper bits of `x` are
+/// zero. sieve m64 -O2 had `test di, di` (a 66 prefix) where the pin has `test
+/// edi, edi`.
+#[test]
+fn a_zeroext_argument_equality_is_compared_in_its_register_at_m64() {
+    let compare = |ty: &str, param: &str, predicate: &str, constant: i64| {
+        let text = format!(
             "target datalayout = \"@m64-datalayout@\"\n\
              target triple = \"x86_64-unknown-linux-gnu\"\n\
-             @g = global [{size} x i8] zeroinitializer, align 16\n\
-             declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\n\
-             define void @f() optsize {{\n  call void @llvm.memset.p0.i64(ptr @g, i8 0, i64 {size}, i1 false)\n  ret void\n}}\n"
-        )
-    };
-    let listing = |size: u32| {
-        let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), &ir(size), "f").unwrap();
+             define i32 @f({ty} {param} %a) {{\nentry:\n  %c = icmp {predicate} {ty} %a, {constant}\n\
+               br i1 %c, label %t, label %e\nt:\n  ret i32 1\ne:\n  ret i32 2\n}}\n"
+        );
+        let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &text, "f").unwrap();
         llrm_codegen::backend::masm::text(&built).unwrap()
     };
-    let large = listing(128);
-    assert!(large.contains("rep stosq") && !large.contains("movaps"), "{large}");
-    let small = listing(32);
-    assert!(small.contains("xorps") && !small.contains("rep stos"), "{small}");
-}
-
-/// A 16-byte copy of unaligned memory is `movups` load and store.
-#[test]
-fn an_unaligned_16_byte_copy_is_movups_at_m64() {
-    let text = "target datalayout = \"@m64-datalayout@\"\n\
-                target triple = \"x86_64-unknown-linux-gnu\"\n\
-                declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
-                define void @f(ptr %d, ptr %s) {\n  call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 16, i1 false)\n  ret void\n}\n";
-    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
-    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    let count = listing.lines().filter(|line| line.trim().starts_with("movups")).count();
-    assert_eq!(count, 2, "{listing}");
+    for (ty, narrow) in [("i16", "di"), ("i8", "dil")] {
+        let listing = compare(ty, "zeroext", "eq", 5);
+        assert!(listing.contains("cmp edi, 5"), "{ty}: {listing}");
+        assert!(!listing.contains(&format!("cmp {narrow}, 5")), "{ty}: {listing}");
+        // No assertion about the upper bits: the argument is not extended.
+        let plain = compare(ty, "", "eq", 5);
+        assert!(plain.contains(&format!("cmp {narrow}, 5")), "{ty} plain: {plain}");
+    }
+    // The pin leaves the unsigned orders at the narrow type.
+    let listing = compare("i16", "zeroext", "ult", 5);
+    assert!(listing.contains("cmp di, 5"), "{listing}");
 }
 
 /// A byte or word add that keeps its source live was a copy and a narrow add
@@ -2126,12 +2182,10 @@ fn an_unsigned_quadword_conversion_without_cmov_has_one_diamond_and_a_shifted_se
     assert!(!listing.contains("-2147483648"), "{listing}");
 }
 
-/// A 72-byte fill and copy at m64 -Os (`pattern_fill.c`,
+/// A 72-byte zero fill and copy at m64 -Os (`pattern_fill.c`,
 /// `huffman_decode.c`, `idioms.c`): `rep stosq` took its value from EAX where
 /// its form reads RAX, and the assembler had no `stosq`/`movsq`: "a division
-/// operand (RAX) not set by a glued CopyToReg" refused the function. The fill
-/// byte is not zero: a zero fill is `xorps` and 16-byte stores (the pin's
-/// `getOptimalMemOpType`) and no longer reaches `rep stosq`.
+/// operand (RAX) not set by a glued CopyToReg" refused the function.
 #[test]
 fn a_quadword_fill_and_copy_at_m64_are_rep_string_instructions() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
@@ -2140,7 +2194,7 @@ fn a_quadword_fill_and_copy_at_m64_are_rep_string_instructions() {
                 declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\n\
                 declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
                 define void @f(ptr %s) optsize {\n  %b = alloca [72 x i8], align 16\n  %c = alloca [72 x i8], align 16\n\
-                \x20 call void @llvm.memset.p0.i64(ptr align 16 %c, i8 7, i64 72, i1 false)\n\
+                \x20 call void @llvm.memset.p0.i64(ptr align 16 %c, i8 0, i64 72, i1 false)\n\
                 \x20 call void @llvm.memcpy.p0.p0.i64(ptr align 16 %b, ptr align 16 %s, i64 72, i1 false)\n\
                 \x20 call void @use(ptr %b, ptr %c)\n  ret void\n}\n";
     let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
@@ -2765,6 +2819,17 @@ fn a_versioned_windows_triple_is_refused_while_the_target_lacks_its_abi() {
     assert!(why.contains("Win64 calling convention"), "{why}");
 }
 
+/// The pin's clang writes `x86_64-apple-macos11` for the OS that compact unwind
+/// needs (10.6 or later); the lookup knew only `macosx`, so the Mach-O unwind
+/// comparison had to run at the default 10.4, where the pin writes no
+/// `__compact_unwind`.
+#[test]
+fn macos_and_macosx_name_the_same_system() {
+    assert!(crate::same_system("x86_64-apple-macosx", "x86_64-apple-macos11"));
+    assert!(crate::by_triple("x86_64-apple-macos11").is_some());
+    assert!(!crate::same_system("x86_64-apple-macosx", "arm64-apple-macos11"));
+}
+
 /// clang writes `"frame-pointer"="all"` for macOS; a leaf function of ours had
 /// no `push rbp`, so its unwind rows were empty where the pin's state the frame
 /// (16 of 130 functions of the x86-64 Mach-O corpus).
@@ -2814,4 +2879,92 @@ fn an_x86_64_macho_frame_states_no_address_at_its_exit_but_elf_does() {
     // The CIE's initial rows state it once; an exit's rows are a second.
     assert_eq!(def_cfa_rsp_8("x86_64-unknown-linux-gnu", "e"), 2, "control: ELF states the address after the pop");
     assert_eq!(def_cfa_rsp_8("x86_64-apple-macosx", "o"), 1, "Mach-O states none");
+}
+
+/// `getOptimalMemOpType` gives 16 bytes (`v4i32`) with SSE2: a 16-byte clear
+/// is `xorps` and one 16-byte store (5 B), not two `mov qword [..], 0` (18 B);
+/// nbody O2 was +31 B over the pin on four of them.
+#[test]
+fn a_16_byte_clear_is_xorps_and_one_16_byte_store_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @g = global [16 x i8] zeroinitializer, align 16\n\
+                declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\n\
+                define void @f() {\n  call void @llvm.memset.p0.i64(ptr @g, i8 0, i64 16, i1 false)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let has = |start: &str| listing.lines().any(|line| line.trim().starts_with(start));
+    assert!(has("xorps") && has("movaps"), "{listing}");
+    assert!(!listing.contains("qword"), "{listing}");
+}
+
+/// A local declared `align 16` sat at `[rsp+4]`: the frame clamped every
+/// alignment to 4 (bintree's array; a 16-byte `movaps` clear of it would fault).
+#[test]
+fn a_local_declared_align_16_is_16_aligned_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @use(ptr)\n\
+                define void @f() {\n  %a = alloca [28 x i8], align 16\n  call void @use(ptr %a)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("lea rdi, [rsp]\n"), "{listing}");
+}
+
+/// A 28-byte clear of an `align 16` local used `movaps` at `[rsp+4]`, which
+/// faults; every `movaps` must now sit at a 16-aligned offset from `rsp`.
+#[test]
+fn a_clear_of_an_align_16_local_never_movaps_a_misaligned_address_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @use(ptr)\n\
+                declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\n\
+                define void @f() {\n  %a = alloca [28 x i8], align 16\n  call void @llvm.memset.p0.i64(ptr %a, i8 0, i64 28, i1 false)\n  call void @use(ptr %a)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let stores: Vec<&str> = listing.lines().map(str::trim).filter(|line| line.starts_with("movaps")).collect();
+    assert!(!stores.is_empty(), "{listing}");
+    for line in stores {
+        let disp = line.split("[rsp").nth(1).and_then(|rest| rest.split(']').next()).unwrap_or("");
+        let disp: i64 = disp.trim_start_matches('+').parse().unwrap_or(0);
+        assert_eq!(disp % 16, 0, "{listing}");
+    }
+}
+
+/// Tuned for size, a 128-byte clear is `rep stosq` (13 B), not `xorps` and
+/// eight `movaps` (up to 72 B); a 32-byte clear stays two stores. The pin's
+/// store count made it eight `movaps`: pattern_fill -Os +50 B, huffman_decode
+/// +12 B over the `rep stosq` the port had.
+#[test]
+fn a_128_byte_clear_at_m64_os_is_rep_stosq_and_a_32_byte_one_is_stores() {
+    let ir = |size: u32| {
+        format!(
+            "target datalayout = \"@m64-datalayout@\"\n\
+             target triple = \"x86_64-unknown-linux-gnu\"\n\
+             @g = global [{size} x i8] zeroinitializer, align 16\n\
+             declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\n\
+             define void @f() optsize {{\n  call void @llvm.memset.p0.i64(ptr @g, i8 0, i64 {size}, i1 false)\n  ret void\n}}\n"
+        )
+    };
+    let listing = |size: u32| {
+        let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), &ir(size), "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let large = listing(128);
+    assert!(large.contains("rep stosq") && !large.contains("movaps"), "{large}");
+    let small = listing(32);
+    assert!(small.contains("xorps") && !small.contains("rep stos"), "{small}");
+}
+
+/// A 16-byte copy of unaligned memory is `movups` load and store.
+#[test]
+fn an_unaligned_16_byte_copy_is_movups_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
+                define void @f(ptr %d, ptr %s) {\n  call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 16, i1 false)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let count = listing.lines().filter(|line| line.trim().starts_with("movups")).count();
+    assert_eq!(count, 2, "{listing}");
 }

@@ -1324,7 +1324,7 @@ impl AddrDag for DagisAdapter<'_> {
 
 /// `SelectionDAG::haveNoCommonBitsSet`, by the known bits: every bit is known
 /// zero in one of the two.
-fn no_common_bits(
+pub(super) fn no_common_bits(
     dag: &SelectionDAG,
     a: SDValue,
     b: SDValue,

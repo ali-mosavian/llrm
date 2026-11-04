@@ -90,6 +90,9 @@ pub struct BuilderTarget {
     pub trap_unreachable: bool,
     /// The integer widths with a register class, ascending.
     pub legal_ints: Vec<u32>,
+    /// The target description has no floating-point registers: the same as
+    /// `use-soft-float` on every function (`TypeSoftenFloat`).
+    pub soft_float: bool,
     /// The library routines the target's runtime has, each with the calling
     /// convention and the symbol a call of it uses (`options.libcalls`); none
     /// given, the names its `c.toml` states.
@@ -334,6 +337,7 @@ impl BuilderTarget {
             switch_optimize: true,
             trap_unreachable: false,
             legal_ints: vec![8, 16, 32],
+            soft_float: false,
             libcalls: None,
             stack_align: None,
             float_store: false,
@@ -358,6 +362,7 @@ impl BuilderTarget {
         BuilderTarget {
             dag: DagConfig { pointer: EVT::I64, offset_folding: true, ..DagConfig::default() },
             legal_ints: vec![8, 16, 32, 64],
+            soft_float: false,
             ..BuilderTarget::m32()
         }
     }
@@ -373,6 +378,7 @@ impl BuilderTarget {
             switch_optimize: true,
             trap_unreachable: false,
             legal_ints: vec![8, 16, 32],
+            soft_float: false,
             libcalls: None,
             stack_align: None,
             float_store: false,
@@ -584,6 +590,7 @@ impl<'a> Builder<'a> {
                 ),
             );
         let mut dag = SelectionDAG::new(DagConfig { fp_extended, ..target.dag.clone() });
+        let module_tables = info.module_tables.clone();
         let tables = info
             .tables
             .get_or_insert_with(|| {
@@ -591,24 +598,34 @@ impl<'a> Builder<'a> {
                 // every symbol under the static relocation
                 // model, which these targets (DOS objects, no
                 // PIC) always use.
+                let (global_names, local_symbols) = module_tables.unwrap_or_else(|| {
+                    (
+                        std::rc::Rc::new(
+                            module
+                                .globals
+                                .iter()
+                                .map(|global| global.name.as_deref().unwrap_or("").to_string())
+                                .collect(),
+                        ),
+                        std::rc::Rc::new(if target.dag.dso_local_symbols {
+                            vec![true; module.globals.len()]
+                        } else {
+                            module
+                                .globals
+                                .iter()
+                                .map(|global| {
+                                    matches!(
+                                        global.linkage,
+                                        llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
+                                    )
+                                })
+                                .collect()
+                        }),
+                    )
+                });
                 super::function_lowering::Tables {
-                    global_names: std::rc::Rc::new(
-                        module.globals.iter().map(|global| global.name.as_deref().unwrap_or("").to_string()).collect(),
-                    ),
-                    local_symbols: std::rc::Rc::new(if target.dag.dso_local_symbols {
-                        vec![true; module.globals.len()]
-                    } else {
-                        module
-                            .globals
-                            .iter()
-                            .map(|global| {
-                                matches!(
-                                    global.linkage,
-                                    llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
-                                )
-                            })
-                            .collect()
-                    }),
+                    global_names,
+                    local_symbols,
                     block_names: std::rc::Rc::new(
                         (0..function.block_capacity())
                             .map(|at| {
@@ -1951,6 +1968,8 @@ impl Builder<'_> {
         &self,
         vt: EVT,
     ) -> Result<Vec<EVT>, Refused> {
+        // Without floating-point registers a float is the integer of its width.
+        let vt = self.soft_float_integer(vt).unwrap_or(vt);
         // A float is one part, in a register of its own class: the target's
         // `accepts` says which.
         if vt.is_floating_point() {
@@ -1977,7 +1996,13 @@ impl Builder<'_> {
         value: SDValue,
         ext: Ext,
     ) -> Result<Vec<SDValue>, Refused> {
-        let vt = self.dag.value_type(value);
+        let mut value = value;
+        let mut vt = self.dag.value_type(value);
+        if let Some(int) = self.soft_float_integer(vt) {
+            // `getCopyToParts` of a softened float: its bits as an integer.
+            vt = int;
+            value = self.dag.get_node(ISD::BitCast, vt, &[value]);
+        }
         let parts = self.calling_parts(vt)?;
         if parts.len() == 1 {
             let narrow = vt.size_in_bits() < parts[0].size_in_bits();
@@ -2000,6 +2025,11 @@ impl Builder<'_> {
         assert: Option<ISD>,
         pointer: bool,
     ) -> SDValue {
+        if let Some(int) = self.soft_float_integer(vt) {
+            // `getCopyFromParts` of a softened float: the integer, bitcast.
+            let bits = self.join_from_calling(parts, int, None, false);
+            return self.dag.get_node(ISD::BitCast, vt, &[bits]);
+        }
         if let [one] = parts {
             if self.dag.value_type(*one) == vt {
                 return *one;
@@ -2642,7 +2672,7 @@ impl Builder<'_> {
 
     /// `useSoftFloat()` of the function being built.
     fn soft_float(&self) -> bool {
-        crate::backend::isel::soft_float(&self.function.attrs)
+        self.target.soft_float || crate::backend::isel::soft_float(&self.function.attrs)
     }
 
     fn visit_ret(
@@ -3044,7 +3074,7 @@ impl Builder<'_> {
             Opcode::ExtractValue(indices) => self.visit_extract_value(&instruction, indices)?,
             Opcode::InsertValue(indices) => self.visit_insert_value(&instruction, indices)?,
             Opcode::Load { align, volatile } => self.visit_load(inst, &instruction, *align, *volatile)?,
-            Opcode::Store { align, volatile } => self.visit_store(&instruction, *align, *volatile)?,
+            Opcode::Store { align, volatile } => self.visit_store(inst, &instruction, *align, *volatile)?,
             Opcode::GetElementPtr { source } => self.visit_gep(&instruction, *source)?,
             Opcode::Br => self.visit_br(&instruction)?,
             Opcode::Alloca { .. }
@@ -3569,6 +3599,27 @@ impl Builder<'_> {
         Ok(MemInfo { mem_vt, align, volatile, base, ext: None, space, ordering: None })
     }
 
+    /// `MachinePointerInfo::V` and the `!tbaa` tag, for a target whose
+    /// `useAA` is true: where the access has no better base.
+    fn with_location(
+        &mut self,
+        info: MemInfo,
+        inst: llrm_mir::module::InstId,
+        pointer: Operand,
+    ) -> MemInfo {
+        if !self.dag.config().use_aa || info.base != MemBase::Unknown {
+            return info;
+        }
+        let location = super::dag::MemLocation {
+            pointer,
+            tbaa: llrm_mir::alias::tag(self.function, inst),
+            bytes: info.mem_vt.size_in_bits().div_ceil(8),
+        };
+        self.dag.mem_locations.push(location);
+        let id = std::num::NonZeroU32::new(self.dag.mem_locations.len() as u32).expect("one location pushed");
+        MemInfo { base: MemBase::Value(id), ..info }
+    }
+
     fn visit_load(
         &mut self,
         inst: llrm_mir::module::InstId,
@@ -3581,6 +3632,7 @@ impl Builder<'_> {
         }
         let ptr = self.get_value(instruction.operands[0])?;
         let info = self.mem_info(instruction.ty, align, volatile, instruction.operands[0])?;
+        let info = self.with_location(info, inst, instruction.operands[0]);
         // `DAG.getRoot()`, not the builder's: a non-volatile load leaves the
         // pending loads alone
         let root = if volatile { self.root() } else { self.dag.get_root() };
@@ -3602,6 +3654,7 @@ impl Builder<'_> {
 
     fn visit_store(
         &mut self,
+        inst: llrm_mir::module::InstId,
         instruction: &llrm_mir::module::Instruction,
         align: Option<u64>,
         volatile: bool,
@@ -3620,6 +3673,7 @@ impl Builder<'_> {
         let src = self.get_value(instruction.operands[0])?;
         let ptr = self.get_value(instruction.operands[1])?;
         let info = self.mem_info(value_type, align, volatile, instruction.operands[1])?;
+        let info = self.with_location(info, inst, instruction.operands[1]);
         let root = if volatile { self.root() } else { self.memory_root() };
         let address = self.dag.get_object_ptr_offset(ptr, 0);
         let store = self.dag.get_store(root, src, address, info);
@@ -4074,6 +4128,7 @@ mod f80_tests {
         let mut info = FunctionLoweringInfo::new(function);
         let target = BuilderTarget {
             legal_ints: vec![8],
+            soft_float: false,
             target_nodes: Some(TargetNodes {
                 call: super::super::x86isd::CALL,
                 ret: super::super::x86isd::RET_GLUE,
@@ -4199,6 +4254,7 @@ mod f80_tests {
         let mut info = FunctionLoweringInfo::new(function);
         let target = BuilderTarget {
             legal_ints: vec![8],
+            soft_float: false,
             target_nodes: Some(TargetNodes {
                 call: super::super::x86isd::CALL,
                 ret: super::super::x86isd::RET_GLUE,
@@ -4305,6 +4361,7 @@ mod f80_tests {
         let mut info = FunctionLoweringInfo::new(function);
         let target = BuilderTarget {
             legal_ints: vec![8],
+            soft_float: false,
             target_nodes: Some(TargetNodes {
                 call: super::super::x86isd::CALL,
                 ret: super::super::x86isd::RET_GLUE,

@@ -4020,7 +4020,15 @@ impl Emitter<'_, '_> {
                 }
             }
             let held = self.fresh(10);
+            let (before, pooled) = (self.blocks.last().map_or(0, |block| block.insns.len()), cell.is_some());
             self.push(Operation::FloatLoad, mnemonic, vec![Loc::Held(held)], cell.map(Loc::Mem).into_iter().collect());
+            // A constant-pool entry is memory nothing writes
+            // (`PseudoSourceValue::isConstant`: the pin's
+            // `isDereferenceableInvariantLoad`): LICM may carry it (DEVIATE
+            // X1).
+            if pooled {
+                self.mark_invariant_loads(before);
+            }
             if constant {
                 self.loaded.insert(value, (held, at.0, at.1));
             }

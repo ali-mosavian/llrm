@@ -71,13 +71,18 @@ pub struct Pool {
     /// Ids handed out: the data' and the jump tables'.
     count: i64,
     entries: IndexMap<Vec<u8>, i64>,
+    /// The module's global names and locality, made by the first function
+    /// and shared by the rest (a table per function was quadratic).
+    pub symbols: Option<Symbols>,
 }
+
+pub type Symbols = (std::rc::Rc<Vec<String>>, std::rc::Rc<Vec<bool>>);
 
 impl Pool {
     /// Data object ids from `first` on are the pool's.
     #[must_use]
     pub fn new(first: i64) -> Self {
-        Self { first, count: 0, entries: IndexMap::default() }
+        Self { first, count: 0, entries: IndexMap::default(), symbols: None }
     }
 
     /// The readonly cell holding `bytes`.

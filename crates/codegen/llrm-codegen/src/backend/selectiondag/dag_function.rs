@@ -801,6 +801,7 @@ fn selected_in(
     let bytes_beat_clocks = cpu.size && layout.pointer(0).bits < layout.largest_legal_integer();
     let convention = crate::backend::isel::convention(module, &layout, id, arch)?;
     let mut info = FunctionLoweringInfo::new(function);
+    info.module_tables = pool.symbols.clone();
     if contracts.is_some_and(|contracts| contracts.frame_zeroed) {
         info.prezeroed = crate::backend::prezeroed::prezeroed(module, function);
     }
@@ -1000,6 +1001,9 @@ fn selected_in(
     for (at, (size, align)) in info.objects.iter().enumerate() {
         let made = Temporaries(&frame).create_stack_temporary(*size, *align);
         debug_assert_eq!(made, alloca_count + at as i32, "frame objects are numbered as the builder numbered them");
+    }
+    if let Some(tables) = &info.tables {
+        pool.symbols.get_or_insert_with(|| (tables.global_names.clone(), tables.local_symbols.clone()));
     }
     // Each jump table is a data object the pool names; its entries are the
     // addresses of the blocks.

@@ -1,5 +1,6 @@
 // flags: -O2 -march=i486 -mabi=watcom
 // link: wc16_callee.wc
+// targets: dos
 /* One program of Open Watcom's own wcc objects and llrm's, on 16 bits: each call crosses the compilers in the register convention
    (AX, DX, BX, CX; a long or a far pointer in a pair; a struct result through SI; the callee pops) as the other compiler emits it. */
 extern void report(long value);

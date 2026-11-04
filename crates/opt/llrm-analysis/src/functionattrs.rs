@@ -551,6 +551,7 @@ fn will_return_by_loops(
     module: &Module,
     layout: &DataLayout,
     spaces: Spaces,
+    callees: &memory::Callees,
     function: &Function,
     norecurse: bool,
 ) -> bool {
@@ -604,14 +605,13 @@ fn will_return_by_loops(
                 Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. }
             ),
         );
-    let callees = memory::callees(module);
     let unobserved = !volatile
         && function.walk().map(|(_, inst)| inst).all(|inst| {
             !matches!(
                 function.instruction(inst).opcode,
                 Opcode::Call(_) | Opcode::Invoke(_)
             )
-                || !memory::of(context, &callees, function, inst).writes
+                || !memory::of(context, callees, function, inst).writes
         });
     unobserved
         && llrm_mir::loopinfo::ends_by_promise(&module.metadata, function, Facts::of(&function.attrs).must_progress())
@@ -624,6 +624,7 @@ fn stamp_flags(
     module: &mut Module,
     layout: &DataLayout,
     spaces: Spaces,
+    callees: &memory::Callees,
     members: &[GlobalId],
 ) -> Vec<GlobalId> {
     let mut found = infer(module, &module.globals, members);
@@ -631,7 +632,7 @@ fn stamp_flags(
         let Some(function) = module.global(*id).function().filter(|one| !one.is_declaration()) else { continue };
         let norecurse = one.no_recurse || Facts::of(&function.attrs).no_recurse();
         if !one.will_return && !Facts::of(&function.attrs).will_return() {
-            one.will_return = will_return_by_loops(module, layout, spaces, function, norecurse);
+            one.will_return = will_return_by_loops(module, layout, spaces, callees, function, norecurse);
         }
     }
     let mut changed = Vec::new();
@@ -682,6 +683,20 @@ pub fn post_order(
     spaces: Spaces,
     members: &[GlobalId],
 ) -> Vec<GlobalId> {
+    let callees = memory::callees(module);
+    post_order_with(module, layout, spaces, &callees, members)
+}
+
+/// `post_order` with what each function does to memory (`memory::callees`) as
+/// the caller holds it, as it stands before `members`: made once for a walk
+/// over every component, not for each (a scan of every global per component).
+pub fn post_order_with(
+    module: &mut Module,
+    layout: &DataLayout,
+    spaces: Spaces,
+    callees: &memory::Callees,
+    members: &[GlobalId],
+) -> Vec<GlobalId> {
     // DEVIATE F3: a `noipa` body is not a member.
     let set: BTreeSet<GlobalId> = members
         .iter()
@@ -692,7 +707,8 @@ pub fn post_order(
     let mut changed: BTreeSet<GlobalId> = stamp_memory(module, &list).into_iter().collect();
     changed.extend(crate::argumentattrs::add_argument_attrs(module, &set));
     changed.extend(crate::initializes::add_initializes(module, layout, &set));
-    changed.extend(stamp_flags(module, layout, spaces, &list));
+    changed.extend(crate::initializes::add_access_ranges(module, layout, &set));
+    changed.extend(stamp_flags(module, layout, spaces, callees, &list));
     changed.into_iter().collect()
 }
 
