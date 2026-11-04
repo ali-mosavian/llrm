@@ -48,3 +48,38 @@ fn signed_overflow_at_256() {
     assert_eq!(smul_ov_word(min, !U256::ZERO, 256).1, true);
     assert_eq!(smul_ov_word(min, U256::ONE, 256), (min, false));
 }
+
+fn huge(limbs: [u128; 4]) -> U512 {
+    U512::from_limbs(limbs)
+}
+
+/// A 512-bit word was the missing room for the product of two 256-bit
+/// integers (`ConstantRange::multiply` of an `i256` range).
+#[test]
+fn a_512_bit_word_multiplies_divides_and_shifts() {
+    let a = huge([0x1234_5678_9abc_def0, 0x0fed_cba9_8765_4321, 7, 1 << 100]);
+    let b = huge([u128::MAX, 3, 0, 0]);
+    let (q, r) = a.divrem(b);
+    assert!(r < b);
+    assert_eq!(q.wrapping_mul(b).wrapping_add(r), a);
+    assert_eq!((a << 200 >> 200).to_limbs()[..2], a.to_limbs()[..2]);
+    assert_eq!((a << 3).to_limbs()[0], a.to_limbs()[0] << 3);
+    let ones = !U512::ZERO;
+    assert_eq!(ones.overflowing_mul(ones), (U512::ONE, true));
+    assert_eq!(U512::ONE.overflowing_mul(ones), (ones, false));
+    assert_eq!(ones.leading_zeros(), 0);
+    assert_eq!(U512::ONE.leading_zeros(), 511);
+    assert_eq!((U512::ONE << 300).trailing_zeros(), 300);
+    assert_eq!(ones.count_ones(), 512);
+}
+
+/// The 256-bit product of two `i128` extremes, in the word that holds it.
+#[test]
+fn the_product_of_two_256_bit_values_fits_512() {
+    let a = !U256::ZERO;
+    let wide = |v: U256| U512::from_limbs(v.to_limbs());
+    let (product, over) = wide(a).overflowing_mul(wide(a));
+    assert!(!over);
+    // (2^256 - 1)^2 = 2^512 - 2^257 + 1.
+    assert_eq!(product, (!U512::ZERO).wrapping_sub(U512::ONE << 257).wrapping_add(U512::from_u128(2)));
+}

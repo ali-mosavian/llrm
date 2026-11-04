@@ -65,6 +65,10 @@ pub trait Word:
     fn leading_zeros(self) -> u32;
     fn trailing_zeros(self) -> u32;
     fn count_ones(self) -> u32;
+    /// The value in four 128-bit limbs, the lowest first.
+    fn to_limbs(self) -> [u128; 4];
+    /// The word with those limbs, the ones it has no room for dropped.
+    fn from_limbs(limbs: [u128; 4]) -> Self;
     /// The quotient and the remainder; panics on a zero divisor.
     fn divrem(
         self,
@@ -141,6 +145,14 @@ impl Word for u128 {
         other: Self,
     ) -> (Self, Self) {
         (self / other, self % other)
+    }
+
+    fn to_limbs(self) -> [u128; 4] {
+        [self, 0, 0, 0]
+    }
+
+    fn from_limbs(limbs: [u128; 4]) -> Self {
+        limbs[0]
     }
 }
 
@@ -362,6 +374,268 @@ impl Word for U256 {
             }
         }
         (quotient, remainder)
+    }
+
+    fn to_limbs(self) -> [u128; 4] {
+        [self.lo, self.hi, 0, 0]
+    }
+
+    fn from_limbs(limbs: [u128; 4]) -> Self {
+        Self { hi: limbs[1], lo: limbs[0] }
+    }
+}
+
+/// 512 bits: the room for a product of two 256-bit integers.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct U512 {
+    limbs: [u128; 4],
+}
+
+impl U512 {
+    fn halves(self) -> [u64; 8] {
+        let mut out = [0_u64; 8];
+        for (at, limb) in self.limbs.iter().enumerate() {
+            out[at * 2] = *limb as u64;
+            out[at * 2 + 1] = (*limb >> 64) as u64;
+        }
+        out
+    }
+
+    fn of_halves(halves: [u64; 8]) -> Self {
+        let mut limbs = [0_u128; 4];
+        for (at, limb) in limbs.iter_mut().enumerate() {
+            *limb = u128::from(halves[at * 2]) | u128::from(halves[at * 2 + 1]) << 64;
+        }
+        Self { limbs }
+    }
+}
+
+impl Ord for U512 {
+    fn cmp(
+        &self,
+        other: &Self,
+    ) -> std::cmp::Ordering {
+        self.limbs.iter().rev().cmp(other.limbs.iter().rev())
+    }
+}
+
+impl PartialOrd for U512 {
+    fn partial_cmp(
+        &self,
+        other: &Self,
+    ) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Not for U512 {
+    type Output = Self;
+
+    fn not(self) -> Self {
+        Self { limbs: self.limbs.map(|limb| !limb) }
+    }
+}
+
+macro_rules! limbwise {
+    ($trait:ident, $method:ident, $assign_trait:ident, $assign:ident, $op:tt) => {
+        impl $trait for U512 {
+            type Output = Self;
+
+            fn $method(
+                self,
+                other: Self,
+            ) -> Self {
+                let mut limbs = self.limbs;
+                for (at, limb) in limbs.iter_mut().enumerate() {
+                    *limb = *limb $op other.limbs[at];
+                }
+                Self { limbs }
+            }
+        }
+
+        impl $assign_trait for U512 {
+            fn $assign(
+                &mut self,
+                other: Self,
+            ) {
+                *self = *self $op other;
+            }
+        }
+    };
+}
+
+limbwise!(BitAnd, bitand, BitAndAssign, bitand_assign, &);
+limbwise!(BitOr, bitor, BitOrAssign, bitor_assign, |);
+limbwise!(BitXor, bitxor, BitXorAssign, bitxor_assign, ^);
+
+impl Shl<u32> for U512 {
+    type Output = Self;
+
+    fn shl(
+        self,
+        by: u32,
+    ) -> Self {
+        if by >= 512 {
+            return Self::ZERO;
+        }
+        let (whole, part) = ((by / 128) as usize, by % 128);
+        let mut limbs = [0_u128; 4];
+        for at in whole..4 {
+            let source = self.limbs[at - whole];
+            limbs[at] |= source << part;
+            if part != 0 && at + 1 < 4 {
+                limbs[at + 1] |= source >> (128 - part);
+            }
+        }
+        Self { limbs }
+    }
+}
+
+impl Shr<u32> for U512 {
+    type Output = Self;
+
+    fn shr(
+        self,
+        by: u32,
+    ) -> Self {
+        if by >= 512 {
+            return Self::ZERO;
+        }
+        let (whole, part) = ((by / 128) as usize, by % 128);
+        let mut limbs = [0_u128; 4];
+        for at in 0..4 - whole {
+            let source = self.limbs[at + whole];
+            limbs[at] |= source >> part;
+            if part != 0 && at >= 1 {
+                limbs[at - 1] |= source << (128 - part);
+            }
+        }
+        Self { limbs }
+    }
+}
+
+impl Word for U512 {
+    const ZERO: Self = Self { limbs: [0; 4] };
+    const ONE: Self = Self { limbs: [1, 0, 0, 0] };
+    const BITS: u32 = 512;
+
+    fn from_u128(value: u128) -> Self {
+        Self { limbs: [value, 0, 0, 0] }
+    }
+
+    fn low_u128(self) -> u128 {
+        self.limbs[0]
+    }
+
+    fn wrapping_add(
+        self,
+        other: Self,
+    ) -> Self {
+        self.overflowing_add(other).0
+    }
+
+    fn wrapping_sub(
+        self,
+        other: Self,
+    ) -> Self {
+        let mut limbs = [0_u128; 4];
+        let mut borrow = false;
+        for (at, limb) in limbs.iter_mut().enumerate() {
+            let (difference, first) = self.limbs[at].overflowing_sub(other.limbs[at]);
+            let (difference, second) = difference.overflowing_sub(u128::from(borrow));
+            *limb = difference;
+            borrow = first || second;
+        }
+        Self { limbs }
+    }
+
+    fn overflowing_add(
+        self,
+        other: Self,
+    ) -> (Self, bool) {
+        let mut limbs = [0_u128; 4];
+        let mut carry = false;
+        for (at, limb) in limbs.iter_mut().enumerate() {
+            let (sum, first) = self.limbs[at].overflowing_add(other.limbs[at]);
+            let (sum, second) = sum.overflowing_add(u128::from(carry));
+            *limb = sum;
+            carry = first || second;
+        }
+        (Self { limbs }, carry)
+    }
+
+    fn overflowing_mul(
+        self,
+        other: Self,
+    ) -> (Self, bool) {
+        let (a, b) = (self.halves(), other.halves());
+        let mut product = [0_u64; 16];
+        for (i, x) in a.iter().enumerate() {
+            let mut carry = 0_u128;
+            for (j, y) in b.iter().enumerate() {
+                let t = u128::from(*x) * u128::from(*y) + u128::from(product[i + j]) + carry;
+                product[i + j] = t as u64;
+                carry = t >> 64;
+            }
+            product[i + 8] = carry as u64;
+        }
+        let mut low = [0_u64; 8];
+        low.copy_from_slice(&product[..8]);
+        (Self::of_halves(low), product[8..].iter().any(|limb| *limb != 0))
+    }
+
+    fn leading_zeros(self) -> u32 {
+        let mut zeros = 0;
+        for limb in self.limbs.iter().rev() {
+            if *limb != 0 {
+                return zeros + limb.leading_zeros();
+            }
+            zeros += 128;
+        }
+        zeros
+    }
+
+    fn trailing_zeros(self) -> u32 {
+        let mut zeros = 0;
+        for limb in self.limbs {
+            if limb != 0 {
+                return zeros + limb.trailing_zeros();
+            }
+            zeros += 128;
+        }
+        zeros
+    }
+
+    fn count_ones(self) -> u32 {
+        self.limbs.iter().map(|limb| limb.count_ones()).sum()
+    }
+
+    fn divrem(
+        self,
+        other: Self,
+    ) -> (Self, Self) {
+        assert!(!other.is_zero(), "attempt to divide by zero");
+        if self < other {
+            return (Self::ZERO, self);
+        }
+        let (mut quotient, mut remainder) = (Self::ZERO, Self::ZERO);
+        for at in (0..512 - self.leading_zeros()).rev() {
+            let carried = remainder.limbs[3] >> 127 == 1;
+            remainder = remainder << 1 | (self >> at) & Self::ONE;
+            if carried || remainder >= other {
+                remainder = remainder.wrapping_sub(other);
+                quotient |= Self::ONE << at;
+            }
+        }
+        (quotient, remainder)
+    }
+
+    fn to_limbs(self) -> [u128; 4] {
+        self.limbs
+    }
+
+    fn from_limbs(limbs: [u128; 4]) -> Self {
+        Self { limbs }
     }
 }
 

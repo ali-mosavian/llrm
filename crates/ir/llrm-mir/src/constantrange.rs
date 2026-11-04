@@ -193,11 +193,7 @@ impl<W: Word> Range<W> {
 
     /// The same range in another word; the bounds fit it by construction.
     pub fn to_word<V: Word>(&self) -> Range<V> {
-        Range {
-            lower: V::from_u128(self.lower.low_u128()),
-            upper: V::from_u128(self.upper.low_u128()),
-            width: self.width,
-        }
+        Range { lower: V::from_limbs(self.lower.to_limbs()), upper: V::from_limbs(self.upper.to_limbs()), width: self.width }
     }
 
     fn w(&self) -> u32 {
