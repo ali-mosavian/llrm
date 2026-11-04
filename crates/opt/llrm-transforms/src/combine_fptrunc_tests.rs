@@ -256,3 +256,19 @@ fn test_fptrunc_work_grows_with_the_chain_not_with_its_square() {
     let (small, large) = (least(600), least(1200));
     assert!(large < small * 3.0, "600 sums {small:.0} work, 1200 sums {large:.0}: a ratio of {:.1}", large / small);
 }
+
+/// `FloatKind::F128` had no name in `unary_name`: with fp128 (#6822) landed,
+/// `llrm-transforms` did not compile (E0004) on release/next.
+#[test]
+fn test_fptrunc_of_a_fabs_of_a_quad_narrows_the_fabs() {
+    let after = combined(
+        "declare fp128 @llvm.fabs.f128(fp128)
+declare double @llvm.fabs.f64(double)
+define double @f(fp128 %a) {
+  %x = call fp128 @llvm.fabs.f128(fp128 %a)
+  %t = fptrunc fp128 %x to double
+  ret double %t
+}",
+    );
+    assert!(after.contains("@llvm.fabs.f64"), "{after}");
+}

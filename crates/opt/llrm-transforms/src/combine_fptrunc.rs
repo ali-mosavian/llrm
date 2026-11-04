@@ -305,6 +305,7 @@ fn unary_name(
         FloatKind::Float => "f32",
         FloatKind::Double => "f64",
         FloatKind::X86Fp80 => "f80",
+        FloatKind::F128 => "f128",
     };
     Some(format!("llvm.{base}.{suffix}"))
 }
