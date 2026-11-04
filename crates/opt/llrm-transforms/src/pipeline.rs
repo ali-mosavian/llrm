@@ -878,7 +878,7 @@ pub(crate) fn llvm_order(
                 // the option is read by `simplifySwitch`, untranslated.
                 simplify_cfg("decide@675"),
                 combine("combine@677"),
-                slot("aggressive-instcombine@678", Box::new(crate::trunc_inst_combine::TruncInstCombine)),
+                slot("aggressive-instcombine@678", Box::new(crate::aggressive_instcombine::AggressiveInstCombine)),
                 slot("tailrec@688", Box::new(tailcallelim::TailCallElim)),
                 // SimplifyCFGOptions().convertSwitchRangeToICmp(true), L691:
                 // the option is read by `simplifySwitch`, untranslated.

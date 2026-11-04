@@ -74,6 +74,7 @@
 //! module's own header.
 
 pub mod adce;
+pub mod aggressive_instcombine;
 pub mod algebraic;
 pub mod alwaysundef;
 pub mod argpromotion;
@@ -107,6 +108,7 @@ pub mod combine_add_idioms;
 pub mod combine_addsub;
 pub mod combine_and;
 pub mod combine_and_select;
+pub mod combine_assume;
 pub mod combine_bitorder;
 pub mod combine_branch;
 pub mod combine_build;
@@ -156,6 +158,7 @@ pub mod combine_select;
 pub mod combine_select_bit_test;
 pub mod combine_select_bools;
 pub mod combine_select_ext_const;
+pub mod combine_select_fabs;
 pub mod combine_select_into_op;
 pub mod combine_select_op_op;
 pub mod combine_select_spf;

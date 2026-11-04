@@ -216,8 +216,8 @@ impl TargetInstrInfo for X86InstrInfo<'_> {
     ) -> Semantics {
         Semantics {
             name: Some("mov".into()),
-            dests: vec![Loc::Held(Held { value: to, width })],
-            sources: vec![Loc::Held(Held { value: from, width })],
+            dests: vec![Loc::Held(Held { value: to, width, offset: 0 })],
+            sources: vec![Loc::Held(Held { value: from, width, offset: 0 })],
             ..Semantics::new(Operation::Move)
         }
     }
@@ -450,7 +450,7 @@ pub fn load_reg_from_stack_slot(
 ) -> Arc<Insn> {
     let inserted = _inserted(
         beside,
-        _mov(Loc::Held(Held { value: into, width: cell.width }), Loc::Mem(cell.clone())),
+        _mov(Loc::Held(Held { value: into, width: cell.width, offset: 0 }), Loc::Mem(cell.clone())),
         vec![into],
         Vec::new(),
     );
@@ -467,7 +467,7 @@ pub fn store_reg_to_stack_slot(
 ) -> Arc<Insn> {
     let inserted = _inserted(
         beside,
-        _mov(Loc::Mem(cell.clone()), Loc::Held(Held { value: out_of, width: cell.width })),
+        _mov(Loc::Mem(cell.clone()), Loc::Held(Held { value: out_of, width: cell.width, offset: 0 })),
         Vec::new(),
         vec![out_of],
     );
@@ -632,7 +632,7 @@ mod tests {
     /// spilled register as undef.
     #[test]
     fn test_a_fold_drops_the_spilled_register_from_the_undefs() {
-        let held = |value: u32| Loc::Held(Held { value, width: 2 });
+        let held = |value: u32| Loc::Held(Held { value, width: 2, offset: 0 });
         let what = Semantics {
             name: Some("add".into()),
             dests: vec![held(1)],
@@ -663,7 +663,7 @@ mod tests {
     ) -> Arc<Insn> {
         let what = Semantics {
             name: Some("fld".into()),
-            dests: vec![Loc::Held(Held { value, width: 10 })],
+            dests: vec![Loc::Held(Held { value, width: 10, offset: 0 })],
             sources: vec![Loc::Mem(cell)],
             ..Semantics::new(Operation::FloatLoad)
         };
@@ -678,7 +678,7 @@ mod tests {
         let what = Semantics {
             name: Some("fstp".into()),
             dests: vec![Loc::Mem(cell)],
-            sources: vec![Loc::Held(Held { value, width: 10 })],
+            sources: vec![Loc::Held(Held { value, width: 10, offset: 0 })],
             ..Semantics::new(Operation::FloatStore)
         };
         Arc::new(Insn::new(at, None, Some(what), vec![], vec![value]))

@@ -213,14 +213,20 @@ def assert_distinct(base, new, same_source: bool = False) -> str:
     return f"binaries: base {a[:12]} {base} | new {b[:12]} {new}" + (" (same binary, same source)" if a == b else "")
 
 
-def assert_distinct_llc(base, new, same_llc: bool = False) -> None:
-    """SystemExit when the llrm-llc beside `base` and the one beside `new` are the same bytes: llrm-cc only drives, so two dists sharing one backend read SAME on every
-    row. Nothing to compare when either has none. `same_llc` allows a head that changes only the frontend."""
-    a, b = Path(base).parent / "llrm-llc", Path(new).parent / "llrm-llc"
-    if same_llc or not (a.is_file() and b.is_file()):
+def assert_distinct_llc(base, new, same_llc: bool = False, names=("llrm-llc",), required: bool = False) -> None:
+    """SystemExit when a backend named in `names` beside `base` and the one beside `new` are the same bytes: llrm-cc only drives, so two dists sharing one backend read SAME on every
+    row. A name missing from either is skipped, or refused when `required` (wasm32 runs llrm-wasm-llc: a pair sharing one gave a 0-DIFF identity run where nbody -O2 moves 939 -> 910 B).
+    `same_llc` allows a head that changes only the frontend."""
+    if same_llc:
         return
-    if md5(a) == md5(b):
-        raise SystemExit(f"same llrm-llc: {a} and {b} both have md5 {md5(a)}; every row would read SAME whatever llrm-cc is (IDENTITY_SAME_LLC=1 for a frontend-only change).")
+    for name in names:
+        a, b = Path(base).parent / name, Path(new).parent / name
+        if not (a.is_file() and b.is_file()):
+            if required:
+                raise SystemExit(f"missing {name}: {a} or {b} does not exist")
+            continue
+        if md5(a) == md5(b):
+            raise SystemExit(f"same {name}: {a} and {b} both have md5 {md5(a)}; every row would read SAME whatever llrm-cc is (IDENTITY_SAME_LLC=1 for a frontend-only change).")
 
 
 OBJECT = "<object>"
