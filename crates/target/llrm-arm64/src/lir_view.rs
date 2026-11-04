@@ -622,6 +622,37 @@ mod tests {
         assert_eq!(lines, [Some(8), Some(9), Some(10), Some(11)], "the copy of x0 into itself (line 7) goes");
     }
 
+    /// The pin keeps `adrp` + `add :lo12:` of one symbol as a single `MOVaddr`
+    /// until after allocation, so the allocator can make the address again
+    /// where it is read (jpeg_single -O3: the address was stored and
+    /// reloaded across a call, +252 B). Here the pair is one rematerializable
+    /// instruction that defines one value, and it expands into the register
+    /// greedy chose.
+    #[test]
+    fn an_address_pair_is_one_rematerializable_instruction_until_after_allocation() {
+        let mut function = MFunc::new("f");
+        let (page, address) = (function.gpr(), function.gpr());
+        let target = Target::Symbol { name: "_msg".into(), addend: 0 };
+        let ops = vec![
+            Op::I(Inst::Adr { page: true, rd: page, target: target.clone(), got: false }),
+            Op::I(Inst::AddPageOffset { rd: address, rn: page, target: target.clone() }),
+            Op::Return { uses: vec![Reg::Gpr(address)], tail: None },
+        ];
+        function.blocks.push(MBlock { label: "L0".into(), ops: OpList::from(ops) });
+        let lir = view(&function);
+        let insts = &lir.blocks[0].insts;
+        assert_eq!(insts.len(), 2, "the pair is one instruction and the return: {insts:?}");
+        assert!(insts[0].rematerializable, "{:?}", insts[0]);
+        let defs = insts[0].operands.iter().filter(|o| matches!(o, Operand::Def(_))).count();
+        let uses = insts[0].operands.iter().filter(|o| matches!(o, Operand::Use(_))).count();
+        assert_eq!((defs, uses), (1, 0), "{:?}", insts[0]);
+        let mut back = function.clone();
+        rebuild(&mut back, &lir, &Assignment(vec![crate::reg::X5, crate::reg::X6]), &[]);
+        let ops = &back.blocks[0].ops;
+        assert_eq!(ops[0], Op::I(Inst::Adr { page: true, rd: Gpr(6), target: target.clone(), got: false }), "{ops:?}");
+        assert_eq!(ops[1], Op::I(Inst::AddPageOffset { rd: Gpr(6), rn: Gpr(6), target }), "{ops:?}");
+    }
+
     /// The registers greedy chose go back into the original operations, a
     /// copy between the same register goes, and a tied register stays one.
     #[test]
