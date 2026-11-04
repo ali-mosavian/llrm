@@ -107,6 +107,17 @@ rule word_mask
 
 
 // Materialize a call's literal once when both stack and register need it.
+// A sign-extending word load whose dword load and in-place extension are fewer bytes, as `mov eax,
+// [abs]` (5) and `cwde` (1) against `movsx eax, word ptr [abs]` (7). The pin keeps the one
+// instruction (X86InstrCompiler.td); the sizes choose, so no register or address is named.
+group split_loads
+    walk window
+
+rule split_sign_extending_load
+    match   movsx d:reg32, src:mem
+    when    free(@0, widening_load), width_in(src, [16]), shorter_pair(@0, $0, $1)
+    rewrite @0: mov d, dword_cell(src) ; @0: movsx d, low_word(d)
+
 group pushed_constants
     walk window
 

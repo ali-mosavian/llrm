@@ -226,6 +226,10 @@ impl llrm_target::Target for M64 {
         CALLING.native().frame_wrap_split_size
     }
 
+    fn frame_red_zone(&self) -> i64 {
+        CALLING.native().frame_red_zone
+    }
+
     /// Past EBP and the return address; there is no far call.
     fn first_argument_offset(
         &self,
@@ -355,6 +359,9 @@ impl llrm_target::Target for M64 {
                     .map(|one| {
                         one.with_tuning(llrm_mir::target::Tuning {
                             inline_size_guard_at_size: true,
+                            // No byte/clock rate is stated for m64 (oversight 2026-11-03): a constant
+                            // multiply is decomposed only where the chain is no larger than the `imul`.
+                            price_pin_multiplies: true,
                             // DEVIATE REC-2, as m32
                             recursive_inlining: Some((8, 450)),
                             recursive_edge_growth: Some((15, 30)),
