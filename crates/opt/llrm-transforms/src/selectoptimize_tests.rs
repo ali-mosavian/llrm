@@ -13,6 +13,7 @@ fn x86() -> llrm_x86::tti::X86 {
         registers: None,
         quad: false,
         real_mode: None,
+        loop_micro_op_buffer: 0,
         tuning: llrm_mir::target::Tuning::PIN,
     }
 }
