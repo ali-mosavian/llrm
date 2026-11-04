@@ -221,6 +221,17 @@ impl TargetLoweringInfo {
     ) -> bool {
         self.type_action(vt) == TypeAction::Legal
     }
+
+    /// `getTypeToExpandTo`: `vt` halved until a legal type is reached.
+    pub fn type_to_expand_to(
+        &self,
+        mut vt: EVT,
+    ) -> EVT {
+        while !self.is_type_legal(vt) {
+            vt = self.type_conversion(vt).1;
+        }
+        vt
+    }
 }
 
 #[cfg(test)]

@@ -42,7 +42,7 @@ fn declares(
     // The routines' integers are words of the target: 16 bits in real mode.
     let (ptr, far, word) = (module.context.types.ptr(0), module.context.types.ptr(1), module.context.types.int(bits));
     let returns = match meaning.result {
-        Returns::Value(_) => word,
+        Returns::Value(_) => module.context.types.int(meaning.result_bits.unwrap_or(bits)),
         Returns::View { .. } => ptr,
         Returns::Copy { .. } => module.context.types.void(),
     };
@@ -114,7 +114,15 @@ fn define(
         }
         Returns::Value(value) => {
             let value = body.expr(value);
-            Some(body.word(value))
+            let value = body.word(value);
+            Some(match meaning.result_bits {
+                Some(bits) if bits != body.bits => {
+                    let ty = body.b.context.types.int(bits);
+                    let cast = if bits < body.bits { CastOp::Trunc } else { CastOp::ZExt };
+                    body.b.cast(cast, value, ty, "")
+                }
+                _ => value,
+            })
         }
         Returns::View { length, data } => {
             let (length, data) = (body.expr(length), body.expr(data));
