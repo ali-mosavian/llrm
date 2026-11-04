@@ -99,10 +99,10 @@ impl Tti for M68k {
         }
     }
 
-    /// The per-target override of `SCEVCheapExpansionBudget`: a limit that
-    /// costs any operation (`smax(n, 1)` for `i + 1 < n`) is not worth
-    /// replacing a compare with in a function built for size; the guard and
-    /// the second counter cost more bytes than the compare saved.
+    /// DEVIATE: a limit that costs any operation (`smax(n, 1)` for
+    /// `i + 1 < n`) is not worth replacing a compare with, in a function built
+    /// for size: the guard and the second counter cost more bytes than the
+    /// compare saved. Exit: none.
     fn lftr_expansion_budget(
         &self,
         optsize: bool,
