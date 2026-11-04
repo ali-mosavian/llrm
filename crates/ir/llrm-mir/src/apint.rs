@@ -65,6 +65,11 @@ pub trait Word:
     fn leading_zeros(self) -> u32;
     fn trailing_zeros(self) -> u32;
     fn count_ones(self) -> u32;
+    /// The quotient and the remainder; panics on a zero divisor.
+    fn divrem(
+        self,
+        other: Self,
+    ) -> (Self, Self);
 
     fn wrapping_mul(
         self,
@@ -129,6 +134,13 @@ impl Word for u128 {
 
     fn count_ones(self) -> u32 {
         u128::count_ones(self)
+    }
+
+    fn divrem(
+        self,
+        other: Self,
+    ) -> (Self, Self) {
+        (self / other, self % other)
     }
 }
 
@@ -326,10 +338,35 @@ impl Word for U256 {
     fn count_ones(self) -> u32 {
         self.hi.count_ones() + self.lo.count_ones()
     }
+
+    /// Shift and subtract: 256 steps at most, and only for a value or divisor
+    /// above 128 bits.
+    fn divrem(
+        self,
+        other: Self,
+    ) -> (Self, Self) {
+        assert!(!other.is_zero(), "attempt to divide by zero");
+        if self.hi == 0 && other.hi == 0 {
+            return (Self { hi: 0, lo: self.lo / other.lo }, Self { hi: 0, lo: self.lo % other.lo });
+        }
+        if self < other {
+            return (Self::ZERO, self);
+        }
+        let (mut quotient, mut remainder) = (Self::ZERO, Self::ZERO);
+        for at in (0..256 - self.leading_zeros()).rev() {
+            let carried = remainder.hi >> 127 == 1;
+            remainder = remainder << 1 | (self >> at) & Self::ONE;
+            if carried || remainder >= other {
+                remainder = remainder.wrapping_sub(other);
+                quotient |= Self::ONE << at;
+            }
+        }
+        (quotient, remainder)
+    }
 }
 
 /// A power of two: one bit set.
-pub(crate) fn is_power_of_two<W: Word>(v: W) -> bool {
+pub fn is_power_of_two<W: Word>(v: W) -> bool {
     !v.is_zero() && (v & v.wrapping_sub(W::ONE)).is_zero()
 }
 
@@ -364,7 +401,7 @@ pub(crate) fn clear_range<W: Word>(
     if high <= low { v } else { v & !(mask::<W>(high) & !mask::<W>(low)) }
 }
 
-pub(crate) fn bit<W: Word>(
+pub fn bit<W: Word>(
     v: W,
     at: u32,
 ) -> bool {
@@ -379,7 +416,7 @@ pub(crate) fn with_bit<W: Word>(
     if on { v | (W::ONE << at) } else { v & !(W::ONE << at) }
 }
 
-pub(crate) fn countl_zero<W: Word>(
+pub fn countl_zero<W: Word>(
     v: W,
     width: u32,
 ) -> u32 {
@@ -393,7 +430,7 @@ pub(crate) fn countl_one<W: Word>(
     countl_zero(!v & mask::<W>(width), width)
 }
 
-pub(crate) fn countr_zero<W: Word>(
+pub fn countr_zero<W: Word>(
     v: W,
     width: u32,
 ) -> u32 {
@@ -411,12 +448,12 @@ pub(crate) fn popcount<W: Word>(v: W) -> u32 {
     v.count_ones()
 }
 
-pub(crate) fn sign_bit<W: Word>(width: u32) -> W {
+pub fn sign_bit<W: Word>(width: u32) -> W {
     W::ONE << (width - 1)
 }
 
 /// `a` as a signed number is below `b`.
-pub(crate) fn slt<W: Word>(
+pub fn slt<W: Word>(
     a: W,
     b: W,
     width: u32,
@@ -424,7 +461,7 @@ pub(crate) fn slt<W: Word>(
     (a ^ sign_bit::<W>(width)) < (b ^ sign_bit::<W>(width))
 }
 
-pub(crate) fn sgt<W: Word>(
+pub fn sgt<W: Word>(
     a: W,
     b: W,
     width: u32,
@@ -433,7 +470,7 @@ pub(crate) fn sgt<W: Word>(
 }
 
 /// Whether `v` is negative at `width`.
-pub(crate) fn is_negative<W: Word>(
+pub fn is_negative<W: Word>(
     v: W,
     width: u32,
 ) -> bool {
@@ -441,7 +478,7 @@ pub(crate) fn is_negative<W: Word>(
 }
 
 /// `v` extended from `from` bits to `to`, copying the sign.
-pub(crate) fn sext<W: Word>(
+pub fn sext<W: Word>(
     v: W,
     from: u32,
     to: u32,
@@ -449,7 +486,7 @@ pub(crate) fn sext<W: Word>(
     if is_negative(v, from) { (v | !mask::<W>(from)) & mask::<W>(to) } else { v }
 }
 
-pub(crate) fn ashr<W: Word>(
+pub fn ashr<W: Word>(
     v: W,
     width: u32,
     by: u32,
@@ -459,7 +496,7 @@ pub(crate) fn ashr<W: Word>(
     if is_negative(v, width) { shifted | (mask::<W>(width) & !mask::<W>(width - by)) } else { shifted }
 }
 
-pub(crate) fn lshr<W: Word>(
+pub fn lshr<W: Word>(
     v: W,
     by: u32,
 ) -> W {
@@ -467,7 +504,7 @@ pub(crate) fn lshr<W: Word>(
 }
 
 /// `APInt::shl(unsigned)`.
-pub(crate) fn shl<W: Word>(
+pub fn shl<W: Word>(
     v: W,
     width: u32,
     by: u32,
@@ -576,13 +613,13 @@ pub(crate) fn clmul<W: Word>(
 }
 
 /// `APInt::getActiveBits`: the bits up to the highest set one.
-pub(crate) fn active_bits<W: Word>(v: W) -> u32 {
+pub fn active_bits<W: Word>(v: W) -> u32 {
     W::BITS - v.leading_zeros()
 }
 
 /// `APInt::getSignificantBits`: the bits of the narrowest signed integer
 /// holding `v`.
-pub(crate) fn significant_bits<W: Word>(
+pub fn significant_bits<W: Word>(
     v: W,
     width: u32,
 ) -> u32 {
@@ -632,6 +669,117 @@ pub(crate) fn limited<W: Word>(
     limit: u32,
 ) -> u32 {
     if v > W::from_u128(u128::from(limit)) { limit } else { v.low_u128() as u32 }
+}
+
+/// `APInt::udiv`.
+pub fn udiv<W: Word>(
+    a: W,
+    b: W,
+) -> W {
+    a.divrem(b).0
+}
+
+/// `APInt::urem`.
+pub fn urem<W: Word>(
+    a: W,
+    b: W,
+) -> W {
+    a.divrem(b).1
+}
+
+/// The magnitude of `v` as a signed number of `width` bits (`INT_MIN` is its
+/// own magnitude, as an unsigned number).
+fn magnitude<W: Word>(
+    v: W,
+    width: u32,
+) -> W {
+    if is_negative(v, width) { W::ZERO.wrapping_sub(v) & mask::<W>(width) } else { v }
+}
+
+/// `APInt::sdiv` at any width: the quotient rounded towards zero
+/// (`INT_MIN / -1` wraps).
+pub fn sdiv_word<W: Word>(
+    a: W,
+    b: W,
+    width: u32,
+) -> W {
+    let quotient = udiv(magnitude(a, width), magnitude(b, width));
+    let negative = is_negative(a, width) != is_negative(b, width);
+    (if negative { W::ZERO.wrapping_sub(quotient) } else { quotient }) & mask::<W>(width)
+}
+
+/// `APInt::srem` at any width: the remainder with the sign of the dividend.
+pub fn srem_word<W: Word>(
+    a: W,
+    b: W,
+    width: u32,
+) -> W {
+    let remainder = urem(magnitude(a, width), magnitude(b, width));
+    (if is_negative(a, width) { W::ZERO.wrapping_sub(remainder) } else { remainder }) & mask::<W>(width)
+}
+
+/// `APIntOps::RoundingUDiv` at any width.
+pub fn rounding_udiv_word<W: Word>(
+    a: W,
+    b: W,
+    up: bool,
+) -> W {
+    let (quotient, remainder) = a.divrem(b);
+    if up && !remainder.is_zero() { quotient.wrapping_add(W::ONE) } else { quotient }
+}
+
+/// `APIntOps::RoundingSDiv` at any width, rounding up or down.
+pub fn rounding_sdiv_word<W: Word>(
+    a: W,
+    b: W,
+    width: u32,
+    up: bool,
+) -> W {
+    let quotient = sdiv_word(a, b, width);
+    let remainder = srem_word(a, b, width);
+    let result = if remainder.is_zero() {
+        quotient
+    } else if (is_negative(remainder, width)) != is_negative(b, width) {
+        if up { quotient } else { quotient.wrapping_sub(W::ONE) }
+    } else if up {
+        quotient.wrapping_add(W::ONE)
+    } else {
+        quotient
+    };
+    result & mask::<W>(width)
+}
+
+/// `APInt::sadd_ov` at any width.
+pub fn sadd_ov_word<W: Word>(
+    a: W,
+    b: W,
+    width: u32,
+) -> (W, bool) {
+    let sum = a.wrapping_add(b) & mask::<W>(width);
+    (sum, is_negative(a, width) == is_negative(b, width) && is_negative(sum, width) != is_negative(a, width))
+}
+
+/// `APInt::ssub_ov` at any width.
+pub fn ssub_ov_word<W: Word>(
+    a: W,
+    b: W,
+    width: u32,
+) -> (W, bool) {
+    let difference = a.wrapping_sub(b) & mask::<W>(width);
+    (difference, is_negative(a, width) != is_negative(b, width) && is_negative(difference, width) != is_negative(a, width))
+}
+
+/// `APInt::smul_ov` at any width.
+pub fn smul_ov_word<W: Word>(
+    a: W,
+    b: W,
+    width: u32,
+) -> (W, bool) {
+    let (product, over) = magnitude(a, width).overflowing_mul(magnitude(b, width));
+    let negative = is_negative(a, width) != is_negative(b, width);
+    let limit = if negative { sign_bit::<W>(width) } else { sign_bit::<W>(width).wrapping_sub(W::ONE) };
+    let result = (if negative { W::ZERO.wrapping_sub(product) } else { product }) & mask::<W>(width);
+    (result, over || product > limit)
 }
 
 // What follows is `u128` only: it divides, or needs a signed number wider than
@@ -769,3 +917,7 @@ pub(crate) fn rotate_amount(
 ) -> u32 {
     (amt % u128::from(width)) as u32
 }
+
+#[cfg(test)]
+#[path = "apint_tests.rs"]
+mod tests;
