@@ -3527,3 +3527,25 @@ fn a_win64_variadic_call_repeats_a_double_in_the_integer_register() {
     let sysv = listing_of("-mabi=sysv");
     assert!(sysv.contains("mov al, 1") && !sysv.contains("rdx"), "{sysv}");
 }
+
+/// A Win64 variadic function finds its unnamed register arguments in the home
+/// area: the callee stores RDX, R8 and R9 there, and `va_start` points at the
+/// first.
+#[test]
+fn a_win64_variadic_function_homes_its_register_arguments_for_va_start() {
+    let body = "declare void @llvm.va_start.p0(ptr)\ndefine i32 @f(i32 %n, ...) {\n  %ap = alloca ptr\n  call void @llvm.va_start.p0(ptr %ap)\n  %p = load ptr, ptr %ap\n  %v = load i32, ptr %p\n  ret i32 %v\n}\n";
+    let text = format!("{SYSV}{body}");
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag", "-mabi=win64"]), &text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    // The homes of RDX, R8 and R9: the return address is at [rsp], the home of
+    // the first argument above it.
+    let below: i64 = lines.iter().find_map(|l| l.strip_prefix("sub rsp, ")?.parse().ok()).unwrap_or(0);
+    for (at, register) in [(16, "rdx"), (24, "r8"), (32, "r9")] {
+        let home = format!("mov qword ptr [rsp+{}], ", at + below);
+        assert!(lines.iter().any(|l| l.starts_with(&home)), "{register} not homed {at} above the return address: {listing}");
+    }
+    assert!(!listing.contains("test al"), "SysV register save area: {listing}");
+    // Win64 has no red zone: nothing is written below the stack pointer.
+    assert!(!listing.contains("[rsp-"), "{listing}");
+}

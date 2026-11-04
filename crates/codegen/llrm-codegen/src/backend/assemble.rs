@@ -1175,14 +1175,20 @@ fn staged(
     }
     // Win64's xmm6-15 are kept too, but saved into the frame, not pushed.
     let (vector_saved, pushed): (Vec<_>, Vec<_>) = convention.saved.iter().copied().partition(|(whole, _)| whole.is_xmm());
-    let mut registers =
-        llrm_target::FrameRegisters { saved: pushed, vector_saved, ..target.arch.frame_registers() };
-    // The convention's entry functions (`entry_clobbers_all`) keep nothing for
-    // a caller that does not exist.
     let entry = module
         .named(name)
         .and_then(|id| module.global(id).function())
         .and_then(|function| target.arch.calling().by_number(function.calling_convention));
+    // The red zone is the function's convention's (Win64 has none).
+    let base = target.arch.frame_registers();
+    let mut registers = llrm_target::FrameRegisters {
+        saved: pushed,
+        vector_saved,
+        red_zone: entry.map_or(base.red_zone, |one| one.frame_red_zone),
+        ..base
+    };
+    // The convention's entry functions (`entry_clobbers_all`) keep nothing for
+    // a caller that does not exist.
     if target.facts.uncalled(name) && entry.is_some_and(|one| one.entry_clobbers_all.iter().any(|entry| entry == name))
     {
         registers.saved.clear();

@@ -635,6 +635,7 @@ impl<'a> Builder<'a> {
             sibcall: false,
             variadic_call: false,
             variadic_count: true,
+            win64_va: false,
             variadic_shadows: Vec::new(),
             call_attrs_move_arguments: false,
             call_sret: Vec::new(),
@@ -684,6 +685,8 @@ struct Builder<'a> {
     /// The convention of the variadic call being lowered counts its vector
     /// registers in `al` (SysV); Win64 has no count.
     variadic_count: bool,
+    /// The function being lowered keeps Win64's `va_list`, the bare pointer.
+    win64_va: bool,
     /// Win64: the integer register of each argument position, where a vector
     /// argument of a variadic call is copied as well
     /// (`LowerCall`'s "XMM reg to the corresponding shadow reg").
@@ -1165,7 +1168,7 @@ impl Builder<'_> {
         if self.module.signature(self.function.ty).2 {
             self.dag.var_args_frame_index = Some(-(fixed + 1));
             if self.target.dag.pointer == EVT::I64 {
-                self.save_variadic_registers()?;
+                self.save_variadic_registers(fixed)?;
             }
         }
         Ok(())
@@ -1345,11 +1348,14 @@ impl Builder<'_> {
     /// `va_start` names. The vector registers' half of the area (48..176)
     /// is left unwritten until floating point is selected at m64 (DEVIATE
     /// SD238: a `double` passed to such a function is not read back).
-    fn save_variadic_registers(&mut self) -> Result<(), Refused> {
+    fn save_variadic_registers(&mut self, fixed: i32) -> Result<(), Refused> {
         let calling = self.full_arch()?.calling();
         let Some(found) = calling.by_number(self.function.calling_convention) else {
             return Err(Refused("va_start at m64 in a function with no convention"));
         };
+        if found.positional {
+            return self.home_variadic_registers(found, fixed);
+        }
         let named: usize = self
             .convention
             .parameters
@@ -1419,6 +1425,45 @@ impl Builder<'_> {
         }
         let fp_offset = (found.argument_registers.len() * 8 + named_vectors * 16) as u32;
         self.dag.var_args_save = Some((save, named as u32 * 8, fp_offset));
+        Ok(())
+    }
+
+    /// `LowerFormalArguments` under Win64: each unnamed integer register is
+    /// stored to its home slot in the caller's shadow space, and `va_start`
+    /// points at the first of them, a plain `char *` (no register save area,
+    /// no vector registers).
+    fn home_variadic_registers(
+        &mut self,
+        found: &llrm_target::calling::Convention,
+        fixed: i32,
+    ) -> Result<(), Refused> {
+        let pointer = self.target.dag.pointer;
+        let named = self.convention.parameters.len();
+        let first = self.full_arch()?.first_argument_offset(false);
+        let mut object = fixed;
+        for (at, name) in found.argument_registers.iter().enumerate().skip(named) {
+            object += 1;
+            self.dag.fixed_offsets.insert(-object, first + at as i64 * 8);
+            let vreg = self.info.new_reg();
+            self.live_ins.push((self.arch.register_named(name), vreg));
+            let entry = self.dag.entry_node();
+            let value = self.dag.get_copy_from_reg(entry, vreg, pointer);
+            let address = self.dag.get_frame_index(pointer, -object);
+            let info = MemInfo {
+                mem_vt: pointer,
+                align: 8,
+                volatile: false,
+                base: MemBase::Stack(-object),
+                ext: None,
+                space: 0,
+                ordering: None,
+            };
+            let root = self.control_root();
+            let store = self.dag.get_store(root, value, address, info);
+            self.dag.set_root(store);
+        }
+        self.dag.var_args_frame_index = Some(-(fixed + 1));
+        self.win64_va = true;
         Ok(())
     }
 
