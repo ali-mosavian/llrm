@@ -268,7 +268,8 @@ pub fn pressure_weighted(
 }
 
 /// The weight of the `candidates` live into `header` that no block of `blocks`
-/// reads: they hold their registers (or spill) across the loop without using it.
+/// reads: they hold their registers (or spill) across the loop without using
+/// it.
 pub fn live_through_weighted(
     function: &Function,
     header: BlockId,
