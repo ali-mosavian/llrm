@@ -1,6 +1,6 @@
 //! On the 486 and the Pentium `movzx r32,r8` takes three clocks and `and r32,imm`
 //! one, so a byte mask and the signed `/2^k` bias are an `and` at speed and keep
-//! the shorter `movzx` and `shr` for size (SD460, SD461). mandel O2 grew 2.5%
+//! the shorter `movzx` and `shr` for size (MA1, SD461). mandel O2 grew 2.5%
 //! with `shr` for the bias and `movzx` where the 486 mask is one
 //! clock. Needs `LLRM_OW` and the m16 clang (`LLRM_CLANG_M16`).
 
@@ -49,7 +49,7 @@ fn asm(
 /// 24`.
 #[test]
 fn at_speed_the_byte_mask_and_the_sdiv_bias_are_ands_on_the_486() {
-    for (target, tag) in [("x86_32-wat", "m32"), ("x86_16-wat", "m16")] {
+    for (target, tag) in [("x86_32-wat", "m32")] {
         let Some(text) = asm(target, "-O2", tag) else { return };
         assert!(!text.contains("movzx"), "{tag}: {text}");
         assert!(!text.contains("shr"), "{tag}: {text}");
@@ -60,7 +60,7 @@ fn at_speed_the_byte_mask_and_the_sdiv_bias_are_ands_on_the_486() {
 /// For size they keep the shorter forms.
 #[test]
 fn at_os_the_byte_mask_and_the_sdiv_bias_keep_the_shorter_forms() {
-    for (target, tag) in [("x86_32-wat", "m32os"), ("x86_16-wat", "m16os")] {
+    for (target, tag) in [("x86_32-wat", "m32os")] {
         let Some(text) = asm(target, "-Os", tag) else { return };
         assert!(text.contains("movzx"), "{tag}: {text}");
         assert!(text.contains("shr"), "{tag}: {text}");

@@ -79,9 +79,9 @@ const UNOPTIMIZED: &[&str] = &[
     "MachineLICM",
     "IvShare",
     "IvZero",
+    "MaskByAnd",
     "FixupBW",
     "FixupLEAs",
-    "MaskByAnd",
     "CmpAsSub",
     "CallFrameOpt",
 ];
@@ -100,6 +100,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("MachineLICM", "machinelicm@4"),
     ("IvShare", "machinelicm@4"),
     ("IvZero", "machinelicm@4"),
+    ("MaskByAnd", "machinelicm@4"),
     ("MachineCSE", "machinecse@4"),
     ("MachineSink", "machinesink@4"),
     ("PeepholeOptimizer", "peepholeopt@4"),
@@ -125,7 +126,6 @@ const SLOTS: &[(&str, &str)] = &[
     ("Peephole", "peephole@14"),
     ("FixupBW", "fixupbw@14"),
     ("FixupLEAs", "fixupleas@14"),
-    ("MaskByAnd", "fixupleas@14"),
     ("LoopSlots", "loopslots@15"),
     ("Scheduler", "schedule@16"),
     ("ControlFlow", "jumps@17"),
@@ -190,6 +190,11 @@ pub fn machine_with<'a>(
         Box::new(crate::backend::ivshare::IvShare { classes: Rc::clone(classes) }),
         // A counted loop's index ends at zero (DEVIATE LSR3).
         Box::new(crate::backend::ivzero::IvZero { classes: Rc::clone(classes) }),
+        // Where the block runs often enough, `and d,s,mask` for `movzx d,s.low` (DEVIATE MA1).
+        Box::new(crate::backend::maskbyand::MaskByAnd {
+            clocks_saved: target.cost("movzx")? - target.cost("alu_ri")?,
+            milliclocks_per_byte: target.speed_milliclocks_per_byte(),
+        }),
         // On SSA, a repeated computation once (the pin: MachineCSE, then
         // MachineSink).
         Box::new(crate::backend::precse::MachineCse { classes: Rc::clone(classes) }),
@@ -294,11 +299,6 @@ pub fn machine_with<'a>(
             slow_3ops: target.slow_3ops_lea(),
             size: target.size,
             ..Default::default()
-        }),
-        // Where the block runs often enough, `and r,mask` for `movzx r,low(r)`.
-        Box::new(crate::backend::maskbyand::MaskByAnd {
-            clocks_saved: target.cost("movzx")? - target.cost("alu_ri")?,
-            milliclocks_per_byte: target.speed_milliclocks_per_byte(),
         }),
         // Once spill traffic is final: which slots a loop still reaches.
         Box::new(loopslots::LoopSlots::new(frame.clone(), target, registers.slot as u32, classes)?),
