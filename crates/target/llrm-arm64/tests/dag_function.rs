@@ -1034,3 +1034,19 @@ fn a_shifted_and_masked_field_is_one_ubfiz() {
     let ir = "define i32 @f(i32 %y) {\n  %s = shl i32 %y, 4\n  %t = and i32 %s, 112\n  ret i32 %t\n}";
     assert_eq!(selected(ir).unwrap(), [["UBFMWri", "RET_ReallyLR"]]);
 }
+
+/// `isNarrowingProfitable` is false for a scalar on AArch64: the index
+/// `zext i8` scaled by 4 stayed one `shl` on 64 bits and folded into the
+/// store as `[x1, x8, lsl #2]`. We narrowed it to a 32-bit `lsl` first, which
+/// cost an instruction in every iteration of stft's bit-reversal loop.
+#[test]
+fn a_scaled_byte_index_folds_into_the_store() {
+    let ir = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"\n\
+              target triple = \"aarch64-unknown-linux-gnu\"\n\
+              define void @f(ptr %b, ptr %p, float %v) {\n  %c = load i8, ptr %b\n  %z = zext i8 %c to i64\n  \
+              %a = getelementptr inbounds float, ptr %p, i64 %z\n  store float %v, ptr %a\n  ret void\n}\n";
+    let asm = llrm_arm64::driver::assembly(ir, llrm_arm64::machine::Platform::Linux, llrm_arm64::driver::Level::O0)
+        .expect("lowers");
+    assert!(asm.contains("lsl #2]"), "{asm}");
+    assert!(!asm.contains("lsl w"), "{asm}");
+}

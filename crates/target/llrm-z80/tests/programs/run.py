@@ -15,7 +15,7 @@ ROOT = HERE.parents[4]
 RUNTIME = HERE.parents[1] / "runtime" / "z80_rt.s"
 LIBC = HERE / "libc"  # the C library's entries over the runtime's: a library, so a program's own definition wins
 DATALAYOUT = 'target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16"'
-CLANG_FLAGS = ["-target", "msp430", "-fsigned-char", "-fpack-struct=1", "-fno-vectorize", "-fno-slp-vectorize", "-S", "-emit-llvm"]
+CLANG_FLAGS = ["-target", "msp430", "-fsigned-char", "-fpack-struct=1", "-fno-vectorize", "-fno-slp-vectorize", "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone", "-S", "-emit-llvm"]
 LOG = 0xC000  # the log pointer, then the entries; the stack runs down from 0xFFFF
 CRT0 = f"""\t.module crt0
 \t.globl _main
@@ -67,11 +67,12 @@ def sh(cmd, cwd, inp=None, timeout=300):
 
 
 def libc_library(work):
-    """The library directory of LIBC's objects: sdld takes a member only for a symbol still undefined (an sdar archive, it takes whole)."""
+    """The library directory of LIBC's objects and those of the `Z80_LIBC_EXTRA` directories (the soft-float helpers): sdld takes a member only for a symbol still undefined (an sdar archive, it takes whole)."""
     lib = Path(work) / "lib"
     lib.mkdir()
     stems = []
-    for s in sorted(LIBC.glob("*.s")):
+    extra = [Path(d) for d in os.environ.get("Z80_LIBC_EXTRA", "").split(":") if d]
+    for s in sorted([*LIBC.glob("*.s"), *(p for d in extra for p in d.glob("*.s"))]):
         a = sh(["sdasz80", "-g", "-o", f"lib/{s.stem}.rel", str(s)], work)
         assert a.returncode == 0, a.stdout + a.stderr
         stems.append(s.stem)

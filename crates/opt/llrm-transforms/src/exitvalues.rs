@@ -195,8 +195,11 @@ fn rewrite_loop_exit_values(
 ) -> usize {
     // DEVIATE 15 is a 16-bit row: the pin's `rewriteLoopExitValues` reads no
     // optsize (IndVarSimplify.cpp, LoopUtils.cpp:1876), and the byte sweep
-    // that motivated it is QCport m16 -Os.
-    let size = size && layout.pointer(0).bits < layout.largest_legal_integer();
+    // that motivated it is QCport m16 -Os. A target whose wide multiplies are
+    // library calls takes it too (`Tti::sizes_exit_values`).
+    let size = size
+        && (layout.pointer(0).bits < layout.largest_legal_integer()
+            || outer.target().tti().is_some_and(|tti| tti.sizes_exit_values()));
     let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
     let declarations: &Declarations = &outer.globals;
     let mut rewrite_phi_set: Vec<RewritePhi> = Vec::new();

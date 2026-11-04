@@ -387,6 +387,7 @@ mod tests {
             IndexMap::default(),
         );
         let frame = |saved: Vec<(RegId, RegId)>| llrm_target::FrameRegisters {
+            vector_saved: Vec::new(),
             pointer: RegId::BP,
             stack: RegId::SP,
             saved,
@@ -446,6 +447,7 @@ mod tests {
             IndexMap::default(),
         );
         let frame = llrm_target::FrameRegisters {
+            vector_saved: Vec::new(),
             pointer: RegId::BP,
             stack: RegId::SP,
             saved: vec![],

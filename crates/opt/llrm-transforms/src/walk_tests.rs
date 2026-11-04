@@ -2694,17 +2694,23 @@ fn m32_tree_calls(
 /// bench fib at m32 -O2 was 334151 clocks against gcc's 210636: the pin's
 /// inliner copies no recursive callee, gcc's `recursive_inlining` copies fib
 /// into itself to depth 8 (REC-2).
-#[cfg(feature = "gcc-gpl")]
 #[test]
 fn test_m32_copies_a_tree_recursion_into_itself_at_speed() {
     let calls = m32_fib_calls(crate::pipeline::Options::default());
     assert!(calls > 8, "fib was not copied into itself, {calls} calls of it");
 }
 
+/// fib at -O1 was copied into itself (334152 -> 424014 clocks, 69 -> 649 B):
+/// gcc inlines no function at -O1, recursive ones included.
+#[test]
+fn test_m32_copies_no_recursion_at_o1() {
+    let calls = m32_fib_calls(crate::pipeline::Options::basic());
+    assert!(calls <= 3, "fib was copied into itself at -O1, {calls} calls of it");
+}
+
 /// gcc rejects the recursive edge of quicksort and bintree at -O2
 /// ("max-inline-insns-auto limit reached", growth 25-28 and 15-22 against 15)
 /// and takes it at -O3 (30): a body that grows past 15 is copied at -O3 only.
-#[cfg(feature = "gcc-gpl")]
 #[test]
 fn test_m32_copies_a_recursion_whose_edge_grows_past_15_only_at_o3() {
     let o2 = m32_tree_calls(6, crate::pipeline::Options::default());
@@ -2724,7 +2730,7 @@ fn test_gcc_size_counts_a_branch_a_call_and_its_arguments_as_gcc_does() {
     let module = parsed(&tree_recursion(0).replace("@tree", "@fib"));
     let (_, _, fib) =
         module.functions().find(|(_, _, f)| !f.is_declaration() && f.parameters().len() == 1).expect("fib");
-    assert_eq!((llrm_gpl_gcc::gcc_size(fib), crate::inline::recursive_edge_growth(fib)), (13, 7));
+    assert_eq!((llrm_gpl_gcc::gcc_size(fib), llrm_gpl_gcc::recursive_edge_growth(fib)), (13, 7));
 }
 
 /// bench bintree's `insert` (three parameters, gcc size 22, edge growth 16 by
@@ -2764,17 +2770,8 @@ rec:
     );
     let (_, _, insert) = module.functions().next().expect("insert");
     let size = llrm_gpl_gcc::gcc_size(insert);
-    assert_eq!(crate::inline::recursive_edge_growth(insert), size - 6);
-    assert!(size - crate::inline::recursive_edge_growth(insert) == 6, "the call term scales with parameters");
-}
-
-/// Without `gcc-gpl` the edge bar cannot be computed: m32 copies no recursion
-/// and its code equals the pin's (REC-2 is inert).
-#[cfg(not(feature = "gcc-gpl"))]
-#[test]
-fn test_m32_copies_no_recursion_without_the_gcc_feature() {
-    let calls = m32_fib_calls(crate::pipeline::Options::default());
-    assert!(calls <= 3, "fib was copied into itself without gcc-gpl, {calls} calls of it");
+    assert_eq!(llrm_gpl_gcc::recursive_edge_growth(insert), size - 6);
+    assert!(size - llrm_gpl_gcc::recursive_edge_growth(insert) == 6, "the call term scales with parameters");
 }
 
 /// gcc-derived code (`llrm-gpl-gcc`, GPL-3.0-or-later) is optional and off: a
@@ -2806,5 +2803,39 @@ fn test_the_default_build_links_no_gcc_derived_crate() {
             continue;
         }
         assert!(!text.contains("llrm-gpl-gcc"), "{} depends on the GPL crate", manifest.display());
+    }
+}
+
+/// The bar of the recursive edge (DEVIATE REC-2) as the 12 self-recursive
+/// functions of the corpus meet it: gcc 15 copies fib, hanoi, recpow and
+/// rectwo into themselves at -O2 (edge growth <= 15) and at -O3 (<= 30) also
+/// bintree `walk`, recchop `chop`, x_hanoi2 `mv`, quicksort `sort` and queens
+/// `place`, never x_mergesort `msort` (growth 67). Fitted on these, `gcc_insns`
+/// of queens 22 sits on the m32 O3 edge.
+#[test]
+fn test_the_m32_edge_bar_makes_gccs_decision_for_every_corpus_recursion() {
+    // (module, function, copied at -O2, copied at -O3)
+    let table: [(&str, &str, &str, bool, bool); 10] = [
+        ("fib", include_str!("testdata/rec2/fib.ll"), "fib_", true, true),
+        ("hanoi", include_str!("testdata/rec2/hanoi.ll"), "hanoi_", true, true),
+        ("recpow", include_str!("testdata/rec2/recpow.ll"), "power_", true, true),
+        ("rectwo", include_str!("testdata/rec2/rectwo.ll"), "paths_", true, true),
+        ("bintree", include_str!("testdata/rec2/bintree.ll"), "walk_", false, true),
+        ("recchop", include_str!("testdata/rec2/recchop.ll"), "chop_", false, true),
+        ("x_hanoi2", include_str!("testdata/rec2/x_hanoi2.ll"), "mv_", false, true),
+        ("quicksort", include_str!("testdata/rec2/quicksort.ll"), "sort_", false, true),
+        ("queens", include_str!("testdata/rec2/queens.ll"), "place_", false, true),
+        ("x_mergesort", include_str!("testdata/rec2/x_mergesort.ll"), "msort_", false, false),
+    ];
+    let m32 = crate::indvars::tests::m32();
+    let (o2_bar, o3_bar) = m32.tti().and_then(|tti| tti.recursive_edge_growth()).expect("m32 states the bar");
+    for (name, text, function, o2, o3) in table {
+        let module = parsed(text);
+        let (_, _, body) = module
+            .functions()
+            .find(|(_, global, _)| global.name.as_deref() == Some(function))
+            .unwrap_or_else(|| panic!("{name}: no {function}"));
+        let insns = crate::inline::recursive_edge_growth(body);
+        assert_eq!((insns <= o2_bar, insns <= o3_bar), (o2, o3), "{name} {function}: gcc_insns {insns}, bars {o2_bar}/{o3_bar}");
     }
 }
