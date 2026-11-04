@@ -122,6 +122,23 @@ pub const TUNING: Tuning = Tuning {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Wasm;
 
+/// The width of a pointer: wasm32.
+const POINTER_BITS: u32 = 32;
+
+/// `BasicTTIImplBase::getTypeLegalizationCost`: how many registers a value of
+/// `ty` takes and each one's size in bits. wasm has `i32`, `i64`, `f32` and
+/// `f64`: a narrower integer is promoted, a wider one split in halves.
+fn legalized(ty: Ty) -> (u32, u32) {
+    match ty {
+        Ty::Int(bits) if bits <= 32 => (1, 32),
+        Ty::Int(bits) if bits <= 64 => (1, 64),
+        Ty::Int(bits) => (bits.div_ceil(64).next_power_of_two(), 64),
+        Ty::Pointer | Ty::Float => (1, 32),
+        Ty::Double => (1, 64),
+        Ty::X87 => (1, 80),
+    }
+}
+
 impl Tti for Wasm {
     /// `FSQRT` is legal on `f32` and `f64`.
     fn have_fast_sqrt(
@@ -237,6 +254,12 @@ impl Tti for Wasm {
         Basic.is_truncate_free(from, to)
     }
 
+    /// `TargetTransformInfoImplBase::getCastInstrCost` and the start of
+    /// `BasicTTIImplBase::getCastInstrCost`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L1257>):
+    /// a pointer cast to or from a legal integer of its width, and a `trunc`
+    /// or `bitcast` between types that legalize to one register of one size
+    /// (`i32` to `i8`: both an `i32`), are free. `Basic` charged each one.
     fn cast_cost(
         &self,
         op: CastKind,
@@ -244,7 +267,23 @@ impl Tti for Wasm {
         from: Ty,
         kind: CostKind,
     ) -> Cost {
-        Basic.cast_cost(op, to, from, kind)
+        let legal_integer = |ty: Ty| matches!(ty, Ty::Int(32 | 64));
+        let width = |ty: Ty| match ty {
+            Ty::Int(bits) => bits,
+            _ => 32,
+        };
+        let free = match op {
+            CastKind::IntToPtr => legal_integer(from) && width(from) <= POINTER_BITS,
+            CastKind::PtrToInt => legal_integer(to) && width(to) >= POINTER_BITS,
+            CastKind::Trunc | CastKind::BitCast => {
+                let integral = |ty: Ty| matches!(ty, Ty::Int(_) | Ty::Pointer);
+                let (from_count, from_size) = legalized(from);
+                let (to_count, to_size) = legalized(to);
+                from_count == to_count && from_size == to_size && integral(from) == integral(to)
+            }
+            _ => false,
+        };
+        if free { Cost::FREE } else { Basic.cast_cost(op, to, from, kind) }
     }
 
     /// A `sext` or `zext` of a load is free when the extending load is legal
