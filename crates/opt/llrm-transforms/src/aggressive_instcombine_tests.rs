@@ -353,3 +353,32 @@ fn the_high_half_of_a_multiply_in_parts_is_a_widening_multiply() {
     let inputs: &[&[i128]] = &[&[0, 0], &[65535, 65535], &[4660, 65536], &[-1, -1], &[305419896, 2596069104]];
     assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
 }
+
+const SQRT_OF_SQUARE: &str = "declare double @sqrt(double)
+define i32 @f(i32 %x) {
+b0:
+  %d = sitofp i32 %x to double
+  %s = fmul double %d, %d
+  %r = call double @sqrt(double %s)
+  %i = fptosi double %r to i32
+  ret i32 %i
+}
+";
+
+/// `sqrt(x * x)` stayed a libcall that may set `errno`; where the target has a
+/// sqrt instruction and the argument cannot be negative, the pin's `foldSqrt`
+/// makes it `llvm.sqrt`.
+#[test]
+fn a_sqrt_of_a_square_is_the_intrinsic_where_the_target_has_a_sqrt() {
+    // Text only: the interpreter has no external `sqrt`.
+    let run = |machine: crate::testing::Tuned| {
+        let mut module = parsed(&format!("{DOS}{SQRT_OF_SQUARE}"));
+        crate::testing::managed_on(&mut module, AggressiveInstCombine, machine);
+        managed(&mut module, crate::dead::Dead)
+    };
+    let fast = run(crate::testing::Tuned { fast_sqrt: true, ..Default::default() });
+    assert!(fast.contains("llvm.sqrt.f64"), "{fast}");
+    assert!(!fast.contains("call double @sqrt"), "{fast}");
+    let slow = run(Default::default());
+    assert!(slow.contains("call double @sqrt"), "no sqrt instruction: the call stays\n{slow}");
+}

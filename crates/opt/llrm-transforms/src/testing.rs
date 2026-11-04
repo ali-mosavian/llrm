@@ -165,6 +165,8 @@ pub struct Tuned {
     /// `ctlz` costs one unit, as on a target with a count-leading-zeros
     /// instruction.
     pub cheap_ctlz: bool,
+    /// `FSQRT` is legal on `double`.
+    pub fast_sqrt: bool,
     /// `Tuning::price_fills`.
     pub price_fills: bool,
     /// No constant memset is stored inline: every fill is a `rep stos`.
@@ -180,11 +182,19 @@ pub struct Flagged {
     /// `ctlz` costs one unit, as on a target with a count-leading-zeros
     /// instruction.
     pub cheap_ctlz: bool,
+    pub fast_sqrt: bool,
     pub no_cmov: bool,
     pub no_global_base: bool,
 }
 
 impl llrm_mir::tti::Tti for Flagged {
+    fn have_fast_sqrt(
+        &self,
+        ty: tti::Ty,
+    ) -> bool {
+        self.fast_sqrt && ty == tti::Ty::Double
+    }
+
     fn prefers_exit_ne(&self) -> bool {
         self.exit_ne
     }
@@ -315,14 +325,14 @@ impl llrm_mir::target::Machine for Tuned {
     }
 
     fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
-        (self.exit_ne || self.no_global_base || self.cheap_ctlz).then(|| {
+        (self.exit_ne || self.no_global_base || self.cheap_ctlz || self.fast_sqrt).then(|| {
             std::rc::Rc::new(Flagged {
                 exit_ne: self.exit_ne,
                 no_cmov: false,
                 no_global_base: self.no_global_base,
                 cheap_ctlz: self.cheap_ctlz,
-            })
-                as _
+                fast_sqrt: self.fast_sqrt,
+            }) as _
         })
     }
 

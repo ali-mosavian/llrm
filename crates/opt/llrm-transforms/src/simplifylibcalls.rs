@@ -57,6 +57,19 @@ use llrm_mir::types::Type;
 
 mod compare;
 
+/// One table per module: the target's library, else the pin's defaults for
+/// the pointer's width.
+pub(crate) fn target_library_info(
+    outer: &llrm_mir::passes::Outer,
+    size_bits: u32,
+) -> std::rc::Rc<TargetLibraryInfo> {
+    outer.memo::<TargetLibraryInfo>(0, || {
+        let library =
+            outer.program().target.library().unwrap_or_else(|| std::rc::Rc::new(Generic::for_pointer(size_bits)));
+        TargetLibraryInfo::new(&*library)
+    })
+}
+
 pub struct SimplifyLibCalls {
     routines: Vec<Routine>,
 }
@@ -435,14 +448,7 @@ impl FunctionPass for SimplifyLibCalls {
         let size_bits = unit.layout.pointer(0).index_bits;
         // One table per module: the target's library, else the pin's defaults
         // for the pointer's width.
-        let info = outer.memo::<TargetLibraryInfo>(0, || {
-            let library = outer
-                .program()
-                .target
-                .library()
-                .unwrap_or_else(|| std::rc::Rc::new(Generic::for_pointer(size_bits)));
-            TargetLibraryInfo::new(&*library)
-        });
+        let info = target_library_info(&outer, size_bits);
         let env = Env { globals: &outer.globals, layout: unit.layout };
         let mut changed = false;
         let calls: Vec<InstId> = unit

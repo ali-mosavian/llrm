@@ -112,6 +112,14 @@ impl Machine for WasmMachine {
 pub struct Wasm;
 
 impl Tti for Wasm {
+    /// `FSQRT` is legal on `f32` and `f64`.
+    fn have_fast_sqrt(
+        &self,
+        ty: llrm_mir::tti::Ty,
+    ) -> bool {
+        matches!(ty, llrm_mir::tti::Ty::Float | llrm_mir::tti::Ty::Double)
+    }
+
     fn name(&self) -> &'static str {
         "WebAssembly"
     }
