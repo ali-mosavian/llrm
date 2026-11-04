@@ -1219,9 +1219,9 @@ entry:
 "
     );
     let module = llrm_mir::parse::module(&text).expect("parses");
-    let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
-    cpu.size = size;
-    let done = selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    // the profile of m32's own cost model: `profile("486")` is m16's, whose tuning the m32 rules are not
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", size).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
     done.body
         .insns()
         .iter()
