@@ -2356,6 +2356,21 @@ fn test_a_move_inside_the_tail_both_ways_end_with_is_not_lifted() {
     assert!(at > lines.iter().position(|line| line.starts_with("cmp")).unwrap(), "{lines:?}");
 }
 
+/// One way jumps to the block the other falls into: the tail is the same
+/// (m16 sfm16_float_add -O2 again, the lift ran on the jump's difference).
+#[test]
+fn test_a_jump_where_the_other_way_falls_does_not_hide_the_common_tail() {
+    let copy = |at| _inserted(_insn(at, Operation::Move, "mov", vec![cx()], vec![si()], None));
+    let lines = _printed(vec![
+        block(1, vec![_compare(1), _branch(2, "je", 9)], vec![9, 4]).into(),
+        block(4, vec![_inserted(_insn(4, Operation::Move, "mov", vec![dx()], vec![imm(1)], None)), copy(5), _jump(6, 20)], vec![20]).into(),
+        block(9, vec![copy(9)], vec![20]).into(),
+        block(20, vec![_return(20)], vec![]).into(),
+    ]);
+    let at = lines.iter().position(|line| line.as_str() == "mov cx, si").unwrap();
+    assert!(at > lines.iter().position(|line| line.starts_with("cmp")).unwrap(), "{lines:?}");
+}
+
 /// The move the `xor` would pass is what the `xor` reads: it stays behind it.
 #[test]
 fn test_a_def_that_reads_what_the_move_before_it_writes_is_not_lifted() {

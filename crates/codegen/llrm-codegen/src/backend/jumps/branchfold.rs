@@ -253,15 +253,22 @@ fn lifted_pair(
     (front(first, matched.iter().map(|m| m.0).collect()), front(second, matched.iter().map(|m| m.1).collect()))
 }
 
-/// How many real instructions both blocks end with, the same ones in the same
-/// order.
+/// The instructions of `block` that run, without the jump it ends on: a way
+/// that falls into its successor and one that jumps there end alike.
+fn running(block: &LirBlock) -> Vec<Arc<Insn>> {
+    let mut real: Vec<Arc<Insn>> = block.insns.iter().filter(|insn| !insn.is_meta()).cloned().collect();
+    if real.last().is_some_and(|last| last.what.as_ref().is_some_and(|what| what.op == Operation::Jump)) {
+        real.pop();
+    }
+    real
+}
+
+/// How many instructions both blocks end with, the same ones in the same order.
 fn common_tail(
     first: &LirBlock,
     second: &LirBlock,
 ) -> usize {
-    let real =
-        |block: &LirBlock| -> Vec<Arc<Insn>> { block.insns.iter().filter(|insn| !insn.is_meta()).cloned().collect() };
-    real(first).iter().rev().zip(real(second).iter().rev()).take_while(|(one, two)| one.what == two.what).count()
+    running(first).iter().rev().zip(running(second).iter().rev()).take_while(|(one, two)| one.what == two.what).count()
 }
 
 /// The positions of the instructions of `block` that `hoist_common` would hoist
@@ -272,8 +279,7 @@ fn liftable(
     block: &LirBlock,
     shared: usize,
 ) -> Vec<usize> {
-    let real = block.insns.iter().filter(|insn| !insn.is_meta()).count();
-    let open = real.saturating_sub(shared);
+    let open = running(block).len().saturating_sub(shared);
     let (mut read, mut written) = (crate::backend::lanes::Lanes::new(), crate::backend::lanes::Lanes::new());
     let mut found = Vec::new();
     for (rank, (at, insn)) in block.insns.iter().enumerate().filter(|(_, insn)| !insn.is_meta()).enumerate() {
