@@ -241,16 +241,28 @@ impl Tti for Z80Tti {
         b: &LsrCost,
     ) -> bool {
         let key = |c: &LsrCost| {
-            (c.num_regs, c.insns, c.num_base_adds, c.add_rec_cost, c.num_iv_muls, c.scale_cost, c.imm_cost, c.setup_cost)
+            (
+                c.num_regs,
+                c.insns,
+                c.num_base_adds,
+                c.add_rec_cost,
+                c.num_iv_muls,
+                c.scale_cost,
+                c.imm_cost,
+                c.setup_cost,
+            )
         };
         key(a) < key(b)
     }
 
     /// DEVIATE Z80L2: a solution the model rates worse than the loop as
-    /// written is dropped (`shouldDropLSRSolutionIfLessProfitable`; the pin's
-    /// X86 leaves it off, llrm-x86 turns it on for real mode). Three pairs make
-    /// a second induction variable cost a spill. Exit: w12's exit-value
-    /// rewrite (find, schr), then re-measured without it.
+    /// written is dropped (`shouldDropLSRSolutionIfLessProfitable`, which
+    /// defaults to false; AMDGPU and llrm-x86 real mode turn it on). Three
+    /// pairs make a second induction variable cost a spill. Reason: lz4 -Oz
+    /// 303 B without it, 262 B with. Cost: schr -O2/-Oz 19/303/45 -> 40/443/61
+    /// and find 16/337/44 -> 16/357/49, which the model rates worse than
+    /// their loops as written. Exit 2026-11-07: w12's exit-value rewrite;
+    /// then measured without the drop, and removed if schr and find hold.
     fn should_drop_lsr_solution_if_less_profitable(&self) -> bool {
         true
     }
