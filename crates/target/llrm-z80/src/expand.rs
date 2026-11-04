@@ -966,6 +966,20 @@ impl Printer<'_> {
                 self.push(format!("ld a, {}", name(ah)));
                 self.push(format!("or a, {}", name(al)));
             }
+            // two pairs, one of them `hl`: `sbc hl, rr` sets zero for the whole
+            // word (`add hl, rr` leaves it alone and puts `hl` back)
+            (false, true)
+                if al == reg::L
+                    && matches!(inst.operands.get(2), Some(Operand::Use(_)))
+                    && self.register(inst, 2)? != reg::HL =>
+            {
+                let other = name(self.register(inst, 2)?);
+                self.push("or a, a");
+                self.push(format!("sbc hl, {other}"));
+                if !self.pair_dead_after(reg::HL, rest) {
+                    self.push(format!("add hl, {other}"));
+                }
+            }
             (false, true) => {
                 self.push(format!("ld a, {}", name(al)));
                 self.push(format!("sub a, {bl}"));
