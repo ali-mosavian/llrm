@@ -1149,6 +1149,7 @@ fn selected_in(
         }
         let arrived = arrival_widths(&built.dag, &built.live_ins);
         let done = select_block(
+            &mut info,
             &mut built.dag,
             &tli,
             &mut X86Lowering {
