@@ -197,7 +197,7 @@ pub fn object(
     let module = lowered(text, level, None)?;
     let backend = Options { size: matches!(level, Level::Os | Level::Oz), mid_end: false, ..Options::default() };
     let mut items = Vec::new();
-    let mut exports = std::collections::HashMap::new();
+    let mut exports = llrm_support::hash::HashMap::default();
     for (_, global, function) in module.functions() {
         if function.is_declaration() {
             continue;

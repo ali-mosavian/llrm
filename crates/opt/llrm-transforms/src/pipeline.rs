@@ -771,7 +771,17 @@ pub(crate) fn llvm_order(
             vec![
                 // `EarlyFPM.addPass(LowerExpectIntrinsicPass())` (#L1177).
                 slot("lowerexpect@1177", Box::new(crate::lowerexpect::LowerExpect)),
-                simplify_cfg("decide@1178"),
+                // `SimplifyCFGPass()` has `ConvertSwitchRangeToICmp` off.
+                slot(
+                    "decide@1178",
+                    Box::new(simplifycfg::SimplifyCfg {
+                        options: simplifycfg::Options {
+                            loop_form_kept: false,
+                            convert_switch_range_to_icmp: false,
+                            ..Default::default()
+                        },
+                    }),
+                ),
                 sroa("sroa@1179"),
                 earlycse("earlycse@1180", false),
             ]
@@ -801,12 +811,22 @@ pub(crate) fn llvm_order(
         // (PassBuilderPipelines.cpp#L1662, the last function pass, after
         // LoopSink) and L1682.
         Phase::Late => vec![
+            // DropUnnecessaryAssumesPass (l.1577), the first of `OptimizePM`.
+            slot(
+                "drop-unnecessary-assumes@1577",
+                Box::new(crate::dropunnecessaryassumes::DropUnnecessaryAssumes { drop_dereferenceable: false }),
+            ),
             slot("float2int@1594", Box::new(crate::float2int::Float2Int)),
             // `LowerConstantIntrinsicsPass` (l.1597), right after Float2Int.
             slot("lower-constant-intrinsics@1597", Box::new(crate::lowerconstantintrinsics::LowerConstantIntrinsics)),
             // LoopInterchangePass (l.1631), in the loop pass manager after
             // LoopRotate (l.1621) and LoopDeletion (l.1628).
             slot("loop-interchange@1631", Box::new(loopinterchange::Interchange::default())),
+            // DropUnnecessaryAssumesPass (l.1360), after the vectorizer.
+            slot(
+                "drop-unnecessary-assumes@1360",
+                Box::new(crate::dropunnecessaryassumes::DropUnnecessaryAssumes { drop_dereferenceable: true }),
+            ),
             // InferAlignmentPass (l.1362), before LoopLoadElimination.
             slot("infer-alignment@1362", Box::new(crate::inferalignment::InferAlignment)),
             // LoopLoadEliminationPass (l.1400), before the SimplifyCFG of
@@ -848,6 +868,7 @@ pub(crate) fn llvm_order(
                     opt_level: if applied.options.limits.target_percent >= 200 { 3 } else { 2 },
                     opt_size: size,
                     only_when_forced: !applied.options.loop_unrolling,
+                    target_unrolling: true,
                     created: Default::default(),
                 }),
             ),
@@ -863,12 +884,12 @@ pub(crate) fn llvm_order(
             licm("licm@1508", true),
             slot("instsimplify@1662", Box::new(crate::instsimplify::InstSimplify)),
             slot("divrempairs@1667", Box::new(crate::divrempairs::DivRemPairs)),
+            slot("expandmemcmp@1673", Box::new(crate::expandmemcmp::ExpandMemCmp)),
             // TailCallElim (l.1677, the module optimization pipeline's
             // "calls created during optimization"), at every level: at -O1 it
             // is the only one, so a self-recursive tail call is a loop there
             // (recmany -O1 -m32 ran 1500 frames deep, 60 KB, where the pin's
-            // runs in one). ExpandMemCmp, between the two at the pin, is not
-            // a slot.
+            // runs in one).
             slot("tailrec@1677", Box::new(tailcallelim::TailCallElim)),
             simplify_cfg_with("simplifycfg@1682", simplifycfg::Options::L1682),
         ],
@@ -963,6 +984,7 @@ pub(crate) fn llvm_order(
                         opt_level: if applied.options.limits.target_percent >= 200 { 3 } else { 2 },
                         opt_size: size,
                         only_when_forced: !applied.options.loop_unrolling,
+                        target_unrolling: false,
                         created: std::rc::Rc::clone(&created),
                     }),
                 ),

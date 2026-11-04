@@ -13,8 +13,14 @@ fn unrolled(module: &mut Module) -> bool {
     crate::loopsimplify::simplified(function);
     crate::lcssa::closed(function).expect("closes");
     let tti = X86::of_cpu("i486").expect("a cpu");
-    let options =
-        Options { opt_level: 2, opt_size: false, min_size: false, only_when_forced: false, prepare_for_lto: false };
+    let options = Options {
+        opt_level: 2,
+        opt_size: false,
+        min_size: false,
+        only_when_forced: false,
+        prepare_for_lto: false,
+        target_unrolling: false,
+    };
     unroll_function(module, "f", &tti, options).expect("unrolls")
 }
 
