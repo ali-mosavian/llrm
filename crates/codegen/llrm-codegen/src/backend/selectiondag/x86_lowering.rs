@@ -2043,11 +2043,11 @@ fn combine_mul(
     // DEVIATE SD447: where the target prices the pin's decompositions, the
     // sheet's chain decides alone: the pin's cases (`lea` pairs, `shl; sub`)
     // cost an instruction and bytes the `imul` does not, and a tie keeps it.
-    // The pin: <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L51191>.
+    // The pin:
+    // <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L51191>.
     // A product `{3,5,9} << {1,2,3}` summed into an `add` keeps the pin's
     // chain: its last step folds into the `add` as a scaled `lea`, which the
-    // sheet does not price.
-    // Exit 2026-11-20. Owner llrm-target-x86-m64.
+    // sheet does not price. Exit 2026-11-20. Owner llrm-target-x86-m64.
     let summed = signed > 0
         && [3u128, 5, 9].iter().any(|base| abs % base == 0 && matches!(abs / base, 2 | 4 | 8))
         && dag.has_one_use(node.node)

@@ -1609,6 +1609,15 @@ impl<'a> TypeLegalizer<'a> {
                 let ((tl, th), (fl, fh)) = (self.expanded_integer(then), self.expanded_integer(other));
                 (self.dag.get_select(half, cond, tl, fl), self.dag.get_select(half, cond, th, fh))
             }
+            ISD::BitCast
+                if self.tli.types.type_action(self.dag.value_type(self.dag.operand(value, 0)))
+                    == TypeAction::SoftenFloat =>
+            {
+                // `ExpandRes_BITCAST` of a softened float: the halves of the
+                // integer that stands for it.
+                let soft = self.softened_float(self.dag.operand(value, 0));
+                self.split_integer(soft, half)
+            }
             ISD::BitCast if self.dag.value_type(self.dag.operand(value, 0)).is_floating_point() => {
                 // `ExpandRes_BITCAST` of a float: stored to a stack slot, the
                 // halves loaded from it.
@@ -1623,7 +1632,11 @@ impl<'a> TypeLegalizer<'a> {
                 let pointer = self.dag.value_type(slot);
                 let offset = self.dag.get_constant(step, pointer);
                 let high_slot = self.dag.get_node(ISD::Add, pointer, &[slot, offset]);
-                (self.dag.get_load(half, store, slot, info), self.dag.get_load(half, store, high_slot, info))
+                let (lo, hi) =
+                    (self.dag.get_load(half, store, slot, info), self.dag.get_load(half, store, high_slot, info));
+                // `hasBigEndianPartOrdering`: the word at the slot is the high
+                // one
+                if self.dag.config().big_endian { (hi, lo) } else { (lo, hi) }
             }
             ISD::BitCast if self.tli.types.is_type_legal(self.dag.value_type(self.dag.operand(value, 0))) => {
                 // `ExpandIntRes_BITCAST` from a same-size integer: its low
@@ -1769,6 +1782,15 @@ impl<'a> TypeLegalizer<'a> {
                 )
             }
             ISD::FShl | ISD::FShr => self.expand_funnel_shift(value, half),
+            // `ExpandIntRes_Rotate`: delegate to the funnel shift of the value
+            // with itself.
+            op @ (ISD::Rotl | ISD::Rotr) => {
+                let funnel = if op == ISD::Rotl { ISD::FShl } else { ISD::FShr };
+                let x = self.dag.operand(value, 0);
+                let by = self.dag.operand(value, 1);
+                let whole = self.dag.get_node(funnel, vt, &[x, x, by]);
+                self.split_integer(whole, half)
+            }
             op => return Err(LegalizeError::Unsupported { op, ty: vt, what: "expand result" }),
         };
         self.set_expanded_integer(value, lo, hi);

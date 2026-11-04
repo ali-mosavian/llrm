@@ -40,6 +40,8 @@ pub fn builder_target() -> BuilderTarget {
         shift_amount: EVT::I32,
         jump_tables: false,
         string_instructions: false,
+        // no FPU at any CPU: a float travels as the integer of its width
+        soft_float: true,
         // past the inline limit a copy or a fill is a call (the
         // pin: `memcpy`, `memmove`, `memset`)
         libcalls: Some(vec![

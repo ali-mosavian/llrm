@@ -192,8 +192,15 @@ fn a_narrowed_shift_takes_the_targets_amount_type() {
     let shl = dag.get_node(ISD::Shl, EVT::I64, &[x, three]);
     let root = dag.get_node(ISD::And, EVT::I64, &[shl, mask]);
     dag.set_root(root);
-    let mut hooks =
-        X86Lowering { cmov: true, sse2: false, min_size: false, i16_mul_chains: false, sext_load: true, zext_free: true, profile: None };
+    let mut hooks = X86Lowering {
+        cmov: true,
+        sse2: false,
+        min_size: false,
+        i16_mul_chains: false,
+        sext_load: true,
+        zext_free: true,
+        profile: None,
+    };
     let tli = TargetLowering::x86_64(Features::default(), MVT::I64);
     DagCombiner::new(&mut dag, &mut hooks, CombineLevel::AfterLegalizeDag).with_tli(&tli).run();
     fn narrowed_shifts(

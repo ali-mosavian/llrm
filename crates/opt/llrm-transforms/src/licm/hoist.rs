@@ -591,7 +591,14 @@ fn speculatable(
                 // alignment must reach the load's own.
                 let wanted = align.unwrap_or_else(|| layout.align(&context.types, instruction.ty));
                 return pointer_alignment_at(context, layout, outer, function, pointer) >= wanted
-                    && llrm_mir::valuetracking::dereferenceable(context, layout, outer.sizes(), function, pointer, bytes);
+                    && llrm_mir::valuetracking::dereferenceable(
+                        context,
+                        layout,
+                        outer.sizes(),
+                        function,
+                        pointer,
+                        bytes,
+                    );
             }
             llrm_mir::valuetracking::dereferenceable(context, layout, outer.sizes(), function, pointer, bytes)
                 || !outer.target().load_may_trap(
