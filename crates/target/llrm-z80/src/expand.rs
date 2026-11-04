@@ -376,6 +376,12 @@ impl Printer<'_> {
                 }
                 self.push(format!("and a, #{}", 0xFFu32 >> count));
             }
+            // the sign of the accumulator: its bit 7 into the carry and
+            // out again (`sra a` seven times is 14 B)
+            "SRA8" if shift_count(inst)? == 7 && name_of(self, 0)? == "a" => {
+                self.push("add a, a");
+                self.push("sbc a, a");
+            }
             "SHL8" | "SRL8" | "SRA8" => {
                 let to = name_of(self, 0)?;
                 let mnemonic = match op {
