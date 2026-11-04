@@ -8,6 +8,7 @@ pub mod atari;
 pub mod callpush;
 pub mod ccr;
 pub mod chain;
+pub mod cmpdup;
 pub mod cmpelim;
 pub mod compile;
 pub mod consts;
