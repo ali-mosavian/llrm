@@ -57,6 +57,87 @@ fn the_size_level_is_priced_in_bytes() {
     assert!(!speed.contains("dex") && !speed.contains("dey"), "-O2:\n{speed}");
 }
 
+/// `n - 1` on a word went through the carry chain (`clc; adc #255` on each
+/// byte, 22 clocks) where `lda lo; bne; dec hi; dec lo` borrows by branch (11):
+/// memcmp's and strncmp's counters, a clock row against gcc. The borrow still
+/// runs: 0x0100 - 1 = 0x00FF, 1 - 1 = 0, 0 - 1 = 0xFFFF.
+#[test]
+fn a_word_minus_one_borrows_by_branch() {
+    let probe = |name: &str, start: i32| {
+        format!(
+            "@{name}_k = global i16 {start}\ndefine i8 @{name}() {{\n  %v = load volatile i16, ptr @{name}_k\n  \
+             %d = add i16 %v, -1\n  %lo = trunc i16 %d to i8\n  %h = lshr i16 %d, 8\n  %hi = trunc i16 %h to i8\n  \
+             %s = shl i8 %hi, 1\n  %r = xor i8 %lo, %s\n  ret i8 %r\n}}\n"
+        )
+    };
+    let ir = module(&[probe("borrow", 256), probe("one", 1), probe("wrap", 0)].concat());
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(!text.contains("adc #255") && text.contains("dec"), "the carry chain:\n{text}");
+    assert_eq!(exit_code_of(&text, "borrow"), 0xFF, "{text}");
+    assert_eq!(exit_code_of(&text, "one"), 0, "{text}");
+    assert_eq!(exit_code_of(&text, "wrap"), 1, "{text}");
+}
+
+/// A byte added to an accumulator from a global indexed by a byte loaded the
+/// element, then added a cell (`lda g,x; clc; adc rc2; sta rc2`), where the 6502
+/// has `adc g,x` and the accumulator can stay in A: sum4 at -Os 22 B against
+/// llvm-mos's 13, sum_arr, sum16, schr. The sum of 1 2 3 4 is 10.
+#[test]
+fn an_indexed_global_is_the_operand_of_the_add() {
+    let ir = module(
+        r#"@arr = global [4 x i8] c"\01\02\03\04"
+@n = global i8 4
+define i8 @probe() {
+entry:
+  %n = load volatile i8, ptr @n
+  br label %loop
+loop:
+  %i = phi i8 [ 0, %entry ], [ %i2, %loop ]
+  %s = phi i8 [ 0, %entry ], [ %s2, %loop ]
+  %z = zext i8 %i to i16
+  %p = getelementptr i8, ptr @arr, i16 %z
+  %b = load i8, ptr %p
+  %s2 = add i8 %s, %b
+  %i2 = add i8 %i, 1
+  %c = icmp eq i8 %i2, %n
+  br i1 %c, label %done, label %loop
+done:
+  ret i8 %s2
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(text.contains("adc arr,x") && !text.contains("lda arr,x"), "the element was loaded:\n{text}");
+    assert_eq!(exit_code_of(&text, "probe"), 10, "{text}");
+}
+
+/// `t[(a + b) >> 1]` on bytes is a pointer plus an `i16` whose high byte is
+/// known zero. Selected as a 16-bit add into the pointer and `ldy #0; lda (rc),y`
+/// (bsearch8: 78 B against llvm-mos's 53) instead of the byte index in Y.
+#[test]
+fn an_index_with_a_known_zero_high_byte_is_the_y_of_the_load() {
+    let ir = module(
+        "define i8 @ldm(ptr %t, i8 %a, i8 %b) {\n  %x = zext i8 %a to i16\n  %y = zext i8 %b to i16\n  \
+         %s = add nuw nsw i16 %x, %y\n  %m = lshr i16 %s, 1\n  %p = getelementptr inbounds i8, ptr %t, i16 %m\n  \
+         %v = load i8, ptr %p\n  ret i8 %v\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(text.contains(",y") && !text.contains("ldy #0"), "the pointer was added in 16 bits:\n{text}");
+}
+
+/// A pointer a call returns (a and x) was copied into its cell a byte at a
+/// time, and the load through it asked the cell for a pair: "a value needed in
+/// two places". `*p()`, `char *q = malloc(4); *q = 1` and cc65's basic.c
+/// `factor` did not compile at any level. The byte at `val` is 42.
+#[test]
+fn a_pointer_a_call_returns_is_loaded_through() {
+    let ir = module(
+        "@val = global i8 42\ndefine weak noinline ptr @p() {\n  ret ptr @val\n}\n\
+         define i8 @g() {\n  %q = call ptr @p()\n  %v = load i8, ptr %q\n  ret i8 %v\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O1)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "g"), 42, "{text}");
+}
+
 /// `LLRM_6502_ZERO_PAGE` sets the platform's zero page, whichever way the
 /// platform is named. It was read before the row's own `--platform=sim65`,
 /// which put the 26 back: a sweep of 16..26 read flat, 4362 bytes at every
@@ -1452,4 +1533,152 @@ define i8 @sub_overflow() {
     // 1 + 1; 2 - 65535 = 3 with a borrow: 3 + 1
     assert_eq!(exit_code_of(&text, "add_overflow"), 2, "{text}");
     assert_eq!(exit_code_of(&text, "sub_overflow"), 4, "{text}");
+}
+
+/// `__builtin_clz` and `__builtin_ctz` (`llvm.ctlz.i32`, `llvm.cttz.i32`) failed
+/// to compile for the 6502 ("CtLzZeroPoison ... convert node to libcall"): any C
+/// program using them was lost. `check` counts the results that are wrong for
+/// 0, 1, 0x80000000 and 0xFFFFFFFF, with and without the zero-is-poison flag.
+#[test]
+fn a_32_bit_clz_and_ctz_count_correctly() {
+    let ir = module(
+        r#"@v0 = global i32 0
+@v1 = global i32 1
+@v2 = global i32 2147483648
+@v3 = global i32 4294967295
+declare i32 @llvm.ctlz.i32(i32, i1)
+declare i32 @llvm.cttz.i32(i32, i1)
+define i8 @check() {
+  %x0 = load volatile i32, ptr @v0
+  %x1 = load volatile i32, ptr @v1
+  %x2 = load volatile i32, ptr @v2
+  %x3 = load volatile i32, ptr @v3
+  %clz0 = call i32 @llvm.ctlz.i32(i32 %x0, i1 false)
+  %bad0 = icmp ne i32 %clz0, 32
+  %w0 = zext i1 %bad0 to i8
+  %clz1 = call i32 @llvm.ctlz.i32(i32 %x1, i1 false)
+  %bad1 = icmp ne i32 %clz1, 31
+  %w1 = zext i1 %bad1 to i8
+  %clz1p = call i32 @llvm.ctlz.i32(i32 %x1, i1 true)
+  %bad2 = icmp ne i32 %clz1p, 31
+  %w2 = zext i1 %bad2 to i8
+  %clz2 = call i32 @llvm.ctlz.i32(i32 %x2, i1 false)
+  %bad3 = icmp ne i32 %clz2, 0
+  %w3 = zext i1 %bad3 to i8
+  %clz2p = call i32 @llvm.ctlz.i32(i32 %x2, i1 true)
+  %bad4 = icmp ne i32 %clz2p, 0
+  %w4 = zext i1 %bad4 to i8
+  %clz3 = call i32 @llvm.ctlz.i32(i32 %x3, i1 false)
+  %bad5 = icmp ne i32 %clz3, 0
+  %w5 = zext i1 %bad5 to i8
+  %clz3p = call i32 @llvm.ctlz.i32(i32 %x3, i1 true)
+  %bad6 = icmp ne i32 %clz3p, 0
+  %w6 = zext i1 %bad6 to i8
+  %ctz0 = call i32 @llvm.cttz.i32(i32 %x0, i1 false)
+  %bad7 = icmp ne i32 %ctz0, 32
+  %w7 = zext i1 %bad7 to i8
+  %ctz1 = call i32 @llvm.cttz.i32(i32 %x1, i1 false)
+  %bad8 = icmp ne i32 %ctz1, 0
+  %w8 = zext i1 %bad8 to i8
+  %ctz1p = call i32 @llvm.cttz.i32(i32 %x1, i1 true)
+  %bad9 = icmp ne i32 %ctz1p, 0
+  %w9 = zext i1 %bad9 to i8
+  %ctz2 = call i32 @llvm.cttz.i32(i32 %x2, i1 false)
+  %bad10 = icmp ne i32 %ctz2, 31
+  %w10 = zext i1 %bad10 to i8
+  %ctz2p = call i32 @llvm.cttz.i32(i32 %x2, i1 true)
+  %bad11 = icmp ne i32 %ctz2p, 31
+  %w11 = zext i1 %bad11 to i8
+  %ctz3 = call i32 @llvm.cttz.i32(i32 %x3, i1 false)
+  %bad12 = icmp ne i32 %ctz3, 0
+  %w12 = zext i1 %bad12 to i8
+  %ctz3p = call i32 @llvm.cttz.i32(i32 %x3, i1 true)
+  %bad13 = icmp ne i32 %ctz3p, 0
+  %w13 = zext i1 %bad13 to i8
+  %s0 = add i8 0, %w0
+  %s1 = add i8 %s0, %w1
+  %s2 = add i8 %s1, %w2
+  %s3 = add i8 %s2, %w3
+  %s4 = add i8 %s3, %w4
+  %s5 = add i8 %s4, %w5
+  %s6 = add i8 %s5, %w6
+  %s7 = add i8 %s6, %w7
+  %s8 = add i8 %s7, %w8
+  %s9 = add i8 %s8, %w9
+  %s10 = add i8 %s9, %w10
+  %s11 = add i8 %s10, %w11
+  %s12 = add i8 %s11, %w12
+  %s13 = add i8 %s12, %w13
+  ret i8 %s13
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "check"), 0, "{text}");
+}
+
+#[test]
+fn a_loop_right_after_an_empty_entry_block_is_not_the_entry() {
+    // -O0 `while (*tp) tp++;` (basic.c st_rem): the empty entry and the loop
+    // header shared block 0 and "entry block is a loop header" panicked
+    let ir = module(
+        "@s = global [3 x i8] c\"ab\\00\"\n@tp = internal global ptr @s\n\
+         define i8 @g() {\n  br label %h\n\
+         h:\n  %p = load ptr, ptr @tp\n  %c = load i8, ptr %p\n  %z = icmp ne i8 %c, 0\n  br i1 %z, label %b, label %x\n\
+         b:\n  %q = getelementptr inbounds i8, ptr %p, i32 1\n  store ptr %q, ptr @tp\n  br label %h\n\
+         x:\n  ret i8 7\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O0)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "g"), 7, "{text}");
+}
+
+#[test]
+fn a_pointer_minus_one_borrows_by_branch() {
+    // a backward copy (k_memmove): `--p` was `clc; adc #255; adc #255` through a
+    // pack/unpack, 885 clocks against the hand routine's 418
+    let ir = module(
+        "@n = global i8 4\n\
+         define i8 @g() {\n\
+         \x20 %n = load volatile i8, ptr @n\n\
+         \x20 %s0 = inttoptr i16 49154 to ptr\n  %d0 = inttoptr i16 45058 to ptr\n\
+         \x20 %a = inttoptr i16 49150 to ptr\n  store volatile i8 1, ptr %a\n\
+         \x20 %b = inttoptr i16 49151 to ptr\n  store volatile i8 2, ptr %b\n\
+         \x20 %c = inttoptr i16 49152 to ptr\n  store volatile i8 3, ptr %c\n\
+         \x20 %e = inttoptr i16 49153 to ptr\n  store volatile i8 4, ptr %e\n\
+         \x20 br label %l\n\
+         l:\n\
+         \x20 %i = phi i8 [ %n, %0 ], [ %j, %l ]\n\
+         \x20 %s = phi ptr [ %s0, %0 ], [ %s2, %l ]\n\
+         \x20 %d = phi ptr [ %d0, %0 ], [ %d2, %l ]\n\
+         \x20 %s2 = getelementptr inbounds i8, ptr %s, i32 -1\n\
+         \x20 %d2 = getelementptr inbounds i8, ptr %d, i32 -1\n\
+         \x20 %v = load volatile i8, ptr %s2\n  store volatile i8 %v, ptr %d2\n\
+         \x20 %j = sub i8 %i, 1\n  %z = icmp ne i8 %j, 0\n  br i1 %z, label %l, label %x\n\
+         x:\n\
+         \x20 %lo = inttoptr i16 45054 to ptr\n  %hi = inttoptr i16 45057 to ptr\n\
+         \x20 %f = load volatile i8, ptr %lo\n  %h = load volatile i8, ptr %hi\n\
+         \x20 %m = mul i8 %f, 16\n  %r = add i8 %m, %h\n  ret i8 %r\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "g"), 20, "{text}");
+    assert!(!text.contains("adc #255"), "{text}");
+}
+
+#[test]
+fn a_word_plus_one_carries_by_branch() {
+    // strnlen's index: `clc; lda lo; adc #1; sta lo; lda hi; adc #0; sta hi`
+    // (13 B) where `inc lo; bne; inc hi` is 6
+    let ir = module(
+        "@n = global i16 300\n@sink = global i16 0\n\
+         define i8 @g() {\n\
+         \x20 %n = load volatile i16, ptr @n\n  br label %l\n\
+         l:\n\
+         \x20 %i = phi i16 [ 0, %0 ], [ %j, %l ]\n\
+         \x20 %j = add i16 %i, 1\n  store volatile i16 %j, ptr @sink\n\
+         \x20 %c = icmp ult i16 %j, %n\n  br i1 %c, label %l, label %x\n\
+         x:\n\
+         \x20 %r = trunc i16 %j to i8\n  ret i8 %r\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "g"), 44, "{text}");
+    assert!(!text.contains("adc #1\n"), "{text}");
 }

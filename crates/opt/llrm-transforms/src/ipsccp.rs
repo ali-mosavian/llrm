@@ -368,8 +368,9 @@ fn run_on_module(
             changed.insert(id);
         }
     }
+    let mut calls = Calls::default();
     for &id in &pointer_replaced {
-        moved_out_of_arguments(module, id);
+        moved_out_of_arguments(module, &mut calls, id);
         changed.insert(id);
     }
 
@@ -440,7 +441,7 @@ fn run_on_module(
             attrs.retain(|one| !is_returned(one));
         }
         function.return_attrs.retain(|one| !is_ub_implying(one));
-        for caller in calls_to(module, id) {
+        for caller in calls.to(module, id) {
             let (at, call) = caller;
             let (_, function) = body_mut(module, at);
             let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(call).opcode else { continue };
@@ -501,11 +502,12 @@ fn run_on_module(
 /// may now reach through a constant what they reached through the argument.
 fn moved_out_of_arguments(
     module: &mut Module,
+    calls: &mut Calls,
     id: GlobalId,
 ) {
     let (_, function) = body_mut(module, id);
     llrm_mir::memory::unsplit(&mut function.attrs, llrm_mir::memory::Moved::OutOfArguments);
-    for (at, call) in calls_to(module, id) {
+    for (at, call) in calls.to(module, id) {
         let (_, function) = body_mut(module, at);
         let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(call).opcode else { continue };
         let mut info = (**info).clone();
@@ -514,25 +516,38 @@ fn moved_out_of_arguments(
     }
 }
 
-/// The calls in `module` that name `callee` directly.
-fn calls_to(
-    module: &Module,
-    callee: GlobalId,
-) -> Vec<(GlobalId, InstId)> {
-    let mut out = Vec::new();
-    for (id, _, function) in module.functions() {
-        for (_, inst) in function.walk() {
-            if matches!(
-                function.instruction(inst).opcode,
-                Opcode::Call(_) | Opcode::Invoke(_)
-            )
-                && llrm_mir::memory::callee(&module.context, function, inst) == Some(callee)
-            {
-                out.push((id, inst));
+#[cfg(test)]
+thread_local!(static SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) });
+
+/// The direct calls of a module by callee, read once and on first use: only
+/// call attributes change after the rewrite, so the instructions stay.
+#[derive(Default)]
+struct Calls(Option<llrm_support::hash::HashMap<GlobalId, Vec<(GlobalId, InstId)>>>);
+
+impl Calls {
+    /// The calls in `module` that name `callee` directly.
+    fn to(
+        &mut self,
+        module: &Module,
+        callee: GlobalId,
+    ) -> Vec<(GlobalId, InstId)> {
+        let all = self.0.get_or_insert_with(|| {
+            #[cfg(test)]
+            SCANS.with(|count| count.set(count.get() + 1));
+            let mut all: llrm_support::hash::HashMap<GlobalId, Vec<(GlobalId, InstId)>> = Default::default();
+            for (id, _, function) in module.functions() {
+                for (_, inst) in function.walk() {
+                    if matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_))
+                        && let Some(named) = llrm_mir::memory::callee(&module.context, function, inst)
+                    {
+                        all.entry(named).or_default().push((id, inst));
+                    }
+                }
             }
-        }
+            all
+        });
+        all.get(&callee).cloned().unwrap_or_default()
     }
-    out
 }
 
 fn is_returned(attr: &Attribute) -> bool {

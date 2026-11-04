@@ -173,6 +173,24 @@ pub struct MulPricing<'a> {
 }
 
 impl CombineHooks for X86Lowering<'_> {
+    /// `foldBinOpIntoSelect`, `visitXOR`'s `(xor (and x, y), y)` and `SimplifySetCC`'s
+    /// GE/LE canonicalization: the pin runs them on x86. Judged on `bintree`, `jpeg_*`
+    /// and `particle` (m16 and C, `-Os`/`-O2`): fewer bytes or clocks, none worse. The
+    /// other default-off combines either changed nothing there or cost a byte
+    /// (`rebuild_brcond_condition`, `fold_mul_of_add_with_constant`) and stay off.
+    /// DEVIATE: the remaining pin combines stay off for x86. Exit 2026-12-01.
+    fn fold_bin_op_into_select(&self) -> bool {
+        true
+    }
+
+    fn fold_xor_of_and_with_mask(&self) -> bool {
+        true
+    }
+
+    fn canonicalize_ge_le(&self) -> bool {
+        true
+    }
+
     /// Where `i16` is native (`i16_mul_chains`: m16) a dword's halves are the
     /// registers it is returned and passed in.
     fn split_dword_loads(&self) -> bool {

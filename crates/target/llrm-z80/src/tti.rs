@@ -134,15 +134,6 @@ impl Tti for Z80Tti {
         "z80"
     }
 
-    /// The target's tuning table for the full unroll: the copy of a loop may
-    /// cost 24 bytes, boosted by nothing. Measured on the 60 kernel cells, 24
-    /// unrolls sum4 alone (+5 B, -56 T); the pin's 300 also copies crc16's
-    /// 8-trip bit loop (+67 B, -2490 T). The size levels keep the pin's rule:
-    /// no copy bigger than the loop.
-    fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
-        (Some(24), Some(100))
-    }
-
     fn cmp_sel_cost(
         &self,
         op: CmpSel,
@@ -274,6 +265,18 @@ impl Tti for Z80Tti {
     /// against 168 without it.
     fn lsr_exit_use_adds_run_once(&self) -> bool {
         true
+    }
+
+    /// A word add, `add hl,bc`: the Z80 prices in machine cycles (and bytes),
+    /// so the expansion budget of four basic instructions counts word
+    /// operations. A 16-bit `umax` alone costs 6; the loop count of lz4c's
+    /// checksum loop (`umax` and an add) was refused, and the loop kept
+    /// `base + i` with its bound and base in the frame (132469 T).
+    fn tcc_basic(
+        &self,
+        kind: CostKind,
+    ) -> Cost {
+        priced(&["add hl;bc"], kind)
     }
 
     // There is no conditional move: a `select` is a branch on the Z80.

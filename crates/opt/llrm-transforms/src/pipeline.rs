@@ -187,6 +187,11 @@ pub struct Options {
     /// builder lowers them as `SelectionDAGBuilder::visitSwitch` (it needs the
     /// switch, with its `unreachable` default, as the pin's passes leave it).
     pub lower_switches: bool,
+    /// `loopidioms::Merge` also makes adjacent stores wider ones (LLVM's
+    /// `DAGCombiner::mergeConsecutiveStores`, DEVIATE `parity.rs`); off for a
+    /// target whose backend merges them, so the inliner and the passes after
+    /// it price the stores the pin's IR has.
+    pub merge_stores: bool,
     pub drop_stores: bool,
     /// Work read below a branch moves below it: gcc's `-ftree-sink`.
     pub sink: bool,
@@ -339,6 +344,7 @@ impl Default for Options {
             switch_conversion: true,
             jump_tables: true,
             lower_switches: true,
+            merge_stores: true,
             search: false,
             exhaustive: false,
         }
@@ -567,7 +573,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(algebraic::Algebraic { size: applied.options.prefers_size(), llvm: false }),
         Box::new(dead::Dead),
         Box::new(loopidioms::LoopIdioms { size: applied.options.prefers_size() }),
-        Box::new(loopidioms::Merge { size: applied.options.prefers_size() }),
+        Box::new(loopidioms::Merge { size: applied.options.prefers_size(), widen: applied.options.merge_stores }),
         Box::new(memcpyopt::MemCpyOpt),
     ];
     every.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
@@ -736,10 +742,13 @@ pub(crate) fn llvm_order(
     let write_through = || -> Vec<Box<dyn FunctionPass>> {
         if applied.options.pre { Vec::new() } else { vec![Box::new(promote::Promote), Box::new(promote::DeadSlots)] }
     };
+    // `SROAPass(ModifyCFG)` everywhere but the late slot, which the pin builds
+    // with `PreserveCFG` (PassBuilderPipelines.cpp L1393, L1494).
     let sroa = |name: &'static str| -> Box<dyn FunctionPass> {
         let parts: Vec<Box<dyn FunctionPass>> = if translated {
-            let mut parts: Vec<Box<dyn FunctionPass>> =
-                vec![Box::new(crate::sroa::Sroa), Box::new(crate::mem2reg::Mem2Reg)];
+            let pass: Box<dyn FunctionPass> =
+                if name == "sroa@1494" { Box::new(crate::sroa::Sroa) } else { Box::new(crate::sroa::SroaModifyCfg) };
+            let mut parts: Vec<Box<dyn FunctionPass>> = vec![pass, Box::new(crate::mem2reg::Mem2Reg)];
             parts.extend(write_through());
             parts
         } else {
@@ -771,7 +780,17 @@ pub(crate) fn llvm_order(
             vec![
                 // `EarlyFPM.addPass(LowerExpectIntrinsicPass())` (#L1177).
                 slot("lowerexpect@1177", Box::new(crate::lowerexpect::LowerExpect)),
-                simplify_cfg("decide@1178"),
+                // `SimplifyCFGPass()` has `ConvertSwitchRangeToICmp` off.
+                slot(
+                    "decide@1178",
+                    Box::new(simplifycfg::SimplifyCfg {
+                        options: simplifycfg::Options {
+                            loop_form_kept: false,
+                            convert_switch_range_to_icmp: false,
+                            ..Default::default()
+                        },
+                    }),
+                ),
                 sroa("sroa@1179"),
                 earlycse("earlycse@1180", false),
             ]
@@ -801,12 +820,34 @@ pub(crate) fn llvm_order(
         // (PassBuilderPipelines.cpp#L1662, the last function pass, after
         // LoopSink) and L1682.
         Phase::Late => vec![
+            // DropUnnecessaryAssumesPass (l.1577), the first of `OptimizePM`.
+            slot(
+                "drop-unnecessary-assumes@1577",
+                Box::new(crate::dropunnecessaryassumes::DropUnnecessaryAssumes { drop_dereferenceable: false }),
+            ),
             slot("float2int@1594", Box::new(crate::float2int::Float2Int)),
             // `LowerConstantIntrinsicsPass` (l.1597), right after Float2Int.
             slot("lower-constant-intrinsics@1597", Box::new(crate::lowerconstantintrinsics::LowerConstantIntrinsics)),
+            // LoopRotatePass (l.1621): the loop pass manager that holds
+            // LoopInterchange runs before `addVectorPasses` and its unroll
+            // (l.1476), so a loop the unroll leaves with its exit in the
+            // middle is not rotated after it.
+            slot(
+                "rotate@1621",
+                Box::new(looprotate::LoopRotate {
+                    duplicate_headers: applied.options.copy_headers && !applied.options.has_min_size,
+                    size: applied.options.prefers_size(),
+                    check_exit_count: true,
+                }),
+            ),
             // LoopInterchangePass (l.1631), in the loop pass manager after
             // LoopRotate (l.1621) and LoopDeletion (l.1628).
             slot("loop-interchange@1631", Box::new(loopinterchange::Interchange::default())),
+            // DropUnnecessaryAssumesPass (l.1360), after the vectorizer.
+            slot(
+                "drop-unnecessary-assumes@1360",
+                Box::new(crate::dropunnecessaryassumes::DropUnnecessaryAssumes { drop_dereferenceable: true }),
+            ),
             // InferAlignmentPass (l.1362), before LoopLoadElimination.
             slot("infer-alignment@1362", Box::new(crate::inferalignment::InferAlignment)),
             // LoopLoadEliminationPass (l.1400), before the SimplifyCFG of
@@ -848,6 +889,7 @@ pub(crate) fn llvm_order(
                     opt_level: if applied.options.limits.target_percent >= 200 { 3 } else { 2 },
                     opt_size: size,
                     only_when_forced: !applied.options.loop_unrolling,
+                    target_unrolling: true,
                     created: Default::default(),
                 }),
             ),
@@ -863,12 +905,12 @@ pub(crate) fn llvm_order(
             licm("licm@1508", true),
             slot("instsimplify@1662", Box::new(crate::instsimplify::InstSimplify)),
             slot("divrempairs@1667", Box::new(crate::divrempairs::DivRemPairs)),
+            slot("expandmemcmp@1673", Box::new(crate::expandmemcmp::ExpandMemCmp)),
             // TailCallElim (l.1677, the module optimization pipeline's
             // "calls created during optimization"), at every level: at -O1 it
             // is the only one, so a self-recursive tail call is a loop there
             // (recmany -O1 -m32 ran 1500 frames deep, 60 KB, where the pin's
-            // runs in one). ExpandMemCmp, between the two at the pin, is not
-            // a slot.
+            // runs in one).
             slot("tailrec@1677", Box::new(tailcallelim::TailCallElim)),
             simplify_cfg_with("simplifycfg@1682", simplifycfg::Options::L1682),
         ],
@@ -917,6 +959,7 @@ pub(crate) fn llvm_order(
                     Box::new(looprotate::LoopRotate {
                         duplicate_headers: applied.options.copy_headers && !applied.options.has_min_size,
                         size: applied.options.prefers_size(),
+                        check_exit_count: false,
                     }),
                 ));
             }
@@ -947,13 +990,23 @@ pub(crate) fn llvm_order(
                 ),
                 slot("loopidioms@737", Box::new(loopidioms::LoopIdioms { size })),
                 slot("indvars@738", Box::new(indvars::IndVars { lftr: indvars::lftr_default(), size })),
-                slot("loopdeletion@749", Box::new(loopdeletion::LoopDeletion)),
+                slot(
+                    "loopdeletion@749",
+                    Box::new(crate::loopidiom::pass::AfterDeletion {
+                        deletion: loopdeletion::LoopDeletion,
+                        idiom: crate::loopidiom::pass::LoopIdiom {
+                            for_size: size,
+                            ..crate::loopidiom::pass::LoopIdiom::with_routines(applied.options.library.clone())
+                        },
+                    }),
+                ),
                 slot(
                     "unroll@753",
                     Box::new(loopunrollpass::LoopFullUnroll {
                         opt_level: if applied.options.limits.target_percent >= 200 { 3 } else { 2 },
                         opt_size: size,
                         only_when_forced: !applied.options.loop_unrolling,
+                        target_unrolling: false,
                         created: std::rc::Rc::clone(&created),
                     }),
                 ),
@@ -987,7 +1040,7 @@ pub(crate) fn llvm_order(
                 slot("cvp@810", Box::new(crate::cvp::Cvp)),
                 slot("adce@815", Box::new(adce::Adce)),
                 slot("memcpyopt@818", Box::new(memcpyopt::MemCpyOpt)),
-                slot("merge@818", Box::new(loopidioms::Merge { size })),
+                slot("merge@818", Box::new(loopidioms::Merge { size, widen: applied.options.merge_stores })),
                 slot("dse@820", Box::new(deadstore::DeadStoreElimination)),
             ]);
             list.extend(canonical("loopsimplify@823", "lcssa@823"));
@@ -1175,7 +1228,8 @@ pub fn recorded(
     // PassBuilderPipelines.cpp#L1241) and runs the function simplification
     // pipeline once per body, in the CGSCC walk: these stages leave a body to
     // the walk's run, not a second full one (GVN ran five times on `main` of
-    // memory_expansion, the pin's twice).
+    // memory_expansion, the pin's twice). `promote.` keeps the full list: the
+    // minimal one left the far sort arguments of Nib quicksort unfolded.
     let mut cleaned = Fixed::linear(&again_applied, Phase::Cleanup);
     // The copies of a tree recursion in itself and then its tail-call
     // elimination, after the clones ipa-cp made (D10).
@@ -1205,7 +1259,7 @@ pub fn recorded(
                     module,
                     analyses,
                     id,
-                    if matches!(stage, "promote." | "ipsccp." | "ipa-deadargs.") { &mut cleaned } else { &mut again },
+                    if matches!(stage, "ipsccp." | "ipa-deadargs.") { &mut cleaned } else { &mut again },
                     stage == "globalsra.",
                 )
                 .unwrap_or_else(|error| panic!("pipeline: {error}"));

@@ -22,13 +22,12 @@
 //! # See also
 //! `llvm/lib/CodeGen/SelectionDAG/InstrEmitter.cpp`.
 
-use std::collections::{HashMap, HashSet};
-
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{NodeData, SDValue, SelectionDAG};
 use llrm_dagisel::instr::OperandDesc;
 pub use llrm_spike_mf::{Block, Inst, Kind, Operand, Phi, Reg};
+use llrm_support::hash::{HashMap, HashSet};
 
 use crate::dagisel::function::Selection;
 use crate::dagisel::generated::ids::reg as pin;
@@ -45,6 +44,8 @@ impl Class {
             pin::ACCRegClassID => Class::Acc,
             pin::GR16RegClassID => Class::Gr16,
             pin::HLRRegClassID => Class::Hlr,
+            pin::DERRegClassID => Class::Der,
+            pin::BCRRegClassID => Class::Bcr,
             _ => return None,
         })
     }
@@ -58,7 +59,8 @@ impl Class {
     }
 }
 
-/// The register of a class that has only one: `ACC` is `a`, `HLR` is `hl`.
+/// The register of a class that has only one: `ACC` is `a`, `HLR` is `hl`,
+/// `DER` is `de`, `BCR` is `bc`.
 ///
 /// An operand in such a class is that physical register, with a copy in or out
 /// around the instruction, as x86's fixed-register operands are. Left as a
@@ -69,6 +71,8 @@ fn fixed_register(id: i16) -> Option<llrm_lir::registers::RegId> {
     match u16::try_from(id).ok()? {
         pin::ACCRegClassID => Some(crate::reg::A),
         pin::HLRRegClassID => Some(crate::reg::HL),
+        pin::DERRegClassID => Some(crate::reg::DE),
+        pin::BCRRegClassID => Some(crate::reg::BC),
         pin::IYRRegClassID => Some(crate::reg::IY),
         _ => None,
     }
@@ -139,7 +143,7 @@ struct Emitter<'a> {
     /// For the block being emitted: the nodes that read each value.
     users: HashMap<(u32, u8), Vec<u32>>,
     /// The values known to be in `a` when they are made.
-    in_acc: std::collections::HashSet<(u32, u8)>,
+    in_acc: llrm_support::hash::HashSet<(u32, u8)>,
 }
 
 impl Emitter<'_> {
@@ -393,7 +397,7 @@ impl Emitter<'_> {
                     reads_flags: reads_flags || desc.implicit_uses.contains(&pin::F),
                     may_load: desc.has(flag::MAY_LOAD),
                     may_store: desc.has(flag::MAY_STORE),
-                    side_effects: desc.has(flag::UNMODELED_SIDE_EFFECTS),
+                    side_effects: desc.has(flag::UNMODELED_SIDE_EFFECTS) || self.dag.volatile_accesses.contains(&node),
                     cheap_as_move: desc.has(flag::CHEAP_AS_A_MOVE),
                     commutable: desc.has(flag::COMMUTABLE),
                     rematerializable: desc.has(flag::REMATERIALIZABLE),
@@ -617,20 +621,20 @@ pub fn emit(
     let mut emitter = Emitter {
         dag: &first.dag,
         function: MFunction::new(name),
-        values: HashMap::new(),
-        builder: HashMap::new(),
-        arrives_in: HashMap::new(),
-        made: HashSet::new(),
-        widened: HashMap::new(),
-        flag_groups: HashMap::new(),
+        values: HashMap::default(),
+        builder: HashMap::default(),
+        arrives_in: HashMap::default(),
+        made: HashSet::default(),
+        widened: HashMap::default(),
+        flag_groups: HashMap::default(),
         flags_now: None,
-        users: HashMap::new(),
+        users: HashMap::default(),
         in_acc: Default::default(),
     };
     // the frame objects the selector made; the allocas came first, at their
     // index
     emitter.function.locals.extend(selection.locals.iter().enumerate().map(|(at, size)| (at as i32, *size, 1)));
-    let mut place_numbers = HashMap::new();
+    let mut place_numbers = HashMap::default();
     let width_class = |bits: u32| if bits > 8 { Class::Gr16 } else { Class::Gr8 };
     for one in &selection.blocks {
         emitter.dag = &one.dag;
@@ -679,6 +683,12 @@ pub fn emit(
             }
         }
         emitter.function.fixed.extend(one.dag.fixed_offsets.clone());
+        if selection.unreachable.contains(&one.block) {
+            let mut end = Inst::new(Kind::Op("UNREACHABLE"), Vec::new());
+            end.terminator = true;
+            end.barrier = true;
+            insts.push(end);
+        }
         let mut block = Block { id: one.block.0, insts, phis: Vec::new() };
         block.place_unlocated();
         emitter.function.blocks.push(block);
