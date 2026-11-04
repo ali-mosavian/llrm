@@ -46,6 +46,17 @@ pub trait Word:
         Self::from_u128(u128::from(value))
     }
 
+    /// The low `bits` bits set, `bits` below `BITS`: [`mask`] without a
+    /// shift of the whole word.
+    fn low_mask(bits: u32) -> Self {
+        (Self::ONE << bits).wrapping_sub(Self::ONE)
+    }
+
+    /// Bit `at` alone, `at` below `BITS`.
+    fn bit(at: u32) -> Self {
+        Self::ONE << at
+    }
+
     fn wrapping_add(
         self,
         other: Self,
@@ -91,6 +102,14 @@ impl Word for u128 {
     const ZERO: Self = 0;
     const ONE: Self = 1;
     const BITS: u32 = 128;
+
+    fn low_mask(bits: u32) -> Self {
+        if bits == 0 { 0 } else { u128::MAX >> (128 - bits) }
+    }
+
+    fn bit(at: u32) -> Self {
+        1 << at
+    }
 
     fn from_u128(value: u128) -> Self {
         value
@@ -249,6 +268,13 @@ impl BitXorAssign for U256 {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The `U256` shifts this thread made, for tests that pin the cost of a
+    /// construction.
+    pub(crate) static SHIFTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl Shl<u32> for U256 {
     type Output = Self;
 
@@ -256,6 +282,8 @@ impl Shl<u32> for U256 {
         self,
         by: u32,
     ) -> Self {
+        #[cfg(test)]
+        SHIFTS.with(|count| count.set(count.get() + 1));
         match by {
             0 => self,
             1..=127 => Self { hi: self.hi << by | self.lo >> (128 - by), lo: self.lo << by },
@@ -281,10 +309,44 @@ impl Shr<u32> for U256 {
     }
 }
 
+/// `low_mask` and `bit` of every width, looked up: a width is asked for more
+/// than once per range operation, and a shift of the whole word is 50 Ir.
+const U256_LOW_MASKS: [U256; 256] = {
+    let mut table = [U256 { hi: 0, lo: 0 }; 256];
+    let mut bits = 1;
+    while bits < 256 {
+        table[bits] = if bits <= 128 {
+            U256 { hi: 0, lo: u128::MAX >> (128 - bits) }
+        } else {
+            U256 { hi: u128::MAX >> (256 - bits), lo: u128::MAX }
+        };
+        bits += 1;
+    }
+    table
+};
+
+const U256_BITS: [U256; 256] = {
+    let mut table = [U256 { hi: 0, lo: 0 }; 256];
+    let mut at = 0;
+    while at < 256 {
+        table[at] = if at < 128 { U256 { hi: 0, lo: 1 << at } } else { U256 { hi: 1 << (at - 128), lo: 0 } };
+        at += 1;
+    }
+    table
+};
+
 impl Word for U256 {
     const ZERO: Self = Self { hi: 0, lo: 0 };
     const ONE: Self = Self { hi: 0, lo: 1 };
     const BITS: u32 = 256;
+
+    fn low_mask(bits: u32) -> Self {
+        U256_LOW_MASKS[bits as usize]
+    }
+
+    fn bit(at: u32) -> Self {
+        U256_BITS[at as usize]
+    }
 
     fn from_u128(value: u128) -> Self {
         Self { hi: 0, lo: value }
@@ -646,7 +708,7 @@ pub fn is_power_of_two<W: Word>(v: W) -> bool {
 
 /// The low `bits` bits set.
 pub fn mask<W: Word>(bits: u32) -> W {
-    if bits >= W::BITS { !W::ZERO } else { (W::ONE << bits).wrapping_sub(W::ONE) }
+    if bits >= W::BITS { !W::ZERO } else { W::low_mask(bits) }
 }
 
 /// `v` with its top `count` of `width` bits set.
@@ -723,7 +785,7 @@ pub(crate) fn popcount<W: Word>(v: W) -> u32 {
 }
 
 pub fn sign_bit<W: Word>(width: u32) -> W {
-    W::ONE << (width - 1)
+    W::bit(width - 1)
 }
 
 /// `a` as a signed number is below `b`.

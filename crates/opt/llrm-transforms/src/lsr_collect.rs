@@ -1041,12 +1041,23 @@ impl<'a, 'b> Collection<'a, 'b> {
 /// They compete with the formulae for the target's registers, which the phis
 /// alone did not show (shellsort bas -Os: a third formula register spilled the
 /// `i32` chain).
+thread_local! {
+    static UNITS_COMPUTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread counted a loop's register units, for a test
+/// that a loop is counted once however many solutions are rated.
+pub fn register_units_computed() -> usize {
+    UNITS_COMPUTED.with(std::cell::Cell::get)
+}
+
 pub fn loop_register_units(
     se: &mut ScalarEvolution,
     cx: &Cx,
     tti: &dyn Tti,
     l: BlockId,
 ) -> u32 {
+    UNITS_COMPUTED.with(|n| n.set(n.get() + 1));
     let Some(lp) = cx.loops.get_loop_for(l) else { return 0 };
     let word = tti.gpr_bits();
     let mut weights: llrm_mir::dense::IdMap<llrm_mir::module::ValueId, usize> = llrm_mir::dense::IdMap::new();

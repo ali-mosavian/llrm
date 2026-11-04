@@ -650,8 +650,10 @@ struct CallMasks {
     /// The blocks' successors (by position), where a call can lose a high half
     /// only if a wide read can follow it: set by `with_flow`.
     flow: Option<Vec<Vec<usize>>>,
-    /// Each block's blocks reachable by one edge or more, as bits.
-    reach: std::cell::OnceCell<Vec<Vec<u64>>>,
+    /// Each block's blocks reachable by one edge or more, as bits, worked out
+    /// for a block when it is first asked of: only the blocks that hold a call
+    /// are, and a row for every block was 140 M Ir of memory_expansion -O2.
+    reach: std::cell::RefCell<Vec<Option<Vec<u64>>>>,
     /// The value a split is tried for (`PhysInterference::set_lane`).
     lane: std::cell::Cell<Option<u32>>,
     /// The registers some call keeps the low half of only.
@@ -743,28 +745,26 @@ impl CallMasks {
         from: usize,
         to: usize,
     ) -> bool {
-        let reach = self
-            .reach
-            .get_or_init(
-                || {
-                    let succ = self.flow.as_deref().unwrap_or_default();
-                    let words = succ.len().div_ceil(64);
-                    (0..succ.len())
-                        .map(|start| {
-                            let mut seen = vec![0u64; words];
-                            let mut work: Vec<usize> = succ[start].clone();
-                            while let Some(block) = work.pop() {
-                                if seen[block / 64] >> (block % 64) & 1 == 0 {
-                                    seen[block / 64] |= 1 << (block % 64);
-                                    work.extend(succ[block].iter().copied());
-                                }
-                            }
-                            seen
-                        })
-                        .collect()
-                },
-            );
-        reach.get(from).is_some_and(|row| row[to / 64] >> (to % 64) & 1 == 1)
+        let succ = self.flow.as_deref().unwrap_or_default();
+        if from >= succ.len() {
+            return false;
+        }
+        let mut rows = self.reach.borrow_mut();
+        if rows.is_empty() {
+            rows.resize(succ.len(), None);
+        }
+        let row = rows[from].get_or_insert_with(|| {
+            let mut seen = vec![0u64; succ.len().div_ceil(64)];
+            let mut work: Vec<usize> = succ[from].clone();
+            while let Some(block) = work.pop() {
+                if seen[block / 64] >> (block % 64) & 1 == 0 {
+                    seen[block / 64] |= 1 << (block % 64);
+                    work.extend(succ[block].iter().copied());
+                }
+            }
+            seen
+        });
+        row[to / 64] >> (to % 64) & 1 == 1
     }
 
     /// Whether a read of more than 2 bytes of a value of `reg`'s family can
@@ -2050,6 +2050,21 @@ mod tests {
         assert!(masks.reg_mask_clobbered(&li).is_none_or(|roots| roots.is_empty()));
         let visited = calls_visited() - before;
         assert!(visited <= 10, "{visited} calls looked at for a range with no call in it");
+    }
+
+    /// A row of block reachability was made for every block of the body the
+    /// first time one was asked: 140 M Ir of memory_expansion -O2 (221
+    /// functions), for a handful of blocks that hold a call. A row is made for
+    /// the block asked of.
+    #[test]
+    fn reachability_is_worked_out_for_the_blocks_asked_of() {
+        let blocks = 300;
+        let flow: Vec<Vec<usize>> = (0..blocks).map(|at| if at + 1 < blocks { vec![at + 1] } else { vec![] }).collect();
+        let masks = CallMasks::of(Regs(&llrm_x86_m16::REGISTER_INFO), Vec::new(), Vec::new(), widths(&[])).with_flow(flow);
+        assert!(masks.reaches(0, 299) && masks.reaches(10, 11) && !masks.reaches(11, 10));
+        assert!(!masks.reaches(299, 299), "a block does not reach itself without a loop");
+        let made = masks.reach.borrow().iter().filter(|row| row.is_some()).count();
+        assert_eq!(made, 4, "a row for each block asked of, not for the {blocks} blocks");
     }
 
     /// `checkRegMaskInterference` looks at the calls inside the segments and

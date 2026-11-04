@@ -310,8 +310,8 @@ pub fn functions_with(
         dump("CmpZero", &machine);
         crate::flagcse::run(&mut machine);
         dump("FlagCse", &machine);
-        crate::storecluster::run(&mut machine);
-        dump("StoreCluster", &machine);
+        crate::memcluster::run(&mut machine);
+        dump("MemCluster", &machine);
         crate::sibcall::run(&mut machine);
         dump("SibCall", &machine);
         crate::prepass::order_copies(&mut machine);
