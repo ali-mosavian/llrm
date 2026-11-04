@@ -2579,6 +2579,14 @@ fn test_m32_copies_a_tree_recursion_into_itself_at_speed() {
     assert!(calls > 8, "fib was not copied into itself, {calls} calls of it");
 }
 
+/// fib at -O1 was copied into itself (334152 -> 424014 clocks, 69 -> 649 B):
+/// gcc inlines no function at -O1, recursive ones included.
+#[test]
+fn test_m32_copies_no_recursion_at_o1() {
+    let calls = m32_fib_calls(crate::pipeline::Options::basic());
+    assert!(calls <= 3, "fib was copied into itself at -O1, {calls} calls of it");
+}
+
 /// gcc rejects the recursive edge of quicksort and bintree at -O2
 /// ("max-inline-insns-auto limit reached", growth 25-28 and 15-22 against 15)
 /// and takes it at -O3 (30): a body that grows past 15 is copied at -O3 only.
