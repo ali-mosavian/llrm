@@ -44,10 +44,12 @@ use super::joinvals::JoinVals;
 use super::pair::{CoalescerEnv, CoalescerPair, full_copy};
 use crate::backend::twoaddr::commutative;
 use crate::liveness::liveintervals::LiveIntervals;
-use crate::liveness::liverange::{LiveInterval, Segment, Vn};
-use crate::liveness::slotindex::InstrKey;
+use crate::liveness::liverange::{LiveInterval, LiveRange, Segment, Vn};
+use crate::liveness::liverangecalc::Operand;
+use crate::liveness::slotindex::{InstrKey, SlotIndex};
 use crate::model::ir::{Held, Loc};
 use crate::model::lir::Insn;
+use llrm_lir::valuelanes::ValueLanes;
 use crate::support::hash::{HashMap, HashSet};
 
 /// Whether `one` does nothing but define its values: a copy or a definition
@@ -221,6 +223,9 @@ pub fn join_copy(
             return JoinResult::Rejected;
         }
     }
+    if cp.is_partial() && (cp.lane_offset() != 0 || has_lane_defs(lis, cp.dst_reg())) {
+        return join_lane(lis, env, state, current_erased, &cp, copy, block);
+    }
     let result = join_virt_regs(lis, state, &cp);
     if result != JoinResult::Joined {
         // Coalescing failed. Try rematerializing the definition of the source
@@ -270,11 +275,72 @@ pub fn join_copy(
         current_erased.insert(copy);
     }
     // Rewrite all SrcReg operands to DstReg.
-    update_reg_defs_uses(lis, state, cp.src_reg(), cp.dst_reg(), cp.is_partial().then_some(cp.lane_offset()));
+    update_reg_defs_uses(lis, state, cp.src_reg(), cp.dst_reg(), cp.is_partial().then_some(cp.lane_offset()), None);
     // SrcReg is guaranteed to be the register whose live interval that is
     // being merged.
     lis.remove_interval(cp.src_reg());
     JoinResult::Joined
+}
+
+/// Whether some def of `value` names the lanes it defines.
+fn has_lane_defs(
+    lis: &LiveIntervals,
+    value: u32,
+) -> bool {
+    lis.operands(value).iter().any(|operand| operand.is_def && operand.lanes != Operand::ALL)
+}
+
+/// The join of a lane copy: `src` is the bytes `cp.lanes()` of `dst`. DEVIATE
+/// C14: the pin runs `JoinVals` once per sub-range of the destination
+/// (`mergeSubRangeInto`); here the join is refused where `src` is live
+/// together with the destination's range for those lanes (the copy's own def
+/// excepted), and made by renaming `src` into the lane and computing the
+/// destination's interval afresh, which builds its sub-ranges from the lane
+/// defs. Exit: `JoinVals` with lane masks (series step 4, 2026-11-24).
+fn join_lane(
+    lis: &mut LiveIntervals,
+    env: &dyn CoalescerEnv,
+    state: &mut State,
+    current_erased: &mut HashSet<InstrKey>,
+    cp: &CoalescerPair,
+    copy: InstrKey,
+    block: usize,
+) -> JoinResult {
+    // A def of `src` that names lanes of its own, or keeps the rest of it,
+    // would need its lanes shifted too: left alone.
+    if has_lane_defs(lis, cp.src_reg()) || lis.operands(cp.src_reg()).iter().any(|operand| operand.reads_reg && operand.is_def) {
+        return JoinResult::Rejected;
+    }
+    let copy_at = lis.indexes.get_instruction_index(copy);
+    let src = lis.interval(cp.src_reg()).range.clone();
+    let dst = lis.interval(cp.dst_reg());
+    let dst = dst.range_for_lanes(cp.lanes()).unwrap_or_else(|| dst.range.clone());
+    if lanes_overlap(&dst, &src, &copy_at) {
+        return JoinResult::Rejected;
+    }
+    env.narrow_lane(cp.dst_reg(), cp.src_reg(), cp.lane_offset());
+    let _ = current_erased;
+    state.erased.insert(copy);
+    lis.remove_instr(block, copy);
+    update_reg_defs_uses(lis, state, cp.src_reg(), cp.dst_reg(), Some(cp.lane_offset()), Some(cp.lanes()));
+    lis.remove_interval(cp.src_reg());
+    lis.remove_interval(cp.dst_reg());
+    JoinResult::Joined
+}
+
+/// Whether two ranges are live together anywhere but where one starts at
+/// `copy_at`, the copy that joins them.
+fn lanes_overlap(
+    a: &LiveRange,
+    b: &LiveRange,
+    copy_at: &SlotIndex,
+) -> bool {
+    a.segments.iter().any(|x| {
+        b.segments.iter().any(|y| {
+            let start = std::cmp::max(&x.start, &y.start);
+            start < std::cmp::min(&x.end, &y.end) && !SlotIndex::is_same_instr(start, copy_at)
+        })
+    })
 }
 
 /// `joinVirtRegs`.
@@ -341,6 +407,7 @@ fn update_reg_defs_uses(
     src: u32,
     dst: u32,
     partial: Option<u32>,
+    lanes: Option<ValueLanes>,
 ) {
     lis.rename_input(src, dst);
     state.renames.push((src, dst));
@@ -363,6 +430,11 @@ fn update_reg_defs_uses(
                 made.partial_defs.push(dst);
                 renamed = Arc::new(made);
             }
+        }
+        if let Some(lanes) = lanes.filter(|_| old.defines.contains(&src)) {
+            let mut made = (*renamed).clone();
+            made.def_lanes.push((dst, lanes));
+            renamed = Arc::new(made);
         }
         let new = renamed.id();
         lis.rewrite_instr(block, key, renamed);

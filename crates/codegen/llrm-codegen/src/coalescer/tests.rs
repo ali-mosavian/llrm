@@ -1323,3 +1323,49 @@ fn test_a_kind_with_no_instruction_left_is_not_kept_at_high_frequency() {
         assert!(env.should_coalesce(&lis, to.id(), 1, 2), "cycle {cycle}");
     }
 }
+
+/// `v2:1@l := mov x` with the lane the copy defines named, as tolir will.
+fn lane_copy(
+    dst: u32,
+    offset: u32,
+    src: u32,
+) -> Arc<Insn> {
+    let what = Semantics {
+        name: Some("mov".into()),
+        dests: vec![Loc::Held(Held { value: dst, width: 1, offset })],
+        sources: vec![held_at(src, 1)],
+        ..Semantics::new(Operation::Move)
+    };
+    let mut copy = Insn::new(0, None, Some(what), vec![dst], vec![src]);
+    copy.def_lanes = vec![(dst, llrm_lir::valuelanes::ValueLanes::at(offset, 1))];
+    // The lane above the first keeps the lanes already defined.
+    if offset != 0 {
+        copy.partial_defs = vec![dst];
+    }
+    Arc::new(copy)
+}
+
+/// A pair built from two bytes: `v2.lo := v1; v2.hi := v3; read v2`. The
+/// whole-value join of the second byte met `v2` live (its low byte) across
+/// `v3` and refused, so one byte copy stayed in every pair. Each byte joins
+/// into its own lane, and the two copies go.
+#[test]
+fn test_both_bytes_of_a_pair_join_into_their_lanes() {
+    let (d1, d3) = (def_at(1, 1), def_at(3, 1));
+    let (lo, hi) = (lane_copy(2, 0, 1), lane_copy(2, 1, 3));
+    let was = body(&[(&[d1, d3, Arc::clone(&lo), Arc::clone(&hi), read_at(2, 2)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    for v in 1..=3 {
+        lis.interval(v);
+    }
+    let mut state = State::new();
+    for copy in [lo.id(), hi.id()] {
+        let result = join_copy(&mut lis, &LaneViews, &mut state, &mut Default::default(), copy);
+        assert_eq!(result, JoinResult::Joined);
+    }
+    let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
+    assert_eq!(kept.len(), 3, "both copies are gone");
+    let dests = |insn: &Arc<Insn>| insn.what.as_ref().unwrap().dests.clone();
+    assert_eq!(dests(&kept[0]), vec![Loc::Held(Held { value: 2, width: 1, offset: 0 })]);
+    assert_eq!(dests(&kept[1]), vec![Loc::Held(Held { value: 2, width: 1, offset: 1 })]);
+}

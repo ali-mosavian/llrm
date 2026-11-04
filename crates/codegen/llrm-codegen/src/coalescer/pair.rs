@@ -232,6 +232,8 @@ pub struct CoalescerPair {
     /// The pin's `SrcIdx`/`DstIdx` of a partial pair: the byte of `dst_reg`
     /// that `src_reg` is. Zero for every pair of the low part.
     lane_offset: u32,
+    /// The bytes of `src_reg` (`lane_offset` .. `+ lane_width` of `dst_reg`).
+    lane_width: u32,
 }
 
 impl CoalescerPair {
@@ -252,6 +254,7 @@ impl CoalescerPair {
                 flipped: false,
                 partial: false,
                 lane_offset: 0,
+                lane_width: src.width,
             });
         }
         // The narrow value is merged into the wide one, whichever way the
@@ -274,6 +277,7 @@ impl CoalescerPair {
             flipped: truncates,
             partial: true,
             lane_offset: wide.offset,
+            lane_width: narrow.width,
         })
     }
 
@@ -293,6 +297,11 @@ impl CoalescerPair {
     /// The byte of `dst_reg` that `src_reg` is (`DstIdx`).
     pub fn lane_offset(&self) -> u32 {
         self.lane_offset
+    }
+
+    /// The bytes of `dst_reg` that `src_reg` is (`DstIdx` as a lane mask).
+    pub fn lanes(&self) -> llrm_lir::valuelanes::ValueLanes {
+        llrm_lir::valuelanes::ValueLanes::at(self.lane_offset, self.lane_width)
     }
 
     pub fn is_flipped(&self) -> bool {
