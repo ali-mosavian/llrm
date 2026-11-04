@@ -100,11 +100,19 @@ pub enum Event {
     ContextClones,
     /// A call graph built over a module (`CallGraph::new`).
     CallGraphs,
+    /// A drain of the combine worklist (`InstCombinerImpl::run`).
+    CombineDrains,
+    /// An instruction `combine` visited.
+    CombineVisits,
+    /// An instruction the combine worklist was first filled with (`prepareWorklist`).
+    CombineInitial,
+    /// An instruction put on the combine worklist that was not already on it.
+    CombineInserts,
 }
 
 const SLOTS: usize = 64;
 
-const NAMES: [&str; 35] = [
+const NAMES: [&str; 39] = [
     "function_clones",
     "function_forks",
     "machinings",
@@ -140,6 +148,10 @@ const NAMES: [&str; 35] = [
     "scev_keys_owned",
     "context_clones",
     "call_graphs",
+    "combine_drains",
+    "combine_visits",
+    "combine_initial",
+    "combine_inserts",
 ];
 
 /// A pass's runs and the instructions of the functions it ran over.
@@ -156,7 +168,7 @@ thread_local! {
     static PASSES: RefCell<Vec<PassRow>> = const { RefCell::new(Vec::new()) };
     /// (pass, analysis, misses): the analyses a pass made the manager compute.
     static ASKS: RefCell<Vec<(&'static str, &'static str, u64)>> = const { RefCell::new(Vec::new()) };
-    static EVENTS: [Cell<u64>; 35] = const { [const { Cell::new(0) }; 35] };
+    static EVENTS: [Cell<u64>; 39] = const { [const { Cell::new(0) }; 39] };
     /// (name, hits, misses) by the address of the name, which is a literal.
     static FOUND: [Cell<usize>; SLOTS] = const { [const { Cell::new(0) }; SLOTS] };
     static ANALYSES: RefCell<Vec<(&'static str, u64, u64)>> = const { RefCell::new(Vec::new()) };
