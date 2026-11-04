@@ -7,7 +7,7 @@ use llrm_spike_mf::regalloc::{Assignment, Target, eliminate_phis_with, two_addre
 use llrm_spike_mf::tolir::allocate_greedy;
 
 use crate::driver::Level;
-use crate::driver::{Request, selections};
+use crate::driver::{Request, selections_both};
 use crate::expand::{self, Line, finish};
 use crate::mfunc::{Block, Inst, Kind, MFunction, Operand, Phi, Reg, emit};
 use crate::regalloc::Z80Registers;
@@ -35,7 +35,14 @@ pub fn take_selection_runs() -> usize {
 
 type SelectionKey = (String, Vec<(String, String)>);
 
-type Selections = std::rc::Rc<Vec<(String, Result<crate::dagisel::function::Selection, String>)>>;
+/// Each function selected with the DAG scheduled by `Source` and by `ILP`.
+type Selections = std::rc::Rc<
+    Vec<(
+        String,
+        Result<crate::dagisel::function::Selection, String>,
+        Result<crate::dagisel::function::Selection, String>,
+    )>,
+>;
 
 thread_local! {
     /// The module most recently run through the mid-end and selection, with
@@ -66,7 +73,7 @@ fn cached_selections(
         return Ok(one);
     }
     SELECTION_RUNS.with(|runs| runs.set(runs.get() + 1));
-    let one = Selections::new(selections(ir, request)?);
+    let one = Selections::new(selections_both(ir, request)?);
     SELECTED.with(|held| *held.borrow_mut() = Some((ir.to_owned(), key, one.clone())));
     Ok(one)
 }
@@ -80,7 +87,9 @@ fn machine_function_with(
     duplicate: bool,
 ) -> Result<MFunction, String> {
     let selected = cached_selections(ir, request)?;
-    let (_, selection) = selected.iter().find(|(one, _)| one == name).ok_or_else(|| format!("no function @{name}"))?;
+    let (_, source, scheduled) =
+        selected.iter().find(|(one, ..)| one == name).ok_or_else(|| format!("no function @{name}"))?;
+    let selection = if crate::dagisel::pipeline::ILP.with(std::cell::Cell::get) { scheduled } else { source };
     let mut function = emit(name, selection.as_ref().map_err(Clone::clone)?)?;
     expand_cmov(&mut function)?;
     if duplicate {
@@ -1219,20 +1228,36 @@ pub fn lines(
     // Copying a return block into its predecessors saves a `jp` and often a
     // move, or costs a copy of the block: the smaller result, then the faster,
     // is kept.
-    let copied = compile(true);
-    // Where copying changes nothing (no small return block with an
-    // unconditional predecessor) the two are one function: allocated once.
-    let alike = || {
-        let (one, other) =
-            (machine_function_with(ir, name, request, true), machine_function_with(ir, name, request, false));
-        matches!(
-            (one, other),
-            (Ok(one), Ok(other)) if format!("{one:?}") == format!("{other:?}")
-        )
+    let scheduled = || {
+        let copied = compile(true);
+        // Where copying changes nothing (no small return block with an
+        // unconditional predecessor) the two are one function: allocated once.
+        let alike = || {
+            let (one, other) =
+                (machine_function_with(ir, name, request, true), machine_function_with(ir, name, request, false));
+            matches!(
+                (one, other),
+                (Ok(one), Ok(other)) if format!("{one:?}") == format!("{other:?}")
+            )
+        };
+        let kept = if copied.is_ok() && alike() { copied.clone() } else { compile(false) };
+        match (copied, kept) {
+            (Ok(one), Ok(two)) => Ok(if expand::price(&one) <= expand::price(&two) { one } else { two }),
+            (Ok(one), Err(_)) | (Err(_), Ok(one)) => Ok(one),
+            (Err(why), Err(_)) => Err(why),
+        }
     };
-    let kept = if copied.is_ok() && alike() { copied.clone() } else { compile(false) };
-    match (copied, kept) {
-        (Ok(one), Ok(two)) => Ok(if expand::price(&one) <= expand::price(&two) { one } else { two }),
+    // The function is scheduled by `Source` and by `ILP` (DEVIATE Z80S1, in
+    // `dagisel/pipeline.rs`); `ILP` replaces `Source` only where it is cheaper.
+    let source = scheduled();
+    crate::dagisel::pipeline::ILP.with(|one| one.set(true));
+    let ilp = scheduled();
+    crate::dagisel::pipeline::ILP.with(|one| one.set(false));
+    match (source, ilp) {
+        (Ok(source), Ok(ilp)) => {
+            let price = |lines: &[Line]| expand::price_in_loops(lines);
+            Ok(if cheaper(request.level, price(&ilp), price(&source)) { ilp } else { source })
+        }
         (Ok(one), Err(_)) | (Err(_), Ok(one)) => Ok(one),
         (Err(why), Err(_)) => Err(why),
     }

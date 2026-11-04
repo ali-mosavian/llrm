@@ -45,6 +45,15 @@
 //! work (pair roles) lands; no join rule explains the rows (the harmful joins
 //! leave palettes unchanged and shift one dequeue order).
 //!
+//! DEVIATE C14: `TargetEnv::kinds`. The pin's `TRI->shouldCoalesce` reads
+//! register classes and at most a few uses. A target here prices the uses a
+//! join would leave a narrower class to serve (`extra_cost`); that walked
+//! every use of both values at each attempt, `copies x uses` for a hot
+//! value (6502 `switch`: `should_coalesce` 38% of the compile). The uses are
+//! summed by kind once per value and merged on a join. An instruction that
+//! names both values counts once per value, not once for the pair (checked
+//! by `LLRM_CHECK_USE_SUMMARY`). Exit: none; the target's price is its own.
+//!
 //! DEVIATE C9 (no number): a parameter's value on entry is defined by no
 //! instruction, so LLVM's phi rule ("any real interference would show up in a
 //! predecessor") does not carry over: the entry block has none. Two parameters

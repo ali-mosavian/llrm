@@ -614,7 +614,7 @@ mod tests {
     use crate::support::hash::IndexMap;
 
     fn held(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 4 })
+        Loc::Held(Held { value, width: 4, offset: 0 })
     }
 
     fn insn(
@@ -680,8 +680,8 @@ mod tests {
         let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
         let cell = |base: u32, index: u32, scale: i64| {
             Loc::Mem(Mem {
-                base: Some(Held { value: base, width: 4 }),
-                index: Some(Held { value: index, width: 4 }),
+                base: Some(Held { value: base, width: 4, offset: 0 }),
+                index: Some(Held { value: index, width: 4, offset: 0 }),
                 scale,
                 ..Mem::new(None, 4)
             })
@@ -741,7 +741,7 @@ mod tests {
             |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
         let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
         let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
-        let wide = |value: u32| Loc::Held(Held { value, width: 10 });
+        let wide = |value: u32| Loc::Held(Held { value, width: 10, offset: 0 });
         let run = |call: bool, truncating: bool| {
             let one = insn(10, Operation::FloatLoad, "fld1", vec![wide(10)], vec![], vec![10], vec![]);
             let add =
@@ -796,7 +796,7 @@ mod tests {
             |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
         let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
         let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
-        let wide = |value: u32| Loc::Held(Held { value, width: 10 });
+        let wide = |value: u32| Loc::Held(Held { value, width: 10, offset: 0 });
         // `reader`: what takes the flipped constant; `nested`: the loop has a
         // loop inside it.
         let run = |reader: &str, nested: bool, size: bool, extra: &str| {
@@ -868,7 +868,7 @@ mod tests {
             |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
         let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
         let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
-        let wide = |value: u32| Loc::Held(Held { value, width: 10 });
+        let wide = |value: u32| Loc::Held(Held { value, width: 10, offset: 0 });
         // `others`: floating values the loop reads from outside it, besides the
         // accumulator.
         let run = |others: u32, call: bool, truncating: bool, width: u32, size: bool| {
@@ -996,7 +996,7 @@ mod tests {
             |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
         let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
         let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
-        let wide = |value: u32| Loc::Held(Held { value, width: 8 });
+        let wide = |value: u32| Loc::Held(Held { value, width: 8, offset: 0 });
         let address = Loc::Imm(llrm_lir::Imm {
             value: 0,
             width: 8,

@@ -487,24 +487,8 @@ fn soft_float_calls(
     format: &str,
 ) -> Vec<(String, u32, String)> {
     let number = llrm_target::calling::Calling::number_of(default.cc.as_deref()).unwrap_or(0);
-    let mut names: Vec<String> = Vec::new();
-    for width in ["s", "d"] {
-        for op in ["add", "sub", "mul", "div"] {
-            names.push(format!("__{op}{width}f3"));
-        }
-        for cmp in ["eq", "ne", "lt", "le", "ge", "gt", "unord"] {
-            names.push(format!("__{cmp}{width}f2"));
-        }
-        for int in ["s", "d"] {
-            names.push(format!("__float{int}i{}", if width == "s" { "sf" } else { "df" }));
-            names.push(format!("__floatun{int}i{}", if width == "s" { "sf" } else { "df" }));
-            names.push(format!("__fix{}{int}i", if width == "s" { "sf" } else { "df" }));
-            names.push(format!("__fixuns{}{int}i", if width == "s" { "sf" } else { "df" }));
-        }
-    }
-    names.extend(["__extendsfdf2".to_owned(), "__truncdfsf2".to_owned()]);
+    let names = llrm_codegen::backend::selectiondag::libcalls::names().map(str::to_owned);
     names
-        .into_iter()
         .map(|name| {
             let symbol = default.decorated(format, &name).unwrap_or_else(|| name.clone());
             (name, number, symbol)
