@@ -1829,12 +1829,13 @@ exit:
     assert_eq!(seeded_loops(text), [true]);
 }
 
-/// `((x*3) + (t*31)) * 31` in a loop, the products' invariant operands times
-/// the factor out of it (`hoistMulAddAssociation`): LICM left the four
-/// multiplications of `mul_constants`' unrolled body apart, and the wasm
-/// function was 4579 B where the pin's is 3693.
+/// Two steps of a recurrence, `t2 = (t1*31) + (x2*3)` over
+/// `t1 = (t*31) + (x1*3)`: one visit of LLVM's LICM carries the factor through
+/// both, so `t` is multiplied by 961 once. A round decided on the function as
+/// it stood left `t*31` for the second product (wasm `mul_constants` -O2:
+/// 4501 B after the first round of the translation, the pin 3693).
 #[test]
-fn test_a_product_of_a_sum_of_products_takes_the_factor_into_the_products() {
+fn test_a_chain_of_products_of_sums_takes_the_factor_through_every_step() {
     let after = licm_printed(
         "define i32 @f(i32 %x0, i32 %t0, i32 %n) {
 b0:
@@ -1842,23 +1843,27 @@ b0:
 
 b1:
   %i = phi i32 [ 0, %b0 ], [ %i1, %b1 ]
-  %x = phi i32 [ %x0, %b0 ], [ %x1, %b1 ]
-  %t = phi i32 [ %t0, %b0 ], [ %r, %b1 ]
+  %x = phi i32 [ %x0, %b0 ], [ %x2, %b1 ]
+  %t = phi i32 [ %t0, %b0 ], [ %t2, %b1 ]
   %x1 = add i32 %x, 7
-  %a = mul i32 %x1, 3
-  %b = mul i32 %t, 31
-  %s = add i32 %a, %b
-  %r = mul i32 %s, 31
+  %x2 = add i32 %x1, 7
+  %a1 = mul i32 %x1, 3
+  %b1m = mul i32 %t, 31
+  %s1 = add i32 %a1, %b1m
+  %a2 = mul i32 %x2, 3
+  %b2m = mul i32 %s1, 31
+  %t2 = add i32 %a2, %b2m
   %i1 = add nuw i32 %i, 1
   %c = icmp slt i32 %i1, %n
   br i1 %c, label %b1, label %b2
 
 b2:
-  ret i32 %r
+  ret i32 %t2
 }
 ",
     );
-    assert!(after.contains("%factor.op.mul"), "{after}");
-    assert!(after.contains(".reass = mul"), "{after}");
-    assert!(!after.contains("%r = mul i32 %s, 31"), "{after}");
+    // Every product of the loop reads a factor made in the preheader, and the
+    // sum is no longer multiplied in the loop.
+    assert!(!after.contains("mul i32 %s1, 31") && !after.contains("%b2m = mul"), "{after}");
+    assert!(after.matches("factor.op.mul").count() >= 4, "{after}");
 }
