@@ -186,3 +186,80 @@ fn the_residual_loop_after_a_peel_has_its_compare_of_the_peeled_phi_decided() {
     assert_eq!(results(&module, INPUTS), before, "{after}");
     assert_eq!(compares(&after), 0, "the peeled trips fold theirs; the loop's is decided too: {after}");
 }
+
+/// A loop declaring a scope, peeled, kept one scope in the peeled iteration and
+/// in the loop: the peel's store and the loop's load were called apart by
+/// `ScopedNoAliasAA`, though they are two runs of the code
+/// (`cloneAndAdaptNoAliasScopes` in LoopPeel).
+#[test]
+fn test_a_peeled_iteration_does_not_share_a_declared_scope_with_the_loop() {
+    use llrm_analysis::aa::{AliasResult, BatchAAResults, MemoryLocation};
+    use llrm_analysis::aggregate::AggregateAA;
+    use llrm_analysis::memory::Unit;
+    use llrm_analysis::scopednoaliasaa::ScopedNoAliasAA;
+
+    let mut module = parsed(
+        "declare void @llvm.experimental.noalias.scope.decl()
+
+define i32 @f(i32 %n, i32 %seed, ptr %p, ptr %q) {
+b0:
+  br label %head
+
+head:
+  %i = phi i32 [ 1, %b0 ], [ %next, %latch ]
+  %t = phi i32 [ %seed, %b0 ], [ %u, %latch ]
+  call void @llvm.experimental.noalias.scope.decl(), !noalias.scope.decl !1
+  store i32 1, ptr %p, !alias.scope !1
+  %v = load i32, ptr %q, !noalias !1
+  %add = add i32 %t, %v
+  %big = icmp sgt i32 %i, 1
+  br i1 %big, label %hot, label %latch
+
+hot:
+  %more = add i32 %add, 100
+  br label %latch
+
+latch:
+  %u = phi i32 [ %add, %head ], [ %more, %hot ]
+  %next = add nsw i32 %i, 1
+  %go = icmp sle i32 %next, %n
+  br i1 %go, label %head, label %out
+
+out:
+  %r = phi i32 [ %u, %latch ]
+  ret i32 %r
+}
+
+!0 = distinct !{!0, !\"domain\"}
+!2 = distinct !{!2, !0, !\"scope\"}
+!1 = !{!2}
+",
+    );
+    assert!(unrolled(&mut module), "{}", printed(&module));
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let function = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f").2;
+    let unit = Unit::of(&module, &layout, function);
+    let ones: Vec<MemoryLocation> = function
+        .walk()
+        .map(|(_, inst)| inst)
+        .filter(|&inst| {
+            let op = function.instruction(inst);
+            matches!(op.opcode, llrm_mir::opcode::Opcode::Store { .. })
+                && matches!(op.operands[0], llrm_mir::module::Operand::Constant(_))
+        })
+        .filter_map(|inst| MemoryLocation::get(&unit, inst))
+        .collect();
+    let loads: Vec<MemoryLocation> = function
+        .walk()
+        .map(|(_, inst)| inst)
+        .filter(|&inst| matches!(function.instruction(inst).opcode, llrm_mir::opcode::Opcode::Load { .. }))
+        .filter_map(|inst| MemoryLocation::get(&unit, inst))
+        .collect();
+    assert_eq!((ones.len(), loads.len()), (2, 2), "{}", printed(&module));
+    let mut chain = AggregateAA::new();
+    chain.add_aa_result(ScopedNoAliasAA::new(&unit));
+    let mut aa = BatchAAResults::new(&mut chain);
+    assert_eq!(aa.alias(&ones[0], &loads[0]), AliasResult::NoAlias, "premise: the peel's own pair");
+    assert_eq!(aa.alias(&ones[1], &loads[1]), AliasResult::NoAlias, "premise: the loop's own pair");
+    assert_eq!(aa.alias(&ones[0], &loads[1]), AliasResult::MayAlias, "{}", printed(&module));
+}
