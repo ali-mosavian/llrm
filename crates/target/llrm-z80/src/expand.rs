@@ -1250,7 +1250,11 @@ fn layout(
         // 8 KB (tests/run/c/fill_nest).
         let mut objects: Vec<(i32, i64)> = function.locals.iter().map(|&(index, size, _)| (index, size)).collect();
         objects.extend(slots.iter().map(|&(index, size)| (index, size as i64)));
-        objects.sort_by_key(|&(_, size)| size);
+        // A frame within IX's reach keeps its locals first and its slots last,
+        // the last slot lying at SP (`pop` then `push` for a reload).
+        if objects.iter().map(|&(_, size)| size).sum::<i64>() > 127 {
+            objects.sort_by_key(|&(_, size)| size);
+        }
         for (index, size) in objects {
             frame.size += size;
             frame.offsets.insert(index, -frame.size);
