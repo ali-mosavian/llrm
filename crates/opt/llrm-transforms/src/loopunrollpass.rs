@@ -351,6 +351,10 @@ struct EstimatedUnrollCost {
     /// PL6: what the first iteration's instructions cost once counted (those a
     /// later iteration or a side effect needs), zero where not priced.
     first_iteration: u32,
+    /// The multiplies and divides of one rolled trip, and of the first trip once
+    /// counted: what the entry values make cheaper there is the peel's gain.
+    heavy_rolled: u32,
+    heavy_first: u32,
 }
 
 /// The analyses of one state of the function, made again after a change.
@@ -495,6 +499,8 @@ fn analyze_loop_unroll_cost(
     let mut simplified_values = IdMap::<llrm_mir::module::ValueId, Operand>::new();
     let mut unrolled_cost = Cost::FREE;
     let mut first_iteration = Cost::FREE;
+    let mut heavy_rolled = Cost::FREE;
+    let mut heavy_first = Cost::FREE;
     let mut rolled_dynamic_cost = Cost::FREE;
     let mut inst_cost_map = llrm_support::hash::HashMap::<(InstId, u32), InstState>::default();
     let mut exit_worklist: Vec<(BlockId, BlockId)> = Vec::new();
@@ -556,6 +562,12 @@ fn analyze_loop_unroll_cost(
 
                 // Track this instruction's expected baseline cost when
                 // executing the rolled loop form.
+                if is_heavy(&run.function.instruction(inst).opcode) {
+                    heavy_rolled = heavy_rolled
+                        + clocks
+                            .and_then(|costs| simplified_clocks(run, inst, &run.function.instruction(inst).operands, costs))
+                            .map_or(Cost::FREE, Cost::of);
+                }
                 rolled_dynamic_cost = rolled_dynamic_cost
                     + clocks
                         .and_then(|costs| simplified_clocks(run, inst, &run.function.instruction(inst).operands, costs))
@@ -621,6 +633,7 @@ fn analyze_loop_unroll_cost(
                         &mut inst_cost_map,
                         &mut unrolled_cost,
                         &mut first_iteration,
+                        &mut heavy_first,
                         kind,
                         clocks,
                         inst,
@@ -718,6 +731,7 @@ fn analyze_loop_unroll_cost(
                 &mut inst_cost_map,
                 &mut unrolled_cost,
                 &mut first_iteration,
+                &mut heavy_first,
                 kind,
                 clocks,
                 terminator,
@@ -752,6 +766,7 @@ fn analyze_loop_unroll_cost(
                     &mut inst_cost_map,
                     &mut unrolled_cost,
                     &mut first_iteration,
+                    &mut heavy_first,
                     kind,
                     clocks,
                     def,
@@ -767,6 +782,8 @@ fn analyze_loop_unroll_cost(
         unrolled_cost: unrolled_cost.value as u32,
         rolled_dynamic_cost: rolled_dynamic_cost.value as u32,
         first_iteration: first_iteration.value as u32,
+        heavy_rolled: heavy_rolled.value as u32,
+        heavy_first: heavy_first.value as u32,
     })
 }
 
@@ -811,6 +828,7 @@ fn add_cost_recursively(
     inst_cost_map: &mut llrm_support::hash::HashMap<(InstId, u32), InstState>,
     unrolled_cost: &mut Cost,
     first_iteration: &mut Cost,
+    heavy_first: &mut Cost,
     kind: CostKind,
     clocks: Option<&llrm_mir::target::OperationCosts>,
     root: InstId,
@@ -888,6 +906,9 @@ fn add_cost_recursively(
                 *unrolled_cost = *unrolled_cost + price;
                 if iteration == 0 {
                     *first_iteration = *first_iteration + price;
+                    if is_heavy(&operation.opcode) {
+                        *heavy_first = *heavy_first + price;
+                    }
                 }
             }
 
@@ -1047,6 +1068,13 @@ fn should_partial_unroll(
     Some(count)
 }
 
+/// The multiplies and divides: the operations whose clocks an entry constant
+/// removes (the rest of a trip's folding is a clock or two each).
+fn is_heavy(opcode: &Opcode) -> bool {
+    use llrm_mir::opcode::BinaryOp;
+    matches!(opcode, Opcode::Binary(BinaryOp::Mul | BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem))
+}
+
 /// What `inst` costs in clocks once `operands` are what its operands simplified
 /// to: a divide or remainder by a constant is the `and` or the multiply-high
 /// sequence the backend makes of it, not a `div` (x_primes: `i % d` at `d = 2`).
@@ -1063,6 +1091,12 @@ fn simplified_clocks(
         && let ConstantKind::Int(bits) = run.context.get(divisor).kind
     {
         return Some(if bits.is_power_of_two() { costs.add } else { costs.multiply + costs.shift + costs.add });
+    }
+    // A multiply by a constant is the shifts and adds the backend makes of it.
+    if matches!(operation.opcode, Opcode::Binary(BinaryOp::Mul))
+        && operands.iter().take(2).any(|operand| matches!(operand, Operand::Constant(_)))
+    {
+        return Some(costs.shift + costs.add);
     }
     crate::profit::operation(run.context, run.layout, run.function, run.callees, inst, costs)
 }
@@ -1102,7 +1136,8 @@ fn peels_folded_entry(
     let Some(cost) = analyze_loop_unroll_cost(run, analyzed, lp, 2, eph, u32::MAX, 2, Some(&costs)) else {
         return false;
     };
-    let saved = u64::from((cost.rolled_dynamic_cost / 2).saturating_sub(cost.first_iteration));
+    // Two trips were priced: the multiplies and divides of one are `heavy_rolled / 2`.
+    let saved = u64::from((cost.heavy_rolled / 2).saturating_sub(cost.heavy_first));
     why(run, lp, &format!("peel the first iteration: folds {saved} of {loop_size}, rate {rate}"));
     folded_entry_pays(saved, loop_size, rate)
 }
