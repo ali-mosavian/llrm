@@ -166,12 +166,25 @@ pub fn promoted(
     costs: &OperationCosts,
     size: bool,
 ) -> Vec<GlobalId> {
+    promoted_among(module, layout, costs, size, None)
+}
+
+/// [`promoted`] over the functions of `among` alone (None: all): the walk's
+/// component, as the pin's ArgumentPromotion runs per SCC in the CGSCC
+/// pipeline.
+pub fn promoted_among(
+    module: &mut Module,
+    layout: &DataLayout,
+    costs: &OperationCosts,
+    size: bool,
+    among: Option<&[GlobalId]>,
+) -> Vec<GlobalId> {
     let only = direct_only(module);
     let llrm_mir::callgraph::DirectCalls { sites, refused } = direct_calls(module);
     let callees = memory::callees(module);
     let mut changed = BTreeSet::new();
     for id in CallGraph::new(module).bottom_up() {
-        if !only.contains(&id) || refused.contains(&id) {
+        if !only.contains(&id) || refused.contains(&id) || among.is_some_and(|ids| !ids.contains(&id)) {
             continue;
         }
         let Some(calls) = sites.get(&id) else { continue };
