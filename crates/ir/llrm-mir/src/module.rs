@@ -1405,6 +1405,21 @@ pub struct Module {
     /// The `section "NAME"` of a global, by its name (`#pragma data_seg`,
     /// `#pragma code_seg`). Printing does not carry it.
     pub sections: std::collections::BTreeMap<String, String>,
+    #[doc(hidden)]
+    pub names: NameCache,
+}
+
+/// The index of `globals` by name, built by the first lookup after `globals`
+/// changed in length. `globals` is edited in place, so a hit is checked
+/// against it and a miss is scanned for: a stale index costs time, never a
+/// wrong answer. A clone starts empty.
+#[derive(Debug, Default)]
+pub struct NameCache(std::sync::RwLock<Option<std::sync::Arc<(usize, std::collections::HashMap<Box<str>, u32>)>>>);
+
+impl Clone for NameCache {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
 }
 
 /// One operation of a `!DIExpression`.
@@ -1549,6 +1564,26 @@ impl Module {
         &self,
         name: &str,
     ) -> Option<GlobalId> {
+        let held = self.names.0.read().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+        let index = match held.filter(|index| index.0 == self.globals.len()) {
+            Some(index) => index,
+            None => {
+                let mut map = std::collections::HashMap::with_capacity(self.globals.len());
+                for (at, one) in self.globals.iter().enumerate() {
+                    if let Some(name) = one.name.as_deref() {
+                        map.entry(name.into()).or_insert(at as u32);
+                    }
+                }
+                let index = std::sync::Arc::new((self.globals.len(), map));
+                *self.names.0.write().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(index.clone());
+                index
+            }
+        };
+        if let Some(&at) = index.1.get(name) {
+            if self.globals.get(at as usize).is_some_and(|one| one.name.as_deref() == Some(name)) {
+                return Some(GlobalId(at));
+            }
+        }
         self.globals.iter().position(|one| one.name.as_deref() == Some(name)).map(|at| GlobalId(at as u32))
     }
 
