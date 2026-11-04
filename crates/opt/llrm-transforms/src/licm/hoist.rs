@@ -40,9 +40,9 @@ fn loop_blocks_rpo(ctx: &LoopCtx) -> Vec<BlockId> {
 /// the instructions it hoists to `preheader`. Not built (L1): the
 /// reciprocal of an `fdiv` (MIR has no `arcp`), `hoistInsertPastInsert`
 /// (no vectors), the invariant-start and guard intrinsics, and
-/// `hoistArithmetics` but `hoistMinMax`, `hoistGEP` and `hoistBOAssociation` (the latter only
-/// for integers: a float add or multiply needs `reassoc` and `nsz`, and the
-/// intersection of the two fast-math flags).
+/// `hoistArithmetics` but `hoistMinMax`, `hoistGEP` and `hoistBOAssociation`
+/// (the latter only for integers: a float add or multiply needs `reassoc` and
+/// `nsz`, and the intersection of the two fast-math flags).
 #[allow(clippy::too_many_arguments)]
 pub fn hoist_region(
     unit: &passes::Unit,
@@ -110,7 +110,10 @@ pub fn may_reassociate(
 ) -> bool {
     let bo = function.instruction(inst);
     // `hoistMinMax`: a logical operation of two compares.
-    if matches!(bo.opcode, Opcode::Select | Opcode::Binary(BinaryOp::And | BinaryOp::Or))
+    if matches!(
+        bo.opcode,
+        Opcode::Select | Opcode::Binary(BinaryOp::And | BinaryOp::Or)
+    )
         && bo.operands.iter().any(|&operand| {
             let Operand::Value(value) = operand else { return false };
             matches!(
@@ -260,7 +263,10 @@ fn hoist_min_max(
     if pred1 != pred2 || lhs1 != lhs2 {
         return None;
     }
-    let use_min = matches!(pred1, IntPredicate::Ult | IntPredicate::Ule | IntPredicate::Slt | IntPredicate::Sle);
+    let use_min = matches!(
+        pred1,
+        IntPredicate::Ult | IntPredicate::Ule | IntPredicate::Slt | IntPredicate::Sle
+    );
     let pred = if inverse { pred1.inverse() } else { pred1 };
     Some(Reassociation::MinMax {
         logic: inst,

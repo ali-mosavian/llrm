@@ -14,8 +14,8 @@ use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{CallInfo, Flags, Opcode};
 use llrm_mir::passes::Declared;
-use llrm_mir::types::Type;
 use llrm_mir::passes::Outer;
+use llrm_mir::types::Type;
 
 use super::hoist::Reassociation;
 use super::sink::Sinking;
@@ -229,7 +229,8 @@ fn hoist_min_max(
             Operand::Value(value) => function.value(value).name.clone().map(|name| format!("{name}.fr")),
             _ => None,
         };
-        let frozen = function.create_instruction(Opcode::Freeze, bound_ty, vec![rhs2], Flags::default(), name.as_deref());
+        let frozen =
+            function.create_instruction(Opcode::Freeze, bound_ty, vec![rhs2], Flags::default(), name.as_deref());
         function.insert(frozen, Position::Before(terminator))?;
         graph.created(context, function, frozen, preheader, Created::End);
         rhs2 = Operand::Value(function.instruction(frozen).result.ok_or("a freeze with no result")?);
@@ -268,7 +269,8 @@ fn hoist_min_max(
     let bound = Operand::Value(function.instruction(bound).result.ok_or("a min with no result")?);
     let bool_ty = function.instruction(logic).ty;
     let name = function.instruction(logic).result.and_then(|result| function.value(result).name.clone());
-    let compare = function.create_instruction(Opcode::ICmp(pred), bool_ty, vec![lhs, bound], Flags::default(), name.as_deref());
+    let compare =
+        function.create_instruction(Opcode::ICmp(pred), bool_ty, vec![lhs, bound], Flags::default(), name.as_deref());
     function.insert(compare, Position::Before(logic))?;
     let home = function.parent(logic).ok_or("an instruction in no block")?;
     graph.created(context, function, compare, home, Created::End);
