@@ -1316,6 +1316,45 @@ fn a_module_is_run_through_the_mid_end_once_however_many_functions_it_has() {
     }
 }
 
+/// The held module's text was compared with the module's, whole, each time a
+/// function was built (four times a function): O(module text) per function,
+/// the +6% per function left from 150 to 1200 functions. A prepared module is
+/// not compared at all, and `text` compares once per function.
+#[test]
+fn the_text_of_a_module_is_not_compared_once_per_function_built() {
+    for count in [10, 40] {
+        let ir = many(count, 1);
+        let request = Request::new(Level::O2);
+        llrm_z80::compile::take_text_compares();
+        let prepared = llrm_z80::compile::prepare(&ir, &request).expect("prepares");
+        for (number, name) in prepared.names().enumerate() {
+            llrm_z80::compile::text_in(&prepared, name, number, &request).expect("compiles");
+        }
+        assert_eq!(llrm_z80::compile::take_text_compares(), 0, "{count} prepared functions");
+        for i in 0..count {
+            text(&ir, &format!("f{i}"), i, &request).expect("compiles");
+        }
+        assert_eq!(llrm_z80::compile::take_text_compares(), count, "{count} functions through `text`");
+    }
+}
+
+/// With `-g` every function parsed the module's text again for its source
+/// file and start line: O(module) per function. A prepared module is parsed
+/// once.
+#[test]
+fn a_module_is_parsed_for_its_sources_once_however_many_functions_it_has() {
+    for count in [10, 40] {
+        let ir = many(count, 1);
+        let request = Request { debug: true, ..Request::new(Level::O2) };
+        llrm_z80::driver::take_source_parses();
+        let prepared = llrm_z80::compile::prepare(&ir, &request).expect("prepares");
+        for (number, name) in prepared.names().enumerate() {
+            llrm_z80::compile::text_in(&prepared, name, number, &request).expect("compiles");
+        }
+        assert_eq!(llrm_z80::driver::take_source_parses(), 1, "{count} functions");
+    }
+}
+
 /// The module kept for the next function is the module asked for: two modules
 /// that name a function alike, compiled one after the other, give their own
 /// code.
