@@ -129,6 +129,7 @@ fn machine_function_with(
     let selection = if crate::dagisel::pipeline::ILP.with(std::cell::Cell::get) { scheduled } else { source };
     let mut function = emit(name, selection.as_ref().map_err(Clone::clone)?)?;
     expand_cmov(&mut function)?;
+    crate::ldir::copy_loops_to_ldir(&mut function);
     if duplicate {
         tail_duplicate_returns(&mut function);
     }

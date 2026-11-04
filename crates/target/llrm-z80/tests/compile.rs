@@ -1423,22 +1423,11 @@ fn a_four_trip_loop_is_unrolled_where_speed_comes_first_and_not_at_oz() {
 /// lz4's match copy kept the source as `dst + offset` (a base add, `pop bc;
 /// push bc; add hl,bc`) and its pointers in ix slots: 102905 clocks at -O2,
 /// gcc's end-pointer loop 35781. Both copies, the literals and the match, are
-/// loops of registers: load, store, two increments, the count.
+/// byte loops of registers, and an `ldir` each: 19721.
 #[test]
-fn a_match_copy_loop_keeps_its_pointers_in_registers() {
+fn the_literal_and_match_copies_are_an_ldir_each() {
     let out = text(include_str!("kernels/ir/lz4.ll"), "lz4", 0, &Request::new(Level::O2)).expect("compiles");
-    let copies = out
-        .split("\nL0_")
-        .filter(|block| {
-            let lines: Vec<&str> = block.lines().collect();
-            let label = lines[0].trim_end_matches(':');
-            lines.len() <= 9
-                && lines.iter().any(|line| line.trim_start().starts_with("ld (") && line.ends_with(", a"))
-                && lines.last().is_some_and(|last| last.trim() == format!("jr nz, L0_{label}"))
-                && !lines.iter().any(|line| line.contains("(ix)"))
-        })
-        .count();
-    assert_eq!(copies, 2, "{out}");
+    assert_eq!(out.matches("\tldir").count(), 2, "{out}");
 }
 
 /// reverse -Oz kept `p + i` and `p + j` as base adds to spare a register, and

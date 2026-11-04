@@ -311,7 +311,7 @@ let Defs = [F, A] in
 // known to be nonzero.
 let mayLoad = 1, mayStore = 1, Defs = [HL, DE, BC, F, A] in
   def LDIRG : Z80Inst<(outs), (ins HLR:$d, DER:$s, BCR:$n), "ldirg $d, $s, $n", [(Z80ldirg i16:$d, i16:$s, i16:$n)]>;
-let mayLoad = 1, mayStore = 1, Defs = [HL, DE, BC] in
+let mayLoad = 1, mayStore = 1, Defs = [HL, DE, BC, F] in
   def LDIR : Z80Inst<(outs), (ins HLR:$d, DER:$s, BCR:$n), "ldir $d, $s, $n", []>;
 
 // A global's address is a 16-bit immediate the linker fills in.

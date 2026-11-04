@@ -72,6 +72,7 @@ pub mod opcode {
     pub const LD8rf: u16 = 383;
     pub const LD8ri: u16 = 384;
     pub const LD8rm: u16 = 385;
+    pub const LDIR: u16 = 386;
     pub const LDIRG: u16 = 387;
     pub const LEAFI: u16 = 388;
     pub const OR16: u16 = 389;

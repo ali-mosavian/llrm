@@ -549,9 +549,8 @@ impl Printer<'_> {
                 self.push(if self.flags_dead(rest) { format!("dec {to}") } else { format!("ld {to}, #0") });
                 self.out.push(Line::Label(skip));
             }
-            // destination hl, source de, count bc: `ex de,hl` makes
-            // them `ldir`'s; the guard skips a count of zero, which `ldir`
-            // would take for 65536
+            // destination hl, source de, count bc: `ex de,hl` makes them
+            // `ldir`'s. A count of zero is 65536 here; `LDIRG` skips it.
             "LDIR" => {
                 self.push("ex de, hl");
                 self.push("ldir");

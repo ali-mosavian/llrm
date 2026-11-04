@@ -1118,6 +1118,7 @@ pub const MACHINE_OPCODES: &[(u16, &str)] = &[
     (383, "LD8rf"),
     (384, "LD8ri"),
     (385, "LD8rm"),
+    (386, "LDIR"),
     (387, "LDIRG"),
     (388, "LEAFI"),
     (389, "OR16"),

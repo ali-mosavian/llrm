@@ -397,7 +397,7 @@ impl Emitter<'_> {
                     reads_flags: reads_flags || desc.implicit_uses.contains(&pin::F),
                     may_load: desc.has(flag::MAY_LOAD),
                     may_store: desc.has(flag::MAY_STORE),
-                    side_effects: desc.has(flag::UNMODELED_SIDE_EFFECTS),
+                    side_effects: desc.has(flag::UNMODELED_SIDE_EFFECTS) || self.dag.volatile_accesses.contains(&node),
                     cheap_as_move: desc.has(flag::CHEAP_AS_A_MOVE),
                     commutable: desc.has(flag::COMMUTABLE),
                     rematerializable: desc.has(flag::REMATERIALIZABLE),
