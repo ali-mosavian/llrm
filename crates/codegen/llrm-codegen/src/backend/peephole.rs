@@ -348,6 +348,7 @@ impl Peephole {
             None => body,
         };
         let body = forwarded_reloads(self.rules, &body);
+        let body = forwarded_float_reloads(self.rules, &body);
         let body = forwarded_copies(self.rules, &body);
         let body = unread_spill_stores(&body);
         let body = crate::backend::deadspills::dead_spill_stores(&body);
@@ -1070,6 +1071,15 @@ pub fn restored_copies(
     body: &LirBody,
 ) -> LirBody {
     peep::rewritten(rules.restored_copies, body, &Facts::new(body, None))
+}
+
+/// Drop the reload of a scalar float into the register that filled the cell
+/// (`peephole.peep`, `forwarded_float_reloads`).
+pub fn forwarded_float_reloads(
+    rules: &peep::Rules,
+    body: &LirBody,
+) -> LirBody {
+    peep::rewritten(rules.forwarded_float_reloads, body, &Facts::new(body, None))
 }
 
 /// Drop the reload of a cell into the register that filled it
