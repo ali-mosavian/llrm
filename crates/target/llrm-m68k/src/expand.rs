@@ -137,6 +137,38 @@ pub fn frame_ops_priced(
 pub enum Line {
     Label(usize),
     Inst(mc::Inst),
+    /// The source place of the instructions that follow, until the next one.
+    Loc(Row),
+}
+
+/// A line-table row: the place and the flags the pin sets on it
+/// (`DwarfDebug::beginInstruction`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Row {
+    pub place: llrm_codegen::model::lir::SrcLoc,
+    /// The first row after the frame is made.
+    pub prologue_end: bool,
+    /// The row of the instruction that takes the frame down.
+    pub epilogue_begin: bool,
+    /// The first row of a block: a statement even on the line before it.
+    pub block_top: bool,
+}
+
+/// `out` and the places that start in it (`(index into out, place)`) as
+/// lines, a place ahead of the instruction it starts at.
+fn flush(
+    out: &mut Vec<mc::Inst>,
+    marks: &mut Vec<(usize, Row)>,
+    lines: &mut Vec<Line>,
+) {
+    let mut marks = std::mem::take(marks).into_iter().peekable();
+    for (index, inst) in out.drain(..).enumerate() {
+        while let Some((_, place)) = marks.next_if(|(at, _)| *at <= index) {
+            lines.push(Line::Loc(place));
+        }
+        lines.push(Line::Inst(inst));
+    }
+    lines.extend(marks.map(|(_, place)| Line::Loc(place)));
 }
 
 /// A branch to the block laid out next is not kept (`BranchFolding`'s
@@ -182,7 +214,8 @@ pub fn finish(
             _ => None,
         })
         .collect();
-    let has_calls = insts.iter().any(|inst| inst.call);
+    // a tail call has no call sequence: it leaves the frame it is in
+    let has_calls = insts.iter().any(|inst| inst.call && inst.kind != Kind::Op("TCRETURNq"));
     let max_call_frame = insts
         .iter()
         .filter(|inst| inst.kind == Kind::Op("ADJCALLSTACKDOWN"))
@@ -236,6 +269,12 @@ pub fn finish(
     let (opening, closing) = frame_ops(&layout, cpu, push_frame)?;
     opening.iter().for_each(|op| frame_op(op, &mut out));
     let mut lines = Vec::new();
+    // Where each place starts in `out`: only when it changes.
+    let mut marks: Vec<(usize, Row)> = Vec::new();
+    // The frame is made by the opening ops: the next row ends the prologue.
+    let mut frame_made = !opening.is_empty();
+    let mut last_origin = 0u32;
+    let mut block_top = false;
     // the bytes a `CCR_PUSH` has on the stack: a slot named from the stack
     // pointer is that much further
     let mut pushed = 0i64;
@@ -245,10 +284,27 @@ pub fn finish(
         let at = block_of.next().expect("a block per instruction");
         while shown <= at {
             if targeted.contains(&shown) {
-                lines.extend(out.drain(..).map(Line::Inst));
+                flush(&mut out, &mut marks, &mut lines);
                 lines.push(Line::Label(shown));
+                last_origin = 0;
+                block_top = true;
             }
             shown += 1;
+        }
+        let place = (inst.origin != 0).then(|| function.places.get(inst.origin as usize - 1).copied()).flatten();
+        let returns = inst.kind == Kind::Op("RET");
+        // A block's first instruction without a place stands under line 0.
+        let place = place.or(block_top.then(|| llrm_codegen::model::lir::SrcLoc::line(0)));
+        if let Some(place) = place
+            && (inst.origin != last_origin || returns || frame_made || block_top)
+        {
+            let row = Row { place, prologue_end: frame_made && place.line != 0, epilogue_begin: returns, block_top };
+            marks.push((out.len(), row));
+            frame_made = frame_made && place.line == 0;
+        }
+        block_top = false;
+        if inst.origin != 0 {
+            last_origin = inst.origin;
         }
         let operands: Vec<mc::Operand> = {
             let mut converted = Vec::new();
@@ -332,6 +388,11 @@ pub fn finish(
                 closing.iter().for_each(|op| frame_op(op, &mut out));
                 out.push(mc::Inst { opcode: "RTS", operands: vec![] });
             }
+            Kind::Op("TCRETURNq") => {
+                let [target, _] = &operands[..] else { return Err("TCRETURNq operands".to_owned()) };
+                closing.iter().for_each(|op| frame_op(op, &mut out));
+                out.push(mc::Inst { opcode: "BRA16", operands: vec![target.clone()] });
+            }
             Kind::Op("MOVM32pm_P") => {
                 let [mc::Operand::Imm(disp), ref base, mc::Operand::Reg(src)] = operands[..] else {
                     return Err("MOVM32pm_P operands".to_owned());
@@ -384,7 +445,7 @@ pub fn finish(
             Kind::Op(name) => out.push(mc::Inst { opcode: name, operands }),
         }
     }
-    lines.extend(out.into_iter().map(Line::Inst));
+    flush(&mut out, &mut marks, &mut lines);
     Ok(lines)
 }
 

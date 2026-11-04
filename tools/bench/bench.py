@@ -41,6 +41,7 @@ import benchlist  # noqa: E402
 import basecounts  # noqa: E402
 import shards  # noqa: E402
 import maps  # noqa: E402
+import native  # noqa: E402
 import corpus  # noqa: E402
 import sizes  # noqa: E402
 import icount  # noqa: E402
@@ -77,8 +78,17 @@ OURS_BASIC = ("bq16", "bq32")
 FLAT = "bq32"
 LOADERS: dict[Path, tuple[Path, ...]] = {}  # an exe -> the files that must sit beside it (DOS/32A)
 COUNTERS = ("instructions", "memory_operands")
+# A kernel that runs fewer instructions than this was folded to a constant (`mov eax, imm; ret` is 2): its row measures the compiler's
+# folding, not the kernel, and a column of such rows reads as an 8x-70x gap against languages that ran the work.
+FOLDED_BELOW = 8
 # Bytes of the program's own object (tools/sizes.py): code, initialised data, uninitialised data. Gated like the counters.
 SIZES = ("code_bytes", "data_bytes", "bss_bytes")
+JUDGED_SIZES = ("code_bytes", "data_bytes", "static_bytes")  # bss is judged through the footprint (data + bss), not alone
+
+
+def with_footprint(row: dict) -> dict:
+    """The row with `static_bytes` = data + bss: a zero table moved from data to bss shrinks the image and leaves the footprint."""
+    return {**row, "static_bytes": row["data_bytes"] + row["bss_bytes"]} if "data_bytes" in row and "bss_bytes" in row else row
 # DOSBox at a fixed 75000 cycles per millisecond: RDTSC cycles / 75000 is milliseconds, the same on any host.
 TIMING_CONF = dosbatch.CONF.replace(dosbatch.CYCLES, "cycles=fixed 75000")
 CYCLES_PER_MS = 75_000
@@ -143,13 +153,13 @@ def benchmarks(selected: list[str]) -> list[Path]:
 ONLY: list[str] | None = None  # `--lang`: the languages measured; None: every one the directory has
 
 
-def variants(directory: Path) -> list[Variant]:
+def variants(directory: Path, every_language: bool = False) -> list[Variant]:
     settings = tomllib.loads((directory / "bench.toml").read_text())
     name = directory_name(directory)
     out = []
     for language, suffix in LANGUAGES.items():
         source = directory / f"{directory.name}{suffix}"
-        if source.exists() and (ONLY is None or language in ONLY):
+        if source.exists() and (every_language or ONLY is None or language in ONLY):
             head = run_tests.header(source)
             region = settings["region"].get(language) or settings["region"]["bas"]  # our BASIC is the same kernel
             out.append(Variant(name, language, source, region, None if language in OURS_BASIC else head.get("known"), head.get("dialect", "qb45").split()[0],
@@ -200,6 +210,10 @@ def compile_flags(variant: Variant, opt: str, kept: bool = False) -> list[str]:
     flags = [f"-{opt}", *([] if kept else ["-fno-inline-functions"]), *os.environ.get("LLRM_BENCH_FLAGS", "").split()]
     if variant.language in (*BASIC_LANGUAGES, *OURS_BASIC):
         flags.append("-fno-inline-functions-called-once")
+        # The program is this module: only the kernel is linked to from outside (as a C helper is `static`), so the rest is internal, near, by value.
+        # Not on the flat target: there every call is near already, and queens (+6% instructions) and four more cells came out worse.
+        if variant.language != FLAT:
+            flags += ["--whole-program", "--export", variant.region]
     return flags
 
 
@@ -333,6 +347,8 @@ def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
     data, bss = sizes.data_bytes(obj)
     if result.region is None:  # main prints the kernel's value without calling it (the call folded to a constant): a folded row, not a failed one
         return {"instructions": 0, **code_fields(obj), "data_bytes": data, "bss_bytes": bss}
+    if result.region.instructions < FOLDED_BELOW:
+        return {"error": f"unmeasured: kernel folded away: {region} ran {result.region.instructions} instructions (a kernel that did its work runs {FOLDED_BELOW} or more)"}
     return {"instructions": result.region.instructions, "memory_operands": result.region.memory_operands, "clocks": result.region.clocks, **code_fields(obj), "data_bytes": data, "bss_bytes": bss}
 
 
@@ -547,6 +563,14 @@ def stage(text: str) -> None:
     print(f"bench: [{time.monotonic() - START:6.0f}s] {text}", file=sys.stderr, flush=True)
 
 
+def native_sources(name: str, directory: Path, work: Path) -> tuple[Path, Path] | None:
+    """The sources the x86_64 row runs and sizes: the harness's own (kept_a_call) for the program's C variant, in a folder of its own."""
+    variant = next((one for one in variants(directory, every_language=True) if one.language == "c"), None)  # `--lang c64` leaves ONLY without "c"
+    folder = work / "kept"
+    folder.mkdir(parents=True, exist_ok=True)
+    return kept_a_call(variant, folder, name.replace("/", "_")) if variant else None
+
+
 def measure_all(selected: list[str], opts: list[str], work: Path, timing: bool = False) -> dict[tuple[str, str, str], dict]:
     """{(benchmark, language, opt): counts or {"error": why} or {"known": issue}}. The levels are independent (a folder each) and are
     measured at once, in a process each; a timed run keeps them one after the other."""
@@ -558,6 +582,8 @@ def measure_all(selected: list[str], opts: list[str], work: Path, timing: bool =
         with ProcessPoolExecutor(max_workers=len(opts)) as pool:
             for part in pool.map(measure_opt, [selected] * len(opts), opts, [work] * len(opts), [timing] * len(opts)):
                 out |= part
+    if ONLY is None or native.OURS in ONLY:
+        out |= native.measure([(directory_name(one), one) for one in benchmarks(selected)], BIN, opts, work / "native", BENCH, native_sources)
     return mark_known(net_times(out) if timing else out, [v for directory in benchmarks(selected) for v in variants(directory)], opts)
 
 
@@ -783,6 +809,7 @@ def against(label: str, got: dict, want: dict | None, waived: list[dict] = (), r
         return [f"{label}: INVALID BASE: the base kernel executed 0 instructions (folded or never run), nothing to compare with"]
     if got.get("instructions") == 0 and want.get("instructions") and "error" not in got:  # the kernel never ran: not a win
         return [f"{label}: INVALID: the kernel executed 0 instructions (inlined or folded into the harness); base {want['instructions']}"]
+    got, want = with_footprint(got), with_footprint(want)
     problems = []
     priced = rate > 0 and all(one in got and one in want for one in ("clocks", "code_bytes"))
     if priced:
@@ -791,7 +818,7 @@ def against(label: str, got: dict, want: dict | None, waived: list[dict] = (), r
             problems.append(f"{label}: {clocks:+d} clocks {size:+d} code bytes at {rate} milliclocks/byte is worse")
     timed = not priced and all(one in side for one in ("clocks", "code_bytes") for side in (got, want))
     tied = timed and got["clocks"] == want["clocks"] and got["code_bytes"] == want["code_bytes"]
-    for counter in (*COUNTERS, "clocks", *SIZES):
+    for counter in (*COUNTERS, "clocks", *JUDGED_SIZES):
         if counter not in got:
             continue
         if counter not in want:
@@ -823,7 +850,8 @@ def ratio_problems(label: str, reference: str, got: dict, want: dict, ref: dict,
     a waiver excuses (its row, counter and this count) is excused here too: the ratio is the count over a constant, so a waived count
     always moved it and no waiver on a row with references could pass."""
     problems = []
-    for counter in (*COUNTERS, *SIZES, "kernel_ms"):
+    got, want, ref = with_footprint(got), with_footprint(want), with_footprint(ref)
+    for counter in (*COUNTERS, *JUDGED_SIZES, "kernel_ms"):
         if any(w["label"] == label and w["counter"] == counter and w["to"] == got.get(counter) for w in waived):
             continue
         if all(counter in one for one in (got, want, ref)) and ref[counter] > 0:
@@ -847,6 +875,17 @@ def drift_problems(label: str, got: dict, stored: dict | None) -> list[str]:
             if abs(got[counter] - stored[counter]) > slack:
                 problems.append(f"{label}: {counter} {got[counter]} != stored {stored[counter]} (reference changed: --bless --references --reason)")
     return problems
+
+
+def native_problems(label: str, got: dict, want: dict | None, waived: list[dict]) -> list[str]:
+    """The x86_64 row: an error fails; a count above the base's fails (code bytes: executable sections of the object; instructions: user-mode, per run)."""
+    if "skip" in got:
+        return []
+    if "error" in got:
+        return [f"{label}: {got['error']}"]
+    if want is not None and "instructions" in want:
+        want = {**want, "instructions": want["instructions"] + 1}  # the count is a rounded mean over 100 runs of a native process: one instruction is its resolution
+    return against(label, got, want, waived)
 
 
 def judge(measured: dict, selected: list[str], opts: list[str], base: dict | None = None, same: set[str] | None = None) -> list[str]:
@@ -888,6 +927,10 @@ def judge(measured: dict, selected: list[str], opts: list[str], base: dict | Non
                 for level in sorted({reference_level(reference, opt) for opt in opts}):
                     if (name, reference, level) in measured:
                         problems += drift_problems(f"{name} {reference} -{level}", measured[(name, reference, level)], baseline.get(reference, {}).get(level))
+        for opt in opts:  # the x86_64 row: no variant of its own, it runs the C source
+            got = measured.get((name, native.OURS, opt))
+            if got is not None:
+                problems += native_problems(f"{name} {native.OURS} -{opt}", got, (base or {}).get((name, native.OURS, opt)) if same is None or name in same else None, waived)
     return problems
 
 
@@ -1090,7 +1133,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("select", nargs="*")
     parser.add_argument("--opt", nargs="+", default=["O2", "Os"])
-    parser.add_argument("--lang", nargs="+", choices=list(LANGUAGES), help="measure only these languages (a BASIC build failing on the head stops every other language's run)")
+    parser.add_argument("--lang", nargs="+", choices=[*LANGUAGES, native.OURS], help="measure only these languages (a BASIC build failing on the head stops every other language's run)")
     parser.add_argument("--time", action="store_true", help="also the kernel's time in DOSBox from RDTSC, net of start-up; gates the time ratio to each reference")
     parser.add_argument("--references", action="store_true", help="measure Open Watcom and BCC (C) and BC 4.5 (BASIC) again: they must equal the stored ones, or --bless records them")
     parser.add_argument("--bless", action="store_true", help="record the references' counts (with --references): the compiler's own are judged against the base, never recorded")

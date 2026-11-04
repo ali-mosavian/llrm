@@ -180,3 +180,15 @@ fn the_dag_path_has_the_same_rows_and_variables_on_darwin() {
         assert_eq!(names(&dag), names(&hand), "{level:?}");
     }
 }
+
+/// A function whose `{` is on the line after its name: the first row is the
+/// `scopeLine` (2), as the pin's, not the line of the name (1).
+#[test]
+fn the_first_row_is_the_scope_line() {
+    for mode in [IselMode::Hand, IselMode::Dag] {
+        let object = described(include_str!("data/debug_scope_o0.ll"), Level::O0, mode);
+        let rows = &object.debug.as_ref().expect("debug information").lines;
+        assert_eq!((rows[0].offset, rows[0].line), (0, 2), "{mode:?}: {rows:?}");
+        assert_eq!(rows[1].line, 3, "{mode:?}: {rows:?}");
+    }
+}

@@ -39,6 +39,7 @@ pub mod m68kisd {
     pub const CMOV: ISD = ISD::Target(ids::CMOV);
     pub const ADD: ISD = ISD::Target(ids::ADD);
     pub const SUB: ISD = ISD::Target(ids::SUB);
+    pub const SUBX: ISD = ISD::Target(ids::SUBX);
     pub const UMUL: ISD = ISD::Target(ids::UMUL);
     pub const SMUL: ISD = ISD::Target(ids::SMUL);
     pub const AND: ISD = ISD::Target(ids::AND);
@@ -46,6 +47,7 @@ pub mod m68kisd {
     pub const XOR: ISD = ISD::Target(ids::XOR);
     pub const CALL: ISD = ISD::Target(ids::CALL);
     pub const RET: ISD = ISD::Target(ids::RET);
+    pub const TC_RETURN: ISD = ISD::Target(ids::TC_RETURN);
     pub const WRAPPER: ISD = ISD::Target(ids::Wrapper);
     pub const WRAPPER_PC: ISD = ISD::Target(ids::WrapperPC);
 }
@@ -78,7 +80,7 @@ pub mod cond {
 pub fn target_lowering(cpu: Cpu) -> TargetLowering {
     use ISD::*;
     let int = [MVT::I8, MVT::I16, MVT::I32];
-    let m68020 = cpu == Cpu::M68020;
+    let m68020 = cpu.at_least(Cpu::M68020);
     let mut tl = TargetLowering::empty(TargetLoweringInfo::new(&int, false).with_shift_by_value_type());
     tl.init_actions();
     for vt in [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64, MVT::I128] {
@@ -190,6 +192,10 @@ impl Hooks for M68kLowering {
     ) -> Option<SDValue> {
         match dag.opcode(node) {
             ISD::SetCC => lower_setcc(dag, node),
+            ISD::SetCCCarry => Some(lower_setcc_carry(dag, node)),
+            ISD::ShlParts => Some(lower_shift_left_parts(dag, node)),
+            ISD::SrlParts => Some(lower_shift_right_parts(dag, node, false)),
+            ISD::SraParts => Some(lower_shift_right_parts(dag, node, true)),
             ISD::Select => Some(lower_select(dag, node)),
             ISD::BrCond => Some(lower_brcond(dag, node)),
             ISD::GlobalAddress => Some(super::call::lower_global_address(dag, node)),
@@ -517,6 +523,82 @@ fn lower_setcc(
     let flags = emit_cmp(dag, op0, op1, code);
     let code = cc_operand(dag, code);
     Some(dag.get_node(m68kisd::SETCC, EVT::I8, &[code, flags]))
+}
+
+/// `LowerSETCCCARRY`: the comparison of `lhs` and `rhs` with a borrow in, as
+/// `subx` over the carry turned into the extend flag (`carry + -1`).
+fn lower_setcc_carry(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let (lhs, rhs, carry) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let cc = cond_of(dag, dag.operand(node, 3));
+    let mut unchanged = rhs;
+    let code = translate_cc(dag, cc, &mut unchanged);
+    let carry_vt = dag.value_type(carry);
+    let minus_one = dag.get_constant(u128::MAX >> (128 - carry_vt.size_in_bits()), carry_vt);
+    let carry = dag.get_node_multi(m68kisd::ADD, &[carry_vt, EVT::I8], &[carry, minus_one]);
+    let compared = dag.get_node_multi(
+        m68kisd::SUBX,
+        &[dag.value_type(lhs), EVT::I8],
+        &[lhs, rhs, SDValue { node: carry.node, res: 1 }],
+    );
+    let code = cc_operand(dag, code);
+    dag.get_node(m68kisd::SETCC, EVT::I8, &[code, SDValue { node: compared.node, res: 1 }])
+}
+
+/// `LowerShiftLeftParts`: a 64-bit shift left of `(lo, hi)` by `shamt` in
+/// 32-bit registers, as a select on `shamt < 32`.
+fn lower_shift_left_parts(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let (lo, hi, shamt) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let vt = dag.value_type(lo);
+    let zero = dag.get_constant(0, vt);
+    let one = dag.get_constant(1, vt);
+    let minus_size = dag.get_constant(0xFFFF_FFE0, vt);
+    let size_minus_1 = dag.get_constant(31, vt);
+    let shamt_minus_size = dag.get_node(ISD::Add, vt, &[shamt, minus_size]);
+    let size_minus_1_shamt = dag.get_node(ISD::Xor, vt, &[size_minus_1, shamt]);
+    let lo_true = dag.get_node(ISD::Shl, vt, &[lo, shamt]);
+    let right_1 = dag.get_node(ISD::Srl, vt, &[lo, one]);
+    let right = dag.get_node(ISD::Srl, vt, &[right_1, size_minus_1_shamt]);
+    let left_hi = dag.get_node(ISD::Shl, vt, &[hi, shamt]);
+    let hi_true = dag.get_node(ISD::Or, vt, &[left_hi, right]);
+    let hi_false = dag.get_node(ISD::Shl, vt, &[lo, shamt_minus_size]);
+    let below = dag.get_setcc(EVT::I8, shamt_minus_size, zero, CondCode::SetLt);
+    let lo = dag.get_node(ISD::Select, vt, &[below, lo_true, zero]);
+    let hi = dag.get_node(ISD::Select, vt, &[below, hi_true, hi_false]);
+    dag.get_node_multi(ISD::MergeValues, &[vt, vt], &[lo, hi])
+}
+
+/// `LowerShiftRightParts`: the same for a shift right, arithmetic or logical.
+fn lower_shift_right_parts(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+    arithmetic: bool,
+) -> SDValue {
+    let (lo, hi, shamt) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let vt = dag.value_type(lo);
+    let right = if arithmetic { ISD::Sra } else { ISD::Srl };
+    let zero = dag.get_constant(0, vt);
+    let one = dag.get_constant(1, vt);
+    let minus_size = dag.get_constant(0xFFFF_FFE0, vt);
+    let size_minus_1 = dag.get_constant(31, vt);
+    let shamt_minus_size = dag.get_node(ISD::Add, vt, &[shamt, minus_size]);
+    let size_minus_1_shamt = dag.get_node(ISD::Xor, vt, &[size_minus_1, shamt]);
+    let right_lo = dag.get_node(ISD::Srl, vt, &[lo, shamt]);
+    let left_hi_1 = dag.get_node(ISD::Shl, vt, &[hi, one]);
+    let left_hi = dag.get_node(ISD::Shl, vt, &[left_hi_1, size_minus_1_shamt]);
+    let lo_true = dag.get_node(ISD::Or, vt, &[right_lo, left_hi]);
+    let hi_true = dag.get_node(right, vt, &[hi, shamt]);
+    let lo_false = dag.get_node(right, vt, &[hi, shamt_minus_size]);
+    let hi_false = if arithmetic { dag.get_node(ISD::Sra, vt, &[hi, size_minus_1]) } else { zero };
+    let below = dag.get_setcc(EVT::I8, shamt_minus_size, zero, CondCode::SetLt);
+    let lo = dag.get_node(ISD::Select, vt, &[below, lo_true, lo_false]);
+    let hi = dag.get_node(ISD::Select, vt, &[below, hi_true, hi_false]);
+    dag.get_node_multi(ISD::MergeValues, &[vt, vt], &[lo, hi])
 }
 
 /// `M68k::GetOppositeBranchCondition`: the codes pair up as `(2n, 2n + 1)`:

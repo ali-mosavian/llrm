@@ -182,7 +182,10 @@ pub fn machine_with<'a>(
         Box::new(crate::backend::combiner::MachineCombiner),
         // On SSA, a loop-invariant computation in the preheader (the pin:
         // EarlyMachineLICM, ahead of MachineCSE).
-        Box::new(crate::backend::machinelicm::MachineLicm { classes: Rc::clone(classes) }),
+        Box::new(crate::backend::machinelicm::MachineLicm {
+            classes: Rc::clone(classes),
+            size: target.size || target.min_size,
+        }),
         // After the loop-invariant values are in the preheader: streams that
         // share one index share one pointer (DEVIATE LSR2).
         Box::new(crate::backend::ivshare::IvShare { classes: Rc::clone(classes) }),
@@ -283,7 +286,11 @@ pub fn machine_with<'a>(
             selector,
         )?),
         // After the peephole, as the pin runs it late (X86FixupBWInsts).
-        Box::new(crate::backend::fixupbw::FixupBw { size: target.size }),
+        Box::new(crate::backend::fixupbw::FixupBw {
+            size: target.size,
+            widens_byte: target.widens_load(1)?,
+            widens_word: target.widens_load(2)?,
+        }),
         Box::new(crate::backend::fixupleas::FixupLeas {
             slow_3ops: target.slow_3ops_lea(),
             size: target.size,

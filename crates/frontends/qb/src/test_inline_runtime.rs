@@ -269,3 +269,38 @@ END SUB
         }
     }
 }
+
+/// `MID$(s, i, 1) = CHR$(x)` was a far call of 47 instructions and a freed
+/// temporary per byte (jpeg_fixed bq16: 7.8M of its 10.3M extra instructions
+/// over C). The runtime states what the statement does, so an inlined copy
+/// stores the byte; a start the string does not hold raises error 5 as the
+/// runtime's routine does, before anything is copied.
+#[test]
+fn a_mid_statement_stores_its_bytes_inline_and_raises_for_a_bad_start() {
+    let source = "DEFINT A-Z
+DECLARE SUB Fill (n AS INTEGER)
+DECLARE SUB Fixed (n AS INTEGER)
+DIM SHARED buf AS STRING
+DIM SHARED fixed8 AS STRING * 8
+buf = STRING$(40, 0)
+Fill 30
+Fixed 7
+PRINT ASC(buf); ASC(fixed8)
+
+SUB Fill (n AS INTEGER)
+    FOR i = 1 TO n: MID$(buf, i, 1) = CHR$(i + 3): NEXT
+END SUB
+
+SUB Fixed (n AS INTEGER)
+    FOR i = 1 TO n: MID$(fixed8, i, 1) = CHR$(i + 3): NEXT
+END SUB
+";
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "store.bas", source.as_bytes());
+    let frontend = qb_driver::Frontend::new("qb45", "qb45");
+    let program = qb_driver::parsed(&path, &frontend, None).expect("compiles");
+    let mir = optimized_mir(&program);
+    assert!(mir.contains("store i8"), "no byte store\n{mir}");
+    assert_eq!(calls(&mir, "B$SMID"), 0, "B$SMID stays\n{mir}");
+    assert!(calls(&mir, "B$SERR") >= 1, "a bad start raises no error\n{mir}");
+}

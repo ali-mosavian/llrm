@@ -473,6 +473,13 @@ name = "llrm-env"
 version = "0.1.0"
 
 [[package]]
+name = "llrm-gpl-gcc"
+version = "0.1.0"
+dependencies = [
+ "llrm-mir",
+]
+
+[[package]]
 name = "llrm-hir"
 version = "0.1.0"
 dependencies = [
@@ -516,6 +523,7 @@ dependencies = [
  "llrm-mir",
  "llrm-object",
  "llrm-spike-mf",
+ "llrm-support",
  "llrm-target",
  "llrm-transforms",
  "tempfile",
@@ -707,6 +715,7 @@ name = "llrm-transforms"
 version = "0.1.0"
 dependencies = [
  "llrm-analysis",
+ "llrm-gpl-gcc",
  "llrm-mir",
  "llrm-support",
  "llrm-target",
@@ -725,8 +734,11 @@ dependencies = [
  "llrm-analysis",
  "llrm-codegen",
  "llrm-dagisel",
+ "llrm-debug",
+ "llrm-dwarf",
  "llrm-lir",
  "llrm-mir",
+ "llrm-object",
  "llrm-spike-mf",
  "llrm-target",
  "llrm-transforms",

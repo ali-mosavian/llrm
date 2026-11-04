@@ -472,7 +472,8 @@ pub fn run(
             };
             apply::apply_loop(
                 &mut *unit.function,
-                &*unit.context,
+                &mut *unit.context,
+                &mut *unit.declared,
                 &mut kept,
                 one,
                 preheader,

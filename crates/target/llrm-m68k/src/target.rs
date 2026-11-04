@@ -16,7 +16,15 @@ use llrm_target::{CostModel, Target, routines, timings};
 
 use crate::{REGISTER_INFO, abi};
 
-const CPUS: &[&str] = &["m68000", "m68020"];
+const CPUS: &[&str] = &["m68000", "m68010", "m68020", "m68030", "m68040", "m68060"];
+
+static TIMINGS: LazyLock<timings::Timings> =
+    LazyLock::new(|| timings::Timings::parse(include_str!("timings.times")).expect("m68k timings.times parses"));
+
+/// The CPU table of `name`: the price of a byte of code each CPU is judged by.
+pub fn cpu_table(name: &str) -> Option<timings::CpuTable> {
+    TIMINGS.cpu(name).cloned()
+}
 
 static LAYOUT: LazyLock<Layout> =
     LazyLock::new(|| Layout::parse(include_str!("machines/datalayout.toml")).expect("m68k datalayout.toml parses"));
@@ -183,9 +191,9 @@ impl Target for M68k {
 
     fn cpu_table(
         &self,
-        _name: &str,
+        name: &str,
     ) -> Option<timings::CpuTable> {
-        None
+        cpu_table(name)
     }
 
     fn registers_text(&self) -> String {

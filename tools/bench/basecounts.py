@@ -26,7 +26,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 CACHE = Path(os.environ.get("LLRM_BENCH_BASE_DIR") or Path.home() / ".cache/llrm/bench-base")
 # The rows the compiler under test makes: the reference compilers' (bas, ow, bcc, ...) do not move with it.
-OURS = ("bas", "c", "nib", "bq16", "bq32")
+OURS = ("bas", "c", "nib", "bq16", "bq32", "c64")
 COUNTERS = ("instructions", "memory_operands", "clocks", "code_bytes", "data_bytes", "bss_bytes")
 # Not under bench/: every tool that lists the benchmarks took a directory there for a program (a "waivers" with no waivers.c).
 WAIVERS = "tools/bench/waivers"
@@ -72,6 +72,9 @@ JUDGE_FILES = (
     "tools/sizes.py",
     "crates/target/llrm-x86/bench/padding.py",
     "tools/bench/flatcount.py",
+    "tools/bench/native.py",
+    "tools/bench/native_driver.c",
+    "tools/elfsize.py",
 )
 
 

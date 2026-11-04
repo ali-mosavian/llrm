@@ -1695,7 +1695,7 @@ pub fn funnel(
     count: Option<i64>,
     at: At,
 ) -> Option<Emitted> {
-    let width = width_of(dest).filter(|bytes| matches!(bytes, 2 | 4) && width_of(other) == Some(*bytes))?;
+    let width = width_of(dest).filter(|bytes| matches!(bytes, 2 | 4 | 8) && width_of(other) == Some(*bytes))?;
     if !["shld", "shrd"].contains(&name) {
         return None;
     }
