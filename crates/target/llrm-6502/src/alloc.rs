@@ -990,32 +990,34 @@ impl Builder {
             .count()
     }
 
-    /// `d := a - 1` on a word: the low byte steps, the high only when the low
-    /// was 0 (`lda lo; bne; dec hi; dec lo`, 11 clocks against 22 for the
-    /// carry chain; a byte in x or y steps by dex/dey). Not for a pointer, which has its own pair bump.
-    fn word_minus_one(
+    /// `d := a - 1` or `a + 1` on a word: the low byte steps, the high only
+    /// when the low wrapped (`lda lo; bne; dec hi; dec lo`, 11 clocks against
+    /// 22 for the carry chain; `inc lo; bne; inc hi`; a byte in x or y steps
+    /// by inx/iny/dex/dey). Not for a pointer, which has its own pair bump.
+    fn word_step(
         &mut self,
         mnemonic: &str,
         d: &str,
         a: &str,
         b: &str,
     ) -> Result<bool, Unsupported> {
-        let one = matches!((mnemonic, self.word_constant(b)), ("ADC", Some([255, 255])) | ("SBC", Some([1, 0])));
-        if !one || self.in_pair(d) || self.in_pair(a) {
+        let up = match (mnemonic, self.word_constant(b)) {
+            ("ADC", Some([1, 0])) => true,
+            ("ADC", Some([255, 255])) | ("SBC", Some([1, 0])) => false,
+            _ => return Ok(false),
+        };
+        if self.in_pair(d) || self.in_pair(a) {
             return Ok(false);
         }
         let (al, ah) = self.read_word(a)?;
         let (dl, dh) = self.write_word(d)?;
         self.copy(dl, al);
         self.copy(dh, ah);
-        let operands = vec![
-            Operand::Def(dl),
-            Operand::Def(dh),
-            Operand::Use(dl),
-            Operand::Use(dh),
-            Operand::Def(Reg::Phys(reg::A)),
-        ];
-        self.push(Inst::new(Kind::Op("DEC16"), operands));
+        let mut operands = vec![Operand::Def(dl), Operand::Def(dh), Operand::Use(dl), Operand::Use(dh)];
+        if !up {
+            operands.push(Operand::Def(Reg::Phys(reg::A)));
+        }
+        self.push(Inst::new(Kind::Op(if up { "INC16" } else { "DEC16" }), operands));
         Ok(true)
     }
 
@@ -1451,13 +1453,13 @@ pub fn build_with_places(
             op::XOR8 => b.alu("EOR", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             op::ADD16 => {
                 let (d, a, c) = (name(&o[0])?, name(&o[1])?, name(&o[2])?);
-                if !b.word_minus_one("ADC", d, a, c)? {
+                if !b.word_step("ADC", d, a, c)? {
                     b.alu16("ADC", Some("CLC"), d, a, c)?
                 }
             }
             op::SUB16 => {
                 let (d, a, c) = (name(&o[0])?, name(&o[1])?, name(&o[2])?);
-                if !b.word_minus_one("SBC", d, a, c)? {
+                if !b.word_step("SBC", d, a, c)? {
                     b.alu16("SBC", Some("SEC"), d, a, c)?
                 }
             }
@@ -2782,6 +2784,17 @@ fn emit_with<const STACK: bool>(
                         )
                         .unwrap();
                     }
+                }
+                // d := d + 1 on two cells: the high byte steps when the low wrapped
+                (Kind::Op("INC16"), _) => {
+                    made += 1;
+                    let step = |r| match r {
+                        reg::X => "inx".to_owned(),
+                        reg::Y => "iny".to_owned(),
+                        cell => format!("inc {}", register_name(cell)),
+                    };
+                    let (low, high) = (step(regs[0]), step(regs[1]));
+                    writeln!(out, "  {low}\n  bne _pa{made}\n  {high}\n_pa{made}:").unwrap();
                 }
                 // d := d - 1 on two cells: the high byte steps when the low was 0
                 (Kind::Op("DEC16"), _) => {
