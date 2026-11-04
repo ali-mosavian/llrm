@@ -348,6 +348,9 @@ impl UnrollCostEstimator {
 struct EstimatedUnrollCost {
     unrolled_cost: u32,
     rolled_dynamic_cost: u32,
+    /// PL6: what the first iteration's instructions cost once counted (those a
+    /// later iteration or a side effect needs), zero where not priced.
+    first_iteration: u32,
 }
 
 /// The analyses of one state of the function, made again after a change.
@@ -491,6 +494,7 @@ fn analyze_loop_unroll_cost(
 
     let mut simplified_values = IdMap::<llrm_mir::module::ValueId, Operand>::new();
     let mut unrolled_cost = Cost::FREE;
+    let mut first_iteration = Cost::FREE;
     let mut rolled_dynamic_cost = Cost::FREE;
     let mut inst_cost_map = llrm_support::hash::HashMap::<(InstId, u32), InstState>::default();
     let mut exit_worklist: Vec<(BlockId, BlockId)> = Vec::new();
@@ -554,7 +558,7 @@ fn analyze_loop_unroll_cost(
                 // executing the rolled loop form.
                 rolled_dynamic_cost = rolled_dynamic_cost
                     + clocks
-                        .and_then(|costs| crate::profit::operation(run.context, run.layout, run.function, run.callees, inst, costs))
+                        .and_then(|costs| simplified_clocks(run, inst, &run.function.instruction(inst).operands, costs))
                         .map_or_else(
                             || instruction_cost(run.tti, run.context, run.layout, run.globals, run.function, inst, kind),
                             Cost::of,
@@ -616,6 +620,7 @@ fn analyze_loop_unroll_cost(
                         &simplified_values,
                         &mut inst_cost_map,
                         &mut unrolled_cost,
+                        &mut first_iteration,
                         kind,
                         clocks,
                         inst,
@@ -712,6 +717,7 @@ fn analyze_loop_unroll_cost(
                 &simplified_values,
                 &mut inst_cost_map,
                 &mut unrolled_cost,
+                &mut first_iteration,
                 kind,
                 clocks,
                 terminator,
@@ -745,6 +751,7 @@ fn analyze_loop_unroll_cost(
                     &simplified_values,
                     &mut inst_cost_map,
                     &mut unrolled_cost,
+                    &mut first_iteration,
                     kind,
                     clocks,
                     def,
@@ -759,6 +766,7 @@ fn analyze_loop_unroll_cost(
     Some(EstimatedUnrollCost {
         unrolled_cost: unrolled_cost.value as u32,
         rolled_dynamic_cost: rolled_dynamic_cost.value as u32,
+        first_iteration: first_iteration.value as u32,
     })
 }
 
@@ -802,6 +810,7 @@ fn add_cost_recursively(
     simplified_values: &IdMap<llrm_mir::module::ValueId, Operand>,
     inst_cost_map: &mut llrm_support::hash::HashMap<(InstId, u32), InstState>,
     unrolled_cost: &mut Cost,
+    first_iteration: &mut Cost,
     kind: CostKind,
     clocks: Option<&llrm_mir::target::OperationCosts>,
     root: InstId,
@@ -859,8 +868,7 @@ fn add_cost_recursively(
                         other => other,
                     })
                     .collect();
-                *unrolled_cost = *unrolled_cost
-                    + clocks
+                let price = clocks
                         .and_then(|costs| simplified_clocks(run, inst, &operands, costs))
                         .map_or_else(
                             || {
@@ -877,6 +885,10 @@ fn add_cost_recursively(
                             },
                             Cost::of,
                         );
+                *unrolled_cost = *unrolled_cost + price;
+                if iteration == 0 {
+                    *first_iteration = *first_iteration + price;
+                }
             }
 
             // The cost of every operand that is not free must be counted,
@@ -1084,8 +1096,13 @@ fn peels_folded_entry(
         return false;
     }
     let costs = crate::profit::costs(run.outer);
-    let Some(cost) = analyze_loop_unroll_cost(run, analyzed, lp, 1, eph, u32::MAX, 1, Some(&costs)) else { return false };
-    let saved = u64::from(cost.rolled_dynamic_cost.saturating_sub(cost.unrolled_cost));
+    // Two trips: the first's instructions are counted where the second or a side
+    // effect needs them, so its cost against one rolled trip is what the entry values
+    // fold (a single trip would count what only feeds the next as dead).
+    let Some(cost) = analyze_loop_unroll_cost(run, analyzed, lp, 2, eph, u32::MAX, 2, Some(&costs)) else {
+        return false;
+    };
+    let saved = u64::from((cost.rolled_dynamic_cost / 2).saturating_sub(cost.first_iteration));
     why(run, lp, &format!("peel the first iteration: folds {saved} of {loop_size}, rate {rate}"));
     folded_entry_pays(saved, loop_size, rate)
 }

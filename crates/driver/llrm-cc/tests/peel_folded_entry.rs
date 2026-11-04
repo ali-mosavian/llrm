@@ -41,13 +41,20 @@ fn asm_of(
 /// The unroll pass's log at `level`: it says "peeling 1 iterations" for a loop
 /// whose first trip it runs folded.
 fn peels(level: &str) -> bool {
+    peels_source(SOURCE, level)
+}
+
+fn peels_source(
+    source: &str,
+    level: &str,
+) -> bool {
     for name in ["LLRM_OW", "LLRM_CLANG_M16"] {
         assert!(std::env::var_os(name).is_some(), "{name} is not set: this test needs it and does not skip");
     }
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("peelentry-log-{}-{}", level.trim_start_matches('-'), std::process::id()));
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("peelentry-log-{}-{}-{}", level.trim_start_matches('-'), source.len(), std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("d.c"), SOURCE).unwrap();
+    std::fs::write(dir.join("d.c"), source).unwrap();
     let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_32-wat")
         .env("LLRM_DEBUG", "unroll")
@@ -77,4 +84,13 @@ fn at_speed_the_first_trip_of_a_remainder_loop_tests_the_low_bit() {
     let source = "long f(int n)\n{\n    int i, d, count = 0;\n    for (i = 2; i < n; ++i) { for (d = 2; d * d <= i; ++d) if (i % d == 0) break; if (d * d > i) ++count; }\n    return count;\n}\n";
     let text = asm_of(source, "-O2", "primes");
     assert!(text.lines().any(|line| line.trim_start().starts_with("test") && line.trim_end().ends_with(", 1")), "{text}");
+}
+
+/// frames: `rest % 10` has a constant divisor in the rolled loop already. Priced
+/// as a divide on that side and an `and` after the peel, it read as 60 clocks
+/// folded and peeled digits() (+2.1M of 3.1M clocks). It is not peeled.
+#[test]
+fn at_speed_a_constant_divisor_the_loop_already_has_does_not_pay_for_a_peel() {
+    let source = "int digits(long v)\n{\n    int total = 0;\n    long rest = v;\n    while (rest > 0) {\n        total += (int)(rest % 10);\n        rest /= 10;\n    }\n    return total;\n}\n";
+    assert!(!peels_source(source, "-O2"), "the digit loop was peeled");
 }
