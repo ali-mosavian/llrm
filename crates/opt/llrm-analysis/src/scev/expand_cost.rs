@@ -278,18 +278,22 @@ impl Expander {
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L1637
-    /// `FindValueInExprValueMap(S, InsertPt, DropPoisonGeneratingInsts)`,
-    /// without the poison check (DEVIATE D12: `canReuseInstruction` is not
-    /// translated; its only effect here is to answer `false` for a value
-    /// whose poison-generating flags cannot be dropped, which costs the
-    /// caller a reuse it would otherwise price at zero).
+    /// `FindValueInExprValueMap(S, InsertPt, DropPoisonGeneratingInsts)`: a
+    /// value that computes `s` and may stand for it at `insert_point`, and the
+    /// instructions whose poison-generating flags must be dropped to use it.
     pub fn find_value_in_expr_value_map(
         &self,
         cx: &Cx,
         se: &mut ScalarEvolution,
         s: Scev,
         insert_point: InstId,
-    ) -> Option<Operand> {
+    ) -> Option<(Operand, Vec<InstId>)> {
+        // If the expansion is not in CanonicalMode, and the SCEV contains any
+        // sub scAddRecExpr type SCEV, it is required to expand the SCEV
+        // literally.
+        if !self.canonical_mode && super::guards::contains_add_recurrence(se, s) {
+            return None;
+        }
         // If S is a constant or unknown, it may be worse to reuse an existing
         // Value.
         if matches!(se.node(s).kind, Kind::Constant(_) | Kind::Unknown(_)) {
@@ -316,8 +320,12 @@ impl Expander {
                 None => true,
                 Some(found) => found.contains(insert_block),
             };
-            if inside {
-                return Some(v);
+            if !inside {
+                continue;
+            }
+            // Make sure reusing the instruction is poison-safe.
+            if let Some(drop) = se.can_reuse_instruction(cx, s, def) {
+                return Some((v, drop));
             }
         }
         None

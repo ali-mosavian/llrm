@@ -2,11 +2,11 @@
 //! `impliesPoison`, `isGuaranteedNotToBePoison` and `isGuaranteedNotToCauseUB`
 //! of ScalarEvolution.
 
-use llrm_mir::apint::Word;
 use std::collections::BTreeSet;
 
+use llrm_mir::apint::Word;
 use llrm_mir::hash::HashSet;
-use llrm_mir::module::Operand;
+use llrm_mir::module::{InstId, Operand};
 use llrm_mir::valuetracking::guarantee;
 
 use super::expr::{Kind, Scev, Type};
@@ -83,6 +83,75 @@ impl ScalarEvolution {
             }
         }
         maybe_poison
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L4181
+    /// `ScalarEvolution::canReuseInstruction`: whether the value of `inst`
+    /// may stand for `s`, and the instructions whose poison-generating flags
+    /// must go for it to (none if `inst` cannot be poison).
+    pub fn can_reuse_instruction(
+        &self,
+        cx: &Cx,
+        s: Scev,
+        inst: InstId,
+    ) -> Option<Vec<InstId>> {
+        let q = cx.query(None);
+        let result = Operand::Value(cx.function.instruction(inst).result?);
+        // If the instruction cannot be poison, it's always safe to reuse.
+        if guarantee::program_undefined_if_poison(&q, result) {
+            return Some(Vec::new());
+        }
+        // Otherwise, it is possible that I is more poisonous that S. Collect
+        // the poison-contributors of S, and then check whether I has any
+        // additional poison-contributors. Poison that is contributed through
+        // poison-generating flags is handled by dropping those flags instead.
+        let poison_vals: HashSet<Operand> = self
+            .collect_maybe_poison(cx, s, false)
+            .into_iter()
+            .filter_map(|one| if let Kind::Unknown(value) = self.node(one).kind { Some(value) } else { None })
+            .collect();
+        let mut drop = Vec::new();
+        let mut worklist = vec![result];
+        let mut visited: HashSet<Operand> = HashSet::default();
+        while let Some(v) = worklist.pop() {
+            if !visited.insert(v) {
+                continue;
+            }
+            // Avoid walking large instruction graphs.
+            if visited.len() > 16 {
+                return None;
+            }
+            // Either the value can't be poison, or the S would also be poison
+            // if it is.
+            if poison_vals.contains(&v) || is_guaranteed_not_to_be_poison_value(&q, v) {
+                continue;
+            }
+            let Operand::Value(value) = v else { return None };
+            let llrm_mir::module::ValueDef::Instruction(i) = cx.function.value(value).def else { return None };
+            // Disjoint or instructions are interpreted as adds by SCEV.
+            // However, we can't replace an arbitrary add with
+            // disjoint or, even if we drop the flag. We would need
+            // to convert the or into an add.
+            let instruction = cx.function.instruction(i);
+            if matches!(
+                instruction.opcode,
+                llrm_mir::opcode::Opcode::Binary(llrm_mir::opcode::BinaryOp::Or)
+            )
+                && instruction.flags.contains(llrm_mir::opcode::Flags::DISJOINT)
+            {
+                return None;
+            }
+            if guarantee::can_create_poison(&q, guarantee::Operator::Instruction(i), false) {
+                return None;
+            }
+            // If the instruction can't create poison, we can recurse to its
+            // operands.
+            if guarantee::has_poison_generating_annotations(&q, guarantee::Operator::Instruction(i)) {
+                drop.push(i);
+            }
+            worklist.extend(instruction.operands.iter().copied().filter(|one| !matches!(one, Operand::Block(_))));
+        }
+        Some(drop)
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L4149
