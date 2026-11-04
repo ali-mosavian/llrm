@@ -170,6 +170,38 @@ exit:
     assert!(after.contains("IV.S."), "{after}");
 }
 
+/// Two conversions of one counter got two floating counters: the pin's
+/// `OptimizeShadowIV` makes one per loop and breaks. wasm x_matmul_f -O2 grew
+/// 29 B (1584 -> 1613) once both conversions were `uitofp nneg` and GVN had no
+/// pass left to merge them: each kept its own `IV.S.` and `fadd`.
+#[test]
+fn a_loop_gets_one_floating_counter_for_two_conversions() {
+    let (changed, after) = reduced_on(
+        FLAT,
+        "define double @f(i32 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %s = phi double [ 0.0, %entry ], [ %s3, %loop ]
+  %d = sitofp i32 %i to double
+  %e = uitofp nneg i32 %i to double
+  %s2 = fadd double %s, %d
+  %s3 = fmul double %s2, %e
+  %next = add nuw nsw i32 %i, 1
+  %c = icmp eq i32 %next, %n
+  br i1 %c, label %exit, label %loop
+exit:
+  ret double %s3
+}
+",
+        "i486",
+        &[&[1], &[5], &[17]],
+    );
+    assert!(changed, "{after}");
+    assert_eq!(after.matches("= phi double [ 0.000000e+00").count() - 1, 1, "{after}");
+}
+
 /// `OptimizeShadowIV` on the outer loop of a nest: `(double) r` is taken in
 /// the outer loop's own body and read by the inner loop. x_ld_div at -Os kept
 /// `fiadd [r]` in every inner trip (19+ clocks on a 486) where the pin's loop
