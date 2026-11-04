@@ -86,7 +86,7 @@ fn _step_of(
     if compare.op != Operation::Compare || compare.name.as_deref() != Some("cmp") {
         return None;
     }
-    let [Loc::Held(Held { value, width }), Loc::Imm(constant)] = compare.sources.as_slice() else { return None };
+    let [Loc::Held(Held { value, width, .. }), Loc::Imm(constant)] = compare.sources.as_slice() else { return None };
     // Only the branch reads the flags, after anchors.
     let branch =
         insns[at + 1..].iter().find(|one| !one.what.as_ref().is_some_and(|what| what.op == Operation::Nothing))?;
@@ -155,7 +155,7 @@ mod tests {
     }
 
     fn held(value: u32) -> Held {
-        Held { value, width: 4 }
+        Held { value, width: 4, offset: 0 }
     }
 
     fn imm(value: i64) -> Loc {
@@ -243,8 +243,8 @@ mod tests {
     #[test]
     fn a_step_of_another_width_than_its_compare_is_not_the_compare() {
         for (step, compare) in [(2, 4), (4, 2)] {
-            let at = |width| Held { value: 1, width };
-            let result = Held { value: 2, width: step };
+            let at = |width| Held { value: 1, width, offset: 0 };
+            let result = Held { value: 2, width: step, offset: 0 };
             let imm = |width| Loc::Imm(Imm { value: 1, width, address: None });
             let insns = vec![
                 insn(
