@@ -1082,7 +1082,10 @@ pub fn refuse_vectors(program: &Program) -> Result<(), String> {
         for (_, global, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
             for at in 0..function.value_count() {
                 let ty = function.value(llrm_mir::module::ValueId(at as u32)).ty;
-                if matches!(module.context.types.get(ty), llrm_mir::types::Type::Vector { .. }) {
+                if matches!(
+                    module.context.types.get(ty),
+                    llrm_mir::types::Type::Vector { .. }
+                ) {
                     let name = global.name.as_deref().unwrap_or("?");
                     return Err(format!("@{name}: a {} value", module.context.types.display(ty)));
                 }

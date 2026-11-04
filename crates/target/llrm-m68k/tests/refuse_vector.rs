@@ -1,9 +1,11 @@
-//! A vector in the IR is refused, not a panic: the mid-end assumes scalars, and no target has vector MIR yet.
+//! A vector in the IR is refused, not a panic: the mid-end assumes scalars, and
+//! no target has vector MIR yet.
 
 use std::process::Command;
 
-/// `<4 x i32>` reached `combine_shared::width` and panicked ("an integer", exit 101, every llc but arm64 and wasm
-/// untested); it is refused as isel refuses a type with no registers, exit 1.
+/// `<4 x i32>` reached `combine_shared::width` and panicked ("an integer", exit
+/// 101, every llc but arm64 and wasm untested); it is refused as isel refuses a
+/// type with no registers, exit 1.
 #[test]
 fn a_vector_value_is_refused_not_a_panic() {
     let dir = std::env::temp_dir().join("llrm-refuse-vector-m68k");
