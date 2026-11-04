@@ -121,6 +121,12 @@ let Constraints = "$d = $a" in {
   def DEC16 : Z80Inst<(outs GR16:$d), (ins GR16:$a), "dec $d", [(set i16:$d, (add i16:$a, (i16 -1)))]>;
 }
 
+// A word moved by 2 or 3 is that many `inc rr` or `dec rr` (1 B, 6 T each), not `ld bc, #n; add hl, bc` (4 B, 21 T) and a register lost.
+def : Pat<(add GR16:$a, (i16 2)), (INC16 (INC16 GR16:$a))>;
+def : Pat<(add GR16:$a, (i16 3)), (INC16 (INC16 (INC16 GR16:$a)))>;
+def : Pat<(add GR16:$a, (i16 -2)), (DEC16 (DEC16 GR16:$a))>;
+def : Pat<(add GR16:$a, (i16 -3)), (DEC16 (DEC16 (DEC16 GR16:$a)))>;
+
 // The full product of two zero-extended bytes; emission builds B:C and runs mlt bc.
 let Predicates = [HasZ180], Defs = [F] in
   def UMUL8X8 : Z80Inst<(outs GR16:$d), (ins GR8:$a, GR8:$b), "umul8x8 $d, $a, $b",

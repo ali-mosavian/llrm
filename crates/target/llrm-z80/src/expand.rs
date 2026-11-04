@@ -1427,7 +1427,7 @@ pub fn finish(
             printer.instruction(inst, next, &block.insts[index + 1..])?;
         }
     }
-    Ok(drop_unreachable(printer.out))
+    Ok(drop_unreachable(cancel_steps(printer.out)))
 }
 
 /// Whether `text` ends the flow: `ret`, `jp L` or `jr L` with no condition.
@@ -1439,6 +1439,33 @@ fn ends_flow(text: &str) -> bool {
 /// `ret z` stands in for a branch to a block that is only a `ret`, which
 /// leaves the block with no reader: the code after an unconditional `ret` or
 /// jump, up to the next label something names, never runs.
+/// `dec rr` then `inc rr` of the same pair, or the reverse, is nothing: neither
+/// touches the flags. A word stored through a pointer leaves it where it was
+/// (`inc hl; ld (hl), d; dec hl`), and a pointer stepped by one after that
+/// undoes the restore.
+fn cancel_steps(lines: Vec<Line>) -> Vec<Line> {
+    fn step(line: &Line) -> Option<(i32, &str)> {
+        let Line::Inst(text) = line else { return None };
+        text.strip_prefix("inc ")
+            .map(|pair| (1, pair))
+            .or_else(|| text.strip_prefix("dec ").map(|pair| (-1, pair)))
+            .filter(|(_, pair)| matches!(*pair, "bc" | "de" | "hl"))
+    }
+    let mut out: Vec<Line> = Vec::with_capacity(lines.len());
+    for line in lines {
+        let undoes = match (step(&line), out.last().and_then(step)) {
+            (Some((sign, pair)), Some(last)) => last == (-sign, pair),
+            _ => false,
+        };
+        if undoes {
+            out.pop();
+        } else {
+            out.push(line);
+        }
+    }
+    out
+}
+
 fn drop_unreachable(lines: Vec<Line>) -> Vec<Line> {
     let named: llrm_support::hash::HashSet<&str> = lines
         .iter()
