@@ -131,11 +131,11 @@ pub mod combine_fpcast;
 #[cfg(test)]
 mod combine_fpcast_tests;
 pub mod combine_fptoint;
+#[cfg(test)]
+mod combine_fptoint_tests;
 pub mod combine_fptrunc;
 #[cfg(test)]
 mod combine_fptrunc_tests;
-#[cfg(test)]
-mod combine_fptoint_tests;
 pub mod combine_funnel;
 pub mod combine_gep;
 pub mod combine_gep_base;

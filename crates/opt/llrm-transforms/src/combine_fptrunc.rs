@@ -131,7 +131,13 @@ fn minimum_fp_type(
         match instruction.opcode {
             Opcode::Cast(CastOp::FPExt) => return c.type_of(instruction.operands[0]),
             Opcode::Cast(op @ (CastOp::SIToFP | CastOp::UIToFP))
-                if can_be_casted_exactly_int_to_fp(c, instruction.operands[0], preferred, op == CastOp::SIToFP, def) =>
+                if can_be_casted_exactly_int_to_fp(
+                    c,
+                    instruction.operands[0],
+                    preferred,
+                    op == CastOp::SIToFP,
+                    def,
+                ) =>
             {
                 return preferred;
             }

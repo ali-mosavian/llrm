@@ -64,11 +64,15 @@ fn fold_masked_trunc(
     if !shared::has_one_use(c, truncated) {
         return None;
     }
-    let trunc = def_of(c, truncated).filter(|&def| c.function.instruction(def).opcode == Opcode::Cast(CastOp::Trunc))?;
+    let trunc =
+        def_of(c, truncated).filter(|&def| c.function.instruction(def).opcode == Opcode::Cast(CastOp::Trunc))?;
     let x = c.function.instruction(trunc).operands[0];
     let source_width = c.context.types.int_bits(c.type_of(src))?;
     let input_width = c.context.types.int_bits(c.type_of(x))?;
-    if input_width > 128 || c.env.layout.legal_integer(source_width) || !shared::should_change_type(c.env.layout, source_width, input_width) {
+    if input_width > 128
+        || c.env.layout.legal_integer(source_width)
+        || !shared::should_change_type(c.env.layout, source_width, input_width)
+    {
         return None;
     }
     let wide_mask = llrm_mir::module::Operand::Constant(c.context.int(c.type_of(x), mask_bits as i128));
