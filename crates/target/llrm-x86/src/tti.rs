@@ -61,6 +61,11 @@ pub struct X86 {
     pub registers: Option<u32>,
     /// The target's tuning table (`Machine::tuning`); the pin's by default.
     pub tuning: llrm_mir::target::Tuning,
+    /// `getSchedModel().LoopMicroOpBufferSize` of the cpu's model: 28 for the
+    /// `SandyBridgeModel` of `core2` and `x86-64`, 0 for the `GenericModel` of
+    /// the rest (`LoopMicroOpBufferSize = -1`).
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86SchedSandyBridge.td#L28
+    pub loop_micro_op_buffer: u32,
 }
 
 /// T6: the 16-bit target's address forms and registers, from its description
@@ -144,6 +149,7 @@ impl X86 {
                 real_mode: None,
                 registers: None,
                 tuning: llrm_mir::target::Tuning::PIN,
+                loop_micro_op_buffer: 0,
             }),
             "core2" => Some(X86 {
                 cmov: true,
@@ -154,6 +160,7 @@ impl X86 {
                 real_mode: None,
                 registers: None,
                 tuning: llrm_mir::target::Tuning::PIN,
+                loop_micro_op_buffer: 28,
             }),
             // `-march=x86-64`: the baseline of long mode, SSE2
             // and `TuningMacroFusion` (X86.td `X86_64V1Tuning`).
@@ -166,6 +173,7 @@ impl X86 {
                 real_mode: None,
                 registers: None,
                 tuning: llrm_mir::target::Tuning::PIN,
+                loop_micro_op_buffer: 28,
             }),
             _ => None,
         }
@@ -574,6 +582,14 @@ impl Tti for X86 {
 
     fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
         (self.tuning.unroll_threshold, self.tuning.unroll_max_percent_threshold_boost)
+    }
+
+    /// `X86.td` gives `core2` and `x86-64` the `SandyBridgeModel`; the base
+    /// `getUnrollingPreferences` then enables partial and runtime unrolling
+    /// (`Tti::get_unrolling_preferences`):
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L768-L803
+    fn loop_micro_op_buffer_size(&self) -> u32 {
+        self.loop_micro_op_buffer
     }
 
     fn x87_stack_slots(&self) -> Option<u32> {
