@@ -60,7 +60,11 @@ static inline sf64 div_core(uint64_t sign, int ea, int eb, uint64_t ma, uint64_t
         while (rem < 0) { d--; rem += (int64_t)mb; } \
         while ((uint64_t)rem >= mb) { d++; rem -= (int64_t)mb; } \
         q = (q << 28) | d; r = (uint64_t)rem; } while (0)
+#ifdef __OPTIMIZE_SIZE__
+    for (int i = 0; i < 2; i++) DIV_STEP28(); /* one copy of the digit step: the unrolled pair is +150 B at -Os */
+#else
     DIV_STEP28(); DIV_STEP28();
+#endif
 #undef DIV_STEP28
     inexact = r != 0;
 #elif defined(SF_DIV64_HW32)
