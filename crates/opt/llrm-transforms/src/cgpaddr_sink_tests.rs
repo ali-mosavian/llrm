@@ -458,3 +458,38 @@ fn test_a_global_plus_index_still_sinks_where_the_target_refuses_a_global_base()
     let second = after.split("b1:").nth(1).unwrap();
     assert!(second.contains("getelementptr i8, ptr @g"), "{after}");
 }
+
+/// A sunk address is `inbounds` only if every `gep` it folds is (the pin's
+/// `ExtAddrMode::InBounds`). Dropped, wasm instruction selection could not fold
+/// a frame address plus the offset into the access: nbody -O2 kept
+/// `i32.const 96; i32.add; i32.const 16; i32.add` on each store, 67 B over
+/// clang.
+#[test]
+fn test_a_sunk_address_keeps_inbounds_only_if_every_gep_had_it() {
+    let text = |flags: &str| {
+        format!(
+            "define i16 @f(i16 %i, i16 %c) {{
+b0:
+  %p = getelementptr {flags} i8, ptr @g, i16 %i
+  %a = getelementptr {flags} i8, ptr %p, i16 8
+  %low = icmp slt i16 %c, 0
+  br i1 %low, label %b1, label %b2
+
+b1:
+  %v = load i16, ptr %a
+  ret i16 %v
+
+b2:
+  ret i16 0
+}}
+"
+        )
+    };
+    let machine = || crate::testing::Tuned { no_global_base: true, ..Default::default() };
+    let inbounds = sunk_on(&text("inbounds"), &[&[0, -1], &[2, 1]], machine());
+    let second = inbounds.split("b1:").nth(1).unwrap();
+    assert!(second.contains("getelementptr inbounds i8"), "{inbounds}");
+    let plain = sunk_on(&text(""), &[&[0, -1], &[2, 1]], machine());
+    let second = plain.split("b1:").nth(1).unwrap();
+    assert!(second.contains("getelementptr i8") && !second.contains("inbounds"), "{plain}");
+}

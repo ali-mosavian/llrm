@@ -332,7 +332,7 @@ fn _implicit_def(
     let what = crate::model::ir::Semantics {
         op: crate::model::ir::Operation::Nothing,
         name: Some(crate::processimpdefs::IMPLICIT_DEF.into()),
-        dests: vec![crate::model::ir::Loc::Held(Held { value, width })],
+        dests: vec![crate::model::ir::Loc::Held(Held { value, width, offset: 0 })],
         sources: Vec::new(),
         ..crate::model::ir::Semantics::new(crate::model::ir::Operation::Nothing)
     };
@@ -346,7 +346,7 @@ fn _held(
     value: u32,
     width: u32,
 ) -> Held {
-    Held { value, width }
+    Held { value, width, offset: 0 }
 }
 
 #[cfg(test)]
@@ -355,7 +355,7 @@ mod tests {
     use crate::model::ir::{Imm, Loc, Operation, Semantics};
 
     fn held(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 4 })
+        Loc::Held(Held { value, width: 4, offset: 0 })
     }
 
     fn def(v: u32) -> Arc<Insn> {
@@ -480,7 +480,7 @@ mod tests {
     /// (d_faces -O2: that stage cost 11.7 M instructions on one body).
     #[test]
     fn test_a_phi_of_an_8_byte_integer_is_lowered_like_any_other() {
-        let wide = |value: u32| Loc::Held(Held { value, width: 8 });
+        let wide = |value: u32| Loc::Held(Held { value, width: 8, offset: 0 });
         let make = |value: u32| {
             let what = Semantics {
                 name: Some("mov".into()),
@@ -504,7 +504,7 @@ mod tests {
     /// for `phielim`'s own lowering, which is deleted).
     #[test]
     fn test_an_x87_phi_is_lowered_like_any_other() {
-        let float = |value: u32| Loc::Held(Held { value, width: 10 });
+        let float = |value: u32| Loc::Held(Held { value, width: 10, offset: 0 });
         let load = |value: u32| {
             let what = Semantics {
                 name: Some("fldz".into()),
