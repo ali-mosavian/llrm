@@ -213,6 +213,16 @@ def assert_distinct(base, new, same_source: bool = False) -> str:
     return f"binaries: base {a[:12]} {base} | new {b[:12]} {new}" + (" (same binary, same source)" if a == b else "")
 
 
+def assert_distinct_llc(base, new, same_llc: bool = False) -> None:
+    """SystemExit when the llrm-llc beside `base` and the one beside `new` are the same bytes: llrm-cc only drives, so two dists sharing one backend read SAME on every
+    row. Nothing to compare when either has none. `same_llc` allows a head that changes only the frontend."""
+    a, b = Path(base).parent / "llrm-llc", Path(new).parent / "llrm-llc"
+    if same_llc or not (a.is_file() and b.is_file()):
+        return
+    if md5(a) == md5(b):
+        raise SystemExit(f"same llrm-llc: {a} and {b} both have md5 {md5(a)}; every row would read SAME whatever llrm-cc is (IDENTITY_SAME_LLC=1 for a frontend-only change).")
+
+
 OBJECT = "<object>"
 OBJECT_BYTES = 100
 
