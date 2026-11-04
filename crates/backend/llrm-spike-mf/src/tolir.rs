@@ -434,9 +434,12 @@ pub fn to_lir<T: Target>(
                     let ordinal = made.origin.len() as i64;
                     made.origin.push((at, position));
                     foldable.push(None);
+                    // the pair it is copied into (its class) and the part it
+                    // copies; a clone of the pair that only these name is
+                    // otherwise any register
                     let part = own
                         .iter()
-                        .filter(|info| !info.def && info.index == k)
+                        .filter(|info| info.def || info.index == k)
                         .cloned()
                         .map(|info| OperandInfo { index: 0, ..info })
                         .collect();

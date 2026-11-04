@@ -74,6 +74,17 @@ fn a_pair_built_from_two_bytes_and_returned_has_its_bytes_in_the_return_pair() {
     assert!(instructions <= 24, "{instructions} instructions:\n{text}");
 }
 
+/// lz4c -Oz was refused ("d has no byte halves", a `RELOAD16` into a byte
+/// register): a clone of a pair built from its bytes, named only by the lane
+/// copies and the spill code, had no class and took any register.
+#[test]
+fn a_pair_built_from_bytes_and_spilled_is_reloaded_into_a_pair() {
+    let dir = env!("CARGO_MANIFEST_DIR");
+    let out = std::env::temp_dir().join("llrm-z80-llc-lz4c-oz.s");
+    let done = llc(&["-S", "-Oz", "-o", out.to_str().unwrap(), &format!("{dir}/tests/kernels/ir/lz4c.ll")]);
+    assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+}
+
 /// `-g` was refused ("unrecognized argument -g", exit 2) and so was every
 /// `llrm-cc -g` z80 row: it writes SDCC's `C$file$line` symbols.
 #[test]
