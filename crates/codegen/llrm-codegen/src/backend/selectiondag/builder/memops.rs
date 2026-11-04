@@ -1026,8 +1026,19 @@ impl Builder<'_> {
                     Some(bytes) => self.inline_memmove(root, dst, other, bytes, limit, dst_align, src_align)?,
                     _ => None,
                 };
+                // a target with string instructions of its own
+                // (`EmitTargetCodeForMemcpy`) copies what is
+                // left past the inline limit with them, where the pin would
+                // call `memcpy`
+                let hooked = match (&inline, which) {
+                    (None, Intrinsic::MemCpy) if !strings_exist => self
+                        .calling()
+                        .and_then(|calling| calling.emit_memcpy_sized(&mut self.dag, root, dst, other, size, opt_size)),
+                    _ => None,
+                };
                 match (inline, which, constant) {
                     (Some(chain), _, _) => chain,
+                    (None, Intrinsic::MemCpy, _) if hooked.is_some() => hooked.expect("checked"),
                     (None, Intrinsic::MemCpy, Some(bytes)) if strings_exist && self.has_min_size() => {
                         self.rep_movs(root, dst, other, bytes, 1, dst_align, src_align)?
                     }
@@ -1191,7 +1202,7 @@ impl Builder<'_> {
                 };
                 let hooked = |dag: &mut _| {
                     if copy {
-                        calling.emit_memcpy(dag, root, dst, other, size)
+                        calling.emit_memcpy_sized(dag, root, dst, other, size, opt_size)
                     } else {
                         calling.emit_memmove(dag, root, dst, other, size)
                     }

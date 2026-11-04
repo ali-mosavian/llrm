@@ -1463,3 +1463,32 @@ fn an_eight_trip_loop_is_unrolled_where_speed_comes_first_and_not_at_oz() {
     assert!(!fast.contains("dec h"), "{fast}");
     assert!(small.contains("dec h"), "{small}");
 }
+
+const MEMCPY: &str = "declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)\n\
+    define void @mc(ptr %d, ptr %s, i16 %n) {\n  call void @llvm.memcpy.p0.p0.i16(ptr %d, ptr %s, i16 %n, i1 false)\n  ret void\n}";
+
+/// A `memcpy` of a length known only at run time called `__memcpy`: the call, a
+/// push, a swap, the same test of the count, the same `ldir`, a pop and a
+/// return, about 60 T more than the copy. Where speed comes first it is the
+/// test and `ldir` inline; tuned for size it stays the call, 4 B less.
+#[test]
+fn a_memcpy_of_unknown_length_is_an_ldir_behind_a_test_of_the_count_where_speed_comes_first() {
+    let ir = format!("target datalayout = \"{DATALAYOUT}\"\n{MEMCPY}");
+    let fast = text(&ir, "mc", 0, &Request::new(Level::O2)).expect("compiles");
+    let small = text(&ir, "mc", 0, &Request::new(Level::Oz)).expect("compiles");
+    assert!(fast.contains("or a, c\n\tjr z, ") && fast.contains("ldir") && !fast.contains("__memcpy"), "{fast}");
+    assert!(small.contains("__memcpy") && !small.contains("ldir"), "{small}");
+}
+
+/// `ldir` copies forward, so a `memmove` with the destination above the source
+/// would overwrite its own source: the runtime's routine picks the direction,
+/// and the inline form is only for `memcpy`.
+#[test]
+fn a_memmove_is_still_a_call() {
+    let ir = format!(
+        "target datalayout = \"{DATALAYOUT}\"\ndeclare void @llvm.memmove.p0.p0.i16(ptr, ptr, i16, i1)\n\
+         define void @mm(ptr %d, ptr %s, i16 %n) {{\n  call void @llvm.memmove.p0.p0.i16(ptr %d, ptr %s, i16 %n, i1 false)\n  ret void\n}}"
+    );
+    let out = text(&ir, "mm", 0, &Request::new(Level::O2)).expect("compiles");
+    assert!(out.contains("__memmove") && !out.contains("ldir"), "{out}");
+}
