@@ -93,6 +93,7 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // on the O3 edge, zero margin). Owner x86-m32; exit 2026-12-10: the
         // estimate becomes gcc's own size count (translated, not fitted).
         recursive_edge_growth: Some((12, 22)),
+        peel_folded_entry: true,
         ..llrm_mir::target::Tuning::PIN
     }
 }

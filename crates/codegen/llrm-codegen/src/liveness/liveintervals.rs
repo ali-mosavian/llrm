@@ -42,7 +42,9 @@ use super::eqclasses::{ConnectedVNInfoEqClasses, distribute_range};
 use super::liverange::{LiveInterval, LiveRange, Segment, VNInfo, Vn};
 use super::liverangecalc::{Ctx, LiveIntervalCalc, Operand};
 use super::slotindex::{InstrKey, SlotIndex, SlotIndexes};
+use crate::model::ir::Loc;
 use crate::model::lir::{Insn, LirBody};
+use llrm_lir::valuelanes::ValueLanes;
 use crate::support::hash::{HashMap, HashSet};
 
 // How many `LiveIntervals` this thread has built, for a test that a phase that
@@ -241,13 +243,12 @@ impl LiveIntervals {
         for &value in &one.defines {
             let reads_reg = one.partial_defs.contains(&value);
             let lanes = one.def_lanes.iter().find(|(v, _)| *v == value).map_or(Operand::ALL, |(_, lanes)| *lanes);
-            self.push_operand(value, Operand { instr, is_def: true, reads_reg, early_clobber: false, lanes });
+            let early_clobber = one.early_clobbers.contains(&value);
+            self.push_operand(value, Operand { instr, is_def: true, reads_reg, early_clobber, lanes });
         }
         for &value in &one.uses {
-            self.push_operand(
-                value,
-                Operand { instr, is_def: false, reads_reg: true, early_clobber: false, lanes: Operand::ALL },
-            );
+            let lanes = read_lanes(one, value);
+            self.push_operand(value, Operand { instr, is_def: false, reads_reg: true, early_clobber: false, lanes });
         }
         // An operand flagged undef names the register and reads nothing
         // (`MachineOperand::isUndef`): it starts and extends no live range.
@@ -1274,6 +1275,35 @@ impl LiveIntervals {
     }
 }
 
+/// The bytes of `value` that `one` reads: what its operands name of it, or all
+/// of them where it names none (an implicit read). A read of one lane of a
+/// value some def writes by lane needs only that lane defined.
+fn read_lanes(
+    one: &Insn,
+    value: u32,
+) -> ValueLanes {
+    if let Some((_, lanes)) = one.use_lanes.iter().find(|(v, _)| *v == value) {
+        return *lanes;
+    }
+    let Some(what) = &one.what else { return Operand::ALL };
+    let mut found = ValueLanes::NONE;
+    for place in &what.sources {
+        for held in llrm_lir::values(place) {
+            if held.value == value {
+                found = found.union(held.lanes());
+            }
+        }
+    }
+    for place in what.dests.iter().filter(|place| matches!(place, Loc::Mem(_))) {
+        for held in llrm_lir::values(place) {
+            if held.value == value {
+                found = found.union(held.lanes());
+            }
+        }
+    }
+    if found.is_empty() { Operand::ALL } else { found }
+}
+
 #[cfg(test)]
 mod tests {
     use llrm_lir::valuelanes::ValueLanes;
@@ -1520,6 +1550,60 @@ mod tests {
         assert!(!lis.interval(1).has_sub_ranges(), "no lane def, no sub-range");
     }
 
+
+    /// `x.hi := a; x.lo := b; use x.hi; use x`: the high byte is defined
+    /// before the low one, as joining the bytes' own defs into a pair puts
+    /// them. A lane def does not end the other lanes: the pair is live from
+    /// the first def to the last read. Taken as whole-value defs, the second
+    /// def ended the first's value and the range had a gap between them.
+    #[test]
+    fn test_a_value_defined_by_lanes_in_either_order_is_live_from_its_first_lane_def() {
+        let lane = |byte: u32| {
+            let mut def = Insn::new(0, None, None, vec![1], Vec::new());
+            def.def_lanes = vec![(1, ValueLanes::at(byte, 1))];
+            Arc::new(def)
+        };
+        let (high, low) = (lane(1), lane(0));
+        let insns = [Arc::clone(&high), Arc::clone(&low), insn(&[], &[1])];
+        let mut lis = LiveIntervals::new(&body(&insns));
+        let between = lis.indexes.get_instruction_index(low.id()).get_reg_slot(false);
+        let interval = lis.interval(1);
+        assert!(interval.range.live_at(&between), "the high byte is live across the low byte's def");
+        assert_eq!(interval.range.segments.len(), 1, "one stretch from the first lane def to the read");
+    }
+
+
+    /// `x.lo := a; x.hi := b; use x.hi; use x.hi`: both reads name the high
+    /// byte, so the low byte's value is never read and is not live past its
+    /// def. Read whole, it was live to the last read, and a copy into the low
+    /// byte could not join past it (crc16 O2: an extra `ld h, e` / `ld e, h`
+    /// round the xor).
+    #[test]
+    fn test_a_read_of_one_lane_does_not_keep_the_other_lane_live() {
+        let lane = |byte: u32| {
+            let mut def = Insn::new(0, None, None, vec![1], Vec::new());
+            def.def_lanes = vec![(1, ValueLanes::at(byte, 1))];
+            Arc::new(def)
+        };
+        let low_live_at_first_read = |named: bool| {
+            let read = || {
+                let mut read = Insn::new(0, None, None, Vec::new(), vec![1]);
+                if named {
+                    read.use_lanes = vec![(1, ValueLanes::at(1, 1))];
+                }
+                Arc::new(read)
+            };
+            let first = read();
+            let insns = [lane(0), lane(1), Arc::clone(&first), read()];
+            let mut lis = LiveIntervals::new(&body(&insns));
+            let at = lis.indexes.get_instruction_index(first.id()).get_reg_slot(false);
+            let interval = lis.interval(1);
+            interval.range_for_lanes(ValueLanes::at(0, 1)).is_some_and(|low| low.live_at(&at))
+        };
+        assert!(low_live_at_first_read(false), "premise: read whole, the low byte is live to the reads");
+        assert!(!low_live_at_first_read(true), "read by lane, the low byte is dead after its def");
+    }
+
     /// Renaming the value renames the marker with it.
     #[test]
     fn test_renaming_a_value_renames_its_partial_def() {
@@ -1544,6 +1628,26 @@ mod tests {
         insn: &Arc<Insn>,
     ) -> SlotIndex {
         lis.indexes.get_instruction_index(insn.id()).get_reg_slot(false)
+    }
+
+    /// `x.lo := a` in one block, `x.hi := b` (keeping the low lane) in the
+    /// next, `use x` after: the pair is live into the second block, because
+    /// the high def keeps the low byte. Taken as a def that starts the pair, it
+    /// was not, and a split put the old low byte and the new pair in different
+    /// registers with no copy (lz4c -Oz returned 0x3131).
+    #[test]
+    fn test_a_partial_lane_def_keeps_the_pair_live_into_its_block() {
+        let mut low = Insn::new(0, None, None, vec![1], Vec::new());
+        low.def_lanes = vec![(1, ValueLanes::at(0, 1))];
+        low.undef_super = true;
+        let mut high = Insn::new(0, None, None, vec![1], Vec::new());
+        high.def_lanes = vec![(1, ValueLanes::at(1, 1))];
+        high.partial_defs = vec![1];
+        let (low, high) = (Arc::new(low), Arc::new(high));
+        let body = blocks(&[(&[Arc::clone(&low)], &[1]), (&[Arc::clone(&high)], &[2]), (&[insn(&[], &[1])], &[])]);
+        let mut lis = LiveIntervals::new(&body);
+        let start = lis.indexes.get_mbb_start_idx(1);
+        assert!(lis.interval(1).range.live_at(&start), "the pair is live into the block of the high def");
     }
 
     /// `pruneValue` from the middle of a block that falls into a join: the

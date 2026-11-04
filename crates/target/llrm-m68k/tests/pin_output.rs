@@ -59,6 +59,7 @@ const SOURCE_ORDER: Options = Options {
     source_order: true,
     indexed: false,
     push_frame: false,
+    push_arguments: false,
     short: false,
     debug: false,
 };
@@ -68,8 +69,13 @@ fn compiled(
     options: Options,
 ) -> String {
     let module = llrm_mir::parse::module(&format!("target datalayout = \"{DATALAYOUT}\"\n{ir}")).expect("parses");
-    text_with(&module, "f", Cpu::M68000, Options { indexed: false, push_frame: false, short: false, ..options })
-        .expect("compiles")
+    text_with(
+        &module,
+        "f",
+        Cpu::M68000,
+        Options { indexed: false, push_frame: false, push_arguments: false, short: false, ..options },
+    )
+    .expect("compiles")
 }
 
 fn branches(body: &str) -> String {
@@ -405,7 +411,9 @@ fn saved_registers_are_stored_into_the_carved_frame_as_the_pin_does() {
     let module = llrm_mir::parse::module(&ir).expect("parses");
     let ours =
         text_with(&module, "k", Cpu::M68000, Options { push_frame: false, ..Options::default() }).expect("compiles");
-    assert!(ours.contains("suba.l\t#20, %sp\n\tmovem.l\t%d2-%d3/%a2, (8,%sp)"), "{ours}");
+    // the 20 bytes are taken in one step, as `suba.l` or the 4-byte `lea`
+    let carved = ["suba.l\t#20, %sp", "lea\t(-20,%sp), %sp"];
+    assert!(carved.iter().any(|open| ours.contains(&format!("{open}\n\tmovem.l\t%d2-%d3/%a2, (8,%sp)"))), "{ours}");
     assert!(!ours.contains("-(%sp)"), "{ours}");
 }
 

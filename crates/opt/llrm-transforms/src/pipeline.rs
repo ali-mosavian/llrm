@@ -192,6 +192,11 @@ pub struct Options {
     /// target whose backend merges them, so the inliner and the passes after
     /// it price the stores the pin's IR has.
     pub merge_stores: bool,
+    /// After `PromoteMemToReg` the write-through `Promote` forwards a global's
+    /// store to the loads after it, across blocks with phis, where there is no
+    /// GVN `pre` (-O1, -Og). The pin's -O1 has no GVN and does not; off for a
+    /// target compared with it (wasm: jpeg_fixed -O1 was 259 B over).
+    pub write_through: bool,
     pub drop_stores: bool,
     /// Work read below a branch moves below it: gcc's `-ftree-sink`.
     pub sink: bool,
@@ -345,6 +350,7 @@ impl Default for Options {
             jump_tables: true,
             lower_switches: true,
             merge_stores: true,
+            write_through: true,
             search: false,
             exhaustive: false,
         }
@@ -734,13 +740,18 @@ pub(crate) fn llvm_order(
     // SROA runs mem2reg on what it splits: one slot, nothing between
     // (SROA.cpp `promoteAllocas`).
     let translated = applied.options.sroa;
-    // DEVIATE, -O1 and -Og only (no GVN `pre`): the write-through `Promote`
+    // DEVIATE, -O1 and -Og only (no GVN `pre`), and where `write_through` is
+    // on: the write-through `Promote`
     // after PromoteMemToReg forwards a store of a global to the load after it,
     // which LLVM's InstCombine does in `visitLoadInst`
     // (FindAvailableLoadedValue, not translated); GVN does it at the other
     // levels. Exit: that translation.
     let write_through = || -> Vec<Box<dyn FunctionPass>> {
-        if applied.options.pre { Vec::new() } else { vec![Box::new(promote::Promote), Box::new(promote::DeadSlots)] }
+        if applied.options.pre || !applied.options.write_through {
+            Vec::new()
+        } else {
+            vec![Box::new(promote::Promote), Box::new(promote::DeadSlots)]
+        }
     };
     // `SROAPass(ModifyCFG)` everywhere but the late slot, which the pin builds
     // with `PreserveCFG` (PassBuilderPipelines.cpp L1393, L1494).
@@ -828,6 +839,18 @@ pub(crate) fn llvm_order(
             slot("float2int@1594", Box::new(crate::float2int::Float2Int)),
             // `LowerConstantIntrinsicsPass` (l.1597), right after Float2Int.
             slot("lower-constant-intrinsics@1597", Box::new(crate::lowerconstantintrinsics::LowerConstantIntrinsics)),
+            // LoopRotatePass (l.1621): the loop pass manager that holds
+            // LoopInterchange runs before `addVectorPasses` and its unroll
+            // (l.1476), so a loop the unroll leaves with its exit in the
+            // middle is not rotated after it.
+            slot(
+                "rotate@1621",
+                Box::new(looprotate::LoopRotate {
+                    duplicate_headers: applied.options.copy_headers && !applied.options.has_min_size,
+                    size: applied.options.prefers_size(),
+                    check_exit_count: true,
+                }),
+            ),
             // LoopInterchangePass (l.1631), in the loop pass manager after
             // LoopRotate (l.1621) and LoopDeletion (l.1628).
             slot("loop-interchange@1631", Box::new(loopinterchange::Interchange::default())),
@@ -1271,15 +1294,6 @@ pub fn recorded(
     // It reads the live-outs from exit phis, so the bodies are closed first.
     manager.add(loopsimplify::LoopSimplify);
     manager.add(lcssa::LoopClosedSSA);
-    // First, the pin's `LoopRotatePass(header duplication, check-exit-count)`
-    // for loops the passes since undid (PassBuilderPipelines.cpp#L1621).
-    if applied.options.copy_headers && !applied.options.has_min_size {
-        manager.add(looprotate::LoopRotate {
-            duplicate_headers: true,
-            size: applied.options.prefers_size(),
-            check_exit_count: true,
-        });
-    }
     manager.add(loopdeletion::LoopDeletion);
     // What no live code names any more goes before selection, as LLVM runs
     // GlobalDCE after inlining.

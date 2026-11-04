@@ -158,17 +158,25 @@ pub fn lower_call(
         })
         .collect();
     let mut glue = None;
+    // `call (iy)` takes its target in IY: copied first, the pointer is not a
+    // pair-sized value live while the arguments fill HL, DE and BC
+    let callee = match (dag.opcode(callee), dag.node(callee).data) {
+        (ISD::GlobalAddress, NodeData::Global { symbol, offset }) => {
+            dag.get_target_global_address(EVT::I16, symbol, offset)
+        }
+        (ISD::TargetGlobalAddress | ISD::TargetExternalSymbolNode | ISD::ExternalSymbol, _) => callee,
+        _ => {
+            let copy = dag.get_copy_to_phys_reg(chain, crate::reg::IY, callee, glue);
+            chain = SDValue { node: copy.node, res: 0 };
+            glue = Some(SDValue { node: copy.node, res: 1 });
+            dag.get_phys_register(EVT::I16, crate::reg::IY)
+        }
+    };
     for &(out, register) in &in_registers {
         let copy = dag.get_copy_to_phys_reg(chain, register, out.value, glue);
         chain = SDValue { node: copy.node, res: 0 };
         glue = Some(SDValue { node: copy.node, res: 1 });
     }
-    let callee = match (dag.opcode(callee), dag.node(callee).data) {
-        (ISD::GlobalAddress, NodeData::Global { symbol, offset }) => {
-            dag.get_target_global_address(EVT::I16, symbol, offset)
-        }
-        _ => callee,
-    };
     let mut operands = vec![chain, callee];
     for &(out, register) in &in_registers {
         let vt = dag.value_type(out.value);

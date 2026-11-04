@@ -78,13 +78,17 @@ impl LocationSize {
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct AAInfo {
     pub tbaa: Option<MetadataId>,
+    /// `!alias.scope`.
     pub noalias_scope: Option<MetadataId>,
+    /// `!noalias`.
+    pub noalias: Option<MetadataId>,
 }
 
 impl AAInfo {
     /// The tags an instruction carries.
     pub fn of(op: &llrm_mir::module::Instruction) -> Self {
-        Self { tbaa: op.metadata.iter().find(|(kind, _)| kind == "tbaa").map(|(_, id)| *id), noalias_scope: None }
+        let tag = |wanted: &str| op.metadata.iter().find(|(kind, _)| kind == wanted).map(|(_, id)| *id);
+        Self { tbaa: tag("tbaa"), noalias_scope: tag("alias.scope"), noalias: tag("noalias") }
     }
 }
 

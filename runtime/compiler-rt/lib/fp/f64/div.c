@@ -1,6 +1,11 @@
-/* __divdf3. SF_DIV_NEWTON is the reciprocal form, else one quotient bit per step. */
+/* __divdf3. SF_DIV_NEWTON is the reciprocal form, SF_DIV64_UDIV two digits by a 64/32 divide (SF_UDIV64BY32), SF_DIV64_HW32 six by 32/32 divides, else one quotient bit per step. */
 #include "f64.h"
 #include "mul64.h"
+
+/* The quotient of the 64-bit hi:lo by d, which fits 32 bits (hi < d): one divide instruction where the target has it (SF_UDIV64BY32 from the config). */
+#ifndef SF_UDIV64BY32
+#define SF_UDIV64BY32(hi, lo, d) ((uint32_t)((((uint64_t)(hi) << 32) | (lo)) / (d)))
+#endif
 
 static inline sf64 div_core(uint64_t sign, int ea, int eb, uint64_t ma, uint64_t mb)
 {
@@ -40,6 +45,41 @@ static inline sf64 div_core(uint64_t sign, int ea, int eb, uint64_t ma, uint64_t
     sf_d64_mb = mb;
     __sf_div64();
     q = sf_d64_q, r = sf_d64_r;
+    inexact = r != 0;
+#elif defined(SF_DIV64_UDIV)
+    /* The integer bit, then 56 fraction bits as two digits of 28. A digit is one 64/32 division of the shifted remainder's top bits
+     * by the top word of mb (bit 31 set), SF_UDIV64BY32(hi, lo, d) with hi < d, off by at most 2 either way and settled against the
+     * full divisor. d * mb wraps past 2^64; the remainder is right modulo 2^64 and small. */
+    uint32_t mbh = (uint32_t)(mb >> 21);
+    r = ma;
+    q = r >= mb;
+    if (q) r -= mb;
+#define DIV_STEP28() do { \
+        uint32_t d = SF_UDIV64BY32((uint32_t)(r >> 25), (uint32_t)(r << 7), mbh); \
+        int64_t rem = (int64_t)((r << 28) - (uint64_t)d * mb); \
+        while (rem < 0) { d--; rem += (int64_t)mb; } \
+        while ((uint64_t)rem >= mb) { d++; rem -= (int64_t)mb; } \
+        q = (q << 28) | d; r = (uint64_t)rem; } while (0)
+    DIV_STEP28(); DIV_STEP28();
+#undef DIV_STEP28
+    inexact = r != 0;
+#elif defined(SF_DIV64_HW32)
+    /* The integer bit, then 56 fraction bits as five digits of 11 and one of 1. A digit is a 32/32 hardware division of the top words
+     * of the shifted remainder by the top word of mb (21 bits), off by at most 2 either way, and settled against the full divisor.
+     * d * mb may wrap past 2^64 on an overshoot; the remainder is right modulo 2^64 and small. */
+    uint32_t mbh = (uint32_t)(mb >> 32);
+    r = ma;
+    q = r >= mb;
+    if (q) r -= mb;
+#define DIV_STEP(w) do { \
+        uint64_t t = r << (w); \
+        uint32_t d = (uint32_t)(t >> 32) / mbh; \
+        int64_t rem = (int64_t)(t - (uint64_t)d * mb); \
+        while (rem < 0) { d--; rem += (int64_t)mb; } \
+        while ((uint64_t)rem >= mb) { d++; rem -= (int64_t)mb; } \
+        q = (q << (w)) | d; r = (uint64_t)rem; } while (0)
+    DIV_STEP(11); DIV_STEP(11); DIV_STEP(11); DIV_STEP(11); DIV_STEP(11); DIV_STEP(1);
+#undef DIV_STEP
     inexact = r != 0;
 #else
     /* One quotient bit per step. */

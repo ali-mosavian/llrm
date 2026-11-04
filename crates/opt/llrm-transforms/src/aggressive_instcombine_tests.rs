@@ -13,7 +13,7 @@ fn merged(text: &str) -> String {
     managed(&mut module, AggressiveInstCombine);
     // The pin leaves the old chain to dead-code elimination.
     let after = managed(&mut module, crate::dead::Dead);
-    let inputs: &[&[i128]] = &[&[0], &[1], &[4660]];
+    let inputs: &[&[i128]] = &[&[0], &[1], &[4660], &[8], &[18], &[2], &[16], &[41], &[-1]];
     assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
     after
 }
@@ -415,6 +415,39 @@ fn a_memchr_of_a_short_constant_string_is_a_switch_on_the_byte() {
     }
 }
 
+const ANY_BITS: &str = "define i16 @f(i16 %x) {
+b0:
+  %a = lshr i16 %x, 3
+  %b = lshr i16 %x, 5
+  %o1 = or i16 %x, %a
+  %o2 = or i16 %o1, %b
+  %r = and i16 %o2, 1
+  ret i16 %r
+}
+";
+
+const ALL_BITS: &str = "define i16 @f(i16 %x) {
+b0:
+  %a = lshr i16 %x, 1
+  %b = and i16 %a, 1
+  %c = lshr i16 %x, 4
+  %r = and i16 %b, %c
+  ret i16 %r
+}
+";
+
+/// Four shifts, three ors and an `and` testing three bits of `x` for any set,
+/// and a shift-and chain testing two for all set, were many instructions; the
+/// pin's `foldAnyOrAllBitsSet` makes each one masked compare.
+#[test]
+fn a_chain_of_shifted_bits_is_one_masked_compare() {
+    for (text, compare) in [(ANY_BITS, "icmp ne i16"), (ALL_BITS, "icmp eq i16")] {
+        let after = merged(text);
+        assert!(after.contains(compare), "{after}");
+        assert!(!after.contains("lshr"), "{after}");
+    }
+}
+
 const STRCMP: &str = "@buf = global [3 x i8] c\"xb\\00\"
 @s = constant [3 x i8] c\"ab\\00\"
 declare i16 @strcmp(ptr, ptr)
@@ -445,4 +478,84 @@ fn a_strcmp_with_a_short_constant_string_tested_for_equality_is_a_byte_chain() {
         let want = llrm_mir::interpret::Val::Int { bits: want, width: 16 };
         assert_eq!(got, vec![want], "strcmp(\"{c}b\", \"ab\") == 0\n{after}");
     }
+}
+
+const SPLIT_CTTZ: &str = "declare i8 @llvm.cttz.i8(i8, i1)\ndefine i16 @f(i16 %x) {
+b0:
+  %lo = trunc i16 %x to i8
+  %zero = icmp eq i8 %lo, 0
+  %sh = lshr i16 %x, 8
+  %hi = trunc i16 %sh to i8
+  %ch = call i8 @llvm.cttz.i8(i8 %hi, i1 false)
+  %hp = add i8 %ch, 8
+  %cl = call i8 @llvm.cttz.i8(i8 %lo, i1 false)
+  %r = select i1 %zero, i8 %hp, i8 %cl
+  %w = zext i8 %r to i16
+  ret i16 %w
+}
+";
+
+const SPLIT_CTLZ: &str = "declare i8 @llvm.ctlz.i8(i8, i1)\ndefine i16 @f(i16 %x) {
+b0:
+  %sh = lshr i16 %x, 8
+  %hi = trunc i16 %sh to i8
+  %zero = icmp eq i8 %hi, 0
+  %lo = trunc i16 %x to i8
+  %cl = call i8 @llvm.ctlz.i8(i8 %lo, i1 false)
+  %lp = add i8 %cl, 8
+  %ch = call i8 @llvm.ctlz.i8(i8 %hi, i1 false)
+  %r = select i1 %zero, i8 %lp, i8 %ch
+  %w = zext i8 %r to i16
+  ret i16 %w
+}
+";
+
+/// A count of trailing or leading zeros of a 16-bit value made in two 8-bit
+/// halves was two counts, an add, a compare and a select; the pin's
+/// `foldSelectSplitCTLZCTTZ` makes it one 16-bit count and a truncate.
+#[test]
+fn a_zero_count_in_two_halves_is_one_full_width_count() {
+    for (text, wide) in [(SPLIT_CTTZ, "llvm.cttz.i16"), (SPLIT_CTLZ, "llvm.ctlz.i16")] {
+        let before = parsed(&format!("{DOS}{text}"));
+        let mut module = before.clone();
+        managed(&mut module, AggressiveInstCombine);
+        let after = managed(&mut module, crate::dead::Dead);
+        assert!(after.contains(wide), "{after}");
+        assert!(!after.contains("select"), "{after}");
+        let inputs: &[&[i128]] = &[&[0], &[1], &[256], &[0x8000], &[0x0100], &[0x00f0], &[-1], &[4660]];
+        assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
+    }
+}
+
+fn patterned_table(elements: &str) -> String {
+    format!(
+        "@t = constant [4 x i16] [{elements}]
+define i16 @f(i16 %i) {{
+b0:
+  %p = getelementptr inbounds [4 x i16], ptr @t, i16 0, i16 %i
+  %v = load i16, ptr %p
+  ret i16 %v
+}}
+"
+    )
+}
+
+/// A load at a variable index of a constant array whose elements are all 7
+/// stayed a load; the pin's `foldPatternedLoads` makes it the constant 7. One
+/// differing element keeps the load.
+#[test]
+fn a_load_from_an_array_of_equal_elements_is_that_element() {
+    let run = |elements: &str| {
+        let before = parsed(&format!("{DOS}{}", patterned_table(elements)));
+        let mut module = before.clone();
+        managed(&mut module, AggressiveInstCombine);
+        let after = managed(&mut module, crate::dead::Dead);
+        let inputs: &[&[i128]] = &[&[0], &[1], &[2], &[3]];
+        assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
+        after
+    };
+    let same = run("i16 7, i16 7, i16 7, i16 7");
+    assert!(!same.contains("load i16"), "{same}");
+    let differ = run("i16 7, i16 7, i16 7, i16 8");
+    assert!(differ.contains("load i16"), "{differ}");
 }

@@ -58,15 +58,8 @@ fn reduced_flat(
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
     let mut declared = llrm_mir::passes::Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
-    let changed = crate::lsr_pass::reduced_with(
-        context,
-        &layout,
-        function,
-        &mut declared,
-        &outer,
-        &llrm_mir::tti::Basic,
-        false,
-    );
+    let changed =
+        crate::lsr_pass::reduced_with(context, &layout, function, &mut declared, &outer, &llrm_mir::tti::Basic, false);
     let after = printed(&module);
     assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
     (changed, after)
@@ -213,8 +206,9 @@ exit:
 ";
 
 /// Two conversions of one counter got two floating counters off the x87
-/// stack: the pin's `OptimizeShadowIV` makes one per loop and breaks. wasm x_matmul_f -O2 grew 29 B (1584 -> 1613) once both
-/// conversions were `uitofp nneg` and GVN had no pass left to merge them.
+/// stack: the pin's `OptimizeShadowIV` makes one per loop and breaks. wasm
+/// x_matmul_f -O2 grew 29 B (1584 -> 1613) once both conversions were `uitofp
+/// nneg` and GVN had no pass left to merge them.
 #[test]
 fn a_loop_gets_one_floating_counter_for_two_conversions_off_the_x87_stack() {
     let (changed, after) = reduced_flat(TWO_CONVERSIONS, &[&[1], &[5], &[17]]);
@@ -1378,6 +1372,21 @@ fn a_cut_nothing_fits_keeps_the_pointer_over_the_table() {
     assert!(after.contains("phi ptr"), "{after}");
 }
 
+/// bench/stft_fixed -Os m16: the same loop inside `main`, beside the outer
+/// loop's values. The solution that fits the three address registers cost one
+/// more instruction than the pointer over `_rev`, and the function came out
+/// 18 B larger (7302 against 7284): at size a reload folds into a memory
+/// operand while the extra instruction is paid in full.
+#[test]
+fn at_size_a_fitting_solution_does_not_cost_an_instruction_more() {
+    let mut module = parsed(include_str!("lsr_stft_rev.ll"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true });
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
+    let after = printed(&module);
+    assert!(after.contains("phi ptr [ %") && after.contains("@$var_rev, i16 128"), "{after}");
+}
+
 const BLOCK_LOOP: &str = "
 @_window = internal global [256 x i32] zeroinitializer, align 2
 @_rev = internal global [256 x i8] zeroinitializer, align 1
@@ -1578,6 +1587,57 @@ exit:
     assert!(!after.contains(" to i8"), "{after}");
 }
 
+fn three_address_registers() -> llrm_x86::tti::X86 {
+    let real = RealMode {
+        scale_costs: vec![(1, 0), (2, 2), (4, 2), (8, 2)],
+        registers: 6,
+        scaled_index_insns: 2,
+        huge_space: None,
+        address_registers: Some(3),
+        inline_size_guard: false,
+        float_code_size_percent: 100,
+        unroll_size_few_trips: (0, 0),
+        recursive_inlining: None,
+        priced_self_inlining: None,
+    };
+    X86::of_cpu("i486").unwrap().in_real_mode(real)
+}
+
+/// qb-metadata hir_part3 `sum_three` at m16: three far rows summed by one
+/// counter. The cheapest formula by the general-register count scales the
+/// counter and holds three bases, more address registers (bx, si, di) than the
+/// target has: the loop reloaded two of them every trip (8 insns, 5 memory
+/// operands against 6 and 3).
+#[test]
+fn three_rows_summed_by_one_counter_do_not_need_more_address_registers_than_the_target_has() {
+    let text = "define i16 @f(ptr addrspace(1) %a, ptr addrspace(1) %b, ptr addrspace(1) %c, i16 %lo, i16 %end) {
+entry:
+  br label %loop
+loop:
+  %t = phi i16 [ 0, %entry ], [ %t3, %loop ]
+  %i = phi i16 [ %lo, %entry ], [ %next, %loop ]
+  %o = shl i16 %i, 1
+  %pa = getelementptr i8, ptr addrspace(1) %a, i16 %o
+  %va = load i16, ptr addrspace(1) %pa
+  %t1 = add i16 %va, %t
+  %pb = getelementptr i8, ptr addrspace(1) %b, i16 %o
+  %vb = load i16, ptr addrspace(1) %pb
+  %t2 = add i16 %t1, %vb
+  %pc = getelementptr i8, ptr addrspace(1) %c, i16 %o
+  %vc = load i16, ptr addrspace(1) %pc
+  %t3 = add i16 %t2, %vc
+  %next = add i16 %i, 1
+  %done = icmp eq i16 %next, %end
+  br i1 %done, label %exit, label %loop
+exit:
+  ret i16 %t3
+}
+";
+    let after = reduced_real(text, &three_address_registers());
+    let in_loop = &after[after.find("loop:").expect("the loop")..];
+    assert!(!in_loop.contains("shl i16"), "{after}");
+}
+
 /// bench/queens at m16 -O2: the inner `safe` loop reads `q[r]` and compares
 /// with `row - r` and `r - row`. The pin's formulae include a pointer walked
 /// by two bytes; DEVIATE LG3's end-biased formulae brought a register of their
@@ -1644,6 +1704,16 @@ ret:
   ret i16 %res
 }
 ";
+
+/// The pin's space is solved beside the end-biased one, and each build counted
+/// the loop's register units again (21% of LSR on jpeg_fixed): once is enough.
+#[test]
+fn a_loop_solved_twice_has_its_register_units_counted_once() {
+    let before = crate::lsr_collect::register_units_computed();
+    let after = reduced_real(QUEENS_INNER, &six_registers());
+    let counted = crate::lsr_collect::register_units_computed() - before;
+    assert_eq!(counted, 1, "{after}");
+}
 
 #[test]
 fn a_loop_the_pin_makes_a_pointer_of_stays_one_when_end_biased_formulae_exist_in_real_mode() {

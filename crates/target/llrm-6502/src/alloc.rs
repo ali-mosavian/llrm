@@ -990,32 +990,40 @@ impl Builder {
             .count()
     }
 
-    /// `d := a - 1` on a word: the low byte steps, the high only when the low
-    /// was 0 (`lda lo; bne; dec hi; dec lo`, 11 clocks against 22 for the
-    /// carry chain; a byte in x or y steps by dex/dey). Not for a pointer, which has its own pair bump.
-    fn word_minus_one(
+    /// `d := a - 1` or `a + 1` on a word: the low byte steps, the high only
+    /// when the low wrapped (`lda lo; bne; dec hi; dec lo`, 11 clocks against
+    /// 22 for the carry chain; `inc lo; bne; inc hi`; a byte in x or y steps
+    /// by inx/iny/dex/dey). Not for a pointer, which has its own pair bump.
+    fn word_step(
         &mut self,
         mnemonic: &str,
         d: &str,
         a: &str,
         b: &str,
     ) -> Result<bool, Unsupported> {
-        let one = matches!((mnemonic, self.word_constant(b)), ("ADC", Some([255, 255])) | ("SBC", Some([1, 0])));
-        if !one || self.in_pair(d) || self.in_pair(a) {
+        let up = match (mnemonic, self.word_constant(b)) {
+            ("ADC", Some([1, 0])) => true,
+            ("ADC", Some([255, 255])) | ("SBC", Some([1, 0])) => false,
+            _ => return Ok(false),
+        };
+        if self.in_pair(d) || self.in_pair(a) {
             return Ok(false);
         }
         let (al, ah) = self.read_word(a)?;
         let (dl, dh) = self.write_word(d)?;
         self.copy(dl, al);
         self.copy(dh, ah);
-        let operands = vec![
-            Operand::Def(dl),
-            Operand::Def(dh),
-            Operand::Use(dl),
-            Operand::Use(dh),
-            Operand::Def(Reg::Phys(reg::A)),
-        ];
-        self.push(Inst::new(Kind::Op("DEC16"), operands));
+        // `inc` has no accumulator form on the 6502 (`dec` loads through it)
+        if up {
+            for r in [dl, dh] {
+                self.require(r, Class(Class::X | Class::Y | Class::M))?;
+            }
+        }
+        let mut operands = vec![Operand::Def(dl), Operand::Def(dh), Operand::Use(dl), Operand::Use(dh)];
+        if !up {
+            operands.push(Operand::Def(Reg::Phys(reg::A)));
+        }
+        self.push(Inst::new(Kind::Op(if up { "INC16" } else { "DEC16" }), operands));
         Ok(true)
     }
 
@@ -1451,13 +1459,13 @@ pub fn build_with_places(
             op::XOR8 => b.alu("EOR", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             op::ADD16 => {
                 let (d, a, c) = (name(&o[0])?, name(&o[1])?, name(&o[2])?);
-                if !b.word_minus_one("ADC", d, a, c)? {
+                if !b.word_step("ADC", d, a, c)? {
                     b.alu16("ADC", Some("CLC"), d, a, c)?
                 }
             }
             op::SUB16 => {
                 let (d, a, c) = (name(&o[0])?, name(&o[1])?, name(&o[2])?);
-                if !b.word_minus_one("SBC", d, a, c)? {
+                if !b.word_step("SBC", d, a, c)? {
                     b.alu16("SBC", Some("SEC"), d, a, c)?
                 }
             }
@@ -1493,6 +1501,25 @@ pub fn build_with_places(
                     let value = b.byte(name(&o[0])?)?;
                     b.copy(acc, value);
                     b.push(Inst::new(Kind::Op("STM"), vec![Operand::Use(acc), Operand::Symbol(symbol, 0)]));
+                }
+            }
+            // a word global: its two halves, g and g+1
+            op::LDABS16 | op::STABS16 => {
+                let symbol = address(&o[1], &o[2]).map_err(Unsupported)?;
+                let acc = Reg::Phys(reg::A);
+                let halves = [symbol.clone(), format!("{symbol}+1")];
+                if inst.opcode == op::LDABS16 {
+                    let (low, high) = b.write_word(name(&o[0])?)?;
+                    for (d, half) in [low, high].into_iter().zip(halves) {
+                        b.push(Inst::new(Kind::Op("LDM"), vec![Operand::Def(acc), Operand::Symbol(half, 0)]));
+                        b.copy(d, acc);
+                    }
+                } else {
+                    let (low, high) = b.read_word(name(&o[0])?)?;
+                    for (value, half) in [low, high].into_iter().zip(halves) {
+                        b.copy(acc, value);
+                        b.push(Inst::new(Kind::Op("STM"), vec![Operand::Use(acc), Operand::Symbol(half, 0)]));
+                    }
                 }
             }
             op::LDAX | op::STAX => {
@@ -2100,6 +2127,21 @@ fn narrow_remainder_calls(function: &mut MFunction<Class>) {
     }
 }
 
+/// At size, a call of a runtime routine that has a compact variant calls it
+/// (`routines.toml`'s `[compact]`).
+fn call_compact_routines(function: &mut MFunction<Class>) {
+    for inst in function.blocks.iter_mut().flat_map(|block| &mut block.insts) {
+        if inst.kind != Kind::Op("JSR") {
+            continue;
+        }
+        if let Some(Operand::Symbol(name, _)) = inst.operands.first_mut()
+            && let Some(compact) = crate::routines::compact_variant(name)
+        {
+            *name = compact.to_owned();
+        }
+    }
+}
+
 fn remove_dead(function: &mut MFunction<Class>) {
     loop {
         let mut read: HashSet<u32> = HashSet::default();
@@ -2645,6 +2687,9 @@ fn emit_with<const STACK: bool>(
     // an instruction goes to the one path that reads it; a bump of a pointer is
     // then done in place, and the read of the old pointer that follows it
     // goes first
+    if TUNING.with(|t| t.get()) == Tuning::SIZE {
+        call_compact_routines(&mut function);
+    }
     let sunk = sink && machine_sink_in_place::<Mos<STACK>>(&mut function);
     let shared = share && crate::sharecmp::share_compares(&mut function);
     reschedule_kills::<Mos<STACK>>(&mut function);
@@ -2782,6 +2827,17 @@ fn emit_with<const STACK: bool>(
                         )
                         .unwrap();
                     }
+                }
+                // d := d + 1 on two cells: the high byte steps when the low wrapped
+                (Kind::Op("INC16"), _) => {
+                    made += 1;
+                    let step = |r| match r {
+                        reg::X => "inx".to_owned(),
+                        reg::Y => "iny".to_owned(),
+                        cell => format!("inc {}", register_name(cell)),
+                    };
+                    let (low, high) = (step(regs[0]), step(regs[1]));
+                    writeln!(out, "  {low}\n  bne _pa{made}\n  {high}\n_pa{made}:").unwrap();
                 }
                 // d := d - 1 on two cells: the high byte steps when the low was 0
                 (Kind::Op("DEC16"), _) => {
@@ -3010,9 +3066,20 @@ fn emit_with<const STACK: bool>(
                 (Kind::Op("LEA"), [_, _, _, Operand::Imm(n)]) => {
                     let n = i64::from(*n as u16);
                     let n = if n >= old { n + spilled } else { n };
-                    writeln!(out, "  clc\n  lda rc0\n  adc #{}", n & 0xFF).unwrap();
-                    move_byte(&mut out, regs[0], reg::A, false, None);
-                    writeln!(out, "  lda rc1\n  adc #{}", (n >> 8) & 0xFF).unwrap();
+                    // a low byte of 0 adds nothing and carries nothing
+                    if n & 0xFF == 0 {
+                        writeln!(out, "  lda rc0").unwrap();
+                        move_byte(&mut out, regs[0], reg::A, false, None);
+                        if n >> 8 == 0 {
+                            writeln!(out, "  lda rc1").unwrap();
+                        } else {
+                            writeln!(out, "  clc\n  lda rc1\n  adc #{}", (n >> 8) & 0xFF).unwrap();
+                        }
+                    } else {
+                        writeln!(out, "  clc\n  lda rc0\n  adc #{}", n & 0xFF).unwrap();
+                        move_byte(&mut out, regs[0], reg::A, false, None);
+                        writeln!(out, "  lda rc1\n  adc #{}", (n >> 8) & 0xFF).unwrap();
+                    }
                     move_byte(&mut out, regs[1], reg::A, false, None);
                 }
                 // against zero, a load or an ALU result has already set the
