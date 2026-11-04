@@ -112,6 +112,7 @@ pub mod combine_and_select;
 pub mod combine_abs;
 pub mod combine_assume;
 pub mod combine_ptrcast;
+pub mod combine_freeze;
 pub mod combine_switch;
 pub mod combine_bitcast;
 pub mod combine_bitorder;

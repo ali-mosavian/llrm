@@ -167,3 +167,27 @@ fn a_bit_count_with_another_mask_is_left_alone() {
     let after = merged(&POPCOUNT.replace("1431655765", "1431655764"));
     assert!(!after.contains("llvm.ctpop"), "{after}");
 }
+
+const CTTZ_TABLE: &str = "@t = constant [32 x i8] [i8 0, i8 1, i8 28, i8 2, i8 29, i8 14, i8 24, i8 3, i8 30, i8 22, i8 20, i8 15, i8 25, i8 17, i8 4, i8 8, i8 31, i8 27, i8 13, i8 23, i8 21, i8 19, i8 16, i8 7, i8 26, i8 12, i8 18, i8 6, i8 11, i8 5, i8 10, i8 9]
+define i8 @f(i32 %x) {
+b0:
+  %neg = sub i32 0, %x
+  %low = and i32 %neg, %x
+  %mul = mul i32 %low, 125613361
+  %shr = lshr i32 %mul, 27
+  %idx = trunc i32 %shr to i16
+  %p = getelementptr inbounds [32 x i8], ptr @t, i16 0, i16 %idx
+  %v = load i8, ptr %p
+  ret i8 %v
+}
+";
+
+/// A de Bruijn table of trailing-zero counts was a negate, an and, a multiply,
+/// a shift and a load (`ctz` in every bit-scan loop); the pin's
+/// `tryToRecognizeTableBasedCttz` makes it `cttz`.
+#[test]
+fn a_de_bruijn_table_lookup_is_a_cttz() {
+    let after = merged(CTTZ_TABLE);
+    assert!(after.contains("llvm.cttz.i32"), "{after}");
+    assert!(!after.contains("load i8"), "{after}");
+}
