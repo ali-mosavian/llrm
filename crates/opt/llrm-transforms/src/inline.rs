@@ -328,6 +328,10 @@ fn semantic(
     inst: InstId,
 ) -> bool {
     let instruction = function.instruction(inst);
+    // A scope declaration is no work (it costs nothing in the pin).
+    if crate::noaliasscopes::declares(function, inst) {
+        return false;
+    }
     match instruction.opcode {
         Opcode::Phi | Opcode::Ret => false,
         Opcode::Br => instruction.operands.len() != 1,
@@ -367,6 +371,9 @@ pub fn gcc_insns_in(
         .into_iter()
         .filter(|&inst| {
             let instruction = body.instruction(inst);
+            if crate::noaliasscopes::declares(body, inst) {
+                return false;
+            }
             match instruction.opcode {
                 Opcode::Phi => false,
                 Opcode::Br => instruction.operands.len() != 1,
@@ -1221,9 +1228,22 @@ fn executed(
     let stated = crate::inlineattrs::SiteAttrs::of(function, call);
     let marked = crate::inlinemetadata::SiteMetadata::of(function, call);
     let scopes = crate::inlinemetadata::DeepClone::of(&planned.candidate.body, metadata, declared);
+    let noalias = crate::inlinealias::declare_scopes(context, function, call, &planned.candidate.body, declared);
     let made = spliced(context, function, call, &planned.candidate.body, anchor);
     if let Some(scopes) = &scopes {
         scopes.remap(function, &made.copies);
+    }
+    if let Some(noalias) = &noalias {
+        crate::inlinealias::scoped(
+            function,
+            context,
+            layout,
+            &planned.candidate.body,
+            &made.copies,
+            noalias,
+            metadata.nodes,
+            declared,
+        );
     }
     if let Some(site) = located {
         inlined_at(function, &planned.candidate.body, &made.copies, site, metadata, declared);

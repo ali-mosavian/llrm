@@ -65,62 +65,72 @@ fn accesses_memory(opcode: &Opcode) -> bool {
     llrm_mir::touched::touches_memory(opcode) || matches!(opcode, Opcode::Atomic(..))
 }
 
-struct Nodes<'a> {
-    module: Metadata<'a>,
-    declared: &'a mut Declared,
+pub(crate) struct Nodes<'a> {
+    module: &'a [MetadataNode],
     first: u32,
     made: BTreeMap<Vec<MetadataId>, MetadataId>,
 }
 
-impl Nodes<'_> {
+impl<'a> Nodes<'a> {
+    pub(crate) fn new(
+        module: &'a [MetadataNode],
+        first: u32,
+    ) -> Self {
+        Self { module, first, made: BTreeMap::new() }
+    }
+
     fn operands(
         &self,
+        declared: &Declared,
         node: MetadataId,
     ) -> Vec<MetadataOperand> {
         match node.0.checked_sub(self.first) {
-            Some(at) => self.declared.nodes().get(at as usize),
-            None => self.module.nodes.get(node.0 as usize),
+            Some(at) => declared.nodes().get(at as usize),
+            None => self.module.get(node.0 as usize),
         }
         .map_or_else(Vec::new, |one| one.operands.clone())
     }
 
-    fn list(
+    pub(crate) fn list(
         &mut self,
+        declared: &mut Declared,
         members: Vec<MetadataId>,
     ) -> MetadataId {
         if let Some(&one) = self.made.get(&members) {
             return one;
         }
         let operands = members.iter().map(|&one| MetadataOperand::Node(one)).collect();
-        let node = self.declared.node(MetadataNode { distinct: false, operands });
+        let node = declared.node(MetadataNode { distinct: false, operands });
         self.made.insert(members, node);
         node
     }
 
     /// `MDNode::concatenate`: `a`'s operands then `b`'s, each once.
-    fn concatenated(
+    pub(crate) fn concatenated(
         &mut self,
+        declared: &mut Declared,
         a: Option<MetadataId>,
         b: Option<MetadataId>,
     ) -> Option<MetadataId> {
         let (Some(first), Some(second)) = (a, b) else { return a.or(b) };
         let mut members = Vec::new();
-        for operand in self.operands(first).into_iter().chain(self.operands(second)) {
+        for operand in self.operands(declared, first).into_iter().chain(self.operands(declared, second)) {
             if let MetadataOperand::Node(one) = operand {
                 if !members.contains(&one) {
                     members.push(one);
                 }
             }
         }
-        Some(self.list(members))
+        Some(self.list(declared, members))
     }
 
     /// `addToAccessGroupList`: a list's members, or the group itself.
     fn groups(
         &self,
+        declared: &Declared,
         node: MetadataId,
     ) -> Vec<MetadataId> {
-        let operands = self.operands(node);
+        let operands = self.operands(declared, node);
         match operands.first() {
             Some(MetadataOperand::Node(_)) => operands
                 .into_iter()
@@ -136,6 +146,7 @@ impl Nodes<'_> {
     /// `uniteAccessGroups`.
     fn united(
         &mut self,
+        declared: &mut Declared,
         a: Option<MetadataId>,
         b: Option<MetadataId>,
     ) -> Option<MetadataId> {
@@ -143,8 +154,8 @@ impl Nodes<'_> {
         if first == second {
             return Some(first);
         }
-        let mut members = self.groups(first);
-        for one in self.groups(second) {
+        let mut members = self.groups(declared, first);
+        for one in self.groups(declared, second) {
             if !members.contains(&one) {
                 members.push(one);
             }
@@ -152,7 +163,7 @@ impl Nodes<'_> {
         match members.len() {
             0 => None,
             1 => Some(members[0]),
-            _ => Some(self.list(members)),
+            _ => Some(self.list(declared, members)),
         }
     }
 }
@@ -167,7 +178,7 @@ pub fn propagated(
     declared: &mut Declared,
 ) {
     let first = declared.next_node().0 - declared.nodes().len() as u32;
-    let mut nodes = Nodes { module, declared, first, made: BTreeMap::new() };
+    let mut nodes = Nodes::new(module.nodes, first);
     // The pin joins into the site's own list as it goes (its TODO): a later
     // instruction gets the earlier ones' lists too.
     let mut parallel = site.parallel;
@@ -176,19 +187,19 @@ pub fn propagated(
             continue;
         }
         if parallel.is_some() {
-            parallel = nodes.concatenated(attached(function, copy, PARALLEL), parallel);
+            parallel = nodes.concatenated(declared, attached(function, copy, PARALLEL), parallel);
             function.set_metadata(copy, PARALLEL, parallel);
         }
         if site.groups.is_some() {
-            let united = nodes.united(attached(function, copy, GROUP), site.groups);
+            let united = nodes.united(declared, attached(function, copy, GROUP), site.groups);
             function.set_metadata(copy, GROUP, united);
         }
         if site.scope.is_some() {
-            let joined = nodes.concatenated(attached(function, copy, SCOPE), site.scope);
+            let joined = nodes.concatenated(declared, attached(function, copy, SCOPE), site.scope);
             function.set_metadata(copy, SCOPE, joined);
         }
         if site.noalias.is_some() {
-            let joined = nodes.concatenated(attached(function, copy, NOALIAS), site.noalias);
+            let joined = nodes.concatenated(declared, attached(function, copy, NOALIAS), site.noalias);
             function.set_metadata(copy, NOALIAS, joined);
         }
     }
