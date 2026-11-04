@@ -1828,3 +1828,34 @@ exit:
 ";
     assert_eq!(seeded_loops(text), [true]);
 }
+
+/// Every alias query between two stack slots asked `exposes` for each slot's
+/// uses afresh: LICM's alias queries took no `ExposedFrames`, and jpeg_fixed
+/// spent 11 of the pass's 36 M Ir in those scans. LICM reads the manager's
+/// set once.
+#[test]
+fn test_licm_alias_queries_do_not_rescan_each_slots_uses() {
+    let text = "define void @f(i16 %n) {
+b0:
+  %a = alloca i16
+  %b = alloca i16
+  %c = alloca i16
+  store i16 0, ptr %a
+  br label %head
+head:
+  %i = phi i16 [ 0, %b0 ], [ %j, %head ]
+  %x = load i16, ptr %a
+  %y = load i16, ptr %c
+  %s = add i16 %x, %y
+  store i16 %s, ptr %b
+  %j = add i16 %i, 1
+  %t = icmp slt i16 %j, %n
+  br i1 %t, label %head, label %exit
+exit:
+  ret void
+}
+";
+    let before = llrm_analysis::frameescape::scans();
+    decided(text);
+    assert_eq!(llrm_analysis::frameescape::scans() - before, 0);
+}
