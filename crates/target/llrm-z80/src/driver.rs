@@ -104,11 +104,8 @@ pub fn program(
         // byte compare (`cp #255`), not a word compare of its extension.
         options.extload = false;
         // The runtime's `strlen` (`cpir`): LoopIdiomRecognize may form a call.
-        options.library = vec![llrm_mir::libfunc::Routine {
-            standard: "strlen",
-            symbol: "_strlen".to_owned(),
-            calling_convention: 0,
-        }];
+        // and `memcmp` (SDCC's libc has no `bcmp`).
+        options.library = llrm_mir::libfunc::Routine::stated(["strlen", "memcmp"], |name| format!("_{name}"), 0);
         for flag in &request.passes {
             apply_pass_flag(&mut options, flag);
         }
