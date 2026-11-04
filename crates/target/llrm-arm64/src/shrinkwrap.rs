@@ -154,6 +154,39 @@ impl Frequencies for Depth {
     }
 }
 
+/// How many natural loops each block is in: a back edge is an edge into a
+/// block that dominates its source, and the loop is what reaches the source
+/// without passing the header. (Layout order says nothing: a join placed before
+/// the loop that feeds it is not in it.)
+fn loop_depths(graph: &Graph) -> Vec<u32> {
+    let count = graph.nodes.len();
+    let mut dominators = DomTreeBase::<false>::new();
+    dominators.recalculate(graph);
+    let mut bodies: Vec<Option<Vec<bool>>> = vec![None; count];
+    for (from, targets) in graph.successors.iter().enumerate() {
+        for &header in targets {
+            if !dominators.dominates(id(header), id(from)) {
+                continue;
+            }
+            let body = bodies[header].get_or_insert_with(|| vec![false; count]);
+            body[header] = true;
+            let mut work = vec![from];
+            while let Some(block) = work.pop() {
+                if !std::mem::replace(&mut body[block], true) {
+                    work.extend(graph.predecessors[block].iter().copied());
+                }
+            }
+        }
+    }
+    let mut depth = vec![0u32; count];
+    for body in bodies.iter().flatten() {
+        for (block, _) in body.iter().enumerate().filter(|(_, inside)| **inside) {
+            depth[block] += 1;
+        }
+    }
+    depth
+}
+
 /// The placement of the prologue and the epilogue of `function`, if it is not
 /// the entry and the end of every return.
 pub fn place(function: &MFunc) -> Option<Wrapped> {
@@ -171,17 +204,8 @@ pub fn place(function: &MFunc) -> Option<Wrapped> {
             predecessors[to].push(from);
         }
     }
-    let mut depth = vec![0u32; count];
-    for (at, targets) in successors.iter().enumerate() {
-        for &target in targets {
-            if target <= at {
-                for block in target..=at {
-                    depth[block] += 1;
-                }
-            }
-        }
-    }
     let graph = Graph { nodes: (0..count).map(id).collect(), successors, predecessors };
+    let depth = loop_depths(&graph);
     let frequencies = Depth(depth.iter().map(|&one| 10u64.pow(one.min(6))).collect());
     let placement = saverestore::run(&graph, &Uses { function }, &frequencies)?;
     let (save, restore) = (placement.save.0 as usize, placement.restore.0 as usize);
