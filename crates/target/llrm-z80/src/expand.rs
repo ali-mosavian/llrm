@@ -352,7 +352,7 @@ impl Printer<'_> {
             }
             "ADD16" => {
                 let source = self.register(inst, 2)?;
-                if !self.add_small_constant(source, rest) {
+                if !self.add_small_constant(source, rest) && !self.step_pair_through_hl(source, rest) {
                     self.push(format!("add hl, {}", name(source)));
                 }
             }
@@ -829,6 +829,42 @@ impl Printer<'_> {
         for _ in 0..value.abs() {
             self.push(if value > 0 { "inc hl" } else { "dec hl" });
         }
+        true
+    }
+
+    /// `ld hl, #k; add hl, rr; ex de, hl` (the sum copied back into `rr`, `hl`
+    /// dead after, the carry too) with k in 1..=3 or -3..=-1: `inc rr` / `dec
+    /// rr` k times, 1-3 B against 5. A pointer kept in `de` or `bc` was
+    /// stepped through `hl`.
+    fn step_pair_through_hl(
+        &mut self,
+        source: RegId,
+        rest: &[Inst],
+    ) -> bool {
+        let Some(Line::Inst(last)) = self.out.last() else { return false };
+        let Some(value) = last.strip_prefix("ld hl, #").and_then(|text| text.parse::<i32>().ok()) else {
+            return false;
+        };
+        let value = if value >= 0x8000 { value - 0x1_0000 } else { value };
+        if !(1..=3).contains(&value.abs()) || source == reg::HL || !is_pair(source) {
+            return false;
+        }
+        let Some(copy) = rest.first().filter(|inst| inst.kind == Kind::Copy) else { return false };
+        let [Operand::Def(to), Operand::Use(from)] = copy.operands[..] else { return false };
+        if self.physical(to) != source || self.physical(from) != reg::HL || !self.flags_dead(rest) {
+            return false;
+        }
+        self.at.1 += 1;
+        let hl_dead = self.pair_dead_after(reg::HL, &rest[1..]);
+        self.at.1 -= 1;
+        if !hl_dead {
+            return false;
+        }
+        self.out.pop();
+        for _ in 0..value.abs() {
+            self.push(format!("{} {}", if value > 0 { "inc" } else { "dec" }, name(source)));
+        }
+        self.skip = 1;
         true
     }
 
