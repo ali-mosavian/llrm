@@ -324,6 +324,16 @@ fn a_loop_is_not_entered_by_a_jump_to_a_merged_test_at_o2() {
     assert!(first.is_some_and(|line| !line.starts_with("jr ")), "{out}");
 }
 
+/// `fib`'s loop counted `a` down with `dec a`, added with `add hl, bc` and then
+/// tested `a` again with `or a, a` before `ret z`: `add hl, rr` leaves the zero
+/// flag, so `dec a`'s still stood (23 B, 685 T, 112 instructions; 22, 637, 100
+/// without the test).
+#[test]
+fn a_zero_flag_stands_through_a_16_bit_add() {
+    let out = text(include_str!("kernels/ir/fib.ll"), "fib", 0, &Request::new(Level::O2)).expect("compiles");
+    assert!(out.contains("add hl, bc\n\tret z") && !out.contains("add hl, bc\n\tor a, a"), "{out}");
+}
+
 /// The adds of a use after the loop were rated every trip, so LSR kept the
 /// loop as written and `lz4` -Oz grew a second pointer's setup: 168
 /// instructions against 159 with the adds rated as run once.

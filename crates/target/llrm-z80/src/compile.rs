@@ -1840,7 +1840,8 @@ fn sets_zero_by_result(inst: &Inst) -> bool {
 /// `optimizeCompareInstr`: the test of a byte against zero (`cp 0`) after the
 /// instruction that made the byte and set the flags by it is dropped when only
 /// the zero flag is read: `dec c; ld a, c; or a; jp nz` is `dec c; jp nz`.
-/// Every `ld` between leaves the flags alone.
+/// Every `ld` between leaves the flags alone, and so does `add hl, rr` (but
+/// for C, H and N).
 fn eliminate_tests(function: &mut MFunction) {
     for block in &mut function.blocks {
         let mut at = 1;
@@ -1878,7 +1879,14 @@ fn eliminate_tests(function: &mut MFunction) {
                 at += 1;
                 continue;
             };
-            let flags_kept = block.insts[setter + 1..at - 1].iter().all(|inst| !inst.sets_flags && !inst.call);
+            // `add hl, rr` (Z80 CPU User Manual UM0080, ADD HL,ss): C is the
+            // carry out of bit 15, H out of bit 11, N is reset; S,
+            // Z and P/V are not affected, so the zero of the byte
+            // survives it. (`adc hl, rr` and `sbc hl, rr` set all
+            // of them.)
+            let flags_kept = block.insts[setter + 1..at - 1]
+                .iter()
+                .all(|inst| !inst.call && (!inst.sets_flags || inst.kind == Kind::Op("ADD16")));
             let readers = block.insts[at + 1..].iter().take_while(|inst| !inst.sets_flags);
             let only_zero = readers
                 .filter(|inst| inst.reads_flags)
