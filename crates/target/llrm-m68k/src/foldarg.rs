@@ -27,7 +27,7 @@ use llrm_spike_mf::{Kind, Operand, Reg};
 use llrm_support::hash::{HashMap, HashSet};
 
 use crate::dagisel::local;
-use crate::foldload::swapped_readers;
+use crate::foldload::{commutes, swapped_readers};
 use crate::mfunc::{MFunction, op_inst};
 
 /// Where an instruction is: block and index.
@@ -143,7 +143,7 @@ fn fold_user(
             // a compare: the other way round, and the conditions with it
             readers = swapped_readers(&insts[user.1 + 1..])?;
             operands.swap(0, 1);
-        } else if inst.commutable {
+        } else if commutes(name, inst.commutable) {
             operands.swap(index, source);
         } else {
             return None;

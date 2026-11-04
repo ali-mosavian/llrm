@@ -66,7 +66,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdSet;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
-use llrm_mir::opcode::{BinaryOp, CallInfo, CastOp, Flags, Opcode, Tail};
+use llrm_mir::opcode::{BinaryOp, CallInfo, CastOp, Flags, IntPredicate, Opcode, Tail};
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses, Unit};
 use llrm_mir::types::{Type, TypeId};
 use llrm_mir::valuetracking::guarantee::{may_read_from_memory, may_throw, may_write_to_memory};
@@ -142,6 +142,8 @@ fn fold_unusual_patterns(
         // is not matched.
         let insts: Vec<InstId> = unit.function.iter_block(block).collect();
         for &inst in insts.iter().rev() {
+            changed |=
+                fold_select_split_ctlz_cttz(unit.context, unit.layout, unit.function, unit.declared, globals, inst);
             changed |= fold_any_or_all_bits_set(unit.context, unit.layout, unit.function, inst);
             changed |= fold_guarded_funnel_shift(unit.context, unit.layout, unit.function, unit.declared, inst);
             changed |= try_to_recognize_pop_count(unit.context, unit.layout, unit.function, unit.declared, inst);
@@ -1864,6 +1866,127 @@ fn fold_any_or_all_bits_set(
     };
     let replacement = if trunc { compare } else { build(function, Opcode::Cast(CastOp::ZExt), x_ty, vec![compare]) };
     function.replace_all_uses_with(result, replacement);
+    true
+}
+
+/// `foldSelectSplitCTLZCTTZ`
+/// ([:204](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L204)),
+/// with `foldSelectSplitCTTZ` (:95) and `foldSelectSplitCTLZ` (:152): the
+/// trailing or leading zeros of a value counted in halves, the second half
+/// only if the first is zero, are one full-width count.
+fn fold_select_split_ctlz_cttz(
+    context: &mut llrm_mir::context::Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    declared: &mut llrm_mir::passes::Declared,
+    globals: &[llrm_mir::module::GlobalValue],
+    inst: InstId,
+) -> bool {
+    let ty = function.instruction(inst).ty;
+    let Some(result) = function.instruction(inst).result else { return false };
+    let Some(half) = context.types.int_bits(ty) else { return false };
+    // The full-width count can exceed what the half type holds.
+    if half <= 2 {
+        return false;
+    }
+    let full = half * 2;
+    let found = {
+        // Calls are named through the globals.
+        let q = Query { globals, ..query(context, layout, function) };
+        let Some((_, _, cond, mut true_value, mut false_value)) = pattern::select(&q, Operand::Value(result)) else {
+            return false;
+        };
+        let Some((_, _, pred, compared, zero)) = pattern::icmp(&q, cond) else { return false };
+        if !q.int_constant(zero).is_some_and(|(bits, _)| bits == 0)
+            || !matches!(pred.pred, IntPredicate::Eq | IntPredicate::Ne)
+        {
+            return false;
+        }
+        if pred.pred == IntPredicate::Ne {
+            std::mem::swap(&mut true_value, &mut false_value);
+        }
+        let one_use = |v: Operand| {
+            matches!(
+                v,
+                Operand::Value(value) if function.users(value).has_one_use()
+            )
+        };
+        let is_const = |v: Operand, want: u128| q.int_constant(v).is_some_and(|(bits, _)| bits == want);
+        let of_width = |v: Operand, bits: u32| {
+            function.operand_type(context, v).and_then(|t| context.types.int_bits(t)) == Some(bits)
+        };
+        // `m_Trunc(m_LShr(m_Specific(src), m_SpecificInt(half)))`.
+        let high_half = |v: Operand, src: Operand| {
+            pattern::cast(&q, v, CastOp::Trunc)
+                .and_then(|(_, _, shifted)| pattern::binary(&q, shifted, BinaryOp::LShr))
+                .is_some_and(|(_, _, value, amount)| value == src && is_const(amount, u128::from(half)))
+        };
+        // `m_OneUse(m_AddLike(m_OneUse(m_Intrinsic(base)),
+        // m_SpecificInt(half)))`: the count's argument.
+        let plus_half = |v: Operand, base: &str| {
+            if !one_use(v) {
+                return None;
+            }
+            let (count, amount) = pattern::add_like(&q, v, Flags::default())?;
+            if !is_const(amount, u128::from(half)) || !one_use(count) {
+                return None;
+            }
+            let (_, args) = pattern::intrinsic_call(&q, count, base)?;
+            args.first().copied()
+        };
+        let counted = |v: Operand, base: &str| {
+            if !one_use(v) {
+                return None;
+            }
+            let (_, args) = pattern::intrinsic_call(&q, v, base)?;
+            args.first().copied()
+        };
+        // cttz: `lo == 0 ? cttz(hi) + half : cttz(lo)`.
+        let cttz = (|| {
+            let (_, _, src) = pattern::cast(&q, compared, CastOp::Trunc)?;
+            if !of_width(src, full) || counted(false_value, "llvm.cttz") != Some(compared) {
+                return None;
+            }
+            let hi_arg = plus_half(true_value, "llvm.cttz")?;
+            high_half(hi_arg, src).then_some((src, "cttz"))
+        })();
+        // ctlz: `hi == 0 ? ctlz(lo) + half : ctlz(hi)`.
+        let ctlz = || {
+            let hi_part = match pattern::cast(&q, compared, CastOp::Trunc) {
+                Some((_, _, src)) => src,
+                None => compared,
+            };
+            let (_, _, src, amount) = pattern::binary(&q, hi_part, BinaryOp::LShr)?;
+            if !of_width(src, full) || !is_const(amount, u128::from(half)) {
+                return None;
+            }
+            let hi_arg = counted(false_value, "llvm.ctlz")?;
+            if !high_half(hi_arg, src) {
+                return None;
+            }
+            let lo_arg = plus_half(true_value, "llvm.ctlz")?;
+            pattern::cast(&q, lo_arg, CastOp::Trunc).is_some_and(|(_, _, value)| value == src).then_some((src, "ctlz"))
+        };
+        cttz.or_else(ctlz)
+    };
+    let Some((src, count)) = found else { return false };
+    let wide = function.operand_type(context, src).expect("a typed value");
+    let i1 = context.types.int(1);
+    let no_poison = Operand::Constant(context.int(i1, 0));
+    let wide_count = call_intrinsic_before(
+        context,
+        function,
+        declared,
+        inst,
+        &format!("llvm.{count}.i{full}"),
+        wide,
+        vec![src, no_poison],
+        vec![wide, i1],
+    );
+    let narrow = function.create_instruction(Opcode::Cast(CastOp::Trunc), ty, vec![wide_count], Flags::default(), None);
+    function.insert(narrow, Position::Before(inst)).expect("a placed instruction");
+    let narrow = Operand::Value(function.instruction(narrow).result.expect("a value"));
+    function.replace_all_uses_with(result, narrow);
     true
 }
 

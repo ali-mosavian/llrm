@@ -235,6 +235,7 @@ pub mod floativ;
 pub mod floatloop;
 pub mod fold;
 pub mod gepoffset;
+pub mod globalbool;
 pub mod globaldce;
 #[cfg(test)]
 mod globaldce_tests;
