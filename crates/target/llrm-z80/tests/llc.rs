@@ -85,6 +85,20 @@ fn a_pair_built_from_bytes_and_spilled_is_reloaded_into_a_pair() {
     assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
 }
 
+/// lz4c -Oz wrote `add a, bc`, which sdasz80 rejects: the byte read of a
+/// reloaded pair named the pair, not its low byte.
+#[test]
+fn a_byte_read_of_a_reloaded_pair_names_the_byte() {
+    let dir = env!("CARGO_MANIFEST_DIR");
+    let out = std::env::temp_dir().join("llrm-z80-llc-lz4c-oz-bytes.s");
+    let done = llc(&["-S", "-Oz", "-o", out.to_str().unwrap(), &format!("{dir}/tests/kernels/ir/lz4c.ll")]);
+    assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+    let text = std::fs::read_to_string(&out).expect("the output file");
+    let bad: Vec<&str> =
+        text.lines().filter(|line| ["add a, ", "sub a, ", "xor a, ", "or a, ", "and a, "].iter().any(|op| line.trim().strip_prefix(op).is_some_and(|rest| matches!(rest, "bc" | "de" | "hl")))).collect();
+    assert!(bad.is_empty(), "{bad:?}");
+}
+
 /// `-g` was refused ("unrecognized argument -g", exit 2) and so was every
 /// `llrm-cc -g` z80 row: it writes SDCC's `C$file$line` symbols.
 #[test]
