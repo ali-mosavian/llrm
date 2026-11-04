@@ -135,6 +135,7 @@ fn fold_unusual_patterns(
         // is not matched.
         let insts: Vec<InstId> = unit.function.iter_block(block).collect();
         for &inst in insts.iter().rev() {
+            changed |= fold_guarded_funnel_shift(unit.context, unit.layout, unit.function, unit.declared, inst);
             changed |= try_to_recognize_pop_count(unit.context, unit.layout, unit.function, unit.declared, inst);
             changed |= try_to_recognize_table_based_patterns(
                 unit.context,
@@ -802,6 +803,149 @@ fn replace_with_pop_count(
     function.insert(call, Position::Before(inst)).expect("a placed instruction");
     let result = function.instruction(inst).result.expect("a value");
     function.replace_all_uses_with(result, Operand::Value(function.instruction(call).result.expect("a value")));
+}
+
+/// `matchFunnelShift`
+/// ([:243](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L243)):
+/// `v` as `fshl` (`true`) or `fshr` of `(shval0, shval1, amount)`.
+fn match_funnel_shift(
+    function: &Function,
+    q: &Query,
+    v: Operand,
+    width: u128,
+) -> Option<(bool, Operand, Operand, Operand)> {
+    use llrm_mir::valuetracking::pattern;
+    let Operand::Value(result) = v else { return None };
+    let (_, _, a, b) = pattern::binary(q, v, BinaryOp::Or)?;
+    if !function.users(result).has_one_use() {
+        return None;
+    }
+    let width_minus = |sub: Operand, amount: Operand| {
+        pattern::binary(q, sub, BinaryOp::Sub).is_some_and(|(_, _, w, x)| {
+            q.int_constant(w).is_some_and(|(bits, _)| bits == width) && x == amount
+        })
+    };
+    // `m_c_Or`: the shifts in either order.
+    for (left, right) in [(a, b), (b, a)] {
+        let (Some((_, _, shl_value, shl_amount)), Some((_, _, lshr_value, lshr_amount))) =
+            (pattern::binary(q, left, BinaryOp::Shl), pattern::binary(q, right, BinaryOp::LShr))
+        else {
+            continue;
+        };
+        // fshl(v0, v1, n) == (v0 << n) | (v1 >> (width - n))
+        if width_minus(lshr_amount, shl_amount) {
+            return Some((true, shl_value, lshr_value, shl_amount));
+        }
+        // fshr(v0, v1, n) == (v1 >> n) | (v0 << (width - n))
+        if width_minus(shl_amount, lshr_amount) {
+            return Some((false, shl_value, lshr_value, lshr_amount));
+        }
+    }
+    None
+}
+
+/// `foldGuardedFunnelShift`
+/// ([:236](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L236)):
+/// a phi of a funnel shift and its source, the branch around the shift when
+/// the amount is zero, is `llvm.fshl`/`llvm.fshr`.
+fn fold_guarded_funnel_shift(
+    context: &mut llrm_mir::context::Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    declared: &mut llrm_mir::passes::Declared,
+    inst: InstId,
+) -> bool {
+    use llrm_mir::valuetracking::pattern;
+    if function.instruction(inst).opcode != Opcode::Phi || function.instruction(inst).operands.len() != 4 {
+        return false;
+    }
+    let ty = function.instruction(inst).ty;
+    let Some(bits) = context.types.int_bits(ty) else { return false };
+    // Not strictly necessary, but careful of targets with no funnel shift.
+    if !bits.is_power_of_two() {
+        return false;
+    }
+    let arms = llrm_analysis::occurrence::arms(function, inst);
+    let (found, phi_block) = {
+        let q = query(context, layout, function);
+        let width = u128::from(bits);
+        let mut found = None;
+        // One arm is the funnel shift, the other its source.
+        for (funnel, guard) in [(0usize, 1usize), (1, 0)] {
+            let Some((is_fshl, shval0, shval1, amount)) = match_funnel_shift(function, &q, arms[funnel].0, width)
+            else {
+                continue;
+            };
+            let source = if is_fshl { shval0 } else { shval1 };
+            if source == arms[guard].0 {
+                found = Some((funnel, guard, is_fshl, shval0, shval1, amount));
+                break;
+            }
+        }
+        (found, function.parent(inst))
+    };
+    let (Some((funnel, guard, is_fshl, mut shval0, mut shval1, amount)), Some(phi_block)) = (found, phi_block) else {
+        return false;
+    };
+    let guard_block = arms[guard].1;
+    let funnel_block = arms[funnel].1;
+    let Some(term) = function.terminator(guard_block) else { return false };
+    // The shifted values dominate the guard's branch.
+    if !dominates_at(function, shval0, term) || !dominates_at(function, shval1, term) {
+        return false;
+    }
+    // `br (icmp eq amount, 0), PhiBB, FunnelBB`.
+    {
+        let q = query(context, layout, function);
+        let branch = function.instruction(term);
+        let (Opcode::Br, [cond, Operand::Block(then), Operand::Block(otherwise)]) =
+            (&branch.opcode, &branch.operands[..])
+        else {
+            return false;
+        };
+        let Some((_, _, pred, lhs, rhs)) = pattern::icmp(&q, *cond) else { return false };
+        if pred.pred != llrm_mir::opcode::IntPredicate::Eq
+            || lhs != amount
+            || !q.int_constant(rhs).is_some_and(|(bits, _)| bits == 0)
+            || *then != phi_block
+            || *otherwise != funnel_block
+        {
+            return false;
+        }
+    }
+    // The first non-phi instruction of the phi's block.
+    let Some(insert) = function.iter_block(phi_block).find(|&one| function.instruction(one).opcode != Opcode::Phi)
+    else {
+        return false;
+    };
+    // The select blocked poison from the shift-by-zero arm; a funnel shift
+    // does not, so freeze that value unless this is a rotate.
+    if shval0 != shval1 {
+        let source = if is_fshl { &mut shval1 } else { &mut shval0 };
+        let poison_free = {
+            let q = query(context, layout, function);
+            llrm_mir::valuetracking::guarantee::is_guaranteed_not_to_be_poison(&q, *source, 0)
+        };
+        if !poison_free {
+            let freeze = function.create_instruction(Opcode::Freeze, ty, vec![*source], Flags::default(), None);
+            function.insert(freeze, Position::Before(insert)).expect("a placed instruction");
+            *source = Operand::Value(function.instruction(freeze).result.expect("a value"));
+        }
+    }
+    let name = if is_fshl { "fshl" } else { "fshr" };
+    let value = call_intrinsic_before(
+        context,
+        function,
+        declared,
+        insert,
+        &format!("llvm.{name}.i{bits}"),
+        ty,
+        vec![shval0, shval1, amount],
+        vec![ty, ty, ty],
+    );
+    let result = function.instruction(inst).result.expect("a value");
+    function.replace_all_uses_with(result, value);
+    true
 }
 
 /// `tryToRecognizePopCount`
