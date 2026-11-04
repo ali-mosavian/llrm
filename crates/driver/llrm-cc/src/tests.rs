@@ -310,3 +310,32 @@ fn the_z80_row_selects_its_own_backend() {
     assert!(args.contains(&"-S".to_owned()) && args.contains(&"-O2".to_owned()), "{args:?}");
     assert_eq!(table["z80-sdcc"].c_abi.as_ref().map(|c| (c.int, c.long, c.pointer)), Some((2, 4, 2)));
 }
+
+/// Every build spawned `clang --version` just to check the pin: ~6M
+/// instructions on a 31M compile of grep. A clang unchanged in path, size and
+/// mtime is now judged once; a changed or non-pin one is asked again.
+#[test]
+fn an_unchanged_pin_clang_is_asked_its_version_once() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = std::env::temp_dir().join(format!("llrm-cc-pin-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let count = dir.join("count");
+    let clang = dir.join("clang");
+    let script = |said: &str| {
+        std::fs::write(&clang, format!("#!/bin/sh\necho x >> {}\necho {said}\n", count.display())).unwrap();
+        std::fs::set_permissions(&clang, std::fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    let spawns = || std::fs::read_to_string(&count).unwrap_or_default().lines().count();
+    script(pin());
+    assert!(check_pin(&clang).is_ok());
+    assert!(check_pin(&clang).is_ok());
+    assert_eq!(spawns(), 1, "the second check spawned again");
+    script(&format!("{} changed", pin()));
+    assert!(check_pin(&clang).is_ok());
+    assert_eq!(spawns(), 2, "a clang of another size was trusted unasked");
+    script("not-a-pin");
+    assert!(check_pin(&clang).is_err(), "a replaced non-pin clang passed on the old stamp");
+    assert!(check_pin(&clang).is_err());
+    assert_eq!(spawns(), 4);
+    let _ = std::fs::remove_dir_all(&dir);
+}
