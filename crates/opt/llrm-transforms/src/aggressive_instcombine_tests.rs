@@ -13,7 +13,7 @@ fn merged(text: &str) -> String {
     managed(&mut module, AggressiveInstCombine);
     // The pin leaves the old chain to dead-code elimination.
     let after = managed(&mut module, crate::dead::Dead);
-    let inputs: &[&[i128]] = &[&[0], &[1], &[4660]];
+    let inputs: &[&[i128]] = &[&[0], &[1], &[4660], &[8], &[18], &[2], &[16], &[41], &[-1]];
     assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
     after
 }
@@ -412,5 +412,38 @@ fn a_memchr_of_a_short_constant_string_is_a_switch_on_the_byte() {
         let got = results(&module, &[&[c]]);
         let want = llrm_mir::interpret::Val::Int { bits: want, width: 16 };
         assert_eq!(got, vec![want], "memchr(\"abc\", {c})\n{after}");
+    }
+}
+
+const ANY_BITS: &str = "define i16 @f(i16 %x) {
+b0:
+  %a = lshr i16 %x, 3
+  %b = lshr i16 %x, 5
+  %o1 = or i16 %x, %a
+  %o2 = or i16 %o1, %b
+  %r = and i16 %o2, 1
+  ret i16 %r
+}
+";
+
+const ALL_BITS: &str = "define i16 @f(i16 %x) {
+b0:
+  %a = lshr i16 %x, 1
+  %b = and i16 %a, 1
+  %c = lshr i16 %x, 4
+  %r = and i16 %b, %c
+  ret i16 %r
+}
+";
+
+/// Four shifts, three ors and an `and` testing three bits of `x` for any set,
+/// and a shift-and chain testing two for all set, were many instructions; the
+/// pin's `foldAnyOrAllBitsSet` makes each one masked compare.
+#[test]
+fn a_chain_of_shifted_bits_is_one_masked_compare() {
+    for (text, compare) in [(ANY_BITS, "icmp ne i16"), (ALL_BITS, "icmp eq i16")] {
+        let after = merged(text);
+        assert!(after.contains(compare), "{after}");
+        assert!(!after.contains("lshr"), "{after}");
     }
 }
