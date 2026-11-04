@@ -1223,13 +1223,30 @@ fn the_text_of_a_module_is_not_compared_once_per_function_built() {
         llrm_z80::compile::take_text_compares();
         let prepared = llrm_z80::compile::prepare(&ir, &request).expect("prepares");
         for (number, name) in prepared.names().enumerate() {
-            llrm_z80::compile::text_in(&ir, &prepared, name, number, &request).expect("compiles");
+            llrm_z80::compile::text_in(&prepared, name, number, &request).expect("compiles");
         }
         assert_eq!(llrm_z80::compile::take_text_compares(), 0, "{count} prepared functions");
         for i in 0..count {
             text(&ir, &format!("f{i}"), i, &request).expect("compiles");
         }
         assert_eq!(llrm_z80::compile::take_text_compares(), count, "{count} functions through `text`");
+    }
+}
+
+/// With `-g` every function parsed the module's text again for its source
+/// file and start line: O(module) per function. A prepared module is parsed
+/// once.
+#[test]
+fn a_module_is_parsed_for_its_sources_once_however_many_functions_it_has() {
+    for count in [10, 40] {
+        let ir = many(count, 1);
+        let request = Request { debug: true, ..Request::new(Level::O2) };
+        llrm_z80::driver::take_source_parses();
+        let prepared = llrm_z80::compile::prepare(&ir, &request).expect("prepares");
+        for (number, name) in prepared.names().enumerate() {
+            llrm_z80::compile::text_in(&prepared, name, number, &request).expect("compiles");
+        }
+        assert_eq!(llrm_z80::driver::take_source_parses(), 1, "{count} functions");
     }
 }
 

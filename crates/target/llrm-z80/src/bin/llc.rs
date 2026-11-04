@@ -63,7 +63,7 @@ fn run() -> i32 {
     let mut module = String::from("\t.area _CODE\n");
     for (number, name) in names.iter().enumerate() {
         module.push_str(&format!("\t.globl {}\n", llrm_z80::data::symbol(name)));
-        match text_in(&ir, &prepared, name, number, &request) {
+        match text_in(&prepared, name, number, &request) {
             Ok(text) => module.push_str(&text),
             Err(why) => {
                 eprintln!("llrm-z80-llc: REFUSED @{name}: {why}");

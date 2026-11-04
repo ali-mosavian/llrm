@@ -49,6 +49,9 @@ pub fn take_text_compares() -> usize {
 /// that module in turn ([`text_in`]): no comparison of its text per function.
 pub struct Prepared {
     selections: Selections,
+    /// With `-g`: the source file and start line of each function, from one
+    /// parse of the module.
+    sources: std::collections::HashMap<String, (String, Option<u32>)>,
 }
 
 impl Prepared {
@@ -64,7 +67,8 @@ pub fn prepare(
     request: &Request,
 ) -> Result<Prepared, String> {
     SELECTION_RUNS.with(|runs| runs.set(runs.get() + 1));
-    Ok(Prepared { selections: Selections::new(selections(ir, request)?) })
+    let sources = if request.debug { crate::driver::sources_of(ir) } else { Default::default() };
+    Ok(Prepared { selections: Selections::new(selections(ir, request)?), sources })
 }
 
 type SelectionKey = (String, Vec<(String, String)>);
@@ -1338,28 +1342,28 @@ pub fn text(
     number: usize,
     request: &Request,
 ) -> Result<String, String> {
-    text_of(ir, &cached_selections(ir, request)?, name, number, request)
+    let source = request.debug.then(|| crate::driver::source_of(ir, name)).flatten();
+    text_of(source, &cached_selections(ir, request)?, name, number, request)
 }
 
-/// [`text`] of a function of a [`Prepared`] module, `ir` being its text.
+/// [`text`] of a function of a [`Prepared`] module.
 pub fn text_in(
-    ir: &str,
     prepared: &Prepared,
     name: &str,
     number: usize,
     request: &Request,
 ) -> Result<String, String> {
-    text_of(ir, &prepared.selections, name, number, request)
+    let source = prepared.sources.get(name).cloned();
+    text_of(source, &prepared.selections, name, number, request)
 }
 
 fn text_of(
-    ir: &str,
+    source: Option<(String, Option<u32>)>,
     selected: &Selections,
     name: &str,
     number: usize,
     request: &Request,
 ) -> Result<String, String> {
-    let source = request.debug.then(|| crate::driver::source_of(ir, name)).flatten();
     let file = source.as_ref().map(|(file, _)| file.clone());
     let mut out = String::new();
     let mut rows = 0;

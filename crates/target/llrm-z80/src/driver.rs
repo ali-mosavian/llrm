@@ -186,16 +186,43 @@ impl llrm_mir::target::Machine for Z80Machine {
     }
 }
 
+thread_local! {
+    /// Parses of a module's text for its source file since the last
+    /// [`take_source_parses`].
+    static SOURCE_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The parses made by [`source_of`] and [`sources_of`] on this thread since
+/// the last call.
+pub fn take_source_parses() -> usize {
+    SOURCE_PARSES.with(|one| one.replace(0))
+}
+
 /// The source file of the unit's `!DICompileUnit` and the line function `name`
 /// starts at (its `!DISubprogram`'s `scopeLine`), if `text` has them.
 pub fn source_of(
     text: &str,
     name: &str,
 ) -> Option<(String, Option<u32>)> {
+    SOURCE_PARSES.with(|one| one.set(one.get() + 1));
     let module = llrm_mir::parse::module(&without_triple(text)).ok()?;
     let (file, _) = llrm_mir::dbgimport::unit_file(&module)?;
     let line = module.named(name).and_then(|id| module.subprogram_line(module.global(id).function()?));
     Some((file, line))
+}
+
+/// [`source_of`] for every function of the module, from one parse.
+pub fn sources_of(text: &str) -> std::collections::HashMap<String, (String, Option<u32>)> {
+    SOURCE_PARSES.with(|one| one.set(one.get() + 1));
+    let mut out = std::collections::HashMap::new();
+    let Ok(module) = llrm_mir::parse::module(&without_triple(text)) else { return out };
+    let Some((file, _)) = llrm_mir::dbgimport::unit_file(&module) else { return out };
+    for global in &module.globals {
+        let Some(name) = global.name.as_deref() else { continue };
+        let Some(function) = global.function() else { continue };
+        out.insert(name.to_owned(), (file.clone(), module.subprogram_line(function)));
+    }
+    out
 }
 
 /// SDCC's size and spelling of a debug type, as the `.adb` writes it: the class
