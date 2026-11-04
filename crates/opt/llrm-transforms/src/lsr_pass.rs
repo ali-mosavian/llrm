@@ -317,12 +317,16 @@ fn plan_loop(
         narrowed(se, &mut pin);
         let (pin_solution, pin_cost) = pin.solve_with_cost(se);
         // A target with no register-plus-register address (wasm) pays an add
-        // for each base added to the counter.
+        // for each base added to the counter, and the code it adds outside the
+        // loop must not outweigh the instructions it saves in it (nbody -O1:
+        // four `base + 32` against one compare).
         let folds_base_and_counter = tti.is_legal_addressing_mode(false, 0, true, 1);
         let kept = !pin_solution.is_empty()
             && (solution.is_empty()
                 || pin_cost.is_less(tti, &cost)
-                || (!folds_base_and_counter && cost.c.num_base_adds > pin_cost.c.num_base_adds));
+                || (!folds_base_and_counter
+                    && (cost.c.num_base_adds > pin_cost.c.num_base_adds
+                        || cost.c.insns + cost.c.setup_cost > pin_cost.c.insns + pin_cost.c.setup_cost)));
         llrm_support::debug!("lsr", "  pin's space solved: kept {kept}");
         if kept {
             lsr = pin;
