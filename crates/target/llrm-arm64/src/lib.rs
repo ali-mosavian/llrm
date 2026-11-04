@@ -27,6 +27,7 @@ pub mod prepass;
 pub mod regalloc;
 pub mod shrinkwrap;
 pub mod sibcall;
+pub mod copyprop;
 pub mod memcluster;
 pub mod postrasink;
 pub mod tti;
