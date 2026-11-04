@@ -144,6 +144,7 @@ fn fold_unusual_patterns(
         for &inst in insts.iter().rev() {
             changed |=
                 fold_select_split_ctlz_cttz(unit.context, unit.layout, unit.function, unit.declared, globals, inst);
+            changed |= fold_any_or_all_bits_set(unit.context, unit.layout, unit.function, inst);
             changed |= fold_guarded_funnel_shift(unit.context, unit.layout, unit.function, unit.declared, inst);
             changed |= try_to_recognize_pop_count(unit.context, unit.layout, unit.function, unit.declared, inst);
             changed |= try_to_recognize_table_based_patterns(
@@ -1742,6 +1743,128 @@ fn fold_mem_chr(
     let found = Operand::Value(function.instruction(found).result.expect("a value"));
     function.replace_all_uses_with(result, found);
     function.erase(inst).expect("a call nothing uses");
+    true
+}
+
+/// `MaskOps`: the source and the bit indexes of a chain of shifted bits.
+struct MaskOps {
+    root: Option<Operand>,
+    mask: u128,
+    bits: u32,
+    match_and_chain: bool,
+    found_and_1: bool,
+}
+
+/// `matchAndOrChain`
+/// ([:373](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L373)).
+fn match_and_or_chain(
+    q: &Query,
+    v: Operand,
+    ops: &mut MaskOps,
+) -> bool {
+    let binary = |op: BinaryOp| pattern::binary(q, v, op).map(|(_, _, a, b)| (a, b));
+    if ops.match_and_chain {
+        if let Some((first, one)) = binary(BinaryOp::And)
+            && q.int_constant(one).is_some_and(|(bits, _)| bits == 1)
+        {
+            ops.found_and_1 = true;
+            return match_and_or_chain(q, first, ops);
+        }
+        if let Some((a, b)) = binary(BinaryOp::And) {
+            return match_and_or_chain(q, a, ops) && match_and_or_chain(q, b, ops);
+        }
+    } else if let Some((a, b)) = binary(BinaryOp::Or) {
+        return match_and_or_chain(q, a, ops) && match_and_or_chain(q, b, ops);
+    }
+    // A shift right, or a bare value standing for bit 0 of the source.
+    let shifted = binary(BinaryOp::LShr).and_then(|(value, amount)| Some((value, q.int_constant(amount)?.0)));
+    let (candidate, index) = match shifted {
+        Some((value, index)) => (value, Some(index)),
+        None => (v, None),
+    };
+    let root = *ops.root.get_or_insert(candidate);
+    // A shift out of range was not simplified.
+    if index.is_some_and(|index| index >= u128::from(ops.bits)) {
+        return false;
+    }
+    ops.mask |= 1u128 << index.unwrap_or(0);
+    root == candidate
+}
+
+/// `foldAnyOrAllBitsSet`
+/// ([:420](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L420)):
+/// `and (or (lshr X, C), ...), 1` is `(X & mask) != 0`, and the `and` chain
+/// is `(X & mask) == mask`.
+///
+/// DEVIATE 47: integers of up to 128 bits; no vectors. Owner: w2. Exit:
+/// 2026-11-21.
+fn fold_any_or_all_bits_set(
+    context: &mut llrm_mir::context::Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    inst: InstId,
+) -> bool {
+    let ty = function.instruction(inst).ty;
+    let Some(result) = function.instruction(inst).result else { return false };
+    let (x, all_bits_set, trunc) = {
+        let q = query(context, layout, function);
+        let one_use = |v: Operand| {
+            matches!(
+                v,
+                Operand::Value(value) if function.users(value).has_one_use()
+            )
+        };
+        let one_use_binary = |v: Operand, op: BinaryOp| one_use(v) && pattern::binary(&q, v, op).is_some();
+        let this = function.instruction(inst);
+        if context.types.int_bits(ty) == Some(1) {
+            let Opcode::Cast(CastOp::Trunc) = this.opcode else { return false };
+            let source = this.operands[0];
+            if one_use_binary(source, BinaryOp::And) {
+                (source, true, true)
+            } else if one_use_binary(source, BinaryOp::Or) {
+                (source, false, true)
+            } else {
+                return false;
+            }
+        } else {
+            let Opcode::Binary(BinaryOp::And) = this.opcode else { return false };
+            let [a, b, ..] = this.operands[..] else { return false };
+            if one_use_binary(a, BinaryOp::And) || one_use_binary(b, BinaryOp::And) {
+                (Operand::Value(result), true, false)
+            } else if one_use_binary(a, BinaryOp::Or) && q.int_constant(b).is_some_and(|(bits, _)| bits == 1) {
+                (a, false, false)
+            } else {
+                return false;
+            }
+        }
+    };
+    let Some(x_ty) = function.operand_type(context, x) else { return false };
+    let Some(bits) = context.types.int_bits(x_ty) else { return false };
+    if bits > 128 {
+        return false;
+    }
+    let mut ops = MaskOps { root: None, mask: 0, bits, match_and_chain: all_bits_set, found_and_1: false };
+    let matched = match_and_or_chain(&query(context, layout, function), x, &mut ops);
+    if !matched || (all_bits_set && !trunc && !ops.found_and_1) {
+        return false;
+    }
+    let root = ops.root.expect("a chain has a root");
+    let mask = Operand::Constant(context.int(x_ty, ops.mask as i128));
+    let mut build = |function: &mut Function, op: Opcode, ty: TypeId, operands: Vec<Operand>| {
+        let one = function.create_instruction(op, ty, operands, Flags::default(), None);
+        function.insert(one, Position::Before(inst)).expect("a placed instruction");
+        Operand::Value(function.instruction(one).result.expect("a value"))
+    };
+    let and = build(function, Opcode::Binary(BinaryOp::And), x_ty, vec![root, mask]);
+    let i1 = context.types.int(1);
+    let compare = if all_bits_set {
+        build(function, Opcode::ICmp(llrm_mir::opcode::IntPredicate::Eq), i1, vec![and, mask])
+    } else {
+        let zero = Operand::Constant(context.int(x_ty, 0));
+        build(function, Opcode::ICmp(llrm_mir::opcode::IntPredicate::Ne), i1, vec![and, zero])
+    };
+    let replacement = if trunc { compare } else { build(function, Opcode::Cast(CastOp::ZExt), x_ty, vec![compare]) };
+    function.replace_all_uses_with(result, replacement);
     true
 }
 

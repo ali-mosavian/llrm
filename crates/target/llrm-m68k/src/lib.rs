@@ -17,6 +17,7 @@ pub mod elf;
 pub mod encode;
 pub mod expand;
 pub mod flags;
+pub mod foldarg;
 pub mod foldload;
 pub mod frame;
 pub mod isa;
