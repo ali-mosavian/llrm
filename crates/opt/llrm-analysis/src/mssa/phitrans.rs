@@ -25,8 +25,8 @@
 //!    takes the layout; there is no TLI.
 //!
 //! DEVIATE, stated facts:
-//! 3. Removed: constants keep use lists, so the scan of a constant base's
-//!    users is the C++'s.
+//! 3. Removed: constants keep use lists, so the scan of a constant base's users
+//!    is the C++'s.
 //!    `test_a_gep_off_a_global_base_is_found_in_a_dominating_block`.
 //! 4. Users come newest first, as LLVM's use list does; any match is an equal
 //!    value and the newest is returned.

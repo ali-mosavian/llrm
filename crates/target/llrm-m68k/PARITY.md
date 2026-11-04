@@ -77,6 +77,12 @@ worst memcpy 36 -> 48 B and 50 -> 90 insns (508 -> 906 clk on the 68000), struct
 **M68K-OS-1: `bsearch` at `-Os` is 4 B over `llc -Os`** (106 against 102). Not yet diagnosed; the
 `size` flag of `place_blocks` is the first place to look. Exit: after the merge.
 
+**M68K-PCREL-DATA: data further than 32 KB from the code.** Globals are addressed `(sym,%pc)`, a
+16-bit displacement; `(from+70016,%pc)` cannot reach a 70 KB array, and the shared ELF writer
+refuses it (`memcpy_runtime`, `memfuncs_runtime` at `-c`; gas leaves it to `ld`, which would
+truncate). The pin has the same form. Owner: m68k. Exit 2026-11-12: absolute `.l` on the 68000, the
+68020's 32-bit PC displacement, picked by object size and clocks.
+
 ## Instruments
 
 - Clocks: `src/timing.rs`, MC68000UM section 8 (16-bit timing; section 7 is the 8-bit MC68008) and

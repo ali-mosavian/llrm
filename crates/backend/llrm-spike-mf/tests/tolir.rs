@@ -759,6 +759,33 @@ fn test_a_call_that_reads_a_pair_and_clobbers_its_byte_is_no_conflict() {
     assert!(decide_with_split(&inputs, Mode::Simple, true).is_some(), "greedy refused the function");
 }
 
+/// A call that reads a pair, clobbers it, and returns in one of its bytes: the
+/// pair's argument range and the call's clobber of it are one range by the time
+/// the result's range starts at the call, so the clobber was no longer "a range
+/// of its own" and the result looked like a second value meeting in the
+/// register. Greedy refused bench_nbody -Os, bintree, grep, wc_mixed
+/// ("greedy refused"): `PIN-CONFLICT` at every call returning in a byte it also
+/// clobbered.
+#[test]
+fn test_a_call_that_reads_a_pair_and_returns_in_its_byte_is_no_conflict() {
+    let mut f = MFunction::<()>::new("returns");
+    f.classes = vec![(); 1];
+    let mut only = Block { id: 0, ..Block::default() };
+    only.insts.push(op("set", vec![Operand::Def(Reg::Phys(RegId::EBX))]));
+    let mut with_result = call();
+    with_result.operands.push(Operand::Use(Reg::Phys(RegId::EBX)));
+    with_result.operands.push(Operand::Def(Reg::Phys(RegId::BL)));
+    only.insts.push(with_result);
+    only.insts.push(op("get", vec![Operand::Def(v(0)), Operand::Use(Reg::Phys(RegId::BL))]));
+    only.insts.push(op("store", vec![Operand::Use(v(0))]));
+    only.insts.push(ret());
+    f.blocks = vec![only];
+    let converted = to_lir::<Flat>(&lowered(f), regs()).expect("converts");
+    let order = |value: u32| converted.order(value);
+    let inputs = converted.inputs(regs(), &order);
+    assert!(decide_with_split(&inputs, Mode::Simple, true).is_some(), "greedy refused the function");
+}
+
 /// A value copied out of a pair is not joined into the pair when one of its
 /// bytes is written while the value lives: the join would make the value hold
 /// the byte's cell. crc16's pointer, joined into `rs1` while `rc3` carried a
@@ -1067,7 +1094,7 @@ fn test_a_literal_made_again_beside_another_literal_keeps_its_own_immediate() {
                 again.spill_reload = true;
                 again.rematerialized = true;
                 let what = again.what.as_mut().expect("semantics");
-                what.dests = vec![Loc::Held(Held { value: 3, width: 1 })];
+                what.dests = vec![Loc::Held(Held { value: 3, width: 1, offset: 0 })];
                 let store = insns.iter().position(|one| one.uses == [1]).expect("the read");
                 insns[store] = insns[store].renamed(&|name| if name == 1 { 3 } else { name });
                 insns.insert(nine + 1, std::sync::Arc::new(again));
@@ -1124,7 +1151,7 @@ fn test_a_zero_made_again_is_not_taken_for_a_symbol() {
                 again.defines = vec![3];
                 again.spill_reload = true;
                 again.rematerialized = true;
-                again.what.as_mut().expect("semantics").dests = vec![Loc::Held(Held { value: 3, width: 1 })];
+                again.what.as_mut().expect("semantics").dests = vec![Loc::Held(Held { value: 3, width: 1, offset: 0 })];
                 let store = insns.iter().position(|one| one.uses == [2]).expect("the read");
                 insns[store] = insns[store].renamed(&|name| if name == 2 { 3 } else { name });
                 insns.insert(address + 1, std::sync::Arc::new(again));

@@ -69,6 +69,8 @@ pub struct FunctionLoweringInfo {
     /// blocks, made at the first block and shared by the DAGs of the rest
     /// (a table per block was a quadratic share of the compile).
     pub(super) tables: Option<Tables>,
+    /// The module's part of the tables, when an earlier function made it.
+    pub(super) module_tables: Option<crate::backend::constpool::Symbols>,
 }
 
 /// What every block's DAG reads about the module and the function.
@@ -128,6 +130,7 @@ impl FunctionLoweringInfo {
             objects: Vec::new(),
             next_frame_index: 0,
             tables: None,
+            module_tables: None,
         };
         let entry = function.entry();
         for &block in function.layout() {

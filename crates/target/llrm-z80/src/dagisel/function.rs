@@ -20,6 +20,7 @@ use llrm_codegen::backend::selectiondag::DagConfig;
 use llrm_codegen::backend::selectiondag::SelectionDAG;
 use llrm_codegen::backend::selectiondag::builder::{BlockDag, BuilderTarget, TargetNodes, TtiHandle, build_block};
 use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
+use llrm_codegen::backend::selectiondag::live_out;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::schedule::Unit;
 use llrm_mir::context::ConstantKind;
@@ -116,6 +117,17 @@ pub fn select_function(
     name: &str,
     cpu: Cpu,
 ) -> Result<Selection, String> {
+    select_function_with(module, name, cpu, true)
+}
+
+/// [`select_function`], with `optimize` false at -O0: no register knows
+/// anything of what a block put in it.
+pub fn select_function_with(
+    module: &Module,
+    name: &str,
+    cpu: Cpu,
+    optimize: bool,
+) -> Result<Selection, String> {
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
     let function = module
         .global(id)
@@ -130,10 +142,30 @@ pub fn select_function(
     let mut info = FunctionLoweringInfo::new(function);
     let mut locals = alloca_sizes(module, function, &layout, &info)?;
     let mut selected = Vec::new();
+    let mut visited = std::collections::HashSet::new();
     for &block in function.layout() {
+        if optimize {
+            // `SelectAllBasicBlocks`: a phi knows what its incoming values do
+            // once all its predecessors are selected.
+            let ready = function.predecessors(block).iter().all(|pred| visited.contains(pred));
+            let phis: Vec<_> = function
+                .iter_block(block)
+                .take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi)
+                .collect();
+            for phi in phis {
+                if ready {
+                    // a value of more than a word is several registers
+                    let bits = |bits: u32| (bits != 0 && bits <= 16).then(|| if bits <= 8 { 8 } else { 16 });
+                    live_out::compute_phi_live_out_reg_info(module, function, phi, &bits, &mut info);
+                } else if let Some(reg) = function.instruction(phi).result.and_then(|r| info.value_regs.get(&r)) {
+                    info.live_out.remove(reg);
+                }
+            }
+            visited.insert(block);
+        }
         let built = build_block(module, function, &layout, &target, &arch, &convention, &mut info, block)
             .map_err(|why| why.0.to_owned())?;
-        select_built(Some((function, block)), block, built, cpu, &mut info, &mut selected)?;
+        select_built(Some((function, block)), block, built, cpu, optimize, &mut info, &mut selected)?;
     }
     // The stack objects the builder made follow the static allocas.
     locals.extend(info.objects.iter().map(|(size, _)| i64::from(*size)));
@@ -242,13 +274,14 @@ fn select_built(
     block: BlockId,
     mut built: BlockDag,
     cpu: Cpu,
+    optimize: bool,
     info: &mut FunctionLoweringInfo,
     selected: &mut Vec<Selected>,
 ) -> Result<(), String> {
     // the scratch slots the legalizers ask for (a long long result's memory)
     // are frame objects numbered after the function's
     built.dag.first_temporary = info.next_stack_object();
-    let units = select_block(&mut built.dag, cpu).map_err(|why| format!("{why:?}"))?;
+    let units = select_block(&mut built.dag, cpu, info, optimize).map_err(|why| format!("{why:?}"))?;
     for (size, align) in std::mem::take(&mut built.dag.temporaries) {
         info.new_stack_object(size, align);
     }
@@ -286,7 +319,7 @@ fn select_built(
     }
     selected.push(Selected { block, dag: built.dag, units, live_ins: built.live_ins, edges });
     for (extra, made) in built.extra {
-        select_built(None, extra, made, cpu, info, selected)?;
+        select_built(None, extra, made, cpu, optimize, info, selected)?;
     }
     Ok(())
 }

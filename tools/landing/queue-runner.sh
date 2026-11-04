@@ -11,7 +11,7 @@ export TMPDIR="${LAND_TMPDIR:-${LAND_TMP:-/tmp/landing}/tmp}"; mkdir -p "$TMPDIR
 # own process group, recorded for stop.sh: the only way to end the runner (never by name or pattern)
 [ "$(ps -o pgid= $$ | tr -d ' ')" = "$$" ] || exec setsid "$0" "$@"
 echo $$ > "${LAND_PIDFILE:-${LAND_TMP:-/tmp/landing}/land-runner.pgid}"
-HERE=$(cd "$(dirname "$0")" && pwd); source "$HERE/disk-preflight.sh"; source "$HERE/open-only.sh"; source "$HERE/pick-disjoint.sh"; source "$HERE/precheck-filter.sh"; source "$HERE/landing-busy.sh"; source "$HERE/head-age.sh"; source "$HERE/starved.sh"; source "$HERE/rate-limit.sh"; source "$HERE/alone-filter.sh"; source "$HERE/solo.sh"; source "$HERE/background.sh"; source "$HERE/stamp.sh"; source "$HERE/refusal-lines.sh"; source "$HERE/urgent.sh"; source "$HERE/stale-batch.sh"; source "$HERE/tooling-current.sh"; source "$HERE/pr-state.sh"; source "$HERE/runner-reload.sh"; source "$HERE/red-tip.sh"
+HERE=$(cd "$(dirname "$0")" && pwd); source "$HERE/disk-preflight.sh"; source "$HERE/open-only.sh"; source "$HERE/pick-disjoint.sh"; source "$HERE/precheck-filter.sh"; source "$HERE/landing-busy.sh"; source "$HERE/head-age.sh"; source "$HERE/starved.sh"; source "$HERE/rate-limit.sh"; source "$HERE/alone-filter.sh"; source "$HERE/solo.sh"; source "$HERE/background.sh"; source "$HERE/stamp.sh"; source "$HERE/refusal-lines.sh"; source "$HERE/urgent.sh"; source "$HERE/stale-batch.sh"; source "$HERE/tooling-current.sh"; source "$HERE/pr-state.sh"; source "$HERE/runner-reload.sh"; source "$HERE/red-tip.sh"; source "$HERE/serial.sh"
 R=ali-mosavian/llrm; W=~/scratch/coord-ps; T=~/scratch/coord-ps-target; Q=/tmp/land-queue.txt; touch $Q
 SELF_SHA=$(runner_scripts_sha "$HERE")
 while true; do
@@ -40,9 +40,14 @@ while true; do
   if [ "${RED_TIP:-1}" = 1 ]; then
     tip=$(git -C "$W" rev-parse "origin/$LAND_BRANCH" 2>/dev/null); G="${LAND_TMP:-/tmp/landing}/tip-green.sha"; S="${LAND_TMP:-/tmp/landing}/tip-stop.txt"
     if [ -n "$tip" ] && [ "$tip" != "$(cat "$G" 2>/dev/null)" ]; then
-      crates=$([ -s "$G" ] && tip_crates "$(cat "$G")" "$tip" 2>/dev/null || true)
-      out=$( (cd "$W" && git checkout -q --detach "$tip" && CARGO_TARGET_DIR="$T" cargo test --release ${crates:---workspace} --lib 2>&1) )
-      if stop=$(red_tip "$HERE/red-allow.txt" <<<"$out"); then echo "$tip" > "$G"; rm -f "$S"; else echo "$stop" | tee "$S" -a "${LAND_TMP:-/tmp/landing}/assemble.log"; fi
+      (cd "$W" && git checkout -q --detach "$tip") 2>/dev/null
+      # the packages changed since the last green tip and everything depending on them; none (only tooling changed) runs nothing
+      crates=--workspace; [ -s "$G" ] && crates=$(cd "$W" && tip_crates "$(cat "$G")" "$tip" 2>/dev/null)
+      out=; rc=0
+      if [ -n "$crates" ]; then
+        out=$( (cd "$W" && CARGO_TARGET_DIR="$T" $(tip_test_cmd "$crates") 2>&1; echo "rc=$?") ); rc=${out##*rc=}; out=${out%rc=*}
+      fi
+      if stop=$(red_tip "$HERE/red-allow.txt" "$rc" <<<"$out"); then echo "$tip" > "$G"; rm -f "$S"; else echo "$stop" | tee "$S" -a "${LAND_TMP:-/tmp/landing}/assemble.log"; fi
     fi
     [ -f "$S" ] && { cat "$S"; sleep 300; continue; }
   fi
@@ -75,6 +80,8 @@ while true; do
     cand=($(prechecked "${cand[@]:0:${PRECHECK_WINDOW:-16}}"))
     batch=($(pick_disjoint 8 "${cand[@]}"))
   fi
+  # SERIAL=1 (runner.env): one PR a pass, one squash commit each
+  batch=($(serial_batch "${batch[@]}"))
   [ ${#batch[@]} -eq 0 ] && { sleep 60; continue; }
   open=($(pop_open $Q "${batch[@]}"))
   batch=("${open[@]}"); [ ${#batch[@]} -eq 0 ] && continue; n=${batch[0]}
@@ -94,7 +101,7 @@ while true; do
       | stamp_lines > $log ) 9>"$W.checkout.lock"
   touch "$log.done"
   for m in "${batch[@]}"; do [[ $m =~ ^[0-9]+$ ]] || continue
-    if [ "$(landed_state $log $m)" = MERGED ]; then echo "$m: MERGED  $(gh pr view $m --repo $R --json title -q .title)"
+    if [ "$(landed_state $log $m)" = MERGED ]; then echo "$m: MERGED  $(gh pr view $m --repo $R --json title -q .title)"; echo "BASE LANDED #$m"
     else echo "$m: REFUSED: batch $log: $(batch_refusal_reason "$log" "$m")"; fi
   done
 done

@@ -14,6 +14,7 @@ pub mod isd {
     pub const SETCC: u16 = 28677;
     pub const ST8A: u16 = 28682;
     pub const STSP: u16 = 28679;
+    pub const SUBZX: u16 = 28683;
     pub const TSTS: u16 = 28680;
     pub const WRAPPER: u16 = 28676;
 }
