@@ -228,6 +228,27 @@ fn decorate(
             global.name = Some(spelled).into();
         }
     }
+    // An alias is spelled as what it names is.
+    for at in 0..module.aliases.len() {
+        let aliasee = module.aliases[at].aliasee;
+        let convention = match module.global(aliasee).function() {
+            Some(one) => calling.by_number(one.calling_convention).unwrap_or(default),
+            None => calling.by_number(0).unwrap_or(default),
+        };
+        let mut name = module.aliases[at].name.clone();
+        // clang spells a regcall alias `__regcall3__NAME`, as its function; the
+        // function lost the prefix above when it took the ABI's convention.
+        if let Some(plain) = name.strip_prefix("__regcall3__")
+            && module.global(aliasee).function().is_some_and(|one| one.calling_convention != llrm_mir::opcode::REGCALL)
+        {
+            name = plain.to_owned();
+        }
+        let spelled = match name.strip_prefix('\u{1}') {
+            Some(exact) => Some(exact.to_owned()),
+            None => convention.decorated(format, &name),
+        };
+        module.aliases[at].name = spelled.unwrap_or(name);
+    }
     spellings
 }
 
@@ -407,7 +428,6 @@ pub fn compiled_dumping(
     }
     let flags = &flags;
     let mut module = llrm_mir::parse::module(&text).map_err(|error| format!("{name}: {error}"))?;
-    module.refuse_aliases("x86").map_err(|error| format!("{name}: {error}"))?;
     if llrm_codegen::support::debug::enabled("mir") {
         // The size of the program as read, before any pass: what the other
         // front ends report as they link their MIR.
@@ -487,24 +507,8 @@ fn soft_float_calls(
     format: &str,
 ) -> Vec<(String, u32, String)> {
     let number = llrm_target::calling::Calling::number_of(default.cc.as_deref()).unwrap_or(0);
-    let mut names: Vec<String> = Vec::new();
-    for width in ["s", "d"] {
-        for op in ["add", "sub", "mul", "div"] {
-            names.push(format!("__{op}{width}f3"));
-        }
-        for cmp in ["eq", "ne", "lt", "le", "ge", "gt", "unord"] {
-            names.push(format!("__{cmp}{width}f2"));
-        }
-        for int in ["s", "d"] {
-            names.push(format!("__float{int}i{}", if width == "s" { "sf" } else { "df" }));
-            names.push(format!("__floatun{int}i{}", if width == "s" { "sf" } else { "df" }));
-            names.push(format!("__fix{}{int}i", if width == "s" { "sf" } else { "df" }));
-            names.push(format!("__fixuns{}{int}i", if width == "s" { "sf" } else { "df" }));
-        }
-    }
-    names.extend(["__extendsfdf2".to_owned(), "__truncdfsf2".to_owned()]);
+    let names = llrm_codegen::backend::selectiondag::libcalls::names().map(str::to_owned);
     names
-        .into_iter()
         .map(|name| {
             let symbol = default.decorated(format, &name).unwrap_or_else(|| name.clone());
             (name, number, symbol)
@@ -633,12 +637,20 @@ fn options_for(
             .filter_map(|one| one.as_str())
             .map(|name| (name.to_owned(), number, pattern.replace('*', name)))
             .collect();
-        if default.cc.as_deref() == Some("sysv") && default.symbol.contains_key(format) {
-            options.pipeline.library = vec![llrm_mir::libfunc::Routine {
-                standard: "strlen",
-                symbol: pattern.replace('*', "strlen"),
-                calling_convention: number,
-            }];
+        // `strlen` where the convention is System V's (DEVIATE D11 of
+        // `pipeline::Options::library`); the compare routines wherever the
+        // object is ELF, whose C library is a hosted one (`bcmp` is not in
+        // Watcom's or DOS's).
+        let stated: Option<Vec<&'static str>> = match default.cc.as_deref() {
+            Some("sysv") if default.symbol.contains_key(format) => {
+                Some(["strlen"].into_iter().chain(llrm_mir::libfunc::HOSTED_COMPARE).collect())
+            }
+            _ if format == "elf" => Some(llrm_mir::libfunc::HOSTED_COMPARE.to_vec()),
+            _ => None,
+        };
+        if let Some(names) = stated {
+            options.pipeline.library =
+                llrm_mir::libfunc::Routine::stated(names, |name| pattern.replace('*', name), number);
         }
     }
     options
@@ -699,8 +711,14 @@ mod options_tests {
             "{:?}",
             sysv.libcalls
         );
-        assert_eq!(sysv.pipeline.library.len(), 1);
-        assert_eq!(sysv.pipeline.library[0].symbol, "_strlen");
+        let symbols: Vec<_> = sysv.pipeline.library.iter().map(|routine| routine.symbol.as_str()).collect();
+        assert_eq!(symbols, ["_strlen", "_memcmp", "_bcmp"]);
+        // x86-64 Linux: `memcmp` and `bcmp` (`memcmp(p, q, n) == 0` stayed a
+        // `memcmp` call there); its `strlen` is not stated. A DOS object states
+        // none: Watcom's library has no `bcmp`.
+        let long = options(&["-m64", "-mabi=sysv"], "elf");
+        let symbols: Vec<_> = long.pipeline.library.iter().map(|routine| routine.symbol.as_str()).collect();
+        assert_eq!(symbols, ["memcmp", "bcmp"]);
     }
 }
 

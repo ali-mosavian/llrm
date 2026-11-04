@@ -413,6 +413,10 @@ impl AllocTarget for Arm64 {
         Class::Gpr
     }
 
+    fn schedules_before_allocation() -> bool {
+        true
+    }
+
     fn candidates(class: Class) -> Vec<RegId> {
         match class {
             Class::Gpr => gpr_order(),

@@ -946,7 +946,7 @@ mod tests {
             vec![reg(RegId::RDI, 8), Loc::Imm(Imm { value: 8, width: 8, address: None })],
         );
         let ret = Arc::new(Insn {
-            requires: vec![(crate::model::ir::Held { value: 7, width: 8 }, RegId::RAX)],
+            requires: vec![(crate::model::ir::Held { value: 7, width: 8, offset: 0 }, RegId::RAX)],
             reads_complete: true,
             ..Insn::new(2, Some((2, 2)), Some(Semantics::new(Operation::Return)), vec![], vec![7])
         });
