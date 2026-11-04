@@ -229,8 +229,8 @@ fn plan_loop(
         function.terminator(lp.get_loop_latch(function).expect("a latch")).expect("a terminator");
     match marked {
         None => {
-            // `OptimizeShadowIV` makes one variable and breaks (DEVIATE LS-SH: more
-            // where floats live on the x87 stack).
+            // `OptimizeShadowIV` makes one variable and breaks (DEVIATE LS-SH:
+            // more where floats live on the x87 stack).
             if let Some(shadow) = lsr_prepare::analyze_shadow(se, &cx, tti, header, &users, shadowed) {
                 return Outcome::Shadow(shadow);
             }
@@ -261,9 +261,18 @@ fn plan_loop(
         Default::default()
     };
     let safe_to_expand = |se: &mut ScalarEvolution, s: Scev| rewriter.is_safe_to_expand(&cx, se, s);
+    // The loop's register units do not change between the two builds.
+    let units = std::cell::Cell::new(None);
     let build = |se: &mut ScalarEvolution| {
         let mut lsr = Collection::new(&cx, tti, header, &safe_to_expand, false, iv_inc_insert_pos);
-        lsr.other_register_units = crate::lsr_collect::loop_register_units(se, &cx, tti, header);
+        lsr.other_register_units = match units.get() {
+            Some(counted) => counted,
+            None => {
+                let counted = crate::lsr_collect::loop_register_units(se, &cx, tti, header);
+                units.set(Some(counted));
+                counted
+            }
+        };
         lsr.size = size;
         llrm_support::debug!("lsr", "  other registers: {}", lsr.other_register_units);
         lsr.chain_uses = chains.inc_set.clone();

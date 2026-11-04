@@ -526,3 +526,36 @@ fn a_zero_count_in_two_halves_is_one_full_width_count() {
         assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
     }
 }
+
+fn patterned_table(elements: &str) -> String {
+    format!(
+        "@t = constant [4 x i16] [{elements}]
+define i16 @f(i16 %i) {{
+b0:
+  %p = getelementptr inbounds [4 x i16], ptr @t, i16 0, i16 %i
+  %v = load i16, ptr %p
+  ret i16 %v
+}}
+"
+    )
+}
+
+/// A load at a variable index of a constant array whose elements are all 7
+/// stayed a load; the pin's `foldPatternedLoads` makes it the constant 7. One
+/// differing element keeps the load.
+#[test]
+fn a_load_from_an_array_of_equal_elements_is_that_element() {
+    let run = |elements: &str| {
+        let before = parsed(&format!("{DOS}{}", patterned_table(elements)));
+        let mut module = before.clone();
+        managed(&mut module, AggressiveInstCombine);
+        let after = managed(&mut module, crate::dead::Dead);
+        let inputs: &[&[i128]] = &[&[0], &[1], &[2], &[3]];
+        assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
+        after
+    };
+    let same = run("i16 7, i16 7, i16 7, i16 7");
+    assert!(!same.contains("load i16"), "{same}");
+    let differ = run("i16 7, i16 7, i16 7, i16 8");
+    assert!(differ.contains("load i16"), "{differ}");
+}

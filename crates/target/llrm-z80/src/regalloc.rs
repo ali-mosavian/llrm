@@ -130,6 +130,25 @@ impl Target for Z80Registers {
         matches!(inst.kind, Kind::Op("PACK")).then(|| (0, vec![(1, 0, 1), (2, 1, 1)]))
     }
 
+    // DEVIATE 3b-1 (owner greedy-subreg, exit 11-10): off until the split
+    // editor copies by lane (a pair built across blocks lost its stack copy:
+    // lz4c -Oz returned 0x3131).
+    fn lowers_lanes() -> bool {
+        false
+    }
+
+    fn read_lanes(inst: &Inst) -> Option<(usize, u32, u32)> {
+        match inst.kind {
+            Kind::Op("BIT7_16" | "HI") => Some((1, 1, 1)),
+            Kind::Op("LO") => Some((1, 0, 1)),
+            _ => None,
+        }
+    }
+
+    fn joins_lanes() -> bool {
+        false
+    }
+
     fn read_part(
         inst: &Inst,
         operand: usize,

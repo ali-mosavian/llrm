@@ -275,7 +275,7 @@ pub fn join_copy(
         current_erased.insert(copy);
     }
     // Rewrite all SrcReg operands to DstReg.
-    update_reg_defs_uses(lis, state, cp.src_reg(), cp.dst_reg(), cp.is_partial().then_some(cp.lane_offset()), None);
+    update_reg_defs_uses(lis, state, cp.src_reg(), cp.dst_reg(), cp.is_partial().then_some(cp.lane_offset()), None, false);
     // SrcReg is guaranteed to be the register whose live interval that is
     // being merged.
     lis.remove_interval(cp.src_reg());
@@ -320,9 +320,13 @@ fn join_lane(
     }
     env.narrow_lane(cp.dst_reg(), cp.src_reg(), cp.lane_offset());
     let _ = current_erased;
+    // The copy kept the other lanes of `dst`: so does the def that replaces it,
+    // whether or not `dst`'s interval is live there yet (the lane joins that
+    // would make it so may come later).
+    let keeps_rest = lis.instr(copy).partial_defs.contains(&cp.dst_reg());
     state.erased.insert(copy);
     lis.remove_instr(block, copy);
-    update_reg_defs_uses(lis, state, cp.src_reg(), cp.dst_reg(), Some(cp.lane_offset()), Some(cp.lanes()));
+    update_reg_defs_uses(lis, state, cp.src_reg(), cp.dst_reg(), Some(cp.lane_offset()), Some(cp.lanes()), keeps_rest);
     lis.remove_interval(cp.src_reg());
     lis.remove_interval(cp.dst_reg());
     JoinResult::Joined
@@ -399,8 +403,8 @@ fn join_virt_regs(
 /// `updateRegDefsUses`: every instruction that names `src` names `dst`. For a
 /// partial pair (`src` is a sub-register of `dst`) a def of `src` becomes a
 /// def that reads `dst` where the instruction reads `src` or `dst` is live
-/// into it, and a def that starts the value where not
-/// (`MO.setIsUndef(!Reads)`).
+/// into it or `keeps_rest` (the lane copy it replaces read the rest), and a def
+/// that starts the value where not (`MO.setIsUndef(!Reads)`).
 fn update_reg_defs_uses(
     lis: &mut LiveIntervals,
     state: &mut State,
@@ -408,6 +412,7 @@ fn update_reg_defs_uses(
     dst: u32,
     partial: Option<u32>,
     lanes: Option<ValueLanes>,
+    keeps_rest: bool,
 ) {
     lis.rename_input(src, dst);
     state.renames.push((src, dst));
@@ -424,7 +429,7 @@ fn update_reg_defs_uses(
         let mut renamed = at_lane.renamed(&|value| if value == src { dst } else { value });
         if partial.is_some() && old.defines.contains(&src) {
             let at = lis.indexes.get_instruction_index(key);
-            let reads = old.uses.contains(&src) || lis.interval(dst).live_at(&at);
+            let reads = keeps_rest || old.uses.contains(&src) || lis.interval(dst).live_at(&at);
             if reads && !renamed.partial_defs.contains(&dst) {
                 let mut made = (*renamed).clone();
                 made.partial_defs.push(dst);

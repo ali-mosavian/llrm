@@ -350,6 +350,9 @@ fn allocate_once(
     sink_copies_before_allocation(&mut function);
     if std::env::var("LLRM_NO_Z80_FORWARD").is_err() {
         crate::forward::read_pairs_from_their_registers(&mut function);
+        if std::env::var("LLRM_NO_Z80_CARRY").is_err() {
+            crate::forward::carry_pairs_across_edges(&mut function);
+        }
     }
     if std::env::var("LLRM_Z80_DUMP").is_ok_and(|one| one == name) {
         dump(&function);

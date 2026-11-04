@@ -409,7 +409,7 @@ fn reclass_by_operands(
                 continue;
             }
             for (value, order) in tii.operand_orders(lis.instr(op.instr)) {
-                if value != reg {
+                if value != reg || reads_a_lane(tables, lis.instr(op.instr), reg) {
                     continue;
                 }
                 allowed = Some(match allowed {
@@ -425,6 +425,24 @@ fn reclass_by_operands(
             _ => {}
         }
     }
+}
+
+/// An operand naming a byte of `reg` (a lane of a wider value) asks the class
+/// of the byte, not of `reg`: `add a, h` reading a pair's high byte does not
+/// make the pair a byte register.
+fn reads_a_lane(
+    tables: &Tables,
+    one: &Insn,
+    reg: u32,
+) -> bool {
+    let Some(whole) = tables.widths.borrow().get(&reg).copied() else { return false };
+    let Some(what) = &one.what else { return false };
+    what.dests
+        .iter()
+        .chain(&what.sources)
+        .flat_map(crate::model::ir::values)
+        .filter(|place| place.value == reg)
+        .all(|place| place.width < whole)
 }
 
 impl super::splitkit::SplitEnv for BodySplitEnv<'_> {

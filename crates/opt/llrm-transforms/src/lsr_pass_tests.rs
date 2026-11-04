@@ -58,15 +58,8 @@ fn reduced_flat(
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
     let mut declared = llrm_mir::passes::Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
-    let changed = crate::lsr_pass::reduced_with(
-        context,
-        &layout,
-        function,
-        &mut declared,
-        &outer,
-        &llrm_mir::tti::Basic,
-        false,
-    );
+    let changed =
+        crate::lsr_pass::reduced_with(context, &layout, function, &mut declared, &outer, &llrm_mir::tti::Basic, false);
     let after = printed(&module);
     assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
     (changed, after)
@@ -213,8 +206,9 @@ exit:
 ";
 
 /// Two conversions of one counter got two floating counters off the x87
-/// stack: the pin's `OptimizeShadowIV` makes one per loop and breaks. wasm x_matmul_f -O2 grew 29 B (1584 -> 1613) once both
-/// conversions were `uitofp nneg` and GVN had no pass left to merge them.
+/// stack: the pin's `OptimizeShadowIV` makes one per loop and breaks. wasm
+/// x_matmul_f -O2 grew 29 B (1584 -> 1613) once both conversions were `uitofp
+/// nneg` and GVN had no pass left to merge them.
 #[test]
 fn a_loop_gets_one_floating_counter_for_two_conversions_off_the_x87_stack() {
     let (changed, after) = reduced_flat(TWO_CONVERSIONS, &[&[1], &[5], &[17]]);
@@ -1378,6 +1372,21 @@ fn a_cut_nothing_fits_keeps_the_pointer_over_the_table() {
     assert!(after.contains("phi ptr"), "{after}");
 }
 
+/// bench/stft_fixed -Os m16: the same loop inside `main`, beside the outer
+/// loop's values. The solution that fits the three address registers cost one
+/// more instruction than the pointer over `_rev`, and the function came out
+/// 18 B larger (7302 against 7284): at size a reload folds into a memory
+/// operand while the extra instruction is paid in full.
+#[test]
+fn at_size_a_fitting_solution_does_not_cost_an_instruction_more() {
+    let mut module = parsed(include_str!("lsr_stft_rev.ll"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true });
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
+    let after = printed(&module);
+    assert!(after.contains("phi ptr [ %") && after.contains("@$var_rev, i16 128"), "{after}");
+}
+
 const BLOCK_LOOP: &str = "
 @_window = internal global [256 x i32] zeroinitializer, align 2
 @_rev = internal global [256 x i8] zeroinitializer, align 1
@@ -1695,6 +1704,16 @@ ret:
   ret i16 %res
 }
 ";
+
+/// The pin's space is solved beside the end-biased one, and each build counted
+/// the loop's register units again (21% of LSR on jpeg_fixed): once is enough.
+#[test]
+fn a_loop_solved_twice_has_its_register_units_counted_once() {
+    let before = crate::lsr_collect::register_units_computed();
+    let after = reduced_real(QUEENS_INNER, &six_registers());
+    let counted = crate::lsr_collect::register_units_computed() - before;
+    assert_eq!(counted, 1, "{after}");
+}
 
 #[test]
 fn a_loop_the_pin_makes_a_pointer_of_stays_one_when_end_biased_formulae_exist_in_real_mode() {
