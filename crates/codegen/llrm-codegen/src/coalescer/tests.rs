@@ -655,6 +655,10 @@ fn test_a_join_narrows_the_class_the_next_join_is_judged_against() {
         should_join: Box::new(|_| true),
         freq: Vec::new(),
         regs: None,
+        kind_of: Box::new(|_, _| None),
+        kinds: Default::default(),
+        check_kinds: false,
+        priced_copy: Default::default(),
     };
     let (base, index) = (copy(2, 1), copy(3, 1));
     // `v1` has two values to `v2`'s one, so the join keeps it as the surviving
@@ -1112,6 +1116,10 @@ fn env_with_palettes(palettes: &[(u32, &[RegId])]) -> TargetEnv {
         should_join: Box::new(|_| true),
         freq: Vec::new(),
         regs: Some(body(&[]).regs()),
+        kind_of: Box::new(|_, _| None),
+        kinds: Default::default(),
+        check_kinds: false,
+        priced_copy: Default::default(),
     }
 }
 
@@ -1162,6 +1170,10 @@ fn test_a_copy_from_a_pinned_argument_is_left_to_the_allocator_when_the_target_s
             freq: Vec::new(),
             joins_sub_registers: true,
             regs: None,
+            kind_of: Box::new(|_, _| None),
+            kinds: Default::default(),
+            check_kinds: false,
+            priced_copy: Default::default(),
         };
         let mut lis = LiveIntervals::new(&was);
         lis.interval(1);

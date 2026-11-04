@@ -254,6 +254,7 @@ pub fn join_copy(
     // other. Make sure the resulting register is set to the right register
     // class.
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/RegisterCoalescer.cpp#L2244-L2247
+    env.merge_uses(lis, copy, cp.dst_reg(), cp.src_reg());
     if cp.is_partial() {
         env.narrow_sub(cp.dst_reg(), cp.src_reg());
     } else {
@@ -720,6 +721,7 @@ fn remove_copy_by_commuting_def(
     LiveIntervals::remove_vreg_def_at(&mut int_a, &a_val.def());
     lis.insert_interval(int_a);
     lis.insert_interval(int_b);
+    env.forget_uses(b_reg, a_reg);
     env.narrow(b_reg, a_reg);
 
     // The copy is the identity now.

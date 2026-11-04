@@ -1839,3 +1839,32 @@ fn a_copy_added_for_an_instruction_or_a_phi_has_the_origin_of_its_neighbour() {
         }
     }
 }
+
+/// One value read by `reads` instructions, then copied `copies` times: every
+/// join priced all of the surviving value's uses again, so the pricing cost
+/// `copies x reads` operand visits (the 6502's `switch` spent 38% of its
+/// compile in it). The uses are summed by kind once, and a join merges them.
+#[test]
+fn test_pricing_the_joins_of_a_value_does_not_read_its_uses_again() {
+    let (reads, copies) = (60, 10);
+    let mut f = MFunction::<()>::new("hot");
+    f.classes = vec![(); 1 + copies];
+    let mut only = Block { id: 0, ..Block::default() };
+    only.insts.push(op("load", vec![Operand::Def(v(0))]));
+    for _ in 0..reads {
+        only.insts.push(op("store", vec![Operand::Use(v(0))]));
+    }
+    for copy in 1..=copies as u32 {
+        only.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(copy)), Operand::Use(v(0))]));
+        only.insts.push(op("store", vec![Operand::Use(v(copy))]));
+    }
+    only.insts.push(ret());
+    f.blocks = vec![only];
+    let f = lowered(f);
+    let before = llrm_spike_mf::tolir::operand_visits();
+    let joined = rewritten_with(&f, true);
+    let visits = llrm_spike_mf::tolir::operand_visits() - before;
+    let left = joined.function.blocks[0].insts.iter().filter(|inst| inst.kind == Kind::Copy).count();
+    assert_eq!(left, 0, "premise: every copy joins");
+    assert!(visits <= 3 * (reads + copies), "{visits} operand visits for {reads} reads and {copies} joins");
+}

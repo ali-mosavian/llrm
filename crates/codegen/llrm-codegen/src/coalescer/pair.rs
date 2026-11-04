@@ -55,6 +55,26 @@ pub trait CoalescerEnv {
     ) {
     }
 
+    /// `src` is about to be absorbed into `dst` across `copy`, which goes with
+    /// the join: the env's per-value lists of uses follow (DEVIATE C14).
+    fn merge_uses(
+        &self,
+        _lis: &LiveIntervals,
+        _copy: InstrKey,
+        _dst: u32,
+        _src: u32,
+    ) {
+    }
+
+    /// Instructions of `a` or `b` were rewritten other than by a join: the
+    /// env's lists of their uses are no longer the instructions' (DEVIATE C14).
+    fn forget_uses(
+        &self,
+        _a: u32,
+        _b: u32,
+    ) {
+    }
+
     /// `TRI->shouldCoalesce(CopyMI, SrcRC, DstRC, NewRC, LIS)`: whether the
     /// join of `src` and `dst` across `copy` goes ahead.
     fn should_coalesce(
