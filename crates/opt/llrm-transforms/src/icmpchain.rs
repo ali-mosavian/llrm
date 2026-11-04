@@ -275,6 +275,7 @@ pub fn folded(
         let q = Query {
             context,
             globals: &[],
+            fresh: &[],
             metadata: &[],
             function: &*function,
             layout: spec.layout,

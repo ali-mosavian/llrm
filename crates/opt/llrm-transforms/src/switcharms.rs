@@ -165,6 +165,7 @@ fn umin_simplified(
         let q = Query {
             context,
             globals: &[],
+            fresh: &[],
             metadata: &[],
             function: &*function,
             layout: spec.layout,
@@ -230,6 +231,7 @@ fn default_branch_simplified(
         let q = Query {
             context,
             globals: &[],
+            fresh: &[],
             metadata: &[],
             function: &*function,
             layout: spec.layout,

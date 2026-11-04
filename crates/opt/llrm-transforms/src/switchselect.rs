@@ -354,6 +354,7 @@ fn folded_to_select(
             let q = Query {
                 context,
                 globals: &[],
+                fresh: &[],
                 metadata: &[],
                 function: &*function,
                 layout: spec.layout,

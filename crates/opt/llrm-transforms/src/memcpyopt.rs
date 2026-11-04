@@ -217,6 +217,7 @@ impl State<'_> {
         Query {
             context: &*self.context,
             globals: &self.outer.globals,
+            fresh: &[],
             metadata: self.metadata,
             function: &*self.function,
             layout: self.layout,
