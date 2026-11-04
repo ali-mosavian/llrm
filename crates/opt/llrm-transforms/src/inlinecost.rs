@@ -78,8 +78,13 @@
 //!   cost (`walk.rs`, callers of at most 300 instructions; the sites of a
 //!   private callee that dies with its last call are tried together, its body
 //!   credited; so are the sites of a private callee called only from this
-//!   caller, whatever they pass). The pin's cost does not follow a load through
-//!   a pointer argument, so it never sees the loop or the arithmetic fold.
+//!   caller, whatever they pass). A trial the instruction units refuse stays if
+//!   the caller is an eighth or more smaller in bytes by the target's byte
+//!   prices (`function_bytes`), at a caller with no byte rate, the callee
+//!   staying: the units count a call by its parameters, not the far-pointer
+//!   words it pushes (`sum_three` -Os, +38 B). The pin's cost does not follow a
+//!   load through a pointer argument, so it never sees the loop or the
+//!   arithmetic fold.
 //! - D9: `noipa` (GCC's; LLVM has no IR form) is `Never` before any other
 //!   attribute decision.
 //! - D7: the minsize loop penalty counts retreating-edge headers, not
@@ -2018,6 +2023,41 @@ impl<'a> Analyzer<'a> {
         if self.site.callee_dies && k >= 2 { (k - 1) * size > k * call } else { size > call }
     }
 
+    /// Bytes one inlined site adds to the module: the callee's unfolded size
+    /// less the call, spread over the sites when the callee dies with them.
+    fn growth_per_site(&self) -> i64 {
+        let (size, call, k) = (self.size_units, self.call_size(), self.site.callee_calls);
+        if self.site.callee_dies && k >= 2 { ((k - 1) * size - k * call) / k } else { size - call }
+    }
+
+    /// Whether a speed caller's inline costs more in bytes than it saves in
+    /// clocks: the growth at the target's price of a byte against the call's
+    /// latency, weighted by the site's frequency. Off where the target does
+    /// not trade bytes for clocks.
+    fn grows_more_than_it_saves(&self) -> bool {
+        let Some(tti) = self.site.tti else { return false };
+        let rate = tti.speed_inline_milliclocks_per_byte();
+        let growth = self.growth_per_site();
+        // Growth under one call's size is inside the estimate's resolution: the
+        // sites of a dying callee fold differently and must not split.
+        if rate == 0 || growth <= self.call_size() || self.site.sole_call_to_local {
+            return false;
+        }
+        let saved = llrm_mir::instructioncost::instruction_cost(
+            tti,
+            self.context,
+            self.site.layout,
+            &self.site.module.globals,
+            self.site.caller,
+            self.site.call,
+            llrm_mir::tti::CostKind::Latency,
+        )
+        .value
+        .max(1);
+        let frequency = self.site.relative_frequency.unwrap_or(1.0).max(0.0);
+        (growth * rate) as f64 > saved as f64 * 1000.0 * frequency
+    }
+
     fn finalize(&mut self) -> Result<(), String> {
         if self.site.caller_size == CallerSize::MinSize {
             let loops = loop_headers(self.callee).iter().filter(|header| !self.dead_blocks.contains(&header.0)).count();
@@ -2031,12 +2071,16 @@ impl<'a> Analyzer<'a> {
         // D11: the analysis above stops at LLVM's threshold; at -Os the verdict
         // is also held to the callee's code size against the call's.
         let pin = self.threshold.max(1);
-        let grows = self.site.caller_size != CallerSize::Speed
-            && !self.site.sole_call_to_local
-            && self.site.tti.is_some_and(|tti| {
-                tti.opt_size_inline_by_code_size() && self.site.callee_calls >= tti.opt_size_inline_guard_min_sites()
-            })
-            && self.grows_the_code();
+        let grows = if self.site.caller_size == CallerSize::Speed {
+            self.grows_more_than_it_saves()
+        } else {
+            !self.site.sole_call_to_local
+                && self.site.tti.is_some_and(|tti| {
+                    tti.opt_size_inline_by_code_size()
+                        && self.site.callee_calls >= tti.opt_size_inline_guard_min_sites()
+                })
+                && self.grows_the_code()
+        };
         self.blocked_by_bound = grows && self.cost < pin;
         if grows {
             // The verdict is `cost < threshold`: the call stays.

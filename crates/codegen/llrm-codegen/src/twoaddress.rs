@@ -636,7 +636,7 @@ pub fn three_address(
         && one.requires.is_empty()
         && one.delivers.is_empty()
         && let (Loc::Held(into), Loc::Held(base)) = (&what.dests[0], &what.sources[0])
-        && (into.width == 4 || narrow_lea(mode, into.width))
+        && (into.width == 4 || (into.width == 8 && mode == ThreeAddress::Wide) || narrow_lea(mode, into.width))
         && base.width == into.width
         && into.value != base.value
     {
@@ -645,11 +645,11 @@ pub fn three_address(
         made.what = Some(Semantics {
             op: Operation::Address,
             name: Some("lea".into()),
-            dests: vec![Loc::Held(Held { width: 4, ..*into })],
+            dests: vec![Loc::Held(if narrow_lea(mode, into.width) { Held { width: 4, ..*into } } else { *into })],
             sources: vec![Loc::Mem(Mem {
                 base: Some(if mode == ThreeAddress::Wide { Held { width: 8, ..*base } } else { *base }),
                 offset,
-                ..Mem::new(None, 4)
+                ..Mem::new(None, into.width)
             })],
             ..Semantics::new(Operation::Address)
         });
@@ -670,10 +670,11 @@ pub fn three_address(
     let word = width == 2
         && mode == ThreeAddress::AddSubWords
         && matches!(what.sources[1], Loc::Imm(Imm { address: None, .. }));
+    let qword = width == 8 && mode == ThreeAddress::Wide;
     // `ADD8ri`, `ADD16ri`, `ADD8rr`, `ADD16rr` (not `SUB8ri`, `SUB16ri`: the
     // pin's FIXME) through `LEA64_32r`.
     let narrow = narrow_lea(mode, width) && what.name.as_deref() == Some("add");
-    if !(width == 4 || word || narrow) || base.width != width || into.value == base.value {
+    if !(width == 4 || word || qword || narrow) || base.width != width || into.value == base.value {
         return None;
     }
     let wide = |held: &Held| if mode == ThreeAddress::Wide { Held { width: 8, ..*held } } else { *held };
@@ -689,7 +690,7 @@ pub fn three_address(
                 scale: if *shift == 1 { 1 } else { 1 << shift },
                 offset: 0,
                 disp_width: if *shift == 1 { 0 } else { 4 },
-                ..Mem::new(Some(ir::Addr::new(ir::Space::Literal, 0)), 4)
+                ..Mem::new(Some(ir::Addr::new(ir::Space::Literal, 0)), width)
             }
         }
         (_, Some("shl")) => return None,
@@ -706,10 +707,14 @@ pub fn three_address(
             if word && step.abs() == 1 {
                 return None;
             }
+            // `ADD64ri32`: a displacement is 32 bits.
+            if qword && i32::try_from(step).is_err() {
+                return None;
+            }
             Mem { base: Some(wide(base)), offset: step, ..Mem::new(None, if narrow { 4 } else { width }) }
         }
         (Loc::Held(index), Some("add")) if index.width == width && index.value != into.value => {
-            Mem { base: Some(wide(base)), index: Some(wide(index)), scale: 1, offset: 0, ..Mem::new(None, 4) }
+            Mem { base: Some(wide(base)), index: Some(wide(index)), scale: 1, offset: 0, ..Mem::new(None, width.max(4)) }
         }
         _ => return None,
     };
@@ -1607,7 +1612,7 @@ mod tests {
     /// a 32-bit target, so the m16 and m32 listings are untouched.
     #[test]
     fn test_a_byte_add_is_a_lea_only_at_wide() {
-        let held = |value: u32| Held { value, width: 1 };
+        let held = |value: u32| Held { value, width: 1, offset: 0 };
         let what = Semantics {
             name: Some("add".into()),
             dests: vec![Loc::Held(held(2))],
@@ -1630,7 +1635,7 @@ mod tests {
     /// though only an instruction that carries a copy has anything to read.
     #[test]
     fn test_process_copy_remembers_only_an_instruction_that_carries_a_copy() {
-        let held = |value: u32| Held { value, width: 4 };
+        let held = |value: u32| Held { value, width: 4, offset: 0 };
         let plain = {
             let what = Semantics {
                 name: Some("mov".into()),
@@ -1677,7 +1682,7 @@ mod tests {
     /// the same way before and after keeps its kill at the new instruction.
     #[test]
     fn test_replacing_a_tied_pair_remakes_only_the_kills_whose_naming_changed() {
-        let held = |value: u32| Held { value, width: 4 };
+        let held = |value: u32| Held { value, width: 4, offset: 0 };
         let make = |at: i64, op: Operation, name: &str, defines: Vec<u32>, uses: Vec<u32>| {
             let what = Semantics {
                 name: Some(name.into()),
@@ -1711,7 +1716,7 @@ mod tests {
     #[test]
     fn test_replacing_tied_pairs_walks_the_instructions_naming_the_value_not_the_block() {
         use crate::liveness::livevariables::WALKED;
-        let held = |value: u32| Held { value, width: 4 };
+        let held = |value: u32| Held { value, width: 4, offset: 0 };
         let make = |at: i64, op: Operation, name: &str, defines: Vec<u32>, uses: Vec<u32>| {
             let what = Semantics {
                 name: Some(name.into()),
@@ -1746,7 +1751,7 @@ mod tests {
     }
 
     fn tied_pairs_sharing_a_source(count: i64) -> (BodyFacts, Vec<Arc<Insn>>) {
-        let held = |value: u32| Held { value, width: 4 };
+        let held = |value: u32| Held { value, width: 4, offset: 0 };
         let make = |at: i64, op: Operation, name: &str, defines: Vec<u32>, uses: Vec<u32>| {
             let what = Semantics {
                 name: Some(name.into()),
