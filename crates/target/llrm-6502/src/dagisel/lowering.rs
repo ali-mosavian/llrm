@@ -173,6 +173,10 @@ impl Hooks for MosLowering {
 
     /// `makeLibCall` through `LowerCall`: the routine's address is a target
     /// external symbol; a long or a long long travels as words, low first.
+    ///
+    /// DEVIATE: a shift count goes as a word. Reason: the routines are libgcc's
+    /// `__ashldi3 (u64, int)` and `int` is a word here, the pin passes the count
+    /// at the target's shift type (a byte). Exit: none.
     fn make_lib_call(
         &mut self,
         dag: &mut SelectionDAG,
@@ -200,8 +204,14 @@ impl Hooks for MosLowering {
                 })
                 .collect()
         };
+        let shift = name.starts_with("__ashl") || name.starts_with("__lshr") || name.starts_with("__ashr");
         let mut outs = Vec::new();
-        for &value in args {
+        for (at, &value) in args.iter().enumerate() {
+            let value = if shift && at == 1 && dag.value_type(value).size_in_bits() < 16 {
+                dag.get_node(ISD::ZeroExtend, EVT::I16, &[value])
+            } else {
+                value
+            };
             let vt = dag.value_type(value);
             let parts = words(dag, value);
             let split = parts.len() > 1;
