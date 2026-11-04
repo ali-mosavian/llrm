@@ -175,6 +175,7 @@ impl Coalescer {
                 joins_global_copies: true,
                 joins_pinned_copies: true,
                 joins_sub_registers: true,
+                joins_lanes: false,
                 aliases: Default::default(),
                 should_join: Box::new(|_| true),
                 freq: Vec::new(),
