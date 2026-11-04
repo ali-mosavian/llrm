@@ -246,6 +246,15 @@ impl Tti for Z80Tti {
         key(a) < key(b)
     }
 
+    /// DEVIATE Z80L2: a solution the model rates worse than the loop as
+    /// written is dropped (`shouldDropLSRSolutionIfLessProfitable`; the pin's
+    /// X86 leaves it off, llrm-x86 turns it on for real mode). Three pairs make
+    /// a second induction variable cost a spill. Exit: w12's exit-value
+    /// rewrite (find, schr), then re-measured without it.
+    fn should_drop_lsr_solution_if_less_profitable(&self) -> bool {
+        true
+    }
+
     // There is no conditional move: a `select` is a branch on the Z80.
     fn has_cmov(&self) -> bool {
         false
