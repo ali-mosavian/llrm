@@ -158,6 +158,9 @@ pub fn items_with(
         &crate::REGISTER_INFO,
         &slots,
     );
+    if options.short {
+        crate::cmpdup::drop_repeated_compares(&mut function, &assignment);
+    }
     preserve_flags(&mut function, &assignment)?;
     branch_fold(&mut function, &assignment);
     crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size);
