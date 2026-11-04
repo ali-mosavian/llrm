@@ -634,6 +634,8 @@ impl<'a> Builder<'a> {
             tail_candidate: None,
             sibcall: false,
             variadic_call: false,
+            variadic_count: true,
+            variadic_shadows: Vec::new(),
             call_attrs_move_arguments: false,
             call_sret: Vec::new(),
             call_result_assert: None,
@@ -679,6 +681,13 @@ struct Builder<'a> {
     /// The call `visit_call` is lowering is to a variadic function: at m64
     /// `lower_call` sets `al` to the vector registers it uses.
     variadic_call: bool,
+    /// The convention of the variadic call being lowered counts its vector
+    /// registers in `al` (SysV); Win64 has no count.
+    variadic_count: bool,
+    /// Win64: the integer register of each argument position, where a vector
+    /// argument of a variadic call is copied as well
+    /// (`LowerCall`'s "XMM reg to the corresponding shadow reg").
+    variadic_shadows: Vec<RegId>,
     /// The call being lowered has an argument whose attribute moves it
     /// (`relocating_attribute`).
     call_attrs_move_arguments: bool,
@@ -1825,6 +1834,12 @@ impl Builder<'_> {
             }
         }
         self.variadic_call = variadic;
+        let found = self.full_arch().ok().and_then(|arch| arch.calling().by_number(info.calling_convention));
+        self.variadic_count = found.is_none_or(|found| found.variadic_vector_register.is_some());
+        self.variadic_shadows = found
+            .filter(|found| variadic && found.positional)
+            .map(|found| found.argument_registers.iter().map(|name| self.arch.register_named(name)).collect())
+            .unwrap_or_default();
         self.call_result_assert = extension_assert(&info.return_attrs);
         self.call_result_range_bits = llrm_mir::valuetracking::pattern::call_range(
             &llrm_mir::valuetracking::Query::new(self.module, self.function, self.layout),
@@ -2306,6 +2321,7 @@ impl Builder<'_> {
         let mut stores = Vec::new();
         let mut copies: Vec<(RegId, SDValue)> = Vec::new();
         let mut stack_pointer = None;
+        let shadows = std::mem::take(&mut self.variadic_shadows);
         for (at, (value, parameter)) in values.iter().zip(&plan.parameters).enumerate() {
             let vt = self.dag.value_type(*value);
             let (part_vt, parts) = match parameter {
@@ -2414,6 +2430,12 @@ impl Builder<'_> {
                         } else {
                             reg
                         };
+                        if reg.is_xmm()
+                            && let Some(&shadow) = shadows.get(at)
+                        {
+                            let bits = self.dag.get_node(ISD::BitCast, EVT::I64, &[piece]);
+                            copies.push((shadow, bits));
+                        }
                         copies.push((reg, piece));
                     }
                 }
@@ -2422,7 +2444,7 @@ impl Builder<'_> {
         }
         // X86's `LowerCall`: a variadic call under SysV x86-64 passes the
         // number of vector registers it uses in `al`
-        if std::mem::take(&mut self.variadic_call) && self.target.dag.pointer == EVT::I64 {
+        if std::mem::take(&mut self.variadic_call) && self.variadic_count && self.target.dag.pointer == EVT::I64 {
             let vectors = plan
                 .parameters
                 .iter()

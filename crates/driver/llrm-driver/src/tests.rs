@@ -3510,3 +3510,20 @@ fn a_win64_function_with_alloca_reloads_its_xmm_saves_through_the_frame_register
     assert!(!saves.is_empty(), "{listing}");
     assert_eq!(reloads, saves.iter().map(|at| at - distance).collect::<Vec<_>>(), "{listing}");
 }
+
+/// Win64 passes a variadic call's double in both the vector and the integer
+/// register of its position (`printf("%f", d)` reads it from RDX).
+#[test]
+fn a_win64_variadic_call_repeats_a_double_in_the_integer_register() {
+    let body = "declare i32 @p(ptr, ...)\ndefine i32 @f(ptr %s, double %d) {\n  %r = call i32 (ptr, ...) @p(ptr %s, double %d)\n  ret i32 %r\n}\n";
+    let text = format!("{SYSV}{body}");
+    let listing_of = |abi: &str| {
+        let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag", abi]), &text, "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let win = listing_of("-mabi=win64");
+    assert!(win.contains("movq rdx, xmm1"), "{win}");
+    assert!(!win.contains("mov al"), "Win64 has no vector count: {win}");
+    let sysv = listing_of("-mabi=sysv");
+    assert!(sysv.contains("mov al, 1") && !sysv.contains("rdx"), "{sysv}");
+}
