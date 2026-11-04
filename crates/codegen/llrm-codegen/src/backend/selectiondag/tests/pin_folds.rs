@@ -64,6 +64,9 @@ impl CombineHooks for Asks {
     fn store_fp_constant_as_i64(&self) -> bool {
         true
     }
+    fn sub_algebra_folds(&self) -> bool {
+        true
+    }
     fn rebuild_brcond_condition(&self) -> bool {
         true
     }
@@ -129,6 +132,36 @@ fn sext_in_reg_of_an_extending_load_is_a_sign_extending_load() {
     assert_eq!(dag.opcode(root), ISD::Load);
     let NodeData::Mem(info) = dag.node(root).data else { panic!("a memory node") };
     assert_eq!(info.ext, Some(LoadExt::SExtLoad));
+}
+
+/// m32 `stft_fixed`: the extending load also read by an add stayed beside the
+/// new `sextload` (a second load of the same word, +18 B); the pin hands the
+/// other users the `sextload` too.
+#[test]
+fn the_other_users_of_an_extending_load_read_the_new_sign_extending_load() {
+    let mut dag = dag();
+    let (ptr, chain) = (dag.get_register(EVT::I32, 7), dag.entry_node());
+    let info = MemInfo {
+        mem_vt: EVT::I16,
+        align: 2,
+        volatile: false,
+        base: MemBase::Stack(0),
+        ext: Some(LoadExt::ExtLoad),
+        space: 0,
+        ordering: None,
+    };
+    let load = dag.get_ext_load(LoadExt::ExtLoad, EVT::I32, chain, ptr, info);
+    let narrow = dag.get_value_type_node(EVT::I16);
+    let sext = dag.get_node(ISD::SignExtendInReg, EVT::I32, &[load, narrow]);
+    let five = dag.get_constant(5, EVT::I32);
+    let add = dag.get_node(ISD::Add, EVT::I32, &[load, five]);
+    let root = dag.get_node(ISD::Xor, EVT::I32, &[sext, add]);
+    dag.set_root(root);
+    let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+    DagCombiner::new(&mut dag, &mut Asks, CombineLevel::AfterLegalizeDag).with_tli(&tli).run();
+    let root = dag.get_root();
+    let (left, right) = (dag.operand(root, 0), dag.operand(dag.operand(root, 1), 0));
+    assert_eq!(left.node, right.node, "one load");
 }
 
 #[test]
@@ -827,6 +860,33 @@ fn a_target_that_declines_keeps_a_select_of_two_constants() {
     select_of_constants(&mut dag);
     DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
     assert_eq!(dag.opcode(dag.get_root()), ISD::Shl, "the default is x86's");
+}
+
+fn sub_of_a_difference(dag: &mut SelectionDAG) {
+    let (a, b, c) = (dag.get_register(EVT::I32, 5), dag.get_register(EVT::I32, 6), dag.get_register(EVT::I32, 7));
+    let difference = dag.get_node(ISD::Sub, EVT::I32, &[b, c]);
+    let root = dag.get_node(ISD::Sub, EVT::I32, &[a, difference]);
+    dag.set_root(root);
+}
+
+/// `a - (b - c)` stayed two subtractions; the pin makes it `a + (c - b)`,
+/// which AArch64 folds into a shifted operand (`x - (8q - q)`).
+#[test]
+fn a_value_minus_a_difference_is_the_sum_with_the_flipped_difference() {
+    let mut dag = dag();
+    sub_of_a_difference(&mut dag);
+    DagCombiner::new(&mut dag, &mut Asks, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.opcode(dag.get_root()), ISD::Add);
+}
+
+/// The same fold on x86 moved `div_constants_long` at x86_16 -O2 from 2062 to
+/// 2066 instructions (a different spill): off until its rows are judged.
+#[test]
+fn a_target_that_does_not_ask_keeps_the_value_minus_a_difference() {
+    let mut dag = dag();
+    sub_of_a_difference(&mut dag);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.opcode(dag.get_root()), ISD::Sub);
 }
 
 fn branch_on_not_of_asserted_boolean(dag: &mut SelectionDAG) {

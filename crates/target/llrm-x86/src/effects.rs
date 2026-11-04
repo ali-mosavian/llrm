@@ -331,11 +331,21 @@ pub fn effects(
         return Some(Served::Known(Effects::default()));
     }
     // `xor ax, ax` reads nothing.
-    let zeroing = row.reads.contains(&"idiom")
+    // `or ax, -1` reads nothing either: every bit is set whatever it held.
+    let filling = name == "or"
         && matches!(
-            dests.as_slice(),
-            [Loc::Reg(dest)] if sources.iter().all(|source| matches!(source, Loc::Reg(one) if one.register == dest.register))
+            (dests.as_slice(), what.sources.as_slice()),
+            ([Loc::Reg(dest)], [Loc::Reg(held), Loc::Imm(fill)])
+                if held.register == dest.register
+                    && fill.address.is_none()
+                    && (fill.value == -1 || (fill.width < 8 && fill.value == (1i64 << (8 * fill.width)) - 1))
         );
+    let zeroing = filling
+        || row.reads.contains(&"idiom")
+            && matches!(
+                dests.as_slice(),
+                [Loc::Reg(dest)] if sources.iter().all(|source| matches!(source, Loc::Reg(one) if one.register == dest.register))
+            );
     if !zeroing {
         if !used(&sources, bits, &mut found.reads, None) {
             return Some(Served::Unknown);

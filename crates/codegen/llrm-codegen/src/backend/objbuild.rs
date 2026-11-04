@@ -58,12 +58,13 @@
 //! # See also
 //! [`crate::backend::masm`] for the items, `asm` for the encoder.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 use std::fmt;
 
 use llrm_debug::{DebugObjectTarget, Described};
 use llrm_lir::registers::Regs;
 use llrm_object::assembler::AsmBackend;
+use llrm_support::hash::HashSet;
 use llrm_object::{Binding, Definition, Fix, Object, ObjectTarget, OmfGroup, Reloc, Role, Section, Symbol, Target};
 use llrm_target::object::{CodeModel, Format};
 use llrm_x86::mc::backend::X86Backend;
@@ -644,6 +645,10 @@ fn stack_probed(
     if format == Format::Coff {
         for procedure in module.procedures.iter_mut().filter(|one| one.registers.slot_scratch.is_some()) {
             procedure.probe_stack = Some("__chkstk".to_owned());
+        }
+        // Win64 has no red zone.
+        for procedure in module.procedures.iter_mut() {
+            procedure.registers.red_zone = 0;
         }
     }
     module
@@ -1686,7 +1691,7 @@ mod tests {
     /// a `KeyError` at print. A jump through a cell keeps pointer-wide entries.
     #[test]
     fn test_a_register_table_jump_gets_a_table_of_differences() {
-        let held = Loc::Held(llrm_lir::Held { value: 1, width: 8 });
+        let held = Loc::Held(llrm_lir::Held { value: 1, width: 8, offset: 0 });
         let jump = Semantics {
             indirect: true,
             table: vec![1, 2],
@@ -2100,7 +2105,7 @@ mod tests {
         let regs = crate::backend::registerinfo::test_regs();
         let cell = ir::Mem {
             addr: Some(Addr { index: 3, ..Addr::new(Space::Segment, 1280) }),
-            index: Some(ir::Held { value: 1, width: 4 }),
+            index: Some(ir::Held { value: 1, width: 4, offset: 0 }),
             index_through: RegId::ESI,
             scale: 2,
             ..ir::Mem::new(None, 2)

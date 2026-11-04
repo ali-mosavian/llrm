@@ -80,6 +80,7 @@ pub const IEK_INF: i32 = i32::MAX;
 pub enum SemanticsKind {
     IeeeSingle,
     IeeeDouble,
+    IeeeQuad,
     X87DoubleExtended,
     Float8E5M2,
     Float8E4M3,
@@ -116,6 +117,15 @@ pub const IEEE_DOUBLE: Sem = &Semantics {
     size_in_bits: 64,
     has_explicit_integer_bit: false,
 };
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/APFloat.cpp#L77>
+pub const IEEE_QUAD: Sem = &Semantics {
+    kind: SemanticsKind::IeeeQuad,
+    max_exponent: 16383,
+    min_exponent: -16382,
+    precision: 113,
+    size_in_bits: 128,
+    has_explicit_integer_bit: false,
+};
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/APFloat.cpp#L119>
 pub const X87_DOUBLE_EXTENDED: Sem = &Semantics {
     kind: SemanticsKind::X87DoubleExtended,
@@ -148,6 +158,7 @@ pub fn semantics_of(kind: FloatKind) -> Sem {
         FloatKind::Float => IEEE_SINGLE,
         FloatKind::Double => IEEE_DOUBLE,
         FloatKind::X86Fp80 => X87_DOUBLE_EXTENDED,
+        FloatKind::F128 => IEEE_QUAD,
     }
 }
 
@@ -196,7 +207,7 @@ pub fn semantics_has_nan(_semantics: Sem) -> bool {
 pub fn is_ieee_like_fp(semantics: Sem) -> bool {
     matches!(
         semantics.kind,
-        SemanticsKind::IeeeSingle | SemanticsKind::IeeeDouble
+        SemanticsKind::IeeeSingle | SemanticsKind::IeeeDouble | SemanticsKind::IeeeQuad
     )
 }
 

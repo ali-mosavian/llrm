@@ -311,7 +311,7 @@ mod tests {
                 Some((at, at + if width == 4 { 3 } else { 2 })),
                 Some(Semantics {
                     name: Some("call".into()),
-                    sources: vec![Loc::Held(Held { value, width })],
+                    sources: vec![Loc::Held(Held { value, width, offset: 0 })],
                     indirect: true,
                     ..Semantics::new(Operation::Call)
                 }),
@@ -368,14 +368,14 @@ mod tests {
             Some((4, 7)),
             Some(Semantics {
                 name: Some("call".into()),
-                sources: vec![Loc::Held(Held { value: 5, width: 4 })],
+                sources: vec![Loc::Held(Held { value: 5, width: 4, offset: 0 })],
                 indirect: true,
                 ..Semantics::new(Operation::Call)
             }),
             vec![],
             vec![7, 5],
         );
-        call.requires = vec![(Held { value: 7, width: 4 }, RegId::EAX)];
+        call.requires = vec![(Held { value: 7, width: 4, offset: 0 }, RegId::EAX)];
         let body = LirBody::new(
             "far",
             0,
@@ -404,7 +404,7 @@ mod tests {
             Some((4, 7)),
             Some(Semantics {
                 name: Some("call".into()),
-                sources: vec![Loc::Held(Held { value: 5, width: 4 })],
+                sources: vec![Loc::Held(Held { value: 5, width: 4, offset: 0 })],
                 indirect: true,
                 ..Semantics::new(Operation::Call)
             }),
@@ -441,7 +441,7 @@ mod tests {
             Some((at, at)),
             Some(Semantics {
                 name: Some("mov".into()),
-                dests: vec![Loc::Held(Held { value, width: 2 })],
+                dests: vec![Loc::Held(Held { value, width: 2, offset: 0 })],
                 sources: vec![Loc::Mem(cell)],
                 ..Semantics::new(Operation::Move)
             }),
@@ -461,7 +461,7 @@ mod tests {
             Some(Semantics {
                 name: Some("mov".into()),
                 dests: vec![Loc::Mem(cell)],
-                sources: vec![Loc::Held(Held { value, width: 2 })],
+                sources: vec![Loc::Held(Held { value, width: 2, offset: 0 })],
                 ..Semantics::new(Operation::Move)
             }),
             vec![],
@@ -471,7 +471,7 @@ mod tests {
 
     fn far_call_after(between: Option<Arc<Insn>>) -> (Vec<Arc<Insn>>, Mem) {
         let table = |disp: i64| Mem {
-            base: Some(Held { value: 10, width: 2 }),
+            base: Some(Held { value: 10, width: 2, offset: 0 }),
             ..Mem::new(Some(Addr::new(Space::Far, disp)), 2)
         };
         let slot = |disp: i64, width: u32| Mem::new(Some(Addr::new(Space::Frame, disp)), width);
@@ -529,7 +529,7 @@ mod tests {
         let (mut insns, _entry) = far_call_after(None);
         let last = insns.len() - 1;
         let mut call = (*insns[last]).clone();
-        call.requires = vec![(Held { value: 10, width: 2 }, RegId::EAX)];
+        call.requires = vec![(Held { value: 10, width: 2, offset: 0 }, RegId::EAX)];
         insns[last] = Arc::new(call);
         let out = folded_calls(insns.clone());
         assert_eq!(out, insns);
@@ -553,7 +553,7 @@ mod tests {
     #[test]
     fn a_far_call_through_a_register_and_an_offset_keeps_its_cell() {
         let field = |offset: i64, width: u32| Mem {
-            base: Some(Held { value: 10, width: 2 }),
+            base: Some(Held { value: 10, width: 2, offset: 0 }),
             through: iced_x86::Register::DS.into(),
             offset,
             ..Mem::new(None, width)

@@ -48,6 +48,11 @@ fn value(
     if kind == FloatKind::X86Fp80 {
         return crate::fp80::value(&constant.kind);
     }
+    // An fp128 is not folded: ApFloat's quad arithmetic is not checked
+    // against the pin.
+    if kind == FloatKind::F128 {
+        return None;
+    }
     let (sem, bits): (Sem, u64) = match (kind, &constant.kind) {
         (FloatKind::Float, ConstantKind::Float(bits)) => (IEEE_SINGLE, *bits),
         (_, ConstantKind::Float(bits)) => (IEEE_DOUBLE, *bits),
@@ -65,6 +70,7 @@ fn sem_of(
     match q.context.types.get(ty) {
         Type::Float(FloatKind::Float) => IEEE_SINGLE,
         Type::Float(FloatKind::X86Fp80) => crate::apfloat::X87_DOUBLE_EXTENDED,
+        Type::Float(FloatKind::F128) => crate::apfloat::IEEE_QUAD,
         _ => IEEE_DOUBLE,
     }
 }
@@ -85,6 +91,9 @@ fn constant_of(
 ) -> Operand {
     if matches!(q.context.types.get(ty), Type::Float(FloatKind::X86Fp80)) {
         return Operand::Constant(crate::fp80::constant(q.context, ty, value));
+    }
+    if matches!(q.context.types.get(ty), Type::Float(FloatKind::F128)) {
+        return Operand::Constant(q.context.constant(Constant { ty, kind: ConstantKind::Float128(value.to_bits()) }));
     }
     Operand::Constant(q.context.constant(Constant { ty, kind: ConstantKind::Float(value.to_bits() as u64) }))
 }
