@@ -442,6 +442,9 @@ struct Mode {
     offset: i128,
     index: Option<(Operand, u64)>,
     insts: Vec<InstId>,
+    /// `ExtAddrMode::InBounds`: every `gep` folded was `inbounds`, and none of
+    /// the shifts that were.
+    in_bounds: bool,
 }
 
 /// The index of the address among a memory access's operands.
@@ -454,6 +457,20 @@ fn address_of(
         Opcode::Store { .. } => Some(1),
         _ => None,
     }
+}
+
+/// The bytes a load or store moves: the pin's `AccessTy`, which AArch64's
+/// scaled index depends on.
+fn access_bytes(
+    unit: &passes::Unit,
+    access: InstId,
+) -> u64 {
+    let inst = unit.function.instruction(access);
+    let ty = match inst.opcode {
+        Opcode::Store { .. } => unit.function.operand_type(unit.context, inst.operands[0]),
+        _ => Some(inst.ty),
+    };
+    ty.map_or(0, |ty| unit.layout.store_size(&unit.context.types, ty))
 }
 
 /// Whether folding `address` (made from the register `held` and a global)
@@ -511,6 +528,7 @@ fn shifted(
     tti: &dyn Tti,
     space: u32,
     block: BlockId,
+    bytes: u64,
     index: Operand,
     scale: u64,
     displacement: i128,
@@ -524,8 +542,9 @@ fn shifted(
     let &[x, amount] = &one.operands[..] else { return None };
     let amount = u32::try_from(integer(unit.context, amount)?).ok().filter(|&amount| amount < 64)?;
     let scaled = scale.checked_shl(amount).filter(|&scaled| scaled >> amount == scale)?;
-    if !tti.is_legal_addressing_mode_in(
+    if !tti.is_legal_addressing_mode_at(
         space,
+        bytes,
         false,
         i64::try_from(displacement).ok()?,
         true,
@@ -554,10 +573,11 @@ fn matched(
     tti: &dyn Tti,
     space: u32,
     block: BlockId,
+    bytes: u64,
     address: Operand,
     depth: u32,
 ) -> Mode {
-    let plain = || Mode { base: address, reg: None, offset: 0, index: None, insts: Vec::new() };
+    let plain = || Mode { base: address, reg: None, offset: 0, index: None, insts: Vec::new(), in_bounds: true };
     let Operand::Value(value) = address else { return plain() };
     let ValueDef::Instruction(gep) = unit.function.value(value).def else { return plain() };
     let instruction = unit.function.instruction(gep);
@@ -582,8 +602,9 @@ fn matched(
     if variable.len() > 1 {
         return plain();
     }
-    let inner = matched(unit, tti, space, block, instruction.operands[0], depth - 1);
+    let inner = matched(unit, tti, space, block, bytes, instruction.operands[0], depth - 1);
     let mut insts = inner.insts;
+    let mut in_bounds = inner.in_bounds && instruction.flags.contains(Flags::INBOUNDS);
     let mut reg = inner.reg;
     let index = match (variable.first(), inner.index) {
         // `BaseGV + BaseReg + ScaledReg`: the earlier index is a register of
@@ -600,13 +621,34 @@ fn matched(
             Some((instruction.operands[1 + at], scale))
         }
         (Some(_), Some(_)) => return plain(),
+        // `matchScaledValue` of scale 1 is `matchAddr(ScaleReg)`
+        // ([CodeGenPrepare.cpp
+        // L4604](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/CodeGenPrepare.cpp#L4604)):
+        // the first register is the base register, not an index. Only over a
+        // global: over a register base it is the second register, the index
+        // (wasm has none, so the pin's mode fails and nothing sinks). A mode
+        // the target refuses is read as an index again (`matchAddr`'s scale-1
+        // fallback).
+        (Some(&(at, 1)), None)
+            if reg.is_none()
+                && is_global(unit.context, inner.base)
+                && shifted(unit, tti, space, block, bytes, instruction.operands[1 + at], 1, offset + inner.offset)
+                    .is_none()
+                && i64::try_from(offset + inner.offset).is_ok_and(|displacement| {
+                    tti.is_legal_addressing_mode_at(space, bytes, true, displacement, true, 0)
+                }) =>
+        {
+            reg = Some(instruction.operands[1 + at]);
+            None
+        }
         (Some(&(at, scale)), None) => {
             let operand = instruction.operands[1 + at];
             // `matchScaledValue(index, scale)` of a `shl x, C`: the shift is
             // the scale of the mode (`matchOperationAddr`, `Instruction::Shl`).
-            match shifted(unit, tti, space, block, operand, scale, offset + inner.offset) {
+            match shifted(unit, tti, space, block, bytes, operand, scale, offset + inner.offset) {
                 Some((shl, folded, scale)) => {
                     insts.push(shl);
+                    in_bounds = false;
                     Some((folded, scale))
                 }
                 None => Some((operand, scale)),
@@ -617,11 +659,11 @@ fn matched(
     let total = offset + inner.offset;
     let scale = index.map_or(0, |(_, scale)| i64::try_from(scale).unwrap_or(i64::MAX));
     let Ok(displacement) = i64::try_from(total) else { return plain() };
-    if !tti.is_legal_addressing_mode_in(space, reg.is_some(), displacement, true, scale) {
+    if !tti.is_legal_addressing_mode_at(space, bytes, reg.is_some(), displacement, true, scale) {
         return plain();
     }
     insts.push(gep);
-    Mode { base: inner.base, reg, offset: total, index, insts }
+    Mode { base: inner.base, reg, offset: total, index, insts, in_bounds }
 }
 
 /// Each load and store whose address is made in another block, with the address
@@ -645,12 +687,13 @@ fn sunk(
         else {
             continue;
         };
-        if let Some(ready) = select_combined(unit, tti, space, block, access, address, &mut made, &mut touched) {
+        let bytes = access_bytes(unit, access);
+        if let Some(ready) = select_combined(unit, tti, space, block, bytes, access, address, &mut made, &mut touched) {
             unit.function.set_operand(access, at, ready);
             changed = true;
             continue;
         }
-        let mode = matched(unit, tti, space, block, address, DEPTH);
+        let mode = matched(unit, tti, space, block, bytes, address, DEPTH);
         let local = |inst: &InstId| unit.function.parent(*inst) == Some(block);
         if mode.insts.is_empty() || mode.insts.iter().all(local) {
             continue;
@@ -692,6 +735,7 @@ fn select_combined(
     tti: &dyn Tti,
     space: u32,
     block: BlockId,
+    bytes: u64,
     access: InstId,
     address: Operand,
     made: &mut BTreeMap<(BlockId, Operand), Operand>,
@@ -708,17 +752,18 @@ fn select_combined(
     }
     let (condition, first, second) = (chosen.operands[0], chosen.operands[1], chosen.operands[2]);
     let (one, other) =
-        (matched(unit, tti, space, block, first, DEPTH), matched(unit, tti, space, block, second, DEPTH));
+        (matched(unit, tti, space, block, bytes, first, DEPTH), matched(unit, tti, space, block, bytes, second, DEPTH));
     if one.base != other.base
         || one.reg.is_some()
         || other.reg.is_some()
         || one.index.is_some()
         || other.index.is_some()
         || one.offset == other.offset
+        || one.in_bounds != other.in_bounds
     {
         return None;
     }
-    if !tti.is_legal_addressing_mode_in(space, false, 0, true, 1) {
+    if !tti.is_legal_addressing_mode_at(space, bytes, false, 0, true, 1) {
         return None;
     }
     let local = |inst: &InstId| unit.function.parent(*inst) == Some(block);
@@ -734,7 +779,12 @@ fn select_combined(
         counting::constant(unit.context, &BigInt::from(other.offset), bits),
     );
     let put = |unit: &mut passes::Unit, opcode: Opcode, ty, operands: Vec<Operand>| -> Operand {
-        let inst = unit.function.create_instruction(opcode, ty, operands, Flags::default(), None);
+        let flags = if matches!(opcode, Opcode::GetElementPtr { .. }) && one.in_bounds {
+            Flags::INBOUNDS
+        } else {
+            Flags::default()
+        };
+        let inst = unit.function.create_instruction(opcode, ty, operands, flags, None);
         unit.function.insert(inst, Position::Before(access)).expect("a position before the access");
         Operand::Value(unit.function.instruction(inst).result.expect("a value"))
     };
@@ -759,7 +809,13 @@ fn remade(
     let i8 = unit.context.types.int(8);
     let mut current = mode.base;
     let put = |unit: &mut passes::Unit, opcode: Opcode, ty, operands: Vec<Operand>| -> Operand {
-        let inst = unit.function.create_instruction(opcode, ty, operands, Flags::default(), None);
+        // `CreatePtrAdd(.., "sunkaddr", AddrMode.InBounds)`.
+        let flags = if matches!(opcode, Opcode::GetElementPtr { .. }) && mode.in_bounds {
+            Flags::INBOUNDS
+        } else {
+            Flags::default()
+        };
+        let inst = unit.function.create_instruction(opcode, ty, operands, flags, None);
         unit.function.insert(inst, Position::Before(access)).expect("a position before the access");
         Operand::Value(unit.function.instruction(inst).result.expect("a value"))
     };

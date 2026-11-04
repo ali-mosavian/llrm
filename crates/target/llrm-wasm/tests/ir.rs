@@ -311,3 +311,30 @@ fn weak_functions_print_weak() {
 fn undef_values() {
     check("undef_values");
 }
+
+/// `int main(void)` has no wrapper for startup to call, and a call whose type
+/// is not its callee's (`int g();` called with an argument) was an invalid
+/// module: the pin's `FixFunctionBitcasts` makes `main(i32, i32)` and private
+/// `_bitcast` wrappers.
+#[test]
+fn main_and_mismatched_calls_get_wrappers() {
+    check("main_wrapper");
+}
+
+/// `select i1 %c, i1 %d, i1 false` combines to an `and` of a `FREEZE`, which
+/// the matcher selects as the generic `COPY`: it reached the printer as
+/// "opcode 20 has no assembly string", and `sieve`, `queens` and every
+/// program with an `a && b` that SimplifyCFG made a select failed at -O2.
+#[test]
+fn an_i1_select_is_an_and() {
+    check("i1_select");
+}
+
+/// A static alloca that is a phi's input was never copied into the phi's
+/// register (the `CopyToReg` of a frame index was dropped): the loop read
+/// memory at an unset local, so quicksort, matmul and shellsort at -O1 and up
+/// returned 0 where clang's return their checksums.
+#[test]
+fn a_frame_index_is_copied_into_a_phi_register() {
+    check("phi_alloca");
+}

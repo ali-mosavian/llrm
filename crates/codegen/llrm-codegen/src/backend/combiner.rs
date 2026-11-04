@@ -305,7 +305,7 @@ fn rebuilt(
     let y = if pattern.commuted() { root_left } else { root_right };
     let (swap_root, swap_prev) = pattern.swaps();
     let (first, second) = if swap_prev { (y, x) } else { (x, y) };
-    let fresh = Held { value: new_value, width };
+    let fresh = Held { value: new_value, width, offset: 0 };
     let inner_depth = depth_of(facts, depth, &[first.value, second.value]);
     // The new inner instruction is a register operation: latency 1.
     let depth_of_root = arrives(facts, depth, a.value).max(inner_depth + 1);
@@ -514,7 +514,7 @@ mod tests {
     use crate::support::hash::IndexMap;
 
     fn held(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 4 })
+        Loc::Held(Held { value, width: 4, offset: 0 })
     }
 
     fn insn(
@@ -541,7 +541,7 @@ mod tests {
         value: u32,
         base: u32,
     ) -> Arc<Insn> {
-        let cell = Mem { base: Some(Held { value: base, width: 4 }), ..Mem::new(None, 4) };
+        let cell = Mem { base: Some(Held { value: base, width: 4, offset: 0 }), ..Mem::new(None, 4) };
         insn(i64::from(value), Operation::Move, "mov", vec![held(value)], vec![Loc::Mem(cell)], vec![value], vec![base])
     }
 

@@ -3,9 +3,8 @@
 //! (`MachineFunction`), the frame objects it needs, and the pseudo
 //! instructions only the backend's own phases understand.
 
-use std::collections::HashMap;
-
 use llrm_codegen::model::lir::SrcLoc;
+use rustc_hash::FxHashMap as HashMap;
 
 use crate::mc::inst::{Gpr, Inst, Target, Vreg};
 use crate::mc::visit::{Reg, RegRef, Role};
@@ -52,6 +51,19 @@ pub enum Op {
         slot: u32,
         offset: i64,
     },
+    /// The jump to entry `index` of jump table `id` (`JumpTableDest32`): `dst`
+    /// is the entry's address, `scratch` holds the loaded offset. `table` is
+    /// the table's address. Both results are written before the inputs are
+    /// dead, so neither may share a register with them.
+    JumpTable {
+        dst: Gpr,
+        scratch: Gpr,
+        table: Gpr,
+        index: Gpr,
+        id: u32,
+        /// The labels of the blocks the entries go to; the table's successors.
+        targets: Vec<String>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -73,6 +85,12 @@ impl Op {
                 visit_reg(src, Role::Use, f);
             }
             Op::Imm { dst, .. } | Op::FrameAddress { dst, .. } => f(RegRef::Gpr(dst), Role::Def),
+            Op::JumpTable { dst, scratch, table, index, .. } => {
+                f(RegRef::Gpr(table), Role::Use);
+                f(RegRef::Gpr(index), Role::Use);
+                f(RegRef::Gpr(dst), Role::Def);
+                f(RegRef::Gpr(scratch), Role::Def);
+            }
             Op::Call { callee, uses, defs, .. } => {
                 if let Callee::Register(register) = callee {
                     f(RegRef::Gpr(register), Role::Use);
@@ -340,6 +358,17 @@ pub struct MFunc {
     /// The frame object each source variable lives in (`llvm.dbg.declare` of
     /// an `alloca`), by the variable's metadata node.
     pub declared: Vec<(llrm_mir::MetadataId, u32)>,
+    /// The constants the function loads from memory (`MachineConstantPool`),
+    /// each under the label its address is taken from.
+    pub pool: Vec<PoolEntry>,
+}
+
+/// A constant pool entry: `bytes` at `align`, under `label`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PoolEntry {
+    pub label: String,
+    pub bytes: Vec<u8>,
+    pub align: usize,
 }
 
 impl MFunc {
@@ -407,6 +436,10 @@ pub fn successors_of(
                 out.extend(labels.get(label.as_str()).copied());
             }
             Op::Return { .. } => falls_through = false,
+            Op::JumpTable { targets, .. } => {
+                out.extend(targets.iter().filter_map(|label| labels.get(label.as_str()).copied()));
+                falls_through = false;
+            }
             Op::I(Inst::Brk { .. }) => falls_through = false,
             _ => {}
         }
@@ -487,7 +520,7 @@ pub fn undefined_reads(function: &MFunc) -> Vec<Reg> {
         changed = false;
         for at in 0..count {
             let entering: HashSet<Reg> = if at == 0 {
-                HashSet::new()
+                HashSet::default()
             } else {
                 let mut from = predecessors[at].iter().map(|&pred| &out[pred]);
                 match from.next() {
@@ -505,7 +538,7 @@ pub fn undefined_reads(function: &MFunc) -> Vec<Reg> {
     let mut report = Vec::new();
     for (at, block) in function.blocks.iter().enumerate() {
         let entering: HashSet<Reg> = if at == 0 {
-            HashSet::new()
+            HashSet::default()
         } else {
             let mut from = predecessors[at].iter().map(|&pred| &out[pred]);
             match from.next() {
@@ -561,4 +594,21 @@ mod verify_tests {
         function.blocks[0].ops.insert(0, Op::Copy { dst: Reg::Gpr(b), src: Reg::Gpr(Gpr(1)) });
         assert_eq!(undefined_reads(&function), vec![]);
     }
+}
+
+/// The registers `function` leaves live: those it returns and passes to a tail
+/// call.
+pub fn returned_registers(function: &MFunc) -> Vec<Reg> {
+    let mut out = Vec::new();
+    for block in &function.blocks {
+        for op in block.ops.iter() {
+            if let Op::Return { uses, tail } = op {
+                out.extend(uses.iter().copied());
+                if let Some(Callee::Register(register)) = tail {
+                    out.push(Reg::Gpr(*register));
+                }
+            }
+        }
+    }
+    out
 }

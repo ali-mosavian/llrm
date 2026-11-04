@@ -29,6 +29,7 @@ use llrm_codegen::backend::selectiondag::{Action, LoadExt, NodeData, SDValue, Se
 use super::generated::ids::isd as ids;
 use super::hooks::Cpu;
 use crate::dag::call::WasmCalling;
+use crate::features::Features;
 
 /// The pin's `WebAssemblyISD` numbers, as the matcher table names them.
 pub mod wasmisd {
@@ -47,7 +48,10 @@ fn pointer(cpu: Cpu) -> MVT {
 }
 
 /// The constructor of `WebAssemblyTargetLowering`, in the pin's order.
-pub fn target_lowering(cpu: Cpu) -> TargetLowering {
+pub fn target_lowering(
+    cpu: Cpu,
+    features: Features,
+) -> TargetLowering {
     use ISD::*;
     let words = [MVT::I32, MVT::I64];
     let mut tl = TargetLowering::empty(
@@ -74,6 +78,14 @@ pub fn target_lowering(cpu: Cpu) -> TargetLowering {
         Action::Expand,
     );
     set(&[SignExtendInReg], &[MVT::I1], Action::Expand);
+    if !features.has("sign-ext") {
+        // Sign extends are legal only when extending a vector extract.
+        set(
+            &[SignExtendInReg],
+            &[MVT::I8, MVT::I16, MVT::I32],
+            if features.has("simd128") { Action::Custom } else { Action::Expand },
+        );
+    }
     set(&[StackSave, StackRestore], &[MVT::Other], Action::Expand);
     set(&[DynamicStackAlloc], &[pointer(cpu)], Action::Expand);
     set(&[FrameIndex], &words, Action::Custom);
@@ -187,12 +199,14 @@ impl Hooks for WasmLowering<'_> {
                 arg_vt: dag.value_type(value),
                 split: false,
                 variadic: false,
+                sret: false,
             })
             .collect();
         let callee = dag.get_external_symbol(EVT::I32, name);
         let root = dag.entry_node();
-        let results = [In { vt: ret, pointer: false, arg_vt: ret, split: false }];
-        let (_chain, values) = WasmCalling { pointer: EVT::I32 }.lower_call(dag, root, callee, &outs, &results);
+        let results = [In { vt: ret, pointer: false, arg_vt: ret, split: false, sret: false, ext: Ext::Any }];
+        let (_chain, values) =
+            WasmCalling { pointer: EVT::I32, bulk_memory_opt: true }.lower_call(dag, root, callee, &outs, &results);
         values.first().copied()
     }
 }

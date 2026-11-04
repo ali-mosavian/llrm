@@ -284,6 +284,20 @@ impl Tti for AArch64 {
         "AArch64"
     }
 
+    /// -Os unrotate: a header no bigger than the branches rotation removes
+    /// (w15-unrotate-os-2026-11-03: limit 2 saved 404 B on jpeg_fixed,
+    /// jpeg_single, nbody and recchop, none larger).
+    fn rotation_header_priced_at_size(&self) -> bool {
+        true
+    }
+
+    /// 0.004 B/clock, provisional: one byte of growth is 250 frequency-weighted
+    /// clocks. The median of the -O2/-O3 cells where inlining grew the code
+    /// (w15-arm64-rate-proposal-11-03.md); widened to 30 clean cells by 11-12.
+    fn speed_inline_milliclocks_per_byte(&self) -> i64 {
+        250_000
+    }
+
     /// A `sext`/`zext` of a load is the extending load (`ldrsb`, `ldrh`, ...)
     /// when the loaded type is a byte, half or word and both types are one
     /// register (`BasicTTIImplBase::getCastInstrCost`, BasicTTIImpl.h:1297).
@@ -626,6 +640,11 @@ impl Tti for AArch64 {
         AArch64::is_legal_addressing_mode_for(access_bytes, base_gv, base_offset, has_base_reg, scale)
     }
 
+    /// `AArch64TTIImpl::getRegisterBitWidth(RGK_Scalar)`: 64.
+    fn scalar_register_bits(&self) -> u32 {
+        64
+    }
+
     /// `isLegalAddImmediate`: 12-bit optionally shifted immediates, the same
     /// encoding for add and sub:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L20177
@@ -886,6 +905,21 @@ impl Lowering for AArch64Lowering {
         bits: u32,
     ) -> bool {
         matches!(bits, 32 | 64)
+    }
+
+    // AArch64TargetMachine.cpp, `addCodeGenPrepare`: `TypePromotion` at -O1 and
+    // up.
+    fn runs_type_promotion(&self) -> bool {
+        true
+    }
+
+    // AArch64ISelLowering.h, `isSExtCheaperThanZExt`: `w` to `x` is one `sxtw`.
+    fn is_sext_cheaper_than_zext(
+        &self,
+        from_bits: u32,
+        to_bits: u32,
+    ) -> bool {
+        from_bits == 32 && to_bits == 64
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L18942
