@@ -536,6 +536,36 @@ impl Insn {
         }
     }
 
+    /// Every value `try_renamed` looks at.
+    pub fn each_value(
+        &self,
+        mut each: impl FnMut(u32),
+    ) {
+        for &value in self.defines.iter().chain(&self.uses).chain(&self.undefs).chain(&self.partial_defs) {
+            each(value);
+        }
+        for &(value, _) in self.def_lanes.iter().chain(&self.use_lanes) {
+            each(value);
+        }
+        for &(value, _) in &self.widths {
+            each(value);
+        }
+        for &(from, to, _) in &self.lane_copies {
+            each(from);
+            each(to);
+        }
+        for (held, _) in self.requires.iter().chain(&self.delivers) {
+            each(held.value);
+        }
+        if let Some(what) = &self.what {
+            for place in what.dests.iter().chain(&what.sources) {
+                for held in llrm_lir::values(place) {
+                    each(held.value);
+                }
+            }
+        }
+    }
+
     /// This instruction with every value it names put through `rename`, and the
     /// same allocation where none of them moves: a rewrite that renames a few
     /// values paid for a copy of every instruction (`phielim` renamed 3,500
