@@ -13,7 +13,6 @@
 //! checks selection and emission, not allocation. Exit: the shared allocator
 //! takes the 6502 (post-parity).
 
-use llrm_support::hash::HashMap;
 use std::fmt::Write;
 
 use llrm_codegen::backend::frameobjects::Object;
@@ -24,6 +23,7 @@ use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{NodeData, SDValue};
 use llrm_mir::context::GlobalId;
 use llrm_mir::module::{BlockId, Module};
+use llrm_support::hash::HashMap;
 
 use crate::REGISTER_INFO;
 use crate::alloc;
@@ -277,6 +277,19 @@ pub fn function_items_with_places(
                     body.push(Item::Inst(inst));
                 }
             }
+        }
+        // An IR `unreachable` emits nothing in the pin (the machine block has
+        // no successors); here a block with no terminator falls into the next
+        // one, so the end is stated.
+        let ends_unreachable = module.named(name).and_then(|id| module.global(id).function()).is_some_and(|function| {
+            // a block a lowering made out of an IR block has no number there
+            (one.block.0 as usize) < function.block_capacity()
+                && function
+                    .terminator(one.block)
+                    .is_some_and(|last| function.instruction(last).opcode == llrm_mir::opcode::Opcode::Unreachable)
+        });
+        if ends_unreachable {
+            body.push(Item::Inst(MInst::new(crate::emit::spill::UNREACHABLE, Vec::new())));
         }
         if split {
             // The edge taken by falling into the next block copies in line; the
