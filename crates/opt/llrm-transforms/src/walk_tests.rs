@@ -2676,3 +2676,37 @@ fn test_the_default_build_links_no_gcc_derived_crate() {
         assert!(!text.contains("llrm-gpl-gcc"), "{} depends on the GPL crate", manifest.display());
     }
 }
+
+/// The bar of the recursive edge (DEVIATE REC-2) as the 12 self-recursive
+/// functions of the corpus meet it: gcc 15 copies fib, hanoi, recpow and
+/// rectwo into themselves at -O2 (edge growth <= 15) and at -O3 (<= 30) also
+/// bintree `walk`, recchop `chop`, x_hanoi2 `mv`, quicksort `sort` and queens
+/// `place`, never x_mergesort `msort` (growth 67). Fitted on these, `gcc_insns`
+/// of queens 22 sits on the m32 O3 edge.
+#[test]
+fn test_the_m32_edge_bar_makes_gccs_decision_for_every_corpus_recursion() {
+    // (module, function, copied at -O2, copied at -O3)
+    let table: [(&str, &str, &str, bool, bool); 10] = [
+        ("fib", include_str!("testdata/rec2/fib.ll"), "fib_", true, true),
+        ("hanoi", include_str!("testdata/rec2/hanoi.ll"), "hanoi_", true, true),
+        ("recpow", include_str!("testdata/rec2/recpow.ll"), "power_", true, true),
+        ("rectwo", include_str!("testdata/rec2/rectwo.ll"), "paths_", true, true),
+        ("bintree", include_str!("testdata/rec2/bintree.ll"), "walk_", false, true),
+        ("recchop", include_str!("testdata/rec2/recchop.ll"), "chop_", false, true),
+        ("x_hanoi2", include_str!("testdata/rec2/x_hanoi2.ll"), "mv_", false, true),
+        ("quicksort", include_str!("testdata/rec2/quicksort.ll"), "sort_", false, true),
+        ("queens", include_str!("testdata/rec2/queens.ll"), "place_", false, true),
+        ("x_mergesort", include_str!("testdata/rec2/x_mergesort.ll"), "msort_", false, false),
+    ];
+    let m32 = crate::indvars::tests::m32();
+    let (o2_bar, o3_bar) = m32.tti().and_then(|tti| tti.recursive_edge_growth()).expect("m32 states the bar");
+    for (name, text, function, o2, o3) in table {
+        let module = parsed(text);
+        let (_, _, body) = module
+            .functions()
+            .find(|(_, global, _)| global.name.as_deref() == Some(function))
+            .unwrap_or_else(|| panic!("{name}: no {function}"));
+        let insns = crate::inline::recursive_edge_growth(body);
+        assert_eq!((insns <= o2_bar, insns <= o3_bar), (o2, o3), "{name} {function}: gcc_insns {insns}, bars {o2_bar}/{o3_bar}");
+    }
+}
