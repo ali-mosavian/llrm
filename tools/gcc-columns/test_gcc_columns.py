@@ -70,6 +70,17 @@ def test_sf_z80_harness_sources_exist():
         assert os.path.exists(os.path.join(root, "runtime/compiler-rt/lib/fp/f32", f + ".c")), f
 
 
+def test_softfloat_z80_table_is_complete_and_current():
+    """The 11-03 table was measured from the removed monolithic sf32.c; it stayed in the repo marked STALE.
+    A table needs 32 gcc clk cells (2 variants x 2 levels x 8 ops), 4 library sizes and the cc1 md5, and no STALE mark."""
+    t = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "tables", "softfloat-z80.tsv")).read()
+    head = [l for l in t.splitlines() if l.startswith("#")]
+    assert not any("STALE" in l for l in head), "stale table"
+    assert re.search(r"cc1 md5 [0-9a-f]{32}", head[0]) and "runtime/compiler-rt" in head[0]
+    rows = [l.split("\t") for l in t.splitlines() if l.startswith("gcc\t")]
+    assert sum(r[3] == "clk" for r in rows) == 32 and sum(r[3] == "bytes" for r in rows) == 4
+
+
 def test_z80_16bit_result_is_charged_the_de_store():
     """gcc's driver stored a 16-bit result with ld (nn),hl (16 T), the DE columns with ld (nn),de (20 T): every 16-bit gcc
     cell was 4 T optimistic (add16 read 78, by hand 82). 16-bit = ex de,hl 4 T + store 4 T; 8-bit in A for both."""
@@ -145,17 +156,6 @@ def test_vs_6502_bar_is_the_lower_of_both_gcc_columns():
     assert row.split("|")[2:4] == [" 100 ", " 900 "], row
 
 
-def test_softfloat_z80_table_is_complete_and_current():
-    """The 11-03 table was measured from the removed monolithic sf32.c; it stayed in the repo marked STALE.
-    A table needs 32 gcc clk cells (2 variants x 2 levels x 8 ops), 4 library sizes and the cc1 md5, and no STALE mark."""
-    t = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "tables", "softfloat-z80.tsv")).read()
-    head = [l for l in t.splitlines() if l.startswith("#")]
-    assert not any("STALE" in l for l in head), "stale table"
-    assert re.search(r"cc1 md5 [0-9a-f]{32}", head[0]) and "runtime/compiler-rt" in head[0]
-    rows = [l.split("\t") for l in t.splitlines() if l.startswith("gcc\t")]
-    assert sum(r[3] == "clk" for r in rows) == 32 and sum(r[3] == "bytes" for r in rows) == 4
-
-
 def test_softfloat_6502_clocks_divide_by_the_records_run():
     """The 11-03 6502 softfloat table divided by 256 although add/sub/mul/div ran 361 records, and subtracted a base run that
     failed its records: hand add read 570 for 324. Records come from the vec.inc that ran, and the base run must pass."""
@@ -171,3 +171,19 @@ def test_softfloat_6502_clocks_divide_by_the_records_run():
     assert sum(r[3] == "clk" for r in rows) == 32 and sum(r[3] == "bytes" for r in rows) == 32
     hand_add = next(l.split("\t")[5] for l in t.splitlines() if l.startswith("hand\t-\t-\tclk\tadd\t"))
     assert int(hand_add) < 400, hand_add
+
+
+def test_z80_tables_name_the_same_cc1():
+    """The kernel and softfloat z80 tables are produced by one cc1: a swap that changes one header and not the other mixes compilers."""
+    t = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tables")
+    md5s = {re.search(r"cc1 md5 ([0-9a-f]{32})", open(os.path.join(t, n)).readline()).group(1) for n in ("z80-gcc.tsv", "softfloat-z80.tsv")}
+    assert len(md5s) == 1, md5s
+
+
+def test_ice_corpus_tells_an_ice_from_a_source_error_and_a_hang():
+    """A cc1 swap must not lose a file the old cc1 compiles: an ICE and a timeout count against the new cc1, a missing header does not."""
+    import ice_corpus as C
+    assert C.classify(1, "x.c:3: internal compiler error: maximum number of LRA assignment passes") == "ice"
+    assert C.classify(1, "error: unable to find a register to spill") == "ice"
+    assert C.classify(1, "fatal error: stdint.h: No such file or directory") == "error"
+    assert C.classify(0, "") == "ok" and C.classify(1, "", True) == "timeout"
