@@ -1420,6 +1420,10 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
         Arc::new(made)
     }
 
+    fn stores_lanes(&self) -> bool {
+        T::spills_lanes()
+    }
+
     fn needs_data_group(
         &self,
         _one: &Insn,
@@ -1614,13 +1618,7 @@ fn lane_register(
     offset: u32,
     bytes: u32,
 ) -> Option<RegId> {
-    let want = ((1_i64 << bytes) - 1) << (registers.lanes(wide).trailing_zeros() + offset);
-    (0..256).map(RegId::from_index).find(|&register| {
-        registers.known(register)
-            && registers.root(register) == registers.root(wide)
-            && registers.lanes(register) == want
-            && registers.bytes(register) == Some(i64::from(bytes))
-    })
+    registers.lane_register(wide, offset, bytes)
 }
 
 /// `source` with the registers greedy chose: its definitions take the
@@ -1795,13 +1793,17 @@ pub fn from_lir<T: Target>(
                     Reg::Virt(v) => v as usize,
                     Reg::Phys(_) => 0,
                 }];
-                let made = if insn.spill_store {
+                let lane = cell.filter(|_| insn.spill_store).and_then(llrm_codegen::greedy::tii::lane_offset);
+                let made = if let Some(offset) = lane {
+                    T::spill_store_lane(class, register, slot, offset)
+                } else if insn.spill_store {
                     T::spill_store(class, register, slot)
                 } else {
                     T::spill_load(class, register, slot)
                 };
                 insts.push(made.ok_or("the target states no spill form")?);
-                if !slots.iter().any(|(one, _)| *one == slot) {
+                // a lane store says nothing of the slot's size
+                if lane.is_none() && !slots.iter().any(|(one, _)| *one == slot) {
                     slots.push((slot, class));
                 }
                 continue;

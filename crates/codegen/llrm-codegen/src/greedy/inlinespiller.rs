@@ -612,6 +612,9 @@ impl<'a> InlineSpiller<'a> {
             self.folded += 1;
             return Some(Vec::new());
         }
+        if let Some(made) = self.spill_lane_def(lis, reg, block, members, &old, &cell, width) {
+            return Some(made);
+        }
         let new = lis.next_virtual_register();
         lis.reserve_virtual_register(new);
         // A write of part of the register keeps the rest: it reads it too (a
@@ -667,6 +670,84 @@ impl<'a> InlineSpiller<'a> {
 }
 
 impl InlineSpiller<'_> {
+    /// `spill_unit` for a def of one lane that keeps the rest of `reg`: the
+    /// rest is in the cell already (every def of `reg` stores), so a byte is
+    /// made for the lane and stored alone, with no reload of the whole
+    /// (`storeRegToStackSlot` with the sub-register index, as the pin spills
+    /// a sub-register def). None where the unit is anything else.
+    fn spill_lane_def(
+        &mut self,
+        lis: &mut LiveIntervals,
+        reg: u32,
+        block: usize,
+        members: &[InstrKey],
+        old: &[Arc<Insn>],
+        cell: &llrm_lir::Mem,
+        width: u32,
+    ) -> Option<Vec<u32>> {
+        if !self.tii.stores_lanes() {
+            return None;
+        }
+        let ([key], [one]) = (members, old) else { return None };
+        let what = one.what.as_ref()?;
+        let [Loc::Held(lane)] = what.dests.as_slice() else { return None };
+        let alone = one.group.is_none()
+            && one.def_lanes.len() == 1
+            && one.def_lanes[0].0 == reg
+            && one.partial_defs.iter().all(|value| *value == reg)
+            && one.defines == [reg]
+            && lane.value == reg
+            && lane.width < width
+            && lane.offset + lane.width <= width
+            && !one.uses.contains(&reg)
+            && !one.undefs.contains(&reg)
+            && !one.requires.iter().chain(&one.delivers).any(|(held, _)| held.value == reg)
+            && !what.sources.iter().any(|loc| matches!(loc, Loc::Held(held) if held.value == reg));
+        if !alone {
+            return None;
+        }
+        let new = lis.next_virtual_register();
+        lis.reserve_virtual_register(new);
+        let mut made = (**one).clone();
+        made.defines = vec![new];
+        made.def_lanes.clear();
+        made.partial_defs.clear();
+        made.undef_super = false;
+        made.what = Some(Semantics {
+            dests: vec![Loc::Held(Held { value: new, width: lane.width, offset: 0 })],
+            ..what.clone()
+        });
+        let made = Arc::new(made);
+        lis.rewrite_instr(block, *key, Arc::clone(&made));
+        let place = crate::greedy::tii::lane_cell(cell, lane.offset, lane.width);
+        let store = crate::greedy::tii::store_reg_to_stack_slot(one, new, &place);
+        lis.insert_instr_after(block, made.id(), store);
+        self.stores += 1;
+        // The bytes of the registers that can hold the lane, either end of
+        // each register of the pair's order.
+        let order: Vec<RegId> = {
+            let held = self.tables.orders.borrow().get(&reg).cloned();
+            let wide = held.unwrap_or_else(|| (self.order_of)(reg));
+            let mut bytes = Vec::new();
+            for register in wide {
+                for offset in 0..width {
+                    if let Some(byte) = self.regs.lane_register(register, offset, lane.width)
+                        && !bytes.contains(&byte)
+                    {
+                        bytes.push(byte);
+                    }
+                }
+            }
+            bytes
+        };
+        self.tables.orders.borrow_mut().insert(new, order);
+        self.tables.widths.borrow_mut().insert(new, lane.width);
+        // Not `derive_family`: a clone takes its parent's class on the way
+        // back, and this is a byte of a pair.
+        NATIVE_UNITS.with(|one| one.set(one.get() + 1));
+        Some(vec![new])
+    }
+
     /// `spill_unit` for an x87 value: a register made from `reg`, an `fld`
     /// of its cell before where the unit reads it and an `fstp` after where it
     /// writes it. DEVIATE D-RFP1: the cell is the value's float type
@@ -1822,6 +1903,10 @@ mod tests {
     }
 
     impl TargetInstrInfo for Renamed<'_> {
+        fn stores_lanes(&self) -> bool {
+            true
+        }
+
         fn is_plain_move(
             &self,
             what: &Semantics,
@@ -2250,6 +2335,86 @@ mod tests {
         assert_eq!((whole_recorded, whole_stores), (1, 1), "premise: a whole def's store is recorded");
         let (lane_recorded, lane_stores) = recorded(true);
         assert_eq!((lane_recorded, lane_stores), (0, 2), "two stores, none recorded");
+    }
+
+    /// A def of one byte of a spilled pair writes that byte to its place in
+    /// the slot and nothing else: the rest of the pair is in the slot already.
+    /// It reloaded the whole pair before the def and stored the whole pair
+    /// after (lz4c -O2: a preheader `ld c,#0` cost two loads and two stores).
+    #[test]
+    fn test_a_def_of_one_lane_of_a_spilled_pair_stores_that_lane_only() {
+        use crate::model::ir::Imm;
+        let mov = |at: i64, dest: Held, partial: bool| {
+            let what = Semantics {
+                name: Some("add".into()),
+                dests: vec![Loc::Held(dest)],
+                sources: vec![Loc::Imm(Imm { value: 5, width: 1, address: None })],
+                ..Semantics::new(Operation::Unary)
+            };
+            let mut one = Insn::new(at, Some((at, at + 1)), Some(what), vec![1], vec![]);
+            one.def_lanes = vec![(1, llrm_lir::valuelanes::ValueLanes::at(dest.offset, dest.width))];
+            if partial {
+                one.partial_defs = vec![1];
+            } else {
+                one.undef_super = true;
+            }
+            Arc::new(one)
+        };
+        let read = Arc::new({
+            let what = Semantics {
+                name: Some("mov".into()),
+                dests: vec![Loc::Held(Held { value: 2, width: 2, offset: 0 })],
+                sources: vec![Loc::Held(Held { value: 1, width: 2, offset: 0 })],
+                ..Semantics::new(Operation::Move)
+            };
+            Insn::new(2, Some((2, 3)), Some(what), vec![2], vec![1])
+        });
+        let insns = vec![
+            mov(0, Held { value: 1, width: 1, offset: 0 }, false),
+            mov(1, Held { value: 1, width: 1, offset: 1 }, true),
+            read,
+        ];
+        let body = LirBody::new(
+            "lanes",
+            0,
+            vec![crate::model::lir::Block::from(LirBlock::new(0, insns))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let mut lis = LiveIntervals::new(&body);
+        for value in 1..=2 {
+            let li = lis.compute_virt_reg_interval(value);
+            lis.insert_interval(li);
+        }
+        let mut matrix = LiveRegMatrix::new(RegisterInfo::new(Regs(&llrm_x86_m16::REGISTER_INFO)), Box::new(NoFixed));
+        let mut frame = Frame::new(0);
+        let classes = RegisterClasses::m16();
+        let tii = Renamed(crate::greedy::tii::X86InstrInfo { bits: 16, classes: &classes, basic_semantics: false });
+        let tables = Rc::new(Tables::default());
+        tables.widths.borrow_mut().insert(1, 2);
+        let order_of = |_: u32| Vec::new();
+        let mut spiller = InlineSpiller::new(&mut frame, &tii, Regs(&llrm_x86_m16::REGISTER_INFO), &order_of, tables);
+        let (env, original) = (Env, Default::default());
+        let mut vrai = VirtRegAuxInfo::new(&env, &original);
+        let (mut shrunk, mut made) = (Vec::new(), Vec::new());
+        let ctx = SpillContext { lis: &mut lis, matrix: &mut matrix, vrai: &mut vrai, shrunk: &mut shrunk };
+        spiller.spill(ctx, 1, &mut made);
+        let insns = lis.block_insns(0);
+        let last_store = insns.iter().rposition(|one| one.spill_store).expect("the defs store");
+        let reloads = insns[..last_store].iter().filter(|one| one.spill_reload).count();
+        let lanes: Vec<Option<u32>> = insns
+            .iter()
+            .filter(|one| one.spill_store)
+            .map(|one| {
+                let what = one.what.as_ref().expect("a store has semantics");
+                match what.dests.as_slice() {
+                    [Loc::Mem(cell)] => crate::greedy::tii::lane_offset(cell),
+                    other => panic!("a store to {other:?}"),
+                }
+            })
+            .collect();
+        assert_eq!(reloads, 0, "no def reloads the pair");
+        assert_eq!(lanes, vec![Some(0), Some(1)], "each def stores its byte");
     }
 
     /// The home `%3` (a sibling of `%2`, both copies of `%1`, live together) is
