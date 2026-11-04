@@ -171,7 +171,9 @@ impl Timings {
                     ("scalars", "cache_line") => table.cache_line = Some(number()?),
                     ("scalars", "speed_milliclocks_per_byte") => table.speed_milliclocks_per_byte = Some(number()?),
                     ("scalars", "line_fill_clocks") => table.line_fill_clocks = Some(number()?),
-                    ("scalars", "tail_dup_placement_threshold") => table.tail_dup_placement_threshold = Some(number()?),
+                    ("scalars", "tail_dup_placement_threshold") => {
+                        table.tail_dup_placement_threshold = Some(number()?)
+                    }
                     ("scalars", other) => return Err(format!("{at}: no scalar `{other}`")),
                     ("clocks", form) => table.clocks.push((form.to_owned(), number()?)),
                     (_, form) => table.latency.push((form.to_owned(), number()?)),

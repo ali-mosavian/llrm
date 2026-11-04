@@ -220,12 +220,11 @@ pub fn do_instruction_selection_with(
     // `insertDAGNode` puts a node before the one being matched, which is
     // an operand of the node being selected: the walk reaches it after that
     // node's users. One whose users are not all selected waits.
-    let mut next = |adapter: &DagisAdapter<'_>, made: &mut Vec<u32>| match made
-        .iter()
-        .rposition(|&m| adapter.is_dead(m) || !adapter.has_pending_user(m))
-    {
-        Some(at) => Some(made.remove(at)),
-        None => rest.next().or_else(|| made.pop()),
+    let mut next = |adapter: &DagisAdapter<'_>, made: &mut Vec<u32>| {
+        match made.iter().rposition(|&m| adapter.is_dead(m) || !adapter.has_pending_user(m)) {
+            Some(at) => Some(made.remove(at)),
+            None => rest.next().or_else(|| made.pop()),
+        }
     };
     while let Some(node) = next(&adapter, &mut made) {
         // `Node->use_empty()`: a node selection left unused is dead.
