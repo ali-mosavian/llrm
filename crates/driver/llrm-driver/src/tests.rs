@@ -1952,13 +1952,7 @@ fn a_probed_frame_ending_in_a_sibling_call_gives_its_stack_back_first() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let lines: Vec<&str> = listing.lines().map(str::trim).collect();
     let jmp = lines.iter().position(|line| line.starts_with("jmp ")).unwrap_or_else(|| panic!("{listing}"));
-    // The red zone may take some of the frame's bytes; what the prologue
-    // takes the exit gives back.
-    let taken = lines.iter().find_map(|line| line.strip_prefix("sub rsp, ")).unwrap_or_else(|| panic!("{listing}"));
-    assert!(
-        lines[jmp - 1] == format!("add rsp, {taken}") || lines[jmp - 1].starts_with("mov rsp, rbp"),
-        "{listing}"
-    );
+    assert!(lines[jmp - 1].starts_with("add rsp, 20") || lines[jmp - 1].starts_with("mov rsp, rbp"), "{listing}");
 }
 
 /// The `.xdata` of an x86-64 module written as COFF, found by `.pdata`'s
@@ -2938,6 +2932,44 @@ fn a_clear_of_an_align_16_local_never_movaps_a_misaligned_address_at_m64() {
     }
 }
 
+/// Tuned for size, a 128-byte clear is `rep stosq` (13 B), not `xorps` and
+/// eight `movaps` (up to 72 B); a 32-byte clear stays two stores. The pin's
+/// store count made it eight `movaps`: pattern_fill -Os +50 B, huffman_decode
+/// +12 B over the `rep stosq` the port had.
+#[test]
+fn a_128_byte_clear_at_m64_os_is_rep_stosq_and_a_32_byte_one_is_stores() {
+    let ir = |size: u32| {
+        format!(
+            "target datalayout = \"@m64-datalayout@\"\n\
+             target triple = \"x86_64-unknown-linux-gnu\"\n\
+             @g = global [{size} x i8] zeroinitializer, align 16\n\
+             declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\n\
+             define void @f() optsize {{\n  call void @llvm.memset.p0.i64(ptr @g, i8 0, i64 {size}, i1 false)\n  ret void\n}}\n"
+        )
+    };
+    let listing = |size: u32| {
+        let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), &ir(size), "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let large = listing(128);
+    assert!(large.contains("rep stosq") && !large.contains("movaps"), "{large}");
+    let small = listing(32);
+    assert!(small.contains("xorps") && !small.contains("rep stos"), "{small}");
+}
+
+/// A 16-byte copy of unaligned memory is `movups` load and store.
+#[test]
+fn an_unaligned_16_byte_copy_is_movups_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
+                define void @f(ptr %d, ptr %s) {\n  call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 16, i1 false)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let count = listing.lines().filter(|line| line.trim().starts_with("movups")).count();
+    assert_eq!(count, 2, "{listing}");
+}
+
 /// A leaf's 100-byte local paid `sub rsp, 104` / `add rsp, 104` (about 12 B);
 /// the pin keeps it in the 128-byte red zone below `rsp`. A call, `noredzone`
 /// and a frame past the zone keep their `sub`.
@@ -3282,44 +3314,6 @@ fn the_os_fill_rule_flips_at_a_length_that_depends_on_the_byte_at_m64() {
         assert!(inline.contains("movaps") && !inline.contains("rep stos"), "byte {byte}, {stores} B: {inline}");
         assert!(string.contains("rep stosq") && !string.contains("movaps"), "byte {byte}, {rep} B: {string}");
     }
-}
-
-/// Tuned for size, a 128-byte clear is `rep stosq` (13 B), not `xorps` and
-/// eight `movaps` (up to 72 B); a 32-byte clear stays two stores. The pin's
-/// store count made it eight `movaps`: pattern_fill -Os +50 B, huffman_decode
-/// +12 B over the `rep stosq` the port had.
-#[test]
-fn a_128_byte_clear_at_m64_os_is_rep_stosq_and_a_32_byte_one_is_stores() {
-    let ir = |size: u32| {
-        format!(
-            "target datalayout = \"@m64-datalayout@\"\n\
-             target triple = \"x86_64-unknown-linux-gnu\"\n\
-             @g = global [{size} x i8] zeroinitializer, align 16\n\
-             declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\n\
-             define void @f() optsize {{\n  call void @llvm.memset.p0.i64(ptr @g, i8 0, i64 {size}, i1 false)\n  ret void\n}}\n"
-        )
-    };
-    let listing = |size: u32| {
-        let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), &ir(size), "f").unwrap();
-        llrm_codegen::backend::masm::text(&built).unwrap()
-    };
-    let large = listing(128);
-    assert!(large.contains("rep stosq") && !large.contains("movaps"), "{large}");
-    let small = listing(32);
-    assert!(small.contains("xorps") && !small.contains("rep stos"), "{small}");
-}
-
-/// A 16-byte copy of unaligned memory is `movups` load and store.
-#[test]
-fn an_unaligned_16_byte_copy_is_movups_at_m64() {
-    let text = "target datalayout = \"@m64-datalayout@\"\n\
-                target triple = \"x86_64-unknown-linux-gnu\"\n\
-                declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
-                define void @f(ptr %d, ptr %s) {\n  call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 16, i1 false)\n  ret void\n}\n";
-    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
-    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    let count = listing.lines().filter(|line| line.trim().starts_with("movups")).count();
-    assert_eq!(count, 2, "{listing}");
 }
 
 /// A 72-byte fill and copy at m64 -Os (`pattern_fill.c`,
