@@ -117,7 +117,7 @@ fn replacing_operand_is_cheap(
 
 /// `canReplaceOperandWithVariable`: the operand `index` of `inst` may be a phi
 /// or a select instead of what it is.
-fn can_replace_operand_with_variable(
+pub(crate) fn can_replace_operand_with_variable(
     context: &Context,
     spec: &Speculation,
     function: &Function,

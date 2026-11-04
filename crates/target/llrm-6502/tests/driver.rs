@@ -110,6 +110,20 @@ done:
     assert_eq!(exit_code_of(&text, "probe"), 10, "{text}");
 }
 
+/// `t[(a + b) >> 1]` on bytes is a pointer plus an `i16` whose high byte is
+/// known zero. Selected as a 16-bit add into the pointer and `ldy #0; lda (rc),y`
+/// (bsearch8: 78 B against llvm-mos's 53) instead of the byte index in Y.
+#[test]
+fn an_index_with_a_known_zero_high_byte_is_the_y_of_the_load() {
+    let ir = module(
+        "define i8 @ldm(ptr %t, i8 %a, i8 %b) {\n  %x = zext i8 %a to i16\n  %y = zext i8 %b to i16\n  \
+         %s = add nuw nsw i16 %x, %y\n  %m = lshr i16 %s, 1\n  %p = getelementptr inbounds i8, ptr %t, i16 %m\n  \
+         %v = load i8, ptr %p\n  ret i8 %v\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(text.contains(",y") && !text.contains("ldy #0"), "the pointer was added in 16 bits:\n{text}");
+}
+
 /// `LLRM_6502_ZERO_PAGE` sets the platform's zero page, whichever way the
 /// platform is named. It was read before the row's own `--platform=sim65`,
 /// which put the 26 back: a sweep of 16..26 read flat, 4362 bytes at every
@@ -1471,4 +1485,85 @@ define i8 @sub_overflow() {
     // 1 + 1; 2 - 65535 = 3 with a borrow: 3 + 1
     assert_eq!(exit_code_of(&text, "add_overflow"), 2, "{text}");
     assert_eq!(exit_code_of(&text, "sub_overflow"), 4, "{text}");
+}
+
+/// `__builtin_clz` and `__builtin_ctz` (`llvm.ctlz.i32`, `llvm.cttz.i32`) failed
+/// to compile for the 6502 ("CtLzZeroPoison ... convert node to libcall"): any C
+/// program using them was lost. `check` counts the results that are wrong for
+/// 0, 1, 0x80000000 and 0xFFFFFFFF, with and without the zero-is-poison flag.
+#[test]
+fn a_32_bit_clz_and_ctz_count_correctly() {
+    let ir = module(
+        r#"@v0 = global i32 0
+@v1 = global i32 1
+@v2 = global i32 2147483648
+@v3 = global i32 4294967295
+declare i32 @llvm.ctlz.i32(i32, i1)
+declare i32 @llvm.cttz.i32(i32, i1)
+define i8 @check() {
+  %x0 = load volatile i32, ptr @v0
+  %x1 = load volatile i32, ptr @v1
+  %x2 = load volatile i32, ptr @v2
+  %x3 = load volatile i32, ptr @v3
+  %clz0 = call i32 @llvm.ctlz.i32(i32 %x0, i1 false)
+  %bad0 = icmp ne i32 %clz0, 32
+  %w0 = zext i1 %bad0 to i8
+  %clz1 = call i32 @llvm.ctlz.i32(i32 %x1, i1 false)
+  %bad1 = icmp ne i32 %clz1, 31
+  %w1 = zext i1 %bad1 to i8
+  %clz1p = call i32 @llvm.ctlz.i32(i32 %x1, i1 true)
+  %bad2 = icmp ne i32 %clz1p, 31
+  %w2 = zext i1 %bad2 to i8
+  %clz2 = call i32 @llvm.ctlz.i32(i32 %x2, i1 false)
+  %bad3 = icmp ne i32 %clz2, 0
+  %w3 = zext i1 %bad3 to i8
+  %clz2p = call i32 @llvm.ctlz.i32(i32 %x2, i1 true)
+  %bad4 = icmp ne i32 %clz2p, 0
+  %w4 = zext i1 %bad4 to i8
+  %clz3 = call i32 @llvm.ctlz.i32(i32 %x3, i1 false)
+  %bad5 = icmp ne i32 %clz3, 0
+  %w5 = zext i1 %bad5 to i8
+  %clz3p = call i32 @llvm.ctlz.i32(i32 %x3, i1 true)
+  %bad6 = icmp ne i32 %clz3p, 0
+  %w6 = zext i1 %bad6 to i8
+  %ctz0 = call i32 @llvm.cttz.i32(i32 %x0, i1 false)
+  %bad7 = icmp ne i32 %ctz0, 32
+  %w7 = zext i1 %bad7 to i8
+  %ctz1 = call i32 @llvm.cttz.i32(i32 %x1, i1 false)
+  %bad8 = icmp ne i32 %ctz1, 0
+  %w8 = zext i1 %bad8 to i8
+  %ctz1p = call i32 @llvm.cttz.i32(i32 %x1, i1 true)
+  %bad9 = icmp ne i32 %ctz1p, 0
+  %w9 = zext i1 %bad9 to i8
+  %ctz2 = call i32 @llvm.cttz.i32(i32 %x2, i1 false)
+  %bad10 = icmp ne i32 %ctz2, 31
+  %w10 = zext i1 %bad10 to i8
+  %ctz2p = call i32 @llvm.cttz.i32(i32 %x2, i1 true)
+  %bad11 = icmp ne i32 %ctz2p, 31
+  %w11 = zext i1 %bad11 to i8
+  %ctz3 = call i32 @llvm.cttz.i32(i32 %x3, i1 false)
+  %bad12 = icmp ne i32 %ctz3, 0
+  %w12 = zext i1 %bad12 to i8
+  %ctz3p = call i32 @llvm.cttz.i32(i32 %x3, i1 true)
+  %bad13 = icmp ne i32 %ctz3p, 0
+  %w13 = zext i1 %bad13 to i8
+  %s0 = add i8 0, %w0
+  %s1 = add i8 %s0, %w1
+  %s2 = add i8 %s1, %w2
+  %s3 = add i8 %s2, %w3
+  %s4 = add i8 %s3, %w4
+  %s5 = add i8 %s4, %w5
+  %s6 = add i8 %s5, %w6
+  %s7 = add i8 %s6, %w7
+  %s8 = add i8 %s7, %w8
+  %s9 = add i8 %s8, %w9
+  %s10 = add i8 %s9, %w10
+  %s11 = add i8 %s10, %w11
+  %s12 = add i8 %s11, %w12
+  %s13 = add i8 %s12, %w13
+  ret i8 %s13
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "check"), 0, "{text}");
 }

@@ -11,7 +11,7 @@
 //! here; `select::function_text` falls back to the cell path. Exit: every
 //! opcode built.
 
-use std::collections::{HashMap, HashSet};
+use llrm_support::hash::{HashMap, HashSet};
 use std::fmt::Write;
 
 use llrm_lir::registers::RegId;
@@ -1134,7 +1134,7 @@ fn pointer_cells(
         matches!((low, high), (Some(1..=255), Some(0)) | (Some(0), Some(1)))
     };
     // a cell read or written as plain bytes anywhere stays a word cell
-    let mut plain: HashSet<String> = HashSet::new();
+    let mut plain: HashSet<String> = HashSet::default();
     for item in items {
         let Item::Inst(MInst { opcode, operands, .. }) = item else { continue };
         for (at, operand) in operands.iter().enumerate() {
@@ -1180,7 +1180,7 @@ fn pointer_cells(
 
 /// The cells that are the base of a pointer access or an address.
 fn pointer_bases(items: &[Item]) -> HashSet<String> {
-    let mut out = HashSet::new();
+    let mut out = HashSet::default();
     for item in items {
         let Item::Inst(MInst { opcode, operands, .. }) = item else { continue };
         let at = match *opcode {
@@ -1199,8 +1199,8 @@ fn pointer_bases(items: &[Item]) -> HashSet<String> {
 
 /// The cells defined by exactly one `LDI8`, with their values.
 fn constants(items: &[Item]) -> HashMap<String, i64> {
-    let mut defs: HashMap<String, usize> = HashMap::new();
-    let mut values = HashMap::new();
+    let mut defs: HashMap<String, usize> = HashMap::default();
+    let mut values = HashMap::default();
     for item in items {
         let Item::Inst(MInst { opcode, operands, .. }) = item else { continue };
         let Some(Machine::Reg(d)) = operands.first() else { continue };
@@ -1261,7 +1261,7 @@ pub fn build_with_places(
 ) -> Result<(MFunction<Class>, Vec<Vec<String>>), Unsupported> {
     // A block starts at a label that follows an instruction (or the first).
     let mut labels: Vec<Vec<String>> = vec![Vec::new()];
-    let mut block_of = HashMap::new();
+    let mut block_of = HashMap::default();
     let mut after_inst = false;
     for item in items {
         match item {
@@ -1279,14 +1279,14 @@ pub fn build_with_places(
     let mut b = Builder {
         function: MFunction { places, ..MFunction::new(name_of_function) },
         origin: 0,
-        bytes: HashMap::new(),
+        bytes: HashMap::default(),
         pointers: pointer_cells(items, &constants(items)),
         packs: Vec::new(),
         constants: constants(items),
         block_of,
-        versions: HashMap::new(),
+        versions: HashMap::default(),
         pending: None,
-        saved: HashMap::new(),
+        saved: HashMap::default(),
         current: 0,
     };
     for id in 0..labels.len() {
@@ -2029,7 +2029,7 @@ fn narrow_remainder_calls(function: &mut MFunction<Class>) {
 
 fn remove_dead(function: &mut MFunction<Class>) {
     loop {
-        let mut read: HashSet<u32> = HashSet::new();
+        let mut read: HashSet<u32> = HashSet::default();
         for operand in function.blocks.iter().flat_map(|b| &b.insts).flat_map(|i| &i.operands) {
             if let Operand::Use(Reg::Virt(v)) = operand {
                 read.insert(*v);
@@ -2153,9 +2153,9 @@ fn live_after(
         }
         (defs, reads)
     };
-    let mut live_in: Vec<HashSet<RegId>> = vec![HashSet::new(); blocks];
+    let mut live_in: Vec<HashSet<RegId>> = vec![HashSet::default(); blocks];
     let mut after: Vec<Vec<HashSet<RegId>>> =
-        function.blocks.iter().map(|b| vec![HashSet::new(); b.insts.len()]).collect();
+        function.blocks.iter().map(|b| vec![HashSet::default(); b.insts.len()]).collect();
     loop {
         let mut changed = false;
         for b in (0..blocks).rev() {

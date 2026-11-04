@@ -326,7 +326,7 @@ pub fn estimate_calling(
     let lines: Vec<&str> = expanded.lines().map(|l| l.split(';').next().unwrap_or("")).collect();
     // the first line of each label, found once: a lookup per branch is a scan
     // of the function per branch
-    let mut labels: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let mut labels: llrm_support::hash::HashMap<&str, usize> = llrm_support::hash::HashMap::default();
     for (at, line) in lines.iter().enumerate() {
         LABEL_SCANS.with(|scans| scans.set(scans.get() + 1));
         if let Some(label) = line.trim_end().strip_suffix(':') {

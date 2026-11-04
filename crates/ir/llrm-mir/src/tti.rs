@@ -295,6 +295,18 @@ pub struct UnrollingPreferences {
     pub unroll_and_jam_inner_loop_threshold: u32,
 }
 
+/// `TTI::MemCmpExpansionOptions`.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MemCmpExpansionOptions {
+    /// Load sizes in bytes, largest first.
+    pub load_sizes: Vec<u32>,
+    pub max_num_loads: u32,
+    pub num_loads_per_block: u32,
+    pub allow_overlapping_loads: bool,
+    /// Sizes a run of loads may be merged into (three-way compares only).
+    pub allowed_tail_expansions: Vec<u32>,
+}
+
 /// The target a cost is for.
 pub trait Tti {
     /// The implementation's name, for what reports which target priced a
@@ -430,8 +442,8 @@ pub trait Tti {
     }
 
     /// `getSchedModel().LoopMicroOpBufferSize`: the micro-ops the target's loop
-    /// buffer holds; 0 where its scheduling model has none (T11: only the
-    /// models of the cpus the plan page pins are known, and none has one).
+    /// buffer holds; 0 where its scheduling model has none (X86: 28 for the
+    /// `SandyBridgeModel` cpus; the others' models are not known here).
     fn loop_micro_op_buffer_size(&self) -> u32 {
         0
     }
@@ -628,6 +640,29 @@ pub trait Tti {
         false
     }
 
+    /// `enableMemCmpExpansion(OptSize, IsZeroCmp)`: how a `memcmp` may be
+    /// expanded to loads and compares; none (the base class) leaves the call.
+    fn enable_mem_cmp_expansion(
+        &self,
+        opt_size: bool,
+        is_zero_cmp: bool,
+    ) -> Option<MemCmpExpansionOptions> {
+        let _ = (opt_size, is_zero_cmp);
+        None
+    }
+
+    /// `allowsMisalignedMemoryAccesses` of an `bits`-wide integer access in
+    /// `address_space` at `align` bytes. The base class has none.
+    fn allows_misaligned_memory_accesses(
+        &self,
+        bits: u32,
+        address_space: u32,
+        align: u64,
+    ) -> bool {
+        let _ = (bits, address_space, align);
+        false
+    }
+
     /// `isLegalAddressingMode`: `base_gv + base_offset + base_reg + scale *
     /// index`.
     fn is_legal_addressing_mode(
@@ -713,6 +748,44 @@ pub trait Tti {
         } else {
             Cost::INVALID
         }
+    }
+
+    /// `getIntImmCodeSizeCost`: the code size of the constant at operand
+    /// `index` of an `op`; the base class has none.
+    fn int_imm_code_size_cost(
+        &self,
+        op: ImmUser,
+        index: u32,
+        imm: i128,
+        bits: u32,
+    ) -> Cost {
+        let _ = (op, index, imm, bits);
+        Cost::FREE
+    }
+
+    /// `getIntImmCostIntrin`: the constant at operand `index` of a call to the
+    /// intrinsic `name`; the base class makes it free.
+    fn int_imm_cost_intrin(
+        &self,
+        name: &str,
+        index: u32,
+        imm: i128,
+        bits: u32,
+    ) -> Cost {
+        let _ = (name, index, imm, bits);
+        Cost::FREE
+    }
+
+    /// `preferToKeepConstantsAttached` (`BasicTTIImpl`): a divide or remainder
+    /// by a constant keeps it unless `isIntDivCheap`, which the base class
+    /// says it is not. `min_size`: the function is `minsize`.
+    fn prefer_to_keep_constants_attached(
+        &self,
+        div_rem_by_constant: bool,
+        min_size: bool,
+    ) -> bool {
+        let _ = min_size;
+        div_rem_by_constant
     }
 
     /// `TargetTransformInfoImplBase::isLegalAddImmediate`: none.
