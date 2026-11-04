@@ -225,6 +225,13 @@ def test_z80_mul16_o2_uses_the_early_exit_helper_and_it_is_exact():
         assert got == a * b & 0xFFFF, (a, b, got)
 
 
+def test_6502_runtime_has_the_indirect_call_helper():
+    """cc65's basic.c (a dispatch table) did not compile with the 6502 cc1: a call through a pointer was an ICE. The cc1 now stores the
+    pointer in __icv and does jsr __icall; both must be defined by the runtime the bench links, or the cell is a link failure."""
+    text = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "rt-6502", "icall.s")).read()
+    assert re.search(r"\.export\s+__icall\s*,\s*__icv", text) and "__icall:" in text and "jmp (__icv)" in text
+
+
 if __name__ == "__main__":
     # every test_*: a hand-kept list ran 4 of 17 and let "ok" stand for all of them
     tests = [f for n, f in sorted(globals().items()) if n.startswith("test_")]
@@ -232,9 +239,3 @@ if __name__ == "__main__":
         t()
     print(f"ok ({len(tests)} tests)")
 
-
-def test_6502_runtime_has_the_indirect_call_helper():
-    """cc65's basic.c (a dispatch table) did not compile with the 6502 cc1: a call through a pointer was an ICE. The cc1 now stores the
-    pointer in __icv and does jsr __icall; both must be defined by the runtime the bench links, or the cell is a link failure."""
-    text = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "rt-6502", "icall.s")).read()
-    assert re.search(r"\.export\s+__icall\s*,\s*__icv", text) and "__icall:" in text and "jmp (__icv)" in text
