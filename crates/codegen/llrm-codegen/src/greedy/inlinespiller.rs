@@ -619,7 +619,9 @@ impl<'a> InlineSpiller<'a> {
         lis.reserve_virtual_register(new);
         // A write of part of the register keeps the rest: it reads it too (a
         // sub-register def without `undef`).
-        let partial = old.iter().any(|one| written_narrower(one, reg, width));
+        // (A reload the spiller made writes the whole register, whatever width
+        // its destination was named with.)
+        let partial = old.iter().any(|one| !one.spill_reload && written_narrower(one, reg, width));
         let reads = partial || old.iter().any(|one| one.uses.contains(&reg));
         let writes = old.iter().any(|one| one.defines.contains(&reg));
         let renamed: Vec<Arc<Insn>> =
@@ -2415,6 +2417,62 @@ mod tests {
             .collect();
         assert_eq!(reloads, 0, "no def reloads the pair");
         assert_eq!(lanes, vec![Some(0), Some(1)], "each def stores its byte");
+    }
+
+    /// A reload the spiller made names its destination by the width it was
+    /// made at, which can be a byte of a pair; spilling that clone in turn took
+    /// the reload for a write of part of the register, and reloaded the pair
+    /// before it (lz4c -O2: two reloads into one register, the first dead).
+    #[test]
+    fn test_spilling_a_reload_does_not_reload_before_it() {
+        use crate::model::ir::Imm;
+        let reload = Arc::new({
+            let what = Semantics {
+                name: Some("RELOAD16".into()),
+                dests: vec![Loc::Held(Held { value: 1, width: 1, offset: 0 })],
+                sources: vec![Loc::Mem(llrm_lir::Mem::new(Some(llrm_lir::Addr::new(llrm_lir::Space::Frame, 2)), 1))],
+                ..Semantics::new(Operation::Move)
+            };
+            let mut one = Insn::new(0, Some((0, 1)), Some(what), vec![1], vec![]);
+            one.spill_reload = true;
+            one
+        });
+        let read = Arc::new({
+            let what = Semantics {
+                name: Some("mov".into()),
+                dests: vec![Loc::Held(Held { value: 2, width: 2, offset: 0 })],
+                sources: vec![Loc::Held(Held { value: 1, width: 2, offset: 0 })],
+                ..Semantics::new(Operation::Move)
+            };
+            Insn::new(1, Some((1, 2)), Some(what), vec![2], vec![1])
+        });
+        let body = LirBody::new(
+            "reload",
+            0,
+            vec![crate::model::lir::Block::from(LirBlock::new(0, vec![reload, read]))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let mut lis = LiveIntervals::new(&body);
+        for value in 1..=2 {
+            let li = lis.compute_virt_reg_interval(value);
+            lis.insert_interval(li);
+        }
+        let mut matrix = LiveRegMatrix::new(RegisterInfo::new(Regs(&llrm_x86_m16::REGISTER_INFO)), Box::new(NoFixed));
+        let mut frame = Frame::new(0);
+        let classes = RegisterClasses::m16();
+        let tii = Renamed(crate::greedy::tii::X86InstrInfo { bits: 16, classes: &classes, basic_semantics: false });
+        let tables = Rc::new(Tables::default());
+        tables.widths.borrow_mut().insert(1, 2);
+        let order_of = |_: u32| Vec::new();
+        let mut spiller = InlineSpiller::new(&mut frame, &tii, Regs(&llrm_x86_m16::REGISTER_INFO), &order_of, tables);
+        let (env, original) = (Env, Default::default());
+        let mut vrai = VirtRegAuxInfo::new(&env, &original);
+        let (mut shrunk, mut made) = (Vec::new(), Vec::new());
+        let ctx = SpillContext { lis: &mut lis, matrix: &mut matrix, vrai: &mut vrai, shrunk: &mut shrunk };
+        spiller.spill(ctx, 1, &mut made);
+        let before_store = lis.block_insns(0).iter().take_while(|one| !one.spill_store).filter(|one| one.spill_reload).count();
+        assert_eq!(before_store, 1, "the reload that was there, and no other before the store");
     }
 
     /// The home `%3` (a sibling of `%2`, both copies of `%1`, live together) is
