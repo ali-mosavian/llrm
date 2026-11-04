@@ -19,7 +19,7 @@ pub fn machine_function(
     name: &str,
     request: &Request,
 ) -> Result<MFunction, String> {
-    machine_function_with(ir, name, request, true)
+    machine_function_with(&cached_selections(ir, request)?, name, true)
 }
 
 thread_local! {
@@ -31,6 +31,44 @@ thread_local! {
 /// The runs of the mid-end and selection on this thread since the last call.
 pub fn take_selection_runs() -> usize {
     SELECTION_RUNS.with(|one| one.replace(0))
+}
+
+thread_local! {
+    /// Times a module's text was compared with the one held since the last
+    /// [`take_text_compares`].
+    static TEXT_COMPARES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The comparisons of a module's text with the one held on this thread since
+/// the last call: each costs the length of the module.
+pub fn take_text_compares() -> usize {
+    TEXT_COMPARES.with(|one| one.replace(0))
+}
+
+/// A module run through the mid-end and selection once, for the functions of
+/// that module in turn ([`text_in`]): no comparison of its text per function.
+pub struct Prepared {
+    selections: Selections,
+    /// With `-g`: the source file and start line of each function, from one
+    /// parse of the module.
+    sources: std::collections::HashMap<String, (String, Option<u32>)>,
+}
+
+impl Prepared {
+    /// The functions the module defines.
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.selections.iter().map(|(name, ..)| name.as_str())
+    }
+}
+
+/// `ir` through the mid-end and selection, for `request`.
+pub fn prepare(
+    ir: &str,
+    request: &Request,
+) -> Result<Prepared, String> {
+    SELECTION_RUNS.with(|runs| runs.set(runs.get() + 1));
+    let sources = if request.debug { crate::driver::sources_of(ir) } else { Default::default() };
+    Ok(Prepared { selections: Selections::new(selections_both(ir, request)?), sources })
 }
 
 type SelectionKey = (String, Vec<(String, String)>);
@@ -65,6 +103,7 @@ fn cached_selections(
     let mut environment: Vec<(String, String)> =
         std::env::vars().filter(|(name, _)| name.starts_with("LLRM_") || name.starts_with("Z80_")).collect();
     environment.sort();
+    TEXT_COMPARES.with(|one| one.set(one.get() + 1));
     let key = (format!("{:?}", (request.level, &request.passes, request.debug, request.cpu as u8)), environment);
     let held = SELECTED.with(|held| {
         held.borrow().as_ref().filter(|(text, was, _)| text == ir && *was == key).map(|(_, _, one)| one.clone())
@@ -81,12 +120,10 @@ fn cached_selections(
 /// [`machine_function`], with or without the return blocks copied into their
 /// predecessors.
 fn machine_function_with(
-    ir: &str,
+    selected: &Selections,
     name: &str,
-    request: &Request,
     duplicate: bool,
 ) -> Result<MFunction, String> {
-    let selected = cached_selections(ir, request)?;
     let (_, source, scheduled) =
         selected.iter().find(|(one, ..)| one == name).ok_or_else(|| format!("no function @{name}"))?;
     let selection = if crate::dagisel::pipeline::ILP.with(std::cell::Cell::get) { scheduled } else { source };
@@ -153,18 +190,19 @@ pub fn allocated(
     name: &str,
     request: &Request,
 ) -> Result<(MFunction, Assignment, Vec<(i32, usize)>), String> {
-    allocated_with(ir, name, request, true).map(|(function, assignment, slots, _)| (function, assignment, slots))
+    allocated_with(&cached_selections(ir, request)?, name, request, true)
+        .map(|(function, assignment, slots, _)| (function, assignment, slots))
 }
 
 type Allocated = (MFunction, Assignment, Vec<(i32, usize)>, std::collections::HashMap<u32, usize>);
 
 fn allocated_with(
-    ir: &str,
+    selected: &Selections,
     name: &str,
     request: &Request,
     duplicate: bool,
 ) -> Result<Allocated, String> {
-    let mut function = machine_function_with(ir, name, request, duplicate)?;
+    let mut function = machine_function_with(selected, name, duplicate)?;
     eliminate_phis_with(&mut function, false);
     let mut hoisted = function.clone();
     if !hoist_constants(&mut hoisted) {
@@ -321,8 +359,13 @@ fn allocate_once(
     remove_identity_copies(&mut function, &assignment);
     tidy_copies(&mut function, &assignment);
     use_lanes_in_place(&mut function, &assignment);
-    // The merged guard and latch of a loop cost one entry jump: bytes for
-    // clocks.
+    // DEVIATE Z80T1: tail merging crosses loops only at Os/Oz. The pin merges
+    // across loops before block placement (BranchFolding.cpp L1173-1203 limit
+    // it to after placement), and rotateLoop does not move the merged test
+    // back (FallThrough2Top ties ExitFreq). The merged guard and latch of a
+    // loop cost one entry jump: -3 B for +12 T per call (xs8 -O2 28/507/105
+    // -> 25/524/106), a trade the z80 has no rate for. Exit: a rate for the
+    // z80, or a form of the merge that costs no clocks.
     let bytes_first = matches!(level, Level::Os | Level::Oz);
     if bytes_first {
         llrm_spike_mf::branch_fold_hoisting_across_loops::<Z80Registers>(&mut function, &assignment);
@@ -1266,8 +1309,17 @@ pub fn lines(
     number: usize,
     request: &Request,
 ) -> Result<Vec<Line>, String> {
+    lines_in(&cached_selections(ir, request)?, name, number, request)
+}
+
+fn lines_in(
+    selected: &Selections,
+    name: &str,
+    number: usize,
+    request: &Request,
+) -> Result<Vec<Line>, String> {
     let compile = |duplicate: bool| -> Result<Vec<Line>, String> {
-        let (function, assignment, slots, reads) = allocated_with(ir, name, request, duplicate)?;
+        let (function, assignment, slots, reads) = allocated_with(selected, name, request, duplicate)?;
         finish(&function, &assignment, number, &slots, reads)
     };
     // Copying a return block into its predecessors saves a `jp` and often a
@@ -1279,7 +1331,7 @@ pub fn lines(
         // unconditional predecessor) the two are one function: allocated once.
         let alike = || {
             let (one, other) =
-                (machine_function_with(ir, name, request, true), machine_function_with(ir, name, request, false));
+                (machine_function_with(selected, name, true), machine_function_with(selected, name, false));
             matches!(
                 (one, other),
                 (Ok(one), Ok(other)) if format!("{one:?}") == format!("{other:?}")
@@ -1317,6 +1369,27 @@ pub fn text(
     request: &Request,
 ) -> Result<String, String> {
     let source = request.debug.then(|| crate::driver::source_of(ir, name)).flatten();
+    text_of(source, &cached_selections(ir, request)?, name, number, request)
+}
+
+/// [`text`] of a function of a [`Prepared`] module.
+pub fn text_in(
+    prepared: &Prepared,
+    name: &str,
+    number: usize,
+    request: &Request,
+) -> Result<String, String> {
+    let source = prepared.sources.get(name).cloned();
+    text_of(source, &prepared.selections, name, number, request)
+}
+
+fn text_of(
+    source: Option<(String, Option<u32>)>,
+    selected: &Selections,
+    name: &str,
+    number: usize,
+    request: &Request,
+) -> Result<String, String> {
     let file = source.as_ref().map(|(file, _)| file.clone());
     let mut out = String::new();
     let mut rows = 0;
@@ -1329,7 +1402,7 @@ pub fn text(
         }
     }
     out.push_str(&format!("{}::\n", crate::data::symbol(name)));
-    for line in lines(ir, name, number, request)? {
+    for line in lines_in(selected, name, number, request)? {
         match line {
             Line::Label(label) => out.push_str(&format!("{label}:\n")),
             Line::Inst(text) => out.push_str(&format!("\t{text}\n")),

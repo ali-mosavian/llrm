@@ -1501,3 +1501,33 @@ fn on_a_486_the_magic_is_the_accumulator_and_the_dividend_the_multiplier() {
     assert_eq!(urem_mul_operands("486"), (true, false));
     assert_eq!(urem_mul_operands("P5"), (false, true));
 }
+
+const STORES_BIG_ENDIAN: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define void @f(ptr %p, i32 %x) {
+  %b3 = trunc i32 %x to i8
+  %s2 = lshr i32 %x, 8
+  %b2 = trunc i32 %s2 to i8
+  %s1 = lshr i32 %x, 16
+  %b1 = trunc i32 %s1 to i8
+  %s0 = lshr i32 %x, 24
+  %b0 = trunc i32 %s0 to i8
+  %p1 = getelementptr i8, ptr %p, i32 1
+  %p2 = getelementptr i8, ptr %p, i32 2
+  %p3 = getelementptr i8, ptr %p, i32 3
+  store i8 %b0, ptr %p
+  store i8 %b1, ptr %p1
+  store i8 %b2, ptr %p2
+  store i8 %b3, ptr %p3
+  ret void
+}
+";
+
+/// A 32-bit value stored a byte at a time, high byte first, was shifts and
+/// four byte stores (`put_be32`: 8 instructions); the pin's `mergeTruncStores`
+/// makes it `bswap` and one store.
+#[test]
+fn four_byte_stores_of_a_value_high_byte_first_are_a_bswap_and_one_store() {
+    let names = names(STORES_BIG_ENDIAN).expect("selects");
+    assert!(names.iter().any(|n| n == "bswap"), "{names:?}");
+    assert!(!names.iter().any(|n| n == "shr" || n == "shld"), "{names:?}");
+}
