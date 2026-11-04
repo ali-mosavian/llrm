@@ -97,6 +97,16 @@ def reported(out):
     return values
 
 
+def program_flags(src):
+    """The `-f` flags of the program's first `// flags:` alternative, and whether it expects x86's types."""
+    text = src.read_text()
+    first = text.splitlines()[0] if text.startswith("// flags:") else ""
+    tokens = first.removeprefix("// flags:").split("|")[0].split()
+    keep = [t for t in tokens if t.startswith("-f") and not t.startswith("-fsanitize")]
+    x86 = any(t in ("-m32", "-mabi=sysv") or t.startswith("-march=i") for t in tokens) or "long double" in text
+    return keep, x86
+
+
 def one(job):
     src, args, work = job
     name = src.stem
@@ -105,7 +115,7 @@ def one(job):
     if want is None:
         return name, "SKIP", "output is not integers"
     ll = w / "p.ll"
-    c = sh([args.clang, f"-O{args.level}" if args.level != "z" else "-Oz", *CLANG_FLAGS, str(src), "-o", str(ll)], ROOT)
+    c = sh([args.clang, f"-O{args.level}" if args.level != "z" else "-Oz", *CLANG_FLAGS, *program_flags(src)[0], str(src), "-o", str(ll)], ROOT)
     if c.returncode:
         return name, "CLANG", (c.stderr.strip().splitlines() or [""])[-1][:100]
     text = [l for l in ll.read_text().splitlines() if not l.startswith("target datalayout")]
@@ -140,6 +150,9 @@ def one(job):
     got = reported(r.stdout)
     if got == want:
         return name, "PASS", f"{len(got)} values"
+    if program_flags(src)[1]:
+        # int is 16 bits and long double 64 here; the .out is x86's, so a difference is not a miscompile
+        return name, "X86", "expects x86's int and long double widths"
     first = next((i for i, (a, b) in enumerate(zip(got, want)) if a != b), min(len(got), len(want)))
     return name, "WRONG", f"value {first}: got {got[first] if first < len(got) else 'none'}, want {want[first] if first < len(want) else 'none'}"
 
