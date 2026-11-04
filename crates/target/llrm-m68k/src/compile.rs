@@ -106,7 +106,7 @@ pub fn items_with(
 ) -> Result<Vec<Item>, String> {
     let optimized;
     let module = if options.mid_end {
-        optimized = mid_end_described_by(module, &M68k::default(), Some(Rc::new(M68kMachine)))?;
+        optimized = mid_end_described_by(module, &M68k::for_cpu(cpu), Some(Rc::new(M68kMachine { cpu })))?;
         &optimized
     } else {
         module
@@ -287,7 +287,15 @@ pub fn mid_end_runs() -> usize {
 /// loop strength reduction, priced by [`M68k`]. (`llc` runs no `opt` pipeline;
 /// the bench's reference does not either.)
 pub fn mid_end(module: &Module) -> Result<Module, String> {
-    mid_end_described_by(module, &M68k::default(), Some(Rc::new(M68kMachine)))
+    mid_end_for(module, Cpu::default())
+}
+
+/// [`mid_end`] for `cpu`.
+pub fn mid_end_for(
+    module: &Module,
+    cpu: Cpu,
+) -> Result<Module, String> {
+    mid_end_described_by(module, &M68k::for_cpu(cpu), Some(Rc::new(M68kMachine { cpu })))
 }
 
 /// [`mid_end`] with another target description: what a test compares the
