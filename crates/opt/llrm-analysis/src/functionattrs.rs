@@ -707,6 +707,7 @@ pub fn post_order_with(
     let mut changed: BTreeSet<GlobalId> = stamp_memory(module, &list).into_iter().collect();
     changed.extend(crate::argumentattrs::add_argument_attrs(module, &set));
     changed.extend(crate::initializes::add_initializes(module, layout, &set));
+    changed.extend(crate::initializes::add_access_ranges(module, layout, &set));
     changed.extend(stamp_flags(module, layout, spaces, callees, &list));
     changed.into_iter().collect()
 }

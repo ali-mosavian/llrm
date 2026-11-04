@@ -61,7 +61,7 @@ use std::sync::Arc;
 use crate::backend::classes::RegisterClasses;
 use crate::backend::licm_core as licm;
 use crate::backend::liveness;
-use crate::model::ir::{Loc, Mem, Operation};
+use crate::model::ir::{Loc, Mem, Operation, Semantics};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
 
@@ -250,6 +250,32 @@ impl licm::Inst for Wrapped {
 
     fn is_jump(&self) -> bool {
         self.0.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Jump | Operation::Branch))
+    }
+
+    /// `isIdenticalTo` with the definitions ignored: the same operation over
+    /// the same values and operands, defining registers of the same widths.
+    fn identical(
+        &self,
+        other: &Self,
+    ) -> bool {
+        let (Some(one), Some(two)) = (&self.0.what, &other.0.what) else { return false };
+        let widths = |what: &Semantics| -> Vec<Option<u32>> {
+            what.dests.iter().map(|place| if let Loc::Held(held) = place { Some(held.width) } else { None }).collect()
+        };
+        one.op == two.op
+            && one.name == two.name
+            && one.sources == two.sources
+            && widths(one) == widths(two)
+            && self.0.uses == other.0.uses
+            && self.0.defines.len() == other.0.defines.len()
+    }
+
+    fn rename_use(
+        &mut self,
+        from: u32,
+        to: u32,
+    ) {
+        self.0 = self.0.renamed(&|value| if value == from { to } else { value });
     }
 }
 
