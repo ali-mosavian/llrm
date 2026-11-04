@@ -83,10 +83,11 @@ def test_z80_16bit_result_is_charged_the_de_store():
     assert Z.result_charge(Z.U8) == (0, 0, 0)
 
 
-def test_z80_table_header_names_the_single_tu_ice():
-    """The shipped z80 cc1 ICEs on a single-TU softfloat build at -O2; the table says so, so no gcc cell is added for such a build."""
-    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tables", "z80-gcc.tsv")
-    assert "single-translation-unit softfloat build" in open(root).readline()
+def test_z80_table_header_names_the_single_tu_fix():
+    """A single-TU softfloat build ICEd the z80 cc1 at -O2 (LRA passes) until sp += n went through IX/IY; the softfloat header says which cc1 compiles it."""
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tables", "softfloat-z80.tsv")
+    head = open(root).readline()
+    assert "compiles at -O2 since the sp += n fix" in head and "KNOWN ISSUE" not in head
 
 
 def test_a_hung_fork_call_is_a_failed_call_not_a_cell():
