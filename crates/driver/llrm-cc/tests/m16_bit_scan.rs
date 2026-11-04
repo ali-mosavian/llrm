@@ -53,4 +53,5 @@ fn an_i16_cttz_scans_at_16_bits_at_m16() {
     let text = std::fs::read_to_string(&asm).unwrap();
     let tz = text.split("lz:").next().unwrap();
     assert!(!tz.contains("bsf e"), "dword cttz:\n{tz}");
+    assert!(!tz.contains("0F3h"), "rep prefix, a dead byte on a 486:\n{tz}");
 }
