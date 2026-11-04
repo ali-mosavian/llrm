@@ -62,6 +62,7 @@ use crate::model::lir::{Block, Insn, LirBlock, LirBody, Phi};
 
 struct Info {
     source_order: bool,
+    m64: bool,
 }
 
 impl SchedInfo for Info {
@@ -95,6 +96,15 @@ impl SchedInfo for Info {
         reg: u16,
     ) -> bool {
         Some(reg) == super::dagisel_adapter::pin_register(super::dagisel_adapter::EFLAGS_ID)
+    }
+
+    // `ADJCALLSTACKDOWN32`/`64` and `ADJCALLSTACKUP32`/`64`, numbered alike in every x86 table.
+    fn call_frame_setup(&self) -> Option<u32> {
+        Some(if self.m64 { 768 } else { 767 })
+    }
+
+    fn call_frame_destroy(&self) -> Option<u32> {
+        Some(if self.m64 { 770 } else { 769 })
     }
 }
 
@@ -1166,7 +1176,7 @@ fn selected_in(
             },
             &selector,
             &mut hooks,
-            &Info { source_order: true },
+            &Info { source_order: true, m64 },
             &ctx,
             &mut state,
             block_at[&block.0],
