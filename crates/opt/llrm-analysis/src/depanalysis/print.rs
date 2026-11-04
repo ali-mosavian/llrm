@@ -137,6 +137,7 @@ pub fn print_module_da(
         let mut aa = AggregateAA::new();
         aa.add_aa_result(BasicAA::new(&unit));
         if tbaa {
+            aa.add_aa_result(crate::scopednoaliasaa::ScopedNoAliasAA::new(&unit));
             aa.add_aa_result(TypeBasedAA::new(&unit));
         }
         let mut info = DependenceInfo::new(&mut aa, &unit, &cx, options);

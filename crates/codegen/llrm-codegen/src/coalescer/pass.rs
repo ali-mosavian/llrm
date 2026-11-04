@@ -177,7 +177,7 @@ impl Coalescer {
                 joins_sub_registers: true,
                 joins_lanes: false,
                 aliases: Default::default(),
-                should_join: Box::new(|_| true),
+                should_join: None,
                 freq: Vec::new(),
                 remat: None,
                 remat_wins: None,

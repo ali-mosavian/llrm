@@ -228,6 +228,20 @@ pub fn physical(
                             }
                         }
                     }
+                    // An address component read as undef (a store through an undefined pointer) names the register it
+                    // was given and reads nothing; the placed cell still holds the value.
+                    if let Some(what) = one.what.as_ref() {
+                        for place in what.dests.iter().chain(&what.sources) {
+                            if let Loc::Mem(cell) = place {
+                                if let Some(base) = cell.base.filter(|base| one.undefs.contains(&base.value)) {
+                                    undef = undef.or(&_lanes(regs, regs.named(cell.through, i64::from(base.width))));
+                                }
+                                if let Some(index) = cell.index.filter(|index| one.undefs.contains(&index.value)) {
+                                    undef = undef.or(&_lanes(regs, regs.named(cell.index_through, i64::from(index.width))));
+                                }
+                            }
+                        }
+                    }
                     *complaint = complaint.or(&effect.reads.minus(&defined).minus(&touched).minus(&undef));
                     // The destination it defines is defined, though the table
                     // calls the write of a `bsr` conditional (a zero source

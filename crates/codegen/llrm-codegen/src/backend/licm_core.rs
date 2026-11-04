@@ -56,6 +56,16 @@ pub trait Inst: Clone {
         false
     }
 
+    /// Every value `rename_use` may change.
+    fn each_value(
+        &self,
+        mut each: impl FnMut(u32),
+    ) {
+        for &value in self.uses().iter().chain(self.defines()) {
+            each(value);
+        }
+    }
+
     /// Reads `to` where it read `from`.
     fn rename_use(
         &mut self,
@@ -65,11 +75,19 @@ pub trait Inst: Clone {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Instructions the rename sweep looked at.
+    pub(crate) static SWEPT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// `one` reading `to` where it read `from`, for each pair of `renamed`.
 fn rename_uses<I: Inst>(
     one: &mut I,
     renamed: &llrm_support::hash::HashMap<u32, u32>,
 ) {
+    #[cfg(test)]
+    SWEPT.with(|swept| swept.set(swept.get() + 1));
     if !one.uses().iter().any(|used| renamed.contains_key(used)) {
         return;
     }
@@ -186,6 +204,23 @@ pub fn hoist<I: Inst, P: Policy<I>>(
             }
         }
     }
+    // The blocks that read each value, or did: a superset, since a moved
+    // instruction leaves a block and a rename adds readers. The sweep after a
+    // round of renames visits these blocks, not the function (the pin's
+    // `replaceRegWith` follows the use list of each register).
+    let mut readers: HashMap<u32, BTreeSet<usize>> = HashMap::default();
+    for (number, block) in blocks.iter().enumerate() {
+        for one in &block.insns {
+            one.each_value(|used| {
+                readers.entry(used).or_default().insert(number);
+            });
+        }
+        for phi in &block.phis {
+            for &used in &phi.incoming {
+                readers.entry(used).or_default().insert(number);
+            }
+        }
+    }
     let mut order: Vec<&loopy::Loop> = found.iter().collect();
     order.sort_by_key(|one| one.body.to_set().len());
     let mut changed = false;
@@ -257,7 +292,15 @@ pub fn hoist<I: Inst, P: Policy<I>>(
             // (the pin's `replaceRegWith` follows the use list of each).
             if !renames.is_empty() {
                 let renamed: llrm_support::hash::HashMap<u32, u32> = renames.into_iter().collect();
-                for block in blocks.iter_mut() {
+                let mut touched: BTreeSet<usize> = BTreeSet::new();
+                for (from, to) in &renamed {
+                    if let Some(read) = readers.get(from).cloned() {
+                        touched.extend(read.iter().copied());
+                        readers.entry(*to).or_default().extend(read);
+                    }
+                }
+                for number in touched {
+                    let block = &mut blocks[number];
                     for one in block.insns.iter_mut() {
                         rename_uses(one, &renamed);
                     }
@@ -285,6 +328,11 @@ pub fn hoist<I: Inst, P: Policy<I>>(
             for &value in one.defines() {
                 defined.insert(value, pre);
             }
+        }
+        for one in &moved {
+            one.each_value(|used| {
+                readers.entry(used).or_default().insert(pre_at);
+            });
         }
         let insns = &mut blocks[pre_at].insns;
         let (leading, moved): (Vec<I>, Vec<I>) = moved.into_iter().partition(|one| policy.leads(one));
