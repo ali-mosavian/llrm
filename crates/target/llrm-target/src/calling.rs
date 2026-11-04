@@ -68,6 +68,13 @@ pub struct Convention {
     pub wide_pairs: Vec<[String; 2]>,
     /// Whether a register an argument skipped is free for a later one.
     pub backfill: bool,
+    /// Argument `n` takes register `n` of its own file, integer or float, and
+    /// the stack slot `n` otherwise (Win64: RCX, RDX, R8, R9 and XMM0-3 share
+    /// positions).
+    pub positional: bool,
+    /// Bytes below the arguments the caller reserves in every call and the
+    /// callee may use (Win64's 32-byte home area of the register arguments).
+    pub shadow_bytes: i64,
     /// The ABI guarantees the stack is a multiple of `stack_alignment` at every
     /// call, whatever the callee holds: every function that calls frames
     /// itself to it.
@@ -222,6 +229,8 @@ const KEYS: &[&str] = &[
     "cc",
     "wide_pairs",
     "backfill",
+    "positional",
+    "shadow_bytes",
     "aligned_calls",
     "register_bytes",
     "sized_arguments",
@@ -654,6 +663,8 @@ impl Convention {
             cc: table.contains_key("cc").then(|| text("cc")).transpose()?,
             wide_pairs,
             backfill: flag("backfill")?,
+            positional: flag("positional")?,
+            shadow_bytes: table.contains_key("shadow_bytes").then(|| integer("shadow_bytes")).transpose()?.unwrap_or(0),
             aligned_calls: flag("aligned_calls")?,
             register_bytes: table.contains_key("register_bytes").then(|| integer("register_bytes")).transpose()?,
             sized_arguments: flag("sized_arguments")?,
@@ -771,6 +782,9 @@ impl Convention {
         arguments: &[Kind],
         reserved: &[&str],
     ) -> Placement {
+        if self.positional {
+            return self.place_positional(arguments, reserved);
+        }
         let mut free: Vec<bool> = vec![true; self.argument_registers.len()];
         for (index, name) in self.argument_registers.iter().enumerate() {
             free[index] = !reserved.contains(&name.as_str());
@@ -828,6 +842,39 @@ impl Convention {
             }
         }
         Placement { places, used, stack_bytes: stack }
+    }
+
+    /// `place` for a `positional` convention: argument `n` is in register `n`
+    /// of its file, else in slot `n` above the shadow area, which the call
+    /// reserves even with no argument on the stack.
+    fn place_positional(
+        &self,
+        arguments: &[Kind],
+        reserved: &[&str],
+    ) -> Placement {
+        let mut places = Vec::new();
+        let mut used = Vec::new();
+        let slot = |position: usize| Place::Stack(self.slot_bytes * position as i64);
+        // The hidden result pointer is the first argument: it takes the first
+        // position, and the named ones follow.
+        let first = reserved.len();
+        for (index, &kind) in arguments.iter().enumerate() {
+            let position = first + index;
+            let register = match kind {
+                Kind::Word | Kind::Sized(_) => self.argument_registers.get(position),
+                Kind::Float(_) => self.float_argument_registers.get(position),
+                Kind::Wide | Kind::Memory(_) => None,
+            };
+            places.push(match register {
+                Some(name) => {
+                    used.push(name.clone());
+                    Place::Registers(vec![name.clone()])
+                }
+                None => slot(position),
+            });
+        }
+        let stack_bytes = (self.slot_bytes * (first + arguments.len()) as i64).max(self.shadow_bytes);
+        Placement { places, used, stack_bytes }
     }
 
     /// The registers a call changes that the callee does not keep: what the
@@ -979,6 +1026,40 @@ mod tests {
             (six.places[4].clone(), six.places[5].clone(), six.stack_bytes),
             (Place::Stack(0), Place::Stack(4), 8)
         );
+    }
+
+    const WIN64: &str = "default = \"w\"\n[abi.w]\nconvention = \"w\"\n[w]\nslot_bytes = 8\norder = \"right-to-left\"\ncleanup = \"caller\"\nargument_registers = [\"rcx\", \"rdx\", \"r8\", \"r9\"]\nfloat_argument_registers = [\"xmm0\", \"xmm1\", \"xmm2\", \"xmm3\"]\npositional = true\nshadow_bytes = 32\nreturn_address_bytes = 8\nfirst_argument_offset = 48\nframe = \"rbp\"\nstack = \"rsp\"\npreserved = [[\"ebx\", \"rbx\"]]\nclobbered = [\"rax\"]\nentry_state = []\npromotion = \"slot\"\nwide_slots = 1\nvariadic_float = \"double\"\n[w.result]\n8 = [\"rax\"]\n";
+
+    /// Win64 shares positions between the integer and float registers: the
+    /// second argument is RDX or XMM1 whatever the first was, the fifth is the
+    /// stack slot above the 32-byte home area, and a call with no stack
+    /// argument still reserves it. SysV's counters placed `(i, d, i, d)` in
+    /// RCX, XMM0, RDX, XMM1.
+    #[test]
+    fn a_positional_convention_numbers_its_registers_by_argument_not_by_file() {
+        let calling = Calling::parse(WIN64).unwrap();
+        let placed = calling.native().place(&[Kind::Word, Kind::Float(8), Kind::Word, Kind::Float(8), Kind::Word]);
+        assert_eq!(
+            placed.places,
+            [registers(&["rcx"]), registers(&["xmm1"]), registers(&["r8"]), registers(&["xmm3"]), Place::Stack(32)]
+        );
+        assert_eq!(placed.stack_bytes, 40);
+        assert_eq!(calling.native().place(&[]).stack_bytes, 32);
+    }
+
+    /// A struct result's hidden pointer is RCX under Win64, so the named
+    /// arguments are positions 1, 2, ...: RDX, XMM2, and the fourth is above
+    /// the shadow area. Placed from position 0 the first one lost its register.
+    #[test]
+    fn a_positional_convention_counts_the_hidden_result_pointer_as_position_zero() {
+        let calling = Calling::parse(WIN64).unwrap();
+        let placed =
+            calling.native().place_reserving(&[Kind::Word, Kind::Float(8), Kind::Word, Kind::Word], &["rcx"]);
+        assert_eq!(
+            placed.places,
+            [registers(&["rdx"]), registers(&["xmm2"]), registers(&["r9"]), Place::Stack(32)]
+        );
+        assert_eq!(placed.stack_bytes, 40);
     }
 
     /// gcc's regparm(3) puts `(float, int b, double, int d, int e)` in EAX,

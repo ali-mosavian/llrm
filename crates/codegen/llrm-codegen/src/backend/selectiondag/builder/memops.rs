@@ -153,6 +153,7 @@ impl Builder<'_> {
         if self.target.dag.pointer == EVT::I64
             && matches!(intrinsic, Intrinsic::VaStart)
             && self.dag.var_args_save.is_none()
+            && !self.win64_va
         {
             return Err(Refused("va_start at m64 outside the entry block"));
         }

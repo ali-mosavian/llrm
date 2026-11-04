@@ -158,10 +158,10 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::facts::{Facts, Inlining};
 use llrm_mir::memory::{Callees, callee};
-use llrm_mir::module::{Function, InstId, Metadata, MetadataId, Module, Operand, ValueDef};
+use llrm_mir::module::{BlockId, Function, InstId, Metadata, MetadataId, Module, Operand, ValueDef};
 use llrm_mir::opcode::{CallInfo, Flags, Opcode};
 use llrm_mir::passes::Declared;
-use llrm_mir::splice::{Spliced, carries, spliced};
+use llrm_mir::splice::{Spliced, carries, merge_entry, spliced};
 use llrm_mir::types::Type;
 use llrm_support::hash::{IndexMap, SparseIdMap};
 
@@ -889,6 +889,8 @@ struct Placed {
     copies: std::collections::BTreeMap<usize, InstId>,
     /// The copies' lifetimes, marked once every copy is made.
     lifetimes: Vec<Lifetimes>,
+    /// The call's block and the copy's entry of each site, in the order made.
+    entries: Vec<(BlockId, BlockId)>,
 }
 
 /// The static allocas of a copy no marker bounds, and where the copy begins
@@ -1225,6 +1227,7 @@ fn executed(
         crate::inlinemetadata::propagated(function, marked, &made.copies, metadata, declared);
     }
     placed.lifetimes.push(unmarked_allocas(context, function, layout, &planned.candidate.body, &made, declared));
+    placed.entries.push((made.block, made.entry));
     let copies = made.copies;
     // The call was the entry's first instruction and is gone: the copies that
     // come out of this one are anchored on what the entry starts with now.
@@ -1335,6 +1338,10 @@ pub fn expanded_all(
     assert_eq!(end.1, frame(context, caller.layout, function), "the stack kept is not the body's");
     for lifetimes in &placed.lifetimes {
         insert_lifetimes(context, function, caller.layout, lifetimes, declared);
+    }
+    // A site made inside an entry joins it first, that entry then the block before it.
+    for &(block, entry) in placed.entries.iter().rev() {
+        merge_entry(function, block, entry);
     }
     Ok(sites.len())
 }
