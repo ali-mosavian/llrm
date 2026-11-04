@@ -10,6 +10,7 @@ pub mod ccr;
 pub mod chain;
 pub mod cmpdup;
 pub mod cmpelim;
+pub mod constreg;
 pub mod compile;
 pub mod consts;
 pub mod dagisel;
