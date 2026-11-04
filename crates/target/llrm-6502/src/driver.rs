@@ -474,6 +474,12 @@ fn write_constant(
             out[at..at + bytes].copy_from_slice(&value.to_le_bytes()[..bytes]);
             Ok(())
         }
+        (ConstantKind::Float(bits), Type::Float(_)) => {
+            // the soft-float image: the float's bits, little-endian
+            let bytes = layout.alloc_size(types, ty) as usize;
+            out[at..at + bytes].copy_from_slice(&bits.to_le_bytes()[..bytes]);
+            Ok(())
+        }
         (ConstantKind::Bytes(data), _) => {
             out[at..at + data.len()].copy_from_slice(data);
             Ok(())

@@ -1,0 +1,4 @@
+# <test name> #<PR>: a red test of the release/next tip the runner lands past, while its fix PR is open
+test_hir_part3::test_a_counter_whose_start_seeds_pointers_counts_up_to_its_symbolic_bound #6688
+test_hir_part3::test_a_counter_stepped_before_other_work_is_tested_against_its_end #6415
+test_hir_part3::test_loops_count_to_zero_once_their_other_counters_are_settled #6771

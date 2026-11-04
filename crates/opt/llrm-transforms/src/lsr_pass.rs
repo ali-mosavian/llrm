@@ -192,12 +192,10 @@ fn plan_loop(
     let planned = |plan| Outcome::Planned(plan);
     let cx = env.cx(context, function);
     let Some(lp) = cx.loops.get_loop_for(header) else { return planned(None) };
-    // Loop simplify form, or stay out of trouble; and the innermost loops
-    // only: the outer ones wait for a model of them.
+    // Loop simplify form, or stay out of trouble.
     if lp.get_loop_preheader(function).is_none()
         || lp.get_loop_latch(function).is_none()
         || !lp.has_dedicated_exits(function)
-        || !lp.is_innermost()
     {
         return planned(None);
     }
@@ -244,6 +242,13 @@ fn plan_loop(
                 iv_inc_insert_pos = nearest_common_dominator(&cx, iv_inc_insert_pos, cond);
             }
         }
+    }
+
+    // Skip nested loops until we can model them better with formulae: the
+    // shadow variables and the exit tests above are made on every loop, as the
+    // pin's constructor does before it looks at the nesting.
+    if !lp.is_innermost() {
+        return planned(None);
     }
 
     // Chains are looked for where the number of registers is what costs.

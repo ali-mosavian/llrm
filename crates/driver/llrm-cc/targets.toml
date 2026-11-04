@@ -199,7 +199,7 @@ llc_program = "llrm-6502-llc"
 object = "ca65"
 link = ["sh", "-c", "echo 'llrm-cc: the 6502 rows stop at -S' >&2; exit 1"]
 
-# m68k Linux, as far as assembly text: the backend has no object writer behind llrm-cc, so a row stops at -S.
+# m68k Linux: -S is gas text, -c an ELF32 relocatable with .text and the data sections; no link line yet.
 # The pin's clang gives the target a 64-bit long double (`[c]` of the description).
 [m68k-68000]
 description = "m68k"
@@ -208,7 +208,7 @@ datalayout = "{datalayout:m68k}"
 clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68000", "-ffreestanding"]
 llc = ["-mcpu=68000"]
 llc_program = "llrm-m68k-llc"
-object = "asm"
+object = "elf"
 link = []
 
 [m68k-68020]
@@ -218,7 +218,7 @@ datalayout = "{datalayout:m68k}"
 clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68020", "-ffreestanding"]
 llc = ["-mcpu=68020"]
 llc_program = "llrm-m68k-llc"
-object = "asm"
+object = "elf"
 link = []
 
 # Z80, as far as sdasz80 text: clang's msp430 is only the C front end (16-bit int and pointers, as SDCC; unsigned char), its

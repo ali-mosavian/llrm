@@ -331,6 +331,59 @@ fn collect(
     result
 }
 
+/// The bytes a function may read and may write through one pointer parameter.
+pub(crate) struct Accessed {
+    pub reads: Vec<(i64, i64)>,
+    pub writes: Vec<(i64, i64)>,
+}
+
+/// The bytes the body of `id` reads and writes through its pointer parameter
+/// `index`, where every use is a constant-offset, non-volatile load, store or
+/// constant-length `memset`/`memcpy`/`memmove`; None (the whole pointee) for
+/// any other use, an interposable definition or a parameter that is not used.
+///
+/// DEVIATE I3 (exit 2026-11-30: ask upstream or drop): LLVM states only the
+/// must-write bytes (`inferInitializes`, FunctionAttrs.cpp:1118), and its
+/// `BasicAAResult::getModRefInfo(Call, Loc)` takes a pointer argument as
+/// `getForArgument`, the whole object when the callee is not sized
+/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/BasicAliasAnalysis.cpp>,
+/// the "Refine the modref info for argument memory" loop). The may-access
+/// ranges narrow that loop to the bytes the callee body touches.
+pub(crate) fn accessed(
+    module: &Module,
+    layout: &DataLayout,
+    id: GlobalId,
+    index: usize,
+) -> Option<Accessed> {
+    let function = module.global(id).function()?;
+    if !crate::argumentattrs::exact_definition(module, id) {
+        return None;
+    }
+    let entry = function.entry()?;
+    let uses = collect(module, layout, function, *function.parameters().get(index)?, entry);
+    let (mut reads, mut writes) = (Ranges::default(), Ranges::default());
+    let mut seen = false;
+    for block in uses.per_block.values() {
+        if block.has_unknown_access {
+            return None;
+        }
+        for (_, access) in block.insts.iter() {
+            // An empty range is a variable index or an empty access: unbounded.
+            let known = !access.ranges.is_empty() && access.ranges.0.iter().all(|&(low, _)| low >= 0);
+            if !known {
+                return None;
+            }
+            match access.kind {
+                Kind::Read => reads = reads.union(&access.ranges),
+                Kind::Write => writes = writes.union(&access.ranges),
+                Kind::WriteWithSideEffect | Kind::Unknown => return None,
+            }
+            seen = true;
+        }
+    }
+    seen.then_some(Accessed { reads: reads.0, writes: writes.0 })
+}
+
 /// The initialized ranges of the parameter `index` of `id` (`inferInitializes`
 /// without stating them): None where there is nothing to state.
 fn inferred(
@@ -487,6 +540,55 @@ pub fn add_initializes(
             attrs.retain(|one| !matches!(one, Attribute::Initializes(_)));
             attrs.push(Attribute::Initializes(stated.0));
             changed.insert(id);
+        }
+    }
+    changed
+}
+
+/// States `accessed` as `llrm.reads` and `llrm.writes` on the pointer
+/// parameters of the members, and drops them where the body no longer bounds
+/// its access.
+pub fn add_access_ranges(
+    module: &mut Module,
+    layout: &DataLayout,
+    members: &BTreeSet<GlobalId>,
+) -> BTreeSet<GlobalId> {
+    let mut changed = BTreeSet::new();
+    for &id in members {
+        let Some(function) = module.global(id).function() else { continue };
+        if function.is_declaration() {
+            continue;
+        }
+        for index in 0..function.parameters().len() {
+            let function = module.global(id).function().expect("a procedure");
+            let pointer = matches!(
+                function
+                    .operand_type(&module.context, Operand::Value(function.parameters()[index]))
+                    .map(|ty| module.context.types.get(ty)),
+                Some(Type::Pointer(_))
+            );
+            if !pointer {
+                continue;
+            }
+            let found = accessed(module, layout, id, index);
+            let attrs = match &mut module.globals[id.0 as usize].kind {
+                llrm_mir::module::GlobalKind::Function(function) => &mut function.parameter_attrs[index],
+                llrm_mir::module::GlobalKind::Variable(_) => unreachable!("a procedure is a function"),
+            };
+            let before = attrs.clone();
+            attrs.retain(|attr| {
+                !matches!(
+                    attr,
+                    Attribute::Str(name, _) if name == llrm_mir::memory::READS || name == llrm_mir::memory::WRITES
+                )
+            });
+            if let Some(found) = found {
+                llrm_mir::memory::state_access_ranges(attrs, llrm_mir::memory::READS, &found.reads);
+                llrm_mir::memory::state_access_ranges(attrs, llrm_mir::memory::WRITES, &found.writes);
+            }
+            if *attrs != before {
+                changed.insert(id);
+            }
         }
     }
     changed

@@ -393,6 +393,13 @@ def platform_sources_of(platform: Path) -> list[Path]:
     return sorted([*platform.glob("*.c"), *platform.glob("*.asm"), *device.glob("*.c"), *device.glob("*.asm"), *device.parent.glob("*.c")])
 
 
+def portable_not_replaced(portable: list[Path], own: list[Path]) -> list[Path]:
+    """The portable C that no source of the target's replaces. An object is named by its source's stem, so a portable `smid.c` beside the target's
+    `smid.asm` shared one `smid.obj` and the later one built won: on the flat target the C routine, +47% instructions per MID$."""
+    taken = {source.stem for source in own}
+    return [source for source in portable if source.stem not in taken]
+
+
 def platform_sources() -> list[Path]:
     """The target's own code: its C and its assembly."""
     return platform_sources_of(platform_directory())
@@ -463,7 +470,7 @@ def build(directory: Path) -> tuple[Path, Path]:
     directory.mkdir(parents=True, exist_ok=True)
     include = dosbatch.c_include(dosbatch.REAL_MODE, directory)
     objects: list[Path] = []
-    for source in portable_sources():
+    for source in portable_not_replaced(portable_sources(), platform_sources()):
         obj = directory / f"{source.stem}.obj"
         _compile_c(source, obj, include)
         objects.append(obj)

@@ -64,6 +64,7 @@ def Z80tsts : SDNode<"Z80ISD::TSTS", SDTZ80Tsts>;
 // Nothing lowers to these two: they exist so the A-based byte forms below are in the instruction tables the emitter uses.
 def Z80ld8a : SDNode<"Z80ISD::LD8A", SDTypeProfile<1, 1, [SDTCisVT<0, i8>, SDTCisVT<1, i16>]>, [SDNPHasChain, SDNPMayLoad]>;
 def Z80st8a : SDNode<"Z80ISD::ST8A", SDTypeProfile<0, 2, [SDTCisVT<0, i8>, SDTCisVT<1, i16>]>, [SDNPHasChain, SDNPMayStore]>;
+def Z80subzx : SDNode<"Z80ISD::SUBZX", SDTypeProfile<1, 2, [SDTCisVT<0, i16>, SDTCisVT<1, i8>, SDTCisVT<2, i8>]>>;
 def Z80wrapper : SDNode<"Z80ISD::WRAPPER", SDTIntUnaryOp>;
 def Z80retglue : SDNode<"Z80ISD::RET_GLUE", SDTNone, [SDNPHasChain, SDNPOptInGlue, SDNPVariadic]>;
 
@@ -123,6 +124,9 @@ let Predicates = [HasZ180], Defs = [F] in
 let Defs = [F, A] in
   def SUBZX8 : Z80Inst<(outs GR16:$d), (ins ACC:$a, GR8:$b), "subzx $d, $a, $b",
                        [(set i16:$d, (sub (zext i8:$a), (zext i8:$b)))]>;
+
+// The same, made by `lower_sub` from words whose high byte is known zero.
+def : Pat<(i16 (Z80subzx ACC:$a, GR8:$b)), (SUBZX8 ACC:$a, GR8:$b)>;
 
 // Word logic is the two bytes' ops, expanded when emitted (the 6502's OR16 is the same); the join of two bytes
 // into a pair, `lo | (hi << 8)`, is the more specific pattern below and wins.
