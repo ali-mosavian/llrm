@@ -993,7 +993,10 @@ mod tests {
     /// A load read by `readers` arithmetic instructions: the several-reader
     /// refold, the only fold that weighs clocks against bytes (a single reader
     /// folds as the pin does, whatever the clocks).
-    fn read_by(readers: usize, cell: Mem) -> LirBody {
+    fn read_by(
+        readers: usize,
+        cell: Mem,
+    ) -> LirBody {
         let mut insns = vec![fld(0, 1, cell), insn(1, Operation::FloatLoad, "fld1", vec![held(2)], vec![])];
         let mut left = 2;
         for reader in 0..readers {

@@ -161,7 +161,7 @@ impl FunctionPass for LoopIdiom {
         let size_costs = (self.for_size || rate > 0 || priced).then(|| {
             let inline =
                 if self.for_size { tuning.max_stores_per_memset_opt_size } else { tuning.max_stores_per_memset };
-            OperationCosts { memset_stores: inline as i64, ..outer.target().size_costs() }
+            OperationCosts { memset_stores: inline as i64, wide_fill: !self.for_size, ..outer.target().size_costs() }
         });
         let clock_costs = if self.for_size {
             Some((outer.target().costs(), outer.target().size_milliclocks_per_byte()))

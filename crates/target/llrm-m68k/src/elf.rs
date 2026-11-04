@@ -158,6 +158,7 @@ fn place(
                 labels.push((label, code.len()));
             }
             Item::Bytes(bytes) => code.extend_from_slice(bytes),
+            Item::Loc(_) => {}
             Item::Inst(one) => {
                 let encoded = encode(one)?;
                 pending.push((code.len(), index, encoded.fixups.clone()));
@@ -202,6 +203,7 @@ fn place(
             definition: Definition::Defined { section: 0, offset: *offset },
             size,
             group: None,
+            visibility: Default::default(),
         });
     }
     let mut relocs = Vec::new();
@@ -223,6 +225,7 @@ fn place(
                             definition: Definition::Undefined,
                             size: 0,
                             group: None,
+                            visibility: Default::default(),
                         });
                         symbols.len() - 1
                     },

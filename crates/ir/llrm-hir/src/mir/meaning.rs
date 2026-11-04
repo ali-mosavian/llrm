@@ -24,7 +24,8 @@ pub(super) fn defined(
         if !declares(module, global, meaning, 8 * descriptor.word as u32) {
             continue;
         }
-        let raise = if promises.checked && meaning.check.is_some() { raiser(module, spaces) } else { None };
+        let stores = matches!(meaning.result, Returns::Copy { .. });
+        let raise = if (promises.checked || stores) && meaning.check.is_some() { raiser(module, spaces) } else { None };
         define(module, global, meaning, descriptor, raise);
     }
 }
@@ -39,13 +40,21 @@ fn declares(
     let Some(function) = module.global(global).function().filter(|one| one.is_declaration()) else { return false };
     let ty = function.ty;
     // The routines' integers are words of the target: 16 bits in real mode.
-    let (ptr, word) = (module.context.types.ptr(0), module.context.types.int(bits));
+    let (ptr, far, word) = (module.context.types.ptr(0), module.context.types.ptr(1), module.context.types.int(bits));
     let returns = match meaning.result {
         Returns::Value(_) => word,
         Returns::View { .. } => ptr,
+        Returns::Copy { .. } => module.context.types.void(),
     };
-    let parameters: Vec<TypeId> =
-        meaning.parameters.iter().map(|one| if *one == Parameter::String { ptr } else { word }).collect();
+    let parameters: Vec<TypeId> = meaning
+        .parameters
+        .iter()
+        .map(|one| match one {
+            Parameter::String => ptr,
+            Parameter::Place => far,
+            Parameter::Int => word,
+        })
+        .collect();
     matches!(
         module.context.types.get(ty),
         Type::Function { returns: r, parameters: p, variadic: false } if *r == returns && *p == parameters
@@ -98,9 +107,14 @@ fn define(
         body.b.position(go);
     }
     let result = match &meaning.result {
+        Returns::Copy { to, from, count } => {
+            let (to, from, count) = (body.expr(to), body.expr(from), body.expr(count));
+            body.copy(to, from, count);
+            None
+        }
         Returns::Value(value) => {
             let value = body.expr(value);
-            body.word(value)
+            Some(body.word(value))
         }
         Returns::View { length, data } => {
             let (length, data) = (body.expr(length), body.expr(data));
@@ -112,10 +126,10 @@ fn define(
             body.b.store(length, at, false);
             let at = body.field(made, descriptor.data);
             body.b.store(data, at, false);
-            made
+            Some(made)
         }
     };
-    body.b.ret(Some(result));
+    body.b.ret(result);
     body.b.function.take_changes();
     for &one in &meaning.releases {
         module.builder(global).function.parameter_attrs[one].push(Fact::Releases.carrier());
@@ -158,6 +172,51 @@ impl Body<'_, '_> {
         self.b.gep(byte, pointer, &[index], Flags::default(), "")
     }
 
+    /// String parameter `at` as a near pointer: a place is cast from its far
+    /// pointer, the data segment's offset.
+    fn string(
+        &mut self,
+        at: usize,
+    ) -> Operand {
+        let parameter = self.b.parameter(at);
+        if self.parameters[at] != Parameter::Place {
+            return parameter;
+        }
+        let near = self.b.context.types.ptr(0);
+        self.b.cast(CastOp::AddrSpaceCast, parameter, near, "")
+    }
+
+    /// `count` bytes forward from `from` to `to`, one at a time.
+    fn copy(
+        &mut self,
+        to: Operand,
+        from: Operand,
+        count: Operand,
+    ) {
+        let (byte, word) = (self.b.context.types.int(8), self.b.context.types.int(self.bits));
+        let done = self.b.block("done");
+        let (head, step) = (self.b.block("copy"), self.b.block("step"));
+        let index = self.b.alloca(word, "index");
+        let zero = self.b.int(self.bits, 0);
+        self.b.store(zero, index, false);
+        let one = self.b.int(self.bits, 1);
+        let none = self.b.icmp(IntPredicate::Slt, count, one, "");
+        self.b.cond_br(none, done, head);
+        self.b.position(head);
+        let at = self.b.load(word, index, false, "");
+        let source = self.b.gep(byte, from, &[at], Flags::default(), "");
+        let target = self.b.gep(byte, to, &[at], Flags::default(), "");
+        let value = self.b.load(byte, source, false, "");
+        self.b.store(value, target, false);
+        self.b.br(step);
+        self.b.position(step);
+        let next = self.b.binary(BinaryOp::Add, at, one, Flags::default(), "");
+        self.b.store(next, index, false);
+        let more = self.b.icmp(IntPredicate::Slt, next, count, "");
+        self.b.cond_br(more, head, done);
+        self.b.position(done);
+    }
+
     /// `expr` as a condition.
     fn condition(
         &mut self,
@@ -178,13 +237,19 @@ impl Body<'_, '_> {
                 self.b.parameter(*at)
             }
             Expr::Length(at) => {
-                let address = self.field(self.b.parameter(*at), self.descriptor.length);
+                let string = self.string(*at);
+                let address = self.field(string, self.descriptor.length);
                 self.b.load(word, address, false, "length")
             }
             Expr::Data(at) => {
-                let (pointer, address) =
-                    (self.b.context.types.ptr(0), self.field(self.b.parameter(*at), self.descriptor.data));
+                let string = self.string(*at);
+                let (pointer, address) = (self.b.context.types.ptr(0), self.field(string, self.descriptor.data));
                 self.b.load(pointer, address, false, "data")
+            }
+            Expr::Near(at) => self.string(*at),
+            Expr::If(when, then, otherwise) => {
+                let (when, then, otherwise) = (self.expr(when), self.expr(then), self.expr(otherwise));
+                self.b.select(when, then, otherwise, "")
             }
             Expr::Slot(value) => {
                 let value = self.expr(value);

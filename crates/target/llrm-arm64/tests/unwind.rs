@@ -53,6 +53,9 @@ fn rules(object: &Path) -> Vec<Vec<String>> {
 
 /// A function that calls and uses the result keeps a frame record; before this
 /// the object had no `.eh_frame`, and nothing could unwind through the call.
+/// The saves are stated after the frame register is set up, highest address
+/// first, as the pin does (they were stated at the `stp`, 4 bytes early, in the
+/// other order: `cfi_diff.py` showed pc 4 `{x29, x30}` against the pin's none).
 #[test]
 fn a_function_with_a_frame_record_states_where_its_caller_is() {
     let directory = tempfile::tempdir().unwrap();
@@ -64,13 +67,13 @@ fn a_function_with_a_frame_record_states_where_its_caller_is() {
         rules(&object),
         [[
             "DW_CFA_def_cfa_offset: 16",
-            "DW_CFA_offset: r29 (x29) at cfa-16",
-            "DW_CFA_offset: r30 (x30) at cfa-8",
             "DW_CFA_def_cfa_register: r29 (x29)",
+            "DW_CFA_offset: r30 (x30) at cfa-8",
+            "DW_CFA_offset: r29 (x29) at cfa-16",
             "DW_CFA_def_cfa_register: r31 (sp)",
             "DW_CFA_def_cfa_offset: 0",
-            "DW_CFA_restore: r29 (x29)",
             "DW_CFA_restore: r30 (x30)",
+            "DW_CFA_restore: r29 (x29)",
         ]
         .map(String::from)
         .to_vec()]
@@ -103,6 +106,25 @@ fn a_saved_float_register_is_stated_with_the_extended_form() {
     assert!(
         rules[0].iter().any(|rule| rule.starts_with("DW_CFA_restore_extended") && rule.contains("r72")),
         "{rules:?}"
+    );
+}
+
+/// Code laid out after the epilogue (an early exit's block that the branch
+/// skips to) runs in the frame again: its rows state the frame address and
+/// the saves anew. Without them the unwinder takes that code for a frameless
+/// one, the state the epilogue left.
+#[test]
+fn code_laid_out_after_the_epilogue_states_the_frame_again() {
+    let directory = tempfile::tempdir().unwrap();
+    let object = object(
+        directory.path(),
+        "declare i32 @g(ptr)\ndeclare i32 @h(ptr)\ndefine i32 @f(i32 %a) {\n  %c = icmp eq i32 %a, 0\n  br i1 %c, label %early, label %late\nearly:\n  %r = call i32 @g(ptr null)\n  %q = mul i32 %r, 3\n  ret i32 %q\nlate:\n  %s = call i32 @h(ptr null)\n  %t = add i32 %s, %a\n  ret i32 %t\n}\n",
+    );
+    let rules = &rules(&object)[0];
+    let torn_down = rules.iter().rposition(|rule| rule == "DW_CFA_def_cfa_offset: 0").expect("the epilogue");
+    assert!(
+        rules[torn_down..].iter().any(|rule| rule.starts_with("DW_CFA_def_cfa: r29")),
+        "the block after the epilogue does not state the frame: {rules:?}"
     );
 }
 

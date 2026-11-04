@@ -10,6 +10,7 @@ use llrm_lir::registers::RegId;
 use llrm_spike_mf::regalloc::Target;
 use llrm_spike_mf::{Inst, Kind, Operand, Reg};
 
+use crate::expand::lanes;
 use crate::{REGISTER_INFO, reg};
 
 /// A virtual register's class.
@@ -45,7 +46,23 @@ impl Z80Registers {
     }
 }
 
+thread_local! {
+    /// Set while a function is allocated again after the first allocation
+    /// failed: the copies from the argument registers are left unjoined
+    /// (`Target::joins_pinned_copies`).
+    pub static UNJOINED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 impl Target for Z80Registers {
+    /// The pin joins a copy with a physical register only when it is reserved
+    /// (`canJoinPhys`); an argument pair is not, so the copy stays and the
+    /// word can spill instead of holding its pair to its last use. The
+    /// convention states whether the z80 leaves them
+    /// (`pinned_copies_unjoined`).
+    fn joins_pinned_copies() -> bool {
+        !(crate::abi::z80().pinned_copies_unjoined || UNJOINED.with(std::cell::Cell::get))
+    }
+
     type Class = Class;
 
     fn meet(
@@ -97,6 +114,21 @@ impl Target for Z80Registers {
         index: usize,
     ) -> Option<Class> {
         crate::mfunc::operand_class(name, index)
+    }
+
+    fn read_part(
+        inst: &Inst,
+        operand: usize,
+        register: RegId,
+    ) -> RegId {
+        // the sign test of a pair, and the byte halves taken from one, read a
+        // single byte
+        let half = match inst.kind {
+            Kind::Op("BIT7_16" | "HI") if operand == 1 => 1,
+            Kind::Op("LO") if operand == 1 => 0,
+            _ => return register,
+        };
+        lanes(register).map_or(register, |lanes| [lanes.0, lanes.1][half])
     }
 
     // `reads_flags_set_just_before` stays false: every copy, spill and reload

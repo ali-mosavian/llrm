@@ -625,6 +625,77 @@ impl Builder<'_> {
         (stored - FILL_BYTES) as i64 * trade.milliclocks_per_byte >= (fill - stores) * 1000
     }
 
+    /// DEVIATE SD2xx (real mode, x87): a zero memset of whole doubles is `fldz`
+    /// and a `fst` of each, where the pin stores integer zeros (`fst qword`
+    /// 3 B, a dword immediate store 8). Tuned for size the bytes decide; at
+    /// speed they are taken where the bytes saved, at the target's speed
+    /// rate, pay for the clocks the `fst`s add. Owner w2. Exit 2026-11-20: a
+    /// store-cost hook on the target description.
+    fn x87_zero_stores(
+        &mut self,
+        chain: SDValue,
+        dst: SDValue,
+        length: u64,
+        align: u64,
+        opt_size: bool,
+        filled: bool,
+    ) -> Option<SDValue> {
+        const FLDZ: u64 = 2;
+        const FST_QWORD: u64 = 3;
+        const FSTP: u64 = 2;
+        if self.target.dag.pointer.size_in_bits() != 16
+            || self.target.tuning.x87_stack_slots.is_none()
+            || self.volatile_memory
+            || length == 0
+            || length % 8 != 0
+        {
+            return None;
+        }
+        let (dwords, cells) = (length / 4, length / 8);
+        let x87 = FLDZ + cells * FST_QWORD + FSTP;
+        // Never over a fill: its price here (`FILL_BYTES`) cannot see the setup
+        // that neighbouring fills share, and fpbench/nbody_single -Os grew 2 B
+        // taking the `fst`s over two adjacent ones.
+        let ints = dwords * 8;
+        // Nor over a `rep stos`: it takes the clear past the backend's inline
+        // stores, and its clocks per byte are the `fst`s' (ring nib -O2: 2 KB
+        // of `fst`, +2017 B for -17 clocks).
+        let inline = if opt_size {
+            self.target.tuning.max_stores_per_memset_opt_size
+        } else {
+            self.target.tuning.max_stores_per_memset
+        } as u64;
+        if filled || x87 >= ints || dwords > inline {
+            return None;
+        }
+        if !opt_size {
+            let trade = self.target.size_trade?;
+            let int_clocks = (dwords * (trade.store + trade.prefix) as u64) as i64;
+            let x87_clocks = trade.float_load + cells as i64 * trade.float_store + trade.float_release;
+            if (ints - x87) as i64 * trade.milliclocks_per_byte < (x87_clocks - int_clocks) * 1000 {
+                return None;
+            }
+        }
+        let f64 = EVT::Simple(super::super::mvt::MVT::F64);
+        let zero = self.dag.get_constant_fp(0, f64);
+        let mut chains = Vec::new();
+        for cell in 0..cells {
+            let off = cell * 8;
+            let to = self.dag.get_object_ptr_offset(dst, off as i64);
+            let info = MemInfo {
+                mem_vt: f64,
+                align: common_alignment(align, off) as u32,
+                volatile: false,
+                base: MemBase::Unknown,
+                ext: None,
+                space: self.space_of(dst),
+                ordering: None,
+            };
+            chains.push(self.dag.get_store(chain, zero, to, info));
+        }
+        Some(self.dag.get_token_factor(&chains))
+    }
+
     /// `getMemsetStores`: the fill value splatted to the widest operation,
     /// truncated for the narrower ones.
     fn inline_memset(
@@ -998,10 +1069,14 @@ impl Builder<'_> {
                 } else {
                     self.target.tuning.max_stores_per_memset
                 };
+                let zero = self.dag.constant(other) == Some(0);
+                let filled = constant.is_some_and(|bytes| self.fill_is_smaller(bytes, opt_size, zero));
+                let floats = constant
+                    .filter(|_| zero)
+                    .and_then(|bytes| self.x87_zero_stores(root, dst, bytes, alignment, opt_size, filled));
                 let inline = match constant {
-                    Some(bytes) if !self.fill_is_smaller(bytes, opt_size, self.dag.constant(other) == Some(0)) => {
-                        self.inline_memset(root, dst, other, bytes, limit, alignment)?
-                    }
+                    _ if floats.is_some() => floats,
+                    Some(bytes) if !filled => self.inline_memset(root, dst, other, bytes, limit, alignment)?,
                     _ => None,
                 };
                 match (inline, constant) {
@@ -1025,6 +1100,19 @@ impl Builder<'_> {
                             && (bytes % 4 == 0 || (bytes % 2 == 0 && alignment >= 2)) =>
                     {
                         self.rep_stos(root, dst, other, bytes, if bytes % 4 == 0 { 4 } else { 2 })?
+                    }
+                    // Tuned for size, a fill of whole words at word alignment
+                    // is words where a word takes no prefix (real mode): the
+                    // same bytes as `rep stosb`'s and half the iterations.
+                    (None, Some(bytes))
+                        if strings_exist
+                            && opt_size
+                            && self.target.dag.pointer.size_in_bits() == 16
+                            && !self.runtime_has("memset")
+                            && bytes % 2 == 0
+                            && alignment >= 2 =>
+                    {
+                        self.rep_stos(root, dst, other, bytes, 2)?
                     }
                     // for size, whole pointer-width units at that alignment: a
                     // `rep stosb` runs a clock per byte (matmul.nib -Os +669)
@@ -1269,7 +1357,7 @@ impl Builder<'_> {
         if flat && tail {
             return self.backward_rep_movsb(chain, dst, src, size);
         }
-        let mut code = if flat { vec![0xFD, 0xF3, 0xA5] } else { vec![0x1E, 0x07, 0xFD, 0xF3, 0x66, 0xA5] };
+        let mut code = if flat { vec![0xFD, 0xF3, 0xA5] } else { vec![0xFD, 0xF3, 0x66, 0xA5] };
         if tail {
             code.extend([0x83, 0xC6, 0x03, 0x83, 0xC7, 0x03, 0x89, 0xD1, 0xF3, 0xA4]);
         }
@@ -1288,6 +1376,13 @@ impl Builder<'_> {
             names.push(name_of(strings.expect("a flat move has no tail").tail));
             values.push(rest);
         }
+        // ES is an input, not a clobber: the block leaves it as it found it,
+        // so a selector already loaded there is reused.
+        let segment = strings.map(|strings| (name_of(strings.destination_segment), self.segment_of(None)));
+        if let Some((name, selector)) = segment {
+            names.push(name);
+            values.push(selector);
+        }
         let block = llrm_mir::intrinsics::AsmBlock {
             code,
             inputs: names.iter().map(|name| (*name).into()).collect(),
@@ -1295,7 +1390,7 @@ impl Builder<'_> {
             clobbers: names
                 .iter()
                 .copied()
-                .chain(strings.map(|strings| name_of(strings.destination_segment)))
+                .filter(|name| Some(*name) != segment.map(|(es, _)| es))
                 .map(Into::into)
                 .collect(),
             memory: true,
@@ -1335,6 +1430,7 @@ impl Builder<'_> {
         let name_of = |register| self.arch.registers().name(register).expect("a described register");
         // A flat target names no string registers: `cx`, `si` and `di` are
         // its operands, and ES already holds what `pop es` loads.
+        let segment = strings.map(|strings| (name_of(strings.destination_segment), self.segment_of(None)));
         let operands = match strings {
             Some(strings) => {
                 [(name_of(strings.count), count), (name_of(strings.source), from), (name_of(strings.destination), to)]
@@ -1345,23 +1441,19 @@ impl Builder<'_> {
             }
         };
         let block = llrm_mir::intrinsics::AsmBlock {
-            // `push ds; pop es`: both pointers are near, in DS; ES holds
-            // whatever the last far access left
-            code: vec![0x1E, 0x07, 0xFD, 0xF3, 0xA4, 0xFC],
-            inputs: operands.iter().map(|(name, _)| (*name).into()).collect(),
+            code: vec![0xFD, 0xF3, 0xA4, 0xFC],
+            inputs: operands.iter().map(|(name, _)| *name).chain(segment.map(|(es, _)| es)).map(Into::into).collect(),
             outputs: Vec::new(),
-            clobbers: operands
-                .iter()
-                .map(|(name, _)| *name)
-                .chain(strings.map(|strings| name_of(strings.destination_segment)))
-                .map(Into::into)
-                .collect(),
+            clobbers: operands.iter().map(|(name, _)| (*name).into()).collect(),
             memory: true,
             fixups: Vec::new(),
         };
         let name = llrm_mir::intrinsics::asm_name(&block);
-        let registers =
-            operands.map(|(name, value)| (self.sized_register(self.arch.register_named(name), pointer), value));
+        let registers: Vec<_> = operands
+            .into_iter()
+            .chain(segment)
+            .map(|(name, value)| (self.sized_register(self.arch.register_named(name), pointer), value))
+            .collect();
         let (chain, _) = lower_asm(&mut self.dag, chain, &name, &[], &registers, &[]);
         chain
     }

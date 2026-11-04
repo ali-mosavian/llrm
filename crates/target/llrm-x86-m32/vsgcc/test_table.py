@@ -19,6 +19,16 @@ def test_the_summary_names_the_worst_program_beside_each_geomean():
     assert len(lines) == 48
 
 
+def test_a_program_whose_clocks_alone_regress_is_named_worst_on_clocks_and_nowhere_else():
+    """A comparator that listed bytes only printed nothing for a clock-only regression (6502, #6582)."""
+    P = programs({'a': 1.0, 'b': 1.0})
+    P['b']['llrm']['clocks'] = 300
+    lines = table.summary(P)
+    assert "worst llrm/gcc O2 clocks: 3.00 (b)" in lines
+    assert "worst llrm/gcc O2 code: 1.00 (a)" in lines
+    assert "worst llrm/gcc O2 ins: 1.00 (a)" in lines
+
+
 def test_a_program_without_a_variant_is_refused_not_averaged():
     """An unresolved symbol left the harness without a row, and the table averaged what remained."""
     P = programs({'a': 1.0, 'b': 2.0})

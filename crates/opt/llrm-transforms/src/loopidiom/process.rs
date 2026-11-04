@@ -243,6 +243,7 @@ impl LoopIdiomRecognize {
         let blocks = run.cur_loop.get_blocks();
         let cx = cx!(run);
         let mut groups: Vec<(Operand, Operand)> = Vec::new();
+        let mut lengths: Vec<i64> = Vec::new();
         let mut stores = 0;
         let mut kept = 0;
         for &block in blocks {
@@ -283,8 +284,22 @@ impl LoopIdiomRecognize {
                     0,
                 );
                 let group = (object, instruction.operands[0]);
-                if !groups.contains(&group) {
-                    groups.push(group);
+                // The stores of one object with one value are one fill: its
+                // length is theirs summed.
+                let size = run
+                    .function
+                    .operand_type(run.context, instruction.operands[0])
+                    .map(|ty| run.env.layout.store_size(&run.context.types, ty) as i64);
+                match groups.iter().position(|seen| *seen == group) {
+                    Some(at) => {
+                        if let (Some(length), Some(size)) = (lengths.get_mut(at), size) {
+                            *length += size;
+                        }
+                    }
+                    None => {
+                        groups.push(group);
+                        lengths.extend(size);
+                    }
                 }
             }
         }
@@ -351,16 +366,15 @@ impl LoopIdiomRecognize {
                     (clocks, rate, trips, cells)
                 }),
                 {
-                    let (be, size) = (run.se.match_apint(args.be_count), run.se.match_apint(args.store_size_scev));
-                    let bytes = be
-                        .filter(|be| be.active_bits() <= 32)
-                        .zip(size.filter(|size| size.active_bits() <= 32))
-                        .map(|(be, size)| (be.zext_value() as i64 + 1) * size.zext_value() as i64 * stores);
-                    bytes.map(|bytes| crate::loopidioms::InlineFills {
+                    // Each fill's own length: its stores' sizes over the trips
+                    // (the sizes differ between the loop's stores).
+                    let be = run.se.match_apint(args.be_count).filter(|be| be.active_bits() <= 32);
+                    be.filter(|_| lengths.len() == groups.len()).map(|be| crate::loopidioms::InlineFills {
                         max_stores: run.memset_stores,
-                        bytes: bytes / (groups.len() as i64).max(1),
+                        lengths: lengths.iter().map(|size| (be.zext_value() as i64 + 1) * size).collect(),
                     })
                 },
+                matches!(is_bytewise_value(&cx.query(Some(args.the_store)), args.stored_val), Some(Byte::Constant(0))),
             ) {
                 return false;
             }

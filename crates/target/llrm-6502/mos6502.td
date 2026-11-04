@@ -152,9 +152,9 @@ let mayLoad = 1 in {
 }
 let mayLoad = 1, AddedComplexity = 10 in
   def LDPI8 : MOSInst<(outs Imag8:$d), (ins memrr:$a), "ldpi $d, ($a)", [(set i8:$d, (load MOSIdx:$a))]>;
-// A global indexed by a byte: LDX i; LDA g,X. The address is the symbol plus the zero-extended index.
-def absx : Operand<i16> { let MIOperandInfo = (ops i16imm, Imag8); }
-def MOSAbsX : ComplexPattern<i16, 2, "SelectAbsX", [], []>;
+// A global indexed by a byte: LDX i; LDA g+k,X. The address is the symbol plus a constant plus the zero-extended index.
+def absx : Operand<i16> { let MIOperandInfo = (ops i16imm, i16imm, Imag8); }
+def MOSAbsX : ComplexPattern<i16, 3, "SelectAbsX", [], []>;
 let mayLoad = 1, AddedComplexity = 10 in
   def LDAX : MOSInst<(outs Imag8:$d), (ins absx:$a), "ldax $d, $a", [(set i8:$d, (load MOSAbsX:$a))]>;
 let mayStore = 1, AddedComplexity = 10 in

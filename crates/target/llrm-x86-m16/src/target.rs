@@ -101,6 +101,12 @@ impl Default for Dos {
     }
 }
 
+/// The interval of `size_milliclocks_per_byte` the Os judge accepts, bounded by
+/// lru/nib below and jpeg_single/nib above (clocks per byte, thousandths).
+const SIZE_RATE_FLOOR: i64 = 4_800;
+const SIZE_RATE_CEILING: i64 = 151_000;
+const SIZE_RATE: i64 = 10_000;
+
 impl Dos {
     /// On a 486 with the pin's tuning limits.
     pub fn pin_tuned() -> Self {
@@ -185,6 +191,7 @@ impl Machine for Dos {
             registers: self.registers as u32,
             scaled_index_insns: scaled_index_insns as u32,
             huge_space: crate::spaces().huge,
+            address_registers: native_address_registers(&self.address_forms),
             inline_size_guard: true,
             float_code_size_percent: 200,
             unroll_size_few_trips: (3, 30),
@@ -275,9 +282,16 @@ impl Machine for Dos {
             max_stores_per_memset_opt_size: 4,
             max_stores_per_memcpy_opt_size: 2,
             max_stores_per_memmove_opt_size: 2,
-            // Tuning constant fitted to sc.c, weapons, mdl and lru, not
-            // derived.
-            size_milliclocks_per_byte: 10_000,
+            // The most clocks a byte may cost at -Os before a smaller form is
+            // refused, in thousandths. The Os judge takes bytes and clocks
+            // both strict against main, so the point must clear both
+            // bounding cells: at least `SIZE_RATE_FLOOR` keeps lru/nib's
+            // 28-byte fill (17 B smaller, +82 clk), under `SIZE_RATE_CEILING`
+            // refuses jpeg_single/nib's (4 B, +605952 clk). Within the
+            // interval the point is the round figure; the interval, not the
+            // point, is what a cell can contradict (2026-11-03 ablation, 171
+            // rows: rate 0 worsens 4 cells, 312 and 500 worsen lru/nib).
+            size_milliclocks_per_byte: SIZE_RATE,
             // The user's rate for m16 at speed (one clock is two bytes): the
             // `timings.times` row the judge reads too.
             speed_milliclocks_per_byte: crate::timings::speed_milliclocks_per_byte(),
@@ -424,6 +438,14 @@ pub fn address_forms(
     ]
 }
 
+/// The registers the cheapest address form names: its base class and its
+/// index class (the frame's register is in neither); none where the form has
+/// no classes.
+fn native_address_registers(forms: &[AddressForm]) -> Option<u32> {
+    let native = forms.iter().filter(|form| !form.secondary).min_by_key(|form| form.use_cost)?;
+    Some((native.bases? + native.indices?) as u32)
+}
+
 /// `arch`'s (one of `timings::ARCHS`) price of each operation, as the
 /// instructions lowering picks for it.
 pub fn costs(arch: &str) -> OperationCosts {
@@ -479,6 +501,17 @@ mod tests {
         assert_eq!(found.cc.as_deref(), Some("basic"));
         assert!(found.clobbered.iter().all(|name| !matches!(name.as_str(), "si" | "di")), "{:?}", found.clobbered);
         assert!(found.clobbered.iter().any(|name| name == "bx"), "{:?}", found.clobbered);
+    }
+
+    /// An address in real mode is a base (bx) and an index (si or di), the
+    /// frame's bp in neither: three registers, where six hold values. LSR's
+    /// pressure on the address class read the six.
+    #[test]
+    fn the_cheapest_address_form_names_three_registers_of_six() {
+        let costs = super::costs("486");
+        let dos = Dos { address_forms: super::address_forms(&costs, 1), costs, ..Dos::default() };
+        let tti = dos.tti().expect("m16 states its cost model");
+        assert_eq!((tti.address_registers(), tti.number_of_gpr_registers()), (3, 6));
     }
 
     /// LSR reads the addressing hooks of the model: real mode's `[bx+si]` is
@@ -611,5 +644,19 @@ mod encoding_tests {
         assert_eq!((register_bytes(2), register_bytes(4)), (2, 3));
         assert_eq!((shift_bytes(1, 4), shift_bytes(3, 4), shift_bytes(1, 2)), (3, 4, 2));
         assert_eq!((imul_immediate_bytes(6, 4), imul_immediate_bytes(446, 4), imul_immediate_bytes(446, 2)), (4, 7, 4));
+    }
+}
+
+#[cfg(test)]
+mod size_rate_tests {
+    use super::*;
+
+    /// The Os rate was a point "fitted" to four programs; the ablation showed
+    /// an interval: below `SIZE_RATE_FLOOR` lru/nib's smaller fill is refused
+    /// (+17 B), above `SIZE_RATE_CEILING` jpeg_single/nib's is taken (+605952
+    /// clk for 4 B).
+    #[test]
+    fn the_size_rate_stays_inside_the_interval_lru_and_jpeg_bound() {
+        assert!((SIZE_RATE_FLOOR..SIZE_RATE_CEILING).contains(&SIZE_RATE));
     }
 }

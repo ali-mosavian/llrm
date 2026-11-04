@@ -270,6 +270,104 @@ pub fn run(function: &mut MFunc) {
     dead_definitions(function);
     non_flag_setting(function);
     redundant_zero_extends(function);
+    narrow_extension_uses(function);
+    dead_code(function);
+}
+
+/// The registers `op` reads as 32 bits: the operands of a `W` form and of the
+/// long multiplies.
+fn narrow_reads(op: &mut Op) -> Vec<&mut Gpr> {
+    match op {
+        Op::I(Inst::ThreeSource { op, width, rn, rm, ra, .. }) => match (op, width) {
+            (Mul3::Smaddl | Mul3::Smsubl | Mul3::Umaddl | Mul3::Umsubl, _) => vec![rn, rm],
+            (Mul3::Madd | Mul3::Msub, Width::W) => vec![rn, rm, ra],
+            _ => Vec::new(),
+        },
+        Op::I(Inst::AddSubImm { width: Width::W, rn, .. } | Inst::LogicImm { width: Width::W, rn, .. }) => vec![rn],
+        Op::I(
+            Inst::AddSubShifted { width: Width::W, rn, rm, .. } | Inst::LogicShifted { width: Width::W, rn, rm, .. },
+        ) => vec![rn, rm],
+        _ => Vec::new(),
+    }
+}
+
+/// `PeepholeOptimizer::optimizeExtInstr`
+/// ([PeepholeOptimizer.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/PeepholeOptimizer.cpp#L587),
+/// `AArch64InstrInfo::isCoalescableExtInstr`): a 32 to 64 bit extension whose
+/// result is only read as 32 bits (through copies) is not needed; the readers
+/// take its source. `switch`'s `digit * digit` kept `sxtw` for the `smull`
+/// that reads its low half.
+fn narrow_extension_uses(function: &mut MFunc) {
+    let definitions = definitions(function);
+    let copies = single_copies(function, &definitions);
+    let root = |mut register: Reg| {
+        while let Some(&next) = copies.get(&register) {
+            register = next;
+        }
+        register
+    };
+    let mut extensions: HashMap<Reg, Reg> = HashMap::new();
+    for op in function.blocks.iter().flat_map(|block| &block.ops) {
+        if let Op::I(Inst::BitfieldMove {
+            op: Bitfield::Sbfm | Bitfield::Ubfm,
+            width: Width::X,
+            rd,
+            rn,
+            immr: 0,
+            imms: 31,
+        }) = op
+            && rd.is_virtual()
+            && rn.is_virtual()
+            && definitions.get(&Reg::Gpr(*rd)) == Some(&1)
+            && definitions.get(&Reg::Gpr(*rn)) == Some(&1)
+        {
+            extensions.insert(Reg::Gpr(*rd), Reg::Gpr(*rn));
+        }
+    }
+    if extensions.is_empty() {
+        return;
+    }
+    // An extension is dropped only when every read of it, through copies, is
+    // a 32-bit one.
+    let mut blocked: HashSet<Reg> = HashSet::new();
+    for block in &mut function.blocks {
+        for op in &mut block.ops {
+            let is_copy = matches!(op, Op::Copy { .. });
+            let narrow: Vec<Gpr> = narrow_reads(op).into_iter().map(|slot| *slot).collect();
+            let uses = op.defs_and_uses().1;
+            let mut narrow_left = narrow;
+            for used in uses {
+                let at = root(used);
+                if !extensions.contains_key(&at) || is_copy && used == at {
+                    continue;
+                }
+                match used {
+                    Reg::Gpr(gpr) => match narrow_left.iter().position(|one| *one == gpr) {
+                        Some(index) if !is_copy => {
+                            narrow_left.remove(index);
+                        }
+                        _ if is_copy => {}
+                        _ => {
+                            blocked.insert(at);
+                        }
+                    },
+                    Reg::Fpr(_) => {
+                        blocked.insert(at);
+                    }
+                }
+            }
+        }
+    }
+    for block in &mut function.blocks {
+        for op in &mut block.ops {
+            for slot in narrow_reads(op) {
+                let at = root(Reg::Gpr(*slot));
+                if let Some(&Reg::Gpr(source)) = extensions.get(&at).filter(|_| !blocked.contains(&at)) {
+                    *slot = source;
+                }
+            }
+        }
+    }
 }
 
 /// A flag-setting instruction whose register nothing reads defines the zero
@@ -307,22 +405,6 @@ fn non_flag_setting(function: &mut MFunc) {
     }
 }
 
-/// The blocks each block can reach by one or more edges.
-fn reachable(cfg: &Cfg) -> Vec<HashSet<usize>> {
-    (0..cfg.successors.len())
-        .map(|start| {
-            let mut seen = HashSet::new();
-            let mut stack = cfg.successors[start].clone();
-            while let Some(block) = stack.pop() {
-                if seen.insert(block) {
-                    stack.extend(&cfg.successors[block]);
-                }
-            }
-            seen
-        })
-        .collect()
-}
-
 /// A pure value that is read only below the block making it is made at the
 /// start of the nearest block that dominates its readers, so the paths that
 /// skip them do not pay for it (`MachineSink`; a phi's constant is made on its
@@ -332,7 +414,8 @@ fn sink(function: &mut MFunc) {
     for _ in 0..16 {
         let cfg = cfg(function);
         let definitions = definitions(function);
-        let reach = reachable(&cfg);
+        let loops = natural_loops(function, &cfg);
+        let depth = |block: usize| loops.iter().filter(|(_, body)| body.contains(&block)).count();
         let mut readers: HashMap<Reg, Vec<usize>> = HashMap::new();
         for (at, block) in function.blocks.iter().enumerate() {
             for op in &block.ops {
@@ -364,12 +447,12 @@ fn sink(function: &mut MFunc) {
                         target = cfg.idom[target];
                     }
                 }
-                let in_cycle = |block: usize| reach[block].contains(&block);
-                let same_cycle = reach[from].contains(&target) && reach[target].contains(&from);
+                // "Don't sink into a deeper cycle": the work would repeat on
+                // each trip of an inner loop.
                 if target != from
                     && cfg.order.contains(&target)
                     && dominates(&cfg, from, target)
-                    && (!in_cycle(target) || same_cycle)
+                    && depth(target) <= depth(from)
                 {
                     moves.push((from, index, target));
                 }
@@ -690,7 +773,7 @@ fn within_pressure(
     // Across a call only the callee-saved registers keep a value.
     let room = |gpr: bool| {
         let (kept, rest) = if gpr {
-            (pool::GPR_CALLEE_SAVED.len(), pool::GPR_CALLER_SAVED.len())
+            (pool::GPR_CALLEE_SAVED.len(), crate::lir_view::gpr_caller_saved_count())
         } else {
             (pool::FPR_CALLEE_SAVED.len(), pool::FPR_CALLER_SAVED.len())
         };
@@ -729,16 +812,16 @@ fn within_pressure(
     chosen
 }
 
-/// Loop-invariant pure definitions move to the end of the loop's preheader.
-fn hoist(function: &mut MFunc) {
-    let cfg = cfg(function);
-    let definitions = definitions(function);
-    let live = live_in(function, &cfg);
-    // The natural loops: a back edge's header dominates its tail.
+/// The natural loops, each as its header and body: a back edge's header
+/// dominates its tail.
+fn natural_loops(
+    function: &MFunc,
+    cfg: &Cfg,
+) -> Vec<(usize, HashSet<usize>)> {
     let mut loops: Vec<(usize, HashSet<usize>)> = Vec::new();
     for tail in 0..function.blocks.len() {
         for &header in &cfg.successors[tail] {
-            if cfg.idom[tail] != usize::MAX && dominates(&cfg, header, tail) {
+            if cfg.idom[tail] != usize::MAX && dominates(cfg, header, tail) {
                 let mut body: HashSet<usize> = HashSet::from([header, tail]);
                 let mut work = vec![tail];
                 while let Some(block) = work.pop() {
@@ -758,6 +841,15 @@ fn hoist(function: &mut MFunc) {
             }
         }
     }
+    loops
+}
+
+/// Loop-invariant pure definitions move to the end of the loop's preheader.
+fn hoist(function: &mut MFunc) {
+    let cfg = cfg(function);
+    let definitions = definitions(function);
+    let live = live_in(function, &cfg);
+    let mut loops = natural_loops(function, &cfg);
     // Innermost first, so a value hoisted out of an inner loop can go on out of
     // the outer one.
     loops.sort_by_key(|(_, body)| body.len());
@@ -869,6 +961,104 @@ mod tests {
             function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
         };
         assert_eq!((movzs(0), movzs(1)), (2, 0), "{function:#?}");
+    }
+
+    /// A loop of 15 constants kept two in the loop (`switch`: `mov w1, #37` on
+    /// every trip, +2177 executed over the pin): the allocatable set lacked x15
+    /// and x18, which the pin hands out on Linux, so hoisting had room for 13.
+    #[test]
+    fn fifteen_loop_constants_are_all_hoisted_on_linux() {
+        crate::lir_view::set_darwin(false);
+        let mut ops = Vec::new();
+        for n in 0..15u32 {
+            ops.push(movz(100 + n, n as u16 + 1));
+            ops.push(add(64, 64, 100 + n));
+        }
+        ops.push(Op::I(Inst::CompareBranch {
+            nonzero: true,
+            width: Width::X,
+            rt: Gpr(64),
+            target: Target::Label("loop".into()),
+        }));
+        ops.push(branch_to("exit"));
+        let mut function = MFunc::new("f");
+        function.next_register = 300;
+        function.blocks = vec![
+            MBlock { label: "entry".into(), ops: vec![movz(64, 0), branch_to("loop")].into() },
+            MBlock { label: "loop".into(), ops: ops.into() },
+            MBlock { label: "exit".into(), ops: vec![Op::Return { uses: vec![], tail: None }].into() },
+        ];
+        hoist(&mut function);
+        let made = |block: usize| {
+            function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
+        };
+        assert_eq!(made(1), 0, "{function:#?}");
+    }
+
+    /// `sxtw` was kept for a `smull` that reads only the low half of its
+    /// result (`switch`: `sbfm x15, x1, #0, #31` and +4 B). The pin's
+    /// `optimizeExtInstr` has the reader take the source.
+    #[test]
+    fn an_extension_read_only_as_32_bits_is_dropped() {
+        let sext = Op::I(Inst::BitfieldMove {
+            op: Bitfield::Sbfm,
+            width: Width::X,
+            rd: Gpr(71),
+            rn: Gpr(70),
+            immr: 0,
+            imms: 31,
+        });
+        let smull = Op::I(Inst::ThreeSource {
+            op: Mul3::Smaddl,
+            width: Width::X,
+            rd: Gpr(72),
+            rn: Gpr(71),
+            rm: Gpr(71),
+            ra: Gpr(31),
+        });
+        let mut function = MFunc::new("f");
+        function.next_register = 80;
+        function.blocks = vec![MBlock {
+            label: "entry".into(),
+            ops: vec![movz(70, 3), sext, smull, Op::Return { uses: vec![Reg::Gpr(Gpr(72))], tail: None }].into(),
+        }];
+        narrow_extension_uses(&mut function);
+        dead_code(&mut function);
+        let extensions =
+            function.blocks[0].ops.iter().filter(|op| matches!(op, Op::I(Inst::BitfieldMove { .. }))).count();
+        assert_eq!(extensions, 0, "{function:#?}");
+    }
+
+    /// A value made in an outer loop was sunk into the inner loop that reads it
+    /// and made on every trip of it (tile at -O1: `add x13, x11, x13, lsl #7`
+    /// in the inner loop, +975 executed, 3%). `MachineSink` does not sink into
+    /// a deeper cycle.
+    #[test]
+    fn a_value_is_not_sunk_into_a_deeper_loop() {
+        let back = |rt: u32, label: &str| {
+            Op::I(Inst::CompareBranch {
+                nonzero: true,
+                width: Width::X,
+                rt: Gpr(rt),
+                target: Target::Label(label.into()),
+            })
+        };
+        let mut function = MFunc::new("f");
+        function.next_register = 80;
+        function.blocks = vec![
+            MBlock { label: "entry".into(), ops: vec![movz(0, 0), branch_to("outer")].into() },
+            // outer loop: makes a constant, runs the inner loop
+            MBlock { label: "outer".into(), ops: vec![movz(71, 7), branch_to("inner")].into() },
+            // inner loop reads the copy
+            MBlock { label: "inner".into(), ops: vec![add(72, 71, 0), back(72, "inner"), branch_to("latch")].into() },
+            MBlock { label: "latch".into(), ops: vec![back(0, "outer"), branch_to("exit")].into() },
+            MBlock { label: "exit".into(), ops: vec![Op::Return { uses: vec![], tail: None }].into() },
+        ];
+        sink(&mut function);
+        let made = |block: usize| {
+            function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
+        };
+        assert_eq!((made(1), made(2)), (1, 0), "{function:#?}");
     }
 
     /// `sp + 0` before a dynamic allocation and after it are different values:

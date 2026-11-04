@@ -24,6 +24,8 @@
 //! `WebAssemblyRegisterInfo.cpp` (`eliminateFrameIndex` L52) and
 //! `PrologEpilogInserter.cpp` (`AdjustStackOffset`), pin d1106deb71cc.
 
+use std::collections::HashMap;
+
 use crate::dagisel::generated::ids::opcode as op;
 use crate::dagisel::generated::instrinfo::{desc, flag};
 use crate::dagisel::post_ids as post;
@@ -121,8 +123,49 @@ pub fn frame_lowering(
         prologue.push(Inst::new(global_set, &[Operand::Sym(stack_pointer), Operand::Use(sp)]));
     }
 
-    // `eliminateFrameIndex`: an address operand folds the offset in; anything
-    // else adds it to the stack pointer.
+    // `eliminateFrameIndex`: an address added to a constant that has no other
+    // use folds the offset into that constant.
+    let mut uses: HashMap<VReg, u32> = HashMap::new();
+    let mut constants: HashMap<VReg, (usize, usize, u32)> = HashMap::new();
+    for (block, insts) in f.blocks.iter().enumerate() {
+        for (at, inst) in insts.iter().enumerate() {
+            for operand in &inst.operands {
+                match *operand {
+                    Operand::Use(reg) => *uses.entry(reg).or_default() += 1,
+                    Operand::Def(reg) if inst.opcode == konst => {
+                        constants.entry(reg).and_modify(|one| one.2 += 1).or_insert((block, at, 1));
+                    }
+                    Operand::Def(reg) => {
+                        constants.entry(reg).and_modify(|one| one.2 += 1).or_insert((usize::MAX, 0, 1));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    for block in 0..f.blocks.len() {
+        for i in 0..f.blocks[block].len() {
+            let inst = &f.blocks[block][i];
+            let ([Operand::Def(_), first, second], true) = (inst.operands.as_slice(), inst.opcode == add) else {
+                continue;
+            };
+            let (frame, other) = match (*first, *second) {
+                (Operand::Frame(index), Operand::Use(reg)) => (index, (2, reg)),
+                (Operand::Use(reg), Operand::Frame(index)) => (index, (1, reg)),
+                _ => continue,
+            };
+            let Some(&(def_block, def_at, 1)) = constants.get(&other.1) else { continue };
+            if def_block == usize::MAX || uses.get(&other.1) != Some(&1) {
+                continue;
+            }
+            let from_sp = stack_size as i64 + offsets[frame as usize];
+            let Some(Operand::Imm(value)) = f.blocks[def_block][def_at].operands.get_mut(1) else { continue };
+            *value += from_sp;
+            f.blocks[block][i].operands[3 - other.0] = Operand::Use(sp);
+        }
+    }
+    // An address operand folds the offset in; anything else adds it to the
+    // stack pointer.
     for block in 0..f.blocks.len() {
         let mut i = 0;
         while i < f.blocks[block].len() {

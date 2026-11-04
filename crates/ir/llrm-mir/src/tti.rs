@@ -777,6 +777,22 @@ pub trait Tti {
         false
     }
 
+    /// Instructions the exit test of a counter that ends at zero costs beyond
+    /// the step: 0 where the step's flags (or a branch on the register) end
+    /// the loop, 1 where the zero has to be tested by its own instruction
+    /// (z80's 16-bit `inc`). A counter that does not end at zero pays the
+    /// compare instead.
+    fn zero_test_cost(&self) -> u32 {
+        0
+    }
+
+    /// The registers an address can be formed from by the target's cheapest
+    /// address form (m16: bx, si, di); the general registers where any
+    /// register serves.
+    fn address_registers(&self) -> u32 {
+        self.number_of_gpr_registers()
+    }
+
     /// DEVIATE LU3: whether a rewrite the cost model rates worse than the loop
     /// as written is dropped when it needs more registers than exist.
     fn lsr_drops_spilling_solution(&self) -> bool {
@@ -819,6 +835,19 @@ pub trait Tti {
     /// `getNumberOfRegisters` of the general-purpose class.
     fn number_of_gpr_registers(&self) -> u32 {
         8
+    }
+
+    /// Whether a stack slot's address is a displacement off the frame register
+    /// in an addressing mode, so as the base of an address it costs no
+    /// register of its own.
+    fn frame_address_is_free(&self) -> bool {
+        false
+    }
+
+    /// The bits one general-purpose register holds: an `i32` takes one at 32,
+    /// two at 16 (the 386 registers of a 16-bit target are 32 wide).
+    fn gpr_bits(&self) -> u32 {
+        32
     }
 
     /// Instructions a scaled index (`base + scale * index`, scale above 1)

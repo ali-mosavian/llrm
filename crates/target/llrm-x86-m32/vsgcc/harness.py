@@ -258,7 +258,8 @@ def cost(ins, taken, first_rep, mem, multiplier=None, prefixes=0):
     """The 486's clocks of `ins`, each from the compiler's own `timings.times` (clocks.py), and `prefixes` operand- and address-size
     prefixes (clocks.prefixes of its bytes) at the table's clock each. A branch is `taken` or not; a string instruction is the
     `first_rep` of its repeat or one more; `multiplier` is the operand a MUL reads."""
-    return _form_clocks(ins, taken, first_rep, multiplier) + prefixes * clocks.PREFIX
+    # The prefix is decoded once: a repeated string instruction pays it with its first iteration, not each.
+    return _form_clocks(ins, taken, first_rep, multiplier) + (prefixes * clocks.PREFIX if first_rep else 0)
 
 
 def _form_clocks(ins, taken, first_rep, multiplier):

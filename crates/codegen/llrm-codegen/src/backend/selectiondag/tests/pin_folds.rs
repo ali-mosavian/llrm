@@ -405,6 +405,66 @@ fn a_target_that_does_not_ask_keeps_the_multiply_of_the_add() {
     assert_eq!(dag.opcode(dag.get_root()), ISD::Mul);
 }
 
+struct Decomposes;
+
+impl CombineHooks for Decomposes {
+    fn decompose_mul_by_constant(
+        &self,
+        _vt: EVT,
+        _c: u128,
+    ) -> bool {
+        true
+    }
+}
+
+fn mul_by(
+    dag: &mut SelectionDAG,
+    constant: u128,
+) {
+    let x = dag.get_register(EVT::I16, 5);
+    let c = dag.get_constant(constant, EVT::I16);
+    let root = dag.get_node(ISD::Mul, EVT::I16, &[x, c]);
+    dag.set_root(root);
+}
+
+/// `x * 33` stayed a multiply, a library call where the target has no
+/// multiplier; with `decomposeMulByConstant` it is `(x << 5) + x`, and
+/// `x * 15` is `(x << 4) - x`, `x * -33` its negation, `x * 6` shifted once
+/// more on both terms.
+#[test]
+fn a_multiply_by_one_off_a_power_of_two_is_shifts_and_an_add_where_the_target_asks() {
+    let shift = |dag: &SelectionDAG, v: SDValue| (dag.opcode(v), dag.constant(dag.operand(v, 1)));
+    let mut dag = dag();
+    mul_by(&mut dag, 33);
+    DagCombiner::new(&mut dag, &mut Decomposes, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::Add);
+    assert_eq!(shift(&dag, dag.operand(root, 0)), (ISD::Shl, Some(5)));
+
+    let mut dag = self::dag();
+    mul_by(&mut dag, 15);
+    DagCombiner::new(&mut dag, &mut Decomposes, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::Sub);
+    assert_eq!(shift(&dag, dag.operand(root, 0)), (ISD::Shl, Some(4)));
+
+    let mut dag = self::dag();
+    mul_by(&mut dag, 6);
+    DagCombiner::new(&mut dag, &mut Decomposes, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::Add);
+    assert_eq!(shift(&dag, dag.operand(root, 0)), (ISD::Shl, Some(2)));
+    assert_eq!(shift(&dag, dag.operand(root, 1)), (ISD::Shl, Some(1)));
+}
+
+#[test]
+fn a_target_that_does_not_ask_keeps_the_multiply_by_one_off_a_power_of_two() {
+    let mut dag = dag();
+    mul_by(&mut dag, 33);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.opcode(dag.get_root()), ISD::Mul);
+}
+
 fn sra_of_truncated_high_half(dag: &mut SelectionDAG) {
     let x = dag.get_register(EVT::I64, 5);
     let (thirty_two, three) = (dag.get_constant(32, EVT::I64), dag.get_constant(3, EVT::I32));

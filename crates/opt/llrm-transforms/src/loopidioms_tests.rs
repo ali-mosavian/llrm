@@ -1192,11 +1192,12 @@ b2:
 }
 ";
 
-/// lru's init loops (three trips of four stores to four small objects) stayed
-/// loops at m16 -O2: the model priced each fill as `rep stos` (17 clocks and 4
-/// a dword), 128 against the loop's 54, while the backend stores a fill of up
-/// to `MaxStoresPerMemset` stores inline, as main did (+24 clocks, +19
-/// instructions, +5 memory operands over main on lru c).
+/// lru's init loops (three trips of four stores to four global objects) at
+/// m16 -O2: four memsets stored inline are 72 bytes (a word store 6, a dword
+/// store 9 with its prefix and 32-bit immediate: 15, 15, 15, 27) against the
+/// loop's 43, for 11 clocks: lru c +29 B over the loop, which 500 mc/B does not
+/// pay. The price took one length for every fill and the dword store as a
+/// word store with a prefix (7 B), 52 B in all.
 #[test]
 fn a_small_fill_the_backend_stores_inline_is_priced_as_those_stores() {
     let mut module = parsed(&format!("{DOS}{SMALL_INIT_LOOP}"));
@@ -1205,7 +1206,56 @@ fn a_small_fill_the_backend_stores_inline_is_priced_as_those_stores() {
     manager.add(crate::loopidiom::pass::LoopIdiom::new());
     manager.run_module(&mut module, machine).unwrap();
     let after = printed(&module);
-    assert!(after.matches("call void @llvm.memset").count() == 4, "{after}");
+    assert!(after.matches("call void @llvm.memset").count() == 0, "{after}");
+}
+
+const ONE_OBJECT_TWO_STORES: &str = "%S = type { [7 x i16], [7 x i16] }
+@s = global %S zeroinitializer
+
+define void @f() {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b1 ]
+  %p = getelementptr inbounds %S, ptr @s, i16 0, i32 0, i16 %i
+  store i16 -1, ptr %p
+  %q = getelementptr inbounds %S, ptr @s, i16 0, i32 1, i16 %i
+  store i16 -1, ptr %q
+  %next = add nuw nsw i16 %i, 1
+  %done = icmp eq i16 %next, 7
+  br i1 %done, label %b2, label %b1
+
+b2:
+  ret void
+}
+";
+
+/// lru's lhead/ltail loop (two word stores of -1 a trip, seven trips, one
+/// object) at m16 -O2 became a `rep stosd` of 28 bytes, 19 B against the loop's
+/// 20 for +3 clocks: lru c +3 clocks for 1 B. The price took it for seven
+/// stores (7 clocks, the backend stores four) and left out the load of -1 and
+/// the 66h prefixes (12 B).
+#[test]
+fn a_fill_the_backend_makes_a_rep_stos_is_priced_with_its_value_load_and_prefixes() {
+    let mut module = parsed(&format!("{DOS}{ONE_OBJECT_TWO_STORES}"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(LoopIdioms { size: false });
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default())).unwrap();
+    let after = printed(&module);
+    assert!(after.matches("call void @llvm.memset").count() == 0, "{after}");
+}
+
+/// lru c -Os: the same loop was a `rep stosb` of 28, 5 B smaller and 84 clocks
+/// slower (17 a byte; the -Os rate is 10).
+#[test]
+fn at_os_a_fill_that_costs_more_clocks_than_its_bytes_are_worth_stays_a_loop() {
+    let mut module = parsed(&format!("{DOS}{ONE_OBJECT_TWO_STORES}"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(LoopIdioms { size: true });
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default())).unwrap();
+    let after = printed(&module);
+    assert!(after.matches("call void @llvm.memset").count() == 0, "{after}");
 }
 
 const ZEROED_NEST: &str = "@a = global [8 x [8 x i16]] zeroinitializer

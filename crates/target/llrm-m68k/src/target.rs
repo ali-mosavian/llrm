@@ -16,7 +16,7 @@ use llrm_target::{CostModel, Target, routines, timings};
 
 use crate::{REGISTER_INFO, abi};
 
-const CPUS: &[&str] = &["m68000", "m68020"];
+const CPUS: &[&str] = &["m68000", "m68010", "m68020", "m68030", "m68040", "m68060"];
 
 static LAYOUT: LazyLock<Layout> =
     LazyLock::new(|| Layout::parse(include_str!("machines/datalayout.toml")).expect("m68k datalayout.toml parses"));

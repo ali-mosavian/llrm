@@ -35,6 +35,9 @@ pub struct FunctionLoweringInfo {
     pub prezeroed: llrm_mir::dense::IdSet<InstId>,
     /// The register the `sret` parameter is copied to, read back to return it.
     pub sret_reg: Option<u32>,
+    /// The register holding the hidden result pointer of a function whose
+    /// result does not fit in registers (`DemoteRegister`).
+    pub demote_reg: Option<u32>,
     /// The register a variadic function keeps the pointer to its variadic
     /// arguments in (`WebAssemblyFunctionInfo::VarargBufferVreg`).
     pub variadic_buffer: Option<u32>,
@@ -112,6 +115,7 @@ impl FunctionLoweringInfo {
             variadic_save: None,
             prezeroed: Default::default(),
             sret_reg: None,
+            demote_reg: None,
             variadic_buffer: None,
             variadic_area: None,
             bpi: None,

@@ -230,8 +230,8 @@ pub fn operation(
                 .and_then(|count| i64::try_from(count).ok())
                 .unwrap_or(UNKNOWN_TRIPS);
             // The backend stores a small constant memset inline.
-            let inline = crate::loopidioms::InlineFills { max_stores: costs.memset_stores, bytes: cells };
-            if costs.memset_stores > 0 && inline.stores() <= inline.max_stores {
+            let inline = crate::loopidioms::InlineFills::one(costs.memset_stores, cells);
+            if costs.memset_stores > 0 && inline.all_inline() {
                 return Some(inline.price(costs));
             }
             return Some(costs.fill + cells * costs.fill_cell);
