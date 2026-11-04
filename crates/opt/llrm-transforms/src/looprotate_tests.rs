@@ -12,7 +12,7 @@ fn rotated(module: &mut Module) -> bool {
     // The loop pass manager hands the pass loops in simplified, LCSSA form.
     let function = module.function_mut("f").expect("@f").1;
     crate::loopsimplify::simplified(function);
-    crate::lcssa::closed(function).expect("closes");
+    crate::testing::closed(module).expect("closes");
     let tti = X86::of_cpu("i486").expect("a cpu");
     let options = Options {
         max_header_size: 16,
@@ -207,7 +207,7 @@ declare i16 @late(i16)
     );
     let function = module.function_mut("f").expect("@f").1;
     crate::loopsimplify::simplified(function);
-    crate::lcssa::closed(function).expect("closes");
+    crate::testing::closed(&mut module).expect("closes");
     let tti = X86::of_cpu("i486").expect("a cpu");
     let options = Options {
         max_header_size: 16,
@@ -376,7 +376,7 @@ fn test_the_size_header_limit_comes_from_the_target_not_its_segments() {
 fn rotated_priced(module: &mut Module) -> bool {
     let function = module.function_mut("f").expect("@f").1;
     crate::loopsimplify::simplified(function);
-    crate::lcssa::closed(function).expect("closes");
+    crate::testing::closed(module).expect("closes");
     let tti = llrm_arm64::tti::AArch64::of_cpu("generic").expect("a cpu");
     let options = Options {
         max_header_size: 16,
@@ -431,7 +431,7 @@ fn rotated_checking(check_exit_count: bool) -> bool {
     let mut module = parsed(LATCH_UNCOUNTED);
     let function = module.function_mut("f").expect("@f").1;
     crate::loopsimplify::simplified(function);
-    crate::lcssa::closed(function).expect("closes");
+    crate::testing::closed(&mut module).expect("closes");
     let tti = X86::of_cpu("i486").expect("a cpu");
     let options = Options {
         max_header_size: 16,
@@ -470,7 +470,7 @@ fn test_check_exit_count_asks_with_one_session_for_all_the_loops_it_leaves() {
     let mut module = parsed(&text);
     let function = module.function_mut("f").expect("@f").1;
     crate::loopsimplify::simplified(function);
-    crate::lcssa::closed(function).expect("closes");
+    crate::testing::closed(&mut module).expect("closes");
     let tti = X86::of_cpu("i486").expect("a cpu");
     let options = Options {
         max_header_size: 16,
@@ -488,8 +488,8 @@ fn test_check_exit_count_asks_with_one_session_for_all_the_loops_it_leaves() {
 /// A header declaring a scope for its store and `!noalias` it on its load kept
 /// one scope in the guard's copy and in the loop: the copy's store and the
 /// loop's load were called apart by `ScopedNoAliasAA`, though they are two runs
-/// of the code and `%p` and `%q` may be one address (`cloneAndAdaptNoAliasScopes`
-/// in LoopRotationUtils).
+/// of the code and `%p` and `%q` may be one address
+/// (`cloneAndAdaptNoAliasScopes` in LoopRotationUtils).
 #[test]
 fn test_the_header_copy_and_the_loop_do_not_share_a_declared_scope() {
     use llrm_analysis::aa::{AliasResult, BatchAAResults, MemoryLocation};
@@ -533,14 +533,22 @@ b3:
     let unit = Unit::of(&module, &layout, function);
     let is_constant_store = |inst| {
         let op = function.instruction(inst);
-        matches!(op.opcode, llrm_mir::opcode::Opcode::Store { .. }) && matches!(op.operands[0], llrm_mir::module::Operand::Constant(_))
+        matches!(op.opcode, llrm_mir::opcode::Opcode::Store { .. })
+            && matches!(op.operands[0], llrm_mir::module::Operand::Constant(_))
     };
-    let stores: Vec<MemoryLocation> =
-        function.walk().map(|(_, inst)| inst).filter(|&inst| is_constant_store(inst)).filter_map(|inst| MemoryLocation::get(&unit, inst)).collect();
+    let stores: Vec<MemoryLocation> = function
+        .walk()
+        .map(|(_, inst)| inst)
+        .filter(|&inst| is_constant_store(inst))
+        .filter_map(|inst| MemoryLocation::get(&unit, inst))
+        .collect();
     let loads: Vec<MemoryLocation> = function
         .walk()
         .map(|(_, inst)| inst)
-        .filter(|&inst| matches!(function.instruction(inst).opcode, llrm_mir::opcode::Opcode::Load { .. }))
+        .filter(|&inst| matches!(
+            function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Load { .. }
+        ))
         .filter_map(|inst| MemoryLocation::get(&unit, inst))
         .collect();
     // The guard's copy first, then the loop's.

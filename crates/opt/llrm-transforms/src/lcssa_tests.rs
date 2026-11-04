@@ -4,8 +4,8 @@
 
 use llrm_mir::passes::PassManager;
 
-use super::{LoopClosedSSA, closed};
-use crate::testing::{f, parsed, printed, results};
+use super::LoopClosedSSA;
+use crate::testing::{closed, f, parsed, printed, results};
 
 /// A counted loop whose carried value is read after it.
 pub const LOOP_WITH_EXIT_USE: &str = "define i16 @f(i16 %seed, i16 %n) {
@@ -30,9 +30,9 @@ b3:
 /// `text` closed, printed; and closed again, unchanged.
 fn closed_once(text: &str) -> String {
     let mut module = parsed(text);
-    closed(f(&mut module)).unwrap();
+    closed(&mut module).unwrap();
     let once = printed(&module);
-    assert!(!closed(f(&mut module)).unwrap(), "closing is idempotent");
+    assert!(!closed(&mut module).unwrap(), "closing is idempotent");
     assert_eq!(printed(&module), once);
     once
 }
@@ -41,7 +41,7 @@ fn closed_once(text: &str) -> String {
 fn untouched(text: &str) {
     let mut module = parsed(text);
     let before = llrm_mir::print::module(&module);
-    assert!(!closed(f(&mut module)).unwrap());
+    assert!(!closed(&mut module).unwrap());
     assert_eq!(llrm_mir::print::module(&module), before);
 }
 
@@ -174,7 +174,7 @@ fn test_exit_phi_cannot_read_a_value_missing_on_one_edge() {
 
 /// Not SSA either: `%carried` does not reach the exit from `%b0`.
 #[test]
-fn test_exit_shared_with_a_bypass_still_requires_canonicalization() {
+fn test_an_exit_the_value_does_not_dominate_gets_no_phi() {
     untouched(
         &LOOP_WITH_EXIT_USE
             .replace("b0:\n  br label %b1", "b0:\n  %c = icmp eq i16 %n, 0\n  br i1 %c, label %b1, label %b3"),
@@ -240,7 +240,7 @@ b4:
     let inputs: &[&[i128]] = &[&[0], &[1], &[5]];
     let expected = results(&parsed(text), inputs);
     let mut module = parsed(text);
-    closed(f(&mut module)).unwrap();
+    closed(&mut module).unwrap();
     let text = printed(&module);
     assert!(text.contains("b3:\n  %j.next.lcssa = phi i16 [ %j.next, %b2 ]\n  %i.next = add i16 %i, 1\n"), "{text}");
     assert!(
@@ -275,14 +275,6 @@ fn test_only_the_values_read_outside_get_exit_phis() {
     let closed = closed_once(LOOP_WITH_EXIT_USE);
     assert_eq!(closed.matches(".lcssa = phi").count(), 1, "{closed}");
     assert!(closed.contains("%carried.lcssa = phi i16 [ %carried, %b1 ]"), "{closed}");
-}
-
-#[test]
-fn test_closing_over_a_held_shape_is_closing() {
-    let mut module = parsed(LOOP_WITH_EXIT_USE);
-    let shape = llrm_analysis::cfg::Shape::of(f(&mut module));
-    assert!(super::closed_in(f(&mut module), &shape).unwrap());
-    assert_eq!(printed(&module), closed_once(LOOP_WITH_EXIT_USE));
 }
 
 /// A loop with two exits that meet at `merge`, then a branch that joins again:
@@ -341,23 +333,19 @@ b26:
 }
 ",
     );
-    assert_eq!(
-        closed.lines().filter(|line| line.contains(".lcssa") && line.contains(" = phi ")).count(),
-        3,
-        "{closed}"
-    );
-    assert!(closed.contains("add i16 %s.lcssa2, 1"), "{closed}");
+    // The pin: a phi in each exit and one at `merge`, none below it.
+    assert_eq!(closed.lines().filter(|line| line.contains(" = phi ")).count(), 5, "{closed}");
+    assert!(closed.contains("= phi i16 [ %s.lcssa1, %x2 ], [ %s.lcssa, %x1 ]"), "{closed}");
 }
 
-/// `closed` found each loop's exits twice (once to know which blocks are exits,
-/// once to close the loop) and a multi-exit loop built its own dominators,
-/// graph and predecessors: 2.47 M against the pin's 0.28 M on d_faces' six
-/// functions. The edges leaving a loop are found once per closing.
+/// `closed` found each loop's exits twice and a multi-exit loop built its own
+/// dominators and graph: 2.47 M against the pin's 0.28 M on d_faces' six
+/// functions. The loop forest is built once per closing.
 #[test]
-fn test_closing_finds_the_exits_of_a_loop_once() {
+fn test_closing_builds_the_loop_forest_once() {
     use llrm_mir::counts::{Event, get};
     let mut module = parsed(LOOP_WITH_EXIT_USE);
-    let before = get(Event::LoopExitScans);
-    closed(f(&mut module)).unwrap();
-    assert_eq!(get(Event::LoopExitScans) - before, 1);
+    let before = get(Event::Forests);
+    closed(&mut module).unwrap();
+    assert_eq!(get(Event::Forests) - before, 1);
 }
