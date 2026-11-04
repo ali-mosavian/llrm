@@ -771,7 +771,17 @@ pub(crate) fn llvm_order(
             vec![
                 // `EarlyFPM.addPass(LowerExpectIntrinsicPass())` (#L1177).
                 slot("lowerexpect@1177", Box::new(crate::lowerexpect::LowerExpect)),
-                simplify_cfg("decide@1178"),
+                // `SimplifyCFGPass()` has `ConvertSwitchRangeToICmp` off.
+                slot(
+                    "decide@1178",
+                    Box::new(simplifycfg::SimplifyCfg {
+                        options: simplifycfg::Options {
+                            loop_form_kept: false,
+                            convert_switch_range_to_icmp: false,
+                            ..Default::default()
+                        },
+                    }),
+                ),
                 sroa("sroa@1179"),
                 earlycse("earlycse@1180", false),
             ]

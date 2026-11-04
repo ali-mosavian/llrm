@@ -895,6 +895,53 @@ impl Tti for X86 {
         cost
     }
 
+    /// `X86TTIImpl::getIntImmCostIntrin`:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L7040
+    fn int_imm_cost_intrin(
+        &self,
+        name: &str,
+        index: u32,
+        imm: i128,
+        bits: u32,
+    ) -> Cost {
+        if bits == 0 {
+            return Cost::FREE;
+        }
+        let name = name.strip_prefix("llvm.").unwrap_or(name);
+        // `getBitWidth() <= 64 && isSignedIntN(width)`.
+        let extended = if bits >= 128 { imm } else { (imm << (128 - bits)) >> (128 - bits) };
+        let fits = |width: u32| bits <= 64 && (-(1i128 << (width - 1))..1i128 << (width - 1)).contains(&extended);
+        let overflow = ["sadd", "uadd", "ssub", "usub", "smul", "umul"]
+            .iter()
+            .any(|op| name.strip_prefix(op).is_some_and(|rest| rest.starts_with(".with.overflow")));
+        if overflow {
+            if index == 1 && fits(32) {
+                return Cost::FREE;
+            }
+        } else if name.starts_with("experimental.stackmap") {
+            if index < 2 || fits(64) {
+                return Cost::FREE;
+            }
+        } else if name.starts_with("experimental.patchpoint") {
+            if index < 4 || fits(64) {
+                return Cost::FREE;
+            }
+        } else {
+            return Cost::FREE;
+        }
+        self.int_imm_cost(imm, bits)
+    }
+
+    /// `X86TargetLowering::isIntDivCheap`: only at `minsize`.
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L65389
+    fn prefer_to_keep_constants_attached(
+        &self,
+        div_rem_by_constant: bool,
+        min_size: bool,
+    ) -> bool {
+        div_rem_by_constant && !min_size
+    }
+
     /// `X86TargetLowering::isTruncateFree`:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L36743
     fn is_truncate_free(
