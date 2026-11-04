@@ -116,6 +116,9 @@ pub struct Env<'a> {
     pub function: &'a Function,
     pub layout: &'a DataLayout,
     pub assumptions: &'a AssumptionCache,
+    /// Whether the module declares `llvm.experimental.guard`, where the caller
+    /// holds the answer for the module; else `LazyValueInfoImpl::new` looks.
+    pub guard_declared: Option<bool>,
 }
 
 impl<'a> Env<'a> {
@@ -127,7 +130,16 @@ impl<'a> Env<'a> {
         layout: &'a DataLayout,
         assumptions: &'a AssumptionCache,
     ) -> Self {
-        Self { context, globals, metadata, function, layout, assumptions }
+        Self { context, globals, metadata, function, layout, assumptions, guard_declared: None }
+    }
+
+    /// `self`, told whether the module declares `llvm.experimental.guard`.
+    pub fn with_guard_declared(
+        mut self,
+        declared: bool,
+    ) -> Self {
+        self.guard_declared = Some(declared);
+        self
     }
 
     /// A `SimplifyQuery(DL)`: no assumptions, no dominator tree.
@@ -739,10 +751,7 @@ fn get_argument_aliasing_to_returned_pointer(
 impl LazyValueInfoImpl {
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LazyValueInfo.cpp#L495>
     pub fn new(env: &Env) -> Self {
-        let guard_decl = env
-            .globals
-            .iter()
-            .any(|g| matches!(g.kind, GlobalKind::Function(_)) && g.name.as_deref() == Some("llvm.experimental.guard"));
+        let guard_decl = env.guard_declared.unwrap_or_else(|| crate::valuetracking::guard_declared(env.globals));
         Self {
             log: crate::passes::check_captures().then(Vec::new),
             the_cache: LazyValueInfoCache::default(),

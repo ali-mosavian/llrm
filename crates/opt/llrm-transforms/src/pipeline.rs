@@ -1361,7 +1361,8 @@ fn rerun(
     let layout = analyses.program().layout.clone();
     let outer = analyses.outer(module);
     let mut declared = Declared::over(std::rc::Rc::clone(&outer.globals), module.metadata.len())
-        .with_assume_declared(outer.assume_declared());
+        .with_assume_declared(outer.assume_declared())
+        .with_guard_declared(outer.guard_declared());
     if fixed.wants_sizes() {
         declared.count_referenced(module);
     }

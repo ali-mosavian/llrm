@@ -142,7 +142,9 @@ impl FunctionPass for Cvp {
         );
 
         let shared = analyses.get::<llrm_mir::lazyvalueinfo::LviCache>(unit.context, unit.layout, unit.function);
-        let mut pass = State { unit, analyses, globals, assumptions, lvi: shared.take(), cfg_changed: false };
+        let guard_declared = unit.declared.guard_declared(&globals);
+        let mut pass =
+            State { unit, analyses, globals, assumptions, guard_declared, lvi: shared.take(), cfg_changed: false };
         #[cfg(test)]
         let before = pass.lvi.get_impl().map_or(0, |one| one.steps.solve);
         let changed = pass.run_impl();
@@ -165,6 +167,8 @@ struct State<'a, 'u> {
     analyses: &'a mut Analyses,
     globals: Rc<Vec<GlobalValue>>,
     assumptions: AssumptionCache,
+    /// Whether the module declares `llvm.experimental.guard`.
+    guard_declared: bool,
     lvi: LazyValueInfo,
     /// A `switch` edge went: the dominator tree is brought up to date before
     /// its next query and the pass does not claim to keep it.
@@ -472,7 +476,8 @@ impl State<'_, '_> {
             &*self.unit.function,
             self.unit.layout,
             &self.assumptions,
-        );
+        )
+        .with_guard_declared(self.guard_declared);
         let found = self.lvi.get_constant(&mut env, v, at);
         found.map(|lattice| self.constant_of(lattice, v))
     }
@@ -490,7 +495,8 @@ impl State<'_, '_> {
             &*self.unit.function,
             self.unit.layout,
             &self.assumptions,
-        );
+        )
+        .with_guard_declared(self.guard_declared);
         self.lvi.get_constant_range(&mut env, v, at, undef_allowed)
     }
 
@@ -507,7 +513,8 @@ impl State<'_, '_> {
             &*self.unit.function,
             self.unit.layout,
             &self.assumptions,
-        );
+        )
+        .with_guard_declared(self.guard_declared);
         self.lvi.get_constant_range_at_use(&mut env, Use { user, index }, undef_allowed)
     }
 
@@ -525,7 +532,8 @@ impl State<'_, '_> {
             &*self.unit.function,
             self.unit.layout,
             &self.assumptions,
-        );
+        )
+        .with_guard_declared(self.guard_declared);
         let found = self.lvi.get_constant_on_edge(&mut env, v, from, to, Some(cxt));
         found.map(|lattice| self.constant_of(lattice, v))
     }
@@ -546,7 +554,8 @@ impl State<'_, '_> {
             &*self.unit.function,
             self.unit.layout,
             &self.assumptions,
-        );
+        )
+        .with_guard_declared(self.guard_declared);
         self.lvi.get_predicate_on_edge(&mut env, pred, v, c, from, to, Some(cxt))
     }
 
@@ -565,7 +574,8 @@ impl State<'_, '_> {
             &*self.unit.function,
             self.unit.layout,
             &self.assumptions,
-        );
+        )
+        .with_guard_declared(self.guard_declared);
         self.lvi.get_predicate_at(&mut env, pred, v, c, at, use_block_value)
     }
 
@@ -584,7 +594,8 @@ impl State<'_, '_> {
             &*self.unit.function,
             self.unit.layout,
             &self.assumptions,
-        );
+        )
+        .with_guard_declared(self.guard_declared);
         self.lvi.get_predicate_at_values(&mut env, pred, lhs, rhs, at, use_block_value)
     }
 
