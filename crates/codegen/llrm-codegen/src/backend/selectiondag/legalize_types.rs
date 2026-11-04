@@ -1196,9 +1196,27 @@ impl<'a> TypeLegalizer<'a> {
                 // `PromoteIntRes_BSWAP` and `PromoteIntRes_BITREVERSE`: the
                 // wider reversal, shifted down by the bits added.
                 let promoted = self.promoted_integer(self.dag.operand(value, 0));
+                // "If the larger BITREVERSE isn't supported by the target, try
+                // to expand now": the narrow type keeps the work small.
+                if op == ISD::BitReverse && !self.tli.is_operation_legal_or_custom_or_promote(op, to) {
+                    if let Some(expanded) = super::legalize_dag::expand_bitreverse(self.dag, value) {
+                        let wide = self.dag.get_node(ISD::AnyExtend, to, &[expanded]);
+                        self.set_promoted_integer(value, wide);
+                        return Ok(());
+                    }
+                }
                 let reversed = self.dag.get_node(op, to, &[promoted]);
                 let added = self.shift_const(u128::from(to.size_in_bits() - vt.size_in_bits()), to);
                 self.dag.get_node(ISD::Srl, to, &[reversed, added])
+            }
+            ISD::BitCast => {
+                // `PromoteIntRes_BITCAST`: through a stack slot, the value
+                // stored as its own type and loaded as the narrow integer.
+                let src = self.dag.operand(value, 0);
+                let (slot, store, cell) = self.store_to_slot(src);
+                let info = super::dag::MemInfo { mem_vt: vt, ..self.slot_info(src, cell) };
+                let load = self.dag.get_load(vt, store, slot, info);
+                self.dag.get_node(ISD::AnyExtend, to, &[load])
             }
             op => return Err(LegalizeError::Unsupported { op, ty: vt, what: "promote result" }),
         };

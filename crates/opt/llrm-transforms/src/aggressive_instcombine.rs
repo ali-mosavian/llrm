@@ -349,6 +349,23 @@ fn fold_loads_recursive(
     true
 }
 
+/// `DT.dominates(Value, Instruction)` for an address: an argument or constant
+/// always does; an instruction does when it is before `at` in its block, or
+/// its block dominates `at`'s.
+fn dominates_at(
+    function: &Function,
+    value: Operand,
+    at: InstId,
+) -> bool {
+    let Operand::Value(id) = value else { return true };
+    let llrm_mir::module::ValueDef::Instruction(def) = function.value(id).def else { return true };
+    let (Some(def_block), Some(at_block)) = (function.parent(def), function.parent(at)) else { return false };
+    if def_block == at_block {
+        return function.comes_before(def, at);
+    }
+    llrm_mir::domtree::DomTree::of(function).dominates(def_block, at_block)
+}
+
 /// `foldConsecutiveLoads`
 /// ([:1540](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L1540)).
 fn fold_consecutive_loads(
@@ -380,7 +397,35 @@ fn fold_consecutive_loads(
         return false;
     }
     let Opcode::Load { align, volatile } = function.instruction(li1).opcode.clone() else { return false };
-    let pointer = function.instruction(li1).operands[0];
+    let mut pointer = function.instruction(li1).operands[0];
+    // The wide load sits at `root_insert`, which may be the other load: the
+    // first load's address is used only if its definition dominates that
+    // point, else the stripped base plus the constant offset is (the pin's
+    // `CreatePtrAdd`, :1569).
+    if !dominates_at(function, pointer, root_insert) {
+        let space = match context.types.get(function.operand_type(context, pointer).expect("a typed pointer")) {
+            Type::Pointer(space) => *space,
+            _ => return false,
+        };
+        let index_bits = layout.pointer(space).index_bits;
+        let (base, offset) =
+            strip_and_accumulate_constant_offsets(&query(context, layout, function), pointer, index_bits, true);
+        let shift = 128 - index_bits;
+        let offset = ((offset << shift) as i128) >> shift;
+        let i8 = context.types.int(8);
+        let index_ty = context.types.int(index_bits);
+        let index = Operand::Constant(context.int(index_ty, offset));
+        let ptr_ty = function.operand_type(context, pointer).expect("a typed pointer");
+        let add = function.create_instruction(
+            Opcode::GetElementPtr { source: i8 },
+            ptr_ty,
+            vec![base, index],
+            Flags::default(),
+            None,
+        );
+        function.insert(add, Position::Before(root_insert)).expect("a placed instruction");
+        pointer = Operand::Value(function.instruction(add).result.expect("a value"));
+    }
     let wider = context.types.int(lops.load_size as u32);
     let new_load =
         function.create_instruction(Opcode::Load { align, volatile }, wider, vec![pointer], Flags::default(), None);

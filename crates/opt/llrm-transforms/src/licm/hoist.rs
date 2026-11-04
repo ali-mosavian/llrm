@@ -109,21 +109,6 @@ pub fn may_reassociate(
     inst: InstId,
 ) -> bool {
     let bo = function.instruction(inst);
-    // `hoistMinMax`: a logical operation of two compares.
-    if matches!(
-        bo.opcode,
-        Opcode::Select | Opcode::Binary(BinaryOp::And | BinaryOp::Or)
-    )
-        && bo.operands.iter().any(|&operand| {
-            let Operand::Value(value) = operand else { return false };
-            matches!(
-                function.value(value).def,
-                ValueDef::Instruction(def) if matches!(function.instruction(def).opcode, Opcode::ICmp(_))
-            )
-        })
-    {
-        return true;
-    }
     if matches!(bo.opcode, Opcode::GetElementPtr { .. }) {
         return matches!(
             bo.operands[0],
@@ -200,6 +185,66 @@ impl Reassociation {
     }
 }
 
+/// `MatchICmpAgainstInvariant`: a one-use relational integer compare `cond` of
+/// a loop-variant value against an invariant one, the variant one on the left;
+/// its definition, predicate (inverted for a logical or) and both sides.
+fn against_invariant(
+    function: &Function,
+    ctx: &LoopCtx,
+    cond: Operand,
+    inverse: bool,
+) -> Option<(InstId, IntPredicate, Operand, Operand)> {
+    let Operand::Value(value) = cond else { return None };
+    let ValueDef::Instruction(def) = function.value(value).def else { return None };
+    let compare = function.instruction(def);
+    let Opcode::ICmp(mut pred) = compare.opcode else { return None };
+    if !function.users(value).has_one_use() || ctx.state.gone.borrow().contains(&def) {
+        return None;
+    }
+    let [mut lhs, mut rhs] = compare.operands[..] else { return None };
+    if matches!(pred, IntPredicate::Eq | IntPredicate::Ne) {
+        return None;
+    }
+    if ctx.is_loop_invariant(lhs) {
+        std::mem::swap(&mut lhs, &mut rhs);
+        pred = pred.swapped();
+    }
+    if ctx.is_loop_invariant(lhs) || !ctx.is_loop_invariant(rhs) {
+        return None;
+    }
+    if inverse {
+        pred = pred.inverse();
+    }
+    Some((def, pred, lhs, rhs))
+}
+
+/// Whether `inst` could be a [`hoist_min_max`]'s logical operation: an `and`,
+/// `or` or select of two compares [`against_invariant`] with one predicate and
+/// one variant side. The cheap look `seeded` takes ahead of the memory graph:
+/// a loop with a logical operation of unrelated compares is not seeded by it.
+pub fn may_hoist_min_max(
+    function: &Function,
+    ctx: &LoopCtx,
+    inst: InstId,
+) -> bool {
+    let logic = function.instruction(inst);
+    let is_constant = |operand: Operand| matches!(operand, Operand::Constant(_));
+    let (a, b, inverse) = match (&logic.opcode, &logic.operands[..]) {
+        (Opcode::Binary(BinaryOp::And), &[a, b]) => (a, b, false),
+        (Opcode::Binary(BinaryOp::Or), &[a, b]) => (a, b, true),
+        // `select a, b, false` and `select a, true, b`.
+        (Opcode::Select, &[a, b, c]) if is_constant(c) => (a, b, false),
+        (Opcode::Select, &[a, b, c]) if is_constant(b) => (a, c, true),
+        _ => return false,
+    };
+    let (Some((_, pred1, lhs1, _)), Some((_, pred2, lhs2, _))) =
+        (against_invariant(function, ctx, a, inverse), against_invariant(function, ctx, b, inverse))
+    else {
+        return false;
+    };
+    pred1 == pred2 && lhs1 == lhs2
+}
+
 /// [`hoistMinMax`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L2256):
 /// `x < a && x < b` (or `||`, as the inverse) with `a` and `b` invariant in
 /// the loop becomes one compare against `min(a, b)`, made in the preheader.
@@ -231,35 +276,9 @@ fn hoist_min_max(
     } else {
         return None;
     };
-    // `MatchICmpAgainstInvariant`: a one-use relational integer compare of a
-    // loop-variant value against an invariant one, the variant one on the left.
-    let against_invariant = |cond: Operand| -> Option<(InstId, IntPredicate, Operand, Operand)> {
-        let Operand::Value(value) = cond else { return None };
-        let ValueDef::Instruction(def) = function.value(value).def else { return None };
-        let compare = function.instruction(def);
-        let Opcode::ICmp(mut pred) = compare.opcode else { return None };
-        if !function.users(value).has_one_use() || ctx.state.gone.borrow().contains(&def) {
-            return None;
-        }
-        let [mut lhs, mut rhs] = compare.operands[..] else { return None };
-        unit.context.types.int_bits(query.type_of(lhs)?)?;
-        if matches!(pred, IntPredicate::Eq | IntPredicate::Ne) {
-            return None;
-        }
-        if ctx.is_loop_invariant(lhs) {
-            std::mem::swap(&mut lhs, &mut rhs);
-            pred = pred.swapped();
-        }
-        if ctx.is_loop_invariant(lhs) || !ctx.is_loop_invariant(rhs) {
-            return None;
-        }
-        if inverse {
-            pred = pred.inverse();
-        }
-        Some((def, pred, lhs, rhs))
-    };
-    let (def1, pred1, lhs1, rhs1) = against_invariant(cond1)?;
-    let (def2, pred2, lhs2, rhs2) = against_invariant(cond2)?;
+    let (def1, pred1, lhs1, rhs1) = against_invariant(function, ctx, cond1, inverse)?;
+    let (def2, pred2, lhs2, rhs2) = against_invariant(function, ctx, cond2, inverse)?;
+    unit.context.types.int_bits(query.type_of(lhs1)?)?;
     if pred1 != pred2 || lhs1 != lhs2 {
         return None;
     }

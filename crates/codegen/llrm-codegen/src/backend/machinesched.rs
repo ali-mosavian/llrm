@@ -1317,6 +1317,19 @@ mod tests {
         assert_eq!(regions(&insns, regs, 16), vec![0..2, 3..5]);
     }
 
+    /// `modifies_stack_pointer`: `add sp, 4` is neither a push, a pop nor a
+    /// call, and `_lanes` leaves SP out of the lanes it orders by, so the two
+    /// loads around it were one region and could swap across the write.
+    #[test]
+    fn test_a_write_of_the_stack_pointer_that_is_not_a_push_or_pop_ends_a_region() {
+        let mut insns = body();
+        let sp = Loc::Reg(llrm_lir::Reg { register: llrm_lir::registers::RegId::SP, width: 2 });
+        let imm = Loc::Imm(crate::model::ir::Imm { value: 4, width: 2, address: None });
+        insns.insert(2, insn(9, semantics(Operation::Binary, "add", vec![sp.clone()], vec![sp, imm]), vec![], vec![]));
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
+        assert_eq!(regions(&insns, regs, 16), vec![0..2, 3..5]);
+    }
+
     /// Three constants feed two adds and a store. In source order all three
     /// are live together (3 values); bottom-up with a limit of two places
     /// the third load just above the add that reads it, so at most two are

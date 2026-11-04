@@ -1768,3 +1768,63 @@ b2:
     );
     assert!(!after.contains("llvm.umin") && !after.contains("llvm.umax"), "{after}");
 }
+
+/// The loops of @f that `seeded` lets reach the memory graph.
+fn seeded_loops(text: &str) -> Vec<bool> {
+    use llrm_analysis::testing::{DOS, layout};
+    use llrm_mir::passes::{Analyses, Outer};
+    let module = parsed(&format!("{DOS}{text}"));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut module = module;
+    let (context, function) = module.function_mut("f").expect("@f");
+    let mut analyses = Analyses::new(std::rc::Rc::new(outer));
+    let shape = analyses.get::<llrm_analysis::cfg::Shape>(context, &layout, function);
+    let innermost = super::innermost_loops(&shape);
+    shape.loops.iter().map(|one| super::seeded(function, &shape, &innermost, one)).collect()
+}
+
+/// #6706 widened the `seeded` look to any `and`, `or` or select of a compare:
+/// nearly every loop then built MemorySSA and walked sink/hoist, licm 43.2M to
+/// 198.9M and mssa 88.2M to 165.6M instructions on memory_expansion.ll. A
+/// logical operation of two compares of variant values seeds nothing.
+#[test]
+fn a_logical_operation_of_variant_compares_does_not_seed_a_loop() {
+    let text = "define i16 @f(i16 %n, i16 %m) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %inc, %loop ]
+  %j = phi i16 [ 0, %entry ], [ %jnc, %loop ]
+  %a = icmp ult i16 %i, %j
+  %b = icmp slt i16 %j, %i
+  %c = and i1 %a, %b
+  %inc = add i16 %i, 1
+  %jnc = add i16 %j, 2
+  br i1 %c, label %loop, label %exit
+exit:
+  ret i16 %inc
+}
+";
+    assert_eq!(seeded_loops(text), [false]);
+}
+
+/// The look #6706 added still seeds the loop it can act on: two compares of
+/// one variant value against two invariant bounds.
+#[test]
+fn two_invariant_bounds_of_one_variant_value_seed_a_loop() {
+    let text = "define i16 @f(i16 %n, i16 %m) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %inc, %loop ]
+  %a = icmp ult i16 %i, %n
+  %b = icmp ult i16 %i, %m
+  %c = and i1 %a, %b
+  %inc = add i16 %i, 1
+  br i1 %c, label %loop, label %exit
+exit:
+  ret i16 %inc
+}
+";
+    assert_eq!(seeded_loops(text), [true]);
+}
