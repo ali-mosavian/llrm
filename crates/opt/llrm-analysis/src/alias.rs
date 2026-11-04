@@ -2379,6 +2379,9 @@ pub fn calls_by_attributes(unit: &Unit) -> llrm_mir::dense::IdMap<InstId, Effect
     for (_, at) in unit.function.walk() {
         let op = unit.function.instruction(at);
         let (Opcode::Call(_) | Opcode::Invoke(_)) = op.opcode else { continue };
+        let callee_attrs = llrm_mir::memory::callee(unit.context, unit.function, at)
+            .and_then(|one| unit.globals.get(one.0 as usize))
+            .and_then(|one| one.function());
         let count = match op.opcode {
             Opcode::Call(_) => op.operands.len() - 1,
             _ => op.operands.len() - 3,
@@ -2407,11 +2410,15 @@ pub fn calls_by_attributes(unit: &Unit) -> llrm_mir::dense::IdMap<InstId, Effect
                     },
                 );
             }
+            let stated = |key: &str| {
+                let attrs = callee_attrs.and_then(|one| one.parameter_attrs.get(index))?;
+                llrm_mir::memory::access_ranges(attrs, key)
+            };
             if through.writes && !_by_value(unit, at, index) {
-                stores.push(place.clone());
+                stores.extend(bounded(&place, stated(llrm_mir::memory::WRITES)));
             }
             if through.reads {
-                loads.push(place);
+                loads.extend(bounded(&place, stated(llrm_mir::memory::READS)));
             }
         }
         let callee = llrm_mir::memory::callee(unit.context, unit.function, at);
@@ -2435,6 +2442,43 @@ pub fn calls_by_attributes(unit: &Unit) -> llrm_mir::dense::IdMap<InstId, Effect
         out.insert(at, Effect { loads: share(loads), stores: share(stores), fills: Vec::new() });
     }
     out
+}
+
+/// The references a call makes through `place`: one per range its callee's body
+/// bounds the access to (`llrm.reads`, `llrm.writes`), else `place` itself.
+///
+/// DEVIATE I3: see `initializes::accessed`.
+fn bounded(
+    place: &MemRef,
+    ranges: Option<Vec<(i64, i64)>>,
+) -> Vec<MemRef> {
+    let Some(ranges) = ranges else { return vec![place.clone()] };
+    // The pointer is not what is accessed once shifted: only its object and bytes are.
+    let Some(provenance) = place.provenance.as_ref() else { return vec![place.clone()] };
+    ranges
+        .into_iter()
+        .filter_map(|(low, high)| {
+            let slices = provenance
+                .slices
+                .iter()
+                .map(|one| {
+                    if one.low == memory::WHOLE_LOW && one.high == memory::WHOLE_HIGH {
+                        return Some(*one);
+                    }
+                    Slice::new(one.object, one.low.checked_add(low)?, one.high.checked_add(high)? - 1, 1, 1).ok()
+                })
+                .collect::<Option<Vec<_>>>()?;
+            let mut shifted = place.clone();
+            shifted.pointer = None;
+            shifted.disp = shifted.disp.checked_add(low)?;
+            shifted.width = u32::try_from(high - low).ok()?;
+            shifted.provenance = Some(Provenance {
+                slices: slices.into_iter().collect(),
+                restrict: provenance.restrict.clone(),
+            });
+            Some(shifted)
+        })
+        .collect()
 }
 
 /// Whether argument `argument` of the call `at` is passed byval: the callee's

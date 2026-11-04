@@ -1069,6 +1069,96 @@ fn test_an_os_call_whose_stack_arguments_are_unknown_stays_a_call() {
     assert!(top.contains("call i32 @parity"), "parity was inlined for nothing:\n{top}");
 }
 
+/// `sum_three(&a, &b, &c)` on three stack records with far data pointers: the
+/// callee leaves `capacity` alone, so its stores go and the kept call counted 10
+/// units against 15 inlined. The call pushes three far pointers and the records
+/// need a frame, 114 bytes against 75: parity/sum_three/c -Os, +38 B.
+#[test]
+fn test_an_os_call_on_stack_records_is_inlined_where_the_bytes_say_so() {
+    let top = sized(
+        r#"target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3"
+
+%struct.Slice = type { i16, i16, ptr addrspace(1) }
+
+@first = internal global [4 x i16] [i16 1, i16 2, i16 3, i16 4], align 2
+@second_data = internal global [4 x i16] [i16 10, i16 20, i16 30, i16 40], align 2
+@third_data = internal global [4 x i16] [i16 100, i16 200, i16 300, i16 400], align 2
+
+define signext i16 @sum(ptr addrspace(1) noundef %0, ptr addrspace(1) noundef %1, ptr addrspace(1) noundef %2) addrspace(1) nounwind optsize memory(read, inaccessiblemem: none) nofree nosync norecurse {
+  br label %4
+
+4:
+  %5 = phi i16 [ 0, %3 ], [ %25, %9 ]
+  %6 = phi i16 [ 0, %3 ], [ %24, %9 ]
+  %7 = load i16, ptr addrspace(1) %0, align 1
+  %8 = icmp ult i16 %5, %7
+  br i1 %8, label %9, label %26
+
+9:
+  %10 = getelementptr inbounds nuw i8, ptr addrspace(1) %0, i16 4
+  %11 = load ptr addrspace(1), ptr addrspace(1) %10, align 1
+  %12 = getelementptr inbounds nuw [2 x i8], ptr addrspace(1) %11, i16 %5
+  %13 = load i16, ptr addrspace(1) %12, align 2
+  %14 = add nsw i16 %6, %13
+  %15 = getelementptr inbounds nuw i8, ptr addrspace(1) %1, i16 4
+  %16 = load ptr addrspace(1), ptr addrspace(1) %15, align 1
+  %17 = getelementptr inbounds nuw [2 x i8], ptr addrspace(1) %16, i16 %5
+  %18 = load i16, ptr addrspace(1) %17, align 2
+  %19 = add nsw i16 %14, %18
+  %20 = getelementptr inbounds nuw i8, ptr addrspace(1) %2, i16 4
+  %21 = load ptr addrspace(1), ptr addrspace(1) %20, align 1
+  %22 = getelementptr inbounds nuw [2 x i8], ptr addrspace(1) %21, i16 %5
+  %23 = load i16, ptr addrspace(1) %22, align 2
+  %24 = add nsw i16 %19, %23
+  %25 = add i16 %5, 1
+  br label %4
+
+26:
+  ret i16 %6
+}
+
+declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture) addrspace(1) nocallback nofree nosync nounwind
+
+declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture) addrspace(1) nocallback nofree nosync nounwind
+
+define i32 @top() addrspace(1) nounwind optsize {
+  %1 = alloca %struct.Slice, align 1
+  %2 = alloca %struct.Slice, align 1
+  %3 = alloca %struct.Slice, align 1
+  call addrspace(1) void @llvm.lifetime.start.p0(i64 -1, ptr %1) nounwind
+  call addrspace(1) void @llvm.lifetime.start.p0(i64 -1, ptr %2) nounwind
+  call addrspace(1) void @llvm.lifetime.start.p0(i64 -1, ptr %3) nounwind
+  store i16 4, ptr %1, align 1
+  %4 = getelementptr inbounds nuw i8, ptr %1, i16 2
+  store i16 4, ptr %4, align 1
+  %5 = getelementptr inbounds nuw i8, ptr %1, i16 4
+  store ptr addrspace(1) addrspacecast (ptr @first to ptr addrspace(1)), ptr %5, align 1
+  store i16 4, ptr %2, align 1
+  %6 = getelementptr inbounds nuw i8, ptr %2, i16 2
+  store i16 4, ptr %6, align 1
+  %7 = getelementptr inbounds nuw i8, ptr %2, i16 4
+  store ptr addrspace(1) addrspacecast (ptr @second_data to ptr addrspace(1)), ptr %7, align 1
+  store i16 4, ptr %3, align 1
+  %8 = getelementptr inbounds nuw i8, ptr %3, i16 2
+  store i16 4, ptr %8, align 1
+  %9 = getelementptr inbounds nuw i8, ptr %3, i16 4
+  store ptr addrspace(1) addrspacecast (ptr @third_data to ptr addrspace(1)), ptr %9, align 1
+  %10 = addrspacecast ptr %1 to ptr addrspace(1)
+  %11 = addrspacecast ptr %2 to ptr addrspace(1)
+  %12 = addrspacecast ptr %3 to ptr addrspace(1)
+  %13 = call signext addrspace(1) i16 @sum(ptr addrspace(1) noundef %10, ptr addrspace(1) noundef %11, ptr addrspace(1) noundef %12) nobuiltin optsize
+  %14 = sext i16 %13 to i32
+  call addrspace(1) void @llvm.lifetime.end.p0(i64 -1, ptr %3) nounwind
+  call addrspace(1) void @llvm.lifetime.end.p0(i64 -1, ptr %2) nounwind
+  call addrspace(1) void @llvm.lifetime.end.p0(i64 -1, ptr %1) nounwind
+  ret i32 %14
+}
+"#,
+        "@top(",
+    );
+    assert!(!top.contains("@sum("), "sum stayed a call:\n{top}");
+}
+
 /// `@top` after the pipeline sized for bytes over `text`.
 fn sized(
     text: &str,
