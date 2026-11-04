@@ -55,11 +55,12 @@ def sh(cmd, cwd, inp=None, timeout=300):
 
 
 def libc_library(work):
-    """The library directory of LIBC's objects: sdld takes a member only for a symbol still undefined (an sdar archive, it takes whole)."""
+    """The library directory of LIBC's objects and those of the `Z80_LIBC_EXTRA` directories (the soft-float helpers): sdld takes a member only for a symbol still undefined (an sdar archive, it takes whole)."""
     lib = Path(work) / "lib"
     lib.mkdir()
     stems = []
-    for s in sorted(LIBC.glob("*.s")):
+    extra = [Path(d) for d in os.environ.get("Z80_LIBC_EXTRA", "").split(":") if d]
+    for s in sorted([*LIBC.glob("*.s"), *(p for d in extra for p in d.glob("*.s"))]):
         a = sh(["sdasz80", "-g", "-o", f"lib/{s.stem}.rel", str(s)], work)
         assert a.returncode == 0, a.stdout + a.stderr
         stems.append(s.stem)
