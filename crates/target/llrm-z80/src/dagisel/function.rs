@@ -12,7 +12,7 @@
 //! calls) needs none. Reason: frame objects wait for the Z80 machine function.
 //! Exit: M4.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use llrm_codegen::backend::isel;
 use llrm_codegen::backend::registerinfo::RegId;
@@ -142,7 +142,7 @@ pub fn select_function_with(
     let mut info = FunctionLoweringInfo::new(function);
     let mut locals = alloca_sizes(module, function, &layout, &info)?;
     let mut selected = Vec::new();
-    let mut visited = std::collections::HashSet::new();
+    let mut visited = llrm_support::hash::HashSet::default();
     for &block in function.layout() {
         if optimize {
             // `SelectAllBasicBlocks`: a phi knows what its incoming values do
