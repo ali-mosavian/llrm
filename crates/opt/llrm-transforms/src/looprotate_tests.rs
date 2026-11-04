@@ -484,3 +484,70 @@ fn test_check_exit_count_asks_with_one_session_for_all_the_loops_it_leaves() {
     rotate_function(&mut module, "f", &tti, options).expect("rotates");
     assert_eq!(llrm_analysis::scev::analysis::sessions_made() - before, 1);
 }
+
+/// A header declaring a scope for its store and `!noalias` it on its load kept
+/// one scope in the guard's copy and in the loop: the copy's store and the
+/// loop's load were called apart by `ScopedNoAliasAA`, though they are two runs
+/// of the code and `%p` and `%q` may be one address (`cloneAndAdaptNoAliasScopes`
+/// in LoopRotationUtils).
+#[test]
+fn test_the_header_copy_and_the_loop_do_not_share_a_declared_scope() {
+    use llrm_analysis::aa::{AliasResult, BatchAAResults, MemoryLocation};
+    use llrm_analysis::aggregate::AggregateAA;
+    use llrm_analysis::memory::Unit;
+    use llrm_analysis::scopednoaliasaa::ScopedNoAliasAA;
+
+    let mut module = parsed(
+        "declare void @llvm.experimental.noalias.scope.decl()
+
+define void @f(ptr %p, ptr %q, i32 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %next, %b2 ]
+  call void @llvm.experimental.noalias.scope.decl(), !noalias.scope.decl !1
+  store i32 1, ptr %p, !alias.scope !1
+  %v = load i32, ptr %q, !noalias !1
+  %go = icmp slt i32 %i, %n
+  br i1 %go, label %b2, label %b3
+
+b2:
+  store i32 %v, ptr %q
+  %next = add i32 %i, 1
+  br label %b1
+
+b3:
+  ret void
+}
+
+!0 = distinct !{!0, !\"domain\"}
+!2 = distinct !{!2, !0, !\"scope\"}
+!1 = !{!2}
+",
+    );
+    assert!(rotated(&mut module), "{}", printed(&module));
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let function = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f").2;
+    let unit = Unit::of(&module, &layout, function);
+    let is_constant_store = |inst| {
+        let op = function.instruction(inst);
+        matches!(op.opcode, llrm_mir::opcode::Opcode::Store { .. }) && matches!(op.operands[0], llrm_mir::module::Operand::Constant(_))
+    };
+    let stores: Vec<MemoryLocation> =
+        function.walk().map(|(_, inst)| inst).filter(|&inst| is_constant_store(inst)).filter_map(|inst| MemoryLocation::get(&unit, inst)).collect();
+    let loads: Vec<MemoryLocation> = function
+        .walk()
+        .map(|(_, inst)| inst)
+        .filter(|&inst| matches!(function.instruction(inst).opcode, llrm_mir::opcode::Opcode::Load { .. }))
+        .filter_map(|inst| MemoryLocation::get(&unit, inst))
+        .collect();
+    // The guard's copy first, then the loop's.
+    assert_eq!((stores.len(), loads.len()), (2, 2), "{}", printed(&module));
+    let mut chain = AggregateAA::new();
+    chain.add_aa_result(ScopedNoAliasAA::new(&unit));
+    let mut aa = BatchAAResults::new(&mut chain);
+    assert_eq!(aa.alias(&stores[0], &loads[0]), AliasResult::NoAlias, "premise: the copy's own pair");
+    assert_eq!(aa.alias(&stores[1], &loads[1]), AliasResult::NoAlias, "premise: the loop's own pair");
+    assert_eq!(aa.alias(&stores[0], &loads[1]), AliasResult::MayAlias, "{}", printed(&module));
+}

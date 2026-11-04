@@ -39,6 +39,14 @@ fn attached(
     function.instruction(inst).metadata.iter().find(|(one, _)| one == kind).map(|&(_, node)| node)
 }
 
+/// Whether `inst` is a `llvm.experimental.noalias.scope.decl`.
+pub(crate) fn declares(
+    function: &Function,
+    inst: InstId,
+) -> bool {
+    attached(function, inst, DECL).is_some()
+}
+
 /// `identifyNoAliasScopesToClone`: the scope lists declared in `insts`.
 pub(crate) fn declared_scopes(
     function: &Function,
