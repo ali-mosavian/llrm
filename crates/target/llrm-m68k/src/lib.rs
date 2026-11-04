@@ -10,6 +10,7 @@ pub mod ccr;
 pub mod chain;
 pub mod cmpelim;
 pub mod compile;
+pub mod consts;
 pub mod dagisel;
 pub mod data;
 pub mod divide;
