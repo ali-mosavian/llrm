@@ -2632,6 +2632,16 @@ fn the_first_row_of_a_function_is_its_scope_line_at_m32() {
     }
 }
 
+/// bench/jpeg_fixed compiled from unoptimized IR at -O2 panicked in the
+/// allocator ("Cannot overlap different values"): `v = implicit_def` before a
+/// loop and `v := cmove v, x` in it, where the `implicit_def` was dropped and
+/// the read stayed, so `v` was live from the function's entry.
+#[test]
+fn a_loop_carried_value_the_entry_path_never_set_is_allocated() {
+    let text = include_str!("../tests/data/implicit_def_loop_carried_m64_o2.ll");
+    compiled(&flags(&["-O2"]), text, "f").expect("compiles");
+}
+
 /// An instruction with no place at the top of a block is line 0 in the pin,
 /// and not a statement; ours left the place of the block before it on every
 /// instruction, so a loop's `-O2` table had no line-0 row at all.
@@ -2999,6 +3009,57 @@ fn a_16_byte_clear_is_xorps_and_one_16_byte_store_at_m64() {
     let has = |start: &str| listing.lines().any(|line| line.trim().starts_with(start));
     assert!(has("xorps") && has("movaps"), "{listing}");
     assert!(!listing.contains("qword"), "{listing}");
+}
+
+/// m64 never stated `pref_loop_alignment`, so its loops were laid out
+/// unaligned where the pin pads every loop header to 16 bytes (not in
+/// size-tuned code).
+#[test]
+fn a_loop_header_is_16_aligned_at_m64_unless_tuned_for_size() {
+    let ir = || {
+        format!(
+            "target datalayout = \"@m64-datalayout@\"\n\
+             target triple = \"x86_64-unknown-linux-gnu\"\n\
+             define i64 @f(ptr %p, i64 %n) {{\n\
+             entry:\n  br label %l\n\
+             l:\n  %i = phi i64 [ 0, %entry ], [ %j, %l ]\n  %s = phi i64 [ 0, %entry ], [ %t, %l ]\n\
+             \x20 %q = getelementptr i64, ptr %p, i64 %i\n  %v = load i64, ptr %q\n  %t = add i64 %s, %v\n\
+             \x20 %j = add i64 %i, 1\n  %c = icmp ult i64 %j, %n\n  br i1 %c, label %l, label %x\n\
+             x:\n  ret i64 %t\n}}\n"
+        )
+    };
+    let listing = |level: &str| {
+        let (built, _) = compiled(&flags(&["-m64", level, "--isel=dag"]), &ir(), "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let plain = listing("-O2");
+    assert!(plain.contains("    align 16\n"), "{plain}");
+    let small = listing("-Os");
+    assert!(!small.contains("    align 16\n"), "{small}");
+}
+
+/// A jump table's index register is copied by the switch lowering itself, not
+/// through `getCopyFromRegs`, so no live-out `AssertZext` wraps it. With one,
+/// the narrowed shift needed a `mov eax, edi` re-zero-extending the index in
+/// the table block (jpeg_fixed +3 B per table).
+#[test]
+fn a_jump_table_index_is_not_zero_extended_again_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @a()\ndeclare void @b()\ndeclare void @c()\ndeclare void @d()\n\
+                define void @f(i32 %x) {\n\
+                \x20 switch i32 %x, label %e [ i32 192, label %la\n i32 193, label %lb\n i32 194, label %lc\n i32 195, label %ld ]\n\
+                la:\n  call void @a()\n  ret void\nlb:\n  call void @b()\n  ret void\n\
+                lc:\n  call void @c()\n  ret void\nld:\n  call void @d()\n  ret void\ne:\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("movsx rcx, dword ptr"), "{listing}");
+    let moves: Vec<&str> = listing
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("mov e") && line.split(", ").nth(1).is_some_and(|r| r.starts_with('e')))
+        .collect();
+    assert!(moves.is_empty(), "{listing}");
 }
 
 /// A local declared `align 16` sat at `[rsp+4]`: the frame clamped every
