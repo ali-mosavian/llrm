@@ -296,6 +296,8 @@ fn plan_loop(
     }
     // The formulae for each use, and the search space made small enough.
     lsr.generate_all_reuse_formulae(se);
+    // The pin's space as generated, for the second solve below.
+    let mut pin = lsr.fork();
     let pin_counts = counts(&lsr);
     // DEVIATE LG3's formulae (beyond the pin) join the space before its
     // narrowing, as the formulae they share registers with do.
@@ -312,8 +314,6 @@ fn plan_loop(
         // counter in an address the pin's does not, on a target that
         // cannot fold it: they save a compare, which that add outweighs
         // (wasm's copy epilog, jpeg_fixed `emit`).
-        let mut pin = build(se);
-        pin.generate_all_reuse_formulae(se);
         narrowed(se, &mut pin);
         let (pin_solution, pin_cost) = pin.solve_with_cost(se);
         // A target with no register-plus-register address (wasm) pays an add
