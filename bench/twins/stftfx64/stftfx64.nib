@@ -1,15 +1,15 @@
 # flags: -O2 -march=i486 | -O2 -march=i486 -m32
 # data: @signal
-# Short-time Fourier transform in Q9 fixed point, as stft_fixed.c: fixed '*' floors, as C's >> and BASIC's floor do.
+# Short-time Fourier transform in Q9 fixed point, as stftfx64.c: fixed '*' floors, as C's >> and BASIC's floor do.
 # The twiddles are rotated in Q15 and cut to Q9.
 import std.io as io
 
 type Q = fixed i32, fraction=9
 type R = fixed i32, fraction=15
 
-const N: i32 = 256
-const HOP: i32 = 128
-const BINS: i32 = 129
+const N: i16 = 256
+const HOP: i16 = 128
+const BINS: i16 = 129
 
 var tw_re: Q[128] = [0] * 128
 var tw_im: Q[128] = [0] * 128
@@ -25,11 +25,11 @@ fn quarter(sample: i16) -> Q:
     return Q(i32(Q(i32(sample)) / 4))
 
 fn fft() -> void:
-    let mut m: i32 = 2
+    let mut m: i16 = 2
     while m <= N:
         let half = m // 2
         let stride = N // m
-        let mut i: i32 = 0
+        let mut i: i16 = 0
         while i < N:
             for j in 0..half:
                 let ar = re[i + j]
@@ -46,12 +46,12 @@ fn fft() -> void:
         m *= 2
 
 # Pointers to the module's arrays are `*near` and made far by `.far()`, which is near on m32: spelling `*far` warns there.
-fn fill(file: &mut io.File, at: i32) -> bool:
+fn fill(file: &mut io.File, at: i16) -> bool:
     unsafe:
         let data: *near mut i16 = &mut block
         match file.read_raw(data.offset(at).cast[u8]().far(), 2 * HOP):
             .ok(n):
-                return n == 2 * HOP
+                return n == u16(2 * HOP)
             .err(_):
                 return false
 
@@ -60,7 +60,7 @@ fn put(file: &mut io.File) -> bool:
         let data: *near u16 = &row
         match file.write_raw(data.cast[u8]().far(), 2 * BINS):
             .ok(n):
-                return n == 2 * BINS
+                return n == u16(2 * BINS)
             .err(_):
                 return false
 
@@ -79,8 +79,8 @@ fn bench_stftfx64() -> i32:
         window[k] = (Q(1) - tw_re[k]) / 2
         window[k + HOP] = Q(1) - window[k]
     for i in 0..N:
-        let mut r: i32 = 0
-        let mut t: i32 = i
+        let mut r: i16 = 0
+        let mut t: i16 = i
         for _bit in 0..8:
             r = r * 2 + (t & 1)
             t = t >> 1
@@ -99,13 +99,13 @@ fn bench_stftfx64() -> i32:
                     let mut output = created
                     if !fill(input, 0):
                         return -1
-                    let mut now: i32 = 0
+                    let mut now: i16 = 0
                     while fill(input, (1 - now) * HOP):
                         for n in 0..HOP:
-                            re[i32(rev[n])] = quarter(block[now * HOP + n]) * window[n]
-                            re[i32(rev[n + HOP])] = quarter(block[(1 - now) * HOP + n]) * window[n + HOP]
-                            im[i32(rev[n])] = 0
-                            im[i32(rev[n + HOP])] = 0
+                            re[i16(rev[n])] = quarter(block[now * HOP + n]) * window[n]
+                            re[i16(rev[n + HOP])] = quarter(block[(1 - now) * HOP + n]) * window[n + HOP]
+                            im[i16(rev[n])] = 0
+                            im[i16(rev[n + HOP])] = 0
                         fft()
                         for k in 0..BINS:
                             let pr = i32(re[k] * 4)
