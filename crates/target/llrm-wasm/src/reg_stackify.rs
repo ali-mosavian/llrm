@@ -42,7 +42,7 @@
 //! `rematerializeCheapDef` (L605), `moveAndTeeForMultiUse` (L669),
 //! `TreeWalkerState` (L725), `CommutingState` (L793).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::dagisel::generated::ids::opcode as op;
 use crate::dagisel::generated::instrinfo::{desc, flag};
@@ -319,7 +319,7 @@ fn is_catch(opcode: u16) -> bool {
 /// each has, where its first definition is, and the liveness of the blocks.
 struct Registers {
     optimize: bool,
-    live_out: Vec<HashSet<VReg>>,
+    live_out: Vec<llrm_mir::dense::IdSet<VReg>>,
     defs: Vec<u32>,
     uses: Vec<u32>,
     /// The block and opcode of the first definition.

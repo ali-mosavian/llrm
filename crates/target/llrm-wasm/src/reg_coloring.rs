@@ -111,8 +111,8 @@ fn ranges(f: &Function) -> Ranges {
         let frequency = 32f64.powi(depth[b] as i32);
         // Where each live register's range, going backwards, ends; `touched`
         // are the registers this block opened or defined.
-        let mut touched: Vec<VReg> = live_out[b].iter().copied().collect();
-        for &r in &live_out[b] {
+        let mut touched: Vec<VReg> = live_out[b].iter().collect();
+        for r in live_out[b].iter() {
             open[r as usize] = Some(end);
         }
         for (i, inst) in block.iter().enumerate().rev() {
