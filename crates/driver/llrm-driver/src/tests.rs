@@ -254,12 +254,12 @@ fn a_dword_add_that_keeps_its_source_is_a_lea_at_m64() {
     assert!(listing.lines().any(|line| line.trim().starts_with("lea e") && line.contains("+5]")), "{listing}");
 }
 
-/// A symbol's address made before a call, once more after it ahead of a loop,
-/// is made again there (`DEVIATE CSE4`): sharing keeps it in a callee-saved
-/// register across the call, a push and pop for the one instruction saved
-/// (memcpy_libcall m64 -O2 shares it in the pin, three bytes smaller).
+/// A symbol's address passed to a call, read by a loop and passed to a call
+/// again is made once for the first call and the loop, and again for the last
+/// call, as the pin has it (`lea` into a callee-saved register, then a `lea`
+/// into `rdi` at the end). It was made three times: CSE4 refused the share.
 #[test]
-fn a_symbol_address_before_a_loop_is_made_again_after_a_call_at_m64() {
+fn a_symbol_address_before_a_loop_is_shared_with_it_and_made_again_after_a_call_at_m64() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 @g = global [64 x i8] zeroinitializer\n\
@@ -271,9 +271,28 @@ fn a_symbol_address_before_a_loop_is_made_again_after_a_call_at_m64() {
                 done:\n  call void @h(ptr @g)\n  ret i32 %t\n}\n";
     let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    // Each call's argument and the loop's address.
+    // The first call's argument and the loop's address, then the last call's.
     let made = listing.lines().filter(|line| line.contains("offset g")).count();
-    assert_eq!(made, 3, "{listing}");
+    assert_eq!(made, 2, "{listing}");
+}
+
+/// A symbol's address passed to four calls in one block was made four times
+/// (`mov rdi, offset src` before each): the greedy input held one def per use,
+/// where the pin's DAG selects the `LEA64r` once and its users share it, so the
+/// allocator never saw a value worth a callee-saved register. memory_expansion
+/// m64 -Os `main` was 920 bytes over the pin, 709 address defs to its 72.
+#[test]
+fn a_symbol_address_passed_to_calls_in_one_block_is_made_once_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @src = global [64 x i8] zeroinitializer\n\
+                declare void @g(ptr)\n\
+                define void @f() {\n  call void @g(ptr @src)\n  call void @g(ptr @src)\n  call void @g(ptr @src)\n\
+                  call void @g(ptr @src)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let made = listing.lines().filter(|line| line.contains("offset src")).count();
+    assert_eq!(made, 1, "{listing}");
 }
 
 /// The same symbol address hoisted twice out of a loop stayed two registers
@@ -303,12 +322,11 @@ fn a_symbol_address_hoisted_twice_out_of_a_loop_is_made_once_at_m64() {
 }
 
 /// A symbol address that every use in a call-bearing loop copies into an
-/// argument register was hoisted into a callee-saved register: its push and pop
-/// and a copy per use for the one instruction the address is made with in the
-/// loop. os_find m64 -O2 was 12 bytes over release/next, memory_expansion -Os
-/// 11, histo two instructions more.
+/// argument register is made once before the loop and held in a callee-saved
+/// register, as the pin has it (r14/r15 beside the loop counter). It was made
+/// at each call in the loop, by the fixed-register copy that remade a constant.
 #[test]
-fn a_symbol_address_only_passed_to_calls_in_a_loop_is_made_in_the_loop_at_m64() {
+fn a_symbol_address_only_passed_to_calls_in_a_loop_is_made_before_it_at_m64() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 @a = global [4096 x i8] zeroinitializer\n\
@@ -320,10 +338,10 @@ fn a_symbol_address_only_passed_to_calls_in_a_loop_is_made_in_the_loop_at_m64() 
                 done:\n  ret void\n}\n";
     let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(!listing.lines().any(|line| line.trim().starts_with("push r1")), "{listing}");
     let loop_start = listing.find("L0_2:").expect("the loop");
     let made = listing[loop_start..].lines().filter(|line| line.contains("offset a")).count();
-    assert_eq!(made, 4, "{listing}");
+    assert_eq!(made, 0, "{listing}");
+    assert_eq!(listing[..loop_start].lines().filter(|line| line.contains("offset a")).count(), 2, "{listing}");
 }
 
 /// A constant used in a loop whose call keeps the caller-saved registers
@@ -348,12 +366,11 @@ fn a_constant_across_a_call_that_keeps_a_caller_saved_register_is_made_before_th
     assert_eq!(made, 0, "{listing}");
 }
 
-/// A symbol address made before a call and again after it, once each, was
-/// made once and kept in a callee-saved register across the call: the push and
-/// pop (two executed instructions) cost more than the one made again
-/// (histo m64 -O2 was two instructions over release/next).
+/// A symbol address made before a call and again after it, once each, is made
+/// once and kept in a callee-saved register across the call, as the pin does
+/// (`lea r14, [rip + a]` before the call, no second one). CSE4 made it twice.
 #[test]
-fn a_symbol_address_made_again_after_a_call_once_is_made_again_at_m64() {
+fn a_symbol_address_made_before_and_after_a_call_is_made_once_at_m64() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 @a = global [4096 x i8] zeroinitializer\n\
@@ -365,7 +382,7 @@ fn a_symbol_address_made_again_after_a_call_once_is_made_again_at_m64() {
     let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let made = listing.lines().filter(|line| line.contains("offset a")).count();
-    assert_eq!(made, 2, "{listing}");
+    assert_eq!(made, 1, "{listing}");
 }
 
 /// A `zeroext` argument compared for (in)equality with a constant is compared
