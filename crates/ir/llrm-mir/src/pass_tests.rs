@@ -1632,3 +1632,28 @@ fn a_function_the_inliner_deleted_is_not_run_over() {
     passes.run_module(&mut module, std::rc::Rc::new(crate::target::Neutral)).expect("a run");
     assert_eq!(runs.get(), 1, "only @kept is run over");
 }
+
+/// A manager handed the declarations of a module carried, accepted as they
+/// stand, has made no listing (0), and a carried `CalleeEffects` was taken as
+/// current by `Seen == Some(0) == 0` whatever the module was: after the QB
+/// runtime inline declared `llvm.smin.i16`, the map lacked it while the
+/// declarations held it, BDCE called the call dead and erased the `add` it
+/// still read (llrm-qb `chr_inlines_whatever_the_size_model_says`).
+#[test]
+fn a_carried_callee_map_is_not_taken_for_current_by_listing_zero() {
+    let one = module();
+    let two = parse::module(&format!("{TEXT}declare void @h()\n")).unwrap_or_else(|error| panic!("{error}"));
+    let proxy = || -> ModuleAnalyses { ModuleAnalyses::of(&one, Rc::new(Neutral)) };
+    // The map is worked out for `one` by a manager that made no listing.
+    let mut first = proxy();
+    first.outer(&one);
+    let mut second = ModuleAnalyses::of(&one, Rc::new(Neutral)).carrying(first.carried());
+    second.outer(&one);
+    second.invalidate(&PreservedAnalyses::none());
+    // The declarations alone are brought to the module that has `@h`.
+    second.get::<crate::passes::Declarations>(&two);
+    let mut third = ModuleAnalyses::of(&two, Rc::new(Neutral)).carrying(second.carried());
+    let outer = third.outer(&two);
+    let h = two.globals.iter().position(|global| global.name.as_deref() == Some("h")).expect("@h");
+    assert!(outer.callees().contains_key(&GlobalId(h as u32)), "the carried map lacks @h: {}", outer.callees().len());
+}

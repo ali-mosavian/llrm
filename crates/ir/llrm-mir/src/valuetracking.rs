@@ -31,6 +31,7 @@ pub mod pattern;
 pub mod power2;
 mod query;
 pub mod range;
+pub mod signbit;
 pub mod signbits;
 #[cfg(test)]
 mod signbits_tests;

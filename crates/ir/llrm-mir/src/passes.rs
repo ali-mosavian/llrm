@@ -191,7 +191,7 @@ pub struct Declared {
     held: Option<Rc<Vec<GlobalValue>>>,
     /// Or the module's `GlobalNames`, which stand through a change of a
     /// declaration's attributes.
-    named: Option<Rc<Vec<Option<String>>>>,
+    named: Option<Rc<NameList>>,
     next: u32,
     /// Whether the module declares `llvm.assume`, where the pass manager knows
     /// it (`with_assume_declared`).
@@ -329,7 +329,7 @@ impl Declared {
     /// declares needs those, and they stand where a function's attributes
     /// change.
     pub fn over_names(
-        named: Rc<Vec<Option<String>>>,
+        named: Rc<NameList>,
         metadata: usize,
     ) -> Self {
         Self {
@@ -840,7 +840,10 @@ fn declared_as_before<A: 'static>(
     analyses.get::<Declarations>(module);
     let now = analyses.listing;
     let seen = analyses.memo::<Seen<A>>();
-    let same = seen.0 == Some(now);
+    // Listing 0 is no listing: a manager that was handed its declarations
+    // carried (accepted as they stand) has made none, and every analysis it
+    // worked from them is `Some(0)` alike, whatever the declarations were.
+    let same = now != 0 && seen.0 == Some(now);
     if working {
         seen.0 = Some(now);
     }
@@ -1009,14 +1012,51 @@ impl ModuleAnalysis for TypeAncestry {
 /// where `Declarations` is made again.
 pub struct GlobalNames;
 
+/// The names `GlobalNames` holds, with the count of names made (`names_made`)
+/// at which they were last seen to be the module's: while no `GlobalName` has
+/// been made since, and the count of globals is the same, they stand without
+/// comparing each.
+#[derive(Debug)]
+pub struct NameList {
+    names: Vec<Option<String>>,
+    seen: std::cell::Cell<u64>,
+}
+
+impl PartialEq for NameList {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.names == other.names
+    }
+}
+
+impl std::ops::Deref for NameList {
+    type Target = Vec<Option<String>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.names
+    }
+}
+
+static NAME_COMPARES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// How many times `GlobalNames` compared every name of a module with its own.
+pub fn name_compares() -> u64 {
+    NAME_COMPARES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 impl ModuleAnalysis for GlobalNames {
-    type Result = Vec<Option<String>>;
+    type Result = NameList;
     const NAME: &'static str = "global-names";
     fn run(
         module: &Module,
         _: &mut ModuleAnalyses,
     ) -> Self::Result {
-        module.globals.iter().map(|one| one.name.owned()).collect()
+        NameList {
+            names: module.globals.iter().map(|one| one.name.owned()).collect(),
+            seen: std::cell::Cell::new(crate::module::names_made()),
+        }
     }
 
     fn unchanged(
@@ -1024,8 +1064,20 @@ impl ModuleAnalysis for GlobalNames {
         _: &mut ModuleAnalyses,
         previous: &Self::Result,
     ) -> bool {
-        module.globals.len() == previous.len()
-            && module.globals.iter().zip(previous).all(|(global, name)| global.name.as_deref() == name.as_deref())
+        let made = crate::module::names_made();
+        if module.globals.len() != previous.names.len() {
+            return false;
+        }
+        if previous.seen.get() == made {
+            return true;
+        }
+        NAME_COMPARES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let same =
+            module.globals.iter().zip(&previous.names).all(|(global, name)| global.name.as_deref() == name.as_deref());
+        if same {
+            previous.seen.set(made);
+        }
+        same
     }
 }
 
