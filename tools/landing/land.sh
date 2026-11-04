@@ -18,6 +18,6 @@ for n in "$@"; do
   if [ "$(gh pr view $n --repo $R --json state -q .state)" = MERGED ]; then echo "$n: MERGED  $title"; echo "BASE LANDED #$n"
   else  # refused or failed: build-queue.sh skips this head against this $LAND_BRANCH until one of them moves
     S=${REFUSED_STATE:-${LAND_TMP:-/tmp/landing}/refused.state}; touch "$S"; sed -i "/^$n /d" "$S"
-    echo "$n $(gh pr view $n --repo $R --json headRefOid -q .headRefOid) $(gh api "repos/$R/git/ref/heads/$LAND_BRANCH" -q .object.sha)" >> "$S"
+    echo "$n $(gh pr view $n --repo $R --json headRefOid -q .headRefOid) $(gh api "repos/$R/git/ref/heads/$LAND_BRANCH" -q .object.sha) $(date +%s)" >> "$S"
   fi
 done
