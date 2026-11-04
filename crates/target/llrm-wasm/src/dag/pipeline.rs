@@ -148,6 +148,10 @@ impl CombineHooks for WasmCombines {
         true
     }
 
+    fn fold_sext_in_reg_of_load(&self) -> bool {
+        true
+    }
+
     fn rebuild_brcond_condition(&self) -> bool {
         true
     }
