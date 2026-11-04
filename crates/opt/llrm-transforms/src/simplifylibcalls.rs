@@ -19,17 +19,23 @@
 //! 0. All but the empty format and the empty `fwrite` need the result unused.
 //! `strcmp`, `strncmp`, `memcmp` and `bcmp` of constant arrays fold to their
 //! order, `strcmp("", p)` and `strcmp(p, "")` to the first byte,
-//! `memcmp(p, q, 1)` to the byte difference (`compare.rs`).
+//! `memcmp(p, q, 1)` to the byte difference, `memcmp(p, q, n) == 0` to one
+//! integer compare for a legal `n * 8` and aligned pointers; `strcmp(p, "x")`
+//! and `strncmp` of a literal are `memcmp` where the bytes are readable and the
+//! result is only compared with zero, and `memcmp(p, q, n) == 0` is `bcmp`
+//! (`compare.rs`).
 //!
 //! # Deviations
-//! - D1: `puts`, `putchar`, `fwrite`, `fputc` and `fputs` are formed only where
-//!   the compile states them in `Options::library`, as `strlen` is (loopidiom
-//!   D11); the pin reads the triple. Exit: `Target::library` naming them.
+//! - D1: `puts`, `putchar`, `fwrite`, `fputc`, `fputs`, `memcmp` and `bcmp` are
+//!   formed only where the compile states them in `Options::library`, as
+//!   `strlen` is (loopidiom D11); the pin reads the triple. Exit:
+//!   `Target::library` naming them.
 //! - D2: the other arms (`sprintf`, `snprintf`, the other `str*`, `mem*`, math)
-//!   are untranslated, and so are the `memcmp` rewrites of `strcmp` and
-//!   `strncmp`, the equality expansion of `memcmp`, and
-//!   `iprintf`/`__small_printf`, `optimizeErrorReporting` and the argument
-//!   annotations.
+//!   are untranslated, and so are `iprintf`/`__small_printf`,
+//!   `optimizeErrorReporting` and the argument annotations.
+//! - D3: `strcmp` of two strings whose lengths are known but whose contents are
+//!   not (a PHI or select of literals) is not rewritten: `GetStringLength` here
+//!   reads a constant global only.
 //!
 //! # Keeps
 //! Blocks and edges are unchanged: dominators and loops are preserved.
@@ -450,6 +456,7 @@ impl FunctionPass for SimplifyLibCalls {
             );
         let int = unit.context.types.int(info.int_bits());
         let size = unit.context.types.int(size_bits);
+        let mut sizes = None;
         for call in calls {
             let Some(global) = llrm_mir::memory::callee(unit.context, unit.function, call) else { continue };
             let Some(func) =
@@ -464,9 +471,10 @@ impl FunctionPass for SimplifyLibCalls {
                 LibFunc::Puts => puts(unit, &site),
                 LibFunc::Fputs => fputs(unit, &site),
                 LibFunc::Fwrite => fwrite_call(unit, &site),
-                LibFunc::Strcmp => compare::str_cmp(unit, &site),
-                LibFunc::Strncmp => compare::str_n_cmp(unit, &site),
-                LibFunc::Memcmp | LibFunc::Bcmp => compare::mem_cmp(unit, &site),
+                LibFunc::Strcmp => compare::str_cmp(unit, &site, &mut sizes),
+                LibFunc::Strncmp => compare::str_n_cmp(unit, &site, &mut sizes),
+                LibFunc::Memcmp => compare::mem_cmp(unit, &site, true),
+                LibFunc::Bcmp => compare::mem_cmp(unit, &site, false),
                 _ => None,
             };
             let Some(rewrite) = rewrite else { continue };
