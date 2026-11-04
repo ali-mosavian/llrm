@@ -132,12 +132,20 @@ pub fn steps() -> usize {
 
 thread_local! {
     static LOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Instructions `is_read_clobber` has put to the alias analysis.
+    static CLOBBERS_ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// The locations this thread's walks have worked out, for a test that an
 /// instruction's place is worked out once, not once for each ask.
 pub fn locations() -> usize {
     LOCATIONS.with(std::cell::Cell::get)
+}
+
+/// The instructions asked of the alias analysis as read clobbers, for a test
+/// that a walk past an intrinsic asks none (the pin's `isa<IntrinsicInst>`).
+pub fn clobbers_asked() -> usize {
+    CLOBBERS_ASKED.with(std::cell::Cell::get)
 }
 
 pub struct DeadStoreElimination;
@@ -885,6 +893,7 @@ impl<'a> Dse<'a> {
         if !self.may_read(use_inst) {
             return false;
         }
+        CLOBBERS_ASKED.with(|count| count.set(count.get() + 1));
         self.aa.get_mod_ref_info(use_inst, def_loc).is_ref()
     }
 
@@ -1009,8 +1018,11 @@ impl<'a> Dse<'a> {
                 return None;
             }
             // A read clobber on the path ends it (intrinsic calls are
-            // understood by the caller).
-            if self.may_read(current_inst) && self.is_read_clobber(killing_loc, current_inst) {
+            // understood by the caller: `!isa<IntrinsicInst>(CurrentI)`).
+            if self.aa.unit().intrinsic(current_inst).is_none()
+                && self.may_read(current_inst)
+                && self.is_read_clobber(killing_loc, current_inst)
+            {
                 return None;
             }
             // Quick check for direct uses that are read clobbers.

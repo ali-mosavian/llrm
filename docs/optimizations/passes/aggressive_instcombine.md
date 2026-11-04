@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/aggressive_instcombine.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/aggressive_instcombine.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/aggressive_instcombine.rs sha256:02a8d35be6c1a3f1f77d1a69b9ba27c34ae182a5913e0c0436b53e649b0e331d -->
+<!-- src: crates/opt/llrm-transforms/src/aggressive_instcombine.rs sha256:044b1198ef1a79fe46ba4ac3cd2111bfc35ec73e0f6862ec413e5b3a2ded7f13 -->
 
 # aggressive_instcombine
 
@@ -36,6 +36,15 @@ DEVIATE (anything MIR or Rust lacks), numbered after `trunc_inst_combine`'s:
     fast for every size the data layout has as a legal integer (the X86
     answer, `X86ISelLoweringCall.cpp#L356`). Owner: w2. Exit: a
     target-supplied fact, 2026-11-28.
+
+40. The pin ends `foldUnusualPatterns` with `SimplifyInstructionsInBlock`;
+    there is no public equivalent here, so the dead chain a fold leaves is
+    the next `dead` pass's. Owner: w2. Exit: 2026-11-21, expose the helper.
+41. `foldConsecutiveStores` ends a run at any instruction that may read or
+    write memory, or throw; the pin asks `BatchAA` whether it touches the
+    run's base. The pass `Unit` carries no module globals, so a callee's own
+    attributes are not seen either. Sound, merges less. Owner: w2. Exit:
+    2026-11-21, with deviation 38's `AliasQuery`.
 
 ## Example
 The pair above is one `load i16`; see `aggressive_instcombine_tests.rs`.
