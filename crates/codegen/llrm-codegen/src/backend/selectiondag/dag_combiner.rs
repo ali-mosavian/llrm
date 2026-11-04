@@ -2561,6 +2561,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         &mut self,
         node: SDValue,
     ) -> Option<SDValue> {
+        if !self.hooks.rebuild_brcond_condition() {
+            return None;
+        }
         let (chain, cond, dest) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
         if self.dag.opcode(cond) == ISD::Freeze && self.dag.has_one_use(cond.node) {
             let inner = self.dag.operand(cond, 0);
