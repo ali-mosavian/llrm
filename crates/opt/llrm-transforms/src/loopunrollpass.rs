@@ -13,9 +13,11 @@
 //!   [`UnrolledInstAnalyzer`](llrm_analysis::loopunrollanalyzer) and finds the
 //!   unrolled cost under the threshold boosted by the dynamic cost saved.
 //!
-//! A count that is not the whole trip count would be partial or runtime
-//! unrolling, which this pass (`OnlyFullUnroll`) does not do. The loop is then
-//! unrolled by [`crate::loopunroll::unroll_loop_blocks`].
+//! A count that is not the whole trip count is partial unrolling, which the
+//! pass does only as `LoopUnrollPass` (`Options::target_unrolling`: the
+//! target's `AllowPartial` and `UpperBound`) and only where the count divides
+//! the trip count; runtime unrolling (the remainder loop) is not here yet. The
+//! loop is then unrolled by [`crate::loopunroll::unroll_loop_blocks`].
 //!
 //! # Deviations
 //! - U3 `computePeelCount` is `looppeel.rs` (S2); its deviations are PL1 to PL5
@@ -101,6 +103,9 @@ pub struct Options {
     /// `OnlyWhenForced`.
     pub only_when_forced: bool,
     pub prepare_for_lto: bool,
+    /// `LoopUnrollPass` rather than `LoopFullUnrollPass`: `AllowPartial` and
+    /// `UpperBound` are the target's, not forced off.
+    pub target_unrolling: bool,
 }
 
 /// What the pass reads and changes.
@@ -122,6 +127,9 @@ pub struct Run<'a> {
     pub declared: &'a mut llrm_mir::passes::Declared,
     /// The iterations peeled off the loop headed by a block in this run (PL1).
     pub peeled: IdMap<BlockId, u32>,
+    /// The headers of loops this run unrolled at run time, and of their
+    /// remainders (`setLoopAlreadyUnrolled`, D4: a set, not metadata).
+    pub finished: IdSet<BlockId>,
     /// The headers of the loops this run made: those that were no loop's header
     /// when it began (`LPMUpdater::addSiblingLoops`, for the passes after it).
     pub created: Vec<BlockId>,
@@ -353,7 +361,13 @@ impl Analyzed {
     pub(crate) fn of(run: &Run) -> Self {
         let tree = DomTree::of(run.function);
         let loops = LoopInfo::analyze(run.function, || &tree);
-        let assumptions = AssumptionCache::of(run.context, run.globals, run.metadata, run.function);
+        let assumptions = AssumptionCache::of_declared(
+            run.context,
+            run.globals,
+            run.metadata,
+            run.function,
+            run.outer.assume_declared(),
+        );
         Self { tree, loops, assumptions }
     }
 }
@@ -367,9 +381,11 @@ pub(crate) fn gather_unrolling_preferences(
 ) -> UnrollingPreferences {
     let mut up = gather_unrolling_preferences_of_target(run, has_calls);
     // Apply the values provided by the full unroll pass.
-    up.partial = false;
-    up.runtime = false;
-    up.upper_bound = false;
+    if !run.options.target_unrolling {
+        up.partial = false;
+        up.runtime = false;
+        up.upper_bound = false;
+    }
     if UNROLL_MAX_UPPER_BOUND == 0 {
         up.upper_bound = false;
     }
@@ -1183,6 +1199,10 @@ fn try_to_unroll_loop(
     analyzed: &Analyzed,
     lp: Loop,
 ) -> Unrolled {
+    if run.finished.contains(&lp.get_header()) {
+        why(run, lp, "already unrolled");
+        return Unrolled::Unmodified;
+    }
     let options = LoopOptions::of(run, lp);
     let tm = options.unroll(run);
     // `TM & TM_Disable`: disabled, or suppressed by the user.
@@ -1381,11 +1401,54 @@ fn try_to_unroll_loop(
         };
     }
 
-    // Do not attempt partial/runtime unrolling in the full unroller.
-    if (trip_count == 0 && max_trip_count == 0) || count < trip_count || count < max_trip_count {
+    // `LoopFullUnrollPass` does not do partial or runtime unrolling.
+    let partial = trip_count != 0 && count < trip_count && trip_count % count == 0;
+    if !run.options.target_unrolling
+        && ((trip_count == 0 && max_trip_count == 0) || count < trip_count || count < max_trip_count)
+    {
         why(run, lp, "partial/runtime unroll in FullLoopUnroll");
         return Unrolled::Unmodified;
     }
+    // Runtime unrolling: the epilog remainder first (`UnrollLoop`), then the
+    // loop, made again, is copied out `count` times.
+    let mut remade = None;
+    if run.options.target_unrolling && !partial && (trip_count == 0 || count < trip_count) {
+        if trip_multiple % count != 0 {
+            let expansion = llrm_analysis::scev::expand_cost::MachineCosts {
+                tti: run.outer.target().tti(),
+                minimum_size: false,
+            };
+            let mut session = llrm_analysis::scev::analysis::ScevSession::of(run.context, run.function, run.outer);
+            let mut env = crate::loopunrollruntime::Env {
+                context: &mut *run.context,
+                layout: run.layout,
+                function: &mut *run.function,
+                declared: &mut *run.declared,
+                outer: run.outer,
+                tti: &expansion,
+            };
+            let done =
+                crate::loopunrollruntime::unroll_runtime_loop_remainder(&mut env, &mut session, header, count, false);
+            let Some(epilog) = done else {
+                why(run, lp, "the remainder loop could not be generated");
+                return Unrolled::Unmodified;
+            };
+            run.scev = ScalarEvolution::new();
+            run.finished.insert(header);
+            if let Some(epilog) = epilog {
+                run.finished.insert(epilog);
+            }
+            if up.unroll_remainder && let Some(epilog) = epilog {
+                crate::loopunrollandjam::unroll_remainder_loop(run, epilog, count - 1);
+            }
+        }
+        remade = Some(Analyzed::of(run));
+    }
+    let runtime = remade.is_some();
+    let (analyzed, lp) = match &remade {
+        Some(analyzed) => (analyzed, analyzed.loops.get_loop_for(header).expect("the loop is still headed by its block")),
+        None => (analyzed, lp),
+    };
 
     why(
         run,
@@ -1399,9 +1462,15 @@ fn try_to_unroll_loop(
     let latches = lp.get_loop_latches(run.function);
     let unroll_options = UnrollOptions {
         count,
-        max_trip_count: count,
+        // A run-time unroll keeps the back edge: the remainder made the latch's
+        // trip multiple `count`, so only its last copy tests the exit.
+        max_trip_count: if runtime { u32::MAX } else if partial { trip_count } else { count },
         max_or_zero,
-        exits: exits.into_iter().filter(|exit| exit.trip_count != 0).collect(),
+        exits: if runtime {
+            lp.get_loop_latch(run.function).map(|block| Exit { block, trip_count: count }).into_iter().collect()
+        } else {
+            exits.into_iter().filter(|exit| exit.trip_count != 0).collect()
+        },
     };
     match unroll_loop_blocks(run.function, header, &body, &latches, &unroll_options, &mut run.emptied) {
         Ok(result) => result,
@@ -1660,6 +1729,7 @@ pub fn unroll_loops(run: &mut Run) -> bool {
     // left that was not there before, the unrolled loop's own first iteration
     // among them: they are new to the loop passes after it.
     let mut revisited: Vec<BlockId> = Vec::new();
+    let mut parents: Vec<BlockId> = Vec::new();
     let mut changed = simplified || closed;
     if changed {
         run.scev = ScalarEvolution::new();
@@ -1692,6 +1762,17 @@ pub fn unroll_loops(run: &mut Run) -> bool {
         let peeled = result == Unrolled::Peeled;
         changed = true;
         run.scev = ScalarEvolution::new();
+        // The pin's loop pass manager runs LPM2's whole list on a loop,
+        // children before parents ([`L270`][pop]): a parent's IndVars
+        // sees its child already unrolled. Here each pass runs over
+        // every loop in turn, so the parent is queued for IndVars
+        // again.
+        //
+        // [pop]:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopPassManager.cpp#L270
+        if let Some(parent) = parent_header {
+            parents.push(parent);
+        }
         if peeled {
             // `PartiallyUnrolled`: its analyses and its nest are made again
             // (the cloned iterations are loops' blocks of its parent).
@@ -1781,6 +1862,13 @@ pub fn unroll_loops(run: &mut Run) -> bool {
             nest.extend(one.get_sub_loops());
         }
     }
+    for header in parents {
+        if analyzed.loops.get_loop_for(header).is_some_and(|one| one.get_header() == header)
+            && !created.contains(&header)
+        {
+            created.push(header);
+        }
+    }
     run.created = created;
     changed
 }
@@ -1792,6 +1880,9 @@ pub struct LoopFullUnroll {
     /// `OnlyWhenForced`: only a loop that asks to be unrolled is
     /// (`!PTO.LoopUnrolling`, clang's `-fno-unroll-loops`, the default at -O1).
     pub only_when_forced: bool,
+    /// The pin's `LoopUnrollPass` (`AllowPartial`, `Runtime` and `UpperBound`
+    /// from the target) where false is `LoopFullUnrollPass`.
+    pub target_unrolling: bool,
     /// The headers of the loops the last run made, for the slot after it: the
     /// loop pass manager's worklist.
     pub created: std::rc::Rc<std::cell::RefCell<Vec<BlockId>>>,
@@ -1827,6 +1918,7 @@ impl FunctionPass for LoopFullUnroll {
             declared: unit.declared,
             emptied: Vec::new(),
             peeled: Default::default(),
+            finished: IdSet::new(),
             created: Vec::new(),
             scev: held.take(),
             options: Options {
@@ -1835,6 +1927,7 @@ impl FunctionPass for LoopFullUnroll {
                 min_size: false,
                 only_when_forced: self.only_when_forced,
                 prepare_for_lto: false,
+                target_unrolling: self.target_unrolling,
             },
         };
         let changed = unroll_loops(&mut run);
@@ -1886,6 +1979,7 @@ pub fn unroll_function(
         options,
         emptied: Vec::new(),
         peeled: Default::default(),
+        finished: IdSet::new(),
         created: Vec::new(),
         scev: ScalarEvolution::new(),
     };

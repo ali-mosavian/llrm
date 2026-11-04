@@ -370,3 +370,52 @@ fn test_the_x87_stack_slots_reach_the_unroll_query_only_without_sse2() {
     let slots = |cpu: &str| X86::of_cpu(cpu).expect("a cpu").with_tuning(tuning.clone()).x87_stack_slots();
     assert_eq!((slots("i486"), slots("pentium"), slots("core2")), (Some(8), Some(8), None));
 }
+
+fn unroll_defaults() -> UnrollingPreferences {
+    UnrollingPreferences {
+        threshold: 150,
+        max_percent_threshold_boost: 400,
+        opt_size_threshold: 0,
+        partial_threshold: 150,
+        partial_opt_size_threshold: 150,
+        default_unroll_runtime_count: 8,
+        max_count: u32::MAX,
+        max_upper_bound: 8,
+        full_unroll_max_count: u32::MAX,
+        be_insns: 2,
+        partial: false,
+        runtime: false,
+        allow_remainder: true,
+        unroll_remainder: false,
+        allow_expensive_trip_count: false,
+        force: false,
+        upper_bound: false,
+        max_iterations_count_to_analyze: 10,
+        unroll_and_jam: false,
+        unroll_and_jam_inner_loop_threshold: 60,
+    }
+}
+
+/// `x86-64` and `core2` run `SandyBridgeModel` (LoopMicroOpBufferSize 28), so
+/// the base `getUnrollingPreferences` enables partial and runtime unrolling
+/// there, up to 28 micro-ops and not past a call. Without it x86-64 reported no
+/// preference and the partial/runtime unroll never ran (0 diffs in the A/B).
+/// The `GenericModel` cpus (`i486` and the rest) have no loop buffer: none.
+#[test]
+fn test_partial_and_runtime_unrolling_follow_the_cpu_models_loop_buffer() {
+    for cpu in ["x86-64", "core2"] {
+        let tti = X86::of_cpu(cpu).unwrap();
+        let mut up = unroll_defaults();
+        tti.get_unrolling_preferences(false, &mut up);
+        assert!(up.partial && up.runtime && up.upper_bound, "{cpu}");
+        assert_eq!((up.partial_threshold, up.opt_size_threshold, up.partial_opt_size_threshold), (28, 0, 0), "{cpu}");
+        let mut calls = unroll_defaults();
+        tti.get_unrolling_preferences(true, &mut calls);
+        assert!(!calls.partial && !calls.runtime && !calls.upper_bound, "{cpu} with a call");
+    }
+    for cpu in ["i386", "i486", "pentium", "pentiumpro", "k5", "k6", "athlon"] {
+        let mut up = unroll_defaults();
+        X86::of_cpu(cpu).unwrap().get_unrolling_preferences(false, &mut up);
+        assert!(!up.partial && !up.runtime && !up.upper_bound, "{cpu}");
+    }
+}

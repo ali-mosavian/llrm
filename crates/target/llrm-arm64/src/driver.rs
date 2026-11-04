@@ -91,7 +91,6 @@ pub fn program(
     let (_, text) = without_triple(text);
     let text = if platform == Platform::Darwin { without_va_arg(&text) } else { text };
     let mut module = llrm_mir::parse::module(&text).map_err(|error| error.to_string())?;
-    module.refuse_aliases("arm64")?;
     llrm_mir::parse::upgrade_lifetimes(&mut module);
     // Atomics are calls the mid-end moves nothing across; the selector makes
     // them instructions.
@@ -202,10 +201,8 @@ pub fn optimized_at(
 /// The routines the C link of this target resolves, by their IR names (the
 /// object writer decorates them): what `SimplifyLibCalls` may form.
 fn c_library() -> Vec<llrm_mir::libfunc::Routine> {
-    ["puts", "putchar", "fwrite", "fputc", "fputs"]
-        .into_iter()
-        .map(|name| llrm_mir::libfunc::Routine { standard: name, symbol: name.to_owned(), calling_convention: 0 })
-        .collect()
+    let names = ["puts", "putchar", "fwrite", "fputc", "fputs"].into_iter().chain(llrm_mir::libfunc::HOSTED_COMPARE);
+    llrm_mir::libfunc::Routine::stated(names, str::to_owned, 0)
 }
 
 /// Which instruction selector makes the machine function (`--isel=`).
@@ -292,21 +289,25 @@ pub fn functions_with(
                 return Err(format!("@{name}: read before written: {undefined:?}"));
             }
         }
+        machine.frame_pointer =
+            llrm_codegen::backend::framefree::frame_pointer_policy(&function.attrs).map(str::to_owned);
         crate::prepass::run(&mut machine);
         dump("Prepass", &machine);
+        let optsize = function
+            .attrs
+            .iter()
+            .any(
+                |attr| matches!(
+                    attr,
+                    llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
+                ),
+            );
         if !llrm_support::env_flag!("LLRM_ARM64_NO_COMBINE") {
-            let size = function
-                .attrs
-                .iter()
-                .any(
-                    |attr| matches!(
-                        attr,
-                        llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
-                    ),
-                );
-            crate::combine::run(&mut machine, size);
+            crate::combine::run(&mut machine, optsize);
             dump("Combine", &machine);
         }
+        crate::cmpzero::run(&mut machine);
+        dump("CmpZero", &machine);
         crate::flagcse::run(&mut machine);
         dump("FlagCse", &machine);
         crate::storecluster::run(&mut machine);
@@ -317,7 +318,7 @@ pub fn functions_with(
         dump("OrderCopies", &machine);
         // The shared greedy allocator, unless `LLRM_ARM64_LINEAR` asks for the
         // linear scan; a function greedy refuses goes to the scan, reported.
-        let greedy = (!llrm_support::env_flag!("LLRM_ARM64_LINEAR")).then(|| crate::lir_view::allocate(&mut machine));
+        let greedy = (!llrm_support::env_flag!("LLRM_ARM64_LINEAR")).then(|| crate::lir_view::allocate(&mut machine, optsize));
         let allocation = match greedy {
             Some(Ok(allocation)) => allocation,
             Some(Err(why)) => {
@@ -414,6 +415,8 @@ pub fn assembly(
     level: impl Into<Level>,
 ) -> Result<String, String> {
     let mut program = program(text, platform)?;
+    // The text carries no alias: refuse it rather than drop the symbol.
+    program.modules[0].refuse_aliases("arm64")?;
     let level = level.into();
     if level != Level::O0 {
         optimized_at(&mut program, level)?;

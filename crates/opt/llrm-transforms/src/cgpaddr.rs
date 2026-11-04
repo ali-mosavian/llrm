@@ -179,6 +179,16 @@ impl FunctionPass for CgpAddr {
             unit.function,
             analyses.outer().target().lowering().as_deref(),
         );
+        // DEVIATE CS1: a dear conversion of a select with a constant arm.
+        let costs = analyses.outer().target().costs();
+        let converted = crate::cgpselect::casts_branched(
+            unit.context,
+            unit.layout,
+            unit.function,
+            costs.float_to_int,
+            costs.float_compare,
+            costs.branch,
+        );
         // `optimizeSwitchInst`'s `optimizeSwitchType`.
         let switches = match analyses.outer().target().lowering() {
             Some(lowering) => {
@@ -260,8 +270,8 @@ impl FunctionPass for CgpAddr {
                 ),
                 None => false,
             };
-        if merged {
-            // A block went: the blocks and edges are not as they were.
+        if merged || converted {
+            // A block went or came: the blocks and edges are not as they were.
             PreservedAnalyses::none()
         } else if phis
             || aligned
@@ -442,6 +452,9 @@ struct Mode {
     offset: i128,
     index: Option<(Operand, u64)>,
     insts: Vec<InstId>,
+    /// `ExtAddrMode::InBounds`: every `gep` folded was `inbounds`, and none of
+    /// the shifts that were.
+    in_bounds: bool,
 }
 
 /// The index of the address among a memory access's operands.
@@ -574,7 +587,7 @@ fn matched(
     address: Operand,
     depth: u32,
 ) -> Mode {
-    let plain = || Mode { base: address, reg: None, offset: 0, index: None, insts: Vec::new() };
+    let plain = || Mode { base: address, reg: None, offset: 0, index: None, insts: Vec::new(), in_bounds: true };
     let Operand::Value(value) = address else { return plain() };
     let ValueDef::Instruction(gep) = unit.function.value(value).def else { return plain() };
     let instruction = unit.function.instruction(gep);
@@ -601,6 +614,7 @@ fn matched(
     }
     let inner = matched(unit, tti, space, block, bytes, instruction.operands[0], depth - 1);
     let mut insts = inner.insts;
+    let mut in_bounds = inner.in_bounds && instruction.flags.contains(Flags::INBOUNDS);
     let mut reg = inner.reg;
     let index = match (variable.first(), inner.index) {
         // `BaseGV + BaseReg + ScaledReg`: the earlier index is a register of
@@ -644,6 +658,7 @@ fn matched(
             match shifted(unit, tti, space, block, bytes, operand, scale, offset + inner.offset) {
                 Some((shl, folded, scale)) => {
                     insts.push(shl);
+                    in_bounds = false;
                     Some((folded, scale))
                 }
                 None => Some((operand, scale)),
@@ -658,7 +673,7 @@ fn matched(
         return plain();
     }
     insts.push(gep);
-    Mode { base: inner.base, reg, offset: total, index, insts }
+    Mode { base: inner.base, reg, offset: total, index, insts, in_bounds }
 }
 
 /// Each load and store whose address is made in another block, with the address
@@ -754,6 +769,7 @@ fn select_combined(
         || one.index.is_some()
         || other.index.is_some()
         || one.offset == other.offset
+        || one.in_bounds != other.in_bounds
     {
         return None;
     }
@@ -773,7 +789,12 @@ fn select_combined(
         counting::constant(unit.context, &BigInt::from(other.offset), bits),
     );
     let put = |unit: &mut passes::Unit, opcode: Opcode, ty, operands: Vec<Operand>| -> Operand {
-        let inst = unit.function.create_instruction(opcode, ty, operands, Flags::default(), None);
+        let flags = if matches!(opcode, Opcode::GetElementPtr { .. }) && one.in_bounds {
+            Flags::INBOUNDS
+        } else {
+            Flags::default()
+        };
+        let inst = unit.function.create_instruction(opcode, ty, operands, flags, None);
         unit.function.insert(inst, Position::Before(access)).expect("a position before the access");
         Operand::Value(unit.function.instruction(inst).result.expect("a value"))
     };
@@ -798,7 +819,13 @@ fn remade(
     let i8 = unit.context.types.int(8);
     let mut current = mode.base;
     let put = |unit: &mut passes::Unit, opcode: Opcode, ty, operands: Vec<Operand>| -> Operand {
-        let inst = unit.function.create_instruction(opcode, ty, operands, Flags::default(), None);
+        // `CreatePtrAdd(.., "sunkaddr", AddrMode.InBounds)`.
+        let flags = if matches!(opcode, Opcode::GetElementPtr { .. }) && mode.in_bounds {
+            Flags::INBOUNDS
+        } else {
+            Flags::default()
+        };
+        let inst = unit.function.create_instruction(opcode, ty, operands, flags, None);
         unit.function.insert(inst, Position::Before(access)).expect("a position before the access");
         Operand::Value(unit.function.instruction(inst).result.expect("a value"))
     };

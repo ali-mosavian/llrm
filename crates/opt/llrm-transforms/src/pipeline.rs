@@ -771,7 +771,17 @@ pub(crate) fn llvm_order(
             vec![
                 // `EarlyFPM.addPass(LowerExpectIntrinsicPass())` (#L1177).
                 slot("lowerexpect@1177", Box::new(crate::lowerexpect::LowerExpect)),
-                simplify_cfg("decide@1178"),
+                // `SimplifyCFGPass()` has `ConvertSwitchRangeToICmp` off.
+                slot(
+                    "decide@1178",
+                    Box::new(simplifycfg::SimplifyCfg {
+                        options: simplifycfg::Options {
+                            loop_form_kept: false,
+                            convert_switch_range_to_icmp: false,
+                            ..Default::default()
+                        },
+                    }),
+                ),
                 sroa("sroa@1179"),
                 earlycse("earlycse@1180", false),
             ]
@@ -801,12 +811,22 @@ pub(crate) fn llvm_order(
         // (PassBuilderPipelines.cpp#L1662, the last function pass, after
         // LoopSink) and L1682.
         Phase::Late => vec![
+            // DropUnnecessaryAssumesPass (l.1577), the first of `OptimizePM`.
+            slot(
+                "drop-unnecessary-assumes@1577",
+                Box::new(crate::dropunnecessaryassumes::DropUnnecessaryAssumes { drop_dereferenceable: false }),
+            ),
             slot("float2int@1594", Box::new(crate::float2int::Float2Int)),
             // `LowerConstantIntrinsicsPass` (l.1597), right after Float2Int.
             slot("lower-constant-intrinsics@1597", Box::new(crate::lowerconstantintrinsics::LowerConstantIntrinsics)),
             // LoopInterchangePass (l.1631), in the loop pass manager after
             // LoopRotate (l.1621) and LoopDeletion (l.1628).
             slot("loop-interchange@1631", Box::new(loopinterchange::Interchange::default())),
+            // DropUnnecessaryAssumesPass (l.1360), after the vectorizer.
+            slot(
+                "drop-unnecessary-assumes@1360",
+                Box::new(crate::dropunnecessaryassumes::DropUnnecessaryAssumes { drop_dereferenceable: true }),
+            ),
             // InferAlignmentPass (l.1362), before LoopLoadElimination.
             slot("infer-alignment@1362", Box::new(crate::inferalignment::InferAlignment)),
             // LoopLoadEliminationPass (l.1400), before the SimplifyCFG of
@@ -830,7 +850,12 @@ pub(crate) fn llvm_order(
                 Box::new(loopunrollandjam::LoopUnrollAndJam {
                     opt_level: if applied.options.limits.target_percent >= 200 { 3 } else { 2 },
                     opt_size: size,
-                    options: loopunrollandjam::JamOptions { on: true, ..Default::default() },
+                    options: loopunrollandjam::JamOptions {
+                        on: true,
+                        clean: true,
+                        pre: applied.options.pre,
+                        ..Default::default()
+                    },
                 }),
             ),
             // LoopUnrollPass (l.1476) with the full unroll the target allows
@@ -843,6 +868,7 @@ pub(crate) fn llvm_order(
                     opt_level: if applied.options.limits.target_percent >= 200 { 3 } else { 2 },
                     opt_size: size,
                     only_when_forced: !applied.options.loop_unrolling,
+                    target_unrolling: true,
                     created: Default::default(),
                 }),
             ),
@@ -858,12 +884,12 @@ pub(crate) fn llvm_order(
             licm("licm@1508", true),
             slot("instsimplify@1662", Box::new(crate::instsimplify::InstSimplify)),
             slot("divrempairs@1667", Box::new(crate::divrempairs::DivRemPairs)),
+            slot("expandmemcmp@1673", Box::new(crate::expandmemcmp::ExpandMemCmp)),
             // TailCallElim (l.1677, the module optimization pipeline's
             // "calls created during optimization"), at every level: at -O1 it
             // is the only one, so a self-recursive tail call is a loop there
             // (recmany -O1 -m32 ran 1500 frames deep, 60 KB, where the pin's
-            // runs in one). ExpandMemCmp, between the two at the pin, is not
-            // a slot.
+            // runs in one).
             slot("tailrec@1677", Box::new(tailcallelim::TailCallElim)),
             simplify_cfg_with("simplifycfg@1682", simplifycfg::Options::L1682),
         ],
@@ -878,7 +904,7 @@ pub(crate) fn llvm_order(
                 // the option is read by `simplifySwitch`, untranslated.
                 simplify_cfg("decide@675"),
                 combine("combine@677"),
-                slot("aggressive-instcombine@678", Box::new(crate::trunc_inst_combine::TruncInstCombine)),
+                slot("aggressive-instcombine@678", Box::new(crate::aggressive_instcombine::AggressiveInstCombine)),
                 slot("tailrec@688", Box::new(tailcallelim::TailCallElim)),
                 // SimplifyCFGOptions().convertSwitchRangeToICmp(true), L691:
                 // the option is read by `simplifySwitch`, untranslated.
@@ -942,13 +968,23 @@ pub(crate) fn llvm_order(
                 ),
                 slot("loopidioms@737", Box::new(loopidioms::LoopIdioms { size })),
                 slot("indvars@738", Box::new(indvars::IndVars { lftr: indvars::lftr_default(), size })),
-                slot("loopdeletion@749", Box::new(loopdeletion::LoopDeletion)),
+                slot(
+                    "loopdeletion@749",
+                    Box::new(crate::loopidiom::pass::AfterDeletion {
+                        deletion: loopdeletion::LoopDeletion,
+                        idiom: crate::loopidiom::pass::LoopIdiom {
+                            for_size: size,
+                            ..crate::loopidiom::pass::LoopIdiom::with_routines(applied.options.library.clone())
+                        },
+                    }),
+                ),
                 slot(
                     "unroll@753",
                     Box::new(loopunrollpass::LoopFullUnroll {
                         opt_level: if applied.options.limits.target_percent >= 200 { 3 } else { 2 },
                         opt_size: size,
                         only_when_forced: !applied.options.loop_unrolling,
+                        target_unrolling: false,
                         created: std::rc::Rc::clone(&created),
                     }),
                 ),
@@ -1071,11 +1107,36 @@ pub(crate) fn function_stages(applied: &Applied) -> Vec<Fixed> {
     ]
 }
 
+/// The first value of a defined function that is a vector, where the target
+/// has no vector MIR: "a <4 x i32> value", as isel refuses a type it has no
+/// registers for. The mid-end assumes scalars (`combine_shared::width`).
+pub fn refuse_vectors(program: &Program) -> Result<(), String> {
+    if program.target.has_vector_mir() {
+        return Ok(());
+    }
+    for module in &program.modules {
+        for (_, global, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
+            for at in 0..function.value_count() {
+                let ty = function.value(llrm_mir::module::ValueId(at as u32)).ty;
+                if matches!(
+                    module.context.types.get(ty),
+                    llrm_mir::types::Type::Vector { .. }
+                ) {
+                    let name = global.name.as_deref().unwrap_or("?");
+                    return Err(format!("@{name}: a {} value", module.context.types.display(ty)));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `applied`, with what the pipeline did to each function.
 pub fn recorded(
     program: &mut Program,
     applied: &Applied,
 ) -> Result<Vec<Stage>, String> {
+    refuse_vectors(program)?;
     timed();
     let mut manager = PassManager::default();
     manager.verify_each = llrm_support::debug::verifying();
@@ -1140,6 +1201,13 @@ pub fn recorded(
     let again_applied =
         Applied { dump: applied.dump.as_ref().map(|one| one.join("interprocedural")), ..applied.clone() };
     let mut again = Fixed::linear(&again_applied, Phase::Simplify);
+    // The pin follows IPSCCP, ArgumentPromotion and DeadArgumentElimination
+    // with `GlobalCleanup` (PromotePass, InstCombine, SimplifyCFG,
+    // PassBuilderPipelines.cpp#L1241) and runs the function simplification
+    // pipeline once per body, in the CGSCC walk: these stages leave a body to
+    // the walk's run, not a second full one (GVN ran five times on `main` of
+    // memory_expansion, the pin's twice).
+    let mut cleaned = Fixed::linear(&again_applied, Phase::Cleanup);
     // The copies of a tree recursion in itself and then its tail-call
     // elimination, after the clones ipa-cp made (D10).
     let late = Some({
@@ -1164,8 +1232,14 @@ pub fn recorded(
             let done =
                 // The stage that only retargets loads and stores of globals
                 // keeps GlobalsAA past its bodies, as the walk's runs do.
-                rerun(module, analyses, id, &mut again, stage == "globalsra.")
-                    .unwrap_or_else(|error| panic!("pipeline: {error}"));
+                rerun(
+                    module,
+                    analyses,
+                    id,
+                    if matches!(stage, "promote." | "ipsccp." | "ipa-deadargs.") { &mut cleaned } else { &mut again },
+                    stage == "globalsra.",
+                )
+                .unwrap_or_else(|error| panic!("pipeline: {error}"));
             TRIGGER.with(|trigger| trigger.borrow_mut().clear());
             done
         }),
@@ -1360,7 +1434,9 @@ fn rerun(
 ) -> Result<(), String> {
     let layout = analyses.program().layout.clone();
     let outer = analyses.outer(module);
-    let mut declared = Declared::over(std::rc::Rc::clone(&outer.globals), module.metadata.len());
+    let mut declared = Declared::over(std::rc::Rc::clone(&outer.globals), module.metadata.len())
+        .with_assume_declared(outer.assume_declared())
+        .with_guard_declared(outer.guard_declared());
     if fixed.wants_sizes() {
         declared.count_referenced(module);
     }
@@ -1858,7 +1934,7 @@ impl Run {
             sections: Default::default(),
             special: Default::default(),
             global_metadata: Default::default(),
-            names: Default::default(),
+            ..Module::default()
         };
         std::fs::create_dir_all(file.parent().expect("a file in a directory"))
             .and_then(|()| std::fs::write(file, llrm_mir::print::module(&module)))

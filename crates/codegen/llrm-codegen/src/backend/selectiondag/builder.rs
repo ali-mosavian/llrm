@@ -594,35 +594,8 @@ impl<'a> Builder<'a> {
         let tables = info
             .tables
             .get_or_insert_with(|| {
-                // `isOffsetFoldingLegal`: `shouldAssumeDSOLocal` holds for
-                // every symbol under the static relocation
-                // model, which these targets (DOS objects, no
-                // PIC) always use.
-                let (global_names, local_symbols) = module_tables.unwrap_or_else(|| {
-                    (
-                        std::rc::Rc::new(
-                            module
-                                .globals
-                                .iter()
-                                .map(|global| global.name.as_deref().unwrap_or("").to_string())
-                                .collect(),
-                        ),
-                        std::rc::Rc::new(if target.dag.dso_local_symbols {
-                            vec![true; module.globals.len()]
-                        } else {
-                            module
-                                .globals
-                                .iter()
-                                .map(|global| {
-                                    matches!(
-                                        global.linkage,
-                                        llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
-                                    )
-                                })
-                                .collect()
-                        }),
-                    )
-                });
+                let (global_names, local_symbols) = module_tables
+                    .unwrap_or_else(|| super::function_lowering::module_tables(module, target.dag.dso_local_symbols));
                 super::function_lowering::Tables {
                     global_names,
                     local_symbols,
@@ -806,6 +779,7 @@ impl Builder<'_> {
                 llrm_mir::types::FloatKind::Float => MVT::F32,
                 llrm_mir::types::FloatKind::Double => MVT::F64,
                 llrm_mir::types::FloatKind::X86Fp80 => MVT::F80,
+                llrm_mir::types::FloatKind::F128 => return Err(Refused("fp128: no legalization yet")),
             })),
             _ => Err(Refused("aggregate or vector value")),
         }
@@ -1779,9 +1753,17 @@ impl Builder<'_> {
             None => called,
         };
         let mut values = Vec::new();
-        for argument in arguments {
+        for (at, argument) in arguments.iter().enumerate() {
             let value = self.get_value(*argument)?;
-            let value = self.pass_float_bits(*argument, value);
+            // The dword is for a stack cell or an integer register; a target
+            // that owns the call (`calling`) or an xmm argument takes the
+            // float.
+            let integer = self.calling().is_none()
+                && !matches!(
+                    plan.parameters.get(at),
+                    Some(Parameter::Registers(regs)) if regs.iter().any(|reg| reg.is_xmm())
+                );
+            let value = if integer { self.pass_float_bits(*argument, value) } else { value };
             self.parts(self.dag.value_type(value))?;
             values.push(value);
         }
@@ -1920,7 +1902,10 @@ impl Builder<'_> {
     /// (its load has no other user) is passed as the dword it is. The pin
     /// loads it onto the x87 stack and stores it to the argument slot (`fld;
     /// fstp`); the integer load folds (`visit_bitcast`) and the store becomes
-    /// `push dword ptr [m]`.
+    /// `push dword ptr [m]`. Only for an argument the convention passes in a
+    /// stack cell or an integer register: in a float register (xmm0, s0) the
+    /// bits are the wrong class
+    /// (`movd xmm0, xmm0`; arm64 `fmov w0, s16`; wasm an `i32` for an `f32`).
     fn pass_float_bits(
         &mut self,
         argument: Operand,
@@ -2139,7 +2124,9 @@ impl Builder<'_> {
         if demoted {
             let types = &self.module.context.types;
             let size = self.layout.alloc_size(types, result_type) as u32;
-            let index = self.info.new_stack_object(size, 1);
+            // `LowerCallTo`: the object has the result type's preferred alignment.
+            let align = self.layout.pref_align(types, result_type) as u32;
+            let index = self.info.new_stack_object(size, align);
             let address = self.dag.get_frame_index(self.target.dag.pointer, index);
             let pointer = self.target.dag.pointer;
             let pieces = self.split_for_calling(address, Ext::Any)?;
@@ -2213,9 +2200,10 @@ impl Builder<'_> {
         self.dag.set_root(chain);
         if let Some((index, address)) = slot {
             let vt = self.type_of(result_type)?;
+            let align = self.layout.pref_align(&self.module.context.types, result_type) as u32;
             let info = MemInfo {
                 mem_vt: vt,
-                align: 1,
+                align,
                 volatile: false,
                 base: MemBase::Stack(index),
                 ext: None,
@@ -2409,8 +2397,12 @@ impl Builder<'_> {
                             continue;
                         }
                         // A byte or word is promoted to `i32`, a dword goes
-                        // in the dword register (`EDI`, not `RDI`)
-                        let promoted = width.min(vt.size_in_bits().max(32));
+                        // in the dword register (`EDI`, not `RDI`); an
+                        // integer between a dword and the register is
+                        // promoted to the register (`i40` to `i64`, as
+                        // `getCopyToParts` does).
+                        let bits = vt.size_in_bits();
+                        let promoted = if bits > 32 && bits < width { width } else { width.min(bits.max(32)) };
                         let piece = if vt.is_integer() && vt.size_in_bits() < promoted {
                             let code = extends.get(at).copied().unwrap_or(ISD::AnyExtend);
                             self.dag.get_node(code, EVT::integer(promoted), &[piece])
@@ -2610,9 +2602,14 @@ impl Builder<'_> {
             let vt = self.dag.value_type(value);
             let pointer = self.target.dag.pointer;
             let address = self.dag.get_copy_from_reg(chain, reg, pointer);
+            // `visitRet`: stored at the preferred alignment of the returned type.
+            let align = match self.function.operand_type(&self.module.context, operand) {
+                Some(ty) => self.layout.pref_align(&self.module.context.types, ty) as u32,
+                None => 1,
+            };
             let info = MemInfo {
                 mem_vt: vt,
-                align: 1,
+                align,
                 volatile: false,
                 base: MemBase::Unknown,
                 ext: None,

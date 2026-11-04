@@ -19,7 +19,7 @@ impl Module {
         linkage: Linkage,
         kind: GlobalKind,
     ) -> Result<GlobalId, String> {
-        if self.globals.iter().any(|one| one.name.as_deref() == Some(name)) {
+        if self.named(name).is_some() {
             return Err(format!("@{name} is already defined"));
         }
         let id = GlobalId(self.globals.len() as u32);

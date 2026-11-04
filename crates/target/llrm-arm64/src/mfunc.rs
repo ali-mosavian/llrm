@@ -3,9 +3,8 @@
 //! (`MachineFunction`), the frame objects it needs, and the pseudo
 //! instructions only the backend's own phases understand.
 
-use std::collections::HashMap;
-
 use llrm_codegen::model::lir::SrcLoc;
+use rustc_hash::FxHashMap as HashMap;
 
 use crate::mc::inst::{Gpr, Inst, Target, Vreg};
 use crate::mc::visit::{Reg, RegRef, Role};
@@ -356,6 +355,8 @@ pub struct MFunc {
     /// objects are addressed from the frame pointer and outgoing arguments are
     /// made room for around each call.
     pub dynamic: bool,
+    /// The function's `"frame-pointer"` attribute (`all`, `non-leaf`, ...).
+    pub frame_pointer: Option<String>,
     /// The frame object each source variable lives in (`llvm.dbg.declare` of
     /// an `alloca`), by the variable's metadata node.
     pub declared: Vec<(llrm_mir::MetadataId, u32)>,
@@ -485,7 +486,7 @@ pub fn sequence_copies(
 /// The virtual registers some path reads before writing: a phi copy that
 /// missed an edge leaves one (`LLRM_ARM64_VERIFY`).
 pub fn undefined_reads(function: &MFunc) -> Vec<Reg> {
-    use std::collections::HashSet;
+    use llrm_support::hash::HashSet;
     let labels: HashMap<&str, usize> =
         function.blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at)).collect();
     let count = function.blocks.len();
@@ -521,7 +522,7 @@ pub fn undefined_reads(function: &MFunc) -> Vec<Reg> {
         changed = false;
         for at in 0..count {
             let entering: HashSet<Reg> = if at == 0 {
-                HashSet::new()
+                HashSet::default()
             } else {
                 let mut from = predecessors[at].iter().map(|&pred| &out[pred]);
                 match from.next() {
@@ -539,7 +540,7 @@ pub fn undefined_reads(function: &MFunc) -> Vec<Reg> {
     let mut report = Vec::new();
     for (at, block) in function.blocks.iter().enumerate() {
         let entering: HashSet<Reg> = if at == 0 {
-            HashSet::new()
+            HashSet::default()
         } else {
             let mut from = predecessors[at].iter().map(|&pred| &out[pred]);
             match from.next() {

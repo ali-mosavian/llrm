@@ -124,7 +124,7 @@ impl Analysis for Assumes {
         analyses: &mut Analyses,
     ) -> AssumptionCache {
         let outer = analyses.outer();
-        AssumptionCache::of(context, &outer.globals, &outer.metadata, function)
+        AssumptionCache::of_declared(context, &outer.globals, &outer.metadata, function, outer.assume_declared())
     }
 }
 
@@ -219,7 +219,7 @@ impl ScevSession {
         function: &Function,
         outer: &llrm_mir::passes::Outer,
     ) -> Self {
-        Self::within(context, &outer.globals, &outer.metadata, function)
+        Self::within_declared(context, &outer.globals, &outer.metadata, function, outer.assume_declared())
     }
 
     /// [`ScevSession::of`] for a caller that holds the module's globals and
@@ -230,9 +230,21 @@ impl ScevSession {
         metadata: &[llrm_mir::module::MetadataNode],
         function: &Function,
     ) -> Self {
+        Self::within_declared(context, globals, metadata, function, llrm_mir::valuetracking::assume_declared(globals))
+    }
+
+    /// [`ScevSession::within`], told whether the module declares `llvm.assume`:
+    /// a caller that holds the answer does not scan every global per function.
+    pub fn within_declared(
+        context: &llrm_mir::context::Context,
+        globals: &[llrm_mir::module::GlobalValue],
+        metadata: &[llrm_mir::module::MetadataNode],
+        function: &Function,
+        declared: bool,
+    ) -> Self {
         let tree = DomTree::of(function);
         let loops = LoopInfo::analyze(function, || &tree);
-        let assumptions = AssumptionCache::of(context, globals, metadata, function);
+        let assumptions = AssumptionCache::of_declared(context, globals, metadata, function, declared);
         Self { tree, loops, assumptions, scev: ScalarEvolution::new() }
     }
 

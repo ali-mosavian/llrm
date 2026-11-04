@@ -282,6 +282,7 @@ impl Machine for Dos {
             // The user's rate for m16 at speed (one clock is two bytes): the
             // `timings.times` row the judge reads too.
             speed_milliclocks_per_byte: crate::timings::speed_milliclocks_per_byte(),
+            price_fills: true,
             // DEVIATE: real mode weighs code bytes over clocks at every level,
             // so the full unroll takes the pin's size threshold
             // (`OptSizeThreshold`,
@@ -363,6 +364,22 @@ impl Machine for Dos {
 
     fn segment_registers(&self) -> i64 {
         SEGMENT_REGISTERS
+    }
+
+    /// DEVIATE: under `-Os` a header is copied only when it has four
+    /// instructions or fewer (`RotationMaxHeaderSize` is 16 in the pin,
+    /// `hasMinSize` alone lowers it; LoopRotation.cpp#L80-L85). Fitted,
+    /// sweep-confirmed: code bytes m16 -Os, QCport 65 modules + 71 vsgcc
+    /// programs, by limit: 16 = 262435 + 14831, 4 = 262098 + 14745 (-337 B,
+    /// -86 B) with no object larger than at 16; 3 and 2 save more (261979,
+    /// 260491) but x_mergesort +21 and, at 2, x_base64 +23 and d_alias +20.
+    /// Not derived from the sheet: a copied header (cmp + jcc, 4 B or more)
+    /// outweighs the 2-3 B jmp rotation removes, so the gain is the follow-on
+    /// (an unrotated counted loop loses its SCEV trip count, a `div` appears;
+    /// sum loop: 21 B rotated, 23 B with -fno-tree-ch). Exit 2026-11-20: a
+    /// priced follow-on replaces the 4, or the pin's 16 returns.
+    fn size_rotation_header_limit(&self) -> Option<u32> {
+        Some(4)
     }
 
     fn two_address(&self) -> bool {
@@ -598,6 +615,16 @@ mod encoding_tests {
         );
         let clocks = dos.costs();
         assert_eq!(clocks.argument, clocks.load + clocks.store);
+    }
+
+    /// A fill's bytes are the instructions it becomes as encoded: `rep stos`
+    /// 2, `push es` and `pop es` 1 each, two 3-byte loads of a word. The
+    /// doubled `mov_ri` estimate made it 18, which the loop-idiom pass then
+    /// cut by a fitted three quarters.
+    #[test]
+    fn a_fill_is_priced_at_its_encoded_bytes() {
+        use llrm_mir::target::Machine;
+        assert_eq!(super::Dos::default().size_costs().fill, 2 + 2 + 2 + 3 + 3);
     }
 
     /// The shared call price is read off the 486 table and the byte table:

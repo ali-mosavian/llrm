@@ -34,6 +34,8 @@ pub struct Summary {
     /// Its effects only reach what its pointer arguments point to.
     pub arguments_only: bool,
     pub returns: bool,
+    /// It states `noreturn`: control never comes back from a call to it.
+    pub no_return: bool,
     /// Each parameter it keeps no copy of.
     pub nocapture: Vec<bool>,
     /// It is `llvm.memset`: its first argument's bytes, as many as the
@@ -108,6 +110,7 @@ pub fn summary(function: &Function) -> Summary {
         accessible: stated_at(attrs, |location| location != Some("inaccessiblemem")),
         arguments_only: argument_memory_only(attrs),
         returns: returns(attrs),
+        no_return: Fact::NoReturn.stated_by(attrs),
         nocapture: function.parameter_attrs.iter().map(|one| Fact::NoCapture.stated_by(one)).collect(),
         memset: false,
         pattern: false,
@@ -476,6 +479,46 @@ pub fn initializes(attrs: &[Attribute]) -> &[(i64, i64)] {
         .iter()
         .find_map(|attr| if let Attribute::Initializes(ranges) = attr { Some(ranges.as_slice()) } else { None })
         .unwrap_or_default()
+}
+
+/// The string attributes stating the bytes a body reads and writes through a
+/// pointer parameter, as `lo:hi,lo:hi` (empty: none). Absent: the whole
+/// pointee.
+pub const READS: &str = "llrm.reads";
+pub const WRITES: &str = "llrm.writes";
+
+/// The byte ranges attribute `key` (`READS` or `WRITES`) among `attrs` states;
+/// None where it is absent or unreadable: the whole pointee.
+pub fn access_ranges(
+    attrs: &[Attribute],
+    key: &str,
+) -> Option<Vec<(i64, i64)>> {
+    let text = attrs
+        .iter()
+        .find_map(
+            |attr| match attr {
+                Attribute::Str(name, Some(value)) if name == key => Some(value.as_str()),
+                _ => None,
+            },
+        )?;
+    text.split(',')
+        .filter(|one| !one.is_empty())
+        .map(|one| {
+            let (low, high) = one.split_once(':')?;
+            Some((low.parse().ok()?, high.parse().ok()?)).filter(|(low, high)| low < high)
+        })
+        .collect()
+}
+
+/// `attrs` with `key` stating `ranges`.
+pub fn state_access_ranges(
+    attrs: &mut Vec<Attribute>,
+    key: &str,
+    ranges: &[(i64, i64)],
+) {
+    let text: Vec<String> = ranges.iter().map(|(low, high)| format!("{low}:{high}")).collect();
+    attrs.retain(|attr| !matches!(attr, Attribute::Str(name, _) if name == key));
+    attrs.push(Attribute::Str(key.to_string(), Some(text.join(","))));
 }
 
 /// What `inst` may do to memory the program can name: a call's effects

@@ -2103,7 +2103,8 @@ fn test_a_counter_stepped_before_other_work_is_tested_against_its_end() {
     // is no longer than the pin's i486 loop (8 instructions). The pin's
     // loop-reduce keeps one counter and addresses by `2 * x`; the 16-bit
     // address has no scale, so ours steps the byte offset (`cmp bx, 674`)
-    // beside the counter, for the same length (DEVIATE LU1).
+    // beside the counter, for the same length (DEVIATE LU1); counting the
+    // offset up to zero (`add bx, 2; jne`, one instruction fewer) is as good.
     let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/run/qb/rcflip.bas");
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let text = listing(&program);
@@ -2120,7 +2121,11 @@ fn test_a_counter_stepped_before_other_work_is_tested_against_its_end() {
         .expect("the multiplying loop");
     let instructions = body.lines().filter(|line| line.starts_with("    ")).count();
     assert!(
-        (body.contains("cmp ax, 357") || body.contains(", 674")) && !body.contains("or ax, ax") && instructions <= 8,
+        (body.contains("cmp ax, 357")
+            || body.contains(", 674")
+            || regex::Regex::new(r"add bx, 2\n\s+jne \w+\s*$").unwrap().is_match(&body))
+            && !body.contains("or ax, ax")
+            && instructions <= 8,
         "{body}"
     );
 }
@@ -3686,6 +3691,22 @@ fn test_clear_calls_the_runtime_clear() {
     let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
     let call = main.find("call far ptr B$SCLR").expect("the call");
     assert!(main[..call].trim_end().ends_with("pushd 0"), "two zero words: {main}");
+}
+
+/// On the llrm runtime at m16, CLEAR called `B$SCLR(stack, given)` without the table of module variables its C
+/// body reads as the third argument: `table->main_module` came from a stray register and the program stopped
+/// with "Illegal function call" (clear_variables.bas). The call carries the table's near address, as the C body takes it.
+#[test]
+fn test_clear_passes_its_table_on_the_llrm_runtime_at_m16() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(&directory, "CLEARM16.BAS", b"x% = 5\r\nCLEAR\r\nPRINT x%\r\nEND\r\n");
+    let frontend = qb_driver::Frontend::new("qb45", "llrm");
+    let text = listing(&qb_driver::parsed(&source, &frontend, None).expect("parses"));
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    let call = main.find("call far ptr B$SCLR").expect("the call");
+    let before = &main[..call];
+    assert!(before.trim_end().ends_with("push offset CLEARM16$D3"), "the table's near address is the third argument: {main}");
+    assert!(!before.contains("pushw DGROUP"), "and not a far pointer on the stack: {main}");
 }
 
 /// A variable set before CLEAR and printed after it was folded to its old

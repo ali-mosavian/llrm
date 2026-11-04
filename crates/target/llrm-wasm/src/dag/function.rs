@@ -207,6 +207,7 @@ pub fn select_function(
     width: Width,
     unwinding: bool,
     optimize: bool,
+    facts: &super::ModuleFacts,
 ) -> Result<Vec<Selected>, String> {
     let layout = DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
@@ -244,12 +245,13 @@ pub fn select_function(
         function,
     );
     let mut info = FunctionLoweringInfo::new(function);
+    info.with_module_tables(facts.tables(module, target.dag.dso_local_symbols));
     let (statics, stack_colors) = static_frame(module, function, &layout, &info)?;
     let alignments: Vec<u64> = statics.iter().map(|&(_, align)| align).collect();
     let alias = super::alias::IrAlias::new(module, function, &layout);
     let mut selected = Vec::new();
     let mut machine_layout = Vec::new();
-    let mut visited = std::collections::HashSet::new();
+    let mut visited = llrm_support::hash::HashSet::default();
     for &block in function.layout() {
         if optimize {
             // `SelectAllBasicBlocks`: a phi knows what its incoming values

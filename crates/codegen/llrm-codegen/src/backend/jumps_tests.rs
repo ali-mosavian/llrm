@@ -26,6 +26,14 @@ fn cx() -> Loc {
     Loc::Reg(Reg { register: RegId::CX, width: 2 })
 }
 
+fn dx() -> Loc {
+    Loc::Reg(Reg { register: RegId::DX, width: 2 })
+}
+
+fn si() -> Loc {
+    Loc::Reg(Reg { register: RegId::SI, width: 2 })
+}
+
 fn imm(value: i64) -> Loc {
     Loc::Imm(Imm { value, width: 2, address: None })
 }
@@ -1500,7 +1508,7 @@ fn test_for_size_a_join_of_two_instructions_is_not_copied() {
     let join = || vec![_move(30, imm(3)), _return(31)];
     let speed = placed(&diamond_joined(0.9, join())).unwrap();
     assert!(speed.blocks.iter().all(|one| one.at != 30), "copied for speed");
-    let size = _placed(&diamond_joined(0.9, join()), true, false).unwrap();
+    let size = _placed(&diamond_joined(0.9, join()), true, false, None).unwrap();
     assert!(size.blocks.iter().any(|one| one.at == 30), "kept for size");
 }
 
@@ -1509,10 +1517,22 @@ fn test_for_size_a_join_of_two_instructions_is_not_copied() {
 #[test]
 fn test_at_o3_a_join_of_four_instructions_is_copied() {
     let join = || vec![_move(30, imm(3)), _move(31, imm(4)), _move(32, imm(5)), _return(33)];
-    let o2 = _placed(&diamond_joined(0.9, join()), false, false).unwrap();
+    let o2 = _placed(&diamond_joined(0.9, join()), false, false, None).unwrap();
     assert!(o2.blocks.iter().any(|one| one.at == 30), "kept at -O2");
-    let o3 = _placed(&diamond_joined(0.9, join()), false, true).unwrap();
+    let o3 = _placed(&diamond_joined(0.9, join()), false, true, None).unwrap();
     assert!(o3.blocks.iter().all(|one| one.at != 30), "copied at -O3");
+}
+
+/// A target's `tail_dup_placement_threshold` below the pin's bound keeps a join
+/// the pin would copy: at m16 -O2 a copied compare-and-branch tail cost bytes
+/// and clocks (qlight, grep: +84 B, +3.1M clk).
+#[test]
+fn test_a_target_threshold_keeps_a_join_the_pin_copies() {
+    let join = || vec![_move(30, imm(3)), _return(31)];
+    let pin = _placed(&diamond_joined(0.9, join()), false, false, None).unwrap();
+    assert!(pin.blocks.iter().all(|one| one.at != 30), "copied by the pin's bound");
+    let target = _placed(&diamond_joined(0.9, join()), false, false, Some(1)).unwrap();
+    assert!(target.blocks.iter().any(|one| one.at == 30), "kept at the target's bound");
 }
 
 /// Only a block that goes to the join and nowhere else takes a copy: one that
@@ -1568,7 +1588,7 @@ fn test_a_copied_test_keeps_its_loops_odds() {
 #[test]
 fn test_for_size_a_diamond_is_placed_as_for_speed() {
     let order =
-        |body: LirBody| _placed(&body, true, false).unwrap().blocks.iter().map(|one| one.at).collect::<Vec<_>>();
+        |body: LirBody| _placed(&body, true, false, None).unwrap().blocks.iter().map(|one| one.at).collect::<Vec<_>>();
     assert_eq!(order(weighted_diamond(0.7)), vec![1, 10, 20, 30]);
     assert_eq!(order(weighted_diamond(0.9)), vec![1, 10, 30, 20]);
 }
@@ -1775,7 +1795,8 @@ fn test_the_liveness_of_some_values_is_what_the_solve_of_all_of_them_gives() {
                 let uses = if next(3) > 0 { vec![next(6) as u32] } else { Vec::new() };
                 let mut one = Insn::new(at * 10 + step as i64, None, None, defines, uses);
                 if next(5) == 0 {
-                    one.requires = vec![(crate::model::ir::Held { value: next(6) as u32, width: 2 }, RegId::AX)];
+                    one.requires =
+                        vec![(crate::model::ir::Held { value: next(6) as u32, width: 2, offset: 0 }, RegId::AX)];
                 }
                 insns.push(Arc::new(one));
             }
@@ -2297,6 +2318,94 @@ fn test_a_zeroing_xor_both_ways_begin_with_is_hoisted_above_the_compare() {
     assert_eq!(lines.iter().filter(|line| line.as_str() == "xor cx, cx").count(), 1, "{lines:?}");
     let at = lines.iter().position(|line| line.as_str() == "xor cx, cx").unwrap();
     assert!(at < lines.iter().position(|line| line.starts_with("cmp")).unwrap(), "{lines:?}");
+}
+
+/// One way puts an unrelated move ahead of the zeroing `xor` both ways need
+/// (`for (...) sum += ...; return sum` at -Os: `mov esi, 1` before `xor ecx,
+/// ecx` in the loop's entry, the bare `xor` on the skip edge): the leading-run
+/// hoist saw different first instructions and left two xors, 4 B over main/gcc
+/// (idiv_loop_os, recgcd 114 B against 110 B).
+#[test]
+fn test_a_zeroing_xor_behind_an_unrelated_move_is_hoisted_above_the_compare() {
+    let zero = |at| _inserted(_insn(at, Operation::Binary, "xor", vec![cx()], vec![cx(), cx()], None));
+    let lines = _printed(vec![
+        block(1, vec![_compare(1), _branch(2, "je", 9)], vec![9, 4]).into(),
+        block(
+            4,
+            vec![
+                _inserted(_insn(4, Operation::Move, "mov", vec![bx()], vec![imm(1)], None)),
+                zero(5),
+                _move(6, bx()),
+                _return(7),
+            ],
+            vec![],
+        )
+        .into(),
+        block(9, vec![zero(9), _move(10, ax()), _return(11)], vec![]).into(),
+    ]);
+    assert_eq!(lines.iter().filter(|line| line.as_str() == "xor cx, cx").count(), 1, "{lines:?}");
+    let at = lines.iter().position(|line| line.as_str() == "xor cx, cx").unwrap();
+    assert!(at < lines.iter().position(|line| line.starts_with("cmp")).unwrap(), "{lines:?}");
+}
+
+/// The ways end with the same tail, the move both have behind an unrelated one
+/// (a duplicated join, m16 sfm16_float_add -O2): tail merging takes the whole
+/// tail, and lifting the move out left tails that no longer merged, +4 B.
+#[test]
+fn test_a_move_inside_the_tail_both_ways_end_with_is_not_lifted() {
+    let copy = |at| _inserted(_insn(at, Operation::Move, "mov", vec![cx()], vec![si()], None));
+    let lines = _printed(vec![
+        block(1, vec![_compare(1), _branch(2, "je", 9)], vec![9, 4]).into(),
+        block(
+            4,
+            vec![_inserted(_insn(4, Operation::Move, "mov", vec![dx()], vec![imm(1)], None)), copy(5), _return(7)],
+            vec![],
+        )
+        .into(),
+        block(9, vec![copy(9), _return(11)], vec![]).into(),
+    ]);
+    let at = lines.iter().position(|line| line.as_str() == "mov cx, si").unwrap();
+    assert!(at > lines.iter().position(|line| line.starts_with("cmp")).unwrap(), "{lines:?}");
+}
+
+/// One way jumps to the block the other falls into: the tail is the same
+/// (m16 sfm16_float_add -O2 again, the lift ran on the jump's difference).
+#[test]
+fn test_a_jump_where_the_other_way_falls_does_not_hide_the_common_tail() {
+    let copy = |at| _inserted(_insn(at, Operation::Move, "mov", vec![cx()], vec![si()], None));
+    let lines = _printed(vec![
+        block(1, vec![_compare(1), _branch(2, "je", 9)], vec![9, 4]).into(),
+        block(4, vec![_inserted(_insn(4, Operation::Move, "mov", vec![dx()], vec![imm(1)], None)), copy(5), _jump(6, 20)], vec![20]).into(),
+        block(9, vec![copy(9)], vec![20]).into(),
+        block(20, vec![_return(20)], vec![]).into(),
+    ]);
+    let at = lines.iter().position(|line| line.as_str() == "mov cx, si").unwrap();
+    assert!(at > lines.iter().position(|line| line.starts_with("cmp")).unwrap(), "{lines:?}");
+}
+
+/// The move the `xor` would pass is what the `xor` reads: it stays behind it.
+#[test]
+fn test_a_def_that_reads_what_the_move_before_it_writes_is_not_lifted() {
+    let lines = _printed(vec![
+        block(1, vec![_compare(1), _branch(2, "je", 9)], vec![9, 4]).into(),
+        block(
+            4,
+            vec![
+                _inserted(_insn(4, Operation::Move, "mov", vec![cx()], vec![imm(1)], None)),
+                _inserted(_insn(5, Operation::Binary, "add", vec![bx()], vec![bx(), cx()], None)),
+                _return(7),
+            ],
+            vec![],
+        )
+        .into(),
+        block(
+            9,
+            vec![_inserted(_insn(9, Operation::Binary, "add", vec![bx()], vec![bx(), cx()], None)), _return(11)],
+            vec![],
+        )
+        .into(),
+    ]);
+    assert_eq!(lines.iter().filter(|line| line.as_str() == "add bx, cx").count(), 2, "{lines:?}");
 }
 
 fn lined(

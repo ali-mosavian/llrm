@@ -265,6 +265,7 @@ fn main() -> ExitCode {
                 let tti = llrm_x86::tti::X86::of_cpu("i486").expect("a cpu");
                 let options = llrm_transforms::looprotate::Options {
                     max_header_size: 16,
+                    priced_at_size: false,
                     rotation_only: false,
                     is_util_mode: false,
                     prepare_for_lto: false,
@@ -366,6 +367,7 @@ fn main() -> ExitCode {
                     min_size: false,
                     only_when_forced: false,
                     prepare_for_lto: false,
+                    target_unrolling: false,
                 };
                 let names: Vec<String> = module
                     .functions()

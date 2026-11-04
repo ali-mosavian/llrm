@@ -44,7 +44,7 @@ struct Frame {
     /// Bytes below IX.
     size: i64,
     /// The offset from IX of each object, by frame index.
-    offsets: std::collections::HashMap<i32, i64>,
+    offsets: llrm_support::hash::HashMap<i32, i64>,
     /// Whether the function sets IX up at all.
     active: bool,
 }
@@ -69,7 +69,7 @@ struct Printer<'a> {
     /// The blocks that are only a `ret`.
     returns_bare: Vec<u32>,
     /// How many times each virtual register is read.
-    reads: std::collections::HashMap<u32, usize>,
+    reads: llrm_support::hash::HashMap<u32, usize>,
     /// A reload the next instruction reads from the frame itself: the register
     /// it would have gone to, and the cell.
     folded: Option<(RegId, String)>,
@@ -973,7 +973,7 @@ impl Printer<'_> {
             _ => return Ok(false),
         };
         // nothing but these reads the registers' virtual values
-        let mut inside: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+        let mut inside: llrm_support::hash::HashMap<u32, usize> = llrm_support::hash::HashMap::default();
         for inst in &rest[..taken] {
             for operand in &inst.operands {
                 if let Operand::Use(Reg::Virt(v)) = operand {
@@ -1317,8 +1317,8 @@ fn entry_pushes(
 /// The instructions of `function` with the registers `assignment` gave them.
 /// `slots` are the spill slots and their sizes in bytes.
 /// How many times each virtual register is read, copies included.
-pub fn reads(function: &MFunction) -> std::collections::HashMap<u32, usize> {
-    let mut reads = std::collections::HashMap::new();
+pub fn reads(function: &MFunction) -> llrm_support::hash::HashMap<u32, usize> {
+    let mut reads = llrm_support::hash::HashMap::default();
     for inst in function.blocks.iter().flat_map(|block| &block.insts) {
         for operand in &inst.operands {
             if let Operand::Use(Reg::Virt(v)) = operand {
@@ -1336,7 +1336,7 @@ pub fn finish(
     assignment: &Assignment,
     number: usize,
     slots: &[(i32, usize)],
-    reads: std::collections::HashMap<u32, usize>,
+    reads: llrm_support::hash::HashMap<u32, usize>,
 ) -> Result<Vec<Line>, String> {
     let mut function = tail_calls(function);
     let frame = layout(&function, slots);
@@ -1406,7 +1406,7 @@ fn ends_flow(text: &str) -> bool {
 /// leaves the block with no reader: the code after an unconditional `ret` or
 /// jump, up to the next label something names, never runs.
 fn drop_unreachable(lines: Vec<Line>) -> Vec<Line> {
-    let named: std::collections::HashSet<&str> = lines
+    let named: llrm_support::hash::HashSet<&str> = lines
         .iter()
         .filter_map(|line| match line {
             Line::Inst(text) => Some(text.split([' ', ',']).filter(|word| !word.is_empty())),
@@ -1527,7 +1527,7 @@ pub fn price(lines: &[Line]) -> (u32, u32) {
 /// loop it is in, a loop being the lines from a label to a jump back to it:
 /// what two allocations of a loop are compared by.
 pub fn price_in_loops(lines: &[Line]) -> (u32, u64) {
-    let labels: std::collections::HashMap<&str, usize> = lines
+    let labels: llrm_support::hash::HashMap<&str, usize> = lines
         .iter()
         .enumerate()
         .filter_map(|(at, line)| match line {
@@ -1589,13 +1589,20 @@ fn jump_of(text: &str) -> Option<(Option<&str>, &str)> {
 /// does not price.
 ///
 /// DEVIATE: `jr` is slower taken (12 T against 10) and faster not taken (7
-/// against 10); SDCC's choice, kept for the byte. Exit: block frequencies at
-/// this stage.
-pub fn relax(lines: Vec<Line>) -> Vec<Line> {
+/// against 10). At the size levels every jump within reach is a `jr`, SDCC's
+/// choice. Where speed comes first, an always-taken jump inside a loop stays a
+/// `jp`: a byte longer, 2 T faster each trip. A conditional jump is a `jr`
+/// (a back edge not taken once per loop costs 3 T there, which a short loop
+/// does not win back), and so is a jump outside every loop. Exit: block
+/// frequencies at this stage.
+pub fn relax(
+    lines: Vec<Line>,
+    speed: bool,
+) -> Vec<Line> {
     const REACH: i64 = 100;
     let mut at = 0;
     let mut starts = Vec::with_capacity(lines.len());
-    let mut labels = std::collections::HashMap::new();
+    let mut labels = llrm_support::hash::HashMap::default();
     for line in &lines {
         starts.push(at);
         if let Line::Label(name) = line {
@@ -1603,6 +1610,19 @@ pub fn relax(lines: Vec<Line>) -> Vec<Line> {
         }
         at += i64::from(bytes_of(line));
     }
+    // the loops, as the spans of the back edges
+    let back_edges: Vec<(i64, i64)> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| match line {
+            Line::Inst(text) => {
+                let target = *labels.get(jump_of(text)?.1)?;
+                (target <= starts[index]).then_some((target, starts[index]))
+            }
+            _ => None,
+        })
+        .collect();
+    let in_loop = |at: i64| back_edges.iter().any(|&(head, edge)| head <= at && at <= edge);
     let mut out: Vec<Line> = Vec::with_capacity(lines.len());
     for (index, line) in lines.iter().enumerate() {
         let Line::Inst(text) = line else {
@@ -1614,18 +1634,30 @@ pub fn relax(lines: Vec<Line>) -> Vec<Line> {
             if cc.is_some_and(|cc| !reach(cc)) {
                 return None;
             }
-            let distance = labels.get(label)? - (starts[index] + 2);
+            let target = *labels.get(label)?;
+            if speed && cc.is_none() && in_loop(starts[index]) {
+                return None;
+            }
+            let distance = target - (starts[index] + 2);
             (distance.abs() <= REACH).then(|| (cc, label))
         });
         match relaxed {
             Some((cc, label)) => {
-                // `dec b; jr nz, L` is `djnz L`
-                // a row between the two does not part them
-                let before = out.iter().rposition(|line| !matches!(line, Line::Loc(_)));
-                let counted = cc == Some("nz")
-                    && before.is_some_and(|at| matches!(&out[at], Line::Inst(last) if last == "dec b"));
-                if counted {
-                    out.remove(before.expect("a dec b"));
+                // `dec b; jr nz, L` is `djnz L`, also past instructions that
+                // neither touch the flags nor use b; a row
+                // between does not part them
+                let counter = (cc == Some("nz"))
+                    .then(|| {
+                        out.iter().rposition(|line| match line {
+                            Line::Inst(text) => text == "dec b" || !flag_and_b_free(text),
+                            Line::Loc(_) => false,
+                            _ => true,
+                        })
+                    })
+                    .flatten()
+                    .filter(|&at| matches!(&out[at], Line::Inst(last) if last == "dec b"));
+                if let Some(at) = counter {
+                    out.remove(at);
                     out.push(Line::Inst(format!("djnz {label}")));
                 } else {
                     out.push(Line::Inst(match cc {
@@ -1638,6 +1670,22 @@ pub fn relax(lines: Vec<Line>) -> Vec<Line> {
         }
     }
     out
+}
+
+/// Whether `text` leaves the flags alone and does not read or write `b`: a
+/// load (`ld` sets no flag) or a 16-bit `inc`/`dec` (neither does), so a
+/// `dec b` before it may move behind it.
+fn flag_and_b_free(text: &str) -> bool {
+    let (mnemonic, operands) = text.split_once(' ').unwrap_or((text, ""));
+    let names_b = |operand: &str| {
+        let bare = operand.trim_matches(|c| c == '(' || c == ')');
+        bare == "b" || bare == "bc"
+    };
+    match mnemonic {
+        "ld" => !operands.split(", ").any(names_b),
+        "inc" | "dec" => matches!(operands, "hl" | "de" | "ix" | "iy"),
+        _ => false,
+    }
 }
 
 /// `call f; ret` is `jp f`: the callee returns to our caller with its result

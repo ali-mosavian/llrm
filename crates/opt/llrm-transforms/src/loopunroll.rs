@@ -115,6 +115,9 @@ pub enum Unrolled {
     Fully,
     /// `LoopUnrollResult::PartiallyUnrolled`: the loop was peeled.
     Peeled,
+    /// `LoopUnrollResult::PartiallyUnrolled`: the body runs `count` times per
+    /// trip of the loop that stays.
+    Partially,
 }
 
 struct ExitInfo {
@@ -155,9 +158,12 @@ pub fn unroll_loop_blocks(
     options: &Options,
     emptied_blocks: &mut Vec<BlockId>,
 ) -> Result<Unrolled, String> {
-    if options.count == 0 || options.max_trip_count == 0 || options.count != options.max_trip_count {
-        return Err("a complete unroll's count is the maximum trip count (D2)".to_owned());
+    if options.count == 0 || options.max_trip_count == 0 || options.count > options.max_trip_count {
+        return Err("an unroll's count is at most the maximum trip count (D2)".to_owned());
     }
+    // `CompletelyUnroll`: the copies are all the iterations; else the last
+    // latch keeps the back edge and the header's phis stay.
+    let complete = options.count == options.max_trip_count;
     let inside = |at: BlockId| body.contains(&at);
     let outside_predecessors = function.predecessors(header).into_iter().filter(|&at| !inside(at)).collect::<Vec<_>>();
     let [preheader] = outside_predecessors[..] else { return Ok(Unrolled::Unmodified) };
@@ -188,6 +194,9 @@ pub fn unroll_loop_blocks(
     let uncond_latch =
         function.instruction(latch_term).opcode == Opcode::Br && function.instruction(latch_term).operands.len() == 1;
     if !uncond_latch && !(_conditional(function, latch).is_some() && latch_is_exiting) {
+        return Ok(Unrolled::Unmodified);
+    }
+    if !complete && !latch_is_exiting {
         return Ok(Unrolled::Unmodified);
     }
     if !_closed(function, &original, &exit_blocks, &inside) {
@@ -298,8 +307,24 @@ pub fn unroll_loop_blocks(
         function.set_operands(phi, from_arms(&incoming));
     }
 
-    // The original header's phis are the preheader's values.
+    // The original header's phis are the preheader's values; where the back
+    // edge stays, they take the last copy's values from the last latch (fixed
+    // below, once the latches are final).
+    let mut kept_arms = Vec::<(InstId, Operand)>::new();
     for &phi in &header_phis {
+        if !complete {
+            let from = arms(function, phi)
+                .into_iter()
+                .find(|&(_, source)| source == latch)
+                .map(|(value, _)| value)
+                .ok_or("a header phi without an arm from the latch")?;
+            let last = match from {
+                Operand::Value(one) => last_value.get(&one).copied().unwrap_or(from),
+                other => other,
+            };
+            kept_arms.push((phi, last));
+            continue;
+        }
         let value = function.instruction(phi).result.expect("a phi's value");
         let entry = arms(function, phi)
             .into_iter()
@@ -320,7 +345,7 @@ pub fn unroll_loop_blocks(
     }
 
     // Branches whose way the iteration knows.
-    let preserve_only_first = options.max_or_zero;
+    let preserve_only_first = complete && options.max_or_zero;
     let mut folded = Vec::<Folded>::new();
     let mut forgotten = IdMap::<BlockId, IdSet<BlockId>>::new();
     for info in &infos {
@@ -328,7 +353,13 @@ pub fn unroll_loop_blocks(
         let size = info.copies.len();
         for (index, &source) in info.copies.iter().enumerate() {
             let next = (index + 1) % size;
-            let known = if preserve_only_first {
+            let known = if !complete {
+                // Partial: the exits known not to be taken in this copy
+                // (`BreakoutTrip`, `TripMultiple`).
+                let (breakout, multiple) =
+                    if info.trip_count != 0 { (info.trip_count % options.count, 0) } else { (1, 1) };
+                (next as u32 != breakout && (multiple == 0 || next as u32 % multiple != 0)).then_some(false)
+            } else if preserve_only_first {
                 (index != 0).then_some(next == 0)
             } else if next == 0 {
                 Some(true)
@@ -351,7 +382,7 @@ pub fn unroll_loop_blocks(
     }
 
     // The last copy's jump back to the header can no longer be taken.
-    if !latch_is_exiting {
+    if complete && !latch_is_exiting {
         let last = *latches.last().expect("a latch per iteration");
         _unreachable(function, last)?;
     }
@@ -372,6 +403,16 @@ pub fn unroll_loop_blocks(
         }
     }
     emptied_blocks.extend(emptied);
+    if !complete {
+        let last = *latches.last().expect("a latch per iteration");
+        for (phi, value) in kept_arms {
+            let mut incoming = arms(function, phi);
+            incoming.retain(|&(_, source)| source != latch);
+            incoming.push((value, last));
+            function.set_operands(phi, from_arms(&incoming));
+        }
+        return Ok(Unrolled::Partially);
+    }
     Ok(Unrolled::Fully)
 }
 

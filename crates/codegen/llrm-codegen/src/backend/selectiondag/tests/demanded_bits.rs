@@ -21,6 +21,17 @@ fn eval(
         ISD::Xor => arg(0) ^ arg(1),
         ISD::Shl => arg(0).checked_shl(arg(1)).unwrap_or(0),
         ISD::Srl => arg(0).checked_shr(arg(1)).unwrap_or(0),
+        ISD::Sra => ((arg(0) as i32) >> arg(1).min(31)) as u32,
+        ISD::CtPop => arg(0).count_ones(),
+        ISD::CtLz => arg(0).leading_zeros(),
+        ISD::CtTz => arg(0).trailing_zeros(),
+        ISD::Select => {
+            if arg(0) != 0 {
+                arg(1)
+            } else {
+                arg(2)
+            }
+        }
         ISD::Rotl => arg(0).rotate_left(arg(1)),
         ISD::SignExtendInReg => {
             let NodeData::ValueType(ext) = dag.node(dag.operand(v, 1)).data else { panic!("no type") };
@@ -37,6 +48,15 @@ fn has(
     op: ISD,
 ) -> bool {
     dag.opcode(v) == op || (0..dag.node(v).ops.len()).any(|i| has(dag, dag.operand(v, i), op))
+}
+
+fn count(
+    dag: &SelectionDAG,
+    v: SDValue,
+    op: ISD,
+) -> usize {
+    usize::from(dag.opcode(v) == op)
+        + (0..dag.node(v).ops.len()).map(|i| count(dag, dag.operand(v, i), op)).sum::<usize>()
 }
 
 /// `build(x, y)` combined, the value checked for every pair of samples. Only
@@ -178,4 +198,97 @@ fn a_truncated_and_with_a_constant_is_the_and_of_the_truncation() {
     let root = dag.get_root();
     assert_eq!((dag.opcode(root), dag.value_type(root)), (ISD::And, EVT::I8));
     assert_eq!(dag.opcode(dag.operand(root, 0)), ISD::Truncate);
+}
+
+/// A `shl` narrowed to 32 bits took its amount in `i32`, not the target's
+/// `i8`, and no pattern matched it (`CannotSelect(Shl)`, bench `histo` at
+/// m64 once the narrowing ran after legalization).
+#[test]
+fn a_narrowed_shift_takes_the_targets_amount_type() {
+    use super::super::x86_lowering::X86Lowering;
+    let mut dag = dag();
+    let x = dag.get_register(EVT::I64, 5);
+    let (three, mask) = (dag.get_constant(3, EVT::I8), dag.get_constant(0xffff_ffff, EVT::I64));
+    let shl = dag.get_node(ISD::Shl, EVT::I64, &[x, three]);
+    let root = dag.get_node(ISD::And, EVT::I64, &[shl, mask]);
+    dag.set_root(root);
+    let mut hooks = X86Lowering {
+        cmov: true,
+        sse2: false,
+        min_size: false,
+        i16_mul_chains: false,
+        sext_load: true,
+        zext_free: true,
+        profile: None,
+    };
+    let tli = TargetLowering::x86_64(Features::default(), MVT::I64);
+    DagCombiner::new(&mut dag, &mut hooks, CombineLevel::AfterLegalizeDag).with_tli(&tli).run();
+    fn narrowed_shifts(
+        dag: &SelectionDAG,
+        v: SDValue,
+        out: &mut Vec<EVT>,
+    ) {
+        if dag.opcode(v) == ISD::Shl && dag.value_type(v) == EVT::I32 {
+            out.push(dag.value_type(dag.operand(v, 1)));
+        }
+        for i in 0..dag.node(v).ops.len() {
+            narrowed_shifts(dag, dag.operand(v, i), out);
+        }
+    }
+    let mut amounts = Vec::new();
+    narrowed_shifts(&dag, dag.get_root(), &mut amounts);
+    assert_eq!(amounts, [EVT::I8], "no i32 shl, or its amount is not i8");
+}
+
+/// `(ashr x, 4) << 28` reads the low nibble of the shift, which no sign bit
+/// reaches: a logical shift (TargetLowering.cpp#L2146). The `sra` stayed.
+#[test]
+fn an_arithmetic_shift_that_no_sign_bit_reaches_is_a_logical_shift() {
+    let (dag, root) = combined(u32::MAX, |dag, x, _| {
+        let sra = shift(dag, ISD::Sra, x, 4);
+        shift(dag, ISD::Shl, sra, 28)
+    });
+    assert!(!has(&dag, root, ISD::Sra));
+}
+
+/// `(ashr x, 31) << 31` reads one bit, which is the sign: a logical shift even
+/// for an amount the combiner cannot see.
+#[test]
+fn an_arithmetic_shift_read_at_one_bit_is_a_logical_shift() {
+    let (dag, root) = combined(u32::MAX, |dag, x, y| {
+        let mask = k(dag, 31);
+        let by = dag.get_node(ISD::And, EVT::I32, &[y, mask]);
+        let sra = dag.get_node(ISD::Sra, EVT::I32, &[x, by]);
+        shift(dag, ISD::Shl, sra, 31)
+    });
+    assert!(!has(&dag, root, ISD::Sra));
+}
+
+/// The count of a 32-bit value is at most 32: `known_bits` has the bits from
+/// bit 6 up zero (`computeKnownBits`, SelectionDAG.cpp#L3921), which is what
+/// drops `(ctpop x) & 63` (wasm `db_ctpop`: 4 instructions, the pin 2).
+#[test]
+fn a_bit_count_has_its_high_bits_known_zero() {
+    let mut dag = dag();
+    let x = dag.get_register(EVT::I32, 5);
+    for count in [ISD::CtPop, ISD::CtLz, ISD::CtTz] {
+        let n = dag.get_node(count, EVT::I32, &[x]);
+        assert_eq!(super::super::known_bits::known_bits(&dag, n).zero, !0x3Fu32 as u128 & 0xFFFF_FFFF, "{count:?}");
+    }
+}
+
+/// `(select c, (x & 0xFF), (x & 0x0F)) << 28` reads the low nibble of the
+/// select, so an arm loses its `and` (wasm `db_sel`: 12 instructions, the
+/// pin 8).
+#[test]
+fn the_arms_of_a_select_are_asked_for_the_demanded_bits() {
+    let (dag, root) = combined(u32::MAX, |dag, x, y| {
+        let (wide, narrow) = (k(dag, 0xFF), k(dag, 0x0F));
+        let a = dag.get_node(ISD::And, EVT::I32, &[x, wide]);
+        let b = dag.get_node(ISD::And, EVT::I32, &[x, narrow]);
+        let select = dag.get_node(ISD::Select, EVT::I32, &[y, a, b]);
+        shift(dag, ISD::Shl, select, 28)
+    });
+    // One arm is rewritten per visit; the select's user is not asked again.
+    assert!(count(&dag, root, ISD::And) < 2, "both arms kept their mask");
 }

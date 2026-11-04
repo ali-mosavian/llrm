@@ -267,6 +267,30 @@ pub fn pressure_weighted(
     peak
 }
 
+/// The weight of the `candidates` live into `header` that no block of `blocks`
+/// reads: they hold their registers (or spill) across the loop without using
+/// it.
+pub fn live_through_weighted(
+    function: &Function,
+    header: BlockId,
+    blocks: &[BlockId],
+    candidates: &IdSet<ValueId>,
+    weight: &dyn Fn(ValueId) -> usize,
+) -> usize {
+    let ranges = ranges_of(function, candidates, None);
+    ranges
+        .iter()
+        .filter(|(_, range)| range.into.contains(&id(header)))
+        .filter(|&(value, _)| {
+            !function
+                .users(value)
+                .into_iter()
+                .any(|user| function.parent(user.user).is_some_and(|block| blocks.contains(&block)))
+        })
+        .map(|(value, _)| weight(value))
+        .sum()
+}
+
 /// `pressure_weighted` for weights that are zero but for values made in
 /// `blocks`: their live ranges are followed from their reads, and those of the
 /// phis that take them, so the work is the size of the ranges and not of the

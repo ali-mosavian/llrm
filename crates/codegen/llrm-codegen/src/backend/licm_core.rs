@@ -65,6 +65,21 @@ pub trait Inst: Clone {
     }
 }
 
+/// `one` reading `to` where it read `from`, for each pair of `renamed`.
+fn rename_uses<I: Inst>(
+    one: &mut I,
+    renamed: &llrm_support::hash::HashMap<u32, u32>,
+) {
+    if !one.uses().iter().any(|used| renamed.contains_key(used)) {
+        return;
+    }
+    for used in one.uses().to_vec() {
+        if let Some(&to) = renamed.get(&used) {
+            one.rename_use(used, to);
+        }
+    }
+}
+
 /// A phi: the value it defines and the values it takes.
 #[derive(Clone, Debug)]
 pub struct Phi {
@@ -237,17 +252,25 @@ pub fn hoist<I: Inst, P: Policy<I>>(
                 }
                 blocks[number].insns = keep;
             }
-            for (from, to) in renames {
+            // One sweep for all the renames: a `from` is a duplicate's
+            // definition and a `to` a kept one's, so no rename feeds another
+            // (the pin's `replaceRegWith` follows the use list of each).
+            if !renames.is_empty() {
+                let renamed: llrm_support::hash::HashMap<u32, u32> = renames.into_iter().collect();
                 for block in blocks.iter_mut() {
                     for one in block.insns.iter_mut() {
-                        one.rename_use(from, to);
+                        rename_uses(one, &renamed);
                     }
                     for phi in block.phis.iter_mut() {
-                        phi.incoming.iter_mut().filter(|value| **value == from).for_each(|value| *value = to);
+                        for value in phi.incoming.iter_mut() {
+                            if let Some(&to) = renamed.get(value) {
+                                *value = to;
+                            }
+                        }
                     }
                 }
                 for one in moved.iter_mut() {
-                    one.rename_use(from, to);
+                    rename_uses(one, &renamed);
                 }
             }
             if !any {

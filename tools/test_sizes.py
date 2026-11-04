@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import pytest  # noqa: E402
 import sizes  # noqa: E402
-from sizes import code_bytes, code_size, data_bytes, selected  # noqa: E402
+from sizes import code_bytes, code_size, data_bytes, lib_bytes, selected  # noqa: E402
 
 
 def record(kind: int, body: bytes) -> bytes:
@@ -122,6 +122,31 @@ def test_a_function_per_comdat_counts_in_the_segment_it_is_placed_in(tmp_path):
         record(0x80, name("x")) + lnames("_TEXT", "CODE", "f", "g", "h") + segdef(0, 1, 2) + comdat(0xC2, 1, 3, 30) + comdat(0xC2, 1, 3, 12, flags=1) + comdat(0xC3, 1, 4, 8) + comdat(0xC2, 1, 5, 5)
     )
     assert code_bytes(path) == 55
+
+
+def test_a_library_function_counts_in_lib_bytes_and_not_in_code_bytes(tmp_path):
+    """stft_fixed O2 read 2284 code bytes for a program of 1724: 560 of them were the standard library's instantiations in the Nib object
+    (`G$7$std$io$File$open` and the rest), which C's extern I/O never shows. code_bytes is the program's own functions; lib_bytes the library's."""
+    path = tmp_path / "lib.obj"
+    path.write_bytes(
+        record(0x80, name("x"))
+        + lnames("_TEXT", "CODE", "G$7$_std$io$File$open$ABCD", "G$8$_std$os$write$ABCD", "_fft$ABCD", "G$9$helper$ABCD")
+        + segdef(0, 1, 2)
+        + comdat(0xC2, 1, 3, 90)
+        + comdat(0xC2, 1, 4, 46)
+        + comdat(0xC2, 1, 5, 656)
+        + comdat(0xC2, 1, 6, 30)
+    )
+    assert (code_bytes(path), lib_bytes(path)) == (686, 136)
+
+
+def test_an_object_without_library_functions_has_a_zero_lib_bytes_and_an_elf_one_has_none(tmp_path):
+    path = tmp_path / "own.obj"
+    path.write_bytes(record(0x80, name("x")) + lnames("_TEXT", "CODE", "f") + segdef(0, 1, 2) + comdat(0xC2, 1, 3, 12))
+    assert (code_bytes(path), lib_bytes(path)) == (12, 0)
+    elf = tmp_path / "a.o"
+    elf.write_bytes(b"\x7fELF" + bytes(60))
+    assert lib_bytes(elf) is None
 
 
 def test_a_comdat_the_linker_places_is_refused_not_missed(tmp_path):

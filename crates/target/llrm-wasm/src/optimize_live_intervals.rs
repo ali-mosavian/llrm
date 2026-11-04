@@ -22,7 +22,8 @@
 //! `LiveIntervals.cpp`, pin d1106deb71cc: `splitSeparateComponents`;
 //! `LiveInterval.cpp`: `ConnectedVNInfoEqClasses::Classify`.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
+use llrm_support::hash::HashMap;
 
 use crate::mir::{Function, IMPLICIT_DEF, Operand, VReg};
 
@@ -113,7 +114,7 @@ fn split(
         }
     }
     // The classes, numbered by their first definition.
-    let mut class_of: HashMap<usize, usize> = HashMap::new();
+    let mut class_of: HashMap<usize, usize> = HashMap::default();
     let mut members = Vec::new();
     for n in 0..sites.len() {
         let root = find(&mut parent, n);

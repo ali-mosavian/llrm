@@ -1,4 +1,4 @@
-; ca65 driver for the FP8 routines: a over 16 values from A0, b over 0..255, exit code = mismatches (max 255)
+; ca65 driver for the FP8 routines: a over ROWS values from A0 (exp8.inc), b over 0..255, exit code = mismatches (max 255)
 .export _main
 .include "op.inc"
 .include "exp8.inc"
@@ -64,7 +64,7 @@ next:
     lda va
     sec
     sbc #A0
-    cmp #16
+    cmp #ROWS
     bcc loop
     lda fail
     ldx #0
