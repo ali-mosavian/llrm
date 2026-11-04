@@ -233,6 +233,11 @@ impl Tti for Z80Tti {
     /// variable is one `inc rr`: lz4's copy loops kept `dst + off` as a base
     /// add and their pointers in the frame (170569 clocks, gcc 35781).
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L7461
+    /// DEVIATE Z80L3: `num_base_adds` also comes before `num_regs`. Three
+    /// pairs hold three induction variables, but each base add is an `add
+    /// hl,rr` and moves every trip: reverse -Oz kept `p + i` and `p + j` as
+    /// base adds to save one register and spilled the rest (105 B, 1900 T);
+    /// SDCC's 68 B / 1270 T. Exit: none; the order is the target's.
     /// Open: `find` -O2/-Oz is 2 B / 27 T worse than the pin's order (a second
     /// induction variable for the returned index).
     fn is_lsr_cost_less(
@@ -242,9 +247,9 @@ impl Tti for Z80Tti {
     ) -> bool {
         let key = |c: &LsrCost| {
             (
+                c.num_base_adds,
                 c.num_regs,
                 c.insns,
-                c.num_base_adds,
                 c.add_rec_cost,
                 c.num_iv_muls,
                 c.scale_cost,

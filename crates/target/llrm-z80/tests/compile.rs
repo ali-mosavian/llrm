@@ -1309,3 +1309,13 @@ fn a_match_copy_loop_keeps_its_pointers_in_registers() {
         .count();
     assert_eq!(copies, 2, "{out}");
 }
+
+/// reverse -Oz kept `p + i` and `p + j` as base adds to spare a register, and
+/// spilled the rest to the frame: 105 B and 1900 T against SDCC's 68 B and
+/// 1270 T. Base adds are rated before registers; 68 B, 1222 T.
+#[test]
+fn reverse_at_oz_does_not_live_in_the_frame() {
+    let out = text(include_str!("kernels/ir/reverse.ll"), "reverse", 0, &Request::new(Level::Oz)).expect("compiles");
+    let frame = out.lines().filter(|line| line.contains("(ix)")).count();
+    assert!(frame <= 10, "{frame} frame accesses\n{out}");
+}
