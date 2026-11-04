@@ -594,8 +594,8 @@ impl<'a> Builder<'a> {
         let tables = info
             .tables
             .get_or_insert_with(|| {
-                let (global_names, local_symbols) =
-                    module_tables.unwrap_or_else(|| super::function_lowering::module_tables(module, target.dag.dso_local_symbols));
+                let (global_names, local_symbols) = module_tables
+                    .unwrap_or_else(|| super::function_lowering::module_tables(module, target.dag.dso_local_symbols));
                 super::function_lowering::Tables {
                     global_names,
                     local_symbols,

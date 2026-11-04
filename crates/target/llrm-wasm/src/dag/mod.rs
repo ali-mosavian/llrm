@@ -128,7 +128,8 @@ impl ModuleFacts {
         }
     }
 
-    /// The names and locality of the module's globals, made at the first function.
+    /// The names and locality of the module's globals, made at the first
+    /// function.
     fn tables(
         &self,
         module: &Module,
@@ -151,7 +152,8 @@ pub fn compile_function_with(
     facts: &ModuleFacts,
 ) -> Result<Function, String> {
     let unwinding = options.exception_model == ExceptionModel::Wasm;
-    let blocks = function::select_function(module, name, width, unwinding, options.level != crate::driver::Level::O0, facts)?;
+    let blocks =
+        function::select_function(module, name, width, unwinding, options.level != crate::driver::Level::O0, facts)?;
     let (params, results) = signature(module, name, width)?;
     let names = |symbol: u32| crate::driver::symbol_name(&module.globals[symbol as usize]);
     let mut f = emit::emit(name, &params, &results, &blocks, &names);

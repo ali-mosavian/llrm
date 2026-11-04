@@ -165,7 +165,8 @@ pub fn assembly(
             continue;
         }
         let name = global.name.owned().ok_or("an unnamed function")?;
-        let f = compile_function_with(&module, &name, width, options, &facts).map_err(|why| format!("@{name}: {why}"))?;
+        let f =
+            compile_function_with(&module, &name, width, options, &facts).map_err(|why| format!("@{name}: {why}"))?;
         out.push_str(&print::function_in(&f, &mut labels));
     }
     Ok(out)
@@ -221,7 +222,8 @@ fn object_of(
         }
         let name = global.name.owned().ok_or("an unnamed function")?;
         features = crate::features::Features::of(function).map_err(|why| format!("@{name}: {why}"))?;
-        let f = compile_function_with(module, &name, width, options, &facts).map_err(|why| format!("@{name}: {why}"))?;
+        let f =
+            compile_function_with(module, &name, width, options, &facts).map_err(|why| format!("@{name}: {why}"))?;
         functions.push(crate::object::encode_function(&f));
     }
     if options.exception_model == crate::dag::ExceptionModel::Wasm {
