@@ -206,3 +206,82 @@ fn a_min_against_a_constant_the_range_of_the_left_decides_is_the_left() {
     ));
     assert!(!out.contains("call i32 @llvm.umin") && out.contains("zext i8 %x to i32"), "{out}");
 }
+
+fn compare(
+    declares: &str,
+    params: &str,
+    body: &str,
+    ret: &str,
+) -> String {
+    combined(&format!("{declares}define {ret} @f({params}) {{\n{body}}}\n"))
+}
+
+const CMP_DECLARES: &str = "declare i8 @llvm.scmp.i8.i64(i64, i64)\ndeclare i8 @llvm.scmp.i8.i32(i32, i32)\n";
+
+/// Pinned `opt -passes=instcombine`: `scmp (sext X), (sext Y)` is `scmp X, Y`;
+/// the zext pair is `ucmp X, Y`. Missing, the compare stayed 64 bits wide.
+#[test]
+fn a_compare_of_two_extensions_is_a_compare_of_the_narrow_operands() {
+    let out = compare(
+        CMP_DECLARES,
+        "i16 %x, i16 %y",
+        "  %a = sext i16 %x to i64\n  %b = sext i16 %y to i64\n  %r = call i8 @llvm.scmp.i8.i64(i64 %a, i64 %b)\n  ret i8 %r\n",
+        "i8",
+    );
+    assert!(out.contains("call i8 @llvm.scmp.i8.i16(i16 %x, i16 %y)"), "{out}");
+    let out = compare(
+        CMP_DECLARES,
+        "i16 %x, i16 %y",
+        "  %a = zext i16 %x to i64\n  %b = zext i16 %y to i64\n  %r = call i8 @llvm.scmp.i8.i64(i64 %a, i64 %b)\n  ret i8 %r\n",
+        "i8",
+    );
+    assert!(out.contains("call i8 @llvm.ucmp.i8.i16(i16 %x, i16 %y)"), "{out}");
+}
+
+/// A constant narrows with the extension of its other operand.
+#[test]
+fn a_compare_of_an_extension_and_a_constant_narrows_the_constant() {
+    let out = compare(
+        CMP_DECLARES,
+        "i16 %x",
+        "  %a = zext i16 %x to i64\n  %r = call i8 @llvm.scmp.i8.i64(i64 %a, i64 7)\n  ret i8 %r\n",
+        "i8",
+    );
+    assert!(out.contains("call i8 @llvm.ucmp.i8.i16(i16 %x, i16 7)"), "{out}");
+}
+
+/// Different extensions do not combine.
+#[test]
+fn a_compare_of_a_sext_and_a_zext_stays_wide() {
+    let out = compare(
+        CMP_DECLARES,
+        "i16 %x, i8 %y",
+        "  %a = sext i16 %x to i32\n  %b = zext i8 %y to i32\n  %r = call i8 @llvm.scmp.i8.i32(i32 %a, i32 %b)\n  ret i8 %r\n",
+        "i8",
+    );
+    assert!(out.contains("call i8 @llvm.scmp.i8.i32(i32 %a, i32 %b)"), "{out}");
+}
+
+/// `scmp(nsw (sub X, Y), 0)` is `scmp(X, Y)`.
+#[test]
+fn a_compare_of_an_nsw_difference_with_zero_is_a_compare_of_the_operands() {
+    let out = compare(
+        "declare i8 @llvm.scmp.i8.i32(i32, i32)\n",
+        "i32 %x, i32 %y",
+        "  %d = sub nsw i32 %x, %y\n  %r = call i8 @llvm.scmp.i8.i32(i32 %d, i32 0)\n  ret i8 %r\n",
+        "i8",
+    );
+    assert!(out.contains("call i8 @llvm.scmp.i8.i32(i32 %x, i32 %y)"), "{out}");
+}
+
+/// A value known to be -1, 0 or 1 compares with zero as itself.
+#[test]
+fn a_compare_with_zero_of_a_value_in_minus_one_to_one_is_the_value() {
+    let out = compare(
+        "declare i8 @llvm.scmp.i8.i32(i32, i32)\n",
+        "i32 %x",
+        "  %s = and i32 %x, 1\n  %r = call i8 @llvm.scmp.i8.i32(i32 %s, i32 0)\n  ret i8 %r\n",
+        "i8",
+    );
+    assert!(!out.contains("call i8 @llvm.scmp"), "{out}");
+}

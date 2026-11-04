@@ -24,6 +24,10 @@
 //! `min/max (neg nsw X), (neg nsw Y)`; `min/max X, -X` is `abs`; a constant
 //! right-hand side the range of the left decides.
 //!
+//! MIRROR (`scmp`/`ucmp`): `foldCmpIntrinsicOfExtended` (both extends of one
+//! type, or one and a constant that narrows losslessly), `scmp(X, 0)` of a
+//! value in [-1, 1], and `scmp(nsw (sub X, Y), 0)`.
+//!
 //! DEVIATE 1: the rest of the min/max case is not translated:
 //! `foldMinimumOverTrailingOrLeadingZeroCount`, `xor` of a power of two,
 //! `moveNotAfterMinMax`, `moveAddAfterMinMax`, `minmax (X & NegPow2C, ...)`,
@@ -38,7 +42,9 @@ use llrm_mir::constantrange::ConstantRange;
 use llrm_mir::module::{InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::valuetracking::pattern;
-use llrm_mir::valuetracking::range::{SelectOperand, compute_constant_range_including_known_bits, is_known_negation};
+use llrm_mir::valuetracking::range::{
+    SelectOperand, compute_constant_range, compute_constant_range_including_known_bits, is_known_negation,
+};
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_shared::query;
@@ -312,6 +318,99 @@ impl Combiner<'_> {
             return Visit::Replace(i1);
         }
         Visit::None
+    }
+}
+
+impl Combiner<'_> {
+    /// The `scmp`/`ucmp` case of `visitCallInst`.
+    pub(crate) fn visit_compare(
+        &mut self,
+        call: InstId,
+        signed: bool,
+    ) -> Visit {
+        let operands = self.function.instruction(call).operands.clone();
+        let [i0, i1, ..] = operands[..] else { return Visit::None };
+        let ty = self.function.instruction(call).ty;
+        if let Some(found) = self.compare_of_extended(call, signed, i0, i1) {
+            return Visit::Replace(found);
+        }
+        if !signed {
+            return Visit::None;
+        }
+        let q = query(self, Some(call));
+        // scmp(X, 0) -> sext_or_trunc(X) if X is known to be one of -1, 0, 1.
+        if pattern::zero(&q, i1) {
+            let width = q.scalar_bits(i0);
+            let range = compute_constant_range(&q, i0, true, 0);
+            if ConstantRange::new(width, mask(width), 2).contains_range(&range) {
+                let (from, to) = (width, self.context.types.int_bits(ty).expect("an integer"));
+                let widened = match from.cmp(&to) {
+                    std::cmp::Ordering::Less => self.create_cast(call, CastOp::SExt, i0, ty, Flags::default()),
+                    std::cmp::Ordering::Greater => self.create_cast(call, CastOp::Trunc, i0, ty, Flags::default()),
+                    std::cmp::Ordering::Equal => i0,
+                };
+                return Visit::Replace(widened);
+            }
+            // scmp(nsw (sub LHS, RHS), 0) -> scmp(LHS, RHS)
+            if let Some((_, instruction, lhs, rhs)) = pattern::binary(&q, i0, BinaryOp::Sub)
+                && instruction.flags.contains(Flags::NSW)
+            {
+                let name = self.compare_name(true, ty, lhs);
+                return Visit::Replace(self.create_intrinsic_named(call, &name, ty, &[lhs, rhs]));
+            }
+        }
+        Visit::None
+    }
+
+    /// `llvm.scmp.i<result>.i<operand>` (or `ucmp`).
+    fn compare_name(
+        &self,
+        signed: bool,
+        ty: llrm_mir::types::TypeId,
+        operand: Operand,
+    ) -> String {
+        let result = self.context.types.int_bits(ty).expect("an integer");
+        let argument = self.context.types.int_bits(self.type_of(operand)).expect("an integer");
+        format!("llvm.{}.i{result}.i{argument}", if signed { "scmp" } else { "ucmp" })
+    }
+
+    /// `foldCmpIntrinsicOfExtended`: `scmp (sext X), (sext Y)` is `scmp X, Y`,
+    /// `scmp (zext X), (zext Y)` is `ucmp X, Y`, `ucmp (ext X), (ext Y)` is
+    /// `ucmp X, Y`; a constant operand is narrowed if that is lossless.
+    fn compare_of_extended(
+        &mut self,
+        call: InstId,
+        signed: bool,
+        i0: Operand,
+        i1: Operand,
+    ) -> Option<Operand> {
+        let ext_of = |c: &Self, v: Operand| {
+            [CastOp::ZExt, CastOp::SExt].into_iter().find_map(|ext| c.extended_from(v, ext).map(|x| (ext, x)))
+        };
+        // scmp/ucmp are not commutative: the extend may be on either side.
+        let (index, (ext, x)) = match ext_of(self, i0) {
+            Some(found) => (0, found),
+            None => (1, ext_of(self, i1)?),
+        };
+        let narrow = self.type_of(x);
+        let other = [i0, i1][1 - index];
+        let y = if let Some((other_ext, y)) = ext_of(self, other) {
+            if other_ext != ext || self.type_of(y) != narrow {
+                return None;
+            }
+            y
+        } else {
+            let q = query(self, None);
+            let (value, width) = pattern::apint(&q, other)?;
+            let small = self.context.types.int_bits(narrow).expect("an integer");
+            self.int(narrow, lossless_trunc(value, width, small, ext)?)
+        };
+        // Both extends keep the unsigned order; only sext keeps the signed one.
+        let signed = signed && ext == CastOp::SExt;
+        let (x, y) = if index == 0 { (x, y) } else { (y, x) };
+        let ty = self.function.instruction(call).ty;
+        let name = self.compare_name(signed, ty, x);
+        Some(self.create_intrinsic_named(call, &name, ty, &[x, y]))
     }
 }
 
