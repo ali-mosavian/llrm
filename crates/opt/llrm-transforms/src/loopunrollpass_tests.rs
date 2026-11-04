@@ -539,6 +539,7 @@ b2:
 ",
     );
     assert!(unrolled(&mut module), "{}", printed(&module));
+    printed(&module); // it verifies
     let layout = llrm_mir::datalayout::DataLayout::default();
     let function = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f").2;
     let unit = Unit::of(&module, &layout, function);
