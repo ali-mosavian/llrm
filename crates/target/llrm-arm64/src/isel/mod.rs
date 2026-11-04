@@ -30,7 +30,7 @@ mod shifted;
 mod val;
 mod widemul;
 
-use std::collections::{HashMap, HashSet};
+use llrm_support::hash::{HashMap, HashSet};
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::{IdMap, IdSet};
@@ -132,10 +132,36 @@ pub fn selected(
     let global = module.global(function);
     let name = global.name.owned().ok_or("an unnamed function")?;
     let body = global.function().ok_or("a variable is not selected")?;
+    if mentions_fp128(module, body) {
+        return refuse("an fp128: no lowering yet");
+    }
     let mut selector = Selector::new(module, body, layout, platform, &name);
     selector.lines = lines;
     selector.run()?;
     Ok(selector.finish())
+}
+
+/// Whether a parameter, a result or a constant operand of `body` is an `fp128`:
+/// this selector's float arms read any non-`Float` kind as a double.
+fn mentions_fp128(
+    module: &Module,
+    body: &Function,
+) -> bool {
+    let is_fp128 = |ty| matches!(
+        module.context.types.get(ty),
+        llrm_mir::Type::Float(llrm_mir::FloatKind::F128)
+    );
+    body.parameters().iter().any(|&parameter| is_fp128(body.value(parameter).ty))
+        || body.walk().any(|(_, inst)| {
+            let inst = body.instruction(inst);
+            inst.result.is_some_and(|result| is_fp128(body.value(result).ty))
+                || inst.operands.iter().any(|operand| {
+                    matches!(
+                        operand,
+                        Operand::Constant(id) if is_fp128(module.context.get(*id).ty)
+                    )
+                })
+        })
 }
 
 impl<'a> Selector<'a> {
@@ -177,10 +203,10 @@ impl<'a> Selector<'a> {
             volatile_access: false,
             lines: false,
             place: None,
-            global_uses: HashMap::new(),
-            global_regs: HashMap::new(),
-            global_pages: HashMap::new(),
-            global_needs_address: HashSet::new(),
+            global_uses: HashMap::default(),
+            global_regs: HashMap::default(),
+            global_pages: HashMap::default(),
+            global_needs_address: HashSet::default(),
             va: None,
         }
     }
@@ -202,8 +228,8 @@ impl<'a> Selector<'a> {
     /// Counts the accesses that name each global: a gep's result counts once
     /// for each of its readers.
     fn count_global_uses(&mut self) {
-        let mut counts: HashMap<String, usize> = HashMap::new();
-        let mut needs_address = HashSet::new();
+        let mut counts: HashMap<String, usize> = HashMap::default();
+        let mut needs_address = HashSet::default();
         for (_, inst) in self.function.walk() {
             let instruction = self.function.instruction(inst);
             for (at, operand) in instruction.operands.iter().enumerate() {
@@ -738,7 +764,7 @@ impl<'a> Selector<'a> {
 /// The blocks reachable from the entry, in reverse post-order.
 fn reverse_post_order(function: &Function) -> Vec<BlockId> {
     let Some(entry) = function.entry() else { return Vec::new() };
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let mut post = Vec::new();
     // An explicit stack of (block, next successor to visit).
     let mut stack = vec![(entry, function.successors(entry).into_iter().collect::<Vec<_>>(), 0usize)];

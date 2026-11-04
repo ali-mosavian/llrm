@@ -393,7 +393,27 @@ fn infer_alignment(
     layout: &DataLayout,
     function: &mut Function,
 ) -> bool {
-    let analyses = FunctionAnalyses::of(context, globals, metadata, layout, function).with_lazy_dom_conditions();
+    infer_alignment_declared(
+        context,
+        globals,
+        metadata,
+        layout,
+        function,
+        llrm_mir::valuetracking::assume_declared(globals),
+    )
+}
+
+/// `infer_alignment`, told whether the module declares `llvm.assume`.
+fn infer_alignment_declared(
+    context: &mut Context,
+    globals: &[GlobalValue],
+    metadata: &[MetadataNode],
+    layout: &DataLayout,
+    function: &mut Function,
+    assume_declared: bool,
+) -> bool {
+    let analyses = FunctionAnalyses::of_declared(context, globals, metadata, layout, function, assume_declared)
+        .with_lazy_dom_conditions();
     let mut state =
         State { context, function, env: Env { globals, metadata, layout }, analyses, bases: Scoped::default() };
     let mut changed = false;
@@ -410,7 +430,8 @@ fn infer_alignment(
 
     // The alloca the first walk raised changes what `computeKnownBits` says.
     state.analyses =
-        FunctionAnalyses::of(state.context, globals, metadata, layout, state.function).with_lazy_dom_conditions();
+        FunctionAnalyses::of_declared(state.context, globals, metadata, layout, state.function, assume_declared)
+            .with_lazy_dom_conditions();
     let tree: &DomTree = &state.analyses.dominator_tree().clone();
     enum Step {
         Enter(BlockId),
@@ -457,7 +478,14 @@ impl FunctionPass for InferAlignment {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let outer = analyses.outer().clone();
-        if infer_alignment(unit.context, &outer.globals, unit.metadata, unit.layout, unit.function) {
+        if infer_alignment_declared(
+            unit.context,
+            &outer.globals,
+            unit.metadata,
+            unit.layout,
+            unit.function,
+            outer.assume_declared(),
+        ) {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else {
             PreservedAnalyses::all()

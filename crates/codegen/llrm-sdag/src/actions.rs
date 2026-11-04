@@ -126,12 +126,15 @@ pub struct TargetLowering {
     /// `isSExtCheaperThanZExt`: `i32` to `i64` where the target extends signed
     /// for free (AArch64's `sxtw` in an addressing mode); no x86 override.
     sext_cheaper_i32_i64: bool,
+    /// `X86TargetLowering::BuildSDIVPow2` builds the `cmov` form of a signed
+    /// divide by a power of two: `Some(is64)`, `i64` too where `is64`.
+    sdiv_pow2_cmov: Option<bool>,
 }
 
 impl TargetLowering {
     /// Every action `Legal`: a table nothing has been set in.
     pub fn empty(types: TargetLoweringInfo) -> TargetLowering {
-        TargetLowering {
+        let mut table = TargetLowering {
             types,
             operations: HashMap::default(),
             promoted_to: HashMap::default(),
@@ -146,6 +149,31 @@ impl TargetLowering {
             libcall_names: HashMap::default(),
             libcall_symbols: HashMap::default(),
             sext_cheaper_i32_i64: false,
+            sdiv_pow2_cmov: None,
+        };
+        table.set_default_integer_libcalls();
+        table
+    }
+
+    /// The pin's `RuntimeLibcalls` defaults for the wide integers: libgcc's
+    /// names for `SHL_I64`, `MUL_I128` and the others, on every target; a
+    /// target's own `set_libcall_name` replaces them.
+    fn set_default_integer_libcalls(&mut self) {
+        use ISD::*;
+        let rows: [(MVT, [&'static str; 8]); 2] = [
+            (
+                MVT::I64,
+                ["__ashldi3", "__lshrdi3", "__ashrdi3", "__muldi3", "__divdi3", "__udivdi3", "__moddi3", "__umoddi3"],
+            ),
+            (
+                MVT::I128,
+                ["__ashlti3", "__lshrti3", "__ashrti3", "__multi3", "__divti3", "__udivti3", "__modti3", "__umodti3"],
+            ),
+        ];
+        for (vt, names) in rows {
+            for (op, name) in [Shl, Srl, Sra, Mul, SDiv, UDiv, SRem, URem].into_iter().zip(names) {
+                self.set_libcall_name(op, vt, name);
+            }
         }
     }
 
@@ -385,6 +413,23 @@ impl TargetLowering {
         self.cmov
     }
 
+    /// Whether `X86TargetLowering::BuildSDIVPow2` makes the `cmov` form for
+    /// `vt`: `canUseCMOV`, and `i16`, `i32` or (`is64Bit`) `i64` (no `i8`).
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L24348>
+    pub fn sdiv_pow2_with_cmov(
+        &self,
+        vt: EVT,
+    ) -> bool {
+        let Some(is64) = self.sdiv_pow2_cmov else {
+            return false;
+        };
+        match vt {
+            EVT::Simple(MVT::I16 | MVT::I32) => true,
+            EVT::Simple(MVT::I64) => is64,
+            _ => false,
+        }
+    }
+
     /// `isOperationLegal`.
     pub fn is_operation_legal(
         &self,
@@ -400,6 +445,19 @@ impl TargetLowering {
         vt: EVT,
     ) -> bool {
         self.types.is_type_legal(vt) && matches!(self.operation_action(op, vt), Action::Legal | Action::Custom)
+    }
+
+    /// `isOperationLegalOrCustomOrPromote`.
+    pub fn is_operation_legal_or_custom_or_promote(
+        &self,
+        op: ISD,
+        vt: EVT,
+    ) -> bool {
+        self.types.is_type_legal(vt)
+            && matches!(
+                self.operation_action(op, vt),
+                Action::Legal | Action::Custom | Action::Promote
+            )
     }
 
     /// `getTypeToPromoteTo`: the recorded type, else the next wider integer
@@ -612,6 +670,7 @@ impl TargetLowering {
         use ISD::*;
         let mut t = TargetLowering::empty(types);
         t.cmov = features.cmov;
+        t.sdiv_pow2_cmov = features.cmov.then_some(is64);
         t.init_actions();
         let ints = [MVT::I8, MVT::I16, MVT::I32];
         // `if (VT == MVT::i64 && !Subtarget.is64Bit()) continue;`
@@ -837,10 +896,11 @@ mod tests {
         assert_eq!(t.operation_action(ISD::FpExtend, EVT::Simple(MVT::F64)), Action::Custom);
     }
 
-    /// CSSC turns scalar `ctpop` from a vector sequence into one instruction.
+    /// CSSC turns scalar `ctpop` into one instruction; without it the node
+    /// is expanded until vector MIR lands (DEVIATE SD533), not `Custom`.
     #[test]
     fn aarch64_ctpop_follows_cssc() {
-        assert_eq!(a64().operation_action(ISD::CtPop, EVT::I32), Action::Custom);
+        assert_eq!(a64().operation_action(ISD::CtPop, EVT::I32), Action::Expand);
         let cssc = TargetLowering::aarch64(Aarch64Features { cssc: true, ..Default::default() });
         assert_eq!(cssc.operation_action(ISD::CtPop, EVT::I32), Action::Legal);
     }

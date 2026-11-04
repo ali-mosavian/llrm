@@ -60,7 +60,8 @@ impl Level {
             Self::Os => MidEnd::size(),
             Self::Oz => MidEnd::min_size(),
         };
-        MidEnd { lower_switches: false, ..options }
+        // The DAG's `mergeConsecutiveStores` widens the stores, as in the pin.
+        MidEnd { lower_switches: false, merge_stores: false, ..options }
     }
 }
 
@@ -79,7 +80,7 @@ fn optimized(
     let options = if std::env::var_os("LLRM_WASM_BACKEND_ONLY").is_some() {
         MidEnd::none()
     } else {
-        MidEnd { library: Vec::new(), ..level.mid_end() }
+        MidEnd { library: c_library(), ..level.mid_end() }
     };
     // `LLRM_WASM_DUMP=DIR`: every mid-end step that changed a body, written to
     // DIR.
@@ -353,4 +354,10 @@ fn data(
         });
     }
     Ok(out)
+}
+
+/// The compare routines of the platform's C library, by their IR names:
+/// what `SimplifyLibCalls` may form.
+fn c_library() -> Vec<llrm_mir::libfunc::Routine> {
+    llrm_mir::libfunc::Routine::stated(llrm_mir::libfunc::HOSTED_COMPARE, str::to_owned, 0)
 }

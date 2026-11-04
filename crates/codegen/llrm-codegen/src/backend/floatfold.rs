@@ -1,6 +1,12 @@
 //! A float load that only one arithmetic instruction reads becomes that
 //! instruction's memory operand: `fld [m]; faddp` is `fadd [m]`.
 //!
+//! DEVIATE FF1 (owner m16, exit 2026-11-17): a volatile cell folds too; the
+//! fused instruction stays volatile and ordered against every other volatile
+//! access. The pin keeps `fld [m]` for it. Cost rule: the fold drops an `fld`
+//! and a stack slot and keeps the one memory read, so it never costs a byte or a
+//! clock; the exit is the pin's own fold, or this stays with the exit moved.
+//!
 //! # How it works
 //! x87 arithmetic has a memory form for a float or a double (`fadd qword ptr
 //! [m]`). Folding saves the load and the x87 register the loaded value held.
@@ -14,7 +20,7 @@
 //!
 //! - it is read exactly once in the body;
 //! - its defining instruction is the nearest earlier definition in the block, a
-//!   plain `fld` or `fild` of a memory cell, not volatile, with no clobbers and
+//!   plain `fld` or `fild` of a memory cell, with no clobbers and
 //!   not part of a group;
 //! - nothing between the load and the arithmetic is volatile, a call, a barrier
 //!   or an escape, or may write the cell (`storedhomes::may_write`);
@@ -264,7 +270,6 @@ fn _refolded(
                 && _loads_memory(one.what.as_ref())
                 && defs.get(&value) == Some(&1)
                 && uses.get(&value).is_some_and(|reads| *reads >= 1)
-                && !one.volatile
                 && one.clobbers.is_empty()
                 && one.group.is_none()
             {
@@ -342,16 +347,19 @@ fn _refolded(
             continue;
         }
         let bytes = loaded + held - folded_bytes;
-        let rate =
-            if cpu.size || cpu.min_size { cpu.size_milliclocks_per_byte() } else { cpu.speed_milliclocks_per_byte() };
-        // A target with an exchange rate takes clocks for bytes at it, and
-        // never grows code built for size; one without takes neither worse.
-        let pays = if rate == 0 {
-            saved >= 0 && bytes >= 0 && (saved > 0 || bytes > 0)
-        } else if cpu.size || cpu.min_size {
-            bytes > 0
+        // Built for size the bytes decide, on every target and with no
+        // exchange rate; clocks only break a tie. At speed a target with a
+        // rate takes clocks for bytes at it, and one without takes neither
+        // worse.
+        let pays = if cpu.size || cpu.min_size {
+            bytes > 0 || (bytes == 0 && saved > 0)
         } else {
-            saved * 1000 + bytes * rate > 0
+            let rate = cpu.speed_milliclocks_per_byte();
+            if rate == 0 {
+                saved >= 0 && bytes >= 0 && (saved > 0 || bytes > 0)
+            } else {
+                saved * 1000 + bytes * rate > 0
+            }
         };
         if !pays {
             continue;
@@ -493,6 +501,9 @@ fn _fused(
 ) -> Arc<Insn> {
     let mut fused = (**one).clone();
     fused.what = Some(what);
+    // A volatile cell is still read once, by the fused instruction, and kept
+    // in order against every other volatile access (`_home_of`).
+    fused.volatile |= load.volatile;
     let foreign = |values: &[u32]| values.iter().copied().filter(|one| !floating.contains(one)).collect::<Vec<u32>>();
     fused.uses = one
         .uses
@@ -546,8 +557,8 @@ pub fn read_from_cell(
 }
 
 /// The load that defines `value`, if it may be read again at `at` as a memory
-/// operand: the nearest definition in the block, a plain load of a cell, not
-/// volatile, with no clobbers and not part of a group, and nothing between it
+/// operand: the nearest definition in the block, a plain load of a cell, with
+/// no clobbers and not part of a group, and nothing between it
 /// and `at` volatile, a call, a barrier or an escape, or able to write the
 /// cell.
 fn _home_of(
@@ -564,7 +575,7 @@ fn _home_of(
                 .is_some_and(|made| made.dests.iter().any(|d| matches!(d, Loc::Held(held) if held.value == value))),
         )?;
     let load = &insns[home];
-    if !_loads_memory(load.what.as_ref()) || load.volatile || !load.clobbers.is_empty() || load.group.is_some() {
+    if !_loads_memory(load.what.as_ref()) || !load.clobbers.is_empty() || load.group.is_some() {
         return None;
     }
     let cell = cell_of(load);
@@ -783,6 +794,24 @@ mod tests {
         assert_eq!(names(&folded(&body, cpu, REGISTERS)), ["fld1", "fmul+m", "fadd+m", "fstp"]);
     }
 
+    /// int_compared_with_float -Os: a volatile float read once by a compare was
+    /// `fld [m]; fxch; fcompp` (+24 B over six sites); the compare reads the
+    /// cell itself, and stays volatile.
+    #[test]
+    fn test_a_volatile_load_a_compare_reads_once_is_its_memory_operand() {
+        let cpu = crate::backend::cpu::profile("486").expect("a profile");
+        let volatile = {
+            let mut load = (*fld(1, 2, global(0, 0))).clone();
+            load.volatile = true;
+            Arc::new(load)
+        };
+        let compare = insn(2, Operation::Compare, "fcom", vec![], vec![held(1), held(2)]);
+        let body = one_block(vec![fld(0, 1, frame(-4)), volatile, compare]);
+        let done = folded(&body, cpu, REGISTERS);
+        assert_eq!(names(&done), ["fld", "fcom+m"]);
+        assert!(done.blocks[0].insns.last().expect("an instruction").volatile);
+    }
+
     /// A store to the cell between two reads changes the value the second one
     /// reads: the load stays.
     #[test]
@@ -973,6 +1002,60 @@ mod tests {
             fstp(3, 3, frame(-4)),
         ]);
         let got = names(&folded(&body, cpu, REGISTERS));
+        assert!(got.contains(&"fld".to_owned()), "{got:?}");
+    }
+
+    /// A size profile of a target with no size rate (m32), the memory form of
+    /// `fadd` priced above the pair it replaces (`fld` 6 + `fadd` 6).
+    fn priced_memory_form(memory: i64) -> crate::backend::cpu::Profile {
+        let mut cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", true).expect("a profile").clone();
+        for (key, price) in [("x87_load", 6), ("x87_add", 6), ("x87_add_m", memory)] {
+            cpu._costs.retain(|(name, _)| name != key);
+            cpu._costs.push((key.to_owned(), price));
+        }
+        cpu
+    }
+
+    /// A load read by `readers` arithmetic instructions: the several-reader
+    /// refold, the only fold that weighs clocks against bytes (a single reader
+    /// folds as the pin does, whatever the clocks).
+    fn read_by(readers: usize, cell: Mem) -> LirBody {
+        let mut insns = vec![fld(0, 1, cell), insn(1, Operation::FloatLoad, "fld1", vec![held(2)], vec![])];
+        let mut left = 2;
+        for reader in 0..readers {
+            let result = 3 + reader as u32;
+            insns.push(arith(2 + reader as i64, "fadd", result, left, 1));
+            left = result;
+        }
+        insns.push(fstp(10, left, frame(-4)));
+        one_block(insns)
+    }
+
+    /// Built for size the bytes decide: two readers of a 3-byte cell save a
+    /// byte and, at `fadd m64` 20 against 12, cost 16 clocks; the fold is made
+    /// on every target. m32 -Os refused it (no size rate: neither metric may
+    /// grow) and m16 took it only through a fitted 10_000 rate.
+    #[test]
+    fn test_a_refold_that_saves_bytes_and_costs_clocks_is_made_for_size() {
+        let cpu = priced_memory_form(20);
+        let got = names(&folded(&read_by(2, frame(-8)), &cpu, REGISTERS));
+        assert!(!got.contains(&"fld".to_owned()), "{got:?}");
+    }
+
+    /// The same refold with the memory form cheaper than the pair.
+    #[test]
+    fn test_a_refold_that_saves_bytes_and_clocks_is_made_for_size() {
+        let cpu = priced_memory_form(6);
+        let got = names(&folded(&read_by(2, frame(-8)), &cpu, REGISTERS));
+        assert!(!got.contains(&"fld".to_owned()), "{got:?}");
+    }
+
+    /// A guard, green before and after: three readers of a 4-byte cell save
+    /// clocks and add two bytes; code built for size does not grow.
+    #[test]
+    fn test_a_refold_that_saves_clocks_and_grows_code_is_not_made_for_size() {
+        let cpu = priced_memory_form(6);
+        let got = names(&folded(&read_by(3, global(0, 0)), &cpu, REGISTERS));
         assert!(got.contains(&"fld".to_owned()), "{got:?}");
     }
 }

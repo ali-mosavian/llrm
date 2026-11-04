@@ -86,6 +86,7 @@ pub fn builder_target(
             use_aa: true,
             ..DagConfig::default()
         },
+        tuning: crate::machine::TUNING,
         shift_amount: pointer(width),
         shift_amount_of: Some(shift_amount_of),
         legal_ints: vec![32, 64],
@@ -251,7 +252,7 @@ pub fn select_function(
     let alias = super::alias::IrAlias::new(module, function, &layout);
     let mut selected = Vec::new();
     let mut machine_layout = Vec::new();
-    let mut visited = std::collections::HashSet::new();
+    let mut visited = llrm_support::hash::HashSet::default();
     for &block in function.layout() {
         if optimize {
             // `SelectAllBasicBlocks`: a phi knows what its incoming values

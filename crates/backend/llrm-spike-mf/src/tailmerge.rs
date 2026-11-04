@@ -25,8 +25,9 @@
 //! entry jump costs more than the short loops save). Exit: 2026-11-14, when
 //! odds and rotation price the entry jump against the trips.
 
-use std::collections::HashSet;
 use std::hash::Hash;
+
+use llrm_support::hash::{HashMap, HashSet};
 
 use crate::fold::{self, Branches};
 use crate::mfunc::{Block, Inst, MFunction, Operand};
@@ -189,7 +190,7 @@ struct Merger<'a, F: TailMergeFunction> {
 
 /// `TailMergeBlocks`: `true` when anything merged.
 pub fn tail_merge_blocks<F: TailMergeFunction>(function: &mut F) -> bool {
-    let mut merger = Merger { function, potentials: Vec::new(), same_tails: Vec::new(), tried: HashSet::new() };
+    let mut merger = Merger { function, potentials: Vec::new(), same_tails: Vec::new(), tried: HashSet::default() };
     merger.run()
 }
 
@@ -537,7 +538,7 @@ impl<F: TailMergeFunction> Merger<'_, F> {
             }
             let pred_bb = self.layout_prev(ibb);
             self.potentials.clear();
-            let mut unique = HashSet::new();
+            let mut unique = HashSet::default();
             for pbb in self.function.predecessors(ibb) {
                 if self.potentials.len() == TAIL_MERGE_THRESHOLD {
                     break;
@@ -594,19 +595,97 @@ struct Mf<'a, C, J> {
     assignment: Option<&'a Assignment>,
     /// The unconditional jump `remove_branch` took off a block, to put back as
     /// it was: the target's own opcode for it (the 65C02's `bra`), not `J`'s.
-    removed: std::collections::HashMap<u32, Inst>,
+    removed: HashMap<u32, Inst>,
     /// Block to the header of its innermost loop, from the blocks at the start;
     /// a split block takes its origin's.
-    loops: std::collections::HashMap<u32, u32>,
+    loops: HashMap<u32, u32>,
+    /// Positions and edges of the blocks as they are, built on the first ask
+    /// after a change (LLVM keeps these on the block).
+    graph: std::cell::RefCell<Option<Graph>>,
     jump: std::marker::PhantomData<J>,
 }
 
+/// Where each block is and which blocks reach it, as flat tables indexed by
+/// block id: a rebuild costs a few allocations, not one per block.
+struct Graph {
+    position: Vec<usize>,
+    /// The predecessors of block `b` are `from[start[b]..start[b + 1]]`, in
+    /// layout order.
+    start: Vec<u32>,
+    from: Vec<u32>,
+}
+
+const ABSENT: usize = usize::MAX;
+
 impl<C, J> Mf<'_, C, J> {
+    fn with_graph<R>(
+        &self,
+        read: impl FnOnce(&Graph) -> R,
+    ) -> R {
+        let mut cached = self.graph.borrow_mut();
+        let graph = cached.get_or_insert_with(|| self.build_graph());
+        read(graph)
+    }
+
+    /// The edges out of the block at `at`, sorted, without repeats: its jumps
+    /// and, when it can, the block after it.
+    fn edges(
+        &self,
+        at: usize,
+        out: &mut Vec<u32>,
+    ) {
+        let blocks = &self.function.blocks;
+        out.clear();
+        out.extend(blocks[at].insts.iter().filter(|inst| inst.terminator).filter_map(targets));
+        if at + 1 < blocks.len() && !blocks[at].insts.last().is_some_and(|last| last.barrier) {
+            out.push(blocks[at + 1].id);
+        }
+        out.sort_unstable();
+        out.dedup();
+    }
+
+    fn build_graph(&self) -> Graph {
+        let blocks = &self.function.blocks;
+        let size = blocks.iter().map(|block| block.id as usize + 1).max().unwrap_or(0);
+        let mut position = vec![ABSENT; size];
+        for (at, block) in blocks.iter().enumerate() {
+            position[block.id as usize] = at;
+        }
+        let mut edges: Vec<(u32, u32)> = Vec::new();
+        let mut out = Vec::new();
+        for (at, block) in blocks.iter().enumerate() {
+            self.edges(at, &mut out);
+            // a jump to a block that is not there reaches no one
+            edges.extend(out.iter().filter(|&&to| (to as usize) < size).map(|&to| (to, block.id)));
+        }
+        let mut start = vec![0u32; size + 1];
+        for &(to, _) in &edges {
+            start[to as usize + 1] += 1;
+        }
+        for b in 0..size {
+            start[b + 1] += start[b];
+        }
+        // filled in edge order, which is layout order of the sources
+        let mut next = start.clone();
+        let mut from = vec![0u32; edges.len()];
+        for &(to, source) in &edges {
+            from[next[to as usize] as usize] = source;
+            next[to as usize] += 1;
+        }
+        Graph { position, start, from }
+    }
+
+    /// The function changed: the next question rebuilds the graph.
+    fn changed(&mut self) {
+        *self.graph.get_mut() = None;
+    }
+
     fn at(
         &self,
         id: u32,
     ) -> usize {
-        self.function.blocks.iter().position(|block| block.id == id).expect("a block that exists")
+        self.with_graph(|graph| graph.position.get(id as usize).copied().filter(|&at| at != ABSENT))
+            .expect("a block that exists")
     }
 }
 
@@ -634,14 +713,8 @@ impl<C, J: Jump> TailMergeFunction for Mf<'_, C, J> {
         &self,
         block: u32,
     ) -> Vec<u32> {
-        let at = self.at(block);
-        let mut out: Vec<u32> =
-            self.function.blocks[at].insts.iter().filter(|inst| inst.terminator).filter_map(targets).collect();
-        if self.can_fall_through(block) {
-            out.push(self.function.blocks[at + 1].id);
-        }
-        out.sort_unstable();
-        out.dedup();
+        let mut out = Vec::new();
+        self.edges(self.at(block), &mut out);
         out
     }
 
@@ -649,12 +722,10 @@ impl<C, J: Jump> TailMergeFunction for Mf<'_, C, J> {
         &self,
         block: u32,
     ) -> Vec<u32> {
-        self.function
-            .blocks
-            .iter()
-            .map(|other| other.id)
-            .filter(|other| self.successors(*other).contains(&block))
-            .collect()
+        self.with_graph(|graph| match (graph.start.get(block as usize), graph.start.get(block as usize + 1)) {
+            (Some(&from), Some(&to)) => graph.from[from as usize..to as usize].to_vec(),
+            _ => Vec::new(),
+        })
     }
 
     fn insts(
@@ -776,6 +847,7 @@ impl<C, J: Jump> TailMergeFunction for Mf<'_, C, J> {
             self.removed.insert(block, jump.clone());
         }
         fold::remove_branch(self.function, at);
+        self.changed();
     }
 
     fn insert_branch(
@@ -795,9 +867,11 @@ impl<C, J: Jump> TailMergeFunction for Mf<'_, C, J> {
                 }
             }
             self.function.blocks[at].insts.push(jump);
+            self.changed();
             return;
         }
         fold::insert_branch::<C, J>(self.function, at, taken, other, cond);
+        self.changed();
     }
 
     fn loop_header(
@@ -819,6 +893,7 @@ impl<C, J: Jump> TailMergeFunction for Mf<'_, C, J> {
         }
         let tail = self.function.blocks[position].insts.split_off(at);
         self.function.insert_block(position + 1, Block { id, insts: tail, phis: Vec::new() });
+        self.changed();
         Some(id)
     }
 
@@ -833,6 +908,7 @@ impl<C, J: Jump> TailMergeFunction for Mf<'_, C, J> {
         if self.function.blocks.get(position + 1).map(|next| next.id) != Some(dest) {
             fold::insert_branch::<C, J>(self.function, position, dest, None, None);
         }
+        self.changed();
     }
 }
 
@@ -842,17 +918,32 @@ pub fn merge_tails<J: Jump, C>(
     function: &mut MFunction<C>,
     assignment: Option<&Assignment>,
 ) -> bool {
+    merge_tails_across_loops::<J, C>(function, assignment, false)
+}
+
+/// [`merge_tails`], and with `across_loops` blocks of different loops merge as
+/// the pin's `BranchFolder` does before block placement. The merged guard and
+/// latch of a loop leave its test at the bottom behind one entry jump: bytes
+/// for clocks, so the caller says where bytes outrank clocks.
+pub fn merge_tails_across_loops<J: Jump, C>(
+    function: &mut MFunction<C>,
+    assignment: Option<&Assignment>,
+    across_loops: bool,
+) -> bool {
     if function.blocks.iter().any(|block| !block.phis.is_empty()) {
         return false;
     }
     let mut mf = Mf::<C, J> {
         function,
         assignment,
-        removed: std::collections::HashMap::new(),
-        loops: std::collections::HashMap::new(),
+        removed: HashMap::default(),
+        loops: HashMap::default(),
+        graph: std::cell::RefCell::new(None),
         jump: std::marker::PhantomData,
     };
-    mf.loops = innermost_loops(&mf.blocks(), |block| mf.successors(block));
+    if !across_loops {
+        mf.loops = innermost_loops(&mf.blocks(), |block| mf.successors(block));
+    }
     tail_merge_blocks(&mut mf)
 }
 
@@ -862,11 +953,10 @@ pub fn merge_tails<J: Jump, C>(
 fn innermost_loops(
     blocks: &[u32],
     successors: impl Fn(u32) -> Vec<u32>,
-) -> std::collections::HashMap<u32, u32> {
-    use std::collections::{HashMap, HashSet};
-    let Some(&entry) = blocks.first() else { return HashMap::new() };
+) -> HashMap<u32, u32> {
+    let Some(&entry) = blocks.first() else { return HashMap::default() };
     let succ: HashMap<u32, Vec<u32>> = blocks.iter().map(|&b| (b, successors(b))).collect();
-    let mut preds: HashMap<u32, Vec<u32>> = HashMap::new();
+    let mut preds: HashMap<u32, Vec<u32>> = HashMap::default();
     for (&b, out) in &succ {
         for &s in out {
             preds.entry(s).or_default().push(b);
@@ -874,7 +964,7 @@ fn innermost_loops(
     }
     let mut back_edges: Vec<(u32, u32)> = Vec::new();
     // true while on the stack
-    let mut state: HashMap<u32, bool> = HashMap::new();
+    let mut state: HashMap<u32, bool> = HashMap::default();
     let mut stack: Vec<(u32, usize)> = vec![(entry, 0)];
     state.insert(entry, true);
     while let Some(&mut (b, ref mut next)) = stack.last_mut() {
@@ -893,7 +983,7 @@ fn innermost_loops(
             stack.pop();
         }
     }
-    let mut bodies: HashMap<u32, HashSet<u32>> = HashMap::new();
+    let mut bodies: HashMap<u32, HashSet<u32>> = HashMap::default();
     for (latch, header) in back_edges {
         let body = bodies.entry(header).or_default();
         body.insert(header);
@@ -904,7 +994,7 @@ fn innermost_loops(
             }
         }
     }
-    let mut innermost: HashMap<u32, u32> = HashMap::new();
+    let mut innermost: HashMap<u32, u32> = HashMap::default();
     for (&header, body) in &bodies {
         for &b in body {
             let smaller = innermost.get(&b).is_none_or(|current| body.len() < bodies[current].len());

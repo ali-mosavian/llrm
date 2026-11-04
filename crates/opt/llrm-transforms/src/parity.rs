@@ -317,12 +317,21 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "slp-vectorizer",
         "slpcompares.rs makes the wide compare the pin's SLP, VectorCombine and InstCombine leave of an and-chain of equalities of adjacent bytes; no vectors; criterion: the chain of eight bytes is one ldr and one cmp as the pin's (tests/slp_compares.rs); exit: vector types in the backend",
     ),
+    entry(
+        "drop-unnecessary-assumes@1360",
+        Late,
+        "drop-unnecessary-assumes<drop-deref>",
+        Translated,
+        "dropunnecessaryassumes.rs",
+    ),
     entry("infer-alignment@1362", Late, "infer-alignment", Translated, ""),
     entry("infer-alignment@1498", Late, "infer-alignment", Translated, ""),
+    entry("drop-unnecessary-assumes@1577", Late, "drop-unnecessary-assumes", Translated, "dropunnecessaryassumes.rs"),
     entry("float2int@1594", Late, "float2int", Translated, ""),
     entry("lower-constant-intrinsics@1597", Late, "lower-constant-intrinsics", Translated, ""),
     entry("instsimplify@1662", Late, "instsimplify", Translated, ""),
     entry("divrempairs@1667", Late, "div-rem-pairs", Translated, ""),
+    entry("expandmemcmp@1673", Late, "expand-memcmp", Translated, ""),
     entry("tailrec@1677", Late, "tailcallelim", Translated, ""),
     partial(
         "simplifycfg@1682",
@@ -388,6 +397,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("flagscopy@5", Backend, "x86-flags-copy-lowering (X86FlagsCopyLowering.cpp)", Translated, ""),
     entry("leaopt@5", Backend, "x86-optimize-leas (X86OptimizeLEAs.cpp)", Translated, ""),
     entry("floatfold@6", Backend, "x86 isel float folding (target)", Old, ""),
+    entry("floatsink@6", Backend, "x86 float load sinking (target; DEVIATE SD-SINK, no pin pass)", Old, ""),
     partial(
         "pushfold@6",
         Backend,
@@ -639,6 +649,12 @@ pub const ANALYSES: &[AnalysisEntry] = &[
         "none: DEVIATE; TypeBasedAA is the pin's counterpart (not translated)",
     ),
     old_analysis("declarations", "Declarations", "none", "none: DEVIATE or delete candidate"),
+    old_analysis(
+        "assume-declared",
+        "AssumeDeclared",
+        "none",
+        "none: DEVIATE; LLVM's AssumptionCache walks the body, we skip it where no llvm.assume is declared",
+    ),
     old_analysis(
         "global-names",
         "GlobalNames",

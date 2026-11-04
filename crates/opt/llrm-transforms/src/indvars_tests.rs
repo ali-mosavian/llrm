@@ -1105,3 +1105,31 @@ exit:
     managed(&mut module, IndVars { lftr: true, size: false });
     assert!(printed(&module).contains("define i128 @f"), "{}", printed(&module));
 }
+
+/// Sequential counted loops on one bound. The pin's loop passes visit them
+/// in program order, so each loop's trip count finds the earlier ones'
+/// already made; visited last first, one query recursed through every loop
+/// before it (about 5 KB of stack each; 1666 loops overflowed 8 MB, as
+/// `llrm-pass indvars` did at 2400 loops).
+#[test]
+fn many_loops_on_one_bound_do_not_nest_their_trip_count_queries() {
+    const LOOPS: usize = 120;
+    let mut text = String::from("define i32 @f(i32 %n) {\nb0:\n  br label %h0\n");
+    for i in 0..LOOPS {
+        let from = if i == 0 { "b0".to_string() } else { format!("m{}", i - 1) };
+        let next = if i + 1 == LOOPS { "x".to_string() } else { format!("h{}", i + 1) };
+        text += &format!(
+            "h{i}:\n  %i{i} = phi i32 [ 0, %{from} ], [ %j{i}, %h{i} ]\n  %j{i} = add nsw i32 %i{i}, 1\n  %c{i} = icmp slt i32 %j{i}, %n\n  br i1 %c{i}, label %h{i}, label %m{i}\nm{i}:\n  br label %{next}\n"
+        );
+    }
+    text += "x:\n  ret i32 0\n}\n";
+    // Small enough that one nested query per loop overflows.
+    let ran = std::thread::Builder::new()
+        .stack_size(STACK)
+        .spawn(move || widening(&text).0)
+        .expect("a thread")
+        .join();
+    assert!(ran.is_ok(), "the query recursion overflowed a {STACK} byte stack");
+}
+
+const STACK: usize = 2 << 20;

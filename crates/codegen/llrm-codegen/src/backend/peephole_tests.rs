@@ -1620,6 +1620,41 @@ fn test_zeroing_before_a_jump_asks_what_the_target_reads() {
     }
 }
 
+/// `mov eax, -1` is five bytes and `or eax, -1` three, one clock each: -Os kept
+/// the `mov` on every dead-flags site (18 in the m32 corpus, 36 B).
+#[test]
+fn test_minus_one_is_or_at_size_when_flags_are_dead() {
+    // (successor's first instruction, ones, rewritten)
+    for (successor, ones, orred) in
+        [("cmp", true, true), ("cmp", false, false), ("jb", true, false), ("cmp-low", true, false)]
+    {
+        let eax = rl(RegId::EAX, 4);
+        let value = if successor == "cmp-low" { 5 } else { -1 };
+        let set = insn(
+            0,
+            Some((0, 5)),
+            Some(sem(Operation::Move, "mov", vec![eax.clone()], vec![im(value, 4)])),
+            vec![],
+            vec![],
+        );
+        let jump = insn(5, Some((5, 7)), Some(semt(Operation::Jump, "jmp", vec![], vec![], Some(7))), vec![], vec![]);
+        let first = match successor {
+            "jb" => Some(semt(Operation::Branch, "jb", vec![], vec![], Some(9))),
+            _ => Some(sem(Operation::Compare, "cmp", vec![], vec![eax.clone(), im(1, 4)])),
+        };
+        let blocks = vec![
+            block(0, vec![Arc::new(set), Arc::new(jump)], vec![7]),
+            block(7, vec![Arc::new(insn(7, Some((7, 9)), first, vec![], vec![]))], vec![]),
+        ];
+        let result = cleared(&body("ones", 0, crate::model::lir::shared(blocks)), ones).insns()[0].clone();
+        let what = result.what.as_ref().unwrap();
+        assert_eq!(what.name.as_deref(), Some(if orred { "or" } else { "mov" }), "{successor} {ones}");
+        if orred {
+            assert_eq!(what.sources, [eax, im(-1, 4)]);
+        }
+    }
+}
+
 /// `mov ecx, 0; mov edx, 64; jmp _chop` (a sibling call) stayed five bytes: the
 /// jump that returns was taken to read the flags, which the pin's `TAILJMPd`
 /// does not (m32 -O2 recchop, +3 B over the pin's `xor`).
@@ -5451,6 +5486,30 @@ fn store_then_reload(between: Vec<Insn>) -> usize {
     )));
     let done = forwarded_reloads(rules(), &body("forwarded-reload", 0, vec![block(0, insns, vec![]).into()]));
     whats(&done.blocks[0].insns).iter().filter(|what| what.name.as_deref() == Some("mov")).count()
+}
+
+/// nbody -O3 at m64: `movsd [rsp-0x20], xmm13 ; movsd xmm13, [rsp-0x20]` stood
+/// in the loop four times a trip (800 of 27.6k instructions); the pin's code has
+/// no such pair, and the rule that drops it knew `mov` and nothing wider than a
+/// dword.
+#[test]
+fn test_a_float_reload_of_the_register_that_filled_the_cell_is_dropped_at_m64() {
+    let cell = || Loc::Mem(mem(frame(-16), 8, RegId::RSP, -16, 1));
+    let movsd = |at: i64, dests: Vec<Loc>, sources: Vec<Loc>| Insn {
+        spill_store: dests.iter().any(|d| matches!(d, Loc::Mem(_))),
+        ..insn(at, Some((at, at + 2)), Some(sem(Operation::Move, "movsd_x", dests, sources)), vec![], vec![])
+    };
+    let insns = vec![
+        Arc::new(movsd(0, vec![cell()], vec![rl(RegId::XMM13, 8)])),
+        Arc::new(movsd(100, vec![rl(RegId::XMM13, 8)], vec![cell()])),
+        Arc::new(insn(200, Some((200, 200)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![])),
+    ];
+    let done = forwarded_float_reloads(
+        &crate::backend::targets::x86_m64::RULES,
+        &body("forwarded-float-reload", 0, vec![block(0, insns, vec![]).into()]),
+    );
+    let moves = whats(&done.blocks[0].insns).iter().filter(|what| what.name.as_deref() == Some("movsd_x")).count();
+    assert_eq!(moves, 1, "the store stays, the reload goes");
 }
 
 /// huge_copy.c at m16 -Os: the forwarding dropped the reload `mov bl, [bp-2]`

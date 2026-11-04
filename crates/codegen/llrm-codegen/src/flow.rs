@@ -79,6 +79,7 @@ const UNOPTIMIZED: &[&str] = &[
     "MachineLICM",
     "IvShare",
     "IvZero",
+    "MaskByAnd",
     "FixupBW",
     "FixupLEAs",
     "CmpAsSub",
@@ -99,6 +100,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("MachineLICM", "machinelicm@4"),
     ("IvShare", "machinelicm@4"),
     ("IvZero", "machinelicm@4"),
+    ("MaskByAnd", "machinelicm@4"),
     ("MachineCSE", "machinecse@4"),
     ("MachineSink", "machinesink@4"),
     ("PeepholeOptimizer", "peepholeopt@4"),
@@ -111,6 +113,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("FlagsCopy", "flagscopy@5"),
     ("X86OptimizeLEAs", "leaopt@5"),
     ("FloatFold", "floatfold@6"),
+    ("FloatSink", "floatsink@6"),
     ("PushFold", "pushfold@6"),
     ("FloatAssign", "floatassign@7"),
     ("FloatPrep", "floatassign@7"),
@@ -191,6 +194,11 @@ pub fn machine_with<'a>(
         Box::new(crate::backend::ivshare::IvShare { classes: Rc::clone(classes) }),
         // A counted loop's index ends at zero (DEVIATE LSR3).
         Box::new(crate::backend::ivzero::IvZero { classes: Rc::clone(classes) }),
+        // Where the block runs often enough, `and d,s,mask` for `movzx d,s.low` (DEVIATE MA1).
+        Box::new(crate::backend::maskbyand::MaskByAnd {
+            clocks_saved: target.cost("movzx")? - target.cost("alu_ri")?,
+            milliclocks_per_byte: target.speed_milliclocks_per_byte(),
+        }),
         // On SSA, a repeated computation once (the pin: MachineCSE, then
         // MachineSink).
         Box::new(crate::backend::precse::MachineCse { classes: Rc::clone(classes) }),
@@ -238,6 +246,8 @@ pub fn machine_with<'a>(
         // A float load only one arithmetic instruction reads is its memory
         // operand.
         Box::new(crate::backend::floatfold::FloatFold { cpu: target, registers: classes.available.len() }),
+        // A float load waits for its reader where that saves an exchange.
+        Box::new(crate::backend::floatsink::FloatSink { cpu: target, basic_semantics }),
         // After phi elimination: a phi's copies are where the stack shuffles.
         Box::new(floatassign::FloatPrep {
             frame: frame.clone(),
@@ -245,7 +255,7 @@ pub fn machine_with<'a>(
             basic_semantics,
             status_word: classes.status_word(),
         }),
-        Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes) }),
+        Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes), cpu: Some(target) }),
         Box::new(twoaddr::TwoAddress { lea: target.three_address() }),
         Box::new(Coalescer { size: target.size, ..Coalescer::new(None, segments, classes) }),
         // After TwoAddress and the coalescer, before any value is placed: the

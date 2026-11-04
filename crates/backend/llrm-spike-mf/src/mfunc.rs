@@ -132,7 +132,7 @@ impl Block {
     /// row for it, which is the format's to write (or to leave to the row
     /// before it).
     pub fn place_unlocated(&mut self) {
-        let mut reader: std::collections::HashMap<Reg, u32> = std::collections::HashMap::new();
+        let mut reader: llrm_support::hash::HashMap<Reg, u32> = Default::default();
         for inst in self.insts.iter_mut().rev() {
             if inst.origin == 0 {
                 inst.origin = inst

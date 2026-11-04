@@ -27,11 +27,21 @@ pub struct Tuning {
     /// What a byte is worth in thousandths of a clock at speed; 0: bytes and
     /// clocks are not traded.
     pub speed_milliclocks_per_byte: i64,
+    /// A fill is weighed against its loop on the target's prices at every
+    /// level (`loopidioms::fills_pay`): strictly where the rate is 0 (neither
+    /// clocks nor bytes may grow), by the rate where it is not. false: the
+    /// pin's, which forms the memset whenever the stores allow.
+    pub price_fills: bool,
     /// A multiply by a constant at speed is the chain of fewest clocks the
     /// CPU's table gives, with no byte term (gcc's `synth_mult` at
     /// -O1..-O3); false: the chain where `speed_milliclocks_per_byte` pays
     /// for its bytes.
     pub multiply_by_clocks: bool,
+    /// A multiply by a constant is decomposed only where the chain's saved
+    /// clocks pay for its extra bytes at `speed_milliclocks_per_byte`, the
+    /// pin's own decompositions included (a tie keeps the `imul`); false:
+    /// the pin's `combineMul` decomposes unconditionally.
+    pub price_pin_multiplies: bool,
     /// `UnrollingPreferences::Threshold` and `MaxPercentThresholdBoost` of the
     /// full-unroll pass; none: the pass's own, by optimization level.
     pub unroll_threshold: Option<u32>,
@@ -86,7 +96,9 @@ impl Tuning {
         max_stores_per_memmove_opt_size: 4,
         size_milliclocks_per_byte: 0,
         speed_milliclocks_per_byte: 0,
+        price_fills: false,
         multiply_by_clocks: false,
+        price_pin_multiplies: false,
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
         unroll_partial_threshold: None,
@@ -161,6 +173,13 @@ pub trait Machine {
         Tuning::PIN
     }
 
+    /// Whether IPSCCP runs a second time after ArgumentPromotion changed a body
+    /// (DEVIATE SD443, exit 2026-11-07: interprocedural.rs). The pin runs it
+    /// once; a target that matches the pin's output turns it off.
+    fn second_ipsccp(&self) -> bool {
+        true
+    }
+
     /// Clocks a byte of code is worth, in thousandths, where a decision is
     /// made for size: the smaller form is kept while the clocks it costs are
     /// under this per byte saved. None: bytes alone decide.
@@ -205,6 +224,12 @@ pub trait Machine {
     /// for its selector, besides those its address names.
     fn far_access_registers(&self) -> i64 {
         0
+    }
+
+    /// Header instructions loop rotation may copy in a size build
+    /// (`RotationMaxHeaderSize`): none stated, the pin's 16.
+    fn size_rotation_header_limit(&self) -> Option<u32> {
+        None
     }
 
     /// Segment registers a far pointer's selector can be held in, besides
@@ -369,6 +394,9 @@ pub struct OperationCosts {
     pub carry_step: i64,
     pub load: i64,
     pub store: i64,
+    /// A constant stored to memory: the register store, plus the immediate
+    /// in code bytes.
+    pub store_immediate: i64,
     pub memory_update: i64,
     pub branch: i64,
     pub prefix: i64,
@@ -405,11 +433,25 @@ pub struct OperationCosts {
     /// last reader is past (x87 `fstp st(0)`): one held across a loop is
     /// released after it.
     pub float_release: i64,
+    /// A float converted to an integer (`fistp` under the control word that
+    /// truncates, and the word back); 0 where the target converts in one cheap
+    /// instruction.
+    pub float_to_int: i64,
+    /// A float compare whose answer is in a register (x87 `fcom`, `fnstsw`,
+    /// `sahf`); 0 where the target states none.
+    pub float_compare: i64,
     pub extend: i64,
     /// A comparison held as a value (`setcc`), before it is extended.
     pub set: i64,
     pub fill: i64,
     pub fill_cell: i64,
+    /// What of `fill` is the save and restore of a segment register around the
+    /// string instruction; 0 where the fill needs none.
+    pub fill_segment: i64,
+    /// `Tuning::max_stores_per_memset` for these prices: a constant memset of
+    /// at most that many stores is stores, not a fill; 0: the table does not
+    /// say.
+    pub memset_stores: i64,
     /// The code bytes of the routine a fill through a huge pointer is laid
     /// down as, in a table priced by bytes; 0 where there is none.
     pub huge_fill: i64,
@@ -521,6 +563,7 @@ impl Default for OperationCosts {
             carry_step: 1,
             load: 1,
             store: 1,
+            store_immediate: 1,
             memory_update: 1,
             branch: 1,
             prefix: 0,
@@ -539,10 +582,14 @@ impl Default for OperationCosts {
             folds_loads: false,
             float_store: 1,
             float_release: 0,
+            float_to_int: 0,
+            float_compare: 0,
             extend: 1,
             set: 1,
             fill: 1,
             fill_cell: 1,
+            fill_segment: 0,
+            memset_stores: 0,
             huge_fill: 0,
             huge_copy: 0,
             copy: 1,

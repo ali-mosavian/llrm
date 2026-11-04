@@ -13,7 +13,7 @@
 //! A `*` marks a total that holds a data-dependent term at its bound; `?`
 //! counts executed instructions the tables do not cover.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -229,7 +229,7 @@ fn price(
     };
     let pcs = trace(exe, cap, &cpu);
     let mut total = Total { insns: 0, clocks: vec![0; models.len()], partial: false, unknown: 0 };
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = llrm_support::hash::HashSet::default();
     // CYCLES_LISTING=1: each distinct executed instruction, its count and
     // clocks
     let mut counts: std::collections::BTreeMap<u32, usize> = std::collections::BTreeMap::new();
@@ -326,10 +326,35 @@ fn assembled(
     Some(std::fs::read(raw).unwrap())
 }
 
+/// The run's directory, deleted when the run ends however it ends. Not the
+/// shared `scratch` module: `matrix` includes this file as a module of its own.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new() -> Scratch {
+        let dir = std::env::temp_dir().join(format!("llrm-m68k-cycles-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        Scratch(dir)
+    }
+}
+
+impl std::ops::Deref for Scratch {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0).ok();
+    }
+}
+
 fn main() {
     let gcc = PathBuf::from(std::env::var("GCC_M68K").expect("GCC_M68K: the unpacked m68k binutils root"));
-    let dir = std::env::temp_dir().join(format!("llrm-m68k-cycles-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new();
     let models = models();
     if std::env::args().nth(1).as_deref() == Some("--exe") {
         let calls: f64 = std::env::var("CYCLES_CALLS").ok().and_then(|n| n.parse().ok()).unwrap_or(3000.0);
@@ -426,5 +451,4 @@ fn main() {
         }
         println!("| {name} | {} |", cells.join(" | "));
     }
-    std::fs::remove_dir_all(&dir).ok();
 }

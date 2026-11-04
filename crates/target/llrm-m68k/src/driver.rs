@@ -133,7 +133,7 @@ fn lowered(
     dump: Option<&std::path::Path>,
 ) -> Result<Module, String> {
     let mut program = program(text)?;
-    let options = MidEnd { library: Vec::new(), ..level.mid_end() };
+    let options = MidEnd { library: c_library(), ..level.mid_end() };
     if let Some(dump) = dump {
         std::fs::create_dir_all(dump).map_err(|error| format!("{}: {error}", dump.display()))?;
     }
@@ -197,7 +197,7 @@ pub fn object(
     let module = lowered(text, level, None)?;
     let backend = Options { size: matches!(level, Level::Os | Level::Oz), mid_end: false, ..Options::default() };
     let mut items = Vec::new();
-    let mut exports = std::collections::HashMap::new();
+    let mut exports = llrm_support::hash::HashMap::default();
     for (_, global, function) in module.functions() {
         if function.is_declaration() {
             continue;
@@ -216,4 +216,10 @@ pub fn object(
         return Err(format!("{}: constructors and destructors are not supported", constructors.name));
     }
     crate::elf::relocatable_with(name, &items, &exports, &variables)
+}
+
+/// The compare routines of the platform's C library, by their IR names:
+/// what `SimplifyLibCalls` may form.
+fn c_library() -> Vec<llrm_mir::libfunc::Routine> {
+    llrm_mir::libfunc::Routine::stated(llrm_mir::libfunc::HOSTED_COMPARE, str::to_owned, 0)
 }

@@ -181,3 +181,34 @@ fn test_merging_a_value_does_not_scan_the_phis_of_unrelated_blocks() {
     let each = (nine - one) / 8.0;
     assert!(each < one / 4.0, "one value {one:.0} work, nine {nine:.0}: {each:.0} for each more");
 }
+
+/// `loops` multi-exit loops one after another, each read after its join.
+fn chained_multi_exit_loops(loops: usize) -> String {
+    let mut text = String::from("define i16 @f(i16 %r0, i16 %n, i16 %m) {\n");
+    for k in 0..loops {
+        let next = k + 1;
+        text += &format!(
+            "pre{k}:\n  br label %a{k}\n\na{k}:\n  %c{k} = phi i16 [ %r{k}, %pre{k} ], [ %s{k}, %b{k} ]\n  %more{k} = icmp ult i16 %c{k}, %n\n  br i1 %more{k}, label %b{k}, label %x{k}\n\nb{k}:\n  %s{k} = add i16 %c{k}, 1\n  %stay{k} = icmp ult i16 %s{k}, %m\n  br i1 %stay{k}, label %a{k}, label %y{k}\n\nx{k}:\n  br label %j{k}\n\ny{k}:\n  br label %j{k}\n\nj{k}:\n  %r{next} = add i16 %c{k}, 7\n  br label %pre{next}\n\n"
+        );
+    }
+    text + &format!("pre{loops}:\n  ret i16 %r{loops}\n}}\n")
+}
+
+/// Every multi-exit loop rebuilt the set of reachable blocks, so closing a
+/// function was loops times blocks: 6 000 instructions of memory_expansion's
+/// cost 70 M instructions in lcssa (20 times a linear pass). Four times the
+/// loops is about four times the work.
+#[test]
+fn test_closing_more_loops_costs_in_proportion_to_the_loops() {
+    let least = |loops: usize| {
+        let text = chained_multi_exit_loops(loops);
+        (0..3)
+            .map(|_| {
+                let mut module = parsed(&text);
+                llrm_support::debug::work_of(|| closed(f(&mut module)).unwrap()).1 as f64
+            })
+            .fold(f64::MAX, f64::min)
+    };
+    let (few, many) = (least(100), least(400));
+    assert!(many < few * 6.0, "100 loops {few:.0} work, 400 loops {many:.0}: {:.1} times", many / few);
+}

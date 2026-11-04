@@ -94,17 +94,28 @@ impl Machine for WasmMachine {
     }
 
     fn tuning(&self) -> Tuning {
-        Tuning {
-            max_stores_per_memset: 8,
-            max_stores_per_memset_opt_size: 4,
-            max_stores_per_memcpy: 8,
-            max_stores_per_memcpy_opt_size: 4,
-            max_stores_per_memmove: 8,
-            max_stores_per_memmove_opt_size: 4,
-            ..Tuning::PIN
-        }
+        TUNING
+    }
+
+    /// SD443: the pin's IPSCCP runs once; a second run specialised the
+    /// arguments of a function whose address was taken before inlining.
+    fn second_ipsccp(&self) -> bool {
+        false
     }
 }
+
+/// `TargetLoweringBase`'s defaults, which WebAssemblyISelLowering does not
+/// override: 8/4 stores for a memset, memcpy and memmove. The DAG builder
+/// takes the same table.
+pub const TUNING: Tuning = Tuning {
+    max_stores_per_memset: 8,
+    max_stores_per_memset_opt_size: 4,
+    max_stores_per_memcpy: 8,
+    max_stores_per_memcpy_opt_size: 4,
+    max_stores_per_memmove: 8,
+    max_stores_per_memmove_opt_size: 4,
+    ..Tuning::PIN
+};
 
 /// The wasm `TargetTransformInfo`: the base class's answers but the address
 /// rule and the unrolling preferences.
@@ -112,6 +123,14 @@ impl Machine for WasmMachine {
 pub struct Wasm;
 
 impl Tti for Wasm {
+    /// `FSQRT` is legal on `f32` and `f64`.
+    fn have_fast_sqrt(
+        &self,
+        ty: llrm_mir::tti::Ty,
+    ) -> bool {
+        matches!(ty, llrm_mir::tti::Ty::Float | llrm_mir::tti::Ty::Double)
+    }
+
     fn name(&self) -> &'static str {
         "WebAssembly"
     }
@@ -127,6 +146,23 @@ impl Tti for Wasm {
         scale: i64,
     ) -> bool {
         base_offset >= 0 && scale == 0
+    }
+
+    /// `BasicTTIImplBase::isLegalAddImmediate` forwards to the lowering, whose
+    /// default (WebAssembly does not override it) accepts every immediate.
+    fn is_legal_add_immediate(
+        &self,
+        _imm: i64,
+    ) -> bool {
+        true
+    }
+
+    /// `BasicTTIImplBase::isLegalICmpImmediate`: as above.
+    fn is_legal_icmp_immediate(
+        &self,
+        _imm: i64,
+    ) -> bool {
+        true
     }
 
     /// `WebAssemblyTTIImpl::getUnrollingPreferences`: partial and runtime

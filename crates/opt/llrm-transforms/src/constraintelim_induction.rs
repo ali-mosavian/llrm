@@ -40,14 +40,17 @@ pub struct Inductions {
 }
 
 impl Inductions {
+    /// Told whether the module declares `llvm.assume` (`Outer::assume_declared`):
+    /// each function does not scan every global for it.
     pub fn new(
         q: &Query,
         tree: &DomTree,
+        assume_declared: bool,
     ) -> Self {
         Self {
             loops: std::rc::Rc::new(LoopInfo::analyze(q.function, || tree)),
             scev: ScalarEvolution::new(),
-            assumptions: AssumptionCache::of(q.context, q.globals, q.metadata, q.function),
+            assumptions: AssumptionCache::of_declared(q.context, q.globals, q.metadata, q.function, assume_declared),
         }
     }
 }
