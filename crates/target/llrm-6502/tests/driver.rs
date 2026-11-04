@@ -1713,3 +1713,20 @@ fn a_zero_filled_variable_is_bss_not_image_bytes() {
     assert!(text.contains("buf: .res 4096"), "{text}");
     assert!(!text.contains(".byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n  .byte 0,0,0,0"), "{text}");
 }
+
+#[test]
+fn a_word_step_never_holds_a_byte_in_a_on_the_plain_6502() {
+    // the high byte of x + 1, returned: it came out in A and the carry step was
+    // `inc a`, a 65C02 opcode ca65 --cpu 6502 refuses (x16basic-c: seven sites)
+    let ir = module(
+        "@n = global i16 255\n\
+         define i8 @g() {\n\
+         \x20 %x = load volatile i16, ptr @n\n  %y = add i16 %x, 1\n\
+         \x20 %h = lshr i16 %y, 8\n  %r = trunc i16 %h to i8\n  ret i8 %r\n}",
+    );
+    for level in [Level::O2, Level::Os] {
+        let text = assembly(&ir, &Request::new(level)).unwrap_or_else(|e| panic!("{e}"));
+        assert!(!text.contains("inc a") && !text.contains("dec a"), "{text}");
+        assert_eq!(exit_code_of(&text, "g"), 1, "{text}");
+    }
+}
