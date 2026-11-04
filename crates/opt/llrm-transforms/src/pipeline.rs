@@ -1071,11 +1071,33 @@ pub(crate) fn function_stages(applied: &Applied) -> Vec<Fixed> {
     ]
 }
 
+/// The first value of a defined function that is a vector, where the target
+/// has no vector MIR: "a <4 x i32> value", as isel refuses a type it has no
+/// registers for. The mid-end assumes scalars (`combine_shared::width`).
+pub fn refuse_vectors(program: &Program) -> Result<(), String> {
+    if program.target.has_vector_mir() {
+        return Ok(());
+    }
+    for module in &program.modules {
+        for (_, global, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
+            for at in 0..function.value_count() {
+                let ty = function.value(llrm_mir::module::ValueId(at as u32)).ty;
+                if matches!(module.context.types.get(ty), llrm_mir::types::Type::Vector { .. }) {
+                    let name = global.name.as_deref().unwrap_or("?");
+                    return Err(format!("@{name}: a {} value", module.context.types.display(ty)));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `applied`, with what the pipeline did to each function.
 pub fn recorded(
     program: &mut Program,
     applied: &Applied,
 ) -> Result<Vec<Stage>, String> {
+    refuse_vectors(program)?;
     timed();
     let mut manager = PassManager::default();
     manager.verify_each = llrm_support::debug::verifying();
