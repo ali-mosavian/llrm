@@ -72,3 +72,21 @@ fn a_loop_of_an_odd_known_trip_count_has_no_epilog() {
     let mid_end = String::from_utf8_lossy(&out.stderr);
     assert!(!mid_end.contains(".epil"), "{mid_end}");
 }
+
+/// The late `LoopRotate` (PassBuilderPipelines.cpp#L1621) ran after the unroll,
+/// where the pin runs it before: the 101-trip loop unrolled by two, its exit
+/// in the first copy, was rotated into a copied first iteration before the
+/// loop (particle -O2: 21 B over the pin).
+#[test]
+fn a_loop_unrolled_with_its_exit_in_the_middle_is_not_rotated_afterwards() {
+    let ir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ir/unroll_odd_trips.ll");
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-wasm-llc"))
+        .args(["-S", "-O2", "-o", "-"])
+        .arg(ir)
+        .output()
+        .expect("llrm-wasm-llc");
+    assert!(out.status.success());
+    let text = String::from_utf8_lossy(&out.stdout);
+    let before_loop = text.split("\tloop").next().expect("a loop");
+    assert!(!before_loop.contains("i32.load16_s"), "a copy of the first iteration before the loop: {text}");
+}
