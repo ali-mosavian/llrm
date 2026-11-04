@@ -132,3 +132,11 @@ fn the_interpreter_refuses_an_fp128_module() {
     let ran = crate::interpret::run(&module, "f", vec![], 100);
     assert!(matches!(ran, Err(crate::interpret::Trap::Unsupported(ref why)) if why.contains("fp128")), "{ran:?}");
 }
+
+/// `mangle` had no arm for fp128 and wrote its display name: the verifier
+/// demanded `llvm.fabs.fp128`, where LLVM's `getMangledTypeStr` says `f128`.
+#[test]
+fn test_an_fp128_intrinsic_is_mangled_f128() {
+    let module = parse::module("declare fp128 @llvm.fabs.f128(fp128)\n").unwrap_or_else(|why| panic!("{why:?}"));
+    assert_eq!(crate::verify::verify(&module), Vec::<String>::new());
+}

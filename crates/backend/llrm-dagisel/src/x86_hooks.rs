@@ -646,10 +646,7 @@ impl<D: AddrDag> X86Predicates<D> for X86Hooks {
         }
         let opcode = dag.opcode(node);
         let bit_scan = matches!(opcode, x86isd::BSF | x86isd::BSR)
-            && !matches!(
-                dag.opcode(dag.operand(node, 0).node),
-                isd::UNDEF | isd::Constant
-            );
+            && !matches!(dag.opcode(dag.operand(node, 0).node), isd::UNDEF | isd::Constant);
         !(matches!(
             opcode,
             isd::TRUNCATE | isd::CopyFromReg | isd::AssertSext | isd::AssertZext | isd::AssertAlign | isd::FREEZE

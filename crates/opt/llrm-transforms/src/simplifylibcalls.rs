@@ -436,8 +436,11 @@ impl FunctionPass for SimplifyLibCalls {
         // One table per module: the target's library, else the pin's defaults
         // for the pointer's width.
         let info = outer.memo::<TargetLibraryInfo>(0, || {
-            let library =
-                outer.program().target.library().unwrap_or_else(|| std::rc::Rc::new(Generic::for_pointer(size_bits)));
+            let library = outer
+                .program()
+                .target
+                .library()
+                .unwrap_or_else(|| std::rc::Rc::new(Generic::for_pointer(size_bits)));
             TargetLibraryInfo::new(&*library)
         });
         let env = Env { globals: &outer.globals, layout: unit.layout };

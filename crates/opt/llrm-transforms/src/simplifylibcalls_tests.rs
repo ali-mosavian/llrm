@@ -22,9 +22,11 @@ fn run(text: &str) -> String {
 /// `printf` call (and a formed `puts` returned `i32`).
 #[test]
 fn test_printf_of_a_plain_string_is_puts_when_int_is_sixteen_bits() {
-    let after = run("@s = private constant [4 x i8] c\"hi\\0A\\00\"\n\
+    let after = run(
+        "@s = private constant [4 x i8] c\"hi\\0A\\00\"\n\
          declare i16 @printf(ptr, ...)\n\
-         define void @f() {\nb0:\n  %r = call i16 (ptr, ...) @printf(ptr @s)\n  ret void\n}\n");
+         define void @f() {\nb0:\n  %r = call i16 (ptr, ...) @printf(ptr @s)\n  ret void\n}\n",
+    );
     assert!(after.contains("@puts"), "{after}");
     assert!(!after.contains("call i16 (ptr, ...) @printf"), "{after}");
 }

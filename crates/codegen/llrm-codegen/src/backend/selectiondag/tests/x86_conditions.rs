@@ -30,15 +30,7 @@ fn lowered(
     DagLegalizer::new(
         dag,
         &tli,
-        &mut X86Lowering {
-            cmov,
-            sse2: false,
-            min_size: false,
-            i16_mul_chains: false,
-            sext_load: false,
-            zext_free: false,
-            profile: None,
-        },
+        &mut X86Lowering { cmov, sse2: false, min_size: false, i16_mul_chains: false, sext_load: false, zext_free: false, profile: None },
     )
     .run()
     .unwrap();
@@ -144,4 +136,14 @@ fn narrow_selects_widen_by_cpu() {
         let root = dag.get_root();
         assert_eq!(dag.opcode(root) == ISD::Truncate, widens, "{vt:?} cmov={cmov}");
     }
+}
+
+/// The pin's `foldBinOpIntoSelect`, `(xor (and x, y), y)` and GE/LE canonicalization ran on every target but x86,
+/// which kept `select (add c, 1)` as an add of a select (bintree C -7 B and -16% clocks at -O2).
+#[test]
+fn x86_runs_the_pin_combines_the_corpus_judged_better() {
+    use super::super::dag_combiner::CombineHooks;
+    let hooks = X86Lowering { cmov: true, sse2: false, min_size: false, i16_mul_chains: false, sext_load: false, zext_free: false, profile: None };
+    assert!(hooks.fold_bin_op_into_select() && hooks.fold_xor_of_and_with_mask() && hooks.canonicalize_ge_le());
+    assert!(!hooks.rebuild_brcond_condition() && !hooks.fold_mul_of_add_with_constant());
 }

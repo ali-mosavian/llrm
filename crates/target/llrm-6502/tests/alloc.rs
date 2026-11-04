@@ -2804,7 +2804,8 @@ done:
 fn a_hot_count_takes_x_from_a_count_held_for_later() {
     let text = compile(TWO_COPIES, "two");
     let first = text.split("two_b2:").nth(1).and_then(|rest| rest.split("two_b1:").next()).expect("loop");
-    assert!(first.contains("  tax\n"), "the first loop's count is not in x:\n{text}");
+    // the count's high byte steps in x (`dex` on a borrow, once `adc #255; tax`)
+    assert!(first.contains("  dex\n"), "the first loop's count is not in x:\n{text}");
 }
 
 /// A byte stored before it is tested against zero is still the byte in `a`,

@@ -198,6 +198,8 @@ impl FunctionPass for LoopIdioms {
 /// that a pair of constants is not made one dword store under `-Os`.
 pub struct Merge {
     pub size: bool,
+    /// Also the wider stores (`mergestores`), not only the memsets.
+    pub widen: bool,
 }
 
 impl FunctionPass for Merge {
@@ -213,7 +215,8 @@ impl FunctionPass for Merge {
         let memset =
             crate::memcpyoptimizer::run_impl(unit.context, unit.layout, unit.function, analyses.outer(), unit.declared);
         let bytes = analyses.outer().target().size_costs();
-        let copies = !llrm_support::env_flag!("LLRM_NO_MERGE_COPIES")
+        let copies = self.widen
+            && !llrm_support::env_flag!("LLRM_NO_MERGE_COPIES")
             && crate::mergestores::merged_copies(
                 unit.context,
                 unit.layout,
@@ -222,14 +225,15 @@ impl FunctionPass for Merge {
                 analyses.outer(),
                 self.size.then(|| (&mut *unit.declared, &bytes)),
             );
-        let constants = crate::mergestores::merged_constants(
-            unit.context,
-            unit.layout,
-            analyses.outer().callees(),
-            unit.function,
-            analyses.outer(),
-            self.size,
-        );
+        let constants = self.widen
+            && crate::mergestores::merged_constants(
+                unit.context,
+                unit.layout,
+                analyses.outer().callees(),
+                unit.function,
+                analyses.outer(),
+                self.size,
+            );
         if constants | memset | copies { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
 }
@@ -778,14 +782,43 @@ fn trip_cost<'a>(
     costs: &OperationCosts,
     size: bool,
 ) -> i64 {
+    trip_total(context, layout, function, callees, blocks, costs, size, true)
+}
+
+/// `trip_cost` in clocks: a jump to the next block is the layout's and runs
+/// nothing, so a trip pays for its one conditional branch (matmul nib -O2: the
+/// row-zeroing nest has two `br`s and one `jne`).
+fn trip_clocks<'a>(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    callees: &Callees,
+    blocks: impl Iterator<Item = &'a BlockId>,
+    costs: &OperationCosts,
+) -> i64 {
+    trip_total(context, layout, function, callees, blocks, costs, true, false)
+}
+
+fn trip_total<'a>(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    callees: &Callees,
+    blocks: impl Iterator<Item = &'a BlockId>,
+    costs: &OperationCosts,
+    size: bool,
+    jumps: bool,
+) -> i64 {
     blocks
         .flat_map(|&block| operations(function, block))
         .filter(|&inst| {
-            !size
-                || !matches!(
-                    function.instruction(inst).opcode,
+            let one = function.instruction(inst);
+            let jump = one.opcode == Opcode::Br && one.operands.len() == 1;
+            (jumps || !jump)
+                && (!size || !matches!(
+                    one.opcode,
                     Opcode::Phi | Opcode::GetElementPtr { .. } | Opcode::ICmp(_)
-                )
+                ))
         })
         .map(|inst| profit::operation(context, layout, function, callees, inst, costs).unwrap_or(costs.add))
         .sum()
@@ -811,7 +844,9 @@ pub(crate) fn variable_copy_pays(
 /// DEVIATE, for `loopidiom`: whether `fills` fills, for the `stores` stores of
 /// the loop over `blocks`, are fewer code bytes than the loop. A loop of one
 /// store is always filled; of several, each fill is a `rep stos` with ES set
-/// around it, and the stores of one object with one value merge into one.
+/// around it, and the stores of one object with one value merge into one. Only
+/// where the target's fill has that segment setup (`fill_segment`); elsewhere
+/// the pin's rule stands and every such loop is filled.
 pub(crate) fn fills_pay(
     context: &Context,
     layout: &DataLayout,
@@ -824,6 +859,7 @@ pub(crate) fn fills_pay(
     kept: i64,
     at_speed: bool,
     clocks: Option<(&OperationCosts, i64, Option<i64>, Option<i64>)>,
+    inline: Option<InlineFills>,
 ) -> bool {
     // `clocks`' last entry is the cells the fill stores in all: a cell is a
     // `stos` of a dword, or the pattern's own cell.
@@ -832,25 +868,60 @@ pub(crate) fn fills_pay(
     if kept > 0 {
         return false;
     }
-    // The table doubles an operation that becomes more than one instruction;
-    // a fill's three immediate loads are 2 to 3 bytes each, not 6: three
-    // quarters of `fill` is its real size (12 to 13 of 18 bytes at m16).
+    // `costs.fill` is the fill as encoded: its loads are the instructions.
     let loop_bytes = trip_cost(context, layout, function, callees, blocks.iter(), costs, true);
     // At speed under a clock price (m16 -O2: 1 clock = 2 B) with the trips
     // known, the bytes are in the price: a fill larger than the loop still pays
     // for the clocks it saves. At -Os, or for unknown trips, the bytes decide.
     let priced = at_speed && clocks.is_some_and(|(_, _, trips, cells)| trips.is_some() && cells.is_some());
-    (stores < 2 || priced || fills_cheaper(loop_bytes, fills, costs.fill))
+    // A small constant fill is stored inline, not as a `rep stos`.
+    let each_fill = inline.filter(|inline| inline.stores() <= inline.max_stores).map_or(costs.fill, |inline| inline.price(costs));
+    (stores < 2 || priced || fills_cheaper(loop_bytes, fills, each_fill))
         && clocks.is_none_or(|(clocks, rate, trips, width)| {
             // The clocks the fill adds against the bytes it saves, as the
             // backend prices a memset's fill against its stores. The loop
             // stays when its extra bytes buy fewer clocks than that.
             let (Some(trips), Some(cells)) = (trips, width) else { return true };
-            let each = trip_cost(context, layout, function, callees, blocks.iter(), clocks, true);
-            let fill = fills * clocks.fill + cells * clocks.fill_cell;
-            let saved = loop_bytes - 3 * fills * costs.fill / 4;
+            let each = trip_clocks(context, layout, function, callees, blocks.iter(), clocks);
+            // At speed the backend stores a small constant fill inline
+            // (`MaxStoresPerMemset`) and uses `rep stos` for the rest.
+            let (fill, fill_bytes) = match inline.filter(|inline| inline.stores() <= inline.max_stores) {
+                Some(inline) => (fills * inline.price(clocks), fills * inline.price(costs)),
+                None => (fills * clocks.fill + cells * clocks.fill_cell, fills * costs.fill),
+            };
+            let saved = loop_bytes - fill_bytes;
+            if rate == 0 {
+                // No rate: neither metric may grow.
+                return fill <= trips * each && saved >= 0;
+            }
             clocks_pay(saved, rate, fill, trips * each)
         })
+}
+
+/// A fill the backend may store inline: `bytes` long, and the most stores a
+/// constant memset takes before it is a `rep stos`
+/// (`Tuning::max_stores_per_memset`).
+#[derive(Clone, Copy)]
+pub(crate) struct InlineFills {
+    pub max_stores: i64,
+    pub bytes: i64,
+}
+
+impl InlineFills {
+    /// Its stores: dwords, then a word and a byte for the tail.
+    pub(crate) fn stores(self) -> i64 {
+        self.bytes / 4 + i64::from(self.bytes % 4 >= 2) + self.bytes % 2
+    }
+
+    /// What those stores cost in `prices`: a dword store carries the
+    /// operand-size prefix where the target has one (`fill_is_smaller`).
+    pub(crate) fn price(
+        self,
+        prices: &OperationCosts,
+    ) -> i64 {
+        let dwords = self.bytes / 4;
+        dwords * (prices.store_immediate + prices.prefix) + (self.stores() - dwords) * prices.store_immediate
+    }
 }
 
 /// Whether the `saved` bytes of the fill are worth the clocks it adds over
@@ -864,14 +935,13 @@ fn clocks_pay(
     saved * rate >= (fill - looped) * 1000
 }
 
-/// Whether a loop of `loop_bytes` is more than `fills` fills of `fill` bytes by
-/// the table, three quarters of which is their real size.
+/// Whether a loop of `loop_bytes` is more than `fills` fills of `fill` bytes.
 fn fills_cheaper(
     loop_bytes: i64,
     fills: i64,
     fill: i64,
 ) -> bool {
-    4 * loop_bytes > 3 * fills * fill
+    loop_bytes > fills * fill
 }
 
 /// What a copy of `length` bytes costs: the loads and stores isel expands it to
