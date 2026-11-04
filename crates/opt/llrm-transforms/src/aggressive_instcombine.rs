@@ -37,9 +37,9 @@
 //!     the next `dead` pass's. Owner: w2. Exit: 2026-11-21, expose the helper.
 //! 41. `foldConsecutiveStores` ends a run at any instruction that may read or
 //!     write memory, or throw; the pin asks `BatchAA` whether it touches the
-//!     run's base. The pass `Unit` carries no module globals, so a callee's
-//!     own attributes are not seen either. Sound, merges less. Owner: w2.
-//!     Exit: 2026-11-21, with deviation 38's `AliasQuery`.
+//!     run's base. The pass `Unit` carries no module globals, so a callee's own
+//!     attributes are not seen either. Sound, merges less. Owner: w2. Exit:
+//!     2026-11-21, with deviation 38's `AliasQuery`.
 //!
 //! # Example
 //! The pair above is one `load i16`; see `aggressive_instcombine_tests.rs`.
@@ -496,7 +496,13 @@ fn merge_consecutive_part_stores(
     let at = Position::Before(first.store);
     if first.val_offset != 0 {
         let amount = Operand::Constant(context.int(value_ty, i128::from(first.val_offset)));
-        let shifted = function.create_instruction(Opcode::Binary(BinaryOp::LShr), value_ty, vec![value, amount], Flags::default(), None);
+        let shifted = function.create_instruction(
+            Opcode::Binary(BinaryOp::LShr),
+            value_ty,
+            vec![value, amount],
+            Flags::default(),
+            None,
+        );
         function.insert(shifted, at).expect("a placed instruction");
         value = Operand::Value(function.instruction(shifted).result.expect("a value"));
     }
@@ -507,8 +513,13 @@ fn merge_consecutive_part_stores(
         function.insert(cast, at).expect("a placed instruction");
         value = Operand::Value(function.instruction(cast).result.expect("a value"));
     }
-    let store =
-        function.create_instruction(Opcode::Store { align, volatile: false }, void, vec![value, pointer], Flags::default(), None);
+    let store = function.create_instruction(
+        Opcode::Store { align, volatile: false },
+        void,
+        vec![value, pointer],
+        Flags::default(),
+        None,
+    );
     function.insert(store, at).expect("a placed instruction");
     for part in parts {
         function.erase(part.store).expect("a store nothing reads");
@@ -538,7 +549,8 @@ fn merge_part_stores(
         let ptr_from_first = part.offset - parts[first].offset;
         let val_from_first = i128::from(part.val_offset) - i128::from(parts[first].val_offset);
         if ptr_from_first * 8 != val_from_first || last_end_from_first != val_from_first {
-            changed |= merge_consecutive_part_stores(context, layout, function, &parts[first..at], last_end_from_first as u64);
+            changed |=
+                merge_consecutive_part_stores(context, layout, function, &parts[first..at], last_end_from_first as u64);
             first = at;
             last_end_from_first = i128::from(part.width);
             continue;
