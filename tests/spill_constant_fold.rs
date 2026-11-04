@@ -36,6 +36,28 @@ fn a_spilled_constant_is_one_store_of_the_immediate() {
     assert!(pairs.is_empty(), "{pairs:?}");
 }
 
+/// bench/nbody_fixed at -O2 reloaded each spilled loop-carried sum into one
+/// register and copied it to another (`mov rax, [rsp+96]` + `mov rdx, rax`)
+/// where the pin reloads straight into the register it uses: the fold probe
+/// had no 8-byte register to stand for the copy's other side, so a fold with
+/// a second 64-bit register operand was always refused.
+#[test]
+fn a_reload_goes_straight_into_the_register_the_copy_names() {
+    let text = listing(include_str!("../bench/nbody_fixed/nbody_fixed.c"), "-O2");
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    let pairs: Vec<_> = lines
+        .windows(2)
+        .filter(|pair| {
+            let Some((into, _)) = pair[0].strip_prefix("mov ").and_then(|rest| rest.split_once(", qword ptr [rsp"))
+            else {
+                return false;
+            };
+            pair[1].strip_prefix("mov ").is_some_and(|rest| rest.ends_with(&format!(", {into}")))
+        })
+        .collect();
+    assert!(pairs.is_empty(), "{pairs:?}");
+}
+
 /// A word value defined by a dword zero was folded to `mov dword ptr [rsp], 0`
 /// and reloaded as a qword: the upper half was stack garbage, so the counter
 /// of a 3x8x64 byte-plane init loop ran wild and the program segfaulted
