@@ -185,9 +185,10 @@ pub struct Walk {
 /// DEVIATE REC-1: the recursion a program is given. `-finline-recursive` asks
 /// for gcc's (copies of a function in itself to depth 3, any size); a target
 /// that states bounds (`Tti::recursive_inlining`) takes those by default when
-/// optimizing for speed (-O2 and -O3: gcc inlines no function at -O1) and inlining is on (`-fno-inline-functions` asks for
-/// no copies of a body, a recursive one included). None: the pin's inliner,
-/// which copies no recursive callee (`IsRecursiveCall`).
+/// optimizing for speed (-O2 and -O3: gcc inlines no function at -O1) and
+/// inlining is on (`-fno-inline-functions` asks for no copies of a body, a
+/// recursive one included). None: the pin's inliner, which copies no recursive
+/// callee (`IsRecursiveCall`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Recursion {
     pub depth: usize,
@@ -309,8 +310,10 @@ impl ProgramPass for Walk {
                             .filter(|one| one.self_calls.is_some() && !self.inline.single && recursion.is_some())
                             .filter_map(|one| Some((one.callee?, one.clone())))
                             .collect();
+                        let known = modules[at].cached::<llrm_analysis::manager::GlobalsModRefAnalysis>();
                         let by = crate::inline::Caller {
                             layout: &program.layout,
+                            effects: known.as_deref(),
                             recursive: recursive.contains(&id),
                             self_inlining: None,
                             peeling: !self.inline.single && recursion.is_some(),
@@ -828,7 +831,8 @@ impl SelfInline {
                     ),
                 )
         };
-        let Some(recursion) = Recursion::of(self.flag, self.for_size, self.inlining && self.speed_rate, program.target.tti().as_deref())
+        let Some(recursion) =
+            Recursion::of(self.flag, self.for_size, self.inlining && self.speed_rate, program.target.tti().as_deref())
         else {
             return Ok(());
         };
@@ -875,8 +879,10 @@ impl SelfInline {
                         self_sites: 0,
                     };
                     let available = [(id, itself)].into_iter().collect();
+                    let known = modules[at].cached::<llrm_analysis::manager::GlobalsModRefAnalysis>();
                     let by = crate::inline::Caller {
                         layout: &program.layout,
+                        effects: known.as_deref(),
                         recursive: true,
                         self_inlining: Some(&frequencies),
                         peeling: false,
