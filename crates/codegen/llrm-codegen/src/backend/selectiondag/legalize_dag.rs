@@ -76,6 +76,27 @@ pub trait Hooks {
     ) -> Option<SDValue> {
         None
     }
+
+    /// `makeLibCall` after type legalization, for a result too wide for a
+    /// register: the routine `name` with `args`, its result the parts `rets`
+    /// (the pin's `MERGE_VALUES` operands, in register order); `None` where the
+    /// target cannot make one.
+    fn make_lib_call_parts(
+        &mut self,
+        _dag: &mut SelectionDAG,
+        _name: &'static str,
+        _args: &[SDValue],
+        _rets: &[EVT],
+        _signed: bool,
+    ) -> Option<Vec<SDValue>> {
+        None
+    }
+
+    /// `DataLayout::isLittleEndian`: which half of a split argument or result
+    /// comes first.
+    fn little_endian(&self) -> bool {
+        true
+    }
 }
 
 /// A target with no custom lowering.
@@ -750,6 +771,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             ISD::SAddSat | ISD::UAddSat | ISD::SSubSat | ISD::USubSat => {
                 Some(vec![super::expand_sat::expand_add_sub_sat(self.dag, self.tli, node)])
             }
+            ISD::UAddO | ISD::USubO => Some(super::expand_overflow::expand_uaddsubo(self.dag, self.tli, node)),
+            ISD::UMulO | ISD::SMulO => Some(super::expand_overflow::expand_mulo(self.dag, self.tli, node)),
+            ISD::SAddO | ISD::SSubO => Some(super::expand_overflow::expand_saddsubo(self.dag, self.tli, node)),
             ISD::BuildPair => {
                 // `ExpandNode`: `zext lo | (anyext hi << half)` ([L4318][pin]).
                 //
@@ -783,7 +807,8 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 Some(vec![self.dag.get_node(ISD::Truncate, vt, &[low])])
             }
             ISD::SMulFix | ISD::UMulFix | ISD::SMulFixSat | ISD::UMulFixSat => {
-                super::expand_fixed::expand_fixed_point_mul(self.dag, self.tli, node).map(|result| vec![result])
+                super::expand_fixed::expand_fixed_point_mul(self.dag, self.tli, &mut *self.hooks, node)
+                    .map(|result| vec![result])
             }
             ISD::FShl | ISD::FShr => Some(vec![super::expand_funnel::expand_funnel_shift(self.dag, self.tli, node)]),
             ISD::SShlSat | ISD::UShlSat => Some(vec![super::expand_fixed::expand_shl_sat(self.dag, self.tli, node)]),
@@ -792,7 +817,6 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             ISD::CtLz | ISD::CtLzZeroPoison => self.expand_ctlz(node).map(|result| vec![result]),
             ISD::CtTz | ISD::CtTzZeroPoison => self.expand_cttz(node).map(|result| vec![result]),
             ISD::BSwap => self.expand_bswap(node).map(|result| vec![result]),
-            ISD::CtTzZeroPoison | ISD::CtLzZeroPoison => self.expand_zero_poison_count(node).map(|result| vec![result]),
             ISD::BitReverse => expand_bitreverse(self.dag, node).map(|result| vec![result]),
             // `vaend` has nothing to do; `vacopy` is a load of the source list
             // and a store to the destination.
@@ -1055,22 +1079,6 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             return Some(self.dag.get_node(ISD::Sub, vt, &[width, count]));
         }
         Some(self.dag.get_node(ISD::CtPop, vt, &[mask]))
-    }
-
-    /// `TargetLowering::expandCTTZ` and `expandCTLZ`, the first step: "if the
-    /// non-ZERO_UNDEF version is supported we can use that instead". wasm has
-    /// `ctz` and `clz` (stft_single, stft_fixed stopped the compile at
-    /// `CTTZ_ZERO_UNDEF`).
-    fn expand_zero_poison_count(
-        &mut self,
-        node: SDValue,
-    ) -> Option<SDValue> {
-        let vt = self.dag.value_type(node);
-        let plain = if self.dag.opcode(node) == ISD::CtTzZeroPoison { ISD::CtTz } else { ISD::CtLz };
-        if !self.tli.is_operation_legal_or_custom(plain, vt) {
-            return None;
-        }
-        Some(self.dag.get_node(plain, vt, &[self.dag.operand(node, 0)]))
     }
 
     /// `TargetLowering::expandBSWAP`

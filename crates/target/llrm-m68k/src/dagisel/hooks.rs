@@ -158,8 +158,8 @@ impl<D: AddrDag> Hooks<D> for M68kHooks {
         }
         let mut push = |values: &[SDValue]| results.extend(values.iter().map(|&v| (v, None)));
         match kind {
-            Complex::Ari => addr::select_ari(dag, value).map(|v| push(&[v])).is_some(),
-            Complex::Arid => addr::select_arid(dag, value).map(|v| push(&v)).is_some(),
+            Complex::Ari => addr::select_ari(dag, parent, value).map(|v| push(&[v])).is_some(),
+            Complex::Arid => addr::select_arid(dag, parent, value).map(|v| push(&v)).is_some(),
             Complex::Arii => addr::select_arii(dag, parent, value).map(|v| push(&v)).is_some(),
             Complex::Pcd => addr::select_pcd(dag, value).map(|v| push(&[v])).is_some(),
             Complex::Pci => addr::select_pci(dag, value).map(|v| push(&v)).is_some(),

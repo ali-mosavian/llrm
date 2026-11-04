@@ -2466,15 +2466,18 @@ fn loop_odds(function: &MFunction<Class>) -> llrm_spike_mf::placement::Odds {
 
 /// `labels` with a label for each block the folding added, numbered past the
 /// source's.
-fn labels_with_new_blocks(
+pub fn labels_with_new_blocks(
     labels: &[Vec<String>],
     function: &MFunction<Class>,
 ) -> Vec<Vec<String>> {
     let mut all = labels.to_vec();
+    if let Some(last) = function.blocks.iter().map(|block| block.id as usize).max() {
+        all.resize(all.len().max(last + 1), Vec::new());
+    }
+    // a block made past the source's, whatever order the layout reaches them in
     for block in &function.blocks {
         let id = block.id as usize;
-        if id >= all.len() {
-            all.resize(id + 1, Vec::new());
+        if all[id].is_empty() {
             all[id].push(format!("{}__tm{id}", function.name));
         }
     }

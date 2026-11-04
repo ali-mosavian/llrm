@@ -1143,7 +1143,7 @@ mod tests {
     use crate::model::lir::Insn;
 
     fn held(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 4 })
+        Loc::Held(Held { value, width: 4, offset: 0 })
     }
 
     fn cell(offset: i64) -> Loc {
@@ -1313,6 +1313,19 @@ mod tests {
     fn test_regions_are_the_runs_between_boundaries() {
         let mut insns = body();
         insns.insert(2, insn(9, semantics(Operation::Call, "call", vec![], vec![]), vec![], vec![]));
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
+        assert_eq!(regions(&insns, regs, 16), vec![0..2, 3..5]);
+    }
+
+    /// `modifies_stack_pointer`: `add sp, 4` is neither a push, a pop nor a
+    /// call, and `_lanes` leaves SP out of the lanes it orders by, so the two
+    /// loads around it were one region and could swap across the write.
+    #[test]
+    fn test_a_write_of_the_stack_pointer_that_is_not_a_push_or_pop_ends_a_region() {
+        let mut insns = body();
+        let sp = Loc::Reg(llrm_lir::Reg { register: llrm_lir::registers::RegId::SP, width: 2 });
+        let imm = Loc::Imm(crate::model::ir::Imm { value: 4, width: 2, address: None });
+        insns.insert(2, insn(9, semantics(Operation::Binary, "add", vec![sp.clone()], vec![sp, imm]), vec![], vec![]));
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
         assert_eq!(regions(&insns, regs, 16), vec![0..2, 3..5]);
     }
@@ -1565,7 +1578,7 @@ mod tests {
     fn test_an_x87_compare_is_ordered_before_a_flag_reader() {
         use super::x87_compare;
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        let wide = |value: u32| Loc::Held(crate::model::ir::Held { value, width: 10 });
+        let wide = |value: u32| Loc::Held(crate::model::ir::Held { value, width: 10, offset: 0 });
         let insns = vec![
             insn(0, semantics(Operation::Compare, "fcom", vec![], vec![wide(1), wide(2)]), vec![], vec![1, 2]),
             insn(1, semantics(Operation::Binary, "adc", vec![held(3)], vec![held(3), held(4)]), vec![3], vec![3, 4]),
@@ -1596,8 +1609,8 @@ mod tests {
     /// > 2.5).
     #[test]
     fn test_a_set_stays_after_the_float_compare_it_reads() {
-        let float = |value: u32| Loc::Held(crate::model::ir::Held { value, width: 10 });
-        let byte = Loc::Held(crate::model::ir::Held { value: 3, width: 1 });
+        let float = |value: u32| Loc::Held(crate::model::ir::Held { value, width: 10, offset: 0 });
+        let byte = Loc::Held(crate::model::ir::Held { value: 3, width: 1, offset: 0 });
         let insns = vec![
             insn(0, semantics(Operation::Compare, "fcom", vec![], vec![float(1), float(2)]), vec![], vec![1, 2]),
             insn(1, semantics(Operation::Unary, "seta", vec![byte], vec![]), vec![3], vec![]),
@@ -1624,7 +1637,7 @@ mod tests {
         assert!(!shift_effect.writes.is_disjoint(&flags), "the shl writes the flags");
         let g = graph(&[compare.clone(), shift, carry], regs, 32);
         assert!(g.preds[2].contains(&1), "adc stays after the shl: {g:?}");
-        let wide = |value: u32| Loc::Held(crate::model::ir::Held { value, width: 10 });
+        let wide = |value: u32| Loc::Held(crate::model::ir::Held { value, width: 10, offset: 0 });
         let fcmov = insn(1, semantics(Operation::Move, "fcmove", vec![wide(7)], vec![wide(8)]), vec![7], vec![7, 8]);
         // Either its effect is unknown (a boundary) or it reads the flags the
         // compare set.

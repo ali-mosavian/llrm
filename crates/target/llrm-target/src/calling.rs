@@ -124,6 +124,10 @@ pub struct Convention {
     /// addressed through the stack pointer, and the frame register is not
     /// set. gcc's `-fomit-frame-pointer`.
     pub frame_optional: bool,
+    /// The registers a function keeps are pushed before the space for its
+    /// locals whether or not it calls (`X86FrameLowering` on x86-64); left
+    /// false where a frame with no call keeps them after.
+    pub frame_saved_first: bool,
     /// A frame tuned for size is opened with `enter N,0` (4 bytes against 6).
     /// Left false where the target prices it above `push bp; mov bp,sp; sub
     /// sp,N`: the 486 takes 14 clocks against 3 (Intel 240440-002), and neither
@@ -239,6 +243,7 @@ const KEYS: &[&str] = &[
     "first_argument_offset_far",
     "frame",
     "frame_optional",
+    "frame_saved_first",
     "frame_enter",
     "frame_wrap_split_size",
     "frame_slot_push",
@@ -676,6 +681,7 @@ impl Convention {
                 .transpose()?,
             frame: text("frame")?,
             frame_optional: flag("frame_optional")?,
+            frame_saved_first: flag("frame_saved_first")?,
             frame_enter: flag("frame_enter")?,
             frame_wrap_split_size: flag("frame_wrap_split_size")?,
             frame_slot_scratch: table

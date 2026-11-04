@@ -27,7 +27,7 @@ const MAX_DATA_FLOW_EDGE: usize = 10;
 
 pub(crate) struct Facts {
     /// Registers live out of each block.
-    live_out: Vec<Vec<bool>>,
+    live_out: Vec<Vec<u64>>,
     /// Every definition of a register: `(block, instruction)`.
     defs: HashMap<u32, Vec<(usize, usize)>>,
 }
@@ -48,35 +48,37 @@ impl Facts {
     pub(crate) fn of<C>(function: &MFunction<C>) -> Facts {
         let count = function.classes.len();
         let blocks = function.blocks.len();
+        let words = count.div_ceil(64);
         let succs = successors(function);
-        let mut gen_ = vec![vec![false; count]; blocks];
-        let mut kill = vec![vec![false; count]; blocks];
+        let mut gen_ = vec![vec![0u64; words]; blocks];
+        let mut kill = vec![vec![0u64; words]; blocks];
         let mut defs: HashMap<u32, Vec<(usize, usize)>> = HashMap::default();
+        let bit = |set: &[u64], r: u32| set[r as usize / 64] >> (r % 64) & 1 != 0;
         for (b, block) in function.blocks.iter().enumerate() {
             for (i, inst) in block.insts.iter().enumerate() {
                 for u in uses(inst) {
-                    if !kill[b][u as usize] {
-                        gen_[b][u as usize] = true;
+                    if !bit(&kill[b], u) {
+                        gen_[b][u as usize / 64] |= 1 << (u % 64);
                     }
                 }
                 for d in defines(inst) {
-                    kill[b][d as usize] = true;
+                    kill[b][d as usize / 64] |= 1 << (d % 64);
                     defs.entry(d).or_default().push((b, i));
                 }
             }
         }
-        let mut live_in = vec![vec![false; count]; blocks];
-        let mut live_out = vec![vec![false; count]; blocks];
+        let mut live_in = vec![vec![0u64; words]; blocks];
+        let mut live_out = vec![vec![0u64; words]; blocks];
         let mut changed = true;
         while changed {
             changed = false;
             for b in (0..blocks).rev() {
-                for r in 0..count {
-                    let out = succs[b].iter().any(|&s| live_in[s][r]);
-                    let input = gen_[b][r] || (out && !kill[b][r]);
-                    if out != live_out[b][r] || input != live_in[b][r] {
-                        live_out[b][r] = out;
-                        live_in[b][r] = input;
+                for w in 0..words {
+                    let out = succs[b].iter().fold(0, |acc, &s| acc | live_in[s][w]);
+                    let input = gen_[b][w] | (out & !kill[b][w]);
+                    if out != live_out[b][w] || input != live_in[b][w] {
+                        live_out[b][w] = out;
+                        live_in[b][w] = input;
                         changed = true;
                     }
                 }
@@ -97,7 +99,7 @@ impl Facts {
         let rest = &function.blocks[b].insts[at + 1..];
         let read_later = rest.iter().any(|inst| uses(inst).any(|u| u == reg));
         let redefined = rest.iter().any(|inst| defines(inst).any(|d| d == reg));
-        !read_later && (redefined || !self.live_out[b][reg as usize])
+        !read_later && (redefined || self.live_out[b][reg as usize / 64] >> (reg % 64) & 1 == 0)
     }
 
     /// `isKilled`: looks through copies, since a copy of a register that lives

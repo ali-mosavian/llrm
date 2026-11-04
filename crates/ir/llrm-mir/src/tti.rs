@@ -354,6 +354,22 @@ pub trait Tti {
         false
     }
 
+    /// What a byte of growth is worth, in thousandths of a clock, to a speed
+    /// caller's inline (D11 at speed): the growth is refused when it costs
+    /// more than the call's latency saves, weighted by the site's frequency.
+    /// 0: the pin's threshold alone.
+    fn speed_inline_milliclocks_per_byte(&self) -> i64 {
+        0
+    }
+
+    /// Whether a size build's loop rotation copies a header only when the copy
+    /// is no bigger than the branches the rotation removes: the loop-closing
+    /// jump and the header's own exit test, in `CodeSize`. False: the pass's
+    /// header limit alone.
+    fn rotation_header_priced_at_size(&self) -> bool {
+        false
+    }
+
     /// The fewest calls a callee has in the module for the bound above to hold
     /// its sites (a callee called once is the pin's: the copy
     /// meets constants the cost model follows, and folds with the sites around
@@ -841,6 +857,12 @@ pub trait Tti {
     /// `getNumberOfRegisters` of the general-purpose class.
     fn number_of_gpr_registers(&self) -> u32 {
         8
+    }
+
+    /// The registers LSR keeps back from `number_of_gpr_registers` when it
+    /// also counts what the loop keeps live (DEVIATE LU3c); the pin's one.
+    fn lsr_reserved_registers(&self) -> u32 {
+        1
     }
 
     /// Whether a stack slot's address is a displacement off the frame register

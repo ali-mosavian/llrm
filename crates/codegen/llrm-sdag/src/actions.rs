@@ -40,6 +40,7 @@
 use llrm_support::hash::HashMap;
 
 use super::isd::{CondCode, ISD};
+use super::libcalls::{self, Libcall};
 use super::lowering::TargetLoweringInfo;
 use super::mvt::{EVT, MVT};
 
@@ -145,6 +146,23 @@ impl TargetLowering {
             libcall_names: HashMap::default(),
             libcall_symbols: HashMap::default(),
             sext_cheaper_i32_i64: false,
+        }
+    }
+
+    /// `RTLIB::ADD_F32` and the rest: compiler-rt's names for the `f32` and
+    /// `f64` arithmetic a soft-float target calls.
+    pub fn set_soft_float_libcall_names(&mut self) {
+        let arithmetic: [(ISD, fn(MVT) -> Libcall); 4] = [
+            (ISD::FAdd, Libcall::Add),
+            (ISD::FSub, Libcall::Sub),
+            (ISD::FMul, Libcall::Mul),
+            (ISD::FDiv, Libcall::Div),
+        ];
+        for (op, call) in arithmetic {
+            for vt in [MVT::F32, MVT::F64] {
+                let name = libcalls::name(call(vt)).expect("the pin names f32 and f64 arithmetic");
+                self.set_libcall_name(op, vt, name);
+            }
         }
     }
 
@@ -498,10 +516,7 @@ impl TargetLowering {
         t.set_ops(&[Select, SetCC, FpExtend], &[MVT::F32, MVT::F64], Action::Expand);
         t.set_ops(&[FpToSInt, FpToUInt, SIntToFp, UIntToFp], &[MVT::I8, MVT::I16, MVT::I32, MVT::I64], Action::Expand);
         // `RTLIB::ADD_F32` and the rest: compiler-rt's names.
-        for (op, stem) in [(FAdd, "add"), (FSub, "sub"), (FMul, "mul"), (FDiv, "div")] {
-            t.set_libcall_name(op, MVT::F32, Box::leak(format!("__{stem}sf3").into_boxed_str()));
-            t.set_libcall_name(op, MVT::F64, Box::leak(format!("__{stem}df3").into_boxed_str()));
-        }
+        t.set_soft_float_libcall_names();
         t
     }
 

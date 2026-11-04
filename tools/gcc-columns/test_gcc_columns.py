@@ -55,3 +55,60 @@ def test_noivopts_flag_only_at_os():
     assert B.level_flags("Os", True) == ["-Os", "-fno-ivopts"]
     assert B.level_flags("O2", True) == ["-O2"]
     assert B.level_flags("Os", False) == ["-Os"]
+
+
+def test_sf_z80_harness_sources_exist():
+    """build.sh read runtime/softfloat/src/sf32.c after a286a52c00 moved it to compiler-rt: the harness died with
+    'No such file' on release/next and every softfloat gcc cell was unmeasurable."""
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
+    d = os.path.join(root, "tools", "gcc-columns", "sf-z80")
+    for n in ("build.sh", "run.sh"):
+        for rel in re.findall(r"\.\./\.\./\.\./(runtime/[A-Za-z0-9_/.-]+)", open(os.path.join(d, n)).read()):
+            assert os.path.exists(os.path.join(root, rel)), f"{n}: {rel} does not exist"
+    names = re.search(r'F="([^"]+)"', open(os.path.join(d, "build.sh")).read()).group(1).split()
+    for f in names:
+        assert os.path.exists(os.path.join(root, "runtime/compiler-rt/lib/fp/f32", f + ".c")), f
+
+
+def test_z80_16bit_result_is_charged_the_de_store():
+    """gcc's driver stored a 16-bit result with ld (nn),hl (16 T), the DE columns with ld (nn),de (20 T): every 16-bit gcc
+    cell was 4 T optimistic (add16 read 78, by hand 82). 16-bit = ex de,hl 4 T + store 4 T; 8-bit in A for both."""
+    assert Z.result_charge(Z.U16) == (1, 8, 1)
+    assert Z.result_charge("int") == (1, 8, 1)
+    assert Z.result_charge(Z.U8) == (0, 0, 0)
+
+
+def test_z80_table_header_names_the_single_tu_ice():
+    """The shipped z80 cc1 ICEs on a single-TU softfloat build at -O2; the table says so, so no gcc cell is added for such a build."""
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tables", "z80-gcc.tsv")
+    assert "single-translation-unit softfloat build" in open(root).readline()
+
+
+def test_a_hung_fork_call_is_a_failed_call_not_a_cell():
+    """compiler-rt f64/mul.c O1 hangs the native-long cc1 (>300 s): every cc1/tool call of both benches runs under a timeout and a timeout
+    returns 124, which the benches count as a failed compile (n/a); a missing or zero-byte cell would read as a number."""
+    import time
+    import gcc_6502_bench as B6
+    os.environ["GCC_COLUMNS_TIMEOUT"] = "1"
+    try:
+        for mod in (Z, B6):
+            mod.TIMEOUT = 1
+            t0 = time.time()
+            p = mod.sh(["sleep", "5"], ".")
+            assert p.returncode == 124 and time.time() - t0 < 4, (mod.__name__, p.returncode)
+    finally:
+        del os.environ["GCC_COLUMNS_TIMEOUT"]
+        Z.TIMEOUT = B6.TIMEOUT = 120
+
+
+def test_host_check_catches_a_wrong_expect():
+    """The kernel expects were hand-derived; host_check must flag one that is off by one, and pass the shipped list."""
+    import host_check as H
+    assert H.main() == 0
+    saved = Z.K[:]
+    try:
+        n, r, a, w = Z.K[-1]
+        Z.K[-1] = (n, r, a, w + 1)
+        assert H.main() == 1
+    finally:
+        Z.K[:] = saved

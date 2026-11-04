@@ -54,6 +54,9 @@ pub struct AddressMode {
     index_reg: Option<SDValue>,
     symbol: Option<Symbol>,
     symbol_flags: u8,
+    /// A `WrapperPC` is a register value (`lea`), not a PC base; see
+    /// [`match_register_address`].
+    pc_as_register: bool,
 }
 
 /// The pointer type: `MVT::i32` (the `TLI->getPointerTy`).
@@ -70,6 +73,7 @@ impl AddressMode {
             index_reg: None,
             symbol: None,
             symbol_flags: 0,
+            pc_as_register: false,
         }
     }
 
@@ -276,7 +280,7 @@ fn match_address_recursively<D: AddrDag>(
         if dag.constant(n).is_some_and(|value| fold_offset_into_address(value, am)) {
             return true;
         }
-    } else if opcode == m68k_isd::Wrapper || opcode == m68k_isd::WrapperPC {
+    } else if opcode == m68k_isd::Wrapper || (opcode == m68k_isd::WrapperPC && !am.pc_as_register) {
         if match_wrapper(dag, n, am) {
             return true;
         }
@@ -313,6 +317,38 @@ fn match_address<D: AddrDag>(
     am: &mut AddressMode,
 ) -> bool {
     match_address_recursively(dag, n, am, 0)
+}
+
+fn writes_memory<D: AddrDag>(
+    dag: &D,
+    parent: u32,
+) -> bool {
+    [isd::STORE, isd::ATOMIC_STORE, generic::ATOMIC_CMP_SWAP].contains(&dag.opcode(parent))
+}
+
+/// `match_address` for a mode that cannot take the PC as its base.
+///
+/// DEVIATE from the pin, whose matcher takes `WrapperPC` as the PC base and
+/// the consumer then rejects it, so `store (add (WrapperPC sym), 4)` has no
+/// pattern (`CannotSelect(Store)`, in the pin's `llc` too). Retried with the
+/// wrapper as a register, selected as `lea (sym,%pc)`. Exit: never; a hole in
+/// the pin.
+fn match_register_address<D: AddrDag>(
+    dag: &mut D,
+    parent: Option<u32>,
+    n: SDValue,
+    am: &mut AddressMode,
+) -> bool {
+    let fresh = *am;
+    if match_address(dag, n, am) && !am.is_pc_relative(dag) {
+        return true;
+    }
+    // A load keeps its PC-relative form (`SelectPCD`); only a write retries.
+    if !parent.is_some_and(|parent| writes_memory(dag, parent)) {
+        return false;
+    }
+    *am = AddressMode { pc_as_register: true, ..fresh };
+    match_address(dag, n, am)
 }
 
 fn i8_imm<D: AddrDag>(
@@ -388,10 +424,11 @@ fn allow_arii_with_zero_disp<D: AddrDag>(
 /// `SelectARI`: `[base]`.
 pub fn select_ari<D: AddrDag>(
     dag: &mut D,
+    parent: Option<u32>,
     n: SDValue,
 ) -> Option<SDValue> {
     let mut am = AddressMode::new(AddrType::Ari);
-    if !match_address(dag, n, &mut am) || am.is_pc_relative(dag) {
+    if !match_register_address(dag, parent, n, &mut am) {
         return None;
     }
     if am.has_index_reg() || am.disp != 0 || am.has_symbolic_displacement() {
@@ -403,10 +440,11 @@ pub fn select_ari<D: AddrDag>(
 /// `SelectARID`: `[disp, base]`.
 pub fn select_arid<D: AddrDag>(
     dag: &mut D,
+    parent: Option<u32>,
     n: SDValue,
 ) -> Option<[SDValue; 2]> {
     let mut am = AddressMode::new(AddrType::Arid);
-    if !match_address(dag, n, &mut am) || am.is_pc_relative(dag) {
+    if !match_register_address(dag, parent, n, &mut am) {
         return None;
     }
     if let Some((disp, base)) = frame_index_address(dag, &am) {
@@ -432,7 +470,7 @@ pub fn select_arii<D: AddrDag>(
     n: SDValue,
 ) -> Option<[SDValue; 3]> {
     let mut am = AddressMode::new(AddrType::Arii);
-    if !match_address(dag, n, &mut am) || am.is_pc_relative(dag) {
+    if !match_register_address(dag, parent, n, &mut am) {
         return None;
     }
     let (base_reg, index_reg) =
