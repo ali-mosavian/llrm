@@ -3,7 +3,11 @@
 #ifdef SF_CMP_SPLIT
 #define SF_STR_(x) #x
 #define SF_STR(x) SF_STR_(x)
-#define SF_CMP_ALIAS(target) __attribute__((alias(SF_STR(target))))
+/* The alias string is the target's mangled name: a regcall-default target (x86 m16) mangles to __regcall3__<name>, SF_ALIAS_PREFIX. */
+#ifndef SF_ALIAS_PREFIX
+#define SF_ALIAS_PREFIX ""
+#endif
+#define SF_CMP_ALIAS(target) __attribute__((alias(SF_ALIAS_PREFIX SF_STR(target))))
 #endif
 #if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_CMP)
 static int SF_N(sf_cmp_bits)(SF_T a, SF_T b)
