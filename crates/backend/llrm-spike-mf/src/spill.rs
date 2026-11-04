@@ -623,8 +623,8 @@ pub fn share_slots<C: Copy + PartialEq>(
                             (Some((from, false)), Some(Operand::Def(r))) if is_reload(&insts[p]) => Some((from, *r)),
                             _ => None,
                         };
-                        let source = match (i.checked_sub(1).and_then(loaded), insts[i].operands.first()) {
-                            (Some((from, r)), Some(Operand::Use(stored))) if r == *stored => {
+                        let source = match (i.checked_sub(1).and_then(loaded), stored(&insts[i])) {
+                            (Some((from, r)), Some(stored)) if r == stored => {
                                 if round == 0 {
                                     copies.push((from, slot));
                                 }
@@ -718,11 +718,22 @@ pub fn share_slots<C: Copy + PartialEq>(
     }
 }
 
-/// Whether `inst` only loads a slot into a register: `[Def(register),
-/// Frame(slot), ..]`. A read of the slot folded into another instruction (`ora
-/// slot`) is not one, and neither it nor the store of its result is a copy.
+/// The register a store to a slot writes: its one `Use` (m68k's store is
+/// `[Imm(0), Frame(slot), Use(register)]`, z80's `[Frame(slot),
+/// Use(register)]`).
+fn stored(inst: &Inst) -> Option<Reg> {
+    inst.operands.iter().find_map(|o| if let Operand::Use(r) = o { Some(*r) } else { None })
+}
+
+/// Whether `inst` only loads a slot into a register: a `Def(register)`, the
+/// `Frame(slot)` and no other operand but a zero offset (`[Def(register),
+/// Frame(slot)]`, or m68k's `[Def(register), Imm(0), Frame(slot)]`). A read of
+/// the slot folded into another instruction (`ora slot`) is not one, and
+/// neither it nor the store of its result is a copy.
 fn is_reload(inst: &Inst) -> bool {
-    matches!(inst.operands.get(1), Some(Operand::Frame(_)))
+    let Some((Operand::Def(_), rest)) = inst.operands.split_first() else { return false };
+    rest.iter().filter(|o| matches!(o, Operand::Frame(_))).count() == 1
+        && rest.iter().all(|o| matches!(o, Operand::Frame(_) | Operand::Imm(0)))
 }
 
 /// A load of a slot followed by a store of the register back to it: the store
@@ -752,10 +763,10 @@ fn drop_self_copies<C>(
                 && is_reload(load)
                 && slot_access(&inst, slots).is_some_and(|(_, stores)| stores)
                 && frame(load) == frame(&inst)
-                && let (Some(Operand::Def(d)), Some(Operand::Use(r))) = (load.operands.first(), inst.operands.first())
-                && d == r
+                && let (Some(Operand::Def(d)), Some(r)) = (load.operands.first(), stored(&inst))
+                && *d == r
             {
-                if mentions[r] == 2 {
+                if mentions[&r] == 2 {
                     out.pop();
                     origin.pop();
                 }
