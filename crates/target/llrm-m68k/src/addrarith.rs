@@ -70,10 +70,7 @@ fn uses_by_register(function: &MFunction) -> Vec<Vec<Use>> {
                     all[*v as usize].push(match (&inst.kind, &inst.operands[..]) {
                         (Kind::Copy, [Operand::Def(Reg::Virt(dst)), _]) => Use::Copy(*dst),
                         (Kind::Op(name), _) if operand_class(name, index) == Some(Class::Ar32) => Use::Address,
-                        // a writeback access names its base last
-                        (Kind::Op(name), operands)
-                            if index + 1 == operands.len() && indexed::printed_as(name).is_some() =>
-                        {
+                        (Kind::Op(name), operands) if indexed::is_base_operand(name, index, operands.len()) => {
                             Use::Address
                         }
                         _ => Use::Other,

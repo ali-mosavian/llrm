@@ -431,9 +431,10 @@ done:
 }";
 
 /// A loop over three byte pointers and a count: the pin's addressing mode is
-/// none, so no pointer is post-incremented. Runs.
+/// none, so no pointer is post-incremented there; ours is `(An)+` (PARITY row
+/// 29). Both run.
 #[test]
-fn a_loop_over_three_pointers_runs_without_post_increment() {
+fn a_loop_over_three_pointers_runs_with_and_without_post_increment() {
     use llrm_m68k::kernels::Arg::{Data, Imm};
     let args = [Data(128), Data(0), Data(0), Imm(5)];
     for options in [Options::default(), Options::PINNED] {
@@ -441,8 +442,9 @@ fn a_loop_over_three_pointers_runs_without_post_increment() {
             assert_eq!(code, 2 * i32::from(b'e'), "{options:?}");
         }
     }
-    let text = text_with(&module(THREE_POINTERS), "k", Cpu::M68000, Options::default()).unwrap();
-    assert!(!text.contains("%a0)+") && !text.contains("%a1)+") && !text.contains("%a2)+"), "{text}");
+    let post = |options| text_with(&module(THREE_POINTERS), "k", Cpu::M68000, options).unwrap().contains(")+");
+    assert!(post(Options::default()), "no (An)+ in ours");
+    assert!(!post(Options::PINNED), "(An)+ in the pin's output");
 }
 
 /// A phi only other phis read had no register and its inputs were dropped
