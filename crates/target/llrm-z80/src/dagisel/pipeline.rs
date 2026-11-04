@@ -10,8 +10,10 @@ use llrm_codegen::backend::registerinfo::RegId;
 use llrm_codegen::backend::selectiondag::dag_combiner::{CombineHooks, CombineLevel, DagCombiner};
 use llrm_codegen::backend::selectiondag::dag_select::do_instruction_selection_with;
 use llrm_codegen::backend::selectiondag::dagisel_adapter::PinRegisters;
+use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
 use llrm_codegen::backend::selectiondag::legalize_dag::DagLegalizer;
 use llrm_codegen::backend::selectiondag::legalize_types::TypeLegalizer;
+use llrm_codegen::backend::selectiondag::live_out;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::schedule::{Preference, SchedInfo, Unit, schedule};
 use llrm_codegen::backend::selectiondag::{SDValue, SelectionDAG};
@@ -169,10 +171,15 @@ impl CombineHooks for Z80Combines {
 pub fn select_block(
     dag: &mut SelectionDAG,
     cpu: Cpu,
+    info: &mut FunctionLoweringInfo,
+    optimize: bool,
 ) -> Result<Vec<Unit>, Refusal> {
     let tli = target_lowering();
     let mut lowering = Z80Lowering;
     let arch = Z80;
+    if optimize {
+        live_out::assert_live_out_copies(dag, info);
+    }
     DagCombiner::new(dag, &mut Z80Combines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
     TypeLegalizer::new(dag, &tli)
         .with_target(&arch)
@@ -182,6 +189,9 @@ pub fn select_block(
     DagCombiner::new(dag, &mut Z80Combines, CombineLevel::AfterLegalizeTypes).with_tli(&tli).run();
     DagLegalizer::new(dag, &tli, &mut lowering).run().map_err(|why| Refusal::Legalize(format!("{why:?}")))?;
     DagCombiner::new(dag, &mut Z80Combines, CombineLevel::AfterLegalizeDag).with_tli(&tli).run();
+    if optimize {
+        live_out::compute_live_out_vreg_info(dag, info);
+    }
 
     let selector = Selector::new(match cpu {
         Cpu::Z80 => z80_z80::TABLE,

@@ -290,11 +290,16 @@ fn a_byte_read_by_an_alu_op_is_read_from_memory() {
 
 /// A loaded byte that is widened went to a byte register and was copied to the
 /// pair's low half (`ld d, (hl)` / `ld e, d` / `ld d, #0`): scmp took a byte
-/// and 4 T-states more per widened load.
+/// and 4 T-states more per widened load. (A word minus the widened byte: with
+/// the byte on both sides it is `SUBZX8`.)
 #[test]
 fn a_widened_load_goes_to_the_pairs_low_half() {
-    let out = text(include_str!("kernels/ir/scmp.ll"), "scmp", 0, &Request::new(Level::O2)).expect("compiles");
-    assert!(out.contains("ld e, (hl)\n\tld d, #0") && !out.contains("ld e, d"), "{out}");
+    let out = compiled(
+        "define i16 @w(ptr %p, i16 %x) {\n  %v = load i8, ptr %p\n  %z = zext i8 %v to i16\n  %r = sub i16 %x, %z\n  ret i16 %r\n}",
+        "w",
+    );
+    let direct = ["ld c, (hl)\n\tld b, #0", "ld e, (hl)\n\tld d, #0"].iter().any(|pair| out.contains(pair));
+    assert!(direct && !out.contains("ld c, b") && !out.contains("ld e, d"), "{out}");
 }
 
 /// `digits` kept its counter across the divide call in a frame slot (`ld
@@ -1212,4 +1217,72 @@ fn a_conditional_branch_to_the_same_return_block_as_the_jump_keeps_that_block() 
     );
     let out = text(&ir, "f", 0, &Request::new(Level::O0)).unwrap_or_else(|why| panic!("{why}"));
     assert!(out.contains("ret"), "{out}");
+}
+
+/// A word that joins a byte and a constant (`*a`, or 0 where the string
+/// ended) was not known to have a zero high byte, so strcmp's `*a - *b` was a
+/// 16-bit `sbc hl, de` with both bytes widened by hand: scmp -O2 took 36 B and
+/// 183 clocks. The difference is `sub a, b` and the borrow as the high byte.
+#[test]
+fn a_difference_of_a_phi_of_bytes_and_a_byte_is_a_byte_subtract_with_the_borrow() {
+    let out = text(include_str!("kernels/ir/scmp.ll"), "scmp", 0, &Request::new(Level::O2)).expect("compiles");
+    assert!(out.contains("sbc a, a") && !out.contains("sbc hl, de"), "{out}");
+}
+
+/// switch.ll's two functions took 8 full allocations each (the return block
+/// copied or kept, constants hoisted or not, the argument copies joined or
+/// not): 16 greedy runs, 51% of a 1.3 G-instruction compile. Copied and kept
+/// gave the same code on all 60 kernel cells; only the copied one is made.
+/// lz4 -O2 took 16 runs. Each of the two schedulers (`Source`, `ILP`) makes
+/// its own: 16.
+#[test]
+fn a_function_is_allocated_at_most_eight_times_per_scheduler() {
+    let ir = include_str!("kernels/ir/lz4.ll");
+    llrm_z80::compile::take_allocations();
+    text(ir, "lz4", 0, &Request::new(Level::O2)).expect("compiles");
+    let runs = llrm_z80::compile::take_allocations();
+    assert!(runs <= 16, "lz4 -O2 was allocated {runs} times");
+}
+
+fn many(
+    count: usize,
+    constant: u32,
+) -> String {
+    let mut ir = format!("target datalayout = \"{DATALAYOUT}\"\n");
+    for i in 0..count {
+        ir.push_str(&format!(
+            "define i16 @f{i}(i16 %a) {{\n  %r = add i16 %a, {}\n  ret i16 %r\n}}\n",
+            constant + i as u32
+        ));
+    }
+    ir
+}
+
+/// Every function of a module ran the whole mid-end and the selection of every
+/// function again, twice (the return block copied and kept): a module of N
+/// functions cost N squared (switch.ll 1.29 G instructions, 4.75x the x86
+/// reference). The module is selected once however many functions it has.
+#[test]
+fn a_module_is_run_through_the_mid_end_once_however_many_functions_it_has() {
+    for count in [3, 30] {
+        let ir = many(count, 1);
+        llrm_z80::compile::take_selection_runs();
+        for i in 0..count {
+            text(&ir, &format!("f{i}"), i, &Request::new(Level::O2)).expect("compiles");
+        }
+        assert_eq!(llrm_z80::compile::take_selection_runs(), 1, "{count} functions");
+    }
+}
+
+/// The module kept for the next function is the module asked for: two modules
+/// that name a function alike, compiled one after the other, give their own
+/// code.
+#[test]
+fn two_modules_compiled_in_turn_do_not_share_the_cache() {
+    let (one, other) = (many(2, 1000), many(2, 2000));
+    let first = text(&one, "f0", 0, &Request::new(Level::O2)).expect("compiles");
+    let second = text(&other, "f0", 0, &Request::new(Level::O2)).expect("compiles");
+    assert!(first.contains("#1000") && second.contains("#2000"), "{first}\n{second}");
+    let again = text(&one, "f0", 0, &Request::new(Level::O2)).expect("compiles");
+    assert_eq!(first, again);
 }

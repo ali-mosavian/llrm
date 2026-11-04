@@ -1,4 +1,5 @@
 # softfloat on 6502, gcc (spike backends, fork spike/backends f3313ec28, gcc 17.0.0 master d77bceec) vs hand asm, 2026-11-03, cc1 md5 4c91eb80d199e61465970fc620d1b8ea, sim65 as in 6502-gcc.tsv, 256 vectors of tests/asm6502/gen.py, clk = (run - empty stub)/256, bytes = CODE+RODATA of the ld65-linked members; gcc bytes: group = all members the ops pull in (sf32: arith / conv files; sf32_6502: one file); hand bytes: per .s file; every cell 0 fails
+# STALE 2026-11-04: measured from runtime/softfloat/src (the monolithic sf32.c), which a286a52c00 moved into runtime/compiler-rt (one file per operation); re-measure on compiler-rt due 2026-11-06
 compiler	variant	level	metric	item	value
 hand	-	-	clk	add	570
 hand	-	-	clk	sub	593

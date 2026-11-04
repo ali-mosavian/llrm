@@ -9,7 +9,7 @@ use llrm_mir::program::Program;
 use llrm_target::Target;
 use llrm_transforms::pipeline::{Applied, Options};
 
-use crate::dagisel::function::{Selection, select_function};
+use crate::dagisel::function::{Selection, select_function_with};
 use crate::dagisel::hooks::Cpu;
 use crate::target::Z80;
 
@@ -124,6 +124,15 @@ pub fn selections(
     text: &str,
     request: &Request,
 ) -> Result<Vec<(String, Result<Selection, String>)>, String> {
+    Ok(selections_both(text, request)?.into_iter().map(|(name, source, _)| (name, source)).collect())
+}
+
+/// [`selections`] with the DAG scheduled by `Source` and again by `ILP`
+/// (DEVIATE Z80S1, in `dagisel/pipeline.rs`): the mid-end runs once.
+pub fn selections_both(
+    text: &str,
+    request: &Request,
+) -> Result<Vec<(String, Result<Selection, String>, Result<Selection, String>)>, String> {
     let mut program = program(text, request)?;
     program.modules.iter_mut().for_each(crate::prepare::split_phi_edges);
     let module = &program.modules[0];
@@ -136,8 +145,14 @@ pub fn selections(
     Ok(names
         .into_iter()
         .map(|name| {
-            let selected = select_function(module, &name, request.cpu);
-            (name, selected)
+            let select = |ilp: bool| {
+                crate::dagisel::pipeline::ILP.with(|one| one.set(ilp));
+                let one = select_function_with(module, &name, request.cpu, request.level != Level::O0);
+                crate::dagisel::pipeline::ILP.with(|one| one.set(false));
+                one
+            };
+            let (source, ilp) = (select(false), select(true));
+            (name, source, ilp)
         })
         .collect())
 }
@@ -251,7 +266,9 @@ pub fn adb(
         let size = 2;
         out.push_str(&format!("F:G${}$0_0$0({{{size}}}DF,{result}),C,0,0,0,0,0\n", one.function));
         out.push_str(&format!("S:G${}$0_0$0({{{size}}}DF,{result}),C,0,0\n", one.function));
-        let Ok(selection) = select_function(module, &one.function, request.cpu) else { continue };
+        let Ok(selection) = select_function_with(module, &one.function, request.cpu, request.level != Level::O0) else {
+            continue;
+        };
         // Frame objects sit below IX, the locals first (`expand::layout`).
         let mut below = 0;
         let ends: Vec<i64> = selection
