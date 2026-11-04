@@ -1396,11 +1396,41 @@ fn try_to_unroll_loop(
         why(run, lp, "partial/runtime unroll in FullLoopUnroll");
         return Unrolled::Unmodified;
     }
-    // Runtime unrolling (the remainder loop) is not here yet.
+    // Runtime unrolling: the epilog remainder first (`UnrollLoop`), then the
+    // loop, made again, is copied out `count` times.
+    let mut remade = None;
     if run.options.target_unrolling && !partial && (trip_count == 0 || count < trip_count) {
-        why(run, lp, "runtime unroll is not translated");
-        return Unrolled::Unmodified;
+        if trip_multiple % count != 0 {
+            let expansion = llrm_analysis::scev::expand_cost::MachineCosts {
+                tti: run.outer.target().tti(),
+                minimum_size: false,
+            };
+            let mut session = llrm_analysis::scev::analysis::ScevSession::of(run.context, run.function, run.outer);
+            let mut env = crate::loopunrollruntime::Env {
+                context: &mut *run.context,
+                layout: run.layout,
+                function: &mut *run.function,
+                declared: &mut *run.declared,
+                outer: run.outer,
+                tti: &expansion,
+            };
+            let done =
+                crate::loopunrollruntime::unroll_runtime_loop_remainder(&mut env, &mut session, header, count, false);
+            let Some(epilog) = done else {
+                why(run, lp, "the remainder loop could not be generated");
+                return Unrolled::Unmodified;
+            };
+            run.scev = ScalarEvolution::new();
+            if up.unroll_remainder && let Some(epilog) = epilog {
+                crate::loopunrollandjam::unroll_remainder_loop(run, epilog, count - 1);
+            }
+        }
+        remade = Some(Analyzed::of(run));
     }
+    let (analyzed, lp) = match &remade {
+        Some(analyzed) => (analyzed, analyzed.loops.get_loop_for(header).expect("the loop is still headed by its block")),
+        None => (analyzed, lp),
+    };
 
     why(
         run,

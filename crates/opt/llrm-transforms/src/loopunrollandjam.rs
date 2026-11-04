@@ -667,7 +667,7 @@ fn update_phi_blocks_and_values(
 /// the epilog loop, which runs at most `count` times, copied out where its
 /// maximum trip count is `count` (the complete unroll; a partial one is not
 /// translated: nothing then is done).
-fn unroll_remainder_loop(
+pub(crate) fn unroll_remainder_loop(
     run: &mut Run,
     epilog_header: BlockId,
     count: u32,
