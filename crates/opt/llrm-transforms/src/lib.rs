@@ -313,6 +313,7 @@ mod memloops_tests;
 pub mod memsetpattern;
 #[cfg(test)]
 mod memsetpattern_tests;
+pub mod mergeicmps;
 pub mod mergestores;
 mod mirror;
 pub mod mldstmotion;

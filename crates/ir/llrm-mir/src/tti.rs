@@ -628,6 +628,18 @@ pub trait Tti {
         false
     }
 
+    /// `enableMemCmpExpansion(OptSize, IsZeroCmp)` is set: whether the target
+    /// expands `memcmp` into loads (the options' `LoadSizes` are not empty).
+    /// The base class has none.
+    fn enable_mem_cmp_expansion(
+        &self,
+        opt_size: bool,
+        is_zero_cmp: bool,
+    ) -> bool {
+        let _ = (opt_size, is_zero_cmp);
+        false
+    }
+
     /// `isLegalAddressingMode`: `base_gv + base_offset + base_reg + scale *
     /// index`.
     fn is_legal_addressing_mode(

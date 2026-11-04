@@ -639,6 +639,15 @@ impl Tti for X86 {
     // `isOperationLegal(SDIVREM/UDIVREM, VT)`; X86ISelLowering sets the scalar
     // divides to `Expand` (L340) and leaves the two-result ones at the base
     // class's `Legal`, so every register type has one.
+    // X86TTIImpl::enableMemCmpExpansion always lists the 4, 2 and 1 byte loads.
+    fn enable_mem_cmp_expansion(
+        &self,
+        _opt_size: bool,
+        _is_zero_cmp: bool,
+    ) -> bool {
+        true
+    }
+
     fn has_div_rem_op(
         &self,
         bits: u32,
