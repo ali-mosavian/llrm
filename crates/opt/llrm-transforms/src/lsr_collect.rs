@@ -1048,7 +1048,7 @@ pub fn loop_register_units(
 ) -> u32 {
     let Some(lp) = cx.loops.get_loop_for(l) else { return 0 };
     let word = tti.gpr_bits();
-    let mut weights: HashMap<llrm_mir::module::ValueId, usize> = HashMap::default();
+    let mut weights: llrm_mir::dense::IdMap<llrm_mir::module::ValueId, usize> = llrm_mir::dense::IdMap::new();
     for &block in lp.get_blocks() {
         for inst in cx.function.iter_block(block) {
             let Some(result) = cx.function.instruction(inst).result else { continue };
@@ -1076,21 +1076,23 @@ pub fn loop_register_units(
     let made = llrm_analysis::liveness::pressure_weighted_made_in(cx.function, &blocks, &|one| {
         weights.get(&one).copied().unwrap_or(0)
     }) as u32;
-    // DEVIATE LU3c: the values that live across this loop without being read
-    // in it (the enclosing loop's, or the function's parameters and entry
-    // block) hold registers too, or spill on every trip of the outer loop
-    // (nibbles -Os).
-    let scope: Vec<BlockId> = match lp.get_parent_loop() {
-        Some(outer) => outer.get_blocks().iter().copied().filter(|&block| !lp.contains(block)).collect(),
-        None => cx.function.entry().into_iter().collect(),
-    };
-    let mut through: HashMap<llrm_mir::module::ValueId, usize> = HashMap::default();
-    let defined = scope
-        .iter()
-        .flat_map(|&block| cx.function.iter_block(block))
-        .filter_map(|inst| cx.function.instruction(inst).result)
-        .chain(if lp.get_parent_loop().is_none() { cx.function.parameters().to_vec() } else { Vec::new() });
-    for result in defined {
+    // DEVIATE LU3c: the enclosing loop's carried values (its header phis) that
+    // live across this loop hold registers too, or spill on every trip of the
+    // outer loop (nibbles -Os). A top-level loop has none.
+    let Some(outer) = lp.get_parent_loop() else { return made };
+    let outer_header = outer.get_header();
+    let mut through: llrm_mir::dense::IdMap<llrm_mir::module::ValueId, usize> = llrm_mir::dense::IdMap::new();
+    let carried = cx.function.iter_block(outer_header).take_while(|&inst| cx.function.instruction(inst).opcode == Opcode::Phi);
+    for result in carried.filter_map(|inst| cx.function.instruction(inst).result) {
+        // Only a value read past this loop can live across it.
+        let read_beyond = cx
+            .function
+            .users(result)
+            .into_iter()
+            .any(|user| cx.function.parent(user.user).is_some_and(|block| !lp.contains(block)));
+        if !read_beyond {
+            continue;
+        }
         let value = Operand::Value(result);
         if !se.is_value_scevable(cx, value) {
             continue;
@@ -1102,7 +1104,7 @@ pub fn loop_register_units(
             through.insert(result, bits.div_ceil(word) as usize);
         }
     }
-    let candidates: llrm_mir::dense::IdSet<llrm_mir::module::ValueId> = through.keys().copied().collect();
+    let candidates: llrm_mir::dense::IdSet<llrm_mir::module::ValueId> = through.keys().collect();
     made + llrm_analysis::liveness::live_through_weighted(cx.function, l, &blocks, &candidates, &|one| {
         through.get(&one).copied().unwrap_or(0)
     }) as u32
