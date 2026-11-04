@@ -355,6 +355,14 @@ mod tests {
         assert_eq!(names(&compares_reused(&body)), ["cmp", "jl", "jne"]);
     }
 
+    /// The pass reaches it: `PeepholeOptimizer` removes the repeated compare
+    /// (the other tests call the fold itself).
+    #[test]
+    fn test_the_peephole_optimizer_removes_a_repeated_compare() {
+        let body = body_of(vec![cmp(0, held(1), held(2)), jcc(1, "jl"), cmp(2, held(1), held(2)), jcc(3, "jne")]);
+        assert_eq!(names(&super::super::compared(&body)), ["cmp", "jl", "jne"]);
+    }
+
     /// `cmp a,b ... cmp b,a; jg`: the reader reads the swapped condition.
     #[test]
     fn test_a_swapped_compare_is_the_earlier_one_with_the_condition_swapped() {
