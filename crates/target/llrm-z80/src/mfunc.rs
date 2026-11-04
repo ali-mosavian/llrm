@@ -683,6 +683,12 @@ pub fn emit(
             }
         }
         emitter.function.fixed.extend(one.dag.fixed_offsets.clone());
+        if selection.unreachable.contains(&one.block) {
+            let mut end = Inst::new(Kind::Op("UNREACHABLE"), Vec::new());
+            end.terminator = true;
+            end.barrier = true;
+            insts.push(end);
+        }
         let mut block = Block { id: one.block.0, insts, phis: Vec::new() };
         block.place_unlocated();
         emitter.function.blocks.push(block);
