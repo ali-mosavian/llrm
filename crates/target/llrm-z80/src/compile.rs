@@ -164,7 +164,9 @@ fn allocated_with(
     // the allocator does not see that a byte of a pair is read in place, so a
     // constant kept across a loop can cost more than making it there, or less:
     // the hoisted loop stays unless the plain one is cheaper by the loop's
-    // weighted cost
+    // weighted cost. The other choices are explored on both: lz4c -O2 wants
+    // the plain one's (exploring only the better first allocation made it 442
+    // B against 427).
     let (plain, with) = (allocate(function, name, request.level), allocate(hoisted, name, request.level));
     match (plain, with) {
         (Ok(plain), Ok(with)) => match (priced_in_loops(&plain), priced_in_loops(&with)) {
@@ -208,38 +210,73 @@ fn allocate(
     name: &str,
     level: Level,
 ) -> Result<Allocated, String> {
-    let has_loop = !Cfg::new(&function).loops().is_empty();
-    let with = |unjoined: Option<bool>, strict: bool, function: MFunction| {
-        crate::regalloc::UNJOINED.with(|one| one.set(unjoined));
-        let done = allocate_once(function, name, strict, level);
-        crate::regalloc::UNJOINED.with(|one| one.set(None));
-        done
-    };
-    match with(None, true, function.clone()) {
-        Ok((mut best, held)) => {
-            let other_join = Some(!crate::abi::z80().pinned_copies_unjoined);
-            let mut others = Vec::new();
-            if has_loop {
-                others.push((other_join, true));
-            }
-            if held {
-                others.push((None, false));
-                if has_loop {
-                    others.push((other_join, false));
-                }
-            }
-            for (unjoined, strict) in others {
-                let Ok((other, _)) = with(unjoined, strict, function.clone()) else { continue };
-                if let (Some(now), Some(then)) = (priced_in_loops(&best), priced_in_loops(&other)) {
-                    if cheaper(level, then, now) {
-                        best = other;
-                    }
-                }
-            }
-            Ok(best)
-        }
-        Err(first) => with(Some(true), true, function).map(|(done, _)| done).map_err(|_| first),
+    let first = allocate_first(function.clone(), name, level)?;
+    Ok(improved(first, function, name, level))
+}
+
+/// What a first allocation leaves: the allocation, whether `strict` held a
+/// byte back from `a`, and whether the other choices are worth exploring (not
+/// after the fallback).
+type First = (Allocated, bool, bool);
+
+/// The first allocation of `function`; where it fails, once more with the
+/// copies from the argument registers left unjoined.
+fn allocate_first(
+    function: MFunction,
+    name: &str,
+    level: Level,
+) -> Result<First, String> {
+    match allocate_with(None, true, function.clone(), name, level) {
+        Ok((best, held)) => Ok((best, held, true)),
+        Err(first) => allocate_with(Some(true), true, function, name, level)
+            .map(|(done, _)| (done, false, false))
+            .map_err(|_| first),
     }
+}
+
+fn allocate_with(
+    unjoined: Option<bool>,
+    strict: bool,
+    function: MFunction,
+    name: &str,
+    level: Level,
+) -> Result<(Allocated, bool), String> {
+    crate::regalloc::UNJOINED.with(|one| one.set(unjoined));
+    let done = allocate_once(function, name, strict, level);
+    crate::regalloc::UNJOINED.with(|one| one.set(None));
+    done
+}
+
+/// The other choices, allocated too, each stays if it is cheaper than the
+/// best so far: the argument copies joined or not, and a byte wanted both in
+/// `a` and in a register of its own loaded through `a` or through `hl`.
+fn improved(
+    (mut best, held, explore): First,
+    function: MFunction,
+    name: &str,
+    level: Level,
+) -> Allocated {
+    if !explore {
+        return best;
+    }
+    let has_loop = !Cfg::new(&function).loops().is_empty();
+    let other_join = Some(!crate::abi::z80().pinned_copies_unjoined);
+    let mut others = Vec::new();
+    if has_loop {
+        others.push((other_join, true));
+    }
+    if held {
+        others.push((None, false));
+    }
+    for (unjoined, strict) in others {
+        let Ok((other, _)) = allocate_with(unjoined, strict, function.clone(), name, level) else { continue };
+        if let (Some(now), Some(then)) = (priced_in_loops(&best), priced_in_loops(&other)) {
+            if cheaper(level, then, now) {
+                best = other;
+            }
+        }
+    }
+    best
 }
 
 thread_local! {

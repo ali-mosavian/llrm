@@ -1169,14 +1169,16 @@ fn a_difference_of_a_phi_of_bytes_and_a_byte_is_a_byte_subtract_with_the_borrow(
 /// copied or kept, constants hoisted or not, the argument copies joined or
 /// not): 16 greedy runs, 51% of a 1.3 G-instruction compile. Copied and kept
 /// gave the same code on all 60 kernel cells; only the copied one is made.
-/// lz4 -O2 took 16 runs.
+/// lz4 -O2 took 16 runs. The choice of a byte loaded through `a` with the
+/// argument copies unjoined won on no kernel cell and none of the 105 corpus
+/// files: 6 runs.
 #[test]
-fn a_function_is_allocated_at_most_eight_times() {
+fn a_function_is_allocated_at_most_six_times() {
     let ir = include_str!("kernels/ir/lz4.ll");
     llrm_z80::compile::take_allocations();
     text(ir, "lz4", 0, &Request::new(Level::O2)).expect("compiles");
     let runs = llrm_z80::compile::take_allocations();
-    assert!(runs <= 8, "lz4 -O2 was allocated {runs} times");
+    assert!(runs <= 6, "lz4 -O2 was allocated {runs} times");
 }
 
 fn many(
