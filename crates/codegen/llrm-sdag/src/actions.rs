@@ -152,8 +152,12 @@ impl TargetLowering {
     /// `RTLIB::ADD_F32` and the rest: compiler-rt's names for the `f32` and
     /// `f64` arithmetic a soft-float target calls.
     pub fn set_soft_float_libcall_names(&mut self) {
-        let arithmetic: [(ISD, fn(MVT) -> Libcall); 4] =
-            [(ISD::FAdd, Libcall::Add), (ISD::FSub, Libcall::Sub), (ISD::FMul, Libcall::Mul), (ISD::FDiv, Libcall::Div)];
+        let arithmetic: [(ISD, fn(MVT) -> Libcall); 4] = [
+            (ISD::FAdd, Libcall::Add),
+            (ISD::FSub, Libcall::Sub),
+            (ISD::FMul, Libcall::Mul),
+            (ISD::FDiv, Libcall::Div),
+        ];
         for (op, call) in arithmetic {
             for vt in [MVT::F32, MVT::F64] {
                 let name = libcalls::name(call(vt)).expect("the pin names f32 and f64 arithmetic");

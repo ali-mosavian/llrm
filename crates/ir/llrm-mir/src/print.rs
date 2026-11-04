@@ -339,6 +339,7 @@ fn float(
     let value = match kind {
         FloatKind::Double | FloatKind::X86Fp80 => f64::from_bits(bits),
         FloatKind::Float => f64::from(f32::from_bits(bits as u32)),
+        FloatKind::F128 => unreachable!("an fp128 constant is Float128, printed in hex"),
     };
     if value.is_finite() {
         let text = format!("{value:.6e}");
@@ -921,6 +922,7 @@ impl Printer<'_> {
                 _ => unreachable!("a floating constant has a floating type"),
             },
             ConstantKind::Float80(bits) => format!("0xK{bits:020X}"),
+            ConstantKind::Float128(bits) => format!("0xL{:016X}{:016X}", *bits as u64, (*bits >> 64) as u64),
             ConstantKind::Null => "null".to_owned(),
             ConstantKind::Poison => "poison".to_owned(),
             ConstantKind::Undef => "undef".to_owned(),

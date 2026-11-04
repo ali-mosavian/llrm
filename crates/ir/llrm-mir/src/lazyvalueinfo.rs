@@ -2529,7 +2529,7 @@ fn zero_value(
     let kind = match context.types.get(ty) {
         Type::Int(_) => ConstantKind::Int(0),
         Type::Pointer(_) => ConstantKind::Null,
-        Type::Float(_) => ConstantKind::Float(0),
+        Type::Float(kind) => ConstantKind::float_zero(*kind),
         _ => ConstantKind::Zero,
     };
     context.constant(Constant { ty, kind })

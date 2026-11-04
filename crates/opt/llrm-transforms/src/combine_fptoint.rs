@@ -205,7 +205,7 @@ fn float_constant(
     match kind {
         FloatKind::Float => Some(f64::from(f32::from_bits(bits as u32))),
         FloatKind::Double => Some(f64::from_bits(bits as u64)),
-        FloatKind::X86Fp80 => None,
+        FloatKind::X86Fp80 | FloatKind::F128 => None,
     }
 }
 

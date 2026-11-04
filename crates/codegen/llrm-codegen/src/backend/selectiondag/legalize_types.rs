@@ -595,7 +595,11 @@ impl<'a> TypeLegalizer<'a> {
                 let wide = to.size_in_bits() > 32;
                 let name = self
                     .fp_to_xint_name(op == ISD::FpToSInt, wide, self.dag.value_type(self.dag.operand(node, 0)))
-                    .ok_or(LegalizeError::Unsupported { op, ty: to, what: "soften a conversion between these types" })?;
+                    .ok_or(LegalizeError::Unsupported {
+                        op,
+                        ty: to,
+                        what: "soften a conversion between these types",
+                    })?;
                 let call = self.soft_c_call(name, &[arg], if wide { to } else { EVT::I32 }, op, to)?;
                 if to.size_in_bits() < 32 { self.dag.get_node(ISD::Truncate, to, &[call]) } else { call }
             }
@@ -1695,7 +1699,11 @@ impl<'a> TypeLegalizer<'a> {
                         vt.size_in_bits() > 32,
                         self.dag.value_type(self.dag.operand(value, 0)),
                     )
-                    .ok_or(LegalizeError::Unsupported { op, ty: vt, what: "soften a conversion between these types" })?;
+                    .ok_or(LegalizeError::Unsupported {
+                        op,
+                        ty: vt,
+                        what: "soften a conversion between these types",
+                    })?;
                 let arg = self.softened_float(self.dag.operand(value, 0));
                 let call = self.soft_c_call(name, &[arg], vt, op, vt)?;
                 self.split_integer(call, half)

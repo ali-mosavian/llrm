@@ -1461,6 +1461,7 @@ fn float_bytes(
             FloatKind::Float => 4,
             FloatKind::Double => 8,
             FloatKind::X86Fp80 => 10,
+            FloatKind::F128 => 16,
         };
         let widest = bytes.entry(number).or_insert(0);
         *widest = size.max(*widest);
