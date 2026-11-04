@@ -88,7 +88,9 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // DEVIATE REC-2: gcc 15.2's `max-inline-recursive-depth` 8 and
         // `max-inline-insns-recursive` 450, at -O2/-O3 (never -Os). Owner w10.
         recursive_inlining: Some((8, 450)),
-        recursive_edge_growth: Some((15, 30)),
+        // gcc's 15/30 size units in `gcc_insns`: fits all 12 corpus
+        // recursions (m32 insns = 1.6 x gcc size less 5.5; queens 22 is the O3 edge).
+        recursive_edge_growth: Some((12, 22)),
         ..llrm_mir::target::Tuning::PIN
     }
 }

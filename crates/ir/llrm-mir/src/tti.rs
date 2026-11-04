@@ -492,7 +492,8 @@ pub trait Tti {
         None
     }
 
-    /// DEVIATE REC-2: gcc's growth bar of the recursive edge at (-O2, -O3);
+    /// DEVIATE REC-2: gcc's growth bar of the recursive edge at (-O2, -O3),
+    /// in `gcc_insns` of the callee;
     /// none: no bar.
     fn recursive_edge_growth(&self) -> Option<(i64, i64)> {
         None
