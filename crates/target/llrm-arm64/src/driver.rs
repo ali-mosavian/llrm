@@ -346,7 +346,7 @@ pub fn functions_with(
         let blocks = crate::layout::fold(
             blocks,
             &mut tables,
-            &crate::layout::edge_odds(module, function, &program.layout),
+            &crate::layout::edge_odds(module, function, &program.layout, &machine),
             optsize,
         );
         let blocks = crate::pairs::fold(blocks);

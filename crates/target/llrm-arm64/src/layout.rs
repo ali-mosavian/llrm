@@ -6,7 +6,7 @@
 //! not placed).
 
 use llrm_spike_mf::cfg::Cfg;
-use llrm_spike_mf::placement::{Graph, Odds, place};
+use llrm_spike_mf::placement::{Graph, Layout, Odds, place};
 use llrm_support::hash::{HashMap, HashSet};
 
 use crate::frame::Lowered;
@@ -95,13 +95,16 @@ fn inverse_over(
     }
 }
 
-/// The IR's branch probabilities by `(from, to)` layout position, for
-/// [`fold`] (`MachineBranchProbabilityInfo`).
+/// The branch probabilities by `(from, to)` label number
+/// (`MachineBranchProbabilityInfo`): the IR's, then what the selector kept
+/// for the edges its merged conditions made.
 pub fn edge_odds(
     module: &llrm_mir::module::Module,
     function: &llrm_mir::module::Function,
     layout: &llrm_mir::datalayout::DataLayout,
+    machine: &crate::mfunc::MFunc,
 ) -> Odds {
+    use llrm_mir::blockfrequency::BranchProbability;
     let bpi = llrm_analysis::bpi::BranchProbabilityInfo::of(
         llrm_analysis::bpi::Module {
             context: &module.context,
@@ -111,16 +114,38 @@ pub fn edge_odds(
         },
         function,
     );
-    let position: HashMap<_, _> = function.layout().iter().enumerate().map(|(at, &block)| (block, at as u32)).collect();
+    // A block's label number is its place among the selector's ids, or in
+    // the IR's layout where there are none.
+    let ids: Vec<u32> = if machine.block_ids.is_empty() {
+        function.layout().iter().map(|block| block.0).collect()
+    } else {
+        machine.block_ids.clone()
+    };
+    let position: HashMap<u32, u32> = ids.iter().enumerate().map(|(at, &id)| (id, at as u32)).collect();
     let mut odds = Odds::default();
-    for (from, &block) in function.layout().iter().enumerate() {
+    for &block in function.layout() {
+        let Some(&from) = position.get(&block.0) else { continue };
         for (index, to) in llrm_mir::loopinfo::children(function, block).enumerate() {
+            let Some(&to) = position.get(&to.0) else { continue };
             let probability = bpi.get_edge_probability(function, block, index);
-            let entry = odds
-                .entry((from as u32, position[&to]))
-                .or_insert((llrm_mir::blockfrequency::BranchProbability::get_zero(), index));
+            let entry = odds.entry((from, to)).or_insert((BranchProbability::get_zero(), index));
             entry.0 = entry.0 + probability;
         }
+    }
+    let mut rank: HashMap<u32, usize> = HashMap::default();
+    let mut kept: HashSet<(u32, u32)> = HashSet::default();
+    for &(from, to, numerator) in &machine.edge_probs {
+        let (Some(&from), Some(&to)) = (position.get(&from), position.get(&to)) else { continue };
+        let index = rank.entry(from).or_insert(0);
+        let probability = BranchProbability::new(numerator, 1 << 31);
+        // The first time an edge is named it replaces the IR's; a second
+        // naming (both arms to one block) adds.
+        if kept.insert((from, to)) {
+            odds.insert((from, to), (probability, *index));
+        } else if let Some(entry) = odds.get_mut(&(from, to)) {
+            entry.0 = entry.0 + probability;
+        }
+        *index += 1;
     }
     odds
 }
@@ -258,11 +283,20 @@ pub fn fold(
     // DEVIATE: an entry that a branch returns to (the pin's IR never has one;
     // block forwarding can make one) keeps the layout order, as frequencies
     // need an entry that is no loop header. Exit: 11-12.
+    let mut likelihood: HashMap<(String, String), u32> = HashMap::default();
     let placed: Vec<usize> = if edges.iter().any(|next| next.contains(&0)) {
         reachable.clone()
     } else {
-        let cfg = Cfg::from_successors(edges);
+        let cfg = Cfg::from_successors(edges.clone());
         let graph = Graph::from_cfg(&cfg, &ids, vec![false; ids.len()], &odds, optsize);
+        for (from, next) in edges.iter().enumerate() {
+            for &to in next {
+                likelihood.insert(
+                    (blocks[reachable[from]].label.clone(), blocks[reachable[to]].label.clone()),
+                    graph.probability(from, to).get_numerator(),
+                );
+            }
+        }
         place(&graph).into_iter().map(|new| reachable[new]).collect()
     };
     let mut taken: Vec<Option<Lowered>> = blocks.into_iter().map(Some).collect();
@@ -271,7 +305,7 @@ pub fn fold(
     // unconditional one is the inverse conditional (`cbz`/`tbz` too).
     for at in 0..ordered.len() {
         let next = ordered.get(at + 1).map(|block| block.label.clone());
-        let Lowered { insts, locs, .. } = &mut ordered[at];
+        let Lowered { insts, locs, label: ordered_label } = &mut ordered[at];
         if let (Some(Inst::Branch { link: false, target: Target::Label(label) }), Some(next)) = (insts.last(), &next)
             && label == next
         {
@@ -287,6 +321,24 @@ pub fn fold(
             locs.truncate(locs.len() - 2);
             insts.push(inverse);
             locs.push(place);
+        }
+        // `optimizeBranches`: a block that ends in a conditional branch and a
+        // jump takes the likelier successor by the conditional branch.
+        if insts.len() >= 2
+            && let Some(Inst::Branch { link: false, target: Target::Label(unlikely) }) = insts.last()
+            && let Some(taken) = label_of(&insts[insts.len() - 2])
+            && !matches!(insts[insts.len() - 2], Inst::Branch { .. })
+            && let (Some(&via_jump), Some(&via_branch)) = (
+                likelihood.get(&(ordered_label.clone(), unlikely.clone())),
+                likelihood.get(&(ordered_label.clone(), taken.to_owned())),
+            )
+            && via_jump > via_branch
+            && let Some(flipped) = inverse_over(&insts[insts.len() - 2], unlikely, Some(taken))
+        {
+            let jump = Inst::Branch { link: false, target: Target::Label(taken.to_owned()) };
+            let len = insts.len();
+            insts[len - 2] = flipped;
+            insts[len - 1] = jump;
         }
     }
     ordered
