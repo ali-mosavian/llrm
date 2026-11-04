@@ -11,7 +11,7 @@ use llrm_mir::context::ConstantKind;
 use llrm_mir::edit::Position;
 use llrm_mir::module::Operand;
 use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Flags, IntPredicate, Opcode};
-use llrm_mir::passes::Unit;
+use llrm_mir::passes::{Outer, Unit};
 use llrm_mir::types::TypeId;
 use llrm_mir::valuetracking::{self, Query, Sizes};
 
@@ -112,15 +112,16 @@ fn only_compared_with_zero(
 fn can_transform_to_mem_cmp(
     unit: &Unit,
     site: &Site,
-    sizes: &mut Option<Sizes>,
+    outer: &Outer,
     string: Operand,
     len: u64,
 ) -> bool {
     if !only_compared_with_zero(unit, site) {
         return false;
     }
-    let sizes = sizes.get_or_insert_with(|| valuetracking::sizes_of(unit.context, site.env.globals, unit.layout));
-    if !valuetracking::dereferenceable(unit.context, unit.layout, sizes, unit.function, string, len) {
+    // The module's globals are measured once, not once for each function.
+    let sizes = outer.memo::<Sizes>(0, || valuetracking::sizes_of(unit.context, site.env.globals, unit.layout));
+    if !valuetracking::dereferenceable(unit.context, unit.layout, &sizes, unit.function, string, len) {
         return false;
     }
     !unit.function.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(name) if name == "sanitize_memory"))
@@ -155,7 +156,7 @@ fn size_constant(
 pub(super) fn str_cmp(
     unit: &mut Unit,
     site: &Site,
-    sizes: &mut Option<Sizes>,
+    outer: &Outer,
 ) -> Option<Rewrite> {
     let operands = unit.function.instruction(site.call).operands.to_vec();
     let (first, second) = (operands[0], operands[1]);
@@ -183,7 +184,7 @@ pub(super) fn str_cmp(
         (Some(_), None) => (second, len1),
         _ => return None,
     };
-    if !can_transform_to_mem_cmp(unit, site, sizes, pointer, len) {
+    if !can_transform_to_mem_cmp(unit, site, outer, pointer, len) {
         return None;
     }
     let len = size_constant(unit, site, len);
@@ -206,7 +207,7 @@ fn constant_length(
 pub(super) fn str_n_cmp(
     unit: &mut Unit,
     site: &Site,
-    sizes: &mut Option<Sizes>,
+    outer: &Outer,
 ) -> Option<Rewrite> {
     let operands = unit.function.instruction(site.call).operands.to_vec();
     let (first, second, size) = (operands[0], operands[1], operands[2]);
@@ -241,7 +242,7 @@ pub(super) fn str_n_cmp(
         (Some(_), None) => (second, string_length(unit, site, first).min(length)),
         _ => return None,
     };
-    if !can_transform_to_mem_cmp(unit, site, sizes, pointer, len) {
+    if !can_transform_to_mem_cmp(unit, site, outer, pointer, len) {
         return None;
     }
     let len = size_constant(unit, site, len);

@@ -456,7 +456,6 @@ impl FunctionPass for SimplifyLibCalls {
             );
         let int = unit.context.types.int(info.int_bits());
         let size = unit.context.types.int(size_bits);
-        let mut sizes = None;
         for call in calls {
             let Some(global) = llrm_mir::memory::callee(unit.context, unit.function, call) else { continue };
             let Some(func) =
@@ -471,8 +470,8 @@ impl FunctionPass for SimplifyLibCalls {
                 LibFunc::Puts => puts(unit, &site),
                 LibFunc::Fputs => fputs(unit, &site),
                 LibFunc::Fwrite => fwrite_call(unit, &site),
-                LibFunc::Strcmp => compare::str_cmp(unit, &site, &mut sizes),
-                LibFunc::Strncmp => compare::str_n_cmp(unit, &site, &mut sizes),
+                LibFunc::Strcmp => compare::str_cmp(unit, &site, &outer),
+                LibFunc::Strncmp => compare::str_n_cmp(unit, &site, &outer),
                 LibFunc::Memcmp => compare::mem_cmp(unit, &site, true),
                 LibFunc::Bcmp => compare::mem_cmp(unit, &site, false),
                 _ => None,
