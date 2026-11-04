@@ -858,6 +858,9 @@ impl<T: Target> Made<'_, T> {
         let mut insn = Insn::new(at, Some((at, at + 1)), Some(what), defines, uses);
         insn.requires = requires;
         insn.delivers = delivers;
+        if T::greedy_early_clobber() && inst.early_clobber {
+            insn.early_clobbers = insn.defines.clone();
+        }
         if inst.call {
             insn.clobbers = T::caller_saved().into_iter().collect();
             // The call writes each clobbered register it names: a value that

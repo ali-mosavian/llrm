@@ -697,9 +697,13 @@ fn promotion_round(
     let exits = promote::unique_exit_blocks(ctx);
     let mut candidates = 0;
     let mut promoted = Vec::new();
-    // Taken once for the loop: the rounds after a promotion see the same room.
-    let room = room.get_or_insert_with(|| pressure::Pressure::of(unit, outer, ctx).map(|held| held.room()));
     let mut found_candidates = promote::collect_promotion_candidates(unit, ctx, mssa, aa, &safety);
+    if found_candidates.is_empty() {
+        return (candidates, promoted);
+    }
+    // Taken once for the loop, and only where something may be promoted: the
+    // rounds after a promotion see the same room.
+    let room = room.get_or_insert_with(|| pressure::Pressure::of(unit, outer, ctx).map(|held| held.room()));
     if room.is_some() {
         found_candidates
             .sort_by_key(|candidate| std::cmp::Reverse(promote::accesses_of(unit, ctx, &candidate.pointers)));

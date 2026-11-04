@@ -7,6 +7,7 @@
 #define SF_DIV_HW32 1
 #define SF_FIX_NAN_UNDEF 1 /* NaN to int is undefined in C and poison in IR, and compiler-rt/libgcc do not return 0 either: the check is bytes over the reference */
 #ifndef __OPTIMIZE_SIZE__
+#define SF_DIV64_HW32 1 /* f64 div in 32/32 digits: -O2 llrm 400 divs 580009 -> 385841 clk, +644 B; at -Os (bytes strict) +594 B, so off */
 #define SF_SPECIALS_ONCE 1 /* -O2 llrm mul 79912 -> 76737 clk, div 144865 -> 143041, same bytes; at -Os it costs 29 B */
 #endif
 #ifdef __OPTIMIZE_SIZE__
