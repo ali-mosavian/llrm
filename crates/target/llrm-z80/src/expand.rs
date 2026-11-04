@@ -651,8 +651,7 @@ impl Printer<'_> {
                 } else if self.iy_is_live() {
                     return Err(format!("a stack argument {} from ix and iy is live", from_ix[0]));
                 } else {
-                    self.push(format!("ld iy, #{offset}"));
-                    self.push("add iy, sp");
+                    self.iy_to_stack(*offset);
                     (0..width).map(|byte| format!("{byte}(iy)")).collect()
                 };
                 if op == "STSP8" {
@@ -1067,9 +1066,27 @@ impl Printer<'_> {
         if self.iy_is_live() {
             return Err(format!("frame object {index} is {at} from ix and iy is live"));
         }
-        self.push(format!("ld iy, #{}", at + self.frame.below_ix() + self.call_bytes));
-        self.push("add iy, sp");
+        self.iy_to_stack(at + self.frame.below_ix() + self.call_bytes);
         Ok((0..count).map(|byte| format!("{byte}(iy)")).collect())
+    }
+
+    /// `ld iy, #offset; add iy, sp`: IY at `offset` bytes above the stack
+    /// pointer. The sum sets the carry, so flags that a later instruction
+    /// reads are kept across it; `a` is saved with them, and the `push` moves
+    /// the stack pointer by two.
+    fn iy_to_stack(
+        &mut self,
+        offset: i64,
+    ) {
+        let keep = !self.flags_dead(&self.function.blocks[self.at.0].insts[self.at.1 + 1..]);
+        if keep {
+            self.push("push af");
+        }
+        self.push(format!("ld iy, #{}", offset + if keep { 2 } else { 0 }));
+        self.push("add iy, sp");
+        if keep {
+            self.push("pop af");
+        }
     }
 
     /// The instructions that read the flags the instruction before `rest` set:

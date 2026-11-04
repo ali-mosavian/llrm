@@ -90,6 +90,9 @@ pub struct BuilderTarget {
     pub trap_unreachable: bool,
     /// The integer widths with a register class, ascending.
     pub legal_ints: Vec<u32>,
+    /// The target description has no floating-point registers: the same as
+    /// `use-soft-float` on every function (`TypeSoftenFloat`).
+    pub soft_float: bool,
     /// The library routines the target's runtime has, each with the calling
     /// convention and the symbol a call of it uses (`options.libcalls`); none
     /// given, the names its `c.toml` states.
@@ -334,6 +337,7 @@ impl BuilderTarget {
             switch_optimize: true,
             trap_unreachable: false,
             legal_ints: vec![8, 16, 32],
+            soft_float: false,
             libcalls: None,
             stack_align: None,
             float_store: false,
@@ -358,6 +362,7 @@ impl BuilderTarget {
         BuilderTarget {
             dag: DagConfig { pointer: EVT::I64, offset_folding: true, ..DagConfig::default() },
             legal_ints: vec![8, 16, 32, 64],
+            soft_float: false,
             ..BuilderTarget::m32()
         }
     }
@@ -373,6 +378,7 @@ impl BuilderTarget {
             switch_optimize: true,
             trap_unreachable: false,
             legal_ints: vec![8, 16, 32],
+            soft_float: false,
             libcalls: None,
             stack_align: None,
             float_store: false,
@@ -584,31 +590,15 @@ impl<'a> Builder<'a> {
                 ),
             );
         let mut dag = SelectionDAG::new(DagConfig { fp_extended, ..target.dag.clone() });
+        let module_tables = info.module_tables.clone();
         let tables = info
             .tables
             .get_or_insert_with(|| {
-                // `isOffsetFoldingLegal`: `shouldAssumeDSOLocal` holds for
-                // every symbol under the static relocation
-                // model, which these targets (DOS objects, no
-                // PIC) always use.
+                let (global_names, local_symbols) = module_tables
+                    .unwrap_or_else(|| super::function_lowering::module_tables(module, target.dag.dso_local_symbols));
                 super::function_lowering::Tables {
-                    global_names: std::rc::Rc::new(
-                        module.globals.iter().map(|global| global.name.as_deref().unwrap_or("").to_string()).collect(),
-                    ),
-                    local_symbols: std::rc::Rc::new(if target.dag.dso_local_symbols {
-                        vec![true; module.globals.len()]
-                    } else {
-                        module
-                            .globals
-                            .iter()
-                            .map(|global| {
-                                matches!(
-                                    global.linkage,
-                                    llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
-                                )
-                            })
-                            .collect()
-                    }),
+                    global_names,
+                    local_symbols,
                     block_names: std::rc::Rc::new(
                         (0..function.block_capacity())
                             .map(|at| {
@@ -1762,9 +1752,17 @@ impl Builder<'_> {
             None => called,
         };
         let mut values = Vec::new();
-        for argument in arguments {
+        for (at, argument) in arguments.iter().enumerate() {
             let value = self.get_value(*argument)?;
-            let value = self.pass_float_bits(*argument, value);
+            // The dword is for a stack cell or an integer register; a target
+            // that owns the call (`calling`) or an xmm argument takes the
+            // float.
+            let integer = self.calling().is_none()
+                && !matches!(
+                    plan.parameters.get(at),
+                    Some(Parameter::Registers(regs)) if regs.iter().any(|reg| reg.is_xmm())
+                );
+            let value = if integer { self.pass_float_bits(*argument, value) } else { value };
             self.parts(self.dag.value_type(value))?;
             values.push(value);
         }
@@ -1903,7 +1901,10 @@ impl Builder<'_> {
     /// (its load has no other user) is passed as the dword it is. The pin
     /// loads it onto the x87 stack and stores it to the argument slot (`fld;
     /// fstp`); the integer load folds (`visit_bitcast`) and the store becomes
-    /// `push dword ptr [m]`.
+    /// `push dword ptr [m]`. Only for an argument the convention passes in a
+    /// stack cell or an integer register: in a float register (xmm0, s0) the
+    /// bits are the wrong class
+    /// (`movd xmm0, xmm0`; arm64 `fmov w0, s16`; wasm an `i32` for an `f32`).
     fn pass_float_bits(
         &mut self,
         argument: Operand,
@@ -1951,6 +1952,8 @@ impl Builder<'_> {
         &self,
         vt: EVT,
     ) -> Result<Vec<EVT>, Refused> {
+        // Without floating-point registers a float is the integer of its width.
+        let vt = self.soft_float_integer(vt).unwrap_or(vt);
         // A float is one part, in a register of its own class: the target's
         // `accepts` says which.
         if vt.is_floating_point() {
@@ -1977,7 +1980,13 @@ impl Builder<'_> {
         value: SDValue,
         ext: Ext,
     ) -> Result<Vec<SDValue>, Refused> {
-        let vt = self.dag.value_type(value);
+        let mut value = value;
+        let mut vt = self.dag.value_type(value);
+        if let Some(int) = self.soft_float_integer(vt) {
+            // `getCopyToParts` of a softened float: its bits as an integer.
+            vt = int;
+            value = self.dag.get_node(ISD::BitCast, vt, &[value]);
+        }
         let parts = self.calling_parts(vt)?;
         if parts.len() == 1 {
             let narrow = vt.size_in_bits() < parts[0].size_in_bits();
@@ -2000,6 +2009,11 @@ impl Builder<'_> {
         assert: Option<ISD>,
         pointer: bool,
     ) -> SDValue {
+        if let Some(int) = self.soft_float_integer(vt) {
+            // `getCopyFromParts` of a softened float: the integer, bitcast.
+            let bits = self.join_from_calling(parts, int, None, false);
+            return self.dag.get_node(ISD::BitCast, vt, &[bits]);
+        }
         if let [one] = parts {
             if self.dag.value_type(*one) == vt {
                 return *one;
@@ -2642,7 +2656,7 @@ impl Builder<'_> {
 
     /// `useSoftFloat()` of the function being built.
     fn soft_float(&self) -> bool {
-        crate::backend::isel::soft_float(&self.function.attrs)
+        self.target.soft_float || crate::backend::isel::soft_float(&self.function.attrs)
     }
 
     fn visit_ret(
@@ -4098,6 +4112,7 @@ mod f80_tests {
         let mut info = FunctionLoweringInfo::new(function);
         let target = BuilderTarget {
             legal_ints: vec![8],
+            soft_float: false,
             target_nodes: Some(TargetNodes {
                 call: super::super::x86isd::CALL,
                 ret: super::super::x86isd::RET_GLUE,
@@ -4223,6 +4238,7 @@ mod f80_tests {
         let mut info = FunctionLoweringInfo::new(function);
         let target = BuilderTarget {
             legal_ints: vec![8],
+            soft_float: false,
             target_nodes: Some(TargetNodes {
                 call: super::super::x86isd::CALL,
                 ret: super::super::x86isd::RET_GLUE,
@@ -4329,6 +4345,7 @@ mod f80_tests {
         let mut info = FunctionLoweringInfo::new(function);
         let target = BuilderTarget {
             legal_ints: vec![8],
+            soft_float: false,
             target_nodes: Some(TargetNodes {
                 call: super::super::x86isd::CALL,
                 ret: super::super::x86isd::RET_GLUE,

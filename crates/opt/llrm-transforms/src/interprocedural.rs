@@ -153,7 +153,7 @@ use llrm_mir::context::GlobalId;
 use llrm_mir::facts::{Fact, Facts};
 use llrm_mir::module::{GlobalKind, Linkage, Module};
 use llrm_mir::opcode::Opcode;
-use llrm_mir::passes::{Declarations, Declared, ModuleAnalyses, PreservedAnalyses};
+use llrm_mir::passes::{Declarations, Declared, GlobalNames, ModuleAnalyses, PreservedAnalyses};
 use llrm_mir::program::{Program, ProgramAnalyses, ProgramPass};
 use llrm_mir::types::Type;
 
@@ -219,14 +219,14 @@ pub(crate) fn declared(
     modules: &mut ModuleAnalyses,
     module: &Module,
 ) -> Declared {
-    let held = modules.get::<Declarations>(module);
+    let named = modules.get::<GlobalNames>(module);
     if checking() {
         assert!(
-            *held == module.declarations(),
-            "the declarations held by the module's analyses differ from a fresh listing"
+            named.iter().zip(&module.globals).all(|(name, global)| global.name.as_deref() == name.as_deref()),
+            "the names held by the module's analyses differ from the module's"
         );
     }
-    Declared::over(held, module.metadata.len())
+    Declared::over_names(named, module.metadata.len())
 }
 
 fn checking() -> bool {
@@ -937,8 +937,17 @@ pub fn stamped(
     let graph = analyses.get::<CallGraphAnalysis>(module);
     let mut changed: Vec<GlobalId> = Vec::new();
     let mut seen: BTreeSet<GlobalId> = BTreeSet::new();
+    // What each function does to memory, kept as the components state it.
+    let mut callees = llrm_mir::memory::callees(module);
     for (members, _) in graph.bottom_up_components() {
-        for id in functionattrs::post_order(module, layout, spaces, &members) {
+        let stated = functionattrs::post_order_with(module, layout, spaces, &callees, &members);
+        for &id in &stated {
+            let global = module.global(id);
+            if let Some(function) = global.function() {
+                callees.insert(id, llrm_mir::memory::global_summary(global.name.as_deref(), function));
+            }
+        }
+        for id in stated {
             if seen.insert(id) {
                 changed.push(id);
             }
