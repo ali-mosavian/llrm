@@ -315,7 +315,33 @@ pub(crate) fn _placed(
                     },
                 );
             let fits = |register: &RegId| width.is_none_or(|bits| regs.view(regs.root(*register), bits).is_some());
-            more.insert(*value, own.filter(fits).or_else(|| held.get(value).copied()).unwrap_or(classes.available[0]));
+            // Named in an address it takes the first register an address can be made of: `ax` has no form there.
+            let in_address = what.dests.iter().chain(&what.sources).any(|place| {
+                matches!(place, Loc::Mem(cell)
+                    if cell.base.is_some_and(|base| base.value == *value) || cell.index.is_some_and(|index| index.value == *value))
+            });
+            let first = if in_address {
+                classes
+                    .available
+                    .iter()
+                    .copied()
+                    .find(|register| {
+                        let word = regs.named(*register, 2);
+                        classes.word_bases.contains(&word) || classes.word_indexes.contains(&word)
+                    })
+                    .unwrap_or(classes.available[0])
+            } else {
+                classes.available[0]
+            };
+            // A pin to a register no address is made of (the selector's `es`, for a far pointer's one value) is not kept.
+            let addressable = |register: &RegId| {
+                let word = regs.named(*register, 2);
+                !in_address || classes.word_bases.contains(&word) || classes.word_indexes.contains(&word)
+            };
+            more.insert(
+                *value,
+                own.filter(fits).filter(addressable).or_else(|| held.get(value).copied().filter(addressable)).unwrap_or(first),
+            );
         }
         undef_held = more;
         &undef_held
