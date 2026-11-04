@@ -299,6 +299,15 @@ pub fn filled_with(
     }) {
         return false;
     }
+    // DEVIATE 17 (exit 2026-11-12, `Tti::memory_idioms_at_optsize`): a size
+    // build keeps its loops where the call costs more bytes than the loop.
+    let for_size = size
+        || function.attrs.iter().any(
+            |attr| matches!(attr, llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"),
+        );
+    if for_size && outer.target().tti().is_some_and(|tti| !tti.memory_idioms_at_optsize()) {
+        return false;
+    }
     let costs = if size { outer.target().size_costs() } else { outer.target().costs() };
     let bytes = outer.target().size_costs();
     let mut changed = false;

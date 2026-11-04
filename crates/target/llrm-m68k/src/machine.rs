@@ -209,6 +209,13 @@ impl Tti for M68k {
         true
     }
 
+    /// DEVIATE 17: a size build keeps a store or copy loop (a `memset` call
+    /// is three pushes, `jsr` and `lea`: 16 B, the loop 10 to 14). Exit
+    /// 2026-11-12.
+    fn memory_idioms_at_optsize(&self) -> bool {
+        false
+    }
+
     fn arithmetic_cost(
         &self,
         op: ArithOp,
