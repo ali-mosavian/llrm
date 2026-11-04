@@ -422,7 +422,8 @@ thread_local! {
     static METADATA_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many times this thread has read every metadata node for the globals they name.
+/// How many times this thread has read every metadata node for the globals they
+/// name.
 pub fn metadata_scans() -> usize {
     METADATA_SCANS.with(std::cell::Cell::get)
 }
@@ -496,7 +497,8 @@ mod tests {
         let outer = std::rc::Rc::new(llrm_mir::passes::Outer::of(&module, None));
         let before = slice_of(&mut module, &outer);
         module.metadata.push(added);
-        // `own` has the count of nodes in it; the globals read are the part to look at.
+        // `own` has the count of nodes in it; the globals read are the part to
+        // look at.
         assert_ne!(slice_of(&mut module, &outer).parts[4], before.parts[4], "the node naming @b was not seen");
     }
 

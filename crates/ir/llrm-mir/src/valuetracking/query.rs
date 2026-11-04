@@ -287,6 +287,22 @@ pub fn assume_declared(globals: &[GlobalValue]) -> bool {
         .any(|global| matches!(global.kind, GlobalKind::Function(_)) && global.intrinsic() == Some(Intrinsic::Assume))
 }
 
+static GUARD_SCANS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// How many times `guard_declared` has scanned a module's globals.
+pub fn guard_scans() -> u64 {
+    GUARD_SCANS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Whether `globals` declare `llvm.experimental.guard`: `LazyValueInfoImpl`'s
+/// `GuardDecl` (`Module::getFunction`, a symbol-table lookup at the pin).
+pub fn guard_declared(globals: &[GlobalValue]) -> bool {
+    GUARD_SCANS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    globals
+        .iter()
+        .any(|g| matches!(g.kind, GlobalKind::Function(_)) && g.name.as_deref() == Some("llvm.experimental.guard"))
+}
+
 impl AssumptionCache {
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/AssumptionCache.cpp#L261>
     pub fn new(

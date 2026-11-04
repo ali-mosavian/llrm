@@ -585,7 +585,10 @@ impl Walk<'_> {
                 // Handle intrinsics with commutative operands
                 // (`SimpleValue::getHashValue`, EarlyCSE.cpp:298).
                 let mut operands = operands.to_vec();
-                if operands.len() >= 3 && self.intrinsic(inst).is_some_and(commutative_intrinsic) && operands[0] > operands[1] {
+                if operands.len() >= 3
+                    && self.intrinsic(inst).is_some_and(commutative_intrinsic)
+                    && operands[0] > operands[1]
+                {
                     operands.swap(0, 1);
                 }
                 key(Tag::Call(info.function_type, info.calling_convention), &operands)

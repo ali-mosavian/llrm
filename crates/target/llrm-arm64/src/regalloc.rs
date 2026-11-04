@@ -21,10 +21,10 @@
 //! allocator stands in until the core machine passes run on arm64 LIR (see
 //! docs/architecture/arm64-spike.md); it is not a translation.
 
-use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::collections::BTreeSet;
 
 use llrm_codegen::model::lir::SrcLoc;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use crate::mc::inst::*;
 use crate::mc::visit::{Reg, RegRef, Role};
@@ -900,7 +900,14 @@ mod tests {
         let value = Reg::Gpr(Gpr(100));
         let spilled = [(value, 1)].into_iter().collect::<HashMap<_, _>>();
         let mut function = function(vec![add(100, 0), add(1, 100)]);
-        rewrite(&mut function, &HashMap::default(), &spilled, &HashMap::default(), &HashSet::default(), &HashSet::default());
+        rewrite(
+            &mut function,
+            &HashMap::default(),
+            &spilled,
+            &HashMap::default(),
+            &HashSet::default(),
+            &HashSet::default(),
+        );
         assert_eq!(spill_loads(&function), 0, "{:?}", function.blocks[0].ops);
     }
 
@@ -911,7 +918,14 @@ mod tests {
         let value = Reg::Gpr(Gpr(100));
         let spilled = [(value, 1)].into_iter().collect::<HashMap<_, _>>();
         let mut function = function(vec![add(100, 0), call(), add(1, 100)]);
-        rewrite(&mut function, &HashMap::default(), &spilled, &HashMap::default(), &HashSet::default(), &HashSet::default());
+        rewrite(
+            &mut function,
+            &HashMap::default(),
+            &spilled,
+            &HashMap::default(),
+            &HashSet::default(),
+            &HashSet::default(),
+        );
         assert_eq!(spill_loads(&function), 1, "{:?}", function.blocks[0].ops);
     }
 
@@ -923,7 +937,14 @@ mod tests {
         let value = Reg::Fpr(Vreg(100));
         let spilled = [(value, 1)].into_iter().collect::<HashMap<_, _>>();
         let mut function = function(vec![Op::Copy { dst: value, src: value }]);
-        rewrite(&mut function, &HashMap::default(), &spilled, &HashMap::default(), &HashSet::default(), &HashSet::default());
+        rewrite(
+            &mut function,
+            &HashMap::default(),
+            &spilled,
+            &HashMap::default(),
+            &HashSet::default(),
+            &HashSet::default(),
+        );
         assert!(function.blocks[0].ops.is_empty(), "{:?}", function.blocks[0].ops);
     }
 

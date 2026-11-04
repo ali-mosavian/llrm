@@ -13,6 +13,7 @@
 //!               flags_dead_out        the instruction or the block
 //!   encoding    encodable, no_longer, the rewrite encodes, in no more bytes
 //!               same_length,          than the original (via `select`)
+//!               shorter_pair,         the two rewrites in fewer bytes than the original
 //!               splits_smaller, ...
 //!   operands    same_width, narrower, widths, roots, register classes,
 //!               same_root, segment    segments
@@ -214,6 +215,19 @@ pub fn no_longer(
     matches!(
         (emitted(cx.bits(), before), emitted(cx.bits(), after)),
         (Some(before), Some(after)) if after.code.len() <= before.code.len()
+    )
+}
+
+/// Both encode, the pair `first` then `second` in fewer bytes than `before`.
+pub fn shorter_pair(
+    cx: &Cx,
+    before: &Arc<Insn>,
+    first: &Arc<Insn>,
+    second: &Arc<Insn>,
+) -> bool {
+    matches!(
+        (emitted(cx.bits(), before), emitted(cx.bits(), first), emitted(cx.bits(), second)),
+        (Some(before), Some(first), Some(second)) if first.code.len() + second.code.len() < before.code.len()
     )
 }
 
