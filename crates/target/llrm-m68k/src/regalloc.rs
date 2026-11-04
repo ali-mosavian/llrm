@@ -24,6 +24,10 @@ pub struct M68kRegisters;
 impl Target for M68kRegisters {
     type Class = Class;
 
+    fn schedules_before_allocation() -> bool {
+        llrm_support::env_flag!("LLRM_M68K_PRESCHED")
+    }
+
     fn meet(
         one: Class,
         other: Class,
