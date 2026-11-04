@@ -804,11 +804,14 @@ fn selected_in(
     let bytes_beat_clocks = cpu.size && layout.pointer(0).bits < layout.largest_legal_integer();
     let convention = crate::backend::isel::convention(module, &layout, id, arch)?;
     let mut info = FunctionLoweringInfo::new(function);
+    info.module_tables = pool.symbols.clone();
     if contracts.is_some_and(|contracts| contracts.frame_zeroed) {
         info.prezeroed = crate::backend::prezeroed::prezeroed(module, function);
     }
     let mut tli = if m16 {
-        TargetLowering::x86_16(Features::default(), MVT::I16)
+        // `useSoftFloat()`, or no x87 among the function's target features.
+        let soft_float = crate::backend::isel::soft_float(&function.attrs);
+        TargetLowering::x86_16(Features { soft_float, ..Features::default() }, MVT::I16)
     } else if m64 {
         TargetLowering::x86_64(Features { sse2: arch.scalar_sse(), cmov: true, ..Features::default() }, MVT::I64)
     } else {
@@ -817,6 +820,11 @@ fn selected_in(
         let cmov = cpu.target().tti().is_some_and(|tti| tti.has_cmov());
         TargetLowering::x86_32(Features { cmov, ..Features::default() }, MVT::I32)
     };
+    // The soft-float routines are spelled as the C compiler spelled their
+    // definitions.
+    for (name, number, symbol) in libcalls {
+        tli.set_libcall_symbol(name, symbol.clone(), *number);
+    }
     // SD214: with a math library the pin calls it for these; the call is not
     // translated yet, so the node is refused rather than selected inline.
     if arch.has_libm() {
@@ -924,10 +932,10 @@ fn selected_in(
         };
         let align =
             crate::backend::isel::natural_align(types, &layout, allocated).max(size & size.wrapping_neg()).clamp(1, 4);
-        // More than the frame keeps the stack aligned to: the frame realigns
-        // the stack pointer for it.
-        let wanted = wanted.map_or(0, |one| one as i64);
-        let align = if wanted > crate::backend::isel::OVER_ALIGNED { wanted } else { align };
+        // The declared alignment wins over the natural one; above what the
+        // frame keeps the stack aligned to, the frame realigns the stack
+        // pointer.
+        let align = align.max(wanted.map_or(0, |one| one as i64));
         sizes.push((value, size, align));
     }
     sizes.sort_by_key(|(value, _, _)| info.static_allocas[value]);
@@ -998,6 +1006,9 @@ fn selected_in(
         let made = Temporaries(&frame).create_stack_temporary(*size, *align);
         debug_assert_eq!(made, alloca_count + at as i32, "frame objects are numbered as the builder numbered them");
     }
+    if let Some(tables) = &info.tables {
+        pool.symbols.get_or_insert_with(|| (tables.global_names.clone(), tables.local_symbols.clone()));
+    }
     // Each jump table is a data object the pool names; its entries are the
     // addresses of the blocks.
     let tables_of_function: Vec<JumpTable> = info
@@ -1065,7 +1076,8 @@ fn selected_in(
     let mul_rate = if cpu.size || cpu.min_size || bytes_beat_clocks { 0 } else { cpu.speed_milliclocks_per_byte() };
     let speed_goal = !(cpu.size || cpu.min_size || bytes_beat_clocks);
     let mul_by_clocks = speed_goal && cpu.target().tti().is_some_and(|tti| tti.multiply_by_clocks());
-    let frequencies = (mul_rate > 0 && !mul_by_clocks).then(|| {
+    let price_pin = speed_goal && cpu.target().tti().is_some_and(|tti| tti.price_pin_multiplies());
+    let frequencies = ((mul_rate > 0 || price_pin) && !mul_by_clocks).then(|| {
         let bpi = llrm_analysis::bpi::BranchProbabilityInfo::of(
             llrm_analysis::bpi::Module {
                 context: &module.context,
@@ -1090,6 +1102,8 @@ fn selected_in(
                 sse2,
                 min_size: cpu.min_size || bytes_beat_clocks,
                 i16_mul_chains: !super::x86_lowering::promotes_i16(&tli),
+                sext_load: true,
+                zext_free: m64,
                 profile: if mul_by_clocks {
                     Some(super::x86_lowering::MulPricing {
                         cpu,
@@ -1097,6 +1111,7 @@ fn selected_in(
                         freq: 1.0,
                         milliclocks_per_byte: mul_rate,
                         by_clocks: true,
+                        price_pin: false,
                     })
                 } else {
                     frequencies
@@ -1108,6 +1123,7 @@ fn selected_in(
                                 freq: frequencies.relative_to_entry(parent),
                                 milliclocks_per_byte: mul_rate,
                                 by_clocks: false,
+                                price_pin,
                             },
                         )
                 },
@@ -1137,7 +1153,7 @@ fn selected_in(
                 let width = arrived_width(&arrived, *vreg).unwrap_or_else(|| regs.bytes(*register).unwrap_or(4) as u32);
                 let view = regs.view(regs.root(*register), width * 8).unwrap_or(*register);
                 arrival.defines.push(value);
-                arrival.delivers.push((Held { value, width }, view));
+                arrival.delivers.push((Held { value, width, offset: 0 }, view));
             }
             // A sibling call through an argument that arrives in a register
             // the epilogue leaves alone jumps through that register, as the
@@ -1205,8 +1221,9 @@ fn selected_in(
                     (done.values.get(&built.dag.resolve(low)), done.values.get(&built.dag.resolve(high)))
             {
                 let width = built.dag.value_type(low).size_in_bits() / 8;
-                noted_wides
-                    .get_or_insert_with(id, || (Held { value: low_made, width }, Held { value: high_made, width }));
+                noted_wides.get_or_insert_with(id, || {
+                    (Held { value: low_made, width, offset: 0 }, Held { value: high_made, width, offset: 0 })
+                });
             }
         }
         emitted.extend(done.blocks);

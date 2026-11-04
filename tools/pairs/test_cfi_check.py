@@ -84,3 +84,16 @@ def test_code_after_the_first_unconditional_exit_is_not_followed():
     code = CODE + ["18 mov\tx0, x1"]
     rows = ROWS + [(24, 29, 16, {30: -8, 29: -16})]
     assert c.check(code, rows) == []
+
+
+def test_a_frame_register_set_by_a_shifted_immediate_is_followed():
+    """`add x29, sp, #1, lsl #12` read as sp+1: a 4128-byte frame's rows were 'wrong' (quicksort, once the record moved to 4096)."""
+    code = [
+        "0 sub\tsp, sp, #0x1, lsl #12",
+        "4 sub\tsp, sp, #0x20",
+        "8 stp\tx29, x30, [sp, #4096]",
+        "c add\tx29, sp, #0x1, lsl #12",
+        "10 ret",
+    ]
+    rows = [(0, 31, 0, {}), (4, 31, 4096, {}), (8, 31, 4128, {}), (16, 29, 32, {30: -24, 29: -32})]
+    assert c.check(code, rows) == []

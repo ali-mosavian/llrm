@@ -6,7 +6,8 @@ use llrm_spike_mf::cfg::Cfg;
 use llrm_spike_mf::regalloc::{Assignment, Target, eliminate_phis_with, two_address};
 use llrm_spike_mf::tolir::allocate_greedy;
 
-use crate::driver::{Request, selections};
+use crate::driver::Level;
+use crate::driver::{Request, selections_both};
 use crate::expand::{self, Line, finish};
 use crate::mfunc::{Block, Inst, Kind, MFunction, Operand, Phi, Reg, emit};
 use crate::regalloc::Z80Registers;
@@ -21,6 +22,62 @@ pub fn machine_function(
     machine_function_with(ir, name, request, true)
 }
 
+thread_local! {
+    /// Times the mid-end and selection ran since the last
+    /// [`take_selection_runs`].
+    static SELECTION_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The runs of the mid-end and selection on this thread since the last call.
+pub fn take_selection_runs() -> usize {
+    SELECTION_RUNS.with(|one| one.replace(0))
+}
+
+type SelectionKey = (String, Vec<(String, String)>);
+
+/// Each function selected with the DAG scheduled by `Source` and by `ILP`.
+type Selections = std::rc::Rc<
+    Vec<(
+        String,
+        Result<crate::dagisel::function::Selection, String>,
+        Result<crate::dagisel::function::Selection, String>,
+    )>,
+>;
+
+thread_local! {
+    /// The module most recently run through the mid-end and selection, with
+    /// what it was run for.
+    static SELECTED: std::cell::RefCell<Option<(String, SelectionKey, Selections)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// [`selections`] of `ir`, kept for the next function of the same module:
+/// every function was run through the whole mid-end and the selection of every
+/// function once for each time it was built (twice, with the return block
+/// copied or kept), so a module of N functions cost N squared.
+fn cached_selections(
+    ir: &str,
+    request: &Request,
+) -> Result<Selections, String> {
+    // everything the result reads: the text, the request, and the LLRM_ and
+    // Z80_ switches of the environment. Compared whole: hashing the text of a
+    // large module for each of its functions was a tenth of the compile.
+    let mut environment: Vec<(String, String)> =
+        std::env::vars().filter(|(name, _)| name.starts_with("LLRM_") || name.starts_with("Z80_")).collect();
+    environment.sort();
+    let key = (format!("{:?}", (request.level, &request.passes, request.debug, request.cpu as u8)), environment);
+    let held = SELECTED.with(|held| {
+        held.borrow().as_ref().filter(|(text, was, _)| text == ir && *was == key).map(|(_, _, one)| one.clone())
+    });
+    if let Some(one) = held {
+        return Ok(one);
+    }
+    SELECTION_RUNS.with(|runs| runs.set(runs.get() + 1));
+    let one = Selections::new(selections_both(ir, request)?);
+    SELECTED.with(|held| *held.borrow_mut() = Some((ir.to_owned(), key, one.clone())));
+    Ok(one)
+}
+
 /// [`machine_function`], with or without the return blocks copied into their
 /// predecessors.
 fn machine_function_with(
@@ -29,10 +86,11 @@ fn machine_function_with(
     request: &Request,
     duplicate: bool,
 ) -> Result<MFunction, String> {
-    let selected = selections(ir, request)?;
-    let (_, selection) =
-        selected.into_iter().find(|(one, _)| one == name).ok_or_else(|| format!("no function @{name}"))?;
-    let mut function = emit(name, &selection?)?;
+    let selected = cached_selections(ir, request)?;
+    let (_, source, scheduled) =
+        selected.iter().find(|(one, ..)| one == name).ok_or_else(|| format!("no function @{name}"))?;
+    let selection = if crate::dagisel::pipeline::ILP.with(std::cell::Cell::get) { scheduled } else { source };
+    let mut function = emit(name, selection.as_ref().map_err(Clone::clone)?)?;
     expand_cmov(&mut function)?;
     if duplicate {
         tail_duplicate_returns(&mut function);
@@ -110,19 +168,16 @@ fn allocated_with(
     eliminate_phis_with(&mut function, false);
     let mut hoisted = function.clone();
     if !hoist_constants(&mut hoisted) {
-        return allocate(function, name);
+        return allocate(function, name, request.level);
     }
     // the allocator does not see that a byte of a pair is read in place, so a
-    // constant kept across a loop can cost more than making it there: the
-    // hoisted loop stays only if it is no bigger and no slower
-    let (plain, with) = (allocate(function, name), allocate(hoisted, name));
-    let price = |one: &Allocated| {
-        let (function, assignment, slots, reads) = one;
-        finish(function, assignment, 0, slots, reads.clone()).ok().map(|lines| expand::price(&lines))
-    };
+    // constant kept across a loop can cost more than making it there, or less:
+    // the hoisted loop stays unless the plain one is cheaper by the loop's
+    // weighted cost
+    let (plain, with) = (allocate(function, name, request.level), allocate(hoisted, name, request.level));
     match (plain, with) {
-        (Ok(plain), Ok(with)) => match (price(&plain), price(&with)) {
-            (Some((pb, pt)), Some((wb, wt))) if wb > pb || wt > pt => Ok(plain),
+        (Ok(plain), Ok(with)) => match (priced_in_loops(&plain), priced_in_loops(&with)) {
+            (Some(one), Some(other)) if cheaper(request.level, one, other) => Ok(plain),
             _ => Ok(with),
         },
         (_, Ok(with)) => Ok(with),
@@ -130,36 +185,96 @@ fn allocated_with(
     }
 }
 
+/// Bytes and the clocks weighted by loop depth of an allocated function.
+fn priced_in_loops(one: &Allocated) -> Option<(u32, u64)> {
+    let (function, assignment, slots, reads) = one;
+    finish(function, assignment, 0, slots, reads.clone()).ok().map(|lines| expand::price_in_loops(&lines))
+}
+
+/// Whether the price `one` beats `other`: bytes first at the size levels,
+/// weighted clocks first otherwise.
+fn cheaper(
+    level: Level,
+    one: (u32, u64),
+    other: (u32, u64),
+) -> bool {
+    if matches!(level, Level::Os | Level::Oz) { one < other } else { (one.1, one.0) < (other.1, other.0) }
+}
+
 /// Allocates `function`; where the first allocation fails, once more with the
 /// copies from the argument registers left unjoined. A joined copy pins the
 /// argument's pair for the whole of the value's range: a `long long` held in
 /// four argument registers has no room left to split (`greedy could not
 /// allocate`). The pin does not join them either (`canJoinPhys`).
+///
+/// Where the choice can allocate better, the other choices are allocated too
+/// and the cheaper by the loop's weighted clocks stays, bytes first at the
+/// size levels and clocks first otherwise: the argument copies joined or not
+/// (a constant kept in a register of its own, or not), and a byte wanted both
+/// in `a` and in a register of its own loaded through `a` or through `hl`.
 fn allocate(
     function: MFunction,
     name: &str,
+    level: Level,
 ) -> Result<Allocated, String> {
-    match allocate_once(function.clone(), name) {
-        Ok(done) => Ok(done),
-        Err(first) => {
-            crate::regalloc::UNJOINED.with(|one| one.set(true));
-            let again = allocate_once(function, name);
-            crate::regalloc::UNJOINED.with(|one| one.set(false));
-            again.map_err(|_| first)
+    let has_loop = !Cfg::new(&function).loops().is_empty();
+    let with = |unjoined: Option<bool>, strict: bool, function: MFunction| {
+        crate::regalloc::UNJOINED.with(|one| one.set(unjoined));
+        let done = allocate_once(function, name, strict);
+        crate::regalloc::UNJOINED.with(|one| one.set(None));
+        done
+    };
+    match with(None, true, function.clone()) {
+        Ok((mut best, held)) => {
+            let other_join = Some(!crate::abi::z80().pinned_copies_unjoined);
+            let mut others = Vec::new();
+            if has_loop {
+                others.push((other_join, true));
+            }
+            if held {
+                others.push((None, false));
+                if has_loop {
+                    others.push((other_join, false));
+                }
+            }
+            for (unjoined, strict) in others {
+                let Ok((other, _)) = with(unjoined, strict, function.clone()) else { continue };
+                if let (Some(now), Some(then)) = (priced_in_loops(&best), priced_in_loops(&other)) {
+                    if cheaper(level, then, now) {
+                        best = other;
+                    }
+                }
+            }
+            Ok(best)
         }
+        Err(first) => with(Some(true), true, function).map(|(done, _)| done).map_err(|_| first),
     }
 }
 
+thread_local! {
+    /// Full allocations run since the last [`take_allocations`].
+    static ALLOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The allocations run on this thread since the last call.
+pub fn take_allocations() -> usize {
+    ALLOCATIONS.with(|one| one.replace(0))
+}
+
+/// One allocation, and whether `strict` held a byte back from `a`.
 fn allocate_once(
     mut function: MFunction,
     name: &str,
-) -> Result<Allocated, String> {
+    strict: bool,
+) -> Result<(Allocated, bool), String> {
     two_address(&mut function);
-    read_bytes_through_their_pairs(&mut function);
+    let held = read_bytes_through_their_pairs(&mut function, strict);
     use_the_shift_carry(&mut function);
+    sink_copies_before_allocation(&mut function);
     if std::env::var("LLRM_Z80_DUMP").is_ok_and(|one| one == name) {
         dump(&function);
     }
+    ALLOCATIONS.with(|one| one.set(one.get() + 1));
     let (assignment, slots) = allocate_greedy::<Z80Registers>(&mut function, Regs(&REGISTER_INFO), false)?;
     let reads = expand::reads(&function);
     if std::env::var("LLRM_Z80_DUMP_RA").is_ok_and(|one| one == name) {
@@ -179,7 +294,7 @@ fn allocate_once(
     } else {
         spills_first(&mut function, &assignment);
     }
-    Ok((function, assignment, slots, reads))
+    Ok(((function, assignment, slots, reads), held))
 }
 
 /// The sign of a word tested next to its shift left by one (`c & 0x8000 ? .. :
@@ -275,7 +390,10 @@ pub fn use_the_shift_carry(function: &mut MFunction) {
 /// `hl` stays free for a pointer that has no other form (`cp (hl)`): scmp
 /// copied both its pointers into `hl` on every trip. The use in `a` is
 /// followed through copies, around loops.
-fn read_bytes_through_their_pairs(function: &mut MFunction) {
+fn read_bytes_through_their_pairs(
+    function: &mut MFunction,
+    strict: bool,
+) -> bool {
     let copy_of = |inst: &Inst| match (inst.kind, &inst.operands[..]) {
         (Kind::Copy, [Operand::Def(to), Operand::Use(from)]) => Some((*to, *from)),
         _ => None,
@@ -297,7 +415,10 @@ fn read_bytes_through_their_pairs(function: &mut MFunction) {
         }
     }
     // a byte some instruction other than a copy reads from its own register
-    // is wanted there too: loaded in `a` it would be copied out again
+    // is wanted there too: loaded in `a` it would be copied out again. Which of
+    // the two is cheaper depends on the pressure on `hl`, so `strict` holds
+    // such a byte back and the caller tries both
+    let mut held = false;
     let read_elsewhere: std::collections::HashSet<u32> = function
         .blocks
         .iter()
@@ -320,7 +441,11 @@ fn read_bytes_through_their_pairs(function: &mut MFunction) {
             else {
                 continue;
             };
-            if hl != reg::HL || *pointer != reg::HL || !in_a.contains(byte) || read_elsewhere.contains(byte) {
+            if hl != reg::HL || *pointer != reg::HL || !in_a.contains(byte) {
+                continue;
+            }
+            if strict && read_elsewhere.contains(byte) {
+                held = true;
                 continue;
             }
             let (Operand::Use(from), Operand::Def(to)) = (copy.operands[1].clone(), load.operands[0].clone()) else {
@@ -335,6 +460,7 @@ fn read_bytes_through_their_pairs(function: &mut MFunction) {
             block.insts[at + 1] = out;
         }
     }
+    held
 }
 
 /// The pair `register` is, or is half of, if `push` and `pop` can move it: not
@@ -626,6 +752,43 @@ pub fn sink_copies_to_the_branch(
         Reg::Virt(v) => assignment.0[v as usize],
         Reg::Phys(id) => id,
     };
+    sink_copies(function, |a, b| Z80Registers::overlaps(register(a), register(b)), |_, _| true);
+}
+
+/// The same before allocation, on the copies between virtual registers: a
+/// value merged by a branch was copied in ahead of the compare that decides
+/// the branch, so it lived beside the value it replaces and the two could not
+/// share a register (minmax's `lo`: a register more, spilled).
+pub fn sink_copies_before_allocation(function: &mut MFunction) {
+    let mut defs = std::collections::HashMap::<u32, u32>::new();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+        for operand in &inst.operands {
+            if let Operand::Def(Reg::Virt(v)) = operand {
+                *defs.entry(*v).or_default() += 1;
+            }
+        }
+    }
+    // only a copy into a value several blocks define: what a branch merges
+    sink_copies(
+        function,
+        |a, b| a == b,
+        |dst, src| {
+            matches!(
+                (dst, src),
+                (Reg::Virt(d), Reg::Virt(_)) if defs.get(&d).is_some_and(|n| *n > 1)
+            )
+        },
+    );
+}
+
+/// Moves each copy `movable` accepts down to the block's branches when nothing
+/// after it reads or writes either register (`conflicts` says when two
+/// registers are one).
+fn sink_copies(
+    function: &mut MFunction,
+    conflicts: impl Fn(Reg, Reg) -> bool,
+    movable: impl Fn(Reg, Reg) -> bool,
+) {
     for block in &mut function.blocks {
         let end = block.insts.iter().rposition(|inst| !inst.terminator).map_or(0, |last| last + 1);
         let mut at = 0;
@@ -635,7 +798,7 @@ pub fn sink_copies_to_the_branch(
                 at += 1;
                 continue;
             };
-            let (dst, src) = (register(*dst), register(*src));
+            let (dst, src) = (*dst, *src);
             let blocked = |later: &Inst| {
                 later.call
                     || later.barrier
@@ -643,11 +806,8 @@ pub fn sink_copies_to_the_branch(
                     || later.side_effects
                     || later.operands.iter().any(|operand| match operand {
                         Operand::Def(r) | Operand::Use(r) => {
-                            let r = register(*r);
-                            Z80Registers::overlaps(r, dst)
-                                || (matches!(operand, Operand::Def(_)) && Z80Registers::overlaps(r, src))
+                            conflicts(*r, dst) || (matches!(operand, Operand::Def(_)) && conflicts(*r, src))
                         }
-                        Operand::Frame(_) => false,
                         _ => false,
                     })
             };
@@ -655,7 +815,8 @@ pub fn sink_copies_to_the_branch(
             // touch neither register each other's would trade places for ever),
             // and only all the way: a copy stopped short sits between a reload
             // and the compare it folds into
-            if (at + 1..end).all(|later| block.insts[later].kind == Kind::Copy)
+            if !movable(dst, src)
+                || (at + 1..end).all(|later| block.insts[later].kind == Kind::Copy)
                 || (at + 1..end).any(|later| blocked(&block.insts[later]))
             {
                 at += 1;
@@ -1067,10 +1228,36 @@ pub fn lines(
     // Copying a return block into its predecessors saves a `jp` and often a
     // move, or costs a copy of the block: the smaller result, then the faster,
     // is kept.
-    let copied = compile(true);
-    let kept = compile(false);
-    match (copied, kept) {
-        (Ok(one), Ok(two)) => Ok(if expand::price(&one) <= expand::price(&two) { one } else { two }),
+    let scheduled = || {
+        let copied = compile(true);
+        // Where copying changes nothing (no small return block with an
+        // unconditional predecessor) the two are one function: allocated once.
+        let alike = || {
+            let (one, other) =
+                (machine_function_with(ir, name, request, true), machine_function_with(ir, name, request, false));
+            matches!(
+                (one, other),
+                (Ok(one), Ok(other)) if format!("{one:?}") == format!("{other:?}")
+            )
+        };
+        let kept = if copied.is_ok() && alike() { copied.clone() } else { compile(false) };
+        match (copied, kept) {
+            (Ok(one), Ok(two)) => Ok(if expand::price(&one) <= expand::price(&two) { one } else { two }),
+            (Ok(one), Err(_)) | (Err(_), Ok(one)) => Ok(one),
+            (Err(why), Err(_)) => Err(why),
+        }
+    };
+    // The function is scheduled by `Source` and by `ILP` (DEVIATE Z80S1, in
+    // `dagisel/pipeline.rs`); `ILP` replaces `Source` only where it is cheaper.
+    let source = scheduled();
+    crate::dagisel::pipeline::ILP.with(|one| one.set(true));
+    let ilp = scheduled();
+    crate::dagisel::pipeline::ILP.with(|one| one.set(false));
+    match (source, ilp) {
+        (Ok(source), Ok(ilp)) => {
+            let price = |lines: &[Line]| expand::price_in_loops(lines);
+            Ok(if cheaper(request.level, price(&ilp), price(&source)) { ilp } else { source })
+        }
         (Ok(one), Err(_)) | (Err(_), Ok(one)) => Ok(one),
         (Err(why), Err(_)) => Err(why),
     }
@@ -1406,8 +1593,13 @@ fn tail_duplicate_returns(function: &mut MFunction) {
         let reaches_unconditionally = |function: &MFunction, p: usize| {
             let last = function.blocks[p].insts.last();
             match last {
+                // a conditional branch ahead of it to the same block keeps the
+                // original alive
                 Some(inst) if inst.barrier => {
-                    matches!(inst.kind, Kind::Op("JP")) && inst.operands == [Operand::Block(id)]
+                    let insts = &function.blocks[p].insts;
+                    matches!(inst.kind, Kind::Op("JP"))
+                        && inst.operands == [Operand::Block(id)]
+                        && !insts[..insts.len() - 1].iter().any(|one| one.operands.contains(&Operand::Block(id)))
                 }
                 // falls through: no branch at all, or a conditional one that
                 // goes elsewhere

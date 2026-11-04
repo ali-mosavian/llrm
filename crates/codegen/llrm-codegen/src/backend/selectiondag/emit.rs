@@ -770,7 +770,7 @@ fn pushed_arguments(
             // The stores keep their places; each is based on a copy of SP.
             let value = state.next_value;
             state.next_value += 1;
-            let base = Held { value, width: 2 };
+            let base = Held { value, width: 2, offset: 0 };
             if let Some(tag) = class_tag(AddrMode::Real16, Role::Base) {
                 classes.push((value, tag));
             }
@@ -812,7 +812,7 @@ fn pushed_arguments(
                 // push, made through a copy of SP.
                 let value = state.next_value;
                 state.next_value += 1;
-                let base = Held { value, width: 2 };
+                let base = Held { value, width: 2, offset: 0 };
                 if let Some(tag) = class_tag(AddrMode::Real16, Role::Base) {
                     classes.push((value, tag));
                 }
@@ -1018,7 +1018,7 @@ fn based_areas(
             } else if is_area(&insn) && !block.insns[at..].iter().any(|one| is_call(one)) {
                 let value = state.next_value;
                 state.next_value += 1;
-                let base = Held { value, width: 2 };
+                let base = Held { value, width: 2, offset: 0 };
                 if let Some(tag) = class_tag(AddrMode::Real16, Role::Base) {
                     classes.push((value, tag));
                 }
@@ -1058,6 +1058,7 @@ fn width(
         EVT::Simple(MVT::I16) => 2,
         EVT::Simple(MVT::I32) => 4,
         EVT::Simple(MVT::I64) => 8,
+        EVT::Simple(MVT::I128) => 16,
         EVT::Int(bits) => bits.div_ceil(8),
         // A floating value is one 10-byte register value of the x87 stack.
         EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80) => 10,
@@ -1375,7 +1376,7 @@ impl Emitter<'_, '_> {
             ) {
                 continue;
             }
-            let dests = vec![Loc::Held(Held { value, width })];
+            let dests = vec![Loc::Held(Held { value, width, offset: 0 })];
             // A zero's immediate narrows with it: the `xor` pass wants both
             // alike.
             let sources = match what.sources.as_slice() {
@@ -1598,8 +1599,9 @@ impl Emitter<'_, '_> {
         if name == "VASTART_SAVE_XMM_REGS" {
             return self.lowered_vastart_save_xmm(n);
         }
-        // `FsFLD0SD`: a zero double, `xorps` of the register with itself.
-        if matches!(name, "FsFLD0SD" | "FsFLD0SS") {
+        // `FsFLD0SD`, `V_SET0`: a zero double or 16 bytes, `xorps` of the
+        // register with itself.
+        if matches!(name, "FsFLD0SD" | "FsFLD0SS" | "V_SET0") {
             let node = self.dag.node(SDValue { node: n, res: 0 });
             let zero = self.fresh(width(self.ctx.map.scalar_sse(), node.values[0]));
             self.values.insert(SDValue { node: n, res: 0 }, zero.value);
@@ -3409,7 +3411,7 @@ impl Emitter<'_, '_> {
                 },
             );
         match exported {
-            Some(reg) => Held { value: self.vreg(reg), width: 10 },
+            Some(reg) => Held { value: self.vreg(reg), width: 10, offset: 0 },
             None => self.fresh(10),
         }
     }
@@ -4018,7 +4020,15 @@ impl Emitter<'_, '_> {
                 }
             }
             let held = self.fresh(10);
+            let (before, pooled) = (self.blocks.last().map_or(0, |block| block.insns.len()), cell.is_some());
             self.push(Operation::FloatLoad, mnemonic, vec![Loc::Held(held)], cell.map(Loc::Mem).into_iter().collect());
+            // A constant-pool entry is memory nothing writes
+            // (`PseudoSourceValue::isConstant`: the pin's
+            // `isDereferenceableInvariantLoad`): LICM may carry it (DEVIATE
+            // X1).
+            if pooled {
+                self.mark_invariant_loads(before);
+            }
             if constant {
                 self.loaded.insert(value, (held, at.0, at.1));
             }
@@ -4068,7 +4078,9 @@ impl Emitter<'_, '_> {
             return Ok(Loc::Held(held));
         }
         match self.values.get(&value) {
-            Some(&v) => Ok(Loc::Held(Held { value: v, width: width_of(self.ctx.map.scalar_sse(), self.dag, value) })),
+            Some(&v) => {
+                Ok(Loc::Held(Held { value: v, width: width_of(self.ctx.map.scalar_sse(), self.dag, value), offset: 0 }))
+            }
             None => Err(EmitError::Unsupported(format!("operand {:?} before its definition", self.dag.opcode(value)))),
         }
     }
@@ -4081,7 +4093,7 @@ impl Emitter<'_, '_> {
         let width = width_of(self.ctx.map.scalar_sse(), self.dag, value);
         match self.dag.node(value).data {
             NodeData::PhysReg(register) => Ok(Loc::Reg(Reg { register, width })),
-            NodeData::Register(reg) => Ok(Loc::Held(Held { value: self.vreg(reg), width })),
+            NodeData::Register(reg) => Ok(Loc::Held(Held { value: self.vreg(reg), width, offset: 0 })),
             _ => Err(EmitError::Unsupported("a register operand without a register".to_owned())),
         }
     }
@@ -4120,7 +4132,7 @@ impl Emitter<'_, '_> {
                         .then_some(reg)
                 },
             )?;
-        Some(Held { value: self.vreg(reg), width })
+        Some(Held { value: self.vreg(reg), width, offset: 0 })
     }
 
     /// The register a result is defined in: the one a `CopyToReg` of it names
@@ -4185,7 +4197,7 @@ impl Emitter<'_, '_> {
         &mut self,
         width: u32,
     ) -> Held {
-        Held { value: self.new_value(), width }
+        Held { value: self.new_value(), width, offset: 0 }
     }
 
     fn push(

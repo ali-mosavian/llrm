@@ -2,7 +2,7 @@
 //! functions of a module, one after another.
 
 use crate::Width;
-use crate::dag::{Options, compile_function};
+use crate::dag::{ModuleFacts, Options, compile_function_with};
 use crate::print;
 
 /// The width `-mtriple=` names.
@@ -72,7 +72,15 @@ fn optimized(
     use llrm_transforms::pipeline::{Applied, Options as MidEnd};
     let machine: std::rc::Rc<dyn llrm_mir::target::Machine> = std::rc::Rc::new(crate::machine::WasmMachine);
     let mut program = llrm_mir::program::Program::new(vec![module], machine)?;
-    let options = MidEnd { library: Vec::new(), ..level.mid_end() };
+    // `LLRM_WASM_BACKEND_ONLY=1`: no mid-end, so an IR that already went
+    // through it (`LLRM_WASM_IR`) is compared with the pin's `llc` as it
+    // stands. A second run is no fixed point (it inlined `gcd` in recgcd
+    // -O1).
+    let options = if std::env::var_os("LLRM_WASM_BACKEND_ONLY").is_some() {
+        MidEnd::none()
+    } else {
+        MidEnd { library: Vec::new(), ..level.mid_end() }
+    };
     // `LLRM_WASM_DUMP=DIR`: every mid-end step that changed a body, written to
     // DIR.
     let dump = std::env::var_os("LLRM_WASM_DUMP").map(std::path::PathBuf::from);
@@ -151,12 +159,14 @@ pub fn assembly(
     let module = prepared(text, width, options)?;
     let mut out = String::new();
     let mut labels = print::Labels::default();
+    let facts = ModuleFacts::of(&module);
     for (_, global, function) in module.functions() {
         if function.is_declaration() {
             continue;
         }
         let name = global.name.owned().ok_or("an unnamed function")?;
-        let f = compile_function(&module, &name, width, options).map_err(|why| format!("@{name}: {why}"))?;
+        let f =
+            compile_function_with(&module, &name, width, options, &facts).map_err(|why| format!("@{name}: {why}"))?;
         out.push_str(&print::function_in(&f, &mut labels));
     }
     Ok(out)
@@ -169,23 +179,58 @@ pub fn object(
     width: Width,
     options: Options,
 ) -> Result<Vec<u8>, String> {
+    object_with_debug(text, width, options, &[])
+}
+
+/// [`object`] with custom debug sections and their relocations.
+pub fn object_with_debug(
+    text: &str,
+    width: Width,
+    options: Options,
+    debug: &[crate::object::DebugSection],
+) -> Result<Vec<u8>, String> {
     let module = prepared(text, width, options)?;
+    object_of(&module, width, options, |_| Ok(debug.to_vec()))
+}
+
+/// [`object`] with DWARF (`-g`) from the module's `!DI*` nodes; `source` names
+/// the unit where the module names none.
+pub fn object_g(
+    text: &str,
+    width: Width,
+    options: Options,
+    source: &str,
+) -> Result<Vec<u8>, String> {
+    let mut module = prepared(text, width, options)?;
+    llrm_mir::dbgimport::types_and_globals(&mut module);
+    object_of(&module, width, options, |functions| crate::debug::sections(&module, width, functions, source))
+}
+
+fn object_of(
+    module: &llrm_mir::module::Module,
+    width: Width,
+    options: Options,
+    debug: impl FnOnce(&[crate::object::Encoded]) -> Result<Vec<crate::object::DebugSection>, String>,
+) -> Result<Vec<u8>, String> {
     let mut functions = Vec::new();
     // `EmitTargetFeatures` reads the subtarget of the last function compiled.
     let mut features = crate::features::Features::default();
+    let facts = ModuleFacts::of(module);
     for (_, global, function) in module.functions() {
         if function.is_declaration() {
             continue;
         }
         let name = global.name.owned().ok_or("an unnamed function")?;
         features = crate::features::Features::of(function).map_err(|why| format!("@{name}: {why}"))?;
-        let f = compile_function(&module, &name, width, options).map_err(|why| format!("@{name}: {why}"))?;
+        let f =
+            compile_function_with(module, &name, width, options, &facts).map_err(|why| format!("@{name}: {why}"))?;
         functions.push(crate::object::encode_function(&f));
     }
     if options.exception_model == crate::dag::ExceptionModel::Wasm {
         features = features.with("exception-handling", true)?;
     }
-    Ok(crate::object::write(&functions, &data(&module, width)?, features))
+    let debug = debug(&functions)?;
+    Ok(crate::object::write_with_debug(&functions, &data(module, width)?, features, &debug))
 }
 
 /// The assembler's name for `global`: `.L` ahead of a private one (`Mangler`

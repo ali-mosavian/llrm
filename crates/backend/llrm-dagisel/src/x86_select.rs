@@ -33,6 +33,7 @@ use crate::x86_llrm::{
     FATAN_OPCODE, FCOS_OPCODE, FEXP_OPCODE, FEXP2_OPCODE, FLN_OPCODE, FLOG2_OPCODE, FRINT_OPCODE, FSIN_OPCODE,
     llrm_opcode, select_llrm_node,
 };
+use crate::x86_memop128::select_mem128;
 use crate::x86_mul::{select_mul_flags, select_mul_lohi};
 use crate::x86_rmw::fold_load_store_into_mem_operand;
 use crate::x86_shift::try_shift_amount_mod;
@@ -93,6 +94,11 @@ pub fn select_node<D: AddrDag>(
             // `UCOMIS*rr` and `UCOM_FpIr*` patterns select the compare. Every
             // x86-64 CPU has CMOV; the 32-bit ones in the tables do not.
             if hooks.options.cpu != Cpu::X64 && select_fcmp(dag, node) {
+                return Outcome::Selected;
+            }
+        }
+        x86isd::LLRM_ZERO128 | x86isd::LLRM_COPY128 => {
+            if select_mem128(dag, hooks, node) {
                 return Outcome::Selected;
             }
         }

@@ -20,6 +20,7 @@ pub mod reloads;
 pub mod reschedule;
 pub mod sink;
 pub mod spill;
+pub mod tailmerge;
 pub mod tolir;
 
 pub use commute::commute_tied;
@@ -31,3 +32,4 @@ pub use regalloc::{Allocate, Assignment, GraphColoring, Join, Side, Target};
 pub use reloads::forward_reloads;
 pub use reschedule::reschedule_kills;
 pub use sink::{Jump, machine_sink, machine_sink_in_place, split_critical_edge};
+pub use tailmerge::{TailMergeFunction, merge_tails, tail_merge_blocks};

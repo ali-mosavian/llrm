@@ -99,6 +99,17 @@ pub trait Target {
         false
     }
 
+    /// Where `inst` builds or splits a register from its lanes (a
+    /// `REG_SEQUENCE`, the z80's `PACK`, the 6502's `PACK` and `UNPACK`):
+    /// `(whole, [(part, byte offset, bytes)])`, as operand positions.
+    /// DEVIATE: the pin places the lanes by coalescing the copies
+    /// `eliminateRegSequence` makes; until the lane model lands (exit
+    /// 2026-11-30) each part is hinted the lane of the register its whole is
+    /// copied to or from.
+    fn lane_moves(_inst: &Inst) -> Option<(usize, Vec<(usize, u32, u32)>)> {
+        None
+    }
+
     /// The part of `register` that `inst` reads through its use operand
     /// `operand`, where it reads less than the whole (the Z80's sign test of a
     /// pair reads the high byte). The pin writes the part as a subregister
@@ -342,9 +353,19 @@ fn hoisted_point(
 pub fn split_flag_edges<T: Jump, C>(function: &mut MFunction<C>) {
     'again: loop {
         let succs = successors(function);
+        // how many distinct blocks leave for each block
+        let mut preds = vec![0usize; function.blocks.len()];
+        let mut last = vec![usize::MAX; function.blocks.len()];
+        for (from, out) in succs.iter().enumerate() {
+            for &to in out {
+                if last[to] != from {
+                    last[to] = from;
+                    preds[to] += 1;
+                }
+            }
+        }
         for to in 0..function.blocks.len() {
-            let preds: Vec<usize> = (0..function.blocks.len()).filter(|p| succs[*p].contains(&to)).collect();
-            if preds.len() < 2 {
+            if preds[to] < 2 {
                 continue;
             }
             for phi in function.blocks[to].phis.clone() {
@@ -408,6 +429,12 @@ pub fn eliminate_phis_with<C: Copy>(
 /// The blocks control can go to from each block: the targets its branches
 /// name, and the next block unless the last instruction never falls through.
 pub fn successors<C>(function: &MFunction<C>) -> Vec<Vec<usize>> {
+    // block id to position, once: a branch names its target by id
+    let size = function.blocks.iter().map(|block| block.id as usize + 1).max().unwrap_or(0);
+    let mut position = vec![usize::MAX; size];
+    for (at, block) in function.blocks.iter().enumerate() {
+        position[block.id as usize] = at;
+    }
     function
         .blocks
         .iter()
@@ -418,7 +445,7 @@ pub fn successors<C>(function: &MFunction<C>) -> Vec<Vec<usize>> {
                 .iter()
                 .flat_map(|inst| &inst.operands)
                 .filter_map(|operand| match operand {
-                    Operand::Block(id) => function.blocks.iter().position(|other| other.id == *id),
+                    Operand::Block(id) => position.get(*id as usize).copied().filter(|&at| at != usize::MAX),
                     _ => None,
                 })
                 .collect();

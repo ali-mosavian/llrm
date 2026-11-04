@@ -78,3 +78,30 @@ fn a_divide_narrows_only_where_the_word_quotient_cannot_overflow() {
     let (dag, root) = case(Some(EVT::I16), ISD::SDiv, EVT::I16, Some(7));
     assert_eq!(dag.opcode(root), ISD::SignExtend, "a word over 7");
 }
+
+/// `udiv i32` of two zero-extended words is a word `udiv`, zero extended:
+/// `ONE / (d >> 18) + 1` was `__udivsi3` at 6502 -O1 (+312 B on nbody_fixed)
+/// once the pin's O1 had no correlated-propagation to narrow it.
+#[test]
+fn an_unsigned_divide_of_zero_extended_words_is_made_at_the_word() {
+    let build = |narrow: Option<EVT>, op: ISD| {
+        let tli = TargetLowering::x86_16(Features::default(), MVT::I16);
+        let mut dag = SelectionDAG::new(DagConfig { narrow_divrem: narrow, ..DagConfig::default() });
+        let x = dag.get_register(EVT::I16, 5);
+        let x = dag.get_node(ISD::ZeroExtend, EVT::I32, &[x]);
+        let y = dag.get_register(EVT::I16, 6);
+        let y = dag.get_node(ISD::ZeroExtend, EVT::I32, &[y]);
+        let divide = dag.get_node(op, EVT::I32, &[x, y]);
+        dag.set_root(divide);
+        DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
+        let root = dag.get_root();
+        (dag, root)
+    };
+    for op in [ISD::UDiv, ISD::URem] {
+        let (dag, root) = build(Some(EVT::I16), op);
+        assert_eq!(dag.opcode(root), ISD::ZeroExtend, "{op:?}");
+        assert_eq!(dag.opcode(dag.operand(root, 0)), op);
+        let (dag, root) = build(None, op);
+        assert_eq!(dag.opcode(root), op, "without the target's say-so");
+    }
+}

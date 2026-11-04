@@ -1,6 +1,6 @@
 //! IR to sdasz80 text through allocation and expansion.
 
-use llrm_z80::compile::{allocated, machine_function, text};
+use llrm_z80::compile::{allocated, lines, machine_function, text};
 use llrm_z80::driver::{Level, Request};
 
 const DATALAYOUT: &str = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16";
@@ -230,12 +230,30 @@ fn a_xor_with_a_byte_in_the_high_half_changes_only_the_high_half() {
 
 /// Two selects on one compare with a `sub` between them: the second `jr c`
 /// read the carry of that `sub`, not of the compare, so gcd returned 4 where
-/// the answer is 6. The compare is made again before the second reader.
+/// the answer is 6. Whichever way it is avoided (the `sub` moved clear, the
+/// compare made again), the last flag writer before a `jr` is a `cp`.
 #[test]
-fn a_flag_reader_after_a_clobber_compares_again() {
+fn a_flag_reader_after_a_clobber_reads_the_flags_of_its_compare() {
     let ir = "define i8 @f(i8 %a, i8 %b) {\n  %c = icmp ugt i8 %a, %b\n  %x = select i1 %c, i8 %b, i8 0\n  %d = sub i8 %a, %x\n  %y = select i1 %c, i8 0, i8 %a\n  %e = sub i8 %b, %y\n  %r = xor i8 %d, %e\n  ret i8 %r\n}";
     let out = compiled(ir, "f");
-    assert_eq!(out.lines().filter(|line| line.trim().starts_with("cp a,")).count(), 2, "{out}");
+    let writes_flags = |line: &str| {
+        let op = line.trim().split_whitespace().next().unwrap_or("");
+        matches!(
+            op,
+            "cp" | "sub" | "sbc" | "add" | "adc" | "inc" | "dec" | "and" | "or" | "xor" | "neg"
+        )
+    };
+    let body: Vec<&str> = out.lines().collect();
+    let mut readers = 0;
+    for (at, line) in body.iter().enumerate().filter(|(_, line)| line.trim().starts_with("jr ")) {
+        if line.trim().starts_with("jr L") {
+            continue;
+        }
+        readers += 1;
+        let writer = body[..at].iter().rev().find(|line| writes_flags(line)).expect("a flag writer");
+        assert!(writer.trim().starts_with("cp"), "{writer} feeds {line}\n{out}");
+    }
+    assert!(readers >= 1, "{out}");
 }
 
 /// A byte loaded into `a` and stored through a pair other than `hl` went
@@ -272,11 +290,16 @@ fn a_byte_read_by_an_alu_op_is_read_from_memory() {
 
 /// A loaded byte that is widened went to a byte register and was copied to the
 /// pair's low half (`ld d, (hl)` / `ld e, d` / `ld d, #0`): scmp took a byte
-/// and 4 T-states more per widened load.
+/// and 4 T-states more per widened load. (A word minus the widened byte: with
+/// the byte on both sides it is `SUBZX8`.)
 #[test]
 fn a_widened_load_goes_to_the_pairs_low_half() {
-    let out = text(include_str!("kernels/ir/scmp.ll"), "scmp", 0, &Request::new(Level::O2)).expect("compiles");
-    assert!(out.contains("ld e, (hl)\n\tld d, #0") && !out.contains("ld e, d"), "{out}");
+    let out = compiled(
+        "define i16 @w(ptr %p, i16 %x) {\n  %v = load i8, ptr %p\n  %z = zext i8 %v to i16\n  %r = sub i16 %x, %z\n  ret i16 %r\n}",
+        "w",
+    );
+    let direct = ["ld c, (hl)\n\tld b, #0", "ld e, (hl)\n\tld d, #0"].iter().any(|pair| out.contains(pair));
+    assert!(direct && !out.contains("ld c, b") && !out.contains("ld e, d"), "{out}");
 }
 
 /// `digits` kept its counter across the divide call in a frame slot (`ld
@@ -476,6 +499,32 @@ fn a_byte_shifted_in_a_is_doublings_and_a_rotate_with_a_mask() {
     let out = text(ir, "xs8", 0, &Request::new(Level::Oz)).unwrap_or_else(|why| panic!("{why}"));
     assert!(out.matches("add a, a").count() >= 4 && out.matches("rlca").count() == 3, "{out}");
     assert!(out.contains("and a, #7") && !out.contains("sla a") && !out.contains("srl a"), "{out}");
+}
+
+/// minmax's `lo`, merged by a branch, was copied in ahead of the compare that
+/// decides the branch, so it lived beside the value it replaces and needed a
+/// register of its own: both extremes spilled to the frame, 66 B / 2675 T
+/// against SDCC's 56 B / 2351 T. Sunk below the compare, `lo` and `hi` stay in
+/// registers.
+#[test]
+fn a_merged_value_is_not_copied_in_ahead_of_the_compare_that_decides_it() {
+    let ir = include_str!("kernels/ir/minmax.ll");
+    for level in [Level::O2, Level::Oz] {
+        let out = text(ir, "minmax", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
+        assert!(!out.contains("(ix)"), "{level:?}\n{out}");
+    }
+}
+
+/// fletcher -Oz made its zero in the loop (`ld e, #0; ld c, e`, 11 T a trip)
+/// where the other allocation of the argument copies keeps it in a register
+/// of its own: 1811 T against 1706. The cheaper by the loop's weighted clocks
+/// stays.
+#[test]
+fn the_allocation_of_a_loop_with_the_cheaper_weighted_clocks_is_kept() {
+    let ir = include_str!("kernels/ir/fletcher.ll");
+    let out = text(ir, "fletcher", 0, &Request::new(Level::Oz)).unwrap_or_else(|why| panic!("{why}"));
+    let (zero, head) = (out.find("ld e, #0"), out.find("L0_1:"));
+    assert!(zero.is_some() && zero < head, "{out}");
 }
 
 /// popcount -Oz copied its loop value into `a` at the loop head and again at
@@ -802,6 +851,41 @@ fn a_string_loop_is_the_runtime_strlen_at_every_level() {
     }
 }
 
+/// A branch to a block that is only a `ret` prints as `ret z`; the block was
+/// printed anyway, a dead `ret` behind the live one: gcd -O2 was 20 B with
+/// two, 19 B with one.
+#[test]
+fn a_return_block_only_conditional_returns_reach_is_not_printed() {
+    let ir = include_str!("kernels/ir/gcd.ll");
+    let out = text(ir, "gcd", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let rets = out.lines().filter(|line| line.trim() == "ret").count();
+    assert_eq!(rets, 1, "{out}");
+    assert!(out.contains("ret z"), "{out}");
+}
+
+/// lz4's `tmp == 255` was widened to a word compare of the zero-extended load
+/// (`ExtendSetCCUses`, as the pin does where a word compare costs the same as a
+/// byte one): `ld a, l; sub a, #255; jr nz; ld a, h; sub a, #0`, and the extra
+/// pressure spilled more. The compare stays on the byte: `cp a, #255`.
+#[test]
+fn a_byte_compared_with_a_constant_is_not_widened_to_a_word_compare() {
+    let ir = include_str!("kernels/ir/lz4.ll");
+    let out = text(ir, "lz4", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("cp a, #255") && !out.contains("sub a, #255"), "{out}");
+}
+
+/// fletcher -O2 made its zero in the loop (`ld e, #0` then `ld c, e`, every
+/// trip) once the plain allocation was chosen over the hoisted one by static
+/// size alone: 35 B / 1456 T became 35 B / 1561 T. The two are chosen by the
+/// loop's weighted clocks.
+#[test]
+fn a_zero_a_loop_needs_is_made_before_the_loop_when_that_is_faster() {
+    let ir = include_str!("kernels/ir/fletcher.ll");
+    let out = text(ir, "fletcher", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let body = out.split("L0_2:").nth(1).and_then(|rest| rest.split("L0_12:").next()).expect("the loop");
+    assert!(!body.contains("#0"), "{out}");
+}
+
 /// minmax -Oz loaded a byte into `a` that its max compare also reads from a
 /// register, so the byte was copied out of `a` again and the pointer lost its
 /// pair: spilled and reloaded by `pop de; push de` every trip, 60 B / 2938 T
@@ -812,6 +896,18 @@ fn a_byte_also_read_as_a_register_is_not_loaded_through_a() {
     let ir = include_str!("kernels/ir/minmax.ll");
     let out = text(ir, "minmax", 0, &Request::new(Level::Oz)).unwrap_or_else(|why| panic!("{why}"));
     assert!(!out.contains("pop de") && out.contains("ld d, (hl)"), "{out}");
+}
+
+/// A byte wanted in `a` and in a register of its own was loaded through `hl`
+/// by a fixed rule, which lz4c -O2 paid for in pressure on `hl`: 443 B against
+/// 428 B when it is loaded through its pair. Both are allocated and the
+/// cheaper by weighted clocks stays.
+#[test]
+fn a_byte_wanted_in_a_and_in_a_register_is_loaded_the_cheaper_way() {
+    let ir = include_str!("kernels/ir/lz4c.ll");
+    let out = lines(ir, "lz4c", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let (bytes, _) = llrm_z80::expand::price(&out);
+    assert!(bytes <= 435, "{bytes} B");
 }
 
 /// `h * 33` (InstCombine folds `(h << 5) + h` into it) was a `__mulhi3` call:
@@ -975,10 +1071,218 @@ fn a_stack_argument_beyond_the_ix_displacement_is_stored_through_iy() {
 }
 
 /// A float argument or result killed the compiler ("legal parts: Type(F32)",
-/// 8 programs of tests/run/c): it is refused by name.
+/// 8 programs of tests/run/c); it is softened to an integer now (#6578), so
+/// passing one through is register moves and a return, no routine.
 #[test]
-fn a_float_argument_is_refused_not_a_panic() {
+fn a_float_argument_passes_as_two_words() {
     let ir = format!("target datalayout = \"{DATALAYOUT}\"\ndefine float @f(float %x) {{\n  ret float %x\n}}");
-    let why = text(&ir, "f", 0, &Request::new(Level::O2)).expect_err("the compiler refuses a float");
-    assert!(why.contains("not a byte or a word"), "{why}");
+    let asm = text(&ir, "f", 0, &Request::new(Level::O2)).expect("a float compiles");
+    assert!(asm.trim_end().ends_with("ret") && !asm.contains("call") && !asm.contains("jp "), "{asm}");
+}
+
+/// A flag writer scheduled between a compare and its branch overwrites the
+/// flags the branch reads (gcd returned 4 where the answer is 6). The emitter
+/// makes the compare again before the branch. Fed the split order directly,
+/// whatever the scheduler would do.
+#[test]
+fn a_compare_is_made_again_when_a_flag_writer_sits_between_it_and_its_branch() {
+    use llrm_codegen::backend::selectiondag::SDValue;
+    use llrm_codegen::backend::selectiondag::isd::ISD;
+    use llrm_z80::dagisel::generated::ids::opcode as instr;
+    use llrm_z80::driver::selections;
+    use llrm_z80::mfunc::{Kind, emit};
+
+    let ir = include_str!("kernels/ir/find.ll");
+    let (_, selection) =
+        selections(ir, &Request::new(Level::O2)).expect("selects").into_iter().find(|(one, _)| one == "find").unwrap();
+    let mut selection = selection.expect("selected");
+    let compares = |selection: &llrm_z80::dagisel::function::Selection| {
+        let function = emit("find", selection).expect("emitted");
+        function.blocks.iter().flat_map(|block| &block.insts).filter(|inst| inst.kind == Kind::Op("CP8m")).count()
+    };
+    assert_eq!(compares(&selection), 1, "premise: scheduled apart, the compare is made once");
+
+    let block = selection
+        .blocks
+        .iter_mut()
+        .find(|block| {
+            block
+                .units
+                .iter()
+                .any(
+                    |unit| matches!(
+                        block.dag.node(SDValue { node: unit.nodes[0], res: 0 }).opcode,
+                        ISD::Machine(op) if op == u32::from(instr::CP8m)
+                    ),
+                )
+        })
+        .expect("the block with the compare");
+    let at = |block: &llrm_z80::dagisel::function::Selected, wanted: u16| {
+        block
+            .units
+            .iter()
+            .position(
+                |unit| matches!(
+                    block.dag.node(SDValue { node: unit.nodes[0], res: 0 }).opcode,
+                    ISD::Machine(op) if op == u32::from(wanted)
+                ),
+            )
+    };
+    // the increment and the copy of its result, after the compare
+    let (cp, inc) = (at(block, instr::CP8m).unwrap(), at(block, instr::INC8).unwrap());
+    assert!(inc < cp, "premise: the increment is scheduled before the compare");
+    let moved: Vec<_> = block.units.drain(inc..=inc + 1).collect();
+    let cp = cp - 2;
+    for (at, unit) in moved.into_iter().enumerate() {
+        block.units.insert(cp + 1 + at, unit);
+    }
+    assert_eq!(compares(&selection), 2, "the compare is made again after the increment");
+}
+
+/// Neither the `Source` nor the `ILP` scheduler wins every function (DEVIATE
+/// Z80S1): `ILP` makes xs8 -O2 two bytes smaller, and spills minmax -Oz to the
+/// frame (53 B against 29). The cheaper is kept.
+#[test]
+fn a_function_is_scheduled_by_whichever_of_source_and_ilp_makes_it_cheaper() {
+    use llrm_z80::compile::lines;
+    use llrm_z80::expand::price;
+    let cost = |ir: &str, name: &str, level| {
+        price(&lines(ir, name, 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}")))
+    };
+    let xs8 = cost(include_str!("kernels/ir/xs8.ll"), "xs8", Level::O2);
+    let minmax = cost(include_str!("kernels/ir/minmax.ll"), "minmax", Level::Oz);
+    assert!(xs8.0 <= 26, "xs8 -O2 is {} B, Source alone gives 28", xs8.0);
+    assert!(minmax.0 <= 29, "minmax -Oz is {} B, ILP alone gives 53", minmax.0);
+}
+
+/// A frame object out of ix's reach is addressed through `ld iy, #n; add iy,
+/// sp`, and the sum sets the carry: a reload between a compare and its `jp c`
+/// changed what the branch saw (divshift's `smod(-c, -d)` returned garbage once
+/// its frame passed 128 bytes). The flags are kept across the sum, and the
+/// stack pointer's two bytes of `push af` are in its offset. Hand-built, in the
+/// order the source gives: compare, reload, branch.
+#[test]
+fn a_far_frame_access_between_a_compare_and_its_branch_keeps_the_carry() {
+    use llrm_spike_mf::regalloc::Assignment;
+    use llrm_z80::expand::{Line, finish, reads};
+    use llrm_z80::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
+    use llrm_z80::regalloc::Class;
+    let mut function = MFunction::new("f");
+    function.classes = vec![Class::Gr8, Class::Gr8, Class::Gr8];
+    let compare = Inst {
+        sets_flags: true,
+        ..Inst::new(
+            Kind::Op("CP8r"),
+            vec![Operand::Def(Reg::Phys(llrm_z80::reg::FLAGS)), Operand::Use(Reg::Virt(0)), Operand::Use(Reg::Virt(1))],
+        )
+    };
+    let reload = Inst::new(Kind::Op("RELOAD8"), vec![Operand::Def(Reg::Virt(2)), Operand::Frame(100)]);
+    let branch = Inst {
+        reads_flags: true,
+        terminator: true,
+        ..Inst::new(Kind::Op("JPC"), vec![Operand::Block(1), Operand::Use(Reg::Phys(llrm_z80::reg::FLAGS))])
+    };
+    function.blocks.push(Block { id: 0, insts: vec![compare, reload, branch], phis: Vec::new() });
+    function.blocks.push(Block { id: 1, insts: vec![Inst::new(Kind::Op("RET"), vec![])], phis: Vec::new() });
+    let assignment = Assignment(vec![llrm_z80::reg::A, llrm_z80::reg::B, llrm_z80::reg::C]);
+    // object 100 sits below 100 words of other objects: out of ix's reach
+    let slots: Vec<(i32, usize)> = (0..101).map(|at| (at, 2)).collect();
+    let lines = finish(&function, &assignment, 0, &slots, reads(&function)).unwrap_or_else(|why| panic!("{why}"));
+    let insts: Vec<&str> = lines
+        .iter()
+        .filter_map(|line| match line {
+            Line::Inst(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    let cp = insts.iter().position(|text| *text == "cp a, b").expect("the compare");
+    let sum = cp
+        + insts[cp..]
+            .iter()
+            .position(|text| *text == "add iy, sp")
+            .unwrap_or_else(|| panic!("premise: via iy {insts:?}"));
+    assert_eq!(insts[sum - 2], "push af", "{insts:?}");
+    assert_eq!(insts[sum + 1], "pop af", "{insts:?}");
+    assert!(insts[sum - 1].starts_with("ld iy, #"), "{insts:?}");
+}
+
+/// `br i1 %c, label %r, label %r` (left by -O0 and by x_switch's mid-end)
+/// made a `jp c` and a `jp` to one `ret` block: the block was copied into
+/// the predecessor in place of the `jp` and deleted, leaving the `jp c`
+/// without a target, and the compiler panicked in tail merging.
+#[test]
+fn a_conditional_branch_to_the_same_return_block_as_the_jump_keeps_that_block() {
+    let ir = format!(
+        "target datalayout = \"{DATALAYOUT}\"\ndefine i16 @f(i16 %x) {{\n  %c = icmp sgt i16 %x, 0\n  br i1 %c, label %r, label %r\nr:\n  ret i16 0\n}}"
+    );
+    let out = text(&ir, "f", 0, &Request::new(Level::O0)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("ret"), "{out}");
+}
+
+/// A word that joins a byte and a constant (`*a`, or 0 where the string
+/// ended) was not known to have a zero high byte, so strcmp's `*a - *b` was a
+/// 16-bit `sbc hl, de` with both bytes widened by hand: scmp -O2 took 36 B and
+/// 183 clocks. The difference is `sub a, b` and the borrow as the high byte.
+#[test]
+fn a_difference_of_a_phi_of_bytes_and_a_byte_is_a_byte_subtract_with_the_borrow() {
+    let out = text(include_str!("kernels/ir/scmp.ll"), "scmp", 0, &Request::new(Level::O2)).expect("compiles");
+    assert!(out.contains("sbc a, a") && !out.contains("sbc hl, de"), "{out}");
+}
+
+/// switch.ll's two functions took 8 full allocations each (the return block
+/// copied or kept, constants hoisted or not, the argument copies joined or
+/// not): 16 greedy runs, 51% of a 1.3 G-instruction compile. Copied and kept
+/// gave the same code on all 60 kernel cells; only the copied one is made.
+/// lz4 -O2 took 16 runs. Each of the two schedulers (`Source`, `ILP`) makes
+/// its own: 16.
+#[test]
+fn a_function_is_allocated_at_most_eight_times_per_scheduler() {
+    let ir = include_str!("kernels/ir/lz4.ll");
+    llrm_z80::compile::take_allocations();
+    text(ir, "lz4", 0, &Request::new(Level::O2)).expect("compiles");
+    let runs = llrm_z80::compile::take_allocations();
+    assert!(runs <= 16, "lz4 -O2 was allocated {runs} times");
+}
+
+fn many(
+    count: usize,
+    constant: u32,
+) -> String {
+    let mut ir = format!("target datalayout = \"{DATALAYOUT}\"\n");
+    for i in 0..count {
+        ir.push_str(&format!(
+            "define i16 @f{i}(i16 %a) {{\n  %r = add i16 %a, {}\n  ret i16 %r\n}}\n",
+            constant + i as u32
+        ));
+    }
+    ir
+}
+
+/// Every function of a module ran the whole mid-end and the selection of every
+/// function again, twice (the return block copied and kept): a module of N
+/// functions cost N squared (switch.ll 1.29 G instructions, 4.75x the x86
+/// reference). The module is selected once however many functions it has.
+#[test]
+fn a_module_is_run_through_the_mid_end_once_however_many_functions_it_has() {
+    for count in [3, 30] {
+        let ir = many(count, 1);
+        llrm_z80::compile::take_selection_runs();
+        for i in 0..count {
+            text(&ir, &format!("f{i}"), i, &Request::new(Level::O2)).expect("compiles");
+        }
+        assert_eq!(llrm_z80::compile::take_selection_runs(), 1, "{count} functions");
+    }
+}
+
+/// The module kept for the next function is the module asked for: two modules
+/// that name a function alike, compiled one after the other, give their own
+/// code.
+#[test]
+fn two_modules_compiled_in_turn_do_not_share_the_cache() {
+    let (one, other) = (many(2, 1000), many(2, 2000));
+    let first = text(&one, "f0", 0, &Request::new(Level::O2)).expect("compiles");
+    let second = text(&other, "f0", 0, &Request::new(Level::O2)).expect("compiles");
+    assert!(first.contains("#1000") && second.contains("#2000"), "{first}\n{second}");
+    let again = text(&one, "f0", 0, &Request::new(Level::O2)).expect("compiles");
+    assert_eq!(first, again);
 }

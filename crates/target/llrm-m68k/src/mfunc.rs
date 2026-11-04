@@ -412,6 +412,26 @@ impl Emitter<'_> {
                 };
                 into.push(Inst::copy(dst, src));
             }
+            // `TargetOpcode::IMPLICIT_DEF` (10), which has no name in the pin's
+            // instruction table: an undefined value, a zero until MIR has
+            // `undef` (the pin's ProcessImplicitDefs drops it)
+            ISD::Machine(10) => {
+                let name = match n.values[0].size_in_bits() {
+                    8 => "MOVI8di",
+                    16 => "MOVI16di",
+                    _ => "MOVI32ri",
+                };
+                let desc =
+                    local::code_of(name).and_then(local::desc).ok_or_else(|| format!("{name}: no description"))?;
+                let class = desc
+                    .operands
+                    .first()
+                    .and_then(|one| Class::of_pin(one.reg_class))
+                    .unwrap_or_else(|| Class::of_type(n.values[0]));
+                let dst = self.new_reg(class);
+                self.values.insert((node, 0), dst);
+                into.push(op_inst(name, desc, vec![Operand::Def(dst), Operand::Imm(0)]));
+            }
             ISD::Machine(code) => {
                 let name = opcode_name(code).ok_or_else(|| {
                     let ops: Vec<String> = n

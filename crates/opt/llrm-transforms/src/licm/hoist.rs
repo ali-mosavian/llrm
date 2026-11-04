@@ -6,7 +6,7 @@ use llrm_analysis::mssa::{AccessId, Kind, Mssa};
 use llrm_mir::context::ConstantKind;
 use llrm_mir::facts::{Fact, Facts};
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
-use llrm_mir::opcode::{Attribute, BinaryOp, Flags as Wrap, Opcode};
+use llrm_mir::opcode::{Attribute, BinaryOp, Flags as Wrap, IntPredicate, Opcode};
 use llrm_mir::passes::{self, Outer};
 
 use super::{Flags, LoopCtx, LoopSafety, calls};
@@ -40,9 +40,9 @@ fn loop_blocks_rpo(ctx: &LoopCtx) -> Vec<BlockId> {
 /// the instructions it hoists to `preheader`. Not built (L1): the
 /// reciprocal of an `fdiv` (MIR has no `arcp`), `hoistInsertPastInsert`
 /// (no vectors), the invariant-start and guard intrinsics, and
-/// `hoistArithmetics` but `hoistGEP` and `hoistBOAssociation` (the latter only
-/// for integers: a float add or multiply needs `reassoc` and `nsz`, and the
-/// intersection of the two fast-math flags).
+/// `hoistArithmetics` but `hoistMinMax`, `hoistGEP` and `hoistBOAssociation`
+/// (the latter only for integers: a float add or multiply needs `reassoc` and
+/// `nsz`, and the intersection of the two fast-math flags).
 #[allow(clippy::too_many_arguments)]
 pub fn hoist_region(
     unit: &passes::Unit,
@@ -78,8 +78,11 @@ pub fn hoist_region(
                 found.push(Hoist { inst, preheader, guaranteed: safety.is_guaranteed_to_execute(inst) });
             // Try to reassociate instructions so that part of computations can
             // be done out of loop.
-            } else if let Some(one) = hoist_gep(unit, ctx, inst).or_else(|| hoist_bo_association(unit, ctx, inst)) {
-                ctx.state.gone.borrow_mut().extend([one.inst(), one.erased()]);
+            } else if let Some(one) = hoist_min_max(unit, ctx, inst)
+                .or_else(|| hoist_gep(unit, ctx, inst))
+                .or_else(|| hoist_bo_association(unit, ctx, inst))
+            {
+                ctx.state.gone.borrow_mut().extend([one.inst()].into_iter().chain(one.erased()));
                 // The preheader gets it where the visit reached it, after the
                 // hoists found so far.
                 reassociated.push((found.len(), one));
@@ -143,6 +146,23 @@ pub enum Reassociation {
     /// [`hoist_gep`]: `gep (gep ptr, inner), outer` becomes
     /// `gep (gep ptr, outer), inner`, the new inner one made in the preheader.
     Gep { gep: InstId, src: InstId, in_bounds: bool },
+    /// [`hoist_min_max`]: `x < a && x < b` becomes `x < min(a, b)`, the
+    /// `min` made in the preheader, and the two compares go.
+    MinMax {
+        /// The `and`, `or` or `select` of the two compares.
+        logic: InstId,
+        cond1: InstId,
+        cond2: InstId,
+        lhs: Operand,
+        rhs1: Operand,
+        rhs2: Operand,
+        signed: bool,
+        use_min: bool,
+        /// The predicate of the new compare (inverted for a logical or).
+        pred: IntPredicate,
+        /// A select: `rhs2` was not necessarily evaluated, so it is frozen.
+        freeze_rhs2: bool,
+    },
 }
 
 impl Reassociation {
@@ -151,16 +171,134 @@ impl Reassociation {
         match *self {
             Self::BinaryOp { bo, .. } => bo,
             Self::Gep { gep, .. } => gep,
+            Self::MinMax { logic, .. } => logic,
         }
     }
 
-    /// The instruction it also erases.
-    pub fn erased(&self) -> InstId {
+    /// The instructions it also erases.
+    pub fn erased(&self) -> Vec<InstId> {
         match *self {
-            Self::BinaryOp { bo0, .. } => bo0,
-            Self::Gep { src, .. } => src,
+            Self::BinaryOp { bo0, .. } => vec![bo0],
+            Self::Gep { src, .. } => vec![src],
+            Self::MinMax { cond1, cond2, .. } => vec![cond1, cond2],
         }
     }
+}
+
+/// `MatchICmpAgainstInvariant`: a one-use relational integer compare `cond` of
+/// a loop-variant value against an invariant one, the variant one on the left;
+/// its definition, predicate (inverted for a logical or) and both sides.
+fn against_invariant(
+    function: &Function,
+    ctx: &LoopCtx,
+    cond: Operand,
+    inverse: bool,
+) -> Option<(InstId, IntPredicate, Operand, Operand)> {
+    let Operand::Value(value) = cond else { return None };
+    let ValueDef::Instruction(def) = function.value(value).def else { return None };
+    let compare = function.instruction(def);
+    let Opcode::ICmp(mut pred) = compare.opcode else { return None };
+    if !function.users(value).has_one_use() || ctx.state.gone.borrow().contains(&def) {
+        return None;
+    }
+    let [mut lhs, mut rhs] = compare.operands[..] else { return None };
+    if matches!(pred, IntPredicate::Eq | IntPredicate::Ne) {
+        return None;
+    }
+    if ctx.is_loop_invariant(lhs) {
+        std::mem::swap(&mut lhs, &mut rhs);
+        pred = pred.swapped();
+    }
+    if ctx.is_loop_invariant(lhs) || !ctx.is_loop_invariant(rhs) {
+        return None;
+    }
+    if inverse {
+        pred = pred.inverse();
+    }
+    Some((def, pred, lhs, rhs))
+}
+
+/// Whether `inst` could be a [`hoist_min_max`]'s logical operation: an `and`,
+/// `or` or select of two compares [`against_invariant`] with one predicate and
+/// one variant side. The cheap look `seeded` takes ahead of the memory graph:
+/// a loop with a logical operation of unrelated compares is not seeded by it.
+pub fn may_hoist_min_max(
+    function: &Function,
+    ctx: &LoopCtx,
+    inst: InstId,
+) -> bool {
+    let logic = function.instruction(inst);
+    let is_constant = |operand: Operand| matches!(operand, Operand::Constant(_));
+    let (a, b, inverse) = match (&logic.opcode, &logic.operands[..]) {
+        (Opcode::Binary(BinaryOp::And), &[a, b]) => (a, b, false),
+        (Opcode::Binary(BinaryOp::Or), &[a, b]) => (a, b, true),
+        // `select a, b, false` and `select a, true, b`.
+        (Opcode::Select, &[a, b, c]) if is_constant(c) => (a, b, false),
+        (Opcode::Select, &[a, b, c]) if is_constant(b) => (a, c, true),
+        _ => return false,
+    };
+    let (Some((_, pred1, lhs1, _)), Some((_, pred2, lhs2, _))) =
+        (against_invariant(function, ctx, a, inverse), against_invariant(function, ctx, b, inverse))
+    else {
+        return false;
+    };
+    pred1 == pred2 && lhs1 == lhs2
+}
+
+/// [`hoistMinMax`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L2256):
+/// `x < a && x < b` (or `||`, as the inverse) with `a` and `b` invariant in
+/// the loop becomes one compare against `min(a, b)`, made in the preheader.
+fn hoist_min_max(
+    unit: &passes::Unit,
+    ctx: &LoopCtx,
+    inst: InstId,
+) -> Option<Reassociation> {
+    let function = &*unit.function;
+    let logic = function.instruction(inst);
+    let result = logic.result?;
+    let query = llrm_mir::valuetracking::Query {
+        context: unit.context,
+        globals: &[],
+        metadata: &[],
+        function,
+        layout: unit.layout,
+        dt: None,
+        assumptions: None,
+        dom_conditions: None,
+        cond_context: None,
+        cxt: Some(inst),
+    };
+    use llrm_mir::valuetracking::pattern;
+    let (inverse, (cond1, cond2)) = if let Some(operands) = pattern::logical_or(&query, Operand::Value(result)) {
+        (true, operands)
+    } else if let Some(operands) = pattern::logical_and(&query, Operand::Value(result)) {
+        (false, operands)
+    } else {
+        return None;
+    };
+    let (def1, pred1, lhs1, rhs1) = against_invariant(function, ctx, cond1, inverse)?;
+    let (def2, pred2, lhs2, rhs2) = against_invariant(function, ctx, cond2, inverse)?;
+    unit.context.types.int_bits(query.type_of(lhs1)?)?;
+    if pred1 != pred2 || lhs1 != lhs2 {
+        return None;
+    }
+    let use_min = matches!(
+        pred1,
+        IntPredicate::Ult | IntPredicate::Ule | IntPredicate::Slt | IntPredicate::Sle
+    );
+    let pred = if inverse { pred1.inverse() } else { pred1 };
+    Some(Reassociation::MinMax {
+        logic: inst,
+        cond1: def1,
+        cond2: def2,
+        lhs: lhs1,
+        rhs1,
+        rhs2,
+        signed: pred1.is_signed(),
+        use_min,
+        pred,
+        freeze_rhs2: logic.opcode == Opcode::Select,
+    })
 }
 
 /// [`hoistGEP`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L2337):
@@ -351,9 +489,9 @@ pub fn is_safe_to_speculatively_execute_with(
 /// The rule of SimplifyCFG's own speculation (`speculativelyExecuteBB`,
 /// `foldTwoEntryPHINode`, `foldBranchToCommonDest`, hoisting and sinking common
 /// code): [`is_safe_to_speculatively_execute_in`] where a load is safe only
-/// if its bytes are dereferenceable, as `isDereferenceableAndAlignedPointer`
-/// has it (alignment is not asked: x86 reads unaligned). LICM and the other
-/// users keep the target's no-trap rule (DEVIATE LM1 of `hoist`).
+/// if its bytes are dereferenceable and its pointer is known to be as aligned
+/// as the load, as `isDereferenceableAndAlignedPointer` has it. LICM and the
+/// other users keep the target's no-trap rule (DEVIATE LM1 of `hoist`).
 pub fn is_safe_to_speculatively_execute_for_cfg(
     context: &llrm_mir::context::Context,
     layout: &llrm_mir::datalayout::DataLayout,
@@ -362,6 +500,50 @@ pub fn is_safe_to_speculatively_execute_for_cfg(
     inst: InstId,
 ) -> bool {
     speculatable(context, layout, function, outer, inst, false, true)
+}
+
+/// The alignment `isDereferenceableAndAlignedPointer` knows of `pointer`:
+/// `Value::getPointerAlignment` of the object under constant-offset GEPs,
+/// less what the offset breaks (a variable offset knows none).
+fn pointer_alignment_at(
+    context: &llrm_mir::context::Context,
+    layout: &llrm_mir::datalayout::DataLayout,
+    outer: &Outer,
+    function: &Function,
+    pointer: Operand,
+) -> u64 {
+    let query = llrm_mir::valuetracking::Query {
+        globals: &outer.globals,
+        ..llrm_mir::valuetracking::Query::bare(context, function, layout)
+    };
+    let mut at = pointer;
+    let mut offset: i128 = 0;
+    while let Operand::Value(value) = at
+        && let ValueDef::Instruction(def) = function.value(value).def
+        && let Opcode::GetElementPtr { source } = function.instruction(def).opcode
+    {
+        let operands = &function.instruction(def).operands;
+        let indices: Vec<Option<i128>> = operands[1..]
+            .iter()
+            .map(|&one| match one {
+                Operand::Constant(id) => match context.get(id).kind {
+                    ConstantKind::Int(bits) => {
+                        Some(llrm_mir::context::signed(bits, context.types.int_bits(context.get(id).ty).unwrap_or(64)))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        let (constant, variable) = layout.collect_offset(&context.types, source, &indices);
+        if !variable.is_empty() {
+            return 1;
+        }
+        offset += constant as i128;
+        at = operands[0];
+    }
+    let base = llrm_mir::valuetracking::known::pointer_alignment(&query, at);
+    if offset == 0 { base } else { base.min(1 << offset.trailing_zeros().min(63)) }
 }
 
 fn speculatable(
@@ -399,17 +581,23 @@ fn speculatable(
             // INT_MIN.
             constant_int(instruction.operands[0]).is_some_and(|numerator| numerator != 1u128 << (width - 1))
         }
-        Opcode::Load { volatile, .. } => {
+        Opcode::Load { align, volatile } => {
             if *volatile {
                 return false;
             }
             let (pointer, bytes) = (instruction.operands[0], layout.store_size(&context.types, instruction.ty));
+            if pin_loads {
+                // `isDereferenceableAndAlignedPointer`: the pointer's known
+                // alignment must reach the load's own.
+                let wanted = align.unwrap_or_else(|| layout.align(&context.types, instruction.ty));
+                return pointer_alignment_at(context, layout, outer, function, pointer) >= wanted
+                    && llrm_mir::valuetracking::dereferenceable(context, layout, outer.sizes(), function, pointer, bytes);
+            }
             llrm_mir::valuetracking::dereferenceable(context, layout, outer.sizes(), function, pointer, bytes)
-                || (!pin_loads
-                    && !outer.target().load_may_trap(
-                        bytes,
-                        llrm_mir::valuetracking::alignment(context, layout, &outer.globals, function, pointer),
-                    ))
+                || !outer.target().load_may_trap(
+                    bytes,
+                    llrm_mir::valuetracking::alignment(context, layout, &outer.globals, function, pointer),
+                )
         }
         Opcode::Call(info) => {
             // The called function could have undefined behavior or

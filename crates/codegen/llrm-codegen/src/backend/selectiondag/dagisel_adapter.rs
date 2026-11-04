@@ -225,6 +225,9 @@ pub fn pin_vt(vt: EVT) -> Vt {
         EVT::Simple(MVT::F32) => mvt::f32,
         EVT::Simple(MVT::F64) => mvt::f64,
         EVT::Simple(MVT::F80) => mvt::f80,
+        // The opaque 16 bytes of an SSE move (`LLRM_ZERO128`, `LLRM_COPY128`);
+        // no pattern asks for it (SD540).
+        EVT::Simple(MVT::I128) => mvt::v4i32,
         EVT::Simple(MVT::Other) => mvt::Other,
         EVT::Simple(MVT::Glue) => mvt::Glue,
         _ => Vt(u16::MAX),
@@ -242,6 +245,7 @@ fn our_vt(vt: Vt) -> EVT {
         (mvt::f32, EVT::Simple(MVT::F32)),
         (mvt::f64, EVT::Simple(MVT::F64)),
         (mvt::f80, EVT::Simple(MVT::F80)),
+        (mvt::v4i32, EVT::Simple(MVT::I128)),
         (mvt::Other, EVT::OTHER),
         (mvt::Glue, EVT::GLUE),
     ]
@@ -477,6 +481,18 @@ impl<'a> DagisAdapter<'a> {
     ) -> bool {
         self.dag.use_candidates(node).iter().any(|user| {
             !self.dead.contains(user) && self.dag.nodes()[*user as usize].ops.iter().any(|op| op.node == node)
+        })
+    }
+
+    /// Whether a live user of `node` is still to be selected: not a machine
+    /// node and not marked selected.
+    pub(super) fn has_pending_user(
+        &self,
+        node: u32,
+    ) -> bool {
+        self.live_user_nodes(node).into_iter().any(|user| {
+            !matches!(self.dag.nodes()[user as usize].opcode, ISD::Machine(_))
+                && self.node_id.get(user as usize).is_none_or(|id| *id != -1)
         })
     }
 
@@ -1320,7 +1336,7 @@ impl AddrDag for DagisAdapter<'_> {
 
 /// `SelectionDAG::haveNoCommonBitsSet`, by the known bits: every bit is known
 /// zero in one of the two.
-fn no_common_bits(
+pub(super) fn no_common_bits(
     dag: &SelectionDAG,
     a: SDValue,
     b: SDValue,

@@ -564,6 +564,10 @@ impl Tti for X86 {
         self.tuning.multiply_by_clocks
     }
 
+    fn price_pin_multiplies(&self) -> bool {
+        self.tuning.price_pin_multiplies
+    }
+
     fn has_cmov(&self) -> bool {
         self.cmov
     }
@@ -589,7 +593,14 @@ impl Tti for X86 {
     }
 
     fn recursive_inlining(&self) -> Option<(u32, i64)> {
-        self.real_mode.as_ref()?.recursive_inlining
+        match self.real_mode.as_ref() {
+            Some(real) => real.recursive_inlining,
+            None => self.tuning.recursive_inlining,
+        }
+    }
+
+    fn recursive_edge_growth(&self) -> Option<(i64, i64)> {
+        self.tuning.recursive_edge_growth
     }
 
     fn priced_self_inlining(&self) -> Option<(u32, i64)> {
@@ -1007,6 +1018,12 @@ impl Tti for X86 {
         self.real_mode.as_ref().map_or(self.registers.unwrap_or(if self.quad { 16 } else { 8 }), |real| real.registers)
     }
 
+    /// Real mode declares the registers the allocator has, and the live count
+    /// LSR keeps is exact there: the six fill (PLASMA's loop, 4 + 2 live).
+    fn lsr_reserved_registers(&self) -> u32 {
+        u32::from(self.real_mode.is_none())
+    }
+
     /// `[bp+disp]` and `[esp+disp]` reach a stack slot with no register to hold
     /// it.
     fn frame_address_is_free(&self) -> bool {
@@ -1018,9 +1035,13 @@ impl Tti for X86 {
         if self.quad { 64 } else { 32 }
     }
 
-    /// `lea` forms `base + index + displacement` in one instruction.
-    fn address_form_adds_offsets(&self) -> bool {
-        true
+    /// `lea` forms `base + index + displacement` in one instruction, from 16
+    /// bits up: there is no 8-bit `lea`.
+    fn address_form_adds_offsets(
+        &self,
+        bits: u32,
+    ) -> bool {
+        bits >= 16
     }
 
     /// DEVIATE LU4: real mode keeps the loop as written where LSR's own model

@@ -132,7 +132,7 @@ impl Block {
     /// row for it, which is the format's to write (or to leave to the row
     /// before it).
     pub fn place_unlocated(&mut self) {
-        let mut reader: std::collections::HashMap<Reg, u32> = std::collections::HashMap::new();
+        let mut reader: llrm_support::hash::HashMap<Reg, u32> = Default::default();
         for inst in self.insts.iter_mut().rev() {
             if inst.origin == 0 {
                 inst.origin = inst
@@ -193,6 +193,8 @@ pub struct MFunction<C> {
     /// The function's own stack objects (static allocas): frame index, size
     /// and alignment in bytes.
     pub locals: Vec<(i32, i64, i64)>,
+    /// The function is built for size (`shouldOptimizeForSize`).
+    pub optimize_for_size: bool,
     /// The source places the instructions' [`Inst::origin`]s number, from 1.
     pub places: Vec<llrm_codegen::model::lir::SrcLoc>,
     /// `-g`: the source variables and where each is.
@@ -212,6 +214,7 @@ impl<C> MFunction<C> {
             classes: Vec::new(),
             fixed: BTreeMap::new(),
             locals: Vec::new(),
+            optimize_for_size: false,
             places: Vec::new(),
             variables: Vec::new(),
         }

@@ -178,7 +178,8 @@ def check(code: list[str], rows: list[tuple]) -> list[str]:
             shift = _imm(operands[3].split("#")[1]) if len(operands) > 3 and operands[3].startswith("lsl") else 0
             sp += (-1 if mnemonic == "sub" else 1) * (_imm(operands[2]) << shift)
         elif mnemonic == "add" and operands[:2] == [MACHINE.fp_name, MACHINE.sp_name] and operands[2].startswith("#"):
-            fp = sp + _imm(operands[2])
+            shift = _imm(operands[3].split("#")[1]) if len(operands) > 3 and operands[3].startswith("lsl") else 0
+            fp = sp + (_imm(operands[2]) << shift)
         elif mnemonic == "mov" and operands[:2] == [MACHINE.fp_name, MACHINE.sp_name]:
             fp = sp
         elif mnemonic == "mov" and operands[:2] == [MACHINE.sp_name, MACHINE.fp_name] and fp is not None:
