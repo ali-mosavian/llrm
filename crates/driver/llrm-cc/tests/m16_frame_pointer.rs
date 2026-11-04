@@ -17,7 +17,7 @@ fn a_function_with_no_locals_has_no_frame_at_m16() {
     let source = dir.join(format!("frame-{}.c", std::process::id()));
     std::fs::write(&source, "int f(int);\nint main(void) { return f(1024); }\n").unwrap();
     for target in ["x86_16-dos", "x86_16-wat"] {
-        let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
             .env("LLRM_CC_TARGET", target)
             .env("LLRM_LLC", target_dir::of(&root).join("release/llrm-llc"))
             .args(["-Os", "-w", "-c", "-S", "-march=i386", "-o", "-"])

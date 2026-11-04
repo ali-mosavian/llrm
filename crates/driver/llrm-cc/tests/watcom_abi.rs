@@ -20,7 +20,7 @@ fn listing(
     let (c, s) = (dir.join("a.c"), dir.join("a.s"));
     std::fs::write(&c, source).unwrap();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", target)
         .env(
             "LLRM_LLC",
