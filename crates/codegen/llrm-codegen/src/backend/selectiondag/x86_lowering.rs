@@ -1911,7 +1911,8 @@ fn lower_vastart(
         NodeData::FrameIndex(slot) => MemBase::Stack(slot),
         _ => MemBase::Unknown,
     };
-    if pointer != EVT::I64 {
+    // Win64's `va_list` is the pointer alone (`LowerWin64_VASTART`).
+    if pointer != EVT::I64 || dag.var_args_save.is_none() {
         let first = dag.get_frame_index(pointer, index);
         let info = MemInfo {
             mem_vt: pointer,
