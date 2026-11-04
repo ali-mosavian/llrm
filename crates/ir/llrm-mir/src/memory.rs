@@ -56,10 +56,20 @@ pub struct Summary {
 /// floor in and out of its budget).
 pub type Callees = HashMap<GlobalId, Summary>;
 
+thread_local! {
+    static SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has summarized every function of a module.
+pub fn callee_map_scans() -> usize {
+    SCANS.with(std::cell::Cell::get)
+}
+
 /// One scan of every function in `module`; counted as `callees` for an
 /// observer, which a pass that asks per query shows.
 pub fn callees(module: &Module) -> Callees {
     crate::passes::counted("callees", false);
+    SCANS.with(|scans| scans.set(scans.get() + 1));
     module
         .globals
         .iter()

@@ -591,12 +591,16 @@ impl ProgramPass for Walk {
                 // bodies are simplified.
                 if !members.is_empty() {
                     let mut stated = false;
-                    for id in llrm_analysis::functionattrs::post_order(
+                    let callees = modules[at].get::<llrm_mir::passes::CalleeEffects>(module);
+                    let stated_now = llrm_analysis::functionattrs::post_order_with(
                         module,
                         &program.layout,
                         program.target.spaces(),
+                        &callees,
                         &members,
-                    ) {
+                    );
+                    drop(callees);
+                    for id in stated_now {
                         modules[at].changed(id);
                         stated = true;
                     }

@@ -2889,3 +2889,23 @@ fn a_low_bit_test_of_the_cell_just_shifted_right_is_a_branch_on_the_carry() {
     let live = cell.replace("l:\n  lda rc4\n  rts", "l:\n  rts");
     assert_eq!(pass(branch_on_shift_carry, &live), live, "a is returned");
 }
+
+/// Tail merging made blocks 5 and 3 (the source has two). Block 5 came first in
+/// the layout, so numbering past the source's labels left 3 with none, and a
+/// branch to it panicked in the emitter: `labels[3][0]`, "index out of bounds:
+/// the len is 0" (tests/run/c/div_constants_short, bench jpeg_fixed,
+/// jpeg_single).
+#[test]
+fn every_block_has_a_label_whatever_order_the_folding_laid_its_new_ones() {
+    use llrm_6502::alloc::{Class, labels_with_new_blocks};
+    use llrm_spike_mf::{Block, MFunction};
+    let mut function: MFunction<Class> = MFunction::new("f");
+    for id in [0u32, 5, 3] {
+        function.blocks.push(Block { id, insts: vec![], phis: vec![] });
+    }
+    let labels = vec![vec!["f".to_string()], vec!["f_b1".to_string()]];
+    let all = labels_with_new_blocks(&labels, &function);
+    for block in &function.blocks {
+        assert!(!all[block.id as usize].is_empty(), "block {} has no label: {all:?}", block.id);
+    }
+}
