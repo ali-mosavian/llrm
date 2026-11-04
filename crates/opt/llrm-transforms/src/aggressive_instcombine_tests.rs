@@ -316,3 +316,40 @@ fn a_no_wrap_shift_in_an_or_chain_compared_with_zero_is_dropped() {
     let inputs: &[&[i128]] = &[&[0, 0], &[1, 0], &[0, 1], &[5, 7]];
     assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
 }
+
+const MUL_HIGH_LADDER: &str = "define i32 @f(i32 %x, i32 %y) {
+b0:
+  %xl = and i32 %x, 65535
+  %xh = lshr i32 %x, 16
+  %yl = and i32 %y, 65535
+  %yh = lshr i32 %y, 16
+  %xlyl = mul i32 %xl, %yl
+  %xhyl = mul i32 %xh, %yl
+  %xlyh = mul i32 %xl, %yh
+  %xhyh = mul i32 %xh, %yh
+  %t = lshr i32 %xlyl, 16
+  %c2 = add i32 %t, %xhyl
+  %c2l = and i32 %c2, 65535
+  %c3 = add i32 %c2l, %xlyh
+  %c2h = lshr i32 %c2, 16
+  %c3h = lshr i32 %c3, 16
+  %a1 = add i32 %xhyh, %c2h
+  %r = add i32 %a1, %c3h
+  ret i32 %r
+}
+";
+
+/// The high half of a 32-bit multiply built from 16-bit parts (the ladder of
+/// carries) was thirteen operations; the pin's `foldMulHigh` makes it a
+/// 64-bit multiply, a shift and a truncate.
+#[test]
+fn the_high_half_of_a_multiply_in_parts_is_a_widening_multiply() {
+    let before = parsed(&format!("{DOS}{MUL_HIGH_LADDER}"));
+    let mut module = before.clone();
+    managed(&mut module, AggressiveInstCombine);
+    let after = managed(&mut module, crate::dead::Dead);
+    assert!(after.contains("mul nuw i64"), "{after}");
+    assert!(!after.contains("and i32"), "{after}");
+    let inputs: &[&[i128]] = &[&[0, 0], &[65535, 65535], &[4660, 65536], &[-1, -1], &[305419896, 2596069104]];
+    assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
+}
