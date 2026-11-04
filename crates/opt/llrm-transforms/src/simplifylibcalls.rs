@@ -25,7 +25,8 @@
 //! result is only compared with zero, and `memcmp(p, q, n) == 0` is `bcmp`
 //! (`compare.rs`). `strchr` of a constant string and character, `strpbrk`,
 //! `strspn`, `strcspn` and `strstr` over constant strings fold to an address
-//! into the first string, null or a length (`search.rs`).
+//! into the first string, null or a length, and `memchr` of a constant array
+//! or size folds to compares and a select (`search.rs`).
 //!
 //! # Deviations
 //! - D1: `puts`, `putchar`, `fwrite`, `fputc`, `fputs`, `memcmp` and `bcmp` are
@@ -39,6 +40,8 @@
 //!   routine (`memchr`, `strlen`, `strncmp`, `strchr`) are untranslated, as is
 //!   the character compare the pin makes of a `strchr` or `strstr` tested
 //!   against its own string: such a call is left as it is.
+//! - D5: `memchr` of a constant array and size tested against null (the pin's
+//!   bit-field and OR-chain rewrite) is not translated.
 //! - D3: `strcmp` of two strings whose lengths are known but whose contents are
 //!   not (a PHI or select of literals) is not rewritten: `GetStringLength` here
 //!   reads a constant global only.
@@ -59,7 +62,7 @@ use llrm_mir::libfunc::{Generic, LibFunc, Routine, TargetLibraryInfo};
 use llrm_mir::module::{InstId, Operand};
 use llrm_mir::opcode::{Attribute, CallInfo, CastOp, Flags, Opcode};
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses, Unit};
-use llrm_mir::types::Type;
+use llrm_mir::types::{Type, TypeId};
 
 mod compare;
 mod search;
@@ -74,6 +77,19 @@ impl SimplifyLibCalls {
     pub fn with_routines(routines: Vec<Routine>) -> Self {
         Self { routines }
     }
+}
+
+/// The instruction `opcode` placed before the call, as an operand.
+fn build(
+    unit: &mut Unit,
+    site: &Site,
+    opcode: Opcode,
+    ty: TypeId,
+    operands: Vec<Operand>,
+) -> Operand {
+    let made = unit.function.create_instruction(opcode, ty, operands, Flags::default(), None);
+    unit.function.insert(made, Position::Before(site.call)).expect("a placed instruction");
+    Operand::Value(unit.function.instruction(made).result.expect("a result"))
 }
 
 /// `getConstantDataArrayInfo` of a pointer that is a constant global: every
@@ -494,6 +510,7 @@ impl FunctionPass for SimplifyLibCalls {
                 LibFunc::Memcmp => compare::mem_cmp(unit, &site, true),
                 LibFunc::Bcmp => compare::mem_cmp(unit, &site, false),
                 LibFunc::Strchr => search::str_chr(unit, &site),
+                LibFunc::Memchr => search::mem_chr(unit, &site),
                 LibFunc::Strpbrk => search::str_pbrk(unit, &site),
                 LibFunc::Strspn => search::str_spn(unit, &site, true),
                 LibFunc::Strcspn => search::str_spn(unit, &site, false),

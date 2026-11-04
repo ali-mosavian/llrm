@@ -14,12 +14,14 @@ fn after(body: &str) -> String {
 @s = private constant [3 x i8] c\"ab\\00\"
 @z = private constant [3 x i8] c\"xy\\00\"
 @c = private constant [3 x i8] c\"xc\\00\"
+@t = private constant [4 x i8] c\"aabb\"
 declare ptr @strchr(ptr, i32)
 declare ptr @strpbrk(ptr, ptr)
 declare i64 @strspn(ptr, ptr)
 declare i64 @strcspn(ptr, ptr)
 declare ptr @strstr(ptr, ptr)
-define ptr @f(ptr %p) {{
+declare ptr @memchr(ptr, i32, i64)
+define ptr @f(ptr %p, i32 %ch, i64 %n) {{
 b0:
 {body}
 }}
@@ -111,4 +113,41 @@ fn test_strspn_and_strcspn_fold_over_constant_strings() {
     assert!(text.contains("ret i64 0") && !text.contains("call"), "{text}");
     let text = count("call i64 @strcspn(ptr @e, ptr %p)");
     assert!(text.contains("ret i64 0") && !text.contains("call"), "{text}");
+}
+
+#[test]
+fn test_memchr_of_size_zero_or_one_needs_no_search() {
+    let text = pointer("call ptr @memchr(ptr %p, i32 %ch, i64 0)");
+    assert!(text.contains("ret ptr null") && !text.contains("call"), "{text}");
+    let text = pointer("call ptr @memchr(ptr %p, i32 %ch, i64 1)");
+    assert!(
+        text.contains("load i8") && text.contains("trunc") && text.contains("select") && !text.contains("call"),
+        "{text}"
+    );
+}
+
+#[test]
+fn test_memchr_of_a_constant_array_and_character_is_bounded_by_the_size() {
+    let text = pointer("call ptr @memchr(ptr @a, i32 98, i64 %n)");
+    assert!(text.contains("icmp ule i64 %n, 1") && text.contains("getelementptr") && !text.contains("call"), "{text}");
+    let text = pointer("call ptr @memchr(ptr @a, i32 122, i64 %n)");
+    assert!(text.contains("ret ptr null") && !text.contains("call"), "{text}");
+}
+
+#[test]
+fn test_memchr_of_an_array_of_two_runs_is_two_compares() {
+    let text = pointer("call ptr @memchr(ptr @t, i32 %ch, i64 %n)");
+    assert!(text.contains("icmp ugt i64 %n, 2") && text.contains("select") && !text.contains("call"), "{text}");
+    // Three runs are no such fold, and nothing else applies.
+    let text = pointer("call ptr @memchr(ptr @a, i32 %ch, i64 %n)");
+    assert!(text.contains("call ptr @memchr"), "{text}");
+}
+
+/// `memchr(S, C, N) == S` with N known nonzero reads the first byte only.
+#[test]
+fn test_memchr_compared_with_its_pointer_reads_the_first_byte() {
+    let text = after(
+        "  %r = call ptr @memchr(ptr %p, i32 %ch, i64 5)\n  %e = icmp eq ptr %r, %p\n  %z = select i1 %e, ptr %p, ptr null\n  ret ptr %z",
+    );
+    assert!(text.contains("load i8") && !text.contains("call ptr @memchr"), "{text}");
 }
