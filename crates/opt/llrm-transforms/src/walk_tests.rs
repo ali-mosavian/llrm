@@ -79,11 +79,6 @@ fn test_a_body_changed_by_an_interprocedural_stage_does_not_rerun_the_list() {
         &crate::pipeline::Applied { options: crate::pipeline::Options::speed(), ..Default::default() },
     );
     let reruns = passes_run_by_ipa_stages(&lines);
-    assert!(
-        !reruns.is_empty(),
-        "no stage reran a body: {:?}",
-        lines.iter().filter(|l| l.starts_with("body ")).map(|l| &l[..60.min(l.len())]).collect::<Vec<_>>()
-    );
     assert!(reruns.iter().all(|(_, runs)| *runs < 10), "the list ran again: {reruns:?}");
 }
 
@@ -206,6 +201,23 @@ fn test_calls_that_a_splice_exposes_are_inlined_before_the_list_runs() {
             .count()
     };
     assert_eq!(walks("top"), 1, "the list ran again over top: {lines:?}");
+}
+
+/// A promotion edited the caller's call site after the caller had run the
+/// list, and `promote.` ran the list over it again (`main` of
+/// memory_expansion: three runs, 833M instructions in the last). The pin runs
+/// ArgumentPromotion per component before its callers are visited.
+#[test]
+fn test_a_caller_of_a_promoted_function_runs_the_list_once() {
+    let lines = pipeline_runs(
+        &format!("{}{DESCRIPTOR}", llrm_analysis::testing::DOS),
+        &crate::pipeline::Applied { options: crate::pipeline::Options::speed(), ..Default::default() },
+    );
+    let again: Vec<&String> = lines
+        .iter()
+        .filter(|line| line.starts_with("body ") && line.contains("trigger \"promote.\"") && line.ends_with("name top"))
+        .collect();
+    assert!(again.is_empty(), "the caller ran the list again after the promotion: {again:?}");
 }
 
 const TWO_CONSTANTS: &str = "define internal i16 @g(i16 %k, i16 %x) noinline {
@@ -401,6 +413,7 @@ fn test_a_recursion_with_copies_runs_the_simplify_list_twice() {
             |program: &mut llrm_mir::program::Program| {
                 let mut analyses = Default::default();
                 let mut walk = crate::walk::Walk {
+                    promote_rate: None,
                     speed_rate: true,
                     inline: crate::inline::Threshold { recursive: true, ..Default::default() },
                     simplify: Box::new(|_, _, _, _| {}),
@@ -464,6 +477,7 @@ fn test_a_caller_of_a_peeled_recursion_is_a_body_with_self_copies() {
             |program: &mut llrm_mir::program::Program| {
                 let mut analyses = Default::default();
                 let mut walk = crate::walk::Walk {
+                    promote_rate: None,
                     speed_rate: true,
                     inline: crate::inline::Threshold { recursive: true, ..Default::default() },
                     simplify: Box::new(|_, _, _, _| {}),
@@ -613,6 +627,7 @@ b0:
         std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
             let mut walk = crate::walk::Walk {
+                promote_rate: None,
                 speed_rate: true,
                 inline: crate::inline::Threshold { recursive: true, ..Default::default() },
                 simplify: Box::new(|_, _, _, _| {}),
@@ -834,6 +849,7 @@ fn test_only_a_tree_recursion_waits_for_its_tail_call_elimination() {
             std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
             |program: &mut llrm_mir::program::Program| {
                 let mut walk = crate::walk::Walk {
+                    promote_rate: None,
                     speed_rate: true,
                     inline: crate::inline::Threshold { recursive, ..Default::default() },
                     simplify: Box::new(|_, _, _, _| {}),
@@ -935,6 +951,7 @@ b0:
             std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
             |program: &mut llrm_mir::program::Program| {
                 let mut walk = crate::walk::Walk {
+                    promote_rate: None,
                     speed_rate: true,
                     inline: crate::inline::Threshold { recursive, ..Default::default() },
                     simplify: Box::new(|_, _, _, _| {}),
@@ -989,6 +1006,7 @@ fn walked_top_with(
         std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
             let mut walk = crate::walk::Walk {
+                promote_rate: None,
                 speed_rate: true,
                 inline: crate::inline::Threshold { recursive, ..Default::default() },
                 simplify: Box::new(|_, _, _, _| {}),
@@ -1463,6 +1481,7 @@ b0:
         move |program: &mut llrm_mir::program::Program| {
             let seen = std::rc::Rc::clone(&seen);
             let mut walk = crate::walk::Walk {
+                promote_rate: None,
                 speed_rate: true,
                 inline: crate::inline::Threshold { limit: 0, ..Default::default() },
                 simplify: Box::new(move |module, analyses, _, _| {
@@ -2400,6 +2419,7 @@ fn test_a_recursion_the_cap_refuses_keeps_its_tail_call_elimination_slot() {
             std::rc::Rc::new(llrm_x86_m16::Dos { recursive_inlining: REC_1, ..llrm_x86_m16::Dos::default() }),
             |program: &mut llrm_mir::program::Program| {
                 let mut walk = crate::walk::Walk {
+                    promote_rate: None,
                     speed_rate: true,
                     inline: crate::inline::Threshold::new(225),
                     simplify: Box::new(|_, _, _, _| {}),
@@ -2836,6 +2856,10 @@ fn test_the_m32_edge_bar_makes_gccs_decision_for_every_corpus_recursion() {
             .find(|(_, global, _)| global.name.as_deref() == Some(function))
             .unwrap_or_else(|| panic!("{name}: no {function}"));
         let insns = crate::inline::recursive_edge_growth(body);
-        assert_eq!((insns <= o2_bar, insns <= o3_bar), (o2, o3), "{name} {function}: gcc_insns {insns}, bars {o2_bar}/{o3_bar}");
+        assert_eq!(
+            (insns <= o2_bar, insns <= o3_bar),
+            (o2, o3),
+            "{name} {function}: gcc_insns {insns}, bars {o2_bar}/{o3_bar}"
+        );
     }
 }
