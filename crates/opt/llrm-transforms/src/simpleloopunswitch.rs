@@ -108,6 +108,8 @@ pub struct Run<'a> {
     pub callees: &'a Callees,
     pub tti: &'a dyn Tti,
     pub function: &'a mut Function,
+    /// `Outer::assume_declared`: held, not scanned for each loop.
+    pub assume_declared: bool,
 }
 
 struct Analyzed {
@@ -120,7 +122,8 @@ impl Analyzed {
     fn of(run: &Run) -> Self {
         let tree = DomTree::of(run.function);
         let loops = LoopInfo::analyze(run.function, || &tree);
-        let assumptions = AssumptionCache::of(run.context, run.globals, run.metadata, run.function);
+        let assumptions =
+            AssumptionCache::of_declared(run.context, run.globals, run.metadata, run.function, run.assume_declared);
         Self { tree, loops, assumptions }
     }
 }
@@ -1128,6 +1131,7 @@ impl FunctionPass for SimpleLoopUnswitch {
             callees: outer.callees(),
             tti: &*tti,
             function: unit.function,
+            assume_declared: outer.assume_declared(),
         };
         if unswitch_loops(&mut run, self.non_trivial) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }

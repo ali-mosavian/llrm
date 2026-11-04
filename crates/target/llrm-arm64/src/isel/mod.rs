@@ -132,10 +132,36 @@ pub fn selected(
     let global = module.global(function);
     let name = global.name.owned().ok_or("an unnamed function")?;
     let body = global.function().ok_or("a variable is not selected")?;
+    if mentions_fp128(module, body) {
+        return refuse("an fp128: no lowering yet");
+    }
     let mut selector = Selector::new(module, body, layout, platform, &name);
     selector.lines = lines;
     selector.run()?;
     Ok(selector.finish())
+}
+
+/// Whether a parameter, a result or a constant operand of `body` is an `fp128`:
+/// this selector's float arms read any non-`Float` kind as a double.
+fn mentions_fp128(
+    module: &Module,
+    body: &Function,
+) -> bool {
+    let is_fp128 = |ty| matches!(
+        module.context.types.get(ty),
+        llrm_mir::Type::Float(llrm_mir::FloatKind::F128)
+    );
+    body.parameters().iter().any(|&parameter| is_fp128(body.value(parameter).ty))
+        || body.walk().any(|(_, inst)| {
+            let inst = body.instruction(inst);
+            inst.result.is_some_and(|result| is_fp128(body.value(result).ty))
+                || inst.operands.iter().any(|operand| {
+                    matches!(
+                        operand,
+                        Operand::Constant(id) if is_fp128(module.context.get(*id).ty)
+                    )
+                })
+        })
 }
 
 impl<'a> Selector<'a> {

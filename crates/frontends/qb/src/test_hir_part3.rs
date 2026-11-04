@@ -3693,6 +3693,27 @@ fn test_clear_calls_the_runtime_clear() {
     assert!(main[..call].trim_end().ends_with("pushd 0"), "two zero words: {main}");
 }
 
+/// On the llrm runtime at m16, CLEAR called `B$SCLR(stack, given)` without the
+/// table of module variables its C body reads as the third argument:
+/// `table->main_module` came from a stray register and the program stopped with
+/// "Illegal function call" (clear_variables.bas). The call carries the table's
+/// near address, as the C body takes it.
+#[test]
+fn test_clear_passes_its_table_on_the_llrm_runtime_at_m16() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(&directory, "CLEARM16.BAS", b"x% = 5\r\nCLEAR\r\nPRINT x%\r\nEND\r\n");
+    let frontend = qb_driver::Frontend::new("qb45", "llrm");
+    let text = listing(&qb_driver::parsed(&source, &frontend, None).expect("parses"));
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    let call = main.find("call far ptr B$SCLR").expect("the call");
+    let before = &main[..call];
+    assert!(
+        before.trim_end().ends_with("push offset CLEARM16$D3"),
+        "the table's near address is the third argument: {main}"
+    );
+    assert!(!before.contains("pushw DGROUP"), "and not a far pointer on the stack: {main}");
+}
+
 /// A variable set before CLEAR and printed after it was folded to its old
 /// value: the call zeroes BC_DATA behind the optimiser's back.
 #[test]

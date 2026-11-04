@@ -57,13 +57,26 @@ pub fn signature(
     let Type::Function { returns, parameters, variadic } = module.context.types.get(function.ty) else {
         return Err(format!("@{name} has no function type"));
     };
-    let mut params = parameters.iter().map(|&ty| value_type(module, ty, width)).collect::<Result<Vec<_>, _>>()?;
+    let pointer = if width == Width::W32 { ValType::I32 } else { ValType::I64 };
+    // `canLowerReturn` is false for an `i128` (two parts, no multivalue ABI):
+    // the result goes through a pointer, the first parameter.
+    let returns_i128 = matches!(module.context.types.get(*returns), Type::Int(128));
+    let mut params: Vec<ValType> = if returns_i128 { vec![pointer] } else { Vec::new() };
+    for &ty in parameters {
+        // An `i128` argument is two `i64`, low part first.
+        if matches!(module.context.types.get(ty), Type::Int(128)) {
+            params.extend([ValType::I64, ValType::I64]);
+        } else {
+            params.push(value_type(module, ty, width)?);
+        }
+    }
     if *variadic {
         // `computeSignatureVTs`: the pointer to the variadic arguments' buffer.
         params.push(if width == Width::W32 { ValType::I32 } else { ValType::I64 });
     }
     let results = match module.context.types.get(*returns) {
         Type::Void => Vec::new(),
+        _ if returns_i128 => Vec::new(),
         _ => vec![value_type(module, *returns, width)?],
     };
     Ok((params, results))
@@ -179,7 +192,7 @@ pub fn compile_function_with(
     lower_memory_pseudos(&mut f);
     // A routine the legalizer or the builder calls (`fmod`, `memcpy`) is in no
     // module: its signature is what the call passes and returns.
-    let library_calls = library_callees(&f, module);
+    let library_calls = library_callees(&f, module, if width == Width::W32 { ValType::I32 } else { ValType::I64 });
     argument_move(&mut f);
     set_p2align_operands(&mut f);
     fix_br_table_defaults(&mut f);
@@ -310,6 +323,7 @@ fn non_throwing(module: &Module) -> std::collections::HashSet<String> {
 fn library_callees(
     f: &Function,
     module: &Module,
+    pointer: ValType,
 ) -> std::collections::HashMap<String, (Vec<ValType>, Vec<ValType>)> {
     let mut found = std::collections::HashMap::new();
     for inst in f.blocks.iter().flatten().filter(|inst| inst.opcode == crate::dagisel::post_ids::CALL) {
@@ -324,7 +338,13 @@ fn library_callees(
         let params = inst
             .operands
             .iter()
-            .filter_map(|operand| if let Operand::Use(reg) = operand { Some(f.vreg_type(*reg)) } else { None })
+            .filter_map(|operand| match operand {
+                Operand::Use(reg) => Some(f.vreg_type(*reg)),
+                // A frame object's address, before the frame lowering gives it
+                // a register (an `sret` slot).
+                Operand::Frame(_) => Some(pointer),
+                _ => None,
+            })
             .collect();
         found.entry(name.clone()).or_insert((params, results));
     }

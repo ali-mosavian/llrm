@@ -2536,7 +2536,7 @@ fn zero_value(
     let kind = match context.types.get(ty) {
         Type::Int(_) => ConstantKind::Int(0),
         Type::Pointer(_) => ConstantKind::Null,
-        Type::Float(_) => ConstantKind::Float(0),
+        Type::Float(kind) => ConstantKind::float_zero(*kind),
         _ => ConstantKind::Zero,
     };
     context.constant(Constant { ty, kind })
@@ -2781,7 +2781,8 @@ impl crate::passes::Analysis for LviCache {
         analyses: &mut crate::passes::Analyses,
     ) {
         let outer = std::rc::Rc::clone(analyses.outer());
-        let assumptions = AssumptionCache::of(context, &outer.globals, &outer.metadata, function);
+        let assumptions =
+            AssumptionCache::of_declared(context, &outer.globals, &outer.metadata, function, outer.assume_declared());
         let mut scratch = context.clone();
         let mut env = Env::new(&mut scratch, &outer.globals, &outer.metadata, function, layout, &assumptions);
         let stale = result.0.borrow_mut().disagreements(&mut env);

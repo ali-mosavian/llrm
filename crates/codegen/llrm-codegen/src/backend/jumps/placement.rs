@@ -119,10 +119,11 @@ pub(super) fn order(
     natural: &[Loop],
     size: bool,
     aggressive: bool,
+    tail_dup: Option<usize>,
 ) -> (Vec<Block>, BlockOdds) {
     let index: IndexMap<i64, usize> = blocks.iter().enumerate().map(|(place, block)| (block.at, place)).collect();
     let entry = index.get(&entry).copied().unwrap_or(0);
-    let mut placer = Placer::new(blocks, odds, busy, &index, size, aggressive, entry);
+    let mut placer = Placer::new(blocks, odds, busy, &index, size, aggressive, tail_dup, entry);
     let order = placer.build(natural, &index);
     let mut out = odds.clone();
     for (from, succ, tail, into) in &placer.rerouted {
@@ -141,6 +142,7 @@ impl Placer {
         index: &IndexMap<i64, usize>,
         size: bool,
         aggressive: bool,
+        tail_dup: Option<usize>,
         entry: usize,
     ) -> Self {
         let n = blocks.len();
@@ -185,13 +187,18 @@ impl Placer {
             exit: None,
             blocks: blocks.to_vec(),
             dead: vec![false; n],
-            dup_size: if size {
-                1
-            } else if aggressive {
-                TAIL_DUPLICATION_AGGRESSIVE
-            } else {
-                TAIL_DUPLICATION
-            },
+            // DEVIATE (timings.times): a target may state a smaller bound.
+            dup_size: tail_dup
+                .unwrap_or(usize::MAX)
+                .min(
+                    if size {
+                        1
+                    } else if aggressive {
+                        TAIL_DUPLICATION_AGGRESSIVE
+                    } else {
+                        TAIL_DUPLICATION
+                    },
+                ),
             rerouted: Vec::new(),
         }
     }

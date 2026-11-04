@@ -30,6 +30,10 @@ pub struct CpuTable {
     pub speed_milliclocks_per_byte: Option<i64>,
     /// Clocks to fill one such line from memory, burst, zero wait states.
     pub line_fill_clocks: Option<i64>,
+    /// The most instructions a block may hold and be copied by placement's
+    /// tail duplication (`TailDupPlacementThreshold`), where the target states
+    /// a smaller bound than the pin's (2, 4 at -O3); `None`: the pin's.
+    pub tail_dup_placement_threshold: Option<i64>,
     /// Form and clocks, in file order.
     pub clocks: Vec<(String, i64)>,
     pub latency: Vec<(String, i64)>,
@@ -167,6 +171,7 @@ impl Timings {
                     ("scalars", "cache_line") => table.cache_line = Some(number()?),
                     ("scalars", "speed_milliclocks_per_byte") => table.speed_milliclocks_per_byte = Some(number()?),
                     ("scalars", "line_fill_clocks") => table.line_fill_clocks = Some(number()?),
+                    ("scalars", "tail_dup_placement_threshold") => table.tail_dup_placement_threshold = Some(number()?),
                     ("scalars", other) => return Err(format!("{at}: no scalar `{other}`")),
                     ("clocks", form) => table.clocks.push((form.to_owned(), number()?)),
                     (_, form) => table.latency.push((form.to_owned(), number()?)),
