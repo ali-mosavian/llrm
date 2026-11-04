@@ -192,6 +192,11 @@ pub struct Options {
     /// target whose backend merges them, so the inliner and the passes after
     /// it price the stores the pin's IR has.
     pub merge_stores: bool,
+    /// After `PromoteMemToReg` the write-through `Promote` forwards a global's
+    /// store to the loads after it, across blocks with phis, where there is no
+    /// GVN `pre` (-O1, -Og). The pin's -O1 has no GVN and does not; off for a
+    /// target compared with it (wasm: jpeg_fixed -O1 was 259 B over).
+    pub write_through: bool,
     pub drop_stores: bool,
     /// Work read below a branch moves below it: gcc's `-ftree-sink`.
     pub sink: bool,
@@ -345,6 +350,7 @@ impl Default for Options {
             jump_tables: true,
             lower_switches: true,
             merge_stores: true,
+            write_through: true,
             search: false,
             exhaustive: false,
         }
@@ -734,13 +740,18 @@ pub(crate) fn llvm_order(
     // SROA runs mem2reg on what it splits: one slot, nothing between
     // (SROA.cpp `promoteAllocas`).
     let translated = applied.options.sroa;
-    // DEVIATE, -O1 and -Og only (no GVN `pre`): the write-through `Promote`
+    // DEVIATE, -O1 and -Og only (no GVN `pre`), and where `write_through` is
+    // on: the write-through `Promote`
     // after PromoteMemToReg forwards a store of a global to the load after it,
     // which LLVM's InstCombine does in `visitLoadInst`
     // (FindAvailableLoadedValue, not translated); GVN does it at the other
     // levels. Exit: that translation.
     let write_through = || -> Vec<Box<dyn FunctionPass>> {
-        if applied.options.pre { Vec::new() } else { vec![Box::new(promote::Promote), Box::new(promote::DeadSlots)] }
+        if applied.options.pre || !applied.options.write_through {
+            Vec::new()
+        } else {
+            vec![Box::new(promote::Promote), Box::new(promote::DeadSlots)]
+        }
     };
     // `SROAPass(ModifyCFG)` everywhere but the late slot, which the pin builds
     // with `PreserveCFG` (PassBuilderPipelines.cpp L1393, L1494).
