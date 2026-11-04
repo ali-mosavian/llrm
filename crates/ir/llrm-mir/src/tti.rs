@@ -390,6 +390,14 @@ pub trait Tti {
         1
     }
 
+    /// Whether the bound above stands down where the pin's own cost, net of
+    /// the instructions it folds, is below zero: the pin counts that inline as
+    /// shrinking the caller (a one-instruction wrapper, a callee whose body
+    /// folds away). False: the bound holds whatever the cost.
+    fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {
+        false
+    }
+
     /// Whether a constant address offset may become a phi: false where the
     /// access folds it as a displacement and the target says to keep it. A
     /// boolean as the pin's `replacingOperandWithVariableIsCheap` is: a
