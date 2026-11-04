@@ -139,6 +139,11 @@ pub struct Insn {
     /// it before the coalescer joins copies of different widths; a narrow def
     /// not listed starts the value, as it always has.
     pub partial_defs: Vec<u32>,
+    /// Values it defines before it has read its operands
+    /// (`MachineOperand::isEarlyClobber`): the def's live range starts at the
+    /// instruction's early-clobber slot, so no register holds both it and an
+    /// operand the instruction reads.
+    pub early_clobbers: Vec<u32>,
     /// Where it copies one value into lanes of another, `(source, destination,
     /// lanes of the destination)`: the `undef %d:sub0 = COPY` pairs
     /// `eliminateRegSequence` makes from a `REG_SEQUENCE`. Liveness still takes
@@ -599,6 +604,7 @@ impl Insn {
         made.uses = self.uses.iter().map(value).collect::<Result<_, E>>()?;
         made.undefs = self.undefs.iter().map(value).collect::<Result<_, E>>()?;
         made.partial_defs = self.partial_defs.iter().map(value).collect::<Result<_, E>>()?;
+        made.early_clobbers = self.early_clobbers.iter().map(value).collect::<Result<_, E>>()?;
         made.def_lanes = self.def_lanes.iter().map(|&(v, lanes)| Ok((rename(v)?, lanes))).collect::<Result<_, E>>()?;
         made.use_lanes = self.use_lanes.iter().map(|&(v, lanes)| Ok((rename(v)?, lanes))).collect::<Result<_, E>>()?;
         made.lane_copies = self
@@ -658,6 +664,7 @@ impl Insn {
             uses,
             undefs: Vec::new(),
             partial_defs: Vec::new(),
+            early_clobbers: Vec::new(),
             lane_copies: Vec::new(),
             def_lanes: Vec::new(),
             use_lanes: Vec::new(),
