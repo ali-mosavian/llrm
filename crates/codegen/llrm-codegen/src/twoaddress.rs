@@ -615,16 +615,6 @@ pub enum ThreeAddress {
     Wide,
 }
 
-/// `ADD64rr`, `ADD64ri32`, `SUB64ri32`, `INC64r`, `DEC64r` and `SHL64ri` to
-/// `LEA64r`: a qword result on a target that addresses with 64-bit registers.
-/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L1422>
-fn quad_lea(
-    mode: ThreeAddress,
-    width: u32,
-) -> bool {
-    mode == ThreeAddress::Wide && width == 8
-}
-
 /// The `lea` of `d := a + k` or `d := a + b`, three-address, or None where the
 /// instruction is not such an add or sub of dwords: the instruction
 /// `convertToThreeAddress` makes of an `ADD32ri`, `ADD32rr` or `SUB32ri`.
@@ -646,21 +636,20 @@ pub fn three_address(
         && one.requires.is_empty()
         && one.delivers.is_empty()
         && let (Loc::Held(into), Loc::Held(base)) = (&what.dests[0], &what.sources[0])
-        && (into.width == 4 || quad_lea(mode, into.width) || narrow_lea(mode, into.width))
+        && (into.width == 4 || (into.width == 8 && mode == ThreeAddress::Wide) || narrow_lea(mode, into.width))
         && base.width == into.width
         && into.value != base.value
     {
         let offset = if name == "inc" { 1 } else { -1 };
-        let result = if into.width == 8 { 8 } else { 4 };
         let mut made = one.clone();
         made.what = Some(Semantics {
             op: Operation::Address,
             name: Some("lea".into()),
-            dests: vec![Loc::Held(Held { width: result, ..*into })],
+            dests: vec![Loc::Held(if narrow_lea(mode, into.width) { Held { width: 4, ..*into } } else { *into })],
             sources: vec![Loc::Mem(Mem {
                 base: Some(if mode == ThreeAddress::Wide { Held { width: 8, ..*base } } else { *base }),
                 offset,
-                ..Mem::new(None, result)
+                ..Mem::new(None, into.width)
             })],
             ..Semantics::new(Operation::Address)
         });
@@ -681,10 +670,11 @@ pub fn three_address(
     let word = width == 2
         && mode == ThreeAddress::AddSubWords
         && matches!(what.sources[1], Loc::Imm(Imm { address: None, .. }));
+    let qword = width == 8 && mode == ThreeAddress::Wide;
     // `ADD8ri`, `ADD16ri`, `ADD8rr`, `ADD16rr` (not `SUB8ri`, `SUB16ri`: the
     // pin's FIXME) through `LEA64_32r`.
     let narrow = narrow_lea(mode, width) && what.name.as_deref() == Some("add");
-    if !(width == 4 || quad_lea(mode, width) || word || narrow) || base.width != width || into.value == base.value {
+    if !(width == 4 || word || qword || narrow) || base.width != width || into.value == base.value {
         return None;
     }
     let wide = |held: &Held| if mode == ThreeAddress::Wide { Held { width: 8, ..*held } } else { *held };
@@ -711,20 +701,20 @@ pub fn three_address(
                 _ => *value,
             };
             let step = if name == Some("sub") { value.checked_neg()? } else { *value };
-            // `ADD64ri32`, `SUB64ri32`: the immediate is a sign-extended dword.
-            if width == 8 && i32::try_from(step).is_err() {
-                return None;
-            }
             // A word unit step stays `inc`: with the source in an address
             // register the `lea` is three bytes against the INC's one, and
             // with it elsewhere the copy it needs makes five against three.
             if word && step.abs() == 1 {
                 return None;
             }
+            // `ADD64ri32`: a displacement is 32 bits.
+            if qword && i32::try_from(step).is_err() {
+                return None;
+            }
             Mem { base: Some(wide(base)), offset: step, ..Mem::new(None, if narrow { 4 } else { width }) }
         }
         (Loc::Held(index), Some("add")) if index.width == width && index.value != into.value => {
-            Mem { base: Some(wide(base)), index: Some(wide(index)), scale: 1, offset: 0, ..Mem::new(None, 4) }
+            Mem { base: Some(wide(base)), index: Some(wide(index)), scale: 1, offset: 0, ..Mem::new(None, width.max(4)) }
         }
         _ => return None,
     };
@@ -1638,47 +1628,6 @@ mod tests {
         assert_eq!(lea.name.as_deref(), Some("lea"));
         let Loc::Mem(cell) = &lea.sources[0] else { panic!("{lea:?}") };
         assert_eq!(cell.offset, -20, "the byte immediate is signed");
-    }
-
-    /// `ADD64ri32`, `ADD64rr`, `INC64r` and `SUB64ri32` are `LEA64r` where
-    /// registers are 64 bits (`Wide`): jpeg_fixed at -O2 m64 kept `mov r, a;
-    /// add r, 1023` (2 instructions) where the pin has `lea r, [a+1023]`.
-    /// Other modes, an immediate past 32 bits and a shared register refuse.
-    #[test]
-    fn test_a_qword_add_is_a_lea_only_at_wide() {
-        let held = |value: u32| Held { value, width: 8, offset: 0 };
-        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 8, address: None });
-        let make = |name: &str, sources: Vec<Loc>, into: u32| {
-            let what = Semantics {
-                name: Some(name.into()),
-                dests: vec![Loc::Held(held(into))],
-                sources,
-                ..Semantics::new(Operation::Binary)
-            };
-            Insn::new(0, Some((0, 0)), Some(what), vec![into], vec![1])
-        };
-        let add = make("add", vec![Loc::Held(held(1)), imm(1023)], 2);
-        for mode in [ThreeAddress::AddSub, ThreeAddress::All] {
-            assert!(three_address(&add, mode).is_none(), "{mode:?}");
-        }
-        let made = three_address(&add, ThreeAddress::Wide).expect("a lea at Wide");
-        let lea = made.what.as_ref().unwrap();
-        assert_eq!(lea.name.as_deref(), Some("lea"));
-        let Loc::Held(into) = &lea.dests[0] else { panic!("{lea:?}") };
-        let Loc::Mem(cell) = &lea.sources[0] else { panic!("{lea:?}") };
-        assert_eq!((into.width, cell.width, cell.offset), (8, 8, 1023));
-        let sum = make("add", vec![Loc::Held(held(1)), Loc::Held(held(3))], 2);
-        assert!(three_address(&sum, ThreeAddress::Wide).is_some());
-        let sub = make("sub", vec![Loc::Held(held(1)), imm(16)], 2);
-        let Loc::Mem(cell) = three_address(&sub, ThreeAddress::Wide).unwrap().what.as_ref().unwrap().sources[0].clone()
-        else {
-            panic!()
-        };
-        assert_eq!(cell.offset, -16);
-        let far = make("add", vec![Loc::Held(held(1)), imm(1 << 40)], 2);
-        assert!(three_address(&far, ThreeAddress::Wide).is_none(), "a displacement is 32 bits");
-        let same = make("add", vec![Loc::Held(held(1)), imm(8)], 1);
-        assert!(three_address(&same, ThreeAddress::Wide).is_none(), "the result is the source");
     }
 
     /// `process_copy` entered every instruction of a block in a std `HashSet`

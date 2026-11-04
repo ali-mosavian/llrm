@@ -1619,13 +1619,21 @@ pub fn relax(lines: Vec<Line>) -> Vec<Line> {
         });
         match relaxed {
             Some((cc, label)) => {
-                // `dec b; jr nz, L` is `djnz L`
-                // a row between the two does not part them
-                let before = out.iter().rposition(|line| !matches!(line, Line::Loc(_)));
-                let counted = cc == Some("nz")
-                    && before.is_some_and(|at| matches!(&out[at], Line::Inst(last) if last == "dec b"));
-                if counted {
-                    out.remove(before.expect("a dec b"));
+                // `dec b; jr nz, L` is `djnz L`, also past instructions that
+                // neither touch the flags nor use b; a row
+                // between does not part them
+                let counter = (cc == Some("nz"))
+                    .then(|| {
+                        out.iter().rposition(|line| match line {
+                            Line::Inst(text) => text == "dec b" || !flag_and_b_free(text),
+                            Line::Loc(_) => false,
+                            _ => true,
+                        })
+                    })
+                    .flatten()
+                    .filter(|&at| matches!(&out[at], Line::Inst(last) if last == "dec b"));
+                if let Some(at) = counter {
+                    out.remove(at);
                     out.push(Line::Inst(format!("djnz {label}")));
                 } else {
                     out.push(Line::Inst(match cc {
@@ -1638,6 +1646,22 @@ pub fn relax(lines: Vec<Line>) -> Vec<Line> {
         }
     }
     out
+}
+
+/// Whether `text` leaves the flags alone and does not read or write `b`: a
+/// load (`ld` sets no flag) or a 16-bit `inc`/`dec` (neither does), so a
+/// `dec b` before it may move behind it.
+fn flag_and_b_free(text: &str) -> bool {
+    let (mnemonic, operands) = text.split_once(' ').unwrap_or((text, ""));
+    let names_b = |operand: &str| {
+        let bare = operand.trim_matches(|c| c == '(' || c == ')');
+        bare == "b" || bare == "bc"
+    };
+    match mnemonic {
+        "ld" => !operands.split(", ").any(names_b),
+        "inc" | "dec" => matches!(operands, "hl" | "de" | "ix" | "iy"),
+        _ => false,
+    }
 }
 
 /// `call f; ret` is `jp f`: the callee returns to our caller with its result
