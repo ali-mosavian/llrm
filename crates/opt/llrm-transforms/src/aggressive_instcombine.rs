@@ -110,7 +110,8 @@ impl FunctionPass for AggressiveInstCombine {
         drop(shape);
         let outer = std::rc::Rc::clone(analyses.outer());
         let tti = outer.target().tti();
-        let folded = fold_unusual_patterns(unit, &reachable, &outer.globals, tti.as_deref());
+        let info = crate::simplifylibcalls::target_library_info(&outer, unit.layout.pointer(0).index_bits);
+        let folded = fold_unusual_patterns(unit, &reachable, &outer.globals, &info, tti.as_deref());
         if truncs.are_all_preserved() && !folded {
             return PreservedAnalyses::all();
         }
@@ -125,6 +126,7 @@ fn fold_unusual_patterns(
     unit: &mut Unit,
     reachable: &IdSet<BlockId>,
     globals: &[llrm_mir::module::GlobalValue],
+    info: &llrm_mir::libfunc::TargetLibraryInfo,
     tti: Option<&dyn llrm_mir::tti::Tti>,
 ) -> bool {
     let mut changed = false;
@@ -149,6 +151,7 @@ fn fold_unusual_patterns(
             changed |= fold_consecutive_loads(unit.context, unit.layout, unit.function, inst);
             changed |= fold_icmp_or_chain(unit.context, unit.layout, unit.function, inst);
             changed |= fold_mul_high(unit.context, unit.layout, unit.function, inst);
+            changed |= fold_lib_calls(unit, globals, info, tti, inst);
         }
         // Done separately to scan the stores once.
         changed |= fold_consecutive_stores(unit.context, unit.layout, unit.function, block);
@@ -1397,6 +1400,88 @@ fn fold_mul_high(
     true
 }
 
+/// `foldSqrt`
+/// ([:855](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L855)):
+/// a `sqrt` libcall whose argument cannot be negative or NaN, on a target with
+/// a sqrt instruction, is `llvm.sqrt`: it sets no `errno`.
+///
+/// DEVIATE 45: the query has no dominator tree or assumption cache, so a fact
+/// that only an `llvm.assume` or a dominating branch states is not seen.
+/// Owner: w2. Exit: 2026-11-21.
+fn fold_sqrt(
+    context: &mut llrm_mir::context::Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    declared: &mut llrm_mir::passes::Declared,
+    globals: &[llrm_mir::module::GlobalValue],
+    info: &llrm_mir::libfunc::TargetLibraryInfo,
+    tti: Option<&dyn llrm_mir::tti::Tti>,
+    inst: InstId,
+) -> bool {
+    use llrm_mir::libfunc::LibFunc;
+    use llrm_mir::types::FloatKind;
+    let Some(tti) = tti else { return false };
+    if !matches!(function.instruction(inst).opcode, Opcode::Call(_)) {
+        return false;
+    }
+    let Some(global) = llrm_mir::memory::callee(context, function, inst) else { return false };
+    let Some(func) = globals.get(global.0 as usize).and_then(|one| info.get_lib_func_of(&context.types, one)) else {
+        return false;
+    };
+    // `isLibFuncEmittable`.
+    if !matches!(func, LibFunc::Sqrt | LibFunc::Sqrtf | LibFunc::Sqrtl) || !info.has(func) {
+        return false;
+    }
+    let ty = function.instruction(inst).ty;
+    let (suffix, tti_ty) = match context.types.get(ty) {
+        Type::Float(FloatKind::Float) => ("f32", llrm_mir::tti::Ty::Float),
+        Type::Float(FloatKind::Double) => ("f64", llrm_mir::tti::Ty::Double),
+        Type::Float(FloatKind::X86Fp80) => ("f80", llrm_mir::tti::Ty::X87),
+        _ => return false,
+    };
+    let Some(result) = function.instruction(inst).result else { return false };
+    let flags = function.instruction(inst).flags;
+    let argument = function.instruction(inst).operands[0];
+    if !tti.have_fast_sqrt(tti_ty) {
+        return false;
+    }
+    let never_negative = flags.contains(Flags::NNAN) || {
+        let q = query(context, layout, function);
+        llrm_mir::valuetracking::fp::compute_known_fp_class(
+            &q,
+            argument,
+            llrm_mir::knownfpclass::KnownFpClass::ORDERED_LESS_THAN_ZERO_MASK,
+            0,
+        )
+        .cannot_be_ordered_less_than_zero()
+    };
+    if !never_negative {
+        return false;
+    }
+    let name = format!("llvm.sqrt.{suffix}");
+    // `CreateIntrinsic(..., Call)` copies the call's fast-math flags.
+    let value =
+        call_intrinsic_with_flags_before(context, function, declared, inst, &name, ty, vec![argument], vec![ty], flags);
+    function.replace_all_uses_with(result, value);
+    function.erase(inst).expect("a call nothing uses");
+    true
+}
+
+/// `foldLibCalls`
+/// ([:2192](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L2192)).
+///
+/// DEVIATE 46: only the `sqrt` arm; `strcmp`, `strncmp` and `memchr` are not
+/// translated. Owner: w2. Exit: 2026-11-21.
+fn fold_lib_calls(
+    unit: &mut Unit,
+    globals: &[llrm_mir::module::GlobalValue],
+    info: &llrm_mir::libfunc::TargetLibraryInfo,
+    tti: Option<&dyn llrm_mir::tti::Tti>,
+    inst: InstId,
+) -> bool {
+    fold_sqrt(unit.context, unit.layout, unit.function, unit.declared, globals, info, tti, inst)
+}
+
 /// `tryToRecognizePopCount`
 /// ([:551](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L551)):
 /// `(i * 0x01010101) >> 24` of the parallel bit count.
@@ -1573,8 +1658,23 @@ fn call_intrinsic_before(
     inst: InstId,
     name: &str,
     ret: TypeId,
+    args: Vec<Operand>,
+    parameters: Vec<TypeId>,
+) -> Operand {
+    call_intrinsic_with_flags_before(context, function, declared, inst, name, ret, args, parameters, Flags::default())
+}
+
+/// `call_intrinsic_before` with the call's fast-math `flags`.
+fn call_intrinsic_with_flags_before(
+    context: &mut llrm_mir::context::Context,
+    function: &mut Function,
+    declared: &mut llrm_mir::passes::Declared,
+    inst: InstId,
+    name: &str,
+    ret: TypeId,
     mut args: Vec<Operand>,
     parameters: Vec<TypeId>,
+    flags: Flags,
 ) -> Operand {
     let function_type = context.types.intern(Type::Function { returns: ret, parameters, variadic: false });
     let callee = declared.declare(name, function_type);
@@ -1589,7 +1689,7 @@ fn call_intrinsic_before(
         tail: Tail::default(),
     };
     args.push(callee);
-    let call = function.create_instruction(Opcode::Call(Box::new(info)), ret, args, Flags::default(), None);
+    let call = function.create_instruction(Opcode::Call(Box::new(info)), ret, args, flags, None);
     function.insert(call, Position::Before(inst)).expect("a placed instruction");
     Operand::Value(function.instruction(call).result.expect("a value"))
 }
