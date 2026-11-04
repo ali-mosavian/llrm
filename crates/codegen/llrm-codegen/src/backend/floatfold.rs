@@ -4,8 +4,8 @@
 //! DEVIATE FF1 (owner m16, exit 2026-11-17): a volatile cell folds too; the
 //! fused instruction stays volatile and ordered against every other volatile
 //! access. The pin keeps `fld [m]` for it. Cost rule: the fold drops an `fld`
-//! and a stack slot and keeps the one memory read, so it never costs a byte or
-//! a clock; the exit is the pin's own fold, or this stays with the exit moved.
+//! and a stack slot and keeps the one memory read, so it never costs a byte or a
+//! clock; the exit is the pin's own fold, or this stays with the exit moved.
 //!
 //! # How it works
 //! x87 arithmetic has a memory form for a float or a double (`fadd qword ptr
@@ -20,8 +20,8 @@
 //!
 //! - it is read exactly once in the body;
 //! - its defining instruction is the nearest earlier definition in the block, a
-//!   plain `fld` or `fild` of a memory cell, with no clobbers and not part of a
-//!   group;
+//!   plain `fld` or `fild` of a memory cell, with no clobbers and
+//!   not part of a group;
 //! - nothing between the load and the arithmetic is volatile, a call, a barrier
 //!   or an escape, or may write the cell (`storedhomes::may_write`);
 //! - the cell is 4 or 8 bytes, or a 2 or 4 byte integer the target prices below
