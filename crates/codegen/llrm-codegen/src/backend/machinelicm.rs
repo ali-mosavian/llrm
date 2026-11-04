@@ -319,6 +319,13 @@ impl licm::Inst for Wrapped {
         &self.0.uses
     }
 
+    fn each_value(
+        &self,
+        each: impl FnMut(u32),
+    ) {
+        self.0.each_value(each);
+    }
+
     fn is_copy(&self) -> bool {
         self.0
             .what
@@ -732,6 +739,46 @@ mod tests {
         assert_eq!(adds, 1, "the premise: the duplicates are made once");
         let renames = RENAMES.with(|renames| renames.get());
         assert!(renames <= 3 * duplicates as usize, "{renames}");
+    }
+
+    /// After a round of renames the sweep visited every instruction of the
+    /// function, loop after loop: 2.9M `rename_uses` calls on
+    /// memory_expansion -O2. Only a block that reads a renamed value is swept.
+    #[test]
+    fn test_blocks_that_read_no_duplicate_are_not_swept_for_renames() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let mut inside = Vec::new();
+        for number in 0..5u32 {
+            let value = 10 + 2 * number;
+            let at = i64::from(10 + 3 * number);
+            inside.push(insn(at, Operation::Binary, "add", vec![held(value)], vec![held(1), held(2)], vec![value], vec![1, 2]));
+            inside.push(insn(at + 1, Operation::Compare, "cmp", vec![], vec![held(value), held(3)], vec![], vec![value, 3]));
+        }
+        inside.push(insn(500, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]));
+        let tail = 200i64;
+        let mut blocks = vec![
+            block(0, vec![1], vec![insn(0, Operation::Jump, "jmp", vec![], vec![], vec![], vec![])]).into(),
+            block(1, vec![1, 1000], inside).into(),
+        ];
+        for number in 0..tail {
+            let at = 1000 + number;
+            let next = if number + 1 == tail { vec![] } else { vec![at + 1] };
+            let value = 5000 + number as u32;
+            blocks.push(
+                block(at, next, vec![insn(at * 10, Operation::Move, "mov", vec![held(value)], vec![held(3)], vec![value], vec![3])])
+                    .into(),
+            );
+        }
+        let mut body = LirBody::new("loop", 0, blocks, IndexMap::default(), IndexMap::default());
+        body.inputs = [1, 2, 3].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        crate::backend::licm_core::SWEPT.with(|swept| swept.set(0));
+        let done = hoisted(&body, &RegisterClasses::m16());
+        let adds = done.blocks[0].insns.iter().filter(|one| one.what.as_ref().and_then(|w| w.name.as_deref()) == Some("add")).count();
+        assert_eq!(adds, 1, "the premise: the duplicates are made once");
+        let swept = crate::backend::licm_core::SWEPT.with(|swept| swept.get());
+        assert!(swept <= 40, "{swept}");
     }
 
     /// bintree's `insert` at -O1, a loop after `tailrecurse`: `t[3*node]` is
