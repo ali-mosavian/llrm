@@ -1730,3 +1730,23 @@ fn a_word_step_never_holds_a_byte_in_a_on_the_plain_6502() {
         assert_eq!(exit_code_of(&text, "g"), 1, "{text}");
     }
 }
+
+#[test]
+fn a_word_global_is_loaded_and_stored_by_absolute_address() {
+    // x16basic-c: 270 sites loaded a u16 global through a pointer cell, `ldx #<(g);
+    // ldy #>(g); stx; sty; ldy #0; lda (p),y; ldy #1; lda (p),y` (19 B) where
+    // `lda g; ldx g+1` is 5
+    let ir = module(
+        "@w = global i16 300\n@v = global i16 0\n\
+         define i8 @g() {\n\
+         \x20 %a = load i16, ptr @w\n  %b = add i16 %a, 2\n  store i16 %b, ptr @v\n\
+         \x20 %c = load i16, ptr @v\n  %h = lshr i16 %c, 8\n  %hl = trunc i16 %h to i8\n  %l = trunc i16 %c to i8\n\
+         \x20 %r = add i8 %hl, %l\n  ret i8 %r\n}",
+    );
+    for level in [Level::O2, Level::Os] {
+        let text = assembly(&ir, &Request::new(level)).unwrap_or_else(|e| panic!("{e}"));
+        // 302 = 0x012E: 1 + 0x2E = 47
+        assert_eq!(exit_code_of(&text, "g"), 47, "{text}");
+        assert!(!text.contains("#<(w)") && !text.contains("#<(v)"), "{text}");
+    }
+}

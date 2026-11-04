@@ -1503,6 +1503,25 @@ pub fn build_with_places(
                     b.push(Inst::new(Kind::Op("STM"), vec![Operand::Use(acc), Operand::Symbol(symbol, 0)]));
                 }
             }
+            // a word global: its two halves, g and g+1
+            op::LDABS16 | op::STABS16 => {
+                let symbol = address(&o[1], &o[2]).map_err(Unsupported)?;
+                let acc = Reg::Phys(reg::A);
+                let halves = [symbol.clone(), format!("{symbol}+1")];
+                if inst.opcode == op::LDABS16 {
+                    let (low, high) = b.write_word(name(&o[0])?)?;
+                    for (d, half) in [low, high].into_iter().zip(halves) {
+                        b.push(Inst::new(Kind::Op("LDM"), vec![Operand::Def(acc), Operand::Symbol(half, 0)]));
+                        b.copy(d, acc);
+                    }
+                } else {
+                    let (low, high) = b.read_word(name(&o[0])?)?;
+                    for (value, half) in [low, high].into_iter().zip(halves) {
+                        b.copy(acc, value);
+                        b.push(Inst::new(Kind::Op("STM"), vec![Operand::Use(acc), Operand::Symbol(half, 0)]));
+                    }
+                }
+            }
             op::LDAX | op::STAX => {
                 let symbol = indexed_address(&o[1], &o[2]).map_err(Unsupported)?;
                 let (acc, x) = (Reg::Phys(reg::A), Reg::Phys(reg::X));
