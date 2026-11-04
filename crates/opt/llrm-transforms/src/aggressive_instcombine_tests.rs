@@ -191,3 +191,105 @@ fn a_de_bruijn_table_lookup_is_a_cttz() {
     assert!(after.contains("llvm.cttz.i32"), "{after}");
     assert!(!after.contains("load i8"), "{after}");
 }
+
+const LOG2_TABLE: &str = "@t = constant [32 x i8] [i8 0, i8 9, i8 1, i8 10, i8 13, i8 21, i8 2, i8 29, i8 11, i8 14, i8 16, i8 18, i8 22, i8 25, i8 3, i8 30, i8 8, i8 12, i8 20, i8 28, i8 15, i8 17, i8 24, i8 7, i8 19, i8 27, i8 23, i8 6, i8 26, i8 5, i8 4, i8 31]
+define i8 @f(i32 %v) {
+b0:
+  %a1 = lshr i32 %v, 1
+  %o1 = or i32 %a1, %v
+  %a2 = lshr i32 %o1, 2
+  %o2 = or i32 %a2, %o1
+  %a3 = lshr i32 %o2, 4
+  %o3 = or i32 %a3, %o2
+  %a4 = lshr i32 %o3, 8
+  %o4 = or i32 %a4, %o3
+  %a5 = lshr i32 %o4, 16
+  %o5 = or i32 %a5, %o4
+  %mul = mul i32 %o5, 130329821
+  %shr = lshr i32 %mul, 27
+  %idx = trunc i32 %shr to i16
+  %p = getelementptr inbounds [32 x i8], ptr @t, i16 0, i16 %idx
+  %r = load i8, ptr %p
+  ret i8 %r
+}
+";
+
+fn merged_on(
+    text: &str,
+    machine: crate::testing::Tuned,
+) -> String {
+    let before = parsed(&format!("{DOS}{text}"));
+    let mut module = before.clone();
+    crate::testing::managed_on(&mut module, AggressiveInstCombine, machine);
+    let after = managed(&mut module, crate::dead::Dead);
+    let inputs: &[&[i128]] = &[&[0], &[1], &[4660], &[-1]];
+    assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
+    after
+}
+
+/// A de Bruijn log2 table behind an or cascade was five shifts, five ors, a
+/// multiply and a load; where `ctlz` is one instruction the pin's
+/// `tryToRecognizeTableBasedLog2` makes it `31 - ctlz`, and where it is not
+/// (x86 without lzcnt: 5) it leaves the table.
+#[test]
+fn a_de_bruijn_log2_table_is_a_ctlz_where_ctlz_is_cheap() {
+    let cheap = merged_on(LOG2_TABLE, crate::testing::Tuned { cheap_ctlz: true, ..Default::default() });
+    assert!(cheap.contains("llvm.ctlz.i32"), "{cheap}");
+    assert!(!cheap.contains("load i8"), "{cheap}");
+    let dear = merged(LOG2_TABLE);
+    assert!(dear.contains("load i8"), "no cheap ctlz: the table stays\n{dear}");
+}
+
+const MASK_TABLE: &str = "@t = constant [6 x i32] [i32 0, i32 1, i32 3, i32 7, i32 15, i32 31]
+define i32 @f(i32 %x, i16 %i) {
+b0:
+  %p = getelementptr inbounds [6 x i32], ptr @t, i16 0, i16 %i
+  %m = load i32, ptr %p
+  %r = and i32 %x, %m
+  ret i32 %r
+}
+";
+
+/// `x & tbl[i]` through a table of low-bits masks was a load; the pin's
+/// `tryToRecognizeTableBasedLowBitsMask` makes it `x & ((1 << i) - 1)`.
+#[test]
+fn a_table_of_low_bit_masks_is_a_shift_and_a_decrement() {
+    let before = parsed(&format!("{DOS}{MASK_TABLE}"));
+    let mut module = before.clone();
+    managed(&mut module, AggressiveInstCombine);
+    let after = managed(&mut module, crate::dead::Dead);
+    assert!(after.contains("shl i32 1,") && after.contains("sub i32"), "{after}");
+    assert!(!after.contains("load i32"), "{after}");
+    let inputs: &[&[i128]] = &[&[-1, 0], &[-1, 3], &[4660, 5], &[255, 1]];
+    assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
+}
+
+const GUARDED_FSHL: &str = "define i32 @f(i32 %a, i32 %b, i32 %n) {
+g:
+  %z = icmp eq i32 %n, 0
+  br i1 %z, label %p, label %f
+f:
+  %sub = sub i32 32, %n
+  %shr = lshr i32 %b, %sub
+  %shl = shl i32 %a, %n
+  %or = or i32 %shr, %shl
+  br label %p
+p:
+  %r = phi i32 [ %or, %f ], [ %a, %g ]
+  ret i32 %r
+}
+";
+
+/// A funnel shift behind a branch around a zero amount (the C idiom that
+/// avoids shifting by the width) was a branch, a phi and four operations; the
+/// pin's `foldGuardedFunnelShift` makes it `fshl`.
+#[test]
+fn a_funnel_shift_guarded_against_a_zero_amount_is_an_fshl() {
+    let before = parsed(&format!("{DOS}{GUARDED_FSHL}"));
+    let mut module = before.clone();
+    managed(&mut module, AggressiveInstCombine);
+    let after = managed(&mut module, crate::dead::Dead);
+    assert!(after.contains("llvm.fshl.i32"), "{after}");
+    let inputs: &[&[i128]] = &[&[1, 2, 0], &[1, 2, 4], &[305419896, 2596069104, 8], &[-1, 5, 31]];
+    assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
+}

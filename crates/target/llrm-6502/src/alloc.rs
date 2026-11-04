@@ -904,6 +904,31 @@ impl Builder {
         Ok(())
     }
 
+    /// `d := a op g[i]` for a global indexed by a byte: x takes the index, the
+    /// op reads `g,x`.
+    fn alu_indexed(
+        &mut self,
+        mnemonic: &'static str,
+        carry: Option<&'static str>,
+        d: &str,
+        a: &str,
+        symbol: String,
+        index: &str,
+    ) -> Result<(), Unsupported> {
+        let (acc, x) = (Reg::Phys(reg::A), Reg::Phys(reg::X));
+        self.define(d);
+        let (d, a, index) = (self.byte(d)?, self.byte(a)?, self.byte(index)?);
+        self.copy(x, index);
+        if let Some(carry) = carry {
+            self.push(Inst::new(Kind::Op(carry), vec![]));
+        }
+        self.copy(acc, a);
+        let second = Operand::Symbol(format!("{symbol},x"), 0);
+        self.push(Inst::new(Kind::Op(mnemonic), vec![Operand::Def(acc), Operand::Use(acc), second, Operand::Use(x)]));
+        self.copy(d, acc);
+        Ok(())
+    }
+
     /// How many halves of the pair `name` are the identity of `mnemonic` (a
     /// known `0`, or `255` for `AND`).
     fn identity_halves(
@@ -919,6 +944,35 @@ impl Builder {
             .iter()
             .filter(|cell| self.constants.get(*cell).is_some_and(|v| is_identity(mnemonic, &Operand::Imm(*v & 0xFF))))
             .count()
+    }
+
+    /// `d := a - 1` on a word: the low byte steps, the high only when the low
+    /// was 0 (`lda lo; bne; dec hi; dec lo`, 11 clocks against 22 for the
+    /// carry chain; a byte in x or y steps by dex/dey). Not for a pointer, which has its own pair bump.
+    fn word_minus_one(
+        &mut self,
+        mnemonic: &str,
+        d: &str,
+        a: &str,
+        b: &str,
+    ) -> Result<bool, Unsupported> {
+        let one = matches!((mnemonic, self.word_constant(b)), ("ADC", Some([255, 255])) | ("SBC", Some([1, 0])));
+        if !one || self.in_pair(d) || self.in_pair(a) {
+            return Ok(false);
+        }
+        let (al, ah) = self.read_word(a)?;
+        let (dl, dh) = self.write_word(d)?;
+        self.copy(dl, al);
+        self.copy(dh, ah);
+        let operands = vec![
+            Operand::Def(dl),
+            Operand::Def(dh),
+            Operand::Use(dl),
+            Operand::Use(dh),
+            Operand::Def(Reg::Phys(reg::A)),
+        ];
+        self.push(Inst::new(Kind::Op("DEC16"), operands));
+        Ok(true)
     }
 
     /// The same on a pair, the carry running from the low byte to the high.
@@ -1308,6 +1362,17 @@ pub fn build_with_places(
                 let symbol = address(&o[2], &o[3]).map_err(Unsupported)?;
                 b.alu_with(mnemonic, carry, name(&o[0])?, name(&o[1])?, Operand::Symbol(symbol, 0))?
             }
+            op::ADD8MX | op::SUB8MX | op::AND8MX | op::OR8MX | op::XOR8MX => {
+                let (mnemonic, carry) = match inst.opcode {
+                    op::ADD8MX => ("ADC", Some("CLC")),
+                    op::SUB8MX => ("SBC", Some("SEC")),
+                    op::AND8MX => ("AND", None),
+                    op::OR8MX => ("ORA", None),
+                    _ => ("EOR", None),
+                };
+                let symbol = indexed_address(&o[2], &o[3]).map_err(Unsupported)?;
+                b.alu_indexed(mnemonic, carry, name(&o[0])?, name(&o[1])?, symbol, name(&o[4])?)?
+            }
             op::SUB8 => b.alu("SBC", Some("SEC"), name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             // one register read and written: `d := a`, then `d` in place
             op::INC8 | op::DEC8 => {
@@ -1320,8 +1385,18 @@ pub fn build_with_places(
             op::AND8 => b.alu("AND", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             op::OR8 => b.alu("ORA", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             op::XOR8 => b.alu("EOR", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
-            op::ADD16 => b.alu16("ADC", Some("CLC"), name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
-            op::SUB16 => b.alu16("SBC", Some("SEC"), name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
+            op::ADD16 => {
+                let (d, a, c) = (name(&o[0])?, name(&o[1])?, name(&o[2])?);
+                if !b.word_minus_one("ADC", d, a, c)? {
+                    b.alu16("ADC", Some("CLC"), d, a, c)?
+                }
+            }
+            op::SUB16 => {
+                let (d, a, c) = (name(&o[0])?, name(&o[1])?, name(&o[2])?);
+                if !b.word_minus_one("SBC", d, a, c)? {
+                    b.alu16("SBC", Some("SEC"), d, a, c)?
+                }
+            }
             op::AND16 => b.alu16("AND", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             op::OR16 => b.alu16("ORA", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             op::XOR16 => b.alu16("EOR", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
@@ -2634,6 +2709,23 @@ fn emit_with<const STACK: bool>(
                         )
                         .unwrap();
                     }
+                }
+                // d := d - 1 on two cells: the high byte steps when the low was 0
+                (Kind::Op("DEC16"), _) => {
+                    made += 1;
+                    // a byte in x or y is read through a and stepped by dex/dey
+                    let read = |r| match r {
+                        reg::X => "txa".to_owned(),
+                        reg::Y => "tya".to_owned(),
+                        cell => format!("lda {}", register_name(cell)),
+                    };
+                    let step = |r| match r {
+                        reg::X => "dex".to_owned(),
+                        reg::Y => "dey".to_owned(),
+                        cell => format!("dec {}", register_name(cell)),
+                    };
+                    let (load, low, high) = (read(regs[0]), step(regs[0]), step(regs[1]));
+                    writeln!(out, "  {load}\n  bne _pa{made}\n  {high}\n_pa{made}:\n  {low}").unwrap();
                 }
                 (Kind::Op("PINCH"), _) => {
                     let (d, s) = (regs[0], regs[1]);

@@ -60,7 +60,8 @@ impl Level {
             Self::Os => MidEnd::size(),
             Self::Oz => MidEnd::min_size(),
         };
-        MidEnd { lower_switches: false, ..options }
+        // The DAG's `mergeConsecutiveStores` widens the stores, as in the pin.
+        MidEnd { lower_switches: false, merge_stores: false, ..options }
     }
 }
 

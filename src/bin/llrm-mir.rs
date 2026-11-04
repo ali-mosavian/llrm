@@ -269,6 +269,7 @@ fn main() -> ExitCode {
                     rotation_only: false,
                     is_util_mode: false,
                     prepare_for_lto: false,
+                    check_exit_count: false,
                 };
                 // Every function with a body.
                 let names: Vec<String> = module

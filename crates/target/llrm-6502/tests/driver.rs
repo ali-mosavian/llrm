@@ -57,6 +57,59 @@ fn the_size_level_is_priced_in_bytes() {
     assert!(!speed.contains("dex") && !speed.contains("dey"), "-O2:\n{speed}");
 }
 
+/// `n - 1` on a word went through the carry chain (`clc; adc #255` on each
+/// byte, 22 clocks) where `lda lo; bne; dec hi; dec lo` borrows by branch (11):
+/// memcmp's and strncmp's counters, a clock row against gcc. The borrow still
+/// runs: 0x0100 - 1 = 0x00FF, 1 - 1 = 0, 0 - 1 = 0xFFFF.
+#[test]
+fn a_word_minus_one_borrows_by_branch() {
+    let probe = |name: &str, start: i32| {
+        format!(
+            "@{name}_k = global i16 {start}\ndefine i8 @{name}() {{\n  %v = load volatile i16, ptr @{name}_k\n  \
+             %d = add i16 %v, -1\n  %lo = trunc i16 %d to i8\n  %h = lshr i16 %d, 8\n  %hi = trunc i16 %h to i8\n  \
+             %s = shl i8 %hi, 1\n  %r = xor i8 %lo, %s\n  ret i8 %r\n}}\n"
+        )
+    };
+    let ir = module(&[probe("borrow", 256), probe("one", 1), probe("wrap", 0)].concat());
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(!text.contains("adc #255") && text.contains("dec"), "the carry chain:\n{text}");
+    assert_eq!(exit_code_of(&text, "borrow"), 0xFF, "{text}");
+    assert_eq!(exit_code_of(&text, "one"), 0, "{text}");
+    assert_eq!(exit_code_of(&text, "wrap"), 1, "{text}");
+}
+
+/// A byte added to an accumulator from a global indexed by a byte loaded the
+/// element, then added a cell (`lda g,x; clc; adc rc2; sta rc2`), where the 6502
+/// has `adc g,x` and the accumulator can stay in A: sum4 at -Os 22 B against
+/// llvm-mos's 13, sum_arr, sum16, schr. The sum of 1 2 3 4 is 10.
+#[test]
+fn an_indexed_global_is_the_operand_of_the_add() {
+    let ir = module(
+        r#"@arr = global [4 x i8] c"\01\02\03\04"
+@n = global i8 4
+define i8 @probe() {
+entry:
+  %n = load volatile i8, ptr @n
+  br label %loop
+loop:
+  %i = phi i8 [ 0, %entry ], [ %i2, %loop ]
+  %s = phi i8 [ 0, %entry ], [ %s2, %loop ]
+  %z = zext i8 %i to i16
+  %p = getelementptr i8, ptr @arr, i16 %z
+  %b = load i8, ptr %p
+  %s2 = add i8 %s, %b
+  %i2 = add i8 %i, 1
+  %c = icmp eq i8 %i2, %n
+  br i1 %c, label %done, label %loop
+done:
+  ret i8 %s2
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(text.contains("adc arr,x") && !text.contains("lda arr,x"), "the element was loaded:\n{text}");
+    assert_eq!(exit_code_of(&text, "probe"), 10, "{text}");
+}
+
 /// `t[(a + b) >> 1]` on bytes is a pointer plus an `i16` whose high byte is
 /// known zero. Selected as a 16-bit add into the pointer and `ldy #0; lda (rc),y`
 /// (bsearch8: 78 B against llvm-mos's 53) instead of the byte index in Y.
