@@ -647,6 +647,7 @@ fn test_a_join_narrows_the_class_the_next_join_is_judged_against() {
         joins_global_copies: true,
         joins_pinned_copies: true,
         joins_sub_registers: true,
+        joins_lanes: false,
         palettes: palettes.into(),
         pins: IndexMap::default(),
         size: false,
@@ -1111,6 +1112,7 @@ fn env_with_palettes(palettes: &[(u32, &[RegId])]) -> TargetEnv {
         joins_global_copies: false,
         joins_pinned_copies: true,
         joins_sub_registers: true,
+        joins_lanes: true,
         aliases: Default::default(),
         should_join: Box::new(|_| true),
         freq: Vec::new(),
@@ -1167,6 +1169,7 @@ fn test_a_copy_from_a_pinned_argument_is_left_to_the_allocator_when_the_target_s
             should_join: Box::new(|_| true),
             freq: Vec::new(),
             joins_sub_registers: true,
+            joins_lanes: false,
             regs: None,
             kind_of: None,
             kinds: Default::default(),
@@ -1368,4 +1371,24 @@ fn test_both_bytes_of_a_pair_join_into_their_lanes() {
     let dests = |insn: &Arc<Insn>| insn.what.as_ref().unwrap().dests.clone();
     assert_eq!(dests(&kept[0]), vec![Loc::Held(Held { value: 2, width: 1, offset: 0 })]);
     assert_eq!(dests(&kept[1]), vec![Loc::Held(Held { value: 2, width: 1, offset: 1 })]);
+}
+
+/// A byte joins the lane of a pair only where some register of the pair's
+/// palette has a register of the byte's palette at that offset: `ah` is the
+/// byte above `al` in `ax`, and `al` is not. Before, `can_share_lane` had no
+/// answer and every copy into a high byte stayed.
+#[test]
+fn test_a_byte_joins_the_lane_of_the_pair_that_has_that_byte_at_that_offset() {
+    let env = env_with_palettes(&[(1, &[RegId::AX]), (2, &[RegId::AH]), (3, &[RegId::AL])]);
+    assert!(env.can_share_lane(2, 1, 1), "ah is the byte above al");
+    assert!(!env.can_share_lane(3, 1, 1), "al is the low byte, not the high one");
+    assert!(env.can_share_sub(3, 1), "premise: al is the low byte of ax");
+}
+
+/// A target that does not join lanes says no whatever the registers.
+#[test]
+fn test_a_target_without_lane_joins_leaves_every_lane_copy() {
+    let mut env = env_with_palettes(&[(1, &[RegId::AX]), (2, &[RegId::AH])]);
+    env.joins_lanes = false;
+    assert!(!env.can_share_lane(2, 1, 1));
 }

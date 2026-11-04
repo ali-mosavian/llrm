@@ -105,6 +105,7 @@ impl<T: Target> Converted<T> {
             T::joins_global_copies(),
             T::joins_pinned_copies(),
             T::joins_sub_registers(),
+            T::joins_lanes(),
             registers,
             Box::new(move |join| {
                 let joined: Vec<RegId> = join.joined.iter().copied().collect();

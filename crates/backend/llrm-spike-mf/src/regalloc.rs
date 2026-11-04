@@ -155,6 +155,12 @@ pub trait Target {
         true
     }
 
+    /// Whether a copy into or out of a byte above the low one of a wider value
+    /// is joined (`CoalescerPair` with a `SubIdx`). False: such a copy stays.
+    fn joins_lanes() -> bool {
+        false
+    }
+
     /// `canJoinPhys`: whether a copy between an ordinary value and a pinned
     /// one (an argument register, not reserved) is joined. The pin joins only
     /// reserved registers, so a target that states false leaves the copy to
