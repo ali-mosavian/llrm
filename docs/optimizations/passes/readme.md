@@ -2,13 +2,14 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 235 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 236 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
 | adce | Aggressive dead code elimination: a translation of LLVM's ADCE (`ADCE.cpp` at d1106deb71cc). | LLVM runs it after SCCP, BDCE and before MemCpyOpt (slot 35). Not in llrm's | [adce](adce.md) |
+| aggressive_instcombine | `AggressiveInstCombine`: `TruncInstCombine`, then the folds of `foldUnusualPatterns`, here `foldConsecutiveLoads`. | As `aggressive-instcombine@678`, after `instcombine` and before `tailrec` | [aggressive_instcombine](aggressive_instcombine.md) |
 | algebraic | Algebraic identities over integer values, as LLVM's InstCombine and, for a loop-carried operand, Reassociate. | `algebraic` runs once in each pass of the fixed point, after `indvars` and | [algebraic](algebraic.md) |
 | alwaysundef | Whether passing a constant into a phi is undefined behavior at a use of the phi: SimplifyCFG's `passingValueIsAlwaysUndefined`. | Named by `hoistcommon`, `speculate`, `undefpred`. | [alwaysundef](alwaysundef.md) |
 | argpromotion | Argument promotion (LLVM's ArgumentPromotion): a pointer parameter a function only reads at fixed offsets is replaced by the fields read. | In the interprocedural step, once, after its inlining loop and before | [argpromotion](argpromotion.md) |

@@ -74,6 +74,7 @@
 //! module's own header.
 
 pub mod adce;
+pub mod aggressive_instcombine;
 pub mod algebraic;
 pub mod alwaysundef;
 pub mod argpromotion;
@@ -380,7 +381,6 @@ pub mod tailmerge;
 pub mod testing;
 pub mod transform;
 pub mod trivialunswitch;
-pub mod aggressive_instcombine;
 pub mod trunc_inst_combine;
 pub mod twoentryphi;
 pub mod typepromotion;

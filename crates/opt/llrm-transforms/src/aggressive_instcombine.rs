@@ -29,8 +29,8 @@
 //!     2026-11-21.
 //! 39. The target's `allowsMisalignedMemoryAccesses` is taken to be true and
 //!     fast for every size the data layout has as a legal integer (the X86
-//!     answer, `X86ISelLoweringCall.cpp#L356`). Owner: w2. Exit: a target-supplied
-//!     fact, 2026-11-28.
+//!     answer, `X86ISelLoweringCall.cpp#L356`). Owner: w2. Exit: a
+//!     target-supplied fact, 2026-11-28.
 //!
 //! # Example
 //! The pair above is one `load i16`; see `aggressive_instcombine_tests.rs`.
@@ -107,7 +107,8 @@ fn fold_unusual_patterns(
     reachable: &IdSet<BlockId>,
 ) -> bool {
     let mut changed = false;
-    let blocks: Vec<BlockId> = unit.function.layout().iter().copied().filter(|&block| reachable.contains(&block)).collect();
+    let blocks: Vec<BlockId> =
+        unit.function.layout().iter().copied().filter(|&block| reachable.contains(&block)).collect();
     for block in blocks {
         // Bottom up: a chain is matched from its end, and a partial pattern
         // is not matched.
@@ -139,7 +140,12 @@ fn shifted_extended_instruction(
     q: &Query,
     v: Operand,
 ) -> Option<(InstId, u64)> {
-    let one_use = |operand: Operand| matches!(operand, Operand::Value(value) if q.function.users(value).has_one_use());
+    let one_use = |operand: Operand| {
+        matches!(
+            operand,
+            Operand::Value(value) if q.function.users(value).has_one_use()
+        )
+    };
     if !one_use(v) {
         return None;
     }
@@ -168,7 +174,12 @@ fn fold_loads_recursive(
     is_root: bool,
 ) -> bool {
     // The root may have several uses; an intermediate value needs one.
-    if !is_root && !matches!(v, Operand::Value(value) if q.function.users(value).has_one_use()) {
+    if !is_root
+        && !matches!(
+            v,
+            Operand::Value(value) if q.function.users(value).has_one_use()
+        )
+    {
         return false;
     }
     // `m_c_Or(m_Value(X), <shifted extended load>)`, either order.
@@ -199,14 +210,18 @@ fn fold_loads_recursive(
 
     // The same load twice, a volatile one, or a different block or address
     // space.
-    let simple = |inst: InstId| matches!(q.function.instruction(inst).opcode, Opcode::Load { volatile: false, .. });
+    let simple = |inst: InstId| matches!(
+        q.function.instruction(inst).opcode,
+        Opcode::Load { volatile: false, .. }
+    );
     if li1 == li2 || !simple(li1) || !simple(li2) {
         return false;
     }
-    let space = |inst: InstId| match q.type_of(q.function.instruction(inst).operands[0]).map(|ty| q.context.types.get(ty)) {
-        Some(Type::Pointer(space)) => Some(*space),
-        _ => None,
-    };
+    let space =
+        |inst: InstId| match q.type_of(q.function.instruction(inst).operands[0]).map(|ty| q.context.types.get(ty)) {
+            Some(Type::Pointer(space)) => Some(*space),
+            _ => None,
+        };
     if space(li1) != space(li2) || space(li1).is_none() {
         return false;
     }
@@ -224,7 +239,8 @@ fn fold_loads_recursive(
         let shift = 128 - index_bits;
         ((offset << shift) as i128) >> shift
     };
-    let bits_of = |inst: InstId| u64::from(q.scalar_bits(Operand::Value(q.function.instruction(inst).result.expect("a load"))));
+    let bits_of =
+        |inst: InstId| u64::from(q.scalar_bits(Operand::Value(q.function.instruction(inst).result.expect("a load"))));
     let (mut load_size1, mut load_size2) = (bits_of(li1), bits_of(li2));
     if ptr1 != ptr2 {
         return false;
@@ -351,13 +367,8 @@ fn fold_consecutive_loads(
     function.insert(new_load, Position::Before(root_insert)).expect("a placed instruction");
     let mut value = Operand::Value(function.instruction(new_load).result.expect("a value"));
     if context.types.int_bits(zext_type) != Some(lops.load_size as u32) {
-        let extended = function.create_instruction(
-            Opcode::Cast(CastOp::ZExt),
-            zext_type,
-            vec![value],
-            Flags::default(),
-            None,
-        );
+        let extended =
+            function.create_instruction(Opcode::Cast(CastOp::ZExt), zext_type, vec![value], Flags::default(), None);
         function.insert(extended, Position::Before(root_insert)).expect("a placed instruction");
         value = Operand::Value(function.instruction(extended).result.expect("a value"));
     }
