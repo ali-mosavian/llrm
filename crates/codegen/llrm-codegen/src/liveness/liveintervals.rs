@@ -160,6 +160,13 @@ impl Slots {
 }
 
 /// `LiveIntervals` (LiveIntervals.h).
+/// An instruction put into a block or taken out of it, with the block's index.
+#[derive(Clone)]
+pub enum Change {
+    Put(usize, Arc<Insn>),
+    Took(usize, Arc<Insn>),
+}
+
 pub struct LiveIntervals {
     pub indexes: SlotIndexes,
     pub cfg: Cfg,
@@ -173,6 +180,10 @@ pub struct LiveIntervals {
     slots: HashMap<(u32, InstrKey), Slots>,
     /// Every instruction by its key (`MachineInstr*`).
     insns: HashMap<InstrKey, Arc<Insn>>,
+    /// Every instruction put in or taken out since
+    /// [`LiveIntervals::track_changes`] was asked for, for a caller that
+    /// keeps a summary of what names a value.
+    changes: std::cell::RefCell<Option<Vec<Change>>>,
     /// The values defined on entry (parameters), which no instruction defines.
     inputs: std::collections::BTreeSet<u32>,
     intervals: HashMap<u32, Rc<LiveInterval>>,
@@ -202,6 +213,7 @@ impl LiveIntervals {
             operands: HashMap::with_capacity_and_hasher(named / 2, Default::default()),
             slots: HashMap::with_capacity_and_hasher(named, Default::default()),
             insns: HashMap::with_capacity_and_hasher(insns, Default::default()),
+            changes: std::cell::RefCell::new(None),
             inputs: body.inputs.clone(),
             intervals: HashMap::default(),
             calc: LiveIntervalCalc::new(),
@@ -280,6 +292,26 @@ impl LiveIntervals {
             if list.is_empty() {
                 self.operands.remove(&value);
             }
+        }
+    }
+
+    /// From now on, record each instruction put into or taken out of a block
+    /// ([`LiveIntervals::take_changes`]).
+    pub fn track_changes(&self) {
+        self.changes.borrow_mut().get_or_insert_with(Vec::new);
+    }
+
+    /// The instructions put in or taken out since the last call, in order.
+    pub fn take_changes(&self) -> Vec<Change> {
+        self.changes.borrow_mut().as_mut().map(std::mem::take).unwrap_or_default()
+    }
+
+    fn note(
+        &self,
+        change: impl FnOnce() -> Change,
+    ) {
+        if let Some(log) = self.changes.borrow_mut().as_mut() {
+            log.push(change());
         }
     }
 
@@ -695,6 +727,7 @@ impl LiveIntervals {
         let index = self.indexes.insert_machine_instr_in_maps(insn.id(), block, &prev, &next, late);
         llrm_mir::counts::bump(llrm_mir::counts::Event::LirOperandListEdits);
         self.add_operands(&insn);
+        self.note(|| Change::Put(block, Arc::clone(&insn)));
         self.insns.insert(insn.id(), Arc::clone(&insn));
         self.blocks[block].insert(pos, insn);
         index
@@ -713,6 +746,7 @@ impl LiveIntervals {
         let index = self.indexes.insert_machine_instr_in_maps(insn.id(), block, &prev, &next, false);
         llrm_mir::counts::bump(llrm_mir::counts::Event::LirOperandListEdits);
         self.add_operands(&insn);
+        self.note(|| Change::Put(block, Arc::clone(&insn)));
         self.insns.insert(insn.id(), Arc::clone(&insn));
         self.blocks[block].insert(pos, insn);
         index
@@ -731,10 +765,12 @@ impl LiveIntervals {
         let pos = self.position_of(block, old);
         let before = Arc::clone(&self.blocks[block][pos]);
         self.remove_operands(&before);
+        self.note(|| Change::Took(block, Arc::clone(&before)));
         self.insns.remove(&old);
         let index = self.indexes.replace_machine_instr_in_maps(old, new.id());
         llrm_mir::counts::bump(llrm_mir::counts::Event::LirOperandListEdits);
         self.add_operands(&new);
+        self.note(|| Change::Put(block, Arc::clone(&new)));
         self.insns.insert(new.id(), Arc::clone(&new));
         self.blocks[block][pos] = new;
         index
@@ -749,6 +785,7 @@ impl LiveIntervals {
         let pos = self.position_of(block, key);
         let gone = self.blocks[block].remove(pos);
         self.remove_operands(&gone);
+        self.note(|| Change::Took(block, Arc::clone(&gone)));
         self.insns.remove(&key);
         self.indexes.remove_machine_instr_from_maps(key);
     }

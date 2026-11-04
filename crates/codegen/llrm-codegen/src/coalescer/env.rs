@@ -32,7 +32,7 @@ use llrm_lir::registers::{RegId, Regs};
 
 use super::driver;
 use super::pair::CoalescerEnv;
-use crate::liveness::liveintervals::LiveIntervals;
+use crate::liveness::liveintervals::{Change, LiveIntervals};
 use crate::liveness::slotindex::InstrKey;
 use crate::model::lir::{Insn, LirBody};
 use crate::support::hash::IndexMap;
@@ -68,25 +68,13 @@ pub struct TargetEnv {
     /// the target interns (the operand slots that name it), or none where the
     /// instruction costs the same in every register. Priced by
     /// [`Join`]'s `kinds`, not by walking the instructions.
-    pub kind_of: Box<dyn Fn(&Insn, u32) -> Option<u32>>,
+    pub kind_of: Option<Box<dyn Fn(&Insn, u32) -> Option<u32>>>,
     /// Each value's [`UseKinds`], built the first time it is priced and merged
     /// when a join absorbs another (DEVIATE C14).
     pub kinds: RefCell<IndexMap<u32, UseKinds>>,
     /// `LLRM_CHECK_USE_SUMMARY`: each [`JoinSide`] also lists its instructions,
     /// for the target to check the summary against.
     pub check_kinds: bool,
-    /// The copy last priced: what it adds to each side's [`UseKinds`], for the
-    /// join to take away when it erases the copy.
-    pub priced_copy: RefCell<Option<PricedCopy>>,
-}
-
-/// What a copy adds to the use lists of the values it joins.
-#[derive(Clone, Copy)]
-pub struct PricedCopy {
-    copy: InstrKey,
-    freq: f32,
-    src: (u32, Option<u32>),
-    dst: (u32, Option<u32>),
 }
 
 /// The instructions that name a value, summed by what they ask of its
@@ -101,20 +89,87 @@ impl TargetEnv {
         value: u32,
     ) -> UseKinds {
         if let Some(kept) = self.kinds.borrow().get(&value) {
+            if self.check_kinds {
+                let now = self.scan_kinds(lis, value);
+                let same = now.len() == kept.len()
+                    && now
+                        .iter()
+                        .all(|(kind, sum)| kept.get(kind).is_some_and(|k| (k - sum).abs() <= 1e-3 * (1.0 + sum)));
+                assert!(same, "value {value}: the kept uses {kept:?} are not the instructions' {now:?}");
+            }
             return kept.clone();
         }
+        let kinds = self.scan_kinds(lis, value);
+        self.kinds.borrow_mut().insert(value, kinds.clone());
+        kinds
+    }
+
+    /// What `insn` asks of the registers of `value`, where the target prices
+    /// it.
+    fn kind(
+        &self,
+        insn: &Insn,
+        value: u32,
+    ) -> Option<u32> {
+        self.kind_of.as_ref().and_then(|kind_of| kind_of(insn, value))
+    }
+
+    /// Applies the instructions put in and taken out since the last pricing to
+    /// the kept lists: each value an instruction names gains or loses what the
+    /// instruction asks of it. A value with no kept list is made afresh, from
+    /// the instructions as they are now.
+    fn catch_up(
+        &self,
+        lis: &LiveIntervals,
+    ) {
+        let changes = lis.take_changes();
+        if changes.is_empty() {
+            return;
+        }
+        let mut all = self.kinds.borrow_mut();
+        for change in changes {
+            let (block, insn, sign) = match &change {
+                Change::Put(block, insn) => (*block, insn, 1.0),
+                Change::Took(block, insn) => (*block, insn, -1.0),
+            };
+            let freq = self.freq.get(block).copied().unwrap_or(1.0);
+            let named = insn.defines.iter().chain(&insn.uses).chain(&insn.undefs);
+            let mut seen = crate::support::hash::HashSet::default();
+            for &value in named {
+                if !seen.insert(value) {
+                    continue;
+                }
+                let Some(kinds) = all.get_mut(&value) else { continue };
+                let Some(kind) = self.kind(insn, value) else { continue };
+                if sign > 0.0 {
+                    *kinds.entry(kind).or_insert(0.0) += freq;
+                } else if let Some(sum) = kinds.get_mut(&kind) {
+                    *sum -= freq;
+                    if *sum <= 1e-6 {
+                        kinds.swap_remove(&kind);
+                    }
+                }
+            }
+        }
+    }
+
+    /// `value`'s [`UseKinds`] from the instructions that name it.
+    fn scan_kinds(
+        &self,
+        lis: &LiveIntervals,
+        value: u32,
+    ) -> UseKinds {
         let mut seen = crate::support::hash::HashSet::default();
         let mut kinds = UseKinds::default();
         for op in lis.operands(value) {
             if !seen.insert(op.instr) {
                 continue;
             }
-            if let Some(kind) = (self.kind_of)(lis.instr(op.instr), value) {
+            if let Some(kind) = self.kind(lis.instr(op.instr), value) {
                 let block = lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(op.instr));
                 *kinds.entry(kind).or_insert(0.0) += self.freq.get(block).copied().unwrap_or(1.0);
             }
         }
-        self.kinds.borrow_mut().insert(value, kinds.clone());
         kinds
     }
 
@@ -273,15 +328,13 @@ impl CoalescerEnv for TargetEnv {
             let block = lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(key));
             self.freq.get(block).copied().unwrap_or(1.0)
         };
-        let mut copy_kinds = Vec::new();
-        let mut side = |value: u32, palette: &BTreeSet<RegId>| {
+        self.catch_up(lis);
+        let side = |value: u32, palette: &BTreeSet<RegId>| {
             let mut kinds = self.use_kinds(lis, value);
             // The copy is no use of the join it is the object of.
-            let kind = (self.kind_of)(lis.instr(copy), value);
-            if let Some(kind) = kind {
+            if let Some(kind) = self.kind(lis.instr(copy), value) {
                 self.take_away(&mut kinds, kind, freq(copy));
             }
-            copy_kinds.push((value, kind));
             let uses = if self.check_kinds {
                 let mut seen = crate::support::hash::HashSet::default();
                 lis.operands(value)
@@ -298,53 +351,11 @@ impl CoalescerEnv for TargetEnv {
         // the wide registers that have its registers as their low part.
         let widths = super::pair::move_copy(lis.instr(copy)).map(|(d, s)| d.width != s.width);
         let joined = if widths == Some(true) { self.hosts(y, x) } else { x.intersection(y).copied().collect() };
-        let (one, other) = (side(src, x), side(dst, y));
-        *self.priced_copy.borrow_mut() = match copy_kinds[..] {
-            [(a, ka), (b, kb)] => Some(PricedCopy { copy, freq: freq(copy), src: (a, ka), dst: (b, kb) }),
-            _ => None,
-        };
-        (self.should_join)(&Join { one, other, joined, copy_frequency: freq(copy) })
+        (self.should_join)(&Join { one: side(src, x), other: side(dst, y), joined, copy_frequency: freq(copy) })
     }
 
-    fn merge_uses(
-        &self,
-        _lis: &LiveIntervals,
-        copy: InstrKey,
-        dst: u32,
-        src: u32,
-    ) {
-        let mut all = self.kinds.borrow_mut();
-        let (from, into) = (all.swap_remove(&src), all.swap_remove(&dst));
-        let priced = *self.priced_copy.borrow();
-        let (Some(mut from), Some(mut into), Some(priced)) = (from, into, priced) else {
-            // One was never priced, or the copy was not the one priced: a list
-            // of the survivor would miss uses, so it is made afresh.
-            return;
-        };
-        if priced.copy != copy || priced.src.0 != src || priced.dst.0 != dst {
-            return;
-        }
-        // The copy goes with the join, from the list of each side.
-        if let Some(kind) = priced.src.1 {
-            self.take_away(&mut from, kind, priced.freq);
-        }
-        if let Some(kind) = priced.dst.1 {
-            self.take_away(&mut into, kind, priced.freq);
-        }
-        for (kind, sum) in from {
-            *into.entry(kind).or_insert(0.0) += sum;
-        }
-        all.insert(dst, into);
-    }
-
-    fn forget_uses(
-        &self,
-        a: u32,
-        b: u32,
-    ) {
-        let mut all = self.kinds.borrow_mut();
-        all.swap_remove(&a);
-        all.swap_remove(&b);
+    fn tracks_uses(&self) -> bool {
+        self.kind_of.is_some()
     }
 
     fn narrow(
@@ -404,6 +415,9 @@ pub fn joined_with_map(
 ) -> (LirBody, JoinMap) {
     // The intervals TwoAddress edited, where it ran just before.
     let mut lis = crate::liveness::liveintervals::take_handed_over(body).unwrap_or_else(|| LiveIntervals::new(body));
+    if env.tracks_uses() {
+        lis.track_changes();
+    }
     let stats = driver::run(&mut lis, env, depth);
     let after = lis.body_like(body);
     if llrm_support::env_flag!("LLRM_COALESCE_WHY") {
@@ -465,10 +479,9 @@ pub fn coalesce(
         should_join,
         freq,
         regs: Some(regs),
-        kind_of,
+        kind_of: Some(kind_of),
         kinds: RefCell::default(),
         check_kinds: llrm_support::env_flag!("LLRM_CHECK_USE_SUMMARY"),
-        priced_copy: RefCell::new(None),
     };
     let depths = crate::analysis::intervals::depths_shared(body);
     let depth: Vec<u32> = body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect();

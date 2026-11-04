@@ -159,17 +159,40 @@ impl<T: Target> Converted<T> {
                 })
             }),
             Box::new(move |one, value| {
-                let mut operands: Vec<OperandInfo> = operands_in(&kind_infos, one)
-                    .into_iter()
-                    .filter(|(held, _)| *held == value)
-                    .map(|(_, info)| info.clone())
-                    .collect();
-                if operands.is_empty() {
+                // which of the instruction's operand slots name the value: the
+                // same instruction shape and slots are one kind, however many
+                // instructions have them
+                let shape = (one.at / 2) as usize;
+                let (_, slots) = kind_infos.get(shape)?;
+                let what = one.what.as_ref()?;
+                if what.name.as_deref() != Some(kind_infos[shape].0) {
                     return None;
                 }
+                let mut named = 0u64;
+                for (at, info) in slots.iter().enumerate().take(64) {
+                    let loc = if info.def { what.dests.get(info.index) } else { what.sources.get(info.index) };
+                    if matches!(loc, Some(Loc::Held(held)) if held.value == value) {
+                        named |= 1 << at;
+                    }
+                }
+                if named == 0 {
+                    return None;
+                }
+                let mut table = kinds.borrow_mut();
+                if let Some(id) = table.by_shape.get(&(shape, named)) {
+                    return Some(*id);
+                }
+                let mut operands: Vec<OperandInfo> = slots
+                    .iter()
+                    .enumerate()
+                    .filter(|(at, _)| named & (1 << at) != 0)
+                    .map(|(_, info)| info.clone())
+                    .collect();
                 operands.sort_by(|a, b| (&a.order, &a.costs).cmp(&(&b.order, &b.costs)));
                 operands.dedup_by(|a, b| (&a.order, &a.costs) == (&b.order, &b.costs));
-                Some(kinds.borrow_mut().intern(operands))
+                let id = table.intern(operands);
+                table.by_shape.insert((shape, named), id);
+                Some(id)
             }),
         );
         for (value, order) in self.orders.iter_mut() {
@@ -658,8 +681,9 @@ thread_local! {
     static OPERAND_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many instructions this thread has read the operand costs of: what the
-/// coalescer's join pricing costs, for a test to bound it.
+/// How many instructions this thread has read the whole operand table of (the
+/// scan the coalescer's join pricing made of every use of a value at every
+/// attempt), for a test to bound it.
 pub fn operand_visits() -> usize {
     OPERAND_VISITS.with(std::cell::Cell::get)
 }
@@ -669,6 +693,9 @@ pub fn operand_visits() -> usize {
 #[derive(Default)]
 struct UseKindTable {
     ids: std::collections::BTreeMap<Vec<(Vec<RegId>, Vec<u32>)>, u32>,
+    /// The kind of an instruction shape (its index in the target's operand
+    /// table) and the slots of it that name the value.
+    by_shape: std::collections::HashMap<(usize, u64), u32>,
     operands: Vec<Vec<OperandInfo>>,
 }
 

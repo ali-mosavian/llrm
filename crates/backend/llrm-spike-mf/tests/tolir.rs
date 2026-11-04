@@ -1840,31 +1840,43 @@ fn a_copy_added_for_an_instruction_or_a_phi_has_the_origin_of_its_neighbour() {
     }
 }
 
-/// One value read by `reads` instructions, then copied `copies` times: every
-/// join priced all of the surviving value's uses again, so the pricing cost
-/// `copies x reads` operand visits (the 6502's `switch` spent 38% of its
-/// compile in it). The uses are summed by kind once, and a join merges them.
+/// One value read by `reads` instructions over several blocks, then copied
+/// `copies` times: every join priced all of the surviving value's uses again,
+/// so the pricing cost `copies x reads` operand visits (the 6502's `switch`
+/// spent 38% of its compile in it). The uses are summed by kind once, and the
+/// instructions a join rewrites move from one value's sum to the other's.
 #[test]
 fn test_pricing_the_joins_of_a_value_does_not_read_its_uses_again() {
-    let (reads, copies) = (60, 10);
+    let (blocks, per_block, copies) = (6, 10, 10);
+    let reads = blocks * per_block;
     let mut f = MFunction::<()>::new("hot");
     f.classes = vec![(); 1 + copies];
-    let mut only = Block { id: 0, ..Block::default() };
-    only.insts.push(op("load", vec![Operand::Def(v(0))]));
-    for _ in 0..reads {
-        only.insts.push(op("store", vec![Operand::Use(v(0))]));
+    let mut all = Vec::new();
+    for id in 0..blocks as u32 {
+        let mut block = Block { id, ..Block::default() };
+        if id == 0 {
+            block.insts.push(op("load", vec![Operand::Def(v(0))]));
+        }
+        for _ in 0..per_block {
+            block.insts.push(op("store", vec![Operand::Use(v(0))]));
+        }
+        if id + 1 < blocks as u32 {
+            block.insts.push(branch(id + 1));
+        } else {
+            for copy in 1..=copies as u32 {
+                block.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(copy)), Operand::Use(v(0))]));
+                block.insts.push(op("store", vec![Operand::Use(v(copy))]));
+            }
+            block.insts.push(ret());
+        }
+        all.push(block);
     }
-    for copy in 1..=copies as u32 {
-        only.insts.push(Inst::new(Kind::Copy, vec![Operand::Def(v(copy)), Operand::Use(v(0))]));
-        only.insts.push(op("store", vec![Operand::Use(v(copy))]));
-    }
-    only.insts.push(ret());
-    f.blocks = vec![only];
+    f.blocks = all;
     let f = lowered(f);
+    let mut converted = to_lir::<Flat>(&f, regs()).expect("converts");
     let before = llrm_spike_mf::tolir::operand_visits();
-    let joined = rewritten_with(&f, true);
+    converted.coalesce(regs(), false);
     let visits = llrm_spike_mf::tolir::operand_visits() - before;
-    let left = joined.function.blocks[0].insts.iter().filter(|inst| inst.kind == Kind::Copy).count();
-    assert_eq!(left, 0, "premise: every copy joins");
-    assert!(visits <= 3 * (reads + copies), "{visits} operand visits for {reads} reads and {copies} joins");
+    assert_eq!(converted.joined().iter().count(), copies, "premise: every copy joins");
+    assert!(visits <= copies, "{visits} operand scans for {reads} reads and {copies} joins");
 }

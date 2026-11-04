@@ -655,10 +655,9 @@ fn test_a_join_narrows_the_class_the_next_join_is_judged_against() {
         should_join: Box::new(|_| true),
         freq: Vec::new(),
         regs: None,
-        kind_of: Box::new(|_, _| None),
+        kind_of: None,
         kinds: Default::default(),
         check_kinds: false,
-        priced_copy: Default::default(),
     };
     let (base, index) = (copy(2, 1), copy(3, 1));
     // `v1` has two values to `v2`'s one, so the join keeps it as the surviving
@@ -1116,10 +1115,9 @@ fn env_with_palettes(palettes: &[(u32, &[RegId])]) -> TargetEnv {
         should_join: Box::new(|_| true),
         freq: Vec::new(),
         regs: Some(body(&[]).regs()),
-        kind_of: Box::new(|_, _| None),
+        kind_of: None,
         kinds: Default::default(),
         check_kinds: false,
-        priced_copy: Default::default(),
     }
 }
 
@@ -1170,10 +1168,9 @@ fn test_a_copy_from_a_pinned_argument_is_left_to_the_allocator_when_the_target_s
             freq: Vec::new(),
             joins_sub_registers: true,
             regs: None,
-            kind_of: Box::new(|_, _| None),
+            kind_of: None,
             kinds: Default::default(),
             check_kinds: false,
-            priced_copy: Default::default(),
         };
         let mut lis = LiveIntervals::new(&was);
         lis.interval(1);
@@ -1183,4 +1180,40 @@ fn test_a_copy_from_a_pinned_argument_is_left_to_the_allocator_when_the_target_s
     };
     assert_eq!(join(true), JoinResult::Joined, "premise: the copy joins when the target allows it");
     assert_eq!(join(false), JoinResult::Rejected, "the copy joined the pin");
+}
+
+/// The kept uses of a value, summed by kind for the target's join price, must
+/// be the instructions' after every rewrite and erase the joins make
+/// (`LLRM_CHECK_USE_SUMMARY`'s check, on in `check_kinds`). A join took the
+/// dead definition a copy alone read (C5), moved a copy to a loop's
+/// preheader, or extended a value over a copy back, and left a kept list
+/// with an instruction that is gone or without the one that replaced it, so
+/// the next join was priced on uses that were not there.
+#[test]
+fn test_the_kept_uses_of_a_value_follow_the_rewrites_and_erases_of_the_joins() {
+    let palette: &[(u32, &[RegId])] =
+        &[(1, &[RegId::AX, RegId::BX]), (2, &[RegId::AX, RegId::BX]), (3, &[RegId::AX, RegId::BX])];
+    let checked = || {
+        let mut env = env_with_palettes(palette);
+        env.kind_of = Some(Box::new(|_, _| Some(0)));
+        env.check_kinds = true;
+        env.freq = vec![1.0, 4.0, 1.0];
+        env
+    };
+    // a dead copy and the definition only it read, with a copy after them
+    let (a, c, d, e) = (def(1), copy(2, 1), load(3), copy(1, 3));
+    let dead_copy = body(&[(&[Arc::clone(&a), Arc::clone(&c), Arc::clone(&d), Arc::clone(&e), read(1)], &[])]);
+    // a copy back of a copy
+    let (first, to, back, redefined) = (load(1), copy(2, 1), copy(1, 2), load(2));
+    let copy_back = body(&[(&[first, to, back, redefined, read(1), read(2)], &[])]);
+    // a copy at a loop entry that the latch reverses
+    let (first, to, user, back) = (load(1), copy(2, 1), read(2), copy(1, 2));
+    let (again, kept, after) = (load(1), read(2), read(1));
+    let loop_entry = body(&[(&[first], &[1]), (&[to, user, back], &[1, 2]), (&[again, kept, after], &[])]);
+    for (name, was) in [("dead copy", dead_copy), ("copy back", copy_back), ("loop entry", loop_entry)] {
+        let env = checked();
+        let depth = vec![0; was.blocks.len()];
+        let _ = super::env::joined(&was, &env, &depth);
+        eprintln!("{name}: kept lists checked at {} prices", env.kinds.borrow().len());
+    }
 }
