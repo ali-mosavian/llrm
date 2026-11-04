@@ -185,7 +185,9 @@ use crate::support::hash::IndexMap;
 mod combined;
 /// The abstract values an operand list names, `ir.values` deciding.
 fn _named_values(where_: &[Loc]) -> Vec<u32> {
-    where_.iter().flat_map(|operand| ir::values(operand).into_iter().map(|one| one.value)).collect()
+    let mut out = Vec::with_capacity(where_.iter().map(|operand| ir::values(operand).len()).sum());
+    out.extend(where_.iter().flat_map(|operand| ir::values(operand).into_iter().map(|one| one.value)));
+    out
 }
 
 /// The values an instruction writes: a destination that *is* a value.
@@ -200,14 +202,13 @@ pub(crate) fn _written(dests: &[Loc]) -> Vec<u32> {
 }
 
 /// The values an instruction reads: its sources, and the addresses its
-/// destinations are reached by.
+/// destinations are reached by. Sized for what it holds: a list grown a push
+/// at a time was reallocated twice (107,000 growths in memory_expansion).
 pub(crate) fn _read(what: &ir::Semantics) -> Vec<u32> {
-    let mut out = _named_values(&what.sources);
-    for where_ in &what.dests {
-        if !matches!(where_, Loc::Held(_)) {
-            out.extend(ir::values(where_).into_iter().map(|one| one.value));
-        }
-    }
+    let addressed = || what.dests.iter().filter(|where_| !matches!(where_, Loc::Held(_)));
+    let count: usize = what.sources.iter().chain(addressed()).map(|operand| ir::values(operand).len()).sum();
+    let mut out = Vec::with_capacity(count);
+    out.extend(what.sources.iter().chain(addressed()).flat_map(|operand| ir::values(operand).into_iter().map(|one| one.value)));
     out
 }
 
@@ -594,6 +595,20 @@ pub fn convention_for_abi(
     }
     if interrupt && widths.iter().any(|&one| one != 2) {
         return refuse("an interrupt handler's parameter that is not a register");
+    }
+    // Row W64-1 (owner x86-m64, exit 2026-11-14): Win64's by-value structs,
+    // 128-bit integers and vectors are passed by the ABI's own rules (a
+    // pointer to a caller copy, XMM0, ...), not probed: refused, not guessed.
+    if registers.is_some_and(|entry| entry.positional) {
+        let unprobed = |ty: TypeId| match types.get(ty) {
+            Type::Int(bits) => *bits > 64,
+            Type::Vector { .. } => true,
+            _ => false,
+        };
+        let shape = |index: usize| byval_type(parameter_attrs.get(index).map_or(&[], Vec::as_slice)).is_some();
+        if param_types.iter().enumerate().any(|(index, &ty)| unprobed(ty) || shape(index)) || unprobed(result) {
+            return refuse("a Win64 by-value struct, 128-bit integer or vector argument or result (row W64-1)");
+        }
     }
     let mut parameters = Vec::new();
     let mut cursor = first;
@@ -8603,5 +8618,25 @@ mod anchoring_tests {
         let before: IndexMap<i64, Vec<u32>> = [(4, vec![0])].into_iter().collect();
         let stands = after_definers(&insns, &before, &notes);
         assert_eq!(stands.get(&2), Some(&vec![0]), "{stands:?}");
+    }
+}
+
+#[cfg(test)]
+mod read_tests {
+    use super::*;
+
+    /// The list of values an instruction reads was grown by pushes: five
+    /// values took a capacity of eight, and every selected instruction paid
+    /// the reallocations (107,000 growths in memory_expansion). It is sized
+    /// for the values it holds.
+    #[test]
+    fn test_the_values_an_instruction_reads_are_listed_in_one_allocation() {
+        let held = |value: u32| Loc::Held(Held { value, width: 4, offset: 0 });
+        let mut what = Semantics::new(Operation::Binary);
+        what.dests = vec![held(9)];
+        what.sources = (1..=5).map(held).collect();
+        let read = _read(&what);
+        assert_eq!(read, vec![1, 2, 3, 4, 5]);
+        assert_eq!(read.capacity(), read.len());
     }
 }

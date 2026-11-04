@@ -309,19 +309,20 @@ __ashrsi3:
 	.globl __udivsi3
 __udivsi3:
 	xor	a
-	jr	udivmodsi
+	jr	__udivmodsi4
 	.globl __umodsi3
 __umodsi3:
 	ld	a,#1
-	jr	udivmodsi
+	jr	__udivmodsi4
 	.globl __divsi3
 __divsi3:
 	ld	a,#2
-	jr	udivmodsi
+	jr	__udivmodsi4
 	.globl __modsi3
 __modsi3:
 	ld	a,#3
-udivmodsi:
+	.globl __udivmodsi4
+__udivmodsi4:
 	push	ix
 	ld	ix,#0
 	add	ix,sp
@@ -330,6 +331,7 @@ udivmodsi:
 	push	de
 	push	hl
 	ld	hl,#0
+	push	hl
 	push	hl
 	push	hl
 	bit	1,-1(ix)
@@ -368,39 +370,106 @@ udivmodsi:
 	ld	a,-1(ix)
 	xor	a,#4
 	ld	-1(ix),a
-loop:	ld	b,#32
-1$:	sla	-8(ix)
+loop:	bit	7,5(ix)
+	jp	nz,udm_big
+	ld	l,-8(ix)
+	ld	h,-7(ix)
+	ld	e,-6(ix)
+	ld	d,-5(ix)
+	ld	b,#32
+udm_sk:	bit	7,d
+	jr	nz,udm_go
+	add	hl,hl
+	ex	de,hl
+	adc	hl,hl
+	ex	de,hl
+	djnz	udm_sk
+	jp	udm_done
+; the dividend's leading zeros are skipped: B steps remain, the remainder starts at zero and the quotient
+; shifts in below the dividend's bits
+udm_go:	ld	-8(ix),l
+	ld	-7(ix),h
+	ld	-6(ix),e
+	ld	-5(ix),d
+	ld	-13(ix),b
+	ld	c,-4(ix)
+	ld	b,-3(ix)
+	ld	hl,#0
+	ld	de,#0
+udm_st:	sla	-8(ix)
 	rl	-7(ix)
 	rl	-6(ix)
 	rl	-5(ix)
-	rl	-12(ix)
-	rl	-11(ix)
-	rl	-10(ix)
-	rl	-9(ix)
-	sbc	a,a
-	ld	c,a
-	ld	a,-12(ix)
-	sub	a,-4(ix)
-	ld	l,a
-	ld	a,-11(ix)
-	sbc	a,-3(ix)
-	ld	h,a
-	ld	a,-10(ix)
-	sbc	a,4(ix)
-	ld	e,a
-	ld	a,-9(ix)
-	sbc	a,5(ix)
-	ld	d,a
-	jr	nc,2$
-	ld	a,c
+	adc	hl,hl
+	ex	de,hl
+	adc	hl,hl
+	ex	de,hl
+	push	hl
+	push	de
 	or	a,a
-	jr	z,3$
-2$:	ld	-12(ix),l
+	sbc	hl,bc
+	ex	de,hl
+	ld	a,l
+	sbc	a,4(ix)
+	ld	l,a
+	ld	a,h
+	sbc	a,5(ix)
+	ld	h,a
+	jr	c,udm_no
+	ex	de,hl
+	pop	af
+	pop	af
+	inc	-8(ix)
+	jr	udm_nx
+udm_no:	pop	de
+	pop	hl
+udm_nx:	dec	-13(ix)
+	jr	nz,udm_st
+	ld	-12(ix),l
 	ld	-11(ix),h
 	ld	-10(ix),e
 	ld	-9(ix),d
-	inc	-8(ix)
-3$:	djnz	1$
+	jp	udm_done
+; a divisor of 2^31 or more: the quotient is 0 or 1
+udm_big:	ld	l,-8(ix)
+	ld	h,-7(ix)
+	ld	e,-6(ix)
+	ld	d,-5(ix)
+	ld	c,-4(ix)
+	ld	b,-3(ix)
+	or	a,a
+	sbc	hl,bc
+	ex	de,hl
+	ld	a,l
+	sbc	a,4(ix)
+	ld	l,a
+	ld	a,h
+	sbc	a,5(ix)
+	ld	h,a
+	jr	c,udm_less
+	ld	-12(ix),e
+	ld	-11(ix),d
+	ld	-10(ix),l
+	ld	-9(ix),h
+	ld	-8(ix),#1
+	ld	-7(ix),#0
+	ld	-6(ix),#0
+	ld	-5(ix),#0
+	jp	udm_done
+udm_less:	ld	a,-8(ix)
+	ld	-12(ix),a
+	ld	a,-7(ix)
+	ld	-11(ix),a
+	ld	a,-6(ix)
+	ld	-10(ix),a
+	ld	a,-5(ix)
+	ld	-9(ix),a
+	xor	a,a
+	ld	-8(ix),a
+	ld	-7(ix),a
+	ld	-6(ix),a
+	ld	-5(ix),a
+udm_done:
 	bit	0,-1(ix)
 	jr	nz,4$
 	bit	2,-1(ix)

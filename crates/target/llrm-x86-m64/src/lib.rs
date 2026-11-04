@@ -317,6 +317,11 @@ impl llrm_target::Target for M64 {
         4
     }
 
+    /// X86ISelLowering.cpp: `setPrefLoopAlignment(Align(16))`.
+    fn pref_loop_alignment(&self) -> u8 {
+        4
+    }
+
     /// Every x86-64 has `nopl` (`FeatureNOPL`): X86AsmBackend uses up to ten
     /// bytes.
     fn max_nop_bytes(&self) -> u8 {
@@ -335,7 +340,8 @@ impl llrm_target::Target for M64 {
         price: &dyn Fn(&str) -> i64,
         prefix: i64,
     ) -> OperationCosts {
-        OPCOSTS.operations(price, prefix)
+        // SSE2 is the baseline: a constant memset is stores of an xmm register.
+        OperationCosts { memset_store: 16, ..OPCOSTS.operations(price, prefix) }
     }
 
     fn register_capacity(&self) -> i64 {
@@ -359,12 +365,15 @@ impl llrm_target::Target for M64 {
                     .map(|one| {
                         one.with_tuning(llrm_mir::target::Tuning {
                             inline_size_guard_at_size: true,
-                            // No byte/clock rate is stated for m64 (oversight 2026-11-03): a constant
-                            // multiply is decomposed only where the chain is no larger than the `imul`.
+                            // No byte/clock rate is stated for m64 (oversight
+                            // 2026-11-03): a constant multiply is decomposed
+                            // only where the chain is no larger than
+                            // the `imul`.
                             price_pin_multiplies: true,
                             // DEVIATE REC-2, as m32
                             recursive_inlining: Some((8, 450)),
-                            recursive_edge_growth: Some((15, 30)),
+                            // gcc's 15/30 size units in `gcc_insns` (m64 counts the sext/gep of its IR).
+                            recursive_edge_growth: Some((16, 31)),
                             ..llrm_mir::target::Tuning::PIN
                         })
                     })

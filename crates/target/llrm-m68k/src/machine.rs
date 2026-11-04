@@ -16,11 +16,17 @@ use std::rc::Rc;
 
 use llrm_mir::spaces::Spaces;
 use llrm_mir::target::{AddressForm, Machine, OperationCosts};
-use llrm_mir::tti::{ArithOp, Basic, CastKind, CmpSel, Cost, CostKind, ImmUser, MemoryOp, OperandInfo, Tti, Ty};
+use llrm_mir::tti::{
+    AddressingMode, ArithOp, Basic, CastKind, CmpSel, Cost, CostKind, ImmUser, MemoryOp, OperandInfo, Tti, Ty,
+};
 
 /// The m68k cost model the passes of the mid-end read.
-#[derive(Clone, Debug, Default)]
-pub struct M68kMachine;
+#[derive(Clone, Copy, Debug, Default)]
+pub struct M68kMachine {
+    /// The processor the code is for: a fact of the target description, read
+    /// by the cost model through [`M68k::cpu`].
+    pub cpu: crate::dagisel::hooks::Cpu,
+}
 
 impl Machine for M68kMachine {
     fn foreign_span(
@@ -33,7 +39,7 @@ impl Machine for M68kMachine {
     }
 
     fn tti(&self) -> Option<Rc<dyn Tti>> {
-        Some(Rc::new(M68k::default()))
+        Some(Rc::new(M68k::for_cpu(self.cpu)))
     }
 
     fn spaces(&self) -> Spaces {
@@ -70,8 +76,17 @@ impl Machine for M68kMachine {
 /// The m68k `TargetTransformInfo`: the base class's answers.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct M68k {
+    /// The processor the code is for; the 68000 where none is given.
+    pub cpu: crate::dagisel::hooks::Cpu,
     /// The 68020's scaled index, `(d8, An, Xn*2/4/8)`; the 68000 has none.
     pub scaled_index: bool,
+}
+
+impl M68k {
+    /// The cost model of `cpu`.
+    pub fn for_cpu(cpu: crate::dagisel::hooks::Cpu) -> M68k {
+        M68k { cpu, ..M68k::default() }
+    }
 }
 
 impl Tti for M68k {
@@ -107,7 +122,41 @@ impl Tti for M68k {
         &self,
         optsize: bool,
     ) -> u32 {
-        if optsize { 0 } else { 4 }
+        // DEVIATE 18 (exit 2026-11-12): from the 68020 on, a `cmp.l` with a
+        // memory limit costs little more than the `subq` of a counter, so the
+        // `smax` guard of the rewritten exit (8 B) is not repaid. The 68000
+        // keeps the pin's 4: there the compare is 10 clk per trip dearer.
+        if optsize || self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020) { 0 } else { 4 }
+    }
+
+    /// DEVIATE: the pin's M68k states no preference; `(An)+` steps a pointer
+    /// by the access size for free (descriptors in `indexed.rs`), so LSR keeps
+    /// a pointer walk rather than an index beside a counter. Exit: none.
+    fn preferred_addressing_mode(&self) -> AddressingMode {
+        AddressingMode::PostIndexed
+    }
+
+    fn is_post_inc_load_legal(
+        &self,
+        ty: Ty,
+    ) -> bool {
+        matches!(ty, Ty::Int(8 | 16 | 32) | Ty::Pointer)
+    }
+
+    fn is_post_inc_store_legal(
+        &self,
+        ty: Ty,
+    ) -> bool {
+        matches!(ty, Ty::Int(8 | 16 | 32) | Ty::Pointer)
+    }
+
+    /// `(An)+` steps by the access size: a walk by 1, 2 or 4 bytes, upward.
+    fn is_post_inc_step_legal(
+        &self,
+        access_bytes: i64,
+        step: i64,
+    ) -> bool {
+        step == access_bytes
     }
 
     fn cmp_sel_cost(
@@ -173,6 +222,17 @@ impl Tti for M68k {
         Basic.cast_cost(op, to, from, kind)
     }
 
+    fn sizes_exit_values(&self) -> bool {
+        true
+    }
+
+    /// DEVIATE 17: a size build keeps a store or copy loop (a `memset` call
+    /// is three pushes, `jsr` and `lea`: 16 B, the loop 10 to 14). Exit
+    /// 2026-11-12.
+    fn memory_idioms_at_optsize(&self) -> bool {
+        false
+    }
+
     fn arithmetic_cost(
         &self,
         op: ArithOp,
@@ -181,6 +241,16 @@ impl Tti for M68k {
         left: OperandInfo,
         right: OperandInfo,
     ) -> Cost {
+        // DEVIATE: the pin's base class prices a multiply or divide it expands
+        // at one operation (`BasicTTIImpl::getArithmeticInstrCost`'s last
+        // line). Past 32 bits the m68k makes a library call of it, and the
+        // closed form of a sum (`(n-1)(n-2)/2` in `i33`) is then 250 B of
+        // `__mulsi3` calls for a loop of 16. Exit: none, a target's prices.
+        if matches!(op, ArithOp::Mul | ArithOp::SDiv | ArithOp::UDiv | ArithOp::SRem | ArithOp::URem)
+            && matches!(ty, Ty::Int(bits) if bits > 32)
+        {
+            return Cost::EXPENSIVE;
+        }
         Basic.arithmetic_cost(op, ty, kind, left, right)
     }
 }

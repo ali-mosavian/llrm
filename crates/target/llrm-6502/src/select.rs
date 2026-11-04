@@ -131,8 +131,12 @@ pub fn function_text(
             },
         );
     let (items, _, places) = function_items_with_places(module, name, selection)?;
-    let (function, labels) =
+    let (mut function, labels) =
         alloc::build_with_places(name, &items, places).map_err(|why| format!("{name}: {}", why.0))?;
+    function.returns_twice = module
+        .named(name)
+        .and_then(|id| module.global(id).function())
+        .is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
     let (code, slots) = alloc::emit(
         function,
         &labels,
@@ -631,7 +635,14 @@ fn lower(
                         }
                         let at = location(module, name, one, input, values, cells)?;
                         match &at {
-                            Operand::Reg(text) if cells.saved.contains_key(text) => {
+                            // a carry read as a value (a compare of two bits)
+                            // is the saved byte, 0 or 1; only a carry operand
+                            // is loaded back into C
+                            Operand::Reg(text)
+                                if cells.saved.contains_key(text)
+                                    && !(cells.saved[text]
+                                        && desc.operands.get(operands.len()).is_some_and(|o| o.reg_class != CARRY)) =>
+                            {
                                 let carry = cells.saved[text];
                                 before.push(MInst::new(
                                     if carry { spill::LOAD_CARRY } else { spill::LOAD_FLAGS },

@@ -119,7 +119,7 @@ impl<T: Target> Converted<T> {
             T::joins_lanes(),
             T::joins_carried_first(),
             registers,
-            Box::new(move |join| {
+            Some(Box::new(move |join| {
                 let joined: Vec<RegId> = join.joined.iter().copied().collect();
                 let side = |side: &llrm_codegen::coalescer::env::JoinSide| {
                     let before: Vec<RegId> = side.palette.iter().copied().collect();
@@ -171,7 +171,7 @@ impl<T: Target> Converted<T> {
                     joined: &joined,
                     copy_frequency: join.copy_frequency,
                 })
-            }),
+            })),
             Some(Box::new(is_literal_move)),
             Some(Box::new(|literal, source, destination, size| {
                 let (source, destination): (Vec<RegId>, Vec<RegId>) =
@@ -516,6 +516,7 @@ pub fn to_lir<T: Target>(
     }
     let entry = if function.blocks.is_empty() { 0 } else { 0 };
     let mut body = LirBody::new(function.name.clone(), entry, blocks, IndexMap::default(), made.pins.clone());
+    body.returns_twice = function.returns_twice;
     loop_branch_odds(&mut body);
     body.inputs = entry_live::<T>(function, &successors).iter().filter_map(|r| made.values.get(r).copied()).collect();
     let mut orders: IndexMap<u32, Vec<RegId>> = IndexMap::default();
@@ -859,6 +860,9 @@ impl<T: Target> Made<'_, T> {
         let mut insn = Insn::new(at, Some((at, at + 1)), Some(what), defines, uses);
         insn.requires = requires;
         insn.delivers = delivers;
+        if T::greedy_early_clobber() && inst.early_clobber {
+            insn.early_clobbers = insn.defines.clone();
+        }
         if inst.call {
             insn.clobbers = T::caller_saved().into_iter().collect();
             // The call writes each clobbered register it names: a value that
@@ -1418,6 +1422,10 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
         Arc::new(made)
     }
 
+    fn stores_lanes(&self) -> bool {
+        T::spills_lanes()
+    }
+
     fn needs_data_group(
         &self,
         _one: &Insn,
@@ -1612,13 +1620,7 @@ fn lane_register(
     offset: u32,
     bytes: u32,
 ) -> Option<RegId> {
-    let want = ((1_i64 << bytes) - 1) << (registers.lanes(wide).trailing_zeros() + offset);
-    (0..256).map(RegId::from_index).find(|&register| {
-        registers.known(register)
-            && registers.root(register) == registers.root(wide)
-            && registers.lanes(register) == want
-            && registers.bytes(register) == Some(i64::from(bytes))
-    })
+    registers.lane_register(wide, offset, bytes)
 }
 
 /// `source` with the registers greedy chose: its definitions take the
@@ -1793,13 +1795,17 @@ pub fn from_lir<T: Target>(
                     Reg::Virt(v) => v as usize,
                     Reg::Phys(_) => 0,
                 }];
-                let made = if insn.spill_store {
+                let lane = cell.filter(|_| insn.spill_store).and_then(llrm_codegen::greedy::tii::lane_offset);
+                let made = if let Some(offset) = lane {
+                    T::spill_store_lane(class, register, slot, offset)
+                } else if insn.spill_store {
                     T::spill_store(class, register, slot)
                 } else {
                     T::spill_load(class, register, slot)
                 };
                 insts.push(made.ok_or("the target states no spill form")?);
-                if !slots.iter().any(|(one, _)| *one == slot) {
+                // a lane store says nothing of the slot's size
+                if lane.is_none() && !slots.iter().any(|(one, _)| *one == slot) {
                     slots.push((slot, class));
                 }
                 continue;

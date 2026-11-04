@@ -650,8 +650,10 @@ struct CallMasks {
     /// The blocks' successors (by position), where a call can lose a high half
     /// only if a wide read can follow it: set by `with_flow`.
     flow: Option<Vec<Vec<usize>>>,
-    /// Each block's blocks reachable by one edge or more, as bits.
-    reach: std::cell::OnceCell<Vec<Vec<u64>>>,
+    /// Each block's blocks reachable by one edge or more, as bits, worked out
+    /// for a block when it is first asked of: only the blocks that hold a call
+    /// are, and a row for every block was 140 M Ir of memory_expansion -O2.
+    reach: std::cell::RefCell<Vec<Option<Vec<u64>>>>,
     /// The value a split is tried for (`PhysInterference::set_lane`).
     lane: std::cell::Cell<Option<u32>>,
     /// The registers some call keeps the low half of only.
@@ -743,28 +745,26 @@ impl CallMasks {
         from: usize,
         to: usize,
     ) -> bool {
-        let reach = self
-            .reach
-            .get_or_init(
-                || {
-                    let succ = self.flow.as_deref().unwrap_or_default();
-                    let words = succ.len().div_ceil(64);
-                    (0..succ.len())
-                        .map(|start| {
-                            let mut seen = vec![0u64; words];
-                            let mut work: Vec<usize> = succ[start].clone();
-                            while let Some(block) = work.pop() {
-                                if seen[block / 64] >> (block % 64) & 1 == 0 {
-                                    seen[block / 64] |= 1 << (block % 64);
-                                    work.extend(succ[block].iter().copied());
-                                }
-                            }
-                            seen
-                        })
-                        .collect()
-                },
-            );
-        reach.get(from).is_some_and(|row| row[to / 64] >> (to % 64) & 1 == 1)
+        let succ = self.flow.as_deref().unwrap_or_default();
+        if from >= succ.len() {
+            return false;
+        }
+        let mut rows = self.reach.borrow_mut();
+        if rows.is_empty() {
+            rows.resize(succ.len(), None);
+        }
+        let row = rows[from].get_or_insert_with(|| {
+            let mut seen = vec![0u64; succ.len().div_ceil(64)];
+            let mut work: Vec<usize> = succ[from].clone();
+            while let Some(block) = work.pop() {
+                if seen[block / 64] >> (block % 64) & 1 == 0 {
+                    seen[block / 64] |= 1 << (block % 64);
+                    work.extend(succ[block].iter().copied());
+                }
+            }
+            seen
+        });
+        row[to / 64] >> (to % 64) & 1 == 1
     }
 
     /// Whether a read of more than 2 bytes of a value of `reg`'s family can
@@ -1231,19 +1231,7 @@ pub fn decide_with_split(
     if llrm_support::env_flag!("LLRM_GREEDY_DECISIONS") {
         eprintln!("block frequencies {:?}", freq);
     }
-    let loops = crate::analysis::loops::loops(&body.blocks, Some(body.entry));
-    let exiting: Vec<bool> = body
-        .blocks
-        .iter()
-        .map(|block| {
-            // The innermost loop holding the block (loops come innermost
-            // first).
-            loops
-                .iter()
-                .find(|one| one.body.contains(&block.at))
-                .is_some_and(|one| block.succ.iter().any(|to| !one.body.contains(to)))
-        })
-        .collect();
+    let exiting = exiting_blocks(body);
     let tables = Rc::new(Tables::default());
     // Under RFP the x87 values take FP0..FP6 (LLVM's RFP
     // classes); a stack position an instruction names is the stackifier's.
@@ -1288,7 +1276,7 @@ pub fn decide_with_split(
     // keeps it wide.
     let lanes = body.blocks.iter().flat_map(|block| block.insns.iter()).any(|one| !one.clobbers_high.is_empty());
     let read_widths = if lanes { crate::backend::widths::_widest_read(body) } else { Default::default() };
-    for (value, width) in crate::backend::widths::_widest(body) {
+    for (&value, &width) in &widest {
         let width = if lanes && width > 2 && read_widths.get(&value).copied().unwrap_or(0) <= 2 { 2 } else { width };
         tables.widths.borrow_mut().insert(value, width);
     }
@@ -1614,6 +1602,20 @@ pub fn decide_with_split(
     }
     let parents = tables.parents.borrow().iter().map(|(new, from)| (*new, *from)).collect();
     Some(Decided { report, placed, spilled, edited, spill_failed: greedy.spill_failed(), parents })
+}
+
+/// Per block: whether an edge of it leaves the innermost loop holding it. One
+/// forest lookup per block, not a scan of every loop.
+fn exiting_blocks(body: &LirBody) -> Vec<bool> {
+    let forest = crate::analysis::loops::forest_of(&body.blocks, Some(body.entry));
+    body.blocks
+        .iter()
+        .map(|block| {
+            forest
+                .innermost(block.at)
+                .is_some_and(|inner| block.succ.iter().any(|to| !forest.contains(inner, *to)))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -2050,6 +2052,21 @@ mod tests {
         assert!(masks.reg_mask_clobbered(&li).is_none_or(|roots| roots.is_empty()));
         let visited = calls_visited() - before;
         assert!(visited <= 10, "{visited} calls looked at for a range with no call in it");
+    }
+
+    /// A row of block reachability was made for every block of the body the
+    /// first time one was asked: 140 M Ir of memory_expansion -O2 (221
+    /// functions), for a handful of blocks that hold a call. A row is made for
+    /// the block asked of.
+    #[test]
+    fn reachability_is_worked_out_for_the_blocks_asked_of() {
+        let blocks = 300;
+        let flow: Vec<Vec<usize>> = (0..blocks).map(|at| if at + 1 < blocks { vec![at + 1] } else { vec![] }).collect();
+        let masks = CallMasks::of(Regs(&llrm_x86_m16::REGISTER_INFO), Vec::new(), Vec::new(), widths(&[])).with_flow(flow);
+        assert!(masks.reaches(0, 299) && masks.reaches(10, 11) && !masks.reaches(11, 10));
+        assert!(!masks.reaches(299, 299), "a block does not reach itself without a loop");
+        let made = masks.reach.borrow().iter().filter(|row| row.is_some()).count();
+        assert_eq!(made, 4, "a row for each block asked of, not for the {blocks} blocks");
     }
 
     /// `checkRegMaskInterference` looks at the calls inside the segments and
@@ -2618,5 +2635,34 @@ mod tests {
         assert!(!pins.interferes(&span(1, 11, 12, &at), RegId::ECX), "between two");
         assert_eq!(PINS_EXAMINED.with(std::cell::Cell::get), 0, "no pin walked for a range that meets none");
         assert!(pins.interferes(&span(1, 12, 13, &at), RegId::ECX), "over one");
+    }
+}
+
+#[cfg(test)]
+mod exiting_tests {
+    use super::exiting_blocks;
+    use crate::model::lir::{LirBlock, LirBody};
+    use crate::support::hash::IndexMap;
+
+    /// `decide_with_split` scanned every loop for every block (654k
+    /// `Body::contains` calls, 41 M of memory_expansion's compile); one forest
+    /// lookup per block gives the same answer: 1 -> 2 <-> 3 (inner), 2 -> 4 -> 1.
+    #[test]
+    fn test_the_exiting_blocks_of_nested_loops_are_those_with_an_edge_out_of_their_innermost_loop() {
+        let block = |at: i64, succ: &[i64]| LirBlock { succ: succ.to_vec().into(), ..LirBlock::new(at, Vec::new()) };
+        let body = LirBody::new(
+            "n",
+            1,
+            vec![
+                block(1, &[2]).into(),
+                block(2, &[3, 4]).into(),
+                block(3, &[2]).into(),
+                block(4, &[1, 5]).into(),
+                block(5, &[]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        assert_eq!(exiting_blocks(&body), [false, true, false, true, false]);
     }
 }

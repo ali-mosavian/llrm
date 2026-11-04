@@ -67,6 +67,15 @@ pub trait Target {
     fn root(register: RegId) -> RegId;
     /// A root no allocator hands out (the frame and stack pointers).
     fn reserved(root: RegId) -> bool;
+    /// DEVIATE HC1: how many independent instructions `HoistCommonCodeInSuccs`
+    /// may look past for an identical one in the other successor. The pin
+    /// compares heads only, an intended rule
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/BranchFolding.cpp#L2043>). Reason: a constant both successors need, one of
+    /// them behind a load, stays twice (crc16: `move.l #65535,%d0` on both
+    /// sides of a guard). Exit: 2026-11-12, or when the pin hoists past them.
+    fn hoist_window() -> usize {
+        0
+    }
     /// The roots a call leaves unspecified.
     fn caller_saved() -> Vec<RegId>;
     /// Whether two allocatable registers share storage (a pair and its
@@ -286,6 +295,14 @@ pub trait Target {
         Vec::new()
     }
 
+    /// Whether greedy allocation keeps an `early_clobber` instruction's defs
+    /// out of the registers it reads. The spike allocator always does; a target
+    /// opts in here where its expansion writes a result before it has read an
+    /// address (m68k's zero-extending load).
+    fn greedy_early_clobber() -> bool {
+        false
+    }
+
     /// The class the instruction `name` names for operand `index`, where it
     /// does (`MCInstrDesc::operands`).
     fn operand_class(
@@ -300,6 +317,20 @@ pub trait Target {
         _class: Self::Class,
         _register: Reg,
         _slot: i32,
+    ) -> Option<Inst> {
+        None
+    }
+    /// Whether `spill_store_lane` is stated.
+    fn spills_lanes() -> bool {
+        false
+    }
+    /// The instruction that stores `register`, one lane of a spilled value of
+    /// `offset` bytes up, to frame `slot`.
+    fn spill_store_lane(
+        _class: Self::Class,
+        _register: Reg,
+        _slot: i32,
+        _offset: u32,
     ) -> Option<Inst> {
         None
     }

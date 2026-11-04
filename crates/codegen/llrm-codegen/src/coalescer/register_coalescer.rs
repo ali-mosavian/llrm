@@ -226,6 +226,11 @@ pub fn join_copy(
     if cp.is_partial() && (cp.lane_offset() != 0 || has_lane_defs(lis, cp.dst_reg())) {
         return join_lane(lis, env, state, current_erased, &cp, copy, block);
     }
+    // DEVIATE C14: `JoinVals` has no lane masks, so a join of whole values
+    // that have lane defs is refused (series step 4).
+    if !cp.is_partial() && (has_lane_defs(lis, cp.src_reg()) || has_lane_defs(lis, cp.dst_reg())) {
+        return JoinResult::Rejected;
+    }
     let result = join_virt_regs(lis, state, &cp);
     if result != JoinResult::Joined {
         // Coalescing failed. Try rematerializing the definition of the source
@@ -329,7 +334,51 @@ fn join_lane(
     update_reg_defs_uses(lis, state, cp.src_reg(), cp.dst_reg(), Some(cp.lane_offset()), Some(cp.lanes()), keeps_rest);
     lis.remove_interval(cp.src_reg());
     lis.remove_interval(cp.dst_reg());
+    keep_joined_lanes_through_undef_defs(lis, cp.dst_reg());
     JoinResult::Joined
+}
+
+/// A lane def flagged to start the value (`undef_super`) that now stands after
+/// a joined def of another lane keeps that lane: the pin's `Reads` is `dst`
+/// live at the def. Left flagged, the earlier lane's def was dead (nothing
+/// read it past the later one) and went with it (lz4c -Oz lost the high byte
+/// of a pair).
+fn keep_joined_lanes_through_undef_defs(
+    lis: &mut LiveIntervals,
+    dst: u32,
+) {
+    let mut keys: Vec<InstrKey> = lis
+        .operands(dst)
+        .iter()
+        .filter(|operand| operand.is_def && !operand.reads_reg && operand.lanes != Operand::ALL && lis.has_instr(operand.instr))
+        .map(|operand| operand.instr)
+        .collect();
+    keys.sort_unstable();
+    keys.dedup();
+    let mut changed = false;
+    for key in keys {
+        let at = lis.indexes.get_instruction_index(key);
+        let old = Arc::clone(lis.instr(key));
+        let mine = old.def_lanes.iter().filter(|(value, _)| *value == dst).fold(None, |all: Option<ValueLanes>, (_, lanes)| {
+            Some(all.map_or(*lanes, |a| a.union(*lanes)))
+        });
+        let Some(mine) = mine else { continue };
+        let live_other = lis.interval(dst).sub_ranges().iter().any(|sub| !sub.lanes.overlaps(mine) && sub.range.live_at(&at));
+        if live_other {
+            let block = lis.indexes.get_mbb_from_index(&at);
+            let mut made = (*old).clone();
+            made.undef_super = false;
+            if !made.partial_defs.contains(&dst) {
+                made.partial_defs.push(dst);
+            }
+            // A pending lane copy keeps its identity: the work list names it.
+            lis.rewrite_instr(block, key, Arc::new(made.standing_for(&old)));
+            changed = true;
+        }
+    }
+    if changed {
+        lis.remove_interval(dst);
+    }
 }
 
 /// Whether two ranges are live together anywhere but where one starts at
@@ -441,9 +490,10 @@ fn update_reg_defs_uses(
             made.def_lanes.push((dst, lanes));
             renamed = Arc::new(made);
         }
-        let new = renamed.id();
-        lis.rewrite_instr(block, key, renamed);
-        state.moved.insert(key, new);
+        // `setReg` rewrites the operand where it stands: the instruction keeps
+        // its identity.
+        let renamed = Arc::new(Arc::unwrap_or_clone(renamed).standing_for(&old));
+        lis.rename_instr(block, key, renamed);
     }
 }
 

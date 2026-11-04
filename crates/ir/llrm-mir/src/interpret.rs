@@ -649,7 +649,8 @@ impl<'m> Machine<'m> {
             | Intrinsic::InvariantEnd
             | Intrinsic::Assume
             | Intrinsic::Prefetch
-            | Intrinsic::FakeUse => void,
+            | Intrinsic::FakeUse
+            | Intrinsic::NoAliasScopeDecl => void,
             Intrinsic::Expect => argument(0),
             // The scope is a token no code reads: the address it covers.
             Intrinsic::InvariantStart => argument(1),

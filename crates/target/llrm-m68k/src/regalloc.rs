@@ -89,8 +89,16 @@ impl Target for M68kRegisters {
         CARRIED_FIRST.with(std::cell::Cell::get)
     }
 
+    fn hoist_window() -> usize {
+        4
+    }
+
     fn caller_saved() -> Vec<RegId> {
         CALLER_SAVED.to_vec()
+    }
+
+    fn greedy_early_clobber() -> bool {
+        true
     }
 
     /// `copyPhysReg`: a copy into a data register is a `move`, which sets the

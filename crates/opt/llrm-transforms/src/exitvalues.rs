@@ -195,8 +195,18 @@ fn rewrite_loop_exit_values(
 ) -> usize {
     // DEVIATE 15 is a 16-bit row: the pin's `rewriteLoopExitValues` reads no
     // optsize (IndVarSimplify.cpp, LoopUtils.cpp:1876), and the byte sweep
-    // that motivated it is QCport m16 -Os.
-    let size = size && layout.pointer(0).bits < layout.largest_legal_integer();
+    // that motivated it is QCport m16 -Os. A target whose wide multiplies are
+    // library calls takes it too (`Tti::sizes_exit_values`).
+    //
+    // DEVIATE 16 (exit 2026-11-12): such a target takes it at speed too. The
+    // closed form of a sum is `i33` multiplies, 250 B of `__mulsi3` calls
+    // against a 16-byte loop, and it loses clocks until the trip count passes
+    // about 70 (68000) or 100 (68020, six `muls.l`), where the break-even is
+    // 4 clk per byte of code (`speed_milliclocks_per_byte`). A loop whose
+    // count SCEV can compute never reaches here; one it cannot is taken to run
+    // 31 times, the pin's static back-edge weight (124:4), so the loop stays.
+    let wide_mul_calls = outer.target().tti().is_some_and(|tti| tti.sizes_exit_values());
+    let size = if size { layout.pointer(0).bits < layout.largest_legal_integer() || wide_mul_calls } else { wide_mul_calls };
     let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
     let declarations: &Declarations = &outer.globals;
     let mut rewrite_phi_set: Vec<RewritePhi> = Vec::new();

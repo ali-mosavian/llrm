@@ -158,10 +158,10 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::facts::{Facts, Inlining};
 use llrm_mir::memory::{Callees, callee};
-use llrm_mir::module::{Function, InstId, Metadata, MetadataId, Module, Operand, ValueDef};
+use llrm_mir::module::{BlockId, Function, InstId, Metadata, MetadataId, Module, Operand, ValueDef};
 use llrm_mir::opcode::{CallInfo, Flags, Opcode};
 use llrm_mir::passes::Declared;
-use llrm_mir::splice::{Spliced, carries, spliced};
+use llrm_mir::splice::{Spliced, carries, merge_entry, spliced};
 use llrm_mir::types::Type;
 use llrm_support::hash::{IndexMap, SparseIdMap};
 
@@ -271,6 +271,9 @@ pub struct Candidate {
 /// What a caller says of itself that bounds what may be copied into it.
 pub struct Caller<'a> {
     pub layout: &'a DataLayout,
+    /// `CalleeAAR`: what the module analysis knows of the functions' memory
+    /// effects, for the scopes a copy's calls get.
+    pub effects: Option<&'a llrm_analysis::globalsmodref::GlobalsModRef>,
     pub recursive: bool,
     /// The copies are of the caller itself: they stop at the recursion limits,
     /// and this is the frequency of each call of the function's own body
@@ -328,6 +331,10 @@ fn semantic(
     inst: InstId,
 ) -> bool {
     let instruction = function.instruction(inst);
+    // A scope declaration is no work (it costs nothing in the pin).
+    if crate::noaliasscopes::declares(function, inst) {
+        return false;
+    }
     match instruction.opcode {
         Opcode::Phi | Opcode::Ret => false,
         Opcode::Br => instruction.operands.len() != 1,
@@ -367,6 +374,9 @@ pub fn gcc_insns_in(
         .into_iter()
         .filter(|&inst| {
             let instruction = body.instruction(inst);
+            if crate::noaliasscopes::declares(body, inst) {
+                return false;
+            }
             match instruction.opcode {
                 Opcode::Phi => false,
                 Opcode::Br => instruction.operands.len() != 1,
@@ -407,21 +417,14 @@ pub fn gcc_work(body: &Function) -> i64 {
     gcc_insns(body) + (LOOP_TRIPS - 1) * looped
 }
 
-/// What a copy of `body` into itself adds (gcc's edge growth,
-/// `want_inline_small_function_p`), in gcc's size units. The estimate is
-/// GPL-3.0-or-later (`llrm-gpl-gcc`, feature `gcc-gpl`); without it the growth
-/// is unbounded, so no bar that asks for it is met and no recursive callee is
-/// copied (DEVIATE REC-2 is inert).
+/// What a copy of `body` into itself adds to the caller in the bar's units:
+/// the callee's `gcc_insns`. gcc's bar is in its own size units (15 at -O2, 30
+/// at -O3, `want_inline_small_function_p`; edge growth is its size less the
+/// call, 6); the target states the bar already converted, calibrated on the
+/// twelve self-recursive functions of the corpus
+/// (`Tuning.recursive_edge_growth`).
 pub fn recursive_edge_growth(body: &Function) -> i64 {
-    #[cfg(feature = "gcc-gpl")]
-    {
-        llrm_gpl_gcc::recursive_edge_growth(body)
-    }
-    #[cfg(not(feature = "gcc-gpl"))]
-    {
-        let _ = body;
-        i64::MAX
-    }
+    gcc_insns(body)
 }
 
 fn semantic_count(body: &Function) -> i64 {
@@ -897,6 +900,8 @@ struct Placed {
     copies: std::collections::BTreeMap<usize, InstId>,
     /// The copies' lifetimes, marked once every copy is made.
     lifetimes: Vec<Lifetimes>,
+    /// The call's block and the copy's entry of each site, in the order made.
+    entries: Vec<(BlockId, BlockId)>,
 }
 
 /// The static allocas of a copy no marker bounds, and where the copy begins
@@ -1202,6 +1207,7 @@ fn executed(
     layout: &DataLayout,
     call: InstId,
     planned: &Planned,
+    effects: Option<&llrm_analysis::globalsmodref::GlobalsModRef>,
     declared: &mut Declared,
     placed: &mut Placed,
     metadata: Metadata,
@@ -1219,7 +1225,26 @@ fn executed(
         _ => llrm_mir::opcode::Tail::None,
     };
     let stated = crate::inlineattrs::SiteAttrs::of(function, call);
+    let marked = crate::inlinemetadata::SiteMetadata::of(function, call);
+    let scopes = crate::inlinemetadata::DeepClone::of(&planned.candidate.body, metadata, declared);
+    let noalias = crate::inlinealias::declare_scopes(context, function, call, &planned.candidate.body, declared);
     let made = spliced(context, function, call, &planned.candidate.body, anchor);
+    if let Some(scopes) = &scopes {
+        scopes.remap(function, &made.copies);
+    }
+    if let Some(noalias) = &noalias {
+        crate::inlinealias::scoped(
+            function,
+            context,
+            layout,
+            &planned.candidate.body,
+            &made.copies,
+            noalias,
+            metadata.nodes,
+            effects,
+            declared,
+        );
+    }
     if let Some(site) = located {
         inlined_at(function, &planned.candidate.body, &made.copies, site, metadata, declared);
     }
@@ -1228,7 +1253,11 @@ fn executed(
     if let Some(stated) = &stated {
         crate::inlineattrs::propagated(function, stated, &planned.candidate.body, &made.copies);
     }
+    if let Some(marked) = &marked {
+        crate::inlinemetadata::propagated(function, marked, &made.copies, metadata, declared);
+    }
     placed.lifetimes.push(unmarked_allocas(context, function, layout, &planned.candidate.body, &made, declared));
+    placed.entries.push((made.block, made.entry));
     let copies = made.copies;
     // The call was the entry's first instruction and is gone: the copies that
     // come out of this one are anchored on what the entry starts with now.
@@ -1244,7 +1273,7 @@ fn executed(
         placed.stack.insert(seq, copy);
     }
     for (place, nested) in planned.nested.iter().rev() {
-        executed(context, function, layout, copies[*place], nested, declared, placed, metadata)?;
+        executed(context, function, layout, copies[*place], nested, effects, declared, placed, metadata)?;
     }
     Ok(())
 }
@@ -1333,12 +1362,17 @@ pub fn expanded_all(
     let mut placed =
         Placed { base: function.entry().and_then(|entry| function.block(entry).first()), ..Placed::default() };
     for (call, planned) in sites.iter().rev() {
-        executed(context, function, caller.layout, *call, planned, declared, &mut placed, metadata)?;
+        executed(context, function, caller.layout, *call, planned, caller.effects, declared, &mut placed, metadata)?;
     }
     assert_eq!(end.0, semantic_count(function), "the size kept is not the body's");
     assert_eq!(end.1, frame(context, caller.layout, function), "the stack kept is not the body's");
     for lifetimes in &placed.lifetimes {
         insert_lifetimes(context, function, caller.layout, lifetimes, declared);
+    }
+    // A site made inside an entry joins it first, that entry then the block
+    // before it.
+    for &(block, entry) in placed.entries.iter().rev() {
+        merge_entry(function, block, entry);
     }
     Ok(sites.len())
 }

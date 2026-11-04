@@ -12,7 +12,6 @@
 //! calls) needs none. Reason: frame objects wait for the Z80 machine function.
 //! Exit: M4.
 
-use llrm_support::hash::HashMap;
 
 use llrm_codegen::backend::isel;
 use llrm_codegen::backend::registerinfo::RegId;
@@ -102,13 +101,17 @@ pub struct Selection {
     /// The width in bits of the register of every value that has one: a phi
     /// input is read on an edge laid out before any block that names it (a
     /// loop's back edge).
-    pub widths: HashMap<u32, u32>,
+    /// The bit width of each register a value lives in, by register number; 0
+    /// where nothing is recorded.
+    pub widths: Vec<u32>,
     /// `-g`: the variables the debug info names and where each is (the `.adb`).
     pub variables: Vec<Variable>,
+    /// The function calls a routine that returns twice (`setjmp`).
+    pub returns_twice: bool,
     /// The blocks IR `unreachable` ends. The pin emits nothing for it (the
     /// machine CFG comes from the IR); here a block with no terminator falls
     /// into the next one, so emission states the end.
-    pub unreachable: llrm_support::hash::HashSet<BlockId>,
+    pub unreachable: llrm_mir::dense::IdSet<BlockId>,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -173,7 +176,7 @@ pub fn select_function_with(
     }
     // The stack objects the builder made follow the static allocas.
     locals.extend(info.objects.iter().map(|(size, _)| i64::from(*size)));
-    let mut widths: HashMap<u32, u32> = info
+    let mut sized: Vec<(u32, u32)> = info
         .value_regs
         .iter()
         .map(|(value, reg)| (*reg, 8 * layout.alloc_size(&module.context.types, function.value(value).ty) as u32))
@@ -187,19 +190,22 @@ pub fn select_function_with(
         .filter(|(_, parts)| *parts > 1)
         .collect();
     for (reg, parts) in wide {
-        widths.extend(info.part_regs(reg, parts).into_iter().skip(1).map(|part| (part, 16)));
+        sized.extend(info.part_regs(reg, parts).into_iter().skip(1).map(|part| (part, 16)));
+    }
+    let mut widths = vec![0; sized.iter().map(|(reg, _)| *reg as usize + 1).max().unwrap_or(0)];
+    for (reg, width) in sized {
+        widths[reg as usize] = width;
     }
     let variables =
         variable_sites(module, function, name, &info, selected.first().map_or(&[][..], |b| &b.live_ins[..]));
-    let unreachable = function
-        .layout()
-        .iter()
-        .copied()
-        .filter(|&block| {
-            function.terminator(block).is_some_and(|last| function.instruction(last).opcode == Opcode::Unreachable)
-        })
-        .collect();
-    Ok(Selection { blocks: selected, locals, cpu, widths, variables, unreachable })
+    let returns_twice = llrm_mir::memory::calls_returns_twice(module, function);
+    let mut unreachable = llrm_mir::dense::IdSet::new();
+    for &block in function.layout() {
+        if function.terminator(block).is_some_and(|last| function.instruction(last).opcode == Opcode::Unreachable) {
+            unreachable.insert(block);
+        }
+    }
+    Ok(Selection { blocks: selected, locals, cpu, widths, variables, returns_twice, unreachable })
 }
 
 /// The variables of `function` (after the debug import): parameters in the

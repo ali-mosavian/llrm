@@ -138,7 +138,14 @@ impl LoopCtx<'_> {
         &self,
         inst: InstId,
     ) -> bool {
-        let block = self.state.moved.borrow().get(&inst).copied().or_else(|| self.function.parent(inst));
+        let moved = self.state.moved.borrow();
+        let block = if moved.is_empty() {
+            None
+        } else {
+            llrm_mir::counts::bump(llrm_mir::counts::Event::LoopCtxMovedLookups);
+            moved.get(&inst).copied()
+        }
+        .or_else(|| self.function.parent(inst));
         block.is_some_and(|block| self.contains_block(block))
     }
 
@@ -365,10 +372,11 @@ pub fn run(
     // made afresh of the body says. (Phis left non-minimal in cycles of
     // irreducible control flow, as LLVM's updater leaves them, are not
     // compared.)
-    let check_graph = |unit: &passes::Unit, built: &Built, what: &str| {
+    let check_graph = |unit: &passes::Unit, built: &Built, what: &dyn Fn() -> String| {
         if !llrm_support::env_flag!("LLRM_CHECK_LICM_GRAPH") || !shape.dominance.irreducible(unit.function).is_empty() {
             return;
         }
+        let what = what();
         let memory = llrm_analysis::memory::Unit::within(unit.context, unit.layout, unit.function, &outer)
             .with_registers(&registers)
             .with_exposed(&frames)
@@ -497,12 +505,14 @@ pub fn run(
         check_graph(
             unit,
             graph.as_ref().expect("a graph"),
-            &format!(
-                "the sinking and hoisting of the loop at {header:?}: {} sunk, {} hoisted, {} reassociated",
-                sunk.len(),
-                hoisted.len(),
-                reassociated.len()
-            ),
+            &|| {
+                format!(
+                    "the sinking and hoisting of the loop at {header:?}: {} sunk, {} hoisted, {} reassociated",
+                    sunk.len(),
+                    hoisted.len(),
+                    reassociated.len()
+                )
+            },
         );
         let Some(preheader) = preheader else { continue };
         // The stores of a promotion go before the first instruction of each
@@ -561,7 +571,7 @@ pub fn run(
                 check_graph(
                     unit,
                     graph.as_ref().expect("a graph"),
-                    &format!("promoting {:?} out of the loop at {header:?}", found.pointers),
+                    &|| format!("promoting {:?} out of the loop at {header:?}", found.pointers),
                 );
                 decisions
                     .promoted
@@ -697,9 +707,13 @@ fn promotion_round(
     let exits = promote::unique_exit_blocks(ctx);
     let mut candidates = 0;
     let mut promoted = Vec::new();
-    // Taken once for the loop: the rounds after a promotion see the same room.
-    let room = room.get_or_insert_with(|| pressure::Pressure::of(unit, outer, ctx).map(|held| held.room()));
     let mut found_candidates = promote::collect_promotion_candidates(unit, ctx, mssa, aa, &safety);
+    if found_candidates.is_empty() {
+        return (candidates, promoted);
+    }
+    // Taken once for the loop, and only where something may be promoted: the
+    // rounds after a promotion see the same room.
+    let room = room.get_or_insert_with(|| pressure::Pressure::of(unit, outer, ctx).map(|held| held.room()));
     if room.is_some() {
         found_candidates
             .sort_by_key(|candidate| std::cmp::Reverse(promote::accesses_of(unit, ctx, &candidate.pointers)));

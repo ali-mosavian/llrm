@@ -83,7 +83,8 @@ impl Builder<'_> {
                 }
                 Ok(())
             }
-            Intrinsic::Assume | Intrinsic::Prefetch | Intrinsic::FakeUse => Ok(()),
+            // `case Intrinsic::experimental_noalias_scope_decl: return;`
+            Intrinsic::Assume | Intrinsic::Prefetch | Intrinsic::FakeUse | Intrinsic::NoAliasScopeDecl => Ok(()),
             // `SelectionDAGBuilder.cpp#L7680`: the region information is
             // discarded; the scope is an undefined pointer.
             Intrinsic::InvariantEnd => Ok(()),
@@ -153,6 +154,7 @@ impl Builder<'_> {
         if self.target.dag.pointer == EVT::I64
             && matches!(intrinsic, Intrinsic::VaStart)
             && self.dag.var_args_save.is_none()
+            && !self.win64_va
         {
             return Err(Refused("va_start at m64 outside the entry block"));
         }

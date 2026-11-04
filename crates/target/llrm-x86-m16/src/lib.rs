@@ -220,6 +220,12 @@ impl llrm_target::Target for M16 {
         0
     }
 
+    /// DEVIATE SD543: no `rep` on `bsf`; the 386, 486 and Pentium have no
+    /// `tzcnt`, so the pin's prefix is a dead byte. Owner m16. Exit 2026-11-20.
+    fn bsf_rep_prefix(&self) -> bool {
+        false
+    }
+
     /// DEVIATE E2-1: no loop is aligned (the pin's is 16 bytes).
     fn pref_loop_alignment(&self) -> u8 {
         0
@@ -323,6 +329,10 @@ impl llrm_target::Target for M16 {
 
     fn frame_register(&self) -> RegId {
         llrm_x86::calling::frame(CALLING.native())
+    }
+
+    fn frame_enter(&self) -> bool {
+        CALLING.native().frame_enter
     }
 
     /// Past BP and a 2-byte return address, or a 4-byte far one.

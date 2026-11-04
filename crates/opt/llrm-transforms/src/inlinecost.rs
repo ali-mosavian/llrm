@@ -2078,6 +2078,7 @@ impl<'a> Analyzer<'a> {
                 && self.site.tti.is_some_and(|tti| {
                     tti.opt_size_inline_by_code_size()
                         && self.site.callee_calls >= tti.opt_size_inline_guard_min_sites()
+                        && !(tti.opt_size_inline_guard_yields_to_negative_cost() && self.cost < 0)
                 })
                 && self.grows_the_code()
         };

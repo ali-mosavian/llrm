@@ -619,6 +619,10 @@ impl Tti for X86 {
         self.tuning.peel_folded_entry
     }
 
+    fn sinks_select_arms(&self) -> bool {
+        self.tuning.sink_select_arms
+    }
+
     fn priced_self_inlining(&self) -> Option<(u32, i64)> {
         self.real_mode.as_ref()?.priced_self_inlining
     }

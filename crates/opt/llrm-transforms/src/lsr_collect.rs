@@ -500,6 +500,34 @@ pub struct Collection<'a, 'b> {
 }
 
 impl<'a, 'b> Collection<'a, 'b> {
+    /// The collection as it stands: the uses with their formulae, to be taken
+    /// on from here two ways.
+    pub fn fork(&self) -> Self {
+        Self {
+            cx: self.cx,
+            tti: self.tti,
+            l: self.l,
+            safe_to_expand: self.safe_to_expand,
+            hardware_loop_profitable: self.hardware_loop_profitable,
+            iv_inc_insert_pos: self.iv_inc_insert_pos,
+            iv_inc_block: self.iv_inc_block,
+            uses: self.uses.clone(),
+            use_map: self.use_map.clone(),
+            reg_uses: self.reg_uses.clone(),
+            factors: self.factors.clone(),
+            types: self.types.clone(),
+            baseline_cost: self.baseline_cost.clone(),
+            changed: self.changed,
+            swapped_compares: self.swapped_compares.clone(),
+            insert_attempts: self.insert_attempts,
+            other_register_units: self.other_register_units,
+            ignore_pressure: std::cell::Cell::new(self.ignore_pressure.get()),
+            size: self.size,
+            rated: std::cell::Cell::new(self.rated.get()),
+            chain_uses: self.chain_uses.clone(),
+        }
+    }
+
     /// The registers other values of the loop hold, as the rating counts them.
     pub fn pressure_units(&self) -> u32 {
         if self.ignore_pressure.get() { 0 } else { self.other_register_units }
@@ -1041,12 +1069,23 @@ impl<'a, 'b> Collection<'a, 'b> {
 /// They compete with the formulae for the target's registers, which the phis
 /// alone did not show (shellsort bas -Os: a third formula register spilled the
 /// `i32` chain).
+thread_local! {
+    static UNITS_COMPUTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread counted a loop's register units, for a test
+/// that a loop is counted once however many solutions are rated.
+pub fn register_units_computed() -> usize {
+    UNITS_COMPUTED.with(std::cell::Cell::get)
+}
+
 pub fn loop_register_units(
     se: &mut ScalarEvolution,
     cx: &Cx,
     tti: &dyn Tti,
     l: BlockId,
 ) -> u32 {
+    UNITS_COMPUTED.with(|n| n.set(n.get() + 1));
     let Some(lp) = cx.loops.get_loop_for(l) else { return 0 };
     let word = tti.gpr_bits();
     let mut weights: llrm_mir::dense::IdMap<llrm_mir::module::ValueId, usize> = llrm_mir::dense::IdMap::new();
