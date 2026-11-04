@@ -584,6 +584,127 @@ fn test_a_copy_of_a_constant_that_cannot_be_joined_is_made_again() {
     assert_consistent(&lis, &was, 2);
 }
 
+/// `value := add value, 1`: a read-modify-write.
+fn step(value: u32) -> Arc<Insn> {
+    let what = Semantics {
+        name: Some("add".into()),
+        dests: vec![held(value)],
+        sources: vec![held(value), Loc::Imm(crate::model::ir::Imm { value: 1, width: 4, address: None })],
+        ..Semantics::new(Operation::Nothing)
+    };
+    Arc::new(Insn::new(0, None, Some(what), vec![value], vec![value]))
+}
+
+/// `v := <name> 7`: a constant the target names its own way (wasm
+/// `CONST_I32`, m68k `MOVI32ri`).
+fn constant_named(
+    v: u32,
+    name: &str,
+) -> Arc<Insn> {
+    let what = Semantics {
+        name: Some(name.into()),
+        dests: vec![held(v)],
+        sources: vec![Loc::Imm(crate::model::ir::Imm { value: 7, width: 4, address: None })],
+        ..Semantics::new(Operation::Move)
+    };
+    Arc::new(Insn::new(0, None, Some(what), vec![v], vec![]))
+}
+
+/// The shape of queens `place`: `v1 := 7` starts an accumulator and `v2 := v1`
+/// an induction variable, both stepped in a loop and diverging. The join is
+/// refused (both live in the loop), and the value of `v1` reaching the copy is
+/// the constant, so the copy becomes `v2 := 7` as the pin's reMaterializeDef
+/// makes it ("Remat: %41 = CONST_I32 0"). With a constant named as x86 names
+/// it the shared coalescer already does.
+#[test]
+fn test_the_induction_start_copied_from_a_loop_carried_constant_is_made_again() {
+    let (a, c) = (constant_named(1, "mov"), copy(2, 1));
+    let was = body(&[(&[a, Arc::clone(&c)], &[1]), (&[read(2), step(1), step(2)], &[1, 2]), (&[read(1)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    let result = join_copy(&mut lis, &AnyClass, &mut State::new(), &mut Default::default(), c.id());
+    assert_eq!(result, JoinResult::Joined);
+    let kept = names(&lis);
+    assert!(!kept.contains(&(vec![2], vec![1])), "the copy is left: {kept:?}");
+}
+
+/// The same loop with the constant a wasm `CONST_I32`: the coalescer asked an
+/// x86-named test ("mov") whether it was worth making again, so on every other
+/// target no copy of a constant was ever made again, and queens `place` kept
+/// `v2 := v1` where the pin has `v2 := CONST_I32 0`. The target's own test
+/// (`TargetEnv::remat`, the one the spiller asks) decides.
+#[test]
+fn test_a_constant_the_target_names_its_own_way_is_made_again() {
+    use std::collections::BTreeSet;
+
+    use llrm_lir::registers::RegId;
+
+    use super::env::TargetEnv;
+    let (a, c) = (constant_named(1, "CONST_I32"), copy(2, 1));
+    let was = body(&[(&[a, Arc::clone(&c)], &[1]), (&[read(2), step(1), step(2)], &[1, 2]), (&[read(1)], &[])]);
+    let palette: BTreeSet<RegId> = [RegId::AX, RegId::BX].into_iter().collect();
+    let env = TargetEnv {
+        palettes: IndexMap::from_iter([(1, palette.clone()), (2, palette)]).into(),
+        pins: IndexMap::default(),
+        size: false,
+        keep_pinned: false,
+        aliases: Default::default(),
+        should_join: Box::new(|_| true),
+        freq: Vec::new(),
+        remat: Some(Box::new(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("CONST_I32")))),
+        remat_wins: None,
+        joins_global_copies: false,
+        joins_pinned_copies: true,
+        joins_sub_registers: true,
+        regs: None,
+        kind_of: None,
+        kinds: Default::default(),
+        check_kinds: false,
+    };
+    let mut lis = LiveIntervals::new(&was);
+    let result = join_copy(&mut lis, &env, &mut State::new(), &mut Default::default(), c.id());
+    assert_eq!(result, JoinResult::Joined);
+    let kept = names(&lis);
+    assert!(!kept.contains(&(vec![2], vec![1])), "the copy is left: {kept:?}");
+}
+
+/// The same loop on a target that prices the remat: the constant costs more
+/// than the register copy it would replace (6502: `lda #0`, 2 bytes, for
+/// `txa`, 1), so the copy stays, where without a price the copy of every
+/// constant was made again (lz4 +1 byte on three rows).
+#[test]
+fn test_a_constant_dearer_than_the_copy_it_replaces_is_not_made_again() {
+    use std::collections::BTreeSet;
+
+    use llrm_lir::registers::RegId;
+
+    use super::env::TargetEnv;
+    let (a, c) = (constant_named(1, "CONST_I32"), copy(2, 1));
+    let was = body(&[(&[a, Arc::clone(&c)], &[1]), (&[read(2), step(1), step(2)], &[1, 2]), (&[read(1)], &[])]);
+    let palette: BTreeSet<RegId> = [RegId::AX, RegId::BX].into_iter().collect();
+    let env = TargetEnv {
+        palettes: IndexMap::from_iter([(1, palette.clone()), (2, palette)]).into(),
+        pins: IndexMap::default(),
+        size: false,
+        keep_pinned: false,
+        aliases: Default::default(),
+        should_join: Box::new(|_| true),
+        freq: Vec::new(),
+        remat: Some(Box::new(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("CONST_I32")))),
+        remat_wins: Some(Box::new(|_, _, _, _| false)),
+        joins_global_copies: false,
+        joins_pinned_copies: true,
+        joins_sub_registers: true,
+        regs: None,
+        kind_of: None,
+        kinds: Default::default(),
+        check_kinds: false,
+    };
+    let mut lis = LiveIntervals::new(&was);
+    join_copy(&mut lis, &env, &mut State::new(), &mut Default::default(), c.id());
+    let kept = names(&lis);
+    assert!(kept.contains(&(vec![2], vec![1])), "the copy was made a constant again: {kept:?}");
+}
+
 /// A copy of a loaded value is not cheap to make again: it stays.
 #[test]
 fn test_a_copy_of_a_load_that_cannot_be_joined_is_not_made_again() {
@@ -655,6 +776,8 @@ fn test_a_join_narrows_the_class_the_next_join_is_judged_against() {
         aliases: Default::default(),
         should_join: Box::new(|_| true),
         freq: Vec::new(),
+        remat: None,
+        remat_wins: None,
         regs: None,
         kind_of: None,
         kinds: Default::default(),
@@ -1120,6 +1243,8 @@ fn env_with_palettes(palettes: &[(u32, &[RegId])]) -> TargetEnv {
         kind_of: None,
         kinds: Default::default(),
         check_kinds: false,
+        remat: None,
+        remat_wins: None,
     }
 }
 
@@ -1174,6 +1299,8 @@ fn test_a_copy_from_a_pinned_argument_is_left_to_the_allocator_when_the_target_s
             kind_of: None,
             kinds: Default::default(),
             check_kinds: false,
+            remat: None,
+            remat_wins: None,
         };
         let mut lis = LiveIntervals::new(&was);
         lis.interval(1);

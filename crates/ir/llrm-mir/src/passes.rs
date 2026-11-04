@@ -2593,6 +2593,11 @@ pub struct ModuleAnalyses {
 /// results held, to be reused when worked out again the same, and what the
 /// analyses that bring their last run up to date kept (`memo`).
 pub struct Carried {
+    /// The listing the last `Declarations` was, held or dropped, and what moved
+    /// since: 0 where none was made (the next manager makes its own).
+    listing: u64,
+    unknown_until: u64,
+    declaration_moves: std::collections::BTreeMap<GlobalId, u64>,
     dropped: HashMap<TypeId, Rc<dyn Any>>,
     memos: HashMap<TypeId, Box<dyn Any>>,
     /// The stateless results, held as they were.
@@ -2648,7 +2653,16 @@ impl ModuleAnalyses {
                 dropped.insert(id, result);
             }
         }
-        Carried { dropped, memos: self.memos, held, stateless: self.stateless }
+        let (listing, unknown_until, declaration_moves) = (self.listing, self.unknown_until, self.declaration_moves);
+        Carried {
+            listing,
+            unknown_until,
+            declaration_moves,
+            dropped,
+            memos: self.memos,
+            held,
+            stateless: self.stateless,
+        }
     }
 
     /// `self`, with what the analyses before it left.
@@ -2662,6 +2676,14 @@ impl ModuleAnalyses {
             if !self.stateless.iter().any(|one| one.id == kind.id) {
                 self.stateless.push(kind);
             }
+        }
+        // The declarations are the listing they were: a new manager's 0 would
+        // make every declaration unknown, and each of its functions would
+        // summarize them all again.
+        if before.listing != 0 {
+            self.listing = before.listing;
+            self.unknown_until = before.unknown_until;
+            self.declaration_moves = before.declaration_moves;
         }
         self.results.extend(before.held.into_iter().map(|(kind, result)| (kind.id, (kind, result))));
         self

@@ -87,7 +87,10 @@ fn unnamed_values_count_the_entry_block() {
 
 #[test]
 fn constructs_outside_the_subset_are_refused() {
-    assert_eq!(refusal("@x = global fp128 zeroinitializer\n"), "line 1: `fp128` is outside MIR's subset of LLVM");
+    assert_eq!(
+        refusal("@x = global ppc_fp128 zeroinitializer\n"),
+        "line 1: `ppc_fp128` is outside MIR's subset of LLVM"
+    );
     assert_eq!(refusal("target triple = \"i386\"\n"), "line 1: `triple` is outside MIR's subset of LLVM");
 }
 

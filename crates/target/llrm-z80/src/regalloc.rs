@@ -6,6 +6,8 @@
 //! `ix` and `sp` (`calling.toml`), so every allocatable register is
 //! caller-saved.
 
+use llrm_codegen::model::ir::Loc;
+use llrm_codegen::model::lir::Insn;
 use llrm_lir::registers::RegId;
 use llrm_spike_mf::regalloc::Target;
 use llrm_spike_mf::{Inst, Kind, Operand, Reg};
@@ -142,6 +144,34 @@ impl Target for Z80Registers {
             _ => return register,
         };
         lanes(register).map_or(register, |lanes| [lanes.0, lanes.1][half])
+    }
+
+    /// A literal in a byte register costs `ld r, n` (7 T, 2 B) against the
+    /// copy `ld r, r'` (4 T, 1 B), a word `ld rr, nn` (10 T, 3 B) against two
+    /// copies (8 T, 2 B): making it again loses to the copy, except a zero in
+    /// `a`, which is `xor a` (4 T, 1 B). Unpriced, `fletcher` -O2 made its zero
+    /// in the loop every trip.
+    fn literal_move_wins(
+        literal: &Insn,
+        _source: &[RegId],
+        destination: &[RegId],
+        size: bool,
+    ) -> bool {
+        let Some(what) = literal.what.as_ref() else { return false };
+        let ([Loc::Held(into)], [Loc::Imm(imm)]) = (what.dests.as_slice(), what.sources.as_slice()) else {
+            return false;
+        };
+        if into.width == 1 && imm.value == 0 && destination == [reg::A] {
+            return true;
+        }
+        let cost = |form: &str| crate::timing::cost(form).map_or((u32::MAX, u32::MAX), |c| (c.bytes, c.taken));
+        let (copy, load) = if into.width == 1 {
+            (cost("ld b;c"), cost("ld b;n"))
+        } else {
+            let (bytes, taken) = cost("ld b;c");
+            ((2 * bytes, 2 * taken), cost("ld bc;nn"))
+        };
+        if size { load.0 <= copy.0 } else { load.1 <= copy.1 }
     }
 
     // `reads_flags_set_just_before` stays false: every copy, spill and reload

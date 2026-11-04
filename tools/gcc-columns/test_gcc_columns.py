@@ -150,6 +150,20 @@ def test_vs_6502_bar_is_the_lower_of_both_gcc_columns():
     assert row.split("|")[2:4] == [" 100 ", " 900 "], row
 
 
+def test_vs_6502_names_the_cc1_of_the_tables_it_read():
+    """vs_6502.py printed the md5s 4c91eb80/75c808c2 as literals: after a cc1 swap the card named a compiler the cells did not come from."""
+    import subprocess
+    d = tempfile.mkdtemp()
+    h = "target\tprog\tlevel\tcompiler\tcode_bytes\tclocks\tinstrs\tnote\n"
+    open(f"{d}/6502.tsv", "w").write(h + "6502\tp\tOs\tours\t120\t1500\t300\t\n")
+    open(f"{d}/6502-gcc.tsv", "w").write("# x, cc1 md5 aaaaaaaa11111111\n" + h + "6502\tp\tOs\tgcc\t100\t1200\t310\t\n")
+    open(f"{d}/6502-gcc.noivopts.tsv", "w").write("# x, cc1 md5 bbbbbbbb22222222\n" + h + "6502\tp\tOs\tgcc-noivopts-Os\t110\t900\t320\t\n")
+    out = f"{d}/vs.md"
+    subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "vs_6502.py"), d, out, "2026-11-04"], check=True)
+    t = open(out).read()
+    assert "md5 aaaaaaaa gcc" in t and "bbbbbbbb gcc-noivopts-Os" in t and "4c91eb80" not in t, t[:400]
+
+
 def test_softfloat_6502_clocks_divide_by_the_records_run():
     """The 11-03 6502 softfloat table divided by 256 although add/sub/mul/div ran 361 records, and subtracted a base run that
     failed its records: hand add read 570 for 324. Records come from the vec.inc that ran, and the base run must pass."""
