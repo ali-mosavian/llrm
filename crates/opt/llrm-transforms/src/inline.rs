@@ -1220,7 +1220,11 @@ fn executed(
     };
     let stated = crate::inlineattrs::SiteAttrs::of(function, call);
     let marked = crate::inlinemetadata::SiteMetadata::of(function, call);
+    let scopes = crate::inlinemetadata::DeepClone::of(&planned.candidate.body, metadata, declared);
     let made = spliced(context, function, call, &planned.candidate.body, anchor);
+    if let Some(scopes) = &scopes {
+        scopes.remap(function, &made.copies);
+    }
     if let Some(site) = located {
         inlined_at(function, &planned.candidate.body, &made.copies, site, metadata, declared);
     }

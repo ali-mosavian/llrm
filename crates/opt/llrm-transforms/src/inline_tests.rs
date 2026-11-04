@@ -882,3 +882,51 @@ b1:
     assert!(main.contains("store i32 1, ptr %a"), "{after}");
     assert!(!main.contains("call void @callee"), "{after}");
 }
+
+/// A callee whose store is in a scope and whose load is `!noalias` it, inlined
+/// at two calls on the same two pointers, shared its scope between the copies:
+/// the first copy's store to `%a` and the second's load of `%a` were called
+/// apart by `ScopedNoAliasAA`, which a miscompile in waiting. Each copy has
+/// its own scope (`ScopedAliasMetadataDeepCloner`).
+#[test]
+fn test_two_copies_of_a_scoped_callee_are_not_in_one_scope() {
+    use llrm_analysis::aa::{AliasResult, BatchAAResults, MemoryLocation};
+    use llrm_analysis::aggregate::AggregateAA;
+    use llrm_analysis::memory::Unit;
+    use llrm_analysis::scopednoaliasaa::ScopedNoAliasAA;
+
+    let mut module = parsed(
+        "define internal i32 @callee(ptr %p, ptr %q) {
+b1:
+  store i32 1, ptr %p, !alias.scope !1
+  %v = load i32, ptr %q, !noalias !1
+  ret i32 %v
+}
+
+define i32 @main(ptr %a, ptr %b) {
+b1:
+  %x = call i32 @callee(ptr %a, ptr %b)
+  %y = call i32 @callee(ptr %b, ptr %a)
+  %r = add i32 %x, %y
+  ret i32 %r
+}
+
+!0 = distinct !{!0, !\"domain\"}
+!2 = distinct !{!2, !0, !\"scope\"}
+!1 = !{!2}
+",
+    );
+    assert!(inline_into(&mut module, "main", 1));
+    let layout = DataLayout::default();
+    let main = module.global(id(&module, "main")).function().unwrap();
+    let unit = Unit::of(&module, &layout, main);
+    let access: Vec<MemoryLocation> =
+        main.walk().filter_map(|(_, inst)| MemoryLocation::get(&unit, inst)).collect();
+    // store %a, load %b, store %b, load %a
+    assert_eq!(access.len(), 4, "{}", printed(&module));
+    let mut chain = AggregateAA::new();
+    chain.add_aa_result(ScopedNoAliasAA::new(&unit));
+    let mut aa = BatchAAResults::new(&mut chain);
+    assert_eq!(aa.alias(&access[0], &access[1]), AliasResult::NoAlias, "premise: one copy's own pair");
+    assert_eq!(aa.alias(&access[0], &access[3]), AliasResult::MayAlias, "{}", printed(&module));
+}

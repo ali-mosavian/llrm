@@ -4,6 +4,11 @@
 //! `!alias.scope` and `!noalias` go to every memory-accessing instruction of the
 //! inlined copy, joined with what the instruction has.
 //!
+//! `ScopedAliasMetadataDeepCloner`
+//! ([L1108](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/InlineFunction.cpp#L1108)):
+//! a callee that carries scope lists is inlined with its own copy of them, so
+//! two copies of one body are not in one scope.
+//!
 //! `AddAlignmentAssumptions` (L1785) is `preserve-alignment-assumptions-during-inlining`,
 //! hidden and off in the pin: nothing to translate.
 //!
@@ -185,6 +190,104 @@ pub fn propagated(
         if site.noalias.is_some() {
             let joined = nodes.concatenated(attached(function, copy, NOALIAS), site.noalias);
             function.set_metadata(copy, NOALIAS, joined);
+        }
+    }
+}
+
+/// The kinds of attachment that name scopes.
+const SCOPE_KINDS: [&str; 3] = [SCOPE, NOALIAS, DECL];
+/// A `llvm.experimental.noalias.scope.decl` is a call carrying its scope list
+/// here (MIR has no metadata call operand).
+pub const DECL: &str = "noalias.scope.decl";
+
+/// `ScopedAliasMetadataDeepCloner`: every node reachable from the scope lists
+/// of a callee, each cloned once.
+pub struct DeepClone(BTreeMap<MetadataId, MetadataId>);
+
+impl DeepClone {
+    /// Clones the scope metadata of `body`, if it has any.
+    pub fn of(
+        body: &Function,
+        module: Metadata,
+        declared: &mut Declared,
+    ) -> Option<Self> {
+        let first = declared.next_node().0 - declared.nodes().len() as u32;
+        let operands = |declared: &Declared, node: MetadataId| -> Vec<MetadataOperand> {
+            match node.0.checked_sub(first) {
+                Some(at) => declared.nodes().get(at as usize),
+                None => module.nodes.get(node.0 as usize),
+            }
+            .map_or_else(Vec::new, |one| one.operands.clone())
+        };
+        let distinct = |declared: &Declared, node: MetadataId| -> bool {
+            match node.0.checked_sub(first) {
+                Some(at) => declared.nodes().get(at as usize),
+                None => module.nodes.get(node.0 as usize),
+            }
+            .is_some_and(|one| one.distinct)
+        };
+        let mut found: Vec<MetadataId> = Vec::new();
+        let mut queue: Vec<MetadataId> = Vec::new();
+        for (_, inst) in body.walk() {
+            for kind in SCOPE_KINDS {
+                if let Some(list) = attached(body, inst, kind)
+                    && !found.contains(&list)
+                {
+                    found.push(list);
+                    queue.push(list);
+                }
+            }
+        }
+        if found.is_empty() {
+            return None;
+        }
+        while let Some(node) = queue.pop() {
+            for operand in operands(declared, node) {
+                if let MetadataOperand::Node(one) = operand
+                    && !found.contains(&one)
+                {
+                    found.push(one);
+                    queue.push(one);
+                }
+            }
+        }
+        // Ids first, so a node that names itself or a later one can be written.
+        let mut next = declared.next_node().0;
+        let map: BTreeMap<MetadataId, MetadataId> = found
+            .iter()
+            .map(|&old| {
+                next += 1;
+                (old, MetadataId(next - 1))
+            })
+            .collect();
+        for &old in &found {
+            let cloned = operands(declared, old)
+                .into_iter()
+                .map(|operand| match operand {
+                    MetadataOperand::Node(one) => MetadataOperand::Node(map[&one]),
+                    other => other,
+                })
+                .collect();
+            let made = declared.node(MetadataNode { distinct: distinct(declared, old), operands: cloned });
+            debug_assert_eq!(made, map[&old]);
+        }
+        Some(Self(map))
+    }
+
+    /// `remap`: the lists of `copies` from the callee's nodes to the clones.
+    pub fn remap(
+        &self,
+        function: &mut Function,
+        copies: &[InstId],
+    ) {
+        for &copy in copies {
+            for kind in SCOPE_KINDS {
+                if let Some(old) = attached(function, copy, kind)
+                    && let Some(&new) = self.0.get(&old)
+                {
+                    function.set_metadata(copy, kind, Some(new));
+                }
+            }
         }
     }
 }
