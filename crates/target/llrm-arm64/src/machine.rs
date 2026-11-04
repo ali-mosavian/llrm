@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 use llrm_mir::lowering::Lowering;
 use llrm_mir::spaces::Spaces;
-use llrm_mir::target::{AddressForm, Machine, OperationCosts};
+use llrm_mir::target::{AddressForm, GlobalMerge, Machine, OperationCosts};
 use llrm_mir::tti::Tti;
 
 use crate::tti::{AArch64, AArch64Lowering};
@@ -124,5 +124,14 @@ impl Machine for Arm64Machine {
     fn address_forms(&self) -> Vec<AddressForm> {
         let scales: BTreeSet<i64> = [1, 2, 4, 8].into_iter().collect();
         vec![AddressForm::new(8, scales, 0, 0, 0, false, None).expect("a well-formed address form")]
+    }
+
+    /// `AArch64PassConfig::addIRPasses`: `createGlobalMergePass(TM, 4095,
+    /// OnlyOptimizeForSize = below -O3, MergeExternalByDefault = !MachO)`.
+    fn global_merge(
+        &self,
+        aggressive: bool,
+    ) -> Option<GlobalMerge> {
+        Some(GlobalMerge { max_offset: 4095, size_only: !aggressive, mach_o: self.platform == Platform::Darwin })
     }
 }

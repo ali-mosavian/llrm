@@ -274,6 +274,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     // (`addPreInlinerPasses`, PGO instrumentation or use only) and #L1424
     // (`ExtraVectorizerPasses`, after the vectorizer) are not in the default
     // pipeline, and llrm has neither a profile nor a vectorizer.
+    entry("rotate@1621", Late, "loop-rotate<header-duplication;check-exit-count>", Translated, ""),
     entry(
         "loop-interchange@1631",
         Late,

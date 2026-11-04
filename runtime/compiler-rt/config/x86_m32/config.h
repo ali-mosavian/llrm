@@ -7,6 +7,10 @@
 #define SF_DIV_HW32 1
 #define SF_FIX_NAN_UNDEF 1 /* NaN to int is undefined in C and poison in IR, and compiler-rt/libgcc do not return 0 either: the check is bytes over the reference */
 #ifndef __OPTIMIZE_SIZE__
+/* f64 div in two 28-bit digits, each one `div` (llrm.x86.udiv64by32: the quotient in the low half, the remainder in the high half; hi < d). Only llrm-cc knows the intrinsic. */
+unsigned long long llrm_udiv64by32(unsigned hi, unsigned lo, unsigned d) __asm__("llrm.x86.udiv64by32") __attribute__((const));
+#define SF_UDIV64BY32(hi, lo, d) llrm_udiv64by32((hi), (lo), (d))
+#define SF_DIV64_UDIV 1
 #define SF_SPECIALS_ONCE 1 /* -O2 llrm mul 79912 -> 76737 clk, div 144865 -> 143041, same bytes; at -Os it costs 29 B */
 #endif
 #ifdef __OPTIMIZE_SIZE__

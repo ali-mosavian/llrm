@@ -274,8 +274,9 @@ pub struct DagConfig {
     pub narrow_srem_overflow_defined: bool,
     /// `TargetSubtargetInfo::useAA`: the builder records each load's and
     /// store's IR pointer ([`MemBase::Value`]) for the combiner's alias
-    /// queries. DEVIATE: off by default (x86 and arm64 answer false). Exit:
-    /// none, the target's own answer.
+    /// queries. x86 answers false. AArch64's `-aarch64-use-aa` is on: DEVIATE,
+    /// arm64 leaves it off (no `AliasOracle` is wired for it, as wasm's is).
+    /// Exit: 2026-11-12, owner w15.
     pub use_aa: bool,
 }
 

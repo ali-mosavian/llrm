@@ -47,6 +47,9 @@
 //! 43. `tryToRecognizeTableBasedLog2` asks the target's `getIntrinsicInstrCost`
 //!     for `ctlz`; a pass run with no `tti` has no answer and does not fold.
 //!     Owner: w2. Exit: 2026-11-21.
+//! 49. `tryToFPToSat` is not translated: MIR has no `llvm.fptosi.sat` (no
+//!     interpreter or lowering) and no target prices it. Owner: w2. Exit:
+//!     2026-11-30, when a corpus cell needs it.
 //!
 //! # Example
 //! The pair above is one `load i16`; see `aggressive_instcombine_tests.rs`.
@@ -66,7 +69,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdSet;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
-use llrm_mir::opcode::{BinaryOp, CallInfo, CastOp, Flags, Opcode, Tail};
+use llrm_mir::opcode::{BinaryOp, CallInfo, CastOp, Flags, IntPredicate, Opcode, Tail};
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses, Unit};
 use llrm_mir::types::{Type, TypeId};
 use llrm_mir::valuetracking::guarantee::{may_read_from_memory, may_throw, may_write_to_memory};
@@ -142,6 +145,8 @@ fn fold_unusual_patterns(
         // is not matched.
         let insts: Vec<InstId> = unit.function.iter_block(block).collect();
         for &inst in insts.iter().rev() {
+            changed |=
+                fold_select_split_ctlz_cttz(unit.context, unit.layout, unit.function, unit.declared, globals, inst);
             changed |= fold_any_or_all_bits_set(unit.context, unit.layout, unit.function, inst);
             changed |= fold_guarded_funnel_shift(unit.context, unit.layout, unit.function, unit.declared, inst);
             changed |= try_to_recognize_pop_count(unit.context, unit.layout, unit.function, unit.declared, inst);
@@ -155,6 +160,7 @@ fn fold_unusual_patterns(
                 inst,
             );
             changed |= fold_consecutive_loads(unit.context, unit.layout, unit.function, inst);
+            changed |= fold_patterned_loads(unit.context, unit.layout, unit.function, globals, inst);
             changed |= fold_icmp_or_chain(unit.context, unit.layout, unit.function, inst);
             changed |= fold_mul_high(unit.context, unit.layout, unit.function, inst);
             changed |= fold_lib_calls(unit, globals, info, tti, cfg_changed, inst);
@@ -1863,6 +1869,240 @@ fn fold_any_or_all_bits_set(
     };
     let replacement = if trunc { compare } else { build(function, Opcode::Cast(CastOp::ZExt), x_ty, vec![compare]) };
     function.replace_all_uses_with(result, replacement);
+    true
+}
+
+/// `foldSelectSplitCTLZCTTZ`
+/// ([:204](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L204)),
+/// with `foldSelectSplitCTTZ` (:95) and `foldSelectSplitCTLZ` (:152): the
+/// trailing or leading zeros of a value counted in halves, the second half
+/// only if the first is zero, are one full-width count.
+fn fold_select_split_ctlz_cttz(
+    context: &mut llrm_mir::context::Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    declared: &mut llrm_mir::passes::Declared,
+    globals: &[llrm_mir::module::GlobalValue],
+    inst: InstId,
+) -> bool {
+    let ty = function.instruction(inst).ty;
+    let Some(result) = function.instruction(inst).result else { return false };
+    let Some(half) = context.types.int_bits(ty) else { return false };
+    // The full-width count can exceed what the half type holds.
+    if half <= 2 {
+        return false;
+    }
+    let full = half * 2;
+    let found = {
+        // Calls are named through the globals.
+        let q = Query { globals, ..query(context, layout, function) };
+        let Some((_, _, cond, mut true_value, mut false_value)) = pattern::select(&q, Operand::Value(result)) else {
+            return false;
+        };
+        let Some((_, _, pred, compared, zero)) = pattern::icmp(&q, cond) else { return false };
+        if !q.int_constant(zero).is_some_and(|(bits, _)| bits == 0)
+            || !matches!(pred.pred, IntPredicate::Eq | IntPredicate::Ne)
+        {
+            return false;
+        }
+        if pred.pred == IntPredicate::Ne {
+            std::mem::swap(&mut true_value, &mut false_value);
+        }
+        let one_use = |v: Operand| {
+            matches!(
+                v,
+                Operand::Value(value) if function.users(value).has_one_use()
+            )
+        };
+        let is_const = |v: Operand, want: u128| q.int_constant(v).is_some_and(|(bits, _)| bits == want);
+        let of_width = |v: Operand, bits: u32| {
+            function.operand_type(context, v).and_then(|t| context.types.int_bits(t)) == Some(bits)
+        };
+        // `m_Trunc(m_LShr(m_Specific(src), m_SpecificInt(half)))`.
+        let high_half = |v: Operand, src: Operand| {
+            pattern::cast(&q, v, CastOp::Trunc)
+                .and_then(|(_, _, shifted)| pattern::binary(&q, shifted, BinaryOp::LShr))
+                .is_some_and(|(_, _, value, amount)| value == src && is_const(amount, u128::from(half)))
+        };
+        // `m_OneUse(m_AddLike(m_OneUse(m_Intrinsic(base)),
+        // m_SpecificInt(half)))`: the count's argument.
+        let plus_half = |v: Operand, base: &str| {
+            if !one_use(v) {
+                return None;
+            }
+            let (count, amount) = pattern::add_like(&q, v, Flags::default())?;
+            if !is_const(amount, u128::from(half)) || !one_use(count) {
+                return None;
+            }
+            let (_, args) = pattern::intrinsic_call(&q, count, base)?;
+            args.first().copied()
+        };
+        let counted = |v: Operand, base: &str| {
+            if !one_use(v) {
+                return None;
+            }
+            let (_, args) = pattern::intrinsic_call(&q, v, base)?;
+            args.first().copied()
+        };
+        // cttz: `lo == 0 ? cttz(hi) + half : cttz(lo)`.
+        let cttz = (|| {
+            let (_, _, src) = pattern::cast(&q, compared, CastOp::Trunc)?;
+            if !of_width(src, full) || counted(false_value, "llvm.cttz") != Some(compared) {
+                return None;
+            }
+            let hi_arg = plus_half(true_value, "llvm.cttz")?;
+            high_half(hi_arg, src).then_some((src, "cttz"))
+        })();
+        // ctlz: `hi == 0 ? ctlz(lo) + half : ctlz(hi)`.
+        let ctlz = || {
+            let hi_part = match pattern::cast(&q, compared, CastOp::Trunc) {
+                Some((_, _, src)) => src,
+                None => compared,
+            };
+            let (_, _, src, amount) = pattern::binary(&q, hi_part, BinaryOp::LShr)?;
+            if !of_width(src, full) || !is_const(amount, u128::from(half)) {
+                return None;
+            }
+            let hi_arg = counted(false_value, "llvm.ctlz")?;
+            if !high_half(hi_arg, src) {
+                return None;
+            }
+            let lo_arg = plus_half(true_value, "llvm.ctlz")?;
+            pattern::cast(&q, lo_arg, CastOp::Trunc).is_some_and(|(_, _, value)| value == src).then_some((src, "ctlz"))
+        };
+        cttz.or_else(ctlz)
+    };
+    let Some((src, count)) = found else { return false };
+    let wide = function.operand_type(context, src).expect("a typed value");
+    let i1 = context.types.int(1);
+    let no_poison = Operand::Constant(context.int(i1, 0));
+    let wide_count = call_intrinsic_before(
+        context,
+        function,
+        declared,
+        inst,
+        &format!("llvm.{count}.i{full}"),
+        wide,
+        vec![src, no_poison],
+        vec![wide, i1],
+    );
+    let narrow = function.create_instruction(Opcode::Cast(CastOp::Trunc), ty, vec![wide_count], Flags::default(), None);
+    function.insert(narrow, Position::Before(inst)).expect("a placed instruction");
+    let narrow = Operand::Value(function.instruction(narrow).result.expect("a value"));
+    function.replace_all_uses_with(result, narrow);
+    true
+}
+
+/// `getStrideAndModOffsetOfGEP`
+/// ([:1823](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L1823)):
+/// the smallest step of the variable indices of the GEPs under `pointer`, and
+/// the constant offset modulo it; `(1, 0)` where it does not reach a global.
+fn stride_and_mod_offset(
+    q: &Query,
+    layout: &DataLayout,
+    mut pointer: Operand,
+) -> (u128, u128) {
+    let index_bits = layout.pointer(0).index_bits;
+    let mask = low_mask(index_bits);
+    let mut stride: Option<u128> = None;
+    let mut mod_offset: u128 = 0;
+    while let Some((_, gep)) = q.instruction_of(pointer)
+        && let Opcode::GetElementPtr { source } = gep.opcode
+    {
+        let indices: Vec<Option<i128>> =
+            gep.operands[1..].iter().map(|&index| q.int_constant(index).map(|(bits, _)| bits as i128)).collect();
+        let (constant, variable) = layout.collect_offset(&q.context().types, source, &indices);
+        mod_offset = mod_offset.wrapping_add(constant as u128) & mask;
+        for (_, scale) in variable {
+            let mut scale = u128::from(scale) & mask;
+            if scale == 0 {
+                continue;
+            }
+            // Only a power of two factor is kept without `nusw`.
+            if !gep.flags.contains(Flags::NUSW) && !gep.flags.contains(Flags::INBOUNDS) {
+                scale = 1u128 << scale.trailing_zeros();
+            }
+            stride = Some(stride.map_or(scale, |stride| gcd(stride, scale)));
+        }
+        pointer = gep.operands[0];
+    }
+    let reaches_global = matches!(
+        pointer,
+        Operand::Constant(id) if matches!(q.context().get(id).kind, ConstantKind::Global(_))
+    );
+    let Some(stride) = stride.filter(|_| reaches_global) else { return (1, 0) };
+    // A negative offset is the remainder of a division by the stride.
+    let negative = mod_offset >> (index_bits - 1) & 1 == 1;
+    let signed = if negative { (mod_offset | !mask) as i128 } else { mod_offset as i128 };
+    let remainder = signed.rem_euclid(stride as i128) as u128;
+    (stride, remainder)
+}
+
+fn gcd(
+    mut a: u128,
+    mut b: u128,
+) -> u128 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
+}
+
+/// `foldPatternedLoads`
+/// ([:1868](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L1868)):
+/// a load from a constant array whose every reachable element is the same is
+/// that constant.
+///
+/// DEVIATE 48: a GEP that is a constant expression is not looked through;
+/// only GEP instructions are. Owner: w2. Exit: 2026-11-21.
+fn fold_patterned_loads(
+    context: &mut llrm_mir::context::Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    globals: &[llrm_mir::module::GlobalValue],
+    inst: InstId,
+) -> bool {
+    let Opcode::Load { align, volatile: false } = function.instruction(inst).opcode else { return false };
+    let load_ty = function.instruction(inst).ty;
+    let Some(result) = function.instruction(inst).result else { return false };
+    let pointer = function.instruction(inst).operands[0];
+    let q = Query { globals, ..query(context, layout, function) };
+    let Operand::Constant(object) = llrm_mir::valuetracking::underlying::get_underlying_object(&q, pointer, 6) else {
+        return false;
+    };
+    let ConstantKind::Global(table) = context.get(object).kind else { return false };
+    let Some(global) = globals.get(table.0 as usize) else { return false };
+    let llrm_mir::module::GlobalKind::Variable(variable) = &global.kind else { return false };
+    // A definitive initializer: the global is not interposable.
+    let (true, Some(initializer), false) = (variable.constant, variable.initializer, global.linkage.is_interposable())
+    else {
+        return false;
+    };
+    // Bail for large initializers in excess of 4K to avoid too many scans.
+    let size = layout.alloc_size(&context.types, context.get(initializer).ty);
+    if size == 0 || size > 4096 {
+        return false;
+    }
+    let (mut stride, mut offset) = stride_and_mod_offset(&q, layout, pointer);
+    // Any valid offset is a multiple of the load's alignment, so checking the
+    // multiples of the bigger of it and the stride is enough.
+    let load_align = align.unwrap_or_else(|| layout.align(&context.types, load_ty));
+    if load_align <= variable.align.unwrap_or(1) && u64::try_from(stride).unwrap_or(u64::MAX) < load_align {
+        offset = 0;
+        stride = u128::from(load_align);
+    }
+    let fold = |at: u128| {
+        llrm_mir::constantfolding::constant_fold_load_from_const(context, layout, initializer, load_ty, at as u64)
+    };
+    let Some(constant) = fold(offset) else { return false };
+    let last = size.wrapping_sub(layout.store_size(&context.types, load_ty));
+    while offset <= u128::from(last) {
+        if fold(offset) != Some(constant) {
+            return false;
+        }
+        offset += stride;
+    }
+    function.replace_all_uses_with(result, Operand::Constant(constant));
     true
 }
 

@@ -13,3 +13,9 @@ typical_bytes = 10
 # 0 to 6 live words (sim65 cycles checked); 0 always keeps the call.
 byte_clocks_speed = 500
 byte_clocks_size = 5000
+
+[compact]
+# A routine with a compact variant: the same result in fewer bytes and more clocks. The call is renamed
+# at size (-Os, -Oz); at speed the fast one stays. __udivhi3c is the bit loop without the short-divisor path.
+__udivhi3 = "__udivhi3c"
+__umodhi3 = "__umodhi3c"

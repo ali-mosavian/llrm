@@ -376,6 +376,12 @@ impl Printer<'_> {
                 }
                 self.push(format!("and a, #{}", 0xFFu32 >> count));
             }
+            // the sign of the accumulator: its bit 7 into the carry and
+            // out again (`sra a` seven times is 14 B)
+            "SRA8" if shift_count(inst)? == 7 && name_of(self, 0)? == "a" => {
+                self.push("add a, a");
+                self.push("sbc a, a");
+            }
             "SHL8" | "SRL8" | "SRA8" => {
                 let to = name_of(self, 0)?;
                 let mnemonic = match op {
@@ -1224,23 +1230,35 @@ fn layout(
     slots: &[(i32, usize)],
 ) -> Frame {
     let mut frame = Frame::default();
-    for &(index, size, _) in &function.locals {
-        frame.size += size;
-        frame.offsets.insert(index, -frame.size);
-    }
     // Slots alone: bytes first, then the words, so the last word lies at SP and
     // each word is one `push`.
     let aligned = function.locals.is_empty() && slots.iter().all(|&(_, size)| size == 1 || size == 2);
-    let mut ordered = slots.to_vec();
     if aligned {
+        let mut ordered = slots.to_vec();
         ordered.sort_by_key(|&(_, size)| size);
-    }
-    for (index, size) in ordered {
-        if aligned && size == 2 && frame.size % 2 == 1 {
-            frame.size += 1;
+        for (index, size) in ordered {
+            if size == 2 && frame.size % 2 == 1 {
+                frame.size += 1;
+            }
+            frame.size += size as i64;
+            frame.offsets.insert(index, -frame.size);
         }
-        frame.size += size as i64;
-        frame.offsets.insert(index, -frame.size);
+    } else {
+        // The smallest objects lie nearest IX: `ld -n(ix), r` reaches 128 bytes
+        // below it, and past that every access is `ld iy, #n; add iy, sp`.
+        // Spill slots and scalars came after a local array and lay beyond its
+        // 8 KB (tests/run/c/fill_nest).
+        let mut objects: Vec<(i32, i64)> = function.locals.iter().map(|&(index, size, _)| (index, size)).collect();
+        objects.extend(slots.iter().map(|&(index, size)| (index, size as i64)));
+        // A frame within IX's reach keeps its locals first and its slots last,
+        // the last slot lying at SP (`pop` then `push` for a reload).
+        if objects.iter().map(|&(_, size)| size).sum::<i64>() > 127 {
+            objects.sort_by_key(|&(_, size)| size);
+        }
+        for (index, size) in objects {
+            frame.size += size;
+            frame.offsets.insert(index, -frame.size);
+        }
     }
     for (&index, &offset) in &function.fixed {
         frame.offsets.insert(index, FIRST_ARGUMENT + offset);

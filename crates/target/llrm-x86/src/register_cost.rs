@@ -3,6 +3,34 @@
 use llrm_lir::registers::RegId;
 use llrm_lir::{Loc, Semantics};
 
+/// What the encoding rules ask of a register, read from its name once.
+#[derive(Clone, Copy)]
+struct RegisterTraits {
+    extended: bool,
+    byte_rex: bool,
+    accumulator: bool,
+}
+
+fn traits_of(phys: RegId) -> RegisterTraits {
+    static TABLE: std::sync::OnceLock<Vec<RegisterTraits>> = std::sync::OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        RegId::values()
+            .map(|reg| {
+                let name = format!("{reg:?}").to_lowercase();
+                RegisterTraits {
+                    extended: name
+                        .strip_prefix('r')
+                        .and_then(|n| n.trim_end_matches(char::is_alphabetic).parse::<u32>().ok())
+                        .is_some_and(|n| n >= 8),
+                    byte_rex: matches!(name.as_str(), "sil" | "dil" | "spl" | "bpl"),
+                    accumulator: matches!(name.as_str(), "al" | "ax" | "eax" | "rax"),
+                }
+            })
+            .collect()
+    });
+    table[phys.index()]
+}
+
 /// What register `phys` adds to the instruction `what` for `value`, from x86's
 /// encoding rules: `r8`..`r15` and, at byte width, `sil`/`dil`/`spl`/`bpl` need
 /// a REX prefix (one byte) unless the instruction has one anyway (a 64-bit
@@ -14,13 +42,7 @@ pub fn register_extra_bytes(
     value: u32,
     phys: RegId,
 ) -> i64 {
-    let name = format!("{phys:?}").to_lowercase();
-    let extended = name
-        .strip_prefix('r')
-        .and_then(|n| n.trim_end_matches(char::is_alphabetic).parse::<u32>().ok())
-        .is_some_and(|n| n >= 8);
-    let byte_rex = matches!(name.as_str(), "sil" | "dil" | "spl" | "bpl");
-    let accumulator = matches!(name.as_str(), "al" | "ax" | "eax" | "rax");
+    let RegisterTraits { extended, byte_rex, accumulator } = traits_of(phys);
     let operands = what.dests.iter().chain(&what.sources);
     // A 64-bit data operand puts REX.W on the instruction: a prefix is there.
     let wide = operands

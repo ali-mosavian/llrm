@@ -693,13 +693,13 @@ pub trait Target {
     /// How deep the floating register stack is: the roots of class `x87` its
     /// register file states.
     fn float_stack(&self) -> usize {
-        registers::parse(&self.registers_text()).map_or(0, |all| registers::of_class(&all, "x87").len())
+        registers::float_facts(&self.registers_text()).0
     }
 
     /// Whether scalar floating point lives in SSE registers: its register
     /// file states roots of class `xmm`.
     fn scalar_sse(&self) -> bool {
-        registers::parse(&self.registers_text()).is_ok_and(|all| !registers::of_class(&all, "xmm").is_empty())
+        registers::float_facts(&self.registers_text()).1
     }
 
     /// The indexed addresses a memory access may use, priced by `costs` (its
@@ -753,6 +753,7 @@ pub trait Target {
             pointer: self.frame_register(),
             stack: self.stack_pointer(),
             saved: self.callee_saved(),
+            vector_saved: Vec::new(),
             slot: self.stack_slot_bytes(),
             align: self.stack_alignment(),
             optional: self.frame_optional(),
@@ -821,6 +822,9 @@ pub struct FrameRegisters {
     pub stack: RegId,
     /// Each callee-saved register by its full register and the one pushed.
     pub saved: Vec<(RegId, RegId)>,
+    /// The callee-saved vector registers (Win64's xmm6-15), each by its full
+    /// register and itself: saved with `movaps` into the frame, not pushed.
+    pub vector_saved: Vec<(RegId, RegId)>,
     /// The bytes the stack is kept a multiple of.
     pub slot: i64,
     /// The bytes the stack pointer is a multiple of at a call, as the callee

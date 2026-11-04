@@ -95,7 +95,10 @@ pub fn target_lowering() -> TargetLowering {
     set(&[ShlParts, SrlParts, SraParts], &[MVT::I8, MVT::I16], Action::Expand);
     set(&[MulHS, MulHU, UMulLoHi, SMulLoHi, SDivRem, UDivRem], &[MVT::I8, MVT::I16], Action::Expand);
     set(&[CtTz, CtLz, CtPop, BSwap], &[MVT::I8, MVT::I16], Action::Expand);
-    set(&[SignExtendInReg], &[MVT::I1, MVT::I8, MVT::I16], Action::Expand);
+    // the action is by the type extended from (`LegalizeDAG`): a word from a
+    // byte is the byte sign-extended (`lower_sign_extend_inreg`)
+    set(&[SignExtendInReg], &[MVT::I1, MVT::I16], Action::Expand);
+    set(&[SignExtendInReg], &[MVT::I8], Action::Custom);
     set(&[Undef, Poison], &[MVT::I1, MVT::I8, MVT::I16], Action::Expand);
     set(&[ZeroExtend, AnyExtend, SignExtend], &[MVT::I8, MVT::I16], Action::Custom);
     set(&[SetCC, Select], &[MVT::I8, MVT::I16], Action::Custom);
@@ -139,10 +142,20 @@ impl Z80Lowering {
         node: SDValue,
     ) -> Option<SDValue> {
         let (value, amount) = (dag.operand(node, 0), dag.operand(node, 1));
-        if dag.constant(amount).is_some() {
+        let vt = dag.value_type(node);
+        if let Some(count) = dag.constant(amount) {
+            // a word shifted right by a byte or more, keeping its sign, is its
+            // high byte shifted by the rest and sign-extended: the bit by bit
+            // form is 2 instructions a bit
+            if dag.opcode(node) == ISD::Sra && vt == EVT::I16 && (8..16).contains(&count) {
+                let (eight, rest) = (dag.get_constant(8, EVT::I8), dag.get_constant(count - 8, EVT::I8));
+                let high = dag.get_node(ISD::Srl, EVT::I16, &[value, eight]);
+                let high = dag.get_node(ISD::Truncate, EVT::I8, &[high]);
+                let byte = if count == 8 { high } else { dag.get_node(ISD::Sra, EVT::I8, &[high, rest]) };
+                return Some(dag.get_node(ISD::SignExtend, EVT::I16, &[byte]));
+            }
             return Some(node);
         }
-        let vt = dag.value_type(node);
         let name = match (dag.opcode(node), vt) {
             (ISD::Shl, EVT::I8) => "__ashlqi3",
             (ISD::Srl, EVT::I8) => "__lshrqi3",
@@ -168,6 +181,7 @@ impl Hooks for Z80Lowering {
             ISD::Select => Some(lower_select(dag, node)),
             ISD::BrCond => Some(lower_brcond(dag, node)),
             ISD::ZeroExtend | ISD::AnyExtend | ISD::SignExtend => Some(lower_extend(dag, node)),
+            ISD::SignExtendInReg => lower_sign_extend_inreg(dag, node),
             ISD::GlobalAddress => lower_global_address(dag, node),
             ISD::Load if dag.value_type(node) == EVT::I1 => lower_bit_load(dag, node),
             ISD::Store if dag.value_type(dag.operand(node, 1)) == EVT::I1 => lower_bit_store(dag, node),
@@ -298,6 +312,23 @@ fn lower_bit_store(
     let (chain, value, ptr) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
     let byte = condition_byte(dag, value);
     Some(dag.get_store(chain, byte, ptr, MemInfo { mem_vt: EVT::I8, ..info }))
+}
+
+/// The low byte of a word sign-extended in place, `(sra (shl x, 8), 8)` as
+/// the expansion has it (sixteen single-bit shifts), is the byte sign-extended
+/// to a word: `ld e, a; rla; sbc a, a; ld d, a`. A sign-extending load of a
+/// byte reaches here, as the legalizer makes it an extending load and this
+/// (`LegalizeDAG`, `SEXTLOAD` expanded).
+fn lower_sign_extend_inreg(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let NodeData::ValueType(from) = dag.node(dag.operand(node, 1)).data else { return None };
+    if from != EVT::I8 || dag.value_type(node) != EVT::I16 {
+        return None;
+    }
+    let byte = dag.get_node(ISD::Truncate, EVT::I8, &[dag.operand(node, 0)]);
+    Some(dag.get_node(ISD::SignExtend, EVT::I16, &[byte]))
 }
 
 /// A condition widened to a byte or a word is `select cond, 1, 0`; any other

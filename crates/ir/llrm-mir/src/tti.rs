@@ -498,7 +498,8 @@ pub trait Tti {
         false
     }
 
-    /// DEVIATE REC-2: gcc's growth bar of the recursive edge at (-O2, -O3);
+    /// DEVIATE REC-2: gcc's growth bar of the recursive edge at (-O2, -O3),
+    /// in `gcc_insns` of the callee;
     /// none: no bar.
     fn recursive_edge_growth(&self) -> Option<(i64, i64)> {
         None
@@ -863,6 +864,24 @@ pub trait Tti {
         false
     }
 
+    /// Beyond the pin (AArch64 and ARM step by any small immediate): whether a
+    /// post-increment access of `access_bytes` may step its pointer by `step`
+    /// bytes. m68k's `(An)+` steps by the access size and no other amount.
+    fn is_post_inc_step_legal(
+        &self,
+        _access_bytes: i64,
+        _step: i64,
+    ) -> bool {
+        true
+    }
+
+    /// Beyond the pin: whether a size build keeps a loop whose closed form
+    /// (`rewriteLoopExitValues`) costs more code than the loop, as the 16-bit
+    /// targets do. m68k's wide multiplies are library calls.
+    fn sizes_exit_values(&self) -> bool {
+        false
+    }
+
     /// Beyond the pin: whether a strict exit compare of a unit-stride counter
     /// that never passes its bound should become `!=` (`exitne`). Counting to
     /// zero and testing `!=` is cheap where a decrement sets the flags and one
@@ -873,11 +892,10 @@ pub trait Tti {
         false
     }
 
-    /// Beyond the pin: the operations `IndVarSimplify`'s test replacement may
-    /// spend on a loop's exit limit (`SCEVCheapExpansionBudget`, 4), for a
-    /// function built for size or not. Where the original test is one compare
-    /// against a value already in hand, a limit such as `smax(n, 1)` costs
-    /// more than the rewrite saves.
+    /// A target's value of the pin's `cl::opt` `SCEVCheapExpansionBudget`
+    /// (default 4), for a function built for size or not: the operations
+    /// `IndVarSimplify`'s test replacement may spend on a loop's exit limit.
+    /// [pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L41)
     fn lftr_expansion_budget(
         &self,
         _optsize: bool,
@@ -959,6 +977,18 @@ pub trait Tti {
     /// also counts what the loop keeps live (DEVIATE LU3c); the pin's one.
     fn lsr_reserved_registers(&self) -> u32 {
         1
+    }
+
+    /// `TCC_Basic` in this target's cost units for `kind` (DEVIATE TB1; the
+    /// pin's is the constant 1): the SCEV expansion budgets
+    /// (`isHighCostExpansion`, 4 of them) are counted in it. A target whose
+    /// costs are not about one per instruction (the Z80 prices in machine
+    /// cycles) says what a basic instruction costs.
+    fn tcc_basic(
+        &self,
+        _kind: CostKind,
+    ) -> Cost {
+        Cost::BASIC
     }
 
     /// DEVIATE LU12: whether the adds of a use whose fixups all lie after the

@@ -779,14 +779,14 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::SetCC => self.visit_setcc(node),
             ISD::Xor => self.visit_xor(node).or_else(|| self.simplify_demanded(node)),
             ISD::BrCond => self.visit_brcond(node),
-            ISD::Mul => self.visit_mul(node),
+            ISD::Mul => self.visit_mul(node).or_else(|| self.simplify_demanded(node)),
             ISD::And => self
                 .visit_and(node)
                 .or_else(|| self.reduce_load_width_of(node))
                 .or_else(|| self.simplify_demanded(node))
                 .or_else(|| self.and_of_extload(node)),
             ISD::Or => self.visit_or(node).or_else(|| self.simplify_demanded(node)),
-            ISD::Add => self.visit_add(node),
+            ISD::Add => self.visit_add(node).or_else(|| self.simplify_demanded(node)),
             ISD::Sub => self.visit_sub(node),
             ISD::FAdd => self.visit_fadd(node),
             ISD::FSub => self.visit_fsub(node),
@@ -801,20 +801,27 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 .visit_shift(node)
                 .or_else(|| if op_is_srl(self.dag.opcode(node)) { self.reduce_load_width_of(node) } else { None })
                 .or_else(|| self.simplify_demanded(node)),
-            ISD::Sra => {
-                self.visit_sra(node).or_else(|| self.visit_shift(node)).or_else(|| self.reduce_load_width_of(node))
-            }
+            ISD::Sra => self
+                .visit_sra(node)
+                .or_else(|| self.visit_shift(node))
+                .or_else(|| self.reduce_load_width_of(node))
+                .or_else(|| self.simplify_demanded(node)),
             // `visitFunnelShift`, closing with `SimplifyDemandedBits(N)`.
             ISD::FShl | ISD::FShr => self.visit_funnel_shift(node).or_else(|| self.simplify_demanded(node)),
             ISD::BSwap => self.visit_bswap(node),
             ISD::Abs | ISD::AbsMinPoison => self.visit_abs(node),
             ISD::CtLz | ISD::CtTz => self.visit_ctlz_cttz(node),
             ISD::CtPop => self.visit_ctpop(node),
-            ISD::Rotl | ISD::Rotr => self.visit_rotate(node),
-            ISD::SMin | ISD::SMax | ISD::UMin | ISD::UMax => self.visit_iminmax(node),
+            ISD::Rotl | ISD::Rotr => self.visit_rotate(node).or_else(|| self.simplify_demanded(node)),
+            ISD::SMin | ISD::SMax | ISD::UMin | ISD::UMax => {
+                self.visit_iminmax(node).or_else(|| self.simplify_demanded(node))
+            }
             ISD::BitReverse => self.visit_bitreverse(node),
             ISD::SDiv => self.visit_sdiv(node),
-            ISD::UDiv => self.visit_udiv(node),
+            ISD::UDiv => self.visit_udiv(node).or_else(|| self.simplify_demanded(node)),
+            // `visitMULHU`: only its closing `SimplifyDemandedBits` (constant
+            // folding by known bits) is translated.
+            ISD::MulHU => self.simplify_demanded(node),
             ISD::SRem | ISD::URem => self.visit_rem(node),
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => self
                 .fold_extend_of_cast(node)
@@ -2159,6 +2166,17 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
             if c == b {
                 return Some(self.dag.get_node(ISD::Sub, vt, &[a, d]));
+            }
+        }
+        // `visitADDLikeCommutative`: a one-use `(c - x)` of a plain constant
+        // added to `y` is `(y - x) + c`, which the compare folds then see.
+        for (sub, other) in [(n0, n1), (n1, n0)] {
+            if self.dag.opcode(sub) == ISD::Sub
+                && self.dag.has_one_use(sub.node)
+                && plain(self.dag, self.dag.operand(sub, 0))
+            {
+                let diff = self.dag.get_node(ISD::Sub, vt, &[other, self.dag.operand(sub, 1)]);
+                return Some(self.dag.get_node(ISD::Add, vt, &[diff, self.dag.operand(sub, 0)]));
             }
         }
         if !self.reassociation_can_break_addressing_mode_pattern(node, n0, n1)
