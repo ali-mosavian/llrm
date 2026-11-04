@@ -113,6 +113,10 @@ const ZERO_TRIP_COUNT_WEIGHTS: [u32; 2] = [1, 127];
 pub struct Options {
     /// `MaxHeaderSize`.
     pub max_header_size: u32,
+    /// DEVIATE (size builds, target opt-in): the header is also held to the
+    /// `CodeSize` of the branches the rotation removes, the loop-closing jump
+    /// and the header's exit test.
+    pub priced_at_size: bool,
     /// `RotationOnly`: no `simplifyLoopLatch`.
     pub rotation_only: bool,
     /// `IsUtilMode`: rotate even a loop whose latch already exits.
@@ -640,6 +644,24 @@ fn rotate_loop(
         if metrics.num_insts.value > i64::from(run.options.max_header_size) {
             return None;
         }
+        if run.options.priced_at_size {
+            let size = |inst: InstId| {
+                llrm_mir::instructioncost::instruction_cost(
+                    run.tti,
+                    run.context,
+                    run.layout,
+                    run.globals,
+                    function,
+                    inst,
+                    llrm_mir::tti::CostKind::CodeSize,
+                )
+                .value
+            };
+            let latch_end = function.terminator(orig_latch).expect("a latch ends in a terminator");
+            if metrics.num_insts.value > size(header_end) + size(latch_end) {
+                return None;
+            }
+        }
         // When preparing for LTO, avoid rotating loops with calls that could be
         // inlined during the LTO stage.
         if run.options.prepare_for_lto && metrics.num_inline_candidates > 0 {
@@ -1007,6 +1029,7 @@ impl FunctionPass for LoopRotate {
         let tti = target_tti(outer.target());
         let options = Options {
             max_header_size: header_limit(self.duplicate_headers, self.size, outer.target()),
+            priced_at_size: self.size && tti.rotation_header_priced_at_size(),
             rotation_only: false,
             is_util_mode: false,
             prepare_for_lto: false,

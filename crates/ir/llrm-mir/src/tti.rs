@@ -362,6 +362,14 @@ pub trait Tti {
         0
     }
 
+    /// Whether a size build's loop rotation copies a header only when the copy
+    /// is no bigger than the branches the rotation removes: the loop-closing
+    /// jump and the header's own exit test, in `CodeSize`. False: the pass's
+    /// header limit alone.
+    fn rotation_header_priced_at_size(&self) -> bool {
+        false
+    }
+
     /// The fewest calls a callee has in the module for the bound above to hold
     /// its sites (a callee called once is the pin's: the copy
     /// meets constants the cost model follows, and folds with the sites around

@@ -284,6 +284,13 @@ impl Tti for AArch64 {
         "AArch64"
     }
 
+    /// -Os unrotate: a header no bigger than the branches rotation removes
+    /// (w15-unrotate-os-2026-11-03: limit 2 saved 404 B on jpeg_fixed,
+    /// jpeg_single, nbody and recchop, none larger).
+    fn rotation_header_priced_at_size(&self) -> bool {
+        true
+    }
+
     /// 0.004 B/clock, provisional: one byte of growth is 250 frequency-weighted
     /// clocks. The median of the -O2/-O3 cells where inlining grew the code
     /// (w15-arm64-rate-proposal-11-03.md); widened to 30 clean cells by 11-12.
