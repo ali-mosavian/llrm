@@ -1792,7 +1792,7 @@ pub fn emit(
         fvalues: HashMap::default(),
         ops: Vec::new(),
         pool: std::cell::RefCell::new(Vec::new()),
-        incoming: HashMap::new(),
+        incoming: HashMap::default(),
     };
     for &(size, align) in &first.frame {
         emitter.mf.slot(size, align);
