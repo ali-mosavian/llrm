@@ -442,8 +442,8 @@ pub trait Tti {
     }
 
     /// `getSchedModel().LoopMicroOpBufferSize`: the micro-ops the target's loop
-    /// buffer holds; 0 where its scheduling model has none (T11: only the
-    /// models of the cpus the plan page pins are known, and none has one).
+    /// buffer holds; 0 where its scheduling model has none (X86: 28 for the
+    /// `SandyBridgeModel` cpus; the others' models are not known here).
     fn loop_micro_op_buffer_size(&self) -> u32 {
         0
     }

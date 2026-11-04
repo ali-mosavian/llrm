@@ -20,6 +20,7 @@ fn rotated(module: &mut Module) -> bool {
         rotation_only: false,
         is_util_mode: false,
         prepare_for_lto: false,
+        check_exit_count: false,
     };
     rotate_function(module, "f", &tti, options).expect("rotates")
 }
@@ -214,6 +215,7 @@ declare i16 @late(i16)
         rotation_only: false,
         is_util_mode: false,
         prepare_for_lto: false,
+        check_exit_count: false,
     };
     let known = module.functions().position(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f") + 1;
     assert!(rotate_function_knowing(&mut module, "f", &tti, options, known).expect("rotates"), "{}", printed(&module));
@@ -382,6 +384,7 @@ fn rotated_priced(module: &mut Module) -> bool {
         rotation_only: false,
         is_util_mode: false,
         prepare_for_lto: false,
+        check_exit_count: false,
     };
     rotate_function(module, "f", &tti, options).expect("rotates")
 }
@@ -397,4 +400,55 @@ fn test_a_size_build_copies_a_header_only_when_it_is_no_bigger_than_the_removed_
         &COUNTED.replace("  %go = icmp slt i16 %i, %n\n", "  %t = add i16 %i, %acc\n  %go = icmp slt i16 %t, %n\n"),
     );
     assert!(!rotated_priced(&mut computing), "{}", printed(&computing));
+}
+
+/// Header exit `i < n` counts the trips; the latch exits on a load, which
+/// does not. No header phi dies by rotating, so only the late slot's
+/// `CheckExitCount` finds it profitable (PassBuilderPipelines.cpp#L1621):
+/// the rotated loop's trip count is computable for unrolling.
+const LATCH_UNCOUNTED: &str = "define i16 @f(i16 %n, ptr %p) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %go = icmp slt i16 %i, %n
+  br i1 %go, label %b2, label %b3
+
+b2:
+  %v = load i16, ptr %p
+  %next = add i16 %i, 1
+  %stop = icmp eq i16 %v, 0
+  br i1 %stop, label %b3, label %b1
+
+b3:
+  %r = phi i16 [ %i, %b1 ], [ %next, %b2 ]
+  ret i16 %r
+}
+";
+
+fn rotated_checking(check_exit_count: bool) -> bool {
+    let mut module = parsed(LATCH_UNCOUNTED);
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::lcssa::closed(function).expect("closes");
+    let tti = X86::of_cpu("i486").expect("a cpu");
+    let options = Options {
+        max_header_size: 16,
+        priced_at_size: false,
+        rotation_only: false,
+        is_util_mode: false,
+        prepare_for_lto: false,
+        check_exit_count,
+    };
+    rotate_function(&mut module, "f", &tti, options).expect("rotates")
+}
+
+/// Rotating a loop whose latch exit count it makes computable was never done:
+/// the late `loop-rotate<check-exit-count>` slot was absent (x_prefix-shaped
+/// loops stayed unrotated for unroll and LSR).
+#[test]
+fn test_check_exit_count_rotates_a_loop_whose_latch_exit_count_it_makes_computable() {
+    assert!(!rotated_checking(false), "premise: no header phi dies, the early slot leaves it");
+    assert!(rotated_checking(true));
 }

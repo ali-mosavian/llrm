@@ -1,4 +1,4 @@
-# 6502 gcc matrix, fork spike/mos-cmp-dedupe 4b9ca03ec (the shift fusion, a byte memory-to-memory move, the ldy hoist, bra on the 65C02, and a repeated cmp with only branches between is dropped) (gcc 17.0.0 master d77bceec), 2026-11-04, cc1 md5 72be3b592af937aacf3165494fa0bbea, sim65 = cc65 V2.19 source (sha256 157b8051…, fetched 2026-11-04T00:17:22Z) with an instruction counter, md5 880101364fa9dec38179c326ebff21fe, cl65 -t sim6502 (gcc) / sim65c02 (gcc-65c02, -m65c02); levels gcc -O1/-O2/-Os as run; clocks=(T101-T1)/100-9 and instrs=(I101-I1)/100-2 incl. argument set-up, return and helper calls; code_bytes=CODE+RODATA+DATA of the kernel object plus the plain hand-written helpers it calls. RESULT CONVENTION: the other columns return in A (A:X); gcc returns in rc2 (rc2:rc3), so every gcc cell is charged the caller's move into A (A:X): QI +2 B +3 clk +1 insn, 16-bit +4 B +6 clk +2 insn (lda rc2; ldx rc3); the note says so. Cells noted 'hand helper, not codegen' (mul/div/mem* helpers written by hand) or 'table, not codegen' (gcc-made constant table) are not compiler wins. ABI otherwise: args in zero-page rc2.. like ours, A/X/Y scratch; a cell that links cc65 library code is n/a
+# 6502 gcc matrix, fork spike/mos-ldy-fn 4f82446c3 (the shift fusion, a byte memory-to-memory move, the ldy hoist, bra on the 65C02, a repeated cmp with only branches between is dropped, and one ldy #n per function when it is the only Y write) (gcc 17.0.0 master d77bceec), 2026-11-04, cc1 md5 75d220259e20c1ded34ca45104c807f6, sim65 = cc65 V2.19 source (sha256 157b8051…, fetched 2026-11-04T00:17:22Z) with an instruction counter, md5 880101364fa9dec38179c326ebff21fe, cl65 -t sim6502 (gcc) / sim65c02 (gcc-65c02, -m65c02); levels gcc -O1/-O2/-Os as run; clocks=(T101-T1)/100-9 and instrs=(I101-I1)/100-2 incl. argument set-up, return and helper calls; code_bytes=CODE+RODATA+DATA of the kernel object plus the plain hand-written helpers it calls. RESULT CONVENTION: the other columns return in A (A:X); gcc returns in rc2 (rc2:rc3), so every gcc cell is charged the caller's move into A (A:X): QI +2 B +3 clk +1 insn, 16-bit +4 B +6 clk +2 insn (lda rc2; ldx rc3); the note says so. Cells noted 'hand helper, not codegen' (mul/div/mem* helpers written by hand) or 'table, not codegen' (gcc-made constant table) are not compiler wins. ABI otherwise: args in zero-page rc2.. like ours, A/X/Y scratch; a cell that links cc65 library code is n/a
 target	prog	level	compiler	code_bytes	clocks	instrs	note
 6502	zero	O1	gcc	7	20	5	incl. result move +2 B +3 clk +1 insn
 6502	zero	O2	gcc	7	20	5	incl. result move +2 B +3 clk +1 insn
@@ -39,15 +39,15 @@ target	prog	level	compiler	code_bytes	clocks	instrs	note
 6502	sum4	O1	gcc	38	67	20	incl. result move +2 B +3 clk +1 insn
 6502	sum4	O2	gcc	38	67	20	incl. result move +2 B +3 clk +1 insn
 6502	sum4	Os	gcc	38	67	20	incl. result move +2 B +3 clk +1 insn
-6502	slen	O1	gcc	59	302	89	incl. result move +4 B +6 clk +2 insn
-6502	slen	O2	gcc	55	306	90	incl. result move +4 B +6 clk +2 insn
+6502	slen	O1	gcc	57	280	78	incl. result move +4 B +6 clk +2 insn
+6502	slen	O2	gcc	53	284	79	incl. result move +4 B +6 clk +2 insn
 6502	slen	Os	gcc	43	314	89	incl. result move +4 B +6 clk +2 insn
-6502	scmp	O1	gcc	82	124	41	incl. result move +4 B +6 clk +2 insn
-6502	scmp	O2	gcc	103	112	37	incl. result move +4 B +6 clk +2 insn
+6502	scmp	O1	gcc	76	120	39	incl. result move +4 B +6 clk +2 insn
+6502	scmp	O2	gcc	97	110	36	incl. result move +4 B +6 clk +2 insn
 6502	scmp	Os	gcc	69	112	37	incl. result move +4 B +6 clk +2 insn
-6502	mcopy	O1	gcc	105	443	125	incl. result move +2 B +3 clk +1 insn
-6502	mcopy	O2	gcc	98	420	117	incl. result move +2 B +3 clk +1 insn
-6502	mcopy	Os	gcc	95	698	222	incl. result move +2 B +3 clk +1 insn
+6502	mcopy	O1	gcc	103	441	124	incl. result move +2 B +3 clk +1 insn
+6502	mcopy	O2	gcc	96	418	116	incl. result move +2 B +3 clk +1 insn
+6502	mcopy	Os	gcc	93	682	214	incl. result move +2 B +3 clk +1 insn
 6502	crc16	O1	gcc	139	4399	1354	incl. result move +4 B +6 clk +2 insn
 6502	crc16	O2	gcc	679	1945	644	table, not codegen; incl. result move +4 B +6 clk +2 insn
 6502	crc16	Os	gcc	106	5520	1702	incl. result move +4 B +6 clk +2 insn
@@ -57,17 +57,17 @@ target	prog	level	compiler	code_bytes	clocks	instrs	note
 6502	digits	O1	gcc	151	3466	1030	hand helper, not codegen; incl. result move +2 B +3 clk +1 insn; body 111 B + __udivhi3 38 B
 6502	digits	O2	gcc	140	3465	1032	hand helper, not codegen; incl. result move +2 B +3 clk +1 insn; body 100 B + __udivhi3 38 B
 6502	digits	Os	gcc	109	3310	988	hand helper, not codegen; incl. result move +2 B +3 clk +1 insn; body 69 B + __udivhi3 38 B
-6502	reverse	O1	gcc	106	406	117	incl. result move +2 B +3 clk +1 insn
-6502	reverse	O2	gcc	106	406	117	incl. result move +2 B +3 clk +1 insn
-6502	reverse	Os	gcc	92	526	162	incl. result move +2 B +3 clk +1 insn
+6502	reverse	O1	gcc	104	404	116	incl. result move +2 B +3 clk +1 insn
+6502	reverse	O2	gcc	104	404	116	incl. result move +2 B +3 clk +1 insn
+6502	reverse	Os	gcc	90	518	158	incl. result move +2 B +3 clk +1 insn
 6502	bsearch8	O1	gcc	111	389	134	incl. result move +2 B +3 clk +1 insn
 6502	bsearch8	O2	gcc	106	376	130	incl. result move +2 B +3 clk +1 insn
 6502	bsearch8	Os	gcc	94	399	137	incl. result move +2 B +3 clk +1 insn
 6502	sum16	O1	gcc	88	892	288	incl. result move +4 B +6 clk +2 insn
 6502	sum16	O2	gcc	88	892	288	incl. result move +4 B +6 clk +2 insn
 6502	sum16	Os	gcc	61	1028	326	incl. result move +4 B +6 clk +2 insn
-6502	schr	O1	gcc	67	214	68	incl. result move +2 B +3 clk +1 insn
-6502	schr	O2	gcc	70	214	68	incl. result move +2 B +3 clk +1 insn
+6502	schr	O1	gcc	65	206	64	incl. result move +2 B +3 clk +1 insn
+6502	schr	O2	gcc	68	206	64	incl. result move +2 B +3 clk +1 insn
 6502	schr	Os	gcc	50	187	58	incl. result move +2 B +3 clk +1 insn
 6502	lz4	O1	gcc	448	25178	6548	incl. result move +4 B +6 clk +2 insn
 6502	lz4	O2	gcc	437	24967	6475	incl. result move +4 B +6 clk +2 insn
@@ -84,8 +84,8 @@ target	prog	level	compiler	code_bytes	clocks	instrs	note
 6502	fletcher	O1	gcc	129	964	333	incl. result move +4 B +6 clk +2 insn
 6502	fletcher	O2	gcc	145	1022	347	incl. result move +4 B +6 clk +2 insn
 6502	fletcher	Os	gcc	106	1051	356	incl. result move +4 B +6 clk +2 insn
-6502	hash16	O1	gcc	108	1403	416	incl. result move +4 B +6 clk +2 insn
-6502	hash16	O2	gcc	102	1406	417	incl. result move +4 B +6 clk +2 insn
+6502	hash16	O1	gcc	106	1381	405	incl. result move +4 B +6 clk +2 insn
+6502	hash16	O2	gcc	100	1384	406	incl. result move +4 B +6 clk +2 insn
 6502	hash16	Os	gcc	98	1481	438	incl. result move +4 B +6 clk +2 insn
 6502	dotx	O1	gcc	84	536	162	incl. result move +2 B +3 clk +1 insn
 6502	dotx	O2	gcc	88	542	164	incl. result move +2 B +3 clk +1 insn
@@ -96,9 +96,9 @@ target	prog	level	compiler	code_bytes	clocks	instrs	note
 6502	k_asrax4	O1	gcc	35	79	25	incl. result move +4 B +6 clk +2 insn
 6502	k_asrax4	O2	gcc	35	79	25	incl. result move +4 B +6 clk +2 insn
 6502	k_asrax4	Os	gcc	35	79	25	incl. result move +4 B +6 clk +2 insn
-6502	k_atoi	O1	gcc	226	744	250	incl. result move +4 B +6 clk +2 insn
+6502	k_atoi	O1	gcc	222	730	243	incl. result move +4 B +6 clk +2 insn
 6502	k_atoi	O2	gcc	259	707	237	incl. result move +4 B +6 clk +2 insn
-6502	k_atoi	Os	gcc	189	730	245	incl. result move +4 B +6 clk +2 insn
+6502	k_atoi	Os	gcc	187	716	238	incl. result move +4 B +6 clk +2 insn
 6502	k_imul8x8r16	O1	gcc	73	652	183	hand helper, not codegen; incl. result move +4 B +6 clk +2 insn; body 26 B + __mulhi3 43 B
 6502	k_imul8x8r16	O2	gcc	73	652	183	hand helper, not codegen; incl. result move +4 B +6 clk +2 insn; body 26 B + __mulhi3 43 B
 6502	k_imul8x8r16	Os	gcc	73	652	183	hand helper, not codegen; incl. result move +4 B +6 clk +2 insn; body 26 B + __mulhi3 43 B
@@ -129,9 +129,9 @@ target	prog	level	compiler	code_bytes	clocks	instrs	note
 6502	k_memcpy	O1	gcc	62	385	106	incl. result move +4 B +6 clk +2 insn
 6502	k_memcpy	O2	gcc	62	385	106	incl. result move +4 B +6 clk +2 insn
 6502	k_memcpy	Os	gcc	64	656	209	incl. result move +4 B +6 clk +2 insn
-6502	k_memmove	O1	gcc	142	470	137	incl. result move +4 B +6 clk +2 insn
-6502	k_memmove	O2	gcc	142	470	137	incl. result move +4 B +6 clk +2 insn
-6502	k_memmove	Os	gcc	140	574	166	incl. result move +4 B +6 clk +2 insn
+6502	k_memmove	O1	gcc	140	456	130	incl. result move +4 B +6 clk +2 insn
+6502	k_memmove	O2	gcc	140	456	130	incl. result move +4 B +6 clk +2 insn
+6502	k_memmove	Os	gcc	138	560	159	incl. result move +4 B +6 clk +2 insn
 6502	k_memset	O1	gcc	56	991	289	incl. result move +4 B +6 clk +2 insn
 6502	k_memset	O2	gcc	101	1324	407	hand helper, not codegen; incl. result move +4 B +6 clk +2 insn; body 60 B + __memset 37 B
 6502	k_memset	Os	gcc	51	1704	537	incl. result move +4 B +6 clk +2 insn
@@ -165,57 +165,57 @@ target	prog	level	compiler	code_bytes	clocks	instrs	note
 6502	k_shrax7	O1	gcc	33	98	22	incl. result move +4 B +6 clk +2 insn
 6502	k_shrax7	O2	gcc	33	98	22	incl. result move +4 B +6 clk +2 insn
 6502	k_shrax7	Os	gcc	33	98	22	incl. result move +4 B +6 clk +2 insn
-6502	k_stpcpy	O1	gcc	47	488	131	incl. result move +4 B +6 clk +2 insn
-6502	k_stpcpy	O2	gcc	47	488	131	incl. result move +4 B +6 clk +2 insn
+6502	k_stpcpy	O1	gcc	45	466	120	incl. result move +4 B +6 clk +2 insn
+6502	k_stpcpy	O2	gcc	45	466	120	incl. result move +4 B +6 clk +2 insn
 6502	k_stpcpy	Os	gcc	32	488	128	incl. result move +4 B +6 clk +2 insn
-6502	k_strchr	O1	gcc	42	168	53	incl. result move +4 B +6 clk +2 insn
-6502	k_strchr	O2	gcc	45	175	54	incl. result move +4 B +6 clk +2 insn
+6502	k_strchr	O1	gcc	40	160	49	incl. result move +4 B +6 clk +2 insn
+6502	k_strchr	O2	gcc	43	163	49	incl. result move +4 B +6 clk +2 insn
 6502	k_strchr	Os	gcc	34	170	53	incl. result move +4 B +6 clk +2 insn
-6502	k_strcmp	O1	gcc	81	846	249	incl. result move +4 B +6 clk +2 insn
-6502	k_strcmp	O2	gcc	84	846	249	incl. result move +4 B +6 clk +2 insn
+6502	k_strcmp	O1	gcc	79	814	233	incl. result move +4 B +6 clk +2 insn
+6502	k_strcmp	O2	gcc	82	814	233	incl. result move +4 B +6 clk +2 insn
 6502	k_strcmp	Os	gcc	64	863	249	incl. result move +4 B +6 clk +2 insn
 6502	k_strcpy	O1	gcc	53	507	133	incl. result move +4 B +6 clk +2 insn
 6502	k_strcpy	O2	gcc	53	507	133	incl. result move +4 B +6 clk +2 insn
 6502	k_strcpy	Os	gcc	37	487	126	incl. result move +4 B +6 clk +2 insn
-6502	k_strcspn	O1	gcc	119	376	122	incl. result move +4 B +6 clk +2 insn
-6502	k_strcspn	O2	gcc	160	381	122	incl. result move +4 B +6 clk +2 insn
-6502	k_strcspn	Os	gcc	88	398	128	incl. result move +4 B +6 clk +2 insn
+6502	k_strcspn	O1	gcc	115	364	116	incl. result move +4 B +6 clk +2 insn
+6502	k_strcspn	O2	gcc	152	367	115	incl. result move +4 B +6 clk +2 insn
+6502	k_strcspn	Os	gcc	86	380	119	incl. result move +4 B +6 clk +2 insn
 6502	k_stricmp	O1	gcc	147	1514	519	incl. result move +4 B +6 clk +2 insn
 6502	k_stricmp	O2	gcc	137	1468	510	incl. result move +4 B +6 clk +2 insn
 6502	k_stricmp	Os	gcc	105	1512	509	incl. result move +4 B +6 clk +2 insn
-6502	k_strlen	O1	gcc	59	302	89	incl. result move +4 B +6 clk +2 insn
-6502	k_strlen	O2	gcc	55	306	90	incl. result move +4 B +6 clk +2 insn
+6502	k_strlen	O1	gcc	57	280	78	incl. result move +4 B +6 clk +2 insn
+6502	k_strlen	O2	gcc	53	284	79	incl. result move +4 B +6 clk +2 insn
 6502	k_strlen	Os	gcc	43	314	89	incl. result move +4 B +6 clk +2 insn
-6502	k_strlower	O1	gcc	79	640	217	incl. result move +4 B +6 clk +2 insn
-6502	k_strlower	O2	gcc	73	651	216	incl. result move +4 B +6 clk +2 insn
-6502	k_strlower	Os	gcc	68	700	232	incl. result move +4 B +6 clk +2 insn
+6502	k_strlower	O1	gcc	75	608	201	incl. result move +4 B +6 clk +2 insn
+6502	k_strlower	O2	gcc	69	619	200	incl. result move +4 B +6 clk +2 insn
+6502	k_strlower	Os	gcc	66	668	216	incl. result move +4 B +6 clk +2 insn
 6502	k_strncmp	O1	gcc	96	980	295	incl. result move +4 B +6 clk +2 insn
 6502	k_strncmp	O2	gcc	95	1032	312	incl. result move +4 B +6 clk +2 insn
 6502	k_strncmp	Os	gcc	115	1617	523	incl. result move +4 B +6 clk +2 insn
-6502	k_strncpy	O1	gcc	104	977	280	incl. result move +4 B +6 clk +2 insn
+6502	k_strncpy	O1	gcc	102	959	271	incl. result move +4 B +6 clk +2 insn
 6502	k_strncpy	O2	gcc	144	1148	337	hand helper, not codegen; incl. result move +4 B +6 clk +2 insn; body 103 B + __memset 37 B
-6502	k_strncpy	Os	gcc	100	1223	369	incl. result move +4 B +6 clk +2 insn
+6502	k_strncpy	Os	gcc	98	1183	349	incl. result move +4 B +6 clk +2 insn
 6502	k_strnicmp	O1	gcc	164	1510	510	incl. result move +4 B +6 clk +2 insn
 6502	k_strnicmp	O2	gcc	154	1441	492	incl. result move +4 B +6 clk +2 insn
 6502	k_strnicmp	Os	gcc	157	2027	707	incl. result move +4 B +6 clk +2 insn
 6502	k_strnlen	O1	gcc	81	895	293	incl. result move +4 B +6 clk +2 insn
 6502	k_strnlen	O2	gcc	84	911	293	incl. result move +4 B +6 clk +2 insn
 6502	k_strnlen	Os	gcc	61	947	305	incl. result move +4 B +6 clk +2 insn
-6502	k_strpbrk	O1	gcc	97	328	105	incl. result move +4 B +6 clk +2 insn
-6502	k_strpbrk	O2	gcc	122	330	104	incl. result move +4 B +6 clk +2 insn
-6502	k_strpbrk	Os	gcc	67	318	100	incl. result move +4 B +6 clk +2 insn
+6502	k_strpbrk	O1	gcc	93	316	99	incl. result move +4 B +6 clk +2 insn
+6502	k_strpbrk	O2	gcc	116	318	98	incl. result move +4 B +6 clk +2 insn
+6502	k_strpbrk	Os	gcc	65	300	91	incl. result move +4 B +6 clk +2 insn
 6502	k_strrchr	O1	gcc	61	442	140	incl. result move +4 B +6 clk +2 insn
 6502	k_strrchr	O2	gcc	58	446	138	incl. result move +4 B +6 clk +2 insn
 6502	k_strrchr	Os	gcc	50	432	133	incl. result move +4 B +6 clk +2 insn
-6502	k_strspn	O1	gcc	121	192	62	incl. result move +4 B +6 clk +2 insn
-6502	k_strspn	O2	gcc	132	197	64	incl. result move +4 B +6 clk +2 insn
-6502	k_strspn	Os	gcc	88	198	64	incl. result move +4 B +6 clk +2 insn
-6502	k_strstr	O1	gcc	107	525	167	incl. result move +4 B +6 clk +2 insn
-6502	k_strstr	O2	gcc	110	525	166	incl. result move +4 B +6 clk +2 insn
+6502	k_strspn	O1	gcc	117	188	60	incl. result move +4 B +6 clk +2 insn
+6502	k_strspn	O2	gcc	126	191	61	incl. result move +4 B +6 clk +2 insn
+6502	k_strspn	Os	gcc	86	192	61	incl. result move +4 B +6 clk +2 insn
+6502	k_strstr	O1	gcc	101	497	153	incl. result move +4 B +6 clk +2 insn
+6502	k_strstr	O2	gcc	104	497	152	incl. result move +4 B +6 clk +2 insn
 6502	k_strstr	Os	gcc	83	517	159	incl. result move +4 B +6 clk +2 insn
-6502	k_strupper	O1	gcc	79	640	217	incl. result move +4 B +6 clk +2 insn
-6502	k_strupper	O2	gcc	73	651	216	incl. result move +4 B +6 clk +2 insn
-6502	k_strupper	Os	gcc	68	700	232	incl. result move +4 B +6 clk +2 insn
+6502	k_strupper	O1	gcc	75	608	201	incl. result move +4 B +6 clk +2 insn
+6502	k_strupper	O2	gcc	69	619	200	incl. result move +4 B +6 clk +2 insn
+6502	k_strupper	Os	gcc	66	668	216	incl. result move +4 B +6 clk +2 insn
 6502	k_tolower	O1	gcc	44	80	28	incl. result move +4 B +6 clk +2 insn
 6502	k_tolower	O2	gcc	42	77	27	incl. result move +4 B +6 clk +2 insn
 6502	k_tolower	Os	gcc	41	76	27	incl. result move +4 B +6 clk +2 insn
@@ -314,10 +314,10 @@ target	prog	level	compiler	code_bytes	clocks	instrs	note
 6502	schr	Os	gcc-65c02	47	185	57	incl. result move +2 B +3 clk +1 insn
 6502	lz4	O1	gcc-65c02	414	24389	6477	incl. result move +4 B +6 clk +2 insn
 6502	lz4	O2	gcc-65c02	407	24225	6425	incl. result move +4 B +6 clk +2 insn
-6502	lz4	Os	gcc-65c02	399	51302	16292	incl. result move +4 B +6 clk +2 insn
+6502	lz4	Os	gcc-65c02	397	51290	16286	incl. result move +4 B +6 clk +2 insn
 6502	lz4c	O1	gcc-65c02	485	50542	14774	incl. result move +4 B +6 clk +2 insn
 6502	lz4c	O2	gcc-65c02	479	50394	14724	incl. result move +4 B +6 clk +2 insn
-6502	lz4c	Os	gcc-65c02	480	93330	30290	incl. result move +4 B +6 clk +2 insn
+6502	lz4c	Os	gcc-65c02	478	93318	30284	incl. result move +4 B +6 clk +2 insn
 6502	xs8	O1	gcc-65c02	46	339	125	incl. result move +2 B +3 clk +1 insn
 6502	xs8	O2	gcc-65c02	46	339	125	incl. result move +2 B +3 clk +1 insn
 6502	xs8	Os	gcc-65c02	40	340	124	incl. result move +2 B +3 clk +1 insn
@@ -340,7 +340,7 @@ target	prog	level	compiler	code_bytes	clocks	instrs	note
 6502	k_asrax4	O2	gcc-65c02	35	79	25	incl. result move +4 B +6 clk +2 insn
 6502	k_asrax4	Os	gcc-65c02	35	79	25	incl. result move +4 B +6 clk +2 insn
 6502	k_atoi	O1	gcc-65c02	205	701	231	incl. result move +4 B +6 clk +2 insn
-6502	k_atoi	O2	gcc-65c02	236	676	222	incl. result move +4 B +6 clk +2 insn
+6502	k_atoi	O2	gcc-65c02	234	676	222	incl. result move +4 B +6 clk +2 insn
 6502	k_atoi	Os	gcc-65c02	172	690	227	incl. result move +4 B +6 clk +2 insn
 6502	k_imul8x8r16	O1	gcc-65c02	73	652	183	hand helper, not codegen; incl. result move +4 B +6 clk +2 insn; body 26 B + __mulhi3 43 B
 6502	k_imul8x8r16	O2	gcc-65c02	73	652	183	hand helper, not codegen; incl. result move +4 B +6 clk +2 insn; body 26 B + __mulhi3 43 B
