@@ -634,11 +634,9 @@ fn options_for(
             .map(|name| (name.to_owned(), number, pattern.replace('*', name)))
             .collect();
         if default.cc.as_deref() == Some("sysv") && default.symbol.contains_key(format) {
-            options.pipeline.library = vec![llrm_mir::libfunc::Routine {
-                standard: "strlen",
-                symbol: pattern.replace('*', "strlen"),
-                calling_convention: number,
-            }];
+            let names = ["strlen"].into_iter().chain(llrm_mir::libfunc::HOSTED_COMPARE);
+            options.pipeline.library =
+                llrm_mir::libfunc::Routine::stated(names, |name| pattern.replace('*', name), number);
         }
     }
     options
@@ -699,8 +697,8 @@ mod options_tests {
             "{:?}",
             sysv.libcalls
         );
-        assert_eq!(sysv.pipeline.library.len(), 1);
-        assert_eq!(sysv.pipeline.library[0].symbol, "_strlen");
+        let symbols: Vec<_> = sysv.pipeline.library.iter().map(|routine| routine.symbol.as_str()).collect();
+        assert_eq!(symbols, ["_strlen", "_memcmp", "_bcmp"]);
     }
 }
 

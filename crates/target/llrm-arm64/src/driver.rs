@@ -202,10 +202,8 @@ pub fn optimized_at(
 /// The routines the C link of this target resolves, by their IR names (the
 /// object writer decorates them): what `SimplifyLibCalls` may form.
 fn c_library() -> Vec<llrm_mir::libfunc::Routine> {
-    ["puts", "putchar", "fwrite", "fputc", "fputs"]
-        .into_iter()
-        .map(|name| llrm_mir::libfunc::Routine { standard: name, symbol: name.to_owned(), calling_convention: 0 })
-        .collect()
+    let names = ["puts", "putchar", "fwrite", "fputc", "fputs"].into_iter().chain(llrm_mir::libfunc::HOSTED_COMPARE);
+    llrm_mir::libfunc::Routine::stated(names, str::to_owned, 0)
 }
 
 /// Which instruction selector makes the machine function (`--isel=`).

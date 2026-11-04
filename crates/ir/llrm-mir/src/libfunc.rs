@@ -453,3 +453,20 @@ pub struct Routine {
     /// The MIR calling convention number of the ABI's C convention.
     pub calling_convention: u32,
 }
+
+impl Routine {
+    /// The routines `names` of a target's C library, each by the symbol
+    /// `symbol` spells it: what `SimplifyLibCalls` and `LoopIdiomRecognize` may
+    /// form where the program links that library.
+    pub fn stated<'a>(
+        names: impl IntoIterator<Item = &'static str>,
+        symbol: impl Fn(&str) -> String + 'a,
+        calling_convention: u32,
+    ) -> Vec<Routine> {
+        names.into_iter().map(|standard| Routine { standard, symbol: symbol(standard), calling_convention }).collect()
+    }
+}
+
+/// `memcmp` and `bcmp`: in every hosted C library the compare arms of
+/// `SimplifyLibCalls` form (the pin states them from the triple).
+pub const HOSTED_COMPARE: [&str; 2] = ["memcmp", "bcmp"];
