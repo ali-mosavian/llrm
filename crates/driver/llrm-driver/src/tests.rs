@@ -3603,3 +3603,26 @@ fn a_win64_function_with_an_unprobed_shape_is_refused() {
         }
     }
 }
+
+/// `(x & 0xffff0000) == 0` on an `i64` is a shift and a 16-bit test, the pin's
+/// shifted-mask case of `X86ISD::CMP`: the mask needs a 64-bit immediate
+/// otherwise, and the `and` held a copy of `x` live. Not translated, it was
+/// `mov`, `and`, `test rax, rax`.
+#[test]
+fn a_64_bit_compare_with_a_shifted_mask_is_a_shift_and_a_narrow_test() {
+    let listing_of = |mask: u64| {
+        let body = format!(
+            "define i1 @f(i64 %x) {{\n  %a = and i64 %x, {mask}\n  %c = icmp eq i64 %a, 0\n  ret i1 %c\n}}\n"
+        );
+        let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &format!("{SYSV}{body}"), "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let middle = listing_of(0xFFFF_0000);
+    assert!(middle.contains("shr rdi, 16") && middle.contains("test di, di"), "{middle}");
+    assert!(!middle.contains("and "), "{middle}");
+    // A mask reaching the low bit is a `shl` (one reaching the sign bit is
+    // `icmp ult` before selection).
+    let low = listing_of(0x0000_FFFF_FFFF_FFFF);
+    assert!(low.contains("shl rdi, 16"), "{low}");
+    assert!(!low.contains("and ") && !low.contains("movabs"), "{low}");
+}

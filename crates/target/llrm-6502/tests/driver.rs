@@ -1458,6 +1458,18 @@ define i8 @fits() {
     assert_eq!(exit_code_of(&text, "fits"), 0, "{text}");
 }
 
+/// A borrow compared with a byte was loaded back into C for a `cmp` that takes
+/// a byte: `llrm-6502-llc` refused X16 BASIC's `fp_fin` at -O2 ("operand c"),
+/// and with it all of mathlib.c. The fixture is that function cut to the 60
+/// blocks that still refused; it compiles, and the compare reads the saved
+/// 0 or 1.
+#[test]
+fn a_borrow_compared_with_a_byte_is_the_saved_byte_not_c() {
+    let ir = module(include_str!("data/borrow_compared_with_a_byte.ll"));
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("fp_fin:"), "{text}");
+}
+
 /// The carry between the two halves of a 32-bit add was made into a byte and
 /// read back (`lda #0; rol a; lsr a`), and the carry out of the last half into
 /// a byte nothing read. `0x1FFFF + 1` has byte 2 equal to 2.

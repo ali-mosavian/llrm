@@ -631,7 +631,14 @@ fn lower(
                         }
                         let at = location(module, name, one, input, values, cells)?;
                         match &at {
-                            Operand::Reg(text) if cells.saved.contains_key(text) => {
+                            // a carry read as a value (a compare of two bits)
+                            // is the saved byte, 0 or 1; only a carry operand
+                            // is loaded back into C
+                            Operand::Reg(text)
+                                if cells.saved.contains_key(text)
+                                    && !(cells.saved[text]
+                                        && desc.operands.get(operands.len()).is_some_and(|o| o.reg_class != CARRY)) =>
+                            {
                                 let carry = cells.saved[text];
                                 before.push(MInst::new(
                                     if carry { spill::LOAD_CARRY } else { spill::LOAD_FLAGS },

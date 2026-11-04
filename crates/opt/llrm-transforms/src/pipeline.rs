@@ -1228,6 +1228,11 @@ pub fn recorded(
             manager.add_program(crate::walk::Walk {
                 inline: applied.options.inline,
                 speed_rate: applied.options.prices_bytes(),
+                promote_rate: Some(if applied.options.prefers_size() {
+                    0
+                } else {
+                    applied.options.limits.milliclocks_per_byte
+                }),
                 simplify: Box::new(move |module, analyses, id, stage| {
                     TRIGGER.with(|trigger| *trigger.borrow_mut() = stage.to_owned());
                     rerun(module, analyses, id, &mut simplify, true)

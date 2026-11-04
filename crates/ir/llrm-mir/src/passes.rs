@@ -427,6 +427,11 @@ impl Declared {
         }
     }
 
+    /// The module's globals as declarations, where the pass was given them.
+    pub fn declarations(&self) -> Option<&[GlobalValue]> {
+        self.held.as_deref().map(Vec::as_slice)
+    }
+
     /// The metadata nodes made so far, which the module has after the pass.
     pub fn nodes(&self) -> &[crate::module::MetadataNode] {
         &self.nodes

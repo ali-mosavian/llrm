@@ -335,6 +335,7 @@ pub fn functions_with(
             None => crate::regalloc::allocate(&mut machine),
         };
         dump("RegAlloc", &machine);
+        crate::copyprop::run(&mut machine);
         crate::postrasink::run(&mut machine);
         dump("PostRaSink", &machine);
         let variables = crate::frame::variable_offsets(&machine, &allocation, platform == Platform::Darwin);
