@@ -257,6 +257,26 @@ impl CoalescerPair {
         env: &dyn CoalescerEnv,
     ) -> Option<Self> {
         let (dst, src) = move_copy(copy)?;
+        // A copy that defines only some lanes of its destination (the
+        // destination is wider than the bytes it names) is a lane copy
+        // whatever the widths and offsets say.
+        if copy.def_lanes.iter().any(|(value, _)| *value == dst.value) && src.offset == 0 && src.value != dst.value {
+            let shareable = match dst.offset {
+                0 => env.can_share_sub(src.value, dst.value),
+                offset => env.can_share_lane(src.value, dst.value, offset),
+            };
+            if !shareable {
+                return None;
+            }
+            return Some(Self {
+                src_reg: src.value,
+                dst_reg: dst.value,
+                flipped: false,
+                partial: true,
+                lane_offset: dst.offset,
+                lane_width: src.width,
+            });
+        }
         if is_whole(dst, src) {
             if !env.can_share(src.value, dst.value) {
                 return None;
@@ -334,7 +354,8 @@ impl CoalescerPair {
         insn: &Insn,
     ) -> bool {
         let Some((dst, src)) = move_copy(insn) else { return false };
-        if self.partial == is_whole(dst, src) {
+        let lane_def = insn.def_lanes.iter().any(|(value, _)| *value == dst.value);
+        if self.partial == (is_whole(dst, src) && !lane_def) {
             return false;
         }
         if self.partial && dst.offset.max(src.offset) != self.lane_offset {
