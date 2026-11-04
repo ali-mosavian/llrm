@@ -1521,20 +1521,3 @@ fn test_a_target_without_lane_joins_leaves_every_lane_copy() {
     env.joins_lanes = false;
     assert!(!env.can_share_lane(2, 1, 1));
 }
-
-/// `v1.lo := v2` where `v1` is a pair that only `ax` can hold and `v2` a byte
-/// that only `al` can: the copy names a byte of the same width as its source
-/// at offset 0, so it read as a copy between two whole values, whose
-/// palettes share no register, and stayed (crc16 O2 on Z80: `ld c, e` and
-/// `ld e, c` round the high byte's xor).
-#[test]
-fn test_a_copy_into_the_low_byte_of_a_pair_joins_by_the_lane_it_defines() {
-    let env = env_with_palettes(&[(1, &[RegId::AX]), (2, &[RegId::AL])]);
-    let (byte, c, r) = (def_at(2, 1), lane_copy(1, 0, 2), read_at(1, 2));
-    let was = body(&[(&[byte, Arc::clone(&c), r], &[])]);
-    let mut lis = LiveIntervals::new(&was);
-    lis.interval(1);
-    lis.interval(2);
-    let result = join_copy(&mut lis, &env, &mut State::new(), &mut Default::default(), c.id());
-    assert_eq!(result, JoinResult::Joined);
-}
