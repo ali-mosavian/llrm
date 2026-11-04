@@ -73,6 +73,24 @@ fn live_in(function: &MFunc, successors: &[Vec<usize>]) -> Vec<u64> {
     live
 }
 
+/// Where a block's way on really leads: a block that is one jump (an edge
+/// block, which the pin never makes where no copy needs the edge) is not a
+/// place to put a copy, so its jump's target stands for it.
+fn through(
+    function: &MFunc,
+    successors: &[Vec<usize>],
+    mut block: usize,
+) -> usize {
+    for _ in 0..successors.len() {
+        let ops = &function.blocks[block].ops;
+        match (ops.len(), successors[block].as_slice()) {
+            (1, [only]) if matches!(ops[0], Op::I(crate::mc::inst::Inst::Branch { link: false, .. })) => block = *only,
+            _ => break,
+        }
+    }
+    block
+}
+
 pub fn run(function: &mut MFunc) {
     let count = function.blocks.len();
     let successors: Vec<Vec<usize>> = {
@@ -83,13 +101,18 @@ pub fn run(function: &mut MFunc) {
     if successors.iter().all(|next| next.len() < 2) {
         return;
     }
+    // The graph the copies move over: edge blocks seen through.
+    let seen: Vec<Vec<usize>> = successors
+        .iter()
+        .map(|next| next.iter().map(|&one| through(function, &successors, one)).collect())
+        .collect();
     let mut predecessors = vec![0usize; count];
-    for next in successors.iter().flatten() {
+    for next in seen.iter().flatten() {
         predecessors[*next] += 1;
     }
     let mut live = live_in(function, &successors);
     for at in 0..count {
-        sink_copies(function, at, &successors[at], &predecessors, &mut live);
+        sink_copies(function, at, &seen[at], &predecessors, &mut live);
     }
 }
 

@@ -17,3 +17,14 @@ fn the_early_exit_runs_before_the_frame() {
     let frame = body.find("stp x29, x30").expect("the frame");
     assert!(test < frame, "{body}");
 }
+
+/// A block that is one jump (the edge out of a branch whose target has other
+/// predecessors) is no place for a copy: the pin has no such block, and the
+/// copy sunk into ours cost a `b` back (switch -Os: +4 B).
+#[test]
+fn a_copy_is_not_sunk_into_an_edge_block() {
+    let asm =
+        driver::assembly(include_str!("data/post_ra_sink_edge.ll"), Platform::Linux, Level::Os).expect("lowers");
+    let jumps = asm.lines().filter(|line| line.starts_with("\tb ")).count();
+    assert_eq!(jumps, 7, "{asm}");
+}
