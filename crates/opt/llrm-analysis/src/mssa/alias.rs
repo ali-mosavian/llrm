@@ -139,6 +139,7 @@ impl<'a> AliasQuery<'a> {
         // The pin's order (`buildDefaultAAPipeline`): BasicAA first, so that
         // type-based answers are asked only of what it leaves MayAlias.
         stack.add_aa_result(crate::basicaa::BasicAA::new(unit));
+        stack.add_aa_result(crate::scopednoaliasaa::ScopedNoAliasAA::new(unit));
         stack.add_aa_result(crate::typebasedaa::TypeBasedAA::new(unit));
         if let Some(info) = unit.globals_mr {
             stack.add_aa_result(crate::globalsmodref::GlobalsAAResult::new(unit, info));
