@@ -382,3 +382,35 @@ fn a_sqrt_of_a_square_is_the_intrinsic_where_the_target_has_a_sqrt() {
     let slow = run(Default::default());
     assert!(slow.contains("call double @sqrt"), "no sqrt instruction: the call stays\n{slow}");
 }
+
+const MEMCHR: &str = "@s = constant [3 x i8] c\"abc\"
+declare ptr @memchr(ptr, i16, i16)
+define i16 @f(i16 %c) {
+b0:
+  %p = call ptr @memchr(ptr @s, i16 %c, i16 3)
+  %base = ptrtoint ptr @s to i16
+  %at = ptrtoint ptr %p to i16
+  %off = sub i16 %at, %base
+  %none = icmp eq ptr %p, null
+  %r = select i1 %none, i16 -1, i16 %off
+  ret i16 %r
+}
+";
+
+/// `memchr` of a three-byte constant string was a library call; the pin's
+/// `foldMemChr` makes it a switch on the byte to the index of its first
+/// occurrence, null otherwise. The folded body is run for every byte it can
+/// find and for two it cannot.
+#[test]
+fn a_memchr_of_a_short_constant_string_is_a_switch_on_the_byte() {
+    let mut module = parsed(&format!("{DOS}{MEMCHR}"));
+    managed(&mut module, AggressiveInstCombine);
+    let after = managed(&mut module, crate::dead::Dead);
+    assert!(!after.contains("call ptr @memchr"), "{after}");
+    assert!(after.contains("switch i8"), "{after}");
+    for (c, want) in [(97, 0), (98, 1), (99, 2), (100, 0xffff), (0, 0xffff)] {
+        let got = results(&module, &[&[c]]);
+        let want = llrm_mir::interpret::Val::Int { bits: want, width: 16 };
+        assert_eq!(got, vec![want], "memchr(\"abc\", {c})\n{after}");
+    }
+}
