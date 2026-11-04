@@ -93,3 +93,10 @@ def test_z80_table_header_names_the_single_tu_ice():
     """The shipped z80 cc1 ICEs on a single-TU softfloat build at -O2; the table says so, so no gcc cell is added for such a build."""
     root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tables", "z80-gcc.tsv")
     assert "single-translation-unit softfloat build" in open(root).readline()
+
+
+def test_z80_tables_name_the_same_cc1():
+    """The kernel and softfloat z80 tables are produced by one cc1: a swap that changes one header and not the other mixes compilers."""
+    t = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tables")
+    md5s = {re.search(r"cc1 md5 ([0-9a-f]{32})", open(os.path.join(t, n)).readline()).group(1) for n in ("z80-gcc.tsv", "softfloat-z80.tsv")}
+    assert len(md5s) == 1, md5s
