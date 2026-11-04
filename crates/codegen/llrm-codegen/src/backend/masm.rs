@@ -3676,9 +3676,6 @@ mod tests {
         block.into()
     }
 
-    /// The first line of a join is a statement when a predecessor ends on
-    /// another line; ours marked no row `ForceStmt`, so a row on the line of
-    /// the one before it was never a statement, whichever way control came.
     /// The i64 `sdiv` expansion (register-form ALU ops, `div`, short jumps,
     /// `push ebp`/`pop ebp`) has no memory operand; `may_address_frame` read it
     /// as one and kept `push bp; mov bp, sp` on `main_` (data_int64 -Os +4 B).
@@ -3694,6 +3691,9 @@ mod tests {
         assert!(may_address_frame(&[InlinePart::Bytes(vec![0x66, 0x8b, 0x46, 0x04])]));
     }
 
+    /// The first line of a join is a statement when a predecessor ends on
+    /// another line; ours marked no row `ForceStmt`, so a row on the line of
+    /// the one before it was never a statement, whichever way control came.
     #[test]
     fn a_block_whose_predecessor_ends_on_another_line_is_forced() {
         // 1 (line 4) -> 3 (line 6) <- 2 (line 5); 2 (line 5) -> 4 (line 5)
