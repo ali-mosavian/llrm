@@ -8,7 +8,7 @@ use llrm_z80::mfunc::{Block, Inst, Kind, MFunction, Operand, Reg};
 use llrm_z80::regalloc::{Class, Z80Registers};
 
 /// `PACK` read as a plain instruction left each byte's lane in the pair
-/// unsaid: nothing for the lane model to read, `lane_copies` empty.
+/// unsaid: nothing for the lane model to read.
 #[test]
 fn a_pack_records_the_lane_each_byte_fills_in_the_pair() {
     let mut f = MFunction::new("f");
@@ -19,16 +19,18 @@ fn a_pack_records_the_lane_each_byte_fills_in_the_pair() {
     );
     f.blocks.push(Block { id: 0, insts: vec![pack], phis: Vec::new() });
     let converted = to_lir::<Z80Registers>(&f, Regs(&llrm_z80::REGISTER_INFO)).expect("converts");
-    let insn = &converted.body.blocks[0].insns[0];
-    assert_eq!(insn.lane_copies, vec![(1, 3, ValueLanes::at(0, 1)), (2, 3, ValueLanes::at(1, 1))]);
-    assert_eq!(insn.defines, vec![3], "liveness still takes the pair whole");
+    let insns = &converted.body.blocks[0].insns;
+    assert_eq!(insns.len(), 2, "one copy per byte");
+    assert_eq!(insns[0].def_lanes, vec![(3, ValueLanes::at(0, 1))]);
+    assert!(insns[0].undef_super, "the low byte starts the pair");
+    assert_eq!(insns[1].def_lanes, vec![(3, ValueLanes::at(1, 1))]);
+    assert_eq!(insns[1].partial_defs, vec![3], "the high byte keeps the low one");
 }
 
-/// DEVIATE 3b-1: with lane lowering on, lz4c -Oz returned 0x3131 and crc16 -Oz
-/// was 82 B (58 B with the `lane_moves` hint). The hint stays until the split
-/// editor copies by lane.
+/// The split editor and the spiller write a lane alone (series step 4), so the
+/// z80 lowers `PACK` to lane copies and joins them.
 #[test]
-fn z80_keeps_the_lane_hint_until_the_split_copies_by_lane() {
+fn z80_lowers_and_joins_lanes() {
     use llrm_spike_mf::regalloc::Target;
-    assert!(!Z80Registers::lowers_lanes() && !Z80Registers::joins_lanes());
+    assert!(Z80Registers::lowers_lanes() && Z80Registers::joins_lanes());
 }
