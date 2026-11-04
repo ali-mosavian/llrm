@@ -78,6 +78,38 @@ fn a_word_minus_one_borrows_by_branch() {
     assert_eq!(exit_code_of(&text, "wrap"), 1, "{text}");
 }
 
+/// A byte added to an accumulator from a global indexed by a byte loaded the
+/// element, then added a cell (`lda g,x; clc; adc rc2; sta rc2`), where the 6502
+/// has `adc g,x` and the accumulator can stay in A: sum4 at -Os 22 B against
+/// llvm-mos's 13, sum_arr, sum16, schr. The sum of 1 2 3 4 is 10.
+#[test]
+fn an_indexed_global_is_the_operand_of_the_add() {
+    let ir = module(
+        r#"@arr = global [4 x i8] c"\01\02\03\04"
+@n = global i8 4
+define i8 @probe() {
+entry:
+  %n = load volatile i8, ptr @n
+  br label %loop
+loop:
+  %i = phi i8 [ 0, %entry ], [ %i2, %loop ]
+  %s = phi i8 [ 0, %entry ], [ %s2, %loop ]
+  %z = zext i8 %i to i16
+  %p = getelementptr i8, ptr @arr, i16 %z
+  %b = load i8, ptr %p
+  %s2 = add i8 %s, %b
+  %i2 = add i8 %i, 1
+  %c = icmp eq i8 %i2, %n
+  br i1 %c, label %done, label %loop
+done:
+  ret i8 %s2
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(text.contains("adc arr,x") && !text.contains("lda arr,x"), "the element was loaded:\n{text}");
+    assert_eq!(exit_code_of(&text, "probe"), 10, "{text}");
+}
+
 /// `LLRM_6502_ZERO_PAGE` sets the platform's zero page, whichever way the
 /// platform is named. It was read before the row's own `--platform=sim65`,
 /// which put the 26 back: a sweep of 16..26 read flat, 4362 bytes at every
