@@ -920,7 +920,7 @@ impl InlineFills {
         prices: &OperationCosts,
     ) -> i64 {
         let dwords = self.bytes / 4;
-        dwords * (prices.store + prices.prefix) + (self.stores() - dwords) * prices.store
+        dwords * (prices.store_immediate + prices.prefix) + (self.stores() - dwords) * prices.store_immediate
     }
 }
 

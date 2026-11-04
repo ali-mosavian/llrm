@@ -1388,3 +1388,12 @@ fn a_loop_trip_is_priced_at_its_conditional_branch_only() {
     assert!(merges(60), "a fill under the loop's clocks is taken");
     assert!(!merges(90), "a fill over the loop's clocks is not: the loop ran 72, not 96");
 }
+
+/// A constant fill was priced at the register store's bytes; its immediate
+/// stores encode longer, so lru -Os m32 took nine stores for a seven-trip loop.
+#[test]
+fn inline_fill_stores_are_priced_as_immediate_stores() {
+    let prices = crate::profit::OperationCosts { store: 6, store_immediate: 10, prefix: 1, ..Default::default() };
+    let fill = super::InlineFills { max_stores: 8, bytes: 8 };
+    assert_eq!(fill.price(&prices), 2 * (10 + 1));
+}

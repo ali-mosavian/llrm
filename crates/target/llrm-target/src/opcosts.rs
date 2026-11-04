@@ -75,7 +75,7 @@ fn cost(
     Ok(Cost::Sum(terms))
 }
 
-const OPERATIONS: [&str; 40] = [
+const OPERATIONS: [&str; 41] = [
     "add",
     "multiply",
     "divide",
@@ -89,6 +89,7 @@ const OPERATIONS: [&str; 40] = [
     "carry_step",
     "load",
     "store",
+    "store_immediate",
     "memory_update",
     "branch",
     "prefix",
@@ -230,6 +231,7 @@ impl Description {
                 "carry_step" => out.carry_step = value,
                 "load" => out.load = value,
                 "store" => out.store = value,
+                "store_immediate" => out.store_immediate = value,
                 "memory_update" => out.memory_update = value,
                 "branch" => out.branch = value,
                 "prefix" => out.prefix = value,
@@ -268,7 +270,7 @@ impl Description {
 mod tests {
     use super::*;
 
-    const ALL: &str = "add = a\nmultiply = m\ndivide = d\nmultiply_long = m\nmultiply_high = m\ndivide_long = d\ndivide_margin = 25\nshift = s\naddress = l\ncarry = carry(z, a, s, r)\ncarry_step = step(a)\nload = ld\nstore = st\nmemory_update = u\nbranch = j\nprefix = prefix\nmove = r\ncall = c\nreturn = t\nargument = st + ld\npop = p\nadjust = i\nreturn_pops = rp - t\nfloat_add = fa\nfloat_multiply = fm\nfloat_divide = fd\nfloat_load = fl\nfloat_load_folded = flf\nfloat_store = fs\nfloat_release = fr\nextend = z\nset = z\nfill = f + 2*p + 3\nfill_cell = fc\nfill_segment = 2*p\ncopy = cp\ncopy_cell = cc\ncopy_variable = cv\ndirection = 2*a\nunroll_budget = 7\n";
+    const ALL: &str = "add = a\nmultiply = m\ndivide = d\nmultiply_long = m\nmultiply_high = m\ndivide_long = d\ndivide_margin = 25\nshift = s\naddress = l\ncarry = carry(z, a, s, r)\ncarry_step = step(a)\nload = ld\nstore = st\nstore_immediate = st\nmemory_update = u\nbranch = j\nprefix = prefix\nmove = r\ncall = c\nreturn = t\nargument = st + ld\npop = p\nadjust = i\nreturn_pops = rp - t\nfloat_add = fa\nfloat_multiply = fm\nfloat_divide = fd\nfloat_load = fl\nfloat_load_folded = flf\nfloat_store = fs\nfloat_release = fr\nextend = z\nset = z\nfill = f + 2*p + 3\nfill_cell = fc\nfill_segment = 2*p\ncopy = cp\ncopy_cell = cc\ncopy_variable = cv\ndirection = 2*a\nunroll_budget = 7\n";
 
     #[test]
     fn a_sum_is_terms_with_counts_and_signs() {

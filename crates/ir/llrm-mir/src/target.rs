@@ -381,6 +381,9 @@ pub struct OperationCosts {
     pub carry_step: i64,
     pub load: i64,
     pub store: i64,
+    /// A constant stored to memory: the register store, plus the immediate
+    /// in code bytes.
+    pub store_immediate: i64,
     pub memory_update: i64,
     pub branch: i64,
     pub prefix: i64,
@@ -540,6 +543,7 @@ impl Default for OperationCosts {
             carry_step: 1,
             load: 1,
             store: 1,
+            store_immediate: 1,
             memory_update: 1,
             branch: 1,
             prefix: 0,
