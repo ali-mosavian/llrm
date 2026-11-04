@@ -99,6 +99,7 @@ pub mod cgpmemalign;
 #[cfg(test)]
 mod cgpmemalign_tests;
 pub mod cgpretdup;
+pub mod cgpselect;
 pub mod cgpswitch;
 pub mod cmpopt;
 #[cfg(test)]
@@ -109,6 +110,7 @@ pub mod combine_addsub;
 pub mod combine_and;
 pub mod combine_and_select;
 pub mod combine_assume;
+pub mod combine_bitcast;
 pub mod combine_bitorder;
 pub mod combine_branch;
 pub mod combine_build;
@@ -126,9 +128,15 @@ pub mod combine_distribute;
 mod combine_flags_result_tests;
 pub mod combine_fp;
 pub mod combine_fp_int_casts;
+pub mod combine_fpcast;
+#[cfg(test)]
+mod combine_fpcast_tests;
 pub mod combine_fptoint;
 #[cfg(test)]
 mod combine_fptoint_tests;
+pub mod combine_fptrunc;
+#[cfg(test)]
+mod combine_fptrunc_tests;
 pub mod combine_funnel;
 pub mod combine_gep;
 pub mod combine_gep_base;
@@ -176,6 +184,7 @@ pub mod combine_xor;
 pub mod condstores;
 pub mod condtocond;
 pub mod congruentiv;
+pub mod constanthoisting;
 pub mod constmerge;
 pub mod constraintelim;
 pub mod constraintelim_induction;
@@ -200,6 +209,7 @@ pub mod dfajumpthreading;
 #[cfg(test)]
 mod dfajumpthreading_tests;
 pub mod divrempairs;
+pub mod dropunnecessaryassumes;
 pub mod earlycse;
 pub mod edges;
 pub mod emptyblocks;
@@ -210,6 +220,7 @@ pub mod exitsink;
 pub mod exitvalues;
 pub mod expand;
 pub mod expansion;
+pub mod expandmemcmp;
 pub mod extload;
 pub mod extpromotion;
 pub mod fixednarrow;
@@ -351,6 +362,7 @@ pub mod rpoattrs;
 pub mod runtimechecks;
 pub mod sccp;
 pub mod sccpsolver;
+pub mod selectoptimize;
 pub mod settled;
 pub mod simpleloopunswitch;
 pub mod simplifycfg;
