@@ -294,6 +294,27 @@ pub trait CombineHooks {
         false
     }
 
+    /// `isTruncateFree(wide, narrow) && isZExtFree(narrow, wide)`: the casts
+    /// `ShrinkDemandedOp` and the shift narrowings of `SimplifyDemandedBits`
+    /// need to run an operation at the narrower type. X86 has them only from
+    /// i64 to i32 on x86-64 (a 32-bit result zero-extends implicitly).
+    fn free_narrowing(
+        &self,
+        _wide: EVT,
+        _narrow: EVT,
+    ) -> bool {
+        false
+    }
+
+    /// `isNarrowingProfitable(N, wide, narrow)`; X86: not i32 to i16.
+    fn narrowing_profitable(
+        &self,
+        _wide: EVT,
+        _narrow: EVT,
+    ) -> bool {
+        true
+    }
+
     /// `isIndexedLoadLegal`/`isIndexedStoreLegal` of `PRE_INC`/`POST_INC` (the
     /// only modes made) for an access of `vt`. x86 has no indexed forms.
     fn is_indexed_legal(
@@ -2948,6 +2969,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             let mask = self.dag.get_constant(super::fold::mask(ext_bits), vt);
             return Some(self.dag.get_node(ISD::And, vt, &[n0, mask]));
         }
+        if self.hooks.fold_sext_in_reg_of_load() {
+            if let Some(narrow) = self.reduce_load_width_of(node) {
+                return Some(narrow);
+            }
+        }
         if let Some(simplified) = self.simplify_demanded(node) {
             return Some(simplified);
         }
@@ -3028,9 +3054,15 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         let (chain, ptr) = (self.dag.operand(load, 0), self.dag.operand(load, 1));
+        let was_extload = info.ext == Some(LoadExt::ExtLoad);
         let info = super::dag::MemInfo { ext: None, ..info };
         let extended = self.dag.get_ext_load(LoadExt::SExtLoad, vt, chain, ptr, info);
         self.replace_value(SDValue { node: load.node, res: 1 }, SDValue { node: extended.node, res: 1 });
+        // The pin's `CombineTo(N0, ExtLoad)`: the extending load's other users
+        // read the new load (the bits above its memory type are undefined).
+        if was_extload {
+            self.replace_value(load, extended);
+        }
         let _ = node;
         Some(extended)
     }
