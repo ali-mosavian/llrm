@@ -138,7 +138,6 @@ impl Combiner<'_> {
         let parameters: Vec<TypeId> = args.iter().map(|&arg| self.type_of(arg)).collect();
         let function_type = self.context.types.intern(Type::Function { returns: ty, parameters, variadic: false });
         let callee = self.declared.declare(name, function_type);
-        self.fresh = self.declared.since(self.env.globals.len(), self.context);
         let pointer = self.context.types.ptr(0);
         let callee =
             Operand::Constant(self.context.constant(Constant { ty: pointer, kind: ConstantKind::Global(callee) }));

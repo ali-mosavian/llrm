@@ -311,7 +311,6 @@ fn hoist_min_max(
     let query = llrm_mir::valuetracking::Query {
         context: unit.context,
         globals: &[],
-        fresh: &[],
         metadata: &[],
         function,
         layout: unit.layout,
@@ -396,7 +395,6 @@ fn hoist_gep(
     let query = llrm_mir::valuetracking::Query {
         context: unit.context,
         globals: &[],
-        fresh: &[],
         metadata: &[],
         function,
         layout: unit.layout,
@@ -544,7 +542,6 @@ fn hoist_add_sub(
     let query = llrm_mir::valuetracking::Query {
         context: unit.context,
         globals: &[],
-        fresh: &[],
         metadata: &[],
         function,
         layout: unit.layout,

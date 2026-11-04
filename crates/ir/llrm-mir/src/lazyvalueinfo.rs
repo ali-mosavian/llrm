@@ -147,7 +147,6 @@ impl<'a> Env<'a> {
         Query {
             context: &*self.context,
             globals: self.globals,
-            fresh: &[],
             metadata: self.metadata,
             function: self.function,
             layout: self.layout,

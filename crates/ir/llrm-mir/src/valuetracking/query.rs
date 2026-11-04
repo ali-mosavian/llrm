@@ -24,10 +24,6 @@ pub struct Query<'a> {
     /// The module's globals, which name the callees; empty where the caller has
     /// no module.
     pub globals: &'a [GlobalValue],
-    /// The declarations a pass made that the module does not hold yet, numbered
-    /// after `globals` (`Declared::since`): a call the pass made of an
-    /// intrinsic it declared is known at once, as LLVM's `getDeclaration`.
-    pub fresh: &'a [GlobalValue],
     /// The module's metadata nodes, which `!range` and the like name; empty
     /// where the caller has no module.
     pub metadata: &'a [MetadataNode],
@@ -52,7 +48,6 @@ impl<'a> Query<'a> {
         Self {
             context: &module.context,
             globals: &module.globals,
-            fresh: &[],
             metadata: &module.metadata,
             function,
             layout,
@@ -74,7 +69,6 @@ impl<'a> Query<'a> {
         Self {
             context,
             globals: &[],
-            fresh: &[],
             metadata: &[],
             function,
             layout,
@@ -218,8 +212,7 @@ impl<'a> Query<'a> {
         let (Opcode::Call(_) | Opcode::Invoke(_)) = instruction.opcode else { return None };
         let Operand::Constant(id) = *instruction.operands.last()? else { return None };
         let ConstantKind::Global(global) = self.context().get(id).kind else { return None };
-        let index = global.0 as usize;
-        let global = self.globals.get(index).or_else(|| self.fresh.get(index.checked_sub(self.globals.len())?))?;
+        let global = self.globals.get(global.0 as usize)?;
         matches!(global.kind, GlobalKind::Function(_)).then_some(global)
     }
 

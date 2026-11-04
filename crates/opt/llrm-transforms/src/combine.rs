@@ -354,9 +354,6 @@ pub struct Combiner<'a> {
     /// What the pass declares in its module
     /// (`Intrinsic::getOrInsertDeclaration`).
     pub declared: &'a mut Declared,
-    /// The declarations `declared` holds that the module does not, for the
-    /// queries of this pass.
-    pub fresh: Vec<GlobalValue>,
 }
 
 impl Combiner<'_> {
@@ -687,7 +684,7 @@ pub(crate) fn combine_with_sinking(
         FunctionAnalyses::of_declared(context, globals, metadata, layout, function, declared.assume_declared(globals))
             .with_lazy_dom_conditions();
     let env = Env { globals, metadata, callees, layout, analyses, sinking, back_edges: Default::default() };
-    let mut c = Combiner { context, function, env: &env, worklist: InstWorklist::default(), declared, fresh: Vec::new() };
+    let mut c = Combiner { context, function, env: &env, worklist: InstWorklist::default(), declared };
     let mut changed = prepare(&env, c.context, c.function, &mut c.worklist);
     changed |= drain(&mut c, visit);
     changed

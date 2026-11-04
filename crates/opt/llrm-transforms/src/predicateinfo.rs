@@ -318,7 +318,6 @@ impl Builder<'_> {
         Query {
             context: self.context,
             globals: self.globals,
-            fresh: &[],
             metadata: self.metadata,
             function,
             layout: &DEFAULT_LAYOUT,

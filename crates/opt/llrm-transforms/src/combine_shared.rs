@@ -67,7 +67,6 @@ pub fn query<'a>(
 ) -> Query<'a> {
     Query {
         globals: c.env.globals,
-        fresh: &c.fresh,
         metadata: c.env.metadata,
         dt: Some(c.env.analyses.dominator_tree()),
         assumptions: Some(c.env.analyses.assumption_cache()),

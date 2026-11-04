@@ -580,7 +580,6 @@ impl MemoryDependenceResults {
             let q = Query {
                 context: unit.context,
                 globals: unit.globals,
-                fresh: &[],
                 metadata: unit.metadata,
                 function,
                 layout: unit.layout,

@@ -50,7 +50,6 @@ use crate::combine_select_bools::select_of_bools;
 use crate::combine_select_ext_const::select_ext_const;
 use crate::combine_select_fabs::select_fcmp_to_fabs;
 use crate::combine_select_into_op::select_into_op;
-use crate::combine_select_minmax_cast::min_max_cast;
 use crate::combine_select_op_op::select_op_op;
 use crate::combine_select_spf::select_with_icmp;
 use crate::combine_select_tail::{nested_selects, select_of_symmetric_select};
@@ -80,7 +79,6 @@ const FOLDS: &[Fold] = &[
     select_ext_const,
     select_of_gep,
     select_into_op,
-    min_max_cast,
     select_of_phi_condition,
     nested_select_implied,
     nested_select_merged,

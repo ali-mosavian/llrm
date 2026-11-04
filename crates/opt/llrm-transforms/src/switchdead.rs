@@ -176,7 +176,6 @@ fn dead_cases_eliminated(
     let q = Query {
         context,
         globals: &spec.outer.globals,
-        fresh: &[],
         metadata: &spec.outer.metadata,
         function: &*function,
         layout: spec.layout,
@@ -292,7 +291,6 @@ fn cmp_intrinsic_folded(
         let q = Query {
             context,
             globals: &spec.outer.globals,
-            fresh: &[],
             metadata: &spec.outer.metadata,
             function: &*function,
             layout: spec.layout,

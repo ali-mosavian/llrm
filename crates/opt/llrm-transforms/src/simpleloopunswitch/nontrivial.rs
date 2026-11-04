@@ -130,7 +130,6 @@ pub(super) fn query_at<'a>(
     Query {
         context: &*run.context,
         globals: run.globals,
-        fresh: &[],
         metadata: run.metadata,
         function: &*run.function,
         layout: run.layout,

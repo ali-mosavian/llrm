@@ -716,9 +716,7 @@ impl Combiner<'_> {
         call: InstId,
     ) -> Option<llrm_mir::intrinsics::Intrinsic> {
         let callee = llrm_mir::memory::callee(self.context, self.function, call)?;
-        let index = callee.0 as usize;
-        // A callee this pass declared is a global of the module at once.
-        self.env.globals.get(index).or_else(|| self.fresh.get(index.checked_sub(self.env.globals.len())?))?.intrinsic()
+        self.env.globals.get(callee.0 as usize)?.intrinsic()
     }
 
     /// `isAllocSiteRemovable`
