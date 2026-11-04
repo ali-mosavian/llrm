@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/instsimplify.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/instsimplify.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/instsimplify.rs sha256:ff1efa776c9b5496a16b9508c686899f7009497533584540b5961bd6d31dfbe0 -->
+<!-- src: crates/opt/llrm-transforms/src/instsimplify.rs sha256:6da3d6b408aeb9e36f84e0628b218304419c30564327d4ed2f357e8a99d3166d -->
 
 # instsimplify
 
@@ -38,4 +38,4 @@ An instruction that equals an operand is replaced by it and then deleted:
 ```
 
 ## Used by
-Named by `pipeline`.
+Named by `assume_declared_is_scanned_once_per_module`, `pipeline`.

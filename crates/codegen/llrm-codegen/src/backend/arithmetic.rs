@@ -177,6 +177,20 @@ pub fn chain_at_speed<'a>(
     freq: f64,
     milliclocks_per_byte: i64,
 ) -> Result<Option<Vec<(&'static str, i64)>>, String> {
+    priced_chain_at_speed(number, width, cpu, arch, freq, milliclocks_per_byte, false)
+}
+
+/// `chain_at_speed`; with `ties_keep_imul` the chain must pay strictly
+/// (`price_pin_multiplies`: the `imul` is one instruction, so a tie is its).
+pub fn priced_chain_at_speed<'a>(
+    number: i64,
+    width: i64,
+    cpu: impl Into<ProfileOrName<'a>>,
+    arch: &dyn llrm_target::Target,
+    freq: f64,
+    milliclocks_per_byte: i64,
+    ties_keep_imul: bool,
+) -> Result<Option<Vec<(&'static str, i64)>>, String> {
     let target = targets::profile(cpu)?;
     if milliclocks_per_byte <= 0 {
         return Ok(None);
@@ -186,7 +200,9 @@ pub fn chain_at_speed<'a>(
     let prefix = if width == 4 { dword_prefix(target) } else { 0 };
     let saved = immediate_multiply(target, number)? + prefix - clocks;
     let extra = chain_bytes(&chain, width, arch) - arch.multiply_immediate_bytes(number, width);
-    Ok((saved > 0 && saved as f64 * freq * 1000.0 >= (extra * milliclocks_per_byte) as f64).then_some(chain))
+    let paid = saved as f64 * freq * 1000.0;
+    let price = (extra * milliclocks_per_byte) as f64;
+    Ok((saved > 0 && if ties_keep_imul { paid > price } else { paid >= price }).then_some(chain))
 }
 
 /// What a dword instruction costs beyond a word one where the target's own
