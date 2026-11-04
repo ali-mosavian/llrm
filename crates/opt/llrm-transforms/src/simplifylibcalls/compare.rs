@@ -15,7 +15,7 @@ use llrm_mir::passes::{Outer, Unit};
 use llrm_mir::types::TypeId;
 use llrm_mir::valuetracking::{self, Query, Sizes};
 
-use super::{NewCall, Rewrite, Site, build, string_info, string_length};
+use super::{NewCall, Rewrite, Site, build, constant_length, string_info, string_length};
 
 /// `std::clamp(A.compare(B), -1, 1)` as a constant of the call's type.
 fn ordering(
@@ -151,18 +151,6 @@ pub(super) fn str_cmp(
     }
     let len = size_constant(unit, site, len);
     Some(mem_cmp_call(unit, site, "memcmp", [first, second], len))
-}
-
-/// The length operand as a constant, `dyn_cast<ConstantInt>(Size)`.
-fn constant_length(
-    unit: &Unit,
-    operand: Operand,
-) -> Option<u64> {
-    let Operand::Constant(id) = operand else { return None };
-    match unit.context.get(id).kind {
-        ConstantKind::Int(bits) => Some(bits as u64),
-        _ => None,
-    }
 }
 
 /// `optimizeStrNCmp`; the `memcmp` rewrites are not translated yet.

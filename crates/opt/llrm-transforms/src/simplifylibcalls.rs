@@ -28,7 +28,8 @@
 //! into the first string, null or a length, and `memchr` of a constant array
 //! or size folds to compares and a select (`search.rs`). `strcpy` and `stpcpy`
 //! of a string of known length are an `llvm.memcpy` of it with its NUL
-//! (`copy.rs`).
+//! (`copy.rs`), and `strcat`, `strncat` and `strncpy` likewise, `strlen`
+//! finding the end where the compile states it.
 //!
 //! # Deviations
 //! - D1: `puts`, `putchar`, `fwrite`, `fputc`, `fputs`, `memcmp` and `bcmp` are
@@ -45,8 +46,10 @@
 //! - D5: `memchr` of a constant array and size tested against null (the pin's
 //!   bit-field and OR-chain rewrite) is not translated.
 //! - D6: `stpcpy` with an unused result (the pin's `strcpy` call) and
-//!   `stpcpy(x, x)` (its `strlen` call) are untranslated, as are `strcat`,
-//!   `strncat` and `strncpy`.
+//!   `stpcpy(x, x)` (its `strlen` call) are untranslated.
+//! - D7: `strncpy` of an empty source (the pin's `memset`) and of a bound past
+//!   the source and its NUL (a NUL-padded copy) are untranslated, as is
+//!   `stpncpy`.
 //! - D3: `strcmp` of two strings whose lengths are known but whose contents are
 //!   not (a PHI or select of literals) is not rewritten: `GetStringLength` here
 //!   reads a constant global only.
@@ -108,6 +111,18 @@ fn string_length(
     match constant_array(unit, site.env, operand) {
         Some(bytes) => bytes.iter().position(|&byte| byte == 0).map_or(0, |end| end as u64 + 1),
         None => 0,
+    }
+}
+
+/// The length operand as a constant, `dyn_cast<ConstantInt>(Size)`.
+fn constant_length(
+    unit: &Unit,
+    operand: Operand,
+) -> Option<u64> {
+    let Operand::Constant(id) = operand else { return None };
+    match unit.context.get(id).kind {
+        ConstantKind::Int(bits) => Some(bits as u64),
+        _ => None,
     }
 }
 
@@ -532,6 +547,9 @@ impl FunctionPass for SimplifyLibCalls {
                 LibFunc::Memchr => search::mem_chr(unit, &site),
                 LibFunc::Strcpy => copy::str_cpy(unit, &site),
                 LibFunc::Stpcpy => copy::stp_cpy(unit, &site),
+                LibFunc::Strcat => copy::str_cat(unit, &site, &self.routines),
+                LibFunc::Strncat => copy::str_n_cat(unit, &site, &self.routines),
+                LibFunc::Strncpy => copy::str_n_cpy(unit, &site),
                 LibFunc::Strpbrk => search::str_pbrk(unit, &site),
                 LibFunc::Strspn => search::str_spn(unit, &site, true),
                 LibFunc::Strcspn => search::str_spn(unit, &site, false),
