@@ -55,6 +55,11 @@ pub fn hardware(name: &str) -> Option<u8> {
     NAMES.iter().position(|one| *one == name).map(|number| number as u8)
 }
 
+/// A vector register's number by its name (`xmm6` is 6).
+pub fn xmm_number(name: &str) -> Option<u8> {
+    name.strip_prefix("xmm").and_then(|digits| digits.parse::<u8>().ok()).filter(|number| *number < 16)
+}
+
 /// Whether a function must keep the register of hardware number `number`.
 pub fn is_nonvolatile(number: u8) -> bool {
     NONVOLATILE.contains(&number)
@@ -330,15 +335,26 @@ pub fn expanded(object: &Object) -> Result<Object, Unsupported> {
     for (section, offset, size, index) in functions {
         let name = object.symbols[index].name.clone();
         let code = &object.sections[section].image;
-        // A producer that declared the prologue is believed; the bytes are
-        // read only for code that declared nothing.
+        // A producer that declared the prologue is believed. A function it
+        // declared a frame for but no directive is believed to have no
+        // prologue: bytes that say otherwise are a path that forgot to
+        // declare, not something to describe from the bytes. Only code that
+        // declared nothing at all (an assembled object) is read.
         let declared = frames.iter().find(|frame| (frame.section, frame.offset) == (section, offset));
-        let info = match declared.filter(|frame| !frame.seh.is_empty()) {
-            Some(frame) => from_seh(&name, &frame.seh)?,
-            None => from_prologue(
-                &name,
-                code.get(offset..offset + size).ok_or_else(|| refused(&name, "a body past its section"))?,
-            )?,
+        let body = code.get(offset..offset + size).ok_or_else(|| refused(&name, "a body past its section"))?;
+        let info = match declared {
+            Some(frame) if !frame.seh.is_empty() => from_seh(&name, &frame.seh)?,
+            Some(_) => {
+                let read = from_prologue(&name, body)?;
+                if !read.codes.is_empty() {
+                    return Err(refused(
+                        &name,
+                        "its code has a prologue the compiler declared no `.seh_*` directive for",
+                    ));
+                }
+                read
+            }
+            None => from_prologue(&name, body)?,
         };
 
         let at = xdata_image.len();

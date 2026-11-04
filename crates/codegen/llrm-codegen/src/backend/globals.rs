@@ -88,9 +88,9 @@ pub fn space(
 
 /// Each global's assembler name, keyed as an `Addr` names it: its name as
 /// `linked` mangles it, as LLVM's Mangler does. An internal global's name
-/// is free, so one no assembler takes becomes `G$n`, as does an external one
-/// defined here (a frontend names it for the object); an imported one must be
-/// a symbol once mangled. An intrinsic has none.
+/// is free, so one no assembler takes becomes `G$n$cleaned name`, as does an
+/// external one defined here (a frontend names it for the object); an imported
+/// one must be a symbol once mangled. An intrinsic has none.
 /// The group index naming a far variable's segment, `seg name`.
 pub fn segment_of(global: GlobalId) -> i64 {
     SEGMENTS + i64::from(global.0)
@@ -119,7 +119,7 @@ pub fn names(
         } else if global.linkage == llrm_mir::Linkage::External && space(module, id) == Space::External {
             return Err(format!("@{name} is no assembler symbol"));
         } else {
-            format!("G${at}")
+            private_name(at, &name)
         };
         out.extend(segment_name(module, id, &symbol, spaces));
         out.insert((space(module, id), i64::from(id.0)), symbol);
@@ -191,6 +191,21 @@ pub fn is_compiler_only(name: &str) -> bool {
 
 fn is_list(name: &str) -> bool {
     name == CONSTRUCTORS
+}
+
+/// `G$n` for a name no assembler takes, followed by the name with every
+/// character an assembler refuses made `$`: `std.io.File.open` is
+/// `G$7$std$io$File$open`. The index keeps names that agree once cleaned apart;
+/// the rest tells a reader of the object (a size tool) where the function came
+/// from.
+fn private_name(
+    at: usize,
+    name: &str,
+) -> String {
+    let cleaned: String =
+        name.chars().map(|one| if one.is_ascii_alphanumeric() || "_@?".contains(one) { one } else { '$' }).collect();
+    let cleaned = cleaned.trim_matches('$');
+    if cleaned.is_empty() { format!("G${at}") } else { format!("G${at}${cleaned}") }
 }
 
 fn is_symbol(name: &str) -> bool {
@@ -372,6 +387,7 @@ impl Initializer<'_> {
                 _ => self.bytes(&bits.to_le_bytes()[..size]),
             },
             ConstantKind::Float80(bits) => self.bytes(&llrm_mir::types::x87_image(*bits)),
+            ConstantKind::Float128(_) => return Err("an fp128 initializer: no emission yet".to_owned()),
             // An undef initializer is any bytes: zero. A poison one is a hole
             // of a switch lookup table (the pin's holes are `poison` too),
             // which the guard never indexes. `emitGlobalConstantImpl` writes

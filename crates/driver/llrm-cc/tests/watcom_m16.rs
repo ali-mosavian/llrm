@@ -20,7 +20,7 @@ fn compiles(
     std::fs::create_dir_all(&dir).unwrap();
     let c = dir.join(format!("{name}.c"));
     std::fs::write(&c, source).unwrap();
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_16-wat")
         .env(
             "LLRM_LLC",
@@ -62,7 +62,7 @@ fn a_huge_pointer_stepping_past_64k_draws_no_warning() {
     let dir = std::env::temp_dir().join(format!("llrm-cc-wat16-huge-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("h.c"), source).unwrap();
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_16-wat")
         .env(
             "LLRM_LLC",

@@ -73,7 +73,7 @@ pub fn null_value(
 ) -> ConstantId {
     let kind = match context.types.get(ty) {
         Type::Int(_) => ConstantKind::Int(0),
-        Type::Float(_) => ConstantKind::Float(0),
+        Type::Float(kind) => ConstantKind::float_zero(*kind),
         Type::Pointer(_) => ConstantKind::Null,
         _ => ConstantKind::Zero,
     };
@@ -282,6 +282,8 @@ fn float_number(
             match kind {
                 FloatKind::Float => f64::from(f32::from_bits(bits as u32)),
                 FloatKind::Double | FloatKind::X86Fp80 => f64::from_bits(bits),
+                // An fp128 constant is Float128, never Float.
+                FloatKind::F128 => return None,
             },
         )),
         ConstantKind::Null | ConstantKind::Zero => Some((kind, 0.0)),
@@ -301,6 +303,7 @@ fn float_constant(
     let bits = match kind {
         FloatKind::Float => u64::from((value as f32).to_bits()),
         FloatKind::Double | FloatKind::X86Fp80 => value.to_bits(),
+        FloatKind::F128 => unreachable!("float_number gives no fp128, so nothing folds into one"),
     };
     context.constant(Constant { ty, kind: ConstantKind::Float(bits) })
 }
