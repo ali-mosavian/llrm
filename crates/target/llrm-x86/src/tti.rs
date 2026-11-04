@@ -1014,6 +1014,12 @@ impl Tti for X86 {
         self.real_mode.as_ref().map_or(self.registers.unwrap_or(if self.quad { 16 } else { 8 }), |real| real.registers)
     }
 
+    /// Real mode declares the registers the allocator has, and the live count
+    /// LSR keeps is exact there: the six fill (PLASMA's loop, 4 + 2 live).
+    fn lsr_reserved_registers(&self) -> u32 {
+        u32::from(self.real_mode.is_none())
+    }
+
     /// `[bp+disp]` and `[esp+disp]` reach a stack slot with no register to hold
     /// it.
     fn frame_address_is_free(&self) -> bool {

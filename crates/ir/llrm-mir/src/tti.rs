@@ -848,6 +848,12 @@ pub trait Tti {
         8
     }
 
+    /// The registers LSR keeps back from `number_of_gpr_registers` when it
+    /// also counts what the loop keeps live (DEVIATE LU3c); the pin's one.
+    fn lsr_reserved_registers(&self) -> u32 {
+        1
+    }
+
     /// Whether a stack slot's address is a displacement off the frame register
     /// in an addressing mode, so as the base of an address it costs no
     /// register of its own.
