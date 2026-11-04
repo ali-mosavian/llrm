@@ -637,7 +637,16 @@ impl FunctionPass for Slot {
         unit: &mut Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        self.inner.run(unit, analyses)
+        let count = |unit: &Unit| -> i64 {
+            unit.function.layout().iter().map(|&b| unit.function.iter_block(b).count() as i64).sum()
+        };
+        if std::env::var_os("W2_SLOT_COUNT").is_none() {
+            return self.inner.run(unit, analyses);
+        }
+        let before = count(unit);
+        let result = self.inner.run(unit, analyses);
+        eprintln!("W2SLOT {} {} {}", self.name, before, count(unit) - before);
+        result
     }
 }
 
@@ -1123,8 +1132,8 @@ pub(crate) fn function_stages(applied: &Applied) -> Vec<Fixed> {
         Fixed::linear(applied, Phase::Early),
         Fixed::linear(applied, Phase::Cleanup),
         Fixed::linear(applied, Phase::Simplify),
-        // DEVIATE: LLVM runs it after the interprocedural passes; here it
-        // closes the function stages.
+        // Placed after the interprocedural passes, as LLVM runs it
+        // (`recorded`).
         Fixed::linear(applied, Phase::Late),
     ]
 }
@@ -1188,9 +1197,13 @@ pub fn recorded(
     }
     manager.add_program(crate::interprocedural::Stamp);
     let walked = |dump: &str| Applied { dump: applied.dump.as_ref().map(|one| one.join(dump)), ..applied.clone() };
+    let mut late_stage = None;
     for (at, stage) in function_stages(applied).into_iter().enumerate() {
-        // The walk simplifies each body: not a module-wide stage.
-        if at != 2 {
+        // The walk simplifies each body: not a module-wide stage. The late
+        // list follows the interprocedural passes.
+        if at == 3 {
+            late_stage = Some(stage);
+        } else if at != 2 {
             manager.add(stage);
         }
         // LLVM's CGSCC walk: each body inlined into, then simplified, callees
@@ -1294,6 +1307,12 @@ pub fn recorded(
     // they all call directly pops its own arguments.
     if applied.options.wanted("calleepop") {
         manager.add_module(calleepop::CalleePop { size: applied.options.prefers_size() });
+    }
+    // The end of `buildModuleOptimizationPipeline`'s function list (l.1662),
+    // after the interprocedural passes: a body that took the late unroll is
+    // not run through the simplification pipeline again.
+    if let Some(stage) = late_stage {
+        manager.add(stage);
     }
     // `buildModuleOptimizationPipeline` (PassBuilderPipelines.cpp:1567,
     // d1106deb71cc). DEVIATE: made even where not held, as GlobalDCE, which
