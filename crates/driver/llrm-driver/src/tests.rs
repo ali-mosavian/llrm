@@ -3549,3 +3549,35 @@ fn a_win64_variadic_function_homes_its_register_arguments_for_va_start() {
     // Win64 has no red zone: nothing is written below the stack pointer.
     assert!(!listing.contains("[rsp-"), "{listing}");
 }
+
+/// Win64 passes the hidden result pointer in RCX, the first position, so the
+/// next argument is in RDX; the callee returns the pointer in RAX.
+#[test]
+fn a_win64_struct_result_shifts_the_arguments_by_one_position() {
+    let body = "define void @f(ptr sret([3 x i64]) align 8 %o, i64 %a) {\n  store i64 %a, ptr %o\n  ret void\n}\ndeclare void @h(ptr sret([3 x i64]) align 8, i64)\ndefine void @g(ptr %p) {\n  call void @h(ptr sret([3 x i64]) align 8 %p, i64 5)\n  ret void\n}\n";
+    let text = format!("{SYSV}{body}");
+    let listing_of = |name: &str| {
+        let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag", "-mabi=win64"]), &text, name).unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let callee = listing_of("f");
+    assert!(callee.contains("], rdx"), "{callee}");
+    assert!(callee.contains("mov rax, rcx"), "{callee}");
+    let caller = listing_of("g");
+    assert!(caller.contains("dx, 5"), "{caller}");
+}
+
+/// A variadic Win64 function with a variable-sized `alloca` homes its
+/// register arguments through the frame register: the stack pointer moves.
+#[test]
+fn a_win64_variadic_function_with_alloca_homes_through_the_frame_register() {
+    let body = "declare void @llvm.va_start.p0(ptr)\ndeclare void @u(ptr, ptr)\ndefine void @f(i64 %n, ...) {\n  %ap = alloca ptr\n  call void @llvm.va_start.p0(ptr %ap)\n  %buf = alloca i8, i64 %n, align 16\n  call void @u(ptr %buf, ptr %ap)\n  ret void\n}\n";
+    let text = format!("{SYSV}{body}");
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag", "-mabi=win64"]), &text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    for at in [24, 32, 40] {
+        let home = format!("mov qword ptr [rbp+{at}], ");
+        assert!(listing.contains(&home), "[rbp+{at}] not a home: {listing}");
+    }
+    assert!(!listing.contains("[rsp-"), "{listing}");
+}

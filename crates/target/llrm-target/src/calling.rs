@@ -855,13 +855,16 @@ impl Convention {
         let mut places = Vec::new();
         let mut used = Vec::new();
         let slot = |position: usize| Place::Stack(self.slot_bytes * position as i64);
-        for (position, &kind) in arguments.iter().enumerate() {
+        // The hidden result pointer is the first argument: it takes the first
+        // position, and the named ones follow.
+        let first = reserved.len();
+        for (index, &kind) in arguments.iter().enumerate() {
+            let position = first + index;
             let register = match kind {
                 Kind::Word | Kind::Sized(_) => self.argument_registers.get(position),
                 Kind::Float(_) => self.float_argument_registers.get(position),
                 Kind::Wide | Kind::Memory(_) => None,
-            }
-            .filter(|name| !reserved.contains(&name.as_str()));
+            };
             places.push(match register {
                 Some(name) => {
                     used.push(name.clone());
@@ -870,7 +873,7 @@ impl Convention {
                 None => slot(position),
             });
         }
-        let stack_bytes = (self.slot_bytes * arguments.len() as i64).max(self.shadow_bytes);
+        let stack_bytes = (self.slot_bytes * (first + arguments.len()) as i64).max(self.shadow_bytes);
         Placement { places, used, stack_bytes }
     }
 
@@ -1042,6 +1045,21 @@ mod tests {
         );
         assert_eq!(placed.stack_bytes, 40);
         assert_eq!(calling.native().place(&[]).stack_bytes, 32);
+    }
+
+    /// A struct result's hidden pointer is RCX under Win64, so the named
+    /// arguments are positions 1, 2, ...: RDX, XMM2, and the fourth is above
+    /// the shadow area. Placed from position 0 the first one lost its register.
+    #[test]
+    fn a_positional_convention_counts_the_hidden_result_pointer_as_position_zero() {
+        let calling = Calling::parse(WIN64).unwrap();
+        let placed =
+            calling.native().place_reserving(&[Kind::Word, Kind::Float(8), Kind::Word, Kind::Word], &["rcx"]);
+        assert_eq!(
+            placed.places,
+            [registers(&["rdx"]), registers(&["xmm2"]), registers(&["r9"]), Place::Stack(32)]
+        );
+        assert_eq!(placed.stack_bytes, 40);
     }
 
     /// gcc's regparm(3) puts `(float, int b, double, int d, int e)` in EAX,
