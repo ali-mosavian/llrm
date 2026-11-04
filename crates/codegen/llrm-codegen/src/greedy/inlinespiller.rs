@@ -634,7 +634,12 @@ impl<'a> InlineSpiller<'a> {
             let store = self.tii.store_reg_to_stack_slot(&old[old.len() - 1], new, &cell);
             lis.insert_instr_after(block, last.id(), Arc::clone(&store));
             self.stores += 1;
-            self.note_store(lis, &store, &cell, &old[old.len() - 1]);
+            // A store after a def of one lane writes a value of its own: it is
+            // not equal to another store of the original's value number, which
+            // merging or hoisting would take it for.
+            if old.iter().all(|one| one.def_lanes.is_empty()) {
+                self.note_store(lis, &store, &cell, &old[old.len() - 1]);
+            }
         }
         // A register an instruction requires or delivers in one register can be
         // given that one only.
