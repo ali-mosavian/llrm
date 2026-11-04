@@ -781,6 +781,66 @@ fn drop_self_copies<C>(
     kept
 }
 
+/// `StackSlotColoring::RemoveDeadStores`
+/// ([StackSlotColoring.cpp#L460](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/StackSlotColoring.cpp#L460)):
+/// a load of a spill slot followed at once by a store of the same physical
+/// register back to it. The store is dead; the load goes too when the register
+/// is not read after the store (the pin's kill flag on the store's use).
+/// Returns the instructions removed.
+///
+/// DEVIATE: runs whether or not slot sharing changed anything; the pin runs it
+/// only when `StackSlotColoring` rewrote a slot. A store of a value just read
+/// from its own slot is dead either way. Exit: none.
+pub fn remove_dead_slot_stores<T: Target>(
+    function: &mut MFunction<T::Class>,
+    assignment: &Assignment,
+    info: &llrm_lir::registers::Info,
+    slots: &[i32],
+) -> usize {
+    let register = |reg: Reg| match reg {
+        Reg::Virt(v) => assignment.0[v as usize],
+        Reg::Phys(id) => id,
+    };
+    let frame =
+        |inst: &Inst| inst.operands.iter().find_map(|o| if let Operand::Frame(s) = o { Some(*s) } else { None });
+    let is_store = |inst: &Inst| !inst.operands.iter().any(|o| matches!(o, Operand::Def(_)));
+    let mut found: Vec<(usize, usize)> = Vec::new();
+    for (b, block) in function.blocks.iter().enumerate() {
+        for (i, pair) in block.insts.windows(2).enumerate() {
+            let (load, store) = (&pair[0], &pair[1]);
+            if is_reload(load)
+                && is_store(store)
+                && let (Some(Operand::Def(loaded)), Some(written)) = (load.operands.first(), stored(store))
+                && let (Some(from), Some(to)) = (frame(load), frame(store))
+                && from == to
+                && slots.contains(&from)
+                && register(*loaded) == register(written)
+            {
+                found.push((b, i));
+            }
+        }
+    }
+    if found.is_empty() {
+        return 0;
+    }
+    let live = crate::livephys::PhysLiveness::of::<T>(function, assignment, info);
+    let mut drop: Vec<(usize, usize)> = Vec::new();
+    for (b, i) in found {
+        drop.push((b, i + 1));
+        let Some(Operand::Def(loaded)) = function.blocks[b].insts[i].operands.first() else { continue };
+        if !live.live_before::<T>(function, assignment, info, b, i + 2).is_live(info, register(*loaded)) {
+            drop.push((b, i));
+        }
+    }
+    drop.sort_unstable();
+    drop.dedup();
+    let removed = drop.len();
+    for (b, i) in drop.into_iter().rev() {
+        function.blocks[b].insts.remove(i);
+    }
+    removed
+}
+
 /// Allocate `function`, spilling until it fits; slot numbers start at
 /// `first_slot`. Returns the assignment and each slot with its register's
 /// class. The function must be out of phis.
