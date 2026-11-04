@@ -57,7 +57,7 @@ Measured: add+sub 672 B, mul+div 609 B; cycles per call add 426, sub 435, mul 16
 IEEE-style 8-bit float `__fp8_add/sub/mul/div` (denormals, inf, NaN, round to nearest even), args rc2 and rc3, result A.
 Build options (`ca65 -D`): `FP8_M` mantissa bits 1..4 (E6M1, E5M2 default, E4M3, E3M4; E + M = 7), `FP8_SPECIAL=0` drops inf/NaN, `FP8_DENORM=0` flushes denormals to zero, `FP8_ADD/SUB/MUL/DIV=0` leave a routine out.
 `FP8_M=n FP8_SPECIAL=n FP8_DENORM=n tests/asm6502/run8.sh [ops]` checks all 65536 pairs against exact rational arithmetic on sim65 (all four widths and the flag combinations: 0 mismatches). `bench8.sh` prints bytes and mean cycles.
-E5M2 sizes: 560 B everything; 438 B without inf/NaN; 541 B without denormals; 419 B without both; div alone 352 B. Cycles per call about add 393, sub 397, mul 337, div 380.
+E5M2 sizes: 560 B everything; 438 B without inf/NaN; 541 B without denormals; 419 B without both; div alone 352 B. Cycles per call (bench8.sh) add 398, sub 406, mul 343, div 389; corrected 2026-11-04, the earlier 393/397/337/380 read low (base stub failed its records).
 
 ## 6502 size and speed table (sim65, 64 identical operands, call minus bare rts)
 

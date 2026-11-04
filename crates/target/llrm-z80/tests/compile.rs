@@ -1135,3 +1135,60 @@ fn a_difference_of_a_phi_of_bytes_and_a_byte_is_a_byte_subtract_with_the_borrow(
     let out = text(include_str!("kernels/ir/scmp.ll"), "scmp", 0, &Request::new(Level::O2)).expect("compiles");
     assert!(out.contains("sbc a, a") && !out.contains("sbc hl, de"), "{out}");
 }
+
+/// switch.ll's two functions took 8 full allocations each (the return block
+/// copied or kept, constants hoisted or not, the argument copies joined or
+/// not): 16 greedy runs, 51% of a 1.3 G-instruction compile. Copied and kept
+/// gave the same code on all 60 kernel cells; only the copied one is made.
+/// lz4 -O2 took 16 runs.
+#[test]
+fn a_function_is_allocated_at_most_eight_times() {
+    let ir = include_str!("kernels/ir/lz4.ll");
+    llrm_z80::compile::take_allocations();
+    text(ir, "lz4", 0, &Request::new(Level::O2)).expect("compiles");
+    let runs = llrm_z80::compile::take_allocations();
+    assert!(runs <= 8, "lz4 -O2 was allocated {runs} times");
+}
+
+fn many(
+    count: usize,
+    constant: u32,
+) -> String {
+    let mut ir = format!("target datalayout = \"{DATALAYOUT}\"\n");
+    for i in 0..count {
+        ir.push_str(&format!(
+            "define i16 @f{i}(i16 %a) {{\n  %r = add i16 %a, {}\n  ret i16 %r\n}}\n",
+            constant + i as u32
+        ));
+    }
+    ir
+}
+
+/// Every function of a module ran the whole mid-end and the selection of every
+/// function again, twice (the return block copied and kept): a module of N
+/// functions cost N squared (switch.ll 1.29 G instructions, 4.75x the x86
+/// reference). The module is selected once however many functions it has.
+#[test]
+fn a_module_is_run_through_the_mid_end_once_however_many_functions_it_has() {
+    for count in [3, 30] {
+        let ir = many(count, 1);
+        llrm_z80::compile::take_selection_runs();
+        for i in 0..count {
+            text(&ir, &format!("f{i}"), i, &Request::new(Level::O2)).expect("compiles");
+        }
+        assert_eq!(llrm_z80::compile::take_selection_runs(), 1, "{count} functions");
+    }
+}
+
+/// The module kept for the next function is the module asked for: two modules
+/// that name a function alike, compiled one after the other, give their own
+/// code.
+#[test]
+fn two_modules_compiled_in_turn_do_not_share_the_cache() {
+    let (one, other) = (many(2, 1000), many(2, 2000));
+    let first = text(&one, "f0", 0, &Request::new(Level::O2)).expect("compiles");
+    let second = text(&other, "f0", 0, &Request::new(Level::O2)).expect("compiles");
+    assert!(first.contains("#1000") && second.contains("#2000"), "{first}\n{second}");
+    let again = text(&one, "f0", 0, &Request::new(Level::O2)).expect("compiles");
+    assert_eq!(first, again);
+}
