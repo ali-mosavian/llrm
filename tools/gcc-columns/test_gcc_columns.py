@@ -101,6 +101,19 @@ def test_a_hung_fork_call_is_a_failed_call_not_a_cell():
         Z.TIMEOUT = B6.TIMEOUT = 120
 
 
+def test_host_check_catches_a_wrong_expect():
+    """The kernel expects were hand-derived; host_check must flag one that is off by one, and pass the shipped list."""
+    import host_check as H
+    assert H.main() == 0
+    saved = Z.K[:]
+    try:
+        n, r, a, w = Z.K[-1]
+        Z.K[-1] = (n, r, a, w + 1)
+        assert H.main() == 1
+    finally:
+        Z.K[:] = saved
+
+
 def test_softfloat_6502_clocks_divide_by_the_records_run():
     """The 11-03 6502 softfloat table divided by 256 although add/sub/mul/div ran 361 records, and subtracted a base run that
     failed its records: hand add read 570 for 324. Records come from the vec.inc that ran, and the base run must pass."""
