@@ -1972,10 +1972,7 @@ fn a_probed_frame_ending_in_a_sibling_call_gives_its_stack_back_first() {
     // The red zone may take some of the frame's bytes; what the prologue
     // takes the exit gives back.
     let taken = lines.iter().find_map(|line| line.strip_prefix("sub rsp, ")).unwrap_or_else(|| panic!("{listing}"));
-    assert!(
-        lines[jmp - 1] == format!("add rsp, {taken}") || lines[jmp - 1].starts_with("mov rsp, rbp"),
-        "{listing}"
-    );
+    assert!(lines[jmp - 1] == format!("add rsp, {taken}") || lines[jmp - 1].starts_with("mov rsp, rbp"), "{listing}");
 }
 
 /// The `.xdata` of an x86-64 module written as COFF, found by `.pdata`'s
@@ -3420,8 +3417,8 @@ fn a_register_fill_and_a_quadword_copy_at_m64_are_rep_string_instructions() {
 }
 
 /// `mov rdi, rbx` (3 B) of a value a dword write zeroed above bit 31 is `mov
-/// edi, ebx` (2 B): the pin emits the `movq`, gcc the dword (bench_io, os_files,
-/// os_find +1 B over release/next).
+/// edi, ebx` (2 B): the pin emits the `movq`, gcc the dword (bench_io,
+/// os_files, os_find +1 B over release/next).
 #[test]
 fn a_copy_of_a_zero_extended_dword_is_a_dword_copy_at_m64() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
@@ -3443,4 +3440,23 @@ fn a_copy_of_a_full_width_value_stays_a_qword_copy_at_m64() {
     let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("mov rbx, rdi") && !listing.contains("mov ebx, edi"), "{listing}");
+}
+
+/// Win64 puts argument `n` in RCX, RDX, R8, R9 by position, the fifth on the
+/// stack above the 32-byte home area the caller reserved.
+#[test]
+fn a_win64_function_takes_its_arguments_by_position_above_the_home_area() {
+    let text = format!(
+        "{SYSV}declare i64 @g(i64, i64, i64, i64, i64)\ndefine i64 @f(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e) {{\n  %r = call i64 @g(i64 %e, i64 %d, i64 %c, i64 %b, i64 %a)\n  %s = add i64 %r, 1\n  ret i64 %s\n}}\n"
+    );
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag", "-mabi=win64"]), &text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    // g(e, d, c, b, a): the fifth argument is stack slot 4 over the 32-byte
+    // home area, and the callee's own fifth is above it, past the return
+    // address.
+    assert!(lines.contains(&"mov qword ptr [rsp+32], rcx"), "{listing}");
+    assert!(lines.contains(&"sub rsp, 48"), "{listing}");
+    assert!(lines.contains(&"mov rcx, qword ptr [rsp+96]"), "{listing}");
+    assert!(!listing.contains("rdi") && !listing.contains("rsi"), "SysV registers: {listing}");
 }
