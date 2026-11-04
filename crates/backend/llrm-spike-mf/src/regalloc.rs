@@ -311,6 +311,20 @@ pub trait Target {
     ) -> Option<Inst> {
         None
     }
+    /// Whether `spill_store_lane` is stated.
+    fn spills_lanes() -> bool {
+        false
+    }
+    /// The instruction that stores `register`, one lane of a spilled value of
+    /// `offset` bytes up, to frame `slot`.
+    fn spill_store_lane(
+        _class: Self::Class,
+        _register: Reg,
+        _slot: i32,
+        _offset: u32,
+    ) -> Option<Inst> {
+        None
+    }
     /// `foldMemoryOperand`: `inst` with its only read of the spilled `register`
     /// taken straight from frame `slot`, where the target has an
     /// instruction form for that; the reload then goes.

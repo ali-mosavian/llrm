@@ -15,3 +15,15 @@ fn a_sum_loop_stays_a_loop_instead_of_a_wide_multiply() {
         assert!(out.contains("add.l"), "{cpu}: no loop:\n{out}");
     }
 }
+
+/// The same loop at `-O2` was 268 B (68000) and 202 B (68020) of multiplies
+/// against gcc's 18 B and slower below a trip count of about 70: the size gate
+/// of `rewriteLoopExitValues` (DEVIATE 15) ran at `-Os` only.
+#[test]
+fn a_sum_loop_stays_a_loop_at_speed_too() {
+    for cpu in ["68000", "68020"] {
+        let out = assembly(SUM, cpu_of(cpu).unwrap(), Level::O2).expect("compiles");
+        assert!(!out.contains("mulsi3") && !out.contains("muls.l"), "{cpu}: the closed form:\n{out}");
+        assert!(out.contains("add.l"), "{cpu}: no loop:\n{out}");
+    }
+}

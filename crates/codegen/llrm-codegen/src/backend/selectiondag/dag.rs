@@ -442,6 +442,10 @@ pub struct SelectionDAG {
     /// The loads and stores the program marks volatile: the LIR instructions
     /// they become keep the mark (`MachineMemOperand::isVolatile`).
     pub volatile_accesses: HashSet<u32>,
+    /// Copies of a virtual register the builder made with `getCopyFromReg`
+    /// itself (a switch's table index or bit-test mask), not through
+    /// `RegsForValue::getCopyFromRegs`: no live-out assertion wraps them.
+    pub direct_copies: HashSet<u32>,
 }
 
 impl SelectionDAG {
@@ -509,6 +513,7 @@ impl SelectionDAG {
             invariant_loads: HashSet::default(),
             fixed_offsets: Default::default(),
             volatile_accesses: HashSet::default(),
+            direct_copies: HashSet::default(),
         };
         dag.entry = dag.intern(ISD::EntryToken, &[EVT::OTHER, EVT::GLUE], &[], SDNodeFlags::default(), NodeData::None);
         dag.root = dag.entry;
