@@ -179,6 +179,17 @@ pub fn promoted_among(
     size: bool,
     among: Option<&[GlobalId]>,
 ) -> Vec<GlobalId> {
+    // The module-wide scans below are made for a function whose own uses of a
+    // pointer parameter allow a promotion, and only then.
+    if let Some(ids) = among
+        && !ids.iter().any(|&id| {
+            module.global(id).function().is_some_and(|function| {
+                (0..function.parameters().len()).any(|parameter| shaped(module, layout, id, parameter).is_some())
+            })
+        })
+    {
+        return Vec::new();
+    }
     let only = direct_only(module);
     let llrm_mir::callgraph::DirectCalls { sites, refused } = direct_calls(module);
     let callees = memory::callees(module);
@@ -210,17 +221,16 @@ fn words(
     (layout.alloc_size(&module.context.types, ty).max(2) as i64 + 1) / 2
 }
 
-#[allow(clippy::too_many_arguments)]
-fn planned(
+/// What the uses of parameter `parameter` of `id` are: its loaded fields, the
+/// recursive calls that pass it on and the addresses stepped to the fields.
+/// None where a use is anything else; the part of a promotion that reads the
+/// function alone.
+fn shaped(
     module: &Module,
     layout: &DataLayout,
-    callees: &memory::Callees,
     id: GlobalId,
     parameter: usize,
-    calls: &[(GlobalId, InstId)],
-    costs: &OperationCosts,
-    size: bool,
-) -> Option<Plan> {
+) -> Option<(llrm_mir::module::ValueId, Vec<Field>, Vec<InstId>, Vec<InstId>)> {
     let function = module.global(id).function()?;
     let context = &module.context;
     let value = *function.parameters().get(parameter)?;
@@ -292,6 +302,23 @@ fn planned(
     {
         return None;
     }
+    Some((value, fields, passed_on, steps))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn planned(
+    module: &Module,
+    layout: &DataLayout,
+    callees: &memory::Callees,
+    id: GlobalId,
+    parameter: usize,
+    calls: &[(GlobalId, InstId)],
+    costs: &OperationCosts,
+    size: bool,
+) -> Option<Plan> {
+    let function = module.global(id).function()?;
+    let context = &module.context;
+    let (value, fields, passed_on, steps) = shaped(module, layout, id, parameter)?;
     // The callers load before the call what the function loaded after it: where
     // the function loads it before it writes or calls anything, the value
     // is the same and the load happens either way; else its own promise
