@@ -52,6 +52,10 @@ fn flags_unread_after(
 ) -> bool {
     for line in &lines[from..] {
         let Line::Inst(inst) = line else { return false };
+        // a jump leaves the block: no block reads the flags its predecessor left
+        if inst.op == Op::Jmp {
+            return true;
+        }
         match inst.flags() {
             Flags::Keeps => {}
             Flags::Of(_) | Flags::Sets => return true,
