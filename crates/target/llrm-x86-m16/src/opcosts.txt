@@ -20,6 +20,7 @@ carry = carry(movzx, alu_rr, shift_ri, mov_rr)
 carry_step = step(alu_rr)
 load = mov_rm
 store = mov_mr
+store_immediate = mov_mr
 memory_update = alu_mr
 branch = jcc
 prefix = prefix
@@ -46,6 +47,7 @@ extend = movzx
 set = setcc
 fill = rep_stos + 2*push_r + 2*pop_seg + 2*mov_ri
 fill_cell = rep_stos_cell
+fill_segment = 2*push_r + 2*pop_seg
 copy = rep_movs + 2*push_r + 2*pop_seg + 3*mov_ri
 copy_cell = rep_movs_cell
 copy_variable = shift_ri + alu_ri + 2*mov_rr + rep_movs
@@ -77,6 +79,8 @@ setcc = 3
 mov_rr = 4
 mov_rm = 6
 mov_mr = 6
+# Not measured at m16: equal to mov_mr so m16 decisions stay as on release/next. Owner w2, exit 2026-11-12.
+mov_mi = 6
 alu_mr = 6
 jcc = 2
 call_far = 5
@@ -96,6 +100,9 @@ push_r = 1
 pop_seg = 1
 mov_ri = 6
 rep_stos_cell = 0
+# `mov r16, imm16` as encoded: `mov_ri` above is the doubled estimate for a constant that needs more than the load; a fill's
+# two loads are only the loads.
+mov_ri_exact = 3
 rep_movs = 2
 rep_movs_cell = 0
 
@@ -107,5 +114,7 @@ rep_movs_cell = 0
 float_to_int = 0
 float_compare = 0
 prefix = 1
+store_immediate = mov_mi
 argument = 2
+fill = rep_stos + 2*push_r + 2*pop_seg + 2*mov_ri_exact
 float_release = x87_release
