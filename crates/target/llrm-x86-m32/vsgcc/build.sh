@@ -17,6 +17,7 @@ ABI=${VSGCC_ABI:-sysv}
 LD=${VSGCC_LD:-80}
 case $LD in 80) LLRM_LD=${VSGCC_LLRM_LD--mlong-double-80}; REF_LD=;; 64) LLRM_LD=${VSGCC_LLRM_LD-}; REF_LD=-mlong-double-64;; *) echo "VSGCC_LD is 80 or 64, not $LD" >&2; exit 2;; esac
 echo -n $LD > $O/ld
+echo -n "$(md5sum < "$LLRM" | cut -c1-12)+$(md5sum < "$(dirname "$LLRM")/llrm-llc" | cut -c1-12)" > $O/o/$P.cc
 echo -n $ABI > $O/abi
 EMU=$(python3 "$R/tools/linkrecipe.py" x86-m32 ld-emulation)
 # the 64-bit divides gcc and clang call, from each compiler's own 32-bit runtime

@@ -545,7 +545,7 @@ fn flag_dag(seed: u64) -> (SelectionDAG, SDValue, SDValue, SDValue) {
     let entry = dag.entry_node();
     let mut vals: Vec<SDValue> = (0..2 + next(3)).map(|i| load(&mut dag, 1 + i as u32, entry)).collect();
     let order_cmp_first = next(2) == 0;
-    let mut make_cmp = |dag: &mut SelectionDAG, vals: &[SDValue], next: &mut dyn FnMut(usize) -> usize| {
+    let make_cmp = |dag: &mut SelectionDAG, vals: &[SDValue], next: &mut dyn FnMut(usize) -> usize| {
         machine(dag, CMP, &[EVT::I8], &[vals[next(vals.len())], vals[next(vals.len())]])
     };
     let mut cmp = None;
