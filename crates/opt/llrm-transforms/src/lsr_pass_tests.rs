@@ -1577,3 +1577,51 @@ exit:
     assert!(after.contains("phi i8"), "{after}");
     assert!(!after.contains(" to i8"), "{after}");
 }
+
+/// bench/queens at m16 -O2: the inner `safe` loop reads `q[r]` and compares
+/// with `row - r` and `r - row`. The pin's formulae include a pointer walked
+/// by two bytes; DEVIATE LG3's end-biased formulae brought a register of their
+/// own, the solver's reuse rule then cut the pointer solution out of the
+/// search, and the solution left cost an instruction more than the loop as it
+/// stood, so LSR was dropped: 236848 clocks against 170823 at -Os, which
+/// finds the pointer. LG3 now joins after the pin's narrowing and is kept
+/// only where it costs less.
+const QUEENS_INNER: &str = "declare i16 @g(ptr, i16, i16)
+
+define i16 @f(ptr %q, i16 %row, i16 %n) {
+b0:
+  %r1 = icmp sgt i16 %row, 0
+  br i1 %r1, label %pre, label %done
+pre:
+  br label %loop
+loop:
+  %r = phi i16 [ %r2, %next ], [ 0, %pre ]
+  %p = getelementptr inbounds nuw [2 x i8], ptr %q, i16 %r
+  %v = load i16, ptr %p, align 2
+  %d = sub nsw i16 %v, %n
+  %z = icmp eq i16 %v, %n
+  %a = sub nuw nsw i16 %row, %r
+  %c1 = icmp eq i16 %d, %a
+  %o1 = select i1 %z, i1 true, i1 %c1
+  %b = sub nsw i16 %r, %row
+  %c2 = icmp eq i16 %d, %b
+  %o2 = select i1 %o1, i1 true, i1 %c2
+  br i1 %o2, label %done, label %next
+next:
+  %r2 = add nuw nsw i16 %r, 1
+  %ex = icmp eq i16 %r2, %row
+  br i1 %ex, label %call, label %loop
+call:
+  %x = call i16 @g(ptr %q, i16 %row, i16 %n)
+  br label %done
+done:
+  %res = phi i16 [ 0, %b0 ], [ 0, %loop ], [ %x, %call ]
+  ret i16 %res
+}
+";
+
+#[test]
+fn a_loop_the_pin_makes_a_pointer_of_stays_one_when_end_biased_formulae_exist_in_real_mode() {
+    let after = reduced_real(QUEENS_INNER, &six_registers());
+    assert!(after.contains("phi ptr"), "{after}");
+}

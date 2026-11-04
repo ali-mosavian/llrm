@@ -280,8 +280,23 @@ fn plan_loop(
     lsr.filter_out_undesirable_dedicated_registers(se);
     llrm_support::debug!("lsr", "  after filtering: {}", counts(&lsr));
     lsr.narrow_search_space_using_heuristics(se);
+    let (mut solution, pin_cost) = lsr.solve_with_cost(se);
+    // DEVIATE LG3 (beyond the pin): its formulae join the space after the pin's
+    // narrowing, and its solution is kept only where it costs less than the
+    // pin's own: a formula that brings a register of its own can cut the
+    // pin's solution out of the search (a use must reuse the registers
+    // already chosen), as it did queens -O2 (+57859 clocks).
+    let pin_uses = lsr.uses.clone();
+    lsr.generate_end_biased(se);
     llrm_support::debug!("lsr", "  after narrowing: {}", counts(&lsr));
-    let solution = lsr.solve(se);
+    if lsr.uses.iter().zip(&pin_uses).any(|(now, was)| now.formulae.len() != was.formulae.len()) {
+        let (beyond, beyond_cost) = lsr.solve_with_cost(se);
+        if !beyond.is_empty() && (solution.is_empty() || beyond_cost.is_less(tti, &pin_cost)) {
+            solution = beyond;
+        } else {
+            lsr.uses = pin_uses;
+        }
+    }
     if solution.is_empty() {
         return planned(None);
     }
