@@ -177,6 +177,14 @@ fn walk(
             }
         }
         ISD::Select => operand(1).intersect(operand(2)),
+        // `computeKnownBits` of the bit counts (SelectionDAG.cpp#L3921-L3955):
+        // the count is at most what the operand's known bits leave possible,
+        // so the bits above that count's width are zero.
+        ISD::CtTz | ISD::CtTzZeroPoison => counted(width, operand(0).one.trailing_zeros().min(width)),
+        ISD::CtLz | ISD::CtLzZeroPoison => counted(width, operand(0).one.leading_zeros().saturating_sub(128 - width)),
+        ISD::CtPop => counted(width, width - operand(0).zero.count_ones().min(width)),
+        // `Known.Zero.setBitsFrom(1)` (SelectionDAG.cpp#L3957).
+        ISD::Parity => KnownBits { zero: all & !1, one: 0, width },
         ISD::UMax => operand(0).umax(operand(1)),
         ISD::UMin => operand(0).umin(operand(1)),
         // `AssertZext`: the bits at and above the asserted type are zero.
@@ -361,4 +369,14 @@ pub fn max_significant_bits(
     value: SDValue,
 ) -> u32 {
     dag.value_type(value).size_in_bits() - num_sign_bits(dag, value) + 1
+}
+
+/// A count of at most `most` in `width` bits: the bits from `bit_width(most)`
+/// up are zero (`Known.Zero.setBitsFrom(bit_width(most))`).
+fn counted(
+    width: u32,
+    most: u32,
+) -> KnownBits {
+    let used = 32 - most.leading_zeros();
+    KnownBits { zero: mask(width) & !mask(used), one: 0, width }
 }

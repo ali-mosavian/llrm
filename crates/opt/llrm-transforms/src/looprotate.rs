@@ -28,9 +28,10 @@
 //!   the function. `process_loop` reads one `LoopInfo` made before the
 //!   rotation; the blocks the rotation adds belong to the loops outside the
 //!   rotated one, which the driver derives again before it reaches them.
-//! - R2 `check-exit-count` is not translated:
-//!   `profitableToRotateLoopExitingLatch` asks ScalarEvolution for exit counts
-//!   only under that option, which no `PassBuilder` pipeline sets.
+//! - R2 `check-exit-count` is the late slot's option
+//!   (PassBuilderPipelines.cpp#L1621); R7 below prices it.
+//! - R7 `profitableToRotateLoopExitingLatch` under that option makes a
+//!   ScalarEvolution session of its own for the question.
 //! - R3 New blocks go at the end of the layout: `Function::insert_block` after
 //!   a block scans the layout. LLVM puts them next to their neighbours.
 //! - R4 No `llvm.experimental.noalias.scope.decl` scope cloning and no
@@ -122,6 +123,9 @@ pub struct Options {
     /// `IsUtilMode`: rotate even a loop whose latch already exits.
     pub is_util_mode: bool,
     pub prepare_for_lto: bool,
+    /// `CheckExitCount`: a loop whose latch exit count rotating makes
+    /// computable is rotated (the late slot, PassBuilderPipelines.cpp#L1621).
+    pub check_exit_count: bool,
 }
 
 /// What the rotation reads and changes.
@@ -478,9 +482,9 @@ fn rewrite_uses_of_cloned_instructions(
     }
 }
 
-/// `profitableToRotateLoopExitingLatch` (R2: without the exit-count test):
-/// whether a header phi has no user but in the header's exit, so rotating
-/// makes it dead.
+/// `profitableToRotateLoopExitingLatch`: whether a header phi has no user but
+/// in the header's exit, so rotating makes it dead, or (`CheckExitCount`)
+/// rotating makes the latch's exit count computable.
 fn profitable_to_rotate_loop_exiting_latch(
     run: &Run,
     lp: Loop,
@@ -500,7 +504,20 @@ fn profitable_to_rotate_loop_exiting_latch(
         }
         return true;
     }
-    false
+    if !run.options.check_exit_count {
+        return false;
+    }
+    // DEVIATE R7: expressions made for this one question (the pass keeps no
+    // ScalarEvolution); exit 2026-11-20 with a session the driver holds.
+    let Some(latch) = lp.get_loop_latch(run.function) else { return false };
+    let mut session =
+        llrm_analysis::scev::analysis::ScevSession::within(run.context, run.globals, run.metadata, run.function);
+    let (se, env) = session.split(run.layout, run.globals, run.metadata);
+    let cx = env.cx(&*run.context, &*run.function);
+    use llrm_analysis::scev::backedge::ExitCountKind::Exact;
+    let latch_count = se.get_exit_count(&cx, header, latch, Exact);
+    let header_count = se.get_exit_count(&cx, header, header, Exact);
+    se.is_could_not_compute(latch_count) && !se.is_could_not_compute(header_count)
 }
 
 /// `LoopInfo::replacementPreservesLCSSAForm`.
@@ -1001,6 +1018,8 @@ pub struct LoopRotate {
     pub duplicate_headers: bool,
     /// Code bytes outrank speed (`-Os`): the header is copied only when small.
     pub size: bool,
+    /// `CheckExitCount`.
+    pub check_exit_count: bool,
 }
 
 impl FunctionPass for LoopRotate {
@@ -1025,6 +1044,7 @@ impl FunctionPass for LoopRotate {
             rotation_only: false,
             is_util_mode: false,
             prepare_for_lto: false,
+            check_exit_count: self.check_exit_count,
         };
         let mut run = Run {
             context: unit.context,
