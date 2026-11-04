@@ -11,7 +11,6 @@
 //! here; `select::function_text` falls back to the cell path. Exit: every
 //! opcode built.
 
-use llrm_support::hash::{HashMap, HashSet};
 use std::fmt::Write;
 
 use llrm_lir::registers::RegId;
@@ -21,6 +20,7 @@ use llrm_spike_mf::{
     Block, Inst, Jump, Kind, MFunction, Operand, Reg, Target, branch_fold, forward_reloads, machine_sink_in_place,
     remove_identity_copies, remove_redundant_copies_between, reschedule_kills,
 };
+use llrm_support::hash::{HashMap, HashSet};
 
 use crate::asm::{Asm, Inst as AsmInst, Line, Op as AsmOp};
 use crate::dagisel::generated::ids::opcode as op;
@@ -1068,7 +1068,8 @@ impl Builder {
             let source = self.pointer(a)?;
             self.define(d);
             let dest = self.pointer(d)?;
-            let operands = vec![Operand::Def(dest), Operand::Use(source), Operand::Imm(n), Operand::Def(Reg::Phys(reg::A))];
+            let operands =
+                vec![Operand::Def(dest), Operand::Use(source), Operand::Imm(n), Operand::Def(Reg::Phys(reg::A))];
             let mut bump = Inst::new(Kind::Op("PSUB"), operands);
             bump.ties = vec![(0, 1)];
             self.push(bump);
@@ -1186,8 +1187,9 @@ fn immediate(operand: &Machine) -> Result<i64, Unsupported> {
 /// access, or the address of a frame object.
 ///
 /// A pointer stays one through a copy and through an add of a constant
-/// 1..=255 or -1..=-255 (`p++`, `p += k`, `--p`), in both directions, so a pointer walked round a loop is
-/// bumped in its pair instead of unpacked, added and packed every trip.
+/// 1..=255 or -1..=-255 (`p++`, `p += k`, `--p`), in both directions, so a
+/// pointer walked round a loop is bumped in its pair instead of unpacked, added
+/// and packed every trip.
 ///
 /// DEVIATE (6502-7): pointer-ness is worked out from how the cells are used,
 /// and an add of a constant is found by following the cell that holds it; the
@@ -1202,7 +1204,10 @@ fn pointer_cells(
     let constant = |cell: &String| {
         let low = constants.get(cell).copied();
         let high = constants.get(&format!("{cell}+1")).copied();
-        matches!((low, high), (Some(1..=255), Some(0 | 255)) | (Some(0), Some(1)))
+        matches!(
+            (low, high),
+            (Some(1..=255), Some(0 | 255)) | (Some(0), Some(1))
+        )
     };
     // a cell read or written as plain bytes anywhere stays a word cell
     let mut plain: HashSet<String> = HashSet::default();
@@ -2142,6 +2147,73 @@ fn call_compact_routines(function: &mut MFunction<Class>) {
     }
 }
 
+/// A carry made into a byte and read back with only moves and loads between
+/// (`SAVEC; copy; ..; copy; LOADC`) stays in C: the 32-bit add paid
+/// `lda #0; rol a; lsr a` between its two halves. A byte nothing reads goes
+/// too.
+///
+/// Every producer of a carry saves it and every consumer loads it, so that
+/// nothing the scheduler or allocator puts between the two can lose it; the
+/// moves and loads here do not touch C.
+fn keep_carry_in_c(function: &mut MFunction<Class>) {
+    let mut reads: HashMap<u32, usize> = HashMap::default();
+    for operand in function.blocks.iter().flat_map(|b| &b.insts).flat_map(|i| &i.operands) {
+        if let Operand::Use(Reg::Virt(v)) = operand {
+            *reads.entry(*v).or_default() += 1;
+        }
+    }
+    let acc = Reg::Phys(reg::A);
+    let saved = |insts: &[Inst], at: usize| match (insts.get(at).map(|i| i.kind), insts.get(at + 1)) {
+        (Some(Kind::Op("SAVEC")), Some(next)) => match (next.kind, &next.operands[..]) {
+            (Kind::Copy, [Operand::Def(Reg::Virt(v)), Operand::Use(from)]) if *from == acc => Some(*v),
+            _ => None,
+        },
+        _ => None,
+    };
+    let moves = |inst: &Inst| matches!(inst.kind, Kind::Copy | Kind::Op("LDM" | "LDI" | "STM"));
+    for block in &mut function.blocks {
+        let mut at = 0;
+        while at < block.insts.len() {
+            let Some(cell) = saved(&block.insts, at) else {
+                // the byte was dropped as unread: the save is a write of A that
+                // the next load overwrites
+                let overwritten = block
+                    .insts
+                    .get(at + 1)
+                    .is_some_and(
+                        |next| matches!(
+                            (next.kind, &next.operands[..]),
+                            (Kind::Copy, [Operand::Def(to), Operand::Use(from)]) if *to == acc && *from != acc
+                        ),
+                    );
+                if block.insts[at].kind == Kind::Op("SAVEC") && overwritten {
+                    block.insts.remove(at);
+                } else {
+                    at += 1;
+                }
+                continue;
+            };
+            let count = reads.get(&cell).copied().unwrap_or(0);
+            let load = (at + 2..block.insts.len().saturating_sub(1)).find(|&j| {
+                matches!(
+                    (block.insts[j].kind, &block.insts[j].operands[..]),
+                    (Kind::Copy, [Operand::Def(to), Operand::Use(Reg::Virt(v))]) if *to == acc && *v == cell
+                ) && block.insts[j + 1].kind == Kind::Op("LOADC")
+            });
+            match (count, load) {
+                (0, _) => {
+                    block.insts.drain(at..at + 2);
+                }
+                (1, Some(j)) if block.insts[at + 2..j].iter().all(moves) => {
+                    block.insts.drain(j..j + 2);
+                    block.insts.drain(at..at + 2);
+                }
+                _ => at += 1,
+            }
+        }
+    }
+}
+
 fn remove_dead(function: &mut MFunction<Class>) {
     loop {
         let mut read: HashSet<u32> = HashSet::default();
@@ -2690,6 +2762,7 @@ fn emit_with<const STACK: bool>(
     if TUNING.with(|t| t.get()) == Tuning::SIZE {
         call_compact_routines(&mut function);
     }
+    keep_carry_in_c(&mut function);
     let sunk = sink && machine_sink_in_place::<Mos<STACK>>(&mut function);
     let shared = share && crate::sharecmp::share_compares(&mut function);
     reschedule_kills::<Mos<STACK>>(&mut function);
@@ -2828,7 +2901,8 @@ fn emit_with<const STACK: bool>(
                         .unwrap();
                     }
                 }
-                // d := d + 1 on two cells: the high byte steps when the low wrapped
+                // d := d + 1 on two cells: the high byte steps when the low
+                // wrapped
                 (Kind::Op("INC16"), _) => {
                     made += 1;
                     let step = |r| match r {
@@ -2839,7 +2913,8 @@ fn emit_with<const STACK: bool>(
                     let (low, high) = (step(regs[0]), step(regs[1]));
                     writeln!(out, "  {low}\n  bne _pa{made}\n  {high}\n_pa{made}:").unwrap();
                 }
-                // d := d - 1 on two cells: the high byte steps when the low was 0
+                // d := d - 1 on two cells: the high byte steps when the low was
+                // 0
                 (Kind::Op("DEC16"), _) => {
                     made += 1;
                     // a byte in x or y is read through a and stepped by dex/dey
@@ -2856,7 +2931,8 @@ fn emit_with<const STACK: bool>(
                     let (load, low, high) = (read(regs[0]), step(regs[0]), step(regs[1]));
                     writeln!(out, "  {load}\n  bne _pa{made}\n  {high}\n_pa{made}:\n  {low}").unwrap();
                 }
-                // d := s - k on a pair: the low byte stepped down, the high on borrow
+                // d := s - k on a pair: the low byte stepped down, the high on
+                // borrow
                 (Kind::Op("PSUB"), [_, _, Operand::Imm(k), ..]) => {
                     let (d, s) = (regs[0], regs[1]);
                     parallel_move(&mut out, &[(lane(d, 0), lane(s, 0)), (lane(d, 1), lane(s, 1))], false);

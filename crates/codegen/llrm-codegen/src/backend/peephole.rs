@@ -2685,9 +2685,11 @@ pub fn _flag_effect(
         // One that clobbers is an opaque barrier, which may observe any flag.
         return if one.clobbers.is_empty() { (Lanes::new(), Lanes::new()) } else { (every, Lanes::new()) };
     }
-    if let Some(effect) = liveness::effect(regs, bits, one) {
-        let flags = |lanes: &Lanes| lanes.iter().copied().filter(|lane| lane.0 == RegId::None).collect::<Lanes>();
-        return (flags(&effect.reads), flags(&effect.writes));
+    let known = liveness::with_effect(regs, bits, one, |effect| {
+        effect.map(|effect| (effect.reads.flag_part(), effect.writes.flag_part()))
+    });
+    if let Some(flags) = known {
+        return flags;
     }
     // A sibling call's `jmp` leaves the function as `ret` does: it reads no
     // flag and the caller's flags are gone (the pin's `TAILJMPd`).

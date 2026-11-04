@@ -293,6 +293,19 @@ impl X86Hooks {
         has_no_flag_uses(dag, flags, |cc| !matches!(cc, 0 | 1 | 4 | 5 | 8..=15))
     }
 
+    /// `onlyUsesZeroFlag` ([L3556][zero]): every reader of the flags tests
+    /// `COND_E` or `COND_NE`.
+    ///
+    /// [zero]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L3556
+    pub fn only_uses_zero_flag<D: AddrDag>(
+        &self,
+        dag: &D,
+        flags: SDValue,
+    ) -> bool {
+        has_no_flag_uses(dag, flags, |cc| !matches!(cc, 4 | 5))
+    }
+
     /// `hasNoSignFlagUses` ([L3636][sign]). Unlike the pin, a user that reads
     /// the flags directly (`SETCC`, `CMOV`, `BRCOND`) is examined too.
     ///

@@ -653,10 +653,11 @@ fn options_for(
                 llrm_mir::libfunc::Routine::stated(names, |name| pattern.replace('*', name), number);
         }
     }
-    // The pin's clang IR at 16 bits has the forwarding of a global's store the
-    // write-through `Promote` stands in for at -O1 (lru -29 B, -16 clk at
-    // m16 -O1). Nib and BASIC build their options by `m16_options` and keep it.
-    if bound.target.layout().mode == 16 {
+    // The pin's clang IR at 16 and 32 bits has the forwarding of a global's
+    // store the write-through `Promote` stands in for at -O1 (lru -29 B, -16
+    // clk at m16; -11 clk, -4 B at m32, the only m32 cell it moves). Nib and
+    // BASIC build their options by `m16_options` and keep it.
+    if matches!(bound.target.layout().mode, 16 | 32) {
         options.pipeline.write_through = false;
     }
     // At -O1 the forwarding made jpeg_fixed/jpeg_single 345-348 B larger at m64
@@ -690,13 +691,13 @@ mod options_tests {
         options_for(&bound, &flags, machine, format, default)
     }
 
-    /// The write-through `Promote` ran on the pin's clang IR at m16 -O1 and made
-    /// `lru` 29 B larger; the frontends that build for m16 alone (Nib, BASIC)
+    /// The write-through `Promote` ran on the pin's clang IR at m16 and m32 -O1 and made
+    /// `lru` larger (29 B at m16); the frontends that build for m16 alone (Nib, BASIC)
     /// have no GVN there and keep it.
     #[test]
-    fn clang_ir_at_m16_has_no_write_through_and_the_m16_frontends_keep_it() {
+    fn clang_ir_at_m16_and_m32_has_no_write_through_and_the_m16_frontends_keep_it() {
         assert!(!options(&["-m16"], "omf").pipeline.write_through);
-        assert!(options(&["-m32"], "omf").pipeline.write_through);
+        assert!(!options(&["-m32"], "omf").pipeline.write_through);
         assert!(crate::m16_options(crate::m16_machine()).pipeline.write_through);
     }
 
