@@ -13,7 +13,7 @@
 //!   does it only when poison-generating flags remain).
 //! - DEVIATE a call's attributes are not intersected; a call that only reads or
 //!   only writes memory (`memory::of`, which counts every location including
-//!   `inaccessiblemem`) is numbered unless it is an `llvm.`/`llrm.` marker.
+//!   `inaccessiblemem`) is numbered unless it is an `llrm.` marker.
 //! - DEVIATE a GEP's constant offset is taken for byte GEPs only.
 //! - DEVIATE MemorySSA is the translated `Mssa`, built once for the function as
 //!   it was and not updated (`MSSAUpdater`); an erased store stays a def in it,
@@ -582,13 +582,23 @@ impl Walk<'_> {
                 if effects.reads || effects.writes {
                     return None;
                 }
-                key(Tag::Call(info.function_type, info.calling_convention), operands)
+                // Handle intrinsics with commutative operands
+                // (`SimpleValue::getHashValue`, EarlyCSE.cpp:298).
+                let mut operands = operands.to_vec();
+                if operands.len() >= 3 && self.intrinsic(inst).is_some_and(commutative_intrinsic) && operands[0] > operands[1] {
+                    operands.swap(0, 1);
+                }
+                key(Tag::Call(info.function_type, info.calling_convention), &operands)
             }
             _ => None,
         }
     }
 
-    /// A call to an `llvm.` or `llrm.` function: a marker, not a computation.
+    /// A call to an `llrm.` function: a marker, not a computation. An `llvm.`
+    /// call is numbered like any call that touches no memory and returns a
+    /// value (`SimpleValue::canHandle`: `doesNotAccessMemory` and not void),
+    /// `umin` and the like included; the ones that return nothing are skipped
+    /// by their result.
     fn marker(
         &self,
         inst: InstId,
@@ -596,7 +606,7 @@ impl Walk<'_> {
         memory::callee(self.context, self.function, inst)
             .and_then(|global| self.view.globals.get(global.0 as usize))
             .and_then(|global| global.name.as_deref())
-            .is_some_and(|name| name.starts_with("llvm.") || name.starts_with("llrm."))
+            .is_some_and(|name| name.starts_with("llrm."))
     }
 
     /// The intrinsic a call names, its type suffixes aside.
@@ -1376,3 +1386,16 @@ impl FunctionPass for EarlyCse {
 #[cfg(test)]
 #[path = "earlycse_tests.rs"]
 mod tests;
+
+/// `Intrinsic::isCommutative` of the intrinsics MIR has: the first two
+/// arguments may be exchanged.
+fn commutative_intrinsic(intrinsic: llrm_mir::intrinsics::Intrinsic) -> bool {
+    use llrm_mir::intrinsics::Intrinsic;
+    match intrinsic {
+        Intrinsic::MinMax { .. } => true,
+        Intrinsic::Saturating { op, .. } | Intrinsic::WithOverflow { op, .. } => {
+            matches!(op, BinaryOp::Add | BinaryOp::Mul)
+        }
+        _ => false,
+    }
+}
