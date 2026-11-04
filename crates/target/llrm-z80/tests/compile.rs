@@ -1519,9 +1519,12 @@ fn a_pointer_read_through_hl_and_stepped_after_stays_in_hl() {
 /// bound and `out` read from the frame every trip, 150 T a byte against gcc's
 /// 106: the exit count `umax(1, n) - 1` cost 6 against a budget of 4 basic
 /// instructions. lz4c -O2 111095 T against gcc's 103309; 102805 stepping a
-/// pointer and counting down in `bc`.
+/// pointer and counting down in `bc`, which still loaded and stored the
+/// pointer's slot every trip; 54659 with the pointer in `hl` across the back
+/// edge.
 #[test]
-fn lz4cs_checksum_loop_steps_a_pointer_and_counts_down() {
+fn lz4cs_checksum_loop_steps_a_pointer_in_hl_and_counts_down() {
     let out = text(include_str!("kernels/ir/lz4c.ll"), "lz4c", 0, &Request::new(Level::O2)).expect("compiles");
-    assert!(!checksum_loop(&out).contains("add hl, bc"), "{out}");
+    let body = checksum_loop(&out);
+    assert!(!body.contains("add hl, bc") && !body.contains("(ix)"), "{out}");
 }

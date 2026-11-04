@@ -155,6 +155,27 @@ pub trait Target {
         true
     }
 
+    /// The bytes of a use operand `inst` reads, where it reads less than the
+    /// whole: `(operand, byte offset, bytes)`. The sign test of a pair reads
+    /// its high byte; liveness takes the rest of the pair as not read there.
+    fn read_lanes(_inst: &Inst) -> Option<(usize, u32, u32)> {
+        None
+    }
+
+    /// Whether `lane_moves`' building instruction (a `PACK`) is converted to
+    /// one copy per part into its lane of the whole (`eliminateRegSequence`),
+    /// which the coalescer then joins. False: it stays one instruction and the
+    /// parts are hinted.
+    fn lowers_lanes() -> bool {
+        false
+    }
+
+    /// Whether a copy into or out of a byte above the low one of a wider value
+    /// is joined (`CoalescerPair` with a `SubIdx`). False: such a copy stays.
+    fn joins_lanes() -> bool {
+        false
+    }
+
     /// `canJoinPhys`: whether a copy between an ordinary value and a pinned
     /// one (an argument register, not reserved) is joined. The pin joins only
     /// reserved registers, so a target that states false leaves the copy to

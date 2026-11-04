@@ -681,6 +681,42 @@ pub fn selected(
     selected_in_pool(module, name, arch, cpu, libcalls, None, &mut Pool::new(module.globals.len() as i64))
 }
 
+/// The table for a target `bits` wide with `features`, built once per thread
+/// and copied for each function: the constructors fill thousands of entries
+/// (65.7 M instructions of tiny600's 4 724 M, 600 functions).
+fn lowering_for(
+    bits: u32,
+    features: Features,
+    build: impl FnOnce() -> TargetLowering,
+) -> TargetLowering {
+    type Key = (u32, [bool; 8]);
+    thread_local! {
+        static TABLES: std::cell::RefCell<Vec<(Key, TargetLowering)>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let key: Key = (
+        bits,
+        [
+            features.cmov,
+            features.bmi,
+            features.lzcnt,
+            features.popcnt,
+            features.movbe,
+            features.shld_slow,
+            features.sse2,
+            features.soft_float,
+        ],
+    );
+    TABLES.with(|tables| {
+        let mut tables = tables.borrow_mut();
+        if let Some((_, found)) = tables.iter().find(|(known, _)| *known == key) {
+            return found.clone();
+        }
+        let made = build();
+        tables.push((key, made.clone()));
+        made
+    })
+}
+
 pub fn selected_in_pool(
     module: &Module,
     name: &str,
@@ -808,14 +844,17 @@ fn selected_in(
     let mut tli = if m16 {
         // `useSoftFloat()`, or no x87 among the function's target features.
         let soft_float = crate::backend::isel::soft_float(&function.attrs);
-        TargetLowering::x86_16(Features { soft_float, ..Features::default() }, MVT::I16)
+        let features = Features { soft_float, ..Features::default() };
+        lowering_for(16, features, || TargetLowering::x86_16(features, MVT::I16))
     } else if m64 {
-        TargetLowering::x86_64(Features { sse2: arch.scalar_sse(), cmov: true, ..Features::default() }, MVT::I64)
+        let features = Features { sse2: arch.scalar_sse(), cmov: true, ..Features::default() };
+        lowering_for(64, features, || TargetLowering::x86_64(features, MVT::I64))
     } else {
         // The machine fact is the cost model's: the same `has_cmov` SimplifyCFG
         // reads.
         let cmov = cpu.target().tti().is_some_and(|tti| tti.has_cmov());
-        TargetLowering::x86_32(Features { cmov, ..Features::default() }, MVT::I32)
+        let features = Features { cmov, ..Features::default() };
+        lowering_for(32, features, || TargetLowering::x86_32(features, MVT::I32))
     };
     // The soft-float routines are spelled as the C compiler spelled their
     // definitions.
@@ -1794,4 +1833,31 @@ pub(super) fn read_before_defined(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod lowering_cache_tests {
+    use super::*;
+
+    /// Every function built its target's action tables again: 109 K
+    /// instructions each, 65.7 M of tiny600's 4 724 M. One build per kind of
+    /// target and feature set, however many functions ask.
+    #[test]
+    fn test_the_action_tables_of_a_target_are_built_once_for_all_its_functions() {
+        let features = Features { sse2: true, cmov: true, ..Features::default() };
+        let built = std::cell::Cell::new(0);
+        for _ in 0..50 {
+            lowering_for(64, features, || {
+                built.set(built.get() + 1);
+                TargetLowering::x86_64(features, MVT::I64)
+            });
+        }
+        assert_eq!(built.get(), 1);
+        let other = Features { sse2: false, ..features };
+        lowering_for(64, other, || {
+            built.set(built.get() + 1);
+            TargetLowering::x86_64(other, MVT::I64)
+        });
+        assert_eq!(built.get(), 2, "another feature set is another table");
+    }
 }

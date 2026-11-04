@@ -97,6 +97,7 @@ const FLOATS: [MVT; 3] = [MVT::F32, MVT::F64, MVT::F80];
 const ALL: [MVT; 10] =
     [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64, MVT::I128, MVT::F32, MVT::F64, MVT::F80, MVT::Other];
 
+#[derive(Clone)]
 pub struct TargetLowering {
     pub types: TargetLoweringInfo,
     operations: HashMap<(ISD, MVT), Action>,

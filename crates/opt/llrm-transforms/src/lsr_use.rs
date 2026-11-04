@@ -491,6 +491,8 @@ pub struct Rating<'a, 'b> {
     pub as_written: bool,
     /// Registers held across the loop by values LSR does not manage.
     pub other_register_units: u32,
+    /// The compile is for size.
+    pub size: bool,
 }
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1232
@@ -503,6 +505,8 @@ pub struct Cost {
     scaled: Vec<(Scev, i64)>,
     /// The registers rated so far as part of an address (DEVIATE LU8).
     addressed: Vec<Scev>,
+    /// Rated for size (set by `rate_formula`).
+    size: bool,
 }
 
 impl Cost {
@@ -548,7 +552,10 @@ impl Cost {
         let (mine, theirs) = (self.overflows(tti), other.overflows(tti));
         if mine != theirs {
             let (fits, over) = if mine { (&other.c, &self.c) } else { (&self.c, &other.c) };
-            if fits.insns <= over.insns.saturating_add(2) {
+            // For size the reloads fold into memory operands and cost bytes
+            // only, while every extra instruction costs its own (DEVIATE LU8).
+            let spare = if self.size || other.size { 0 } else { 2 };
+            if fits.insns <= over.insns.saturating_add(spare) {
                 return theirs;
             }
         }
@@ -576,6 +583,7 @@ impl Cost {
         lu: &Use,
         mut losers: Option<&mut HashSet<Scev>>,
     ) {
+        self.size = r.size;
         if self.is_loser() {
             return;
         }
