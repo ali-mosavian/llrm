@@ -94,17 +94,22 @@ impl Machine for WasmMachine {
     }
 
     fn tuning(&self) -> Tuning {
-        Tuning {
-            max_stores_per_memset: 8,
-            max_stores_per_memset_opt_size: 4,
-            max_stores_per_memcpy: 8,
-            max_stores_per_memcpy_opt_size: 4,
-            max_stores_per_memmove: 8,
-            max_stores_per_memmove_opt_size: 4,
-            ..Tuning::PIN
-        }
+        TUNING
     }
 }
+
+/// `TargetLoweringBase`'s defaults, which WebAssemblyISelLowering does not
+/// override: 8/4 stores for a memset, memcpy and memmove. The DAG builder
+/// takes the same table.
+pub const TUNING: Tuning = Tuning {
+    max_stores_per_memset: 8,
+    max_stores_per_memset_opt_size: 4,
+    max_stores_per_memcpy: 8,
+    max_stores_per_memcpy_opt_size: 4,
+    max_stores_per_memmove: 8,
+    max_stores_per_memmove_opt_size: 4,
+    ..Tuning::PIN
+};
 
 /// The wasm `TargetTransformInfo`: the base class's answers but the address
 /// rule and the unrolling preferences.
