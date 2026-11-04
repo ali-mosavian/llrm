@@ -16,7 +16,10 @@
 //!   loop with no call and a free stack slot, in a function that never writes
 //!   the control word (`constant_load`), or a load in a block that runs on
 //!   every trip of a loop with no store, call or volatile access
-//!   (`InitializeLoadsHoistableLoops` L1472, `IsGuaranteedToExecute`);
+//!   (`InitializeLoadsHoistableLoops` L1472, `IsGuaranteedToExecute`); DEVIATE
+//!   ML2: an `fld1`/`fldz` and its `fchs` also move where the function writes
+//!   the control word, when the loop is innermost and only arithmetic reads
+//!   them (below);
 //! - every value it reads is defined outside the loop or was hoisted
 //!   (`IsLoopInvariantInst`);
 //! - it is not as cheap as a move (`IsProfitableToHoist`: a cheap instruction
@@ -37,6 +40,22 @@
 //! `MayCSE`: only reached in the pin's high-pressure branch for an instruction
 //! outside a block that runs every trip, where the `constant` path above
 //! already hoists what the allocator can make again.
+//!
+//! DEVIATE ML2, exit 2026-11-20: the pin's `FLD1` and `FLDZ` read `$fpcw`,
+//! which the function's `FLDCW` (for an `fptosi`) writes, so nothing moves and
+//! `fld1; fchs; faddp` (18 clk) is made on every trip of a loop that adds
+//! `-1.0`. Both and `fchs` are exact under any rounding control. A constant
+//! that an `fchs` flips moves, with the flip, when the loop is innermost,
+//! stores no x87 value, every reader is an arithmetic instruction beside a
+//! register (a compare wants the constant on top, a memory operand makes the
+//! held value be copied: `fxch`es and `fld st(i)` cost what the hoist saves)
+//! and the stack has room (`CARRY_RESERVE`); not at -Os, where the `fstp` that
+//! ends the carried value costs 2 B (as X1). A plain `fld1`/`fldz` stays: it
+//! saves 4 clk and the loop's back edge pays `fxch`es (recfloat, +8%).
+//! x_ld_abs -O2 13,320 -> 12,693 clk (gcc 13,113) at 80 bits, 12,684 ->
+//! 12,057 at 64; double x_horner -O2 92,084 -> 83,304. The exit: does the
+//! pin's `isConstantPhysReg` stop counting `FLD1`/`FLDZ`, or gcc's reg-stack
+//! keep the same cells.
 //!
 //! # Example
 //! A loop that adds `a[i] * k3` where `k3 := k + 3` is made inside it (the
@@ -165,6 +184,79 @@ fn pool_load(one: &Insn) -> bool {
 /// Stack slots a loop keeps free of hoisted constants for its own temporaries
 /// (an operation's two operands and a result).
 const CARRY_RESERVE: usize = 3;
+
+/// `fchs`: the sign flip of an x87 value, exact under any rounding control.
+/// Moves with the constant it flips (`IsLoopInvariantInst` has every value it
+/// reads defined outside the loop or hoisted).
+fn sign_flip(one: &Insn) -> bool {
+    one.what.as_ref().is_some_and(|what| {
+        what.op == Operation::FloatUnary
+            && what.name.as_deref() == Some("fchs")
+            && matches!(what.sources.as_slice(), [Loc::Held(_)])
+            && matches!(what.dests.as_slice(), [Loc::Held(_)])
+    }) && one.defines.len() == 1
+        && one.uses.len() == 1
+        && one.call.is_none()
+        && one.group.is_none()
+        && !one.volatile()
+        && !one.spill_reload
+        && !one.spill_store
+}
+
+/// The loop has no loop inside it: one block it holds is the target of a back
+/// edge. A value held across an inner loop costs stack depth there for a saving
+/// once per outer trip.
+fn innermost(facts: &licm::Facts<'_, Wrapped>) -> bool {
+    facts
+        .blocks
+        .iter()
+        .filter(|block| facts.inside.contains(&block.at))
+        .flat_map(|block| block.succ.iter().filter(move |&&to| to <= block.at))
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
+        <= 1
+}
+
+/// The instructions of the loop that read `value`.
+fn reads<'a>(
+    facts: &'a licm::Facts<'_, Wrapped>,
+    value: u32,
+) -> impl Iterator<Item = &'a Wrapped> {
+    facts
+        .blocks
+        .iter()
+        .filter(|block| facts.inside.contains(&block.at))
+        .flat_map(|block| block.insns.iter())
+        .filter(move |one| one.0.uses.contains(&value))
+}
+
+/// Every read of `value` in the loop is an x87 arithmetic operand beside a
+/// register, directly or through a sign flip: held on the stack it is `st(i)`
+/// of the operation. A compare wants it on top, so holding it costs an `fxch`
+/// (4 clocks) where `fldz` is 4.
+fn read_by_arithmetic(
+    facts: &licm::Facts<'_, Wrapped>,
+    value: u32,
+) -> bool {
+    // Two registers: with a memory operand the constant is copied (`fld st(0)`,
+    // 4 clk, as `fld1` is) and the hoist saves nothing.
+    let arithmetic = |one: &Insn| {
+        one.what
+            .as_ref()
+            .is_some_and(
+                |what| (matches!(what.op, Operation::FloatArith | Operation::FloatArithPop)
+                    || matches!(
+                        what.name.as_deref(),
+                        Some("fadd" | "fsub" | "fsubr" | "fmul" | "fdiv" | "fdivr")
+                    ))
+                    && what.sources.iter().all(|source| matches!(source, Loc::Held(_))),
+            )
+    };
+    reads(facts, value).all(|one| {
+        arithmetic(&one.0)
+            || sign_flip(&one.0) && one.0.defines.first().is_some_and(|&flipped| read_by_arithmetic(facts, flipped))
+    })
+}
 
 /// `IsLICMCandidate` for what this pass moves. `loads`: the loop has nothing
 /// that keeps a load in it, and the load's block runs on every trip.
@@ -314,8 +406,41 @@ impl licm::Policy<Wrapped> for X86<'_> {
         };
         // An x87 constant is hoisted where the control word is constant and the
         // stack has room (`constant_load`).
-        if constant_load(one) {
-            return !self.control_word_written && !self.calls && self.floats_named < self.body.float_stack;
+        if constant_load(one) && !self.control_word_written {
+            return !self.calls && self.floats_named < self.body.float_stack;
+        }
+        // DEVIATE ML2 (as X1): `fld1`/`fldz` and `fchs` are exact under any
+        // rounding control, so the control word the function writes
+        // does not keep them in the loop.
+        if constant_load(one) || sign_flip(one) {
+            // A loop that stores an x87 value works around a held constant with
+            // `fxch`es (x_ld_to_float, 64-bit, +530 clk).
+            let stores = facts.blocks.iter().filter(|block| facts.inside.contains(&block.at)).any(|block| {
+                block.insns.iter().any(|read| read.0.what.as_ref().is_some_and(|what| what.op == Operation::FloatStore))
+            });
+            // Only a constant that is flipped: `fld1; fchs` a trip (10 clk) is
+            // what holding saves; a plain `fld1` saves 4 clk, and
+            // the `fxch`es at the loop's back edge cost more (recfloat, +8%).
+            let flipped = value.is_some_and(|value| reads(facts, value).any(|read| sign_flip(&read.0)));
+            if constant_load(one) && !flipped {
+                return false;
+            }
+            // A flip takes the slot of the constant it flips; a constant they
+            // all flip is held as the flipped one.
+            let room = sign_flip(one) || self.floats_named + CARRY_RESERVE < self.body.float_stack;
+            if stores
+                || self.size
+                || self.calls
+                || !room
+                || !innermost(facts)
+                || !value.is_some_and(|value| read_by_arithmetic(facts, value))
+            {
+                return false;
+            }
+            if constant_load(one) {
+                self.floats_named += 1;
+            }
+            return true;
         }
         if pool_load(one) {
             if self.size || self.calls || self.floats_named + CARRY_RESERVE >= self.body.float_stack {
@@ -628,8 +753,81 @@ mod tests {
         assert_eq!(run(false, false), ["fld1", "jmp"]);
         assert_eq!(run(true, false), ["jmp"]);
         // recfloat -O2: the pin's `FLDCW` for the `fptosi` after the loop
-        // makes `$fpcw` non-constant, so `fld1` stays in the loop.
+        // makes `$fpcw` non-constant, so `fld1` stays in the loop (ML2 holds
+        // it only to flip it: `test_a_flipped_x87_constant_is_held...`).
         assert_eq!(run(false, true), ["jmp"]);
+    }
+
+    /// x_ld_abs -O2 at m32: the unrolled copies of `x[i] - 16 - r` made `-1.0`
+    /// (`fld1; fchs`, 10 clk) and added it (8) on every inner trip, 13,320 clk
+    /// of gcc's 13,113. Held across the loop it is one `fadd st, st(i)`. A
+    /// compare wants its constant on top, where holding it costs an `fxch`
+    /// for the `fldz` it saves; a loop with a loop inside it holds the value
+    /// across the inner loop for a saving once an outer trip.
+    #[test]
+    fn test_a_flipped_x87_constant_is_held_by_an_innermost_loop_that_adds_it() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
+        let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let wide = |value: u32| Loc::Held(Held { value, width: 10 });
+        // `reader`: what takes the flipped constant; `nested`: the loop has a
+        // loop inside it.
+        let run = |reader: &str, nested: bool, size: bool, extra: &str| {
+            let one = insn(10, Operation::FloatLoad, "fld1", vec![wide(10)], vec![], vec![10], vec![]);
+            let flip = insn(11, Operation::FloatUnary, "fchs", vec![wide(11)], vec![wide(10)], vec![11], vec![10]);
+            let other = if extra == "mem" { Loc::Mem(Mem::new(None, 8)) } else { wide(1) };
+            let read =
+                insn(12, Operation::Binary, reader, vec![wide(12)], vec![other, wide(11)], vec![12], vec![1, 11]);
+            let store = insn(
+                17,
+                Operation::FloatStore,
+                "fstp",
+                vec![Loc::Mem(Mem::new(None, 8))],
+                vec![wide(12)],
+                vec![],
+                vec![12],
+            );
+            let mut blocks = vec![block(0, vec![1], vec![jump(0)]).into()];
+            if nested {
+                blocks.push(block(1, vec![2], vec![one, flip, read]).into());
+                blocks.push(block(2, vec![2, 3], vec![branch(13)]).into());
+                blocks.push(block(3, vec![1, 4], vec![branch(14)]).into());
+            } else {
+                let mut inside = vec![one, flip, read];
+                if extra == "store" {
+                    inside.push(store);
+                }
+                inside.push(branch(13));
+                blocks.push(block(1, vec![1, 2], inside).into());
+            }
+            // The function writes the control word (`fisttp` after the loop).
+            let exit = vec![
+                insn(16, Operation::FloatStore, "fisttp", vec![], vec![wide(12)], vec![], vec![12]),
+                insn(15, Operation::Return, "ret", vec![], vec![], vec![], vec![]),
+            ];
+            blocks.push(block(blocks.len() as i64, vec![], exit).into());
+            let mut body = LirBody::new("loop", 0, blocks, IndexMap::default(), IndexMap::default());
+            body.inputs = [1].into_iter().collect();
+            body.float_stack = 8;
+            body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+            let done = hoisted_sized(&body, &RegisterClasses::m16(), size);
+            done.blocks[0]
+                .insns
+                .iter()
+                .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(run("fadd", false, false, ""), ["fld1", "fchs", "jmp"]);
+        assert_eq!(run("fcom", false, false, ""), ["jmp"]);
+        assert_eq!(run("fadd", true, false, ""), ["jmp"]);
+        assert_eq!(run("fadd", false, true, ""), ["jmp"], "-Os: the `fstp` that ends the carried value costs 2 B");
+        assert_eq!(run("fadd", false, false, "store"), ["jmp"], "x_ld_to_float, 64-bit: `fxch`es around the store");
+        assert_eq!(
+            run("fadd", false, false, "mem"),
+            ["jmp"],
+            "x_ld_div, 64-bit: the held value is copied, `fld st(0)`"
+        );
     }
 
     /// A loop-invariant `fld m80` of a constant-pool entry was made on every
