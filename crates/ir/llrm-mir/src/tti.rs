@@ -492,6 +492,12 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE PL6: whether a loop's first iteration is peeled where its entry
+    /// constants fold enough of it to pay the copy at the speed rate.
+    fn peels_folded_entry(&self) -> bool {
+        false
+    }
+
     /// DEVIATE REC-2: gcc's growth bar of the recursive edge at (-O2, -O3);
     /// none: no bar.
     fn recursive_edge_growth(&self) -> Option<(i64, i64)> {
@@ -1088,6 +1094,16 @@ pub trait Tti {
             ty,
             Ty::Int(8 | 16 | 32) | Ty::Float | Ty::Double | Ty::Pointer
         )
+    }
+
+    /// `haveFastSqrt`: a legal `FSQRT` on `ty`
+    /// ([BasicTTIImpl.h:674](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L674)).
+    /// Default: none, for a target without an FPU or a sqrt instruction.
+    fn have_fast_sqrt(
+        &self,
+        _ty: Ty,
+    ) -> bool {
+        false
     }
 
     /// `shouldBuildLookupTables`: whether the target jumps through a table

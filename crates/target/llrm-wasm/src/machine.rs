@@ -96,6 +96,12 @@ impl Machine for WasmMachine {
     fn tuning(&self) -> Tuning {
         TUNING
     }
+
+    /// SD443: the pin's IPSCCP runs once; a second run specialised the
+    /// arguments of a function whose address was taken before inlining.
+    fn second_ipsccp(&self) -> bool {
+        false
+    }
 }
 
 /// `TargetLoweringBase`'s defaults, which WebAssemblyISelLowering does not
@@ -117,6 +123,14 @@ pub const TUNING: Tuning = Tuning {
 pub struct Wasm;
 
 impl Tti for Wasm {
+    /// `FSQRT` is legal on `f32` and `f64`.
+    fn have_fast_sqrt(
+        &self,
+        ty: llrm_mir::tti::Ty,
+    ) -> bool {
+        matches!(ty, llrm_mir::tti::Ty::Float | llrm_mir::tti::Ty::Double)
+    }
+
     fn name(&self) -> &'static str {
         "WebAssembly"
     }

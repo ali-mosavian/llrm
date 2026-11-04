@@ -453,3 +453,13 @@ fn test_an_exported_symbol_is_spelled_as_the_object_format_asks() {
     assert!(spelled(&[]).contains(&"f_".to_owned()));
     assert!(spelled(&[("watcall32", "*")]).contains(&"f".to_owned()));
 }
+
+/// #6736 gave the `promote.` rerun the minimal cleanup list: `sort` kept its length parameter, the bounds checks
+/// and a far array pointer (`ret 4`), which the full list folds into a two-index call on the stack array. Nib
+/// quicksort -O2 went from 258,793 to 324,077 clocks (+25%) and from 334 to 411 B.
+#[test]
+fn test_sort_takes_only_its_two_indices_after_the_ipo_reruns() {
+    let function = _nib("quicksort", "main", "_sort");
+    assert!(!function.contains("ret 4"), "the length and the far pointer were not folded away\n{function}");
+    assert!(function.contains("\n    ret\n"), "{function}");
+}

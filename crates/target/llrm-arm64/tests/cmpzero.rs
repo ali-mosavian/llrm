@@ -35,3 +35,18 @@ fn a_reader_of_the_overflow_flag_keeps_the_compare() {
     let asm = assembly(&ir);
     assert!(!asm.contains("adds"), "{asm}");
 }
+
+/// `switch i8 (trunc nuw i32 %x)` compared the byte after an `and #0xff`; the
+/// pin's `SimplifySetCC` compares `%x` itself (the switch of `jpeg_fixed` -Os,
+/// +4 B once `visitSwitchInst` narrowed its condition).
+#[test]
+fn a_switch_on_a_trunc_nuw_compares_the_wide_value() {
+    let ir = format!(
+        "{DATALAYOUT}declare void @a()\ndeclare void @b()\ndeclare void @c()\ndeclare void @d()\n\
+         define void @f(i32 %x) {{\n  %t = trunc nuw i32 %x to i8\n  switch i8 %t, label %o [ i8 -37, label %l1 i8 -60, label %l2 \
+         i8 -64, label %l3 ]\nl1:\n  call void @a()\n  ret void\nl2:\n  call void @b()\n  ret void\nl3:\n  call void @c()\n  ret void\n\
+         o:\n  call void @d()\n  ret void\n}}\n"
+    );
+    let asm = assembly(&ir);
+    assert!(!asm.contains("and "), "{asm}");
+}

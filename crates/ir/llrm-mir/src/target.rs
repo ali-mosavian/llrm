@@ -83,6 +83,10 @@ pub struct Tuning {
     /// (`want_inline_small_function_p`) for `recursive_inlining` to run on
     /// it; none: no such bar.
     pub recursive_edge_growth: Option<(i64, i64)>,
+    /// DEVIATE PL6: the first iteration of an innermost loop is peeled where
+    /// its entry constants fold enough of the body to pay the copy at the
+    /// speed rate (`Tti::peels_folded_entry`). false: the pin's `computePeelCount`.
+    pub peel_folded_entry: bool,
 }
 
 impl Tuning {
@@ -110,6 +114,7 @@ impl Tuning {
         keep_constant_displacements: false,
         recursive_inlining: None,
         recursive_edge_growth: None,
+        peel_folded_entry: false,
     };
 }
 
@@ -171,6 +176,13 @@ pub trait Machine {
     /// overrides. A target with no entry here takes `Tuning::PIN`.
     fn tuning(&self) -> Tuning {
         Tuning::PIN
+    }
+
+    /// Whether IPSCCP runs a second time after ArgumentPromotion changed a body
+    /// (DEVIATE SD443, exit 2026-11-07: interprocedural.rs). The pin runs it
+    /// once; a target that matches the pin's output turns it off.
+    fn second_ipsccp(&self) -> bool {
+        true
     }
 
     /// Clocks a byte of code is worth, in thousandths, where a decision is

@@ -2,6 +2,7 @@
 //! `impliesPoison`, `isGuaranteedNotToBePoison` and `isGuaranteedNotToCauseUB`
 //! of ScalarEvolution.
 
+use llrm_mir::apint::Word;
 use std::collections::BTreeSet;
 
 use llrm_mir::hash::HashSet;
@@ -172,7 +173,7 @@ impl ScalarEvolution {
         if let Kind::SignExtend(operand) = self.node(s).kind {
             return self.is_known_non_zero(cx, operand.scev);
         }
-        self.get_unsigned_range(cx, s).get_unsigned_min() != 0
+        self.get_unsigned_range(cx, s).get_unsigned_min() != llrm_mir::apint::U256::ZERO
     }
 }
 

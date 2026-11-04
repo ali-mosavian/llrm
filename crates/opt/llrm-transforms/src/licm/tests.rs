@@ -1948,6 +1948,36 @@ b2:
     assert!(!after.contains("invariant.op"), "{after}");
 }
 
+/// `m_NUWAddLike`: an `or disjoint` is the add `hoistAdd` takes, so `i | 1 u<
+/// 999` in a loop unrolled by two is `i u< 998` (wasm `floats` -O3 kept the
+/// `or` and its constant: +1000 instructions).
+#[test]
+fn test_a_compare_of_a_disjoint_or_with_an_invariant_operand_is_reassociated_out() {
+    let after = licm_printed(
+        "define i16 @f(i16 %n, i16 %a) {
+b0:
+  %p = and i16 %a, 255
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %x = or disjoint i16 %i, %p
+  %go = icmp ult i16 %x, 999
+  %gz = zext i1 %go to i16
+  %j = add i16 %i, %gz
+  %i1 = add i16 %j, 1
+  %c = icmp slt i16 %i1, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}
+",
+    );
+    assert!(block_of(&after, "b0").iter().any(|line| line.contains("%invariant.op = sub nuw i16 999, %p")), "{after}");
+    assert!(block_of(&after, "b1").iter().all(|line| !line.contains("%x = ")), "{after}");
+}
+
 /// `hoistMulAddAssociation`: `(a * x + b * y) * c` with `a`, `b`, `c` invariant
 /// is `(a * c) * x + (b * c) * y`, the two products made in the preheader.
 /// llrm left the whole tree in the loop, where `opt -passes=licm` hoists them.
