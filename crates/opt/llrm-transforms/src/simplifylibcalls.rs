@@ -17,14 +17,19 @@
 //! of `"%c"` `fputc`, of `"%s"` `fputs`; `fputs` of a constant string is
 //! `fwrite` (not at `optsize`); `fwrite` of one byte is `fputc`, of none is
 //! 0. All but the empty format and the empty `fwrite` need the result unused.
+//! `strcmp`, `strncmp`, `memcmp` and `bcmp` of constant arrays fold to their
+//! order, `strcmp("", p)` and `strcmp(p, "")` to the first byte,
+//! `memcmp(p, q, 1)` to the byte difference (`compare.rs`).
 //!
 //! # Deviations
 //! - D1: `puts`, `putchar`, `fwrite`, `fputc` and `fputs` are formed only where
 //!   the compile states them in `Options::library`, as `strlen` is (loopidiom
 //!   D11); the pin reads the triple. Exit: `Target::library` naming them.
-//! - D2: the other arms (`sprintf`, `snprintf`, `str*`, `mem*`, math) are
-//!   untranslated, and so are `iprintf`/`__small_printf`,
-//!   `optimizeErrorReporting` and the argument annotations.
+//! - D2: the other arms (`sprintf`, `snprintf`, the other `str*`, `mem*`, math)
+//!   are untranslated, and so are the `memcmp` rewrites of `strcmp` and
+//!   `strncmp`, the equality expansion of `memcmp`, and
+//!   `iprintf`/`__small_printf`, `optimizeErrorReporting` and the argument
+//!   annotations.
 //!
 //! # Keeps
 //! Blocks and edges are unchanged: dominators and loops are preserved.
@@ -44,6 +49,8 @@ use llrm_mir::opcode::{Attribute, CallInfo, CastOp, Flags, Opcode};
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses, Unit};
 use llrm_mir::types::Type;
 
+mod compare;
+
 pub struct SimplifyLibCalls {
     routines: Vec<Routine>,
 }
@@ -56,9 +63,9 @@ impl SimplifyLibCalls {
     }
 }
 
-/// `getConstantStringInfo` of a pointer that is a constant global: the bytes
-/// up to the first NUL, which must be there.
-fn constant_string(
+/// `getConstantDataArrayInfo` of a pointer that is a constant global: every
+/// byte of the array.
+fn constant_array(
     unit: &Unit,
     env: Env,
     operand: Operand,
@@ -67,6 +74,17 @@ fn constant_string(
     let ConstantKind::Global(global) = unit.context.get(id).kind else { return None };
     let bytes = read_byte_array_from_global(unit.context, env, global, 0)?;
     let ConstantKind::Bytes(raw) = &unit.context.get(bytes).kind else { return None };
+    Some(raw.to_vec())
+}
+
+/// `getConstantStringInfo` of a pointer that is a constant global: the bytes
+/// up to the first NUL, which must be there.
+fn constant_string(
+    unit: &Unit,
+    env: Env,
+    operand: Operand,
+) -> Option<Vec<u8>> {
+    let raw = constant_array(unit, env, operand)?;
     let end = raw.iter().position(|&byte| byte == 0)?;
     Some(raw[..end].to_vec())
 }
@@ -83,6 +101,8 @@ struct NewCall {
 enum Rewrite {
     /// The call goes, its result (if read) the constant 0.
     Drop,
+    /// The call's result becomes this value, built before the call.
+    Value(Operand),
     Call(NewCall),
 }
 
@@ -444,6 +464,9 @@ impl FunctionPass for SimplifyLibCalls {
                 LibFunc::Puts => puts(unit, &site),
                 LibFunc::Fputs => fputs(unit, &site),
                 LibFunc::Fwrite => fwrite_call(unit, &site),
+                LibFunc::Strcmp => compare::str_cmp(unit, &site),
+                LibFunc::Strncmp => compare::str_n_cmp(unit, &site),
+                LibFunc::Memcmp | LibFunc::Bcmp => compare::mem_cmp(unit, &site),
                 _ => None,
             };
             let Some(rewrite) = rewrite else { continue };
@@ -453,6 +476,7 @@ impl FunctionPass for SimplifyLibCalls {
                     let ty = unit.function.instruction(call).ty;
                     Operand::Constant(unit.context.int(ty, 0))
                 }
+                Rewrite::Value(value) => value,
                 Rewrite::Call(new) => match emit(unit, &self.routines, new, call) {
                     Some(new) => Operand::Value(unit.function.instruction(new).result.expect("a result")),
                     None => continue,
