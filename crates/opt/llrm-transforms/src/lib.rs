@@ -105,15 +105,12 @@ pub mod cmpopt;
 #[cfg(test)]
 mod codegen_slots_tests;
 pub mod combine;
+pub mod combine_abs;
 pub mod combine_add_idioms;
 pub mod combine_addsub;
 pub mod combine_and;
 pub mod combine_and_select;
-pub mod combine_abs;
 pub mod combine_assume;
-pub mod combine_ptrcast;
-pub mod combine_freeze;
-pub mod combine_switch;
 pub mod combine_bitcast;
 pub mod combine_bitorder;
 pub mod combine_branch;
@@ -141,6 +138,7 @@ mod combine_fptoint_tests;
 pub mod combine_fptrunc;
 #[cfg(test)]
 mod combine_fptrunc_tests;
+pub mod combine_freeze;
 pub mod combine_funnel;
 pub mod combine_gep;
 pub mod combine_gep_base;
@@ -166,6 +164,7 @@ pub mod combine_or;
 pub mod combine_pass;
 pub mod combine_phi;
 pub mod combine_phi_args;
+pub mod combine_ptrcast;
 pub mod combine_select;
 pub mod combine_select_bit_test;
 pub mod combine_select_bools;
@@ -184,6 +183,7 @@ pub mod combine_sink;
 #[cfg(test)]
 mod combine_sink_tests;
 pub mod combine_sub;
+pub mod combine_switch;
 pub mod combine_visit_select;
 pub mod combine_xor;
 pub mod condstores;
@@ -224,16 +224,18 @@ pub mod exitpredicate;
 pub mod exitsink;
 pub mod exitvalues;
 pub mod expand;
-pub mod expansion;
 pub mod expandmemcmp;
+pub mod expansion;
 pub mod extload;
 pub mod extpromotion;
 pub mod fixednarrow;
 pub mod float2int;
 pub mod floatfold;
+pub mod floativ;
 pub mod floatloop;
 pub mod fold;
 pub mod gepoffset;
+pub mod globalbool;
 pub mod globaldce;
 #[cfg(test)]
 mod globaldce_tests;
@@ -254,6 +256,7 @@ pub mod inferspace;
 #[cfg(test)]
 mod inferspace_tests;
 pub mod inline;
+mod inlineattrs;
 pub mod inlinecost;
 #[cfg(test)]
 mod inlinecost_tests;

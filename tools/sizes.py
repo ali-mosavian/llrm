@@ -181,6 +181,31 @@ def segments(obj: Path) -> list[Segment]:
     return [Segment(name, klass, size, min(loaded, size), bits, tuple(pieces), library) for name, klass, size, loaded, bits, pieces, library in found]
 
 
+def externs(obj: Path) -> list[str]:
+    """Names the OMF object leaves to the linker (EXTDEF): the library helpers it calls are among them, and their bytes are in no `code_bytes`."""
+    data = Path(obj).read_bytes()
+    found, defined, at = [], set(), 0
+    while at + 3 <= len(data):
+        kind, length = data[at], int.from_bytes(data[at + 1 : at + 3], "little")
+        body = data[at + 3 : at + 2 + length]
+        at += 3 + length
+        i = 0
+        while kind == 0x96 and i < len(body):  # LNAMES: a function the object defines as a COMDAT is named here
+            defined.add(body[i + 1 : i + 1 + body[i]].decode("latin-1"))
+            i += 1 + body[i]
+        if kind in (0x90, 0x91):  # PUBDEF: the names the object defines
+            _, j = omf_index(body, 0)
+            segment, j = omf_index(body, j)
+            j += 2 if segment == 0 else 0
+            while j < len(body):
+                defined.add(body[j + 1 : j + 1 + body[j]].decode("latin-1"))
+                _, j = omf_index(body, j + 1 + body[j] + (4 if kind == 0x91 else 2))
+        while kind == 0x8C and i < len(body):  # EXTDEF: length-prefixed name, type index
+            found.append(body[i + 1 : i + 1 + body[i]].decode("latin-1"))
+            _, i = omf_index(body, i + 1 + body[i])
+    return sorted(set(found) - defined)
+
+
 def is_elf(obj: Path) -> bool:
     with open(obj, "rb") as file:
         return file.read(4) == b"\x7fELF"

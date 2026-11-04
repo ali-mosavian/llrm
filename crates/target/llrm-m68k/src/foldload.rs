@@ -45,6 +45,19 @@ fn use_counts(function: &MFunction) -> Vec<u32> {
     counts
 }
 
+/// Whether `name`'s two register sources may swap places. DEVIATE: the pin
+/// marks `ADD32dd` commutable and not its `ADD32dr` twin, so a loaded value
+/// that is the tied operand could not become the memory source. Exit: none.
+pub(crate) fn commutes(
+    name: &str,
+    marked: bool,
+) -> bool {
+    marked
+        || ["ADD", "AND", "OR"]
+            .iter()
+            .any(|stem| name.strip_prefix(stem).is_some_and(|rest| rest.starts_with(['8', '1', '3'])))
+}
+
 pub fn fold_loads(function: &mut MFunction) {
     let counts = use_counts(function);
     for b in 0..function.blocks.len() {
@@ -110,7 +123,7 @@ fn fold_one(
         if operands[first] != loaded {
             let other = operands.iter().position(|one| *one == loaded).unwrap_or(first);
             let both_registers = matches!(operands[first], Operand::Use(Reg::Virt(_)));
-            if insts[user].commutable && both_registers {
+            if commutes(name, insts[user].commutable) && both_registers {
                 operands.swap(first, other);
             } else if operands.len() == 2
                 && both_registers
@@ -234,7 +247,7 @@ fn fold_one(
 
 /// The readers of the codes after a compare, as they read once its operands
 /// change places, with their offsets; `None` when one cannot.
-fn swapped_readers(after: &[Inst]) -> Option<Vec<(usize, Inst)>> {
+pub(crate) fn swapped_readers(after: &[Inst]) -> Option<Vec<(usize, Inst)>> {
     let mut found = Vec::new();
     for (offset, inst) in after.iter().enumerate() {
         if inst.sets_flags || inst.call {

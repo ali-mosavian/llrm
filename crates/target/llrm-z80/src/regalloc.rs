@@ -22,6 +22,9 @@ pub enum Class {
     Acc,
     Gr16,
     Hlr,
+    /// `de` and `bc` alone: the fixed operands of `ldir`.
+    Der,
+    Bcr,
     Iy,
     /// Unconstrained: any allocatable register.
     Any,
@@ -77,6 +80,8 @@ impl Target for Z80Registers {
             (Class::Any, one) | (one, Class::Any) => Some(one),
             (Class::Gr8, Class::Acc) | (Class::Acc, Class::Gr8) => Some(Class::Acc),
             (Class::Gr16, Class::Hlr) | (Class::Hlr, Class::Gr16) => Some(Class::Hlr),
+            (Class::Gr16, Class::Der) | (Class::Der, Class::Gr16) => Some(Class::Der),
+            (Class::Gr16, Class::Bcr) | (Class::Bcr, Class::Gr16) => Some(Class::Bcr),
             _ => None,
         }
     }
@@ -91,6 +96,8 @@ impl Target for Z80Registers {
             Class::Acc => vec![reg::A],
             Class::Gr16 => PAIRS.to_vec(),
             Class::Hlr => vec![reg::HL],
+            Class::Der => vec![reg::DE],
+            Class::Bcr => vec![reg::BC],
             Class::Iy => vec![reg::IY],
             Class::Any => BYTES.iter().chain(&PAIRS).chain(&[reg::IY]).copied().collect(),
         }
@@ -121,6 +128,25 @@ impl Target for Z80Registers {
 
     fn lane_moves(inst: &Inst) -> Option<(usize, Vec<(usize, u32, u32)>)> {
         matches!(inst.kind, Kind::Op("PACK")).then(|| (0, vec![(1, 0, 1), (2, 1, 1)]))
+    }
+
+    // DEVIATE 3b-1 (owner greedy-subreg, exit 11-10): off until the split
+    // editor copies by lane (a pair built across blocks lost its stack copy:
+    // lz4c -Oz returned 0x3131).
+    fn lowers_lanes() -> bool {
+        false
+    }
+
+    fn read_lanes(inst: &Inst) -> Option<(usize, u32, u32)> {
+        match inst.kind {
+            Kind::Op("BIT7_16" | "HI") => Some((1, 1, 1)),
+            Kind::Op("LO") => Some((1, 0, 1)),
+            _ => None,
+        }
+    }
+
+    fn joins_lanes() -> bool {
+        false
     }
 
     fn read_part(

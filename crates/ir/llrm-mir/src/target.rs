@@ -83,6 +83,11 @@ pub struct Tuning {
     /// (`want_inline_small_function_p`) for `recursive_inlining` to run on
     /// it; none: no such bar.
     pub recursive_edge_growth: Option<(i64, i64)>,
+    /// DEVIATE PL6: the first iteration of an innermost loop is peeled where
+    /// its entry constants fold enough of the body to pay the copy at the
+    /// speed rate (`Tti::peels_folded_entry`). false: the pin's
+    /// `computePeelCount`.
+    pub peel_folded_entry: bool,
 }
 
 impl Tuning {
@@ -110,6 +115,7 @@ impl Tuning {
         keep_constant_displacements: false,
         recursive_inlining: None,
         recursive_edge_growth: None,
+        peel_folded_entry: false,
     };
 }
 
@@ -171,6 +177,13 @@ pub trait Machine {
     /// overrides. A target with no entry here takes `Tuning::PIN`.
     fn tuning(&self) -> Tuning {
         Tuning::PIN
+    }
+
+    /// Whether IPSCCP runs a second time after ArgumentPromotion changed a body
+    /// (DEVIATE SD443, exit 2026-11-07: interprocedural.rs). The pin runs it
+    /// once; a target that matches the pin's output turns it off.
+    fn second_ipsccp(&self) -> bool {
+        true
     }
 
     /// Clocks a byte of code is worth, in thousandths, where a decision is
@@ -472,6 +485,9 @@ pub struct OperationCosts {
     pub pieces_clear: i64,
     pub pieces_set_size: i64,
     pub pieces_clear_size: i64,
+    /// Bytes of the widest store a constant memset expands to; 0: the
+    /// target's pointer width, a dword at least.
+    pub memset_store: i64,
     /// The fewest case values for which a switch is a jump table (gcc's
     /// `case_values_threshold`); 0: the target has no table jump.
     pub jump_table: i64,
@@ -594,6 +610,7 @@ impl Default for OperationCosts {
             pieces_clear: 0,
             pieces_set_size: 0,
             pieces_clear_size: 0,
+            memset_store: 0,
             jump_table: 0,
             cache_line: 0,
             line_fill_clocks: 0,

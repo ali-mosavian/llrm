@@ -1521,7 +1521,7 @@ impl WidenIv {
 
             let cx = cx!(e);
             let rhs_scev = e.se.get_scev(&cx, cmp_rhs);
-            let cmp_rhs_range = e.se.get_signed_range(&cx, rhs_scev);
+            let cmp_rhs_range = e.se.get_signed_range(&cx, rhs_scev).to_word::<u128>();
             let constrained = ConstantRange::make_allowed_icmp_region(pred, &cmp_rhs_range);
             let narrow_def_range = constrained.add_with_no_wrap(
                 &ConstantRange::single(width, rhs),

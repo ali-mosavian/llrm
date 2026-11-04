@@ -58,6 +58,11 @@ pub trait ExpansionTti {
     /// `hasMinSize` of the function: the cost kind is code size, not
     /// reciprocal throughput.
     fn code_size(&self) -> bool;
+    /// `TCC_Basic`, which scales the budget (DEVIATE TB1: the target's, not
+    /// the constant 1).
+    fn tcc_basic(&self) -> i64 {
+        1
+    }
     /// `getArithmeticInstrCost(Opcode, Ty, CostKind)`.
     fn get_arithmetic_instr_cost(
         &self,
@@ -124,8 +129,7 @@ impl Expander {
             exprs.iter().map(|&s| Operand_ { parent_opcode: Opc::None, operand_index: -1, s }).collect();
         let mut processed: HashSet<Scev> = HashSet::default();
         let mut cost = 0i64;
-        // `TCC_Basic` is 1.
-        let scaled_budget = i64::from(budget);
+        let scaled_budget = i64::from(budget) * tti.tcc_basic();
         while let Some(item) = worklist.pop() {
             if self.is_high_cost_expansion_helper(
                 cx,
@@ -502,6 +506,10 @@ impl MachineCosts {
 impl ExpansionTti for MachineCosts {
     fn code_size(&self) -> bool {
         self.minimum_size
+    }
+
+    fn tcc_basic(&self) -> i64 {
+        self.tti.as_ref().map_or(1, |tti| tti.tcc_basic(self.kind()).value)
     }
 
     fn get_arithmetic_instr_cost(

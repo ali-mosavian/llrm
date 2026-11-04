@@ -1073,6 +1073,39 @@ fn test_a_target_that_prefers_exit_ne_gets_the_not_equal_compare() {
     assert!(text.contains("icmp ne i32 %i, 1"), "{text}");
 }
 
+/// `willNotOverflow` widens the `i128` add of a restoring divide's counter to
+/// `i256`, and `ConstantRange` stopped at 128 bits: IndVars panicked
+/// ("outside 1..=128") compiling the quad-precision divide `div.c`.
+#[test]
+fn an_i128_loop_is_widened_by_indvars_without_a_panic() {
+    let text = "define i128 @f(i128 %a, i128 %b) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %i.next, %latch ]
+  %r = phi i128 [ %a, %entry ], [ %r.shl, %latch ]
+  %q = phi i128 [ 0, %entry ], [ %q.next, %latch ]
+  %ge = icmp uge i128 %r, %b
+  br i1 %ge, label %sub, label %latch
+sub:
+  %d = sub i128 %r, %b
+  br label %latch
+latch:
+  %r.new = phi i128 [ %d, %sub ], [ %r, %loop ]
+  %q.next = phi i128 [ 1, %sub ], [ %q, %loop ]
+  %r.shl = shl i128 %r.new, 1
+  %i.next = add nsw i32 %i, 1
+  %c = icmp slt i32 %i.next, 117
+  br i1 %c, label %loop, label %exit
+exit:
+  ret i128 %q.next
+}
+";
+    let mut module = parsed(text);
+    managed(&mut module, IndVars { lftr: true, size: false });
+    assert!(printed(&module).contains("define i128 @f"), "{}", printed(&module));
+}
+
 /// Sequential counted loops on one bound. The pin's loop passes visit them
 /// in program order, so each loop's trip count finds the earlier ones'
 /// already made; visited last first, one query recursed through every loop

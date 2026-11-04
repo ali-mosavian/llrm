@@ -693,13 +693,13 @@ pub trait Target {
     /// How deep the floating register stack is: the roots of class `x87` its
     /// register file states.
     fn float_stack(&self) -> usize {
-        registers::parse(&self.registers_text()).map_or(0, |all| registers::of_class(&all, "x87").len())
+        registers::float_facts(&self.registers_text()).0
     }
 
     /// Whether scalar floating point lives in SSE registers: its register
     /// file states roots of class `xmm`.
     fn scalar_sse(&self) -> bool {
-        registers::parse(&self.registers_text()).is_ok_and(|all| !registers::of_class(&all, "xmm").is_empty())
+        registers::float_facts(&self.registers_text()).1
     }
 
     /// The indexed addresses a memory access may use, priced by `costs` (its
