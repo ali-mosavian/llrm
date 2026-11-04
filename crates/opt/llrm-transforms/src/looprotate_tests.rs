@@ -452,3 +452,35 @@ fn test_check_exit_count_rotates_a_loop_whose_latch_exit_count_it_makes_computab
     assert!(!rotated_checking(false), "premise: no header phi dies, the early slot leaves it");
     assert!(rotated_checking(true));
 }
+
+/// The late slot made a `ScevSession` (dominators, loops, assumptions) for each
+/// loop it asked about: memory_expansion -O2 paid 413 M instructions for 217 of
+/// them, quadratic in the function. A function whose loops it leaves makes one.
+#[test]
+fn test_check_exit_count_asks_with_one_session_for_all_the_loops_it_leaves() {
+    let mut text = String::from("define i16 @f(ptr %p) {\nb0:\n  br label %h0\n");
+    for k in 0..5 {
+        let from = if k == 0 { "b0".to_string() } else { format!("e{}", k - 1) };
+        let next = if k == 4 { "end".to_string() } else { format!("h{}", k + 1) };
+        text += &format!(
+            "h{k}:\n  %i{k} = phi i16 [ 0, %{from} ], [ %n{k}, %l{k} ]\n  %v{k} = load i16, ptr %p\n  %g{k} = icmp eq i16 %v{k}, 0\n  br i1 %g{k}, label %e{k}, label %l{k}\nl{k}:\n  %w{k} = load i16, ptr %p\n  %n{k} = add i16 %i{k}, 1\n  %s{k} = icmp eq i16 %w{k}, 1\n  br i1 %s{k}, label %e{k}, label %h{k}\ne{k}:\n  %r{k} = phi i16 [ %i{k}, %h{k} ], [ %n{k}, %l{k} ]\n  br label %{next}\n"
+        );
+    }
+    text += "end:\n  ret i16 0\n}\n";
+    let mut module = parsed(&text);
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::lcssa::closed(function).expect("closes");
+    let tti = X86::of_cpu("i486").expect("a cpu");
+    let options = Options {
+        max_header_size: 16,
+        priced_at_size: false,
+        rotation_only: false,
+        is_util_mode: false,
+        prepare_for_lto: false,
+        check_exit_count: true,
+    };
+    let before = llrm_analysis::scev::analysis::sessions_made();
+    rotate_function(&mut module, "f", &tti, options).expect("rotates");
+    assert_eq!(llrm_analysis::scev::analysis::sessions_made() - before, 1);
+}

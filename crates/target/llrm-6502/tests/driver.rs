@@ -1596,3 +1596,35 @@ fn a_loop_right_after_an_empty_entry_block_is_not_the_entry() {
     let text = assembly(&ir, &Request::new(Level::O0)).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(exit_code_of(&text, "g"), 7, "{text}");
 }
+
+#[test]
+fn a_pointer_minus_one_borrows_by_branch() {
+    // a backward copy (k_memmove): `--p` was `clc; adc #255; adc #255` through a
+    // pack/unpack, 885 clocks against the hand routine's 418
+    let ir = module(
+        "@n = global i8 4\n\
+         define i8 @g() {\n\
+         \x20 %n = load volatile i8, ptr @n\n\
+         \x20 %s0 = inttoptr i16 49154 to ptr\n  %d0 = inttoptr i16 45058 to ptr\n\
+         \x20 %a = inttoptr i16 49150 to ptr\n  store volatile i8 1, ptr %a\n\
+         \x20 %b = inttoptr i16 49151 to ptr\n  store volatile i8 2, ptr %b\n\
+         \x20 %c = inttoptr i16 49152 to ptr\n  store volatile i8 3, ptr %c\n\
+         \x20 %e = inttoptr i16 49153 to ptr\n  store volatile i8 4, ptr %e\n\
+         \x20 br label %l\n\
+         l:\n\
+         \x20 %i = phi i8 [ %n, %0 ], [ %j, %l ]\n\
+         \x20 %s = phi ptr [ %s0, %0 ], [ %s2, %l ]\n\
+         \x20 %d = phi ptr [ %d0, %0 ], [ %d2, %l ]\n\
+         \x20 %s2 = getelementptr inbounds i8, ptr %s, i32 -1\n\
+         \x20 %d2 = getelementptr inbounds i8, ptr %d, i32 -1\n\
+         \x20 %v = load volatile i8, ptr %s2\n  store volatile i8 %v, ptr %d2\n\
+         \x20 %j = sub i8 %i, 1\n  %z = icmp ne i8 %j, 0\n  br i1 %z, label %l, label %x\n\
+         x:\n\
+         \x20 %lo = inttoptr i16 45054 to ptr\n  %hi = inttoptr i16 45057 to ptr\n\
+         \x20 %f = load volatile i8, ptr %lo\n  %h = load volatile i8, ptr %hi\n\
+         \x20 %m = mul i8 %f, 16\n  %r = add i8 %m, %h\n  ret i8 %r\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "g"), 20, "{text}");
+    assert!(!text.contains("adc #255"), "{text}");
+}

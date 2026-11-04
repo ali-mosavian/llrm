@@ -445,5 +445,35 @@ fn a_chain_of_shifted_bits_is_one_masked_compare() {
         let after = merged(text);
         assert!(after.contains(compare), "{after}");
         assert!(!after.contains("lshr"), "{after}");
+
+const STRCMP: &str = "@buf = global [3 x i8] c\"xb\\00\"
+@s = constant [3 x i8] c\"ab\\00\"
+declare i16 @strcmp(ptr, ptr)
+define i16 @f(i16 %c) {
+b0:
+  %byte = trunc i16 %c to i8
+  store i8 %byte, ptr @buf
+  %a = ptrtoint ptr @buf to i16
+  %p = inttoptr i16 %a to ptr
+  %r = call i16 @strcmp(ptr %p, ptr @s)
+  %same = icmp eq i16 %r, 0
+  %out = zext i1 %same to i16
+  ret i16 %out
+}
+";
+
+/// `strcmp(p, \"ab\") == 0` was a library call; the pin's `StrNCmpInliner`
+/// makes it two byte differences, the second read only if the first is zero.
+/// The folded body runs for the byte that matches and for two that do not.
+#[test]
+fn a_strcmp_with_a_short_constant_string_tested_for_equality_is_a_byte_chain() {
+    let mut module = parsed(&format!("{DOS}{STRCMP}"));
+    managed(&mut module, AggressiveInstCombine);
+    let after = managed(&mut module, crate::dead::Dead);
+    assert!(!after.contains("call i16 @strcmp"), "{after}");
+    for (c, want) in [(97, 1), (98, 0), (0, 0)] {
+        let got = results(&module, &[&[c]]);
+        let want = llrm_mir::interpret::Val::Int { bits: want, width: 16 };
+        assert_eq!(got, vec![want], "strcmp(\"{c}b\", \"ab\") == 0\n{after}");
     }
 }

@@ -423,3 +423,33 @@ fn the_difference_of_extended_pointers_is_the_extended_offset() {
         "  %0 = zext nneg i64 %n to i128\n  ret i128 %0\n",
     );
 }
+
+/// `n - (n & 1)`, the trip count LoopUnroll's runtime remainder makes, stayed a
+/// `sub` and an `and` where the pin has `n & -2`: wasm `floats` -O3 recomputed
+/// the bound every iteration (+1000 instructions).
+#[test]
+fn x_minus_x_and_a_constant_is_x_and_its_complement() {
+    check(
+        "i32",
+        "i32 %x",
+        "  %a = and i32 %x, 1\n  %r = sub i32 %x, %a\n  ret i32 %r\n",
+        "  %0 = and i32 %x, -2\n  ret i32 %0\n",
+    );
+}
+
+/// With a variable mask the `and` must have no other user (`opt` agrees).
+#[test]
+fn x_minus_x_and_y_is_x_and_not_y_only_for_a_one_use_and() {
+    check(
+        "i32",
+        "i32 %x, i32 %y",
+        "  %a = and i32 %x, %y\n  %r = sub i32 %x, %a\n  ret i32 %r\n",
+        "  %0 = xor i32 %y, -1\n  %1 = and i32 %x, %0\n  ret i32 %1\n",
+    );
+    check(
+        "i32",
+        "i32 %x, i32 %y",
+        "  %a = and i32 %x, %y\n  %r = sub i32 %x, %a\n  %s = add i32 %r, %a\n  ret i32 %s\n",
+        "  %a = and i32 %x, %y\n  %r = sub i32 %x, %a\n  %s = add i32 %r, %a\n  ret i32 %s\n",
+    );
+}

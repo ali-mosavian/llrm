@@ -514,9 +514,15 @@ fn hoist_add_sub(
         return None;
     }
     let operation = function.instruction(dead);
-    let Opcode::Binary(op @ (BinaryOp::Add | BinaryOp::Sub)) = operation.opcode else { return None };
+    // `m_NSWAddLike`/`m_NUWAddLike`: an `or disjoint` is an add that wraps in
+    // neither sense.
+    let (op, disjoint) = match operation.opcode {
+        Opcode::Binary(op @ (BinaryOp::Add | BinaryOp::Sub)) => (op, false),
+        Opcode::Binary(BinaryOp::Or) if operation.flags.contains(Wrap::DISJOINT) => (BinaryOp::Add, true),
+        _ => return None,
+    };
     let signed = pred.is_signed();
-    if !operation.flags.contains(if signed { Wrap::NSW } else { Wrap::NUW }) {
+    if !disjoint && !operation.flags.contains(if signed { Wrap::NSW } else { Wrap::NUW }) {
         return None;
     }
     let (mut variant_op, mut invariant_op) = (operation.operands[0], operation.operands[1]);

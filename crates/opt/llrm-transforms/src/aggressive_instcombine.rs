@@ -1462,10 +1462,9 @@ fn fold_sqrt(
 /// `foldLibCalls`
 /// ([:2192](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L2192)).
 ///
-/// DEVIATE 46: the `strcmp` and `strncmp` arms are not translated; `memchr`
-/// reads a pointer that is a constant global itself, not a constant offset
-/// into one, and its switch has no branch weights (as DEVIATE 42). Owner: w2.
-/// Exit: 2026-11-21.
+/// DEVIATE 46: `memchr`, `strcmp` and `strncmp` read a pointer that is a
+/// constant global itself, not a constant offset into one, and their
+/// branches have no weights (as DEVIATE 42). Owner: w2. Exit: 2026-11-21.
 fn fold_lib_calls(
     unit: &mut Unit,
     globals: &[llrm_mir::module::GlobalValue],
@@ -1491,6 +1490,11 @@ fn fold_lib_calls(
         LibFunc::Sqrt | LibFunc::Sqrtf | LibFunc::Sqrtl => {
             fold_sqrt(unit.context, unit.layout, unit.function, unit.declared, tti, inst)
         }
+        LibFunc::Strcmp | LibFunc::Strncmp => {
+            let folded = fold_str_n_cmp(unit.context, unit.layout, unit.function, globals, func, inst);
+            *cfg_changed |= folded;
+            folded
+        }
         LibFunc::Memchr => {
             let folded = fold_mem_chr(unit.context, unit.layout, unit.function, globals, inst);
             *cfg_changed |= folded;
@@ -1498,6 +1502,144 @@ fn fold_lib_calls(
         }
         _ => false,
     }
+}
+
+/// `StrNCmpInlineThreshold`.
+const STR_N_CMP_INLINE_THRESHOLD: u64 = 3;
+
+/// `StrNCmpInliner::optimizeStrNCmp` and `inlineCompare`
+/// ([:1970](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L1970),
+/// [:2040](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L2040)):
+/// a `strcmp` or `strncmp` against a constant string of two or three bytes,
+/// used only in comparisons with zero, is a chain of byte differences that
+/// stops at the first one that is not zero.
+fn fold_str_n_cmp(
+    context: &mut llrm_mir::context::Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    globals: &[llrm_mir::module::GlobalValue],
+    func: llrm_mir::libfunc::LibFunc,
+    inst: InstId,
+) -> bool {
+    use llrm_mir::libfunc::LibFunc;
+    let operands = function.instruction(inst).operands.clone();
+    let (first, second, limit) = match (func, &operands[..]) {
+        (LibFunc::Strcmp, [first, second, _callee]) => (*first, *second, None),
+        (LibFunc::Strncmp, [first, second, limit, _callee]) => (*first, *second, Some(*limit)),
+        _ => return false,
+    };
+    let q = query(context, layout, function);
+    if !llrm_mir::valuetracking::known::is_only_used_in_zero_comparison(&q, inst) || first == second {
+        return false;
+    }
+    let env = llrm_mir::constantfolding::Env { globals, layout };
+    let known_first = crate::simplifylibcalls::constant_array_in(context, env, first);
+    let known_second = crate::simplifylibcalls::constant_array_in(context, env, second);
+    if known_first.is_some() == known_second.is_some() {
+        return false;
+    }
+    // The NUL and what follows it are not trimmed.
+    let swapped = known_first.is_some();
+    let (string, other) =
+        if let Some(string) = known_first { (string, second) } else { (known_second.expect("one is known"), first) };
+    let mut n = string.iter().position(|&byte| byte == 0).map_or(u128::MAX, |at| at as u128 + 1);
+    if let Some(limit) = limit {
+        let Some((limit, _)) = q.int_constant(limit) else { return false };
+        n = n.min(limit);
+    }
+    if n > string.len() as u128 || n < 2 || n > u128::from(STR_N_CMP_INLINE_THRESHOLD) {
+        return false;
+    }
+    // A pointer with two or more dereferenceable bytes is better served
+    // elsewhere.
+    if llrm_mir::valuetracking::known::pointer_dereferenceable_bytes(&q, other).0 > 1 {
+        return false;
+    }
+    let n = n as usize;
+    let call_ty = function.instruction(inst).ty;
+    let Some(result) = function.instruction(inst).result else { return false };
+    let Some(block) = function.parent(inst) else { return false };
+    let i8 = context.types.int(8);
+    let index_ty = context.types.int(layout.pointer(0).index_bits);
+    let void = context.types.void();
+
+    let tail = crate::edges::split_block_at(function, block, inst);
+    let jump = function.terminator(block).expect("the split's branch");
+    function.erase(jump).expect("a terminator defines nothing");
+    let mut previous = block;
+    let mut subs = Vec::new();
+    for _ in 0..n {
+        let sub = function.create_block(Some("sub"));
+        function.insert_block(sub, Some(previous)).expect("a new block");
+        previous = sub;
+        subs.push(sub);
+    }
+    let ne = function.create_block(Some("ne"));
+    function.insert_block(ne, Some(previous)).expect("a new block");
+
+    let enter = function.create_instruction(Opcode::Br, void, vec![Operand::Block(subs[0])], Flags::default(), None);
+    function.insert(enter, Position::End(block)).expect("a placed block");
+
+    let mut incoming = Vec::new();
+    for (at, &sub) in subs.iter().enumerate() {
+        let mut build = |function: &mut Function, op: Opcode, ty, operands: Vec<Operand>, flags| {
+            let one = function.create_instruction(op, ty, operands, flags, None);
+            function.insert(one, Position::End(sub)).expect("a placed block");
+            function.instruction(one).result.map(Operand::Value)
+        };
+        let offset = Operand::Constant(context.int(index_ty, at as i128));
+        let place = build(
+            function,
+            Opcode::GetElementPtr { source: i8 },
+            function.operand_type(context, other).expect("a typed pointer"),
+            vec![other, offset],
+            Flags::INBOUNDS,
+        )
+        .expect("a value");
+        let byte = build(function, Opcode::Load { align: None, volatile: false }, i8, vec![place], Flags::default())
+            .expect("a value");
+        let ours = build(function, Opcode::Cast(CastOp::ZExt), call_ty, vec![byte], Flags::default()).expect("a value");
+        let theirs = Operand::Constant(context.int(call_ty, i128::from(string[at])));
+        let operands = if swapped { vec![theirs, ours] } else { vec![ours, theirs] };
+        let difference =
+            build(function, Opcode::Binary(BinaryOp::Sub), call_ty, operands, Flags::default()).expect("a value");
+        if at + 1 < n {
+            let zero = Operand::Constant(context.int(call_ty, 0));
+            let i1 = context.types.int(1);
+            let differs = build(
+                function,
+                Opcode::ICmp(llrm_mir::opcode::IntPredicate::Ne),
+                i1,
+                vec![difference, zero],
+                Flags::default(),
+            )
+            .expect("a value");
+            build(
+                function,
+                Opcode::Br,
+                void,
+                vec![differs, Operand::Block(ne), Operand::Block(subs[at + 1])],
+                Flags::default(),
+            );
+        } else {
+            build(function, Opcode::Br, void, vec![Operand::Block(ne)], Flags::default());
+        }
+        incoming.push((difference, sub));
+    }
+    let difference = function.create_instruction(
+        Opcode::Phi,
+        call_ty,
+        llrm_analysis::occurrence::from_arms(&incoming),
+        Flags::default(),
+        None,
+    );
+    function.insert(difference, Position::End(ne)).expect("a placed block");
+    let difference = Operand::Value(function.instruction(difference).result.expect("a value"));
+    let out = function.create_instruction(Opcode::Br, void, vec![Operand::Block(tail)], Flags::default(), None);
+    function.insert(out, Position::End(ne)).expect("a placed block");
+    function.replace_all_uses_with(result, difference);
+    function.erase(inst).expect("a call nothing uses");
+    true
 }
 
 /// `MemChrInlineThreshold`.

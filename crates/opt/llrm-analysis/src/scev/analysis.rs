@@ -213,6 +213,16 @@ pub struct ScevSession {
     scev: ScalarEvolution,
 }
 
+thread_local! {
+    static SESSIONS_MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many sessions this thread made, for a test that a pass asking many
+/// questions of one function does not make a session for each.
+pub fn sessions_made() -> usize {
+    SESSIONS_MADE.with(std::cell::Cell::get)
+}
+
 impl ScevSession {
     pub fn of(
         context: &llrm_mir::context::Context,
@@ -242,6 +252,7 @@ impl ScevSession {
         function: &Function,
         declared: bool,
     ) -> Self {
+        SESSIONS_MADE.with(|made| made.set(made.get() + 1));
         let tree = DomTree::of(function);
         let loops = LoopInfo::analyze(function, || &tree);
         let assumptions = AssumptionCache::of_declared(context, globals, metadata, function, declared);
