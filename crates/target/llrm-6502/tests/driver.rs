@@ -57,6 +57,27 @@ fn the_size_level_is_priced_in_bytes() {
     assert!(!speed.contains("dex") && !speed.contains("dey"), "-O2:\n{speed}");
 }
 
+/// `n - 1` on a word went through the carry chain (`clc; adc #255` on each
+/// byte, 22 clocks) where `lda lo; bne; dec hi; dec lo` borrows by branch (11):
+/// memcmp's and strncmp's counters, a clock row against gcc. The borrow still
+/// runs: 0x0100 - 1 = 0x00FF, 1 - 1 = 0, 0 - 1 = 0xFFFF.
+#[test]
+fn a_word_minus_one_borrows_by_branch() {
+    let probe = |name: &str, start: i32| {
+        format!(
+            "@{name}_k = global i16 {start}\ndefine i8 @{name}() {{\n  %v = load volatile i16, ptr @{name}_k\n  \
+             %d = add i16 %v, -1\n  %lo = trunc i16 %d to i8\n  %h = lshr i16 %d, 8\n  %hi = trunc i16 %h to i8\n  \
+             %s = shl i8 %hi, 1\n  %r = xor i8 %lo, %s\n  ret i8 %r\n}}\n"
+        )
+    };
+    let ir = module(&[probe("borrow", 256), probe("one", 1), probe("wrap", 0)].concat());
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(!text.contains("adc #255") && text.contains("dec"), "the carry chain:\n{text}");
+    assert_eq!(exit_code_of(&text, "borrow"), 0xFF, "{text}");
+    assert_eq!(exit_code_of(&text, "one"), 0, "{text}");
+    assert_eq!(exit_code_of(&text, "wrap"), 1, "{text}");
+}
+
 /// `LLRM_6502_ZERO_PAGE` sets the platform's zero page, whichever way the
 /// platform is named. It was read before the row's own `--platform=sim65`,
 /// which put the 26 back: a sweep of 16..26 read flat, 4362 bytes at every
