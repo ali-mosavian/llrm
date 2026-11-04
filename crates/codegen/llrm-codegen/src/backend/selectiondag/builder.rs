@@ -779,6 +779,7 @@ impl Builder<'_> {
                 llrm_mir::types::FloatKind::Float => MVT::F32,
                 llrm_mir::types::FloatKind::Double => MVT::F64,
                 llrm_mir::types::FloatKind::X86Fp80 => MVT::F80,
+                llrm_mir::types::FloatKind::F128 => return Err(Refused("fp128: no legalization yet")),
             })),
             _ => Err(Refused("aggregate or vector value")),
         }
@@ -2123,7 +2124,9 @@ impl Builder<'_> {
         if demoted {
             let types = &self.module.context.types;
             let size = self.layout.alloc_size(types, result_type) as u32;
-            let index = self.info.new_stack_object(size, 1);
+            // `LowerCallTo`: the object has the result type's preferred alignment.
+            let align = self.layout.pref_align(types, result_type) as u32;
+            let index = self.info.new_stack_object(size, align);
             let address = self.dag.get_frame_index(self.target.dag.pointer, index);
             let pointer = self.target.dag.pointer;
             let pieces = self.split_for_calling(address, Ext::Any)?;
@@ -2197,9 +2200,10 @@ impl Builder<'_> {
         self.dag.set_root(chain);
         if let Some((index, address)) = slot {
             let vt = self.type_of(result_type)?;
+            let align = self.layout.pref_align(&self.module.context.types, result_type) as u32;
             let info = MemInfo {
                 mem_vt: vt,
-                align: 1,
+                align,
                 volatile: false,
                 base: MemBase::Stack(index),
                 ext: None,
@@ -2393,8 +2397,12 @@ impl Builder<'_> {
                             continue;
                         }
                         // A byte or word is promoted to `i32`, a dword goes
-                        // in the dword register (`EDI`, not `RDI`)
-                        let promoted = width.min(vt.size_in_bits().max(32));
+                        // in the dword register (`EDI`, not `RDI`); an
+                        // integer between a dword and the register is
+                        // promoted to the register (`i40` to `i64`, as
+                        // `getCopyToParts` does).
+                        let bits = vt.size_in_bits();
+                        let promoted = if bits > 32 && bits < width { width } else { width.min(bits.max(32)) };
                         let piece = if vt.is_integer() && vt.size_in_bits() < promoted {
                             let code = extends.get(at).copied().unwrap_or(ISD::AnyExtend);
                             self.dag.get_node(code, EVT::integer(promoted), &[piece])
@@ -2594,9 +2602,14 @@ impl Builder<'_> {
             let vt = self.dag.value_type(value);
             let pointer = self.target.dag.pointer;
             let address = self.dag.get_copy_from_reg(chain, reg, pointer);
+            // `visitRet`: stored at the preferred alignment of the returned type.
+            let align = match self.function.operand_type(&self.module.context, operand) {
+                Some(ty) => self.layout.pref_align(&self.module.context.types, ty) as u32,
+                None => 1,
+            };
             let info = MemInfo {
                 mem_vt: vt,
-                align: 1,
+                align,
                 volatile: false,
                 base: MemBase::Unknown,
                 ext: None,

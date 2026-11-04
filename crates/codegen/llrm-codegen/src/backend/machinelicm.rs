@@ -367,8 +367,16 @@ impl licm::Inst for Wrapped {
         from: u32,
         to: u32,
     ) {
+        #[cfg(test)]
+        RENAMES.with(|renames| renames.set(renames.get() + 1));
         self.0 = self.0.renamed(&|value| if value == from { to } else { value });
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Calls of `Wrapped::rename_use`.
+    static RENAMES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// The x86 half of the pass: which instructions move (`IsLICMCandidate`,
@@ -665,6 +673,65 @@ mod tests {
         };
         assert_eq!(names(0), ["add", "jmp"]);
         assert_eq!(names(1), ["mov", "jcxz"]);
+    }
+
+    /// `EliminateCSE` renamed the readers of one duplicate at a time, each
+    /// rename visiting every instruction of the function: 19 duplicates in a
+    /// loop of 140 instructions made about 2,700 `rename_use` calls, and
+    /// `lir machinelicm` of jpeg_single went from 8.7M to 51M instructions.
+    /// Only a reader of a duplicate is renamed.
+    #[test]
+    fn test_the_readers_of_duplicates_are_renamed_without_visiting_the_whole_body() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let duplicates = 20u32;
+        let mut inside = Vec::new();
+        for number in 0..duplicates {
+            let value = 10 + 2 * number;
+            let at = i64::from(10 + 3 * number);
+            inside.push(insn(at, Operation::Binary, "add", vec![held(value)], vec![held(1), held(2)], vec![value], vec![1, 2]));
+            inside.push(insn(
+                at + 1,
+                Operation::Compare,
+                "cmp",
+                vec![],
+                vec![held(value), held(3)],
+                vec![],
+                vec![value, 3],
+            ));
+        }
+        for number in 0..100u32 {
+            let value = 200 + number;
+            inside.push(insn(
+                i64::from(100 + number),
+                Operation::Move,
+                "mov",
+                vec![held(value)],
+                vec![held(3)],
+                vec![value],
+                vec![3],
+            ));
+        }
+        inside.push(insn(500, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]));
+        let mut body = LirBody::new(
+            "loop",
+            0,
+            vec![
+                block(0, vec![1], vec![insn(0, Operation::Jump, "jmp", vec![], vec![], vec![], vec![])]).into(),
+                block(1, vec![1, 2], inside).into(),
+                block(2, vec![], vec![insn(501, Operation::Return, "ret", vec![], vec![], vec![], vec![])]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1, 2, 3].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        RENAMES.with(|renames| renames.set(0));
+        let done = hoisted(&body, &RegisterClasses::m16());
+        let adds = done.blocks[0].insns.iter().filter(|one| one.what.as_ref().and_then(|w| w.name.as_deref()) == Some("add")).count();
+        assert_eq!(adds, 1, "the premise: the duplicates are made once");
+        let renames = RENAMES.with(|renames| renames.get());
+        assert!(renames <= 3 * duplicates as usize, "{renames}");
     }
 
     /// bintree's `insert` at -O1, a loop after `tailrecurse`: `t[3*node]` is

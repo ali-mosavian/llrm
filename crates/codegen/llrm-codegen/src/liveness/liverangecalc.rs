@@ -583,7 +583,23 @@ impl LiveIntervalCalc {
             }
         }
         for lanes in masks {
-            let mine: Vec<Operand> = operands.iter().filter(|mo| mo.lanes.overlaps(lanes)).copied().collect();
+            // A def that keeps the rest of the value (`readsReg`) reads the
+            // lanes it does not define.
+            let mut mine: Vec<Operand> = Vec::new();
+            for mo in operands {
+                let reads = if mo.is_def && mo.reads_reg { ValueLanes(!mo.lanes.0) } else { mo.lanes };
+                if mo.is_def && mo.lanes.overlaps(lanes) {
+                    mine.push(Operand { reads_reg: false, ..*mo });
+                }
+                if mo.reads_reg && reads.overlaps(lanes) {
+                    mine.push(Operand { is_def: false, ..*mo });
+                }
+            }
+            // Lanes no def reaches are undefined (`computeSubRangeUndefs`):
+            // a read of the whole value has nothing to extend to there.
+            if !mine.iter().any(|mo| mo.is_def) {
+                continue;
+            }
             let mut range = LiveRange::new();
             self.create_dead_defs(&mut range, &mine, ctx);
             self.calc.reset_live_out_map(ctx.cfg.len());

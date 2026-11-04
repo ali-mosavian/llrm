@@ -2788,7 +2788,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         for (group, object) in groups.iter().zip(self.objects.clone()) {
             let kind = match self.b.context.types.get(group.ty) {
                 Type::Int(_) => ConstantKind::Int(0),
-                Type::Float(_) => ConstantKind::Float(0),
+                Type::Float(kind) => ConstantKind::float_zero(*kind),
                 Type::Pointer(_) => ConstantKind::Null,
                 _ => {
                     let callee = Value::Constant(self.tables.callees[MEMSET]);

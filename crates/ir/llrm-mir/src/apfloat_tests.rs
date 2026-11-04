@@ -264,17 +264,17 @@ fn the_pinned_llvm_answers_say_more_than_one_thing() {
     assert_many_answers(include_str!("apfloat_golden.txt"), &["constants", "semantics"], 300);
 }
 
-/// MIR has `float`, `double` and `x86_fp80` and nothing else, which is what
-/// lets `ApFloat` leave out half, bfloat, quad and double-double.
+/// MIR has `float`, `double`, `x86_fp80` and `fp128` and nothing else, which
+/// is what lets `ApFloat` leave out half, bfloat and double-double.
 /// `semantics_of` matches every `FloatKind`, so this stops compiling the day
 /// MIR gains one; and the parser refuses the others.
 #[test]
 fn mir_has_only_the_float_kinds_apfloat_has() {
-    for kind in [crate::FloatKind::Float, crate::FloatKind::Double, crate::FloatKind::X86Fp80] {
+    for kind in [crate::FloatKind::Float, crate::FloatKind::Double, crate::FloatKind::X86Fp80, crate::FloatKind::F128] {
         let sem = semantics_of(kind);
         assert_eq!(sem.size_in_bits, crate::datalayout::float_bits(kind));
     }
-    for ty in ["half", "bfloat", "fp128", "ppc_fp128"] {
+    for ty in ["half", "bfloat", "ppc_fp128"] {
         let text = format!("define {ty} @f({ty} %a) {{\n  ret {ty} %a\n}}\n");
         assert!(crate::parse::module(&text).is_err(), "{ty}");
     }

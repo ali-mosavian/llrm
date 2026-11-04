@@ -1073,7 +1073,8 @@ fn selected_in(
     let mul_rate = if cpu.size || cpu.min_size || bytes_beat_clocks { 0 } else { cpu.speed_milliclocks_per_byte() };
     let speed_goal = !(cpu.size || cpu.min_size || bytes_beat_clocks);
     let mul_by_clocks = speed_goal && cpu.target().tti().is_some_and(|tti| tti.multiply_by_clocks());
-    let frequencies = (mul_rate > 0 && !mul_by_clocks).then(|| {
+    let price_pin = speed_goal && cpu.target().tti().is_some_and(|tti| tti.price_pin_multiplies());
+    let frequencies = ((mul_rate > 0 || price_pin) && !mul_by_clocks).then(|| {
         let bpi = llrm_analysis::bpi::BranchProbabilityInfo::of(
             llrm_analysis::bpi::Module {
                 context: &module.context,
@@ -1098,6 +1099,8 @@ fn selected_in(
                 sse2,
                 min_size: cpu.min_size || bytes_beat_clocks,
                 i16_mul_chains: !super::x86_lowering::promotes_i16(&tli),
+                sext_load: true,
+                zext_free: m64,
                 profile: if mul_by_clocks {
                     Some(super::x86_lowering::MulPricing {
                         cpu,
@@ -1105,6 +1108,7 @@ fn selected_in(
                         freq: 1.0,
                         milliclocks_per_byte: mul_rate,
                         by_clocks: true,
+                        price_pin: false,
                     })
                 } else {
                     frequencies
@@ -1116,6 +1120,7 @@ fn selected_in(
                                 freq: frequencies.relative_to_entry(parent),
                                 milliclocks_per_byte: mul_rate,
                                 by_clocks: false,
+                                price_pin,
                             },
                         )
                 },

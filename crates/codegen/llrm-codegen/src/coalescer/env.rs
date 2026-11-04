@@ -75,6 +75,14 @@ pub struct TargetEnv {
     /// `LLRM_CHECK_USE_SUMMARY`: each [`JoinSide`] also lists its instructions,
     /// for the target to check the summary against.
     pub check_kinds: bool,
+    /// `TII->isAsCheapAsAMove(DefMI) && TII->isReMaterializable(DefMI)`: the
+    /// target's own test of a definition worth making again. None: a move of
+    /// an immediate or an address as x86 names them.
+    pub remat: Option<Box<dyn Fn(&Insn) -> bool>>,
+    /// The target's price of that remat against the copy it replaces: the
+    /// definition, the registers the copy's source and destination may take,
+    /// and whether the build is for size. None: always worth it.
+    pub remat_wins: Option<RematWins>,
 }
 
 /// The instructions that name a value, summed by what they ask of its
@@ -232,6 +240,9 @@ impl TargetEnv {
     }
 }
 
+/// See [`TargetEnv::remat_wins`].
+pub type RematWins = Box<dyn Fn(&Insn, &BTreeSet<RegId>, &BTreeSet<RegId>, bool) -> bool>;
+
 /// One side of a copy about to be joined.
 pub struct JoinSide {
     pub value: u32,
@@ -271,6 +282,34 @@ impl CoalescerEnv for TargetEnv {
 
     fn tuned_for_size(&self) -> bool {
         self.size
+    }
+
+    fn rematerializable(
+        &self,
+        insn: &Insn,
+    ) -> bool {
+        match &self.remat {
+            Some(shape) => insn.spread.is_empty() && insn.call.is_none() && shape(insn),
+            None => {
+                insn.spread.is_empty()
+                    && insn.call.is_none()
+                    && crate::greedy::remat::is_trivially_re_materializable(insn, false)
+            }
+        }
+    }
+
+    fn remat_wins(
+        &self,
+        def: &Insn,
+        source: u32,
+        destination: u32,
+    ) -> bool {
+        let palettes = self.palettes.borrow();
+        let (Some(wins), Some(from), Some(to)) = (&self.remat_wins, palettes.get(&source), palettes.get(&destination))
+        else {
+            return true;
+        };
+        wins(def, from, to, self.size)
     }
 
     fn keeps(
@@ -466,6 +505,8 @@ pub fn coalesce(
     joins_sub_registers: bool,
     regs: llrm_lir::registers::Regs,
     should_join: Box<dyn Fn(&Join) -> bool>,
+    remat: Option<Box<dyn Fn(&Insn) -> bool>>,
+    remat_wins: Option<RematWins>,
     kind_of: Box<dyn Fn(&Insn, u32) -> Option<u32>>,
 ) -> (LirBody, IndexMap<u32, BTreeSet<RegId>>, JoinMap) {
     let aliases = pins
@@ -496,6 +537,8 @@ pub fn coalesce(
         aliases,
         should_join,
         freq,
+        remat,
+        remat_wins,
         regs: Some(regs),
         kind_of: Some(kind_of),
         kinds: RefCell::default(),

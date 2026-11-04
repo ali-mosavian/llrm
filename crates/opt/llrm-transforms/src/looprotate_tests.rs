@@ -14,7 +14,13 @@ fn rotated(module: &mut Module) -> bool {
     crate::loopsimplify::simplified(function);
     crate::lcssa::closed(function).expect("closes");
     let tti = X86::of_cpu("i486").expect("a cpu");
-    let options = Options { max_header_size: 16, rotation_only: false, is_util_mode: false, prepare_for_lto: false };
+    let options = Options {
+        max_header_size: 16,
+        priced_at_size: false,
+        rotation_only: false,
+        is_util_mode: false,
+        prepare_for_lto: false,
+    };
     rotate_function(module, "f", &tti, options).expect("rotates")
 }
 
@@ -202,7 +208,13 @@ declare i16 @late(i16)
     crate::loopsimplify::simplified(function);
     crate::lcssa::closed(function).expect("closes");
     let tti = X86::of_cpu("i486").expect("a cpu");
-    let options = Options { max_header_size: 16, rotation_only: false, is_util_mode: false, prepare_for_lto: false };
+    let options = Options {
+        max_header_size: 16,
+        priced_at_size: false,
+        rotation_only: false,
+        is_util_mode: false,
+        prepare_for_lto: false,
+    };
     let known = module.functions().position(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f") + 1;
     assert!(rotate_function_knowing(&mut module, "f", &tti, options, known).expect("rotates"), "{}", printed(&module));
 }
@@ -336,8 +348,9 @@ b3:
 }
 
 /// -Os cut the header limit to 4 on every target; the byte sweep that showed it
-/// to be smaller was m16 only. m32 keeps the pin's 16 (`hasMinSize` alone
-/// lowers it), so a five-instruction header is copied there at -Os.
+/// to be smaller was m16 only (a target states its own limit). m32 keeps the
+/// pin's 16 (`hasMinSize` alone lowers it), so a five-instruction header is
+/// copied there at -Os.
 #[test]
 fn test_the_size_header_limit_is_m16_only() {
     use llrm_mir::target::Neutral;
@@ -345,4 +358,43 @@ fn test_the_size_header_limit_is_m16_only() {
     assert_eq!(super::header_limit(true, true, &llrm_x86_m16::Dos::default()), 4);
     assert_eq!(super::header_limit(true, false, &llrm_x86_m16::Dos::default()), 16);
     assert_eq!(super::header_limit(false, true, &llrm_x86_m16::Dos::default()), 0);
+}
+
+/// The -Os limit of 4 followed `segment_registers() > 0`, so any target with
+/// segment registers copied at most four header instructions; the sweep
+/// behind 4 was m16's, which now states it itself.
+#[test]
+fn test_the_size_header_limit_comes_from_the_target_not_its_segments() {
+    let segmented = crate::testing::Tuned { segments: 2, ..Default::default() };
+    assert_eq!(super::header_limit(true, true, &segmented), 16);
+}
+
+/// `rotated` as a size build on arm64, where a header is copied only when it
+/// is no bigger than the branches rotation removes.
+fn rotated_priced(module: &mut Module) -> bool {
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::lcssa::closed(function).expect("closes");
+    let tti = llrm_arm64::tti::AArch64::of_cpu("generic").expect("a cpu");
+    let options = Options {
+        max_header_size: 16,
+        priced_at_size: true,
+        rotation_only: false,
+        is_util_mode: false,
+        prepare_for_lto: false,
+    };
+    rotate_function(module, "f", &tti, options).expect("rotates")
+}
+
+/// -Os arm64: a header of only the exit test is rotated, a header that also
+/// computes something is not (copying it grew jpeg_fixed, jpeg_single, nbody
+/// and recchop by 404 B in all).
+#[test]
+fn test_a_size_build_copies_a_header_only_when_it_is_no_bigger_than_the_removed_branches() {
+    let mut test_only = parsed(COUNTED);
+    assert!(rotated_priced(&mut test_only), "{}", printed(&test_only));
+    let mut computing = parsed(
+        &COUNTED.replace("  %go = icmp slt i16 %i, %n\n", "  %t = add i16 %i, %acc\n  %go = icmp slt i16 %t, %n\n"),
+    );
+    assert!(!rotated_priced(&mut computing), "{}", printed(&computing));
 }

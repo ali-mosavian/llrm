@@ -13,7 +13,7 @@ use std::process::Command;
 fn a_c_alias_is_a_public_name_in_the_m16_object() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let object = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("alias-{}.o", std::process::id()));
-    let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_16-dos")
         .env("LLRM_LLC", target_dir::of(&root).join("release/llrm-llc"))
         .args(["-O2", "-w", "-c", "-march=i386", "-o"])
@@ -34,7 +34,7 @@ fn a_c_alias_is_a_public_name_in_the_m16_object() {
 fn a_watcom_alias_has_no_regcall_prefix_in_the_m16_object() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let object = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("alias-wat-{}.o", std::process::id()));
-    let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_16-wat")
         .env("LLRM_LLC", target_dir::of(&root).join("release/llrm-llc"))
         .args(["-O2", "-w", "-c", "-march=i386", "-o"])
