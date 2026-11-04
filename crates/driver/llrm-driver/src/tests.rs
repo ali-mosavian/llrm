@@ -2632,6 +2632,16 @@ fn the_first_row_of_a_function_is_its_scope_line_at_m32() {
     }
 }
 
+/// bench/jpeg_fixed compiled from unoptimized IR at -O2 panicked in the
+/// allocator ("Cannot overlap different values"): `v = implicit_def` before a
+/// loop and `v := cmove v, x` in it, where the `implicit_def` was dropped and
+/// the read stayed, so `v` was live from the function's entry.
+#[test]
+fn a_loop_carried_value_the_entry_path_never_set_is_allocated() {
+    let text = include_str!("../tests/data/implicit_def_loop_carried_m64_o2.ll");
+    compiled(&flags(&["-O2"]), text, "f").expect("compiles");
+}
+
 /// An instruction with no place at the top of a block is line 0 in the pin,
 /// and not a statement; ours left the place of the block before it on every
 /// instruction, so a loop's `-O2` table had no line-0 row at all.
