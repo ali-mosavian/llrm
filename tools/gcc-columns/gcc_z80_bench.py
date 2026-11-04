@@ -91,6 +91,14 @@ def run(ihx, cwd):
     return clks, inst, int(m.group(1), 16) | int(m.group(2), 16) << 8
 
 
+def result_charge(ret):
+    """(bytes, T, insns) charged to a gcc cell so it is priced like the DE-returning columns.
+    16-bit: the caller's ex de,hl (1 B, 4 T, 1 insn), and the driver stores through DE (ld (nn),de, 20 T)
+    where gcc's driver stores through HL (ld (nn),hl, 16 T): 4 T more. The store was uncharged until 2026-11-04:
+    add16 read 78 T against 82 by hand."""
+    return (1, 8, 1) if ret != U8 else (0, 0, 0)
+
+
 def driver(name, ret, args):
     protos = ", ".join(t for t, _ in args) or "void"
     s = "extern unsigned char buf[]; extern char str[]; extern unsigned char tab[]; extern unsigned char lz[]; extern unsigned char lzout[];\n"
@@ -166,18 +174,20 @@ def main():
             if got & mask != want_v & mask:
                 bad.append((*cell, f"WRONG result {got & mask:#x}, hand-derived {want_v & mask:#x}")); continue
             b = linked_code(f"{w}/x.map") - code_size(f"{w}/crt0.rel") - code_size(f"{w}/d.rel")
-            # Result convention: ours returns 16-bit values in DE, gcc in HL, so the caller's
-            # ex de,hl is charged to gcc: +1 B +4 T +1 insn for 16-bit results (8-bit: A in both).
-            mv = (1, 4, 1) if ret != U8 else (0, 0, 0)
+            mv = result_charge(ret)
             tab = data_size(f"{w}/k.rel")
             b += tab
             rows[cell] = (b + mv[0], t - bt + mv[1], i - bi + mv[2])
-            note = f"incl. result move +{mv[0]} B +{mv[1]} T +{mv[2]} insn" if mv[0] else "8-bit result in A, no move"
+            note = f"incl. result move +{mv[0]} B +{mv[1]} T +{mv[2]} insn (ex de,hl 4 T + store via DE 4 T)" if mv[0] else "8-bit result in A, no move"
             if re.search(r"___(mulqi3|mulhi3|udivhi3|call_hl)\b", open(f"{w}/k.s").read()):
                 note = "hand helper, not codegen; " + note
             if tab >= 64:
                 note = f"table, not codegen; {tab} B table counted; " + note
             cnotes[cell] = note
+    # Guard, by hand: add16(300,5000) = ld hl 10 + ld de 10 + call 17 + add hl,de 11 + ret 10 + ld (nn),hl 16 + ex de,hl 4 + 4 = 82.
+    for lvl in a.levels.split(","):
+        if ("add16", lvl) in rows:
+            assert rows[("add16", lvl)][1] == 82, rows[("add16", lvl)]
     lv = a.levels.split(",")
     out = ["# gcc z80 spike column", ""] + hdr + ["", "| kernel | " + " | ".join(f"{l} B/T/insn" for l in lv) + " | best B | best T |", "|---|" + "---|" * (len(lv) + 2)]
     for name, *_ in K:
