@@ -180,6 +180,7 @@ fn query<'a>(
     Query {
         context,
         globals: &[],
+        fresh: &[],
         metadata: &[],
         function,
         layout,

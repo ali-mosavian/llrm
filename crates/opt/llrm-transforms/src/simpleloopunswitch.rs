@@ -436,6 +436,7 @@ fn build_partial_unswitch_conditional_branch(
             let query = Query {
                 context: &*run.context,
                 globals: run.globals,
+                fresh: &[],
                 metadata: run.metadata,
                 function: &*run.function,
                 layout: run.layout,

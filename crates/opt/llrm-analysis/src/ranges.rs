@@ -1194,6 +1194,7 @@ pub fn value_tracking_at(
     let q = llrm_mir::valuetracking::Query {
         context: unit.context,
         globals: unit.globals,
+        fresh: &[],
         metadata: unit.metadata,
         function: unit.function,
         layout: unit.layout,

@@ -278,6 +278,7 @@ impl<'a> Rewrite<'a> {
         Query {
             context: self.context,
             globals: &self.outer.globals,
+            fresh: &[],
             metadata: self.metadata,
             function,
             layout: self.layout,
