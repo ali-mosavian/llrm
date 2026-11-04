@@ -56,6 +56,7 @@ fn a_reload_goes_straight_into_the_register_the_copy_names() {
         })
         .collect();
     assert!(pairs.is_empty(), "{pairs:?}");
+}
 
 /// A word value defined by a dword zero was folded to `mov dword ptr [rsp], 0`
 /// and reloaded as a qword: the upper half was stack garbage, so the counter
