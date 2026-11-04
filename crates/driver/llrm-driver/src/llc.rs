@@ -653,6 +653,19 @@ fn options_for(
                 llrm_mir::libfunc::Routine::stated(names, |name| pattern.replace('*', name), number);
         }
     }
+    // The pin's clang IR at 16 bits has the forwarding of a global's store the
+    // write-through `Promote` stands in for at -O1 (lru -29 B, -16 clk at
+    // m16 -O1). Nib and BASIC build their options by `m16_options` and keep it.
+    if bound.target.layout().mode == 16 {
+        options.pipeline.write_through = false;
+    }
+    // At -O1 the forwarding made jpeg_fixed/jpeg_single 345-348 B larger at m64
+    // (the pin's -O1 forwards it in InstCombine, not here); -Og, which has no
+    // GVN either, is smaller with it (row WT1, owner x86-m64, exit 2026-11-14).
+    // Not at m32, where it is 167-199 B smaller on those two (lru the reverse).
+    if bound.target.layout().mode == 64 && flags.level == llrm_codegen::driver::flags::Level::O1 {
+        options.pipeline.write_through = false;
+    }
     options
 }
 
@@ -675,6 +688,27 @@ mod options_tests {
         let machine = flags.machine(&*bound.target, bound.target.machine()).unwrap();
         let default = flags.convention(&*bound.target).unwrap();
         options_for(&bound, &flags, machine, format, default)
+    }
+
+    /// The write-through `Promote` ran on the pin's clang IR at m16 -O1 and made
+    /// `lru` 29 B larger; the frontends that build for m16 alone (Nib, BASIC)
+    /// have no GVN there and keep it.
+    #[test]
+    fn clang_ir_at_m16_has_no_write_through_and_the_m16_frontends_keep_it() {
+        assert!(!options(&["-m16"], "omf").pipeline.write_through);
+        assert!(options(&["-m32"], "omf").pipeline.write_through);
+        assert!(crate::m16_options(crate::m16_machine()).pipeline.write_through);
+    }
+
+    /// The write-through `Promote` made jpeg_fixed -O1 348 B and jpeg_single
+    /// -O1 345 B larger at m64; it stays on at -Og, at m32 and at the levels
+    /// with GVN `pre` (where it does not run).
+    #[test]
+    fn clang_ir_at_o1_has_no_write_through_and_og_keeps_it() {
+        assert!(!options(&["-m64", "-O1"], "elf").pipeline.write_through);
+        assert!(options(&["-m32", "-O1"], "elf").pipeline.write_through);
+        assert!(options(&["-m64", "-Og"], "elf").pipeline.write_through);
+        assert!(options(&["-m64", "-O2"], "elf").pipeline.write_through);
     }
 
     /// `llrm-cc --dump DIR` reached the backend as an input file: "cannot

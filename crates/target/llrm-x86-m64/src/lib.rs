@@ -367,7 +367,8 @@ impl llrm_target::Target for M64 {
                             price_pin_multiplies: true,
                             // DEVIATE REC-2, as m32
                             recursive_inlining: Some((8, 450)),
-                            recursive_edge_growth: Some((15, 30)),
+                            // gcc's 15/30 size units in `gcc_insns` (m64 counts the sext/gep of its IR).
+                            recursive_edge_growth: Some((16, 31)),
                             ..llrm_mir::target::Tuning::PIN
                         })
                     })

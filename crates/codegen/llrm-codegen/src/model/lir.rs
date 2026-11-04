@@ -629,29 +629,30 @@ impl Insn {
                 *place = settled(place)?;
             }
         }
-        let value = |value: &u32| rename(*value);
-        made.defines = self.defines.iter().map(value).collect::<Result<_, E>>()?;
-        made.uses = self.uses.iter().map(value).collect::<Result<_, E>>()?;
-        made.undefs = self.undefs.iter().map(value).collect::<Result<_, E>>()?;
-        made.partial_defs = self.partial_defs.iter().map(value).collect::<Result<_, E>>()?;
-        made.early_clobbers = self.early_clobbers.iter().map(value).collect::<Result<_, E>>()?;
-        made.def_lanes = self.def_lanes.iter().map(|&(v, lanes)| Ok((rename(v)?, lanes))).collect::<Result<_, E>>()?;
-        made.use_lanes = self.use_lanes.iter().map(|&(v, lanes)| Ok((rename(v)?, lanes))).collect::<Result<_, E>>()?;
-        made.lane_copies = self
-            .lane_copies
-            .iter()
-            .map(|&(from, to, lanes)| Ok((rename(from)?, rename(to)?, lanes)))
-            .collect::<Result<_, E>>()?;
-        let wants = |side: &[(Held, RegId)]| -> Result<Vec<(Held, RegId)>, E> {
-            side.iter()
-                .map(|(held, register)| {
-                    Ok((Held { value: rename(held.value)?, width: held.width, offset: held.offset }, *register))
-                })
-                .collect()
+        // `made` is a clone: its lists are renamed where they stand, not
+        // collected into second ones.
+        let value = |value: &mut u32| -> Result<(), E> {
+            *value = rename(*value)?;
+            Ok(())
         };
-        made.requires = wants(&self.requires)?;
-        made.delivers = wants(&self.delivers)?;
-        made.widths = self.widths.iter().map(|&(v, width)| Ok((rename(v)?, width))).collect::<Result<_, E>>()?;
+        made.defines.iter_mut().try_for_each(value)?;
+        made.uses.iter_mut().try_for_each(value)?;
+        made.undefs.iter_mut().try_for_each(value)?;
+        made.partial_defs.iter_mut().try_for_each(value)?;
+        made.early_clobbers.iter_mut().try_for_each(value)?;
+        for (v, _) in made.def_lanes.iter_mut().chain(&mut made.use_lanes) {
+            value(v)?;
+        }
+        for (from, to, _) in &mut made.lane_copies {
+            value(from)?;
+            value(to)?;
+        }
+        for (held, _) in made.requires.iter_mut().chain(&mut made.delivers) {
+            value(&mut held.value)?;
+        }
+        for (v, _) in &mut made.widths {
+            value(v)?;
+        }
         Ok(Arc::new(made))
     }
 
@@ -1386,6 +1387,10 @@ pub struct LirBody {
     /// The registers the frame saved, found before its exit was made: the
     /// exit's own pops name them and the frame register.
     pub frame_saved: Option<Vec<RegId>>,
+    /// The callee-saved vector registers the body writes and where its frame
+    /// keeps them: each with the displacement of a 16-byte cell. The entry
+    /// saves them with `movaps`, the exits reload them.
+    pub vector_saves: Vec<(RegId, crate::model::ir::Mem)>,
     /// What `-g` says of its variables at points in the code, by the numbers
     /// `DebugTags::before` holds.
     pub notes: Arc<Vec<DebugNote>>,
@@ -1589,6 +1594,7 @@ impl LirBody {
             over_aligned: Vec::new(),
             frame_exit: None,
             frame_saved: None,
+            vector_saves: Vec::new(),
             notes: Arc::default(),
             placed: Arc::default(),
             arguments_in_cells: Arc::default(),
@@ -1661,6 +1667,7 @@ impl LirBody {
             over_aligned: self.over_aligned.clone(),
             frame_exit: self.frame_exit,
             frame_saved: self.frame_saved.clone(),
+            vector_saves: self.vector_saves.clone(),
             notes: Arc::clone(&self.notes),
             placed: Arc::clone(&self.placed),
             arguments_in_cells: Arc::clone(&self.arguments_in_cells),
@@ -1978,6 +1985,38 @@ mod tests {
         assert_eq!(named.uses, vec![7], "the original stands");
         let refused = named.try_renamed(&|value| if value == 7 { Err("cycle") } else { Ok(value) });
         assert_eq!(refused.err(), Some("cycle"));
+    }
+
+    /// Each list of an instruction is renamed where it stands (the copy's
+    /// lists were collected into second ones): a value named in any of them
+    /// moves, the others stay.
+    #[test]
+    fn test_a_rename_moves_the_value_in_every_list_of_the_instruction() {
+        use llrm_lir::valuelanes::ValueLanes;
+        let held = |value| Held { value, width: 4, offset: 0 };
+        let mut named = (*instruction(0x10, None)).clone();
+        named.defines = vec![7, 2];
+        named.uses = vec![1, 7];
+        named.undefs = vec![7];
+        named.partial_defs = vec![7];
+        named.early_clobbers = vec![7];
+        named.def_lanes = vec![(7, ValueLanes(1))];
+        named.use_lanes = vec![(7, ValueLanes(2))];
+        named.lane_copies = vec![(7, 2, ValueLanes(1)), (1, 7, ValueLanes(2))];
+        named.requires = vec![(held(7), RegId::DL)];
+        named.delivers = vec![(held(1), RegId::DL), (held(7), RegId::CX)];
+        named.widths = vec![(7, 2), (1, 4)];
+        let named = Arc::new(named);
+        let moved = named.renamed(&|value| if value == 7 { 9 } else { value });
+        assert_eq!(moved.defines, vec![9, 2]);
+        assert_eq!(moved.uses, vec![1, 9]);
+        assert_eq!((&moved.undefs, &moved.partial_defs, &moved.early_clobbers), (&vec![9], &vec![9], &vec![9]));
+        assert_eq!(moved.def_lanes, vec![(9, ValueLanes(1))]);
+        assert_eq!(moved.use_lanes, vec![(9, ValueLanes(2))]);
+        assert_eq!(moved.lane_copies, vec![(9, 2, ValueLanes(1)), (1, 9, ValueLanes(2))]);
+        assert_eq!(moved.requires, vec![(held(9), RegId::DL)]);
+        assert_eq!(moved.delivers, vec![(held(1), RegId::DL), (held(9), RegId::CX)]);
+        assert_eq!(moved.widths, vec![(9, 2), (1, 4)]);
     }
 
     #[test]

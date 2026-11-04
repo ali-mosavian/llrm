@@ -109,6 +109,21 @@ fn test_a_copy_between_values_that_do_not_overlap_is_joined_and_removed() {
     assert_consistent(&lis, &was, 1);
 }
 
+/// A join renamed the instruction that named the absorbed value into a new
+/// one (a new identity, a rebuilt slot index): the pin's `setReg` edits the
+/// operand where the instruction stands. Both survivors keep their identity.
+#[test]
+fn test_a_join_renames_the_instructions_that_name_the_absorbed_value_in_place() {
+    let (a, c, r) = (def(1), copy(2, 1), read(2));
+    let was = body(&[(&[Arc::clone(&a), Arc::clone(&c), Arc::clone(&r)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(1);
+    lis.interval(2);
+    join_copy(&mut lis, &AnyClass, &mut State::new(), &mut Default::default(), c.id());
+    let ids: Vec<u64> = lis.blocks().iter().flatten().map(|one| one.id()).collect();
+    assert_eq!(ids, vec![a.id(), r.id()], "the def and the read are the instructions they were");
+}
+
 /// `v1 := def; v2 := mov v1` and nothing reads `v2`: the copy is dead, and so
 /// then is the definition it alone read. Only the copy went, leaving a `v1`
 /// that nothing reads (C5: `eliminateDeadDefs` was not run).

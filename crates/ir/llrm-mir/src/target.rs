@@ -78,10 +78,10 @@ pub struct Tuning {
     /// `max-inline-insns-recursive` (`Tti::recursive_inlining`); none: the
     /// pin's inliner.
     pub recursive_inlining: Option<(u32, i64)>,
-    /// gcc's `max-inline-insns-auto` at -O2 and -O3 (15, 30): the most a copy
-    /// of the recursive callee may grow its caller
-    /// (`want_inline_small_function_p`) for `recursive_inlining` to run on
-    /// it; none: no such bar.
+    /// gcc's `max-inline-insns-auto` at -O2 and -O3 (15, 30 of its size
+    /// units) as the most `gcc_insns` a recursive callee may have for
+    /// `recursive_inlining` to run on it, calibrated per target; none: no
+    /// such bar.
     pub recursive_edge_growth: Option<(i64, i64)>,
     /// DEVIATE PL6: the first iteration of an innermost loop is peeled where
     /// its entry constants fold enough of the body to pay the copy at the

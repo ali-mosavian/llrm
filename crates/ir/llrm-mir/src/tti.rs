@@ -498,7 +498,8 @@ pub trait Tti {
         false
     }
 
-    /// DEVIATE REC-2: gcc's growth bar of the recursive edge at (-O2, -O3);
+    /// DEVIATE REC-2: gcc's growth bar of the recursive edge at (-O2, -O3),
+    /// in `gcc_insns` of the callee;
     /// none: no bar.
     fn recursive_edge_growth(&self) -> Option<(i64, i64)> {
         None
@@ -872,6 +873,13 @@ pub trait Tti {
         _step: i64,
     ) -> bool {
         true
+    }
+
+    /// Beyond the pin: whether a size build keeps a loop whose closed form
+    /// (`rewriteLoopExitValues`) costs more code than the loop, as the 16-bit
+    /// targets do. m68k's wide multiplies are library calls.
+    fn sizes_exit_values(&self) -> bool {
+        false
     }
 
     /// Beyond the pin: whether a strict exit compare of a unit-stride counter

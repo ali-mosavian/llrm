@@ -1231,19 +1231,7 @@ pub fn decide_with_split(
     if llrm_support::env_flag!("LLRM_GREEDY_DECISIONS") {
         eprintln!("block frequencies {:?}", freq);
     }
-    let loops = crate::analysis::loops::loops(&body.blocks, Some(body.entry));
-    let exiting: Vec<bool> = body
-        .blocks
-        .iter()
-        .map(|block| {
-            // The innermost loop holding the block (loops come innermost
-            // first).
-            loops
-                .iter()
-                .find(|one| one.body.contains(&block.at))
-                .is_some_and(|one| block.succ.iter().any(|to| !one.body.contains(to)))
-        })
-        .collect();
+    let exiting = exiting_blocks(body);
     let tables = Rc::new(Tables::default());
     // Under RFP the x87 values take FP0..FP6 (LLVM's RFP
     // classes); a stack position an instruction names is the stackifier's.
@@ -1288,7 +1276,7 @@ pub fn decide_with_split(
     // keeps it wide.
     let lanes = body.blocks.iter().flat_map(|block| block.insns.iter()).any(|one| !one.clobbers_high.is_empty());
     let read_widths = if lanes { crate::backend::widths::_widest_read(body) } else { Default::default() };
-    for (value, width) in crate::backend::widths::_widest(body) {
+    for (&value, &width) in &widest {
         let width = if lanes && width > 2 && read_widths.get(&value).copied().unwrap_or(0) <= 2 { 2 } else { width };
         tables.widths.borrow_mut().insert(value, width);
     }
@@ -1614,6 +1602,20 @@ pub fn decide_with_split(
     }
     let parents = tables.parents.borrow().iter().map(|(new, from)| (*new, *from)).collect();
     Some(Decided { report, placed, spilled, edited, spill_failed: greedy.spill_failed(), parents })
+}
+
+/// Per block: whether an edge of it leaves the innermost loop holding it. One
+/// forest lookup per block, not a scan of every loop.
+fn exiting_blocks(body: &LirBody) -> Vec<bool> {
+    let forest = crate::analysis::loops::forest_of(&body.blocks, Some(body.entry));
+    body.blocks
+        .iter()
+        .map(|block| {
+            forest
+                .innermost(block.at)
+                .is_some_and(|inner| block.succ.iter().any(|to| !forest.contains(inner, *to)))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -2633,5 +2635,34 @@ mod tests {
         assert!(!pins.interferes(&span(1, 11, 12, &at), RegId::ECX), "between two");
         assert_eq!(PINS_EXAMINED.with(std::cell::Cell::get), 0, "no pin walked for a range that meets none");
         assert!(pins.interferes(&span(1, 12, 13, &at), RegId::ECX), "over one");
+    }
+}
+
+#[cfg(test)]
+mod exiting_tests {
+    use super::exiting_blocks;
+    use crate::model::lir::{LirBlock, LirBody};
+    use crate::support::hash::IndexMap;
+
+    /// `decide_with_split` scanned every loop for every block (654k
+    /// `Body::contains` calls, 41 M of memory_expansion's compile); one forest
+    /// lookup per block gives the same answer: 1 -> 2 <-> 3 (inner), 2 -> 4 -> 1.
+    #[test]
+    fn test_the_exiting_blocks_of_nested_loops_are_those_with_an_edge_out_of_their_innermost_loop() {
+        let block = |at: i64, succ: &[i64]| LirBlock { succ: succ.to_vec().into(), ..LirBlock::new(at, Vec::new()) };
+        let body = LirBody::new(
+            "n",
+            1,
+            vec![
+                block(1, &[2]).into(),
+                block(2, &[3, 4]).into(),
+                block(3, &[2]).into(),
+                block(4, &[1, 5]).into(),
+                block(5, &[]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        assert_eq!(exiting_blocks(&body), [false, true, false, true, false]);
     }
 }

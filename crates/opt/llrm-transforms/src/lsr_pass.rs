@@ -308,12 +308,27 @@ fn plan_loop(
         // the search (a use must reuse the registers already chosen), as they
         // did queens -O2 (+57859 clocks, 236848 against 170823 at -Os): the
         // pin's space is solved too, and its solution kept where it costs
-        // less than the one with them.
+        // less than the one with them, or where theirs adds a base to the
+        // counter in an address the pin's does not, on a target that
+        // cannot fold it: they save a compare, which that add outweighs
+        // (wasm's copy epilog, jpeg_fixed `emit`).
         let mut pin = build(se);
         pin.generate_all_reuse_formulae(se);
         narrowed(se, &mut pin);
         let (pin_solution, pin_cost) = pin.solve_with_cost(se);
-        if !pin_solution.is_empty() && (solution.is_empty() || pin_cost.is_less(tti, &cost)) {
+        // A target with no register-plus-register address (wasm) pays an add
+        // for each base added to the counter, and the code it adds outside the
+        // loop must not outweigh the instructions it saves in it (nbody -O1:
+        // four `base + 32` against one compare).
+        let folds_base_and_counter = tti.is_legal_addressing_mode(false, 0, true, 1);
+        let kept = !pin_solution.is_empty()
+            && (solution.is_empty()
+                || pin_cost.is_less(tti, &cost)
+                || (!folds_base_and_counter
+                    && (cost.c.num_base_adds > pin_cost.c.num_base_adds
+                        || cost.c.insns + cost.c.setup_cost > pin_cost.c.insns + pin_cost.c.setup_cost)));
+        llrm_support::debug!("lsr", "  pin's space solved: kept {kept}");
+        if kept {
             lsr = pin;
             solution = pin_solution;
         }

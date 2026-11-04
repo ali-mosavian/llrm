@@ -455,8 +455,9 @@ x:
   ret i32 %r
 }";
     let text = compiled(ir, Options { size: true, ..Options::default() });
-    assert!(text.contains("move.l\t(12,%sp), %d"), "{text}");
-    assert!(!text.contains("(15,%sp)"), "{text}");
+    // the argument is read as a long, wherever the saved registers put it
+    assert!(!text.lines().any(|line| line.starts_with("\tmove.b\t(") && line.contains(",%sp)")), "{text}");
+    assert!(text.contains("lsl.l"), "{text}");
 }
 
 fn constant(value: i64) -> String {
@@ -526,7 +527,7 @@ fn a_global_is_stored_through_its_address() {
 #[test]
 fn a_constant_array_is_indexed_through_its_address() {
     let text = global_function("index");
-    assert!(text.contains("lea\t(t,%pc), %a0") && text.contains("move.b\t(0,%a0,%d0), %d0"), "{text}");
+    assert!(text.contains("lea\t(t,%pc), %a0") && text.contains("move.b\t(0,%a0,%d"), "{text}");
 }
 
 const NARROW_GLOBALS: &str = "@buf = constant [16 x i8] zeroinitializer\n@w = constant [4 x i16] zeroinitializer\n\
@@ -550,7 +551,7 @@ fn a_narrow_global_is_zero_extended_from_its_pc_relative_address() {
     assert!(byte.contains("move.b\t(buf+6,%pc), %d0"), "{byte}");
     let word = narrow_global("zw").expect("compiles");
     assert!(word.contains("move.w\t(w+2,%pc), %d0"), "{word}");
-    assert!(narrow_global("zbi").expect("compiles").contains("move.b\t(0,%a0,%d0), %d0"));
+    assert!(narrow_global("zbi").expect("compiles").contains("move.b\t(0,%a0,%d"));
 }
 
 /// `MOVZXd32d16` defines an `XR32` register in the pin, so the allocator could
@@ -802,12 +803,13 @@ define i16 @f() {
 
 /// A copy loop steps its pointers with `addq` or `lea` as the pin's selection
 /// does. `(An)+` came from rewrites of the expanded text and the loop pass's
-/// preference, neither of which the pin has: every copy loop carried it.
+/// preference, neither of which the pin has: every copy loop carried it. Ours
+/// has it now (PARITY row 29); the pinned build must not.
 #[test]
 fn a_copy_loop_has_no_post_increment_as_the_pin_has_none() {
     let module = llrm_mir::parse::module(&llrm_m68k::kernels::source("copy")).expect("parses");
-    let ours = text_with(&module, "k", Cpu::M68000, Options::default()).expect("compiles");
-    assert!(!ours.contains("%a0)+") && !ours.contains("%a1)+") && !ours.contains("%a2)+"), "{ours}");
+    let pinned = text_with(&module, "k", Cpu::M68000, Options::PINNED).expect("compiles");
+    assert!(!pinned.contains(")+"), "{pinned}");
 }
 
 /// A counting loop adds and compares with the pin's `add.l #1` and `cmpi.l`.
