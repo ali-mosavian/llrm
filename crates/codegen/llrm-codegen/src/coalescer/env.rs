@@ -71,7 +71,7 @@ pub struct TargetEnv {
     pub kind_of: Option<Box<dyn Fn(&Insn, u32) -> Option<u32>>>,
     /// Each value's [`UseKinds`], built the first time it is priced and merged
     /// when a join absorbs another (DEVIATE C14).
-    pub kinds: RefCell<IndexMap<u32, UseKinds>>,
+    pub kinds: RefCell<IndexMap<u32, Kept>>,
     /// `LLRM_CHECK_USE_SUMMARY`: each [`JoinSide`] also lists its instructions,
     /// for the target to check the summary against.
     pub check_kinds: bool,
@@ -81,20 +81,36 @@ pub struct TargetEnv {
 /// registers: the target's kind id and the frequency of their blocks.
 pub type UseKinds = IndexMap<u32, f32>;
 
+/// [`UseKinds`] with how many instructions each kind sums: a kind goes when its
+/// count reaches 0, not when its sum does (f32 sums of hot blocks keep a
+/// residue of 1e-3 after many puts and takes).
+pub type Kept = IndexMap<u32, Tally>;
+
+#[derive(Clone, Copy, Debug)]
+pub struct Tally {
+    pub count: u32,
+    pub sum: f32,
+}
+
+fn sums(kept: &Kept) -> UseKinds {
+    kept.iter().map(|(&kind, tally)| (kind, tally.sum)).collect()
+}
+
 impl TargetEnv {
     /// `value`'s [`UseKinds`]: kept, or made once from its instructions.
     fn use_kinds(
         &self,
         lis: &LiveIntervals,
         value: u32,
-    ) -> UseKinds {
+    ) -> Kept {
         if let Some(kept) = self.kinds.borrow().get(&value) {
             if self.check_kinds {
                 let now = self.scan_kinds(lis, value);
                 let same = now.len() == kept.len()
-                    && now
-                        .iter()
-                        .all(|(kind, sum)| kept.get(kind).is_some_and(|k| (k - sum).abs() <= 1e-3 * (1.0 + sum)));
+                    && now.iter().all(|(kind, now)| {
+                        kept.get(kind)
+                            .is_some_and(|k| k.count == now.count && (k.sum - now.sum).abs() <= 1e-3 * (1.0 + now.sum))
+                    });
                 assert!(same, "value {value}: the kept uses {kept:?} are not the instructions' {now:?}");
             }
             return kept.clone();
@@ -142,12 +158,11 @@ impl TargetEnv {
                 let Some(kinds) = all.get_mut(&value) else { continue };
                 let Some(kind) = self.kind(insn, value) else { continue };
                 if sign > 0.0 {
-                    *kinds.entry(kind).or_insert(0.0) += freq;
-                } else if let Some(sum) = kinds.get_mut(&kind) {
-                    *sum -= freq;
-                    if *sum <= 1e-6 {
-                        kinds.swap_remove(&kind);
-                    }
+                    let tally = kinds.entry(kind).or_insert(Tally { count: 0, sum: 0.0 });
+                    tally.count += 1;
+                    tally.sum += freq;
+                } else {
+                    self.take_away(kinds, kind, freq);
                 }
             }
         }
@@ -158,16 +173,18 @@ impl TargetEnv {
         &self,
         lis: &LiveIntervals,
         value: u32,
-    ) -> UseKinds {
+    ) -> Kept {
         let mut seen = crate::support::hash::HashSet::default();
-        let mut kinds = UseKinds::default();
+        let mut kinds = Kept::default();
         for op in lis.operands(value) {
             if !seen.insert(op.instr) {
                 continue;
             }
             if let Some(kind) = self.kind(lis.instr(op.instr), value) {
                 let block = lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(op.instr));
-                *kinds.entry(kind).or_insert(0.0) += self.freq.get(block).copied().unwrap_or(1.0);
+                let tally = kinds.entry(kind).or_insert(Tally { count: 0, sum: 0.0 });
+                tally.count += 1;
+                tally.sum += self.freq.get(block).copied().unwrap_or(1.0);
             }
         }
         kinds
@@ -176,13 +193,14 @@ impl TargetEnv {
     /// `kinds` less one instruction of `kind` that runs `freq` times.
     fn take_away(
         &self,
-        kinds: &mut UseKinds,
+        kinds: &mut Kept,
         kind: u32,
         freq: f32,
     ) {
-        if let Some(sum) = kinds.get_mut(&kind) {
-            *sum -= freq;
-            if *sum <= 0.0 {
+        if let Some(tally) = kinds.get_mut(&kind) {
+            tally.count -= 1;
+            tally.sum -= freq;
+            if tally.count == 0 {
                 kinds.swap_remove(&kind);
             }
         }
@@ -345,7 +363,7 @@ impl CoalescerEnv for TargetEnv {
             } else {
                 Vec::new()
             };
-            JoinSide { value, palette: palette.clone(), kinds, uses }
+            JoinSide { value, palette: palette.clone(), kinds: sums(&kinds), uses }
         };
         // A partial pair's `src` is the narrow value: the joined value takes
         // the wide registers that have its registers as their low part.

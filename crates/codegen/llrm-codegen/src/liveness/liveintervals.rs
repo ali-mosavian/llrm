@@ -159,13 +159,14 @@ impl Slots {
     }
 }
 
-/// `LiveIntervals` (LiveIntervals.h).
 /// An instruction put into a block or taken out of it, with the block's index.
 #[derive(Clone)]
 pub enum Change {
     Put(usize, Arc<Insn>),
     Took(usize, Arc<Insn>),
 }
+
+/// `LiveIntervals` (LiveIntervals.h).
 
 pub struct LiveIntervals {
     pub indexes: SlotIndexes,

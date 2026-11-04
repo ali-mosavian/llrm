@@ -1217,3 +1217,33 @@ fn test_the_kept_uses_of_a_value_follow_the_rewrites_and_erases_of_the_joins() {
         eprintln!("{name}: kept lists checked at {} prices", env.kinds.borrow().len());
     }
 }
+
+/// A kind's kept sum is f32: put and taken at blocks of frequency 1e5 and 0.7
+/// (the hot one taken first) it ends near 0.003, not 0, so a kind whose last
+/// instruction was taken stayed in the list and the next join was priced on a
+/// use that was not there (`LLRM_CHECK_USE_SUMMARY` saw one kind too many).
+/// The kind goes with its last instruction.
+#[test]
+fn test_a_kind_with_no_instruction_left_is_not_kept_at_high_frequency() {
+    let palette: &[(u32, &[RegId])] = &[(1, &[RegId::AX, RegId::BX]), (2, &[RegId::AX, RegId::BX])];
+    let (first, to, here, there) = (load(1), copy(2, 1), read(1), read(2));
+    let was = body(&[(&[first, Arc::clone(&to), here, there], &[1]), (&[read(1)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.track_changes();
+    let mut env = env_with_palettes(palette);
+    // the probes are the instructions named "use": a kind of their own
+    env.kind_of = Some(Box::new(|insn, _| {
+        Some(if insn.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("use")) { 1 } else { 0 })
+    }));
+    env.check_kinds = true;
+    env.freq = vec![1.0e5, 0.7];
+    assert!(env.should_coalesce(&lis, to.id(), 1, 2), "premise: the kept lists are made");
+    for cycle in 0..5 {
+        let (hot, cold) = (read_at(1, 4), read_at(1, 4));
+        lis.insert_instr_before_at(0, None, Arc::clone(&hot), false);
+        lis.insert_instr_before_at(1, None, Arc::clone(&cold), false);
+        lis.remove_instr(0, hot.id());
+        lis.remove_instr(1, cold.id());
+        assert!(env.should_coalesce(&lis, to.id(), 1, 2), "cycle {cycle}");
+    }
+}
