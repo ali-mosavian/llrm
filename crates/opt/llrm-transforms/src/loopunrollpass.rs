@@ -351,9 +351,8 @@ struct EstimatedUnrollCost {
     /// PL6: what the first iteration's instructions cost once counted (those a
     /// later iteration or a side effect needs), zero where not priced.
     first_iteration: u32,
-    /// The multiplies and divides of one rolled trip, and of the first trip
-    /// once counted: what the entry values make cheaper there is the peel's
-    /// gain.
+    /// The multiplies and divides of one rolled trip, and of the first trip once
+    /// counted: what the entry values make cheaper there is the peel's gain.
     heavy_rolled: u32,
     heavy_first: u32,
 }
@@ -566,26 +565,14 @@ fn analyze_loop_unroll_cost(
                 if is_heavy(&run.function.instruction(inst).opcode) {
                     heavy_rolled = heavy_rolled
                         + clocks
-                            .and_then(|costs| {
-                                simplified_clocks(run, inst, &run.function.instruction(inst).operands, costs)
-                            })
+                            .and_then(|costs| simplified_clocks(run, inst, &run.function.instruction(inst).operands, costs))
                             .map_or(Cost::FREE, Cost::of);
                 }
                 rolled_dynamic_cost = rolled_dynamic_cost
                     + clocks
                         .and_then(|costs| simplified_clocks(run, inst, &run.function.instruction(inst).operands, costs))
                         .map_or_else(
-                            || {
-                                instruction_cost(
-                                    run.tti,
-                                    run.context,
-                                    run.layout,
-                                    run.globals,
-                                    run.function,
-                                    inst,
-                                    kind,
-                                )
-                            },
+                            || instruction_cost(run.tti, run.context, run.layout, run.globals, run.function, inst, kind),
                             Cost::of,
                         );
 
@@ -900,22 +887,22 @@ fn add_cost_recursively(
                     })
                     .collect();
                 let price = clocks
-                    .and_then(|costs| simplified_clocks(run, inst, &operands, costs))
-                    .map_or_else(
-                        || {
-                            instruction_cost_with(
-                                run.tti,
-                                run.context,
-                                run.layout,
-                                run.globals,
-                                run.function,
-                                inst,
-                                &operands,
-                                kind,
-                            )
-                        },
-                        Cost::of,
-                    );
+                        .and_then(|costs| simplified_clocks(run, inst, &operands, costs))
+                        .map_or_else(
+                            || {
+                                instruction_cost_with(
+                                    run.tti,
+                                    run.context,
+                                    run.layout,
+                                    run.globals,
+                                    run.function,
+                                    inst,
+                                    &operands,
+                                    kind,
+                                )
+                            },
+                            Cost::of,
+                        );
                 *unrolled_cost = *unrolled_cost + price;
                 if iteration == 0 {
                     *first_iteration = *first_iteration + price;
@@ -1085,16 +1072,12 @@ fn should_partial_unroll(
 /// removes (the rest of a trip's folding is a clock or two each).
 fn is_heavy(opcode: &Opcode) -> bool {
     use llrm_mir::opcode::BinaryOp;
-    matches!(
-        opcode,
-        Opcode::Binary(BinaryOp::Mul | BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem)
-    )
+    matches!(opcode, Opcode::Binary(BinaryOp::Mul | BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem))
 }
 
 /// What `inst` costs in clocks once `operands` are what its operands simplified
 /// to: a divide or remainder by a constant is the `and` or the multiply-high
-/// sequence the backend makes of it, not a `div` (x_primes: `i % d` at `d =
-/// 2`).
+/// sequence the backend makes of it, not a `div` (x_primes: `i % d` at `d = 2`).
 fn simplified_clocks(
     run: &Run,
     inst: InstId,
@@ -1103,10 +1086,8 @@ fn simplified_clocks(
 ) -> Option<i64> {
     use llrm_mir::opcode::BinaryOp;
     let operation = run.function.instruction(inst);
-    if let (
-        Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem),
-        Some(&Operand::Constant(divisor)),
-    ) = (&operation.opcode, operands.get(1))
+    if let (Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem), Some(&Operand::Constant(divisor))) =
+        (&operation.opcode, operands.get(1))
         && let ConstantKind::Int(bits) = run.context.get(divisor).kind
     {
         return Some(if bits.is_power_of_two() { costs.add } else { costs.multiply + costs.shift + costs.add });
@@ -1138,17 +1119,10 @@ fn peels_folded_entry(
     loop_size: u32,
     up: &UnrollingPreferences,
 ) -> bool {
-    // The late pass only: the pin counts peels in loop metadata
-    // (`llvm.loop.peeled.count`), which this port keeps for one run (PL1),
-    // and the entry constants of the residual loop fold again (x_primes: d
-    // = 2, then d = 3).
-    if !run.tti.peels_folded_entry()
-        || !run.options.target_unrolling
-        || run.options.opt_size
-        || run.options.min_size
-        || run.options.opt_level < 2
-        || loop_size.saturating_mul(2) > up.threshold
-    {
+    // The late pass only: the pin counts peels in loop metadata (`llvm.loop.peeled.count`),
+    // which this port keeps for one run (PL1), and the entry constants of the residual
+    // loop fold again (x_primes: d = 2, then d = 3).
+    if !run.tti.peels_folded_entry() || !run.options.target_unrolling || run.options.opt_size || run.options.min_size || run.options.opt_level < 2 || loop_size.saturating_mul(2) > up.threshold {
         return false;
     }
     let rate = run.tti.speed_milliclocks_per_byte().max(0) as u64;
@@ -1156,15 +1130,13 @@ fn peels_folded_entry(
         return false;
     }
     let costs = crate::profit::costs(run.outer);
-    // Two trips: the first's instructions are counted where the second or a
-    // side effect needs them, so its cost against one rolled trip is what
-    // the entry values fold (a single trip would count what only feeds the
-    // next as dead).
+    // Two trips: the first's instructions are counted where the second or a side
+    // effect needs them, so its cost against one rolled trip is what the entry values
+    // fold (a single trip would count what only feeds the next as dead).
     let Some(cost) = analyze_loop_unroll_cost(run, analyzed, lp, 2, eph, u32::MAX, 2, Some(&costs)) else {
         return false;
     };
-    // Two trips were priced: the multiplies and divides of one are
-    // `heavy_rolled / 2`.
+    // Two trips were priced: the multiplies and divides of one are `heavy_rolled / 2`.
     let saved = u64::from((cost.heavy_rolled / 2).saturating_sub(cost.heavy_first));
     why(run, lp, &format!("peel the first iteration: folds {saved} of {loop_size}, rate {rate}"));
     folded_entry_pays(saved, loop_size, rate)
@@ -1255,12 +1227,7 @@ pub(crate) fn compute_unroll_count(
         };
         let already = run.peeled.get(&lp.get_header()).copied().unwrap_or(0);
         crate::looppeel::compute_peel_count(se, &cx, run.callees, lp, loop_size, pp, up.threshold, already);
-        if pp.peel_count == 0
-            && already == 0
-            && pp.allow_peeling
-            && crate::looppeel::can_peel(&cx, lp)
-            && peels_folded_entry(run, analyzed, lp, eph, loop_size, up)
-        {
+        if pp.peel_count == 0 && already == 0 && pp.allow_peeling && crate::looppeel::can_peel(&cx, lp) && peels_folded_entry(run, analyzed, lp, eph, loop_size, up) {
             pp.peel_count = 1;
         }
     }
@@ -1591,8 +1558,10 @@ fn try_to_unroll_loop(
     let mut remade = None;
     if run.options.target_unrolling && trip_count == 0 {
         if trip_multiple % count != 0 {
-            let expansion =
-                llrm_analysis::scev::expand_cost::MachineCosts { tti: run.outer.target().tti(), minimum_size: false };
+            let expansion = llrm_analysis::scev::expand_cost::MachineCosts {
+                tti: run.outer.target().tti(),
+                minimum_size: false,
+            };
             let mut session = llrm_analysis::scev::analysis::ScevSession::of(run.context, run.function, run.outer);
             let mut env = crate::loopunrollruntime::Env {
                 context: &mut *run.context,
@@ -1613,9 +1582,7 @@ fn try_to_unroll_loop(
             if let Some(epilog) = epilog {
                 run.finished.insert(epilog);
             }
-            if up.unroll_remainder
-                && let Some(epilog) = epilog
-            {
+            if up.unroll_remainder && let Some(epilog) = epilog {
                 crate::loopunrollandjam::unroll_remainder_loop(run, epilog, count - 1);
             }
         }
@@ -1623,9 +1590,7 @@ fn try_to_unroll_loop(
     }
     let runtime = remade.is_some();
     let (analyzed, lp) = match &remade {
-        Some(analyzed) => {
-            (analyzed, analyzed.loops.get_loop_for(header).expect("the loop is still headed by its block"))
-        }
+        Some(analyzed) => (analyzed, analyzed.loops.get_loop_for(header).expect("the loop is still headed by its block")),
         None => (analyzed, lp),
     };
 
@@ -1643,13 +1608,7 @@ fn try_to_unroll_loop(
         count,
         // A run-time unroll keeps the back edge: the remainder made the latch's
         // trip multiple `count`, so only its last copy tests the exit.
-        max_trip_count: if runtime {
-            u32::MAX
-        } else if partial {
-            trip_count
-        } else {
-            count
-        },
+        max_trip_count: if runtime { u32::MAX } else if partial { trip_count } else { count },
         max_or_zero,
         exits: if runtime {
             lp.get_loop_latch(run.function).map(|block| Exit { block, trip_count: count }).into_iter().collect()
