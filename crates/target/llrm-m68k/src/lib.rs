@@ -5,6 +5,7 @@ pub mod abi;
 pub mod addrarith;
 pub mod amiga;
 pub mod atari;
+pub mod callpush;
 pub mod ccr;
 pub mod chain;
 pub mod cmpelim;

@@ -8,7 +8,7 @@ use llrm_mir::module::Module;
 
 use crate::dagisel::function::select_function_with;
 use crate::dagisel::hooks::Cpu;
-use crate::expand::{Line, finish};
+use crate::expand::{Line, finish_with};
 use crate::flags::preserve_flags;
 use crate::machine::{M68k, M68kMachine};
 use crate::mc;
@@ -47,6 +47,9 @@ pub struct Options {
     /// Push and pop the saved registers where that is no larger and no
     /// slower than the pin's `suba.l` and `movem` into slots.
     pub push_frame: bool,
+    /// Outgoing arguments as pushes where that is cheaper than stores into the
+    /// reserved call area ([`crate::callpush`]).
+    pub push_arguments: bool,
     /// `addq` and `subq` for an immediate of 1 to 8, which the pin has no
     /// instruction for.
     pub short: bool,
@@ -63,6 +66,7 @@ impl Options {
         source_order: false,
         indexed: false,
         push_frame: false,
+        push_arguments: false,
         short: false,
         debug: false,
     };
@@ -76,6 +80,7 @@ impl Default for Options {
             source_order: false,
             indexed: true,
             push_frame: true,
+            push_arguments: true,
             short: true,
             debug: false,
         }
@@ -163,7 +168,16 @@ pub fn items_with(
             epilogue_begin: false,
         }));
     }
-    for line in finish(&function, &assignment, number, &slots, cpu, options.push_frame)? {
+    for line in finish_with(
+        &function,
+        &assignment,
+        number,
+        &slots,
+        cpu,
+        options.push_frame,
+        options.short,
+        options.push_arguments.then_some(wants_size),
+    )? {
         out.push(match line {
             Line::Label(at) => Item::Label(format!(".LBB{number}_{at}")),
             Line::Inst(inst) => Item::Inst(inst),
