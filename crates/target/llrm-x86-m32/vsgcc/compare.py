@@ -3,7 +3,7 @@
   uv run --project tools python crates/target/llrm-x86-m32/vsgcc/compare.py MAIN.jsonl TIP.jsonl
 
 Per program and level (llrmO1 -O1: reported, not gated; llrm -O2, llrmO3 -O3: priced at the 486 line fill; llrmOs -Os: bytes and clocks strict,
-instructions and memory operands only on a tie). `code` is padding-free (harness.code_size). Refuses (exit 1) on rows that are not ok, kernels
+instructions and memory operands only on a tie). `code` is padding-free (harness.code_size). Refuses (exit 1) on rows without one compiler stamp per file (build.sh), main and tip built by the same compiler, rows that are not ok, kernels
 that ran 0 instructions, or cell sets that differ; FAIL cells exit 1 too."""
 import json
 import sys
@@ -20,6 +20,16 @@ def read(path):
     return {(r["prog"], r["variant"]): r for r in map(json.loads, Path(path).read_text().splitlines()) if r["variant"] in LEVELS}
 
 
+def stamp(rows):
+    """The one compiler stamp of a file's rows, or why there is none."""
+    stamps = {r.get("cc") for r in rows.values()}
+    if None in stamps:
+        return None, "rows have no compiler stamp: rebuild with build.sh"
+    if len(stamps) > 1:
+        return None, f"rows of two compilers {sorted(stamps)} in one file"
+    return stamps.pop() if stamps else None, None
+
+
 def cell(row):
     return {"instructions": row["ins"], "memory_operands": row["mem"], "clocks": row["clocks"], "code_bytes": row["code"], "data_bytes": row.get("data", 0)}
 
@@ -27,6 +37,14 @@ def cell(row):
 def judge(main, tip):
     """(refusals, FAIL lines, cells judged, cells reported only)."""
     refusals = [f"{key[0]}/{key[1]}: row not ok or no instructions" for rows in (main, tip) for key, row in rows.items() if not row.get("ok") or not row.get("ins")]
+    stamps = []
+    for name, rows in (("main", main), ("tip", tip)):
+        one, why = stamp(rows)
+        stamps.append(one)
+        if why:
+            refusals.append(f"{name}: {why}")
+    if stamps[0] is not None and stamps[0] == stamps[1]:
+        refusals.append(f"main and tip were built by the same compiler {stamps[0]}: nothing to compare")
     if set(main) != set(tip):
         refusals.append(f"cell sets differ: only main {sorted(set(main) - set(tip))[:4]}, only tip {sorted(set(tip) - set(main))[:4]}")
     fails, judged, reported = [], 0, 0

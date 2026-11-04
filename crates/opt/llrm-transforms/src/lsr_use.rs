@@ -567,8 +567,16 @@ impl Cost {
         }
 
         // The unfolded adds inside the loop.
+        // DEVIATE LU12: the pin counts the adds of a use whose fixups all lie
+        // outside the loop as if they ran every trip; they run once. Where the
+        // target says so, they do not weigh against the formulae that share
+        // the loop's counter (z80 find: an exit value `i` taken from a second
+        // counter beat `base + i` and a `dec` after the loop). Off for x86: a
+        // short loop entered often (m16 fib, frames) pays the once-run adds
+        // on every entry.
+        let inside = !(lu.all_fixups_outside_loop && r.tti.lsr_exit_use_adds_run_once());
         let parts = f.num_regs();
-        if parts > 1 {
+        if parts > 1 && inside {
             // Not the base and a possible second register, if the target folds
             // two.
             let folded = f.scale != 0 && is_am_completely_folded(r.tti, lu, f);
@@ -582,7 +590,7 @@ impl Cost {
             && parts >= 2
             && r.tti.address_form_adds_offsets(narrowest_bits(r, lu, f))
             && r.tti.is_legal_addressing_mode(f.base_gv.is_some(), f.unfolded_offset.0, true, f.scale);
-        if !absorbed {
+        if !absorbed && inside {
             self.c.num_base_adds += u32::from(f.unfolded_offset.is_non_zero());
         }
 
@@ -611,6 +619,7 @@ impl Cost {
             }
             // The target may not support this offset for this instruction.
             if lu.kind == Kind::Address
+                && inside
                 && offset.is_non_zero()
                 && !is_am_completely_folded_at(
                     r.tti,
@@ -628,7 +637,11 @@ impl Cost {
 
         // Every register past the target's, less one, is another instruction
         // (a fill).
-        let target_regs = (r.tti.number_of_gpr_registers() - 1).saturating_sub(r.other_register_units);
+        // DEVIATE LU3c: the pin keeps one register back for what it does not
+        // count; where the target says LU3b's live count is exact it is not
+        // taken twice.
+        let reserve = if r.other_register_units == 0 { 1 } else { r.tti.lsr_reserved_registers() };
+        let target_regs = (r.tti.number_of_gpr_registers() - reserve).saturating_sub(r.other_register_units);
         if self.c.num_regs > target_regs {
             // Already past: only the newly added registers add instructions.
             if prev_regs > target_regs {

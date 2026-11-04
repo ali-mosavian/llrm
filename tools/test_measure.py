@@ -363,6 +363,21 @@ def test_a_measurement_is_of_one_profile_and_the_dist_base_is_built_with_the_dis
     assert ran == [["bash", "-c", "env -u RUSTFLAGS cargo build --profile dist -q --bin llrm-cc --bin llrm-llc"]], "llrm-cc and llrm-llc only: the other binaries measure nothing"
 
 
+def test_the_objects_build_has_every_llc_the_objsweep_gate_sweeps_and_snapshots_the_dist_directory(monkeypatch, tmp_path):
+    """The gate's objects step built llrm-cc and llrm-llc only, so every sibling-llc target (arm64, wasm) was refused or skipped and a writer change there passed unseen."""
+    cc_targets = {"llrm-" + t.split("-")[0] + "-llc" for t in ("arm64-x", "wasm-x")}
+    assert cc_targets <= set(measure.EXTRA_LLCS)
+    assert all(f"--bin {b}" in measure.MEASURE_BUILDS["objects"] for b in measure.EXTRA_LLCS)
+    assert "--bin llrm-arm64-llc" not in measure.MEASURE_BUILDS["dist"], "the cost gate's dist build stays the compiler alone"
+    monkeypatch.setattr(measure, "BUILD", tmp_path)
+    monkeypatch.setattr(measure, "checked_out", lambda sha, tree, source=None: tmp_path)
+    monkeypatch.setattr(measure.subprocess, "run", lambda command, **kw: subprocess.CompletedProcess(command, 0, "", ""))
+    seen = []
+    monkeypatch.setattr(measure, "snapshot", lambda release, sha, kind="": seen.append(release.name) or tmp_path)
+    measure.built("0" * 40, "objects")
+    assert seen == ["dist"]
+
+
 def test_a_flagged_step_names_the_steps_of_its_axis_that_rose():
     """Work moved into an engine that runs inside another step's span flags that step though the total falls (regparm16, three times);
     the flag now says where the rise is."""

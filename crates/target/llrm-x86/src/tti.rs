@@ -564,6 +564,10 @@ impl Tti for X86 {
         self.tuning.multiply_by_clocks
     }
 
+    fn price_pin_multiplies(&self) -> bool {
+        self.tuning.price_pin_multiplies
+    }
+
     fn has_cmov(&self) -> bool {
         self.cmov
     }
@@ -1008,6 +1012,12 @@ impl Tti for X86 {
     /// Eight general registers, sixteen in long mode (`getNumberOfRegisters`).
     fn number_of_gpr_registers(&self) -> u32 {
         self.real_mode.as_ref().map_or(self.registers.unwrap_or(if self.quad { 16 } else { 8 }), |real| real.registers)
+    }
+
+    /// Real mode declares the registers the allocator has, and the live count
+    /// LSR keeps is exact there: the six fill (PLASMA's loop, 4 + 2 live).
+    fn lsr_reserved_registers(&self) -> u32 {
+        u32::from(self.real_mode.is_none())
     }
 
     /// `[bp+disp]` and `[esp+disp]` reach a stack slot with no register to hold
