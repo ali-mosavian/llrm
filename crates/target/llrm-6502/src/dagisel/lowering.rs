@@ -99,12 +99,10 @@ pub fn target_lowering() -> TargetLowering {
     // variable ones expand to runtime calls where they are emitted.
     set(&[Mul, SDiv, SRem, Shl, Srl, Sra], Action::Legal);
     set(&[SDivRem, MulHS, MulHU, UMulLoHi, SMulLoHi], Action::Expand);
-    // A word multiply, or signed add and subtract, with overflow stays refused
-    // ("convert node to libcall"), as before the shared expansion of the
-    // overflow operations: expanded, their `i1` select/setcc makes the
-    // scheduler's dependence cycle (#6429). Exit: that cycle fixed
-    // (2026-11-12).
-    set(&[UMulO, SMulO, SAddO, SSubO], Action::LibCall);
+    // An unsigned word multiply with overflow stays refused ("convert node to
+    // libcall"): expanded wide, its flag's extension is not lowered
+    // (CannotSelect ZeroExtend). Exit: 2026-11-12.
+    set(&[UMulO], Action::LibCall);
     // an unsigned divide and remainder are the one runtime call that makes
     // both: the legalizer expands each to the `UDIVREM` node, and the pair
     // of one dividend and divisor is one node
@@ -245,6 +243,12 @@ fn lower_extend(
 ) -> SDValue {
     let condition = dag.operand(node, 0);
     if dag.value_type(condition) != EVT::I1 {
+        return node;
+    }
+    // the flag of an overflow op is not a condition yet: its expansion makes
+    // one, and the extension is lowered when that is done (`condition_byte` has
+    // no byte for it and would widen the flag with this very node)
+    if matches!(dag.opcode(condition), ISD::SAddO | ISD::SSubO | ISD::SMulO) {
         return node;
     }
     let vt = dag.value_type(node);

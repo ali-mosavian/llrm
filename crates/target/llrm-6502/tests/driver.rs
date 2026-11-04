@@ -904,3 +904,65 @@ fn a_split_that_leaves_a_range_without_uses_compiles() {
     let text = assembly(ir, &Request::new(Level::O2)).expect("compiles");
     assert!(text.contains("test:"), "{text}");
 }
+
+/// The flag of a signed word overflow op, widened to a byte, sent lowering into
+/// a dependence cycle: `lower_extend` made the widened flag a `select flag, 1,
+/// 0` before the op was expanded, `condition_byte` had no byte for the op's
+/// flag and widened it with the very node being replaced, so the `CMOV`'s flags
+/// were a compare of its own result (the scheduler's "never ordered", #6429).
+/// Each op's flag is right: `flags` adds the flags of four operand pairs, two
+/// that overflow and two that do not.
+fn flags_ir(
+    op: &str,
+    pairs: [(i16, i16); 4],
+) -> String {
+    let call = |n: usize| format!("  %f{n} = call i8 @flag(i16 {}, i16 {})\n", pairs[n].0, pairs[n].1);
+    let ir = module(&format!(
+        r#"declare {{ i16, i1 }} @llvm.{op}.with.overflow.i16(i16, i16)
+define internal i8 @flag(i16 %a, i16 %b) #0 {{
+  %r = call {{ i16, i1 }} @llvm.{op}.with.overflow.i16(i16 %a, i16 %b)
+  %o = extractvalue {{ i16, i1 }} %r, 1
+  %z = zext i1 %o to i8
+  ret i8 %z
+}}
+define i8 @flags() {{
+{}{}{}{}  %t = add i8 %f0, %f1
+  %u = add i8 %f2, %f3
+  %v = add i8 %t, %u
+  ret i8 %v
+}}
+attributes #0 = {{ noinline }}"#,
+        call(0),
+        call(1),
+        call(2),
+        call(3),
+    ));
+    ir
+}
+
+fn flags_sum(
+    op: &str,
+    pairs: [(i16, i16); 4],
+) -> i32 {
+    let text = assembly(&flags_ir(op, pairs), &Request::new(Level::O2)).unwrap();
+    exit_code_of(&text, "flags")
+}
+
+#[test]
+fn the_flag_of_a_signed_word_add_with_overflow_widens_to_a_byte_without_a_cycle() {
+    assert_eq!(flags_sum("sadd", [(30000, 30000), (-30000, -30000), (30000, -30000), (1, 2)]), 2);
+}
+
+#[test]
+fn the_flag_of_a_signed_word_subtract_with_overflow_widens_to_a_byte_without_a_cycle() {
+    assert_eq!(flags_sum("ssub", [(30000, -30000), (-30000, 30000), (30000, 30000), (1, 2)]), 2);
+}
+
+/// The multiply is a call to the runtime's `__mulhi3`, which the test's
+/// assembler has no copy of: it compiles, with the call, and is not run.
+#[test]
+fn the_flag_of_a_signed_word_multiply_with_overflow_widens_to_a_byte_without_a_cycle() {
+    let ir = flags_ir("smul", [(300, 300), (-300, 300), (30, 30), (-3, 4)]);
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(text.contains("__mulhi3"), "{text}");
+}
