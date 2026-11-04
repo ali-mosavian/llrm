@@ -1276,7 +1276,7 @@ pub fn decide_with_split(
     // keeps it wide.
     let lanes = body.blocks.iter().flat_map(|block| block.insns.iter()).any(|one| !one.clobbers_high.is_empty());
     let read_widths = if lanes { crate::backend::widths::_widest_read(body) } else { Default::default() };
-    for (value, width) in crate::backend::widths::_widest(body) {
+    for (&value, &width) in &widest {
         let width = if lanes && width > 2 && read_widths.get(&value).copied().unwrap_or(0) <= 2 { 2 } else { width };
         tables.widths.borrow_mut().insert(value, width);
     }
