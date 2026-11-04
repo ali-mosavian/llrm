@@ -1130,7 +1130,8 @@ fn combine_integer_setcc(
     let source = dag.operand(lhs, 0);
     let (source_vt, op_vt) = (dag.value_type(source), dag.value_type(lhs));
     // A type the target holds in a register: not a pair (m16's dword).
-    let legal = source_vt.size_in_bits() >= 32 && source_vt.size_in_bits() <= dag.config().pointer.size_in_bits().max(32);
+    let legal =
+        source_vt.size_in_bits() >= 32 && source_vt.size_in_bits() <= dag.config().pointer.size_in_bits().max(32);
     if !legal {
         return None;
     }

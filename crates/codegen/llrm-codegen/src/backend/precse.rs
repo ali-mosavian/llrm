@@ -385,14 +385,15 @@ impl Walk<'_> {
         to: usize,
         index: usize,
     ) -> bool {
-        let is_call = |one: &Arc<Insn>| {
-            one.call.is_some() || one.what.as_ref().is_some_and(|what| what.op == Operation::Call)
-        };
+        let is_call =
+            |one: &Arc<Insn>| one.call.is_some() || one.what.as_ref().is_some_and(|what| what.op == Operation::Call);
         let defined = self.body.blocks[from].insns.iter().position(|one| one.defines.contains(&shared)).unwrap_or(0);
         if from == to {
             return self.body.blocks[from].insns[defined..index.max(defined)].iter().any(is_call);
         }
-        if self.body.blocks[from].insns[defined..].iter().any(is_call) || self.body.blocks[to].insns[..index].iter().any(is_call) {
+        if self.body.blocks[from].insns[defined..].iter().any(is_call)
+            || self.body.blocks[to].insns[..index].iter().any(is_call)
+        {
             return true;
         }
         let blocks = self.body.blocks.len();
@@ -856,9 +857,10 @@ pub fn shared(
             .blocks
             .iter()
             .map(|block| {
-                block.insns.iter().any(|one| {
-                    one.call.is_some() || one.what.as_ref().is_some_and(|what| what.op == Operation::Call)
-                })
+                block
+                    .insns
+                    .iter()
+                    .any(|one| one.call.is_some() || one.what.as_ref().is_some_and(|what| what.op == Operation::Call))
             })
             .collect(),
     };
@@ -1049,7 +1051,8 @@ mod tests {
         };
         let build = |call_reads: bool, fixed_reader: bool, zero: bool| {
             let make = |at: i64, value: u32| {
-                let source = if zero { Loc::Imm(llrm_lir::Imm { value: 0, width: 8, address: None }) } else { symbol() };
+                let source =
+                    if zero { Loc::Imm(llrm_lir::Imm { value: 0, width: 8, address: None }) } else { symbol() };
                 insn(at, Operation::Move, "mov", vec![wide(value)], vec![source], vec![value], vec![])
             };
             let mut reader = if call_reads {

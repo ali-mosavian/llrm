@@ -305,8 +305,8 @@ fn a_symbol_address_hoisted_twice_out_of_a_loop_is_made_once_at_m64() {
 /// A symbol address that every use in a call-bearing loop copies into an
 /// argument register was hoisted into a callee-saved register: its push and pop
 /// and a copy per use for the one instruction the address is made with in the
-/// loop. os_find m64 -O2 was 12 bytes over release/next, memory_expansion -Os 11,
-/// histo two instructions more.
+/// loop. os_find m64 -O2 was 12 bytes over release/next, memory_expansion -Os
+/// 11, histo two instructions more.
 #[test]
 fn a_symbol_address_only_passed_to_calls_in_a_loop_is_made_in_the_loop_at_m64() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
@@ -370,8 +370,9 @@ fn a_symbol_address_made_again_after_a_call_once_is_made_again_at_m64() {
 
 /// A `zeroext` argument compared for (in)equality with a constant is compared
 /// in the register it arrived in: the pin's `combineSetCC` turns
-/// `cmpeq(trunc(x), C)` into `cmpeq(x, C)` where the upper bits of `x` are zero.
-/// sieve m64 -O2 had `test di, di` (a 66 prefix) where the pin has `test edi, edi`.
+/// `cmpeq(trunc(x), C)` into `cmpeq(x, C)` where the upper bits of `x` are
+/// zero. sieve m64 -O2 had `test di, di` (a 66 prefix) where the pin has `test
+/// edi, edi`.
 #[test]
 fn a_zeroext_argument_equality_is_compared_in_its_register_at_m64() {
     let compare = |ty: &str, param: &str, predicate: &str, constant: i64| {
