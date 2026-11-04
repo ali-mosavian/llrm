@@ -663,6 +663,78 @@ impl Builder<'_> {
         (stored - FILL_BYTES) as i64 * trade.milliclocks_per_byte >= (fill - stores) * 1000
     }
 
+    /// DEVIATE SD2xx (real mode, x87): a zero memset of whole doubles is `fldz`
+    /// and a `fst` of each, where the pin stores integer zeros (`fst qword`
+    /// 3 B, a dword immediate store 8). Tuned for size the bytes decide; at
+    /// speed they are taken where the bytes saved, at the target's speed
+    /// rate, pay for the clocks the `fst`s add. Owner w2. Exit 2026-11-20: a
+    /// store-cost hook on the target description.
+    fn x87_zero_stores(
+        &mut self,
+        chain: SDValue,
+        dst: SDValue,
+        length: u64,
+        align: u64,
+        opt_size: bool,
+        filled: bool,
+    ) -> Option<SDValue> {
+        let Some(bytes) = self.target.tuning.x87_zero_store.or_else(|| self.target.tti.as_ref().and_then(|tti| tti.0.x87_zero_store())) else {
+            return None;
+        };
+        // Floats live on the x87 stack (no SSE2 in the function's features).
+        if !self.target.tti.as_ref().is_some_and(|tti| tti.0.x87_stack_slots().is_some())
+            || self.volatile_memory
+            || length == 0
+            || length % 8 != 0
+        {
+            return None;
+        }
+        let (dwords, cells) = (length / 4, length / 8);
+        let x87 = bytes.fldz + cells * bytes.fst_qword + bytes.fstp;
+        // Never over a fill: its price here (`FILL_BYTES`) cannot see the setup
+        // that neighbouring fills share, and fpbench/nbody_single -Os grew 2 B
+        // taking the `fst`s over two adjacent ones.
+        let ints = dwords * bytes.store_imm32;
+        // Nor over a `rep stos`: it takes the clear past the backend's inline
+        // stores, and its clocks per byte are the `fst`s' (ring nib -O2: 2 KB
+        // of `fst`, +2017 B for -17 clocks).
+        let inline = if opt_size {
+            self.target.tuning.max_stores_per_memset_opt_size
+        } else {
+            self.target.tuning.max_stores_per_memset
+        } as u64;
+        if filled || x87 >= ints || dwords > inline {
+            return None;
+        }
+        if !opt_size {
+            let trade = self.target.size_trade?;
+            let prefix = if bytes.dword_prefixed { trade.prefix } else { 0 };
+            let int_clocks = (dwords * (trade.store + prefix) as u64) as i64;
+            let x87_clocks = trade.float_load + cells as i64 * trade.float_store + trade.float_release;
+            if (ints - x87) as i64 * trade.milliclocks_per_byte < (x87_clocks - int_clocks) * 1000 {
+                return None;
+            }
+        }
+        let f64 = EVT::Simple(super::super::mvt::MVT::F64);
+        let zero = self.dag.get_constant_fp(0, f64);
+        let mut chains = Vec::new();
+        for cell in 0..cells {
+            let off = cell * 8;
+            let to = self.dag.get_object_ptr_offset(dst, off as i64);
+            let info = MemInfo {
+                mem_vt: f64,
+                align: common_alignment(align, off) as u32,
+                volatile: false,
+                base: MemBase::Unknown,
+                ext: None,
+                space: self.space_of(dst),
+                ordering: None,
+            };
+            chains.push(self.dag.get_store(chain, zero, to, info));
+        }
+        Some(self.dag.get_token_factor(&chains))
+    }
+
     /// DEVIATE SD541 (x86-64, tuned for size): a constant fill whose 16-byte
     /// stores (and the `xorps`, or the pool load of the splat) take more bytes
     /// than a `rep stosq` fill is the fill. The pin counts stores
@@ -1097,12 +1169,16 @@ impl Builder<'_> {
                 } else {
                     self.target.tuning.max_stores_per_memset
                 };
+                let zero = self.dag.constant(other) == Some(0);
+                let filled = constant.is_some_and(|bytes| {
+                    self.fill_is_smaller(bytes, opt_size, self.dag.constant(other).map(|byte| byte & 0xff))
+                });
+                let floats = constant
+                    .filter(|_| zero)
+                    .and_then(|bytes| self.x87_zero_stores(root, dst, bytes, alignment, opt_size, filled));
                 let inline = match constant {
-                    Some(bytes)
-                        if !self.fill_is_smaller(bytes, opt_size, self.dag.constant(other).map(|byte| byte & 0xff)) =>
-                    {
-                        self.inline_memset(root, dst, other, bytes, limit, alignment)?
-                    }
+                    _ if floats.is_some() => floats,
+                    Some(bytes) if !filled => self.inline_memset(root, dst, other, bytes, limit, alignment)?,
                     _ => None,
                 };
                 match (inline, constant) {
@@ -1139,6 +1215,17 @@ impl Builder<'_> {
                             && alignment >= 2 =>
                     {
                         self.rep_stos(root, dst, other, bytes, 2)?
+                    }
+                    // for size, whole pointer-width units at that alignment: a
+                    // `rep stosb` runs a clock per byte (matmul.nib -Os +669)
+                    (None, Some(bytes))
+                        if strings_exist
+                            && opt_size
+                            && !self.runtime_has("memset")
+                            && alignment >= self.pointer_bytes()
+                            && bytes % self.pointer_bytes() == 0 =>
+                    {
+                        self.rep_stos(root, dst, other, bytes, self.pointer_bytes())?
                     }
                     _ if strings_exist && !self.runtime_has("memset") => self.rep_stosb(root, dst, other, size),
                     _ => self.mem_libcall("memset", root, &[dst, other], size)?,
@@ -1794,6 +1881,10 @@ impl Builder<'_> {
     /// (`emitConstantSizeRepmovs` takes `i64` at 8-byte alignment on x86-64).
     fn string_block(&self) -> u64 {
         u64::from(self.target.dag.pointer.size_in_bits() / 8).max(4)
+    }
+
+    fn pointer_bytes(&self) -> u64 {
+        u64::from(self.target.dag.pointer.size_in_bits() / 8)
     }
 
     /// `emitConstantSizeRepstos`.

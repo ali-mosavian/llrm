@@ -162,6 +162,8 @@ pub struct Tuned {
     pub no_global_base: bool,
     /// `Tti::prefers_exit_ne`.
     pub exit_ne: bool,
+    /// `Tuning::price_fills`.
+    pub price_fills: bool,
 }
 
 use llrm_mir::tti;
@@ -280,6 +282,10 @@ impl llrm_mir::lowering::Lowering for FoldsMasks {
 }
 
 impl llrm_mir::target::Machine for Tuned {
+    fn tuning(&self) -> llrm_mir::target::Tuning {
+        llrm_mir::target::Tuning { price_fills: self.price_fills, ..llrm_mir::target::Tuning::PIN }
+    }
+
     fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
         (self.exit_ne || self.no_global_base).then(|| {
             std::rc::Rc::new(Flagged { exit_ne: self.exit_ne, no_cmov: false, no_global_base: self.no_global_base })

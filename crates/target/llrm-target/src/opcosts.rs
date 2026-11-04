@@ -75,7 +75,7 @@ fn cost(
     Ok(Cost::Sum(terms))
 }
 
-const OPERATIONS: [&str; 39] = [
+const OPERATIONS: [&str; 40] = [
     "add",
     "multiply",
     "divide",
@@ -110,12 +110,17 @@ const OPERATIONS: [&str; 39] = [
     "set",
     "fill",
     "fill_cell",
+    "fill_segment",
     "copy",
     "copy_cell",
     "copy_variable",
     "direction",
     "unroll_budget",
 ];
+
+/// Operations a table may leave out: 0 in `OperationCosts` then, which its
+/// reader reads as "the usual sum".
+const OPTIONAL: [&str; 5] = ["store_dword", "fill_load", "fill_load_zero", "fill_wide", "fill_wide_value"];
 
 impl Description {
     pub fn parse(text: &str) -> Result<Self, String> {
@@ -152,7 +157,7 @@ impl Description {
                 ));
                 continue;
             }
-            if !OPERATIONS.contains(&name.as_str()) {
+            if !OPERATIONS.contains(&name.as_str()) && !OPTIONAL.contains(&name.as_str()) {
                 return Err(format!("opcosts.txt:{}: no operation `{name}`", index + 1));
             }
             let cost = cost(value, index + 1)?;
@@ -212,7 +217,10 @@ impl Description {
             Cost::Step(add) => step_cost(price(add)),
         };
         let mut out = OperationCosts::default();
-        for (name, cost) in operations {
+        let extra = replaced.iter().filter(|(name, _)| !operations.iter().any(|(one, _)| one == name));
+        for (name, cost) in
+            operations.iter().map(|(name, cost)| (name, cost)).chain(extra.map(|(name, cost)| (name, cost)))
+        {
             let cost = replaced.iter().find(|(one, _)| one == name).map_or(cost, |(_, replacement)| replacement);
             let value = value(cost);
             match name.as_str() {
@@ -250,11 +258,17 @@ impl Description {
                 "set" => out.set = value,
                 "fill" => out.fill = value,
                 "fill_cell" => out.fill_cell = value,
+                "fill_segment" => out.fill_segment = value,
                 "copy" => out.copy = value,
                 "copy_cell" => out.copy_cell = value,
                 "copy_variable" => out.copy_variable = value,
                 "direction" => out.direction = value,
                 "unroll_budget" => out.unroll_budget = value,
+                "store_dword" => out.store_dword = value,
+                "fill_load" => out.fill_load = value,
+                "fill_load_zero" => out.fill_load_zero = value,
+                "fill_wide" => out.fill_wide = value,
+                "fill_wide_value" => out.fill_wide_value = value,
                 other => unreachable!("`{other}` was checked"),
             }
         }
@@ -266,7 +280,7 @@ impl Description {
 mod tests {
     use super::*;
 
-    const ALL: &str = "add = a\nmultiply = m\ndivide = d\nmultiply_long = m\nmultiply_high = m\ndivide_long = d\ndivide_margin = 25\nshift = s\naddress = l\ncarry = carry(z, a, s, r)\ncarry_step = step(a)\nload = ld\nstore = st\nmemory_update = u\nbranch = j\nprefix = prefix\nmove = r\ncall = c\nreturn = t\nargument = st + ld\npop = p\nadjust = i\nreturn_pops = rp - t\nfloat_add = fa\nfloat_multiply = fm\nfloat_divide = fd\nfloat_load = fl\nfloat_load_folded = flf\nfloat_store = fs\nfloat_release = fr\nextend = z\nset = z\nfill = f + 2*p + 3\nfill_cell = fc\ncopy = cp\ncopy_cell = cc\ncopy_variable = cv\ndirection = 2*a\nunroll_budget = 7\n";
+    const ALL: &str = "add = a\nmultiply = m\ndivide = d\nmultiply_long = m\nmultiply_high = m\ndivide_long = d\ndivide_margin = 25\nshift = s\naddress = l\ncarry = carry(z, a, s, r)\ncarry_step = step(a)\nload = ld\nstore = st\nmemory_update = u\nbranch = j\nprefix = prefix\nmove = r\ncall = c\nreturn = t\nargument = st + ld\npop = p\nadjust = i\nreturn_pops = rp - t\nfloat_add = fa\nfloat_multiply = fm\nfloat_divide = fd\nfloat_load = fl\nfloat_load_folded = flf\nfloat_store = fs\nfloat_release = fr\nextend = z\nset = z\nfill = f + 2*p + 3\nfill_cell = fc\nfill_segment = 2*p\ncopy = cp\ncopy_cell = cc\ncopy_variable = cv\ndirection = 2*a\nunroll_budget = 7\n";
 
     #[test]
     fn a_sum_is_terms_with_counts_and_signs() {

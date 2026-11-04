@@ -240,6 +240,7 @@ fn run_on_loop(
         bytes: None,
         clocks: None,
         speed: None,
+        memset_stores: 0,
         name,
         env: &env,
         context: &mut context,

@@ -1160,11 +1160,129 @@ fn at_os_a_10_byte_clear_is_stores_not_rep_stos() {
 #[test]
 fn at_os_a_clear_that_is_a_fill_stays_a_fill_as_it_grows() {
     for parity in [0, 1] {
+        // whole doubles are x87 stores, not a fill
+        // (`a_zero_clear_of_doubles_*`)
         let sizes: Vec<u32> = (4..=64).filter(|n| n % 2 == parity).collect();
         let first = sizes.iter().copied().find(|&n| memset_shape(n, 0).0 == 1).expect("a fill");
         assert!(first > 8, "{first}");
         assert!(sizes.iter().filter(|&&n| n >= first).all(|&n| memset_shape(n, 0).0 == 1), "parity {parity}");
     }
+}
+
+/// The ops of a zero `memset` of `length` bytes at m16: `(fills, integer
+/// stores, float stores)`.
+fn memset_ops(
+    length: u32,
+    size: bool,
+) -> Vec<String> {
+    let text = format!(
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+declare void @use(ptr)
+define void @f() {{
+entry:
+  %a = alloca [{length} x i8], align 8
+  call void @llvm.memset.p0.i16(ptr %a, i8 0, i16 {length}, i1 false)
+  call void @use(ptr %a)
+  ret void
+}}
+"
+    );
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    cpu.size = size;
+    let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    done.body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .map(|w| format!("{:?}:{}", w.op, w.name.clone().unwrap_or_default()))
+        .collect()
+}
+
+/// The ops of a zero `memset` of `length` bytes at m32 (flat, i486).
+fn memset_ops_m32(
+    length: u32,
+    size: bool,
+) -> Vec<String> {
+    let text = format!(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @llvm.memset.p0.i32(ptr, i8, i32, i1)
+declare void @use(ptr)
+define void @f() {{
+entry:
+  %a = alloca [{length} x i8], align 8
+  call void @llvm.memset.p0.i32(ptr %a, i8 0, i32 {length}, i1 false)
+  call void @use(ptr %a)
+  ret void
+}}
+"
+    );
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    // the profile of m32's own cost model: `profile("486")` is m16's, whose tuning the m32 rules are not
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", size).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    done.body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .map(|w| format!("{:?}:{}", w.op, w.name.clone().unwrap_or_default()))
+        .collect()
+}
+
+/// nbody -Os at m32: a 16-byte zero clear of two doubles was four dword
+/// immediate stores (28 B, nothing on the x87 stack to say it was cheaper)
+/// where `fldz; fst; fstp` is 10; the m16 rule did not reach flat code.
+#[test]
+fn at_m32_os_a_zero_clear_of_doubles_is_x87_stores_not_dword_stores() {
+    let ops = memset_ops_m32(16, true);
+    assert_eq!(ops[..2], ["FloatLoad:fldz", "FloatStore:fst"], "{ops:?}");
+    assert!(!ops.iter().any(|o| o.starts_with("Fill") || o.starts_with("Store")), "{ops:?}");
+}
+
+/// At speed the four `mov [m], 0` (4 clocks) keep their place over `fldz`,
+/// two stores and the release (20 B saved are 6 clocks at 0.312 a byte).
+#[test]
+fn at_m32_speed_a_zero_clear_of_doubles_stays_dword_stores() {
+    let ops = memset_ops_m32(16, false);
+    assert!(!ops.iter().any(|o| o.starts_with("FloatStore")), "{ops:?}");
+}
+
+/// nbody O2/Os at m16 grew 100 B: each 16-byte zero clear of two doubles was
+/// four dword immediate stores (32 B) where `fldz; fst; fst` is 8.
+#[test]
+fn a_zero_clear_of_doubles_is_x87_stores_not_dword_stores() {
+    let ops = memset_ops(8, true);
+    assert_eq!(ops[..2], ["FloatLoad:fldz", "FloatStore:fst"], "{ops:?}");
+    assert!(!ops.iter().any(|o| o.starts_with("Fill") || o.starts_with("Store")), "{ops:?}");
+}
+
+/// A clear the model prices as a fill stays one at -Os: it cannot see the
+/// setup adjacent fills share (fpbench and nbody_single grew 2 B with `fst`s
+/// over two of 24 B).
+#[test]
+fn a_zero_clear_of_doubles_that_is_a_fill_stays_rep_stos() {
+    let ops = memset_ops(24, true);
+    assert!(ops.iter().any(|o| o.starts_with("Fill")) && !ops.iter().any(|o| o.starts_with("FloatStore")), "{ops:?}");
+}
+
+/// ring nib -O2: a 2 KB zero clear was 256 `fst`s, +2017 B over the `rep stosd`
+/// for -17 clocks. Only a clear the backend would store inline is `fst`s.
+#[test]
+fn at_speed_a_clear_past_the_inline_stores_stays_rep_stos() {
+    let ops = memset_ops(2048, false);
+    assert!(!ops.iter().any(|o| o.starts_with("FloatStore")), "{ops:?}");
+    let ops = memset_ops(32, false);
+    assert!(!ops.iter().any(|o| o.starts_with("FloatStore")), "8 dwords are past the 4 stores: {ops:?}");
+}
+
+/// matmul nib -O2: two 16-byte clears as `fldz`, two `fst`, `fstp st(0)` were
+/// 46 B smaller and 142 clocks slower: the release was not in the price, and
+/// the 22 B it saves do not pay 15 clocks a clear at two bytes a clock.
+#[test]
+fn at_speed_the_release_of_the_fldz_is_in_the_price_of_x87_stores() {
+    let ops = memset_ops(16, false);
+    assert!(!ops.iter().any(|o| o.starts_with("FloatStore")), "{ops:?}");
 }
 
 /// sc.c's 14-byte zero fill: 7 bytes saved for 66 clocks, 9.4 a byte, pay.
@@ -1688,4 +1806,45 @@ fn a_constant_fill_of_whole_words_at_word_alignment_is_rep_stosw() {
 fn a_constant_fill_of_odd_size_or_byte_alignment_stays_rep_stosb() {
     assert_eq!(constant_fill_unit(203, 2).as_deref(), Some("1"));
     assert_eq!(constant_fill_unit(202, 1).as_deref(), Some("1"));
+}
+
+/// The `rep stos` unit of a constant 28-byte `memset` of `value` at `align 2`,
+/// tuned for size (`size`) or not, at m16 on the 486.
+fn fill_unit_of(
+    value: i32,
+    size: bool,
+) -> Option<String> {
+    let text = format!(
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+define void @f(ptr %p) {{
+entry:
+  call void @llvm.memset.p0.i16(ptr align 2 %p, i8 {value}, i16 28, i1 false)
+  ret void
+}}
+"
+    );
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    cpu.size = size;
+    let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    done.body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| w.op == crate::model::ir::Operation::Fill)
+        .and_then(|w| {
+            w.sources.iter().find_map(|source| match source {
+                crate::model::ir::Loc::Held(held) => Some(held.width.to_string()),
+                _ => None,
+            })
+        })
+}
+
+/// lru nib -Os: a 28-byte fill of -1 as bytes was -1 B but +56 clocks against the
+/// `rep stosw` the base emits; -Os trades neither way.
+#[test]
+fn at_size_a_fill_of_a_value_that_is_not_zero_is_words() {
+    assert_eq!(fill_unit_of(-1, true).as_deref(), Some("2"));
+    assert_eq!(fill_unit_of(0, true).as_deref(), Some("2"));
 }

@@ -37,12 +37,14 @@ float_load = x87_load
 # A load folded into `fadd m32` costs what the memory form costs more than the register one.
 float_load_folded = x87_add_m - x87_add
 float_store = x87_store
-# Unpriced in clocks: no audited price for the 386 to the Core (x86-m32 has the 486 and P5). Bytes: [size].
-float_release = 0
+# `fstp st(0)`: 3 clocks (Intel's i486 data sheet, Table 10.3, FST/FSTP ST(i)), the emulator's `fst_reg`; no audited price for the other
+# CPUs, which keep the 486's. Owner w2, exit 2026-11-20: a row in each CPU file. Bytes: [size].
+float_release = 3
 extend = movzx
 set = setcc
 fill = rep_stos + 2*push_r + 2*pop_seg + 2*mov_ri
 fill_cell = rep_stos_cell
+fill_segment = 2*push_r + 2*pop_seg
 copy = rep_movs + 2*push_r + 2*pop_seg + 3*mov_ri
 copy_cell = rep_movs_cell
 copy_variable = shift_ri + alu_ri + 2*mov_rr + rep_movs
@@ -93,6 +95,11 @@ push_r = 1
 pop_seg = 1
 mov_ri = 6
 rep_stos_cell = 0
+# `mov r16, imm16` as encoded: `mov_ri` above is the doubled estimate for a constant that needs more than the load; a fill's
+# two loads are only the loads.
+mov_ri_exact = 3
+# `mov dword ptr [m], imm32` with a 66h prefix: 66 C7 /0 disp16 imm32.
+mov_mi32 = 9
 rep_movs = 2
 rep_movs_cell = 0
 
@@ -102,4 +109,13 @@ rep_movs_cell = 0
 [size]
 prefix = 1
 argument = 2
+fill = rep_stos + 2*push_r + 2*pop_seg + 2*mov_ri_exact
 float_release = x87_release
+# A dword store of a constant is the word store with a prefix and a wider immediate; the clocks are the usual sum.
+store_dword = mov_mi32
+# The value a fill stores is loaded into the accumulator: `xor ax, ax` for zero, `mov ax, imm16` otherwise. A dword unit adds the 66h
+# on that load and on `stosd`, and two bytes of immediate (`mov eax, -1` is 6 bytes, `rep stosd` 3).
+fill_load_zero = 2
+fill_load = mov_ri_exact
+fill_wide = 2
+fill_wide_value = 2

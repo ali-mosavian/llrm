@@ -175,6 +175,11 @@ pub struct SizeTrade {
     /// One store of a register-sized and of a wide (prefixed) value.
     pub store: i64,
     pub prefix: i64,
+    /// `fldz` and a `fst` of a double.
+    pub float_load: i64,
+    pub float_store: i64,
+    /// The `fstp st(0)` that releases the `fldz`.
+    pub float_release: i64,
 }
 
 impl BuilderTarget {

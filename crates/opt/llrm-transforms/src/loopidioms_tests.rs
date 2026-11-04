@@ -1067,13 +1067,14 @@ fn a_falling_word_copy_eighty_cells_up_is_never_a_memcpy_whatever_its_addresses_
 }
 
 /// QCport m16 -Os, loop and fill bytes as the model sums them: mod_tex's two
-/// fills (loop 28) beat its loop, which grew the module 8 bytes at the
-/// table's 18 a fill; snd_mix's (24) and lru's four (42) lose to theirs.
+/// fills (loop 28) beat its loop; snd_mix's (24) and lru's four (42) lose to
+/// theirs. A fill is priced at its encoded 12 bytes, not a fitted fraction of
+/// the doubled table (3 * 18 / 4 = 13.5 priced a 24-byte loop above two fills).
 #[test]
-fn a_fill_is_priced_at_three_quarters_of_the_table() {
-    assert!(super::fills_cheaper(28, 2, 18));
-    assert!(!super::fills_cheaper(24, 2, 18));
-    assert!(!super::fills_cheaper(42, 4, 18));
+fn a_fill_is_priced_at_its_encoded_size() {
+    assert!(super::fills_cheaper(28, 2, 12));
+    assert!(!super::fills_cheaper(24, 2, 12));
+    assert!(!super::fills_cheaper(42, 4, 12));
 }
 
 /// lru's init at m16 -Os: the loop of two word stores is 5 bytes over the
@@ -1113,4 +1114,327 @@ b2:
     let after = managed_fill(text, &[&[]]);
     assert!(after.contains("llvm.memset"), "{after}");
     assert!(after.contains("@llvm.memset.p0.i16(ptr align 2 "), "{after}");
+}
+
+const TWO_BYTE_ARRAYS: &str = "@a = global [8 x i8] zeroinitializer
+@b = global [8 x i8] zeroinitializer
+
+define void @f() {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %next, %b1 ]
+  %p = getelementptr [8 x i8], ptr @a, i32 0, i32 %i
+  store i8 0, ptr %p
+  %q = getelementptr [8 x i8], ptr @b, i32 0, i32 %i
+  store i8 7, ptr %q
+  %next = add nuw nsw i32 %i, 1
+  %done = icmp eq i32 %next, 8
+  br i1 %done, label %b2, label %b1
+
+b2:
+  ret void
+}
+";
+
+/// The pin forms the memset of every constant-store loop. Weighing the loop
+/// against its fills is only for a target whose fill saves and restores a
+/// segment register; at m32 (`fill_segment` 0) the fills of lru's init loop at
+/// -Os were left a loop by the same test, +21 instructions and +45 clocks.
+#[test]
+fn a_target_with_no_segment_setup_forms_the_memsets_the_pin_forms() {
+    let sized = |segment: i64| {
+        let costs = crate::profit::OperationCosts {
+            fill: 12,
+            fill_segment: segment,
+            store: 6,
+            add: 4,
+            branch: 2,
+            ..Default::default()
+        };
+        let machine = crate::testing::Tuned { sizes: costs, ..Default::default() };
+        let mut module = parsed(&format!("target datalayout = \"e-p:32:32-i64:32-n8:16:32\"\n{TWO_BYTE_ARRAYS}"));
+        let mut pass = crate::loopidiom::pass::LoopIdiom::new();
+        pass.for_size = true;
+        crate::testing::managed_on(&mut module, pass, machine)
+    };
+    let (flat, setup) = (sized(0), sized(4));
+    assert!(flat.contains("call void @llvm.memset"), "no segment setup: the pin's memsets\n{flat}");
+    assert!(!setup.contains("call void @llvm.memset"), "ES around each fill: the loop is smaller\n{setup}");
+}
+
+const SMALL_INIT_LOOP: &str = "@a = global [3 x i16] zeroinitializer
+@b = global [3 x i16] zeroinitializer
+@c = global [3 x i16] zeroinitializer
+@d = global [3 x i32] zeroinitializer
+
+define void @f() {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b1 ]
+  %pa = getelementptr [3 x i16], ptr @a, i16 0, i16 %i
+  store i16 0, ptr %pa
+  %pb = getelementptr [3 x i16], ptr @b, i16 0, i16 %i
+  store i16 -1, ptr %pb
+  %pc = getelementptr [3 x i16], ptr @c, i16 0, i16 %i
+  store i16 -1, ptr %pc
+  %pd = getelementptr [3 x i32], ptr @d, i16 0, i16 %i
+  store i32 0, ptr %pd
+  %next = add nuw nsw i16 %i, 1
+  %done = icmp eq i16 %next, 3
+  br i1 %done, label %b2, label %b1
+
+b2:
+  ret void
+}
+";
+
+/// lru's init loops (three trips of four stores to four global objects) at
+/// m16 -O2: four memsets stored inline are 72 bytes (a word store 6, a dword
+/// store 9 with its prefix and 32-bit immediate: 15, 15, 15, 27) against the
+/// loop's 43, for 11 clocks: lru c +29 B over the loop, which 500 mc/B does not
+/// pay. The price took one length for every fill and the dword store as a
+/// word store with a prefix (7 B), 52 B in all.
+#[test]
+fn a_small_fill_the_backend_stores_inline_is_priced_as_those_stores() {
+    let mut module = parsed(&format!("{DOS}{SMALL_INIT_LOOP}"));
+    let machine = std::rc::Rc::new(llrm_x86_m16::Dos::default());
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(crate::loopidiom::pass::LoopIdiom::new());
+    manager.run_module(&mut module, machine).unwrap();
+    let after = printed(&module);
+    assert!(after.matches("call void @llvm.memset").count() == 0, "{after}");
+}
+
+const ONE_OBJECT_TWO_STORES: &str = "%S = type { [7 x i16], [7 x i16] }
+@s = global %S zeroinitializer
+
+define void @f() {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b1 ]
+  %p = getelementptr inbounds %S, ptr @s, i16 0, i32 0, i16 %i
+  store i16 -1, ptr %p
+  %q = getelementptr inbounds %S, ptr @s, i16 0, i32 1, i16 %i
+  store i16 -1, ptr %q
+  %next = add nuw nsw i16 %i, 1
+  %done = icmp eq i16 %next, 7
+  br i1 %done, label %b2, label %b1
+
+b2:
+  ret void
+}
+";
+
+/// lru's lhead/ltail loop (two word stores of -1 a trip, seven trips, one
+/// object) at m16 -O2 became a `rep stosd` of 28 bytes, 19 B against the loop's
+/// 20 for +3 clocks: lru c +3 clocks for 1 B. The price took it for seven
+/// stores (7 clocks, the backend stores four) and left out the load of -1 and
+/// the 66h prefixes (12 B).
+#[test]
+fn a_fill_the_backend_makes_a_rep_stos_is_priced_with_its_value_load_and_prefixes() {
+    let mut module = parsed(&format!("{DOS}{ONE_OBJECT_TWO_STORES}"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(LoopIdioms { size: false });
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default())).unwrap();
+    let after = printed(&module);
+    assert!(after.matches("call void @llvm.memset").count() == 0, "{after}");
+}
+
+/// lru c -Os: the same loop was a `rep stosb` of 28, 5 B smaller and 84 clocks
+/// slower (17 a byte; the -Os rate is 10).
+#[test]
+fn at_os_a_fill_that_costs_more_clocks_than_its_bytes_are_worth_stays_a_loop() {
+    let mut module = parsed(&format!("{DOS}{ONE_OBJECT_TWO_STORES}"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(LoopIdioms { size: true });
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default())).unwrap();
+    let after = printed(&module);
+    assert!(after.matches("call void @llvm.memset").count() == 0, "{after}");
+}
+
+const ZEROED_NEST: &str = "@a = global [8 x [8 x i16]] zeroinitializer
+define void @f() {
+b0:
+  br label %o
+o:
+  %i = phi i16 [ 0, %b0 ], [ %in, %ol ]
+  br label %j
+j:
+  %jj = phi i16 [ 0, %o ], [ %jn, %j ]
+  %p = getelementptr [8 x [8 x i16]], ptr @a, i16 0, i16 %i, i16 %jj
+  store i16 0, ptr %p
+  %jn = add nuw nsw i16 %jj, 1
+  %jd = icmp eq i16 %jn, 8
+  br i1 %jd, label %ol, label %j
+ol:
+  %in = add nuw nsw i16 %i, 1
+  %id = icmp eq i16 %in, 8
+  br i1 %id, label %b2, label %o
+b2:
+  ret void
+}
+";
+
+/// The same nest whose inner loop also sums, and the sum is returned.
+const LIVE_NEST: &str = "@a = global [8 x [8 x i16]] zeroinitializer
+define i16 @f() {
+b0:
+  br label %o
+o:
+  %i = phi i16 [ 0, %b0 ], [ %in, %ol ]
+  %s0 = phi i16 [ 0, %b0 ], [ %s1, %ol ]
+  br label %j
+j:
+  %jj = phi i16 [ 0, %o ], [ %jn, %j ]
+  %s = phi i16 [ %s0, %o ], [ %sn, %j ]
+  %p = getelementptr [8 x [8 x i16]], ptr @a, i16 0, i16 %i, i16 %jj
+  store i16 0, ptr %p
+  %sn = add i16 %s, 1
+  %jn = add nuw nsw i16 %jj, 1
+  %jd = icmp eq i16 %jn, 8
+  br i1 %jd, label %ol, label %j
+ol:
+  %s1 = phi i16 [ %sn, %j ]
+  %in = add nuw nsw i16 %i, 1
+  %id = icmp eq i16 %in, 8
+  br i1 %id, label %b2, label %o
+b2:
+  ret i16 %s1
+}
+";
+
+fn through_the_loop_passes(text: &str) -> String {
+    let mut module = parsed(&format!("{DOS}{text}"));
+    let machine = std::rc::Rc::new(llrm_x86_m16::Dos::default());
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(crate::loopidiom::pass::LoopIdiom::new());
+    manager.add(crate::loopidiom::pass::AfterDeletion {
+        deletion: crate::loopdeletion::LoopDeletion,
+        idiom: crate::loopidiom::pass::LoopIdiom::new(),
+    });
+    manager.run_module(&mut module, machine).unwrap();
+    printed(&module)
+}
+
+/// matmul nib -O2: the zero loops of an 8 by 8 array were eight memsets of a
+/// row in a loop (+135 clocks, +52 instructions, +73 memory operands over one
+/// memset of the array). The pin's loop pass manager deletes the inner loop the
+/// idiom made dead before it visits the parent, which then holds a memset in a
+/// loop and promotes it (`processLoopMemSet`). At speed on the 486 the nest's
+/// row is inline dword stores (12 clocks a trip) against `rep stosd`'s 4 a
+/// dword (145 for the array, 96 for the nest: matmul nib -O2 +289 clocks), so
+/// the nest stays.
+#[test]
+fn a_nest_of_zero_stores_stays_at_speed_once_the_inner_loop_is_deleted() {
+    let after = through_the_loop_passes(ZEROED_NEST);
+    assert!(!after.contains("i8 0, i16 128"), "{after}");
+}
+
+/// An inner loop that computes something the function returns is not dead: it
+/// stays, and so does the outer loop.
+#[test]
+fn a_nest_whose_inner_loop_is_live_stays_a_nest() {
+    let after = through_the_loop_passes(LIVE_NEST);
+    assert!(!after.contains("i8 0, i16 128"), "{after}");
+    assert!(after.contains("phi"), "{after}");
+}
+
+/// lru at m32 -O1: a fill of fewer bytes and more clocks than its loop (-32 B
+/// for +21 clocks) was taken. A target that prices its fills and has no rate
+/// keeps the loop unless neither bytes nor clocks grow.
+#[test]
+fn a_priced_fill_with_no_rate_is_taken_only_if_neither_metric_grows() {
+    let after = |fill_clocks: i64, sized: bool| {
+        let clocks = crate::profit::OperationCosts {
+            fill: fill_clocks,
+            fill_cell: 0,
+            store: 1,
+            add: 1,
+            branch: 3,
+            ..Default::default()
+        };
+        let bytes =
+            crate::profit::OperationCosts { fill: 8, fill_cell: 0, store: 6, add: 4, branch: 2, ..Default::default() };
+        let machine = crate::testing::Tuned { costs: clocks, sizes: bytes, price_fills: true, ..Default::default() };
+        let mut module = parsed(&format!("target datalayout = \"e-p:32:32-i64:32-n8:16:32\"\n{TWO_BYTE_ARRAYS}"));
+        let mut pass = crate::loopidiom::pass::LoopIdiom::new();
+        pass.for_size = sized;
+        crate::testing::managed_on(&mut module, pass, machine).matches("call void @llvm.memset").count()
+    };
+    assert_eq!(after(30, true), 0, "the fills take more clocks than the loop: the loop stays");
+    assert_eq!(after(2, true), 2, "fewer bytes and fewer clocks: both are fills");
+}
+
+/// A loop that holds only the memset its inner loop became was priced as a
+/// fill of nothing (no stores, no fills counted), so it always paid: matmul nib
+/// -O2 took 145 clocks of `rep stosd` over 136 of the loop it replaced. The
+/// memset is the one fill the loop makes.
+#[test]
+fn the_memset_a_loop_promotes_is_priced_as_one_fill() {
+    let after = |fill_clocks: i64| {
+        let clocks = crate::profit::OperationCosts {
+            fill: fill_clocks,
+            fill_cell: 0,
+            store: 1,
+            add: 1,
+            branch: 3,
+            ..Default::default()
+        };
+        let bytes =
+            crate::profit::OperationCosts { fill: 8, fill_cell: 0, store: 2, add: 4, branch: 2, ..Default::default() };
+        let machine = crate::testing::Tuned { costs: clocks, sizes: bytes, price_fills: true, ..Default::default() };
+        let mut module = parsed(&format!("{DOS}{ZEROED_NEST}"));
+        let mut manager = llrm_mir::passes::PassManager::default();
+        manager.add(crate::loopidiom::pass::LoopIdiom::new());
+        manager.add(crate::loopidiom::pass::AfterDeletion {
+            deletion: crate::loopdeletion::LoopDeletion,
+            idiom: crate::loopidiom::pass::LoopIdiom::new(),
+        });
+        manager.run_module(&mut module, std::rc::Rc::new(machine)).unwrap();
+        printed(&module)
+    };
+    assert!(after(1).contains("i8 0, i16 128"), "a cheap fill merges the nest");
+    let dear = after(100);
+    assert!(!dear.contains("i8 0, i16 128"), "a fill dearer than its loop stays out\n{dear}");
+}
+
+/// matmul nib -O2: the row-zeroing nest priced its trip at two branches (a
+/// conditional and the jump back) where the code has one `jne`, so its loop
+/// looked 40 clocks dearer than it ran and a `rep stosd` of 145 clocks replaced
+/// a 96-clock loop (+289 clocks for -47 bytes). A jump to the next block is
+/// free in a trip.
+#[test]
+fn a_loop_trip_is_priced_at_its_conditional_branch_only() {
+    let merges = |fill_clocks: i64| {
+        let clocks = crate::profit::OperationCosts {
+            fill: fill_clocks,
+            fill_cell: 0,
+            store: 1,
+            add: 1,
+            branch: 3,
+            ..Default::default()
+        };
+        let bytes =
+            crate::profit::OperationCosts { fill: 8, fill_cell: 0, store: 2, add: 4, branch: 2, ..Default::default() };
+        let machine = crate::testing::Tuned { costs: clocks, sizes: bytes, price_fills: true, ..Default::default() };
+        let mut module = parsed(&format!("{DOS}{ZEROED_NEST}"));
+        let mut manager = llrm_mir::passes::PassManager::default();
+        manager.add(crate::loopidiom::pass::LoopIdiom::new());
+        manager.add(crate::loopidiom::pass::AfterDeletion {
+            deletion: crate::loopdeletion::LoopDeletion,
+            idiom: crate::loopidiom::pass::LoopIdiom::new(),
+        });
+        manager.run_module(&mut module, std::rc::Rc::new(machine)).unwrap();
+        printed(&module).contains("i8 0, i16 128")
+    };
+    // The loop is 8 trips of 9 clocks (the branch 3, the step 1, the row's 5
+    // stores).
+    assert!(merges(60), "a fill under the loop's clocks is taken");
+    assert!(!merges(90), "a fill over the loop's clocks is not: the loop ran 72, not 96");
 }

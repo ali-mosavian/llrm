@@ -6,6 +6,20 @@ use std::collections::BTreeSet;
 
 use crate::spaces::Spaces;
 
+/// The bytes of the two ways to clear a double: dword immediates and
+/// `fldz` with `fst`s (flat `[reg+disp8]`; real mode adds the 66h prefix to the
+/// dword store and its immediate).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct X87ZeroStore {
+    pub fldz: u64,
+    pub fst_qword: u64,
+    pub fstp: u64,
+    /// `mov dword ptr [m], imm32`.
+    pub store_imm32: u64,
+    /// The dword store carries the operand-size prefix (its clocks add `prefix`).
+    pub dword_prefixed: bool,
+}
+
 /// The tuning limits of a target: one default (the pin's value, which every
 /// target without an entry takes) and the overrides a target description
 /// states. The names are the pin's `TargetLoweringBase` fields.
@@ -27,6 +41,11 @@ pub struct Tuning {
     /// What a byte is worth in thousandths of a clock at speed; 0: bytes and
     /// clocks are not traded.
     pub speed_milliclocks_per_byte: i64,
+    /// A fill is weighed against its loop on the target's prices at every
+    /// level (`loopidioms::fills_pay`): strictly where the rate is 0 (neither
+    /// clocks nor bytes may grow), by the rate where it is not. false: the
+    /// pin's, which forms the memset whenever the stores allow.
+    pub price_fills: bool,
     /// A multiply by a constant at speed is the chain of fewest clocks the
     /// CPU's table gives, with no byte term (gcc's `synth_mult` at
     /// -O1..-O3); false: the chain where `speed_milliclocks_per_byte` pays
@@ -49,6 +68,9 @@ pub struct Tuning {
     /// there (a target without SSE2 floating point); none: floats are not
     /// held on a stack. The loop unroll caps its copies by it.
     pub x87_stack_slots: Option<u32>,
+    /// Where floats live on the x87 stack, how a zero fill may be stored as
+    /// `fldz` and `fst`s; none: it is not.
+    pub x87_zero_store: Option<X87ZeroStore>,
     /// `-unswitch-threshold` of the non-trivial loop unswitch (-O3): the cost
     /// (loop size times copies) a candidate must stay under; none: 50.
     pub unswitch_threshold: Option<i64>,
@@ -91,12 +113,14 @@ impl Tuning {
         max_stores_per_memmove_opt_size: 4,
         size_milliclocks_per_byte: 0,
         speed_milliclocks_per_byte: 0,
+        price_fills: false,
         multiply_by_clocks: false,
         price_pin_multiplies: false,
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
         unroll_partial_threshold: None,
         x87_stack_slots: None,
+        x87_zero_store: None,
         unswitch_threshold: None,
         inline_threshold: None,
         split_merged_conditions: false,
@@ -416,6 +440,28 @@ pub struct OperationCosts {
     pub set: i64,
     pub fill: i64,
     pub fill_cell: i64,
+    /// What of `fill` is the save and restore of a segment register around the
+    /// string instruction; 0 where the fill needs none.
+    pub fill_segment: i64,
+    /// `Tuning::max_stores_per_memset` for these prices: a constant memset of
+    /// at most that many stores is stores, not a fill; 0: the table does not
+    /// say.
+    pub memset_stores: i64,
+    /// A store of a constant that fills a dword where the target needs a
+    /// prefix or a wider immediate for it; 0: `store + prefix`.
+    pub store_dword: i64,
+    /// The bytes a fill adds to `fill` for the value it stores: the load of
+    /// the accumulator, of a zero (`fill_load_zero`) or of any other value.
+    /// 0: `fill` has them in.
+    pub fill_load: i64,
+    pub fill_load_zero: i64,
+    /// What a dword unit adds over a word one: the operand-size prefixes, and
+    /// the wider immediate of a value that is not zero. 0: none.
+    pub fill_wide: i64,
+    pub fill_wide_value: i64,
+    /// The fill is made at speed, in dwords where the length allows
+    /// (`Tuning`), not by the pass's own `-Os` word unit.
+    pub wide_fill: bool,
     /// The code bytes of the routine a fill through a huge pointer is laid
     /// down as, in a table priced by bytes; 0 where there is none.
     pub huge_fill: i64,
@@ -454,6 +500,17 @@ pub struct OperationCosts {
 }
 
 impl OperationCosts {
+    /// The bytes of a fill of `zero` or of another value: `fill` and the
+    /// load of the value, in dwords when the fill is made so.
+    pub fn fill_with(
+        &self,
+        zero: bool,
+    ) -> i64 {
+        let load = if zero { self.fill_load_zero } else { self.fill_load };
+        let wide = if self.wide_fill { self.fill_wide + if zero { 0 } else { self.fill_wide_value } } else { 0 };
+        self.fill + load + wide
+    }
+
     /// The ratio under which a constant memset of `zero` bytes, or of any other
     /// byte, is stores; 0 where none is stated. `size`: tuned for size.
     pub fn pieces(
@@ -549,6 +606,14 @@ impl Default for OperationCosts {
             set: 1,
             fill: 1,
             fill_cell: 1,
+            fill_segment: 0,
+            memset_stores: 0,
+            store_dword: 0,
+            fill_load: 0,
+            fill_load_zero: 0,
+            fill_wide: 0,
+            fill_wide_value: 0,
+            wide_fill: false,
             huge_fill: 0,
             huge_copy: 0,
             copy: 1,

@@ -68,6 +68,9 @@ pub struct Run<'a> {
     pub clocks: Option<(&'a OperationCosts, i64)>,
     /// The target's clock prices, at speed; none at `-Os`.
     pub speed: Option<&'a OperationCosts>,
+    /// `Tuning::max_stores_per_memset`: the stores a constant fill may be
+    /// inline.
+    pub memset_stores: i64,
     /// `TTI`: the target's costs, where it has them.
     pub tti: Option<&'a dyn llrm_mir::tti::Tti>,
 }
@@ -240,11 +243,27 @@ impl LoopIdiomRecognize {
         let blocks = run.cur_loop.get_blocks();
         let cx = cx!(run);
         let mut groups: Vec<(Operand, Operand)> = Vec::new();
+        let mut lengths: Vec<i64> = Vec::new();
         let mut stores = 0;
         let mut kept = 0;
         for &block in blocks {
             for inst in run.function.iter_block(block) {
                 let instruction = run.function.instruction(inst);
+                // The memset a loop promotes (`processLoopMemSet`) is the one
+                // fill the loop makes: priced, it is a store of its length.
+                if args.is_loop_memset && inst == args.the_store {
+                    stores += 1;
+                    let object = llrm_mir::valuetracking::underlying::get_underlying_object(
+                        &cx.query(Some(inst)),
+                        instruction.operands[0],
+                        0,
+                    );
+                    let group = (object, instruction.operands[1]);
+                    if !groups.contains(&group) {
+                        groups.push(group);
+                    }
+                    continue;
+                }
                 if !matches!(instruction.opcode, Opcode::Store { .. }) {
                     continue;
                 }
@@ -265,8 +284,22 @@ impl LoopIdiomRecognize {
                     0,
                 );
                 let group = (object, instruction.operands[0]);
-                if !groups.contains(&group) {
-                    groups.push(group);
+                // The stores of one object with one value are one fill: its
+                // length is theirs summed.
+                let size = run
+                    .function
+                    .operand_type(run.context, instruction.operands[0])
+                    .map(|ty| run.env.layout.store_size(&run.context.types, ty) as i64);
+                match groups.iter().position(|seen| *seen == group) {
+                    Some(at) => {
+                        if let (Some(length), Some(size)) = (lengths.get_mut(at), size) {
+                            *length += size;
+                        }
+                    }
+                    None => {
+                        groups.push(group);
+                        lengths.extend(size);
+                    }
                 }
             }
         }
@@ -332,6 +365,16 @@ impl LoopIdiomRecognize {
                         );
                     (clocks, rate, trips, cells)
                 }),
+                {
+                    // Each fill's own length: its stores' sizes over the trips
+                    // (the sizes differ between the loop's stores).
+                    let be = run.se.match_apint(args.be_count).filter(|be| be.active_bits() <= 32);
+                    be.filter(|_| lengths.len() == groups.len()).map(|be| crate::loopidioms::InlineFills {
+                        max_stores: run.memset_stores,
+                        lengths: lengths.iter().map(|size| (be.zext_value() as i64 + 1) * size).collect(),
+                    })
+                },
+                matches!(is_bytewise_value(&cx.query(Some(args.the_store)), args.stored_val), Some(Byte::Constant(0))),
             ) {
                 return false;
             }
