@@ -1427,6 +1427,7 @@ fn try_to_unroll_loop(
         }
         remade = Some(Analyzed::of(run));
     }
+    let runtime = remade.is_some();
     let (analyzed, lp) = match &remade {
         Some(analyzed) => (analyzed, analyzed.loops.get_loop_for(header).expect("the loop is still headed by its block")),
         None => (analyzed, lp),
@@ -1444,9 +1445,15 @@ fn try_to_unroll_loop(
     let latches = lp.get_loop_latches(run.function);
     let unroll_options = UnrollOptions {
         count,
-        max_trip_count: if partial { trip_count } else { count },
+        // A run-time unroll keeps the back edge: the remainder made the latch's
+        // trip multiple `count`, so only its last copy tests the exit.
+        max_trip_count: if runtime { u32::MAX } else if partial { trip_count } else { count },
         max_or_zero,
-        exits: exits.into_iter().filter(|exit| exit.trip_count != 0).collect(),
+        exits: if runtime {
+            lp.get_loop_latch(run.function).map(|block| Exit { block, trip_count: count }).into_iter().collect()
+        } else {
+            exits.into_iter().filter(|exit| exit.trip_count != 0).collect()
+        },
     };
     match unroll_loop_blocks(run.function, header, &body, &latches, &unroll_options, &mut run.emptied) {
         Ok(result) => result,
