@@ -234,7 +234,7 @@ impl Hooks for M68kLowering {
         // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/M68k/M68kCallingConv.td#L26-L32)
         // is not modeled, so the caller expands the operation inline. Exit:
         // a two-register result in `lower_call`, by 2026-11-14.
-        if ret.size_in_bits() > 32 {
+        if rets.iter().any(|ret| ret.size_in_bits() > 32) {
             return None;
         }
         let ext = if signed { Ext::Sign } else { Ext::Zero };
