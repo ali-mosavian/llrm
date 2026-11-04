@@ -186,6 +186,7 @@ fn plan_loop(
     header: BlockId,
     marked: Option<&[InstId]>,
     carried: Option<IvUsers>,
+    shadowed: bool,
     stress_chains: bool,
     size: bool,
 ) -> Outcome {
@@ -228,7 +229,9 @@ fn plan_loop(
         function.terminator(lp.get_loop_latch(function).expect("a latch")).expect("a terminator");
     match marked {
         None => {
-            if let Some(shadow) = lsr_prepare::analyze_shadow(se, &cx, header, &users) {
+            // `OptimizeShadowIV` makes one variable and breaks (DEVIATE LS-SH: more
+            // where floats live on the x87 stack).
+            if let Some(shadow) = lsr_prepare::analyze_shadow(se, &cx, tti, header, &users, shadowed) {
                 return Outcome::Shadow(shadow);
             }
             let edits = lsr_prepare::analyze(se, &cx, tti, header, &users);
@@ -361,6 +364,8 @@ pub fn reduced_held(
         let mut marked: Option<Vec<InstId>> = None;
         // The users of the first look, kept through the edit of the exit tests.
         let mut carried: Option<IvUsers> = None;
+        // The one shadow variable the loop gets.
+        let mut shadowed = false;
         for _ in 0..6 {
             // What the edits since changed is no longer what the expressions
             // say; the rest of them stay, as they do in LLVM.
@@ -380,6 +385,7 @@ pub fn reduced_held(
                     header,
                     marked.as_deref(),
                     carried.take(),
+                    shadowed,
                     stress_chains,
                     size,
                 ) {
@@ -404,6 +410,7 @@ pub fn reduced_held(
                     Outcome::Shadow(edit) => {
                         llrm_mir::counts::bump(llrm_mir::counts::Event::LsrPrepared);
                         lsr_prepare::apply_shadow(function, context, &edit);
+                        shadowed = true;
                         changed = true;
                         continue;
                     }
