@@ -162,8 +162,12 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             source = self.dag.get_node(ISD::Rotr, wide, &[source, amount]);
         }
         let NodeData::Mem(first_info) = self.dag.node(first_store).data else { return None };
-        let new =
-            self.dag.get_store(chain, source, self.dag.operand(first_store, 2), MemInfo { mem_vt: wide, ..first_info });
+        let new = self.dag.get_store(
+            chain,
+            source,
+            self.dag.operand(first_store, 2),
+            MemInfo { mem_vt: wide, ..first_info },
+        );
         // The other stores are left to the combines that remove dead ones.
         self.replace_value(st, new);
         Some(new)
