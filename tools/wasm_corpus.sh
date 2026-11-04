@@ -8,7 +8,7 @@ set -u
 ulimit -v 16777216 # one runaway compile must not take the box
 root=$(cd "$(dirname "$0")/.." && pwd)
 clang=${LLRM_CLANG_WASM:-$HOME/scratch/llvm-build-clang-wasm/bin/clang}
-llrm_cc=${LLRM_CC:-$root/target/release/llrm-cc}
+llrm_cc=${LLRM_CC:-$(python3 "$root/tools/llrmbin.py" bin)/llrm-cc}
 out=$(mktemp -d); trap 'rm -rf "$out"' EXIT
 level=$1; shift
 cpu=${WASM_CPU:+-mcpu=$WASM_CPU}

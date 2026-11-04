@@ -107,6 +107,8 @@ andnps	binary	x/^0,xm	128	sse_logic	-	idiom,same	-	-/-	Andnps_xmm_xmmm128
 orps	binary	x/^0,xm	128	sse_logic	-	idiom,same	-	-/-	Orps_xmm_xmmm128
 movaps	move	x/xm	128	sse_move	-	self,same	-	-/-	Movaps_xmm_xmmm128
 movaps	move	m/x	128	sse_move	-	-	-	-/-	Movaps_xmmm128_xmm
+movups	move	x/xm	128	sse_move	-	self,same	-	-/-	Movups_xmm_xmmm128
+movups	move	m/x	128	sse_move	-	-	-	-/-	Movups_xmmm128_xmm
 movq	extend	r/x	64	sse_move	-	-	-	-/-	Movq_rm64_xmm
 movq_x	extend	x/r	64	sse_move	-	-	-	-/-	Movq_xmm_rm64
 movd	extend	r/x	32	sse_move	-	-	-	-/-	Movd_rm32_xmm

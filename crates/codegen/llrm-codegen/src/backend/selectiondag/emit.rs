@@ -1058,6 +1058,7 @@ fn width(
         EVT::Simple(MVT::I16) => 2,
         EVT::Simple(MVT::I32) => 4,
         EVT::Simple(MVT::I64) => 8,
+        EVT::Simple(MVT::I128) => 16,
         EVT::Int(bits) => bits.div_ceil(8),
         // A floating value is one 10-byte register value of the x87 stack.
         EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80) => 10,
@@ -1598,8 +1599,9 @@ impl Emitter<'_, '_> {
         if name == "VASTART_SAVE_XMM_REGS" {
             return self.lowered_vastart_save_xmm(n);
         }
-        // `FsFLD0SD`: a zero double, `xorps` of the register with itself.
-        if matches!(name, "FsFLD0SD" | "FsFLD0SS") {
+        // `FsFLD0SD`, `V_SET0`: a zero double or 16 bytes, `xorps` of the
+        // register with itself.
+        if matches!(name, "FsFLD0SD" | "FsFLD0SS" | "V_SET0") {
             let node = self.dag.node(SDValue { node: n, res: 0 });
             let zero = self.fresh(width(self.ctx.map.scalar_sse(), node.values[0]));
             self.values.insert(SDValue { node: n, res: 0 }, zero.value);

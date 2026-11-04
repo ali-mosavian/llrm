@@ -2,13 +2,14 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 233 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 236 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
 | adce | Aggressive dead code elimination: a translation of LLVM's ADCE (`ADCE.cpp` at d1106deb71cc). | LLVM runs it after SCCP, BDCE and before MemCpyOpt (slot 35). Not in llrm's | [adce](adce.md) |
+| aggressive_instcombine | `AggressiveInstCombine`: `TruncInstCombine`, then the folds of `foldUnusualPatterns`, here `foldConsecutiveLoads`. | As `aggressive-instcombine@678`, after `instcombine` and before `tailrec` | [aggressive_instcombine](aggressive_instcombine.md) |
 | algebraic | Algebraic identities over integer values, as LLVM's InstCombine and, for a loop-carried operand, Reassociate. | `algebraic` runs once in each pass of the fixed point, after `indvars` and | [algebraic](algebraic.md) |
 | alwaysundef | Whether passing a constant into a phi is undefined behavior at a use of the phi: SimplifyCFG's `passingValueIsAlwaysUndefined`. | Named by `hoistcommon`, `speculate`, `undefpred`. | [alwaysundef](alwaysundef.md) |
 | argpromotion | Argument promotion (LLVM's ArgumentPromotion): a pointer parameter a function only reads at fixed offsets is replaced by the fields read. | In the interprocedural step, once, after its inlining loop and before | [argpromotion](argpromotion.md) |
@@ -42,6 +43,8 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_demanded | `SimplifyDemandedUseBits`: an integer instruction is rewritten, or its operands are, when the users read only some of its bits. | The `visit*` of the integer families (`visitAnd`, `visitAdd`, `visitTrunc`, | [combine_demanded](combine_demanded.md) |
 | combine_distribute | `InstCombinerImpl::foldUsingDistributiveLaws`: factor a common term out of two operands of a binary operator, or expand an operator over an operand it distributes over when both halves simplify. | `visit_and`, `visit_or`, `visit_xor`, `visit_add`, `visit_sub`, `visit_mul`. | [combine_distribute](combine_distribute.md) |
 | combine_fp | `visitFDiv`'s `foldFDivConstantDivisor`: a division by a constant is a multiply by its reciprocal. | `combine::visitors` for `fdiv`. | [combine_fp](combine_fp.md) |
+| combine_fp_int_casts | `foldFBinOpOfIntCasts`: a floating-point `fadd`, `fsub` or `fmul` of two integer conversions, or of one and a whole-number constant, is one integer operation and one conversion, if the conversions are exact and the integer operation cannot overflow. | `combine_fp::visit_fadd_or_fmul` and `visit_fsub`, at the pin's position | [combine_fp_int_casts](combine_fp_int_casts.md) |
+| combine_fptoint | InstCombine's `visitFPToUI` and `visitFPToSI`, from [`InstCombineCasts.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCasts.cpp) at d1106deb71cc. | `combine` (its `visit`, the `FPToUI` and `FPToSI` opcodes). | [combine_fptoint](combine_fptoint.md) |
 | combine_funnel | `convertOrOfShiftsToFunnelShift` and `matchFunnelShift`: an `or` of two opposite shifts, or of a pair of concatenations, is a funnel shift. | `visitOr` ([`crate::combine_or`](combine_or.md)), and by `SimplifyDemandedBits` | [combine_funnel](combine_funnel.md) |
 | combine_gep | `visitGetElementPtrInst`: canonical forms of a `getelementptr`. | Named by `combine_compares`, `combine_gep_base`, `combine_gep_index`, `combine_gep_merge`, `combine_gep_phi`, `combine_sub`. | [combine_gep](combine_gep.md) |
 | combine_gep_base | `CommonPointerBase` and `EmitGEPOffsets`: the pointer two GEP chains share and the offset each adds to it. | `foldGEPICmp` (`combine_compares.rs`). | [combine_gep_base](combine_gep_base.md) |
