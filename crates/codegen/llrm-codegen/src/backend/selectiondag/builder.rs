@@ -590,6 +590,7 @@ impl<'a> Builder<'a> {
                 ),
             );
         let mut dag = SelectionDAG::new(DagConfig { fp_extended, ..target.dag.clone() });
+        let module_tables = info.module_tables.clone();
         let tables = info
             .tables
             .get_or_insert_with(|| {
@@ -597,24 +598,34 @@ impl<'a> Builder<'a> {
                 // every symbol under the static relocation
                 // model, which these targets (DOS objects, no
                 // PIC) always use.
+                let (global_names, local_symbols) = module_tables.unwrap_or_else(|| {
+                    (
+                        std::rc::Rc::new(
+                            module
+                                .globals
+                                .iter()
+                                .map(|global| global.name.as_deref().unwrap_or("").to_string())
+                                .collect(),
+                        ),
+                        std::rc::Rc::new(if target.dag.dso_local_symbols {
+                            vec![true; module.globals.len()]
+                        } else {
+                            module
+                                .globals
+                                .iter()
+                                .map(|global| {
+                                    matches!(
+                                        global.linkage,
+                                        llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
+                                    )
+                                })
+                                .collect()
+                        }),
+                    )
+                });
                 super::function_lowering::Tables {
-                    global_names: std::rc::Rc::new(
-                        module.globals.iter().map(|global| global.name.as_deref().unwrap_or("").to_string()).collect(),
-                    ),
-                    local_symbols: std::rc::Rc::new(if target.dag.dso_local_symbols {
-                        vec![true; module.globals.len()]
-                    } else {
-                        module
-                            .globals
-                            .iter()
-                            .map(|global| {
-                                matches!(
-                                    global.linkage,
-                                    llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
-                                )
-                            })
-                            .collect()
-                    }),
+                    global_names,
+                    local_symbols,
                     block_names: std::rc::Rc::new(
                         (0..function.block_capacity())
                             .map(|at| {
@@ -1768,9 +1779,17 @@ impl Builder<'_> {
             None => called,
         };
         let mut values = Vec::new();
-        for argument in arguments {
+        for (at, argument) in arguments.iter().enumerate() {
             let value = self.get_value(*argument)?;
-            let value = self.pass_float_bits(*argument, value);
+            // The dword is for a stack cell or an integer register; a target
+            // that owns the call (`calling`) or an xmm argument takes the
+            // float.
+            let integer = self.calling().is_none()
+                && !matches!(
+                    plan.parameters.get(at),
+                    Some(Parameter::Registers(regs)) if regs.iter().any(|reg| reg.is_xmm())
+                );
+            let value = if integer { self.pass_float_bits(*argument, value) } else { value };
             self.parts(self.dag.value_type(value))?;
             values.push(value);
         }
@@ -1909,7 +1928,10 @@ impl Builder<'_> {
     /// (its load has no other user) is passed as the dword it is. The pin
     /// loads it onto the x87 stack and stores it to the argument slot (`fld;
     /// fstp`); the integer load folds (`visit_bitcast`) and the store becomes
-    /// `push dword ptr [m]`.
+    /// `push dword ptr [m]`. Only for an argument the convention passes in a
+    /// stack cell or an integer register: in a float register (xmm0, s0) the
+    /// bits are the wrong class
+    /// (`movd xmm0, xmm0`; arm64 `fmov w0, s16`; wasm an `i32` for an `f32`).
     fn pass_float_bits(
         &mut self,
         argument: Operand,
