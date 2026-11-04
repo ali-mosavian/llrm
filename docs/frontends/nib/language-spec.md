@@ -2204,10 +2204,11 @@ given only the symbols a program uses.
 A `var` is a place in DGROUP that every function of its module names, with its
 initial value stored in the executable. Its type is written and its initial
 value is a compile-time value. A local of the same name hides it. It is an
-integer, `char` or `bool`, an array of those or of structs, or a struct whose
-fields are of those kinds; a string, vec or dict (a heap value) and a float are
+integer, `char`, `bool`, `f32` or `f64`, an array of those or of structs, or a
+struct whose fields are of those kinds; a string, vec or dict (a heap value) is
 not accepted ([#367](https://github.com/ali-mosavian/llrm/issues/367)). A
-struct starts as a struct literal, an array as a literal or a repeat.
+float starts as a number, stored as its IEEE bits. A struct starts as a struct
+literal, an array as a literal or a repeat.
 
 ```nib
 struct Point:
@@ -2748,7 +2749,7 @@ Language gaps that are open work:
 | a truncating integer divide | [#363](https://github.com/ali-mosavian/llrm/issues/363) |
 | an `i16` literal `0x8000` | [#368](https://github.com/ali-mosavian/llrm/issues/368) |
 | a truncating fixed-point multiply | [#383](https://github.com/ali-mosavian/llrm/issues/383) |
-| float and heap module variables | [#367](https://github.com/ali-mosavian/llrm/issues/367) |
+| heap module variables | [#367](https://github.com/ali-mosavian/llrm/issues/367) |
 | `not`, `lds`, `les` and far-pointer or carry operands in inline assembly | [#640](https://github.com/ali-mosavian/llrm/issues/640) |
 
 ## 20. Grammar

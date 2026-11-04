@@ -78,3 +78,12 @@ fn nbody_matches_the_python_reference() {
     assert!(executed.output.ends_with("VX=-0.103515625\nVY=-0.07421875\nDONE\n"));
     assert_eq!(executed.value, Some(Number::Int(-10_177)));
 }
+
+/// A float module variable starts as its initial value: IEEE bits in the data,
+/// read back as the number, for f32 and f64, a negative one too.
+#[test]
+fn float_module_variables_start_as_their_initial_values() {
+    let source = "var table: f32[3] = [1.5, -2.25, 4.0]\nvar wide: f64 = 0.1\nvar zeros: f32[4] = [0.0] * 4\n\nfn f32_sum() -> f32:\n    return table[0] + table[1] + table[2] + zeros[3]\n\nfn f64_value() -> f64:\n    return wide\n";
+    assert_eq!(execute(source, "f32_sum", &[]).value, Some(Number::Float(3.25)));
+    assert_eq!(execute(source, "f64_value", &[]).value, Some(Number::Float(0.1)));
+}
