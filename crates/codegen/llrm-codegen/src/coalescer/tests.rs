@@ -1502,6 +1502,27 @@ fn test_both_bytes_of_a_pair_join_into_their_lanes() {
     assert_eq!(dests(&kept[1]), vec![Loc::Held(Held { value: 2, width: 1, offset: 1 })]);
 }
 
+/// The high byte joins before the low one, while the pair is not yet live at
+/// the byte's def: the def still keeps the other lane (the copy it replaces
+/// read it). It started the pair, so the low lane was dead there and a
+/// reload of the pair was given its registers (lz4c -Oz returned 0x3131).
+#[test]
+fn test_a_byte_joined_into_a_lane_before_the_pair_is_live_keeps_the_other_lane() {
+    let (d1, d3) = (def_at(1, 1), def_at(3, 1));
+    let (lo, hi) = (lane_copy(2, 0, 1), lane_copy(2, 1, 3));
+    let was = body(&[(&[d1, d3, Arc::clone(&lo), Arc::clone(&hi), read_at(2, 2)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    for v in 1..=3 {
+        lis.interval(v);
+    }
+    let mut state = State::new();
+    let result = join_copy(&mut lis, &LaneViews, &mut state, &mut Default::default(), hi.id());
+    assert_eq!(result, JoinResult::Joined);
+    let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
+    let definer = kept.iter().find(|insn| insn.def_lanes.iter().any(|(v, _)| *v == 2)).expect("the byte's def");
+    assert_eq!(definer.partial_defs, vec![2], "premise: the def is of a lane of the pair; it keeps the rest");
+}
+
 /// A byte joins the lane of a pair only where some register of the pair's
 /// palette has a register of the byte's palette at that offset: `ah` is the
 /// byte above `al` in `ax`, and `al` is not. Before, `can_share_lane` had no
