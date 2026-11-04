@@ -108,6 +108,8 @@ mod constantrange_tests;
 #[cfg(test)]
 mod edit_tests;
 #[cfg(test)]
+mod fp128_tests;
+#[cfg(test)]
 mod fpclass_tests;
 #[cfg(test)]
 mod golden_dump;

@@ -635,6 +635,42 @@ impl Tti for X86 {
         self.real_mode.as_ref().map_or(100, |real| real.float_code_size_percent)
     }
 
+    // X86TTIImpl::enableMemCmpExpansion
+    // (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L7513).
+    // DEVIATE X1 (exit 2026-11-30, same permalink): the 16-, 32- and 64-byte
+    // vector load sizes of an equality compare are left out (vectors are
+    // deferred); the pin takes them from `getPreferVectorWidth`.
+    fn enable_mem_cmp_expansion(
+        &self,
+        _opt_size: bool,
+        is_zero_cmp: bool,
+    ) -> Option<MemCmpExpansionOptions> {
+        let mut load_sizes = Vec::new();
+        if self.quad {
+            load_sizes.push(8);
+        }
+        load_sizes.extend([4, 2, 1]);
+        Some(MemCmpExpansionOptions {
+            load_sizes,
+            // X86ISelLowering.cpp#L2946: MaxLoadsPerMemcmp and its OptSize twin.
+            max_num_loads: 2,
+            num_loads_per_block: if is_zero_cmp { 2 } else { 1 },
+            allow_overlapping_loads: true,
+            allowed_tail_expansions: Vec::new(),
+        })
+    }
+
+    // X86TargetLowering::allowsMisalignedMemoryAccesses
+    // (X86ISelLoweringCall.cpp#L371): any size, but a non-temporal vector.
+    fn allows_misaligned_memory_accesses(
+        &self,
+        _bits: u32,
+        _address_space: u32,
+        _align: u64,
+    ) -> bool {
+        true
+    }
+
     // X86TTIImpl::hasDivRemOp (X86TargetTransformInfo.cpp#L7421) asks
     // `isOperationLegal(SDIVREM/UDIVREM, VT)`; X86ISelLowering sets the scalar
     // divides to `Expand` (L340) and leaves the two-result ones at the base
@@ -877,6 +913,53 @@ impl Tti for X86 {
             return if cost.value <= constants { Cost::FREE } else { cost };
         }
         cost
+    }
+
+    /// `X86TTIImpl::getIntImmCostIntrin`:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L7040
+    fn int_imm_cost_intrin(
+        &self,
+        name: &str,
+        index: u32,
+        imm: i128,
+        bits: u32,
+    ) -> Cost {
+        if bits == 0 {
+            return Cost::FREE;
+        }
+        let name = name.strip_prefix("llvm.").unwrap_or(name);
+        // `getBitWidth() <= 64 && isSignedIntN(width)`.
+        let extended = if bits >= 128 { imm } else { (imm << (128 - bits)) >> (128 - bits) };
+        let fits = |width: u32| bits <= 64 && (-(1i128 << (width - 1))..1i128 << (width - 1)).contains(&extended);
+        let overflow = ["sadd", "uadd", "ssub", "usub", "smul", "umul"]
+            .iter()
+            .any(|op| name.strip_prefix(op).is_some_and(|rest| rest.starts_with(".with.overflow")));
+        if overflow {
+            if index == 1 && fits(32) {
+                return Cost::FREE;
+            }
+        } else if name.starts_with("experimental.stackmap") {
+            if index < 2 || fits(64) {
+                return Cost::FREE;
+            }
+        } else if name.starts_with("experimental.patchpoint") {
+            if index < 4 || fits(64) {
+                return Cost::FREE;
+            }
+        } else {
+            return Cost::FREE;
+        }
+        self.int_imm_cost(imm, bits)
+    }
+
+    /// `X86TargetLowering::isIntDivCheap`: only at `minsize`.
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L65389
+    fn prefer_to_keep_constants_attached(
+        &self,
+        div_rem_by_constant: bool,
+        min_size: bool,
+    ) -> bool {
+        div_rem_by_constant && !min_size
     }
 
     /// `X86TargetLowering::isTruncateFree`:

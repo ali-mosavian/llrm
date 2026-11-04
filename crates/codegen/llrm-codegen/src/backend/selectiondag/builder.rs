@@ -779,6 +779,7 @@ impl Builder<'_> {
                 llrm_mir::types::FloatKind::Float => MVT::F32,
                 llrm_mir::types::FloatKind::Double => MVT::F64,
                 llrm_mir::types::FloatKind::X86Fp80 => MVT::F80,
+                llrm_mir::types::FloatKind::F128 => return Err(Refused("fp128: no legalization yet")),
             })),
             _ => Err(Refused("aggregate or vector value")),
         }

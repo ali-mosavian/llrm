@@ -213,6 +213,12 @@ pub trait Machine {
         0
     }
 
+    /// Header instructions loop rotation may copy in a size build
+    /// (`RotationMaxHeaderSize`): none stated, the pin's 16.
+    fn size_rotation_header_limit(&self) -> Option<u32> {
+        None
+    }
+
     /// Segment registers a far pointer's selector can be held in, besides
     /// `registers`: none where the target has none.
     fn segment_registers(&self) -> i64 {
@@ -411,6 +417,13 @@ pub struct OperationCosts {
     /// last reader is past (x87 `fstp st(0)`): one held across a loop is
     /// released after it.
     pub float_release: i64,
+    /// A float converted to an integer (`fistp` under the control word that
+    /// truncates, and the word back); 0 where the target converts in one cheap
+    /// instruction.
+    pub float_to_int: i64,
+    /// A float compare whose answer is in a register (x87 `fcom`, `fnstsw`,
+    /// `sahf`); 0 where the target states none.
+    pub float_compare: i64,
     pub extend: i64,
     /// A comparison held as a value (`setcc`), before it is extended.
     pub set: i64,
@@ -545,6 +558,8 @@ impl Default for OperationCosts {
             folds_loads: false,
             float_store: 1,
             float_release: 0,
+            float_to_int: 0,
+            float_compare: 0,
             extend: 1,
             set: 1,
             fill: 1,

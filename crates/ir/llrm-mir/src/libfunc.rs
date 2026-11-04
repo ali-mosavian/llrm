@@ -178,6 +178,14 @@ pub struct Generic {
     pub size_t_bits: u32,
 }
 
+impl Generic {
+    /// The pin's defaults for a pointer `bits` wide: a 32-bit `int` unless the
+    /// pointer is 16 bits wide, `size_t` as wide as the pointer.
+    pub fn for_pointer(bits: u32) -> Self {
+        Self { int_bits: if bits == 16 { 16 } else { 32 }, size_t_bits: bits }
+    }
+}
+
 impl Library for Generic {
     fn int_bits(&self) -> u32 {
         self.int_bits
@@ -453,3 +461,20 @@ pub struct Routine {
     /// The MIR calling convention number of the ABI's C convention.
     pub calling_convention: u32,
 }
+
+impl Routine {
+    /// The routines `names` of a target's C library, each by the symbol
+    /// `symbol` spells it: what `SimplifyLibCalls` and `LoopIdiomRecognize` may
+    /// form where the program links that library.
+    pub fn stated<'a>(
+        names: impl IntoIterator<Item = &'static str>,
+        symbol: impl Fn(&str) -> String + 'a,
+        calling_convention: u32,
+    ) -> Vec<Routine> {
+        names.into_iter().map(|standard| Routine { standard, symbol: symbol(standard), calling_convention }).collect()
+    }
+}
+
+/// `memcmp` and `bcmp`: in every hosted C library the compare arms of
+/// `SimplifyLibCalls` form (the pin states them from the triple).
+pub const HOSTED_COMPARE: [&str; 2] = ["memcmp", "bcmp"];

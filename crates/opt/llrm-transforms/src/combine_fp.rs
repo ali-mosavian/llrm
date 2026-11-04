@@ -53,7 +53,18 @@ pub fn visit_fadd_or_fmul(
     if simplify_associative_or_commutative(c, inst) {
         return Visit::Changed;
     }
-    crate::combine_fp_int_casts::fold_fbinop_of_int_casts(c, inst).unwrap_or(Visit::None)
+    if let Some(found) = crate::combine_fp_int_casts::fold_fbinop_of_int_casts(c, inst) {
+        return found;
+    }
+    // `foldBinopWithPhiOperands` and `foldBinOpIntoSelectOrPhi`, as the pin's
+    // `visitFAdd` (InstCombineAddSub.cpp L2133) and `visitFMul`
+    // (InstCombineMulDivRem.cpp L1013) have them after the vector fold.
+    for found in [c.fold_binop_with_phi_operands(inst), c.fold_bin_op_into_select_or_phi(inst)] {
+        if !matches!(found, Visit::None) {
+            return found;
+        }
+    }
+    Visit::None
 }
 
 /// `visitFSub` (InstCombineAddSub.cpp:3322), up to `X - (-Y) --> X + Y`: the
@@ -84,7 +95,18 @@ pub fn visit_fsub(
     if let Some(y) = fneg_operand(c, op1) {
         return c.replace_with_binop(inst, BinaryOp::FAdd, op0, y, instruction.flags);
     }
-    crate::combine_fp_int_casts::fold_fbinop_of_int_casts(c, inst).unwrap_or(Visit::None)
+    if let Some(found) = crate::combine_fp_int_casts::fold_fbinop_of_int_casts(c, inst) {
+        return found;
+    }
+    // `foldBinopWithPhiOperands` and `foldBinOpIntoSelectOrPhi`, as the pin's
+    // `visitFAdd` (InstCombineAddSub.cpp L2133) and `visitFMul`
+    // (InstCombineMulDivRem.cpp L1013) have them after the vector fold.
+    for found in [c.fold_binop_with_phi_operands(inst), c.fold_bin_op_into_select_or_phi(inst)] {
+        if !matches!(found, Visit::None) {
+            return found;
+        }
+    }
+    Visit::None
 }
 
 /// `visitCallInst`'s `Intrinsic::fmuladd`
@@ -193,6 +215,8 @@ fn has_exact_inverse(
         FloatKind::Double | FloatKind::X86Fp80 => {
             divisor.is_normal() && divisor.to_bits() & 0xf_ffff_ffff_ffff == 0 && (1.0 / divisor).is_normal()
         }
+        // No f64 stands for an fp128 divisor: nothing is rewritten.
+        FloatKind::F128 => false,
     }
 }
 

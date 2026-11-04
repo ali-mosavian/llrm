@@ -673,7 +673,7 @@ fn update_phi_blocks_and_values(
 /// the epilog loop, which runs at most `count` times, copied out where its
 /// maximum trip count is `count` (the complete unroll; a partial one is not
 /// translated: nothing then is done).
-fn unroll_remainder_loop(
+pub(crate) fn unroll_remainder_loop(
     run: &mut Run,
     epilog_header: BlockId,
     count: u32,
@@ -708,6 +708,8 @@ fn unroll_remainder_loop(
     }
     let tree = DomTree::of(run.function);
     let loops = LoopInfo::analyze(run.function, || &tree);
+    // `globals` gained the `llvm.assume` declaration the epilog guard needs, which
+    // the module's memoized `Outer::assume_declared` does not know.
     let assumptions = AssumptionCache::of(run.context, &globals, run.metadata, run.function);
     let Some(lp) = loops.get_loop_for(epilog_header) else { return };
     let mut se = ScalarEvolution::new();
@@ -1557,6 +1559,7 @@ impl FunctionPass for LoopUnrollAndJam {
             declared: unit.declared,
             emptied: Vec::new(),
             peeled: Default::default(),
+            finished: Default::default(),
             created: Vec::new(),
             scev: llrm_analysis::scev::ScalarEvolution::new(),
             options: UnrollOptions {

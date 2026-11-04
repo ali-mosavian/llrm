@@ -127,6 +127,9 @@ pub struct Run<'a> {
     pub declared: &'a mut llrm_mir::passes::Declared,
     /// The iterations peeled off the loop headed by a block in this run (PL1).
     pub peeled: IdMap<BlockId, u32>,
+    /// The headers of loops this run unrolled at run time, and of their
+    /// remainders (`setLoopAlreadyUnrolled`, D4: a set, not metadata).
+    pub finished: IdSet<BlockId>,
     /// The headers of the loops this run made: those that were no loop's header
     /// when it began (`LPMUpdater::addSiblingLoops`, for the passes after it).
     pub created: Vec<BlockId>,
@@ -358,7 +361,13 @@ impl Analyzed {
     pub(crate) fn of(run: &Run) -> Self {
         let tree = DomTree::of(run.function);
         let loops = LoopInfo::analyze(run.function, || &tree);
-        let assumptions = AssumptionCache::of(run.context, run.globals, run.metadata, run.function);
+        let assumptions = AssumptionCache::of_declared(
+            run.context,
+            run.globals,
+            run.metadata,
+            run.function,
+            run.outer.assume_declared(),
+        );
         Self { tree, loops, assumptions }
     }
 }
@@ -1190,6 +1199,10 @@ fn try_to_unroll_loop(
     analyzed: &Analyzed,
     lp: Loop,
 ) -> Unrolled {
+    if run.finished.contains(&lp.get_header()) {
+        why(run, lp, "already unrolled");
+        return Unrolled::Unmodified;
+    }
     let options = LoopOptions::of(run, lp);
     let tm = options.unroll(run);
     // `TM & TM_Disable`: disabled, or suppressed by the user.
@@ -1396,11 +1409,46 @@ fn try_to_unroll_loop(
         why(run, lp, "partial/runtime unroll in FullLoopUnroll");
         return Unrolled::Unmodified;
     }
-    // Runtime unrolling (the remainder loop) is not here yet.
+    // Runtime unrolling: the epilog remainder first (`UnrollLoop`), then the
+    // loop, made again, is copied out `count` times.
+    let mut remade = None;
     if run.options.target_unrolling && !partial && (trip_count == 0 || count < trip_count) {
-        why(run, lp, "runtime unroll is not translated");
-        return Unrolled::Unmodified;
+        if trip_multiple % count != 0 {
+            let expansion = llrm_analysis::scev::expand_cost::MachineCosts {
+                tti: run.outer.target().tti(),
+                minimum_size: false,
+            };
+            let mut session = llrm_analysis::scev::analysis::ScevSession::of(run.context, run.function, run.outer);
+            let mut env = crate::loopunrollruntime::Env {
+                context: &mut *run.context,
+                layout: run.layout,
+                function: &mut *run.function,
+                declared: &mut *run.declared,
+                outer: run.outer,
+                tti: &expansion,
+            };
+            let done =
+                crate::loopunrollruntime::unroll_runtime_loop_remainder(&mut env, &mut session, header, count, false);
+            let Some(epilog) = done else {
+                why(run, lp, "the remainder loop could not be generated");
+                return Unrolled::Unmodified;
+            };
+            run.scev = ScalarEvolution::new();
+            run.finished.insert(header);
+            if let Some(epilog) = epilog {
+                run.finished.insert(epilog);
+            }
+            if up.unroll_remainder && let Some(epilog) = epilog {
+                crate::loopunrollandjam::unroll_remainder_loop(run, epilog, count - 1);
+            }
+        }
+        remade = Some(Analyzed::of(run));
     }
+    let runtime = remade.is_some();
+    let (analyzed, lp) = match &remade {
+        Some(analyzed) => (analyzed, analyzed.loops.get_loop_for(header).expect("the loop is still headed by its block")),
+        None => (analyzed, lp),
+    };
 
     why(
         run,
@@ -1414,9 +1462,15 @@ fn try_to_unroll_loop(
     let latches = lp.get_loop_latches(run.function);
     let unroll_options = UnrollOptions {
         count,
-        max_trip_count: if partial { trip_count } else { count },
+        // A run-time unroll keeps the back edge: the remainder made the latch's
+        // trip multiple `count`, so only its last copy tests the exit.
+        max_trip_count: if runtime { u32::MAX } else if partial { trip_count } else { count },
         max_or_zero,
-        exits: exits.into_iter().filter(|exit| exit.trip_count != 0).collect(),
+        exits: if runtime {
+            lp.get_loop_latch(run.function).map(|block| Exit { block, trip_count: count }).into_iter().collect()
+        } else {
+            exits.into_iter().filter(|exit| exit.trip_count != 0).collect()
+        },
     };
     match unroll_loop_blocks(run.function, header, &body, &latches, &unroll_options, &mut run.emptied) {
         Ok(result) => result,
@@ -1864,6 +1918,7 @@ impl FunctionPass for LoopFullUnroll {
             declared: unit.declared,
             emptied: Vec::new(),
             peeled: Default::default(),
+            finished: IdSet::new(),
             created: Vec::new(),
             scev: held.take(),
             options: Options {
@@ -1924,6 +1979,7 @@ pub fn unroll_function(
         options,
         emptied: Vec::new(),
         peeled: Default::default(),
+        finished: IdSet::new(),
         created: Vec::new(),
         scev: ScalarEvolution::new(),
     };

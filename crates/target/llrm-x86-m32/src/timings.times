@@ -103,6 +103,7 @@ x87_add_i    =    =
 x87_mul_i    =    =
 x87_div_i    =   = 
 x87_cmp_i    =    =
+x87_compare  =    =
 x87_control_load = =
 x87_control_store = =
 mul_r16      =   = 
@@ -185,6 +186,7 @@ x87_add_i    =    =
 x87_mul_i    =    =
 x87_div_i    =   = 
 x87_cmp_i    =    =
+x87_compare  =    =
 x87_control_load = =
 x87_control_store = =
 mul_r16      =   = 
