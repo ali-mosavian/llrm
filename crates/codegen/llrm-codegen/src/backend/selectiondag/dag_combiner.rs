@@ -645,6 +645,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 self.replace_value(old, new);
                 self.add_to_worklist_with_users(new.node);
                 self.dag.delete_dead(old.node);
+                self.queue_survivors();
             }
             let Some(result) = result else { continue };
             if result.node == n && result.res == 0 {
@@ -667,6 +668,26 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
             self.dag.delete_dead(n);
             self.dag.delete_replaced(n);
+            self.queue_survivors();
+        }
+    }
+
+    /// `CombineTo(old, new)` with `AddTo`: the new node and its users are
+    /// queued, then the old node goes and its surviving operands are queued.
+    pub(super) fn combine_store_to(
+        &mut self,
+        old: SDValue,
+        new: SDValue,
+    ) {
+        self.replace_value(old, new);
+        self.add_to_worklist_with_users(new.node);
+        self.dag.delete_replaced(old.node);
+        self.queue_survivors();
+    }
+
+    fn queue_survivors(&mut self) {
+        for node in std::mem::take(&mut self.dag.survivors) {
+            self.add_to_worklist(node);
         }
     }
 

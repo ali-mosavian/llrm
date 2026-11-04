@@ -374,6 +374,9 @@ pub struct SelectionDAG {
     /// `delete_dead`'s worklist, kept between calls: a fresh `vec![node]` per
     /// call was one allocation each (51K on jpeg_fixed -O2).
     dead_work: Vec<u32>,
+    /// Nodes that lost a user to a deletion but live on, for the combiner's
+    /// worklist (`recursivelyDeleteUnusedNodes`).
+    pub(super) survivors: Vec<u32>,
     /// The `IROrder` of the `SDLoc` in force: nodes made now carry it.
     pub cur_order: u32,
     /// The source line of the IR instruction at each `IROrder` (0: none), from
@@ -484,6 +487,7 @@ impl SelectionDAG {
             cse: Cse::default(),
             deleted: Vec::new(),
             dead_work: Vec::new(),
+            survivors: Vec::new(),
             cur_order: 0,
             lines: Vec::new(),
             inst_order: Vec::new(),
@@ -614,6 +618,17 @@ impl SelectionDAG {
         let mut work = std::mem::take(&mut self.dead_work);
         work.push(node);
         while let Some(n) = work.pop() {
+            let initial = n == node;
+            if !initial
+                && !self.is_deleted(n)
+                && n != self.root.node
+                && n != self.entry.node
+                && !self.nodes[n as usize].ops.is_empty()
+                && (0..self.nodes[n as usize].values.len() as u8).any(|res| self.has_users(SDValue { node: n, res }))
+            {
+                self.survivors.push(n);
+                continue;
+            }
             // Chain and glue nodes stay: the builder keeps handles on some
             // (the pin protects them with `HandleSDNode`). DEVIATE: an unused
             // token factor goes like any node (`RemoveDeadNodes`): kept, it
@@ -637,7 +652,13 @@ impl SelectionDAG {
                 self.deleted.resize(self.nodes.len(), false);
             }
             self.deleted[n as usize] = true;
-            work.extend(self.nodes[n as usize].ops.iter().map(|op| op.node));
+            // A `SmallSetVector`: an operand already waiting is not added twice.
+            for i in 0..self.nodes[n as usize].ops.len() {
+                let op = self.nodes[n as usize].ops[i].node;
+                if !work.contains(&op) {
+                    work.push(op);
+                }
+            }
         }
         self.dead_work = work;
     }
@@ -673,6 +694,10 @@ impl SelectionDAG {
         self.deleted[node as usize] = true;
         let operands: Vec<u32> = self.nodes[node as usize].ops.iter().map(|op| op.node).collect();
         for op in operands {
+            let results = self.nodes[op as usize].values.len() as u8;
+            if (0..results).any(|res| self.has_users(SDValue { node: op, res })) {
+                self.survivors.push(op);
+            }
             self.delete_dead(op);
         }
     }

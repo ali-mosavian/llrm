@@ -345,7 +345,16 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let replacement = self.dag.get_store(better, value, ptr, info);
         let token = self.dag.get_token_factor(&[chain, replacement]);
         self.add_to_worklist(token.node);
-        Some(token)
+        // `CombineTo(ST, Token, false)`: the users of the store are not put on
+        // the worklist, and `visitSTORE` returns the store itself, so `Run`
+        // adds nothing either.
+        let operands: Vec<u32> = self.dag.node(store).ops.iter().map(|op| op.node).collect();
+        let _ = self.dag.replace_all_uses_with(store, token);
+        self.dag.delete_replaced(store.node);
+        for operand in operands {
+            self.add_to_worklist(operand);
+        }
+        Some(store)
     }
 }
 
