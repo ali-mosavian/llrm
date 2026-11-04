@@ -124,7 +124,7 @@ impl Analysis for Assumes {
         analyses: &mut Analyses,
     ) -> AssumptionCache {
         let outer = analyses.outer();
-        AssumptionCache::of(context, &outer.globals, &outer.metadata, function)
+        AssumptionCache::of_declared(context, &outer.globals, &outer.metadata, function, outer.assume_declared())
     }
 }
 

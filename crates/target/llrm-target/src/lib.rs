@@ -756,8 +756,10 @@ pub trait Target {
             slot: self.stack_slot_bytes(),
             align: self.stack_alignment(),
             optional: self.frame_optional(),
+            saved_first: self.frame_saved_first(),
             enter: self.frame_enter(),
             wrap_split_size: self.frame_wrap_split_size(),
+            red_zone: self.frame_red_zone(),
             slot_scratch: self.frame_slot_scratch(),
             free: false,
             kept: false,
@@ -778,6 +780,13 @@ pub trait Target {
         false
     }
 
+    /// Whether the registers a function keeps are pushed before the space for
+    /// its locals even where it calls nothing (`calling.toml`'s
+    /// `frame_saved_first`).
+    fn frame_saved_first(&self) -> bool {
+        false
+    }
+
     /// Whether a frame tuned for size opens with `enter` (`calling.toml`'s
     /// `frame_enter`).
     fn frame_enter(&self) -> bool {
@@ -794,6 +803,12 @@ pub trait Target {
 
     fn frame_wrap_split_size(&self) -> bool {
         false
+    }
+
+    /// The bytes below the stack pointer a leaf frame may use (`calling.toml`'s
+    /// `frame_red_zone`).
+    fn frame_red_zone(&self) -> i64 {
+        0
     }
 }
 
@@ -814,10 +829,16 @@ pub struct FrameRegisters {
     pub align: i64,
     /// A function that needs no frame register may leave it out.
     pub optional: bool,
+    /// The registers are pushed before the locals' space even where nothing is
+    /// called.
+    pub saved_first: bool,
     /// A frame tuned for size opens with `enter`.
     pub enter: bool,
     /// A size build may skip the frame on an early exit into a shared return.
     pub wrap_split_size: bool,
+    /// The bytes below the stack pointer a leaf function's locals may use
+    /// without a `sub`; 0 where the ABI has no red zone.
+    pub red_zone: i64,
     /// The registers a one-slot frame pushes and pops (`calling.toml`'s
     /// `frame_slot_push`/`frame_slot_pop`), where it does.
     pub slot_scratch: Option<(RegId, RegId)>,

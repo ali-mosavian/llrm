@@ -1198,7 +1198,9 @@ entry:
         free: false,
         kept: false,
         exit_cfi: true,
+        saved_first: false,
         wrap_split_size: false,
+        red_zone: 0,
         slot_scratch: None,
     };
     let leaf = selected(&module, "leaf", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
