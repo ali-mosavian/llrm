@@ -1628,3 +1628,23 @@ fn a_pointer_minus_one_borrows_by_branch() {
     assert_eq!(exit_code_of(&text, "g"), 20, "{text}");
     assert!(!text.contains("adc #255"), "{text}");
 }
+
+#[test]
+fn a_word_plus_one_carries_by_branch() {
+    // strnlen's index: `clc; lda lo; adc #1; sta lo; lda hi; adc #0; sta hi`
+    // (13 B) where `inc lo; bne; inc hi` is 6
+    let ir = module(
+        "@n = global i16 300\n@sink = global i16 0\n\
+         define i8 @g() {\n\
+         \x20 %n = load volatile i16, ptr @n\n  br label %l\n\
+         l:\n\
+         \x20 %i = phi i16 [ 0, %0 ], [ %j, %l ]\n\
+         \x20 %j = add i16 %i, 1\n  store volatile i16 %j, ptr @sink\n\
+         \x20 %c = icmp ult i16 %j, %n\n  br i1 %c, label %l, label %x\n\
+         x:\n\
+         \x20 %r = trunc i16 %j to i8\n  ret i8 %r\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "g"), 44, "{text}");
+    assert!(!text.contains("adc #1\n"), "{text}");
+}
