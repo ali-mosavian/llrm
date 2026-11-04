@@ -185,6 +185,7 @@ impl Machine for Dos {
             registers: self.registers as u32,
             scaled_index_insns: scaled_index_insns as u32,
             huge_space: crate::spaces().huge,
+            address_registers: native_address_registers(&self.address_forms),
             inline_size_guard: true,
             float_code_size_percent: 200,
             unroll_size_few_trips: (3, 30),
@@ -423,6 +424,14 @@ pub fn address_forms(
     ]
 }
 
+/// The registers the cheapest address form names: its base class and its
+/// index class (the frame's register is in neither); none where the form has
+/// no classes.
+fn native_address_registers(forms: &[AddressForm]) -> Option<u32> {
+    let native = forms.iter().filter(|form| !form.secondary).min_by_key(|form| form.use_cost)?;
+    Some((native.bases? + native.indices?) as u32)
+}
+
 /// `arch`'s (one of `timings::ARCHS`) price of each operation, as the
 /// instructions lowering picks for it.
 pub fn costs(arch: &str) -> OperationCosts {
@@ -478,6 +487,17 @@ mod tests {
         assert_eq!(found.cc.as_deref(), Some("basic"));
         assert!(found.clobbered.iter().all(|name| !matches!(name.as_str(), "si" | "di")), "{:?}", found.clobbered);
         assert!(found.clobbered.iter().any(|name| name == "bx"), "{:?}", found.clobbered);
+    }
+
+    /// An address in real mode is a base (bx) and an index (si or di), the
+    /// frame's bp in neither: three registers, where six hold values. LSR's
+    /// pressure on the address class read the six.
+    #[test]
+    fn the_cheapest_address_form_names_three_registers_of_six() {
+        let costs = super::costs("486");
+        let dos = Dos { address_forms: super::address_forms(&costs, 1), costs, ..Dos::default() };
+        let tti = dos.tti().expect("m16 states its cost model");
+        assert_eq!((tti.address_registers(), tti.number_of_gpr_registers()), (3, 6));
     }
 
     /// LSR reads the addressing hooks of the model: real mode's `[bx+si]` is

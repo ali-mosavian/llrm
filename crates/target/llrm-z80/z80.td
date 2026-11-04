@@ -34,6 +34,7 @@ def ACC : RegisterClass<"Z80", [i8], 8, (add A)>;
 def GR16 : RegisterClass<"Z80", [i16], 8, (add BC, DE, HL)>;
 def HLR : RegisterClass<"Z80", [i16], 8, (add HL)>;
 def IDX : RegisterClass<"Z80", [i16], 8, (add IX, IY)>;
+def IYR : RegisterClass<"Z80", [i16], 8, (add IY)>;
 def SPR : RegisterClass<"Z80", [i16], 8, (add SP)>;
 // The flags as an i8 value, as the 6502's P and m68k's CCR are. The condition code is a constant:
 // NZ 0, Z 1, NC 2 (unsigned >=), C 3 (unsigned <).
@@ -63,6 +64,7 @@ def Z80tsts : SDNode<"Z80ISD::TSTS", SDTZ80Tsts>;
 // Nothing lowers to these two: they exist so the A-based byte forms below are in the instruction tables the emitter uses.
 def Z80ld8a : SDNode<"Z80ISD::LD8A", SDTypeProfile<1, 1, [SDTCisVT<0, i8>, SDTCisVT<1, i16>]>, [SDNPHasChain, SDNPMayLoad]>;
 def Z80st8a : SDNode<"Z80ISD::ST8A", SDTypeProfile<0, 2, [SDTCisVT<0, i8>, SDTCisVT<1, i16>]>, [SDNPHasChain, SDNPMayStore]>;
+def Z80subzx : SDNode<"Z80ISD::SUBZX", SDTypeProfile<1, 2, [SDTCisVT<0, i16>, SDTCisVT<1, i8>, SDTCisVT<2, i8>]>>;
 def Z80wrapper : SDNode<"Z80ISD::WRAPPER", SDTIntUnaryOp>;
 def Z80retglue : SDNode<"Z80ISD::RET_GLUE", SDTNone, [SDNPHasChain, SDNPOptInGlue, SDNPVariadic]>;
 
@@ -116,6 +118,15 @@ let Predicates = [HasZ180], Defs = [F] in
   def UMUL8X8 : Z80Inst<(outs GR16:$d), (ins GR8:$a, GR8:$b), "umul8x8 $d, $a, $b",
                         [(set i16:$d, (mul (zext i8:$a), (zext i8:$b)))]>;
 
+
+// The difference of two zero-extended bytes: the byte subtraction, then the borrow as the high byte
+// (`sub a, b; ld lo, a; sbc a, a; ld hi, a`). strcmp's `*a - *b` and every absolute difference of bytes.
+let Defs = [F, A] in
+  def SUBZX8 : Z80Inst<(outs GR16:$d), (ins ACC:$a, GR8:$b), "subzx $d, $a, $b",
+                       [(set i16:$d, (sub (zext i8:$a), (zext i8:$b)))]>;
+
+// The same, made by `lower_sub` from words whose high byte is known zero.
+def : Pat<(i16 (Z80subzx ACC:$a, GR8:$b)), (SUBZX8 ACC:$a, GR8:$b)>;
 
 // Word logic is the two bytes' ops, expanded when emitted (the 6502's OR16 is the same); the join of two bytes
 // into a pair, `lo | (hi << 8)`, is the more specific pattern below and wins.
@@ -174,14 +185,14 @@ let mayStore = 1 in {
   def LD8mr : Z80Inst<(outs), (ins GR8:$s, HLR:$p), "ld ($p), $s", [(store i8:$s, i16:$p)]>;
   def LD8mi : Z80Inst<(outs), (ins i8imm:$v, HLR:$p), "ld ($p), $v", [(store (i8 imm:$v), i16:$p)]>;
 }
-// ld a,(nn) / ld (nn),a / ld hl,(nn) / ld (nn),hl: a global.
+// ld a,(nn) / ld (nn),a / ld rr,(nn) / ld (nn),rr: a global. The pair forms are 3 B / 16 T for hl, ED-prefixed 4 B / 20 T for bc and de.
 let mayLoad = 1, AddedComplexity = 10 in {
   def LD8am : Z80Inst<(outs ACC:$d), (ins i16imm:$a), "ld a, ($a)", [(set i8:$d, (load (Z80wrapper tglobaladdr:$a)))]>;
-  def LD16hm : Z80Inst<(outs HLR:$d), (ins i16imm:$a), "ld hl, ($a)", [(set i16:$d, (load (Z80wrapper tglobaladdr:$a)))]>;
+  def LD16rg : Z80Inst<(outs GR16:$d), (ins i16imm:$a), "ld $d, ($a)", [(set i16:$d, (load (Z80wrapper tglobaladdr:$a)))]>;
 }
 let mayStore = 1, AddedComplexity = 10 in {
   def LD8ma : Z80Inst<(outs), (ins ACC:$s, i16imm:$a), "ld ($a), a", [(store i8:$s, (Z80wrapper tglobaladdr:$a))]>;
-  def LD16mh : Z80Inst<(outs), (ins HLR:$s, i16imm:$a), "ld ($a), hl", [(store i16:$s, (Z80wrapper tglobaladdr:$a))]>;
+  def LD16gr : Z80Inst<(outs), (ins GR16:$s, i16imm:$a), "ld ($a), $s", [(store i16:$s, (Z80wrapper tglobaladdr:$a))]>;
 }
 
 // Copies the selector does not match from a pattern.
@@ -222,6 +233,9 @@ let isCall = 1 in
   def CALL : Z80Inst<(outs), (ins calltarget:$t), "call $t", [(Z80call tglobaladdr:$t)]>;
 // a routine the selector names itself (the libcall of a fill or copy of unknown size)
 def : Pat<(Z80call texternalsym:$t), (CALL texternalsym:$t)>;
+// A call through a pointer: the address in iy, as SDCC's `call ___sdcc_call_iy`; the routine is `jp (iy)`.
+let isCall = 1 in
+  def CALLiy : Z80Inst<(outs), (ins IYR:$t), "call __call_iy", [(Z80call i16:$t)]>;
 
 // The call sequence's stack adjustment, resolved by the frame code once the frame is laid out.
 let Defs = [SP, F], Uses = [SP] in {

@@ -77,6 +77,7 @@ impl Function {
         let mut values = vec![BTreeSet::new(); self.values.len()];
         let mut blocks = vec![BTreeSet::new(); self.blocks.len()];
         let mut phi_blocks = vec![BTreeSet::new(); self.blocks.len()];
+        let mut constants: Vec<BTreeSet<Use>> = Vec::new();
         for (at, instruction) in self.instructions.iter().enumerate() {
             if self.erased[at] {
                 continue;
@@ -89,7 +90,12 @@ impl Function {
                         phi_blocks[block.0 as usize].insert(one)
                     }
                     Operand::Block(block) => blocks[block.0 as usize].insert(one),
-                    Operand::Constant(_) => false,
+                    Operand::Constant(constant) => {
+                        if constants.len() <= constant.index() {
+                            constants.resize(constant.index() + 1, BTreeSet::new());
+                        }
+                        constants[constant.index()].insert(one)
+                    }
                 };
             }
         }
@@ -113,6 +119,13 @@ impl Function {
             let kept: BTreeSet<Use> = list.iter().copied().collect();
             if kept != *expected || kept.len() != list.len() {
                 problems.push(format!("phis of block {at}: kept {list:?}, operands say {expected:?}"));
+            }
+        }
+        for (at, expected) in constants.iter().enumerate() {
+            let list = self.uses.users(Held::Constant(at as u32)).iter().copied().collect::<Vec<_>>();
+            let kept: BTreeSet<Use> = list.iter().copied().collect();
+            if kept != *expected || kept.len() != list.len() {
+                problems.push(format!("constant {at}: kept {list:?}, operands say {expected:?}"));
             }
         }
         problems

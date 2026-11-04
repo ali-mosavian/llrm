@@ -56,10 +56,20 @@ pub struct Summary {
 /// floor in and out of its budget).
 pub type Callees = HashMap<GlobalId, Summary>;
 
+thread_local! {
+    static SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has summarized every function of a module.
+pub fn callee_map_scans() -> usize {
+    SCANS.with(std::cell::Cell::get)
+}
+
 /// One scan of every function in `module`; counted as `callees` for an
 /// observer, which a pass that asks per query shows.
 pub fn callees(module: &Module) -> Callees {
     crate::passes::counted("callees", false);
+    SCANS.with(|scans| scans.set(scans.get() + 1));
     module
         .globals
         .iter()
@@ -466,6 +476,46 @@ pub fn initializes(attrs: &[Attribute]) -> &[(i64, i64)] {
         .iter()
         .find_map(|attr| if let Attribute::Initializes(ranges) = attr { Some(ranges.as_slice()) } else { None })
         .unwrap_or_default()
+}
+
+/// The string attributes stating the bytes a body reads and writes through a
+/// pointer parameter, as `lo:hi,lo:hi` (empty: none). Absent: the whole
+/// pointee.
+pub const READS: &str = "llrm.reads";
+pub const WRITES: &str = "llrm.writes";
+
+/// The byte ranges attribute `key` (`READS` or `WRITES`) among `attrs` states;
+/// None where it is absent or unreadable: the whole pointee.
+pub fn access_ranges(
+    attrs: &[Attribute],
+    key: &str,
+) -> Option<Vec<(i64, i64)>> {
+    let text = attrs
+        .iter()
+        .find_map(
+            |attr| match attr {
+                Attribute::Str(name, Some(value)) if name == key => Some(value.as_str()),
+                _ => None,
+            },
+        )?;
+    text.split(',')
+        .filter(|one| !one.is_empty())
+        .map(|one| {
+            let (low, high) = one.split_once(':')?;
+            Some((low.parse().ok()?, high.parse().ok()?)).filter(|(low, high)| low < high)
+        })
+        .collect()
+}
+
+/// `attrs` with `key` stating `ranges`.
+pub fn state_access_ranges(
+    attrs: &mut Vec<Attribute>,
+    key: &str,
+    ranges: &[(i64, i64)],
+) {
+    let text: Vec<String> = ranges.iter().map(|(low, high)| format!("{low}:{high}")).collect();
+    attrs.retain(|attr| !matches!(attr, Attribute::Str(name, _) if name == key));
+    attrs.push(Attribute::Str(key.to_string(), Some(text.join(","))));
 }
 
 /// What `inst` may do to memory the program can name: a call's effects

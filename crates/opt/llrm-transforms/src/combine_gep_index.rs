@@ -51,7 +51,7 @@ impl Combiner<'_> {
     }
 
     /// `v` as `op x`: the cast's operand.
-    fn cast_parts(
+    pub(crate) fn cast_parts(
         &self,
         v: Operand,
     ) -> Option<(CastOp, Operand, Flags)> {

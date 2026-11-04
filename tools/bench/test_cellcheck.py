@@ -24,6 +24,7 @@ TABLE = [
     ("p/bas/Os", row(1000, 100, 150), row(1000, 100), True),  # -Os: a tie in bytes and clocks gates instructions
     ("p/bas/Os", row(999, 100, 150), row(1000, 100), False),  # clocks lower: instructions do not gate
     ("p/bq32/Os", row(1000, 101), row(1000, 100), True),
+    ("p/bq16/Os", row(1001, 100), row(1000, 100), True),  # -Os: clocks alone worse, bytes and instructions equal
     ("p/bas/O2", row(10, 10), row(0, 10, instructions=0), True),  # a base that executed nothing is no base
 ]
 
@@ -48,3 +49,18 @@ def test_two_harness_digests_are_all_nobase(tmp_path, capsys):
         files.append(str(tmp_path / f"{name}.json"))
     assert cellcheck.main(files) == 1
     assert "ALL NOBASE: harness digests differ (aaa vs bbb)" in capsys.readouterr().out
+
+
+def test_equal_bytes_and_instructions_with_other_clocks_is_a_pad_parity_candidate_and_still_fails():
+    key, head, base = "p/bq16/Os", row(1001, 100), row(1000, 100)
+    assert cellcheck.pad_parity({key: head}, {key: base}) == {key}
+    assert cellcheck.check({key: head}, {key: base})
+    assert cellcheck.pad_parity({key: row(1001, 101)}, {key: base}) == set()
+
+
+def test_a_row_that_did_not_compile_is_an_error_not_a_comparison():
+    """A bar compiler without --export gave 50 error rows; the check read them as "base has no instructions" on 100 cells and named no cause."""
+    bad = {"error": "compile: usage\nllrm-qb: error: unrecognized arguments: --export"}
+    out = cellcheck.check({"p/bas/Os": row(1, 1)}, {"p/bas/Os": bad})
+    assert out == ["p/bas/Os: ERROR in base: llrm-qb: error: unrecognized arguments: --export"]
+    assert cellcheck.check({"p/bas/Os": bad}, {"p/bas/Os": row(1, 1)})[0].startswith("p/bas/Os: ERROR in head")
