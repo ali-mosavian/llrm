@@ -32,3 +32,25 @@ fn a_bit_scan_is_bsf_and_bsr_at_m16() {
     assert!(text.contains("bsf") && text.contains("bsr"), "no bit scan:\n{text}");
     assert!(!text.contains("21845"), "popcount mask expansion:\n{text}");
 }
+
+/// An `i16` `cttz` was promoted to `i32` (the pin's table): a dword
+/// `tzcnt`-idiom scan, 66h-prefixed, whose result spilled as a dword in the
+/// stft_single -O2 loop (+166,586 clocks despite fewer instructions).
+#[test]
+fn an_i16_cttz_scans_at_16_bits_at_m16() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let source = dir.join(format!("tz16-{}.ll", std::process::id()));
+    let asm = dir.join(format!("tz16-{}.s", std::process::id()));
+    std::fs::write(&source, IR).unwrap();
+    let out = Command::new(target_dir::of(&root).join("release/llrm-llc"))
+        .args(["-march=i386", "-S", "-o"])
+        .arg(&asm)
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let text = std::fs::read_to_string(&asm).unwrap();
+    let tz = text.split("lz:").next().unwrap();
+    assert!(!tz.contains("bsf e"), "dword cttz:\n{tz}");
+}
