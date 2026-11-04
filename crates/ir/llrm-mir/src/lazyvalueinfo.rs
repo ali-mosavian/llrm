@@ -82,7 +82,9 @@ use crate::domtree::DomTree;
 use crate::facts::Fact;
 use crate::hash::{HashMap, HashSet};
 use crate::knownbits::KnownBits;
-use crate::module::{BlockId, Function, GlobalValue, InstId, MetadataNode, MetadataOperand, Operand, Use, ValueDef};
+use crate::module::{
+    BlockId, Function, GlobalValue, InstId, MetadataNode, MetadataOperand, Operand, Use, ValueDef,
+};
 use crate::opcode::{Attribute, BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use crate::types::{Type, TypeId};
 use crate::valuelattice::{LatticeConstant, MergeOptions, ValueLatticeElement};
