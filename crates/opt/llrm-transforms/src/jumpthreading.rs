@@ -229,7 +229,14 @@ impl FunctionPass for JumpThreading {
         let outer = Rc::clone(analyses.outer());
         let globals = Rc::clone(&outer.globals);
         let tti = crate::looprotate::target_tti(outer.target());
-        let assumptions = AssumptionCache::of(unit.context, &globals, unit.metadata, unit.function);
+        let assumptions = AssumptionCache::of_declared(
+            unit.context,
+            &globals,
+            unit.metadata,
+            unit.function,
+            unit.declared.assume_declared(&globals),
+        );
+        let guard_declared = unit.declared.guard_declared(&globals);
         let mut pass = State {
             unit,
             globals,
@@ -237,6 +244,7 @@ impl FunctionPass for JumpThreading {
             tti: &*tti,
             outer: Rc::clone(&outer),
             assumptions,
+            guard_declared,
             lvi: LazyValueInfo::new(),
             loop_headers: IdSet::new(),
             unreachable: IdSet::new(),
@@ -287,6 +295,8 @@ struct State<'a, 'u> {
     tti: &'a dyn Tti,
     outer: Rc<Outer>,
     assumptions: AssumptionCache,
+    /// Whether the module declares `llvm.experimental.guard`.
+    guard_declared: bool,
     lvi: LazyValueInfo,
     loop_headers: IdSet<BlockId>,
     unreachable: IdSet<BlockId>,
@@ -462,7 +472,8 @@ impl State<'_, '_> {
             &*self.unit.function,
             self.unit.layout,
             &self.assumptions,
-        );
+        )
+        .with_guard_declared(self.guard_declared);
         let found = self.lvi.get_constant_on_edge(&mut env, value, from, to, cxt)?;
         self.known_from_lattice(found)
     }
@@ -480,7 +491,8 @@ impl State<'_, '_> {
             &*self.unit.function,
             self.unit.layout,
             &self.assumptions,
-        );
+        )
+        .with_guard_declared(self.guard_declared);
         let found = self.lvi.get_constant(&mut env, value, at)?;
         self.known_from_lattice(found)
     }
@@ -502,7 +514,8 @@ impl State<'_, '_> {
             &*self.unit.function,
             self.unit.layout,
             &self.assumptions,
-        );
+        )
+        .with_guard_declared(self.guard_declared);
         let known = self.lvi.get_predicate_on_edge(&mut env, pred, value, constant, from, to, cxt)?;
         Some(self.bool_constant(known))
     }
@@ -522,7 +535,8 @@ impl State<'_, '_> {
             &*self.unit.function,
             self.unit.layout,
             &self.assumptions,
-        );
+        )
+        .with_guard_declared(self.guard_declared);
         let known = self.lvi.get_predicate_at(&mut env, pred, value, constant, at, false)?;
         Some(self.bool_constant(known))
     }
@@ -542,7 +556,8 @@ impl State<'_, '_> {
             &*self.unit.function,
             self.unit.layout,
             &self.assumptions,
-        );
+        )
+        .with_guard_declared(self.guard_declared);
         self.lvi.get_constant_range_on_edge(&mut env, value, from, to, cxt)
     }
 
@@ -560,7 +575,8 @@ impl State<'_, '_> {
             &*self.unit.function,
             self.unit.layout,
             &self.assumptions,
-        );
+        )
+        .with_guard_declared(self.guard_declared);
         self.lvi.thread_edge(&env, pred, old, new);
     }
 

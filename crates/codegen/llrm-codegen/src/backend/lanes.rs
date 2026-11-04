@@ -134,8 +134,9 @@ impl Table {
 /// built once and kept.
 fn table_of(regs: Regs) -> &'static Table {
     static FILES: Mutex<Vec<(usize, &'static Table)>> = Mutex::new(Vec::new());
-    let named = |register: RegId| regs.name(register);
-    if matches!(named(llrm_x86::registers::ROOTS[0]), Some("eax" | "ax")) {
+    // A file with an integer view under four bytes (`al`, `ax`) has byte lanes;
+    // one without writes a root whole (arm64's `w` write clears the `x`).
+    if regs.0.entries().any(|(_, entry)| entry.bits / 8 < 4 && entry.classes & llrm_lir::registers::class::INT != 0) {
         return &X86;
     }
     let key = regs.0 as *const _ as usize;

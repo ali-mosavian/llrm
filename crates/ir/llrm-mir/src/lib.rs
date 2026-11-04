@@ -47,6 +47,7 @@ pub mod fp80;
 pub mod fpclass;
 pub mod hash;
 pub mod idf;
+pub mod image;
 pub mod inline;
 pub mod instructioncost;
 pub mod interpret;

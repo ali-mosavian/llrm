@@ -57,7 +57,7 @@ pub mod cond {
 
 pub fn target_lowering() -> TargetLowering {
     use ISD::*;
-    let mut tl = TargetLowering::empty(TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false));
+    let mut tl = TargetLowering::empty(TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false).with_soft_float());
     tl.init_actions();
     for vt in [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64] {
         for ext in [LoadExt::SExtLoad, LoadExt::ZExtLoad, LoadExt::ExtLoad] {
@@ -99,6 +99,10 @@ pub fn target_lowering() -> TargetLowering {
     // variable ones expand to runtime calls where they are emitted.
     set(&[Mul, SDiv, SRem, Shl, Srl, Sra], Action::Legal);
     set(&[SDivRem, MulHS, MulHU, UMulLoHi, SMulLoHi], Action::Expand);
+    // An unsigned word multiply with overflow stays refused ("convert node to
+    // libcall"): expanded wide, its flag's extension is not lowered
+    // (CannotSelect ZeroExtend). Exit: 2026-11-12.
+    set(&[UMulO], Action::LibCall);
     // an unsigned divide and remainder are the one runtime call that makes
     // both: the legalizer expands each to the `UDIVREM` node, and the pair
     // of one dividend and divisor is one node
@@ -131,6 +135,8 @@ pub fn target_lowering() -> TargetLowering {
             tl.set_operation_action(op, vt, Action::Custom);
         }
     }
+    // softened floats: compiler-rt's routines
+    tl.set_soft_float_libcall_names();
     tl
 }
 
@@ -157,6 +163,81 @@ impl Hooks for MosLowering {
             }
             _ => None,
         }
+    }
+
+    /// `makeLibCall` through `LowerCall`: the routine's address is a target
+    /// external symbol; a long or a long long travels as words, low first.
+    fn make_lib_call(
+        &mut self,
+        dag: &mut SelectionDAG,
+        name: &'static str,
+        args: &[SDValue],
+        ret: EVT,
+        signed: bool,
+    ) -> Option<SDValue> {
+        use super::call::{Ext, In, Out, lower_call};
+        let ext = if signed { Ext::Sign } else { Ext::Zero };
+        let words = |dag: &mut SelectionDAG, value: SDValue| -> Vec<SDValue> {
+            let vt = dag.value_type(value);
+            if vt.size_in_bits() <= 16 {
+                return vec![value];
+            }
+            (0..vt.size_in_bits() / 16)
+                .map(|at| {
+                    let moved = if at == 0 {
+                        value
+                    } else {
+                        let amount = dag.get_constant(u128::from(16 * at), EVT::I8);
+                        dag.get_node(ISD::Srl, vt, &[value, amount])
+                    };
+                    dag.get_node(ISD::Truncate, EVT::I16, &[moved])
+                })
+                .collect()
+        };
+        let mut outs = Vec::new();
+        for &value in args {
+            let vt = dag.value_type(value);
+            let parts = words(dag, value);
+            let split = parts.len() > 1;
+            outs.extend(parts.into_iter().map(|part| Out {
+                value: part,
+                ext,
+                pointer: false,
+                arg_vt: vt,
+                split,
+                variadic: false,
+                sret: false,
+            }));
+        }
+        let count = if ret.size_in_bits() > 16 { ret.size_in_bits() / 16 } else { 1 };
+        let part_vt = if count > 1 { EVT::I16 } else { ret };
+        let ins = vec![
+            In { vt: part_vt, pointer: false, arg_vt: ret, split: count > 1, sret: false, ext: Ext::Any };
+            count as usize
+        ];
+        let callee = dag.get_target_external_symbol(EVT::I16, name);
+        let root = dag.entry_node();
+        let (_chain, values) = lower_call(dag, root, callee, &outs, &ins).ok()?;
+        join_words(dag, &values, ret)
+    }
+}
+
+/// The words of a long or a long long, low first, as the one value.
+fn join_words(
+    dag: &mut SelectionDAG,
+    words: &[SDValue],
+    vt: EVT,
+) -> Option<SDValue> {
+    match words {
+        [one] => Some(*one),
+        [lo, hi] => Some(dag.get_node(ISD::BuildPair, vt, &[*lo, *hi])),
+        [a, b, c, d] => {
+            let half = EVT::integer(vt.size_in_bits() / 2);
+            let low = dag.get_node(ISD::BuildPair, half, &[*a, *b]);
+            let high = dag.get_node(ISD::BuildPair, half, &[*c, *d]);
+            Some(dag.get_node(ISD::BuildPair, vt, &[low, high]))
+        }
+        _ => None,
     }
 }
 
@@ -239,6 +320,12 @@ fn lower_extend(
 ) -> SDValue {
     let condition = dag.operand(node, 0);
     if dag.value_type(condition) != EVT::I1 {
+        return node;
+    }
+    // the flag of an overflow op is not a condition yet: its expansion makes
+    // one, and the extension is lowered when that is done (`condition_byte` has
+    // no byte for it and would widen the flag with this very node)
+    if matches!(dag.opcode(condition), ISD::SAddO | ISD::SSubO | ISD::SMulO) {
         return node;
     }
     let vt = dag.value_type(node);

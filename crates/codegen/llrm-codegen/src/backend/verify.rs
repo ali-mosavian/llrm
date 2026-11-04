@@ -595,7 +595,7 @@ mod tests {
         value: u32,
         width: u32,
     ) -> Loc {
-        Loc::Held(ir::Held { value, width })
+        Loc::Held(ir::Held { value, width, offset: 0 })
     }
 
     fn semantics(
@@ -735,7 +735,7 @@ mod tests {
             body
         };
         let selected = Loc::Mem(ir::Mem {
-            selector: Some(ir::Held { value: 1, width: 2 }),
+            selector: Some(ir::Held { value: 1, width: 2, offset: 0 }),
             ..ir::Mem::new(Some(ir::Addr::new(ir::Space::Segment, 0)), 2)
         });
         let flat = llrm_target::Target::layout(&llrm_x86_m32::M32).spaces.roles;

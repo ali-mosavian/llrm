@@ -4,6 +4,21 @@
 #include <stdint.h>
 #include "vectors.h"
 
+#ifdef M68K_FLOAT_C /* the operations are tests/m68k_float_ops.c's plain float C, compiled by llrm-cc */
+#define __addsf3 f_add
+#define __subsf3 f_sub
+#define __mulsf3 f_mul
+#define __divsf3 f_div
+#define __floatsisf f_i2f
+#define __floatunsisf f_u2f
+#define __fixsfsi f_f2i
+#define __fixunssfsi f_f2u
+int f_cmp(float, float);
+#define CMP_(x, y) f_cmp(x, y)
+#else
+#define CMP_(x, y) (__unordsf2(x, y) ? 2 : __cmpsf2(x, y))
+#endif
+
 float __addsf3(float, float), __subsf3(float, float), __mulsf3(float, float), __divsf3(float, float);
 int __cmpsf2(float, float), __unordsf2(float, float);
 float __floatsisf(int32_t), __floatunsisf(uint32_t);
@@ -39,7 +54,7 @@ int main(void)
         chk(1, "sub", v[0], v[1], f2b(__subsf3(x, y)), v[3]);
         chk(2, "mul", v[0], v[1], f2b(__mulsf3(x, y)), v[4]);
         chk(3, "div", v[0], v[1], f2b(__divsf3(x, y)), v[5]);
-        int c = __unordsf2(x, y) ? 2 : __cmpsf2(x, y);
+        int c = CMP_(x, y);
         chk(4, "cmp", v[0], v[1], (uint32_t)c, (uint32_t)v[6]);
         chk(5, "i2f", v[0], 0, f2b(__floatsisf((int32_t)v[0])), v[7]);
         chk(5, "u2f", v[0], 0, f2b(__floatunsisf(v[0])), v[8]);
