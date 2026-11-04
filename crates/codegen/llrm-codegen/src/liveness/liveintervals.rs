@@ -1473,9 +1473,11 @@ mod tests {
         let insns = [insn(&[1], &[]), Arc::new(high), insn(&[], &[1])];
         let mut lis = LiveIntervals::new(&body(&insns));
         let interval = lis.interval(1);
-        assert_eq!(interval.sub_ranges().len(), 1);
+        // the lane def's own, and the lanes no def names alone
+        assert_eq!(interval.sub_ranges().len(), 2);
         assert_eq!(interval.sub_ranges()[0].lanes, ValueLanes::at(1, 1));
-        assert!(!interval.sub_ranges()[0].range.segments.is_empty());
+        assert_eq!(interval.sub_ranges()[1].lanes, ValueLanes(!ValueLanes::at(1, 1).0));
+        assert!(interval.sub_ranges().iter().all(|sub| !sub.range.segments.is_empty()));
         let plain = [insn(&[1], &[]), insn(&[], &[1])];
         let mut lis = LiveIntervals::new(&body(&plain));
         assert!(!lis.interval(1).has_sub_ranges(), "no lane def, no sub-range");

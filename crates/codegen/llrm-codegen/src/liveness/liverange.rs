@@ -1415,6 +1415,45 @@ impl LiveInterval {
         self.sub_ranges.clear();
     }
 
+    /// `LiveInterval::verify` for the sub-ranges (LiveInterval.cpp#L1056): each
+    /// names a lane and lies inside the main range, which is live wherever
+    /// some lane is.
+    pub fn verify_sub_ranges(&self) -> Result<(), String> {
+        for sub in &self.sub_ranges {
+            if sub.lanes.is_empty() {
+                return Err(format!("%{}: a sub-range names no lane", self.reg));
+            }
+            for segment in &sub.range.segments {
+                let inside =
+                    self.range.segments.iter().any(|main| main.start <= segment.start && segment.end <= main.end);
+                if !inside {
+                    return Err(format!("%{}: a sub-range segment lies outside the main range", self.reg));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The liveness of `lanes` alone (`LiveRegMatrix::foreachUnit`, which
+    /// unifies the sub-ranges whose mask meets the unit's): the segments of
+    /// every sub-range that names one of them. None for a value without
+    /// sub-ranges, whose one range is read whole.
+    pub fn range_for_lanes(
+        &self,
+        lanes: ValueLanes,
+    ) -> Option<LiveRange> {
+        if self.sub_ranges.is_empty() {
+            return None;
+        }
+        let mut found = LiveRange::new();
+        for sub in self.sub_ranges.iter().filter(|sub| sub.lanes.overlaps(lanes)) {
+            for segment in &sub.range.segments {
+                found.add_segment(Segment::new(segment.start.clone(), segment.end.clone(), None));
+            }
+        }
+        Some(found)
+    }
+
     pub fn weight(&self) -> f32 {
         self.weight
     }
@@ -1695,6 +1734,24 @@ mod tests {
     use super::*;
     use crate::model::lir::{Block, Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
+
+    /// A sub-range must lie inside the main range: one that reaches past it
+    /// fails the verifier.
+    #[test]
+    fn a_sub_range_outside_the_main_range_fails_the_verifier() {
+        let (_indexes, at) = indexes();
+        let mut one = LiveInterval::new(1, 0.0);
+        let v = one.get_next_value(at[10].clone());
+        one.add_segment(Segment::new(at[10].clone(), at[20].clone(), Some(v)));
+        let mut inside = LiveRange::new();
+        inside.add_segment(Segment::new(at[12].clone(), at[18].clone(), None));
+        one.create_sub_range(ValueLanes::at(1, 1)).range = inside;
+        assert!(one.verify_sub_ranges().is_ok());
+        let mut outside = LiveRange::new();
+        outside.add_segment(Segment::new(at[15].clone(), at[30].clone(), None));
+        one.create_sub_range(ValueLanes::at(0, 1)).range = outside;
+        assert!(one.verify_sub_ranges().is_err());
+    }
 
     /// A value is whole until a lane is defined apart: sub-ranges make two
     /// intervals unequal and `clear_sub_ranges` makes them equal again.

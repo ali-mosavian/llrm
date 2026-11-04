@@ -572,6 +572,16 @@ impl LiveIntervalCalc {
                 masks.push(mo.lanes);
             }
         }
+        // The lanes no def names alone keep their own sub-range, so the
+        // sub-ranges cover the value (the pin's refined sub-ranges do).
+        if let Some(rest) =
+            masks.iter().fold(None, |all: Option<ValueLanes>, one| Some(all.map_or(*one, |a| a.union(*one))))
+        {
+            let rest = ValueLanes(!rest.0);
+            if !rest.is_empty() {
+                masks.push(rest);
+            }
+        }
         for lanes in masks {
             let mine: Vec<Operand> = operands.iter().filter(|mo| mo.lanes.overlaps(lanes)).copied().collect();
             let mut range = LiveRange::new();
