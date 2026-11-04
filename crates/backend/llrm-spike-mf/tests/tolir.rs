@@ -1839,3 +1839,38 @@ fn a_copy_added_for_an_instruction_or_a_phi_has_the_origin_of_its_neighbour() {
         }
     }
 }
+
+/// The coalescer makes an instruction again where a copy was (the literal for
+/// a second loop value) and the clone shares the original's `at`. The
+/// scheduler put the originals back by `at`, so both came back as the first:
+/// two definitions of one value, the other never set (arm64 `phi_zero`).
+#[test]
+fn test_the_scheduler_puts_back_each_instruction_not_the_first_with_its_position() {
+    use llrm_codegen::model::ir::Held;
+    let mut f = MFunction::<()>::new("clones");
+    f.classes = vec![(); 3];
+    let mut entry = Block { id: 0, ..Block::default() };
+    let mut zero = op("ldi", vec![Operand::Def(v(0)), Operand::Imm(0)]);
+    zero.rematerializable = true;
+    entry.insts.push(zero);
+    entry.insts.push(op("store", vec![Operand::Use(v(0))]));
+    entry.insts.push(ret());
+    f.blocks = vec![entry];
+    let f = lowered(f);
+    let mut converted = to_lir::<Flat>(&f, regs()).expect("converts");
+    let mut body = converted.body.clone();
+    body.blocks[0]
+        .insns
+        .edit(
+            |insns| {
+                let mut again = (*insns[0]).clone();
+                again.defines = vec![3];
+                again.what.as_mut().expect("semantics").dests = vec![Loc::Held(Held { value: 3, width: 1 })];
+                insns.insert(1, std::sync::Arc::new(again));
+            },
+        );
+    converted.body = body;
+    converted.schedule(&f, regs());
+    let defined: Vec<u32> = converted.body.blocks[0].insns.iter().flat_map(|one| one.defines.clone()).collect();
+    assert!(defined.contains(&1) && defined.contains(&3), "both definitions survive: {defined:?}");
+}

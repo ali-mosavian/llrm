@@ -28,6 +28,15 @@
 //! Union, difference, intersection, subset and disjointness are single word
 //! operations. Inserting a lane that is none of the 72 panics.
 //!
+//! # Other register files
+//! The table above is the x86 one and the default. A file of another target
+//! (arm64's 31 roots and 32 vector registers) has its own, built from the
+//! file's roots: one lane for each root and every view of it (a write of a
+//! `w` register writes the whole `x`, so a finer lane would never be told
+//! apart), the 32 flag lanes, and at most 128 in all. [`enter`] makes a file's
+//! table the one this thread's `Lanes` read until the guard drops; a mask
+//! belongs to the table it was made under.
+//!
 //! # Example
 //! No example: a bit set type. `liveness.rs` shows what it holds.
 //!
@@ -36,10 +45,11 @@
 //! `regthrash`, `exactaddress`, `sharedstores`), `loopslots`,
 //! `schedule`, `parcopy`, and `peep/guards`, `peep/walk`, `peep/make`.
 
+use std::cell::Cell;
 use std::fmt;
-use std::sync::LazyLock;
+use std::sync::{LazyLock, Mutex};
 
-use llrm_lir::registers::RegId;
+use llrm_lir::registers::{RegId, Regs};
 
 /// One byte of a register root, or one flag bit against `RegId::None`.
 pub type Lane = (RegId, u32);
@@ -61,7 +71,7 @@ struct Table {
 const BYTES: u32 = 8;
 const UPPER: u32 = 4;
 
-static TABLE: LazyLock<Table> = LazyLock::new(|| {
+static X86: LazyLock<Table> = LazyLock::new(|| {
     let mut lanes: Vec<Lane> = (0..32).map(|bit| (RegId::None, bit)).collect();
     for root in llrm_x86::registers::ROOTS.into_iter().chain(llrm_x86::registers::ROOTS64) {
         lanes.extend((0..=UPPER).map(|byte| (root, byte)));
@@ -91,8 +101,81 @@ static TABLE: LazyLock<Table> = LazyLock::new(|| {
     Table { lanes, first, count, bytes }
 });
 
+impl Table {
+    /// The table of a file that is not x86's: the 32 flag lanes, then one lane
+    /// for each root, which each of its views names.
+    fn of_file(regs: Regs) -> Table {
+        let mut lanes: Vec<Lane> = (0..32).map(|bit| (RegId::None, bit)).collect();
+        let entries = || regs.table.iter().flatten();
+        lanes.extend(entries().filter(|entry| entry.root == entry.id).map(|entry| (entry.id, 0)));
+        lanes.sort();
+        assert!(lanes.len() <= 128, "{} lanes of a register file are more than a mask holds", lanes.len());
+        let (mut first, mut count, mut bytes) = ([0_u8; REGISTERS], [0_u8; REGISTERS], [0_u8; REGISTERS]);
+        for (bit, lane) in lanes.iter().enumerate() {
+            let slot = lane.0.index();
+            if count[slot] == 0 {
+                first[slot] = u8::try_from(bit).expect("fits");
+            }
+            count[slot] += 1;
+            bytes[slot] = count[slot];
+        }
+        for entry in entries() {
+            let root = entry.root.index();
+            let slot = entry.id.index();
+            first[slot] = first[root];
+            count[slot] = 1;
+            bytes[slot] = u8::try_from((entry.bits / 8).max(1)).expect("a register is under 256 bytes");
+        }
+        Table { lanes, first, count, bytes }
+    }
+}
+
+/// The table the file of `regs` stands under: x86's for an x86 file, else one
+/// built once and kept.
+fn table_of(regs: Regs) -> &'static Table {
+    static FILES: Mutex<Vec<(usize, &'static Table)>> = Mutex::new(Vec::new());
+    let named = |register: RegId| regs.name(register);
+    if matches!(named(llrm_x86::registers::ROOTS[0]), Some("eax" | "ax")) {
+        return &X86;
+    }
+    let key = regs.0 as *const _ as usize;
+    let mut files = FILES.lock().unwrap();
+    if let Some((_, table)) = files.iter().find(|(one, _)| *one == key) {
+        return table;
+    }
+    let table: &'static Table = Box::leak(Box::new(Table::of_file(regs)));
+    files.push((key, table));
+    table
+}
+
+thread_local! {
+    /// The table this thread's lanes read; none is x86's.
+    static ACTIVE: Cell<Option<&'static Table>> = const { Cell::new(None) };
+}
+
+fn active() -> &'static Table {
+    ACTIVE.with(Cell::get).unwrap_or(&X86)
+}
+
+/// The register file's lane table in force until this drops.
+pub struct Guard(Option<&'static Table>);
+
+impl Drop for Guard {
+    fn drop(&mut self) {
+        ACTIVE.with(|active| active.set(self.0));
+    }
+}
+
+/// Makes the lanes of `regs`' file the ones this thread reads. A mask made
+/// under one file is not meaningful under another.
+pub fn enter(regs: Regs) -> Guard {
+    let table = table_of(regs);
+    let was = ACTIVE.with(|active| active.replace((!std::ptr::eq(table, &*X86)).then_some(table)));
+    Guard(was)
+}
+
 fn bit(lane: &Lane) -> Option<u32> {
-    let table = &*TABLE;
+    let table = active();
     let slot = lane.0.index();
     (slot < REGISTERS && lane.1 < u32::from(table.bytes[slot]))
         .then(|| u32::from(table.first[slot]) + lane.1.min(u32::from(table.count[slot]) - 1))
@@ -113,7 +196,7 @@ impl Lanes {
 
     /// How many lanes there are: the bits of a mask in use.
     pub fn count() -> usize {
-        TABLE.lanes.len()
+        active().lanes.len()
     }
 
     /// The lanes of a bit mask, as `mask` gives it.
@@ -126,6 +209,11 @@ impl Lanes {
     pub fn flags(mask: u32) -> Self {
         Self(u128::from(mask))
     }
+
+    /// The flag bit a scheduler stands memory for: a load reads it and a store
+    /// writes it, so a store keeps its place against every other access. No
+    /// x86 flag uses the bit.
+    pub const MEMORY: u32 = 1 << 30;
 
     /// The flags emitted code reads (`Flag::READ`).
     pub fn read_flags() -> Self {
@@ -142,7 +230,7 @@ impl Lanes {
         if len == 0 {
             return Self(0);
         }
-        let table = &*TABLE;
+        let table = active();
         let slot = register.index();
         let last = start + len - 1;
         assert!(
@@ -204,7 +292,7 @@ impl Lanes {
     }
 
     pub fn iter(&self) -> Iter {
-        Iter(self.0)
+        Iter(self.0, active())
     }
 
     // The set operations as `BTreeSet` spells them, yielding lanes in order.
@@ -212,21 +300,21 @@ impl Lanes {
         &self,
         other: &Self,
     ) -> Iter {
-        Iter(self.0 | other.0)
+        Iter(self.0 | other.0, active())
     }
 
     pub fn difference(
         &self,
         other: &Self,
     ) -> Iter {
-        Iter(self.0 & !other.0)
+        Iter(self.0 & !other.0, active())
     }
 
     pub fn intersection(
         &self,
         other: &Self,
     ) -> Iter {
-        Iter(self.0 & other.0)
+        Iter(self.0 & other.0, active())
     }
 
     // The same operations as sets, without an iterator between.
@@ -265,7 +353,7 @@ impl Lanes {
 
 /// The lanes of a mask, lowest bit first.
 #[derive(Clone)]
-pub struct Iter(u128);
+pub struct Iter(u128, &'static Table);
 
 impl Iterator for Iter {
     type Item = &'static Lane;
@@ -276,7 +364,7 @@ impl Iterator for Iter {
         }
         let bit = self.0.trailing_zeros();
         self.0 &= self.0 - 1;
-        Some(&TABLE.lanes[bit as usize])
+        Some(&self.1.lanes[bit as usize])
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -292,7 +380,7 @@ impl DoubleEndedIterator for Iter {
         }
         let bit = 127 - self.0.leading_zeros();
         self.0 &= !(1 << bit);
-        Some(&TABLE.lanes[bit as usize])
+        Some(&self.1.lanes[bit as usize])
     }
 }
 
@@ -303,7 +391,7 @@ impl IntoIterator for Lanes {
     type IntoIter = std::iter::Copied<Iter>;
 
     fn into_iter(self) -> Self::IntoIter {
-        Iter(self.0).copied()
+        Iter(self.0, active()).copied()
     }
 }
 
@@ -312,7 +400,7 @@ impl<'a> IntoIterator for &'a Lanes {
     type IntoIter = Iter;
 
     fn into_iter(self) -> Iter {
-        Iter(self.0)
+        Iter(self.0, active())
     }
 }
 
@@ -399,13 +487,26 @@ mod tests {
         assert_eq!(Lanes::from([(RegId::EAX, 7), (RegId::EAX, 5)]), upper);
         assert!(!Lanes::from([(RegId::EAX, 3)]).contains(&(RegId::EAX, 4)));
         assert!(std::panic::catch_unwind(|| Lanes::from([(RegId::EAX, 8)])).is_err(), "a ninth byte is no lane");
-        assert!(TABLE.lanes.len() <= 128);
+        assert!(X86.lanes.len() <= 128);
+    }
+
+    /// Every x86 file stands under x86's table, so a pass of an x86 target
+    /// reads the lanes it always did.
+    #[test]
+    fn an_x86_file_enters_the_x86_table() {
+        for regs in
+            [Regs(&llrm_x86_m16::REGISTER_INFO), Regs(&llrm_x86_m32::REGISTER_INFO), Regs(&llrm_x86_m64::REGISTER_INFO)]
+        {
+            assert!(std::ptr::eq(table_of(regs), &*X86), "{regs:?}");
+            let _file = enter(regs);
+            assert_eq!(Lanes::count(), X86.lanes.len());
+        }
     }
 
     #[test]
     fn test_lanes_iterate_and_compare_as_a_btreeset_does() {
         assert_eq!(Lanes::flags(0b101), Lanes::from([(RegId::None, 0), (RegId::None, 2)]));
-        let every: Vec<Lane> = TABLE.lanes.clone();
+        let every: Vec<Lane> = X86.lanes.clone();
         let picks: Vec<Vec<Lane>> = vec![
             vec![],
             every.clone(),
@@ -435,9 +536,9 @@ mod tests {
     /// root's upper bytes folded into one lane.
     #[test]
     fn span_matches_the_lanes_of_each_byte() {
-        let registers: BTreeSet<RegId> = TABLE.lanes.iter().map(|lane| lane.0).collect();
+        let registers: BTreeSet<RegId> = X86.lanes.iter().map(|lane| lane.0).collect();
         for register in registers.into_iter().filter(|register| *register != RegId::None) {
-            let bytes = u32::from(TABLE.bytes[register.index()]);
+            let bytes = u32::from(X86.bytes[register.index()]);
             for start in 0..bytes {
                 for len in 0..=bytes - start {
                     let each: Lanes = (start..start + len).map(|byte| (register, byte)).collect();
