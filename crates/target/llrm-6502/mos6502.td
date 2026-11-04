@@ -183,6 +183,11 @@ let Defs = [P], mayLoad = 1, AddedComplexity = 30 in {
 }
 let mayStore = 1, AddedComplexity = 20 in
   def STABS : MOSInst<(outs), (ins Imag8:$s, absaddr:$a), "stabs $s, $a", [(store i8:$s, MOSAbs:$a)]>;
+// A word global: the two halves by absolute address, g and g+1.
+let mayLoad = 1, AddedComplexity = 20 in
+  def LDABS16 : MOSInst<(outs Imag16:$d), (ins absaddr:$a), "ldabs16 $d, $a", [(set i16:$d, (load MOSAbs:$a))]>;
+let mayStore = 1, AddedComplexity = 20 in
+  def STABS16 : MOSInst<(outs), (ins Imag16:$s, absaddr:$a), "stabs16 $s, $a", [(store i16:$s, MOSAbs:$a)]>;
 let mayStore = 1 in {
   def STP8 : MOSInst<(outs), (ins Imag8:$s, memri:$p), "stp $s, ($p)", [(store i8:$s, MOSAddr:$p)]>;
   def STP16 : MOSInst<(outs), (ins Imag16:$s, memri:$p), "stp16 $s, ($p)", [(store i16:$s, MOSAddr:$p)]>;

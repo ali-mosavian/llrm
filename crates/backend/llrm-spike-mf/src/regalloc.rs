@@ -286,6 +286,14 @@ pub trait Target {
         Vec::new()
     }
 
+    /// Whether greedy allocation keeps an `early_clobber` instruction's defs
+    /// out of the registers it reads. The spike allocator always does; a target
+    /// opts in here where its expansion writes a result before it has read an
+    /// address (m68k's zero-extending load).
+    fn greedy_early_clobber() -> bool {
+        false
+    }
+
     /// The class the instruction `name` names for operand `index`, where it
     /// does (`MCInstrDesc::operands`).
     fn operand_class(

@@ -185,7 +185,7 @@ pub struct Walk {
 /// DEVIATE REC-1: the recursion a program is given. `-finline-recursive` asks
 /// for gcc's (copies of a function in itself to depth 3, any size); a target
 /// that states bounds (`Tti::recursive_inlining`) takes those by default when
-/// optimizing for speed and inlining is on (`-fno-inline-functions` asks for
+/// optimizing for speed (-O2 and -O3: gcc inlines no function at -O1) and inlining is on (`-fno-inline-functions` asks for
 /// no copies of a body, a recursive one included). None: the pin's inliner,
 /// which copies no recursive callee (`IsRecursiveCall`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -223,7 +223,7 @@ impl ProgramPass for Walk {
         let recursion = Recursion::of(
             self.inline.recursive,
             self.inline.single,
-            self.inline.limit != 0,
+            self.inline.limit != 0 && self.speed_rate,
             program.target.tti().as_deref(),
         );
         let mut params = crate::inlinecost::InlineParams {
@@ -807,7 +807,7 @@ impl SelfInline {
                     ),
                 )
         };
-        let Some(recursion) = Recursion::of(self.flag, self.for_size, self.inlining, program.target.tti().as_deref())
+        let Some(recursion) = Recursion::of(self.flag, self.for_size, self.inlining && self.speed_rate, program.target.tti().as_deref())
         else {
             return Ok(());
         };
