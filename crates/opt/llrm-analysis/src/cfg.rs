@@ -264,8 +264,11 @@ impl Around for Loop {
         &self,
         function: &Function,
     ) -> Option<i64> {
-        let entering = self.entering(function);
-        let [one] = entering.iter().copied().collect::<Vec<_>>()[..] else { return None };
+        let mut entering = function.predecessors(block(self.header)).into_iter().map(id).filter(|at| !self.body.contains(at));
+        let one = entering.next()?;
+        if entering.next().is_some() {
+            return None;
+        }
         (successors_of(function, one) == [self.header]).then_some(one)
     }
 }

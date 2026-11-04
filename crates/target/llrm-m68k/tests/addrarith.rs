@@ -202,3 +202,36 @@ fn a_pointer_plus_a_register_read_only_as_an_address_is_an_indexed_lea() {
     let out = text_with(&m, "k", Cpu::M68000, Options { size: true, ..Options::default() }).expect("compiles");
     assert!(out.contains("lea\t(0,%a"), "no indexed lea:\n{out}");
 }
+
+/// A sum that is stored, not used as an address, stayed data: the store through
+/// `(An)+` names its value last, and the pass took that last register for the
+/// store's base, made the sum an indexed `lea` into an address register and
+/// encoded `move.l %a2, (%a0)+` as `move.l %d2, (%a0)+` (a local array filled
+/// with `n + i` read back 0).
+#[test]
+fn a_sum_stored_through_post_increment_is_not_made_an_address() {
+    use llrm_m68k::compile::{Options, text_with};
+    use llrm_m68k::dagisel::hooks::Cpu;
+    let ir = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"
+define i32 @f(i32 %n) {
+entry:
+  %a = alloca [4 x i32]
+  br label %l
+l:
+  %i = phi i32 [0, %entry], [%i1, %l]
+  %p = getelementptr [4 x i32], ptr %a, i32 0, i32 %i
+  %v = add i32 %n, %i
+  store i32 %v, ptr %p
+  %i1 = add i32 %i, 1
+  %c = icmp ult i32 %i1, 4
+  br i1 %c, label %l, label %s
+s:
+  %q = getelementptr [4 x i32], ptr %a, i32 0, i32 3
+  %r = load i32, ptr %q
+  ret i32 %r
+}";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let out = text_with(&module, "f", Cpu::M68000, Options::default()).expect("compiles");
+    let indexed_lea = |line: &&str| line.starts_with("\tlea\t(0,%a") && line.contains(",%d");
+    assert!(!out.lines().any(|line| indexed_lea(&line)), "the stored sum is an address:\n{out}");
+}

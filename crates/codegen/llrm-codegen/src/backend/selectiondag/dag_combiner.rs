@@ -2161,6 +2161,17 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_node(ISD::Sub, vt, &[a, d]));
             }
         }
+        // `visitADDLikeCommutative`: a one-use `(c - x)` of a plain constant
+        // added to `y` is `(y - x) + c`, which the compare folds then see.
+        for (sub, other) in [(n0, n1), (n1, n0)] {
+            if self.dag.opcode(sub) == ISD::Sub
+                && self.dag.has_one_use(sub.node)
+                && plain(self.dag, self.dag.operand(sub, 0))
+            {
+                let diff = self.dag.get_node(ISD::Sub, vt, &[other, self.dag.operand(sub, 1)]);
+                return Some(self.dag.get_node(ISD::Add, vt, &[diff, self.dag.operand(sub, 0)]));
+            }
+        }
         if !self.reassociation_can_break_addressing_mode_pattern(node, n0, n1)
             && let Some(regrouped) = self.reassociate_ops(ISD::Add, n0, n1, self.dag.node(node).flags)
         {

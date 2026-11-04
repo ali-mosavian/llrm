@@ -14,6 +14,7 @@ use crate::asm::{self, Mode, Refusal};
 const CHECK: &str = include_str!("helpers/check.asm");
 const NARROW: &str = include_str!("helpers/narrow.asm");
 const WIDE: &str = include_str!("helpers/wide.asm");
+const WIDE_BSR: &str = include_str!("helpers/wide_bsr.asm");
 const SIGNS: &str = include_str!("helpers/signs.asm");
 const UNSIGNS: &str = include_str!("helpers/unsigns.asm");
 const SIGNS32: &str = include_str!("helpers/signs32.asm");
@@ -73,9 +74,11 @@ fn divided(
     } else {
         Mode { bits: 16, segmented: true, address_bytes: 2, wide: true }
     };
+    // flat code normalizes the divisor with one bsr; real mode keeps the shift loop (a 386 bsr is 10+3n clocks)
+    let wide = if bits == 32 { WIDE_BSR } else { WIDE };
     let source = match (signed, wide_divisor) {
-        (false, true) => [CHECK, NARROW, WIDE, "done:\n"].concat(),
-        (true, true) => [SIGNS, CHECK, NARROW, WIDE, "done:\n", UNSIGNS].concat(),
+        (false, true) => [CHECK, NARROW, wide, "done:\n"].concat(),
+        (true, true) => [SIGNS, CHECK, NARROW, wide, "done:\n", UNSIGNS].concat(),
         (false, false) => ["    xor ecx, ecx\n", NARROW, "done:\n"].concat(),
         (true, false) => [
             SIGNS32,

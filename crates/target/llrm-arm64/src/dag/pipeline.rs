@@ -436,6 +436,14 @@ impl SchedInfo for Aarch64Sched {
         instrinfo::desc(opcode as u16).is_some_and(|desc| desc.has(flag::CALL))
     }
 
+    fn call_frame_setup(&self) -> Option<u32> {
+        Some(u32::from(aarch64_ids::ADJCALLSTACKDOWN))
+    }
+
+    fn call_frame_destroy(&self) -> Option<u32> {
+        Some(u32::from(aarch64_ids::ADJCALLSTACKUP))
+    }
+
     fn source_order(&self) -> bool {
         true
     }

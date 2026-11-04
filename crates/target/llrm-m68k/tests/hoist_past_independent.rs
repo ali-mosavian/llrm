@@ -11,6 +11,7 @@ fn a_constant_both_successors_need_is_loaded_once() {
     let source = std::fs::read_to_string(format!("{}/bench/library/crc16.ll", env!("CARGO_MANIFEST_DIR"))).unwrap();
     let module = llrm_mir::parse::module(&source).expect("parses");
     let text = text_with(&module, "k", Cpu::M68000, Options { size: true, ..Options::default() }).expect("compiles");
-    let loads = text.lines().filter(|line| line.trim() == "move.l\t#65535, %d0").count();
+    // the constant is `moveq #0, %d0; not.w %d0` since the consts pass
+    let loads = text.lines().filter(|line| line.trim() == "not.w\t%d0").count();
     assert_eq!(loads, 1, "{text}");
 }

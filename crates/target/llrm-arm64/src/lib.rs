@@ -28,6 +28,7 @@ pub mod regalloc;
 pub mod shrinkwrap;
 pub mod sibcall;
 pub mod memcluster;
+pub mod postrasink;
 pub mod tti;
 #[cfg(test)]
 mod tti_tests;
