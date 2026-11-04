@@ -140,6 +140,7 @@ pub fn items_with(
         crate::chain::post_increment_chains(&mut function, &assignment, cpu, wants_size);
         crate::narrow::merge_logic_immediates(&mut function, &assignment);
         crate::narrow::narrow_logic_immediates(&mut function, &assignment);
+        crate::consts::materialize_constants(&mut function, &assignment, cpu, wants_size);
     }
     remove_identity_copies(&mut function, &assignment);
     remove_redundant_copies(&mut function, &assignment);
