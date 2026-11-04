@@ -907,8 +907,32 @@ fn should_full_unroll(
         return Some(count);
     }
     let growth = uce.unrolled_loop_size(up, count).saturating_sub(u64::from(uce.rolled_loop_size()));
-    let saved = u64::from(count) * (u64::from(up.be_insns) + 1);
-    (growth.saturating_mul(rate as u64) <= saved.saturating_mul(1000)).then_some(count)
+    let per_entry = u64::from(count) * (u64::from(up.be_insns) + 1);
+    // The loop runs as often as its preheader does: the clocks saved per entry
+    // weighted by that frequency over the function's entry, as the inline
+    // guard weighs a site.
+    let frequency = lp
+        .get_loop_preheader(run.function)
+        .and_then(|preheader| {
+            let bpi = llrm_analysis::bpi::BranchProbabilityInfo::of(
+                llrm_analysis::bpi::Module {
+                    context: &*run.context,
+                    declarations: run.globals,
+                    metadata: run.metadata,
+                    layout: run.layout,
+                },
+                run.function,
+            );
+            let frequencies = llrm_analysis::blockfreq::BlockFrequencies::of_bpi(run.function, &bpi);
+            (frequencies.get_entry_freq().get_frequency() > 0).then(|| frequencies.relative_to_entry(preheader))
+        })
+        .unwrap_or(1.0)
+        .max(0.0);
+    let keeps = (growth.saturating_mul(rate as u64)) as f64 <= per_entry as f64 * 1000.0 * frequency;
+    if !keeps {
+        why(run, lp, &format!("full unroll by {count} refused: grows {growth}, saves {per_entry} clocks x {frequency}"));
+    }
+    keeps.then_some(count)
 }
 
 /// `shouldFullUnroll`.
