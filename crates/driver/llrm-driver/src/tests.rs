@@ -2899,7 +2899,8 @@ fn a_16_byte_clear_is_xorps_and_one_16_byte_store_at_m64() {
 }
 
 /// A local declared `align 16` sat at `[rsp+4]`: the frame clamped every
-/// alignment to 4 (bintree's array; a 16-byte `movaps` clear of it would fault).
+/// alignment to 4 (bintree's array; a 16-byte `movaps` clear of it would
+/// fault).
 #[test]
 fn a_local_declared_align_16_is_16_aligned_at_m64() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
