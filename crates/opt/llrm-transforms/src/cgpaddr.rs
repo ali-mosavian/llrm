@@ -189,6 +189,14 @@ impl FunctionPass for CgpAddr {
             costs.float_compare,
             costs.branch,
         );
+        // DEVIATE CS2: an arm only a select reads is made on its path, where
+        // the select is a branch anyway.
+        let arms_sunk = analyses
+            .outer()
+            .target()
+            .tti()
+            .is_some_and(|tti| !tti.has_cmov() && tti.sinks_select_arms())
+            && crate::cgpselect::select_arms_sunk(unit.context, unit.function);
         // `optimizeSwitchInst`'s `optimizeSwitchType`.
         let switches = match analyses.outer().target().lowering() {
             Some(lowering) => {
@@ -270,7 +278,7 @@ impl FunctionPass for CgpAddr {
                 ),
                 None => false,
             };
-        if merged || converted {
+        if merged || converted || arms_sunk {
             // A block went or came: the blocks and edges are not as they were.
             PreservedAnalyses::none()
         } else if phis

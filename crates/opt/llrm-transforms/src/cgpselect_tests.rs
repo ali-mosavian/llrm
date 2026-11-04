@@ -142,3 +142,47 @@ b0:
     );
     assert!(!changed, "{text}");
 }
+
+/// `x > 65520 ? x - 65521 : x` computed the subtraction before the branch
+/// every select makes where there is no conditional move: a copy and a
+/// subtract on both paths (x_adler -O2 +7.5k clocks over gcc).
+#[test]
+fn test_a_select_arm_only_the_select_reads_is_made_on_its_own_path() {
+    let mut module = parsed(
+        "define i32 @f(i32 %x) {
+b0:
+  %c = icmp ugt i32 %x, 65520
+  %d = add i32 %x, -65521
+  %r = select i1 %c, i32 %d, i32 %x
+  ret i32 %r
+}
+",
+    );
+    let llrm_mir::module::Module { context, globals, .. } = &mut module;
+    let llrm_mir::module::GlobalKind::Function(function) = &mut globals[0].kind else { panic!("a function") };
+    assert!(super::select_arms_sunk(context, function));
+    let text = printed(&module);
+    assert!(!text.contains("select"), "{text}");
+    let (before, after) = text.split_once("add i32").expect("the subtraction");
+    assert!(before.contains("br i1 %c"), "the branch comes first: {text}");
+    assert!(after.contains("phi i32"), "{text}");
+}
+
+/// Control: an arm another instruction reads stays before the branch.
+#[test]
+fn test_a_select_arm_with_a_second_reader_stays() {
+    let mut module = parsed(
+        "define i32 @f(i32 %x) {
+b0:
+  %c = icmp ugt i32 %x, 65520
+  %d = add i32 %x, -65521
+  %r = select i1 %c, i32 %d, i32 %x
+  %t = add i32 %r, %d
+  ret i32 %t
+}
+",
+    );
+    let llrm_mir::module::Module { context, globals, .. } = &mut module;
+    let llrm_mir::module::GlobalKind::Function(function) = &mut globals[0].kind else { panic!("a function") };
+    assert!(!super::select_arms_sunk(context, function));
+}
