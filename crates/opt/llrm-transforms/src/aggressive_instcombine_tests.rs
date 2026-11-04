@@ -105,3 +105,37 @@ fn stores_with_a_gap_between_them_are_not_merged() {
     let after = merged(&text);
     assert_eq!(after.matches("store ").count(), 2, "{after}");
 }
+
+const POPCOUNT: &str = "define i32 @f(i32 %x) {
+b0:
+  %a = lshr i32 %x, 1
+  %b = and i32 %a, 1431655765
+  %c = sub i32 %x, %b
+  %d = and i32 %c, 858993459
+  %e = lshr i32 %c, 2
+  %f = and i32 %e, 858993459
+  %g = add i32 %d, %f
+  %h = lshr i32 %g, 4
+  %i = add i32 %g, %h
+  %j = and i32 %i, 252645135
+  %k = mul i32 %j, 16843009
+  %l = lshr i32 %k, 24
+  ret i32 %l
+}
+";
+
+/// The parallel bit count (Seander Anderson's) stayed twelve instructions and
+/// a multiply; the pin makes it `llvm.ctpop`.
+#[test]
+fn the_parallel_bit_count_is_a_ctpop() {
+    let after = merged(POPCOUNT);
+    assert!(after.contains("llvm.ctpop.i32"), "{after}");
+    assert!(!after.contains("mul "), "{after}");
+}
+
+/// A mask that is not 0x55... is not the idiom.
+#[test]
+fn a_bit_count_with_another_mask_is_left_alone() {
+    let after = merged(&POPCOUNT.replace("1431655765", "1431655764"));
+    assert!(!after.contains("llvm.ctpop"), "{after}");
+}

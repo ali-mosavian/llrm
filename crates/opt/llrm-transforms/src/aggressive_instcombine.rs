@@ -56,9 +56,10 @@
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdSet;
+use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
-use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
+use llrm_mir::opcode::{BinaryOp, CallInfo, CastOp, Flags, Opcode, Tail};
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses, Unit};
 use llrm_mir::types::{Type, TypeId};
 use llrm_mir::valuetracking::Query;
@@ -122,6 +123,7 @@ fn fold_unusual_patterns(
         // is not matched.
         let insts: Vec<InstId> = unit.function.iter_block(block).collect();
         for &inst in insts.iter().rev() {
+            changed |= try_to_recognize_pop_count(unit.context, unit.layout, unit.function, unit.declared, inst);
             changed |= fold_consecutive_loads(unit.context, unit.layout, unit.function, inst);
         }
         // Done separately to scan the stores once.
@@ -582,6 +584,173 @@ fn fold_consecutive_stores(
         changed |= merge_part_stores(context, layout, function, run);
     }
     changed
+}
+
+/// `m_c_Add`-style: both orders of the operands of `v`, an `op`.
+fn operand_pairs(
+    q: &Query,
+    v: Operand,
+    op: BinaryOp,
+) -> Vec<(Operand, Operand)> {
+    match llrm_mir::valuetracking::pattern::binary(q, v, op) {
+        Some((_, _, a, b)) => vec![(a, b), (b, a)],
+        None => Vec::new(),
+    }
+}
+
+/// `m_And(X, m_SpecificInt(mask))`: `X`.
+fn and_with(
+    q: &Query,
+    v: Operand,
+    mask: u128,
+) -> Option<Operand> {
+    let (_, _, x, m) = llrm_mir::valuetracking::pattern::binary(q, v, BinaryOp::And)?;
+    q.int_constant(m).is_some_and(|(bits, _)| bits == mask).then_some(x)
+}
+
+/// `m_LShr(X, m_SpecificInt(amount))`: `X`.
+fn lshr_by(
+    q: &Query,
+    v: Operand,
+    amount: u128,
+) -> Option<Operand> {
+    let (_, _, x, a) = llrm_mir::valuetracking::pattern::binary(q, v, BinaryOp::LShr)?;
+    q.int_constant(a).is_some_and(|(bits, _)| bits == amount).then_some(x)
+}
+
+/// `APInt::getSplat(len, APInt(8, byte))`.
+fn splat(
+    len: u32,
+    byte: u8,
+) -> u128 {
+    (0..len / 8).fold(0u128, |all, at| all | (u128::from(byte) << (8 * at)))
+}
+
+/// `matchPopCountBytes`
+/// ([:492](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L492)):
+/// the root of the per-byte population count steps that end at `v`.
+fn match_pop_count_bytes(
+    q: &Query,
+    v: Operand,
+    len: u32,
+) -> Option<Operand> {
+    let (mask55, mask33, mask0f) = (splat(len, 0x55), splat(len, 0x33), splat(len, 0x0f));
+    // "((x + (x >> 4)) & 0x0F...)"
+    let sum = and_with(q, v, mask0f)?;
+    let add2 = operand_pairs(q, sum, BinaryOp::Add)
+        .into_iter()
+        .find_map(|(shifted, same)| lshr_by(q, shifted, 4).filter(|&x| x == same))?;
+    // "x = (x & 0x33..) + ((x >> 2) & 0x33..)" or "x = x - 3*((x >> 2) & 0x33..)"
+    let sub1 = operand_pairs(q, add2, BinaryOp::Add)
+        .into_iter()
+        .find_map(|(shifted, plain)| {
+            let x = lshr_by(q, and_with(q, shifted, mask33)?, 2)?;
+            (and_with(q, plain, mask33)? == x).then_some(x)
+        })
+        .or_else(|| {
+            let (_, _, times, sub1) = llrm_mir::valuetracking::pattern::binary(q, add2, BinaryOp::Add)?;
+            let (_, _, anded, minus_three) = llrm_mir::valuetracking::pattern::binary(q, times, BinaryOp::Mul)?;
+            let minus_three_bits = splat_neg(len, 3);
+            q.int_constant(minus_three).is_some_and(|(bits, _)| bits == minus_three_bits).then_some(())?;
+            let x = lshr_by(q, and_with(q, anded, mask33)?, 2)?;
+            (x == sub1).then_some(x)
+        })?;
+    // "x - ((x >> 1) & 0x55...)"
+    let (_, _, root, and) = llrm_mir::valuetracking::pattern::binary(q, sub1, BinaryOp::Sub)?;
+    let (_, _, shifted, and_mask) = llrm_mir::valuetracking::pattern::binary(q, and, BinaryOp::And)?;
+    if lshr_by(q, shifted, 1)? != root {
+        return None;
+    }
+    let (and_mask, _) = q.int_constant(and_mask)?;
+    if and_mask != mask55 {
+        // A narrowed mask is accepted if the missing bits are known zero in
+        // `Root >> 1`.
+        if and_mask & !mask55 != 0 {
+            return None;
+        }
+        let needed = mask55 & !and_mask;
+        if !llrm_mir::valuetracking::known::masked_value_is_zero(q, shifted, needed, 0) {
+            return None;
+        }
+    }
+    Some(root)
+}
+
+/// `-n` as a `len`-bit constant.
+fn splat_neg(
+    len: u32,
+    n: u128,
+) -> u128 {
+    let mask = if len >= 128 { u128::MAX } else { (1u128 << len) - 1 };
+    n.wrapping_neg() & mask
+}
+
+/// `replaceWithPopCount`
+/// ([:470](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L470)),
+/// of a root of the instruction's own type: a call of `llvm.ctpop.iN`, its
+/// declaration made through `Unit::declared`.
+fn replace_with_pop_count(
+    context: &mut llrm_mir::context::Context,
+    function: &mut Function,
+    declared: &mut llrm_mir::passes::Declared,
+    inst: InstId,
+    root: Operand,
+) {
+    let ty = function.instruction(inst).ty;
+    let width = context.types.int_bits(ty).expect("an integer");
+    let function_type = context.types.intern(Type::Function { returns: ty, parameters: vec![ty], variadic: false });
+    let callee = declared.declare(&format!("llvm.ctpop.i{width}"), function_type);
+    let pointer = context.types.ptr(0);
+    let callee = Operand::Constant(context.constant(Constant { ty: pointer, kind: ConstantKind::Global(callee) }));
+    let info = CallInfo {
+        function_type,
+        calling_convention: 0,
+        return_attrs: Vec::new(),
+        argument_attrs: vec![Vec::new()],
+        attrs: Vec::new(),
+        tail: Tail::default(),
+    };
+    let call = function.create_instruction(Opcode::Call(Box::new(info)), ty, vec![root, callee], Flags::default(), None);
+    function.insert(call, Position::Before(inst)).expect("a placed instruction");
+    let result = function.instruction(inst).result.expect("a value");
+    function.replace_all_uses_with(result, Operand::Value(function.instruction(call).result.expect("a value")));
+}
+
+/// `tryToRecognizePopCount`
+/// ([:551](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/AggressiveInstCombine/AggressiveInstCombine.cpp#L551)):
+/// `(i * 0x01010101) >> 24` of the parallel bit count.
+fn try_to_recognize_pop_count(
+    context: &mut llrm_mir::context::Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    declared: &mut llrm_mir::passes::Declared,
+    inst: InstId,
+) -> bool {
+    let root = {
+        let q = query(context, layout, function);
+        let Some(result) = function.instruction(inst).result else { return false };
+        let value = Operand::Value(result);
+        let Some((_, _, op0, op1)) = llrm_mir::valuetracking::pattern::binary(&q, value, BinaryOp::LShr) else {
+            return false;
+        };
+        let Some(Type::Int(len)) = q.type_of(value).map(|ty| q.context.types.get(ty).clone()) else { return false };
+        // Len == 8 is `tryToRecognizePopCount2n3`'s.
+        if len > 128 || len <= 8 || len % 8 != 0 {
+            return false;
+        }
+        let Some((_, _, mul_op0, mask01)) = llrm_mir::valuetracking::pattern::binary(&q, op0, BinaryOp::Mul) else {
+            return false;
+        };
+        if !q.int_constant(mask01).is_some_and(|(bits, _)| bits == splat(len, 0x01))
+            || !q.int_constant(op1).is_some_and(|(bits, _)| bits == u128::from(len - 8))
+        {
+            return false;
+        }
+        let Some(root) = match_pop_count_bytes(&q, mul_op0, len) else { return false };
+        root
+    };
+    replace_with_pop_count(context, function, declared, inst, root);
+    true
 }
 
 #[cfg(test)]
