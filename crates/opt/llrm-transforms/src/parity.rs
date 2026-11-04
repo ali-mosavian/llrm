@@ -323,6 +323,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("lower-constant-intrinsics@1597", Late, "lower-constant-intrinsics", Translated, ""),
     entry("instsimplify@1662", Late, "instsimplify", Translated, ""),
     entry("divrempairs@1667", Late, "div-rem-pairs", Translated, ""),
+    entry("expandmemcmp@1673", Late, "expand-memcmp", Translated, ""),
     entry("tailrec@1677", Late, "tailcallelim", Translated, ""),
     partial(
         "simplifycfg@1682",

@@ -326,13 +326,6 @@ const ROWS: &[Disposition] = &[
     ),
     row(
         Late,
-        "expand-memcmp",
-        Why::Missing,
-        "DEFERRED, 0/77 IRs (12 bench + 65 QCport); revisit after parity-green",
-        "w-4, 11-09",
-    ),
-    row(
-        Late,
         "vector-combine",
         NA,
         "vectors deferred (user ruling 10-20), -sse target Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out.",

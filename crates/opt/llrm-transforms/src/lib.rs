@@ -210,6 +210,7 @@ pub mod exitsink;
 pub mod exitvalues;
 pub mod expand;
 pub mod expansion;
+pub mod expandmemcmp;
 pub mod extload;
 pub mod extpromotion;
 pub mod fixednarrow;
