@@ -590,6 +590,7 @@ impl<'a> Builder<'a> {
                 ),
             );
         let mut dag = SelectionDAG::new(DagConfig { fp_extended, ..target.dag.clone() });
+        let module_tables = info.module_tables.clone();
         let tables = info
             .tables
             .get_or_insert_with(|| {
@@ -597,24 +598,34 @@ impl<'a> Builder<'a> {
                 // every symbol under the static relocation
                 // model, which these targets (DOS objects, no
                 // PIC) always use.
+                let (global_names, local_symbols) = module_tables.unwrap_or_else(|| {
+                    (
+                        std::rc::Rc::new(
+                            module
+                                .globals
+                                .iter()
+                                .map(|global| global.name.as_deref().unwrap_or("").to_string())
+                                .collect(),
+                        ),
+                        std::rc::Rc::new(if target.dag.dso_local_symbols {
+                            vec![true; module.globals.len()]
+                        } else {
+                            module
+                                .globals
+                                .iter()
+                                .map(|global| {
+                                    matches!(
+                                        global.linkage,
+                                        llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
+                                    )
+                                })
+                                .collect()
+                        }),
+                    )
+                });
                 super::function_lowering::Tables {
-                    global_names: std::rc::Rc::new(
-                        module.globals.iter().map(|global| global.name.as_deref().unwrap_or("").to_string()).collect(),
-                    ),
-                    local_symbols: std::rc::Rc::new(if target.dag.dso_local_symbols {
-                        vec![true; module.globals.len()]
-                    } else {
-                        module
-                            .globals
-                            .iter()
-                            .map(|global| {
-                                matches!(
-                                    global.linkage,
-                                    llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
-                                )
-                            })
-                            .collect()
-                    }),
+                    global_names,
+                    local_symbols,
                     block_names: std::rc::Rc::new(
                         (0..function.block_capacity())
                             .map(|at| {
