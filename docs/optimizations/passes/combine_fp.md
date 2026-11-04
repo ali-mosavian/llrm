@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_fp.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_fp.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_fp.rs sha256:d0daff8fca9b30a6c793975c0bf004a3911a6666af6645a01246ebedc0becffe -->
+<!-- src: crates/opt/llrm-transforms/src/combine_fp.rs sha256:8767c838a58a0e1ca6c5936cc03da2682c6e7897434cf66eb85348f7e96535cc -->
 
 # combine_fp
 
@@ -20,7 +20,7 @@ in `visitFAdd` and `visitFMul` after `SimplifyAssociativeOrCommutative`, are
 not translated.
 
 DEVIATE 3: `visitFSub` stops after `X - (-Y) --> X + Y`: the
-`foldFNegIntoConstant`, `foldFBinOpOfIntCasts`, cast-of-fneg, `fmul`/`fdiv`
+`foldFNegIntoConstant`, cast-of-fneg, `fmul`/`fdiv`
 of a negated factor and the `reassoc nsz` arms are not translated; a half or
 `x86_fp80` constant is not negated.
 

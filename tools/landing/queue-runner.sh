@@ -11,7 +11,7 @@ export TMPDIR="${LAND_TMPDIR:-${LAND_TMP:-/tmp/landing}/tmp}"; mkdir -p "$TMPDIR
 # own process group, recorded for stop.sh: the only way to end the runner (never by name or pattern)
 [ "$(ps -o pgid= $$ | tr -d ' ')" = "$$" ] || exec setsid "$0" "$@"
 echo $$ > "${LAND_PIDFILE:-${LAND_TMP:-/tmp/landing}/land-runner.pgid}"
-HERE=$(cd "$(dirname "$0")" && pwd); source "$HERE/disk-preflight.sh"; source "$HERE/open-only.sh"; source "$HERE/pick-disjoint.sh"; source "$HERE/precheck-filter.sh"; source "$HERE/landing-busy.sh"; source "$HERE/head-age.sh"; source "$HERE/starved.sh"; source "$HERE/rate-limit.sh"; source "$HERE/alone-filter.sh"; source "$HERE/solo.sh"; source "$HERE/background.sh"; source "$HERE/stamp.sh"; source "$HERE/refusal-lines.sh"; source "$HERE/urgent.sh"; source "$HERE/stale-batch.sh"; source "$HERE/tooling-current.sh"; source "$HERE/pr-state.sh"; source "$HERE/runner-reload.sh"; source "$HERE/red-tip.sh"
+HERE=$(cd "$(dirname "$0")" && pwd); source "$HERE/disk-preflight.sh"; source "$HERE/open-only.sh"; source "$HERE/pick-disjoint.sh"; source "$HERE/precheck-filter.sh"; source "$HERE/landing-busy.sh"; source "$HERE/head-age.sh"; source "$HERE/starved.sh"; source "$HERE/rate-limit.sh"; source "$HERE/alone-filter.sh"; source "$HERE/solo.sh"; source "$HERE/background.sh"; source "$HERE/stamp.sh"; source "$HERE/refusal-lines.sh"; source "$HERE/urgent.sh"; source "$HERE/stale-batch.sh"; source "$HERE/tooling-current.sh"; source "$HERE/pr-state.sh"; source "$HERE/runner-reload.sh"; source "$HERE/red-tip.sh"; source "$HERE/serial.sh"
 R=ali-mosavian/llrm; W=~/scratch/coord-ps; T=~/scratch/coord-ps-target; Q=/tmp/land-queue.txt; touch $Q
 SELF_SHA=$(runner_scripts_sha "$HERE")
 while true; do
@@ -80,6 +80,8 @@ while true; do
     cand=($(prechecked "${cand[@]:0:${PRECHECK_WINDOW:-16}}"))
     batch=($(pick_disjoint 8 "${cand[@]}"))
   fi
+  # SERIAL=1 (runner.env): one PR a pass, one squash commit each
+  batch=($(serial_batch "${batch[@]}"))
   [ ${#batch[@]} -eq 0 ] && { sleep 60; continue; }
   open=($(pop_open $Q "${batch[@]}"))
   batch=("${open[@]}"); [ ${#batch[@]} -eq 0 ] && continue; n=${batch[0]}
@@ -99,7 +101,7 @@ while true; do
       | stamp_lines > $log ) 9>"$W.checkout.lock"
   touch "$log.done"
   for m in "${batch[@]}"; do [[ $m =~ ^[0-9]+$ ]] || continue
-    if [ "$(landed_state $log $m)" = MERGED ]; then echo "$m: MERGED  $(gh pr view $m --repo $R --json title -q .title)"
+    if [ "$(landed_state $log $m)" = MERGED ]; then echo "$m: MERGED  $(gh pr view $m --repo $R --json title -q .title)"; echo "BASE LANDED #$m"
     else echo "$m: REFUSED: batch $log: $(batch_refusal_reason "$log" "$m")"; fi
   done
 done

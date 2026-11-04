@@ -466,3 +466,47 @@ exit:
     let after = pass_output(text);
     assert!(!after.contains("llvm.memcpy") && !after.contains("llvm.memmove"), "{after}");
 }
+
+/// `a[i] = p[i], b[i] = 0xEE` over 700 trips at speed: the pin makes the copy
+/// a memcpy and the fill a memset in one run. The fill was judged beside the
+/// copy's store, a computed one, and left a loop until a second run; only the
+/// full-pipeline reruns after IPO stages gave it (memory_expansion `lr1`,
+/// x86_32 -O2: a 700-trip byte loop, not a memset call).
+#[test]
+fn test_a_fill_beside_a_copy_is_a_memset_in_the_run_that_makes_the_memcpy() {
+    let text = format!(
+        "{}define void @f(ptr %p) {{
+entry:
+  %a = alloca [700 x i8], align 1
+  %b = alloca [700 x i8], align 1
+  br label %h
+
+h:
+  %i = phi i16 [ 0, %entry ], [ %i2, %h ]
+  %s = getelementptr inbounds i8, ptr %p, i16 %i
+  %v = load i8, ptr %s, align 1
+  %da = getelementptr inbounds i8, ptr %a, i16 %i
+  store i8 %v, ptr %da, align 1
+  %db = getelementptr inbounds i8, ptr %b, i16 %i
+  store i8 -18, ptr %db, align 1
+  %i2 = add nuw nsw i16 %i, 1
+  %c = icmp ne i16 %i2, 700
+  br i1 %c, label %h, label %exit
+
+exit:
+  call void @sink(ptr %a, ptr %b)
+  ret void
+}}
+
+declare void @sink(ptr, ptr)
+",
+        llrm_analysis::testing::DOS
+    );
+    let mut module = crate::testing::parsed(&text);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(super::pass::LoopIdiom::new());
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default())).unwrap();
+    let after = llrm_mir::print::module(&module);
+    assert!(after.contains("llvm.memcpy"), "premise: the copy is a memcpy\n{after}");
+    assert!(after.contains("llvm.memset"), "{after}");
+}
