@@ -884,3 +884,30 @@ fn a_zext_nneg_combined_before_the_sext_of_its_load_is_the_sext() {
     assert!(names.iter().any(|n| n == "movsx"), "premise: the sext is selected, got {names:?}");
     assert!(!names.iter().any(|n| n == "movzx"), "the zext nneg is the sext: {names:?}");
 }
+
+/// `llrm.x86.udiv64by32` is the divide instruction: no call is made, `div`
+/// follows the two moves into `edx:eax`, and the result halves are the
+/// quotient (`eax`) and the remainder (`edx`). softfloat's f64 divide took
+/// 385841 clocks against libgcc's 197850 with a software 64 by 32 divide.
+#[test]
+fn a_udiv64by32_call_is_a_div_not_a_call() {
+    let ir = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare i64 @llrm.x86.udiv64by32(i32, i32, i32) readnone
+define i64 @f(i32 %hi, i32 %lo, i32 %d) {
+  %r = call i64 @llrm.x86.udiv64by32(i32 %hi, i32 %lo, i32 %d)
+  ret i64 %r
+}
+";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<String> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter_map(|w| w.name.as_deref().map(str::to_owned))
+        .collect();
+    assert_eq!(names.iter().filter(|n| n.as_str() == "div").count(), 1, "{names:?}");
+    assert!(!names.iter().any(|n| n.as_str() == "call"), "{names:?}");
+}

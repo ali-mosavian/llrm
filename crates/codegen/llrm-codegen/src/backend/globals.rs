@@ -109,7 +109,9 @@ pub fn names(
         let id = GlobalId(at as u32);
         // An intrinsic is lowered where it is called, never linked.
         if global.name.as_deref().is_some_and(|name| {
-            (llrm_mir::intrinsics::is_reserved(name) && !is_list(name)) || llrm_mir::atomic::decode(name).is_some()
+            (llrm_mir::intrinsics::is_reserved(name) && !is_list(name))
+                || llrm_mir::intrinsics::is_wide_divide(name)
+                || llrm_mir::atomic::decode(name).is_some()
         }) {
             continue;
         }
