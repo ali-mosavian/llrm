@@ -1,7 +1,8 @@
 /* Every compare entry point against C's operators, NaN included: the library contract (compiler-rt/libgcc) is
  * lt <0 iff a<b, le <=0 iff a<=b, ge >=0 iff a>=b, gt >0 iff a>b, eq ==0 iff a==b, ne !=0 iff a!=b, cmp as lt/le;
  * unordered: > 0 from lt/le/eq/ne/cmp, < 0 from ge/gt (ours: exactly +1 and -1), unord 1. host_f32.c only checked cmp and unord.
- * cc -O2 -fno-builtin -ffp-contract=off -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_cmp_entries.c lib/fp/f32/*.c lib/fp/f64/*.c && ./a.out [n] */
+ * cc -O2 -fno-builtin -ffp-contract=off -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_cmp_entries.c lib/fp/f32/*.c lib/fp/f64/*.c && ./a.out [n]
+ * and again with -DSF_CMP_SPLIT (x86 m16: each entry its own file over the external core of cmp_core.c) */
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>

@@ -1,11 +1,11 @@
 #!/bin/bash
-# usage: tests/m16_split_padding.sh [OPT] -> x86_16-wat -march=i486: per-object code bytes of the split f32 files, the linked bytes reached
+# usage: [SF_FLAGS=-DSF_CMP_SPLIT] tests/m16_split_padding.sh [OPT] -> x86_16-wat -march=i486: per-object code bytes of the split f32 files, the linked bytes reached
 # from each entry (jwlink, option eliminate) and the linked CODE span (reached + alignment padding between segments), against a control:
 # the same sources in one translation unit. Needs LLRM_CC_DIR (llrm-cc), LLRM_OW, LLRM_CLANG_M16 as size_m16.sh.
 set -e
 cd "$(dirname "$0")/.."
 OPT=${1:-Os}; D=${LLRM_CC_DIR:-$HOME/targets/gs-out/rbase}; T=$(mktemp -d); trap 'rm -r $T' EXIT; export LLRM_CC_TARGET=x86_16-wat
-CFG="-include config/x86_m16/config.h"
+CFG="-include config/x86_m16/config.h $SF_FLAGS"
 cc1() { $D/llrm-cc -march=i486 -$OPT $CFG -Iinclude -c "$@"; }
 SRC="$(tests/fp_sources.sh f32) lib/int/clzsi2.c"
 mkdir $T/split $T/flat

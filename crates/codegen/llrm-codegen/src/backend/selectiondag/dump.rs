@@ -143,6 +143,7 @@ impl SelectionDAG {
                     MemBase::CallArgument(offset) => format!("call-argument+{offset}"),
                     MemBase::ConstantPool(_) => "constant-pool".to_string(),
                     MemBase::JumpTable => "jump-table".to_string(),
+                    MemBase::Value(_) => "unknown-address".to_string(),
                 };
                 let volatile = if info.volatile { "volatile " } else { "" };
                 write!(text, "<({volatile}{verb} (s{}) {to} {base}", info.mem_vt.size_in_bits()).ok();

@@ -1462,6 +1462,8 @@ pub fn decide_with_split(
             .map(|(unit, mut list)| {
                 list.sort();
                 let mut merged: Vec<(SlotIndex, SlotIndex)> = Vec::new();
+                // where the segment that reaches the merged range's end began
+                let mut tail = None;
                 for (start, end) in list {
                     match merged.last_mut() {
                         Some(last) if start <= last.1 => {
@@ -1475,11 +1477,17 @@ pub fn decide_with_split(
                             // and a register it only clobbers (a call returning
                             // `bd0` that clobbers `wd0`): the clobber holds
                             // nothing.
-                            let clobber = last.0 == start && last.1 == start.get_dead_slot();
+                            let clobber = tail.as_ref() == Some(&start) && last.1 == start.get_dead_slot();
                             conflict |= start < last.1 && !copies.contains_key(&start) && !both_dead && !clobber;
+                            if end > last.1 {
+                                tail = Some(start.clone());
+                            }
                             last.1 = std::cmp::max(last.1.clone(), end)
                         }
-                        _ => merged.push((start, end)),
+                        _ => {
+                            tail = Some(start.clone());
+                            merged.push((start, end))
+                        }
                     }
                 }
                 let range = crate::liveness::liverange::LiveRange {

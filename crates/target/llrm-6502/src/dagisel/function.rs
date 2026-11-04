@@ -39,6 +39,7 @@ pub fn builder_target() -> BuilderTarget {
     BuilderTarget {
         shift_amount: EVT::I8,
         legal_ints: vec![8, 16],
+        soft_float: true,
         jump_tables: false,
         string_instructions: false,
         // the runtime's own routines (runtime/mos_rt.s), called by the name the
