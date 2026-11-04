@@ -716,7 +716,7 @@ fn phis(
             };
             let at = emitter.function.blocks.iter().position(|block| block.id == to).ok_or("a phi in no block")?;
             for &(input, result) in &edge.copies {
-                let class = width_class(selection.widths.get(&result).copied().unwrap_or(16));
+                let class = width_class(selection.widths.get(result as usize).copied().filter(|width| *width != 0).unwrap_or(16));
                 let result = emitter.numbered(result, class);
                 let incoming = emitter.numbered(input, class);
                 let phis = &mut emitter.function.blocks[at].phis;

@@ -1666,6 +1666,23 @@ impl Builder<'_> {
         Ok(())
     }
 
+    /// A call of `llrm.x86.udiv64by32 hi, lo, d` (DEVIATE DV1): the divide
+    /// instruction's quotient and remainder as the low and high halves of the
+    /// `i64` result.
+    fn visit_wide_divide(
+        &mut self,
+        instruction: &llrm_mir::module::Instruction,
+    ) -> Result<(), Refused> {
+        let arguments = &instruction.operands[..instruction.operands.len() - 1];
+        let [hi, lo, divisor] = arguments else { return Err(Refused("a wide divide of other than three operands")) };
+        let (hi, lo, divisor) = (self.get_value(*hi)?, self.get_value(*lo)?, self.get_value(*divisor)?);
+        let node = self.dag.get_node_multi(super::x86isd::LLRM_UDIV64BY32, &[EVT::I32, EVT::I32], &[hi, lo, divisor]);
+        let pair = [SDValue { node: node.node, res: 0 }, SDValue { node: node.node, res: 1 }];
+        let value = self.dag.get_node(ISD::BuildPair, EVT::I64, &pair);
+        self.set_value(instruction.result.ok_or(Refused("a wide divide without a result"))?, value);
+        Ok(())
+    }
+
     /// `X86ISD::CALL`, `callseq_end`, then the result read back.
     fn visit_call(
         &mut self,
@@ -1688,6 +1705,12 @@ impl Builder<'_> {
             .and_then(|name| llrm_mir::atomic::decode(&name))
         {
             return self.visit_atomic(instruction, atomic);
+        }
+        if direct
+            .and_then(|global| self.module.global(global).name.owned())
+            .is_some_and(|name| llrm_mir::intrinsics::is_wide_divide(&name))
+        {
+            return self.visit_wide_divide(instruction);
         }
         if let Some(intrinsic) = direct.and_then(|global| self.module.global(global).intrinsic()) {
             let name = direct.and_then(|global| self.module.global(global).name.owned()).unwrap_or_default();
