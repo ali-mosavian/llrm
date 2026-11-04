@@ -97,11 +97,11 @@ fn constant_string(
 
 /// A call of a stated library routine to form: `emitPutChar`, `emitPutS`,
 /// `emitFWrite`, `emitFPutC`, `emitFPutS`.
-struct NewCall {
-    standard: &'static str,
-    args: Vec<Operand>,
-    returns: llrm_mir::types::TypeId,
-    params: Vec<llrm_mir::types::TypeId>,
+pub(crate) struct NewCall {
+    pub(crate) standard: &'static str,
+    pub(crate) args: Vec<Operand>,
+    pub(crate) returns: llrm_mir::types::TypeId,
+    pub(crate) params: Vec<llrm_mir::types::TypeId>,
 }
 
 enum Rewrite {
@@ -112,13 +112,13 @@ enum Rewrite {
     Call(NewCall),
 }
 
-/// The call of the stated routine `new`, placed before `at`; none where the
+/// The call of the stated routine `new`, placed at `at`; none where the
 /// compile does not state it.
-fn emit(
+pub(crate) fn emit(
     unit: &mut Unit,
     routines: &[Routine],
     new: NewCall,
-    at: InstId,
+    at: Position,
 ) -> Option<InstId> {
     let routine = routines.iter().find(|one| one.standard == new.standard)?;
     let ty =
@@ -141,7 +141,7 @@ fn emit(
     operands.push(callee);
     let call =
         unit.function.create_instruction(Opcode::Call(Box::new(info)), new.returns, operands, Flags::default(), None);
-    unit.function.insert(call, Position::Before(at)).expect("a placed call");
+    unit.function.insert(call, at).expect("a placed call");
     Some(call)
 }
 
@@ -413,6 +413,22 @@ fn puts(
     Some(put_char(site, Operand::Constant(unit.context.int(site.int, i128::from(b'\n')))))
 }
 
+/// One table per module: the target's library, else the pin's defaults for
+/// the pointer's width.
+pub(crate) fn library_info(
+    outer: &llrm_mir::passes::Outer,
+    size_bits: u32,
+) -> std::rc::Rc<TargetLibraryInfo> {
+    outer.memo::<TargetLibraryInfo>(0, || {
+        let library = outer
+            .program()
+            .target
+            .library()
+            .unwrap_or_else(|| std::rc::Rc::new(Generic::for_pointer(size_bits)));
+        TargetLibraryInfo::new(&*library)
+    })
+}
+
 impl FunctionPass for SimplifyLibCalls {
     fn adds_memory_operations(&self) -> bool {
         false
@@ -433,16 +449,7 @@ impl FunctionPass for SimplifyLibCalls {
     ) -> PreservedAnalyses {
         let outer = analyses.outer().clone();
         let size_bits = unit.layout.pointer(0).index_bits;
-        // One table per module: the target's library, else the pin's defaults
-        // for the pointer's width.
-        let info = outer.memo::<TargetLibraryInfo>(0, || {
-            let library = outer
-                .program()
-                .target
-                .library()
-                .unwrap_or_else(|| std::rc::Rc::new(Generic::for_pointer(size_bits)));
-            TargetLibraryInfo::new(&*library)
-        });
+        let info = library_info(&outer, size_bits);
         let env = Env { globals: &outer.globals, layout: unit.layout };
         let mut changed = false;
         let calls: Vec<InstId> = unit
@@ -493,7 +500,7 @@ impl FunctionPass for SimplifyLibCalls {
                     Operand::Constant(unit.context.int(ty, 0))
                 }
                 Rewrite::Value(value) => value,
-                Rewrite::Call(new) => match emit(unit, &self.routines, new, call) {
+                Rewrite::Call(new) => match emit(unit, &self.routines, new, Position::Before(call)) {
                     Some(new) => Operand::Value(unit.function.instruction(new).result.expect("a result")),
                     None => continue,
                 },
