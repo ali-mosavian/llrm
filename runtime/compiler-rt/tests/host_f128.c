@@ -1,5 +1,5 @@
 /* binary128 against the host's __float128 (libgcc's tf routines): the library contract of add, sub, mul, div, neg, unord and every compare entry, NaN included.
- * cc -O2 -fno-builtin -ffp-contract=off -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_f128.c $(tests/fp_sources.sh f128) && ./a.out [n]
+ * cc -O2 -fno-builtin -ffp-contract=off -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_f128.c $(tests/fp_sources.sh f128) lib/fp/f32/pack.c lib/fp/f64/pack.c && ./a.out [n]
  * Operands: random bit patterns, a third of them drawn from the edges (zeros, infinities, NaNs, denormals, the largest and smallest normals, one apart). */
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,6 +8,15 @@
 typedef unsigned __int128 u128;
 typedef __float128 q;
 q sfb_addtf3(q, q), sfb_subtf3(q, q), sfb_multf3(q, q), sfb_divtf3(q, q), sfb_negtf2(q);
+q sfb_extendsftf2(float), sfb_extenddftf2(double), sfb_floatsitf(int32_t), sfb_floatunsitf(uint32_t), sfb_floatditf(int64_t), sfb_floatunditf(uint64_t), sfb_floattitf(__int128), sfb_floatuntitf(u128);
+float sfb_trunctfsf2(q);
+double sfb_trunctfdf2(q);
+int32_t sfb_fixtfsi(q);
+uint32_t sfb_fixunstfsi(q);
+int64_t sfb_fixtfdi(q);
+uint64_t sfb_fixunstfdi(q);
+__int128 sfb_fixtfti(q);
+u128 sfb_fixunstfti(q);
 int sfb_cmptf2(q, q), sfb_eqtf2(q, q), sfb_netf2(q, q), sfb_lttf2(q, q), sfb_letf2(q, q), sfb_getf2(q, q), sfb_gttf2(q, q), sfb_unordtf2(q, q);
 static uint64_t rng = 0x9E3779B97F4A7C15ull;
 static uint64_t rnd(void) { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; return rng; }
@@ -48,6 +57,39 @@ int main(int argc, char **argv)
         arith("mul", x, y, bits(sfb_multf3(a, b)), bits(a * b));
         arith("div", x, y, bits(sfb_divtf3(a, b)), bits(a / b));
         n++; if (bits(sfb_negtf2(a)) != (x ^ ((u128)1 << 127))) bad("neg", x, y, bits(sfb_negtf2(a)), x ^ ((u128)1 << 127)); /* bit-exact, a signalling NaN stays one */
+        /* conversions out of binary128: in range and not NaN only (C leaves the rest undefined) */
+        /* in-range operands for the float to integer entries: a random integer over a small divisor, so fractions and every width occur */
+        q aq = (q)(__int128)(wide() >> (rnd() % 128)) / (q)(1 + rnd() % 1000);
+        if (rnd() & 1) aq = -aq;
+        for (int pass = 0; pass < 2; pass++) {
+        q a = pass ? aq : f(x);
+        if (a == a) {
+            float tf = (float)a; double td = (double)a;
+            n += 2;
+            if (a != a || sfb_trunctfsf2(a) != tf) bad("trunc32", x, y, 0, 0);
+            if (sfb_trunctfdf2(a) != td) bad("trunc64", x, y, 0, 0);
+            q lo = a < 0 ? -a : a;
+            if (lo < 2147483648.0Q) { n++; if (sfb_fixtfsi(a) != (int32_t)a) bad("fixsi", x, y, 0, 0); }
+            if (lo < 4294967296.0Q) { n++; if (a > -1 && sfb_fixunstfsi(a) != (uint32_t)a) bad("fixusi", x, y, 0, 0); }
+            if (lo < 9223372036854775808.0Q) { n++; if (sfb_fixtfdi(a) != (int64_t)a) bad("fixdi", x, y, 0, 0); }
+            if (lo < 18446744073709551616.0Q) { n++; if (a > -1 && sfb_fixunstfdi(a) != (uint64_t)a) bad("fixudi", x, y, 0, 0); }
+            if (lo < 1.7014118346046923173168730371588410572e38Q) { n++; if (sfb_fixtfti(a) != (__int128)a) bad("fixti", x, y, 0, 0); }
+            if (lo < 3.4028236692093846346337460743176821145e38Q) { n++; if (a > -1 && sfb_fixunstfti(a) != (u128)a) bad("fixuti", x, y, 0, 0); }
+        }
+        }
+        {
+            uint32_t w = (uint32_t)rnd(); uint64_t v = rnd(); u128 t = wide() >> (rnd() % 128);
+            float fw; memcpy(&fw, &w, 4); double dv; memcpy(&dv, &v, 8);
+            n += 8;
+            arith("extsf", w, 0, bits(sfb_extendsftf2(fw)), bits((q)fw));
+            arith("extdf", v, 0, bits(sfb_extenddftf2(dv)), bits((q)dv));
+            arith("floatsi", (int32_t)w, 0, bits(sfb_floatsitf((int32_t)w)), bits((q)(int32_t)w));
+            arith("floatusi", w, 0, bits(sfb_floatunsitf(w)), bits((q)w));
+            arith("floatdi", v, 0, bits(sfb_floatditf((int64_t)v)), bits((q)(int64_t)v));
+            arith("floatudi", v, 0, bits(sfb_floatunditf(v)), bits((q)v));
+            arith("floatti", t, 0, bits(sfb_floattitf((__int128)t)), bits((q)(__int128)t));
+            arith("floatuti", t, 0, bits(sfb_floatuntitf(t)), bits((q)t));
+        }
         int un = a != a || b != b;
         n++;
         int c = sfb_cmptf2(a, b), e = sfb_eqtf2(a, b), ne = sfb_netf2(a, b), l = sfb_lttf2(a, b), le = sfb_letf2(a, b), ge = sfb_getf2(a, b), g = sfb_gttf2(a, b);

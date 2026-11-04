@@ -23,11 +23,6 @@ typedef unsigned __int128 sf128; /* binary128 bit pattern: wasm32 passes it as t
 #ifdef SF_INTABI
 typedef uint32_t sf_float;
 typedef uint64_t sf_double;
-#ifdef __SIZEOF_INT128__
-typedef sf128 sf_quad;
-static inline sf128 q2b(sf_quad f) { return f; }
-static inline sf_quad b2q(sf128 b) { return b; }
-#endif
 static inline sf32 f2b(sf_float f) { return f; }
 static inline sf_float b2f(sf32 b) { return b; }
 static inline sf64 d2b(sf_double f) { return f; }
@@ -35,15 +30,24 @@ static inline sf_double b2d(sf64 b) { return b; }
 #else
 typedef float sf_float;
 typedef double sf_double;
-#ifdef __SIZEOF_INT128__
-typedef __float128 sf_quad; /* long double is binary128 only on some targets: the host test and GCC use __float128 */
-static inline sf128 q2b(sf_quad f) { union { sf_quad f; sf128 b; } u; u.f = f; return u.b; }
-static inline sf_quad b2q(sf128 b) { union { sf_quad f; sf128 b; } u; u.b = b; return u.f; }
-#endif
 static inline sf32 f2b(float f) { union { float f; sf32 b; } u; u.f = f; return u.b; }
 static inline float b2f(sf32 b) { union { float f; sf32 b; } u; u.b = b; return u.f; }
 static inline sf64 d2b(double f) { union { double f; sf64 b; } u; u.f = f; return u.b; }
 static inline double b2d(sf64 b) { union { double f; sf64 b; } u; u.b = b; return u.f; }
+#endif
+
+/* binary128 as bits (SF_INTABI, or SF_QUADBITS when only the quad type is missing from the backend: wasm32 has float and double but no fp128 in MIR): the
+ * entry points take and return unsigned __int128, which wasm32 passes as two i64 and returns through an sret pointer, exactly the tf libcalls' convention. */
+#ifdef __SIZEOF_INT128__
+#if defined(SF_INTABI) || defined(SF_QUADBITS)
+typedef sf128 sf_quad;
+static inline sf128 q2b(sf_quad f) { return f; }
+static inline sf_quad b2q(sf128 b) { return b; }
+#else
+typedef __float128 sf_quad; /* long double is binary128 only on some targets: the host test and GCC use __float128 */
+static inline sf128 q2b(sf_quad f) { union { sf_quad f; sf128 b; } u; u.f = f; return u.b; }
+static inline sf_quad b2q(sf128 b) { union { sf_quad f; sf128 b; } u; u.b = b; return u.f; }
+#endif
 #endif
 
 /* Round and pack: m has three guard bits and its implicit one at bit 26; e may be <= 0 or >= 255. */
