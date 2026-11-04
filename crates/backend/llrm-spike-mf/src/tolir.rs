@@ -34,8 +34,10 @@
 //! loop branch heuristic); every other branch is even. Exit: the odds the
 //! front end knows (the IR's branch weights).
 
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::marker::PhantomData;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use llrm_codegen::backend::allocresult::Error;
@@ -87,6 +89,9 @@ impl<T: Target> Converted<T> {
         size: bool,
     ) {
         let infos = self.tii.infos.clone();
+        let kind_infos = infos.clone();
+        let kinds = Rc::new(RefCell::new(UseKindTable::default()));
+        let priced = Rc::clone(&kinds);
         let palettes = self
             .orders
             .iter()
@@ -105,24 +110,45 @@ impl<T: Target> Converted<T> {
                 let joined: Vec<RegId> = join.joined.iter().copied().collect();
                 let side = |side: &llrm_codegen::coalescer::env::JoinSide| {
                     let before: Vec<RegId> = side.palette.iter().copied().collect();
-                    // an instruction is priced once however many operands name
-                    // the value
+                    // a kind is one instruction's operands that name the value:
+                    // priced once however many of them there are
+                    let worst = |operands: &[OperandInfo]| {
+                        operands
+                            .iter()
+                            .filter_map(|info| {
+                                let (was, will) = (info.cheapest(&before)?, info.cheapest(&joined)?);
+                                Some(will.saturating_sub(was))
+                            })
+                            .max()
+                            .unwrap_or(0)
+                    };
+                    let kinds = priced.borrow();
                     let extra = side
-                        .uses
+                        .kinds
                         .iter()
-                        .map(|(one, freq)| {
-                            let worst = operands_in(&infos, one)
-                                .into_iter()
-                                .filter(|(value, _)| *value == side.value)
-                                .filter_map(|(_, info)| {
-                                    let (was, will) = (info.cheapest(&before)?, info.cheapest(&joined)?);
-                                    Some(will.saturating_sub(was))
-                                })
-                                .max()
-                                .unwrap_or(0);
-                            *freq * worst as f32
-                        })
+                        .map(|(kind, freq)| *freq * worst(&kinds.operands[*kind as usize]) as f32)
                         .sum::<f32>();
+                    if !side.uses.is_empty() {
+                        // LLRM_CHECK_USE_SUMMARY: the list of every instruction
+                        // prices the same
+                        let slow = side
+                            .uses
+                            .iter()
+                            .map(|(one, freq)| {
+                                let named: Vec<OperandInfo> = operands_in(&infos, one)
+                                    .into_iter()
+                                    .filter(|(value, _)| *value == side.value)
+                                    .map(|(_, info)| info.clone())
+                                    .collect();
+                                *freq * worst(&named) as f32
+                            })
+                            .sum::<f32>();
+                        assert!(
+                            (slow - extra).abs() <= 1e-3 * (1.0 + slow.abs()),
+                            "value {}: the instructions price {slow}, the summary {extra}",
+                            side.value
+                        );
+                    }
                     (before, extra)
                 };
                 let ((source, source_extra), (destination, destination_extra)) = (side(&join.one), side(&join.other));
@@ -132,6 +158,42 @@ impl<T: Target> Converted<T> {
                     joined: &joined,
                     copy_frequency: join.copy_frequency,
                 })
+            }),
+            Box::new(move |one, value| {
+                // which of the instruction's operand slots name the value: the
+                // same instruction shape and slots are one kind, however many
+                // instructions have them
+                let shape = (one.at / 2) as usize;
+                let (_, slots) = kind_infos.get(shape)?;
+                let what = one.what.as_ref()?;
+                if what.name.as_deref() != Some(kind_infos[shape].0) {
+                    return None;
+                }
+                let mut named = 0u64;
+                for (at, info) in slots.iter().enumerate().take(64) {
+                    let loc = if info.def { what.dests.get(info.index) } else { what.sources.get(info.index) };
+                    if matches!(loc, Some(Loc::Held(held)) if held.value == value) {
+                        named |= 1 << at;
+                    }
+                }
+                if named == 0 {
+                    return None;
+                }
+                let mut table = kinds.borrow_mut();
+                if let Some(id) = table.by_shape.get(&(shape, named)) {
+                    return Some(*id);
+                }
+                let mut operands: Vec<OperandInfo> = slots
+                    .iter()
+                    .enumerate()
+                    .filter(|(at, _)| named & (1 << at) != 0)
+                    .map(|(_, info)| info.clone())
+                    .collect();
+                operands.sort_by(|a, b| (&a.order, &a.costs).cmp(&(&b.order, &b.costs)));
+                operands.dedup_by(|a, b| (&a.order, &a.costs) == (&b.order, &b.costs));
+                let id = table.intern(operands);
+                table.by_shape.insert((shape, named), id);
+                Some(id)
             }),
         );
         for (value, order) in self.orders.iter_mut() {
@@ -626,6 +688,46 @@ fn foldable_source<T: Target>(inst: &Inst) -> Option<(&'static str, usize)> {
     None
 }
 
+thread_local! {
+    static OPERAND_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many instructions this thread has read the whole operand table of (the
+/// scan the coalescer's join pricing made of every use of a value at every
+/// attempt), for a test to bound it.
+pub fn operand_visits() -> usize {
+    OPERAND_VISITS.with(std::cell::Cell::get)
+}
+
+/// The operand sets the instructions of a body name a value by, one id each
+/// (a kind of use the coalescer sums).
+#[derive(Default)]
+struct UseKindTable {
+    ids: std::collections::BTreeMap<Vec<(Vec<RegId>, Vec<u32>)>, u32>,
+    /// The kind of an instruction shape (its index in the target's operand
+    /// table) and the slots of it that name the value.
+    by_shape: std::collections::HashMap<(usize, u64), u32>,
+    operands: Vec<Vec<OperandInfo>>,
+}
+
+impl UseKindTable {
+    /// The id of `operands`, sorted and without repeats.
+    fn intern(
+        &mut self,
+        operands: Vec<OperandInfo>,
+    ) -> u32 {
+        let key: Vec<(Vec<RegId>, Vec<u32>)> =
+            operands.iter().map(|one| (one.order.clone(), one.costs.clone())).collect();
+        if let Some(id) = self.ids.get(&key) {
+            return *id;
+        }
+        let id = self.operands.len() as u32;
+        self.operands.push(operands);
+        self.ids.insert(key, id);
+        id
+    }
+}
+
 /// What the target says of one virtual-register operand of an instruction:
 /// the `index`th source (or destination, where `def`) the converter gave it.
 /// Named by position, not by value, because the coalescer renames values.
@@ -683,6 +785,7 @@ fn operands_in<'a>(
     infos: &'a [(&'static str, Vec<OperandInfo>)],
     one: &Insn,
 ) -> Vec<(u32, &'a OperandInfo)> {
+    OPERAND_VISITS.with(|visits| visits.set(visits.get() + 1));
     let Some((name, infos)) = infos.get((one.at / 2) as usize) else { return Vec::new() };
     let Some(what) = one.what.as_ref() else { return Vec::new() };
     if what.name.as_deref() != Some(name) {
