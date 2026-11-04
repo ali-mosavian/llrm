@@ -2807,8 +2807,8 @@ impl<'a> TypeLegalizer<'a> {
                 .dag
                 .get_node_flags(ISD::BuildPair, pointer, &[moved, selector], super::dag::SDNodeFlags::PAIR_FAR);
         }
-        let offset = self.dag.get_constant(step, pointer);
-        self.dag.get_node(ISD::Add, pointer, &[ptr, offset])
+        // `getObjectPtrOffset`: the offset stays inside the object, so the add cannot wrap.
+        self.dag.get_object_ptr_offset(ptr, step as i64)
     }
 
     /// `ExpandIntOp_STORE`, a plain store: the low dword, then the high at +4
