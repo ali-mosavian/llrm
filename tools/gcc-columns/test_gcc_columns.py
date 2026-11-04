@@ -70,6 +70,20 @@ def test_sf_z80_harness_sources_exist():
         assert os.path.exists(os.path.join(root, "runtime/compiler-rt/lib/fp/f32", f + ".c")), f
 
 
+def test_z80_16bit_result_is_charged_the_de_store():
+    """gcc's driver stored a 16-bit result with ld (nn),hl (16 T), the DE columns with ld (nn),de (20 T): every 16-bit gcc
+    cell was 4 T optimistic (add16 read 78, by hand 82). 16-bit = ex de,hl 4 T + store 4 T; 8-bit in A for both."""
+    assert Z.result_charge(Z.U16) == (1, 8, 1)
+    assert Z.result_charge("int") == (1, 8, 1)
+    assert Z.result_charge(Z.U8) == (0, 0, 0)
+
+
+def test_z80_table_header_names_the_single_tu_ice():
+    """The shipped z80 cc1 ICEs on a single-TU softfloat build at -O2; the table says so, so no gcc cell is added for such a build."""
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tables", "z80-gcc.tsv")
+    assert "single-translation-unit softfloat build" in open(root).readline()
+
+
 def test_softfloat_z80_table_is_complete_and_current():
     """The 11-03 table was measured from the removed monolithic sf32.c; it stayed in the repo marked STALE.
     A table needs 32 gcc clk cells (2 variants x 2 levels x 8 ops), 4 library sizes and the cc1 md5, and no STALE mark."""
