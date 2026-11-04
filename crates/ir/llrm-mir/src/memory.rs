@@ -34,6 +34,8 @@ pub struct Summary {
     /// Its effects only reach what its pointer arguments point to.
     pub arguments_only: bool,
     pub returns: bool,
+    /// It states `noreturn`: control never comes back from a call to it.
+    pub no_return: bool,
     /// Each parameter it keeps no copy of.
     pub nocapture: Vec<bool>,
     /// It is `llvm.memset`: its first argument's bytes, as many as the
@@ -108,6 +110,7 @@ pub fn summary(function: &Function) -> Summary {
         accessible: stated_at(attrs, |location| location != Some("inaccessiblemem")),
         arguments_only: argument_memory_only(attrs),
         returns: returns(attrs),
+        no_return: Fact::NoReturn.stated_by(attrs),
         nocapture: function.parameter_attrs.iter().map(|one| Fact::NoCapture.stated_by(one)).collect(),
         memset: false,
         pattern: false,
