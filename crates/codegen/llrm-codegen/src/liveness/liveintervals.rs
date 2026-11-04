@@ -784,6 +784,29 @@ impl LiveIntervals {
         index
     }
 
+    /// `new` takes the place of `old` with the identity `old` has, the way
+    /// `MachineOperand::setReg` rewrites an instruction where it stands: the
+    /// slot index and the maps keyed by identity are untouched, the operand
+    /// lists are rebuilt as [`Self::rewrite_instr`] does.
+    pub fn rename_instr(
+        &mut self,
+        block: usize,
+        old: InstrKey,
+        new: Arc<Insn>,
+    ) {
+        debug_assert_eq!(new.id(), old);
+        llrm_mir::counts::bump(llrm_mir::counts::Event::LirRewrites);
+        let pos = self.position_of(block, old);
+        let before = Arc::clone(&self.blocks[block][pos]);
+        self.remove_operands(&before);
+        self.note(|| Change::Took(block, Arc::clone(&before)));
+        llrm_mir::counts::bump(llrm_mir::counts::Event::LirOperandListEdits);
+        self.add_operands(&new);
+        self.note(|| Change::Put(block, Arc::clone(&new)));
+        self.insns.insert(old, Arc::clone(&new));
+        self.blocks[block][pos] = new;
+    }
+
     /// `RemoveMachineInstrFromMaps` and erasing the instruction.
     pub fn remove_instr(
         &mut self,

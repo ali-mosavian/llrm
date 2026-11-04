@@ -205,6 +205,10 @@ impl Tti for M68k {
         Basic.cast_cost(op, to, from, kind)
     }
 
+    fn sizes_exit_values(&self) -> bool {
+        true
+    }
+
     fn arithmetic_cost(
         &self,
         op: ArithOp,
@@ -213,6 +217,16 @@ impl Tti for M68k {
         left: OperandInfo,
         right: OperandInfo,
     ) -> Cost {
+        // DEVIATE: the pin's base class prices a multiply or divide it expands
+        // at one operation (`BasicTTIImpl::getArithmeticInstrCost`'s last
+        // line). Past 32 bits the m68k makes a library call of it, and the
+        // closed form of a sum (`(n-1)(n-2)/2` in `i33`) is then 250 B of
+        // `__mulsi3` calls for a loop of 16. Exit: none, a target's prices.
+        if matches!(op, ArithOp::Mul | ArithOp::SDiv | ArithOp::UDiv | ArithOp::SRem | ArithOp::URem)
+            && matches!(ty, Ty::Int(bits) if bits > 32)
+        {
+            return Cost::EXPENSIVE;
+        }
         Basic.arithmetic_cost(op, ty, kind, left, right)
     }
 }

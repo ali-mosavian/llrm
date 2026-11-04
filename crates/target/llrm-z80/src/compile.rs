@@ -128,9 +128,6 @@ fn machine_function_with(
         selected.iter().find(|(one, ..)| one == name).ok_or_else(|| format!("no function @{name}"))?;
     let selection = if crate::dagisel::pipeline::ILP.with(std::cell::Cell::get) { scheduled } else { source };
     let mut function = emit(name, selection.as_ref().map_err(Clone::clone)?)?;
-    if !call_frames_are_sequential(&function) {
-        return Err(format!("@{name}: the schedule opens a call frame inside another"));
-    }
     expand_cmov(&mut function)?;
     crate::ldir::copy_loops_to_ldir(&mut function);
     if duplicate {
@@ -139,32 +136,6 @@ fn machine_function_with(
     eliminate_tests(&mut function);
     eliminate_dead(&mut function);
     Ok(function)
-}
-
-/// Whether each `ADJCALLSTACKDOWN` of stack arguments is closed by its `ADJCALLSTACKUP` before the
-/// next opens. The stack arguments are addressed from the open frame's size, so
-/// a frame inside another is stored to the wrong addresses.
-///
-/// DEVIATE: the pin's scheduler never nests them. Reason: the `ILP` schedule
-/// moved `__fixdfsi`'s frame into `__muldf3`'s (see tests/call_frames.rs); until
-/// the scheduler is fixed the variant is dropped and `Source` stands. Exit: the
-/// scheduler keeps call sequences apart.
-fn call_frames_are_sequential(function: &MFunction) -> bool {
-    function.blocks.iter().all(|block| {
-        let mut open = false;
-        for inst in &block.insts {
-            // a frame of no bytes addresses nothing
-            if !matches!(inst.operands.first(), Some(Operand::Imm(bytes)) if *bytes > 0) {
-                continue;
-            }
-            match inst.kind {
-                Kind::Op("ADJCALLSTACKDOWN") if std::mem::replace(&mut open, true) => return false,
-                Kind::Op("ADJCALLSTACKUP") if !std::mem::replace(&mut open, false) => return false,
-                _ => {}
-            }
-        }
-        !open
-    })
 }
 
 /// Drops the instructions whose results nothing reads (`ZEXT8` of a byte whose

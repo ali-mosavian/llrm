@@ -251,6 +251,24 @@ pub fn printed_as(name: &str) -> Option<(&'static str, usize, usize)> {
     Some((one.prints_as, one.drop, one.drops))
 }
 
+/// Whether operand `index` of the `count` operands of writeback `name` is an
+/// address base. A load or a source twin names its base last; a store names
+/// the stored value last, after its base; a load-and-store has only bases.
+pub fn is_base_operand(
+    name: &str,
+    index: usize,
+    count: usize,
+) -> bool {
+    let Some(one) = WRITEBACKS.iter().find(|one| one.name == name) else { return false };
+    if one.memory_move {
+        true
+    } else if one.load || one.source {
+        index + 1 == count
+    } else {
+        index == 1
+    }
+}
+
 /// The load-and-store writeback for the store `user` of a loaded value
 /// (`MOV32pd` is `MOV32po_WB`, `MOV32od_WB` is `MOV32oo_WB`).
 pub fn store_twin(user: &str) -> Option<&'static str> {
