@@ -2904,3 +2904,26 @@ b:
     assert!(narrowed(pipeline::Options::standard()), "premise: -O2 narrows it");
     assert!(!narrowed(pipeline::Options::basic()), "-O1 narrowed with CVP, which the pin's O1 lacks");
 }
+
+/// The pin's early `SimplifyCFGPass()` (L1178) has `ConvertSwitchRangeToICmp`
+/// off (`opt -print-pipeline-passes`: `simplifycfg<...no-switch-range-to-icmp...>`);
+/// ours turned a two-way switch over a case range into an `icmp` there, ahead of
+/// the passes that read the switch. The slots that name the option (L1245, ...)
+/// keep it.
+#[test]
+fn test_the_early_simplifycfg_slot_leaves_a_switch_range_alone() {
+    let text = "define i32 @f(i32 %x) {\nb0:\n  switch i32 %x, label %d [\n    i32 0, label %a\n    i32 1, label %a\n    i32 2, label %a\n  ]\na:\n  ret i32 1\nd:\n  ret i32 2\n}\n";
+    let run = |slot: &str| {
+        let mut module = llrm_analysis::testing::parsed(text);
+        let applied = Applied { only: Some(slot.to_owned()), options: pipeline::Options::standard(), ..Applied::default() };
+        assert!(pipeline::slot_built(&applied, slot), "no slot {slot}");
+        let mut manager = llrm_mir::passes::PassManager::default();
+        manager.add(pipeline::Fixed::new(&applied));
+        manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).expect("the slot runs");
+        llrm_mir::print::module(&module)
+    };
+    let early = run("decide@1178");
+    assert!(early.contains("switch i32"), "the early slot made the range an icmp:\n{early}");
+    let later = run("decide@1244");
+    assert!(!later.contains("switch i32"), "premise: the later slot folds the range:\n{later}");
+}
