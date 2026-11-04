@@ -38,15 +38,35 @@ fn asm_of(
     std::fs::read_to_string(dir.join("d.s")).unwrap()
 }
 
-/// At speed the first trip is peeled; the loop's three multiplies are kept
-/// and the peeled copy's that fold are gone.
+/// The unroll pass's log at `level`: it says "peeling 1 iterations" for a loop
+/// whose first trip it runs folded.
+fn peels(level: &str) -> bool {
+    for name in ["LLRM_OW", "LLRM_CLANG_M16"] {
+        assert!(std::env::var_os(name).is_some(), "{name} is not set: this test needs it and does not skip");
+    }
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("peelentry-log-{}-{}", level.trim_start_matches('-'), std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("d.c"), SOURCE).unwrap();
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
+        .env("LLRM_CC_TARGET", "x86_32-wat")
+        .env("LLRM_DEBUG", "unroll")
+        .args([level, "-w", "-S", "-march=i486", "-o"])
+        .arg(dir.join("d.s"))
+        .arg(dir.join("d.c"))
+        .output()
+        .unwrap();
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    String::from_utf8_lossy(&run.stderr).contains("peel the first iteration")
+        && String::from_utf8_lossy(&run.stderr).contains("peeling 1 iterations")
+}
+
+/// At speed the first trip (x = y = 0: three multiplies fold) is peeled; for
+/// size it is not (mandel -O2: 660898 -> 596494 clocks).
 #[test]
-fn at_speed_the_first_trip_of_a_folding_loop_is_peeled() {
-    let text = asm("-O2", "speed");
-    let loops = text.matches("imul").count();
-    let size = asm("-Os", "size").matches("imul").count();
-    assert_eq!(size, 3, "-Os keeps the loop alone");
-    assert!(loops > size, "{loops} imul at -O2 against {size} at -Os: the first trip was not peeled\n{text}");
+fn at_speed_the_first_trip_of_a_folding_loop_is_peeled_and_for_size_it_is_not() {
+    assert!(peels("-O2"), "-O2 did not peel the first trip");
+    assert!(!peels("-Os"), "-Os peeled it");
 }
 
 /// x_primes: `i % d` at `d = 2` is a test of the low bit, not a divide, and
