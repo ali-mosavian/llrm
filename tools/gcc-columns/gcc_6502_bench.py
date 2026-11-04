@@ -71,8 +71,11 @@ def load_hand(d):
     return out
 
 
+TIMEOUT = int(os.environ.get("GCC_COLUMNS_TIMEOUT", "120"))  # seconds per tool call; a timeout exits 124 = a failed call, never a cell
+
+
 def sh(cmd, cwd, **kw):
-    return subprocess.run(["bash", "-c", "ulimit -v 16000000; timeout 120 \"$@\"", "_"] + cmd, cwd=cwd,
+    return subprocess.run(["bash", "-c", f"ulimit -v 16000000; timeout {TIMEOUT} \"$@\"", "_"] + cmd, cwd=cwd,
                           capture_output=True, text=True, **kw)
 
 

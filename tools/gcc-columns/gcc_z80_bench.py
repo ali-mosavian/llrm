@@ -50,8 +50,11 @@ _lzout:\t.ds 640
 """
 
 
+TIMEOUT = int(os.environ.get("GCC_COLUMNS_TIMEOUT", "120"))  # seconds per tool call; a timeout exits 124 = a failed call, never a cell
+
+
 def sh(cmd, cwd, inp=None):
-    return subprocess.run(["bash", "-c", "ulimit -v 16000000; exec timeout 120 \"$@\"", "x"] + cmd, cwd=cwd,
+    return subprocess.run(["bash", "-c", f"ulimit -v 16000000; exec timeout {TIMEOUT} \"$@\"", "x"] + cmd, cwd=cwd,
                           input=inp, capture_output=True, text=True)
 
 
@@ -113,6 +116,7 @@ def main():
     ap.add_argument("--kernels", default="")
     ap.add_argument("--levels", default="O1,O2,Os")
     ap.add_argument("--rt", default=os.path.join(HERE, "rt-z80"), help="dir of libgcc helper .s files, one routine each")
+    ap.add_argument("--rt-speed", default=os.path.join(HERE, "rt-z80-speed"), help="helpers that replace the --rt ones of the same name at the speed levels (O2, O3)")
     ap.add_argument("--src", default=os.path.join(HERE, "..", "..", "crates/target/llrm-6502/tests/bench/kernels.c"))
     ap.add_argument("--out", default="")
     ap.add_argument("--tsv", default="", help="matrix TSV rows (target prog level compiler bytes clocks instrs note)")
@@ -132,12 +136,19 @@ def main():
                 rts.append(f[:-2] + ".rel")
     # selective library: sdldz80 pulls members of a text list only when referenced
     open(f"{w}/rt.lib", "w").write("".join(f"{r}\n" for r in rts))
+    # speed levels: the helpers of --rt-speed stand in for the same-named ones
+    sp = sorted(f for f in os.listdir(a.rt_speed) if f.endswith(".s")) if os.path.isdir(a.rt_speed) else []
+    for f in sp:
+        assert sh(["sdasz80", "-o", "sp_" + f[:-2] + ".rel", os.path.join(a.rt_speed, f)], w).returncode == 0, f
+    open(f"{w}/rtsp.lib", "w").write("".join(f"{r}\n" for r in rts if r[:-4] + ".s" not in sp) + "".join(f"sp_{f[:-2]}.rel\n" for f in sp))
+    SPEED = ("O2", "O3")
     open(f"{w}/empty.c", "w").write("")
     r = sh([a.cc1, "-version", "-quiet", "empty.c", "-o", "/dev/null"], w)
     ver = next(l for l in (r.stdout + r.stderr).splitlines() if "version" in l)
     hdr = [cc1_line(a.cc1), f"version: {ver}",
            "assembler/linker: sdasz80/sdldz80 (SDCC 4.5.0), ucsim_z80",
-           "flags: cc1 -quiet -<level> -DK_<name> kernels.c; driver cc1 -quiet -O1"]
+           "flags: cc1 -quiet -<level> -DK_<name> kernels.c; driver cc1 -quiet -O1",
+           "helpers: rt-z80/ at O1/Os; rt-z80-speed/ replaces the same-named ones at O2/O3 (early-exit __mulhi3: +4 B, -508 T on mul16)"]
     base_flags = ["-quiet"]
     rows, bad, cnotes = {}, [], {}
     for name, ret, args, want_v in K:
@@ -148,9 +159,9 @@ def main():
             p = sh([a.cc1, *base_flags, "-O1", *defs, "d.c", "-o", f"{tag}.s"], w)
             assert p.returncode == 0, p.stderr[-400:]
             assert sh(["sdasz80", "-o", f"{tag}.rel", f"{tag}.s"], w).returncode == 0
-        def link(objs, out):
+        def link(objs, out, lib="rt"):
             lk = ["-i", "-m", "-b", "_HEADER=0", "-b", "_CODE=0x100", "-b", "_DATA=0x8000", out]
-            return sh(["sdldz80", *lk, "-k", w, "-l", "rt", *objs] if rts else ["sdldz80", *lk, *objs], w)
+            return sh(["sdldz80", *lk, "-k", w, "-l", lib, *objs] if rts else ["sdldz80", *lk, *objs], w)
         # sdldz80 takes: options, output name, then object files
         p = link(["crt0.rel", "data.rel", "e.rel"], "e")
         if p.returncode:
@@ -163,7 +174,7 @@ def main():
                 bad.append((*cell, "compile: " + (p.stderr or p.stdout)[-200:].replace("\n", " "))); continue
             if sh(["sdasz80", "-o", "k.rel", "k.s"], w).returncode:
                 bad.append((*cell, "assemble")); continue
-            p = link(["crt0.rel", "data.rel", "d.rel", "k.rel"], "x")
+            p = link(["crt0.rel", "data.rel", "d.rel", "k.rel"], "x", "rtsp" if lvl in SPEED and sp else "rt")
             if p.returncode:
                 bad.append((*cell, "link: " + p.stderr[-200:].replace("\n", " "))); continue
             try:
@@ -181,6 +192,8 @@ def main():
             note = f"incl. result move +{mv[0]} B +{mv[1]} T +{mv[2]} insn (ex de,hl 4 T + store via DE 4 T)" if mv[0] else "8-bit result in A, no move"
             if re.search(r"___(mulqi3|mulhi3|udivhi3|call_hl)\b", open(f"{w}/k.s").read()):
                 note = "hand helper, not codegen; " + note
+            if lvl in SPEED and any(f"___{f[2:-2]}" in open(f"{w}/k.s").read() for f in sp):
+                note = f"speed helper ({', '.join(f[:-2] for f in sp)}) at {lvl}; " + note
             if tab >= 64:
                 note = f"table, not codegen; {tab} B table counted; " + note
             cnotes[cell] = note

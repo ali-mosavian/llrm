@@ -22,7 +22,7 @@ impl CoalescerEnv for AnyClass {
 }
 
 fn held(value: u32) -> Loc {
-    Loc::Held(Held { value, width: 4 })
+    Loc::Held(Held { value, width: 4, offset: 0 })
 }
 
 fn copy(
@@ -131,7 +131,7 @@ fn test_a_dead_copy_takes_the_definition_only_it_read() {
 fn test_a_dead_copy_does_not_take_a_call_that_delivered_its_source() {
     let what = Semantics { name: Some("call".into()), ..Semantics::new(Operation::Call) };
     let mut call = Insn::new(0, None, Some(what), vec![1], vec![]);
-    call.delivers = vec![(Held { value: 1, width: 4 }, llrm_lir::registers::RegId::EAX)];
+    call.delivers = vec![(Held { value: 1, width: 4, offset: 0 }, llrm_lir::registers::RegId::EAX)];
     let (call, c) = (Arc::new(call), copy(2, 1));
     let was = body(&[(&[Arc::clone(&call), Arc::clone(&c)], &[])]);
     let mut lis = LiveIntervals::new(&was);
@@ -429,7 +429,7 @@ fn test_two_copies_into_one_value_leave_every_read_defined() {
 #[test]
 fn test_a_coalesced_address_keeps_its_memory_operand_defined() {
     use crate::model::ir::Mem;
-    let memory = Mem { base: Some(Held { value: 2, width: 2 }), ..Mem::new(None, 2) };
+    let memory = Mem { base: Some(Held { value: 2, width: 2, offset: 0 }), ..Mem::new(None, 2) };
     let what = Semantics {
         name: Some("mov".into()),
         dests: vec![held(3)],
@@ -655,6 +655,9 @@ fn test_a_join_narrows_the_class_the_next_join_is_judged_against() {
         should_join: Box::new(|_| true),
         freq: Vec::new(),
         regs: None,
+        kind_of: None,
+        kinds: Default::default(),
+        check_kinds: false,
     };
     let (base, index) = (copy(2, 1), copy(3, 1));
     // `v1` has two values to `v2`'s one, so the join keeps it as the surviving
@@ -905,7 +908,7 @@ fn held_at(
     value: u32,
     width: u32,
 ) -> Loc {
-    Loc::Held(Held { value, width })
+    Loc::Held(Held { value, width, offset: 0 })
 }
 
 /// `dst := mov src` between two widths.
@@ -1112,6 +1115,9 @@ fn env_with_palettes(palettes: &[(u32, &[RegId])]) -> TargetEnv {
         should_join: Box::new(|_| true),
         freq: Vec::new(),
         regs: Some(body(&[]).regs()),
+        kind_of: None,
+        kinds: Default::default(),
+        check_kinds: false,
     }
 }
 
@@ -1162,6 +1168,9 @@ fn test_a_copy_from_a_pinned_argument_is_left_to_the_allocator_when_the_target_s
             freq: Vec::new(),
             joins_sub_registers: true,
             regs: None,
+            kind_of: None,
+            kinds: Default::default(),
+            check_kinds: false,
         };
         let mut lis = LiveIntervals::new(&was);
         lis.interval(1);
@@ -1171,4 +1180,192 @@ fn test_a_copy_from_a_pinned_argument_is_left_to_the_allocator_when_the_target_s
     };
     assert_eq!(join(true), JoinResult::Joined, "premise: the copy joins when the target allows it");
     assert_eq!(join(false), JoinResult::Rejected, "the copy joined the pin");
+}
+
+/// A target with a view of the wide value's high byte.
+struct LaneViews;
+
+impl CoalescerEnv for LaneViews {
+    fn can_share(
+        &self,
+        _a: u32,
+        _b: u32,
+    ) -> bool {
+        true
+    }
+
+    fn can_share_sub(
+        &self,
+        _narrow: u32,
+        _wide: u32,
+    ) -> bool {
+        true
+    }
+
+    fn can_share_lane(
+        &self,
+        _narrow: u32,
+        _wide: u32,
+        _offset: u32,
+    ) -> bool {
+        true
+    }
+}
+
+/// `v2:2@1 := mov v1:1` into the byte above the low one, as `read_at` sees it.
+fn copy_into_lane(offset: u32) -> Arc<Insn> {
+    let what = Semantics {
+        name: Some("mov".into()),
+        dests: vec![Loc::Held(Held { value: 2, width: 1, offset })],
+        sources: vec![held_at(1, 1)],
+        ..Semantics::new(Operation::Move)
+    };
+    Arc::new(Insn::new(0, None, Some(what), vec![2], vec![1]))
+}
+
+/// `v2.hi := mov v1` joined v1 into the low byte of v2 (the wide-copy case
+/// only knew the low part): a byte copied to the high byte of a pair was named
+/// at offset 0, so the pair's two bytes overlapped. The join puts v1's def at
+/// byte 1 of v2.
+#[test]
+fn test_a_copy_into_the_high_byte_joins_the_byte_at_its_offset() {
+    let (narrow, c, r) = (def_at(1, 1), copy_into_lane(1), read_at(2, 2));
+    let was = body(&[(&[narrow, Arc::clone(&c), r], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(1);
+    lis.interval(2);
+    let result = join_copy(&mut lis, &LaneViews, &mut State::new(), &mut Default::default(), c.id());
+    assert_eq!(result, JoinResult::Joined);
+    let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
+    assert_eq!(kept.len(), 2, "the copy is gone");
+    assert_eq!(
+        kept[0].what.as_ref().unwrap().dests,
+        vec![Loc::Held(Held { value: 2, width: 1, offset: 1 })],
+        "the byte def names the high byte of the pair"
+    );
+}
+
+/// A target with no view of the high byte leaves the copy: the pair needs
+/// `can_share_lane`.
+#[test]
+fn test_without_a_view_of_the_high_byte_the_copy_is_left() {
+    let (narrow, c, r) = (def_at(1, 1), copy_into_lane(1), read_at(2, 2));
+    let was = body(&[(&[narrow, Arc::clone(&c), r], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.interval(1);
+    lis.interval(2);
+    let result = join_copy(&mut lis, &SubRegisters, &mut State::new(), &mut Default::default(), c.id());
+    assert_eq!(result, JoinResult::Rejected);
+}
+
+/// The kept uses of a value, summed by kind for the target's join price, must
+/// be the instructions' after every rewrite and erase the joins make
+/// (`LLRM_CHECK_USE_SUMMARY`'s check, on in `check_kinds`). A join took the
+/// dead definition a copy alone read (C5), moved a copy to a loop's
+/// preheader, or extended a value over a copy back, and left a kept list
+/// with an instruction that is gone or without the one that replaced it, so
+/// the next join was priced on uses that were not there.
+#[test]
+fn test_the_kept_uses_of_a_value_follow_the_rewrites_and_erases_of_the_joins() {
+    let palette: &[(u32, &[RegId])] =
+        &[(1, &[RegId::AX, RegId::BX]), (2, &[RegId::AX, RegId::BX]), (3, &[RegId::AX, RegId::BX])];
+    let checked = || {
+        let mut env = env_with_palettes(palette);
+        env.kind_of = Some(Box::new(|_, _| Some(0)));
+        env.check_kinds = true;
+        env.freq = vec![1.0, 4.0, 1.0];
+        env
+    };
+    // a dead copy and the definition only it read, with a copy after them
+    let (a, c, d, e) = (def(1), copy(2, 1), load(3), copy(1, 3));
+    let dead_copy = body(&[(&[Arc::clone(&a), Arc::clone(&c), Arc::clone(&d), Arc::clone(&e), read(1)], &[])]);
+    // a copy back of a copy
+    let (first, to, back, redefined) = (load(1), copy(2, 1), copy(1, 2), load(2));
+    let copy_back = body(&[(&[first, to, back, redefined, read(1), read(2)], &[])]);
+    // a copy at a loop entry that the latch reverses
+    let (first, to, user, back) = (load(1), copy(2, 1), read(2), copy(1, 2));
+    let (again, kept, after) = (load(1), read(2), read(1));
+    let loop_entry = body(&[(&[first], &[1]), (&[to, user, back], &[1, 2]), (&[again, kept, after], &[])]);
+    for (name, was) in [("dead copy", dead_copy), ("copy back", copy_back), ("loop entry", loop_entry)] {
+        let env = checked();
+        let depth = vec![0; was.blocks.len()];
+        let _ = super::env::joined(&was, &env, &depth);
+        eprintln!("{name}: kept lists checked at {} prices", env.kinds.borrow().len());
+    }
+}
+
+/// A kind's kept sum is f32: put and taken at blocks of frequency 1e5 and 0.7
+/// (the hot one taken first) it ends near 0.003, not 0, so a kind whose last
+/// instruction was taken stayed in the list and the next join was priced on a
+/// use that was not there (`LLRM_CHECK_USE_SUMMARY` saw one kind too many).
+/// The kind goes with its last instruction.
+#[test]
+fn test_a_kind_with_no_instruction_left_is_not_kept_at_high_frequency() {
+    let palette: &[(u32, &[RegId])] = &[(1, &[RegId::AX, RegId::BX]), (2, &[RegId::AX, RegId::BX])];
+    let (first, to, here, there) = (load(1), copy(2, 1), read(1), read(2));
+    let was = body(&[(&[first, Arc::clone(&to), here, there], &[1]), (&[read(1)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    lis.track_changes();
+    let mut env = env_with_palettes(palette);
+    // the probes are the instructions named "use": a kind of their own
+    env.kind_of = Some(Box::new(|insn, _| {
+        Some(if insn.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("use")) { 1 } else { 0 })
+    }));
+    env.check_kinds = true;
+    env.freq = vec![1.0e5, 0.7];
+    assert!(env.should_coalesce(&lis, to.id(), 1, 2), "premise: the kept lists are made");
+    for cycle in 0..5 {
+        let (hot, cold) = (read_at(1, 4), read_at(1, 4));
+        lis.insert_instr_before_at(0, None, Arc::clone(&hot), false);
+        lis.insert_instr_before_at(1, None, Arc::clone(&cold), false);
+        lis.remove_instr(0, hot.id());
+        lis.remove_instr(1, cold.id());
+        assert!(env.should_coalesce(&lis, to.id(), 1, 2), "cycle {cycle}");
+    }
+}
+
+/// `v2:1@l := mov x` with the lane the copy defines named, as tolir will.
+fn lane_copy(
+    dst: u32,
+    offset: u32,
+    src: u32,
+) -> Arc<Insn> {
+    let what = Semantics {
+        name: Some("mov".into()),
+        dests: vec![Loc::Held(Held { value: dst, width: 1, offset })],
+        sources: vec![held_at(src, 1)],
+        ..Semantics::new(Operation::Move)
+    };
+    let mut copy = Insn::new(0, None, Some(what), vec![dst], vec![src]);
+    copy.def_lanes = vec![(dst, llrm_lir::valuelanes::ValueLanes::at(offset, 1))];
+    // The lane above the first keeps the lanes already defined.
+    if offset != 0 {
+        copy.partial_defs = vec![dst];
+    }
+    Arc::new(copy)
+}
+
+/// A pair built from two bytes: `v2.lo := v1; v2.hi := v3; read v2`. The
+/// whole-value join of the second byte met `v2` live (its low byte) across
+/// `v3` and refused, so one byte copy stayed in every pair. Each byte joins
+/// into its own lane, and the two copies go.
+#[test]
+fn test_both_bytes_of_a_pair_join_into_their_lanes() {
+    let (d1, d3) = (def_at(1, 1), def_at(3, 1));
+    let (lo, hi) = (lane_copy(2, 0, 1), lane_copy(2, 1, 3));
+    let was = body(&[(&[d1, d3, Arc::clone(&lo), Arc::clone(&hi), read_at(2, 2)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    for v in 1..=3 {
+        lis.interval(v);
+    }
+    let mut state = State::new();
+    for copy in [lo.id(), hi.id()] {
+        let result = join_copy(&mut lis, &LaneViews, &mut state, &mut Default::default(), copy);
+        assert_eq!(result, JoinResult::Joined);
+    }
+    let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
+    assert_eq!(kept.len(), 3, "both copies are gone");
+    let dests = |insn: &Arc<Insn>| insn.what.as_ref().unwrap().dests.clone();
+    assert_eq!(dests(&kept[0]), vec![Loc::Held(Held { value: 2, width: 1, offset: 0 })]);
+    assert_eq!(dests(&kept[1]), vec![Loc::Held(Held { value: 2, width: 1, offset: 1 })]);
 }

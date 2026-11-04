@@ -1,0 +1,90 @@
+reason = "new program: a zip dot loop over two slices of different lengths"
+blessed = "2026-11-03"
+
+[ow.O2]
+instructions = 70044
+memory_operands = 21914
+code_bytes = 252
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.9356
+
+[ow.Os]
+instructions = 75554
+memory_operands = 21876
+code_bytes = 238
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 1.0091
+
+[bcc.O2]
+instructions = 19535
+memory_operands = 8234
+code_bytes = 223
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.2619
+
+[bcc.Os]
+instructions = 31451
+memory_operands = 9954
+code_bytes = 228
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.4208
+
+[tc.O2]
+instructions = 69101
+memory_operands = 18610
+code_bytes = 266
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.923
+
+[tc.Os]
+instructions = 72619
+memory_operands = 22370
+code_bytes = 256
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.97
+
+[tcpp.O2]
+instructions = 72129
+memory_operands = 12156
+code_bytes = 249
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.9634
+
+[tcpp.Os]
+instructions = 77703
+memory_operands = 14036
+code_bytes = 244
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 1.0377
+
+[bc.O2]
+instructions = 98786
+memory_operands = 43349
+code_bytes = 514
+data_bytes = 7
+bss_bytes = 10
+kernel_ms = 1.3367
+
+[pds71.O2]
+instructions = 101313
+memory_operands = 43512
+code_bytes = 510
+data_bytes = 7
+bss_bytes = 10
+kernel_ms = 1.3662
+
+[vbdos.O2]
+instructions = 102372
+memory_operands = 43879
+code_bytes = 516
+data_bytes = 7
+bss_bytes = 10
+kernel_ms = 1.3769
