@@ -1952,7 +1952,13 @@ fn a_probed_frame_ending_in_a_sibling_call_gives_its_stack_back_first() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let lines: Vec<&str> = listing.lines().map(str::trim).collect();
     let jmp = lines.iter().position(|line| line.starts_with("jmp ")).unwrap_or_else(|| panic!("{listing}"));
-    assert!(lines[jmp - 1].starts_with("add rsp, 20") || lines[jmp - 1].starts_with("mov rsp, rbp"), "{listing}");
+    // The red zone may take some of the frame's bytes; what the prologue
+    // takes the exit gives back.
+    let taken = lines.iter().find_map(|line| line.strip_prefix("sub rsp, ")).unwrap_or_else(|| panic!("{listing}"));
+    assert!(
+        lines[jmp - 1] == format!("add rsp, {taken}") || lines[jmp - 1].starts_with("mov rsp, rbp"),
+        "{listing}"
+    );
 }
 
 /// The `.xdata` of an x86-64 module written as COFF, found by `.pdata`'s
