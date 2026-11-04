@@ -11,6 +11,12 @@ llrm-dagisel = { path = "../../backend/llrm-dagisel" }
 llrm-codegen = { workspace = true }
 llrm-lir = { workspace = true }
 llrm-mir = { workspace = true }
+llrm-analysis = { workspace = true }
+llrm-transforms = { workspace = true }
+llrm-spike-mf = { workspace = true }
+llrm-object = { workspace = true }
+llrm-debug = { workspace = true }
+llrm-dwarf = { workspace = true }
 
 [build-dependencies]
 llrm-target = { workspace = true }

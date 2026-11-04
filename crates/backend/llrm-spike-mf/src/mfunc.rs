@@ -55,6 +55,9 @@ pub struct Inst {
     pub may_store: bool,
     pub side_effects: bool,
     pub cheap_as_move: bool,
+    /// A load of memory nothing writes (`isDereferenceableInvariantLoad`):
+    /// loop-invariant when its address is.
+    pub invariant_load: bool,
     /// The spiller may run it again at each use instead of keeping its result
     /// (`isTriviallyReMaterializable`).
     pub rematerializable: bool,
@@ -63,6 +66,11 @@ pub struct Inst {
     pub early_clobber: bool,
     /// Its two register sources may swap places (`isCommutable`).
     pub commutable: bool,
+    /// The caller's number for the operation it was made from (the `DebugLoc`
+    /// a `MachineInstr` carries); 0 for none. A clone keeps it, code the
+    /// allocator adds has none. A target that lists its source places in
+    /// [`MFunction::places`] numbers them from 1.
+    pub origin: u32,
 }
 
 impl Inst {
@@ -83,9 +91,11 @@ impl Inst {
             may_store: false,
             side_effects: false,
             cheap_as_move: false,
+            invariant_load: false,
             rematerializable: false,
             early_clobber: false,
             commutable: false,
+            origin: 0,
         }
     }
 
@@ -113,6 +123,63 @@ pub struct Block {
     pub phis: Vec<Phi>,
 }
 
+impl Block {
+    /// An instruction with no place that defines a register a later one reads
+    /// (a constant, a materialised address) takes the place of the first of
+    /// those readers, the user it was made for (the pin emits a node with its
+    /// user's `DebugLoc`). Any other stays at place 0: a bare jump, an edge
+    /// copy, what follows the last located instruction. Line 0 is the pin's
+    /// row for it, which is the format's to write (or to leave to the row
+    /// before it).
+    pub fn place_unlocated(&mut self) {
+        let mut reader: std::collections::HashMap<Reg, u32> = std::collections::HashMap::new();
+        for inst in self.insts.iter_mut().rev() {
+            if inst.origin == 0 {
+                inst.origin = inst
+                    .operands
+                    .iter()
+                    .find_map(|operand| match operand {
+                        Operand::Def(reg) => reader.get(reg).copied(),
+                        _ => None,
+                    })
+                    .unwrap_or(0);
+            }
+            for operand in &inst.operands {
+                match operand {
+                    Operand::Def(reg) => {
+                        reader.remove(reg);
+                    }
+                    Operand::Use(reg) if inst.origin != 0 => {
+                        reader.insert(*reg, inst.origin);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+/// A source variable the debug info names, and where it lives for the whole
+/// function: the channel `-g` formats read, whatever the target.
+#[derive(Clone, Debug)]
+pub struct Variable {
+    pub name: String,
+    /// Its `!DIType` node, as the module the function was selected from has it.
+    pub r#type: llrm_mir::module::MetadataId,
+    /// The `!DIExpression` operations of the location, as written.
+    pub expr: Vec<llrm_mir::module::DwOp>,
+    pub parameter: bool,
+    pub place: VariablePlace,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VariablePlace {
+    /// The register an argument arrives in.
+    Register(RegId),
+    /// Frame object `index`, `offset` bytes into it.
+    Frame { index: i32, offset: i64 },
+}
+
 /// `C` is the target's register class.
 #[derive(Clone, Debug)]
 pub struct MFunction<C> {
@@ -126,9 +193,20 @@ pub struct MFunction<C> {
     /// The function's own stack objects (static allocas): frame index, size
     /// and alignment in bytes.
     pub locals: Vec<(i32, i64, i64)>,
+    /// The function is built for size (`shouldOptimizeForSize`).
+    pub optimize_for_size: bool,
+    /// The source places the instructions' [`Inst::origin`]s number, from 1.
+    pub places: Vec<llrm_codegen::model::lir::SrcLoc>,
+    /// `-g`: the source variables and where each is.
+    pub variables: Vec<Variable>,
 }
 
 impl<C> MFunction<C> {
+    /// [`Block::place_unlocated`] for every block.
+    pub fn place_unlocated(&mut self) {
+        self.blocks.iter_mut().for_each(Block::place_unlocated);
+    }
+
     pub fn new(name: &str) -> MFunction<C> {
         MFunction {
             name: name.to_owned(),
@@ -136,6 +214,9 @@ impl<C> MFunction<C> {
             classes: Vec::new(),
             fixed: BTreeMap::new(),
             locals: Vec::new(),
+            optimize_for_size: false,
+            places: Vec::new(),
+            variables: Vec::new(),
         }
     }
 

@@ -102,14 +102,14 @@
 //! `FoldSetCC`
 //! ([L2698](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L2698)).
 
-pub use llrm_sdag::{actions, isd, lowering, mvt, x86isd};
+pub use llrm_sdag::{actions, isd, libcalls, lowering, mvt, x86isd};
 pub mod abs_combine;
 pub mod address_analysis;
 pub mod bitcast_combine;
 pub mod bitreverse_combine;
 pub mod bswap_combine;
 pub mod builder;
-mod chain_combine;
+pub mod chain_combine;
 pub mod combine_funnel;
 pub mod combine_load;
 pub mod combine_store_merge;
@@ -129,6 +129,7 @@ pub mod emit;
 pub mod expand_divrem_const;
 pub mod expand_fixed;
 pub mod expand_funnel;
+pub mod expand_overflow;
 pub mod expand_sat;
 pub mod fold;
 pub mod fp_combine;
@@ -144,11 +145,13 @@ pub mod libcall;
 pub mod live_out;
 pub mod logic_setcc;
 mod match_rotate;
+pub mod narrow_divrem;
 pub mod opcodes;
 mod reassociate;
 pub mod reduce_load_width;
 pub mod rotate_combine;
 pub mod schedule;
+pub mod setcc_extreme;
 pub mod switchcg;
 pub mod target_calling;
 pub mod x86_carry;
@@ -157,7 +160,8 @@ pub mod x86_preprocess;
 
 pub use actions::{Action, Features, LoadExt, TargetLowering};
 pub use dag::{
-    BooleanContents, DagConfig, MemBase, MemInfo, NodeData, Rauw, SDNode, SDNodeFlags, SDValue, SelectionDAG,
+    BooleanContents, DagConfig, MemBase, MemInfo, MemLocation, NodeData, Rauw, SDNode, SDNodeFlags, SDValue,
+    SelectionDAG,
 };
 pub use isd::{CondCode, ISD};
 pub use lowering::{TargetLoweringInfo, TypeAction};
@@ -187,6 +191,8 @@ mod dag_function_frame_tests;
 mod dag_function_m64_tests;
 #[cfg(test)]
 mod dag_function_odds_tests;
+#[cfg(test)]
+mod dag_function_soft_float_tests;
 #[cfg(test)]
 mod dag_function_switch_tests;
 #[cfg(test)]

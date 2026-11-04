@@ -66,6 +66,14 @@ impl Globals {
         self.1.map_or_else(|| name.to_owned(), |platform| crate::data::symbol_name(platform, name))
     }
 
+    /// The prefix of a label the linker never sees: `l` on Mach-O, `.L` on ELF.
+    pub fn local_prefix(&self) -> &'static str {
+        match self.1 {
+            Some(Platform::Linux) => ".L",
+            _ => "l",
+        }
+    }
+
     pub fn get(
         &self,
         id: u32,

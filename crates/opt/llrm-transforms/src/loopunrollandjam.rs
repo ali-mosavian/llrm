@@ -694,6 +694,7 @@ fn unroll_remainder_loop(
         globals.push(llrm_mir::module::GlobalValue {
             name: "llvm.assume".to_owned().into(),
             linkage: llrm_mir::module::Linkage::External,
+            visibility: llrm_mir::Visibility::Default,
             unnamed_addr: Default::default(),
             address_space: 0,
             kind: llrm_mir::module::GlobalKind::Function(Box::new(function)),

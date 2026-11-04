@@ -325,6 +325,16 @@ pub enum Datum {
     /// A frontend's own item, which Python's untyped `Module.data` carries
     /// through: QB's `_SegmentWord`, a `dw seg name` only its writer encodes.
     SegmentWord(String),
+    /// A four-byte `name - base`, a position-independent jump table's entry
+    /// (`.long .LBB0_6-.LJTI0_0`).
+    Difference(Difference),
+}
+
+/// `name - base` in four bytes: both labels of one module.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Difference {
+    pub name: String,
+    pub base: String,
 }
 
 /// The bytes `items` occupy from segment offset `from` (an `Align` pads to a
@@ -341,6 +351,7 @@ pub fn data_size(
         Datum::Align(_) => at,
         Datum::Bytes(bytes) => at + bytes.len() as i64,
         Datum::SegmentWord(_) => at + 2,
+        Datum::Difference(_) => at + 4,
     }) - from
 }
 
@@ -403,6 +414,16 @@ pub fn split_data(
     Ok(pieces)
 }
 
+/// A second name for a symbol this module defines (`GlobalAlias`): it is the
+/// target's address under another name, not a copy.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Alias {
+    pub name: String,
+    pub target: String,
+    /// `Local` for an `internal` or `private` alias.
+    pub binding: llrm_object::Binding,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Module {
     /// The register file of the target the module is for.
@@ -413,6 +434,11 @@ pub struct Module {
     /// (name, "far" | "near" | "byte")
     pub externs: Vec<(String, String)>,
     pub publics: Vec<String>,
+    /// The visibility of each exported name that is not the default, by its
+    /// name in the object.
+    pub visibility: std::collections::BTreeMap<String, llrm_object::Visibility>,
+    /// Second names for symbols above, exported as `publics` are.
+    pub aliases: Vec<Alias>,
     /// (segment, items)
     pub data: Vec<(String, Vec<Datum>)>,
     pub procedures: Vec<Procedure>,
@@ -536,20 +562,55 @@ pub fn jump_tables(
         let jumps =
             procedure.body.blocks.iter().flat_map(|block| block.insns.iter()).filter_map(|one| one.what.as_ref());
         for what in jumps.filter(|what| what.op == Operation::Jump && what.indirect && !what.table.is_empty()) {
-            let Some(Loc::Mem(ir::Mem { addr: Some(addr), .. })) = what.sources.first() else { continue };
-            let name = format!("$J{}", addr.index);
-            names.insert((Space::Segment, addr.index), name.clone());
+            let index = match (what.sources.first(), what.table_id) {
+                (Some(Loc::Mem(ir::Mem { addr: Some(addr), .. })), _) => addr.index,
+                (_, Some(id)) => id,
+                _ => continue,
+            };
+            let name = format!("$J{index}");
+            names.insert((Space::Segment, index), name.clone());
             out.push(Datum::Object(Label { name }));
-            out.extend(
-                what.table
-                    .iter()
-                    .map(
-                        |&target| Datum::Pointer(Pointer { name: label(number, target), offset: 0, far: false, bytes }),
-                    ),
-            );
+            // A table read through a register is position independent: its
+            // entries are offsets from the table.
+            let relative = what.table_id.is_some() && !matches!(what.sources.first(), Some(Loc::Mem(_)));
+            out.extend(what.table.iter().map(|&target| {
+                if relative {
+                    Datum::Difference(Difference { name: label(number, target), base: format!("$J{index}") })
+                } else {
+                    Datum::Pointer(Pointer { name: label(number, target), offset: 0, far: false, bytes })
+                }
+            }));
         }
     }
     out
+}
+
+/// The tables of `tables` (from [`jump_tables`]) that are position independent
+/// or of 64-bit pointers, each aligned to its entry, and the others: a table of
+/// differences is never written, so it goes in the read-only data (`.rodata`)
+/// as the pin's.
+pub fn split_read_only(tables: Vec<Datum>) -> (Vec<Datum>, Vec<Datum>) {
+    let (mut read_only, mut writable) = (Vec::new(), Vec::new());
+    let mut group: Vec<Datum> = Vec::new();
+    let mut flush = |group: &mut Vec<Datum>| {
+        // A 64-bit table of pointers (`-fno-pic`) is as unwritten and is the
+        // pin's `.rodata` too; the narrower ones stay where they were.
+        let wide = matches!(group.get(1), Some(Datum::Pointer(Pointer { bytes: 8, .. })));
+        if matches!(group.get(1), Some(Datum::Difference(_))) || wide {
+            read_only.push(Datum::Align(Align { to: if wide { 8 } else { 4 } }));
+            read_only.append(group);
+        } else {
+            writable.append(group);
+        }
+    };
+    for datum in tables {
+        if matches!(datum, Datum::Object(_)) {
+            flush(&mut group);
+        }
+        group.push(datum);
+    }
+    flush(&mut group);
+    (read_only, writable)
 }
 
 pub fn datum(item: &Datum) -> Vec<String> {
@@ -574,6 +635,7 @@ pub fn datum(item: &Datum) -> Vec<String> {
         Datum::Bytes(item) => _code(&[InlinePart::Bytes(item.clone())]),
         // `_code((item,))` yields nothing for an item it cannot match.
         Datum::SegmentWord(_) => Vec::new(),
+        Datum::Difference(Difference { name, base }) => vec![format!("    dd {name} - {base}")],
     }
 }
 
@@ -607,6 +669,9 @@ pub enum Mark {
     /// The code after it is this source line's: the procedure's `index`th
     /// line, where [`line_label`] names it.
     Line { line: SrcLoc, index: u32 },
+    /// The line row before it is a statement however its line compares with
+    /// the last row's (`ForceIsStmtInstrs`).
+    ForceStmt,
     /// The procedure's own code starts, its prologue done: the first code
     /// of a source line.
     BodyStart,
@@ -621,6 +686,10 @@ pub enum Mark {
     Def { tag: u32, place: Place },
     /// Note `note` of the body (`LirBody::notes`) stands here.
     Note(u32),
+    /// The LIR instruction with this identity (`Insn::id`) starts here: a
+    /// zero-size anchor the debug ranges are placed by, written for a body
+    /// that has notes.
+    Insn(u64),
     /// The call before it clobbers this register (one mark for each it
     /// clobbers).
     Clobbered(RegId),
@@ -1129,13 +1198,16 @@ pub fn realign_refusal(procedure: &Procedure) -> Option<String> {
 /// locals' space), except where it calls: its outgoing arguments are stored at
 /// `[sp]` and up, where registers pushed after the space would be.
 pub fn realigned(procedure: Procedure) -> Procedure {
-    let calls = matches!(procedure.body.bits, 32 | 64)
-        && procedure
-            .body
-            .blocks
-            .iter()
-            .flat_map(|block| block.insns.iter())
-            .any(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Call));
+    // The pin's 64-bit frame pushes its registers before the space for the
+    // locals whether or not it calls.
+    let calls = procedure.registers.saved_first
+        || (matches!(procedure.body.bits, 32 | 64)
+            && procedure
+                .body
+                .blocks
+                .iter()
+                .flat_map(|block| block.insns.iter())
+                .any(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Call)));
     if realign_of(&procedure.body) == 0 && !calls { procedure } else { saved_first(procedure) }
 }
 
@@ -1149,7 +1221,7 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
         && procedure.interrupt.is_none()
         && !procedure.far
         && matches!(procedure.body.bits, 32 | 64)
-        && (procedure.reserve != 0 || moves_stack(&procedure.body))
+        && (procedure.reserve != 0 || moves_stack(&procedure.body) || procedure.registers.saved_first)
         && procedure.callees.values().all(|one| one.code.is_empty())
         && [false, true].iter().all(|omit| {
             // Nothing wrapped, or the frame and every register at the one Save
@@ -1197,7 +1269,10 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
         (!procedure.size || held || procedure.registers.free) && stack_addressed(&procedure, 0).is_some()
     };
     let above = if dropped { slot } else { 0 };
-    let gap = (align - (above + pushed) % align) % align;
+    // Nothing is aligned where there are no locals: a leaf with two pushed
+    // registers had a `push rax` slot, and a caller with one had `sub rsp, 16`
+    // (the call alignment is `frame`'s, below), where the pin has neither.
+    let gap = if procedure.reserve == 0 { 0 } else { (align - (above + pushed) % align) % align };
     match crate::backend::relayout::pushed_down(&procedure.body, pushed + gap - above) {
         Some(body) => Procedure {
             body: lir::LirBody { saved_first: true, slot_dropped: dropped, ..body },
@@ -1304,6 +1379,7 @@ fn lowered(
     let saved = &saved[..];
     const FP: u32 = u32::MAX - 1;
     const EAX: u32 = u32::MAX;
+    const DEAD: u32 = u32::MAX - 2;
     let slot = procedure.registers.slot;
     let info = FrameInfo {
         has_fp: framed,
@@ -1314,7 +1390,16 @@ fn lowered(
         realign_to: Some(realign_of(&procedure.body)).filter(|&align| align != 0).map(|align| align as u64),
         has_var_sized_objects: !omit && framed && moves_stack(&procedure.body),
     };
-    let register = |reg_number: u32| if reg_number == FP { reg(FRAME) } else { reg(saved[reg_number as usize]) };
+    // A one-slot frame is `push rax` / `pop rcx` where no return is a sibling
+    // call (`emitSPUpdate` with `findDeadCallerSavedReg`), after the saved
+    // registers as before them.
+    let scratch =
+        procedure.registers.slot_scratch.filter(|_| omit && reserve == slot && !sibling_calls(&procedure.body));
+    let register = |reg_number: u32| match reg_number {
+        FP => reg(FRAME),
+        DEAD => reg(scratch.expect("a dead register is popped for a scratch frame").1),
+        _ => reg(saved[reg_number as usize]),
+    };
     let adjust = |name: &str, bytes: u64| {
         semantics(
             Operation::Binary,
@@ -1324,7 +1409,10 @@ fn lowered(
         )
     };
     let lower = |op: Op| match op {
-        Op::Push(EAX) => adjust("sub", slot as u64),
+        Op::Push(EAX) => match scratch {
+            Some((push, _)) => semantics(Operation::Push, "push", vec![], vec![reg(push)]),
+            None => adjust("sub", slot as u64),
+        },
         Op::Push(number) => semantics(Operation::Push, "push", vec![], vec![register(number)]),
         Op::Pop(number) => semantics(Operation::Pop, "pop", vec![register(number)], vec![]),
         Op::MovFpSp => semantics(Operation::Move, "mov", vec![reg(FRAME)], vec![reg(STACK)]),
@@ -1350,7 +1438,8 @@ fn lowered(
             enter.extend(stack_check(procedure, reserve));
         }
     }
-    let leave = emit_epilogue(&info, None).into_iter().map(lower).collect();
+    let dead = scratch.map(|_| DEAD);
+    let leave = emit_epilogue(&info, dead).into_iter().map(lower).collect();
     (enter, leave)
 }
 
@@ -1406,6 +1495,7 @@ fn parts(
         !omit
             && procedure.entry == 0
             && (reserve != 0
+                || procedure.registers.kept
                 || roots.contains(&procedure.body.regs().root(procedure.registers.pointer))
                 || procedure.callees.values().any(|one| may_address_frame(&one.code)))
     };
@@ -1808,6 +1898,7 @@ fn built(
     // The prologue is the first line's, not the previous procedure's last.
     let mut line = first.and_then(|one| one.line);
     let mut lines = 0..;
+    let forced_blocks = forced_statement_blocks(blocks);
     let mut marked = |line: SrcLoc| Item::Mark(Mark::Line { line, index: lines.next().expect("unbounded") });
     // The arguments are in their registers from the first byte: what the entry
     // says of them stands before the prologue.
@@ -1820,7 +1911,12 @@ fn built(
                     one.delivers.iter().zip(&one.debug.defines).filter(|(_, tag)| **tag != u32::MAX).map(
                         |((_, register), tag)| Item::Mark(Mark::Def { tag: *tag, place: Place::Register(*register) }),
                     );
-                defined.chain(one.debug.before.iter().map(|&note| Item::Mark(Mark::Note(note)))).collect::<Vec<_>>()
+                let anchor = one.debug.slot.map(|slot| Item::Mark(Mark::Insn(slot as u64)));
+                anchor
+                    .into_iter()
+                    .chain(defined)
+                    .chain(one.debug.before.iter().map(|&note| Item::Mark(Mark::Note(note))))
+                    .collect::<Vec<_>>()
             })
             .collect();
     let cells = blocks_arguments(&procedure.body);
@@ -1921,6 +2017,8 @@ fn built(
         let ends_in_jump =
             last_printed.is_some_and(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Jump));
         let mut closed = false;
+        let mut top = index > 0;
+        let mut first_lined = true;
         for one in &block.insns {
             if let Some(pieces) =
                 closing.filter(|_| ends_in_jump && last_printed.is_some_and(|last| Arc::ptr_eq(last, one)))
@@ -1931,6 +2029,10 @@ fn built(
             }
             if first.is_some_and(|first| Arc::ptr_eq(first, one)) {
                 out.push(Item::Mark(Mark::BodyStart));
+            }
+            // The instruction's anchor, ahead of what is said before it.
+            if let Some(slot) = one.debug.slot.filter(|_| !one.arrival()) {
+                out.push(Item::Mark(Mark::Insn(slot as u64)));
             }
             // What is said before an instruction stands there whether or not it
             // is emitted: a jump to the next block is not.
@@ -1946,9 +2048,26 @@ fn built(
             let Some(what) = &one.what else {
                 return Err(Unprintable(format!("{} at {}: an instruction with no semantics", procedure.name, one.at)));
             };
+            // An instruction with no place at the top of a block is line 0: it
+            // does not take the place of the block that lies before it
+            // (`DwarfDebug::beginInstruction`).
+            if std::mem::take(&mut top)
+                && one.line.is_none()
+                && let Some(before) = line.filter(|before| before.line != 0)
+            {
+                line = Some(SrcLoc { line: 0, ..before });
+                out.extend(line.map(&mut marked));
+            }
+            // Only the block's first line can be forced.
+            let force_here = one.line.is_some_and(|place| place.line != 0)
+                && std::mem::take(&mut first_lined)
+                && forced_blocks.contains(&block.at);
             if one.line.is_some() && one.line != line {
                 line = one.line;
                 out.extend(line.map(&mut marked));
+                if force_here {
+                    out.push(Item::Mark(Mark::ForceStmt));
+                }
             }
             match what.op {
                 Operation::Move if _segment(regs, &what.dests[0]) && matches!(what.sources[0], Loc::Imm(_)) => {
@@ -2164,7 +2283,9 @@ fn built(
                     let marks = cfi.after(what, &bp);
                     let ends = matches!(what.op, Operation::Return | Operation::Jump);
                     out.push(item);
-                    out.extend(marks);
+                    if procedure.registers.exit_cfi {
+                        out.extend(marks);
+                    }
                     ends
                 }
                 Item::Callee(Callee { tail: true, .. }) => {
@@ -2174,7 +2295,9 @@ fn built(
                 Item::Mark(Mark::Pops(bytes)) => {
                     let marks = cfi.after_pops(*bytes);
                     out.push(item);
-                    out.extend(marks);
+                    if procedure.registers.exit_cfi {
+                        out.extend(marks);
+                    }
                     false
                 }
                 _ => {
@@ -2186,7 +2309,7 @@ fn built(
                 cfi = done.clone();
                 // Nothing in this function follows its last exit: a directive
                 // there would open the next function's frame.
-                if last_label.is_some_and(|label| label > at) {
+                if procedure.registers.exit_cfi && last_label.is_some_and(|label| label > at) {
                     out.push(done.restate());
                 }
             }
@@ -3414,12 +3537,62 @@ pub fn _signed(n: i64) -> String {
     }
 }
 
+/// The blocks whose first line is a statement whatever the line before it was
+/// (`DwarfDebug::findForceIsStmtInstrs`): some predecessor ends on another line
+/// than the block's first, or has no line at all. The pin reads each branch's
+/// own line; the last line of the block stands for them here.
+fn forced_statement_blocks(blocks: &[crate::model::lir::Block]) -> std::collections::HashSet<i64> {
+    let first_line = |block: &crate::model::lir::Block| {
+        block.insns.iter().find_map(|one| one.line.map(|place| place.line).filter(|&line| line != 0))
+    };
+    let last_line = |block: &crate::model::lir::Block| {
+        block.insns.iter().rev().find_map(|one| one.line.map(|place| place.line).filter(|&line| line != 0))
+    };
+    let mut forced = std::collections::HashSet::new();
+    for block in blocks {
+        for next in block.succ.iter() {
+            let Some(target) = blocks.iter().find(|one| one.at == *next) else { continue };
+            if first_line(target).is_some() && last_line(block) != first_line(target) {
+                forced.insert(target.at);
+            }
+        }
+    }
+    forced
+}
+
 #[cfg(test)]
 mod tests {
     //! Port of `tests/test_masm.py`: the jwasm printer spells each operand as
     //! select encodes it.
 
     use super::*;
+
+    /// A block of one instruction on `line`, leading to `succ`.
+    fn lined(
+        at: i64,
+        line: u32,
+        succ: &[i64],
+    ) -> crate::model::lir::Block {
+        let mut one = lir::Insn::new(at, None, None, vec![], vec![]);
+        one.line = Some(SrcLoc::line(line));
+        let mut block = lir::LirBlock::new(at, vec![std::sync::Arc::new(one)]);
+        block.succ = succ.to_vec().into();
+        block.into()
+    }
+
+    /// The first line of a join is a statement when a predecessor ends on
+    /// another line; ours marked no row `ForceStmt`, so a row on the line of
+    /// the one before it was never a statement, whichever way control came.
+    #[test]
+    fn a_block_whose_predecessor_ends_on_another_line_is_forced() {
+        // 1 (line 4) -> 3 (line 6) <- 2 (line 5); 2 (line 5) -> 4 (line 5)
+        // only.
+        let blocks = [lined(1, 4, &[3]), lined(2, 5, &[3, 4]), lined(3, 6, &[]), lined(4, 5, &[])];
+        let forced = forced_statement_blocks(&blocks);
+        assert!(forced.contains(&3), "{forced:?}");
+        // Block 4's one predecessor ends on its line.
+        assert!(!forced.contains(&4), "{forced:?}");
+    }
 
     fn no_names() -> IndexMap<(Space, i64), String> {
         IndexMap::default()
@@ -3502,7 +3675,7 @@ mod tests {
     #[test]
     fn test_a_string_move_prints_with_rep_where_it_repeats() {
         let regs = crate::backend::registerinfo::test_regs();
-        let held = |value| Loc::Held(crate::model::ir::Held { value, width: 2 });
+        let held = |value| Loc::Held(crate::model::ir::Held { value, width: 2, offset: 0 });
         // A count is the extra result; the segments, where the target has them,
         // the last two sources.
         let results = |count: usize| (0..count).map(|one| held(10 + one as u32)).collect::<Vec<_>>();
@@ -4084,6 +4257,8 @@ mod tests {
             names: no_names(),
             externs: Vec::new(),
             publics: Vec::new(),
+            visibility: Default::default(),
+            aliases: Vec::new(),
             data: Vec::new(),
             procedures: Vec::new(),
             private: BTreeSet::new(),
@@ -4122,6 +4297,9 @@ mod tests {
             wrap_split_size: false,
             slot_scratch: None,
             free: false,
+            kept: false,
+            exit_cfi: true,
+            saved_first: false,
         };
         let procedure = Procedure {
             name: "_get".into(),
@@ -4174,6 +4352,9 @@ mod tests {
                 wrap_split_size: false,
                 slot_scratch: None,
                 free: false,
+                kept: false,
+                exit_cfi: true,
+                saved_first: false,
             };
             let procedure = Procedure {
                 name: "_get".into(),
@@ -4245,6 +4426,9 @@ mod tests {
             wrap_split_size: false,
             slot_scratch: None,
             free: false,
+            kept: false,
+            exit_cfi: true,
+            saved_first: false,
         };
         let procedure = Procedure {
             name: "_get".into(),
@@ -4418,6 +4602,9 @@ mod tests {
             wrap_split_size: false,
             slot_scratch: None,
             free: false,
+            kept: false,
+            exit_cfi: true,
+            saved_first: false,
         };
         let procedure = Procedure {
             name: "_get".into(),
@@ -4562,6 +4749,71 @@ mod tests {
         let r#where =
             ir::AddressRef { through: RegId::None, index_through: RegId::EAX, ..ir::AddressRef::new(Some(address)) };
         assert_eq!(_operand(regs, &Loc::Address(r#where), &names).unwrap(), "L_b1+12[eax]");
+    }
+
+    /// An instruction the allocator counted at a slot has an anchor at that
+    /// slot, which the debug ranges are placed by; one it did not (no `-g`, or
+    /// notes with no ranges asked for) has none, so its output is what it was.
+    #[test]
+    fn test_a_body_with_notes_marks_every_instruction_and_one_without_marks_none() {
+        for (noted, stamped) in [(true, true), (true, false), (false, false)] {
+            let r#move = insn(0, semantics(Operation::Move, "mov", vec![ax()], vec![through_bp()]));
+            let leave = insn(1, semantics(Operation::Return, "ret", vec![], vec![]));
+            let slots: crate::support::hash::HashMap<u64, i64> =
+                [(r#move.id(), 16), (leave.id(), 32)].into_iter().collect();
+            let mut body = lir::LirBody::new(
+                "get",
+                1,
+                vec![lir::LirBlock::new(1, vec![r#move, leave]).into()],
+                IndexMap::default(),
+                IndexMap::default(),
+            );
+            if noted {
+                body.notes = std::sync::Arc::new(vec![lir::DebugNote {
+                    variable: 1,
+                    piece: None,
+                    value: lir::NoteValue::Constant(0),
+                }]);
+            }
+            if stamped {
+                body = body.with_slots(&slots);
+            }
+            let registers = llrm_target::FrameRegisters {
+                pointer: RegId::EBP,
+                stack: RegId::ESP,
+                saved: Vec::new(),
+                slot: 4,
+                align: 4,
+                optional: false,
+                enter: false,
+                wrap_split_size: false,
+                slot_scratch: None,
+                free: false,
+                kept: false,
+                exit_cfi: true,
+                saved_first: false,
+            };
+            let procedure = Procedure {
+                name: "_get".into(),
+                public: true,
+                far: false,
+                body,
+                reserve: 4,
+                callees: IndexMap::default(),
+                interrupt: None,
+                size: false,
+                entry: 0,
+                stack_check: None,
+                probe_stack: None,
+                registers,
+            };
+            let marked: Vec<u64> = built(&procedure, 1, false)
+                .unwrap()
+                .iter()
+                .filter_map(|item| if let Item::Mark(Mark::Insn(id)) = item { Some(*id) } else { None })
+                .collect();
+            assert_eq!(marked, if stamped { vec![16, 32] } else { Vec::new() }, "noted: {noted}, stamped: {stamped}");
+        }
     }
 }
 

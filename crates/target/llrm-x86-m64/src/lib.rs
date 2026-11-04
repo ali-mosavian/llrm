@@ -209,6 +209,10 @@ impl llrm_target::Target for M64 {
         CALLING.native().frame_optional
     }
 
+    fn frame_saved_first(&self) -> bool {
+        CALLING.native().frame_saved_first
+    }
+
     fn frame_enter(&self) -> bool {
         CALLING.native().frame_enter
     }
@@ -348,6 +352,15 @@ impl llrm_target::Target for M64 {
                 prices,
                 Some(OPCOSTS.size_costs()),
                 llrm_x86::tti::X86::of_cpu("x86-64")
+                    .map(|one| {
+                        one.with_tuning(llrm_mir::target::Tuning {
+                            inline_size_guard_at_size: true,
+                            // DEVIATE REC-2, as m32
+                            recursive_inlining: Some((8, 450)),
+                            recursive_edge_growth: Some((15, 30)),
+                            ..llrm_mir::target::Tuning::PIN
+                        })
+                    })
                     .map(|one| std::rc::Rc::new(one) as std::rc::Rc<dyn llrm_mir::tti::Tti>),
                 Some(std::rc::Rc::new(llrm_x86::lowering::X86 { is_64bit: true })),
             )

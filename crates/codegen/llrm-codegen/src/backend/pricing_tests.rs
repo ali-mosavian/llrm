@@ -165,8 +165,8 @@ fn test_a_lea_of_a_register_and_a_scaled_copy_of_it_has_a_byte_price() {
         addr: None,
         through: RegId::EBX,
         index_through: RegId::EBX,
-        index: Some(ir::Held { value: 1, width: 4 }),
-        base: Some(ir::Held { value: 1, width: 4 }),
+        index: Some(ir::Held { value: 1, width: 4, offset: 0 }),
+        base: Some(ir::Held { value: 1, width: 4, offset: 0 }),
         scale: 2,
         width: 4,
         ..ir::Mem::new(None, 0)

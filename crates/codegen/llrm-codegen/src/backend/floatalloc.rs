@@ -451,6 +451,14 @@ pub(super) fn _truncating(
     };
     // Python keys these slots by the 1-tuples ("control",) and ("chop",).
     let (saved, chop) = (frame.cell(("control", 0), 2)?, frame.cell(("chop", 0), 2)?);
+    // The rounding-control bits 10-11 live in the word's high byte: a byte `or` is
+    // shorter than the word one by its immediate (and the operand-size prefix).
+    let chop_high = Mem {
+        addr: chop.addr.map(|addr| addr.plus(1)),
+        offset: if chop.addr.is_some() { chop.offset } else { chop.offset + 1 },
+        width: 1,
+        ..chop.clone()
+    };
     // The registers are allocated by now: no value is left to hold the word, so
     // it goes through memory alone.
     let insn = |what: Semantics, at: i64| -> Arc<Insn> {
@@ -492,8 +500,8 @@ pub(super) fn _truncating(
                     semantics(
                         Operation::Binary,
                         "or",
-                        vec![Loc::Mem(chop.clone())],
-                        vec![Loc::Mem(chop.clone()), Loc::Imm(Imm { value: 0x0C00, width: 2, address: None })],
+                        vec![Loc::Mem(chop_high.clone())],
+                        vec![Loc::Mem(chop_high.clone()), Loc::Imm(Imm { value: 0x0C, width: 1, address: None })],
                     ),
                     at,
                 ),

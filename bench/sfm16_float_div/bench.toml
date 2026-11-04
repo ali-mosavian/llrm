@@ -1,0 +1,5 @@
+description = "sfm16_float_div: plain float C over 400 vectors, soft-float library flattened"
+repetitions = 1
+
+[region]
+c = "bench_sfm16_float_div"

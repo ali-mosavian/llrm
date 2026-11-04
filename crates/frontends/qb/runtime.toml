@@ -1169,6 +1169,14 @@ inline = "always"
 view = { length = "1", data = "slot($0)" }
 check = { when = "$0 < 0 or 255 < $0", raise = 5 }
 
+[semantics."B$SMID"]
+evidence = "rt/mid.asm B$SMID (llrm: runtime/qb/smid.c): up to $3 bytes of the source over the string at $0 from $4 (counting from 1), forward one at a time, the string keeping its length ($1 bytes of a fixed-length string, else the descriptor's); a start below 1 or past the end, or a negative maximum, is error 5, raised before anything is copied."
+parameters = ["place", "int", "string", "int", "int"]
+check = { when = "$4 < 1 or $3 < 0 or if($1 == 0, len($0), $1) - ($4 - 1) < 1", raise = 5 }
+copy = { to = "if($1 == 0, data($0), near($0)) + ($4 - 1)", from = "data($2)", count = "min(min($3, len($2)), if($1 == 0, len($0), $1) - ($4 - 1))" }
+releases = [2]
+inline = "always"
+
 # Normal-return stack cleanup read directly from the matching entry in all
 # three shipped Microsoft runtimes.  This is deliberately only a stack ABI
 # table: memory, clobber, allocation, error and alias effects remain those of

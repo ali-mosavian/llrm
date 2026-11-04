@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 140 documented, 0 undocumented.
+From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 142 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -79,6 +79,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 140 documen
 | leaopt | Two address computations that differ only in a displacement are one: LLVM's `X86OptimizeLEAs` ([X86OptimizeLEAs.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86OptimizeLEAs.cpp)). | A machine phase after `machinesink` and before `phielim` | [leaopt](leaopt.md) |
 | legalize | Promotes the integers of an odd width (i2..i63 but 8, 16 and 32) to the next machine width, in MIR before instruction selection. | Once per module in `driver::optimized`, after `minmax_expanded` and before | [legalize](legalize.md) |
 | libmcalls | Turns the rounding intrinsics x87 has no instruction for into calls of the C library: `llvm.floor.f64` is a call of `floor`. | Once per module in `driver::optimized`, after the pipeline: the optimizer | [libmcalls](libmcalls.md) |
+| licm_core | The target-neutral half of early `MachineLICM`: which loops have a preheader, which values a loop reads from outside, which copies a loop phi takes, and the walk that moves what the target's policy calls hoistable to the end of the preheader. |  | [licm_core](licm_core.md) |
 | lifetimes | Where a block local's bytes are live, from its lifetime markers, so that locals never live together can share a frame slot. | `isel` takes the intervals in its own instruction numbering; `slots` then | [lifetimes](lifetimes.md) |
 | lirtext | LIR as text, one stage at a time: what `ISEL_DUMP` prints after each machine phase. | `assemble` after each machine phase when `ISEL_DUMP` is set; the register | [lirtext](lirtext.md) |
 | live | The live intervals the allocator holds of the body it is rewriting, and the spill weight each value gets from them. | `allocate` builds and edits it; `spiller`, `splitkit` and `regclass` | [live](live.md) |
@@ -134,6 +135,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 140 documen
 | slotcopies | Keeps one frame cell where a value is copied from a cell into a spill cell. | A sub-pass of [`crate::backend::peephole`](peephole.md), after `postrasink`. | [slotcopies](slotcopies.md) |
 | slots | Lets two values share one frame slot when they are never live together, so a frame holds the most that is live at once, not the sum of all spills. | - `crate::backend::spiller`, which shares spill slots by the live range of | [slots](slots.md) |
 | spillplacement | Decides, for each value being split, which edge bundles hold it in a register and which on the stack. | Not a pass: `crate::backend::splitkit` queries it for each value it | [spillplacement](spillplacement.md) |
+| stackcoloring | StackColoring ([source](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/StackColoring.cpp#L1)), shared by every target: the static allocas whose lifetimes never overlap share one frame object. | - [`crate::backend::selectiondag::dag_function`](selectiondag.md), which groups the allocas | [stackcoloring](stackcoloring.md) |
 | stackusage | How much stack a program may use, as gcc's `-fstack-usage` and `-Wstack-usage` report it. | `elide_checks` is the `stack checks` step of assembly, once per module. | [stackusage](stackusage.md) |
 | stepflags | Removes a compare of a value with a constant when a step of the same value already sets those flags. | Once per block in instruction selection, after `comparefold` and before | [stepflags](stepflags.md) |
 | storecombine | Packs two neighbouring literal word stores into one dword store. | A sub-pass of [`crate::backend::peephole`](peephole.md), once per body, after | [storecombine](storecombine.md) |

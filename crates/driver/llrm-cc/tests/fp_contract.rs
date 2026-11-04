@@ -66,3 +66,37 @@ fn a_contracted_multiply_add_is_the_x87_multiply_then_add() {
     assert_eq!(default_output, "3c30000000000000 33800000", "double rounding gives zero here");
     assert_eq!(default_output, off_output);
 }
+
+/// arm64 listing of `tests/cc/fp_contract/fma.c`: `-ffp-contract=off` was put
+/// on every machine that fuses, so `a * b + c` was `fmul` and `fadd` where the
+/// pin's clang and gcc make `fmadd` (nbody ran 47859 instructions for 16857).
+fn arm64_listing(extra: &[&str]) -> Option<String> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let llc = Path::new(env!("CARGO_BIN_EXE_llrm-cc")).with_file_name("llrm-arm64-llc");
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || !llc.exists() {
+        eprintln!("skipped: LLRM_PIN_CLANG names no pinned clang, or {} is not built", llc.display());
+        return None;
+    }
+    let out = std::env::temp_dir().join(format!("llrm-cc-fma-{}-{}.s", extra.len(), std::process::id()));
+    let ran = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "arm64-linux")
+        .args(["-O2", "-S"])
+        .args(extra)
+        .arg(root.join("tests/cc/fp_contract/fma.c"))
+        .arg("-o")
+        .arg(&out)
+        .output()
+        .unwrap();
+    assert!(ran.status.success(), "{}", String::from_utf8_lossy(&ran.stderr));
+    let listing = std::fs::read_to_string(&out).unwrap();
+    let _ = std::fs::remove_file(&out);
+    Some(listing)
+}
+
+#[test]
+fn arm64_contracts_a_multiply_add_by_default_and_not_when_told_not_to() {
+    let Some(default) = arm64_listing(&[]) else { return };
+    assert!(default.contains("fmadd"), "{default}");
+    let off = arm64_listing(&["-ffp-contract=off"]).unwrap();
+    assert!(!off.contains("fmadd") && off.contains("fmul") && off.contains("fadd"), "{off}");
+}

@@ -133,6 +133,7 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         FAdd => pin::FADD,
         FSub => pin::FSUB,
         FMul => pin::FMUL,
+        FMA => pin::FMA,
         FDiv => pin::FDIV,
         FRem => pin::FREM,
         FNeg => pin::FNEG,
@@ -224,6 +225,9 @@ pub fn pin_vt(vt: EVT) -> Vt {
         EVT::Simple(MVT::F32) => mvt::f32,
         EVT::Simple(MVT::F64) => mvt::f64,
         EVT::Simple(MVT::F80) => mvt::f80,
+        // The opaque 16 bytes of an SSE move (`LLRM_ZERO128`, `LLRM_COPY128`);
+        // no pattern asks for it (SD540).
+        EVT::Simple(MVT::I128) => mvt::v4i32,
         EVT::Simple(MVT::Other) => mvt::Other,
         EVT::Simple(MVT::Glue) => mvt::Glue,
         _ => Vt(u16::MAX),
@@ -241,6 +245,7 @@ fn our_vt(vt: Vt) -> EVT {
         (mvt::f32, EVT::Simple(MVT::F32)),
         (mvt::f64, EVT::Simple(MVT::F64)),
         (mvt::f80, EVT::Simple(MVT::F80)),
+        (mvt::v4i32, EVT::Simple(MVT::I128)),
         (mvt::Other, EVT::OTHER),
         (mvt::Glue, EVT::GLUE),
     ]
@@ -545,6 +550,18 @@ impl<'a> DagisAdapter<'a> {
             }
         }
         out
+    }
+
+    /// `ReplaceUses` of an `AssertSext` or `AssertZext` by its operand, the
+    /// assertion and what only it read gone.
+    pub fn drop_assertion(
+        &mut self,
+        node: u32,
+    ) {
+        let asserted = SDValue { node, res: 0 };
+        let operand = self.dag.operand(asserted, 0);
+        self.dag.replace_all_uses_with(asserted, operand);
+        self.remove(node);
     }
 
     fn remove(
@@ -1211,6 +1228,11 @@ impl AddrDag for DagisAdapter<'_> {
                     flags: 0,
                 })
             }
+            // Only the position-independent table is a symbol operand
+            // (`relative_jump_tables`); the others keep it in a register.
+            NodeData::JumpTable(index) if self.dag.relative_jump_tables() => {
+                Some(Wrapped { symbol: Symbol { kind: SymbolKind::JumpTable, id: index }, offset: 0, flags: 0 })
+            }
             _ => None,
         }
     }
@@ -1293,6 +1315,7 @@ impl AddrDag for DagisAdapter<'_> {
             }
             SymbolKind::External => (ISD::ExternalSymbol, NodeData::Symbol(symbol.id)),
             SymbolKind::ConstantPool { .. } => (ISD::TargetConstantPool, NodeData::PoolIndex(symbol.id, disp)),
+            SymbolKind::JumpTable => (ISD::TargetJumpTable, NodeData::JumpTable(symbol.id)),
             other => panic!("{other:?} symbols are not in our DAG"),
         };
         theirs(self.dag.intern(opcode, &[EVT::I32], &[], SDNodeFlags::default(), data))
@@ -1301,7 +1324,7 @@ impl AddrDag for DagisAdapter<'_> {
 
 /// `SelectionDAG::haveNoCommonBitsSet`, by the known bits: every bit is known
 /// zero in one of the two.
-fn no_common_bits(
+pub(super) fn no_common_bits(
     dag: &SelectionDAG,
     a: SDValue,
     b: SDValue,

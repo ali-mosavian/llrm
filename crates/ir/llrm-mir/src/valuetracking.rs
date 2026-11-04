@@ -31,6 +31,7 @@ pub mod pattern;
 pub mod power2;
 mod query;
 pub mod range;
+pub mod signbit;
 pub mod signbits;
 #[cfg(test)]
 mod signbits_tests;
@@ -43,7 +44,9 @@ mod objectsize_tests;
 #[cfg(test)]
 mod power2_tests;
 
-pub use query::{AssumptionCache, CondContext, DomConditionCache, FunctionAnalyses, Query};
+pub use query::{
+    AssumptionCache, CondContext, DomConditionCache, FunctionAnalyses, Query, assume_declared, assume_scans,
+};
 
 #[cfg(test)]
 mod range_tests;
