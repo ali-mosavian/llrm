@@ -695,7 +695,7 @@ mod tests {
             ..Semantics::new(Operation::Binary)
         };
         let mulsd = Arc::new(Insn::new(0, None, Some(what), vec![1], vec![1, 2]));
-        let cell = Mem::new(Some(Addr::new(Space::Frame, -8)), 8);
+        let cell = Mem { through: RegId::RBP, ..Mem::new(Some(Addr::new(Space::Frame, -8)), 8) };
         let classes = RegisterClasses::of(&llrm_x86_m64::M64);
         let folded = fold_memory_operand(&mulsd, 2, &cell, 64, &classes).expect("folds");
         assert!(matches!(folded.what.as_ref().unwrap().sources.as_slice(), [Loc::Held(_), Loc::Mem(_)]), "{folded:?}");
