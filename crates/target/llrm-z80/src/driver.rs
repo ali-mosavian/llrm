@@ -220,9 +220,9 @@ pub fn source_of(
 }
 
 /// [`source_of`] for every function of the module, from one parse.
-pub fn sources_of(text: &str) -> std::collections::HashMap<String, (String, Option<u32>)> {
+pub fn sources_of(text: &str) -> llrm_support::hash::HashMap<String, (String, Option<u32>)> {
     SOURCE_PARSES.with(|one| one.set(one.get() + 1));
-    let mut out = std::collections::HashMap::new();
+    let mut out = llrm_support::hash::HashMap::default();
     let Ok(module) = llrm_mir::parse::module(&without_triple(text)) else { return out };
     let Some((file, _)) = llrm_mir::dbgimport::unit_file(&module) else { return out };
     for global in &module.globals {

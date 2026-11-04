@@ -51,7 +51,7 @@ pub struct Prepared {
     selections: Selections,
     /// With `-g`: the source file and start line of each function, from one
     /// parse of the module.
-    sources: std::collections::HashMap<String, (String, Option<u32>)>,
+    sources: llrm_support::hash::HashMap<String, (String, Option<u32>)>,
 }
 
 impl Prepared {
