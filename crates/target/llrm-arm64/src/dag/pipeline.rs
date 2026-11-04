@@ -125,6 +125,10 @@ impl CombineHooks for Aarch64Lowering {
         true
     }
 
+    fn sub_algebra_folds(&self) -> bool {
+        true
+    }
+
     fn widened_unsigned_divide_type(
         &self,
         vt: EVT,
