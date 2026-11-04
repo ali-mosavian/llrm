@@ -55,7 +55,6 @@
 //! A machine phase before `precse` (`flow::machine_with`), at every -O level
 //! but -O0.
 
-use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -68,8 +67,6 @@ use crate::model::passes::LIRTransform;
 
 pub struct MachineLicm {
     pub classes: Rc<RegisterClasses>,
-    /// The roots a callee keeps for its caller.
-    pub saved: std::collections::BTreeSet<llrm_lir::registers::RegId>,
     /// -Os, -Oz: a carried constant costs the `fstp` that ends it (DEVIATE X1
     /// is off).
     pub size: bool,
@@ -88,7 +85,7 @@ impl LIRTransform for MachineLicm {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(hoisted_sized(&body, &self.classes, &self.saved, self.size))
+        Ok(hoisted_sized(&body, &self.classes, self.size))
     }
 }
 
@@ -282,62 +279,6 @@ impl licm::Inst for Wrapped {
     }
 }
 
-/// Whether hoisting a rematerializable `value` out of a loop whose calls take
-/// every caller-saved register pays: the uses that read it save more executed
-/// instructions than its register costs.
-///
-/// DEVIATE LICM2 (pin: `IsProfitableToHoist` always hoists a trivially
-/// rematerializable instruction, "providing the register allocator can just
-/// pull them down again",
-/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineLICM.cpp#L1304):
-/// across such calls the value lives in a callee-saved register, which costs
-/// its push and pop (`getCSRFirstUseCost`, 2) once per entry, and a use that
-/// needs it in a fixed register (a call argument) is a copy (`mov rdi, rbx`)
-/// of the same one instruction the remat is. A use that reads the register
-/// saves the remat at its block's frequency (`MachineBlockFrequencyInfo`,
-/// relative to the entry); the preheader makes it once. Exit 2026-11-20: the
-/// greedy allocator splits a hoisted constant around the call and drops the
-/// copy; re-measure and drop.
-fn pays(
-    facts: &licm::Facts<'_, Wrapped>,
-    def: &Insn,
-    value: u32,
-    freq: &HashMap<i64, f64>,
-) -> bool {
-    const SAVE_RESTORE: f64 = 2.0;
-    let inside = || facts.blocks.iter().filter(|block| facts.inside.contains(&block.at));
-    // The loop's identical remats are one value once hoisted (`EliminateCSE`).
-    let template = Wrapped(Arc::new(def.clone()));
-    let mut values = vec![value];
-    values.extend(
-        inside()
-            .flat_map(|block| &block.insns)
-            .filter(|one| one.0.uses.is_empty() && licm::Inst::identical(&template, one))
-            .filter_map(|one| one.0.defines.first().copied())
-            .filter(|other| *other != value),
-    );
-    let saved: f64 = inside()
-        .map(|block| {
-            let reads = block
-                .insns
-                .iter()
-                .filter(|one| {
-                    values.iter().any(|value| one.0.uses.contains(value))
-                        && !one.0.requires.iter().any(|(held, _)| values.contains(&held.value))
-                })
-                .count();
-            reads as f64 * freq.get(&block.at).copied().unwrap_or(1.0)
-        })
-        .sum();
-    let preheader = facts
-        .blocks
-        .iter()
-        .filter(|block| !facts.inside.contains(&block.at) && block.succ.iter().any(|to| facts.inside.contains(to)))
-        .map(|block| freq.get(&block.at).copied().unwrap_or(1.0))
-        .fold(1.0, f64::max);
-    saved > preheader + SAVE_RESTORE
-}
-
 /// The x86 half of the pass: which instructions move (`IsLICMCandidate`,
 /// `IsProfitableToHoist`, the x87 constants, the flags).
 struct X86<'a> {
@@ -348,12 +289,6 @@ struct X86<'a> {
     control_word_written: bool,
     /// The loop being walked.
     calls: bool,
-    /// A value held across the loop's calls takes a callee-saved register: no
-    /// other allocatable one survives them all.
-    needs_csr: bool,
-    /// Each block's frequency relative to the entry, by `at`.
-    freq: HashMap<i64, f64>,
-    saved: &'a std::collections::BTreeSet<llrm_lir::registers::RegId>,
     floats_named: usize,
     named: usize,
     loads: bool,
@@ -386,13 +321,6 @@ impl licm::Policy<Wrapped> for X86<'_> {
                     || one.0.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Call | Operation::Barrier))
             })
         });
-        let clobbered: std::collections::BTreeSet<_> = inside()
-            .flat_map(|block| block.insns.iter())
-            .filter(|one| one.0.call.is_some() || one.0.what.as_ref().is_some_and(|what| what.op == Operation::Call))
-            .flat_map(|one| one.0.clobbers.iter().map(|one| self.regs.root(*one)))
-            .collect();
-        self.needs_csr = self.calls
-            && !self.classes.available.iter().any(|one| !self.saved.contains(one) && !clobbered.contains(one));
         // `InitializeLoadsHoistableLoops`: no store, call or ordered load in
         // the loop, its inner loops among it.
         self.loads = !inside().any(|block| block.insns.iter().any(|one| keeps_loads(&one.0)));
@@ -443,9 +371,6 @@ impl licm::Policy<Wrapped> for X86<'_> {
                 && one.delivers.is_empty()
                 && crate::greedy::remat::is_trivially_re_materializable(one, false)
         });
-        if constant && self.needs_csr && value.is_some_and(|value| !pays(facts, one, value, &self.freq)) {
-            return false;
-        }
         if constant && !movable {
             return true;
         }
@@ -489,16 +414,14 @@ impl licm::Policy<Wrapped> for X86<'_> {
 pub fn hoisted(
     body: &LirBody,
     classes: &RegisterClasses,
-    saved: &std::collections::BTreeSet<llrm_lir::registers::RegId>,
 ) -> LirBody {
-    hoisted_sized(body, classes, saved, false)
+    hoisted_sized(body, classes, false)
 }
 
 /// `hoisted`, where `size` keeps the x87 pool constants in their loops.
 pub fn hoisted_sized(
     body: &LirBody,
     classes: &RegisterClasses,
-    saved: &std::collections::BTreeSet<llrm_lir::registers::RegId>,
     size: bool,
 ) -> LirBody {
     let Some(regs) = body.registers else { return body.clone() };
@@ -536,16 +459,6 @@ pub fn hoisted_sized(
         floating: crate::backend::regclass::floating(body),
         control_word_written,
         calls: false,
-        needs_csr: false,
-        freq: {
-            let mbfi = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(body);
-            body.blocks
-                .iter()
-                .enumerate()
-                .map(|(index, block)| (block.at, mbfi.get_block_freq_relative_to_entry_block(index)))
-                .collect()
-        },
-        saved,
         floats_named: 0,
         named: 0,
         loads: false,
@@ -617,7 +530,7 @@ mod tests {
         body.inputs = [1, 2, 3].into_iter().collect();
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
         let classes = RegisterClasses::m16();
-        let done = hoisted(&body, &classes, &Default::default());
+        let done = hoisted(&body, &classes);
         let names = |at: usize| -> Vec<String> {
             done.blocks[at]
                 .insns
@@ -677,7 +590,7 @@ mod tests {
             );
             body.inputs = [1, 2, 3].into_iter().collect();
             body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
-            let done = hoisted(&body, &RegisterClasses::m16(), &Default::default());
+            let done = hoisted(&body, &RegisterClasses::m16());
             let names = |at: usize| -> Vec<String> {
                 done.blocks[at]
                     .insns
@@ -731,7 +644,7 @@ mod tests {
             body.inputs = [1].into_iter().collect();
             body.float_stack = 8;
             body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
-            let done = hoisted(&body, &RegisterClasses::m16(), &Default::default());
+            let done = hoisted(&body, &RegisterClasses::m16());
             done.blocks[0]
                 .insns
                 .iter()
@@ -812,7 +725,7 @@ mod tests {
             body.inputs = [1].into_iter().chain(100..100 + others).collect();
             body.float_stack = 8;
             body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
-            let done = hoisted_sized(&body, &RegisterClasses::m16(), &Default::default(), size);
+            let done = hoisted_sized(&body, &RegisterClasses::m16(), size);
             done.blocks[0]
                 .insns
                 .iter()
@@ -868,7 +781,7 @@ mod tests {
             );
             body.inputs = [1].into_iter().collect();
             body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
-            let done = hoisted(&body, &RegisterClasses::m16(), &Default::default());
+            let done = hoisted(&body, &RegisterClasses::m16());
             (done.blocks[0].insns.len(), done.blocks[1].insns.len())
         };
         assert_eq!(run(true), (1, 2), "the phi's copy stays");
@@ -905,7 +818,7 @@ mod tests {
         );
         body.inputs = [1].into_iter().collect();
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m64::REGISTER_INFO));
-        let done = hoisted(&body, &RegisterClasses::of(&llrm_x86_m64::M64), &Default::default());
+        let done = hoisted(&body, &RegisterClasses::of(&llrm_x86_m64::M64));
         assert_eq!((done.blocks[0].insns.len(), done.blocks[1].insns.len()), (2, 1));
     }
 }

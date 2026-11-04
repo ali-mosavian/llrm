@@ -356,8 +356,7 @@ impl Walk<'_> {
         // if shared, and its push and pop (2 executed per entry) cost more
         // than the one instruction sharing removes unless that runs often
         // enough. The pin shares it (heuristic 2 asks only for a register use
-        // or a non-copy reader). The same price as LICM2's, in
-        // `machinelicm::pays`. Exit 2026-11-20 with it.
+        // or a non-copy reader). Exit 2026-11-20.
         if !reads_value && self.freq[block] <= 2.0 && self.crosses_call(shared, shared_block, block, index) {
             return false;
         }

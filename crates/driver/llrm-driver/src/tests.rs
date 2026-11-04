@@ -348,33 +348,6 @@ fn a_constant_across_a_call_that_keeps_a_caller_saved_register_is_made_before_th
     assert_eq!(made, 0, "{listing}");
 }
 
-/// A symbol address read directly only in a block that runs a quarter of the
-/// loop's iterations was hoisted into a callee-saved register across the
-/// loop's call: the push and pop cost more executed instructions than the
-/// remat saved (histo and scroll m64 -O2 were one to five instructions over
-/// release/next). The frequency-weighted price keeps it in the loop.
-#[test]
-fn a_symbol_address_read_only_in_a_cold_block_of_a_loop_is_made_there_at_m64() {
-    let text = "target datalayout = \"@m64-datalayout@\"\n\
-                target triple = \"x86_64-unknown-linux-gnu\"\n\
-                @a = global [4096 x i8] zeroinitializer\n\
-                declare void @h()\n\
-                define i32 @f(i64 %n, i1 %p, ptr %kp) {\nentry:\n  br label %loop\n\
-                loop:\n  %i = phi i64 [ 0, %entry ], [ %j, %latch ]\n  %s = phi i32 [ 0, %entry ], [ %t, %latch ]\n\
-                  call void @h()\n  br i1 %p, label %cold, label %latch, !prof !0\n\
-                cold:\n  %k = load volatile i64, ptr %kp\n  %ptr = getelementptr i8, ptr @a, i64 %k\n\
-                  %v = load volatile i8, ptr %ptr\n  %w = zext i8 %v to i32\n  br label %latch\n\
-                latch:\n  %u = phi i32 [ 0, %loop ], [ %w, %cold ]\n  %t = add i32 %s, %u\n\
-                  %j = add i64 %i, 1\n  %c = icmp ult i64 %j, %n\n  br i1 %c, label %loop, label %done\n\
-                done:\n  ret i32 %t\n}\n\
-                !0 = !{!\"branch_weights\", i32 1, i32 15}\n";
-    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
-    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(!listing.lines().any(|line| line.trim().starts_with("push r12")), "{listing}");
-    let made = listing.lines().filter(|line| line.contains("offset a")).count();
-    assert_eq!(made, 1, "{listing}");
-}
-
 /// A symbol address made before a call and again after it, once each, was
 /// made once and kept in a callee-saved register across the call: the push and
 /// pop (two executed instructions) cost more than the one made again
