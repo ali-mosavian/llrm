@@ -3541,14 +3541,14 @@ pub fn _signed(n: i64) -> String {
 /// (`DwarfDebug::findForceIsStmtInstrs`): some predecessor ends on another line
 /// than the block's first, or has no line at all. The pin reads each branch's
 /// own line; the last line of the block stands for them here.
-fn forced_statement_blocks(blocks: &[crate::model::lir::Block]) -> std::collections::HashSet<i64> {
+fn forced_statement_blocks(blocks: &[crate::model::lir::Block]) -> llrm_support::hash::HashSet<i64> {
     let first_line = |block: &crate::model::lir::Block| {
         block.insns.iter().find_map(|one| one.line.map(|place| place.line).filter(|&line| line != 0))
     };
     let last_line = |block: &crate::model::lir::Block| {
         block.insns.iter().rev().find_map(|one| one.line.map(|place| place.line).filter(|&line| line != 0))
     };
-    let mut forced = std::collections::HashSet::new();
+    let mut forced = llrm_support::hash::HashSet::default();
     for block in blocks {
         for next in block.succ.iter() {
             let Some(target) = blocks.iter().find(|one| one.at == *next) else { continue };
