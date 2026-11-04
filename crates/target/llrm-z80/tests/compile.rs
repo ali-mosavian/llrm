@@ -324,6 +324,16 @@ fn a_loop_is_not_entered_by_a_jump_to_a_merged_test_at_o2() {
     assert!(first.is_some_and(|line| !line.starts_with("jr ")), "{out}");
 }
 
+/// The adds of a use after the loop were rated every trip, so LSR kept the
+/// loop as written and `lz4` -Oz grew a second pointer's setup: 168
+/// instructions against 159 with the adds rated as run once.
+#[test]
+fn an_add_after_the_loop_is_rated_once_not_every_trip() {
+    let out = text(include_str!("kernels/ir/lz4.ll"), "lz4", 0, &Request::new(Level::Oz)).expect("compiles");
+    let instructions = out.lines().filter(|line| line.starts_with('\t') && !line.starts_with("\t.")).count();
+    assert!(instructions <= 160, "{instructions} instructions\n{out}");
+}
+
 /// `sum4`'s rotated loop was `dec b; inc hl; jr nz`: the pointer step sat
 /// between the decrement and the branch, so no `djnz` formed (12 B, 172 T, 22
 /// instructions at -O2; 11 B, 160 T, 18 with it).

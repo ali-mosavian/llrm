@@ -260,15 +260,10 @@ impl Tti for Z80Tti {
         key(a) < key(b)
     }
 
-    /// DEVIATE Z80L2: a solution the model rates worse than the loop as
-    /// written is dropped (`shouldDropLSRSolutionIfLessProfitable`, which
-    /// defaults to false; AMDGPU and llrm-x86 real mode turn it on). Three
-    /// pairs make a second induction variable cost a spill. Reason: lz4 -Oz
-    /// 303 B without it, 262 B with. Cost: schr -O2/-Oz 19/303/45 -> 40/443/61
-    /// and find 16/337/44 -> 16/357/49, which the model rates worse than
-    /// their loops as written. Exit 2026-11-07: w12's exit-value rewrite;
-    /// then measured without the drop, and removed if schr and find hold.
-    fn should_drop_lsr_solution_if_less_profitable(&self) -> bool {
+    /// The adds of a use whose fixups all lie after the loop are rated as run
+    /// once (DEVIATE LU12, off in the pin): lz4 -Oz keeps 159 instructions
+    /// against 168 without it.
+    fn lsr_exit_use_adds_run_once(&self) -> bool {
         true
     }
 
