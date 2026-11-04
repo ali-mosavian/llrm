@@ -366,6 +366,11 @@ class TimedOnlyTests(unittest.TestCase):
                 got = bench.measure(("p", obj, obj, None, ["1"], obj))
         self.assertEqual(got, {"code_bytes": 12, "align_bytes": 0, "data_bytes": 0, "bss_bytes": 40})
 
+    def test_a_cell_that_calls_library_helpers_says_its_bytes_exclude_them(self):
+        """qlight bcc -O2 read 216 B beside ours 389: the long divides were helpers outside code_bytes, unsaid."""
+        measured = {("qlight", "bcc", "O2"): {"code_bytes": 216, "externs": ["__I4D"]}, ("qlight", "c", "O2"): {"code_bytes": 389}}
+        self.assertEqual(bench.helper_lines(measured), ["HELPERS qlight bcc -O2: code_bytes excludes __I4D"])
+
     def test_a_baseline_without_counts_does_not_fail_a_run_without_them(self):
         """against() read got['instructions'] for a measurement that has none: a KeyError, and the gate died."""
         sized = {"code_bytes": 12, "data_bytes": 0, "bss_bytes": 40}

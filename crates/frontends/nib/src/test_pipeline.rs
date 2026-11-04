@@ -463,3 +463,12 @@ fn test_sort_takes_only_its_two_indices_after_the_ipo_reruns() {
     assert!(!function.contains("ret 4"), "the length and the far pointer were not folded away\n{function}");
     assert!(function.contains("\n    ret\n"), "{function}");
 }
+
+/// An immutable literal table was built on the stack by one `mov` per element on every call (jpeg_fixed's `cosine`: 64
+/// dword stores, 398 B of frame, +570 B of code against C's static table). It is read from a read-only object.
+#[test]
+fn test_an_immutable_literal_table_is_read_from_its_object_not_stored_per_call() {
+    let function = _nib("table", "pick", "_pick");
+    assert!(function.contains("$constant"), "{function}");
+    assert!(function.matches("mov dword ptr [bp-").count() < 4, "{function}");
+}

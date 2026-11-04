@@ -235,6 +235,7 @@ pub mod floativ;
 pub mod floatloop;
 pub mod fold;
 pub mod gepoffset;
+pub mod globalbool;
 pub mod globaldce;
 #[cfg(test)]
 mod globaldce_tests;
@@ -255,6 +256,7 @@ pub mod inferspace;
 #[cfg(test)]
 mod inferspace_tests;
 pub mod inline;
+mod inlineattrs;
 pub mod inlinecost;
 #[cfg(test)]
 mod inlinecost_tests;

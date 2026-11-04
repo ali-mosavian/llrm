@@ -873,6 +873,17 @@ pub trait Tti {
         false
     }
 
+    /// A target's value of the pin's `cl::opt` `SCEVCheapExpansionBudget`
+    /// (default 4), for a function built for size or not: the operations
+    /// `IndVarSimplify`'s test replacement may spend on a loop's exit limit.
+    /// [pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L41)
+    fn lftr_expansion_budget(
+        &self,
+        _optsize: bool,
+    ) -> u32 {
+        4
+    }
+
     /// `isNumRegsMajorCostOfLSR`.
     fn is_num_regs_major_cost_of_lsr(&self) -> bool {
         true
@@ -947,6 +958,18 @@ pub trait Tti {
     /// also counts what the loop keeps live (DEVIATE LU3c); the pin's one.
     fn lsr_reserved_registers(&self) -> u32 {
         1
+    }
+
+    /// `TCC_Basic` in this target's cost units for `kind` (DEVIATE TB1; the
+    /// pin's is the constant 1): the SCEV expansion budgets
+    /// (`isHighCostExpansion`, 4 of them) are counted in it. A target whose
+    /// costs are not about one per instruction (the Z80 prices in machine
+    /// cycles) says what a basic instruction costs.
+    fn tcc_basic(
+        &self,
+        _kind: CostKind,
+    ) -> Cost {
+        Cost::BASIC
     }
 
     /// DEVIATE LU12: whether the adds of a use whose fixups all lie after the

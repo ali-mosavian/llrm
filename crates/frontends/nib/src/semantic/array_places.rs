@@ -6,6 +6,9 @@
 
 use super::*;
 
+/// A literal table of more bytes than this is copied from a read-only object.
+const CONSTANT_COPY_BYTES: usize = 32;
+
 impl FunctionCompiler<'_> {
     /// The element and shape of the fixed array `expression` is: one it
     /// holds, or one a `&T[N]` value it computes refers to.
@@ -316,7 +319,24 @@ impl FunctionCompiler<'_> {
             mutable: true,
             owner: name.into(),
         };
-        if let Expr::Array(..) = value {
+        let constant = match value {
+            Expr::Array(..) => self.constant_source(name, element, shape, value, span)?,
+            _ => None,
+        };
+        if let Some(source) = constant.as_ref().filter(|_| !mutable) {
+            // Nothing writes an immutable table: the name is the object.
+            let binding = Binding {
+                type_: BindingType::Array { element, shape },
+                mutable,
+                storage: Storage::Place(source.place),
+            };
+            self.scopes.last_mut().expect("scope").insert(name.into(), binding);
+            return Ok(());
+        }
+        if let Some(source) = constant {
+            let (type_name, count) = self.types.array_run(element, shape);
+            self.emit_run(&destination, ElementType::Scalar(type_name), count, RunSource::Cells(source), span)?;
+        } else if let Expr::Array(..) = value {
             // No value reads the new place: each element is stored as it is
             // made.
             let slot = FieldLayout { type_: element, offset: 0, shape: None };
@@ -338,6 +358,63 @@ impl FunctionCompiler<'_> {
         let binding = Binding { type_: BindingType::Array { element, shape }, mutable, storage };
         self.scopes.last_mut().expect("scope").insert(name.into(), binding);
         Ok(())
+    }
+
+    /// A read-only object holding the elements of the literal `value`, when
+    /// each is a compile-time scalar and there are more than
+    /// `CONSTANT_COPY_BYTES` of them: copied into the local, a table costs a
+    /// loop instead of a store per element, and the optimizer reads it in
+    /// place when the local is never written (clang's constant global and
+    /// memcpy, `isOnlyCopiedFromConstantMemory`).
+    fn constant_source(
+        &mut self,
+        name: &str,
+        element: ElementType,
+        shape: Shape,
+        value: &Expr,
+        span: Span,
+    ) -> Result<Option<StructView>, Diagnostic> {
+        let ElementType::Scalar(type_name) = element else { return Ok(None) };
+        let plain = matches!(type_name, TypeName::Fixed { .. } | TypeName::Char | TypeName::Bool) || is_integer(type_name);
+        let width = self.types.width(element.id()) as usize;
+        if !plain || width * shape.len() as usize <= CONSTANT_COPY_BYTES {
+            return Ok(None);
+        }
+        let mut bytes = Vec::with_capacity(width * shape.len() as usize);
+        for (_, item) in literal_elements(value, shape.dims(), span)? {
+            let Some(literal) = super::super::consts::folded(item, &BTreeMap::new()) else { return Ok(None) };
+            let Some(hir::Operand::Constant(_, number)) = self.coerced(&literal, type_name)?.operand
+            else {
+                return Ok(None);
+            };
+            bytes.extend_from_slice(&number.to_le_bytes()[..width]);
+        }
+        let extent = bytes.len() as u32;
+        let label = self.hidden("constant");
+        let symbol = self.literals.object(&label, bytes, true, None);
+        let array = self.types.array(element, shape);
+        let place = self.next_place;
+        self.next_place += 1;
+        self.places.push(hir::Place {
+            id: place,
+            name: format!("$constant{symbol}"),
+            type_id: array,
+            mutable: false,
+            offset: 0,
+            extent,
+            storage: "module",
+            symbol,
+            volatile: false,
+        });
+        Ok(Some(StructView {
+            struct_id: array,
+            place,
+            pointer: None,
+            indices: Vec::new(),
+            offset: 0,
+            mutable: false,
+            owner: name.into(),
+        }))
     }
 
     /// Makes the prepared `stores`, in order.
