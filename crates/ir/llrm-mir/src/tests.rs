@@ -1398,9 +1398,11 @@ fn test_a_module_makes_one_symbol_table_for_all_its_lookups() {
     assert_eq!(module.named("missing"), None);
     // A name made on any thread (a parallel test parsing text) stales every
     // table once, so the tables are one and one per name made meanwhile; a
-    // table per lookup would be 1201.
+    // table per lookup would be 1201, and a scan of the globals (the 90 M Ir
+    // bug) makes none.
     let made = crate::module::names_made() - names;
-    assert!(crate::module::symbol_builds() - builds <= 1 + made, "{} tables, {made} names made", crate::module::symbol_builds() - builds);
+    let tables = crate::module::symbol_builds() - builds;
+    assert!((1..=1 + made).contains(&tables), "{tables} tables, {made} names made");
 }
 
 /// A name made on another thread between two lookups staled the table, and
