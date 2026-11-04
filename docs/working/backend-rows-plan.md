@@ -36,6 +36,10 @@ Pin ([MachineLICM.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc/ll
 
 Ours: nothing at this stage; the mid-end `licm` and `loopslots.rs` (reloads). PRs: (1) candidates, invariance and `Hoist` into the preheader without the pressure gate; (2) the register-pressure gate (`InitRegPressure` .. `CanCauseHighRegPressure`, limits from the target's register classes); (3) the CSE on hoist. Lands as a pre-RA LIR pass beside `precse.rs`.
 
+## Row 91, Win64 unwind pin diff: land 11-08, owner object-refactor
+
+Pin: `X86WinCOFFStreamer`/`X86WinEHUnwindV2` emit `.xdata`/`.pdata` from `.seh_*` directives. Ours declares them (`masm.rs` `seh_after`, `win64unwind.rs`); `tools/pairs/unwind_win64_diff.py` compares prolog size, frame register and unwind codes with the pin's, exit 77 until x86-m64's Win64 rows exist. Exit 11-08: those rows land, the diff runs clean on them, its own PR.
+
 ## Order
 
-82 (11-04), then 34/83, 84, 90, 42 (11-06). The compile-cost items (LCSSA leftovers #3683, LSR callees) follow.
+82 (11-04), then 34/83, 84, 90, 42 (11-06), 91 (11-08). The compile-cost items (LCSSA leftovers #3683, LSR callees) follow.
