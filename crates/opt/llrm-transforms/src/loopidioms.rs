@@ -139,7 +139,7 @@
 
 use std::collections::BTreeSet;
 
-use llrm_analysis::cfg;
+use llrm_analysis::cfg::{self, Around};
 use llrm_analysis::graph::loops::Loop;
 use llrm_analysis::induction::{self, AffineOperand, CountedLoop};
 use llrm_analysis::memory::{MemRef, Unit};
@@ -316,6 +316,19 @@ pub fn filled_with(
                 changed = true;
                 continue 'again;
             }
+            let split = if found.is_none() {
+                let unit = Unit::within(context, layout, function, outer).with_shape(&shape);
+                let facts = standing.of(&unit);
+                _split(&unit.with_registers(facts), callees, &loop_, &costs, &bytes, size)
+            } else {
+                None
+            };
+            if let Some(split) = split {
+                _hoist(context, layout, declared, function, &split);
+                standing.changed();
+                changed = true;
+                continue 'again;
+            }
         }
         return changed;
     }
@@ -410,26 +423,7 @@ fn _fill(
     size: bool,
 ) -> Option<_Found> {
     let function = unit.function;
-    let header = cfg::block(loop_.header);
-    if loop_.latches.len() != 1 {
-        return None;
-    }
-    // Tested before its trips: the header tests and the body is a straight line
-    // back to it, in whatever order its blocks lie. Tested after
-    // them: the body is a straight line from the header to the latch, which
-    // tests (a loop entered behind a copy of its test).
-    let successors = function.successors(header);
-    let posttested = loop_.body.len() == 1 || !successors.iter().any(|to| !loop_.body.contains(&cfg::id(*to)));
-    let (chain, latch, test) = if posttested {
-        let chain = _chain_after(function, header, loop_)?;
-        let latch = *chain.last().expect("a chain has blocks");
-        (chain, latch, latch)
-    } else {
-        let chain = _chain(function, header, loop_)?;
-        let latch = *chain.last().expect("a chain has blocks");
-        (chain, latch, header)
-    };
-    let exit = *function.successors(test).iter().find(|to| !loop_.body.contains(&cfg::id(**to)))?;
+    let (header, chain, latch, test, exit, posttested) = _shape(function, loop_)?;
 
     // A loop is a fill only if what it does besides arithmetic is stores, loads
     // and memsets that `_stored` or `_copied` take: asked before its trips are
@@ -643,6 +637,251 @@ fn _fill(
         posttested,
         memset,
     })
+}
+
+/// A loop's header, the straight line of blocks its trips run, its latch, the
+/// block that tests, the exit, and whether it tests after them.
+fn _shape(
+    function: &Function,
+    loop_: &Loop,
+) -> Option<(BlockId, Vec<BlockId>, BlockId, BlockId, BlockId, bool)> {
+    let header = cfg::block(loop_.header);
+    if loop_.latches.len() != 1 {
+        return None;
+    }
+    // Tested before its trips: the header tests and the body is a straight line
+    // back to it, in whatever order its blocks lie. Tested after
+    // them: the body is a straight line from the header to the latch, which
+    // tests (a loop entered behind a copy of its test).
+    let successors = function.successors(header);
+    let posttested = loop_.body.len() == 1 || !successors.iter().any(|to| !loop_.body.contains(&cfg::id(*to)));
+    let (chain, latch, test) = if posttested {
+        let chain = _chain_after(function, header, loop_)?;
+        let latch = *chain.last().expect("a chain has blocks");
+        (chain, latch, latch)
+    } else {
+        let chain = _chain(function, header, loop_)?;
+        let latch = *chain.last().expect("a chain has blocks");
+        (chain, latch, header)
+    };
+    let exit = *function.successors(test).iter().find(|to| !loop_.body.contains(&cfg::id(**to)))?;
+    Some((header, chain, latch, test, exit, posttested))
+}
+
+/// A loop's fills that stay where the loop is not one: LLVM's
+/// `LoopIdiomRecognize` takes each store by itself, a memset ahead of the loop
+/// and the loop for what else it does.
+struct _Split {
+    preheader: BlockId,
+    fills: Vec<_Hoisted>,
+    /// The memset's pointer space and length width.
+    memset: (u32, u32),
+}
+
+/// A store of a split loop and the memset it becomes.
+struct _Hoisted {
+    effect: InstId,
+    root: Operand,
+    start: BigInt,
+    byte: Byte,
+    length: BigInt,
+}
+
+/// The fills of `loop_`, a loop of a known count whose other stores and loads
+/// touch other objects, that are as many memsets before it. Not a loop of
+/// fills only: that one is `_fill`'s whole.
+fn _split(
+    unit: &Unit,
+    callees: &Callees,
+    loop_: &Loop,
+    costs: &OperationCosts,
+    bytes_costs: &OperationCosts,
+    size: bool,
+) -> Option<_Split> {
+    // Priced like the loop's other fills; what a memset saves under `-Os`
+    // is a store of the loop that stays.
+    if size {
+        return None;
+    }
+    let function = unit.function;
+    let (header, chain, _, _, _, posttested) = _shape(function, loop_)?;
+    let preheader = cfg::block(loop_.preheader(function)?);
+    if loop_.exits(function).len() != 1 {
+        return None;
+    }
+    let plain = |inst: InstId| memory::speculatable(unit.context, callees, function, inst);
+    // A loop tested before its trips runs its header once more than its body.
+    if !posttested
+        && operations(function, header)
+            .into_iter()
+            .any(|inst| function.terminator(header) != Some(inst) && !plain(inst))
+    {
+        return None;
+    }
+    let proof = induction::counted(unit, loop_, None, true).into_iter().find(|proof| {
+        proof.posttested == posttested && proof.count.as_ref().is_some_and(|count| *count > BigInt::from(0))
+    })?;
+    let count = proof.count.clone()?;
+    let still = induction::invariant(function, &loop_.body);
+    let counters = induction::basics(unit, loop_);
+    let walk = induction::recurrences(unit, loop_, &counters);
+    let (mut fills, mut kept): (Vec<_Hoisted>, Vec<MemRef>) = (Vec::new(), Vec::new());
+    for &block in &chain {
+        for inst in operations(function, block) {
+            if function.terminator(block) == Some(inst) {
+                continue;
+            }
+            let op = function.instruction(inst);
+            let hoisted = match _stored(unit, callees, inst, &still) {
+                Some((pointer, byte, bytes)) if !matches!(byte, Byte::Pattern(..)) => {
+                    let formula = match pointer {
+                        Operand::Value(address) => walk.values.get(&address).filter(|one| one.pointer.is_some()),
+                        _ => None,
+                    };
+                    formula.and_then(|formula| {
+                        let width = formula.width();
+                        let bounded = unit.layout.pointer(unit.space(pointer)?).index_bits == width
+                            && proof.width() <= width
+                            && &count * &bytes < BigInt::from(1) << width;
+                        let start = formula.start.known()?;
+                        (bounded && formula.step.known()? == bytes).then(|| _Hoisted {
+                            effect: inst,
+                            root: formula.pointer.expect("a rooted pointer"),
+                            start,
+                            byte,
+                            length: &count * &bytes,
+                        })
+                    })
+                }
+                _ => None,
+            };
+            if let Some(hoisted) = hoisted {
+                fills.push(hoisted);
+                continue;
+            }
+            let address = match op.opcode {
+                Opcode::Store { .. } => op.operands[1],
+                Opcode::Load { .. } => op.operands[0],
+                _ if plain(inst) => continue,
+                _ => return None,
+            };
+            let at = MemRef::at(unit, address, 1);
+            if !at.object || at.root.is_none() {
+                return None;
+            }
+            kept.push(at);
+        }
+    }
+    if fills.is_empty() || kept.is_empty() {
+        return None;
+    }
+    // Each fill's object is its own, and none the loop's other accesses reach.
+    let objects = fills.iter().map(|fill| MemRef::at(unit, fill.root, 1)).collect::<Vec<_>>();
+    for (at, one) in objects.iter().enumerate() {
+        let rest = objects[at + 1..].iter().chain(kept.iter());
+        if !one.object || one.root.is_none() || rest.into_iter().any(|other| other.root == one.root || !other.object) {
+            return None;
+        }
+    }
+    // Over the trips the loop makes, the stores it keeps are what the memsets
+    // cost.
+    let trips = count.to_i64()?;
+    let word = match costs.memset_store {
+        0 => i64::from(unit.layout.pointer(0).bits / 8).max(4),
+        stored => stored,
+    };
+    let priced = |fill: &_Hoisted| {
+        let zero = matches!(fill.byte, Byte::Number(0));
+        let length = fill.length.to_i64()?;
+        let stored = Some((length, zero));
+        let store =
+            |costs: &OperationCosts| if costs.store_immediate > 0 { costs.store_immediate } else { costs.store };
+        // The stores the memset replaces are the trips of the loop only where
+        // the target expands a small memset inline and unrolls a loop of few
+        // trips; a loop that stays rolled holds one store, whose bytes the
+        // memset must not exceed (x86-16 nbody_fixed -O2 grew 7).
+        let stores = if costs.memset_store > 0 { trips } else { 1 };
+        Some(
+            trips * store(costs) >= fill_price(costs, size, trips, Some(trips), stored, word)
+                && stores * store(bytes_costs) >= fill_price(bytes_costs, true, trips, Some(trips), stored, word),
+        )
+    };
+    if !fills.iter().all(|fill| priced(fill) == Some(true)) {
+        return None;
+    }
+    let space = unit.space(fills[0].root)?;
+    let width = unit.layout.pointer(space).index_bits;
+    Some(_Split { preheader, fills, memset: (space, width) })
+}
+
+/// Each fill of `split` a memset ahead of its loop, its store gone.
+fn _hoist(
+    context: &mut Context,
+    layout: &DataLayout,
+    declared: &mut Declared,
+    function: &mut Function,
+    split: &_Split,
+) {
+    let at = function.terminator(split.preheader).expect("a preheader branch");
+    let (space, width) = split.memset;
+    let void = context.types.void();
+    let pointer_type = context.types.ptr(0);
+    let i8 = context.types.int(8);
+    for fill in &split.fills {
+        let align = match function.instruction(fill.effect).opcode {
+            Opcode::Store { align, .. } => align.or_else(|| {
+                let ty = function.operand_type(context, function.instruction(fill.effect).operands[0])?;
+                Some(layout.align(&context.types, ty))
+            }),
+            _ => None,
+        };
+        let destination = if fill.start == BigInt::from(0) {
+            fill.root
+        } else {
+            let ty = function.operand_type(context, fill.root).expect("a typed pointer");
+            let offset = counting::constant(context, &fill.start, width);
+            let gep = function.create_instruction(
+                Opcode::GetElementPtr { source: i8 },
+                ty,
+                vec![fill.root, offset],
+                Flags::default(),
+                None,
+            );
+            function.insert(gep, Position::Before(at)).expect("a placed branch");
+            Operand::Value(function.instruction(gep).result.expect("a pointer"))
+        };
+        let byte = match fill.byte {
+            Byte::Operand(byte) => byte,
+            Byte::Number(byte) => counting::constant(context, &BigInt::from(byte), 8),
+            Byte::Pattern(value) => value,
+        };
+        let (callee, function_type) = _memset(context, declared, space, width);
+        let callee =
+            Operand::Constant(context.constant(Constant { ty: pointer_type, kind: ConstantKind::Global(callee) }));
+        let mut argument_attrs = vec![Vec::new(); 4];
+        if let Some(align) = align {
+            argument_attrs[0].push(llrm_mir::opcode::Attribute::Int("align".to_owned(), align));
+        }
+        let info = CallInfo {
+            function_type,
+            calling_convention: 0,
+            return_attrs: Vec::new(),
+            argument_attrs,
+            attrs: Vec::new(),
+            tail: Default::default(),
+        };
+        let length = counting::constant(context, &fill.length, width);
+        let off = counting::constant(context, &BigInt::from(0), 1);
+        let call = function.create_instruction(
+            Opcode::Call(Box::new(info)),
+            void,
+            vec![destination, byte, length, off, callee],
+            Flags::default(),
+            None,
+        );
+        function.insert(call, Position::Before(at)).expect("a placed branch");
+        function.erase(fill.effect).expect("an effect has no result");
+    }
 }
 
 /// The first of a loop's fills as `_fill` takes the only one, and the others as
@@ -875,7 +1114,8 @@ pub(crate) fn fills_pay(
     // for the clocks it saves. At -Os, or for unknown trips, the bytes decide.
     let priced = at_speed && clocks.is_some_and(|(_, _, trips, cells)| trips.is_some() && cells.is_some());
     // A small constant fill is stored inline, not as a `rep stos`.
-    let each_fill = inline.filter(|inline| inline.stores() <= inline.max_stores).map_or(costs.fill, |inline| inline.price(costs));
+    let each_fill =
+        inline.filter(|inline| inline.stores() <= inline.max_stores).map_or(costs.fill, |inline| inline.price(costs));
     (stores < 2 || priced || fills_cheaper(loop_bytes, fills, each_fill))
         && clocks.is_none_or(|(clocks, rate, trips, width)| {
             // The clocks the fill adds against the bytes it saves, as the
@@ -978,6 +1218,35 @@ fn _cheaper(
     _cheaper_by(each, known, most, costs, size, moved, 1, None)
 }
 
+/// What one memset costs over `trips` cells: its stores while they are under
+/// the CPU's ratio, as isel expands it (`stored`: its length known, and
+/// whether it is zeros), else the string instruction.
+fn fill_price(
+    costs: &OperationCosts,
+    size: bool,
+    trips: i64,
+    known: Option<i64>,
+    stored: Option<(i64, bool)>,
+    word: i64,
+) -> i64 {
+    let string = costs.fill + trips * costs.fill_cell;
+    match (stored, known) {
+        // The fill's length known: stores while they are under the CPU's
+        // ratio, as `memset` expands it (a CPU with none states keeps the
+        // cells it has always taken).
+        (Some((length, zero)), _) if costs.pieces(size, zero) > 0 => {
+            let pieces = length / word + i64::from((length % word).count_ones());
+            if pieces < costs.pieces(size, zero) {
+                pieces * costs.store
+            } else {
+                costs.fill + (length + word - 1) / word * costs.fill_cell
+            }
+        }
+        (_, Some(count)) if count <= 16 => count * costs.store,
+        _ => string,
+    }
+}
+
 /// `_cheaper`, for a loop whose trips are `fills` fills, each its own memset.
 fn _cheaper_by(
     each: i64,
@@ -993,23 +1262,7 @@ fn _cheaper_by(
     // Isel expands a few cells to stores, as gcc's by-pieces rule says, and a
     // few bytes of a copy to loads and stores.
     let Some((bytes, backward)) = moved else {
-        let string = costs.fill + trips * costs.fill_cell;
-        let fill = match (stored, known) {
-            // The fill's length known: stores while they are under the CPU's
-            // ratio, as `memset` expands it (a CPU with none states keeps the
-            // cells it has always taken).
-            (Some((length, zero)), _) if costs.pieces(size, zero) > 0 => {
-                let pieces = length / 4 + i64::from((length % 4).count_ones());
-                if pieces < costs.pieces(size, zero) {
-                    pieces * costs.store
-                } else {
-                    costs.fill + (length + 3) / 4 * costs.fill_cell
-                }
-            }
-            (_, Some(count)) if count <= 16 => count * costs.store,
-            _ => string,
-        };
-        return trips * each > fills * fill;
+        return trips * each > fills * fill_price(costs, size, trips, known, stored, 4);
     };
     let copy = match known {
         Some(count) => copy_price(costs, count * bytes, backward),

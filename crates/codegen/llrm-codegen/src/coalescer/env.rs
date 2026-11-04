@@ -52,10 +52,13 @@ pub struct TargetEnv {
     pub joins_pinned_copies: bool,
     /// DEVIATE C13 (`CoalescerEnv::joins_sub_registers`).
     pub joins_sub_registers: bool,
+    /// Whether a copy into or out of a lane above the low one is joined
+    /// ([`CoalescerEnv::can_share_lane`]). Off: such a copy stays.
+    pub joins_lanes: bool,
     /// For each pinned value, the pinned values on overlapping registers.
     pub aliases: IndexMap<u32, Vec<u32>>,
     /// `TargetRegisterInfo::shouldCoalesce`: whether the join goes ahead.
-    pub should_join: Box<dyn Fn(&Join) -> bool>,
+    pub should_join: Option<Box<dyn Fn(&Join) -> bool>>,
     /// The frequency of each block relative to the entry block
     /// (`MBFI->getBlockFreqRelativeToEntryBlock`); a block it does not list
     /// runs once.
@@ -223,6 +226,17 @@ impl TargetEnv {
         wide: &BTreeSet<RegId>,
         narrow: &BTreeSet<RegId>,
     ) -> BTreeSet<RegId> {
+        self.hosts_at(wide, narrow, 0)
+    }
+
+    /// `hosts` for the byte `offset` of the wide register: the narrow one is
+    /// that many bytes above the wide one's lowest.
+    fn hosts_at(
+        &self,
+        wide: &BTreeSet<RegId>,
+        narrow: &BTreeSet<RegId>,
+        offset: u32,
+    ) -> BTreeSet<RegId> {
         let Some(regs) = &self.regs else { return BTreeSet::new() };
         let low = |register: RegId| regs.lanes(register);
         wide.iter()
@@ -233,7 +247,7 @@ impl TargetEnv {
                     .any(
                         |&small| regs.root(small) == regs.root(big)
                             && low(small) & !low(big) == 0
-                            && low(small).trailing_zeros() == low(big).trailing_zeros(),
+                            && low(small).trailing_zeros() == low(big).trailing_zeros() + offset,
                     )
             })
             .collect()
@@ -360,6 +374,40 @@ impl CoalescerEnv for TargetEnv {
         }
     }
 
+    fn can_share_lane(
+        &self,
+        narrow: u32,
+        wide: u32,
+        offset: u32,
+    ) -> bool {
+        if !self.joins_lanes {
+            return false;
+        }
+        if let (Some(x), Some(y)) = (self.pins.get(&narrow), self.pins.get(&wide)) {
+            if self.regs.as_ref().is_none_or(|regs| regs.root(*x) != regs.root(*y)) {
+                return false;
+            }
+        }
+        let palettes = self.palettes.borrow();
+        match (palettes.get(&wide), palettes.get(&narrow)) {
+            (Some(big), Some(small)) => !self.hosts_at(big, small, offset).is_empty(),
+            _ => self.regs.is_some(),
+        }
+    }
+
+    fn narrow_lane(
+        &self,
+        wide: u32,
+        narrow: u32,
+        offset: u32,
+    ) {
+        let mut palettes = self.palettes.borrow_mut();
+        let Some(small) = palettes.get(&narrow).cloned() else { return };
+        if let Some(big) = palettes.get(&wide).cloned() {
+            palettes.insert(wide, self.hosts_at(&big, &small, offset));
+        }
+    }
+
     fn narrow_sub(
         &self,
         wide: u32,
@@ -379,6 +427,9 @@ impl CoalescerEnv for TargetEnv {
         src: u32,
         dst: u32,
     ) -> bool {
+        // `TargetRegisterInfo::shouldCoalesce` is no work where the target has
+        // no opinion: no `Join` is built for it.
+        let Some(should_join) = &self.should_join else { return true };
         let palettes = self.palettes.borrow();
         let (Some(x), Some(y)) = (palettes.get(&src), palettes.get(&dst)) else { return true };
         let freq = |key: InstrKey| {
@@ -408,7 +459,8 @@ impl CoalescerEnv for TargetEnv {
         // the wide registers that have its registers as their low part.
         let widths = super::pair::move_copy(lis.instr(copy)).map(|(d, s)| d.width != s.width);
         let joined = if widths == Some(true) { self.hosts(y, x) } else { x.intersection(y).copied().collect() };
-        (self.should_join)(&Join { one: side(src, x), other: side(dst, y), joined, copy_frequency: freq(copy) })
+        JOINS_BUILT.with(|built| built.set(built.get() + 1));
+        should_join(&Join { one: side(src, x), other: side(dst, y), joined, copy_frequency: freq(copy) })
     }
 
     fn tracks_uses(&self) -> bool {
@@ -453,6 +505,12 @@ impl JoinMap {
     pub fn iter(&self) -> impl Iterator<Item = (u32, u32)> + '_ {
         self.0.keys().map(|&value| (value, self.survivor(value)))
     }
+}
+
+thread_local! {
+    /// How many [`Join`]s `should_coalesce` has built on this thread, for a
+    /// test that a target with no opinion costs none.
+    pub static JOINS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// `body` with its copies joined by the translated coalescer.
@@ -503,8 +561,9 @@ pub fn coalesce(
     joins_global_copies: bool,
     joins_pinned_copies: bool,
     joins_sub_registers: bool,
+    joins_lanes: bool,
     regs: llrm_lir::registers::Regs,
-    should_join: Box<dyn Fn(&Join) -> bool>,
+    should_join: Option<Box<dyn Fn(&Join) -> bool>>,
     remat: Option<Box<dyn Fn(&Insn) -> bool>>,
     remat_wins: Option<RematWins>,
     kind_of: Box<dyn Fn(&Insn, u32) -> Option<u32>>,
@@ -534,6 +593,7 @@ pub fn coalesce(
         joins_global_copies,
         joins_pinned_copies,
         joins_sub_registers,
+        joins_lanes,
         aliases,
         should_join,
         freq,

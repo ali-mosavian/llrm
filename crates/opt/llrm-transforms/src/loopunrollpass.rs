@@ -1563,7 +1563,10 @@ fn try_to_unroll_loop(
     }
 
     // `LoopFullUnrollPass` does not do partial or runtime unrolling.
-    let partial = trip_count != 0 && count < trip_count && trip_count % count == 0;
+    // A known trip count is unrolled in place, the exit kept in the copy it
+    // falls in (`BreakoutTrip`): `UP.Runtime &= TripCount == 0 && ...`
+    // ([LoopUnrollPass.cpp:1439](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopUnrollPass.cpp#L1439)).
+    let partial = trip_count != 0 && count < trip_count;
     if !run.options.target_unrolling
         && ((trip_count == 0 && max_trip_count == 0) || count < trip_count || count < max_trip_count)
     {
@@ -1573,7 +1576,7 @@ fn try_to_unroll_loop(
     // Runtime unrolling: the epilog remainder first (`UnrollLoop`), then the
     // loop, made again, is copied out `count` times.
     let mut remade = None;
-    if run.options.target_unrolling && !partial && (trip_count == 0 || count < trip_count) {
+    if run.options.target_unrolling && trip_count == 0 {
         if trip_multiple % count != 0 {
             let expansion = llrm_analysis::scev::expand_cost::MachineCosts {
                 tti: run.outer.target().tti(),

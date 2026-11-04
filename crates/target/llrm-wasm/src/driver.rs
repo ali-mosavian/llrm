@@ -61,7 +61,9 @@ impl Level {
             Self::Oz => MidEnd::min_size(),
         };
         // The DAG's `mergeConsecutiveStores` widens the stores, as in the pin.
-        MidEnd { lower_switches: false, merge_stores: false, ..options }
+        // The pin's -O1 has no GVN: a global's store is not forwarded across
+        // blocks.
+        MidEnd { lower_switches: false, merge_stores: false, write_through: false, ..options }
     }
 }
 

@@ -767,6 +767,26 @@ fn _move(
     into: Held,
     out_of: Loc,
 ) -> Arc<Insn> {
+    // A copy of what `beside` reads as undefined is undefined: the pin's `COPY` of an `IMPLICIT_DEF`, which
+    // `ProcessImplicitDefs` flags undef at the reads. Left a read of a value nothing defines, the live range of
+    // an undef far pointer had no reaching def and the allocator panicked.
+    if let Loc::Held(held) = &out_of
+        && beside.undefs.contains(&held.value)
+    {
+        let mut made = Insn::new(
+            beside.at,
+            Some((beside.at, beside.at)),
+            Some(Semantics {
+                name: Some(crate::processimpdefs::IMPLICIT_DEF.into()),
+                dests: vec![Loc::Held(into)],
+                ..Semantics::new(Operation::Nothing)
+            }),
+            vec![into.value],
+            Vec::new(),
+        );
+        made.line = beside.line;
+        return Arc::new(made);
+    }
     let uses = match &out_of {
         Loc::Held(held) => vec![held.value],
         _ => Vec::new(),
@@ -819,10 +839,14 @@ pub fn hoisted(
     body: &LirBody,
     fixed: &IndexMap<u32, RegId>,
 ) -> LirBody {
-    if fixed.is_empty() {
+    let regs = body.regs();
+    // Only a copy into a segment register is moved (below): with none pinned,
+    // the scan of every loop's blocks finds nothing, 131 M Ir of
+    // memory_expansion -O2's 255 M regalloc prepare.
+    if !fixed.values().any(|register| regs.is_segment(*register)) {
         return body.clone();
     }
-    let regs = body.regs();
+    body.facts.0.bump("hoist-loops");
     let forest = crate::analysis::loops::forest_of(&body.blocks, Some(body.entry));
     let mut order: Vec<usize> = (0..forest.loops.len()).collect();
     order.sort_by_key(|&one| forest.loops[one].size);
@@ -1547,6 +1571,22 @@ mod tests {
         ]);
         let done = hoisted(&body, &pinned(&[(2, RegId::CX)]));
         assert_eq!(at_block(&done, 10), vec![2, 3]);
+    }
+
+    /// With no segment register pinned nothing is moved, yet every loop's
+    /// blocks were scanned for it: 131 M Ir of memory_expansion -O2's 255 M
+    /// regalloc prepare (221 functions).
+    #[test]
+    fn test_no_loop_is_scanned_where_no_segment_register_is_pinned() {
+        let body = flow(vec![
+            block_to(0, vec![defined(1, 0)], &[10]),
+            block_to(10, vec![copied(2, 1, 10), reads_in(2, RegId::CX, 3, 12)], &[10, 20]),
+            block_to(20, vec![], &[]),
+        ]);
+        let _ = hoisted(&body, &pinned(&[(2, RegId::CX)]));
+        assert_eq!(body.facts.0.counted("hoist-loops"), 0);
+        let _ = hoisted(&body, &pinned(&[(2, RegId::ES)]));
+        assert_eq!(body.facts.0.counted("hoist-loops"), 1, "premise: a segment register is scanned for");
     }
 
     #[test]

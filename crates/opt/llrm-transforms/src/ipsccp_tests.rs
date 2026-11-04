@@ -534,3 +534,44 @@ b:
     );
     assert!(header(&text, "set").contains("memory(argmem: write)"), "{text}");
 }
+
+/// Every callee whose pointer argument became a constant, or whose return was
+/// zapped, rescanned the whole module for its calls: 186 scans, 85 M of
+/// memory_expansion's 346 M in the interprocedural step. One scan per run.
+#[test]
+fn test_the_calls_of_a_module_are_found_in_one_scan_for_all_callees() {
+    let module = parsed(
+        "declare void @use(i32)
+
+define internal void @a(i32 %x) {
+b1:
+  call void @use(i32 %x)
+  ret void
+}
+
+define internal void @b(i32 %x) {
+b1:
+  call void @a(i32 %x)
+  call void @a(i32 %x)
+  ret void
+}
+
+define void @main() {
+b1:
+  call void @b(i32 1)
+  call void @a(i32 2)
+  ret void
+}
+",
+    );
+    let (a, b) = (module.named("a").unwrap(), module.named("b").unwrap());
+    let mut calls = super::Calls::default();
+    let before = super::SCANS.with(|count| count.get());
+    let (to_a, to_b) = (calls.to(&module, a), calls.to(&module, b));
+    for _ in 0..20 {
+        calls.to(&module, a);
+        calls.to(&module, b);
+    }
+    assert_eq!(super::SCANS.with(|count| count.get()) - before, 1);
+    assert_eq!((to_a.len(), to_b.len()), (3, 1));
+}

@@ -83,3 +83,30 @@ fn the_product_of_two_256_bit_values_fits_512() {
     // (2^256 - 1)^2 = 2^512 - 2^257 + 1.
     assert_eq!(product, (!U512::ZERO).wrapping_sub(U512::ONE << 257).wrapping_add(U512::from_u128(2)));
 }
+
+/// A mask and a range of a `U256` word cost shifts of the whole word (`mask`
+/// was `(1 << bits) - 1`, `Range::new` took it four times): 13.5 M Ir of a
+/// jpeg_fixed -O2 compile, 3.2 M of it in `Range::new`. They are built from
+/// the width.
+#[test]
+fn a_mask_and_a_range_of_a_wide_word_need_no_wide_shift() {
+    for bits in 1..256 {
+        let expected = (0..bits).fold(U256::ZERO, |all, at| all | (U256::ONE << at));
+        assert_eq!(mask::<U256>(bits), expected, "mask {bits}");
+    }
+    for bits in 1..128 {
+        assert_eq!(mask::<u128>(bits), (1_u128 << bits) - 1, "mask {bits}");
+    }
+    assert_eq!(mask::<U256>(256), !U256::ZERO);
+    assert_eq!(mask::<u128>(0), 0);
+    assert_eq!(mask::<u128>(127), u128::MAX >> 1);
+    for width in 1..=256 {
+        assert_eq!(sign_bit::<U256>(width), U256::ONE << (width - 1), "sign bit {width}");
+    }
+    SHIFTS.with(|count| count.set(0));
+    let range = crate::constantrange::Range::<U256>::new(32, U256::from_u128(5), U256::from_u128(9));
+    let _ = (range, mask::<U256>(64), mask::<U256>(160), sign_bit::<U256>(40));
+    let _ = (range.get_signed_min(), range.get_signed_max());
+    let shifts = SHIFTS.with(std::cell::Cell::get);
+    assert_eq!(shifts, 0, "{shifts} wide shifts to make a range, two masks and a sign bit and read its signed ends");
+}

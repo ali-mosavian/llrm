@@ -23,6 +23,11 @@ use llrm_mir::types::Type;
 
 use super::LoopCtx;
 
+#[cfg(test)]
+thread_local! {
+    pub static COUNTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// One loop's held values.
 pub struct Pressure {
     limit: usize,
@@ -38,6 +43,8 @@ impl Pressure {
         outer: &Outer,
         ctx: &LoopCtx,
     ) -> Option<Self> {
+        #[cfg(test)]
+        COUNTED.with(|count| count.set(count.get() + 1));
         let limit = outer.target().tti()?.number_of_gpr_registers() as usize;
         if limit == 0 {
             return None;
