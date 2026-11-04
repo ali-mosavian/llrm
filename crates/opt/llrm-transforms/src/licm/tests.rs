@@ -1828,3 +1828,123 @@ exit:
 ";
     assert_eq!(seeded_loops(text), [true]);
 }
+
+/// `hoistSubAddAssociation`'s three shapes, `a` and `b` invariant:
+/// `(LV + a) - b` to `LV + (a - b)`, `(LV - a) - b` to `LV - (a + b)`,
+/// `(LV - a) + b` (either order) to `LV + (b - a)`. llrm kept the invariant
+/// sub or add in the loop, where `opt -passes=licm` hoists it.
+#[test]
+fn test_sub_and_add_chains_with_invariant_operands_are_reassociated_out() {
+    let text = |inner: &str, outer: &str| {
+        format!(
+            "define i16 @f(i16 %n, i16 %a, i16 %b) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %x = {inner}
+  %y = {outer}
+  %i1 = add i16 %i, %y
+  %c = icmp slt i16 %i1, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}}
+"
+        )
+    };
+    let cases = [
+        ("add i16 %i, %a", "sub i16 %x, %b", "%invariant.op = sub i16 %a, %b", "%y.reass = add i16 %i, %invariant.op"),
+        ("sub i16 %i, %a", "sub i16 %x, %b", "%invariant.op = add i16 %a, %b", "%y.reass = sub i16 %i, %invariant.op"),
+        ("sub i16 %i, %a", "add i16 %x, %b", "%invariant.op = sub i16 %b, %a", "%y.reass = add i16 %i, %invariant.op"),
+        ("sub i16 %i, %a", "add i16 %b, %x", "%invariant.op = sub i16 %b, %a", "%y.reass = add i16 %i, %invariant.op"),
+    ];
+    for (inner, outer, invariant, rebuilt) in cases {
+        let after = licm_printed(&text(inner, outer));
+        assert!(block_of(&after, "b0").iter().any(|line| line.contains(invariant)), "{inner} / {outer}\n{after}");
+        let body = block_of(&after, "b1");
+        assert!(body.iter().any(|line| line.contains(rebuilt)), "{inner} / {outer}\n{after}");
+        assert!(body.iter().all(|line| !line.contains("%x = ")), "{inner} / {outer}\n{after}");
+    }
+}
+
+/// `hoistAddSub`: `LV + C1 < C2` is `LV < C2 - C1` and `LV - C1 < C2` is
+/// `LV < C1 + C2` when the move cannot overflow; `C1 - LV < C2` is `LV > C1 -
+/// C2`. llrm kept the add in the loop, where `opt -passes=licm` hoists the
+/// bound.
+#[test]
+fn test_a_compare_of_an_add_or_sub_with_an_invariant_operand_is_reassociated_out() {
+    let text = |operation: &str, flags: &str, compare: &str, p: &str, q: &str| {
+        format!(
+            "define i16 @f(i16 %n, i16 %a, i16 %b) {{
+b0:
+  %p = {p}
+  %q = {q}
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %x = {operation} {flags} i16 {compare}
+  %go = icmp ult i16 %x, %q
+  %gz = zext i1 %go to i16
+  %j = add i16 %i, %gz
+  %i1 = add i16 %j, 1
+  %c = icmp slt i16 %i1, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}}
+"
+        )
+    };
+    // add: LV + C1 u< C2.
+    let after = licm_printed(&text("add", "nuw", "%i, %p", "and i16 %a, 255", "or i16 %b, 255"));
+    assert!(block_of(&after, "b0").iter().any(|line| line.contains("%invariant.op = sub nuw i16 %q, %p")), "{after}");
+    assert!(block_of(&after, "b1").iter().any(|line| line.contains("icmp ult i16 %i, %invariant.op")), "{after}");
+    assert!(block_of(&after, "b1").iter().all(|line| !line.contains("%x = ")), "{after}");
+    // sub: LV - C1 u< C2.
+    let after = licm_printed(&text("sub", "nuw", "%i, %p", "and i16 %a, 255", "and i16 %b, 255"));
+    assert!(block_of(&after, "b0").iter().any(|line| line.contains("%invariant.op = add nuw i16 %p, %q")), "{after}");
+    // C1 - LV u< C2: LV u> C1 - C2.
+    let after = licm_printed(&text("sub", "nuw", "%p, %i", "or i16 %a, 255", "and i16 %b, 255"));
+    assert!(block_of(&after, "b0").iter().any(|line| line.contains("%invariant.op = sub nuw i16 %p, %q")), "{after}");
+    assert!(block_of(&after, "b1").iter().any(|line| line.contains("icmp ugt i16 %i, %invariant.op")), "{after}");
+    // No wrap flag: untouched.
+    let after = licm_printed(&text("add", "", "%i, %p", "and i16 %a, 255", "or i16 %b, 255"));
+    assert!(!after.contains("invariant.op"), "{after}");
+}
+
+/// `hoistMulAddAssociation`: `(a * x + b * y) * c` with `a`, `b`, `c` invariant
+/// is `(a * c) * x + (b * c) * y`, the two products made in the preheader.
+/// llrm left the whole tree in the loop, where `opt -passes=licm` hoists them.
+#[test]
+fn test_a_product_of_a_sum_of_products_with_invariant_factors_is_reassociated_out() {
+    let text = "define i16 @f(i16 %n, i16 %a, i16 %b, i16 %c) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %x = mul i16 %a, %i
+  %y = mul i16 %i, %b
+  %s = add nsw i16 %x, %y
+  %t = mul i16 %s, %c
+  %i1 = add i16 %i, %t
+  %k = icmp slt i16 %i1, %n
+  br i1 %k, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}
+";
+    let after = licm_printed(text);
+    let pre = block_of(&after, "b0");
+    assert!(pre.iter().any(|line| line.contains("= mul i16 %a, %c")), "{after}");
+    assert!(pre.iter().any(|line| line.contains("= mul i16 %b, %c")), "{after}");
+    let body = block_of(&after, "b1");
+    assert!(body.iter().all(|line| !line.contains("%t = ")), "{after}");
+    assert!(body.iter().any(|line| line.contains("%x.reass = mul i16 %factor.op.mul1, %i")), "{after}");
+}
