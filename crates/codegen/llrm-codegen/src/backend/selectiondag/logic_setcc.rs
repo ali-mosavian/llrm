@@ -313,6 +313,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if let Some(rotated) = self.match_rotate(n0, n1) {
             return Some(rotated);
         }
+        if let Some(load) = self.match_load_combine(node) {
+            return Some(load);
+        }
         if let Some(packed) = self.pack_words_by_shrd(node) {
             return Some(packed);
         }
