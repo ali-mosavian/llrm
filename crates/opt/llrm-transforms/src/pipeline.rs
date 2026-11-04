@@ -811,12 +811,22 @@ pub(crate) fn llvm_order(
         // (PassBuilderPipelines.cpp#L1662, the last function pass, after
         // LoopSink) and L1682.
         Phase::Late => vec![
+            // DropUnnecessaryAssumesPass (l.1577), the first of `OptimizePM`.
+            slot(
+                "drop-unnecessary-assumes@1577",
+                Box::new(crate::dropunnecessaryassumes::DropUnnecessaryAssumes { drop_dereferenceable: false }),
+            ),
             slot("float2int@1594", Box::new(crate::float2int::Float2Int)),
             // `LowerConstantIntrinsicsPass` (l.1597), right after Float2Int.
             slot("lower-constant-intrinsics@1597", Box::new(crate::lowerconstantintrinsics::LowerConstantIntrinsics)),
             // LoopInterchangePass (l.1631), in the loop pass manager after
             // LoopRotate (l.1621) and LoopDeletion (l.1628).
             slot("loop-interchange@1631", Box::new(loopinterchange::Interchange::default())),
+            // DropUnnecessaryAssumesPass (l.1360), after the vectorizer.
+            slot(
+                "drop-unnecessary-assumes@1360",
+                Box::new(crate::dropunnecessaryassumes::DropUnnecessaryAssumes { drop_dereferenceable: true }),
+            ),
             // InferAlignmentPass (l.1362), before LoopLoadElimination.
             slot("infer-alignment@1362", Box::new(crate::inferalignment::InferAlignment)),
             // LoopLoadEliminationPass (l.1400), before the SimplifyCFG of

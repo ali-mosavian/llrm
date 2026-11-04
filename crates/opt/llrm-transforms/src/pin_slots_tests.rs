@@ -256,13 +256,6 @@ const ROWS: &[Disposition] = &[
     ),
     row(
         Late,
-        "drop-unnecessary-assumes",
-        Why::Missing,
-        "pin ablation (2026-10-27): 0 IRs of 65 QCport (i486 -O2 and m16 -Os), 0 of 58 QB (m16 -Os; the pin parses 58 of 101), 0 of 49 C examples/bench (m16 -Os and i486 -O2); DEFERRED, revisit after parity-green",
-        "w4",
-    ),
-    row(
-        Late,
         "alignment-from-assumptions",
         Why::Missing,
         "pin ablation (2026-10-27): 0 IRs of 65 QCport (i486 -O2 and m16 -Os), 0 of 58 QB (m16 -Os; the pin parses 58 of 101), 0 of 49 C examples/bench (m16 -Os and i486 -O2); DEFERRED, revisit after parity-green",
