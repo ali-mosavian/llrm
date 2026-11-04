@@ -96,6 +96,12 @@ impl Machine for WasmMachine {
     fn tuning(&self) -> Tuning {
         TUNING
     }
+
+    /// SD443: the pin's IPSCCP runs once; a second run specialised the
+    /// arguments of a function whose address was taken before inlining.
+    fn second_ipsccp(&self) -> bool {
+        false
+    }
 }
 
 /// `TargetLoweringBase`'s defaults, which WebAssemblyISelLowering does not
