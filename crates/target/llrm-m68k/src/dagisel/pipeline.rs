@@ -187,8 +187,8 @@ pub fn select_block_with(
     let tli = target_lowering(cpu);
     let mut lowering = M68kLowering { indexed };
     let selector = Selector::new(match cpu {
-        Cpu::M68000 => m68k_m68000::TABLE,
-        Cpu::M68020 => m68k_m68020::TABLE,
+        Cpu::M68000 | Cpu::M68010 => m68k_m68000::TABLE,
+        Cpu::M68020 | Cpu::M68030 | Cpu::M68040 | Cpu::M68060 => m68k_m68020::TABLE,
     });
     let mut target = M68kTarget {
         tli: &tli,

@@ -159,6 +159,13 @@ impl Slots {
     }
 }
 
+/// An instruction put into a block or taken out of it, with the block's index.
+#[derive(Clone)]
+pub enum Change {
+    Put(usize, Arc<Insn>),
+    Took(usize, Arc<Insn>),
+}
+
 /// `LiveIntervals` (LiveIntervals.h).
 pub struct LiveIntervals {
     pub indexes: SlotIndexes,
@@ -173,6 +180,10 @@ pub struct LiveIntervals {
     slots: HashMap<(u32, InstrKey), Slots>,
     /// Every instruction by its key (`MachineInstr*`).
     insns: HashMap<InstrKey, Arc<Insn>>,
+    /// Every instruction put in or taken out since
+    /// [`LiveIntervals::track_changes`] was asked for, for a caller that
+    /// keeps a summary of what names a value.
+    changes: std::cell::RefCell<Option<Vec<Change>>>,
     /// The values defined on entry (parameters), which no instruction defines.
     inputs: std::collections::BTreeSet<u32>,
     intervals: HashMap<u32, Rc<LiveInterval>>,
@@ -202,6 +213,7 @@ impl LiveIntervals {
             operands: HashMap::with_capacity_and_hasher(named / 2, Default::default()),
             slots: HashMap::with_capacity_and_hasher(named, Default::default()),
             insns: HashMap::with_capacity_and_hasher(insns, Default::default()),
+            changes: std::cell::RefCell::new(None),
             inputs: body.inputs.clone(),
             intervals: HashMap::default(),
             calc: LiveIntervalCalc::new(),
@@ -225,16 +237,25 @@ impl LiveIntervals {
         one: &Insn,
     ) {
         let instr = one.id();
+        // A def that keeps the rest of the value reads it (`readsReg()`).
         for &value in &one.defines {
-            self.push_operand(value, Operand { instr, is_def: true, reads_reg: false, early_clobber: false });
+            let reads_reg = one.partial_defs.contains(&value);
+            let lanes = one.def_lanes.iter().find(|(v, _)| *v == value).map_or(Operand::ALL, |(_, lanes)| *lanes);
+            self.push_operand(value, Operand { instr, is_def: true, reads_reg, early_clobber: false, lanes });
         }
         for &value in &one.uses {
-            self.push_operand(value, Operand { instr, is_def: false, reads_reg: true, early_clobber: false });
+            self.push_operand(
+                value,
+                Operand { instr, is_def: false, reads_reg: true, early_clobber: false, lanes: Operand::ALL },
+            );
         }
         // An operand flagged undef names the register and reads nothing
         // (`MachineOperand::isUndef`): it starts and extends no live range.
         for &value in &one.undefs {
-            self.push_operand(value, Operand { instr, is_def: false, reads_reg: false, early_clobber: false });
+            self.push_operand(
+                value,
+                Operand { instr, is_def: false, reads_reg: false, early_clobber: false, lanes: Operand::ALL },
+            );
         }
     }
 
@@ -278,6 +299,26 @@ impl LiveIntervals {
             if list.is_empty() {
                 self.operands.remove(&value);
             }
+        }
+    }
+
+    /// From now on, record each instruction put into or taken out of a block
+    /// ([`LiveIntervals::take_changes`]).
+    pub fn track_changes(&self) {
+        self.changes.borrow_mut().get_or_insert_with(Vec::new);
+    }
+
+    /// The instructions put in or taken out since the last call, in order.
+    pub fn take_changes(&self) -> Vec<Change> {
+        self.changes.borrow_mut().as_mut().map(std::mem::take).unwrap_or_default()
+    }
+
+    fn note(
+        &self,
+        change: impl FnOnce() -> Change,
+    ) {
+        if let Some(log) = self.changes.borrow_mut().as_mut() {
+            log.push(change());
         }
     }
 
@@ -693,6 +734,7 @@ impl LiveIntervals {
         let index = self.indexes.insert_machine_instr_in_maps(insn.id(), block, &prev, &next, late);
         llrm_mir::counts::bump(llrm_mir::counts::Event::LirOperandListEdits);
         self.add_operands(&insn);
+        self.note(|| Change::Put(block, Arc::clone(&insn)));
         self.insns.insert(insn.id(), Arc::clone(&insn));
         self.blocks[block].insert(pos, insn);
         index
@@ -711,6 +753,7 @@ impl LiveIntervals {
         let index = self.indexes.insert_machine_instr_in_maps(insn.id(), block, &prev, &next, false);
         llrm_mir::counts::bump(llrm_mir::counts::Event::LirOperandListEdits);
         self.add_operands(&insn);
+        self.note(|| Change::Put(block, Arc::clone(&insn)));
         self.insns.insert(insn.id(), Arc::clone(&insn));
         self.blocks[block].insert(pos, insn);
         index
@@ -729,10 +772,12 @@ impl LiveIntervals {
         let pos = self.position_of(block, old);
         let before = Arc::clone(&self.blocks[block][pos]);
         self.remove_operands(&before);
+        self.note(|| Change::Took(block, Arc::clone(&before)));
         self.insns.remove(&old);
         let index = self.indexes.replace_machine_instr_in_maps(old, new.id());
         llrm_mir::counts::bump(llrm_mir::counts::Event::LirOperandListEdits);
         self.add_operands(&new);
+        self.note(|| Change::Put(block, Arc::clone(&new)));
         self.insns.insert(new.id(), Arc::clone(&new));
         self.blocks[block][pos] = new;
         index
@@ -747,6 +792,7 @@ impl LiveIntervals {
         let pos = self.position_of(block, key);
         let gone = self.blocks[block].remove(pos);
         self.remove_operands(&gone);
+        self.note(|| Change::Took(block, Arc::clone(&gone)));
         self.insns.remove(&key);
         self.indexes.remove_machine_instr_from_maps(key);
     }
@@ -1230,6 +1276,8 @@ impl LiveIntervals {
 
 #[cfg(test)]
 mod tests {
+    use llrm_lir::valuelanes::ValueLanes;
+
     use super::*;
     use crate::model::lir::{Block, LirBlock};
     use crate::support::hash::IndexMap;
@@ -1400,6 +1448,84 @@ mod tests {
         SHRUNK.with(|one| one.borrow_mut().clear());
         lis.erase_dead_defs(&[insns[1].id(), insns[2].id(), insns[3].id()]);
         assert_eq!(SHRUNK.with(|one| one.borrow().clone()), [1]);
+    }
+
+    /// `v1 := 4 bytes; v1.lo := 2 bytes; use v1`, the narrow def listed in
+    /// `partial_defs` or not.
+    fn narrow_def_body(partial: bool) -> [Arc<Insn>; 3] {
+        let mut narrow = Insn::new(0, None, None, vec![1], Vec::new());
+        if partial {
+            narrow.partial_defs = vec![1];
+        }
+        [insn(&[1], &[]), Arc::new(narrow), insn(&[], &[1])]
+    }
+
+    /// A word write that keeps the rest of its dword (the coalescer's join of a
+    /// `w2 <- w4` copy, s67 on m68k: 53 of 89 left copies) reads the dword: the
+    /// value is live into it. Treated as a plain def, the dword's def was dead
+    /// and the upper half was whatever the register held.
+    #[test]
+    fn test_a_partial_def_reads_the_value_it_keeps_the_rest_of() {
+        let insns = narrow_def_body(true);
+        let mut lis = LiveIntervals::new(&body(&insns));
+        let narrow = lis.operands(1).iter().find(|op| op.instr == insns[1].id()).copied().unwrap();
+        assert!(narrow.is_def && narrow.reads_reg);
+        let at_narrow = lis.indexes.get_instruction_index(insns[1].id());
+        assert!(lis.interval(1).live_at(&at_narrow), "the first write is live into the narrow one");
+    }
+
+    /// A narrow def not listed starts the value, as every body that has one
+    /// does today (zero-extending writes, narrow loads): the first write is
+    /// dead. Treating it as a read panicked 776 compiles ("a unique value").
+    #[test]
+    fn test_a_narrow_def_not_listed_starts_the_value() {
+        let insns = narrow_def_body(false);
+        let mut lis = LiveIntervals::new(&body(&insns));
+        assert!(lis.operands(1).iter().all(|op| !op.reads_reg || !op.is_def));
+        let at_narrow = lis.indexes.get_instruction_index(insns[1].id());
+        assert!(!lis.interval(1).live_at(&at_narrow), "the first write is dead");
+    }
+
+    /// A def of the high byte of a value names that lane on its operand, and a
+    /// rename carries the lanes with the value; an unlisted def names all.
+    #[test]
+    fn test_a_def_names_the_lanes_it_defines() {
+        let mut high = Insn::new(0, None, None, vec![1], Vec::new());
+        high.def_lanes = vec![(1, ValueLanes::at(1, 1))];
+        let insns = [insn(&[1], &[]), Arc::new(high), insn(&[], &[1])];
+        let lis = LiveIntervals::new(&body(&insns));
+        let lanes: Vec<_> = lis.operands(1).iter().filter(|op| op.is_def).map(|op| op.lanes).collect();
+        assert_eq!(lanes, vec![Operand::ALL, ValueLanes::at(1, 1)]);
+        let renamed = insns[1].renamed(&|value| if value == 1 { 7 } else { value });
+        assert_eq!(renamed.def_lanes, vec![(7, ValueLanes::at(1, 1))]);
+    }
+
+    /// `v1 := whole; v1.hi := byte; use v1.hi; use v1`: a value with a lane def
+    /// gets a sub-range for that lane, live from the lane def to the lane's
+    /// use only; a value without one has none.
+    #[test]
+    fn test_a_lane_def_makes_a_sub_range_live_between_the_lane_def_and_its_use() {
+        let mut high = Insn::new(0, None, None, vec![1], Vec::new());
+        high.def_lanes = vec![(1, ValueLanes::at(1, 1))];
+        let insns = [insn(&[1], &[]), Arc::new(high), insn(&[], &[1])];
+        let mut lis = LiveIntervals::new(&body(&insns));
+        let interval = lis.interval(1);
+        // the lane def's own, and the lanes no def names alone
+        assert_eq!(interval.sub_ranges().len(), 2);
+        assert_eq!(interval.sub_ranges()[0].lanes, ValueLanes::at(1, 1));
+        assert_eq!(interval.sub_ranges()[1].lanes, ValueLanes(!ValueLanes::at(1, 1).0));
+        assert!(interval.sub_ranges().iter().all(|sub| !sub.range.segments.is_empty()));
+        let plain = [insn(&[1], &[]), insn(&[], &[1])];
+        let mut lis = LiveIntervals::new(&body(&plain));
+        assert!(!lis.interval(1).has_sub_ranges(), "no lane def, no sub-range");
+    }
+
+    /// Renaming the value renames the marker with it.
+    #[test]
+    fn test_renaming_a_value_renames_its_partial_def() {
+        let insns = narrow_def_body(true);
+        let renamed = insns[1].renamed(&|value| if value == 1 { 7 } else { value });
+        assert_eq!((renamed.defines.clone(), renamed.partial_defs.clone()), (vec![7], vec![7]));
     }
 
     fn blocks(shape: &[(&[Arc<Insn>], &[i64])]) -> LirBody {

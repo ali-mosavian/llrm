@@ -135,7 +135,21 @@ impl FunctionPass for LoopIdiom {
             .and_then(|id| outer.globals.get(id.0 as usize))
             .and_then(|global| global.name.owned())
             .unwrap_or_default();
-        let assumptions = AssumptionCache::of(unit.context, &outer.globals, unit.metadata, unit.function);
+        let assumptions = AssumptionCache::of_declared(
+            unit.context,
+            &outer.globals,
+            unit.metadata,
+            unit.function,
+            unit.declared.assume_declared(&outer.globals),
+        );
+        let env = Env {
+            globals: &outer.globals,
+            metadata: unit.metadata,
+            layout: unit.layout,
+            loops: &loops,
+            tree: &tree,
+            assumptions: &assumptions,
+        };
         let tti = outer.target().tti();
         let mark = unit.function.mark();
         let held = analyses.get::<llrm_analysis::scev::analysis::Scevs>(unit.context, unit.layout, unit.function);

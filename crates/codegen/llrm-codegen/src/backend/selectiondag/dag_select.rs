@@ -217,12 +217,33 @@ pub fn do_instruction_selection_with(
     // refused ("operand Truncate before its definition").
     let mut made: Vec<u32> = Vec::new();
     let mut rest = order.into_iter();
-    while let Some(node) = made.pop().or_else(|| rest.next()) {
+    // `insertDAGNode` puts a node before the one being matched, which is
+    // an operand of the node being selected: the walk reaches it after that
+    // node's users. One whose users are not all selected waits.
+    let mut next = |adapter: &DagisAdapter<'_>, made: &mut Vec<u32>| {
+        match made.iter().rposition(|&m| adapter.is_dead(m) || !adapter.has_pending_user(m)) {
+            Some(at) => Some(made.remove(at)),
+            None => rest.next().or_else(|| made.pop()),
+        }
+    };
+    while let Some(node) = next(&adapter, &mut made) {
         // `Node->use_empty()`: a node selection left unused is dead.
         if adapter.is_dead(node) || !(node == adapter.dag.get_root().node || adapter.has_live_users(node)) {
             continue;
         }
         if matches!(adapter.dag.nodes()[node as usize].opcode, ISD::Machine(_)) {
+            continue;
+        }
+        // `SelectCodeCommon` for `AssertSext` and `AssertZext`: each is its
+        // operand, once the users that read what it asserts are selected
+        // (a pattern predicate sees the assertion; `smull` of a value
+        // another block extended). Targets that call `remove_assertions`
+        // first have none left.
+        if matches!(
+            adapter.dag.nodes()[node as usize].opcode,
+            ISD::AssertSext | ISD::AssertZext
+        ) {
+            adapter.drop_assertion(node);
             continue;
         }
         let before = adapter.dag.nodes().len();
