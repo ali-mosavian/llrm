@@ -102,6 +102,14 @@ impl SchedInfo for Z80Sched {
         instrinfo::desc(opcode as u16).is_some_and(|desc| desc.has(flag::CALL))
     }
 
+    fn call_frame_setup(&self) -> Option<u32> {
+        Some(u32::from(super::generated::ids::opcode::ADJCALLSTACKDOWN))
+    }
+
+    fn call_frame_destroy(&self) -> Option<u32> {
+        Some(u32::from(super::generated::ids::opcode::ADJCALLSTACKUP))
+    }
+
     /// A flags result is the register `f`.
     fn fixed_register_def(
         &self,
