@@ -127,6 +127,9 @@ pub struct Run<'a> {
     pub declared: &'a mut llrm_mir::passes::Declared,
     /// The iterations peeled off the loop headed by a block in this run (PL1).
     pub peeled: IdMap<BlockId, u32>,
+    /// The headers of loops this run unrolled at run time, and of their
+    /// remainders (`setLoopAlreadyUnrolled`, D4: a set, not metadata).
+    pub finished: IdSet<BlockId>,
     /// The headers of the loops this run made: those that were no loop's header
     /// when it began (`LPMUpdater::addSiblingLoops`, for the passes after it).
     pub created: Vec<BlockId>,
@@ -1190,6 +1193,10 @@ fn try_to_unroll_loop(
     analyzed: &Analyzed,
     lp: Loop,
 ) -> Unrolled {
+    if run.finished.contains(&lp.get_header()) {
+        why(run, lp, "already unrolled");
+        return Unrolled::Unmodified;
+    }
     let options = LoopOptions::of(run, lp);
     let tm = options.unroll(run);
     // `TM & TM_Disable`: disabled, or suppressed by the user.
@@ -1421,6 +1428,10 @@ fn try_to_unroll_loop(
                 return Unrolled::Unmodified;
             };
             run.scev = ScalarEvolution::new();
+            run.finished.insert(header);
+            if let Some(epilog) = epilog {
+                run.finished.insert(epilog);
+            }
             if up.unroll_remainder && let Some(epilog) = epilog {
                 crate::loopunrollandjam::unroll_remainder_loop(run, epilog, count - 1);
             }
@@ -1882,6 +1893,7 @@ impl FunctionPass for LoopFullUnroll {
             declared: unit.declared,
             emptied: Vec::new(),
             peeled: Default::default(),
+            finished: IdSet::new(),
             created: Vec::new(),
             scev: held.take(),
             options: Options {
@@ -1942,6 +1954,7 @@ pub fn unroll_function(
         options,
         emptied: Vec::new(),
         peeled: Default::default(),
+        finished: IdSet::new(),
         created: Vec::new(),
         scev: ScalarEvolution::new(),
     };

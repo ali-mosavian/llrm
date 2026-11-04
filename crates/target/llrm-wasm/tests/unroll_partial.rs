@@ -37,3 +37,19 @@ fn a_loop_of_unknown_trips_is_unrolled_by_four_with_a_remainder() {
     let body = text.split("\tloop").nth(1).and_then(|rest| rest.split("end_loop").next()).expect("a loop");
     assert_eq!((body.matches("f64.mul").count(), body.matches("br_if").count()), (4, 1), "{body}");
 }
+
+/// The epilog loop of a run-time unroll was unrolled again by two (the pin
+/// marks it `setLoopAlreadyUnrolled`): `object_extent_loop` at wasm O2 was
+/// 1680 B where the pin's is 1489.
+#[test]
+fn the_remainder_of_a_run_time_unroll_is_not_unrolled_again() {
+    let ir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ir/unroll_runtime_nested.ll");
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-wasm-llc"))
+        .args(["-S", "-O2", "-o", "-"])
+        .arg(ir)
+        .output()
+        .expect("llrm-wasm-llc");
+    assert!(out.status.success());
+    let muls = String::from_utf8_lossy(&out.stdout).matches("f64.mul").count();
+    assert_eq!(muls, 5, "{muls} multiplies: four in the body, one in the remainder");
+}
