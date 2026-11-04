@@ -906,8 +906,20 @@ fn should_full_unroll(
     if rate == 0 || run.options.opt_size {
         return Some(count);
     }
-    let growth = uce.unrolled_loop_size(up, count).saturating_sub(u64::from(uce.rolled_loop_size()));
-    let per_entry = u64::from(count) * (u64::from(up.be_insns) + 1);
+    // Where the pin's analysis simulates the unrolled loop (few trips), what
+    // folds away is counted: the code that stays against the loop's, the
+    // dynamic cost saved against that code. Otherwise the loop control alone.
+    let analysis = analyze_loop_unroll_cost(run, analyzed, lp, count, eph, u32::MAX, up.max_iterations_count_to_analyze);
+    let (growth, per_entry) = match &analysis {
+        Some(cost) => (
+            u64::from(cost.unrolled_cost).saturating_sub(u64::from(uce.rolled_loop_size())),
+            u64::from(cost.rolled_dynamic_cost).saturating_sub(u64::from(cost.unrolled_cost)),
+        ),
+        None => (
+            uce.unrolled_loop_size(up, count).saturating_sub(u64::from(uce.rolled_loop_size())),
+            u64::from(count) * (u64::from(up.be_insns) + 1),
+        ),
+    };
     // The loop runs as often as its preheader does: the clocks saved per entry
     // weighted by that frequency over the function's entry, as the inline
     // guard weighs a site.
@@ -928,6 +940,12 @@ fn should_full_unroll(
         })
         .unwrap_or(1.0)
         .max(0.0);
+    // Growth within a few copies of the loop is inside the estimate's
+    // resolution: what the copies let later passes fold away (a filled array
+    // read back, a store forwarded) is not seen here.
+    if growth <= 4 * u64::from(uce.rolled_loop_size()) {
+        return Some(count);
+    }
     let keeps = (growth.saturating_mul(rate as u64)) as f64 <= per_entry as f64 * 1000.0 * frequency;
     if !keeps {
         why(run, lp, &format!("full unroll by {count} refused: grows {growth}, saves {per_entry} clocks x {frequency}"));
