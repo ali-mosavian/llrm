@@ -1383,7 +1383,7 @@ pub fn recorded(
     }
     // DEVIATE CS2, at the speed rate.
     if applied.options.prices_bytes() && applied.options.wanted("cgpselectarms") {
-        manager.add(cgpselect::SelectArms);
+        manager.add(crate::cgpselect::SelectArms);
     }
     // After cgpaddr, with the other passes that make the forms isel sees:
     // the pin's DAGCombiner makes one extending load for a load and its

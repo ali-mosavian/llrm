@@ -357,25 +357,7 @@ fn sinkable(
             if yes == no {
                 continue;
             }
-            let arm = |operand: Operand| -> Option<InstId> {
-                let Operand::Value(value) = operand else { return None };
-                let ValueDef::Instruction(inst) = function.value(value).def else { return None };
-                let pure = matches!(
-                    function.instruction(inst).opcode,
-                    Opcode::Binary(
-                        BinaryOp::Add
-                            | BinaryOp::Sub
-                            | BinaryOp::Mul
-                            | BinaryOp::Shl
-                            | BinaryOp::LShr
-                            | BinaryOp::AShr
-                            | BinaryOp::And
-                            | BinaryOp::Or
-                            | BinaryOp::Xor
-                    ) | Opcode::Cast(CastOp::ZExt | CastOp::SExt | CastOp::Trunc)
-                );
-                (pure && function.parent(inst) == Some(block) && function.users(value).has_one_use()).then_some(inst)
-            };
+            let arm = |operand: Operand| -> Option<InstId> { sinkable_def(function, block, operand) };
             let (yes, no) = (arm(yes), arm(no));
             if yes.is_some() || no.is_some() {
                 return Some((select, yes, no));
@@ -383,6 +365,54 @@ fn sinkable(
         }
     }
     None
+}
+
+/// The instruction of `block` that makes `operand`, where it is pure and only
+/// one instruction reads its value.
+fn sinkable_def(
+    function: &Function,
+    block: BlockId,
+    operand: Operand,
+) -> Option<InstId> {
+    let Operand::Value(value) = operand else { return None };
+    let ValueDef::Instruction(inst) = function.value(value).def else { return None };
+    let pure = matches!(
+        function.instruction(inst).opcode,
+        Opcode::Binary(
+            BinaryOp::Add
+                | BinaryOp::Sub
+                | BinaryOp::Mul
+                | BinaryOp::Shl
+                | BinaryOp::LShr
+                | BinaryOp::AShr
+                | BinaryOp::And
+                | BinaryOp::Or
+                | BinaryOp::Xor
+        ) | Opcode::Cast(CastOp::ZExt | CastOp::SExt | CastOp::Trunc)
+    );
+    (pure && function.parent(inst) == Some(block) && function.users(value).has_one_use()).then_some(inst)
+}
+
+/// `arm` and what only it reads (`3 * x` of `3 * x + 1`), in block order: the
+/// whole chain moves, or the selector no longer folds it (`lea [x+x*2+1]`).
+fn arm_chain(
+    function: &Function,
+    block: BlockId,
+    arm: InstId,
+) -> Vec<InstId> {
+    let mut found = vec![arm];
+    let mut at = 0;
+    while at < found.len() {
+        for operand in function.instruction(found[at]).operands.clone() {
+            if let Some(def) = sinkable_def(function, block, operand)
+                && !found.contains(&def)
+            {
+                found.push(def);
+            }
+        }
+        at += 1;
+    }
+    function.iter_block(block).filter(|inst| found.contains(inst)).collect()
 }
 
 /// `select c, a, b` made `br c, ..` with each sunk arm in a block of its own
@@ -405,7 +435,9 @@ fn sunk(
         let Some(inst) = arm else { return (home, Operand::Block(join)) };
         let side = function.create_block(None);
         function.insert_block(side, Some(home)).expect("a new block");
-        function.move_to(inst, Position::End(side)).expect("a placed instruction");
+        for moved in arm_chain(function, home, inst) {
+            function.move_to(moved, Position::End(side)).expect("a placed instruction");
+        }
         let back = function.create_instruction(Opcode::Br, void, vec![Operand::Block(join)], Flags::default(), None);
         function.insert(back, Position::End(side)).expect("an unplaced instruction");
         (side, Operand::Block(side))

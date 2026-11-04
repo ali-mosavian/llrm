@@ -186,3 +186,31 @@ b0:
     let llrm_mir::module::GlobalKind::Function(function) = &mut globals[0].kind else { panic!("a function") };
     assert!(!super::select_arms_sunk(context, function));
 }
+
+/// `x & 1 ? 3 * x + 1 : x >> 1`: the multiply moved with the add, or the
+/// selector had `lea [x + x*2]; inc` where it folds one `lea [x + x*2 + 1]`
+/// (x_collatz -O3 +5.9k clocks).
+#[test]
+fn test_a_select_arm_moves_with_the_instructions_only_it_reads() {
+    let mut module = parsed(
+        "define i32 @f(i32 %x) {
+b0:
+  %b = and i32 %x, 1
+  %c = icmp ne i32 %b, 0
+  %m = mul i32 %x, 3
+  %d = add i32 %m, 1
+  %h = lshr i32 %x, 1
+  %r = select i1 %c, i32 %d, i32 %h
+  ret i32 %r
+}
+",
+    );
+    let llrm_mir::module::Module { context, globals, .. } = &mut module;
+    let llrm_mir::module::GlobalKind::Function(function) = &mut globals[0].kind else { panic!("a function") };
+    assert!(super::select_arms_sunk(context, function));
+    let text = printed(&module);
+    let branch = text.find("br i1 %c").expect("the branch");
+    for what in ["mul i32", "add i32 %m", "lshr i32"] {
+        assert!(text.find(what).expect(what) > branch, "{what} after the branch: {text}");
+    }
+}
