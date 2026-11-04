@@ -706,7 +706,7 @@ struct UseKindTable {
     ids: std::collections::BTreeMap<Vec<(Vec<RegId>, Vec<u32>)>, u32>,
     /// The kind of an instruction shape (its index in the target's operand
     /// table) and the slots of it that name the value.
-    by_shape: std::collections::HashMap<(usize, u64), u32>,
+    by_shape: llrm_support::hash::HashMap<(usize, u64), u32>,
     operands: Vec<Vec<OperandInfo>>,
 }
 
@@ -807,7 +807,7 @@ fn operands_in<'a>(
 /// The register each value is copied to or from, through the chain of copies
 /// between values, where the chain meets one register only: where a
 /// lane-built value ends up whole.
-fn whole_homes<T: Target>(function: &MFunction<T::Class>) -> std::collections::HashMap<u32, RegId> {
+fn whole_homes<T: Target>(function: &MFunction<T::Class>) -> llrm_support::hash::HashMap<u32, RegId> {
     let mut parent: Vec<u32> = (0..=function.classes.len() as u32).collect();
     fn find(
         parent: &mut [u32],
@@ -842,7 +842,7 @@ fn whole_homes<T: Target>(function: &MFunction<T::Class>) -> std::collections::H
             _ => {}
         }
     }
-    let mut homes: std::collections::HashMap<u32, Option<RegId>> = std::collections::HashMap::new();
+    let mut homes: llrm_support::hash::HashMap<u32, Option<RegId>> = Default::default();
     for (v, p) in touched {
         let root = find(&mut parent, v);
         homes
@@ -863,7 +863,7 @@ fn whole_homes<T: Target>(function: &MFunction<T::Class>) -> std::collections::H
 /// hint the lane of the register its whole is copied to or from.
 fn hint_lanes<T: Target>(
     inst: &Inst,
-    homes: &std::collections::HashMap<u32, RegId>,
+    homes: &llrm_support::hash::HashMap<u32, RegId>,
     registers: Regs,
     infos: &mut [OperandInfo],
 ) {

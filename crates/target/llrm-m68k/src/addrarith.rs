@@ -1,6 +1,7 @@
 //! A pointer moved by a constant is added to in an address register: `lea`,
 //! then `addq` or `adda` where that costs less on the CPU, in place of `move
-//! %a0, %d2; addq #6, %d2; move %d2, %a0`.
+//! %a0, %d2; addq #6, %d2; move %d2, %a0`. The opposite round trip, a data
+//! value added to through an address register, is [`refine_lea_round_trips`].
 //!
 //! # How it works
 //! The pin's add of an immediate takes and gives a data register, so a pointer
@@ -266,6 +267,132 @@ fn rewrite_one(
     insts[at] = inst;
     insts.remove(copy);
     Some(at)
+}
+
+fn is_data(register: llrm_lir::registers::RegId) -> bool {
+    [reg::D0, reg::D1, reg::D2, reg::D3, reg::D4, reg::D5, reg::D6, reg::D7].contains(&register)
+}
+
+/// The clocks and bytes of the data-register add `opcode` of `value` on `cpu`.
+fn data_add_price(
+    opcode: &'static str,
+    value: i64,
+    cpu: Cpu,
+) -> Option<(u32, u32)> {
+    let d0 = mc::Operand::Reg(llrm_lir::registers::RegId::from(reg::D0));
+    let inst = mc::Inst { opcode, operands: vec![d0.clone(), d0, mc::Operand::Imm(value)] };
+    let bytes = crate::encode::encode(&inst).ok()?.bytes.len() as u32;
+    let clocks = crate::timing::cost(cpu, &mc::print(&inst).ok()?, bytes, false).ok()?.clocks;
+    Some((clocks, bytes))
+}
+
+/// The clocks of the two-byte register copy `text` on `cpu`.
+fn copy_clocks(
+    cpu: Cpu,
+    text: &str,
+) -> Option<u32> {
+    Some(crate::timing::cost(cpu, text, 2, false).ok()?.clocks)
+}
+
+/// DEVIATE: the pin keeps the `lea` its selector makes for an add of an
+/// immediate to a data value, and its allocator leaves the copies around it:
+/// `move.l %d0,%a0; lea (48,%a0),%a0; move.l %a0,%d0`. This is X86's
+/// LEA-to-ADD (`FixupLEAs`), after allocation so that the registers stay as
+/// allocated (making the add before allocation moved values from address
+/// registers into the scarcer data registers: 14 of 300 seeds grew). Exit:
+/// none.
+///
+/// Three adjacent instructions that copy a data register to an address
+/// register, `lea` from it, and copy the result to a data register, those
+/// two address registers read nowhere else, are `addq`/`subq`/`add` on the
+/// data register (with a copy when the two data registers differ), where the
+/// timing tables price that lower on `cpu` (bytes first at a smaller size).
+/// The add sets the codes the `lea` leaves, so one whose codes a later
+/// instruction would read stays.
+pub fn refine_lea_round_trips(
+    function: &mut MFunction,
+    assignment: &Assignment,
+    cpu: Cpu,
+    size: bool,
+) {
+    let uses = uses_by_register(function);
+    let single = |v: u32| uses[v as usize].len() == 1;
+    let phys = |r: &Reg| match r {
+        Reg::Virt(v) => assignment.0[*v as usize],
+        Reg::Phys(p) => *p,
+    };
+    for block in &mut function.blocks {
+        let mut at = 0;
+        while at + 2 < block.insts.len() {
+            let rewrite = (|| {
+                let insts = &block.insts[at..at + 3];
+                let ([Operand::Def(Reg::Virt(base)), Operand::Use(x)], Kind::Copy) =
+                    (&insts[0].operands[..], &insts[0].kind)
+                else {
+                    return None;
+                };
+                let (Kind::Op("LEA32p"), [Operand::Def(Reg::Virt(d)), Operand::Imm(value), Operand::Use(Reg::Virt(b))]) =
+                    (&insts[1].kind, &insts[1].operands[..])
+                else {
+                    return None;
+                };
+                let ([Operand::Def(w), Operand::Use(Reg::Virt(c))], Kind::Copy) =
+                    (&insts[2].operands[..], &insts[2].kind)
+                else {
+                    return None;
+                };
+                if b != base || c != d || !single(*base) || !single(*d) || !is_data(phys(x)) || !is_data(phys(w)) {
+                    return None;
+                }
+                if is_data(phys(&Reg::Virt(*base))) || is_data(phys(&Reg::Virt(*d))) {
+                    return None;
+                }
+                for after in &block.insts[at + 3..] {
+                    if after.sets_flags || after.call {
+                        break;
+                    }
+                    if after.reads_flags {
+                        return None;
+                    }
+                }
+                let (opcode, immediate) = match *value {
+                    1..=8 => ("ADDQ32di", *value),
+                    -8..=-1 => ("SUBQ32di", -*value),
+                    _ => ("ADD32di", *value),
+                };
+                // the three as they are, against the add (and a copy)
+                let same = phys(x) == phys(w);
+                let lea = price(&Candidate { opcode: "LEA32p", operands: displaced, value: *value }, cpu)?;
+                let (clocks, bytes) = data_add_price(opcode, immediate, cpu)?;
+                let old = (
+                    copy_clocks(cpu, "move.l\t%d0, %a0")? + lea.0 + copy_clocks(cpu, "move.l\t%a0, %d0")?,
+                    2 + lea.1 + 2,
+                );
+                let copy_cost = if same { 0 } else { copy_clocks(cpu, "move.l\t%d0, %d1")? };
+                let new = (clocks + copy_cost, bytes + if same { 0 } else { 2 });
+                if crate::timing::order(cpu, size, new.0, new.1) >= crate::timing::order(cpu, size, old.0, old.1) {
+                    return None;
+                }
+                let desc = local::desc(local::code_of(opcode)?)?;
+                let add = |source: Reg| op_inst(opcode, desc, tied(*w, source, immediate));
+                Some(if same {
+                    vec![add(*x)]
+                } else {
+                    let mut copy = insts[2].clone();
+                    copy.operands = vec![Operand::Def(*w), Operand::Use(*x)];
+                    vec![copy, add(*w)]
+                })
+            })();
+            match rewrite {
+                Some(new) => {
+                    let count = new.len();
+                    block.insts.splice(at..at + 3, new);
+                    at += count;
+                }
+                None => at += 1,
+            }
+        }
+    }
 }
 
 /// The CPU whose tables the pin selects from: the 68000 for it and the 68010,
