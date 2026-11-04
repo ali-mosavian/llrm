@@ -83,6 +83,21 @@ refuses it (`memcpy_runtime`, `memfuncs_runtime` at `-c`; gas leaves it to `ld`,
 truncate). The pin has the same form. Owner: m68k. Exit 2026-11-12: absolute `.l` on the 68000, the
 68020's 32-bit PC displacement, picked by object size and clocks.
 
+**M68K-HEX: a select's merged value may sit in an address register.** `hex` at 68020 `-Os` is 90 B
+against gcc's 62 B. The select is a phi (`EmitLoweredSelect`) whose result the pin's MIR has as
+`dr32`: the byte store reads it through `COPY %phi.MxSubRegIndex8Lo`, and `InstrEmitter::EmitSubregNode`
+([L503][emit-subreg]) calls `ConstrainForSubReg` ([L477][constrain-sub]; the call at [L560][constrain-call]),
+which constrains the vreg to the sub-class that has the sub-register (`DR32`, the only class with
+`MxSubRegIndex8Lo`) through `MachineRegisterInfo::constrainRegClass`. Ours lowers `EXTRACT_SUBREG` to a
+plain `Inst::copy` (`mfunc.rs`, the `EXTRACT_SUBREG` arm), so the phi stays `Xr32` and the allocator may
+take `%a1`; every data use then pays a copy. Owner: m68k. Exit: convergence step 5 (m68k onto the shared
+greedy, which owns the class choice of a phi-merged value; ~2026-12-04). A pre-allocation `lea` to `add`
+on the arm was tried and made `hex` 94 -> 98 B.
+
+[emit-subreg]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/InstrEmitter.cpp#L503
+[constrain-sub]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/InstrEmitter.cpp#L477
+[constrain-call]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/InstrEmitter.cpp#L560
+
 ## Instruments
 
 - Clocks: `src/timing.rs`, MC68000UM section 8 (16-bit timing; section 7 is the 8-bit MC68008) and
