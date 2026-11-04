@@ -261,40 +261,52 @@ fn plan_loop(
         Default::default()
     };
     let safe_to_expand = |se: &mut ScalarEvolution, s: Scev| rewriter.is_safe_to_expand(&cx, se, s);
-    let mut lsr = Collection::new(&cx, tti, header, &safe_to_expand, false, iv_inc_insert_pos);
-    lsr.other_register_units = crate::lsr_collect::loop_register_units(se, &cx, tti, header);
-    lsr.size = size;
-    llrm_support::debug!("lsr", "  other registers: {}", lsr.other_register_units);
-    lsr.chain_uses = chains.inc_set.clone();
-    lsr.collect_interesting_types_and_factors(se, &users);
-    lsr.collect_fixups_and_initial_formulae(se, &users);
-    lsr.collect_loop_invariant_fixups_and_formulae(se);
+    let build = |se: &mut ScalarEvolution| {
+        let mut lsr = Collection::new(&cx, tti, header, &safe_to_expand, false, iv_inc_insert_pos);
+        lsr.other_register_units = crate::lsr_collect::loop_register_units(se, &cx, tti, header);
+        lsr.size = size;
+        llrm_support::debug!("lsr", "  other registers: {}", lsr.other_register_units);
+        lsr.chain_uses = chains.inc_set.clone();
+        lsr.collect_interesting_types_and_factors(se, &users);
+        lsr.collect_fixups_and_initial_formulae(se, &users);
+        lsr.collect_loop_invariant_fixups_and_formulae(se);
+        lsr
+    };
+    let counts =
+        |lsr: &Collection| lsr.uses.iter().map(|one| one.formulae.len().to_string()).collect::<Vec<_>>().join(" ");
+    let narrowed = |se: &mut ScalarEvolution, lsr: &mut Collection| {
+        llrm_support::debug!("lsr", "  formulae per use: {}", counts(lsr));
+        lsr.filter_out_undesirable_dedicated_registers(se);
+        llrm_support::debug!("lsr", "  after filtering: {}", counts(lsr));
+        lsr.narrow_search_space_using_heuristics(se);
+        llrm_support::debug!("lsr", "  after narrowing: {}", counts(lsr));
+    };
+    let mut lsr = build(se);
     if lsr.uses.is_empty() {
         return planned(None);
     }
     // The formulae for each use, and the search space made small enough.
     lsr.generate_all_reuse_formulae(se);
-    let counts =
-        |lsr: &Collection| lsr.uses.iter().map(|one| one.formulae.len().to_string()).collect::<Vec<_>>().join(" ");
-    llrm_support::debug!("lsr", "  formulae per use: {}", counts(&lsr));
-    lsr.filter_out_undesirable_dedicated_registers(se);
-    llrm_support::debug!("lsr", "  after filtering: {}", counts(&lsr));
-    lsr.narrow_search_space_using_heuristics(se);
-    let (mut solution, pin_cost) = lsr.solve_with_cost(se);
-    // DEVIATE LG3 (beyond the pin): its formulae join the space after the pin's
-    // narrowing, and its solution is kept only where it costs less than the
-    // pin's own: a formula that brings a register of its own can cut the
-    // pin's solution out of the search (a use must reuse the registers
-    // already chosen), as it did queens -O2 (+57859 clocks).
-    let pin_uses = lsr.uses.clone();
+    let pin_counts = counts(&lsr);
+    // DEVIATE LG3's formulae (beyond the pin) join the space before its
+    // narrowing, as the formulae they share registers with do.
     lsr.generate_end_biased(se);
-    llrm_support::debug!("lsr", "  after narrowing: {}", counts(&lsr));
-    if lsr.uses.iter().zip(&pin_uses).any(|(now, was)| now.formulae.len() != was.formulae.len()) {
-        let (beyond, beyond_cost) = lsr.solve_with_cost(se);
-        if !beyond.is_empty() && (solution.is_empty() || beyond_cost.is_less(tti, &pin_cost)) {
-            solution = beyond;
-        } else {
-            lsr.uses = pin_uses;
+    let beyond = counts(&lsr) != pin_counts;
+    narrowed(se, &mut lsr);
+    let (mut solution, cost) = lsr.solve_with_cost(se);
+    if beyond {
+        // The registers of those formulae can cut the pin's solution out of
+        // the search (a use must reuse the registers already chosen), as they
+        // did queens -O2 (+57859 clocks, 236848 against 170823 at -Os): the
+        // pin's space is solved too, and its solution kept where it costs
+        // less than the one with them.
+        let mut pin = build(se);
+        pin.generate_all_reuse_formulae(se);
+        narrowed(se, &mut pin);
+        let (pin_solution, pin_cost) = pin.solve_with_cost(se);
+        if !pin_solution.is_empty() && (solution.is_empty() || pin_cost.is_less(tti, &cost)) {
+            lsr = pin;
+            solution = pin_solution;
         }
     }
     if solution.is_empty() {
