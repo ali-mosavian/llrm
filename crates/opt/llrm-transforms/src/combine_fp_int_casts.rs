@@ -230,11 +230,8 @@ fn whole_number(
     if !value.is_finite() || value.fract() != 0.0 || (value == 0.0 && value.is_sign_negative()) {
         return None;
     }
-    let (low, high) = if signed {
-        (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1)
-    } else {
-        (0, (1i128 << bits) - 1)
-    };
+    let (low, high) =
+        if signed { (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1) } else { (0, (1i128 << bits) - 1) };
     // An f64 holds the integer exactly only below 2^53 in magnitude here.
     if value.abs() >= 9_007_199_254_740_992.0 {
         return None;
