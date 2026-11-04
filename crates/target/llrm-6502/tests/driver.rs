@@ -1715,6 +1715,28 @@ fn a_zero_filled_variable_is_bss_not_image_bytes() {
 }
 
 #[test]
+fn a_word_divide_calls_the_compact_routine_at_size_and_the_fast_one_at_speed() {
+    // k_itoa at -Os linked the divide's short-divisor path too: 89 B against
+    // sdcc's 64 for a bare divide
+    let ir = module(
+        "@a = global i16 50000\n@b = global i16 7\n\
+         define i8 @g() {\n\
+         \x20 %a = load volatile i16, ptr @a\n  %b = load volatile i16, ptr @b\n\
+         \x20 %q = udiv i16 %a, %b\n  %r = urem i16 %a, %b\n  %s = add i16 %q, %r\n\
+         \x20 %t = lshr i16 %s, 8\n  %u = xor i16 %s, %t\n  %v = trunc i16 %u to i8\n  ret i8 %v\n}",
+    );
+    let size = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(size.contains("jsr __udivhi3c"), "{size}");
+    let speed = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(speed.contains("jsr __udivhi3\n"), "{speed}");
+    // 50000 / 7 = 7142 r 6: 7148 = 0x1BEC, 0x1B ^ 0x1BEC low byte 0xEC ^ 0x1B = 0xF7
+    for text in [&size, &speed] {
+        let linked = format!("{text}\n{}", common::pipeline::reachable_runtime(text));
+        assert_eq!(exit_code_of(&linked, "g"), 0xF7, "{linked}");
+}
+}
+
+#[test]
 fn a_word_step_never_holds_a_byte_in_a_on_the_plain_6502() {
     // the high byte of x + 1, returned: it came out in A and the carry step was
     // `inc a`, a 65C02 opcode ca65 --cpu 6502 refuses (x16basic-c: seven sites)

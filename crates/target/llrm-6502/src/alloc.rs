@@ -2127,6 +2127,21 @@ fn narrow_remainder_calls(function: &mut MFunction<Class>) {
     }
 }
 
+/// At size, a call of a runtime routine that has a compact variant calls it
+/// (`routines.toml`'s `[compact]`).
+fn call_compact_routines(function: &mut MFunction<Class>) {
+    for inst in function.blocks.iter_mut().flat_map(|block| &mut block.insts) {
+        if inst.kind != Kind::Op("JSR") {
+            continue;
+        }
+        if let Some(Operand::Symbol(name, _)) = inst.operands.first_mut()
+            && let Some(compact) = crate::routines::compact_variant(name)
+        {
+            *name = compact.to_owned();
+        }
+    }
+}
+
 fn remove_dead(function: &mut MFunction<Class>) {
     loop {
         let mut read: HashSet<u32> = HashSet::default();
@@ -2672,6 +2687,9 @@ fn emit_with<const STACK: bool>(
     // an instruction goes to the one path that reads it; a bump of a pointer is
     // then done in place, and the read of the old pointer that follows it
     // goes first
+    if TUNING.with(|t| t.get()) == Tuning::SIZE {
+        call_compact_routines(&mut function);
+    }
     let sunk = sink && machine_sink_in_place::<Mos<STACK>>(&mut function);
     let shared = share && crate::sharecmp::share_compares(&mut function);
     reschedule_kills::<Mos<STACK>>(&mut function);
