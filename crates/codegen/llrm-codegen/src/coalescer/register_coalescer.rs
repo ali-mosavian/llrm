@@ -350,7 +350,7 @@ fn keep_joined_lanes_through_undef_defs(
     let mut keys: Vec<InstrKey> = lis
         .operands(dst)
         .iter()
-        .filter(|operand| operand.is_def && lis.instr(operand.instr).undef_super)
+        .filter(|operand| operand.is_def && !operand.reads_reg && operand.lanes != Operand::ALL && lis.has_instr(operand.instr))
         .map(|operand| operand.instr)
         .collect();
     keys.sort_unstable();
@@ -371,7 +371,8 @@ fn keep_joined_lanes_through_undef_defs(
             if !made.partial_defs.contains(&dst) {
                 made.partial_defs.push(dst);
             }
-            lis.rewrite_instr(block, key, Arc::new(made));
+            // A pending lane copy keeps its identity: the work list names it.
+            lis.rewrite_instr(block, key, Arc::new(made.standing_for(&old)));
             changed = true;
         }
     }

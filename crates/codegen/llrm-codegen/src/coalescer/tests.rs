@@ -1547,6 +1547,29 @@ fn test_a_lane_def_after_a_joined_lane_keeps_it() {
     assert!(!low.undef_super && low.partial_defs == vec![2], "{low:?}");
 }
 
+/// The low lane copy of a pair that an earlier join left plain (no
+/// `undef_super`, nothing kept) stands over the high lane once that joins:
+/// it must keep it too, else the low def is the only one the high lane's
+/// readers see and the main range loses the high lane's stretch (lz4c -O2
+/// asserted "Inconsistent LiveInterval" in the union).
+#[test]
+fn test_a_plain_lane_def_keeps_a_lane_joined_after_it() {
+    let (d3, d1) = (def_at(3, 1), def_at(1, 1));
+    let (lo, hi) = (lane_copy(2, 0, 1), lane_copy(2, 1, 3));
+    assert!(!lo.undef_super && !lo.partial_defs.contains(&2), "premise: the low copy keeps nothing");
+    let was = body(&[(&[d3, d1, Arc::clone(&lo), Arc::clone(&hi), read_at(2, 2)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    for v in 1..=3 {
+        lis.interval(v);
+    }
+    let mut state = State::new();
+    let result = join_copy(&mut lis, &LaneViews, &mut state, &mut Default::default(), hi.id());
+    assert_eq!(result, JoinResult::Joined);
+    let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
+    let low = kept.iter().find(|insn| insn.def_lanes.iter().any(|(_, lanes)| *lanes == llrm_lir::valuelanes::ValueLanes::at(0, 1))).expect("the low copy");
+    assert!(low.partial_defs == vec![2], "{low:?}");
+}
+
 /// A byte copied into the low lane of a pair names the same width at the same
 /// offset as a copy between two bytes, so it was taken for one: the byte (`al`)
 /// shares no palette with the pair (`ax`) whole, and the copy stayed (crc16 -Oz
