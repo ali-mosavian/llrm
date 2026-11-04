@@ -130,7 +130,7 @@ impl FunctionPass for LoopIdiom {
         if headers.is_empty() {
             return PreservedAnalyses::all();
         }
-        let outer = std::rc::Rc::clone(analyses.outer());
+        let mut outer = std::rc::Rc::clone(analyses.outer());
         let name = unit
             .id
             .and_then(|id| outer.globals.get(id.0 as usize))
@@ -152,7 +152,6 @@ impl FunctionPass for LoopIdiom {
             assumptions: &assumptions,
         };
         let tti = outer.target().tti();
-        let provider = BasicAaProvider { layout: unit.layout, metadata: unit.metadata, globals: &outer.globals };
         let mark = unit.function.mark();
         let held = analyses.get::<llrm_analysis::scev::analysis::Scevs>(unit.context, unit.layout, unit.function);
         let mut se = held.take();
@@ -179,6 +178,15 @@ impl FunctionPass for LoopIdiom {
         let mut changed = false;
         for header in headers {
             let cur_loop = loops.get_loop_for(header).expect("a loop");
+            let env = Env {
+                globals: &outer.globals,
+                metadata: unit.metadata,
+                layout: unit.layout,
+                loops: &loops,
+                tree: &tree,
+                assumptions: &assumptions,
+            };
+            let provider = BasicAaProvider { layout: unit.layout, metadata: unit.metadata, globals: &outer.globals };
             let mut run = Run {
                 name: &name,
                 env: &env,
@@ -208,6 +216,13 @@ impl FunctionPass for LoopIdiom {
                     se.forget_loop(&cx, header);
                 }
             }
+            // A function this loop declared (`llvm.memset`) is the callee of
+            // the calls it made, as `getOrInsertDeclaration` makes
+            // it at once: the loops after it read the call as the
+            // intrinsic it is, not as one that may throw and not
+            // return.
+            analyses.declared(&*unit.context, &*unit.declared);
+            outer = std::rc::Rc::clone(analyses.outer());
         }
         if changed && unit.function.mark() != mark {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()

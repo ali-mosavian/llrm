@@ -163,6 +163,13 @@ pub trait Target {
         true
     }
 
+    /// Whether the pre-RA machine scheduler (`MachineScheduler`, run after the
+    /// register coalescer in the pin) orders the function before allocation.
+    /// Here false: a target opts in once its numbers say so.
+    fn schedules_before_allocation() -> bool {
+        false
+    }
+
     /// Whether a value is spilled, not given a callee-saved register, when
     /// its spill costs less than the register's first use.
     fn csr_spill_first() -> bool {
@@ -181,6 +188,19 @@ pub trait Target {
     /// narrows both for good, and the allocator cannot widen the survivor.
     fn should_coalesce(join: &Join) -> bool {
         join.extra_cost() <= join.copy_frequency * Self::copy_cost() as f32
+    }
+
+    /// `isAsCheapAsAMove` against the copy it replaces: whether making the
+    /// literal move `literal` again for a copy from a value that may take
+    /// `source` to one that may take `destination` costs no more than the
+    /// copy. The pin asks no price, so the default always remats.
+    fn literal_move_wins(
+        _literal: &llrm_codegen::model::lir::Insn,
+        _source: &[RegId],
+        _destination: &[RegId],
+        _size: bool,
+    ) -> bool {
+        true
     }
 
     /// What one register-to-register copy costs, in the unit of

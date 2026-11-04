@@ -83,8 +83,10 @@ fn a_copy_between_the_two_bytes_of_a_pair_is_kept() {
 fn a_byte_of_a_pair_is_read_in_place() {
     let ir = include_str!("kernels/ir/fill.ll");
     let out = text(ir, "fill", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
-    assert!(out.contains("ld (hl), c") && out.contains("cp a, c"), "{out}");
-    assert!(!out.contains("ld d, c"), "{out}");
+    // the byte is stored and compared from the register it lives in, `c`
+    // or, with the induction variable in `b`, `b`
+    assert!(out.contains("ld (hl), ") && out.contains("cp a, "), "{out}");
+    assert!(!out.contains("ld d, c") && !out.contains("ld d, b"), "{out}");
 }
 
 /// The loaded byte went to a spare pair and the running sum to `hl`, so the
@@ -300,6 +302,45 @@ fn a_widened_load_goes_to_the_pairs_low_half() {
     );
     let direct = ["ld c, (hl)\n\tld b, #0", "ld e, (hl)\n\tld d, #0"].iter().any(|pair| out.contains(pair));
     assert!(direct && !out.contains("ld c, b") && !out.contains("ld e, d"), "{out}");
+}
+
+/// `gcd`'s guard and latch both compare `cp a, l`; tail merging did not cross
+/// from the guard into the loop at -Oz, so the test was emitted twice (14
+/// instructions, 17 B); the pin merges across loops before placement: 13, 16 B.
+#[test]
+fn a_guard_and_a_latch_with_the_same_test_share_it_where_bytes_come_first() {
+    let out = text(include_str!("kernels/ir/gcd.ll"), "gcd", 0, &Request::new(Level::Oz)).expect("compiles");
+    let instructions = out.lines().filter(|line| line.starts_with('\t') && !line.starts_with("\t.")).count();
+    assert_eq!(instructions, 13, "{out}");
+}
+
+/// The merge leaves the loop's test at the bottom behind one entry jump (12 T
+/// per call): -3 B for xs8 at -O2 (25 B, 524 T against 28 B, 507 T), a trade
+/// speed does not make.
+#[test]
+fn a_loop_is_not_entered_by_a_jump_to_a_merged_test_at_o2() {
+    let out = text(include_str!("kernels/ir/xs8.ll"), "xs8", 0, &Request::new(Level::O2)).expect("compiles");
+    let first = out.lines().map(str::trim).find(|line| !line.starts_with('.') && !line.ends_with(':'));
+    assert!(first.is_some_and(|line| !line.starts_with("jr ")), "{out}");
+}
+
+/// The adds of a use after the loop were rated every trip, so LSR kept the
+/// loop as written and `lz4` -Oz grew a second pointer's setup: 168
+/// instructions against 159 with the adds rated as run once.
+#[test]
+fn an_add_after_the_loop_is_rated_once_not_every_trip() {
+    let out = text(include_str!("kernels/ir/lz4.ll"), "lz4", 0, &Request::new(Level::Oz)).expect("compiles");
+    let instructions = out.lines().filter(|line| line.starts_with('\t') && !line.starts_with("\t.")).count();
+    assert!(instructions <= 160, "{instructions} instructions\n{out}");
+}
+
+/// `sum4`'s rotated loop was `dec b; inc hl; jr nz`: the pointer step sat
+/// between the decrement and the branch, so no `djnz` formed (12 B, 172 T, 22
+/// instructions at -O2; 11 B, 160 T, 18 with it).
+#[test]
+fn a_decrement_behind_a_pointer_step_is_a_djnz() {
+    let out = text(include_str!("kernels/ir/sum4.ll"), "sum4", 0, &Request::new(Level::O2)).expect("compiles");
+    assert!(out.contains("djnz") && !out.contains("dec b"), "{out}");
 }
 
 /// `digits` kept its counter across the divide call in a frame slot (`ld
@@ -1233,15 +1274,16 @@ fn a_difference_of_a_phi_of_bytes_and_a_byte_is_a_byte_subtract_with_the_borrow(
 /// copied or kept, constants hoisted or not, the argument copies joined or
 /// not): 16 greedy runs, 51% of a 1.3 G-instruction compile. Copied and kept
 /// gave the same code on all 60 kernel cells; only the copied one is made.
-/// lz4 -O2 took 16 runs. Each of the two schedulers (`Source`, `ILP`) makes
-/// its own: 16.
+/// lz4 -O2 took 16 runs. The choice of a byte loaded through `a` with the
+/// argument copies unjoined won on no kernel cell and none of the 105 corpus
+/// files: 6 per scheduler (`Source`, `ILP`), 12.
 #[test]
-fn a_function_is_allocated_at_most_eight_times_per_scheduler() {
+fn a_function_is_allocated_at_most_six_times_per_scheduler() {
     let ir = include_str!("kernels/ir/lz4.ll");
     llrm_z80::compile::take_allocations();
     text(ir, "lz4", 0, &Request::new(Level::O2)).expect("compiles");
     let runs = llrm_z80::compile::take_allocations();
-    assert!(runs <= 16, "lz4 -O2 was allocated {runs} times");
+    assert!(runs <= 12, "lz4 -O2 was allocated {runs} times");
 }
 
 fn many(
@@ -1274,6 +1316,45 @@ fn a_module_is_run_through_the_mid_end_once_however_many_functions_it_has() {
     }
 }
 
+/// The held module's text was compared with the module's, whole, each time a
+/// function was built (four times a function): O(module text) per function,
+/// the +6% per function left from 150 to 1200 functions. A prepared module is
+/// not compared at all, and `text` compares once per function.
+#[test]
+fn the_text_of_a_module_is_not_compared_once_per_function_built() {
+    for count in [10, 40] {
+        let ir = many(count, 1);
+        let request = Request::new(Level::O2);
+        llrm_z80::compile::take_text_compares();
+        let prepared = llrm_z80::compile::prepare(&ir, &request).expect("prepares");
+        for (number, name) in prepared.names().enumerate() {
+            llrm_z80::compile::text_in(&prepared, name, number, &request).expect("compiles");
+        }
+        assert_eq!(llrm_z80::compile::take_text_compares(), 0, "{count} prepared functions");
+        for i in 0..count {
+            text(&ir, &format!("f{i}"), i, &request).expect("compiles");
+        }
+        assert_eq!(llrm_z80::compile::take_text_compares(), count, "{count} functions through `text`");
+    }
+}
+
+/// With `-g` every function parsed the module's text again for its source
+/// file and start line: O(module) per function. A prepared module is parsed
+/// once.
+#[test]
+fn a_module_is_parsed_for_its_sources_once_however_many_functions_it_has() {
+    for count in [10, 40] {
+        let ir = many(count, 1);
+        let request = Request { debug: true, ..Request::new(Level::O2) };
+        llrm_z80::driver::take_source_parses();
+        let prepared = llrm_z80::compile::prepare(&ir, &request).expect("prepares");
+        for (number, name) in prepared.names().enumerate() {
+            llrm_z80::compile::text_in(&prepared, name, number, &request).expect("compiles");
+        }
+        assert_eq!(llrm_z80::driver::take_source_parses(), 1, "{count} functions");
+    }
+}
+
 /// The module kept for the next function is the module asked for: two modules
 /// that name a function alike, compiled one after the other, give their own
 /// code.
@@ -1285,4 +1366,35 @@ fn two_modules_compiled_in_turn_do_not_share_the_cache() {
     assert!(first.contains("#1000") && second.contains("#2000"), "{first}\n{second}");
     let again = text(&one, "f0", 0, &Request::new(Level::O2)).expect("compiles");
     assert_eq!(first, again);
+}
+
+/// lz4's match copy kept the source as `dst + offset` (a base add, `pop bc;
+/// push bc; add hl,bc`) and its pointers in ix slots: 102905 clocks at -O2,
+/// gcc's end-pointer loop 35781. Both copies, the literals and the match, are
+/// loops of registers: load, store, two increments, the count.
+#[test]
+fn a_match_copy_loop_keeps_its_pointers_in_registers() {
+    let out = text(include_str!("kernels/ir/lz4.ll"), "lz4", 0, &Request::new(Level::O2)).expect("compiles");
+    let copies = out
+        .split("\nL0_")
+        .filter(|block| {
+            let lines: Vec<&str> = block.lines().collect();
+            let label = lines[0].trim_end_matches(':');
+            lines.len() <= 9
+                && lines.iter().any(|line| line.trim_start().starts_with("ld (") && line.ends_with(", a"))
+                && lines.last().is_some_and(|last| last.trim() == format!("jr nz, L0_{label}"))
+                && !lines.iter().any(|line| line.contains("(ix)"))
+        })
+        .count();
+    assert_eq!(copies, 2, "{out}");
+}
+
+/// reverse -Oz kept `p + i` and `p + j` as base adds to spare a register, and
+/// spilled the rest to the frame: 105 B and 1900 T against SDCC's 68 B and
+/// 1270 T. Base adds are rated before registers; 68 B, 1222 T.
+#[test]
+fn reverse_at_oz_does_not_live_in_the_frame() {
+    let out = text(include_str!("kernels/ir/reverse.ll"), "reverse", 0, &Request::new(Level::Oz)).expect("compiles");
+    let frame = out.lines().filter(|line| line.contains("(ix)")).count();
+    assert!(frame <= 10, "{frame} frame accesses\n{out}");
 }
