@@ -173,6 +173,14 @@ let Defs = [P], mayLoad = 1, AddedComplexity = 30 in {
   def OR8M : MOSInst<(outs Imag8:$d), (ins Imag8:$a, absaddr:$m), "or8m $d, $a, $m", [(set i8:$d, (or i8:$a, (load MOSAbs:$m)))]>;
   def XOR8M : MOSInst<(outs Imag8:$d), (ins Imag8:$a, absaddr:$m), "xor8m $d, $a, $m", [(set i8:$d, (xor i8:$a, (load MOSAbs:$m)))]>;
 }
+// The same with a global indexed by a byte: LDX i; LDA a; ADC g,x.
+let Defs = [P], mayLoad = 1, AddedComplexity = 30 in {
+  def ADD8MX : MOSInst<(outs Imag8:$d), (ins Imag8:$a, absx:$m), "add8mx $d, $a, $m", [(set i8:$d, (add i8:$a, (load MOSAbsX:$m)))]>;
+  def SUB8MX : MOSInst<(outs Imag8:$d), (ins Imag8:$a, absx:$m), "sub8mx $d, $a, $m", [(set i8:$d, (sub i8:$a, (load MOSAbsX:$m)))]>;
+  def AND8MX : MOSInst<(outs Imag8:$d), (ins Imag8:$a, absx:$m), "and8mx $d, $a, $m", [(set i8:$d, (and i8:$a, (load MOSAbsX:$m)))]>;
+  def OR8MX : MOSInst<(outs Imag8:$d), (ins Imag8:$a, absx:$m), "or8mx $d, $a, $m", [(set i8:$d, (or i8:$a, (load MOSAbsX:$m)))]>;
+  def XOR8MX : MOSInst<(outs Imag8:$d), (ins Imag8:$a, absx:$m), "xor8mx $d, $a, $m", [(set i8:$d, (xor i8:$a, (load MOSAbsX:$m)))]>;
+}
 let mayStore = 1, AddedComplexity = 20 in
   def STABS : MOSInst<(outs), (ins Imag8:$s, absaddr:$a), "stabs $s, $a", [(store i8:$s, MOSAbs:$a)]>;
 let mayStore = 1 in {

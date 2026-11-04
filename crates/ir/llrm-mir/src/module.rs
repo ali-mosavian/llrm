@@ -1262,11 +1262,14 @@ pub struct GlobalName {
 /// one count is current while the count stands.
 static NAMES_MADE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-static SYMBOL_BUILDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+thread_local! {
+    static SYMBOL_BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
 
-/// How many symbol tables `Module::named` has made.
+/// How many symbol tables `Module::named` has made on this thread: a test
+/// that counts them is not told of the tables other tests make beside it.
 pub fn symbol_builds() -> u64 {
-    SYMBOL_BUILDS.load(std::sync::atomic::Ordering::Relaxed)
+    SYMBOL_BUILDS.with(std::cell::Cell::get)
 }
 
 /// `LLRM_CHECK_SYMBOLS` compares each lookup with a scan of the globals.
@@ -1638,7 +1641,7 @@ impl Module {
         &self,
         made: u64,
     ) -> Symbols {
-        SYMBOL_BUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        SYMBOL_BUILDS.with(|builds| builds.set(builds.get() + 1));
         let mut ids = crate::hash::HashMap::default();
         for (at, global) in self.globals.iter().enumerate() {
             if let Some(text) = global.name.as_deref() {

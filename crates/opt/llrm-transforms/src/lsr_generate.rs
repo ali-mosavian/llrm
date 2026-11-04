@@ -1035,7 +1035,6 @@ impl Collection<'_, '_> {
             }
         }
         self.generate_cross_use_constant_offsets(se);
-        self.generate_end_biased(se);
     }
 
     /// `GenerateEndBiased` (DEVIATE LG3, gcc's `ubase - ratio * cbase`,

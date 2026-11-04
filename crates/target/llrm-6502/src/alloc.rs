@@ -407,6 +407,9 @@ struct Builder {
     /// Pointers written as two bytes, packed into their pair after the
     /// instruction.
     packs: Vec<(Reg, Reg, Reg)>,
+    /// The half of a pointer cell a byte copy wrote, until the other half
+    /// arrives and the pair is packed (a pointer returned in a and x).
+    halves: HashMap<String, (bool, Reg)>,
     /// Cells defined once, by an immediate load: they fold into the user.
     constants: HashMap<String, i64>,
     /// Cells loaded once from a global and read once by an add, subtract or
@@ -510,6 +513,47 @@ impl Builder {
         unpack.early_clobber = true;
         self.push(unpack);
         Ok((low, high))
+    }
+
+    /// `d := s` for bytes, where either may be a half of a pointer cell: a
+    /// half read is unpacked from the pair, and the two halves written are
+    /// packed into it when the second arrives.
+    fn copy_byte(
+        &mut self,
+        d: &str,
+        s: &str,
+    ) -> Result<(), Unsupported> {
+        let half = |b: &Builder, n: &str| {
+            let word = n.strip_suffix("+1").unwrap_or(n);
+            b.pointers.contains(word).then(|| (word.to_owned(), n.ends_with("+1")))
+        };
+        let source = match half(self, s) {
+            Some((word, high)) => {
+                let (low, top) = self.read_word(&word)?;
+                if high { top } else { low }
+            }
+            None => self.byte(s)?,
+        };
+        let Some((word, high)) = half(self, d) else {
+            self.define(d);
+            let d = self.byte(d)?;
+            self.copy(d, source);
+            return Ok(());
+        };
+        let Some((other_high, other)) = self.halves.remove(&word) else {
+            self.halves.insert(word, (high, source));
+            return Ok(());
+        };
+        if other_high == high {
+            return Err(Unsupported(format!("half of {word} written twice")));
+        }
+        let (low, top) = if high { (other, source) } else { (source, other) };
+        self.define(&word);
+        let pair = self.pointer(&word)?;
+        let mut pack = Inst::new(Kind::Op("PACK"), vec![Operand::Def(pair), Operand::Use(low), Operand::Use(top)]);
+        pack.early_clobber = true;
+        self.push(pack);
+        Ok(())
     }
 
     /// The bytes to write a word through: a pointer cell gets two new bytes
@@ -904,6 +948,31 @@ impl Builder {
         Ok(())
     }
 
+    /// `d := a op g[i]` for a global indexed by a byte: x takes the index, the
+    /// op reads `g,x`.
+    fn alu_indexed(
+        &mut self,
+        mnemonic: &'static str,
+        carry: Option<&'static str>,
+        d: &str,
+        a: &str,
+        symbol: String,
+        index: &str,
+    ) -> Result<(), Unsupported> {
+        let (acc, x) = (Reg::Phys(reg::A), Reg::Phys(reg::X));
+        self.define(d);
+        let (d, a, index) = (self.byte(d)?, self.byte(a)?, self.byte(index)?);
+        self.copy(x, index);
+        if let Some(carry) = carry {
+            self.push(Inst::new(Kind::Op(carry), vec![]));
+        }
+        self.copy(acc, a);
+        let second = Operand::Symbol(format!("{symbol},x"), 0);
+        self.push(Inst::new(Kind::Op(mnemonic), vec![Operand::Def(acc), Operand::Use(acc), second, Operand::Use(x)]));
+        self.copy(d, acc);
+        Ok(())
+    }
+
     /// How many halves of the pair `name` are the identity of `mnemonic` (a
     /// known `0`, or `255` for `AND`).
     fn identity_halves(
@@ -919,6 +988,35 @@ impl Builder {
             .iter()
             .filter(|cell| self.constants.get(*cell).is_some_and(|v| is_identity(mnemonic, &Operand::Imm(*v & 0xFF))))
             .count()
+    }
+
+    /// `d := a - 1` on a word: the low byte steps, the high only when the low
+    /// was 0 (`lda lo; bne; dec hi; dec lo`, 11 clocks against 22 for the
+    /// carry chain; a byte in x or y steps by dex/dey). Not for a pointer, which has its own pair bump.
+    fn word_minus_one(
+        &mut self,
+        mnemonic: &str,
+        d: &str,
+        a: &str,
+        b: &str,
+    ) -> Result<bool, Unsupported> {
+        let one = matches!((mnemonic, self.word_constant(b)), ("ADC", Some([255, 255])) | ("SBC", Some([1, 0])));
+        if !one || self.in_pair(d) || self.in_pair(a) {
+            return Ok(false);
+        }
+        let (al, ah) = self.read_word(a)?;
+        let (dl, dh) = self.write_word(d)?;
+        self.copy(dl, al);
+        self.copy(dh, ah);
+        let operands = vec![
+            Operand::Def(dl),
+            Operand::Def(dh),
+            Operand::Use(dl),
+            Operand::Use(dh),
+            Operand::Def(Reg::Phys(reg::A)),
+        ];
+        self.push(Inst::new(Kind::Op("DEC16"), operands));
+        Ok(true)
     }
 
     /// The same on a pair, the carry running from the low byte to the high.
@@ -1205,14 +1303,16 @@ pub fn build_with_places(
     items: &[Item],
     places: Vec<llrm_codegen::model::lir::SrcLoc>,
 ) -> Result<(MFunction<Class>, Vec<Vec<String>>), Unsupported> {
-    // A block starts at a label that follows an instruction (or the first).
+    // A block starts at a label that follows an instruction (or the first). The
+    // entry block stays apart from a loop header that follows it directly: the
+    // entry has no predecessors.
     let mut labels: Vec<Vec<String>> = vec![Vec::new()];
     let mut block_of = HashMap::default();
     let mut after_inst = false;
     for item in items {
         match item {
             Item::Label(l) => {
-                if after_inst {
+                if after_inst || labels.len() == 1 && !labels[0].is_empty() {
                     labels.push(Vec::new());
                     after_inst = false;
                 }
@@ -1228,6 +1328,7 @@ pub fn build_with_places(
         bytes: HashMap::default(),
         pointers: pointer_cells(items, &constants(items)),
         packs: Vec::new(),
+        halves: HashMap::default(),
         constants: constants(items),
         block_of,
         versions: HashMap::default(),
@@ -1239,14 +1340,16 @@ pub fn build_with_places(
         b.function.blocks.push(Block { id: id as u32, ..Block::default() });
     }
     let mut after_inst = false;
+    let mut entry_labeled = false;
     for item in items {
         let inst = match item {
             Item::Label(_) => {
-                if after_inst {
+                if after_inst || b.current == 0 && entry_labeled {
                     b.current += 1;
                     after_inst = false;
                     b.pending = None;
                 }
+                entry_labeled = true;
                 continue;
             }
             // the flags are not kept across the phi copies: a compare is redone
@@ -1259,11 +1362,7 @@ pub fn build_with_places(
         after_inst = true;
         let o = &inst.operands;
         match inst.opcode {
-            op::COPY8 => {
-                b.define(name(&o[0])?);
-                let (d, s) = (b.byte(name(&o[0])?)?, b.byte(name(&o[1])?)?);
-                b.copy(d, s);
-            }
+            op::COPY8 => b.copy_byte(name(&o[0])?, name(&o[1])?)?,
             op::COPY16 => {
                 let (d, src) = (name(&o[0])?, name(&o[1])?);
                 if b.in_pair(d) && b.in_pair(src) {
@@ -1308,6 +1407,17 @@ pub fn build_with_places(
                 let symbol = address(&o[2], &o[3]).map_err(Unsupported)?;
                 b.alu_with(mnemonic, carry, name(&o[0])?, name(&o[1])?, Operand::Symbol(symbol, 0))?
             }
+            op::ADD8MX | op::SUB8MX | op::AND8MX | op::OR8MX | op::XOR8MX => {
+                let (mnemonic, carry) = match inst.opcode {
+                    op::ADD8MX => ("ADC", Some("CLC")),
+                    op::SUB8MX => ("SBC", Some("SEC")),
+                    op::AND8MX => ("AND", None),
+                    op::OR8MX => ("ORA", None),
+                    _ => ("EOR", None),
+                };
+                let symbol = indexed_address(&o[2], &o[3]).map_err(Unsupported)?;
+                b.alu_indexed(mnemonic, carry, name(&o[0])?, name(&o[1])?, symbol, name(&o[4])?)?
+            }
             op::SUB8 => b.alu("SBC", Some("SEC"), name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             // one register read and written: `d := a`, then `d` in place
             op::INC8 | op::DEC8 => {
@@ -1320,8 +1430,18 @@ pub fn build_with_places(
             op::AND8 => b.alu("AND", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             op::OR8 => b.alu("ORA", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             op::XOR8 => b.alu("EOR", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
-            op::ADD16 => b.alu16("ADC", Some("CLC"), name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
-            op::SUB16 => b.alu16("SBC", Some("SEC"), name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
+            op::ADD16 => {
+                let (d, a, c) = (name(&o[0])?, name(&o[1])?, name(&o[2])?);
+                if !b.word_minus_one("ADC", d, a, c)? {
+                    b.alu16("ADC", Some("CLC"), d, a, c)?
+                }
+            }
+            op::SUB16 => {
+                let (d, a, c) = (name(&o[0])?, name(&o[1])?, name(&o[2])?);
+                if !b.word_minus_one("SBC", d, a, c)? {
+                    b.alu16("SBC", Some("SEC"), d, a, c)?
+                }
+            }
             op::AND16 => b.alu16("AND", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             op::OR16 => b.alu16("ORA", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             op::XOR16 => b.alu16("EOR", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
@@ -1864,6 +1984,9 @@ pub fn build_with_places(
             other => return Err(Unsupported(format!("opcode {other}"))),
         }
         b.flush_packs();
+    }
+    if let Some(word) = b.halves.keys().next() {
+        return Err(Unsupported(format!("one half of {word} written alone")));
     }
     remove_dead(&mut b.function);
     narrow_remainder_calls(&mut b.function);
@@ -2634,6 +2757,23 @@ fn emit_with<const STACK: bool>(
                         )
                         .unwrap();
                     }
+                }
+                // d := d - 1 on two cells: the high byte steps when the low was 0
+                (Kind::Op("DEC16"), _) => {
+                    made += 1;
+                    // a byte in x or y is read through a and stepped by dex/dey
+                    let read = |r| match r {
+                        reg::X => "txa".to_owned(),
+                        reg::Y => "tya".to_owned(),
+                        cell => format!("lda {}", register_name(cell)),
+                    };
+                    let step = |r| match r {
+                        reg::X => "dex".to_owned(),
+                        reg::Y => "dey".to_owned(),
+                        cell => format!("dec {}", register_name(cell)),
+                    };
+                    let (load, low, high) = (read(regs[0]), step(regs[0]), step(regs[1]));
+                    writeln!(out, "  {load}\n  bne _pa{made}\n  {high}\n_pa{made}:\n  {low}").unwrap();
                 }
                 (Kind::Op("PINCH"), _) => {
                     let (d, s) = (regs[0], regs[1]);

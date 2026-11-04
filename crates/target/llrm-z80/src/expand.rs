@@ -549,6 +549,21 @@ impl Printer<'_> {
                 self.push(if self.flags_dead(rest) { format!("dec {to}") } else { format!("ld {to}, #0") });
                 self.out.push(Line::Label(skip));
             }
+            // destination hl, source de, count bc: `ex de,hl` makes them
+            // `ldir`'s. A count of zero is 65536 here; `LDIRG` skips it.
+            "LDIR" => {
+                self.push("ex de, hl");
+                self.push("ldir");
+            }
+            "LDIRG" => {
+                let skip = format!("{}$", self.out.iter().filter(|line| !matches!(line, Line::Loc(_))).count());
+                self.push("ld a, b");
+                self.push("or a, c");
+                self.push(format!("jr z, {skip}"));
+                self.push("ex de, hl");
+                self.push("ldir");
+                self.out.push(Line::Label(skip));
+            }
             "AND16i" | "OR16i" | "XOR16i" => {
                 let mnemonic = op[..op.len() - 3].to_lowercase();
                 let (to, a) = (self.register(inst, 0)?, self.register(inst, 1)?);

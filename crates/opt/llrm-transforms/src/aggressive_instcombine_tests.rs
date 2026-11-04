@@ -239,3 +239,146 @@ fn a_de_bruijn_log2_table_is_a_ctlz_where_ctlz_is_cheap() {
     let dear = merged(LOG2_TABLE);
     assert!(dear.contains("load i8"), "no cheap ctlz: the table stays\n{dear}");
 }
+
+const MASK_TABLE: &str = "@t = constant [6 x i32] [i32 0, i32 1, i32 3, i32 7, i32 15, i32 31]
+define i32 @f(i32 %x, i16 %i) {
+b0:
+  %p = getelementptr inbounds [6 x i32], ptr @t, i16 0, i16 %i
+  %m = load i32, ptr %p
+  %r = and i32 %x, %m
+  ret i32 %r
+}
+";
+
+/// `x & tbl[i]` through a table of low-bits masks was a load; the pin's
+/// `tryToRecognizeTableBasedLowBitsMask` makes it `x & ((1 << i) - 1)`.
+#[test]
+fn a_table_of_low_bit_masks_is_a_shift_and_a_decrement() {
+    let before = parsed(&format!("{DOS}{MASK_TABLE}"));
+    let mut module = before.clone();
+    managed(&mut module, AggressiveInstCombine);
+    let after = managed(&mut module, crate::dead::Dead);
+    assert!(after.contains("shl i32 1,") && after.contains("sub i32"), "{after}");
+    assert!(!after.contains("load i32"), "{after}");
+    let inputs: &[&[i128]] = &[&[-1, 0], &[-1, 3], &[4660, 5], &[255, 1]];
+    assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
+}
+
+const GUARDED_FSHL: &str = "define i32 @f(i32 %a, i32 %b, i32 %n) {
+g:
+  %z = icmp eq i32 %n, 0
+  br i1 %z, label %p, label %f
+f:
+  %sub = sub i32 32, %n
+  %shr = lshr i32 %b, %sub
+  %shl = shl i32 %a, %n
+  %or = or i32 %shr, %shl
+  br label %p
+p:
+  %r = phi i32 [ %or, %f ], [ %a, %g ]
+  ret i32 %r
+}
+";
+
+/// A funnel shift behind a branch around a zero amount (the C idiom that
+/// avoids shifting by the width) was a branch, a phi and four operations; the
+/// pin's `foldGuardedFunnelShift` makes it `fshl`.
+#[test]
+fn a_funnel_shift_guarded_against_a_zero_amount_is_an_fshl() {
+    let before = parsed(&format!("{DOS}{GUARDED_FSHL}"));
+    let mut module = before.clone();
+    managed(&mut module, AggressiveInstCombine);
+    let after = managed(&mut module, crate::dead::Dead);
+    assert!(after.contains("llvm.fshl.i32"), "{after}");
+    let inputs: &[&[i128]] = &[&[1, 2, 0], &[1, 2, 4], &[305419896, 2596069104, 8], &[-1, 5, 31]];
+    assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
+}
+
+const SHIFTED_OR_IS_ZERO: &str = "define i1 @f(i32 %a, i32 %b) {
+b0:
+  %s = shl nuw i32 %a, 3
+  %o = or i32 %s, %b
+  %c = icmp eq i32 %o, 0
+  ret i1 %c
+}
+";
+
+/// A no-wrap shift inside an or chain compared with zero changes nothing the
+/// compare sees; the pin's `foldICmpOrChain` drops it, so the shift is not
+/// computed.
+#[test]
+fn a_no_wrap_shift_in_an_or_chain_compared_with_zero_is_dropped() {
+    let before = parsed(&format!("{DOS}{SHIFTED_OR_IS_ZERO}"));
+    let mut module = before.clone();
+    managed(&mut module, AggressiveInstCombine);
+    let after = managed(&mut module, crate::dead::Dead);
+    assert!(!after.contains("shl"), "{after}");
+    let inputs: &[&[i128]] = &[&[0, 0], &[1, 0], &[0, 1], &[5, 7]];
+    assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
+}
+
+const MUL_HIGH_LADDER: &str = "define i32 @f(i32 %x, i32 %y) {
+b0:
+  %xl = and i32 %x, 65535
+  %xh = lshr i32 %x, 16
+  %yl = and i32 %y, 65535
+  %yh = lshr i32 %y, 16
+  %xlyl = mul i32 %xl, %yl
+  %xhyl = mul i32 %xh, %yl
+  %xlyh = mul i32 %xl, %yh
+  %xhyh = mul i32 %xh, %yh
+  %t = lshr i32 %xlyl, 16
+  %c2 = add i32 %t, %xhyl
+  %c2l = and i32 %c2, 65535
+  %c3 = add i32 %c2l, %xlyh
+  %c2h = lshr i32 %c2, 16
+  %c3h = lshr i32 %c3, 16
+  %a1 = add i32 %xhyh, %c2h
+  %r = add i32 %a1, %c3h
+  ret i32 %r
+}
+";
+
+/// The high half of a 32-bit multiply built from 16-bit parts (the ladder of
+/// carries) was thirteen operations; the pin's `foldMulHigh` makes it a
+/// 64-bit multiply, a shift and a truncate.
+#[test]
+fn the_high_half_of_a_multiply_in_parts_is_a_widening_multiply() {
+    let before = parsed(&format!("{DOS}{MUL_HIGH_LADDER}"));
+    let mut module = before.clone();
+    managed(&mut module, AggressiveInstCombine);
+    let after = managed(&mut module, crate::dead::Dead);
+    assert!(after.contains("mul nuw i64"), "{after}");
+    assert!(!after.contains("and i32"), "{after}");
+    let inputs: &[&[i128]] = &[&[0, 0], &[65535, 65535], &[4660, 65536], &[-1, -1], &[305419896, 2596069104]];
+    assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
+}
+
+const SQRT_OF_SQUARE: &str = "declare double @sqrt(double)
+define i32 @f(i32 %x) {
+b0:
+  %d = sitofp i32 %x to double
+  %s = fmul double %d, %d
+  %r = call double @sqrt(double %s)
+  %i = fptosi double %r to i32
+  ret i32 %i
+}
+";
+
+/// `sqrt(x * x)` stayed a libcall that may set `errno`; where the target has a
+/// sqrt instruction and the argument cannot be negative, the pin's `foldSqrt`
+/// makes it `llvm.sqrt`.
+#[test]
+fn a_sqrt_of_a_square_is_the_intrinsic_where_the_target_has_a_sqrt() {
+    // Text only: the interpreter has no external `sqrt`.
+    let run = |machine: crate::testing::Tuned| {
+        let mut module = parsed(&format!("{DOS}{SQRT_OF_SQUARE}"));
+        crate::testing::managed_on(&mut module, AggressiveInstCombine, machine);
+        managed(&mut module, crate::dead::Dead)
+    };
+    let fast = run(crate::testing::Tuned { fast_sqrt: true, ..Default::default() });
+    assert!(fast.contains("llvm.sqrt.f64"), "{fast}");
+    assert!(!fast.contains("call double @sqrt"), "{fast}");
+    let slow = run(Default::default());
+    assert!(slow.contains("call double @sqrt"), "no sqrt instruction: the call stays\n{slow}");
+}
