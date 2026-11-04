@@ -581,7 +581,11 @@ impl Selector<'_, '_, '_> {
         _: &mut Vec<Arc<Insn>>,
     ) -> Result<Loc, Unselected> {
         let instruction = self.function.instruction(m.inst);
-        Ok(Loc::Held(Held { value: self.value(instruction.result.expect("a result")), width: self.native_width() }))
+        Ok(Loc::Held(Held {
+            value: self.value(instruction.result.expect("a result")),
+            width: self.native_width(),
+            offset: 0,
+        }))
     }
 
     pub fn op_result(
@@ -591,7 +595,7 @@ impl Selector<'_, '_, '_> {
     ) -> Result<Loc, Unselected> {
         let instruction = self.function.instruction(m.inst);
         let width = self.width(instruction.ty)?;
-        Ok(Loc::Held(Held { value: self.value(instruction.result.expect("a result")), width }))
+        Ok(Loc::Held(Held { value: self.value(instruction.result.expect("a result")), width, offset: 0 }))
     }
 
     /// A fresh register of the result's width.
@@ -620,7 +624,7 @@ impl Selector<'_, '_, '_> {
     ) -> Result<Loc, Unselected> {
         let result = self.function.instruction(m.inst).result.expect("a result");
         let bytes = self.size(self.function.instruction(m.inst).ty)?;
-        Ok(Loc::Held(Held { value: self.value(result), width: self.arch.float_width(bytes) }))
+        Ok(Loc::Held(Held { value: self.value(result), width: self.arch.float_width(bytes), offset: 0 }))
     }
 
     /// The cell a float load or store reaches: its bytes in memory.
@@ -1330,7 +1334,7 @@ impl Selector<'_, '_, '_> {
         let mut halves = self.words[&m.inst].clone();
         halves.sort_by_key(|&(offset, _)| offset);
         for (offset, result) in halves {
-            let held = Held { value: self.value(result), width: 2 };
+            let held = Held { value: self.value(result), width: 2, offset: 0 };
             let source = match made.get(&offset) {
                 Some(&earlier) => Loc::Held(earlier),
                 None => Loc::Mem(Self::memory(regs, pointer.moved(offset), 2)),
@@ -1546,7 +1550,7 @@ impl Selector<'_, '_, '_> {
             _ => None,
         };
         let Some(field) = field else { return refuse("an extractvalue of no answer in registers") };
-        let result = Held { value: self.value(instruction.result.expect("a field")), width: field.width };
+        let result = Held { value: self.value(instruction.result.expect("a field")), width: field.width, offset: 0 };
         out.push(insn(m.at, semantics(Operation::Move, "mov", vec![Loc::Held(result)], vec![Loc::Held(field)])));
         Ok(())
     }
@@ -1581,7 +1585,7 @@ impl Selector<'_, '_, '_> {
             }
         };
         let (no, yes) = (self.held(no, ty, m.at, out)?, self.held(yes, ty, m.at, out)?);
-        let result = Held { value: self.value(instruction.result.expect("a select's value")), width };
+        let result = Held { value: self.value(instruction.result.expect("a select's value")), width, offset: 0 };
         let name = format!("cmov{}", &code[1..]);
         out.push(insn(
             m.at,
@@ -1636,7 +1640,7 @@ impl Selector<'_, '_, '_> {
             at,
             semantics(Operation::Binary, "sub", vec![stack.clone()], vec![stack.clone(), Loc::Held(rounded)]),
         ));
-        let result = Held { value: self.value(instruction.result.expect("an address")), width };
+        let result = Held { value: self.value(instruction.result.expect("an address")), width, offset: 0 };
         out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(result)], vec![stack])));
         Ok(())
     }
@@ -1708,7 +1712,11 @@ impl Selector<'_, '_, '_> {
         test: Test,
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<(), Unselected> {
-        let result = Held { value: self.value(self.function.instruction(m.inst).result.expect("a result")), width: 1 };
+        let result = Held {
+            value: self.value(self.function.instruction(m.inst).result.expect("a result")),
+            width: 1,
+            offset: 0,
+        };
         let at = m.at;
         let set = |code: &str, into: Held| {
             insn(at, semantics(Operation::Unary, &format!("set{}", &code[1..]), vec![Loc::Held(into)], vec![]))

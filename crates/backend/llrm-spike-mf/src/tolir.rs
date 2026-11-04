@@ -45,6 +45,7 @@ use llrm_codegen::greedy::targetinfo::TargetRegisterInfo;
 use llrm_codegen::greedy::tii::TargetInstrInfo;
 use llrm_codegen::model::lir::{Block as LirBlockRef, Insn, LirBlock, LirBody};
 use llrm_lir::registers::{RegId, Regs};
+use llrm_lir::valuelanes::ValueLanes;
 use llrm_lir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
 use llrm_support::hash::IndexMap;
 
@@ -472,7 +473,7 @@ impl<T: Target> Made<'_, T> {
         for operand in &inst.operands {
             match operand {
                 Operand::Use(Reg::Virt(v)) => {
-                    let held = Held { value: v + 1, width: self.widths[*v as usize] };
+                    let held = Held { value: v + 1, width: self.widths[*v as usize], offset: 0 };
                     uses.push(held.value);
                     sources.push(Loc::Held(held));
                 }
@@ -482,7 +483,7 @@ impl<T: Target> Made<'_, T> {
                     }
                     let value = self.pinned(*register).0;
                     let width = self.registers.bytes(*register).map_or(1, |bytes| bytes as u32);
-                    let held = Held { value, width };
+                    let held = Held { value, width, offset: 0 };
                     uses.push(value);
                     requires.push((held, *register));
                     sources.push(Loc::Held(held));
@@ -517,7 +518,7 @@ impl<T: Target> Made<'_, T> {
         for operand in &inst.operands {
             match operand {
                 Operand::Def(Reg::Virt(v)) => {
-                    let held = Held { value: v + 1, width: self.widths[*v as usize] };
+                    let held = Held { value: v + 1, width: self.widths[*v as usize], offset: 0 };
                     defines.push(held.value);
                     dests.push(Loc::Held(held));
                 }
@@ -526,7 +527,7 @@ impl<T: Target> Made<'_, T> {
                         continue;
                     }
                     let (value, width) = self.pinned(*register);
-                    let held = Held { value, width };
+                    let held = Held { value, width, offset: 0 };
                     defines.push(value);
                     delivers.push((held, *register));
                     dests.push(Loc::Held(held));
@@ -590,6 +591,16 @@ impl<T: Target> Made<'_, T> {
         }
         insn.symbol = symbol.then_some(true);
         insn.volatile = inst.side_effects;
+        // the lanes of the whole each part is copied into
+        if let Some((whole, parts)) = T::lane_moves(inst)
+            && let Some(Operand::Def(Reg::Virt(to)) | Operand::Use(Reg::Virt(to))) = inst.operands.get(whole)
+        {
+            for (part, offset, bytes) in parts {
+                if let Some(Operand::Def(Reg::Virt(from)) | Operand::Use(Reg::Virt(from))) = inst.operands.get(part) {
+                    insn.lane_copies.push((from + 1, to + 1, ValueLanes::at(offset, bytes)));
+                }
+            }
+        }
         insn
     }
 }
@@ -855,11 +866,11 @@ impl<T: Target> SpikeInstrInfo<T> {
             match operand {
                 Operand::Def(Reg::Virt(_)) => {
                     defines.push(value);
-                    dests.push(Loc::Held(Held { value, width }));
+                    dests.push(Loc::Held(Held { value, width, offset: 0 }));
                 }
                 Operand::Use(Reg::Virt(_)) => {
                     uses.push(value);
-                    sources.push(Loc::Held(Held { value, width }));
+                    sources.push(Loc::Held(Held { value, width, offset: 0 }));
                 }
                 Operand::Frame(slot) => {
                     let cell = Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, i64::from(*slot))), width));
@@ -922,8 +933,8 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
     ) -> Semantics {
         Semantics {
             name: Some(COPY.into()),
-            dests: vec![Loc::Held(Held { value: to, width })],
-            sources: vec![Loc::Held(Held { value: from, width })],
+            dests: vec![Loc::Held(Held { value: to, width, offset: 0 })],
+            sources: vec![Loc::Held(Held { value: from, width, offset: 0 })],
             ..Semantics::new(Operation::Move)
         }
     }

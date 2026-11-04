@@ -232,8 +232,8 @@ fn instruction(
                 writeln!(
                     out,
                     "    {} = COPY {}",
-                    vreg(&Held { value: *to, width: to_width })?,
-                    vreg(&Held { value: *from, width: from_width })?
+                    vreg(&Held { value: *to, width: to_width, offset: 0 })?,
+                    vreg(&Held { value: *from, width: from_width, offset: 0 })?
                 )
                 .unwrap();
             }
@@ -864,7 +864,7 @@ mod tests {
     use crate::support::hash::IndexMap;
 
     fn held(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 4 })
+        Loc::Held(Held { value, width: 4, offset: 0 })
     }
 
     fn insn(
@@ -925,8 +925,8 @@ mod tests {
         let setup = insn("call_frame_setup", Operation::Move, vec![], vec![imm(4), imm(0), imm(0)]);
         let push = insn("push", Operation::Push, vec![], vec![held(1)]);
         let call = Arc::new(Insn {
-            requires: vec![(Held { value: 1, width: 4 }, RegId::ECX)],
-            delivers: vec![(Held { value: 2, width: 4 }, RegId::EAX)],
+            requires: vec![(Held { value: 1, width: 4, offset: 0 }, RegId::ECX)],
+            delivers: vec![(Held { value: 2, width: 4, offset: 0 }, RegId::EAX)],
             ..Insn::clone(&insn("call", Operation::Call, vec![], vec![]))
         });
         let destroy = insn("call_frame_destroy", Operation::Move, vec![], vec![imm(4), imm(0)]);
@@ -1044,7 +1044,7 @@ mod tests {
     fn test_a_switch_through_a_table_prints_its_jump_table() {
         use llrm_lir::{Addr, Mem, Space};
         let mut table = Mem::new(Some(Addr::new(Space::Segment, 7)), 4);
-        table.index = Some(Held { value: 1, width: 4 });
+        table.index = Some(Held { value: 1, width: 4, offset: 0 });
         table.scale = 4;
         let jump = insn("jmp", Operation::Branch, vec![], vec![Loc::Mem(table)]);
         let ret = insn("", Operation::Return, vec![], vec![]);
@@ -1068,7 +1068,7 @@ mod tests {
     fn test_an_indexed_local_array_cell_is_an_indexed_stack_object() {
         use llrm_lir::{Addr, Mem, Space};
         let mut cell = Mem::new(Some(Addr::new(Space::Frame, -64)), 4);
-        cell.index = Some(Held { value: 2, width: 4 });
+        cell.index = Some(Held { value: 2, width: 4, offset: 0 });
         cell.scale = 4;
         let load = insn("mov", Operation::Move, vec![held(1)], vec![Loc::Mem(cell)]);
         let ret = insn("", Operation::Return, vec![], vec![]);
@@ -1333,8 +1333,8 @@ mod tests {
     /// trip (x_cordic), where its own MIR is `$cl = COPY %k.sub_8bit`.
     #[test]
     fn a_copy_into_a_pinned_value_is_a_copy_into_its_register() {
-        let k = Loc::Held(Held { value: 1, width: 4 });
-        let count = Loc::Held(Held { value: 2, width: 4 });
+        let k = Loc::Held(Held { value: 1, width: 4, offset: 0 });
+        let count = Loc::Held(Held { value: 2, width: 4, offset: 0 });
         let start =
             insn("mov", Operation::Move, vec![held(1)], vec![Loc::Imm(Imm { value: 0, width: 4, address: None })]);
         let copy = insn("mov", Operation::Move, vec![count.clone()], vec![k]);
