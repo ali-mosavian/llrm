@@ -76,7 +76,8 @@ setcc = 3
 mov_rr = 4
 mov_rm = 6
 mov_mr = 6
-mov_mi = 8
+# Not measured at m16: equal to mov_mr so m16 decisions stay as on release/next. Owner w2, exit 2026-11-12.
+mov_mi = 6
 alu_mr = 6
 jcc = 2
 call_far = 5

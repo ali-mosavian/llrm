@@ -1149,6 +1149,7 @@ fn a_target_with_no_segment_setup_forms_the_memsets_the_pin_forms() {
             fill: 12,
             fill_segment: segment,
             store: 6,
+            store_immediate: 6,
             add: 4,
             branch: 2,
             ..Default::default()
@@ -1305,13 +1306,14 @@ fn a_priced_fill_with_no_rate_is_taken_only_if_neither_metric_grows() {
             fill: fill_clocks,
             fill_cell: 0,
             store: 1,
+            store_immediate: 1,
             add: 1,
             branch: 3,
             ..Default::default()
         };
         let bytes =
-            crate::profit::OperationCosts { fill: 8, fill_cell: 0, store: 6, add: 4, branch: 2, ..Default::default() };
-        let machine = crate::testing::Tuned { costs: clocks, sizes: bytes, price_fills: true, ..Default::default() };
+            crate::profit::OperationCosts { fill: 8, fill_cell: 0, store: 6, store_immediate: 6, add: 4, branch: 2, ..Default::default() };
+        let machine = crate::testing::Tuned { costs: clocks, sizes: bytes, price_fills: true, rep_fills: true, ..Default::default() };
         let mut module = parsed(&format!("target datalayout = \"e-p:32:32-i64:32-n8:16:32\"\n{TWO_BYTE_ARRAYS}"));
         let mut pass = crate::loopidiom::pass::LoopIdiom::new();
         pass.for_size = sized;
@@ -1332,13 +1334,14 @@ fn the_memset_a_loop_promotes_is_priced_as_one_fill() {
             fill: fill_clocks,
             fill_cell: 0,
             store: 1,
+            store_immediate: 1,
             add: 1,
             branch: 3,
             ..Default::default()
         };
         let bytes =
-            crate::profit::OperationCosts { fill: 8, fill_cell: 0, store: 2, add: 4, branch: 2, ..Default::default() };
-        let machine = crate::testing::Tuned { costs: clocks, sizes: bytes, price_fills: true, ..Default::default() };
+            crate::profit::OperationCosts { fill: 8, fill_cell: 0, store: 2, store_immediate: 2, add: 4, branch: 2, ..Default::default() };
+        let machine = crate::testing::Tuned { costs: clocks, sizes: bytes, price_fills: true, rep_fills: true, ..Default::default() };
         let mut module = parsed(&format!("{DOS}{ZEROED_NEST}"));
         let mut manager = llrm_mir::passes::PassManager::default();
         manager.add(crate::loopidiom::pass::LoopIdiom::new());
@@ -1366,12 +1369,13 @@ fn a_loop_trip_is_priced_at_its_conditional_branch_only() {
             fill: fill_clocks,
             fill_cell: 0,
             store: 1,
+            store_immediate: 1,
             add: 1,
             branch: 3,
             ..Default::default()
         };
         let bytes =
-            crate::profit::OperationCosts { fill: 8, fill_cell: 0, store: 2, add: 4, branch: 2, ..Default::default() };
+            crate::profit::OperationCosts { fill: 8, fill_cell: 0, store: 2, store_immediate: 2, add: 4, branch: 2, ..Default::default() };
         let machine = crate::testing::Tuned { costs: clocks, sizes: bytes, price_fills: true, ..Default::default() };
         let mut module = parsed(&format!("{DOS}{ZEROED_NEST}"));
         let mut manager = llrm_mir::passes::PassManager::default();

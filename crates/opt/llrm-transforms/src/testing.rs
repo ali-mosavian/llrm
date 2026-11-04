@@ -164,6 +164,8 @@ pub struct Tuned {
     pub exit_ne: bool,
     /// `Tuning::price_fills`.
     pub price_fills: bool,
+    /// No constant memset is stored inline: every fill is a `rep stos`.
+    pub rep_fills: bool,
 }
 
 use llrm_mir::tti;
@@ -283,7 +285,14 @@ impl llrm_mir::lowering::Lowering for FoldsMasks {
 
 impl llrm_mir::target::Machine for Tuned {
     fn tuning(&self) -> llrm_mir::target::Tuning {
-        llrm_mir::target::Tuning { price_fills: self.price_fills, ..llrm_mir::target::Tuning::PIN }
+        let inline = if self.rep_fills { 0 } else { llrm_mir::target::Tuning::PIN.max_stores_per_memset };
+        let inline_size = if self.rep_fills { 0 } else { llrm_mir::target::Tuning::PIN.max_stores_per_memset_opt_size };
+        llrm_mir::target::Tuning {
+            price_fills: self.price_fills,
+            max_stores_per_memset: inline,
+            max_stores_per_memset_opt_size: inline_size,
+            ..llrm_mir::target::Tuning::PIN
+        }
     }
 
     fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {

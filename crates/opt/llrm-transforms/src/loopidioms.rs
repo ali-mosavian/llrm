@@ -864,19 +864,15 @@ pub(crate) fn fills_pay(
     if kept > 0 {
         return false;
     }
-    // The pin forms the memset whenever the stores allow. Only a fill that
-    // saves and restores a segment register (m16's ES), or that the target
-    // prices (clocks given), is weighed against its loop.
-    if costs.fill_segment == 0 && clocks.is_none() {
-        return true;
-    }
     // `costs.fill` is the fill as encoded: its loads are the instructions.
     let loop_bytes = trip_cost(context, layout, function, callees, blocks.iter(), costs, true);
     // At speed under a clock price (m16 -O2: 1 clock = 2 B) with the trips
     // known, the bytes are in the price: a fill larger than the loop still pays
     // for the clocks it saves. At -Os, or for unknown trips, the bytes decide.
     let priced = at_speed && clocks.is_some_and(|(_, _, trips, cells)| trips.is_some() && cells.is_some());
-    (stores < 2 || priced || fills_cheaper(loop_bytes, fills, costs.fill))
+    // A small constant fill is stored inline, not as a `rep stos`.
+    let each_fill = inline.filter(|inline| inline.stores() <= inline.max_stores).map_or(costs.fill, |inline| inline.price(costs));
+    (stores < 2 || priced || fills_cheaper(loop_bytes, fills, each_fill))
         && clocks.is_none_or(|(clocks, rate, trips, width)| {
             // The clocks the fill adds against the bytes it saves, as the
             // backend prices a memset's fill against its stores. The loop
