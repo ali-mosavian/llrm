@@ -178,6 +178,28 @@ fn on_i386(
     }
 }
 
+/// `foldICmpShrConstConst`: a constant shifted right by a variable amount and
+/// compared for equality was left as a shift and a compare; the pin tests the
+/// amount directly (`(lshr 40, %x) == 5` is `%x == 3`).
+#[test]
+fn an_equality_of_a_constant_shifted_by_a_variable_tests_the_amount() {
+    let eq = |op: &str, pred: &str, shifted: i32, c: i32| {
+        format!("  %s = {op} i32 {shifted}, %x\n  %r = icmp {pred} i32 %s, {c}\n")
+    };
+    on_i386(&eq("lshr", "eq", 40, 5), &["icmp eq i32 %x, 3"]);
+    on_i386(&eq("lshr", "ne", 40, 5), &["icmp ne i32 %x, 3"]);
+    // Zero: the amount must shift out the highest set bit (log2 40 = 5).
+    on_i386(&eq("lshr", "eq", 40, 0), &["icmp ugt i32 %x, 5"]);
+    on_i386(&eq("lshr", "ne", 40, 0), &["icmp ult i32 %x, 6"]);
+    on_i386(&eq("lshr", "eq", 40, 40), &["icmp eq i32 %x, 0"]);
+    // 40 >> 3 = 5, never 7.
+    on_i386(&eq("lshr", "eq", 40, 7), &["ret i1 false"]);
+    on_i386(&eq("lshr", "ne", 40, 7), &["ret i1 true"]);
+    // Several solutions when comparing against -1: any amount of 4 or more.
+    on_i386(&eq("ashr", "eq", -16, -1), &["icmp ugt i32 %x, 3"]);
+    on_i386(&eq("ashr", "eq", -16, -4), &["icmp eq i32 %x, 2"]);
+}
+
 /// shellsort's gap-32 copy kept `icmp ult (trunc nuw i32 %x to i16), 32`: the
 /// compare stayed narrow, SCEV found no exit count and the one-trip inner loop
 /// stayed (3 blocks the pin deletes). `foldICmpTruncConstant`'s nuw/nsw arm was
@@ -189,4 +211,21 @@ fn a_compare_of_a_nuw_or_nsw_trunc_with_a_constant_is_the_wide_compare() {
     on_i386("  %t = trunc nsw i32 %x to i16\n  %r = icmp slt i16 %t, -5\n", &["icmp slt i32 %x, -5"]);
     // nuw alone cannot widen a signed compare.
     on_i386("  %t = trunc nuw i32 %x to i16\n  %r = icmp slt i16 %t, 32\n", &["icmp slt i16 %t, 32"]);
+}
+
+/// volatile_bitfield: `icmp ugt (lshr i32 %x, 18), 300` stayed a shift and a
+/// compare (+33 B at m16 -Os); the pin compares `%x` with `((300 + 1) << 18) -
+/// 1`. `foldICmpShrConstant` was not translated.
+#[test]
+fn a_compare_of_a_shift_right_with_a_constant_is_the_compare_of_the_value() {
+    let shr = |op: &str, pred: &str, amount: u32, c: i32| {
+        format!("  %s = {op} i32 %x, {amount}\n  %r = icmp {pred} i32 %s, {c}\n")
+    };
+    on_i386(&shr("lshr", "ugt", 18, 300), &["icmp ugt i32 %x, 78905343"]);
+    on_i386(&shr("lshr", "ult", 3, 100), &["icmp ult i32 %x, 800"]);
+    on_i386(&shr("ashr", "slt", 3, 5), &["icmp slt i32 %x, 40"]);
+    on_i386(&shr("ashr", "ugt", 3, 5), &["icmp ugt i32 %x, 47"]);
+    on_i386(&shr("ashr", "sgt", 3, 5), &["icmp sgt i32 %x, 47"]);
+    // Equality: the shift becomes a mask of the high bits.
+    on_i386(&shr("lshr", "eq", 3, 5), &["and i32 %x, -8", "icmp eq i32 %0, 40"]);
 }

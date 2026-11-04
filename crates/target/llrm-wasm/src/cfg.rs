@@ -137,4 +137,12 @@ impl LoopGraph for Cfg {
     ) -> impl Iterator<Item = BlockId> {
         self.preds[block.0 as usize].iter().copied()
     }
+
+    /// MIR blocks have no special terminators: any block can take hoisted code.
+    fn is_legal_to_hoist_into(
+        &self,
+        _block: BlockId,
+    ) -> bool {
+        true
+    }
 }

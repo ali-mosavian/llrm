@@ -189,6 +189,7 @@ impl Options {
             self.spills_extended,
             self.pipeline.stable_loads,
             self.pipeline.has_min_size,
+            self.pipeline.prices_bytes(),
         )
     }
 }
@@ -355,9 +356,10 @@ pub fn compiled_module(
     name: &str,
     options: &Options,
 ) -> Result<masm::Module, String> {
-    let layout = options.arch.layout().datalayout;
+    let description = options.arch.layout();
+    let layout = description.datalayout;
     match module.datalayout.as_deref() {
-        Some(stated) if stated == layout => {}
+        Some(stated) if stated == layout || description.platforms.iter().any(|one| one.datalayout == stated) => {}
         Some(stated) => {
             return Err(format!("the module's datalayout `{stated}` is not {}'s `{layout}`", options.arch.name()));
         }

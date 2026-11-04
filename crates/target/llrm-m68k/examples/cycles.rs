@@ -5,6 +5,11 @@
 //! and the 68020, cache case). Needs
 //! `$GCC_M68K` (the unpacked m68k binutils, for `objdump`: the pin's
 //! `llvm-objdump` shows `addq` and `tst` as `<unknown>`) and `qemu-m68k`.
+//! `cycles --exe PATH...`: prices each prebuilt ELF: every executed instruction
+//! outside the functions `h_*`, `main` and `_start`, per processor of
+//! `CYCLES_CPUS`, and per call (`CYCLES_CALLS`, default 3000). qemu runs
+//! `CYCLES_QEMU_CPU` (default `m68020` for a path containing `68020`, else
+//! `m68000`). The clocks are the tables' instruction clocks, not bus cycles.
 //! A `*` marks a total that holds a data-dependent term at its bound; `?`
 //! counts executed instructions the tables do not cover.
 
@@ -40,27 +45,112 @@ fn models() -> Vec<Model> {
 }
 
 /// The program counters qemu executed, in order.
-fn trace(exe: &Path) -> Vec<u32> {
+fn trace(
+    exe: &Path,
+    cap: usize,
+    cpu: &str,
+) -> Vec<u32> {
     use std::io::{BufRead, BufReader};
     let mut child = Command::new("timeout")
-        .args(["10", "qemu-m68k", "-cpu", "m68000", "-one-insn-per-tb", "-d", "exec", "-D", "/dev/stderr"])
+        .args(["120", "qemu-m68k", "-cpu", cpu, "-one-insn-per-tb", "-d", "exec", "-D", "/dev/stderr"])
         .arg(exe)
         .stderr(Stdio::piped())
         .spawn()
         .expect("timeout runs qemu-m68k");
     let mut pcs = Vec::new();
     for line in BufReader::new(child.stderr.take().unwrap()).lines().map_while(Result::ok) {
+        // a trace that ends in a fault is a short program, not a cheap one
+        assert!(
+            !line.contains("uncaught target signal"),
+            "{} faulted on {cpu} after {} instructions: {line} (CYCLES_QEMU_CPU names the CPU to run on)",
+            exe.display(),
+            pcs.len()
+        );
         let Some(fields) = line.split_once('[').and_then(|(_, rest)| rest.split_once(']')) else { continue };
         if let Some(pc) = fields.0.split('/').nth(1).and_then(|pc| u32::from_str_radix(pc, 16).ok()) {
             pcs.push(pc);
         }
-        if pcs.len() > CAP {
+        if pcs.len() > cap {
             child.kill().ok();
             break;
         }
     }
     child.wait().ok();
     pcs
+}
+
+/// The qemu CPU an executable runs on: the newest of 68020, 68030, 68040 and
+/// 68060 its path names, else the 68000.
+fn qemu_cpu_for(path: &str) -> &'static str {
+    ["68060", "68040", "68030", "68020"]
+        .into_iter()
+        .find(|tag| path.contains(tag))
+        .map_or(
+            "m68000",
+            |tag| match tag {
+                "68060" => "m68060",
+                "68040" => "m68040",
+                "68030" => "m68030",
+                _ => "m68020",
+            },
+        )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::process::Command;
+
+    use super::{qemu_cpu_for, trace};
+
+    /// A 68020 program (`divu.l`) assembled and linked with the m68k binutils;
+    /// `None` without `$GCC_M68K`.
+    fn program_with_divu_l() -> Option<std::path::PathBuf> {
+        let root = std::env::var("GCC_M68K").ok().filter(|root| !root.is_empty())?;
+        let dir = std::env::temp_dir().join(format!("cycles-fault-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (source, object, exe) = (dir.join("p.s"), dir.join("p.o"), dir.join("p.exe"));
+        std::fs::write(
+            &source,
+            ".globl _start\n_start:\n\tmoveq #5,%d0\n\tmoveq #3,%d1\n\tdivu.l %d1,%d0\n\tmoveq #1,%d0\n\tmoveq #0,%d1\n\ttrap #0\n",
+        )
+        .unwrap();
+        let tool = |name: &str| {
+            let mut command = Command::new(format!("{root}/usr/bin/m68k-linux-gnu-{name}"));
+            command.env("LD_LIBRARY_PATH", format!("{root}/usr/lib/x86_64-linux-gnu"));
+            command
+        };
+        assert!(tool("as").args(["-m68020", "-o"]).arg(&object).arg(&source).status().unwrap().success());
+        assert!(tool("ld").arg("-o").arg(&exe).arg(&object).status().unwrap().success());
+        Some(exe)
+    }
+
+    /// The 68020 program on `m68000` faulted at `divu.l`; its trace of three
+    /// instructions was priced as the whole program, with no error.
+    #[test]
+    #[should_panic(expected = "faulted on m68000")]
+    fn a_trace_that_ends_in_a_fault_is_refused() {
+        let Some(exe) = program_with_divu_l() else { panic!("faulted on m68000 (skipped: no GCC_M68K)") };
+        trace(&exe, 1000, "m68000");
+    }
+
+    #[test]
+    fn the_same_program_traces_on_the_cpu_it_needs() {
+        let Some(exe) = program_with_divu_l() else { return };
+        assert!(trace(&exe, 1000, "m68020").len() >= 6);
+    }
+
+    /// A 68040 or 68060 program ran on `m68000`, faulted at its first 68020+
+    /// instruction and was priced for the few it had executed (339
+    /// instructions, 0.1 clock a call), with no error.
+    #[test]
+    fn a_path_naming_a_newer_cpu_runs_on_it() {
+        assert_eq!(qemu_cpu_for("/t/f.68000"), "m68000");
+        assert_eq!(qemu_cpu_for("/t/f.68020"), "m68020");
+        assert_eq!(qemu_cpu_for("/t/f.68030"), "m68030");
+        assert_eq!(qemu_cpu_for("/t/f.68040.exe"), "m68040");
+        assert_eq!(qemu_cpu_for("/t/sf32-68060"), "m68060");
+        assert_eq!(qemu_cpu_for("/t/plain"), "m68000");
+    }
 }
 
 /// `CYCLES_EXE=program CYCLES_FUNCS=a,b,c`: price a whole program (a
@@ -75,6 +165,7 @@ fn functions() -> Vec<String> {
 fn listing(
     gcc: &Path,
     exe: &Path,
+    harness: bool,
 ) -> (Vec<(u32, String)>, Vec<std::ops::Range<u32>>) {
     let out = Command::new(gcc.join("usr/bin/m68k-linux-gnu-objdump"))
         .env("LD_LIBRARY_PATH", gcc.join("usr/lib/x86_64-linux-gnu"))
@@ -92,7 +183,9 @@ fn listing(
             if let Some(start) = open.take() {
                 ranges.push(start..address);
             }
-            if wanted.iter().any(|one| one == name) {
+            // `harness`: every function but the test harness's own
+            let outside = harness && !(name.starts_with("h_") || name == "main" || name == "_start");
+            if outside || wanted.iter().any(|one| one == name) {
                 open = Some(address);
             }
             continue;
@@ -118,8 +211,9 @@ fn price(
     gcc: &Path,
     exe: &Path,
     models: &[Model],
+    harness: bool,
 ) -> Total {
-    let (lines, ranges) = listing(gcc, exe);
+    let (lines, ranges) = listing(gcc, exe, harness);
     let at: HashMap<u32, (usize, &str)> = lines
         .iter()
         .enumerate()
@@ -127,7 +221,13 @@ fn price(
             (*address, (lines.get(index + 1).map_or(2, |next| next.0 - address) as usize, text.as_str()))
         })
         .collect();
-    let pcs = trace(exe);
+    let (cap, cpu) = if harness {
+        let cpu = std::env::var("CYCLES_QEMU_CPU").unwrap_or_else(|_| qemu_cpu_for(&exe.to_string_lossy()).to_owned());
+        (200_000_000, cpu)
+    } else {
+        (CAP, "m68000".to_owned())
+    };
+    let pcs = trace(exe, cap, &cpu);
     let mut total = Total { insns: 0, clocks: vec![0; models.len()], partial: false, unknown: 0 };
     let mut seen = std::collections::HashSet::new();
     // CYCLES_LISTING=1: each distinct executed instruction, its count and
@@ -226,13 +326,59 @@ fn assembled(
     Some(std::fs::read(raw).unwrap())
 }
 
+/// The run's directory, deleted when the run ends however it ends. Not the
+/// shared `scratch` module: `matrix` includes this file as a module of its own.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new() -> Scratch {
+        let dir = std::env::temp_dir().join(format!("llrm-m68k-cycles-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        Scratch(dir)
+    }
+}
+
+impl std::ops::Deref for Scratch {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0).ok();
+    }
+}
+
 fn main() {
     let gcc = PathBuf::from(std::env::var("GCC_M68K").expect("GCC_M68K: the unpacked m68k binutils root"));
-    let dir = std::env::temp_dir().join(format!("llrm-m68k-cycles-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new();
     let models = models();
+    if std::env::args().nth(1).as_deref() == Some("--exe") {
+        let calls: f64 = std::env::var("CYCLES_CALLS").ok().and_then(|n| n.parse().ok()).unwrap_or(3000.0);
+        let heads: Vec<String> = models
+            .iter()
+            .map(|cpu| {
+                let name = format!("{cpu:?}");
+                format!("{0} clk | {0} clk/call", name.trim_start_matches('M'))
+            })
+            .collect();
+        println!("| exe | insns | {} |", heads.join(" | "));
+        for path in std::env::args().skip(2) {
+            let total = price(&gcc, Path::new(&path), &models, true);
+            let mark = if total.partial { "*" } else { "" };
+            let unknown = if total.unknown > 0 { format!(" ?{}", total.unknown) } else { String::new() };
+            let cells: Vec<String> =
+                total.clocks.iter().map(|one| format!("{one}{mark}{unknown} | {:.1}", *one as f64 / calls)).collect();
+            let name = Path::new(&path).file_name().map_or(path.clone(), |n| n.to_string_lossy().into_owned());
+            println!("| {name} | {} | {} |", total.insns, cells.join(" | "));
+        }
+        return;
+    }
     if let Some(exe) = std::env::var_os("CYCLES_EXE") {
-        let total = price(&gcc, Path::new(&exe), &models);
+        let total = price(&gcc, Path::new(&exe), &models, false);
         let clocks: Vec<String> = models.iter().zip(&total.clocks).map(|(cpu, clk)| format!("{cpu:?} {clk}")).collect();
         println!(
             "insns {} clocks {} unpriced {} partial {}",
@@ -297,7 +443,7 @@ fn main() {
                     Command::new("timeout").args(["10", "qemu-m68k", "-cpu", "m68000"]).arg(&exe).status().unwrap();
                 assert_eq!(status.code(), Some(expected), "{name}: the llc's code gives another result");
             }
-            let total = price(&gcc, &exe, &models);
+            let total = price(&gcc, &exe, &models, false);
             let mark = if total.partial { "*" } else { "" };
             let unknown = if total.unknown > 0 { format!(" ?{}", total.unknown) } else { String::new() };
             let clocks: Vec<String> = total.clocks.iter().map(|one| format!("{one}{mark}{unknown}")).collect();
@@ -305,5 +451,4 @@ fn main() {
         }
         println!("| {name} | {} |", cells.join(" | "));
     }
-    std::fs::remove_dir_all(&dir).ok();
 }

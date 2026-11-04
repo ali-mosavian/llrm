@@ -4,6 +4,8 @@
 # list and refuses a group the .peep has that is not here, or lacks its form.
 extensions body
 zeroed_loads body
+split_loads body
+narrowed_copies body
 pushed_constants body
 pushes body
 narrowed_moves body

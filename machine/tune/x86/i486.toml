@@ -12,6 +12,8 @@ set_ratio_size = 3
 clear_ratio_size = 2
 jump_table = 5
 cache_line = 16
+# Clocks to fill one line: a 4-dword burst, 2-1-1-1 at zero wait states (Intel486 DX data sheet, burst cycle) [U: datasheet not in the repo].
+line_fill_clocks = 5
 pairing = 0
 
 [clocks]

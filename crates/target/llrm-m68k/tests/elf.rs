@@ -165,8 +165,14 @@ fn data_bss_weak_and_undefined_symbols_are_as_llvm_mc_writes_them() {
         eprintln!("the pin's llvm-mc is not built: not run");
         return;
     };
-    let symbol =
-        |name: &str, binding, definition, size| Symbol { name: name.into(), binding, definition, size, group: None };
+    let symbol = |name: &str, binding, definition, size| Symbol {
+        name: name.into(),
+        binding,
+        definition,
+        size,
+        group: None,
+        visibility: Default::default(),
+    };
     let section = |name: &str, role, image: Vec<u8>, relocs| Section {
         name: name.into(),
         role,

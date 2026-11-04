@@ -1030,7 +1030,7 @@ mod tests {
     /// defined"). The definition goes and the readers read it as undef.
     #[test]
     fn test_an_implicit_def_is_gone_after_allocation_and_its_readers_read_undef() {
-        let held = |value: u32| Loc::Held(crate::model::ir::Held { value, width: 4 });
+        let held = |value: u32| Loc::Held(crate::model::ir::Held { value, width: 4, offset: 0 });
         let undef = Insn::new(
             0,
             Some((0, 0)),
