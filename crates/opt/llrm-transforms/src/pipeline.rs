@@ -503,7 +503,7 @@ impl Options {
             "sroa" | "promote" => self.promote,
             "lsr" | "canonfreeze" | "maskscale" => self.strength && self.lsr,
             "indvars" | "window" | "gepoffset" => self.strength,
-            "cgpaddr" => self.strength && self.cgpaddr,
+            "cgpaddr" | "cgpselectarms" => self.strength && self.cgpaddr,
             "extload" => self.extload,
             "typepromotion" => self.strength && self.typepromotion,
             "unroll" => self.unroll,
@@ -1375,6 +1375,10 @@ pub fn recorded(
     // arithmetic of a block's accesses, made in the block that uses them.
     if applied.options.wanted("cgpaddr") {
         manager.add(cgpaddr::CgpAddr);
+    }
+    // DEVIATE CS2, at the speed rate.
+    if applied.options.prices_bytes() && applied.options.wanted("cgpselectarms") {
+        manager.add(cgpselect::SelectArms);
     }
     // After cgpaddr, with the other passes that make the forms isel sees:
     // the pin's DAGCombiner makes one extending load for a load and its

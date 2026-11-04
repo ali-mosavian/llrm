@@ -43,6 +43,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
+use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
 
 use crate::edges::split_block_at;
 
@@ -287,6 +288,35 @@ fn branched(
         && function.users(value).has_one_use()
     {
         function.move_to(inner, Position::Before(moved)).expect("a placed instruction");
+    }
+}
+
+/// [`select_arms_sunk`] as a pass, after `cgpaddr`, at the speed rate only
+/// (-O2 and -O3: -O1 and -Os are strict bytes and the branch form is up to 3 B
+/// longer), where the target states `sinks_select_arms` and has no
+/// conditional move.
+pub struct SelectArms;
+
+impl FunctionPass for SelectArms {
+    fn name(&self) -> &'static str {
+        "cgpselectarms"
+    }
+
+    fn adds_memory_operations(&self) -> bool {
+        false
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut passes::Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let wanted = analyses.outer().target().tti().is_some_and(|tti| !tti.has_cmov() && tti.sinks_select_arms());
+        if wanted && select_arms_sunk(unit.context, unit.function) {
+            PreservedAnalyses::none()
+        } else {
+            PreservedAnalyses::all()
+        }
     }
 }
 
