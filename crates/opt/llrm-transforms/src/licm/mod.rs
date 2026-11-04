@@ -138,7 +138,14 @@ impl LoopCtx<'_> {
         &self,
         inst: InstId,
     ) -> bool {
-        let block = self.state.moved.borrow().get(&inst).copied().or_else(|| self.function.parent(inst));
+        let moved = self.state.moved.borrow();
+        let block = if moved.is_empty() {
+            None
+        } else {
+            llrm_mir::counts::bump(llrm_mir::counts::Event::LoopCtxMovedLookups);
+            moved.get(&inst).copied()
+        }
+        .or_else(|| self.function.parent(inst));
         block.is_some_and(|block| self.contains_block(block))
     }
 
