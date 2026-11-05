@@ -390,6 +390,9 @@ fn allocate_once(
     two_address(&mut function);
     let held = read_bytes_through_their_pairs(&mut function, strict);
     use_the_shift_carry(&mut function);
+    if std::env::var("LLRM_NO_Z80_ADC").is_err() {
+        crate::carry::use_the_carry(&mut function);
+    }
     sink_copies_before_allocation(&mut function);
     if std::env::var("LLRM_NO_Z80_FORWARD").is_err() {
         crate::forward::read_pairs_from_their_registers(&mut function);
