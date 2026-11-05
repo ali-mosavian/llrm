@@ -430,6 +430,62 @@ impl llrm_target::Target for M64 {
 
 #[cfg(test)]
 mod tests {
+    /// The `[bytes]` table was a flat-32 copy (alu_rr 4, mov_rm 6, x87 6), so
+    /// the size estimator over-counted x86-64 code ~1.45x and the unroll rate
+    /// was priced against it. Each form must be the length iced encodes.
+    #[test]
+    fn test_every_bytes_form_is_the_length_iced_encodes() {
+        use iced_x86::{Code, Encoder, Instruction, MemoryOperand, Register::*};
+        let slot = || MemoryOperand::with_base_displ(RBP, -8);
+        let forms: Vec<(&str, Instruction)> = vec![
+            ("alu_rr", Instruction::with2(Code::Add_r64_rm64, RAX, RCX).unwrap()),
+            ("xchg_rr", Instruction::with2(Code::Xchg_rm64_r64, RAX, RCX).unwrap()),
+            ("imul_r32", Instruction::with2(Code::Imul_r64_rm64, RAX, RCX).unwrap()),
+            ("smul_min_w4", Instruction::with2(Code::Imul_r64_rm64, RAX, RCX).unwrap()),
+            ("idiv_r32", Instruction::with1(Code::Idiv_rm64, RCX).unwrap()),
+            ("shift_ri", Instruction::with2(Code::Shl_rm64_imm8, RAX, 3u32).unwrap()),
+            ("lea", Instruction::with2(Code::Lea_r64_m, RAX, slot()).unwrap()),
+            ("movzx", Instruction::with2(Code::Movzx_r32_rm8, EAX, CL).unwrap()),
+            ("setcc", Instruction::with1(Code::Sete_rm8, AL).unwrap()),
+            ("mov_rr", Instruction::with2(Code::Mov_r64_rm64, RAX, RCX).unwrap()),
+            ("mov_rm", Instruction::with2(Code::Mov_r64_rm64, RAX, slot()).unwrap()),
+            ("mov_mr", Instruction::with2(Code::Mov_rm64_r64, slot(), RAX).unwrap()),
+            ("mov_mi", Instruction::with2(Code::Mov_rm64_imm32, slot(), 1000i32).unwrap()),
+            ("alu_mr", Instruction::with2(Code::Add_rm64_r64, slot(), RAX).unwrap()),
+            ("jcc", Instruction::with_branch(Code::Je_rel8_64, 2).unwrap()),
+            ("call_near", Instruction::with_branch(Code::Call_rel32_64, 0x1000).unwrap()),
+            ("ret_near", Instruction::with(Code::Retnq)),
+            ("pop_r", Instruction::with1(Code::Pop_r64, RAX).unwrap()),
+            ("push_r", Instruction::with1(Code::Push_r64, RAX).unwrap()),
+            ("alu_ri", Instruction::with2(Code::Add_rm64_imm8, RAX, 8i32).unwrap()),
+            ("ret_pop", Instruction::with1(Code::Retnq_imm16, 8u32).unwrap()),
+            ("x87_add", Instruction::with2(Code::Fadd_st0_sti, ST0, ST1).unwrap()),
+            ("x87_add_m", Instruction::with1(Code::Fadd_m32fp, slot()).unwrap()),
+            ("x87_mul", Instruction::with2(Code::Fmul_st0_sti, ST0, ST1).unwrap()),
+            ("x87_div", Instruction::with2(Code::Fdiv_st0_sti, ST0, ST1).unwrap()),
+            ("x87_load", Instruction::with1(Code::Fld_m32fp, slot()).unwrap()),
+            ("x87_store", Instruction::with1(Code::Fstp_m32fp, slot()).unwrap()),
+            ("x87_release", Instruction::with1(Code::Fstp_sti, ST0).unwrap()),
+            ("sse_arith", Instruction::with2(Code::Addsd_xmm_xmmm64, XMM0, XMM1).unwrap()),
+            ("sse_sqrt", Instruction::with2(Code::Sqrtsd_xmm_xmmm64, XMM0, XMM1).unwrap()),
+            ("sse_move", Instruction::with2(Code::Movsd_xmm_xmmm64, XMM0, slot()).unwrap()),
+            ("sse_compare", Instruction::with2(Code::Ucomisd_xmm_xmmm64, XMM0, XMM1).unwrap()),
+            ("sse_logic", Instruction::with2(Code::Xorps_xmm_xmmm128, XMM0, XMM1).unwrap()),
+            ("rep_stos", Instruction::with_rep_stosq(64)),
+            ("mov_ri", Instruction::with2(Code::Mov_r32_imm32, EAX, 1000i32).unwrap()),
+            ("rep_movs", Instruction::with_rep_movsq(64)),
+        ];
+        let text = include_str!("opcosts.txt");
+        let table = text.split("[bytes]").nth(1).unwrap().split("\n[").next().unwrap();
+        let named = table.lines().filter(|line| !line.starts_with('#') && line.contains('=')).count();
+        assert_eq!(named, forms.len(), "a form in [bytes] has no encoding here");
+        for (form, instruction) in forms {
+            let mut encoder = Encoder::new(64);
+            let length = encoder.encode(&instruction, 0x1000).unwrap_or_else(|error| panic!("{form}: {error}"));
+            assert_eq!(OPCOSTS.bytes(form), Some(length as i64), "{form}");
+        }
+    }
+
     /// x86-64 described no x87 registers, so an x87 value (a QB `fatan`, a
     /// `long double`) had no register class and the DAG path refused it.
     #[test]
