@@ -459,10 +459,11 @@ pub fn assembled_by(
     }
     let flat_elf = arch.object().default == llrm_target::object::Format::Elf && arch.object().code_model().flat();
     // A flat ELF object keeps the pool in mergeable sections, with no gap to fill.
+    let entries = pool.borrow();
     let pooled = if flat_elf {
-        crate::backend::constpool::wide_first(pool.borrow().entries())
+        crate::backend::constpool::wide_first(entries.entries())
     } else {
-        crate::backend::constpool::gap_filled(pool.borrow().entries(), masm::data_size(&data, 0))
+        crate::backend::constpool::gap_filled(entries.entries(), masm::data_size(&data, 0))
     };
     for (bytes, id) in pooled {
         let name = format!("$K{id}");

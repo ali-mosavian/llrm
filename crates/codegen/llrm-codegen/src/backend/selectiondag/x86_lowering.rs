@@ -1573,7 +1573,8 @@ fn combine_sub(
         .or_else(|| lea_adds.then(|| combine_masked_xor_difference(dag, node)).flatten())
 }
 
-/// DEVIATE SD448 (exit 2026-11-14, when the pin's `convertToThreeAddressWithLEA`
+/// DEVIATE SD448 (exit 2026-11-20, last extension: then removed by translating
+/// the pin, or a row with a new owner; when the pin's `convertToThreeAddressWithLEA`
 /// takes 8-bit adds on 32-bit targets, TA-10): `sub C, (xor X, M)` is `add X,
 /// C - M` when `M` is a low-bit mask and `X` has no bits above it, so the
 /// `xor` is `M - X`. `__floatsisf`'s shift amount `26 - (n ^ 31)` is `n - 5`:
