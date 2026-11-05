@@ -3,7 +3,8 @@
 ; r <<= 1", as the C loop does. The operands go through these cells, so the routine does not depend on the compiler's argument layout.
 ; r lives in hl, de, hl', de' (low word first); mb stays in memory. A step subtracts mb word by word and adds it back when the subtract borrowed;
 ; the quotient bit rolls into a, with a set bit as the sentinel that tells when a byte is full (the first byte holds one bit, 57 = 1 + 7 * 8); a'
-; counts the stored bytes. Scratch: a, bc, de, hl, iy and the alternate set.
+; counts the stored bytes. The top words of r and mb are compared first (ix points at mb): only when they are equal does the subtract decide.
+; Scratch: a, bc, de, hl, iy and the alternate set; ix is kept.
 
 	.module div64
 	.area _DATA
@@ -21,10 +22,26 @@ __sf_div64::
 	ld	de,(_sf_d64_ma+6)
 	exx
 	ld	iy,#_sf_d64_q+7
+	push	ix
+	ld	ix,#_sf_d64_mb
 	ld	a,#8
 	ex	af,af'
 	ld	a,#0x80
-1$:	or	a,a		; r - mb, a word at a time, the borrow ripples through
+1$:	exx			; the top words of r and mb decide almost every step
+	ld	c,a
+	ld	a,d
+	cp	a,7(ix)
+	jr	nz,5$
+	ld	a,e
+	cp	a,6(ix)
+	jr	nz,5$
+	ld	a,c		; equal: the whole subtract decides
+	exx
+	jr	8$
+5$:	ld	a,c
+	exx
+	jr	c,9$		; top word below: r < mb, the bit is 0 and nothing to subtract
+8$:	or	a,a		; r - mb, a word at a time, the borrow ripples through
 	ld	bc,(_sf_d64_mb)
 	sbc	hl,bc
 	ex	de,hl
@@ -54,7 +71,7 @@ __sf_div64::
 	adc	hl,bc
 	ex	de,hl
 	exx
-	or	a,a
+9$:	or	a,a
 	jr	3$
 2$:	scf
 3$:	rla			; the bit in, the sentinel out
@@ -86,4 +103,5 @@ __sf_div64::
 	ld	(_sf_d64_r+4),hl
 	ld	(_sf_d64_r+6),de
 	exx
+	pop	ix
 	ret
