@@ -143,6 +143,14 @@ fn _undef_supers(body: &LirBody) -> BTreeSet<usize> {
             }
         }
     }
+    // Liveness is only asked of a value some def writes narrower than its
+    // widest operand; most bodies have none.
+    let narrower_def = |held: &Held| u32::from(held.width) < widest.get(&held.value).copied().unwrap_or(0);
+    if !body.blocks.iter().flat_map(|block| block.insns.iter()).any(|one| {
+        one.what.iter().flat_map(|what| &what.dests).any(|place| matches!(place, Loc::Held(held) if narrower_def(held)))
+    }) {
+        return BTreeSet::new();
+    }
     let index = ranges::indexed_shared(body);
     let live = ranges::intervals_shared(body, Some(&index));
     let mut found = BTreeSet::new();
@@ -152,7 +160,7 @@ fn _undef_supers(body: &LirBody) -> BTreeSet<usize> {
             let slot = index.slot(block, position);
             for place in &what.dests {
                 let Loc::Held(held) = place else { continue };
-                let narrower = u32::from(held.width) < widest.get(&held.value).copied().unwrap_or(0);
+                let narrower = narrower_def(held);
                 let live_before = live
                     .get(&held.value)
                     .is_some_and(|value| value.segments.iter().any(|run| run.start <= slot && slot < run.end));
@@ -453,4 +461,47 @@ fn _register_of(
         return Ok(Loc::Reg(Reg { register: *register, width: 1 }));
     }
     Ok(Loc::Reg(Reg { register: regs.named(*register, i64::from(value.width)), width: value.width }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn held(
+        value: u32,
+        width: u8,
+    ) -> Loc {
+        Loc::Held(Held { value, width: width.into(), offset: 0 })
+    }
+
+    fn body_of(insns: Vec<Arc<Insn>>) -> LirBody {
+        let block = LirBlock::new(0, insns);
+        LirBody::new("t", 0, lir::shared(vec![block]), IndexMap::default(), IndexMap::default())
+    }
+
+    fn mov(
+        at: i64,
+        dest: Loc,
+        source: Loc,
+    ) -> Arc<Insn> {
+        let what = crate::model::ir::Semantics { name: Some("mov".into()), dests: vec![dest], sources: vec![source], ..crate::model::ir::Semantics::new(Operation::Move) };
+        Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![], vec![]))
+    }
+
+    /// Every operand of a value one width: `_undef_supers` worked out the body's
+    /// intervals anyway (50 M of memory_expansion's 8.98 G, rewrite's liveness).
+    #[test]
+    fn a_body_without_narrow_defs_works_out_no_intervals() {
+        let body = body_of(vec![mov(0, held(1, 4), held(2, 4)), mov(1, held(3, 4), held(1, 4))]);
+        assert!(_undef_supers(&body).is_empty());
+        assert_eq!(ranges::worked(&body), 0);
+    }
+
+    /// The narrow def of an otherwise wide value still asks.
+    #[test]
+    fn a_narrow_def_of_a_wide_value_is_found_undef() {
+        let body = body_of(vec![mov(0, held(1, 1), held(2, 4)), mov(1, held(3, 4), held(1, 4))]);
+        assert_eq!(_undef_supers(&body).len(), 1);
+        assert_eq!(ranges::worked(&body), 1);
+    }
 }
