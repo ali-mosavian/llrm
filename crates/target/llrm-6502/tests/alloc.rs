@@ -2981,3 +2981,14 @@ fn a_reload_before_a_jump_goes() {
         "  sta rc5\n  sta rc6\n  jmp L\n"
     );
 }
+
+/// x16basic-c `strs.c` -O2 (`fn_chrd`) did not compile: a word used as a
+/// pointer has its high byte stored elsewhere. The byte was read as a cell
+/// nothing defined, and the coalescer panicked ("a unique value").
+#[test]
+fn the_high_byte_of_a_pointer_word_is_read_from_its_pair() {
+    let ir = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/pointer_high_byte.ll")).unwrap();
+    let text = compile_at(&ir, "f", 16, Tuning::SPEED);
+    assert!(text.contains("sta facmoh"), "{text}");
+    assert!(text.contains("sta (rc"), "{text}");
+}
