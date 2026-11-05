@@ -90,6 +90,18 @@ impl M68k {
 }
 
 impl Tti for M68k {
+    /// `UnrollingPreferences::Threshold` of the full unroll, 32 where the pin's
+    /// is 300: an iteration's loop control is about 24 clk on the 68000 (an
+    /// `addq`, a `cmp` and a taken `bcc`), 6 B at 4 clk/B, so a copy of the
+    /// body pays for itself only when the body is a couple of instructions.
+    /// The 400% boost stays, which keeps a hot small loop unrolled (crc16
+    /// -O2: 3894 against 5264 clk). 300 seeds -O2 68020: 669352 -> 516950 B,
+    /// the 24 programs unchanged. DEVIATE: the pin's target sets none. Exit:
+    /// review 2026-11-20.
+    fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
+        (Some(32), Some(400))
+    }
+
     fn name(&self) -> &'static str {
         "M68k"
     }
