@@ -807,6 +807,15 @@ impl Printer<'_> {
                 let slot = self.frame_slots(index, *offset, 1)?.remove(0);
                 self.push(format!("ld {slot}, {register}"));
             }
+            "RELOAD8L" => {
+                let index = self.frame_index(inst, 1)?;
+                let register = name_of(self, 0)?;
+                let Some(Operand::Imm(offset)) = inst.operands.get(2) else {
+                    return Err("a lane reload with no offset".to_owned());
+                };
+                let slot = self.frame_slots(index, *offset, 1)?.remove(0);
+                self.push(format!("ld {register}, {slot}"));
+            }
             "SPILL16" | "RELOAD16" => {
                 let (index, register) =
                     if op == "SPILL16" { (self.frame_index(inst, 0)?, 1) } else { (self.frame_index(inst, 1)?, 0) };
