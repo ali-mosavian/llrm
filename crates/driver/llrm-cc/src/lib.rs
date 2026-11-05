@@ -492,6 +492,15 @@ pub fn target_named<'a>(
 }
 
 /// `llrm-llc`'s argument list for one translated unit.
+/// The build's flags for clang: all of them, but the code model on a target
+/// whose backend takes it (clang refuses it there).
+pub fn clang_flags(
+    target: &Target,
+    build: &Build,
+) -> Vec<String> {
+    build.clang.iter().filter(|flag| !(target.llc_mcmodel && flag.starts_with("-mcmodel="))).cloned().collect()
+}
+
 pub fn llc_args(
     target: &Target,
     build: &Build,
@@ -692,9 +701,7 @@ fn build(
                 let ir = scratch.join(format!("{}.ll", stem(path)));
                 let mut args = target.clang.clone();
                 args.extend(resource.iter().cloned());
-                args.extend(
-                    build.clang.iter().filter(|flag| !(target.llc_mcmodel && flag.starts_with("-mcmodel="))).cloned(),
-                );
+                args.extend(clang_flags(target, build));
                 args.extend(
                     ["-S", "-emit-llvm", "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone", "-o"]
                         .map(String::from),

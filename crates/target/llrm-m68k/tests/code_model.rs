@@ -28,6 +28,12 @@ fn asm(
 }
 
 #[test]
+fn an_unknown_model_is_refused_not_dropped() {
+    assert!(CodeModel::parse("huge").is_err());
+    assert_eq!(CodeModel::parse("medium"), Ok(CodeModel::Medium));
+}
+
+#[test]
 fn small_is_pc_relative_at_every_cpu() {
     for cpu in ["68000", "68020"] {
         assert!(asm(cpu, CodeModel::Small).contains("%pc"), "{cpu}");
