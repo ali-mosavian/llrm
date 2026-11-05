@@ -207,6 +207,9 @@ pub fn operation(
         Opcode::Store { .. } => costs.store,
         Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor)
         | Opcode::ICmp(_) => costs.add,
+        Opcode::Cast(CastOp::FPToSI | CastOp::FPToUI | CastOp::SIToFP | CastOp::UIToFP) if costs.convert > 0 => {
+            costs.convert
+        }
         Opcode::Cast(_) | Opcode::ExtractValue(_) | Opcode::InsertValue(_) | Opcode::Phi | Opcode::Freeze => {
             costs.r#move
         }

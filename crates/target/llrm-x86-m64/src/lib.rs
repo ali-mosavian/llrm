@@ -479,6 +479,7 @@ mod tests {
             ("x87_release", Instruction::with1(Code::Fstp_sti, ST0).unwrap(), Instruction::with1(Code::Fstp_sti, ST0).unwrap()),
             ("sse_arith", two(Code::Addsd_xmm_xmmm64, XMM0, XMM1), two(Code::Addsd_xmm_xmmm64, XMM8, XMM9)),
             ("sse_arith_m", rm(Code::Addsd_xmm_xmmm64, XMM0, near()), rm(Code::Addsd_xmm_xmmm64, XMM8, far())),
+            ("sse_convert", two(Code::Cvttss2si_r32_xmmm32, EAX, XMM0), rm(Code::Cvtsi2ss_xmm_rm32, XMM8, far())),
             ("sse_sqrt", two(Code::Sqrtsd_xmm_xmmm64, XMM0, XMM1), two(Code::Sqrtsd_xmm_xmmm64, XMM8, XMM9)),
             ("sse_move", two(Code::Movaps_xmm_xmmm128, XMM0, XMM1), two(Code::Movsd_xmm_xmmm64, XMM8, XMM9)),
             ("sse_load", rm(Code::Movsd_xmm_xmmm64, XMM0, near()), rm(Code::Movsd_xmm_xmmm64, XMM8, far())),
@@ -536,6 +537,7 @@ mod tests {
         assert_eq!(sized.float_store, OPCOSTS.bytes("sse_store").unwrap());
         assert_eq!(sized.float_load_folded, 3);
         assert_eq!(sized.float_release, 0);
+        assert_eq!(sized.convert, OPCOSTS.bytes("sse_convert").unwrap());
     }
 
     /// `object()` and the runtime tables are parsed once and kept; each must

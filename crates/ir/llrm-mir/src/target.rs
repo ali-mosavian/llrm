@@ -542,6 +542,10 @@ pub struct OperationCosts {
     /// truncates, and the word back); 0 where the target converts in one cheap
     /// instruction.
     pub float_to_int: i64,
+    /// A float and an integer converted either way in registers (`cvttss2si`,
+    /// `cvtsi2sd`), where a cast is more than the move it is priced as; 0 = a
+    /// move.
+    pub convert: i64,
     /// A float compare whose answer is in a register (x87 `fcom`, `fnstsw`,
     /// `sahf`); 0 where the target states none.
     pub float_compare: i64,
@@ -691,6 +695,7 @@ impl Default for OperationCosts {
             float_store: 1,
             float_release: 0,
             float_to_int: 0,
+            convert: 0,
             float_compare: 0,
             extend: 1,
             set: 1,

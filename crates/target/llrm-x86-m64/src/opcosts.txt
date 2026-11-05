@@ -38,6 +38,8 @@ float_store = x87_store
 float_release = x87_release
 # SSE converts in one instruction; the long double that uses x87 never reaches a select of conversions.
 float_to_int = 0
+# A register convert is clocked as the move it was priced as; its bytes are in [size] (row M64-FLOATCLK).
+convert = mov_rr
 float_compare = 0
 extend = movzx
 set = setcc
@@ -90,6 +92,7 @@ x87_store = 4
 x87_release = 2
 sse_arith = 4
 sse_arith_m = 7
+sse_convert = 5
 sse_sqrt = 4
 sse_move = 4
 sse_load = 8
@@ -119,3 +122,4 @@ float_load = sse_load
 float_load_folded = sse_arith_m - sse_arith
 float_store = sse_store
 float_release = 0
+convert = sse_convert

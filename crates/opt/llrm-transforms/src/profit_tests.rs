@@ -551,3 +551,25 @@ fn a_nest_of_loops_past_the_end_of_i64_saturates_its_weights() {
         .expect("products by branch");
     assert!(by_branch[&named(&format!("h{}", DEPTH - 1))] >= 1_000_000_000_000_000_000, "{by_branch:?}");
 }
+
+/// A float-to-integer cast was priced as a register move (3 B at x86-64) while
+/// `cvttss2si` is 5: an unrolled loop of ten of them was 20 B under its
+/// encodings, which with the float-load rows flipped fpbench -O2's last
+/// 6-trip nest to unrolled (+224 B).
+#[test]
+fn a_float_integer_cast_is_priced_at_the_targets_convert() {
+    let module = module("define i32 @f(float %x) {\nb0:\n  %r = fptosi float %x to i32\n  ret i32 %r\n}\n");
+    let f = function(&module);
+    let callees = llrm_mir::memory::callees(&module);
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let (_, cast) = f
+        .walk()
+        .find(|&(_, inst)| matches!(f.instruction(inst).opcode, llrm_mir::opcode::Opcode::Cast(_)))
+        .expect("the cast");
+    let price = |convert| {
+        let costs = OperationCosts { r#move: 3, convert, ..OperationCosts::default() };
+        operation(&module.context, &layout, f, &callees, cast, &costs)
+    };
+    assert_eq!(price(0), Some(3), "no convert stated: a move");
+    assert_eq!(price(5), Some(5), "the convert the target states");
+}

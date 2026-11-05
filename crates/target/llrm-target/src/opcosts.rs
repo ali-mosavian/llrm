@@ -79,6 +79,9 @@ fn cost(
     Ok(Cost::Sum(terms))
 }
 
+/// Prices a table may leave out (the operation is then priced as it was before the key existed).
+const OPTIONAL: [&str; 1] = ["convert"];
+
 const OPERATIONS: [&str; 43] = [
     "add",
     "multiply",
@@ -160,7 +163,7 @@ impl Description {
                 ));
                 continue;
             }
-            if !OPERATIONS.contains(&name.as_str()) {
+            if !OPERATIONS.contains(&name.as_str()) && !OPTIONAL.contains(&name.as_str()) {
                 return Err(format!("opcosts.txt:{}: no operation `{name}`", index + 1));
             }
             let cost = cost(value, index + 1)?;
@@ -262,6 +265,7 @@ impl Description {
                 "float_store" => out.float_store = value,
                 "float_release" => out.float_release = value,
                 "float_to_int" => out.float_to_int = value,
+                "convert" => out.convert = value,
                 "float_compare" => out.float_compare = value,
                 "extend" => out.extend = value,
                 "set" => out.set = value,
