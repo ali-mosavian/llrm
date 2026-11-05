@@ -321,13 +321,34 @@ fn plan_loop(
         // loop must not outweigh the instructions it saves in it (nbody -O1:
         // four `base + 32` against one compare).
         let folds_base_and_counter = tti.is_legal_addressing_mode(false, 0, true, 1);
+        // DEVIATE LG3-T: where the target's bytes are counted exactly, the
+        // pin's solution stays unless LG3's is fewer of them.
+        let by_bytes = tti.lsr_byte_model().map(|model| {
+            (pin.solution_bytes(se, &model, &pin_solution), lsr.solution_bytes(se, &model, &solution))
+        });
         let kept = !pin_solution.is_empty()
             && (solution.is_empty()
                 || pin_cost.is_less(tti, &cost)
-                || (!folds_base_and_counter
-                    && (cost.c.num_base_adds > pin_cost.c.num_base_adds
-                        || cost.c.insns + cost.c.setup_cost > pin_cost.c.insns + pin_cost.c.setup_cost)));
-        llrm_support::debug!("lsr", "  pin's space solved: kept {kept}");
+                || match by_bytes {
+                    Some((pin_bytes, lg3_bytes)) => pin_bytes <= lg3_bytes,
+                    None => {
+                        !folds_base_and_counter
+                            && (cost.c.num_base_adds > pin_cost.c.num_base_adds
+                                || cost.c.insns + cost.c.setup_cost > pin_cost.c.insns + pin_cost.c.setup_cost)
+                    }
+                });
+        llrm_support::debug!("lsr", "  pin's space solved: kept {kept}: pin {:?} against {:?}, bytes {by_bytes:?}", pin_cost.c, cost.c);
+        if llrm_support::debug::enabled("lsr-size") {
+            for (name, c, sol) in [("pin", &pin, &pin_solution), ("lg3", &lsr, &solution)] {
+                for (at, &chosen) in sol.iter().enumerate() {
+                    let f = &c.uses[at].formulae[chosen];
+                    llrm_support::debug!("lsr-size", "  {name} use {at} {:?}: {:?}", c.uses[at].kind, f);
+                    for reg in f.base_regs.iter().copied().chain(f.scaled_reg) {
+                        llrm_support::debug!("lsr-size", "      {reg:?} = {:?}", se.node(reg).kind);
+                    }
+                }
+            }
+        }
         if kept {
             lsr = pin;
             solution = pin_solution;
