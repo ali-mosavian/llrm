@@ -690,9 +690,6 @@ fn build(
                     ["-S", "-emit-llvm", "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone", "-o"]
                         .map(String::from),
                 );
-                if std::env::var_os("LLRM_CC_USELISTS").is_some() {
-                    args.extend(["-Xclang", "-emit-llvm-uselists"].map(String::from));
-                }
                 args.extend([ir.display().to_string(), path.clone()]);
                 run(&clang, &args)?;
                 let text = std::fs::read_to_string(&ir).map_err(|error| fail(format!("{}: {error}", ir.display())))?;
