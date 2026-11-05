@@ -457,6 +457,13 @@ pub trait Tti {
         0
     }
 
+    /// Whether one wider store of constants may start off its own size
+    /// (`allowsMemoryAccess` calls the unaligned store fast). False: it starts
+    /// at a multiple of its size.
+    fn merges_unaligned_stores(&self) -> bool {
+        false
+    }
+
     /// Whether a size build's loop rotation copies a header only when the copy
     /// is no bigger than the branches the rotation removes: the loop-closing
     /// jump and the header's own exit test, in `CodeSize`. False: the pass's
