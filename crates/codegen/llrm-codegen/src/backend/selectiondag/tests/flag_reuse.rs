@@ -30,6 +30,7 @@ fn counted(
             cmov: false,
             sse2: false,
             min_size: false,
+            three_address_adds: false,
             i16_mul_chains: false,
             sext_load: false, zext_free: false,
             profile: None,

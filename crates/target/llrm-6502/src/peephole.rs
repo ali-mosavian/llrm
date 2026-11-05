@@ -2,7 +2,7 @@
 //! instructions.
 //!
 //! # How it works
-//! Five passes walk the lines of an [`Asm`] once each. What an instruction does
+//! Six passes walk the lines of an [`Asm`] once each. What an instruction does
 //! to `a` and to the zero and sign flags comes from [`crate::asm::Op::flags`],
 //! so a pass asks "does this instruction set the flags" and does not list
 //! mnemonics:
@@ -10,6 +10,11 @@
 //! - [`drop_reloads`]: `sta m; lda m` (likewise `x`, `y`) of a zero-page or
 //!   spill cell, when the load's flags are unread. A carry flag op or a store
 //!   to another cell in between leaves the register and the cell as they were.
+//! - [`fold_known_cells`]: `lda rc8` (likewise the other loads and `cmp`,
+//!   `adc`, `sbc`, `and`, `ora`, `eor`) of a cell the function stored an
+//!   immediate into becomes `lda #n`: the value is known, and the passes after
+//!   it can drop the load or the compare. A call keeps `rc8`..`rc15`
+//!   (callee-saved); a label forgets everything.
 //! - [`drop_known_loads`]: `ldx #n` of what the register already holds, tracked
 //!   through immediates and transfers, forgotten at a label, a call or an
 //!   instruction not listed.
@@ -52,7 +57,8 @@ fn flags_unread_after(
 ) -> bool {
     for line in &lines[from..] {
         let Line::Inst(inst) = line else { return false };
-        // a jump leaves the block: no block reads the flags its predecessor left
+        // a jump leaves the block: no block reads the flags its predecessor
+        // left
         if inst.op == Op::Jmp {
             return true;
         }
@@ -82,6 +88,7 @@ fn sets_nz_of(
 
 /// The passes, in the order they feed each other.
 pub fn run(asm: &mut Asm) {
+    fold_known_cells(asm);
     drop_reloads(asm);
     drop_known_loads(asm);
     drop_zero_compares(asm);
@@ -147,6 +154,104 @@ fn retain(
     asm.lines.retain(|_| *keep.next().unwrap());
 }
 
+/// Whether a call keeps the cell `name`: `rc8`..`rc15` are callee-saved.
+fn kept_by_calls(name: &str) -> bool {
+    name.strip_prefix("rc").and_then(|n| n.parse::<u8>().ok()).is_some_and(|n| (8..=15).contains(&n))
+}
+
+/// A load or an ALU operation of a cell that holds a known immediate reads the
+/// immediate instead. The values known are the immediates loaded into a
+/// register and stored from it (`sta`, `stx`, `sty`, `stz`) to a zero-page or
+/// spill cell, forgotten when the cell is written another way, at a label, at
+/// an instruction not listed, and at a call for every cell but `rc8`..`rc15`.
+/// A store through a pointer or an index may write any cell.
+pub fn fold_known_cells(asm: &mut Asm) {
+    let mut registers: [Option<String>; 3] = [None, None, None];
+    let mut cells: std::collections::HashMap<String, String> = Default::default();
+    let register_of = |op: Op| match op {
+        Op::Lda | Op::Sta | Op::Cmp => 0,
+        Op::Ldx | Op::Stx | Op::Cpx => 1,
+        _ => 2,
+    };
+    for line in &mut asm.lines {
+        let Line::Inst(inst) = line else {
+            registers = Default::default();
+            cells.clear();
+            continue;
+        };
+        let cell = match &inst.operand {
+            Operand::Direct(name) if inst.operand.is_cell() => Some(name.clone()),
+            _ => None,
+        };
+        let known = cell.as_ref().and_then(|name| cells.get(name)).cloned();
+        match inst.op {
+            Op::Lda | Op::Ldx | Op::Ldy => {
+                if let Some(value) = known {
+                    inst.operand = Operand::Imm(value);
+                }
+                registers[register_of(inst.op)] = match &inst.operand {
+                    Operand::Imm(value) => Some(value.clone()),
+                    _ => None,
+                };
+            }
+            Op::Cmp | Op::Cpx | Op::Cpy => {
+                if let Some(value) = known {
+                    inst.operand = Operand::Imm(value);
+                }
+            }
+            Op::Adc | Op::Sbc | Op::And | Op::Ora | Op::Eor => {
+                if let Some(value) = known {
+                    inst.operand = Operand::Imm(value);
+                }
+                registers[0] = None;
+            }
+            Op::Sta | Op::Stx | Op::Sty => match (&inst.operand, cell) {
+                (_, Some(name)) => match &registers[register_of(inst.op)] {
+                    Some(value) => drop(cells.insert(name, value.clone())),
+                    None => drop(cells.remove(&name)),
+                },
+                // a global named directly is not a cell
+                (Operand::Direct(_), None) => {}
+                _ => cells.clear(),
+            },
+            Op::Stz => match (&inst.operand, cell) {
+                (_, Some(name)) => drop(cells.insert(name, "0".to_owned())),
+                (Operand::Direct(_), None) => {}
+                _ => cells.clear(),
+            },
+            Op::Inc | Op::Dec | Op::Asl | Op::Lsr | Op::Rol | Op::Ror => match (&inst.operand, cell) {
+                (Operand::Acc | Operand::None, _) => registers[0] = None,
+                (_, Some(name)) => drop(cells.remove(&name)),
+                (Operand::Direct(_), None) => {}
+                _ => cells.clear(),
+            },
+            Op::Inx | Op::Dex => registers[1] = None,
+            Op::Iny | Op::Dey => registers[2] = None,
+            Op::Pla => registers[0] = None,
+            Op::Txa => registers[0] = registers[1].clone(),
+            Op::Tya => registers[0] = registers[2].clone(),
+            Op::Tax => registers[1] = registers[0].clone(),
+            Op::Tay => registers[2] = registers[0].clone(),
+            Op::Clc | Op::Sec | Op::Pha | Op::Nop | Op::Bit => {}
+            Op::Jsr => {
+                registers = Default::default();
+                match &inst.operand {
+                    Operand::Direct(callee) if !callee.starts_with("__csave") && !callee.starts_with("__crest") => {
+                        cells.retain(|name, _| kept_by_calls(name));
+                    }
+                    _ => cells.clear(),
+                }
+            }
+            // a branch not taken falls through with all that is known here
+            op if op.opposite().is_some() => {}
+            _ => {
+                registers = Default::default();
+                cells.clear();
+            }
+        }
+    }
+}
+
 /// `ldx #n` (likewise `lda` and `ldy`) of what the register already holds: it
 /// goes, unless a branch reads the flags it sets. The values known are the
 /// immediates loaded and the transfers between registers, forgotten at a
@@ -204,15 +309,23 @@ fn leaves_cell_and_registers(
     let Line::Inst(Inst { op, operand, .. }) = line else { return false };
     match op {
         Op::Clc | Op::Sec | Op::Nop => true,
-        Op::Sta | Op::Stx | Op::Sty => operand.is_cell() && operand != load,
+        // a store changes no register, and no cell but its own: a global named
+        // directly or indexed is not a cell, a zero-page indexed store or one
+        // through a pointer may be
+        Op::Sta | Op::Stx | Op::Sty | Op::Stz => match operand {
+            Operand::Direct(_) => operand != load,
+            Operand::Indexed(name, _) => !(name.starts_with("rc") || name.starts_with("s_")),
+            _ => false,
+        },
         _ => false,
     }
 }
 
-/// `sta m` then `lda m` (likewise `x` and `y`) of a zero-page or spill cell:
-/// the register still holds it, so the load goes. It also set the zero and sign
-/// flags, so it stays when a branch reads them before anything sets them again.
-/// A carry flag op or a store to another cell between the two changes neither.
+/// `sta m` or `lda m` then `lda m` (likewise `x` and `y`) of a zero-page or
+/// spill cell: the register still holds it, so the load goes. It also set the
+/// zero and sign flags, so it stays when a branch reads them before anything
+/// sets them again. A carry flag op or a store to anything but `m` between the
+/// two changes neither.
 pub fn drop_reloads(asm: &mut Asm) {
     let lines = &asm.lines;
     let keep: Vec<bool> = (0..lines.len())
@@ -230,7 +343,7 @@ pub fn drop_reloads(asm: &mut Asm) {
                     .rev()
                     .find(|before| !leaves_cell_and_registers(before, operand))
                     .and_then(Line::inst)
-                    .is_some_and(|before| before.op == store && before.operand == *operand)
+                    .is_some_and(|before| (before.op == store || before.op == *load) && before.operand == *operand)
                 && flags_unread_after(lines, at + 1);
             !reload
         })

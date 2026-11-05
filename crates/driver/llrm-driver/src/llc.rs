@@ -268,6 +268,7 @@ fn with_default_convention(
     default: &llrm_target::calling::Convention,
     regcall_default: bool,
     c_library: bool,
+    watcom_library: bool,
 ) {
     let Some(number) = llrm_target::calling::Calling::number_of(default.cc.as_deref()).filter(|number| *number != 0)
     else {
@@ -287,7 +288,7 @@ fn with_default_convention(
     let main_is_watcom = default.cc.as_deref() == Some("regparm3");
     // Where the ABI is the register-size one, the library's functions are Open
     // Watcom's whichever way the front end marks the rest.
-    let library_is_watcom = (!regcall_default || main_is_watcom) && !c_library;
+    let library_is_watcom = watcom_library && (!regcall_default || main_is_watcom) && !c_library;
     // clang gives the library functions it knows (`strlen`, `atan`) their C
     // convention whatever the default is, so `_strlen` was called where the
     // library has `strlen_`: a declaration or a definition of one (the float
@@ -455,7 +456,9 @@ pub fn compiled_dumping(
     if let Some(policy) = &flags.frame_pointer {
         with_frame_pointer(&mut module, policy);
     }
-    with_default_convention(&mut module, default, flags.regcall_default, flags.c_library);
+    // Open Watcom's library is the DOS one: the other systems' own libc keeps
+    // C's convention.
+    with_default_convention(&mut module, default, flags.regcall_default, flags.c_library, format.name() == "omf");
     crate::coerce::small_structs_as_scalars(&mut module, bound.target.calling())?;
     let spellings = decorate(&mut module, bound.target.calling(), default, format.name());
     // After the rename: the debug info names the symbols the object has.
@@ -769,6 +772,25 @@ mod options_tests {
         let (built, _) = compiled_dumping(&flags, text, "w", None).unwrap();
         let assembly = masm::text(&built).unwrap();
         assert_eq!((assembly.matches("sub rsp").count(), assembly.matches("add rsp").count()), (1, 1), "{assembly}");
+    }
+
+    /// Windows turned a libc function's call into Open Watcom's `watcallcc`,
+    /// which the Win64 convention does not describe: `printf` of a double was
+    /// refused ("call the convention does not describe"). The Watcom library
+    /// is the DOS one (an OMF object); and a variadic double goes in its
+    /// position's XMM and its shadow GPR.
+    #[test]
+    fn a_windows_printf_of_a_double_keeps_win64_and_copies_it_to_the_shadow_register() {
+        let text = "target datalayout = \"e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                    target triple = \"x86_64-pc-windows-msvc\"\n\
+                    declare i32 @printf(ptr, ...)\n\
+                    @fmt = private constant [4 x i8] c\"%f\\0A\\00\"\n\
+                    define i32 @f(double %d, i32 %i) {\n  %r = call i32 (ptr, ...) @printf(ptr @fmt, double %d, i32 %i)\n  %s = add i32 %r, 1\n  ret i32 %s\n}\n";
+        let mut flags = Flags::default();
+        flags.allow_pending_abi = true;
+        let (built, _) = compiled_dumping(&flags, text, "w", None).unwrap();
+        let assembly = masm::text(&built).unwrap();
+        assert!(assembly.contains("movq rdx, xmm0") && assembly.contains("mov r8d, edx"), "{assembly}");
     }
 
     /// `llrm-cc` ran the backend with none of what the Watcom front end set

@@ -90,3 +90,11 @@ Owner w10; review 2026-12-01. The pin copies no recursive callee ([`IsRecursiveC
 ## REC-1 priced copies (2026-11-01, owner w9)
 
 `Tti::priced_self_inlining` replaces the literals 14 and 2 at m16 real mode: a level of self-copies is made while its saved call clocks are worth its bytes at `speed_milliclocks_per_byte`. The first level must pay `COPY_MARGIN` (4) times over. The margin is a fit, a tracker row: key fib, frames, rectwo (growth/gain 0.21 or less) against quicksort, bintree, recchop (0.28 or more). Replacement: a margin from the sheet's loop trips and call price, by 2026-11-13.
+
+## Open rows, x86-m32 -O3 (2026-11-05, owner x86-m32, exit 2026-11-20)
+
+Against gcc 15 -O3 on the vsgcc harness (486 clocks): the copies alone do not close them; gcc first clones the function on constant arguments (ipa-cp), then inlines recursively. Cloner: llrm-w2-memops. Card: `~/scratch/handoff/m32-rec-queens-o3-card-2026-11-05.md` (copies of `place`: 251 -> 1471 B, clocks -0.3%, not landed).
+
+- **REC-1:** queens, 154117 vs 94851 clk. gcc: `place.constprop.N` for row = 0, 1, 2, ..., each inlined into the previous, then 8 recursive inlines.
+- **REC-2:** rectwo, 1230664 vs 555904 clk. gcc: `paths/5` clone on `n != 0`, then 8 recursive inlines; hand-specialised ours is still 2.3x gcc.
+- **REC-3:** x_hanoi2, 167712 vs 120944 clk.
