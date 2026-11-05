@@ -158,7 +158,9 @@ def test_pic_mode_reads_the_objects_relocations_not_the_flag(tmp_path):
         modes[flag] = native.pic_mode(obj)
     assert modes == {"-fPIE": "pic", "-fno-pic": "nopic"}
     row = {"instructions": 1}
-    assert native.mismatch(row, "clang64", tmp_path / "t-fno-pic.o", tmp_path / "t-fPIE.o") == {"error": "pic mode: clang64 is nopic, ours is pic"}
+    noted = {**row, "note": "pc-rel vs abs data refs: clang64 is nopic, ours is pic"}
+    assert native.mismatch(row, "clang64", tmp_path / "t-fno-pic.o", tmp_path / "t-fPIE.o") == noted  # the hanoi2 shape: the row is kept, with the note
+    assert native.mismatch(row, "clang64", tmp_path / "t-fPIE.o", tmp_path / "t-fno-pic.o")["note"] == "pc-rel vs abs data refs: clang64 is pic, ours is nopic"  # the parity/algebra Os shape
     assert native.mismatch(row, "clang64", tmp_path / "t-fno-pic.o", tmp_path / "t-fno-pic.o") == row
 
 
