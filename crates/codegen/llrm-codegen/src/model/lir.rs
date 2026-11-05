@@ -747,8 +747,17 @@ impl Insn {
         self,
         of: &Insn,
     ) -> Insn {
-        let _ = self.ident.0.set(of.id());
+        self.stand_for(of);
         self
+    }
+
+    /// [`Self::standing_for`] for an instruction already shared: no copy to
+    /// move it through.
+    pub fn stand_for(
+        &self,
+        of: &Insn,
+    ) {
+        let _ = self.ident.0.set(of.id());
     }
 
     /// `self` told other `-g` tags. Still the same instruction, so it keeps
