@@ -287,6 +287,8 @@ pub struct Caller<'a> {
     /// that is copied.
     pub depth: usize,
     pub callee: i64,
+    /// What the copies may add together, in `gcc_insns`.
+    pub growth: i64,
 }
 
 /// DEVIATE (recursion), gcc's `--param max-inline-recursive-depth-auto` is 8
@@ -308,11 +310,12 @@ const MAX_INLINE_INSNS_RECURSIVE_GCC: i64 = 450;
 
 /// DEVIATE (recursion), gcc 13.3's `--param max-inline-insns-recursive-auto`
 /// is 450 (params.opt:553, `recursive_inlining`, ipa-inline.cc:1645); 150 here,
-/// in `gcc_insns`: the size the function may reach by copies of itself. The
-/// smallest that keeps fib and rectwo under main (depth 3, -O2 clocks/bytes;
-/// main fib 227171/537, rectwo 612458/538): 60: fib 207179/264, rectwo
-/// 1489763/280; 100: 132006/360, 876030/424; 150: 132006/360, 530081/520; 450:
-/// 132006/360, 530081/520. Owner: w-6. Exit: as the depth's.
+/// in `gcc_insns`: the size the function may reach by copies of itself. A
+/// target states its own through `Tti::recursive_inlining_growth`; m32 takes 450
+/// at -O2 (fib 240256 -> 99687 clk, 469 -> 985 B, 2026-11-05) and keeps 150 at
+/// -O3 (rectwo +185k, bintree +2k, recchop +0.8k clk worse with 450). The
+/// 10-20 numbers of fib 132006/360 are gone with the rest of the pipeline.
+/// Owner: x86-m32. Exit: 2026-11-20, the copies chosen by gcc's badness heap.
 pub const MAX_INLINE_INSNS_RECURSIVE: i64 = 150;
 
 /// `--param min-inline-recursive-probability` (10 per cent, params.opt:769): a
@@ -781,7 +784,7 @@ impl<'a> Plan<'a, '_> {
             let frequency = frequencies.get(&site).copied().unwrap_or(1.0);
             if depth > self.caller.depth
                 || gcc_work(callee) > self.caller.callee
-                || self.insns + grown > MAX_INLINE_INSNS_RECURSIVE
+                || self.insns + grown > self.caller.growth
                 || frequency * 100.0 <= MIN_INLINE_RECURSIVE_PROBABILITY
             {
                 return None;

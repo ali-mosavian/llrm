@@ -619,6 +619,10 @@ impl Tti for X86 {
         self.tuning.recursive_edge_growth
     }
 
+    fn recursive_inlining_growth(&self) -> Option<(i64, i64)> {
+        self.tuning.recursive_inlining_growth
+    }
+
     fn peels_folded_entry(&self) -> bool {
         self.tuning.peel_folded_entry
     }

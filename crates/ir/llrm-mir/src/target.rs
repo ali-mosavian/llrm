@@ -92,6 +92,10 @@ pub struct Tuning {
     /// `recursive_inlining` to run on it, calibrated per target; none: no
     /// such bar.
     pub recursive_edge_growth: Option<(i64, i64)>,
+    /// DEVIATE REC-2: what the copies of a recursive function in itself may add
+    /// at (-O2, -O3), in `gcc_insns` (gcc's `max-inline-insns-recursive`, 450);
+    /// none: `inline::MAX_INLINE_INSNS_RECURSIVE`.
+    pub recursive_inlining_growth: Option<(i64, i64)>,
     /// DEVIATE PL6: the first iteration of an innermost loop is peeled where
     /// its entry constants fold enough of the body to pay the copy at the
     /// speed rate (`Tti::peels_folded_entry`). false: the pin's
@@ -140,6 +144,7 @@ impl Tuning {
         keep_constant_displacements: false,
         recursive_inlining: None,
         recursive_edge_growth: None,
+        recursive_inlining_growth: None,
         peel_folded_entry: false,
         sink_select_arms: false,
         inline_variable_memcpy: false,

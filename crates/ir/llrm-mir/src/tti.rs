@@ -638,6 +638,12 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE REC-2: what the copies of a recursive function in itself may add
+    /// at (-O2, -O3), in `gcc_insns`; none: the pass's own.
+    fn recursive_inlining_growth(&self) -> Option<(i64, i64)> {
+        None
+    }
+
     /// DEVIATE REC-1: the ceilings (depth, callee size in `gcc_insns`) within
     /// which a tree-recursive function's copies of itself are chosen by
     /// price: each level of copies is made while the clocks it saves, at
