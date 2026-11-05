@@ -2240,6 +2240,7 @@ fn _affine_address(
         i64::from(cpu.operand_bytes),
         scale,
         word,
+        terms.len() + usize::from(disp != 0),
     ) else {
         return Ok(None);
     };

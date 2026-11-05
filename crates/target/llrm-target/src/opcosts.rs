@@ -89,6 +89,8 @@ const OPERATIONS: [&str; 43] = [
     "divide_margin",
     "shift",
     "address",
+    "address_dword",
+    "address_third",
     "carry",
     "carry_step",
     "load",
@@ -239,6 +241,8 @@ impl Description {
                 "divide_margin" => out.divide_margin = value,
                 "shift" => out.shift = value,
                 "address" => out.address = value,
+                "address_dword" => out.address_dword = value,
+                "address_third" => out.address_third = value,
                 "carry" => out.carry = value,
                 "carry_step" => out.carry_step = value,
                 "load" => out.load = value,
@@ -284,7 +288,7 @@ impl Description {
 mod tests {
     use super::*;
 
-    const ALL: &str = "add = a\nmultiply = m\ndivide = d\nmultiply_long = m\nmultiply_high = m\ndivide_long = d\ndivide_margin = 25\nshift = s\naddress = l\ncarry = carry(z, a, s, r)\ncarry_step = step(a)\nload = ld\nstore = st\nstore_immediate = st\nmemory_update = u\nbranch = j\nprefix = prefix\nmove = r\ncall = c\nreturn = t\nargument = st + ld\npop = p\nadjust = i\nreturn_pops = rp - t\nfloat_add = fa\nfloat_multiply = fm\nfloat_divide = fd\nfloat_load = fl\nfloat_load_folded = flf\nfloat_store = fs\nfloat_release = fr\nfloat_to_int = fi\nfloat_compare = fcp\nextend = z\nset = z\nfill = f + 2*p + 3\nfill_cell = fc\nfill_segment = 2*p\ncopy = cp\ncopy_cell = cc\ncopy_variable = cv\ndirection = 2*a\nunroll_budget = 7\n";
+    const ALL: &str = "add = a\nmultiply = m\ndivide = d\nmultiply_long = m\nmultiply_high = m\ndivide_long = d\ndivide_margin = 25\nshift = s\naddress = l\naddress_dword = 0\naddress_third = 0\ncarry = carry(z, a, s, r)\ncarry_step = step(a)\nload = ld\nstore = st\nstore_immediate = st\nmemory_update = u\nbranch = j\nprefix = prefix\nmove = r\ncall = c\nreturn = t\nargument = st + ld\npop = p\nadjust = i\nreturn_pops = rp - t\nfloat_add = fa\nfloat_multiply = fm\nfloat_divide = fd\nfloat_load = fl\nfloat_load_folded = flf\nfloat_store = fs\nfloat_release = fr\nfloat_to_int = fi\nfloat_compare = fcp\nextend = z\nset = z\nfill = f + 2*p + 3\nfill_cell = fc\nfill_segment = 2*p\ncopy = cp\ncopy_cell = cc\ncopy_variable = cv\ndirection = 2*a\nunroll_budget = 7\n";
 
     #[test]
     fn a_sum_is_terms_with_counts_and_signs() {

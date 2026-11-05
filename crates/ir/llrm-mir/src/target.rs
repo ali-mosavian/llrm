@@ -498,6 +498,15 @@ pub struct OperationCosts {
     pub multiply_high: i64,
     pub shift: i64,
     pub address: i64,
+    /// What a `lea` of dwords costs where a prefix widens it (real mode: the
+    /// operand-size and address-size prefixes, `66 67 8D ModRM` and a SIB byte
+    /// or a displacement); 0 where the target states none, and the price is
+    /// then `address` plus the prefixes' prices.
+    pub address_dword: i64,
+    /// What a third part of that address (a base, an index and a
+    /// displacement: the SIB byte and the displacement both) adds to
+    /// `address_dword`; 0 where the target states none.
+    pub address_third: i64,
     /// An address advanced in a space whose displacement carries into its
     /// selector (a huge pointer's): the offset's sum, its carry, and the
     /// selector stepped by it.
@@ -671,11 +680,15 @@ pub fn three_operand(
     operand: i64,
     scale: i64,
     word: bool,
+    parts: usize,
 ) -> Option<i64> {
     if word {
         return forms.iter().any(|form| !form.secondary && form.index_width == 2).then_some(costs.address);
     }
     let form = forms.iter().find(|form| form.index_width == 4 && form.scales.contains(&scale))?;
+    if costs.address_dword > 0 && width != operand {
+        return Some(costs.address_dword + costs.address_third * parts.saturating_sub(2) as i64 + form.use_cost - costs.prefix);
+    }
     Some(costs.sized(costs.address, width, operand) + form.use_cost)
 }
 
@@ -692,6 +705,8 @@ impl Default for OperationCosts {
             multiply_high: 1,
             shift: 1,
             address: 1,
+            address_dword: 0,
+            address_third: 0,
             carry: 1,
             carry_step: 1,
             load: 1,
@@ -911,11 +926,27 @@ mod operand_size_tests {
     fn a_native_dword_address_is_priced_and_a_word_one_needs_a_word_form() {
         let costs = OperationCosts { address: 2, prefix: 1, ..OperationCosts::default() };
         let flat = [form(4, false, 0)];
-        assert_eq!(three_operand(&costs, &flat, 4, 4, 2, false), Some(2));
-        assert_eq!(three_operand(&costs, &flat, 2, 4, 1, true), None);
+        assert_eq!(three_operand(&costs, &flat, 4, 4, 2, false, 2), Some(2));
+        assert_eq!(three_operand(&costs, &flat, 2, 4, 1, true, 2), None);
         let real = [form(2, false, 0), form(4, true, 1)];
-        assert_eq!(three_operand(&costs, &real, 4, 2, 2, false), Some(2 + 1 + 1));
-        assert_eq!(three_operand(&costs, &real, 2, 2, 1, true), Some(2));
+        assert_eq!(three_operand(&costs, &real, 4, 2, 2, false, 2), Some(2 + 1 + 1));
+        assert_eq!(three_operand(&costs, &real, 2, 2, 1, true, 2), Some(2));
+    }
+
+    /// Real mode's `lea`: 3 bytes in words (`8D 40 07`), 5 as dwords behind the
+    /// two prefixes (`67 66 8D 40 07`), 6 with a base, an index and a
+    /// displacement (`67 66 8D 44 01 07`); all three read as one price
+    /// (`address` plus the prefixes) before `address_dword`, so a fold that
+    /// replaced `inc` and `add` (5 bytes) by the six-byte form looked free.
+    #[test]
+    fn a_dword_lea_is_priced_by_its_parts_and_a_word_one_is_not() {
+        let costs = OperationCosts { address: 6, prefix: 1, address_dword: 10, address_third: 2, ..OperationCosts::default() };
+        let real = [form(2, false, 0), form(4, true, 1)];
+        assert_eq!(three_operand(&costs, &real, 2, 2, 1, true, 3), Some(6));
+        assert_eq!(three_operand(&costs, &real, 4, 2, 1, false, 2), Some(10));
+        assert_eq!(three_operand(&costs, &real, 4, 2, 1, false, 3), Some(12));
+        let unstated = OperationCosts { address: 6, prefix: 1, ..OperationCosts::default() };
+        assert_eq!(three_operand(&unstated, &real, 4, 2, 1, false, 3), Some(8));
     }
 }
 

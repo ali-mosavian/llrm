@@ -333,6 +333,7 @@ fn positive_chains<'a>(
                     i64::from(target.operand_bytes),
                     scale,
                     false,
+                    2,
                 )
             })
             .flatten()
