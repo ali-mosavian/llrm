@@ -1300,7 +1300,11 @@ impl Builder<'_> {
         }
         let dword = self.dag.get_value_type_node(EVT::I32);
         let rep = self.dag.get_node_multi(x86isd::REP_MOVS, &[EVT::OTHER, EVT::GLUE], &[chain, dword, glue]);
-        if self.constant_size(count).is_some_and(|bytes| bytes % 4 == 0) {
+        // a length whose low two bits are known zero (`n << 2`) has no byte
+        // tail
+        if self.constant_size(count).is_some_and(|bytes| bytes % 4 == 0)
+            || super::super::known_bits::masked_value_is_zero(&self.dag, count, 3)
+        {
             return SDValue { node: rep.node, res: 0 };
         }
         let three = self.dag.get_constant(3, pointer);
