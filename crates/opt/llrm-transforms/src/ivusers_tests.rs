@@ -60,7 +60,7 @@ fn with_users(
         asked.set(asked.get() + 1);
         true
     };
-    let env = Env { safe_to_speculate: &safe, ephemeral: &|_| false };
+    let env = Env { safe_to_speculate: &safe, ephemeral: &|_| false, native_bits: 0 };
     let grown = llrm_mir::dense::idset_resizes::<InstId>();
     let users = IvUsers::of(&mut se, &cx, header, &env);
     GROWN.with(|n| n.set(llrm_mir::dense::idset_resizes::<InstId>() - grown));
@@ -188,7 +188,7 @@ fn test_the_block_places_are_made_once_for_all_the_loops_of_a_function() {
         assumptions: &assumptions,
     };
     let mut se = ScalarEvolution::new();
-    let env = Env { safe_to_speculate: &|_| true, ephemeral: &|_| false };
+    let env = Env { safe_to_speculate: &|_| true, ephemeral: &|_| false, native_bits: 0 };
     let before = llrm_mir::module::block_places_built();
     let headers: Vec<_> = loops.top_level_loops().map(|one| one.get_header()).collect();
     assert_eq!(headers.len(), 6);

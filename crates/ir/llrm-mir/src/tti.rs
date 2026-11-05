@@ -1241,6 +1241,15 @@ pub trait Tti {
         Some(self.number_of_gpr_registers())
     }
 
+    /// DEVIATE LSR-N: the widest integer LSR takes as a native induction
+    /// variable where the datalayout's `n` names fewer. The pin's `IVUsers`
+    /// skips every type `isLegalInteger` refuses, so on a datalayout of `n8`
+    /// no 16- or 32-bit counter, product or pointer is reduced. 0: the
+    /// datalayout's.
+    fn lsr_native_integer_bits(&self) -> u32 {
+        0
+    }
+
     /// The registers LSR keeps back from `number_of_gpr_registers` when it
     /// also counts what the loop keeps live (DEVIATE LU3c); the pin's one.
     fn lsr_reserved_registers(&self) -> u32 {

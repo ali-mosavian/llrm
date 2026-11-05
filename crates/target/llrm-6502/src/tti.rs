@@ -185,6 +185,13 @@ impl Tti for Mos6502 {
     // llrm-target-6502. Exit: a frequency that knows the trip count,
     // 2026-11-20.
 
+    /// A counter, a product or an address of 16 or 32 bits is several byte
+    /// adds; the datalayout's `n8` made LSR leave all of them (shrink_wrapped_frame:
+    /// `n * i` a 32-bit multiply per trip, 56k of its 64k clocks).
+    fn lsr_native_integer_bits(&self) -> u32 {
+        32
+    }
+
     /// `jsr` and `rts`, and each argument byte through a cell (`lda`, `sta`).
     fn call_sequence_cost(
         &self,
