@@ -1013,7 +1013,8 @@ fn a_word_in_de_is_stored_to_a_global_without_moving_it() {
 fn a_comparison_used_as_a_value_is_a_byte_that_is_one_or_zero() {
     let ir = include_str!("kernels/ir/carry32.ll");
     let out = text(ir, "carry32", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
-    assert!(out.contains("sbc a, ") && out.contains("dec "), "{out}");
+    // the carry fusion has since turned the compare and its byte into `adc hl, rr`
+    assert!(out.contains("adc hl, ") && !out.contains("SETCC8"), "{out}");
 }
 
 /// A call with more arguments than registers was refused: "stack arguments are
