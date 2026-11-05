@@ -670,7 +670,11 @@ pub fn three_address(
             name: Some("lea".into()),
             dests: vec![Loc::Held(if narrow_lea(mode, into.width) { Held { width: 4, ..*into } } else { *into })],
             sources: vec![Loc::Mem(Mem {
-                base: Some(if mode == ThreeAddress::Wide { Held { width: 8, ..*base } } else { *base }),
+                base: Some(match mode {
+                    ThreeAddress::Wide => Held { width: 8, ..*base },
+                    _ if narrow_lea(mode, into.width) => Held { width: 4, ..*base },
+                    _ => *base,
+                }),
                 offset,
                 ..Mem::new(None, into.width)
             })],
@@ -700,7 +704,11 @@ pub fn three_address(
     if !(width == 4 || word || qword || narrow) || base.width != width || into.value == base.value {
         return None;
     }
-    let wide = |held: &Held| if mode == ThreeAddress::Wide { Held { width: 8, ..*held } } else { *held };
+    let wide = |held: &Held| match mode {
+        ThreeAddress::Wide => Held { width: 8, ..*held },
+        _ if narrow => Held { width: 4, ..*held },
+        _ => *held,
+    };
     let cell = match (&what.sources[1], what.name.as_deref()) {
         // `SHL32ri` by 1 to 3: `[a + a]` for 1, `[a*4]`, `[a*8]` for the rest
         // (the index alone takes a 32-bit displacement, as the pin's does).
@@ -757,13 +765,17 @@ pub fn three_address(
 }
 
 /// `convertToThreeAddressWithLEA`: a byte or word `add`, `inc` or `dec` is a
-/// `LEA64_32r` of the source read whole, only where registers are 64 bits
+/// `LEA64_32r` of the source read whole, where registers are 64 bits
 /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L1228>).
+///
+/// DEVIATE TA-10: also a `LEA32r` on a flat 32-bit target (`All`), the pin's
+/// own TODO at that line. `__floatsisf`'s `mov ecx, eax; add cl, -5` is `lea
+/// ecx, [eax - 5]`. Exit 2026-11-14: remove when the pin does the same.
 fn narrow_lea(
     mode: ThreeAddress,
     width: u32,
 ) -> bool {
-    mode == ThreeAddress::Wide && matches!(width, 1 | 2)
+    matches!(mode, ThreeAddress::Wide | ThreeAddress::All) && matches!(width, 1 | 2)
 }
 
 /// Whether the flags `insns[index]` writes are written again, in its block,
@@ -1645,11 +1657,11 @@ mod tests {
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
-    /// A byte `add` of a constant is a `LEA64_32r` only where registers are 64
-    /// bits (`Wide`): the pin's `convertToThreeAddressWithLEA` returns null on
-    /// a 32-bit target, so the m16 and m32 listings are untouched.
+    /// A byte `add` of a constant is a `lea` on flat targets (`All`, DEVIATE
+    /// TA-10: `mov ecx, eax; add cl, -5` in `__floatsisf`, five bytes for
+    /// three) and `Wide`, not on a 16-bit one.
     #[test]
-    fn test_a_byte_add_is_a_lea_only_at_wide() {
+    fn test_a_byte_add_is_a_lea_on_flat_targets() {
         let held = |value: u32| Held { value, width: 1, offset: 0 };
         let what = Semantics {
             name: Some("add".into()),
@@ -1658,14 +1670,17 @@ mod tests {
             ..Semantics::new(Operation::Binary)
         };
         let one = Insn::new(0, Some((0, 0)), Some(what), vec![2], vec![1]);
-        for mode in [ThreeAddress::AddSub, ThreeAddress::AddSubWords, ThreeAddress::All] {
+        for mode in [ThreeAddress::AddSub, ThreeAddress::AddSubWords] {
             assert!(three_address(&one, mode).is_none(), "{mode:?}");
         }
-        let made = three_address(&one, ThreeAddress::Wide).expect("a lea at Wide");
-        let lea = made.what.as_ref().unwrap();
-        assert_eq!(lea.name.as_deref(), Some("lea"));
-        let Loc::Mem(cell) = &lea.sources[0] else { panic!("{lea:?}") };
-        assert_eq!(cell.offset, -20, "the byte immediate is signed");
+        for (mode, base_width) in [(ThreeAddress::All, 4), (ThreeAddress::Wide, 8)] {
+            let made = three_address(&one, mode).expect("a lea");
+            let lea = made.what.as_ref().unwrap();
+            assert_eq!(lea.name.as_deref(), Some("lea"));
+            let Loc::Mem(cell) = &lea.sources[0] else { panic!("{lea:?}") };
+            assert_eq!(cell.offset, -20, "the byte immediate is signed");
+            assert_eq!(cell.base.map(|b| b.width), Some(base_width), "{mode:?}: the source is read whole");
+        }
     }
 
     /// `process_copy` entered every instruction of a block in a std `HashSet`
