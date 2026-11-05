@@ -18,6 +18,7 @@ for m in $MODULES; do
   sed -i 's/___/__/g' $OUT/$n.s
   sdasz80 -g -o $OUT/$n.rel $OUT/$n.s
 done
+sdasz80 -g -o "$OUT/div64.rel" config/z80/div64.s; cp config/z80/div64.s "$OUT/div64.s"
 defined=$(grep -h '\.globl' $OUT/*.s | awk '{print $2}' | sort -u)
 missing=""
 for s in __adddf3 __subdf3 __muldf3 __divdf3 __eqdf2 __nedf2 __ltdf2 __ledf2 __gtdf2 __gedf2 __cmpdf2 __addsf3 __subsf3 __mulsf3 __divsf3 __eqsf2 __nesf2 __ltsf2 __lesf2 \
