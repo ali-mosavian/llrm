@@ -9,7 +9,7 @@ lib/fp/             f32/ f64/ f8/: one file per operation family (add_sub mul di
 lib/int/            int32.c int64.c: __mulsi3 .. __moddi3, no 64-bit operation in any body
 lib/math/           mathf.c and its coefficients (sf_coef.h, from tools/gen_coef.py)
 lib/fast/           fast32*.c: the non-IEEE fast float (spike)
-config/<target>/    x86_m16 x86_m32 x86_m64 m68k: config.h, the target's knobs (pass with -include); 6502 z80: hand-written assembly overrides
+config/<target>/    x86_m16 x86_m32 x86_m64 m68k wasm: config.h, the target's knobs (pass with -include); 6502 z80: hand-written assembly overrides
 tests/ tools/       host oracles, per-target harnesses, generators
 ```
 
