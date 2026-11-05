@@ -117,7 +117,7 @@ static WRITEBACKS: LazyLock<Vec<Writeback>> = LazyLock::new(|| {
     // a load through `(An)+` stored at once: the pin's move from `(An)+` to an
     // `(An)`, `(d,An)` or `(An)+` destination, with the bases it updates
     for bits in ["8", "16", "32"] {
-        for (to, updates) in [('j', 0), ('p', 0), ('o', 1)] {
+        for (to, updates) in [('j', 0), ('p', 0), ('f', 0), ('o', 1)] {
             let printed = leak(format!("MOV{bits}{to}o"));
             if code_of_pin(printed).is_none() {
                 continue;
