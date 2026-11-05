@@ -140,3 +140,22 @@ fn a_not_sign_splat_and_y_is_the_swapped_select() {
         "  %0 = icmp slt i32 %x, 0\n  %1 = select i1 %0, i32 0, i32 %y\n  ret i32 %1\n",
     );
 }
+
+/// `and (phi [0], [zext (load i8)]), 3` stayed after the phi: the pin moves the
+/// `and` into the arm that loads (`and i8`, `zext nneg`) and leaves the
+/// constant arm folded, jpeg_fixed -O1 +37 B over the pin.
+#[test]
+fn an_and_of_a_phi_with_a_constant_arm_moves_into_the_other_arm() {
+    let text = "define i32 @f(i1 %c, ptr %p, ptr %q) {\nentry:\n  br i1 %c, label %load, label %join\n\
+                load:\n  %b = load i8, ptr %p, align 1\n  %z = zext i8 %b to i32\n  br label %join\n\
+                join:\n  %v = phi i32 [ 0, %entry ], [ %z, %load ]\n  %a = and i32 %v, 3\n  store i32 %a, ptr %q, align 4\n  ret i32 0\n}\n";
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit);
+    let after = printed(&module);
+    let join = after.split("join:").nth(1).expect("join block");
+    assert!(!join.contains(" = and "), "the and stays after the phi:\n{after}");
+    assert!(after.contains("phi i32 [ 0, %entry ]"), "{after}");
+}

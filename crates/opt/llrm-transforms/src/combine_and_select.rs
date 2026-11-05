@@ -329,6 +329,19 @@ fn fold_sign_splat(
     None
 }
 
+/// `foldBinOpIntoSelectOrPhi`
+/// ([:2784](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineAndOrXor.cpp#L2784)):
+/// `and (phi [0], [x]), C` is a phi of the `and` taken in each arm.
+fn fold_bin_op_into_select_or_phi(
+    c: &mut Combiner,
+    inst: InstId,
+    _op0: Operand,
+    _op1: Operand,
+) -> Option<Visit> {
+    let found = c.fold_bin_op_into_select_or_phi(inst);
+    (!matches!(found, Visit::None)).then_some(found)
+}
+
 /// The folds of this module in the order `visitAnd` reaches them.
 pub fn fold_and_select(
     c: &mut Combiner,
@@ -336,8 +349,9 @@ pub fn fold_and_select(
     op0: Operand,
     op1: Operand,
 ) -> Option<Visit> {
-    let steps: [fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>; 6] = [
+    let steps: [fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>; 7] = [
         fold_sign_mask_of_shifted_zext,
+        fold_bin_op_into_select_or_phi,
         fold_xor_or_not,
         fold_casted_bitwise_logic,
         fold_bool_extension,
