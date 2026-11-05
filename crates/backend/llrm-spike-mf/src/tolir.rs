@@ -452,7 +452,7 @@ pub fn to_lir<T: Target>(
                         .iter()
                         .filter(|info| info.def || info.index == k)
                         .cloned()
-                        .map(|info| OperandInfo { index: 0, ..info })
+                        .map(|info| OperandInfo { index: 0, lane: Some((lane.bytes, lane.offset)), ..info })
                         .collect();
                     infos.push((COPY, part));
                     insns.push(Arc::new(made.lane_copy(lane, 2 * ordinal)));
@@ -982,6 +982,10 @@ struct OperandInfo {
     /// What the instruction costs in each, aligned with `order`
     /// (`Target::operand_cost`).
     costs: Vec<u32>,
+    /// For the part of a lane-built pair: the bytes and offset of the lane the
+    /// copy writes. A copy greedy makes beside it, of the whole pair, is
+    /// another instruction.
+    lane: Option<(u32, u32)>,
 }
 
 impl OperandInfo {
@@ -1000,7 +1004,7 @@ impl OperandInfo {
             }
             _ => None,
         };
-        Self { def, index, hint, order, costs }
+        Self { def, index, hint, order, costs, lane: None }
     }
 
     /// The cheapest this instruction is in any of `registers` it prices.
@@ -1030,8 +1034,12 @@ fn operands_in<'a>(
     if what.name.as_deref() != Some(name) {
         return Vec::new();
     }
+    let lane_dest = |bytes: u32, offset: u32| {
+        matches!(what.dests.first(), Some(Loc::Held(held)) if held.width == bytes && held.offset == offset)
+    };
     infos
         .iter()
+        .filter(|info| info.lane.is_none_or(|(bytes, offset)| lane_dest(bytes, offset)))
         .filter_map(|info| {
             let loc = if info.def { what.dests.get(info.index) } else { what.sources.get(info.index) };
             match loc {
