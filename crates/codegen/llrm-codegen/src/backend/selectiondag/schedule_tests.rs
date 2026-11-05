@@ -237,7 +237,7 @@ const SUBS: u32 = 10;
 const CALL: u32 = 11;
 const BCC: u32 = 12;
 
-struct CallInfo;
+struct CallInfo(u16);
 
 impl SchedInfo for CallInfo {
     fn num_defs(
@@ -251,7 +251,7 @@ impl SchedInfo for CallInfo {
         &self,
         opcode: u32,
     ) -> &[u16] {
-        if opcode == SUBS { &[FLAGS] } else { &[] }
+        if opcode == SUBS { std::slice::from_ref(&self.0) } else { &[] }
     }
 
     fn is_call(
@@ -259,6 +259,13 @@ impl SchedInfo for CallInfo {
         opcode: u32,
     ) -> bool {
         opcode == CALL
+    }
+
+    fn has_cross_copy_class(
+        &self,
+        reg: u16,
+    ) -> bool {
+        reg == self.0
     }
 }
 
@@ -269,14 +276,17 @@ impl SchedInfo for CallInfo {
 /// and clones the `subs` below the call.
 #[test]
 fn a_flag_definition_live_across_a_call_is_recomputed_after_it() {
+    let eflags_id = super::dagisel_adapter::EFLAGS_ID;
+    let eflags = super::dagisel_adapter::pin_register(eflags_id).expect("EFLAGS has a pin number");
     let mut dag = dag();
     let entry = dag.entry_node();
     let n = load(&mut dag, 1, entry);
     let subs = machine(&mut dag, SUBS, &[EVT::I32, EVT::I32], &[n]);
-    let mask = dag.get_register_mask_clobbering(&[FLAGS]);
+    let mask = dag.get_register_mask_clobbering(&[eflags]);
     let call = machine(&mut dag, CALL, &[EVT::OTHER], &[chain_of(n), subs, mask]);
-    let bcc = machine(&mut dag, BCC, &[EVT::OTHER], &[call, SDValue { node: subs.node, res: 1 }]);
-    let order = schedule(&dag, bcc, &CallInfo);
+    let copy = dag.get_copy_to_phys_reg(call, eflags_id, SDValue { node: subs.node, res: 1 }, None);
+    let bcc = machine(&mut dag, BCC, &[EVT::OTHER], &[SDValue { node: copy.node, res: 0 }, SDValue { node: copy.node, res: 1 }]);
+    let order = schedule(&dag, bcc, &CallInfo(eflags));
     let last_subs = (0..order.len()).rev().find(|&i| order[i].nodes.contains(&subs.node)).expect("scheduled");
     assert!(position(&order, call) < last_subs, "the branch reads flags the call clobbered: {order:?}");
     assert!(last_subs < position(&order, bcc), "{order:?}");
