@@ -680,6 +680,13 @@ pub trait Target {
         0
     }
 
+    /// The most bytes of padding a loop header's alignment may take (the
+    /// `MaxBytesForAlignment` the pin's X86 never sets, gcc's `.p2align
+    /// 4,,10`); 0: no limit.
+    fn loop_alignment_max_skip(&self) -> u8 {
+        0
+    }
+
     /// `X86AsmBackend::getMaximumNopSize`: the longest single no-operation
     /// the padding of this target's code may use.
     fn max_nop_bytes(&self) -> u8 {

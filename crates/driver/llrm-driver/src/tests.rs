@@ -3067,6 +3067,24 @@ fn a_jump_table_index_is_not_zero_extended_again_at_m64() {
     assert!(moves.is_empty(), "{listing}");
 }
 
+/// `while (h() != 255 && !bad)` on an `i1` global was `mov al, bad; not al;
+/// test al, 1; jne` (11 B); the pin's `rebuildSetCC` makes it `cmp bad, 1; jne`
+/// (jpeg_fixed `-Os` m64, two sites).
+#[test]
+fn a_branch_on_a_negated_bool_global_is_one_compare_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @bad = global i1 false\n\
+                declare i32 @h()\n\
+                define void @f() {\n\
+                br label %lp\nlp:\n  %v = call i32 @h()\n  %c = icmp eq i32 %v, 255\n  br i1 %c, label %x, label %t\n\
+                t:\n  %b = load i1, ptr @bad\n  br i1 %b, label %x, label %lp\nx:\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("not al"), "{listing}");
+    assert!(listing.contains("cmp byte ptr bad, 1"), "{listing}");
+}
+
 /// The locals' base was aligned to the stack's 16 below the pushed registers
 /// (the pin aligns each object to its own and only the total to the stack):
 /// a function with one int local and two saved registers had `sub rsp, 24`
@@ -3652,6 +3670,35 @@ fn a_copy_of_a_full_width_value_stays_a_qword_copy_at_m64() {
     let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("mov rbx, rdi") && !listing.contains("mov ebx, edi"), "{listing}");
+}
+
+/// SysV x86-64 passes an `i128` in two consecutive registers and returns it in
+/// RAX:RDX; with fewer than two left it takes 16 aligned bytes of the stack.
+/// It was refused ("a i128 value"), and with only the size known the second
+/// half was read from the first one's bytes.
+#[test]
+fn a_sysv_i128_argument_takes_two_registers_or_sixteen_aligned_stack_bytes() {
+    let listing_of = |body: &str, name: &str| {
+        let text = format!("{SYSV}{body}");
+        let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &text, name).unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let add = listing_of("define i128 @f(i128 %a, i128 %b) {\n  %r = add i128 %a, %b\n  ret i128 %r\n}\n", "f");
+    assert!(add.contains("adc") && !add.contains("[rsp"), "registers rdi:rsi and rdx:rcx: {add}");
+    // Five integers leave R9 alone: the pair goes to the stack, the next
+    // integer takes R9.
+    let spilled = listing_of(
+        "define i128 @f(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i128 %x, i64 %g) {\n  %p = add i128 %x, 1\n  %q = zext i64 %g to i128\n  %r = add i128 %p, %q\n  ret i128 %r\n}\n",
+        "f",
+    );
+    assert!(spilled.contains("[rsp+8]") && spilled.contains("[rsp+16]") && spilled.contains("r9"), "{spilled}");
+    // A seventh integer on the stack leaves the pair 8 bytes off its
+    // 16-byte alignment: it skips them.
+    let aligned = listing_of(
+        "define i128 @f(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i64 %f, i64 %g, i128 %h) {\n  %p = zext i64 %g to i128\n  %r = add i128 %h, %p\n  ret i128 %r\n}\n",
+        "f",
+    );
+    assert!(aligned.contains("[rsp+8]") && aligned.contains("[rsp+24]") && aligned.contains("[rsp+32]"), "{aligned}");
 }
 
 /// Win64 puts argument `n` in RCX, RDX, R8, R9 by position, the fifth on the
