@@ -1411,6 +1411,18 @@ fn phased(
         }
         None => (body, None),
     };
+    // The widest alignment of an object of the frame: an alloca's, or a spill
+    // slot's as its width up to the slot cap.
+    let object_align = frame
+        .capacities
+        .values()
+        .filter(|&&size| size > 0)
+        .map(|&size| (1i64 << size.ilog2()).min(frame.align))
+        .chain([frame.alloca_align])
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let body = LirBody { object_align, ..body };
     Ok((
         Machined {
             body,

@@ -402,7 +402,8 @@ def stage_shared_headers(folder: Path, text: bytes) -> bytes:
 def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str, work: Path) -> dict[str, tuple[Path, Path] | str]:
     """A Borland-family reference (BORLAND), every program in one DOSBox boot. Keyed by stem.
     Linked with the toolchain's own start-up (C0M) and libraries: the floating-point programs need its FP87 and MATHM,
-    which ask C0M for `__version` and `_errno`. Only `report` comes from the corpus's ext.asm."""
+    which ask C0M for `__version` and `_errno`. Only `report` comes from the corpus's ext.asm.
+    Turbo C++ 3.0's CM.LIB (SETUPIO) calls `_isatty`, which only CS.LIB defines: tcpp links CS.LIB last."""
     home, compiler, levels = BORLAND[language]
     folder = work / f"{language}{opt}"
     folder.mkdir(parents=True)
@@ -424,7 +425,7 @@ def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str,
         lib = home / "lib"
         try:
             dosbatch._host([str(BIN / "jwlink"), "option", "quiet", "option", f"map={listing}", *dosbatch.linkrecipe.link(dosbatch.REAL_MODE, "format"), "name", str(exe), "file", str(lib / "C0M.OBJ"), "file", str(obj), *support,
-                            "library", str(lib / "CM.LIB"), "library", str((BCC / "lib" if language == "tcpp" else lib) / "FP87.LIB"), "library", str(lib / "MATHM.LIB")])
+                            "library", str(lib / "CM.LIB"), "library", str((BCC / "lib" if language == "tcpp" else lib) / "FP87.LIB"), "library", str(lib / "MATHM.LIB"), *(["library", str(lib / "CS.LIB")] if language == "tcpp" else [])])
         except dosbatch.BuildError as error:
             out[stem] = f"link: {error}"
             continue
@@ -1020,6 +1021,9 @@ def standing(measured: dict, selected: list[str], opts: list[str]) -> list[str]:
                         parts.append(f"{title} {100 * (geomean(ratios) - 1):+.1f}% (n={len(ratios)})")
                 if skipped:
                     parts.append(f"folded, out of the geomeans: {', '.join(skipped)}")
+                broken = [f"{name}: {measured[(name, reference, opt)]['error']}" for name in map(directory_name, benchmarks(selected)) if "error" in measured.get((name, reference, opt), {})]
+                if broken:  # a reference that did not build is no column, not an empty one
+                    lines.append(f"REFERENCE BROKEN {reference} -{level}: {len(broken)} programs unmeasured, e.g. {broken[0][:200]}")
                 if parts:
                     lines.append(f"llrm {language} -{opt} vs {reference} {'/O' if reference in BASIC_REFERENCES else '-' + level}: " + ", ".join(parts))
     return lines

@@ -14,7 +14,7 @@
 //! `findPHICopyInsertPoint`.
 
 use crate::dagisel::generated::instrinfo::{desc, flag};
-use crate::mir::{Function, Inst, Operand, PHI};
+use crate::mir::{Function, IMPLICIT_DEF, Inst, Operand, PHI};
 
 /// `isTerminator`.
 fn is_terminator(inst: &Inst) -> bool {
@@ -27,6 +27,20 @@ pub fn phi_elimination(f: &mut Function) -> bool {
     // were lowered.
     let mut before_terminators: Vec<Vec<Inst>> = vec![Vec::new(); f.blocks.len()];
     let mut changed = false;
+    // `SrcUndef`: a PHI operand that only an `IMPLICIT_DEF` defines gets no
+    // copy; the incoming register is itself an `IMPLICIT_DEF`, which the
+    // coalescer erases where a join overlaps it.
+    let undef_sources: std::collections::HashSet<u32> = f
+        .blocks
+        .iter()
+        .flatten()
+        .filter(|inst| inst.opcode == IMPLICIT_DEF)
+        .filter_map(|inst| match inst.operands.first() {
+            Some(Operand::Def(r)) => Some(*r),
+            _ => None,
+        })
+        .collect();
+    let mut undef_used = false;
     for b in 0..f.blocks.len() {
         let phis = f.blocks[b].iter().take_while(|inst| inst.opcode == PHI).count();
         if phis == 0 {
@@ -49,8 +63,13 @@ pub fn phi_elimination(f: &mut Function) -> bool {
                     continue;
                 }
                 done.push(pred);
-                before_terminators[pred as usize]
-                    .push(Inst::new(ty.copy(), &[Operand::Def(incoming), Operand::Use(src)]));
+                let made = if undef_sources.contains(&src) {
+                    undef_used = true;
+                    Inst::new(IMPLICIT_DEF, &[Operand::Def(incoming)])
+                } else {
+                    Inst::new(ty.copy(), &[Operand::Def(incoming), Operand::Use(src)])
+                };
+                before_terminators[pred as usize].push(made);
             }
         }
         // Each PHI's copy goes in before the first non-PHI, ahead of the copies
@@ -64,6 +83,28 @@ pub fn phi_elimination(f: &mut Function) -> bool {
         }
         let end = f.blocks[b].iter().rposition(|inst| !is_terminator(inst)).map_or(0, |last| last + 1);
         f.blocks[b].splice(end..end, copies);
+    }
+    if undef_used {
+        // The `IMPLICIT_DEF`s nothing reads any more.
+        let read: std::collections::HashSet<u32> = f
+            .blocks
+            .iter()
+            .flatten()
+            .flat_map(|inst| inst.operands.iter())
+            .filter_map(|operand| match operand {
+                Operand::Use(r) => Some(*r),
+                _ => None,
+            })
+            .collect();
+        for block in &mut f.blocks {
+            block.retain(|inst| {
+                inst.opcode != IMPLICIT_DEF
+                    || !matches!(
+                        inst.operands.first(),
+                        Some(Operand::Def(r)) if undef_sources.contains(r) && !read.contains(r)
+                    )
+            });
+        }
     }
     changed
 }
@@ -199,7 +240,7 @@ pub(crate) fn split_edge(
 mod tests {
     use super::*;
     use crate::dagisel::generated::ids::opcode as op;
-    use crate::mir::ValType;
+    use crate::mir::{ValType, is_copy};
 
     /// bb0 -> {bb2, bb1}, bb1 -> bb2, with `%a` read in bb1 and by the PHI of
     /// bb2: the edge bb0 -> bb2 is critical and `%a` stays live past the PHI.
@@ -247,5 +288,32 @@ mod tests {
         f.succs[0] = vec![1];
         f.blocks[0].remove(2);
         assert!(!split_phi_edges(&mut f));
+    }
+    /// `%p = phi [poison, bb0], [%x, bb1]`: bb0's copy was a `COPY` of a shared
+    /// `IMPLICIT_DEF` register, which the coalescer must treat as a real value;
+    /// the prolog of a runtime unroll left 14 of them in a loop's exit edge
+    /// (wasm x87_arguments +176 B over the pin). The pin writes an
+    /// `IMPLICIT_DEF` of the incoming register (`SrcUndef`).
+    #[test]
+    fn a_poison_operand_is_an_implicit_def_of_the_incoming_register_not_a_copy() {
+        let mut f = Function::default();
+        let (undef, x, p) = (0, 1, 2);
+        for _ in 0..3 {
+            f.new_vreg(ValType::I32);
+        }
+        let def = Operand::Def;
+        let (reg, block) = (Operand::Use, |b| Operand::Block(b));
+        f.blocks = vec![
+            vec![Inst::new(IMPLICIT_DEF, &[def(undef)]), Inst::new(op::BR_IF, &[block(2), reg(undef)])],
+            vec![Inst::new(op::CONST_I32, &[def(x), Operand::Imm(7)]), Inst::new(op::BR, &[block(2)])],
+            vec![Inst::new(PHI, &[def(p), reg(undef), block(0), reg(x), block(1)]), Inst::new(op::RETURN, &[reg(p)])],
+        ];
+        f.succs = vec![vec![2, 1], vec![2], vec![]];
+        assert!(phi_elimination(&mut f));
+        let copies = f.blocks.iter().flatten().filter(|inst| is_copy(inst.opcode)).count();
+        let implicit = f.blocks[0].iter().filter(|inst| inst.opcode == IMPLICIT_DEF).count();
+        // bb0 keeps its one read of `%undef` (the branch); the PHI's operand is
+        // a def.
+        assert_eq!((copies, implicit), (2, 2), "{:?}", f.blocks);
     }
 }

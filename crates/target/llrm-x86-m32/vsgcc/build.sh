@@ -32,12 +32,12 @@ RT_clang=$($CLANG -m32 --rtlib=compiler-rt -print-libgcc-file-name)
 [ -f "$RT_clang" ] || RT_clang=$RT_gcc
 fi
 # a row is refused when the compilers disagree on sizeof(long double): the table once set llrm's 8 bytes beside gcc's 12
-echo 'char ld_probe[sizeof(long double)];' > $O/b/ld_probe.c
+echo 'char ld_probe[sizeof(long double)];' > $O/b/ld_probe.$P.c
 size_of() { size -A "$1" | while read -r name bytes _; do [ "$name" = .bss ] && echo $bytes; done; }
-$LLRM --target=x86_32-wat ${LLRM_FLAGS:-} -mabi=$ABI $LLRM_LD -march=i486 -fobject-format=elf -c -o $O/b/ld_probe.llrm.o $O/b/ld_probe.c 2>/dev/null || { echo "FAIL ld probe llrm $P"; exit 1; }
+$LLRM --target=x86_32-wat ${LLRM_FLAGS:-} -mabi=$ABI $LLRM_LD -march=i486 -fobject-format=elf -c -o $O/b/ld_probe.$P.llrm.o $O/b/ld_probe.$P.c 2>/dev/null || { echo "FAIL ld probe llrm $P"; exit 1; }
 WANT=8; [ $LD = 80 ] && WANT=12
-if [ -z "${VSGCC_ONLY:-}" ]; then gcc -m32 $REF_LD -c -o $O/b/ld_probe.gcc.o $O/b/ld_probe.c && [ "$(size_of $O/b/ld_probe.gcc.o)" = $WANT ] || { echo "FAIL long double: gcc is not $WANT bytes ($LD bit) $P"; exit 1; }; fi
-[ "$(size_of $O/b/ld_probe.llrm.o)" = $WANT ] || { echo "FAIL long double: llrm is $(size_of $O/b/ld_probe.llrm.o) bytes, the reference $WANT ($LD bit) $P"; exit 1; }
+if [ -z "${VSGCC_ONLY:-}" ]; then gcc -m32 $REF_LD -c -o $O/b/ld_probe.$P.gcc.o $O/b/ld_probe.$P.c && [ "$(size_of $O/b/ld_probe.$P.gcc.o)" = $WANT ] || { echo "FAIL long double: gcc is not $WANT bytes ($LD bit) $P"; exit 1; }; fi
+[ "$(size_of $O/b/ld_probe.$P.llrm.o)" = $WANT ] || { echo "FAIL long double: llrm is $(size_of $O/b/ld_probe.$P.llrm.o) bytes, the reference $WANT ($LD bit) $P"; exit 1; }
 $LLRM --target=x86_32-wat ${LLRM_FLAGS:-} -mabi=$ABI $LLRM_LD -O2 -march=i486 -c -o $O/o/$P.llrm.obj $S 2>$O/o/$P.llrm.err || echo "FAIL llrm $P"
 $LLRM --target=x86_32-wat ${LLRM_FLAGS:-} -mabi=$ABI $LLRM_LD -Os -march=i486 -c -o $O/o/$P.llrmOs.obj $S 2>$O/o/$P.llrmOs.err || echo "FAIL llrmOs $P"
 for o in O1 O3; do $LLRM --target=x86_32-wat ${LLRM_FLAGS:-} -mabi=$ABI $LLRM_LD -$o -march=i486 -c -o $O/o/$P.llrm$o.obj $S 2>$O/o/$P.llrm$o.err || echo "FAIL llrm$o $P"; done

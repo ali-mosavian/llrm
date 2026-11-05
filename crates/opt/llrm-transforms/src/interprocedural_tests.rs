@@ -1231,3 +1231,136 @@ fn stamping_does_not_summarize_every_global_for_each_function() {
     let (few, many) = (scans(4), scans(32));
     assert!(many <= few + 2, "4 functions: {few} scans, 32: {many}");
 }
+
+/// `row` indexes a global: with it known, the address of its cell is an
+/// immediate, and a loop of stores through it saves the address arithmetic.
+/// `time_saved` priced that fold at nothing, so a call with only that
+/// constant (hanoi2's `mv(n, 0, 2, 1)`: 28% of its clocks to gcc, which cloned
+/// it) was never cloned.
+const CONSTANT_ROW: &str = "@cells = global [4 x [8 x i16]] zeroinitializer
+
+define i16 @fill(i16 %row, i16 %n) {
+b0:
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %body ]
+  %go = icmp slt i16 %i, %n
+  br i1 %go, label %body, label %done
+
+body:
+  %p = getelementptr [8 x i16], ptr @cells, i16 %row
+  %q = getelementptr i16, ptr %p, i16 %i
+  store i16 %i, ptr %q
+  %i1 = add nsw i16 %i, 1
+  br label %head
+
+done:
+  ret i16 0
+}
+
+define i16 @f(i16 %n) {
+b0:
+  %a = call i16 @fill(i16 2, i16 %n)
+  %b = call i16 @fill(i16 2, i16 %n)
+  ret i16 %a
+}
+";
+
+#[test]
+fn test_a_constant_index_into_a_global_is_priced_as_a_saving() {
+    let cloned = |clone: bool| {
+        let mut module = parsed(CONSTANT_ROW);
+        stepped(&mut module, &["f"], 20, Threshold { cp_clone: clone, ..Threshold::none() });
+        module.named("fill.constprop.1").is_some()
+    };
+    assert!(!cloned(false));
+    assert!(cloned(true));
+}
+
+/// Each level of `down` saves one address, too little to pay for a copy; the
+/// four levels together do, and GCC's `propagate_effects` credits the copy for
+/// `row = 0` with the ones after it. Priced alone, the copy was refused: queens
+/// got four clones of eight, hanoi2 none.
+const DOWN: &str = "@cells = global [8 x [8 x i16]] zeroinitializer
+
+define void @down(i16 %row, i16 %x) {
+b0:
+  %done = icmp eq i16 %row, 4
+  br i1 %done, label %out, label %go
+
+go:
+  %p = getelementptr [8 x i16], ptr @cells, i16 %row
+  %a = add i16 %x, 1
+  %b = mul i16 %a, %x
+  %c = add i16 %b, %a
+  %d = mul i16 %c, %b
+  %e = add i16 %d, %c
+  %f = mul i16 %e, %d
+  store i16 %f, ptr %p
+  %r1 = add nsw i16 %row, 1
+  call void @down(i16 %r1, i16 %e)
+  br label %out
+
+out:
+  ret void
+}
+
+define void @f(i16 %x) {
+b0:
+  call void @down(i16 0, i16 %x)
+  call void @down(i16 0, i16 3)
+  ret void
+}
+";
+
+#[test]
+fn test_a_clone_is_credited_with_the_clones_its_recursion_makes() {
+    let mut module = parsed(DOWN);
+    stepped(&mut module, &["f"], 20, Threshold { cp_clone: true, ..Threshold::none() });
+    assert!(module.named("down.constprop.1").is_some(), "{}", printed(&module));
+}
+
+/// `down` halves the range it passes on: `(row + hi) / 2` is no pass-through
+/// of one parameter, so GCC follows no chain of contexts from it. Credited
+/// with the contexts anyway, recchop got nine clones (+3485 B, 650 clk) at
+/// -O3.
+const HALVING: &str = "@cells = global [8 x [8 x i16]] zeroinitializer
+
+define void @down(i16 %row, i16 %hi, i16 %x) {
+b0:
+  %done = icmp eq i16 %row, %hi
+  br i1 %done, label %out, label %go
+
+go:
+  %p = getelementptr [8 x i16], ptr @cells, i16 %row
+  %a = add i16 %x, 1
+  %b = mul i16 %a, %x
+  %c = add i16 %b, %a
+  %d = mul i16 %c, %b
+  %e = add i16 %d, %c
+  %f = mul i16 %e, %d
+  store i16 %f, ptr %p
+  %s = add i16 %row, %hi
+  %m = udiv i16 %s, 2
+  call void @down(i16 %m, i16 %hi, i16 %e)
+  br label %out
+
+out:
+  ret void
+}
+
+define void @f(i16 %x) {
+b0:
+  call void @down(i16 0, i16 7, i16 %x)
+  call void @down(i16 0, i16 7, i16 3)
+  ret void
+}
+";
+
+#[test]
+fn test_a_recursion_that_halves_a_range_makes_no_chain_of_contexts() {
+    let mut module = parsed(HALVING);
+    stepped(&mut module, &["f"], 20, Threshold { cp_clone: true, ..Threshold::none() });
+    assert!(module.named("down.constprop.1").is_none(), "{}", printed(&module));
+}
