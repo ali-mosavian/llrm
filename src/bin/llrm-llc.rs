@@ -26,6 +26,9 @@ fn main() {
         ("STALE", llrm_mir::passes::stale_checks_run()),
         ("REPLAY", llrm_mir::passes::replay_checks_run()),
     ]);
+    if std::env::var_os("LLRM_CHECK_FRAME").is_some() {
+        eprintln!("{}", llrm_codegen::backend::masm::frame_asks_report());
+    }
     if llrm_codegen::support::debug::enabled("counts") {
         llrm_mir::counts::lines().iter().for_each(|line| eprintln!("{line}"));
         llrm_transforms::parity::tally_lines().iter().for_each(|line| eprintln!("{line}"));

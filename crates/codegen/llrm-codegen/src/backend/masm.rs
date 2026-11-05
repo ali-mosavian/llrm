@@ -2843,7 +2843,41 @@ fn inert(callee: &Callee) -> bool {
 /// on. Where anything puts that out of reach (a stack pointer written another
 /// way, inline code, an indirect call whose callee may pop, a frame register
 /// read as a value) the frame stays.
+/// `stack_addressed`, and under `LLRM_CHECK_FRAME` a record of every ask: the
+/// caller, and whether the frame register could be omitted. A function whose
+/// answer differs between asks is reported (the single-decision frame, MASM-RB1
+/// plan step A, relies on it never differing).
+#[track_caller]
 fn stack_addressed(
+    procedure: &Procedure,
+    number: usize,
+) -> Option<Vec<Item>> {
+    let found = stack_addressed_trial(procedure, number);
+    if std::env::var_os("LLRM_CHECK_FRAME").is_some() {
+        let caller = std::panic::Location::caller();
+        let mut asks = ASKS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let entry = asks.entry(procedure.name.to_string()).or_default();
+        entry.push((caller.line(), found.is_some()));
+        if entry.iter().any(|(_, was)| *was != found.is_some()) {
+            eprintln!("frame-flip {}: {:?}", procedure.name, entry);
+        }
+    }
+    found
+}
+
+/// Per function: (the line of the ask, its answer), in order.
+static ASKS: std::sync::Mutex<std::collections::BTreeMap<String, Vec<(u32, bool)>>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+/// The number of asks per function, for a run that set `LLRM_CHECK_FRAME`.
+pub fn frame_asks_report() -> String {
+    let asks = ASKS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let total: usize = asks.values().map(Vec::len).sum();
+    let flips = asks.values().filter(|one| one.iter().any(|(_, was)| *was != one[0].1)).count();
+    format!("frame asks: {} functions, {} asks, {} flips", asks.len(), total, flips)
+}
+
+fn stack_addressed_trial(
     procedure: &Procedure,
     number: usize,
 ) -> Option<Vec<Item>> {
