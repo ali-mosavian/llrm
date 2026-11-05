@@ -164,7 +164,7 @@ pub fn call_sequence(
         .arguments
         .iter()
         .map(|argument| match argument.byval_bytes {
-            Some(bytes) => (bytes as i64).div_ceil(4).max(1),
+            Some(bytes) => ((bytes as i64 + 3) / 4).max(1),
             None => argument.ty.map_or(1, pieces),
         })
         .sum();
