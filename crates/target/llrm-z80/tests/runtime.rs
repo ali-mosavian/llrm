@@ -70,17 +70,18 @@ fn the_divide_routines_beat_sdcc_on_bytes_and_cycles() {
 
 /// `__umodsi3` of a 22-bit dividend by a 17-bit divisor (loop_interchange's
 /// `% 100003`) took 13.6k T: the remainder and the quotient both lived in the
-/// frame and all 32 steps ran. With the remainder in registers and the
-/// dividend's leading zeros skipped it is 8.1k.
+/// frame and all 32 steps ran; with the remainder in registers and the leading
+/// zeros skipped it was 8.1k. SDCC aligns the divisor under the dividend and
+/// takes one step per quotient bit (3.1k here); so does this: 2.5k.
 #[test]
-fn a_long_remainder_of_a_small_dividend_skips_its_leading_zeros() {
+fn a_long_remainder_takes_one_step_per_quotient_bit() {
     if !["sdasz80", "ucsim_z80"].into_iter().all(have) {
         assert!(std::env::var("Z80_ORACLE_OPTIONAL").is_ok_and(|flag| flag == "1"), "sdcc tools not found");
         return;
     }
     let dir = env!("CARGO_MANIFEST_DIR");
     let done = Command::new("python3")
-        .args(["-I", &format!("{dir}/tests/runtime/divlong_clocks.py"), &format!("{dir}/runtime/z80_rt.s"), "9000"])
+        .args(["-I", &format!("{dir}/tests/runtime/divlong_clocks.py"), &format!("{dir}/runtime/z80_rt.s"), "3000"])
         .output()
         .expect("python3 runs");
     let text = String::from_utf8_lossy(&done.stdout);
