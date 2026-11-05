@@ -2473,3 +2473,65 @@ define i8 @borrow() {
         assert_eq!(exit_code_of(&text, "borrow"), 0, "{level:?}\n{text}");
     }
 }
+
+/// A library shift took its amount as a byte (the shift-amount type) where the
+/// pin makes it the library's `int`, a 16-bit word here: a helper written in C
+/// (`u64 __ashldi3(u64, int)`, compiler-rt) read a high byte the caller never
+/// stored, whatever the stack held. `dirty` leaves 0xFF on the stack first.
+#[test]
+fn a_library_shift_passes_its_amount_as_the_c_int() {
+    let ir = module(
+        r#"define i64 @__ashldi3(i64 %x, i16 %n) noinline {
+  %w = zext i16 %n to i64
+  ret i64 %w
+}
+@n = global i8 3
+@x = global i64 1
+define void @dirty() noinline {
+  %a = alloca [32 x i8]
+  %p0 = getelementptr i8, ptr %a, i16 0
+  store volatile i8 -1, ptr %p0
+  %p1 = getelementptr i8, ptr %a, i16 1
+  store volatile i8 -1, ptr %p1
+  %p2 = getelementptr i8, ptr %a, i16 2
+  store volatile i8 -1, ptr %p2
+  %p3 = getelementptr i8, ptr %a, i16 3
+  store volatile i8 -1, ptr %p3
+  %p4 = getelementptr i8, ptr %a, i16 4
+  store volatile i8 -1, ptr %p4
+  %p5 = getelementptr i8, ptr %a, i16 5
+  store volatile i8 -1, ptr %p5
+  %p6 = getelementptr i8, ptr %a, i16 6
+  store volatile i8 -1, ptr %p6
+  %p7 = getelementptr i8, ptr %a, i16 7
+  store volatile i8 -1, ptr %p7
+  %p8 = getelementptr i8, ptr %a, i16 8
+  store volatile i8 -1, ptr %p8
+  %p9 = getelementptr i8, ptr %a, i16 9
+  store volatile i8 -1, ptr %p9
+  %p10 = getelementptr i8, ptr %a, i16 10
+  store volatile i8 -1, ptr %p10
+  %p11 = getelementptr i8, ptr %a, i16 11
+  store volatile i8 -1, ptr %p11
+  ret void
+}
+define i64 @shift() noinline {
+  %v = load i64, ptr @x
+  %c = load i8, ptr @n
+  %z = zext i8 %c to i64
+  %r = shl i64 %v, %z
+  ret i64 %r
+}
+define i8 @high_byte_of_the_amount() {
+  call void @dirty()
+  %r = call i64 @shift()
+  %h = lshr i64 %r, 8
+  %t = trunc i64 %h to i8
+  ret i8 %t
+}"#,
+    );
+    for level in [Level::O0, Level::O2, Level::Os] {
+        let text = assembly(&ir, &Request::new(level)).unwrap_or_else(|e| panic!("{level:?}: {e}"));
+        assert_eq!(exit_code_of(&text, "high_byte_of_the_amount"), 0, "{level:?}\n{text}");
+    }
+}

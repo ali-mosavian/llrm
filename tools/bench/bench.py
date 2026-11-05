@@ -381,7 +381,7 @@ def build_watcom(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Pat
     from the corpus's ext.asm."""
     obj, exe, listing = work / f"{stem}.obj", work / f"{stem}.exe", work / f"{stem}.map"
     flags = ["-ox", "-oe=0"] if opt == "O2" else ["-os", "-ol"]  # -oe=0: the kernel stays a call, as llrm-c compiles it
-    done = cpulimit.run([str(OW / "bwcc"), "-zq", "-mm", "-ecc", "-s", "-DOWREF", "-4", "-fpi87", f"-i={OWLIB.parent / 'h'}", *physical_defines(), *flags, str(variant.source), f"-fo={obj}"], 300, capture_output=True, text=True)
+    done = cpulimit.run([str(OW / "bwcc"), "-zq", "-mm", "-ecc", "-s", "-DOWREF", "-4", "-fpi87", f"-i={OWLIB.parent / 'h'}", *physical_defines(), *flags, str(variant.source), f"-fo={obj}"], 300, capture_output=True, text=True, timeout=native.COMPILE_SECONDS)
     if done.returncode != 0 or not obj.exists():
         return "compile: " + (done.stderr or done.stdout).strip()[-300:]
     support = dosbatch.c_support(dosbatch.REAL_MODE, work)
@@ -462,8 +462,8 @@ def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str,
             header = folder / "bench_io.h"
             if header.exists():
                 header.write_bytes(header.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
-    subprocess.run([str(ROOT / "tools" / "callconv" / "bcc.sh"), str(folder), *[f"{stem}.c {levels[opt]} {" ".join([*physical_defines(), *BORLAND_DEFINES.get(language, [])])}".strip() for _, stem in variants_]],
-                   env={**os.environ, "CCROOT": str(home.parent), "CCDIR": home.name, "CCEXE": compiler}, capture_output=True, timeout=1800)
+    native.run_limited([str(ROOT / "tools" / "callconv" / "bcc.sh"), str(folder), *[f"{stem}.c {levels[opt]} {" ".join([*physical_defines(), *BORLAND_DEFINES.get(language, [])])}".strip() for _, stem in variants_]],
+                   env={**os.environ, "CCROOT": str(home.parent), "CCDIR": home.name, "CCEXE": compiler}, seconds=1800)
     support = [word for one in dosbatch.c_support(dosbatch.REAL_MODE, folder) for word in ("file", str(one))]
     out: dict[str, tuple[Path, Path] | str] = {}
     for _, stem in variants_:

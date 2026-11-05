@@ -15,7 +15,7 @@
 // CHECK-NOT: std
 // CHECK: {{_scroll_up(@3)?}} endp
 // CHECK-LABEL: {{_scroll_down(@3)?}} proc
-// A backward move is the fixed byte string `std; rep movsd; ...; cld` (memops.rs), listed as one `db`; ES is an input (40de5fe1df), so no `push ds; pop es`.
+// A backward move is the fixed byte string `std; rep movsd; ...; cld` (memops.rs), listed as one `db`; ES is an input, loaded once for the moves beside it (backward_moves_share_es.c).
 // CHECK[-O2]: {{db 0fdh,0f3h,066h,0a5h.*,0fch}}
 // CHECK[-Os]: dec ax
 // CHECK: {{_scroll_down(@3)?}} endp
