@@ -179,6 +179,19 @@ pub fn module_text(
             texts[at] = alloc::with_shared_saves(false, || function_text(module, parts[at].0, parts[at].1))?;
         }
     }
+    // the wide speed division is linked once and costs 141 bytes:
+    // a module whose divisions are cold calls the speed routines with the
+    // small wide path
+    let wide = |text: &str| {
+        ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3"].iter().any(|name| text.contains(&format!(" {name}_fast\n")))
+    };
+    if texts.iter().any(|text| wide(text)) && !crate::hotdivision::hot(module) {
+        for at in 0..texts.len() {
+            if wide(&texts[at]) {
+                texts[at] = alloc::with_fast_division(false, || function_text(module, parts[at].0, parts[at].1))?;
+            }
+        }
+    }
     Ok(texts)
 }
 
