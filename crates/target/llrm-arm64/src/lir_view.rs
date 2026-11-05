@@ -91,6 +91,11 @@ fn label_of(inst: &Inst) -> Option<&str> {
 /// What an operation is apart from its registers, as a number: the allocator
 /// sees the instruction by name and this, and `rebuild` finds the operation
 /// again by it.
+/// `mov xd, xzr`: the register-31 source of a copy is the zero register.
+fn is_zero_copy(op: &Op) -> bool {
+    matches!(op, Op::Copy { dst: Reg::Gpr(_), src: Reg::Gpr(Gpr(31)) })
+}
+
 fn content(op: &Op) -> i64 {
     use std::hash::{Hash, Hasher};
     let mut blank = op.clone();
@@ -174,7 +179,11 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
                 continue;
             }
             let fused = pairs[at].contains_key(&index);
+            let zero = is_zero_copy(op);
             let (kind, terminator, barrier, call) = match op {
+                // A copy of the zero register is a move of 0: made again where
+                // it is read (`reMaterializeTrivialDef`), not copied from one value.
+                Op::Copy { .. } if zero => (Kind::Op("Imm"), false, false, false),
                 Op::I(inst) => (
                     Kind::Op(name_of(inst)),
                     matches!(
@@ -214,6 +223,9 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
                 let key = register.key();
                 // The page register of a fused `MOVaddr` is not a value.
                 if fused && role == Role::Use && std::mem::take(&mut page_read) {
+                    return;
+                }
+                if zero && role == Role::Use {
                     return;
                 }
                 let reg = to_lir(key);
@@ -268,6 +280,7 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
             );
             inst.early_clobber = matches!(op, Op::I(Inst::Atomic { .. }) | Op::JumpTable { .. });
             inst.rematerializable = fused
+                || zero
                 || matches!(
                     op,
                     Op::Imm { .. }
@@ -278,7 +291,7 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
                 &op,
                 Op::I(Inst::Load { mmo, .. }) if mmo.object == crate::mc::inst::MemObject::ConstantPool
             );
-            inst.cheap_as_move = matches!(op, Op::Imm { .. } | Op::I(Inst::MoveWide { .. }));
+            inst.cheap_as_move = zero || matches!(op, Op::Imm { .. } | Op::I(Inst::MoveWide { .. }));
             insts.push(inst);
         }
         lir.blocks.push(Block { id: at as u32, insts, phis: Vec::new() });
@@ -371,8 +384,12 @@ pub fn rebuild(
                 Kind::Op(_) => {
                     let Some(Operand::Imm(hash)) = inst.operands.last() else { panic!("an operation with no content") };
                     let mut op = originals[hash].clone();
+                    let zero = is_zero_copy(&op);
                     let mut at = 0;
                     op.visit(&mut |register, role| {
+                        if zero && role == Role::Use {
+                            return;
+                        }
                         let new = reg_at(at);
                         at += if role == Role::UseDef { 2 } else { 1 };
                         match (register, new) {
