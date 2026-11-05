@@ -70,8 +70,10 @@ fn copies(
         .filter_map(|(_, inst)| {
             let callee = llrm_mir::memory::callee(context, function, inst)?;
             let copy = matches!(intrinsics[callee.0 as usize]?, Intrinsic::MemCpy);
-            let variable = constant_value(context, function.instruction(inst).operands[2]).is_none();
-            (copy && variable && !volatile(context, function, inst)).then_some(inst)
+            (copy
+                && constant_value(context, function.instruction(inst).operands[2]).is_none()
+                && !volatile(context, function, inst))
+            .then_some(inst)
         })
         .collect()
 }
