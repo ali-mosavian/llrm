@@ -120,6 +120,18 @@ fn cells() -> impl Iterator<Item = RegId> {
     (2..8).chain(BASE_CELLS..imaginary()).chain(8..BASE_CELLS).map(rc)
 }
 
+/// How many bytes a value may live in on the platform with `zero_page` cells
+/// (`BASE_CELLS` at least): `a`, `x`, `y` and [`cells`], and how many of those
+/// a callee keeps. The register file `Machine::registers`/`call_registers`
+/// state to the mid-end, counted from the allocator's own pools.
+pub fn register_file(zero_page: u8) -> (i64, i64) {
+    let before = IMAGINARY.with(|n| n.replace(zero_page.clamp(BASE_CELLS, MOST_CELLS)));
+    let bytes = 3 + cells().count() as i64;
+    let kept = cells().filter(|&cell| preserved(cell)).count() as i64;
+    IMAGINARY.with(|n| n.set(before));
+    (bytes, kept)
+}
+
 /// The pairs a pointer may live in: `rs1`..`rs3` over `rc2`..`rc7`, the scratch
 /// pairs `rs8`.., then `rs4`..`rs7`.
 fn pairs() -> impl Iterator<Item = RegId> {
