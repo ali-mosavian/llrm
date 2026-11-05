@@ -597,6 +597,14 @@ pub struct OperationCosts {
     /// The fewest case values for which a switch is a jump table (gcc's
     /// `case_values_threshold`); 0: the target has no table jump.
     pub jump_table: i64,
+    /// The bytes every function has beyond its operations (a callee-saved
+    /// register saved and restored): added once to a function's size
+    /// estimate; 0 where the table states none.
+    pub function: i64,
+    /// Percent a function's estimate (operations plus `function`) is scaled
+    /// by for what the lowering adds that no operation names (spills, branch
+    /// relaxation), measured against objects; 100: none.
+    pub function_scale: i64,
     /// Bytes of one line of the CPU's data cache (its first level); 0: the
     /// target states none (no cache, or not known).
     pub cache_line: i64,
@@ -728,6 +736,8 @@ impl Default for OperationCosts {
             pieces_clear_size: 0,
             memset_store: 0,
             jump_table: 0,
+            function: 0,
+            function_scale: 100,
             cache_line: 0,
             line_fill_clocks: 0,
         }
