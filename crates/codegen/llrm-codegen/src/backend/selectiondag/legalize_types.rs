@@ -102,16 +102,15 @@ impl<'a> TypeLegalizer<'a> {
 
     /// `getShiftAmountTy` for a shift of `vt` (`i8` on x86).
     /// The type a library shift takes its amount in: `EVT::getIntegerVT(
-    /// getIntSize())` where the target states its `int`, else the
-    /// shift-amount type.
+    /// getIntSize())`.
     fn libcall_shift_amount_type(
         &self,
         vt: EVT,
     ) -> EVT {
-        match self.tli.types.int_size() {
-            Some(bits) => EVT::integer(bits),
-            None => self.shift_amount_type(vt),
+        if self.tli.types.narrow_library_shift() {
+            return self.shift_amount_type(vt);
         }
+        EVT::integer(self.tli.types.int_size())
     }
 
     fn shift_amount_type(
