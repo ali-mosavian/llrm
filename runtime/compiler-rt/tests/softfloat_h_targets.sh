@@ -12,4 +12,5 @@ for t in wasm32 aarch64-linux-gnu aarch64-apple-darwin x86_64-linux-gnu i386-lin
   n=$((n + 1)); [ -z "$out" ] || { echo "$t: $(echo "$out" | head -1)"; rc=1; }
 done
 rm -f "${TMPDIR:-/tmp}/sf_h_targets.c"
+[ $n -gt 0 ] || { echo "no target was usable: is $C a clang?"; exit 2; }
 [ $rc = 0 ] && echo "softfloat.h parses on $n targets"; exit $rc
