@@ -36,6 +36,9 @@
 //!
 //! A phi whose arms differ in kind stays.
 //!
+//! (C1 is not what left leas in m64 quicksort -O3: that was the missing
+//! base-as-register retry in `matched_over`.)
+//!
 //! DEVIATE C1 (m32): the rest of CodeGenPrepare's work is done by isel, which
 //! rebuilds an address expression in the block that uses it, and by the select
 //! lowering; the width of a switch condition is `cgpswitch`'s
@@ -727,7 +730,14 @@ fn matched_over(
         }
         // The base matched an index of its own: match this one against the
         // base as a register; a second conflict is a failure.
-        (Some(_), Some(_)) if !opaque => {
+        // DEVIATE CGP2 (owner anyisa, exit 2026-11-20): not in real mode. The
+        // sunk address keeps its base and index live to the store; with four
+        // registers that grew m16 bintree -Os by 5 bytes and
+        // phi_slot_unknown_arm -O1 by 9 (an added spill slot and a select made
+        // through `setge`). The pin has no such gate (its code16 build has
+        // 32-bit registers, so it is no oracle here); the exit makes this a
+        // register-pressure price.
+        (Some(_), Some(_)) if !opaque && tti.scaled_index_insns() == 0 => {
             return matched_over(unit, tti, space, block, bytes, address, depth, true);
         }
         (Some(_), Some(_)) => return plain(),

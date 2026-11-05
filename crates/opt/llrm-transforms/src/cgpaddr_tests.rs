@@ -397,3 +397,42 @@ b4:
     assert!(!b2.contains("%p"), "the store reads the address made in the header: {after}");
     assert!(b2.contains("%i"), "the store's block makes its address from the index: {after}");
 }
+
+/// The same shape in real mode (four registers): the address stays as it was.
+/// With the base and the index both live to the store, m16 bintree -Os grew
+/// 5 bytes and phi_slot_unknown_arm -O1 9 (DEVIATE CGP2).
+#[test]
+fn test_an_address_over_a_base_with_an_index_of_its_own_stays_in_real_mode() {
+    let after = sunk(
+        "define void @f(ptr %base, i16 %n, i16 %cv) {
+b0:
+  %n2 = shl i16 %n, 1
+  %inner = getelementptr i8, ptr %base, i16 %n2
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b3 ]
+  %s = shl i16 %i, 1
+  %p = getelementptr i8, ptr %inner, i16 %s
+  %v = load i16, ptr %p
+  %c = icmp slt i16 %v, %cv
+  br i1 %c, label %b2, label %b3
+
+b2:
+  store i16 %cv, ptr %p
+  br label %b3
+
+b3:
+  %i1 = add i16 %i, 1
+  %done = icmp eq i16 %i1, %n
+  br i1 %done, label %b4, label %b1
+
+b4:
+  ret void
+}
+",
+    );
+    let (_, rest) = after.split_once("b2:").expect("a block b2");
+    let b2 = rest.split_once("b3:").expect("a block b3").0;
+    assert!(b2.contains("%p"), "the store reads the address made in the header: {after}");
+}
