@@ -5,12 +5,12 @@
 //!
 //! # How it works
 //! Constants: stores of integer constants to adjacent cells of one object are
-//! one store of their bytes, in the target's byte order, when the bytes are a legal integer
-//! (`getConsecutiveStores` finds the run of cells of one width, the widest
-//! legal prefix is taken, and a store made is a candidate again, so a byte pair
-//! and a word beside it become a dword). A load of any of the cells, another
-//! store, a call or a volatile store ends the span; stores that overlap leave
-//! the object alone.
+//! one store of their bytes, in the target's byte order, when the bytes are a
+//! legal integer (`getConsecutiveStores` finds the run of cells of one width,
+//! the widest legal prefix is taken, and a store made is a candidate again, so
+//! a byte pair and a word beside it become a dword). A load of any of the
+//! cells, another store, a call or a volatile store ends the span; stores that
+//! overlap leave the object alone.
 //!
 //! Loads:
 //! In straight-line code, a store of a value another instruction loaded, the
@@ -450,7 +450,8 @@ struct Constant {
     value: u128,
     /// The pointer of the lowest cell.
     pointer: Operand,
-    /// The least alignment, in bytes, the stores promised: that of the narrowest.
+    /// The least alignment, in bytes, the stores promised: that of the
+    /// narrowest.
     align: u32,
 }
 
@@ -858,6 +859,21 @@ mod constant_tests {
         let inputs: &[&[i128]] = &[&[0, 0], &[0, 1], &[0, 2], &[0, 3], &[0, 4], &[0, 5]];
         assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
         (after, changed)
+    }
+
+    /// On a big-endian layout the first byte is the high one: the bytes 18, 52
+    /// are 0x1234 (4660), not 0x3412 (13330).
+    #[test]
+    fn test_a_big_endian_pair_joins_its_first_byte_high() {
+        let text = "@s = global [8 x i8] zeroinitializer\n\ndefine void @f() {\n  %p1 = getelementptr inbounds [8 x i8], ptr @s, i16 0, i16 1\n  store i8 18, ptr @s\n  store i8 52, ptr %p1\n  ret void\n}\n";
+        let mut module = parsed(&format!("{}{text}", DOS.replacen("\"e-", "\"E-", 1)));
+        let (layout, outer) =
+            (layout(&module), Outer::of(&module, Some(std::rc::Rc::new(llrm_x86_m16::Dos::default()))));
+        let callees = llrm_mir::memory::callees(&module);
+        let (context, function) = module.function_mut("f").expect("@f");
+        let changed = merged_constants(context, &layout, &callees, function, &outer, false);
+        let after = printed(&module);
+        assert!(changed && after.contains("store i16 4660, ptr @s"), "{after}");
     }
 
     /// A byte pair and a word beside it are a dword: the store made from the
