@@ -463,6 +463,15 @@ struct Builder {
     /// cells for later.
     pending: Option<Compare>,
     saved: HashMap<String, Compare>,
+    /// The flags of the pending compare are already made, for a branch on the
+    /// carry alone (`carry_branch_ahead`): the branch does not redo it.
+    flags_made: bool,
+    /// The last word step: its block, the index of its first instruction, the
+    /// cell it defines and its item. A compare after it, with only copies and
+    /// loads between, may move in front (`carry_branch_ahead`).
+    step_at: Option<(usize, usize, String, usize)>,
+    /// The item being built.
+    item: usize,
     /// Compares are redone where the flags are read: nothing keeps `P` alive.
     /// The block instructions go to.
     current: usize,
@@ -1097,10 +1106,28 @@ impl Builder {
             .count()
     }
 
+    /// Whether `d := a op b` on a word is a step (`Some(up)`), as
+    /// [`Self::word_step`] makes it.
+    fn steps(
+        &self,
+        mnemonic: &str,
+        d: &str,
+        a: &str,
+        b: &str,
+    ) -> Option<bool> {
+        let up = match (mnemonic, self.word_constant(b)) {
+            ("ADC", Some([1, 0])) => true,
+            ("ADC", Some([255, 255])) | ("SBC", Some([1, 0])) => false,
+            _ => return None,
+        };
+        (!self.in_pair(d) && !self.in_pair(a)).then_some(up)
+    }
+
     /// `d := a - 1` or `a + 1` on a word: the low byte steps, the high only
     /// when the low wrapped (`lda lo; bne; dec hi; dec lo`, 11 clocks against
     /// 22 for the carry chain; `inc lo; bne; inc hi`; a byte in x or y steps
     /// by inx/iny/dex/dey). Not for a pointer, which has its own pair bump.
+    /// The step leaves the carry alone (`inc` and `dec` set N and Z only).
     fn word_step(
         &mut self,
         mnemonic: &str,
@@ -1108,14 +1135,8 @@ impl Builder {
         a: &str,
         b: &str,
     ) -> Result<bool, Unsupported> {
-        let up = match (mnemonic, self.word_constant(b)) {
-            ("ADC", Some([1, 0])) => true,
-            ("ADC", Some([255, 255])) | ("SBC", Some([1, 0])) => false,
-            _ => return Ok(false),
-        };
-        if self.in_pair(d) || self.in_pair(a) {
-            return Ok(false);
-        }
+        let Some(up) = self.steps(mnemonic, d, a, b) else { return Ok(false) };
+        self.step_at = Some((self.current, self.function.blocks[self.current].insts.len(), d.to_owned(), self.item));
         let (al, ah) = self.read_word(a)?;
         let (dl, dh) = self.write_word(d)?;
         self.copy(dl, al);
@@ -1457,6 +1478,63 @@ fn pointer_bases(items: &[Item]) -> HashSet<String> {
     out
 }
 
+/// The condition code `redo_compare` takes for `bcc` and `bcs`: they read the
+/// carry alone.
+const CARRY_ONLY: i64 = 2;
+
+/// Whether the next reader of the flags after `items[from..]`, in the same
+/// block, is a `bcc` or `bcs`, and only copies, loads of constants and steps of
+/// a word by one lie between: they leave the carry as the compare made it
+/// (`lda`, `ldx`, `sta`, `tax`, `inc` and `dec` change N and Z only). A branch
+/// on Z, N or a signed condition keeps its compare where it is.
+fn carry_branch_ahead(
+    b: &Builder,
+    items: &[Item],
+    from: usize,
+) -> bool {
+    let mut skip = false;
+    for (at, item) in items.iter().enumerate().skip(from) {
+        if std::mem::take(&mut skip) {
+            continue;
+        }
+        let Item::Inst(MInst { opcode, operands, .. }) = item else { return false };
+        match *opcode {
+            // the flags saved and loaded at once: nothing between
+            save if save == spill::SAVE_FLAGS => match items.get(at + 1) {
+                Some(Item::Inst(next)) if next.opcode == spill::LOAD_FLAGS && next.operands == *operands => skip = true,
+                _ => return false,
+            },
+            op::BCC | op::BCS => return true,
+            op::COPY8 | op::COPY16 | op::LDI8 | op::LDI16 => {}
+            op::ADD16 | op::SUB16 => {
+                let [Machine::Reg(d), Machine::Reg(a), Machine::Reg(c)] = &operands[..] else { return false };
+                let mnemonic = if *opcode == op::ADD16 { "ADC" } else { "SBC" };
+                if b.steps(mnemonic, d, a, c).is_none() {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// Whether `items` are copies and loads that do not define `a`, nor `c` by a
+/// copy (a constant `c` is read from the constants, wherever it is loaded).
+fn leaves_alone(
+    items: &[Item],
+    a: &str,
+    c: &str,
+) -> bool {
+    items.iter().all(|item| match item {
+        Item::Inst(MInst { opcode, operands, .. }) if matches!(*opcode, op::COPY8 | op::COPY16 | op::LDI8 | op::LDI16) => {
+            let loads = matches!(*opcode, op::LDI8 | op::LDI16);
+            !matches!(operands.first(), Some(Machine::Reg(d)) if d == a || d == c && !loads)
+        }
+        _ => false,
+    })
+}
+
 /// The cells defined by exactly one `LDI8`, with their values.
 fn constants(items: &[Item]) -> HashMap<String, i64> {
     let mut defs: HashMap<String, usize> = HashMap::default();
@@ -1563,6 +1641,9 @@ pub fn build_with_places(
         lost_halves: HashSet::default(),
         pending: None,
         saved: HashMap::default(),
+        flags_made: false,
+        step_at: None,
+        item: 0,
         current: 0,
     };
     for id in 0..labels.len() {
@@ -1571,12 +1652,19 @@ pub fn build_with_places(
     let mut after_inst = false;
     let mut entry_labeled = false;
     for (at, item) in items.iter().enumerate() {
+        b.item = at;
+        // copies and loads between the step and its compare keep the step
+        // pending (the compare's right side is read from the constants)
+        let loads =
+            matches!(item, Item::Inst(MInst { opcode: op::COPY8 | op::COPY16 | op::LDI8 | op::LDI16, .. }));
+        let prev_step = if loads { b.step_at.clone() } else { b.step_at.take() };
         let inst = match item {
             Item::Label(_) => {
                 if after_inst || b.current == 0 && entry_labeled {
                     b.current += 1;
                     after_inst = false;
                     b.pending = None;
+                    b.flags_made = false;
                 }
                 entry_labeled = true;
                 continue;
@@ -1992,6 +2080,27 @@ pub fn build_with_places(
                     zero: false,
                     memory: None,
                 });
+                // DEVIATE (6502-LANE-COPY): the item before stepped a word
+                // and a branch on the carry alone reads this compare, with
+                // only steps and copies between (they leave the carry): the
+                // compare is made in front of the step, the old value dies
+                // at it and the step needs no copy of it. Exit 2026-11-20
+                // (the flags per opcode in `asm.rs`).
+                if let Some((block, start, d, step_item)) = prev_step
+                    && block == b.current
+                    && d != a
+                    && d != c
+                    && b.word_constant(c).is_some()
+                    && leaves_alone(&items[step_item + 1..at], a, c)
+                    && carry_branch_ahead(&b, items, at + 1)
+                {
+                    let before = b.function.blocks[block].insts.len();
+                    b.redo_compare(CARRY_ONLY, true)?;
+                    let insts = &mut b.function.blocks[block].insts;
+                    let made = insts.len() - before;
+                    insts[start..].rotate_right(made);
+                    b.flags_made = true;
+                }
             }
             spill_op if spill_op == spill::SAVE_FLAGS => {
                 let compare = b.pending.clone().ok_or_else(|| Unsupported("saved flags with no compare".into()))?;
@@ -2004,7 +2113,9 @@ pub fn build_with_places(
             }
             code @ (op::BEQ | op::BNE | op::BCC | op::BCS | op::BMI | op::BPL) => {
                 let condition = [op::BEQ, op::BNE, op::BCC, op::BCS, op::BMI, op::BPL].iter().position(|c| *c == code);
-                b.redo_compare(condition.map_or(-1, |c| c as i64), true)?;
+                if !std::mem::take(&mut b.flags_made) {
+                    b.redo_compare(condition.map_or(-1, |c| c as i64), true)?;
+                }
                 let mnemonic = match code {
                     op::BEQ => "BEQ",
                     op::BNE => "BNE",
