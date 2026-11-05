@@ -32,6 +32,9 @@ for op in cmp floatsi fixsi; do
     echo "${OURS_PROTO[$op]}"
     echo "long bench_$n(long n) { long i; sfu32 acc = 0; for (i = 0; i < n; ++i) { ${OURS_BODY[$op]} } return (long)acc; }"
     echo "int main(void) { report(bench_$n($NV)); return 0; }"; } > $K/$n/$n.c
+  # the image must hold only its own source (it was every f32 file, 2.7 kB, against one-function crt kernels): no other operation, and pack only where it rounds
+  ! grep -Pzq 'SF_NAME\(addsf3\)\([^;{]*\)\s*\{' $K/$n/$n.c || { echo "FAIL: $n links the addition"; exit 1; }
+  [ $op = floatsi ] || ! grep -Pzq 'sf32_pack\([^;{]*\)\s*\{' $K/$n/$n.c || { echo "FAIL: $n links pack"; exit 1; }
   gcc -m32 -O0 -w $K/$n/$n.c $T/rep.c -o $T/r_$n && $T/r_$n > $K/$n/$n.out
   n=x_crt_$op; mkdir -p $K/$n
   { echo 'extern void report(long value);'
