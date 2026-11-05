@@ -1846,20 +1846,17 @@ fn a_byte_stored_from_one_half_of_a_pair_and_loaded_into_the_other_stays_in_the_
     assert!(!out.contains("pop de\n\tdec d"), "{out}");
 }
 
-/// -O2 and -O3 keep the slots of a function that has a frame in the frame: the
-/// general conversion lost the peek (`pop bc; push bc`, 21 T against 38 T
-/// through IX) on a hot slot, div_constants_short -O2 +290,566 T. A function
-/// with nothing but spills is still the base pass's (the frame goes, any
-/// level). The same function converts at -Os.
+/// Spill slots were push and pop only at -Os and -Oz: at -O2 and -O3 the
+/// slot read again lost `pop bc; push bc` to two IX loads, 4,000 B and 12.8M T
+/// over the corpus (div_constants_short -O2 1.36M T). A slot read again is now
+/// peeked at every level.
 #[test]
-fn spill_slots_stay_in_the_frame_at_o2_and_o3() {
+fn spill_slots_are_push_and_pop_at_every_level() {
     let ir = include_str!("kernels/ir/stack_slots_framed.ll");
-    for level in [Level::O2, Level::O3] {
+    for level in [Level::O2, Level::O3, Level::Os] {
         let out = text(ir, "f", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
-        assert!(out.contains("ld -4(ix), e") && !out.contains("call _g\n\tpush de"), "{level:?}\n{out}");
+        assert!(out.contains("call _g\n\tpush de") && !out.contains("ld -4(ix)"), "{level:?}\n{out}");
     }
-    let out = text(ir, "f", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
-    assert!(out.contains("call _g\n\tpush de") && !out.contains("ld -4(ix)"), "{out}");
 }
 
 /// The base pass at -O2: a function whose frame holds only spills loses the
@@ -1869,4 +1866,16 @@ fn a_function_with_only_spills_loses_its_frame_at_o2() {
     let ir = include_str!("kernels/ir/stack_slots_single.ll");
     let out = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     assert!(out.contains("push de") && !out.contains("(ix)"), "{out}");
+}
+
+/// Peeking every slot that is read again made logical_value -Os 152 lines
+/// instead of 148 (+12 B): the frame stayed for the other slots and each moved
+/// slot added its own `ld`. The function is priced with and without the peeks,
+/// and the cheaper stays.
+#[test]
+fn peeking_slots_is_kept_only_where_it_is_smaller() {
+    let out = text(include_str!("kernels/ir/stack_peek_not_always_cheaper.ll"), "main", 0, &Request::new(Level::Os))
+        .expect("compiles");
+    let lines = out.lines().count();
+    assert!(lines <= 148, "{lines} lines\n{out}");
 }

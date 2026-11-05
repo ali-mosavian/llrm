@@ -465,47 +465,59 @@ fn allocate_once(
     let mut framed = function.clone();
     spills_first(&mut framed, &assignment);
     narrow_reload_for_byte_shift(&mut framed, &assignment);
-    if !crate::tti::spills_as_push_pop(level) {
-        // the whole-function pass of the base, as it was
-        let mut slots = slots;
-        if frameless_slots_are_a_stack(&mut function, &assignment) {
-            slots.clear();
-            return Ok(((function, assignment, slots, reads), held));
-        }
-        return Ok(((framed, assignment, slots, reads), held));
-    }
-    let report = stack_slot_report(&mut function, &assignment);
-    if std::env::var_os("LLRM_Z80_STACK_WHY").is_some() {
-        for (slot, (stores, loads)) in &report.accesses {
-            let verdict = match report.refused.iter().find(|(one, _)| one == slot) {
-                Some((_, why)) => format!("refused {why:?}"),
-                None => "pushed".to_owned(),
-            };
-            eprintln!("stack-slot {name} slot {slot} stores {stores} loads {loads} {verdict}");
-        }
-    }
-    STACK_REFUSALS.with(|one| one.borrow_mut().extend(report.refused.iter().copied()));
     let framed = (framed, assignment.clone(), slots.clone(), reads.clone());
-    let pushed = report.pushed;
-    if pushed.is_empty() {
-        return Ok((framed, held));
-    }
-    let mut slots = slots;
-    slots.retain(|(slot, _)| !pushed.contains(slot));
-    if !slots.is_empty() {
-        spills_first(&mut function, &assignment);
-        narrow_reload_for_byte_shift(&mut function, &assignment);
-    }
-    let stacked = (function, assignment, slots, reads);
     // Pushes and pops are 1 B and 10-11 T where a slot through IX is 3 B and
     // 19 T a byte, but they change what the printer and the later choices
     // keep in a pair (fill_nest -Os: the constant 4660 left bc, +65% T): the
-    // function is priced both ways by the rule that picks the other variants.
-    let (was, now) = (priced_in_loops(&framed, level), priced_in_loops(&stacked, level));
-    if std::env::var_os("LLRM_Z80_STACK_PRICE").is_some() {
-        eprintln!("stack-price {name} {level:?} framed {was:?} stacked {now:?}");
+    // function is priced framed, with the slots that are plain stacks, and
+    // with the slots read again peeked too, by the rule that picks the other
+    // variants. More slots on the stack is not always cheaper
+    // (logical_value -Os: +12 B).
+    let mut best_price = priced_in_loops(&framed, level);
+    let mut best = framed;
+    // the base's whole-function pass (a frame of spills only is a stack, and
+    // no frame) is the start to beat
+    let mut frameless = function.clone();
+    if frameless_slots_are_a_stack(&mut frameless, &assignment) {
+        best = (frameless, assignment.clone(), Vec::new(), reads.clone());
+        best_price = priced_in_loops(&best, level);
     }
-    Ok((if keeps_stacked(level, was, now) { stacked } else { framed }, held))
+    for peek in [false, true] {
+        let mut candidate = function.clone();
+        let report = stack_slot_report(&mut candidate, &assignment, peek);
+        if peek {
+            if std::env::var_os("LLRM_Z80_STACK_WHY").is_some() {
+                for (slot, (stores, loads)) in &report.accesses {
+                    let verdict = match report.refused.iter().find(|(one, _)| one == slot) {
+                        Some((_, why)) => format!("refused {why:?}"),
+                        None => "pushed".to_owned(),
+                    };
+                    eprintln!("stack-slot {name} slot {slot} stores {stores} loads {loads} {verdict}");
+                }
+            }
+            STACK_REFUSALS.with(|one| one.borrow_mut().extend(report.refused.iter().copied()));
+        }
+        let pushed = report.pushed;
+        if pushed.is_empty() {
+            continue;
+        }
+        let mut slots = slots.clone();
+        slots.retain(|(slot, _)| !pushed.contains(slot));
+        if !slots.is_empty() {
+            spills_first(&mut candidate, &assignment);
+            narrow_reload_for_byte_shift(&mut candidate, &assignment);
+        }
+        let stacked = (candidate, assignment.clone(), slots, reads.clone());
+        let now = priced_in_loops(&stacked, level);
+        if std::env::var_os("LLRM_Z80_STACK_PRICE").is_some() {
+            eprintln!("stack-price {name} {level:?} peek {peek} best {best_price:?} stacked {now:?}");
+        }
+        if keeps_stacked(level, best_price, now) {
+            best = stacked;
+            best_price = now;
+        }
+    }
+    Ok((best, held))
 }
 
 /// Whether the push and pop form of a function stays: where it prices lower
@@ -694,11 +706,11 @@ fn stack_pair(register: llrm_lir::registers::RegId) -> Option<llrm_lir::register
     [reg::BC, reg::DE, reg::HL].into_iter().find(|pair| REGISTER_INFO.root(register) == *pair)
 }
 
-/// The pass the push-and-pop conversion was before `stack_slots`, kept where
-/// that is off (-O2, -O3; see `tti::spills_as_push_pop`). Spill slots that
-/// nothing else needs a frame for become `push` and `pop`, and the frame goes:
-/// `digits` kept a counter across a call with `ld -1(ix), b` / `ld b, -1(ix)`
-/// and the 13 bytes of frame setup and teardown SDCC does without.
+/// The pass the push-and-pop conversion was before `stack_slots`, the start
+/// the other forms must beat. Spill slots that nothing else needs a frame for
+/// become `push` and `pop`, and the frame goes: `digits` kept a counter across
+/// a call with `ld -1(ix), b` / `ld b, -1(ix)` and the 13 bytes of frame setup
+/// and teardown SDCC does without.
 ///
 /// Every path must treat the slots as a stack: a store with the slot empty, a
 /// load of the slot on top, an empty stack at each return, one stack where
@@ -832,7 +844,7 @@ pub fn stack_slots(
     function: &mut MFunction,
     assignment: &Assignment,
 ) -> Vec<i32> {
-    stack_slot_report(function, assignment).pushed
+    stack_slot_report(function, assignment, true).pushed
 }
 
 /// Why a spill slot stays in the frame instead of becoming a `push` and `pop`.
@@ -873,6 +885,7 @@ pub struct StackReport {
 pub fn stack_slot_report(
     function: &mut MFunction,
     assignment: &Assignment,
+    peek: bool,
 ) -> StackReport {
     use llrm_spike_mf::livephys::PhysLiveness;
     let register = |reg: Reg| match reg {
@@ -935,13 +948,63 @@ pub fn stack_slot_report(
     let succs = llrm_spike_mf::regalloc::successors(function);
     let live = PhysLiveness::of::<Z80Registers>(function, assignment, &REGISTER_INFO);
     // the first slot that keeps `chosen` from being a stack, or none
-    let violation = |function: &MFunction, chosen: &std::collections::BTreeSet<i32>| -> Option<(i32, StackRefusal)> {
+    // per block and instruction: whether a load's slot is read again after it
+    let read_again = |function: &MFunction, chosen: &std::collections::BTreeSet<i32>| -> Vec<Vec<bool>> {
+        use std::collections::BTreeSet;
+        let n = function.blocks.len();
+        let (mut live_in, mut live_out) = (vec![BTreeSet::<i32>::new(); n], vec![BTreeSet::<i32>::new(); n]);
+        let step = |inst: &Inst, now: &mut BTreeSet<i32>| match spill(inst) {
+            Some((true, slot, _)) if chosen.contains(&slot) => {
+                now.remove(&slot);
+            }
+            Some((false, slot, _)) if chosen.contains(&slot) => {
+                now.insert(slot);
+            }
+            _ => {}
+        };
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for b in (0..n).rev() {
+                live_out[b] = succs[b].iter().flat_map(|&next| live_in[next].iter().copied()).collect();
+                let mut now = live_out[b].clone();
+                function.blocks[b].insts.iter().rev().for_each(|inst| step(inst, &mut now));
+                if now != live_in[b] {
+                    live_in[b] = now;
+                    changed = true;
+                }
+            }
+        }
+        (0..n)
+            .map(|b| {
+                let mut now = live_out[b].clone();
+                let mut flags: Vec<bool> = function.blocks[b]
+                    .insts
+                    .iter()
+                    .rev()
+                    .map(|inst| {
+                        let again = matches!(spill(inst), Some((false, slot, _)) if now.contains(&slot));
+                        step(inst, &mut now);
+                        again
+                    })
+                    .collect();
+                flags.reverse();
+                flags
+            })
+            .collect()
+    };
+    let violation = |function: &MFunction,
+                     chosen: &std::collections::BTreeSet<i32>,
+                     peeks: &mut std::collections::BTreeSet<(usize, usize)>|
+     -> Option<(i32, StackRefusal)> {
+        peeks.clear();
+        let again = read_again(function, chosen);
         let mut entry: Vec<Option<Vec<i32>>> = vec![None; function.blocks.len()];
         entry[0] = Some(Vec::new());
         let mut work = vec![0usize];
         while let Some(b) = work.pop() {
             let mut stack = entry[b].clone().expect("a block on the list has a stack");
-            for inst in &function.blocks[b].insts {
+            for (at, inst) in function.blocks[b].insts.iter().enumerate() {
                 match spill(inst) {
                     Some((true, slot, _)) if chosen.contains(&slot) => {
                         if stack.contains(&slot) {
@@ -953,7 +1016,12 @@ pub fn stack_slot_report(
                         if stack.last() != Some(&slot) {
                             return Some((slot, StackRefusal::LoadNotOnTop));
                         }
-                        stack.pop();
+                        // read again later: `pop` then `push` leaves it on top
+                        if peek && again[b][at] {
+                            peeks.insert((b, at));
+                        } else {
+                            stack.pop();
+                        }
                     }
                     _ => {}
                 }
@@ -997,23 +1065,26 @@ pub fn stack_slot_report(
         }
         None
     };
-    while let Some((slot, why)) = violation(function, &chosen) {
+    let mut peeks = std::collections::BTreeSet::new();
+    while let Some((slot, why)) = violation(function, &chosen, &mut peeks) {
         chosen.remove(&slot);
         refused.push((slot, why));
     }
-    for inst in function.blocks.iter_mut().flat_map(|block| &mut block.insts) {
-        match spill(inst) {
-            Some((true, slot, _)) if chosen.contains(&slot) => {
-                inst.kind = Kind::Op("PUSHP");
-                inst.operands.remove(0);
-                inst.may_store = false;
+    for (b, block) in function.blocks.iter_mut().enumerate() {
+        for (at, inst) in block.insts.iter_mut().enumerate() {
+            match spill(inst) {
+                Some((true, slot, _)) if chosen.contains(&slot) => {
+                    inst.kind = Kind::Op("PUSHP");
+                    inst.operands.remove(0);
+                    inst.may_store = false;
+                }
+                Some((false, slot, _)) if chosen.contains(&slot) => {
+                    inst.kind = Kind::Op(if peeks.contains(&(b, at)) { "PEEKP" } else { "POPP" });
+                    inst.operands.remove(1);
+                    inst.may_load = false;
+                }
+                _ => {}
             }
-            Some((false, slot, _)) if chosen.contains(&slot) => {
-                inst.kind = Kind::Op("POPP");
-                inst.operands.remove(1);
-                inst.may_load = false;
-            }
-            _ => {}
         }
     }
     refused.sort_by_key(|(slot, _)| *slot);
