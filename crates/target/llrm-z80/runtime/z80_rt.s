@@ -300,6 +300,53 @@ __ashrsi3:
 	ex	de,hl
 	ret
 
+; ---- long multiply -------------------------------------------------------------------------------
+
+; The product of two longs, low 32 bits: a is hl (low) and de (high), b bc (low) and the word the caller stored on the
+; stack (high); the result is de (low) and hl (high). Shift and add over b's 32 bits in the shadow registers. The
+; return address waits in iy and the caller's word stays where it was (it pops it).
+	.globl __mulsi3
+__mulsi3:
+	pop	iy
+	exx
+	pop	de
+	ld	hl,#0
+	exx
+	push	de
+	ld	d,b
+	ld	e,c
+	ld	b,h
+	ld	c,l
+	ld	hl,#0
+	exx
+	pop	bc
+	exx
+	ld	a,#32
+1$:	exx
+	srl	d
+	rr	e
+	exx
+	rr	d
+	rr	e
+	jr	nc,2$
+	add	hl,bc
+	exx
+	adc	hl,bc
+	exx
+2$:	sla	c
+	rl	b
+	exx
+	rl	c
+	rl	b
+	exx
+	dec	a
+	jr	nz,1$
+	push	hl
+	exx
+	pop	de
+	push	af
+	jp	(iy)
+
 ; ---- long divide and remainder -------------------------------------------------------------------
 
 ; The dividend is hl (low) and de (high), the divisor bc (low) and the word the caller stored on the stack (high);

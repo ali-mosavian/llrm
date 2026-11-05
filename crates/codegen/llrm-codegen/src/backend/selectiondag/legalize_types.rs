@@ -2460,8 +2460,14 @@ impl<'a> TypeLegalizer<'a> {
     /// `ExpandIntRes_MUL` through `expandMUL_LOHI`: the full product of the low
     /// halves, plus the two cross products in the high half. Two operands that
     /// are both zero-extended or both sign-extended (by their known bits) need
-    /// no cross products. No library call is made: the pin has none for the
-    /// types that come here, and `force_expand_multiply` is its fallback.
+    /// no cross products. Without a widening multiply the library call
+    /// (`RTLIB::MUL_I32`) is made, else `force_expand_multiply`.
+    ///
+    /// DEVIATE: the call is made only where the target names a routine for
+    /// functions tuned for size. The pin calls any named routine; m68k, 6502
+    /// and wasm name one and expanded inline until now, and their output stays
+    /// as it was until their owners measure the call. Exit: those targets
+    /// measured.
     fn expand_mul(
         &mut self,
         value: SDValue,
@@ -2501,6 +2507,10 @@ impl<'a> TypeLegalizer<'a> {
             (both, SDValue { node: both.node, res: 1 })
         } else if self.tli.is_operation_legal_or_custom(ISD::MulHU, half) {
             (self.dag.get_node(ISD::Mul, half, &[ll, rl]), self.dag.get_node(ISD::MulHU, half, &[ll, rl]))
+        } else if self.tli.has_size_libcall_name(ISD::Mul, self.dag.value_type(value))
+            && let Some(pair) = self.expand_by_libcall(value, ISD::Mul, half, false, [lhs, rhs])
+        {
+            return Ok(pair);
         } else {
             return Ok(self.force_expand_multiply(ll, rl, lh, rh));
         };

@@ -122,6 +122,9 @@ pub fn target_lowering() -> TargetLowering {
             tl.set_libcall_name(op, vt, name);
         }
     }
+    // a long multiply is a call in a function tuned for size: the halves
+    // multiplied, shifted and added are 80 B and more
+    tl.set_size_libcall_name(Mul, MVT::I32, "__mulsi3");
     // the long long divide has a smaller routine (one step per dividend bit)
     // for a function tuned for size
     for (op, name) in
