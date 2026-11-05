@@ -18,7 +18,9 @@ while read -r _ tg lvl f; do
     LLRM_CC_TARGET=$tg "$D/$v/llrm-cc" $fl $lvl ${CELLS_INC:-} -c "$f" -o "$w/$v.o" >/dev/null 2>&1 || continue
     LLRM_CC_TARGET=$tg "$D/$v/llrm-cc" $fl $lvl ${CELLS_INC:-} -S "$f" -o "$w/$v.s" >/dev/null 2>&1 || continue
     [ -s "$w/$v.o" ] && [ -s "$w/$v.s" ] || continue
-    text[$v]=$(size "$w/$v.o" | awk 'NR==2{print $1}')
+    # OMF (m16) objects defeat size(1): the file size then, symbols being equal on both sides.
+    text[$v]=$(size "$w/$v.o" 2>/dev/null | awk 'NR==2{print $1}')
+    [ -n "${text[$v]}" ] || text[$v]=$(stat -c %s "$w/$v.o")
     ins[$v]=$(grep -cE '^[[:space:]]+[a-z][a-z0-9.]*([[:space:]]|$)' "$w/$v.s")
   done
   if [ -z "${text[base]:-}" ] || [ -z "${text[new]:-}" ] || [ "${ins[base]:-0}" -eq 0 ] || [ "${ins[new]:-0}" -eq 0 ]; then
