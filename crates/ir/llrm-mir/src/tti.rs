@@ -617,6 +617,14 @@ pub trait Tti {
     /// `getSchedModel().LoopMicroOpBufferSize`: the micro-ops the target's loop
     /// buffer holds; 0 where its scheduling model has none (X86: 28 for the
     /// `SandyBridgeModel` cpus; the others' models are not known here).
+    /// The program's code is (not) position independent: addressing modes
+    /// differ (`isPositionIndependent`). Set once per program.
+    fn set_position_independent(
+        &self,
+        _position_independent: bool,
+    ) {
+    }
+
     fn loop_micro_op_buffer_size(&self) -> u32 {
         0
     }
@@ -750,6 +758,11 @@ pub trait Tti {
     /// table); none: `unroll_partial_threshold_override`'s.
     fn unroll_jam_partial_threshold_override(&self) -> Option<u32> {
         None
+    }
+
+    /// Tuning `unroll_jam_exact_count`.
+    fn unroll_jam_exact_count(&self) -> bool {
+        false
     }
 
     /// The target's `-unswitch-threshold` (its tuning table); none: the pin's
