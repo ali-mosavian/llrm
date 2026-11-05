@@ -2419,6 +2419,26 @@ fn a_long_multiply_links_the_compact_routine_at_every_level() {
     }
 }
 
+/// A `byval` argument of 40 bytes is copied by a call of `memcpy` the builder
+/// names itself; the 6502 left its callee an `ExternalSymbol` and refused
+/// (`CannotSelect("ExternalSymbol")`: byval_struct, byval_inline and
+/// byval_initializes at -O0, any caller that does not inline the callee).
+#[test]
+fn a_byval_argument_over_the_inline_limit_is_copied_by_a_memcpy_call() {
+    let ir = module(
+        r#"%big = type { [40 x i8] }
+declare i32 @sum(ptr byval(%big) align 1, i32)
+define i32 @f(ptr %p) {
+  %r = call i32 @sum(ptr byval(%big) align 1 %p, i32 100)
+  ret i32 %r
+}"#,
+    );
+    for level in [Level::O0, Level::O2, Level::Os] {
+        let text = assembly(&ir, &Request::new(level)).unwrap_or_else(|e| panic!("{level:?}: {e}"));
+        assert!(text.contains("jsr memcpy"), "{level:?}\n{text}");
+    }
+}
+
 /// `llvm.usub.sat.i32` returned the inverse: 0 where the subtract does not
 /// borrow and the wrapped difference where it does (`sat_builtins`: 4e9 - 5
 /// gave 0, 5 - 4e9 gave 294967301). The borrow was read as the carry.
