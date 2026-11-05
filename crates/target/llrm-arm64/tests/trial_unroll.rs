@@ -18,3 +18,10 @@ fn a_nest_that_pays_whole_is_unrolled_though_the_outer_loop_alone_does_not() {
     let count = instructions(include_str!("data/bench_nbody_nest.ll"));
     assert!(count >= 140, "{count} instructions");
 }
+
+#[test]
+fn probe() {
+    let asm = driver::assembly(include_str!("data/bench_nbody_nest.ll"), Platform::Linux, Level::O2).expect("lowers");
+    let back = asm.lines().filter(|l| l.trim_start().starts_with("b.") || l.trim_start().starts_with("cbnz") || l.trim_start().starts_with("cbz")).count();
+    eprintln!("NEST labels {} condbr {}", asm.lines().filter(|l| l.starts_with(".L")).count(), back);
+}

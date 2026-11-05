@@ -57,6 +57,14 @@ pub(super) fn full_unroll_pays(
     if encloses_known_trips(run, se, analyzed, lp, up.full_unroll_max_count) {
         return true;
     }
+    // The same for a loop around loops that all run few trips: the pin unrolls
+    // the nest at its early pass, whole, and what that frees (the inner loops,
+    // the arrays they index) is cleaned after it (nbody -O2 triangular nest:
+    // +8 B for -23,816 instructions, priced +267 B). The bound is the pin's own
+    // for what it analyzes, `-unroll-max-iteration-count-to-analyze`.
+    if bounds_few_trips(run, se, analyzed, lp, up.max_iterations_count_to_analyze) {
+        return true;
+    }
     // DEVIATE UP1 trial pricing (`trial.rs`): the loops the pin's threshold
     // allows, and the rules above leave to the estimate, are tried on a copy.
     match run.trial {
@@ -400,6 +408,39 @@ fn encloses_known_trips(
             return false;
         }
         around = parent.get_parent_loop();
+    }
+    true
+}
+
+/// Whether `lp` holds loops, and every loop inside it runs at most `most`
+/// trips (a constant maximum, as a triangular nest's inner loop has).
+fn bounds_few_trips(
+    run: &Run,
+    se: &mut ScalarEvolution,
+    analyzed: &Analyzed,
+    lp: Loop,
+    most: u32,
+) -> bool {
+    if lp.is_innermost() {
+        return false;
+    }
+    let cx = llrm_analysis::scev::Cx {
+        context: &*run.context,
+        globals: run.globals,
+        metadata: run.metadata,
+        function: &*run.function,
+        layout: run.layout,
+        loops: &analyzed.loops,
+        tree: &analyzed.tree,
+        assumptions: &analyzed.assumptions,
+    };
+    let mut inside: Vec<Loop> = lp.get_sub_loops().collect();
+    while let Some(one) = inside.pop() {
+        let trips = se.get_small_constant_max_trip_count(&cx, one.get_header());
+        if trips == 0 || trips > most {
+            return false;
+        }
+        inside.extend(one.get_sub_loops());
     }
     true
 }
