@@ -1,6 +1,7 @@
 """#2329 squashed a stale head and reverted decide's LVI step (a82b332be): the squash must refuse what a bare `gh pr merge` merged."""
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import subprocess
@@ -2228,3 +2229,25 @@ def test_the_integration_branches_and_forks_are_never_deleted(head, cross):
 def test_a_failed_delete_is_reported_not_raised_because_the_landing_is_already_done():
     run, calls = fake_gh(delete_rc=1)
     assert "not deleted" in ps.delete_merged_head("6400", run=run, sleep=lambda s: None)
+
+
+def test_a_squash_subject_that_is_not_conventional_is_refused(tmp_path):
+    """#7472 landed as 'Merge remote-tracking branch ...': the PR title became the commit subject unchecked."""
+    repo, head = stale_merge(tmp_path)
+    merge = "Merge remote-tracking branch 'origin/release/next' into w15/x"
+    for title in (merge, "update stuff", "Fix: capital type"):
+        assert any("subject" in w for w in ps.refusals(head, "Reverts: lvi", base="main", cwd=repo, title=title)), title
+    for title in ("fix(tools): gate scripts fail closed", "perf(combine)!: min/max of extended operands", "docs: notes"):
+        assert ps.refusals(head, "Reverts: lvi", base="main", cwd=repo, title=title) == [], title
+
+
+def test_a_90_char_squash_subject_warns_now_and_refuses_from_the_ratchet_date():
+    """157 of 400 landed subjects were over 72: a hard fail on day one would have blocked every landing."""
+    long = "fix(tools): " + "x" * 78
+    before, after = ps.SUBJECT_MAX_FROM - datetime.timedelta(days=1), ps.SUBJECT_MAX_FROM
+    assert ps.subject_length(long, before) == ([f"90 chars: squash subject {long!r} is over the 60 target (max 72); shorten the PR title"], [])
+    warn, refuse = ps.subject_length(long, after)
+    assert warn == [] and refuse and refuse[0].startswith("90 chars")
+    w72, r72 = ps.subject_length("fix(tools): " + "x" * 60, after)
+    assert w72 and r72 == []  # exactly 72: over the target, within the max
+    assert ps.subject_length("fix(tools): short", after) == ([], [])
