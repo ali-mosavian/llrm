@@ -93,7 +93,7 @@ pub(super) fn full_unroll_pays(
     // The accesses of a local array the copies make constant-indexed: the
     // array is promoted to registers, so they cost no clocks and no bytes
     // (frameless: `local[i]` filled and read by two 12-trip loops).
-    let (mut promoted, mut promoted_runs, ints, floats) = promoted_accesses(run, analyzed, lp, &known);
+    let (mut promoted, mut promoted_runs, ints, floats, rmw) = promoted_accesses(run, analyzed, lp, &known);
     // DEVIATE UP1-REG (owner m64, exit 2026-11-20): the promoted elements are
     // registers only while they fit: more than the file holds, and they are
     // stack slots again (fpbench -O2 m64: four 6-element float arrays, 24
@@ -137,6 +137,7 @@ pub(super) fn full_unroll_pays(
             promoted,
             ints,
             floats,
+            rmw,
             float_file: run.outer.target().float_registers(),
             rate,
         }
@@ -158,6 +159,7 @@ pub(super) struct Priced {
     pub promoted: i64,
     pub ints: usize,
     pub floats: usize,
+    pub rmw: usize,
     pub float_file: i64,
     pub rate: i64,
 }
@@ -165,7 +167,7 @@ pub(super) struct Priced {
 impl Priced {
     pub(super) fn line(&self) -> String {
         format!(
-            "priced unroll: {} trips, saves {} clk, adds {} B (body {} B; units {} of {}, promoted {}, ints {}, floats {}), float file {}, rate {}",
+            "priced unroll: {} trips, saves {} clk, adds {} B (body {} B; units {} of {}, promoted {}, ints {}, floats {}, rmw {}), float file {}, rate {}",
             self.trips,
             self.saved,
             self.added,
@@ -175,6 +177,7 @@ impl Priced {
             self.promoted,
             self.ints,
             self.floats,
+            self.rmw,
             self.float_file,
             self.rate
         )
@@ -296,10 +299,14 @@ fn promoted_accesses(
     analyzed: &Analyzed,
     lp: Loop,
     known: &IdSet<ValueId>,
-) -> (i64, i64, usize, usize) {
+) -> (i64, i64, usize, usize, usize) {
     let function = &*run.function;
     let (mut found, mut runs) = (0, 0);
     let (mut ints, mut floats): (IdSet<ValueId>, IdSet<ValueId>) = (IdSet::new(), IdSet::new());
+    // Float arrays the loop both reads and writes: after a full unroll their elements
+    // are forwarded from one trip of the loops around to the next, one live value each.
+    let (mut loaded, mut written, mut rmw): (IdSet<ValueId>, IdSet<ValueId>, IdSet<ValueId>) =
+        (IdSet::new(), IdSet::new(), IdSet::new());
     for &block in lp.get_blocks() {
         let nested = analyzed.loops.get_loop_depth(block).saturating_sub(lp.get_loop_depth());
         for inst in function.iter_block(block) {
@@ -340,12 +347,20 @@ fn promoted_accesses(
                     let float = stored
                         .and_then(|ty| llrm_mir::tti::Ty::of(&run.context.types, ty))
                         .is_some_and(|ty| ty.is_float());
-                    if float { floats.insert(root) } else { ints.insert(root) };
+                    if float {
+                        floats.insert(root);
+                        if matches!(one.opcode, Opcode::Store { .. }) { written.insert(root) } else { loaded.insert(root) };
+                        if loaded.contains(&root) && written.contains(&root) {
+                            rmw.insert(root);
+                        }
+                    } else {
+                        ints.insert(root);
+                    }
                 }
             }
         }
     }
-    (found, runs, ints.len(), floats.len())
+    (found, runs, ints.len(), floats.len(), rmw.len())
 }
 
 /// What an address at the counters is an element of.
