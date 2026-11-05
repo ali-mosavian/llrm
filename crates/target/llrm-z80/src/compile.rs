@@ -393,6 +393,9 @@ fn allocate_once(
     if std::env::var("LLRM_NO_Z80_ADC").is_err() {
         crate::carry::use_the_carry(&mut function);
     }
+    if std::env::var("LLRM_NO_Z80_STEP").is_err() {
+        crate::step::step_by_small_constants(&mut function);
+    }
     sink_copies_before_allocation(&mut function);
     if std::env::var("LLRM_NO_Z80_FORWARD").is_err() {
         crate::forward::read_pairs_from_their_registers(&mut function);
