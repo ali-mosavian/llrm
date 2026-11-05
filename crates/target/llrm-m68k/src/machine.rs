@@ -178,6 +178,9 @@ impl Tti for M68k {
         ty: Ty,
         kind: CostKind,
     ) -> Cost {
+        if kind == CostKind::CodeSize {
+            return crate::sizes::cmp_sel(op, ty);
+        }
         Basic.cmp_sel_cost(op, ty, kind)
     }
 
@@ -188,6 +191,9 @@ impl Tti for M68k {
         kind: CostKind,
         indexed: bool,
     ) -> Cost {
+        if kind == CostKind::CodeSize {
+            return crate::sizes::memory(op, ty, indexed);
+        }
         Basic.memory_op_cost(op, ty, kind, indexed)
     }
 
@@ -196,6 +202,9 @@ impl Tti for M68k {
         phi: bool,
         kind: CostKind,
     ) -> Cost {
+        if kind == CostKind::CodeSize {
+            return crate::sizes::control_flow(phi);
+        }
         Basic.cf_instr_cost(phi, kind)
     }
 
@@ -232,6 +241,9 @@ impl Tti for M68k {
         from: Ty,
         kind: CostKind,
     ) -> Cost {
+        if kind == CostKind::CodeSize {
+            return crate::sizes::cast(op, to, from);
+        }
         Basic.cast_cost(op, to, from, kind)
     }
 
@@ -282,6 +294,9 @@ impl Tti for M68k {
         left: OperandInfo,
         right: OperandInfo,
     ) -> Cost {
+        if kind == CostKind::CodeSize {
+            return crate::sizes::arithmetic(op, ty, right, self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020));
+        }
         // DEVIATE: the pin's base class prices a multiply or divide it expands
         // at one operation (`BasicTTIImpl::getArithmeticInstrCost`'s last
         // line). Past 32 bits the m68k makes a library call of it, and the

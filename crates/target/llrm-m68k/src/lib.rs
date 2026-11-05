@@ -40,6 +40,7 @@ pub mod regalloc;
 pub mod scaledindex;
 pub mod shiftadd;
 pub mod target;
+pub mod sizes;
 pub mod timing;
 
 use llrm_lir::registers::{RegId, Row};
