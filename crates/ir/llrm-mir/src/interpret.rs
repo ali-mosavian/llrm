@@ -609,6 +609,7 @@ impl<'m> Machine<'m> {
                 self.poison[range].fill(poison);
                 void
             }
+            Intrinsic::Trap => return unsupported("llvm.trap: the program stops"),
             Intrinsic::MemSetPattern => {
                 let (Val::Ptr(address), Val::Int { bits: count, .. }) = (argument(0), argument(2)) else {
                     return undefined("a pattern fill of a poison address or count");

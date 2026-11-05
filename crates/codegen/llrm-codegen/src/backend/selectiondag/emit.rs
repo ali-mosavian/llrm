@@ -3021,6 +3021,11 @@ impl Emitter<'_, '_> {
                 self.values.insert(SDValue { node: n, res: 0 }, held.value);
                 return Ok(Some(()));
             }
+            // `llvm.trap`: the `TRAP` node the intrinsic made.
+            "TRAP" => {
+                self.push(Operation::Nothing, "ud2", Vec::new(), Vec::new());
+                return Ok(Some(()));
+            }
             "SAHF" => {
                 if let Some((left, right)) = self.pending_fcom.remove(&n) {
                     self.push(Operation::Compare, "fcom", Vec::new(), vec![Loc::Held(left), Loc::Held(right)]);

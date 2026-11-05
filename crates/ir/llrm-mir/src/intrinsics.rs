@@ -129,6 +129,9 @@ pub enum Intrinsic {
     /// `llvm.prefetch`: a hint to bring an address into the cache; no code is
     /// needed where the target has no prefetch instruction.
     Prefetch,
+    /// `llvm.trap`: the program stops here (`ud2` on x86); control does not
+    /// continue.
+    Trap,
     /// `llvm.fake.use`: keeps its operands live for a debugger at `-Og`; no
     /// code runs it.
     FakeUse,
@@ -745,6 +748,14 @@ const TABLE: [Spec; 82] = [
         overloads: &[],
         returns: Slot::Void,
         parameters: &[Slot::Int(1)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.trap",
+        intrinsic: Intrinsic::Trap,
+        overloads: &[],
+        returns: Slot::Void,
+        parameters: &[],
         own: None,
     },
     Spec {
