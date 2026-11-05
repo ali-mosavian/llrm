@@ -89,7 +89,7 @@ const MSSA_OPT_CAP: usize = 500;
 
 /// ScopedHashTable: `insert` shadows, `lookup` finds the innermost, and
 /// leaving a scope takes back what it inserted.
-struct Scoped<K, V> {
+pub(crate) struct Scoped<K, V> {
     map: HashMap<K, V>,
     /// What each insert shadowed, to put back when its scope is left: a
     /// table of one value a key, not a stack of them.
@@ -98,15 +98,15 @@ struct Scoped<K, V> {
 }
 
 impl<K: std::hash::Hash + Eq + Clone, V> Scoped<K, V> {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self { map: HashMap::default(), inserted: Vec::new(), marks: Vec::new() }
     }
 
-    fn enter(&mut self) {
+    pub(crate) fn enter(&mut self) {
         self.marks.push(self.inserted.len());
     }
 
-    fn leave(&mut self) {
+    pub(crate) fn leave(&mut self) {
         let mark = self.marks.pop().expect("a scope entered");
         while self.inserted.len() > mark {
             let (key, shadowed) = self.inserted.pop().expect("a key");
@@ -121,7 +121,7 @@ impl<K: std::hash::Hash + Eq + Clone, V> Scoped<K, V> {
         }
     }
 
-    fn insert(
+    pub(crate) fn insert(
         &mut self,
         key: K,
         value: V,
@@ -130,7 +130,7 @@ impl<K: std::hash::Hash + Eq + Clone, V> Scoped<K, V> {
         self.inserted.push((key, shadowed));
     }
 
-    fn lookup(
+    pub(crate) fn lookup(
         &self,
         key: &K,
     ) -> Option<&V> {

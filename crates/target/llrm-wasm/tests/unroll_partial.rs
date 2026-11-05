@@ -200,3 +200,20 @@ fn the_poison_phis_of_a_prolog_leave_no_loop_copies() {
     let sets = body.matches("local.set").count();
     assert!(sets <= 12, "{sets} local.set:\n{body}");
 }
+
+/// `simplifyLoopAfterUnroll` runs `loadCSE` after a partial unroll: the three
+/// copies of the sorted-check loop of bench/quicksort loaded `a[i]` twice
+/// (6 loads, the pin's 4), 18 bytes over the pin at `-O2`.
+#[test]
+fn the_copies_of_a_partially_unrolled_loop_do_not_load_an_element_twice() {
+    let ir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ir/unroll_sorted_check.ll");
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-wasm-llc"))
+        .args(["-S", "-O2", "-o", "-"])
+        .arg(ir)
+        .output()
+        .expect("llrm-wasm-llc");
+    assert!(out.status.success());
+    let text = String::from_utf8_lossy(&out.stdout);
+    let loads = text.matches("i32.load").count();
+    assert_eq!(loads, 4, "{loads} loads for four elements:\n{text}");
+}

@@ -1252,17 +1252,50 @@ impl Emitter<'_> {
         }
     }
 
-    /// The memory operand of the load or store `id`: its volatile flag and
-    /// the object its address names.
+    /// How far `value`, an address, is into the object `object_of` names: the
+    /// constants the nodes that made it add (the offset of a
+    /// `MachineMemOperand`'s pointer).
+    fn displacement_of(
+        &self,
+        value: SDValue,
+        depth: u32,
+    ) -> Option<i64> {
+        if depth > 6 {
+            return None;
+        }
+        let node = self.dag.node(value);
+        match (&node.data, node.opcode) {
+            (NodeData::Global { offset, .. }, ISD::TargetGlobalAddress) => Some(*offset),
+            (NodeData::FrameIndex(index), ISD::TargetFrameIndex | ISD::FrameIndex) if *index >= 0 => Some(0),
+            (_, ISD::Machine(code)) if matches!(opcode_name(code), Some("ADRP" | "MOVaddr")) => {
+                self.displacement_of(*node.ops.first()?, depth + 1)
+            }
+            (_, ISD::Machine(code)) if opcode_name(code) == Some("ADDXri") => {
+                let (base, added, shift) = (*node.ops.first()?, *node.ops.get(1)?, node.ops.get(2).copied());
+                if shift.is_some_and(|shift| self.dag.constant(shift) != Some(0)) {
+                    return None;
+                }
+                Some(self.displacement_of(base, depth + 1)? + i64::try_from(self.dag.constant(added)?).ok()?)
+            }
+            _ => None,
+        }
+    }
+
+    /// The memory operand of the load or store `id`: its volatile flag, the
+    /// object its address names and, where `at` (the offset from the address
+    /// node, `None` for a form that is not a plain offset) and the node say,
+    /// how far into it.
     fn memory_operand(
         &self,
         id: u32,
         store: bool,
+        at: Option<i64>,
     ) -> MemOperand {
         let node = self.dag.node(SDValue { node: id, res: 0 });
         let base = node.ops.get(usize::from(store)).copied();
         let object = base.and_then(|base| self.object_of(base, 0)).unwrap_or_default();
-        MemOperand { object, volatile: self.dag.volatile_accesses.contains(&id), ..MemOperand::default() }
+        let offset = base.and_then(|base| Some(self.displacement_of(base, 0)? + at?));
+        MemOperand { object, offset, volatile: self.dag.volatile_accesses.contains(&id) }
     }
 
     fn memory(
@@ -1327,7 +1360,12 @@ impl Emitter<'_> {
         };
         // A selected node keeps the flag of the access it folded
         // (`set_node_mem_refs`).
-        let mmo = self.memory_operand(id, access.store);
+        let at = match &addr {
+            Addr::Offset { imm, .. } | Addr::Pre { imm, .. } => Some(*imm),
+            Addr::Post { .. } => Some(0),
+            _ => None,
+        };
+        let mmo = self.memory_operand(id, access.store, at);
         if access.fp {
             let reg = match fvalue {
                 Some(reg) => reg,
