@@ -126,6 +126,47 @@ pub(crate) struct Total {
     pub(crate) unknown: usize,
 }
 
+/// The qemu CPU a run of `exe` is traced on: the one its path names, the 68000
+/// when none. A trace on the wrong CPU counts the instructions of another
+/// program (the 040 and 060 matrix columns were traced on the 68000).
+fn qemu_cpu_of(exe: &Path) -> &'static str {
+    let name = exe.to_string_lossy();
+    ["68060", "68040", "68030", "68020", "68010"]
+        .into_iter()
+        .find(|cpu| name.contains(cpu))
+        .map_or(
+            "m68000",
+            |cpu| match cpu {
+                "68060" => "m68060",
+                "68040" => "m68040",
+                "68030" => "m68030",
+                "68020" => "m68020",
+                _ => "m68010",
+            },
+        )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::qemu_cpu_of;
+
+    /// The 040 and 060 matrix columns priced the instruction counts of a trace
+    /// on `m68000` (partition 040: 202 instructions for gcc's 121).
+    #[test]
+    fn a_run_is_traced_on_the_cpu_its_path_names() {
+        for (path, cpu) in [
+            ("sum_68000_O2_ours.elf", "m68000"),
+            ("sum_68020_O2_ours.elf", "m68020"),
+            ("sum_68040_O2_ours.elf", "m68040"),
+            ("sum_68060_Os_gcc.elf", "m68060"),
+        ] {
+            assert_eq!(qemu_cpu_of(Path::new(path)), cpu, "{path}");
+        }
+    }
+}
+
 pub(crate) fn price(
     gcc: &Path,
     exe: &Path,
@@ -140,8 +181,7 @@ pub(crate) fn price(
             (*address, (lines.get(index + 1).map_or(2, |next| next.0 - address) as usize, text.as_str()))
         })
         .collect();
-    let cpu = std::env::var("CYCLES_QEMU_CPU")
-        .unwrap_or_else(|_| if exe.to_string_lossy().contains("68020") { "m68020" } else { "m68000" }.to_owned());
+    let cpu = std::env::var("CYCLES_QEMU_CPU").unwrap_or_else(|_| qemu_cpu_of(exe).to_owned());
     let cap = if harness { 200_000_000 } else { CAP };
     let pcs = trace(exe, cap, &cpu);
     let mut total = Total { insns: 0, clocks: vec![0; models.len()], partial: false, unknown: 0 };
