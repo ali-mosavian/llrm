@@ -478,7 +478,9 @@ fn update_reg_defs_uses(
         let mut renamed = at_lane.renamed(&|value| if value == src { dst } else { value });
         if partial.is_some() && old.defines.contains(&src) {
             let at = lis.indexes.get_instruction_index(key);
-            let reads = keeps_rest || old.uses.contains(&src) || lis.interval(dst).live_at(&at);
+            // the lanes a copy keeps are not read when this instruction
+            // defines them itself: another lane of `dst` was joined here first
+            let reads = (keeps_rest && !old.defines.contains(&dst)) || old.uses.contains(&src) || lis.interval(dst).live_at(&at);
             if reads && !renamed.partial_defs.contains(&dst) {
                 let mut made = (*renamed).clone();
                 made.partial_defs.push(dst);

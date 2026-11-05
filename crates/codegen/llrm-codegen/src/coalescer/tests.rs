@@ -1600,6 +1600,33 @@ fn test_a_plain_lane_def_keeps_a_lane_joined_after_it() {
     assert!(low.partial_defs == vec![2], "{low:?}");
 }
 
+/// One instruction defines both bytes of a pair (a LEA's address): once both
+/// join their lanes it defines the whole pair. The high lane's copy kept the
+/// low one, so the def was marked to read the pair, which nothing defined
+/// before it: the pair was live from the function entry and the split of it
+/// died on "Cannot overlap different values" (6502, write_through_parameter -O1).
+#[test]
+fn test_one_instruction_defining_both_bytes_does_not_read_the_pair() {
+    let both = Arc::new(Insn::new(0, None, None, vec![1, 3], vec![]));
+    let (lo, hi) = (lane_copy(2, 0, 1), lane_copy(2, 1, 3));
+    assert!(hi.partial_defs == vec![2], "premise: the high copy keeps the low lane");
+    let was = body(&[(&[Arc::clone(&both), Arc::clone(&lo), Arc::clone(&hi), read_at(2, 2)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    for v in 1..=3 {
+        lis.interval(v);
+    }
+    let mut state = State::new();
+    for copy in [lo.id(), hi.id()] {
+        let result = join_copy(&mut lis, &LaneViews, &mut state, &mut Default::default(), copy);
+        assert_eq!(result, JoinResult::Joined);
+    }
+    let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
+    let definer = kept.iter().find(|insn| insn.defines.contains(&2)).expect("the def of both bytes");
+    assert!(definer.partial_defs.is_empty(), "{definer:?}");
+    let at = lis.indexes.get_instruction_index(definer.id());
+    assert!(!lis.interval(2).live_at(&at), "live before its def");
+}
+
 /// A byte copied into the low lane of a pair names the same width at the same
 /// offset as a copy between two bytes, so it was taken for one: the byte (`al`)
 /// shares no palette with the pair (`ax`) whole, and the copy stayed (crc16 -Oz
