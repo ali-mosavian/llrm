@@ -296,9 +296,6 @@ impl Tti for Z80Tti {
         true
     }
 
-    /// SZ1, rule 1: a size build keeps a callee bigger than its call. The pin's
-    /// `OptSizeThreshold` 50 allows growth, and a word update is 6 B where the
-    /// call is 3.
     /// DEVIATE U1: a loop of up to 3 trips is unrolled at `optsize` where its
     /// copies add no code (float_in_place_update -Os kept the soft-float
     /// library: 9421 B against 13 B at -O2).
@@ -306,6 +303,9 @@ impl Tti for Z80Tti {
         Some(3)
     }
 
+    /// SZ1, rule 1: a size build keeps a callee bigger than its call. The pin's
+    /// `OptSizeThreshold` 50 allows growth, and a word update is 6 B where the
+    /// call is 3.
     fn opt_size_inline_by_code_size(&self) -> bool {
         true
     }
