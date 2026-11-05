@@ -94,12 +94,12 @@ class AbGuard(unittest.TestCase):
     def test_a_tool_location_is_accepted_and_the_environment_is_printed(self):
         done = self.run_guard(self.c2, extra={"LLRM_PIN_CLANG": "/x/clang"})
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertIn("ab_guard: env: LLRM_PIN_CLANG=/x/clang", done.stdout)
+        self.assertIn("ab_env: env: LLRM_PIN_CLANG=/x/clang", done.stderr)
 
     def test_a_switch_named_in_ab_allow_env_is_accepted_and_printed(self):
         done = self.run_guard(self.c2, extra={"LLRM_NO_STACKS": "1", "AB_ALLOW_ENV": "LLRM_NO_STACKS"})
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertIn("LLRM_NO_STACKS=1", done.stdout)
+        self.assertIn("LLRM_NO_STACKS=1", done.stderr)
 
 
 if __name__ == "__main__":

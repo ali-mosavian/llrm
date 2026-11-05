@@ -7,6 +7,7 @@
 # FAIL wasm32 LEVEL NAME RC_BASE RC_HEAD (a backend refused it). Refuses two dists that share an llrm-llc or an llrm-wasm-llc.
 # Exit 1 if any DIFF, any FAIL whose two codes differ or are not a refusal (1, 2: 127, 124, a signal is a broken tool), or no SAME row. IDENTITY_SAME_LLC=1 allows a head that changes only the frontend.
 set -u
+. "$(dirname "$0")/ab_env.sh"; ab_env_check || exit 2
 base=${1:?base dir}; new=${2:?head dir}; out=${3:?out dir}
 root=$(cd "$(dirname "$0")/.." && pwd)
 python3 -c "import sys; sys.path.insert(0, '$root/tools'); import llrmbin; llrmbin.assert_distinct_llc(sys.argv[1] + '/llrm-cc', sys.argv[2] + '/llrm-cc', bool(sys.argv[3]), ('llrm-llc', 'llrm-wasm-llc'), True)" "$base" "$new" "${IDENTITY_SAME_LLC:-}" || exit 2

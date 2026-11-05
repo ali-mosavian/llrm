@@ -204,9 +204,24 @@ def md5(path) -> str:
     return hashlib.md5(Path(path).read_bytes()).hexdigest()
 
 
+def assert_clean_env(environ=None) -> list[str]:
+    """SystemExit on an LLRM_* variable outside `AB_ENV_OK` of ab_env.sh (the shell drivers' list) that `AB_ALLOW_ENV` does not name; else the `LLRM_*=value` lines
+    to print. LLRM_WASM_BACKEND_ONLY on one side skipped the mid-end and a false second cause was chased for 40 minutes."""
+    import re
+
+    environ = os.environ if environ is None else environ
+    ok = set(re.search(r'^AB_ENV_OK="([^"]*)"', (Path(__file__).parent / "ab_env.sh").read_text(), re.M).group(1).split())
+    ok |= set(environ.get("AB_ALLOW_ENV", "").split())
+    bad = sorted(k for k in environ if k.startswith("LLRM_") and k not in ok)
+    if bad:
+        raise SystemExit(f"{bad[0]}={environ[bad[0]]} changes the pipeline; unset it, or name it in AB_ALLOW_ENV if both sides are meant to run it")
+    return [f"{k}={environ[k]}" for k in sorted(environ) if k.startswith("LLRM_")]
+
+
 def assert_distinct(base, new, same_source: bool = False) -> str:
     """The header line of an A/B table: both binaries' md5. SystemExit when they are equal and the sources are not known to be: `cargo build -p X` does not
     relink target/release/X, so two builds of different commits were the same binary and a pair read "0 differ" (lir-cleanup-port's identity run)."""
+    assert_clean_env()
     a, b = md5(base), md5(new)
     if a == b and not same_source:
         raise SystemExit(f"same binary: base {base} and new {new} both have md5 {a}; the new commit was not built into it (`cargo build --bin X`, not `-p`). Refusing to print a diff.")
@@ -217,6 +232,7 @@ def assert_distinct_llc(base, new, same_llc: bool = False, names=("llrm-llc",), 
     """SystemExit when a backend named in `names` beside `base` and the one beside `new` are the same bytes: llrm-cc only drives, so two dists sharing one backend read SAME on every
     row. A name missing from either is skipped, or refused when `required` (wasm32 runs llrm-wasm-llc: a pair sharing one gave a 0-DIFF identity run where nbody -O2 moves 939 -> 910 B).
     `same_llc` allows a head that changes only the frontend."""
+    assert_clean_env()
     if same_llc:
         return
     for name in names:
