@@ -50,7 +50,7 @@ use llrm_support::hash::{HashMap, HashSet, IndexSet};
 use crate::ivusers::IvUsers;
 use crate::lsr_formula::{Formula, Immediate, MemAccessTy, RegUseTracker};
 use crate::lsr_use::{
-    Cost, Fixup, Kind, Rating, Use, is_am_completely_folded_at, is_am_completely_folded_between, is_legal_use_formula,
+    Cost, Fixup, Kind, Rating, Use, is_am_completely_folded_at, is_am_completely_folded_between,
 };
 
 // ---- helpers ----
@@ -780,11 +780,11 @@ impl<'a, 'b> Collection<'a, 'b> {
     ) -> bool {
         self.insert_attempts += 1;
         let lu = &self.uses[lu_idx];
-        // A formula that cannot be expanded is not inserted.
-        assert!(
-            is_legal_use_formula(self.tti, lu.min_offset, lu.max_offset, lu.kind, lu.access_ty, f),
-            "Formula is illegal"
-        );
+        // The pin only asserts `isLegalUse` here
+        // (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L3748);
+        // a build without assertions inserts the formula unchecked, as the
+        // initial formula of a scaled address on a target with no scaled form
+        // must be (the 6502's `a[i]` of 4-byte elements).
         if !self.uses[lu_idx].insert_formula(se, f, self.l) {
             return false;
         }
