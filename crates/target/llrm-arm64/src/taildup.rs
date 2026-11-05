@@ -55,11 +55,12 @@ fn copyable(
         && !block.insts.iter().filter_map(label_of).any(|label| label == own)
 }
 
-/// Copies the short blocks into their sole-exit jumpers.
+/// Copies the short blocks into their sole-exit jumpers; returns each
+/// (jumper, copied block) pair, as the copy keeps the original's edge odds.
 pub fn tail_duplicate(
     blocks: &mut [Lowered],
     optsize: bool,
-) {
+) -> Vec<(String, String)> {
     let size = if optsize { 1 } else { 2 };
     let short: HashMap<String, (Vec<Inst>, Vec<Option<(u32, u32)>>)> = blocks
         .iter()
@@ -68,8 +69,9 @@ pub fn tail_duplicate(
         .filter(|(_, block)| copyable(block, &block.label, size))
         .map(|(_, block)| (block.label.clone(), (block.insts.clone(), block.locs.clone())))
         .collect();
+    let mut copies = Vec::new();
     if short.is_empty() {
-        return;
+        return copies;
     }
     let at: HashMap<String, usize> = blocks.iter().enumerate().map(|(at, block)| (block.label.clone(), at)).collect();
     for (index, block) in blocks.iter_mut().enumerate() {
@@ -78,16 +80,19 @@ pub fn tail_duplicate(
         if block.insts.iter().filter_map(label_of).count() != 1 || *to == block.label {
             continue;
         }
-        let Some((insts, locs)) = short.get(to) else { continue };
+        let to = to.clone();
+        let Some((insts, locs)) = short.get(&to) else { continue };
         // "Don't duplicate into a fall-through predecessor."
-        if at[to] == index + 1 {
+        if at[&to] == index + 1 {
             continue;
         }
         block.insts.pop();
         block.locs.pop();
         block.insts.extend(insts.iter().cloned());
         block.locs.extend(locs.iter().copied());
+        copies.push((block.label.clone(), to));
     }
+    copies
 }
 
 /// `mov rd, rm` as `orr rd, xzr, rm`: the copy's destination, source and
