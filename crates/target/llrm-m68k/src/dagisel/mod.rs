@@ -21,4 +21,5 @@ pub mod lowering;
 pub mod pea;
 pub mod pipeline;
 pub mod predicates;
+pub mod scaled;
 pub mod short;

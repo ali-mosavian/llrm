@@ -303,9 +303,9 @@ __ashrsi3:
 ; ---- long divide and remainder -------------------------------------------------------------------
 
 ; The dividend is hl (low) and de (high), the divisor bc (low) and the word the caller stored on the stack (high);
-; the result is de (low) and hl (high). Restoring division over a frame addressed through ix, which is kept: 32 steps,
-; the quotient shifting into the dividend's place as the remainder shifts in. Mode bits in the frame: 0 remainder
-; wanted, 1 signed, 2 quotient negative, 3 remainder negative.
+; the result is de (low) and hl (high). The divisor is aligned under the dividend and each step takes it off where
+; it fits: one step per quotient bit, in the shadow registers, over a frame addressed through ix, which is kept.
+; Mode bits in the frame: 0 remainder wanted, 1 signed, 2 quotient negative, 3 remainder negative.
 	.globl __udivsi3
 __udivsi3:
 	xor	a
@@ -370,105 +370,102 @@ __udivmodsi4:
 	ld	a,-1(ix)
 	xor	a,#4
 	ld	-1(ix),a
-loop:	bit	7,5(ix)
-	jp	nz,udm_big
-	ld	l,-8(ix)
+; The divisor is shifted left under the dividend (while its top bit is clear and it stays no greater), then
+; each step subtracts it where it fits, a quotient bit, and shifts it right: one step per quotient bit, not per
+; dividend bit. The dividend (remainder) is hl low and hl' high, the divisor de and de', the quotient bc and bc'
+; (the routine's own shadow set), a counts the steps left.
+loop:	ld	l,-8(ix)
 	ld	h,-7(ix)
-	ld	e,-6(ix)
-	ld	d,-5(ix)
-	ld	b,#32
-udm_sk:	bit	7,d
-	jr	nz,udm_go
-	add	hl,hl
-	ex	de,hl
-	adc	hl,hl
-	ex	de,hl
-	djnz	udm_sk
-	jp	udm_done
-; the dividend's leading zeros are skipped: B steps remain, the remainder starts at zero and the quotient
-; shifts in below the dividend's bits
-udm_go:	ld	-8(ix),l
-	ld	-7(ix),h
-	ld	-6(ix),e
-	ld	-5(ix),d
-	ld	-13(ix),b
-	ld	c,-4(ix)
-	ld	b,-3(ix)
-	ld	hl,#0
-	ld	de,#0
-udm_st:	sla	-8(ix)
-	rl	-7(ix)
-	rl	-6(ix)
-	rl	-5(ix)
-	adc	hl,hl
-	ex	de,hl
-	adc	hl,hl
-	ex	de,hl
-	push	hl
-	push	de
+	ld	e,-4(ix)
+	ld	d,-3(ix)
+	exx
+	ld	l,-6(ix)
+	ld	h,-5(ix)
+	ld	e,4(ix)
+	ld	d,5(ix)
+	ld	bc,#0
+	exx
+	ld	bc,#0
+	xor	a,a
+; a divisor of zero: the quotient is all ones, the remainder the dividend
+	ld	a,e
+	or	a,d
+	exx
+	or	a,e
+	or	a,d
+	exx
+	jr	nz,udm_nz
+	ld	bc,#0xFFFF
+	exx
+	ld	bc,#0xFFFF
+	exx
+	jr	udm_out
+udm_nz:	xor	a,a
+udm_al:	exx
+	bit	7,d
+	exx
+	jr	nz,udm_lp
+	sla	e
+	rl	d
+	exx
+	rl	e
+	rl	d
+	exx
 	or	a,a
-	sbc	hl,bc
-	ex	de,hl
-	ld	a,l
-	sbc	a,4(ix)
-	ld	l,a
-	ld	a,h
-	sbc	a,5(ix)
-	ld	h,a
+	sbc	hl,de
+	exx
+	sbc	hl,de
+	exx
+	jr	c,udm_ov
+	add	hl,de
+	exx
+	adc	hl,de
+	exx
+	inc	a
+	jr	udm_al
+; the divisor passed the dividend: back one place
+udm_ov:	add	hl,de
+	exx
+	adc	hl,de
+	srl	d
+	rr	e
+	exx
+	rr	d
+	rr	e
+udm_lp:	or	a,a
+	sbc	hl,de
+	exx
+	sbc	hl,de
+	exx
 	jr	c,udm_no
-	ex	de,hl
-	pop	af
-	pop	af
-	inc	-8(ix)
-	jr	udm_nx
-udm_no:	pop	de
-	pop	hl
-udm_nx:	dec	-13(ix)
-	jr	nz,udm_st
-	ld	-12(ix),l
-	ld	-11(ix),h
-	ld	-10(ix),e
-	ld	-9(ix),d
-	jp	udm_done
-; a divisor of 2^31 or more: the quotient is 0 or 1
-udm_big:	ld	l,-8(ix)
-	ld	h,-7(ix)
-	ld	e,-6(ix)
-	ld	d,-5(ix)
-	ld	c,-4(ix)
-	ld	b,-3(ix)
+	scf
+	jr	udm_q
+udm_no:	add	hl,de
+	exx
+	adc	hl,de
+	exx
 	or	a,a
-	sbc	hl,bc
-	ex	de,hl
-	ld	a,l
-	sbc	a,4(ix)
-	ld	l,a
-	ld	a,h
-	sbc	a,5(ix)
-	ld	h,a
-	jr	c,udm_less
-	ld	-12(ix),e
-	ld	-11(ix),d
+udm_q:	rl	c
+	rl	b
+	exx
+	rl	c
+	rl	b
+	srl	d
+	rr	e
+	exx
+	rr	d
+	rr	e
+	dec	a
+	jp	p,udm_lp
+udm_out:	ld	-12(ix),l
+	ld	-11(ix),h
+	ld	-8(ix),c
+	ld	-7(ix),b
+	exx
 	ld	-10(ix),l
 	ld	-9(ix),h
-	ld	-8(ix),#1
-	ld	-7(ix),#0
-	ld	-6(ix),#0
-	ld	-5(ix),#0
-	jp	udm_done
-udm_less:	ld	a,-8(ix)
-	ld	-12(ix),a
-	ld	a,-7(ix)
-	ld	-11(ix),a
-	ld	a,-6(ix)
-	ld	-10(ix),a
-	ld	a,-5(ix)
-	ld	-9(ix),a
-	xor	a,a
-	ld	-8(ix),a
-	ld	-7(ix),a
-	ld	-6(ix),a
-	ld	-5(ix),a
+	ld	-6(ix),c
+	ld	-5(ix),b
 udm_done:
 	bit	0,-1(ix)
 	jr	nz,4$

@@ -215,3 +215,36 @@ fn a_constant_clear_for_size_without_memset_steps_by_whole_words() {
     let dump = built_from(module, "clear", &BuilderTarget::m32().with_libcalls(&[])).expect("builds");
     assert!(dump.contains("$ecx, Constant:i32<64>") && dump.contains("ValueType:ch:i32"), "{dump}");
 }
+
+/// x_mergesort -O3 at m32: the three copy loops of `msort` became `call
+/// _memcpy` (three pushes, the call, the callee's setup: ~35 clk each, 72146
+/// clk against 54487 with the loops left). With the target's tuning bit a
+/// variable length is `rep movsd` inline at speed, and the call at size.
+#[test]
+fn a_variable_copy_is_rep_movs_at_speed_where_the_tuning_says_so() {
+    let target = BuilderTarget::m32().with_libcalls(&["memcpy"]);
+    let before = built("copy", &target).expect("builds");
+    assert!(before.contains("'memcpy'") && !before.contains("REP_MOVS"), "premise: the pin's call\n{before}");
+    let mut tuning = llrm_mir::target::Tuning::PIN;
+    tuning.inline_variable_memcpy = true;
+    let tti = llrm_x86::tti::X86::of_cpu("i486").expect("a cpu").with_tuning(tuning);
+    let target = target.with_tti(Some(std::rc::Rc::new(tti)));
+    let after = built("copy", &target).expect("builds");
+    assert!(after.contains("REP_MOVS") && !after.contains("'memcpy'"), "{after}");
+}
+
+/// x_mergesort -O3: a copy of `n << 2` bytes ended in a `rep movsb` of `xor
+/// ecx, ecx` (a dead tail, ~5 clk and three instructions per copy, 1818
+/// copies). A length with its low two bits known zero has one `rep movs`.
+#[test]
+fn a_dword_multiple_variable_copy_has_no_byte_tail() {
+    let text = "target datalayout = \"e-p:32:32-n8:16:32\"\n\
+        declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)\n\
+        define void @cells(ptr %d, ptr %s, i32 %n) {\n  %b = shl i32 %n, 2\n  call void @llvm.memcpy.p0.p0.i32(ptr %d, ptr %s, i32 %b, i1 false)\n  ret void\n}\n";
+    let mut tuning = llrm_mir::target::Tuning::PIN;
+    tuning.inline_variable_memcpy = true;
+    let tti = llrm_x86::tti::X86::of_cpu("i486").expect("a cpu").with_tuning(tuning);
+    let target = BuilderTarget::m32().with_libcalls(&["memcpy"]).with_tti(Some(std::rc::Rc::new(tti)));
+    let dump = built_from(text, "cells", &target).expect("builds");
+    assert_eq!(dump.matches("REP_MOVS").count(), 1, "{dump}");
+}
