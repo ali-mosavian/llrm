@@ -353,10 +353,12 @@ struct EstimatedUnrollCost {
     /// PL6: what the first iteration's instructions cost once counted (those a
     /// later iteration or a side effect needs), zero where not priced.
     first_iteration: u32,
-    /// The bytes of the instructions the copies keep (the analysis folds the rest): the
-    /// unit costs above are SizeAndLatency, and a call is about 8 of them and 8 bytes.
+    /// The bytes of the instructions the copies keep (the analysis folds the
+    /// rest): the unit costs above are SizeAndLatency, and a call is about 8 of
+    /// them and 8 bytes.
     unrolled_bytes: i64,
-    /// A call was priced through (`through_calls`): the pin's analysis would have given up.
+    /// A call was priced through (`through_calls`): the pin's analysis would
+    /// have given up.
     through_call: bool,
     /// The multiplies and divides of one rolled trip, and of the first trip
     /// once counted: what the entry values make cheaper there is the peel's
@@ -663,11 +665,12 @@ fn analyze_loop_unroll_cost(
                         _ => true,
                     };
                     // DEVIATE UP1-CALL (owner x87, exit 2026-11-20: the pin's
-                    // `getInstructionCost` of a call or gcc's estimate prices it): the
-                    // pin gives up on a call, and the priced unroll then takes the
-                    // copies as the whole body (static_pointers: 7 x `push imm; call`
-                    // priced 305 B, was 6 B smaller). A call here is one instruction
-                    // the copies keep, with the operands that feed it.
+                    // `getInstructionCost` of a call or gcc's estimate prices
+                    // it): the pin gives up on a call, and the priced unroll
+                    // then takes the copies as the whole body (static_pointers:
+                    // 7 x `push imm; call` priced 305 B, was 6 B smaller). A
+                    // call here is one instruction the copies keep, with the
+                    // operands that feed it.
                     if lowered && !through_calls {
                         why(run, lp, "cannot analyze: a call");
                         return None;
@@ -686,7 +689,7 @@ fn analyze_loop_unroll_cost(
                         &mut inst_cost_map,
                         &mut unrolled_cost,
                         &mut first_iteration,
-&mut unrolled_bytes,
+                        &mut unrolled_bytes,
                         &mut heavy_first,
                         kind,
                         clocks,
@@ -785,7 +788,7 @@ fn analyze_loop_unroll_cost(
                 &mut inst_cost_map,
                 &mut unrolled_cost,
                 &mut first_iteration,
-&mut unrolled_bytes,
+                &mut unrolled_bytes,
                 &mut heavy_first,
                 kind,
                 clocks,
@@ -821,7 +824,7 @@ fn analyze_loop_unroll_cost(
                     &mut inst_cost_map,
                     &mut unrolled_cost,
                     &mut first_iteration,
-&mut unrolled_bytes,
+                    &mut unrolled_bytes,
                     &mut heavy_first,
                     kind,
                     clocks,
@@ -964,10 +967,14 @@ fn add_cost_recursively(
                         Cost::of,
                     );
                 *unrolled_cost = *unrolled_cost + price;
-                if !matches!(operation.opcode, Opcode::Phi | Opcode::GetElementPtr { .. } | Opcode::ICmp(_)) {
+                if !matches!(
+                    operation.opcode,
+                    Opcode::Phi | Opcode::GetElementPtr { .. } | Opcode::ICmp(_)
+                ) {
                     let size = run.outer.target().size_costs();
-                    *unrolled_bytes += crate::profit::operation(run.context, run.layout, run.function, run.callees, inst, &size)
-                        .unwrap_or(size.add);
+                    *unrolled_bytes +=
+                        crate::profit::operation(run.context, run.layout, run.function, run.callees, inst, &size)
+                            .unwrap_or(size.add);
                 }
                 if iteration == 0 {
                     *first_iteration = *first_iteration + price;
