@@ -1,4 +1,5 @@
 // flags: -O0 -m32 | -O2 -march=i486 -m32 | -O2 -march=i486 -m32 -mabi=sysv
+// flags-m68k: -mcmodel=medium
 /* The runtime's memmove (memmove_, _memmove) and memset (memset_, _memset) against byte loops written here: overlaps in both
    directions at every offset from 1 to 5, sizes around the dword boundary, a size past 64 KiB, unaligned starts, no byte touched
    outside the range, dst back, and the direction flag clear at the return (a string operation after the call would run backwards).

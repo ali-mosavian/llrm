@@ -161,6 +161,9 @@ pub struct M68kLowering {
     /// The beyond-pin size rewrites (`addq`, `extb.l`, `sub` of a sign-extended
     /// compare).
     pub short: bool,
+    /// A global's address is an absolute one, not PC-relative (the medium
+    /// model on the 68000 and 68010, the large model).
+    pub absolute_data: bool,
 }
 
 impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLowering {
@@ -224,7 +227,7 @@ impl Hooks for M68kLowering {
             ISD::SraParts => Some(lower_shift_right_parts(dag, node, true)),
             ISD::Select => Some(lower_select(dag, node)),
             ISD::BrCond => Some(lower_brcond(dag, node)),
-            ISD::GlobalAddress => Some(super::call::lower_global_address(dag, node)),
+            ISD::GlobalAddress => Some(super::call::lower_global_address(dag, node, self.absolute_data)),
             ISD::VAStart => lower_vastart(dag, node),
             ISD::SAddO | ISD::UAddO | ISD::SSubO | ISD::USubO | ISD::SMulO | ISD::UMulO => lower_xalu(dag, node),
             _ => None,
