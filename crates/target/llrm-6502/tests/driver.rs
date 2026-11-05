@@ -2252,3 +2252,21 @@ fn the_array_of_a_function_that_calls_a_declaration_stays_on_the_stack() {
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
     assert!(!text.contains("_local"), "{text}");
 }
+
+/// byvalue_struct_address (tests/run/c): `bar` stores a static that `main`
+/// reads, and costs more than its call at -Os until `main` has folded the read
+/// away with the store. The first walk of the inliner prices it whole and
+/// leaves `jsr bar` (23 bytes became 120, 62 instructions for 13); the second
+/// walk finds it small.
+#[test]
+fn a_callee_emptied_by_a_fold_in_its_caller_is_inlined_by_the_second_walk() {
+    let ir = include_str!("data/byvalue_struct_address.ll");
+    let mut request = Request::new(Level::Os);
+    request.passes.push("-fno-second-inline".to_owned());
+    let once = assembly(ir, &request).unwrap();
+    let twice = assembly(ir, &Request::new(Level::Os)).unwrap();
+    assert!(once.contains("jsr bar"), "the first walk alone no longer leaves the call:\n{once}");
+    assert!(!twice.contains("jsr bar"), "the callee is still called:\n{twice}");
+    let size = |text: &str| text.lines().filter(|line| line.starts_with("  ")).count();
+    assert!(size(&twice) * 2 < size(&once), "{} instructions against {}", size(&twice), size(&once));
+}

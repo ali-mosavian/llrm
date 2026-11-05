@@ -191,6 +191,8 @@ fn program(
     if request.level != Level::O0 {
         let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
         let mut options = request.level.options();
+        options.second_inline = !request.passes.iter().any(|flag| flag == "-fno-second-inline")
+            && std::env::var_os("LLRM_6502_NO_ROUND2").is_none();
         for flag in &request.passes {
             apply_pass_flag(&mut options, flag);
         }
