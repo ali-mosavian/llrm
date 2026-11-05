@@ -1280,6 +1280,14 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     // and the gap is reserved with them.
     let slot = procedure.registers.slot;
     let align = procedure.registers.align.max(slot);
+    // A 64-bit frame aligns the locals' base to the widest object, as the pin
+    // aligns each object to its own and only the total to the stack
+    // (`calculateFrameObjectOffsets`); the call alignment is `frame`'s below.
+    let align = if procedure.body.bits == 64 && procedure.body.object_align > 0 {
+        procedure.body.object_align.min(align)
+    } else {
+        align
+    };
     // Where the frame register is omitted and that is settled without a size
     // comparison (`frame_omitted`), its cell is not reserved: the return
     // address and the registers are what the locals are aligned below. The
@@ -1293,6 +1301,19 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     // registers had a `push rax` slot, and a caller with one had `sub rsp, 16`
     // (the call alignment is `frame`'s, below), where the pin has neither.
     let gap = if procedure.reserve == 0 { 0 } else { (align - (above + pushed) % align) % align };
+    // DEVIATE FR1 (owner m64, exit 2026-11-14): the pin pads the total to the
+    // stack alignment below the locals (`calculateFrameObjectOffsets`, the
+    // final `alignTo(Offset, StackAlign)`), so its lowest local sits at
+    // `[rsp+pad]`, a disp8 more than ours. Where the frame register is
+    // omitted the pad goes above the locals instead, as the base layout had it.
+    let pad = if procedure.body.bits == 64 && dropped && procedure.reserve != 0 && aligns_for_calls(&procedure) {
+        let call = procedure.registers.align;
+        let rounded = (procedure.reserve + slot - 1) / slot * slot;
+        (call - (slot + pushed + gap + rounded) % call) % call
+    } else {
+        0
+    };
+    let gap = gap + pad;
     match crate::backend::relayout::pushed_down(&procedure.body, pushed + gap - above) {
         Some(body) => Procedure {
             body: lir::LirBody { saved_first: true, slot_dropped: dropped, ..body },
@@ -1540,6 +1561,25 @@ pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
 
 /// `_frame_parts`, with no frame register where `omit`: the entry sets none and
 /// the return takes back what the entry reserved.
+/// Whether a call finds the stack a multiple of the target's alignment, as its
+/// callee assumes, or a saved vector register's `movaps` needs the boundary:
+/// the frame takes what keeps it so.
+fn aligns_for_calls(procedure: &Procedure) -> bool {
+    let (slot, align) = (procedure.registers.slot, procedure.registers.align);
+    let calls = align > slot
+        && procedure.body.bits >= 32
+        && !procedure.far
+        && procedure.interrupt.is_none()
+        && procedure.entry == 0
+        && procedure
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .any(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Call));
+    calls || (align > slot && !procedure.body.vector_saves.is_empty())
+}
+
 fn parts(
     procedure: &Procedure,
     omit: bool,
@@ -1569,19 +1609,7 @@ fn parts(
     // takes what keeps it so, the return address, the pushed registers, the
     // frame register and the reserve a multiple of it.
     let align = procedure.registers.align;
-    let calls = align > slot
-        && procedure.body.bits >= 32
-        && !procedure.far
-        && procedure.interrupt.is_none()
-        && procedure.entry == 0
-        && procedure
-            .body
-            .blocks
-            .iter()
-            .flat_map(|block| block.insns.iter())
-            .any(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Call));
-    // `movaps` of a saved vector register needs the frame on the boundary too.
-    let calls = calls || (align > slot && !procedure.body.vector_saves.is_empty());
+    let calls = aligns_for_calls(procedure);
     let mut reserve = reserve;
     if calls {
         let below =

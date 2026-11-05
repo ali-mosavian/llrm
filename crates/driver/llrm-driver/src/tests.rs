@@ -3062,6 +3062,41 @@ fn a_jump_table_index_is_not_zero_extended_again_at_m64() {
     assert!(moves.is_empty(), "{listing}");
 }
 
+/// The locals' base was aligned to the stack's 16 below the pushed registers
+/// (the pin aligns each object to its own and only the total to the stack):
+/// a function with one int local and two saved registers had `sub rsp, 24`
+/// and the local at `[rsp+12]`, the pin `push rax` and `[rsp+4]`.
+#[test]
+fn a_one_int_local_costs_one_stack_slot_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare i32 @g(ptr)\n\
+                define i32 @calls(i32 %x) {\n\
+                \x20 %p = alloca i32, align 4\n  store i32 %x, ptr %p\n\
+                \x20 %a = call i32 @g(ptr %p)\n  %b = call i32 @g(ptr %p)\n  %s = add i32 %a, %b\n  ret i32 %s\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "calls").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("push rax"), "{listing}");
+    assert!(!listing.contains("sub rsp, 24"), "{listing}");
+}
+
+/// With the frame register omitted, the call-alignment pad lay below the
+/// locals (the pin's place): two `i64` locals sat at `[rsp+8]` and `[rsp+16]`,
+/// a disp8 on every access to the lowest. FR1 puts the pad above them.
+#[test]
+fn the_call_pad_lies_above_the_locals_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @g(ptr, ptr)\n\
+                define void @f(i64 %x) {\n\
+                \x20 %p = alloca i64, align 8\n  %q = alloca i64, align 8\n  store i64 %x, ptr %p\n  store i64 %x, ptr %q\n\
+                \x20 call void @g(ptr %p, ptr %q)\n  call void @g(ptr %q, ptr %p)\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("sub rsp, 24"), "{listing}");
+    assert!(listing.contains("[rsp]") || listing.contains("lea rdi, [rsp]"), "{listing}");
+}
+
 /// A local declared `align 16` sat at `[rsp+4]`: the frame clamped every
 /// alignment to 4 (bintree's array; a 16-byte `movaps` clear of it would
 /// fault).
