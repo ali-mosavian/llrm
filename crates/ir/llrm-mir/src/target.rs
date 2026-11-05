@@ -113,6 +113,10 @@ pub struct Tuning {
     /// at (-O2, -O3), in `gcc_insns` (gcc's `max-inline-insns-recursive`, 450);
     /// none: `inline::MAX_INLINE_INSNS_RECURSIVE`.
     pub recursive_inlining_growth: Option<(i64, i64)>,
+    /// DEVIATE REC-2: at (-O2, -O3) a tree recursion's tail calls are eliminated before it is
+    /// copied into itself (gcc: `pass_tail_recursion` runs early, `passes.def` before `pass_ipa_inline`),
+    /// not after (D10).
+    pub recursive_tre_first: (bool, bool),
     /// DEVIATE PL6: the first iteration of an innermost loop is peeled where
     /// its entry constants fold enough of the body to pay the copy at the
     /// speed rate (`Tti::peels_folded_entry`). false: the pin's
@@ -173,6 +177,7 @@ impl Tuning {
         recursive_inlining: None,
         recursive_edge_growth: None,
         recursive_inlining_growth: None,
+        recursive_tre_first: (false, false),
         peel_folded_entry: false,
         unroll_milliclocks_per_byte: 0,
         sink_select_arms: false,

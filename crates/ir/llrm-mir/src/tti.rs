@@ -732,6 +732,12 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE REC-2: whether, at (-O2, -O3), a tree recursion's tail calls are eliminated
+    /// before its copies of itself are made.
+    fn recursive_tre_first(&self) -> (bool, bool) {
+        (false, false)
+    }
+
     /// DEVIATE REC-1: the ceilings (depth, callee size in `gcc_insns`) within
     /// which a tree-recursive function's copies of itself are chosen by
     /// price: each level of copies is made while the clocks it saves, at
