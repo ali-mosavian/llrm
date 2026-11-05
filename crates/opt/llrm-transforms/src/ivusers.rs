@@ -51,7 +51,8 @@ pub struct Env<'a> {
     /// Membership in the loop's ephemeral values.
     pub ephemeral: &'a dyn Fn(InstId) -> bool,
     /// DEVIATE LSR-N: widths LSR takes as native besides the datalayout's `n`
-    /// (`Tti::lsr_native_integer_widths`).
+    /// (`Tti::lsr_native_integer_widths`); the pin's check is
+    /// [`!DL.isLegalInteger(Width)`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/IVUsers.cpp#L157).
     pub native_widths: &'a [u32],
 }
 
