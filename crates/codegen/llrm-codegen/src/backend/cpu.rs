@@ -277,6 +277,22 @@ impl Profile {
         (self.model)(&self.cpu_prices())
     }
 
+    /// `target`, with the private convention the ABI `family` states: Win64's
+    /// is every function's, so `private` does not move one to System V's.
+    pub fn target_under(
+        &self,
+        arch: &dyn Target,
+        family: Option<&str>,
+    ) -> std::rc::Rc<dyn llrm_mir::target::Machine> {
+        let mut prices = self.cpu_prices();
+        let family = family.unwrap_or(&arch.calling().default);
+        if arch.calling().abi_private.contains_key(family) {
+            prices.private =
+                private_convention_under(arch, Some(family), llrm_support::env_flag!("LLRM_PRIVATE_WATCALL"));
+        }
+        (self.model)(&prices)
+    }
+
     /// The form that indexes by a dword register: where a target has one, a
     /// 16-bit target's behind the address-size prefix (`secondary`), a flat
     /// one's native.
@@ -903,8 +919,18 @@ fn private_convention(
     arch: &dyn Target,
     instrument: bool,
 ) -> Option<llrm_mir::target::PrivateConvention> {
+    private_convention_under(arch, None, instrument)
+}
+
+/// `private_convention` under the ABI family `family` (the default's without
+/// one): the family may state its own.
+pub fn private_convention_under(
+    arch: &dyn Target,
+    family: Option<&str>,
+    instrument: bool,
+) -> Option<llrm_mir::target::PrivateConvention> {
     let calling = arch.calling();
-    let private = calling.private()?;
+    let private = calling.private_under(family)?;
     let private = calling.private_instrument().filter(|_| instrument).unwrap_or(private);
     let to = llrm_target::calling::Calling::number_of(private.cc.as_deref())?;
     let mut from: Vec<u32> = calling
