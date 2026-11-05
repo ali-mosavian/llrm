@@ -139,3 +139,45 @@ fn the_poison_phi_of_a_prolog_shares_the_local_of_its_neighbour() {
     let locals = text.lines().find(|line| line.trim_start().starts_with(".local")).expect("a .local line");
     assert_eq!(locals.split_whitespace().skip(1).count(), 4, "{locals}");
 }
+
+/// A prolog's exit phis take `poison` from the skip edge. The wasm coalescer
+/// erased their `IMPLICIT_DEF` but the instruction stayed, and its zero was
+/// written into the local a join had given the live value: `run(n)` was wrong
+/// for every n divisible by four from 4 up (n = 4 gave 12.625 for -165.625).
+#[test]
+fn a_prolog_whose_trip_count_divides_by_four_gives_the_right_sum() {
+    let dir = std::env::temp_dir().join(format!("llrm-wasm-prolog-run-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let ir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ir/unroll_prolog_run.ll");
+    let made = Command::new(env!("CARGO_BIN_EXE_llrm-wasm-llc"))
+        .args(["-O2", "-filetype=obj", "-o"])
+        .arg(dir.join("f.o"))
+        .arg(&ir)
+        .output()
+        .expect("llrm-wasm-llc");
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let linked = Command::new("wasm-ld")
+        .args(["--no-entry", "--export-all"])
+        .arg(dir.join("f.o"))
+        .arg("-o")
+        .arg(dir.join("f.wasm"))
+        .output()
+        .expect("wasm-ld");
+    assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
+    let script = "const m = new WebAssembly.Module(require('fs').readFileSync(process.env.MODULE));
+         const run = new WebAssembly.Instance(m, {}).exports.run;
+         const f32 = Math.fround;
+         const bad = [];
+         for (let n = 0; n <= 17; n++) {
+           let a = 100, b = f32(3), c = 7, d = f32(0.25);
+           for (let i = 0; i < n; i++) { const a1 = a * 0.5 + 1; b = f32(b + 1); c = c - a; d = f32(d + d); a = a1; }
+           const want = a + b + c + d;
+           const got = run(100, 3, n, 7, 0.25);
+           if (got !== want) bad.push(n + ': ' + got + ' != ' + want);
+         }
+         console.log(bad.length ? bad.join('; ') : 'ok');";
+    let ran = Command::new("node").args(["-e", script]).env("MODULE", dir.join("f.wasm")).output().expect("node");
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(ran.status.success(), "{}", String::from_utf8_lossy(&ran.stderr));
+    assert_eq!(String::from_utf8_lossy(&ran.stdout).trim(), "ok");
+}
