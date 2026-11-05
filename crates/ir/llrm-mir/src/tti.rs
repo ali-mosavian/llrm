@@ -327,6 +327,12 @@ pub struct HardwareLoopTarget {
     /// `PerformEntryTest`: the loop's entry guard may be folded into the
     /// counter's set (`test.set.loop.iterations`).
     pub perform_entry_test: bool,
+    /// Beyond the pin (PPC's `checkCallInLoop` is its own check): the counter
+    /// is lost across a call, so a loop that calls is left alone.
+    pub rejects_calls: bool,
+    /// Beyond the pin: the counter is one more register, so a loop is
+    /// converted only where its own counter dies, replaced by this one.
+    pub requires_dead_counter: bool,
 }
 
 impl Default for HardwareLoopTarget {
@@ -338,6 +344,8 @@ impl Default for HardwareLoopTarget {
             is_nesting_legal: false,
             counter_in_reg: false,
             perform_entry_test: false,
+            rejects_calls: false,
+            requires_dead_counter: false,
         }
     }
 }

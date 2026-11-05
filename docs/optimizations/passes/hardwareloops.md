@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/hardwareloops.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/hardwareloops.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/hardwareloops.rs sha256:b14080bda6838e81864e87467321e0c81cca160e8c1313fc54e5174099d34a47 -->
+<!-- src: crates/opt/llrm-transforms/src/hardwareloops.rs sha256:b6bda01b3a3a81951fbbbb504b80b60b671b86de8de5a74cfea0e924516d277a -->
 
 # hardwareloops
 
@@ -33,8 +33,10 @@ In the strength slot, after `lsr`, only for a target whose
 changes nothing anywhere until a target lowers the intrinsics.
 
 ## Limits
-Only the form without a phi counter and without an entry test is made
-(`llvm.loop.decrement`, `llvm.set.loop.iterations`).
+No entry test is made (`llvm.test.set.loop.iterations`). A target whose
+counter is a register value (`counter_in_reg`) gets the phi form:
+`llvm.start.loop.iterations`, a phi, `llvm.loop.decrement.reg` and `icmp ne
+0`, which the interpreter runs.
 
 DEVIATE 1: `isHardwareLoopCandidate` rejects an exit count whose type is
 wider than the counter. Here the count is taken when its unsigned range
@@ -59,6 +61,11 @@ attribute MIR holds. Nothing after this pass copies a loop or a call
 
 DEVIATE 5: a loop is eligible only in LoopSimplify form (the pin inserts a
 preheader where there is none). Exit: `InsertPreheaderForLoop`.
+
+DEVIATE 6: when the exit test was `icmp` of a counter that only the test and
+its own update read (the phi and the update read each other), that counter
+is deleted. The pin leaves the cycle, which `RecursivelyDelete...` does not
+see as dead. Exit: none.
 
 ## See also
 `HardwareLoopsImpl::TryConvertLoop`, `HardwareLoop::Create`,
