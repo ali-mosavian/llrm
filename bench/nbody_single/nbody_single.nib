@@ -1,12 +1,13 @@
-# Six-body integrator in f32, 1000 steps. Module vars cannot be floats: arrays are locals.
+# Six-body integrator in f32, 1000 steps.
 # Overdamped: the bodies settle at their centre of mass whatever the intermediate precision (a lighter damping was chaotic: #360).
 const BODIES: i16 = 6
 
+var pos_x: f32[6] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+var pos_y: f32[6] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+var vel_x: f32[6] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+var vel_y: f32[6] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
 fn bench_nbody_single() -> i32:
-    let mut pos_x: f32[6] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    let mut pos_y: f32[6] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    let mut vel_x: f32[6] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    let mut vel_y: f32[6] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
     for body in 0..BODIES:
         pos_x[body] = f32(body * 7 - 15)
         pos_y[body] = f32(body * 5 - 12)
