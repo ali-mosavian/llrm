@@ -2992,6 +2992,7 @@ fn a_zero_across_a_call_is_made_again_not_kept_in_a_saved_cell() {
               define i8 @f() {\n  %c = call i16 @chrget(i16 0)\n  store i16 0, ptr @a\n  store i16 0, ptr @b\n  %t = trunc i16 %c to i8\n  ret i8 %t\n}";
     let text = compile_at(ir, "f", 16, Tuning::SIZE);
     assert!(!text.contains("pha"), "{text}");
+}
 
 /// x16basic-c `strs.c` -O2 (`fn_chrd`) did not compile: a word used as a
 /// pointer has its high byte stored elsewhere. The byte was read as a cell
