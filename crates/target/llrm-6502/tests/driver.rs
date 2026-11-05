@@ -2106,6 +2106,22 @@ fn a_pointer_stepped_by_a_constant_and_compared_is_bumped_in_its_pair() {
     }
 }
 
+/// A frame address (`rc0` plus 3) copied into a pointer pair went through the
+/// index registers: `adc #3; tax; lda rc1; adc #0; tay; stx rc6; sty rc7`
+/// (x16 `crunch` 1147 B, `flow` -57 B here): the sums are in `a`, so `sta rc6`.
+#[test]
+fn a_frame_address_is_stored_from_a_not_through_the_index_registers() {
+    let ir = module(
+        "@g = global ptr null\n@h = global ptr null\ndeclare void @use(ptr)\n\
+         define void @f() {\n  %a = alloca [8 x i8]\n  %q = getelementptr inbounds i8, ptr %a, i16 3\n  \
+         store volatile ptr %q, ptr @g\n  %r = getelementptr inbounds i8, ptr %a, i16 5\n  store volatile ptr %r, ptr @h\n  \
+         call void @use(ptr %q)\n  ret void\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap();
+    let transfers = text.lines().filter(|line| matches!(line.trim(), "tax" | "tay")).count();
+    assert!(transfers <= 4, "{transfers} transfers into the index registers:\n{text}");
+}
+
 /// `SAddO`, `SSubO` and `SMulO` on a word were refused ("convert node to
 /// libcall"); they compile now, and the value and the overflow bit must be
 /// right at the edges (30000 + 30000, -32768 - 1, 181 * 181), not just

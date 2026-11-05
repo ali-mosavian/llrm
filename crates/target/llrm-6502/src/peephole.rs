@@ -25,6 +25,9 @@
 //! - [`load_straight_into_a`]: `ldx m; ...; txa` (likewise `ldy` and `tya`)
 //!   with only loads and stores of other bytes between, and `x` dead after the
 //!   transfer: `lda m`.
+//! - [`store_before_transfer`]: `tax; ...; stx m` (likewise `tay` and `sty`)
+//!   with only work on `a` between, `m` untouched and the index register dead
+//!   after: `sta m` where the transfer was.
 //! - [`drop_cancelling_transfers`]: `tya; tay` and its three twins: the second
 //!   moves what the first just moved.
 //! - [`branch_on_shift_carry`]: `ldx m; bpl` after `asl|rol c` where `c` held
@@ -96,6 +99,7 @@ pub fn run(asm: &mut Asm) {
     drop_known_loads(asm);
     drop_zero_compares(asm);
     load_straight_into_a(asm);
+    store_before_transfer(asm);
     drop_cancelling_transfers(asm);
     branch_on_shift_carry(asm);
     jump_to_return(asm);
@@ -450,6 +454,70 @@ fn load_straight_once(asm: &mut Asm) -> bool {
     }
     retain(asm, &keep);
     changed
+}
+
+/// `tax; ...; stx m` (likewise `tay` and `sty`): the byte is in `a` at the
+/// transfer, so `sta m` there, when between the two only `a` is worked on, `m`
+/// is not touched, nothing reads or writes the index register, and the register
+/// is dead after the store. The flags the transfer set are set again before a
+/// read. (A pointer plus a constant went `adc #3; tax; lda rc1; adc #0; tay;
+/// stx rc6; sty rc7` where `adc #3; sta rc6; lda rc1; adc #0; sta rc7` does.)
+pub fn store_before_transfer(asm: &mut Asm) {
+    while store_before_once(asm) {}
+}
+
+fn store_before_once(asm: &mut Asm) -> bool {
+    let lines = &asm.lines;
+    for (at, line) in lines.iter().enumerate() {
+        let Line::Inst(Inst { op: transfer @ (Op::Tax | Op::Tay), .. }) = line else { continue };
+        let (store, register, other_transfer, other_load, other_store) = if *transfer == Op::Tax {
+            (Op::Stx, Registers::X, Op::Tay, Op::Ldy, Op::Sty)
+        } else {
+            (Op::Sty, Registers::Y, Op::Tax, Op::Ldx, Op::Stx)
+        };
+        let index = if register == Registers::X { Index::X } else { Index::Y };
+        let mut found = None;
+        let mut target: Option<&Operand> = None;
+        for (next, line) in lines.iter().enumerate().skip(at + 1) {
+            let Line::Inst(Inst { op, operand, .. }) = line else { break };
+            if *op == store {
+                if matches!(operand, Operand::Direct(_)) {
+                    found = Some(next);
+                    target = Some(operand);
+                }
+                break;
+            }
+            let touches_index = matches!(operand, Operand::Indexed(_, i) if *i == index)
+                || matches!((operand, register), (Operand::IndirectX(_), Registers::X) | (Operand::IndirectY(_), Registers::Y));
+            let quiet = !touches_index
+                && match op {
+                    Op::Clc | Op::Sec | Op::Nop => true,
+                    Op::Lda | Op::Cmp | Op::Adc | Op::Sbc | Op::And | Op::Ora | Op::Eor => {
+                        matches!(operand, Operand::Direct(_) | Operand::Imm(_))
+                    }
+                    Op::Sta => matches!(operand, Operand::Direct(_)),
+                    o if *o == other_transfer || *o == other_load => matches!(operand, Operand::Direct(_) | Operand::Imm(_) | Operand::None),
+                    o if *o == other_store => matches!(operand, Operand::Direct(_)),
+                    _ => false,
+                };
+            if !quiet {
+                break;
+            }
+        }
+        let (Some(to), Some(cell)) = (found, target) else { continue };
+        // `m` is neither read nor written between the two
+        let untouched = lines[at + 1..to].iter().all(|line| line.inst().is_none_or(|i| i.operand != *cell));
+        if untouched
+            && flags_unread_after(lines, at + 1)
+            && dead_from(lines, to + 1, register, &mut HashSet::default())
+        {
+            let cell = cell.clone();
+            asm.lines[at] = Line::Inst(Inst { op: Op::Sta, operand: cell, place: 0 });
+            asm.lines.remove(to);
+            return true;
+        }
+    }
+    false
 }
 
 /// `tya; tay`, `tay; tya`, `txa; tax` and `tax; txa`: the second transfer
