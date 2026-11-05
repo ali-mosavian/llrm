@@ -1632,25 +1632,25 @@ pub fn _effects_by_table(
         .flat_map(|(held, register)| _lanes(regs, regs.named(*register, i64::from(held.width))))
         .collect();
     if flags {
-        reads.extend(_flag_lanes(found.flags_read).minus(&writes));
-        writes.extend(_flag_lanes(found.flags_written));
+        reads.include(_flag_lanes(found.flags_read).minus(&writes));
+        writes.include(_flag_lanes(found.flags_written));
     }
     for register in &found.reads {
-        reads.extend(_lanes(regs, *register).minus(&writes));
+        reads.include(_lanes(regs, *register).minus(&writes));
     }
     for register in &found.writes {
-        writes.extend(_lanes(regs, *register));
+        writes.include(_lanes(regs, *register));
         // In long mode a dword write clears the upper half of the register.
         if bits == 64
             && regs.bytes(*register) == Some(4)
             && let Some(whole) = regs.view(regs.root(*register), 64)
         {
-            writes.extend(_lanes(regs, whole));
+            writes.include(_lanes(regs, whole));
         }
     }
     if may_write {
         for register in &found.maybe_writes {
-            writes.extend(_lanes(regs, *register));
+            writes.include(_lanes(regs, *register));
         }
     }
     Some(Some((reads, writes)))
