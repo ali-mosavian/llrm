@@ -2214,4 +2214,23 @@ mod tests {
         assert_eq!(pyrepr::tuple::<i64>(&[2]), "(2,)");
         assert_eq!(pyrepr::tuple::<i64>(&[2, 3]), "(2, 3)");
     }
+
+    /// A failed check's edge stated at `NEVER_TAKEN_WEIGHT` to 1 (isel: that many
+    /// 2^31sts) vanished when a split gave it a share of 1/16: `rerouted` rounds
+    /// to the unit as the pin does (`BranchProbability.h:140`, no clamp), a block
+    /// on that path then had a table entry and no odds into it, and
+    /// `LLRM_VERIFY=1` rejected x87 floatalloc blocks (fpbench Os at `i32::MAX`).
+    #[test]
+    fn test_a_never_taken_edge_survives_a_sixteenth_share() {
+        use crate::hir::mir::NEVER_TAKEN_WEIGHT;
+        use crate::model::lir::BlockOdds;
+
+        let units = (BlockOdds::CERTAIN / (f64::from(NEVER_TAKEN_WEIGHT) + 1.0)).round() as u32;
+        let mut odds = BlockOdds::default();
+        odds.taken.insert((1, 2), units);
+        odds.taken.insert((1, 3), BlockOdds::CERTAIN as u32 - units);
+        odds.rerouted(1, &[2, 3], 2, &[(4, 1.0 / 16.0)]);
+
+        assert!(odds.taken[&(1, 4)] > 0, "the split edge has {} units", odds.taken[&(1, 4)]);
+    }
 }
