@@ -289,7 +289,7 @@ def body_checks(head: str, description: str, base: str = BASE, cwd: Path = ROOT,
 
 def warnings(head: str, description: str, base: str = BASE, cwd: Path = ROOT, title: str = "") -> list[str]:
     """The description checks that only warn (all of them unless BODY_CHECKS=refuse)."""
-    return [] if BODY_CHECKS == "refuse" else body_checks(head, description, base, cwd, title)
+    return subject_length(title)[0] + ([] if BODY_CHECKS == "refuse" else body_checks(head, description, base, cwd, title))
 
 
 CONVENTIONAL = re.compile(r"(feat|fix|perf|refactor|test|docs|build|ci|chore|style|revert)(\([^)]+\))?!?: \S")
@@ -302,13 +302,28 @@ def subject_refusals(title: str) -> list[str]:
     return [f"squash subject {title!r} is not `type(scope): description` (a 'Merge ...' title is a merge-commit line): retitle the PR"]
 
 
+SUBJECT_TARGET, SUBJECT_MAX = 60, 72
+SUBJECT_MAX_FROM = datetime.date(2026, 11, 12)  # ratchet: warn until sessions have adapted (157 of 400 subjects were over 72 on 11-05), then refuse
+
+
+def subject_length(title: str, today: datetime.date | None = None) -> tuple[list[str], list[str]]:
+    """(warnings, refusals) for a title longer than the target; over the max it refuses from SUBJECT_MAX_FROM."""
+    n = len(title)
+    if n <= SUBJECT_TARGET:
+        return [], []
+    note = f"{n} chars: squash subject {title!r} is over the {SUBJECT_TARGET} target (max {SUBJECT_MAX}); shorten the PR title"
+    if n > SUBJECT_MAX and (today or datetime.date.today()) >= SUBJECT_MAX_FROM:
+        return [], [note]
+    return [note], []
+
+
 def refusals(head: str, description: str, base: str = BASE, cwd: Path = ROOT, title: str = "") -> list[str]:
     """Why this head may not be squashed into `base`; empty if it may."""
     if subprocess.run(["git", "merge-base", "--is-ancestor", base, head], cwd=cwd).returncode:
         return [f"the PR head does not contain {base}: merge it in first (a stale head squashes other PRs' work away)"]
     why = [f"{page}: still links to {path}, which the squash deletes; remove or repoint the link in this PR" for path, page in dead_links(base, head, cwd)]
     soft = body_checks(head, description, base, cwd, title) if BODY_CHECKS == "refuse" else []
-    return subject_refusals(title) + soft + why + conflict_markers(base, head, cwd) + assistant_mentions(title, description, base, head, cwd)
+    return subject_refusals(title) + subject_length(title)[1] + soft + why + conflict_markers(base, head, cwd) + assistant_mentions(title, description, base, head, cwd)
 
 
 PRECHECK_CACHE = LANDED_LOG.parent / "precheck-cache.json"  # (PR head sha, release/next sha) -> the verdict line, and the head's own check failures per sha: ~40 candidates per cycle must not rebuild the dev checkout each
