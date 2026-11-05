@@ -568,3 +568,49 @@ b2:
     assert_eq!(aa.alias(&stores[0], &loads[0]), AliasResult::NoAlias, "premise: one copy's own pair");
     assert_eq!(aa.alias(&stores[0], &loads[1]), AliasResult::MayAlias, "{}", printed(&module));
 }
+
+/// `for (i = 0; i < 8; i++) acc += (i * k + n) ...`: a body big enough that
+/// unrolling it is judged by `analyzeLoopUnrollCost`.
+fn heavy() -> String {
+    let mut body = String::new();
+    for k in 0..24 {
+        body.push_str(&format!("  %t{k} = mul i16 %i, {}\n  %u{k} = add i16 %t{k}, %n\n", k + 3));
+    }
+    let sum = (0..24).fold("%acc".to_string(), |sum, k| {
+        body.push_str(&format!("  %s{k} = add i16 {sum}, %u{k}\n"));
+        format!("%s{k}")
+    });
+    format!(
+        "define i16 @f(i16 %x, i16 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b1 ]
+  %acc = phi i16 [ %x, %b0 ], [ {sum}, %b1 ]
+{body}  %next = add i16 %i, 1
+  %go = icmp slt i16 %next, 8
+  br i1 %go, label %b1, label %b2
+
+b2:
+  %r = phi i16 [ {sum}, %b1 ]
+  ret i16 %r
+}}
+"
+    )
+}
+
+/// Old: `analyze_loop_unroll_cost` began a `ScalarEvolution` of its own for
+/// each loop, so the loop's phis and steps were made again after the trip
+/// count had made them (the unroll analyzer's `get_scev` was 18.0 M Ir on
+/// jpeg_fixed -O2 m32, the pin's 5.5 M on its cached SE). The pass's own
+/// session answers it.
+#[test]
+fn test_the_unroll_cost_analysis_reads_the_loops_expressions_the_pass_already_made() {
+    use llrm_mir::counts::{Event, get};
+    let mut module = parsed(&heavy());
+    let before = get(Event::ScevNodes);
+    unrolled(&mut module);
+    let made = get(Event::ScevNodes) - before;
+    assert!(made <= 29, "{made} expressions were made for one loop");
+}
