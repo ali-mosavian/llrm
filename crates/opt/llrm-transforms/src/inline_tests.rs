@@ -57,6 +57,7 @@ fn inline_known(
         peeling: false,
         depth: MAX_INLINE_RECURSIVE_DEPTH,
         callee: i64::MAX,
+        growth: MAX_INLINE_INSNS_RECURSIVE,
     };
     let mut changed = false;
     loop {
@@ -631,6 +632,7 @@ fn self_inlined(ops: usize) -> (usize, i64) {
         peeling: false,
         depth: MAX_INLINE_RECURSIVE_DEPTH,
         callee: i64::MAX,
+        growth: MAX_INLINE_INSNS_RECURSIVE,
     };
     let mut declared = llrm_mir::passes::Declared::of(&module);
     let (context, function, metadata) = module.function_and_metadata_mut("down").unwrap();

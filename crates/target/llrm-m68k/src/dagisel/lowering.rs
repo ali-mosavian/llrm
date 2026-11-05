@@ -254,6 +254,7 @@ impl Hooks for M68kLowering {
             split: false,
             variadic: false,
             sret: false,
+            byval: None,
         };
         // `getCopyToParts`: a 64-bit argument is two words, the high one first
         // on a big-endian target.
@@ -267,13 +268,13 @@ impl Hooks for M68kLowering {
                 outs.push(out(value, dag));
             }
         }
-        let word = In { vt: EVT::I32, pointer: false, arg_vt: EVT::I32, split: false, sret: false, ext: Ext::Any };
+        let word = In { vt: EVT::I32, pointer: false, arg_vt: EVT::I32, split: false, sret: false, ext: Ext::Any, byval: None };
         let mut ins: Vec<In> = Vec::new();
         for &ret in rets {
             if ret == EVT::I64 {
                 ins.extend([word, word]);
             } else {
-                ins.push(In { vt: ret, pointer: false, arg_vt: ret, split: false, sret: false, ext: Ext::Any });
+                ins.push(In { vt: ret, pointer: false, arg_vt: ret, split: false, sret: false, ext: Ext::Any, byval: None });
             }
         }
         let callee = dag.get_target_external_symbol(EVT::I32, name);

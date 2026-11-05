@@ -152,6 +152,12 @@ impl Tti for Wasm {
         "WebAssembly"
     }
 
+    /// Wasm locals are virtual: the engine allocates the registers, and the
+    /// pin's LICM promotes without a cap (bench nbody_fixed -O2).
+    fn licm_register_limit(&self) -> Option<u32> {
+        None
+    }
+
     /// `WebAssemblyTargetLowering::isLegalAddressingMode`: offsets add as
     /// unsigned without wrapping, so a negative one is refused; no register is
     /// scaled; every other form is legal.

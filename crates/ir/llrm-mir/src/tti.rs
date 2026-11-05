@@ -638,6 +638,12 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE REC-2: what the copies of a recursive function in itself may add
+    /// at (-O2, -O3), in `gcc_insns`; none: the pass's own.
+    fn recursive_inlining_growth(&self) -> Option<(i64, i64)> {
+        None
+    }
+
     /// DEVIATE REC-1: the ceilings (depth, callee size in `gcc_insns`) within
     /// which a tree-recursive function's copies of itself are chosen by
     /// price: each level of copies is made while the clocks it saves, at
@@ -1130,6 +1136,14 @@ pub trait Tti {
     /// `getNumberOfRegisters` of the general-purpose class.
     fn number_of_gpr_registers(&self) -> u32 {
         8
+    }
+
+    /// The values LICM may hold across a loop before it refuses a promotion
+    /// (DEVIATE LP1, `licm/pressure.rs` in llrm-transforms): the register count
+    /// by default; `None` where registers are not what a value is held in and
+    /// the pin promotes without a cap.
+    fn licm_register_limit(&self) -> Option<u32> {
+        Some(self.number_of_gpr_registers())
     }
 
     /// The registers LSR keeps back from `number_of_gpr_registers` when it

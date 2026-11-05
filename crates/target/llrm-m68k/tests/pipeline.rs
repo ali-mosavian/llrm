@@ -37,8 +37,8 @@ fn an_add_of_two_stack_arguments_is_a_move_and_an_add_with_a_memory_operand() {
         }
     };
     let ins = [
-        In { vt: EVT::I32, pointer: false, arg_vt: EVT::I32, split: false, sret: false, ext: Ext::Any },
-        In { vt: EVT::I32, pointer: false, arg_vt: EVT::I32, split: false, sret: false, ext: Ext::Any },
+        In { vt: EVT::I32, pointer: false, arg_vt: EVT::I32, split: false, sret: false, ext: Ext::Any, byval: None },
+        In { vt: EVT::I32, pointer: false, arg_vt: EVT::I32, split: false, sret: false, ext: Ext::Any, byval: None },
     ];
     let args = calling.lower_formal_arguments(&mut dag, entry, &ins, &mut fixed);
     let sum = dag.get_node(ISD::Add, EVT::I32, &[args[0], args[1]]);
@@ -53,6 +53,7 @@ fn an_add_of_two_stack_arguments_is_a_move_and_an_add_with_a_memory_operand() {
             split: false,
             variadic: false,
             sret: false,
+            byval: None,
         }],
     );
     dag.set_root(ret);
