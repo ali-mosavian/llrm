@@ -768,6 +768,20 @@ def time_programs(exes: dict[tuple[str, str, str], Path], work: Path, inputs: di
     return out
 
 
+def corpus_digest(directory: Path) -> str:
+    """md5 of a program's sources (not its expected.toml or .out): what its stored reference numbers were measured from."""
+    parts = sorted(f for f in directory.iterdir() if f.is_file() and f.name != "expected.toml" and f.suffix != ".out")
+    return hashlib.md5(b"".join(f.name.encode() + f.read_bytes() for f in parts)).hexdigest()
+
+
+def stale_corpus(directory: Path) -> str | None:
+    """Why the stored reference numbers of `directory` no longer belong to its sources, or None (also for a file blessed before `corpus` was recorded)."""
+    recorded = read_expected(directory).get("corpus")
+    if recorded is None or recorded == corpus_digest(directory):
+        return None
+    return f"{directory_name(directory)}: sources changed since the references were blessed (corpus {recorded[:8]}, now {corpus_digest(directory)[:8]}): --bless --references --reason"
+
+
 def read_expected(directory: Path) -> dict:
     path = directory / "expected.toml"
     return tomllib.loads(path.read_text()) if path.exists() else {}
@@ -789,9 +803,9 @@ def write_expected(directory: Path, measured: dict, name: str, reason: str) -> b
         if "kernel_ms" not in new and "kernel_ms" in old and old.get("instructions") == new.get("instructions"):
             new["kernel_ms"] = old["kernel_ms"]
         tables.setdefault(language, {})[opt] = new
-    if {language: {opt: dict(table) for opt, table in by_opt.items()} for language, by_opt in tables.items()} == {language: {opt: dict(table) for opt, table in by_opt.items()} for language, by_opt in before.items()} and (directory / "expected.toml").exists():
+    if {language: {opt: dict(table) for opt, table in by_opt.items()} for language, by_opt in tables.items()} == {language: {opt: dict(table) for opt, table in by_opt.items()} for language, by_opt in before.items()} and (directory / "expected.toml").exists() and not stale_corpus(directory):
         return False
-    lines = [f"reason = {json.dumps(reason)}", f'blessed = "{date.today()}"', ""]  # JSON escapes are TOML's
+    lines = [f"reason = {json.dumps(reason)}", f'blessed = "{date.today()}"', f'corpus = "{corpus_digest(directory)}"', ""]  # JSON escapes are TOML's
     for language in dict.fromkeys([*LANGUAGES, *BASIC_LANGUAGES, *(one for many in REFERENCES.values() for one in many)]):
         for opt in sorted(tables.get(language, {})):
             lines += [f"[{language}.{opt}]", *(f"{one} = {value}" for one, value in tables[language][opt].items()), ""]
@@ -930,6 +944,9 @@ def judge(measured: dict, selected: list[str], opts: list[str], base: dict | Non
         for (one, language, opt), row in (base or {}).items():
             if one == name and (same is None or name in same):
                 baseline.setdefault(language, {})[opt] = row
+        stale = stale_corpus(directory)
+        if stale:
+            problems.append(stale)
         for variant in variants(directory):
             for opt in opts:
                 got = measured[(name, variant.language, opt)]
@@ -953,7 +970,7 @@ def judge(measured: dict, selected: list[str], opts: list[str], base: dict | Non
                             problems += ratio_problems(label, reference, got, want, ref, waived)
             for reference in REFERENCES.get(variant.language, ()):
                 for level in sorted({reference_level(reference, opt) for opt in opts}):
-                    if (name, reference, level) in measured:
+                    if (name, reference, level) in measured and not stale:
                         problems += drift_problems(f"{name} {reference} -{level}", measured[(name, reference, level)], baseline.get(reference, {}).get(level))
         for opt in opts:  # the x86_64 row: no variant of its own, it runs the C source
             got = measured.get((name, native.OURS, opt))
@@ -1078,8 +1095,7 @@ def source_digests(names: list[str]) -> dict[str, str]:
     """md5 of each program's sources (not its expected.toml or .out), so two runs say whether they measured the same programs."""
     out = {}
     for one in benchmarks(set(names)):
-        parts = sorted(f for f in one.iterdir() if f.is_file() and f.name != "expected.toml" and f.suffix != ".out")
-        out[directory_name(one)] = hashlib.md5(b"".join(f.name.encode() + f.read_bytes() for f in parts)).hexdigest()
+        out[directory_name(one)] = corpus_digest(one)
     return out
 
 
