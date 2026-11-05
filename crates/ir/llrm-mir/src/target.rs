@@ -78,6 +78,11 @@ pub struct Tuning {
     /// site too (otherwise only two or more: the pin's single-site inline
     /// stands). A callee that stays and is copied once only grows the code.
     pub inline_size_guard_single_site: bool,
+    /// A size build rotates a loop only when the header's exit test folds in
+    /// the preheader (RS1): an unfolded copy is a compare and a branch, more
+    /// than the loop-closing jump it removes. false: the pass's header limit
+    /// alone.
+    pub rotation_guard_must_fold_at_size: bool,
     /// A constant offset of an address is a displacement the access folds;
     /// SimplifyCFG's sinking of two such accesses behind a phi of the offsets
     /// is refused (it costs the displacement). false: the pin's.
@@ -146,6 +151,7 @@ impl Tuning {
         split_merged_conditions: false,
         inline_size_guard_at_size: false,
         inline_size_guard_single_site: false,
+        rotation_guard_must_fold_at_size: false,
         keep_constant_displacements: false,
         recursive_inlining: None,
         recursive_edge_growth: None,
