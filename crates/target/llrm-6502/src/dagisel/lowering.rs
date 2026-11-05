@@ -72,11 +72,17 @@ pub fn target_lowering() -> TargetLowering {
     {
         tl.set_load_ext_action(LoadExt::SExtLoad, vt, mem, Action::Expand);
     }
-    // and a zero- or any-extending one to a type that is not a register is not
-    // formed, to be split again
-    for (vt, mem) in
-        [(MVT::I32, MVT::I8), (MVT::I32, MVT::I16), (MVT::I64, MVT::I8), (MVT::I64, MVT::I16), (MVT::I64, MVT::I32)]
-    {
+    // and a zero- or any-extending one is not selected from a global's address
+    // (a pointer pair and `lda (zp),y` where `lda abs` is one instruction),
+    // or at all to a type that is not a register: split again
+    for (vt, mem) in [
+        (MVT::I16, MVT::I8),
+        (MVT::I32, MVT::I8),
+        (MVT::I32, MVT::I16),
+        (MVT::I64, MVT::I8),
+        (MVT::I64, MVT::I16),
+        (MVT::I64, MVT::I32),
+    ] {
         for ext in [LoadExt::ZExtLoad, LoadExt::ExtLoad] {
             tl.set_load_ext_action(ext, vt, mem, Action::Expand);
         }
