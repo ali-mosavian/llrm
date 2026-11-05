@@ -352,3 +352,14 @@ fn an_unchanged_pin_clang_is_asked_its_version_once() {
     assert_eq!(spawns(), 4);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Every compile read and parsed the description file of all 21 targets, 55% of
+/// llrm-cc's 9.6M instructions on grep. One row is resolved alone; a broken
+/// description of another row must not matter.
+#[test]
+fn only_the_named_target_reads_its_description() {
+    let text = "[good]\ntriple = \"x\"\ndatalayout = \"e\"\nclang = []\nllc = []\nobject = \"o\"\nlink = []\n\n[bad]\ntriple = \"y\"\ndatalayout = \"{datalayout:no-such-crate}\"\nclang = []\nllc = []\nobject = \"o\"\nlink = []\n";
+    assert!(targets(text).is_err());
+    assert_eq!(target(text, "x").unwrap().datalayout, "e");
+    assert!(target(text, "bad").is_err());
+}

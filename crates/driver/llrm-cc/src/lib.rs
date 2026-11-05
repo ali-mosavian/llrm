@@ -197,20 +197,36 @@ fn c_abi_of(target: &Target) -> Result<Option<CAbi>, String> {
     Ok(Some(sizes))
 }
 
-pub fn targets(text: &str) -> Result<BTreeMap<String, Target>, String> {
-    let mut table: BTreeMap<String, Target> = toml::from_str(text).map_err(|error| format!("targets.toml: {error}"))?;
-    for target in table.values_mut() {
-        target.datalayout = expanded(&target.datalayout)?;
-        target.c_abi = c_abi_of(target)?;
-        target.clang_datalayout = target.clang_datalayout.take().map(|one| expanded(&one)).transpose()?;
-        for word in target.clang.iter_mut().chain(&mut target.llc) {
-            *word = word.replace("{root}", ROOT);
-        }
-        for word in target.clang.iter_mut().chain(&mut target.llc).chain(&mut target.link) {
-            *word = with_environment(word);
-        }
+fn raw_targets(text: &str) -> Result<BTreeMap<String, Target>, String> {
+    toml::from_str(text).map_err(|error| format!("targets.toml: {error}"))
+}
+
+/// `target` with its description files read and its placeholders filled.
+fn resolved(mut target: Target) -> Result<Target, String> {
+    target.datalayout = expanded(&target.datalayout)?;
+    target.c_abi = c_abi_of(&target)?;
+    target.clang_datalayout = target.clang_datalayout.take().map(|one| expanded(&one)).transpose()?;
+    for word in target.clang.iter_mut().chain(&mut target.llc) {
+        *word = word.replace("{root}", ROOT);
     }
-    Ok(table)
+    for word in target.clang.iter_mut().chain(&mut target.llc).chain(&mut target.link) {
+        *word = with_environment(word);
+    }
+    Ok(target)
+}
+
+pub fn targets(text: &str) -> Result<BTreeMap<String, Target>, String> {
+    raw_targets(text)?.into_iter().map(|(name, target)| Ok((name, resolved(target)?))).collect()
+}
+
+/// The row named `name` (or whose triple it is), resolved alone: the other
+/// rows' description files are not read.
+pub fn target(
+    text: &str,
+    name: &str,
+) -> Result<Target, String> {
+    let table = raw_targets(text)?;
+    resolved(target_named(&table, name)?.clone())
 }
 
 #[derive(Debug, PartialEq)]
@@ -807,16 +823,12 @@ pub fn run_main(argv: &[String]) -> i32 {
             eprintln!("llrm-cc: {why}");
             2
         })?;
-        let table = targets(TARGETS).map_err(|why| {
-            eprintln!("llrm-cc: {why}");
-            1
-        })?;
         let (named, job) = parse(argv).map_err(|why| {
             eprintln!("llrm-cc: {why}");
             1
         })?;
         let name = named.or_else(|| std::env::var("LLRM_CC_TARGET").ok()).unwrap_or_else(|| DEFAULT_TARGET.into());
-        let target = target_named(&table, &name).map_err(|why| {
+        let target = &target(TARGETS, &name).map_err(|why| {
             eprintln!("llrm-cc: {why}");
             1
         })?;
