@@ -12,6 +12,7 @@ pub mod cmpdup;
 pub mod cmpelim;
 pub mod divrem;
 pub mod constreg;
+pub mod commutative;
 pub mod compile;
 pub mod consts;
 pub mod dagisel;
