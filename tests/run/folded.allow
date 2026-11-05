@@ -2,3 +2,5 @@
 os_console	OS shim test: the program is two write calls on a literal
 os_exit	OS shim test: the program is report, exit, report
 long_double_stride	ABI layout test: it reports sizeof and an address difference, constants by definition
+fsgs_call_callee	callee-only file with no main: the other half of a link test, nothing to fold
+watcom_far_sum_callee	callee-only file with no main: the other half of a link test, nothing to fold
