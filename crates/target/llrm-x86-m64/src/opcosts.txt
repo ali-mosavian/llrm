@@ -59,27 +59,27 @@ unroll_budget = 150
 # twice where an operation becomes more than the instruction; a call, return, branch and stack operation is the
 # instruction itself. Flat code has no operand-size prefix on a dword and no segment override.
 [bytes]
-# The bytes of each form at x86-64, as iced-x86 encodes it (REX.W on a 64-bit operand, a disp8 on a memory operand);
-# a test in lib.rs asserts every entry. The form lists were a flat-32 copy until M64-BYTE-TABLE.
+# The bytes of each form: its mean over the compiled corpus at x86-64 (objdump of the bench objects), rounded; a test in
+# lib.rs holds each between iced's shortest and longest encoding. The form lists were a flat-32 copy until M64-BYTE-TABLE.
 alu_rr = 3
 xchg_rr = 3
-imul_r32 = 4
-smul_min_w4 = 4
+imul_r32 = 5
+smul_min_w4 = 5
 idiv_r32 = 3
-shift_ri = 4
+shift_ri = 3
 lea = 4
-movzx = 3
+movzx = 5
 setcc = 3
 mov_rr = 3
-mov_rm = 4
-mov_mr = 4
-mov_mi = 8
-alu_mr = 4
-jcc = 2
+mov_rm = 6
+mov_mr = 7
+mov_mi = 9
+alu_mr = 6
+jcc = 3
 call_near = 5
 ret_near = 1
 pop_r = 1
-alu_ri = 4
+alu_ri = 5
 ret_pop = 3
 x87_add = 2
 x87_add_m = 6
@@ -90,7 +90,7 @@ x87_store = 4
 x87_release = 2
 sse_arith = 4
 sse_sqrt = 4
-sse_move = 5
+sse_move = 6
 sse_compare = 4
 sse_logic = 3
 rep_stos = 3

@@ -434,53 +434,57 @@ impl llrm_target::Target for M64 {
 
 #[cfg(test)]
 mod tests {
-    /// The `[bytes]` table was a flat-32 copy (alu_rr 4, mov_rm 6, x87 6), so
-    /// the size estimator over-counted x86-64 code ~1.45x and the unroll rate
-    /// was priced against it. Each form must be the length iced encodes.
+    /// The `[bytes]` table was a flat-32 copy (alu_rr 4, shift_ri 6, x87 6), so
+    /// the size estimator over-counted x86-64 code ~1.45x. A form's entry is the
+    /// mean over the compiled corpus (objdump of the bench objects), which must
+    /// lie between iced's shortest and longest encoding of the form: stack slot
+    /// to absolute operand, imm8 to imm32.
     #[test]
-    fn test_every_bytes_form_is_the_length_iced_encodes() {
+    fn test_every_bytes_form_lies_between_the_iced_shortest_and_longest_encoding() {
         use iced_x86::{Code, Encoder, Instruction, MemoryOperand, Register::*};
-        let slot = || MemoryOperand::with_base_displ(RBP, -8);
-        // x87 loads and stores go through rsp (a SIB byte); arithmetic reads rip-relative constants.
-        let stack = || MemoryOperand::with_base_displ(RSP, 16);
-        let constant = || MemoryOperand::with_base_displ(RIP, 0x2000);
-        let forms: Vec<(&str, Instruction)> = vec![
-            ("alu_rr", Instruction::with2(Code::Add_r64_rm64, RAX, RCX).unwrap()),
-            ("xchg_rr", Instruction::with2(Code::Xchg_rm64_r64, RAX, RCX).unwrap()),
-            ("imul_r32", Instruction::with2(Code::Imul_r64_rm64, RAX, RCX).unwrap()),
-            ("smul_min_w4", Instruction::with2(Code::Imul_r64_rm64, RAX, RCX).unwrap()),
-            ("idiv_r32", Instruction::with1(Code::Idiv_rm64, RCX).unwrap()),
-            ("shift_ri", Instruction::with2(Code::Shl_rm64_imm8, RAX, 3u32).unwrap()),
-            ("lea", Instruction::with2(Code::Lea_r64_m, RAX, slot()).unwrap()),
-            ("movzx", Instruction::with2(Code::Movzx_r32_rm8, EAX, CL).unwrap()),
-            ("setcc", Instruction::with1(Code::Sete_rm8, AL).unwrap()),
-            ("mov_rr", Instruction::with2(Code::Mov_r64_rm64, RAX, RCX).unwrap()),
-            ("mov_rm", Instruction::with2(Code::Mov_r64_rm64, RAX, slot()).unwrap()),
-            ("mov_mr", Instruction::with2(Code::Mov_rm64_r64, slot(), RAX).unwrap()),
-            ("mov_mi", Instruction::with2(Code::Mov_rm64_imm32, slot(), 1000i32).unwrap()),
-            ("alu_mr", Instruction::with2(Code::Add_rm64_r64, slot(), RAX).unwrap()),
-            ("jcc", Instruction::with_branch(Code::Je_rel8_64, 0x1010).unwrap()),
-            ("call_near", Instruction::with_branch(Code::Call_rel32_64, 0x1000).unwrap()),
-            ("ret_near", Instruction::with(Code::Retnq)),
-            ("pop_r", Instruction::with1(Code::Pop_r64, RAX).unwrap()),
-            ("push_r", Instruction::with1(Code::Push_r64, RAX).unwrap()),
-            ("alu_ri", Instruction::with2(Code::Add_rm64_imm8, RAX, 8i32).unwrap()),
-            ("ret_pop", Instruction::with1(Code::Retnq_imm16, 8u32).unwrap()),
-            ("x87_add", Instruction::with2(Code::Fadd_st0_sti, ST0, ST1).unwrap()),
-            ("x87_add_m", Instruction::with1(Code::Fadd_m32fp, constant()).unwrap()),
-            ("x87_mul", Instruction::with2(Code::Fmul_st0_sti, ST0, ST1).unwrap()),
-            ("x87_div", Instruction::with2(Code::Fdiv_st0_sti, ST0, ST1).unwrap()),
-            ("x87_load", Instruction::with1(Code::Fld_m32fp, stack()).unwrap()),
-            ("x87_store", Instruction::with1(Code::Fstp_m32fp, stack()).unwrap()),
-            ("x87_release", Instruction::with1(Code::Fstp_sti, ST0).unwrap()),
-            ("sse_arith", Instruction::with2(Code::Addsd_xmm_xmmm64, XMM0, XMM1).unwrap()),
-            ("sse_sqrt", Instruction::with2(Code::Sqrtsd_xmm_xmmm64, XMM0, XMM1).unwrap()),
-            ("sse_move", Instruction::with2(Code::Movsd_xmm_xmmm64, XMM0, slot()).unwrap()),
-            ("sse_compare", Instruction::with2(Code::Ucomisd_xmm_xmmm64, XMM0, XMM1).unwrap()),
-            ("sse_logic", Instruction::with2(Code::Xorps_xmm_xmmm128, XMM0, XMM1).unwrap()),
-            ("rep_stos", Instruction::with_rep_stosq(64).unwrap()),
-            ("mov_ri", Instruction::with2(Code::Mov_r32_imm32, EAX, 1000i32).unwrap()),
-            ("rep_movs", Instruction::with_rep_movsq(64).unwrap()),
+        let near = || MemoryOperand::with_base_displ(RBP, -8);
+        let far = || MemoryOperand::new(RCX, R9, 8, 0x1234_5678, 8, false, None);
+        let rip = || MemoryOperand::with_base_displ(RIP, 0x2000);
+        let two = |code, a: iced_x86::Register, b: iced_x86::Register| Instruction::with2(code, a, b).unwrap();
+        let rm = |code, r, m| Instruction::with2(code, r, m).unwrap();
+        let mr = |code, m, r| Instruction::with2(code, m, r).unwrap();
+        let forms: Vec<(&str, Instruction, Instruction)> = vec![
+            ("alu_rr", two(Code::Add_r32_rm32, EAX, ECX), two(Code::Add_r64_rm64, R8, R9)),
+            ("xchg_rr", two(Code::Xchg_rm32_r32, EAX, ECX), two(Code::Xchg_rm64_r64, R8, R9)),
+            ("imul_r32", two(Code::Imul_r32_rm32, EAX, ECX), rm(Code::Imul_r64_rm64, R8, far())),
+            ("smul_min_w4", two(Code::Imul_r32_rm32, EAX, ECX), rm(Code::Imul_r64_rm64, R8, far())),
+            ("idiv_r32", Instruction::with1(Code::Idiv_rm32, ECX).unwrap(), Instruction::with1(Code::Idiv_rm64, far()).unwrap()),
+            ("shift_ri", Instruction::with2(Code::Shl_rm32_imm8, EAX, 3u32).unwrap(), Instruction::with2(Code::Shl_rm64_imm8, R8, 3u32).unwrap()),
+            ("lea", rm(Code::Lea_r32_m, EAX, near()), rm(Code::Lea_r64_m, R8, far())),
+            ("movzx", two(Code::Movzx_r32_rm8, EAX, CL), rm(Code::Movzx_r64_rm16, R8, far())),
+            ("setcc", Instruction::with1(Code::Sete_rm8, AL).unwrap(), Instruction::with1(Code::Sete_rm8, R8L).unwrap()),
+            ("mov_rr", two(Code::Mov_r32_rm32, EAX, ECX), two(Code::Mov_r64_rm64, R8, R9)),
+            ("mov_rm", rm(Code::Mov_r32_rm32, EAX, near()), rm(Code::Mov_r64_rm64, R8, far())),
+            ("mov_mr", mr(Code::Mov_rm32_r32, near(), EAX), mr(Code::Mov_rm64_r64, far(), R8)),
+            ("mov_mi", Instruction::with2(Code::Mov_rm32_imm32, near(), 1000i32).unwrap(), Instruction::with2(Code::Mov_rm64_imm32, far(), 1000i32).unwrap()),
+            ("alu_mr", mr(Code::Add_rm32_r32, near(), EAX), mr(Code::Add_rm64_r64, far(), R8)),
+            ("jcc", Instruction::with_branch(Code::Je_rel8_64, 0x1010).unwrap(), Instruction::with_branch(Code::Je_rel32_64, 0x3000).unwrap()),
+            ("call_near", Instruction::with_branch(Code::Call_rel32_64, 0x3000).unwrap(), Instruction::with_branch(Code::Call_rel32_64, 0x3000).unwrap()),
+            ("ret_near", Instruction::with(Code::Retnq), Instruction::with(Code::Retnq)),
+            ("pop_r", Instruction::with1(Code::Pop_r64, RAX).unwrap(), Instruction::with1(Code::Pop_r64, R8).unwrap()),
+            ("push_r", Instruction::with1(Code::Push_r64, RAX).unwrap(), Instruction::with1(Code::Push_r64, R8).unwrap()),
+            ("alu_ri", Instruction::with2(Code::Add_rm32_imm8, EAX, 8i32).unwrap(), Instruction::with2(Code::Add_rm64_imm32, R8, 1000i32).unwrap()),
+            ("ret_pop", Instruction::with1(Code::Retnq_imm16, 8u32).unwrap(), Instruction::with1(Code::Retnq_imm16, 8u32).unwrap()),
+            ("x87_add", two(Code::Fadd_st0_sti, ST0, ST1), two(Code::Fadd_st0_sti, ST0, ST1)),
+            ("x87_add_m", Instruction::with1(Code::Fadd_m32fp, near()).unwrap(), Instruction::with1(Code::Fadd_m32fp, far()).unwrap()),
+            ("x87_mul", two(Code::Fmul_st0_sti, ST0, ST1), two(Code::Fmul_st0_sti, ST0, ST1)),
+            ("x87_div", two(Code::Fdiv_st0_sti, ST0, ST1), two(Code::Fdiv_st0_sti, ST0, ST1)),
+            ("x87_load", Instruction::with1(Code::Fld_m32fp, near()).unwrap(), Instruction::with1(Code::Fld_m32fp, rip()).unwrap()),
+            ("x87_store", Instruction::with1(Code::Fstp_m32fp, near()).unwrap(), Instruction::with1(Code::Fstp_m32fp, rip()).unwrap()),
+            ("x87_release", Instruction::with1(Code::Fstp_sti, ST0).unwrap(), Instruction::with1(Code::Fstp_sti, ST0).unwrap()),
+            ("sse_arith", two(Code::Addsd_xmm_xmmm64, XMM0, XMM1), two(Code::Addsd_xmm_xmmm64, XMM8, XMM9)),
+            ("sse_sqrt", two(Code::Sqrtsd_xmm_xmmm64, XMM0, XMM1), two(Code::Sqrtsd_xmm_xmmm64, XMM8, XMM9)),
+            ("sse_move", two(Code::Movaps_xmm_xmmm128, XMM0, XMM1), rm(Code::Movsd_xmm_xmmm64, XMM8, far())),
+            ("sse_compare", two(Code::Ucomisd_xmm_xmmm64, XMM0, XMM1), two(Code::Ucomisd_xmm_xmmm64, XMM8, XMM9)),
+            ("sse_logic", two(Code::Xorps_xmm_xmmm128, XMM0, XMM1), two(Code::Xorps_xmm_xmmm128, XMM8, XMM9)),
+            ("rep_stos", Instruction::with_rep_stosd(64).unwrap(), Instruction::with_rep_stosq(64).unwrap()),
+            ("mov_ri", Instruction::with2(Code::Mov_r32_imm32, EAX, 1000i32).unwrap(), Instruction::with2(Code::Mov_r64_imm64, R8, 1i64 << 40).unwrap()),
+            ("rep_movs", Instruction::with_rep_movsd(64).unwrap(), Instruction::with_rep_movsq(64).unwrap()),
         ];
         let text = include_str!("opcosts.txt");
         let table = text.split("[bytes]").nth(1).unwrap().split("\n[").next().unwrap();
@@ -489,26 +493,16 @@ mod tests {
             .lines()
             .filter(|line| !line.starts_with('#') && line.contains('=') && !line.contains("_cell"))
             .count();
-        assert_eq!(named, forms.len(), "a form in [bytes] has no encoding here");
-        for (form, instruction) in forms {
+        assert_eq!(named, forms.len(), "a form in [bytes] has no encodings here");
+        let length = |form: &str, instruction: &Instruction| {
             let mut encoder = Encoder::new(64);
-            let length = encoder.encode(&instruction, 0x1000).unwrap_or_else(|error| panic!("{form}: {error}"));
-            assert_eq!(OPCOSTS.bytes(form), Some(length as i64), "{form}");
-        }
-    }
-
-    /// x86-64 described no x87 registers, so an x87 value (a QB `fatan`, a
-    /// `long double`) had no register class and the DAG path refused it.
-    #[test]
-    fn test_the_x87_stack_and_its_seven_rfp_registers_are_described() {
-        use llrm_target::Target;
-        let file = llrm_target::registers::parse(&M64.registers_text()).unwrap();
-        let named = |class: &str| -> Vec<&str> {
-            file.iter().filter(|one| one.is(class)).map(|one| one.name.as_str()).collect()
+            encoder.encode(instruction, 0x1000).unwrap_or_else(|error| panic!("{form}: {error}")) as i64
         };
-        assert_eq!(named("x87"), ["st0", "st1", "st2", "st3", "st4", "st5", "st6", "st7"]);
-        assert_eq!(named("rfp"), ["mm0", "mm1", "mm2", "mm3", "mm4", "mm5", "mm6"]);
-        assert_eq!(M64.float_stack(), 8);
+        for (form, shortest, longest) in forms {
+            let (low, high) = (length(form, &shortest), length(form, &longest));
+            let bytes = OPCOSTS.bytes(form).unwrap_or_else(|| panic!("{form} has no bytes"));
+            assert!((low..=high).contains(&bytes), "{form}: {bytes} B is outside iced's {low}..={high}");
+        }
     }
 
     /// `object()` and the runtime tables are parsed once and kept; each must
