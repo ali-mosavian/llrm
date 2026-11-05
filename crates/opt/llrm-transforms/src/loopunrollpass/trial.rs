@@ -61,10 +61,12 @@ fn measure(run: &mut Run) -> (i64, i64) {
     // Where the target lowers the copy, its bytes are the measure: the backend
     // merges stores (lru -O3: the IR model said +8 B, the code is smaller) and
     // spills (nbody_single -O3: -112 B modelled, +460 B built).
+    let declared = run.declared.since(run.globals.len(), &*run.context);
     let lowered = run.this.and_then(|id| {
         run.tti.lowered_bytes(&llrm_mir::tti::LoweredFunction {
             context: &*run.context,
             globals: run.globals,
+            declared: &declared,
             metadata: run.metadata,
             layout: run.layout,
             function: &*run.function,

@@ -22,6 +22,7 @@ fn lowered(
     let declarations: Vec<_> = module.globals.iter().cloned().collect();
     let count = function.walk().count();
     let request = LoweredFunction {
+        declared: &[],
         context: &module.context,
         globals: &declarations,
         metadata: &module.metadata,

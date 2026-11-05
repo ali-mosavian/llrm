@@ -533,7 +533,7 @@ pub fn lowered_bytes(function: &llrm_mir::tti::LoweredFunction) -> Option<i64> {
     let mut module = llrm_mir::module::Module {
         context: function.context.clone(),
         datalayout: Some(platform.datalayout().to_owned()),
-        globals: function.globals.to_vec(),
+        globals: function.globals.iter().chain(function.declared).cloned().collect(),
         metadata: function.metadata.to_vec(),
         ..Default::default()
     };

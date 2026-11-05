@@ -1818,6 +1818,8 @@ mod access_tests {
 pub struct LoweredFunction<'a> {
     pub context: &'a crate::context::Context,
     pub globals: &'a [crate::module::GlobalValue],
+    /// Globals the passes declared after the module's, numbered after them.
+    pub declared: &'a [crate::module::GlobalValue],
     pub metadata: &'a [crate::module::MetadataNode],
     pub layout: &'a crate::datalayout::DataLayout,
     pub function: &'a crate::module::Function,
