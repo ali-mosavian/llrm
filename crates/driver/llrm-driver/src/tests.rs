@@ -3137,6 +3137,29 @@ fn a_nest_with_loads_invariant_in_the_outer_loop_is_jammed_at_o3_m64() {
     assert!(tripled.count() >= 2, "{listing}");
 }
 
+/// fib at m64 -O2 was copied into itself to the 150 `gcc_insns` the pass allowed
+/// (25941 clocks, 556 B) where gcc's cap is 450 (10793 clocks, 1028 B); -O3 keeps 150
+/// (m32's rectwo and bintree are worse with 450 there).
+#[test]
+fn fib_is_copied_into_itself_to_gccs_growth_cap_at_o2_only_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i32 @fib(i32 %n) {\n\
+                  %c = icmp slt i32 %n, 2\n\
+                  br i1 %c, label %base, label %rec\n\
+                base:\n  ret i32 %n\n\
+                rec:\n\
+                  %a = sub i32 %n, 1\n  %x = call i32 @fib(i32 %a)\n\
+                  %b = sub i32 %n, 2\n  %y = call i32 @fib(i32 %b)\n\
+                  %r = add i32 %x, %y\n  ret i32 %r\n}\n";
+    let calls = |level: &str| {
+        let (built, _) = compiled(&flags(&["-m64", level, "--isel=dag"]), text, "fib").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap().matches("call fib").count()
+    };
+    let (o2, o3) = (calls("-O2"), calls("-O3"));
+    assert!(o2 > o3, "-O2 made {o2} calls of fib, -O3 {o3}");
+}
+
 /// An `i32` divided by a constant at m64 was `mov ecx, 0xcccccccd; mul ecx;
 /// shr edx, 3` (the one-operand `mul`, 4 clocks, edx:eax); the pin widens it
 /// to `imul rax, rcx; shr rax, 35` (switch -O2: 31690 cycles, clang 27667).
@@ -3162,6 +3185,32 @@ fn a_signed_i32_division_by_ten_merges_its_shifts_at_m64() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("sar rax, 34"), "{listing}");
     assert!(!listing.contains("shr rax, 32"), "{listing}");
+}
+
+/// Static code (no "PIC Level" flag) at m64 made the address of a global a
+/// `lea reg, [rip+sym]` (7 bytes) where the pin's `MOV32ri64` is `mov r32,
+/// sym` (5 bytes, R_X86_64_32): jpeg_fixed -Os had 20 of them.
+#[test]
+fn the_address_of_a_global_in_static_code_at_m64_is_a_dword_move() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @arr = internal global [100 x i32] zeroinitializer\n\
+                declare void @use(ptr)\n\
+                define void @f() {\n  call void @use(ptr @arr)\n  ret void\n}\n\
+                !llvm.module.flags = !{!0}\n!0 = !{i32 7, !\"uwtable\", i32 2}\n";
+    let (built, format) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let bytes = llrm_codegen::backend::objbuild::written_in(
+        &built,
+        "f.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .unwrap();
+    // `mov edi, imm32` (BF) against `lea rdi, [rip+disp32]` (48 8D 3D).
+    assert!(bytes.windows(5).any(|code| code == [0xBF, 0, 0, 0, 0]), "no `mov edi, sym`: {listing}");
+    assert!(!bytes.windows(3).any(|code| code == [0x48, 0x8D, 0x3D]), "a `lea rdi, [rip+sym]`: {listing}");
 }
 
 /// A local declared `align 16` sat at `[rsp+4]`: the frame clamped every

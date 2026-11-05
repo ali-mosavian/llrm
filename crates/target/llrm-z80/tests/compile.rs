@@ -1658,3 +1658,25 @@ fn one_long_multiply_in_a_module_stays_inline_at_size() {
     let out = compiled(ir, "f");
     assert!(!out.contains("__mulsi3"), "{out}");
 }
+
+/// A long shifted by a constant was unrolled in a function tuned for size:
+/// `x << 5` 60 B, `x >> 13` 49 B, where the shift routine is a 14 B loop
+/// (-Os). The bytes still shifted times the bits beyond whole bytes are the
+/// cost: 5 and 13 take the routine; whole bytes, one or two bits and the last
+/// byte (29, 31) stay unrolled, as a 64-bit shift's halves did (data_int64
+/// +199 B when 29 and 31 called); speed levels never take it.
+#[test]
+fn a_function_tuned_for_size_shifts_a_long_by_a_constant_in_the_routine() {
+    let shifted = |op: &str, count: u32, attr: &str| {
+        compiled(&format!("define i32 @f(i32 %a) {attr} {{\n  %r = {op} i32 %a, {count}\n  ret i32 %r\n}}"), "f")
+    };
+    for (op, routine) in [("shl", "__ashlsi3"), ("lshr", "__lshrsi3"), ("ashr", "__ashrsi3")] {
+        for count in [5, 13] {
+            assert!(shifted(op, count, "optsize").contains(routine), "{op} {count}");
+        }
+        for count in [1, 2, 8, 16, 29, 31] {
+            assert!(!shifted(op, count, "optsize").contains("__"), "{op} {count} stays unrolled");
+        }
+        assert!(!shifted(op, 5, "").contains("__"), "{op} 5 at speed levels");
+    }
+}

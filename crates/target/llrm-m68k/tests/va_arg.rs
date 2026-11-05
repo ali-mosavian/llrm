@@ -6,7 +6,6 @@ use llrm_m68k::compile::{Options, items_with};
 use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 use llrm_m68k::object::{executable, start, write_executable};
-use llrm_m68k::vaarg::without_va_arg;
 
 mod support;
 
@@ -18,23 +17,16 @@ fn a_function_reading_its_variadic_arguments_compiles() {
     assert!(asm.contains("sum:"), "{asm}");
 }
 
-/// The pin's `expandVAArg`: load the list, round to the type's alignment (a
-/// long is 2-aligned), step by its allocation size, store back, load.
+/// Every scalar a C `...` reads compiles: the selector expands `va_arg` itself.
 #[test]
-fn va_arg_becomes_the_pins_expansion() {
-    let out = without_va_arg("  %11 = va_arg ptr %3, i32\n  %12 = va_arg ptr %3, double\n");
-    assert!(!out.contains("va_arg"), "{out}");
-    assert!(out.contains("%va.0.sum = add i32 %va.0.int, 1\n"), "{out}");
-    assert!(out.contains("getelementptr inbounds i8, ptr %va.0.at, i32 4\n"), "{out}");
-    assert!(out.contains("%11 = load i32, ptr %va.0.at, align 2\n"), "{out}");
-    assert!(out.contains("%va.1.sum = add i32 %va.1.int, 7\n"), "{out}");
-    assert!(out.contains("getelementptr inbounds i8, ptr %va.1.at, i32 8\n"), "{out}");
-}
-
-#[test]
-fn a_type_it_does_not_know_is_left_alone() {
-    let text = "  %1 = va_arg ptr %0, %struct.s\n";
-    assert_eq!(without_va_arg(text), text);
+fn va_arg_of_each_scalar_compiles() {
+    for ty in ["i8", "i16", "i32", "i64", "float", "double", "ptr"] {
+        let text = format!(
+            "target datalayout = \"{}\"\ndefine {ty} @f(ptr %ap) {{\n  %v = va_arg ptr %ap, {ty}\n  ret {ty} %v\n}}\n",
+            llrm_m68k::kernels::DATALAYOUT
+        );
+        assembly(&text, cpu_of("68020").unwrap(), Level::O2).unwrap_or_else(|why| panic!("{ty}: {why}"));
+    }
 }
 
 /// `sum(3, 10, 20, 30)` reads three longs through `va_start`/`va_arg`: 60. A
@@ -45,7 +37,7 @@ fn the_variadic_arguments_are_read_from_the_stack() {
     let Some(qemu) = support::qemu() else { return };
     let text = format!(
         "{}\ndefine i32 @f() {{\n  %r = call i32 (i32, ...) @sum(i32 3, i32 10, i32 20, i32 30)\n  ret i32 %r\n}}\n",
-        without_va_arg(SUM).replace(" dso_local", "").replace("target triple = \"m68k-unknown-linux-gnu\"\n", "")
+        SUM.replace(" dso_local", "").replace("target triple = \"m68k-unknown-linux-gnu\"\n", "")
     );
     let module = llrm_mir::parse::module(&text).expect("parses");
     for cpu in [Cpu::M68000, Cpu::M68020] {

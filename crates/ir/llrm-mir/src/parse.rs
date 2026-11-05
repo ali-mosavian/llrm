@@ -2091,6 +2091,12 @@ impl Parser {
                     let ty = self.module.context.types.ptr(address_space);
                     (Opcode::Alloca { allocated, align, address_space }, ty, operands)
                 }
+                "va_arg" => {
+                    let (_, list) = self.typed_value(local)?;
+                    self.expect_punct(',')?;
+                    let ty = self.ty()?;
+                    (Opcode::VaArg, ty, vec![list])
+                }
                 "load" => {
                     let atomic = self.eat_word("atomic");
                     let volatile = self.eat_word("volatile");

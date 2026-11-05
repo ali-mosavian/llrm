@@ -6,7 +6,7 @@
 //! The generated table names its complex patterns by number; [`X86Hooks`] reads
 //! the function each number stands for from the CPU's `COMPLEX_PATTERNS` and
 //! runs the matcher of that name from [`crate::x86_addr`]. `selectTLSADDRAddr`
-//! and `selectMOV64Imm32` never match here (SD35).
+//! never matches here (SD35).
 //!
 //! Numbered deviations from the pin (reason / owner / exit / review):
 //! - **SD36** `checkTCRetEnoughRegs` is `false` and `isDef32`,
@@ -462,7 +462,19 @@ impl<D: AddrDag> Hooks<D> for X86Hooks {
                 results.push((matcher.dag.operand(value.node, 0), None));
                 return true;
             }
-            // ELF TLS and 64-bit immediates (SD35).
+            "selectMOV64Imm32" => {
+                // `selectMOV64Imm32`, small code model: a `Wrapper` of a
+                // symbol (not TLS) is a dword immediate, the address of static
+                // code. A RIP wrapper is the `lea`'s.
+                if matcher.dag.opcode(value.node) != x86isd::Wrapper
+                    || matcher.dag.opcode(matcher.dag.operand(value.node, 0).node) == isd::TargetGlobalTLSAddress
+                {
+                    return false;
+                }
+                results.push((matcher.dag.operand(value.node, 0), None));
+                return true;
+            }
+            // ELF TLS (SD35).
             _ => None,
         };
         let Some(a) = operands else { return false };

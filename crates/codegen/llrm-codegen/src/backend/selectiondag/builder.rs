@@ -1358,7 +1358,10 @@ impl Builder<'_> {
     /// `va_start` names. The vector registers' half of the area (48..176)
     /// is left unwritten until floating point is selected at m64 (DEVIATE
     /// SD238: a `double` passed to such a function is not read back).
-    fn save_variadic_registers(&mut self, fixed: i32) -> Result<(), Refused> {
+    fn save_variadic_registers(
+        &mut self,
+        fixed: i32,
+    ) -> Result<(), Refused> {
         let calling = self.full_arch()?.calling();
         let Some(found) = calling.by_number(self.function.calling_convention) else {
             return Err(Refused("va_start at m64 in a function with no convention"));
@@ -2044,14 +2047,22 @@ impl Builder<'_> {
         attrs: &[llrm_mir::opcode::Attribute],
     ) -> Option<ByVal> {
         use llrm_mir::opcode::Attribute;
-        let ty = attrs.iter().find_map(|attr| match attr {
-            Attribute::Type(name, ty) if name == "byval" => Some(*ty),
-            _ => None,
-        })?;
-        let align = attrs.iter().find_map(|attr| match attr {
-            Attribute::Int(name, value) if name == "align" => Some(*value),
-            _ => None,
-        });
+        let ty = attrs
+            .iter()
+            .find_map(
+                |attr| match attr {
+                    Attribute::Type(name, ty) if name == "byval" => Some(*ty),
+                    _ => None,
+                },
+            )?;
+        let align = attrs
+            .iter()
+            .find_map(
+                |attr| match attr {
+                    Attribute::Int(name, value) if name == "align" => Some(*value),
+                    _ => None,
+                },
+            );
         Some(ByVal {
             size: self.layout.alloc_size(&self.module.context.types, ty) as u32,
             align: align.unwrap_or(4) as u32,
@@ -2180,9 +2191,7 @@ impl Builder<'_> {
     ) -> Result<Option<SDValue>, Refused> {
         let sibling = std::mem::take(&mut self.sibcall);
         let in_area = calling.byval_in_area();
-        if sibling
-            || flags_answer
-            || (byvals.iter().any(Option::is_some) && !calling.byval_by_reference() && !in_area)
+        if sibling || flags_answer || (byvals.iter().any(Option::is_some) && !calling.byval_by_reference() && !in_area)
         {
             return Err(Refused("tail call, flags answer or byval with a target's calling hook"));
         }
@@ -2250,7 +2259,8 @@ impl Builder<'_> {
         if demoted {
             let types = &self.module.context.types;
             let size = self.layout.alloc_size(types, result_type) as u32;
-            // `LowerCallTo`: the object has the result type's preferred alignment.
+            // `LowerCallTo`: the object has the result type's preferred
+            // alignment.
             let align = self.layout.pref_align(types, result_type) as u32;
             let index = self.info.new_stack_object(size, align);
             let address = self.dag.get_frame_index(self.target.dag.pointer, index);
@@ -2737,7 +2747,8 @@ impl Builder<'_> {
             let vt = self.dag.value_type(value);
             let pointer = self.target.dag.pointer;
             let address = self.dag.get_copy_from_reg(chain, reg, pointer);
-            // `visitRet`: stored at the preferred alignment of the returned type.
+            // `visitRet`: stored at the preferred alignment of the returned
+            // type.
             let align = match self.function.operand_type(&self.module.context, operand) {
                 Some(ty) => self.layout.pref_align(&self.module.context.types, ty) as u32,
                 None => 1,
@@ -2778,7 +2789,16 @@ impl Builder<'_> {
                 let pieces = self.split_for_calling(value, ext)?;
                 let split = pieces.len() > 1;
                 for piece in pieces {
-                    outs.push(Out { value: piece, ext, pointer, arg_vt, split, variadic: false, sret: false, byval: None });
+                    outs.push(Out {
+                        value: piece,
+                        ext,
+                        pointer,
+                        arg_vt,
+                        split,
+                        variadic: false,
+                        sret: false,
+                        byval: None,
+                    });
                 }
             }
         }
@@ -3204,6 +3224,7 @@ impl Builder<'_> {
             Opcode::FNeg => self.visit_fneg(&instruction)?,
             Opcode::Select => self.visit_select(&instruction)?,
             Opcode::Freeze => self.visit_freeze(&instruction)?,
+            Opcode::VaArg => self.visit_va_arg(&instruction)?,
             Opcode::ExtractValue(indices) => self.visit_extract_value(&instruction, indices)?,
             Opcode::InsertValue(indices) => self.visit_insert_value(&instruction, indices)?,
             Opcode::Load { align, volatile } => self.visit_load(inst, &instruction, *align, *volatile)?,
