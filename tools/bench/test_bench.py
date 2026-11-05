@@ -1348,3 +1348,30 @@ def test_references_blessed_from_other_sources_are_refused(tmp_path, monkeypatch
     assert any("sources changed" in one for one in bench.judge({("x", "c", "O2"): dict(SIZED), ("x", "bcc", "O2"): dict(SIZED)}, ["x"], ["O2"]))
     assert bench.write_expected(tmp_path / "x", {("x", "bcc", "O2"): SIZED}, "x", "again")  # a bless records the new sources
     assert bench.stale_corpus(tmp_path / "x") is None
+
+
+def test_a_program_that_is_not_a_reference_program_is_left_out_loudly(tmp_path, monkeypatch, capsys):
+    """The nine sfm16_* programs use C99 `for (int i...)`: every reference compiler failed them, four REFERENCE BROKEN lines each."""
+    for name, extra in (("kept", ""), ("c99", "references = false\n")):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "bench.toml").write_text(f'{extra}[region]\nc = "f"\n')
+    monkeypatch.setattr(bench, "BENCH", tmp_path)
+    one = lambda name: (tmp_path / name, bench.Variant(name, "c", tmp_path / name / f"{name}.c", "f", None))
+    assert bench.reference_programs([one("kept"), one("c99")]) == [one("kept")]
+    assert "not a reference program: c99" in capsys.readouterr().out
+
+
+def test_an_emulated_reference_program_is_fed_its_corpus_cut(tmp_path, monkeypatch):
+    """grep and jpeg/stft under ow, bcc, tc and tcpp ran with no input file and printed `0 0` / `PHOTO.JPG not found`: the reference jobs
+    carried no files, while ours were fed the ci_bytes cut."""
+    folder = tmp_path / "grep"
+    folder.mkdir()
+    (folder / "in.dat").write_bytes(b"x" * 100)
+    (folder / "grep.out").write_text("full\n")
+    (folder / "grep.ci.out").write_text("cut\n")
+    monkeypatch.setattr(bench, "BENCH", tmp_path)
+    variant = bench.Variant("grep", "c", folder / "grep.c", "f", None, "qb45", True, ("in.dat",), 10, True)
+    files, want, counted = bench.counting_input(variant, folder, tmp_path / "ci")
+    assert [one.read_bytes() for one in files] == [b"x" * 10] and want == ["cut"] and counted
+    plain = bench.Variant("grep", "c", folder / "grep.c", "f", None, "qb45", True, ("in.dat",), 10, False)
+    assert bench.counting_input(plain, folder, tmp_path / "ci2") == ((), ["full"], False)

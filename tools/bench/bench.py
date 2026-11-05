@@ -464,6 +464,15 @@ def with_startup(selected: list[str], timing: bool) -> list[tuple[Path, Variant]
     return todo + [(STARTUP, variant) for variant in variants(STARTUP) if timing]
 
 
+def reference_programs(todo: list[tuple[Path, Variant]]) -> list[tuple[Path, Variant]]:
+    """`todo` less the programs whose bench.toml says `references = false` (C99 or llrm-only sources the reference compilers cannot build),
+    each named on a line: a program left out is announced, not silently absent."""
+    left_out = sorted({directory for directory, _ in todo if tomllib.loads((directory / "bench.toml").read_text()).get("references") is False})
+    for directory in left_out:
+        print(f"not a reference program: {directory_name(directory)} (bench.toml: references = false)", flush=True)
+    return [(directory, variant) for directory, variant in todo if directory not in left_out]
+
+
 def measure_references(selected: list[str], opts: list[str], work: Path, timing: bool = False) -> dict[tuple[str, str, str], dict]:
     """The reference compilers on the same programs: Open Watcom and BCC 3.1 for C (languages `ow`, `bcc`, at each level)
     and QuickBASIC 4.5's BC for BASIC (language `bc`, one level: /O). With --time each also gets its kernel time."""
@@ -471,7 +480,7 @@ def measure_references(selected: list[str], opts: list[str], work: Path, timing:
     folder = work / "reference"
     shutil.rmtree(folder, ignore_errors=True)
     folder.mkdir(parents=True)
-    todo = with_startup(selected, timing)
+    todo = reference_programs(with_startup(selected, timing))
     stems = [f"R{at:03d}" for at in range(len(todo))]
     jobs, owned, plain, needs = [], [], {}, {}
     def own(key, stem, directory, variant, built, obj=None):
@@ -480,7 +489,8 @@ def measure_references(selected: list[str], opts: list[str], work: Path, timing:
         elif directory == STARTUP:
             plain[key] = built[0]
         else:
-            owned.append((key, (stem, built[0], built[1], None if variant.timed_only and not variant.emulated else variant.region, expected_output(directory), obj)))
+            files, want, counted = counting_input(variant, directory, folder / "ci-input" / stem)
+            owned.append((key, (stem, built[0], built[1], variant.region if counted else None, want, obj, files)))
             needs[key] = timing_input(variant, directory)
     for opt in opts:
         c_todo = [(directory, variant, stem) for (directory, variant), stem in zip(todo, stems) if variant.language == "c"]
@@ -658,9 +668,7 @@ def measure_opt(selected: list[str], opt: str, work: Path, timing: bool = False)
             plain[key] = exe  # timed, not counted
         else:
             # an emulated program is counted on the cut of its corpus the default bench times (ci_bytes), even under --time
-            fed = timing_input(variant, directory, folder / "ci-input" / stem) if variant.emulated else None
-            files, want = (fed["files"], fed["want"]) if fed and "files" in fed else ((), expected_output(directory))  # an unavailable corpus leaves it timed only
-            counted = not variant.timed_only or bool(files)
+            files, want, counted = counting_input(variant, directory, folder / "ci-input" / stem)
             jobs.append((key, (stem, exe, listing, variant.region if counted else None, want, folder / f"{stem}.obj", files)))
             needs[key] = timing_input(variant, directory, None if timing else folder / "ci-input" / stem)
     with ProcessPoolExecutor() as pool:
@@ -740,6 +748,14 @@ def timing_input(variant: Variant, directory: Path, reduced: Path | None = None)
             small.append(reduced / file.name)
         return {"files": tuple(small), "want": run_tests.lines((directory / f"{directory.name}.ci.out").read_text())}
     return {"files": files, "want": expected_output(directory)}
+
+
+def counting_input(variant: Variant, directory: Path, reduced: Path) -> tuple[tuple[Path, ...], list[str], bool]:
+    """(files the emulated run reads, the output it must print, whether it is counted): an emulated program is counted on the cut of its corpus
+    the default bench times (`ci_bytes`), even under --time; any other, and one whose corpus is unavailable, is timed only if it is timed_only."""
+    fed = timing_input(variant, directory, reduced) if variant.emulated else None
+    files, want = (fed["files"], fed["want"]) if fed and "files" in fed else ((), expected_output(directory))
+    return files, want, not variant.timed_only or bool(files)
 
 
 def time_programs(exes: dict[tuple[str, str, str], Path], work: Path, inputs: dict | None = None) -> dict[tuple[str, str, str], dict]:
