@@ -128,27 +128,22 @@ fn apply(
     found: Found,
 ) {
     let Found { flag, copies, add, other, condition, subtract } = found;
-    let stepped = classes.len() as u32;
-    classes.push(Class::Gr16);
+    let _ = classes;
+    let stepped = Reg::Phys(reg::HL);
     let flags = Reg::Phys(reg::FLAGS);
     let origin = insts[add].origin;
-    let mut copy = Inst::new(Kind::Copy, vec![Operand::Def(Reg::Virt(stepped)), Operand::Use(Reg::Virt(other))]);
+    let mut copy = Inst::new(Kind::Copy, vec![Operand::Def(stepped), Operand::Use(Reg::Virt(other))]);
     copy.origin = origin;
     let mut step = Inst::new(
         Kind::Op(if subtract { "DEC16c" } else { "INC16c" }),
-        vec![
-            Operand::Def(Reg::Virt(stepped)),
-            Operand::Use(Reg::Virt(stepped)),
-            Operand::Imm(condition),
-            Operand::Use(flags),
-        ],
+        vec![Operand::Def(stepped), Operand::Use(stepped), Operand::Imm(condition), Operand::Use(flags)],
     );
     step.ties = vec![(0, 1)];
     step.reads_flags = true;
     step.origin = origin;
     // the sum's copy out reads the stepped word
     let out = &mut insts[add + 1];
-    out.operands[1] = Operand::Use(Reg::Virt(stepped));
+    out.operands[1] = Operand::Use(stepped);
     insts.splice(add..=add, [copy, step]);
     let mut gone: Vec<usize> = flag.iter().chain(&copies).copied().collect();
     gone.sort_unstable();
