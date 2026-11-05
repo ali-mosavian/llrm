@@ -484,6 +484,14 @@ impl Builder {
         if let Some(r) = self.bytes.get(name) {
             return Ok(*r);
         }
+        // A half of a pointer cell lives in its pair: a read of it unpacks
+        // the pair. Without this the half was a byte nothing defined
+        // (strs -O2: "a unique value" in the coalescer).
+        let word = name.strip_suffix("+1").unwrap_or(name);
+        if self.pointers.contains(word) {
+            let (low, high) = self.read_word(word)?;
+            return Ok(if name.ends_with("+1") { high } else { low });
+        }
         let r = self.fresh();
         self.bytes.insert(name.to_owned(), r);
         Ok(r)
