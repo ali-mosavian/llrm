@@ -12,7 +12,7 @@ MODULES="fp/f64/add_sub fp/f64/mul fp/f64/div fp/f64/float fp/f64/pack fp/f32/pa
 mkdir -p "$OUT"; T=$(mktemp -d); trap 'rm -r $T' EXIT
 for m in $MODULES; do
   n=$(echo "$m" | tr / _)
-  $CLANG --target=msp430 -O2 -Xclang -disable-llvm-passes -ffreestanding -Iinclude -S -emit-llvm lib/$m.c -o $T/$n.raw.ll
+  $CLANG --target=msp430 -O2 -Xclang -disable-llvm-passes -ffreestanding -Iinclude -include config/z80/config.h -S -emit-llvm lib/$m.c -o $T/$n.raw.ll
   sed -E "s|^target datalayout = .*|target datalayout = \"$DL\"|; /^target triple/d" $T/$n.raw.ll > $T/$n.ll
   $LLC -S -$OPT -o $OUT/$n.s $T/$n.ll
   sed -i 's/___/__/g' $OUT/$n.s
