@@ -54,6 +54,13 @@ pub(super) fn full_unroll_pays(
     // copies and this loop's own analysis cannot see it (tests/run
     // int64_division: 7 x 6 divisions fold to constants; vetoed, 14 -> 198
     // instructions). The pin's threshold decides it.
+    // A loop an unroll of this run made is part of a nest whose outer loop was
+    // decided: the copies of the inner loops follow it (nbody -O2: the 4-trip
+    // outer loop unrolls, its 3-, 2- and 1-trip inner copies were each priced
+    // alone and kept rolled, +38,016).
+    if !run.first.contains(&lp.get_header()) {
+        return true;
+    }
     if encloses_known_trips(run, se, analyzed, lp, up.full_unroll_max_count) {
         return true;
     }
