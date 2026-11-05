@@ -3,7 +3,7 @@
 # Red when a target compiled nothing, wrote no result, or failed more files than tools/cc-sweep.baseline allows (CC_SWEEP_BASELINE overrides the path).
 # The baseline is a ratchet: counts may only go down, by hand; the gate rewrites nothing. The failing names are printed so a swap of one FAIL for another shows.
 root=$(cd "$(dirname "$0")/.." && pwd)
-targets=${*:-x86_16-wat x86_32-dos x86_64-linux arm64-linux}
+targets=${*:-x86_16-wat x86_32-wat x86_32-dos x86_64-linux arm64-linux}
 bin=$(python3 "$root/tools/llrmbin.py" bin)
 out=${CC_SWEEP_OUT:-/tmp/cc-sweep}; mkdir -p "$out"
 export LLRM_LLC=$bin/llrm-llc
