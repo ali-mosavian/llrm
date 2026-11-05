@@ -2419,6 +2419,26 @@ fn a_long_multiply_links_the_compact_routine_at_every_level() {
     }
 }
 
+/// A `byval` argument of 40 bytes is copied by a call of `memcpy` the builder
+/// names itself; the 6502 left its callee an `ExternalSymbol` and refused
+/// (`CannotSelect("ExternalSymbol")`: byval_struct, byval_inline and
+/// byval_initializes at -O0, any caller that does not inline the callee).
+#[test]
+fn a_byval_argument_over_the_inline_limit_is_copied_by_a_memcpy_call() {
+    let ir = module(
+        r#"%big = type { [40 x i8] }
+declare i32 @sum(ptr byval(%big) align 1, i32)
+define i32 @f(ptr %p) {
+  %r = call i32 @sum(ptr byval(%big) align 1 %p, i32 100)
+  ret i32 %r
+}"#,
+    );
+    for level in [Level::O0, Level::O2, Level::Os] {
+        let text = assembly(&ir, &Request::new(level)).unwrap_or_else(|e| panic!("{level:?}: {e}"));
+        assert!(text.contains("jsr memcpy"), "{level:?}\n{text}");
+    }
+}
+
 /// `llvm.usub.sat.i32` returned the inverse: 0 where the subtract does not
 /// borrow and the wrapped difference where it does (`sat_builtins`: 4e9 - 5
 /// gave 0, 5 - 4e9 gave 294967301). The borrow was read as the carry.
@@ -2451,5 +2471,67 @@ define i8 @borrow() {
         // 4000000000 - 5 = 0xEE6B27FB; 5 - 4000000000 clamps to 0
         assert_eq!(exit_code_of(&text, "no_borrow"), 0xFB, "{level:?}\n{text}");
         assert_eq!(exit_code_of(&text, "borrow"), 0, "{level:?}\n{text}");
+    }
+}
+
+/// A library shift took its amount as a byte (the shift-amount type) where the
+/// pin makes it the library's `int`, a 16-bit word here: a helper written in C
+/// (`u64 __ashldi3(u64, int)`, compiler-rt) read a high byte the caller never
+/// stored, whatever the stack held. `dirty` leaves 0xFF on the stack first.
+#[test]
+fn a_library_shift_passes_its_amount_as_the_c_int() {
+    let ir = module(
+        r#"define i64 @__ashldi3(i64 %x, i16 %n) noinline {
+  %w = zext i16 %n to i64
+  ret i64 %w
+}
+@n = global i8 3
+@x = global i64 1
+define void @dirty() noinline {
+  %a = alloca [32 x i8]
+  %p0 = getelementptr i8, ptr %a, i16 0
+  store volatile i8 -1, ptr %p0
+  %p1 = getelementptr i8, ptr %a, i16 1
+  store volatile i8 -1, ptr %p1
+  %p2 = getelementptr i8, ptr %a, i16 2
+  store volatile i8 -1, ptr %p2
+  %p3 = getelementptr i8, ptr %a, i16 3
+  store volatile i8 -1, ptr %p3
+  %p4 = getelementptr i8, ptr %a, i16 4
+  store volatile i8 -1, ptr %p4
+  %p5 = getelementptr i8, ptr %a, i16 5
+  store volatile i8 -1, ptr %p5
+  %p6 = getelementptr i8, ptr %a, i16 6
+  store volatile i8 -1, ptr %p6
+  %p7 = getelementptr i8, ptr %a, i16 7
+  store volatile i8 -1, ptr %p7
+  %p8 = getelementptr i8, ptr %a, i16 8
+  store volatile i8 -1, ptr %p8
+  %p9 = getelementptr i8, ptr %a, i16 9
+  store volatile i8 -1, ptr %p9
+  %p10 = getelementptr i8, ptr %a, i16 10
+  store volatile i8 -1, ptr %p10
+  %p11 = getelementptr i8, ptr %a, i16 11
+  store volatile i8 -1, ptr %p11
+  ret void
+}
+define i64 @shift() noinline {
+  %v = load i64, ptr @x
+  %c = load i8, ptr @n
+  %z = zext i8 %c to i64
+  %r = shl i64 %v, %z
+  ret i64 %r
+}
+define i8 @high_byte_of_the_amount() {
+  call void @dirty()
+  %r = call i64 @shift()
+  %h = lshr i64 %r, 8
+  %t = trunc i64 %h to i8
+  ret i8 %t
+}"#,
+    );
+    for level in [Level::O0, Level::O2, Level::Os] {
+        let text = assembly(&ir, &Request::new(level)).unwrap_or_else(|e| panic!("{level:?}: {e}"));
+        assert_eq!(exit_code_of(&text, "high_byte_of_the_amount"), 0, "{level:?}\n{text}");
     }
 }
