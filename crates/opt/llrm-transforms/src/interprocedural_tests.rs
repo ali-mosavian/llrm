@@ -1277,3 +1277,46 @@ fn test_a_constant_index_into_a_global_is_priced_as_a_saving() {
     assert!(!cloned(false));
     assert!(cloned(true));
 }
+
+/// Each level of `down` saves one address, too little to pay for a copy; the
+/// four levels together do, and GCC's `propagate_effects` credits the copy for
+/// `row = 0` with the ones after it. Priced alone, the copy was refused: queens
+/// got four clones of eight, hanoi2 none.
+const DOWN: &str = "@cells = global [8 x [8 x i16]] zeroinitializer
+
+define void @down(i16 %row, i16 %x) {
+b0:
+  %done = icmp eq i16 %row, 4
+  br i1 %done, label %out, label %go
+
+go:
+  %p = getelementptr [8 x i16], ptr @cells, i16 %row
+  %a = add i16 %x, 1
+  %b = mul i16 %a, %x
+  %c = add i16 %b, %a
+  %d = mul i16 %c, %b
+  %e = add i16 %d, %c
+  %f = mul i16 %e, %d
+  store i16 %f, ptr %p
+  %r1 = add nsw i16 %row, 1
+  call void @down(i16 %r1, i16 %e)
+  br label %out
+
+out:
+  ret void
+}
+
+define void @f(i16 %x) {
+b0:
+  call void @down(i16 0, i16 %x)
+  call void @down(i16 0, i16 3)
+  ret void
+}
+";
+
+#[test]
+fn test_a_clone_is_credited_with_the_clones_its_recursion_makes() {
+    let mut module = parsed(DOWN);
+    stepped(&mut module, &["f"], 20, Threshold { cp_clone: true, ..Threshold::none() });
+    assert!(module.named("down.constprop.1").is_some(), "{}", printed(&module));
+}

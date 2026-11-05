@@ -262,9 +262,21 @@ pub fn cloned(
         let replaces = private.contains(&name)
             && !addressed.contains(&name)
             && counts.get(&name).copied().unwrap_or(0) == sites.len() as i64;
-        let (saved, loops) = time_saved(module, layout, body, &known, &callees, costs);
+        let (saved, loops, _) = time_saved(module, layout, name, body, &known, &callees, costs);
+        let level = state.made.get(&origin).copied().unwrap_or(0);
+        let chain = chain_benefit(
+            module,
+            layout,
+            name,
+            body,
+            &known,
+            &callees,
+            costs,
+            level,
+            &mut BTreeMap::new(),
+        );
         let frequency: i64 = sites.iter().map(|site| site.2).sum();
-        let mut benefit = (saved / TIME_SCALE + if loops { LOOP_HINT_BONUS } else { 0 }) * frequency / profit::UNIT;
+        let mut benefit = chain.saturating_mul(frequency) / profit::UNIT;
         // GCC's `incorporate_penalties`: a function in a cycle with others, not
         // one that calls itself.
         let own = body.walk().any(|(_, inst)| llrm_mir::memory::callee(&module.context, body, inst) == Some(name));
@@ -330,17 +342,54 @@ pub fn cloned(
     changed
 }
 
+/// What a context is worth, with what the contexts it passes to its own calls
+/// are worth: GCC's `propagate_effects` adds a value's benefit to the value
+/// that produces it, times `ipa-cp-max-recursive-depth` less the level, so a
+/// clone for `row = 0` is credited with the rows after it.
+fn chain_benefit(
+    module: &Module,
+    layout: &DataLayout,
+    name: GlobalId,
+    body: &Function,
+    known: &[Option<ConstantId>],
+    callees: &Callees,
+    costs: &OperationCosts,
+    level: usize,
+    memo: &mut BTreeMap<(Vec<Option<ConstantId>>, usize), i64>,
+) -> i64 {
+    if let Some(&done) = memo.get(&(known.to_vec(), level)) {
+        return done;
+    }
+    // A context met again while it is priced adds nothing.
+    memo.insert((known.to_vec(), level), 0);
+    let (saved, loops, next) = time_saved(module, layout, name, body, known, callees, costs);
+    let mut benefit = saved / TIME_SCALE + if loops { LOOP_HINT_BONUS } else { 0 };
+    if level + 1 < MAX_CLONES {
+        for (context, frequency) in next {
+            if context.as_slice() == known {
+                continue;
+            }
+            let after = chain_benefit(module, layout, name, body, &context, callees, costs, level + 1, memo);
+            let factor = (MAX_CLONES - level) as i64;
+            benefit = benefit.saturating_add(after.saturating_mul(factor).saturating_mul(frequency) / profit::UNIT);
+        }
+    }
+    memo.insert((known.to_vec(), level), benefit);
+    benefit
+}
+
 /// GCC's `time_benefit`: the clocks a call no longer spends in `body` given its
 /// known actuals: what they fold, and what only a branch they decide reaches,
 /// each at its block's frequency (a loop that does not run saves its trips).
 fn time_saved(
     module: &Module,
     layout: &DataLayout,
+    name: GlobalId,
     body: &Function,
     known: &[Option<ConstantId>],
     callees: &Callees,
     costs: &OperationCosts,
-) -> (i64, bool) {
+) -> (i64, bool, Vec<(Vec<Option<ConstantId>>, i64)>) {
     let unit = Unit::of(module, layout, body);
     let mut values = IndexMap::default();
     for (&parameter, constant) in body.parameters().iter().zip(known) {
@@ -484,7 +533,30 @@ fn time_saved(
                 }
             }),
         );
-    ((unknown - kept) / profit::UNIT, hint)
+    // The contexts the body's calls of itself pass on: what the known actuals
+    // make constant at each (GCC's `propagate_effects` follows them).
+    let mut next: Vec<(Vec<Option<ConstantId>>, i64)> = Vec::new();
+    for (block, inst) in body.walk() {
+        if !reached.contains(&block) || llrm_mir::memory::callee(&module.context, body, inst) != Some(name) {
+            continue;
+        }
+        let instruction = body.instruction(inst);
+        let context: Vec<Option<ConstantId>> = body
+            .parameters()
+            .iter()
+            .zip(&instruction.operands)
+            .map(|(&parameter, &operand)| {
+                let number = consts::_operand(&unit, operand, &values, None)?;
+                let value = number.n.to_string().parse::<i128>().ok()?;
+                module.context.types.int_bits(body.value(parameter).ty)?;
+                Some(module.context.int(body.value(parameter).ty, value))
+            })
+            .collect();
+        if context.iter().any(Option::is_some) {
+            next.push((context, weight(block)));
+        }
+    }
+    ((unknown - kept) / profit::UNIT, hint, next)
 }
 
 /// The `getelementptr`s in reached blocks whose base is a constant (a global)
