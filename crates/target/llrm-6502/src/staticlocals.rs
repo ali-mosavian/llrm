@@ -18,6 +18,17 @@
 //! or a stack save keeps its stack. The objects of a module together stay
 //! under [`BUDGET`] bytes of RAM.
 //!
+//! # Price
+//! The start-up zeroing of the new BSS costs [`ZERO_CLOCKS`] a byte, once.
+//! Where clocks count (any level but `-Os`, which counts code bytes only) a
+//! function is converted when the clocks it saves exceed that: per call, the
+//! frame ([`FRAME_CLOCKS`]) and [`ACCESS_CLOCKS`] for each access, an access in
+//! a loop counting 10 per level of depth, and the calls counted the same way
+//! from the call sites in the module (one where it has none: an exported
+//! function nothing here calls is priced as called once). A function
+//! called once, outside a loop, with a big array it touches twice, keeps the
+//! stack.
+//!
 //! DEVIATE (6502-6): not in the pin; llvm-mos has it as `MOSStaticStackAlloc`.
 //! Reason: the soft stack costs a 16-bit add per element access; fmult of the
 //! X16 math library runs 21% faster and 404 B smaller with its three arrays
@@ -31,6 +42,10 @@
 //!   ... gep %a, %i ...                       ... gep @f.local0, %i ...
 //! ```
 
+use std::collections::BTreeMap;
+
+use llrm_analysis::cfg;
+use llrm_analysis::graph::loops;
 use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::facts::Facts;
@@ -41,6 +56,15 @@ use llrm_mir::types::TypeId;
 
 /// Bytes of RAM the static locals of a module may take together.
 pub const BUDGET: u64 = 2048;
+
+/// Clocks the start-up zeroing of a byte of BSS costs, once (cc65's `zerobss`
+/// on sim65, measured: 15).
+pub const ZERO_CLOCKS: f64 = 15.0;
+/// Clocks a call spends on a soft-stack frame: `rs0` adjusted both ways.
+pub const FRAME_CLOCKS: f64 = 30.0;
+/// Clocks an access saves: the frame address is a 16-bit add and a pointer
+/// pair (12 to 14), the static one is the operand.
+pub const ACCESS_CLOCKS: f64 = 8.0;
 
 /// What one function gives up: its allocas and the lifetime markers on them.
 struct Plan {
@@ -58,10 +82,14 @@ struct Object {
 
 /// The allocas of every function of `module` that cannot be re-entered, as
 /// globals. How many objects became globals.
-pub fn applied(module: &mut Module) -> Result<usize, String> {
+pub fn applied(
+    module: &mut Module,
+    speed: bool,
+) -> Result<usize, String> {
     let layout = module.datalayout.as_deref().map_or_else(|| Ok(DataLayout::default()), DataLayout::parse)?;
     let mut plans = Vec::new();
     let mut left = BUDGET;
+    let calls = if speed { call_weights(module) } else { BTreeMap::new() };
     for (index, global) in module.globals.iter().enumerate() {
         let GlobalKind::Function(function) = &global.kind else { continue };
         if function.entry().is_none() || !Facts::of(&function.attrs).no_recurse() {
@@ -71,6 +99,13 @@ pub fn applied(module: &mut Module) -> Result<usize, String> {
         let bytes: u64 = objects.iter().map(|one| one.bytes).sum();
         if objects.is_empty() || bytes > left {
             continue;
+        }
+        if speed {
+            let calls = calls.get(&index).copied().unwrap_or(1.0);
+            let saved = calls * (FRAME_CLOCKS + ACCESS_CLOCKS * accesses(function, &objects));
+            if saved <= ZERO_CLOCKS * bytes as f64 {
+                continue;
+            }
         }
         left -= bytes;
         plans.push(Plan { function: index, objects });
@@ -165,4 +200,71 @@ fn callee_intrinsic(
     let Operand::Constant(id) = *function.instruction(inst).operands.last()? else { return None };
     let ConstantKind::Global(global) = module.context.get(id).kind else { return None };
     module.globals.get(global.0 as usize)?.intrinsic()
+}
+
+/// How much an access in a block of loop depth `depth` counts: 10 a level.
+fn weight(depth: usize) -> f64 {
+    10f64.powi(depth.min(3) as i32)
+}
+
+/// The accesses of `objects` in one activation, an access counting for the
+/// loops around it. The users of an object's address and of an address made
+/// from it (a `getelementptr` or a cast) count.
+fn accesses(
+    function: &llrm_mir::module::Function,
+    objects: &[Object],
+) -> f64 {
+    let depths = block_depths(function);
+    let at = |inst: InstId| function.parent(inst).and_then(|block| depths.get(&cfg::id(block))).copied().unwrap_or(0);
+    let mut total = 0.0;
+    for object in objects {
+        let Some(result) = function.instruction(object.alloca).result else { continue };
+        let mut work = vec![result];
+        let mut seen = 0;
+        while let Some(value) = work.pop() {
+            seen += 1;
+            if seen > 64 {
+                break;
+            }
+            for one in function.users(value).iter() {
+                let user = function.instruction(one.user);
+                match user.opcode {
+                    Opcode::GetElementPtr { .. } | Opcode::Cast(_) => work.extend(user.result),
+                    _ => total += weight(at(one.user)),
+                }
+            }
+        }
+    }
+    total
+}
+
+fn block_depths(function: &llrm_mir::module::Function) -> BTreeMap<i64, usize> {
+    loops::depth(&cfg::graph(function), function.entry().map(cfg::id))
+}
+
+/// For each defined function, how many times its call sites in the module
+/// run per run of their callers, a call in a loop counting 10 a level.
+fn call_weights(module: &Module) -> BTreeMap<usize, f64> {
+    let mut found: BTreeMap<usize, f64> = BTreeMap::new();
+    for global in &module.globals {
+        let GlobalKind::Function(function) = &global.kind else { continue };
+        if function.entry().is_none() {
+            continue;
+        }
+        let mut depths = None;
+        for block in function.layout() {
+            for inst in function.iter_block(*block) {
+                let instruction = function.instruction(inst);
+                if !matches!(instruction.opcode, Opcode::Call(_)) {
+                    continue;
+                }
+                let Some(Operand::Constant(id)) = instruction.operands.last().copied() else { continue };
+                let ConstantKind::Global(callee) = module.context.get(id).kind else { continue };
+                let depths = depths.get_or_insert_with(|| block_depths(function));
+                *found.entry(callee.0 as usize).or_default() +=
+                    weight(depths.get(&cfg::id(*block)).copied().unwrap_or(0));
+            }
+        }
+    }
+    found
 }
