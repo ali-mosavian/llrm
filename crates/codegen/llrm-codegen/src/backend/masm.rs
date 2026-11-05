@@ -1322,8 +1322,13 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     } else {
         0
     };
+    // A pad above the locals moves their base off the widest object's
+    // alignment (a 16-aligned array at `[rsp+8]`: movaps faulted); one that is
+    // not a multiple of it goes below them.
+    let above_locals = if pad % align == 0 { pad } else { 0 };
+    let shifted = gap + above_locals;
     let gap = gap + pad;
-    match crate::backend::relayout::pushed_down(&procedure.body, pushed + gap - above) {
+    match crate::backend::relayout::pushed_down(&procedure.body, pushed + shifted - above) {
         Some(body) => Procedure {
             body: lir::LirBody { saved_first: true, slot_dropped: dropped, ..body },
             reserve: procedure.reserve + gap,
