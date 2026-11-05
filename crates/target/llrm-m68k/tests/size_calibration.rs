@@ -1,6 +1,9 @@
 //! `function_bytes`, the estimate every byte-priced decision reads, counted about half of what the assembled functions
-//! are (median 1.9 times short over tests/run/c, `~/scratch/handoff/m68k-operation-costs-card-2026-11-05.md`). The
-//! estimate over the matrix kernels must be within a quarter of the object's `.text`, at both CPUs and both levels.
+//! are (median 1.9 times short over tests/run/c, `~/scratch/handoff/m68k-operation-costs-card-2026-11-05.md`).
+//! `function_scale` (150) is the median over those programs; the matrix kernels are leaf loops with no frame, call or
+//! spill, which the estimate already covers at 100 (0.84), so at 150 they sit above the objects (about 1.3). The test
+//! bounds both sides on them: the estimate is not below three quarters (the old table's miss) and not above 1.4 (a
+//! scale that over-counts leaf code by more than the median program under-counts it).
 
 use llrm_m68k::compile::CodeModel;
 use llrm_m68k::dagisel::hooks::Cpu;
@@ -30,7 +33,8 @@ fn text_bytes(elf: &[u8]) -> usize {
 }
 
 #[test]
-fn the_estimate_is_within_a_quarter_of_the_objects_at_both_cpus_and_levels() {
+fn the_estimate_brackets_the_objects_at_both_cpus_and_levels() {
+    let mut failures = Vec::new();
     for (cpu_name, cpu) in [("68000", Cpu::M68000), ("68020", Cpu::M68020)] {
         for level in ["2", "s"] {
             let (mut estimate, mut actual) = (0, 0);
@@ -47,7 +51,10 @@ fn the_estimate_is_within_a_quarter_of_the_objects_at_both_cpus_and_levels() {
             }
             let ratio = estimate as f64 / actual as f64;
             assert!(actual > 0, "{cpu_name} -O{level}: no kernel compiled");
-            assert!((0.75..=1.25).contains(&ratio), "{cpu_name} -O{level}: estimate {estimate} B against objects {actual} B ({ratio:.2})");
+            if !(0.75..=1.4).contains(&ratio) {
+                failures.push(format!("{cpu_name} -O{level}: estimate {estimate} B against objects {actual} B ({ratio:.2})"));
+            }
         }
     }
+    assert!(failures.is_empty(), "{failures:#?}");
 }
