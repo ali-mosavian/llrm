@@ -247,3 +247,44 @@ fn word_copies_into_a_call_sequence_are_one_dword_copy() {
     }
     assert_eq!(widths, vec![EVT::I32]);
 }
+
+/// wasm `memory_expansion`: four byte stores to `p+i`, `p+(i+1)`.. stayed four
+/// stores because the private address match saw `p + (i + k)` as a base of its
+/// own; the pin reads base, index and offset and made one `i32.store`
+/// (+142 B over 31 functions).
+#[test]
+fn word_stores_to_base_plus_index_plus_constant_are_one_dword_store() {
+    let tli = TargetLowering::x86_16(Features::default(), MVT::I16);
+    let mut dag = dag();
+    let entry = dag.entry_node();
+    let (p, i) = (arg(&mut dag, EVT::I16, 0), arg(&mut dag, EVT::I16, 1));
+    let mut stores = Vec::new();
+    for (n, k) in [0u128, 2].into_iter().enumerate() {
+        let index = if k == 0 {
+            i
+        } else {
+            let c = dag.get_constant(k, EVT::I16);
+            dag.get_node(ISD::Add, EVT::I16, &[i, c])
+        };
+        let ptr = dag.get_node(ISD::Add, EVT::I16, &[p, index]);
+        let value = dag.get_constant(0x10 + n as u128, EVT::I16);
+        stores.push(dag.get_store(entry, value, ptr, info(EVT::I16, false)));
+    }
+    let root = dag.get_token_factor(&stores);
+    dag.set_root(root);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
+    let mut seen = vec![dag.get_root()];
+    let mut kinds = Vec::new();
+    while let Some(node) = seen.pop() {
+        match dag.opcode(node) {
+            ISD::TokenFactor => seen.extend((0..dag.node(node).ops.len()).map(|i| dag.operand(node, i))),
+            ISD::Store => {
+                let NodeData::Mem(info) = dag.node(node).data else { panic!("mem") };
+                kinds.push(info.mem_vt);
+            }
+            _ => {}
+        }
+    }
+    kinds.dedup();
+    assert_eq!(kinds, vec![EVT::I32]);
+}

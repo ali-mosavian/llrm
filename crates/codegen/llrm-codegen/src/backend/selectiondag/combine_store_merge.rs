@@ -5,13 +5,11 @@
 //!
 //! DEVIATE SD217: only the stores of constants and of loads (no vector element
 //! extracts as the source, no vector store, no truncating store for a type that
-//! promotes, no rotate of two loads in reverse order), the base of an address
-//! is a frame index, a global or one node plus constant offsets
-//! (`BaseIndexOffset::match` without the index register), and
+//! promotes, no rotate of two loads in reverse order), and
 //! `allowsMemoryAccess` is true for every scalar the target holds (x86 assumes
 //! up to 8 bytes fast), and the argument stores of a constant to a call
 //! sequence (chained off `CALLSEQ_START`) are not merged: they are pushes, and
-//! a merged `pushd` is longer at m16. Exit: the vectors, the rotate. Owner w10.
+//! a merged `pushd` is longer at m16. Exit: the vectors, the rotate, by 2026-11-20. Owner w12.
 //! Review 2026-11-13.
 //!
 //! # See also
@@ -25,6 +23,7 @@
 //! ([L23969](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L23969)).
 
 use super::actions::{Action, TargetLowering};
+use super::address_analysis::BaseIndexOffset;
 use super::dag::{MemBase, MemInfo, NodeData, SDValue};
 use super::dag_combiner::{CombineHooks, CombineLevel, DagCombiner};
 use super::isd::ISD;
@@ -47,9 +46,7 @@ pub(super) enum Base {
 enum Source {
     Constant,
     /// A load of the stored type, a simple one with no other reader.
-    Load {
-        base: Base,
-    },
+    Load,
 }
 
 /// A store `MemOpLink`: the store, and its byte offset from the base.
@@ -117,7 +114,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         {
             return None;
         }
-        Some(Source::Load { base: self.match_address(self.dag.operand(value, 1)).0 })
+        Some(Source::Load)
     }
 
     /// `getStoreMergeCandidates`: the stores that store as many bytes as `st`,
@@ -130,8 +127,8 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         info: MemInfo,
         source: Source,
     ) -> (SDValue, Vec<Link>) {
-        let ptr = self.dag.operand(st, 2);
-        let (base, here) = self.match_address(ptr);
+        let here = BaseIndexOffset::matching(self.dag, st);
+        let here_load = (source == Source::Load).then(|| BaseIndexOffset::matching(self.dag, self.dag.operand(st, 1)));
         let mut root = self.dag.operand(st, 0);
         // Deviation: the argument stores of a constant in a call sequence
         // become pushes, and a merged one is a `pushd` with an
@@ -162,10 +159,16 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             {
                 return;
             }
-            let (their_base, there) = this.match_address(this.dag.operand(other, 2));
-            if their_base == base {
-                found.push(Link { store: other, offset: there - here });
+            let Some(offset) = here.equal_base_index(&BaseIndexOffset::matching(this.dag, other), this.dag) else {
+                return;
+            };
+            // The loads read from one base too.
+            if let Some(first) = &here_load
+                && first.equal_base_index(&BaseIndexOffset::matching(this.dag, this.dag.operand(other, 1)), this.dag).is_none()
+            {
+                return;
             }
+            found.push(Link { store: other, offset });
         };
         for user in self.dag.users(root).take(MAX_SEARCH_NODES) {
             let other = SDValue { node: user, res: 0 };
@@ -283,7 +286,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             }
             changed |= match source {
                 Source::Constant => self.merge_constants(&mut stores, run, mem, root, widest),
-                Source::Load { .. } => self.merge_loads(&mut stores, run, mem, root, widest),
+                Source::Load => self.merge_loads(&mut stores, run, mem, root, widest),
             };
         }
         changed
@@ -524,7 +527,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             let first_align = self.load_align(first_load);
             let first_store_align = self.store_align(stores[0].store);
             let load_chain = self.dag.operand(first_load, 0);
-            let start = self.match_address(self.dag.operand(first_load, 1)).1;
+            let start = BaseIndexOffset::matching(self.dag, first_load);
             let (mut last_consecutive, mut last_legal) = (1, 1);
             for i in 1..consecutive {
                 let load = self.stored_load(&stores[i]);
@@ -532,7 +535,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 if self.dag.operand(load, 0) != load_chain {
                     break;
                 }
-                if self.match_address(self.dag.operand(load, 1)).1 - start != element * i as i64 {
+                if start.equal_base_index(&BaseIndexOffset::matching(self.dag, load), self.dag) != Some(element * i as i64) {
                     break;
                 }
                 last_consecutive = i + 1;
