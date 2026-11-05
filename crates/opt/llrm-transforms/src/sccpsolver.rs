@@ -118,8 +118,8 @@ type Lattice = ValueLatticeElement;
 const MAX_NUM_RANGE_EXTENSIONS: u32 = 10;
 
 /// `getMaxWidenStepsOpts`.
-fn max_widen_steps_opts() -> MergeOptions {
-    MergeOptions::default().set_max_widen_steps(MAX_NUM_RANGE_EXTENSIONS)
+fn max_widen_steps_opts(keeps_sign: bool) -> MergeOptions {
+    MergeOptions::default().set_max_widen_steps(MAX_NUM_RANGE_EXTENSIONS).set_widen_keeps_sign(keeps_sign)
 }
 
 /// `SCCPSolver::isConstant`.
@@ -271,6 +271,9 @@ pub struct Solver<'a> {
     inst_work: Vec<(u32, InstId)>,
     /// `BBWorkList`.
     bb_work: Vec<(u32, BlockId)>,
+    /// DEVIATE REC5-1: a range widened for being extended too often keeps its
+    /// sign ([`MergeOptions::widen_keeps_sign`]).
+    widen_keeps_sign: bool,
 }
 
 impl<'a> Solver<'a> {
@@ -294,6 +297,14 @@ impl<'a> Solver<'a> {
             solver.track_value_of_argument(argument, index as u32);
         }
         solver
+    }
+
+    /// DEVIATE REC5-1: a range extended too often keeps its sign.
+    pub fn keep_sign_when_widening(
+        &mut self,
+        on: bool,
+    ) {
+        self.widen_keeps_sign = on;
     }
 
     /// `SCCPSolver(DL, GetTLI, Ctx)` with `addPredicateInfo` for each defined
@@ -361,6 +372,7 @@ impl<'a> Solver<'a> {
             global_users: HashMap::default(),
             inst_work: Vec::new(),
             bb_work: Vec::new(),
+            widen_keeps_sign: false,
         }
     }
 
@@ -1157,7 +1169,7 @@ impl<'a> Solver<'a> {
             Opcode::Store { .. } => self.visit_store(inst),
             // An atomic access is no simple load or store: its result is
             // overdefined and the global it touches is not tracked.
-            Opcode::LandingPad { .. } | Opcode::Atomic(_) => self.visit_instruction(inst),
+            Opcode::LandingPad { .. } | Opcode::Atomic(_) | Opcode::VaArg => self.visit_instruction(inst),
         }
     }
 
@@ -1209,7 +1221,9 @@ impl<'a> Solver<'a> {
         // additional extension. The count is adjusted to match the number of
         // active incoming values, which limits multiple extensions caused by
         // the same incoming value.
-        let opts = MergeOptions::default().set_max_widen_steps(feasible.len() as u32 + 1);
+        let opts = MergeOptions::default()
+            .set_max_widen_steps(feasible.len() as u32 + 1)
+            .set_widen_keeps_sign(self.widen_keeps_sign);
         let extensions = feasible.len() as u32;
         if let Some(fields) = self.struct_fields(ty) {
             for index in 0..fields.len() as u32 {
@@ -1884,7 +1898,7 @@ impl<'a> Solver<'a> {
                 if self.global_operand(pointer) == Some(global) {
                     self.global_users.entry(global).or_default().add((self.active as u32, inst));
                 }
-                self.merge_in_value(result, &tracked, max_widen_steps_opts());
+                self.merge_in_value(result, &tracked, max_widen_steps_opts(self.widen_keeps_sign));
                 return;
             }
             // Transform load from a constant into a constant if possible.
@@ -1978,13 +1992,13 @@ impl<'a> Solver<'a> {
             Incoming::Overdefined => self.mark_overdefined(formal),
             Incoming::Fields(fields) => {
                 for (at, call_arg) in fields.iter().enumerate() {
-                    self.merge_in_field(formal, at as u32, call_arg, max_widen_steps_opts());
+                    self.merge_in_field(formal, at as u32, call_arg, max_widen_steps_opts(self.widen_keeps_sign));
                 }
             }
             Incoming::Value(call_arg) => {
                 let ty = self.function.value(formal).ty;
                 let call_arg = call_arg.intersect(&self.get_arg_attribute_vl(index, ty));
-                self.merge_in_value(formal, &call_arg, max_widen_steps_opts());
+                self.merge_in_value(formal, &call_arg, max_widen_steps_opts(self.widen_keeps_sign));
             }
         }
     }
@@ -2109,7 +2123,7 @@ impl<'a> Solver<'a> {
             self.tracked[slot].users.add(user);
             for index in 0..fields.len() as u32 {
                 let tracked = self.tracked[slot].multiple.as_ref().expect("tracked returns")[index as usize].clone();
-                self.merge_in_field(result, index, &tracked, max_widen_steps_opts());
+                self.merge_in_field(result, index, &tracked, max_widen_steps_opts(self.widen_keeps_sign));
             }
             return;
         }
@@ -2121,7 +2135,7 @@ impl<'a> Solver<'a> {
         // result.
         self.tracked[slot.expect("a tracked callee")].users.add(user);
         let result = instruction.result.expect("a call to a function returning a value");
-        self.merge_in_value(result, &tracked, max_widen_steps_opts());
+        self.merge_in_value(result, &tracked, max_widen_steps_opts(self.widen_keeps_sign));
     }
 
     /// `handleCallOverdefined`.

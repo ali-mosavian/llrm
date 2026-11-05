@@ -122,6 +122,22 @@ pub fn target_lowering() -> TargetLowering {
             tl.set_libcall_name(op, vt, name);
         }
     }
+    // a long shifted by a constant is a call in a function tuned for size once
+    // the bytes still shifted times the bits beyond whole bytes reach 10: each
+    // is a 2 B shift instruction, the call is 5 B and the routine 15 once
+    // (x << 5 is 60 B inline, x >> 29 only 17). The 64-bit shifts reach it
+    // through their 32-bit halves.
+    for (op, name) in [Shl, Srl, Sra].into_iter().zip(["__ashlsi3", "__lshrsi3", "__ashrsi3"]) {
+        tl.set_size_libcall_name(op, MVT::I32, name);
+    }
+    tl.set_size_shift_call(8, 10);
+    // the long long divide has a smaller routine (one step per dividend bit)
+    // for a function tuned for size
+    for (op, name) in
+        [SDiv, UDiv, SRem, URem].into_iter().zip(["__s_divdi3", "__s_udivdi3", "__s_moddi3", "__s_umoddi3"])
+    {
+        tl.set_size_libcall_name(op, MVT::I64, name);
+    }
     // softened floats: compiler-rt's routines
     tl.set_soft_float_libcall_names();
     tl.set_operation_action(BrCond, MVT::Other, Action::Custom);
@@ -217,6 +233,7 @@ impl Hooks for Z80Lowering {
                 split: false,
                 variadic: false,
                 sret: true,
+                byval: None,
             });
         }
         for &value in args {
@@ -246,6 +263,7 @@ impl Hooks for Z80Lowering {
                 split,
                 variadic: false,
                 sret: false,
+                byval: None,
             }));
         }
         let part_vt = if ret == EVT::I32 { EVT::I16 } else { ret };
@@ -253,7 +271,7 @@ impl Hooks for Z80Lowering {
             EVT::I64 => Vec::new(),
             _ => {
                 vec![
-                    In { vt: part_vt, pointer: false, arg_vt: ret, split: ret == EVT::I32, sret: false, ext: Ext::Any };
+                    In { vt: part_vt, pointer: false, arg_vt: ret, split: ret == EVT::I32, sret: false, ext: Ext::Any, byval: None };
                     if ret == EVT::I32 { 2 } else { 1 }
                 ]
             }

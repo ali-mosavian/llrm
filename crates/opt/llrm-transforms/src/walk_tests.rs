@@ -2720,6 +2720,16 @@ fn test_m32_copies_a_tree_recursion_into_itself_at_speed() {
     assert!(calls > 8, "fib was not copied into itself, {calls} calls of it");
 }
 
+/// fib at m32 -O2 was copied into itself to the 150 `gcc_insns` the pass allowed
+/// and ran 240256 clocks against gcc's 210636 (gcc's cap is 450; -O2 now takes it,
+/// 99687 clocks); -O3 keeps 150 (rectwo and bintree are worse with 450 there).
+#[test]
+fn test_m32_o2_copies_fib_to_gccs_growth_cap_and_o3_to_the_old_one() {
+    let o2 = m32_fib_calls(crate::pipeline::Options::default());
+    let o3 = m32_fib_calls(crate::pipeline::Options::speed());
+    assert!(o2 > o3, "-O2 made {o2} calls of fib, -O3 {o3}");
+}
+
 /// fib at -O1 was copied into itself (334152 -> 424014 clocks, 69 -> 649 B):
 /// gcc inlines no function at -O1, recursive ones included.
 #[test]

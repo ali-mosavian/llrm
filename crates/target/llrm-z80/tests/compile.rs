@@ -1013,7 +1013,8 @@ fn a_word_in_de_is_stored_to_a_global_without_moving_it() {
 fn a_comparison_used_as_a_value_is_a_byte_that_is_one_or_zero() {
     let ir = include_str!("kernels/ir/carry32.ll");
     let out = text(ir, "carry32", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
-    // the carry fusion has since turned the compare and its byte into `adc hl, rr`
+    // the carry fusion has since turned the compare and its byte into `adc hl,
+    // rr`
     assert!(out.contains("adc hl, ") && !out.contains("SETCC8"), "{out}");
 }
 
@@ -1610,4 +1611,72 @@ fn a_counted_loop_counts_its_trips_in_a_byte() {
     let out = text(&ir, "copy", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     assert!(out.contains("ld b, #200"), "{out}");
     assert!(!out.contains("or a, e"), "the word count is tested no more: {out}");
+}
+
+/// A function tuned for size called the long long divide made for speed: the
+/// routine is 179 B more to link (data_int64 and int64_division, -Os). It
+/// calls the size routine; any other function the speed one.
+#[test]
+fn a_function_tuned_for_size_calls_the_small_long_long_divide() {
+    let body = |attr: &str| {
+        format!(
+            "define i64 @f(i64 %a, i64 %b) {attr} {{\n  %q = udiv i64 %a, %b\n  %r = srem i64 %a, %b\n  %s = add i64 %q, %r\n  ret i64 %s\n}}"
+        )
+    };
+    for attr in ["optsize", "minsize"] {
+        let out = compiled(&body(attr), "f");
+        assert!(out.contains("call __s_udivdi3") && out.contains("call __s_moddi3"), "{attr}: {out}");
+    }
+    let out = compiled(&body(""), "f");
+    assert!(out.contains("call __udivdi3") && !out.contains("_s\n"), "{out}");
+}
+
+/// A long multiplied by a constant was split into its halves, each half
+/// shifted and subtracted, in a function tuned for size: `x * 31` was 99 B and
+/// `x * 1000` 185 B, where a call is 14 (div_constants_short, mul_constants,
+/// -Os). A function tuned for size calls `__mulsi3`; the others keep the
+/// halves.
+#[test]
+fn a_function_tuned_for_size_calls_the_long_multiply() {
+    let body = |attr: &str| {
+        format!(
+            "define i32 @f(i32 %a, i32 %b, i32 %c) {attr} {{\n  %r = mul i32 %a, %b\n  %s = mul i32 %r, %c\n  ret i32 %s\n}}"
+        )
+    };
+    let out = compiled(&body("optsize"), "f");
+    assert!(out.contains("call __mulsi3"), "{out}");
+    let out = compiled(&body(""), "f");
+    assert!(!out.contains("__mulsi3"), "{out}");
+}
+
+/// The routine is 57 B: one small multiply in a module called it at -Os and
+/// the program grew (copy_runs +10 B, switch_jump_table +31 B). A module
+/// needs two long multiplies for the call.
+#[test]
+fn one_long_multiply_in_a_module_stays_inline_at_size() {
+    let ir = "define i32 @f(i32 %a) optsize {\n  %r = mul i32 %a, 31\n  ret i32 %r\n}";
+    let out = compiled(ir, "f");
+    assert!(!out.contains("__mulsi3"), "{out}");
+}
+
+/// A long shifted by a constant was unrolled in a function tuned for size:
+/// `x << 5` 60 B, `x >> 13` 49 B, where the shift routine is a 14 B loop
+/// (-Os). The bytes still shifted times the bits beyond whole bytes are the
+/// cost: 5 and 13 take the routine; whole bytes, one or two bits and the last
+/// byte (29, 31) stay unrolled, as a 64-bit shift's halves did (data_int64
+/// +199 B when 29 and 31 called); speed levels never take it.
+#[test]
+fn a_function_tuned_for_size_shifts_a_long_by_a_constant_in_the_routine() {
+    let shifted = |op: &str, count: u32, attr: &str| {
+        compiled(&format!("define i32 @f(i32 %a) {attr} {{\n  %r = {op} i32 %a, {count}\n  ret i32 %r\n}}"), "f")
+    };
+    for (op, routine) in [("shl", "__ashlsi3"), ("lshr", "__lshrsi3"), ("ashr", "__ashrsi3")] {
+        for count in [5, 13] {
+            assert!(shifted(op, count, "optsize").contains(routine), "{op} {count}");
+        }
+        for count in [1, 2, 8, 16, 29, 31] {
+            assert!(!shifted(op, count, "optsize").contains("__"), "{op} {count} stays unrolled");
+        }
+        assert!(!shifted(op, 5, "").contains("__"), "{op} 5 at speed levels");
+    }
 }

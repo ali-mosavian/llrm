@@ -121,6 +121,14 @@ pub struct TargetLowering {
     /// like): the runtime routine a `LibCall` action calls. Empty unless the
     /// target fills it.
     libcall_names: HashMap<(ISD, MVT), &'static str>,
+    /// The routine a function tuned for size calls where it differs from
+    /// `libcall_names`'.
+    size_libcall_names: HashMap<(ISD, MVT), &'static str>,
+    /// `(granule, least)`: in a function tuned for size a shift by a constant
+    /// is the routine's call where the granules left after the whole moves
+    /// times the bits beyond them reach `least` (each is a shift instruction
+    /// per granule).
+    size_shift_call: Option<(u128, u128)>,
     /// The object spelling of a routine's name where the convention decorates
     /// it (`___addsf3@3`).
     libcall_symbols: HashMap<String, (String, u32)>,
@@ -148,11 +156,16 @@ impl TargetLowering {
             keeps_f64_constants: false,
             cmov: false,
             libcall_names: HashMap::default(),
+            size_libcall_names: HashMap::default(),
+            size_shift_call: None,
             libcall_symbols: HashMap::default(),
             sext_cheaper_i32_i64: false,
             sdiv_pow2_cmov: None,
         };
         table.set_default_integer_libcalls();
+        // `TargetLoweringBase`: `VAARG` is expanded unless the target says
+        // otherwise.
+        table.set_operation_action(ISD::VAArg, MVT::Other, Action::Expand);
         table
     }
 
@@ -205,8 +218,53 @@ impl TargetLowering {
         self.libcall_names.insert((op, vt), name);
     }
 
-    /// `getLibcallName` of the routine `op` of `vt` calls, if the target has
-    /// one.
+    /// The routine `op` of `vt` calls in a function tuned for size, where a
+    /// smaller one than [`Self::set_libcall_name`]'s exists.
+    pub fn set_size_libcall_name(
+        &mut self,
+        op: ISD,
+        vt: MVT,
+        name: &'static str,
+    ) {
+        self.size_libcall_names.insert((op, vt), name);
+    }
+
+    /// A shift by a constant of a `bits`-wide value is a call to the shift
+    /// routine in a function tuned for size where the granules still shifted
+    /// times the bits beyond whole granules reach `least`.
+    pub fn set_size_shift_call(
+        &mut self,
+        granule: u128,
+        least: u128,
+    ) {
+        self.size_shift_call = Some((granule, least));
+    }
+
+    /// Whether the shift of a `bits`-wide value by the constant `amount` is
+    /// the routine's call here.
+    pub fn calls_for_size_shift(
+        &self,
+        amount: u128,
+        bits: u128,
+    ) -> bool {
+        self.opt_for_size
+            && self.size_shift_call.is_some_and(|(granule, least)| {
+                (bits / granule).saturating_sub(amount / granule) * (amount % granule) >= least
+            })
+    }
+
+    /// Whether `op` of `vt` has a routine for functions tuned for size.
+    pub fn has_size_libcall_name(
+        &self,
+        op: ISD,
+        vt: EVT,
+    ) -> bool {
+        matches!(
+            vt,
+            EVT::Simple(vt) if self.size_libcall_names.contains_key(&(op, vt))
+        )
+    }
+
     /// The routine `name` is spelled `symbol` in the object.
     pub fn set_libcall_symbol(
         &mut self,
@@ -234,13 +292,16 @@ impl TargetLowering {
         self.libcall_symbols.get(name).map_or_else(|| name.to_owned(), |(symbol, _)| symbol.clone())
     }
 
+    /// `getLibcallName` of the routine `op` of `vt` calls, if the target has
+    /// one.
     pub fn libcall_name(
         &self,
         op: ISD,
         vt: EVT,
     ) -> Option<&'static str> {
         let EVT::Simple(vt) = vt else { return None };
-        self.libcall_names.get(&(op, vt)).copied()
+        let sized = self.opt_for_size.then(|| self.size_libcall_names.get(&(op, vt)).copied()).flatten();
+        sized.or_else(|| self.libcall_names.get(&(op, vt)).copied())
     }
 
     pub fn set_operation_action(
@@ -603,7 +664,7 @@ impl TargetLowering {
         t.set_ops(&[BitReverse, CtLs], &words, Legal);
         t.set_ops(&[BuildPair], &[MVT::I64], Expand);
         t.set_ops(&[FpToSInt, FpToUInt, SIntToFp, UIntToFp], &words, Custom);
-        t.set_ops(&[VAStart, VACopy], &[MVT::Other], Custom);
+        t.set_ops(&[VAStart, VACopy, VAArg], &[MVT::Other], Custom);
         t.set_ops(&[VAEnd, StackSave, StackRestore], &[MVT::Other], Expand);
         // The pin asks for `STACKSAVE` at `MVT::Other`; here the node's value
         // type is asked.
@@ -750,6 +811,12 @@ impl TargetLowering {
         // (BuildSDIV finds neither MULHS nor SMUL_LOHI there); only i32
         // has the two-result multiply (`MUL32r`).
         t.set_ops(&[SMulLoHi, UMulLoHi], &[MVT::I8, MVT::I16], Expand);
+        // At 64 bits BuildSDIV/BuildUDIV find no two-result multiply for an
+        // `i32` either and widen it (`imul rax, rcx, 0xCCCCCCCD; shr rax,
+        // 35`), where ours took the one-operand `mul ecx` (edx:eax).
+        if is64 {
+            t.set_ops(&[SMulLoHi, UMulLoHi], &[MVT::I32], Expand);
+        }
         // fixed-point multiply is expanded by `expandFixedPointMul` (the base
         // default)
         t.set_ops(&[SMulFix], &[MVT::I8, MVT::I16, MVT::I32], Expand);
@@ -852,6 +919,20 @@ mod tests {
 
     fn a64() -> TargetLowering {
         TargetLowering::aarch64(Aarch64Features::default())
+    }
+
+    /// A function tuned for size called the speed routine of a divide: a
+    /// target's smaller one was never asked for.
+    #[test]
+    fn a_function_tuned_for_size_calls_the_size_routine() {
+        let mut t = TargetLowering::empty(TargetLoweringInfo::aarch64());
+        t.set_libcall_name(ISD::UDiv, MVT::I64, "__fast");
+        t.set_size_libcall_name(ISD::UDiv, MVT::I64, "__small");
+        t.set_libcall_name(ISD::SDiv, MVT::I64, "__only");
+        assert_eq!(t.libcall_name(ISD::UDiv, EVT::I64), Some("__fast"));
+        t.set_opt_for_size(true);
+        assert_eq!(t.libcall_name(ISD::UDiv, EVT::I64), Some("__small"));
+        assert_eq!(t.libcall_name(ISD::SDiv, EVT::I64), Some("__only"), "no size routine: the one routine");
     }
 
     /// An x86 table's `i8` set-cc result and `i8` register class were the

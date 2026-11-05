@@ -23,7 +23,7 @@ use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
 use llrm_codegen::backend::selectiondag::legalize_dag::Hooks;
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
 use llrm_codegen::backend::selectiondag::{Action, LoadExt, SDNodeFlags, SDValue, SelectionDAG, TargetLowering};
-use llrm_codegen::backend::selectiondag::{NodeData, TargetLoweringInfo};
+use llrm_codegen::backend::selectiondag::{MemBase, MemInfo, NodeData, TargetLoweringInfo};
 
 use super::generated::ids::isd as ids;
 use super::hooks::Cpu;
@@ -216,6 +216,7 @@ impl Hooks for M68kLowering {
             ISD::Select => Some(lower_select(dag, node)),
             ISD::BrCond => Some(lower_brcond(dag, node)),
             ISD::GlobalAddress => Some(super::call::lower_global_address(dag, node)),
+            ISD::VAStart => lower_vastart(dag, node),
             ISD::SAddO | ISD::UAddO | ISD::SSubO | ISD::USubO | ISD::SMulO | ISD::UMulO => lower_xalu(dag, node),
             _ => None,
         }
@@ -253,6 +254,7 @@ impl Hooks for M68kLowering {
             split: false,
             variadic: false,
             sret: false,
+            byval: None,
         };
         // `getCopyToParts`: a 64-bit argument is two words, the high one first
         // on a big-endian target.
@@ -266,13 +268,13 @@ impl Hooks for M68kLowering {
                 outs.push(out(value, dag));
             }
         }
-        let word = In { vt: EVT::I32, pointer: false, arg_vt: EVT::I32, split: false, sret: false, ext: Ext::Any };
+        let word = In { vt: EVT::I32, pointer: false, arg_vt: EVT::I32, split: false, sret: false, ext: Ext::Any, byval: None };
         let mut ins: Vec<In> = Vec::new();
         for &ret in rets {
             if ret == EVT::I64 {
                 ins.extend([word, word]);
             } else {
-                ins.push(In { vt: ret, pointer: false, arg_vt: ret, split: false, sret: false, ext: Ext::Any });
+                ins.push(In { vt: ret, pointer: false, arg_vt: ret, split: false, sret: false, ext: Ext::Any, byval: None });
             }
         }
         let callee = dag.get_target_external_symbol(EVT::I32, name);
@@ -722,4 +724,21 @@ fn lower_brcond(
         (code, emit_test(dag, cond_value, cond::NE))
     };
     dag.get_node(m68kisd::BRCOND, EVT::OTHER, &[chain, dest, code, flags])
+}
+
+/// `M68kTargetLowering::LowerVASTART`: `va_start` stores the address of the
+/// first variadic argument's slot (`VarArgsFrameIndex`) through the list.
+fn lower_vastart(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let index = dag.var_args_frame_index?;
+    let (chain, list) = (dag.operand(node, 0), dag.operand(node, 1));
+    let first = dag.get_frame_index(EVT::I32, index);
+    let base = match dag.node(list).data {
+        NodeData::FrameIndex(slot) => MemBase::Stack(slot),
+        _ => MemBase::Unknown,
+    };
+    let info = MemInfo { mem_vt: EVT::I32, align: 2, volatile: false, base, ext: None, space: 0, ordering: None };
+    Some(dag.get_store(chain, first, list, info))
 }

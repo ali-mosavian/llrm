@@ -105,7 +105,8 @@ struct Slot {
 }
 
 struct State {
-    /// Each instruction with its place: one lookup, where three maps took three.
+    /// Each instruction with its place: one lookup, where three maps took
+    /// three.
     slots: HashMap<InstrKey, Slot>,
     /// The instructions of each block by order stamp: the stamps rise along the
     /// block, with gaps, so an instruction goes between two others (or moves)
@@ -373,12 +374,9 @@ impl BodyFacts {
             })
             .max()?;
         let reads = state.slots[&key].insn.uses.contains(&value);
-        let defined_after = state
-            .defs
-            .get(&value)
-            .is_some_and(
-                |defs| defs.iter().any(|def| state.slots.get(def).is_some_and(|slot| slot.block == block && slot.stamp > stamp)),
-            );
+        let defined_after = state.defs.get(&value).is_some_and(|defs| {
+            defs.iter().any(|def| state.slots.get(def).is_some_and(|slot| slot.block == block && slot.stamp > stamp))
+        });
         (stamp > floor && reads && !defined_after).then_some(key)
     }
 
@@ -716,7 +714,10 @@ pub fn three_address(
         // `SHL32ri` by 1 to 3: `[a + a]` for 1, `[a*4]`, `[a*8]` for the rest
         // (the index alone takes a 32-bit displacement, as the pin's does).
         (Loc::Imm(Imm { value: shift @ 1..=3, address: None, .. }), Some("shl"))
-            if matches!(mode, ThreeAddress::All | ThreeAddress::Dwords | ThreeAddress::Wide) =>
+            if matches!(
+                mode,
+                ThreeAddress::All | ThreeAddress::Dwords | ThreeAddress::Wide
+            ) =>
         {
             Mem {
                 base: (*shift == 1).then_some(wide(base)),
@@ -1361,6 +1362,7 @@ impl<'a> Commuter<'a> {
         at: usize,
         regs: llrm_lir::registers::Regs,
         bits: u32,
+        flags_dead_out: &dyn Fn() -> bool,
     ) -> bool {
         let mi = Arc::clone(&work[at]);
         // Only an instruction the pass would untie: tied, and writing another
@@ -1411,7 +1413,7 @@ impl<'a> Commuter<'a> {
             end += 1;
         }
         // The flags it reads or writes are not to be read or written between.
-        let writes_flags = flags_touched(&mi, regs, bits);
+        let Some((mi_reads_flags, mi_writes_flags)) = flag_lanes(&mi, regs, bits) else { return false };
         // The kill is within the eleven instructions the walk below allows.
         let Some(found) = work[end.min(work.len())..].iter().take(11).position(|one| {
             #[cfg(test)]
@@ -1422,7 +1424,7 @@ impl<'a> Commuter<'a> {
         };
         let last = end + found;
         let mut visited = 0;
-        for other in &work[end..=last] {
+        for (place, other) in work[end..=last].iter().enumerate() {
             if visited > 10 {
                 return false;
             }
@@ -1430,8 +1432,19 @@ impl<'a> Commuter<'a> {
             if barrier(other) {
                 return false;
             }
-            if writes_flags && !flags_untouched(other, regs, bits) {
-                return false;
+            // The pin's register test on EFLAGS: an instruction between that
+            // reads them, or writes them where they are read, is
+            // not crossed; a dead write is (`!MO.isDead() &&
+            // regOverlapsSet(Defs, MOReg)`).
+            if mi_reads_flags || mi_writes_flags {
+                let Some((reads, writes)) = flag_lanes(other, regs, bits) else { return false };
+                if (mi_writes_flags && reads)
+                    || (writes
+                        && (mi_reads_flags
+                            || (mi_writes_flags && !flags_dead_after(work, end + place, regs, bits, flags_dead_out))))
+                {
+                    return false;
+                }
             }
             if other.defines.iter().any(|value| uses.contains(value) || defs.contains(value)) {
                 return false;

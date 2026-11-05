@@ -597,6 +597,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::ipsccp_widen_keeps_sign`.
+    fn ipsccp_widen_keeps_sign(&self) -> bool {
+        false
+    }
+
     /// DEVIATE U1: the bar (unrolled size) an `optsize` loop of at most this
     /// many trips is fully unrolled under, where the target says so: its
     /// body's tests fold on the trip, and few copies cost little; none: the
@@ -630,6 +635,12 @@ pub trait Tti {
     /// in `gcc_insns` of the callee;
     /// none: no bar.
     fn recursive_edge_growth(&self) -> Option<(i64, i64)> {
+        None
+    }
+
+    /// DEVIATE REC-2: what the copies of a recursive function in itself may add
+    /// at (-O2, -O3), in `gcc_insns`; none: the pass's own.
+    fn recursive_inlining_growth(&self) -> Option<(i64, i64)> {
         None
     }
 
@@ -1125,6 +1136,14 @@ pub trait Tti {
     /// `getNumberOfRegisters` of the general-purpose class.
     fn number_of_gpr_registers(&self) -> u32 {
         8
+    }
+
+    /// The values LICM may hold across a loop before it refuses a promotion
+    /// (DEVIATE LP1, `licm/pressure.rs` in llrm-transforms): the register count
+    /// by default; `None` where registers are not what a value is held in and
+    /// the pin promotes without a cap.
+    fn licm_register_limit(&self) -> Option<u32> {
+        Some(self.number_of_gpr_registers())
     }
 
     /// The registers LSR keeps back from `number_of_gpr_registers` when it

@@ -2155,3 +2155,128 @@ fn a_signed_word_overflow_operation_computes_its_value_and_its_flag() {
         }
     }
 }
+
+/// `fp_bfmultt`'s arrays (`f[3 - j + k]`) lived on the soft stack: every
+/// element access added `rc0`, a constant and the index in 16 bits, and the
+/// function adjusted `rc0` both ways (the X16 mathlib's multiply, 77% of its
+/// clocks). A function nothing re-enters has one activation, so its array is
+/// global (`lda g,x`): no frame, and the values over two calls are still its
+/// own.
+#[test]
+fn the_array_of_a_function_nothing_re_enters_is_global() {
+    let ir = module(
+        r#"declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture)
+declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture)
+define i8 @fill(i8 %n) noinline norecurse {
+entry:
+  %a = alloca [6 x i8]
+  call void @llvm.lifetime.start.p0(i64 6, ptr %a)
+  br label %store
+store:
+  %i = phi i8 [ 0, %entry ], [ %i2, %store ]
+  %x = mul i8 %i, 3
+  %w = zext i8 %i to i16
+  %p = getelementptr i8, ptr %a, i16 %w
+  store volatile i8 %x, ptr %p
+  %i2 = add i8 %i, 1
+  %c = icmp ult i8 %i2, 6
+  br i1 %c, label %store, label %sum
+sum:
+  %j = phi i8 [ 0, %store ], [ %j2, %sum ]
+  %t = phi i8 [ 0, %store ], [ %t2, %sum ]
+  %v = zext i8 %j to i16
+  %q = getelementptr i8, ptr %a, i16 %v
+  %e = load volatile i8, ptr %q
+  %t2 = add i8 %t, %e
+  %j2 = add i8 %j, 1
+  %d = icmp ult i8 %j2, %n
+  br i1 %d, label %sum, label %out
+out:
+  call void @llvm.lifetime.end.p0(i64 6, ptr %a)
+  ret i8 %t2
+}
+define i8 @twice() {
+  %x = call i8 @fill(i8 4)
+  %y = call i8 @fill(i8 3)
+  %z = add i8 %x, %y
+  ret i8 %z
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(text.contains("_local0") && !text.contains("sta rc0"), "the array is on the soft stack:\n{text}");
+    assert_eq!(exit_code_of(&text, "twice"), 27, "{text}");
+}
+
+/// What re-enters a function keeps its stack: with the array global, the
+/// recursion below returns 0 where each activation's own `a[0]` makes 6.
+#[test]
+fn the_array_of_a_function_that_can_be_re_entered_stays_on_the_stack() {
+    let body = |name: &str, call: &str| {
+        format!(
+            "define i8 @{name}(i8 %n) noinline {{\n  %a = alloca [4 x i8]\n  store volatile i8 %n, ptr %a\n  \
+             %z = icmp eq i8 %n, 0\n  br i1 %z, label %done, label %go\ngo:\n  %m = sub i8 %n, 1\n  {call}\n  \
+             %v = load volatile i8, ptr %a\n  %s = add i8 %r, %v\n  ret i8 %s\ndone:\n  ret i8 0\n}}\n"
+        )
+    };
+    let driver = |name: &str| format!("define i8 @run_{name}() {{\n  %r = call i8 @{name}(i8 3)\n  ret i8 %r\n}}\n");
+    let direct = [body("direct", "%r = call i8 @direct(i8 %m)"), driver("direct")].concat();
+    let indirect = [
+        "@table = global ptr @through\n".to_owned(),
+        body("through", "%f = load ptr, ptr @table\n  %r = call i8 %f(i8 %m)"),
+        driver("through"),
+    ]
+    .concat();
+    let outer = [
+        "@back = global ptr @outer\ndefine i8 @mid(i8 %n) noinline {\n  %f = load ptr, ptr @back\n  \
+         %r = call i8 %f(i8 %n)\n  ret i8 %r\n}\n"
+            .to_owned(),
+        body("outer", "%r = call i8 @mid(i8 %m)"),
+        driver("outer"),
+    ]
+    .concat();
+    for (name, ir) in [("direct", direct), ("through", indirect), ("outer", outer)] {
+        let text = assembly(&module(&ir), &Request::new(Level::O2)).unwrap();
+        assert!(!text.contains("_local"), "{name}: an array shared by activations:\n{text}");
+        assert_eq!(exit_code_of(&text, &format!("run_{name}")), 6, "{name}:\n{text}");
+    }
+}
+
+/// A call to a declaration may come back into the function (a callback): not
+/// `norecurse`, so the array stays on the stack.
+#[test]
+fn the_array_of_a_function_that_calls_a_declaration_stays_on_the_stack() {
+    let ir = module(
+        "declare void @elsewhere(ptr)\ndefine void @f() {\n  %a = alloca [4 x i8]\n  \
+         call void @elsewhere(ptr %a)\n  ret void\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(!text.contains("_local"), "{text}");
+}
+
+/// The start-up zeroing of the new BSS costs 15 clocks a byte, once: a
+/// function called once, outside any loop, with a 24-byte array it touches
+/// twice, gave `tail_calls` 360 clocks for 46 saved. It keeps the stack where
+/// clocks count (-O2) and goes static where bytes do (-Os).
+#[test]
+fn a_static_array_pays_for_the_zeroing_of_its_bytes() {
+    let ir = module(
+        r#"define i8 @once(i8 %n) noinline norecurse {
+  %a = alloca [24 x i8]
+  %w = zext i8 %n to i16
+  %p = getelementptr i8, ptr %a, i16 %w
+  store volatile i8 %n, ptr %p
+  %v = load volatile i8, ptr %p
+  ret i8 %v
+}
+define i8 @t() {
+  %r = call i8 @once(i8 7)
+  ret i8 %r
+}"#,
+    );
+    let speed = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(!speed.contains("_local"), "-O2 zeroes 24 bytes to save 46 clocks:\n{speed}");
+    assert_eq!(exit_code_of(&speed, "t"), 7, "{speed}");
+    let size = assembly(&ir, &Request::new(Level::Os)).unwrap();
+    assert!(size.contains("_local0"), "-Os counts bytes:\n{size}");
+    assert_eq!(exit_code_of(&size, "t"), 7, "{size}");
+}

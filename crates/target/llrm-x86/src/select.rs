@@ -494,6 +494,17 @@ pub fn got_symbol(
     _assemble(&raised(create_reg_mem(Code::Mov_r64_rm64, into, rip_operand())), at, true)
 }
 
+/// `mov into32, symbol`: the address of a symbol as a value in static code,
+/// zero-extended (R_X86_64_32; the pin's `MOV32ri64`).
+pub fn load_symbol_zero_extended(
+    into: RegId,
+    at: At,
+) -> Option<Emitted> {
+    (width_of(into)? == 8).then_some(())?;
+    let made = create_reg_i32(Code::Mov_r32_imm32, into.full_register32(), 0).ok()?;
+    _assemble(&made, at, true)
+}
+
 /// `lea into, [rip + symbol]`: the address of a symbol as a value in long mode.
 pub fn lea_symbol(
     into: RegId,
@@ -2480,6 +2491,9 @@ pub fn emit_in(
             // `mov sreg,imm` the machine has no encoding for.
             (Loc::Reg(into), Loc::Imm(imm)) if seg(into.register) => load_segment(into.register, imm.value, at),
             (Loc::Reg(into), Loc::Reg(outof)) => r#move(into.register, outof.register, at),
+            (Loc::Reg(into), Loc::Imm(imm)) if at.bits == 64 && imm.width == 4 && imm.address.is_some() => {
+                load_symbol_zero_extended(into.register, at)
+            }
             (Loc::Reg(into), Loc::Imm(imm))
                 if at.bits == 64 && imm.address.is_some_and(|addr| addr.space == Space::External) =>
             {

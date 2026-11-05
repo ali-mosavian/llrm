@@ -798,6 +798,10 @@ pub enum Opcode {
     FCmp(FloatPredicate),
     Phi,
     Select,
+    /// `VAArgInst`: the next variadic argument of type `ty` read through the
+    /// `va_list` pointer (operand 0), which it advances. Reads and writes that
+    /// list; the target's `VAARG` legalization says how.
+    VaArg,
     Freeze,
     Call(Box<CallInfo>),
     LandingPad {
@@ -897,6 +901,7 @@ impl Opcode {
             Self::ExtractValue(_) => "extractvalue",
             Self::InsertValue(_) => "insertvalue",
             Self::Alloca { .. } => "alloca",
+            Self::VaArg => "va_arg",
             Self::Load { .. } => "load",
             Self::Store { .. } => "store",
             Self::Atomic(info) => match info.kind {

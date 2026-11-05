@@ -265,6 +265,28 @@ fn test_an_optsize_caller_keeps_a_compare_loop_with_many_sites_when_the_target_g
     assert!(cost >= threshold, "{cost} against {threshold}");
 }
 
+/// SZ2 at the 64-bit target: an external callee with ONE site is not copied
+/// into an `optsize` caller when the copy grows the code (cost 45 against 50
+/// inlined it; crc -Os m64: 139 B against gcc 96, which keeps the call).
+#[test]
+fn test_an_optsize_caller_keeps_a_callee_with_one_site_when_the_target_guards_single_sites() {
+    let tti = |single: bool| {
+        llrm_x86::tti::X86::of_cpu("x86-64").unwrap().with_tuning(llrm_mir::target::Tuning {
+            inline_size_guard_at_size: true,
+            inline_size_guard_single_site: single,
+            ..llrm_mir::target::Tuning::PIN
+        })
+    };
+    let params = InlineParams { compute_full_inline_cost: true, ..InlineParams::from_level(2) };
+    let price = |single: bool| {
+        priced_params(COMPARE_LOOP, 0, false, CallerSize::OptSize, Some(&tti(single)), params, (1, false))
+    };
+    let (cost, threshold) = price(false);
+    assert!(cost < threshold, "the premise: the pin inlines it ({cost} against {threshold})");
+    let (cost, threshold) = price(true);
+    assert!(cost >= threshold, "{cost} against {threshold}");
+}
+
 /// D11 at speed on arm64: a callee with two sites that stays is not copied
 /// into a speed caller when its growth, at a byte's price in clocks, outweighs
 /// the call it saves (the pin's cost 45 against 50 inlined the compare loop;

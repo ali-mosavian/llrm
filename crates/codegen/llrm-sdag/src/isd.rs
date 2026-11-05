@@ -22,6 +22,9 @@ pub enum ISD {
     VAStart,
     VAEnd,
     VACopy,
+    /// `VAARG`: (chain, list pointer, `SrcValue`, ABI alignment) to (value,
+    /// chain).
+    VAArg,
     /// `SRCVALUE`: the IR pointer an access came from, for the target.
     SrcValue,
     GlobalAddress,
@@ -234,6 +237,7 @@ impl ISD {
             VAStart => "vastart",
             VAEnd => "vaend",
             VACopy => "vacopy",
+            VAArg => "vaarg",
             SrcValue => "SrcValue",
             GlobalAddress => "GlobalAddress",
             TargetGlobalAddress => "TargetGlobalAddress",

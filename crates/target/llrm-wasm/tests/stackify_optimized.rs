@@ -496,3 +496,42 @@ fn a_loop_exit_phi_edge_has_a_block_of_its_own_at_o1() {
     let f = body(&text, "f");
     assert!(f.lines().any(|line| line.split_whitespace().eq(["br", "2"])), "{text}");
 }
+
+/// Ten globals a loop adds its index to, each a promotion candidate.
+fn ten_counters() -> String {
+    let globals: String = (1..=10).map(|k| format!("@g{k} = internal global i32 0\n")).collect();
+    let body: String = (1..=10)
+        .map(|k| format!("  %x{k} = load i32, ptr @g{k}\n  %y{k} = add i32 %x{k}, %v\n  store i32 %y{k}, ptr @g{k}\n"))
+        .collect();
+    format!(
+        "target datalayout = \"e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-i128:128-n32:64-S128-ni:1:10:20\"
+{globals}declare i32 @h(i32) nounwind willreturn memory(none)
+define void @f(i32 %n) {{
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %i1, %loop ]
+  %v = call i32 @h(i32 %i)
+{body}  %i1 = add nuw i32 %i, 1
+  %c = icmp eq i32 %i1, %n
+  br i1 %c, label %exit, label %loop
+exit:
+  ret void
+}}
+"
+    )
+}
+
+/// LICM refused promotions past eight values held across the loop, a limit
+/// the pin does not have (wasm locals are virtual): bench nbody_fixed -O2
+/// kept `pos_x[0]` and `pos_y[0]` in memory, 2 loads more a step; here five of
+/// ten stay stores in the loop.
+#[test]
+fn every_global_a_loop_updates_is_kept_in_a_local_whatever_the_count() {
+    let text = asm(&ten_counters(), Level::O2);
+    let f = body(&text, "f");
+    let start = f.find("loop").expect("a loop");
+    let end = f.rfind("end_loop").expect("its end");
+    let accesses = f[start..end].matches("i32.load\tg").count() + f[start..end].matches("i32.store\tg").count();
+    assert_eq!(accesses, 0, "{text}");
+}

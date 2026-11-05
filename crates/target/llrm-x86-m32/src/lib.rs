@@ -93,6 +93,10 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // 22 sits on the O3 edge, zero margin). Owner x86-m32; exit 2026-12-10:
         // the estimate becomes gcc's own size count (translated, not fitted).
         recursive_edge_growth: Some((12, 22)),
+        // DEVIATE REC-2: the copies may add gcc's 450 at -O2 (fib 240256 -> 99687 clk,
+        // x_fib, frames), 150 at -O3 (rectwo, bintree, recchop are worse with 450; their
+        // O3 card is open). Owner x86-m32, exit 2026-11-20.
+        recursive_inlining_growth: Some((450, 150)),
         peel_folded_entry: true,
         sink_select_arms: true,
         // DEVIATE MEM-1 (the pin's `EmitTargetCodeForMemcpy`,
@@ -102,6 +106,9 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // its short copy loops were `call _memcpy`; inline, 72146 -> 66173 clk
         // (gcc 60026: row MEM-1-R1). Owner w2. Exit 2026-11-20.
         inline_variable_memcpy: true,
+        // DEVIATE REC5-1 (owner w2, exit 2026-11-20):
+        // see `Tuning::ipsccp_widen_keeps_sign`.
+        ipsccp_widen_keeps_sign: true,
         ..llrm_mir::target::Tuning::PIN
     }
 }
