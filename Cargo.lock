@@ -631,6 +631,7 @@ dependencies = [
  "llrm-hir",
  "llrm-mir",
  "llrm-object",
+ "llrm-omf",
  "llrm-qbruntime",
  "llrm-support",
  "llrm-target",

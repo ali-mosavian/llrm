@@ -50,6 +50,12 @@ impl Machine for M68kMachine {
         OperationCosts::default()
     }
 
+    /// Code bytes per operation at this CPU ([`crate::opcosts`]); clocks are
+    /// still one per operation.
+    fn size_costs(&self) -> OperationCosts {
+        crate::opcosts::size_costs(self.cpu).unwrap_or_else(|why| panic!("m68k operation sizes: {why}"))
+    }
+
     /// `d0`..`d7`, `a0`..`a5`.
     fn registers(&self) -> i64 {
         14

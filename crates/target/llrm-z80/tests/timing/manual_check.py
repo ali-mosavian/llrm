@@ -34,7 +34,9 @@ SECTION = {
     "and b": "AND s@AND r", "and n": "AND s@AND n", "or b": "OR s@OR r", "or n": "OR s@OR n", "xor b": "XOR s@XOR r",
     "xor n": "XOR s@XOR n", "cp b": "CP s@CP r", "cp n": "CP s@CP n", "cp (hl)": "CP s@CP (HL)",
     "sla b": "SLA m@SLA r", "sra b": "SRA m@SRA r", "srl b": "SRL m@SRL r", "rl b": "RL m@RL r", "rr b": "RR m@RR r",
-    "sla (hl)": "SLA m@SLA (HL)",
+    "sla (hl)": "SLA m@SLA (HL)", "ld sp;ix": "LD SP, IX", "sub (ix+d)": "SUB s@SUB (IX+d)",
+    "and (ix+d)": "AND s@AND (IX+d)", "or (ix+d)": "OR s@OR (IX+d)", "xor (ix+d)": "XOR s@XOR (IX+d)",
+    "cp (ix+d)": "CP s@CP (IX+d)", "dec (ix+d)": "DEC m@DEC (IX+d)", "add hl;sp": "ADD HL, ss", "add ix;sp": "ADD IX, pp",
 }
 
 
