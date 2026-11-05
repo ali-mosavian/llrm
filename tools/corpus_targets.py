@@ -50,6 +50,14 @@ def reason(source: str) -> str:
     return "n/a, DOS-only" if listed == ["dos"] else "n/a, targets: " + " ".join(listed)
 
 
+def expected_output(source: Path, target: str) -> Path:
+    """The file a program's output is compared with on TARGET: `NAME.FAMILY.out` (FAMILY: the target's first dash-field, `m68k`
+    for `m68k-68020`) where the target's ABI differs from the one `NAME.out` was written for, else `NAME.out`. Each override has a
+    one-line `NAME.FAMILY.why` saying which ABI fact differs; a byte-order difference is fixed in the source, not here."""
+    own = source.with_suffix(f".{target.split('-')[0]}.out")
+    return own if own.exists() else source.with_suffix(".out")
+
+
 def main(argv: list[str]) -> int:
     if len(argv) != 4 or argv[1] != "check":
         print("usage: corpus_targets.py check TARGET FILE.c", file=sys.stderr)

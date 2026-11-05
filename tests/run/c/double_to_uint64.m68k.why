@@ -1,0 +1,1 @@
+(u64)2^64 as a float is out of range (undefined in C): x86 fisttp gives 0, m68k soft-float saturates to -1 (gcc and ours agree); lines 23-24.
