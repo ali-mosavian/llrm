@@ -3137,6 +3137,29 @@ fn a_nest_with_loads_invariant_in_the_outer_loop_is_jammed_at_o3_m64() {
     assert!(tripled.count() >= 2, "{listing}");
 }
 
+/// fib at m64 -O2 was copied into itself to the 150 `gcc_insns` the pass allowed
+/// (25941 clocks, 556 B) where gcc's cap is 450 (10793 clocks, 1028 B); -O3 keeps 150
+/// (m32's rectwo and bintree are worse with 450 there).
+#[test]
+fn fib_is_copied_into_itself_to_gccs_growth_cap_at_o2_only_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i32 @fib(i32 %n) {\n\
+                  %c = icmp slt i32 %n, 2\n\
+                  br i1 %c, label %base, label %rec\n\
+                base:\n  ret i32 %n\n\
+                rec:\n\
+                  %a = sub i32 %n, 1\n  %x = call i32 @fib(i32 %a)\n\
+                  %b = sub i32 %n, 2\n  %y = call i32 @fib(i32 %b)\n\
+                  %r = add i32 %x, %y\n  ret i32 %r\n}\n";
+    let calls = |level: &str| {
+        let (built, _) = compiled(&flags(&["-m64", level, "--isel=dag"]), text, "fib").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap().matches("call fib").count()
+    };
+    let (o2, o3) = (calls("-O2"), calls("-O3"));
+    assert!(o2 > o3, "-O2 made {o2} calls of fib, -O3 {o3}");
+}
+
 /// A local declared `align 16` sat at `[rsp+4]`: the frame clamped every
 /// alignment to 4 (bintree's array; a 16-byte `movaps` clear of it would
 /// fault).
