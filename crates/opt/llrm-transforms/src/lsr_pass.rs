@@ -315,7 +315,9 @@ fn plan_loop(
         // cannot fold it: they save a compare, which that add outweighs
         // (wasm's copy epilog, jpeg_fixed `emit`).
         narrowed(se, &mut pin);
-        let (pin_solution, pin_cost) = pin.solve_with_cost(se);
+        // The same search again finds the same solution.
+        let (pin_solution, pin_cost) =
+            if lsr.same_search_as(&pin) { (solution.clone(), cost.clone()) } else { pin.solve_with_cost(se) };
         // A target with no register-plus-register address (wasm) pays an add
         // for each base added to the counter, and the code it adds outside the
         // loop must not outweigh the instructions it saves in it (nbody -O1:

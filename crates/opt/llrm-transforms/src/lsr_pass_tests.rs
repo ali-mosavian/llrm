@@ -1731,3 +1731,21 @@ fn a_loop_the_pin_makes_a_pointer_of_stays_one_when_end_biased_formulae_exist_in
     let after = reduced_real(QUEENS_INNER, &six_registers());
     assert!(after.contains("phi ptr"), "{after}");
 }
+
+/// The end-biased formulae narrowed away left the pin's space and ours the
+/// same, and the loop was searched twice for one answer (471 loops of
+/// memory_expansion, 137 M instructions).
+#[test]
+fn a_loop_whose_two_spaces_are_one_is_searched_once() {
+    let before = crate::lsr_solve::searches_run();
+    let after = reduced_real(SUM_OF_COUNTS, &six_registers());
+    assert_eq!(crate::lsr_solve::searches_run() - before, 1, "{after}");
+}
+
+/// The positive control: spaces that differ are searched both.
+#[test]
+fn a_loop_whose_two_spaces_differ_is_searched_twice() {
+    let before = crate::lsr_solve::searches_run();
+    let after = reduced_real(QUEENS_INNER, &six_registers());
+    assert_eq!(crate::lsr_solve::searches_run() - before, 2, "{after}");
+}

@@ -217,6 +217,7 @@ impl Collection<'_, '_> {
         &self,
         se: &mut ScalarEvolution,
     ) -> (Vec<usize>, Cost) {
+        SOLVED.with(|n| n.set(n.get() + 1));
         if llrm_support::debug::enabled("lsr-all") {
             self.trace_candidates(se);
         }
@@ -273,4 +274,14 @@ impl Collection<'_, '_> {
         }
         (solution, solution_cost)
     }
+}
+
+thread_local! {
+    static SOLVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread searched a loop's space, for a test that a loop
+/// whose two spaces are one is searched once.
+pub fn searches_run() -> usize {
+    SOLVED.with(std::cell::Cell::get)
 }

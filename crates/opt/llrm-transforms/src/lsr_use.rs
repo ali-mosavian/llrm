@@ -153,6 +153,24 @@ pub struct Use {
 }
 
 impl Use {
+    /// Whether `other` is the same to the solver: what `rate_formula` and the
+    /// search read of a use, the formulae in their order included.
+    pub fn same_to_solver(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.kind == other.kind
+            && self.access_ty == other.access_ty
+            && self.fixups == other.fixups
+            && self.min_offset == other.min_offset
+            && self.max_offset == other.max_offset
+            && self.all_fixups_outside_loop == other.all_fixups_outside_loop
+            && self.all_fixups_unconditional == other.all_fixups_unconditional
+            && self.rigid_formula == other.rigid_formula
+            && self.formulae == other.formulae
+            && self.regs.iter().eq(other.regs.iter())
+    }
+
     pub fn new(
         kind: Kind,
         access_ty: MemAccessTy,

@@ -500,6 +500,21 @@ pub struct Collection<'a, 'b> {
 }
 
 impl<'a, 'b> Collection<'a, 'b> {
+    /// Whether solving `other` is solving `self`: the search reads only the
+    /// uses, the baseline cost and the register pressure.
+    pub fn same_search_as(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.size == other.size
+            && self.hardware_loop_profitable == other.hardware_loop_profitable
+            && self.l == other.l
+            && self.baseline_cost == other.baseline_cost
+            && self.pressure_units() == other.pressure_units()
+            && self.uses.len() == other.uses.len()
+            && self.uses.iter().zip(&other.uses).all(|(one, two)| one.same_to_solver(two))
+    }
+
     /// The collection as it stands: the uses with their formulae, to be taken
     /// on from here two ways.
     pub fn fork(&self) -> Self {
