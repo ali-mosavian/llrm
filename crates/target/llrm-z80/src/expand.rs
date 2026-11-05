@@ -2072,6 +2072,22 @@ fn flag_and_b_free(text: &str) -> bool {
 /// the stack (the caller cleans up after it).
 fn tail_calls(function: &MFunction) -> MFunction {
     let mut function = function.clone();
+    // The frame is gone when the callee runs, so a local whose address was
+    // taken may be read by it; LLVM marks no such call `tail`.
+    let escapes = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .any(
+            |inst| inst.kind == Kind::Op("LEAFI")
+                && matches!(
+                    inst.operands.get(1),
+                    Some(Operand::Frame(index)) if function.locals.iter().any(|&(local, ..)| local == *index)
+                ),
+        );
+    if escapes {
+        return function;
+    }
     for block in &mut function.blocks {
         let insts = &block.insts;
         let n = insts.len();
@@ -2084,7 +2100,11 @@ fn tail_calls(function: &MFunction) -> MFunction {
             {
                 let symbol = insts[at].operands.first().cloned();
                 if let Some(symbol @ Operand::Symbol(..)) = symbol {
-                    let mut tail = Inst::new(Kind::Op("TAILCALL"), vec![symbol]);
+                    // the call's argument registers stay read: the copies that
+                    // fill them are not dead
+                    let mut operands = insts[at].operands.clone();
+                    operands[0] = symbol;
+                    let mut tail = Inst::new(Kind::Op("TAILCALL"), operands);
                     tail.terminator = true;
                     tail.barrier = true;
                     block.insts.truncate(at);
