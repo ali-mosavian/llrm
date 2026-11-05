@@ -6,6 +6,8 @@
 //! (m16 -Os 1983 B on main, 2568 B with the promotions, 2096 B with this).
 //! Exit: none while a spilled promoted value is not stored back where the
 //! allocator wants it.
+//! A target with no registers to spill into (wasm) states no limit
+//! (`Tti::licm_register_limit`).
 //!
 //! # How it works
 //! The loop's pressure is the invariant integer or pointer values its
@@ -45,7 +47,7 @@ impl Pressure {
     ) -> Option<Self> {
         #[cfg(test)]
         COUNTED.with(|count| count.set(count.get() + 1));
-        let limit = outer.target().tti()?.number_of_gpr_registers() as usize;
+        let limit = outer.target().tti()?.licm_register_limit()? as usize;
         if limit == 0 {
             return None;
         }

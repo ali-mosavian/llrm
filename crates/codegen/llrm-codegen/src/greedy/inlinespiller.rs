@@ -1006,18 +1006,15 @@ impl InlineSpiller<'_> {
     ) -> u32 {
         let reg = self.reg;
         let key = self.keys.get(&reg).copied().unwrap_or(self.original);
-        // An original of one value has one value wherever its siblings are live
-        // together: they overlap on that value, and share its slot as LLVM's do
+        // Every sibling shares the original's slot, whatever the original's
+        // values, as LLVM's do
         // (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/InlineSpiller.cpp#L1466,
         // `StackSlot = VRM.getStackSlot(Original)`).
-        let one_value = lis.has_interval(self.original) && lis.get_interval(self.original).range.contains_one_value();
         let clear = range.is_none_or(|range| {
             self.homed
                 .get(&key)
                 .is_none_or(
-                    |ranges| !ranges.iter().any(|(owner, one)| {
-                        *owner != reg && ((!one_value && one.overlaps(range)) || Self::meet_at_group(lis, one, range))
-                    }),
+                    |ranges| !ranges.iter().any(|(owner, one)| *owner != reg && Self::meet_at_group(lis, one, range)),
                 )
         });
         if clear { key } else { reg }
@@ -2545,11 +2542,12 @@ mod tests {
         assert_eq!(sibling_home(false).0, 1);
     }
 
-    /// An original defined twice may give two siblings two values, which one
-    /// cell cannot hold.
+    /// An original of two values shares its home too: the pin's slot is the
+    /// original's whatever its values, and an IV's reload took a second cell
+    /// (stft_single -O2: `mov si,[bp-2]; mov [bp-4],si`, one store a trip).
     #[test]
-    fn test_siblings_of_an_original_of_two_values_keep_homes_of_their_own() {
-        assert_eq!(sibling_home(true).0, 3);
+    fn test_siblings_of_an_original_of_two_values_share_its_home() {
+        assert_eq!(sibling_home(true).0, 1);
     }
 
     /// Two equal stores of one value, one in each arm of a diamond whose head

@@ -30,11 +30,11 @@
 //! inserted copies own no bytes of the input.
 //!
 //! DEVIATE TA-9 (owner x87, exit 2026-11-20): an x87 load that kills the source
-//! of a tied add goes above it before the `lea` is made (`rescheduleKillAboveMI`
-//! tried first for that kill only). The pin makes the `lea` and its pre-RA
-//! scheduler puts the load above it; the loads are in stack form here, which
-//! the scheduler treats as a boundary. A horner loop's `p -= 12` was `lea; fld
-//! [p]; mov p, q` a trip, now `fld [p]; add p, -12`.
+//! of a tied add goes above it before the `lea` is made
+//! (`rescheduleKillAboveMI` tried first for that kill only). The pin makes the
+//! `lea` and its pre-RA scheduler puts the load above it; the loads are in
+//! stack form here, which the scheduler treats as a boundary. A horner loop's
+//! `p -= 12` was `lea; fld [p]; mov p, q` a trip, now `fld [p]; add p, -12`.
 //!
 //! # Example
 //! The body of a counted loop, before and after. Update in place made `v4 :=
@@ -157,7 +157,9 @@ pub fn tied(
             }
             // `rescheduleMIBelowKill`: a tied instruction whose source dies in
             // a later reader goes below it.
-            if commuted.is_none() && walk.reschedule_mi_below_kill(&mut work, place, body.regs(), body.bits) {
+            if commuted.is_none()
+                && walk.reschedule_mi_below_kill(&mut work, place, body.regs(), body.bits, &flags_dead_out)
+            {
                 continue;
             }
             // DEVIATE TA-9 (exit 2026-11-20): an x87 load that kills the
@@ -931,6 +933,68 @@ mod tests {
             .collect();
         let last = adds.last().expect("an add");
         assert_eq!(last.sources, vec![held(9, 4), held(12, 4)], "the lea stays second: the sum is tied to (a+b)");
+    }
+
+    /// A `dec` of `n` with an `add` that kills `n` after it: both write the
+    /// flags and nothing reads them, so the pin moves the `dec` below the
+    /// `add` (`rescheduleMIBelowKill` crosses a dead EFLAGS def) and `n`
+    /// dies at the `dec`. Refusing any flags traffic made the `dec` an `lea`
+    /// and the `add` a commuted add: countdown at m64 grew 45 -> 48 B once
+    /// its `lea` was shared.
+    #[test]
+    fn test_a_dec_moves_below_the_add_that_kills_its_source_across_dead_flags() {
+        use llrm_lir::registers::RegId;
+        let nothing = |at: i64| {
+            let what = Semantics { name: Some("".into()), ..Semantics::new(Operation::Nothing) };
+            Insn::new(at, Some((at, at)), Some(what), vec![], vec![])
+        };
+        let mut arrival = nothing(0);
+        arrival.defines = vec![1, 3];
+        arrival.delivers = vec![
+            (Held { value: 1, width: 4, offset: 0 }, RegId::EAX),
+            (Held { value: 3, width: 4, offset: 0 }, RegId::EDX),
+        ];
+        let dec = {
+            let what = Semantics {
+                name: Some("dec".into()),
+                dests: vec![held(4, 4)],
+                sources: vec![held(1, 4)],
+                ..Semantics::new(Operation::Unary)
+            };
+            Arc::new(Insn::new(1, Some((1, 1)), Some(what), vec![4], vec![1]))
+        };
+        let mut ret = nothing(5);
+        ret.requires = vec![(Held { value: 9, width: 4, offset: 0 }, RegId::EAX)];
+        ret.uses = vec![9];
+        let input = LirBody::new(
+            "countdown",
+            0,
+            vec![
+                LirBlock::new(
+                    0,
+                    vec![
+                        Arc::new(arrival),
+                        dec,
+                        sum_into(2, 5, 3, 1),
+                        sum_into(3, 8, 5, 3),
+                        sum_into(4, 9, 8, 4),
+                        Arc::new(ret),
+                    ],
+                )
+                .into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let got = tied(&input, All);
+        let named = |name: &str| {
+            got.insns()
+                .iter()
+                .filter_map(|one| one.what.as_ref())
+                .filter(|what| what.name.as_deref() == Some(name))
+                .count()
+        };
+        assert_eq!(named("dec"), 1, "the dec stays a dec, after the add");
     }
 
     /// LNGMXX copied its accumulator out and back each iteration to preserve

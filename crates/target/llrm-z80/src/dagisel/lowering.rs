@@ -224,6 +224,7 @@ impl Hooks for Z80Lowering {
                 split: false,
                 variadic: false,
                 sret: true,
+                byval: None,
             });
         }
         for &value in args {
@@ -253,6 +254,7 @@ impl Hooks for Z80Lowering {
                 split,
                 variadic: false,
                 sret: false,
+                byval: None,
             }));
         }
         let part_vt = if ret == EVT::I32 { EVT::I16 } else { ret };
@@ -260,7 +262,7 @@ impl Hooks for Z80Lowering {
             EVT::I64 => Vec::new(),
             _ => {
                 vec![
-                    In { vt: part_vt, pointer: false, arg_vt: ret, split: ret == EVT::I32, sret: false, ext: Ext::Any };
+                    In { vt: part_vt, pointer: false, arg_vt: ret, split: ret == EVT::I32, sret: false, ext: Ext::Any, byval: None };
                     if ret == EVT::I32 { 2 } else { 1 }
                 ]
             }
