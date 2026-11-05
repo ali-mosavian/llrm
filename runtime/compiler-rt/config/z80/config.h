@@ -16,4 +16,6 @@ static inline void sf_z80_mul32x32(uint32_t a, uint32_t b, uint32_t *hi, uint32_
     *hi = hh + (lh >> 16) + (hl >> 16) + (mid >> 16);
 }
 #define SF_MUL32X32 sf_z80_mul32x32
+/* The 57-step restoring loop of the f64 divide as a Z80 routine over fixed cells (config/z80/div64.s): the compiled loop costs ~3.0k clk per step. */
+#define SF_DIV64_Z80 1
 #endif
