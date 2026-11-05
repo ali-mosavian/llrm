@@ -250,6 +250,12 @@ pub struct DagConfig {
     /// (`FP_EVAL`): a constant operation folds only where its result is exact,
     /// as the IR's folder does.
     pub fp_extended: bool,
+    /// Scalar floats live on the x87 register stack: a stored value read back
+    /// is not forwarded to the load, since the load's other readers would
+    /// share one stack input. The default is x86's. DEVIATE: the pin forwards
+    /// on x86 too; x87 selection cannot yet share a stack input. Exit: x87
+    /// stack allocation, owner llrm-target-x87.
+    pub fp_stack: bool,
     /// `computeKnownBitsForTargetNode`: what the target knows of one of its
     /// nodes, given the known bits of operand `n`; `None` for a node it
     /// says nothing about.
@@ -299,6 +305,7 @@ impl Default for DagConfig {
             div_prices: None,
             sdiv_pow2_stays: false,
             fp_extended: false,
+            fp_stack: true,
             known_bits_for_target_node: None,
             big_endian: false,
             fma_faster: false,
