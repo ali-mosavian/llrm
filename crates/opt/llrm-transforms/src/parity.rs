@@ -348,6 +348,8 @@ pub(crate) const REGISTRY: &[Entry] = &[
     // Runs in the strength slot,
     // before `lsr`: `canonfreeze::CanonicalizeFreezeInLoops`.
     entry("canonfreeze", Module, "canon-freeze", Translated, ""),
+    // Runs in the strength slot, after `lsr`: `hardwareloops::HardwareLoops`.
+    entry("hardwareloops", Module, "hardware-loops", Translated, ""),
     entry("rotate@728", Simplify, "loop-rotate<header-duplication>", Translated, ""),
     partial(
         "indvars@753",

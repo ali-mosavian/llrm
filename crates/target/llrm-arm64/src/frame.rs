@@ -42,6 +42,8 @@ struct Layout {
     /// The register pairs saved and the frame record, lowest address first.
     saves: Vec<(Save, u64)>,
     frame_record: Option<u64>,
+    /// The bytes of the frame below the saved registers (the locals).
+    locals: u64,
 }
 
 /// One store of the callee-saved area: the register at the lower address
@@ -277,7 +279,7 @@ fn layout(
         saves.push((save, at));
     }
     saves.reverse();
-    Layout { size: locals_end + area, dynamic: function.dynamic, slots, saves, frame_record }
+    Layout { size: locals_end + area, dynamic: function.dynamic, slots, saves, frame_record, locals: locals_end }
 }
 
 impl Layout {
@@ -287,6 +289,16 @@ impl Layout {
     fn folded_bump(&self) -> Option<i64> {
         let first = self.saves.first().map(|(_, at)| *at).or(self.frame_record)?;
         (first == 0 && self.size <= 512).then_some(self.size as i64)
+    }
+
+    /// The locals' bytes where the saved registers are pushed first and the
+    /// locals taken after, as the pin when `CombineSPBump` is off
+    /// (`shouldCombineCSRLocalStackBump`: a frame of 512 bytes or more).
+    /// DEVIATE FS1: a frame with a moving stack pointer stays combined (the
+    /// pin does not combine it either). Exit: 11-12.
+    fn split_locals(&self) -> Option<u64> {
+        let saved = !self.saves.is_empty() || self.frame_record.is_some();
+        (saved && !self.dynamic && self.locals > 0 && self.size >= 512).then_some(self.locals)
     }
 
     /// The register and the offset from it that address byte `offset` of frame
@@ -522,17 +534,37 @@ fn prologue(
     frame: &Layout,
     emitter: &mut Emitter,
 ) {
+    if let Some(locals) = frame.split_locals() {
+        // The saved registers first, the locals after them.
+        let area = (frame.size - locals) as i64;
+        save_registers(frame, emitter, true, Some(area), locals);
+        if let Some(at) = frame.frame_record {
+            emitter.add_to(Gpr::FP, Gpr::R31, false, at - locals, Gpr(16));
+            emitter.cfi(Cfi::DefCfa { register: unwind::FP, offset: (frame.size - at) as i64 });
+        }
+        flush_saved(emitter);
+        emitter.adjust_sp(-(locals as i64));
+        if frame.frame_record.is_none() {
+            emitter.cfi(Cfi::DefCfaOffset { offset: frame.size as i64 });
+        }
+        return;
+    }
     let bump = frame.folded_bump();
     if bump.is_none() && frame.size > 0 {
         emitter.adjust_sp(-(frame.size as i64));
         emitter.cfi(Cfi::DefCfaOffset { offset: frame.size as i64 });
     }
-    save_registers(frame, emitter, true, bump);
+    save_registers(frame, emitter, true, bump, 0);
     if let Some(at) = frame.frame_record {
         emitter.add_to(Gpr::FP, Gpr::R31, false, at, Gpr(16));
         emitter.cfi(Cfi::DefCfa { register: unwind::FP, offset: (frame.size - at) as i64 });
     }
-    // Highest address first: the order of the pin's frame indices.
+    flush_saved(emitter);
+}
+
+/// The saves' `.cfi_offset`s, highest address first: the order of the pin's
+/// frame indices.
+fn flush_saved(emitter: &mut Emitter) {
     let mut saved = std::mem::take(&mut emitter.saved);
     saved.sort_by_key(|cfi| match cfi {
         Cfi::Offset { offset, .. } => std::cmp::Reverse(*offset),
@@ -563,13 +595,25 @@ fn take_down(
     if let (true, Some(record)) = (frame.dynamic, frame.frame_record) {
         emitter.add_to(Gpr::R31, Gpr::FP, true, record, Gpr(16));
     }
+    if let Some(locals) = frame.split_locals() {
+        // The locals first, then the registers pushed ahead of them.
+        emitter.adjust_sp(locals as i64);
+        let area = (frame.size - locals) as i64;
+        if frame.frame_record.is_some() {
+            emitter.cfi(Cfi::DefCfa { register: unwind::SP, offset: area });
+        } else {
+            emitter.cfi(Cfi::DefCfaOffset { offset: area });
+        }
+        save_registers(frame, emitter, false, Some(area), locals);
+        return;
+    }
     // The frame address is the stack pointer's again, before the registers
     // come back from under it.
     if frame.frame_record.is_some() {
         emitter.cfi(Cfi::DefCfa { register: unwind::SP, offset: frame.size as i64 });
     }
     let bump = frame.folded_bump();
-    save_registers(frame, emitter, false, bump);
+    save_registers(frame, emitter, false, bump, 0);
     if bump.is_none() && frame.size > 0 {
         emitter.adjust_sp(frame.size as i64);
         emitter.cfi(Cfi::DefCfaOffset { offset: 0 });
@@ -582,6 +626,7 @@ fn save_registers(
     emitter: &mut Emitter,
     store: bool,
     bump: Option<i64>,
+    below: u64,
 ) {
     let int = |reg: Gpr| Memory::Int { width: Width::X, bytes: 8, sign: false, reg };
     let mut accesses: Vec<(Memory, Option<Memory>, u64, i64)> = Vec::new();
@@ -600,7 +645,10 @@ fn save_registers(
     if !store {
         accesses.reverse();
     }
-    for (first, second, offset, _) in accesses {
+    for (first, second, absolute, _) in accesses {
+        // From the stack pointer as it stands: `below` bytes of locals are not
+        // taken yet where the registers go first.
+        let offset = absolute - below;
         let moves = bump.filter(|_| offset == 0);
         let addr = match moves {
             Some(by) if store => Addr::Pre { base: Gpr::R31, imm: -by },
@@ -615,7 +663,7 @@ fn save_registers(
                 (None, false) => Inst::Load { mem: first, addr, mmo: MemOperand::default() },
             };
             emitter.insts.push(inst);
-            declare(frame, emitter, store, &first, second.as_ref(), offset, true);
+            declare(frame, emitter, store, &first, second.as_ref(), absolute, bump.filter(|_| moves.is_some()));
             continue;
         }
         // A pair reaches 504 bytes from the base; further, the address is made.
@@ -634,7 +682,7 @@ fn save_registers(
             (None, false) => Inst::Load { mem: first, addr, mmo: MemOperand::default() },
         };
         emitter.insts.push(inst);
-        declare(frame, emitter, store, &first, second.as_ref(), offset, false);
+        declare(frame, emitter, store, &first, second.as_ref(), absolute, None);
     }
 }
 
@@ -648,15 +696,16 @@ fn declare(
     first: &Memory,
     second: Option<&Memory>,
     offset: u64,
-    moves: bool,
+    moves: Option<i64>,
 ) {
     let number = |memory: &Memory| match memory {
         Memory::Int { reg, .. } => reg.0 as u16,
         Memory::Fp { reg, .. } => 64 + reg.0 as u16,
     };
     let size = frame.size as i64;
-    if store && moves {
-        emitter.cfi(Cfi::DefCfaOffset { offset: size });
+    if let (true, Some(by)) = (store, moves) {
+        // The bytes the stack pointer has moved by this far.
+        emitter.cfi(Cfi::DefCfaOffset { offset: by });
     }
     for (index, memory) in std::iter::once(first).chain(second).enumerate() {
         let register = number(memory);
@@ -666,7 +715,7 @@ fn declare(
             emitter.cfi(Cfi::Restore { register });
         }
     }
-    if !store && moves {
+    if !store && moves.is_some() {
         emitter.cfi(Cfi::DefCfaOffset { offset: 0 });
     }
 }

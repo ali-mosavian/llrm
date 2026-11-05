@@ -16,6 +16,7 @@ import os
 import re
 import sys
 import functools
+import hashlib
 import json
 import math
 import shutil
@@ -1048,6 +1049,29 @@ def base_rows(args, names: list[str] | None = None) -> tuple[dict, set[str], str
     return base, same, base_sha
 
 
+def source_digests(names: list[str]) -> dict[str, str]:
+    """md5 of each program's sources (not its expected.toml or .out), so two runs say whether they measured the same programs."""
+    out = {}
+    for one in benchmarks(set(names)):
+        parts = sorted(f for f in one.iterdir() if f.is_file() and f.name != "expected.toml" and f.suffix != ".out")
+        out[directory_name(one)] = hashlib.md5(b"".join(f.name.encode() + f.read_bytes() for f in parts)).hexdigest()
+    return out
+
+
+def compare_runs(first: Path, second: Path, allow_source_diff: bool = False) -> int:
+    """Exit 1, naming the programs, when two --json runs measured different sources: an A/B across them compares the sources, not the compilers."""
+    sides = [json.loads(path.with_name(path.name + ".sources").read_text()) if path.with_name(path.name + ".sources").exists() else None for path in (first, second)]
+    if None in sides:
+        print("REFUSED: a run carries no .sources digest; measure it again")
+        return 1
+    differ = sorted(name for name in sides[0].keys() & sides[1].keys() if sides[0][name] != sides[1][name])
+    if differ and not allow_source_diff:
+        print(f"REFUSED: {len(differ)} programs measured from different sources: {' '.join(differ)}")
+        return 1
+    print(f"SAME SOURCES {len(sides[0].keys() & sides[1].keys()) - len(differ)} programs")
+    return 0
+
+
 def compare_baselines(first: Path, second: Path) -> int:
     """Exit 1, naming the cells, when two runs of one compiler disagree: a baseline that two runs do not reproduce judges nothing."""
     one, two = (basecounts.rows_of(json.loads(path.read_text())) for path in (first, second))
@@ -1163,12 +1187,16 @@ def main() -> int:
     parser.add_argument("--record", action="store_true", help="measure the head and keep its counts as the base of the next pull requests (a main push); no base, no judging")
     parser.add_argument("--shard", metavar="I/N", help="only shard I of N of the benchmarks (shards.toml), judged alone; --json then writes shard-I.json for --merge. `base` or `base:I/N`: the base's counts, all or slice I, in base.json or base-I.json")
     parser.add_argument("--merge", nargs=2, metavar=("DIR", "N"), help="judge nothing: print the verdict of the N shard-*.json in DIR (add --record on a main push)")
+    parser.add_argument("--compare-runs", nargs=2, type=Path, metavar=("A", "B"), help="refuse (exit 1, programs named) when two --json runs measured different program sources, unless --allow-source-diff")
+    parser.add_argument("--allow-source-diff", action="store_true")
     parser.add_argument("--compare-baselines", nargs=2, type=Path, metavar=("A", "B"), help="judge nothing: refuse (exit 1, cells named) when two --json runs of one compiler differ in any count")
     parser.add_argument("--json", type=Path)
     parser.add_argument("--work", type=Path, default=llrmbin.target_dir() / "bench")
     args = parser.parse_args()
     global ONLY
     ONLY = args.lang
+    if args.compare_runs:
+        return compare_runs(*args.compare_runs, args.allow_source_diff)
     if args.compare_baselines:
         return compare_baselines(*args.compare_baselines)
     if args.merge:
@@ -1196,6 +1224,13 @@ def main() -> int:
     if args.json and not args.shard:
         args.json.write_text(json.dumps({"/".join(key): value for key, value in measured.items()}, indent=1))
         args.json.with_name(args.json.name + ".harness").write_text(basecounts.harness_digest() + "\n")
+        args.json.with_name(args.json.name + ".sources").write_text(json.dumps(source_digests(sorted({key[0] for key in measured})), indent=1) + "\n")
+        import stamp
+
+        # Each compiler's build commit and md5 beside the counts; with LLRM_EXPECT_SHA named, one built from a commit that is not its ancestor is refused.
+        expect = os.environ.get("LLRM_EXPECT_SHA")
+        recorded = stamp.require_ancestor(BIN, expect, ROOT) if expect else stamp.dist_stamps(BIN)
+        args.json.with_name(args.json.name + ".provenance").write_text(json.dumps({name: {"sha": sha, "md5": md5} for name, (sha, md5) in recorded.items()}, indent=1) + "\n")
     print("HARNESS", basecounts.harness_digest())
     unbuilt = [f"{'/'.join(key)}: {value['error']}" for key, value in measured.items() if "error" in value and not value["error"].startswith("skipped: ")]
     if unbuilt and (args.record or args.no_judge):  # a base or leg with cells that did not build is no base: say how many, exit nonzero

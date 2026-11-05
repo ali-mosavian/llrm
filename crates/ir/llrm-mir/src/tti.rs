@@ -307,6 +307,61 @@ pub struct MemCmpExpansionOptions {
     pub allowed_tail_expansions: Vec<u32>,
 }
 
+/// The fields of `HardwareLoopInfo` a target sets in
+/// `isHardwareLoopProfitable`; the pass keeps the rest (the exit block, branch
+/// and count it finds).
+///
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/TargetTransformInfo.h#L104>
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HardwareLoopTarget {
+    /// `CountType`'s width: the pin's default is 32
+    /// (`hardware-loop-counter-bitwidth`).
+    pub count_bits: u32,
+    /// `LoopDecrement`: what `llvm.loop.decrement` takes off the counter.
+    pub loop_decrement: u64,
+    /// `IsNestingLegal`: a loop inside another may be a hardware loop.
+    pub is_nesting_legal: bool,
+    /// `CounterInReg`: the counter is a register value carried round the loop
+    /// by a phi (`loop.decrement.reg`), not state the target keeps.
+    pub counter_in_reg: bool,
+    /// `PerformEntryTest`: the loop's entry guard may be folded into the
+    /// counter's set (`test.set.loop.iterations`).
+    pub perform_entry_test: bool,
+}
+
+impl Default for HardwareLoopTarget {
+    /// `HardwareLoopInfo(L)`'s defaults.
+    fn default() -> Self {
+        HardwareLoopTarget {
+            count_bits: 32,
+            loop_decrement: 1,
+            is_nesting_legal: false,
+            counter_in_reg: false,
+            perform_entry_test: false,
+        }
+    }
+}
+
+/// An argument of a call, as the call sequence sees it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CallArgument {
+    /// The value's type; none for an aggregate or a vector.
+    pub ty: Option<Ty>,
+    /// The bytes copied onto the stack, for a `byval` argument.
+    pub byval_bytes: Option<u64>,
+}
+
+/// A call site: its arguments and the static frame its callee builds.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CallShape {
+    pub arguments: Vec<CallArgument>,
+    /// The bytes of the callee's static allocas.
+    pub callee_frame_bytes: u64,
+    /// The bytes of the caller's static allocas: a caller with none has no
+    /// frame, and an inlined callee's moves into it instead of vanishing.
+    pub caller_frame_bytes: u64,
+}
+
 /// The target a cost is for.
 pub trait Tti {
     /// The implementation's name, for what reports which target priced a
@@ -364,6 +419,34 @@ pub trait Tti {
     /// arguments (SZ1). The pin's `OptSizeThreshold` 50 allows growth.
     fn opt_size_inline_by_code_size(&self) -> bool {
         false
+    }
+
+    /// What one call costs the caller and the callee together, in `kind`:
+    /// the call and return, the arguments' setup (a by-value copy, a push
+    /// past the argument registers), and the frame the callee builds and tears
+    /// down. Inlining removes all of it, so the inliner's size and rate bounds
+    /// read it in place of the call instruction's flat price. None: the pin's
+    /// flat price (the call as one instruction and one per argument).
+    fn call_sequence_cost(
+        &self,
+        shape: &CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        let _ = (shape, kind);
+        None
+    }
+
+    /// What building and tearing down the callee's frame costs in `kind`,
+    /// once per call executed. Inlining removes it from the callee, which then
+    /// stays or dies: in bytes it is saved once, when the callee dies, and
+    /// only where the caller already has a frame. None: no frame term.
+    fn callee_frame_cost(
+        &self,
+        shape: &CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        let _ = (shape, kind);
+        None
     }
 
     /// What a byte of growth is worth, in thousandths of a clock, to a speed
@@ -562,6 +645,17 @@ pub trait Tti {
     /// 50.
     fn unswitch_threshold_override(&self) -> Option<i64> {
         None
+    }
+
+    /// `isHardwareLoopProfitable`: whether the target counts loops in hardware
+    /// (`djnz`, `dbra`, `loop`), and how, in `info`. The hook sees no loop
+    /// yet: no target reads one (DEVIATE 3 of `hardwareloops`). Off by
+    /// default; the pass does not run for a target that says no.
+    fn is_hardware_loop_profitable(
+        &self,
+        _info: &mut HardwareLoopTarget,
+    ) -> bool {
+        false
     }
 
     /// `getUnrollingPreferences` given the loop's shape, which targets read

@@ -577,6 +577,50 @@ fn shifted(
     (live || folds).then_some((shl, x, scaled))
 }
 
+/// `isNoopAddrSpaceCast(from, to)`: the two spaces hold the same bits as the
+/// same stable integers (x86: both below 256), so the cast changes the type
+/// and nothing else.
+fn noop_cast(
+    unit: &passes::Unit,
+    cast: InstId,
+) -> bool {
+    let instruction = unit.function.instruction(cast);
+    let space_of = |ty: Option<TypeId>| match ty.map(|ty| unit.context.types.get(ty).clone()) {
+        Some(Type::Pointer(space)) => Some(space),
+        _ => None,
+    };
+    let from = space_of(unit.function.operand_type(unit.context, instruction.operands[0]));
+    let to = space_of(instruction.result.map(|result| unit.function.value(result).ty));
+    let (Some(from), Some(to)) = (from, to) else { return false };
+    let (from, to) = (unit.layout.pointer(from), unit.layout.pointer(to));
+    from.bits == to.bits && from.index_bits == to.index_bits && !from.unstable && !to.unstable
+}
+
+/// The address-space cast `cast` read as a mode: that of its operand, and the
+/// cast itself among the instructions the mode replaces when it is
+/// `isProfitableToFoldIntoAddressingMode` (read once, or only by addresses).
+fn through_cast(
+    unit: &passes::Unit,
+    tti: &dyn Tti,
+    space: u32,
+    block: BlockId,
+    bytes: u64,
+    cast: InstId,
+    depth: u32,
+) -> Option<Mode> {
+    if !noop_cast(unit, cast) {
+        return None;
+    }
+    let instruction = unit.function.instruction(cast);
+    let result = instruction.result?;
+    if unit.function.users(result).iter().count() != 1 && !crate::spill::address_only(unit.function, result, DEPTH) {
+        return None;
+    }
+    let mut inner = matched(unit, tti, space, block, bytes, instruction.operands[0], depth);
+    inner.insts.push(cast);
+    Some(inner)
+}
+
 /// `matchAddr`: `address` read as a mode, `depth` more `gep`s allowed.
 fn matched(
     unit: &passes::Unit,
@@ -591,6 +635,13 @@ fn matched(
     let Operand::Value(value) = address else { return plain() };
     let ValueDef::Instruction(gep) = unit.function.value(value).def else { return plain() };
     let instruction = unit.function.instruction(gep);
+    // `matchOperationAddr`, `Instruction::AddrSpaceCast`
+    // ([L5244](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/CodeGenPrepare.cpp#L5244)):
+    // a cast between spaces that share their representation is the address
+    // of its operand, at the same depth.
+    if instruction.opcode == Opcode::Cast(CastOp::AddrSpaceCast) {
+        return through_cast(unit, tti, space, block, bytes, gep, depth).unwrap_or_else(plain);
+    }
     let Opcode::GetElementPtr { source } = instruction.opcode else { return plain() };
     if depth == 0 {
         return plain();
@@ -711,7 +762,8 @@ fn sunk(
         let ready = match made.get(&(block, address)) {
             Some(&ready) => ready,
             None => {
-                let ready = remade(unit, access, space, &mode);
+                let wanted = unit.function.operand_type(unit.context, address).expect("a typed address");
+                let ready = remade(unit, access, space, &mode, wanted);
                 made.insert((block, address), ready);
                 ready
             }
@@ -813,6 +865,7 @@ fn remade(
     access: InstId,
     space: u32,
     mode: &Mode,
+    wanted: TypeId,
 ) -> Operand {
     let bits = unit.layout.pointer(space).index_bits;
     let pointer = unit.function.operand_type(unit.context, mode.base).expect("a typed base");
@@ -853,6 +906,11 @@ fn remade(
     if mode.offset != 0 {
         let constant = counting::constant(unit.context, &BigInt::from(mode.offset), bits);
         current = put(unit, Opcode::GetElementPtr { source: i8 }, pointer, vec![current, constant]);
+    }
+    // `CreatePointerBitCastOrAddrSpaceCast(SunkAddr, Addr->getType())`: the
+    // mode's base is in the space it was read through, not the access's.
+    if unit.function.operand_type(unit.context, current) != Some(wanted) {
+        current = put(unit, Opcode::Cast(CastOp::AddrSpaceCast), wanted, vec![current]);
     }
     current
 }

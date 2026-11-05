@@ -95,8 +95,9 @@ fn content(op: &Op) -> i64 {
     use std::hash::{Hash, Hasher};
     let mut blank = op.clone();
     blank.visit(&mut |register, _| match register {
-        RegRef::Gpr(register) => *register = Gpr(0),
-        RegRef::Fpr(register) => *register = Vreg(0),
+        RegRef::Gpr(register) if register.is_virtual() => *register = Gpr(Gpr::FIRST_VIRTUAL),
+        RegRef::Fpr(register) if register.is_virtual() => *register = Vreg(Gpr::FIRST_VIRTUAL),
+        _ => {}
     });
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     format!("{blank:?}").hash(&mut hasher);
@@ -724,5 +725,16 @@ mod tests {
         assert_eq!(copy.operands[1], Operand::Use(LirReg::Phys(crate::reg::V0)));
         assert_eq!(from_lir(LirReg::Phys(crate::reg::X5), Class::Gpr), Reg::Gpr(Gpr(5)));
         assert_eq!(from_lir(LirReg::Phys(crate::reg::V3), Class::Fpr), Reg::Fpr(Vreg(3)));
+    }
+
+    /// An `Imm 1` into the fixed `w0` and one into a virtual register had one
+    /// content (every register blanked to 0): the allocator took the fixed one
+    /// as the template of the other, and jpeg -Os read `w10` that `movz w0`
+    /// had been emitted for (a wrong checksum).
+    #[test]
+    fn a_fixed_register_and_a_virtual_one_do_not_share_content() {
+        let into = |dst| Op::Imm { dst: Gpr(dst), bits: 32, value: 1 };
+        assert_ne!(content(&into(0)), content(&into(Gpr::FIRST_VIRTUAL + 7)));
+        assert_eq!(content(&into(Gpr::FIRST_VIRTUAL + 1)), content(&into(Gpr::FIRST_VIRTUAL + 7)));
     }
 }

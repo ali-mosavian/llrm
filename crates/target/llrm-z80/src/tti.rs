@@ -299,6 +299,92 @@ impl Tti for Z80Tti {
         250
     }
 
+    /// The call with what surrounds it, which inlining removes: `call nn` and
+    /// `ret`; the first three word arguments in HL, DE and BC (`ld rr,nn`, the
+    /// dearer of a constant and a move), a byte in a register (`ld r,n`), the
+    /// rest `push` and the `pop` that takes them back; a `byval` argument
+    /// copied by `ldir`; and the callee's frame, `push ix; ld ix,#0; add ix,sp`
+    /// and its undoing, with a `push` a word of locals (a frame over 6 B is
+    /// `ld iy,#-n; add iy,sp; ld sp,iy`).
+    ///
+    /// DEVIATE: the values live across the call (every register is
+    /// caller-saved, so each costs a spill and a reload, 6 B / 38 T) and the
+    /// frame the callee's own spills make are not here: the inliner does not
+    /// know them before allocation. Exit: none; the estimate is the floor.
+    /// `ld sp,ix` and `ld iy,nn` are priced as `ld sp,hl` and `ld ix,nn`: the
+    /// table has no form for them.
+    fn call_sequence_cost(
+        &self,
+        shape: &CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        let (mut bytes, mut clocks) = sum(&["call nn", "ret"]);
+        let mut registers = 0;
+        for argument in &shape.arguments {
+            let words = match argument.ty {
+                Some(Ty::Int(bits)) if bits <= 8 => 0,
+                Some(Ty::Int(bits)) => i64::from(bits.div_ceil(16)),
+                Some(ty) => self.parts(ty),
+                None => 1,
+            };
+            if let Some(copied) = argument.byval_bytes {
+                // `ld hl,src; ld de,dst; ld bc,n; ldir`: 21 T a byte
+                let (b, c) = sum(&["ld hl;nn", "ld hl;nn", "ld bc;nn", "ldir"]);
+                bytes += b;
+                clocks += c + 21 * (copied as i64 - 1);
+            } else if words == 0 {
+                let (b, c) = sum(&["ld b;n"]);
+                bytes += b;
+                clocks += c;
+            } else {
+                for _ in 0..words {
+                    let form = if registers < 3 { &["ld bc;nn"][..] } else { &["push bc", "pop bc"][..] };
+                    registers += 1;
+                    let (b, c) = sum(form);
+                    bytes += b;
+                    clocks += c;
+                }
+            }
+        }
+        Some(Cost::of(match kind {
+            CostKind::CodeSize => bytes,
+            _ => (clocks + 3) / 4,
+        }))
+    }
+
+    /// The callee's frame: `push ix; ld ix,#0; add ix,sp` and its undoing, with
+    /// a `push` a word of locals (a frame over 6 B is `ld iy,#-n; add iy,sp;
+    /// ld sp,iy`). `ld sp,ix` and `ld iy,nn` are priced as `ld sp,hl` and
+    /// `ld ix,nn`: the table has no form for them.
+    fn callee_frame_cost(
+        &self,
+        shape: &CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        if shape.callee_frame_bytes == 0 {
+            return None;
+        }
+        let (mut bytes, mut clocks) = (0, 0);
+        let frame: &[&str] = if shape.callee_frame_bytes > 6 {
+            &["push ix", "ld ix;nn", "add ix;bc", "ld ix;nn", "add ix;bc", "ld sp;hl", "ld sp;hl", "pop ix"]
+        } else {
+            &["push ix", "ld ix;nn", "add ix;bc", "ld sp;hl", "pop ix"]
+        };
+        let (b, c) = sum(frame);
+        bytes += b;
+        clocks += c;
+        if shape.callee_frame_bytes <= 6 {
+            let (b, c) = sum(&["push bc"]);
+            let words = (shape.callee_frame_bytes as i64 + 1) / 2;
+            bytes += b * words;
+            clocks += c * words;
+        }
+        Some(Cost::of(match kind {
+            CostKind::CodeSize => bytes,
+            _ => (clocks + 3) / 4,
+        }))
+    }
+
     // There is no conditional move: a `select` is a branch on the Z80.
     fn has_cmov(&self) -> bool {
         false

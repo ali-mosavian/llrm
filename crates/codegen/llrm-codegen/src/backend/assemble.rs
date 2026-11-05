@@ -93,6 +93,22 @@ use crate::model::ir::{Addr, AddressRef, Loc, Semantics, Space};
 use crate::model::lir::LirBody;
 use crate::support::hash::IndexMap;
 
+/// `kept` and the freed frame register `freed`, in the order of the
+/// convention's whole callee-saved list `order` (the frame register's place in
+/// it included); `freed` last where the list does not name it.
+fn in_list_order(
+    order: &[(RegId, RegId)],
+    mut kept: Vec<(RegId, RegId)>,
+    freed: (RegId, RegId),
+) -> Vec<(RegId, RegId)> {
+    kept.push(freed);
+    let mut sorted: Vec<(RegId, RegId)> = order.iter().copied().filter(|one| kept.contains(one)).collect();
+    if !sorted.contains(&freed) {
+        sorted.push(freed);
+    }
+    sorted
+}
+
 /// What only the frontend knows: each call's contract, and the symbol each
 /// MIR name links as.
 pub trait Abi {
@@ -1174,7 +1190,8 @@ fn staged(
         std::sync::Arc::make_mut(&mut body.call_pops).extend(open.into_iter().map(|at| (at, 0)));
     }
     // Win64's xmm6-15 are kept too, but saved into the frame, not pushed.
-    let (vector_saved, pushed): (Vec<_>, Vec<_>) = convention.saved.iter().copied().partition(|(whole, _)| whole.is_xmm());
+    let (vector_saved, pushed): (Vec<_>, Vec<_>) =
+        convention.saved.iter().copied().partition(|(whole, _)| whole.is_xmm());
     let entry = module
         .named(name)
         .and_then(|id| module.global(id).function())
@@ -1237,7 +1254,18 @@ fn staged(
         registers.free = true;
         // Saved as any kept register is: its root, and the register a prologue
         // pushes.
-        registers.saved.push((body.regs().root(registers.pointer), registers.pointer));
+        let freed = (body.regs().root(registers.pointer), registers.pointer);
+        match entry {
+            // At its place in the convention's list, as the pin's callee-saved
+            // order has it (Win64 lists RBP second, System V last).
+            Some(entry) => {
+                let mut open = entry.clone();
+                open.frame = String::new();
+                let order = target.arch.convention_callee_saved(&open);
+                registers.saved = in_list_order(&order, std::mem::take(&mut registers.saved), freed);
+            }
+            None => registers.saved.push(freed),
+        }
         Rc::new(target.classes.with_frame_free())
     } else {
         Rc::clone(target.classes)
@@ -1383,6 +1411,18 @@ fn phased(
         }
         None => (body, None),
     };
+    // The widest alignment of an object of the frame: an alloca's, or a spill
+    // slot's as its width up to the slot cap.
+    let object_align = frame
+        .capacities
+        .values()
+        .filter(|&&size| size > 0)
+        .map(|&size| (1i64 << size.ilog2()).min(frame.align))
+        .chain([frame.alloca_align])
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let body = LirBody { object_align, ..body };
     Ok((
         Machined {
             body,
@@ -1419,4 +1459,25 @@ fn landed_last(
     let at = pad.at;
     blocks.push(pad);
     Ok((body.with_blocks(blocks), at))
+}
+
+#[cfg(test)]
+mod saved_order_tests {
+    use llrm_lir::registers::RegId;
+
+    use super::in_list_order;
+
+    fn pair(number: u8) -> (RegId, RegId) {
+        (RegId::from_raw(number), RegId::from_raw(number))
+    }
+
+    /// A freed frame register was pushed first whatever the convention lists:
+    /// Win64's hanoi pushed `rbp, r14, rsi, rdi, rbx` where the pin has `r14,
+    /// rsi, rdi, rbp, rbx` (RBP is second in Win64's list, last in System V's).
+    #[test]
+    fn a_freed_frame_register_takes_its_place_in_the_convention_list() {
+        let order = [pair(1), pair(2), pair(3), pair(4)];
+        assert_eq!(in_list_order(&order, vec![pair(4), pair(1)], pair(2)), [pair(1), pair(2), pair(4)]);
+        assert_eq!(in_list_order(&order, vec![pair(3)], pair(9)), [pair(3), pair(9)]);
+    }
 }

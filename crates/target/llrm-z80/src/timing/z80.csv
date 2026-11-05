@@ -23,6 +23,7 @@ ld bc;nn,3,10,,z80
 ld hl;nn,3,10,,z80
 ld ix;nn,4,14,,z80
 ld sp;hl,1,6,,z80
+ld sp;ix,2,10,,z80
 ld b;(ix+d),3,19,,z80
 ld (ix+d);b,3,19,,z80
 ld (ix+d);n,4,19,,z80
@@ -68,6 +69,7 @@ add hl;sp,1,11,,z80
 adc hl;bc,2,15,,z80
 sbc hl;bc,2,15,,z80
 add ix;bc,2,15,,z80
+add ix;sp,2,15,,z80
 sla b,2,8,,z80
 sra b,2,8,,z80
 srl b,2,8,,z80

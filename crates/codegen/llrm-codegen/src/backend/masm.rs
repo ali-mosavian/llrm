@@ -1280,6 +1280,14 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     // and the gap is reserved with them.
     let slot = procedure.registers.slot;
     let align = procedure.registers.align.max(slot);
+    // A 64-bit frame aligns the locals' base to the widest object, as the pin
+    // aligns each object to its own and only the total to the stack
+    // (`calculateFrameObjectOffsets`); the call alignment is `frame`'s below.
+    let align = if procedure.body.bits == 64 && procedure.body.object_align > 0 {
+        procedure.body.object_align.min(align)
+    } else {
+        align
+    };
     // Where the frame register is omitted and that is settled without a size
     // comparison (`frame_omitted`), its cell is not reserved: the return
     // address and the registers are what the locals are aligned below. The
@@ -1293,6 +1301,19 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     // registers had a `push rax` slot, and a caller with one had `sub rsp, 16`
     // (the call alignment is `frame`'s, below), where the pin has neither.
     let gap = if procedure.reserve == 0 { 0 } else { (align - (above + pushed) % align) % align };
+    // DEVIATE FR1 (owner m64, exit 2026-11-14): the pin pads the total to the
+    // stack alignment below the locals (`calculateFrameObjectOffsets`, the
+    // final `alignTo(Offset, StackAlign)`), so its lowest local sits at
+    // `[rsp+pad]`, a disp8 more than ours. Where the frame register is
+    // omitted the pad goes above the locals instead, as the base layout had it.
+    let pad = if procedure.body.bits == 64 && dropped && procedure.reserve != 0 && aligns_for_calls(&procedure) {
+        let call = procedure.registers.align;
+        let rounded = (procedure.reserve + slot - 1) / slot * slot;
+        (call - (slot + pushed + gap + rounded) % call) % call
+    } else {
+        0
+    };
+    let gap = gap + pad;
     match crate::backend::relayout::pushed_down(&procedure.body, pushed + gap - above) {
         Some(body) => Procedure {
             body: lir::LirBody { saved_first: true, slot_dropped: dropped, ..body },
@@ -1514,8 +1535,8 @@ fn may_address_frame(parts: &[InlinePart]) -> bool {
             0x83 if code.get(at + 1).is_some_and(|modrm| modrm >> 6 == 3) => at += 3,
             // A register-form ALU op, `test`, `xchg` or `mov` (`add r, r`,
             // `xor`, `sbb`, `sub`, `cmp`, ...): mod = 11
-            0x01 | 0x03 | 0x09 | 0x0B | 0x11 | 0x13 | 0x19 | 0x1B | 0x21 | 0x23 | 0x29 | 0x2B | 0x31 | 0x33
-            | 0x39 | 0x3B | 0x85 | 0x87 | 0x89 | 0x8B
+            0x01 | 0x03 | 0x09 | 0x0B | 0x11 | 0x13 | 0x19 | 0x1B | 0x21 | 0x23 | 0x29 | 0x2B | 0x31 | 0x33 | 0x39
+            | 0x3B | 0x85 | 0x87 | 0x89 | 0x8B
                 if code.get(at + 1).is_some_and(|modrm| modrm >> 6 == 3) =>
             {
                 at += 2
@@ -1540,6 +1561,25 @@ pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
 
 /// `_frame_parts`, with no frame register where `omit`: the entry sets none and
 /// the return takes back what the entry reserved.
+/// Whether a call finds the stack a multiple of the target's alignment, as its
+/// callee assumes, or a saved vector register's `movaps` needs the boundary:
+/// the frame takes what keeps it so.
+fn aligns_for_calls(procedure: &Procedure) -> bool {
+    let (slot, align) = (procedure.registers.slot, procedure.registers.align);
+    let calls = align > slot
+        && procedure.body.bits >= 32
+        && !procedure.far
+        && procedure.interrupt.is_none()
+        && procedure.entry == 0
+        && procedure
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .any(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Call));
+    calls || (align > slot && !procedure.body.vector_saves.is_empty())
+}
+
 fn parts(
     procedure: &Procedure,
     omit: bool,
@@ -1569,19 +1609,7 @@ fn parts(
     // takes what keeps it so, the return address, the pushed registers, the
     // frame register and the reserve a multiple of it.
     let align = procedure.registers.align;
-    let calls = align > slot
-        && procedure.body.bits >= 32
-        && !procedure.far
-        && procedure.interrupt.is_none()
-        && procedure.entry == 0
-        && procedure
-            .body
-            .blocks
-            .iter()
-            .flat_map(|block| block.insns.iter())
-            .any(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Call));
-    // `movaps` of a saved vector register needs the frame on the boundary too.
-    let calls = calls || (align > slot && !procedure.body.vector_saves.is_empty());
+    let calls = aligns_for_calls(procedure);
     let mut reserve = reserve;
     if calls {
         let below =
@@ -1828,6 +1856,82 @@ fn frame_held(procedure: &Procedure) -> bool {
 }
 
 pub fn listing(
+    procedure: &Procedure,
+    number: usize,
+) -> Result<Vec<Item>, Unprintable> {
+    let mut items = listed(procedure, number)?;
+    // A Windows 64-bit function (`probe_stack` marks one).
+    if procedure.probe_stack.is_some() {
+        trailing_calls_padded(&mut items);
+    }
+    Ok(items)
+}
+
+/// Whether `what` is part of an epilogue: the stack pointer taken back, a
+/// register popped or reloaded, the return.
+fn epilogue_step(what: &Semantics) -> bool {
+    let to_stack = what.dests.iter().any(writes_stack_pointer);
+    match what.op {
+        Operation::Pop | Operation::Leave | Operation::Return => true,
+        Operation::Binary | Operation::Address | Operation::Move if to_stack => true,
+        Operation::Move => what.name.as_deref() == Some("movaps") && matches!(what.sources.first(), Some(Loc::Mem(_))),
+        _ => what.name.as_deref() == Some("nop"),
+    }
+}
+
+/// `X86MCInstLower`'s nop before `SEH_BeginEpilogue` and
+/// `X86AvoidTrailingCall`'s `int3`: the Windows 64-bit unwinder decodes forward
+/// from the return address, so a call may not be followed by an epilogue
+/// (`nop`) or end a function (`int3`).
+fn trailing_calls_padded(items: &mut Vec<Item>) {
+    let mut at = 0;
+    while at < items.len() {
+        if !matches!(
+            &items[at],
+            Item::Callee(Callee { tail: false, code, .. }) if code.is_empty()
+        ) {
+            at += 1;
+            continue;
+        }
+        let mut real = items[at + 1..]
+            .iter()
+            .filter_map(
+                |item| match item {
+                    Item::Semantics(what) => Some(Some(what)),
+                    Item::Label(_) | Item::Callee(_) | Item::Align(_) | Item::TailIf { .. } => Some(None),
+                    _ => None,
+                },
+            );
+        // Up to the return, nothing but epilogue steps.
+        let mut epilogue = false;
+        let mut empty = true;
+        for step in real.by_ref() {
+            match step {
+                Some(what) if epilogue_step(what) => {
+                    empty = false;
+                    if what.op == Operation::Return {
+                        epilogue = true;
+                        break;
+                    }
+                }
+                Some(_) | None => {
+                    empty = false;
+                    break;
+                }
+            }
+        }
+        if epilogue {
+            items.insert(at + 1, Item::Semantics(semantics(Operation::Nothing, "nop", vec![], vec![])));
+            at += 1;
+        } else if empty {
+            items.insert(at + 1, Item::Semantics(semantics(Operation::Nothing, "int3", vec![], vec![])));
+            at += 1;
+        }
+        at += 1;
+    }
+}
+
+fn listed(
     procedure: &Procedure,
     number: usize,
 ) -> Result<Vec<Item>, Unprintable> {
@@ -3776,8 +3880,9 @@ mod tests {
     #[test]
     fn the_lines_of_a_block_are_read_once_whatever_leads_to_it() {
         let count = 200i64;
-        let blocks: Vec<crate::model::lir::Block> =
-            (0..count).map(|at| lined(at, 1 + at as u32, &[(at + 1) % count, (at + 2) % count, (at + 3) % count])).collect();
+        let blocks: Vec<crate::model::lir::Block> = (0..count)
+            .map(|at| lined(at, 1 + at as u32, &[(at + 1) % count, (at + 2) % count, (at + 3) % count]))
+            .collect();
         LINES.with(|lines| lines.set(0));
         let forced = forced_statement_blocks(&blocks);
         assert_eq!(forced.len(), count as usize, "the premise: every block follows another line");
@@ -5076,5 +5181,40 @@ mod split_tests {
             semantics(Operation::Move, "mov", vec![to], vec![reg(rbx)])
         };
         assert!(declared(&through_frame).is_none());
+    }
+
+    fn names_of(items: &[Item]) -> Vec<String> {
+        items
+            .iter()
+            .map(|item| match item {
+                Item::Callee(callee) => format!("call {}", callee.name),
+                Item::Semantics(what) => what.name.clone().unwrap_or_default().to_string(),
+                _ => "other".to_owned(),
+            })
+            .collect()
+    }
+
+    /// The Windows 64-bit unwinder decodes forward from a return address: a
+    /// call followed by the epilogue left `add rsp` to be read as the
+    /// function's, and a function that ends in a call (`abort`) ran into the
+    /// next one. The pin pads them with `nop` and `int3`.
+    #[test]
+    fn a_call_before_the_epilogue_is_padded_with_a_nop_and_one_ending_a_function_with_int3() {
+        let add = || {
+            let count = Loc::Imm(ir::Imm { value: 40, width: 8, address: None });
+            Item::Semantics(semantics(Operation::Binary, "add", vec![sp_reg()], vec![sp_reg(), count]))
+        };
+        let ret = || Item::Semantics(semantics(Operation::Return, "ret", vec![], vec![]));
+        let body = || Item::Semantics(semantics(Operation::Move, "mov", vec![reg(RegId::AX)], vec![reg(RegId::CX)]));
+        let call = || Item::Callee(Callee::new("f", false));
+        let mut leaving = vec![call(), add(), ret()];
+        trailing_calls_padded(&mut leaving);
+        assert_eq!(names_of(&leaving), ["call f", "nop", "add", "ret"]);
+        let mut in_body = vec![call(), body(), add(), ret()];
+        trailing_calls_padded(&mut in_body);
+        assert_eq!(names_of(&in_body), ["call f", "mov", "add", "ret"]);
+        let mut ending = vec![ret(), call()];
+        trailing_calls_padded(&mut ending);
+        assert_eq!(names_of(&ending), ["ret", "call f", "int3"]);
     }
 }

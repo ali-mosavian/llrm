@@ -14,6 +14,7 @@ pub mod mfunc;
 pub mod narrow;
 pub mod prepare;
 pub mod regalloc;
+pub mod step;
 pub mod target;
 pub mod timing;
 pub mod tti;

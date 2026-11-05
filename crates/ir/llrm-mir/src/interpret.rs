@@ -650,8 +650,14 @@ impl<'m> Machine<'m> {
             | Intrinsic::Assume
             | Intrinsic::Prefetch
             | Intrinsic::FakeUse
-            | Intrinsic::NoAliasScopeDecl => void,
+            | Intrinsic::NoAliasScopeDecl
+            | Intrinsic::SetLoopIterations => void,
             Intrinsic::Expect => argument(0),
+            Intrinsic::TestSetLoopIterations => match argument(0) {
+                Val::Int { bits, .. } => Val::Int { bits: u128::from(bits != 0), width: 1 },
+                _ => Val::Poison,
+            },
+            Intrinsic::LoopDecrement => return unsupported("a hardware loop counter"),
             // The scope is a token no code reads: the address it covers.
             Intrinsic::InvariantStart => argument(1),
             // Flat memory: the address difference, wrapped to the result.

@@ -108,9 +108,29 @@ impl<'p> DagTarget for X86Target<'_, 'p> {
         dag: &mut SelectionDAG,
         temporaries: &mut dyn super::x86_preprocess::FrameObjects,
     ) {
-        // `ComputeLiveOutVRegInfo`: after the legalizers, before the assertions go.
+        // `ComputeLiveOutVRegInfo`: after the legalizers, before the assertions
+        // go.
         super::live_out::compute_live_out_vreg_info(dag, self.live);
         super::x86_preprocess::preprocess(dag, temporaries, self.lowering.sse2);
+        // DEVIATE SD544 (m16): no callee-load move at real mode. Reason: its
+        // calls and jumps carry a far callee and a segment, which the pin has
+        // no counterpart for. Exit 2026-11-12: the x86-m16 review of far indirect calls.
+        let options = &self.chooser.hooks.options;
+        if options.address_mode != llrm_dagisel::x86_addr::AddrMode::Real16 {
+            let facts = super::x86_preprocess::CalleeLoadFacts {
+                optimizing: !options.opt_none,
+                is_64: options.cpu == llrm_dagisel::x86_hooks::Cpu::X64,
+                position_independent: false,
+                slow_two_mem_ops: false,
+                slow_indirect_call: false,
+                indirect_thunks: false,
+            };
+            let hooks = &*self.chooser.hooks;
+            super::x86_preprocess::move_callee_loads(dag, facts, &mut |dag, node| {
+                let adapter = DagisAdapter::new(dag);
+                llrm_dagisel::dag::X86Predicates::check_tc_ret_enough_regs(hooks, &adapter, node)
+            });
+        }
     }
 }
 
@@ -235,11 +255,12 @@ pub fn do_instruction_selection_with(
     // `insertDAGNode` puts a node before the one being matched, which is
     // an operand of the node being selected: the walk reaches it after that
     // node's users. One whose users are not all selected waits.
-    let mut next = |adapter: &DagisAdapter<'_>, made: &mut Vec<u32>| {
-        match made.iter().rposition(|&m| adapter.is_dead(m) || !adapter.has_pending_user(m)) {
-            Some(at) => Some(made.remove(at)),
-            None => rest.next().or_else(|| made.pop()),
-        }
+    let mut next = |adapter: &DagisAdapter<'_>, made: &mut Vec<u32>| match made
+        .iter()
+        .rposition(|&m| adapter.is_dead(m) || !adapter.has_pending_user(m))
+    {
+        Some(at) => Some(made.remove(at)),
+        None => rest.next().or_else(|| made.pop()),
     };
     while let Some(node) = next(&adapter, &mut made) {
         // `Node->use_empty()`: a node selection left unused is dead.
