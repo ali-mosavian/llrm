@@ -22,7 +22,8 @@ fn assembled(
         "MEMORY { M: start=$0200, size=$1000, file=\"%O\"; }\nSEGMENTS { CODE: load=M, type=ro; }\n",
     )
     .unwrap();
-    let steps: [(&str, &[&str]); 2] = [("ca65", &["p.s", "-o", "p.o"]), ("ld65", &["-C", "p.cfg", "-o", "p.bin", "p.o"])];
+    let steps: [(&str, &[&str]); 2] =
+        [("ca65", &["p.s", "-o", "p.o"]), ("ld65", &["-C", "p.cfg", "-o", "p.bin", "p.o"])];
     for (program, args) in steps {
         let out = Command::new(program).args(args).current_dir(&dir).output().expect(program);
         assert!(out.status.success(), "{program}: {}", String::from_utf8_lossy(&out.stderr));

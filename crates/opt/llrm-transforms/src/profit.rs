@@ -225,9 +225,7 @@ pub fn operation(
         Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor) => {
             costs.add * words(context, instruction.result.map(|value| function.value(value).ty), costs)
         }
-        Opcode::ICmp(_) => {
-            costs.add * words(context, function.operand_type(context, instruction.operands[0]), costs)
-        }
+        Opcode::ICmp(_) => costs.add * words(context, function.operand_type(context, instruction.operands[0]), costs),
         Opcode::Cast(_) | Opcode::ExtractValue(_) | Opcode::InsertValue(_) | Opcode::Phi | Opcode::Freeze => {
             costs.r#move * words(context, instruction.result.map(|value| function.value(value).ty), costs)
         }
