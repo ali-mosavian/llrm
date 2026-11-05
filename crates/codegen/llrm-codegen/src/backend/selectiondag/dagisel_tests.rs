@@ -819,3 +819,16 @@ fn the_adapter_answers_the_known_zero_bits_of_the_dag() {
     assert_eq!(known_zero(&adapter, value, 0), 0, "premise: the structural subset knows nothing of a umin");
     assert_eq!(adapter.known_zero_bits(value), 0xffff_fff0);
 }
+
+/// `dead` was a `BTreeSet<u32>` queried for every use of every node (22 M Ir in
+/// `has_live_users`, memory_expansion -O2 x86-64); it is a flag per node. A
+/// node past the flags is alive, and a second removal is told it was already.
+#[test]
+fn test_a_removed_node_is_dead_once_and_a_new_node_is_alive() {
+    let mut dead = super::dagisel_adapter::DeadNodes::default();
+    assert!(!dead.contains(&7), "a node nothing removed is alive");
+    assert!(dead.insert(7), "the first removal is news");
+    assert!(!dead.insert(7), "the second is not");
+    assert!(dead.contains(&7));
+    assert!(!dead.contains(&3) && !dead.contains(&900), "its neighbours and later nodes are alive");
+}
