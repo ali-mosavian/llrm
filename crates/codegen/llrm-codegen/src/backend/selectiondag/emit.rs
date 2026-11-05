@@ -51,6 +51,7 @@ use std::sync::Arc;
 use llrm_dagisel::instr::{self, InstrDesc, operand_type};
 use llrm_dagisel::x86_addr::AddrMode;
 use llrm_dagisel::x86_classes::{Role, class_tag};
+use llrm_lir::registers::RegId;
 use llrm_support::hash::HashMap;
 
 use super::dag::{NodeData, SDNodeFlags, SDValue, SelectionDAG};
@@ -1878,6 +1879,49 @@ impl Emitter<'_, '_> {
         Ok(())
     }
 
+    /// The registers of `GR32_TC` / `GR64_TC` the arguments do not take, that
+    /// a caller-saved register is: the epilogue restores every other one
+    /// before the jump.
+    fn tail_call_registers(
+        &self,
+        requires: &[(Held, RegId)],
+    ) -> Result<Vec<RegId>, EmitError> {
+        let registers = self.ctx.registers;
+        let mut free: Vec<RegId> = Vec::new();
+        for (id, one) in registers.entries() {
+            if one.classes & llrm_lir::registers::class::TAIL_CALL != 0
+                && self.ctx.caller_saved.contains(&registers.root(id))
+                && requires.iter().all(|(_, taken)| registers.root(*taken) != registers.root(id))
+                && free.iter().all(|kept| registers.root(*kept) != registers.root(id))
+            {
+                free.push(id);
+            }
+        }
+        if free.is_empty() {
+            return Err(EmitError::Unsupported("a sibling call with no free register".to_owned()));
+        }
+        Ok(free)
+    }
+
+    /// The jump of a sibling call, through `target`, with `requires` pinned.
+    fn push_tail_jump(
+        &mut self,
+        requires: Vec<(Held, RegId)>,
+        target: Loc,
+    ) {
+        let at = self.next_address();
+        let mut uses: Vec<u32> = requires.iter().map(|(held, _)| held.value).collect();
+        uses.dedup();
+        let what = Semantics {
+            indirect: true,
+            name: Some("jmp".into()),
+            sources: vec![target],
+            ..Semantics::new(Operation::Return)
+        };
+        let insn = Insn { requires, ..Insn::new(at, Some((at, at)), Some(what), vec![], uses) };
+        self.blocks.last_mut().expect("a block").insns.push(Arc::new(insn));
+    }
+
     fn next_address(&mut self) -> i64 {
         self.state.next_address()
     }
@@ -2567,28 +2611,34 @@ impl Emitter<'_, '_> {
                     return Err(EmitError::Unsupported("a sibling call through a non-register".to_owned()));
                 };
                 let mut requires = std::mem::take(&mut self.arguments);
-                let registers = self.ctx.registers;
-                let free = registers
-                    .entries()
-                    .filter(|(_, one)| one.classes & llrm_lir::registers::class::TAIL_CALL != 0)
-                    .map(|(id, _)| id)
-                    .find(|one| {
-                        self.ctx.caller_saved.contains(&registers.root(*one))
-                            && requires.iter().all(|(_, taken)| registers.root(*taken) != registers.root(*one))
-                    })
-                    .ok_or_else(|| EmitError::Unsupported("a sibling call with no free register".to_owned()))?;
-                requires.push((callee, free));
-                let at = self.next_address();
-                let mut uses: Vec<u32> = requires.iter().map(|(held, _)| held.value).collect();
-                uses.dedup();
-                let what = Semantics {
-                    indirect: true,
-                    name: Some("jmp".into()),
-                    sources: vec![Loc::Held(callee)],
-                    ..Semantics::new(Operation::Return)
-                };
-                let insn = Insn { requires, ..Insn::new(at, Some((at, at)), Some(what), vec![], uses) };
-                self.blocks.last_mut().expect("a block").insns.push(Arc::new(insn));
+                let free = self.tail_call_registers(&requires)?;
+                requires.push((callee, free[0]));
+                self.push_tail_jump(requires, Loc::Held(callee));
+                return Ok(Some(()));
+            }
+            // An indirect sibling call through a cell of memory (the pin's
+            // `X86tcret (load addr)`): the registers the cell is addressed by
+            // are pinned as the address of `TCRETURNri` is. A cell with more
+            // registers than are free is loaded into one first, which is
+            // `TCRETURNri` (a call is never refused for it).
+            "TCRETURNmi" | "TCRETURNmi64" => {
+                let bytes = if name == "TCRETURNmi64" { 8 } else { 4 };
+                let group =
+                    node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short sibling call".to_owned()))?;
+                let cell = self.cell(group, bytes)?;
+                let mut requires = std::mem::take(&mut self.arguments);
+                let free = self.tail_call_registers(&requires)?;
+                let mut addressed: Vec<Held> = cell.base.into_iter().chain(cell.index).collect();
+                addressed.dedup_by_key(|held| held.value);
+                if addressed.len() <= free.len() {
+                    requires.extend(addressed.into_iter().zip(free.iter().copied()));
+                    self.push_tail_jump(requires, Loc::Mem(cell));
+                } else {
+                    let target = self.fresh(bytes);
+                    self.push(Operation::Move, "mov", vec![Loc::Held(target)], vec![Loc::Mem(cell)]);
+                    requires.push((target, free[0]));
+                    self.push_tail_jump(requires, Loc::Held(target));
+                }
                 return Ok(Some(()));
             }
             "CALLpcrel32" | "CALL64pcrel32" => {
