@@ -1048,7 +1048,14 @@ pub(crate) fn llvm_order(
                         only_when_forced: !applied.options.loop_unrolling,
                         target_unrolling: false,
                         created: std::rc::Rc::clone(&created),
-                        pricing: loopunrollpass::Pricing::Estimate,
+                        pricing: if applied.trial_cleanup {
+                            loopunrollpass::Pricing::Skip
+                        } else {
+                            let inner = Applied { dump: None, trial_cleanup: true, ..applied.clone() };
+                            loopunrollpass::Pricing::Trial(std::rc::Rc::new(move || {
+                                Box::new(Fixed::linear(&inner, Phase::Simplify)) as Box<dyn FunctionPass>
+                            }))
+                        },
                     }),
                 ),
                 // The loops the unroll made go on to LPM2's passes: indvars on
