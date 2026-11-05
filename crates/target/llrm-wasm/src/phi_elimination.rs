@@ -190,6 +190,11 @@ pub(crate) fn split_edge(
     block: usize,
 ) {
     let new = pred + 1;
+    // `pred` may fall into the block laid out after it: the new block now stands
+    // there, so the fall-through needs its own jump (the block moves up by one).
+    let falls_into = f.blocks[pred].last().is_some_and(|last| !last.is_barrier())
+        && pred + 1 < f.blocks.len()
+        && pred + 1 != block;
     let shift = |b: &mut u32| {
         if *b as usize >= new {
             *b += 1;
@@ -228,6 +233,9 @@ pub(crate) fn split_edge(
         if *to == block {
             *to = new;
         }
+    }
+    if falls_into {
+        f.blocks[pred as usize].push(Inst::new(crate::dagisel::generated::ids::opcode::BR, &[Operand::Block(new_id + 1)]));
     }
     f.blocks.insert(new, vec![Inst::new(crate::dagisel::generated::ids::opcode::BR, &[Operand::Block(target)])]);
     f.succs.insert(new, vec![block]);
@@ -278,6 +286,19 @@ mod tests {
         assert_eq!(f.blocks[1], vec![Inst::new(op::BR, &[Operand::Block(3)])]);
         assert_eq!(f.succs[0], vec![1, 2]);
         assert!(f.blocks[3][0].operands.contains(&Operand::Block(1)), "{:?}", f.blocks[3][0]);
+        assert_eq!(f.blocks[0][2].operands[0], Operand::Block(1));
+    }
+
+    /// bb0 ends in `BR_IF bb2` and falls into bb1: splitting the edge to bb2
+    /// puts the new block where bb1 was, so bb0 needs its own `BR` to bb1. It
+    /// had none and fell into the new block: every input took the split edge
+    /// (wasm switch_peeled_table -Os returned its argument for all inputs).
+    #[test]
+    fn a_split_after_a_falling_through_branch_keeps_the_fall_through() {
+        let mut f = function();
+        f.blocks[0].pop();
+        assert!(split_phi_edges(&mut f));
+        assert_eq!(f.blocks[0].last(), Some(&Inst::new(op::BR, &[Operand::Block(2)])), "{:?}", f.blocks[0]);
         assert_eq!(f.blocks[0][2].operands[0], Operand::Block(1));
     }
 
