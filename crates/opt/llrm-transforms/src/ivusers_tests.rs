@@ -26,6 +26,11 @@ exit:
 }
 ";
 
+thread_local! {
+    /// How many sets grew while the last `with_users` made its users.
+    static GROWN: Cell<usize> = const { Cell::new(0) };
+}
+
 /// `text`'s `@f` with its IV users, the number of instructions asked about,
 /// and the loop's header.
 fn with_users(
@@ -56,7 +61,9 @@ fn with_users(
         true
     };
     let env = Env { safe_to_speculate: &safe, ephemeral: &|_| false };
+    let grown = llrm_mir::dense::idset_resizes::<InstId>();
     let users = IvUsers::of(&mut se, &cx, header, &env);
+    GROWN.with(|n| n.set(llrm_mir::dense::idset_resizes::<InstId>() - grown));
     body(&cx, &mut se, &users, header, asked.get());
 }
 
@@ -224,4 +231,13 @@ fn a_set_carried_past_an_edit_that_changed_a_use_differs_from_a_fresh_one() {
     assert!(found.contains("carried"), "{found}");
     carried.pop();
     assert!(crate::ivusers::difference(&carried, &again).is_some());
+}
+
+/// Each instruction asked about made a set of its result's users that grew to
+/// the highest id (727 instructions apiece, 18 M on memory_expansion); the
+/// users of one IV grow no set but the processed one, made with room.
+#[test]
+fn the_users_of_an_induction_variable_grow_no_set() {
+    with_users(ARRAY, |_, _, users, _, _| assert!(!users.uses.is_empty()));
+    assert_eq!(GROWN.with(Cell::get), 0);
 }
