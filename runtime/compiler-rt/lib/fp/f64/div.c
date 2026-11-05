@@ -4,7 +4,7 @@
 
 /* hi:lo divided by d, with hi < d: the quotient in the low word and the remainder in the high word of the result, as one divide instruction gives them
  * (SF_UDIV64BY32 from the config). */
-#ifndef SF_UDIV64BY32
+#if defined(SF_DIV64_UDIV) && !defined(SF_UDIV64BY32)
 static inline uint64_t sf_udiv64by32(uint32_t hi, uint32_t lo, uint32_t d)
 {
     uint64_t n = ((uint64_t)hi << 32) | lo;
