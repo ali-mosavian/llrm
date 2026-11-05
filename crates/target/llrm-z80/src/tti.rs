@@ -346,21 +346,38 @@ impl Tti for Z80Tti {
                 }
             }
         }
-        if shape.callee_frame_bytes > 0 {
-            let frame: &[&str] = if shape.callee_frame_bytes > 6 {
-                &["push ix", "ld ix;nn", "add ix;bc", "ld ix;nn", "add ix;bc", "ld sp;hl", "ld sp;hl", "pop ix"]
-            } else {
-                &["push ix", "ld ix;nn", "add ix;bc", "ld sp;hl", "pop ix"]
-            };
-            let (b, c) = sum(frame);
-            bytes += b;
-            clocks += c;
-            if shape.callee_frame_bytes <= 6 {
-                let (b, c) = sum(&["push bc"]);
-                let words = (shape.callee_frame_bytes as i64 + 1) / 2;
-                bytes += b * words;
-                clocks += c * words;
-            }
+        Some(Cost::of(match kind {
+            CostKind::CodeSize => bytes,
+            _ => (clocks + 3) / 4,
+        }))
+    }
+
+    /// The callee's frame: `push ix; ld ix,#0; add ix,sp` and its undoing, with
+    /// a `push` a word of locals (a frame over 6 B is `ld iy,#-n; add iy,sp;
+    /// ld sp,iy`). `ld sp,ix` and `ld iy,nn` are priced as `ld sp,hl` and
+    /// `ld ix,nn`: the table has no form for them.
+    fn callee_frame_cost(
+        &self,
+        shape: &CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        if shape.callee_frame_bytes == 0 {
+            return None;
+        }
+        let (mut bytes, mut clocks) = (0, 0);
+        let frame: &[&str] = if shape.callee_frame_bytes > 6 {
+            &["push ix", "ld ix;nn", "add ix;bc", "ld ix;nn", "add ix;bc", "ld sp;hl", "ld sp;hl", "pop ix"]
+        } else {
+            &["push ix", "ld ix;nn", "add ix;bc", "ld sp;hl", "pop ix"]
+        };
+        let (b, c) = sum(frame);
+        bytes += b;
+        clocks += c;
+        if shape.callee_frame_bytes <= 6 {
+            let (b, c) = sum(&["push bc"]);
+            let words = (shape.callee_frame_bytes as i64 + 1) / 2;
+            bytes += b * words;
+            clocks += c * words;
         }
         Some(Cost::of(match kind {
             CostKind::CodeSize => bytes,
