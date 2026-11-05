@@ -1135,6 +1135,21 @@ fn a_stack_argument_beyond_the_ix_displacement_is_stored_through_iy() {
     assert!(text.contains("add iy, sp") && text.contains("(iy)"), "{text}");
 }
 
+/// `w >> 8` of a spilled word reloaded both bytes and then overwrote the low
+/// one (`ld e, -8(ix)` / `ld d, -7(ix)` / `ld e, d` / `ld d, #0`): 3 B and 19 T
+/// a site, 11 sites in div_constants_short. Only the high byte is loaded now.
+#[test]
+fn a_spilled_word_shifted_right_by_a_byte_reloads_one_byte() {
+    let ir = include_str!("kernels/ir/reload_high_lane.ll");
+    let out = text(ir, "f", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+    let lines: Vec<&str> = out.lines().map(str::trim).collect();
+    let dead = lines.windows(4).any(|w| {
+        w[0].starts_with("ld e, -") && w[1].starts_with("ld d, -") && w[2] == "ld e, d" && w[3] == "ld d, #0"
+    });
+    assert!(!dead, "{out}");
+    assert!(lines.windows(2).any(|w| w[0].starts_with("ld e, -") && w[1] == "ld d, #0"), "{out}");
+}
+
 /// A float argument or result killed the compiler ("legal parts: Type(F32)",
 /// 8 programs of tests/run/c); it is softened to an integer now (#6578), so
 /// passing one through is register moves and a return, no routine.

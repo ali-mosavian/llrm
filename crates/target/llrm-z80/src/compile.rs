@@ -440,6 +440,7 @@ fn allocate_once(
         slots.clear();
     } else {
         spills_first(&mut function, &assignment);
+        narrow_reload_for_byte_shift(&mut function, &assignment);
     }
     Ok(((function, assignment, slots, reads), held))
 }
@@ -1239,6 +1240,62 @@ pub fn read_copies_at_their_source(
             }
         }
         break;
+    }
+}
+
+/// A pair reloaded and shifted by a whole byte (`w >> 8`, `w << 8`) needs one
+/// byte of the slot: the lane the shift overwrites is not loaded
+/// (`ld e, -8(ix)` / `ld d, -7(ix)` / `ld e, d` / `ld d, #0` is `ld e,
+/// -7(ix)` / `ld d, #0`). The pin folds a reload into its use where the
+/// target has the form (`InlineSpiller::foldMemoryOperand`); this is that
+/// form for the shift by 8.
+pub fn narrow_reload_for_byte_shift(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) {
+    let register = |reg: Reg| match reg {
+        Reg::Virt(v) => assignment.0[v as usize],
+        Reg::Phys(id) => id,
+    };
+    for block in &mut function.blocks {
+        let mut at = 0;
+        while at + 1 < block.insts.len() {
+            let (first, second) = (&block.insts[at], &block.insts[at + 1]);
+            let (
+                Kind::Op("RELOAD16"),
+                [Operand::Def(loaded), Operand::Frame(slot)],
+                Kind::Op(shift @ ("SHL16" | "SRL16")),
+                [Operand::Def(written), Operand::Use(read), Operand::Imm(8)],
+            ) = (first.kind, &first.operands[..], second.kind, &second.operands[..])
+            else {
+                at += 1;
+                continue;
+            };
+            let pair = register(*loaded);
+            let Ok((lo, hi)) = expand::lanes(pair) else {
+                at += 1;
+                continue;
+            };
+            if register(*written) != pair || register(*read) != pair {
+                at += 1;
+                continue;
+            }
+            // `kept` takes the byte that moves across, read from its half of
+            // the slot; `cleared` is zeroed
+            let (kept, from, cleared) = if shift == "SRL16" { (lo, 1, hi) } else { (hi, 0, lo) };
+            let load = Inst {
+                may_load: true,
+                ..Inst::new(
+                    Kind::Op("RELOAD8L"),
+                    vec![Operand::Def(Reg::Phys(kept)), Operand::Frame(*slot), Operand::Imm(from)],
+                )
+            };
+            let clear = Inst::new(Kind::Op("LD8ri"), vec![Operand::Def(Reg::Phys(cleared)), Operand::Imm(0)]);
+            let (a, b) = if shift == "SRL16" { (load, clear) } else { (clear, load) };
+            block.insts[at] = a;
+            block.insts[at + 1] = b;
+            at += 2;
+        }
     }
 }
 
