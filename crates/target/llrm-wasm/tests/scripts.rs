@@ -46,7 +46,10 @@ fn llc_writes_standard_output_for_a_dash() {
     assert!(String::from_utf8_lossy(&out.stdout).contains(".functype"));
 }
 
-fn compare(pin: &str, files: &[&str]) -> (Option<i32>, String) {
+fn compare(
+    pin: &str,
+    files: &[&str],
+) -> (Option<i32>, String) {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("compare.sh");
     let out = Command::new("bash")
         .arg(path)
@@ -58,8 +61,9 @@ fn compare(pin: &str, files: &[&str]) -> (Option<i32>, String) {
     (out.status.code(), String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// `compare.sh` printed "REF-FAIL ... match 0, differ 1" and exited 0 with a missing pin llc, so
-/// a gate that read its status passed with nothing compared.
+/// `compare.sh` printed "REF-FAIL ... match 0, differ 1" and exited 0 with a
+/// missing pin llc, so a gate that read its status passed with nothing
+/// compared.
 #[test]
 fn compare_sh_fails_when_the_pin_llc_is_missing() {
     let (code, said) = compare("/nonexistent/llc", &["/dev/null"]);
