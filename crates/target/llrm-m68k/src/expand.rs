@@ -310,7 +310,7 @@ pub fn finish_with(
             objects: objects.clone(),
             saved: used.clone(),
             max_call_frame,
-            stack_align: if short { 4 } else { 0 },
+            stack_align: if short { frame::SHIPPED_STACK_ALIGN } else { 0 },
             adjusts_stack: has_calls,
             ..Function::default()
         })

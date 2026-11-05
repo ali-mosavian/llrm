@@ -39,6 +39,10 @@ const SLOT: i64 = 4;
 /// `M68kSubtarget::stackAlignment`.
 const STACK_ALIGN: i64 = 8;
 
+/// The shipped build's stack alignment: m68k Linux, AmigaOS and TOS ask for
+/// no more than 4.
+pub const SHIPPED_STACK_ALIGN: i64 = 4;
+
 /// What the frame depends on: `MachineFrameInfo` and the function's attributes.
 #[derive(Clone, Debug, Default)]
 pub struct Function {

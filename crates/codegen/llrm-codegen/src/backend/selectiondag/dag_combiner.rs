@@ -359,7 +359,7 @@ pub trait CombineHooks {
     /// the sign extension of a compare is the cheaper one (`slt; extb.l` 4 B
     /// against `slt; and.l #1` 8 B on the 68020), and the pin's `sub x, (zext
     /// i1 y)` to `add x, (sext i1 y)` fold has no dual for the add.
-    /// DEVIATE: not in the pin. Exit: never, a target choice.
+    /// DEVIATE: not in the pin. Exit: review 2026-11-20.
     fn sub_of_sign_extended_bool(&self) -> bool {
         false
     }
