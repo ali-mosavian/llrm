@@ -389,7 +389,10 @@ fn sequences(
         let call = (down + 1..insts.len()).find(|&i| insts[i].call);
         let up = call
             .and_then(|call| (call + 1..insts.len()).find(|&i| matches!(insts[i].kind, Kind::Op("ADJCALLSTACKUP"))));
-        let (Some(call), Some(up)) = (call, up) else {
+        // one block's sequence: a shared tail can leave the `up` of a call in
+        // a later block, and the next `up` in order is another sequence's
+        let in_block = |at: Option<usize>| at.filter(|&at| blocks[at] == blocks[down]);
+        let (Some(call), Some(up)) = (in_block(call), in_block(up)) else {
             others.push(bytes);
             at += 1;
             continue;
