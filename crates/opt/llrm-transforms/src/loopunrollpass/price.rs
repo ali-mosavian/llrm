@@ -58,7 +58,7 @@ pub(super) fn full_unroll_pays(
         return true;
     }
     let clocks = crate::profit::costs(run.outer);
-    let bytes = run.outer.target().size_costs();
+    let bytes = run.outer.target().byte_costs();
     let blocks = lp.get_blocks();
     let body_bytes = trip_cost(run.context, run.layout, run.function, run.callees, blocks.iter(), &bytes, true);
     let body_clocks = trip_clocks(run.context, run.layout, run.function, run.callees, blocks.iter(), &clocks);
