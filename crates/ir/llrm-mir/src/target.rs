@@ -82,11 +82,19 @@ pub struct Tuning {
     /// site too (otherwise only two or more: the pin's single-site inline
     /// stands). A callee that stays and is copied once only grows the code.
     pub inline_size_guard_single_site: bool,
+    /// A full unroll's discount for a local array it makes constant-indexed
+    /// (promoted to registers) holds only while the promoted elements fit the
+    /// register file (UP1). false: every such access is free.
+    pub unroll_promotion_fits_registers: bool,
     /// A size build rotates a loop only when the header's exit test folds in
     /// the preheader (RS1): an unfolded copy is a compare and a branch, more
     /// than the loop-closing jump it removes. false: the pass's header limit
     /// alone.
     pub rotation_guard_must_fold_at_size: bool,
+    /// A size build rotates a loop only when the copied header is no bigger than
+    /// the branches the rotation removes (the loop-closing jump and the exit
+    /// test), in `CodeSize` (arm64's w15 rule). false: the header limit alone.
+    pub rotation_header_priced_at_size: bool,
     /// A constant offset of an address is a displacement the access folds;
     /// SimplifyCFG's sinking of two such accesses behind a phi of the offsets
     /// is refused (it costs the displacement). false: the pin's.
@@ -123,6 +131,8 @@ pub struct Tuning {
     /// a function not tuned for size, is `rep movsd` and `rep movsb` inline,
     /// not a call of `memcpy` (gcc's `rep_prefix_4_byte` stringop strategy for
     /// the 486 and P5). false: the pin's `EmitTargetCodeForMemcpy`, a libcall.
+    /// Linux x86-64 stays false: glibc's `memcpy` of 0-32 bytes is 6.4 TSC
+    /// ticks a call, `rep movsb` 8.2 (Ryzen 9 9950X3D, fsrm; 2026-11-05).
     pub inline_variable_memcpy: bool,
     /// DEVIATE REC5-1 (owner w2, exit 2026-11-20): IPSCCP widens a range that
     /// keeps growing to its half-line, keeping the sign, not to overdefined
@@ -156,7 +166,9 @@ impl Tuning {
         split_merged_conditions: false,
         inline_size_guard_at_size: false,
         inline_size_guard_single_site: false,
+        unroll_promotion_fits_registers: false,
         rotation_guard_must_fold_at_size: false,
+        rotation_header_priced_at_size: false,
         keep_constant_displacements: false,
         recursive_inlining: None,
         recursive_edge_growth: None,

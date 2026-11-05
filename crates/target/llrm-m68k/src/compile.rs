@@ -161,6 +161,7 @@ pub fn items_with(
         crate::narrow::narrow_logic_immediates(&mut function, &assignment);
         crate::consts::materialize_constants(&mut function, &assignment, cpu, wants_size);
         crate::constreg::constant_into_destination(&mut function, &assignment);
+        crate::constreg::immediate_from_free_register(&mut function, &assignment);
     }
     remove_identity_copies(&mut function, &assignment);
     remove_redundant_copies(&mut function, &assignment);

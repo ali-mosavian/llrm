@@ -64,6 +64,8 @@ def physical_defines() -> list[str]:
     return [f"-DPHYSICAL_{name.upper()}=0x{address:X}UL" for name, address in tomllib.loads(text)["physical"].items()]
 
 
+# The module that defines `__doserror_`, which the shipped clibm.lib's creatdos/opendos ask for and its dictionary does not give (stft_single, which creates and opens files).
+DOSERROR_OBJ = Path(os.environ.get("LLRM_OW", Path.home() / "scratch/ow-src")) / "bld/clib/_dos/library/msdos.086/mm/error086.obj"
 OW = Path(os.environ.get("OW_BIN", Path.home() / "work/personal/open-watcom-v2/build/binbuild"))
 # Open Watcom's own medium-model C library, 8087 maths library and start-up (an OW v2 release; the tree's build of them
 # needs its generated headers and 16-bit bootstrap, which this checkout lacks)
@@ -327,6 +329,17 @@ def code_fields(obj: Path) -> dict:
     return {"code_bytes": size.code, "align_bytes": size.align, **({"align_unread": size.unread} if size.unread else {}), **({"lib_bytes": size.library} if size.library else {}), **({"externs": called} if called else {})}
 
 
+def skip_lines(measured: dict) -> list[str]:
+    """One `SKIP reason (N programs)` line per reason a row was skipped, so a program with no column is counted in the header, not missing from it."""
+    return [f"SKIP {why} ({len({key[0] for key, value in measured.items() if value.get('skip') == why})} programs)" for why in sorted({value["skip"] for value in measured.values() if "skip" in value})]
+
+
+def note_lines(measured: dict) -> list[str]:
+    """One `NOTE reason (N cells)` line per distinct note on a kept row, so an annotated row is counted in the header, not only carried in the json."""
+    notes = [value["note"] for value in measured.values() if "note" in value]
+    return [f"NOTE {why} ({notes.count(why)} cells)" for why in sorted(set(notes))]
+
+
 def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
     """Counts of one built variant: the entry address from its map, the emulated run, the output check, and the bytes
     of its own object `obj` (tools/sizes.py): not the image, which holds the start-up and the libraries as well."""
@@ -368,19 +381,23 @@ def build_watcom(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Pat
     from the corpus's ext.asm."""
     obj, exe, listing = work / f"{stem}.obj", work / f"{stem}.exe", work / f"{stem}.map"
     flags = ["-ox", "-oe=0"] if opt == "O2" else ["-os", "-ol"]  # -oe=0: the kernel stays a call, as llrm-c compiles it
-    done = cpulimit.run([str(OW / "bwcc"), "-zq", "-mm", "-ecc", "-s", "-DOWREF", "-4", "-fpi87", f"-i={OWLIB.parent / 'h'}", *physical_defines(), *flags, str(variant.source), f"-fo={obj}"], 300, capture_output=True, text=True)
+    done = cpulimit.run([str(OW / "bwcc"), "-zq", "-mm", "-ecc", "-s", "-DOWREF", "-4", "-fpi87", f"-i={OWLIB.parent / 'h'}", *physical_defines(), *flags, str(variant.source), f"-fo={obj}"], 300, capture_output=True, text=True, timeout=native.COMPILE_SECONDS)
     if done.returncode != 0 or not obj.exists():
         return "compile: " + (done.stderr or done.stdout).strip()[-300:]
     support = dosbatch.c_support(dosbatch.REAL_MODE, work)
+    extra: list[str] = []  # error086.obj, once the library turns out not to define `__doserror_`
     stack = 60 * 1024  # the most DGROUP holds: a deep recursion (recsum, 2000 frames) overran the 16K one into the code; a program with more data gets what is left
     while True:
         try:
             # Watcom names main `main_`; its start-up asks for `_cstart_` and the library calls it
             dosbatch._host([str(BIN / "jwlink"), "option", "quiet", "option", f"map={listing}", "option", "start=_cstart_", "option", f"stack={stack}", *dosbatch.linkrecipe.link(dosbatch.REAL_MODE, "format"), "name", str(exe),
-                            "libpath", str(OWLIB / "dos"), "libpath", str(OWLIB), "file", str(obj), *[word for one in support for word in ("file", str(one))],
+                            "libpath", str(OWLIB / "dos"), "libpath", str(OWLIB), "file", str(obj), *extra, *[word for one in support for word in ("file", str(one))],
                             "library", "clibm.lib", "library", "math87m.lib", "library", "noemu87.lib"])
             break
         except dosbatch.BuildError as error:
+            if "__doserror_ is an undefined reference" in str(error) and not extra and DOSERROR_OBJ.exists():
+                extra = ["file", str(DOSERROR_OBJ)]
+                continue
             over = re.search(r"DGROUP exceeds 64k by (\d+) bytes", str(error))
             if not over or stack <= 4096:
                 return f"build: {error}"
@@ -445,8 +462,8 @@ def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str,
             header = folder / "bench_io.h"
             if header.exists():
                 header.write_bytes(header.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
-    subprocess.run([str(ROOT / "tools" / "callconv" / "bcc.sh"), str(folder), *[f"{stem}.c {levels[opt]} {" ".join([*physical_defines(), *BORLAND_DEFINES.get(language, [])])}".strip() for _, stem in variants_]],
-                   env={**os.environ, "CCROOT": str(home.parent), "CCDIR": home.name, "CCEXE": compiler}, capture_output=True, timeout=1800)
+    native.run_limited([str(ROOT / "tools" / "callconv" / "bcc.sh"), str(folder), *[f"{stem}.c {levels[opt]} {" ".join([*physical_defines(), *BORLAND_DEFINES.get(language, [])])}".strip() for _, stem in variants_]],
+                   env={**os.environ, "CCROOT": str(home.parent), "CCDIR": home.name, "CCEXE": compiler}, seconds=1800)
     support = [word for one in dosbatch.c_support(dosbatch.REAL_MODE, folder) for word in ("file", str(one))]
     out: dict[str, tuple[Path, Path] | str] = {}
     for _, stem in variants_:
@@ -1302,6 +1319,8 @@ def main() -> int:
         recorded = stamp.require_ancestor(BIN, expect, ROOT) if expect else stamp.dist_stamps(BIN)
         args.json.with_name(args.json.name + ".provenance").write_text(json.dumps({name: {"sha": sha, "md5": md5} for name, (sha, md5) in recorded.items()}, indent=1) + "\n")
     print("HARNESS", basecounts.harness_digest())
+    print(*skip_lines(measured), sep="\n")
+    print(*note_lines(measured), sep="\n")
     unbuilt = [f"{'/'.join(key)}: {value['error']}" for key, value in measured.items() if "error" in value and not value["error"].startswith("skipped: ")]
     if unbuilt and (args.record or args.no_judge):  # a base or leg with cells that did not build is no base: say how many, exit nonzero
         print(f"NOHEAD {len(unbuilt)} cells did not build:", *unbuilt[:20], sep="\n  ")
@@ -1339,8 +1358,6 @@ def main() -> int:
         problems += uncovered
         print(*basecounts.coverage_lines(judged, judged_programs, left_out), sep="\n")
         print(*basecounts.coverage_detail(measured, base, same), sep="\n")
-    for why in sorted({value["skip"] for value in measured.values() if "skip" in value}):
-        print("SKIP", why)
     print(*standing(measured, args.select, args.opt), sep="\n")
     print(*align_lines(measured), sep="\n")
     print(*helper_lines(measured), sep="\n")

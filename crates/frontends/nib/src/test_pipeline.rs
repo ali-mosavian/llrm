@@ -472,3 +472,12 @@ fn test_an_immutable_literal_table_is_read_from_its_object_not_stored_per_call()
     assert!(function.contains("$constant"), "{function}");
     assert!(function.matches("mov dword ptr [bp-").count() < 4, "{function}");
 }
+
+/// A local f32 literal table was built by one `mov dword ptr [bp-N], imm` per element (jpeg_single's `cosine`: 64 stores, 102
+/// instructions, ~550 B at -Os m16): `constant_source` took only integer-like elements. It is read from a read-only object too.
+#[test]
+fn test_an_immutable_f32_literal_table_is_read_from_its_object_not_stored_per_call() {
+    let function = _nib("ftable", "pick", "_pick");
+    assert!(function.contains("$constant"), "{function}");
+    assert!(function.matches("mov dword ptr [bp-").count() < 4, "{function}");
+}

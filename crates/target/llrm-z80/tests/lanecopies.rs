@@ -24,11 +24,25 @@ fn a_pack_records_the_lane_each_byte_fills_in_the_pair() {
     assert_eq!(insn.defines, vec![3], "liveness still takes the pair whole");
 }
 
-/// DEVIATE 3b-1: with lane lowering on, lz4c -Oz returned 0x3131 and crc16 -Oz
-/// was 82 B (58 B with the `lane_moves` hint). The hint stays until the split
-/// editor copies by lane.
+/// A copy the spiller made beside the lane copy of a built pair took the lane
+/// copy's operand classes: its pair was handed a byte register, and
+/// `sum3UL -O2` was refused ("d has no byte halves").
 #[test]
-fn z80_keeps_the_lane_hint_until_the_split_copies_by_lane() {
+fn a_pair_copied_beside_a_lane_copy_keeps_its_pair_class() {
+    let dir = env!("CARGO_MANIFEST_DIR");
+    let out = std::env::temp_dir().join("llrm-z80-pair-beside-lane.s");
+    let done = std::process::Command::new(env!("CARGO_BIN_EXE_llrm-z80-llc"))
+        .args(["-S", "-O2", "-o", out.to_str().unwrap(), &format!("{dir}/tests/data/pair_reload_beside_lane_copy.ll")])
+        .output()
+        .expect("llrm-z80-llc runs");
+    assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+}
+
+/// Lowering and joining lanes stay off until the split editor copies by lane
+/// (DEVIATE 3b-1): lowering alone grew the corpus (+505 lines at -O2), and
+/// joining summed a stale byte in `mul_constants` -O2.
+#[test]
+fn z80_keeps_lanes_off_until_the_split_copies_by_lane() {
     use llrm_spike_mf::regalloc::Target;
     assert!(!Z80Registers::lowers_lanes() && !Z80Registers::joins_lanes());
 }

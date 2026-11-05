@@ -25,14 +25,37 @@ class MemoryLimit(subprocess.SubprocessError):
     """The command was stopped by the address-space limit (`ulimit -v`)."""
 
 
+class LimitExpired(subprocess.TimeoutExpired):
+    """A `TimeoutExpired` that names the limit that fired: `limit` is "cpu" (`seconds` of CPU time) or "wall" (the `timeout=` backstop)."""
+
+    def __init__(self, command, seconds, limit: str, output=None, stderr=None):
+        super().__init__(command, seconds, output=output, stderr=stderr)
+        self.limit = limit
+
+    def __str__(self):
+        return f"{self.limit} limit of {self.timeout:g} s hit: {' '.join(map(str, self.cmd[:6]))}"
+
+
 def run(command: list, seconds: int, memory_kb: int | None = None, **kwargs) -> subprocess.CompletedProcess:
-    """`subprocess.run(command, **kwargs)`, stopped after `seconds` of CPU time: raises `subprocess.TimeoutExpired`,
-    the exception a wall-clock `timeout=` raised, so a caller that handled that handles this."""
-    kwargs.setdefault("timeout", BACKSTOP_SECONDS)
+    """`subprocess.run(command, **kwargs)`, stopped after `seconds` of CPU time or the wall-clock `timeout=` backstop: raises `LimitExpired`
+    (a `subprocess.TimeoutExpired`, so a caller that handled that handles this) naming the limit. The command runs in a process group of its own and a wall
+    stop kills the whole group: `subprocess.run(timeout=)` killed only the driver and left gcc's cc1 running 11.5 h."""
+    wall = kwargs.pop("timeout", BACKSTOP_SECONDS)
+    if kwargs.pop("capture_output", False):
+        kwargs["stdout"] = kwargs["stderr"] = subprocess.PIPE
+    stdin = kwargs.pop("input", None)
     limit = MEMORY_KB if memory_kb is None else memory_kb
-    done = subprocess.run(["sh", "-c", f'ulimit -t {seconds}; ulimit -v {limit}; exec "$@"', "sh", *map(str, command)], **kwargs)
+    argv = ["sh", "-c", f'ulimit -t {seconds}; ulimit -v {limit}; exec "$@"', "sh", *map(str, command)]
+    with subprocess.Popen(argv, start_new_session=True, **({"stdin": subprocess.PIPE} if stdin is not None else {}), **kwargs) as process:
+        try:
+            out, err = process.communicate(stdin, timeout=wall)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            out, err = process.communicate()
+            raise LimitExpired(command, wall, "wall", output=out, stderr=err) from None
+    done = subprocess.CompletedProcess(argv, process.returncode, out, err)
     if done.returncode in (-signal.SIGXCPU, -signal.SIGKILL):
-        raise subprocess.TimeoutExpired(command, seconds, output=done.stdout, stderr=done.stderr)
+        raise LimitExpired(command, seconds, "cpu", output=done.stdout, stderr=done.stderr)
     text = done.stderr if isinstance(done.stderr, str) else (done.stderr or b"").decode("latin-1")
     if done.returncode and any(mark in text for mark in OUT_OF_MEMORY):
         raise MemoryLimit(f"memory limit ({limit // 1024} MB): {' '.join(map(str, command[:3]))}")

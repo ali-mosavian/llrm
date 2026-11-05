@@ -116,6 +116,8 @@ fn data_role(
         "_DATA" => Role::Data,
         "_BSS" | "BSSB" => Role::Bss,
         "CONST" => Role::ROData,
+        // The pin's mergeable constant sections (`.rodata.cst4`...).
+        _ if name.starts_with(".rodata.cst") => Role::ROData,
         crate::backend::globals::INIT_SEGMENT => Role::InitFunctions,
         _ if far_bss => Role::Bss,
         _ => Role::Data,
@@ -1074,6 +1076,7 @@ pub fn _encoded(
     };
     let mut code = made.code.clone();
     let mut fixups: IndexMap<usize, Fixup> = IndexMap::default();
+    let beside_memory = what.dests.iter().chain(&what.sources).any(|one| matches!(one, Loc::Mem(_)));
     for one in what.dests.iter().chain(&what.sources) {
         let (at, loc, addend, addr) = match one {
             Loc::Mem(ir::Mem { addr: Some(addr), through, index_through, .. })
@@ -1094,6 +1097,11 @@ pub fn _encoded(
             // instruction pointer.
             // Static code loads it with `mov r32, imm32`: an absolute field.
             Loc::Imm(ir::Imm { address: Some(addr), value, width: 4, .. }) if model == CodeModel::Flat64 => {
+                (made.immediate_at, near, addr.disp + value, addr)
+            }
+            // Beside a memory operand the displacement is the memory's: the
+            // symbol is the sign-extended imm32 (`mov qword ptr [m], offset a`).
+            Loc::Imm(ir::Imm { address: Some(addr), value, .. }) if model == CodeModel::Flat64 && beside_memory => {
                 (made.immediate_at, near, addr.disp + value, addr)
             }
             Loc::Imm(ir::Imm { address: Some(addr), value, .. }) if model == CodeModel::Flat64 => {
@@ -1119,7 +1127,7 @@ pub fn _encoded(
         // a symbol defined elsewhere is its table entry's.
         let loc = if model == CodeModel::Flat64 && matches!(one, Loc::Imm(ir::Imm { width: 4, .. })) {
             loc
-        } else if model == CodeModel::Flat64 && based {
+        } else if model == CodeModel::Flat64 && (based || (beside_memory && matches!(one, Loc::Imm(_)))) {
             llrm_x86::mc::fixup::abs_signed_4()
         } else if model == CodeModel::Flat64 {
             let from = code.len() - at;
@@ -2160,6 +2168,30 @@ mod tests {
             (fixup.kind, fixup.at + 4, field(&piece.code, fixup.at, fixup.kind)),
             (OFFSET32, piece.code.len(), 1280)
         );
+    }
+
+    /// `store ptr @a, ptr @sink` at -O2 -fno-pic encoded `mov [rip+disp], imm`
+    /// with one fixup: the immediate's symbol took the displacement's field, so
+    /// the store wrote 0 over the function `a` (sfm16 c64 -O2 segfaulted).
+    #[test]
+    fn test_a_store_of_a_symbol_to_a_symbol_has_a_fixup_for_each() {
+        let regs = crate::backend::registerinfo::test_regs();
+        let cell = ir::Mem {
+            addr: Some(Addr { index: 3, ..Addr::new(Space::External, 0) }),
+            ..ir::Mem::new(None, 8)
+        };
+        let value = ir::Imm { value: 0, width: 8, address: Some(Addr { index: 4, ..Addr::new(Space::External, 0) }) };
+        let what = semantics(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![Loc::Imm(value)]);
+        let names = IndexMap::from_iter([((Space::External, 3), "sink".to_owned()), ((Space::External, 4), "a".to_owned())]);
+
+        let piece = _encoded(regs, &what, &names, CodeModel::Flat64).unwrap();
+
+        let mut named: Vec<_> = piece.fixups.iter().map(|one| (one.name.as_str(), one.at)).collect();
+        named.sort_unstable();
+        assert_eq!(named.len(), 2, "{named:?}");
+        assert_eq!(named[0].0, "a");
+        assert_eq!(named[1].0, "sink");
+        assert_ne!(named[0].1, named[1].1, "both fixups on one field: {named:?}");
     }
 
     /// Code was never aligned: every function began where the last ended.
