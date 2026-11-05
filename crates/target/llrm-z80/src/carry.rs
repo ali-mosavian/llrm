@@ -161,11 +161,14 @@ fn recognised(
         let Some(low) = low else { continue };
         let low_out = low + 1;
         // the compare's flags are read by the byte alone
-        let others = insts[cp + 1..]
-            .iter()
-            .enumerate()
-            .take_while(|(_, i)| !i.sets_flags)
-            .any(|(at, i)| i.reads_flags && cp + 1 + at != set);
+        // (the instruction that sets them again may read them first: `cp16c`)
+        let mut others = false;
+        for (at, i) in insts[cp + 1..].iter().enumerate() {
+            others |= i.reads_flags && cp + 1 + at != set;
+            if i.sets_flags {
+                break;
+            }
+        }
         if others {
             continue;
         }

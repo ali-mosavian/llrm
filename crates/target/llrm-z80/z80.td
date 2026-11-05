@@ -228,9 +228,6 @@ let mayLoad = 1 in
 let Defs = [A] in {
   def CP16 : Z80Inst<(outs Flags:$f), (ins GR16:$a, GR16:$b), "cp16 $a, $b", [(set i8:$f, (Z80cmp i16:$a, i16:$b))]>;
   def CP16i : Z80Inst<(outs Flags:$f), (ins GR16:$a, i16imm:$b), "cp16 $a, $b", [(set i8:$f, (Z80cmp i16:$a, (i16 imm:$b)))]>;
-  // sbc of the two byte pairs with the carry of the compare before: the carry out is the long's borrow.
-  def CP16C : Z80Inst<(outs Flags:$f), (ins GR16:$a, GR16:$b, Flags:$c, i8imm:$s), "cp16c $a, $b", [(set i8:$f, (Z80cmpc i16:$a, i16:$b, i8:$c, (i8 imm:$s)))]>;
-  def CP16Ci : Z80Inst<(outs Flags:$f), (ins GR16:$a, i16imm:$b, Flags:$c, i8imm:$s), "cp16c $a, $b", [(set i8:$f, (Z80cmpc i16:$a, (i16 imm:$b), i8:$c, (i8 imm:$s)))]>;
 }
 def BIT7_8 : Z80Inst<(outs Flags:$f), (ins GR8:$a), "bit 7, $a", [(set i8:$f, (Z80tsts i8:$a))]>;
 def BIT7_16 : Z80Inst<(outs Flags:$f), (ins GR16:$a), "bit7 $a", [(set i8:$f, (Z80tsts i16:$a))]>;
@@ -347,3 +344,10 @@ def : Pat<(i16 (xor (shl GR16:$x, (i8 8)), GR16:$y)),
 // A byte loaded and widened: the load, and a zero high byte.
 def : Pat<(i16 (zextloadi8 i16:$p)), (ZEXT8 (LD8rm i16:$p))>;
 def : Pat<(i16 (extloadi8 i16:$p)), (ZEXT8 (LD8rm i16:$p))>;
+
+// The next word of a long compare: sbc of the two byte pairs with the carry of the compare before, the carry out the
+// long's borrow. Last in the file so the other instructions keep their numbers.
+let Defs = [A] in {
+  def CP16C : Z80Inst<(outs Flags:$f), (ins GR16:$a, GR16:$b, Flags:$c, i8imm:$s), "cp16c $a, $b", [(set i8:$f, (Z80cmpc i16:$a, i16:$b, i8:$c, (i8 imm:$s)))]>;
+  def CP16Ci : Z80Inst<(outs Flags:$f), (ins GR16:$a, i16imm:$b, Flags:$c, i8imm:$s), "cp16c $a, $b", [(set i8:$f, (Z80cmpc i16:$a, (i16 imm:$b), i8:$c, (i8 imm:$s)))]>;
+}

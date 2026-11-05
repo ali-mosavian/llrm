@@ -1680,3 +1680,25 @@ fn a_function_tuned_for_size_shifts_a_long_by_a_constant_in_the_routine() {
         assert!(!shifted(op, 5, "").contains("__"), "{op} 5 at speed levels");
     }
 }
+
+/// A long compared with another was two word compares joined by a select: each
+/// made a 0/1 byte, the high words' equality picked one (`lcmp` 53 B at -Os,
+/// SDCC 27). The words are one chain of `sub`, `sbc`, `sbc`, `sbc` instead, the
+/// order read from the carry; a signed order corrects the sign for overflow.
+#[test]
+fn a_long_order_is_one_borrow_chain() {
+    let order = |cc: &str| {
+        compiled(
+            &format!(
+                "define i16 @f(i32 %x, i32 %y) optsize {{\n  %c = icmp {cc} i32 %x, %y\n  %r = zext i1 %c to i16\n  ret i16 %r\n}}"
+            ),
+            "f",
+        )
+    };
+    for cc in ["ult", "uge", "slt", "sge", "ugt", "ule", "sgt", "sle"] {
+        let text = order(cc);
+        assert_eq!(text.matches("sbc a,").count(), 3, "{cc}:\n{text}");
+        assert!(!text.contains("jr nz"), "{cc} still joins the words by equality:\n{text}");
+        assert_eq!(text.contains("jp po"), cc.starts_with('s'), "{cc}:\n{text}");
+    }
+}

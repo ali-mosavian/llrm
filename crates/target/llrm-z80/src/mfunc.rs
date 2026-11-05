@@ -410,7 +410,8 @@ impl Emitter<'_> {
                 });
                 match flags_key {
                     Some(key) => {
-                        self.flag_groups.insert(key, carried.into_iter().chain(into[group_start..].iter().cloned()).collect());
+                        self.flag_groups
+                            .insert(key, carried.into_iter().chain(into[group_start..].iter().cloned()).collect());
                         self.flags_now = Some(key);
                     }
                     None if desc.implicit_defs.contains(&pin::F) || desc.has(flag::CALL) => self.flags_now = None,

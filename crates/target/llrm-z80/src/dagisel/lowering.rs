@@ -104,7 +104,7 @@ pub fn target_lowering() -> TargetLowering {
     set(&[ZeroExtend, AnyExtend, SignExtend], &[MVT::I8, MVT::I16], Action::Custom);
     set(&[SetCC, Select], &[MVT::I8, MVT::I16], Action::Custom);
     // a long's order is the chain of its words' compares (`lower_setcc_carry`)
-    set(&[SetCCCarry], &[MVT::I1, MVT::I16], Action::Custom);
+    set(&[SetCCCarry], &[MVT::I1, MVT::I8, MVT::I16], Action::Custom);
     // i1 is a register type here, but its memory is a byte (`lower_bit_load`)
     set(&[Load, Store], &[MVT::I1], Action::Custom);
     for (vt, names) in [
@@ -580,7 +580,7 @@ fn lower_setcc_carry(
     node: SDValue,
 ) -> Option<SDValue> {
     let (high, other, borrow) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
-    if dag.opcode(borrow) != ISD::USubO {
+    if dag.opcode(borrow) != ISD::USubO || dag.value_type(high) != EVT::I16 {
         return None;
     }
     let (low, below) = (dag.operand(borrow, 0), dag.operand(borrow, 1));
