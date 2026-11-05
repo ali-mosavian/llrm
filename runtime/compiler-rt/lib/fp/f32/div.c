@@ -30,6 +30,11 @@ static inline sf32 div_core(uint32_t sign, int ea, int eb, uint32_t ma, uint32_t
     while ((int32_t)r < 0) { q--; r += mb; }
     while (r >= mb) { q++; r -= mb; }
     inexact = r != 0;
+#elif defined(SF_DIV_NATIVE64)
+    /* One 64/32 hardware divide: ma * 2^27 and the quotient (< 2^28) both fit in 64 bits. For a target with a fast 64-bit divide (x86 m64). */
+    uint64_t n = (uint64_t)ma << 27;
+    q = (uint32_t)(n / mb);
+    inexact = n != (uint64_t)q * mb;
 #elif defined(SF_DIV_HW32)
     /* The quotient in four 32/32 hardware divisions: the integer bit, then 8, 8, 8 and 3 fraction bits, each a division of the remainder
      * (< mb < 2^24) shifted up by the step width. For a target whose 32-bit divide is cheap (x86 m32, m68k 020+). */

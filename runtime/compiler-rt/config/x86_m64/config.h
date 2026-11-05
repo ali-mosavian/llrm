@@ -3,4 +3,7 @@
 #define SF_X86_M64_H
 #include "../x86_m32/config.h"
 #define SF_MUL64X64(a, b, h, l) do { unsigned __int128 p_ = (unsigned __int128)(a) * (b); *(h) = (uint64_t)(p_ >> 64); *(l) = (uint64_t)p_; } while (0)
+/* R5 (softfloat, exit 11-20): f32 divide in one 64-bit hardware divide, not four 32-bit ones (SF_DIV_HW32 of the m32 config). Dropped if the 4-divide form measures faster on the m64 targets in use. */
+#undef SF_DIV_HW32
+#define SF_DIV_NATIVE64 1
 #endif
