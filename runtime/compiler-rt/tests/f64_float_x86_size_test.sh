@@ -3,7 +3,7 @@
 # Before: both went through the generic from_mag and sf64_pack, alone m32 516 / 468 B, m64 311 / 262 B (llrm-cc, not system clang: its float.c is twice as large). With all four linked the direct form costs +23 / +33 B.
 cd "$(dirname "$0")/.." || exit 2; T=$(mktemp -d); trap 'rm -r $T' EXIT
 D=${LLRM_DIST:-$(python3 ../../tools/llrmbin.py bin 2> /dev/null)}
-[ -x "$D/llrm-cc" ] && [ -x "$D/llrm-llc" ] || { echo "SKIPPED (not a pass): no llrm-cc/llrm-llc dist; set LLRM_DIST"; exit 2; }
+[ -x "$D/llrm-cc" ] && [ -x "$D/llrm-llc" ] || { echo "FAIL: no llrm-cc/llrm-llc dist; set LLRM_DIST (a missing dist is a failure, not a skip)"; exit 1; }
 export LLRM_LLC=$D/llrm-llc; bad=0
 cat > $T/alone.py <<'P'
 import re, subprocess, sys
