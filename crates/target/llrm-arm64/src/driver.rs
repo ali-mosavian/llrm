@@ -325,7 +325,8 @@ pub fn functions_with(
         dump("OrderCopies", &machine);
         // The shared greedy allocator, unless `LLRM_ARM64_LINEAR` asks for the
         // linear scan; a function greedy refuses goes to the scan, reported.
-        let greedy = (!llrm_support::env_flag!("LLRM_ARM64_LINEAR")).then(|| crate::lir_view::allocate(&mut machine, optsize));
+        let greedy =
+            (!llrm_support::env_flag!("LLRM_ARM64_LINEAR")).then(|| crate::lir_view::allocate(&mut machine, optsize));
         let allocation = match greedy {
             Some(Ok(allocation)) => allocation,
             Some(Err(why)) => {
@@ -342,7 +343,13 @@ pub fn functions_with(
         let blocks = crate::frame::lower(&machine, &allocation, platform == Platform::Darwin)
             .map_err(|why| format!("@{name}: {why}"))?;
         let mut tables = crate::jumptable::tables_of(&machine);
-        let blocks = crate::layout::fold(blocks, &mut tables);
+        let blocks = crate::layout::fold(
+            blocks,
+            &mut tables,
+            &crate::layout::edge_odds(module, function, &program.layout, &machine),
+            optsize,
+            &crate::mfunc::returned_registers(&machine),
+        );
         let blocks = crate::pairs::fold(blocks);
         let mut blocks = crate::ldst_update::fold(blocks, &crate::mfunc::returned_registers(&machine));
         crate::jumptable::compress(&mut blocks, &mut tables).map_err(|why| format!("@{name}: {why}"))?;
