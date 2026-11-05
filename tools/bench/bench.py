@@ -64,6 +64,8 @@ def physical_defines() -> list[str]:
     return [f"-DPHYSICAL_{name.upper()}=0x{address:X}UL" for name, address in tomllib.loads(text)["physical"].items()]
 
 
+# The module that defines `__doserror_`, which the shipped clibm.lib's creatdos/opendos ask for and its dictionary does not give (stft_single, which creates and opens files).
+DOSERROR_OBJ = Path(os.environ.get("LLRM_OW", Path.home() / "scratch/ow-src")) / "bld/clib/_dos/library/msdos.086/mm/error086.obj"
 OW = Path(os.environ.get("OW_BIN", Path.home() / "work/personal/open-watcom-v2/build/binbuild"))
 # Open Watcom's own medium-model C library, 8087 maths library and start-up (an OW v2 release; the tree's build of them
 # needs its generated headers and 16-bit bootstrap, which this checkout lacks)
@@ -383,15 +385,19 @@ def build_watcom(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Pat
     if done.returncode != 0 or not obj.exists():
         return "compile: " + (done.stderr or done.stdout).strip()[-300:]
     support = dosbatch.c_support(dosbatch.REAL_MODE, work)
+    extra: list[str] = []  # error086.obj, once the library turns out not to define `__doserror_`
     stack = 60 * 1024  # the most DGROUP holds: a deep recursion (recsum, 2000 frames) overran the 16K one into the code; a program with more data gets what is left
     while True:
         try:
             # Watcom names main `main_`; its start-up asks for `_cstart_` and the library calls it
             dosbatch._host([str(BIN / "jwlink"), "option", "quiet", "option", f"map={listing}", "option", "start=_cstart_", "option", f"stack={stack}", *dosbatch.linkrecipe.link(dosbatch.REAL_MODE, "format"), "name", str(exe),
-                            "libpath", str(OWLIB / "dos"), "libpath", str(OWLIB), "file", str(obj), *[word for one in support for word in ("file", str(one))],
+                            "libpath", str(OWLIB / "dos"), "libpath", str(OWLIB), "file", str(obj), *extra, *[word for one in support for word in ("file", str(one))],
                             "library", "clibm.lib", "library", "math87m.lib", "library", "noemu87.lib"])
             break
         except dosbatch.BuildError as error:
+            if "__doserror_ is an undefined reference" in str(error) and not extra and DOSERROR_OBJ.exists():
+                extra = ["file", str(DOSERROR_OBJ)]
+                continue
             over = re.search(r"DGROUP exceeds 64k by (\d+) bytes", str(error))
             if not over or stack <= 4096:
                 return f"build: {error}"
