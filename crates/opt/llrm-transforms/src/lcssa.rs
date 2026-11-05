@@ -165,6 +165,7 @@ fn form_on_all_loops(
     for top in info.top_level_loops() {
         changed |= form.recursively(top)?;
     }
+    form.in_value_order()?;
     Ok(changed)
 }
 
@@ -343,7 +344,7 @@ impl Form<'_> {
                 let phi = exit_phi(self.function, value);
                 let incoming = preds.iter().map(|&pred| (Operand::Value(value), pred)).collect::<Vec<_>>();
                 self.function.set_operands(phi, from_arms(&incoming));
-                insert_in_value_order(self.function, exit, phi, value, &self.placed)?;
+                place_phi(self.function, exit, phi)?;
                 self.placed.insert(phi, value);
                 // An exit with a predecessor outside the loop: that input is
                 // rewritten in terms of a different phi.
@@ -387,6 +388,9 @@ impl Form<'_> {
                 updater.rewrite_use(self.context, self.layout, self.function, one);
             }
 
+            for &joined in updater.inserted_phis() {
+                self.placed.insert(joined, value);
+            }
             // SSAUpdater may have placed phis inside other loops.
             for &placed in updater.inserted_phis() {
                 let block = self.function.parent(placed).expect("a placed phi");
@@ -421,6 +425,26 @@ impl Form<'_> {
         Ok(changed)
     }
 
+    /// DEVIATE L4: the phis this run added (exit and join phis) follow a
+    /// block's own phis, by the value they close; the pin leaves each first in
+    /// its block, the last made first.
+    fn in_value_order(&mut self) -> Result<(), String> {
+        let mut by_block: HashMap<BlockId, Vec<(ValueId, InstId)>> = HashMap::new();
+        for (&phi, &value) in &self.placed {
+            if let Some(block) = self.function.parent(phi) {
+                by_block.entry(block).or_default().push((value, phi));
+            }
+        }
+        for (block, mut phis) in by_block {
+            phis.sort_unstable();
+            for (_, phi) in phis {
+                let first = self.function.iter_block(block).find(|&inst| self.function.instruction(inst).opcode != Opcode::Phi);
+                self.function.move_to(phi, first.map_or(Position::End(block), Position::Before))?;
+            }
+        }
+        Ok(())
+    }
+
     /// `PHINode::getIncomingBlock(Use)`.
     fn incoming_block(
         &self,
@@ -433,31 +457,6 @@ impl Form<'_> {
     }
 }
 
-/// Places `phi` for `value` after the block's phis and the phis this run added
-/// for lower values (DEVIATE L4: the pin puts it first in the block).
-fn insert_in_value_order(
-    function: &mut Function,
-    block: BlockId,
-    phi: InstId,
-    value: ValueId,
-    added: &HashMap<InstId, ValueId>,
-) -> Result<(), String> {
-    let mut first_other = None;
-    for inst in function.iter_block(block) {
-        if function.instruction(inst).opcode != Opcode::Phi {
-            first_other = Some(inst);
-            break;
-        }
-        match added.get(&inst) {
-            Some(&of) if of > value => {
-                first_other = Some(inst);
-                break;
-            }
-            _ => {}
-        }
-    }
-    function.insert(phi, first_other.map_or(Position::End(block), Position::Before))
-}
 
 /// `block`'s instructions other than its phis, in order.
 pub(crate) fn operations(
