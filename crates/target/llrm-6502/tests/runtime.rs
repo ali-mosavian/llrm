@@ -591,7 +591,9 @@ fn a_long_modulo_by_a_17_bit_divisor_does_not_walk_32_trips() {
 #[test]
 fn a_long_modulo_runs_for_the_quotients_bits_not_the_dividends_bytes() {
     let clocks = |name: &str, a: u32, b: u32| {
-        let load = |at: &str, v: u32| (0..4).map(|k| format!("  lda #{}\n  sta {at}+{k}\n", (v >> (8 * k)) & 255)).collect::<String>();
+        let load = |at: &str, v: u32| {
+            (0..4).map(|k| format!("  lda #{}\n  sta {at}+{k}\n", (v >> (8 * k)) & 255)).collect::<String>()
+        };
         let setup = format!("{}{}", load("__sa", a), load("__sb", b));
         let with = common::cycles_with(&format!("{name}-with"), &format!("{setup}  jsr __modsi3_fast\n"), "");
         with - common::cycles_with(&format!("{name}-none"), &setup, "")
