@@ -1,4 +1,4 @@
-//! DEVIATE UP1 trial pricing (owner w15, exit 2026-11-20). The pin has no
+//! DEVIATE UP1 trial pricing (owner arm64, exit 2026-11-20; the pin has no byte term and unrolls what its size threshold accepts). The pin has no price for a full
 //! price for a full unroll its threshold allows. Where the target prices bytes
 //! in clocks, such a loop is unrolled on a copy of the function, the
 //! Simplify list runs once over the copy as it does over an inliner trial

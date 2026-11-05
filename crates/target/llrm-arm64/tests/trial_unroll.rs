@@ -30,3 +30,12 @@ fn a_nest_whose_inner_count_follows_the_outer_counter_is_the_pins_decision() {
 fn a_loop_of_constant_count_around_the_nest_is_still_priced() {
     assert!(instructions(include_str!("data/bench_matmul.ll")) <= 205);
 }
+
+/// lru -O2/-O3: the pin unrolls both init loops (unrolled size under the
+/// threshold); the byte price priced the copies' constant stores one by one
+/// (+28 B each), vetoed them, and left +5,043 / +7,049 over the pin. The
+/// lowered copy merges the stores and the loops go.
+#[test]
+fn init_loops_whose_stores_merge_in_the_copies_are_unrolled() {
+    assert_eq!(labels(include_str!("data/bench_lru_init.ll")), 0);
+}
