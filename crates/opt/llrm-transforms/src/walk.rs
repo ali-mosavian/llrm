@@ -248,7 +248,6 @@ impl ProgramPass for Walk {
         program: &mut Program,
         analyses: &mut ProgramAnalyses,
     ) -> Result<(), String> {
-        crate::argpromotion::walk_begins();
         let mut modules = managers(program, analyses);
         let roots = roots(program);
         let recursion = Recursion::of(
@@ -720,7 +719,10 @@ impl ProgramPass for Walk {
                         crate::argpromotion::promoted_among(module, &program.layout, priced, bytes, Some(&members))
                     {
                         modules[at].changed(id);
-                        crate::argpromotion::walk_promoted();
+                        function_mut(module, id)
+                            .1
+                            .attrs
+                            .push(llrm_mir::opcode::Attribute::Flag(PROMOTED_IN_WALK.to_owned()));
                         if visited.contains(&id) {
                             (self.simplify)(module, &mut modules[at], id, "promote.");
                         }
@@ -879,6 +881,25 @@ fn edge_growth_bar(
 }
 
 pub const SELF_COPIED: &str = "llrm-self-copied";
+
+/// A body the walk promoted arguments of: the module-wide step after the walk
+/// reads it to run IPSCCP again (SD443), as it does for its own promotions.
+const PROMOTED_IN_WALK: &str = "llrm-promoted-in-walk";
+
+/// Whether the walk promoted any body; the marks are removed.
+pub(crate) fn take_walk_promotions(program: &mut Program) -> bool {
+    let mut found = false;
+    for module in &mut program.modules {
+        for global in &mut module.globals {
+            if let llrm_mir::module::GlobalKind::Function(function) = &mut global.kind {
+                let before = function.attrs.len();
+                function.attrs.retain(|attr| !matches!(attr, llrm_mir::opcode::Attribute::Flag(flag) if flag == PROMOTED_IN_WALK));
+                found |= function.attrs.len() != before;
+            }
+        }
+    }
+    found
+}
 
 /// DEVIATE (recursion): the copies of a tree-recursive function in itself, as
 /// gcc's `recursive_inlining` makes them, to the limits of [`crate::inline`],

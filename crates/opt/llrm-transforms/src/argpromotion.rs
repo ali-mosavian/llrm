@@ -169,28 +169,6 @@ pub fn promoted(
     promoted_among(module, layout, costs, size, None)
 }
 
-thread_local! {
-    /// Whether the inliner walk promoted a body since it began: the module-wide
-    /// step after it reads this, as it reads its own promotions, to run IPSCCP
-    /// again (SD443).
-    static WALK_PROMOTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// The walk begins: nothing is promoted yet.
-pub(crate) fn walk_begins() {
-    WALK_PROMOTED.with(|one| one.set(false));
-}
-
-/// The walk promoted a body.
-pub(crate) fn walk_promoted() {
-    WALK_PROMOTED.with(|one| one.set(true));
-}
-
-/// Whether the walk promoted a body.
-pub(crate) fn promoted_in_walk() -> bool {
-    WALK_PROMOTED.with(std::cell::Cell::get)
-}
-
 /// [`promoted`] over the functions of `among` alone (None: all): the walk's
 /// component, as the pin's ArgumentPromotion runs per SCC in the CGSCC
 /// pipeline.
