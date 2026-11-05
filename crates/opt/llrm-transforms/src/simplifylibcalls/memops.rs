@@ -9,12 +9,12 @@
 //!   `copyFlags` are not translated: the intrinsic gets `align 1` and nothing
 //!   of the call's attributes, flags or metadata, and the arguments are not
 //!   annotated `nonnull`/`dereferenceable` (`annotateNonNullAndDereferenceable`).
-//! - DEVIATE M3 (owner w2, exit 2026-11-30): the pin marks `mempcpy` and
-//!   `memccpy` unavailable on Windows (TargetLibraryInfo.cpp#L387,
-//!   #L801-L802). The triple is not visible here (`libfunc.rs` DEVIATE 1): a
-//!   target's `Library` states it, and the Windows targets state none, so
-//!   they have the unknown-OS defaults and a user's own `mempcpy` is rewritten.
-//!   Exit: a Windows `Library` naming them unavailable.
+//! - DEVIATE M3 (owner w2, exit 2026-12-01): the pin marks `memccpy`
+//!   unavailable on Windows outside MinGW (TargetLibraryInfo.cpp#L387) and on
+//!   PlayStation, `mempcpy` on PlayStation only (#L801-L802, the `isPS()`
+//!   block from #L692). The triple is not visible here (`libfunc.rs` DEVIATE
+//!   1): a target's `Library` states it, and those targets state none, so a
+//!   user's own `memccpy` there is rewritten. Exit: the Windows `Library`.
 //! - DEVIATE M2 (owner w2, exit 2026-11-30): a pointer in a non-default
 //!   address space is left as the call (the pin's intrinsic is overloaded on
 //!   it; the table here names the default space only).
