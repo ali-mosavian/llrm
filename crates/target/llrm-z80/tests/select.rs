@@ -82,6 +82,24 @@ macro_rules! cpu_tests {
                 assert_eq!(name(&dag, add), "ADD16");
             }
 
+            /// `p + 2` made `ld rr, #2` and `add hl, rr`: a constant the printer
+            /// turned into `inc hl` twice, but the allocator was charged a pair
+            /// for it, and a loop's own constant (fill_nest's `ld bc, #4660`) was
+            /// made again on every trip.
+            #[test]
+            fn a_word_plus_two_is_a_step_not_a_constant_pair() {
+                for (k, step) in [(2, "INC16x2"), (3, "INC16x3"), (-2, "DEC16x2"), (-3, "DEC16x3")] {
+                    let mut dag = TestDag::new();
+                    let a = dag.input(1, mvt::i16);
+                    let c = dag.make_constant(k, mvt::i16);
+                    let add = dag.node(isd::ADD, &[mvt::i16], &[a, c]);
+
+                    assert_eq!(select(&mut dag, add), Outcome::Selected);
+
+                    assert_eq!(name(&dag, add), step, "x + {k}");
+                }
+            }
+
             #[test]
             fn a_byte_load_through_a_pointer_is_ld8rm() {
                 let mut dag = TestDag::new();

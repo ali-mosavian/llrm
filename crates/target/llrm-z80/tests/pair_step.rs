@@ -48,3 +48,15 @@ fn a_variant_is_priced_before_the_printers_peepholes() {
     llrm_z80::expand::PRICING.with(|one| one.set(false));
     assert!(asm.contains("add hl, de") && !asm.contains("inc de"), "{asm}");
 }
+
+/// A pair stepped by three selected as its own instruction prints `inc` three
+/// times: no constant pair, no `add hl`.
+#[test]
+fn a_step_instruction_prints_its_incs() {
+    let phys = |r| Reg::Phys(r);
+    let asm = text(vec![
+        Inst::new(Kind::Op("INC16x3"), vec![Operand::Def(phys(reg::HL)), Operand::Use(phys(reg::HL))]),
+        Inst::new(Kind::Op("RET"), vec![Operand::Use(phys(reg::HL))]),
+    ]);
+    assert!(asm.starts_with("inc hl\ninc hl\ninc hl\nret"), "{asm}");
+}

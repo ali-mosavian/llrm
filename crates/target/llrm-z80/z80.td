@@ -120,6 +120,14 @@ let Constraints = "$d = $a" in {
   def INC16 : Z80Inst<(outs GR16:$d), (ins GR16:$a), "inc $d", [(set i16:$d, (add i16:$a, (i16 1)))]>;
   def DEC16 : Z80Inst<(outs GR16:$d), (ins GR16:$a), "dec $d", [(set i16:$d, (add i16:$a, (i16 -1)))]>;
 }
+// A pair stepped by two or three: `inc rr` / `dec rr` that many times, 2-3 B against the 4 B of `ld rr, #k`
+// and `add hl, rr`. Selected as an instruction of their own so the constant is no register the allocator charges.
+let Constraints = "$d = $a" in {
+  def INC16x2 : Z80Inst<(outs HLR:$d), (ins HLR:$a), "inc $d\n inc $d", [(set i16:$d, (add i16:$a, (i16 2)))]>;
+  def INC16x3 : Z80Inst<(outs HLR:$d), (ins HLR:$a), "inc $d\n inc $d\n inc $d", [(set i16:$d, (add i16:$a, (i16 3)))]>;
+  def DEC16x2 : Z80Inst<(outs HLR:$d), (ins HLR:$a), "dec $d\n dec $d", [(set i16:$d, (add i16:$a, (i16 -2)))]>;
+  def DEC16x3 : Z80Inst<(outs HLR:$d), (ins HLR:$a), "dec $d\n dec $d\n dec $d", [(set i16:$d, (add i16:$a, (i16 -3)))]>;
+}
 
 // The full product of two zero-extended bytes; emission builds B:C and runs mlt bc.
 let Predicates = [HasZ180], Defs = [F] in
