@@ -36,3 +36,16 @@ def test_the_command_prints_na_and_exits_3_not_a_failure(tmp_path):
 def test_the_shipped_dos_programs_are_tagged():
     for name in ("watcom_far_sum", "huge_fill", "regparm3_matrix_4", "fsgs_call", "os_screen", "far_return"):
         assert not ct.applies("z80", (RUN / f"{name}.c").read_text()), name
+
+
+def test_a_family_flags_line_is_read_only_for_its_family():
+    source = "// flags: -O2 -m32\n// flags-m68k: -mcmodel=medium\nint main(void){return 0;}\n"
+    assert ct.flags_for("m68k", source) == ["-mcmodel=medium"]
+    assert ct.flags_for("x86", source) == []
+
+
+def test_the_big_data_programs_ask_m68k_for_the_medium_model():
+    """memcpy_runtime, memfuncs_runtime and memory_expansion address arrays past 32 KiB: 16-bit PC-relative displacements
+    cannot reach them (gas: value too large for field of 2 bytes; ld: R_68K_PC16 truncated)."""
+    for name in ("memcpy_runtime", "memfuncs_runtime", "memory_expansion"):
+        assert ct.flags_for("m68k", (RUN / f"{name}.c").read_text()) == ["-mcmodel=medium"], name
