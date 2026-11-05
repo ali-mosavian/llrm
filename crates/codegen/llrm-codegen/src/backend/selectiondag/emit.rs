@@ -145,6 +145,15 @@ pub trait Conventions {
         None
     }
 
+    /// What a call of `callee` may read and write, as its attributes state it
+    /// (`llrm_mir::memory::of`); any memory where they are not known.
+    fn effects(
+        &self,
+        _callee: Option<&Callee>,
+    ) -> llrm_mir::memory::Effects {
+        llrm_mir::memory::Effects::ANY
+    }
+
     /// The registers a call of `callee` keeps only the pushed part of (a
     /// 16-bit push of a 32-bit register): their upper half is destroyed.
     fn clobbers_high(
@@ -1916,7 +1925,7 @@ impl Emitter<'_, '_> {
             }
         };
         let memory = Arc::new(crate::model::lir::CallMemory {
-            effects: llrm_mir::memory::Effects::ANY,
+            effects: self.ctx.conventions.effects(callee),
             private: Vec::new(),
             // A callee that pops its own arguments lists SP among what it
             // disturbs; the pushes and the call account for that, and a
