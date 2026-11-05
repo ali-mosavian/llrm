@@ -84,6 +84,7 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         multiply_by_clocks: true,
         x87_stack_slots: Some(8),
         speed_milliclocks_per_byte: per_byte,
+        // DEVIATE SZ1 (owner x86-m32, exit 2026-11-20): D11 holds at -Os, so a callee whose copies grow the code stays a call (called_once_os: gcc -Os does; the pin inlines it).
         inline_size_guard_at_size: true,
         // DEVIATE SZ2 (owner x86-m32, exit 2026-11-20): -Os keeps a once-called callee whose copy grows the code (gcc does; the pin copies it).
         inline_size_guard_single_site: true,
