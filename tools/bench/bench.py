@@ -464,6 +464,15 @@ def with_startup(selected: list[str], timing: bool) -> list[tuple[Path, Variant]
     return todo + [(STARTUP, variant) for variant in variants(STARTUP) if timing]
 
 
+def reference_programs(todo: list[tuple[Path, Variant]]) -> list[tuple[Path, Variant]]:
+    """`todo` less the programs whose bench.toml says `references = false` (C99 or llrm-only sources the reference compilers cannot build),
+    each named on a line: a program left out is announced, not silently absent."""
+    left_out = sorted({directory for directory, _ in todo if tomllib.loads((directory / "bench.toml").read_text()).get("references") is False})
+    for directory in left_out:
+        print(f"not a reference program: {directory_name(directory)} (bench.toml: references = false)", flush=True)
+    return [(directory, variant) for directory, variant in todo if directory not in left_out]
+
+
 def measure_references(selected: list[str], opts: list[str], work: Path, timing: bool = False) -> dict[tuple[str, str, str], dict]:
     """The reference compilers on the same programs: Open Watcom and BCC 3.1 for C (languages `ow`, `bcc`, at each level)
     and QuickBASIC 4.5's BC for BASIC (language `bc`, one level: /O). With --time each also gets its kernel time."""
@@ -471,7 +480,7 @@ def measure_references(selected: list[str], opts: list[str], work: Path, timing:
     folder = work / "reference"
     shutil.rmtree(folder, ignore_errors=True)
     folder.mkdir(parents=True)
-    todo = with_startup(selected, timing)
+    todo = reference_programs(with_startup(selected, timing))
     stems = [f"R{at:03d}" for at in range(len(todo))]
     jobs, owned, plain, needs = [], [], {}, {}
     def own(key, stem, directory, variant, built, obj=None):
