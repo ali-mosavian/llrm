@@ -106,6 +106,8 @@ pub struct Selection {
     pub widths: Vec<u32>,
     /// `-g`: the variables the debug info names and where each is (the `.adb`).
     pub variables: Vec<Variable>,
+    /// The function calls a routine that returns twice (`setjmp`).
+    pub returns_twice: bool,
     /// The blocks IR `unreachable` ends. The pin emits nothing for it (the
     /// machine CFG comes from the IR); here a block with no terminator falls
     /// into the next one, so emission states the end.
@@ -196,13 +198,14 @@ pub fn select_function_with(
     }
     let variables =
         variable_sites(module, function, name, &info, selected.first().map_or(&[][..], |b| &b.live_ins[..]));
+    let returns_twice = llrm_mir::memory::calls_returns_twice(module, function);
     let mut unreachable = llrm_mir::dense::IdSet::new();
     for &block in function.layout() {
         if function.terminator(block).is_some_and(|last| function.instruction(last).opcode == Opcode::Unreachable) {
             unreachable.insert(block);
         }
     }
-    Ok(Selection { blocks: selected, locals, cpu, widths, variables, unreachable })
+    Ok(Selection { blocks: selected, locals, cpu, widths, variables, returns_twice, unreachable })
 }
 
 /// The variables of `function` (after the debug import): parameters in the

@@ -106,7 +106,7 @@ pub fn items_with(
 ) -> Result<Vec<Item>, String> {
     let optimized;
     let module = if options.mid_end {
-        optimized = mid_end_described_by(module, &M68k::default(), Some(Rc::new(M68kMachine)))?;
+        optimized = mid_end_described_by(module, &M68k::for_cpu(cpu), Some(Rc::new(M68kMachine { cpu })))?;
         &optimized
     } else {
         module
@@ -118,6 +118,8 @@ pub fn items_with(
         || module.global(id).function().is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
     let blocks = select_function_with(module, name, cpu, options.source_order, options.indexed, options.short)?;
     let mut function = emit(name, &blocks)?;
+    function.returns_twice =
+        module.global(id).function().is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
     if options.short {
         crate::cmpelim::eliminate_tests(&mut function);
         crate::negadd::negative_adds_to_subq(&mut function);
@@ -287,7 +289,15 @@ pub fn mid_end_runs() -> usize {
 /// loop strength reduction, priced by [`M68k`]. (`llc` runs no `opt` pipeline;
 /// the bench's reference does not either.)
 pub fn mid_end(module: &Module) -> Result<Module, String> {
-    mid_end_described_by(module, &M68k::default(), Some(Rc::new(M68kMachine)))
+    mid_end_for(module, Cpu::default())
+}
+
+/// [`mid_end`] for `cpu`.
+pub fn mid_end_for(
+    module: &Module,
+    cpu: Cpu,
+) -> Result<Module, String> {
+    mid_end_described_by(module, &M68k::for_cpu(cpu), Some(Rc::new(M68kMachine { cpu })))
 }
 
 /// [`mid_end`] with another target description: what a test compares the
