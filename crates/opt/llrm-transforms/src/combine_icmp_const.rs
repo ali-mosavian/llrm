@@ -16,7 +16,8 @@
 //! OWED, each at its place as a `// OWED:` comment: the other opcodes of
 //! `foldICmpBinOpWithConstant` (`foldICmpXorConstant`, `foldICmpOrConstant`,
 //! `foldICmpShlConstant`,
-//! `foldICmpSRemConstant`, `foldICmpUDivConstant`, `foldICmpDivConstant`,
+//! `foldICmpSRemConstant`, `foldICmpUDivConstant` (`foldICmpDivConstant` is
+//! `combine_icmp_div`),
 //! ),
 //! the `or`-of-select case of `foldICmpBinOpEqualityWithConstant`, the
 //! truth-table fold, and the select, truncate, intrinsic and `extractvalue`
@@ -156,6 +157,18 @@ pub fn fold_icmp_inst_with_constant(
     };
     if let Some((op, flags, x, amount)) = shr
         && let Some(visit) = fold_icmp_shr_constant(c, inst, pred, op0, (op, flags), (x, amount), value, width)
+    {
+        return Some(visit);
+    }
+    let div = {
+        let q = query(c, None);
+        [BinaryOp::UDiv, BinaryOp::SDiv]
+            .into_iter()
+            .find_map(|op| pattern::binary(&q, op0, op).map(|(_, div, x, y)| (op, div.flags, x, y)))
+    };
+    if let Some((op, flags, x, y)) = div
+        && let Some(visit) =
+            crate::combine_icmp_div::fold_icmp_div_constant(c, inst, pred, op0, (op, flags), (x, y), value, width)
     {
         return Some(visit);
     }
