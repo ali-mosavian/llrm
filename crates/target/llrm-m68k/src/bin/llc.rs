@@ -1,8 +1,9 @@
-//! `llrm-m68k-llc -S [-mcpu=68000|..|68060] [-O<n>] [--dump DIR] [-o OUT]
+//! `llrm-m68k-llc -S [-mcpu=68000|..|68060] [-mcmodel=small|medium|large] [-O<n>] [--dump DIR] [-o OUT]
 //! FILE.ll`: LLVM IR from clang's front end alone through the mid-end and the
 //! m68k backend to assembly text with `-S`, else to an ELF32 relocatable
 //! object (`-c` is the same).
 
+use llrm_m68k::compile::CodeModel;
 use llrm_m68k::driver::{self, Level};
 
 fn main() {
@@ -19,6 +20,7 @@ fn run() -> i32 {
     let mut output = None;
     let mut input = None;
     let mut dump = None;
+    let mut model = CodeModel::Small;
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
@@ -29,6 +31,13 @@ fn run() -> i32 {
             "--dump" => dump = arguments.next().map(std::path::PathBuf::from),
             other if other.starts_with("--dump=") => dump = Some(other["--dump=".len()..].into()),
             other if other.starts_with("-mcpu=") => cpu = other["-mcpu=".len()..].to_owned(),
+            other if other.starts_with("-mcmodel=") => match CodeModel::parse(&other["-mcmodel=".len()..]) {
+                Ok(parsed) => model = parsed,
+                Err(why) => {
+                    eprintln!("llrm-m68k-llc: {why}");
+                    return 2;
+                }
+            },
             other if other.starts_with("-O") => match Level::parse(&other[2..]) {
                 Ok(parsed) => level = parsed,
                 Err(why) => {
@@ -49,7 +58,7 @@ fn run() -> i32 {
     }
     let Some(input) = input else {
         eprintln!(
-            "usage: llrm-m68k-llc [-S|-c] [-g] [-mcpu=68000|..|68060] [-O0|-O1|-O2|-O3|-Os|-Oz] [--dump DIR] [-o OUT] FILE.ll"
+            "usage: llrm-m68k-llc [-S|-c] [-g] [-mcpu=68000|..|68060] [-mcmodel=small|medium|large] [-O0|-O1|-O2|-O3|-Os|-Oz] [--dump DIR] [-o OUT] FILE.ll"
         );
         return 2;
     };
@@ -63,9 +72,9 @@ fn run() -> i32 {
     let env = llrm_support::env_var("LLRM_MIR_STAGES").map(std::path::PathBuf::from);
     let result: Result<Vec<u8>, String> = driver::cpu_of(&cpu).and_then(|cpu| {
         if assembly {
-            driver::assembly_with(&text, cpu, level, debug, dump.as_deref().or(env.as_deref())).map(String::into_bytes)
+            driver::assembly_in(&text, cpu, level, debug, dump.as_deref().or(env.as_deref()), model).map(String::into_bytes)
         } else {
-            driver::object(&text, cpu, level, &input)
+            driver::object_in(&text, cpu, level, &input, model)
         }
     });
     match result {
