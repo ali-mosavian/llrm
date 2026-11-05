@@ -2252,3 +2252,31 @@ fn the_array_of_a_function_that_calls_a_declaration_stays_on_the_stack() {
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
     assert!(!text.contains("_local"), "{text}");
 }
+
+/// The start-up zeroing of the new BSS costs 15 clocks a byte, once: a
+/// function called once, outside any loop, with a 24-byte array it touches
+/// twice, gave `tail_calls` 360 clocks for 46 saved. It keeps the stack where
+/// clocks count (-O2) and goes static where bytes do (-Os).
+#[test]
+fn a_static_array_pays_for_the_zeroing_of_its_bytes() {
+    let ir = module(
+        r#"define i8 @once(i8 %n) noinline norecurse {
+  %a = alloca [24 x i8]
+  %w = zext i8 %n to i16
+  %p = getelementptr i8, ptr %a, i16 %w
+  store volatile i8 %n, ptr %p
+  %v = load volatile i8, ptr %p
+  ret i8 %v
+}
+define i8 @t() {
+  %r = call i8 @once(i8 7)
+  ret i8 %r
+}"#,
+    );
+    let speed = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(!speed.contains("_local"), "-O2 zeroes 24 bytes to save 46 clocks:\n{speed}");
+    assert_eq!(exit_code_of(&speed, "t"), 7, "{speed}");
+    let size = assembly(&ir, &Request::new(Level::Os)).unwrap();
+    assert!(size.contains("_local0"), "-Os counts bytes:\n{size}");
+    assert_eq!(exit_code_of(&size, "t"), 7, "{size}");
+}
