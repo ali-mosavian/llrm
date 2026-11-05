@@ -198,13 +198,19 @@ fn merge_return_tails(blocks: &mut Vec<Lowered>) {
         let mut insts = blocks[at].insts.clone();
         match (insts.last(), bare) {
             (Some(Inst::Ret { .. }), None) => Some(insts),
-            (Some(last), Some((label, ret))) if last == ret || matches!(last, Inst::Branch { link: false, target: Target::Label(to) } if to == label) => {
+            (Some(last), Some((label, ret)))
+                if last == ret
+                    || matches!(last, Inst::Branch { link: false, target: Target::Label(to) } if to == label) =>
+            {
                 if blocks[at].label == *label || insts.len() < 2 {
                     return None;
                 }
                 *insts.last_mut()? = Inst::Branch { link: false, target: Target::Label(label.clone()) };
                 Some(insts)
             }
+            // A jump (to a block, or a tail call): the blocks that jump to the
+            // same place end alike.
+            (Some(Inst::Branch { link: false, .. }), _) => Some(insts),
             _ => None,
         }
     };
@@ -213,19 +219,30 @@ fn merge_return_tails(blocks: &mut Vec<Lowered>) {
         let ending: Vec<(usize, Vec<Inst>)> = (0..blocks.len())
             .filter_map(|at| ends_alike(blocks, at, &bare_block).map(|insts| (at, insts)))
             .collect();
-        if ending.len() > 64 {
-            return;
+        // Blocks are compared with those that end in the same instruction.
+        let mut groups: HashMap<String, Vec<usize>> = HashMap::default();
+        for (at, (_, insts)) in ending.iter().enumerate() {
+            if let Some(last) = insts.last() {
+                groups.entry(format!("{last:?}")).or_default().push(at);
+            }
         }
         let mut best: Option<(usize, usize, usize)> = None;
-        for (a, (one, one_insts)) in ending.iter().enumerate() {
-            for (other, other_insts) in &ending[a + 1..] {
-                let length = common_tail(one_insts, other_insts);
-                let real = one_insts[one_insts.len() - length..].iter().filter(|i| counts(i)).count();
-                // The same two blocks again, or a tail that is a whole block
-                // `forwards` merges.
-                let whole = length == blocks[*one].insts.len() && length == blocks[*other].insts.len();
-                if real >= TAIL_MERGE_SIZE && !whole && best.is_none_or(|(_, _, longest)| length > longest) {
-                    best = Some((*one, *other, length));
+        for group in groups.values().filter(|group| group.len() > 1 && group.len() <= 64) {
+            for (a, &x) in group.iter().enumerate() {
+                for &y in &group[a + 1..] {
+                    let ((one, one_insts), (other, other_insts)) = (&ending[x], &ending[y]);
+                    let length = common_tail(one_insts, other_insts);
+                    let real = one_insts[one_insts.len() - length..].iter().filter(|i| counts(i)).count();
+                    // The same two blocks again, or a tail that is a whole block
+                    // `forwards` merges.
+                    let whole = length == blocks[*one].insts.len() && length == blocks[*other].insts.len();
+                    let found = (*one.min(other), *one.max(other), length);
+                    if real >= TAIL_MERGE_SIZE
+                        && !whole
+                        && best.is_none_or(|(a, b, longest)| length > longest || (length == longest && (found.0, found.1) < (a, b)))
+                    {
+                        best = Some(found);
+                    }
                 }
             }
         }
@@ -242,8 +259,18 @@ fn merge_return_tails(blocks: &mut Vec<Lowered>) {
             (one, other)
         } else {
             let at = blocks[other].insts.len() - length;
+            let label = {
+                let mut number = 0;
+                loop {
+                    let label = format!("{}.t{number}", blocks[other].label);
+                    if !blocks.iter().any(|block| block.label == label) {
+                        break label;
+                    }
+                    number += 1;
+                }
+            };
             let tail = Lowered {
-                label: format!("{}.tail", blocks[other].label),
+                label,
                 insts: blocks[other].insts.split_off(at),
                 locs: blocks[other].locs.split_off(at),
             };
