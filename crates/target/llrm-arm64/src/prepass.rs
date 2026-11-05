@@ -96,7 +96,7 @@ fn keyed(op: &Op) -> String {
     format!("{copy:?}")
 }
 
-struct Cfg {
+pub(crate) struct Cfg {
     successors: Vec<Vec<usize>>,
     predecessors: Vec<Vec<usize>>,
     /// Immediate dominators; the entry's is itself.
@@ -105,7 +105,7 @@ struct Cfg {
     order: Vec<usize>,
 }
 
-fn cfg(function: &MFunc) -> Cfg {
+pub(crate) fn cfg(function: &MFunc) -> Cfg {
     let count = function.blocks.len();
     let labels: HashMap<&str, usize> =
         function.blocks.iter().enumerate().map(|(at, one)| (one.label.as_str(), at)).collect();
@@ -267,6 +267,7 @@ pub fn run(function: &mut MFunc) {
     // What was hoisted from several blocks is one value in the preheader.
     cse(function);
     sink(function);
+    crate::sinkfold::run(function);
     dead_definitions(function);
     non_flag_setting(function);
     redundant_zero_extends(function);
@@ -681,7 +682,7 @@ fn invariants(
 /// reads most, as many as the registers not already held by what the loop
 /// reads from outside, plus what they are made from.
 /// The virtual registers live into each block.
-fn live_in(
+pub(crate) fn live_in(
     function: &MFunc,
     cfg: &Cfg,
 ) -> Vec<HashSet<Reg>> {
@@ -717,7 +718,7 @@ fn live_in(
 /// The most virtual registers (general, floating point) live at once at a
 /// point of `blocks`, leaving out `skip` (`MachineLICM`'s `RegPressure` over
 /// the loop: its temporaries count, not only what it holds across trips).
-fn peak_pressure(
+pub(crate) fn peak_pressure(
     function: &MFunc,
     blocks: &[usize],
     cfg: &Cfg,
