@@ -2768,6 +2768,7 @@ fn below_top(
 /// jpeg_fixed 5749 -> 5874. Exit: the frame lowering prices the two forms in
 /// clocks as well as bytes (or `-Os` frames are laid out for disp8 reach from
 /// the stack pointer), and this comparison is deleted.
+#[track_caller]
 fn frame_omitted(
     procedure: &Procedure,
     number: usize,
@@ -2922,11 +2923,15 @@ pub fn frame_asks_report() -> String {
     let total: usize = asks.values().map(Vec::len).sum();
     let flips = asks.values().filter(|one| one.iter().any(|ask| ask.some != one[0].some)).count();
     let (mut output, mut repeat) = (0, 0);
+    let mut pairs = std::collections::BTreeMap::<(u32, u32), usize>::new();
+    let mut answers = [0usize; 2];
     for one in asks.values() {
         for (index, ask) in one.iter().enumerate() {
+            answers[usize::from(ask.some)] += 1;
             if let Some(same) = one[..index].iter().find(|before| before.input == ask.input && before.number == ask.number) {
                 if same.some == ask.some && same.output == ask.output {
                     repeat += 1;
+                    *pairs.entry((same.line, ask.line)).or_default() += 1;
                 } else {
                     output += 1;
                 }
@@ -2936,13 +2941,17 @@ pub fn frame_asks_report() -> String {
     let mut lines = std::collections::BTreeMap::<u32, usize>::new();
     asks.values().flatten().for_each(|ask| *lines.entry(ask.line).or_default() += 1);
     let by_line: Vec<String> = lines.iter().map(|(line, count)| format!("{line} {count}")).collect();
+    let repeated: Vec<String> = pairs.iter().map(|((from, to), count)| format!("{from}>{to} {count}")).collect();
     format!(
-        "frame asks: {} functions, {} asks, {} flips, {} output-changed, {} repeats; by caller line: {}",
+        "frame asks: {} functions, {} asks, {} flips, {} output-changed, {} repeats; answers none {} some {}; repeat pairs: {}; by caller line: {}",
         asks.len(),
         total,
         flips,
         output,
         repeat,
+        answers[0],
+        answers[1],
+        repeated.join(", "),
         by_line.join(", ")
     )
 }
