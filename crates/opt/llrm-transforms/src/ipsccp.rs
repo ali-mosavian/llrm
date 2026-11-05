@@ -132,8 +132,9 @@ fn solved_each(
     for at in 0..program.modules.len() {
         let private = crate::interprocedural::private(program, at);
         let outer = outer_of(program, at);
+        let keeps_sign = program.target.tti().is_some_and(|tti| tti.ipsccp_widen_keeps_sign());
         let Program { modules, layout, .. } = &mut *program;
-        for id in run_on_module(&mut modules[at], layout, &outer, &private) {
+        for id in run_on_module(&mut modules[at], layout, &outer, &private, keeps_sign) {
             changed.insert((at, id));
         }
     }
@@ -236,6 +237,7 @@ fn run_on_module(
     layout: &DataLayout,
     outer: &Outer,
     private: &BTreeSet<GlobalId>,
+    keeps_sign: bool,
 ) -> BTreeSet<GlobalId> {
     let ids: Vec<GlobalId> =
         module.functions().filter(|(_, _, function)| !function.is_declaration()).map(|(id, _, _)| id).collect();
@@ -267,6 +269,7 @@ fn run_on_module(
             .collect();
         let env = ModuleEnv { context, layout, globals, metadata };
         let mut solver = Solver::module(env, functions).expect("a defined function");
+        solver.keep_sign_when_widening(keeps_sign);
         for (at, &id) in ids.iter().enumerate() {
             // Determine if we can track the function's return values.
             if tracks_returns[at] {

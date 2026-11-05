@@ -102,6 +102,11 @@ pub struct Tuning {
     /// not a call of `memcpy` (gcc's `rep_prefix_4_byte` stringop strategy for
     /// the 486 and P5). false: the pin's `EmitTargetCodeForMemcpy`, a libcall.
     pub inline_variable_memcpy: bool,
+    /// DEVIATE REC5-1 (owner w2, exit 2026-11-20): IPSCCP widens a range that
+    /// keeps growing to its half-line, keeping the sign, not to overdefined
+    /// (the pin). recpow -O2: `i % 97` of a loop counter was a signed divide
+    /// all the way into the callee.
+    pub ipsccp_widen_keeps_sign: bool,
 }
 
 impl Tuning {
@@ -133,6 +138,7 @@ impl Tuning {
         peel_folded_entry: false,
         sink_select_arms: false,
         inline_variable_memcpy: false,
+        ipsccp_widen_keeps_sign: false,
     };
 }
 

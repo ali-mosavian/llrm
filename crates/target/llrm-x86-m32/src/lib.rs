@@ -102,6 +102,9 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // its short copy loops were `call _memcpy`; inline, 72146 -> 66173 clk
         // (gcc 60026: row MEM-1-R1). Owner w2. Exit 2026-11-20.
         inline_variable_memcpy: true,
+        // DEVIATE REC5-1 (owner w2, exit 2026-11-20):
+        // see `Tuning::ipsccp_widen_keeps_sign`.
+        ipsccp_widen_keeps_sign: true,
         ..llrm_mir::target::Tuning::PIN
     }
 }
