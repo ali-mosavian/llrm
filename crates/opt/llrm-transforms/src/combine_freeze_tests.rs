@@ -66,3 +66,47 @@ b0:
     assert!(after.contains("or i32 %x, -1"), "{after}");
     assert!(!after.contains("freeze"), "{after}");
 }
+
+/// A freeze of an argument with another user left that user unfrozen: pinned
+/// instcombine (`freezeOtherUses`) hoists the freeze to the entry and reads it
+/// in every dominated use (`freeze_dominated_uses_test1`). It cost
+/// `freeze i8` after jpeg's `inbuf` load being missing at -O1.
+#[test]
+fn a_freeze_replaces_the_dominated_uses_of_its_operand() {
+    let after = combined(
+        "declare void @use(i32)
+define void @f(i32 %v) {
+b0:
+  %fr = freeze i32 %v
+  call void @use(i32 %v)
+  call void @use(i32 %fr)
+  ret void
+}
+",
+    );
+    assert!(!after.contains("@use(i32 %v)"), "{after}");
+    assert_eq!(after.matches("freeze i32 %v").count(), 1, "{after}");
+}
+
+/// A freeze in a branch arm stayed there with the other arm unfrozen: the
+/// freeze moves to right after the definition (the entry) and both arms read it.
+#[test]
+fn a_freeze_moves_next_to_the_definition_to_dominate_more_uses() {
+    let after = combined(
+        "declare void @use(i32)
+define void @f(i32 %v, i1 %c) {
+b0:
+  br i1 %c, label %a, label %b
+a:
+  %fr = freeze i32 %v
+  call void @use(i32 %fr)
+  ret void
+b:
+  call void @use(i32 %v)
+  ret void
+}
+",
+    );
+    assert!(!after.contains("@use(i32 %v)"), "{after}");
+    assert!(after.find("freeze").unwrap() < after.find("br i1").unwrap(), "{after}");
+}
