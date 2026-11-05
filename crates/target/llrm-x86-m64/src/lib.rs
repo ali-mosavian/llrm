@@ -437,6 +437,9 @@ mod tests {
     fn test_every_bytes_form_is_the_length_iced_encodes() {
         use iced_x86::{Code, Encoder, Instruction, MemoryOperand, Register::*};
         let slot = || MemoryOperand::with_base_displ(RBP, -8);
+        // x87 loads and stores go through rsp (a SIB byte); arithmetic reads rip-relative constants.
+        let stack = || MemoryOperand::with_base_displ(RSP, 16);
+        let constant = || MemoryOperand::with_base_displ(RIP, 0x2000);
         let forms: Vec<(&str, Instruction)> = vec![
             ("alu_rr", Instruction::with2(Code::Add_r64_rm64, RAX, RCX).unwrap()),
             ("xchg_rr", Instruction::with2(Code::Xchg_rm64_r64, RAX, RCX).unwrap()),
@@ -460,11 +463,11 @@ mod tests {
             ("alu_ri", Instruction::with2(Code::Add_rm64_imm8, RAX, 8i32).unwrap()),
             ("ret_pop", Instruction::with1(Code::Retnq_imm16, 8u32).unwrap()),
             ("x87_add", Instruction::with2(Code::Fadd_st0_sti, ST0, ST1).unwrap()),
-            ("x87_add_m", Instruction::with1(Code::Fadd_m32fp, slot()).unwrap()),
+            ("x87_add_m", Instruction::with1(Code::Fadd_m32fp, constant()).unwrap()),
             ("x87_mul", Instruction::with2(Code::Fmul_st0_sti, ST0, ST1).unwrap()),
             ("x87_div", Instruction::with2(Code::Fdiv_st0_sti, ST0, ST1).unwrap()),
-            ("x87_load", Instruction::with1(Code::Fld_m32fp, slot()).unwrap()),
-            ("x87_store", Instruction::with1(Code::Fstp_m32fp, slot()).unwrap()),
+            ("x87_load", Instruction::with1(Code::Fld_m32fp, stack()).unwrap()),
+            ("x87_store", Instruction::with1(Code::Fstp_m32fp, stack()).unwrap()),
             ("x87_release", Instruction::with1(Code::Fstp_sti, ST0).unwrap()),
             ("sse_arith", Instruction::with2(Code::Addsd_xmm_xmmm64, XMM0, XMM1).unwrap()),
             ("sse_sqrt", Instruction::with2(Code::Sqrtsd_xmm_xmmm64, XMM0, XMM1).unwrap()),
