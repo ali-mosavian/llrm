@@ -480,7 +480,9 @@ mod tests {
             ("sse_arith", two(Code::Addsd_xmm_xmmm64, XMM0, XMM1), two(Code::Addsd_xmm_xmmm64, XMM8, XMM9)),
             ("sse_arith_m", rm(Code::Addsd_xmm_xmmm64, XMM0, near()), rm(Code::Addsd_xmm_xmmm64, XMM8, far())),
             ("sse_sqrt", two(Code::Sqrtsd_xmm_xmmm64, XMM0, XMM1), two(Code::Sqrtsd_xmm_xmmm64, XMM8, XMM9)),
-            ("sse_move", two(Code::Movaps_xmm_xmmm128, XMM0, XMM1), rm(Code::Movsd_xmm_xmmm64, XMM8, far())),
+            ("sse_move", two(Code::Movaps_xmm_xmmm128, XMM0, XMM1), two(Code::Movsd_xmm_xmmm64, XMM8, XMM9)),
+            ("sse_load", rm(Code::Movsd_xmm_xmmm64, XMM0, near()), rm(Code::Movsd_xmm_xmmm64, XMM8, far())),
+            ("sse_store", mr(Code::Movsd_xmmm64_xmm, near(), XMM0), mr(Code::Movsd_xmmm64_xmm, far(), XMM8)),
             ("sse_compare", two(Code::Ucomisd_xmm_xmmm64, XMM0, XMM1), two(Code::Ucomisd_xmm_xmmm64, XMM8, XMM9)),
             ("sse_logic", two(Code::Xorps_xmm_xmmm128, XMM0, XMM1), two(Code::Xorps_xmm_xmmm128, XMM8, XMM9)),
             ("rep_stos", Instruction::with_rep_stosd(64).unwrap(), Instruction::with_rep_stosq(64).unwrap()),
@@ -522,14 +524,16 @@ mod tests {
 
     /// `float_add`/`float_load`/`float_store` named the x87 forms (2-4 B), so a
     /// loop of `double` arithmetic, which is SSE at x86-64, was priced 30% under
-    /// its encodings: the six-trip nests of fpbench -O2 unrolled (+248 B).
+    /// its encodings: the six-trip nests of fpbench -O2 unrolled (+248 B). A float
+    /// load or store is the memory form (corpus mean 7-8 B), not the mean of every
+    /// SSE move, whose register copies (3.6 B) dilute it to 6.
     #[test]
     fn test_float_operations_are_priced_in_sse_bytes() {
         let sized = OPCOSTS.size_costs();
         assert_eq!(sized.float_add, OPCOSTS.bytes("sse_arith").unwrap());
         assert_eq!(sized.float_multiply, OPCOSTS.bytes("sse_arith").unwrap());
-        assert_eq!(sized.float_load, OPCOSTS.bytes("sse_move").unwrap());
-        assert_eq!(sized.float_store, OPCOSTS.bytes("sse_move").unwrap());
+        assert_eq!(sized.float_load, OPCOSTS.bytes("sse_load").unwrap());
+        assert_eq!(sized.float_store, OPCOSTS.bytes("sse_store").unwrap());
         assert_eq!(sized.float_load_folded, 3);
         assert_eq!(sized.float_release, 0);
     }
