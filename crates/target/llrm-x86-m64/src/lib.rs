@@ -383,11 +383,11 @@ impl llrm_target::Target for M64 {
                             // x86-m32's): a full unroll repays its bytes at a
                             // rate in milliclocks a byte (fpbench -O2:
                             // 6-trip fp nests, +815 B for -75 clocks, gcc keeps them).
-                            // 156: a cold 64 B line fill is 10 clocks (L2 chase 14-16 minus
-                            // L1 chase 4), measured on a Ryzen 9 9950X3D (Zen 5); a model
-                            // choice, not validated by the warm-loop clock columns
-                            // (row M64-RATE, owner m64, exit 2026-11-20).
-                            unroll_milliclocks_per_byte: 156,
+                            // 312 is x86-m32's 486 line-fill rate, borrowed: UNMEASURED at m64
+                            // (row M64-RATE, owner m64, exit 2026-11-20). A cold 64 B L2 fill
+                            // measured on a Ryzen 9 9950X3D is 10 clocks = 156 mclk/B; at 156
+                            // fcmp_all -O2 grew 63% for 10% fewer instructions, so it stays 312.
+                            unroll_milliclocks_per_byte: 312,
                             unroll_promotion_fits_registers: true,
                             rotation_guard_must_fold_at_size: true,
                             // No byte/clock rate is stated for m64 (oversight
@@ -478,6 +478,7 @@ mod tests {
             ("x87_store", Instruction::with1(Code::Fstp_m32fp, near()).unwrap(), Instruction::with1(Code::Fstp_m32fp, rip()).unwrap()),
             ("x87_release", Instruction::with1(Code::Fstp_sti, ST0).unwrap(), Instruction::with1(Code::Fstp_sti, ST0).unwrap()),
             ("sse_arith", two(Code::Addsd_xmm_xmmm64, XMM0, XMM1), two(Code::Addsd_xmm_xmmm64, XMM8, XMM9)),
+            ("sse_arith_m", rm(Code::Addsd_xmm_xmmm64, XMM0, near()), rm(Code::Addsd_xmm_xmmm64, XMM8, far())),
             ("sse_sqrt", two(Code::Sqrtsd_xmm_xmmm64, XMM0, XMM1), two(Code::Sqrtsd_xmm_xmmm64, XMM8, XMM9)),
             ("sse_move", two(Code::Movaps_xmm_xmmm128, XMM0, XMM1), rm(Code::Movsd_xmm_xmmm64, XMM8, far())),
             ("sse_compare", two(Code::Ucomisd_xmm_xmmm64, XMM0, XMM1), two(Code::Ucomisd_xmm_xmmm64, XMM8, XMM9)),
@@ -517,6 +518,20 @@ mod tests {
         assert_eq!(named("x87"), ["st0", "st1", "st2", "st3", "st4", "st5", "st6", "st7"]);
         assert_eq!(named("rfp"), ["mm0", "mm1", "mm2", "mm3", "mm4", "mm5", "mm6"]);
         assert_eq!(M64.float_stack(), 8);
+    }
+
+    /// `float_add`/`float_load`/`float_store` named the x87 forms (2-4 B), so a
+    /// loop of `double` arithmetic, which is SSE at x86-64, was priced 30% under
+    /// its encodings: the six-trip nests of fpbench -O2 unrolled (+248 B).
+    #[test]
+    fn test_float_operations_are_priced_in_sse_bytes() {
+        let sized = OPCOSTS.size_costs();
+        assert_eq!(sized.float_add, OPCOSTS.bytes("sse_arith").unwrap());
+        assert_eq!(sized.float_multiply, OPCOSTS.bytes("sse_arith").unwrap());
+        assert_eq!(sized.float_load, OPCOSTS.bytes("sse_move").unwrap());
+        assert_eq!(sized.float_store, OPCOSTS.bytes("sse_move").unwrap());
+        assert_eq!(sized.float_load_folded, 3);
+        assert_eq!(sized.float_release, 0);
     }
 
     /// `object()` and the runtime tables are parsed once and kept; each must

@@ -89,6 +89,7 @@ x87_load = 4
 x87_store = 4
 x87_release = 2
 sse_arith = 4
+sse_arith_m = 7
 sse_sqrt = 4
 sse_move = 6
 sse_compare = 4
@@ -106,3 +107,13 @@ rep_movs_cell = 0
 prefix = 1
 store_immediate = mov_mi
 argument = 2
+# A double or float is SSE at x86-64, not an x87 stack entry (only long double is): the x87 rows above
+# priced fpbench's loop bodies at 2-4 B an operation, 30% under their encodings. [operations] still names the
+# x87 forms for clocks (row M64-FLOATCLK).
+float_add = sse_arith
+float_multiply = sse_arith
+float_divide = sse_arith
+float_load = sse_move
+float_load_folded = sse_arith_m - sse_arith
+float_store = sse_move
+float_release = 0
