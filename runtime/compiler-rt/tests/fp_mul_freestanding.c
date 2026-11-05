@@ -8,6 +8,8 @@ double sfb_divdf3(double, double);
 float sfb_floatsisf(int);
 double sfb_floatsidf(int);
 double sfb_floatdidf(long long);
+double sfb_floatunsidf(unsigned);
+double sfb_floatundidf(unsigned long long);
 #ifndef REPS
 #define REPS 1
 #endif
@@ -26,7 +28,9 @@ int run(void)
         case 1: r.f = sfb_muldf3(a.f, b.f); break;
         case 3: r.f = sfb_divdf3(a.f, b.f); break;
         case 5: r.f = sfb_floatsidf((int)V[i].a); break;
-        default: r.f = sfb_floatdidf((long long)V[i].a); break;
+        case 6: r.f = sfb_floatdidf((long long)V[i].a); break;
+        case 7: r.f = sfb_floatunsidf((unsigned)V[i].a); break;
+        default: r.f = sfb_floatundidf(V[i].a); break;
         }
         if (op == 0 || op == 2 || op == 4) bad += fr.u != (unsigned)V[i].want;
         else bad += r.u != V[i].want;
