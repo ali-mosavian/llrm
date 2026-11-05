@@ -1,5 +1,5 @@
-//! A backward string move takes ES as an input, not a clobber, so a
-//! selector already in ES is reused. Needs the pinned clang
+//! A backward string move loads ES itself (`push ds; pop es`): ES is not an
+//! input, since a far access leaves its own selector there. Needs the pinned clang
 //! (`LLRM_PIN_CLANG`) and the Open Watcom headers (`LLRM_OW`).
 
 #[path = "common/target_dir.rs"]
@@ -15,10 +15,11 @@ fn has(
     code.windows(pattern.len()).any(|window| window == pattern)
 }
 
-/// Each backward copy loaded ES itself (`push ds; pop es`), so scroll -Os with
-/// a forward and a backward copy spent six bytes more than one load.
+/// A backward copy took ES as it found it, so after a far access it wrote
+/// through the far selector (idiom_edges.c bytes_down, wrong sum); each copy
+/// loads ES.
 #[test]
-fn backward_copies_load_es_once() {
+fn backward_copies_load_es() {
     if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
         eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
         return;
@@ -51,6 +52,6 @@ fn backward_copies_load_es_once() {
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
     let code = std::fs::read(dir.join("d.o")).unwrap();
     let loads = code.windows(2).filter(|window| *window == [0x1e, 0x07]).count();
-    assert!(loads == 0, "{loads} `push ds; pop es` in two backward copies");
+    assert!(loads == 2, "{loads} `push ds; pop es` in two backward copies, want one each");
     assert!(has(&code, &[0xfd]), "no backward string move was emitted");
 }

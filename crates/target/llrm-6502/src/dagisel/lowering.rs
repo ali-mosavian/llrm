@@ -622,15 +622,7 @@ fn condition_byte(
             }
             // the carry an add or subtract leaves in C: `0 + 0 + C`, and for
             // a borrow `0 - 0 - C` (all ones) masked to the bit
-            op @ (ISD::UAddO | ISD::UAddOCarry | ISD::USubO | ISD::USubOCarry) if value.res == 1 => {
-                let zero = dag.get_constant(0, EVT::I8);
-                let adds = matches!(op, ISD::UAddO | ISD::UAddOCarry);
-                let widen = if adds { ISD::UAddOCarry } else { ISD::USubOCarry };
-                let pair = dag.get_node_multi(widen, &[EVT::I8, EVT::I1], &[zero, zero, value]);
-                let byte = SDValue { node: pair.node, res: 0 };
-                let one = dag.get_constant(1, EVT::I8);
-                if adds { byte } else { dag.get_node(ISD::And, EVT::I8, &[byte, one]) }
-            }
+            ISD::UAddO | ISD::UAddOCarry | ISD::USubO | ISD::USubOCarry if value.res == 1 => carry_byte(dag, value),
             ISD::Select => {
                 let (test, a, b) = (dag.operand(value, 0), dag.operand(value, 1), dag.operand(value, 2));
                 let (a, b) = (condition_byte(dag, a), condition_byte(dag, b));
@@ -643,8 +635,28 @@ fn condition_byte(
             }
             _ => dag.get_node(ISD::ZeroExtend, EVT::I8, &[value]),
         },
+        // the boolean of a saturating subtract's expansion is a byte
+        // (`getSetCCResultType`): the same borrow, which read as C is inverted
+        EVT::I8 if value.res == 1 && matches!(dag.opcode(value), ISD::USubO | ISD::USubOCarry) => {
+            carry_byte(dag, value)
+        }
         _ => value,
     }
+}
+
+/// The carry an add or subtract leaves in C as a byte of 0 or 1: `0 + 0 + C`,
+/// and for a borrow `0 - 0 - C` (all ones) masked to the bit.
+fn carry_byte(
+    dag: &mut SelectionDAG,
+    value: SDValue,
+) -> SDValue {
+    let zero = dag.get_constant(0, EVT::I8);
+    let adds = matches!(dag.opcode(value), ISD::UAddO | ISD::UAddOCarry);
+    let widen = if adds { ISD::UAddOCarry } else { ISD::USubOCarry };
+    let pair = dag.get_node_multi(widen, &[EVT::I8, EVT::I1], &[zero, zero, value]);
+    let byte = SDValue { node: pair.node, res: 0 };
+    let one = dag.get_constant(1, EVT::I8);
+    if adds { byte } else { dag.get_node(ISD::And, EVT::I8, &[byte, one]) }
 }
 
 /// `LowerSELECT`: `CMOV false, true, cc, flags`.

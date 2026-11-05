@@ -2004,6 +2004,30 @@ fn the_declared_win64_prologue_is_what_the_code_bytes_say() {
     assert_eq!(declared, read, "{:?}", frame.seh);
 }
 
+/// A Win64 function with a frame register (`alloca`) pushes RBP and sets it
+/// from RSP; its `.seh_pushreg rbp` and `.seh_setframe rbp, 0` were left out
+/// (the frame register is not a register of the file the directives read), so
+/// the unwind data held the allocation alone and an unwinder lost the frame.
+#[test]
+fn a_win64_frame_register_has_its_seh_directives() {
+    let body = "declare i64 @g(ptr)\ndefine i64 @f(i64 %n) {\n  %p = alloca i8, i64 %n, align 16\n  %r = call i64 @g(ptr %p)\n  ret i64 %r\n}\n";
+    let text = format!("{SYSV}{body}");
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag", "-mabi=win64"]), &text, "f").unwrap();
+    let object = llrm_codegen::backend::objbuild::built(
+        &built,
+        "f.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .unwrap();
+    let frame = object.frames.first().expect("a declared frame");
+    let section = &object.sections[frame.section];
+    let body = &section.image[frame.offset..frame.offset + frame.length];
+    let declared = llrm_x86::mc::win64unwind::from_seh("f", &frame.seh).unwrap();
+    let read = llrm_x86::mc::win64unwind::from_prologue("f", body).unwrap();
+    assert_eq!(declared, read, "{:?}", frame.seh);
+}
+
 /// The pin pushes the callee-saved registers `ebp, ebx, edi, esi`
 /// (`clang -target i386-unknown-linux-gnu -O2` on this function, with and
 /// without `-fno-omit-frame-pointer`): the last of CSR_32 (`esi, edi, ebx,
