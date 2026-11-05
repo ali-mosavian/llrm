@@ -15,6 +15,11 @@
 //! left: when no store remains the prologue and epilogue lose their `suba` and
 //! `adda`, which is where a pair of two-word calls gains.
 //!
+//! A pushed register that a scratch-register load in the same block filled,
+//! and nothing else reads, is pushed from the load's memory instead
+//! (`move.l (4,%a0), -(%sp)`) when that is cheaper than the load and the push;
+//! no store or call may sit between the load and the push.
+//!
 //! DEVIATE: the pin keeps the reserved call frame and stores
 //! (`M68kFrameLowering` has no `X86CallFrameOptimization`); gcc pushes. Reason:
 //! best of gcc and clang is the goal. Exit: none.
@@ -37,6 +42,10 @@ pub struct Plan {
     /// Argument stores that wait for the call and become pushes there, with
     /// their offsets.
     deferred: HashMap<usize, i64>,
+    /// Argument stores whose push reads memory, with the load that read it.
+    folded: HashMap<usize, usize>,
+    /// Loads that vanish into a push.
+    dropped: HashSet<usize>,
     /// `ADJCALLSTACKDOWN`s that vanish.
     downs: HashSet<usize>,
     /// `ADJCALLSTACKUP`s that become `adda.l #bytes, %sp`.
@@ -57,6 +66,22 @@ impl Plan {
         at: usize,
     ) -> Option<i64> {
         self.deferred.get(&at).copied()
+    }
+
+    /// The load whose memory operand the push of store `at` reads.
+    pub fn folded_load(
+        &self,
+        at: usize,
+    ) -> Option<usize> {
+        self.folded.get(&at).copied()
+    }
+
+    /// Whether the load `at` is part of a push.
+    pub fn is_dropped(
+        &self,
+        at: usize,
+    ) -> bool {
+        self.dropped.contains(&at)
     }
 
     pub fn is_down(
@@ -91,6 +116,8 @@ struct Sequence {
     offsets: Vec<i64>,
     /// The stores are not in push order: the pushes wait for the call.
     deferred: bool,
+    /// Stores that push what a load read, and the loads.
+    folds: Vec<(usize, usize)>,
     kept: (usize, u32),
     pushed: (usize, u32),
 }
@@ -175,6 +202,129 @@ pub fn push_of(value: &mc::Operand) -> mc::Inst {
     mc::Inst { opcode, operands: vec![mc::Operand::Reg(reg::SP), value.clone()] }
 }
 
+/// The push that reads what the load `load` reads: `move.l (4,%a0), %d1` is
+/// `move.l (4,%a0), -(%sp)`.
+pub fn memory_push(load: &str) -> Option<&'static str> {
+    let [dst, src] = load.strip_prefix("MOV32")?.as_bytes() else { return None };
+    if !matches!(dst, b'd' | b'a' | b'r') {
+        return None;
+    }
+    Some(match src {
+        b'j' => "MOV32ej",
+        b'p' => "MOV32ep",
+        b'f' => "MOV32ef",
+        b'b' => "MOV32eb",
+        b'k' => "MOV32ek",
+        b'q' => "MOV32eq",
+        _ => return None,
+    })
+}
+
+/// The operands of `inst` as the printer has them, a frame index at
+/// displacement 0 from `%sp`: right for a price, since the form fixes the size.
+fn priced_operands(
+    inst: &Inst,
+    assignment: &Assignment,
+) -> Option<Vec<mc::Operand>> {
+    let mut out = Vec::new();
+    let mut it = inst.operands.iter().peekable();
+    while let Some(operand) = it.next() {
+        match operand {
+            Operand::Def(r) | Operand::Use(r) => out.push(mc::Operand::Reg(physical(*r, assignment))),
+            Operand::Imm(value) => {
+                out.push(mc::Operand::Imm(*value));
+                if matches!(it.peek(), Some(Operand::Frame(_))) {
+                    it.next();
+                    out.push(mc::Operand::Reg(reg::SP));
+                }
+            }
+            Operand::Symbol(name, addend) => out.push(mc::Operand::Symbol(name.clone(), *addend)),
+            _ => return None,
+        }
+    }
+    Some(out)
+}
+
+/// The registers `inst` reads besides its result.
+fn reads(
+    inst: &Inst,
+    assignment: &Assignment,
+) -> Vec<llrm_lir::registers::RegId> {
+    inst.operands
+        .iter()
+        .filter_map(|operand| match operand {
+            Operand::Use(r) => Some(REGISTER_INFO.root(physical(*r, assignment))),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The load that can be part of the push of store `store` (a register source
+/// `src`), and what it costs with the load: when the register is a scratch one
+/// only the push uses, the push can read the load's memory itself. `point` is
+/// where the push happens: the store, or the call when the pushes wait for it.
+fn foldable(
+    insts: &[&Inst],
+    assignment: &Assignment,
+    blocks: &[usize],
+    store: usize,
+    point: usize,
+    src: llrm_lir::registers::RegId,
+    stores: &[usize],
+) -> Option<usize> {
+    let root = REGISTER_INFO.root(src);
+    // the call clobbers these: nothing reads the value after it
+    if ![reg::D0, reg::D1, reg::A0, reg::A1].iter().any(|scratch| REGISTER_INFO.root(*scratch) == root) {
+        return None;
+    }
+    // the nearest definition in the store's block, with no call between
+    let load = (0..store)
+        .rev()
+        .take_while(|&i| blocks[i] == blocks[store] && !insts[i].call && insts[i].kind != Kind::Op("ADJCALLSTACKUP"))
+        .find(|&i| defines(insts[i], src, assignment))?;
+    let inst = insts[load];
+    let Kind::Op(name) = inst.kind else { return None };
+    memory_push(name)?;
+    if !inst.may_load || inst.may_store || inst.side_effects {
+        return None;
+    }
+    let address = reads(inst, assignment);
+    for i in load + 1..=point {
+        if i == store {
+            continue;
+        }
+        let other = insts[i];
+        if matches!(other.kind, Kind::Op("ADJCALLSTACKDOWN")) {
+            continue;
+        }
+        let own_store = stores.contains(&i);
+        let names_root = other
+            .operands
+            .iter()
+            .any(
+                |operand| match operand {
+                    Operand::Def(r) | Operand::Use(r) => REGISTER_INFO.root(physical(*r, assignment)) == root,
+                    _ => false,
+                },
+            );
+        let defines_address = other
+            .operands
+            .iter()
+            .any(
+                |operand| match operand {
+                    Operand::Def(r) => address.contains(&REGISTER_INFO.root(physical(*r, assignment))),
+                    _ => false,
+                },
+            );
+        // the call the pushes wait for may write memory: they are made first
+        let writes = !own_store && !(other.call && i == point) && (other.may_store || other.side_effects || other.call);
+        if names_root || defines_address || writes {
+            return None;
+        }
+    }
+    Some(load)
+}
+
 fn cost(
     inst: &mc::Inst,
     cpu: Cpu,
@@ -203,8 +353,10 @@ fn cheaper(
 /// The sequences of `insts` whose stores can be pushes, with their prices.
 fn sequences(
     insts: &[&Inst],
+    blocks: &[usize],
     assignment: &Assignment,
     cpu: Cpu,
+    size: bool,
     short: bool,
 ) -> Result<(Vec<Sequence>, Vec<i64>), String> {
     let mut found = Vec::new();
@@ -230,9 +382,9 @@ fn sequences(
             continue;
         };
         at = up + 1;
-        let mut stores = Vec::new();
-        let mut offsets = Vec::new();
-        let mut priced = ((0usize, 0u32), (0usize, 0u32));
+        // each argument store: where, its offset, its source, its price kept
+        // and pushed
+        let mut parts: Vec<(usize, i64, Source, (usize, u32), (usize, u32))> = Vec::new();
         let mut convertible = bytes > 0 && bytes % 4 == 0;
         for i in down + 1..call {
             if let Some((offset, source)) = argument_store(insts[i], assignment) {
@@ -249,27 +401,50 @@ fn sequences(
                         operands: vec![mc::Operand::Imm(offset), sp.clone(), value.clone()],
                     }
                 };
-                let push = push_of(&value);
-                priced.0 = add(priced.0, cost(&store, cpu)?);
-                priced.1 = add(priced.1, cost(&push, cpu)?);
-                stores.push(i);
-                offsets.push(offset);
+                parts.push((i, offset, source, cost(&store, cpu)?, cost(&push_of(&value), cpu)?));
             } else if names_sp(insts[i], assignment) || matches!(insts[i].kind, Kind::Op("ADJCALLSTACKDOWN")) {
                 convertible = false;
             }
         }
+        let stores: Vec<usize> = parts.iter().map(|part| part.0).collect();
+        let offsets: Vec<i64> = parts.iter().map(|part| part.1).collect();
         let wanted: Vec<i64> = (0..bytes / 4).map(|n| bytes - 4 - 4 * n).collect();
         let in_order = offsets == wanted;
         let mut sorted = offsets.clone();
         sorted.sort_unstable_by(|a, b| b.cmp(a));
-        // a push that waits for the call reads its register there
-        let keeps_values = in_order
-            || stores.iter().all(|&store| match argument_store(insts[store], assignment) {
-                Some((_, Source::Register(src))) => {
-                    !insts[store + 1..call].iter().any(|inst| defines(inst, src, assignment))
+        let mut priced = ((0usize, 0u32), (0usize, 0u32));
+        let mut folds = Vec::new();
+        let mut keeps_values = true;
+        for &(store, _, source, kept, pushed) in &parts {
+            let (mut kept, mut pushed) = (kept, pushed);
+            if let Source::Register(src) = source {
+                let point = if in_order { store } else { call };
+                // a push that reads memory replaces the load and the push
+                let memory = foldable(insts, assignment, blocks, store, point, src, &stores).and_then(|load| {
+                    let Kind::Op(name) = insts[load].kind else { return None };
+                    let mut operands = priced_operands(insts[load], assignment)?;
+                    operands[0] = mc::Operand::Reg(reg::SP);
+                    let read = cost(&mc::Inst { opcode: memory_push(name)?, operands }, cpu).ok()?;
+                    let own = mc::Inst { opcode: name, operands: priced_operands(insts[load], assignment)? };
+                    let load_price = cost(&own, cpu).ok()?;
+                    Some((load, read, load_price))
+                });
+                match memory {
+                    Some((load, read, load_price)) if cheaper(read, add(load_price, pushed), size) => {
+                        folds.push((store, load));
+                        kept = add(kept, load_price);
+                        pushed = read;
+                    }
+                    // a push that waits for the call reads its register there
+                    _ if !in_order => {
+                        keeps_values &= !insts[store + 1..call].iter().any(|inst| defines(inst, src, assignment));
+                    }
+                    _ => {}
                 }
-                _ => true,
-            });
+            }
+            priced.0 = add(priced.0, kept);
+            priced.1 = add(priced.1, pushed);
+        }
         if !convertible || sorted != wanted || !keeps_values {
             others.push(bytes);
             continue;
@@ -282,6 +457,7 @@ fn sequences(
             stores,
             offsets,
             deferred: !in_order,
+            folds,
             kept: priced.0,
             pushed: add(priced.1, cost(&cleanup, cpu)?),
         });
@@ -293,13 +469,14 @@ fn sequences(
 /// prologue and epilogue when the largest call area is `n` bytes.
 pub fn plan(
     insts: &[&Inst],
+    blocks: &[usize],
     assignment: &Assignment,
     cpu: Cpu,
     size: bool,
     short: bool,
     frame_price: impl Fn(i64) -> Result<(usize, u32), String>,
 ) -> Result<Plan, String> {
-    let (found, others) = sequences(insts, assignment, cpu, short)?;
+    let (found, others) = sequences(insts, blocks, assignment, cpu, size, short)?;
     if found.is_empty() {
         return Ok(Plan::default());
     }
@@ -333,6 +510,10 @@ pub fn plan(
     let mut plan = Plan::default();
     for (one, pushed) in found.iter().zip(&best.0) {
         if *pushed {
+            for &(store, load) in &one.folds {
+                plan.folded.insert(store, load);
+                plan.dropped.insert(load);
+            }
             if one.deferred {
                 plan.deferred.extend(one.stores.iter().copied().zip(one.offsets.iter().copied()));
             } else {
