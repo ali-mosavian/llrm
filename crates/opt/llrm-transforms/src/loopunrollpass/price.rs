@@ -155,26 +155,27 @@ pub(super) fn full_unroll_pays(
     );
     // Only a loop whose estimate lands near the bar is worth a trial: far on
     // either side the copy and its Simplify list would change nothing.
-    if matches!(run.trial, Trial::Collect) && near_the_bar(saved, added, rate) {
+    if matches!(run.trial, Trial::Collect) && near_the_bar(saved, added, rate, run.tti.unroll_trial_margin()) {
+        if llrm_support::debug::enabled("unroll") {
+            eprintln!("unroll: collect {:?}: estimate saves {saved} clk, adds {added} B", lp.get_header());
+        }
         run.deferred.push(lp.get_header());
         return false;
     }
     unroll_pays(saved, added, rate)
 }
 
-/// How far from the bar, as a factor either way, an estimate still earns a
-/// trial. Estimates that miss by more are not the ones the trials overturned.
-const TRIAL_MARGIN: i64 = 4;
-
-/// Whether the saving and the cost of a priced unroll are within
-/// `TRIAL_MARGIN` of each other at `rate`.
+/// Whether the saving and the cost of a priced unroll are within `margin`
+/// (a factor either way) of each other at `rate`.
 pub(crate) fn near_the_bar(
     saved: i64,
     added: i64,
     rate: i64,
+    margin: i64,
 ) -> bool {
-    let (gain, cost) = (saved * 1000, added * rate);
-    gain < cost * TRIAL_MARGIN && cost < gain * TRIAL_MARGIN
+    let (gain, cost) = (i128::from(saved) * 1000, i128::from(added) * i128::from(rate));
+    let margin = i128::from(margin);
+    gain < cost * margin && cost < gain * margin
 }
 
 /// The operands of the loops inside `lp` that each copy of its body makes a
@@ -474,9 +475,9 @@ mod tests {
     /// compile's instructions (nbody, lru) and changed nothing.
     #[test]
     fn only_an_estimate_near_the_bar_is_tried() {
-        assert!(near_the_bar(100, 100, 250_000 / 250));
-        assert!(!near_the_bar(1000, 1, 250_000));
-        assert!(!near_the_bar(1, 1000, 250_000));
-        assert!(!near_the_bar(0, 0, 250_000));
+        assert!(near_the_bar(100, 100, 250_000 / 250, 4));
+        assert!(!near_the_bar(1000, 1, 250_000, 4));
+        assert!(!near_the_bar(1, 1000, 250_000, 4));
+        assert!(!near_the_bar(0, 0, 250_000, 4));
     }
 }

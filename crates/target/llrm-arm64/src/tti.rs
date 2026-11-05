@@ -321,6 +321,10 @@ impl Tti for AArch64 {
         true
     }
 
+    fn unroll_trial_margin(&self) -> i64 {
+        1 << 20
+    }
+
     fn merges_unaligned_stores(&self) -> bool {
         true
     }
