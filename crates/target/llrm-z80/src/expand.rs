@@ -556,7 +556,7 @@ impl Printer<'_> {
                 // half-carry flags, which no branch here reads.
                 self.push(if value == "#0" { "or a, a".to_owned() } else { format!("cp a, {value}") });
             }
-            "CP16" | "CP16i" => self.compare16(inst, rest)?,
+            "CP16" | "CP16i" | "CP16C" | "CP16Ci" => self.compare16(inst, rest)?,
             // `ld` leaves the flags alone: the byte is 1, and 0 when the
             // condition fails
             "SETCC8" => {
@@ -1020,7 +1020,7 @@ impl Printer<'_> {
             {
                 match (one.kind, one.operands.get(1)) {
                     (Kind::Op("SETCC8"), Some(Operand::Imm(2 | 3)))
-                    | (Kind::Op("JPC" | "JPNC" | "RETC" | "RETNC"), _) => carry = true,
+                    | (Kind::Op("JPC" | "JPNC" | "RETC" | "RETNC" | "CP16C" | "CP16Ci"), _) => carry = true,
                     (Kind::Op("SETCC8"), Some(Operand::Imm(0 | 1)))
                     | (Kind::Op("JPZ" | "JPNZ" | "RETZ" | "RETNZ"), _) => zero = true,
                     (Kind::Op(name), _) => other = Some(name),
@@ -1033,6 +1033,26 @@ impl Printer<'_> {
         }
         // no reader: a wide compare whose later word compare decides on its own
         if !(carry || zero) {
+            return Ok(());
+        }
+        // the next word of a long: the borrow of the one before comes in
+        if matches!(inst.kind, Kind::Op("CP16C" | "CP16Ci")) {
+            if zero {
+                return Err("CP16C read for zero".into());
+            }
+            self.push(format!("ld a, {}", name(al)));
+            self.push(format!("sbc a, {bl}"));
+            self.push(format!("ld a, {}", name(ah)));
+            self.push(format!("sbc a, {bh}"));
+            // signed: the sign, corrected where the subtract overflowed, into
+            // the carry
+            if matches!(inst.operands.get(4), Some(Operand::Imm(1))) {
+                let fixed = format!("{}$", self.out.iter().filter(|line| !matches!(line, Line::Loc(_))).count() + 1);
+                self.push(format!("jp po, {fixed}"));
+                self.push("xor a, #128");
+                self.out.push(Line::Label(fixed));
+                self.push("rlca");
+            }
             return Ok(());
         }
         let skip = format!("{}$", self.out.iter().filter(|line| !matches!(line, Line::Loc(_))).count());

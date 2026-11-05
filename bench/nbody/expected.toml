@@ -1,5 +1,6 @@
-reason = "#1804 (hoist prices a float load its reader folds as the reader's own memory form): bas rows re-recorded by hand, since --bless now records references only: nbody -O2 +2.1% instructions and +6.9% memory operands at 20 B less code and -1.4% clocks; nbody -Os -6.5% instructions; nbody_single -Os +33% memory operands at -2.4% instructions and 8 B less code"
-blessed = "2026-10-16"
+reason = "C references re-blessed 2026-11-05: corpus edits since 10-15 (parity kernels volatile inputs, textfill DOS-only); tcpp links CM.LIB ISATTY (#7243)"
+blessed = "2026-11-05"
+corpus = "daa7f7457b30c0aa08debdfc0e0ca78a"
 
 [ow.O2]
 instructions = 53725
@@ -20,7 +21,7 @@ kernel_ms = 0.8448
 [bcc.O2]
 instructions = 149311
 memory_operands = 39837
-code_bytes = 487
+code_bytes = 485
 data_bytes = 40
 bss_bytes = 0
 kernel_ms = 2.0001
@@ -28,7 +29,7 @@ kernel_ms = 2.0001
 [bcc.Os]
 instructions = 192309
 memory_operands = 39637
-code_bytes = 554
+code_bytes = 552
 data_bytes = 40
 bss_bytes = 0
 kernel_ms = 2.5736
@@ -36,7 +37,7 @@ kernel_ms = 2.5736
 [tc.O2]
 instructions = 205907
 memory_operands = 68280
-code_bytes = 835
+code_bytes = 831
 data_bytes = 24
 bss_bytes = 0
 kernel_ms = 2.7539
@@ -44,7 +45,7 @@ kernel_ms = 2.7539
 [tc.Os]
 instructions = 205906
 memory_operands = 68280
-code_bytes = 830
+code_bytes = 827
 data_bytes = 24
 bss_bytes = 0
 kernel_ms = 2.7538
@@ -52,7 +53,7 @@ kernel_ms = 2.7538
 [tcpp.O2]
 instructions = 203513
 memory_operands = 40239
-code_bytes = 599
+code_bytes = 594
 data_bytes = 40
 bss_bytes = 0
 kernel_ms = 2.723

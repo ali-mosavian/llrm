@@ -2785,11 +2785,8 @@ fn an_x86_64_module_of_windows_or_macos_is_written_in_that_systems_object_format
             "target datalayout = \"e-m:{mangling}-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
              target triple = \"{triple}\"\ndeclare void @g()\ndefine void @f() {{\n  call void @g()\n  ret void\n}}\n"
         );
-        // Windows is refused until its ABI rows land; the flag takes the object
-        // anyway, for the unwind comparison.
-        let asked = if mangling == "w" { &["-fallow-pending-abi"][..] } else { &[] };
         let (built, chosen) =
-            crate::llc::compiled(&flags(asked), &text, "f").unwrap_or_else(|why| panic!("{triple}: {why}"));
+            crate::llc::compiled(&flags(&[]), &text, "f").unwrap_or_else(|why| panic!("{triple}: {why}"));
         assert_eq!(chosen, format, "{triple}");
         let object = llrm_codegen::backend::objbuild::written_in(
             &built,
@@ -2803,15 +2800,16 @@ fn an_x86_64_module_of_windows_or_macos_is_written_in_that_systems_object_format
     }
 }
 
-/// Windows x86-64 IR compiled with System V argument registers and a red zone:
-/// wrong code, written without a word. The target states what is pending and
-/// the driver refuses until the Win64 rows land.
+/// Windows x86-64 IR was refused while the target lacked its ABI ("the Win64
+/// calling convention ... not carried"); the rows have landed, so it compiles
+/// with no flag, and with Win64's registers.
 #[test]
-fn a_windows_module_is_refused_while_the_target_lacks_its_abi() {
+fn a_windows_module_compiles_with_the_win64_abi_and_no_flag() {
     let text = "target datalayout = \"e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
-                target triple = \"x86_64-pc-windows-msvc\"\ndefine void @f() {\n  ret void\n}\n";
-    let why = crate::llc::compiled(&flags(&[]), text, "f").unwrap_err();
-    assert!(why.contains("Win64 calling convention"), "{why}");
+                target triple = \"x86_64-pc-windows-msvc\"\ndefine i64 @f(i64 %a, i64 %b) {\n  %r = add i64 %a, %b\n  ret i64 %r\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&[]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("rcx") && listing.contains("rdx") && !listing.contains("rdi"), "{listing}");
 }
 
 /// An x86-64 Mach-O object named its symbols `f` and `g`; the system's linker
@@ -2843,15 +2841,15 @@ fn a_triple_with_the_os_version_names_the_same_system() {
     assert!(crate::by_triple("x86_64-apple-macosx10.4.0").is_some());
 }
 
-/// Matching a triple past its OS version must not open the Win64 hole the
-/// pending-ABI gate closes: clang writes `x86_64-pc-windows-msvc19.0.0`, and
-/// that module is refused like the bare triple.
+/// clang writes `x86_64-pc-windows-msvc19.0.0`: that module is the Windows
+/// system too, and takes Win64's registers like the bare triple.
 #[test]
-fn a_versioned_windows_triple_is_refused_while_the_target_lacks_its_abi() {
+fn a_versioned_windows_triple_takes_the_win64_abi() {
     let text = "target datalayout = \"e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
-                target triple = \"x86_64-pc-windows-msvc19.0.0\"\ndefine void @f() {\n  ret void\n}\n";
-    let why = crate::llc::compiled(&flags(&[]), text, "f").unwrap_err();
-    assert!(why.contains("Win64 calling convention"), "{why}");
+                target triple = \"x86_64-pc-windows-msvc19.0.0\"\ndefine i64 @f(i64 %a, i64 %b) {\n  %r = add i64 %a, %b\n  ret i64 %r\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&[]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("rcx") && listing.contains("rdx") && !listing.contains("rdi"), "{listing}");
 }
 
 /// The pin's clang writes `x86_64-apple-macos11` for the OS that compact unwind

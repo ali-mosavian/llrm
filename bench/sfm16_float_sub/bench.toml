@@ -1,3 +1,4 @@
+references = false
 description = "sfm16_float_sub: plain float C over 400 vectors, soft-float library flattened"
 repetitions = 1
 
