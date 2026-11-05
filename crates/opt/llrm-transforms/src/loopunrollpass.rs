@@ -1955,6 +1955,38 @@ pub(crate) fn simplify_loop_after_unroll(
     }
 }
 
+/// `!CompletelyUnroll`: the loop headed by `header` is a loop after the unroll,
+/// its header reached from one of `after` (the preheader is not).
+fn is_still_a_loop(
+    run: &Run,
+    header: BlockId,
+    after: &[BlockId],
+) -> bool {
+    run.function.predecessors(header).into_iter().any(|one| after.contains(&one))
+}
+
+/// The `SimplifyIVs` half of `simplifyLoopAfterUnroll`
+/// ([LoopUnroll.cpp:350](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopUnroll.cpp#L350)),
+/// run when the unroll is partial (`!CompletelyUnroll && Count > 1`):
+/// `simplifyLoopIVs`, then `loadCSE`. `analyzed` describes the function before
+/// the IVs are simplified, whose edits leave its blocks and edges as they are.
+fn simplify_ivs_and_load_cse(
+    run: &mut Run,
+    analyzed: &Analyzed,
+    header: BlockId,
+) {
+    let _ = crate::simplifyindvar::simplified_loop_ivs(
+        run.context,
+        run.layout,
+        run.function,
+        run.declared,
+        run.outer,
+        header,
+    );
+    run.scev = ScalarEvolution::new();
+    crate::loopunrollloadcse::load_cse(run, analyzed, header);
+}
+
 /// The blocks `UnrollLoop` hands `simplifyLoopAfterUnroll`: the loop's own that
 /// remain (`body`) and those made since the function had `capacity` blocks.
 pub(crate) fn unrolled_blocks(
@@ -2067,7 +2099,13 @@ pub fn unroll_loops(run: &mut Run) -> bool {
         // after every loop they were `n^2` over `n` loops in a function).
         if parent_header.is_none() && !holds_loops {
             let after = unrolled_blocks(run, capacity, &body);
-            simplify_loop_after_unroll(run, None, &after);
+            if is_still_a_loop(run, header, &after) {
+                let fresh = Analyzed::of(run);
+                simplify_ivs_and_load_cse(run, &fresh, header);
+                simplify_loop_after_unroll(run, Some(&fresh.loops), &after);
+            } else {
+                simplify_loop_after_unroll(run, None, &after);
+            }
             continue;
         }
         // `UnrollLoop` closes the outer loop's SSA form
@@ -2077,6 +2115,9 @@ pub fn unroll_loops(run: &mut Run) -> bool {
         // The blocks `UnrollLoop` hands `simplifyLoopAfterUnroll`: the loop's
         // own that remain and the ones it made.
         let after = unrolled_blocks(run, capacity, &body);
+        if is_still_a_loop(run, header, &after) {
+            simplify_ivs_and_load_cse(run, &analyzed, header);
+        }
         simplify_loop_after_unroll(run, Some(&analyzed.loops), &after);
         analyzed = Analyzed::of(run);
         // `UnrollLoop` puts the loops it cloned back in loop-simplify form
