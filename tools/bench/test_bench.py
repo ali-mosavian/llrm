@@ -220,6 +220,18 @@ class TurboCppTests(unittest.TestCase):
         self.assertGreater(got.get("instructions", 0), 0, got)
 
 
+@unittest.skipUnless(bench.references_available() and (bench.BORLAND["tc"][0] / "lib" / "MATHM.LIB").exists(), "needs Turbo C 2.01")
+class TurboCHeaderTests(unittest.TestCase):
+    def test_a_turbo_c_program_that_includes_the_shared_header_compiles(self):
+        """TC 2.01 read bench_io.h (bare LF) as an unterminated conditional: jpeg and stft, four programs, had no tc row."""
+        import tempfile
+
+        variant = next(one for one in bench.variants(bench.BENCH / "jpeg_single") if one.language == "c")
+        with tempfile.TemporaryDirectory(dir=bench.llrmbin.target_dir()) as where:
+            built = bench.build_borland("tc", [(variant, "H000")], "O2", Path(where))["H000"]
+        self.assertNotIsInstance(built, str, built)
+
+
 SIZED = {"instructions": 100, "memory_operands": 40, "code_bytes": 200, "data_bytes": 10, "bss_bytes": 4}
 
 
