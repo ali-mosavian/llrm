@@ -113,6 +113,10 @@ pub struct Target {
     pub llc_level: bool,
     /// Why the backend takes no `-O<n>`; required where `llc_level` is false.
     pub llc_level_reason: Option<String>,
+    /// Whether the backend takes `-mcmodel=` (the pin's `llc -code-model`) and
+    /// clang does not: the driver gives the flag to the backend alone.
+    #[serde(default)]
+    pub llc_mcmodel: bool,
     pub object: String,
     pub link: Vec<String>,
     /// The command that runs an executable of the target, the executable last;
@@ -500,6 +504,9 @@ pub fn llc_args(
     }
     args.extend(target.llc.iter().cloned());
     args.extend(build.llc.iter().cloned());
+    if target.llc_mcmodel {
+        args.extend(build.clang.iter().filter(|flag| flag.starts_with("-mcmodel=")).cloned());
+    }
     if build.stop == Stop::Assembly {
         args.push("-S".into());
     }
@@ -685,7 +692,9 @@ fn build(
                 let ir = scratch.join(format!("{}.ll", stem(path)));
                 let mut args = target.clang.clone();
                 args.extend(resource.iter().cloned());
-                args.extend(build.clang.iter().cloned());
+                args.extend(
+                    build.clang.iter().filter(|flag| !(target.llc_mcmodel && flag.starts_with("-mcmodel="))).cloned(),
+                );
                 args.extend(
                     ["-S", "-emit-llvm", "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone", "-o"]
                         .map(String::from),

@@ -352,3 +352,16 @@ fn an_unchanged_pin_clang_is_asked_its_version_once() {
     assert_eq!(spawns(), 4);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The pin's clang refuses `-mcmodel=medium` for m68k ("unsupported argument"); the code model is `llc -code-model`'s. A
+/// row with `llc_mcmodel` gives the flag to the backend and keeps it from clang, and a row without gives it to clang only.
+#[test]
+fn mcmodel_goes_to_the_m68k_backend_and_not_to_its_clang() {
+    let table = targets(TARGETS).unwrap();
+    let one = built("-O2 -mcmodel=medium -c x.c");
+    let m68k = &table["m68k-68000"];
+    assert!(llc_args(m68k, &one, Path::new("x.ll"), Path::new("x.o")).iter().any(|arg| arg == "-mcmodel=medium"));
+    let x86 = &table["x86_32-linux"];
+    assert!(!llc_args(x86, &one, Path::new("x.ll"), Path::new("x.o")).iter().any(|arg| arg == "-mcmodel=medium"));
+    assert!(m68k.llc_mcmodel && !x86.llc_mcmodel);
+}
