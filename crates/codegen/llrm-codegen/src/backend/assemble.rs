@@ -457,6 +457,7 @@ pub fn assembled_by(
         let registers = shared_registers.clone().expect("a routine is shared by a function");
         procedures.push(masm::routine_procedure(&name, code, registers, Regs(arch.registers())));
     }
+    let flat_elf = arch.object().default == llrm_target::object::Format::Elf && arch.object().code_model().flat();
     for (bytes, id) in crate::backend::constpool::wide_first(pool.borrow().entries()) {
         let name = format!("$K{id}");
         names.insert((Space::Segment, id), name.clone());
@@ -480,6 +481,16 @@ pub fn assembled_by(
         // `align` would still raise the segment to dword, and the linker pads
         // the next module's data up to it (+2 B in the linked exe of nine
         // programs at m16 -Os).
+        // A flat ELF object keeps a constant of 4, 8, 16 or 32 bytes in the pin's
+        // read-only mergeable section of its size, not in the writable data.
+        if flat_elf && matches!(bytes.len(), 4 | 8 | 16 | 32) {
+            let section = sectioned.entry(format!(".rodata.cst{}", bytes.len())).or_default();
+            if section.is_empty() {
+                section.push(masm::Datum::Align(masm::Align { to: bytes.len() as i64 }));
+            }
+            section.extend([masm::Datum::Label(masm::Label { name }), masm::Datum::Bytes(bytes.to_vec())]);
+            continue;
+        }
         if to > 1 && (to >= 8 || masm::data_size(&data, 0) % to != 0) {
             data.push(masm::Datum::Align(masm::Align { to }));
         }
