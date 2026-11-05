@@ -66,6 +66,7 @@ pub(super) fn full_unroll_pays(
             return false;
         }
         Trial::Skip => return false,
+        Trial::Pin => return true,
         Trial::Force(header) => return header == lp.get_header(),
     }
     let clocks = crate::profit::costs(run.outer);

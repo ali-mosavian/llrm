@@ -119,8 +119,13 @@ pub enum Trial {
     Estimate,
     /// Not unrolled: the loop is noted in `Run::deferred` for a trial.
     Collect,
-    /// Not unrolled and not noted: the cleanup of a trial.
+    /// Not unrolled and not noted: a measure.
     Skip,
+    /// Unrolled as the pin decides, without a price: the cleanup of a trial,
+    /// where the loops left to it are unrolled as they will be (nbody -O2:
+    /// unrolling the outer loop makes its inner loops, and the arrays they
+    /// index, go too).
+    Pin,
     /// Only this loop is unrolled: the trial's copy, and its acceptance.
     Force(BlockId),
 }
@@ -2320,7 +2325,7 @@ impl FunctionPass for LoopFullUnroll {
             Pricing::Estimate => Trial::Estimate,
             Pricing::Trial(_) if tti.unroll_trial() => Trial::Collect,
             Pricing::Trial(_) => Trial::Estimate,
-            Pricing::Skip => Trial::Skip,
+            Pricing::Skip => Trial::Pin,
         };
         let mut run = self.run_with(unit, &outer, &*tti, held.take(), first);
         let mut changed = unroll_loops(&mut run);
