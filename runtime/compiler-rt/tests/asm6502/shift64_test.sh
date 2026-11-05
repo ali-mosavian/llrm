@@ -21,8 +21,8 @@ int main(void) {
 C
 cc -O0 -o $T/host $T/m.c && { $T/host; want=$?; } || want=$?
 $LLRM_CC --target=6502-sim65 -O2 -S -w $T/m.c -o $T/m.s
-$LLRM_CC --target=6502-sim65 -Os -S -DSF_INTABI $INC -Iinclude lib/int/int64.c -o $T/i.s
-{ grep -h '^rc[0-9]* = ' $T/m.s | sort -u; printf '.export _main\n_main:\n  jsr main\n  rts\n'; grep -v '^rc[0-9]* = ' $T/m.s; grep -v '^rc[0-9]* = ' $T/i.s; cat $MOS_RT; } > $T/p.s
+for r in ashldi3 lshrdi3 ashrdi3; do $LLRM_CC --target=6502-sim65 -Os -S -DSF_INTABI $INC -Iinclude lib/int/$r.c -o $T/$r.s; done
+{ grep -h '^rc[0-9]* = ' $T/m.s | sort -u; printf '.export _main\n_main:\n  jsr main\n  rts\n'; grep -v '^rc[0-9]* = ' $T/m.s; for r in ashldi3 lshrdi3 ashrdi3; do grep -v '^rc[0-9]* = ' $T/$r.s; done; cat $MOS_RT; } > $T/p.s
 cl65 -t sim6502 -o $T/p.bin $T/p.s
 set +e; sim65 -c -x 500000000 $T/p.bin > /dev/null 2>&1; got=$?; set -e
 echo "i64 shifts on sim65: exit $got, host $want"

@@ -13,10 +13,10 @@ N=${1:-3000}; B=${2:-110}; T=$(mktemp -d); OPT=${OPT:-Os}; SHOW=${SHOW:-0}
 MOS_RT=${MOS_RT:?set MOS_RT to the mos_rt.s runtime}
 for g in gen_vectors64 gen_vectors64_edge; do cc -O2 -ffp-contract=off -DEXT tests/$g.c -o $T/$g; done
 driver() { $LLRM_CC --target=6502-sim65 -O2 -S -DSF_INTABI -DSHOW=$SHOW -Iinclude -I$T tests/sim65_main64.c -o $T/main.s; }
-LIBFILES="$(tests/fp_sources.sh f64 f32_64 f32) lib/int/int64.c"
+LIBFILES="$(tests/fp_sources.sh f64 f32_64 f32) $(tests/fp_sources.sh int64)"
 LIBS=$(for p in $LIBFILES; do echo $(basename $(dirname $p))_$(basename $p .c); done)
 for p in $LIBFILES; do f=$(basename $(dirname $p))_$(basename $p .c); $LLRM_CC --target=6502-sim65 -$OPT -S -DSF_INTABI $SF_EXTRA -Iinclude $p -o $T/$f.s; done
-# ld65 links whole objects: keep only what the driver reaches (int64.c would bring its divide for a shift).
+# ld65 links whole objects: keep only what the driver reaches (a shift pulls no divide: one routine per file).
 $T/gen_vectors64 1 > $T/vectors64.h; driver
 mkdir $T/r
 python3 tests/sim65_reach.py $T/r main $T/main.s $(for f in $LIBS; do echo $T/$f.s; done) > /dev/null
