@@ -30,3 +30,12 @@ read -r _ llrm_b clang_b _ <<< "$row"
 [ "$(wc -w <<< "$row")" -eq 8 ] || { echo "FAIL: bintree row lost a column (empty bytes): $row"; exit 1; }
 case "$llrm_b$clang_b" in *[!0-9]*|"") echo "FAIL: bintree has no bytes: $row"; exit 1;; esac
 echo "ok: $row"
+
+# A missing compiler, a pin clang that cannot compile the stub, no program, and a run in which every program failed all
+# printed FAIL rows (or nothing) and exited 0: a gate reading the status passed over no measurement.
+bad=$(mktemp -d); printf '#!/bin/sh\nexit 1\n' > "$bad/clang"; chmod +x "$bad/clang"
+for case in "LLRM_CC=$bad/none" "LLRM_CLANG_WASM=$bad/none" "LLRM_CLANG_WASM=$bad/clang"; do
+    if env "$case" "$root/tools/wasm_corpus.sh" O1 "$root/bench/fib/fib.c" > /dev/null 2>&1; then echo "FAIL: exit 0 with $case"; exit 1; fi
+done
+if "$root/tools/wasm_corpus.sh" O1 > /dev/null 2>&1; then echo "FAIL: exit 0 with no program"; exit 1; fi
+echo "ok: a broken tool or an empty run exits non-zero"

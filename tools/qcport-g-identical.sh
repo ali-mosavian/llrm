@@ -4,12 +4,14 @@
 #   QCPORT=~/scratch/qcport/src QCPORT_INC=~/scratch/qctc/inc tools/qcport-g-identical.sh [llrm-c]
 C=${1:-$(python3 "$(dirname "$0")/llrmbin.py" bin)/llrm-c}; Q=${QCPORT:?QCPORT names the QCport src directory}; INC=${QCPORT_INC:?QCPORT_INC names its Borland include directory}; T=$(mktemp -d)
 inc=(); for d in host render model game sound ui qgl; do inc+=(-I "$Q/$d"); done; inc+=(-I "$INC")
-same=0; differ=0; refused=0
+same=0; differ=0; refused=0; gfail=0
 for f in "$Q"/{host,render,model,game,sound,ui}/*.c; do n=$(basename "$f" .c)
   for level in -O0 -O2 -Os; do
     "$C" $level "${inc[@]}" -S "$f" -o "$T/a.s" >/dev/null 2>&1 || { refused=$((refused+1)); continue; }
-    "$C" $level -g "${inc[@]}" -S "$f" -o "$T/b.s" >/dev/null 2>&1 || { echo "FAIL -g $n $level"; refused=$((refused+1)); continue; }
+    "$C" $level -g "${inc[@]}" -S "$f" -o "$T/b.s" >/dev/null 2>&1 || { echo "FAIL -g $n $level"; refused=$((refused+1)); gfail=$((gfail+1)); continue; }
     if cmp -s <(sed -E 's/L_b[0-9]+/L_b/g' "$T/a.s") <(sed -E 's/L_b[0-9]+/L_b/g' "$T/b.s"); then same=$((same+1)); else differ=$((differ+1)); echo "DIFFERS $n $level"; fi
   done
 done
 echo "QCport: identical $same, differing $differ, refused $refused"; rm -rf "$T"
+# Nothing compared, a difference, or a module that builds only without -g is not "identical".
+[ $((same + differ)) -gt 0 ] && [ $differ = 0 ] && [ $gfail = 0 ]

@@ -661,6 +661,30 @@ fn lower(
                         ));
                     }
                     let mut all = before;
+                    // A frame object in the pointer of a memory access is `rs0`
+                    // plus its distance, where one `(zp),Y` offset reaches;
+                    // past 255 the address is built (`eliminateFrameIndex`).
+                    let at = if code == op::STZP { 0 } else { operands.len().wrapping_sub(2) };
+                    let framed = matches!(code, op::LDP8 | op::LDP16 | op::STP8 | op::STP16 | op::STZP)
+                        && n.ops
+                            .iter()
+                            .any(|input| one.dag.nodes()[input.node as usize].opcode == ISD::TargetFrameIndex);
+                    if framed {
+                        if let (Some(Operand::Imm(base)), Some(Operand::Imm(extra))) =
+                            (operands.get(at).cloned(), operands.get(at + 1).cloned())
+                        {
+                            let distance = base + extra;
+                            if (0..=255).contains(&distance) {
+                                operands[at] = Operand::reg("rs0");
+                                operands[at + 1] = Operand::Imm(distance);
+                            } else {
+                                let pointer = cells.word();
+                                all.push(MInst::new(op::LEASP16, vec![pointer.clone(), Operand::Imm(distance)]));
+                                operands[at] = pointer;
+                                operands[at + 1] = Operand::Imm(0);
+                            }
+                        }
+                    }
                     all.push(MInst::new(code, operands));
                     all.extend(after);
                     Ok(all)

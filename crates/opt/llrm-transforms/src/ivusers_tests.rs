@@ -60,7 +60,7 @@ fn with_users(
         asked.set(asked.get() + 1);
         true
     };
-    let env = Env { safe_to_speculate: &safe, ephemeral: &|_| false };
+    let env = Env { safe_to_speculate: &safe, ephemeral: &|_| false, native_widths: &[] };
     let grown = llrm_mir::dense::idset_resizes::<InstId>();
     let users = IvUsers::of(&mut se, &cx, header, &env);
     GROWN.with(|n| n.set(llrm_mir::dense::idset_resizes::<InstId>() - grown));

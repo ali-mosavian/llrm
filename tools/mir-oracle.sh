@@ -7,6 +7,7 @@
 # disassemble alike. A file saying "; invalid: REASON" must instead be
 # refused by opt, and by llrm-mir for REASON.
 set -u
+[ $# -gt 0 ] || { echo "usage: mir-oracle.sh FILE.ll... (no files checks nothing)" >&2; exit 2; }
 bin=${LLVM20:-}
 for guess in /usr/lib/llvm-20/bin /opt/homebrew/opt/llvm@20/bin; do
   [ -z "$bin" ] && [ -x "$guess/opt" ] && bin=$guess
