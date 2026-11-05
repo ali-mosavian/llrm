@@ -1110,7 +1110,7 @@ const TRIAL_CALLER: usize = 300;
 /// carrying its operand-size prefix, a divide by a constant its multiply-high
 /// sequence. The `CodeSize` units of the cost model count instructions of
 /// the pin's x86, not bytes of a 16-bit encoding.
-pub(crate) fn function_bytes(
+pub fn function_bytes(
     module: &Module,
     layout: &llrm_mir::datalayout::DataLayout,
     costs: &llrm_mir::target::OperationCosts,
