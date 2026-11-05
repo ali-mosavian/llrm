@@ -382,10 +382,23 @@ fn drains_visits_and_inserts_count_the_worklist() {
     assert_eq!(inserts, initial);
 
     let before = counts();
-    let mut module = parsed(
-        "define i16 @f(i16 %x) {\nb0:\n  %a = add i16 %x, 0\n  %b = sub i16 %a, %x\n  ret i16 %b\n}\n",
-    );
+    let mut module =
+        parsed("define i16 @f(i16 %x) {\nb0:\n  %a = add i16 %x, 0\n  %b = sub i16 %a, %x\n  ret i16 %b\n}\n");
     assert!(combined(&mut module));
     let [_, visits, initial, inserts] = delta(before);
     assert!(visits > initial - 1 && inserts >= initial, "{visits} {initial} {inserts}");
+}
+
+/// `visitAdd`'s flag inference was not translated: a counter
+/// `i = phi [0], [i + 1 nsw]` kept `add nsw` where the pin's InstCombine
+/// states `add nuw nsw` (`willNotOverflowUnsignedAdd`: a recurrence that
+/// starts and steps non-negative with nsw stays non-negative, so `+ 1` cannot
+/// wrap unsigned). The flag lets `gep (shl x), i` split as `inbounds nuw`; without
+/// it grep's GEPs came out flagless.
+#[test]
+fn a_nonnegative_counter_with_nsw_step_gains_nuw() {
+    check(
+        "define i32 @f(i32 %n) {\nb0:\n  br label %l\n\nl:\n  %i = phi i32 [ 0, %b0 ], [ %i1, %l ]\n  %i1 = add nsw i32 %i, 1\n  %c = icmp slt i32 %i1, %n\n  br i1 %c, label %l, label %x\n\nx:\n  ret i32 %i1\n}\n",
+        "define i32 @f(i32 %n) {\nb0:\n  br label %l\n\nl:\n  %i = phi i32 [ 0, %b0 ], [ %i1, %l ]\n  %i1 = add nuw nsw i32 %i, 1\n  %c = icmp slt i32 %i1, %n\n  br i1 %c, label %l, label %x\n\nx:\n  ret i32 %i1\n}\n",
+    );
 }

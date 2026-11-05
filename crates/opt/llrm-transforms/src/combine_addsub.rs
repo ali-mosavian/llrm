@@ -709,7 +709,47 @@ pub fn visit_add(
         let one = c.int(ty, 1);
         return c.replace_with_binop(inst, BinaryOp::Shl, lhs, one, wrap_of(flags));
     }
-    fold_add_rest(c, inst)
+    let found = fold_add_rest(c, inst);
+    if !matches!(found, Visit::None) {
+        return found;
+    }
+    infer_add_flags(c, inst)
+}
+
+/// The `nsw`/`nuw` inference of `visitAdd`
+/// ([InstCombineAddSub.cpp:1976](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineAddSub.cpp#L1976)):
+/// the flag a range proof allows, and, for the step of a recurrence, the users
+/// of its phi are queued again (:2062). MIRROR. The steps between
+/// `fold_add_rest` and this one in LLVM (DEVIATE 1 of `combine_add_idioms`) are
+/// not translated.
+fn infer_add_flags(
+    c: &mut Combiner,
+    inst: InstId,
+) -> Visit {
+    use llrm_mir::valuetracking::range::compute_overflow_for_unsigned_add;
+    let (lhs, rhs, flags) = parts(c, inst);
+    let mut new = flags;
+    if !flags.contains(Flags::NSW) && will_not_overflow_signed_add(c, inst, lhs, rhs) {
+        new.insert(Flags::NSW);
+    }
+    let unsigned = compute_overflow_for_unsigned_add(&query(c, Some(inst)), lhs, rhs) == OverflowResult::NeverOverflows;
+    if !flags.contains(Flags::NUW) && unsigned {
+        new.insert(Flags::NUW);
+    }
+    if new == flags {
+        return Visit::None;
+    }
+    c.function.set_flags(inst, new);
+    let recurrence = llrm_mir::valuetracking::pattern::match_simple_recurrence_of(&query(c, Some(inst)), inst);
+    if let Some((phi, _, _)) = recurrence {
+        if let Some(result) = c.function.instruction(phi).result {
+            let users: Vec<InstId> = c.function.users(result).iter().map(|one| one.user).collect();
+            for user in users {
+                c.add_to_worklist(user);
+            }
+        }
+    }
+    Visit::Changed
 }
 
 #[cfg(test)]
