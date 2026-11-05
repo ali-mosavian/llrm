@@ -114,11 +114,60 @@ def rows_of(path: str) -> dict[str, list[tuple]]:
     return out
 
 
+def patched(data: bytes, section: tuple[int, int]) -> bytes | None:
+    """`data` with the operand of the first `DW_CFA_def_cfa_offset` of the first FDE that has one made 8 bytes larger, or None where no FDE has one:
+    the compiler's own rows with one wrong, the control that the checker fails on real output. `section` is the .eh_frame (file offset, size)."""
+    start, size = section
+    at = start
+    while at + 8 <= start + size:
+        length = int.from_bytes(data[at : at + 4], "little")
+        if length == 0:
+            break
+        entry_end = at + 4 + length
+        if int.from_bytes(data[at + 4 : at + 8], "little") != 0:  # an FDE: pc begin, range (4 each), then the augmentation length
+            code = at + 8 + 8 + 1 + data[at + 16]
+            while code < entry_end:
+                op = data[code]
+                if op == 0x0E and data[code + 1] < 0x70:
+                    out = bytearray(data)
+                    out[code + 1] += 8
+                    return bytes(out)
+                # the opcodes the compiler's rows use, and their operand bytes (small values: one byte each)
+                code += 1 + {0x0E: 1, 0x0D: 1, 0x0C: 2, 0x02: 1, 0x03: 2, 0x04: 4}.get(op, 1 if op & 0xC0 == 0x80 else 0)
+        at = entry_end
+    return None
+
+
+def control(obj: str, tools: str) -> bool:
+    """Whether the checker flags `obj` once its first CFA offset is made wrong; False where the object has none to make wrong."""
+    from elftools.elf.elffile import ELFFile  # noqa: PLC0415
+    import tempfile  # noqa: PLC0415
+
+    with open(obj, "rb") as handle:
+        data = handle.read()
+        handle.seek(0)
+        section = ELFFile(handle).get_section_by_name(".eh_frame")
+        where = (section["sh_offset"], section["sh_size"])
+    wrong = patched(data, where)
+    if wrong is None:
+        return False
+    with tempfile.NamedTemporaryFile(suffix=".o") as copy:
+        copy.write(wrong)
+        copy.flush()
+        code = code_of(subprocess.run([f"{tools}/llvm-objdump", "-d", "--no-show-raw-insn", copy.name], capture_output=True, text=True, check=True).stdout)
+        return any(check(code[name], rows) for name, rows in rows_of(copy.name).items() if code.get(name))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("objects", nargs="+")
+    parser.add_argument("--control", action="store_true", help="the real-output control: make one CFA offset wrong in each object and require the checker to flag it")
     parser.add_argument("--tools", default=str(Path.home() / "scratch/llvm-build-aarch64/bin"))
     args = parser.parse_args()
+    if args.control:
+        made = [obj for obj in args.objects if (flagged := control(obj, args.tools)) is not None and flagged]
+        print(f"eh_frame_check --control: {len(made)} of {len(args.objects)} objects flagged after a CFA offset was made wrong")
+        return 0 if made else 3
     functions = bad = skipped = 0
     for obj in args.objects:
         code = code_of(subprocess.run([f"{args.tools}/llvm-objdump", "-d", "--no-show-raw-insn", obj], capture_output=True, text=True, check=True).stdout)

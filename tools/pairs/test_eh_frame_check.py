@@ -47,3 +47,12 @@ def test_a_body_that_pushes_stack_arguments_is_not_modelled():
     code = [(0, "subq $0x58, %rsp"), (4, "leaq 0x1(%rdi), %rax"), (8, "subq $0x10, %rsp"), (0xc, "callq 0x0"), (0x11, "addq $0x58, %rsp"), (0x15, "retq")]
     rows = [(0, 7, 8, {}), (4, 7, 96, {}), (0x11, 7, 96, {}), (0x15, 7, 8, {})]
     assert c.check(code, rows)[0].startswith(c.SKIPPED)
+
+
+def test_the_control_makes_exactly_the_first_cfa_offset_wrong():
+    """A CIE, then an FDE: advance 1, def_cfa_offset 16, advance 3, offset r6 at 2, def_cfa_register r6: only the 16 changes, to 24."""
+    cie_body = bytes(4) + bytes([1, 0, 1, 0x78, 16])
+    fde_body = (13).to_bytes(4, "little") + bytes(8) + bytes([0]) + bytes([0x41, 0x0E, 16, 0x43, 0x86, 2, 0x0D, 6])
+    data = len(cie_body).to_bytes(4, "little") + cie_body + len(fde_body).to_bytes(4, "little") + fde_body
+    out = c.patched(data, (0, len(data)))
+    assert out is not None and [i for i, (a, b) in enumerate(zip(data, out)) if a != b] == [data.index(bytes([0x0E, 16])) + 1] and out[data.index(bytes([0x0E, 16])) + 1] == 24
