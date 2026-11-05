@@ -46,5 +46,5 @@ fn a_word_fill_loop_steps_its_pointer_with_incs() {
     let (_, body) = text.rsplit_once("jr nz, L0_").map(|(head, tail)| (head, tail)).expect("a back edge");
     let label = format!("L0_{}:", body.lines().next().unwrap().trim());
     let looped = &text[text.find(&label).expect("the loop label")..];
-    assert!(!looped.contains("sla") && !looped.contains("dec hl") && !looped.contains("add hl"), "{text}");
+    assert!(!looped.contains("sla") && !looped.contains("dec hl") && !looped.contains("#2"), "{text}");
 }

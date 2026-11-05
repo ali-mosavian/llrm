@@ -229,7 +229,10 @@ fn allocated_with(
 /// Bytes and the clocks weighted by loop depth of an allocated function.
 fn priced_in_loops(one: &Allocated) -> Option<(u32, u64)> {
     let (function, assignment, slots, reads) = one;
-    finish(function, assignment, 0, slots, reads.clone()).ok().map(|lines| expand::price_in_loops(&lines))
+    expand::PRICING.with(|one| one.set(true));
+    let lines = finish(function, assignment, 0, slots, reads.clone());
+    expand::PRICING.with(|one| one.set(false));
+    lines.ok().map(|lines| expand::price_in_loops(&lines))
 }
 
 /// Whether the price `one` beats `other`: bytes first at the size levels;

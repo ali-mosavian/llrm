@@ -115,6 +115,11 @@ fn pointer(register: RegId) -> Result<&'static str, String> {
     if is_pair(register) { Ok(name(register)) } else { Err(format!("{} is no pointer pair", name(register))) }
 }
 
+thread_local! {
+    /// Set while a variant is priced: the printer leaves its peepholes out.
+    pub static PRICING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 fn is_pair(register: RegId) -> bool {
     register == reg::BC || register == reg::DE || register == reg::HL
 }
@@ -809,6 +814,9 @@ impl Printer<'_> {
         source: RegId,
         rest: &[Inst],
     ) -> bool {
+        if PRICING.with(|one| one.get()) {
+            return false;
+        }
         let Some(Line::Inst(last)) = self.out.last() else { return false };
         let Some(value) = last
             .strip_prefix("ld ")
@@ -841,6 +849,9 @@ impl Printer<'_> {
         source: RegId,
         rest: &[Inst],
     ) -> bool {
+        if PRICING.with(|one| one.get()) {
+            return false;
+        }
         let Some(Line::Inst(last)) = self.out.last() else { return false };
         let Some(value) = last.strip_prefix("ld hl, #").and_then(|text| text.parse::<i32>().ok()) else {
             return false;

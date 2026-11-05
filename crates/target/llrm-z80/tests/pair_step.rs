@@ -16,12 +16,9 @@ fn text(insts: Vec<Inst>) -> String {
         .join("\n")
 }
 
-/// `de` + 2 was `ld hl, #2; add hl, de; ex de, hl` (5 B, 29 T) when the sum
-/// goes back into `de` and nothing reads `hl` or the carry after.
-#[test]
-fn a_pair_stepped_by_two_through_hl_is_two_incs() {
+fn stepped() -> Vec<Inst> {
     let phys = |r| Reg::Phys(r);
-    let stepped = vec![
+    vec![
         Inst::new(Kind::Op("LD16ri"), vec![Operand::Def(phys(reg::HL)), Operand::Imm(2)]),
         Inst::new(
             Kind::Op("ADD16"),
@@ -30,7 +27,24 @@ fn a_pair_stepped_by_two_through_hl_is_two_incs() {
         Inst::new(Kind::Copy, vec![Operand::Def(phys(reg::DE)), Operand::Use(phys(reg::HL))]),
         Inst::new(Kind::Op("LD16ri"), vec![Operand::Def(phys(reg::HL)), Operand::Imm(0)]),
         Inst::new(Kind::Op("RET"), vec![Operand::Use(phys(reg::DE))]),
-    ];
-    let asm = text(stepped);
+    ]
+}
+
+/// `de` + 2 was `ld hl, #2; add hl, de; ex de, hl` (5 B, 29 T) when the sum
+/// goes back into `de` and nothing reads `hl` or the carry after.
+#[test]
+fn a_pair_stepped_by_two_through_hl_is_two_incs() {
+    let asm = text(stepped());
     assert!(asm.contains("inc de\ninc de") && !asm.contains("add hl"), "{asm}");
+}
+
+/// A variant priced with the printer's peepholes changed which allocation won:
+/// copy_runs -O2 came out 2 B and 600 T worse than before them, the price
+/// differing by 0.09%. While a variant is priced the sequence stays whole.
+#[test]
+fn a_variant_is_priced_before_the_printers_peepholes() {
+    llrm_z80::expand::PRICING.with(|one| one.set(true));
+    let asm = text(stepped());
+    llrm_z80::expand::PRICING.with(|one| one.set(false));
+    assert!(asm.contains("add hl, de") && !asm.contains("inc de"), "{asm}");
 }
