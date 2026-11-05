@@ -282,6 +282,16 @@ impl<const STACK: bool> Target for Mos<STACK> {
         }
     }
 
+    // DEVIATE 3b-1 (owner greedy-subreg): a pair is built and taken apart by
+    // lane, as the pin's sub-register coalescing does.
+    fn lowers_lanes() -> bool {
+        true
+    }
+
+    fn joins_lanes() -> bool {
+        true
+    }
+
     fn moves_lanes(inst: &Inst) -> bool {
         matches!(inst.kind, Kind::Op("PACK" | "UNPACK"))
     }
@@ -3210,7 +3220,9 @@ fn emit_with<const STACK: bool>(
                     let jump = tail_call(block, i, pending);
                     // the speed variants of the variable long shifts move whole
                     // bytes first: 45 bytes more each, linked once, for 200
-                    // clocks fewer per 8 bits
+                    // clocks fewer per 8 bits. `__mulsi3_fast` (19 bytes more)
+                    // is not chosen: a site that never runs or has a constant
+                    // multiplier priced as run once still links it
                     let fast = matches!(callee.as_str(), "__ashlsi3" | "__lshrsi3" | "__ashrsi3")
                         && TUNING.with(|t| t.get()).clocks_per_byte <= 1;
                     writeln!(out, "  {} {callee}{}", if jump { "jmp" } else { "jsr" }, if fast { "_fast" } else { "" })
@@ -3569,8 +3581,28 @@ fn emit_with<const STACK: bool>(
     }
     let slots: Vec<(String, usize)> =
         if STACK { Vec::new() } else { slots.iter().map(|(slot, class)| (slot_name(*slot), size_of(class))).collect() };
+    let returns_a = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .filter(|inst| inst.kind == Kind::Op("RTS"))
+        .flat_map(|inst| &inst.operands)
+        .any(|operand| matches!(operand, Operand::Use(Reg::Phys(r)) if *r == reg::A));
+    // `jsr callee` reads `a` when the call lists it among the arguments
+    let mut a_callees = std::collections::BTreeSet::new();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts).filter(|inst| inst.kind == Kind::Op("JSR")) {
+        if let [Operand::Symbol(callee, _), arguments @ ..] = &inst.operands[..]
+            && arguments.iter().any(|operand| matches!(operand, Operand::Use(Reg::Phys(r)) if *r == reg::A))
+        {
+            a_callees.insert(callee.clone());
+            a_callees.insert(format!("{callee}_fast"));
+        }
+    }
     Ok((
-        own_labels(&finish(out, source.map(|(file, scope)| (file, scope, &function.places[..]))), &function.name),
+        own_labels(
+            &finish(out, source.map(|(file, scope)| (file, scope, &function.places[..])), !returns_a, a_callees),
+            &function.name,
+        ),
         slots,
         sunk,
         shared,
@@ -3618,7 +3650,11 @@ fn own_labels(
 fn finish(
     mut code: Asm,
     lines_of: Option<(&str, Option<u32>, &[llrm_codegen::model::lir::SrcLoc])>,
+    no_a_result: bool,
+    a_callees: std::collections::BTreeSet<String>,
 ) -> String {
+    code.no_a_result = no_a_result;
+    code.a_callees = a_callees;
     crate::peephole::run(&mut code);
     crate::relax::relax(&mut code);
     if let Some((file, scope, places)) = lines_of {

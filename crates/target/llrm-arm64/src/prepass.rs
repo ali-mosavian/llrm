@@ -256,16 +256,19 @@ fn dead_code(function: &mut MFunc) {
     }
 }
 
-pub fn run(function: &mut MFunc) {
+pub fn run(
+    function: &mut MFunc,
+    optsize: bool,
+) {
     dead_code(function);
     unsplit_edges(function);
     if function.blocks.len() < 2 && function.blocks.iter().all(|block| block.ops.len() < 3) {
         return;
     }
-    cse(function);
+    cse(function, optsize);
     hoist(function);
     // What was hoisted from several blocks is one value in the preheader.
-    cse(function);
+    cse(function, optsize);
     sink(function);
     crate::sinkfold::run(function);
     dead_definitions(function);
@@ -550,7 +553,74 @@ fn flags_dead(
 }
 
 /// Equal pure computations of a dominating block are used instead of repeated.
-fn cse(function: &mut MFunc) {
+/// Where each register is read: (block, index).
+fn readers_of(function: &MFunc) -> HashMap<Reg, Vec<(usize, usize)>> {
+    let mut readers: HashMap<Reg, Vec<(usize, usize)>> = HashMap::default();
+    for (block, body) in function.blocks.iter().enumerate() {
+        for (index, op) in body.ops.iter().enumerate() {
+            for used in op.defs_and_uses().1 {
+                readers.entry(used).or_default().push((block, index));
+            }
+        }
+    }
+    readers
+}
+
+/// `MachineCSE::isProfitableToCSE`: sharing `earlier` with `register` stretches
+/// `earlier`'s range, so it is not done for an operation with no register
+/// operand whose result is only copied (heuristic 2) unless every reader of
+/// `register` already reads `earlier`.
+///
+/// DEVIATE: heuristic 1 (a cheap operation across blocks) and 3 (phi readers)
+/// are not translated; within one block equal operations always merge (one DAG
+/// node in the pin); at `optsize` they always merge (a shared constant is the
+/// smaller code; the heuristics guard register pressure). Exit: 11-20.
+fn profitable(
+    readers: &HashMap<Reg, Vec<(usize, usize)>>,
+    definitions: &HashMap<Reg, usize>,
+    blocks: &[crate::mfunc::MBlock],
+    earlier: Reg,
+    register: Reg,
+    op: &Op,
+) -> bool {
+    let reads = |one: Reg| readers.get(&one).map_or(&[][..], Vec::as_slice);
+    let seen = reads(earlier);
+    if reads(register).iter().all(|reader| seen.contains(reader)) {
+        return true;
+    }
+    let no_register_operand = !op.defs_and_uses().1.iter().any(|used| used.is_virtual());
+    // A copy chain that ends in a register written in several places is a
+    // phi's input: the pin sees a PHI there, which is no copy.
+    let phi_input = |start: Reg| {
+        let mut pending = vec![start];
+        let mut steps = 0;
+        while let Some(one) = pending.pop() {
+            steps += 1;
+            if steps > 16 {
+                return true;
+            }
+            for &(block, index) in reads(one) {
+                if let Op::Copy { dst, .. } = blocks[block].ops[index] {
+                    if definitions.get(&dst) != Some(&1) {
+                        return true;
+                    }
+                    pending.push(dst);
+                }
+            }
+        }
+        false
+    };
+    let only_copied = reads(register)
+        .iter()
+        .all(|&(block, index)| matches!(blocks[block].ops[index], Op::Copy { .. }))
+        && !phi_input(register);
+    !(no_register_operand && only_copied)
+}
+
+fn cse(
+    function: &mut MFunc,
+    optsize: bool,
+) {
     let cfg = cfg(function);
     let definitions = definitions(function);
     // The table, scoped by the dominator tree: a block sees what its
@@ -562,7 +632,11 @@ fn cse(function: &mut MFunc) {
     let mut rename: HashMap<Reg, Reg> = HashMap::default();
     let mut removed: HashSet<(usize, usize)> = HashSet::default();
     let mut table: HashMap<String, Reg> = HashMap::default();
+    // The block each table entry's register is defined in: equal operations in
+    // one block are one DAG node in the pin, shared whatever their readers.
+    let mut home: HashMap<Reg, usize> = HashMap::default();
     let copies = single_copies(function, &definitions);
+    let readers = readers_of(function);
     let mut stack: Vec<(usize, usize, Vec<String>)> = vec![(0, 0, Vec::new())];
     // Depth-first over the tree, undoing a block's entries when it is left.
     while let Some((block, next, added)) = stack.last_mut() {
@@ -582,12 +656,16 @@ fn cse(function: &mut MFunc) {
                     // A flag-setting instruction is shared where its own flags
                     // are dead: the earlier one still sets them
                     // (`MachineCSE`, `PhysRegDefsReach`).
-                    Some(&earlier) if !setter || flags_dead(&function.blocks[*block].ops, index) => {
+                    Some(&earlier)
+                        if (!setter || flags_dead(&function.blocks[*block].ops, index))
+                            && (optsize || home.get(&earlier) == Some(block) || profitable(&readers, &definitions, &function.blocks, earlier, register, op)) =>
+                    {
                         rename.insert(register, earlier);
                         removed.insert((*block, index));
                     }
                     Some(_) => {}
                     None => {
+                        home.insert(register, *block);
                         table.insert(key.clone(), register);
                         entries.push(key);
                     }
@@ -957,11 +1035,94 @@ mod tests {
     #[test]
     fn a_constant_the_loop_remakes_is_the_entrys() {
         let mut function = function();
-        run(&mut function);
+        run(&mut function, false);
         let movzs = |block: usize| {
             function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
         };
         assert_eq!((movzs(0), movzs(1)), (2, 0), "{function:#?}");
+    }
+
+    /// The loop used 30011 and so did a block after a call, which read it as a
+    /// copy: the two were one value, held in a callee-saved register across
+    /// the call (recpow -O1: a third saved register, +2.6k instructions over
+    /// the pin; `isProfitableToCSE` heuristic 2 keeps them apart).
+    #[test]
+    fn a_constant_only_copied_is_not_shared_with_the_loops() {
+        let mut function = MFunc::new("f");
+        let (a, b, c, d, e) = (64, 65, 66, 67, 68);
+        function.next_register = 70;
+        let copy = |dst: u32, src: u32| Op::Copy { dst: Reg::Gpr(Gpr(dst)), src: Reg::Gpr(Gpr(src)) };
+        function.blocks = vec![
+            MBlock { label: "entry".into(), ops: vec![movz(b, 0), branch_to("loop")].into() },
+            MBlock {
+                label: "loop".into(),
+                ops: vec![
+                    movz(a, 5000),
+                    add(d, b, a),
+                    Op::I(Inst::CompareBranch {
+                        nonzero: true,
+                        width: Width::X,
+                        rt: Gpr(d),
+                        target: Target::Label("loop".into()),
+                    }),
+                    branch_to("after"),
+                ]
+                .into(),
+            },
+            MBlock {
+                label: "after".into(),
+                ops: vec![movz(c, 5000), copy(e, c), add(69, e, d), Op::Return { uses: vec![Reg::Gpr(Gpr(69))], tail: None }].into(),
+            },
+        ];
+        run(&mut function, false);
+        let movzs = |block: usize| {
+            function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
+        };
+        assert_eq!(movzs(2), 1, "{function:#?}");
+    }
+
+    /// At `optsize` the constant a later block makes is the loop's: one
+    /// `mov` (jpeg_fixed -Os: a seventh `mov w, #1024` for the kept `sdiv`,
+    /// +4 bytes over the pin-faithful heuristic alone).
+    #[test]
+    fn at_optsize_a_constant_only_copied_is_shared() {
+        let mut function = MFunc::new("f");
+        let (a, b, c, d, e) = (64, 65, 66, 67, 68);
+        function.next_register = 70;
+        let copy = |dst: u32, src: u32| Op::Copy { dst: Reg::Gpr(Gpr(dst)), src: Reg::Gpr(Gpr(src)) };
+        function.blocks = vec![
+            MBlock { label: "entry".into(), ops: vec![movz(b, 0), branch_to("loop")].into() },
+            MBlock {
+                label: "loop".into(),
+                ops: vec![
+                    movz(a, 5000),
+                    add(d, b, a),
+                    Op::I(Inst::CompareBranch {
+                        nonzero: true,
+                        width: Width::X,
+                        rt: Gpr(d),
+                        target: Target::Label("loop".into()),
+                    }),
+                    branch_to("after"),
+                ]
+                .into(),
+            },
+            MBlock {
+                label: "after".into(),
+                ops: vec![
+                    movz(c, 5000),
+                    copy(e, c),
+                    add(69, e, d),
+                    Op::Return { uses: vec![Reg::Gpr(Gpr(69))], tail: None },
+                ]
+                .into(),
+            },
+        ];
+        run(&mut function, true);
+        let movzs = |block: usize| {
+            function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
+        };
+        assert_eq!(movzs(2), 0, "{function:#?}");
     }
 
     /// A loop of 15 constants kept two in the loop (`switch`: `mov w1, #37` on
@@ -1088,7 +1249,7 @@ mod tests {
         };
         function.blocks[0].ops =
             vec![read(64), movz(65, 1), read(66), keep(64), keep(65), keep(66), branch_to("loop")].into();
-        run(&mut function);
+        run(&mut function, false);
         let reads = function.blocks[0].ops.iter().filter(|op| matches!(op, Op::I(Inst::AddSubImm { .. }))).count();
         assert_eq!(reads, 2, "{function:#?}");
     }
@@ -1098,7 +1259,7 @@ mod tests {
     fn a_constant_only_the_loop_makes_is_hoisted() {
         let mut function = function();
         function.blocks[0].ops.remove(0);
-        run(&mut function);
+        run(&mut function, false);
         let count = |block: usize| {
             function.blocks[block]
                 .ops

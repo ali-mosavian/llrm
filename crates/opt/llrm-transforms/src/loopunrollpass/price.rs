@@ -6,7 +6,7 @@
 
 use std::collections::HashSet;
 
-use llrm_mir::module::{ValueDef, ValueId};
+use llrm_mir::module::{Linkage, ValueDef, ValueId};
 
 use super::*;
 use crate::loopidioms::{trip_clocks, trip_cost};
@@ -40,7 +40,14 @@ pub(super) fn full_unroll_pays(
     up: &UnrollingPreferences,
 ) -> bool {
     let rate = run.tti.unroll_milliclocks_per_byte();
-    if rate <= 0 || run.options.opt_size || run.options.min_size || run.options.opt_level < 2 {
+    // The early LoopFullUnrollPass unrolls a callee before the inliner sees it
+    // (the pin's order): a veto in a function the inliner can take leaves a
+    // small rolled helper that is then inlined, and unrolled, at every site
+    // (jpeg_fixed -O2 +530 B). Such a loop is priced in the late pass, in the
+    // context of each site.
+    let inlinable = !run.options.target_unrolling
+        && run.this.is_some_and(|this| matches!(run.globals[this.0 as usize].linkage, Linkage::Internal | Linkage::Private));
+    if inlinable || rate <= 0 || run.options.opt_size || run.options.min_size || run.options.opt_level < 2 {
         return true;
     }
     // A loop of known trips in a nest of loops of known trips is a step to
@@ -84,12 +91,31 @@ pub(super) fn full_unroll_pays(
     // The accesses of a local array the copies make constant-indexed: the
     // array is promoted to registers, so they cost no clocks and no bytes
     // (frameless: `local[i]` filled and read by two 12-trip loops).
-    let (promoted, promoted_runs) = promoted_accesses(run, analyzed, lp, &known);
+    let (mut promoted, mut promoted_runs, ints, floats) = promoted_accesses(run, analyzed, lp, &known);
+    // DEVIATE UP1-REG (owner m64, exit 2026-11-20): the promoted elements are
+    // registers only while they fit: more than the file holds, and they are
+    // stack slots again (fpbench -O2 m64: four 6-element float arrays, 24
+    // values for 16 registers, were priced at 0 bytes and grew 815).
+    if run.tti.unroll_promotion_fits_registers() {
+        let machine = run.outer.target();
+        let float_room = if machine.float_registers() > 0 { machine.float_registers() } else { machine.registers() };
+        if ints as i64 * i64::from(trips) > machine.registers() || floats as i64 * i64::from(trips) > float_room {
+            promoted = 0;
+            promoted_runs = 0;
+        }
+    }
     let added = (added - i64::from(trips) * promoted * bytes.load).max(0);
     let (saved_units, constant_clocks) = match analysis {
         Some(cost) => (i64::from(cost.rolled_dynamic_cost.saturating_sub(cost.unrolled_cost)), 0),
         None => (i64::from(trips) * i64::from(up.be_insns), i64::from(trips) * nested_uses * clocks.r#move),
     };
+    // The loop's control costs what it runs, never less than the body's average
+    // unit: a taken back edge is several clocks (the i486's `jne` 3), the
+    // counter's step and the compare one each (lru: a 3-trip loop saved 6
+    // clocks by the average, 25 run).
+    let control = (i64::from(trips) - 1) * clocks.branch + i64::from(trips) * 2 * clocks.add;
+    let averaged = i64::from(trips) * (i64::from(up.be_insns) + 1) * body_clocks / rolled_units;
+    let constant_clocks = constant_clocks + (control - averaged).max(0);
     let constant_clocks = constant_clocks + i64::from(trips) * promoted_runs * clocks.load;
     // The loop runs once for each trip of the loops around it, which the
     // bytes do not: the saving is counted over those runs (x_cordic: the
@@ -99,7 +125,7 @@ pub(super) fn full_unroll_pays(
     why(
         run,
         lp,
-        &format!("priced unroll: {trips} trips, saves {saved} clk, adds {added} B (body {body_bytes} B), rate {rate}"),
+        &format!("priced unroll: {trips} trips, saves {saved} clk, adds {added} B (body {body_bytes} B; units {unrolled_units} of {rolled_units}, promoted {promoted}), rate {rate}"),
     );
     unroll_pays(saved, added, rate)
 }
@@ -219,9 +245,10 @@ fn promoted_accesses(
     analyzed: &Analyzed,
     lp: Loop,
     known: &HashSet<ValueId>,
-) -> (i64, i64) {
+) -> (i64, i64, usize, usize) {
     let function = &*run.function;
     let (mut found, mut runs) = (0, 0);
+    let (mut ints, mut floats): (HashSet<ValueId>, HashSet<ValueId>) = (HashSet::new(), HashSet::new());
     for &block in lp.get_blocks() {
         let nested = analyzed.loops.get_loop_depth(block).saturating_sub(lp.get_loop_depth());
         for inst in function.iter_block(block) {
@@ -254,10 +281,20 @@ fn promoted_accesses(
             if free {
                 found += 1;
                 runs += ASSUMED_TRIPS.pow(nested.min(2));
+                if let Some(Base::Local(root)) = local_array_at(run, pointer, known) {
+                    let stored = match one.opcode {
+                        Opcode::Store { .. } => function.operand_type(run.context, one.operands[0]),
+                        _ => one.result.map(|result| function.value(result).ty),
+                    };
+                    let float = stored
+                        .and_then(|ty| llrm_mir::tti::Ty::of(&run.context.types, ty))
+                        .is_some_and(|ty| ty.is_float());
+                    if float { floats.insert(root) } else { ints.insert(root) };
+                }
             }
         }
     }
-    (found, runs)
+    (found, runs, ints.len(), floats.len())
 }
 
 /// What an address at the counters is an element of.

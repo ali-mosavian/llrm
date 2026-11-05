@@ -599,6 +599,71 @@ fn bitfield_insert_from_or_and_imm<D: AddrDag>(
     Some(Outcome::Selected)
 }
 
+/// `tryBitfieldExtractOp`: `and (srl x, n), mask`, `srl`/`sra` of a `shl` or
+/// of an `and`, and `sign_extend_inreg` of a shift are one `UBFM`/`SBFM`.
+///
+/// DEVIATE SD530: the forms through `truncate`/`any_extend` (they select a
+/// 64-bit `UBFM` and take its low half) are not matched, as in SD529. Exit:
+/// the `Widen` helper.
+///
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/AArch64/AArch64ISelDAGToDAG.cpp#L3152>
+pub fn select_bitfield_extract<D: AddrDag>(
+    dag: &mut D,
+    node: u32,
+) -> Option<Outcome> {
+    let opcode = dag.opcode(node);
+    let vt = dag.value_type(Value::new(node, 0));
+    let bits = width_of(vt)?;
+    let (signed, source, immr, imms) = if opcode == isd::AND {
+        let (source, lsb, msb) = bitfield_extract_from_and(dag, node, 0, false)?;
+        (false, source, lsb, msb)
+    } else if opcode == isd::SRL || opcode == isd::SRA {
+        let amount = u64::try_from(dag.constant(dag.operand(node, 1))?).ok()?;
+        let shifted = dag.operand(node, 0);
+        let signed = opcode == isd::SRA;
+        // `isSeveralBitsExtractOpFromShr`: `srl (and x, mask), n`.
+        if opcode == isd::SRL
+            && let Some(mask) = imm_operand(dag, shifted.node, isd::AND)
+            && is_mask(mask >> amount.min(63))
+        {
+            (false, dag.operand(shifted.node, 0), amount as u32, 63 - mask.leading_zeros())
+        } else {
+            // A shift of a left shift.
+            let shl = imm_operand(dag, shifted.node, isd::SHL)?;
+            if shl >= u64::from(bits) || amount == 0 || amount >= u64::from(bits) {
+                return None;
+            }
+            let immr = amount as i64 - shl as i64;
+            let immr = if immr < 0 { immr + i64::from(bits) } else { immr } as u32;
+            (signed, dag.operand(shifted.node, 0), immr, bits - shl as u32 - 1)
+        }
+    } else if opcode == isd::SIGN_EXTEND_INREG {
+        let inner = dag.operand(node, 0);
+        let shift = imm_operand(dag, inner.node, isd::SRL).or_else(|| imm_operand(dag, inner.node, isd::SRA))?;
+        let width = match dag.value_type_node(dag.operand(node, 1))? {
+            mvt::i8 => 8,
+            mvt::i16 => 16,
+            mvt::i32 => 32,
+            _ => return None,
+        };
+        if shift + width > u64::from(bits) {
+            return None;
+        }
+        (true, dag.operand(inner.node, 0), shift as u32, (shift + width - 1) as u32)
+    } else {
+        return None;
+    };
+    let machine = match (bits, signed) {
+        (32, false) => op::UBFMWri,
+        (32, true) => op::SBFMWri,
+        (_, false) => op::UBFMXri,
+        (_, true) => op::SBFMXri,
+    };
+    let (immr, imms) = (dag.target_constant(i64::from(immr), vt), dag.target_constant(i64::from(imms), vt));
+    dag.morph_node_to(node, machine, &[vt], &[source, immr, imms]);
+    Some(Outcome::Selected)
+}
+
 /// `tryBitfieldInsertOp`. `None` for any node it does not match.
 pub fn select_bitfield_insert<D: AddrDag>(
     dag: &mut D,

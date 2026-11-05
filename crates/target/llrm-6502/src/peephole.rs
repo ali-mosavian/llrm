@@ -33,6 +33,11 @@
 //! - [`branch_on_shift_carry`]: `ldx m; bpl` after `asl|rol c` where `c` held
 //!   what `m` holds: the shift's carry is `m`'s top bit, so `bcc` replaces
 //!   both.
+//! - [`step_in_place`]: `lda #1; clc; adc m; sta m` (also `lda m; clc; adc #1;
+//!   sta m`, `lda m; sec; sbc #1; sta m` and the 65C02's `lda m; inc a; sta
+//!   m`, each a step of 1) of a byte in memory, with `a` and the carry dead
+//!   after: `inc m` (`dec m`), which sets the sign and zero flags as the store
+//!   left them.
 //! - [`jump_to_return`]: `jmp l` where `l:` is a lone `rts` becomes `rts`.
 //!
 //! DEVIATE: LLVM's `PeepholeOptimizer` and `MachineCSE` work on allocated
@@ -98,6 +103,7 @@ pub fn run(asm: &mut Asm) {
     drop_reloads(asm);
     drop_known_loads(asm);
     drop_zero_compares(asm);
+    step_in_place(asm);
     load_straight_into_a(asm);
     store_before_transfer(asm);
     drop_cancelling_transfers(asm);
@@ -419,7 +425,7 @@ fn load_straight_once(asm: &mut Asm) -> bool {
                     Op::Sta => matches!(operand, Operand::Direct(_)) && operand != from,
                     Op::Beq | Op::Bne | Op::Bcc | Op::Bcs | Op::Bmi | Op::Bpl => match operand {
                         Operand::Direct(target) => label_at(target)
-                            .is_some_and(|label| dead_from(lines, label, register, &mut HashSet::default())),
+                            .is_some_and(|label| dead_from(lines, label, register, &mut HashSet::default(), Exits::default())),
                         _ => false,
                     },
                     // the other index register: a load or store of another byte
@@ -436,7 +442,7 @@ fn load_straight_once(asm: &mut Asm) -> bool {
             }
         }
         if let Some(to) = to
-            && dead_from(lines, to + 1, register, &mut HashSet::default())
+            && dead_from(lines, to + 1, register, &mut HashSet::default(), Exits::default())
         {
             drops.push((at, to));
         }
@@ -509,7 +515,7 @@ fn store_before_once(asm: &mut Asm) -> bool {
         let untouched = lines[at + 1..to].iter().all(|line| line.inst().is_none_or(|i| i.operand != *cell));
         if untouched
             && flags_unread_after(lines, at + 1)
-            && dead_from(lines, to + 1, register, &mut HashSet::default())
+            && dead_from(lines, to + 1, register, &mut HashSet::default(), Exits::default())
         {
             let cell = cell.clone();
             asm.lines[at] = Line::Inst(Inst { op: Op::Sta, operand: cell, place: 0 });
@@ -583,14 +589,33 @@ fn writes_cell(
         && inst.operand == *cell
 }
 
+/// What the function lets `dead_from` assume about the instructions that leave
+/// it or call out. The default assumes nothing: a return reads the register and
+/// so does a call.
+#[derive(Clone, Copy, Default)]
+struct Exits<'a> {
+    /// A return does not read `a`: the function leaves nothing there.
+    no_a_result: bool,
+    /// The routines called with an argument in `a`; a call to any other one
+    /// writes `a` without reading it. `None`: every call reads it.
+    a_callees: Option<&'a std::collections::BTreeSet<String>>,
+}
+
+impl<'a> Exits<'a> {
+    fn of(asm: &'a Asm) -> Exits<'a> {
+        Exits { no_a_result: asm.no_a_result, a_callees: Some(&asm.a_callees) }
+    }
+}
+
 /// Whether register `bit` (A, X or Y) is written before it is read, along every
-/// path from `lines[from]`. A call, a return or an instruction not listed
-/// counts as a read.
+/// path from `lines[from]`. An instruction not listed counts as a read; a call
+/// and a return do as `exits` says.
 fn dead_from(
     lines: &[Line],
     from: usize,
     bit: Registers,
     seen: &mut HashSet<usize>,
+    exits: Exits,
 ) -> bool {
     let mut at = from;
     while let Some(line) = lines.get(at) {
@@ -658,6 +683,18 @@ fn dead_from(
                 _,
             ) => (indexed(if bit == Registers::X { Index::X } else { Index::Y }), false),
             (Op::Lda | Op::Ldx | Op::Ldy, _) => (indexed(if bit == Registers::X { Index::X } else { Index::Y }), false),
+            (Op::Rts, _) => return bit == Registers::A && exits.no_a_result,
+            (Op::Jsr, _) if bit == Registers::A => {
+                // the callee clobbers `a`: it is dead unless it was an argument
+                let callee = match &inst.operand {
+                    Operand::Direct(name) => name,
+                    _ => return false,
+                };
+                match exits.a_callees {
+                    Some(set) if !set.contains(callee) => return true,
+                    _ => return false,
+                }
+            }
             (Op::Jmp, _) => {
                 return inst
                     .target()
@@ -665,13 +702,13 @@ fn dead_from(
                         |label| lines
                             .iter()
                             .position(|l| *l == Line::Label(label.to_owned()))
-                            .is_some_and(|to| dead_from(lines, to, bit, seen)),
+                            .is_some_and(|to| dead_from(lines, to, bit, seen, exits)),
                     );
             }
             (op, _) if op.opposite().is_some() || op == Op::Bra => {
                 let target =
                     inst.target().and_then(|label| lines.iter().position(|l| *l == Line::Label(label.to_owned())));
-                let taken = target.is_some_and(|to| dead_from(lines, to, bit, seen));
+                let taken = target.is_some_and(|to| dead_from(lines, to, bit, seen, exits));
                 if op == Op::Bra {
                     return taken;
                 }
@@ -859,5 +896,146 @@ fn carry_branch(
             return None;
         }
     };
-    (copied && dead_from(&asm.lines, at + 1, tested, &mut HashSet::default())).then_some((carry, from))
+    (copied && dead_from(&asm.lines, at + 1, tested, &mut HashSet::default(), Exits::default())).then_some((carry, from))
+}
+
+/// The memory byte a step of one was added to and stored back, and the step
+/// (`true`: up), when `lines[at..at + 4]` (or three, for `inc a`) is one:
+/// the length of the match too.
+fn step_of(
+    lines: &[Line],
+    at: usize,
+) -> Option<(Operand, bool, usize)> {
+    let inst = |n: usize| lines.get(at + n).and_then(Line::inst);
+    let memory = |operand: &Operand| {
+        matches!(operand, Operand::Direct(_) | Operand::Indexed(_, Index::X)).then(|| operand.clone())
+    };
+    let first = inst(0)?;
+    let imm = |inst: &Inst, value: &str| inst.operand == Operand::Imm(value.to_owned());
+    // `lda #1; clc; adc m; sta m`
+    if first.op == Op::Lda && (imm(first, "1") || imm(first, "255")) {
+        let (carry, add, store) = (inst(1)?, inst(2)?, inst(3)?);
+        let up = imm(first, "1");
+        let m = memory(&add.operand)?;
+        if carry.op == Op::Clc && add.op == Op::Adc && store.op == Op::Sta && store.operand == m {
+            return Some((m, up, 4));
+        }
+        return None;
+    }
+    let m = memory(&first.operand).filter(|_| first.op == Op::Lda)?;
+    let (step, store) = (inst(1)?, inst(2)?);
+    // `lda m; inc a; sta m`
+    if matches!(step.op, Op::Inc | Op::Dec) && matches!(step.operand, Operand::Acc | Operand::None) {
+        if store.op == Op::Sta && store.operand == m {
+            return Some((m, step.op == Op::Inc, 3));
+        }
+        return None;
+    }
+    // `lda m; clc; adc #1; sta m` and `lda m; sec; sbc #1; sta m`
+    let (add, store) = (inst(2)?, inst(3)?);
+    if store.op != Op::Sta || store.operand != m || !imm(add, "1") {
+        return None;
+    }
+    match (step.op, add.op) {
+        (Op::Clc, Op::Adc) => Some((m, true, 4)),
+        (Op::Sec, Op::Sbc) => Some((m, false, 4)),
+        _ => None,
+    }
+}
+
+/// Whether the carry is written before it is read, along every path from
+/// `lines[from]`. A call or a return counts as a write: no routine takes the
+/// carry in, and none leaves it for a caller to read.
+fn carry_dead_from(
+    lines: &[Line],
+    from: usize,
+    seen: &mut HashSet<usize>,
+) -> bool {
+    let mut at = from;
+    while let Some(line) = lines.get(at) {
+        if !seen.insert(at) {
+            return true;
+        }
+        at += 1;
+        let inst = match line {
+            Line::Inst(inst) => inst,
+            Line::Label(_) => continue,
+            Line::Raw(_) => return false,
+        };
+        match inst.op {
+            Op::Clc | Op::Sec | Op::Cmp | Op::Cpx | Op::Cpy | Op::Jsr | Op::Rts => return true,
+            Op::Asl | Op::Lsr if matches!(inst.operand, Operand::Acc | Operand::None) => return true,
+            Op::Lda
+            | Op::Ldx
+            | Op::Ldy
+            | Op::Sta
+            | Op::Stx
+            | Op::Sty
+            | Op::Stz
+            | Op::Tax
+            | Op::Tay
+            | Op::Txa
+            | Op::Tya
+            | Op::Tsx
+            | Op::Txs
+            | Op::And
+            | Op::Ora
+            | Op::Eor
+            | Op::Inc
+            | Op::Dec
+            | Op::Inx
+            | Op::Iny
+            | Op::Dex
+            | Op::Dey
+            | Op::Bit
+            | Op::Pha
+            | Op::Pla
+            | Op::Phx
+            | Op::Phy
+            | Op::Plx
+            | Op::Ply
+            | Op::Nop => {}
+            Op::Jmp => {
+                return inst
+                    .target()
+                    .is_some_and(
+                        |label| lines
+                            .iter()
+                            .position(|l| *l == Line::Label(label.to_owned()))
+                            .is_some_and(|to| carry_dead_from(lines, to, seen)),
+                    );
+            }
+            Op::Beq | Op::Bne | Op::Bmi | Op::Bpl | Op::Bra => {
+                let taken = inst
+                    .target()
+                    .and_then(|label| lines.iter().position(|l| *l == Line::Label(label.to_owned())))
+                    .is_some_and(|to| carry_dead_from(lines, to, seen));
+                if inst.op == Op::Bra || !taken {
+                    return taken;
+                }
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// A step of one of a byte in memory as `inc m` or `dec m`.
+pub fn step_in_place(asm: &mut Asm) {
+    let mut at = 0;
+    while at < asm.lines.len() {
+        let Some((cell, up, length)) = step_of(&asm.lines, at) else {
+            at += 1;
+            continue;
+        };
+        let after = at + length;
+        if dead_from(&asm.lines, after, Registers::A, &mut HashSet::default(), Exits::of(asm))
+            && carry_dead_from(&asm.lines, after, &mut HashSet::default())
+        {
+            let place = asm.lines[at].inst().map_or(0, |i| i.place);
+            let op = if up { Op::Inc } else { Op::Dec };
+            asm.lines.splice(at..after, [Line::Inst(Inst { op, operand: cell, place })]);
+        }
+        at += 1;
+    }
 }

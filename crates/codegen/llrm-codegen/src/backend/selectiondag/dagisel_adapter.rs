@@ -378,11 +378,38 @@ fn theirs(v: SDValue) -> PinValue {
     PinValue::new(v.node, v.res)
 }
 
+/// The nodes selection removed, by node id: a flag each, as node ids are dense
+/// (a `BTreeSet` was 22 M Ir of `has_live_users` on memory_expansion -O2
+/// x86-64).
+#[derive(Default)]
+pub(super) struct DeadNodes(Vec<bool>);
+
+impl DeadNodes {
+    pub(super) fn contains(
+        &self,
+        node: &u32,
+    ) -> bool {
+        self.0.get(*node as usize).copied().unwrap_or(false)
+    }
+
+    /// True if `node` was not dead before.
+    pub(super) fn insert(
+        &mut self,
+        node: u32,
+    ) -> bool {
+        let at = node as usize;
+        if self.0.len() <= at {
+            self.0.resize(at + 1, false);
+        }
+        !std::mem::replace(&mut self.0[at], true)
+    }
+}
+
 /// A [`SelectionDAG`] under selection.
 pub struct DagisAdapter<'a> {
     pub dag: &'a mut SelectionDAG,
     /// Nodes selection removed; the arena keeps them, no query sees them.
-    dead: BTreeSet<u32>,
+    dead: DeadNodes,
     /// The memory operands each machine node got (`setNodeMemRefs`), as
     /// load/store node ids.
     pub mem_refs: BTreeMap<u32, Vec<u32>>,
@@ -417,8 +444,9 @@ impl<'a> DagisAdapter<'a> {
             }
             work.extend(dag.nodes()[node as usize].ops.iter().map(|op| op.node));
         }
-        let dead =
-            (0..dag.nodes().len() as u32).filter(|&node| dag.is_deleted(node) || !reached[node as usize]).collect();
+        let dead = DeadNodes(
+            (0..dag.nodes().len() as u32).map(|node| dag.is_deleted(node) || !reached[node as usize]).collect(),
+        );
         let mut node_id = vec![-1; dag.nodes().len()];
         for (position, node) in super::dag_select::users_first(dag).into_iter().rev().enumerate() {
             node_id[node as usize] = position as i32;

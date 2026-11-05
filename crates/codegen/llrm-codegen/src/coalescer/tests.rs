@@ -1600,6 +1600,55 @@ fn test_a_plain_lane_def_keeps_a_lane_joined_after_it() {
     assert!(low.partial_defs == vec![2], "{low:?}");
 }
 
+/// One instruction defines both bytes of a pair (a LEA's address): once both
+/// join their lanes it defines the whole pair. The high lane's copy kept the
+/// low one, so the def was marked to read the pair, which nothing defined
+/// before it: the pair was live from the function entry and the split of it
+/// died on "Cannot overlap different values" (6502, write_through_parameter -O1).
+#[test]
+fn test_one_instruction_defining_both_bytes_does_not_read_the_pair() {
+    let both = Arc::new(Insn::new(0, None, None, vec![1, 3], vec![]));
+    let (lo, hi) = (lane_copy(2, 0, 1), lane_copy(2, 1, 3));
+    assert!(hi.partial_defs == vec![2], "premise: the high copy keeps the low lane");
+    let was = body(&[(&[Arc::clone(&both), Arc::clone(&lo), Arc::clone(&hi), read_at(2, 2)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    for v in 1..=3 {
+        lis.interval(v);
+    }
+    let mut state = State::new();
+    for copy in [lo.id(), hi.id()] {
+        let result = join_copy(&mut lis, &LaneViews, &mut state, &mut Default::default(), copy);
+        assert_eq!(result, JoinResult::Joined);
+    }
+    let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
+    let definer = kept.iter().find(|insn| insn.defines.contains(&2)).expect("the def of both bytes");
+    assert!(definer.partial_defs.is_empty(), "{definer:?}");
+    let at = lis.indexes.get_instruction_index(definer.id());
+    assert!(!lis.interval(2).live_at(&at), "live before its def");
+}
+
+/// A copy of a pair built by lane defs, the pair still read after it, was
+/// refused (whole values with lane defs never joined): the quicksort inner loop
+/// of the 6502 at -O2 copied its element address (`lda rc16; sta rc22; lda
+/// rc17; sta rc23`) every trip, 2 instructions and 3% of the cycles.
+#[test]
+fn test_a_whole_copy_of_a_pair_built_by_lane_defs_is_joined() {
+    let (d1, d3) = (def_at(1, 1), def_at(3, 1));
+    let (lo, hi) = (lane_copy(2, 0, 1), lane_copy(2, 1, 3));
+    let whole = copy(4, 2);
+    let was = body(&[(&[d1, d3, lo, hi, Arc::clone(&whole), read_at(2, 2), read_at(4, 2)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    for v in 1..=4 {
+        lis.interval(v);
+    }
+    let mut state = State::new();
+    let result = join_copy(&mut lis, &LaneViews, &mut state, &mut Default::default(), whole.id());
+    assert_eq!(result, JoinResult::Joined, "the copy of the pair stayed");
+    let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
+    assert!(kept.iter().all(|insn| insn.id() != whole.id()), "the copy is gone");
+    assert!(kept.iter().all(|insn| !insn.defines.contains(&4) && !insn.uses.contains(&4)), "{kept:?}");
+}
+
 /// A byte copied into the low lane of a pair names the same width at the same
 /// offset as a copy between two bytes, so it was taken for one: the byte (`al`)
 /// shares no palette with the pair (`ax`) whole, and the copy stayed (crc16 -Oz

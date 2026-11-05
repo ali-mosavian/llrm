@@ -130,6 +130,7 @@ impl BranchProbabilityInfo {
         module: Module,
         function: &Function,
     ) -> Self {
+        llrm_mir::counts::bump(llrm_mir::counts::Event::BranchProbabilities);
         let mut bpi = Self { probs: vec![None; function.block_capacity()] };
         let Some(entry) = function.entry() else { return bpi };
         let cycles = CycleInfo::compute(function);

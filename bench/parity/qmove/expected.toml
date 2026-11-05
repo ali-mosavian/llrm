@@ -1,5 +1,6 @@
-reason = "inputs read through volatile or DATA so no build folds the kernel; reference counts change with the source"
-blessed = "2026-10-25"
+reason = "C references re-blessed 2026-11-05: corpus edits since 10-15 (parity kernels volatile inputs, textfill DOS-only); tcpp links CM.LIB ISATTY (#7243)"
+blessed = "2026-11-05"
+corpus = "7bdd8163344a72a429eb5cf0385ef308"
 
 [ow.O2]
 instructions = 211
@@ -18,35 +19,35 @@ bss_bytes = 0
 [bcc.O2]
 instructions = 207
 memory_operands = 74
-code_bytes = 353
+code_bytes = 351
 data_bytes = 24
 bss_bytes = 0
 
 [bcc.Os]
 instructions = 207
 memory_operands = 74
-code_bytes = 334
+code_bytes = 332
 data_bytes = 24
 bss_bytes = 0
 
 [tc.O2]
 instructions = 277
 memory_operands = 77
-code_bytes = 372
+code_bytes = 371
 data_bytes = 32
 bss_bytes = 0
 
 [tc.Os]
 instructions = 273
 memory_operands = 77
-code_bytes = 367
+code_bytes = 361
 data_bytes = 32
 bss_bytes = 0
 
 [tcpp.O2]
 instructions = 265
 memory_operands = 75
-code_bytes = 350
+code_bytes = 349
 data_bytes = 28
 bss_bytes = 0
 kernel_ms = 0.0117
@@ -54,7 +55,7 @@ kernel_ms = 0.0117
 [tcpp.Os]
 instructions = 261
 memory_operands = 75
-code_bytes = 346
+code_bytes = 343
 data_bytes = 28
 bss_bytes = 0
 kernel_ms = 0.0117

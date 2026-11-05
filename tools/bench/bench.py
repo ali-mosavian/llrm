@@ -371,14 +371,20 @@ def build_watcom(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Pat
     done = cpulimit.run([str(OW / "bwcc"), "-zq", "-mm", "-ecc", "-s", "-DOWREF", "-4", "-fpi87", f"-i={OWLIB.parent / 'h'}", *physical_defines(), *flags, str(variant.source), f"-fo={obj}"], 300, capture_output=True, text=True)
     if done.returncode != 0 or not obj.exists():
         return "compile: " + (done.stderr or done.stdout).strip()[-300:]
-    try:
-        support = dosbatch.c_support(dosbatch.REAL_MODE, work)
-        # Watcom names main `main_`; its start-up asks for `_cstart_` and the library calls it
-        dosbatch._host([str(BIN / "jwlink"), "option", "quiet", "option", f"map={listing}", "option", "start=_cstart_", "option", "stack=16k", *dosbatch.linkrecipe.link(dosbatch.REAL_MODE, "format"), "name", str(exe),
-                        "libpath", str(OWLIB / "dos"), "libpath", str(OWLIB), "file", str(obj), *[word for one in support for word in ("file", str(one))],
-                        "library", "clibm.lib", "library", "math87m.lib", "library", "noemu87.lib"])
-    except dosbatch.BuildError as error:
-        return f"build: {error}"
+    support = dosbatch.c_support(dosbatch.REAL_MODE, work)
+    stack = 60 * 1024  # the most DGROUP holds: a deep recursion (recsum, 2000 frames) overran the 16K one into the code; a program with more data gets what is left
+    while True:
+        try:
+            # Watcom names main `main_`; its start-up asks for `_cstart_` and the library calls it
+            dosbatch._host([str(BIN / "jwlink"), "option", "quiet", "option", f"map={listing}", "option", "start=_cstart_", "option", f"stack={stack}", *dosbatch.linkrecipe.link(dosbatch.REAL_MODE, "format"), "name", str(exe),
+                            "libpath", str(OWLIB / "dos"), "libpath", str(OWLIB), "file", str(obj), *[word for one in support for word in ("file", str(one))],
+                            "library", "clibm.lib", "library", "math87m.lib", "library", "noemu87.lib"])
+            break
+        except dosbatch.BuildError as error:
+            over = re.search(r"DGROUP exceeds 64k by (\d+) bytes", str(error))
+            if not over or stack <= 4096:
+                return f"build: {error}"
+            stack -= -(-int(over.group(1)) // 16) * 16
     return exe, listing
 
 
@@ -418,6 +424,9 @@ def omf_library_module(library: Path, name: str, out: Path) -> Path:
     raise KeyError(f"{name} is not a module of {library}")
 
 
+BORLAND_DEFINES = {"tcpp": ["-D__huge=huge"]}  # Turbo C++ 3.0 knows `huge`, not `__huge` (BCC 3.1 and Watcom know both); TC 2.01 has no huge arrays at all: its row stays an error
+
+
 def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str, work: Path) -> dict[str, tuple[Path, Path] | str]:
     """A Borland-family reference (BORLAND), every program in one DOSBox boot. Keyed by stem.
     Linked with the toolchain's own start-up (C0M) and libraries: the floating-point programs need its FP87 and MATHM,
@@ -432,7 +441,11 @@ def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str,
         if home.name == "tc201":  # TC 2.01 reads a `#` after a bare LF as an illegal character: every program with a #define failed
             text = text.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
         (folder / f"{stem}.c").write_bytes(text)
-    subprocess.run([str(ROOT / "tools" / "callconv" / "bcc.sh"), str(folder), *[f"{stem}.c {levels[opt]} {" ".join(physical_defines())}".strip() for _, stem in variants_]],
+        if home.name == "tc201":  # the shared header too: its first #ifndef read as unterminated, "Unexpected end of file in conditional"
+            header = folder / "bench_io.h"
+            if header.exists():
+                header.write_bytes(header.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
+    subprocess.run([str(ROOT / "tools" / "callconv" / "bcc.sh"), str(folder), *[f"{stem}.c {levels[opt]} {" ".join([*physical_defines(), *BORLAND_DEFINES.get(language, [])])}".strip() for _, stem in variants_]],
                    env={**os.environ, "CCROOT": str(home.parent), "CCDIR": home.name, "CCEXE": compiler}, capture_output=True, timeout=1800)
     support = [word for one in dosbatch.c_support(dosbatch.REAL_MODE, folder) for word in ("file", str(one))]
     out: dict[str, tuple[Path, Path] | str] = {}
@@ -460,6 +473,15 @@ def with_startup(selected: list[str], timing: bool) -> list[tuple[Path, Variant]
     return todo + [(STARTUP, variant) for variant in variants(STARTUP) if timing]
 
 
+def reference_programs(todo: list[tuple[Path, Variant]]) -> list[tuple[Path, Variant]]:
+    """`todo` less the programs whose bench.toml says `references = false` (C99 or llrm-only sources the reference compilers cannot build),
+    each named on a line: a program left out is announced, not silently absent."""
+    left_out = sorted({directory for directory, _ in todo if tomllib.loads((directory / "bench.toml").read_text()).get("references") is False})
+    for directory in left_out:
+        print(f"not a reference program: {directory_name(directory)} (bench.toml: references = false)", flush=True)
+    return [(directory, variant) for directory, variant in todo if directory not in left_out]
+
+
 def measure_references(selected: list[str], opts: list[str], work: Path, timing: bool = False) -> dict[tuple[str, str, str], dict]:
     """The reference compilers on the same programs: Open Watcom and BCC 3.1 for C (languages `ow`, `bcc`, at each level)
     and QuickBASIC 4.5's BC for BASIC (language `bc`, one level: /O). With --time each also gets its kernel time."""
@@ -467,7 +489,7 @@ def measure_references(selected: list[str], opts: list[str], work: Path, timing:
     folder = work / "reference"
     shutil.rmtree(folder, ignore_errors=True)
     folder.mkdir(parents=True)
-    todo = with_startup(selected, timing)
+    todo = reference_programs(with_startup(selected, timing))
     stems = [f"R{at:03d}" for at in range(len(todo))]
     jobs, owned, plain, needs = [], [], {}, {}
     def own(key, stem, directory, variant, built, obj=None):
@@ -476,7 +498,8 @@ def measure_references(selected: list[str], opts: list[str], work: Path, timing:
         elif directory == STARTUP:
             plain[key] = built[0]
         else:
-            owned.append((key, (stem, built[0], built[1], None if variant.timed_only and not variant.emulated else variant.region, expected_output(directory), obj)))
+            files, want, counted = counting_input(variant, directory, folder / "ci-input" / stem)
+            owned.append((key, (stem, built[0], built[1], variant.region if counted else None, want, obj, files)))
             needs[key] = timing_input(variant, directory)
     for opt in opts:
         c_todo = [(directory, variant, stem) for (directory, variant), stem in zip(todo, stems) if variant.language == "c"]
@@ -654,9 +677,7 @@ def measure_opt(selected: list[str], opt: str, work: Path, timing: bool = False)
             plain[key] = exe  # timed, not counted
         else:
             # an emulated program is counted on the cut of its corpus the default bench times (ci_bytes), even under --time
-            fed = timing_input(variant, directory, folder / "ci-input" / stem) if variant.emulated else None
-            files, want = (fed["files"], fed["want"]) if fed and "files" in fed else ((), expected_output(directory))  # an unavailable corpus leaves it timed only
-            counted = not variant.timed_only or bool(files)
+            files, want, counted = counting_input(variant, directory, folder / "ci-input" / stem)
             jobs.append((key, (stem, exe, listing, variant.region if counted else None, want, folder / f"{stem}.obj", files)))
             needs[key] = timing_input(variant, directory, None if timing else folder / "ci-input" / stem)
     with ProcessPoolExecutor() as pool:
@@ -738,6 +759,14 @@ def timing_input(variant: Variant, directory: Path, reduced: Path | None = None)
     return {"files": files, "want": expected_output(directory)}
 
 
+def counting_input(variant: Variant, directory: Path, reduced: Path) -> tuple[tuple[Path, ...], list[str], bool]:
+    """(files the emulated run reads, the output it must print, whether it is counted): an emulated program is counted on the cut of its corpus
+    the default bench times (`ci_bytes`), even under --time; any other, and one whose corpus is unavailable, is timed only if it is timed_only."""
+    fed = timing_input(variant, directory, reduced) if variant.emulated else None
+    files, want = (fed["files"], fed["want"]) if fed and "files" in fed else ((), expected_output(directory))
+    return files, want, not variant.timed_only or bool(files)
+
+
 def time_programs(exes: dict[tuple[str, str, str], Path], work: Path, inputs: dict | None = None) -> dict[tuple[str, str, str], dict]:
     """Wall time of each whole program in DOSBox, from RDTSC around the run (tools/bench/timeit.asm): {"cycles", "ms"}.
     Whole-program: it includes the runtime's start-up and the print, which differ per toolchain. net_times takes the
@@ -768,6 +797,20 @@ def time_programs(exes: dict[tuple[str, str, str], Path], work: Path, inputs: di
     return out
 
 
+def corpus_digest(directory: Path) -> str:
+    """md5 of a program's sources (not its expected.toml or .out): what its stored reference numbers were measured from."""
+    parts = sorted(f for f in directory.iterdir() if f.is_file() and f.name != "expected.toml" and f.suffix != ".out")
+    return hashlib.md5(b"".join(f.name.encode() + f.read_bytes() for f in parts)).hexdigest()
+
+
+def stale_corpus(directory: Path) -> str | None:
+    """Why the stored reference numbers of `directory` no longer belong to its sources, or None (also for a file blessed before `corpus` was recorded)."""
+    recorded = read_expected(directory).get("corpus")
+    if recorded is None or recorded == corpus_digest(directory):
+        return None
+    return f"{directory_name(directory)}: sources changed since the references were blessed (corpus {recorded[:8]}, now {corpus_digest(directory)[:8]}): --bless --references --reason"
+
+
 def read_expected(directory: Path) -> dict:
     path = directory / "expected.toml"
     return tomllib.loads(path.read_text()) if path.exists() else {}
@@ -789,9 +832,9 @@ def write_expected(directory: Path, measured: dict, name: str, reason: str) -> b
         if "kernel_ms" not in new and "kernel_ms" in old and old.get("instructions") == new.get("instructions"):
             new["kernel_ms"] = old["kernel_ms"]
         tables.setdefault(language, {})[opt] = new
-    if {language: {opt: dict(table) for opt, table in by_opt.items()} for language, by_opt in tables.items()} == {language: {opt: dict(table) for opt, table in by_opt.items()} for language, by_opt in before.items()} and (directory / "expected.toml").exists():
+    if {language: {opt: dict(table) for opt, table in by_opt.items()} for language, by_opt in tables.items()} == {language: {opt: dict(table) for opt, table in by_opt.items()} for language, by_opt in before.items()} and (directory / "expected.toml").exists() and not stale_corpus(directory):
         return False
-    lines = [f"reason = {json.dumps(reason)}", f'blessed = "{date.today()}"', ""]  # JSON escapes are TOML's
+    lines = [f"reason = {json.dumps(reason)}", f'blessed = "{date.today()}"', f'corpus = "{corpus_digest(directory)}"', ""]  # JSON escapes are TOML's
     for language in dict.fromkeys([*LANGUAGES, *BASIC_LANGUAGES, *(one for many in REFERENCES.values() for one in many)]):
         for opt in sorted(tables.get(language, {})):
             lines += [f"[{language}.{opt}]", *(f"{one} = {value}" for one, value in tables[language][opt].items()), ""]
@@ -930,6 +973,9 @@ def judge(measured: dict, selected: list[str], opts: list[str], base: dict | Non
         for (one, language, opt), row in (base or {}).items():
             if one == name and (same is None or name in same):
                 baseline.setdefault(language, {})[opt] = row
+        stale = stale_corpus(directory)
+        if stale:
+            problems.append(stale)
         for variant in variants(directory):
             for opt in opts:
                 got = measured[(name, variant.language, opt)]
@@ -953,7 +999,7 @@ def judge(measured: dict, selected: list[str], opts: list[str], base: dict | Non
                             problems += ratio_problems(label, reference, got, want, ref, waived)
             for reference in REFERENCES.get(variant.language, ()):
                 for level in sorted({reference_level(reference, opt) for opt in opts}):
-                    if (name, reference, level) in measured:
+                    if (name, reference, level) in measured and not stale:
                         problems += drift_problems(f"{name} {reference} -{level}", measured[(name, reference, level)], baseline.get(reference, {}).get(level))
         for opt in opts:  # the x86_64 row: no variant of its own, it runs the C source
             got = measured.get((name, native.OURS, opt))
@@ -1078,8 +1124,7 @@ def source_digests(names: list[str]) -> dict[str, str]:
     """md5 of each program's sources (not its expected.toml or .out), so two runs say whether they measured the same programs."""
     out = {}
     for one in benchmarks(set(names)):
-        parts = sorted(f for f in one.iterdir() if f.is_file() and f.name != "expected.toml" and f.suffix != ".out")
-        out[directory_name(one)] = hashlib.md5(b"".join(f.name.encode() + f.read_bytes() for f in parts)).hexdigest()
+        out[directory_name(one)] = corpus_digest(one)
     return out
 
 
