@@ -698,13 +698,6 @@ pub trait Tti {
         None
     }
 
-    /// DEVIATE U1: the most trips of an `optsize` loop that is fully unrolled
-    /// where the copies add no code (the analysis folds away what they do not
-    /// keep); none: the pin's.
-    fn unroll_few_trips_adding_no_bytes(&self) -> Option<u32> {
-        None
-    }
-
     /// The target's `DefaultThreshold` for the inliner (its tuning table);
     /// none: the pass's own.
     fn inline_threshold_override(&self) -> Option<i64> {

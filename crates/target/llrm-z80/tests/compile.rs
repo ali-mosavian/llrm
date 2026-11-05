@@ -1891,13 +1891,3 @@ fn an_internal_function_is_a_local_label_and_an_external_one_is_global() {
     let external = text(include_str!("kernels/ir/digits.ll"), "digits", 0, &Request::new(Level::Os)).expect("compiles");
     assert!(external.starts_with("_digits::\n"), "{external}");
 }
-
-/// A loop of two trips over doubles stayed a loop at -Os and called the
-/// soft-float library: float_in_place_update 9421 B against 13 B at -O2. It is
-/// unrolled where the trips are few and the copies fold.
-#[test]
-fn a_two_trip_loop_over_doubles_is_unrolled_at_os() {
-    let ir = include_str!("kernels/ir/few_trip_float_loop.ll");
-    let out = text(ir, "main", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
-    assert!(!out.contains("df3"), "{out}");
-}

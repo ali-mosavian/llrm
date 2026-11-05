@@ -296,13 +296,6 @@ impl Tti for Z80Tti {
         true
     }
 
-    /// DEVIATE U1: a loop of up to 3 trips is unrolled at `optsize` where its
-    /// copies add no code (float_in_place_update -Os kept the soft-float
-    /// library: 9421 B against 13 B at -O2).
-    fn unroll_few_trips_adding_no_bytes(&self) -> Option<u32> {
-        Some(3)
-    }
-
     /// SZ1, rule 1: a size build keeps a callee bigger than its call. The pin's
     /// `OptSizeThreshold` 50 allows growth, and a word update is 6 B where the
     /// call is 3.
