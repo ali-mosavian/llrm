@@ -21,6 +21,43 @@ pub fn qemu() -> Option<PathBuf> {
     found
 }
 
+/// What `$GCC_M68K` (the unpacked m68k binutils) asks of a test.
+#[derive(Debug, PartialEq)]
+pub enum Oracle {
+    Root(String),
+    /// The oracle was skipped on purpose; the text is the line to print.
+    Skipped(String),
+}
+
+/// `$GCC_M68K` against `$M68K_ISA_SKIP_ORACLE`: the root, the explicit skip, or the reason the test must fail.
+pub fn oracle_with(
+    root: Option<&str>,
+    skip: Option<&str>,
+) -> Result<Oracle, String> {
+    if let Some(root) = root.filter(|root| !root.is_empty()) {
+        return Ok(Oracle::Root(root.to_owned()));
+    }
+    if skip == Some("1") {
+        return Ok(Oracle::Skipped("ORACLE SKIPPED: GCC_M68K is not set and M68K_ISA_SKIP_ORACLE=1".to_owned()));
+    }
+    Err("GCC_M68K is not set: the unpacked m68k binutils (e.g. ~/scratch/gcc-m68k); M68K_ISA_SKIP_ORACLE=1 skips this oracle".to_owned())
+}
+
+/// The binutils root for an oracle test. Unset, the test fails naming what to set; `M68K_ISA_SKIP_ORACLE=1`
+/// skips it with a visible `ORACLE SKIPPED` line and gives `None`.
+pub fn oracle_root() -> Option<String> {
+    let root = std::env::var("GCC_M68K").ok();
+    let skip = std::env::var("M68K_ISA_SKIP_ORACLE").ok();
+    match oracle_with(root.as_deref(), skip.as_deref()) {
+        Ok(Oracle::Root(root)) => Some(root),
+        Ok(Oracle::Skipped(line)) => {
+            eprintln!("{line}");
+            None
+        }
+        Err(why) => panic!("{why}"),
+    }
+}
+
 /// A path no other call in this process has been given. Naming it by the IR's
 /// length gave two tests whose programs had the same length one file, and each
 /// ran the other's. The file at it is deleted when the value is dropped, a

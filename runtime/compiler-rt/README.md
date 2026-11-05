@@ -6,7 +6,7 @@ Compiler runtime for targets that lack hardware for an operation: soft-float (bi
 include/            softfloat.h (entry points), sf_helpers.h (width helpers; a target overrides one by defining its macro first)
 lib/fp/             f32/ f64/ f8/: one file per operation family (add_sub mul div cmp unord neg pack, float_si float_usi fix_si fix_usi float_di fix_di extend trunc), over the
                     width-generic macros.inc codec.inc add.inc mul.inc div.inc cmp.inc core_end.inc; f32.h and f64.h are the width headers
-lib/int/            int32.c int64.c: __mulsi3 .. __moddi3, no 64-bit operation in any body
+lib/int/            int32.c, one file per 64-bit routine (muldi3.c .. ashrdi3.c, i64.h): __mulsi3 .. __ashrdi3, no 64-bit operation in any body
 lib/math/           mathf.c and its coefficients (sf_coef.h, from tools/gen_coef.py)
 lib/fast/           fast32*.c: the non-IEEE fast float (spike)
 config/<target>/    x86_m16 x86_m32 x86_m64 m68k wasm: config.h, the target's knobs (pass with -include); 6502 z80: hand-written assembly overrides
@@ -25,7 +25,7 @@ cc -O2 -fno-builtin -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_f32.c lib/fp/f32
 
 Vector classes: edge list (zeros, denormal limits, min/max normal, one, inf, NaN payloads, powers of two near 2^24..2^32, pi); random mix of uniform bits, denormals, near-equal exponents (cancellation), edge values plus or minus 3 ulp; every 251st f32 pattern for conversions; i32/u32/i64/u64 powers of two plus or minus 4, 0..70000 and its negation, random widths, and exact round-to-nearest ties and half-plus-minus-one neighbours at every bit position; f64 to f32 random with exponents spanning the denormal range and half-way ties; f32 to f64 to f32 round trip.
 
-Integer builtins (`__mulsi3 __udivsi3 __divsi3 __umodsi3 __modsi3`, `__muldi3 __udivdi3 __divdi3 __umoddi3 __moddi3`): `lib/int/int32.c`, `lib/int/int64.c`, no 64-bit operation in any body. Division by zero gives all ones and remainder = dividend; INT_MIN / -1 is INT_MIN. Oracle `tests/host_int.c` (build line in its header comment: `-fno-builtin '-DSFB_NAME(n)=sfb_##n'`).
+Integer builtins (`__mulsi3 __udivsi3 __divsi3 __umodsi3 __modsi3`, `__muldi3 __udivdi3 __divdi3 __umoddi3 __moddi3`): `lib/int/int32.c`, `lib/int/{muldi3,udivdi3,umoddi3,divdi3,moddi3,ashldi3,lshrdi3,ashrdi3}.c` (divides share `udivmod_w.c`; `tests/fp_sources.sh int64`), no 64-bit operation in any body. Division by zero gives all ones and remainder = dividend; INT_MIN / -1 is INT_MIN. Oracle `tests/host_int.c` (build line in its header comment: `-fno-builtin '-DSFB_NAME(n)=sfb_##n'`).
 
 Math (`lib/math/mathf.c`, coefficients in `lib/math/sf_coef.h` from `tools/gen_coef.py`, stdlib Python): `sqrtf` (exact), `sinf cosf tanf atanf atan2f asinf acosf expf exp2f logf log2f log10f`, written in float arithmetic so they call the target's `__mulsf3` etc. Max error vs the host double libm over 24M inputs: sin/cos 3 ulp, tan 4, asin/acos 3, atan/atan2 2, exp/exp2/log 1, log2/log10 2 (the 3-4 only beyond |x| > 2^20, Payne-Hanek path; below 200 it is 2). Not yet: `powf` (needs f64 for the extra precision). Oracle `tests/host_mathf.c` (build line in its header). Compiles only on targets that soften float (m68k, once the SoftenFloat binary is current; 6502 has no float lowering yet).
 

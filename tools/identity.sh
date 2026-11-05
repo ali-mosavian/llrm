@@ -59,4 +59,6 @@ qcport)
 esac | xargs -P 8 -L1 bash -c 'one $0 "$@"' | sort > "$out/results"
 cut -d' ' -f1 "$out/results" | uniq -c
 grep -v '^SAME' "$out/results"
+# Rows that all REFUSED compared nothing: two builds that fail alike must not pass.
+grep -q '^SAME' "$out/results" || { echo "identity: no program was compared SAME (every row REFUSED, or none ran)" >&2; exit 1; }
 ! grep -q '^\(DIFF\|STATUS\)' "$out/results"

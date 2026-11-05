@@ -89,6 +89,7 @@ pub(super) fn full_unroll_pays(
         u32::MAX,
         trips,
         None,
+        true,
     );
     // The code the copies add, at the body's average bytes a unit: what the
     // analysis folds away is not emitted (byval_struct: a 41-trip loop of
@@ -97,7 +98,10 @@ pub(super) fn full_unroll_pays(
     let unrolled_units = analysis
         .as_ref()
         .map_or(uce.unrolled_loop_size(up, trips) as i64, |cost| i64::from(cost.unrolled_cost));
-    let added = ((unrolled_units - rolled_units).max(0) * body_bytes) / rolled_units;
+    let added = match analysis.as_ref() {
+        Some(cost) if cost.through_call => (cost.unrolled_bytes - body_bytes).max(0),
+        _ => ((unrolled_units - rolled_units).max(0) * body_bytes) / rolled_units,
+    };
     let (nested_uses, known) = constant_operand_uses(run, analyzed, lp);
     // The accesses of a local array the copies make constant-indexed: the
     // array is promoted to registers, so they cost no clocks and no bytes

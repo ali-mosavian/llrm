@@ -8,12 +8,15 @@ set -u
 root=$(cd "$(dirname "$0")/.." && pwd)
 clang=${LLRM_PIN_CLANG:-$HOME/scratch/llvm-build/bin/clang}
 llc=${LLRM_LLC:-$root/target/debug/llrm-llc}
-[ -n "${LLRM_NO_BUILD:-}" ] || (cd "$root" && buildslot cargo build --bin llrm-llc 2>&1 | grep -E "^error" -A8)
+if [ -z "${LLRM_NO_BUILD:-}" ]; then  # a failed build must not leave the stale llrm-llc to run
+  built=$(cd "$root" && buildslot cargo build --bin llrm-llc 2>&1) || { echo "$built" | grep -E "^error" -A8; echo "llc_check: building llrm-llc failed" >&2; exit 2; }
+fi
 triple=${LLRM_TRIPLE:-x86_64-linux-gnu}
 "$clang" --version | grep -q d1106deb71cc || { echo "llc_check: $clang is not the pin d1106deb71cc"; exit 2; }
 "$clang" --version | head -1
 out=$(mktemp -d)
-progs=${*:-$(cd "$root/tests/llc" && ls *.c | sed 's/\.c$//')}
+progs=${*:-$(cd "$root/tests/llc" && ls *.c 2>/dev/null | sed 's/\.c$//')}
+[ -n "$progs" ] || { echo "llc_check: no programs in $root/tests/llc" >&2; exit 2; }
 llcpin=${LLRM_PIN_LLC:-$(dirname "$clang")/llc}
 printf '%-10s %-6s %8s %8s %8s   (.text bytes)\n' prog result clang pin llrm
 bad=0

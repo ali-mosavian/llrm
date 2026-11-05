@@ -12,6 +12,7 @@ done
 [ "$(readlink -f "$D/base")" != "$(readlink -f "$D/new")" ] || { echo "cells: base and new are one directory" >&2; exit 2; }
 w=$(mktemp -d); trap 'rm -rf "$w"' EXIT
 declare -A text ins
+empty=0
 while read -r _ tg lvl f; do
   fl=""; case $tg in x86_16-wat) fl=-march=i386;; x86_32-linux) fl=-m32;; esac
   for v in base new; do
@@ -24,8 +25,10 @@ while read -r _ tg lvl f; do
     ins[$v]=$(grep -cE '^[[:space:]]+[a-z][a-z0-9.]*([[:space:]]|$)' "$w/$v.s")
   done
   if [ -z "${text[base]:-}" ] || [ -z "${text[new]:-}" ] || [ "${ins[base]:-0}" -eq 0 ] || [ "${ins[new]:-0}" -eq 0 ]; then
-    echo "EMPTY $tg $lvl $f" ; unset 'text[base]' 'text[new]' 'ins[base]' 'ins[new]'; continue
+    echo "EMPTY $tg $lvl $f" ; empty=$((empty + 1)); unset 'text[base]' 'text[new]' 'ins[base]' 'ins[new]'; continue
   fi
   echo "$tg $lvl $(basename "$f") bytes ${text[base]} ${text[new]} instrs ${ins[base]} ${ins[new]}"
   unset 'text[base]' 'text[new]' 'ins[base]' 'ins[new]'
 done < "$L"
+# A cell that built nothing is a failed measurement, not a quiet one.
+[ "$empty" -eq 0 ] || { echo "cells: $empty EMPTY cell(s)" >&2; exit 1; }

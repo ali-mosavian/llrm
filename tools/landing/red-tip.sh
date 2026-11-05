@@ -15,6 +15,21 @@ red_tip() {
 tip_test_cmd() { echo "cargo test -q --lib --no-fail-fast ${1:---workspace}"; }
 # tip_crates FROM TO: the packages changed between two commits and everything that depends on them (tip_crates.py).
 tip_crates() {
-  local meta; meta=$(mktemp); cargo metadata --no-deps --format-version 1 > "$meta" 2>/dev/null || { rm -f "$meta"; echo --workspace; return; }
-  git diff --name-only "$1" "$2" | python3 "$(dirname "${BASH_SOURCE[0]}")/tip_crates.py" "$meta"; rm -f "$meta"
+  local meta names sel; meta=$(mktemp)
+  cargo metadata --no-deps --format-version 1 > "$meta" 2>/dev/null || { rm -f "$meta"; echo --workspace; return; }
+  # no pipeline: a crashing git diff or tip_crates.py must not read as "nothing changed"
+  names=$(git diff --name-only "$1" "$2") && sel=$(python3 "$(dirname "${BASH_SOURCE[0]}")/tip_crates.py" "$meta" <<<"$names"); local rc=$?
+  rm -f "$meta"; [ $rc = 0 ] && echo "$sel"; return $rc
+}
+# tip_verdict WORKTREE TARGET_DIR ALLOW FROM TO: tests the crates changed from the last green tip FROM (empty: the workspace) to TO. Returns 0 when
+# green; prints the STOP line and returns 1 when red. A crate list that could not be made is red, not "nothing changed".
+tip_verdict() {
+  local w=$1 t=$2 allow=$3 from=$4 to=$5 crates=--workspace out= rc=0
+  if [ -n "$from" ]; then
+    crates=$(cd "$w" && tip_crates "$from" "$to" 2>/dev/null) || { echo "STOP: release/next red: tip_crates failed, no crate was tested"; return 1; }
+  fi
+  if [ -n "$crates" ]; then
+    out=$( (cd "$w" && CARGO_TARGET_DIR="$t" $(tip_test_cmd "$crates") 2>&1; echo "rc=$?") ); rc=${out##*rc=}; out=${out%rc=*}
+  fi
+  red_tip "$allow" "$rc" <<<"$out"
 }
