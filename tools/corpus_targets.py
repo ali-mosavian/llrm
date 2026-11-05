@@ -22,6 +22,15 @@ def tags(source: str) -> list[str] | None:
     return None
 
 
+def flags_for(family: str, source: str) -> list[str]:
+    """The extra flags of a `// flags-FAMILY:` line (first lines): flags only one target family takes. The shared `// flags:`
+    line is every harness's; `-mcmodel=medium` there fails the x86 -m32 rows (clang: unsupported argument)."""
+    for line in source.splitlines()[:HEADER_LINES]:
+        if line.startswith(f"// flags-{family}:"):
+            return line.removeprefix(f"// flags-{family}:").split()
+    return []
+
+
 def applies(target: str, source: str) -> bool:
     listed = tags(source)
     if listed is None:
