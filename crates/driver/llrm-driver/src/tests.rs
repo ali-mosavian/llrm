@@ -3552,8 +3552,8 @@ fn a_win64_function_takes_its_arguments_by_position_above_the_home_area() {
     // home area, and the callee's own fifth is above it, past the return
     // address.
     assert!(lines.contains(&"mov qword ptr [rsp+32], rcx"), "{listing}");
-    assert!(lines.contains(&"sub rsp, 48"), "{listing}");
-    assert!(lines.contains(&"mov rcx, qword ptr [rsp+96]"), "{listing}");
+    assert!(lines.contains(&"sub rsp, 40"), "{listing}");
+    assert!(lines.contains(&"mov rcx, qword ptr [rsp+80]"), "{listing}");
     assert!(!listing.contains("rdi") && !listing.contains("rsi"), "SysV registers: {listing}");
 }
 

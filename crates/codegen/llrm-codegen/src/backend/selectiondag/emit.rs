@@ -2552,7 +2552,11 @@ impl Emitter<'_, '_> {
                 }
                 // The area is a multiple of the call alignment; the callee pops
                 // `popped` of it, the caller the rest.
-                let bytes = (bytes + self.ctx.call_alignment - 1) / self.ctx.call_alignment * self.ctx.call_alignment;
+                let bytes = if self.ctx.reserved_calls {
+                    bytes
+                } else {
+                    (bytes + self.ctx.call_alignment - 1) / self.ctx.call_alignment * self.ctx.call_alignment
+                };
                 // Flat 32-bit: the pin's pseudos, which `callframe.rs` turns
                 // into pushes or `sub`/`add` (DEVIATE CF4).
                 if self.ctx.address_mode == AddrMode::Flat32 || self.ctx.reserved_calls {
