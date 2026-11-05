@@ -58,6 +58,13 @@
 //! form above them, not `fxch` and `fadd [m]` (`unfold_memory_form`). The pin
 //! keeps the memory form and exchanges.
 //!
+//! DEVIATE 10 (owner x87, exit 2026-11-20): a memory-form operation (`fsub
+//! [m]`) whose other operand stays live is `fld [m]` and the register form
+//! reading that operand (`fsubr st, st(i)`) where the target prices the copy
+//! (`fld st(i)`) and the memory form above the load and the register form
+//! (`unfold_copy_form`). The pin copies the operand and keeps the memory form:
+//! on a 486 `fld st(i)` is 4 clocks and `fld m` 3 (nbody -O2 m16, 1,200 trips).
+//!
 //! DEVIATE 4: an unreachable block with live floating values has no predecessor
 //! to fix its entry; its live values are taken in ascending order (LLVM
 //! asserts).
@@ -197,6 +204,9 @@ struct Fps<'a> {
     /// DEVIATE 9: per operation (add, mul, div), whether the target prices
     /// `fxch` and the memory form above `fld` and the register form.
     unfold: [bool; 3],
+    /// DEVIATE 10: per operation, whether the target prices the copy (`fld
+    /// st(i)`) and the memory form above `fld` and the register form.
+    unfold_copy: [bool; 3],
     /// The order (`st(0)` first) the block's exit bundle is already fixed to.
     exit_order: Option<Vec<u32>>,
 }
@@ -553,7 +563,9 @@ impl Fps<'_> {
             && !results.is_empty()
         {
             let Loc::Held(kept) = what.sources[0] else { unreachable!("checked above") };
-            if self.unfold_memory_form(step, kept.value, &what, results[0])? {
+            if self.unfold_memory_form(step, kept.value, &what, results[0])?
+                || self.unfold_copy_form(step, kept.value, &what, results[0])?
+            {
                 return Ok(());
             }
             let sources = std::iter::once(st(0)).chain(what.sources[1..].iter().cloned()).collect();
@@ -722,6 +734,48 @@ impl Fps<'_> {
         self.insert(semantics(Operation::FloatArith, &name, vec![st(other)], vec![st(other), st(0)]));
         self.pop_stack_after();
         self.values[slot] = result;
+        Ok(true)
+    }
+
+    /// DEVIATE 10: the memory form on a copy of an operand that stays is `fld
+    /// [m]` and the register form reading the operand where it lies: `fsub
+    /// [m]` (operand - cell) is `fld [m]; fsubr st, st(i)`. True when it
+    /// emitted the instruction.
+    fn unfold_copy_form(
+        &mut self,
+        step: &Step,
+        kept: u32,
+        what: &Semantics,
+        result: u32,
+    ) -> Result<bool, Raised> {
+        let [_, cell @ Loc::Mem(memory)] = what.sources.as_slice() else { return Ok(false) };
+        let (class, name) = match what.name.as_deref() {
+            Some("fadd") => (0, "fadd"),
+            Some("fsub") => (0, "fsubr"),
+            Some("fsubr") => (0, "fsub"),
+            Some("fmul") => (1, "fmul"),
+            Some("fdiv") => (2, "fdivr"),
+            Some("fdivr") => (2, "fdiv"),
+            _ => return Ok(false),
+        };
+        if !self.unfold_copy[class]
+            || !matches!(memory.width, 4 | 8)
+            || step.kills(kept)
+            || self.values.len() >= self.depth
+        {
+            return Ok(false);
+        }
+        let slot = self.slot(kept)?;
+        self.emit(Semantics {
+            op: Operation::FloatLoad,
+            name: Some("fld".into()),
+            dests: vec![st(0)],
+            sources: vec![cell.clone()],
+            ..what.clone()
+        });
+        self.push(result)?;
+        // The operand is one slot lower now; the cell is on top, the result's place.
+        self.insert(semantics(Operation::FloatArith, name, vec![st(0)], vec![st(0), st(slot + 1)]));
         Ok(true)
     }
 
@@ -1307,6 +1361,18 @@ pub(super) fn converted(
         next: None,
         swallowed: BTreeSet::new(),
         exit_order: None,
+        unfold_copy: ["add", "mul", "div"].map(|class| {
+            let price = |key: String| cpu.and_then(|cpu| cpu.cost(&key).ok());
+            match (
+                price("x87_copy".into()),
+                price("x87_load".into()),
+                price(format!("x87_{class}")),
+                price(format!("x87_{class}_m")),
+            ) {
+                (Some(copy), Some(load), Some(register), Some(memory)) => copy + memory > load + register,
+                _ => false,
+            }
+        }),
         unfold: ["add", "mul", "div"].map(|class| {
             let price = |key: String| cpu.and_then(|cpu| cpu.cost(&key).ok());
             match (
