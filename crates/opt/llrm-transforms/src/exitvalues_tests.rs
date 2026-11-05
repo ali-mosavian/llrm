@@ -12,7 +12,7 @@ fn rewritten(text: &str) -> (bool, String) {
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
     let mut declared = llrm_mir::passes::Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
-    crate::lcssa::closed(function).expect("closes");
+    crate::lcssa::closed(context, &crate::testing::layout(), function).expect("closes");
     let changed = super::rewritten(context, &layout, function, &mut declared, &outer);
     let after = printed(&module);
     let inputs: &[&[i128]] = &[&[0], &[1], &[7], &[100]];
@@ -167,7 +167,7 @@ fn rewritten_at_size(
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
     let mut declared = llrm_mir::passes::Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
-    crate::lcssa::closed(function).expect("closes");
+    crate::lcssa::closed(context, &crate::testing::layout(), function).expect("closes");
     let mut session =
         llrm_analysis::scev::analysis::ScevSession::within(context, &outer.globals, &outer.metadata, function);
     super::rewritten_in(&mut session, context, &layout, function, &mut declared, &outer, true)

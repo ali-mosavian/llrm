@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lcssa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lcssa.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lcssa.rs sha256:8a4f4bafb3a3cc4acbecb4634228bd75c4a9d7ab86ae28858149be858a444467 -->
+<!-- src: crates/opt/llrm-transforms/src/lcssa.rs sha256:356e0d1aa559606dba9129aabdf4fa3e33a92139b1fc42c78206ec2d2f50bbfe -->
 
 # lcssa
 
@@ -11,22 +11,26 @@ A value defined in a loop and read outside it is read through a phi in the
 loop's exit block. Later loop passes can then change the loop's body, copy
 it or move its exits without rewriting readers outside it.
 
-Loops are taken innermost first, so an inner exit phi is an ordinary
-definition of the enclosing loop. For one loop:
+This is `LCSSA.cpp`. Loops are taken innermost first (`formLCSSARecursively`),
+so an inner exit phi is an ordinary definition of the enclosing loop. For one
+loop (`formLCSSA`):
 
-- With a single exit block whose predecessors are exactly the exiting
-  blocks, a value is closed when every block that reads it is dominated by
-  the exit and its definition dominates every exiting block. Each such value
-  gets a phi in the exit with one input per exiting block, and every outside
-  reader the exit dominates is rewritten to read it. A phi that reads the
-  value on an edge counts at that edge's source block. If the exit has other
-  predecessors, the loop is left for `loopsimplify`.
-- With several exit blocks, [`crate::lcssamerges`](lcssamerges.md) makes a phi at each and
-  merges them where the exits' paths join.
+- The blocks that dominate an exit and sit directly in the loop are found
+  by walking immediate dominators up from the exits.
+- Each value they define, with a use but not a lone one in its own block, is
+  a candidate.
+- A candidate's uses outside the loop (a phi's counting at its incoming
+  block) are rewritten. A use in an unreachable block becomes poison.
+- Each exit block its definition dominates gets a phi, named after the value
+  with `.lcssa`, placed first in the block, with one input per predecessor.
+  An input from a block outside the loop is itself rewritten.
+- A use in an exit block reads that block's phi, a lone new phi is read
+  directly, and any other use goes through `SsaUpdater`, which places a phi
+  where the exits' paths join.
+- A phi that nothing reads is erased again.
 
 Phis are only added, as `formLCSSA` does: a phi whose inputs are all one
-value stays for CodeGenPrepare's phi fold. The new phi is named after its
-value with `.lcssa`. The pass is idempotent.
+value stays for CodeGenPrepare's phi fold. The pass is idempotent.
 
 The helpers `arms`, `from_arms`, `operations`, `definitions`, `exit_phi` and
 `place_phi` read and build phis for many other loop passes.
@@ -78,5 +82,15 @@ and again after header copying. The unroller calls it first.
 Dominators and loops stay valid; all other analyses are invalidated when
 something changed.
 
+## Deviations
+- L1 Lifetime markers are ordinary users (2026-11-04, w2, exit 2026-11-12):
+  the pin drops them when one crosses the loop boundary, but a pass has no
+  callee table to know them by. A marker names an alloca, which sits in the
+  entry block, never in a loop.
+- L2 No `ScalarEvolution` and no debug records: the pin caches the SCEV of a
+  new phi and moves `dbg.value`s; neither is kept here (S1 of `ssaupdater`).
+- L3 A phi's inputs come in predecessor id order, not use-list order.
+
 ## See also
-LLVM's LCSSA (LCSSA.cpp, `formLCSSA`).
+LLVM's
+[`LCSSA.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LCSSA.cpp).

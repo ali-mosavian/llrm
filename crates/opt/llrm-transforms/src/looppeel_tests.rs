@@ -11,7 +11,7 @@ use crate::testing::{parsed, printed, results};
 fn unrolled(module: &mut Module) -> bool {
     let function = module.function_mut("f").expect("@f").1;
     crate::loopsimplify::simplified(function);
-    crate::lcssa::closed(function).expect("closes");
+    crate::testing::closed(module).expect("closes");
     let tti = X86::of_cpu("i486").expect("a cpu");
     let options = Options {
         opt_level: 2,
@@ -253,7 +253,10 @@ out:
     let loads: Vec<MemoryLocation> = function
         .walk()
         .map(|(_, inst)| inst)
-        .filter(|&inst| matches!(function.instruction(inst).opcode, llrm_mir::opcode::Opcode::Load { .. }))
+        .filter(|&inst| matches!(
+            function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Load { .. }
+        ))
         .filter_map(|inst| MemoryLocation::get(&unit, inst))
         .collect();
     assert_eq!((ones.len(), loads.len()), (2, 2), "{}", printed(&module));

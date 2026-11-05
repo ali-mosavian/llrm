@@ -739,7 +739,7 @@ impl FunctionPass for LoopLoadElim {
                     is_recursively_lcssa_form(&*unit.function, env.loops, env.tree, found)
                 };
                 if !lcssa {
-                    let _ = crate::lcssa::formed(unit.function);
+                    let _ = crate::lcssa::closed(unit.context, unit.layout, unit.function);
                     session = ScevSession::of(unit.context, unit.function, &outer);
                 }
                 let (se, env) = session.split(unit.layout, &outer.globals, &outer.metadata);
