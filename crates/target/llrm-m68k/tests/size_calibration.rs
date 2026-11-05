@@ -1,9 +1,13 @@
 //! `function_bytes`, the estimate every byte-priced decision reads, counted about half of what the assembled functions
 //! are (median 1.9 times short over tests/run/c, `~/scratch/handoff/m68k-operation-costs-card-2026-11-05.md`).
-//! `function_scale` (150) is the median over those programs; the matrix kernels are leaf loops with no frame, call or
-//! spill, which the estimate already covers at 100 (0.84), so at 150 they sit above the objects (about 1.3). The test
-//! bounds both sides on them: the estimate is not below three quarters (the old table's miss) and not above 1.4 (a
-//! scale that over-counts leaf code by more than the median program under-counts it).
+//!
+//! Two populations, two statements:
+//! - the programs the factor was fit on (tests/data_size: the last IR stage of 22 tests/run/c programs, chosen by
+//!   `crc32(name) % 5 == 0`): the estimate is within 0.8 and 1.1 of the objects' `.text` in aggregate. `function_scale` is
+//!   the MEDIAN per-function ratio of the whole corpus (1.46, 1.50), the small functions the decisions are about, so the
+//!   aggregate sits a little under 1 (big functions carry spills and relaxation no operation names);
+//! - the 12 matrix kernels, leaf loops without frame, call or spill: the estimate already covers them at 100 (0.84), so
+//!   at 150 they sit above their objects (1.26 to 1.34) by design. Bounded at 0.75 and 1.4 so a larger scale is noticed.
 
 use llrm_m68k::compile::CodeModel;
 use llrm_m68k::dagisel::hooks::Cpu;
@@ -13,6 +17,15 @@ use llrm_m68k::machine::M68kMachine;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::target::Machine;
 use llrm_transforms::walk::function_bytes;
+
+fn estimate_over(
+    module: &llrm_mir::module::Module,
+    cpu: Cpu,
+) -> i64 {
+    let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+    let costs = M68kMachine { cpu }.size_costs();
+    module.functions().filter(|(_, _, function)| !function.is_declaration()).map(|(_, _, function)| function_bytes(module, &layout, &costs, function)).sum()
+}
 
 /// The size of the `.text` section of a big-endian ELF32 object.
 fn text_bytes(elf: &[u8]) -> usize {
@@ -33,7 +46,7 @@ fn text_bytes(elf: &[u8]) -> usize {
 }
 
 #[test]
-fn the_estimate_brackets_the_objects_at_both_cpus_and_levels() {
+fn the_estimate_brackets_the_leaf_kernels_at_both_cpus_and_levels() {
     let mut failures = Vec::new();
     for (cpu_name, cpu) in [("68000", Cpu::M68000), ("68020", Cpu::M68020)] {
         for level in ["2", "s"] {
@@ -52,6 +65,34 @@ fn the_estimate_brackets_the_objects_at_both_cpus_and_levels() {
             let ratio = estimate as f64 / actual as f64;
             assert!(actual > 0, "{cpu_name} -O{level}: no kernel compiled");
             if !(0.75..=1.4).contains(&ratio) {
+                failures.push(format!("{cpu_name} -O{level}: estimate {estimate} B against objects {actual} B ({ratio:.2})"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+#[test]
+fn the_estimate_tracks_the_objects_of_the_programs_it_was_fit_on() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data_size");
+    let mut files: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|entry| entry.unwrap().path()).filter(|path| path.extension().is_some_and(|e| e == "ll")).collect();
+    files.sort();
+    assert!(files.len() >= 20, "{} fixtures", files.len());
+    let mut failures = Vec::new();
+    for (cpu_name, cpu) in [("68000", Cpu::M68000), ("68020", Cpu::M68020)] {
+        for level in ["2", "s"] {
+            let (mut estimate, mut actual) = (0, 0);
+            for path in &files {
+                let text = std::fs::read_to_string(path).unwrap();
+                let module = llrm_mir::parse::module(&text).unwrap();
+                let name = path.file_stem().unwrap().to_str().unwrap();
+                let object = driver::object_in(&text, driver::cpu_of(cpu_name).unwrap(), Level::parse(level).unwrap(), name, CodeModel::Small)
+                    .unwrap_or_else(|why| panic!("{name}: {why}"));
+                estimate += estimate_over(&module, cpu);
+                actual += text_bytes(&object) as i64;
+            }
+            let ratio = estimate as f64 / actual as f64;
+            if !(0.8..=1.1).contains(&ratio) {
                 failures.push(format!("{cpu_name} -O{level}: estimate {estimate} B against objects {actual} B ({ratio:.2})"));
             }
         }
