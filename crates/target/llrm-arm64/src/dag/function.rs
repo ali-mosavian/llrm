@@ -191,8 +191,11 @@ pub fn select_function_in(
                 llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
             ),
         );
-    let target = builder_target(platform)
-        .with_int_div_cheap(opt_for_size)
+    let mut target = builder_target(platform).with_int_div_cheap(opt_for_size);
+    // `AArch64TargetLowering::BuildSDIVPow2`: where a divide is cheap, a divide
+    // by a power of two stays one.
+    target.dag.sdiv_pow2_stays = opt_for_size;
+    let target = target
         .with_tti(tti)
         .with_tail_calls(llrm_support::env_var("LLRM_TAIL_CALLS").is_none_or(|value| value != "0"))
         .with_zext_free(is_zext_free);
