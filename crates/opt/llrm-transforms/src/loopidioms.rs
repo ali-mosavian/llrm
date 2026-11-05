@@ -1077,7 +1077,8 @@ fn trip_total<'a>(
 /// pin lowers that copy to a libc call, which llrm has none of: the string
 /// instruction takes ES, three registers, the count split in dwords and odd
 /// bytes, and a second `rep movs` (x_mergesort msort at m16 -Os: three sites,
-/// 16 bytes over the loop each).
+/// 16 bytes over the loop each). Owner w2, exit 2026-11-20: the DAG's
+/// variable-length copy (MEM-1) prices it at m16 as it does at m32.
 pub(crate) fn variable_copy_pays(
     context: &Context,
     layout: &DataLayout,
