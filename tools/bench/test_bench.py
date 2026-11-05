@@ -1154,6 +1154,15 @@ def test_no_c_parity_source_hands_its_kernel_constants():
             assert "volatile" in text, f"{source.name} sets its kernel's inputs from constants: clang folds the call"
 
 
+def test_a_nib_parity_kernel_with_constant_inputs_is_not_left_for_the_compiler_to_fold():
+    """parity/qmove/nib read 1 instruction (kernel and helper folded to a constant: no @noipa) and the row was unmeasured. The Nib files that fold the same way, control and qmove, mark kernel and helper @noipa."""
+    for name, functions in (("control", ("parity_control", "bench_control")), ("qmove", ("pl_ground_accel", "bench_qmove"))):
+        lines = (bench.BENCH / "parity" / name / f"{name}.nib").read_text().splitlines()
+        for function in functions:
+            at = next(i for i, line in enumerate(lines) if line.startswith(f"fn {function}("))
+            assert lines[at - 1].strip() == "@noipa", f"{name}.nib: {function} is not @noipa"
+
+
 def test_a_file_program_is_counted_with_its_declared_files_in_a_folder_of_its_own(tmp_path, monkeypatch):
     """jpeg_fixed, jpeg_single, stft_fixed and stft_single were timed only: 40 m16 rows had no instructions or clocks. Counted with no
     input file, stft_fixed printed -1 for 30825279; the emulator now gets the files the source's `data:` header names."""
@@ -1404,3 +1413,9 @@ def test_an_emulated_reference_program_is_fed_its_corpus_cut(tmp_path, monkeypat
     assert [one.read_bytes() for one in files] == [b"x" * 10] and want == ["cut"] and counted
     plain = bench.Variant("grep", "c", folder / "grep.c", "f", None, "qb45", True, ("in.dat",), 10, False)
     assert bench.counting_input(plain, folder, tmp_path / "ci2") == ((), ["full"], False)
+
+
+def test_skipped_rows_are_counted_in_the_header_by_reason():
+    """sfm16_* had no native column and nothing said so. Each skip reason prints once with the number of programs it left without a row."""
+    measured = {("a", "gcc64", "O2"): {"skip": "why"}, ("a", "clang64", "O2"): {"skip": "why"}, ("b", "gcc64", "O2"): {"skip": "why"}, ("b", "c64", "O2"): {"instructions": 1}}
+    assert bench.skip_lines(measured) == ["SKIP why (2 programs)"]

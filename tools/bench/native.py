@@ -22,7 +22,17 @@ OURS = "c64"
 NOPIC = "c64nopic"  # ours with -fno-pic: the column that compares to gcc and clang, which are -fno-pic; never gated, no base leg
 REPORTED = {NOPIC: "ours", "gcc64": "gcc", "clang64": "clang", "pin64": "pin"}  # pin: the pinned LLVM clang (LLRM_PIN_CLANG), the compiler llrm tracks  # columns beside ours, never gated
 FAR = re.compile(r"\b(far|huge|__huge|__far)\b")  # a DOS far or huge pointer: the program has no x86_64 reading
+LONG32 = re.compile(r"\btypedef\s+(?:unsigned\s+)?long\s+\w*32\b")  # a 32-bit type spelled `long`: 64 bits here, so the program computes another result (sfm16_* printed 620745305, want 1984619853, in gcc, clang and ours alike)
 DATA = re.compile(r"^//\s*data:", re.M)  # it reads a file by a DOS path the driver does not supply: not run natively
+
+
+NO_NATIVE_LONG = "no native column (long is 64-bit)"
+
+
+def spells_int32_as_long(directory: Path) -> bool:
+    """The program has a source and an expected output but defines a 32-bit type as `long`: its native rows are a skip row with the reason, not a missing one."""
+    source = directory / f"{directory.name}.c"
+    return source.is_file() and source.with_suffix(".out").is_file() and bool(LONG32.search(source.read_text(errors="replace")))
 
 
 def candidates(directory: Path) -> Path | None:
@@ -31,7 +41,7 @@ def candidates(directory: Path) -> Path | None:
     if not source.is_file() or not source.with_suffix(".out").is_file():
         return None
     text = source.read_text(errors="replace")
-    return None if FAR.search(text) or DATA.search(text) or not re.search(r"\bmain\s*\(", text) else source
+    return None if FAR.search(text) or LONG32.search(text) or DATA.search(text) or not re.search(r"\bmain\s*\(", text) else source
 
 
 def perf_missing() -> str | None:
@@ -76,9 +86,10 @@ def instructions_per_run(exe: Path, cwd: Path) -> int | str:
 
 
 def pic_mode(obj: Path) -> str:
-    """"pic", "nopic", "mixed" or "unknown" from the object's own relocations: an absolute 32-bit one (R_X86_64_32, 32S) is no-pic; a pc-relative one against
-    data (a data symbol or a .data/.bss/.rodata section) is pic; none of either says nothing. The flag a compiler was given is not the mode it wrote (main
-    ignored -fno-pic)."""
+    """"nopic", "pic" or "unknown" from the object's references to data (a data symbol or a .data/.bss/.rodata section). An absolute 32-bit one (R_X86_64_32, 32S)
+    is no-pic and wins: position-independent code never writes one, while non-pic code still reaches some data pc-relative (gcc -fno-pic read `mixed` on soft-float
+    code with a .rodata immediate beside a .bss load). Else a pc-relative or GOT one is pic; none says nothing. Calls and function addresses do not count. The flag a
+    compiler was given is not the mode it wrote (main ignored -fno-pic)."""
     found = subprocess.run(["readelf", "-rsW", str(obj)], capture_output=True, text=True).stdout.splitlines()
     data = {fields[7] for line in found if len(fields := line.split()) >= 8 and fields[0].endswith(":") and fields[3] == "OBJECT"}
     modes = set()
@@ -86,13 +97,13 @@ def pic_mode(obj: Path) -> str:
         fields = line.split()
         if len(fields) < 5 or not re.fullmatch(r"[0-9a-f]{8,16}", fields[0]) or not fields[2].startswith("R_X86_64_"):
             continue
+        if not (fields[4] in data or fields[4].startswith((".data", ".bss", ".rodata"))):
+            continue
         if fields[2] in ("R_X86_64_32", "R_X86_64_32S"):
             modes.add("nopic")
-        elif fields[2] in ("R_X86_64_PC32", "R_X86_64_GOTPCREL", "R_X86_64_GOTPCRELX", "R_X86_64_REX_GOTPCRELX") and (
-            fields[4] in data or fields[4].startswith((".data", ".bss", ".rodata"))
-        ):
+        elif fields[2] in ("R_X86_64_PC32", "R_X86_64_GOTPCREL", "R_X86_64_GOTPCRELX", "R_X86_64_REX_GOTPCRELX"):
             modes.add("pic")
-    return modes.pop() if len(modes) == 1 else "mixed" if modes else "unknown"
+    return "nopic" if "nopic" in modes else "pic" if modes else "unknown"
 
 
 def mismatch(row: dict, column: str, obj: Path, ours: Path) -> dict:
@@ -103,6 +114,12 @@ def mismatch(row: dict, column: str, obj: Path, ours: Path) -> dict:
         return row
     theirs, mine = pic_mode(obj), pic_mode(ours)
     return row if "unknown" in (theirs, mine) or theirs == mine else {"error": f"pic mode: {column} is {theirs}, ours is {mine}"}
+
+
+def checked_object(work: Path, program: str, column: str, opt: str) -> Path:
+    """The object whose position-independence is compared: the sized one where the harness wrapped the kernel (the program's own, `measure_one`), else the counted one. The counted wrapper's global pointer is a pc-relative data reference in every column, so gcc and clang read `pic` from it while ours, with the program's table beside it, read `mixed` (hanoi O2)."""
+    sized = work / f"{program}.{column}.{opt}.sized.o"
+    return sized if sized.exists() else work / f"{program}.{column}.{opt}.o"
 
 
 def compile_command(compiler: str, binary: Path, source: Path, opt: str, out: Path, bench: Path) -> tuple[list[str], dict[str, str]]:
@@ -157,6 +174,8 @@ def measure(selected: list[tuple[str, Path]], binary: Path, opts: list[str], wor
     for name, directory in selected:
         source = candidates(directory)
         if source is None:
+            if spells_int32_as_long(directory):
+                out |= {(name, column, opt): {"skip": NO_NATIVE_LONG} for opt in opts for column in ("gcc64", "clang64", "pin64", OURS, NOPIC)}
             continue
         pair = keep(name, directory, work) if keep else None  # (counted, sized) sources that keep the kernel a call, or None
         run, sized, extra = (*pair, ()) if pair else (source, source, ("-fno-inline-functions",))
@@ -168,6 +187,6 @@ def measure(selected: list[tuple[str, Path]], binary: Path, opts: list[str], wor
                 broken = rows["gcc64"].get("error", "")
                 if broken.startswith(("compile:", "link:")) and rows["clang64"].get("error", "").startswith(("compile:", "link:")):
                     rows = {column: {"skip": f"not buildable natively (gcc and clang fail too): {broken}"} for column in rows}  # parity/scalar calls `keep`, which only the DOS harness defines
-            rows = {column: mismatch(row, column, work / f"{directory.name}.{column}.{opt}.o", work / f"{directory.name}.{NOPIC}.{opt}.o") for column, row in rows.items()}
+            rows = {column: mismatch(row, column, checked_object(work, directory.name, column, opt), checked_object(work, directory.name, NOPIC, opt)) for column, row in rows.items()}
             out |= {(name, column, opt): row for column, row in rows.items()}
     return out
