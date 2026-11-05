@@ -11,8 +11,16 @@ static inline sf32 mul_core(uint32_t sign, int ea, int eb, uint32_t ma, uint32_t
     sf_mul32x32(ma, mb, &hi, &lo);
 #endif
     /* The product has its top bit at 47 or 46; keep 27 bits and fold the rest. */
+#ifdef SF_MUL_NORM_SELECT
+    /* Random operands put the top bit at 47 or 46 half the time each: the branch below mispredicts every other call on a deep-pipeline CPU. */
+    uint32_t t = (hi >> 15) ^ 1;
+    int e = ea + eb - 126 - (int)t;
+    hi = (hi << t) | ((lo >> 1) >> (31 - t));
+    lo <<= t;
+#else
     int e = ea + eb - 126;
     if (!(hi >> 15)) { e--; hi = (hi << 1) | (lo >> 31); lo <<= 1; }
+#endif
     uint32_t m = (hi << 11) | (lo >> 21) | ((lo << 11) != 0);
     return pack_near(sign, e, m);
 }

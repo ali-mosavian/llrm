@@ -6,4 +6,6 @@
 /* R5 (softfloat, exit 11-20): f32 divide in one 64-bit hardware divide, not four 32-bit ones (SF_DIV_HW32 of the m32 config). Dropped if the 4-divide form measures faster on the m64 targets in use. */
 #undef SF_DIV_HW32
 #define SF_DIV_NATIVE64 1
+/* R4 (softfloat, exit 11-20): f32 mul normalises without a branch; native -O2 mul 22.1 -> see the commit. Removed when the backend turns the shift branch into a select itself. */
+#define SF_MUL_NORM_SELECT 1
 #endif

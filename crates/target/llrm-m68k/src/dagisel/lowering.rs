@@ -119,7 +119,12 @@ pub fn target_lowering(cpu: Cpu) -> TargetLowering {
         set(&[op], &[MVT::I32], Action::LibCall);
     }
     set(&[UMulLoHi, SMulLoHi], &[MVT::I8, MVT::I16], Action::Expand);
-    set(&[SMulO, UMulO], &int, Action::Custom);
+    // DEVIATE: `mulu.l` and `muls.l`, which `lower_xalu` selects for an `i32`
+    // multiply with overflow, exist from the 68020; the 68000 expands it
+    // (`expandMULO`) through the 64-bit product. The pin keeps `Custom` on
+    // every CPU. Exit: never, while the pin does.
+    set(&[SMulO, UMulO], &[MVT::I8, MVT::I16], Action::Custom);
+    set(&[SMulO, UMulO], &[MVT::I32], if m68020 { Action::Custom } else { Action::Expand });
     set(&[ShlParts, SraParts, SrlParts], &[MVT::I32], Action::Custom);
     set(&[AddC, AddE, SubC, SubE, SAddO, UAddO, SSubO, USubO], &int, Action::Custom);
     set(&[BrCond], &[MVT::Other], Action::Custom);
