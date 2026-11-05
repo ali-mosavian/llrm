@@ -1125,6 +1125,22 @@ impl<D: AddrDag> Matcher<'_, D> {
         debug_assert_eq!(am.segment, Some(placeholder));
         am.segment = None;
 
+        // DEVIATE M16-LEA-1 (owner m16, exit 2026-11-12): at -Os in real mode a
+        // dword `lea r,[a+b+1]` is 6 B (67 66 8D /r sib disp8), where `add r,b`
+        // + `inc r` is 5 B; the pin takes the `lea` (complexity 3).
+        if self.size
+            && self.mode == AddrMode::Real16
+            && vt == mvt::i32
+            && am.base_type == BaseType::Reg
+            && am.base_reg.is_some()
+            && am.index_reg.is_some()
+            && am.scale == 1
+            && matches!(am.disp, 1 | -1)
+            && !am.has_symbolic_displacement()
+        {
+            return None;
+        }
+
         let mut complexity = 0;
         if am.base_type == BaseType::Reg && am.base_reg.is_some() {
             complexity = 1;
