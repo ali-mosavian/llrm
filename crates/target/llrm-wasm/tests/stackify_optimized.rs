@@ -101,6 +101,24 @@ fn adjacent_stores_merge_when_optimizing() {
     assert!(!body(&o2, "s").contains("i32.store16"), "{o2}");
 }
 
+const TWO_BYTE_STORES: &str = "define void @s(ptr %p) {
+entry:
+  store i8 66, ptr %p
+  %q = getelementptr i8, ptr %p, i32 1
+  store i8 77, ptr %q
+  ret void
+}
+";
+
+/// Two adjacent constant byte stores stayed two `i32.store8`: the combiner's
+/// truncating-store merge was off for wasm, so jpeg_fixed's BMP header kept
+/// 4 more stores and 43 bytes over the pin at `-Os`.
+#[test]
+fn adjacent_byte_stores_of_constants_are_one_store16() {
+    let o2 = asm(TWO_BYTE_STORES, Level::O2);
+    assert!(body(&o2, "s").matches("i32.store16").count() == 1 && !body(&o2, "s").contains("i32.store8"), "{o2}");
+}
+
 const SEQUENTIAL: &str = "declare void @h(i32)
 define void @k(i32 %x) {
 entry:
