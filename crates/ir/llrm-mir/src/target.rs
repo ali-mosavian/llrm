@@ -91,6 +91,10 @@ pub struct Tuning {
     /// than the loop-closing jump it removes. false: the pass's header limit
     /// alone.
     pub rotation_guard_must_fold_at_size: bool,
+    /// A size build rotates a loop only when the copied header is no bigger than
+    /// the branches the rotation removes (the loop-closing jump and the exit
+    /// test), in `CodeSize` (arm64's w15 rule). false: the header limit alone.
+    pub rotation_header_priced_at_size: bool,
     /// A constant offset of an address is a displacement the access folds;
     /// SimplifyCFG's sinking of two such accesses behind a phi of the offsets
     /// is refused (it costs the displacement). false: the pin's.
@@ -164,6 +168,7 @@ impl Tuning {
         inline_size_guard_single_site: false,
         unroll_promotion_fits_registers: false,
         rotation_guard_must_fold_at_size: false,
+        rotation_header_priced_at_size: false,
         keep_constant_displacements: false,
         recursive_inlining: None,
         recursive_edge_growth: None,

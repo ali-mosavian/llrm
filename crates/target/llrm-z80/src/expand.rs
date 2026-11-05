@@ -689,6 +689,11 @@ impl Printer<'_> {
                 }
                 self.call_bytes = if down { 2 * pushes } else { 0 };
             }
+            "PUSHARG" => {
+                let pair = self.register(inst, 0)?;
+                self.push(format!("push {}", name(pair)));
+                self.call_bytes += 2;
+            }
             "STSP8" | "STSP16" => {
                 let Some(Operand::Imm(offset)) = inst.operands.get(1) else {
                     return Err("a stack store without an offset".to_owned());
@@ -1551,6 +1556,7 @@ pub fn finish(
     reads: llrm_support::hash::HashMap<u32, usize>,
 ) -> Result<Vec<Line>, String> {
     let mut function = tail_calls(function);
+    push_arguments(&mut function, assignment);
     let frame = layout(&function, slots);
     let pushed = entry_pushes(&mut function, assignment, &frame);
     let function = &function;
@@ -2080,6 +2086,67 @@ fn flag_and_b_free(text: &str) -> bool {
         "ld" => !operands.split(", ").any(names_b),
         "inc" | "dec" => matches!(operands, "hl" | "de" | "ix" | "iy"),
         _ => false,
+    }
+}
+
+/// The stack arguments of a call, all words in a register pair, are pushed in
+/// place of reserving the area with `push bc` and storing into it: `ld hl, #0;
+/// push hl` is 4 B where `push bc; ld hl, #0; ld -32(ix), l; ld -31(ix), h`
+/// is 10. `X86CallFrameOptimization`, which turns the stores of a reserved
+/// call frame into pushes, for the stores that run from the top word down.
+fn push_arguments(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) {
+    let pair_of = |operand: Option<&Operand>| {
+        let register = match operand {
+            Some(Operand::Use(Reg::Virt(v))) => assignment.0[*v as usize],
+            Some(Operand::Use(Reg::Phys(id))) => *id,
+            _ => return None,
+        };
+        [reg::BC, reg::DE, reg::HL].into_iter().find(|pair| register == *pair)
+    };
+    for block in &mut function.blocks {
+        let mut at = 0;
+        while at < block.insts.len() {
+            let Kind::Op("ADJCALLSTACKDOWN") = block.insts[at].kind else {
+                at += 1;
+                continue;
+            };
+            let Some(Operand::Imm(bytes @ 2..=16)) = block.insts[at].operands.first().cloned() else {
+                at += 1;
+                continue;
+            };
+            let mut stores = Vec::new();
+            let mut next = bytes - 2;
+            let mut legal = bytes % 2 == 0;
+            let mut end = at + 1;
+            while legal && end < block.insts.len() && !block.insts[end].call {
+                let inst = &block.insts[end];
+                match inst.kind {
+                    Kind::Op("STSP16") => {
+                        legal = matches!(
+                            inst.operands.get(1),
+                            Some(Operand::Imm(offset)) if *offset == next
+                        ) && pair_of(inst.operands.first()).is_some();
+                        stores.push(end);
+                        next -= 2;
+                    }
+                    Kind::Op("STSP8" | "ADJCALLSTACKDOWN" | "ADJCALLSTACKUP" | "PUSHP" | "POPP") => legal = false,
+                    _ => {}
+                }
+                end += 1;
+            }
+            let called = end < block.insts.len() && block.insts[end].call;
+            if !(legal && called && next == -2) {
+                at += 1;
+                continue;
+            }
+            for &store in &stores {
+                block.insts[store].kind = Kind::Op("PUSHARG");
+            }
+            block.insts.remove(at);
+        }
     }
 }
 

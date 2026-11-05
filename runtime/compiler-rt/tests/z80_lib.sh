@@ -8,11 +8,11 @@ OUT=${1:?output directory}; OPT=${2:-Os}; LLC=${LLRM_Z80_LLC:?path of llrm-z80-l
 DL="e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16"
 MODULES="fp/f64/add_sub fp/f64/mul fp/f64/div fp/f64/float fp/f64/pack fp/f32/pack fp/f32/extend fp/f32/trunc fp/f32/add_sub fp/f32/mul fp/f32/div
  fp/f32/float_si fp/f32/float_usi fp/f32/float_di fp/f32/fix_si fp/f32/fix_usi fp/f32/fix_di fp/f64/fix_si fp/f64/fix_usi fp/f64/fix_di fp/f64/fix_udi
- fp/f32/cmp fp/f64/cmp fp/f32/neg fp/f64/neg fp/f32/unord fp/f64/unord"
+ fp/f32/cmp fp/f64/cmp fp/f32/neg fp/f64/neg fp/f32/unord fp/f64/unord int/clzsi2"
 mkdir -p "$OUT"; T=$(mktemp -d); trap 'rm -r $T' EXIT
 for m in $MODULES; do
   n=$(echo "$m" | tr / _)
-  $CLANG --target=msp430 -O2 -Xclang -disable-llvm-passes -ffreestanding -Iinclude -S -emit-llvm lib/$m.c -o $T/$n.raw.ll
+  $CLANG --target=msp430 -O2 -Xclang -disable-llvm-passes -ffreestanding -Iinclude -include config/z80/config.h -S -emit-llvm lib/$m.c -o $T/$n.raw.ll
   sed -E "s|^target datalayout = .*|target datalayout = \"$DL\"|; /^target triple/d" $T/$n.raw.ll > $T/$n.ll
   $LLC -S -$OPT -o $OUT/$n.s $T/$n.ll
   sed -i 's/___/__/g' $OUT/$n.s
