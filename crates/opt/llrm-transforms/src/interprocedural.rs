@@ -700,8 +700,14 @@ pub fn optimized_with<E: From<String>>(
     // tests/nearcalls.rs holds the folded shape and, ignored, the pin's.
     let walk_promoted = crate::walk::take_walk_promotions(program);
     if (promoted_any || walk_promoted) && program.target.second_ipsccp() {
-        for (at, id) in crate::ipsccp::run_ipsccp_with(program, modules) {
+        // Every body is told changed before the first runs again: the solver has
+        // already restated the attributes of all of them, and a pipeline that
+        // asks the declarations meanwhile must not find the others' standing.
+        let solved = crate::ipsccp::run_ipsccp_with(program, modules);
+        for &(at, id) in &solved {
             edited(&mut modules[at], &[id]);
+        }
+        for (at, id) in solved {
             reoptimised(&mut program.modules[at], &mut modules[at], id, "ipsccp.")?;
         }
     }

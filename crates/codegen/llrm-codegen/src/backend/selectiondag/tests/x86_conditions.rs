@@ -149,3 +149,26 @@ fn x86_runs_the_pin_combines_the_corpus_judged_better() {
     let m64 = X86Lowering { zext_free: true, ..hooks };
     assert!(m64.rebuild_brcond_condition() && m64.fold_and_of_extload());
 }
+
+/// `and (freeze (extload i8)), 255` kept the load wide and the mask: x86 did
+/// not ask for the pin's `ReduceLoadWidth` through a freeze (the hook is
+/// default-off; the IR-level lowering drops this freeze, so the DAG is built
+/// by hand, as `pin_folds` does for the generic fold).
+#[test]
+fn x86_narrows_a_mask_over_a_frozen_extending_load() {
+    use super::super::dag_combiner::{CombineLevel, DagCombiner};
+    let mut dag = dag();
+    super::pin_folds::masked_frozen_extload(&mut dag);
+    let mut x86 = X86Lowering {
+        cmov: true,
+        sse2: false,
+        min_size: false,
+        three_address_adds: false,
+        i16_mul_chains: false,
+        sext_load: false,
+        zext_free: false,
+        profile: None,
+    };
+    DagCombiner::new(&mut dag, &mut x86, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.opcode(dag.get_root()), ISD::AssertZext);
+}
