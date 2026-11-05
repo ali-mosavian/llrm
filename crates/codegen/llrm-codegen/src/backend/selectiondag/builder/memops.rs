@@ -540,7 +540,9 @@ impl Builder<'_> {
                 let mut value = 0u128;
                 for at in 0..width {
                     let byte = bytes.as_ref().and_then(|bytes| bytes.get((base + src_off + at) as usize)).copied();
-                    value |= u128::from(byte.unwrap_or(0)) << (8 * at);
+                    // the first byte is the low bits on a little-endian target
+                    let place = if self.dag.config().big_endian { width - at - 1 } else { at };
+                    value |= u128::from(byte.unwrap_or(0)) << (8 * place);
                 }
                 let value = self.dag.get_constant(value, vt);
                 let to = self.dag.get_object_ptr_offset(dst, dst_off as i64);
@@ -857,6 +859,19 @@ impl Builder<'_> {
         Some((Some(bytes), from))
     }
 
+    /// The low `count` bytes of `bits` as the target lays them in memory.
+    fn memory_bytes(
+        &self,
+        bits: u128,
+        count: usize,
+    ) -> Vec<u8> {
+        if self.dag.config().big_endian {
+            bits.to_be_bytes()[16 - count..].to_vec()
+        } else {
+            bits.to_le_bytes()[..count].to_vec()
+        }
+    }
+
     /// `ReadDataFromGlobal`: the constant's bytes at `at`, where the layout
     /// puts them; `None` for anything but integers, floats and aggregates of
     /// them.
@@ -874,12 +889,12 @@ impl Builder<'_> {
                 let width = types.int_bits(constant.ty)?;
                 (width % 8 == 0).then_some(())?;
                 let count = (width / 8) as usize;
-                bytes.get_mut(at..at + count)?.copy_from_slice(&bits.to_le_bytes()[..count]);
+                bytes.get_mut(at..at + count)?.copy_from_slice(&self.memory_bytes(*bits, count));
             }
             ConstantKind::Float(bits) => match types.get(constant.ty) {
                 Type::Float(kind @ (FloatKind::Float | FloatKind::Double)) => {
                     let count = kind.value_bytes() as usize;
-                    bytes.get_mut(at..at + count)?.copy_from_slice(&bits.to_le_bytes()[..count]);
+                    bytes.get_mut(at..at + count)?.copy_from_slice(&self.memory_bytes(u128::from(*bits), count));
                 }
                 _ => return None,
             },

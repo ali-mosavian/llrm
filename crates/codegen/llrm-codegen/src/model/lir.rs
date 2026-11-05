@@ -191,6 +191,10 @@ pub struct Insn {
     /// far pointer's offset and selector, or of a long's halves), as the DAG's
     /// `PAIR_FAR`/`PAIR_LONG` marked it at selection.
     pub pair: Option<PairKind>,
+    /// An `or` of operands that share no bit, selected as the pin's `ADDnn_DB`:
+    /// two-address conversion may make it an `lea` as it would an `add`;
+    /// otherwise it is an `or`.
+    pub disjoint: bool,
     /// The source line of the MIR instruction it was selected from (`!dbg`).
     pub line: Option<SrcLoc>,
     pub debug: DebugTags,
@@ -722,6 +726,7 @@ impl Insn {
             invariant: false,
             reads_complete: false,
             pair: None,
+            disjoint: false,
             line: None,
             debug: DebugTags::default(),
             declared: None,

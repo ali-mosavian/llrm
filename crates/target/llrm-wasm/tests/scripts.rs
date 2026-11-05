@@ -45,3 +45,35 @@ fn llc_writes_standard_output_for_a_dash() {
     assert!(out.status.success() && !stray, "stray file: {stray}");
     assert!(String::from_utf8_lossy(&out.stdout).contains(".functype"));
 }
+
+fn compare(
+    pin: &str,
+    files: &[&str],
+) -> (Option<i32>, String) {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("compare.sh");
+    let out = Command::new("bash")
+        .arg(path)
+        .args(files)
+        .env("LLRM_PIN_LLC", pin)
+        .env("BIN", env!("CARGO_BIN_EXE_llrm-wasm-llc"))
+        .output()
+        .expect("bash");
+    (out.status.code(), String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// `compare.sh` printed "REF-FAIL ... match 0, differ 1" and exited 0 with a
+/// missing pin llc, so a gate that read its status passed with nothing
+/// compared.
+#[test]
+fn compare_sh_fails_when_the_pin_llc_is_missing() {
+    let (code, said) = compare("/nonexistent/llc", &["/dev/null"]);
+    assert!(said.contains("REF-FAIL") && said.contains("differ 1"), "{said}");
+    assert_eq!(code, Some(1), "{said}");
+}
+
+/// No files compared is not a match.
+#[test]
+fn compare_sh_fails_when_it_compared_nothing() {
+    let (code, said) = compare("/bin/true", &[]);
+    assert_eq!(code, Some(1), "{said}");
+}

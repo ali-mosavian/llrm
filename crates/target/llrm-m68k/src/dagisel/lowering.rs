@@ -119,7 +119,12 @@ pub fn target_lowering(cpu: Cpu) -> TargetLowering {
         set(&[op], &[MVT::I32], Action::LibCall);
     }
     set(&[UMulLoHi, SMulLoHi], &[MVT::I8, MVT::I16], Action::Expand);
-    set(&[SMulO, UMulO], &int, Action::Custom);
+    // DEVIATE: `mulu.l` and `muls.l`, which `lower_xalu` selects for an `i32`
+    // multiply with overflow, exist from the 68020; the 68000 expands it
+    // (`expandMULO`) through the 64-bit product. The pin keeps `Custom` on
+    // every CPU. Exit: never, while the pin does.
+    set(&[SMulO, UMulO], &[MVT::I8, MVT::I16], Action::Custom);
+    set(&[SMulO, UMulO], &[MVT::I32], if m68020 { Action::Custom } else { Action::Expand });
     set(&[ShlParts, SraParts, SrlParts], &[MVT::I32], Action::Custom);
     set(&[AddC, AddE, SubC, SubE, SAddO, UAddO, SSubO, USubO], &int, Action::Custom);
     set(&[BrCond], &[MVT::Other], Action::Custom);
@@ -159,6 +164,10 @@ pub struct M68kLowering {
 }
 
 impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLowering {
+    fn little_endian(&self) -> bool {
+        false
+    }
+
     fn sub_of_sign_extended_bool(&self) -> bool {
         self.short
     }
@@ -268,13 +277,29 @@ impl Hooks for M68kLowering {
                 outs.push(out(value, dag));
             }
         }
-        let word = In { vt: EVT::I32, pointer: false, arg_vt: EVT::I32, split: false, sret: false, ext: Ext::Any, byval: None };
+        let word = In {
+            vt: EVT::I32,
+            pointer: false,
+            arg_vt: EVT::I32,
+            split: false,
+            sret: false,
+            ext: Ext::Any,
+            byval: None,
+        };
         let mut ins: Vec<In> = Vec::new();
         for &ret in rets {
             if ret == EVT::I64 {
                 ins.extend([word, word]);
             } else {
-                ins.push(In { vt: ret, pointer: false, arg_vt: ret, split: false, sret: false, ext: Ext::Any, byval: None });
+                ins.push(In {
+                    vt: ret,
+                    pointer: false,
+                    arg_vt: ret,
+                    split: false,
+                    sret: false,
+                    ext: Ext::Any,
+                    byval: None,
+                });
             }
         }
         let callee = dag.get_target_external_symbol(EVT::I32, name);
