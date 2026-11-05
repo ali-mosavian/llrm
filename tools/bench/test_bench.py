@@ -197,6 +197,12 @@ class ReferenceFloatTests(unittest.TestCase):
             got = self._counts(lambda variant, where: bench.build_watcom(variant, "O2", where, "F000"), name)
             self.assertGreater(got.get("instructions", 0), 0, got)
 
+    def test_watcom_runs_a_2000_deep_recursion(self):
+        """recsum, recmany and recfloat (2000 frames, not tail-called by Watcom) overran the 16K stack into the code: invalid instruction, no ow row."""
+        for name in ("recsum", "recmany", "recfloat"):
+            got = self._counts(lambda variant, where: bench.build_watcom(variant, "O2", where, "F000"), name)
+            self.assertGreater(got.get("instructions", 0), 0, got)
+
     @unittest.skipUnless((bench.BORLAND["tc"][0] / "lib" / "MATHM.LIB").exists(), "needs Turbo C 2.01")
     def test_a_turbo_c_program_with_a_define_and_a_float_links_and_prints_its_output(self):
         """TC 2.01 read `#define` after a bare LF as an illegal character (no row for the 4 programs with one), and its MATHM.LIB was empty (no floats)."""
