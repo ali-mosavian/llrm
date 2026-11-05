@@ -265,6 +265,8 @@ impl Machine for Dos {
             return llrm_mir::target::Tuning::PIN;
         }
         llrm_mir::target::Tuning {
+            // Trial: arm64's -Os unrotate rule (header priced against the branches removed).
+            rotation_header_priced_at_size: true,
             max_stores_per_memset: 4,
             max_stores_per_memcpy: 2,
             max_stores_per_memmove: 2,

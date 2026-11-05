@@ -693,6 +693,10 @@ impl Tti for X86 {
         self.tuning.rotation_guard_must_fold_at_size
     }
 
+    fn rotation_header_priced_at_size(&self) -> bool {
+        self.tuning.rotation_header_priced_at_size
+    }
+
     fn constant_offset_phi_is_cheap(&self) -> bool {
         !self.tuning.keep_constant_displacements
     }

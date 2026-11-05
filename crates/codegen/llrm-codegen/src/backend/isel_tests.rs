@@ -191,9 +191,9 @@ done:
 }
 ";
     let got = listing(text, "sum");
-    // The comparison stays flags beside its branch; the phis' zeros are made in
-    // the entry, which runs a copy of the test and falls into the loop (the
-    // likelier way) rather than copy the return over it. The scheduler may put
+    // The comparison stays flags beside its branch. m16's tail-duplication
+    // threshold is 1 (#6827), so the test is not copied into the loop: it
+    // closes with `jmp` (the mid-end rotates real loops first). The scheduler may put
     // the load of n and the two zeros in any order and register names, so the
     // test pins the shape: three entry instructions (the load and two zeros),
     // the test, and the loop with the registers its instructions name.
@@ -213,13 +213,13 @@ done:
     assert_eq!(
         &got[6..],
         [
+            "L0_1:".to_owned(),
             format!("cmp {i}, {n}"),
             "jge L0_8".to_owned(),
             "L0_5:".to_owned(),
             format!("add {sum}, {i}"),
             format!("inc {i}"),
-            format!("cmp {i}, {n}"),
-            "jl L0_5".to_owned(),
+            "jmp L0_1".to_owned(),
             "L0_8:".to_owned(),
             "pop bp".to_owned(),
             "retf".to_owned(),
