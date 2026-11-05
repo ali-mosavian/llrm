@@ -1,0 +1,4 @@
+# target  failures  cause; owner; exit   (a ratchet: lower by hand when fixed; arm64-linux has no line, it must be 0 with a dist that has llrm-arm64-llc)
+x86_16-dos 42 32 = no 16-bit sysroot (host glibc headers); 8 = redefinition of i; geometry main.h; queens __uint128_t; owner softfloat or m16; exit 11-20
+x86_32-dos 4 geometry (main.h), extdata (glibc errno.h), queens (__uint128_t), bits (warning as error); owner softfloat; exit 11-20
+x86_64-linux 2 geometry (main.h), bench/parity/sum_three (far pointer, 16-bit source); owner softfloat; exit 11-20
