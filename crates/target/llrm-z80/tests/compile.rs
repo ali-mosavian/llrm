@@ -1714,3 +1714,23 @@ fn a_long_subtract_borrow_shared_with_the_order_chain_still_fuses() {
     let instructions = text.lines().filter(|line| line.starts_with('\t') && !line.trim_start().starts_with('.')).count();
     assert!(instructions <= 135, "{instructions} instructions:\n{text}");
 }
+
+/// `line` passed the address of its local to `kernel` and ended in `jp
+/// _kernel` with the frame already popped: `kernel` ran over the local it was
+/// handed (frame_address_stack_args -Oz printed 13599, not 13346).
+#[test]
+fn a_call_given_the_address_of_a_local_is_not_a_tail_jump() {
+    let out = compiled(
+        "declare void @use(ptr)\ndefine void @f() {\n  %a = alloca [4 x i8]\n  call void @use(ptr %a)\n  ret void\n}",
+        "f",
+    );
+    assert!(out.contains("call _use") && !out.contains("jp _use"), "{out}");
+}
+
+/// The same call without a local to reach is still a tail jump.
+#[test]
+fn a_call_with_no_local_to_reach_is_a_tail_jump() {
+    let out =
+        compiled("declare void @use(i16)\ndefine void @f(i16 %x) {\n  call void @use(i16 %x)\n  ret void\n}", "f");
+    assert!(out.contains("jp _use"), "{out}");
+}
