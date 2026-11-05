@@ -111,6 +111,8 @@ pub struct Selection {
     /// machine CFG comes from the IR); here a block with no terminator falls
     /// into the next one, so emission states the end.
     pub unreachable: llrm_mir::dense::IdSet<BlockId>,
+    /// `internal` or `private`: the symbol is the module's own, not exported.
+    pub local: bool,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -214,7 +216,8 @@ pub fn select_function_with(
             unreachable.insert(block);
         }
     }
-    Ok(Selection { blocks: selected, locals, cpu, widths, variables, returns_twice, unreachable })
+    let local = matches!(module.global(id).linkage, llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private);
+    Ok(Selection { blocks: selected, locals, cpu, widths, variables, returns_twice, unreachable, local })
 }
 
 /// The variables of `function` (after the debug import): parameters in the

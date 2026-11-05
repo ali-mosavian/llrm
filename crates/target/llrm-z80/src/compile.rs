@@ -59,6 +59,22 @@ impl Prepared {
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.selections.iter().map(|(name, ..)| name.as_str())
     }
+
+    /// Whether function `name` is the module's own (`internal`, `private`):
+    /// two modules may each define one.
+    pub fn is_local(
+        &self,
+        name: &str,
+    ) -> bool {
+        is_local(&self.selections, name)
+    }
+}
+
+fn is_local(
+    selected: &Selections,
+    name: &str,
+) -> bool {
+    selected.iter().any(|(one, source, _)| one == name && source.as_ref().is_ok_and(|selection| selection.local))
 }
 
 /// `ir` through the mid-end and selection, for `request`.
@@ -1472,7 +1488,8 @@ fn text_of(
             symbol(&mut out, format!("C${file}${line}$0_0${number}_0"));
         }
     }
-    out.push_str(&format!("{}::\n", crate::data::symbol(name)));
+    let colons = if is_local(selected, name) { ":" } else { "::" };
+    out.push_str(&format!("{}{colons}\n", crate::data::symbol(name)));
     for line in lines_in(selected, name, number, request)? {
         match line {
             Line::Label(label) => out.push_str(&format!("{label}:\n")),

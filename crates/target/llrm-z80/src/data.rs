@@ -53,10 +53,15 @@ pub fn text(
             (false, true) => "\t.area _BSS\n",
             (false, false) => "\t.area _DATA\n",
         });
+        // `internal` and `private` are the module's own: two modules may each define one
+        let local = matches!(global.linkage, llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private);
         for datum in datums {
             match datum {
                 Datum::Bytes(bytes) if bss => out.push_str(&format!("\t.ds {}\n", bytes.len())),
                 Datum::Fill(fill) if bss => out.push_str(&format!("\t.ds {}\n", fill.size)),
+                Datum::Label(label) | Datum::Object(label) if local => {
+                    out.push_str(&format!("{}:\n", label.name));
+                }
                 Datum::Label(label) | Datum::Object(label) => {
                     out.push_str(&format!("\t.globl {0}\n{0}::\n", label.name));
                 }
