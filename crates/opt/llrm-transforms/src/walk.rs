@@ -319,7 +319,11 @@ impl ProgramPass for Walk {
                                 self.inline.limit == 0,
                                 tti.as_deref(),
                                 decided.as_mut(),
-                                (tti.is_some() && size != crate::inlinecost::CallerSize::Speed).then_some(&mut trials),
+                                (tti.as_deref().is_some_and(|tti| {
+                                    size != crate::inlinecost::CallerSize::Speed
+                                        || tti.speed_inline_milliclocks_per_byte() > 0
+                                }))
+                                .then_some(&mut trials),
                             )
                         };
                         let mut declared = declared(&mut modules[at], module);
@@ -514,7 +518,11 @@ impl ProgramPass for Walk {
                                 // At speed a target that prices bytes in clocks
                                 // takes a trial that grows the code where the
                                 // clocks it saves are worth the growth.
-                                let rate = if self.speed_rate { tti.speed_milliclocks_per_byte() } else { 0 };
+                                let rate = if self.speed_rate {
+                                    tti.speed_milliclocks_per_byte().max(tti.speed_inline_milliclocks_per_byte())
+                                } else {
+                                    0
+                                };
                                 let (saved, growth) = if size == crate::inlinecost::CallerSize::Speed && rate > 0 {
                                     let costs = program.target.size_costs();
                                     let now = module.global(id).function().expect("a body");
@@ -545,7 +553,7 @@ impl ProgramPass for Walk {
                                         / calls.len() as f64;
                                     let once = kept_clocks + run - function_clocks(module, &program.layout, tti, now);
                                     (
-                                        if once > 0 { (once as f64 * trips) as i64 } else { once },
+                                        (once as f64 * trips) as i64,
                                         function_bytes(module, &program.layout, &costs, now)
                                             - function_bytes(module, &program.layout, &costs, &kept)
                                             - gone,
@@ -601,17 +609,30 @@ impl ProgramPass for Walk {
                                         growth
                                     );
                                 }
-                                if tried <= best + credit
-                                    || (saved > 0 && growth * rate <= saved * 1000)
-                                    || (rate == 0
-                                        && credit == 0
-                                        && -growth * 8
-                                            >= function_bytes(
-                                                module,
-                                                &program.layout,
-                                                &program.target.size_costs(),
-                                                &kept,
-                                            ))
+                                // At speed with a byte price only the sites of a callee that
+                                // goes with them are tried, and the price decides: the
+                                // module loses the callee, and the copies meet the
+                                // constants (a stack bracket, a trip count) the cost
+                                // model does not follow. One site of a callee that stays
+                                // widens the caller's registers for its whole body (jpeg
+                                // `decode` with `getbit` inlined: five more register
+                                // pairs saved on every call, +441k instructions).
+                                let priced = rate > 0 && size == crate::inlinecost::CallerSize::Speed;
+                                if if priced {
+                                    credit > 0 && growth * rate <= saved * 1000
+                                } else {
+                                    tried <= best + credit
+                                        || (saved > 0 && growth * rate <= saved * 1000)
+                                        || (rate == 0
+                                            && credit == 0
+                                            && -growth * 8
+                                                >= function_bytes(
+                                                    module,
+                                                    &program.layout,
+                                                    &program.target.size_costs(),
+                                                    &kept,
+                                                ))
+                                }
                                 {
                                     best = tried;
                                     accepted.extend(calls);
