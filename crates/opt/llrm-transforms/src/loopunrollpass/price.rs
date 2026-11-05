@@ -88,8 +88,8 @@ pub(super) fn full_unroll_pays(
         .as_ref()
         .map_or(uce.unrolled_loop_size(up, trips) as i64, |cost| i64::from(cost.unrolled_cost));
     let added = match analysis.as_ref() {
-        Some(cost) => (cost.unrolled_bytes - body_bytes).max(0),
-        None => ((unrolled_units - rolled_units).max(0) * body_bytes) / rolled_units,
+        Some(cost) if cost.through_call => (cost.unrolled_bytes - body_bytes).max(0),
+        _ => ((unrolled_units - rolled_units).max(0) * body_bytes) / rolled_units,
     };
     let (nested_uses, known) = constant_operand_uses(run, analyzed, lp);
     // The accesses of a local array the copies make constant-indexed: the

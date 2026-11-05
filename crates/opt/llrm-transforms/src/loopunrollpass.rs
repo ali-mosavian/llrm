@@ -356,6 +356,8 @@ struct EstimatedUnrollCost {
     /// The bytes of the instructions the copies keep (the analysis folds the rest): the
     /// unit costs above are SizeAndLatency, and a call is about 8 of them and 8 bytes.
     unrolled_bytes: i64,
+    /// A call was priced through (`through_calls`): the pin's analysis would have given up.
+    through_call: bool,
     /// The multiplies and divides of one rolled trip, and of the first trip
     /// once counted: what the entry values make cheaper there is the peel's
     /// gain.
@@ -509,6 +511,7 @@ fn analyze_loop_unroll_cost(
     let mut unrolled_cost = Cost::FREE;
     let mut first_iteration = Cost::FREE;
     let mut unrolled_bytes = 0_i64;
+    let mut through_call = false;
     let mut heavy_rolled = Cost::FREE;
     let mut heavy_first = Cost::FREE;
     let mut heavy_folded = 0_i64;
@@ -669,6 +672,7 @@ fn analyze_loop_unroll_cost(
                         why(run, lp, "cannot analyze: a call");
                         return None;
                     }
+                    through_call |= lowered;
                 }
 
                 // If the instruction might have a side effect, recursively
@@ -835,6 +839,7 @@ fn analyze_loop_unroll_cost(
         rolled_dynamic_cost: rolled_dynamic_cost.value as u32,
         first_iteration: first_iteration.value as u32,
         unrolled_bytes,
+        through_call,
         heavy_rolled: heavy_rolled.value as u32,
         heavy_first: heavy_first.value as u32,
         heavy_folded: heavy_folded as u32,
