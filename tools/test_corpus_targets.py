@@ -59,6 +59,7 @@ def test_an_override_names_the_abi_fact_it_rests_on():
     for out in overrides:
         why = out.with_suffix(".why")
         assert why.exists() and len(why.read_text().strip().splitlines()) == 1, f"{out.name}: one line of why"
+        assert why.read_text().startswith("ABI: "), f"{out.name}: an override is for an ABI difference; fix the program otherwise"
         shared = out.with_name(out.name.replace(".m68k.out", ".out"))
         assert shared.exists() and shared.read_bytes() != out.read_bytes(), f"{out.name}: stale, equal to {shared.name}"
 

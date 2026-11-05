@@ -1,1 +1,1 @@
-long double is 8 bytes on m68k (the pin's clang default, TargetInfo.cpp:130; gcc's is 12): the first word of 0.1L and 1.1L is the double's 0x3FB9 and 0x3FF1; gcc column n/a.
+ABI: long double is 8 bytes on m68k (the pin's clang default, TargetInfo.cpp:130; gcc's is 12): the first word of 0.1L and 1.1L is the double's 0x3FB9 and 0x3FF1; gcc column n/a.

@@ -1,1 +1,1 @@
-long double is 8 bytes with 8-byte alignment on m68k (the pin's clang; gcc: 12 and 2): sizes 8, 16, 24, 8 by hand (1+7+8+2+6); gcc column n/a.
+ABI: long double is 8 bytes with 8-byte alignment on m68k (the pin's clang; gcc: 12 and 2): sizes 8, 16, 24, 8 by hand (1+7+8+2+6); gcc column n/a.
