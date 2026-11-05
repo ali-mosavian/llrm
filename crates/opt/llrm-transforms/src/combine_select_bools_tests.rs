@@ -95,3 +95,27 @@ fn a_select_that_repeats_its_condition_s_select_uses_the_inner_condition() {
     );
     assert!(out.matches("select").count() == 1 && out.contains("select i1 %a, i1 %b, i1 false"), "{out}");
 }
+
+/// jpeg_fixed -O1: `select (y == 0), true, (y samesign ugt 2)` stayed a select,
+/// where the pin makes it an `or` (a poison `icmp samesign` leaves `y` on the
+/// other side of zero, so `y == 0` is false): impliesPoisonOrCond's
+/// samesign arm was missing, so the range fold never saw the two compares (+37
+/// B over the pin).
+#[test]
+fn a_select_whose_arm_is_a_samesign_compare_of_the_same_value_is_an_or() {
+    let out = combined(
+        "i32 %y",
+        "  %a = icmp eq i32 %y, 0\n  %b = icmp samesign ugt i32 %y, 2\n  %r = select i1 %a, i1 true, i1 %b\n  ret i1 %r\n",
+    );
+    assert!(out.contains("or i1 %a, %b"), "{out}");
+}
+
+#[test]
+fn a_chain_of_logical_ors_with_a_samesign_arm_reassociates() {
+    let out = combined(
+        "i32 %y, i1 %p",
+        "  %a = icmp eq i32 %y, 0\n  %o1 = select i1 %p, i1 true, i1 %a\n  %b = icmp samesign ugt i32 %y, 2\n  \
+         %r = select i1 %o1, i1 true, i1 %b\n  ret i1 %r\n",
+    );
+    assert!(out.contains("or i1 %a, %b"), "{out}");
+}
