@@ -27,6 +27,11 @@ fn asm(
     assembly_in(IR, cpu_of(cpu).unwrap(), Level::O2, false, None, model).expect("compiles")
 }
 
+const ADDRESS_IR: &str = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"
+@to = global [70016 x i8] zeroinitializer, align 2
+define ptr @addr() { ret ptr @to }
+";
+
 #[test]
 fn an_unknown_model_is_refused_not_dropped() {
     assert!(CodeModel::parse("huge").is_err());
@@ -64,4 +69,15 @@ fn binutils_assembles_the_big_array_in_the_medium_model_at_68000() {
     command.env("LD_LIBRARY_PATH", format!("{root}/usr/lib/x86_64-linux-gnu"));
     let done = command.arg("-m68000").arg("-o").arg(&object).arg(&source).output().unwrap();
     assert!(done.status.success(), "{}\n{text}", String::from_utf8_lossy(&done.stderr));
+}
+
+/// The absolute form printed `move.l to, %a0`: the text of a load from `to`, where the object code (`movea.l #to`)
+/// had the address. The three `*_runtime` programs read the array's first bytes as a pointer and faulted at 68000.
+#[test]
+fn an_absolute_address_is_an_immediate_not_a_load_of_the_symbol() {
+    for (cpu, model) in [("68000", CodeModel::Medium), ("68000", CodeModel::Large), ("68020", CodeModel::Large)] {
+        let text = assembly_in(ADDRESS_IR, cpu_of(cpu).unwrap(), Level::O2, false, None, model).expect("compiles");
+        assert!(text.contains("#to,"), "{cpu} {model:?}: {text}");
+        assert!(!text.contains("move.l\tto,"), "{cpu} {model:?}: {text}");
+    }
 }
