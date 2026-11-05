@@ -963,75 +963,135 @@ udivmod32_fast:                      ; the speed variant: __sa / __sb -> __sa, _
   sta __sr
   rts
 @wide:
-  ldx #32
-; While the remainder with the dividend's next byte appended is still below the divisor, the
-; eight trips for that byte only shift it in: take the byte at once. A divisor of m bytes lets
-; m-1 bytes go this way, a dividend of fewer bytes than that is all remainder, and a zero divisor
-; never passes the test, so its quotient is all ones.
-@skip:
-  lda __sr+3
-  bne @next
-  lda __sr+2
-  cmp __sb+3
-  bne @below
-  lda __sr+1
-  cmp __sb+2
-  bne @below
-  lda __sr
-  cmp __sb+1
-  bne @below
-  lda __sa+3
-  cmp __sb
-@below:
-  bcs @next                     ; the remainder reaches the divisor: the trips start here
-  lda __sr+2
-  sta __sr+3
-  lda __sr+1
-  sta __sr+2
-  lda __sr
-  sta __sr+1
-  lda __sa+3
+  lda __sb                      ; a zero divisor: all-ones quotient, the dividend as remainder
+  ora __sb+1
+  ora __sb+2
+  ora __sb+3
+  bne @nz
+  ldx #3
+@zero:
+  lda __sa,x
+  sta __sr,x
+  lda #$FF
+  sta __sa,x
+  dex
+  bpl @zero
+  rts
+@nz:
+  lda __sa                      ; the remainder starts as the dividend
   sta __sr
-  lda __sa+2
-  sta __sa+3
   lda __sa+1
-  sta __sa+2
-  lda __sa
-  sta __sa+1
+  sta __sr+1
+  lda __sa+2
+  sta __sr+2
+  lda __sa+3
+  sta __sr+3
+  ldx #3                        ; a divisor above the dividend: quotient 0
+@cmpd:
+  lda __sa,x
+  cmp __sb,x
+  bne @cmpe
+  dex
+  bpl @cmpd
+  inx                           ; equal: C is set
+@cmpe:
+  bcs @big
   lda #0
   sta __sa
+  sta __sa+1
+  sta __sa+2
+  sta __sa+3
+  rts
+; The pin's compiler-rt `__udivXi3` (int_div_impl.inc) runs for the quotient's bit length. The
+; divisor is shifted left while it stays at or below half the dividend (X counts the shifts), then
+; each trip subtracts it from the remainder when it fits, shifts that answer into the quotient
+; and halves the divisor: X + 1 trips, one for each bit of the quotient.
+@big:
+  lda __sa+3                    ; half the dividend, in __st
+  lsr a
+  sta __st+3
+  lda __sa+2
+  ror a
+  sta __st+2
+  lda __sa+1
+  ror a
+  sta __st+1
+  lda __sa
+  ror a
+  sta __st
+  ldx #0
+@abyte:                         ; a whole byte at once while the divisor shifted by 8 stays at or below half
+  lda __sb+3
+  bne @align
+  lda __sb+2
+  cmp __st+3
+  bne @cb
+  lda __sb+1
+  cmp __st+2
+  bne @cb
+  lda __sb
+  cmp __st+1
+  beq @bshift                   ; equal above, and the divisor's low byte is 0 after the shift
+@cb:
+  bcs @align
+@bshift:
+  lda __sb+2
+  sta __sb+3
+  lda __sb+1
+  sta __sb+2
+  lda __sb
+  sta __sb+1
+  lda #0
+  sta __sb
   txa
-  sec
-  sbc #8
+  clc
+  adc #8
   tax
-  bne @skip
-  rts                           ; the whole dividend is remainder
-@next:
-  asl __sa
-  rol __sa+1
-  rol __sa+2
-  rol __sa+3
-  rol __sr
-  rol __sr+1
-  rol __sr+2
-  rol __sr+3
-  bcs @take                     ; the remainder overflowed 32 bits: it is above any divisor
+  bne @abyte
+@align:
+  lda __sb+3                    ; the divisor above half the dividend: aligned
+  cmp __st+3
+  bne @cmph
+  lda __sb+2
+  cmp __st+2
+  bne @cmph
+  lda __sb+1
+  cmp __st+1
+  bne @cmph
+  lda __sb
+  cmp __st
+  beq @shift
+@cmph:
+  bcs @aligned
+@shift:
+  asl __sb
+  rol __sb+1
+  rol __sb+2
+  rol __sb+3
+  inx
+  bne @align                    ; X is never 0 here: the loop is past a short branch's reach otherwise
+@aligned:
+  lda #0
+  sta __sa
+  sta __sa+1
+  sta __sa+2
+  sta __sa+3
+  inx
+@trip:
   lda __sr+3                    ; compare from the high byte: most trips end at the first
   cmp __sb+3
-  bne @cmp
+  bne @c2
   lda __sr+2
   cmp __sb+2
-  bne @cmp
+  bne @c2
   lda __sr+1
   cmp __sb+1
-  bne @cmp
+  bne @c2
   lda __sr
   cmp __sb
-@cmp:
-  bcc @skipbit                  ; the remainder is below the divisor
-@take:
-  sec
-  lda __sr
+@c2:
+  bcc @no                       ; the remainder is below the divisor: the quotient bit is 0 (C clear)
+  lda __sr                      ; C is set: no borrow, and the quotient bit is 1
   sbc __sb
   sta __sr
   lda __sr+1
@@ -1043,10 +1103,17 @@ udivmod32_fast:                      ; the speed variant: __sa / __sb -> __sa, _
   lda __sr+3
   sbc __sb+3
   sta __sr+3
-  inc __sa                      ; the quotient bit (bit 0 of __sa is clear after the shift)
-@skipbit:
+@no:
+  rol __sa                      ; the quotient bit comes in at the bottom
+  rol __sa+1
+  rol __sa+2
+  rol __sa+3
+  lsr __sb+3
+  ror __sb+2
+  ror __sb+1
+  ror __sb
   dex
-  bne @next
+  bne @trip
   rts
 
 .export __udivsi3_fast

@@ -583,3 +583,21 @@ fn a_long_modulo_by_a_17_bit_divisor_does_not_walk_32_trips() {
     let without = common::cycles_with("modsi-clocks-none", setup, "");
     assert!(with - without < 1800, "{} clocks", with - without);
 }
+
+/// `(x * 3 + p) % 1000003` ran 8 trips of the bit loop for a 22-bit dividend
+/// and a 20-bit divisor whatever the quotient (1189 clocks a call, 2.2x
+/// llvm-mos's loop around it): it started from whole bytes. The pin's
+/// compiler-rt `__udivXi3` runs for the quotient's bit length.
+#[test]
+fn a_long_modulo_runs_for_the_quotients_bits_not_the_dividends_bytes() {
+    let clocks = |name: &str, a: u32, b: u32| {
+        let load = |at: &str, v: u32| (0..4).map(|k| format!("  lda #{}\n  sta {at}+{k}\n", (v >> (8 * k)) & 255)).collect::<String>();
+        let setup = format!("{}{}", load("__sa", a), load("__sb", b));
+        let with = common::cycles_with(&format!("{name}-with"), &format!("{setup}  jsr __modsi3_fast\n"), "");
+        with - common::cycles_with(&format!("{name}-none"), &setup, "")
+    };
+    let two_bits = clocks("modsi-q2", 3_000_009, 1_000_003);
+    let none = clocks("modsi-q0", 999_999, 1_000_003);
+    assert!(two_bits < 800, "3000009 % 1000003: {two_bits} clocks");
+    assert!(none < 350, "999999 % 1000003: {none} clocks");
+}
