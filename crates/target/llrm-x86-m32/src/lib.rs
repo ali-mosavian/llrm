@@ -98,6 +98,10 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // O3 card is open). Owner x86-m32, exit 2026-11-20.
         recursive_inlining_growth: Some((450, 150)),
         peel_folded_entry: true,
+        // DEVIATE UP1 (owner x86-m32; exit 2026-11-20: the pin's cost model or
+        // gcc's unroll estimate priced in clocks and bytes replaces it): a
+        // full unroll must repay its bytes at the speed rate.
+        unroll_milliclocks_per_byte: per_byte,
         sink_select_arms: true,
         // DEVIATE MEM-1 (the pin's `EmitTargetCodeForMemcpy`,
         // X86SelectionDAGInfo.cpp L328, leaves a variable length to a libcall):
