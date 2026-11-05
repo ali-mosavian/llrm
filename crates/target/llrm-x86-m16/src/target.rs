@@ -500,7 +500,7 @@ mod tests {
     /// a load looked free at -Os. A register form is the integer register row.
     #[test]
     fn m16_x87_byte_rows_split_register_and_memory_forms() {
-        let sizes = DESCRIPTION.size_costs();
+        let sizes = super::DESCRIPTION.size_costs();
         // Mean encoded bytes of the 16 float bench programs at -Os, per form.
         for (form, estimate, measured) in [
             ("register add", sizes.float_add, 2.00),
