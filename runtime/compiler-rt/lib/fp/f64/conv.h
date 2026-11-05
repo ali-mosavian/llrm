@@ -31,7 +31,7 @@ static inline sf64 round_mag(uint64_t sign, uint64_t u, int n)
 SF_CONV_FN sf64 from_mag32(uint64_t sign, uint32_t x)
 {
     if (!x) return 0;
-#ifdef SF_CLZ64 /* 64-bit registers: one shift puts the top bit at 52 (compiler-rt's form); the implicit bit adds the last exponent step */
+#if defined(SF_CLZ64) || defined(SF_CONV_WIDE32) /* 64-bit registers: one shift puts the top bit at 52 (compiler-rt's form); the implicit bit adds the last exponent step */
     int c = sf_clz32(x);
     return sign + (((uint64_t)x << (c + 21)) + ((uint64_t)(1053 - c) << 52));
 #else
@@ -45,11 +45,6 @@ SF_CONV_FN sf64 from_mag(uint64_t sign, uint64_t u)
 #ifdef SF_CLZ64 /* native 64-bit clz: one normaliser and no pack call (a program using only conversions links 52-168 B, not 300) */
     if (!u) return 0;
     return round_mag(sign, u, 63 - sf_clz64(u));
-#elif defined(SF_CONV_DIRECT32) /* the 32-bit conversions call from_mag32 themselves: this one is the 64-bit normaliser only */
-    if (!u) return 0;
-    int n = 63 - sf_clz64(u);
-    uint64_t m = n > 55 ? sf_shr_sticky64(u, n - 55) : u << (55 - n);
-    return SF_PACK(sign, n + 1023, m);
 #else /* pack is shared with the arithmetic: inlining the rounding grew float.c (m68k +126 B, x86 m64 +66) */
     uint32_t hi = (uint32_t)(u >> 32);
     if (!hi) return from_mag32(sign, (uint32_t)u);

@@ -2,6 +2,7 @@
 #ifndef SF_X86_M64_H
 #define SF_X86_M64_H
 #include "../x86_m32/config.h"
+#define SF_CONV_WIDE32 1 /* f64 sidf/unsidf: the 64-bit-register form of the exact path, m64 -Os float.c 249 -> 240 B */
 #define SF_MUL64X64(a, b, h, l) do { unsigned __int128 p_ = (unsigned __int128)(a) * (b); *(h) = (uint64_t)(p_ >> 64); *(l) = (uint64_t)p_; } while (0)
 /* R4 (softfloat, exit 11-20): f32 mul normalises without a branch; native -O2 mul 22.1 -> see the commit. Removed when the backend turns the shift branch into a select itself. */
 #define SF_MUL_NORM_SELECT 1
