@@ -249,6 +249,7 @@ pub fn finish_with(
         })
         .collect();
     let insts: Vec<_> = kept.iter().map(|(_, inst)| *inst).collect();
+    let blocks: Vec<usize> = kept.iter().map(|(at, _)| *at).collect();
     let targeted: Vec<usize> = insts
         .iter()
         .flat_map(|inst| &inst.operands)
@@ -315,7 +316,7 @@ pub fn finish_with(
         })
     };
     let pushes = match pushes {
-        Some(size) => crate::callpush::plan(&insts, assignment, cpu, size, short, |max_call_frame| {
+        Some(size) => crate::callpush::plan(&insts, &blocks, assignment, cpu, size, short, |max_call_frame| {
             let (opening, closing) = frame_ops(&frame_of(max_call_frame), cpu, push_frame, short)?;
             frame_cost_with(&[opening, closing].concat(), cpu, short)
         })?,
@@ -336,9 +337,56 @@ pub fn finish_with(
     // pointer is that much further
     let mut pushed = 0i64;
     // the values of the stores whose pushes wait for the call, by offset
-    let mut waiting: Vec<(i64, mc::Operand)> = Vec::new();
+    let mut waiting: Vec<(i64, usize)> = Vec::new();
     let mut block_of = kept.iter().map(|(at, _)| *at).peekable();
     let mut shown = 0usize;
+    // the operands of `inst` as the printer has them, with `pushed` bytes
+    // more on the stack than the frame accounts for
+    let convert = |inst: &crate::mfunc::Inst, pushed: i64| -> Result<Vec<mc::Operand>, String> {
+        let mut converted = Vec::new();
+        let mut it = inst.operands.iter().peekable();
+        while let Some(operand) = it.next() {
+            converted.push(match operand {
+                Operand::Def(r) | Operand::Use(r) => mc::Operand::Reg(physical(*r, assignment)),
+                Operand::Imm(value) => {
+                    // a frame index follows the displacement it adds to
+                    if let Some(Operand::Frame(index)) = it.peek() {
+                        let at = frame_indices.iter().position(|one| one == index).ok_or("an unknown frame index")?;
+                        let (base, disp) = layout.address(at);
+                        it.next();
+                        converted.push(mc::Operand::Imm(value + disp + if base == Base::Sp { pushed } else { 0 }));
+                        converted.push(mc::Operand::Reg(if base == Base::Sp { reg::SP } else { reg::A6 }));
+                        continue;
+                    }
+                    mc::Operand::Imm(*value)
+                }
+                Operand::Symbol(name, addend) => mc::Operand::Symbol(name.clone(), *addend),
+                Operand::Block(id) => {
+                    let at = function.blocks.iter().position(|block| block.id == *id).ok_or("a branch to no block")?;
+                    mc::Operand::Symbol(format!(".LBB{number}_{at}"), 0)
+                }
+                Operand::Frame(_) => return Err("a frame index with no displacement".to_owned()),
+            });
+        }
+        Ok(converted)
+    };
+    // the push of argument store `store`, `pushed` bytes down: of its value,
+    // or of the memory the load folded into it reads
+    let push_for = |store: usize, pushed: i64| -> Result<mc::Inst, String> {
+        match pushes.folded_load(store) {
+            Some(load) => {
+                let Kind::Op(name) = insts[load].kind else { return Err("a folded load is an instruction".to_owned()) };
+                let mut operands = convert(insts[load], pushed)?;
+                operands[0] = mc::Operand::Reg(reg::SP);
+                let opcode = crate::callpush::memory_push(name).ok_or("a folded load has a push")?;
+                Ok(mc::Inst { opcode, operands })
+            }
+            None => {
+                let operands = convert(insts[store], pushed)?;
+                Ok(crate::callpush::push_of(operands.last().ok_or("a push of nothing")?))
+            }
+        }
+    };
     for (index, inst) in insts.iter().copied().enumerate() {
         let at = block_of.next().expect("a block per instruction");
         while shown <= at {
@@ -365,50 +413,23 @@ pub fn finish_with(
         if inst.origin != 0 {
             last_origin = inst.origin;
         }
-        let operands: Vec<mc::Operand> = {
-            let mut converted = Vec::new();
-            let mut it = inst.operands.iter().peekable();
-            while let Some(operand) = it.next() {
-                converted.push(match operand {
-                    Operand::Def(r) | Operand::Use(r) => mc::Operand::Reg(physical(*r, assignment)),
-                    Operand::Imm(value) => {
-                        // a frame index follows the displacement it adds to
-                        if let Some(Operand::Frame(index)) = it.peek() {
-                            let at =
-                                frame_indices.iter().position(|one| one == index).ok_or("an unknown frame index")?;
-                            let (base, disp) = layout.address(at);
-                            it.next();
-                            converted.push(mc::Operand::Imm(value + disp + if base == Base::Sp { pushed } else { 0 }));
-                            converted.push(mc::Operand::Reg(if base == Base::Sp { reg::SP } else { reg::A6 }));
-                            continue;
-                        }
-                        mc::Operand::Imm(*value)
-                    }
-                    Operand::Symbol(name, addend) => mc::Operand::Symbol(name.clone(), *addend),
-                    Operand::Block(id) => {
-                        let at =
-                            function.blocks.iter().position(|block| block.id == *id).ok_or("a branch to no block")?;
-                        mc::Operand::Symbol(format!(".LBB{number}_{at}"), 0)
-                    }
-                    Operand::Frame(_) => return Err("a frame index with no displacement".to_owned()),
-                });
-            }
-            converted
-        };
+        let operands = convert(inst, pushed)?;
+        if pushes.is_dropped(index) {
+            continue;
+        }
         if let Some(offset) = pushes.deferred_offset(index) {
-            waiting.push((offset, operands.last().ok_or("a push of nothing")?.clone()));
+            waiting.push((offset, index));
             continue;
         }
         if inst.call && !waiting.is_empty() {
             waiting.sort_by(|a, b| b.0.cmp(&a.0));
-            for (_, value) in waiting.drain(..) {
-                out.push(crate::callpush::push_of(&value));
+            for (_, store) in waiting.drain(..) {
+                out.push(push_for(store, pushed)?);
                 pushed += 4;
             }
         }
         if pushes.is_push(index) {
-            let value = operands.last().ok_or("a push of nothing")?;
-            out.push(crate::callpush::push_of(value));
+            out.push(push_for(index, pushed)?);
             pushed += 4;
             continue;
         }
