@@ -175,13 +175,14 @@ fn a_selector_carries_the_rules_of_its_directory() {
 fn the_rule_groups_come_from_one_list() {
     let mut present = crate::backend::targets::x86_m16::RULES.present();
     present.extend(crate::backend::targets::x86_m32::RULES.present());
+    present.extend(crate::backend::targets::x86_m64::RULES.present());
     present.sort_unstable();
     present.dedup();
     let mut all = super::Rules::GROUPS.to_vec();
     all.sort_unstable();
     assert_eq!(present, all);
     assert!(super::Rules::NONE.present().is_empty());
-    assert_eq!(super::Rules::GROUPS.len(), 28);
+    assert_eq!(super::Rules::GROUPS.len(), 29);
 }
 
 /// A window was built, and the group's first-pattern test run, at every
