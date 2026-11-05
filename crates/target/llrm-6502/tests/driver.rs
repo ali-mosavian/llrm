@@ -2426,19 +2426,31 @@ fn a_long_multiply_links_the_compact_routine_at_every_level() {
 #[test]
 fn a_32_bit_product_of_the_counter_is_a_running_sum_at_speed() {
     let ir = module(
-        "define void @f(ptr %p, i32 %n) {
+        "define i32 @f(i32 %n) {
 entry:
-  br label %loop
-loop:
-  %i = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %a = alloca [16 x i32], align 1
+  br label %fill
+fill:
+  %i = phi i32 [ 0, %entry ], [ %next, %fill ]
   %product = mul nuw nsw i32 %i, %n
-  %slot = getelementptr inbounds i32, ptr %p, i32 %i
+  %index = trunc i32 %i to i16
+  %slot = getelementptr inbounds [4 x i8], ptr %a, i16 %index
   store i32 %product, ptr %slot, align 1
   %next = add nuw nsw i32 %i, 1
-  %done = icmp eq i32 %next, 16
-  br i1 %done, label %exit, label %loop
+  %filled = icmp eq i32 %next, 16
+  br i1 %filled, label %sum, label %fill
+sum:
+  %j = phi i32 [ 0, %fill ], [ %jn, %sum ]
+  %total = phi i32 [ 0, %fill ], [ %t, %sum ]
+  %jx = trunc i32 %j to i16
+  %cell = getelementptr inbounds [4 x i8], ptr %a, i16 %jx
+  %v = load i32, ptr %cell, align 1
+  %t = add i32 %total, %v
+  %jn = add nuw nsw i32 %j, 1
+  %done = icmp eq i32 %jn, 16
+  br i1 %done, label %exit, label %sum
 exit:
-  ret void
+  ret i32 %t
 }",
     );
     let fast = assembly(&ir, &Request::new(Level::O2)).unwrap();

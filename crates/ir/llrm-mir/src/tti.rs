@@ -465,14 +465,10 @@ pub trait Tti {
     /// those or return a policy of its own.
     fn inline_policy(&self) -> InlinePolicy {
         InlinePolicy {
-            by_size: self
-                .opt_size_inline_by_code_size()
-                .then(
-                    || SizeRule {
-                        min_sites: self.opt_size_inline_guard_min_sites(),
-                        yields_to_negative_cost: self.opt_size_inline_guard_yields_to_negative_cost(),
-                    },
-                ),
+            by_size: self.opt_size_inline_by_code_size().then(|| SizeRule {
+                min_sites: self.opt_size_inline_guard_min_sites(),
+                yields_to_negative_cost: self.opt_size_inline_guard_yields_to_negative_cost(),
+            }),
             by_rate: self.speed_inline_milliclocks_per_byte(),
         }
     }
@@ -1255,6 +1251,8 @@ pub trait Tti {
     /// besides the datalayout's `n`. The pin's `IVUsers` skips every type
     /// `isLegalInteger` refuses, so on a datalayout of `n8` no 16- or 32-bit
     /// counter, product or pointer is reduced. None: the datalayout's.
+    /// Owner llrm-target-6502; exit: 16-bit widths and `-Os` with a byte-aware
+    /// LSR cost, 2026-11-20.
     fn lsr_native_integer_widths(&self) -> &'static [u32] {
         &[]
     }
