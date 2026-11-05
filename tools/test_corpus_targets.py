@@ -36,3 +36,14 @@ def test_the_command_prints_na_and_exits_3_not_a_failure(tmp_path):
 def test_the_shipped_dos_programs_are_tagged():
     for name in ("watcom_far_sum", "huge_fill", "regparm3_matrix_4", "fsgs_call", "os_screen", "far_return"):
         assert not ct.applies("z80", (RUN / f"{name}.c").read_text()), name
+
+
+def test_every_program_on_the_dos_os_layer_is_tagged():
+    """os_console, os_exit, os_files, os_find, os_names, os_execute, os_console_in and bench_io had no tag: 160 m68k cells
+    read as nobuild ("llrm_os.h not found") instead of n/a."""
+    untagged = [
+        p.name
+        for p in sorted(RUN.glob("*.c"))
+        if ('"llrm_os.h"' in p.read_text() or "bench_io.h" in p.read_text()) and ct.tags(p.read_text()) is None
+    ]
+    assert untagged == []
