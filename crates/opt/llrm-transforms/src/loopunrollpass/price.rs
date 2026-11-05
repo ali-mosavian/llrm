@@ -6,7 +6,7 @@
 
 use std::collections::HashSet;
 
-use llrm_mir::module::{ValueDef, ValueId};
+use llrm_mir::module::{Linkage, ValueDef, ValueId};
 
 use super::*;
 use crate::loopidioms::{trip_clocks, trip_cost};
@@ -41,9 +41,13 @@ pub(super) fn full_unroll_pays(
 ) -> bool {
     let rate = run.tti.unroll_milliclocks_per_byte();
     // The early LoopFullUnrollPass unrolls a callee before the inliner sees it
-    // (the pin's order): a veto here leaves a small rolled helper that is then
-    // inlined, and unrolled, at every site (jpeg_fixed -O2 +530 B).
-    if !run.options.target_unrolling || rate <= 0 || run.options.opt_size || run.options.min_size || run.options.opt_level < 2 {
+    // (the pin's order): a veto in a function the inliner can take leaves a
+    // small rolled helper that is then inlined, and unrolled, at every site
+    // (jpeg_fixed -O2 +530 B). Such a loop is priced in the late pass, in the
+    // context of each site.
+    let inlinable = !run.options.target_unrolling
+        && run.this.is_some_and(|this| matches!(run.globals[this.0 as usize].linkage, Linkage::Internal | Linkage::Private));
+    if inlinable || rate <= 0 || run.options.opt_size || run.options.min_size || run.options.opt_level < 2 {
         return true;
     }
     // A loop of known trips in a nest of loops of known trips is a step to
