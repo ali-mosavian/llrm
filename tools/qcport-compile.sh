@@ -12,7 +12,8 @@ QCPORT_INC="${QCPORT_INC:?QCPORT_INC names its Borland include directory}"
 OUT="$(mktemp -d)"; trap 'rm -rf "$OUT"' EXIT
 includes=(); for d in host render model game sound ui qgl; do includes+=(-I "$QCPORT/$d"); done
 includes+=(-I "$QCPORT_INC")
-modules=$(ls "$QCPORT"/{host,render,model,game,sound,ui}/*.c)
+modules=$(ls "$QCPORT"/{host,render,model,game,sound,ui}/*.c 2>/dev/null)
+[ -n "$modules" ] || { echo "qcport-compile: no modules under $QCPORT" >&2; exit 2; }
 refused=0
 for level in -O2 -Os; do
     for source in $modules; do
