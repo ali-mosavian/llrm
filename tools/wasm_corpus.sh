@@ -56,9 +56,9 @@ count() {
 printf '%-22s %9s %9s %12s %12s %9s %9s  %s\n' program llrm_B clang_B llrm_instr clang_instr llrm_code clang_code result
 for f in "$@"; do
   n=$(basename "$f" .c)
-  LLRM_CLANG_WASM=$clang LLRM_CC_TARGET=wasm32 timeout 300 "$llrm_cc" "-$level" $cpu -c "$f" -I"$root/bench" -o "$out/$n.l.o" 2> "$out/$n.err" ||
+  LLRM_CLANG_WASM=$clang LLRM_CC_TARGET=wasm32 timeout 300 "$llrm_cc" "-$level" $cpu -c "$f" -I"$root/bench" -I"$root/runtime/shared/posix" -o "$out/$n.l.o" 2> "$out/$n.err" ||
     { printf '%-22s llrm-cc FAIL: %s\n' "$n" "$(head -c 90 "$out/$n.err" | tr '\n' ' ')"; continue; }
-  timeout 300 "$clang" --target=wasm32 -ffreestanding "-$level" $cpu -c "$f" -I"$root/bench" -o "$out/$n.c.o" 2> /dev/null ||
+  timeout 300 "$clang" --target=wasm32 -ffreestanding "-$level" $cpu -c "$f" -I"$root/bench" -I"$root/runtime/shared/posix" -o "$out/$n.c.o" 2> /dev/null ||
     { printf '%-22s clang FAIL\n' "$n"; continue; }
   read -r lv li <<< "$(count "$out/$n.l.o")"
   read -r cv ci <<< "$(count "$out/$n.c.o")"
