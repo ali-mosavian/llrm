@@ -163,10 +163,13 @@ fn argument_store(
 }
 
 /// `move.l value, -(%sp)`: `value` is a register or an immediate.
-pub(crate) fn push_of(value: &mc::Operand) -> mc::Inst {
+pub fn push_of(value: &mc::Operand) -> mc::Inst {
     let opcode = match value {
         mc::Operand::Reg(src) if crate::expand::is_address(*src) => "MOV32ea",
         mc::Operand::Reg(_) => "MOV32ed",
+        mc::Operand::Imm(v) if crate::dagisel::pea::fits(*v) => {
+            return mc::Inst { opcode: crate::dagisel::pea::NAME, operands: vec![value.clone()] };
+        }
         _ => "MOV32ei",
     };
     mc::Inst { opcode, operands: vec![mc::Operand::Reg(reg::SP), value.clone()] }

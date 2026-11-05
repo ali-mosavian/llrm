@@ -416,14 +416,14 @@ pub(super) fn clocks(
             by_destination(&tables.bit_field, &format!("{name} (< 5 Bytes)"), Size::L, effective(operands)?)
         }
         ("lea" | "pea", [source, ..]) => {
-            let column = label(mode(source)?, false);
+            let column = label(mode(source)?, true);
             tables.lea.cell(&name, "", column, 0)
         }
         ("movem", [Operand::List(registers), memory]) => {
-            tables.lea.cell("MOVEM Reg->Mem", "", label(mode(memory)?, false), *registers)
+            tables.lea.cell("MOVEM Reg->Mem", "", label(mode(memory)?, true), *registers)
         }
         ("movem", [memory, Operand::List(registers)]) => {
-            tables.lea.cell("MOVEM Mem->Reg", "", label(mode(memory)?, false), *registers)
+            tables.lea.cell("MOVEM Mem->Reg", "", label(mode(memory)?, true), *registers)
         }
         ("abcd" | "sbcd" | "addx" | "subx", [first, _]) => {
             let column = if mode(first)? == Mode::Dn { "op Dy,Dx" } else { "op <ea>y,<ea>x" };
