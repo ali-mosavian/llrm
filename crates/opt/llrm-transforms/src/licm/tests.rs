@@ -2065,3 +2065,23 @@ exit:
     let priced = super::pressure::COUNTED.with(std::cell::Cell::get) - before;
     assert_eq!(priced, 0, "pressure priced {priced} times for a loop with no memory access");
 }
+
+/// LICM hoists the load through `MemorySSAUpdater` and says it kept MemorySSA
+/// (LICM.cpp `PA.preserve<MemorySSAAnalysis>()`): the graph asked for after it
+/// is the one it updated. Before, the updater's graph was dropped with the
+/// pass's change and the next pass computed MemorySSA again (2 computations,
+/// not 1; 21 LICM misses against the pin's 11 on jpeg_fixed).
+#[test]
+fn test_the_memory_graph_licm_updated_is_the_one_the_next_pass_gets() {
+    let text = looped(GLOBALS, "", "", "  %v = load i16, ptr @g\n");
+    let (hits, misses) = crate::testing::mssa_misses_over(
+        &text,
+        vec![
+            Box::new(crate::testing::AsksMssa { forgets: false }),
+            Box::new(Licm { apply: true, speculate: true }),
+            Box::new(crate::testing::AsksMssa { forgets: false }),
+        ],
+    );
+    assert_eq!(misses, 1, "MemorySSA was computed again after LICM updated it");
+    assert!(hits >= 2, "LICM and the pass after it read the one graph: {hits} hits");
+}

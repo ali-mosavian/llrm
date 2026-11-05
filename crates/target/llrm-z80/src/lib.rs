@@ -8,6 +8,7 @@ pub mod driver;
 pub mod expand;
 pub mod forward;
 pub mod inline_rt;
+pub mod bump;
 pub mod carry;
 pub mod ldir;
 pub mod mfunc;

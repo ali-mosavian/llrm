@@ -359,6 +359,45 @@ pub struct CallArgument {
     pub byval_bytes: Option<u64>,
 }
 
+/// Rule 1 of the inliner's policy: an `optsize` caller's inline of a callee
+/// that stays must not grow the code (SZ1).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SizeRule {
+    /// The fewest calls a callee has in the module for the rule to hold its
+    /// sites (a callee called once is the pin's: the copy meets constants the
+    /// cost model follows, and folds with the sites around it).
+    pub min_sites: i64,
+    /// Whether the rule stands down where the pin's own cost, net of the
+    /// instructions it folds, is below zero: the pin counts that inline as
+    /// shrinking the caller (a one-instruction wrapper, a callee whose body
+    /// folds away).
+    pub yields_to_negative_cost: bool,
+}
+
+/// What a target states of the inliner's verdict beyond the pin's analyzer.
+/// The inliner reads this and nothing else of the target's inline hooks:
+/// `Tti::inline_policy` is the one place a target says it.
+///
+/// DEVIATE: the pin's `getInlineCost` is `cost < threshold` alone (the default
+/// policy states nothing). Reason: a small platform's call is 3 bytes and its
+/// cycles are few; the two rules of the user's 11-04 ruling are bytes against
+/// the call at `-Os`, and bytes against clocks on a hot path at `-O2`/`-O3`.
+/// Exit: none; step 4 of `handoff/inline-cost-model-design.md`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InlinePolicy {
+    /// Rule 1, at `-Os` and `-Oz`; none: not held.
+    pub by_size: Option<SizeRule>,
+    /// Rule 2, at `-O2` and `-O3`: what a byte of growth is worth in
+    /// thousandths of a clock against the call's latency, weighted by the
+    /// site's frequency. 0: the pin's threshold alone.
+    pub by_rate: i64,
+}
+
+impl InlinePolicy {
+    /// The pin's verdict: neither rule.
+    pub const PIN: InlinePolicy = InlinePolicy { by_size: None, by_rate: 0 };
+}
+
 /// A call site: its arguments and the static frame its callee builds.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CallShape {
@@ -419,6 +458,19 @@ pub trait Tti {
     ) -> crate::jumpmerge::CondMerging {
         let _ = query;
         crate::jumpmerge::CondMerging::SPLIT
+    }
+
+    /// The inliner's policy for this target. The default is built from the
+    /// hooks below that a target already states, so a target may keep stating
+    /// those or return a policy of its own.
+    fn inline_policy(&self) -> InlinePolicy {
+        InlinePolicy {
+            by_size: self.opt_size_inline_by_code_size().then(|| SizeRule {
+                min_sites: self.opt_size_inline_guard_min_sites(),
+                yields_to_negative_cost: self.opt_size_inline_guard_yields_to_negative_cost(),
+            }),
+            by_rate: self.speed_inline_milliclocks_per_byte(),
+        }
     }
 
     /// Whether an `optsize` caller's inline of a callee that stays must not
@@ -565,6 +617,14 @@ pub trait Tti {
     /// `getSchedModel().LoopMicroOpBufferSize`: the micro-ops the target's loop
     /// buffer holds; 0 where its scheduling model has none (X86: 28 for the
     /// `SandyBridgeModel` cpus; the others' models are not known here).
+    /// The program's code is (not) position independent: addressing modes
+    /// differ (`isPositionIndependent`). Set once per program.
+    fn set_position_independent(
+        &self,
+        _position_independent: bool,
+    ) {
+    }
+
     fn loop_micro_op_buffer_size(&self) -> u32 {
         0
     }
@@ -698,6 +758,11 @@ pub trait Tti {
     /// table); none: `unroll_partial_threshold_override`'s.
     fn unroll_jam_partial_threshold_override(&self) -> Option<u32> {
         None
+    }
+
+    /// Tuning `unroll_jam_exact_count`.
+    fn unroll_jam_exact_count(&self) -> bool {
+        false
     }
 
     /// The target's `-unswitch-threshold` (its tuning table); none: the pin's

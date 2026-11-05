@@ -2,10 +2,10 @@
 //! by this compiler twice (`ours`: `llrm-cc` over the C source, as a user runs
 //! it; `ours-ir`: the backend alone on the kernel's IR), m68k gcc (`$GCC_M68K`)
 //! and the pin's clang (`$LLRM_PIN_CLANG` into `$LLVM_M68K/llc`) at O2 and Os
-//! for the 68000 and the 68020, run under `qemu-m68k` and priced as `cycles`
-//! does. Prints the competitor-matrix rows: `target prog level compiler
-//! code_bytes clocks instrs note`, tab separated. An empty field means the
-//! instrument has no number; `note` says why.
+//! for the 68000, 68020, 68040 and 68060, run under `qemu-m68k` and priced as
+//! `cycles` does. Prints the competitor-matrix rows: `target prog level
+//! compiler code_bytes clocks instrs note`, tab separated. An empty field means
+//! the instrument has no number; `note` says why.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -20,11 +20,40 @@ use llrm_m68k::object::{assemble, executable, write_executable};
 #[path = "cycles.rs"]
 mod cycles;
 
+/// The sections of an `objdump -h` listing that hold data a kernel could load
+/// (`.rodata*`, `.data*`, `.bss*`, literal pools) with a size above zero.
+fn data_sections(listing: &str) -> Vec<String> {
+    listing
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let (_, name, size) = (fields.next()?, fields.next()?, fields.next()?);
+            let data = [".rodata", ".data", ".bss", ".lit"].iter().any(|prefix| name.starts_with(prefix));
+            (data && u64::from_str_radix(size, 16).is_ok_and(|size| size > 0)).then(|| name.to_owned())
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    /// A kernel that loads a constant from `.rodata` counted only its `.text`
+    /// for every column (arm64's instrument hid up to 24 B that way).
+    #[test]
+    fn a_kernel_with_rodata_is_not_counted_by_its_text_alone() {
+        let listing = "Idx Name          Size      VMA\n  0 .text         00000010  00000000\n  1 .data         00000000  00000000\n  2 .rodata       00000008  00000000\n";
+        assert_eq!(super::data_sections(listing), vec![".rodata".to_owned()]);
+    }
+}
+
 /// The `.text` of an object that holds leaf code: no relocation in it.
 fn leaf_text(
     objdump: &Path,
     object: &Path,
 ) -> Result<Vec<u8>, String> {
+    let headers = Command::new(objdump).arg("-h").arg(object).output().map_err(|e| e.to_string())?;
+    if let Some(section) = data_sections(&String::from_utf8_lossy(&headers.stdout)).first() {
+        return Err(format!("loads data from {section}: bytes of .text alone would undercount"));
+    }
     let relocations = Command::new(objdump).arg("-r").arg(object).output().map_err(|e| e.to_string())?;
     let listing = String::from_utf8_lossy(&relocations.stdout).to_string();
     let in_text = listing.split("RELOCATION RECORDS FOR").find(|part| part.trim_start().starts_with("[.text]"));
@@ -178,8 +207,18 @@ fn main() {
     } else {
         (table().into_iter().map(|(name, args, expected)| (name, args, expected, true)).collect(), data())
     };
-    let cpus = [("68000", Cpu::M68000, Model::M68000), ("68020", Cpu::M68020, Model::M68020)];
+    let cpus = [
+        ("68000", Cpu::M68000, Model::M68000),
+        ("68020", Cpu::M68020, Model::M68020),
+        ("68040", Cpu::M68040, Model::M68040),
+        ("68060", Cpu::M68060, Model::M68060),
+    ];
+    // `MATRIX_CPUS=68040,68060` keeps the named columns
+    let only = std::env::var("MATRIX_CPUS").ok();
     for (cpu_name, cpu, model) in cpus {
+        if only.as_ref().is_some_and(|only| !only.split(',').any(|one| one == cpu_name)) {
+            continue;
+        }
         // `fnptr` is handed a pointer to `h`, compiled by this compiler for
         // every column
         let helper = (set == "library").then(|| {
