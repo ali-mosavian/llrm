@@ -141,13 +141,17 @@ def falls_through(words):
     return True
 
 
-def runtime_bytes(w, graph, kernel_text):
-    """Bytes of the runtime routines the kernel reaches: symbol address differences in the link map."""
+def runtime_bytes(w, graph, kernel_text, defined=None):
+    """Bytes of the runtime routines the kernel reaches: symbol address differences in the link map. `defined`: the
+    routines of the runtime object; a name of another object (the soft-float library, linked whole and already in the
+    image) is not charged a second time."""
     wanted = set(re.findall(r"\b(__\w+)", kernel_text))
+    if defined is not None:
+        wanted &= defined
     todo = list(wanted)
     while todo:
         for callee in graph.get(todo.pop(), ()):
-            if callee not in wanted:
+            if callee not in wanted and (defined is None or callee in defined):
                 wanted.add(callee); todo.append(callee)
     if not wanted:
         return 0
