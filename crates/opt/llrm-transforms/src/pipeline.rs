@@ -144,7 +144,7 @@ use crate::{
     fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs, inferspace,
     inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam,
     loopunrollpass, mem2reg, memcpyopt, mldstmotion, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg,
-    switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window,
+    switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window, zeromerge,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -230,6 +230,8 @@ pub struct Options {
     /// has it (`isLoadExtLegal`); off for a target that has not, where the
     /// wider compare costs more than the extension saved.
     pub extload: bool,
+    /// `zeromerge`: zeroed locals that follow each other in the entry block share one fill. llrm only (DEVIATE D1 of `zeromerge.rs`); runs where a pointer is 16 bits. `-fllrm-zero-merge`.
+    pub zero_merge: bool,
     /// `TypePromotion`, which the pin runs before CodeGenPrepare where the
     /// target asks (`-fllrm-typepromotion`).
     pub typepromotion: bool,
@@ -332,6 +334,7 @@ impl Default for Options {
             strength: true,
             cgpaddr: true,
             extload: true,
+            zero_merge: true,
             typepromotion: true,
             lsr: true,
             unroll: true,
@@ -511,6 +514,7 @@ impl Options {
             "indvars" | "window" | "gepoffset" => self.strength,
             "cgpaddr" | "cgpselectarms" => self.strength && self.cgpaddr,
             "extload" => self.extload,
+            "zeromerge" => self.zero_merge,
             "typepromotion" => self.strength && self.typepromotion,
             "unroll" => self.unroll,
             "peel" => self.peel,
@@ -1417,6 +1421,10 @@ pub fn recorded(
     // extension (`ExtendUsesToFormExtLoad`), which isel cannot.
     if applied.options.wanted("extload") {
         manager.add(extload::ExtLoad);
+    }
+    // DEVIATE D1 of `zeromerge`: after SROA and loop idioms made the fills.
+    if applied.options.wanted("zeromerge") {
+        manager.add(zeromerge::ZeroMerge);
     }
     // Last of the passes that reshape the body, as gcc's `pass_lower_switch`
     // follows its optimizations.
