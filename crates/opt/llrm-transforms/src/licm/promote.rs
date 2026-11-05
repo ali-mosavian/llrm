@@ -9,7 +9,7 @@ use llrm_analysis::mssa::Mssa;
 use llrm_analysis::mssa::alias::{AliasQuery, Location};
 use llrm_mir::context::ConstantKind;
 use llrm_mir::dense::IdSet;
-use llrm_mir::module::{BlockId, GlobalKind, InstId, Operand, ValueDef, ValueId};
+use llrm_mir::module::{BlockId, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{self, Outer};
 
@@ -367,7 +367,11 @@ fn is_not_visible_on_unwind_in_loop(
     is_alloca(unit, object) && !is_captured(unit, outer, exposed, object)
 }
 
-/// `isWritableObject`: an alloca or a variable that is not constant.
+/// `isWritableObject`
+/// ([AliasAnalysis.cpp:1000](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/AliasAnalysis.cpp#L1000)):
+/// an alloca, a `byval` or `writable noalias` argument, or the result of a
+/// `noalias` call. A global is not: "we may not have provenance to perform the
+/// write".
 pub(crate) fn is_writable_object(
     context: &llrm_mir::Context,
     function: &llrm_mir::module::Function,
@@ -377,17 +381,23 @@ pub(crate) fn is_writable_object(
     if is_alloca_in(function, object) {
         return true;
     }
-    match object {
-        Operand::Constant(id) => match context.get(id).kind {
-            ConstantKind::Global(global) => outer.globals.get(global.0 as usize).is_some_and(|one| {
-                matches!(
-                    &one.kind,
-                    GlobalKind::Variable(variable) if !variable.constant
-                )
-            }),
-            _ => false,
-        },
-        _ => false,
+    let Operand::Value(value) = object else { return false };
+    match function.value(value).def {
+        llrm_mir::module::ValueDef::Argument(at) => {
+            let attrs = function.parameter_attrs.get(at as usize).map(Vec::as_slice).unwrap_or_default();
+            let named = |wanted: &str| {
+                attrs.iter().any(|one| match one {
+                    llrm_mir::opcode::Attribute::Flag(name) | llrm_mir::opcode::Attribute::Type(name, _) => {
+                        name == wanted
+                    }
+                    _ => false,
+                })
+            };
+            named("byval") || (named("writable") && llrm_mir::facts::Fact::NoAlias.stated_by(attrs))
+        }
+        llrm_mir::module::ValueDef::Instruction(inst) => {
+            llrm_mir::memory::returns_noalias(context, &outer.globals, function, inst)
+        }
     }
 }
 
@@ -582,22 +592,6 @@ pub fn promote_loop_accesses_to_scalars(
     // only, if possible.
     if store_safety != StoreSafety::Safe && !found_load_to_promote {
         // If we cannot hoist the load either, give up.
-        return None;
-    }
-    // A location the loop only stores to, on some paths, is promoted only
-    // where the pin's `StoreSafety` allows the store after the loop
-    // ([L1921](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L1921)):
-    // the pin (`ThreadModel::POSIX` for this triple,
-    // [L1672](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L1672))
-    // calls only a function-local object thread-local, so a global is left:
-    // promoting it would load it in the preheader and store it after the
-    // loop for no load saved, and the load keeps `writeonly` from removing
-    // the global (nbody.bas, +43 B at -Os m16, once its division guard
-    // stopped taking a slot of `Pressure`).
-    if !found_load_to_promote
-        && !store_is_guaranteed_to_execute
-        && !is_alloca(unit, underlying_object(unit, first_pointer))
-    {
         return None;
     }
     Some(Promotion {

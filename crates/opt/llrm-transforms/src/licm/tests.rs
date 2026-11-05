@@ -318,12 +318,15 @@ fn test_a_global_stored_on_some_paths_and_never_loaded_is_not_promoted() {
     assert_eq!(promoted(&conditional_store_loop("  %t = icmp eq i32 %i, 3\n")), Vec::<(Vec<String>, bool)>::new());
 }
 
-/// With a load in the loop the promotion saves it: promoted, stores and all.
+/// With a load in the loop the promotion saves it, but a global is no writable
+/// object (`isWritableObject`): the stores stay in the loop. They left it, and
+/// the loop's exit stored the global back on a zero-trip path, so jpeg_fixed's
+/// `emit` was 27 B over the pin at wasm32 -O1.
 #[test]
-fn test_a_global_stored_on_some_paths_and_loaded_is_promoted() {
+fn test_a_global_stored_on_some_paths_and_loaded_is_promoted_without_its_stores() {
     assert_eq!(
         promoted(&conditional_store_loop("  %x = load i32, ptr @g\n  %t = icmp eq i32 %x, 3\n")),
-        [(vec!["constant".to_owned()], true)]
+        [(vec!["constant".to_owned()], false)]
     );
 }
 
@@ -510,11 +513,36 @@ b3:
     )
 }
 
+/// As [`global_loop`], rotated: the body runs whenever the loop is entered, so
+/// its stores are guaranteed to execute and may leave the loop.
+fn global_do_loop(body: &str) -> String {
+    format!(
+        "@g = global i16 5
+@h = global i16 7
+
+define i16 @f(i16 %n) {{
+b0:
+  br label %b2
+
+b2:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b2 ]
+{body}  %i1 = add i16 %i, 1
+  %c = icmp slt i16 %i1, %n
+  br i1 %c, label %b2, label %b3
+
+b3:
+  %r = load i16, ptr @g
+  ret i16 %r
+}}
+"
+    )
+}
+
 /// A global read and written in the loop is one value there: loaded before it,
 /// stored once after, the loop's own loads and stores gone.
 #[test]
 fn test_a_global_read_and_written_in_a_loop_lives_in_a_register() {
-    let text = global_loop("  %x = load i16, ptr @g\n  %y = add i16 %x, %i\n  store i16 %y, ptr @g\n");
+    let text = global_do_loop("  %x = load i16, ptr @g\n  %y = add i16 %x, %i\n  store i16 %y, ptr @g\n");
     let (_, after) = applied(&text, &trips());
     let body = block_of(&after, "b2");
     assert!(!body.iter().any(|line| line.contains("@g")), "{after}");
@@ -560,7 +588,7 @@ b3:
 /// so a loop that never stores leaves it as it was.
 #[test]
 fn test_a_store_made_on_some_trips_is_preceded_by_a_load_before_the_loop() {
-    let text = global_loop("  %x = load i16, ptr @g\n  store i16 %x, ptr @h\n  store i16 %i, ptr @g\n");
+    let text = global_do_loop("  %x = load i16, ptr @g\n  store i16 %x, ptr @h\n  store i16 %i, ptr @g\n");
     let (_, after) = applied(&text, &trips());
     assert!(!block_of(&after, "b2").iter().any(|line| line.contains("@g")), "{after}");
     assert!(block_of(&after, "b0").iter().any(|line| line.contains("load i16, ptr @g")), "{after}");
@@ -645,7 +673,7 @@ b5:
 /// was 7).
 #[test]
 fn test_a_store_after_the_exit_test_leaves_the_value_of_the_last_trip() {
-    let text = global_loop("  %x = load i16, ptr @g\n  store i16 %x, ptr @h\n  store i16 %i, ptr @g\n");
+    let text = global_do_loop("  %x = load i16, ptr @g\n  store i16 %x, ptr @h\n  store i16 %i, ptr @g\n");
     let (_, after) = applied(&text, &trips());
     assert!(block_of(&after, "b3").iter().any(|line| line.starts_with("store i16")), "{after}");
 }
