@@ -217,22 +217,36 @@ fn allocated_with(
     // B against 427).
     let (plain, with) = (allocate(function, name, request.level), allocate(hoisted, name, request.level));
     match (plain, with) {
-        (Ok(plain), Ok(with)) => match (priced_in_loops(&plain), priced_in_loops(&with)) {
-            (Some(one), Some(other)) if cheaper(request.level, one, other) => Ok(plain),
-            _ => Ok(with),
-        },
+        (Ok(plain), Ok(with)) => {
+            match (priced_in_loops(&plain, request.level), priced_in_loops(&with, request.level)) {
+                (Some(one), Some(other)) if cheaper(request.level, one, other) => Ok(plain),
+                _ => Ok(with),
+            }
+        }
         (_, Ok(with)) => Ok(with),
         (plain, Err(_)) => plain,
     }
 }
 
 /// Bytes and the clocks weighted by loop depth of an allocated function.
-fn priced_in_loops(one: &Allocated) -> Option<(u32, u64)> {
+fn priced_in_loops(
+    one: &Allocated,
+    level: Level,
+) -> Option<(u32, u64)> {
     let (function, assignment, slots, reads) = one;
-    expand::PRICING.with(|one| one.set(true));
+    expand::PRICING.with(|one| one.set(priced_before_peepholes(level)));
     let lines = finish(function, assignment, 0, slots, reads.clone());
     expand::PRICING.with(|one| one.set(false));
     lines.ok().map(|lines| expand::price_in_loops(&lines))
+}
+
+/// Whether a variant is priced before the printer's peepholes. At the speed
+/// levels the price is weighted clocks, good to a few tenths of a percent, and
+/// a peephole moved a near-tie to the worse variant (copy_runs -O2: 2 B and
+/// 600 T). At the size levels the price is bytes, exact, and a peephole's
+/// bytes are real: without them pattern_fill -Os chose a variant 1 B bigger.
+fn priced_before_peepholes(level: Level) -> bool {
+    !matches!(level, Level::Os | Level::Oz)
 }
 
 /// Whether the price `one` beats `other`: bytes first at the size levels;
@@ -253,6 +267,12 @@ mod tests {
 
     /// A variant 61 B bigger for 107 clocks fewer won on the clocks alone
     /// (tail_calls -O1, 4444 B to 4505 B); at 1 B = 3 T it loses.
+    #[test]
+    fn variants_are_priced_with_the_peepholes_only_at_the_size_levels() {
+        assert!(priced_before_peepholes(Level::O2) && priced_before_peepholes(Level::O3));
+        assert!(!priced_before_peepholes(Level::Os) && !priced_before_peepholes(Level::Oz));
+    }
+
     #[test]
     fn a_bigger_variant_does_not_win_on_fewer_clocks_alone() {
         assert!(!cheaper(Level::O2, (4505, 85_000), (4444, 85_107)));
@@ -336,7 +356,7 @@ fn improved(
     }
     for (unjoined, strict) in others {
         let Ok((other, _)) = allocate_with(unjoined, strict, function.clone(), name, level) else { continue };
-        if let (Some(now), Some(then)) = (priced_in_loops(&best), priced_in_loops(&other)) {
+        if let (Some(now), Some(then)) = (priced_in_loops(&best, level), priced_in_loops(&other, level)) {
             if cheaper(level, then, now) {
                 best = other;
             }
