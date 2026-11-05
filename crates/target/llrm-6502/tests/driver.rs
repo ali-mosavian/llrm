@@ -2313,3 +2313,16 @@ fn the_second_walk_leaves_a_settled_body_as_it_was() {
     let size = |text: &str| text.lines().filter(|line| line.starts_with("  ")).count();
     assert!(size(&twice) <= size(&once), "{} instructions against {}", size(&twice), size(&once));
 }
+
+/// recmany_o1 (tests/run/c): the rerun over `bench_recmany` "saved" one unit of
+/// the estimate (an add's operand) and kept a Reassociate reorder of a settled
+/// chain: 16 bytes more at -Os. One unit does not keep a rerun.
+#[test]
+fn a_rerun_that_saves_one_unit_of_the_estimate_is_not_kept() {
+    let ir = include_str!("data/recmany_o1.ll");
+    let mut request = Request::new(Level::Os);
+    request.passes.push("-fno-second-inline".to_owned());
+    let once = assembly(ir, &request).unwrap();
+    let twice = assembly(ir, &Request::new(Level::Os)).unwrap();
+    assert_eq!(twice, once, "the second walk changed a program it has nothing to inline in");
+}

@@ -455,9 +455,9 @@ impl ProgramPass for Walk {
                             (self.simplify)(module, &mut modules[at], id, "walk.");
                         } else if let Some(tti) = tti.as_deref() {
                             let kept = function_mut(module, id).1.clone();
-                            let before = body_size(module, &program.layout, tti, id);
+                            let before = sized(module, &program.layout, tti, id, false);
                             (self.simplify)(module, &mut modules[at], id, "walk.again.");
-                            if body_size(module, &program.layout, tti, id) >= before {
+                            if sized(module, &program.layout, tti, id, false) + GUARD >= before {
                                 *function_mut(module, id).1 = kept;
                                 modules[at].changed(id);
                                 modules[at]
@@ -1149,6 +1149,12 @@ fn function_clocks(
         .sum()
 }
 
+/// Units a rerun of the Simplify list over a settled body must save to stay: one
+/// is the wobble of the operand-sensitive estimate (recmany_o1 "saved" 1 by an
+/// add's operand and kept a Reassociate reorder, +16 B). Of the 75 reruns kept
+/// on the corpus, 14 save one unit and the rest more.
+const GUARD: i64 = 1;
+
 /// SZ2: the code size of body `id`, by the target's cost model for bytes.
 fn body_size(
     module: &Module,
@@ -1156,12 +1162,28 @@ fn body_size(
     tti: &dyn llrm_mir::tti::Tti,
     id: GlobalId,
 ) -> i64 {
+    sized(module, layout, tti, id, true)
+}
+
+/// [`body_size`] with or without its phis: a phi is a copy the allocator
+/// coalesces, and the single-input ones LCSSA left are folded later anyway.
+fn sized(
+    module: &Module,
+    layout: &llrm_mir::datalayout::DataLayout,
+    tti: &dyn llrm_mir::tti::Tti,
+    id: GlobalId,
+    phis: bool,
+) -> i64 {
     let function = module.global(id).function().expect("a body");
     let float =
         |ty: llrm_mir::types::TypeId| llrm_mir::tti::Ty::of(&module.context.types, ty).is_some_and(|ty| ty.is_float());
     function
         .walk()
         .map(|(_, inst)| {
+            let operation = function.instruction(inst);
+            if !phis && matches!(operation.opcode, llrm_mir::opcode::Opcode::Phi) {
+                return 0;
+            }
             let units = llrm_mir::instructioncost::instruction_cost(
                 tti,
                 &module.context,
@@ -1172,7 +1194,6 @@ fn body_size(
                 llrm_mir::tti::CostKind::CodeSize,
             )
             .value;
-            let operation = function.instruction(inst);
             let moves = matches!(
                 operation.opcode,
                 llrm_mir::opcode::Opcode::Load { .. }
