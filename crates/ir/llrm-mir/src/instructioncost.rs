@@ -43,7 +43,8 @@ fn operand_info(
     }
 }
 
-fn operand_type(
+/// The type of an operand; none for a block.
+pub fn operand_type(
     context: &Context,
     function: &Function,
     operand: Operand,

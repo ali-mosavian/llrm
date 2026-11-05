@@ -501,7 +501,7 @@ impl Options {
             "dse" => self.drop_stores,
             "sink" => self.sink,
             "sroa" | "promote" => self.promote,
-            "lsr" | "canonfreeze" | "maskscale" => self.strength && self.lsr,
+            "lsr" | "canonfreeze" | "maskscale" | "hardwareloops" => self.strength && self.lsr,
             "indvars" | "window" | "gepoffset" => self.strength,
             "cgpaddr" | "cgpselectarms" => self.strength && self.cgpaddr,
             "extload" => self.extload,
@@ -1475,6 +1475,11 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // The remainder LSR wrote out as a quotient and a product, back to one
         // where the divide stays.
         passes.push(Box::new(crate::remidiom::RemainderIdiom { size: applied.options.prefers_size() }));
+        // The pin's llc runs it in the pre-ISel passes, after LSR; it does
+        // nothing for a target that counts no loop in hardware.
+        if applied.options.wanted("hardwareloops") {
+            passes.push(Box::new(crate::hardwareloops::HardwareLoops));
+        }
     }
     passes
 }

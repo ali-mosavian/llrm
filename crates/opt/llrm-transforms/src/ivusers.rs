@@ -194,7 +194,7 @@ impl IvUsers {
     ) -> Self {
         #[cfg(test)]
         BUILDS.with(|made| made.set(made.get() + 1));
-        let mut users = Self { l, uses: Vec::new(), processed: IdSet::new(), ordered: 0 };
+        let mut users = Self { l, uses: Vec::new(), processed: IdSet::with_capacity(cx.function.instruction_count()), ordered: 0 };
         let phis: Vec<InstId> =
             cx.function.iter_block(l).take_while(|&inst| cx.function.instruction(inst).opcode == Opcode::Phi).collect();
         for phi in phis {
@@ -247,7 +247,6 @@ impl IvUsers {
 
         let l = self.l;
         let lp = cx.loops.get_loop_for(l).expect("a loop");
-        let mut unique = IdSet::<InstId>::new();
         let mut users: Vec<InstId> = cx.function.users(result).iter().map(|one| one.user).collect();
         if users.len() > 1 {
             self.ordered += users.len();
@@ -258,11 +257,10 @@ impl IvUsers {
                 Some((cx.function.layout_index(block)?, cx.function.number_in_block(*user)?))
             };
             users.sort_by_key(|user| std::cmp::Reverse(place(user)));
+            // One instruction using the result twice sorts to one place.
+            users.dedup();
         }
         for user in users {
-            if !unique.insert(user) {
-                continue;
-            }
             // Do not recurse into a phi twice.
             let is_phi = cx.function.instruction(user).opcode == Opcode::Phi;
             if is_phi && self.processed.contains(&user) {

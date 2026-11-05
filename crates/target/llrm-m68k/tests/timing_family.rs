@@ -383,6 +383,8 @@ fn m68060_movem_lea_pea() {
     assert_eq!(m68060("movem.l %d2-%d4, -(%sp)"), 3);
     assert_eq!(m68060("lea (4,%a0), %a1"), 1);
     assert_eq!(m68060("pea (4,%a0)"), 2);
+    // (xxx).WL is one column: `pea 22:w` was "not in the M68060 tables"
+    assert_eq!(m68060("pea 22:w"), 1);
 }
 
 /// Tables 10-21 to 10-24 (pp. 10-22 to 10-24): ADDX Dy,Dx 1, -(Ay),-(Ax) 2;

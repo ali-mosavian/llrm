@@ -1,12 +1,13 @@
 //! The instructions this target has above the pin's table, by code and name:
 //! the writebacks of [`super::indexed`], the short forms of
-//! [`super::short`] and the divide-remainders of [`super::divrem`].
+//! [`super::short`], the divide-remainders of [`super::divrem`] and the
+//! `pea` push of [`super::pea`], which only [`crate::callpush`] makes.
 
 use llrm_dagisel::instr::InstrDesc;
 
 use super::asm::{AsmOperand, asm};
 use super::enc::{Piece, encoding};
-use super::{divrem, indexed, short};
+use super::{divrem, indexed, pea, short};
 
 /// The machine code of the instruction named `name`, the pin's or a local one.
 pub fn code_of(name: &str) -> Option<u16> {
@@ -25,7 +26,11 @@ pub fn desc(code: u16) -> Option<&'static InstrDesc> {
 
 /// The pin's `asm` row of `name`, or the local instruction's.
 pub fn text(name: &str) -> Option<&'static (&'static str, &'static str, &'static [AsmOperand])> {
-    asm(name).or_else(|| short::short_asm(name)).or_else(|| indexed::source_asm(name)).or_else(|| divrem::divrem_asm(name))
+    asm(name)
+        .or_else(|| short::short_asm(name))
+        .or_else(|| indexed::source_asm(name))
+        .or_else(|| divrem::divrem_asm(name))
+        .or_else(|| pea::pea_asm(name))
 }
 
 /// The pin's encoding of `name`, or the local instruction's.
@@ -35,4 +40,5 @@ pub fn bits(name: &str) -> Option<(u16, &'static [Piece])> {
         .or_else(|| short::short_encoding(name))
         .or_else(|| indexed::source_encoding(name))
         .or_else(|| divrem::divrem_encoding(name))
+        .or_else(|| pea::pea_encoding(name))
 }

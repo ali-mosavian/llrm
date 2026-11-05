@@ -1376,6 +1376,11 @@ pub struct LirBody {
     /// would have held is not reserved, the locals lie directly below the
     /// pushed registers.
     pub slot_dropped: bool,
+    /// The widest alignment any object of the frame wants (an alloca's, a
+    /// spill slot's as its width), 0 when not known: what a 64-bit frame
+    /// aligns the locals' base to, not the stack's (the pin aligns each
+    /// object to its own and only the total to the stack).
+    pub object_align: i64,
     /// The locals wanting more than the stack's alignment, as (displacement
     /// below BP, alignment): the frame realigns the stack pointer for them
     /// and they lie that far below the aligned top, not below BP.
@@ -1591,6 +1596,7 @@ impl LirBody {
             cfa_variables: false,
             saved_first: false,
             slot_dropped: false,
+            object_align: 0,
             over_aligned: Vec::new(),
             frame_exit: None,
             frame_saved: None,
@@ -1664,6 +1670,7 @@ impl LirBody {
             cfa_variables: self.cfa_variables,
             saved_first: self.saved_first,
             slot_dropped: self.slot_dropped,
+            object_align: self.object_align,
             over_aligned: self.over_aligned.clone(),
             frame_exit: self.frame_exit,
             frame_saved: self.frame_saved.clone(),

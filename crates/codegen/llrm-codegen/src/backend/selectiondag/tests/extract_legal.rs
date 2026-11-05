@@ -22,6 +22,7 @@ fn extracting_a_half_of_a_legal_wide_value_is_a_truncate_of_a_shift() {
                 cmov: false,
                 sse2: false,
                 min_size: false,
+                three_address_adds: false,
                 i16_mul_chains: false,
                 sext_load: false, zext_free: false,
                 profile: None,

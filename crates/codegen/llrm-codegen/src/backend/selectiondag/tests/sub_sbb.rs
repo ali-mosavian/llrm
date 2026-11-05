@@ -43,6 +43,7 @@ fn a_negated_shifted_bit_is_a_bit_test_and_sbb() {
         cmov: false,
         sse2: false,
         min_size: false,
+        three_address_adds: false,
         i16_mul_chains: false,
         sext_load: false, zext_free: false,
         profile: None,
