@@ -300,6 +300,28 @@ __ashrsi3:
 	ex	de,hl
 	ret
 
+; ---- 16 x 16 -> 32 multiply ---------------------------------------------------------------------------------------
+
+; hl * de -> de:hl, the full 32-bit product of two unsigned words (de low, hl high, as a long result): one multiplier
+; bit per step, 16 steps. `__mulsi3` computes two cross terms against zero for the same product.
+	.globl __umulhisi3
+__umulhisi3:
+	ld	b,h
+	ld	c,l
+	ld	hl,#0
+	ld	a,#16
+1$:	add	hl,hl
+	rl	e
+	rl	d
+	jr	nc,2$
+	add	hl,bc
+	jr	nc,2$
+	inc	de
+2$:	dec	a
+	jr	nz,1$
+	ex	de,hl
+	ret
+
 ; ---- long multiply -------------------------------------------------------------------------------
 
 ; The product of two longs, low 32 bits: a is hl (low) and de (high), b bc (low) and the word the caller stored on the
