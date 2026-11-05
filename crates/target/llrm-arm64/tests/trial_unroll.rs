@@ -9,19 +9,24 @@ fn instructions(source: &str) -> usize {
     asm.lines().filter(|line| line.starts_with('\t') && !line.trim_start().starts_with('.')).count()
 }
 
-/// nbody -O2: the 4-trip outer loop of a triangular nest cost +100 B in a copy
-/// that unrolled it with its inner loops rolled, and was kept rolled (114
-/// instructions, 38,049 executed against 14,233); the nest as the pin unrolls it
-/// is 224 B smaller (149 instructions).
-#[test]
-fn a_nest_that_pays_whole_is_unrolled_though_the_outer_loop_alone_does_not() {
-    let count = instructions(include_str!("data/bench_nbody_nest.ll"));
-    assert!(count >= 140, "{count} instructions");
+fn labels(source: &str) -> usize {
+    let asm = driver::assembly(source, Platform::Linux, Level::O2).expect("lowers");
+    asm.lines().filter(|line| line.starts_with(".L")).count()
 }
 
+/// nbody -O2: the triangular nest (4 trips around a loop of at most 3, whose
+/// count follows the outer counter) was priced +267 B and kept rolled, 38,049
+/// instructions executed where the pin's whole-nest unroll runs 14,233 for 8 B
+/// less. The pin's unrolled nest has 10 labels; with the nest kept rolled, or
+/// unrolled by a trial, it has fewer.
 #[test]
-fn probe() {
-    let asm = driver::assembly(include_str!("data/bench_nbody_nest.ll"), Platform::Linux, Level::O2).expect("lowers");
-    let back = asm.lines().filter(|l| l.trim_start().starts_with("b.") || l.trim_start().starts_with("cbnz") || l.trim_start().starts_with("cbz")).count();
-    eprintln!("NEST labels {} condbr {}", asm.lines().filter(|l| l.starts_with(".L")).count(), back);
+fn a_nest_whose_inner_count_follows_the_outer_counter_is_the_pins_decision() {
+    assert_eq!(labels(include_str!("data/bench_nbody_nest.ll")), 10);
+}
+
+/// Guard: matmul's 8-trip loops are constant whatever their outer loops do, so
+/// they are priced on their own and stay rolled (202 instructions).
+#[test]
+fn a_loop_of_constant_count_around_the_nest_is_still_priced() {
+    assert!(instructions(include_str!("data/bench_matmul.ll")) <= 205);
 }
