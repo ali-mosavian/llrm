@@ -5,7 +5,7 @@
 //!
 //! # How it works
 //! Constants: stores of integer constants to adjacent cells of one object are
-//! one store of their bytes, little-endian, when the bytes are a legal integer
+//! one store of their bytes, in the target's byte order, when the bytes are a legal integer
 //! (`getConsecutiveStores` finds the run of cells of one width, the widest
 //! legal prefix is taken, and a store made is a candidate again, so a byte pair
 //! and a word beside it become a dword). A load of any of the cells, another
@@ -570,8 +570,12 @@ fn constants_merged(
             let low = cells[at].low;
             let mut value = 0u128;
             let mut stores = Vec::new();
+            let top = cells[at + take - 1].high;
             for one in &cells[at..at + take] {
-                value |= one.value << (8 * (one.low - low) as u32);
+                // the lowest address holds the low bits of a little-endian
+                // value and the high bits of a big-endian one
+                let place = if unit.layout.big_endian { top - one.high } else { one.low - low };
+                value |= one.value << (8 * place as u32);
                 stores.extend(one.stores.iter().copied());
             }
             let latest = cells[at..at + take].iter().max_by_key(|one| one.order).expect("a run has cells");
