@@ -31,6 +31,7 @@ pub(crate) fn unroll_pays(
 /// the pin's bytes.
 pub(super) fn full_unroll_pays(
     run: &mut Run,
+    se: &mut ScalarEvolution,
     analyzed: &Analyzed,
     lp: Loop,
     eph: &IdSet<InstId>,
@@ -53,6 +54,7 @@ pub(super) fn full_unroll_pays(
     // every trip, and the operands the copies make constant (below).
     let analysis = analyze_loop_unroll_cost(
         run,
+        se,
         analyzed,
         lp,
         trips,

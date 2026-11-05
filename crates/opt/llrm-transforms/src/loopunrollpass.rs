@@ -1004,7 +1004,7 @@ fn should_full_unroll(
         up.threshold
     };
     if unrolled_size < u64::from(few) {
-        return price::full_unroll_pays(run, analyzed, lp, eph, full_unroll_trip_count, uce, up)
+        return price::full_unroll_pays(run, se, analyzed, lp, eph, full_unroll_trip_count, uce, up)
             .then_some(full_unroll_trip_count);
     }
 
@@ -1027,7 +1027,7 @@ fn should_full_unroll(
         let boost = full_unroll_boosting_factor(&cost, up.max_percent_threshold_boost);
         let boosted_threshold = (u64::from(up.threshold) * u64::from(boost) / 100) as u32;
         if cost.unrolled_cost < boosted_threshold {
-            return price::full_unroll_pays(run, analyzed, lp, eph, full_unroll_trip_count, uce, up)
+            return price::full_unroll_pays(run, se, analyzed, lp, eph, full_unroll_trip_count, uce, up)
                 .then_some(full_unroll_trip_count);
         }
     }
