@@ -1057,6 +1057,13 @@ impl Collection<'_, '_> {
             return;
         }
         let cx = self.cx;
+        // The saving is one compare a trip; the biased bases cost setup
+        // instructions once. A loop that runs few trips (an unroll's
+        // remainder) never pays them back.
+        let trips = se.get_small_constant_max_trip_count(cx, self.l);
+        if trips != 0 && trips <= END_BIAS_SETUP_INSNS {
+            return;
+        }
         // The registers that end at zero, in the exit test's formulae.
         let mut zero_ending: Vec<Scev> = Vec::new();
         for lu in &self.uses {
@@ -1245,6 +1252,10 @@ impl Collection<'_, '_> {
         }
     }
 }
+
+/// Instructions the biased bases of an end-biased formula cost in the
+/// preheader: the start scaled and negated, and the sum.
+const END_BIAS_SETUP_INSNS: u32 = 3;
 
 thread_local! {
     static GENERATED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
