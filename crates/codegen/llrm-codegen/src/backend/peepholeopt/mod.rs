@@ -58,6 +58,8 @@
 //! A machine phase on SSA after MachineSink and ahead of MachineCombiner (the
 //! pin's `addMachineSSAOptimization` order), at every level but -O0.
 
+mod redundant;
+
 use std::sync::Arc;
 
 use crate::backend::lanes::Lanes;
@@ -93,7 +95,7 @@ impl LIRTransform for PeepholeOptimizer {
 /// `body` with the compares an earlier instruction's flags make redundant gone,
 /// and each dead-result subtract a compare.
 pub fn compared(body: &LirBody) -> LirBody {
-    flags_reused(&subtracts_compared(body))
+    flags_reused(&redundant::compares_reused(&subtracts_compared(body)))
 }
 
 /// `body` with each dead-result subtract a compare.
@@ -222,6 +224,21 @@ fn reads_what_it_sets(
     }
 }
 
+/// The flag lanes an instruction of `body` reads and writes; none where it is
+/// not known.
+pub(crate) fn flag_effects(body: &LirBody) -> impl Fn(&Insn) -> Option<(Lanes, Lanes)> + '_ {
+    move |one: &Insn| {
+        let Some(effect) = crate::backend::liveness::effect(body.regs(), body.bits, one) else {
+            // a conditional branch reads the flags and writes nothing
+            let branch = one.what.as_ref().filter(|what| what.op == Operation::Branch && !what.indirect);
+            return branch
+                .filter(|what| what.name.as_deref().and_then(condition_of).is_some())
+                .map(|_| (Lanes::flags(u32::MAX), Lanes::new()));
+        };
+        Some((flag_lanes(&effect.reads), flag_lanes(&effect.writes)))
+    }
+}
+
 /// `body` with each compare of a value with zero gone where the instruction
 /// that made the value in the same block set the flags it reads.
 fn flags_reused(body: &LirBody) -> LirBody {
@@ -238,17 +255,7 @@ fn flags_reused(body: &LirBody) -> LirBody {
             }
         }
     }
-    // The flag lanes `one` reads and writes.
-    let flags = |one: &Insn| -> Option<(Lanes, Lanes)> {
-        let Some(effect) = crate::backend::liveness::effect(body.regs(), body.bits, one) else {
-            // a conditional branch reads the flags and writes nothing
-            let branch = one.what.as_ref().filter(|what| what.op == Operation::Branch && !what.indirect);
-            return branch
-                .filter(|what| what.name.as_deref().and_then(condition_of).is_some())
-                .map(|_| (Lanes::flags(u32::MAX), Lanes::new()));
-        };
-        Some((flag_lanes(&effect.reads), flag_lanes(&effect.writes)))
-    };
+    let flags = flag_effects(body);
     let mut changed = false;
     let blocks: Vec<_> = body
         .blocks
@@ -359,7 +366,7 @@ fn reusable(
 }
 
 /// Whether the block at `at` writes every one of `pending` before it reads any.
-fn successor_overwrites_flags(
+pub(super) fn successor_overwrites_flags(
     body: &LirBody,
     at: i64,
     flags: &dyn Fn(&Insn) -> Option<(Lanes, Lanes)>,
