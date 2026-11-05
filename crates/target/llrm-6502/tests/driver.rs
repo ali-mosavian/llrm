@@ -2326,3 +2326,45 @@ fn a_rerun_that_saves_one_unit_of_the_estimate_is_not_kept() {
     let twice = assembly(ir, &Request::new(Level::Os)).unwrap();
     assert_eq!(twice, once, "the second walk changed a program it has nothing to inline in");
 }
+
+/// `g++` on a global byte was `lda #1; clc; adc g; sta g` (9 bytes) where `inc
+/// g` is 3 (x16basic-c: `deccnt++`, `++tenexp` in fp_fin). The carry and A are
+/// dead after the store, and `inc` leaves the flags a branch reads as they
+/// were.
+#[test]
+fn a_step_of_a_global_byte_is_an_inc_or_a_dec_of_it() {
+    let ir = module(
+        "@g = global i8 5\n\
+         define void @up() noinline {\n  %v = load i8, ptr @g\n  %w = add i8 %v, 1\n  store i8 %w, ptr @g\n  ret void\n}\n\
+         define void @down() noinline {\n  %v = load i8, ptr @g\n  %w = add i8 %v, -1\n  store i8 %w, ptr @g\n  ret void\n}\n\
+         define i8 @t() {\n  call void @up()\n  call void @up()\n  call void @down()\n  %r = load i8, ptr @g\n  ret i8 %r\n}",
+    );
+    for level in [Level::O2, Level::Os] {
+        let text = assembly(&ir, &Request::new(level)).unwrap();
+        assert!(text.contains("inc g") && text.contains("dec g"), "{text}");
+        assert!(!text.contains("adc g"), "{text}");
+        assert_eq!(exit_code_of(&text, "t"), 6, "{text}");
+    }
+    // the 65C02's `lda g; inc a; sta g`
+    let mut request = Request::new(Level::Os);
+    request.cpu = llrm_6502::dagisel::hooks::Cpu::W65c02;
+    let text = assembly(&ir, &request).unwrap();
+    assert!(text.contains("inc g") && text.contains("dec g") && !text.contains("inc a"), "{text}");
+}
+
+/// The step of the counter of `do work(); while (--n)` was `lda #255; clc; adc
+/// n; sta n` too: the call after the branch writes A and takes no argument in
+/// it, so A is dead at the branch. A callee that takes its argument in A keeps
+/// the load.
+#[test]
+fn a_counter_stepped_before_a_call_that_needs_no_a_is_a_dec() {
+    let ir = module(
+        "@n = global i8 3\n@hits = global i8 0\n\
+         define void @work() noinline {\n  %v = load i8, ptr @hits\n  %w = add i8 %v, 2\n  store i8 %w, ptr @hits\n  ret void\n}\n\
+         define i8 @t() {\nentry:\n  br label %loop\nloop:\n  call void @work()\n  %c = load i8, ptr @n\n  %d = add i8 %c, -1\n  \
+         store i8 %d, ptr @n\n  %z = icmp eq i8 %d, 0\n  br i1 %z, label %out, label %loop\nout:\n  %r = load i8, ptr @hits\n  ret i8 %r\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap();
+    assert!(text.contains("dec n") && !text.contains("adc n"), "{text}");
+    assert_eq!(exit_code_of(&text, "t"), 6, "{text}");
+}
