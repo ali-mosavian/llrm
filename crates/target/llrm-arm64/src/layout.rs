@@ -194,7 +194,8 @@ fn common_tail(
 /// DEVIATE: the pin also merges a shorter tail where a block is only the
 /// tail and the other can fall into it, and two instructions at -Os; and it
 /// takes the pairs by the hash of their ends, not by the last instruction.
-/// Exit: 11-12.
+/// Exit: 11-20. Tried 11-05: taking both on the 148-cell corpus changed no
+/// cell, so they stay out until a cell needs them.
 fn merge_return_tails(blocks: &mut Vec<Lowered>) {
     // The block that is only a return, where there is one: a block that
     // returns, or jumps there, ends the same way.
