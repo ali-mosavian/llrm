@@ -84,6 +84,7 @@ pub fn builder_target(
             add_to_or_disjoint: true,
             // `WebAssemblySubtarget::useAA`
             use_aa: true,
+            fp_stack: false,
             ..DagConfig::default()
         },
         tuning: crate::machine::TUNING,
