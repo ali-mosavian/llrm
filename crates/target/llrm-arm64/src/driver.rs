@@ -523,3 +523,35 @@ mod tests {
         assert_eq!(platform_or_default("x86_64-unknown-linux-gnu"), None);
     }
 }
+
+/// The code bytes of `function` lowered whole, as the trial of an unroll
+/// measures it: the function alone in a module with the declarations of the
+/// rest. Four bytes an instruction and the constants the code loads; none if it
+/// does not lower.
+pub fn lowered_bytes(function: &llrm_mir::tti::LoweredFunction) -> Option<i64> {
+    let platform = if function.layout.pointer(0).bits == 64 { Platform::Linux } else { return None };
+    let mut module = llrm_mir::module::Module {
+        context: function.context.clone(),
+        datalayout: Some(platform.datalayout().to_owned()),
+        globals: function.globals.to_vec(),
+        metadata: function.metadata.to_vec(),
+        ..Default::default()
+    };
+    let slot = module.globals.get_mut(function.id.0 as usize)?;
+    slot.kind = llrm_mir::module::GlobalKind::Function(Box::new(function.function.clone()));
+    let program = Program::new(vec![module], Rc::new(Arm64Machine { platform })).ok()?;
+    let lowered = functions(&program).ok()?;
+    Some(
+        lowered
+            .iter()
+            .map(|one| {
+                let insts: usize = one
+                    .blocks
+                    .iter()
+                    .map(|block| block.insts.iter().filter(|inst| !matches!(inst, crate::mc::inst::Inst::Mark(_))).count())
+                    .sum();
+                insts as i64 * 4 + one.pool.iter().map(|entry| entry.bytes.len() as i64).sum::<i64>()
+            })
+            .sum(),
+    )
+}

@@ -321,6 +321,13 @@ impl Tti for AArch64 {
         true
     }
 
+    fn lowered_bytes(
+        &self,
+        function: &llrm_mir::tti::LoweredFunction,
+    ) -> Option<i64> {
+        crate::driver::lowered_bytes(function)
+    }
+
     fn merges_unaligned_stores(&self) -> bool {
         true
     }

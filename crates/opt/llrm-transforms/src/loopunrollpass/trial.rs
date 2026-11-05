@@ -57,8 +57,24 @@ fn measure(run: &mut Run) -> (i64, i64) {
         weighted += weight
             * trip_clocks(run.context, run.layout, run.function, run.callees, std::iter::once(block), &clocks);
     }
-    let size = trip_cost(run.context, run.layout, run.function, run.callees, run.function.layout().iter(), &bytes, true);
-    (size, weighted)
+    let model = trip_cost(run.context, run.layout, run.function, run.callees, run.function.layout().iter(), &bytes, true);
+    // Where the target lowers the copy, its bytes are the measure: the backend
+    // merges stores (lru -O3: the IR model said +8 B, the code is smaller) and
+    // spills (nbody_single -O3: -112 B modelled, +460 B built).
+    let lowered = run.this.and_then(|id| {
+        run.tti.lowered_bytes(&llrm_mir::tti::LoweredFunction {
+            context: &*run.context,
+            globals: run.globals,
+            metadata: run.metadata,
+            layout: run.layout,
+            function: &*run.function,
+            id,
+        })
+    });
+    if llrm_support::debug::enabled("unroll") {
+        eprintln!("unroll: measure: model {model} B, lowered {lowered:?} B, {weighted} clk");
+    }
+    (lowered.unwrap_or(model), weighted)
 }
 
 impl LoopFullUnroll {

@@ -655,6 +655,17 @@ pub trait Tti {
         false
     }
 
+    /// The code bytes the target makes of `function`, lowered whole (selection,
+    /// allocation, frame): what the trial of an unroll measures where the IR
+    /// model cannot see the backend (stores merged, registers spilled). None:
+    /// the target does not lower a copy; the IR model decides.
+    fn lowered_bytes(
+        &self,
+        _function: &LoweredFunction,
+    ) -> Option<i64> {
+        None
+    }
+
     /// `Tuning::multiply_by_clocks`.
     fn multiply_by_clocks(&self) -> bool {
         false
@@ -1794,4 +1805,15 @@ mod access_tests {
         Counts(Basic).get_unrolling_preferences_for(&LoopShape { has_calls: true, ..LoopShape::default() }, &mut up);
         assert_eq!(up.max_count, 7);
     }
+}
+
+/// A function with what lowering it needs of its module: the declarations of
+/// the module's globals, its metadata, and the function's own id.
+pub struct LoweredFunction<'a> {
+    pub context: &'a crate::context::Context,
+    pub globals: &'a [crate::module::GlobalValue],
+    pub metadata: &'a [crate::module::MetadataNode],
+    pub layout: &'a crate::datalayout::DataLayout,
+    pub function: &'a crate::module::Function,
+    pub id: crate::context::GlobalId,
 }
