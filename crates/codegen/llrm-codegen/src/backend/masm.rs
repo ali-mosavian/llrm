@@ -1135,7 +1135,7 @@ pub(crate) fn wrap_of(
     frame: bool,
     stack_addressed: bool,
 ) -> Option<crate::backend::shrinkwrap::Wrap> {
-    if moves_stack(body) || realign_of(body) != 0 {
+    if body.unwrapped || moves_stack(body) || realign_of(body) != 0 {
         return None;
     }
     let lows = saved_of(procedure);

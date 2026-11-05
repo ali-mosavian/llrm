@@ -409,6 +409,7 @@ pub fn assembled_by(
                 // Copies of returns and split tails only make code better: -O0
                 // has neither.
                 let procedure = if !cpu.optimized {
+                    let procedure = masm::Procedure { body: LirBody { unwrapped: true, ..procedure.body }, ..procedure };
                     if let Some(why) = masm::realign_refusal(&procedure) {
                         return Err(why);
                     }
