@@ -14,7 +14,7 @@
 //! DEVIATE: no LLVM pass. Reason: the pin's `add x, (zext (setcc))` stays an
 //! add; a target with a condition-predicated increment has none. Exit: none.
 
-use crate::mfunc::{Class, Inst, Kind, MFunction, Operand, Reg};
+use crate::mfunc::{Inst, Kind, MFunction, Operand, Reg};
 use crate::reg;
 
 /// Steps each word added to (subtracted by) a flag by `INC16c` / `DEC16c`.
@@ -39,7 +39,7 @@ pub fn step_by_flags(function: &mut MFunction) -> bool {
     let mut changed = false;
     for block in &mut function.blocks {
         while let Some(found) = recognised(&block.insts, &reads) {
-            apply(&mut block.insts, &mut function.classes, found);
+            apply(&mut block.insts, found);
             changed = true;
         }
     }
@@ -124,12 +124,12 @@ fn recognised(
 
 fn apply(
     insts: &mut Vec<Inst>,
-    classes: &mut Vec<Class>,
     found: Found,
 ) {
     let Found { flag, copies, add, other, condition, subtract } = found;
-    let _ = classes;
-    let stepped = Reg::Phys(reg::HL);
+    // `de`: `hl` stays free for the arithmetic around the step (Oz tail_calls
+    // 1872 B in hl, 1753 B in de)
+    let stepped = Reg::Phys(reg::DE);
     let flags = Reg::Phys(reg::FLAGS);
     let origin = insts[add].origin;
     let mut copy = Inst::new(Kind::Copy, vec![Operand::Def(stepped), Operand::Use(Reg::Virt(other))]);
