@@ -29,6 +29,7 @@ use llrm_analysis::mssa::view::Translated;
 use llrm_analysis::mssa::{Mssa, shadow};
 use llrm_analysis::scev::Cx;
 use llrm_analysis::scev::expr::Scev;
+use llrm_mir::dense::IdMap;
 use llrm_mir::module::{BlockId, InstId, Operand};
 use llrm_mir::opcode::Opcode;
 use llrm_support::hash::HashMap;
@@ -64,7 +65,7 @@ pub(crate) fn load_cse(
     let blocks = lp.get_blocks().to_vec();
 
     // The SCEV of each simple load's address (LC2).
-    let mut keys: HashMap<InstId, Scev> = HashMap::default();
+    let mut keys: IdMap<InstId, Scev> = IdMap::new();
     {
         // The pass's expressions, which `simplifyLoopIVs` just asked: the pin
         // keeps one `ScalarEvolution` for both.
@@ -94,7 +95,7 @@ pub(crate) fn load_cse(
     }
     // Two loads of one address are all there is to match (LC1).
     let mut seen: HashMap<Scev, u32> = HashMap::default();
-    for key in keys.values() {
+    for (_, key) in keys.iter() {
         *seen.entry(*key).or_insert(0) += 1;
     }
     if !seen.values().any(|&count| count > 1) {
