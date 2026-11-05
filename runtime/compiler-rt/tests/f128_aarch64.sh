@@ -9,7 +9,7 @@ build() { # mode flag
     $C --target=aarch64-linux-gnu -O2 -w -ffreestanding $2 -Iinclude '-DSF_NAME(n)=sfb_##n' -c $f -o $T/$1/$(echo $f | tr / _).o || exit 2; done
   aarch64-linux-gnu-gcc -O2 -w -fno-builtin -ffp-contract=off -D__float128=_Float128 -DSF_QUAD_FLOAT128 -Iinclude '-DSF_NAME(n)=sfb_##n' tests/host_f128.c $T/$1/*.o -o $T/$1/t -static || exit 2
 }
-build ld -DSF_QUAD_LONGDOUBLE; build bits ""
+build ld "-include stdint.h -include config/aarch64/config.h"; build bits ""
 timeout 300 qemu-aarch64 $T/ld/t ${1:-20000} | tail -1 | grep -qE '^n=[0-9]+ fails=0$' || { echo "FAIL: the long double build differs from libgcc's tf routines"; exit 1; }
 timeout 300 qemu-aarch64 $T/bits/t 2000 | tail -1 | grep -qE 'fails=0$' && { echo "FAIL: the bits ABI passed on aarch64: the test does not discriminate"; exit 1; }
 echo "f128_aarch64 ok"
