@@ -153,13 +153,14 @@ pub fn minmax_expanded(module: &mut Module) -> Result<(), String> {
 /// Whether the selector takes a select of type `ty` as it is: the DAG keeps an
 /// integer select to `LowerSELECT` and `EmitLoweredSelect`, as the pin does
 /// (S2's exit); `(c & 1) ? x ^ k : x` is then `x ^ (k & -(c & 1))`, where the
-/// branch it was made into computed both arms and jumped. Floats and the
-/// rest are still branched here (no `CMOV_RFP*` expansion yet).
+/// branch it was made into computed both arms and jumped. A `float` or
+/// `double` select is kept too, for `combineSelectToPseudoMinMax` (`minss`,
+/// `maxss`) and `CMOV_FR*`; the rest are still branched here.
 pub fn kept_for_isel(
     isel: crate::backend::shadow::Selector,
     ty: &str,
 ) -> bool {
-    isel == crate::backend::shadow::Selector::Dag && matches!(ty, "i8" | "i16" | "i32")
+    isel == crate::backend::shadow::Selector::Dag && matches!(ty, "i8" | "i16" | "i32" | "float" | "double")
 }
 
 /// Every select of `module`'s functions made a branch and a phi.
@@ -708,6 +709,10 @@ done:
             assert!(super::kept_for_isel(Selector::Dag, ty), "{ty}");
             assert!(!super::kept_for_isel(Selector::Old, ty), "{ty}");
         }
-        assert!(!super::kept_for_isel(Selector::Dag, "float"), "no CMOV_RFP expansion yet");
+        for ty in ["float", "double"] {
+            assert!(super::kept_for_isel(Selector::Dag, ty), "{ty}: the DAG makes minss/maxss of it");
+            assert!(!super::kept_for_isel(Selector::Old, ty), "{ty}");
+        }
+        assert!(!super::kept_for_isel(Selector::Dag, "i64"));
     }
 }
