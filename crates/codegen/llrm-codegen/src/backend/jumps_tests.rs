@@ -1974,6 +1974,32 @@ fn test_a_loop_block_nothing_falls_into_is_aligned() {
     assert!(align(m16).iter().all(|(_, align)| *align == 0), "m16 aligns nothing");
 }
 
+/// DEVIATE SD545: an aligned loop header takes at most the target's
+/// `loop_max_skip` bytes of padding. jpeg_single -O2 m32 padded 15 bytes of
+/// one-byte nops before a loop it falls into 58% of the time, 216,077 nops
+/// executed (+1.4%).
+#[test]
+fn test_an_aligned_loop_header_gives_up_a_pad_longer_than_the_targets_limit() {
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_move(1, imm(0)), _jump(2, 3)], vec![3]).into(),
+            block(8, vec![_move(8, bx())], vec![3]).into(),
+            block(3, vec![_compare(3), _branch(4, "jl", 8), _jump(5, 17)], vec![8, 17]).into(),
+            block(17, vec![_return(17)], vec![]).into(),
+        ],
+    );
+    let mut on = cpu::profile("486").unwrap().clone();
+    on.loop_alignment = 4;
+    on.loop_max_skip = 10;
+    let skip =
+        |one: &cpu::Profile| aligned(&source, one).blocks.iter().map(|one| (one.at, one.max_skip)).collect::<Vec<_>>();
+    assert_eq!(skip(&on), [(1, 0), (8, 10), (3, 0), (17, 0)]);
+    on.loop_max_skip = 0;
+    assert!(skip(&on).iter().all(|(_, skip)| *skip == 0), "no limit stated, no limit set");
+}
+
 /// A table jump's index to a block that only jumps goes to where it jumps: the
 /// block is dropped and the table kept naming it ("references to nothing
 /// defined or declared: L0_14").
