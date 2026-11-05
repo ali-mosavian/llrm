@@ -1603,6 +1603,11 @@ fn try_to_unroll_loop(
     let mut remade = None;
     if run.options.target_unrolling && trip_count == 0 {
         if trip_multiple % count != 0 {
+            // `EpilogProfitability` (LoopUnroll.cpp#L1058): the epilog only
+            // where a header phi starts at an integer constant.
+            let use_epilog = lp.get_loop_preheader(run.function).is_some_and(|pre| {
+                crate::loopunrollruntime::is_epilog_profitable(run.context, run.function, header, pre)
+            });
             let expansion = llrm_analysis::scev::expand_cost::MachineCosts {
                 tti: run.outer.target().tti(),
                 minimum_size: false,
@@ -1616,8 +1621,14 @@ fn try_to_unroll_loop(
                 outer: run.outer,
                 tti: &expansion,
             };
-            let done =
-                crate::loopunrollruntime::unroll_runtime_loop_remainder(&mut env, &mut session, header, count, false);
+            let done = crate::loopunrollruntime::unroll_runtime_loop_remainder(
+                &mut env,
+                &mut session,
+                header,
+                count,
+                false,
+                use_epilog,
+            );
             let Some(epilog) = done else {
                 why(run, lp, "the remainder loop could not be generated");
                 return Unrolled::Unmodified;

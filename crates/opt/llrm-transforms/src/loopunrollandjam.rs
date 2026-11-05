@@ -794,7 +794,7 @@ pub(crate) fn unroll_and_jam_loop(
             tti: expansion,
         };
         let done =
-            crate::loopunrollruntime::unroll_runtime_loop_remainder(&mut env, &mut session, header, count, false);
+            crate::loopunrollruntime::unroll_runtime_loop_remainder(&mut env, &mut session, header, count, false, true);
         if done.is_none() {
             llrm_support::debug!("unroll-jam", "the remainder loop could not be generated");
             return Jammed::Unmodified;

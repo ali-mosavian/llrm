@@ -121,6 +121,8 @@ fn convert(f: &Function) -> MFunction<Class> {
                 let mut copy = MInst::new(Kind::Copy, operands);
                 copy.cheap_as_move = true;
                 copy
+            } else if inst.opcode == crate::mir::IMPLICIT_DEF {
+                MInst::new(Kind::Op(llrm_codegen::processimpdefs::IMPLICIT_DEF), operands)
             } else {
                 MInst::new(Kind::Op(name_of(inst.opcode)), operands)
             };
