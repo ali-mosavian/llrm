@@ -412,8 +412,10 @@ fn encloses_known_trips(
     true
 }
 
-/// Whether `lp` holds loops, and every loop inside it runs at most `most`
-/// trips (a constant maximum, as a triangular nest's inner loop has).
+/// Whether `lp` holds a loop whose trip count follows a counter of `lp` (a
+/// constant maximum, no constant count: a triangular nest's inner loop) and
+/// every loop inside it runs at most `most` trips. A loop inside that runs a
+/// constant number of trips whatever `lp` does is priced on its own.
 fn bounds_few_trips(
     run: &Run,
     se: &mut ScalarEvolution,
@@ -434,13 +436,15 @@ fn bounds_few_trips(
         tree: &analyzed.tree,
         assumptions: &analyzed.assumptions,
     };
+    let mut follows = false;
     let mut inside: Vec<Loop> = lp.get_sub_loops().collect();
     while let Some(one) = inside.pop() {
         let trips = se.get_small_constant_max_trip_count(&cx, one.get_header());
         if trips == 0 || trips > most {
             return false;
         }
+        follows |= se.get_small_constant_trip_count(&cx, one.get_header()) == 0;
         inside.extend(one.get_sub_loops());
     }
-    true
+    follows
 }
