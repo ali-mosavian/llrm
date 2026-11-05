@@ -569,9 +569,11 @@ fn readers_of(function: &MFunc) -> HashMap<Reg, Vec<(usize, usize)>> {
 /// `register` already reads `earlier`.
 ///
 /// DEVIATE: heuristic 1 (a cheap operation across blocks) and 3 (phi readers)
-/// are not translated. Exit: 11-20.
+/// are not translated; within one block equal operations always merge (one DAG
+/// node in the pin). Exit: 11-20.
 fn profitable(
     readers: &HashMap<Reg, Vec<(usize, usize)>>,
+    definitions: &HashMap<Reg, usize>,
     blocks: &[crate::mfunc::MBlock],
     earlier: Reg,
     register: Reg,
@@ -583,8 +585,31 @@ fn profitable(
         return true;
     }
     let no_register_operand = !op.defs_and_uses().1.iter().any(|used| used.is_virtual());
-    let only_copied =
-        reads(register).iter().all(|&(block, index)| matches!(blocks[block].ops[index], Op::Copy { .. }));
+    // A copy chain that ends in a register written in several places is a
+    // phi's input: the pin sees a PHI there, which is no copy.
+    let phi_input = |start: Reg| {
+        let mut pending = vec![start];
+        let mut steps = 0;
+        while let Some(one) = pending.pop() {
+            steps += 1;
+            if steps > 16 {
+                return true;
+            }
+            for &(block, index) in reads(one) {
+                if let Op::Copy { dst, .. } = blocks[block].ops[index] {
+                    if definitions.get(&dst) != Some(&1) {
+                        return true;
+                    }
+                    pending.push(dst);
+                }
+            }
+        }
+        false
+    };
+    let only_copied = reads(register)
+        .iter()
+        .all(|&(block, index)| matches!(blocks[block].ops[index], Op::Copy { .. }))
+        && !phi_input(register);
     !(no_register_operand && only_copied)
 }
 
@@ -600,6 +625,9 @@ fn cse(function: &mut MFunc) {
     let mut rename: HashMap<Reg, Reg> = HashMap::default();
     let mut removed: HashSet<(usize, usize)> = HashSet::default();
     let mut table: HashMap<String, Reg> = HashMap::default();
+    // The block each table entry's register is defined in: equal operations in
+    // one block are one DAG node in the pin, shared whatever their readers.
+    let mut home: HashMap<Reg, usize> = HashMap::default();
     let copies = single_copies(function, &definitions);
     let readers = readers_of(function);
     let mut stack: Vec<(usize, usize, Vec<String>)> = vec![(0, 0, Vec::new())];
@@ -623,13 +651,14 @@ fn cse(function: &mut MFunc) {
                     // (`MachineCSE`, `PhysRegDefsReach`).
                     Some(&earlier)
                         if (!setter || flags_dead(&function.blocks[*block].ops, index))
-                            && profitable(&readers, &function.blocks, earlier, register, op) =>
+                            && (home.get(&earlier) == Some(block) || profitable(&readers, &definitions, &function.blocks, earlier, register, op)) =>
                     {
                         rename.insert(register, earlier);
                         removed.insert((*block, index));
                     }
                     Some(_) => {}
                     None => {
+                        home.insert(register, *block);
                         table.insert(key.clone(), register);
                         entries.push(key);
                     }
