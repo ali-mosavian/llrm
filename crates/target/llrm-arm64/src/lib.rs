@@ -2,7 +2,9 @@
 
 pub mod cc;
 pub mod cfi;
+pub mod cmpzero;
 pub mod combine;
+pub mod copyprop;
 pub mod dag;
 pub mod data;
 pub mod debug;
@@ -10,7 +12,6 @@ pub mod divconst;
 pub mod driver;
 pub mod emit;
 pub mod expand_imm;
-pub mod cmpzero;
 pub mod flagcse;
 pub mod frame;
 pub mod isel;
@@ -21,16 +22,16 @@ pub mod licm;
 pub mod lir_view;
 pub mod machine;
 pub mod mc;
+pub mod memcluster;
 pub mod mfunc;
 pub mod pairs;
+pub mod postrasink;
 pub mod prepass;
 pub mod regalloc;
 pub mod shrinkwrap;
-pub mod taildup;
 pub mod sibcall;
-pub mod copyprop;
-pub mod memcluster;
-pub mod postrasink;
+pub mod sinkfold;
+pub mod taildup;
 pub mod tti;
 #[cfg(test)]
 mod tti_tests;

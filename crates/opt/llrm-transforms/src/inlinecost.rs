@@ -1999,6 +1999,9 @@ impl<'a> Analyzer<'a> {
     /// counted as.
     fn call_size(&self) -> i64 {
         let Some(tti) = self.site.tti else { return 0 };
+        if let Some(sequence) = self.call_sequence(llrm_mir::tti::CostKind::CodeSize) {
+            return sequence;
+        }
         let size = llrm_mir::instructioncost::instruction_cost(
             tti,
             self.context,
@@ -2012,6 +2015,75 @@ impl<'a> Analyzer<'a> {
         (size * tti.call_code_size_percent() + 50) / 100
     }
 
+    /// The call site as the target's call sequence sees it.
+    fn call_shape(&self) -> Option<llrm_mir::tti::CallShape> {
+        use llrm_mir::tti::{CallArgument, CallShape, Ty};
+        let call = self.site.caller.instruction(self.site.call);
+        let info = call_info(self.site.caller, self.site.call)?;
+        let arguments = call.operands.len().saturating_sub(1);
+        let arguments = (0..arguments)
+            .map(|index| {
+                let byval = info
+                    .argument_attrs
+                    .get(index)
+                    .and_then(
+                        |attrs| attrs
+                            .iter()
+                            .find_map(
+                                |one| match one {
+                                    Attribute::Type(name, ty) if name == "byval" => Some(*ty),
+                                    _ => None,
+                                },
+                            ),
+                    );
+                let ty = llrm_mir::instructioncost::operand_type(self.context, self.site.caller, call.operands[index])
+                    .and_then(|ty| Ty::of(&self.context.types, ty));
+                CallArgument { ty, byval_bytes: byval.map(|ty| self.site.layout.alloc_size(&self.context.types, ty)) }
+            })
+            .collect();
+        let caller = self.site.caller;
+        let caller_frame_bytes = caller
+            .layout()
+            .first()
+            .map(|&entry| {
+                caller
+                    .iter_block(entry)
+                    .filter_map(|inst| match &caller.instruction(inst).opcode {
+                        Opcode::Alloca { allocated, .. } if caller.instruction(inst).operands.is_empty() => {
+                            Some(self.site.layout.alloc_size(&self.context.types, *allocated))
+                        }
+                        _ => None,
+                    })
+                    .sum()
+            })
+            .unwrap_or(0);
+        Some(CallShape { arguments, callee_frame_bytes: self.allocated_size, caller_frame_bytes })
+    }
+
+    /// The target's price of the call and its argument setup
+    /// (`Tti::call_sequence_cost`), or none where it states none.
+    fn call_sequence(
+        &self,
+        kind: llrm_mir::tti::CostKind,
+    ) -> Option<i64> {
+        let tti = self.site.tti?;
+        tti.call_sequence_cost(&self.call_shape()?, kind).map(|cost| cost.value)
+    }
+
+    /// What the callee's frame costs (`Tti::callee_frame_cost`) where inlining
+    /// removes it: none where the caller has no frame to put it in.
+    fn callee_frame(
+        &self,
+        kind: llrm_mir::tti::CostKind,
+    ) -> i64 {
+        let Some(tti) = self.site.tti else { return 0 };
+        let Some(shape) = self.call_shape() else { return 0 };
+        if shape.caller_frame_bytes == 0 {
+            return 0;
+        }
+        tti.callee_frame_cost(&shape, kind).map_or(0, |cost| cost.value)
+    }
+
     /// Whether inlining leaves the module's code bigger. A callee that stays
     /// grows it by its unfolded size less the call it replaces, per site. One
     /// that dies with its calls (local, address not taken) is also removed:
@@ -2020,14 +2092,17 @@ impl<'a> Analyzer<'a> {
     /// calls: 19 > 20 does not grow).
     fn grows_the_code(&self) -> bool {
         let (size, call, k) = (self.size_units, self.call_size(), self.site.callee_calls);
-        if self.site.callee_dies && k >= 2 { (k - 1) * size > k * call } else { size > call }
+        // the callee's frame goes once, with the callee
+        let frame = self.callee_frame(llrm_mir::tti::CostKind::CodeSize);
+        if self.site.callee_dies && k >= 2 { (k - 1) * size > k * call + frame } else { size > call }
     }
 
     /// Bytes one inlined site adds to the module: the callee's unfolded size
     /// less the call, spread over the sites when the callee dies with them.
     fn growth_per_site(&self) -> i64 {
         let (size, call, k) = (self.size_units, self.call_size(), self.site.callee_calls);
-        if self.site.callee_dies && k >= 2 { ((k - 1) * size - k * call) / k } else { size - call }
+        let frame = self.callee_frame(llrm_mir::tti::CostKind::CodeSize);
+        if self.site.callee_dies && k >= 2 { ((k - 1) * size - k * call - frame) / k } else { size - call }
     }
 
     /// Whether a speed caller's inline costs more in bytes than it saves in
@@ -2043,17 +2118,22 @@ impl<'a> Analyzer<'a> {
         if rate == 0 || growth <= self.call_size() || self.site.sole_call_to_local {
             return false;
         }
-        let saved = llrm_mir::instructioncost::instruction_cost(
-            tti,
-            self.context,
-            self.site.layout,
-            &self.site.module.globals,
-            self.site.caller,
-            self.site.call,
-            llrm_mir::tti::CostKind::Latency,
-        )
-        .value
-        .max(1);
+        let saved = self
+            .call_sequence(llrm_mir::tti::CostKind::Latency)
+            .unwrap_or_else(|| {
+                llrm_mir::instructioncost::instruction_cost(
+                    tti,
+                    self.context,
+                    self.site.layout,
+                    &self.site.module.globals,
+                    self.site.caller,
+                    self.site.call,
+                    llrm_mir::tti::CostKind::Latency,
+                )
+                .value
+            })
+            .saturating_add(self.callee_frame(llrm_mir::tti::CostKind::Latency))
+            .max(1);
         let frequency = self.site.relative_frequency.unwrap_or(1.0).max(0.0);
         (growth * rate) as f64 > saved as f64 * 1000.0 * frequency
     }

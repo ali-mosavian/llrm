@@ -180,7 +180,9 @@ fn operand(text: &str) -> Result<Operand, String> {
     if text.strip_suffix(":l").is_some_and(|address| address.starts_with("0x")) {
         return Ok(Operand::Mode(Mode::AbsL, 0));
     }
-    if text.strip_suffix(":w").is_some_and(|address| address.starts_with("0x")) {
+    if text.strip_suffix(":w").is_some_and(|address| {
+        address.starts_with("0x") || address.trim_start_matches('-').chars().all(|c| c.is_ascii_digit())
+    }) {
         return Ok(Operand::Mode(Mode::AbsW, 0));
     }
     let first = text.chars().next();

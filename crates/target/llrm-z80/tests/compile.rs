@@ -338,7 +338,10 @@ fn a_loop_is_not_entered_by_a_jump_to_a_merged_test_at_o2() {
 #[test]
 fn a_zero_flag_stands_through_a_16_bit_add() {
     let out = text(include_str!("kernels/ir/fib.ll"), "fib", 0, &Request::new(Level::O2)).expect("compiles");
-    assert!(out.contains("add hl, bc\n\tret z") && !out.contains("add hl, bc\n\tor a, a"), "{out}");
+    // the counter is stepped before or after the add; either way the flag
+    // stands for `ret z`
+    assert!(out.contains("ret z") && !out.contains("add hl, bc\n\tor a, a"), "{out}");
+    assert_eq!(out.matches("or a, a").count(), 1, "only the entry test: {out}");
 }
 
 /// The adds of a use after the loop were rated every trip, so LSR kept the
@@ -1010,7 +1013,8 @@ fn a_word_in_de_is_stored_to_a_global_without_moving_it() {
 fn a_comparison_used_as_a_value_is_a_byte_that_is_one_or_zero() {
     let ir = include_str!("kernels/ir/carry32.ll");
     let out = text(ir, "carry32", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
-    assert!(out.contains("sbc a, ") && out.contains("dec "), "{out}");
+    // the carry fusion has since turned the compare and its byte into `adc hl, rr`
+    assert!(out.contains("adc hl, ") && !out.contains("SETCC8"), "{out}");
 }
 
 /// A call with more arguments than registers was refused: "stack arguments are
@@ -1563,4 +1567,47 @@ fn a_size_build_does_not_copy_a_callee_bigger_than_its_call() {
         })
         .sum();
     assert_eq!(calls, 3, "step was copied into its callers");
+}
+
+/// A callee with a frame pays its entry and exit at every call: `push ix`,
+/// `ld ix`, `add ix,sp`, the stack adjustment and their undoing, 12 to 20 B,
+/// which an inline removes. Priced as the bare call, -Os kept `bench` (two
+/// calls, a 140 B frame) a call: stack_arrays_copy was 155 B, 122 B inlined.
+#[test]
+fn a_size_build_inlines_a_callee_whose_frame_costs_more_than_its_body() {
+    let ir = include_str!("kernels/ir/stack_arrays_copy.ll");
+    let out = text(ir, "main", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("_bench"), "{out}");
+}
+
+/// A callee's frame is built once, and an inlined copy builds it in the caller:
+/// credited per site, as if every copy shed one, -Os inlined `dirty` (a 96 B
+/// frame, two sites) into a `main` with no frame of its own and
+/// long_double_constant_store grew from 64 B to 72 B. `dirty` stays a call.
+#[test]
+fn a_size_build_keeps_a_callee_whose_frame_would_move_into_a_frameless_caller() {
+    let ir = include_str!("kernels/ir/long_double_constant_store.ll");
+    let out = text(ir, "main", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+    assert_eq!(out.matches("call _dirty").count(), 2, "{out}");
+}
+
+/// A counted byte copy kept its count in a word: `ld de, #200` and `dec de;
+/// ld a, d; or a, e` a trip, with the pointer stepped beside it. HardwareLoops
+/// counts the trips in a byte (`ld b, #200`) and the word is gone: rep_count
+/// was 9% fewer clocks, mul_constants 12% fewer bytes.
+#[test]
+fn a_counted_loop_counts_its_trips_in_a_byte() {
+    let ir = format!(
+        "target datalayout = \"{DATALAYOUT}\"\n@a = global [200 x i8] zeroinitializer\n\
+         @b = global [200 x i8] zeroinitializer\n\
+         define void @copy() {{\nentry:\n  br label %loop\nloop:\n\
+         \x20 %i = phi i16 [ 0, %entry ], [ %i.next, %loop ]\n\
+         \x20 %p = getelementptr i8, ptr @a, i16 %i\n  %v = load i8, ptr %p\n  %w = add i8 %v, 1\n\
+         \x20 %q = getelementptr i8, ptr @b, i16 %i\n  store i8 %w, ptr %q\n\
+         \x20 %i.next = add nuw i16 %i, 1\n  %c = icmp ne i16 %i.next, 200\n\
+         \x20 br i1 %c, label %loop, label %exit\nexit:\n  ret void\n}}"
+    );
+    let out = text(&ir, "copy", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("ld b, #200"), "{out}");
+    assert!(!out.contains("or a, e"), "the word count is tested no more: {out}");
 }

@@ -705,6 +705,7 @@ const IMPLEMENTED_BY: &[(&str, &str)] = &[
     ("copyprop@18", "codegen:backend/machinecp"),
     ("lsr", "lsr_pass"),
     ("canonfreeze", "canonfreeze"),
+    ("hardwareloops", "hardwareloops"),
 ];
 
 /// Every source line of the module `name`: its file and its directory.

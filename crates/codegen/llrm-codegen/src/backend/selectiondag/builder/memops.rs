@@ -97,7 +97,7 @@ impl Builder<'_> {
                 Ok(())
             }
             // a hint the passes read: its value is its argument
-            Intrinsic::Expect | Intrinsic::Restrict => {
+            Intrinsic::Expect | Intrinsic::Restrict | Intrinsic::StartLoopIterations => {
                 let value = self.get_value(instruction.operands[0])?;
                 self.set_value(instruction.result.ok_or(Refused("a hint without a result"))?, value);
                 Ok(())
@@ -134,6 +134,15 @@ impl Builder<'_> {
             | Intrinsic::LRint
             | Intrinsic::LLRint
             | Intrinsic::Unary(_) => self.visit_math(instruction, intrinsic),
+            // the counter a phi carries, less what an iteration takes off
+            Intrinsic::LoopDecrementReg => {
+                let (left, right) =
+                    (self.get_value(instruction.operands[0])?, self.get_value(instruction.operands[1])?);
+                let vt = self.type_of(instruction.ty)?;
+                let node = self.dag.get_node(ISD::Sub, vt, &[left, right]);
+                self.set_value(instruction.result.ok_or(Refused("a decrement without a result"))?, node);
+                Ok(())
+            }
             _ => Err(Refused("intrinsic call")),
         }
     }

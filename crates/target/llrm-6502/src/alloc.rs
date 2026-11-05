@@ -418,6 +418,8 @@ struct Builder {
     block_of: HashMap<String, u32>,
     /// How many times each cell or register has been defined so far.
     versions: HashMap<String, u32>,
+    /// High halves of pointer cells written as plain bytes: the pair never sees them.
+    lost_halves: HashSet<String>,
     /// The compare whose flags the next branch reads, and the ones saved to
     /// cells for later.
     pending: Option<Compare>,
@@ -481,8 +483,19 @@ impl Builder {
         if !name.starts_with("v_") && !name.starts_with("w_") {
             return Err(Unsupported(format!("operand {name}")));
         }
+        if self.lost_halves.contains(name) {
+            return Err(Unsupported(format!("{name}, the high half of a pointer cell, is written as a byte")));
+        }
         if let Some(r) = self.bytes.get(name) {
             return Ok(*r);
+        }
+        // A half of a pointer cell lives in its pair: a read of it unpacks
+        // the pair. Without this the half was a byte nothing defined
+        // (strs -O2: "a unique value" in the coalescer).
+        let word = name.strip_suffix("+1").unwrap_or(name);
+        if self.pointers.contains(word) {
+            let (low, high) = self.read_word(word)?;
+            return Ok(if name.ends_with("+1") { high } else { low });
         }
         let r = self.fresh();
         self.bytes.insert(name.to_owned(), r);
@@ -667,6 +680,9 @@ impl Builder {
         name: &str,
     ) {
         *self.versions.entry(name.to_owned()).or_default() += 1;
+        if name.strip_suffix("+1").is_some_and(|word| self.pointers.contains(word)) {
+            self.lost_halves.insert(name.to_owned());
+        }
     }
 
     fn version(
@@ -986,6 +1002,10 @@ impl Builder {
             self.copy(d, a);
             return Ok(());
         }
+        if is_zeroing(mnemonic, &second) {
+            self.push(Inst::new(Kind::Op("LDI"), vec![Operand::Def(d), Operand::Imm(0)]));
+            return Ok(());
+        }
         if let Some(carry) = carry {
             self.push(Inst::new(Kind::Op(carry), vec![]));
         }
@@ -1209,6 +1229,10 @@ impl Builder {
                 self.copy(d, a);
                 continue;
             }
+            if is_zeroing(mnemonic, &b) {
+                self.push(Inst::new(Kind::Op("LDI"), vec![Operand::Def(d), Operand::Imm(0)]));
+                continue;
+            }
             if half == 1 && low_kept && b == Operand::Imm(1) {
                 self.copy(d, a);
                 self.push(Inst::new(
@@ -1278,6 +1302,15 @@ fn is_identity(
         (mnemonic, second),
         ("EOR" | "ORA", Operand::Imm(0)) | ("AND", Operand::Imm(255))
     )
+}
+
+/// A logical op whose immediate makes the byte zero whatever it was: `x & 0`
+/// (the high half of a zero-extended byte masked by 255 was `lda #0; and #0`).
+fn is_zeroing(
+    mnemonic: &str,
+    second: &Operand,
+) -> bool {
+    matches!((mnemonic, second), ("AND", Operand::Imm(0)))
 }
 
 fn name(operand: &Machine) -> Result<&str, Unsupported> {
@@ -1416,6 +1449,18 @@ fn constants(items: &[Item]) -> HashMap<String, i64> {
         let word = cell.strip_suffix("+1").unwrap_or(cell);
         defs[cell] == 1 && defs[word] == 1 && (cell.starts_with("v_") || cell.starts_with("w_"))
     });
+    // a word masked by a word whose high byte is zero has a zero high byte (the
+    // mask 255 that zero-extends an any-extended byte)
+    for item in items {
+        let Item::Inst(MInst { opcode: op::AND16, operands, .. }) = item else { continue };
+        if let [Machine::Reg(d), _, Machine::Reg(mask)] = &operands[..]
+            && defs[d] == 1
+            && (d.starts_with("v_") || d.starts_with("w_"))
+            && values.get(&format!("{mask}+1")) == Some(&0)
+        {
+            values.insert(format!("{d}+1"), 0);
+        }
+    }
     // a byte copied once from a constant is that constant (the zero high half
     // of a widened byte)
     for item in items {
@@ -1475,6 +1520,7 @@ pub fn build_with_places(
         constants: constants(items),
         block_of,
         versions: HashMap::default(),
+        lost_halves: HashSet::default(),
         pending: None,
         saved: HashMap::default(),
         current: 0,

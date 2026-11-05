@@ -126,6 +126,7 @@ pub fn items_with(
         crate::negadd::negative_adds_to_subq(&mut function);
         crate::addrarith::address_adds(&mut function, cpu, wants_size);
         crate::foldload::fold_loads(&mut function);
+        crate::divrem::remainders_from_quotients(&mut function);
         if wants_size {
             crate::foldarg::fold_argument_loads(&mut function);
         }
@@ -135,6 +136,9 @@ pub fn items_with(
     crate::regalloc::split_flag_edges(&mut function);
     eliminate_phis_with(&mut function, false);
     fold_reserved_copies(&mut function);
+    if options.short {
+        crate::commutative::mark_commutative(&mut function, wants_size);
+    }
     commute_tied(&mut function);
     two_address(&mut function);
     // spill slots are numbered after the static allocas

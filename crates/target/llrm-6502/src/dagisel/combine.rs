@@ -14,7 +14,7 @@ use llrm_codegen::backend::selectiondag::dag_combiner::{CombineHooks, CombineLev
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::known_bits::masked_value_is_zero;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
-use llrm_codegen::backend::selectiondag::{SDValue, SelectionDAG};
+use llrm_codegen::backend::selectiondag::{LoadExt, NodeData, SDValue, SelectionDAG};
 
 pub struct MosCombines;
 
@@ -79,7 +79,8 @@ fn byte_sum_with_carry(
     }
     let [x, y, z] = leaves[..] else { return None };
     let bit = |dag: &SelectionDAG, term: SDValue| masked_value_is_zero(dag, term, 0xFFFE);
-    let byte = |dag: &SelectionDAG, term: SDValue| masked_value_is_zero(dag, term, 0xFF00);
+    let byte =
+        |dag: &SelectionDAG, term: SDValue| masked_value_is_zero(dag, term, 0xFF00) || is_any_extended_byte(dag, term);
     let (a, b, c) =
         [(x, y, z), (x, z, y), (y, z, x)].into_iter().find(|&(a, b, c)| bit(dag, c) && byte(dag, a) && byte(dag, b))?;
     let low = |dag: &mut SelectionDAG, term: SDValue| match dag.opcode(term) {
@@ -90,6 +91,27 @@ fn byte_sum_with_carry(
     let carry = carry_in(dag, c);
     let sum = dag.get_node_multi(ISD::UAddOCarry, &[EVT::I8, EVT::I1], &[a, b, carry]);
     Some((SDValue { node: sum.node, res: 0 }, SDValue { node: sum.node, res: 1 }))
+}
+
+/// A byte widened with undefined high bits (`any_extend`, or a load that
+/// extends that way): zero is one of the values those bits may have, so it is
+/// a byte as `zext` is. `SimplifyDemandedBits` turns a `zext` into one
+/// wherever the sum's high byte is not read.
+fn is_any_extended_byte(
+    dag: &SelectionDAG,
+    term: SDValue,
+) -> bool {
+    match dag.opcode(term) {
+        ISD::AnyExtend => dag.value_type(dag.operand(term, 0)) == EVT::I8,
+        ISD::Load => {
+            term.res == 0
+                && matches!(
+                    dag.node(term).data,
+                    NodeData::Mem(info) if info.ext == Some(LoadExt::ExtLoad) && info.mem_vt == EVT::I8
+                )
+        }
+        _ => false,
+    }
 }
 
 /// One half of a `BuildPair`: `trunc` of it is the low piece, and `srl` of it

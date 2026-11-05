@@ -131,7 +131,8 @@ impl Tti for M68k {
 
     /// DEVIATE: the pin's M68k states no preference; `(An)+` steps a pointer
     /// by the access size for free (descriptors in `indexed.rs`), so LSR keeps
-    /// a pointer walk rather than an index beside a counter. Exit: none.
+    /// a pointer walk rather than an index beside a counter. Exit: 2026-11-20,
+    /// when LSR rates the indexed formula beside the walk (M68K-COPY-OS).
     fn preferred_addressing_mode(&self) -> AddressingMode {
         AddressingMode::PostIndexed
     }
@@ -220,6 +221,17 @@ impl Tti for M68k {
         kind: CostKind,
     ) -> Cost {
         Basic.cast_cost(op, to, from, kind)
+    }
+
+    /// DEVIATE 20: each select a two-entry phi would become costs the branch
+    /// and move it lowers to, in bytes as in clocks (a fold saves one branch
+    /// and adds a move per select). gcd -O2 44 -> 26 B, 236 -> 138 clk; -Os
+    /// 44 -> 26 B. Exit 2026-11-12.
+    fn select_branch_extra(
+        &self,
+        _optsize: bool,
+    ) -> i64 {
+        1
     }
 
     fn sizes_exit_values(&self) -> bool {
