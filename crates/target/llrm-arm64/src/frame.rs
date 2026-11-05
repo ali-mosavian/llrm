@@ -16,6 +16,8 @@
 
 use llrm_object::assembler::Cfi;
 
+use rustc_hash::FxHashSet as HashSet;
+
 use crate::mc::inst::*;
 use crate::mc::unwind;
 use crate::mc::visit::Reg;
@@ -220,37 +222,72 @@ fn place_objects(function: &MFunc) -> (Vec<u64>, u64) {
                     },
                 ),
         );
-    let assign = |order: &[usize], slots: &mut Vec<u64>| {
-        let mut at = function.outgoing;
-        for &index in order.iter().rev() {
-            let slot = &function.slots[index];
-            at = at.next_multiple_of(slot.align.max(1));
-            slots[index] = at;
-            at += slot.size;
-        }
-        at
-    };
-    // Only a frame the pre-indexed store can allocate (offset -256 at the
-    // lowest) gains from that: a larger one keeps the dense order, whose
-    // offsets stay within the reach of a pair.
-    let mut at = assign(&order, &mut slots);
-    if at.next_multiple_of(16) > 256 {
-        // The pin's order: the first object at the top.
-        order = (0..function.slots.len()).collect();
-        at = assign(&order, &mut slots);
-    } else if let Some((first, 0)) = first
-        && let Some(position) = order.iter().position(|&one| one == first)
+    if let Some((first, 0)) = first
+        && let Some(at) = order.iter().position(|&one| one == first)
     {
-        let mut moved = order.clone();
-        moved.remove(position);
-        moved.push(first);
-        let mut again = slots.clone();
-        let end = assign(&moved, &mut again);
-        if end.next_multiple_of(16) <= 256 {
-            (slots, at) = (again, end);
+        order.remove(at);
+        order.push(first);
+    }
+    let mut at = function.outgoing;
+    for &index in order.iter().rev() {
+        let slot = &function.slots[index];
+        at = at.next_multiple_of(slot.align.max(1));
+        slots[index] = at;
+        at += slot.size;
+    }
+    // The dense order can put an object past what a pair reaches
+    // (`ldp`/`stp` of an 8-byte register: 504 bytes from the base); the pin's
+    // order, the first object at the top, is taken where it leaves fewer
+    // adjacent accesses out of reach.
+    let reach = unreachable_pairs(function, &slots);
+    if reach > 0 {
+        let by_index: Vec<usize> = (0..function.slots.len()).collect();
+        let mut indexed = vec![0; slots.len()];
+        let mut end = function.outgoing;
+        for &index in by_index.iter().rev() {
+            let slot = &function.slots[index];
+            end = end.next_multiple_of(slot.align.max(1));
+            indexed[index] = end;
+            end += slot.size;
+        }
+        if unreachable_pairs(function, &indexed) < reach {
+            (slots, at) = (indexed, end);
         }
     }
     (slots, at.next_multiple_of(16))
+}
+
+/// The adjacent same-kind accesses in a block whose lower address is past
+/// what a pair instruction reaches from the stack pointer, with the objects
+/// at `slots`.
+fn unreachable_pairs(
+    function: &MFunc,
+    slots: &[u64],
+) -> usize {
+    let mut count = 0;
+    for block in &function.blocks {
+        let mut seen: HashSet<(bool, u8, i64)> = HashSet::default();
+        for op in &block.ops {
+            let (load, mem, slot, offset) = match op {
+                Op::I(Inst::Load { mem, addr: Addr::Slot { slot, offset }, .. }) => (true, mem, slot, offset),
+                Op::I(Inst::Store { mem, addr: Addr::Slot { slot, offset }, .. }) => (false, mem, slot, offset),
+                _ => continue,
+            };
+            let bytes = match mem {
+                Memory::Int { bytes, .. } | Memory::Fp { bytes, .. } => *bytes,
+            };
+            if let Some(&base) = slots.get(*slot as usize)
+                && matches!(bytes, 4 | 8 | 16)
+            {
+                seen.insert((load, bytes, base as i64 + offset));
+            }
+        }
+        count += seen
+            .iter()
+            .filter(|&&(load, bytes, at)| at > 63 * i64::from(bytes) && seen.contains(&(load, bytes, at + i64::from(bytes))))
+            .count();
+    }
+    count
 }
 
 fn layout(
