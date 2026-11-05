@@ -2931,6 +2931,10 @@ impl Emitter<'_, '_> {
                     ],
                     vec![Loc::Held(count), Loc::Held(source), Loc::Held(destination)],
                 );
+                // a `rep` glued after this one goes on from where it stopped
+                self.accumulator.insert(counter, emptied);
+                self.accumulator.insert(from, source_after);
+                self.accumulator.insert(to, destination_after);
                 return Ok(Some(()));
             }
             "REP_STOSB_32" | "REP_STOSW_32" | "REP_STOSD_32" | "REP_STOSB_64" | "REP_STOSW_64" | "REP_STOSD_64"
