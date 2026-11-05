@@ -436,9 +436,9 @@ fn allocate_once(
     return_conditionally(&mut function);
     let size = |class| if Z80Registers::bytes_of(class) == 1 { 1 } else { 2 };
     let mut slots: Vec<(i32, usize)> = slots.into_iter().map(|(slot, class)| (slot, size(class))).collect();
-    if slots_are_a_stack(&mut function, &assignment) {
-        slots.clear();
-    } else {
+    let pushed = stack_slots(&mut function, &assignment);
+    slots.retain(|(slot, _)| !pushed.contains(slot));
+    if !slots.is_empty() || pushed.is_empty() {
         spills_first(&mut function, &assignment);
         narrow_reload_for_byte_shift(&mut function, &assignment);
     }
@@ -617,24 +617,34 @@ fn stack_pair(register: llrm_lir::registers::RegId) -> Option<llrm_lir::register
     [reg::BC, reg::DE, reg::HL].into_iter().find(|pair| REGISTER_INFO.root(register) == *pair)
 }
 
-/// Spill slots that nothing else needs a frame for become `push` and `pop`, and
-/// the frame goes: `digits` kept a counter across a call with `ld -1(ix), b` /
-/// `ld b, -1(ix)` and the 13 bytes of frame setup and teardown SDCC does
-/// without.
-///
-/// Every path must treat the slots as a stack: a store with the slot empty, a
-/// load of the slot on top, an empty stack at each return, one stack where
-/// paths meet. A byte slot saves its pair, so the other half must not be live
-/// after the `pop` (`PhysLiveness`). `a` is not saved this way: its pair is the
-/// flags.
+/// Whether any spill slot of `function` became a `push` and `pop`: see
+/// [`stack_slots`].
 pub fn slots_are_a_stack(
     function: &mut MFunction,
     assignment: &Assignment,
 ) -> bool {
+    !stack_slots(function, assignment).is_empty()
+}
+
+/// Spill slots that are used as a stack become `push` and `pop`: `digits` kept
+/// a counter across a call with `ld -1(ix), b` / `ld b, -1(ix)` and the 13
+/// bytes of frame setup and teardown SDCC does without, and a slot through IX
+/// costs 3 B each way a byte where a pair is 1 B each way.
+///
+/// A slot is one when every path treats it as such: a store with the slot not
+/// on the stack, a load of the slot on top, an empty stack at each return, one
+/// stack where paths meet. A byte slot saves its pair, so the other half must
+/// not be live after the `pop` (`PhysLiveness`). `a` is not saved this way: its
+/// pair is the flags. No spill sits between the reservation of a call's stack
+/// arguments and the call: the arguments must lie lowest. A slot that fails
+/// stays in the frame; the others are pushed below it, past the locals.
+///
+/// Returns the slots made pushes and pops.
+pub fn stack_slots(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) -> Vec<i32> {
     use llrm_spike_mf::livephys::PhysLiveness;
-    if !function.locals.is_empty() || !function.fixed.is_empty() {
-        return false;
-    }
     let register = |reg: Reg| match reg {
         Reg::Virt(v) => assignment.0[v as usize],
         Reg::Phys(id) => id,
@@ -648,73 +658,105 @@ pub fn slots_are_a_stack(
         }
         _ => None,
     };
-    let mut any = false;
-    for inst in function.blocks.iter().flat_map(|block| &block.insts) {
-        if inst.operands.iter().any(|one| matches!(one, Operand::Frame(_))) {
-            match spill(inst) {
-                Some((_, _, register)) if stack_pair(register).is_some() => any = true,
-                _ => return false,
+    // the slots in play, less those no stack can hold
+    let mut chosen: std::collections::BTreeSet<i32> = std::collections::BTreeSet::new();
+    let mut barred: std::collections::BTreeSet<i32> = std::collections::BTreeSet::new();
+    let call_bytes = expand::call_bytes_at_entry(function);
+    for (b, block) in function.blocks.iter().enumerate() {
+        let mut area = call_bytes[b].0 != 0;
+        for inst in &block.insts {
+            match (inst.kind, inst.operands.first()) {
+                (Kind::Op("ADJCALLSTACKDOWN"), Some(Operand::Imm(size))) if *size != 0 => area = true,
+                (Kind::Op("ADJCALLSTACKUP"), Some(Operand::Imm(size))) if *size != 0 => area = false,
+                _ => {}
+            }
+            if let Some((_, slot, register)) = spill(inst) {
+                chosen.insert(slot);
+                if stack_pair(register).is_none() || area {
+                    barred.insert(slot);
+                }
             }
         }
     }
-    if !any {
-        return false;
+    chosen.retain(|slot| !barred.contains(slot));
+    if chosen.is_empty() {
+        return Vec::new();
     }
     let succs = llrm_spike_mf::regalloc::successors(function);
-    let mut entry: Vec<Option<Vec<i32>>> = vec![None; function.blocks.len()];
-    entry[0] = Some(Vec::new());
-    let mut work = vec![0usize];
-    while let Some(b) = work.pop() {
-        let mut stack = entry[b].clone().expect("a block on the list has a stack");
-        for inst in &function.blocks[b].insts {
-            match spill(inst) {
-                Some((true, slot, _)) if !stack.contains(&slot) => stack.push(slot),
-                Some((false, slot, _)) if stack.last() == Some(&slot) => {
-                    stack.pop();
-                }
-                Some(_) => return false,
-                None => {}
-            }
-        }
-        if succs[b].is_empty() && !stack.is_empty() {
-            return false;
-        }
-        for &next in &succs[b] {
-            match &entry[next] {
-                Some(seen) if *seen != stack => return false,
-                Some(_) => {}
-                None => {
-                    entry[next] = Some(stack.clone());
-                    work.push(next);
-                }
-            }
-        }
-    }
-    // the other half of a pair a byte slot saves is dead once the pair is
-    // restored
     let live = PhysLiveness::of::<Z80Registers>(function, assignment, &REGISTER_INFO);
-    for (b, block) in function.blocks.iter().enumerate() {
-        for (at, inst) in block.insts.iter().enumerate() {
-            let Some((false, _, register)) = spill(inst) else { continue };
-            let pair = stack_pair(register).expect("checked above");
-            if register != pair {
-                let after = live.live_before::<Z80Registers>(function, assignment, &REGISTER_INFO, b, at + 1);
-                let (lo, hi) = expand::lanes(pair).expect("a pair has two halves");
-                let mate = if register == lo { hi } else { lo };
-                if after.is_live(&REGISTER_INFO, mate) {
-                    return false;
+    // the first slot that keeps `chosen` from being a stack, or none
+    let violation = |function: &MFunction, chosen: &std::collections::BTreeSet<i32>| -> Option<i32> {
+        let mut entry: Vec<Option<Vec<i32>>> = vec![None; function.blocks.len()];
+        entry[0] = Some(Vec::new());
+        let mut work = vec![0usize];
+        while let Some(b) = work.pop() {
+            let mut stack = entry[b].clone().expect("a block on the list has a stack");
+            for inst in &function.blocks[b].insts {
+                match spill(inst) {
+                    Some((true, slot, _)) if chosen.contains(&slot) => {
+                        if stack.contains(&slot) {
+                            return Some(slot);
+                        }
+                        stack.push(slot);
+                    }
+                    Some((false, slot, _)) if chosen.contains(&slot) => {
+                        if stack.last() != Some(&slot) {
+                            return Some(slot);
+                        }
+                        stack.pop();
+                    }
+                    _ => {}
+                }
+            }
+            if succs[b].is_empty() && !stack.is_empty() {
+                return stack.last().copied();
+            }
+            for &next in &succs[b] {
+                match &entry[next] {
+                    Some(seen) if *seen != stack => {
+                        let at = seen.iter().zip(&stack).position(|(a, b)| a != b).unwrap_or(seen.len().min(stack.len()));
+                        return stack.get(at).or_else(|| seen.get(at)).copied();
+                    }
+                    Some(_) => {}
+                    None => {
+                        entry[next] = Some(stack.clone());
+                        work.push(next);
+                    }
                 }
             }
         }
+        // the other half of a pair a byte slot saves is dead once the pair is
+        // restored
+        for (b, block) in function.blocks.iter().enumerate() {
+            for (at, inst) in block.insts.iter().enumerate() {
+                let Some((false, slot, register)) = spill(inst) else { continue };
+                if !chosen.contains(&slot) {
+                    continue;
+                }
+                let pair = stack_pair(register).expect("checked above");
+                if register != pair {
+                    let after = live.live_before::<Z80Registers>(function, assignment, &REGISTER_INFO, b, at + 1);
+                    let (lo, hi) = expand::lanes(pair).expect("a pair has two halves");
+                    let mate = if register == lo { hi } else { lo };
+                    if after.is_live(&REGISTER_INFO, mate) {
+                        return Some(slot);
+                    }
+                }
+            }
+        }
+        None
+    };
+    while let Some(slot) = violation(function, &chosen) {
+        chosen.remove(&slot);
     }
     for inst in function.blocks.iter_mut().flat_map(|block| &mut block.insts) {
-        match inst.kind {
-            Kind::Op("SPILL8" | "SPILL16") => {
+        match spill(inst) {
+            Some((true, slot, _)) if chosen.contains(&slot) => {
                 inst.kind = Kind::Op("PUSHP");
                 inst.operands.remove(0);
                 inst.may_store = false;
             }
-            Kind::Op("RELOAD8" | "RELOAD16") => {
+            Some((false, slot, _)) if chosen.contains(&slot) => {
                 inst.kind = Kind::Op("POPP");
                 inst.operands.remove(1);
                 inst.may_load = false;
@@ -722,7 +764,7 @@ pub fn slots_are_a_stack(
             _ => {}
         }
     }
-    true
+    chosen.into_iter().collect()
 }
 
 /// Moves the entry block's spills of argument registers up to its start while
