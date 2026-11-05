@@ -76,9 +76,10 @@ def instructions_per_run(exe: Path, cwd: Path) -> int | str:
 
 
 def pic_mode(obj: Path) -> str:
-    """"pic", "nopic", "mixed" or "unknown" from the object's own relocations: an absolute 32-bit one (R_X86_64_32, 32S) is no-pic; a pc-relative one against
-    data (a data symbol or a .data/.bss/.rodata section) is pic; none of either says nothing. The flag a compiler was given is not the mode it wrote (main
-    ignored -fno-pic)."""
+    """"nopic", "pic" or "unknown" from the object's references to data (a data symbol or a .data/.bss/.rodata section). An absolute 32-bit one (R_X86_64_32, 32S)
+    is no-pic and wins: position-independent code never writes one, while non-pic code still reaches some data pc-relative (gcc -fno-pic read `mixed` on soft-float
+    code with a .rodata immediate beside a .bss load). Else a pc-relative or GOT one is pic; none says nothing. Calls and function addresses do not count. The flag a
+    compiler was given is not the mode it wrote (main ignored -fno-pic)."""
     found = subprocess.run(["readelf", "-rsW", str(obj)], capture_output=True, text=True).stdout.splitlines()
     data = {fields[7] for line in found if len(fields := line.split()) >= 8 and fields[0].endswith(":") and fields[3] == "OBJECT"}
     modes = set()
@@ -86,13 +87,13 @@ def pic_mode(obj: Path) -> str:
         fields = line.split()
         if len(fields) < 5 or not re.fullmatch(r"[0-9a-f]{8,16}", fields[0]) or not fields[2].startswith("R_X86_64_"):
             continue
+        if not (fields[4] in data or fields[4].startswith((".data", ".bss", ".rodata"))):
+            continue
         if fields[2] in ("R_X86_64_32", "R_X86_64_32S"):
             modes.add("nopic")
-        elif fields[2] in ("R_X86_64_PC32", "R_X86_64_GOTPCREL", "R_X86_64_GOTPCRELX", "R_X86_64_REX_GOTPCRELX") and (
-            fields[4] in data or fields[4].startswith((".data", ".bss", ".rodata"))
-        ):
+        elif fields[2] in ("R_X86_64_PC32", "R_X86_64_GOTPCREL", "R_X86_64_GOTPCRELX", "R_X86_64_REX_GOTPCRELX"):
             modes.add("pic")
-    return modes.pop() if len(modes) == 1 else "mixed" if modes else "unknown"
+    return "nopic" if "nopic" in modes else "pic" if modes else "unknown"
 
 
 def mismatch(row: dict, column: str, obj: Path, ours: Path) -> dict:
@@ -103,6 +104,12 @@ def mismatch(row: dict, column: str, obj: Path, ours: Path) -> dict:
         return row
     theirs, mine = pic_mode(obj), pic_mode(ours)
     return row if "unknown" in (theirs, mine) or theirs == mine else {"error": f"pic mode: {column} is {theirs}, ours is {mine}"}
+
+
+def checked_object(work: Path, program: str, column: str, opt: str) -> Path:
+    """The object whose position-independence is compared: the sized one where the harness wrapped the kernel (the program's own, `measure_one`), else the counted one. The counted wrapper's global pointer is a pc-relative data reference in every column, so gcc and clang read `pic` from it while ours, with the program's table beside it, read `mixed` (hanoi O2)."""
+    sized = work / f"{program}.{column}.{opt}.sized.o"
+    return sized if sized.exists() else work / f"{program}.{column}.{opt}.o"
 
 
 def compile_command(compiler: str, binary: Path, source: Path, opt: str, out: Path, bench: Path) -> tuple[list[str], dict[str, str]]:
@@ -168,6 +175,6 @@ def measure(selected: list[tuple[str, Path]], binary: Path, opts: list[str], wor
                 broken = rows["gcc64"].get("error", "")
                 if broken.startswith(("compile:", "link:")) and rows["clang64"].get("error", "").startswith(("compile:", "link:")):
                     rows = {column: {"skip": f"not buildable natively (gcc and clang fail too): {broken}"} for column in rows}  # parity/scalar calls `keep`, which only the DOS harness defines
-            rows = {column: mismatch(row, column, work / f"{directory.name}.{column}.{opt}.o", work / f"{directory.name}.{NOPIC}.{opt}.o") for column, row in rows.items()}
+            rows = {column: mismatch(row, column, checked_object(work, directory.name, column, opt), checked_object(work, directory.name, NOPIC, opt)) for column, row in rows.items()}
             out |= {(name, column, opt): row for column, row in rows.items()}
     return out
