@@ -382,4 +382,33 @@ mod tests {
         assert_eq!(load_before(copy(reg(RegId::EBX, 4), reg(RegId::EAX, 4))), "mov");
         assert_eq!(load_before(copy(reg(RegId::BX, 2), reg(RegId::AX, 2))), "movzx");
     }
+    /// `mov dx, [frame-128 + rax*2]` at 64 bits: the cell has no encoding
+    /// until the frame layout names the frame register, so the encodability
+    /// probe refused `movzx edx, ...` and shellsort -O2 kept the partial
+    /// write (+25% clocks against clang).
+    #[test]
+    fn a_word_load_of_a_frame_cell_with_a_wide_index_is_widened_at_64_bits() {
+        use crate::model::ir::{Addr, Held, Mem, Space};
+        let mut cell = Mem::new(Some(Addr::new(Space::Frame, -128)), 2);
+        cell.through = RegId::BP;
+        cell.index = Some(Held { value: 40, width: 8, offset: 0 });
+        cell.index_through = RegId::RAX;
+        cell.scale = 2;
+        let what = copy(reg(RegId::DX, 2), Loc::Mem(cell));
+        let load = Arc::new(Insn::new(0, Some((0, 0)), Some(what), vec![], vec![]));
+        let ret = Semantics { name: Some("ret".into()), ..Semantics::new(Operation::Return) };
+        let mut ret = Insn::new(1, Some((1, 1)), Some(ret), vec![], vec![]);
+        ret.reads_complete = true;
+        let mut body = LirBody::new(
+            "f",
+            0,
+            vec![LirBlock::new(0, vec![load, Arc::new(ret)]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.bits = 64;
+        let done = FixupBw { size: false, widens_byte: true, widens_word: true }.fixed(&body);
+        let name = done.blocks[0].insns[0].what.as_ref().and_then(|what| what.name.clone()).expect("a name");
+        assert_eq!(&*name, "movzx");
+    }
 }

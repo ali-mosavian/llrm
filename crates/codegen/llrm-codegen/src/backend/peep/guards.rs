@@ -289,8 +289,18 @@ pub fn short_in_real_mode_at(
             (Some(before), Some(after)) if after.code.len() <= before.code.len()
         )
     } else {
-        emitted(bits, after).is_some()
+        awaits_frame_layout(after) || emitted(bits, after).is_some()
     }
+}
+
+/// A frame cell reached by a wide index has no encoding until the frame
+/// layout names the frame register; `after` is not one that cannot encode.
+fn awaits_frame_layout(one: &Insn) -> bool {
+    one.what.as_ref().is_some_and(|what| {
+        what.dests.iter().chain(&what.sources).any(
+            |place| matches!(place, Loc::Mem(cell) if llrm_x86::select::awaits_frame_layout(cell)),
+        )
+    })
 }
 
 /// Both encode, in as many bytes.
