@@ -477,3 +477,109 @@ fn the_memory_routines_return_the_destination() {
         assert_eq!(got, 0, "{routine} did not return dst");
     }
 }
+
+/// The cases of the 32-bit division tests: edges, then a fixed pseudo-random
+/// walk over dividend and divisor widths (a divisor below 256 and one that
+/// skips dividend bytes take other paths in the speed routines).
+fn division_cases() -> Vec<(u32, u32)> {
+    let mut cases = vec![
+        (0, 0),
+        (0, 5),
+        (5, 0),
+        (1, 1),
+        (u32::MAX, 1),
+        (u32::MAX, u32::MAX),
+        (0x8000_0000, u32::MAX),
+        (0x8000_0000, 1),
+        (3_000_000, 100_003),
+        (100_003, 100_003),
+        (100_002, 100_003),
+        (255, 1),
+        (256, 255),
+        (65_535, 257),
+        (0x0100_0000, 3),
+        (0x7FFF_FFFF, 0x10000),
+    ];
+    for d in [2u32, 3, 5, 7, 10, 100, 127, 128, 129, 254, 255, 256, 257] {
+        for a in [0, 1, d - 1, d, d + 1, 255, 256, 65_535, 65_536, 0x7FFF_FFFF, 0x8000_0000, u32::MAX, 123_456_789] {
+            cases.push((a, d));
+        }
+    }
+    let mut state = 0x2545_F491u32;
+    let mut next = move || {
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        state
+    };
+    for _ in 0..60 {
+        let wa = [1, 7, 8, 9, 15, 16, 17, 24, 25, 31, 32][(next() >> 8) as usize % 11];
+        let wb = [1, 3, 8, 9, 16, 17, 24, 32][(next() >> 8) as usize % 8];
+        let (a, b) = (next(), next());
+        cases.push((a >> (32 - wa), b >> (32 - wb)));
+    }
+    cases
+}
+
+/// Runs `routine` over `cases`, `want` the result each should leave in
+/// `__sa`: the number of cases it got wrong, 255 at most.
+fn division_mismatches(
+    name: &str,
+    routine: &str,
+    cases: &[(u32, u32)],
+    want: impl Fn(u32, u32) -> u32,
+) -> i32 {
+    assert!(cases.len() < 256);
+    let mut table = String::from(".segment \"RODATA\"\nthe_cases:\n");
+    for &(a, b) in cases {
+        table += &format!("  .dword {a}, {b}, {}\n", want(a, b));
+    }
+    table += ".segment \"CODE\"\n";
+    let mut main = String::from("  lda #<the_cases\n  sta rc2\n  lda #>the_cases\n  sta rc3\n  lda #0\n  sta rc4\n  sta rc5\nthe_next:\n");
+    for (cell, from) in [("__sa", 0), ("__sb", 4)] {
+        for at in 0..4 {
+            main += &format!("  ldy #{}\n  lda (rc2),y\n  sta {cell}+{at}\n", from + at);
+        }
+    }
+    main += &format!("  jsr {routine}\n");
+    for at in 0..4 {
+        main += &format!("  ldy #{}\n  lda (rc2),y\n  cmp __sa+{at}\n  bne the_wrong\n", 8 + at);
+    }
+    main += "  jmp the_right\nthe_wrong:\n  inc rc4\nthe_right:\n  clc\n  lda rc2\n  adc #12\n  sta rc2\n  bcc the_same_page\n  inc rc3\nthe_same_page:\n  inc rc5\n";
+    main += &format!("  lda rc5\n  cmp #{}\n  beq the_end\n  jmp the_next\nthe_end:\n  lda rc4\n", cases.len());
+    common::run_with(name, &main, &table)
+}
+
+/// The speed variants of the 32-bit division and the small ones give the
+/// same results: quotient and remainder, unsigned and signed, a zero divisor
+/// (all ones over the dividend, as the walk of 32 trips left it), INT_MIN / -1
+/// and the dividend bytes that are skipped.
+#[test]
+fn long_division_routines_agree_with_the_machine_on_edges_and_a_walk() {
+    let cases = division_cases();
+    let unsigned = |a: u32, b: u32| if b == 0 { (u32::MAX, a) } else { (a / b, a % b) };
+    let signed = |a: u32, b: u32| {
+        let (x, y) = (a as i32, b as i32);
+        if y == 0 { (if x < 0 { 1 } else { u32::MAX }, a) } else { (x.wrapping_div(y) as u32, x.wrapping_rem(y) as u32) }
+    };
+    for suffix in ["", "_fast"] {
+        for (routine, quotient, which) in [("udivsi3", true, 0), ("umodsi3", false, 0), ("divsi3", true, 1), ("modsi3", false, 1)] {
+            let name = format!("__{routine}{suffix}");
+            let wrong = division_mismatches(&format!("div-{routine}{suffix}"), &name, &cases, |a, b| {
+                let (q, r) = if which == 0 { unsigned(a, b) } else { signed(a, b) };
+                if quotient { q } else { r }
+            });
+            assert_eq!(wrong, 0, "{name}: {wrong} of {} cases wrong", cases.len());
+        }
+    }
+}
+
+/// `x % 100003` on a 6-digit x walked all 32 bits: 4192 clocks a call, 1.8x
+/// gcc's, and loop_interchange -O2 spent 13.9M of its clocks on 3072 of
+/// them. The speed variant takes the dividend's bytes into the remainder
+/// while it stays below the divisor.
+#[test]
+fn a_long_modulo_by_a_17_bit_divisor_does_not_walk_32_trips() {
+    let setup = "  lda #$C0\n  sta __sa\n  lda #$C6\n  sta __sa+1\n  lda #$2D\n  sta __sa+2\n  lda #0\n  sta __sa+3\n  lda #$A3\n  sta __sb\n  lda #$86\n  sta __sb+1\n  lda #1\n  sta __sb+2\n  lda #0\n  sta __sb+3\n";
+    let with = common::cycles_with("modsi-clocks", &format!("{setup}  jsr __modsi3_fast\n"), "");
+    let without = common::cycles_with("modsi-clocks-none", setup, "");
+    assert!(with - without < 1800, "{} clocks", with - without);
+}
