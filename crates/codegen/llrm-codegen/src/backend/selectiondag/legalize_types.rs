@@ -792,9 +792,8 @@ impl<'a> TypeLegalizer<'a> {
                     let promoted = legalizer.promoted_integer(operand);
                     let wide = legalizer.dag.value_type(promoted);
                     if signed {
-                        let by = legalizer.shift_amount(wide, wide.size_in_bits() - bits);
-                        let high = legalizer.dag.get_node(ISD::Shl, wide, &[promoted, by]);
-                        legalizer.dag.get_node(ISD::Sra, wide, &[high, by])
+                        let ty = legalizer.dag.get_value_type_node(legalizer.dag.value_type(operand));
+                        legalizer.dag.get_node(ISD::SignExtendInReg, wide, &[promoted, ty])
                     } else {
                         let mask = legalizer.dag.get_constant(super::fold::mask(bits), wide);
                         legalizer.dag.get_node(ISD::And, wide, &[promoted, mask])
@@ -842,9 +841,8 @@ impl<'a> TypeLegalizer<'a> {
                         self.dag.get_node(ISD::And, wide, &[promoted, mask])
                     }
                     _ => {
-                        let by = self.shift_amount(wide, wide.size_in_bits() - bits);
-                        let high = self.dag.get_node(ISD::Shl, wide, &[promoted, by]);
-                        self.dag.get_node(ISD::Sra, wide, &[high, by])
+                        let ty = self.dag.get_value_type_node(self.dag.value_type(value));
+                        self.dag.get_node(ISD::SignExtendInReg, wide, &[promoted, ty])
                     }
                 };
                 let amount = match self.action(self.dag.value_type(amount)) {
@@ -1363,9 +1361,8 @@ impl<'a> TypeLegalizer<'a> {
                     if as_is {
                         promoted
                     } else if code.is_signed_int() {
-                        let by = legalizer.shift_amount(wide, wide.size_in_bits() - bits);
-                        let high = legalizer.dag.get_node(ISD::Shl, wide, &[promoted, by]);
-                        legalizer.dag.get_node(ISD::Sra, wide, &[high, by])
+                        let ty = legalizer.dag.get_value_type_node(legalizer.dag.value_type(value));
+                        legalizer.dag.get_node(ISD::SignExtendInReg, wide, &[promoted, ty])
                     } else {
                         let mask = legalizer.dag.get_constant(super::fold::mask(bits), wide);
                         legalizer.dag.get_node(ISD::And, wide, &[promoted, mask])
