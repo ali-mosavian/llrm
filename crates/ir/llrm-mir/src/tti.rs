@@ -465,6 +465,13 @@ pub trait Tti {
         0
     }
 
+    /// Whether one wider store of constants may start off its own size
+    /// (`allowsMemoryAccess` calls the unaligned store fast). False: it starts
+    /// at a multiple of its size.
+    fn merges_unaligned_stores(&self) -> bool {
+        false
+    }
+
     /// Whether a size build's loop rotation copies a header only when the copy
     /// is no bigger than the branches the rotation removes: the loop-closing
     /// jump and the header's own exit test, in `CodeSize`. False: the pass's
@@ -592,6 +599,16 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::inline_variable_memcpy`.
+    fn inlines_variable_memcpy(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::ipsccp_widen_keeps_sign`.
+    fn ipsccp_widen_keeps_sign(&self) -> bool {
+        false
+    }
+
     /// DEVIATE U1: the bar (unrolled size) an `optsize` loop of at most this
     /// many trips is fully unrolled under, where the target says so: its
     /// body's tests fold on the trip, and few copies cost little; none: the
@@ -625,6 +642,12 @@ pub trait Tti {
     /// in `gcc_insns` of the callee;
     /// none: no bar.
     fn recursive_edge_growth(&self) -> Option<(i64, i64)> {
+        None
+    }
+
+    /// DEVIATE REC-2: what the copies of a recursive function in itself may add
+    /// at (-O2, -O3), in `gcc_insns`; none: the pass's own.
+    fn recursive_inlining_growth(&self) -> Option<(i64, i64)> {
         None
     }
 
@@ -1120,6 +1143,14 @@ pub trait Tti {
     /// `getNumberOfRegisters` of the general-purpose class.
     fn number_of_gpr_registers(&self) -> u32 {
         8
+    }
+
+    /// The values LICM may hold across a loop before it refuses a promotion
+    /// (DEVIATE LP1, `licm/pressure.rs` in llrm-transforms): the register count
+    /// by default; `None` where registers are not what a value is held in and
+    /// the pin promotes without a cap.
+    fn licm_register_limit(&self) -> Option<u32> {
+        Some(self.number_of_gpr_registers())
     }
 
     /// The registers LSR keeps back from `number_of_gpr_registers` when it

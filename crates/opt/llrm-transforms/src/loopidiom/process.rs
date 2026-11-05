@@ -765,7 +765,8 @@ impl LoopIdiomRecognize {
         // generating the base address and checking everything.
         // DEVIATE: at -Os a copy whose length is known only at run time stays
         // a loop when the `rep movs` that replaces it is more bytes (no libc
-        // `memcpy` to call). Exit: none.
+        // `memcpy` to call). At speed, DEVIATE MEM-1 inlines the copy. Exit
+        // 2026-11-20.
         if let Some((costs, callees)) = run.bytes
             && run.se.match_apint(args.be_count).is_none()
         {

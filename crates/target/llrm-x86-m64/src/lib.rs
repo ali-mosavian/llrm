@@ -365,6 +365,10 @@ impl llrm_target::Target for M64 {
                     .map(|one| {
                         one.with_tuning(llrm_mir::target::Tuning {
                             inline_size_guard_at_size: true,
+                            // DEVIATE SZ2 (owner m64, exit 2026-11-19): the bound holds a
+                            // callee with one site too; the pin copies it (crc, floats,
+                            // tile -Os: gcc keeps the call, +40 B each).
+                            inline_size_guard_single_site: true,
                             // No byte/clock rate is stated for m64 (oversight
                             // 2026-11-03): a constant multiply is decomposed
                             // only where the chain is no larger than
@@ -374,6 +378,8 @@ impl llrm_target::Target for M64 {
                             recursive_inlining: Some((8, 450)),
                             // gcc's 15/30 size units in `gcc_insns` (m64 counts the sext/gep of its IR).
                             recursive_edge_growth: Some((16, 31)),
+                            // DEVIATE REC5-1 (owner w2, exit 2026-11-20), as m32.
+                            ipsccp_widen_keeps_sign: true,
                             // DEVIATE UJ2 (owner m64, exit 2026-11-14): BasicTTIImpl's
                             // 28-micro-op loop buffer gave the jam of an outer loop
                             // of that size a count of 0 (particle -O3: 15850 cycles,

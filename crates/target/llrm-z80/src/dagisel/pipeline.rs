@@ -181,8 +181,10 @@ pub fn select_block(
     cpu: Cpu,
     info: &mut FunctionLoweringInfo,
     optimize: bool,
+    sized: bool,
 ) -> Result<Vec<Unit>, Refusal> {
-    let tli = target_lowering();
+    let mut tli = target_lowering();
+    tli.set_opt_for_size(sized);
     let mut lowering = Z80Lowering;
     let arch = Z80;
     if optimize {

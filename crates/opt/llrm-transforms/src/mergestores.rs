@@ -41,8 +41,9 @@
 //! widen the span.
 //!
 //! DEVIATE M3 (pinned by `constants_that_cannot_be_one_wider_store_are_kept`):
-//! a wider constant store starts at a multiple of its size. LLVM's
-//! `allowsMemoryAccess` calls any x86 access fast.
+//! a wider constant store starts at a multiple of its size, unless the target
+//! says an unaligned one is fast (`Tti::merges_unaligned_stores`, AArch64:
+//! `allowsMisalignedMemoryAccesses`). Exit 11-12: the other targets' answers.
 //!
 //! DEVIATE M4 (rows, `sum_three -Os`): tuned for size, a merge is made only
 //! where the one store is no more code bytes than the ones it replaces, a
@@ -449,6 +450,24 @@ struct Constant {
     value: u128,
     /// The pointer of the lowest cell.
     pointer: Operand,
+    /// The least alignment, in bytes, the stores promised: that of the narrowest.
+    align: u32,
+}
+
+/// Whether `inst` is a store of an integer to an object that none of the
+/// open cells is in: it leaves them where they are, as the DAG's chains do
+/// (`findBetterNeighborChains` puts the stores that do not alias under one
+/// root).
+fn stored_elsewhere(
+    unit: &Unit,
+    inst: InstId,
+    open: &[Constant],
+) -> bool {
+    let op = unit.function.instruction(inst);
+    let Opcode::Store { volatile: false, .. } = op.opcode else { return false };
+    let Some(bits) = unit.int_bits(op.operands[0]) else { return false };
+    let Some((root, _)) = cell(unit, op.operands[1], bits.div_ceil(8)) else { return false };
+    open.iter().all(|one| one.root != root)
 }
 
 /// A store of an integer constant to a cell of an object.
@@ -472,6 +491,7 @@ fn constant(
         high: low + i64::from(bits / 8),
         value: value & ((1u128 << bits) - 1),
         pointer,
+        align: bits / 8,
     })
 }
 
@@ -514,6 +534,7 @@ fn constants_merged(
     stored: &IndexMap<(u128, u32), usize>,
     costs: &OperationCosts,
     size: bool,
+    unaligned: bool,
 ) -> Vec<Constant> {
     let mut cells = group;
     loop {
@@ -538,7 +559,7 @@ fn constants_merged(
                         let bits = width * count as i64 * 8;
                         matches!(bits, 16 | 32 | 64)
                             && bits <= i64::from(legal)
-                            && cells[at].low % (width * count as i64) == 0
+                            && (unaligned || cells[at].low % (width * count as i64) == 0)
                             && (!size || smaller(unit, costs, &cells[at..at + count], width * count as i64, stored))
                     },
                 );
@@ -564,6 +585,7 @@ fn constants_merged(
                 high: cells[at + take - 1].high,
                 value,
                 pointer: cells[at].pointer,
+                align: cells[at..at + take].iter().map(|one| one.align).min().unwrap_or(1),
             };
             cells.splice(at..at + take, [merged]);
             changed = true;
@@ -587,6 +609,7 @@ pub fn merged_constants(
 ) -> bool {
     let legal = layout.largest_legal_integer();
     let costs = outer.target().size_costs();
+    let unaligned = outer.target().tti().is_some_and(|tti| tti.merges_unaligned_stores());
     let mut plan: Vec<Constant> = Vec::new();
     {
         let unit = Unit::within(context, layout, function, outer);
@@ -601,8 +624,9 @@ pub fn merged_constants(
                 if let Some(one) = constant(&unit, inst, order) {
                     *stored.entry((one.value, (one.high - one.low) as u32)).or_default() += 1;
                     open.push(one);
-                } else if !memory::speculatable(unit.context, callees, function, inst)
-                    || matches!(function.instruction(inst).opcode, Opcode::Store { .. })
+                } else if (!memory::speculatable(unit.context, callees, function, inst)
+                    || matches!(function.instruction(inst).opcode, Opcode::Store { .. }))
+                    && !stored_elsewhere(&unit, inst, &open)
                 {
                     spans.push(std::mem::take(&mut open));
                 }
@@ -628,7 +652,7 @@ pub fn merged_constants(
                     continue;
                 }
                 plan.extend(
-                    constants_merged(&unit, group, legal, &stored, &costs, size)
+                    constants_merged(&unit, group, legal, &stored, &costs, size, unaligned)
                         .into_iter()
                         .filter(|one| one.stores.len() > 1),
                 );
@@ -640,8 +664,10 @@ pub fn merged_constants(
         let value = crate::counting::constant(context, &llrm_analysis::num::Num::from(wide.value), bits);
         let void = context.types.void();
         let last = wide.last;
+        // A merge made off its own size promises only what the cells did.
+        let align = (unaligned && wide.low % (wide.high - wide.low) != 0).then_some(u64::from(wide.align));
         let store = function.create_instruction(
-            Opcode::Store { align: None, volatile: false },
+            Opcode::Store { align, volatile: false },
             void,
             vec![value, wide.pointer],
             Flags::default(),

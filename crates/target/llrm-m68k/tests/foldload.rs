@@ -81,6 +81,7 @@ fn every_move_from_post_increment_to_memory_encodes_as_binutils_does() {
     for name in indexed::memory_move_rows() {
         let operands = match name.as_bytes()[name.len() - 2] {
             b'p' => vec![Operand::Imm(6), Operand::Reg(reg::A1), Operand::Reg(reg::A2)],
+            b'f' => vec![Operand::Imm(6), Operand::Reg(reg::A1), Operand::Reg(reg::D1), Operand::Reg(reg::A2)],
             _ => vec![Operand::Reg(reg::A1), Operand::Reg(reg::A2)],
         };
         let inst = Inst { opcode: name, operands };
@@ -90,7 +91,7 @@ fn every_move_from_post_increment_to_memory_encodes_as_binutils_does() {
         assert_eq!(encode(&inst).unwrap().bytes, want, "{name}: {text}");
         checked += 1;
     }
-    assert_eq!(checked, 9);
+    assert_eq!(checked, 12);
 }
 
 /// Folds `n` longs read through a post-incremented pointer into `acc` by `op`.

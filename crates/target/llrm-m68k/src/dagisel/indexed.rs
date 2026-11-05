@@ -58,6 +58,9 @@ struct Writeback {
     /// A move from `(An)+` to memory (`MOV32po`, `MOV32oo`): a load and the
     /// store of its value, `drops` leading results being the updated bases.
     memory_move: bool,
+    /// A store of an argument slot's bytes through `(An)+` (`MOV8op`): made
+    /// by [`crate::foldarg`], never selected.
+    slot: bool,
     /// How many leading operands are updated bases the printed row lacks.
     drops: usize,
 }
@@ -73,6 +76,7 @@ macro_rules! writeback {
             base: $name,
             source: false,
             memory_move: false,
+            slot: false,
             drops: 1,
         }),*]
     };
@@ -111,13 +115,14 @@ static WRITEBACKS: LazyLock<Vec<Writeback>> = LazyLock::new(|| {
             base,
             source: true,
             memory_move: false,
+            slot: false,
             drops: 1,
         });
     }
     // a load through `(An)+` stored at once: the pin's move from `(An)+` to an
     // `(An)`, `(d,An)` or `(An)+` destination, with the bases it updates
     for bits in ["8", "16", "32"] {
-        for (to, updates) in [('j', 0), ('p', 0), ('o', 1)] {
+        for (to, updates) in [('j', 0), ('p', 0), ('f', 0), ('o', 1)] {
             let printed = leak(format!("MOV{bits}{to}o"));
             if code_of_pin(printed).is_none() {
                 continue;
@@ -131,9 +136,29 @@ static WRITEBACKS: LazyLock<Vec<Writeback>> = LazyLock::new(|| {
                 base: printed,
                 source: false,
                 memory_move: true,
+                slot: false,
                 drops: updates + 1,
             });
         }
+    }
+    // a store through `(An)+` of what an argument slot holds
+    for bits in ["8", "16", "32"] {
+        let printed = leak(format!("MOV{bits}op"));
+        if code_of_pin(printed).is_none() {
+            continue;
+        }
+        all.push(Writeback {
+            name: leak(format!("{printed}_WB")),
+            prints_as: printed,
+            load: false,
+            pre: false,
+            drop: 0,
+            base: printed,
+            source: false,
+            memory_move: false,
+            slot: true,
+            drops: 1,
+        });
     }
     // a byte or word loaded through `(An)+` and extended: the pin's extension
     // pseudo with the mode of `(An)+`, which `expand` makes a clear and a move
@@ -154,6 +179,7 @@ static WRITEBACKS: LazyLock<Vec<Writeback>> = LazyLock::new(|| {
             base,
             source: false,
             memory_move: false,
+            slot: false,
             drops: 1,
         });
     }
@@ -277,6 +303,13 @@ pub fn store_twin(user: &str) -> Option<&'static str> {
     WRITEBACKS.iter().find(|one| one.memory_move && one.prints_as.strip_suffix('o') == Some(stem)).map(|one| one.name)
 }
 
+/// The writeback that stores through `(An)+` what a slot holds, for the
+/// writeback store `user` (`MOV8od_WB` is `MOV8op_WB`).
+pub fn slot_store_twin(user: &str) -> Option<&'static str> {
+    let stem = user.strip_suffix("d_WB").or_else(|| user.strip_suffix("r_WB"))?;
+    WRITEBACKS.iter().find(|one| one.slot && one.prints_as.strip_suffix('p') == Some(stem)).map(|one| one.name)
+}
+
 static DESCS: LazyLock<Vec<InstrDesc>> = LazyLock::new(|| {
     WRITEBACKS
         .iter()
@@ -324,7 +357,8 @@ static DESCS: LazyLock<Vec<InstrDesc>> = LazyLock::new(|| {
                 if one.load {
                     operands.extend([base.operands[0], register, used]);
                 } else {
-                    operands.extend([register, used, base.operands[1]]);
+                    operands.extend([register, used]);
+                    operands.extend_from_slice(&base.operands[1..]);
                 }
             }
             InstrDesc {
@@ -471,7 +505,7 @@ fn code(
         };
         let letters = &one.prints_as[one.prints_as.len() - 2..];
         let to_address = letters.starts_with('a') || letters.ends_with('a');
-        !one.source && one.load == load && one.pre == pre && narrow && to_address == address_register
+        !one.source && !one.slot && one.load == load && one.pre == pre && narrow && to_address == address_register
     };
     WRITEBACKS.iter().position(|one| wanted(&one)).map(|at| FIRST + at as u16)
 }

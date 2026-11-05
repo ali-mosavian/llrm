@@ -105,10 +105,7 @@ pub fn target_lowering() -> TargetLowering {
     // variable ones expand to runtime calls where they are emitted.
     set(&[Mul, SDiv, SRem, Shl, Srl, Sra], Action::Legal);
     set(&[SDivRem, MulHS, MulHU, UMulLoHi, SMulLoHi], Action::Expand);
-    // An unsigned word multiply with overflow stays refused ("convert node to
-    // libcall"): expanded wide, its flag's extension is not lowered
-    // (CannotSelect ZeroExtend). Exit: 2026-11-12.
-    set(&[UMulO], Action::LibCall);
+    set(&[UMulO], Action::Expand);
     // an unsigned divide and remainder are the one runtime call that makes
     // both: the legalizer expands each to the `UDIVREM` node, and the pair
     // of one dividend and divisor is one node
@@ -219,12 +216,13 @@ impl Hooks for MosLowering {
                 split,
                 variadic: false,
                 sret: false,
+                byval: None,
             }));
         }
         let count = if ret.size_in_bits() > 16 { ret.size_in_bits() / 16 } else { 1 };
         let part_vt = if count > 1 { EVT::I16 } else { ret };
         let ins = vec![
-            In { vt: part_vt, pointer: false, arg_vt: ret, split: count > 1, sret: false, ext: Ext::Any };
+            In { vt: part_vt, pointer: false, arg_vt: ret, split: count > 1, sret: false, ext: Ext::Any, byval: None };
             count as usize
         ];
         let callee = dag.get_target_external_symbol(EVT::I16, name);
@@ -370,7 +368,7 @@ fn lower_extend(
     // the flag of an overflow op is not a condition yet: its expansion makes
     // one, and the extension is lowered when that is done (`condition_byte` has
     // no byte for it and would widen the flag with this very node)
-    if matches!(dag.opcode(condition), ISD::SAddO | ISD::SSubO | ISD::SMulO) {
+    if matches!(dag.opcode(condition), ISD::SAddO | ISD::SSubO | ISD::SMulO | ISD::UMulO) {
         return node;
     }
     let vt = dag.value_type(node);

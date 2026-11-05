@@ -3,6 +3,7 @@
 
 pub mod abi;
 pub mod addrarith;
+pub mod addrroles;
 pub mod amiga;
 pub mod atari;
 pub mod callpush;
@@ -37,8 +38,10 @@ pub mod negadd;
 pub mod shiftadd;
 pub mod object;
 pub mod regalloc;
+pub mod scaledindex;
 pub mod target;
 pub mod timing;
+pub mod vaarg;
 
 use llrm_lir::registers::{RegId, Row};
 

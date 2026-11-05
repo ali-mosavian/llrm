@@ -623,3 +623,15 @@ fn extb_is_priced_as_ext_from_the_68020() {
     assert!(m68040("extb.l %d0") > 0);
     assert!(m68060("extb.l %d0") > 0);
 }
+
+/// objdump prints `extb.l` as `extbl`; `BASES` lacked `extb`, so a 68020+ build
+/// with a byte sign-extension was "not in the tables" and its clocks marked
+/// unpriced.
+#[test]
+fn gnu_extbl_is_priced_from_the_68020() {
+    for cpu in [Cpu::M68020, Cpu::M68030, Cpu::M68040, Cpu::M68060] {
+        let text = llrm_m68k::timing::from_gnu("extbl %d0").expect("extbl maps to extb.l");
+        assert_eq!(text, "extb.l %d0", "{cpu:?}");
+        assert!(cost_on(cpu, &text, 2, true).is_ok(), "{cpu:?} prices {text}");
+    }
+}

@@ -130,6 +130,10 @@ pub fn items_with(
         if wants_size {
             crate::foldarg::fold_argument_loads(&mut function);
         }
+        crate::addrroles::address_roles(&mut function);
+        if cpu.at_least(Cpu::M68020) {
+            crate::scaledindex::scale_indexes(&mut function);
+        }
     }
     expand_cmov(&mut function)?;
     machine_sink(&mut function);

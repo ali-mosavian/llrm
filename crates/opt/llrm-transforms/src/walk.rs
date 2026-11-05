@@ -348,6 +348,7 @@ impl ProgramPass for Walk {
                             peeling: !self.inline.single && recursion.is_some(),
                             depth: recursion.map_or(0, |one| one.depth),
                             callee: recursion.map_or(i64::MAX, |one| one.callee),
+                            growth: crate::inline::MAX_INLINE_INSNS_RECURSIVE,
                         };
                         let spliced = crate::inline::expanded_all(
                             context,
@@ -959,6 +960,10 @@ impl SelfInline {
                         peeling: false,
                         depth,
                         callee,
+                        growth: tti
+                            .as_deref()
+                            .and_then(|tti| tti.recursive_inlining_growth())
+                            .map_or(crate::inline::MAX_INLINE_INSNS_RECURSIVE, |(o2, o3)| if self.o3 { o3 } else { o2 }),
                     };
                     copies =
                         crate::inline::expanded_all(context, function, &by, &available, None, &mut declared, metadata)?;

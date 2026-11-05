@@ -306,6 +306,10 @@ impl Tti for AArch64 {
         250_000
     }
 
+    fn merges_unaligned_stores(&self) -> bool {
+        true
+    }
+
     /// A `sext`/`zext` of a load is the extending load (`ldrsb`, `ldrh`, ...)
     /// when the loaded type is a byte, half or word and both types are one
     /// register (`BasicTTIImplBase::getCastInstrCost`, BasicTTIImpl.h:1297).

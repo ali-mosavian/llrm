@@ -75,6 +75,36 @@ def instructions_per_run(exe: Path, cwd: Path) -> int | str:
     return round((many - few) / window)
 
 
+def pic_mode(obj: Path) -> str:
+    """"pic", "nopic", "mixed" or "unknown" from the object's own relocations: an absolute 32-bit one (R_X86_64_32, 32S) is no-pic; a pc-relative one against
+    data (a data symbol or a .data/.bss/.rodata section) is pic; none of either says nothing. The flag a compiler was given is not the mode it wrote (main
+    ignored -fno-pic)."""
+    found = subprocess.run(["readelf", "-rsW", str(obj)], capture_output=True, text=True).stdout.splitlines()
+    data = {fields[7] for line in found if len(fields := line.split()) >= 8 and fields[0].endswith(":") and fields[3] == "OBJECT"}
+    modes = set()
+    for line in found:
+        fields = line.split()
+        if len(fields) < 5 or not re.fullmatch(r"[0-9a-f]{8,16}", fields[0]) or not fields[2].startswith("R_X86_64_"):
+            continue
+        if fields[2] in ("R_X86_64_32", "R_X86_64_32S"):
+            modes.add("nopic")
+        elif fields[2] in ("R_X86_64_PC32", "R_X86_64_GOTPCREL", "R_X86_64_GOTPCRELX", "R_X86_64_REX_GOTPCRELX") and (
+            fields[4] in data or fields[4].startswith((".data", ".bss", ".rodata"))
+        ):
+            modes.add("pic")
+    return modes.pop() if len(modes) == 1 else "mixed" if modes else "unknown"
+
+
+def mismatch(row: dict, column: str, obj: Path, ours: Path) -> dict:
+    """`row`, or an error where the reported column's object is a different position-independence than ours (c64nopic) that the same program compiled to: a
+    pc-relative table beside an absolute one differs by a `lea` per access (hanoi2 -O2 read 10.6% behind clang with the pic one against the nopic one, 16% ahead
+    like for like)."""
+    if column not in REPORTED or column == NOPIC or "error" in row or "skip" in row or not obj.exists() or not ours.exists():
+        return row
+    theirs, mine = pic_mode(obj), pic_mode(ours)
+    return row if "unknown" in (theirs, mine) or theirs == mine else {"error": f"pic mode: {column} is {theirs}, ours is {mine}"}
+
+
 def compile_command(compiler: str, binary: Path, source: Path, opt: str, out: Path, bench: Path) -> tuple[list[str], dict[str, str]]:
     """The command and environment that compile `source` to the object `out`: the same flags for every compiler; ours is flagless in the gated column (like for like with the base: main 65098fd950 ignores -fno-pic) and `-fno-pic` in its reported column, as gcc and clang are; `main` becomes `bench_main_`, which the driver runs."""
     flags = [f"-{opt}", "-c", "-Dmain=bench_main_", "-I", str(bench), "-I", str(POSIX), "-o", str(out), str(source)]
@@ -138,5 +168,6 @@ def measure(selected: list[tuple[str, Path]], binary: Path, opts: list[str], wor
                 broken = rows["gcc64"].get("error", "")
                 if broken.startswith(("compile:", "link:")) and rows["clang64"].get("error", "").startswith(("compile:", "link:")):
                     rows = {column: {"skip": f"not buildable natively (gcc and clang fail too): {broken}"} for column in rows}  # parity/scalar calls `keep`, which only the DOS harness defines
+            rows = {column: mismatch(row, column, work / f"{directory.name}.{column}.{opt}.o", work / f"{directory.name}.{NOPIC}.{opt}.o") for column, row in rows.items()}
             out |= {(name, column, opt): row for column, row in rows.items()}
     return out

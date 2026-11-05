@@ -140,3 +140,21 @@ def test_the_per_run_count_does_not_flip_with_the_counters_jitter(monkeypatch):
 
         monkeypatch.setattr(native, "instructions_of", count)
         assert native.instructions_per_run(Path("x"), Path(".")) == 482, jitter
+
+
+def test_pic_mode_reads_the_objects_relocations_not_the_flag(tmp_path):
+    """hanoi2 -O2 read 10.6% behind clang when ours was pc-relative and clang absolute; like for like ours was 16% ahead. The mode is the object's, and a column of
+    the other mode is an error row, not a number."""
+    if shutil.which("gcc") is None or shutil.which("readelf") is None:
+        pytest.skip("no gcc or readelf")
+    source = tmp_path / "t.c"
+    source.write_text("static int a[100];\nint f(int i) { return a[i]++; }\n")
+    modes = {}
+    for flag in ("-fPIE", "-fno-pic"):
+        obj = tmp_path / f"t{flag}.o"
+        assert __import__("subprocess").run(["gcc", "-O2", flag, "-c", str(source), "-o", str(obj)]).returncode == 0
+        modes[flag] = native.pic_mode(obj)
+    assert modes == {"-fPIE": "pic", "-fno-pic": "nopic"}
+    row = {"instructions": 1}
+    assert native.mismatch(row, "clang64", tmp_path / "t-fno-pic.o", tmp_path / "t-fPIE.o") == {"error": "pic mode: clang64 is nopic, ours is pic"}
+    assert native.mismatch(row, "clang64", tmp_path / "t-fno-pic.o", tmp_path / "t-fno-pic.o") == row

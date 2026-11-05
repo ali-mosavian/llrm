@@ -1362,7 +1362,7 @@ fn pointer_cells(
             let word = cell.strip_suffix("+1").unwrap_or(cell);
             let pointer_use = cell == word
                 && match *opcode {
-                    op::COPY16 => true,
+                    op::COPY16 | op::CMP16 | op::CMPZ16 => true,
                     op::ADD16 => matches!(&operands[2], Machine::Reg(b) if constant(b)),
                     op::LDP8 | op::LDP16 | op::STP8 | op::STP16 | op::LDPI8 | op::STPI8 | op::LDPZ | op::STPZ => {
                         at == 1
