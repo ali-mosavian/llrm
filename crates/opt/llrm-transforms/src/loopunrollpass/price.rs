@@ -66,7 +66,16 @@ pub(super) fn full_unroll_pays(
             return false;
         }
         Trial::Skip => return false,
-        Trial::Force(header) => return header == lp.get_header(),
+        // The candidate and the loops in it, and the copies its unroll makes:
+        // the whole nest as the pin decides it, so that what unrolling the
+        // outer loop frees (the inner loops, the arrays they index) is in the
+        // copy that is measured (nbody -O2: +8 B for the nest, +208 B priced
+        // with the inner loops rolled).
+        Trial::Force(header) => {
+            return header == lp.get_header()
+                || !run.first.contains(&lp.get_header())
+                || analyzed.loops.get_loop_for(header).is_some_and(|candidate| candidate.contains_loop(Some(lp)));
+        }
     }
     let clocks = crate::profit::costs(run.outer);
     let bytes = run.outer.target().byte_costs();

@@ -157,6 +157,9 @@ pub struct Run<'a> {
     pub trial: Trial,
     /// The headers of the loops `Trial::Collect` left for a trial.
     pub deferred: Vec<BlockId>,
+    /// The headers of the loops the run began with: a loop not among them is a
+    /// copy an unroll made.
+    pub first: IdSet<BlockId>,
 }
 
 /// `TransformationMode`.
@@ -2067,6 +2070,7 @@ pub fn unroll_loops(run: &mut Run) -> bool {
     let closed = crate::lcssa::closed(run.context, run.layout, run.function).unwrap_or(false);
     let mut analyzed = Analyzed::of(run);
     let at_first: IdSet<BlockId> = analyzed.loops.get_loops_in_preorder().iter().map(|one| one.get_header()).collect();
+    run.first = at_first.clone();
     // The worklist is popped from the back (`appendReversedLoopsToWorklist`):
     // the loops are visited in the reverse of
     // `getLoopsInReverseSiblingPreorder`, each loop after the loops it
@@ -2287,6 +2291,7 @@ impl LoopFullUnroll {
             scev,
             trial,
             deferred: Vec::new(),
+            first: Default::default(),
             options: Options {
                 opt_level: self.opt_level,
                 opt_size: self.opt_size,
@@ -2384,6 +2389,7 @@ pub fn unroll_function(
         scev: ScalarEvolution::new(),
         trial: Trial::Estimate,
         deferred: Vec::new(),
+        first: Default::default(),
     };
     let unrolled = unroll_loops(&mut run);
     declared.place(module)?;

@@ -1581,6 +1581,7 @@ impl FunctionPass for LoopUnrollAndJam {
             scev: llrm_analysis::scev::ScalarEvolution::new(),
             trial: crate::loopunrollpass::Trial::Estimate,
             deferred: Vec::new(),
+            first: Default::default(),
             options: UnrollOptions {
                 opt_level: self.opt_level,
                 opt_size: self.opt_size,
