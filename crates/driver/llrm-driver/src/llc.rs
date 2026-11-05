@@ -273,7 +273,10 @@ fn with_default_convention(
     else {
         return;
     };
+    let served: Vec<u32> =
+        default.serves.iter().filter_map(|name| llrm_target::calling::Calling::number_of(Some(name))).collect();
     let takes = |convention: u32, variadic: bool| match (regcall_default, convention) {
+        (_, other) if served.contains(&other) => true,
         (false, 0) => true,
         (true, llrm_mir::opcode::REGCALL) => true,
         (true, 0) => variadic,
@@ -423,8 +426,13 @@ pub fn compiled_dumping(
         return Err(format!("{}: {why}; -fallow-pending-abi emits it anyway", triple.as_deref().unwrap_or_default()));
     }
     let mut flags = flags.clone();
-    if let (None, Some(system)) = (flags.object_format, system) {
-        flags.object_format = Some(llrm_target::object::Format::parse(&system.format)?);
+    if let Some(system) = system {
+        if flags.object_format.is_none() {
+            flags.object_format = Some(llrm_target::object::Format::parse(&system.format)?);
+        }
+        if flags.abi.is_none() {
+            flags.abi = system.abi;
+        }
     }
     let flags = &flags;
     let mut module = llrm_mir::parse::module(&text).map_err(|error| format!("{name}: {error}"))?;
@@ -691,9 +699,9 @@ mod options_tests {
         options_for(&bound, &flags, machine, format, default)
     }
 
-    /// The write-through `Promote` ran on the pin's clang IR at m16 and m32 -O1 and made
-    /// `lru` larger (29 B at m16); the frontends that build for m16 alone (Nib, BASIC)
-    /// have no GVN there and keep it.
+    /// The write-through `Promote` ran on the pin's clang IR at m16 and m32 -O1
+    /// and made `lru` larger (29 B at m16); the frontends that build for
+    /// m16 alone (Nib, BASIC) have no GVN there and keep it.
     #[test]
     fn clang_ir_at_m16_and_m32_has_no_write_through_and_the_m16_frontends_keep_it() {
         assert!(!options(&["-m16"], "omf").pipeline.write_through);
@@ -725,6 +733,25 @@ mod options_tests {
         let written = std::fs::read_dir(&dir).unwrap().count();
         let _ = std::fs::remove_dir_all(&dir);
         assert!(written > 0, "no stage written");
+    }
+
+    /// A Windows module's `fastcc` function took System V's registers
+    /// (`edi`, `esi`) while its `ccc` ones took Win64's: `hanoi`'s recursion
+    /// called with `edi` and `esi` and read its own arguments from `ecx` and
+    /// `edx`. On a Win64 subtarget every convention is `CC_X86_Win64_C`.
+    #[test]
+    fn a_windows_fastcc_function_and_its_call_take_the_win64_registers() {
+        let text = "target datalayout = \"e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                    target triple = \"x86_64-pc-windows-msvc\"\n\
+                    define internal fastcc i32 @sub(i32 %a, i32 %b) noinline {\n  %r = sub i32 %a, %b\n  ret i32 %r\n}\n\
+                    define i32 @f(i32 %x, i32 %y) {\n  %r = call fastcc i32 @sub(i32 %y, i32 %x)\n  ret i32 %r\n}\n";
+        let mut flags = Flags::default();
+        flags.allow_pending_abi = true;
+        let (built, _) = compiled_dumping(&flags, text, "w", None).unwrap();
+        let assembly = masm::text(&built).unwrap();
+        let (callee, caller) = assembly.split_once("f proc near").expect("both functions");
+        assert!(callee.contains("sub eax, edx"), "the callee reads ecx and edx:\n{assembly}");
+        assert!(caller.contains("mov ecx, edx") && !caller.contains("edi") && !caller.contains("esi"), "{assembly}");
     }
 
     /// `llrm-cc` ran the backend with none of what the Watcom front end set

@@ -75,6 +75,10 @@ pub struct Convention {
     /// Bytes below the arguments the caller reserves in every call and the
     /// callee may use (Win64's 32-byte home area of the register arguments).
     pub shadow_bytes: i64,
+    /// The MIR conventions besides C's that functions and calls in this
+    /// ABI take (`serves = ["fast"]`): Win64 sends every one through
+    /// `CC_X86_Win64_C`.
+    pub serves: Vec<String>,
     /// The ABI guarantees the stack is a multiple of `stack_alignment` at every
     /// call, whatever the callee holds: every function that calls frames
     /// itself to it.
@@ -220,6 +224,10 @@ pub struct Calling {
     /// whatever ABI the program has: no one else sees it, so the target's
     /// best serves. None where its default is that.
     pub private: Option<String>,
+    /// The convention a private function takes under an ABI family that
+    /// states its own (`[abi.<family>] private = "..."`): Win64 has one
+    /// convention for every function, `fastcc` included.
+    pub abi_private: BTreeMap<String, String>,
     /// The convention an instrument gives private functions in place of
     /// `private` (`LLRM_PRIVATE_WATCALL`), to compare the two. Never a default.
     pub private_instrument: Option<String>,
@@ -231,6 +239,7 @@ const KEYS: &[&str] = &[
     "backfill",
     "positional",
     "shadow_bytes",
+    "serves",
     "aligned_calls",
     "register_bytes",
     "sized_arguments",
@@ -293,6 +302,7 @@ impl Calling {
             .ok_or("calling.toml: `default` names the ABI a program has without -mabi=")?
             .to_owned();
         let mut abis = BTreeMap::new();
+        let mut abi_private = BTreeMap::new();
         for (family, one) in
             table.get("abi").and_then(toml::Value::as_table).ok_or("calling.toml: no [abi.<family>]")?
         {
@@ -302,6 +312,11 @@ impl Calling {
                 .and_then(toml::Value::as_str)
                 .ok_or_else(|| format!("calling.toml: abi.{family}.convention is not a name"))?;
             abis.insert(family.clone(), convention.to_owned());
+            if let Some(private) = one.as_table().and_then(|one| one.get("private")) {
+                let private =
+                    private.as_str().ok_or_else(|| format!("calling.toml: abi.{family}.private is not a name"))?;
+                abi_private.insert(family.clone(), private.to_owned());
+            }
         }
         for (name, value) in table
             .iter()
@@ -337,13 +352,20 @@ impl Calling {
             .get("private_instrument")
             .map(|one| one.as_str().map(str::to_owned).ok_or("calling.toml: `private_instrument` names a convention"))
             .transpose()?;
-        let calling = Self { conventions, abis, default, private, private_instrument };
+        let calling = Self { conventions, abis, default, private, abi_private, private_instrument };
         for (key, name) in [("private", &calling.private), ("private_instrument", &calling.private_instrument)] {
             if let Some(name) = name {
                 calling
                     .named(name)
                     .ok_or_else(|| format!("calling.toml: {key} is the convention {name}, which is not given"))?;
             }
+        }
+        for name in calling.abi_private.values() {
+            calling
+                .named(name)
+                .ok_or_else(
+                    || format!("calling.toml: an abi's private is the convention {name}, which is not given"),
+                )?;
         }
         for (family, convention) in &calling.abis {
             calling
@@ -359,6 +381,20 @@ impl Calling {
     /// The convention a private function takes, where the target states one.
     pub fn private(&self) -> Option<&Convention> {
         self.private.as_deref().and_then(|name| self.named(name))
+    }
+
+    /// The convention a private function takes under the ABI `family` (the
+    /// default's without one): the family's own where it states one, else
+    /// `private`'s.
+    pub fn private_under(
+        &self,
+        family: Option<&str>,
+    ) -> Option<&Convention> {
+        let family = family.unwrap_or(&self.default);
+        match self.abi_private.get(family) {
+            Some(name) => self.named(name),
+            None => self.private(),
+        }
     }
 
     /// The convention the comparison instrument gives a private function.
@@ -664,6 +700,10 @@ impl Convention {
             wide_pairs,
             backfill: flag("backfill")?,
             positional: flag("positional")?,
+            serves: match table.get("serves") {
+                Some(_) => names(table.get("serves"), "serves")?,
+                None => Vec::new(),
+            },
             shadow_bytes: table.contains_key("shadow_bytes").then(|| integer("shadow_bytes")).transpose()?.unwrap_or(0),
             aligned_calls: flag("aligned_calls")?,
             register_bytes: table.contains_key("register_bytes").then(|| integer("register_bytes")).transpose()?,
@@ -1053,12 +1093,8 @@ mod tests {
     #[test]
     fn a_positional_convention_counts_the_hidden_result_pointer_as_position_zero() {
         let calling = Calling::parse(WIN64).unwrap();
-        let placed =
-            calling.native().place_reserving(&[Kind::Word, Kind::Float(8), Kind::Word, Kind::Word], &["rcx"]);
-        assert_eq!(
-            placed.places,
-            [registers(&["rdx"]), registers(&["xmm2"]), registers(&["r9"]), Place::Stack(32)]
-        );
+        let placed = calling.native().place_reserving(&[Kind::Word, Kind::Float(8), Kind::Word, Kind::Word], &["rcx"]);
+        assert_eq!(placed.places, [registers(&["rdx"]), registers(&["xmm2"]), registers(&["r9"]), Place::Stack(32)]);
         assert_eq!(placed.stack_bytes, 40);
     }
 
@@ -1155,6 +1191,24 @@ mod tests {
             (Some("*"), Some("*"), Some("_*"))
         );
         assert_eq!((calling.redecorated("^", "elf"), calling.redecorated("*_", "coff")), (None, None));
+    }
+
+    /// An ABI family may state its own private convention (`[abi.<family>]
+    /// private`), and a convention the conventions it serves (`serves`); the
+    /// others take the file's `private`. Win64's `fastcc` function went to
+    /// System V's registers for want of both.
+    #[test]
+    fn an_abi_family_states_its_own_private_convention_and_the_ones_it_serves() {
+        let text = format!("{WATCALL}[c]\nlike = \"w\"\ncc = \"cdecl\"\nserves = [\"fast\"]\n").replace(
+            "default = \"w\"\n[abi.w]\nconvention = \"w\"\n",
+            "default = \"stack\"\nprivate = \"w\"\n[abi.reg]\nconvention = \"w\"\nprivate = \"c\"\n[abi.stack]\nconvention = \"c\"\n",
+        );
+        let calling = Calling::parse(&text).unwrap();
+        let named = |one: Option<&Convention>| one.map(|one| one.name.clone());
+        assert_eq!(named(calling.private_under(None)), Some("w".to_owned()));
+        assert_eq!(named(calling.private_under(Some("reg"))), Some("c".to_owned()));
+        assert_eq!(calling.named("c").unwrap().serves, ["fast"]);
+        assert!(calling.named("w").unwrap().serves.is_empty());
     }
 
     /// The default ABI is the file's `default`, not its first entry: a second
