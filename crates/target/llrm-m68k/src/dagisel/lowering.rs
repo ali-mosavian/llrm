@@ -159,6 +159,10 @@ pub struct M68kLowering {
 }
 
 impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLowering {
+    fn little_endian(&self) -> bool {
+        false
+    }
+
     fn sub_of_sign_extended_bool(&self) -> bool {
         self.short
     }
@@ -268,13 +272,29 @@ impl Hooks for M68kLowering {
                 outs.push(out(value, dag));
             }
         }
-        let word = In { vt: EVT::I32, pointer: false, arg_vt: EVT::I32, split: false, sret: false, ext: Ext::Any, byval: None };
+        let word = In {
+            vt: EVT::I32,
+            pointer: false,
+            arg_vt: EVT::I32,
+            split: false,
+            sret: false,
+            ext: Ext::Any,
+            byval: None,
+        };
         let mut ins: Vec<In> = Vec::new();
         for &ret in rets {
             if ret == EVT::I64 {
                 ins.extend([word, word]);
             } else {
-                ins.push(In { vt: ret, pointer: false, arg_vt: ret, split: false, sret: false, ext: Ext::Any, byval: None });
+                ins.push(In {
+                    vt: ret,
+                    pointer: false,
+                    arg_vt: ret,
+                    split: false,
+                    sret: false,
+                    ext: Ext::Any,
+                    byval: None,
+                });
             }
         }
         let callee = dag.get_target_external_symbol(EVT::I32, name);
