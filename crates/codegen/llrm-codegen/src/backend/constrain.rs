@@ -478,22 +478,6 @@ pub fn distinct_classes_given(
     for one in uses {
         every.entry(one.value).or_default().push(one);
     }
-    let depths = crate::analysis::intervals::depths_shared(body);
-    let depth_of = |block: usize| depths.get(&body.blocks[block].at).copied().unwrap_or(0);
-    // The deepest loop each value is named in.
-    let mut referenced: IndexMap<u32, u32> = IndexMap::default();
-    for (at, block) in body.blocks.iter().enumerate() {
-        for held in block
-            .insns
-            .iter()
-            .filter_map(|one| one.what.as_ref())
-            .flat_map(|what| what.dests.iter().chain(&what.sources))
-            .flat_map(ir::values)
-        {
-            let deepest = referenced.entry(held.value).or_default();
-            *deepest = (*deepest).max(depth_of(at));
-        }
-    }
     // Which (block, instruction, value, role) reads take a copy.
     let mut peeled: BTreeSet<(usize, usize, u32, u8)> = BTreeSet::new();
     for (value, all) in &by_value {
@@ -528,6 +512,33 @@ pub fn distinct_classes_given(
     // `InstrEmitter.cpp`'s `MinRCSize`: reads that leave a value fewer than
     // four registers. Those in a block less deep in loops than the value's
     // deepest reference take a copy of their own, if that leaves the rest more.
+    // The deepest loop each value is named in, worked out at the first value
+    // that needs it: most bodies have none.
+    let depths = std::cell::OnceCell::new();
+    let depth_of = |block: usize| {
+        let depths = depths.get_or_init(|| crate::analysis::intervals::depths_shared(body));
+        depths.get(&body.blocks[block].at).copied().unwrap_or(0)
+    };
+    let referenced = std::cell::OnceCell::new();
+    let deepest_of = |value: &u32| {
+        let referenced = referenced.get_or_init(|| {
+            let mut referenced: IndexMap<u32, u32> = IndexMap::default();
+            for (at, block) in body.blocks.iter().enumerate() {
+                for held in block
+                    .insns
+                    .iter()
+                    .filter_map(|one| one.what.as_ref())
+                    .flat_map(|what| what.dests.iter().chain(&what.sources))
+                    .flat_map(ir::values)
+                {
+                    let deepest = referenced.entry(held.value).or_default();
+                    *deepest = (*deepest).max(depth_of(at));
+                }
+            }
+            referenced
+        });
+        referenced.get(value).copied().unwrap_or(0)
+    };
     for (value, all) in every.iter().filter(|_| NARROW.with(Cell::get)) {
         let class = |chosen: &[&&regclass::Use]| {
             chosen.iter().fold(None::<BTreeSet<RegId>>, |had, one| {
@@ -536,7 +547,7 @@ pub fn distinct_classes_given(
         };
         let all: Vec<&&regclass::Use> = all.iter().collect();
         let Some(left) = class(&all).filter(|left| !left.is_empty() && left.len() < MIN_RC_SIZE) else { continue };
-        let deepest = referenced.get(value).copied().unwrap_or(0);
+        let deepest = deepest_of(value);
         let (cold, kept): (Vec<&&regclass::Use>, Vec<&&regclass::Use>) =
             all.iter().partition(|one| !one.defining && depth_of(one.block) < deepest);
         if !cold.is_empty() && class(&kept).is_none_or(|rest| rest.len() > left.len()) {
@@ -1639,5 +1650,22 @@ mod tests {
         ]);
         let done = hoisted(&body, &pinned(&[(2, RegId::ES)]));
         assert_eq!(at_block(&done, 10), vec![2, 3]);
+    }
+}
+
+#[cfg(test)]
+mod laziness_tests {
+    use super::*;
+    use crate::model::lir::LirBlock;
+
+    /// A body no read confines worked out its loop depths and walked every
+    /// operand for the deepest reference of each value (34 M of
+    /// memory_expansion -O2, in `distinct_classes_given`).
+    #[test]
+    fn a_body_with_no_confining_reads_works_out_no_loop_depths() {
+        let block = LirBlock::new(0, vec![]);
+        let body = LirBody::new("t", 0, crate::model::lir::shared(vec![block]), IndexMap::default(), IndexMap::default());
+        assert!(distinct_classes_given(&body, 0, &[]).is_none());
+        assert_eq!(body.facts.0.runs::<crate::analysis::graph::LoopDepths>(), 0);
     }
 }
