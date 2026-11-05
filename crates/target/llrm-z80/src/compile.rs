@@ -1328,6 +1328,21 @@ fn use_lanes_once(
                 at += 1;
                 continue;
             }
+            // the byte's own register may be read by an instruction that names
+            // it, a call's argument whose copy allocation made the identity
+            let own = register(Reg::Virt(byte));
+            let overlaps = <Z80Registers as llrm_spike_mf::Target>::overlaps;
+            let mut named = false;
+            for later in &insts[at + 1..] {
+                named |= later.operands.iter().any(|o| matches!(o, Operand::Use(Reg::Phys(id)) if overlaps(*id, own)));
+                if named || later.operands.iter().any(|o| matches!(o, Operand::Def(r) if overlaps(register(*r), own))) {
+                    break;
+                }
+            }
+            if named {
+                at += 1;
+                continue;
+            }
             for later in &mut function.blocks[b].insts[at + 1..=last] {
                 for operand in &mut later.operands {
                     if matches!(operand, Operand::Use(Reg::Virt(v)) if *v == byte) {
