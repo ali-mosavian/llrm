@@ -15,7 +15,10 @@ issue                   =
 in_order                =
 prefix                  =
 partial_stall           =
-mispredict_penalty      =
+# DEVIATE CMC3 (owner m64, exit 2026-11-20): the pin's SandyBridge penalty (16) converts
+# register cmovs to branches; on Zen 5 that costs jpeg_fixed -Os +2.6% (pin llc with
+# -x86-cmov-converter=false is faster). 1000: only memory-operand groups convert.
+mispredict_penalty      1000
 lcp_stall               =
 set_ratio           =
 clear_ratio         =
