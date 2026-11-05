@@ -657,7 +657,8 @@ impl SelectionDAG {
                 self.deleted.resize(self.nodes.len(), false);
             }
             self.deleted[n as usize] = true;
-            // A `SmallSetVector`: an operand already waiting is not added twice.
+            // A `SmallSetVector`: an operand already waiting is not added
+            // twice.
             for i in 0..self.nodes[n as usize].ops.len() {
                 let op = self.nodes[n as usize].ops[i].node;
                 if !work.contains(&op) {
@@ -1895,6 +1896,17 @@ impl SelectionDAG {
         other: SDValue,
     ) -> SDValue {
         self.get_node(ISD::Select, vt, &[cond, then, other])
+    }
+
+    /// `SDNode::dropFlags`: the flags in `drop` are cleared on the node, in
+    /// place.
+    pub(super) fn drop_flags(
+        &mut self,
+        value: SDValue,
+        drop: SDNodeFlags,
+    ) {
+        let node = &mut self.nodes[value.node as usize];
+        node.flags = SDNodeFlags(node.flags.0 & !drop.0);
     }
 
     /// `getNode(Opcode, VT, Ops...)` with no flags.

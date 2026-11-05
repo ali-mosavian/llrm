@@ -2160,7 +2160,8 @@ fn a_cleaned_up_argument_push_gives_the_frame_address_back() {
 /// A frame whose registers are pushed before the locals' space (`saved_first`,
 /// every x86-64 frame with a pushed register) had no `.eh_frame`: the entry
 /// was not declared. The bytes are the pin's for `push rbx; sub rsp, 32 ...
-/// add rsp, 32; pop rbx; ret`.
+/// add rsp, 32; pop rbx; ret`. The local is at `[rsp]` (FR1, the call pad above
+/// it): `lea rdi, [rsp]` is a byte shorter than `[rsp+8]`, so 33 bytes.
 #[test]
 fn a_frame_with_pushed_registers_before_its_locals_has_the_pins_eh_frame() {
     let text = format!(
@@ -2171,7 +2172,7 @@ fn a_frame_with_pushed_registers_before_its_locals_has_the_pins_eh_frame() {
     assert_eq!(
         eh_frame_of(&text),
         hex("1400000000000000017a5200017810011b0c07089001000\
-             01c0000001c000000000000002200000000410e10440e3083025b0e10410e0800")
+             01c0000001c000000000000002100000000410e10440e3083025a0e10410e0800")
     );
 }
 

@@ -627,6 +627,10 @@ impl Tti for X86 {
         self.tuning.sink_select_arms
     }
 
+    fn inlines_variable_memcpy(&self) -> bool {
+        self.tuning.inline_variable_memcpy
+    }
+
     fn priced_self_inlining(&self) -> Option<(u32, i64)> {
         self.real_mode.as_ref()?.priced_self_inlining
     }

@@ -537,7 +537,10 @@ pub fn finish_with(
                 };
                 out.extend(expand_any_extension(dst, src)?);
             }
-            Kind::Op(name) if extension(name).is_some() => {
+            Kind::Op(name)
+                if extension(name).is_some()
+                    || crate::dagisel::scaled::base_of(name).is_some_and(|base| extension(base).is_some()) =>
+            {
                 out.extend(expand_extension(name, &operands, cpu)?);
             }
             Kind::Op(name) if crate::dagisel::indexed::extension_of(name).is_some() => {
@@ -668,6 +671,11 @@ fn expand_extension(
     cpu: crate::dagisel::hooks::Cpu,
 ) -> Result<Vec<mc::Inst>, String> {
     use mc::Operand::{Imm, Reg as R};
+    // `MOVZXd32f16x2`: the load is the scaled sibling of `MOV16rf`
+    let (name, scale) = match crate::dagisel::scaled::base_of(name) {
+        Some(base) => (base, crate::dagisel::scaled::scale_of(name)),
+        None => (name, None),
+    };
     let (signed, to, mode, from) = extension(name).ok_or("not an extension")?;
     let R(dst) = operands[0] else { return Err(format!("{name}: operands")) };
     let root = REGISTER_INFO.root(dst);
@@ -725,6 +733,12 @@ fn expand_extension(
         (16, 'q') => "MOV16rq",
         (16, 'k') => "MOV16rk",
         _ => return Err(format!("{name}: addressing mode {mode} is not translated")),
+    };
+    let load = match scale {
+        Some(scale) => {
+            crate::dagisel::scaled::scaled_name(load, scale).ok_or_else(|| format!("{name}: no scaled {load}"))?
+        }
+        None => load,
     };
     let reads_dst = operands[1..].iter().any(|one| matches!(one, R(reg) if REGISTER_INFO.root(*reg) == root));
     let mut moved = operands.to_vec();

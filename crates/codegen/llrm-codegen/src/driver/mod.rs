@@ -565,11 +565,14 @@ pub fn optimized(
         program.modules.iter_mut().try_for_each(|module| crate::backend::libmcalls::expanded(module, &options.libcalls))
     })?;
     if let Some((_, convention, symbol)) = options.libcalls.iter().find(|(name, ..)| name == "memcpy") {
+        let inline_variable = options.cpu()?.target().tti().is_some_and(|tti| tti.inlines_variable_memcpy());
         timed("mir memcpy calls", || {
             program
                 .modules
                 .iter_mut()
-                .try_for_each(|module| crate::backend::memcpycall::expanded(module, *convention, symbol))
+                .try_for_each(
+                    |module| crate::backend::memcpycall::expanded(module, *convention, symbol, inline_variable),
+                )
         })?;
     }
     timed("mir constant intrinsics", || {
