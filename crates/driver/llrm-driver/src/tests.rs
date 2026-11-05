@@ -1979,6 +1979,31 @@ fn a_probed_frame_ending_in_a_sibling_call_gives_its_stack_back_first() {
     assert!(lines[jmp - 1] == format!("add rsp, {taken}") || lines[jmp - 1].starts_with("mov rsp, rbp"), "{listing}");
 }
 
+/// The listing of `tail call @g(...)` then `ret`, built with `abi` at -O2.
+fn tail_call_listing(abi: &str, signature: &str, arguments: &str) -> String {
+    // a variadic call names its callee's type: `i32 (i32, ...) @g`
+    let text = format!(
+        "{SYSV}declare i32 @g{signature}\ndefine i32 @f(i32 %x) {{\n  %r = tail call i32 {} @g({arguments})\n  ret i32 %r\n}}\n",
+        if signature.contains("...") { "(i32, ...)" } else { "(i32, i32)" }
+    );
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag", abi]), &text, "f").unwrap();
+    llrm_codegen::backend::masm::text(&built).unwrap()
+}
+
+/// A variadic tail call under Win64 became `jmp g`; the pin keeps `call g`
+/// then `ret` (`isEligibleForSiblingCallOpt`: no variadic sibling call when
+/// either side is Win64). SysV, and a Win64 call of a fixed signature, still jump.
+#[test]
+fn a_win64_variadic_tail_call_stays_a_call() {
+    let jumps = |listing: &str| listing.lines().any(|line| line.trim().starts_with("jmp g"));
+    let variadic = tail_call_listing("-mabi=win64", "(i32, ...)", "i32 %x, i32 %x");
+    assert!(!jumps(&variadic) && variadic.contains("call g"), "{variadic}");
+    let fixed = tail_call_listing("-mabi=win64", "(i32, i32)", "i32 %x, i32 %x");
+    assert!(jumps(&fixed), "{fixed}");
+    let sysv = tail_call_listing("-mabi=sysv", "(i32, ...)", "i32 %x, i32 %x");
+    assert!(jumps(&sysv), "{sysv}");
+}
+
 /// The `.xdata` of an x86-64 module written as COFF, found by `.pdata`'s
 /// layout: the frames the compiler declared (`.seh_*`) against the bytes read
 /// back from the same code agree.
