@@ -236,33 +236,81 @@ fn place_objects(function: &MFunc) -> (Vec<u64>, u64) {
         at += slot.size;
     }
     // The dense order can put an object past what a pair reaches
-    // (`ldp`/`stp` of an 8-byte register: 504 bytes from the base); the pin's
-    // order, the first object at the top, is taken where it leaves fewer
-    // adjacent accesses out of reach.
+    // (`ldp`/`stp` of an 8-byte register: 504 bytes from the base). Ordered
+    // by the pairs per byte instead, the pairs are the ones near the base; it
+    // is taken where it leaves fewer of them out of reach.
     let reach = unreachable_pairs(function, &slots);
     if reach > 0 {
-        let by_index: Vec<usize> = (0..function.slots.len()).collect();
-        let mut indexed = vec![0; slots.len()];
+        let pairs = pair_uses(function);
+        let mut by_pairs: Vec<usize> = (0..function.slots.len()).collect();
+        by_pairs.sort_by(|&a, &b| {
+            (pairs[a] * size(b)).cmp(&(pairs[b] * size(a))).then(function.slots[a].align.cmp(&function.slots[b].align))
+        });
+        let mut paired = vec![0; slots.len()];
         let mut end = function.outgoing;
-        for &index in by_index.iter().rev() {
+        for &index in by_pairs.iter().rev() {
             let slot = &function.slots[index];
             end = end.next_multiple_of(slot.align.max(1));
-            indexed[index] = end;
+            paired[index] = end;
             end += slot.size;
         }
-        if unreachable_pairs(function, &indexed) < reach {
-            (slots, at) = (indexed, end);
+        if formable_pairs(function, &paired) > formable_pairs(function, &slots) {
+            (slots, at) = (paired, end);
         }
     }
     (slots, at.next_multiple_of(16))
 }
 
-/// The adjacent same-kind accesses in a block whose lower address is past
-/// what a pair instruction reaches from the stack pointer, with the objects
-/// at `slots`.
+/// How many adjacent same-kind access pairs (`ldp`/`stp` candidates) start in
+/// each frame object.
+fn pair_uses(function: &MFunc) -> Vec<u64> {
+    let mut uses = vec![0; function.slots.len()];
+    for block in &function.blocks {
+        let mut seen: HashSet<(bool, u8, u32, i64)> = HashSet::default();
+        for op in &block.ops {
+            let (load, mem, slot, offset) = match op {
+                Op::I(Inst::Load { mem, addr: Addr::Slot { slot, offset }, .. }) => (true, mem, slot, offset),
+                Op::I(Inst::Store { mem, addr: Addr::Slot { slot, offset }, .. }) => (false, mem, slot, offset),
+                _ => continue,
+            };
+            let (Memory::Int { bytes, .. } | Memory::Fp { bytes, .. }) = mem;
+            if matches!(bytes, 4 | 8 | 16) {
+                seen.insert((load, *bytes, *slot, *offset));
+            }
+        }
+        for &(load, bytes, slot, offset) in &seen {
+            if seen.contains(&(load, bytes, slot, offset + i64::from(bytes)))
+                && let Some(count) = uses.get_mut(slot as usize)
+            {
+                *count += 1;
+            }
+        }
+    }
+    uses
+}
+
+/// The adjacent same-kind accesses in a block that one pair instruction can
+/// take with the objects at `slots`: the lower address a multiple of the size
+/// and within what `ldp`/`stp` reaches from the stack pointer.
+fn formable_pairs(
+    function: &MFunc,
+    slots: &[u64],
+) -> usize {
+    pairs_at(function, slots, true)
+}
+
+/// The same adjacent accesses that a pair cannot take.
 fn unreachable_pairs(
     function: &MFunc,
     slots: &[u64],
+) -> usize {
+    pairs_at(function, slots, false)
+}
+
+fn pairs_at(
+    function: &MFunc,
+    slots: &[u64],
+    formable: bool,
 ) -> usize {
     let mut count = 0;
     for block in &function.blocks {
@@ -273,18 +321,19 @@ fn unreachable_pairs(
                 Op::I(Inst::Store { mem, addr: Addr::Slot { slot, offset }, .. }) => (false, mem, slot, offset),
                 _ => continue,
             };
-            let bytes = match mem {
-                Memory::Int { bytes, .. } | Memory::Fp { bytes, .. } => *bytes,
-            };
+            let (Memory::Int { bytes, .. } | Memory::Fp { bytes, .. }) = mem;
             if let Some(&base) = slots.get(*slot as usize)
                 && matches!(bytes, 4 | 8 | 16)
             {
-                seen.insert((load, bytes, base as i64 + offset));
+                seen.insert((load, *bytes, base as i64 + offset));
             }
         }
         count += seen
             .iter()
-            .filter(|&&(load, bytes, at)| at > 63 * i64::from(bytes) && seen.contains(&(load, bytes, at + i64::from(bytes))))
+            .filter(|&&(load, bytes, at)| {
+                let reachable = at <= 63 * i64::from(bytes) && at % i64::from(bytes) == 0;
+                seen.contains(&(load, bytes, at + i64::from(bytes))) && reachable == formable
+            })
             .count();
     }
     count
