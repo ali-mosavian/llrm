@@ -1702,3 +1702,15 @@ fn a_long_order_is_one_borrow_chain() {
         assert_eq!(text.contains("jp po"), cc.starts_with('s'), "{cc}:\n{text}");
     }
 }
+
+/// The borrow of a 64-bit subtract's low long is the order chain of its words,
+/// and the compare of the low word is shared with the subtract's own borrow:
+/// the sharing kept the word subtract from becoming `sub hl` / `sbc hl`, and
+/// int64_division grew 8 B over the select form. The subtract keeps its fused
+/// words (at most 135 instructions; 145 with the compare gone from the fusion).
+#[test]
+fn a_long_subtract_borrow_shared_with_the_order_chain_still_fuses() {
+    let text = compiled("define i64 @f(i64 %a, i64 %b) optsize {\n  %r = sub i64 %a, %b\n  ret i64 %r\n}", "f");
+    let instructions = text.lines().filter(|line| line.starts_with('\t') && !line.trim_start().starts_with('.')).count();
+    assert!(instructions <= 135, "{instructions} instructions:\n{text}");
+}
