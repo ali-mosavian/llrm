@@ -1,9 +1,0 @@
-	.globl	addr
-addr:
-	move.l	to, %a0
-	rts
-	.section	.bss
-	.balign	2
-	.globl	to
-to:
-	.skip	70016

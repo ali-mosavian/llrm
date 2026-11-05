@@ -3,6 +3,8 @@
 //! m68k backend to assembly text with `-S`, else to an ELF32 relocatable
 //! object (`-c` is the same).
 
+use std::io::Write;
+
 use llrm_m68k::compile::CodeModel;
 use llrm_m68k::driver::{self, Level};
 
@@ -83,7 +85,9 @@ fn run() -> i32 {
             let path = output.unwrap_or_else(|| {
                 std::path::Path::new(&input).with_extension(extension).to_string_lossy().into_owned()
             });
-            if let Err(error) = std::fs::write(&path, bytes) {
+            // `-o -` is stdout, as in llc and clang; it wrote a file named `-`.
+            let written = if path == "-" { std::io::stdout().write_all(&bytes) } else { std::fs::write(&path, bytes) };
+            if let Err(error) = written {
                 eprintln!("llrm-m68k-llc: {path}: {error}");
                 return 1;
             }
