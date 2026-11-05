@@ -79,7 +79,7 @@ fn cost(
     Ok(Cost::Sum(terms))
 }
 
-const OPERATIONS: [&str; 43] = [
+const OPERATIONS: [&str; 45] = [
     "add",
     "multiply",
     "divide",
