@@ -876,6 +876,8 @@ impl TargetLowering {
                 // ANDPD simulates FABS, XORP FNEG, ANDPD and ORPD FCOPYSIGN
                 t.set_ops(&[FAbs, FNeg, FCopySign], &[vt], Custom);
                 t.set_ops(&[FAdd, FSub], &[vt], Custom);
+                // L1041: `SetFPMinMaxAction`
+                t.set_ops(&[PseudoFMin, PseudoFMax], &[vt], Legal);
                 // (no FSINCOS node here: nothing builds one)
                 t.set_ops(&[FSin, FCos], &[vt], Expand);
             }

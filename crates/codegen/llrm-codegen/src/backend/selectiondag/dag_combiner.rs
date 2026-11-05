@@ -1231,7 +1231,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             let (lhs, rhs, code) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1), self.dag.operand(n0, 2));
             return Some(self.dag.get_node(ISD::SelectCC, vt, &[lhs, rhs, n1, n2, code]));
         }
-        None
+        // The end of `visitSELECT` (DAGCombiner.cpp#L13713).
+        self.select_to_pseudo_min_max(node)
     }
 
     /// `foldSelectOfConstants` ([L13011][pin]) for an `i1` condition before

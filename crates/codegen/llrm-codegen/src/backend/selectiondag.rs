@@ -114,6 +114,7 @@ pub mod combine_funnel;
 pub mod combine_load;
 pub mod combine_store_merge;
 pub mod combine_load_combine;
+pub mod combine_select_minmax;
 pub mod combine_trunc_stores;
 pub mod combine_token_factor;
 pub mod ctcount_combine;

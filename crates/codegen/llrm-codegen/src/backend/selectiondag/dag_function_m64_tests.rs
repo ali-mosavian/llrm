@@ -1319,3 +1319,23 @@ entry:
     assert!(names.iter().any(|n| n == "and" || n == "movzx" || n == "mov"), "premise: selected, got {names:?}");
     assert!(!names.iter().any(|n| n.starts_with("movsx")), "a free zero extension, not movsxd: {names:?}");
 }
+
+/// `p >= 65535.0f ? 65535.0f : p` converted to an integer stayed a compare
+/// and a branch (`ucomiss`, `jb`, `movss`): the DAG had no `pseudo_fmin`, so
+/// the clamps of jpeg_fixed and stft_single grew 24-80 B at m64. It is `minss`.
+#[test]
+fn an_m64_float_clamp_is_minss() {
+    let names = m64_names(
+        "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i64 @f(float %p) {
+entry:
+  %c = fcmp oge float %p, 6.553500e+04
+  %q = select i1 %c, float 6.553500e+04, float %p
+  %r = fptosi float %q to i64
+  ret i64 %r
+}
+",
+    );
+    assert!(names.iter().any(|n| n == "minss"), "{names:?}");
+    assert!(names.iter().all(|n| n != "ucomiss" && !n.starts_with('j')), "{names:?}");
+}

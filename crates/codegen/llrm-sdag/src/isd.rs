@@ -130,6 +130,11 @@ pub enum ISD {
     FNeg,
     FAbs,
     FSqrt,
+    /// `PSEUDO_FMIN`: `x olt y ? x : y`, with the select's NaN and signed-zero
+    /// behaviour (x86 `minss`).
+    PseudoFMin,
+    /// `PSEUDO_FMAX`.
+    PseudoFMax,
     /// `FREEZE`: stops undef and poison propagating.
     Freeze,
     SCmp,
@@ -337,6 +342,8 @@ impl ISD {
             FNeg => "fneg",
             FAbs => "fabs",
             FSqrt => "fsqrt",
+            PseudoFMin => "pseudo_fmin",
+            PseudoFMax => "pseudo_fmax",
             Freeze => "freeze",
             SCmp => "scmp",
             UCmp => "ucmp",
