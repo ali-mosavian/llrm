@@ -130,9 +130,9 @@ impl Target for Z80Registers {
         matches!(inst.kind, Kind::Op("PACK")).then(|| (0, vec![(1, 0, 1), (2, 1, 1)]))
     }
 
-    // DEVIATE 3b-1 (owner greedy-subreg, exit 11-10): off until the split
-    // editor copies by lane (a pair built across blocks lost its stack copy:
-    // lz4c -Oz returned 0x3131).
+    // DEVIATE 3b-1 (owner greedy-subreg, exit 2026-11-12): both off until the
+    // split editor copies by lane. Lowering alone: +505 lines at -O2; with
+    // joins `mul_constants` -O2 summed a stale byte.
     fn lowers_lanes() -> bool {
         false
     }

@@ -1392,8 +1392,8 @@ fn test_a_minsize_function_is_priced_by_code_size() {
     }
 }
 
-/// `FoldInstsToUnreachable`: what follows a call to a `noreturn` function was kept (and the block it jumps to
-/// with it), though control never gets there.
+/// `FoldInstsToUnreachable`: what follows a call to a `noreturn` function was
+/// kept (and the block it jumps to with it), though control never gets there.
 #[test]
 fn test_the_code_after_a_call_that_never_returns_is_cut_and_the_block_ends_in_unreachable() {
     let mut module = parsed(
@@ -1421,4 +1421,108 @@ b0:
 }
 "
     );
+}
+
+/// A loop reads a new `%2 = next()` each pass (jpeg_fixed's marker loop) and
+/// switches on it; the latch is an empty block back to the header. The
+/// `switch %2` before the latch was folded with the header's: its default
+/// went to the header's default as if the same `%2` reached the header again.
+/// A marker no case names (208..216 here) then went round the tests for ever:
+/// wasm32 -O1..-Os hung where the pin returns 1.
+#[test]
+fn test_a_switch_is_not_folded_with_the_header_that_reads_a_new_value() {
+    let text = "@n = global i32 0
+@m = global i32 0
+
+define i32 @next() {
+b0:
+  %v = load i32, ptr @n
+  %w = add i32 %v, 1
+  store i32 %w, ptr @n
+  %r = add i32 %v, 208
+  ret i32 %r
+}
+
+define void @message(ptr %p) {
+b0:
+  store i32 1, ptr @m
+  ret void
+}
+
+@.str = private unnamed_addr constant [4 x i8] c\"p\\0D\\0A\\00\", align 1
+@.str.1 = private unnamed_addr constant [4 x i8] c\"a\\0D\\0A\\00\", align 1
+@.str.2 = private unnamed_addr constant [4 x i8] c\"b\\0D\\0A\\00\", align 1
+
+define i32 @f() {
+  br label %1
+
+1:
+  %2 = call i32 @next()
+  switch i32 %2, label %9 [
+    i32 196, label %3
+    i32 192, label %5
+    i32 194, label %8
+  ]
+
+3:
+  %4 = call i32 @next()
+  br label %22
+
+5:
+  %6 = call i32 @next()
+  %7 = call i32 @next()
+  br label %22
+
+8:
+  call void @message(ptr noundef @.str)
+  br label %23
+
+9:
+  %10 = add i32 %2, -201
+  %11 = icmp ult i32 %10, 7
+  %12 = icmp ne i32 %2, 204
+  %13 = and i1 %11, %12
+  br i1 %13, label %14, label %15
+
+14:
+  call void @message(ptr noundef @.str.1)
+  br label %23
+
+15:
+  %16 = add i32 %2, -193
+  %17 = icmp ult i32 %16, 15
+  br i1 %17, label %switch.early.test, label %19
+
+switch.early.test:
+  switch i32 %2, label %18 [
+    i32 200, label %22
+    i32 204, label %22
+  ]
+
+18:
+  call void @message(ptr noundef @.str.2)
+  br label %23
+
+19:
+  switch i32 %2, label %22 [
+    i32 221, label %20
+    i32 217, label %23
+  ]
+
+20:
+  %21 = call i32 @next()
+  br label %22
+
+22:
+  br label %1
+
+23:
+  %24 = phi i32 [ 0, %8 ], [ 0, %14 ], [ 0, %18 ], [ 1, %19 ]
+  ret i32 %24
+}
+";
+    let mut module = parsed(text);
+    let before = results(&module, &[&[]]);
+    simplify_with(&super::Options::L1438, &mut module);
+    assert_eq!(results(&module, &[&[]]), before, "{}", printed(&module));
 }

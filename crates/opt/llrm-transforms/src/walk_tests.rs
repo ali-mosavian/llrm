@@ -2747,6 +2747,15 @@ fn test_m32_copies_no_recursion_at_o1() {
     assert!(calls <= 3, "fib was copied into itself at -O1, {calls} calls of it");
 }
 
+/// -Os is strict bytes: quicksort, bintree and hanoi are the same object with
+/// D10 on or off at m32 and x86_64 -Os (247, 229, 47 B), so no recursive copy
+/// is made there (the rate levels' 1261 B shape never reaches -Os).
+#[test]
+fn test_m32_copies_no_recursion_at_os() {
+    let calls = m32_tree_calls(6, crate::pipeline::Options::size());
+    assert!(calls <= 3, "a recursion was copied into itself at -Os, {calls} calls of it");
+}
+
 /// gcc rejects the recursive edge of quicksort and bintree at -O2
 /// ("max-inline-insns-auto limit reached", growth 25-28 and 15-22 against 15)
 /// and takes it at -O3 (30): a body that grows past 15 is copied at -O3 only.
