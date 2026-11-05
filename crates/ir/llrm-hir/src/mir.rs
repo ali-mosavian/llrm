@@ -526,19 +526,13 @@ struct Tables<'h> {
 
 /// The weight of an edge a program practically never takes, against 1 for the
 /// other: a panic path ending `unreachable` (a failed bounds, shift, conversion,
-/// division or key check). DEVIATE from clang, whose checks and the pin's
-/// unreachable default both use `(1 << 20) - 1` (`MDBuilder.h:46`
-/// `kLikelyBranchWeight`, `EmitCheck` in `CGExpr.cpp`): at that 9.5e-7 the panic
-/// mass of a deep loop nest of checked accesses exceeds the flow entering its
-/// outer loop, block frequency loses about half per level, and call sites after
-/// the nest fall under the 2% cold bound (jpeg_fixed `convert` and `restart`:
-/// 0.0014 of entry, against 0.33 unchecked). `(1 << 26) - 1` is the smallest
-/// ratio that keeps those sites warm in the pin's inliner (`(1 << 24) - 1` does
-/// not). Branch odds are 2^31sts (pin `BranchProbability.h:37`) and scaling
-/// rounds with no clamp (`:140`): at `i32::MAX` the edge is one unit and a
-/// split's share rounds it to 0, so `LLRM_VERIFY` flagged x87 blocks (fpbench
-/// Os); this leaves 32 units. Owner: qb-metadata. Exit: 2026-11-20.
-pub const NEVER_TAKEN_WEIGHT: u32 = (1 << 26) - 1;
+/// division or key check). Clang's `EmitCheck` states `(1 << 20) - 1` for a
+/// check (`CGExpr.cpp:4367` `createLikelyBranchWeights`, `MDBuilder.h:46`
+/// `kLikelyBranchWeight`), the same ratio the pin's unreachable heuristic gives
+/// the edge without a `!prof`. Branch odds are 2^31sts (pin
+/// `BranchProbability.h:37`), so the edge keeps 2048 units. A larger ratio is a
+/// DEVIATE (see the 2^26-1 change).
+pub const NEVER_TAKEN_WEIGHT: u32 = (1 << 20) - 1;
 
 /// The `!dbg` metadata kind: the source line an instruction came from.
 pub const DEBUG_LINE: &str = "dbg";

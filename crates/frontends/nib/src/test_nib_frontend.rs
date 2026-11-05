@@ -3398,5 +3398,5 @@ fn test_a_failed_check_edge_carries_the_never_taken_weights() {
     let value = defined(&mir, "_value");
 
     assert!(value.lines().any(|line| line.contains("br i1 ") && line.contains("!prof")), "{value}");
-    assert!(mir.contains("branch_weights\", i32 67108863, i32 1"), "{mir}");
+    assert!(mir.contains("branch_weights\", i32 1048575, i32 1"), "{mir}");
 }
