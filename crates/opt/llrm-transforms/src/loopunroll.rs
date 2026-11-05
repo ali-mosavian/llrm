@@ -131,6 +131,8 @@ struct ExitInfo {
 /// `loop_` copied `options.count` times in place, its branches folded.
 /// `Unmodified`, changing nothing, where it is a loop `UnrollLoop` refuses.
 pub fn unroll_loop(
+    context: &llrm_mir::context::Context,
+    layout: &llrm_mir::datalayout::DataLayout,
     function: &mut Function,
     loop_: &Loop,
     options: &Options,
@@ -138,9 +140,17 @@ pub fn unroll_loop(
     let body = loop_.body.iter().map(|&at| cfg::block(at)).collect::<Vec<_>>();
     let latches = loop_.latches.iter().map(|&at| cfg::block(at)).collect::<Vec<_>>();
     let mut emptied = Vec::new();
-    let result = unroll_loop_blocks(function, cfg::block(loop_.header), &body, &latches, options, &mut emptied, &mut |_, _, _| {})?;
+    let result = unroll_loop_blocks(
+        function,
+        cfg::block(loop_.header),
+        &body,
+        &latches,
+        options,
+        &mut emptied,
+        &mut |_, _, _| {},
+    )?;
     function.erase_blocks(&emptied)?;
-    lcssa::closed(function)?;
+    lcssa::closed(context, layout, function)?;
     Ok(result)
 }
 
@@ -285,7 +295,8 @@ pub fn unroll_loop_blocks(
             }
             fresh.push(new);
         }
-        // `cloneAndAdaptNoAliasScopes` for this iteration (LoopUnroll.cpp:1367).
+        // `cloneAndAdaptNoAliasScopes` for this iteration
+        // (LoopUnroll.cpp:1367).
         rescoped(function, &made, it);
         for &new in &fresh {
             for inst in function.iter_block(new).collect::<Vec<_>>() {

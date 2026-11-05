@@ -366,7 +366,7 @@ pub fn compiled_module(
         None => return Err(format!("the module states no datalayout; {}'s is `{layout}`", options.arch.name())),
     }
     let cpu = options.cpu()?;
-    let mut program = Program::new(vec![module], cpu.target())?;
+    let mut program = Program::new(vec![module], cpu.target_under(&*options.arch, options.abi.as_deref()))?;
     if llrm_support::debug::verifying() {
         timed("mir verify frontend", || verified(&program, "the frontend"))?;
     }

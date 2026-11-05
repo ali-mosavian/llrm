@@ -9,6 +9,8 @@ convention = "sysv64"
 
 [abi.win64]
 convention = "win64"
+# X86CallingConv.td: a Win64 subtarget sends every calling convention (`fastcc` too) through CC_X86_Win64_C.
+private = "win64"
 
 # sysv64: the System V AMD64 ABI as gcc and clang emit it on Linux (X86CallingConv.td's CC_X86_64_C and
 # RetCC_X86_64_C). Integer and pointer arguments take RDI, RSI, RDX, RCX, R8, R9 in order, then the stack in
@@ -84,6 +86,10 @@ float = ["xmm0"]
 # in registers and `va_list` are not modelled yet.
 [win64]
 cc = "win64"
+# X86CallingConv.td sends every convention through CC_X86_Win64_C on a Win64 subtarget.
+serves = ["fast"]
+# The stack pointer changes only in the prologue and epilogue: every call's area (the home area too) is reserved there.
+reserve_call_frame = true
 slot_bytes = 8
 stack_alignment = 16
 aligned_calls = true

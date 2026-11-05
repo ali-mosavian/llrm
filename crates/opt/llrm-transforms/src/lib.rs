@@ -49,7 +49,7 @@
 //! `promote` (`Sroa`, `Promote`, with `splitcopy`), `inferspace`,
 //! `gepoffset`, `cgpaddr`, `fixednarrow`, `ports`.
 //!
-//! Loops: `loopsimplify`, `lcssa` (with `lcssamerges`), `hoist`, `loopmotion`,
+//! Loops: `loopsimplify`, `lcssa`, `hoist`, `loopmotion`,
 //! `trivialunswitch`, `unswitch`,
 //! `indvars` (with `exitvalues`, `exitsink`),
 //! `lsr` (with `mirror`), `window`, `rotate`, `unroll`, `peel`,
@@ -239,6 +239,7 @@ pub mod globalbool;
 pub mod globaldce;
 #[cfg(test)]
 mod globaldce_tests;
+pub mod globalmerge;
 pub mod globalopt;
 pub mod globalsra;
 pub mod gvn;
@@ -256,13 +257,12 @@ pub mod inferspace;
 #[cfg(test)]
 mod inferspace_tests;
 pub mod inline;
-mod inlineattrs;
-mod inlinemetadata;
 mod inlinealias;
-mod noaliasscopes;
+mod inlineattrs;
 pub mod inlinecost;
 #[cfg(test)]
 mod inlinecost_tests;
+mod inlinemetadata;
 pub mod instsimplify;
 pub mod instworklist;
 #[cfg(test)]
@@ -279,7 +279,6 @@ pub mod jumpthreading;
 mod jumpthreading_tests;
 pub mod knownpred;
 pub mod lcssa;
-pub mod lcssamerges;
 pub mod lftr;
 pub mod licm;
 pub mod local;
@@ -332,7 +331,6 @@ pub mod memcpyoptimizer;
 pub mod memloops;
 #[cfg(test)]
 mod memloops_tests;
-pub mod globalmerge;
 pub mod memsetpattern;
 #[cfg(test)]
 mod memsetpattern_tests;
@@ -342,6 +340,7 @@ pub mod mldstmotion;
 pub mod narrowspace;
 #[cfg(test)]
 mod narrowspace_tests;
+mod noaliasscopes;
 pub mod pageindex;
 #[cfg(test)]
 mod pageindex_tests;

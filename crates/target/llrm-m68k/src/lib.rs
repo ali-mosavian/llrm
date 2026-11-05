@@ -32,6 +32,7 @@ pub mod mc;
 pub mod mfunc;
 pub mod narrow;
 pub mod negadd;
+pub mod shiftadd;
 pub mod object;
 pub mod regalloc;
 pub mod target;

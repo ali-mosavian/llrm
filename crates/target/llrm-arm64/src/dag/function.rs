@@ -125,6 +125,8 @@ pub struct Selected {
     /// The frame object each source variable lives in (`llvm.dbg.declare` of a
     /// static `alloca`), by the variable's metadata node.
     pub declared: Vec<(llrm_mir::MetadataId, u32)>,
+    /// The probabilities the builder kept for the edges of merged conditions.
+    pub edge_probs: Vec<(u32, u32, u32)>,
 }
 
 /// `PHI result, [incoming, from this block]` of the successor `to`: registers
@@ -276,6 +278,7 @@ pub fn select_function_in(
             phis,
             tables: info.jump_tables.clone(),
             declared: declared.clone(),
+            edge_probs: info.edge_probs.iter().map(|(from, to, p)| (from.0, to.0, *p)).collect(),
         });
     }
     frame.extend(info.objects.iter().map(|&(size, align)| (u64::from(size), u64::from(align))));

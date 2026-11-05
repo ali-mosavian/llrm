@@ -639,6 +639,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 self.replace_value(old, new);
                 self.add_to_worklist_with_users(new.node);
                 self.dag.delete_dead(old.node);
+                self.queue_survivors();
             }
             let Some(result) = result else { continue };
             if result.node == n && result.res == 0 {
@@ -661,6 +662,26 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
             self.dag.delete_dead(n);
             self.dag.delete_replaced(n);
+            self.queue_survivors();
+        }
+    }
+
+    /// `CombineTo(old, new)` with `AddTo`: the new node and its users are
+    /// queued, then the old node goes and its surviving operands are queued.
+    pub(super) fn combine_store_to(
+        &mut self,
+        old: SDValue,
+        new: SDValue,
+    ) {
+        self.replace_value(old, new);
+        self.add_to_worklist_with_users(new.node);
+        self.dag.delete_replaced(old.node);
+        self.queue_survivors();
+    }
+
+    fn queue_survivors(&mut self) {
+        for node in std::mem::take(&mut self.dag.survivors) {
+            self.add_to_worklist(node);
         }
     }
 
@@ -782,6 +803,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::Or => self.visit_or(node).or_else(|| self.simplify_demanded(node)),
             ISD::Add => self.visit_add(node).or_else(|| self.simplify_demanded(node)),
             ISD::Sub => self.visit_sub(node),
+            ISD::UAddO => self.visit_uaddo(node),
+            ISD::UAddOCarry => self.visit_uaddo_carry(node),
             ISD::FAdd => self.visit_fadd(node),
             ISD::FSub => self.visit_fsub(node),
             ISD::FMul => self.visit_fmul(node),
@@ -2610,6 +2633,97 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let c = self.dag.constant(n1).filter(|_| !self.dag.is_opaque(n1))?;
         let negated = self.dag.get_constant(c.wrapping_neg() & super::fold::mask(vt.size_in_bits()), vt);
         Some(self.dag.get_node(ISD::Add, vt, &[n0, negated]))
+    }
+
+    /// `visitADDO` for `uaddo`
+    /// ([L3621](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L3621)):
+    /// a dead overflow is an `add`, a constant goes right, `x + 0` has no
+    /// carry, and a sum that cannot overflow is an `add`. DEVIATE UADDO1: the
+    /// `(uaddo (xor a, -1), 1)` and `visitUADDOLike` carry folds are not
+    /// translated. Exit: 2026-11-14.
+    fn visit_uaddo(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let vt = self.dag.value_type(node);
+        let carry_vt = self.dag.node(node).values[1];
+        let overflow = SDValue { node: node.node, res: 1 };
+        if !self.dag.has_users(overflow) {
+            let sum = self.dag.get_node(ISD::Add, vt, &[n0, n1]);
+            let undef = self.dag.get_undef(carry_vt);
+            self.dag.combine_to(node, sum);
+            self.dag.combine_to(overflow, undef);
+            return None;
+        }
+        if self.dag.constant(n0).is_some() && self.dag.constant(n1).is_none() {
+            return Some(self.dag.get_node_multi(ISD::UAddO, &[vt, carry_vt], &[n1, n0]));
+        }
+        let no_carry = self.dag.get_constant(0, carry_vt);
+        if self.dag.is_null_constant(n1) {
+            self.dag.combine_to(node, n0);
+            self.dag.combine_to(overflow, no_carry);
+            return None;
+        }
+        if self.unsigned_add_never_overflows(n0, n1) {
+            let sum = self.dag.get_node(ISD::Add, vt, &[n0, n1]);
+            self.dag.combine_to(node, sum);
+            self.dag.combine_to(overflow, no_carry);
+        }
+        None
+    }
+
+    /// `computeOverflowForUnsignedAdd(..) == OFK_Never` from the known bits:
+    /// the two largest values the operands can have do not carry.
+    fn unsigned_add_never_overflows(
+        &self,
+        a: SDValue,
+        b: SDValue,
+    ) -> bool {
+        let (ka, kb) = (super::known_bits::known_bits(self.dag, a), super::known_bits::known_bits(self.dag, b));
+        let all = super::fold::mask(ka.width);
+        (!ka.zero & all) + (!kb.zero & all) <= all
+    }
+
+    /// `visitUADDO_CARRY`
+    /// ([L3716](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L3716)):
+    /// a constant goes right, a zero carry in is a `uaddo`, and with the
+    /// overflow dead `(uaddo_carry (add|uaddo X, Y), 0, c)` is `(uaddo_carry
+    /// X, Y, c)`. DEVIATE UADDO1: the `0 + 0 + c`, `(xor a, -1)` and diamond
+    /// folds are not translated.
+    fn visit_uaddo_carry(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (n0, n1, carry) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+        let values = self.dag.node(node).values.clone();
+        if self.dag.constant(n0).is_some() && self.dag.constant(n1).is_none() {
+            return Some(self.dag.get_node_multi(ISD::UAddOCarry, &values, &[n1, n0, carry]));
+        }
+        if self.dag.is_null_constant(carry) {
+            let legal = match self.tli {
+                Some(tli) if self.level >= CombineLevel::AfterLegalizeDag => {
+                    tli.is_operation_legal_or_custom(ISD::UAddO, values[0])
+                }
+                _ => true,
+            };
+            if legal {
+                return Some(self.dag.get_node_multi(ISD::UAddO, &values, &[n0, n1]));
+            }
+        }
+        let dead = !self.dag.has_users(SDValue { node: node.node, res: 1 });
+        for (x, zero) in [(n0, n1), (n1, n0)] {
+            if !dead || !self.dag.is_null_constant(zero) {
+                continue;
+            }
+            let adds = self.dag.opcode(x) == ISD::Add
+                || (self.dag.opcode(x) == ISD::UAddO && x.res == 0 && SDValue { node: x.node, res: 1 } != carry);
+            if adds {
+                let (a, b) = (self.dag.operand(x, 0), self.dag.operand(x, 1));
+                return Some(self.dag.get_node_multi(ISD::UAddOCarry, &values, &[a, b, carry]));
+            }
+        }
+        None
     }
 
     /// The algebraic folds of `visitSUB`

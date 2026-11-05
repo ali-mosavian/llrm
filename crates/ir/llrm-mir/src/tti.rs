@@ -477,6 +477,18 @@ pub trait Tti {
         true
     }
 
+    /// DEVIATE D5 (`twoentryphi.rs`): what each select costs beyond its own
+    /// price when folding a two-entry phi (a select is a branch and a move
+    /// where there is no conditional move). 0: as at the pin, which does not
+    /// count the selects. `optsize`: the function is a size build.
+    fn select_branch_extra(
+        &self,
+        optsize: bool,
+    ) -> i64 {
+        let _ = optsize;
+        0
+    }
+
     /// `Tuning::sink_select_arms`.
     fn sinks_select_arms(&self) -> bool {
         false

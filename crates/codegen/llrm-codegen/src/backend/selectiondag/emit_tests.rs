@@ -102,6 +102,7 @@ fn context_in(
         address_mode: mode,
         opt_size: false,
         call_alignment: 1,
+        reserved_calls: false,
         map: &map,
         names: &names,
     });

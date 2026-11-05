@@ -1,24 +1,19 @@
-//! The overflow operations the 6502 does not select: they are refused by name,
-//! not expanded.
+//! The overflow operation the 6502 does not select, `UMulO`: refused by name,
+//! not expanded. The signed ones compile (tests/driver.rs).
 
 mod common;
 
 use common::pipeline::datalayout;
 
-/// `UMulO`, `SMulO`, `SAddO` and `SSubO` on a word had no pattern, and the
-/// legalizer refused them ("convert node to libcall"). The shared expansion of
-/// the overflow operations (`expand_overflow`) would expand them to a multiply
-/// and a compare, and the scheduler then ran away on the dependence cycle of
-/// the `i1` select/setcc that makes (#6429). The 6502 sets them to `LibCall`
-/// so the refusal stays, until that cycle is fixed.
+/// `UMulO` on a word has no pattern, and the legalizer refuses it ("convert
+/// node to libcall"). The shared expansion of the overflow operations
+/// (`expand_overflow`) would expand it to a multiply and a compare, and the
+/// scheduler then ran away on the dependence cycle of the `i1` select/setcc
+/// that makes (#6429). The 6502 sets it to `LibCall` so the refusal stays, until
+/// that cycle is fixed. (`SMulO`, `SAddO` and `SSubO` compile now.)
 #[test]
 fn a_word_overflow_operation_is_refused_by_name_not_expanded_into_a_cycle() {
-    for (intrinsic, op) in [
-        ("llvm.umul.with.overflow.i16", "UMulO"),
-        ("llvm.smul.with.overflow.i16", "SMulO"),
-        ("llvm.sadd.with.overflow.i16", "SAddO"),
-        ("llvm.ssub.with.overflow.i16", "SSubO"),
-    ] {
+    for (intrinsic, op) in [("llvm.umul.with.overflow.i16", "UMulO")] {
         let dir = std::env::temp_dir().join(format!("llrm6502-ovf-{}-{op}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let source = dir.join("f.ll");

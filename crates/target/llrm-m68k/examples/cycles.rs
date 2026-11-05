@@ -100,6 +100,16 @@ fn qemu_cpu_for(path: &str) -> &'static str {
 mod tests {
     use super::*;
 
+    /// gas assembled `bgt L` with a 16-bit displacement: a table priced the
+    /// compiler's text 2 B a branch above its own encoder.
+    #[test]
+    fn a_branch_to_a_label_is_left_for_gas_to_relax() {
+        assert_eq!(
+            relaxed("\tbgt\t.LBB0_2\n\tbra\t.L3\n\tbsr\tf\n\tbne\t(%a0)\n"),
+            "\tjgt\t.LBB0_2\n\tjra\t.L3\n\tjbsr\tf\n\tbne\t(%a0)\n"
+        );
+    }
+
     /// The 68020 table compiled with `-mcpu=68000`: its clocks were 68000 code
     /// on 68020 timing, and crc16 was judged on them.
     #[test]
@@ -298,6 +308,41 @@ fn price(
     total
 }
 
+/// `asm` with each branch to a label as the gas pseudo-branch that picks its
+/// own displacement: gas assembles `bgt L` with a 16-bit displacement however
+/// near L is, where this compiler's own encoder (and gcc's `jgt`) use 8 bits
+/// when they fit. Priced as printed, every forward branch cost 2 B and some
+/// clocks more than the code the compiler writes (max -O2 18 B against 16).
+fn relaxed(asm: &str) -> String {
+    const CONDITIONS: [&str; 14] = ["hi", "ls", "cc", "cs", "ne", "eq", "vc", "vs", "pl", "mi", "ge", "lt", "gt", "le"];
+    asm.lines()
+        .map(|line| {
+            let Some((indent, rest)) = line.split_once(|c: char| !c.is_whitespace()).map(|(indent, _)| {
+                let at = indent.len();
+                (&line[..at], &line[at..])
+            }) else {
+                return line.to_owned();
+            };
+            let Some((mnemonic, operand)) = rest.split_once(char::is_whitespace) else { return line.to_owned() };
+            let label = operand.trim().starts_with(|c: char| c == '.' || c.is_alphabetic() || c == '_');
+            let pseudo = match mnemonic {
+                "bra" => Some("jra".to_owned()),
+                "bsr" => Some("jbsr".to_owned()),
+                _ => mnemonic
+                    .strip_prefix('b')
+                    .filter(|condition| CONDITIONS.contains(condition))
+                    .map(|condition| format!("j{condition}")),
+            };
+            match pseudo {
+                Some(pseudo) if label => format!("{indent}{pseudo}\t{}", operand.trim()),
+                _ => line.to_owned(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n"
+}
+
 /// The driver's flag for the processor a table is for: the code is compiled
 /// for the processor it is then run and priced on (the tool once compiled
 /// every table for the 68000, so the 68020 column priced 68000 code).
@@ -308,6 +353,20 @@ fn driver_cpu(cpu: &str) -> String {
 /// The assembler's flag for the same processor.
 fn assembler_arch(cpu: &str) -> String {
     format!("-m{cpu}")
+}
+
+/// The IR `CYCLES_LLC` compiles: `$CYCLES_RAW_IR_DIR/<set>/<name>.ll` where
+/// there is one (clang's output with no passes, what `llrm-cc` hands the
+/// driver), else the bench's own IR. Some bench IR is hand-written (gcd's
+/// selects), so a gap measured on it is not the shipped path's.
+fn shipped_source(
+    set: &str,
+    name: &str,
+) -> String {
+    std::env::var_os("CYCLES_RAW_IR_DIR")
+        .map(|dir| Path::new(&dir).join(set).join(format!("{name}.ll")))
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .unwrap_or_else(|| source_in(set, name))
 }
 
 /// `CYCLES_LLC=llrm-m68k-llc`: the code of `k` is that driver's assembly for
@@ -333,7 +392,7 @@ fn assembled(
         .status()
         .unwrap();
     assert!(status.success(), "the llc failed");
-    let text = format!(".text\n{}", std::fs::read_to_string(&asm).unwrap());
+    let text = format!(".text\n{}", relaxed(&std::fs::read_to_string(&asm).unwrap()));
     let source = dir.join("llc_in.s");
     std::fs::write(&source, text).unwrap();
     let object = dir.join("llc.o");
@@ -477,7 +536,7 @@ fn main() {
                 let mut code = items_with(&module, "k", Cpu::M68000, options).unwrap();
                 if let (Some(llc), true) = (std::env::var_os("CYCLES_LLC"), leaf) {
                     let Some(bytes) =
-                        assembled(Path::new(&llc), &gcc, &source_in(&set, name), options.size, &dir, &cpu_name)
+                        assembled(Path::new(&llc), &gcc, &shipped_source(&set, name), options.size, &dir, &cpu_name)
                     else {
                         cells.push("calls the runtime".to_owned());
                         continue;
