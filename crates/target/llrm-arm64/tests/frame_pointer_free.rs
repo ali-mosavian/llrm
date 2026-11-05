@@ -91,3 +91,24 @@ fn nothing_live_across_a_call_is_in_x16_or_x17() {
         assert!(!stale, "{reg} is read after the call but written before it: {asm}");
     }
 }
+
+/// The allocation made while the frame looked small (x16/x17 free) is thrown
+/// away when the real frame is 24 KB: with it kept, a spill at a large offset
+/// would clobber a value held in x16/x17.
+#[test]
+fn a_frame_that_outgrows_the_estimate_is_allocated_again_without_the_pair() {
+    let _one_at_a_time = LOCK.lock().unwrap_or_else(|held| held.into_inner());
+    llrm_arm64::frame::UNSURE.store(true, std::sync::atomic::Ordering::Relaxed);
+    let asm = driver::assembly(include_str!("data/frame_scratch_big.ll"), Platform::Linux, Level::O2);
+    llrm_arm64::frame::UNSURE.store(false, std::sync::atomic::Ordering::Relaxed);
+    let asm = asm.expect("lowers");
+    let data_uses: Vec<&str> = asm
+        .lines()
+        .filter(|line| {
+            (line.contains("x16") || line.contains("x17"))
+                && !(line.contains("sp") || line.contains("movz") || line.contains("movk") || line.contains("[x1"))
+        })
+        .collect();
+    assert!(data_uses.is_empty(), "{data_uses:?}");
+    assert!(asm.contains("x16") || asm.contains("x17"), "large offsets still use the pair: {asm}");
+}

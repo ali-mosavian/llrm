@@ -161,6 +161,20 @@ pub fn frame_bound(
 /// (`x16`/`x17`, the lowerer's pair): below it, no offset does.
 pub const SCRATCH_FREE_BELOW: u64 = 4000;
 
+/// Whether the frame may stay below `SCRATCH_FREE_BELOW` (so `x16`/`x17` can
+/// be allocated): `(tight, loose)` for 8 and 16 B per register.
+pub fn scratch_estimate(function: &MFunc) -> (bool, bool) {
+    if UNSURE.load(std::sync::atomic::Ordering::Relaxed) {
+        return (true, false);
+    }
+    let fits = |per_register| frame_bound(function, per_register) < SCRATCH_FREE_BELOW;
+    (fits(8), fits(16))
+}
+
+/// Tests set this to make every function "maybe small": the pair is allocated
+/// and the real frame decides whether the allocation stands.
+pub static UNSURE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn place_objects(function: &MFunc) -> (Vec<u64>, u64) {
     let uses = object_uses(function);
     let size = |at: usize| function.slots[at].size.max(1);

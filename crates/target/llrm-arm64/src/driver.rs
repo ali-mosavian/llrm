@@ -329,8 +329,7 @@ pub fn functions_with(
         // encode; they are the allocator's while the frame stays small. A
         // spill slot is at most 16 B, a register mostly 8: between the two
         // bounds the allocation is kept only if the frame came out small.
-        let tight = crate::frame::frame_bound(&machine, 8) < crate::frame::SCRATCH_FREE_BELOW;
-        let loose = crate::frame::frame_bound(&machine, 16) < crate::frame::SCRATCH_FREE_BELOW;
+        let (tight, loose) = crate::frame::scratch_estimate(&machine);
         let snapshot = (tight && !loose).then(|| machine.clone());
         crate::lir_view::set_frame_pointer_free(
             platform != Platform::Darwin
