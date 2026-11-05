@@ -1272,6 +1272,40 @@ b6:
 }
 ";
 
+/// At size the rule is off: the doubled limit made `copy` -Os m16 3 B bigger
+/// (`add ax,ax` and `cmp` for `dec`), idioms.c +51 B over the m16 corpus.
+#[test]
+fn at_size_a_word_copy_keeps_the_counter_and_does_not_double_the_limit() {
+    let mut module = parsed(&format!("{DOS}{COPY}"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true });
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
+    let after = printed(&module);
+    assert!(!after.contains("shl i16"), "{after}");
+}
+
+const COPY: &str = "
+@a = global [100 x i16] zeroinitializer
+@b = global [100 x i16] zeroinitializer
+define void @copy(i16 %0) {
+  %2 = icmp sgt i16 %0, 0
+  br i1 %2, label %3, label %11
+3:
+  br label %4
+4:
+  %5 = phi i16 [ %9, %4 ], [ 0, %3 ]
+  %6 = getelementptr inbounds nuw [2 x i8], ptr @b, i16 %5
+  %7 = load i16, ptr %6, align 2
+  %8 = getelementptr inbounds nuw [2 x i8], ptr @a, i16 %5
+  store i16 %7, ptr %8, align 2
+  %9 = add nuw nsw i16 %5, 1
+  %10 = icmp eq i16 %9, %0
+  br i1 %10, label %11, label %4
+11:
+  ret void
+}
+";
+
 const DOT: &str = "
 define i32 @dot(ptr %0, ptr %1, i16 %2) {
   %4 = icmp sgt i16 %2, 0
