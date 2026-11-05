@@ -480,6 +480,13 @@ pub trait Tti {
         false
     }
 
+    /// Whether a size build's loop rotation copies a header only when its
+    /// exit test folds in the preheader (RS1). False: the pass's header limit
+    /// alone.
+    fn rotation_guard_must_fold_at_size(&self) -> bool {
+        false
+    }
+
     /// The fewest calls a callee has in the module for the bound above to hold
     /// its sites (a callee called once is the pin's: the copy
     /// meets constants the cost model follows, and folds with the sites around
