@@ -8,4 +8,7 @@
 #define SF_CLZ32(x) ((int)__builtin_clz(x))
 #define SF_CLZ64(x) ((int)__builtin_clzll(x))
 #define SF_QUAD_LONGDOUBLE 1
+#ifndef __OPTIMIZE_SIZE__ /* -O2: f64 div 643 / 701 -> about 125 / 139 executed instructions (compiler-rt 98 / 127), +124 / +136 B; -Os keeps the bit loop (strict bytes) */
+#define SF_DIV_NEWTON 1
+#endif
 #endif
