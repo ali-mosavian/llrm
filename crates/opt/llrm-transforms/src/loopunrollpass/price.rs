@@ -63,9 +63,13 @@ pub(super) fn full_unroll_pays(
         Trial::Estimate => {}
         Trial::Collect => {
             run.deferred.push(lp.get_header());
+            run.declined.insert(lp.get_header());
             return false;
         }
-        Trial::Skip => return false,
+        Trial::Skip => {
+            run.declined.insert(lp.get_header());
+            return false;
+        }
         Trial::Force(header) => return header == lp.get_header(),
     }
     let clocks = crate::profit::costs(run.outer);
@@ -140,7 +144,11 @@ pub(super) fn full_unroll_pays(
         lp,
         &format!("priced unroll: {trips} trips, saves {saved} clk, adds {added} B (body {body_bytes} B; units {unrolled_units} of {rolled_units}, promoted {promoted}), rate {rate}"),
     );
-    unroll_pays(saved, added, rate)
+    let pays = unroll_pays(saved, added, rate);
+    if !pays && run.tti.unroll_trial() {
+        run.declined.insert(lp.get_header());
+    }
+    pays
 }
 
 /// The operands of the loops inside `lp` that each copy of its body makes a

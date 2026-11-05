@@ -157,6 +157,12 @@ pub struct Run<'a> {
     pub trial: Trial,
     /// The headers of the loops `Trial::Collect` left for a trial.
     pub deferred: Vec<BlockId>,
+    /// The headers of the loops the price layer left rolled in this run: the
+    /// pin unrolls an inner loop before it sizes the loop around it, so a loop
+    /// with one of these inside is not unrolled in this run (nbody_single -O3:
+    /// the 6-trip inner loop left rolled, the outer loops unrolled around it,
+    /// +460 B).
+    pub declined: IdSet<BlockId>,
 }
 
 /// `TransformationMode`.
@@ -1449,6 +1455,14 @@ fn why(
     }
 }
 
+/// Whether `lp` or a loop inside it was left rolled by the price layer.
+fn inner_declined(
+    run: &Run,
+    lp: Loop,
+) -> bool {
+    run.declined.contains(&lp.get_header()) || lp.get_sub_loops().any(|inner| inner_declined(run, inner))
+}
+
 /// `tryToUnrollLoop`, for the full unroll pass.
 /// The instructions of `blocks`.
 fn body_instructions(
@@ -1465,6 +1479,10 @@ fn try_to_unroll_loop(
 ) -> Unrolled {
     if run.finished.contains(&lp.get_header()) {
         why(run, lp, "already unrolled");
+        return Unrolled::Unmodified;
+    }
+    if lp.get_sub_loops().any(|inner| inner_declined(run, inner)) {
+        why(run, lp, "a loop inside was left rolled by the price");
         return Unrolled::Unmodified;
     }
     let options = LoopOptions::of(run, lp);
@@ -2287,6 +2305,7 @@ impl LoopFullUnroll {
             scev,
             trial,
             deferred: Vec::new(),
+            declined: IdSet::new(),
             options: Options {
                 opt_level: self.opt_level,
                 opt_size: self.opt_size,
@@ -2384,6 +2403,7 @@ pub fn unroll_function(
         scev: ScalarEvolution::new(),
         trial: Trial::Estimate,
         deferred: Vec::new(),
+        declined: IdSet::new(),
     };
     let unrolled = unroll_loops(&mut run);
     declared.place(module)?;
