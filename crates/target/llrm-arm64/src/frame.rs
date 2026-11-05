@@ -220,18 +220,35 @@ fn place_objects(function: &MFunc) -> (Vec<u64>, u64) {
                     },
                 ),
         );
-    if let Some((first, 0)) = first
-        && let Some(at) = order.iter().position(|&one| one == first)
+    let assign = |order: &[usize], slots: &mut Vec<u64>| {
+        let mut at = function.outgoing;
+        for &index in order.iter().rev() {
+            let slot = &function.slots[index];
+            at = at.next_multiple_of(slot.align.max(1));
+            slots[index] = at;
+            at += slot.size;
+        }
+        at
+    };
+    // Only a frame the pre-indexed store can allocate (offset -256 at the
+    // lowest) gains from that: a larger one keeps the dense order, whose
+    // offsets stay within the reach of a pair.
+    let mut at = assign(&order, &mut slots);
+    if at.next_multiple_of(16) > 256 {
+        // The pin's order: the first object at the top.
+        order = (0..function.slots.len()).collect();
+        at = assign(&order, &mut slots);
+    } else if let Some((first, 0)) = first
+        && let Some(position) = order.iter().position(|&one| one == first)
     {
-        order.remove(at);
-        order.push(first);
-    }
-    let mut at = function.outgoing;
-    for &index in order.iter().rev() {
-        let slot = &function.slots[index];
-        at = at.next_multiple_of(slot.align.max(1));
-        slots[index] = at;
-        at += slot.size;
+        let mut moved = order.clone();
+        moved.remove(position);
+        moved.push(first);
+        let mut again = slots.clone();
+        let end = assign(&moved, &mut again);
+        if end.next_multiple_of(16) <= 256 {
+            (slots, at) = (again, end);
+        }
     }
     (slots, at.next_multiple_of(16))
 }
