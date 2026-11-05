@@ -1177,10 +1177,14 @@ fn test_unroll_is_priced_against_the_loop_as_optimized() {
     let assembly = listing_on(&parsed(&source), "main", &level("Os"), "486");
     let body = &assembly[assembly.find("_value proc").unwrap()..assembly.find("_value endp").unwrap()];
 
-    // Each fill is one string fill or one rolled store, never eight copies.
-    let fills = Regex::new(r"rep stos[bwd]\n").unwrap().find_iter(body).count()
-        + Regex::new(r"mov dword ptr \[[^\]]*\], 0\n").unwrap().find_iter(body).count();
-    assert_eq!(fills, 2, "{body}");
+    // The two adjacent 256-byte zero fills are merged (zero-memset merge) into
+    // one 512-byte string fill; unrolled, `b`'s would be eight dword stores.
+    let fills = Regex::new(r"rep stos[bwd]\n").unwrap().find_iter(body).count();
+    let stores = Regex::new(r"mov dword ptr \[[^\]]*\], 0\n").unwrap().find_iter(body).count();
+    assert_eq!((fills, stores), (1, 0), "{body}");
+    let counted = Regex::new(r"mov cx, (\d+)\n(?:[^\n]*\n){0,6}?\s*rep stos([bwd])\n").unwrap().captures(body).expect("a counted fill");
+    let width = match &counted[2] { "b" => 1, "w" => 2, _ => 4 };
+    assert_eq!(counted[1].parse::<usize>().unwrap() * width, 512, "{body}");
 }
 
 #[test]
