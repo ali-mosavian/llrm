@@ -1278,3 +1278,20 @@ def test_bss_is_judged_through_the_footprint_not_alone():
     assert bench.against("n nib -O2", {**base, "bss_bytes": 5}, base) == ["n nib -O2: static_bytes 35 > 34 (worse)"]  # bss growth grows the footprint
     assert bench.against("n nib -O2", {**base, "data_bytes": 31, "bss_bytes": 3}, base) == ["n nib -O2: data_bytes 31 > 30 (worse)"]  # data growth, footprint equal
     assert bench.against("n nib -O2", {**base, "data_bytes": 20, "bss_bytes": 24}, base) == ["n nib -O2: static_bytes 44 > 34 (worse)"]  # data down 10, bss up 20
+
+
+def test_compare_runs_refuses_sides_measured_from_different_sources(tmp_path, capsys):
+    """An A/B read stft_single from an i32 source on one side and the i16 source on the other: 8 against 0 wide register lines, blamed on a compiler pass that did not exist."""
+    one, two = tmp_path / "one.json", tmp_path / "two.json"
+    for path, digest in ((one, "a"), (two, "b")):
+        path.with_name(path.name + ".sources").write_text(json.dumps({"stft_single": digest, "fib": "same"}))
+    assert bench.compare_runs(one, two) == 1
+    assert "REFUSED: 1 programs measured from different sources: stft_single" in capsys.readouterr().out
+    assert bench.compare_runs(one, two, allow_source_diff=True) == 0
+    assert bench.compare_runs(one, one) == 0
+    two.with_name("two.json.sources").unlink()
+    assert bench.compare_runs(one, two) == 1
+
+
+def test_source_digests_change_with_the_program_source():
+    assert bench.source_digests(["fib"])["fib"] != bench.source_digests(["queens"])["queens"]
