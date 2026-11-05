@@ -1,9 +1,9 @@
 #!/bin/sh
-# Compile every example C file with llrm-cc for each target: tools/cc-sweep.sh [target...]  (LLRM_CLANG_M16 for x86_16-dos)
+# Compile every example C file with llrm-cc for each target: tools/cc-sweep.sh [target...]  (x86_16-wat needs LLRM_CLANG_M16 and LLRM_OW: DOS sources see Watcom's libc headers, not the host's)
 # Red when a target compiled nothing, wrote no result, or failed more files than tools/cc-sweep.baseline allows (CC_SWEEP_BASELINE overrides the path).
 # The baseline is a ratchet: counts may only go down, by hand; the gate rewrites nothing. The failing names are printed so a swap of one FAIL for another shows.
 root=$(cd "$(dirname "$0")/.." && pwd)
-targets=${*:-x86_16-dos x86_32-dos x86_64-linux arm64-linux}
+targets=${*:-x86_16-wat x86_32-dos x86_64-linux arm64-linux}
 bin=$(python3 "$root/tools/llrmbin.py" bin)
 out=${CC_SWEEP_OUT:-/tmp/cc-sweep}; mkdir -p "$out"
 export LLRM_LLC=$bin/llrm-llc
