@@ -101,6 +101,7 @@ mod cgpmemalign_tests;
 pub mod cgpretdup;
 pub mod cgpselect;
 pub mod cgpswitch;
+pub mod cgpmath;
 pub mod cmpopt;
 #[cfg(test)]
 mod codegen_slots_tests;
