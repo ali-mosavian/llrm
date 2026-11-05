@@ -306,6 +306,21 @@ impl Tti for AArch64 {
         250_000
     }
 
+    /// DEVIATE REC-2 (owner arm64, exit 2026-11-30): gcc 15.2's
+    /// `max-inline-recursive-depth` 8 and `max-inline-insns-recursive` 450 at
+    /// -O2/-O3, never -Os. No growth bar of its own: m32's are fitted to the
+    /// i486 corpus, arm64's would be fitted to arm64's.
+    fn recursive_inlining(&self) -> Option<(u32, i64)> {
+        Some((8, 450))
+    }
+
+    /// DEVIATE REC-2: gcc eliminates tail calls before it copies a recursion;
+    /// at -O3 (m32's measure: the loop's copies beat the tree's), -O2 keeps
+    /// the pin's order.
+    fn recursive_tre_first(&self) -> (bool, bool) {
+        (false, true)
+    }
+
     fn merges_unaligned_stores(&self) -> bool {
         true
     }
