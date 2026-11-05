@@ -1413,3 +1413,9 @@ def test_an_emulated_reference_program_is_fed_its_corpus_cut(tmp_path, monkeypat
     assert [one.read_bytes() for one in files] == [b"x" * 10] and want == ["cut"] and counted
     plain = bench.Variant("grep", "c", folder / "grep.c", "f", None, "qb45", True, ("in.dat",), 10, False)
     assert bench.counting_input(plain, folder, tmp_path / "ci2") == ((), ["full"], False)
+
+
+def test_skipped_rows_are_counted_in_the_header_by_reason():
+    """sfm16_* had no native column and nothing said so. Each skip reason prints once with the number of programs it left without a row."""
+    measured = {("a", "gcc64", "O2"): {"skip": "why"}, ("a", "clang64", "O2"): {"skip": "why"}, ("b", "gcc64", "O2"): {"skip": "why"}, ("b", "c64", "O2"): {"instructions": 1}}
+    assert bench.skip_lines(measured) == ["SKIP why (2 programs)"]

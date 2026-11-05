@@ -27,6 +27,8 @@ def test_a_program_runs_natively_only_with_main_an_expected_output_and_no_far_po
     assert native.candidates(program(tmp_path, "g", out=None)) is None
     assert native.candidates(program(tmp_path, "h", "char far *p; int main(void) { return 0; }\n")) is None
     assert native.candidates(program(tmp_path, "i", "int f(void) { return 0; }\n")) is None
+    assert native.candidates(program(tmp_path, "l", "typedef unsigned char sfu8; typedef long sfi32;\nint main(void) { return 0; }\n")) is None
+    assert native.candidates(program(tmp_path, "m", "typedef unsigned long sfu32;\nint main(void) { return 0; }\n")) is None
     assert native.candidates(program(tmp_path, "j", "char __huge *p; int main(void) { return 0; }\n")) is None
     assert native.candidates(program(tmp_path, "k", "// data: photo.jpg\n" + PROGRAM)) is None  # jpeg and stft printed the file name where a number was expected
 
@@ -158,6 +160,19 @@ def test_pic_mode_reads_the_objects_relocations_not_the_flag(tmp_path):
     row = {"instructions": 1}
     assert native.mismatch(row, "clang64", tmp_path / "t-fno-pic.o", tmp_path / "t-fPIE.o") == {"error": "pic mode: clang64 is nopic, ours is pic"}
     assert native.mismatch(row, "clang64", tmp_path / "t-fno-pic.o", tmp_path / "t-fno-pic.o") == row
+
+
+def test_a_program_with_a_32_bit_long_is_a_skip_row_with_its_reason_not_a_missing_one(tmp_path, monkeypatch):
+    """sfm16_* (9 programs) had no gcc/clang column and no row saying so: the missing bar read as met. Each now has a skip row per native column."""
+    directory = tmp_path / "sf"
+    directory.mkdir()
+    (directory / "sf.c").write_text("typedef unsigned char sfu8; typedef long sfi32;\nint main(void) { return 0; }\n")
+    (directory / "sf.out").write_text("1\n")
+    assert native.spells_int32_as_long(directory)
+    monkeypatch.setattr(native, "perf_missing", lambda: None)
+    rows = native.measure([("sf", directory)], tmp_path, ["O2", "Os"], tmp_path / "w", tmp_path)
+    assert {key[2] for key in rows} == {"O2", "Os"} and {key[1] for key in rows} >= {"gcc64", "clang64"}
+    assert all(row == {"skip": native.NO_NATIVE_LONG} for row in rows.values())
 
 
 def test_pic_mode_is_read_from_the_sized_object_not_the_wrapper_pointer_beside_it(tmp_path):
