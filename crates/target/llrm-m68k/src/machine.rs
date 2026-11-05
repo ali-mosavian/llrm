@@ -131,7 +131,8 @@ impl Tti for M68k {
 
     /// DEVIATE: the pin's M68k states no preference; `(An)+` steps a pointer
     /// by the access size for free (descriptors in `indexed.rs`), so LSR keeps
-    /// a pointer walk rather than an index beside a counter. Exit: none.
+    /// a pointer walk rather than an index beside a counter. Exit: 2026-11-20,
+    /// when LSR rates the indexed formula beside the walk (M68K-COPY-OS).
     fn preferred_addressing_mode(&self) -> AddressingMode {
         AddressingMode::PostIndexed
     }

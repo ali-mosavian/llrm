@@ -312,6 +312,19 @@ impl Profile {
         }
     }
 
+    /// `three_address`, for a size build: a flat 32-bit target without the byte
+    /// and word `lea` (TA-10).
+    pub fn three_address_for(
+        &self,
+        size: bool,
+    ) -> crate::twoaddress::ThreeAddress {
+        use crate::twoaddress::ThreeAddress;
+        match self.three_address() {
+            ThreeAddress::All if size => ThreeAddress::Dwords,
+            mode => mode,
+        }
+    }
+
     /// The dataclass constructor with every defaulted field at its default, and
     /// the registers and cost model of the target `arch`.
     pub fn new(
@@ -711,6 +724,22 @@ mod tests {
         assert_eq!(with(Vec::new()), ThreeAddress::Off);
         assert_eq!(with(vec![AddressForm { secondary: false, ..dword.clone() }]), ThreeAddress::All);
         assert_eq!(with(vec![AddressForm { index_width: 8, ..dword }]), ThreeAddress::Wide);
+    }
+
+    /// A size build keeps the dword `lea` and drops the byte and word ones
+    /// (TA-10): 11 m32 -Os cells grew when they were made there. Wide and
+    /// the 16-bit modes are the same at either.
+    #[test]
+    fn test_a_size_build_drops_the_byte_and_word_lea_on_flat_targets() {
+        use crate::twoaddress::ThreeAddress;
+        let m16 = profile("486").unwrap();
+        let dword = m16.dword_address_form().expect("a dword form").clone();
+        let with = |forms: Vec<_>, size| Profile { address_forms: forms.into(), ..m16.clone() }.three_address_for(size);
+        let flat = AddressForm { secondary: false, ..dword.clone() };
+        assert_eq!(with(vec![flat.clone()], false), ThreeAddress::All);
+        assert_eq!(with(vec![flat], true), ThreeAddress::Dwords);
+        assert_eq!(with(vec![AddressForm { index_width: 8, ..dword }], true), ThreeAddress::Wide);
+        assert_eq!(m16.three_address_for(true), ThreeAddress::AddSubWords);
     }
 
     #[test]

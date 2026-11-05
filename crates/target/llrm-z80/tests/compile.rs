@@ -1564,3 +1564,25 @@ fn a_size_build_does_not_copy_a_callee_bigger_than_its_call() {
         .sum();
     assert_eq!(calls, 3, "step was copied into its callers");
 }
+
+/// A callee with a frame pays its entry and exit at every call: `push ix`,
+/// `ld ix`, `add ix,sp`, the stack adjustment and their undoing, 12 to 20 B,
+/// which an inline removes. Priced as the bare call, -Os kept `bench` (two
+/// calls, a 140 B frame) a call: stack_arrays_copy was 155 B, 122 B inlined.
+#[test]
+fn a_size_build_inlines_a_callee_whose_frame_costs_more_than_its_body() {
+    let ir = include_str!("kernels/ir/stack_arrays_copy.ll");
+    let out = text(ir, "main", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("_bench"), "{out}");
+}
+
+/// A callee's frame is built once, and an inlined copy builds it in the caller:
+/// credited per site, as if every copy shed one, -Os inlined `dirty` (a 96 B
+/// frame, two sites) into a `main` with no frame of its own and
+/// long_double_constant_store grew from 64 B to 72 B. `dirty` stays a call.
+#[test]
+fn a_size_build_keeps_a_callee_whose_frame_would_move_into_a_frameless_caller() {
+    let ir = include_str!("kernels/ir/long_double_constant_store.ll");
+    let out = text(ir, "main", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+    assert_eq!(out.matches("call _dirty").count(), 2, "{out}");
+}
