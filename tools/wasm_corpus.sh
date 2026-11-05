@@ -44,7 +44,7 @@ EOF
 section() { wasm-objdump -h "$2" | sed -n "s/^ *$1 start=.*(size=0x\\([0-9a-f]*\\)).*/\\1/p" | while read -r h; do echo $((16#$h)); done; }
 code() { section Code "$1"; }
 # The bytes a cell is judged by: the code and the initialised data it loads (a lookup table, a string).
-image() { echo $(($(code "$1") + $(section Data "$1"))); }
+image() { echo $(($(code "$1") + $(section Data "$1" | tr -d "\n" | grep . || echo 0))); }
 
 # "result instructions" of one object linked with the stub.
 count() {

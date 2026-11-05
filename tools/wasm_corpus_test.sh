@@ -23,3 +23,10 @@ row=$("$root/tools/wasm_corpus.sh" O1 "$root/bench/jpeg_single/jpeg_single.c" | 
 read -r _ llrm_b clang_b _ <<< "$row"
 case "$llrm_b$clang_b" in *[!0-9]*|"") echo "FAIL: jpeg_single has no bytes: $row"; exit 1;; esac
 echo "ok: $row"
+
+# An object with no Data section (bintree) summed "code + nothing": its bytes printed empty and the cell read blank.
+row=$("$root/tools/wasm_corpus.sh" O1 "$root/bench/bintree/bintree.c" | tail -1)
+read -r _ llrm_b clang_b _ <<< "$row"
+[ "$(wc -w <<< "$row")" -eq 8 ] || { echo "FAIL: bintree row lost a column (empty bytes): $row"; exit 1; }
+case "$llrm_b$clang_b" in *[!0-9]*|"") echo "FAIL: bintree has no bytes: $row"; exit 1;; esac
+echo "ok: $row"
