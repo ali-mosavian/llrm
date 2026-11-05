@@ -48,3 +48,37 @@ fn a_variant_is_priced_before_the_printers_peepholes() {
     llrm_z80::expand::PRICING.with(|one| one.set(false));
     assert!(asm.contains("add hl, de") && !asm.contains("inc de"), "{asm}");
 }
+
+fn reload_then_spill(between: Option<Inst>) -> String {
+    let phys = |r| Reg::Phys(r);
+    let mut insts = vec![Inst::new(Kind::Op("RELOAD16"), vec![Operand::Def(phys(reg::BC)), Operand::Frame(1)])];
+    insts.extend(between);
+    insts.push(Inst::new(Kind::Op("SPILL16"), vec![Operand::Frame(1), Operand::Use(phys(reg::BC))]));
+    insts.push(Inst::new(Kind::Op("RET"), vec![Operand::Use(phys(reg::BC))]));
+    let mut function = MFunction::new("f");
+    function.blocks = vec![Block { id: 0, insts, phis: Vec::new() }];
+    let lines = finish(&function, &Assignment(Vec::new()), 0, &[(1, 2), (2, 2)], Default::default()).expect("prints");
+    lines
+        .iter()
+        .filter_map(|line| if let Line::Inst(text) = line { Some(text.as_str()) } else { None })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// idiv_loop_os -Os printed `ld c,-10(ix); ld b,-9(ix); ld -10(ix),c;
+/// ld -9(ix),b`: a slot stored back what it was just loaded into, 6 B of 19 T
+/// a byte. The spill of an unchanged reload is gone.
+#[test]
+fn a_slot_is_not_stored_back_what_was_just_loaded_from_it() {
+    let asm = reload_then_spill(None);
+    assert!(asm.contains("ld c, -2(ix)") && !asm.contains("ld -2(ix), c"), "{asm}");
+}
+
+/// A value changed between the load and the store is stored.
+#[test]
+fn a_changed_value_is_stored_back() {
+    let changed =
+        Inst::new(Kind::Op("INC16"), vec![Operand::Def(Reg::Phys(reg::BC)), Operand::Use(Reg::Phys(reg::BC))]);
+    let asm = reload_then_spill(Some(changed));
+    assert!(asm.contains("ld -2(ix), c") && asm.contains("ld -1(ix), b"), "{asm}");
+}

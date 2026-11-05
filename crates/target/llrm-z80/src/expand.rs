@@ -759,6 +759,9 @@ impl Printer<'_> {
                 if op == "RELOAD8" && self.held_since_stored(&[(slot.clone(), register.to_owned())]) {
                     return Ok(());
                 }
+                if op == "SPILL8" && just_reloaded(&self.out, &[(slot.clone(), register.to_owned())]) {
+                    return Ok(());
+                }
                 if op == "RELOAD8" && self.reload_is_operand(inst, rest) {
                     self.folded = Some((self.register(inst, 0)?, slot));
                     return Ok(());
@@ -798,6 +801,12 @@ impl Printer<'_> {
                     let stores: Vec<(String, String)> =
                         slots.iter().zip([lo, hi]).map(|(slot, byte)| (slot.clone(), name(byte).to_owned())).collect();
                     if self.held_since_stored(&stores) {
+                        return Ok(());
+                    }
+                } else {
+                    let loaded: Vec<(String, String)> =
+                        slots.iter().zip([lo, hi]).map(|(slot, byte)| (slot.clone(), name(byte).to_owned())).collect();
+                    if just_reloaded(&self.out, &loaded) {
                         return Ok(());
                     }
                 }
@@ -1560,6 +1569,31 @@ pub fn finish(
 fn ends_flow(text: &str) -> bool {
     text == "ret"
         || text.strip_prefix("jp ").or_else(|| text.strip_prefix("jr ")).is_some_and(|rest| !rest.contains(','))
+}
+
+/// Whether the last lines printed are the loads `ld register, slot` of `loads`,
+/// in order: the slots already hold what the registers do, and a store of them
+/// back is 3 B and 19 T a byte for nothing. The allocator splits a range round
+/// a reload and spills the value it had not changed (idiv_loop_os).
+fn just_reloaded(
+    out: &[Line],
+    loads: &[(String, String)],
+) -> bool {
+    // newest first; a label on the way is a join, whose other path has not
+    // loaded
+    let mut lines: Vec<&str> = Vec::new();
+    for line in out.iter().rev() {
+        match line {
+            Line::Loc(_) => {}
+            Line::Label(_) => return false,
+            Line::Inst(text) => lines.push(text),
+        }
+        if lines.len() == loads.len() {
+            break;
+        }
+    }
+    lines.len() == loads.len()
+        && lines.iter().rev().zip(loads).all(|(text, (slot, register))| **text == format!("ld {register}, {slot}"))
 }
 
 /// Whether the registers still hold what was just stored to their slots:
