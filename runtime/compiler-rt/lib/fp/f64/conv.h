@@ -31,9 +31,14 @@ static inline sf64 round_mag(uint64_t sign, uint64_t u, int n)
 SF_CONV_FN sf64 from_mag32(uint64_t sign, uint32_t x)
 {
     if (!x) return 0;
+#ifdef SF_CLZ64 /* 64-bit registers: one shift puts the top bit at 52 (compiler-rt's form); the implicit bit adds the last exponent step */
+    int c = sf_clz32(x);
+    return sign + (((uint64_t)x << (c + 21)) + ((uint64_t)(1053 - c) << 52));
+#else
     int n = 31 - sf_clz32(x);
     uint32_t y = x << (31 - n); /* top bit set */
     return sign + (((uint64_t)(((uint32_t)n + 1022u) << 20) + (y >> 11)) << 32) + ((uint64_t)(y << 21));
+#endif
 }
 SF_CONV_FN sf64 from_mag(uint64_t sign, uint64_t u)
 {

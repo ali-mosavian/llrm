@@ -10,7 +10,7 @@ check() { # triple config sym bound
   ld.lld -static --gc-sections -e sfb_$3 -o $T/x $T/float.o $T/pack.o 2> $T/err || { echo "FAIL: link $1 $3: $(cat $T/err)"; bad=1; return; }
   n=$(size -A $T/x | awk '$1 ~ /^\.text/{t+=$2} END{print t+0}')
   [ "$n" -le "$4" ] || { echo "FAIL: $1 $3 links to $n B (bound $4)"; bad=1; }; }
-check aarch64-linux-gnu aarch64 floatsidf 70
+check aarch64-linux-gnu aarch64 floatsidf 64
 check aarch64-linux-gnu aarch64 floatunsidf 60
 check aarch64-linux-gnu aarch64 floatdidf 172
 check aarch64-linux-gnu aarch64 floatundidf 152

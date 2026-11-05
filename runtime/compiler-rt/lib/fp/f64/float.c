@@ -5,7 +5,7 @@
 sf_double SF_NAME(floatsidf)(int32_t x) /* one body: a branch on the sign duplicated it */
 {
     uint32_t s = (uint32_t)(x >> 31);
-    return b2d(from_mag32((uint64_t)s << 63, ((uint32_t)x ^ s) - s));
+    return b2d(from_mag32((uint64_t)((uint32_t)x & 0x80000000u) << 32, ((uint32_t)x ^ s) - s));
 }
 sf_double SF_NAME(floatunsidf)(uint32_t x) { return b2d(from_mag32(0, x)); }
 #else
