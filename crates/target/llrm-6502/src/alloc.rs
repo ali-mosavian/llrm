@@ -418,6 +418,8 @@ struct Builder {
     block_of: HashMap<String, u32>,
     /// How many times each cell or register has been defined so far.
     versions: HashMap<String, u32>,
+    /// High halves of pointer cells written as plain bytes: the pair never sees them.
+    lost_halves: HashSet<String>,
     /// The compare whose flags the next branch reads, and the ones saved to
     /// cells for later.
     pending: Option<Compare>,
@@ -480,6 +482,9 @@ impl Builder {
         }
         if !name.starts_with("v_") && !name.starts_with("w_") {
             return Err(Unsupported(format!("operand {name}")));
+        }
+        if self.lost_halves.contains(name) {
+            return Err(Unsupported(format!("{name}, the high half of a pointer cell, is written as a byte")));
         }
         if let Some(r) = self.bytes.get(name) {
             return Ok(*r);
@@ -675,6 +680,9 @@ impl Builder {
         name: &str,
     ) {
         *self.versions.entry(name.to_owned()).or_default() += 1;
+        if name.strip_suffix("+1").is_some_and(|word| self.pointers.contains(word)) {
+            self.lost_halves.insert(name.to_owned());
+        }
     }
 
     fn version(
@@ -1483,6 +1491,7 @@ pub fn build_with_places(
         constants: constants(items),
         block_of,
         versions: HashMap::default(),
+        lost_halves: HashSet::default(),
         pending: None,
         saved: HashMap::default(),
         current: 0,
