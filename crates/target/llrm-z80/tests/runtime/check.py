@@ -205,6 +205,8 @@ def main():
     def tdiv32(a, b): q = abs(a) // abs(b); return q if (a < 0) == (b < 0) else -q
     l32b = l32 + [10, 100, 1000, 65535, 65537, 0x10000, 0x7FFF, 0x8000, 0xFFFF0000, 0x80000001]
     lp = [(a, b) for a in l32b for b in l32b if b] + [(rnd.getrandbits(32), rnd.getrandbits(rnd.choice([3, 8, 16, 24, 32])) or 1) for _ in range(150)]
+    mp = [(a, b) for a in l32b for b in l32b] + [(rnd.getrandbits(32), rnd.getrandbits(rnd.choice([3, 8, 16, 24, 32]))) for _ in range(150)]
+    allok &= check("__mulsi3", "LL>L", lambda a, b: a * b & 0xFFFFFFFF, mp)
     allok &= check("__udivsi3", "LL>L", lambda a, b: a // b, lp)
     allok &= check("__umodsi3", "LL>L", lambda a, b: a % b, lp)
     allok &= check("__divsi3", "LL>L", lambda a, b: tdiv32(s32c(a), s32c(b)) & 0xFFFFFFFF, lp)
@@ -231,7 +233,7 @@ def main():
             print(f"FAIL __udivdi3 ({a:#x}, {b}) took {t} T, bar {bar}")
             allok = False
     print("ALL OK" if allok else "FAILURES")
-    for nm, sig, args in (("__mulqi3", "A,L>A", (7, 6)), ("__mulqi3", "A,L>A", (200, 255)), ("__udivqi3", "A,L>A", (200, 7)), ("__mulhi3", "HL,DE>DE", (1234, 56)), ("__mulhi3", "HL,DE>DE", (56, 1234)), ("__udivhi3", "HL,DE>DE", (40000, 10)), ("__umodhi3", "HL,DE>DE", (40000, 10)), ("__ashlhi3", "HL,A>DE", (1, 5)), ("__divqi3", "A,L>A", (200, 7)), ("__divhi3", "HL,DE>DE", (40000, 10)), ("__ashlsi3", "L,A>L", (1, 20)), ("__udivsi3", "LL>L", (1000000, 10)), ("__divsi3", "LL>L", (1000000, 10))):
+    for nm, sig, args in (("__mulqi3", "A,L>A", (7, 6)), ("__mulqi3", "A,L>A", (200, 255)), ("__udivqi3", "A,L>A", (200, 7)), ("__mulhi3", "HL,DE>DE", (1234, 56)), ("__mulhi3", "HL,DE>DE", (56, 1234)), ("__udivhi3", "HL,DE>DE", (40000, 10)), ("__umodhi3", "HL,DE>DE", (40000, 10)), ("__ashlhi3", "HL,A>DE", (1, 5)), ("__divqi3", "A,L>A", (200, 7)), ("__divhi3", "HL,DE>DE", (40000, 10)), ("__ashlsi3", "L,A>L", (1, 20)), ("__mulsi3", "LL>L", (31, 1000)), ("__udivsi3", "LL>L", (1000000, 10)), ("__divsi3", "LL>L", (1000000, 10))):
         print(f"{nm}{args}: {cost(nm, sig, args)} T")
     for nm, a, b, count in (("__udivdi3", 0x123456789ABCDEF0, 1000003, False), ("__divdi3", 0x123456789ABCDEF0, 1000003, False), ("__udivdi3", 1000000, 10, False), ("__ashldi3", 1, 13, True), ("__lshrdi3", 0x123456789ABCDEF0, 37, True), ("__ashrdi3", 1 << 63, 63, True)):
         print(f"{nm}({a:#x}, {b}): {cost64(nm, a, b, count)} T")

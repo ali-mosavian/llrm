@@ -220,6 +220,18 @@ impl TargetLowering {
         self.size_libcall_names.insert((op, vt), name);
     }
 
+    /// Whether `op` of `vt` has a routine for functions tuned for size.
+    pub fn has_size_libcall_name(
+        &self,
+        op: ISD,
+        vt: EVT,
+    ) -> bool {
+        matches!(
+            vt,
+            EVT::Simple(vt) if self.size_libcall_names.contains_key(&(op, vt))
+        )
+    }
+
     /// The routine `name` is spelled `symbol` in the object.
     pub fn set_libcall_symbol(
         &mut self,

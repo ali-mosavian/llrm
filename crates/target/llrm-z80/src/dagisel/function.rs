@@ -146,6 +146,7 @@ pub fn select_function_with(
     let convention = isel::convention(module, &layout, id, &arch).map_err(|why| why.0)?;
     let target = builder_target();
     let sized = ["optsize", "minsize"].into_iter().any(|name| llrm_mir::memory::has(&function.attrs, name));
+    let long_multiply = llrm_mir::memory::has(&function.attrs, crate::prepare::LONG_MULTIPLY);
     let mut info = FunctionLoweringInfo::new(function);
     let mut locals = alloca_sizes(module, function, &layout, &info)?;
     let mut selected = Vec::new();
@@ -172,7 +173,15 @@ pub fn select_function_with(
         }
         let built = build_block(module, function, &layout, &target, &arch, &convention, &mut info, block)
             .map_err(|why| why.0.to_owned())?;
-        select_built(Some((function, block)), block, built, cpu, (optimize, sized), &mut info, &mut selected)?;
+        select_built(
+            Some((function, block)),
+            block,
+            built,
+            cpu,
+            (optimize, sized, long_multiply),
+            &mut info,
+            &mut selected,
+        )?;
     }
     // The stack objects the builder made follow the static allocas.
     locals.extend(info.objects.iter().map(|(size, _)| i64::from(*size)));
@@ -292,14 +301,15 @@ fn select_built(
     block: BlockId,
     mut built: BlockDag,
     cpu: Cpu,
-    (optimize, sized): (bool, bool),
+    (optimize, sized, long_multiply): (bool, bool, bool),
     info: &mut FunctionLoweringInfo,
     selected: &mut Vec<Selected>,
 ) -> Result<(), String> {
     // the scratch slots the legalizers ask for (a long long result's memory)
     // are frame objects numbered after the function's
     built.dag.first_temporary = info.next_stack_object();
-    let units = select_block(&mut built.dag, cpu, info, optimize, sized).map_err(|why| format!("{why:?}"))?;
+    let units =
+        select_block(&mut built.dag, cpu, info, optimize, (sized, long_multiply)).map_err(|why| format!("{why:?}"))?;
     for (size, align) in std::mem::take(&mut built.dag.temporaries) {
         info.new_stack_object(size, align);
     }
@@ -337,7 +347,7 @@ fn select_built(
     }
     selected.push(Selected { block, dag: built.dag, units, live_ins: built.live_ins, edges });
     for (extra, made) in built.extra {
-        select_built(None, extra, made, cpu, (optimize, sized), info, selected)?;
+        select_built(None, extra, made, cpu, (optimize, sized, long_multiply), info, selected)?;
     }
     Ok(())
 }
