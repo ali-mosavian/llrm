@@ -334,6 +334,8 @@ pub fn finish_with(
     // the bytes a `CCR_PUSH` has on the stack: a slot named from the stack
     // pointer is that much further
     let mut pushed = 0i64;
+    // the values of the stores whose pushes wait for the call, by offset
+    let mut waiting: Vec<(i64, mc::Operand)> = Vec::new();
     let mut block_of = kept.iter().map(|(at, _)| *at).peekable();
     let mut shown = 0usize;
     for (index, inst) in insts.iter().copied().enumerate() {
@@ -392,6 +394,17 @@ pub fn finish_with(
             }
             converted
         };
+        if let Some(offset) = pushes.deferred_offset(index) {
+            waiting.push((offset, operands.last().ok_or("a push of nothing")?.clone()));
+            continue;
+        }
+        if inst.call && !waiting.is_empty() {
+            waiting.sort_by(|a, b| b.0.cmp(&a.0));
+            for (_, value) in waiting.drain(..) {
+                out.push(crate::callpush::push_of(&value));
+                pushed += 4;
+            }
+        }
         if pushes.is_push(index) {
             let value = operands.last().ok_or("a push of nothing")?;
             out.push(crate::callpush::push_of(value));

@@ -3,9 +3,12 @@
 //!
 //! # How it works
 //! A call sequence is `ADJCALLSTACKDOWN n`, stores of the arguments to
-//! `(k, %sp)` for `k` from `n - 4` down to 0, the call and `ADJCALLSTACKUP`.
-//! [`plan`] finds the sequences whose stores fill the area in that order with
-//! nothing else naming the stack pointer in between. Pushing is priced against
+//! `(k, %sp)` for every `k` from 0 up to `n - 4`, the call and
+//! `ADJCALLSTACKUP`. [`plan`] finds the sequences whose stores fill the area
+//! with nothing else naming the stack pointer in between. Stores that come
+//! from `n - 4` down to 0 are pushed where they stand; in any other order the
+//! pushes go right before the call, which needs the stored registers to keep
+//! their values until then. Pushing is priced against
 //! the stores (`encode` and `timing::cost` on the cpu, the cleanup `adda`
 //! included) three ways: no sequence, every sequence, and the sequences that
 //! are cheaper alone. The frame is priced with each choice's largest call area
@@ -31,6 +34,9 @@ use crate::{REGISTER_INFO, mc, reg};
 pub struct Plan {
     /// Argument stores that become pushes.
     pushes: HashSet<usize>,
+    /// Argument stores that wait for the call and become pushes there, with
+    /// their offsets.
+    deferred: HashMap<usize, i64>,
     /// `ADJCALLSTACKDOWN`s that vanish.
     downs: HashSet<usize>,
     /// `ADJCALLSTACKUP`s that become `adda.l #bytes, %sp`.
@@ -43,6 +49,14 @@ impl Plan {
         at: usize,
     ) -> bool {
         self.pushes.contains(&at)
+    }
+
+    /// The call-area offset of a store whose push goes before the call.
+    pub fn deferred_offset(
+        &self,
+        at: usize,
+    ) -> Option<i64> {
+        self.deferred.get(&at).copied()
     }
 
     pub fn is_down(
@@ -74,6 +88,9 @@ struct Sequence {
     up: usize,
     bytes: i64,
     stores: Vec<usize>,
+    offsets: Vec<i64>,
+    /// The stores are not in push order: the pushes wait for the call.
+    deferred: bool,
     kept: (usize, u32),
     pushed: (usize, u32),
 }
@@ -99,6 +116,21 @@ fn names_sp(
                 Operand::Def(r) | Operand::Use(r) => REGISTER_INFO.root(physical(*r, assignment)) == reg::SP,
                 _ => false,
             },
+        )
+}
+
+fn defines(
+    inst: &Inst,
+    register: llrm_lir::registers::RegId,
+    assignment: &Assignment,
+) -> bool {
+    inst.operands
+        .iter()
+        .any(
+            |operand| matches!(
+                operand,
+                Operand::Def(r) if REGISTER_INFO.root(physical(*r, assignment)) == REGISTER_INFO.root(register)
+            ),
         )
 }
 
@@ -224,12 +256,32 @@ fn sequences(
             }
         }
         let wanted: Vec<i64> = (0..bytes / 4).map(|n| bytes - 4 - 4 * n).collect();
-        if !convertible || offsets != wanted {
+        let in_order = offsets == wanted;
+        let mut sorted = offsets.clone();
+        sorted.sort_unstable_by(|a, b| b.cmp(a));
+        // a push that waits for the call reads its register there
+        let keeps_values = in_order
+            || stores.iter().all(|&store| match argument_store(insts[store], assignment) {
+                Some((_, Source::Register(src))) => {
+                    !insts[store + 1..call].iter().any(|inst| defines(inst, src, assignment))
+                }
+                _ => true,
+            });
+        if !convertible || sorted != wanted || !keeps_values {
             others.push(bytes);
             continue;
         }
         let cleanup = crate::expand::sp_adjust(bytes, short);
-        found.push(Sequence { down, up, bytes, stores, kept: priced.0, pushed: add(priced.1, cost(&cleanup, cpu)?) });
+        found.push(Sequence {
+            down,
+            up,
+            bytes,
+            stores,
+            offsets,
+            deferred: !in_order,
+            kept: priced.0,
+            pushed: add(priced.1, cost(&cleanup, cpu)?),
+        });
     }
     Ok((found, others))
 }
@@ -278,7 +330,11 @@ pub fn plan(
     let mut plan = Plan::default();
     for (one, pushed) in found.iter().zip(&best.0) {
         if *pushed {
-            plan.pushes.extend(one.stores.iter().copied());
+            if one.deferred {
+                plan.deferred.extend(one.stores.iter().copied().zip(one.offsets.iter().copied()));
+            } else {
+                plan.pushes.extend(one.stores.iter().copied());
+            }
             plan.downs.insert(one.down);
             plan.ups.insert(one.up, one.bytes);
         }
