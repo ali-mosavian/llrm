@@ -458,7 +458,13 @@ pub fn assembled_by(
         procedures.push(masm::routine_procedure(&name, code, registers, Regs(arch.registers())));
     }
     let flat_elf = arch.object().default == llrm_target::object::Format::Elf && arch.object().code_model().flat();
-    for (bytes, id) in crate::backend::constpool::wide_first(pool.borrow().entries()) {
+    // A flat ELF object keeps the pool in mergeable sections, with no gap to fill.
+    let pooled = if flat_elf {
+        crate::backend::constpool::wide_first(pool.borrow().entries())
+    } else {
+        crate::backend::constpool::gap_filled(pool.borrow().entries(), masm::data_size(&data, 0))
+    };
+    for (bytes, id) in pooled {
         let name = format!("$K{id}");
         names.insert((Space::Segment, id), name.clone());
         // A double is on an 8-byte boundary: a 486 takes 3 clocks more for one
