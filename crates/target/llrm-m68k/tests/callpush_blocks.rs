@@ -54,3 +54,12 @@ fn a_call_on_each_path_of_a_diamond_keeps_its_own_cleanup_at_68000() {
 fn a_call_on_each_path_of_a_diamond_keeps_its_own_cleanup_at_68020() {
     run_with("68020");
 }
+
+/// The arguments of a call are pushed before a diamond the call is after (`compare_to_int64`: the `pea 3:w` of
+/// a `__mulsi3`). Pairing a call with a cleanup only from its own block dropped that push too: 4 bytes more.
+#[test]
+fn arguments_pushed_before_a_diamond_stay_pushes_at_68000() {
+    let ir = std::fs::read_to_string(fixture("diamond_push.ll")).unwrap();
+    let text = driver::assembly(&ir, driver::cpu_of("68000").expect("a cpu"), Level::O2).expect("compiles");
+    assert!(text.matches("pea\t").count() >= 5, "a push became a store:\n{text}");
+}

@@ -389,10 +389,16 @@ fn sequences(
         let call = (down + 1..insts.len()).find(|&i| insts[i].call);
         let up = call
             .and_then(|call| (call + 1..insts.len()).find(|&i| matches!(insts[i].kind, Kind::Op("ADJCALLSTACKUP"))));
-        // one block's sequence: a shared tail can leave the `up` of a call in
-        // a later block, and the next `up` in order is another sequence's
-        let in_block = |at: Option<usize>| at.filter(|&at| blocks[at] == blocks[down]);
-        let (Some(call), Some(up)) = (in_block(call), in_block(up)) else {
+        // A cleanup belongs to the call before it in its own block, with no
+        // other call or call area between: a tail shared by two paths leaves
+        // one `up` after two calls, and the one in another block is not this
+        // call's. The arguments may be pushed before a diamond the call is
+        // after.
+        let own_up = call.zip(up).filter(|&(call, up)| {
+            blocks[up] == blocks[call]
+                && insts[call + 1..up].iter().all(|inst| !inst.call && !matches!(inst.kind, Kind::Op("ADJCALLSTACKDOWN")))
+        });
+        let Some((call, up)) = own_up else {
             others.push(bytes);
             at += 1;
             continue;
