@@ -454,6 +454,22 @@ struct Constant {
     align: u32,
 }
 
+/// Whether `inst` is a store of an integer to an object that none of the
+/// open cells is in: it leaves them where they are, as the DAG's chains do
+/// (`findBetterNeighborChains` puts the stores that do not alias under one
+/// root).
+fn stored_elsewhere(
+    unit: &Unit,
+    inst: InstId,
+    open: &[Constant],
+) -> bool {
+    let op = unit.function.instruction(inst);
+    let Opcode::Store { volatile: false, .. } = op.opcode else { return false };
+    let Some(bits) = unit.int_bits(op.operands[0]) else { return false };
+    let Some((root, _)) = cell(unit, op.operands[1], bits.div_ceil(8)) else { return false };
+    open.iter().all(|one| one.root != root)
+}
+
 /// A store of an integer constant to a cell of an object.
 fn constant(
     unit: &Unit,
@@ -608,8 +624,9 @@ pub fn merged_constants(
                 if let Some(one) = constant(&unit, inst, order) {
                     *stored.entry((one.value, (one.high - one.low) as u32)).or_default() += 1;
                     open.push(one);
-                } else if !memory::speculatable(unit.context, callees, function, inst)
-                    || matches!(function.instruction(inst).opcode, Opcode::Store { .. })
+                } else if (!memory::speculatable(unit.context, callees, function, inst)
+                    || matches!(function.instruction(inst).opcode, Opcode::Store { .. }))
+                    && !stored_elsewhere(&unit, inst, &open)
                 {
                     spans.push(std::mem::take(&mut open));
                 }
