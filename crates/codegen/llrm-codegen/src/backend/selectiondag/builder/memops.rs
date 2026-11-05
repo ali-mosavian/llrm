@@ -1452,8 +1452,9 @@ impl Builder<'_> {
             names.push(name_of(strings.expect("a flat move has no tail").tail));
             values.push(rest);
         }
-        // ES is an input, not a clobber: the block leaves it as it found it,
-        // so a selector already loaded there is reused.
+        // ES is an input the emit step requires (`feeds_call`): the block
+        // leaves it as the selector it was given, so late cleanup keeps one
+        // load for every string move and drops it after a far access.
         let segment = strings.map(|strings| (name_of(strings.destination_segment), self.segment_of(None)));
         if let Some((name, selector)) = segment {
             names.push(name);

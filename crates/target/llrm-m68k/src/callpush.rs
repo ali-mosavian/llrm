@@ -322,6 +322,19 @@ fn foldable(
             return None;
         }
     }
+    // the load goes with its push: a later store of the same register still
+    // needs the value (`a + a`: both arguments are the one load)
+    for other in &insts[point + 1..] {
+        let reads_root = other.operands.iter().any(
+            |operand| matches!(operand, Operand::Use(r) if REGISTER_INFO.root(physical(*r, assignment)) == root),
+        );
+        if reads_root {
+            return None;
+        }
+        if other.call || defines(other, src, assignment) {
+            break;
+        }
+    }
     Some(load)
 }
 

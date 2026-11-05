@@ -335,6 +335,19 @@ pub trait Target {
     ) -> Option<Inst> {
         None
     }
+    /// Whether an instruction named `name` only defines zero, so that spilling
+    /// its value is a store of the zero register (`foldMemoryOperandImpl` of a
+    /// `COPY` from a physical register).
+    fn is_zero_def(_name: &str) -> bool {
+        false
+    }
+    /// The instruction that stores the zero register to frame `slot`.
+    fn zero_store(
+        _class: Self::Class,
+        _slot: i32,
+    ) -> Option<Inst> {
+        None
+    }
     /// The instruction that loads frame `slot` into `register`.
     fn spill_load(
         _class: Self::Class,
