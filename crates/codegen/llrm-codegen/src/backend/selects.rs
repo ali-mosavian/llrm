@@ -30,6 +30,11 @@
 //! UADDO the same way (`TargetLowering::expandUADDSUBO`). Exit: the old selector
 //! is deleted.
 //!
+//! DEVIATE S5 (no number): `llvm.experimental.noalias.scope.decl` is erased
+//! here for the same selectors: no code runs it, and the DAG builder returns
+//! at it (`SelectionDAGBuilder`, `case Intrinsic::experimental_noalias_scope_decl`).
+//! Exit: the old selector is deleted.
+//!
 //! DEVIATE S2 (no number): the pin keeps the select to instruction selection.
 //! CodeGenPrepare's `optimizeSelectInst` forms no branch where
 //! `isPredictableSelectExpensive` is false (in-order i486, `CodeGenPrepare.cpp`
@@ -152,6 +157,21 @@ pub fn minmax_expanded(module: &mut Module) -> Result<(), String> {
                 chosen
             };
             function.replace_all_uses_with(call.result.ok_or("a min or max value")?, chosen);
+            function.erase(inst)?;
+        }
+        let scope_decls: Vec<InstId> = function
+            .walk()
+            .filter_map(|(_, inst)| {
+                let instruction = function.instruction(inst);
+                let Some(&Operand::Constant(callee)) = instruction.operands.last() else { return None };
+                let ConstantKind::Global(callee) = context.get(callee).kind else { return None };
+                match (matches!(instruction.opcode, Opcode::Call(_)), intrinsics[callee.0 as usize]) {
+                    (true, Some(Intrinsic::NoAliasScopeDecl)) => Some(inst),
+                    _ => None,
+                }
+            })
+            .collect();
+        for inst in scope_decls {
             function.erase(inst)?;
         }
         let overflowing: Vec<(InstId, BinaryOp)> = function
@@ -677,6 +697,27 @@ entry:
             assert_eq!(run(&after, "f", arguments.clone(), 100).unwrap(), Val::Int { bits: want, width: 16 });
             assert_eq!(run(&before, "f", arguments, 100).unwrap(), Val::Int { bits: want, width: 16 });
         }
+    }
+
+    /// #7043's inliner leaves `llvm.experimental.noalias.scope.decl` in the
+    /// body; `--isel=old` refused it ("@main: @llvm.experimental.noalias.scope.decl",
+    /// 18 nib and qb tests). No code runs it.
+    #[test]
+    fn test_a_noalias_scope_declaration_is_erased() {
+        let text = "declare void @llvm.experimental.noalias.scope.decl()
+define i16 @f(i16 %a) {
+entry:
+  call void @llvm.experimental.noalias.scope.decl()
+  %b = add i16 %a, 1
+  ret i16 %b
+}
+";
+        let mut after = llrm_mir::parse::module(text).unwrap();
+        super::minmax_expanded(&mut after).unwrap();
+        assert_eq!(llrm_mir::verify::verify(&after), Vec::<String>::new(), "{}", llrm_mir::print::module(&after));
+        assert!(!llrm_mir::print::module(&after).contains("call void"), "{}", llrm_mir::print::module(&after));
+        let arguments = vec![Val::Int { bits: 41, width: 16 }];
+        assert_eq!(run(&after, "f", arguments, 100).unwrap(), Val::Int { bits: 42, width: 16 });
     }
 
     /// CodeGenPrepare's `uadd.with.overflow.i16` reached `--isel=old` (nib and qb
