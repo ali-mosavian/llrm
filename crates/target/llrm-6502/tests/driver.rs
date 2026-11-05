@@ -532,6 +532,16 @@ fn exit_code_of(
     text: &str,
     function: &str,
 ) -> i32 {
+    exit_code_with(text, function, "")
+}
+
+/// [`exit_code_of`] with `runtime` (ca65 text) after `_main`: the routines the
+/// compiled code calls.
+fn exit_code_with(
+    text: &str,
+    function: &str,
+    runtime: &str,
+) -> i32 {
     // Tests share the process and often the function name: one directory each.
     static RUN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let run = RUN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -540,7 +550,7 @@ fn exit_code_of(
     let main = format!(
         ".export _main\n_main:\n  lda #0\n  sta rc0\n  lda #$80\n  sta rc1\n  jsr {function}\n  ldx #0\n  rts\n"
     );
-    std::fs::write(dir.join("t.s"), format!("{text}\n{main}")).unwrap();
+    std::fs::write(dir.join("t.s"), format!("{text}\n{main}{runtime}")).unwrap();
     common::pipeline::tool(&dir, "cl65", &["-t", "sim6502", "-o", "t.bin", "t.s"])
         .unwrap_or_else(|e| panic!("{e}\n{text}"));
     let code = std::process::Command::new("sim65").arg(dir.join("t.bin")).status().unwrap().code().unwrap();
@@ -1903,4 +1913,133 @@ fn a_c_global_takes_the_platforms_symbol_prefix() {
     assert!(cc65.contains("sta _sp") && !cc65.contains("sta sp"), "{cc65}");
     let plain = on("sim65");
     assert!(plain.contains(".export sp") && plain.contains("sta sp"), "{plain}");
+}
+
+/// `a - b + strend` copied the word global into two cells (`lda strend; sta
+/// rc2; lda strend+1; sta rc3`) and added the cells: four instructions the
+/// byte forms never needed. A word global read once by an add is the memory
+/// operand of both halves, as a byte global is (x16 getspa, linget).
+#[test]
+fn a_word_global_read_once_by_an_add_is_the_memory_operand_of_both_halves() {
+    let ir = module(
+        "@g = global i16 0\n\
+         define i16 @f(i16 %a, i16 %b) {\n  %s = sub i16 %a, %b\n  %v = load i16, ptr @g\n  %r = add i16 %s, %v\n  ret i16 %r\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(text.contains("adc g\n") && text.contains("adc g+1\n"), "no memory operand:\n{text}");
+    assert!(!text.contains("lda g\n"), "the global was loaded into a cell first:\n{text}");
+}
+
+/// A store between the word load and its add must not change what the add
+/// reads: the load keeps its place, so the add reads a cell.
+#[test]
+fn a_store_between_a_word_load_and_its_add_does_not_change_what_the_add_reads() {
+    let ir = module(
+        "@g = global i16 0\n\
+         define i16 @f(i16 %x) {\n  %a = load i16, ptr @g\n  store i16 %x, ptr @g\n  %b = add i16 %a, %x\n  ret i16 %b\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    let (read, written) = (text.find("adc g"), text.find("sta g"));
+    assert!(read.is_none() || read < written, "the add reads g after the store:\n{text}");
+}
+
+/// `if (n < strend)` loaded the word global into two cells and compared the
+/// cells (`lda strend; sta rc4; lda strend+1; sta rc5; cmp rc4; sbc rc5`):
+/// four instructions and two cells more than `cmp strend; sbc strend+1`
+/// (x16 getspa). A byte global is the same.
+#[test]
+fn a_global_compared_by_a_branch_is_the_memory_operand_of_the_compare() {
+    for (ty, flags) in [("i16", ["cmp g\n", "sbc g+1\n"]), ("i8", ["cpx g\n", "cpx g\n"])] {
+        let ir = module(&format!(
+            "@g = global {ty} 0\ndeclare void @h()\n\
+             define void @f({ty} %x) {{\n  %v = load {ty}, ptr @g\n  %c = icmp ult {ty} %x, %v\n  \
+             br i1 %c, label %t, label %e\nt:\n  call void @h()\n  ret void\ne:\n  ret void\n}}"
+        ));
+        let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+        assert!(flags.iter().all(|read| text.contains(read)), "{ty}: no memory operand:\n{text}");
+        assert!(!text.contains("lda g"), "{ty}: the global was loaded into a cell first:\n{text}");
+    }
+}
+
+/// The flags are made where the branch reads them. A store to the global, or a
+/// call, between the compare and its branch must not change what is compared:
+/// the compare reads the global before the store.
+#[test]
+fn a_store_or_a_call_between_a_compare_and_its_branch_does_not_change_what_it_reads() {
+    for between in ["store i16 %y, ptr @g", "call void @other()"] {
+        let ir = module(&format!(
+            "@g = global i16 0\ndeclare void @h()\ndeclare void @other()\n\
+             define void @f(i16 %x, i16 %y) {{\n  %v = load i16, ptr @g\n  %c = icmp ult i16 %x, %v\n  {between}\n  \
+             br i1 %c, label %t, label %e\nt:\n  call void @h()\n  ret void\ne:\n  ret void\n}}"
+        ));
+        let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+        let after = text.find("sta g").into_iter().chain(text.find("jsr other")).min().expect("the write");
+        assert!(text.find("cmp g").is_none_or(|read| read < after), "{between}: the compare reads g after it:\n{text}");
+        assert!(text.contains("lda g"), "{between}: g was never read before the write:\n{text}");
+    }
+}
+
+/// `a = x; b = x;` loaded `x` from its cell twice (`lda rc2; sta a; lda rc2;
+/// sta b`): the store to `a` changes neither the register nor the cell. x16
+/// fin's eleven zero stores were `lda rc2; sta g` eleven times (a byte and a
+/// clock each).
+#[test]
+fn a_byte_stored_twice_is_loaded_once() {
+    let ir = module(
+        "@a = global i8 0\n@b = global i8 0\n@c = global i8 0\n\
+         define void @k(i8 %x) {\n  store i8 %x, ptr @a\n  store i8 %x, ptr @b\n  store i8 %x, ptr @c\n  ret void\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert_eq!(text.matches("lda rc2").count(), 1, "the byte was loaded again:\n{text}");
+    assert_eq!(text.matches("sta ").count(), 3, "{text}");
+}
+
+/// A zero kept in a callee-saved cell across a call was loaded and compared
+/// as `lda rc8` / `cmp rc8`, two bytes each like `cmp #0`, but the compare
+/// against zero after `lda cf` stayed because the cell hid the zero (x16
+/// fin). The cell's immediate is read as an immediate, and the compare goes.
+#[test]
+fn a_zero_in_a_callee_saved_cell_is_compared_as_zero() {
+    let ir = module(
+        "@cf = global i8 0\n@g1 = global i8 0\n@g2 = global i8 0\ndeclare i8 @chrget(i8)\n\
+         define i8 @f() {\n  store i8 0, ptr @g1\n  %c = call i8 @chrget(i8 0)\n  store i8 0, ptr @g2\n  \
+         %v = load i8, ptr @cf\n  %z = icmp eq i8 %v, 0\n  %i = add i8 %c, 1\n  %r = select i1 %z, i8 %c, i8 %i\n  ret i8 %r\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap();
+    assert!(!text.contains("cmp rc"), "a zero was compared from a cell:\n{text}");
+    assert!(!text.contains("cmp #0"), "a compare against zero follows a load of the flag:\n{text}");
+}
+
+/// `SAddO`, `SSubO` and `SMulO` on a word were refused ("convert node to
+/// libcall"); they compile now, and the value and the overflow bit must be
+/// right at the edges (30000 + 30000, -32768 - 1, 181 * 181), not just
+/// accepted. `UMulO` is still refused (tests/overflow_ops.rs).
+#[test]
+fn a_signed_word_overflow_operation_computes_its_value_and_its_flag() {
+    let pairs: [(i16, i16); 7] =
+        [(30000, 30000), (-30000, -30000), (1, 2), (-1, 1), (32767, 1), (-32768, -1), (181, 182)];
+    let ops: [(&str, fn(i16, i16) -> (i16, bool)); 3] =
+        [("sadd", i16::overflowing_add), ("ssub", i16::overflowing_sub), ("smul", i16::overflowing_mul)];
+    let mut ir = String::new();
+    for (op, _) in ops {
+        ir += &format!("declare {{ i16, i1 }} @llvm.{op}.with.overflow.i16(i16, i16)\n");
+        for (k, (a, b)) in pairs.iter().enumerate() {
+            ir += &format!(
+                "@a_{op}{k} = global i16 {a}\n@b_{op}{k} = global i16 {b}\n\
+                 define i8 @t_{op}{k}() {{\n  %a = load volatile i16, ptr @a_{op}{k}\n  %b = load volatile i16, ptr @b_{op}{k}\n  \
+                 %r = call {{ i16, i1 }} @llvm.{op}.with.overflow.i16(i16 %a, i16 %b)\n  \
+                 %v = extractvalue {{ i16, i1 }} %r, 0\n  %o = extractvalue {{ i16, i1 }} %r, 1\n  \
+                 %lo = trunc i16 %v to i8\n  %h = lshr i16 %v, 8\n  %hi = trunc i16 %h to i8\n  %x = xor i8 %lo, %hi\n  \
+                 %m = select i1 %o, i8 -128, i8 0\n  %y = xor i8 %x, %m\n  ret i8 %y\n}}\n"
+            );
+        }
+    }
+    let text = assembly(&module(&ir), &Request::new(Level::O2)).unwrap();
+    for (op, rust) in ops {
+        for (k, (a, b)) in pairs.iter().enumerate() {
+            let (value, overflow) = rust(*a, *b);
+            let want = (value as u16 & 0xFF) as i32 ^ (value as u16 >> 8) as i32 ^ if overflow { 0x80 } else { 0 };
+            assert_eq!(exit_code_with(&text, &format!("t_{op}{k}"), llrm_6502::RUNTIME), want, "{op}({a}, {b}) = {value}, overflow {overflow}");
+        }
+    }
 }

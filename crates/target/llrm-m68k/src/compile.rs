@@ -122,9 +122,11 @@ pub fn items_with(
         module.global(id).function().is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
     if options.short {
         crate::cmpelim::eliminate_tests(&mut function);
+        crate::shiftadd::shifts_to_adds(&mut function);
         crate::negadd::negative_adds_to_subq(&mut function);
         crate::addrarith::address_adds(&mut function, cpu, wants_size);
         crate::foldload::fold_loads(&mut function);
+        crate::divrem::remainders_from_quotients(&mut function);
         if wants_size {
             crate::foldarg::fold_argument_loads(&mut function);
         }

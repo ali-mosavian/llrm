@@ -11,7 +11,7 @@ use crate::testing::{parsed, printed, results};
 fn unrolled(module: &mut Module) -> bool {
     let function = module.function_mut("f").expect("@f").1;
     crate::loopsimplify::simplified(function);
-    crate::lcssa::closed(function).expect("closes");
+    crate::testing::closed(module).expect("closes");
     let tti = X86::of_cpu("i486").expect("a cpu");
     let options = Options {
         opt_level: 2,
@@ -473,7 +473,7 @@ exit:
     let before = results(&module, inputs);
     let function = module.function_mut("f").expect("@f").1;
     crate::loopsimplify::simplified(function);
-    crate::lcssa::closed(function).expect("closes");
+    crate::testing::closed(&mut module).expect("closes");
     let tti = X86::of_cpu("i486").expect("a cpu");
     let options = Options {
         opt_level: 3,
@@ -501,10 +501,11 @@ fn a_first_iteration_is_peeled_only_where_its_folded_clocks_repay_the_copy() {
     assert!(!super::folded_entry_pays(0, 15, 312));
 }
 
-/// A loop declaring a scope for its store and `!noalias` it on its load, unrolled
-/// four times, kept one scope for every copy: the first copy's store to `%p` and
-/// the second's load through `%q` were called apart by `ScopedNoAliasAA`, though
-/// `%p` and `%q` may be one address at each trip (`cloneAndAdaptNoAliasScopes`).
+/// A loop declaring a scope for its store and `!noalias` it on its load,
+/// unrolled four times, kept one scope for every copy: the first copy's store
+/// to `%p` and the second's load through `%q` were called apart by
+/// `ScopedNoAliasAA`, though `%p` and `%q` may be one address at each trip
+/// (`cloneAndAdaptNoAliasScopes`).
 #[test]
 fn test_each_unrolled_copy_of_a_loop_declaring_a_scope_has_its_own() {
     use llrm_analysis::aa::{AliasResult, BatchAAResults, MemoryLocation};
@@ -545,12 +546,18 @@ b2:
     let unit = Unit::of(&module, &layout, function);
     let stores: Vec<MemoryLocation> = function
         .walk()
-        .filter(|&(_, inst)| matches!(function.instruction(inst).opcode, llrm_mir::opcode::Opcode::Store { .. }))
+        .filter(|&(_, inst)| matches!(
+            function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Store { .. }
+        ))
         .filter_map(|(_, inst)| MemoryLocation::get(&unit, inst))
         .collect();
     let loads: Vec<MemoryLocation> = function
         .walk()
-        .filter(|&(_, inst)| matches!(function.instruction(inst).opcode, llrm_mir::opcode::Opcode::Load { .. }))
+        .filter(|&(_, inst)| matches!(
+            function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Load { .. }
+        ))
         .filter_map(|(_, inst)| MemoryLocation::get(&unit, inst))
         .collect();
     // Per copy: the scoped store to %p, the load, the store to %q.

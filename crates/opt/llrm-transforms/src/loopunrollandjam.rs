@@ -708,8 +708,8 @@ pub(crate) fn unroll_remainder_loop(
     }
     let tree = DomTree::of(run.function);
     let loops = LoopInfo::analyze(run.function, || &tree);
-    // `globals` gained the `llvm.assume` declaration the epilog guard needs, which
-    // the module's memoized `Outer::assume_declared` does not know.
+    // `globals` gained the `llvm.assume` declaration the epilog guard needs,
+    // which the module's memoized `Outer::assume_declared` does not know.
     let assumptions = AssumptionCache::of(run.context, &globals, run.metadata, run.function);
     let Some(lp) = loops.get_loop_for(epilog_header) else { return };
     let mut se = ScalarEvolution::new();
@@ -742,20 +742,18 @@ pub(crate) fn unroll_remainder_loop(
     let latches = lp.get_loop_latches(cx.function);
     let capacity = run.function.block_capacity();
     let options = crate::loopunroll::Options { count, max_trip_count: count, max_or_zero, exits };
-    if let Err(error) =
-        crate::loopunroll::unroll_loop_blocks(
-            run.function,
-            epilog_header,
-            &body,
-            &latches,
-            &options,
-            &mut run.emptied,
-            &mut |_, _, _| {},
-        )
-    {
+    if let Err(error) = crate::loopunroll::unroll_loop_blocks(
+        run.function,
+        epilog_header,
+        &body,
+        &latches,
+        &options,
+        &mut run.emptied,
+        &mut |_, _, _| {},
+    ) {
         panic!("remainder unroll: {error}");
     }
-    let _ = crate::lcssa::closed(run.function);
+    let _ = crate::lcssa::closed(run.context, run.layout, run.function);
     let analyzed = Analyzed::of(run);
     let after = crate::loopunrollpass::unrolled_blocks(run, capacity, &body);
     simplify_loop_after_unroll(run, Some(&analyzed.loops), &after);
@@ -1554,7 +1552,7 @@ impl FunctionPass for LoopUnrollAndJam {
         // only if a loop is unrolled and jammed (as in `loopinterchange`).
         let saved = unit.function.clone();
         crate::loopsimplify::simplified(unit.function);
-        let _ = crate::lcssa::closed(unit.function);
+        let _ = crate::lcssa::closed(unit.context, unit.layout, unit.function);
         let mut run = Run {
             context: unit.context,
             layout: unit.layout,

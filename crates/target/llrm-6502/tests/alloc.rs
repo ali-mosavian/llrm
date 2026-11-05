@@ -2336,6 +2336,66 @@ fn a_reload_across_a_carry_op_or_another_cells_store_goes() {
     }
 }
 
+/// `lda rc5; sta g; lda rc5; sta h` loaded the cell twice (x16 fin: eleven
+/// zero stores, each `lda rc2; sta g`): a store to a global changes neither the
+/// register nor the cell. A zero-page indexed store, a store through a pointer,
+/// a write to the cell, a label and a branch on the flags are kept.
+#[test]
+fn a_load_repeated_across_a_store_to_a_global_goes() {
+    use llrm_6502::peephole::drop_reloads;
+    assert_eq!(
+        pass(drop_reloads, "  lda rc5\n  sta g\n  lda rc5\n  sta h\n  rts\n"),
+        "  lda rc5\n  sta g\n  sta h\n  rts\n"
+    );
+    assert_eq!(
+        pass(drop_reloads, "  lda rc5\n  sta g,x\n  lda rc5\n  adc rc6\n  rts\n"),
+        "  lda rc5\n  sta g,x\n  adc rc6\n  rts\n"
+    );
+    for kept in [
+        "  lda rc5\n  sta rc6,y\n  lda rc5\n  adc rc6\n",
+        "  lda rc5\n  sta (rc2),y\n  lda rc5\n  adc rc6\n",
+        "  lda rc5\n  inc rc5\n  lda rc5\n  adc rc6\n",
+        "  lda rc5\nl:\n  lda rc5\n  adc rc6\n",
+        "  lda rc5\n  sta g\n  lda rc5\n  beq l\n",
+    ] {
+        assert_eq!(pass(drop_reloads, kept), kept);
+    }
+}
+
+/// `lda #0; sta rc8` then `jsr f; lda rc8; sta g; lda cf; cmp rc8; beq` kept
+/// two loads of the zero in `rc8` and a compare against it, 6 bytes and 12
+/// clocks more than `lda #0`/`cmp #0` that `drop_zero_compares` then removes.
+/// A cell stored an immediate reads as that immediate until it is written
+/// another way, a label, an unlisted instruction, or a call that does not keep
+/// it (`rc2`..`rc7`; `rc8`..`rc15` survive).
+#[test]
+fn a_cell_stored_an_immediate_reads_as_the_immediate() {
+    use llrm_6502::peephole::fold_known_cells;
+    assert_eq!(
+        pass(fold_known_cells, "  lda #0\n  sta rc8\n  jsr f\n  lda rc8\n  cmp rc8\n  rts\n"),
+        "  lda #0\n  sta rc8\n  jsr f\n  lda #0\n  cmp #0\n  rts\n"
+    );
+    assert_eq!(
+        pass(fold_known_cells, "  ldx #3\n  stx rc9\n  txa\n  clc\n  adc rc9\n  sta g\n  ldy rc9\n  rts\n"),
+        "  ldx #3\n  stx rc9\n  txa\n  clc\n  adc #3\n  sta g\n  ldy #3\n  rts\n"
+    );
+    for kept in [
+        // a call does not keep rc2
+        "  lda #0\n  sta rc2\n  jsr f\n  lda rc2\n  rts\n",
+        // written another way
+        "  lda #0\n  sta rc8\n  inc rc8\n  lda rc8\n  rts\n",
+        "  lda #0\n  sta rc8\n  sta rc8,y\n  lda rc8\n  rts\n",
+        "  lda #0\n  sta rc8\n  sta (rc2),y\n  lda rc8\n  rts\n",
+        "  lda #0\n  sta rc8\n  lda g\n  sta rc8\n  lda rc8\n  rts\n",
+        // a label brings other paths
+        "  lda #0\n  sta rc8\nl:\n  lda rc8\n  rts\n",
+        // the shared restore rewrites the cell
+        "  lda #0\n  sta rc8\n  jsr __crest\n  lda rc8\n  rts\n",
+    ] {
+        assert_eq!(pass(fold_known_cells, kept), kept);
+    }
+}
+
 /// `cmp #0` with a label between it and its branch (`lz4`, 4 sites): a path
 /// that jumps to the label brings its own flags, and this path's come from `a`.
 /// A label before the compare joins paths whose flags differ.
@@ -2920,4 +2980,15 @@ fn a_reload_before_a_jump_goes() {
         pass(drop_reloads, "  sta rc5\n  lda rc5\n  sta rc6\n  jmp L\n"),
         "  sta rc5\n  sta rc6\n  jmp L\n"
     );
+}
+
+/// x16basic-c `strs.c` -O2 (`fn_chrd`) did not compile: a word used as a
+/// pointer has its high byte stored elsewhere. The byte was read as a cell
+/// nothing defined, and the coalescer panicked ("a unique value").
+#[test]
+fn the_high_byte_of_a_pointer_word_is_read_from_its_pair() {
+    let ir = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/pointer_high_byte.ll")).unwrap();
+    let text = compile_at(&ir, "f", 16, Tuning::SPEED);
+    assert!(text.contains("sta facmoh"), "{text}");
+    assert!(text.contains("sta (rc"), "{text}");
 }

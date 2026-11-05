@@ -1537,3 +1537,41 @@ fn a_pair_only_its_low_byte_is_read_from_is_a_byte() {
     let out = text(include_str!("kernels/ir/scmp.ll"), "scmp", 0, &Request::new(Level::O2)).expect("compiles");
     assert!(!out.contains("ld b, #0") && !out.contains("ld bc, #0"), "{out}");
 }
+
+/// A size build copied a callee bigger than its call into every caller: the
+/// pin's `OptSizeThreshold` allows growth, and `step`'s six word updates are
+/// 36 B where the call is 3. `step` is called from three places and stays one
+/// body at -Os; at -O2 the pin's threshold alone decides.
+#[test]
+fn a_size_build_does_not_copy_a_callee_bigger_than_its_call() {
+    let globals: String = (0..6).map(|i| format!("@g{i} = global i16 0\n")).collect();
+    let updates: String = (0..6)
+        .map(|i| {
+            format!("  %v{i} = load i16, ptr @g{i}\n  %w{i} = add i16 %v{i}, {}\n  store i16 %w{i}, ptr @g{i}\n", 7 + i)
+        })
+        .collect();
+    let ir = format!(
+        "target datalayout = \"{DATALAYOUT}\"\n{globals}define void @step() {{\n{updates}  ret void\n}}\n\
+         define void @one() {{\n  call void @step()\n  ret void\n}}\n\
+         define void @two() {{\n  call void @step()\n  call void @step()\n  ret void\n}}"
+    );
+    let calls: usize = ["one", "two"]
+        .iter()
+        .map(|name| {
+            let out = text(&ir, name, 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+            out.matches("_step").count()
+        })
+        .sum();
+    assert_eq!(calls, 3, "step was copied into its callers");
+}
+
+/// A callee with a frame pays its entry and exit at every call: `push ix`,
+/// `ld ix`, `add ix,sp`, the stack adjustment and their undoing, 12 to 20 B,
+/// which an inline removes. Priced as the bare call, -Os kept `bench` (two
+/// calls, a 140 B frame) a call: stack_arrays_copy was 155 B, 122 B inlined.
+#[test]
+fn a_size_build_inlines_a_callee_whose_frame_costs_more_than_its_body() {
+    let ir = include_str!("kernels/ir/stack_arrays_copy.ll");
+    let out = text(ir, "main", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!out.contains("_bench"), "{out}");
+}

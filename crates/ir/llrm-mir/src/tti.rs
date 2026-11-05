@@ -307,6 +307,23 @@ pub struct MemCmpExpansionOptions {
     pub allowed_tail_expansions: Vec<u32>,
 }
 
+/// An argument of a call, as the call sequence sees it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CallArgument {
+    /// The value's type; none for an aggregate or a vector.
+    pub ty: Option<Ty>,
+    /// The bytes copied onto the stack, for a `byval` argument.
+    pub byval_bytes: Option<u64>,
+}
+
+/// A call site: its arguments and the static frame its callee builds.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CallShape {
+    pub arguments: Vec<CallArgument>,
+    /// The bytes of the callee's static allocas.
+    pub callee_frame_bytes: u64,
+}
+
 /// The target a cost is for.
 pub trait Tti {
     /// The implementation's name, for what reports which target priced a
@@ -364,6 +381,21 @@ pub trait Tti {
     /// arguments (SZ1). The pin's `OptSizeThreshold` 50 allows growth.
     fn opt_size_inline_by_code_size(&self) -> bool {
         false
+    }
+
+    /// What one call costs the caller and the callee together, in `kind`:
+    /// the call and return, the arguments' setup (a by-value copy, a push
+    /// past the argument registers), and the frame the callee builds and tears
+    /// down. Inlining removes all of it, so the inliner's size and rate bounds
+    /// read it in place of the call instruction's flat price. None: the pin's
+    /// flat price (the call as one instruction and one per argument).
+    fn call_sequence_cost(
+        &self,
+        shape: &CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        let _ = (shape, kind);
+        None
     }
 
     /// What a byte of growth is worth, in thousandths of a clock, to a speed
@@ -475,6 +507,18 @@ pub trait Tti {
     /// `Subtarget.canUseCMOV()`: false where a `select` is lowered to a branch.
     fn has_cmov(&self) -> bool {
         true
+    }
+
+    /// DEVIATE D5 (`twoentryphi.rs`): what each select costs beyond its own
+    /// price when folding a two-entry phi (a select is a branch and a move
+    /// where there is no conditional move). 0: as at the pin, which does not
+    /// count the selects. `optsize`: the function is a size build.
+    fn select_branch_extra(
+        &self,
+        optsize: bool,
+    ) -> i64 {
+        let _ = optsize;
+        0
     }
 
     /// `Tuning::sink_select_arms`.

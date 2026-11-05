@@ -410,7 +410,7 @@ fn hoist_loop_to_new_parent(
         return false;
     }
     crate::loopsimplify::simplified(run.function);
-    let _ = crate::lcssa::closed(run.function);
+    let _ = crate::lcssa::closed(run.context, run.layout, run.function);
     true
 }
 

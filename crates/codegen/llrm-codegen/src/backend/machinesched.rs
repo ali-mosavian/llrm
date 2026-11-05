@@ -1070,6 +1070,7 @@ pub fn scheduled(
             // What is live below a region is asked for a region of more than
             // half the allocatable registers only.
             let mut now: HashSet<u32> = HashSet::default();
+            let mut now87: HashSet<u32> = HashSet::default();
             let copies = regions.iter().any(|region| insns[region.clone()].iter().any(|one| copy_of(one).is_some()));
             if copies || regions.iter().any(|region| region.len() > limit / 2) {
                 let live = live.get_or_insert_with(|| live_rows(body));
@@ -1077,7 +1078,14 @@ pub fn scheduled(
                     insns.iter().flat_map(|one| one.defines.iter().chain(&one.uses)).copied().collect();
                 values.sort_unstable();
                 values.dedup();
-                now = values.into_iter().filter(|&value| counted(value) && live.live_out(block.at, value)).collect();
+                now = values
+                    .iter()
+                    .copied()
+                    .filter(|&value| counted(value) && live.live_out(block.at, value))
+                    .collect();
+                // The x87 values live below the block count in the stack's set
+                // (the pin: every live-out register is in the bottom pressure).
+                now87 = values.iter().copied().filter(|&value| stack.contains(&value) && live.live_out(block.at, value)).collect();
                 if regions.iter().any(|region| region.len() > limit / 2)
                     && let Some(make) = model.take()
                 {
@@ -1099,16 +1107,23 @@ pub fn scheduled(
                 }
                 now.extend(one.uses.iter().copied().filter(|&value| counted(value)));
             };
+            let step87 = |now: &mut HashSet<u32>, one: &Insn| {
+                for value in &one.defines {
+                    now.remove(value);
+                }
+                now.extend(one.uses.iter().copied().filter(|value| stack.contains(value)));
+            };
             let mut out = insns.clone();
             let mut end = insns.len();
             for region in regions.iter().rev() {
                 for one in insns[region.end..end].iter().rev() {
                     step(&mut now, one);
+                    step87(&mut now87, one);
                 }
                 let slice = &insns[region.clone()];
                 if slice.len() >= 2 {
                     let tracking = made.as_ref().filter(|_| slice.len() > limit / 2).map(|model| {
-                        let mut live_out: Vec<u32> = now.iter().copied().collect();
+                        let mut live_out: Vec<u32> = now.iter().chain(&now87).copied().collect();
                         live_out.sort_unstable();
                         // `initLiveThru`: a live-out value counts unless a def
                         // in the region ties it (two-address).
@@ -1132,6 +1147,7 @@ pub fn scheduled(
                 }
                 for one in slice.iter().rev() {
                     step(&mut now, one);
+                    step87(&mut now87, one);
                 }
                 end = region.start;
             }
