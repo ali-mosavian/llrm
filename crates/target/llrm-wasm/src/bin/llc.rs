@@ -42,6 +42,13 @@ fn run() -> i32 {
             "-mattr=+exception-handling" => handling = true,
             other if other.starts_with("-mtriple=") => triple = other["-mtriple=".len()..].to_owned(),
             other if input.is_none() && !other.starts_with('-') => input = Some(other.to_owned()),
+            // `bounds` checks nothing in IR (llrm-cc); `stack` needs a C
+            // runtime this target lacks.
+            "-fsanitize=bounds" | "-fno-sanitize=bounds" | "-fno-sanitize=stack" => {}
+            "-fsanitize=stack" => {
+                eprintln!("llrm-wasm-llc: -fsanitize=stack: wasm has no C runtime stack check yet");
+                return 2;
+            }
             other if llrm_debug::is_debug_flag(other) => {
                 eprintln!("{}", llrm_debug::no_writer("llrm-wasm-llc", other, "wasm"));
                 return 2;

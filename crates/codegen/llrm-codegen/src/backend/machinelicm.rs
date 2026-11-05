@@ -354,6 +354,14 @@ impl licm::Inst for Wrapped {
         other: &Self,
     ) -> bool {
         let (Some(one), Some(two)) = (&self.0.what, &other.0.what) else { return false };
+        // DEVIATE X2 (owner m64, exit 2026-11-20): an x87 value is a stack
+        // entry and the allocator gives each loop-carried entry its own
+        // definition; the pin's RFP registers are virtual until the stackifier
+        // (X86FloatingPoint), which copes with one register feeding two. Two
+        // `fldz` stay two values.
+        if one.dests.iter().any(|place| matches!(place, Loc::Held(held) if held.width == 10)) {
+            return false;
+        }
         let widths = |what: &Semantics| -> Vec<Option<u32>> {
             what.dests.iter().map(|place| if let Loc::Held(held) = place { Some(held.width) } else { None }).collect()
         };
@@ -936,6 +944,48 @@ mod tests {
         // makes `$fpcw` non-constant, so `fld1` stays in the loop (ML2 holds
         // it only to flip it: `test_a_flipped_x87_constant_is_held...`).
         assert_eq!(run(false, true), ["jmp"]);
+    }
+
+    /// FRAC.BAS `fracline2` (qb): two `fldz` made before the loop were one
+    /// value after EliminateCSE, read by both loop-carried entries of the x87
+    /// stack: "floating stack input is unavailable" (once "value#10 is read
+    /// but never defined"). Each x87 value is its own stack entry, so two
+    /// constant loads stay two values.
+    #[test]
+    fn test_two_hoisted_x87_constants_stay_two_values() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
+        let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let wide = |value: u32| Loc::Held(Held { value, width: 10, offset: 0 });
+        let first = insn(10, Operation::FloatLoad, "fldz", vec![wide(10)], vec![], vec![10], vec![]);
+        let second = insn(11, Operation::FloatLoad, "fldz", vec![wide(11)], vec![], vec![11], vec![]);
+        let read_first =
+            insn(12, Operation::Binary, "fadd", vec![wide(12)], vec![wide(1), wide(10)], vec![12], vec![1, 10]);
+        let read_second =
+            insn(13, Operation::Binary, "fadd", vec![wide(13)], vec![wide(12), wide(11)], vec![13], vec![12, 11]);
+        let mut body = LirBody::new(
+            "loop",
+            0,
+            vec![
+                block(0, vec![1], vec![jump(0)]).into(),
+                block(1, vec![1, 2], vec![first, second, read_first, read_second, branch(14)]).into(),
+                block(2, vec![], vec![insn(15, Operation::Return, "ret", vec![], vec![], vec![], vec![])]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1].into_iter().collect();
+        body.float_stack = 8;
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let done = hoisted(&body, &RegisterClasses::m16());
+        let before: Vec<u32> = done.blocks[0]
+            .insns
+            .iter()
+            .filter(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("fldz")))
+            .flat_map(|one| one.defines.iter().copied())
+            .collect();
+        assert_eq!(before, [10, 11]);
     }
 
     /// x_ld_abs -O2 at m32: the unrolled copies of `x[i] - 16 - r` made `-1.0`
