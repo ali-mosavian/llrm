@@ -222,10 +222,13 @@ fn a_constant_clear_for_size_without_memset_steps_by_whole_words() {
 /// variable length is `rep movsd` inline at speed, and the call at size.
 #[test]
 fn a_variable_copy_is_rep_movs_at_speed_where_the_tuning_says_so() {
-    let mut target = BuilderTarget::m32().with_libcalls(&["memcpy"]);
+    let target = BuilderTarget::m32().with_libcalls(&["memcpy"]);
     let before = built("copy", &target).expect("builds");
     assert!(before.contains("'memcpy'") && !before.contains("REP_MOVS"), "premise: the pin's call\n{before}");
-    target.tuning.inline_variable_memcpy = true;
+    let mut tuning = llrm_mir::target::Tuning::PIN;
+    tuning.inline_variable_memcpy = true;
+    let tti = llrm_x86::tti::X86::of_cpu("i486").expect("a cpu").with_tuning(tuning);
+    let target = target.with_tti(Some(std::rc::Rc::new(tti)));
     let after = built("copy", &target).expect("builds");
     assert!(after.contains("REP_MOVS") && !after.contains("'memcpy'"), "{after}");
 }
