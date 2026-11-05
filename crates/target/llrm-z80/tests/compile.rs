@@ -1658,3 +1658,59 @@ fn one_long_multiply_in_a_module_stays_inline_at_size() {
     let out = compiled(ir, "f");
     assert!(!out.contains("__mulsi3"), "{out}");
 }
+
+/// A long shifted by a constant was unrolled in a function tuned for size:
+/// `x << 5` 60 B, `x >> 13` 49 B, where the shift routine is a 14 B loop
+/// (-Os). The bytes still shifted times the bits beyond whole bytes are the
+/// cost: 5 and 13 take the routine; whole bytes, one or two bits and the last
+/// byte (29, 31) stay unrolled, as a 64-bit shift's halves did (data_int64
+/// +199 B when 29 and 31 called); speed levels never take it.
+#[test]
+fn a_function_tuned_for_size_shifts_a_long_by_a_constant_in_the_routine() {
+    let shifted = |op: &str, count: u32, attr: &str| {
+        compiled(&format!("define i32 @f(i32 %a) {attr} {{\n  %r = {op} i32 %a, {count}\n  ret i32 %r\n}}"), "f")
+    };
+    for (op, routine) in [("shl", "__ashlsi3"), ("lshr", "__lshrsi3"), ("ashr", "__ashrsi3")] {
+        for count in [5, 13] {
+            assert!(shifted(op, count, "optsize").contains(routine), "{op} {count}");
+        }
+        for count in [1, 2, 8, 16, 29, 31] {
+            assert!(!shifted(op, count, "optsize").contains("__"), "{op} {count} stays unrolled");
+        }
+        assert!(!shifted(op, 5, "").contains("__"), "{op} 5 at speed levels");
+    }
+}
+
+/// A long compared with another was two word compares joined by a select: each
+/// made a 0/1 byte, the high words' equality picked one (`lcmp` 53 B at -Os,
+/// SDCC 27). The words are one chain of `sub`, `sbc`, `sbc`, `sbc` instead, the
+/// order read from the carry; a signed order corrects the sign for overflow.
+#[test]
+fn a_long_order_is_one_borrow_chain() {
+    let order = |cc: &str| {
+        compiled(
+            &format!(
+                "define i16 @f(i32 %x, i32 %y) optsize {{\n  %c = icmp {cc} i32 %x, %y\n  %r = zext i1 %c to i16\n  ret i16 %r\n}}"
+            ),
+            "f",
+        )
+    };
+    for cc in ["ult", "uge", "slt", "sge", "ugt", "ule", "sgt", "sle"] {
+        let text = order(cc);
+        assert_eq!(text.matches("sbc a,").count(), 3, "{cc}:\n{text}");
+        assert!(!text.contains("jr nz"), "{cc} still joins the words by equality:\n{text}");
+        assert_eq!(text.contains("jp po"), cc.starts_with('s'), "{cc}:\n{text}");
+    }
+}
+
+/// The borrow of a 64-bit subtract's low long is the order chain of its words,
+/// and the compare of the low word is shared with the subtract's own borrow:
+/// the sharing kept the word subtract from becoming `sub hl` / `sbc hl`, and
+/// int64_division grew 8 B over the select form. The subtract keeps its fused
+/// words (at most 135 instructions; 145 with the compare gone from the fusion).
+#[test]
+fn a_long_subtract_borrow_shared_with_the_order_chain_still_fuses() {
+    let text = compiled("define i64 @f(i64 %a, i64 %b) optsize {\n  %r = sub i64 %a, %b\n  ret i64 %r\n}", "f");
+    let instructions = text.lines().filter(|line| line.starts_with('\t') && !line.trim_start().starts_with('.')).count();
+    assert!(instructions <= 135, "{instructions} instructions:\n{text}");
+}

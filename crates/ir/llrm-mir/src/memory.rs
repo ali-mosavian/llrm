@@ -446,15 +446,17 @@ fn at_with(
         let Attribute::Memory(locations) = attr else { continue };
         let default = locations.iter().find(|(one, _)| one.is_none()).map_or(Effects::NONE, |(_, one)| access(one));
         let stated = match location {
-            Some(_) => locations.iter().find(|(one, _)| one.as_deref() == location).map_or(default, |(_, one)| access(one)),
+            Some(_) => {
+                locations.iter().find(|(one, _)| one.as_deref() == location).map_or(default, |(_, one)| access(one))
+            }
             // Another named location, as `errnomem`, is part of the rest.
-            None => locations
-                .iter()
-                .filter(|(one, _)| one.is_some() && !LOCATIONS.contains(&one.as_deref()))
-                .fold(default, |effects, (_, one)| {
+            None => locations.iter().filter(|(one, _)| one.is_some() && !LOCATIONS.contains(&one.as_deref())).fold(
+                default,
+                |effects, (_, one)| {
                     let one = access(one);
                     Effects { reads: effects.reads || one.reads, writes: effects.writes || one.writes }
-                }),
+                },
+            ),
         };
         effects = Effects { reads: effects.reads && stated.reads, writes: effects.writes && stated.writes };
     }
@@ -559,6 +561,8 @@ pub fn of(
         Opcode::Store { volatile: false, .. } => Effects { reads: false, writes: true },
         // Volatile, as LLVM has it: ordered with every other access.
         Opcode::Load { .. } | Opcode::Store { .. } => Effects::ANY,
+        // `VAArgInst` reads the list and writes it back advanced.
+        Opcode::VaArg => Effects::ANY,
         Opcode::Call(info) | Opcode::Invoke(info) => {
             let callee = callee(context, function, inst).and_then(|one| callees.get(&one)).map(|one| one.effects);
             let at_site = stated(&info.attrs);
@@ -724,10 +728,13 @@ mod effects_tests {
             for location in LOCATIONS {
                 assert_eq!(at(attrs, location), reference(attrs, location), "{attrs:?} at {location:?}");
             }
-            let want = LOCATIONS.into_iter().map(|one| reference(attrs, one)).fold(Effects::NONE, |one, other| Effects {
-                reads: one.reads || other.reads,
-                writes: one.writes || other.writes,
-            });
+            let want = LOCATIONS
+                .into_iter()
+                .map(|one| reference(attrs, one))
+                .fold(
+                    Effects::NONE,
+                    |one, other| Effects { reads: one.reads || other.reads, writes: one.writes || other.writes },
+                );
             THROUGHS.with(|count| count.set(0));
             assert_eq!(stated(attrs), want, "{attrs:?}");
             let reads = THROUGHS.with(std::cell::Cell::get);

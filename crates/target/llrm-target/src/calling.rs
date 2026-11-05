@@ -66,6 +66,9 @@ pub struct Convention {
     pub float_argument_registers: Vec<String>,
     /// The pairs an i64 argument takes, low register first.
     pub wide_pairs: Vec<[String; 2]>,
+    /// The alignment of a wide argument on the stack, where it is more than a
+    /// slot (SysV x86-64: an `__int128` is 16-aligned).
+    pub wide_stack_align: Option<i64>,
     /// Whether a register an argument skipped is free for a later one.
     pub backfill: bool,
     /// Argument `n` takes register `n` of its own file, integer or float, and
@@ -261,6 +264,7 @@ const KEYS: &[&str] = &[
     "aggregate_pointer_far",
     "slot_bytes",
     "stack_alignment",
+    "wide_stack_align",
     "order",
     "cleanup",
     "argument_registers",
@@ -728,6 +732,10 @@ impl Convention {
             symbol,
             slot_bytes: integer("slot_bytes")?,
             stack_alignment: table.contains_key("stack_alignment").then(|| integer("stack_alignment")).transpose()?,
+            wide_stack_align: table
+                .contains_key("wide_stack_align")
+                .then(|| integer("wide_stack_align"))
+                .transpose()?,
             order,
             cleanup,
             argument_registers: names(table.get("argument_registers"), "argument_registers")?,
@@ -876,6 +884,9 @@ impl Convention {
                 }
                 None => {
                     spilled = !self.skip_memory;
+                    if let (Kind::Wide, Some(align)) = (kind, self.wide_stack_align) {
+                        stack = (stack + align - 1) / align * align;
+                    }
                     places.push(Place::Stack(stack));
                     let bytes = match kind {
                         Kind::Word => self.slot_bytes,

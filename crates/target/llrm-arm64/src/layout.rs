@@ -194,7 +194,8 @@ fn common_tail(
 /// DEVIATE: the pin also merges a shorter tail where a block is only the
 /// tail and the other can fall into it, and two instructions at -Os; and it
 /// takes the pairs by the hash of their ends, not by the last instruction.
-/// Exit: 11-12.
+/// Exit: 11-20. Tried 11-05: taking both on the 148-cell corpus changed no
+/// cell, so they stay out until a cell needs them.
 fn merge_return_tails(blocks: &mut Vec<Lowered>) {
     // The block that is only a return, where there is one: a block that
     // returns, or jumps there, ends the same way.
@@ -243,9 +244,10 @@ fn merge_return_tails(blocks: &mut Vec<Lowered>) {
                     let ((one, one_insts), (other, other_insts)) = (&ending[x], &ending[y]);
                     let length = common_tail(one_insts, other_insts);
                     let real = one_insts[one_insts.len() - length..].iter().filter(|i| counts(i)).count();
-                    // The same two blocks again, or a tail that is a whole block
-                    // `forwards` merges.
-                    let whole = length == blocks[*one].insts.len() && length == blocks[*other].insts.len();
+                    // Two blocks that are only a jump: `forwards` merges those.
+                    let whole = length == 1
+                        && blocks[*one].insts.len() == 1
+                        && blocks[*other].insts.len() == 1;
                     let found = (*one.min(other), *one.max(other), length);
                     if real >= TAIL_MERGE_SIZE
                         && !whole
@@ -496,7 +498,15 @@ pub fn fold(
     // The pin copies in layout order (`TailDuplicator`, then
     // `MachineCopyPropagation`): a jump to the block next to it stays a
     // fall-through.
-    crate::taildup::tail_duplicate(&mut ordered, optsize);
+    for (jumper, original) in crate::taildup::tail_duplicate(&mut ordered, optsize) {
+        // The copy keeps the original's edge odds (`addSuccessor` with the
+        // original's probabilities), which `optimizeBranches` reads below.
+        let edges: Vec<(String, u32)> =
+            likelihood.iter().filter(|((from, _), _)| *from == original).map(|((_, to), odds)| (to.clone(), *odds)).collect();
+        for (to, odds) in edges {
+            likelihood.entry((jumper.clone(), to)).or_insert(odds);
+        }
+    }
     crate::taildup::drop_unreferenced(&mut ordered, tables);
     crate::taildup::propagate_backward(&mut ordered, exits);
     // A branch to the next block falls through; a conditional branch over an
@@ -588,5 +598,35 @@ mod tests {
         assert_eq!(targets.len(), 2, "{out:?}");
         assert_eq!(targets[0], targets[1], "{out:?}");
         assert!(rets <= 2, "{rets} returns: {out:?}");
+    }
+
+    /// The loop's header test was copied into its latch, and the copy lost the
+    /// odds of its edges: the latch read `cbz exit; b top`, a jump every
+    /// iteration (recpow -O1: +7.7% instructions over the pin).
+    #[test]
+    fn a_copied_header_test_branches_back_to_the_likelier_loop_block() {
+        use llrm_mir::blockfrequency::BranchProbability;
+        let jump = |to: &str| Inst::Branch { link: false, target: Target::Label(to.into()) };
+        let ret = || Inst::Ret { rn: Gpr(30) };
+        let blocks = vec![
+            block(".Lf.0", vec![jump(".Lf.1")]),
+            block(".Lf.1", vec![cbz(1, ".Lf.4"), jump(".Lf.2")]),
+            block(".Lf.2", vec![cbz(2, ".Lf.5"), jump(".Lf.3")]),
+            block(".Lf.3", vec![Inst::Nop, jump(".Lf.1")]),
+            block(".Lf.4", vec![ret()]),
+            block(".Lf.5", vec![Inst::Nop, ret()]),
+        ];
+        let mut odds = Odds::default();
+        let mut edge = |from: u32, to: u32, numerator: u32, index: usize| {
+            odds.insert((from, to), (BranchProbability::new(numerator, 32), index));
+        };
+        edge(1, 4, 1, 0);
+        edge(1, 2, 31, 1);
+        edge(2, 5, 16, 0);
+        edge(2, 3, 16, 1);
+        let out = fold(blocks, &mut [], &odds, false, &[]);
+        let latch = out.iter().find(|block| block.insts.contains(&Inst::Nop) && block.label == ".Lf.3").expect("latch");
+        let ends = format!("{:?}", &latch.insts[latch.insts.len() - 2..]);
+        assert!(ends.contains("nonzero: true"), "{ends}");
     }
 }

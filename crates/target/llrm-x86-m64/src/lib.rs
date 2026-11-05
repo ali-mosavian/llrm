@@ -322,6 +322,13 @@ impl llrm_target::Target for M64 {
         4
     }
 
+    /// DEVIATE SD545 (owner anyisa, exit 2026-11-20): the pin pads a loop
+    /// header with up to 15 bytes; gcc's `.p2align 4,,10` pads at most 10.
+    /// -O2 m32 `jpeg_single` ran 15 one-byte nops 14,457 times.
+    fn loop_alignment_max_skip(&self) -> u8 {
+        10
+    }
+
     /// Every x86-64 has `nopl` (`FeatureNOPL`): X86AsmBackend uses up to ten
     /// bytes.
     fn max_nop_bytes(&self) -> u8 {

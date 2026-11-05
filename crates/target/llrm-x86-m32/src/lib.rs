@@ -98,6 +98,10 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // O3 card is open). Owner x86-m32, exit 2026-11-20.
         recursive_inlining_growth: Some((450, 150)),
         peel_folded_entry: true,
+        // DEVIATE UP1 (owner x86-m32; exit 2026-11-20: the pin's cost model or
+        // gcc's unroll estimate priced in clocks and bytes replaces it): a
+        // full unroll must repay its bytes at the speed rate.
+        unroll_milliclocks_per_byte: per_byte,
         sink_select_arms: true,
         // DEVIATE MEM-1 (the pin's `EmitTargetCodeForMemcpy`,
         // X86SelectionDAGInfo.cpp L328, leaves a variable length to a libcall):
@@ -420,6 +424,13 @@ impl llrm_target::Target for M32 {
     /// X86ISelLowering.cpp: `setPrefLoopAlignment(Align(16))`.
     fn pref_loop_alignment(&self) -> u8 {
         4
+    }
+
+    /// DEVIATE SD545 (owner anyisa, exit 2026-11-20): the pin pads a loop
+    /// header with up to 15 bytes; gcc's `.p2align 4,,10` pads at most 10.
+    /// -O2 m32 `jpeg_single` ran 15 one-byte nops 14,457 times.
+    fn loop_alignment_max_skip(&self) -> u8 {
+        10
     }
 
     /// The i486 and Pentium have no `nopl` (`FeatureNOPL`): one byte.

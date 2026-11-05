@@ -3256,6 +3256,23 @@ impl Emitter<'_, '_> {
             "MOV32r_1" => Some(-1),
             _ => None,
         };
+        // `MOV32ri64` of a symbol (`selectMOV64Imm32`, static code): a dword
+        // load that zero-extends, `mov r32, sym` (5 bytes, R_X86_64_32) where
+        // the RIP form `lea r64, [rip+sym]` is 7.
+        if name == "MOV32ri64"
+            && let Some(&source) = node.ops.first()
+            && matches!(
+                self.dag.node(source).data,
+                NodeData::Global { .. } | NodeData::JumpTable(_) | NodeData::PoolIndex(..)
+            )
+            && let Ok(Loc::Imm(imm)) = self.operand(source)
+            && imm.address.is_some()
+        {
+            let held = self.result_register(SDValue { node: n, res: 0 }, width);
+            self.values.insert(SDValue { node: n, res: 0 }, held.value);
+            self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Imm(Imm { width: 4, ..imm })]);
+            return Ok(Some(()));
+        }
         if let Some(value) = constant {
             let held = self.result_register(SDValue { node: n, res: 0 }, width);
             self.values.insert(SDValue { node: n, res: 0 }, held.value);

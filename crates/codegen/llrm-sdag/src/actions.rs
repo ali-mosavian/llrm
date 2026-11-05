@@ -124,6 +124,11 @@ pub struct TargetLowering {
     /// The routine a function tuned for size calls where it differs from
     /// `libcall_names`'.
     size_libcall_names: HashMap<(ISD, MVT), &'static str>,
+    /// `(granule, least)`: in a function tuned for size a shift by a constant
+    /// is the routine's call where the granules left after the whole moves
+    /// times the bits beyond them reach `least` (each is a shift instruction
+    /// per granule).
+    size_shift_call: Option<(u128, u128)>,
     /// The object spelling of a routine's name where the convention decorates
     /// it (`___addsf3@3`).
     libcall_symbols: HashMap<String, (String, u32)>,
@@ -152,11 +157,15 @@ impl TargetLowering {
             cmov: false,
             libcall_names: HashMap::default(),
             size_libcall_names: HashMap::default(),
+            size_shift_call: None,
             libcall_symbols: HashMap::default(),
             sext_cheaper_i32_i64: false,
             sdiv_pow2_cmov: None,
         };
         table.set_default_integer_libcalls();
+        // `TargetLoweringBase`: `VAARG` is expanded unless the target says
+        // otherwise.
+        table.set_operation_action(ISD::VAArg, MVT::Other, Action::Expand);
         table
     }
 
@@ -218,6 +227,30 @@ impl TargetLowering {
         name: &'static str,
     ) {
         self.size_libcall_names.insert((op, vt), name);
+    }
+
+    /// A shift by a constant of a `bits`-wide value is a call to the shift
+    /// routine in a function tuned for size where the granules still shifted
+    /// times the bits beyond whole granules reach `least`.
+    pub fn set_size_shift_call(
+        &mut self,
+        granule: u128,
+        least: u128,
+    ) {
+        self.size_shift_call = Some((granule, least));
+    }
+
+    /// Whether the shift of a `bits`-wide value by the constant `amount` is
+    /// the routine's call here.
+    pub fn calls_for_size_shift(
+        &self,
+        amount: u128,
+        bits: u128,
+    ) -> bool {
+        self.opt_for_size
+            && self.size_shift_call.is_some_and(|(granule, least)| {
+                (bits / granule).saturating_sub(amount / granule) * (amount % granule) >= least
+            })
     }
 
     /// Whether `op` of `vt` has a routine for functions tuned for size.
@@ -631,7 +664,7 @@ impl TargetLowering {
         t.set_ops(&[BitReverse, CtLs], &words, Legal);
         t.set_ops(&[BuildPair], &[MVT::I64], Expand);
         t.set_ops(&[FpToSInt, FpToUInt, SIntToFp, UIntToFp], &words, Custom);
-        t.set_ops(&[VAStart, VACopy], &[MVT::Other], Custom);
+        t.set_ops(&[VAStart, VACopy, VAArg], &[MVT::Other], Custom);
         t.set_ops(&[VAEnd, StackSave, StackRestore], &[MVT::Other], Expand);
         // The pin asks for `STACKSAVE` at `MVT::Other`; here the node's value
         // type is asked.

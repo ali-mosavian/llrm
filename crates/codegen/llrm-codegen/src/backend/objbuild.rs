@@ -1092,6 +1092,10 @@ pub fn _encoded(
             }
             // Long mode loads a symbol's address with `lea` from the
             // instruction pointer.
+            // Static code loads it with `mov r32, imm32`: an absolute field.
+            Loc::Imm(ir::Imm { address: Some(addr), value, width: 4, .. }) if model == CodeModel::Flat64 => {
+                (made.immediate_at, near, addr.disp + value, addr)
+            }
             Loc::Imm(ir::Imm { address: Some(addr), value, .. }) if model == CodeModel::Flat64 => {
                 (made.displacement_at, near, addr.disp + value, addr)
             }
@@ -1113,7 +1117,9 @@ pub fn _encoded(
         // Long mode reaches a symbol from the instruction pointer: the field is
         // relative to the instruction's end, and an address loaded for
         // a symbol defined elsewhere is its table entry's.
-        let loc = if model == CodeModel::Flat64 && based {
+        let loc = if model == CodeModel::Flat64 && matches!(one, Loc::Imm(ir::Imm { width: 4, .. })) {
+            loc
+        } else if model == CodeModel::Flat64 && based {
             llrm_x86::mc::fixup::abs_signed_4()
         } else if model == CodeModel::Flat64 {
             let from = code.len() - at;

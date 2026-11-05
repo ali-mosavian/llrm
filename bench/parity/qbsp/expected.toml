@@ -1,5 +1,6 @@
-reason = "narrow zero written whole (xor eax,eax, -1 byte/prefix), one pop ecx for a dword of arguments at m32 -Os, and sink (a load read only below a branch moves below it): bytes down on most bq32 rows; five bq32 rows +1..5 instructions (<0.03%): a flag-idiom the wider xor no longer feeds"
-blessed = "2026-10-15"
+reason = "C references re-blessed 2026-11-05: corpus edits since 10-15 (parity kernels volatile inputs, textfill DOS-only); tcpp links CM.LIB ISATTY (#7243)"
+blessed = "2026-11-05"
+corpus = "12c6e09e8425ab49369492c3c33eaab9"
 
 [ow.O2]
 instructions = 387
@@ -20,7 +21,7 @@ kernel_ms = 0.0186
 [bcc.O2]
 instructions = 393
 memory_operands = 103
-code_bytes = 392
+code_bytes = 391
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 0.0127
@@ -36,7 +37,7 @@ kernel_ms = 0.0125
 [tc.O2]
 instructions = 549
 memory_operands = 155
-code_bytes = 458
+code_bytes = 457
 data_bytes = 4
 bss_bytes = 0
 kernel_ms = 0.0138
@@ -44,7 +45,7 @@ kernel_ms = 0.0138
 [tc.Os]
 instructions = 537
 memory_operands = 157
-code_bytes = 449
+code_bytes = 448
 data_bytes = 4
 bss_bytes = 0
 kernel_ms = 0.0137
@@ -52,7 +53,7 @@ kernel_ms = 0.0137
 [tcpp.O2]
 instructions = 496
 memory_operands = 109
-code_bytes = 430
+code_bytes = 429
 data_bytes = 16
 bss_bytes = 0
 kernel_ms = 0.0142
@@ -60,7 +61,7 @@ kernel_ms = 0.0142
 [tcpp.Os]
 instructions = 483
 memory_operands = 109
-code_bytes = 424
+code_bytes = 423
 data_bytes = 16
 bss_bytes = 0
 kernel_ms = 0.014
