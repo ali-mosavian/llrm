@@ -17,8 +17,8 @@
 //! - A candidate's uses outside the loop (a phi's counting at its incoming
 //!   block) are rewritten. A use in an unreachable block becomes poison.
 //! - Each exit block its definition dominates gets a phi, named after the value
-//!   with `.lcssa`, placed after the block's phis (L4), with one input per predecessor.
-//!   An input from a block outside the loop is itself rewritten.
+//!   with `.lcssa`, placed after the block's phis (L4), with one input per
+//!   predecessor. An input from a block outside the loop is itself rewritten.
 //! - A use in an exit block reads that block's phi, a lone new phi is read
 //!   directly, and any other use goes through `SsaUpdater`, which places a phi
 //!   where the exits' paths join.
@@ -85,10 +85,11 @@
 //! - L2 No `ScalarEvolution` and no debug records: the pin caches the SCEV of a
 //!   new phi and moves `dbg.value`s; neither is kept here (S1 of `ssaupdater`).
 //! - L3 A phi's inputs come in predecessor id order, not use-list order.
-//! - L4 An exit phi goes after the block's phis, in value-id order (2026-11-05, w2,
-//!   exit 2026-11-12, row QR-1): the pin puts it first. The register allocator adds
-//!   spills for some orders of an exit block's phis where the pin's code size is
-//!   constant; the old order is the one that does not (x86 jpeg Os, 6502 grep Os).
+//! - L4 An exit phi goes after the block's phis, in value-id order (2026-11-05,
+//!   w2, exit 2026-11-12, row QR-1): the pin puts it first. The register
+//!   allocator adds spills for some orders of an exit block's phis where the
+//!   pin's code size is constant; the old order is the one that does not (x86
+//!   jpeg Os, 6502 grep Os).
 //!
 //! # See also
 //! LLVM's
@@ -438,7 +439,8 @@ impl Form<'_> {
         for (block, mut phis) in by_block {
             phis.sort_unstable();
             for (_, phi) in phis {
-                let first = self.function.iter_block(block).find(|&inst| self.function.instruction(inst).opcode != Opcode::Phi);
+                let first =
+                    self.function.iter_block(block).find(|&inst| self.function.instruction(inst).opcode != Opcode::Phi);
                 self.function.move_to(phi, first.map_or(Position::End(block), Position::Before))?;
             }
         }
@@ -456,7 +458,6 @@ impl Form<'_> {
         from
     }
 }
-
 
 /// `block`'s instructions other than its phis, in order.
 pub(crate) fn operations(

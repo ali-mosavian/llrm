@@ -352,7 +352,8 @@ fn test_closing_builds_the_loop_forest_once() {
 
 /// Exit phis come in the order the values are defined, as the pin's:
 /// the worklist pops the last value first and each phi goes first in the block.
-/// The old pass sorted them by value id; the order is what the backend reacts to.
+/// The old pass sorted them by value id; the order is what the backend reacts
+/// to.
 #[test]
 fn test_exit_phis_follow_the_order_of_their_definitions() {
     let closed = closed_once(
@@ -385,8 +386,8 @@ x:
 }
 
 /// L4: an exit phi goes after the block's own phis, as the old pass put it.
-/// Placed first, as the pin does, x86 jpeg Os grew 5..38 B and 6502 grep Os 38 B:
-/// the allocator adds spills for some orders of an exit's phis (row QR-1).
+/// Placed first, as the pin does, x86 jpeg Os grew 5..38 B and 6502 grep Os 38
+/// B: the allocator adds spills for some orders of an exit's phis (row QR-1).
 #[test]
 fn test_an_exit_phi_goes_after_the_phis_the_block_already_has() {
     let closed = closed_once(
