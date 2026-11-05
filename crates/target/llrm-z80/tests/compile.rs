@@ -1771,3 +1771,18 @@ fn the_stack_word_of_a_long_divide_is_pushed_not_stored() {
         "stored into the slot\n{out}"
     );
 }
+
+/// The product of two zero-extended words was a full `__mulsi3` at -Os (15 B,
+/// 32 steps). In a function tuned for size it is one call of `__umulhisi3`,
+/// the 16 x 16 -> 32 routine; at -O2 the partial products stay.
+#[test]
+fn the_product_of_two_extended_words_is_one_widening_multiply() {
+    let ir = "define i32 @product(i16 %a, i16 %b) {\n  %x = zext i16 %a to i32\n  %y = zext i16 %b to i32\n  %r = mul i32 %x, %y\n  ret i32 %r\n}";
+    let ir = format!("target datalayout = \"{DATALAYOUT}\"\n{ir}");
+    for level in [Level::Os, Level::Oz] {
+        let out = text(&ir, "product", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
+        let instructions = out.lines().filter(|l| l.starts_with('\t') && !l.trim_start().starts_with('.')).count();
+        assert!(out.contains("__umulhisi3") && !out.contains("__mulsi3") && !out.contains("__mulhi3"), "{out}");
+        assert!(instructions <= 8, "{instructions}\n{out}");
+    }
+}

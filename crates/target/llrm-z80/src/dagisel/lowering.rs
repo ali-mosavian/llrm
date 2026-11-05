@@ -115,6 +115,11 @@ pub fn target_lowering() -> TargetLowering {
             tl.set_libcall_name(op, vt, name);
         }
     }
+    // the product of two zero-extended words is one call in a function tuned
+    // for size, the whole 32-bit result in `de` and `hl` (`expand_mul`): 15 B
+    // for the product against 216 B of partial products. At -O2 the partial
+    // products ran faster in div_constants_short and compare_to_int64.
+    tl.set_size_libcall_name(UMulLoHi, MVT::I16, "__umulhisi3");
     // the longs are expanded to words; a divide or a variable shift of one is
     // the call, not a word-wise expansion
     for (vt, names) in [

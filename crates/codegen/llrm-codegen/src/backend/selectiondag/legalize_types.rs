@@ -2560,6 +2560,23 @@ impl<'a> TypeLegalizer<'a> {
         {
             return Ok(pair);
         }
+        // DEVIATE: a target that names a routine for the product of two words
+        // (`RTLIB`-style `UMulLoHi` name) calls it for two zero-extended
+        // operands without declaring `UMUL_LOHI` legal or custom, which would
+        // also turn every division by a constant into a multiply by its
+        // reciprocal. Exit: none.
+        if super::known_bits::masked_value_is_zero(self.dag, lhs, high_mask)
+            && super::known_bits::masked_value_is_zero(self.dag, rhs, high_mask)
+            && !self.product_fits(lhs, rhs, bits)
+            && let Some(name) = self.tli.libcall_name(ISD::UMulLoHi, half)
+        {
+            let vt = self.dag.value_type(value);
+            if let Some(hooks) = self.hooks.as_mut()
+                && let Some(result) = hooks.make_lib_call(self.dag, name, &[ll, rl], vt, false)
+            {
+                return Ok(self.split_integer(result, half));
+            }
+        }
         if super::known_bits::max_significant_bits(self.dag, lhs) <= bits
             && super::known_bits::max_significant_bits(self.dag, rhs) <= bits
             && let Some(pair) = widening(self, true)
