@@ -81,6 +81,7 @@ mod setcc_i1_operands;
 mod setcc_result;
 mod setcc_simplify;
 mod sext_in_reg;
+mod shift_of_shifted_logic;
 mod shift_amount;
 mod shift_simplify;
 mod srl_of_trunc;
