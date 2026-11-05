@@ -17,8 +17,9 @@
 //!   loop, `MemorySSA(*L, AA, DT)`), once, and only when two loads of the loop
 //!   share an address SCEV: without such a pair nothing can match. It is not
 //!   updated as loads go, as LLVM's is not. Exit: a loop-scoped build.
-//! - LC2 The SCEVs are made before the walk, by a new `ScalarEvolution`, since
-//!   the walk changes the function and LLVM's holds its expressions current.
+//! - LC2 The SCEVs are made before the walk, by the pass's `ScalarEvolution`
+//!   (the one `simplifyLoopIVs` asked), since the walk changes the function and
+//!   LLVM's holds its expressions current.
 //!
 //! # Used by
 //! [`crate::loopunrollpass::unroll_loops`], where the loop is still a loop.
@@ -26,8 +27,8 @@
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::mssa::view::Translated;
 use llrm_analysis::mssa::{Mssa, shadow};
+use llrm_analysis::scev::Cx;
 use llrm_analysis::scev::expr::Scev;
-use llrm_analysis::scev::{Cx, ScalarEvolution};
 use llrm_mir::module::{BlockId, InstId, Operand};
 use llrm_mir::opcode::Opcode;
 use llrm_support::hash::HashMap;
@@ -65,7 +66,9 @@ pub(crate) fn load_cse(
     // The SCEV of each simple load's address (LC2).
     let mut keys: HashMap<InstId, Scev> = HashMap::default();
     {
-        let mut se = ScalarEvolution::new();
+        // The pass's expressions, which `simplifyLoopIVs` just asked: the pin
+        // keeps one `ScalarEvolution` for both.
+        let se = &mut run.scev;
         let cx = Cx {
             context: &*run.context,
             globals: run.globals,
