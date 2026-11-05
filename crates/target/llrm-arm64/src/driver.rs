@@ -325,6 +325,15 @@ pub fn functions_with(
         dump("OrderCopies", &machine);
         // The shared greedy allocator, unless `LLRM_ARM64_LINEAR` asks for the
         // linear scan; a function greedy refuses goes to the scan, reported.
+        crate::lir_view::set_frame_pointer_free(
+            platform != Platform::Darwin
+                && !(machine.calls
+                    || machine.dynamic
+                    || llrm_codegen::backend::framefree::keeps_frame_pointer(
+                        machine.frame_pointer.as_deref(),
+                        machine.calls,
+                    )),
+        );
         let greedy =
             (!llrm_support::env_flag!("LLRM_ARM64_LINEAR")).then(|| crate::lir_view::allocate(&mut machine, optsize));
         let allocation = match greedy {
