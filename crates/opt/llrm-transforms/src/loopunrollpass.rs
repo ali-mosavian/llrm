@@ -392,6 +392,18 @@ impl Analyzed {
     }
 }
 
+/// `formLCSSARecursively` over the analyses of the function as it stands, and
+/// those analyses again only if it changed the function: the pin's pass takes
+/// its DT/LI from the analysis manager and `UnrollLoop` updates them, so a
+/// no-op LCSSA costs no rebuild.
+fn analyses_after_lcssa(run: &mut Run) -> (Analyzed, bool) {
+    let analyzed = Analyzed::of(run);
+    let changed =
+        crate::lcssa::closed_with(run.context, run.layout, run.function, &analyzed.tree, &analyzed.loops)
+            .unwrap_or(false);
+    if changed { (Analyzed::of(run), true) } else { (analyzed, false) }
+}
+
 /// `gatherUnrollingPreferences` for the full unroll pass (`UserThreshold`,
 /// `AllowPartial`, `Runtime` and `UpperBound` provided: none, false, false,
 /// false).
@@ -2055,8 +2067,7 @@ pub fn unroll_loops(run: &mut Run) -> bool {
     // `LoopUnrollPass::run` (L1762): every loop is put in simplified form and
     // LCSSA first, whether or not anything is unrolled.
     let simplified = crate::loopsimplify::simplified(run.function);
-    let closed = crate::lcssa::closed(run.context, run.layout, run.function).unwrap_or(false);
-    let mut analyzed = Analyzed::of(run);
+    let (mut analyzed, closed) = analyses_after_lcssa(run);
     let at_first: IdSet<BlockId> = analyzed.loops.get_loops_in_preorder().iter().map(|one| one.get_header()).collect();
     // The worklist is popped from the back (`appendReversedLoopsToWorklist`):
     // the loops are visited in the reverse of
@@ -2118,8 +2129,7 @@ pub fn unroll_loops(run: &mut Run) -> bool {
             // `peelLoop` ends in `simplifyLoop`: the exits the copies share
             // are dedicated again (here for the whole function, U6).
             crate::loopsimplify::simplified(run.function);
-            let _ = crate::lcssa::closed(run.context, run.layout, run.function);
-            analyzed = Analyzed::of(run);
+            analyzed = analyses_after_lcssa(run).0;
             // `simplifyLoopAfterUnroll(L, SimplifyIVs = true)`: the IVs first
             // (PL5).
             let env = llrm_analysis::scev::expander::Env {
@@ -2170,8 +2180,7 @@ pub fn unroll_loops(run: &mut Run) -> bool {
         }
         // `UnrollLoop` closes the outer loop's SSA form
         // (`formLCSSARecursively`).
-        let _ = crate::lcssa::closed(run.context, run.layout, run.function);
-        analyzed = Analyzed::of(run);
+        analyzed = analyses_after_lcssa(run).0;
         // The blocks `UnrollLoop` hands `simplifyLoopAfterUnroll`: the loop's
         // own that remain and the ones it made.
         let after = unrolled_blocks(run, capacity, &body);
@@ -2185,8 +2194,7 @@ pub fn unroll_loops(run: &mut Run) -> bool {
         // the unrolled loop had an outer loop or held loops (U6).
         if parent_header.is_some() || siblings_of(&analyzed.loops).iter().any(|one| !old.contains(one)) {
             crate::loopsimplify::simplified(run.function);
-            let _ = crate::lcssa::closed(run.context, run.layout, run.function);
-            analyzed = Analyzed::of(run);
+            analyzed = analyses_after_lcssa(run).0;
         }
         let mut fresh: Vec<BlockId> =
             siblings_of(&analyzed.loops).into_iter().filter(|one| !old.contains(one)).collect();

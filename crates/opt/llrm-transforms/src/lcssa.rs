@@ -152,6 +152,19 @@ pub fn closed(
     form_on_all_loops(context, layout, function, &tree, &info)
 }
 
+/// [`closed`] over a tree and loops the caller holds for `function`: no
+/// second dominator tree is built (`formLCSSAOnAllLoops(LI, DT, SE)` takes
+/// the pass's analyses).
+pub fn closed_with(
+    context: &Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    tree: &DomTree,
+    info: &LoopInfo,
+) -> Result<bool, String> {
+    form_on_all_loops(context, layout, function, tree, info)
+}
+
 /// `formLCSSAOnAllLoops`.
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LCSSA.cpp#L477>

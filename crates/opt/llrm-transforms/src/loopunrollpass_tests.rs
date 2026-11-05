@@ -614,3 +614,18 @@ fn test_the_unroll_cost_analysis_reads_the_loops_expressions_the_pass_already_ma
     let made = get(Event::ScevNodes) - before;
     assert!(made <= 29, "{made} expressions were made for one loop");
 }
+
+/// Old: every LCSSA pass of the unroll made a dominator tree and a loop forest
+/// of its own, and `Analyzed::of` made another pair on the unchanged function
+/// (983 builds over 449 runs, 556 M Ir on memory_expansion). A no-op LCSSA
+/// keeps the analyses it was given.
+#[test]
+fn test_a_no_op_lcssa_does_not_make_the_analyses_again() {
+    use llrm_mir::counts::{Event, get};
+    let mut module = parsed(&heavy());
+    let (trees, forests) = (get(Event::Dominators) + get(Event::DominatorsReused), get(Event::Forests));
+    unrolled(&mut module);
+    let trees = get(Event::Dominators) + get(Event::DominatorsReused) - trees;
+    let forests = get(Event::Forests) - forests;
+    assert!(trees <= 6 && forests <= 6, "{trees} trees, {forests} forests for one loop");
+}
