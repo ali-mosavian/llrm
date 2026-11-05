@@ -7,6 +7,10 @@
 //! The 68000 has no 32-bit multiply or divide: those are a library call (two
 //! pushes, `jsr`, the cleanup); the 68020 has `muls.l` and `divs.l`.
 //!
+//! Floating point is the soft-float library: an operation pushes its operands'
+//! words from their stack slots, calls, takes the arguments off and stores the
+//! result words, priced once here as that expansion.
+//!
 //! Clocks are not here yet: `costs()` still prices an operation at one.
 //!
 //! # See also
@@ -52,6 +56,19 @@ fn wide(
     ]
 }
 
+/// A soft-float operation: `words` argument words pushed from stack slots, the
+/// call, the arguments taken off, `stores` result words stored.
+fn libcall(
+    words: i64,
+    stores: usize,
+) -> Vec<Inst> {
+    let mut form: Vec<Inst> = (0..words).map(|_| inst("MOV32ep", vec![r(reg::SP), Operand::Imm(4), r(reg::A0)])).collect();
+    form.push(inst("CALLb", vec![Operand::Symbol("__adddf3".to_owned(), 0)]));
+    form.push(crate::expand::sp_adjust(4 * words, true));
+    form.extend((0..stores).map(|_| inst("MOV32pd", vec![Operand::Imm(4), r(reg::A0), r(reg::D0)])));
+    form
+}
+
 /// The forms of each operation class, named as `OperationCosts` names them.
 pub fn forms(cpu: Cpu) -> Vec<(&'static str, Vec<Inst>)> {
     let imm = Operand::Imm;
@@ -71,8 +88,58 @@ pub fn forms(cpu: Cpu) -> Vec<(&'static str, Vec<Inst>)> {
         ("adjust", vec![crate::expand::sp_adjust(8, true)]),
         ("extend", vec![inst("EXT32", vec![r(reg::D0), r(reg::D0)])]),
         ("set", vec![inst("SETd8eq", vec![r(reg::BD0)])]),
+        // A short branch (`bra.b`, `bcc.b`): 2 B; the assembler widens a far one to 4, which the function's
+        // `function_scale` carries. A branch to the next instruction is not a `.b`; the test lays a `nop` between.
+        ("branch", vec![inst("BRA8", vec![imm(2)])]),
+        ("argument", vec![crate::callpush::push_of(&r(reg::D0))]),
+        ("pop", vec![inst("MOV32do", vec![r(reg::D0), r(reg::SP)])]),
+        ("float_add", libcall(4, 2)),
+        ("float_multiply", libcall(4, 2)),
+        ("float_divide", libcall(4, 2)),
+        ("float_compare", libcall(4, 0)),
+        ("float_to_int", libcall(2, 1)),
+        ("float_load", vec![inst("MOV32dp", vec![r(reg::D0), imm(4), r(reg::A0)]), inst("MOV32dp", vec![r(reg::D1), imm(4), r(reg::A0)])]),
+        ("float_store", vec![inst("MOV32pd", vec![imm(4), r(reg::A0), r(reg::D0)]), inst("MOV32pd", vec![imm(4), r(reg::A0), r(reg::D1)])]),
+        // Every function: one callee-saved register saved and restored.
+        ("function", vec![crate::callpush::push_of(&r(reg::D2)), inst("MOV32do", vec![r(reg::D2), r(reg::SP)])]),
     ]
 }
+
+/// The fields `size_costs` leaves at `OperationCosts::default()`, each with why: no such operation on m68k, or a
+/// tuning number that is not the size of an instruction. A field equal to its default that is not here is one nobody
+/// priced (`tests/opcosts.rs` fails on it).
+pub const AT_DEFAULT: &[(&str, &str)] = &[
+    ("argument", "2: a register push, which is what the default says; also a form"),
+    ("prefix", "m68k has no operand-size prefix"),
+    ("return_pops", "the caller pops its arguments"),
+    ("carry", "no segmented or huge pointers"),
+    ("carry_step", "no segmented or huge pointers"),
+    ("multiply_high", "constant divides use the multiply-long sequence priced above"),
+    ("divide_margin", "no isIntDivCheap margin stated"),
+    ("float_load_folded", "soft float folds no load into an operation (folds_loads is false: unread)"),
+    ("folds_loads", "same"),
+    ("float_release", "no floating register stack"),
+    ("fill", "no string instruction: a memset is stores or a library call (loop idioms, own row)"),
+    ("fill_cell", "same"),
+    ("fill_segment", "no segment registers"),
+    ("memset_stores", "a tuning limit, not an instruction size"),
+    ("huge_fill", "no huge pointers"),
+    ("huge_copy", "no huge pointers"),
+    ("copy", "no string instruction (loop idioms, own row)"),
+    ("copy_cell", "same"),
+    ("copy_variable", "same"),
+    ("direction", "no direction flag"),
+    ("unroll_budget", "a tuning limit"),
+    ("pieces_set", "a tuning limit"),
+    ("pieces_clear", "a tuning limit"),
+    ("pieces_set_size", "a tuning limit"),
+    ("pieces_clear_size", "a tuning limit"),
+    ("memset_store", "a tuning limit"),
+    ("jump_table", "a tuning limit (switch lowering, own row)"),
+    ("function_scale", "measured against objects after this table (the calibration test), then set"),
+    ("cache_line", "set by the CPU table"),
+    ("line_fill_clocks", "set by the CPU table"),
+];
 
 /// The operations in code bytes at `cpu`.
 pub fn size_costs(cpu: Cpu) -> Result<OperationCosts, String> {
@@ -95,6 +162,17 @@ pub fn size_costs(cpu: Cpu) -> Result<OperationCosts, String> {
             "adjust" => costs.adjust = size,
             "extend" => costs.extend = size,
             "set" => costs.set = size,
+            "branch" => costs.branch = size,
+            "argument" => costs.argument = size,
+            "pop" => costs.pop = size,
+            "float_add" => costs.float_add = size,
+            "float_multiply" => costs.float_multiply = size,
+            "float_divide" => costs.float_divide = size,
+            "float_compare" => costs.float_compare = size,
+            "float_to_int" => costs.float_to_int = size,
+            "float_load" => costs.float_load = size,
+            "float_store" => costs.float_store = size,
+            "function" => costs.function = size,
             other => return Err(format!("no field for {other}")),
         }
     }

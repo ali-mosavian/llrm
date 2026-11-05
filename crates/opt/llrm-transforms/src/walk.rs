@@ -1195,7 +1195,10 @@ pub fn function_bytes(
                 _ => costs.add,
             }
         })
-        .sum()
+        .sum::<i64>()
+        .saturating_add(costs.function)
+        .saturating_mul(costs.function_scale)
+        / 100
 }
 
 /// SZ2: the bytes the module loses when the callees of a trial's `sites` go
