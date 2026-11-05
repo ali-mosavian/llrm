@@ -1538,6 +1538,15 @@ fn selected_in(
     }
     let mut body =
         crate::backend::isel::noted(module, function, name, &noted_ats, &noted_values, &noted_wides, &[], body);
+    // What the optimizer kept for the allocator (`!llrm.spares`, `!llrm.home`):
+    // the old route's `isel` set them, this route did not and the allocator
+    // read empty sets.
+    {
+        let ats: crate::support::hash::IndexMap<llrm_mir::module::InstId, i64> = noted_ats.iter().map(|(inst, &at)| (inst, at)).collect();
+        let values: crate::support::hash::IndexMap<ValueId, u32> = noted_values.iter().map(|(id, &vreg)| (id, vreg)).collect();
+        body.spares = std::sync::Arc::new(crate::backend::isel::spared(module, function, &ats));
+        body.homes = std::sync::Arc::new(crate::backend::isel::homed(module, function, &ats, &values, &body));
+    }
     set_odds(&mut body, &info.edge_probs, &block_at);
     // The loops whose trips `induction` proves, as the old route states them:
     // the executed-work estimate (the route choice's, `LLRM_DEBUG=cost`) reads

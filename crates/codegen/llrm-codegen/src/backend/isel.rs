@@ -1439,7 +1439,7 @@ pub(crate) fn parameters(
 
 /// Each (load, write) the optimizer proved apart (`!llrm.spares`), by the `at`
 /// each became.
-fn spared(
+pub(crate) fn spared(
     module: &Module,
     function: &Function,
     ats: &IndexMap<InstId, i64>,
@@ -1488,7 +1488,7 @@ fn float_bytes(
 
 /// Each phi's value that the program also holds in a fixed cell (`!llrm.home`):
 /// the cell the store it names wrote.
-fn homed(
+pub(crate) fn homed(
     module: &Module,
     function: &Function,
     ats: &IndexMap<InstId, i64>,

@@ -1697,3 +1697,44 @@ hi:
     let made = llrm_mir::counts::get(llrm_mir::counts::Event::BranchProbabilities) - before;
     assert_eq!(made, 1, "{made} branch probability calculations for one function");
 }
+
+/// The DAG route finished a body without `spares`, which only the old
+/// route's `isel` filled in: `-fllrm-spares` attached `!llrm.spares` to a loop's
+/// fixed-cell load and the allocator read an empty set (22-44 asks per compile,
+/// always empty).
+#[test]
+fn test_the_dag_route_keeps_the_spares_the_optimizer_proved() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"
+@g = global i32 0
+define void @f(ptr %a, i32 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %v = load i32, ptr @g, !tbaa !1
+  %p = getelementptr i16, ptr %a, i32 %i
+  %t = trunc i32 %v to i16
+  store i16 %t, ptr %p, !tbaa !5
+  %next = add i32 %i, 1
+  %c = icmp slt i32 %next, %n
+  br i1 %c, label %loop, label %out
+out:
+  ret void
+}
+!0 = !{!\"Simple C/C++ TBAA\"}
+!3 = !{!\"omnipotent char\", !0}
+!2 = !{!\"int\", !3}
+!4 = !{!\"short\", !3}
+!1 = !{!2, !2, i64 0}
+!5 = !{!4, !4, i64 0}
+";
+    let mut module = crate::testing::module(text).expect("parses");
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add_module(llrm_transforms::spares::Spares);
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("runs");
+    let load = module.metadata.iter().filter(|_| true).count();
+    assert!(load > 0);
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .expect("selects");
+    assert!(!done.body.spares.is_empty(), "the DAG route dropped the spares the optimizer proved");
+}
