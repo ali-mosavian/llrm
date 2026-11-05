@@ -1999,6 +1999,9 @@ impl<'a> Analyzer<'a> {
     /// counted as.
     fn call_size(&self) -> i64 {
         let Some(tti) = self.site.tti else { return 0 };
+        if let Some(sequence) = self.call_sequence(llrm_mir::tti::CostKind::CodeSize) {
+            return sequence;
+        }
         let size = llrm_mir::instructioncost::instruction_cost(
             tti,
             self.context,
@@ -2010,6 +2013,39 @@ impl<'a> Analyzer<'a> {
         )
         .value;
         (size * tti.call_code_size_percent() + 50) / 100
+    }
+
+    /// The target's price of the call with its argument setup and the callee's
+    /// frame (`Tti::call_sequence_cost`), or none where it states none.
+    fn call_sequence(
+        &self,
+        kind: llrm_mir::tti::CostKind,
+    ) -> Option<i64> {
+        use llrm_mir::tti::{CallArgument, CallShape, Ty};
+        let tti = self.site.tti?;
+        let call = self.site.caller.instruction(self.site.call);
+        let info = call_info(self.site.caller, self.site.call)?;
+        let arguments = call.operands.len().saturating_sub(1);
+        let arguments = (0..arguments)
+            .map(|index| {
+                let byval = info.argument_attrs.get(index).and_then(
+                    |attrs| attrs.iter().find_map(
+                        |one| match one {
+                            Attribute::Type(name, ty) if name == "byval" => Some(*ty),
+                            _ => None,
+                        },
+                    ),
+                );
+                let ty = llrm_mir::instructioncost::operand_type(self.context, self.site.caller, call.operands[index])
+                    .and_then(|ty| Ty::of(&self.context.types, ty));
+                CallArgument {
+                    ty,
+                    byval_bytes: byval.map(|ty| self.site.layout.alloc_size(&self.context.types, ty)),
+                }
+            })
+            .collect();
+        let shape = CallShape { arguments, callee_frame_bytes: self.allocated_size };
+        tti.call_sequence_cost(&shape, kind).map(|cost| cost.value)
     }
 
     /// Whether inlining leaves the module's code bigger. A callee that stays
@@ -2043,17 +2079,21 @@ impl<'a> Analyzer<'a> {
         if rate == 0 || growth <= self.call_size() || self.site.sole_call_to_local {
             return false;
         }
-        let saved = llrm_mir::instructioncost::instruction_cost(
-            tti,
-            self.context,
-            self.site.layout,
-            &self.site.module.globals,
-            self.site.caller,
-            self.site.call,
-            llrm_mir::tti::CostKind::Latency,
-        )
-        .value
-        .max(1);
+        let saved = self
+            .call_sequence(llrm_mir::tti::CostKind::Latency)
+            .unwrap_or_else(
+                || llrm_mir::instructioncost::instruction_cost(
+                    tti,
+                    self.context,
+                    self.site.layout,
+                    &self.site.module.globals,
+                    self.site.caller,
+                    self.site.call,
+                    llrm_mir::tti::CostKind::Latency,
+                )
+                .value,
+            )
+            .max(1);
         let frequency = self.site.relative_frequency.unwrap_or(1.0).max(0.0);
         (growth * rate) as f64 > saved as f64 * 1000.0 * frequency
     }
