@@ -150,9 +150,15 @@ pub fn edge_odds(
     odds
 }
 
-/// The fewest instructions a shared tail has (`BranchFolder`'s
-/// `-tail-merge-size`).
+/// The fewest instructions a shared tail has, its jump included
+/// (`BranchFolder`'s `-tail-merge-size`: 3, of which the jump is the pin's
+/// extra one, so two others).
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/BranchFolding.cpp#L103>
 const TAIL_MERGE_SIZE: usize = 3;
+
+/// The most blocks compared at once (`-tail-merge-threshold`).
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/BranchFolding.cpp#L97>
+const TAIL_MERGE_THRESHOLD: usize = 150;
 
 /// Whether `inst` is an instruction of the tail: not a directive.
 fn counts(inst: &Inst) -> bool {
@@ -176,15 +182,19 @@ fn common_tail(
     length
 }
 
-/// Blocks that return alike share the end they have in common
-/// (`BranchFolder::TryTailMergeBlocks`): the longer common tail of two
-/// returns, of at least `TAIL_MERGE_SIZE` instructions, is one block, and the
-/// blocks branch to it. The epilogue of a function with two exits was written
-/// twice (`rectwo` -O2: +16 B).
+/// Blocks that end alike share the end they have in common
+/// (`BranchFolder::TryTailMergeBlocks`,
+/// [`ProfitableToMerge`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/BranchFolding.cpp#L633)):
+/// of the blocks that end in the same jump or return, the pair with the
+/// longest common tail of at least `TAIL_MERGE_SIZE` instructions makes it one
+/// block, and the blocks branch to it. The epilogue of a function with two
+/// exits was written twice (`rectwo` -O2: +16 B), and `jpeg` -Os wrote the
+/// same calls on four paths.
 ///
-/// DEVIATE: only blocks that end in a return (the pin merges the tails of
-/// any blocks that end alike), and the tail is shared between two blocks at a
-/// time, the longest first. Exit: 11-12.
+/// DEVIATE: the pin also merges a shorter tail where a block is only the
+/// tail and the other can fall into it, and two instructions at -Os; and it
+/// takes the pairs by the hash of their ends, not by the last instruction.
+/// Exit: 11-12.
 fn merge_return_tails(blocks: &mut Vec<Lowered>) {
     // The block that is only a return, where there is one: a block that
     // returns, or jumps there, ends the same way.
@@ -227,7 +237,7 @@ fn merge_return_tails(blocks: &mut Vec<Lowered>) {
             }
         }
         let mut best: Option<(usize, usize, usize)> = None;
-        for group in groups.values().filter(|group| group.len() > 1 && group.len() <= 64) {
+        for group in groups.values().filter(|group| group.len() > 1 && group.len() <= TAIL_MERGE_THRESHOLD) {
             for (a, &x) in group.iter().enumerate() {
                 for &y in &group[a + 1..] {
                     let ((one, one_insts), (other, other_insts)) = (&ending[x], &ending[y]);
