@@ -8,7 +8,7 @@ OUT=${1:?output directory}; OPT=${2:-Os}; LLC=${LLRM_Z80_LLC:?path of llrm-z80-l
 DL="e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16"
 MODULES="fp/f64/add_sub fp/f64/mul fp/f64/div fp/f64/float fp/f64/pack fp/f32/pack fp/f32/extend fp/f32/trunc fp/f32/add_sub fp/f32/mul fp/f32/div
  fp/f32/float_si fp/f32/float_usi fp/f32/float_di fp/f32/fix_si fp/f32/fix_usi fp/f32/fix_di fp/f64/fix_si fp/f64/fix_usi fp/f64/fix_di fp/f64/fix_udi
- fp/f32/cmp fp/f64/cmp fp/f32/neg fp/f64/neg fp/f32/unord fp/f64/unord"
+ fp/f32/cmp fp/f64/cmp fp/f32/neg fp/f64/neg fp/f32/unord fp/f64/unord int/clzsi2"
 mkdir -p "$OUT"; T=$(mktemp -d); trap 'rm -r $T' EXIT
 for m in $MODULES; do
   n=$(echo "$m" | tr / _)
@@ -18,6 +18,7 @@ for m in $MODULES; do
   sed -i 's/___/__/g' $OUT/$n.s
   sdasz80 -g -o $OUT/$n.rel $OUT/$n.s
 done
+sdasz80 -g -o "$OUT/div64.rel" config/z80/div64.s; cp config/z80/div64.s "$OUT/div64.s"
 defined=$(grep -h '\.globl' $OUT/*.s | awk '{print $2}' | sort -u)
 missing=""
 for s in __adddf3 __subdf3 __muldf3 __divdf3 __eqdf2 __nedf2 __ltdf2 __ledf2 __gtdf2 __gedf2 __cmpdf2 __addsf3 __subsf3 __mulsf3 __divsf3 __eqsf2 __nesf2 __ltsf2 __lesf2 \
