@@ -374,6 +374,17 @@ pub fn operand_of(
     place_operand(&what.address(), what.base.is_some(), what.index.is_some(), bits)
 }
 
+/// A frame cell reached through the frame token (a word register) by a wide
+/// index: no encoding until the frame layout names the frame register, but
+/// the registers it reads are known.
+pub fn awaits_frame_layout(what: &ir::Mem) -> bool {
+    what.addr.is_some_and(|addr| addr.space == Space::Frame)
+        && what.index.is_some()
+        && what.index_through != RegId::None
+        && width_of(what.index_through) >= Some(4)
+        && width_of(if what.through == RegId::None { RegId::BP } else { what.through }) < Some(4)
+}
+
 /// An address as an encodable memory operand, and whether it is relocated.
 /// `based` and `indexed`: a pass made a value of the cell's base or index, and
 /// `through` is where the allocation put it.
