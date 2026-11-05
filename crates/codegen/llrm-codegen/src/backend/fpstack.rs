@@ -62,7 +62,8 @@
 //! [m]`) whose other operand stays live is `fld [m]` and the register form
 //! reading that operand (`fsubr st, st(i)`) where the target prices the copy
 //! (`fld st(i)`) and the memory form above the load and the register form
-//! (`unfold_copy_form`). The pin copies the operand and keeps the memory form:
+//! (`unfold_copy_form`). The pin copies the operand and keeps the memory form
+//! (`handleOneArgFPRW`'s `duplicateToTop` branch, <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FloatingPoint.cpp#L1300-L1304>):
 //! on a 486 `fld st(i)` is 4 clocks and `fld m` 3 (nbody -O2 m16, 1,200 trips).
 //!
 //! DEVIATE 4: an unreachable block with live floating values has no predecessor
