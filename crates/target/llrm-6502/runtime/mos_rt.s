@@ -1206,3 +1206,173 @@ __modsi3_fast_byte:             ; __sa % __sb -> __sa (signed), a divisor of 1 t
   jsr neg_sa
 @done:
   rts
+
+; ---- the speed division with the small wide path: the routines of the module that divides cold
+; (sites that run fewer than 3 times together, `hotdivision`) are the ones of the first speed variant,
+; byte for byte: the pin-structure wide path above is 141 bytes more and pays only where it runs ----
+udivmod32_fast_small:                      ; the speed variant: __sa / __sb -> __sa, __sa % __sb -> __sr (unsigned)
+  lda #0
+  sta __sr
+  sta __sr+1
+  sta __sr+2
+  sta __sr+3
+  lda __sb+1                    ; a divisor below 256: the remainder stays in A, a byte at a time
+  ora __sb+2
+  ora __sb+3
+  bne @wide
+  lda __sb
+  beq @wide                     ; a zero divisor takes the general path: its quotient is all ones
+  lda #0
+  ldx #3
+@byte:
+  ldy #8
+@bit:
+  asl __sa,x
+  rol a
+  bcs @t                        ; the remainder overflowed 8 bits: it is above the divisor
+  cmp __sb
+  bcc @s
+@t:
+  sbc __sb                      ; C is set
+  inc __sa,x                    ; the quotient bit (bit 0 is clear after the shift)
+@s:
+  dey
+  bne @bit
+  dex
+  bpl @byte
+  sta __sr
+  rts
+@wide:
+  ldx #32
+; While the remainder with the dividend's next byte appended is still below the divisor, the
+; eight trips for that byte only shift it in: take the byte at once. A divisor of m bytes lets
+; m-1 bytes go this way, a dividend of fewer bytes than that is all remainder, and a zero divisor
+; never passes the test, so its quotient is all ones.
+@skip:
+  lda __sr+3
+  bne @next
+  lda __sr+2
+  cmp __sb+3
+  bne @below
+  lda __sr+1
+  cmp __sb+2
+  bne @below
+  lda __sr
+  cmp __sb+1
+  bne @below
+  lda __sa+3
+  cmp __sb
+@below:
+  bcs @next                     ; the remainder reaches the divisor: the trips start here
+  lda __sr+2
+  sta __sr+3
+  lda __sr+1
+  sta __sr+2
+  lda __sr
+  sta __sr+1
+  lda __sa+3
+  sta __sr
+  lda __sa+2
+  sta __sa+3
+  lda __sa+1
+  sta __sa+2
+  lda __sa
+  sta __sa+1
+  lda #0
+  sta __sa
+  txa
+  sec
+  sbc #8
+  tax
+  bne @skip
+  rts                           ; the whole dividend is remainder
+@next:
+  asl __sa
+  rol __sa+1
+  rol __sa+2
+  rol __sa+3
+  rol __sr
+  rol __sr+1
+  rol __sr+2
+  rol __sr+3
+  bcs @take                     ; the remainder overflowed 32 bits: it is above any divisor
+  lda __sr+3                    ; compare from the high byte: most trips end at the first
+  cmp __sb+3
+  bne @cmp
+  lda __sr+2
+  cmp __sb+2
+  bne @cmp
+  lda __sr+1
+  cmp __sb+1
+  bne @cmp
+  lda __sr
+  cmp __sb
+@cmp:
+  bcc @skipbit                  ; the remainder is below the divisor
+@take:
+  sec
+  lda __sr
+  sbc __sb
+  sta __sr
+  lda __sr+1
+  sbc __sb+1
+  sta __sr+1
+  lda __sr+2
+  sbc __sb+2
+  sta __sr+2
+  lda __sr+3
+  sbc __sb+3
+  sta __sr+3
+  inc __sa                      ; the quotient bit (bit 0 of __sa is clear after the shift)
+@skipbit:
+  dex
+  bne @next
+  rts
+
+.export __udivsi3_fast_small
+__udivsi3_fast_small:                 ; __sa / __sb -> __sa
+  jmp udivmod32_fast_small
+
+.export __umodsi3_fast_small
+__umodsi3_fast_small:                 ; __sa % __sb -> __sa
+  jsr udivmod32_fast_small
+  jmp copy_sr_to_sa
+
+divmod32s_fast_small:                 ; the signs split off, then the speed division
+  lda #0
+  sta __sg
+  lda __sa+3
+  bpl @a
+  lda #3
+  sta __sg
+  jsr neg_sa
+@a:
+  lda __sb+3
+  bpl @b
+  lda __sg
+  eor #1
+  sta __sg
+  jsr neg_sb
+@b:
+  jmp udivmod32_fast_small
+
+.export __divsi3_fast_small
+__divsi3_fast_small:                  ; __sa / __sb -> __sa (signed, truncated toward zero)
+  jsr divmod32s_fast_small
+  lda __sg
+  and #1
+  beq @done
+  jsr neg_sa
+@done:
+  rts
+
+.export __modsi3_fast_small
+__modsi3_fast_small:                  ; __sa % __sb -> __sa (signed, the sign of the dividend)
+  jsr divmod32s_fast_small
+  jsr copy_sr_to_sa
+  lda __sg
+  and #2
+  beq @done
+  jsr neg_sa
+@done:
+  rts

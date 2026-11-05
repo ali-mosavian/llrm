@@ -633,3 +633,60 @@ fn the_byte_divisor_entries_divide_like_the_general_ones() {
         }
     }
 }
+
+/// The routines a cold module calls are the first speed variant: they link no
+/// pin-structure wide path (141 B more) and divide like the hot ones.
+#[test]
+fn the_small_speed_division_links_no_wide_path_and_divides_like_the_hot_one() {
+    let cases =
+        [(3_000_009u32, 1_000_003u32), (0xFFFF_FFFF, 255), (40_000, 0xFFFF_FFFD), (70_000, 300), (99, 100), (7, 0)];
+    for (routine, hot) in [
+        ("__udivsi3_fast_small", "__udivsi3_fast"),
+        ("__umodsi3_fast_small", "__umodsi3_fast"),
+        ("__divsi3_fast_small", "__divsi3_fast"),
+        ("__modsi3_fast_small", "__modsi3_fast"),
+    ] {
+        let text = common::pipeline::reachable_runtime(&format!("  jsr {routine}\n"));
+        assert!(text.contains("udivmod32_fast_small:") && !text.contains("udivmod32_wide:"), "{routine}: {text}");
+        let hot_text = common::pipeline::reachable_runtime(&format!("  jsr {hot}\n"));
+        assert!(hot_text.contains("udivmod32_wide:") && !hot_text.contains("_small"), "{hot}: {hot_text}");
+        for (a, b) in cases {
+            let name = format!("{routine}-{a}-{b}");
+            assert_eq!(long(&name, routine, a, b), long(&format!("h{name}"), hot, a, b), "{routine} {a} {b}");
+        }
+    }
+}
+
+/// The hot threshold is derived from what the pin-structure wide path saves a
+/// call (`hotdivision::SAVED_CLOCKS`, the mean over these ten shapes; the
+/// median is 224, the four shapes with a divisor above 16 bits that the corpus
+/// sites hit save 328 on average). This re-measures the same ten shapes: it
+/// shows the constant is not stale if the routines change, not that the ten
+/// are the call mix of a program.
+#[test]
+fn the_wide_path_saves_a_call_what_the_hot_threshold_assumes() {
+    let shapes = [
+        (3_000_009u32, 1_000_003u32),
+        (70_000, 300),
+        (12_345_678, 257),
+        (4_000_000_000, 65_537),
+        (2_147_483_647, 1000),
+        (100_000, 300),
+        (1_000_000, 70_000),
+        (99, 100_000),
+        (4_000_000_000, 300),
+        (16_777_216, 256),
+    ];
+    let clocks = |routine: &str, a: u32, b: u32| {
+        let load = |at: &str, v: u32| {
+            (0..4).map(|k| format!("  lda #{}\n  sta {at}+{k}\n", (v >> (8 * k)) & 255)).collect::<String>()
+        };
+        let setup = format!("{}{}", load("__sa", a), load("__sb", b));
+        let with = common::cycles_with(&format!("{routine}-{a}-{b}"), &format!("{setup}  jsr {routine}\n"), "");
+        with - common::cycles_with(&format!("none-{routine}-{a}-{b}"), &setup, "")
+    };
+    let saved: i64 =
+        shapes.iter().map(|&(a, b)| clocks("__udivsi3_fast_small", a, b) - clocks("__udivsi3_fast", a, b)).sum();
+    let mean = saved as f64 / shapes.len() as f64;
+    assert!(mean >= llrm_6502::hotdivision::SAVED_CLOCKS * 0.9, "the wide path saves {mean} clocks a call");
+}

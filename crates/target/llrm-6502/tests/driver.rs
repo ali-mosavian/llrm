@@ -2621,12 +2621,13 @@ fn a_local_past_255_bytes_from_rc0_is_still_reached() {
     }
 }
 
-/// A long division called the wide speed routine at any site: its 141 bytes
-/// (423 clocks at 3 a byte) came into programs that divide once, cold
-/// (`compound_assignment_types`: +139 B for -9 clocks). A module links it only
-/// where a division site runs about ten times: in a loop, or in a function
-/// called from one. Elsewhere the compact routine; -Os never has the speed
-/// one.
+/// A long division called the speed routine with the pin-structure wide path
+/// at any site: its 141 bytes (423 clocks at 3 a byte) came into programs that
+/// divide once, cold (`compound_assignment_types`: +139 B for -9 clocks). A
+/// module links it only where its division sites run 3 times (`hotdivision`): in a loop,
+/// or in a function called from one. Elsewhere the routine with the small wide
+/// path (the compact one is 3195 clocks slower on one call); -Os never has a
+/// speed one.
 #[test]
 fn a_long_remainder_calls_the_fast_routine_only_where_it_is_hot() {
     let cold = module("define i32 @f(i32 %a, i32 %b) {\n  %r = srem i32 %a, %b\n  ret i32 %r\n}");
@@ -2642,10 +2643,13 @@ fn a_long_remainder_calls_the_fast_routine_only_where_it_is_hot() {
          %c = icmp ult i32 %j, %n\n  br i1 %c, label %l, label %x\nx:\n  ret i32 %r\n}",
     );
     let text = assembly(&cold, &Request::new(Level::O2)).unwrap();
-    assert!(text.contains("jsr __modsi3\n") && !text.contains("_fast"), "a cold site:\n{text}");
+    assert!(
+        text.contains("jsr __modsi3_fast_small\n") && !text.contains("jsr __modsi3_fast\n"),
+        "a cold site:\n{text}"
+    );
     for (ir, what) in [(&looped, "a loop"), (&from_a_loop, "a function called from a loop")] {
         let text = assembly(ir, &Request::new(Level::O2)).unwrap();
-        assert!(text.contains("__modsi3_fast") && !text.contains("jsr __modsi3\n"), "{what}:\n{text}");
+        assert!(text.contains("jsr __modsi3_fast\n") && !text.contains("_small"), "{what}:\n{text}");
         let small = assembly(ir, &Request::new(Level::Os)).unwrap();
         assert!(small.contains("__modsi3") && !small.contains("_fast"), "{what} at -Os:\n{small}");
     }

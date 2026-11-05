@@ -83,7 +83,8 @@ thread_local! {
     static TUNING: std::cell::Cell<Tuning> = const { std::cell::Cell::new(Tuning::SPEED) };
     static SPIKE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// Whether a long division by a divisor not known to be a byte calls the
-    /// wide speed routine (see [`with_fast_division`]).
+    /// speed routine with the pin-structure wide path, and not the one with
+    /// the small wide path (see [`with_fast_division`]).
     static FAST_DIVISION: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }
 
@@ -3274,12 +3275,13 @@ fn emit_with<const STACK: bool>(
                     };
                     let speed = TUNING.with(|t| t.get()).clocks_per_byte <= 1;
                     let division = matches!(callee, "__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3");
-                    let entry = if division && speed && byte {
+                    let entry = if !speed {
+                        ""
+                    } else if division && byte {
                         "_fast_byte"
-                    } else if speed
-                        && (matches!(callee, "__ashlsi3" | "__lshrsi3" | "__ashrsi3")
-                            || division && FAST_DIVISION.with(|f| f.get()))
-                    {
+                    } else if division && !FAST_DIVISION.with(|f| f.get()) {
+                        "_fast_small"
+                    } else if division || matches!(callee, "__ashlsi3" | "__lshrsi3" | "__ashrsi3") {
                         "_fast"
                     } else {
                         ""
