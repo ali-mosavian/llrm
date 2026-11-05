@@ -29,6 +29,9 @@ order = "right-to-left"
 cleanup = "caller"
 argument_registers = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"]
 float_argument_registers = ["xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7"]
+# An __int128 takes two consecutive free registers (CC_X86_64_I128), else 16 aligned bytes of the stack.
+wide_pairs = [["rdi", "rsi"], ["rsi", "rdx"], ["rdx", "rcx"], ["rcx", "r8"], ["r8", "r9"]]
+wide_stack_align = 16
 sized_arguments = true
 skip_memory = true
 backfill = false
@@ -57,7 +60,7 @@ aggregate_pointer_register = "rdi"
 aggregate_pointer_returned = "rax"
 aggregate_pointer_popped_by = "caller"
 promotion = "slot"
-wide_slots = 1
+wide_slots = 2
 variadic_float = "double"
 # A variadic call tells the callee in AL how many vector registers carry arguments, so its prologue saves them.
 variadic_vector_register = "rax"

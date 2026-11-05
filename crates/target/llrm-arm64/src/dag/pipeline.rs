@@ -260,7 +260,7 @@ impl CombineHooks for Aarch64Lowering {
     ) -> bool {
         matches!(
             op,
-            ISD::Mul | ISD::Sub | ISD::And | ISD::Or | ISD::GlobalAddress | ISD::Shl | ISD::Srl | ISD::Sra | ISD::Rotr
+            ISD::Mul | ISD::Add | ISD::Sub | ISD::And | ISD::Or | ISD::GlobalAddress | ISD::Shl | ISD::Srl | ISD::Sra | ISD::Rotr
         )
     }
 
@@ -283,6 +283,7 @@ impl CombineHooks for Aarch64Lowering {
         match dag.opcode(node) {
             ISD::Mul => super::combine::combine_mul(dag, node, level),
             ISD::GlobalAddress => self.global_address_combine(dag, node),
+            ISD::Add => super::combine::add_combine_for_shifted_operands(dag, node),
             ISD::Sub => super::combine::conditional_sub(dag, node),
             ISD::Shl | ISD::Srl | ISD::Sra | ISD::Rotr if level == CombineLevel::AfterLegalizeDag => {
                 super::combine::shift_amount_mod(dag, node)
@@ -319,6 +320,7 @@ impl LegalizeHooks for Aarch64Lowering {
                 super::lowering::lower_xalu(dag, node)
             }
             ISD::Abs | ISD::AbsMinPoison => super::lowering::lower_abs(dag, node),
+            ISD::VAArg => super::lowering::lower_vaarg(dag, node),
             ISD::BrCond => super::lowering::lower_brcond(dag, node),
             ISD::BrCC => super::lowering::lower_br_cc_node(dag, node),
             ISD::SIntToFp | ISD::UIntToFp => super::lowering::lower_int_to_fp(dag, node),
@@ -483,6 +485,7 @@ pub fn select_block(
     do_instruction_selection_with(dag, &Aarch64Ids::new(), |adapter, node| {
         select_frame_index(adapter, node)
             .or_else(|| select_indexed_load(adapter, node))
+            .or_else(|| super::bitfield::select_bitfield_extract(adapter, node))
             .or_else(|| super::bitfield::select_bitfield_insert_in_zero(adapter, node))
             .or_else(|| super::bitfield::select_bitfield_insert(adapter, node))
             .or_else(|| select_zero(adapter, node))

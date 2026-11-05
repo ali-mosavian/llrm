@@ -183,6 +183,11 @@ pub struct Walk {
     /// The interprocedural step's byte-for-clock rate (None: bytes), which
     /// prices an ArgumentPromotion.
     pub promote_rate: Option<i64>,
+    /// The Simplify list reruns over a body no call was spliced into. Off in
+    /// the second walk (DEVIATE 6502-SZ1): there the rerun stays only where the
+    /// body gets smaller, for Reassociate ranks by the layout and reorders a
+    /// settled chain at no gain (call_keeps +26 B).
+    pub rerun_unchanged: bool,
 }
 
 /// DEVIATE REC-1: the recursion a program is given. `-finline-recursive` asks
@@ -321,7 +326,7 @@ impl ProgramPass for Walk {
                                 decided.as_mut(),
                                 (tti.as_deref().is_some_and(|tti| {
                                     size != crate::inlinecost::CallerSize::Speed
-                                        || tti.speed_inline_milliclocks_per_byte() > 0
+                                        || tti.inline_policy().by_rate > 0
                                 }))
                                 .then_some(&mut trials),
                             )
@@ -446,7 +451,19 @@ impl ProgramPass for Walk {
                             repeats += 1;
                             continue;
                         }
-                        (self.simplify)(module, &mut modules[at], id, "walk.");
+                        if spliced || self.rerun_unchanged {
+                            (self.simplify)(module, &mut modules[at], id, "walk.");
+                        } else if let Some(tti) = tti.as_deref() {
+                            let kept = function_mut(module, id).1.clone();
+                            let before = sized(module, &program.layout, tti, id, false);
+                            (self.simplify)(module, &mut modules[at], id, "walk.again.");
+                            if sized(module, &program.layout, tti, id, false) + GUARD >= before {
+                                *function_mut(module, id).1 = kept;
+                                modules[at].changed(id);
+                                modules[at]
+                                    .invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
+                            }
+                        }
                         if let (Some(before), Some(tti)) = (spliced_body, tti.as_deref()) {
                             // SZ2: each refused site is inlined into the body
                             // as it stood before
@@ -520,7 +537,7 @@ impl ProgramPass for Walk {
                                 // takes a trial that grows the code where the
                                 // clocks it saves are worth the growth.
                                 let rate = if self.speed_rate {
-                                    tti.speed_milliclocks_per_byte().max(tti.speed_inline_milliclocks_per_byte())
+                                    tti.speed_milliclocks_per_byte().max(tti.inline_policy().by_rate)
                                 } else {
                                     0
                                 };
@@ -1132,6 +1149,12 @@ fn function_clocks(
         .sum()
 }
 
+/// Units a rerun of the Simplify list over a settled body must save to stay: one
+/// is the wobble of the operand-sensitive estimate (recmany_o1 "saved" 1 by an
+/// add's operand and kept a Reassociate reorder, +16 B). Of the 75 reruns kept
+/// on the corpus, 14 save one unit and the rest more.
+const GUARD: i64 = 1;
+
 /// SZ2: the code size of body `id`, by the target's cost model for bytes.
 fn body_size(
     module: &Module,
@@ -1139,12 +1162,28 @@ fn body_size(
     tti: &dyn llrm_mir::tti::Tti,
     id: GlobalId,
 ) -> i64 {
+    sized(module, layout, tti, id, true)
+}
+
+/// [`body_size`] with or without its phis: a phi is a copy the allocator
+/// coalesces, and the single-input ones LCSSA left are folded later anyway.
+fn sized(
+    module: &Module,
+    layout: &llrm_mir::datalayout::DataLayout,
+    tti: &dyn llrm_mir::tti::Tti,
+    id: GlobalId,
+    phis: bool,
+) -> i64 {
     let function = module.global(id).function().expect("a body");
     let float =
         |ty: llrm_mir::types::TypeId| llrm_mir::tti::Ty::of(&module.context.types, ty).is_some_and(|ty| ty.is_float());
     function
         .walk()
         .map(|(_, inst)| {
+            let operation = function.instruction(inst);
+            if !phis && matches!(operation.opcode, llrm_mir::opcode::Opcode::Phi) {
+                return 0;
+            }
             let units = llrm_mir::instructioncost::instruction_cost(
                 tti,
                 &module.context,
@@ -1155,7 +1194,6 @@ fn body_size(
                 llrm_mir::tti::CostKind::CodeSize,
             )
             .value;
-            let operation = function.instruction(inst);
             let moves = matches!(
                 operation.opcode,
                 llrm_mir::opcode::Opcode::Load { .. }

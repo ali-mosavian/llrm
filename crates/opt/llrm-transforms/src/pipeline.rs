@@ -144,7 +144,7 @@ use crate::{
     fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs, inferspace,
     inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam,
     loopunrollpass, mem2reg, memcpyopt, mldstmotion, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg,
-    switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window,
+    switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window, zeromerge,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -230,6 +230,8 @@ pub struct Options {
     /// has it (`isLoadExtLegal`); off for a target that has not, where the
     /// wider compare costs more than the extension saved.
     pub extload: bool,
+    /// `zeromerge`: zeroed locals that follow each other in the entry block share one fill. llrm only (DEVIATE D1 of `zeromerge.rs`); runs where a pointer is 16 bits. `-fllrm-zero-merge`.
+    pub zero_merge: bool,
     /// `TypePromotion`, which the pin runs before CodeGenPrepare where the
     /// target asks (`-fllrm-typepromotion`).
     pub typepromotion: bool,
@@ -237,6 +239,11 @@ pub struct Options {
     /// off); `strength` turns it off with the other address passes.
     pub lsr: bool,
     pub unroll: bool,
+    /// A second CGSCC walk after the dead globals and loops are gone: the first
+    /// walk prices a callee before the folds that empty it (a static callee
+    /// whose last caller folds away). llrm only; off by default, the 6502 turns
+    /// it on. DEVIATE 6502-SZ1, exit 2026-11-20.
+    pub second_inline: bool,
     /// clang's `PTO.LoopUnrolling` (`UnrollLoops`, on above -O1,
     /// [CompilerInvocation.cpp#L1936](https://github.com/llvm/llvm-project/blob/d1106deb71cc/clang/lib/Frontend/CompilerInvocation.cpp#L1936)):
     /// off, the full unroll of the LLVM order only takes a loop that asks
@@ -327,9 +334,11 @@ impl Default for Options {
             strength: true,
             cgpaddr: true,
             extload: true,
+            zero_merge: true,
             typepromotion: true,
             lsr: true,
             unroll: true,
+            second_inline: false,
             loop_unrolling: true,
             peel: true,
             loopidioms: true,
@@ -505,6 +514,7 @@ impl Options {
             "indvars" | "window" | "gepoffset" => self.strength,
             "cgpaddr" | "cgpselectarms" => self.strength && self.cgpaddr,
             "extload" => self.extload,
+            "zeromerge" => self.zero_merge,
             "typepromotion" => self.strength && self.typepromotion,
             "unroll" => self.unroll,
             "peel" => self.peel,
@@ -1228,6 +1238,7 @@ pub fn recorded(
             manager.add_program(crate::walk::Walk {
                 inline: applied.options.inline,
                 speed_rate: applied.options.prices_bytes(),
+                rerun_unchanged: true,
                 promote_rate: Some(if applied.options.prefers_size() {
                     0
                 } else {
@@ -1317,6 +1328,26 @@ pub fn recorded(
     // GlobalDCE after inlining.
     manager.add_program(globaldce::GlobalDce);
     manager.add_program(availableexternally::EliminateAvailableExternally);
+    if applied.options.second_inline && applied.options.inline.limit != 0 {
+        manager.compute::<GlobalsAA>();
+        manager.compute::<GlobalsModRefAnalysis>();
+        let mut simplify = Fixed::linear(&walked("walk2"), Phase::Simplify);
+        manager.add_program(crate::walk::Walk {
+            inline: applied.options.inline,
+            speed_rate: applied.options.prices_bytes(),
+            rerun_unchanged: false,
+            promote_rate: Some(if applied.options.prefers_size() {
+                0
+            } else {
+                applied.options.limits.milliclocks_per_byte
+            }),
+            simplify: Box::new(move |module, analyses, id, stage| {
+                TRIGGER.with(|trigger| *trigger.borrow_mut() = stage.to_owned());
+                rerun(module, analyses, id, &mut simplify, true).unwrap_or_else(|error| panic!("pipeline: {error}"));
+                TRIGGER.with(|trigger| trigger.borrow_mut().clear());
+            }),
+        });
+    }
     // `ReversePostOrderFunctionAttrsPass` (PassBuilderPipelines.cpp:1542).
     manager.add_module(crate::rpoattrs::ReversePostOrderFunctionAttrs);
     // Once the callers that remain are the ones that stay: an internal function
@@ -1390,6 +1421,10 @@ pub fn recorded(
     // extension (`ExtendUsesToFormExtLoad`), which isel cannot.
     if applied.options.wanted("extload") {
         manager.add(extload::ExtLoad);
+    }
+    // DEVIATE D1 of `zeromerge`: after SROA and loop idioms made the fills.
+    if applied.options.wanted("zeromerge") {
+        manager.add(zeromerge::ZeroMerge);
     }
     // Last of the passes that reshape the body, as gcc's `pass_lower_switch`
     // follows its optimizations.

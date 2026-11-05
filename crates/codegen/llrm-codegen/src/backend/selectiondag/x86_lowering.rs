@@ -197,6 +197,20 @@ impl CombineHooks for X86Lowering<'_> {
         true
     }
 
+    /// `visitBRCOND`'s `rebuildSetCC`: `!bad` on an `i1` global is `cmp byte [bad], 1; jne`,
+    /// not `mov al; not al; test al, 1; jne` (jpeg_fixed `-Os` m64, 2 sites, 8 B). The
+    /// m16 judging cost a byte, so only the 64-bit lowering asks.
+    /// DEVIATE: off at m16 and m32. Exit 2026-12-01.
+    fn rebuild_brcond_condition(&self) -> bool {
+        self.zext_free
+    }
+
+    /// `visitAND`'s `(and (extload i1), 1)` is a `zextload`, so the branch above
+    /// compares the loaded byte without `and al, 1`. DEVIATE: m64 only, with it.
+    fn fold_and_of_extload(&self) -> bool {
+        self.zext_free
+    }
+
     fn fold_xor_of_and_with_mask(&self) -> bool {
         true
     }

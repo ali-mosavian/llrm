@@ -241,30 +241,70 @@ impl LiveIntervals {
         let instr = one.id();
         // A def that keeps the rest of the value reads it (`readsReg()`).
         for (at, &value) in one.defines.iter().enumerate() {
-            let reads_reg = one.partial_defs.contains(&value);
             // a value defined twice (both bytes of a pair) names a lane each time
             let nth = one.defines[..at].iter().filter(|v| **v == value).count();
-            let lanes = one
-                .def_lanes
-                .iter()
-                .filter(|(v, _)| *v == value)
-                .nth(nth)
-                .map_or(Operand::ALL, |(_, lanes)| *lanes);
-            let early_clobber = one.early_clobbers.contains(&value);
-            self.push_operand(value, Operand { instr, is_def: true, reads_reg, early_clobber, lanes });
+            self.push_def(one, instr, value, nth);
         }
         for &value in &one.uses {
-            let lanes = read_lanes(one, value);
-            self.push_operand(value, Operand { instr, is_def: false, reads_reg: true, early_clobber: false, lanes });
+            self.push_use(one, instr, value);
         }
         // An operand flagged undef names the register and reads nothing
         // (`MachineOperand::isUndef`): it starts and extends no live range.
         for &value in &one.undefs {
-            self.push_operand(
-                value,
-                Operand { instr, is_def: false, reads_reg: false, early_clobber: false, lanes: Operand::ALL },
-            );
+            self.push_undef(instr, value);
         }
+    }
+
+    /// The operands of `value` alone, in the order `add_operands` puts them.
+    fn add_value_operands(
+        &mut self,
+        one: &Insn,
+        value: u32,
+    ) {
+        let instr = one.id();
+        for (nth, &named) in one.defines.iter().filter(|named| **named == value).enumerate() {
+            self.push_def(one, instr, named, nth);
+        }
+        for &named in one.uses.iter().filter(|named| **named == value) {
+            self.push_use(one, instr, named);
+        }
+        for &named in one.undefs.iter().filter(|named| **named == value) {
+            self.push_undef(instr, named);
+        }
+    }
+
+    fn push_def(
+        &mut self,
+        one: &Insn,
+        instr: InstrKey,
+        value: u32,
+        nth: usize,
+    ) {
+        let reads_reg = one.partial_defs.contains(&value);
+        let lanes = one.def_lanes.iter().filter(|(v, _)| *v == value).nth(nth).map_or(Operand::ALL, |(_, lanes)| *lanes);
+        let early_clobber = one.early_clobbers.contains(&value);
+        self.push_operand(value, Operand { instr, is_def: true, reads_reg, early_clobber, lanes });
+    }
+
+    fn push_use(
+        &mut self,
+        one: &Insn,
+        instr: InstrKey,
+        value: u32,
+    ) {
+        let lanes = read_lanes(one, value);
+        self.push_operand(value, Operand { instr, is_def: false, reads_reg: true, early_clobber: false, lanes });
+    }
+
+    fn push_undef(
+        &mut self,
+        instr: InstrKey,
+        value: u32,
+    ) {
+        self.push_operand(
+            value,
+            Operand { instr, is_def: false, reads_reg: false, early_clobber: false, lanes: Operand::ALL },
+        );
     }
 
     fn push_operand(
@@ -290,23 +330,32 @@ impl LiveIntervals {
         llrm_mir::counts::bump(llrm_mir::counts::Event::LirOperandListEdits);
         let instr = one.id();
         for &value in one.defines.iter().chain(&one.uses).chain(&one.undefs) {
-            // A value named twice finds its slots gone the second time.
-            let Some(mine) = self.slots.remove(&(value, instr)) else { continue };
-            let list = self.operands.get_mut(&value).expect("a slot names a listed operand");
-            // Highest first: the operand swapped in is then never one of ours.
-            for at in mine.descending() {
-                let at = at as usize;
-                let last = list.len() - 1;
-                list.swap_remove(at);
-                if at != last {
-                    let moved = self.slots.get_mut(&(value, list[at].instr)).expect("a listed operand has a slot");
-                    *moved.iter_mut().find(|slot| **slot as usize == last).expect("the slot of the last operand") =
-                        at as u32;
-                }
+            self.remove_value_operands(value, instr);
+        }
+    }
+
+    /// The operands of `value` in `instr` unlinked. A value named twice finds
+    /// its slots gone the second time.
+    fn remove_value_operands(
+        &mut self,
+        value: u32,
+        instr: InstrKey,
+    ) {
+        let Some(mine) = self.slots.remove(&(value, instr)) else { return };
+        let list = self.operands.get_mut(&value).expect("a slot names a listed operand");
+        // Highest first: the operand swapped in is then never one of ours.
+        for at in mine.descending() {
+            let at = at as usize;
+            let last = list.len() - 1;
+            list.swap_remove(at);
+            if at != last {
+                let moved = self.slots.get_mut(&(value, list[at].instr)).expect("a listed operand has a slot");
+                *moved.iter_mut().find(|slot| **slot as usize == last).expect("the slot of the last operand") =
+                    at as u32;
             }
-            if list.is_empty() {
-                self.operands.remove(&value);
-            }
+        }
+        if list.is_empty() {
+            self.operands.remove(&value);
         }
     }
 
@@ -809,6 +858,33 @@ impl LiveIntervals {
         self.note(|| Change::Took(block, Arc::clone(&before)));
         llrm_mir::counts::bump(llrm_mir::counts::Event::LirOperandListEdits);
         self.add_operands(&new);
+        self.note(|| Change::Put(block, Arc::clone(&new)));
+        self.insns.insert(old, Arc::clone(&new));
+        self.blocks[block][pos] = new;
+    }
+
+    /// [`Self::rename_instr`] of a rename of `from` to `to` alone (`setReg` on
+    /// the operands of one register): only the operand lists of those two
+    /// values are edited, as the pin's use-def chains unlink and link those
+    /// two. The operands of every other value stay where they are.
+    pub fn rename_value_in_instr(
+        &mut self,
+        block: usize,
+        old: InstrKey,
+        from: u32,
+        to: u32,
+        new: Arc<Insn>,
+    ) {
+        debug_assert_eq!(new.id(), old);
+        debug_assert!(!new.defines.iter().chain(&new.uses).chain(&new.undefs).any(|value| *value == from));
+        llrm_mir::counts::bump(llrm_mir::counts::Event::LirRewrites);
+        let pos = self.position_of(block, old);
+        let before = Arc::clone(&self.blocks[block][pos]);
+        self.remove_value_operands(from, old);
+        self.remove_value_operands(to, old);
+        self.note(|| Change::Took(block, Arc::clone(&before)));
+        llrm_mir::counts::bump(llrm_mir::counts::Event::LirOperandListEdits);
+        self.add_value_operands(&new, to);
         self.note(|| Change::Put(block, Arc::clone(&new)));
         self.insns.insert(old, Arc::clone(&new));
         self.blocks[block][pos] = new;

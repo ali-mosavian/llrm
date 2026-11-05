@@ -67,6 +67,9 @@ struct Found {
     /// The low op's result copy: the new pair goes behind it.
     low_out: usize,
     subtract: bool,
+    /// A `cp16c` that reads the compare's flags too (a long's order chained
+    /// on this word): the compare stays, ahead of it.
+    chained: Option<usize>,
 }
 
 fn virt(operand: &Operand) -> Option<u32> {
@@ -161,11 +164,19 @@ fn recognised(
         let Some(low) = low else { continue };
         let low_out = low + 1;
         // the compare's flags are read by the byte alone
-        let others = insts[cp + 1..]
-            .iter()
-            .enumerate()
-            .take_while(|(_, i)| !i.sets_flags)
-            .any(|(at, i)| i.reads_flags && cp + 1 + at != set);
+        // (the instruction that sets them again may read them first: `cp16c`)
+        let (mut others, mut chained) = (false, None);
+        for (at, i) in insts[cp + 1..].iter().enumerate() {
+            if i.reads_flags && cp + 1 + at != set {
+                match i.kind {
+                    Kind::Op("CP16C" | "CP16Ci") => chained = Some(cp + 1 + at),
+                    _ => others = true,
+                }
+            }
+            if i.sets_flags {
+                break;
+            }
+        }
         if others {
             continue;
         }
@@ -237,6 +248,7 @@ fn recognised(
             last: [into, f],
             low_out,
             subtract,
+            chained,
         });
     }
     None
@@ -248,7 +260,8 @@ fn apply(
     found: Found,
 ) {
     let flags = Reg::Phys(reg::FLAGS);
-    let Found { high, added: commuted, hoist, carry, last, low_out, subtract } = found;
+    let Found { high, added: commuted, hoist, carry, last, low_out, subtract, chained } = found;
+    let kept = chained.map(|at| (insts[carry[0]].clone(), insts[at].clone()));
     // the low op now leaves its carry for the pair behind it
     let low = low_out - 1;
     insts[low].operands.push(Operand::Def(flags));
@@ -291,4 +304,11 @@ fn apply(
     }
     added.extend([high_in, wide, result]);
     insts.splice(behind..behind, added);
+    // the compare the chain reads, again, right before it
+    if let Some((compare, reader)) = kept {
+        let at = insts.iter().position(|i| i.kind == reader.kind && i.operands == reader.operands);
+        if let Some(at) = at {
+            insts.insert(at, compare);
+        }
+    }
 }

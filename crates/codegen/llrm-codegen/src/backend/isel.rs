@@ -1086,6 +1086,8 @@ pub(super) fn size_of(
         (_, Type::Struct { .. } | Type::Named(_)) => {
             u32::try_from(layout.store_size(&module.context.types, ty)).map_err(|_| Unselected("a struct".into()))
         }
+        // Two eightbytes where the datalayout has a legal i64.
+        (_, Type::Int(128)) if layout.largest_legal_integer() >= 64 => Ok(16),
         _ => width_of(module, layout, ty),
     }
 }

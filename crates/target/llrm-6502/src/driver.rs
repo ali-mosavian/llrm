@@ -191,6 +191,8 @@ fn program(
     if request.level != Level::O0 {
         let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
         let mut options = request.level.options();
+        options.second_inline = !request.passes.iter().any(|flag| flag == "-fno-second-inline")
+            && std::env::var_os("LLRM_6502_NO_ROUND2").is_none();
         for flag in &request.passes {
             apply_pass_flag(&mut options, flag);
         }
@@ -200,7 +202,7 @@ fn program(
             && std::env::var_os("LLRM_6502_NO_STATIC_LOCALS").is_none();
         if static_locals {
             for module in &mut program.modules {
-                crate::staticlocals::applied(module)?;
+                crate::staticlocals::applied(module, request.level != Level::Os)?;
             }
         }
     }

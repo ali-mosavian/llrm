@@ -355,6 +355,20 @@ impl Printer<'_> {
                 let to = name_of(self, 0)?;
                 self.push(format!("{mnemonic} {to}"));
             }
+            // the word stepped when the condition holds: `jr` over the step
+            // on its opposite (a step leaves the flags alone)
+            "INC16c" | "DEC16c" => {
+                let Some(Operand::Imm(cond)) = inst.operands.get(2) else {
+                    return Err("a conditional step without a condition".to_owned());
+                };
+                let opposite =
+                    ["z", "nz", "c", "nc"].get(*cond as usize).ok_or("a conditional step on an unknown condition")?;
+                let to = name_of(self, 0)?;
+                let skip = format!("{}$", self.out.iter().filter(|line| !matches!(line, Line::Loc(_))).count());
+                self.push(format!("jr {opposite}, {skip}"));
+                self.push(format!("{} {to}", op[..3].to_lowercase()));
+                self.out.push(Line::Label(skip));
+            }
             "INC16x2" | "INC16x3" | "DEC16x2" | "DEC16x3" => {
                 let mnemonic = op[..3].to_lowercase();
                 let to = name_of(self, 0)?;
@@ -556,7 +570,7 @@ impl Printer<'_> {
                 // half-carry flags, which no branch here reads.
                 self.push(if value == "#0" { "or a, a".to_owned() } else { format!("cp a, {value}") });
             }
-            "CP16" | "CP16i" => self.compare16(inst, rest)?,
+            "CP16" | "CP16i" | "CP16C" | "CP16Ci" => self.compare16(inst, rest)?,
             // `ld` leaves the flags alone: the byte is 1, and 0 when the
             // condition fails
             "SETCC8" => {
@@ -1018,10 +1032,12 @@ impl Printer<'_> {
         let (mut carry, mut zero, mut other) = (false, false, None);
         for one in &self.flag_readers(rest) {
             {
-                match (one.kind, one.operands.get(1)) {
-                    (Kind::Op("SETCC8"), Some(Operand::Imm(2 | 3)))
-                    | (Kind::Op("JPC" | "JPNC" | "RETC" | "RETNC"), _) => carry = true,
-                    (Kind::Op("SETCC8"), Some(Operand::Imm(0 | 1)))
+                // a conditional step names its condition after the word
+                let condition = if matches!(one.kind, Kind::Op("INC16c" | "DEC16c")) { 2 } else { 1 };
+                match (one.kind, one.operands.get(condition)) {
+                    (Kind::Op("SETCC8" | "INC16c" | "DEC16c"), Some(Operand::Imm(2 | 3)))
+                    | (Kind::Op("JPC" | "JPNC" | "RETC" | "RETNC" | "CP16C" | "CP16Ci"), _) => carry = true,
+                    (Kind::Op("SETCC8" | "INC16c" | "DEC16c"), Some(Operand::Imm(0 | 1)))
                     | (Kind::Op("JPZ" | "JPNZ" | "RETZ" | "RETNZ"), _) => zero = true,
                     (Kind::Op(name), _) => other = Some(name),
                     (Kind::Copy, _) => {}
@@ -1033,6 +1049,26 @@ impl Printer<'_> {
         }
         // no reader: a wide compare whose later word compare decides on its own
         if !(carry || zero) {
+            return Ok(());
+        }
+        // the next word of a long: the borrow of the one before comes in
+        if matches!(inst.kind, Kind::Op("CP16C" | "CP16Ci")) {
+            if zero {
+                return Err("CP16C read for zero".into());
+            }
+            self.push(format!("ld a, {}", name(al)));
+            self.push(format!("sbc a, {bl}"));
+            self.push(format!("ld a, {}", name(ah)));
+            self.push(format!("sbc a, {bh}"));
+            // signed: the sign, corrected where the subtract overflowed, into
+            // the carry
+            if matches!(inst.operands.get(4), Some(Operand::Imm(1))) {
+                let fixed = format!("{}$", self.out.iter().filter(|line| !matches!(line, Line::Loc(_))).count() + 1);
+                self.push(format!("jp po, {fixed}"));
+                self.push("xor a, #128");
+                self.out.push(Line::Label(fixed));
+                self.push("rlca");
+            }
             return Ok(());
         }
         let skip = format!("{}$", self.out.iter().filter(|line| !matches!(line, Line::Loc(_))).count());
@@ -2052,6 +2088,22 @@ fn flag_and_b_free(text: &str) -> bool {
 /// the stack (the caller cleans up after it).
 fn tail_calls(function: &MFunction) -> MFunction {
     let mut function = function.clone();
+    // The frame is gone when the callee runs, so a local whose address was
+    // taken may be read by it; LLVM marks no such call `tail`.
+    let escapes = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .any(
+            |inst| inst.kind == Kind::Op("LEAFI")
+                && matches!(
+                    inst.operands.get(1),
+                    Some(Operand::Frame(index)) if function.locals.iter().any(|&(local, ..)| local == *index)
+                ),
+        );
+    if escapes {
+        return function;
+    }
     for block in &mut function.blocks {
         let insts = &block.insts;
         let n = insts.len();
@@ -2064,7 +2116,11 @@ fn tail_calls(function: &MFunction) -> MFunction {
             {
                 let symbol = insts[at].operands.first().cloned();
                 if let Some(symbol @ Operand::Symbol(..)) = symbol {
-                    let mut tail = Inst::new(Kind::Op("TAILCALL"), vec![symbol]);
+                    // the call's argument registers stay read: the copies that
+                    // fill them are not dead
+                    let mut operands = insts[at].operands.clone();
+                    operands[0] = symbol;
+                    let mut tail = Inst::new(Kind::Op("TAILCALL"), operands);
                     tail.terminator = true;
                     tail.barrier = true;
                     block.insts.truncate(at);

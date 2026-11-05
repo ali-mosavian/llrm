@@ -2785,11 +2785,8 @@ fn an_x86_64_module_of_windows_or_macos_is_written_in_that_systems_object_format
             "target datalayout = \"e-m:{mangling}-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
              target triple = \"{triple}\"\ndeclare void @g()\ndefine void @f() {{\n  call void @g()\n  ret void\n}}\n"
         );
-        // Windows is refused until its ABI rows land; the flag takes the object
-        // anyway, for the unwind comparison.
-        let asked = if mangling == "w" { &["-fallow-pending-abi"][..] } else { &[] };
         let (built, chosen) =
-            crate::llc::compiled(&flags(asked), &text, "f").unwrap_or_else(|why| panic!("{triple}: {why}"));
+            crate::llc::compiled(&flags(&[]), &text, "f").unwrap_or_else(|why| panic!("{triple}: {why}"));
         assert_eq!(chosen, format, "{triple}");
         let object = llrm_codegen::backend::objbuild::written_in(
             &built,
@@ -2803,15 +2800,16 @@ fn an_x86_64_module_of_windows_or_macos_is_written_in_that_systems_object_format
     }
 }
 
-/// Windows x86-64 IR compiled with System V argument registers and a red zone:
-/// wrong code, written without a word. The target states what is pending and
-/// the driver refuses until the Win64 rows land.
+/// Windows x86-64 IR was refused while the target lacked its ABI ("the Win64
+/// calling convention ... not carried"); the rows have landed, so it compiles
+/// with no flag, and with Win64's registers.
 #[test]
-fn a_windows_module_is_refused_while_the_target_lacks_its_abi() {
+fn a_windows_module_compiles_with_the_win64_abi_and_no_flag() {
     let text = "target datalayout = \"e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
-                target triple = \"x86_64-pc-windows-msvc\"\ndefine void @f() {\n  ret void\n}\n";
-    let why = crate::llc::compiled(&flags(&[]), text, "f").unwrap_err();
-    assert!(why.contains("Win64 calling convention"), "{why}");
+                target triple = \"x86_64-pc-windows-msvc\"\ndefine i64 @f(i64 %a, i64 %b) {\n  %r = add i64 %a, %b\n  ret i64 %r\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&[]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("rcx") && listing.contains("rdx") && !listing.contains("rdi"), "{listing}");
 }
 
 /// An x86-64 Mach-O object named its symbols `f` and `g`; the system's linker
@@ -2843,15 +2841,15 @@ fn a_triple_with_the_os_version_names_the_same_system() {
     assert!(crate::by_triple("x86_64-apple-macosx10.4.0").is_some());
 }
 
-/// Matching a triple past its OS version must not open the Win64 hole the
-/// pending-ABI gate closes: clang writes `x86_64-pc-windows-msvc19.0.0`, and
-/// that module is refused like the bare triple.
+/// clang writes `x86_64-pc-windows-msvc19.0.0`: that module is the Windows
+/// system too, and takes Win64's registers like the bare triple.
 #[test]
-fn a_versioned_windows_triple_is_refused_while_the_target_lacks_its_abi() {
+fn a_versioned_windows_triple_takes_the_win64_abi() {
     let text = "target datalayout = \"e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
-                target triple = \"x86_64-pc-windows-msvc19.0.0\"\ndefine void @f() {\n  ret void\n}\n";
-    let why = crate::llc::compiled(&flags(&[]), text, "f").unwrap_err();
-    assert!(why.contains("Win64 calling convention"), "{why}");
+                target triple = \"x86_64-pc-windows-msvc19.0.0\"\ndefine i64 @f(i64 %a, i64 %b) {\n  %r = add i64 %a, %b\n  ret i64 %r\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&[]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("rcx") && listing.contains("rdx") && !listing.contains("rdi"), "{listing}");
 }
 
 /// The pin's clang writes `x86_64-apple-macos11` for the OS that compact unwind
@@ -3067,6 +3065,24 @@ fn a_jump_table_index_is_not_zero_extended_again_at_m64() {
     assert!(moves.is_empty(), "{listing}");
 }
 
+/// `while (h() != 255 && !bad)` on an `i1` global was `mov al, bad; not al;
+/// test al, 1; jne` (11 B); the pin's `rebuildSetCC` makes it `cmp bad, 1; jne`
+/// (jpeg_fixed `-Os` m64, two sites).
+#[test]
+fn a_branch_on_a_negated_bool_global_is_one_compare_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @bad = global i1 false\n\
+                declare i32 @h()\n\
+                define void @f() {\n\
+                br label %lp\nlp:\n  %v = call i32 @h()\n  %c = icmp eq i32 %v, 255\n  br i1 %c, label %x, label %t\n\
+                t:\n  %b = load i1, ptr @bad\n  br i1 %b, label %x, label %lp\nx:\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("not al"), "{listing}");
+    assert!(listing.contains("cmp byte ptr bad, 1"), "{listing}");
+}
+
 /// The locals' base was aligned to the stack's 16 below the pushed registers
 /// (the pin aligns each object to its own and only the total to the stack):
 /// a function with one int local and two saved registers had `sub rsp, 24`
@@ -3137,6 +3153,29 @@ fn a_nest_with_loads_invariant_in_the_outer_loop_is_jammed_at_o3_m64() {
     assert!(tripled.count() >= 2, "{listing}");
 }
 
+/// fib at m64 -O2 was copied into itself to the 150 `gcc_insns` the pass allowed
+/// (25941 clocks, 556 B) where gcc's cap is 450 (10793 clocks, 1028 B); -O3 keeps 150
+/// (m32's rectwo and bintree are worse with 450 there).
+#[test]
+fn fib_is_copied_into_itself_to_gccs_growth_cap_at_o2_only_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i32 @fib(i32 %n) {\n\
+                  %c = icmp slt i32 %n, 2\n\
+                  br i1 %c, label %base, label %rec\n\
+                base:\n  ret i32 %n\n\
+                rec:\n\
+                  %a = sub i32 %n, 1\n  %x = call i32 @fib(i32 %a)\n\
+                  %b = sub i32 %n, 2\n  %y = call i32 @fib(i32 %b)\n\
+                  %r = add i32 %x, %y\n  ret i32 %r\n}\n";
+    let calls = |level: &str| {
+        let (built, _) = compiled(&flags(&["-m64", level, "--isel=dag"]), text, "fib").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap().matches("call fib").count()
+    };
+    let (o2, o3) = (calls("-O2"), calls("-O3"));
+    assert!(o2 > o3, "-O2 made {o2} calls of fib, -O3 {o3}");
+}
+
 /// An `i32` divided by a constant at m64 was `mov ecx, 0xcccccccd; mul ecx;
 /// shr edx, 3` (the one-operand `mul`, 4 clocks, edx:eax); the pin widens it
 /// to `imul rax, rcx; shr rax, 35` (switch -O2: 31690 cycles, clang 27667).
@@ -3162,6 +3201,32 @@ fn a_signed_i32_division_by_ten_merges_its_shifts_at_m64() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("sar rax, 34"), "{listing}");
     assert!(!listing.contains("shr rax, 32"), "{listing}");
+}
+
+/// Static code (no "PIC Level" flag) at m64 made the address of a global a
+/// `lea reg, [rip+sym]` (7 bytes) where the pin's `MOV32ri64` is `mov r32,
+/// sym` (5 bytes, R_X86_64_32): jpeg_fixed -Os had 20 of them.
+#[test]
+fn the_address_of_a_global_in_static_code_at_m64_is_a_dword_move() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @arr = internal global [100 x i32] zeroinitializer\n\
+                declare void @use(ptr)\n\
+                define void @f() {\n  call void @use(ptr @arr)\n  ret void\n}\n\
+                !llvm.module.flags = !{!0}\n!0 = !{i32 7, !\"uwtable\", i32 2}\n";
+    let (built, format) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let bytes = llrm_codegen::backend::objbuild::written_in(
+        &built,
+        "f.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .unwrap();
+    // `mov edi, imm32` (BF) against `lea rdi, [rip+disp32]` (48 8D 3D).
+    assert!(bytes.windows(5).any(|code| code == [0xBF, 0, 0, 0, 0]), "no `mov edi, sym`: {listing}");
+    assert!(!bytes.windows(3).any(|code| code == [0x48, 0x8D, 0x3D]), "a `lea rdi, [rip+sym]`: {listing}");
 }
 
 /// A local declared `align 16` sat at `[rsp+4]`: the frame clamped every
@@ -3603,6 +3668,35 @@ fn a_copy_of_a_full_width_value_stays_a_qword_copy_at_m64() {
     let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("mov rbx, rdi") && !listing.contains("mov ebx, edi"), "{listing}");
+}
+
+/// SysV x86-64 passes an `i128` in two consecutive registers and returns it in
+/// RAX:RDX; with fewer than two left it takes 16 aligned bytes of the stack.
+/// It was refused ("a i128 value"), and with only the size known the second
+/// half was read from the first one's bytes.
+#[test]
+fn a_sysv_i128_argument_takes_two_registers_or_sixteen_aligned_stack_bytes() {
+    let listing_of = |body: &str, name: &str| {
+        let text = format!("{SYSV}{body}");
+        let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &text, name).unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let add = listing_of("define i128 @f(i128 %a, i128 %b) {\n  %r = add i128 %a, %b\n  ret i128 %r\n}\n", "f");
+    assert!(add.contains("adc") && !add.contains("[rsp"), "registers rdi:rsi and rdx:rcx: {add}");
+    // Five integers leave R9 alone: the pair goes to the stack, the next
+    // integer takes R9.
+    let spilled = listing_of(
+        "define i128 @f(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i128 %x, i64 %g) {\n  %p = add i128 %x, 1\n  %q = zext i64 %g to i128\n  %r = add i128 %p, %q\n  ret i128 %r\n}\n",
+        "f",
+    );
+    assert!(spilled.contains("[rsp+8]") && spilled.contains("[rsp+16]") && spilled.contains("r9"), "{spilled}");
+    // A seventh integer on the stack leaves the pair 8 bytes off its
+    // 16-byte alignment: it skips them.
+    let aligned = listing_of(
+        "define i128 @f(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i64 %f, i64 %g, i128 %h) {\n  %p = zext i64 %g to i128\n  %r = add i128 %h, %p\n  ret i128 %r\n}\n",
+        "f",
+    );
+    assert!(aligned.contains("[rsp+8]") && aligned.contains("[rsp+24]") && aligned.contains("[rsp+32]"), "{aligned}");
 }
 
 /// Win64 puts argument `n` in RCX, RDX, R8, R9 by position, the fifth on the

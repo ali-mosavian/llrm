@@ -70,6 +70,7 @@ const UNOPTIMIZED: &[&str] = &[
     "OptimizePHIs",
     "LateCleanup",
     "MachineCombiner",
+    "CmovConversion",
     "PushFold",
     "LoadFold",
     "FixupSetCC",
@@ -105,6 +106,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("MachineSink", "machinesink@4"),
     ("PeepholeOptimizer", "peepholeopt@4"),
     ("MachineCombiner", "combiner@4"),
+    ("CmovConversion", "cmovconversion@4"),
     ("LiveRangeShrink", "liverangeshrink@4"),
     ("MachineScheduler", "machinesched@5"),
     ("FixupSetCC", "fixupsetcc@5"),
@@ -184,6 +186,9 @@ pub fn machine_with<'a>(
         // addILPOpts): a chain of one integer operation rebuilt so its late
         // operand joins last.
         Box::new(crate::backend::combiner::MachineCombiner),
+        // On SSA, right after it (the pin's addILPOpts): a conditional move of
+        // a load, or one that waits on its condition in a loop, is a branch.
+        Box::new(crate::backend::cmovconversion::CmovConversion { cpu: target }),
         // On SSA, a loop-invariant computation in the preheader (the pin:
         // EarlyMachineLICM, ahead of MachineCSE).
         Box::new(crate::backend::machinelicm::MachineLicm {

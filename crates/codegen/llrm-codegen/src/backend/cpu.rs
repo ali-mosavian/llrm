@@ -116,6 +116,8 @@ pub struct Profile {
     pub bsf_rep_prefix: bool,
     /// `getPrefLoopAlignment` as a power of two; 0: loops are not aligned.
     pub loop_alignment: u8,
+    /// `Target::loop_alignment_max_skip`.
+    pub loop_max_skip: u8,
     pub call_register_capacity: i64,
     /// The floating values it holds in registers at once.
     pub float_register_capacity: i64,
@@ -153,6 +155,8 @@ pub struct Profile {
     /// target states a smaller bound than the pin's (`timings.times`);
     /// none: the pin's.
     pub tail_dup_threshold: Option<usize>,
+    /// Clocks a mispredicted branch costs, where the target states it.
+    pub mispredict_penalty: Option<i64>,
     /// `-fexcess-precision=standard` (`-ffloat-store`): a float conversion
     /// rounds to its type, where otherwise x87 keeps the wider value in its
     /// register, as gcc's `-fexcess-precision=fast` does.
@@ -351,6 +355,7 @@ impl Profile {
             operand_bytes: arch.operand_bytes(),
             bsf_rep_prefix: arch.bsf_rep_prefix(),
             loop_alignment: arch.pref_loop_alignment(),
+            loop_max_skip: arch.loop_alignment_max_skip(),
             call_register_capacity: arch.callee_saved().len() as i64,
             float_register_capacity: arch.float_stack() as i64,
             address_scales: BTreeSet::from([1]),
@@ -367,6 +372,7 @@ impl Profile {
             optimized: true,
             aggressive: false,
             tail_dup_threshold: None,
+            mispredict_penalty: None,
             float_store: false,
             rounds_float_spills: false,
             stable_loads: true,
@@ -554,6 +560,7 @@ fn _profile(
         _latencies: table.latency.clone(),
         address_prefix_stall: table.lcp_stall,
         tail_dup_threshold: table.tail_dup_placement_threshold.map(|n| n.max(0) as usize),
+        mispredict_penalty: table.mispredict_penalty,
         ..Profile::new(arch, name, table.issue, table.in_order, table.prefix, table.partial_stall)
     })
 }

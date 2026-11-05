@@ -396,6 +396,9 @@ fn allocate_once(
     if std::env::var("LLRM_NO_Z80_STEP").is_err() {
         crate::step::step_by_small_constants(&mut function);
     }
+    if std::env::var("LLRM_NO_Z80_BUMP").is_err() {
+        crate::bump::step_by_flags(&mut function);
+    }
     sink_copies_before_allocation(&mut function);
     if std::env::var("LLRM_NO_Z80_FORWARD").is_err() {
         crate::forward::read_pairs_from_their_registers(&mut function);
@@ -1325,6 +1328,21 @@ fn use_lanes_once(
                         }),
                 );
             if clobbered {
+                at += 1;
+                continue;
+            }
+            // the byte's own register may be read by an instruction that names
+            // it, a call's argument whose copy allocation made the identity
+            let own = register(Reg::Virt(byte));
+            let overlaps = <Z80Registers as llrm_spike_mf::Target>::overlaps;
+            let mut named = false;
+            for later in &insts[at + 1..] {
+                named |= later.operands.iter().any(|o| matches!(o, Operand::Use(Reg::Phys(id)) if overlaps(*id, own)));
+                if named || later.operands.iter().any(|o| matches!(o, Operand::Def(r) if overlaps(register(*r), own))) {
+                    break;
+                }
+            }
+            if named {
                 at += 1;
                 continue;
             }

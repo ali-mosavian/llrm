@@ -118,6 +118,12 @@ pub struct Options {
     /// `CodeSize` of the branches the rotation removes, the loop-closing jump
     /// and the header's exit test.
     pub priced_at_size: bool,
+    /// DEVIATE RS1 (size builds, target opt-in, owner m64, exit 2026-11-20):
+    /// a loop is rotated only if the copied exit test folds in the
+    /// preheader. gcc's `ch_base::copy_headers` copies at `-Os` only when the
+    /// code does not grow; an unfolded guard is a compare and a branch
+    /// against the one jump the rotation removes.
+    pub guard_must_fold: bool,
     /// `RotationOnly`: no `simplifyLoopLatch`.
     pub rotation_only: bool,
     /// `IsUtilMode`: rotate even a loop whose latch already exits.
@@ -605,6 +611,84 @@ fn split_critical_edge(
     Some(split)
 }
 
+/// Whether the header's exit count is computable (RS1): a counted loop keeps
+/// its rotated form, which the induction variable passes after it read.
+fn header_exit_count_known(
+    run: &Run,
+    lp: Loop,
+    header: BlockId,
+) -> bool {
+    let mut held = run.scev.borrow_mut();
+    let session = held.get_or_insert_with(|| {
+        llrm_analysis::scev::analysis::ScevSession::within(run.context, run.globals, run.metadata, run.function)
+    });
+    let (se, env) = session.split(run.layout, run.globals, run.metadata);
+    let cx = env.cx(&*run.context, &*run.function);
+    let _ = lp;
+    use llrm_analysis::scev::backedge::ExitCountKind::Exact;
+    let count = se.get_exit_count(&cx, header, header, Exact);
+    !se.is_could_not_compute(count)
+}
+
+/// Whether the header's exit test is a constant once its phis read the
+/// preheader's values: the copy the rotation would put in the preheader
+/// (RS1), simplified as `rotate_loop` does and removed again.
+fn guard_folds(
+    run: &mut Run,
+    orig_header: BlockId,
+    orig_preheader: BlockId,
+    header_end: InstId,
+) -> bool {
+    let entry = run.function.terminator(orig_preheader).expect("a terminated preheader");
+    let mut map = IdMap::<ValueId, Operand>::new();
+    let mut copies: Vec<InstId> = Vec::new();
+    for inst in run.function.iter_block(orig_header).collect::<Vec<_>>() {
+        if inst == header_end {
+            break;
+        }
+        let operation = run.function.instruction(inst);
+        let Some(result) = operation.result else { continue };
+        if operation.opcode == Opcode::Phi {
+            if let Some((value, _)) = arms(run.function, inst).into_iter().find(|&(_, from)| from == orig_preheader) {
+                map.insert(result, value);
+            }
+            continue;
+        }
+        let copy = run.function.clone_instruction(inst);
+        run.function.insert(copy, Position::Before(entry)).expect("a placed preheader");
+        let operands = run.function.instruction(copy).operands.clone();
+        for (index, operand) in operands.into_iter().enumerate() {
+            if let Operand::Value(one) = operand
+                && let Some(&mapped) = map.get(&one)
+            {
+                run.function.set_operand(copy, index, mapped);
+            }
+        }
+        match llrm_mir::simplify::simplify_instruction(run.context, run.layout, run.function, copy) {
+            Some(value) => {
+                map.insert(result, value);
+            }
+            None => {
+                if let Some(made) = run.function.instruction(copy).result {
+                    map.insert(result, Operand::Value(made));
+                }
+            }
+        }
+        copies.push(copy);
+    }
+    let mut condition = run.function.instruction(header_end).operands[0];
+    if let Operand::Value(one) = condition
+        && let Some(&mapped) = map.get(&one)
+    {
+        condition = mapped;
+    }
+    let folds = constant_int(run.context, condition).is_some();
+    for copy in copies.into_iter().rev() {
+        run.function.erase(copy).expect("a temporary copy");
+    }
+    folds
+}
+
 /// `rotateLoop`: whether the loop was rotated. `simplified_latch`: the latch
 /// was just folded into the final loop exit; the new latch is an exiting
 /// branch, and the rotation would have happened had it not been folded.
@@ -697,6 +781,12 @@ fn rotate_loop(
     // If the loop could not be converted to canonical form, it must have an
     // indirectbr in it: give up.
     if !lp.has_dedicated_exits(run.function) {
+        return None;
+    }
+    if run.options.guard_must_fold
+        && !guard_folds(run, orig_header, orig_preheader, header_end)
+        && !header_exit_count_known(run, lp, orig_header)
+    {
         return None;
     }
 
@@ -1097,6 +1187,7 @@ impl FunctionPass for LoopRotate {
         let options = Options {
             max_header_size: header_limit(self.duplicate_headers, self.size, outer.target()),
             priced_at_size: self.size && tti.rotation_header_priced_at_size(),
+            guard_must_fold: self.size && tti.rotation_guard_must_fold_at_size(),
             rotation_only: false,
             is_util_mode: false,
             prepare_for_lto: false,
