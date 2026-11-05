@@ -3067,6 +3067,24 @@ fn a_jump_table_index_is_not_zero_extended_again_at_m64() {
     assert!(moves.is_empty(), "{listing}");
 }
 
+/// `while (h() != 255 && !bad)` on an `i1` global was `mov al, bad; not al;
+/// test al, 1; jne` (11 B); the pin's `rebuildSetCC` makes it `cmp bad, 1; jne`
+/// (jpeg_fixed `-Os` m64, two sites).
+#[test]
+fn a_branch_on_a_negated_bool_global_is_one_compare_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @bad = global i1 false\n\
+                declare i32 @h()\n\
+                define void @f() {\n\
+                br label %lp\nlp:\n  %v = call i32 @h()\n  %c = icmp eq i32 %v, 255\n  br i1 %c, label %x, label %t\n\
+                t:\n  %b = load i1, ptr @bad\n  br i1 %b, label %x, label %lp\nx:\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("not al"), "{listing}");
+    assert!(listing.contains("cmp byte ptr bad, 1"), "{listing}");
+}
+
 /// The locals' base was aligned to the stack's 16 below the pushed registers
 /// (the pin aligns each object to its own and only the total to the stack):
 /// a function with one int local and two saved registers had `sub rsp, 24`
