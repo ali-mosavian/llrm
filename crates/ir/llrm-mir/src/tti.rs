@@ -410,6 +410,18 @@ pub struct CallShape {
 }
 
 /// The target a cost is for.
+/// The bytes of the instructions LSR's formulae turn into: reading or writing
+/// a local, a binary operator, a constant's opcode (its operand is a LEB128).
+#[derive(Clone, Copy, Debug)]
+pub struct LsrByteModel {
+    pub local_get: u32,
+    pub local_set: u32,
+    pub binop: u32,
+    pub const_op: u32,
+    /// The LEB128 bytes of a relocatable constant (a global's address).
+    pub reloc_leb: u32,
+}
+
 pub trait Tti {
     /// The implementation's name, for what reports which target priced a
     /// decision.
@@ -1245,6 +1257,14 @@ pub trait Tti {
     /// the pin promotes without a cap.
     fn licm_register_limit(&self) -> Option<u32> {
         Some(self.number_of_gpr_registers())
+    }
+
+    /// DEVIATE LG3-T: the encoded sizes of the instructions an LSR solution is
+    /// made of, where the target's code bytes are counted exactly (wasm). LSR
+    /// then keeps the pin's solution over LG3's unless LG3's is fewer bytes.
+    /// Exit: 2026-11-20, or when the pin's order ranks LG3's formulae.
+    fn lsr_byte_model(&self) -> Option<LsrByteModel> {
+        None
     }
 
     /// The registers LSR keeps back from `number_of_gpr_registers` when it

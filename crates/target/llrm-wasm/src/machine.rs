@@ -158,6 +158,13 @@ impl Tti for Wasm {
         None
     }
 
+    /// `local.get`/`local.set` with an index under 128 are two bytes, an
+    /// operator one, `i32.const` one before its LEB128, a relocatable one padded to five
+    /// (DEVIATE LG3-T).
+    fn lsr_byte_model(&self) -> Option<llrm_mir::tti::LsrByteModel> {
+        Some(llrm_mir::tti::LsrByteModel { local_get: 2, local_set: 2, binop: 1, const_op: 1, reloc_leb: 5 })
+    }
+
     /// `WebAssemblyTargetLowering::isLegalAddressingMode`: offsets add as
     /// unsigned without wrapping, so a negative one is refused; no register is
     /// scaled; every other form is legal.

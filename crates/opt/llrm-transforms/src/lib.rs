@@ -323,6 +323,7 @@ pub mod lsr_pass;
 #[cfg(test)]
 mod lsr_pass_tests;
 pub mod lsr_prepare;
+pub mod lsr_size;
 pub mod lsr_solve;
 pub mod lsr_use;
 #[cfg(test)]
