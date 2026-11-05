@@ -260,7 +260,7 @@ impl CombineHooks for Aarch64Lowering {
     ) -> bool {
         matches!(
             op,
-            ISD::Mul | ISD::Sub | ISD::And | ISD::Or | ISD::GlobalAddress | ISD::Shl | ISD::Srl | ISD::Sra | ISD::Rotr
+            ISD::Mul | ISD::Add | ISD::Sub | ISD::And | ISD::Or | ISD::GlobalAddress | ISD::Shl | ISD::Srl | ISD::Sra | ISD::Rotr
         )
     }
 
@@ -283,6 +283,7 @@ impl CombineHooks for Aarch64Lowering {
         match dag.opcode(node) {
             ISD::Mul => super::combine::combine_mul(dag, node, level),
             ISD::GlobalAddress => self.global_address_combine(dag, node),
+            ISD::Add => super::combine::add_combine_for_shifted_operands(dag, node),
             ISD::Sub => super::combine::conditional_sub(dag, node),
             ISD::Shl | ISD::Srl | ISD::Sra | ISD::Rotr if level == CombineLevel::AfterLegalizeDag => {
                 super::combine::shift_amount_mod(dag, node)

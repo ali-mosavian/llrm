@@ -221,6 +221,8 @@ pub struct Decisions {
     pub rebuilds: usize,
     pub max_rebuilds: usize,
     pub rebuilt_instructions: usize,
+    /// The updater-kept graph was put back in the manager.
+    pub graph_kept: bool,
 }
 
 fn found_changed(found: &Decisions) -> bool {
@@ -502,18 +504,14 @@ pub fn run(
             )
             .unwrap_or_else(|why| panic!("licm: {why}"));
         }
-        check_graph(
-            unit,
-            graph.as_ref().expect("a graph"),
-            &|| {
-                format!(
-                    "the sinking and hoisting of the loop at {header:?}: {} sunk, {} hoisted, {} reassociated",
-                    sunk.len(),
-                    hoisted.len(),
-                    reassociated.len()
-                )
-            },
-        );
+        check_graph(unit, graph.as_ref().expect("a graph"), &|| {
+            format!(
+                "the sinking and hoisting of the loop at {header:?}: {} sunk, {} hoisted, {} reassociated",
+                sunk.len(),
+                hoisted.len(),
+                reassociated.len()
+            )
+        });
         let Some(preheader) = preheader else { continue };
         // The stores of a promotion go before the first instruction of each
         // exit block that is not a phi, taken before any promotion: the
@@ -568,11 +566,9 @@ pub fn run(
                 apply::promote(&mut *unit.function, &mut *unit.context, &mut kept, &site, found)
                     .unwrap_or_else(|why| panic!("licm: {why}"));
                 last_store = kept.last_store;
-                check_graph(
-                    unit,
-                    graph.as_ref().expect("a graph"),
-                    &|| format!("promoting {:?} out of the loop at {header:?}", found.pointers),
-                );
+                check_graph(unit, graph.as_ref().expect("a graph"), &|| {
+                    format!("promoting {:?} out of the loop at {header:?}", found.pointers)
+                });
                 decisions
                     .promoted
                     .push(
@@ -586,6 +582,20 @@ pub fn run(
                     );
             }
         }
+    }
+    // `PA.preserve<MemorySSAAnalysis>()`: the graph the updater kept is the
+    // manager's from here, as EarlyCSE's is.
+    if found_changed(&decisions)
+        && let Some(built) = graph
+    {
+        analyses.replace::<llrm_analysis::manager::MemorySsa>(
+            &*unit.function,
+            Ok(std::rc::Rc::new(llrm_analysis::manager::MssaGraph::new(
+                built.mssa,
+                Some(std::rc::Rc::new(built.accesses)),
+            ))),
+        );
+        decisions.graph_kept = true;
     }
     decisions
 }
@@ -831,7 +841,10 @@ impl FunctionPass for Licm {
         });
         if self.apply && changed {
             // Instructions move between blocks; blocks and edges stand.
-            let kept = PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>();
+            let mut kept = PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>();
+            if found.graph_kept {
+                kept = kept.preserve_updated::<llrm_analysis::manager::MemorySsa>();
+            }
             if only_moved {
                 // Instructions moved between blocks and none made or erased:
                 // what the memory accesses are annotated with and what each

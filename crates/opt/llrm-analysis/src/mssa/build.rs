@@ -356,15 +356,10 @@ impl Mssa {
         skip_visited: bool,
         rename_all_uses: bool,
     ) {
-        let mut children: IdMap<BlockId, Vec<BlockId>> = IdMap::new();
-        for &block in function.layout() {
-            if let Some(idom) = self.dominance.immediate(function, cfg::id(block)) {
-                children.get_or_insert_with(cfg::block(idom), Vec::new).push(block);
-            }
-        }
-        struct RenamePassData {
-            node: BlockId,
-            child: usize,
+        let dominance = self.dominance.clone();
+        let tree = dominance.tree(function);
+        struct RenamePassData<'a> {
+            kids: llrm_mir::domtree::ChildBlocks<'a, false>,
             incoming: Option<AccessId>,
         }
         let mut work: Vec<RenamePassData> = Vec::new();
@@ -375,15 +370,12 @@ impl Mssa {
         }
         let incoming = self.rename_block(root, incoming, rename_all_uses);
         self.rename_successor_phis(function, root, incoming.expect("an incoming value"), rename_all_uses);
-        work.push(RenamePassData { node: root, child: 0, incoming });
+        work.push(RenamePassData { kids: tree.child_blocks(root), incoming });
         while let Some(top) = work.last_mut() {
-            let kids = children.get(&top.node).map_or(&[][..], Vec::as_slice);
-            if top.child == kids.len() {
+            let Some(block) = top.kids.next() else {
                 work.pop();
                 continue;
-            }
-            let block = kids[top.child];
-            top.child += 1;
+            };
             let mut value = top.incoming;
             let already_visited = !visited.insert(block);
             if skip_visited && already_visited {
@@ -397,7 +389,7 @@ impl Mssa {
                 value = self.rename_block(block, value, rename_all_uses);
             }
             self.rename_successor_phis(function, block, value.expect("an incoming value"), rename_all_uses);
-            work.push(RenamePassData { node: block, child: 0, incoming: value });
+            work.push(RenamePassData { kids: tree.child_blocks(block), incoming: value });
         }
     }
 
