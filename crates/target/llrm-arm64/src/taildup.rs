@@ -46,7 +46,10 @@ fn copyable(
     own: &str,
     size: usize,
 ) -> bool {
-    let ends = matches!(block.insts.last(), Some(Inst::Branch { link: false, .. } | Inst::Ret { .. }));
+    let ends = matches!(
+        block.insts.last(),
+        Some(Inst::Branch { link: false, .. } | Inst::Ret { .. })
+    );
     ends && block.insts.len() <= size
         && !block.insts.iter().any(|inst| matches!(inst, Inst::Cfi(_) | Inst::Label(_)))
         && !block.insts.iter().filter_map(label_of).any(|label| label == own)
@@ -118,7 +121,10 @@ fn renamed(
             }
         }
     });
-    if defs != 1 || reads_from || matches!(inst, Inst::Branch { link: true, .. } | Inst::BranchReg { link: true, .. }) {
+    if defs != 1 || reads_from || matches!(
+        inst,
+        Inst::Branch { link: true, .. } | Inst::BranchReg { link: true, .. }
+    ) {
         return None;
     }
     out.visit(&mut |register, role| {
@@ -173,8 +179,12 @@ pub fn propagate_backward(
                 let touches_dst = defs.contains(&Reg::Gpr(dst)) || uses.contains(&Reg::Gpr(dst));
                 if defs.contains(&Reg::Gpr(src)) {
                     if !touches_dst && let Some(new) = renamed(&block.insts[before], src, dst) {
-                        // A 32-bit copy of a 64-bit write would drop the high half.
-                        let wide = matches!(block.insts[before], Inst::LogicShifted { width: Width::W, .. })
+                        // A 32-bit copy of a 64-bit write would drop the high
+                        // half.
+                        let wide = matches!(
+                            block.insts[before],
+                            Inst::LogicShifted { width: Width::W, .. }
+                        )
                             || matches!(block.insts[before], Inst::MoveWide { .. });
                         if width == Width::X || wide || !is_64(&block.insts[before]) {
                             found = Some((before, new));
@@ -182,7 +192,10 @@ pub fn propagate_backward(
                     }
                     break;
                 }
-                if touches_dst || uses.contains(&Reg::Gpr(src)) || matches!(block.insts[before], Inst::Branch { link: true, .. }) {
+                if touches_dst
+                    || uses.contains(&Reg::Gpr(src))
+                    || matches!(block.insts[before], Inst::Branch { link: true, .. })
+                {
                     break;
                 }
             }
@@ -201,8 +214,45 @@ pub fn propagate_backward(
 /// Whether `inst` writes a 64-bit result.
 fn is_64(inst: &Inst) -> bool {
     match inst {
-        Inst::LogicShifted { width, .. } | Inst::LogicImm { width, .. } | Inst::AddSubImm { width, .. } => *width == Width::X,
+        Inst::LogicShifted { width, .. } | Inst::LogicImm { width, .. } | Inst::AddSubImm { width, .. } => {
+            *width == Width::X
+        }
         Inst::AddSubShifted { width, .. } => *width == Width::X,
         _ => true,
+    }
+}
+
+/// Drops the blocks nothing branches to or falls into (the short block, once
+/// every jumper has its own copy).
+pub fn drop_unreferenced(
+    blocks: &mut Vec<Lowered>,
+    tables: &[crate::jumptable::Table],
+) {
+    loop {
+        let mut referenced: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for (at, block) in blocks.iter().enumerate() {
+            referenced.extend(block.insts.iter().filter_map(label_of));
+            referenced.extend(tables.iter().flat_map(|table| table.entries.iter().map(String::as_str)));
+            let ends = matches!(
+                block.insts.last(),
+                Some(
+                    Inst::Branch { link: false, .. }
+                        | Inst::BranchReg { link: false, .. }
+                        | Inst::Ret { .. }
+                        | Inst::Brk { .. }
+                )
+            );
+            if !ends && let Some(next) = blocks.get(at + 1) {
+                referenced.insert(next.label.as_str());
+            }
+        }
+        let dead: Vec<usize> =
+            (1..blocks.len()).filter(|&at| !referenced.contains(blocks[at].label.as_str())).collect();
+        if dead.is_empty() {
+            return;
+        }
+        for at in dead.into_iter().rev() {
+            blocks.remove(at);
+        }
     }
 }

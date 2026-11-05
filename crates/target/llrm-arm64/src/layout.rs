@@ -204,9 +204,6 @@ pub fn fold(
             *entry = found.clone();
         }
     }
-    // After `BranchFolder` (the threading above), as in the pin's order.
-    crate::taildup::tail_duplicate(&mut blocks, optsize);
-    crate::taildup::propagate_backward(&mut blocks, exits);
     let table_of: HashMap<&str, &Table> = tables.iter().map(|table| (table.base.as_str(), table)).collect();
     // Reachable blocks, in `MachineBlockPlacement`'s order.
     let index: HashMap<&str, usize> = blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at)).collect();
@@ -280,10 +277,78 @@ pub fn fold(
                 );
             }
         }
-        place(&graph).into_iter().map(|new| reachable[new]).collect()
+        let pinned = place(&graph);
+        // DEVIATE: the old first-successor chain is kept unless placement
+        // executes fewer jumps by the same frequencies; the pin's
+        // placement ignores that cost (quicksort's swap path gains a
+        // `b`). Exit: none while the pin's does.
+        let jumps = |order: &[usize]| -> u128 {
+            order
+                .iter()
+                .enumerate()
+                .map(|(at, &new)| {
+                    let insts = &blocks[reachable[new]].insts;
+                    let jump = match insts.last() {
+                        Some(Inst::Branch { link: false, target: Target::Label(label) }) => index.get(label.as_str()),
+                        _ => None,
+                    };
+                    let cond = insts
+                        .len()
+                        .checked_sub(2)
+                        .and_then(|before| label_of(&insts[before]))
+                        .filter(|_| jump.is_some())
+                        .and_then(|label| index.get(label));
+                    let next = order.get(at + 1).map(|&one| reachable[one]);
+                    let falls = |target: Option<&usize>| target.is_some_and(|t| Some(*t) == next);
+                    let costs = match (cond, jump) {
+                        (_, None) => false,
+                        (None, Some(_)) => !falls(jump),
+                        (Some(_), Some(_)) => !falls(jump) && !falls(cond),
+                    };
+                    u128::from(costs) * u128::from(graph.frequency(new).get_frequency())
+                })
+                .sum()
+        };
+        // The chain the selector's order gives: follow the last unplaced
+        // successor, push the rest.
+        let identity: Vec<usize> = {
+            let mut placed: Vec<usize> = Vec::new();
+            let mut seen = vec![false; edges.len()];
+            let mut pending: Vec<usize> = vec![0];
+            while let Some(start) = pending.pop() {
+                let mut current = start;
+                while !std::mem::replace(&mut seen[current], true) {
+                    placed.push(current);
+                    let mut chain = None;
+                    for &candidate in edges[current].iter().rev() {
+                        if seen[candidate] {
+                            continue;
+                        }
+                        if chain.is_none() {
+                            chain = Some(candidate);
+                        } else {
+                            pending.push(candidate);
+                        }
+                    }
+                    match chain {
+                        Some(next) => current = next,
+                        None => break,
+                    }
+                }
+            }
+            placed
+        };
+        let order = if jumps(&pinned) < jumps(&identity) { pinned } else { identity };
+        order.into_iter().map(|new| reachable[new]).collect()
     };
     let mut taken: Vec<Option<Lowered>> = blocks.into_iter().map(Some).collect();
     let mut ordered: Vec<Lowered> = placed.into_iter().map(|at| taken[at].take().expect("placed once")).collect();
+    // The pin copies in layout order (`TailDuplicator`, then
+    // `MachineCopyPropagation`): a jump to the block next to it stays a
+    // fall-through.
+    crate::taildup::tail_duplicate(&mut ordered, optsize);
+    crate::taildup::drop_unreferenced(&mut ordered, tables);
+    crate::taildup::propagate_backward(&mut ordered, exits);
     // A branch to the next block falls through; a conditional branch over an
     // unconditional one is the inverse conditional (`cbz`/`tbz` too).
     for at in 0..ordered.len() {
