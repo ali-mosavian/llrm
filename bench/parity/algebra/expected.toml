@@ -1,69 +1,62 @@
-reason = "a BASIC procedure at m32 holds a value in the frame register and builds no frame (the driver now records the bytes a runtime callee pops, a push of a value is sized, x87 register bytes are inert, the freed registers reach masm): bq32 -O2 instructions -0..-10.5% (fib -10.5%, nbody -9.9%, particle -6.9%, shellsort -6.6%, hanoi -3.4%), code -3%..+7% ([esp+d] is a byte longer than [ebp+d]); -Os keeps BASIC's frame where size is tuned and masm compares the bytes: -4%..+0%, instructions +0..+2.5%"
-blessed = "2026-10-14"
+reason = "C references re-blessed 2026-11-05: corpus edits since 10-15 (parity kernels volatile inputs, textfill DOS-only); tcpp links CM.LIB ISATTY (#7243)"
+blessed = "2026-11-05"
+corpus = "df24ad30f3b192279152757a00831b84"
 
 [ow.O2]
-instructions = 186
-memory_operands = 20
-code_bytes = 172
-data_bytes = 0
+instructions = 190
+memory_operands = 24
+code_bytes = 176
+data_bytes = 8
 bss_bytes = 4
-kernel_ms = 0.0038
 
 [ow.Os]
-instructions = 180
-memory_operands = 20
-code_bytes = 168
-data_bytes = 0
+instructions = 184
+memory_operands = 24
+code_bytes = 172
+data_bytes = 8
 bss_bytes = 4
-kernel_ms = 0.0037
 
 [bcc.O2]
-instructions = 72
-memory_operands = 19
-code_bytes = 177
-data_bytes = 0
+instructions = 77
+memory_operands = 24
+code_bytes = 181
+data_bytes = 8
 bss_bytes = 4
-kernel_ms = 0.0021
 
 [bcc.Os]
-instructions = 68
-memory_operands = 17
-code_bytes = 162
-data_bytes = 0
+instructions = 73
+memory_operands = 22
+code_bytes = 166
+data_bytes = 8
 bss_bytes = 4
-kernel_ms = 0.002
 
 [tc.O2]
-instructions = 219
-memory_operands = 22
-code_bytes = 193
-data_bytes = 0
+instructions = 223
+memory_operands = 27
+code_bytes = 196
+data_bytes = 8
 bss_bytes = 4
-kernel_ms = 0.004
 
 [tc.Os]
-instructions = 214
-memory_operands = 22
-code_bytes = 186
-data_bytes = 0
+instructions = 220
+memory_operands = 27
+code_bytes = 189
+data_bytes = 8
 bss_bytes = 4
-kernel_ms = 0.0039
 
 [tcpp.O2]
-instructions = 230
-memory_operands = 26
+instructions = 234
+memory_operands = 30
 code_bytes = 210
-data_bytes = 0
+data_bytes = 8
 bss_bytes = 4
-kernel_ms = 0.0041
 
 [tcpp.Os]
-instructions = 224
-memory_operands = 26
+instructions = 228
+memory_operands = 30
 code_bytes = 206
-data_bytes = 0
+data_bytes = 8
 bss_bytes = 4
-kernel_ms = 0.004
 
 [bc.O2]
 instructions = 344

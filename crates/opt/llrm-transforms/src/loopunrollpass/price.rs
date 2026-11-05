@@ -90,6 +90,13 @@ pub(super) fn full_unroll_pays(
         Some(cost) => (i64::from(cost.rolled_dynamic_cost.saturating_sub(cost.unrolled_cost)), 0),
         None => (i64::from(trips) * i64::from(up.be_insns), i64::from(trips) * nested_uses * clocks.r#move),
     };
+    // The loop's control costs what it runs, never less than the body's average
+    // unit: a taken back edge is several clocks (the i486's `jne` 3), the
+    // counter's step and the compare one each (lru: a 3-trip loop saved 6
+    // clocks by the average, 25 run).
+    let control = (i64::from(trips) - 1) * clocks.branch + i64::from(trips) * 2 * clocks.add;
+    let averaged = i64::from(trips) * (i64::from(up.be_insns) + 1) * body_clocks / rolled_units;
+    let constant_clocks = constant_clocks + (control - averaged).max(0);
     let constant_clocks = constant_clocks + i64::from(trips) * promoted_runs * clocks.load;
     // The loop runs once for each trip of the loops around it, which the
     // bytes do not: the saving is counted over those runs (x_cordic: the

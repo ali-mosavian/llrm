@@ -423,6 +423,7 @@ mod vncoercion_tests;
 pub mod walk;
 pub mod widen;
 pub mod window;
+pub mod zeromerge;
 // Not ported, meaning nothing where a value is whole: `wholephis` and
 // `wholestores` joined word halves of the old MIR's split values (called
 // from `algebraic`).

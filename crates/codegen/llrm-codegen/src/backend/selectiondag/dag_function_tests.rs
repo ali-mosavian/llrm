@@ -1636,3 +1636,62 @@ fn the_odds_of_a_branch_are_found_in_its_piece_not_in_every_block() {
     let (examined, edges) = odds(400);
     assert!(examined <= 2 * edges, "{examined} blocks examined for {edges} edges");
 }
+
+/// Every function ran `consts::known` and `exposed_frames` over its whole body
+/// to find loop trip counts, loops or none (67 M Ir of 6.9 G on
+/// memory_expansion -O2 m64). A function without a loop derives nothing and
+/// states no trips; one with a loop still does.
+#[test]
+fn test_a_function_without_a_loop_derives_no_trip_counts() {
+    let layout = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n";
+    let flat = "define i32 @f(i32 %a) {\nentry:\n  %r = add i32 %a, 1\n  ret i32 %r\n}\n";
+    let looped = "define i32 @f(i32 %n) {
+entry:
+  br label %head
+head:
+  %i = phi i32 [ 0, %entry ], [ %next, %head ]
+  %next = add i32 %i, 1
+  %done = icmp eq i32 %next, 8
+  br i1 %done, label %out, label %head
+out:
+  ret i32 %next
+}
+";
+    let derivations = |text: &str| {
+        let before = llrm_analysis::consts::scratch_derivations();
+        let module = crate::testing::module(&format!("{layout}{text}")).expect("parses");
+        let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+            .expect("selects");
+        (llrm_analysis::consts::scratch_derivations() - before, done.body.loop_trip_counts.len())
+    };
+    assert_eq!(derivations(flat), (0, 0), "a loop-free function worked out the facts of its body");
+    let (derived, trips) = derivations(looped);
+    assert!(derived >= 1 && trips == 1, "the loop lost its trips: {derived} derivations, {trips} counts");
+}
+
+/// A function's branch probabilities were calculated twice in a selection, once
+/// for the multiply prices' block frequencies and once more for the builder's
+/// edge probabilities (11.5 M Ir in `build_block`, memory_expansion -O2 m64).
+#[test]
+fn test_a_selection_calculates_the_branch_probabilities_once() {
+    let layout = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n";
+    let text = format!(
+        "{layout}define i32 @f(i32 %a, i32 %b) {{
+entry:
+  %m = mul i32 %a, %b
+  %c = icmp slt i32 %m, 10
+  br i1 %c, label %lo, label %hi
+lo:
+  ret i32 1
+hi:
+  ret i32 2
+}}
+"
+    );
+    let before = llrm_mir::counts::get(llrm_mir::counts::Event::BranchProbabilities);
+    let module = crate::testing::module(&text).expect("parses");
+    selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .expect("selects");
+    let made = llrm_mir::counts::get(llrm_mir::counts::Event::BranchProbabilities) - before;
+    assert_eq!(made, 1, "{made} branch probability calculations for one function");
+}

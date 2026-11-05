@@ -1680,3 +1680,73 @@ fn a_function_tuned_for_size_shifts_a_long_by_a_constant_in_the_routine() {
         assert!(!shifted(op, 5, "").contains("__"), "{op} 5 at speed levels");
     }
 }
+
+/// A long compared with another was two word compares joined by a select: each
+/// made a 0/1 byte, the high words' equality picked one (`lcmp` 53 B at -Os,
+/// SDCC 27). The words are one chain of `sub`, `sbc`, `sbc`, `sbc` instead, the
+/// order read from the carry; a signed order corrects the sign for overflow.
+#[test]
+fn a_long_order_is_one_borrow_chain() {
+    let order = |cc: &str| {
+        compiled(
+            &format!(
+                "define i16 @f(i32 %x, i32 %y) optsize {{\n  %c = icmp {cc} i32 %x, %y\n  %r = zext i1 %c to i16\n  ret i16 %r\n}}"
+            ),
+            "f",
+        )
+    };
+    for cc in ["ult", "uge", "slt", "sge", "ugt", "ule", "sgt", "sle"] {
+        let text = order(cc);
+        assert_eq!(text.matches("sbc a,").count(), 3, "{cc}:\n{text}");
+        assert!(!text.contains("jr nz"), "{cc} still joins the words by equality:\n{text}");
+        assert_eq!(text.contains("jp po"), cc.starts_with('s'), "{cc}:\n{text}");
+    }
+}
+
+/// The borrow of a 64-bit subtract's low long is the order chain of its words,
+/// and the compare of the low word is shared with the subtract's own borrow:
+/// the sharing kept the word subtract from becoming `sub hl` / `sbc hl`, and
+/// int64_division grew 8 B over the select form. The subtract keeps its fused
+/// words (at most 135 instructions; 145 with the compare gone from the fusion).
+#[test]
+fn a_long_subtract_borrow_shared_with_the_order_chain_still_fuses() {
+    let text = compiled("define i64 @f(i64 %a, i64 %b) optsize {\n  %r = sub i64 %a, %b\n  ret i64 %r\n}", "f");
+    let instructions = text.lines().filter(|line| line.starts_with('\t') && !line.trim_start().starts_with('.')).count();
+    assert!(instructions <= 135, "{instructions} instructions:\n{text}");
+}
+
+/// `line` passed the address of its local to `kernel` and ended in `jp
+/// _kernel` with the frame already popped: `kernel` ran over the local it was
+/// handed (frame_address_stack_args -Oz printed 13599, not 13346).
+#[test]
+fn a_call_given_the_address_of_a_local_is_not_a_tail_jump() {
+    let out = compiled(
+        "declare void @use(ptr)\ndefine void @f() {\n  %a = alloca [4 x i8]\n  call void @use(ptr %a)\n  ret void\n}",
+        "f",
+    );
+    assert!(out.contains("call _use") && !out.contains("jp _use"), "{out}");
+}
+
+/// The same call without a local to reach is still a tail jump.
+#[test]
+fn a_call_with_no_local_to_reach_is_a_tail_jump() {
+    let out =
+        compiled("declare void @use(i16)\ndefine void @f(i16 %x) {\n  call void @use(i16 %x)\n  ret void\n}", "f");
+    assert!(out.contains("jp _use"), "{out}");
+}
+
+/// `x + 1` and `x - 1` on a long rebuilt the low word's carry by a compare, a
+/// `ld h, #1` / `jr` / `dec h` byte and an add: 19 B and 20 B. The carry is a
+/// zero test of the low word and the high word steps behind a `jr` (12 B).
+#[test]
+fn a_long_step_of_one_is_a_zero_test_and_a_conditional_step() {
+    let ir = "define i32 @inc(i32 %x) {\n  %r = add i32 %x, 1\n  ret i32 %r\n}\n\
+              define i32 @dec(i32 %x) {\n  %r = add i32 %x, -1\n  ret i32 %r\n}";
+    let ir = format!("target datalayout = \"{DATALAYOUT}\"\n{ir}");
+    for (name, step) in [("inc", "inc"), ("dec", "dec")] {
+        let out = text(&ir, name, 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+        let instructions = out.lines().filter(|l| l.starts_with('\t') && !l.trim_start().starts_with('.')).count();
+        assert!(out.contains("jr nz") && !out.contains("sbc") && !out.contains("sub a"), "{name}\n{out}");
+        assert!(out.contains(&format!("\t{step} ")) && instructions <= 12, "{name}: {instructions}\n{out}");
+    }
+}

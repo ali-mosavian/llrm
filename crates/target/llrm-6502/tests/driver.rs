@@ -2326,3 +2326,95 @@ fn a_rerun_that_saves_one_unit_of_the_estimate_is_not_kept() {
     let twice = assembly(ir, &Request::new(Level::Os)).unwrap();
     assert_eq!(twice, once, "the second walk changed a program it has nothing to inline in");
 }
+
+/// `g++` on a global byte was `lda #1; clc; adc g; sta g` (9 bytes) where `inc
+/// g` is 3 (x16basic-c: `deccnt++`, `++tenexp` in fp_fin). The carry and A are
+/// dead after the store, and `inc` leaves the flags a branch reads as they
+/// were.
+#[test]
+fn a_step_of_a_global_byte_is_an_inc_or_a_dec_of_it() {
+    let ir = module(
+        "@g = global i8 5\n\
+         define void @up() noinline {\n  %v = load i8, ptr @g\n  %w = add i8 %v, 1\n  store i8 %w, ptr @g\n  ret void\n}\n\
+         define void @down() noinline {\n  %v = load i8, ptr @g\n  %w = add i8 %v, -1\n  store i8 %w, ptr @g\n  ret void\n}\n\
+         define i8 @t() {\n  call void @up()\n  call void @up()\n  call void @down()\n  %r = load i8, ptr @g\n  ret i8 %r\n}",
+    );
+    for level in [Level::O2, Level::Os] {
+        let text = assembly(&ir, &Request::new(level)).unwrap();
+        assert!(text.contains("inc g") && text.contains("dec g"), "{text}");
+        assert!(!text.contains("adc g"), "{text}");
+        assert_eq!(exit_code_of(&text, "t"), 6, "{text}");
+    }
+    // the 65C02's `lda g; inc a; sta g`
+    let mut request = Request::new(Level::Os);
+    request.cpu = llrm_6502::dagisel::hooks::Cpu::W65c02;
+    let text = assembly(&ir, &request).unwrap();
+    assert!(text.contains("inc g") && text.contains("dec g") && !text.contains("inc a"), "{text}");
+}
+
+/// The step of the counter of `do work(); while (--n)` was `lda #255; clc; adc
+/// n; sta n` too: the call after the branch writes A and takes no argument in
+/// it, so A is dead at the branch. A callee that takes its argument in A keeps
+/// the load.
+#[test]
+fn a_counter_stepped_before_a_call_that_needs_no_a_is_a_dec() {
+    let ir = module(
+        "@n = global i8 3\n@hits = global i8 0\n\
+         define void @work() noinline {\n  %v = load i8, ptr @hits\n  %w = add i8 %v, 2\n  store i8 %w, ptr @hits\n  ret void\n}\n\
+         define i8 @t() {\nentry:\n  br label %loop\nloop:\n  call void @work()\n  %c = load i8, ptr @n\n  %d = add i8 %c, -1\n  \
+         store i8 %d, ptr @n\n  %z = icmp eq i8 %d, 0\n  br i1 %z, label %out, label %loop\nout:\n  %r = load i8, ptr @hits\n  ret i8 %r\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap();
+    assert!(text.contains("dec n") && !text.contains("adc n"), "{text}");
+    assert_eq!(exit_code_of(&text, "t"), 6, "{text}");
+}
+
+/// licm_graph_callee_footprint (tests/run/c): `state * 3UL` was a call of
+/// `__mulsi3` (2263 clocks a trip, 10x gcc's loop). A long multiply by `2^N +-
+/// 1` is a shift and an add where clocks count (-O2): the call is 59 bytes and
+/// ~2200 clocks, the expansion ~75 and ~100. Tuned for size it stays a call
+/// unless the shift is whole bytes (`x * 257` is 52 bytes), measured at -Os.
+#[test]
+fn a_long_multiply_by_a_near_power_of_two_is_shifts_where_clocks_count() {
+    let ir = module(
+        "define i32 @by3(i32 %x) noinline {\n  %r = mul i32 %x, 3\n  ret i32 %r\n}\n\
+         define i32 @by257(i32 %x) noinline {\n  %r = mul i32 %x, 257\n  ret i32 %r\n}\n\
+         define i8 @t3() {\n  %v = call i32 @by3(i32 16909060)\n  %h = lshr i32 %v, 8\n  %r = trunc i32 %h to i8\n  ret i8 %r\n}\n\
+         define i8 @t257() {\n  %v = call i32 @by257(i32 16909060)\n  %h = lshr i32 %v, 8\n  %r = trunc i32 %h to i8\n  ret i8 %r\n}",
+    );
+    let fast = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(!fast.contains("__mulsi3"), "{fast}");
+    let linked = format!("{fast}\n{}", common::pipeline::reachable_runtime(&fast));
+    assert_eq!(exit_code_of(&linked, "t3"), 0x09, "{fast}");
+    assert_eq!(exit_code_of(&linked, "t257"), 0x07, "{fast}");
+    // tuned for size: the call stays for 3, not for 257
+    let ir = ir.replace("noinline {", "noinline optsize {");
+    let small = assembly(&ir, &Request::new(Level::Os)).unwrap();
+    let (by3, by257) = (function_text(&small, "by3"), function_text(&small, "by257"));
+    assert!(by3.contains("__mulsi3"), "{by3}");
+    assert!(!by257.contains("__mulsi3"), "{by257}");
+}
+
+/// The lines of function `name` in `text`, up to the next label of a function.
+fn function_text(
+    text: &str,
+    name: &str,
+) -> String {
+    let start = text.find(&format!("\n{name}:")).unwrap_or_else(|| panic!("no {name}:\n{text}"));
+    let rest = &text[start + 1..];
+    let end = rest.find("\n.export").unwrap_or(rest.len());
+    rest[..end].to_owned()
+}
+
+/// `__mulsi3_fast` linked 19 bytes more into 13 of 72 programs and ran faster
+/// in 11; in struct_with_i64 and frame_address_stack_args the multiply never
+/// runs and the bytes were all cost. A long multiply calls `__mulsi3` at every
+/// level until a priced rule picks the variant.
+#[test]
+fn a_long_multiply_links_the_compact_routine_at_every_level() {
+    let ir = module("define i32 @f(i32 %a, i32 %b) {\n  %r = mul i32 %a, %b\n  ret i32 %r\n}");
+    for level in [Level::O2, Level::Os] {
+        let text = assembly(&ir, &Request::new(level)).unwrap();
+        assert!(text.contains("__mulsi3") && !text.contains("__mulsi3_fast"), "{text}");
+    }
+}

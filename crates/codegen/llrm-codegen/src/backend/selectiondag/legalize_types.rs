@@ -792,9 +792,8 @@ impl<'a> TypeLegalizer<'a> {
                     let promoted = legalizer.promoted_integer(operand);
                     let wide = legalizer.dag.value_type(promoted);
                     if signed {
-                        let by = legalizer.shift_amount(wide, wide.size_in_bits() - bits);
-                        let high = legalizer.dag.get_node(ISD::Shl, wide, &[promoted, by]);
-                        legalizer.dag.get_node(ISD::Sra, wide, &[high, by])
+                        let ty = legalizer.dag.get_value_type_node(legalizer.dag.value_type(operand));
+                        legalizer.dag.get_node(ISD::SignExtendInReg, wide, &[promoted, ty])
                     } else {
                         let mask = legalizer.dag.get_constant(super::fold::mask(bits), wide);
                         legalizer.dag.get_node(ISD::And, wide, &[promoted, mask])
@@ -842,9 +841,8 @@ impl<'a> TypeLegalizer<'a> {
                         self.dag.get_node(ISD::And, wide, &[promoted, mask])
                     }
                     _ => {
-                        let by = self.shift_amount(wide, wide.size_in_bits() - bits);
-                        let high = self.dag.get_node(ISD::Shl, wide, &[promoted, by]);
-                        self.dag.get_node(ISD::Sra, wide, &[high, by])
+                        let ty = self.dag.get_value_type_node(self.dag.value_type(value));
+                        self.dag.get_node(ISD::SignExtendInReg, wide, &[promoted, ty])
                     }
                 };
                 let amount = match self.action(self.dag.value_type(amount)) {
@@ -1363,9 +1361,8 @@ impl<'a> TypeLegalizer<'a> {
                     if as_is {
                         promoted
                     } else if code.is_signed_int() {
-                        let by = legalizer.shift_amount(wide, wide.size_in_bits() - bits);
-                        let high = legalizer.dag.get_node(ISD::Shl, wide, &[promoted, by]);
-                        legalizer.dag.get_node(ISD::Sra, wide, &[high, by])
+                        let ty = legalizer.dag.get_value_type_node(legalizer.dag.value_type(value));
+                        legalizer.dag.get_node(ISD::SignExtendInReg, wide, &[promoted, ty])
                     } else {
                         let mask = legalizer.dag.get_constant(super::fold::mask(bits), wide);
                         legalizer.dag.get_node(ISD::And, wide, &[promoted, mask])
@@ -2126,10 +2123,25 @@ impl<'a> TypeLegalizer<'a> {
             // Without a carry operation: the plain halves, the carry (a borrow
             // for a subtract) a compare of the low result with its operand.
             let lo = self.dag.get_node(plain, half, &[ll, rl]);
-            let (compared, with, cc) =
-                if op == ISD::Add { (lo, ll, CondCode::SetULt) } else { (ll, rl, CondCode::SetULt) };
-            let cmp = self.dag.get_setcc(self.tli.types.set_cc_result_type(half), compared, with, cc);
+            let cc_vt = self.tli.types.set_cc_result_type(half);
+            let all_ones = super::fold::mask(half.size_in_bits());
+            let zero = self.dag.get_constant(0, half);
+            let (cmp, minus_one) = if op == ISD::Sub {
+                (self.dag.get_setcc(cc_vt, ll, rl, CondCode::SetULt), false)
+            } else if self.dag.constant(rl) == Some(1) {
+                // X+1 has a carry out if X+1==0
+                (self.dag.get_setcc(cc_vt, lo, zero, CondCode::SetEq), false)
+            } else if self.dag.constant(rl) == Some(all_ones) {
+                // X-1 carries unless X is 0, and X-1 with -1 above is a borrow
+                let both = self.dag.constant(rh) == Some(all_ones);
+                (self.dag.get_setcc(cc_vt, ll, zero, if both { CondCode::SetEq } else { CondCode::SetNe }), both)
+            } else {
+                (self.dag.get_setcc(cc_vt, lo, ll, CondCode::SetULt), false)
+            };
             let carry = self.dag.get_bool_as_bit(cmp, half);
+            if minus_one {
+                return Ok((lo, self.dag.get_node(ISD::Sub, half, &[lh, carry])));
+            }
             let hi = self.dag.get_node(plain, half, &[lh, rh]);
             return Ok((lo, self.dag.get_node(plain, half, &[hi, carry])));
         }

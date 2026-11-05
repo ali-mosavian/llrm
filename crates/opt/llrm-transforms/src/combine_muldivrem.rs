@@ -1177,7 +1177,18 @@ pub fn visit_mul(
 
     // (mul Op0 Op1): if Log2(Op0) folds away -> (shl Op1, Log2(Op0)), and if
     // Log2(Op1) folds away -> (shl Op0, Log2(Op1)).
+    // DEVIATE SD546 (owner anyisa, exit 2026-11-20): a size build keeps
+    // `mul X, select(c, 8, 2)` where a shift needs its count in one register;
+    // the pin's `shl X, select(c, 3, 1)` (visitMul,
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineMulDivRem.cpp#L604)
+    // costs the move and the register (pack_ref -Os: m32 -18 B, m64 -7 B).
+    // gcc's `expand_mult` shifts only a constant multiplier
+    // (expmed.cc:3540-3560). A constant count stays.
+    let keeps_mul = c.env.fixed_shift_count && is_optsize(c.function);
     for (log_of, other) in [(op0, op1), (op1, op0)] {
+        if keeps_mul && !matches!(log_of, Operand::Constant(_)) {
+            continue;
+        }
         if let Some(res) = try_get_log2(c, inst, log_of, false) {
             // We can only propagate the nuw flag.
             return c.replace_with_binop(inst, BinaryOp::Shl, other, res, wrap(has_nuw, false));
@@ -2395,4 +2406,17 @@ pub fn visit_srem(
     }
     // X srem Y -> X urem Y, iff X and Y don't have sign bit set
     c.replace_with_binop(inst, BinaryOp::URem, op0, op1, Flags::default())
+}
+
+/// The function is built for size (`optsize` or `minsize`).
+fn is_optsize(function: &llrm_mir::module::Function) -> bool {
+    function
+        .attrs
+        .iter()
+        .any(
+            |attr| matches!(
+                attr,
+                llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
+            ),
+        )
 }

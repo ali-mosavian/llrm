@@ -464,6 +464,54 @@ __mulsi3:                       ; __sa * __sb -> __sa (the low 32 bits)
   bne @next
   jmp copy_st_to_sa
 
+; __mulsi3 for speed: the multiplier is walked a byte at a time and the walk
+; stops at its last set byte, 19 bytes more, a third of the clocks for a byte.
+.export __mulsi3_fast
+__mulsi3_fast:                  ; __sa * __sb -> __sa (the low 32 bits)
+  lda #0
+  sta __st
+  sta __st+1
+  sta __st+2
+  sta __st+3
+  ldy #4
+@byte:
+  ldx #8
+@next:
+  lsr __sb+3
+  ror __sb+2
+  ror __sb+1
+  ror __sb
+  bcc @skip
+  clc
+  lda __st
+  adc __sa
+  sta __st
+  lda __st+1
+  adc __sa+1
+  sta __st+1
+  lda __st+2
+  adc __sa+2
+  sta __st+2
+  lda __st+3
+  adc __sa+3
+  sta __st+3
+@skip:
+  asl __sa
+  rol __sa+1
+  rol __sa+2
+  rol __sa+3
+  dex
+  bne @next
+  lda __sb
+  ora __sb+1
+  ora __sb+2
+  ora __sb+3
+  beq @done
+  dey
+  bne @byte
+@done:
+  jmp copy_st_to_sa
+
 .macro cmp_sub_32
   sec
   lda __sr
