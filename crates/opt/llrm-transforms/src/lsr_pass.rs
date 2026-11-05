@@ -214,7 +214,9 @@ fn plan_loop(
     let env_users = Env {
         safe_to_speculate: &safe_to_speculate,
         ephemeral: &is_ephemeral,
-        native_bits: tti.lsr_native_integer_bits(),
+        // DEVIATE LSR-N holds at speed only: at `-Os` a counter LSR adds for a
+        // wide loop grew tail_calls by 354 bytes.
+        native_bits: if size { 0 } else { tti.lsr_native_integer_bits() },
     };
     let mut users = match carried {
         Some(users) => {

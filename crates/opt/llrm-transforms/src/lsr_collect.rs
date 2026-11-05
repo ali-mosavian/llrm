@@ -49,9 +49,7 @@ use llrm_support::hash::{HashMap, HashSet, IndexSet};
 
 use crate::ivusers::IvUsers;
 use crate::lsr_formula::{Formula, Immediate, MemAccessTy, RegUseTracker};
-use crate::lsr_use::{
-    Cost, Fixup, Kind, Rating, Use, is_am_completely_folded_at, is_am_completely_folded_between,
-};
+use crate::lsr_use::{Cost, Fixup, Kind, Rating, Use, is_am_completely_folded_at, is_am_completely_folded_between};
 
 // ---- helpers ----
 
