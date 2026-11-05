@@ -171,6 +171,7 @@ pub mod combine_select_bit_test;
 pub mod combine_select_bools;
 pub mod combine_select_ext_const;
 pub mod combine_select_fabs;
+pub mod combine_select_fcmp_swap;
 pub mod combine_select_into_op;
 pub mod combine_select_minmax_cast;
 pub mod combine_select_op_op;

@@ -49,6 +49,7 @@ use crate::combine_select_bit_test::{select_bit_test, select_icmp_and_and};
 use crate::combine_select_bools::select_of_bools;
 use crate::combine_select_ext_const::select_ext_const;
 use crate::combine_select_fabs::select_fcmp_to_fabs;
+use crate::combine_select_fcmp_swap::select_fcmp_unordered_swap;
 use crate::combine_select_into_op::select_into_op;
 use crate::combine_select_minmax_cast::select_min_max_cast;
 use crate::combine_select_op_op::select_op_op;
@@ -86,6 +87,7 @@ const FOLDS: &[Fold] = &[
     nested_select_merged,
     binop_between_selects,
     absorb_not_condition,
+    select_fcmp_unordered_swap,
     select_of_symmetric_select,
     nested_selects,
 ];
