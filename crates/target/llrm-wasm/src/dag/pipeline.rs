@@ -168,6 +168,12 @@ impl CombineHooks for WasmCombines {
         true
     }
 
+    /// `tryStoreMergeOfConstants`: two byte stores are one `i32.store16`, a
+    /// truncating store of the promoted type (`isTruncStoreLegal(i32, i16)`).
+    fn merge_stores_via_trunc_store(&self) -> bool {
+        true
+    }
+
     fn merge_stores_after_legalization(
         &self,
         _mem: EVT,

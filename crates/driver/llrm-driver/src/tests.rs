@@ -258,6 +258,9 @@ fn a_dword_add_that_keeps_its_source_is_a_lea_at_m64() {
 /// again is made once for the first call and the loop, and again for the last
 /// call, as the pin has it (`lea` into a callee-saved register, then a `lea`
 /// into `rdi` at the end). It was made three times: CSE4 refused the share.
+/// Since #6878 (cpu-model unroll preferences) the pin runtime-unrolls this
+/// loop by 8: the address is made for the first call, the unrolled loop, the
+/// remainder loop and the last call.
 #[test]
 fn a_symbol_address_before_a_loop_is_shared_with_it_and_made_again_after_a_call_at_m64() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
@@ -273,7 +276,8 @@ fn a_symbol_address_before_a_loop_is_shared_with_it_and_made_again_after_a_call_
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     // The first call's argument and the loop's address, then the last call's.
     let made = listing.lines().filter(|line| line.contains("offset g")).count();
-    assert_eq!(made, 2, "{listing}");
+    assert_eq!(made, 4, "{listing}");
+    assert_eq!(listing.matches("movzx").count(), 9, "unrolled by 8 plus the remainder loop: {listing}");
 }
 
 /// A symbol's address passed to four calls in one block was made four times

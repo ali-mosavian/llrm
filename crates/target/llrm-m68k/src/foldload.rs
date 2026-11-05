@@ -208,7 +208,8 @@ fn fold_one(
         let (Operand::Use(Reg::Virt(r)) | Operand::Def(Reg::Virt(r))) = operand else { continue };
         let Some(want) = operand_class(twin, index) else { continue };
         let have = function.classes[*r as usize];
-        if have == want {
+        // a class the twin's operand takes whole needs no change
+        if have == want || have.meet(want) == Some(have) {
             continue;
         }
         if have != Class::Xr32 {

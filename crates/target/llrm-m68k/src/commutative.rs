@@ -17,7 +17,7 @@
 //!
 //! DEVIATE: the pin marks `ADD32dd` commutative and not its `ADD32dr` twin.
 //! Reason: both are the same add, and the tie to the dying source saves the
-//! copies. Exit: none.
+//! copies. Exit: review 2026-11-20, a policy choice.
 //!
 //! # See also
 //! `TwoAddressInstructionPass::isProfitableToCommute`.

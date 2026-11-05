@@ -153,9 +153,16 @@ pub fn target_lowering(cpu: Cpu) -> TargetLowering {
 pub struct M68kLowering {
     /// Form `(An)+` and `-(An)` accesses; the pin sets no indexed action.
     pub indexed: bool,
+    /// The beyond-pin size rewrites (`addq`, `extb.l`, `sub` of a sign-extended
+    /// compare).
+    pub short: bool,
 }
 
 impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLowering {
+    fn sub_of_sign_extended_bool(&self) -> bool {
+        self.short
+    }
+
     fn is_indexed_legal(
         &self,
         _is_load: bool,

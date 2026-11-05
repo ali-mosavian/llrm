@@ -2010,6 +2010,44 @@ fn a_zero_in_a_callee_saved_cell_is_compared_as_zero() {
     assert!(!text.contains("cmp #0"), "a compare against zero follows a load of the flag:\n{text}");
 }
 
+/// `UMulO` on a word was refused ("convert node to libcall", `overflow_builtins.c`
+/// of tests/run/c): its flag's extension was not lowered. It computes the
+/// product and the carry out of the 16 bits, at the edges (255 * 257 fits,
+/// 256 * 256 and 4096 * 16 do not).
+#[test]
+fn an_unsigned_word_multiply_with_overflow_computes_its_value_and_its_flag() {
+    let pairs: [(u16, u16); 10] = [
+        (0, 0),
+        (1, 65535),
+        (255, 257),
+        (256, 256),
+        (65535, 65535),
+        (300, 200),
+        (4096, 16),
+        (255, 258),
+        (2, 32768),
+        (1, 32768),
+    ];
+    let mut ir = String::from("declare { i16, i1 } @llvm.umul.with.overflow.i16(i16, i16)\n");
+    for (k, (a, b)) in pairs.iter().enumerate() {
+        ir += &format!(
+            "@a_um{k} = global i16 {}\n@b_um{k} = global i16 {}\n\
+             define i8 @t_um{k}() {{\n  %a = load volatile i16, ptr @a_um{k}\n  %b = load volatile i16, ptr @b_um{k}\n  \
+             %r = call {{ i16, i1 }} @llvm.umul.with.overflow.i16(i16 %a, i16 %b)\n  \
+             %v = extractvalue {{ i16, i1 }} %r, 0\n  %o = extractvalue {{ i16, i1 }} %r, 1\n  \
+             %lo = trunc i16 %v to i8\n  %h = lshr i16 %v, 8\n  %hi = trunc i16 %h to i8\n  %x = xor i8 %lo, %hi\n  \
+             %m = select i1 %o, i8 -128, i8 0\n  %y = xor i8 %x, %m\n  ret i8 %y\n}}\n",
+            *a as i16, *b as i16
+        );
+    }
+    let text = assembly(&module(&ir), &Request::new(Level::O2)).unwrap();
+    for (k, (a, b)) in pairs.iter().enumerate() {
+        let (value, overflow) = a.overflowing_mul(*b);
+        let want = (value & 0xFF) as i32 ^ (value >> 8) as i32 ^ if overflow { 0x80 } else { 0 };
+        assert_eq!(exit_code_with(&text, &format!("t_um{k}"), llrm_6502::RUNTIME), want, "umul({a}, {b}) = {value}, overflow {overflow}");
+    }
+}
+
 /// A byte loaded and zero-extended to a word had its high half masked as
 /// `lda #0; and #0` and a cell for it (#7165 expanded the extending load to an
 /// any-extend and a mask 255): `zext(a) + zext(b)` took 30 instructions where
@@ -2031,7 +2069,7 @@ fn a_zero_extended_loaded_byte_has_no_mask_of_zero() {
 /// `SAddO`, `SSubO` and `SMulO` on a word were refused ("convert node to
 /// libcall"); they compile now, and the value and the overflow bit must be
 /// right at the edges (30000 + 30000, -32768 - 1, 181 * 181), not just
-/// accepted. `UMulO` is still refused (tests/overflow_ops.rs).
+/// accepted.
 #[test]
 fn a_signed_word_overflow_operation_computes_its_value_and_its_flag() {
     let pairs: [(i16, i16); 7] =
