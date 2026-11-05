@@ -2982,6 +2982,18 @@ fn a_reload_before_a_jump_goes() {
     );
 }
 
+/// x16basic-c `fp_fin`: a zero word live across a call took `rc8`/`rc9`, for a
+/// `pha`/`pla` pair each, instead of being made again at its three reads. A
+/// remade literal has no store, so its definition is not part of the spill's
+/// cost.
+#[test]
+fn a_zero_across_a_call_is_made_again_not_kept_in_a_saved_cell() {
+    let ir = "declare i16 @chrget(i16)\n@a = external global i16\n@b = external global i16\n\
+              define i8 @f() {\n  %c = call i16 @chrget(i16 0)\n  store i16 0, ptr @a\n  store i16 0, ptr @b\n  %t = trunc i16 %c to i8\n  ret i8 %t\n}";
+    let text = compile_at(ir, "f", 16, Tuning::SIZE);
+    assert!(!text.contains("pha"), "{text}");
+}
+
 /// x16basic-c `strs.c` -O2 (`fn_chrd`) did not compile: a word used as a
 /// pointer has its high byte stored elsewhere. The byte was read as a cell
 /// nothing defined, and the coalescer panicked ("a unique value").
@@ -3010,4 +3022,20 @@ fn a_byte_written_to_a_pointer_cells_high_half_is_refused() {
     ];
     let refused = build("f", &items).err().expect("the write is refused");
     assert!(refused.0.contains("w_p+1"), "{}", refused.0);
+}
+
+/// `ldy #0; pha; lda #0; sta rc8; pla`: a zero made into a cell while `a` is
+/// live, with `y` already holding it (tests/run/c os_files, memory_expansion
+/// -Os: 30 of these in one function, 4 bytes where `sty rc8` is 2).
+#[test]
+fn a_literal_made_into_a_cell_is_stored_from_the_index_register_that_holds_it() {
+    use llrm_6502::peephole::drop_known_loads;
+    assert_eq!(
+        pass(drop_known_loads, "  ldy #0\n  pha\n  lda #0\n  sta rc8\n  pla\n  lda rc8\n  rts\n"),
+        "  ldy #0\n  sty rc8\n  lda rc8\n  rts\n"
+    );
+    let other = "  ldy #1\n  pha\n  lda #0\n  sta rc8\n  pla\n  lda rc8\n  rts\n";
+    assert_eq!(pass(drop_known_loads, other), other, "y holds another value");
+    let read = "  ldy #0\n  pha\n  lda #0\n  sta rc8\n  pla\n  beq l\n  rts\n";
+    assert_eq!(pass(drop_known_loads, read), read, "the branch reads the flags pla set");
 }

@@ -259,11 +259,30 @@ pub fn fold_known_cells(asm: &mut Asm) {
 pub fn drop_known_loads(asm: &mut Asm) {
     let mut known: [Option<&str>; 3] = [None; 3];
     let mut keep = vec![true; asm.lines.len()];
+    let mut stores: Vec<(usize, Inst)> = Vec::new();
+    let mut skip = 0;
     for (at, line) in asm.lines.iter().enumerate() {
+        if at < skip {
+            continue;
+        }
         let Line::Inst(Inst { op, operand, .. }) = line else {
             known = [None; 3];
             continue;
         };
+        // `pha; lda #n; sta m; pla` (a literal made into a cell while `a` is
+        // live) is one store when `x` or `y` already holds `n`
+        if *op == Op::Pha
+            && let [Some(Line::Inst(load)), Some(Line::Inst(store)), Some(Line::Inst(pull))] =
+                [1, 2, 3].map(|n| asm.lines.get(at + n))
+            && (load.op, store.op, pull.op) == (Op::Lda, Op::Sta, Op::Pla)
+            && let (Operand::Imm(value), Operand::Direct(_)) = (&load.operand, &store.operand)
+            && flags_unread_after(&asm.lines, at + 4)
+            && let Some(by) = [(1, Op::Stx), (2, Op::Sty)].into_iter().find(|(r, _)| known[*r] == Some(value.as_str()))
+        {
+            stores.push((at, Inst { op: by.1, operand: store.operand.clone(), place: store.place }));
+            skip = at + 4;
+            continue;
+        }
         let register = match op {
             Op::Lda => Some(0),
             Op::Ldx => Some(1),
@@ -296,6 +315,10 @@ pub fn drop_known_loads(asm: &mut Asm) {
             _ if op.opposite().is_some() => {}
             _ => known = [None; 3],
         }
+    }
+    for (at, store) in stores {
+        asm.lines[at] = Line::Inst(store);
+        keep[at + 1..at + 4].fill(false);
     }
     retain(asm, &keep);
 }

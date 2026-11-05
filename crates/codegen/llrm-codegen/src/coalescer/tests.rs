@@ -1678,3 +1678,43 @@ fn test_a_target_with_no_opinion_on_a_join_is_not_asked_to_build_one() {
     assert_eq!(run(Some(Box::new(|_| true))), 1, "premise: an opinion is built a join for");
     assert_eq!(run(None), 0);
 }
+
+/// `v := implicit_def`: the value a phi's predecessor gets where the phi's
+/// input is poison.
+fn implicit_def(v: u32) -> Arc<Insn> {
+    let what = Semantics {
+        name: Some(crate::processimpdefs::IMPLICIT_DEF.into()),
+        dests: vec![held(v)],
+        ..Semantics::new(Operation::Nothing)
+    };
+    Arc::new(Insn::new(0, None, Some(what), vec![v], vec![]))
+}
+
+/// A run-time unroll's prolog leaves two phi values the same (`acc.unr` from
+/// poison, `acc.unr2` from 0.0) and both are copies of one prolog value. The
+/// bypass edge gives `v2` an `implicit_def` that overlaps `v1`'s 0.0: the pin
+/// erases it (`ErasableImplicitDef`), the two join, and no copy is left.
+/// Without the port `v1` and `v2` stayed two registers with a copy in the
+/// prolog loop: wasm bench/recfloat at O2 was 512 B to the pin's 487.
+#[test]
+fn test_an_implicit_def_overlapping_a_live_value_is_erased_by_the_join() {
+    let bypass = block_at(0, vec![def(1), implicit_def(2), jump(0x20)], &[0x20, 0x10]);
+    let prolog = block_at(0x10, vec![def(3), copy(2, 3), copy(1, 3), jump(0x20)], &[0x20]);
+    let exit = block_at(0x20, vec![read(1), read(2)], &[]);
+    let was = body_of(vec![bypass, prolog, exit]);
+    let mut lis = LiveIntervals::new(&was);
+    let stats = super::driver::run(&mut lis, &AnyClass, &[0, 0, 0]);
+    assert!(stats.joined >= 1, "premise: something joined: {stats:?}");
+    let after = lis.body_like(&was);
+    let insns: Vec<_> = after.blocks.iter().flat_map(|one| one.insns.iter()).collect();
+    let copies = insns
+        .iter()
+        .filter(|one| one.what.as_ref().is_some_and(|w| w.sources.iter().any(|s| matches!(s, Loc::Held(_)))))
+        .count();
+    assert_eq!(copies, 0, "a copy is left: {insns:?}");
+    let last = insns.iter().rev().find(|one| one.uses.len() == 1).unwrap();
+    let reads: Vec<u32> =
+        insns.iter().filter(|one| one.defines.is_empty() && one.uses.len() == 1).map(|one| one.uses[0]).collect();
+    assert_eq!(reads.len(), 2, "{last:?}");
+    assert_eq!(reads[0], reads[1], "the two phi values are one register");
+}

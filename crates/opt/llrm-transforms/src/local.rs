@@ -179,7 +179,7 @@ fn edges_into(
 }
 
 /// The call `inst`'s intrinsic, if its callee is one.
-fn intrinsic_of(
+pub(crate) fn intrinsic_of(
     context: &Context,
     declarations: &Declarations,
     function: &Function,

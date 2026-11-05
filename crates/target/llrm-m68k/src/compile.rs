@@ -136,6 +136,9 @@ pub fn items_with(
     crate::regalloc::split_flag_edges(&mut function);
     eliminate_phis_with(&mut function, false);
     fold_reserved_copies(&mut function);
+    if options.short {
+        crate::commutative::mark_commutative(&mut function, wants_size);
+    }
     commute_tied(&mut function);
     two_address(&mut function);
     // spill slots are numbered after the static allocas

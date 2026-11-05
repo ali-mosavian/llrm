@@ -1002,6 +1002,10 @@ impl Builder {
             self.copy(d, a);
             return Ok(());
         }
+        if is_zeroing(mnemonic, &second) {
+            self.push(Inst::new(Kind::Op("LDI"), vec![Operand::Def(d), Operand::Imm(0)]));
+            return Ok(());
+        }
         if let Some(carry) = carry {
             self.push(Inst::new(Kind::Op(carry), vec![]));
         }
@@ -1225,6 +1229,10 @@ impl Builder {
                 self.copy(d, a);
                 continue;
             }
+            if is_zeroing(mnemonic, &b) {
+                self.push(Inst::new(Kind::Op("LDI"), vec![Operand::Def(d), Operand::Imm(0)]));
+                continue;
+            }
             if half == 1 && low_kept && b == Operand::Imm(1) {
                 self.copy(d, a);
                 self.push(Inst::new(
@@ -1294,6 +1302,15 @@ fn is_identity(
         (mnemonic, second),
         ("EOR" | "ORA", Operand::Imm(0)) | ("AND", Operand::Imm(255))
     )
+}
+
+/// A logical op whose immediate makes the byte zero whatever it was: `x & 0`
+/// (the high half of a zero-extended byte masked by 255 was `lda #0; and #0`).
+fn is_zeroing(
+    mnemonic: &str,
+    second: &Operand,
+) -> bool {
+    matches!((mnemonic, second), ("AND", Operand::Imm(0)))
 }
 
 fn name(operand: &Machine) -> Result<&str, Unsupported> {
@@ -1432,6 +1449,18 @@ fn constants(items: &[Item]) -> HashMap<String, i64> {
         let word = cell.strip_suffix("+1").unwrap_or(cell);
         defs[cell] == 1 && defs[word] == 1 && (cell.starts_with("v_") || cell.starts_with("w_"))
     });
+    // a word masked by a word whose high byte is zero has a zero high byte (the
+    // mask 255 that zero-extends an any-extended byte)
+    for item in items {
+        let Item::Inst(MInst { opcode: op::AND16, operands, .. }) = item else { continue };
+        if let [Machine::Reg(d), _, Machine::Reg(mask)] = &operands[..]
+            && defs[d] == 1
+            && (d.starts_with("v_") || d.starts_with("w_"))
+            && values.get(&format!("{mask}+1")) == Some(&0)
+        {
+            values.insert(format!("{d}+1"), 0);
+        }
+    }
     // a byte copied once from a constant is that constant (the zero high half
     // of a widened byte)
     for item in items {
