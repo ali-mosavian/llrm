@@ -56,3 +56,38 @@ fn a_large_frame_keeps_x16_and_x17_for_its_offsets() {
         .collect();
     assert!(data_uses.is_empty(), "{data_uses:?}");
 }
+
+/// `x16` and `x17` are clobbered by the linker's veneers at every call: a value
+/// that lives across one never sits in them.
+#[test]
+fn nothing_live_across_a_call_is_in_x16_or_x17() {
+    let _one_at_a_time = LOCK.lock().unwrap_or_else(|held| held.into_inner());
+    let asm = driver::assembly(include_str!("data/live_across_call.ll"), Platform::Linux, Level::O2).expect("lowers");
+    let (before, after) = asm.split_once("\tbl f").expect("the call");
+    let written = |text: &str, reg: &str| {
+        text.lines().any(|line| {
+            let mut parts = line.trim().splitn(2, ' ');
+            parts.next();
+            parts.next().is_some_and(|ops| ops.split(',').next().is_some_and(|dst| dst.trim() == reg))
+        })
+    };
+    for reg in ["x16", "x17"] {
+        // Read after the call, before any write after it.
+        let mut stale = false;
+        for line in after.lines() {
+            let line = line.trim();
+            let ops = line.split_once(' ').map_or("", |(_, ops)| ops);
+            let mut fields = ops.split(',').map(str::trim);
+            let dst = fields.next().unwrap_or("");
+            let reads = fields.any(|field| field == reg || field.contains(&format!("[{reg}")));
+            if reads && !stale {
+                stale = written(before, reg);
+                break;
+            }
+            if dst == reg {
+                break;
+            }
+        }
+        assert!(!stale, "{reg} is read after the call but written before it: {asm}");
+    }
+}
