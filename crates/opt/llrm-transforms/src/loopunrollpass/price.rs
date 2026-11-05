@@ -6,7 +6,7 @@
 
 use std::collections::HashSet;
 
-use llrm_mir::module::ValueId;
+use llrm_mir::module::{ValueDef, ValueId};
 
 use super::*;
 use crate::loopidioms::{trip_clocks, trip_cost};
@@ -69,13 +69,17 @@ pub(super) fn full_unroll_pays(
         .as_ref()
         .map_or(uce.unrolled_loop_size(up, trips) as i64, |cost| i64::from(cost.unrolled_cost));
     let added = ((unrolled_units - rolled_units).max(0) * body_bytes) / rolled_units;
+    let (nested_uses, known) = constant_operand_uses(run, analyzed, lp);
+    // The accesses of a local array the copies make constant-indexed: the
+    // array is promoted to registers, so they cost no clocks and no bytes
+    // (frameless: `local[i]` filled and read by two 12-trip loops).
+    let (promoted, promoted_runs) = promoted_accesses(run, analyzed, lp, &known);
+    let added = (added - i64::from(trips) * promoted * bytes.load).max(0);
     let (saved_units, constant_clocks) = match analysis {
         Some(cost) => (i64::from(cost.rolled_dynamic_cost.saturating_sub(cost.unrolled_cost)), 0),
-        None => (
-            i64::from(trips) * i64::from(up.be_insns),
-            i64::from(trips) * constant_operand_uses(run, analyzed, lp) * clocks.r#move,
-        ),
+        None => (i64::from(trips) * i64::from(up.be_insns), i64::from(trips) * nested_uses * clocks.r#move),
     };
+    let constant_clocks = constant_clocks + i64::from(trips) * promoted_runs * clocks.load;
     // The loop runs once for each trip of the loops around it, which the
     // bytes do not: the saving is counted over those runs (x_cordic: the
     // 12-trip loop inside a loop of `n` runs `n` times, 89 clocks each).
@@ -98,11 +102,11 @@ fn constant_operand_uses(
     run: &Run,
     analyzed: &Analyzed,
     lp: Loop,
-) -> i64 {
+) -> (i64, HashSet<ValueId>) {
     let function = &*run.function;
     let header = lp.get_header();
     let (Some(preheader), Some(latch)) = (lp.get_loop_preheader(function), lp.get_loop_latch(function)) else {
-        return 0;
+        return (0, HashSet::new());
     };
     let depth = lp.get_loop_depth();
     let own: Vec<InstId> = lp
@@ -128,7 +132,12 @@ fn constant_operand_uses(
             grew = false;
             for &inst in &own {
                 let one = function.instruction(inst);
-                let pure = matches!(
+                // An element of a constant table at the counters is a constant
+                // in a copy.
+                let element = matches!(one.opcode, Opcode::Load { volatile: false, .. })
+                    && matches!(local_array_at(run, one.operands[0], &known), Some(Base::Table));
+                let pure = element
+                    || matches!(
                     one.opcode,
                     Opcode::FNeg
                         | Opcode::Binary(_)
@@ -187,5 +196,107 @@ fn constant_operand_uses(
             }
         }
     }
-    uses
+    (uses, known)
+}
+
+/// The loads and stores in the blocks of `lp` (and, as many as they run, those of
+/// the loops inside it) of a local array that does not
+/// escape, at an address computed from the counters of `lp` (`known`) alone: in
+/// a full unroll each is at a constant offset and the array is promoted.
+fn promoted_accesses(
+    run: &Run,
+    analyzed: &Analyzed,
+    lp: Loop,
+    known: &HashSet<ValueId>,
+) -> (i64, i64) {
+    let function = &*run.function;
+    let (mut found, mut runs) = (0, 0);
+    for &block in lp.get_blocks() {
+        let nested = analyzed.loops.get_loop_depth(block).saturating_sub(lp.get_loop_depth());
+        for inst in function.iter_block(block) {
+            let one = function.instruction(inst);
+            let pointer = match one.opcode {
+                Opcode::Load { volatile: false, .. } => one.operands[0],
+                Opcode::Store { volatile: false, .. } => one.operands[1],
+                _ => continue,
+            };
+            let free = match local_array_at(run, pointer, known) {
+                // A read of a constant table at the counter is the table's
+                // element in a copy.
+                Some(Base::Table) => matches!(one.opcode, Opcode::Load { .. }),
+                Some(Base::Local(root)) => llrm_analysis::capturetracking::pointer_may_be_captured(
+                    function,
+                    run.globals,
+                    run.context,
+                    root,
+                    llrm_analysis::capturetracking::CaptureComponents::PROVENANCE,
+                    |cc| {
+                        cc.intersect(llrm_analysis::capturetracking::CaptureComponents::PROVENANCE)
+                            == llrm_analysis::capturetracking::CaptureComponents::PROVENANCE
+                    },
+                    llrm_analysis::capturetracking::DEFAULT_MAX_USES_TO_EXPLORE,
+                )
+                .without_ret
+                .captures_nothing(),
+                None => false,
+            };
+            if free {
+                found += 1;
+                runs += ASSUMED_TRIPS.pow(nested.min(2));
+            }
+        }
+    }
+    (found, runs)
+}
+
+/// What an address at the counters is an element of.
+enum Base {
+    Local(ValueId),
+    Table,
+}
+
+/// The alloca, or constant global, `pointer` addresses through geps whose
+/// indices are constants or in `known`.
+fn local_array_at(
+    run: &Run,
+    mut pointer: Operand,
+    known: &HashSet<ValueId>,
+) -> Option<Base> {
+    let function = &*run.function;
+    let mut indexed = false;
+    loop {
+        match pointer {
+            Operand::Constant(id) => {
+                let ConstantKind::Global(global) = run.context.get(id).kind else { return None };
+                return match &run.globals[global.0 as usize].kind {
+                    GlobalKind::Variable(variable) if variable.constant && variable.initializer.is_some() && indexed => {
+                        Some(Base::Table)
+                    }
+                    _ => None,
+                };
+            }
+            Operand::Value(value) => {
+                let ValueDef::Instruction(def) = function.value(value).def else { return None };
+                let one = function.instruction(def);
+                match one.opcode {
+                    Opcode::Alloca { .. } => return Some(Base::Local(value)),
+                    Opcode::GetElementPtr { .. } => {
+                        let varying = one.operands[1..].iter().any(|index| matches!(index, Operand::Value(_)));
+                        let counted = one.operands[1..].iter().all(|index| match index {
+                            Operand::Value(index) => known.contains(index),
+                            Operand::Constant(_) => true,
+                            Operand::Block(_) => false,
+                        });
+                        if !counted {
+                            return None;
+                        }
+                        indexed |= varying;
+                        pointer = one.operands[0];
+                    }
+                    _ => return None,
+                }
+            }
+            Operand::Block(_) => return None,
+        }
+    }
 }
