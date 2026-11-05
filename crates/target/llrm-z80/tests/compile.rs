@@ -1575,3 +1575,14 @@ fn a_size_build_inlines_a_callee_whose_frame_costs_more_than_its_body() {
     let out = text(ir, "main", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
     assert!(!out.contains("_bench"), "{out}");
 }
+
+/// A callee's frame is built once, and an inlined copy builds it in the caller:
+/// credited per site, as if every copy shed one, -Os inlined `dirty` (a 96 B
+/// frame, two sites) into a `main` with no frame of its own and
+/// long_double_constant_store grew from 64 B to 72 B. `dirty` stays a call.
+#[test]
+fn a_size_build_keeps_a_callee_whose_frame_would_move_into_a_frameless_caller() {
+    let ir = include_str!("kernels/ir/long_double_constant_store.ll");
+    let out = text(ir, "main", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+    assert_eq!(out.matches("call _dirty").count(), 2, "{out}");
+}

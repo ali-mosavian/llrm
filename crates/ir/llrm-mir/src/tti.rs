@@ -322,6 +322,9 @@ pub struct CallShape {
     pub arguments: Vec<CallArgument>,
     /// The bytes of the callee's static allocas.
     pub callee_frame_bytes: u64,
+    /// The bytes of the caller's static allocas: a caller with none has no
+    /// frame, and an inlined callee's moves into it instead of vanishing.
+    pub caller_frame_bytes: u64,
 }
 
 /// The target a cost is for.
@@ -390,6 +393,19 @@ pub trait Tti {
     /// read it in place of the call instruction's flat price. None: the pin's
     /// flat price (the call as one instruction and one per argument).
     fn call_sequence_cost(
+        &self,
+        shape: &CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        let _ = (shape, kind);
+        None
+    }
+
+    /// What building and tearing down the callee's frame costs in `kind`,
+    /// once per call executed. Inlining removes it from the callee, which then
+    /// stays or dies: in bytes it is saved once, when the callee dies, and
+    /// only where the caller already has a frame. None: no frame term.
+    fn callee_frame_cost(
         &self,
         shape: &CallShape,
         kind: CostKind,
