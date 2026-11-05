@@ -185,6 +185,15 @@ impl Tti for Mos6502 {
     // llrm-target-6502. Exit: a frequency that knows the trip count,
     // 2026-11-20.
 
+    /// A full unroll at -O2/-O3 must save 3 clocks for each code byte it adds
+    /// (the 6502 rate, `DEVIATE 6502-RATE`), on the real clock and byte tables
+    /// (`crate::opcosts`, `DEVIATE 6502-OPCOSTS`): the unit prices it used
+    /// before read a 32-bit store fill as a few instructions (220 B for 46
+    /// clocks, byval_struct). Owner: llrm-target-6502. Exit: 2026-11-20.
+    fn unroll_milliclocks_per_byte(&self) -> i64 {
+        3000
+    }
+
     /// A 32-bit counter or product is four byte adds; the datalayout's `n8`
     /// made LSR leave all of them (shrink_wrapped_frame: `n * i` a 32-bit
     /// multiply per trip, 56k of its 64k clocks). Not 16: with it the

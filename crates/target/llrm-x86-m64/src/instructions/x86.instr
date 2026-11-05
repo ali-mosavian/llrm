@@ -57,6 +57,9 @@ shld    funnel    rm/^0,r,ri    64    shift_ri    s2=cx    -    count    -/OF,SF
 shrd    funnel    rm/^0,r,ri    64    shift_ri    s2=cx    -    count    -/OF,SF,ZF,AF,CF,PF    Shrd_rm{w}_r{w}_CL
 neg    unary    rm/^0    64    alu_rr    -    -    -    -/OF,SF,ZF,AF,CF,PF    Neg_rm{w}
 not    unary    rm/^0    64    alu_rr    -    -    -    -/-    Not_rm{w}
+# bsf, bsr: as x86-m32's (flat alu_rr, `cond`: the destination is untouched for a zero source), at 64 bits.
+bsf    binary    r/^0,rm    64    alu_rr    -    -    cond    -/OF,SF,ZF,AF,CF,PF    Bsf_r{w}_rm{w}
+bsr    binary    r/^0,rm    64    alu_rr    -    -    cond    -/OF,SF,ZF,AF,CF,PF    Bsr_r{w}_rm{w}
 inc    unary    rm/^0    64    alu_rr    -    -    -    -/OF,SF,ZF,AF,PF    Inc_rm{w}
 dec    unary    rm/^0    64    alu_rr    -    -    -    -/OF,SF,ZF,AF,PF    Dec_rm{w}
 imul    mul    r/^0,rmi    64    imul_r32    -    -    -    -/OF,SF,ZF,AF,CF,PF    Imul_r{w}_rm{w}

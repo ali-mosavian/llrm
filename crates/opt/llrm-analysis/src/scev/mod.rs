@@ -321,8 +321,19 @@ impl Default for ScalarEvolution {
     }
 }
 
+thread_local! {
+    static MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many [`ScalarEvolution`]s this thread made, for a test that a pass
+/// asking many questions of one function keeps one table of expressions.
+pub fn made() -> usize {
+    MADE.with(std::cell::Cell::get)
+}
+
 impl ScalarEvolution {
     pub fn new() -> Self {
+        MADE.with(|made| made.set(made.get() + 1));
         let mut se = Self {
             nodes: Vec::new(),
             unique: HashMap::with_capacity_and_hasher(256, Default::default()),

@@ -260,7 +260,7 @@ impl CombineHooks for Aarch64Lowering {
     ) -> bool {
         matches!(
             op,
-            ISD::Mul | ISD::Add | ISD::Sub | ISD::And | ISD::Or | ISD::GlobalAddress | ISD::Shl | ISD::Srl | ISD::Sra | ISD::Rotr
+            ISD::Mul | ISD::Add | ISD::Sub | ISD::And | ISD::Or | ISD::SetCC | ISD::GlobalAddress | ISD::Shl | ISD::Srl | ISD::Sra | ISD::Rotr
         )
     }
 
@@ -285,6 +285,7 @@ impl CombineHooks for Aarch64Lowering {
             ISD::GlobalAddress => self.global_address_combine(dag, node),
             ISD::Add => super::combine::add_combine_for_shifted_operands(dag, node),
             ISD::Sub => super::combine::conditional_sub(dag, node),
+            ISD::SetCC => super::combine::or_xor_chain(dag, node),
             ISD::Shl | ISD::Srl | ISD::Sra | ISD::Rotr if level == CombineLevel::AfterLegalizeDag => {
                 super::combine::shift_amount_mod(dag, node)
             }
@@ -432,6 +433,12 @@ impl SchedInfo for Aarch64Sched {
         opcode: u32,
     ) -> bool {
         instrinfo::desc(opcode as u16).is_some_and(|desc| desc.has(flag::CALL))
+    }
+
+    /// A call preserves no flags: the pin's `RegisterMask` of the call lists
+    /// `NZCV` as clobbered.
+    fn call_clobbered(&self) -> &[u16] {
+        &[llrm_dagisel::generated::aarch64::ids::reg::NZCV]
     }
 
     fn call_frame_setup(&self) -> Option<u32> {

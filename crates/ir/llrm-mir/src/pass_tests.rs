@@ -697,6 +697,24 @@ fn module_analyses_of_the_declarations_stand_until_a_declaration_changes() {
     );
 }
 
+/// `LLRM_CHECK_MODULES` ran every compile into a panic, "declarations: brought up to date, it is not
+/// what working it out afresh gives", then the same for callee-effects: the afresh run took the patch
+/// path on the result the first run left behind, from before `stamp` gave `f` its attributes.
+#[test]
+fn analyses_worked_out_afresh_ignore_the_result_the_first_run_left() {
+    use crate::passes::{CalleeEffects, Declarations};
+    let mut module = module();
+    let program = crate::program::ProgramProxy::of(&module, Rc::new(Neutral));
+    let mut analyses = ModuleAnalyses::new(program);
+    analyses.get::<Declarations>(&module);
+    analyses.get::<CalleeEffects>(&module);
+    let (_, function) = module.function_mut("f").unwrap();
+    function.attrs.push(Attribute::Flag("readnone".to_owned()));
+    analyses.invalidate(&PreservedAnalyses::none());
+    assert!(analyses.run_agrees_afresh::<Declarations>(&module), "declarations kept the listing from before the attribute");
+    assert!(analyses.run_agrees_afresh::<CalleeEffects>(&module), "callee effects kept the map from before the attribute");
+}
+
 /// A pass that named nothing loses the result though the body did not move:
 /// the rerun is told `same-untouched` (383 of the 2,248 results dropped at one
 /// d_faces -O2 compile were of that kind on main, which kept them).
