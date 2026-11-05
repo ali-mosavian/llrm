@@ -15,7 +15,7 @@ define void @copy(ptr %d, ptr %s, i32 %n) {
 ; CHECK-LABEL: copy_ proc
 ; CHECK: mov edi, eax
 ; CHECK: mov esi, edx
-; CHECK: rep movs dword
+; CHECK: rep movsd
 ; CHECK-NOT: mov edi, eax
 ; CHECK-NOT: mov esi, edx
-; CHECK: rep movs byte
+; CHECK: rep movsb

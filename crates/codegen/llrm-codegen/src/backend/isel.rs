@@ -6407,7 +6407,7 @@ impl Selector<'_, '_, '_> {
         effects: llrm_mir::memory::Effects,
         disturbs: BTreeSet<RegId>,
     ) -> Arc<crate::model::lir::CallMemory> {
-        Arc::new(crate::model::lir::CallMemory { effects, private: self.private.clone(), disturbs })
+        Arc::new(crate::model::lir::CallMemory { effects, private: self.private.clone(), disturbs, block: false })
     }
 
     /// A direct call: its arguments pushed as its convention orders them,
