@@ -38,6 +38,7 @@ pub fn text(
         if variable.initializer.is_none() || global.name.as_deref().is_some_and(globals::is_compiler_only) {
             continue;
         }
+        let local = llrm_mir::image::Export::of(global.linkage) == llrm_mir::image::Export::Local;
         let id = llrm_mir::GlobalId(at as u32);
         let datums = globals::datums(module, id, &names)?;
         // a variable of zeros is bss: space the program's start clears, not bytes of the image
@@ -57,6 +58,9 @@ pub fn text(
             match datum {
                 Datum::Bytes(bytes) if bss => out.push_str(&format!("\t.ds {}\n", bytes.len())),
                 Datum::Fill(fill) if bss => out.push_str(&format!("\t.ds {}\n", fill.size)),
+                Datum::Label(label) | Datum::Object(label) if local => {
+                    out.push_str(&format!("{}:\n", label.name));
+                }
                 Datum::Label(label) | Datum::Object(label) => {
                     out.push_str(&format!("\t.globl {0}\n{0}::\n", label.name));
                 }
