@@ -98,7 +98,8 @@ impl SchedInfo for Info {
         Some(reg) == super::dagisel_adapter::pin_register(super::dagisel_adapter::EFLAGS_ID)
     }
 
-    // `ADJCALLSTACKDOWN32`/`64` and `ADJCALLSTACKUP32`/`64`, numbered alike in every x86 table.
+    // `ADJCALLSTACKDOWN32`/`64` and `ADJCALLSTACKUP32`/`64`, numbered alike in
+    // every x86 table.
     fn call_frame_setup(&self) -> Option<u32> {
         Some(if self.m64 { 768 } else { 767 })
     }
@@ -958,7 +959,10 @@ fn selected_in(
     if module.signature(function.ty).2 {
         match &positional {
             Some(found) if convention.parameters.len() < found.argument_registers.len() => {
-                cells.extend((convention.parameters.len()..found.argument_registers.len()).map(|at| arch.first_argument_offset(false) + at as i64 * 8));
+                cells.extend(
+                    (convention.parameters.len()..found.argument_registers.len())
+                        .map(|at| arch.first_argument_offset(false) + at as i64 * 8),
+                );
             }
             _ => cells.push(convention.stack_arguments),
         }
@@ -1112,6 +1116,11 @@ fn selected_in(
         frame: &frame,
         address_mode,
         opt_size: cpu.size || cpu.min_size,
+        reserved_calls: module
+            .named(name)
+            .and_then(|id| module.global(id).function())
+            .and_then(|function| arch.calling().by_number(function.calling_convention))
+            .is_some_and(|convention| convention.reserve_call_frame),
         call_alignment: if arch.aligned_calls() { (arch.stack_alignment() as i64).max(1) } else { 1 },
         map: &tables.map,
         names: &tables.names,

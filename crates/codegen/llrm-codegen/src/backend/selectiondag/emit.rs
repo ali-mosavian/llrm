@@ -220,6 +220,10 @@ pub struct EmitContext<'a> {
     /// The multiple a call's argument area is rounded to, so a call finds the
     /// stack aligned (`aligned_calls`); 1 where calls need none.
     pub call_alignment: i64,
+    /// The function's convention changes the stack pointer only in the
+    /// prologue and epilogue: its calls' areas are frame pseudos, reserved
+    /// there, at any width.
+    pub reserved_calls: bool,
     pub map: &'a OpcodeMap,
     pub names: &'a HashMap<u16, &'a str>,
     /// The jump tables of the function, by `JumpTable` index.
@@ -521,8 +525,10 @@ pub fn emit_in(
         let node = dag.node(*value);
         // `flds`, `fldz` and `fld1`: the f32 the program holds.
         let exact = bytes == 4
-            && matches!(node.opcode, ISD::Machine(op)
-                if emitter.ctx.names.get(&(op as u16)).is_some_and(|name| matches!(*name, "LD_Fp32m" | "LD_Fp032" | "LD_Fp132")));
+            && matches!(
+                node.opcode,
+                ISD::Machine(op) if emitter.ctx.names.get(&(op as u16)).is_some_and(|name| matches!(*name, "LD_Fp32m" | "LD_Fp032" | "LD_Fp132"))
+            );
         let all = emitter.state.float_exact.entry(*number).or_insert(true);
         *all &= exact;
     }
@@ -2505,9 +2511,10 @@ impl Emitter<'_, '_> {
                 let bytes = (bytes + self.ctx.call_alignment - 1) / self.ctx.call_alignment * self.ctx.call_alignment;
                 // Flat 32-bit: the pin's pseudos, which `callframe.rs` turns
                 // into pushes or `sub`/`add` (DEVIATE CF4).
-                if self.ctx.address_mode == AddrMode::Flat32 {
+                if self.ctx.address_mode == AddrMode::Flat32 || self.ctx.reserved_calls {
                     if bytes != 0 {
-                        let imm = |value: i64| Loc::Imm(Imm { value, width: 4, address: None });
+                        let width = if self.ctx.address_mode == AddrMode::Flat64 { 8 } else { 4 };
+                        let imm = |value: i64| Loc::Imm(Imm { value, width, address: None });
                         let (pseudo, sources) = if name.starts_with("ADJCALLSTACKDOWN") {
                             ("call_frame_setup", vec![imm(bytes), imm(0), imm(0)])
                         } else {

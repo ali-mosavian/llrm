@@ -754,6 +754,23 @@ mod options_tests {
         assert!(caller.contains("mov ecx, edx") && !caller.contains("edi") && !caller.contains("esi"), "{assembly}");
     }
 
+    /// Every Win64 call moved the stack pointer around its 32 bytes of home
+    /// area (`sub rsp, 32` / `add rsp, 32` per call, `hanoi`'s loop included);
+    /// the pin reserves the area in the prologue, the only place the stack
+    /// pointer may change on Win64.
+    #[test]
+    fn a_windows_call_reserves_its_home_area_in_the_prologue() {
+        let text = "target datalayout = \"e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                    target triple = \"x86_64-pc-windows-msvc\"\n\
+                    declare i32 @g(i32)\n\
+                    define i32 @f(i32 %x) {\n  %a = call i32 @g(i32 %x)\n  %b = call i32 @g(i32 %a)\n  %c = add i32 %a, %b\n  ret i32 %c\n}\n";
+        let mut flags = Flags::default();
+        flags.allow_pending_abi = true;
+        let (built, _) = compiled_dumping(&flags, text, "w", None).unwrap();
+        let assembly = masm::text(&built).unwrap();
+        assert_eq!((assembly.matches("sub rsp").count(), assembly.matches("add rsp").count()), (1, 1), "{assembly}");
+    }
+
     /// `llrm-cc` ran the backend with none of what the Watcom front end set
     /// for C: float spills kept 80 bits, `memcpy` stayed `rep movs`, and no
     /// loop became `strlen`.

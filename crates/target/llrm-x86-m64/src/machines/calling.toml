@@ -88,6 +88,8 @@ float = ["xmm0"]
 cc = "win64"
 # X86CallingConv.td sends every convention through CC_X86_Win64_C on a Win64 subtarget.
 serves = ["fast"]
+# The stack pointer changes only in the prologue and epilogue: every call's area (the home area too) is reserved there.
+reserve_call_frame = true
 slot_bytes = 8
 stack_alignment = 16
 aligned_calls = true

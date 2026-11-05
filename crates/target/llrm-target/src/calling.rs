@@ -75,6 +75,10 @@ pub struct Convention {
     /// Bytes below the arguments the caller reserves in every call and the
     /// callee may use (Win64's 32-byte home area of the register arguments).
     pub shadow_bytes: i64,
+    /// The stack pointer moves only in the prologue and epilogue (Win64: "it
+    /// is not valid to change the stack pointer outside the prolog/epilog"):
+    /// a call's area is reserved in the frame, whatever the call needs.
+    pub reserve_call_frame: bool,
     /// The MIR conventions besides C's that functions and calls in this
     /// ABI take (`serves = ["fast"]`): Win64 sends every one through
     /// `CC_X86_Win64_C`.
@@ -239,6 +243,7 @@ const KEYS: &[&str] = &[
     "backfill",
     "positional",
     "shadow_bytes",
+    "reserve_call_frame",
     "serves",
     "aligned_calls",
     "register_bytes",
@@ -704,6 +709,7 @@ impl Convention {
                 Some(_) => names(table.get("serves"), "serves")?,
                 None => Vec::new(),
             },
+            reserve_call_frame: flag("reserve_call_frame")?,
             shadow_bytes: table.contains_key("shadow_bytes").then(|| integer("shadow_bytes")).transpose()?.unwrap_or(0),
             aligned_calls: flag("aligned_calls")?,
             register_bytes: table.contains_key("register_bytes").then(|| integer("register_bytes")).transpose()?,
