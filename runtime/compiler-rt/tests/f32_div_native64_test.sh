@@ -1,5 +1,8 @@
 #!/bin/sh
 # usage: LLRM_CC_DIR=dir tests/f32_div_native64_test.sh -> at m64 -O2 the f32 divide is one hardware divide (it was four 32-bit divides plus the remainder steps, SF_DIV_HW32) and still equals the host FPU.
+# BRANCH STATUS (draft, red on purpose, exit 11-20 or when the compiler fix lands): llrm-cc at 3ba009bf39..082f95629b emits (u64)a << 27 as a 32-bit shl before `div rcx`
+# (repro: ~/scratch/handoff/shl27-udiv-repro.c), so the native check below fails 200000/200000. Owner of the fix: m64, #7436 (shl-half). Green on a dist with it: then
+# measure clocks (none quoted from this branch) and mark ready. R5 in config/x86_m64/config.h is removed if the four-divide form measures faster.
 set -e
 cd "$(dirname "$0")/.."; D=${LLRM_CC_DIR:?set LLRM_CC_DIR}; T=$(mktemp -d); trap 'rm -r $T' EXIT
 LLRM_CC_TARGET=x86_64-linux $D/llrm-cc -m64 -O2 -include config/x86_m64/config.h -Iinclude '-DSF_NAME(n)=sfb_##n' -c lib/fp/f32/div.c -o $T/d.o
