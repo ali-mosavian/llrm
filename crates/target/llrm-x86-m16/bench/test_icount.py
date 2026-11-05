@@ -179,6 +179,24 @@ done:"""
         result = self.run_body(body, bytes([7]), "fname db 'C:\\DATA.BIN', 0\nbuf db 0")
         self.assertEqual((result.error, result.exit_code), ("", 7))
 
+    def test_a_program_that_asks_for_a_files_attributes_learns_whether_it_exists(self):
+        """Borland's open() calls `int 21h ah=43h` first: bcc, tc and tcpp stopped with `int 21h ah=0x43` on jpeg_single, jpeg_fixed,
+        stft_single and stft_fixed and had no reference row. Found: carry clear; missing: carry set, AX=2."""
+        body = """    mov dx, offset fname
+    mov ax, 4300h
+    int 21h
+    jc fail
+    mov al, 7
+    jmp done
+fail:
+    mov al, ah
+    cmp ax, 2
+done:"""
+        found = self.run_body(body, b"x", "fname db 'DATA.BIN', 0")
+        self.assertEqual((found.error, found.exit_code), ("", 7))
+        missing = self.run_body(body.replace("DATA", "NONE"), b"x", "fname db 'NONE.BIN', 0")
+        self.assertEqual((missing.error, missing.exit_code), ("", 0))
+
 
 class MapTests(unittest.TestCase):
     def test_a_name_matches_as_each_language_spells_it(self):
