@@ -1879,3 +1879,15 @@ fn peeking_slots_is_kept_only_where_it_is_smaller() {
     let lines = out.lines().count();
     assert!(lines <= 148, "{lines} lines\n{out}");
 }
+
+/// An `internal` function was labelled `name::`, a global: two modules that
+/// each define the same `static inline` helper failed to link (`_sf_clz64` in
+/// the soft-float f64 mul and div: float_bits, float_in_place_update).
+#[test]
+fn an_internal_function_is_a_local_label_and_an_external_one_is_global() {
+    let ir = include_str!("kernels/ir/stack_slot_other_register.ll");
+    let internal = text(ir, "sum", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(internal.starts_with("_sum:\n"), "{internal}");
+    let external = text(include_str!("kernels/ir/digits.ll"), "digits", 0, &Request::new(Level::Os)).expect("compiles");
+    assert!(external.starts_with("_digits::\n"), "{external}");
+}
