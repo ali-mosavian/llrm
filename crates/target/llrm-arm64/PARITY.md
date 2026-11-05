@@ -9,3 +9,4 @@
 | GM3 | allocation | stft_single/stft_fixed/nbody_fixed O3 run more instructions than release/next without the merge; the merged address adds are the pin's, the residue is spills and copies | 11-12 |
 | SF1 | `sinkfold.rs` | sink-and-fold runs after phi elimination: a value qualifies when it and its operands are defined once (the pin: SSA) | 11-12 |
 | SF2 | `sinkfold.rs` | register pressure at the sink target counts live virtual registers against the allocatable ones (the pin: per pressure set) | 11-12 |
+| FS1 | `frame.rs` | a frame with a moving stack pointer keeps the combined stack bump (the pin splits it at 512 bytes too) | 11-12 |
