@@ -39,6 +39,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::tti::*;
 use llrm_target::Target as _;
 
+use crate::driver::Level;
 use crate::target::Z80;
 use crate::timing::cost;
 

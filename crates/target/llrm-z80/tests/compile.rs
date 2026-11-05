@@ -1143,9 +1143,9 @@ fn a_spilled_word_shifted_right_by_a_byte_reloads_one_byte() {
     let ir = include_str!("kernels/ir/reload_high_lane.ll");
     let out = text(ir, "f", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
     let lines: Vec<&str> = out.lines().map(str::trim).collect();
-    let dead = lines.windows(4).any(|w| {
-        w[0].starts_with("ld e, -") && w[1].starts_with("ld d, -") && w[2] == "ld e, d" && w[3] == "ld d, #0"
-    });
+    let dead = lines
+        .windows(4)
+        .any(|w| w[0].starts_with("ld e, -") && w[1].starts_with("ld d, -") && w[2] == "ld e, d" && w[3] == "ld d, #0");
     assert!(!dead, "{out}");
     assert!(lines.windows(2).any(|w| w[0].starts_with("ld e, -") && w[1] == "ld d, #0"), "{out}");
 }
@@ -1727,7 +1727,8 @@ fn a_long_order_is_one_borrow_chain() {
 #[test]
 fn a_long_subtract_borrow_shared_with_the_order_chain_still_fuses() {
     let text = compiled("define i64 @f(i64 %a, i64 %b) optsize {\n  %r = sub i64 %a, %b\n  ret i64 %r\n}", "f");
-    let instructions = text.lines().filter(|line| line.starts_with('\t') && !line.trim_start().starts_with('.')).count();
+    let instructions =
+        text.lines().filter(|line| line.starts_with('\t') && !line.trim_start().starts_with('.')).count();
     assert!(instructions <= 135, "{instructions} instructions:\n{text}");
 }
 
@@ -1797,4 +1798,84 @@ fn a_long_shift_routine_takes_its_count_in_a_as_a_byte() {
     let shifted = compiled("define i32 @f(i32 %a) optsize {\n  %r = shl i32 %a, 5\n  ret i32 %r\n}", "f");
     assert!(shifted.contains("ld a, #5"), "{shifted}");
     assert!(!shifted.contains("ld bc, #5") && !shifted.contains("ld hl, #5"), "{shifted}");
+}
+
+/// Positive control for the stack-slot refusal counter: `x` is spilled before
+/// `y` and reloaded first, so its slot is not on top. The counter reading
+/// "nothing refused" here would be the instrument being wrong, not the
+/// allocator (the reasons are measured on div_constants_short).
+#[test]
+fn a_slot_reloaded_under_another_is_refused_and_named() {
+    let ir = include_str!("kernels/ir/stack_slots_crossed.ll");
+    llrm_z80::compile::take_stack_refusals();
+    let out = text(ir, "f", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+    let refused = llrm_z80::compile::take_stack_refusals();
+    assert!(refused.iter().any(|(_, why)| *why == llrm_z80::compile::StackRefusal::LoadNotOnTop), "{refused:?}\n{out}");
+}
+
+/// The other half of the control: one value kept across one call is a plain
+/// `push` and `pop`, and the counter names nothing. A counter that refused
+/// every slot would pass the crossed-order test alone. The word is spilled
+/// from `de` and reloaded into `bc`: a word slot may come back in any pair (a
+/// rule of "the same register" refused it and lost the whole saving).
+#[test]
+fn a_slot_that_is_a_stack_is_not_refused() {
+    let ir = include_str!("kernels/ir/stack_slots_single.ll");
+    llrm_z80::compile::take_stack_refusals();
+    let out = text(ir, "f", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+    let refused = llrm_z80::compile::take_stack_refusals();
+    assert!(refused.is_empty(), "{refused:?}\n{out}");
+    assert!(out.contains("push") && !out.contains("(ix)"), "{out}");
+}
+
+/// copy_runs and loop_versioning at -Os gave wrong sums (164226 for 929463):
+/// `sum` kept its loop count in a byte slot stored from `e` and reloaded into
+/// `d`, and `push de` / `pop de` restores `e` into `e`. A byte slot whose
+/// stores and loads use different halves of a pair stays in the frame; a word
+/// may come back in another pair.
+#[test]
+fn a_byte_stored_from_one_half_of_a_pair_and_loaded_into_the_other_stays_in_the_frame() {
+    let ir = include_str!("kernels/ir/stack_slot_other_register.ll");
+    llrm_z80::compile::take_stack_refusals();
+    let out = text(ir, "sum", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+    let refused = llrm_z80::compile::take_stack_refusals();
+    assert!(
+        refused.iter().any(|(_, why)| *why == llrm_z80::compile::StackRefusal::DifferentLane),
+        "{refused:?}\n{out}"
+    );
+    assert!(!out.contains("pop de\n\tdec d"), "{out}");
+}
+
+/// Spill slots were push and pop only at -Os and -Oz: at -O2 and -O3 the
+/// slot read again lost `pop bc; push bc` to two IX loads, 4,000 B and 12.8M T
+/// over the corpus (div_constants_short -O2 1.36M T). A slot read again is now
+/// peeked at every level.
+#[test]
+fn spill_slots_are_push_and_pop_at_every_level() {
+    let ir = include_str!("kernels/ir/stack_slots_framed.ll");
+    for level in [Level::O2, Level::O3, Level::Os] {
+        let out = text(ir, "f", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"));
+        assert!(out.contains("call _g\n\tpush de") && !out.contains("ld -4(ix)"), "{level:?}\n{out}");
+    }
+}
+
+/// The base pass at -O2: a function whose frame holds only spills loses the
+/// frame to `push` and `pop`, at every level.
+#[test]
+fn a_function_with_only_spills_loses_its_frame_at_o2() {
+    let ir = include_str!("kernels/ir/stack_slots_single.ll");
+    let out = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(out.contains("push de") && !out.contains("(ix)"), "{out}");
+}
+
+/// Peeking every slot that is read again made logical_value -Os 152 lines
+/// instead of 148 (+12 B): the frame stayed for the other slots and each moved
+/// slot added its own `ld`. The function is priced with and without the peeks,
+/// and the cheaper stays.
+#[test]
+fn peeking_slots_is_kept_only_where_it_is_smaller() {
+    let out = text(include_str!("kernels/ir/stack_peek_not_always_cheaper.ll"), "main", 0, &Request::new(Level::Os))
+        .expect("compiles");
+    let lines = out.lines().count();
+    assert!(lines <= 148, "{lines} lines\n{out}");
 }

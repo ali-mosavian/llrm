@@ -971,7 +971,7 @@ fn add_cost_recursively(
                     operation.opcode,
                     Opcode::Phi | Opcode::GetElementPtr { .. } | Opcode::ICmp(_)
                 ) {
-                    let size = run.outer.target().size_costs();
+                    let size = run.outer.target().byte_costs();
                     *unrolled_bytes +=
                         crate::profit::operation(run.context, run.layout, run.function, run.callees, inst, &size)
                             .unwrap_or(size.add);
