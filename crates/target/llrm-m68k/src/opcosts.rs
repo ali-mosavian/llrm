@@ -136,14 +136,20 @@ pub const AT_DEFAULT: &[(&str, &str)] = &[
     ("pieces_clear_size", "a tuning limit"),
     ("memset_store", "a tuning limit"),
     ("jump_table", "a tuning limit (switch lowering, own row)"),
-    ("function_scale", "measured against objects after this table (the calibration test), then set"),
     ("cache_line", "set by the CPU table"),
     ("line_fill_clocks", "set by the CPU table"),
 ];
 
+/// What the lowering adds that no IR operation names (spills, branch relaxation, copies the allocator leaves): the
+/// median over `tests/run/c` of the object function's bytes against this table's estimate was 1.46 at the 68000 and
+/// 1.50 at the 68020 (train split by symbol hash; hold-out median |error| 0.31 and 0.35 against 0.38 and 0.41 at 1.0,
+/// aggregate 0.92 and 0.89 of the objects). The aggregate alone would say 1.7 to 1.8; the many small functions the
+/// decisions are about set the median.
+const FUNCTION_SCALE_PERCENT: i64 = 150;
+
 /// The operations in code bytes at `cpu`.
 pub fn size_costs(cpu: Cpu) -> Result<OperationCosts, String> {
-    let mut costs = OperationCosts::default();
+    let mut costs = OperationCosts { function_scale: FUNCTION_SCALE_PERCENT, ..OperationCosts::default() };
     for (class, form) in forms(cpu) {
         let size = bytes(&form)?;
         match class {

@@ -32,7 +32,7 @@ fn text_bytes(elf: &[u8]) -> usize {
 #[test]
 fn the_estimate_is_within_a_quarter_of_the_objects_at_both_cpus_and_levels() {
     for (cpu_name, cpu) in [("68000", Cpu::M68000), ("68020", Cpu::M68020)] {
-        for level in ["O2", "Os"] {
+        for level in ["2", "s"] {
             let (mut estimate, mut actual) = (0, 0);
             for (name, ..) in table() {
                 let source = source_in("kernels", name);
@@ -46,8 +46,8 @@ fn the_estimate_is_within_a_quarter_of_the_objects_at_both_cpus_and_levels() {
                 actual += text_bytes(&object) as i64;
             }
             let ratio = estimate as f64 / actual as f64;
-            assert!(actual > 0, "{cpu_name} {level}: no kernel compiled");
-            assert!((0.75..=1.25).contains(&ratio), "{cpu_name} {level}: estimate {estimate} B against objects {actual} B ({ratio:.2})");
+            assert!(actual > 0, "{cpu_name} -O{level}: no kernel compiled");
+            assert!((0.75..=1.25).contains(&ratio), "{cpu_name} -O{level}: estimate {estimate} B against objects {actual} B ({ratio:.2})");
         }
     }
 }
