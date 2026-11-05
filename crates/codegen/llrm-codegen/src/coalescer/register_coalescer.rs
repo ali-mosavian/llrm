@@ -489,7 +489,12 @@ fn update_reg_defs_uses(
         }
         if let Some(lanes) = lanes.filter(|_| old.defines.contains(&src)) {
             let mut made = (*renamed).clone();
-            made.def_lanes.push((dst, lanes));
+            // one entry per def of `dst`, in the order of the defs: this def
+            // stands after the defs of `dst` that come before it
+            let at = old.defines.iter().position(|v| *v == src).unwrap_or(0);
+            let before = old.defines[..at].iter().filter(|v| **v == dst).count();
+            let place = made.def_lanes.iter().enumerate().filter(|(_, (v, _))| *v == dst).nth(before).map_or(made.def_lanes.len(), |(i, _)| i);
+            made.def_lanes.insert(place, (dst, lanes));
             renamed = Arc::new(made);
         }
         // `setReg` rewrites the operand where it stands: the instruction keeps

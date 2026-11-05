@@ -1857,13 +1857,16 @@ pub fn from_lir<T: Target>(
             let source = &original.blocks[from].insts[inst];
             // a copy into a lane of a pair: a move into the register of that lane
             if name == Some(COPY) && !insn.def_lanes.is_empty() {
-                let (Some(Loc::Held(to)), Some(Loc::Held(source))) = (what.dests.first(), what.sources.first()) else {
-                    return Err("a lane copy that does not move a value".into());
-                };
-                let dest = lane_or_number(to, &mut classes, &mut number);
-                let from = lane_or_number(source, &mut classes, &mut number);
-                insts.push(Inst::new(Kind::Copy, vec![Operand::Def(dest), Operand::Use(from)]));
-                continue;
+                // a source that is no value (a physical register) stays as written
+                if let Some(Loc::Held(source)) = what.sources.first() {
+                    let Some(Loc::Held(to)) = what.dests.first() else {
+                        return Err("a lane copy that does not move a value".into());
+                    };
+                    let dest = lane_or_number(to, &mut classes, &mut number);
+                    let from = lane_or_number(source, &mut classes, &mut number);
+                    insts.push(Inst::new(Kind::Copy, vec![Operand::Def(dest), Operand::Use(from)]));
+                    continue;
+                }
             }
             // a copy a split made stands beside an instruction and claims none
             // of its bytes, whatever that instruction is

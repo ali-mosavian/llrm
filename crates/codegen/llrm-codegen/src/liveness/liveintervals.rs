@@ -240,9 +240,16 @@ impl LiveIntervals {
     ) {
         let instr = one.id();
         // A def that keeps the rest of the value reads it (`readsReg()`).
-        for &value in &one.defines {
+        for (at, &value) in one.defines.iter().enumerate() {
             let reads_reg = one.partial_defs.contains(&value);
-            let lanes = one.def_lanes.iter().find(|(v, _)| *v == value).map_or(Operand::ALL, |(_, lanes)| *lanes);
+            // a value defined twice (both bytes of a pair) names a lane each time
+            let nth = one.defines[..at].iter().filter(|v| **v == value).count();
+            let lanes = one
+                .def_lanes
+                .iter()
+                .filter(|(v, _)| *v == value)
+                .nth(nth)
+                .map_or(Operand::ALL, |(_, lanes)| *lanes);
             let early_clobber = one.early_clobbers.contains(&value);
             self.push_operand(value, Operand { instr, is_def: true, reads_reg, early_clobber, lanes });
         }
@@ -1704,6 +1711,22 @@ mod tests {
         let entry = lis.indexes.get_mbb_start_idx(0);
         assert!(!hi.live_at(&entry), "premise: nothing defines the high byte yet");
         assert!(hi.live_at(&lis.indexes.get_mbb_start_idx(1)), "it is live around the loop");
+    }
+
+    /// One instruction defines both bytes of a pair (`x.lo, x.hi := lea`): each
+    /// def names its own lane. Both took the first one's, so the high byte had
+    /// no sub-range, the matrix saw nothing in its register and a byte live
+    /// across the instruction shared it (6502, a pointer's high byte summed
+    /// with itself).
+    #[test]
+    fn test_an_instruction_defining_both_bytes_of_a_pair_defines_each_lane() {
+        let mut both = Insn::new(0, None, None, vec![1, 1], Vec::new());
+        both.def_lanes = vec![(1, ValueLanes::at(0, 1)), (1, ValueLanes::at(1, 1))];
+        both.undef_super = false;
+        let body = blocks(&[(&[Arc::new(both), insn(&[], &[1])], &[])]);
+        let mut lis = LiveIntervals::new(&body);
+        let hi = lis.interval(1).range_for_lanes(ValueLanes::at(1, 1)).expect("the pair has sub-ranges");
+        assert!(!hi.segments.is_empty(), "the high byte is defined by the instruction");
     }
 
     /// `pruneValue` from the middle of a block that falls into a join: the

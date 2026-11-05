@@ -282,6 +282,16 @@ impl<const STACK: bool> Target for Mos<STACK> {
         }
     }
 
+    // DEVIATE 3b-1 (owner greedy-subreg): a pair is built and taken apart by
+    // lane, as the pin's sub-register coalescing does.
+    fn lowers_lanes() -> bool {
+        true
+    }
+
+    fn joins_lanes() -> bool {
+        true
+    }
+
     fn moves_lanes(inst: &Inst) -> bool {
         matches!(inst.kind, Kind::Op("PACK" | "UNPACK"))
     }
