@@ -560,6 +560,13 @@ pub trait Tti {
         0
     }
 
+    /// DEVIATE UP1: what a code byte a full unroll adds is worth in
+    /// thousandths of a clock at -O2/-O3, where the unroll must save that many
+    /// clocks to be made (`loopunrollprice`); 0: the pin's threshold alone.
+    fn unroll_milliclocks_per_byte(&self) -> i64 {
+        0
+    }
+
     /// `Tuning::multiply_by_clocks`.
     fn multiply_by_clocks(&self) -> bool {
         false
