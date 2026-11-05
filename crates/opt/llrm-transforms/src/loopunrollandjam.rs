@@ -1384,11 +1384,10 @@ impl LoopUnrollAndJam {
             up.unroll_and_jam = true;
             up.partial = true;
             up.runtime = true;
-            // D1b (UJ2, owner m64, exit 2026-11-14): the outer loop's size is
-            // measured against the full-unroll threshold, not the 28 micro-ops
-            // `BasicTTIImpl` takes for a loop buffer: the inner loop stays
-            // rolled, and the jam's own limit is the inner loop's 60.
-            up.partial_threshold = up.partial_threshold.max(up.threshold);
+            // The target's own `PartialThreshold` for the outer loop (UJ2).
+            if let Some(threshold) = run.tti.unroll_jam_partial_threshold_override() {
+                up.partial_threshold = threshold;
+            }
         }
         if let Some(runtime) = self.options.runtime {
             up.runtime = runtime;
