@@ -1393,6 +1393,10 @@ pub struct LirBody {
     /// would have held is not reserved, the locals lie directly below the
     /// pushed registers.
     pub slot_dropped: bool,
+    /// ShrinkWrap does not run: the pin adds it only when optimizing
+    /// (`TargetPassConfig::addMachinePasses`), so the frame and the registers
+    /// are set up at the entry.
+    pub unwrapped: bool,
     /// The widest alignment any object of the frame wants (an alloca's, a
     /// spill slot's as its width), 0 when not known: what a 64-bit frame
     /// aligns the locals' base to, not the stack's (the pin aligns each
@@ -1613,6 +1617,7 @@ impl LirBody {
             cfa_variables: false,
             saved_first: false,
             slot_dropped: false,
+            unwrapped: false,
             object_align: 0,
             over_aligned: Vec::new(),
             frame_exit: None,
@@ -1687,6 +1692,7 @@ impl LirBody {
             cfa_variables: self.cfa_variables,
             saved_first: self.saved_first,
             slot_dropped: self.slot_dropped,
+            unwrapped: self.unwrapped,
             object_align: self.object_align,
             over_aligned: self.over_aligned.clone(),
             frame_exit: self.frame_exit,
