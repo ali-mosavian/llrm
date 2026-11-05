@@ -1061,6 +1061,14 @@ pub trait Tti {
         true
     }
 
+    /// Beyond the pin: whether a shift by a variable amount needs the count
+    /// in one fixed register (x86's `cl`), which costs a move and holds the
+    /// register. A size build then keeps `mul X, select(c, 8, 2)` rather than
+    /// the pin's `shl X, select(c, 3, 1)` (`visitMul`'s `tryGetLog2`).
+    fn variable_shift_count_in_fixed_register(&self) -> bool {
+        false
+    }
+
     /// Beyond the pin: whether a strict exit compare of a unit-stride counter
     /// that never passes its bound should become `!=` (`exitne`). Counting to
     /// zero and testing `!=` is cheap where a decrement sets the flags and one
