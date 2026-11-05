@@ -307,6 +307,41 @@ pub struct MemCmpExpansionOptions {
     pub allowed_tail_expansions: Vec<u32>,
 }
 
+/// The fields of `HardwareLoopInfo` a target sets in
+/// `isHardwareLoopProfitable`; the pass keeps the rest (the exit block, branch
+/// and count it finds).
+///
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/TargetTransformInfo.h#L104>
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HardwareLoopTarget {
+    /// `CountType`'s width: the pin's default is 32
+    /// (`hardware-loop-counter-bitwidth`).
+    pub count_bits: u32,
+    /// `LoopDecrement`: what `llvm.loop.decrement` takes off the counter.
+    pub loop_decrement: u64,
+    /// `IsNestingLegal`: a loop inside another may be a hardware loop.
+    pub is_nesting_legal: bool,
+    /// `CounterInReg`: the counter is a register value carried round the loop
+    /// by a phi (`loop.decrement.reg`), not state the target keeps.
+    pub counter_in_reg: bool,
+    /// `PerformEntryTest`: the loop's entry guard may be folded into the
+    /// counter's set (`test.set.loop.iterations`).
+    pub perform_entry_test: bool,
+}
+
+impl Default for HardwareLoopTarget {
+    /// `HardwareLoopInfo(L)`'s defaults.
+    fn default() -> Self {
+        HardwareLoopTarget {
+            count_bits: 32,
+            loop_decrement: 1,
+            is_nesting_legal: false,
+            counter_in_reg: false,
+            perform_entry_test: false,
+        }
+    }
+}
+
 /// An argument of a call, as the call sequence sees it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CallArgument {
@@ -610,6 +645,17 @@ pub trait Tti {
     /// 50.
     fn unswitch_threshold_override(&self) -> Option<i64> {
         None
+    }
+
+    /// `isHardwareLoopProfitable`: whether the target counts loops in hardware
+    /// (`djnz`, `dbra`, `loop`), and how, in `info`. The hook sees no loop
+    /// yet: no target reads one (DEVIATE 3 of `hardwareloops`). Off by
+    /// default; the pass does not run for a target that says no.
+    fn is_hardware_loop_profitable(
+        &self,
+        _info: &mut HardwareLoopTarget,
+    ) -> bool {
+        false
     }
 
     /// `getUnrollingPreferences` given the loop's shape, which targets read

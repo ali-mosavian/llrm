@@ -198,7 +198,7 @@ def attr_text(key: str, value) -> str:
 
 def mir_names() -> set[str]:
     """The `llvm.*` intrinsics `intrinsics.rs` enumerates."""
-    text = (ROOT / "crates/ir/llrm-mir/src/intrinsics.rs").read_text()
+    text = (ROOT / "crates/ir/llrm-mir/src/intrinsics.rs").read_text().split("\n#[cfg(test)]\nmod tests {")[0]
     return set(re.findall(r'"(llvm\.[a-z][a-z0-9_.]*)"', text))
 
 
