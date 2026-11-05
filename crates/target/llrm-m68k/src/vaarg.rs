@@ -11,8 +11,8 @@
 //! alignments are the target's fixed datalayout's.
 //!
 //! DEVIATE: MIR has no `va_arg` instruction, so the driver expands it in the
-//! text. arm64's driver does the same. Exit: review 2026-11-20, or when MIR
-//! reads `va_arg` and the selector lowers it.
+//! text, as arm64's does. A stopgap: the pin's MIR `va_arg` opcode replaces
+//! both rewrites. Exit: 2026-11-20.
 //!
 //! # See also
 //! `SelectionDAG::expandVAArg`, `SelectionDAGBuilder::visitVAArg`, pin
