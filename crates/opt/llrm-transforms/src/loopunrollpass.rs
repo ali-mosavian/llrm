@@ -2015,16 +2015,26 @@ fn simplify_ivs_and_load_cse(
     analyzed: &Analyzed,
     header: BlockId,
 ) {
+    let env = llrm_analysis::scev::expander::Env {
+        globals: run.globals,
+        metadata: run.metadata,
+        layout: run.layout,
+        loops: &analyzed.loops,
+        tree: &analyzed.tree,
+        assumptions: &analyzed.assumptions,
+    };
     let _ = crate::simplifyindvar::simplified_loop_ivs(
         run.context,
         run.layout,
         run.function,
         run.declared,
         run.outer,
+        &mut run.scev,
+        env,
         header,
     );
-    run.scev = ScalarEvolution::new();
     crate::loopunrollloadcse::load_cse(run, analyzed, header);
+    run.scev = ScalarEvolution::new();
 }
 
 /// The blocks `UnrollLoop` hands `simplifyLoopAfterUnroll`: the loop's own that
@@ -2112,12 +2122,22 @@ pub fn unroll_loops(run: &mut Run) -> bool {
             analyzed = Analyzed::of(run);
             // `simplifyLoopAfterUnroll(L, SimplifyIVs = true)`: the IVs first
             // (PL5).
+            let env = llrm_analysis::scev::expander::Env {
+                globals: run.globals,
+                metadata: run.metadata,
+                layout: run.layout,
+                loops: &analyzed.loops,
+                tree: &analyzed.tree,
+                assumptions: &analyzed.assumptions,
+            };
             let _ = crate::simplifyindvar::simplified_loop_ivs(
                 run.context,
                 run.layout,
                 run.function,
                 run.declared,
                 run.outer,
+                &mut run.scev,
+                env,
                 header,
             );
             let after = unrolled_blocks(run, capacity, &body);

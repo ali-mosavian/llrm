@@ -1177,10 +1177,14 @@ fn test_unroll_is_priced_against_the_loop_as_optimized() {
     let assembly = listing_on(&parsed(&source), "main", &level("Os"), "486");
     let body = &assembly[assembly.find("_value proc").unwrap()..assembly.find("_value endp").unwrap()];
 
-    // Each fill is one string fill or one rolled store, never eight copies.
-    let fills = Regex::new(r"rep stos[bwd]\n").unwrap().find_iter(body).count()
-        + Regex::new(r"mov dword ptr \[[^\]]*\], 0\n").unwrap().find_iter(body).count();
-    assert_eq!(fills, 2, "{body}");
+    // The two adjacent 256-byte zero fills are merged (zero-memset merge) into
+    // one 512-byte string fill; unrolled, `b`'s would be eight dword stores.
+    let fills = Regex::new(r"rep stos[bwd]\n").unwrap().find_iter(body).count();
+    let stores = Regex::new(r"mov dword ptr \[[^\]]*\], 0\n").unwrap().find_iter(body).count();
+    assert_eq!((fills, stores), (1, 0), "{body}");
+    let counted = Regex::new(r"mov cx, (\d+)\n(?:[^\n]*\n){0,6}?\s*rep stos([bwd])\n").unwrap().captures(body).expect("a counted fill");
+    let width = match &counted[2] { "b" => 1, "w" => 2, _ => 4 };
+    assert_eq!(counted[1].parse::<usize>().unwrap() * width, 512, "{body}");
 }
 
 #[test]
@@ -3385,4 +3389,18 @@ fn a_fixed_point_divide_is_one_truncating_divide() {
     assert!(!kdiv.contains("setl") && !kdiv.contains("setne"), "no floor correction after the divide: {kdiv}");
     let lines = kdiv.lines().filter(|line| !line.trim().is_empty()).count();
     assert!(lines <= 25, "{lines} lines: {kdiv}");
+}
+
+#[test]
+fn test_a_failed_check_edge_carries_the_never_taken_weights() {
+    // The panic edge of a check was left to the unreachable default (9.5e-7); in a deep nest of
+    // checked loops that mass exceeded the flow entering the outer loop (jpeg_fixed Os).
+    let directory = tempfile::tempdir().expect("a directory");
+    let text = "@export(\"cdecl16\")\nfn value(i: i16) -> i16:\n    let a: i16[8] = [1] * 8\n    return a[i]\n";
+    let program = parsed(&written(&directory, "weighted.nib", text));
+    let mir = emitted_text(&program);
+    let value = defined(&mir, "_value");
+
+    assert!(value.lines().any(|line| line.contains("br i1 ") && line.contains("!prof")), "{value}");
+    assert!(mir.contains("branch_weights\", i32 1048575, i32 1"), "{mir}");
 }

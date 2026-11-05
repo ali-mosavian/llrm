@@ -100,6 +100,12 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // x_fib, frames), 150 at -O3 (rectwo, bintree, recchop are worse with 450; their
         // O3 card is open). Owner x86-m32, exit 2026-11-20.
         recursive_inlining_growth: Some((450, 150)),
+        // DEVIATE REC-2: gcc eliminates tail calls before it copies a recursion (passes.def:97, then
+        // pass_ipa_inline :164). At -O3 the copies of the loop beat the tree's (rectwo 1230664 -> 466986
+        // clk, recchop, x_hanoi2, bintree; no -O3 cell worse); at -O2 the tree's copies let GVN merge the
+        // pure same-argument calls (fib 99618 clk against 228901), so -O2 keeps today's order. Owner
+        // x86-m32, exit 2026-11-20.
+        recursive_tre_first: (false, true),
         peel_folded_entry: true,
         // DEVIATE UP1 (owner x86-m32; exit 2026-11-20: the pin's cost model or
         // gcc's unroll estimate priced in clocks and bytes replaces it): a
