@@ -2573,3 +2573,26 @@ define i8 @high_byte_of_the_amount() {
         assert_eq!(exit_code_of(&text, "high_byte_of_the_amount"), 0, "{level:?}\n{text}");
     }
 }
+
+/// A two-trip loop calling through a pointer table (`for (i = 0; i < 2; ++i)
+/// table[i](7 + i)`, function_table) stayed a loop at -Os: 164 B against 92 B
+/// at -O2, where the pin has two straight calls at every level (InstCombine's
+/// `icmp(phi(C1, C2), C) -> phi(icmp, icmp)`, then SimplifyCFG threads the
+/// branch): `foldICmpWithConstant` is not translated yet.
+#[test]
+fn a_two_trip_loop_through_a_table_is_as_small_at_os_as_unrolled() {
+    let ir = "@table = global [2 x ptr] [ptr @report, ptr @report], align 2\n\
+              declare void @report(i32)\n\
+              define i16 @main() optsize {\n  br label %1\n\
+              1:\n  %2 = phi i16 [ 0, %0 ], [ 1, %1 ]\n  %3 = getelementptr inbounds [2 x i8], ptr @table, i16 %2\n  \
+              %4 = load ptr, ptr %3, align 2\n  %5 = add i16 %2, 7\n  %6 = zext i16 %5 to i32\n  \
+              tail call void %4(i32 %6)\n  %7 = icmp eq i16 %2, 0\n  br i1 %7, label %1, label %8\n\
+              8:\n  ret i16 0\n}";
+    let bytes = |level| {
+        let request = Request::new(level);
+        let text = assembly(&module(ir), &request).unwrap_or_else(|e| panic!("{e}"));
+        llrm_6502::timing::estimate(request.cpu, &text).unwrap().bytes
+    };
+    let (small, fast) = (bytes(Level::Os), bytes(Level::O2));
+    assert!(small <= fast + 8, "-Os {small} B, -O2 {fast} B");
+}
