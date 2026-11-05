@@ -82,6 +82,7 @@ use llrm_mir::valuetracking::AssumptionCache;
 use crate::looppeel::PeelingPreferences;
 use crate::loopunroll::{Exit, Options as UnrollOptions, Unrolled, unroll_loop_blocks};
 
+mod pairs;
 mod price;
 mod trial;
 

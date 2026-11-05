@@ -321,6 +321,11 @@ impl Tti for AArch64 {
         true
     }
 
+    /// `AArch64LoadStoreOptimizer`: adjacent loads or stores are `ldp`/`stp`.
+    fn pairs_adjacent_memory(&self) -> bool {
+        true
+    }
+
     fn merges_unaligned_stores(&self) -> bool {
         true
     }

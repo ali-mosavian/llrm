@@ -655,6 +655,12 @@ pub trait Tti {
         false
     }
 
+    /// The trial prices adjacent loads and stores of a block as the pairs the
+    /// target forms (`loopunrollpass/pairs.rs`).
+    fn pairs_adjacent_memory(&self) -> bool {
+        false
+    }
+
     /// `Tuning::multiply_by_clocks`.
     fn multiply_by_clocks(&self) -> bool {
         false

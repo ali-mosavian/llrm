@@ -42,6 +42,7 @@ fn measure(run: &mut Run) -> (i64, i64) {
     };
     let mut trips: HashMap<BlockId, i64> = HashMap::new();
     let mut weighted = 0;
+    let mut pairs = 0;
     for block in run.function.layout() {
         let mut weight = 1;
         let mut around = analyzed.loops.get_loop_for(*block);
@@ -54,10 +55,15 @@ fn measure(run: &mut Run) -> (i64, i64) {
             });
             around = lp.get_parent_loop();
         }
-        weighted += weight
-            * trip_clocks(run.context, run.layout, run.function, run.callees, std::iter::once(block), &clocks);
+        let mut here = trip_clocks(run.context, run.layout, run.function, run.callees, std::iter::once(block), &clocks);
+        if run.tti.pairs_adjacent_memory() {
+            let (loads, stores) = super::pairs::paired(run.context, run.layout, run.function, run.outer, *block);
+            here -= loads * clocks.load + stores * clocks.store;
+            pairs += loads * bytes.load + stores * bytes.store;
+        }
+        weighted += weight * here;
     }
-    let size = trip_cost(run.context, run.layout, run.function, run.callees, run.function.layout().iter(), &bytes, true);
+    let size = trip_cost(run.context, run.layout, run.function, run.callees, run.function.layout().iter(), &bytes, true) - pairs;
     (size, weighted)
 }
 
