@@ -551,6 +551,18 @@ pub fn two_address<C>(function: &mut MFunction<C>) {
                 copy.origin = inst.origin;
                 out.push(copy);
                 inst.operands[used] = Operand::Use(destination);
+                // The other uses of the source read the copy too
+                // (`processTiedPairs`, TwoAddressInstructionPass.cpp#L1722):
+                // `x = add y, y` is `x = y; x = add x, x`, so `y` can die here
+                // and share x's register. Not under early clobber, where x is
+                // written before the uses read.
+                if !inst.early_clobber {
+                    for (at, operand) in inst.operands.iter_mut().enumerate() {
+                        if at != used && matches!(operand, Operand::Use(other) if *other == source) {
+                            *operand = Operand::Use(destination);
+                        }
+                    }
+                }
             }
             out.push(inst);
         }
