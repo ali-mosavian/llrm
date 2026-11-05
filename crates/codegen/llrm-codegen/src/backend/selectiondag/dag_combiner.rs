@@ -288,12 +288,6 @@ pub trait CombineHooks {
         false
     }
 
-    /// `SimplifyDemandedBits`'s `ADD`/`SUB`/`MUL` case. DEVIATE: off by default
-    /// (the pin runs it for every target). Exit: x86 judged.
-    fn simplify_demanded_add_sub_mul(&self) -> bool {
-        false
-    }
-
     /// `isTruncateFree(wide, narrow) && isZExtFree(narrow, wide)`: the casts
     /// `ShrinkDemandedOp` and the shift narrowings of `SimplifyDemandedBits`
     /// need to run an operation at the narrower type. X86 has them only from
