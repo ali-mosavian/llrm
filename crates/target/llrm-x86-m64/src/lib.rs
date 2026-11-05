@@ -397,6 +397,11 @@ impl llrm_target::Target for M64 {
                             // of that size a count of 0 (particle -O3: 15850 cycles,
                             // gcc's jam 10262); the full-unroll threshold instead.
                             unroll_jam_partial_threshold: Some(300),
+                            // DEVIATE UJ3 (owner m64, exit 2026-11-20): the pin never jams
+                            // on X86; ours takes an exact divisor of a known outer trip
+                            // count (particle -O3: count 3 of 100 left a nest copy,
+                            // +433 B, +8.6% clk).
+                            unroll_jam_exact_count: true,
                             ..llrm_mir::target::Tuning::PIN
                         })
                     })
