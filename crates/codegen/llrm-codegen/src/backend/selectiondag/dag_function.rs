@@ -1167,6 +1167,13 @@ fn selected_in(
                 cmov: tli.can_use_cmov(),
                 sse2,
                 min_size: cpu.min_size || bytes_beat_clocks,
+                three_address_adds: !(cpu.size || cpu.min_size)
+                    && !matches!(
+                        cpu.three_address(),
+                        crate::twoaddress::ThreeAddress::Off
+                            | crate::twoaddress::ThreeAddress::AddSub
+                            | crate::twoaddress::ThreeAddress::AddSubWords
+                    ),
                 i16_mul_chains: !super::x86_lowering::promotes_i16(&tli),
                 sext_load: true,
                 zext_free: m64,

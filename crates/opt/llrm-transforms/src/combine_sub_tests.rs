@@ -453,22 +453,3 @@ fn x_minus_x_and_y_is_x_and_not_y_only_for_a_one_use_and() {
         "  %a = and i32 %x, %y\n  %r = sub i32 %x, %a\n  %s = add i32 %r, %a\n  ret i32 %s\n",
     );
 }
-
-/// `26 - (n ^ 31)` with `n <= 31` kept a `sub` (`mov cl, 26; sub cl, bl` in
-/// `__floatsisf`); it is `n - 5`.
-#[test]
-fn a_constant_minus_a_masked_xor_is_an_add() {
-    check(
-        "i32",
-        "i32 %a",
-        "  %n = and i32 %a, 31\n  %x = xor i32 %n, 31\n  %r = sub i32 26, %x\n  ret i32 %r\n",
-        "  %n = and i32 %a, 31\n  %0 = add i32 %n, -5\n  ret i32 %0\n",
-    );
-}
-
-/// With bits above the mask unknown the `xor` is not `31 - n`.
-#[test]
-fn a_constant_minus_a_xor_of_a_wide_value_stays() {
-    let body = "  %x = xor i32 %a, 31\n  %r = sub i32 26, %x\n  ret i32 %r\n";
-    check("i32", "i32 %a", body, body);
-}

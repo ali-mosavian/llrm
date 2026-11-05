@@ -633,6 +633,9 @@ pub enum ThreeAddress {
     /// takes a 16-bit address form: `lea ax, [bx + k]`.
     AddSubWords,
     All,
+    /// `All` without the byte and word adds (DEVIATE TA-10 off): flat 32-bit
+    /// at `-Os`, where a `lea`'s fourth byte-capable register costs a spill.
+    Dwords,
     /// `All` on a target that addresses with 64-bit registers: `lea eax, [rdi +
     /// k]` (`LEA64_32r`), the base read at its full width.
     Wide,
@@ -713,7 +716,7 @@ pub fn three_address(
         // `SHL32ri` by 1 to 3: `[a + a]` for 1, `[a*4]`, `[a*8]` for the rest
         // (the index alone takes a 32-bit displacement, as the pin's does).
         (Loc::Imm(Imm { value: shift @ 1..=3, address: None, .. }), Some("shl"))
-            if matches!(mode, ThreeAddress::All | ThreeAddress::Wide) =>
+            if matches!(mode, ThreeAddress::All | ThreeAddress::Dwords | ThreeAddress::Wide) =>
         {
             Mem {
                 base: (*shift == 1).then_some(wide(base)),
@@ -770,7 +773,9 @@ pub fn three_address(
 ///
 /// DEVIATE TA-10: also a `LEA32r` on a flat 32-bit target (`All`), the pin's
 /// own TODO at that line. `__floatsisf`'s `mov ecx, eax; add cl, -5` is `lea
-/// ecx, [eax - 5]`. Exit 2026-11-14: remove when the pin does the same.
+/// ecx, [eax - 5]`. Off at `-Os` ([`ThreeAddress::Dwords`]): the result takes
+/// one of the four byte-capable registers, and 11 m32 -Os cells grew from the
+/// spill that cost. Exit 2026-11-14: remove when the pin does the same.
 fn narrow_lea(
     mode: ThreeAddress,
     width: u32,
@@ -1670,7 +1675,7 @@ mod tests {
             ..Semantics::new(Operation::Binary)
         };
         let one = Insn::new(0, Some((0, 0)), Some(what), vec![2], vec![1]);
-        for mode in [ThreeAddress::AddSub, ThreeAddress::AddSubWords] {
+        for mode in [ThreeAddress::AddSub, ThreeAddress::AddSubWords, ThreeAddress::Dwords] {
             assert!(three_address(&one, mode).is_none(), "{mode:?}");
         }
         for (mode, base_width) in [(ThreeAddress::All, 4), (ThreeAddress::Wide, 8)] {

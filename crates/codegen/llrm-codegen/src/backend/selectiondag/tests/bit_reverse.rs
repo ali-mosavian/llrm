@@ -81,6 +81,7 @@ fn the_expansion_reverses_the_bits() {
                 cmov: true,
                 sse2: false,
                 min_size: false,
+                three_address_adds: false,
                 i16_mul_chains: false,
                 sext_load: false, zext_free: false,
                 profile: None,

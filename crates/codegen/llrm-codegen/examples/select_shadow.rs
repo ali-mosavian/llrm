@@ -132,7 +132,7 @@ fn main() {
                 // pin's order, with the target, the hooks and the action table
                 // the real route gives each stage.
                 let mut lowering =
-                    X86Lowering { cmov: false, sse2: false, min_size: false, i16_mul_chains: false, sext_load: false, zext_free: false, profile: None };
+                    X86Lowering { cmov: false, sse2: false, min_size: false, three_address_adds: false, i16_mul_chains: false, sext_load: false, zext_free: false, profile: None };
                 if let Err(why) = legalized(dag, &tli, &mut lowering, arch) {
                     println!("REFUSED {name}:{block_name} legalize: {why:?}");
                     continue;

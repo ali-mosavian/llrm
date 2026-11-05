@@ -136,6 +136,10 @@ pub struct X86Lowering<'a> {
     pub sse2: bool,
     /// `hasMinSize`: llrm's `-Os` as well as `-Oz`.
     pub min_size: bool,
+    /// The target adds three-address (`lea`) and the build is for speed: flat
+    /// 32-bit and 64-bit, not `-Os`. DEVIATE SD448
+    /// ([`combine_masked_xor_difference`]) is made there only.
+    pub three_address_adds: bool,
     /// The pin chains an `i16` multiply by a constant: it promotes it to `i32`
     /// ([L64277][promote]) and `combineMul` builds the `lea`/shift chain there.
     /// Where `i16` is not promoted (m16, `is_desirable_to_promote_op`) the same
@@ -317,7 +321,7 @@ impl CombineHooks for X86Lowering<'_> {
             ISD::Mul => combine_mul(dag, node, level, self.min_size, self.i16_mul_chains, self.profile),
             ISD::SetCC => combine_integer_setcc(dag, node, level),
             ISD::Add => combine_add(dag, node),
-            ISD::Sub => combine_sub(dag, node),
+            ISD::Sub => combine_sub(dag, node, self.three_address_adds),
             x86isd::ADD | x86isd::SUB => combine_x86_add_sub(dag, node),
             x86isd::CMOV => combine_cmov(dag, node),
             x86isd::SETCC => combine_setcc(dag, node),
@@ -1430,11 +1434,45 @@ fn combine_uint_to_fp(
 /// `combineSub`: `combineAddOrSubToADCOrSBB` ([`super::x86_carry`]), then
 /// `combineSubSetcc`. (The `SUB(…, SBB)` and `~A - ~B` folds are not
 /// translated, SD219.)
+///
+/// DEVIATE SD448: then, where `lea_adds`, [`combine_masked_xor_difference`].
 fn combine_sub(
     dag: &mut SelectionDAG,
     node: SDValue,
+    lea_adds: bool,
 ) -> Option<SDValue> {
-    super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node).or_else(|| combine_sub_setcc(dag, node))
+    super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node)
+        .or_else(|| combine_sub_setcc(dag, node))
+        .or_else(|| lea_adds.then(|| combine_masked_xor_difference(dag, node)).flatten())
+}
+
+/// DEVIATE SD448 (exit 2026-11-14, when the pin's `convertToThreeAddressWithLEA`
+/// takes 8-bit adds on 32-bit targets, TA-10): `sub C, (xor X, M)` is `add X,
+/// C - M` when `M` is a low-bit mask and `X` has no bits above it, so the
+/// `xor` is `M - X`. `__floatsisf`'s shift amount `26 - (n ^ 31)` is `n - 5`:
+/// one `lea` where the `sub` took `mov cl, 26; sub cl, bl`. Where the target
+/// has no three-address add (m16) the `add` needs a copy and is a byte longer,
+/// so it is not made there.
+fn combine_masked_xor_difference(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let (minuend, xor) = (dag.operand(node, 0), dag.operand(node, 1));
+    let c = dag.constant(minuend)?;
+    if dag.opcode(xor) != ISD::Xor {
+        return None;
+    }
+    let (x, m) = (dag.operand(xor, 0), dag.constant(dag.operand(xor, 1))?);
+    if m == 0 || m & m.wrapping_add(1) != 0 {
+        return None;
+    }
+    let mask = super::fold::mask(vt.size_in_bits());
+    if (m | super::known_bits::known_bits(dag, x).zero) & mask != mask {
+        return None;
+    }
+    let delta = dag.get_constant(c.wrapping_sub(m) & mask, vt);
+    Some(dag.get_node(ISD::Add, vt, &[x, delta]))
 }
 
 /// `combineSubSetcc` ([L60838][pin]): `sub C, zext(setcc)` is

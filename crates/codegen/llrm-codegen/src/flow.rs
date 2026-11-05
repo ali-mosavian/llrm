@@ -257,7 +257,7 @@ pub fn machine_with<'a>(
             status_word: classes.status_word(),
         }),
         Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes), cpu: Some(target) }),
-        Box::new(twoaddr::TwoAddress { lea: target.three_address() }),
+        Box::new(twoaddr::TwoAddress { lea: target.three_address_for(target.size || target.min_size) }),
         Box::new(Coalescer { size: target.size, ..Coalescer::new(None, segments, classes) }),
         // After TwoAddress and the coalescer, before any value is placed: the
         // pin's pre-RA scheduler, bottom-up by pressure.
