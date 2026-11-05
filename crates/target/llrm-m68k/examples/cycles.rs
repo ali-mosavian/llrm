@@ -100,6 +100,16 @@ fn qemu_cpu_for(path: &str) -> &'static str {
 mod tests {
     use super::*;
 
+    /// muldiv is not a leaf in the crate's 68000 code (it calls `__mulsi3`),
+    /// and the tool refused every `CYCLES_LLC` row of it ("not a leaf"), so no
+    /// div/mul change (DIVSL) could be measured. A driver's own code decides.
+    #[test]
+    fn an_external_drivers_rows_are_priced_whatever_the_crates_leaf_flag() {
+        assert!(llc_prices(true, false));
+        assert!(llc_prices(true, true));
+        assert!(!llc_prices(false, false));
+    }
+
     /// gas assembled `bgt L` with a 16-bit displacement: a table priced the
     /// compiler's text 2 B a branch above its own encoder.
     #[test]
@@ -355,6 +365,15 @@ fn assembler_arch(cpu: &str) -> String {
     format!("-m{cpu}")
 }
 
+/// Whether a row is priced from the external driver's code: whenever there is
+/// one, a call to a routine showing as a relocation in it.
+fn llc_prices(
+    llc_mode: bool,
+    _leaf: bool,
+) -> bool {
+    llc_mode
+}
+
 /// The IR `CYCLES_LLC` compiles: `$CYCLES_RAW_IR_DIR/<set>/<name>.ll` where
 /// there is one (clang's output with no passes, what `llrm-cc` hands the
 /// driver), else the bench's own IR. Some bench IR is hand-written (gcd's
@@ -518,10 +537,9 @@ fn main() {
         println!("|{}", "---|".repeat(5 + 2 * models.len()));
         for (name, args, expected, leaf) in &rows {
             let (name, expected, leaf) = (*name, *expected, *leaf);
-            if llc_mode && !leaf {
-                println!("| {name} | not a leaf: size and clocks need the runtime linked |");
-                continue;
-            }
+            // an external driver's own code says whether the row calls a
+            // routine (a relocation in it); the crate's 68000 table does not
+            let leaf = leaf || llc_prices(llc_mode, leaf);
             let mut text = source_in(&set, name);
             let mut runtime_names: Vec<&str> = Vec::new();
             if !leaf {
@@ -533,8 +551,8 @@ fn main() {
                 runtime_names.iter().flat_map(|one| items(&module, one, Cpu::M68000).unwrap()).collect();
             let mut cells = Vec::new();
             for options in [Options::default(), Options { size: true, ..Options::default() }] {
-                let mut code = items_with(&module, "k", Cpu::M68000, options).unwrap();
-                if let (Some(llc), true) = (std::env::var_os("CYCLES_LLC"), leaf) {
+                let mut code = if llc_mode { Vec::new() } else { items_with(&module, "k", Cpu::M68000, options).unwrap() };
+                if let Some(llc) = std::env::var_os("CYCLES_LLC") {
                     let Some(bytes) =
                         assembled(Path::new(&llc), &gcc, &shipped_source(&set, name), options.size, &dir, &cpu_name)
                     else {
