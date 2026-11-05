@@ -12,7 +12,7 @@ cpus = ["z80", "z180"]
 own_ids = "own_ids.txt"
 # Named by the hand code: instructions no pattern selects, and every register (the pin numbers the pipeline maps to ours).
 extra_symbols = [
-  "Z80::COPY8", "Z80::COPY16", "Z80::sub_lo", "Z80::sub_hi", "MVT::i32",
+  "Z80::COPY8", "Z80::COPY16", "Z80::LDIR", "Z80::sub_lo", "Z80::sub_hi", "MVT::i32",
   "Z80::A", "Z80::B", "Z80::C", "Z80::D", "Z80::E", "Z80::H", "Z80::L", "Z80::BC", "Z80::DE", "Z80::HL", "Z80::IX", "Z80::IY", "Z80::SP", "Z80::F",
 ]
 ids_includes = [

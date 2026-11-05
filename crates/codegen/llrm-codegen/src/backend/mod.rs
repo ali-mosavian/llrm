@@ -259,6 +259,7 @@ pub mod precse;
 pub mod prezeroed;
 pub mod prologue;
 pub mod pushfold;
+pub mod vectorsaves;
 pub mod regpressure;
 pub mod regthrash;
 pub mod relayout;

@@ -1,69 +1,63 @@
-reason = "frame register held as a value at m32 against main's new rows: instructions down in 24 rows (fib -10%, nbody -10%, jpeg_fixed -O2 -4%), queens +2% and jpeg -Os +0.1..0.8%; esp-addressed code is a byte longer an access"
-blessed = "2026-10-14"
+reason = "C references re-blessed 2026-11-05: corpus edits since 10-15 (parity kernels volatile inputs, textfill DOS-only); tcpp links CM.LIB ISATTY (#7243)"
+blessed = "2026-11-05"
+corpus = "2ece02804761085fd061855dde5fe383"
 
 [ow.O2]
-instructions = 52028
-memory_operands = 10001
-code_bytes = 121
+instructions = 70019
+memory_operands = 12000
+code_bytes = 120
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.695
 
 [ow.Os]
-instructions = 56025
+instructions = 74019
 memory_operands = 12000
-code_bytes = 114
+code_bytes = 118
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.7483
 
 [bcc.O2]
-instructions = 62041
-memory_operands = 22008
-code_bytes = 176
+instructions = 64027
+memory_operands = 24004
+code_bytes = 146
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.8286
 
 [bcc.Os]
 instructions = 64023
 memory_operands = 24004
-code_bytes = 149
+code_bytes = 142
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 0.8551
 
 [tc.O2]
-instructions = 66034
-memory_operands = 50012
-code_bytes = 169
+instructions = 82030
+memory_operands = 42008
+code_bytes = 161
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.8819
 
 [tc.Os]
-instructions = 66031
-memory_operands = 50012
-code_bytes = 163
+instructions = 82027
+memory_operands = 42008
+code_bytes = 155
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.8818
 
 [tcpp.O2]
-instructions = 62039
-memory_operands = 30008
-code_bytes = 166
+instructions = 68035
+memory_operands = 30006
+code_bytes = 158
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.8285
 
 [tcpp.Os]
-instructions = 62035
-memory_operands = 30008
-code_bytes = 162
+instructions = 68031
+memory_operands = 30006
+code_bytes = 154
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.8285
 
 [bc.O2]
 instructions = 94172

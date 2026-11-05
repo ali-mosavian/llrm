@@ -32,12 +32,12 @@ RT_clang=$($CLANG -m32 --rtlib=compiler-rt -print-libgcc-file-name)
 [ -f "$RT_clang" ] || RT_clang=$RT_gcc
 fi
 # a row is refused when the compilers disagree on sizeof(long double): the table once set llrm's 8 bytes beside gcc's 12
-echo 'char ld_probe[sizeof(long double)];' > $O/b/ld_probe.c
+echo 'char ld_probe[sizeof(long double)];' > $O/b/ld_probe.$P.c
 size_of() { size -A "$1" | while read -r name bytes _; do [ "$name" = .bss ] && echo $bytes; done; }
-$LLRM --target=x86_32-wat ${LLRM_FLAGS:-} -mabi=$ABI $LLRM_LD -march=i486 -fobject-format=elf -c -o $O/b/ld_probe.llrm.o $O/b/ld_probe.c 2>/dev/null || { echo "FAIL ld probe llrm $P"; exit 1; }
+$LLRM --target=x86_32-wat ${LLRM_FLAGS:-} -mabi=$ABI $LLRM_LD -march=i486 -fobject-format=elf -c -o $O/b/ld_probe.$P.llrm.o $O/b/ld_probe.$P.c 2>/dev/null || { echo "FAIL ld probe llrm $P"; exit 1; }
 WANT=8; [ $LD = 80 ] && WANT=12
-if [ -z "${VSGCC_ONLY:-}" ]; then gcc -m32 $REF_LD -c -o $O/b/ld_probe.gcc.o $O/b/ld_probe.c && [ "$(size_of $O/b/ld_probe.gcc.o)" = $WANT ] || { echo "FAIL long double: gcc is not $WANT bytes ($LD bit) $P"; exit 1; }; fi
-[ "$(size_of $O/b/ld_probe.llrm.o)" = $WANT ] || { echo "FAIL long double: llrm is $(size_of $O/b/ld_probe.llrm.o) bytes, the reference $WANT ($LD bit) $P"; exit 1; }
+if [ -z "${VSGCC_ONLY:-}" ]; then gcc -m32 $REF_LD -c -o $O/b/ld_probe.$P.gcc.o $O/b/ld_probe.$P.c && [ "$(size_of $O/b/ld_probe.$P.gcc.o)" = $WANT ] || { echo "FAIL long double: gcc is not $WANT bytes ($LD bit) $P"; exit 1; }; fi
+[ "$(size_of $O/b/ld_probe.$P.llrm.o)" = $WANT ] || { echo "FAIL long double: llrm is $(size_of $O/b/ld_probe.$P.llrm.o) bytes, the reference $WANT ($LD bit) $P"; exit 1; }
 $LLRM --target=x86_32-wat ${LLRM_FLAGS:-} -mabi=$ABI $LLRM_LD -O2 -march=i486 -c -o $O/o/$P.llrm.obj $S 2>$O/o/$P.llrm.err || echo "FAIL llrm $P"
 $LLRM --target=x86_32-wat ${LLRM_FLAGS:-} -mabi=$ABI $LLRM_LD -Os -march=i486 -c -o $O/o/$P.llrmOs.obj $S 2>$O/o/$P.llrmOs.err || echo "FAIL llrmOs $P"
 for o in O1 O3; do $LLRM --target=x86_32-wat ${LLRM_FLAGS:-} -mabi=$ABI $LLRM_LD -$o -march=i486 -c -o $O/o/$P.llrm$o.obj $S 2>$O/o/$P.llrm$o.err || echo "FAIL llrm$o $P"; done
@@ -45,9 +45,11 @@ for o in O1 O3; do $LLRM --target=x86_32-wat ${LLRM_FLAGS:-} -mabi=$ABI $LLRM_LD
 cd $O/b
 # Our m32 target states a stack alignment of 4 (S32); the pin's and gcc's Linux default is 16, which keeps a reserved call frame where 4 pushes.
 F="$REF_LD -Dfar= -m32 -march=i486 -fno-pic -fno-stack-protector -fcf-protection=none -fno-asynchronous-unwind-tables"
+# VSGCC_NOVEC=1: the scalar column, both competitors with their vectorizers off (gcc 13 runs its vectorizer at O2/O3 even with no SIMD)
+NV_GCC=; NV_CLANG=; [ -z "${VSGCC_NOVEC:-}" ] || { NV_GCC="-fno-tree-vectorize -fno-tree-slp-vectorize"; NV_CLANG="-fno-vectorize -fno-slp-vectorize"; }
 for o in O1 O2 O3 Os; do
-  gcc $F -mpreferred-stack-boundary=2 -$o -c -o $P.gcc$o.o $S 2>$P.gcc$o.err || echo "FAIL gcc$o $P"
-  $CLANG $F -mstack-alignment=4 -$o -c -o $P.clang$o.o $S 2>$P.clang$o.err || echo "FAIL clang$o $P"
+  gcc $F $NV_GCC -mpreferred-stack-boundary=2 -$o -c -o $P.gcc$o.o $S 2>$P.gcc$o.err || echo "FAIL gcc$o $P"
+  $CLANG $F $NV_CLANG -mstack-alignment=4 -$o -c -o $P.clang$o.o $S 2>$P.clang$o.err || echo "FAIL clang$o $P"
   CS="gcc clang"
   if [ $o = O2 ] || [ $o = Os ]; then  # the ELF build of llrm is for loops.py
     $LLRM --target=x86_32-wat ${LLRM_FLAGS:-} -mabi=$ABI $LLRM_LD -$o -march=i486 -fobject-format=elf -c -o $P.llrmElf$o.o $S 2>$P.llrmElf$o.err || echo "FAIL llrmElf$o $P"

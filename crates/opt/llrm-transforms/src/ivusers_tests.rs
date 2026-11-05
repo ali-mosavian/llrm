@@ -26,6 +26,11 @@ exit:
 }
 ";
 
+thread_local! {
+    /// How many sets grew while the last `with_users` made its users.
+    static GROWN: Cell<usize> = const { Cell::new(0) };
+}
+
 /// `text`'s `@f` with its IV users, the number of instructions asked about,
 /// and the loop's header.
 fn with_users(
@@ -56,7 +61,9 @@ fn with_users(
         true
     };
     let env = Env { safe_to_speculate: &safe, ephemeral: &|_| false };
+    let grown = llrm_mir::dense::idset_resizes::<InstId>();
     let users = IvUsers::of(&mut se, &cx, header, &env);
+    GROWN.with(|n| n.set(llrm_mir::dense::idset_resizes::<InstId>() - grown));
     body(&cx, &mut se, &users, header, asked.get());
 }
 
@@ -149,15 +156,46 @@ fn the_walk_is_linear_in_the_users() {
     assert!(large <= 2 * small + 4, "{small} questions for 100 loads, {large} for 200");
 }
 
-/// IU1 made the program-order map for every value with two users: d_faces -O2
-/// paid 6.2 M instructions for 38 loops (`IdMap::from_iter`, 4.4 M + 1.9 M).
-/// A loop makes it once, however many values have two users (`%i` and `%next`
-/// here).
+/// IU1 walked the whole layout to place the blocks of a loop's users, for each
+/// loop: memory_expansion -O2 paid 63 M instructions for 471 loops (`IdMap`
+/// `from_iter`), quadratic in the function. The function makes the places once
+/// for all its loops.
 #[test]
-fn test_the_program_order_map_is_made_once_for_a_loop() {
-    with_users(ARRAY, |_, _, users, _, _| {
-        assert_eq!(users.order_builds(), 1);
-    });
+fn test_the_block_places_are_made_once_for_all_the_loops_of_a_function() {
+    let mut text = String::from("define i32 @f(ptr %p, i32 %n) {\nentry:\n  br label %l0\n");
+    for k in 0..6 {
+        let from = if k == 0 { "entry".to_string() } else { format!("x{}", k - 1) };
+        let next = if k == 5 { "end".to_string() } else { format!("l{}", k + 1) };
+        text += &format!(
+            "l{k}:\n  %i{k} = phi i32 [ 0, %{from} ], [ %n{k}, %l{k} ]\n  %a{k} = getelementptr i32, ptr %p, i32 %i{k}\n  %v{k} = load i32, ptr %a{k}\n  %n{k} = add i32 %i{k}, 1\n  %c{k} = icmp slt i32 %n{k}, %n\n  br i1 %c{k}, label %l{k}, label %x{k}\nx{k}:\n  %r{k} = add i32 %n{k}, %v{k}\n  br label %{next}\n"
+        );
+    }
+    text += "end:\n  ret i32 0\n}\n";
+    let module = llrm_mir::parse::module(&text).expect("a module");
+    let (_, _, function) = module.functions().next().expect("a function");
+    let layout = DataLayout::parse("e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32").unwrap();
+    let tree = DomTree::of(function);
+    let loops = LoopInfo::analyze(function, || &tree);
+    let assumptions = AssumptionCache::new(&module, function);
+    let cx = Cx {
+        context: &module.context,
+        globals: &module.globals,
+        metadata: &module.metadata,
+        function,
+        layout: &layout,
+        loops: &loops,
+        tree: &tree,
+        assumptions: &assumptions,
+    };
+    let mut se = ScalarEvolution::new();
+    let env = Env { safe_to_speculate: &|_| true, ephemeral: &|_| false };
+    let before = llrm_mir::module::block_places_built();
+    let headers: Vec<_> = loops.top_level_loops().map(|one| one.get_header()).collect();
+    assert_eq!(headers.len(), 6);
+    for header in headers {
+        IvUsers::of(&mut se, &cx, header, &env);
+    }
+    assert_eq!(llrm_mir::module::block_places_built() - before, 1);
 }
 
 /// IU1 ordered every instruction of the function to sort the two users of a
@@ -193,4 +231,13 @@ fn a_set_carried_past_an_edit_that_changed_a_use_differs_from_a_fresh_one() {
     assert!(found.contains("carried"), "{found}");
     carried.pop();
     assert!(crate::ivusers::difference(&carried, &again).is_some());
+}
+
+/// Each instruction asked about made a set of its result's users that grew to
+/// the highest id (727 instructions apiece, 18 M on memory_expansion); the
+/// users of one IV grow no set but the processed one, made with room.
+#[test]
+fn the_users_of_an_induction_variable_grow_no_set() {
+    with_users(ARRAY, |_, _, users, _, _| assert!(!users.uses.is_empty()));
+    assert_eq!(GROWN.with(Cell::get), 0);
 }

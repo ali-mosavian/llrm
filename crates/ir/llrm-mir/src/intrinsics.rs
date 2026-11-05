@@ -132,10 +132,34 @@ pub enum Intrinsic {
     /// `llvm.fake.use`: keeps its operands live for a debugger at `-Og`; no
     /// code runs it.
     FakeUse,
+    /// `llvm.experimental.noalias.scope.decl`: a scope of `!alias.scope` and
+    /// `!noalias` starts here and lives for one run of the code around it; a
+    /// pass that copies the code gives the copy its own. MIR has no metadata
+    /// call operand, so the call has none and its scope list is the
+    /// `!noalias.scope.decl` attachment. No code runs it.
+    NoAliasScopeDecl,
     /// `llvm.expect`: its first argument, which the second says it is expected
     /// to be: a hint `lower-expect` turns into branch weights and removes
     /// (LowerExpectIntrinsic.cpp); no code runs it.
     Expect,
+    /// `llvm.set.loop.iterations`: the loop that follows runs its argument's
+    /// count of iterations (HardwareLoops.cpp); a target that has no counter
+    /// register lowers it to nothing.
+    SetLoopIterations,
+    /// `llvm.test.set.loop.iterations`: as `set.loop.iterations`, and whether
+    /// the count is not zero, which lets it guard a loop that may run no
+    /// iteration.
+    TestSetLoopIterations,
+    /// `llvm.start.loop.iterations`: as `set.loop.iterations`, and its
+    /// argument again, to be carried round the loop by a phi.
+    StartLoopIterations,
+    /// `llvm.loop.decrement.reg`: its first argument, the iterations still to
+    /// run, less its second: the next value of the phi that carries them.
+    LoopDecrementReg,
+    /// `llvm.loop.decrement`: takes its argument off the loop counter and
+    /// says whether the loop goes on. Only a target that opts in to hardware
+    /// loops has one.
+    LoopDecrement,
     /// `llrm.noalias`: its argument, which it, and what is based on it, is
     /// reached by no pointer that is not, while anything based on it is used:
     /// C's `restrict`, said of a loop's pointers by the pass that tested that
@@ -532,7 +556,7 @@ thread_local! {
     static PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-const TABLE: [Spec; 76] = [
+const TABLE: [Spec; 82] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -660,6 +684,46 @@ const TABLE: [Spec; 76] = [
         own: None,
     },
     Spec {
+        name: "llvm.set.loop.iterations",
+        intrinsic: Intrinsic::SetLoopIterations,
+        overloads: &[Kind::Int],
+        returns: Slot::Void,
+        parameters: &[Slot::Any(0)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.test.set.loop.iterations",
+        intrinsic: Intrinsic::TestSetLoopIterations,
+        overloads: &[Kind::Int],
+        returns: Slot::Int(1),
+        parameters: &[Slot::Any(0)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.start.loop.iterations",
+        intrinsic: Intrinsic::StartLoopIterations,
+        overloads: &[Kind::Int],
+        returns: Slot::Any(0),
+        parameters: &[Slot::Any(0)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.loop.decrement.reg",
+        intrinsic: Intrinsic::LoopDecrementReg,
+        overloads: &[Kind::Int],
+        returns: Slot::Any(0),
+        parameters: INTS,
+        own: None,
+    },
+    Spec {
+        name: "llvm.loop.decrement",
+        intrinsic: Intrinsic::LoopDecrement,
+        overloads: &[Kind::Int],
+        returns: Slot::Int(1),
+        parameters: &[Slot::Any(0)],
+        own: None,
+    },
+    Spec {
         name: "llvm.is.constant",
         intrinsic: Intrinsic::IsConstant,
         overloads: &[Kind::Int],
@@ -689,6 +753,14 @@ const TABLE: [Spec; 76] = [
         overloads: &[Kind::Pointer],
         returns: Slot::Void,
         parameters: &[Slot::Any(0), Slot::Int(32), Slot::Int(32), Slot::Int(32)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.experimental.noalias.scope.decl",
+        intrinsic: Intrinsic::NoAliasScopeDecl,
+        overloads: &[],
+        returns: Slot::Void,
+        parameters: &[],
         own: None,
     },
     Spec {
@@ -901,6 +973,18 @@ pub fn window_name(
     huge: TypeId,
 ) -> String {
     format!("llrm.ia16.window.{}.{}", mangle(types, far), mangle(types, huge))
+}
+
+/// DEVIATE DV1: the 64 by 32 bit unsigned divides a target lowers by name
+/// (`unsigned long long f(unsigned hi, unsigned lo, unsigned d)`, the
+/// remainder in the high half of the result, the quotient in the low half):
+/// a plain declaration to every pass, a target's divide instruction in the
+/// backend. One table: a target adds its name as data.
+pub const WIDE_DIVIDES: &[&str] = &["llrm.x86.udiv64by32"];
+
+/// Whether `name` is one of [`WIDE_DIVIDES`].
+pub fn is_wide_divide(name: &str) -> bool {
+    WIDE_DIVIDES.contains(&name)
 }
 
 pub fn is_reserved(name: &str) -> bool {

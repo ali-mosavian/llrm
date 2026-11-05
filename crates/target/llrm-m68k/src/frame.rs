@@ -12,6 +12,11 @@
 //! lowest of their slots, after the stack adjustment and before the `unlk` or
 //! `adda.l` in the epilogue.
 //!
+//! DEVIATE: the shipped build rounds the frame to 4, the m68k Linux stack
+//! boundary gcc keeps, not the pin's 8, which only pads a frame (a function
+//! that pushes two words and calls paid `lea (-4,%sp),%sp` and an `addq.l #4`).
+//! Exit: none, a target's ABI fact.
+//!
 //! DEVIATE: not translated are stack realignment and the base pointer,
 //! dynamic allocas, tail calls (`TCReturnAddrDelta`), a stack adjustment over
 //! 2 GiB, CFI and shrink wrapping. Reason: the slice does not reach them.
@@ -34,6 +39,10 @@ const SLOT: i64 = 4;
 /// `M68kSubtarget::stackAlignment`.
 const STACK_ALIGN: i64 = 8;
 
+/// The shipped build's stack alignment: m68k Linux, AmigaOS and TOS ask for
+/// no more than 4.
+pub const SHIPPED_STACK_ALIGN: i64 = 4;
+
 /// What the frame depends on: `MachineFrameInfo` and the function's attributes.
 #[derive(Clone, Debug, Default)]
 pub struct Function {
@@ -45,6 +54,8 @@ pub struct Function {
     /// The callee-saved registers the allocator used, in `CSR_STD` order.
     pub saved: Vec<RegId>,
     pub max_call_frame: i64,
+    /// The stack alignment; 0 is the pin's.
+    pub stack_align: i64,
     pub adjusts_stack: bool,
     /// `"frame-pointer"="all"`.
     pub frame_pointer_all: bool,
@@ -121,7 +132,7 @@ pub fn layout(function: &Function) -> Layout {
     let frame = Frame {
         local_area: SLOT,
         max_align,
-        stack_align: STACK_ALIGN,
+        stack_align: if function.stack_align == 0 { STACK_ALIGN } else { function.stack_align },
         transient_align: 1,
         adjusts_stack: function.adjusts_stack,
         has_var_sized: function.has_var_sized,

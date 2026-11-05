@@ -66,8 +66,26 @@ pub struct Convention {
     pub float_argument_registers: Vec<String>,
     /// The pairs an i64 argument takes, low register first.
     pub wide_pairs: Vec<[String; 2]>,
+    /// The alignment of a wide argument on the stack, where it is more than a
+    /// slot (SysV x86-64: an `__int128` is 16-aligned).
+    pub wide_stack_align: Option<i64>,
     /// Whether a register an argument skipped is free for a later one.
     pub backfill: bool,
+    /// Argument `n` takes register `n` of its own file, integer or float, and
+    /// the stack slot `n` otherwise (Win64: RCX, RDX, R8, R9 and XMM0-3 share
+    /// positions).
+    pub positional: bool,
+    /// Bytes below the arguments the caller reserves in every call and the
+    /// callee may use (Win64's 32-byte home area of the register arguments).
+    pub shadow_bytes: i64,
+    /// The stack pointer moves only in the prologue and epilogue (Win64: "it
+    /// is not valid to change the stack pointer outside the prolog/epilog"):
+    /// a call's area is reserved in the frame, whatever the call needs.
+    pub reserve_call_frame: bool,
+    /// The MIR conventions besides C's that functions and calls in this
+    /// ABI take (`serves = ["fast"]`): Win64 sends every one through
+    /// `CC_X86_Win64_C`.
+    pub serves: Vec<String>,
     /// The ABI guarantees the stack is a multiple of `stack_alignment` at every
     /// call, whatever the callee holds: every function that calls frames
     /// itself to it.
@@ -213,6 +231,10 @@ pub struct Calling {
     /// whatever ABI the program has: no one else sees it, so the target's
     /// best serves. None where its default is that.
     pub private: Option<String>,
+    /// The convention a private function takes under an ABI family that
+    /// states its own (`[abi.<family>] private = "..."`): Win64 has one
+    /// convention for every function, `fastcc` included.
+    pub abi_private: BTreeMap<String, String>,
     /// The convention an instrument gives private functions in place of
     /// `private` (`LLRM_PRIVATE_WATCALL`), to compare the two. Never a default.
     pub private_instrument: Option<String>,
@@ -222,6 +244,10 @@ const KEYS: &[&str] = &[
     "cc",
     "wide_pairs",
     "backfill",
+    "positional",
+    "shadow_bytes",
+    "reserve_call_frame",
+    "serves",
     "aligned_calls",
     "register_bytes",
     "sized_arguments",
@@ -238,6 +264,7 @@ const KEYS: &[&str] = &[
     "aggregate_pointer_far",
     "slot_bytes",
     "stack_alignment",
+    "wide_stack_align",
     "order",
     "cleanup",
     "argument_registers",
@@ -284,6 +311,7 @@ impl Calling {
             .ok_or("calling.toml: `default` names the ABI a program has without -mabi=")?
             .to_owned();
         let mut abis = BTreeMap::new();
+        let mut abi_private = BTreeMap::new();
         for (family, one) in
             table.get("abi").and_then(toml::Value::as_table).ok_or("calling.toml: no [abi.<family>]")?
         {
@@ -293,6 +321,11 @@ impl Calling {
                 .and_then(toml::Value::as_str)
                 .ok_or_else(|| format!("calling.toml: abi.{family}.convention is not a name"))?;
             abis.insert(family.clone(), convention.to_owned());
+            if let Some(private) = one.as_table().and_then(|one| one.get("private")) {
+                let private =
+                    private.as_str().ok_or_else(|| format!("calling.toml: abi.{family}.private is not a name"))?;
+                abi_private.insert(family.clone(), private.to_owned());
+            }
         }
         for (name, value) in table
             .iter()
@@ -328,13 +361,20 @@ impl Calling {
             .get("private_instrument")
             .map(|one| one.as_str().map(str::to_owned).ok_or("calling.toml: `private_instrument` names a convention"))
             .transpose()?;
-        let calling = Self { conventions, abis, default, private, private_instrument };
+        let calling = Self { conventions, abis, default, private, abi_private, private_instrument };
         for (key, name) in [("private", &calling.private), ("private_instrument", &calling.private_instrument)] {
             if let Some(name) = name {
                 calling
                     .named(name)
                     .ok_or_else(|| format!("calling.toml: {key} is the convention {name}, which is not given"))?;
             }
+        }
+        for name in calling.abi_private.values() {
+            calling
+                .named(name)
+                .ok_or_else(
+                    || format!("calling.toml: an abi's private is the convention {name}, which is not given"),
+                )?;
         }
         for (family, convention) in &calling.abis {
             calling
@@ -350,6 +390,20 @@ impl Calling {
     /// The convention a private function takes, where the target states one.
     pub fn private(&self) -> Option<&Convention> {
         self.private.as_deref().and_then(|name| self.named(name))
+    }
+
+    /// The convention a private function takes under the ABI `family` (the
+    /// default's without one): the family's own where it states one, else
+    /// `private`'s.
+    pub fn private_under(
+        &self,
+        family: Option<&str>,
+    ) -> Option<&Convention> {
+        let family = family.unwrap_or(&self.default);
+        match self.abi_private.get(family) {
+            Some(name) => self.named(name),
+            None => self.private(),
+        }
     }
 
     /// The convention the comparison instrument gives a private function.
@@ -654,6 +708,13 @@ impl Convention {
             cc: table.contains_key("cc").then(|| text("cc")).transpose()?,
             wide_pairs,
             backfill: flag("backfill")?,
+            positional: flag("positional")?,
+            serves: match table.get("serves") {
+                Some(_) => names(table.get("serves"), "serves")?,
+                None => Vec::new(),
+            },
+            reserve_call_frame: flag("reserve_call_frame")?,
+            shadow_bytes: table.contains_key("shadow_bytes").then(|| integer("shadow_bytes")).transpose()?.unwrap_or(0),
             aligned_calls: flag("aligned_calls")?,
             register_bytes: table.contains_key("register_bytes").then(|| integer("register_bytes")).transpose()?,
             sized_arguments: flag("sized_arguments")?,
@@ -671,6 +732,10 @@ impl Convention {
             symbol,
             slot_bytes: integer("slot_bytes")?,
             stack_alignment: table.contains_key("stack_alignment").then(|| integer("stack_alignment")).transpose()?,
+            wide_stack_align: table
+                .contains_key("wide_stack_align")
+                .then(|| integer("wide_stack_align"))
+                .transpose()?,
             order,
             cleanup,
             argument_registers: names(table.get("argument_registers"), "argument_registers")?,
@@ -771,6 +836,9 @@ impl Convention {
         arguments: &[Kind],
         reserved: &[&str],
     ) -> Placement {
+        if self.positional {
+            return self.place_positional(arguments, reserved);
+        }
         let mut free: Vec<bool> = vec![true; self.argument_registers.len()];
         for (index, name) in self.argument_registers.iter().enumerate() {
             free[index] = !reserved.contains(&name.as_str());
@@ -816,6 +884,9 @@ impl Convention {
                 }
                 None => {
                     spilled = !self.skip_memory;
+                    if let (Kind::Wide, Some(align)) = (kind, self.wide_stack_align) {
+                        stack = (stack + align - 1) / align * align;
+                    }
                     places.push(Place::Stack(stack));
                     let bytes = match kind {
                         Kind::Word => self.slot_bytes,
@@ -828,6 +899,39 @@ impl Convention {
             }
         }
         Placement { places, used, stack_bytes: stack }
+    }
+
+    /// `place` for a `positional` convention: argument `n` is in register `n`
+    /// of its file, else in slot `n` above the shadow area, which the call
+    /// reserves even with no argument on the stack.
+    fn place_positional(
+        &self,
+        arguments: &[Kind],
+        reserved: &[&str],
+    ) -> Placement {
+        let mut places = Vec::new();
+        let mut used = Vec::new();
+        let slot = |position: usize| Place::Stack(self.slot_bytes * position as i64);
+        // The hidden result pointer is the first argument: it takes the first
+        // position, and the named ones follow.
+        let first = reserved.len();
+        for (index, &kind) in arguments.iter().enumerate() {
+            let position = first + index;
+            let register = match kind {
+                Kind::Word | Kind::Sized(_) => self.argument_registers.get(position),
+                Kind::Float(_) => self.float_argument_registers.get(position),
+                Kind::Wide | Kind::Memory(_) => None,
+            };
+            places.push(match register {
+                Some(name) => {
+                    used.push(name.clone());
+                    Place::Registers(vec![name.clone()])
+                }
+                None => slot(position),
+            });
+        }
+        let stack_bytes = (self.slot_bytes * (first + arguments.len()) as i64).max(self.shadow_bytes);
+        Placement { places, used, stack_bytes }
     }
 
     /// The registers a call changes that the callee does not keep: what the
@@ -981,6 +1085,36 @@ mod tests {
         );
     }
 
+    const WIN64: &str = "default = \"w\"\n[abi.w]\nconvention = \"w\"\n[w]\nslot_bytes = 8\norder = \"right-to-left\"\ncleanup = \"caller\"\nargument_registers = [\"rcx\", \"rdx\", \"r8\", \"r9\"]\nfloat_argument_registers = [\"xmm0\", \"xmm1\", \"xmm2\", \"xmm3\"]\npositional = true\nshadow_bytes = 32\nreturn_address_bytes = 8\nfirst_argument_offset = 48\nframe = \"rbp\"\nstack = \"rsp\"\npreserved = [[\"ebx\", \"rbx\"]]\nclobbered = [\"rax\"]\nentry_state = []\npromotion = \"slot\"\nwide_slots = 1\nvariadic_float = \"double\"\n[w.result]\n8 = [\"rax\"]\n";
+
+    /// Win64 shares positions between the integer and float registers: the
+    /// second argument is RDX or XMM1 whatever the first was, the fifth is the
+    /// stack slot above the 32-byte home area, and a call with no stack
+    /// argument still reserves it. SysV's counters placed `(i, d, i, d)` in
+    /// RCX, XMM0, RDX, XMM1.
+    #[test]
+    fn a_positional_convention_numbers_its_registers_by_argument_not_by_file() {
+        let calling = Calling::parse(WIN64).unwrap();
+        let placed = calling.native().place(&[Kind::Word, Kind::Float(8), Kind::Word, Kind::Float(8), Kind::Word]);
+        assert_eq!(
+            placed.places,
+            [registers(&["rcx"]), registers(&["xmm1"]), registers(&["r8"]), registers(&["xmm3"]), Place::Stack(32)]
+        );
+        assert_eq!(placed.stack_bytes, 40);
+        assert_eq!(calling.native().place(&[]).stack_bytes, 32);
+    }
+
+    /// A struct result's hidden pointer is RCX under Win64, so the named
+    /// arguments are positions 1, 2, ...: RDX, XMM2, and the fourth is above
+    /// the shadow area. Placed from position 0 the first one lost its register.
+    #[test]
+    fn a_positional_convention_counts_the_hidden_result_pointer_as_position_zero() {
+        let calling = Calling::parse(WIN64).unwrap();
+        let placed = calling.native().place_reserving(&[Kind::Word, Kind::Float(8), Kind::Word, Kind::Word], &["rcx"]);
+        assert_eq!(placed.places, [registers(&["rdx"]), registers(&["xmm2"]), registers(&["r9"]), Place::Stack(32)]);
+        assert_eq!(placed.stack_bytes, 40);
+    }
+
     /// gcc's regparm(3) puts `(float, int b, double, int d, int e)` in EAX,
     /// EDX, ECX (b, d, e) and the float and the double on the stack: it
     /// counts integers only. With `skip_memory` off the float stopped the rest,
@@ -1074,6 +1208,24 @@ mod tests {
             (Some("*"), Some("*"), Some("_*"))
         );
         assert_eq!((calling.redecorated("^", "elf"), calling.redecorated("*_", "coff")), (None, None));
+    }
+
+    /// An ABI family may state its own private convention (`[abi.<family>]
+    /// private`), and a convention the conventions it serves (`serves`); the
+    /// others take the file's `private`. Win64's `fastcc` function went to
+    /// System V's registers for want of both.
+    #[test]
+    fn an_abi_family_states_its_own_private_convention_and_the_ones_it_serves() {
+        let text = format!("{WATCALL}[c]\nlike = \"w\"\ncc = \"cdecl\"\nserves = [\"fast\"]\n").replace(
+            "default = \"w\"\n[abi.w]\nconvention = \"w\"\n",
+            "default = \"stack\"\nprivate = \"w\"\n[abi.reg]\nconvention = \"w\"\nprivate = \"c\"\n[abi.stack]\nconvention = \"c\"\n",
+        );
+        let calling = Calling::parse(&text).unwrap();
+        let named = |one: Option<&Convention>| one.map(|one| one.name.clone());
+        assert_eq!(named(calling.private_under(None)), Some("w".to_owned()));
+        assert_eq!(named(calling.private_under(Some("reg"))), Some("c".to_owned()));
+        assert_eq!(calling.named("c").unwrap().serves, ["fast"]);
+        assert!(calling.named("w").unwrap().serves.is_empty());
     }
 
     /// The default ABI is the file's `default`, not its first entry: a second

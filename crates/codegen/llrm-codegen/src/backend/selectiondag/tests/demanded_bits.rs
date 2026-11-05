@@ -216,6 +216,7 @@ fn a_narrowed_shift_takes_the_targets_amount_type() {
         cmov: true,
         sse2: false,
         min_size: false,
+        three_address_adds: false,
         i16_mul_chains: false,
         sext_load: true,
         zext_free: true,
@@ -291,4 +292,105 @@ fn the_arms_of_a_select_are_asked_for_the_demanded_bits() {
     });
     // One arm is rewritten per visit; the select's user is not asked again.
     assert!(count(&dag, root, ISD::And) < 2, "both arms kept their mask");
+}
+
+/// `mulhu (and x, 255), 255` is below 2^16, so its high word is 0. The pin
+/// asks `SimplifyDemandedBits` from `visitMULHU` ([L5821]) just to fold such a
+/// node by known bits; ours never asked, and the multiply stayed (m68k, x86
+/// m16: a `mul` of two masked bytes kept as a call/long multiply).
+///
+/// [L5821]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L5821
+#[test]
+fn a_high_multiply_of_two_masked_bytes_is_zero() {
+    let mut dag = dag();
+    let x = dag.get_register(EVT::I32, 5);
+    let ff = dag.get_constant(0xFF, EVT::I32);
+    let masked = dag.get_node(ISD::And, EVT::I32, &[x, ff]);
+    let root = dag.get_node(ISD::MulHU, EVT::I32, &[masked, ff]);
+    dag.set_root(root);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.constant(dag.get_root()), Some(0));
+}
+
+/// `(x << 16) * (y << 16)` has no bit set in 32: `visitMUL` ends in
+/// `SimplifyDemandedBits` ([L5155]), which finds all 32 bits known.
+///
+/// [L5155]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L5155
+#[test]
+fn a_product_of_two_shifted_values_whose_low_word_is_clear_is_zero() {
+    let mut dag = dag();
+    let (x, y) = (dag.get_register(EVT::I32, 5), dag.get_register(EVT::I32, 6));
+    let sixteen = dag.get_constant(16, EVT::I32);
+    let a = dag.get_node(ISD::Shl, EVT::I32, &[x, sixteen]);
+    let b = dag.get_node(ISD::Shl, EVT::I32, &[y, sixteen]);
+    let root = dag.get_node(ISD::Mul, EVT::I32, &[a, b]);
+    dag.set_root(root);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.constant(dag.get_root()), Some(0));
+}
+
+/// `(x + 0xFFFF) & 0xFFFF`: only the low 16 bits are read, and the addend has
+/// them all set, so the pin makes it `x + -1` (`ADD` case of
+/// `SimplifyDemandedBits`, [L3013]). A target that did not ask kept the
+/// 16-bit constant (m68k, z80, 6502, x86 m16/m32).
+///
+/// [L3013]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L3013
+#[test]
+fn an_addend_with_every_demanded_bit_set_is_minus_one_for_any_target() {
+    let mut dag = dag();
+    let x = dag.get_register(EVT::I32, 5);
+    let low = dag.get_constant(0xFFFF, EVT::I32);
+    let sum = dag.get_node(ISD::Add, EVT::I32, &[x, low]);
+    let root = dag.get_node(ISD::And, EVT::I32, &[sum, low]);
+    dag.set_root(root);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    let add = dag.operand(root, 0);
+    assert_eq!(dag.opcode(add), ISD::Add, "root {:?}", dag.opcode(root));
+    assert_eq!(dag.constant(dag.operand(add, 1)), Some(0xFFFF_FFFF));
+}
+
+/// `(x & -64) << 4` reads 28 bits of the mask. The pin's generic shrink writes
+/// `0x0FFFFFC0` (an imm32 `and`, 3 B longer than `-64`); x86 keeps a mask that
+/// is a sign-extended imm8 at m16 (DEVIATE SD212c). x86_16 `div_constants_ulong -O2`
+/// grew 6 B when the call sites ran.
+fn and_mask_under_a_shift(m16: bool) -> Option<u128> {
+    use super::super::x86_lowering::X86Lowering;
+    let mut dag = dag();
+    let x = dag.get_register(EVT::I32, 5);
+    let mask = dag.get_constant(0xFFFF_FFC0, EVT::I32);
+    let and = dag.get_node(ISD::And, EVT::I32, &[x, mask]);
+    let root = shift(&mut dag, ISD::Shl, and, 4);
+    dag.set_root(root);
+    let mut hooks = X86Lowering {
+        cmov: true,
+        sse2: false,
+        min_size: false,
+        three_address_adds: false,
+        i16_mul_chains: m16,
+        sext_load: true,
+        zext_free: false,
+        profile: None,
+    };
+    DagCombiner::new(&mut dag, &mut hooks, CombineLevel::BeforeLegalizeTypes).run();
+    fn mask_of(dag: &SelectionDAG, v: SDValue) -> Option<u128> {
+        if dag.opcode(v) == ISD::And {
+            if let Some(c) = dag.constant(dag.operand(v, 1)) {
+                return Some(c);
+            }
+        }
+        (0..dag.node(v).ops.len()).find_map(|i| mask_of(dag, dag.operand(v, i)))
+    }
+    mask_of(&dag, dag.get_root())
+}
+
+#[test]
+fn an_x86_and_mask_that_is_an_imm8_keeps_its_short_form() {
+    assert_eq!(and_mask_under_a_shift(true), Some(0xFFFF_FFC0));
+}
+
+/// m32 and m64 keep the pin's shrink.
+#[test]
+fn an_x86_and_mask_is_shrunk_as_the_pin_does_off_m16() {
+    assert_eq!(and_mask_under_a_shift(false), Some(0x0FFF_FFC0));
 }

@@ -134,6 +134,7 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
         address_mode: llrm_dagisel::x86_addr::AddrMode::Flat32,
         opt_size: false,
         call_alignment: 1,
+        reserved_calls: false,
         map: &map,
         names: &names,
     };
@@ -144,14 +145,17 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
             .map_err(|r| r.0.to_owned())?;
         let before = built.dag.dump();
         let emitted = select_block(
+            &mut info,
             &mut built.dag,
             &tli,
             &mut X86Lowering {
                 cmov: false,
                 sse2: false,
                 min_size: false,
+                three_address_adds: false,
                 i16_mul_chains: false,
-                sext_load: false, zext_free: false,
+                sext_load: false,
+                zext_free: false,
                 profile: None,
             },
             &selector,
@@ -216,8 +220,10 @@ fn the_combiner_runs_between_the_legalizers() {
             cmov: false,
             sse2: false,
             min_size: false,
+            three_address_adds: false,
             i16_mul_chains: false,
-            sext_load: false, zext_free: false,
+            sext_load: false,
+            zext_free: false,
             profile: None,
         },
         &machine,
@@ -338,13 +344,16 @@ fn a_dag_target_is_preprocessed_once_before_it_selects() {
                 cmov: false,
                 sse2: false,
                 min_size: false,
+                three_address_adds: false,
                 i16_mul_chains: false,
-                sext_load: false, zext_free: false,
+                sext_load: false,
+                zext_free: false,
                 profile: None,
             },
             hooks(),
         );
         let x86 = X86Target {
+            live: &mut info,
             tli: &tli,
             lowering: &mut lowering,
             chooser: X86Chooser { selector: &selector, hooks: &mut hooks },

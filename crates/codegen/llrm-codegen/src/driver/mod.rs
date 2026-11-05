@@ -366,7 +366,7 @@ pub fn compiled_module(
         None => return Err(format!("the module states no datalayout; {}'s is `{layout}`", options.arch.name())),
     }
     let cpu = options.cpu()?;
-    let mut program = Program::new(vec![module], cpu.target())?;
+    let mut program = Program::new(vec![module], cpu.target_under(&*options.arch, options.abi.as_deref()))?;
     if llrm_support::debug::verifying() {
         timed("mir verify frontend", || verified(&program, "the frontend"))?;
     }
@@ -565,11 +565,14 @@ pub fn optimized(
         program.modules.iter_mut().try_for_each(|module| crate::backend::libmcalls::expanded(module, &options.libcalls))
     })?;
     if let Some((_, convention, symbol)) = options.libcalls.iter().find(|(name, ..)| name == "memcpy") {
+        let inline_variable = options.cpu()?.target().tti().is_some_and(|tti| tti.inlines_variable_memcpy());
         timed("mir memcpy calls", || {
             program
                 .modules
                 .iter_mut()
-                .try_for_each(|module| crate::backend::memcpycall::expanded(module, *convention, symbol))
+                .try_for_each(
+                    |module| crate::backend::memcpycall::expanded(module, *convention, symbol, inline_variable),
+                )
         })?;
     }
     timed("mir constant intrinsics", || {

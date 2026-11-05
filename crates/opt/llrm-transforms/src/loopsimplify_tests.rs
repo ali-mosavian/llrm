@@ -736,3 +736,87 @@ out:
     // `cfg!(test)`.
     simplified(function);
 }
+
+/// n1 (rank 22): `a` carries `%i` unchanged to the header, `b` carries the
+/// next count, so the pin nests the loops; llrm merged both back edges into
+/// one latch. `findPHIToPartitionLoops` names the phi that tells them apart.
+#[test]
+fn test_a_header_phi_a_backedge_carries_unchanged_partitions_the_loops() {
+    let module = parsed(
+        "define i32 @f(i32 %n, ptr %p) {
+entry:
+  br label %h
+
+h:
+  %i = phi i32 [ 0, %entry ], [ %i, %a ], [ %i2, %b ]
+  %v = load i32, ptr %p
+  %c1 = icmp slt i32 %v, %n
+  br i1 %c1, label %a, label %b
+
+a:
+  %w = load volatile i32, ptr %p
+  %c2 = icmp eq i32 %w, 0
+  br i1 %c2, label %h, label %x
+
+b:
+  %i2 = add i32 %i, 1
+  %c3 = icmp slt i32 %i2, %n
+  br i1 %c3, label %h, label %x
+
+x:
+  %r = phi i32 [ %i, %a ], [ %i2, %b ]
+  ret i32 %r
+}
+",
+    );
+    let (_, _, function) = module.functions().next().unwrap();
+    let block =
+        |name: &str| *function.layout().iter().find(|&&one| function.block(one).name.as_deref() == Some(name)).unwrap();
+    let (h, a, b) = (block("h"), block("a"), block("b"));
+    let in_loop = |one| one == h || one == a || one == b;
+    let found = super::find_phi_to_partition_loops(function, h, &in_loop).expect("a phi");
+    assert_eq!(function.value(function.instruction(found).result.unwrap()).name.as_deref(), Some("i"));
+    // From outside the loop, or as another value, it is no mark.
+    assert_eq!(super::find_phi_to_partition_loops(function, h, &|one| one == h || one == b), None);
+}
+
+/// n1 (rank 22): the pin nests the loops of `h` (`a` carries `%i` back to it,
+/// `b` the next count): an inner loop `h`, `a` with one latch, and an outer
+/// loop around it. llrm made one loop with one latch for both.
+#[test]
+fn test_a_loop_whose_header_phi_is_carried_unchanged_by_one_backedge_is_nested() {
+    let mut module = parsed(
+        "define i32 @f(i32 %n, ptr %p) {
+entry:
+  br label %h
+
+h:
+  %i = phi i32 [ 0, %entry ], [ %i, %a ], [ %i2, %b ]
+  %v = load i32, ptr %p
+  %c1 = icmp slt i32 %v, %n
+  br i1 %c1, label %a, label %b
+
+a:
+  %w = load volatile i32, ptr %p
+  %c2 = icmp eq i32 %w, 0
+  br i1 %c2, label %h, label %x
+
+b:
+  %i2 = add i32 %i, 1
+  %c3 = icmp slt i32 %i2, %n
+  br i1 %c3, label %h, label %x
+
+x:
+  %r = phi i32 [ %i, %a ], [ %i2, %b ]
+  ret i32 %r
+}
+",
+    );
+    let function = module.function_mut("f").expect("@f").1;
+    assert!(simplified(function));
+    let shape = cfg::Shape::of(function);
+    assert_eq!(shape.loops.len(), 2, "{}", printed(&module));
+    let (small, large) = if shape.loops[0].body.len() < shape.loops[1].body.len() { (0, 1) } else { (1, 0) };
+    assert!(shape.loops[small].body.iter().all(|block| shape.loops[large].body.contains(block)));
+    assert!(shape.loops.iter().all(|one| one.latches.len() == 1), "{}", printed(&module));
+}

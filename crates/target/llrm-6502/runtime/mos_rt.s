@@ -134,7 +134,7 @@ udivmod8:
 ; rs1 / rs2: the quotient in rc2:rc3, the remainder in rc6:rc7. Uses A and X only.
 udivmod16:
   lda rc5
-  bne @wide
+  bne udivmod16c
   ; a divisor under 256: the remainder is a byte, in A, with the carry of the shift as its ninth bit
   ldx #16
 @next8:
@@ -154,7 +154,8 @@ udivmod16:
   lda #0
   sta rc7
   rts
-@wide:
+; the bit loop alone: what the compact entry points run
+udivmod16c:
   lda #0
   sta rc6
   sta rc7
@@ -211,6 +212,21 @@ __udivhi3:                      ; rs1 / rs2 -> A:X, the remainder in rc6:rc7
 .export __umodhi3
 __umodhi3:                      ; rs1 % rs2 -> A:X
   jsr udivmod16
+  lda rc6
+  ldx rc7
+  rts
+
+; the compact variants, called where a byte is worth more than the clocks: no short-divisor path
+.export __udivhi3c
+__udivhi3c:                     ; rs1 / rs2 -> A:X, the remainder in rc6:rc7
+  jsr udivmod16c
+  lda rc2
+  ldx rc3
+  rts
+
+.export __umodhi3c
+__umodhi3c:                     ; rs1 % rs2 -> A:X
+  jsr udivmod16c
   lda rc6
   ldx rc7
   rts
@@ -446,6 +462,54 @@ __mulsi3:                       ; __sa * __sb -> __sa (the low 32 bits)
   rol __sa+3
   dex
   bne @next
+  jmp copy_st_to_sa
+
+; __mulsi3 for speed: the multiplier is walked a byte at a time and the walk
+; stops at its last set byte, 19 bytes more, a third of the clocks for a byte.
+.export __mulsi3_fast
+__mulsi3_fast:                  ; __sa * __sb -> __sa (the low 32 bits)
+  lda #0
+  sta __st
+  sta __st+1
+  sta __st+2
+  sta __st+3
+  ldy #4
+@byte:
+  ldx #8
+@next:
+  lsr __sb+3
+  ror __sb+2
+  ror __sb+1
+  ror __sb
+  bcc @skip
+  clc
+  lda __st
+  adc __sa
+  sta __st
+  lda __st+1
+  adc __sa+1
+  sta __st+1
+  lda __st+2
+  adc __sa+2
+  sta __st+2
+  lda __st+3
+  adc __sa+3
+  sta __st+3
+@skip:
+  asl __sa
+  rol __sa+1
+  rol __sa+2
+  rol __sa+3
+  dex
+  bne @next
+  lda __sb
+  ora __sb+1
+  ora __sb+2
+  ora __sb+3
+  beq @done
+  dey
+  bne @byte
+@done:
   jmp copy_st_to_sa
 
 .macro cmp_sub_32

@@ -33,7 +33,7 @@ use std::cell::RefCell;
 
 use llrm_analysis::scev::expr::{Kind, Scev};
 use llrm_analysis::scev::{Cx, ScalarEvolution};
-use llrm_mir::dense::{IdMap, IdSet};
+use llrm_mir::dense::IdSet;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::valuetracking::pattern::phi_incoming;
@@ -70,11 +70,6 @@ pub struct IvUsers {
     pub l: BlockId,
     pub uses: Vec<IvStrideUse>,
     processed: IdSet<InstId>,
-    /// Each block's place in the layout, made once for the loop the
-    /// first time a value has two users (IU1).
-    order: Option<IdMap<BlockId, usize>>,
-    /// How many times `order` was made: 0 or 1.
-    order_builds: u32,
     /// How many users had their place worked out.
     ordered: usize,
 }
@@ -199,7 +194,7 @@ impl IvUsers {
     ) -> Self {
         #[cfg(test)]
         BUILDS.with(|made| made.set(made.get() + 1));
-        let mut users = Self { l, uses: Vec::new(), processed: IdSet::new(), order: None, order_builds: 0, ordered: 0 };
+        let mut users = Self { l, uses: Vec::new(), processed: IdSet::with_capacity(cx.function.instruction_count()), ordered: 0 };
         let phis: Vec<InstId> =
             cx.function.iter_block(l).take_while(|&inst| cx.function.instruction(inst).opcode == Opcode::Phi).collect();
         for phi in phis {
@@ -252,25 +247,20 @@ impl IvUsers {
 
         let l = self.l;
         let lp = cx.loops.get_loop_for(l).expect("a loop");
-        let mut unique = IdSet::<InstId>::new();
         let mut users: Vec<InstId> = cx.function.users(result).iter().map(|one| one.user).collect();
         if users.len() > 1 {
-            if self.order.is_none() {
-                self.order_builds += 1;
-                self.order = Some(cx.function.layout().iter().enumerate().map(|(at, &block)| (block, at)).collect());
-            }
-            let order = self.order.as_ref().expect("made above");
             self.ordered += users.len();
+            // The function keeps each block's index in the layout, made once
+            // for all the loops (IU1).
             let place = |user: &InstId| {
                 let block = cx.function.parent(*user)?;
-                Some((*order.get(&block)?, cx.function.number_in_block(*user)?))
+                Some((cx.function.layout_index(block)?, cx.function.number_in_block(*user)?))
             };
             users.sort_by_key(|user| std::cmp::Reverse(place(user)));
+            // One instruction using the result twice sorts to one place.
+            users.dedup();
         }
         for user in users {
-            if !unique.insert(user) {
-                continue;
-            }
             // Do not recurse into a phi twice.
             let is_phi = cx.function.instruction(user).opcode == Opcode::Phi;
             if is_phi && self.processed.contains(&user) {
@@ -317,11 +307,6 @@ impl IvUsers {
     /// users sorted, not the function.
     pub fn ordered_instructions(&self) -> usize {
         self.ordered
-    }
-
-    /// How many times the program-order map was made: once per loop at most.
-    pub fn order_builds(&self) -> u32 {
-        self.order_builds
     }
 
     /// `isIVUserOrOperand`: whether the walk reached `inst`.

@@ -162,6 +162,16 @@ def main():
     global RTREL
     p = sh(["cp", RT, "rt.s"]); 
     RTREL = build("rt", open(f"{W}/rt.s").read())
+    # The link map cuts a symbol at 9 characters, and the byte counts of tests/kernels/measure.py read it: two
+    # routines alike in them were counted as one (`__udivdi3_s` hid the size routine's bytes behind the speed one's).
+    names = re.findall(r"^(__\w+):", open(RT).read(), re.M)
+    cut = {}
+    for name in names:
+        cut.setdefault(name[:9], []).append(name)
+    clash = [group for group in cut.values() if len(group) > 1]
+    if clash:
+        print(f"FAIL routine names alike in 9 characters: {clash}")
+        sys.exit(1)
     rnd = random.Random(1)
     edges16 = [0, 1, 2, 3, 7, 8, 9, 10, 15, 16, 100, 255, 256, 257, 1000, 1234, 4096, 32767, 32768, 32769, 40000, 65534, 65535]
     allok = True
@@ -195,6 +205,8 @@ def main():
     def tdiv32(a, b): q = abs(a) // abs(b); return q if (a < 0) == (b < 0) else -q
     l32b = l32 + [10, 100, 1000, 65535, 65537, 0x10000, 0x7FFF, 0x8000, 0xFFFF0000, 0x80000001]
     lp = [(a, b) for a in l32b for b in l32b if b] + [(rnd.getrandbits(32), rnd.getrandbits(rnd.choice([3, 8, 16, 24, 32])) or 1) for _ in range(150)]
+    mp = [(a, b) for a in l32b for b in l32b] + [(rnd.getrandbits(32), rnd.getrandbits(rnd.choice([3, 8, 16, 24, 32]))) for _ in range(150)]
+    allok &= check("__mulsi3", "LL>L", lambda a, b: a * b & 0xFFFFFFFF, mp)
     allok &= check("__udivsi3", "LL>L", lambda a, b: a // b, lp)
     allok &= check("__umodsi3", "LL>L", lambda a, b: a % b, lp)
     allok &= check("__divsi3", "LL>L", lambda a, b: tdiv32(s32c(a), s32c(b)) & 0xFFFFFFFF, lp)
@@ -205,16 +217,23 @@ def main():
     def tdiv64(a, b): q = abs(a) // abs(b); return q if (a < 0) == (b < 0) else -q
     qp = [(a, b) for a in q64 for b in q64 if b][::3]
     qp += [(a, b) for a in q64 for b in (1, 2, 10, 3)]
-    allok &= check("__udivdi3", "QQ>Q", lambda a, b: a // b, qp)
-    allok &= check("__umoddi3", "QQ>Q", lambda a, b: a % b, qp)
-    # the quotient of the most negative value by -1 overflows in C
-    sq = [p for p in qp if not (p[0] == 1 << 63 and p[1] == (1 << 64) - 1)]
-    allok &= check("__divdi3", "QQ>Q", lambda a, b: tdiv64(s64(a), s64(b)) & ((1 << 64) - 1), sq)
-    allok &= check("__moddi3", "QQ>Q", lambda a, b: (s64(a) - tdiv64(s64(a), s64(b)) * s64(b)) & ((1 << 64) - 1), sq)
+    for pre in ("__", "__s_"):
+        allok &= check(pre + "udivdi3", "QQ>Q", lambda a, b: a // b, qp)
+        allok &= check(pre + "umoddi3", "QQ>Q", lambda a, b: a % b, qp)
+        # the quotient of the most negative value by -1 overflows in C
+        sq = [p for p in qp if not (p[0] == 1 << 63 and p[1] == (1 << 64) - 1)]
+        allok &= check(pre + "divdi3", "QQ>Q", lambda a, b: tdiv64(s64(a), s64(b)) & ((1 << 64) - 1), sq)
+        allok &= check(pre + "moddi3", "QQ>Q", lambda a, b: (s64(a) - tdiv64(s64(a), s64(b)) * s64(b)) & ((1 << 64) - 1), sq)
     for nm, f in (("__ashldi3", lambda a, b: a << b & ((1 << 64) - 1)), ("__lshrdi3", lambda a, b: a >> b), ("__ashrdi3", lambda a, b: s64(a) >> b & ((1 << 64) - 1))):
         allok &= check(nm, "QA>Q", f, [(a, b) for a in q64 for b in (0, 1, 7, 8, 9, 15, 16, 31, 32, 33, 47, 56, 63)])
+    # A long long divide takes one step per quotient bit; at one per dividend bit these cost 97k and 103k T.
+    for a, b, bar in ((0x123456789ABCDEF0, 1000003, 25000), (1000000, 10, 18000)):
+        t = cost64("__udivdi3", a, b)
+        if t > bar:
+            print(f"FAIL __udivdi3 ({a:#x}, {b}) took {t} T, bar {bar}")
+            allok = False
     print("ALL OK" if allok else "FAILURES")
-    for nm, sig, args in (("__mulqi3", "A,L>A", (7, 6)), ("__mulqi3", "A,L>A", (200, 255)), ("__udivqi3", "A,L>A", (200, 7)), ("__mulhi3", "HL,DE>DE", (1234, 56)), ("__mulhi3", "HL,DE>DE", (56, 1234)), ("__udivhi3", "HL,DE>DE", (40000, 10)), ("__umodhi3", "HL,DE>DE", (40000, 10)), ("__ashlhi3", "HL,A>DE", (1, 5)), ("__divqi3", "A,L>A", (200, 7)), ("__divhi3", "HL,DE>DE", (40000, 10)), ("__ashlsi3", "L,A>L", (1, 20)), ("__udivsi3", "LL>L", (1000000, 10)), ("__divsi3", "LL>L", (1000000, 10))):
+    for nm, sig, args in (("__mulqi3", "A,L>A", (7, 6)), ("__mulqi3", "A,L>A", (200, 255)), ("__udivqi3", "A,L>A", (200, 7)), ("__mulhi3", "HL,DE>DE", (1234, 56)), ("__mulhi3", "HL,DE>DE", (56, 1234)), ("__udivhi3", "HL,DE>DE", (40000, 10)), ("__umodhi3", "HL,DE>DE", (40000, 10)), ("__ashlhi3", "HL,A>DE", (1, 5)), ("__divqi3", "A,L>A", (200, 7)), ("__divhi3", "HL,DE>DE", (40000, 10)), ("__ashlsi3", "L,A>L", (1, 20)), ("__mulsi3", "LL>L", (31, 1000)), ("__udivsi3", "LL>L", (1000000, 10)), ("__divsi3", "LL>L", (1000000, 10))):
         print(f"{nm}{args}: {cost(nm, sig, args)} T")
     for nm, a, b, count in (("__udivdi3", 0x123456789ABCDEF0, 1000003, False), ("__divdi3", 0x123456789ABCDEF0, 1000003, False), ("__udivdi3", 1000000, 10, False), ("__ashldi3", 1, 13, True), ("__lshrdi3", 0x123456789ABCDEF0, 37, True), ("__ashrdi3", 1 << 63, 63, True)):
         print(f"{nm}({a:#x}, {b}): {cost64(nm, a, b, count)} T")

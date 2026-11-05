@@ -85,10 +85,36 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         x87_stack_slots: Some(8),
         speed_milliclocks_per_byte: per_byte,
         inline_size_guard_at_size: true,
+        // DEVIATE SZ2 (owner x86-m32, exit 2026-11-20): -Os keeps a once-called callee whose copy grows the code (gcc does; the pin copies it).
+        inline_size_guard_single_site: true,
         // DEVIATE REC-2: gcc 15.2's `max-inline-recursive-depth` 8 and
         // `max-inline-insns-recursive` 450, at -O2/-O3 (never -Os). Owner w10.
         recursive_inlining: Some((8, 450)),
-        recursive_edge_growth: Some((15, 30)),
+        // DEVIATE REC-2 bar: gcc's 15/30 size units in our `gcc_insns`, fitted
+        // to the 10 corpus recursions (insns = 1.6 x gcc size less 5.5; queens
+        // 22 sits on the O3 edge, zero margin). Owner x86-m32; exit 2026-12-10:
+        // the estimate becomes gcc's own size count (translated, not fitted).
+        recursive_edge_growth: Some((12, 22)),
+        // DEVIATE REC-2: the copies may add gcc's 450 at -O2 (fib 240256 -> 99687 clk,
+        // x_fib, frames), 150 at -O3 (rectwo, bintree, recchop are worse with 450; their
+        // O3 card is open). Owner x86-m32, exit 2026-11-20.
+        recursive_inlining_growth: Some((450, 150)),
+        peel_folded_entry: true,
+        // DEVIATE UP1 (owner x86-m32; exit 2026-11-20: the pin's cost model or
+        // gcc's unroll estimate priced in clocks and bytes replaces it): a
+        // full unroll must repay its bytes at the speed rate.
+        unroll_milliclocks_per_byte: per_byte,
+        sink_select_arms: true,
+        // DEVIATE MEM-1 (the pin's `EmitTargetCodeForMemcpy`,
+        // X86SelectionDAGInfo.cpp L328, leaves a variable length to a libcall):
+        // at -O2/-O3 on the 486 and P5, the only CPUs this target accepts, it
+        // is `rep movsd` inline, as gcc's `rep_prefix_4_byte`. x_mergesort -O3:
+        // its short copy loops were `call _memcpy`; inline, 72146 -> 66173 clk
+        // (gcc 60026: row MEM-1-R1). Owner w2. Exit 2026-11-20.
+        inline_variable_memcpy: true,
+        // DEVIATE REC5-1 (owner w2, exit 2026-11-20):
+        // see `Tuning::ipsccp_widen_keeps_sign`.
+        ipsccp_widen_keeps_sign: true,
         ..llrm_mir::target::Tuning::PIN
     }
 }
@@ -391,9 +417,22 @@ impl llrm_target::Target for M32 {
         4
     }
 
+    /// DEVIATE SD543: no `rep` on `bsf`; the 386, 486 and Pentium have no
+    /// `tzcnt`, so the pin's prefix is a dead byte. Owner m16. Exit 2026-11-20.
+    fn bsf_rep_prefix(&self) -> bool {
+        false
+    }
+
     /// X86ISelLowering.cpp: `setPrefLoopAlignment(Align(16))`.
     fn pref_loop_alignment(&self) -> u8 {
         4
+    }
+
+    /// DEVIATE SD545 (owner anyisa, exit 2026-11-20): the pin pads a loop
+    /// header with up to 15 bytes; gcc's `.p2align 4,,10` pads at most 10.
+    /// -O2 m32 `jpeg_single` ran 15 one-byte nops 14,457 times.
+    fn loop_alignment_max_skip(&self) -> u8 {
+        10
     }
 
     /// The i486 and Pentium have no `nopl` (`FeatureNOPL`): one byte.

@@ -197,12 +197,68 @@ class ReferenceFloatTests(unittest.TestCase):
             got = self._counts(lambda variant, where: bench.build_watcom(variant, "O2", where, "F000"), name)
             self.assertGreater(got.get("instructions", 0), 0, got)
 
+    def test_watcom_runs_a_2000_deep_recursion(self):
+        """recsum, recmany and recfloat (2000 frames, not tail-called by Watcom) overran the 16K stack into the code: invalid instruction, no ow row."""
+        for name in ("recsum", "recmany", "recfloat"):
+            got = self._counts(lambda variant, where: bench.build_watcom(variant, "O2", where, "F000"), name)
+            self.assertGreater(got.get("instructions", 0), 0, got)
+
+    def test_watcom_gives_a_program_with_much_data_the_stack_that_is_left(self):
+        """stft_single (7K of data) did not link with the 60K stack: DGROUP exceeds 64k by 2000 bytes. The stack shrinks by what is over."""
+        import tempfile
+
+        variant = next(one for one in bench.variants(bench.BENCH / "stft_single") if one.language == "c")
+        with tempfile.TemporaryDirectory(dir=bench.llrmbin.target_dir()) as where:
+            built = bench.build_watcom(variant, "O2", Path(where), "F000")
+        self.assertNotIsInstance(built, str, built)
+
     @unittest.skipUnless((bench.BORLAND["tc"][0] / "lib" / "MATHM.LIB").exists(), "needs Turbo C 2.01")
     def test_a_turbo_c_program_with_a_define_and_a_float_links_and_prints_its_output(self):
         """TC 2.01 read `#define` after a bare LF as an illegal character (no row for the 4 programs with one), and its MATHM.LIB was empty (no floats)."""
         for name in ("nbody_single", "floats"):
             got = self._counts(lambda variant, where: bench.build_borland("tc", [(variant, "F000")], "O2", where)["F000"], name)
             self.assertGreater(got.get("instructions", 0), 0, got)
+
+
+@unittest.skipUnless(bench.references_available() and (bench.BORLAND["tcpp"][0] / "lib" / "CM.LIB").exists(), "needs Turbo C++ 3.0")
+class TurboCppTests(unittest.TestCase):
+    def test_a_turbo_cpp_program_links_and_runs_its_kernel(self):
+        """tcpp links failed on `_isatty` (jwlink misses it in CM.LIB). Linking CS.LIB for it built small-model code into a medium-model
+        program: 94 of 116 rows then never entered their kernel."""
+        import tempfile
+
+        variant = next(one for one in bench.variants(bench.BENCH / "floats") if one.language == "c")
+        with tempfile.TemporaryDirectory(dir=bench.llrmbin.target_dir()) as where:
+            built = bench.build_borland("tcpp", [(variant, "T000")], "O2", Path(where))["T000"]
+            self.assertNotIsInstance(built, str, built)
+            got = bench.measure(("T000", built[0], built[1], variant.region, bench.expected_output(bench.BENCH / "floats"), built[0].with_suffix(".OBJ")))
+        self.assertGreater(got.get("instructions", 0), 0, got)
+
+
+@unittest.skipUnless(bench.references_available() and (bench.BORLAND["tc"][0] / "lib" / "MATHM.LIB").exists(), "needs Turbo C 2.01")
+class TurboCHeaderTests(unittest.TestCase):
+    def test_a_turbo_c_program_that_includes_the_shared_header_compiles(self):
+        """TC 2.01 read bench_io.h (bare LF) as an unterminated conditional: jpeg and stft, four programs, had no tc row."""
+        import tempfile
+
+        variant = next(one for one in bench.variants(bench.BENCH / "jpeg_single") if one.language == "c")
+        with tempfile.TemporaryDirectory(dir=bench.llrmbin.target_dir()) as where:
+            built = bench.build_borland("tc", [(variant, "H000")], "O2", Path(where))["H000"]
+        self.assertNotIsInstance(built, str, built)
+
+
+@unittest.skipUnless(bench.references_available() and (bench.BORLAND["tcpp"][0] / "lib" / "CM.LIB").exists(), "needs Turbo C++ 3.0")
+class TurboCppHugeTests(unittest.TestCase):
+    def test_a_turbo_cpp_program_with_a_huge_array_runs(self):
+        """huge.c spells `__huge`, which Turbo C++ 3.0 does not know ("Declaration syntax error"): no tcpp row."""
+        import tempfile
+
+        variant = next(one for one in bench.variants(bench.BENCH / "huge") if one.language == "c")
+        with tempfile.TemporaryDirectory(dir=bench.llrmbin.target_dir()) as where:
+            built = bench.build_borland("tcpp", [(variant, "U000")], "O2", Path(where))["U000"]
+            self.assertNotIsInstance(built, str, built)
+            got = bench.measure(("U000", built[0], built[1], variant.region, bench.expected_output(bench.BENCH / "huge"), built[0].with_suffix(".OBJ")))
+        self.assertGreater(got.get("instructions", 0), 0, got)
 
 
 SIZED = {"instructions": 100, "memory_operands": 40, "code_bytes": 200, "data_bytes": 10, "bss_bytes": 4}
@@ -365,6 +421,11 @@ class TimedOnlyTests(unittest.TestCase):
             with mock.patch.object(bench.icount, "run", side_effect=AssertionError("stepped it")):
                 got = bench.measure(("p", obj, obj, None, ["1"], obj))
         self.assertEqual(got, {"code_bytes": 12, "align_bytes": 0, "data_bytes": 0, "bss_bytes": 40})
+
+    def test_a_cell_that_calls_library_helpers_says_its_bytes_exclude_them(self):
+        """qlight bcc -O2 read 216 B beside ours 389: the long divides were helpers outside code_bytes, unsaid."""
+        measured = {("qlight", "bcc", "O2"): {"code_bytes": 216, "externs": ["__I4D"]}, ("qlight", "c", "O2"): {"code_bytes": 389}}
+        self.assertEqual(bench.helper_lines(measured), ["HELPERS qlight bcc -O2: code_bytes excludes __I4D"])
 
     def test_a_baseline_without_counts_does_not_fail_a_run_without_them(self):
         """against() read got['instructions'] for a measurement that has none: a KeyError, and the gate died."""
@@ -1273,3 +1334,73 @@ def test_bss_is_judged_through_the_footprint_not_alone():
     assert bench.against("n nib -O2", {**base, "bss_bytes": 5}, base) == ["n nib -O2: static_bytes 35 > 34 (worse)"]  # bss growth grows the footprint
     assert bench.against("n nib -O2", {**base, "data_bytes": 31, "bss_bytes": 3}, base) == ["n nib -O2: data_bytes 31 > 30 (worse)"]  # data growth, footprint equal
     assert bench.against("n nib -O2", {**base, "data_bytes": 20, "bss_bytes": 24}, base) == ["n nib -O2: static_bytes 44 > 34 (worse)"]  # data down 10, bss up 20
+
+
+def test_compare_runs_refuses_sides_measured_from_different_sources(tmp_path, capsys):
+    """An A/B read stft_single from an i32 source on one side and the i16 source on the other: 8 against 0 wide register lines, blamed on a compiler pass that did not exist."""
+    one, two = tmp_path / "one.json", tmp_path / "two.json"
+    for path, digest in ((one, "a"), (two, "b")):
+        path.with_name(path.name + ".sources").write_text(json.dumps({"stft_single": digest, "fib": "same"}))
+    assert bench.compare_runs(one, two) == 1
+    assert "REFUSED: 1 programs measured from different sources: stft_single" in capsys.readouterr().out
+    assert bench.compare_runs(one, two, allow_source_diff=True) == 0
+    assert bench.compare_runs(one, one) == 0
+    two.with_name("two.json.sources").unlink()
+    assert bench.compare_runs(one, two) == 1
+
+
+def test_source_digests_change_with_the_program_source():
+    assert bench.source_digests(["fib"])["fib"] != bench.source_digests(["queens"])["queens"]
+
+
+def test_a_reference_that_did_not_build_is_named_in_the_standing(tmp_path, monkeypatch):
+    """tcpp failed to link (`_isatty`) on every program and the standing printed no tcpp line at all: a broken column read as a missing one."""
+    (tmp_path / "x").mkdir()
+    (tmp_path / "x" / "bench.toml").write_text('[region]\nc = "f"\n')
+    monkeypatch.setattr(bench, "BENCH", tmp_path)
+    measured = {("x", "c", "O2"): dict(SIZED), ("x", "tcpp", "O2"): {"error": "link: E2028 _isatty"}}
+    text = "\n".join(bench.standing(measured, [], ["O2"]))
+    assert "REFERENCE BROKEN tcpp" in text and "E2028" in text, text
+
+
+def test_references_blessed_from_other_sources_are_refused(tmp_path, monkeypatch):
+    """textfill and the parity kernels were edited after the 10-15 bless: bcc, tc, ow and tcpp all drifted on those rows and it read as four
+    compilers moving. A program's sources are recorded when its references are blessed, and judging refuses a mismatch."""
+    (tmp_path / "x").mkdir()
+    (tmp_path / "x" / "bench.toml").write_text('[region]\nc = "f"\n')
+    (tmp_path / "x" / "x.c").write_text("int f(void){return 1;}\n")
+    monkeypatch.setattr(bench, "BENCH", tmp_path)
+    bench.write_expected(tmp_path / "x", {("x", "bcc", "O2"): SIZED}, "x", "t")
+    assert bench.stale_corpus(tmp_path / "x") is None
+    (tmp_path / "x" / "x.c").write_text("int f(void){return 2;}\n")
+    assert "sources changed since the references were blessed" in bench.stale_corpus(tmp_path / "x")
+    assert any("sources changed" in one for one in bench.judge({("x", "c", "O2"): dict(SIZED), ("x", "bcc", "O2"): dict(SIZED)}, ["x"], ["O2"]))
+    assert bench.write_expected(tmp_path / "x", {("x", "bcc", "O2"): SIZED}, "x", "again")  # a bless records the new sources
+    assert bench.stale_corpus(tmp_path / "x") is None
+
+
+def test_a_program_that_is_not_a_reference_program_is_left_out_loudly(tmp_path, monkeypatch, capsys):
+    """The nine sfm16_* programs use C99 `for (int i...)`: every reference compiler failed them, four REFERENCE BROKEN lines each."""
+    for name, extra in (("kept", ""), ("c99", "references = false\n")):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "bench.toml").write_text(f'{extra}[region]\nc = "f"\n')
+    monkeypatch.setattr(bench, "BENCH", tmp_path)
+    one = lambda name: (tmp_path / name, bench.Variant(name, "c", tmp_path / name / f"{name}.c", "f", None))
+    assert bench.reference_programs([one("kept"), one("c99")]) == [one("kept")]
+    assert "not a reference program: c99" in capsys.readouterr().out
+
+
+def test_an_emulated_reference_program_is_fed_its_corpus_cut(tmp_path, monkeypatch):
+    """grep and jpeg/stft under ow, bcc, tc and tcpp ran with no input file and printed `0 0` / `PHOTO.JPG not found`: the reference jobs
+    carried no files, while ours were fed the ci_bytes cut."""
+    folder = tmp_path / "grep"
+    folder.mkdir()
+    (folder / "in.dat").write_bytes(b"x" * 100)
+    (folder / "grep.out").write_text("full\n")
+    (folder / "grep.ci.out").write_text("cut\n")
+    monkeypatch.setattr(bench, "BENCH", tmp_path)
+    variant = bench.Variant("grep", "c", folder / "grep.c", "f", None, "qb45", True, ("in.dat",), 10, True)
+    files, want, counted = bench.counting_input(variant, folder, tmp_path / "ci")
+    assert [one.read_bytes() for one in files] == [b"x" * 10] and want == ["cut"] and counted
+    plain = bench.Variant("grep", "c", folder / "grep.c", "f", None, "qb45", True, ("in.dat",), 10, False)
+    assert bench.counting_input(plain, folder, tmp_path / "ci2") == ((), ["full"], False)

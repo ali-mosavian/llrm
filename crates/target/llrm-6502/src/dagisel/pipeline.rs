@@ -98,6 +98,14 @@ impl SchedInfo for MosSched {
         instrinfo::desc(opcode as u16).is_some_and(|desc| desc.has(flag::CALL))
     }
 
+    fn call_frame_setup(&self) -> Option<u32> {
+        Some(u32::from(super::generated::ids::opcode::ADJCALLSTACKDOWN))
+    }
+
+    fn call_frame_destroy(&self) -> Option<u32> {
+        Some(u32::from(super::generated::ids::opcode::ADJCALLSTACKUP))
+    }
+
     fn source_order(&self) -> bool {
         true
     }
@@ -114,11 +122,12 @@ pub enum Refusal {
 pub fn select_block(
     dag: &mut SelectionDAG,
     cpu: Cpu,
+    sized: bool,
 ) -> Result<Vec<Unit>, Refusal> {
     let tli = target_lowering();
     let mut lowering = MosLowering;
     let arch = Mos;
-    DagCombiner::new(dag, &mut MosCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
+    DagCombiner::new(dag, &mut MosCombines { sized }, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
     TypeLegalizer::new(dag, &tli)
         .with_target(&arch)
         .with_hooks(&mut lowering)

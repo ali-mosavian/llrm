@@ -650,6 +650,9 @@ const IMPLEMENTED_BY: &[(&str, &str)] = &[
     ("constraint-elimination@699", "constraintelim"),
     ("loop-instsimplify@715", "loopinstsimplify"),
     ("loop-simplifycfg@716", "loopsimplifycfg"),
+    ("lcssa@764", "lcssa"),
+    ("lcssa@772", "lcssa"),
+    ("lcssa@823", "lcssa"),
     ("licm@724", "licm"),
     ("rotate@728", "looprotate"),
     ("licm@730", "licm"),
@@ -681,6 +684,7 @@ const IMPLEMENTED_BY: &[(&str, &str)] = &[
     ("jumpthreading@668", "jumpthreading"),
     ("unroll@753", "loopunrollpass"),
     ("jumpthreading@809", "jumpthreading"),
+    ("rotate@1621", "looprotate"),
     ("loop-interchange@1631", "loopinterchange"),
     ("loop-unroll-and-jam@1474", "loopunrollandjam"),
     ("cmpsub@1", "codegen:backend/cmpsub"),
@@ -701,6 +705,7 @@ const IMPLEMENTED_BY: &[(&str, &str)] = &[
     ("copyprop@18", "codegen:backend/machinecp"),
     ("lsr", "lsr_pass"),
     ("canonfreeze", "canonfreeze"),
+    ("hardwareloops", "hardwareloops"),
 ];
 
 /// Every source line of the module `name`: its file and its directory.

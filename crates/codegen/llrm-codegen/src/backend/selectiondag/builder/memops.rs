@@ -83,7 +83,8 @@ impl Builder<'_> {
                 }
                 Ok(())
             }
-            Intrinsic::Assume | Intrinsic::Prefetch | Intrinsic::FakeUse => Ok(()),
+            // `case Intrinsic::experimental_noalias_scope_decl: return;`
+            Intrinsic::Assume | Intrinsic::Prefetch | Intrinsic::FakeUse | Intrinsic::NoAliasScopeDecl => Ok(()),
             // `SelectionDAGBuilder.cpp#L7680`: the region information is
             // discarded; the scope is an undefined pointer.
             Intrinsic::InvariantEnd => Ok(()),
@@ -96,7 +97,7 @@ impl Builder<'_> {
                 Ok(())
             }
             // a hint the passes read: its value is its argument
-            Intrinsic::Expect | Intrinsic::Restrict => {
+            Intrinsic::Expect | Intrinsic::Restrict | Intrinsic::StartLoopIterations => {
                 let value = self.get_value(instruction.operands[0])?;
                 self.set_value(instruction.result.ok_or(Refused("a hint without a result"))?, value);
                 Ok(())
@@ -133,8 +134,48 @@ impl Builder<'_> {
             | Intrinsic::LRint
             | Intrinsic::LLRint
             | Intrinsic::Unary(_) => self.visit_math(instruction, intrinsic),
+            // the counter a phi carries, less what an iteration takes off
+            Intrinsic::LoopDecrementReg => {
+                let (left, right) =
+                    (self.get_value(instruction.operands[0])?, self.get_value(instruction.operands[1])?);
+                let vt = self.type_of(instruction.ty)?;
+                let node = self.dag.get_node(ISD::Sub, vt, &[left, right]);
+                self.set_value(instruction.result.ok_or(Refused("a decrement without a result"))?, node);
+                Ok(())
+            }
             _ => Err(Refused("intrinsic call")),
         }
+    }
+
+    /// `getSrcValue` of the IR pointer `operand`.
+    fn src_value_of(
+        &mut self,
+        operand: Operand,
+    ) -> SDValue {
+        let key = match operand {
+            Operand::Value(value) => value.0,
+            Operand::Constant(id) => 1 << 31 | id.index() as u32,
+            _ => 0,
+        };
+        self.dag.get_src_value(key)
+    }
+
+    /// `visitVAArg`: `VAARG` of the list at the root, the type's ABI
+    /// alignment as the last operand; the chain it returns is the new root.
+    pub(super) fn visit_va_arg(
+        &mut self,
+        instruction: &Instruction,
+    ) -> Result<(), Refused> {
+        let vt = self.type_of(instruction.ty)?;
+        let align = self.layout.align(&self.module.context.types, instruction.ty);
+        let root = self.root();
+        let list = self.get_value(instruction.operands[0])?;
+        let source = self.src_value_of(instruction.operands[0]);
+        let align = self.dag.get_constant_with(align as u128, EVT::I32, true, false);
+        let node = self.dag.get_node_multi(ISD::VAArg, &[vt, EVT::OTHER], &[root, list, source, align]);
+        self.dag.set_root(SDValue { node: node.node, res: 1 });
+        self.set_value(instruction.result.ok_or(Refused("a va_arg without a result"))?, node);
+        Ok(())
     }
 
     /// `visitVAStart`, `visitVAEnd`, `visitVACopy`: the node on the root with
@@ -153,6 +194,7 @@ impl Builder<'_> {
         if self.target.dag.pointer == EVT::I64
             && matches!(intrinsic, Intrinsic::VaStart)
             && self.dag.var_args_save.is_none()
+            && !self.win64_va
         {
             return Err(Refused("va_start at m64 outside the entry block"));
         }
@@ -165,12 +207,7 @@ impl Builder<'_> {
             ops.push(self.get_value(*operand)?);
         }
         for operand in &instruction.operands[..ops.len() - 1] {
-            let key = match operand {
-                Operand::Value(value) => value.0,
-                Operand::Constant(id) => 1 << 31 | id.index() as u32,
-                _ => 0,
-            };
-            ops.push(self.dag.get_src_value(key));
+            ops.push(self.src_value_of(*operand));
         }
         let code = match intrinsic {
             Intrinsic::VaStart => ISD::VAStart,
@@ -1026,8 +1063,19 @@ impl Builder<'_> {
                     Some(bytes) => self.inline_memmove(root, dst, other, bytes, limit, dst_align, src_align)?,
                     _ => None,
                 };
+                // a target with string instructions of its own
+                // (`EmitTargetCodeForMemcpy`) copies what is
+                // left past the inline limit with them, where the pin would
+                // call `memcpy`
+                let hooked = match (&inline, which) {
+                    (None, Intrinsic::MemCpy) if !strings_exist => self
+                        .calling()
+                        .and_then(|calling| calling.emit_memcpy_sized(&mut self.dag, root, dst, other, size, opt_size)),
+                    _ => None,
+                };
                 match (inline, which, constant) {
                     (Some(chain), _, _) => chain,
+                    (None, Intrinsic::MemCpy, _) if hooked.is_some() => hooked.expect("checked"),
                     (None, Intrinsic::MemCpy, Some(bytes)) if strings_exist && self.has_min_size() => {
                         self.rep_movs(root, dst, other, bytes, 1, dst_align, src_align)?
                     }
@@ -1051,6 +1099,17 @@ impl Builder<'_> {
                         self.rep_movs(root, dst, other, bytes, 4, dst_align, src_align)?
                     }
                     _ if strings_exist && matches!(which, Intrinsic::MemCpy) && !self.runtime_has("memcpy") => {
+                        self.rep_movs_dwords(root, dst, other, size)
+                    }
+                    // DEVIATE MEM-1: a length known at run time is `rep movsd`
+                    // inline at speed where the target's tuning says so (the
+                    // pin calls `memcpy`)
+                    _ if strings_exist
+                        && matches!(which, Intrinsic::MemCpy)
+                        && constant.is_none()
+                        && !opt_size
+                        && self.target.tti.as_ref().is_some_and(|tti| tti.0.inlines_variable_memcpy()) =>
+                    {
                         self.rep_movs_dwords(root, dst, other, size)
                     }
                     // a move a pass proved forward, past the inline limit: `rep
@@ -1189,7 +1248,7 @@ impl Builder<'_> {
                 };
                 let hooked = |dag: &mut _| {
                     if copy {
-                        calling.emit_memcpy(dag, root, dst, other, size)
+                        calling.emit_memcpy_sized(dag, root, dst, other, size, opt_size)
                     } else {
                         calling.emit_memmove(dag, root, dst, other, size)
                     }
@@ -1267,7 +1326,12 @@ impl Builder<'_> {
         }
         let dword = self.dag.get_value_type_node(EVT::I32);
         let rep = self.dag.get_node_multi(x86isd::REP_MOVS, &[EVT::OTHER, EVT::GLUE], &[chain, dword, glue]);
-        if self.constant_size(count).is_some_and(|bytes| bytes % 4 == 0) {
+        // DEVIATE MEM-1: where the target inlines variable copies, a length
+        // whose low two bits are known zero (`n << 2`) has no byte tail
+        let inlines = self.target.tti.as_ref().is_some_and(|tti| tti.0.inlines_variable_memcpy());
+        if self.constant_size(count).is_some_and(|bytes| bytes % 4 == 0)
+            || inlines && super::super::known_bits::masked_value_is_zero(&self.dag, count, 3)
+        {
             return SDValue { node: rep.node, res: 0 };
         }
         let three = self.dag.get_constant(3, pointer);

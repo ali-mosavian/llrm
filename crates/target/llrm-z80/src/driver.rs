@@ -106,7 +106,8 @@ pub fn program(
             apply_pass_flag(&mut options, flag);
         }
         llrm_transforms::pipeline::applied(&mut program, &Applied { options, only: None, dump })?;
-        program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
+        program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded_stepping)?;
+        program.modules.iter_mut().for_each(crate::prepare::mark_long_multiplies);
     }
     Ok(program)
 }

@@ -229,3 +229,45 @@ fn a_compare_of_a_shift_right_with_a_constant_is_the_compare_of_the_value() {
     // Equality: the shift becomes a mask of the high bits.
     on_i386(&shr("lshr", "eq", 3, 5), &["and i32 %x, -8", "icmp eq i32 %0, 40"]);
 }
+/// A zero-extended offset compare is made in the narrow type (`opt`: `add i32
+/// %n, -1` then `icmp ult`); the wide add and zext stayed.
+#[test]
+fn an_offset_compare_of_a_zero_extension_is_made_in_the_narrow_type() {
+    let out = run_visit_icmp(
+        "define i1 @f(i32 %n) {
+b0:
+  %w = zext i32 %n to i64
+  %a = add i64 %w, -1
+  %c = icmp ult i64 %a, 7
+  ret i1 %c
+}
+",
+    );
+    assert!(out.contains("add i32 %n, -1") && !out.contains("i64"), "{out}");
+}
+
+/// A range check on `hi + ~lo` is a compare of `lo - hi` (wasm32 recchop:
+/// +11 instructions, +414 executed); `opt` drops the `xor` and the `add`.
+#[test]
+fn a_range_check_on_a_sum_with_a_complement_is_a_compare_of_the_difference() {
+    let out = run_visit_icmp(
+        "define i1 @f(i32 %lo, i32 %hi) {
+b0:
+  %n = xor i32 %lo, -1
+  %b = add i32 %hi, %n
+  %g = icmp ult i32 %b, 3
+  ret i1 %g
+}
+",
+    );
+    assert!(out.contains("sub i32 %lo, %hi") && out.contains(", -4") && !out.contains("xor"), "{out}");
+}
+
+fn run_visit_icmp(text: &str) -> String {
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit);
+    printed(&module)
+}

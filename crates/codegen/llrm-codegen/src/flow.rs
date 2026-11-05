@@ -111,6 +111,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("MachineScheduler", "machinesched@5"),
     ("FixupSetCC", "fixupsetcc@5"),
     ("CallFrameOpt", "callframe@5"),
+    ("VectorSaves", "callframe@5"),
     ("ReserveCallFrame", "callframe@5"),
     ("FlagsCopy", "flagscopy@5"),
     ("X86OptimizeLEAs", "leaopt@5"),
@@ -260,8 +261,8 @@ pub fn machine_with<'a>(
             basic_semantics,
             status_word: classes.status_word(),
         }),
-        Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes) }),
-        Box::new(twoaddr::TwoAddress { lea: target.three_address() }),
+        Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes), cpu: Some(target) }),
+        Box::new(twoaddr::TwoAddress { lea: target.three_address_for(target.size || target.min_size) }),
         Box::new(Coalescer { size: target.size, ..Coalescer::new(None, segments, classes) }),
         // After TwoAddress and the coalescer, before any value is placed: the
         // pin's pre-RA scheduler, bottom-up by pressure.
@@ -281,6 +282,13 @@ pub fn machine_with<'a>(
             prices: parcopy::CyclePrices::of(target),
             available: classes.available.clone(),
             saved: registers.saved.iter().map(|(whole, _)| *whole).collect(),
+        }),
+        // The callee-saved vector registers the body writes get their frame
+        // cells before the call frame is reserved below them.
+        Box::new(crate::backend::vectorsaves::VectorSaves {
+            frame: frame.clone(),
+            saved: registers.vector_saved.iter().map(|(whole, _)| *whole).collect(),
+            bias: registers.slot,
         }),
         // The pin's PEI: the call frame is reserved, or each call adjusts.
         Box::new(crate::backend::callframe::ReserveCallFrame {
@@ -305,6 +313,7 @@ pub fn machine_with<'a>(
             size: target.size,
             widens_byte: target.widens_load(1)?,
             widens_word: target.widens_load(2)?,
+            strict_bytes: target.size || target.min_size || !target.speed_rate,
         }),
         Box::new(crate::backend::fixupleas::FixupLeas {
             slow_3ops: target.slow_3ops_lea(),

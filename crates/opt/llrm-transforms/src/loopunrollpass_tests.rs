@@ -11,7 +11,7 @@ use crate::testing::{parsed, printed, results};
 fn unrolled(module: &mut Module) -> bool {
     let function = module.function_mut("f").expect("@f").1;
     crate::loopsimplify::simplified(function);
-    crate::lcssa::closed(function).expect("closes");
+    crate::testing::closed(module).expect("closes");
     let tti = X86::of_cpu("i486").expect("a cpu");
     let options = Options {
         opt_level: 2,
@@ -473,7 +473,7 @@ exit:
     let before = results(&module, inputs);
     let function = module.function_mut("f").expect("@f").1;
     crate::loopsimplify::simplified(function);
-    crate::lcssa::closed(function).expect("closes");
+    crate::testing::closed(&mut module).expect("closes");
     let tti = X86::of_cpu("i486").expect("a cpu");
     let options = Options {
         opt_level: 3,
@@ -487,4 +487,130 @@ exit:
     let after = printed(&module);
     assert_eq!(results(&module, inputs), before, "{after}");
     assert!(after.contains("%b = phi") || after.matches("phi i32 [ 0").count() > 0, "the outer loop is gone: {after}");
+}
+
+/// mandel -O2 ran its first trip (x = y = 0: two multiplies and a compare that
+/// fold) 768 times at 25k of 660k clocks. The peel is made where the clocks
+/// the fold saves repay the bytes of the copy at the 486's rate (312).
+#[test]
+fn a_first_iteration_is_peeled_only_where_its_folded_clocks_repay_the_copy() {
+    // 15 units are 45 bytes: 14040 milliclocks at 312, 14 clocks.
+    assert!(super::folded_entry_pays(39, 15, 312));
+    assert!(super::folded_entry_pays(15, 15, 312));
+    assert!(!super::folded_entry_pays(14, 15, 312));
+    assert!(!super::folded_entry_pays(0, 15, 312));
+}
+
+/// A loop declaring a scope for its store and `!noalias` it on its load,
+/// unrolled four times, kept one scope for every copy: the first copy's store
+/// to `%p` and the second's load through `%q` were called apart by
+/// `ScopedNoAliasAA`, though `%p` and `%q` may be one address at each trip
+/// (`cloneAndAdaptNoAliasScopes`).
+#[test]
+fn test_each_unrolled_copy_of_a_loop_declaring_a_scope_has_its_own() {
+    use llrm_analysis::aa::{AliasResult, BatchAAResults, MemoryLocation};
+    use llrm_analysis::aggregate::AggregateAA;
+    use llrm_analysis::memory::Unit;
+    use llrm_analysis::scopednoaliasaa::ScopedNoAliasAA;
+
+    let mut module = parsed(
+        "declare void @llvm.experimental.noalias.scope.decl()
+
+define void @f(ptr %p, ptr %q) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %next, %b1 ]
+  call void @llvm.experimental.noalias.scope.decl(), !noalias.scope.decl !1
+  store i32 1, ptr %p, !alias.scope !1
+  %v = load i32, ptr %q, !noalias !1
+  store i32 %v, ptr %q
+  %next = add i32 %i, 1
+  %go = icmp slt i32 %next, 4
+  br i1 %go, label %b1, label %b2
+
+b2:
+  ret void
+}
+
+!0 = distinct !{!0, !\"domain\"}
+!2 = distinct !{!2, !0, !\"scope\"}
+!1 = !{!2}
+",
+    );
+    assert!(unrolled(&mut module), "{}", printed(&module));
+    printed(&module); // it verifies
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let function = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f").2;
+    let unit = Unit::of(&module, &layout, function);
+    let stores: Vec<MemoryLocation> = function
+        .walk()
+        .filter(|&(_, inst)| matches!(
+            function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Store { .. }
+        ))
+        .filter_map(|(_, inst)| MemoryLocation::get(&unit, inst))
+        .collect();
+    let loads: Vec<MemoryLocation> = function
+        .walk()
+        .filter(|&(_, inst)| matches!(
+            function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Load { .. }
+        ))
+        .filter_map(|(_, inst)| MemoryLocation::get(&unit, inst))
+        .collect();
+    // Per copy: the scoped store to %p, the load, the store to %q.
+    assert_eq!((stores.len(), loads.len()), (8, 4), "{}", printed(&module));
+    let mut chain = AggregateAA::new();
+    chain.add_aa_result(ScopedNoAliasAA::new(&unit));
+    let mut aa = BatchAAResults::new(&mut chain);
+    assert_eq!(aa.alias(&stores[0], &loads[0]), AliasResult::NoAlias, "premise: one copy's own pair");
+    assert_eq!(aa.alias(&stores[0], &loads[1]), AliasResult::MayAlias, "{}", printed(&module));
+}
+
+/// `for (i = 0; i < 8; i++) acc += (i * k + n) ...`: a body big enough that
+/// unrolling it is judged by `analyzeLoopUnrollCost`.
+fn heavy() -> String {
+    let mut body = String::new();
+    for k in 0..24 {
+        body.push_str(&format!("  %t{k} = mul i16 %i, {}\n  %u{k} = add i16 %t{k}, %n\n", k + 3));
+    }
+    let sum = (0..24).fold("%acc".to_string(), |sum, k| {
+        body.push_str(&format!("  %s{k} = add i16 {sum}, %u{k}\n"));
+        format!("%s{k}")
+    });
+    format!(
+        "define i16 @f(i16 %x, i16 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b1 ]
+  %acc = phi i16 [ %x, %b0 ], [ {sum}, %b1 ]
+{body}  %next = add i16 %i, 1
+  %go = icmp slt i16 %next, 8
+  br i1 %go, label %b1, label %b2
+
+b2:
+  %r = phi i16 [ {sum}, %b1 ]
+  ret i16 %r
+}}
+"
+    )
+}
+
+/// Old: `analyze_loop_unroll_cost` began a `ScalarEvolution` of its own for
+/// each loop, so the loop's phis and steps were made again after the trip
+/// count had made them (the unroll analyzer's `get_scev` was 18.0 M Ir on
+/// jpeg_fixed -O2 m32, the pin's 5.5 M on its cached SE). The pass's own
+/// session answers it.
+#[test]
+fn test_the_unroll_cost_analysis_reads_the_loops_expressions_the_pass_already_made() {
+    use llrm_mir::counts::{Event, get};
+    let mut module = parsed(&heavy());
+    let before = get(Event::ScevNodes);
+    unrolled(&mut module);
+    let made = get(Event::ScevNodes) - before;
+    assert!(made <= 29, "{made} expressions were made for one loop");
 }

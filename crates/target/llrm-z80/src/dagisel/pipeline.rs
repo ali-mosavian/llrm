@@ -11,10 +11,11 @@ use llrm_codegen::backend::selectiondag::dag_combiner::{CombineHooks, CombineLev
 use llrm_codegen::backend::selectiondag::dag_select::do_instruction_selection_with;
 use llrm_codegen::backend::selectiondag::dagisel_adapter::PinRegisters;
 use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
+use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::legalize_dag::DagLegalizer;
 use llrm_codegen::backend::selectiondag::legalize_types::TypeLegalizer;
 use llrm_codegen::backend::selectiondag::live_out;
-use llrm_codegen::backend::selectiondag::mvt::EVT;
+use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
 use llrm_codegen::backend::selectiondag::schedule::{Preference, SchedInfo, Unit, schedule};
 use llrm_codegen::backend::selectiondag::{SDValue, SelectionDAG};
 use llrm_dagisel::interp::Selector;
@@ -102,6 +103,14 @@ impl SchedInfo for Z80Sched {
         instrinfo::desc(opcode as u16).is_some_and(|desc| desc.has(flag::CALL))
     }
 
+    fn call_frame_setup(&self) -> Option<u32> {
+        Some(u32::from(super::generated::ids::opcode::ADJCALLSTACKDOWN))
+    }
+
+    fn call_frame_destroy(&self) -> Option<u32> {
+        Some(u32::from(super::generated::ids::opcode::ADJCALLSTACKUP))
+    }
+
     /// A flags result is the register `f`.
     fn fixed_register_def(
         &self,
@@ -173,8 +182,15 @@ pub fn select_block(
     cpu: Cpu,
     info: &mut FunctionLoweringInfo,
     optimize: bool,
+    (sized, long_multiply): (bool, bool),
 ) -> Result<Vec<Unit>, Refusal> {
-    let tli = target_lowering();
+    let mut tli = target_lowering();
+    tli.set_opt_for_size(sized);
+    // a long multiply is a call in a function tuned for size, in a module with
+    // enough of them to pay for the routine (`prepare::mark_long_multiplies`)
+    if long_multiply {
+        tli.set_size_libcall_name(ISD::Mul, MVT::I32, "__mulsi3");
+    }
     let mut lowering = Z80Lowering;
     let arch = Z80;
     if optimize {

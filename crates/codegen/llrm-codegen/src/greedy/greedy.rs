@@ -1497,7 +1497,7 @@ impl<'a> RAGreedy<'a> {
         if stage == LiveRangeStage::Spill && virt.is_spillable() {
             // We choose spill over using the CSR for the first time if the
             // spill cost is lower than CSRCost.
-            if splitter.csr_spill_is_dearer(virt, csr_cost) {
+            if splitter.csr_spill_is_dearer(virt, csr_cost, false) {
                 return Some(phys);
             }
             // We are going to spill, set CostPerUseLimit to 1 to make sure that
@@ -1505,7 +1505,7 @@ impl<'a> RAGreedy<'a> {
             *cost_per_use_limit = 1;
             return None;
         }
-        if spill_first && virt.is_spillable() && !splitter.csr_spill_is_dearer(virt, csr_cost) {
+        if spill_first && virt.is_spillable() && !splitter.csr_spill_is_dearer(virt, csr_cost, true) {
             *cost_per_use_limit = 1;
             return None;
         }

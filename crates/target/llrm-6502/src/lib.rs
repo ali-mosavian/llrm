@@ -15,6 +15,7 @@ pub mod relax;
 pub mod routines;
 pub mod select;
 pub mod sharecmp;
+pub mod staticlocals;
 pub mod target;
 pub mod timing;
 pub mod tti;

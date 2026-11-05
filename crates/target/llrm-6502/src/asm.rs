@@ -370,6 +370,11 @@ impl fmt::Display for Line {
 #[derive(Clone, Default, PartialEq, Eq, Debug)]
 pub struct Asm {
     pub lines: Vec<Line>,
+    /// The function returns nothing in `a`: a `rts` does not read it.
+    pub no_a_result: bool,
+    /// The routines this function calls with an argument in `a` (as written
+    /// after `jsr`).
+    pub a_callees: std::collections::BTreeSet<String>,
     /// The place the instructions written from now on get.
     pub place: u32,
     /// What was written since the last newline.

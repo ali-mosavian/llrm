@@ -1,6 +1,7 @@
 //! The arithmetic folds: `getAddExpr`, `getMulExpr`, their helpers and the
 //! flag strengthening they share.
 
+use super::ConstantRange;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 
@@ -175,9 +176,9 @@ impl ScalarEvolution {
             // (A <opcode> C) --> (A <opcode> C)<nsw> if the op doesn't sign
             // overflow.
             if sign_or_unsign_wrap & flags::NSW == 0 {
-                let nsw_region = llrm_mir::constantrange::ConstantRange::make_guaranteed_no_wrap_region(
+                let nsw_region = ConstantRange::make_guaranteed_no_wrap_region(
                     opcode,
-                    &llrm_mir::constantrange::ConstantRange::single(c.width, c.bits),
+                    &ConstantRange::single(c.width, c.word()),
                     llrm_mir::constantrange::NO_SIGNED_WRAP,
                 );
                 if nsw_region.contains_range(&self.get_signed_range(cx, ops[1].scev)) {
@@ -188,9 +189,9 @@ impl ScalarEvolution {
             // (A <opcode> C) --> (A <opcode> C)<nuw> if the op doesn't unsign
             // overflow.
             if sign_or_unsign_wrap & flags::NUW == 0 {
-                let nuw_region = llrm_mir::constantrange::ConstantRange::make_guaranteed_no_wrap_region(
+                let nuw_region = ConstantRange::make_guaranteed_no_wrap_region(
                     opcode,
-                    &llrm_mir::constantrange::ConstantRange::single(c.width, c.bits),
+                    &ConstantRange::single(c.width, c.word()),
                     llrm_mir::constantrange::NO_UNSIGNED_WRAP,
                 );
                 if nuw_region.contains_range(&self.get_unsigned_range(cx, ops[1].scev)) {
@@ -1122,7 +1123,7 @@ impl ScalarEvolution {
                         let bits = self.get_type_size_in_bits(cx, self.type_of(add_rec));
                         let min_int = Ap::signed_min(bits);
                         let range_min = self.get_signed_range(cx, add_rec).get_signed_min();
-                        if Ap::new(bits, range_min) != min_int {
+                        if Ap::from_word(bits, range_min) != min_int {
                             flags_mask |= flags::NSW;
                         }
                     }
@@ -1267,7 +1268,7 @@ impl ScalarEvolution {
 
                     if has_flags(fl, flags::NSW) && !has_flags(fl, flags::NUW) {
                         let scale_range = self.get_signed_range(cx, scale.scev);
-                        let nsw_region = llrm_mir::constantrange::ConstantRange::make_guaranteed_no_wrap_region(
+                        let nsw_region = ConstantRange::make_guaranteed_no_wrap_region(
                             BinaryOp::Mul,
                             &scale_range,
                             llrm_mir::constantrange::NO_SIGNED_WRAP,

@@ -502,6 +502,13 @@ impl<'a> TypeLegalizer<'a> {
                 self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: load.node, res: 1 });
                 load
             }
+            ISD::VAArg => {
+                // `SoftenFloatRes_VAARG`: the same read as an integer.
+                let ops: Vec<SDValue> = (0..4).map(|at| self.dag.operand(value, at)).collect();
+                let read = self.dag.get_node_multi(ISD::VAArg, &[int, EVT::OTHER], &ops);
+                self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: read.node, res: 1 });
+                SDValue { node: read.node, res: 0 }
+            }
             op @ (ISD::SIntToFp | ISD::UIntToFp | ISD::FpExtend | ISD::FpRound) => {
                 // `SoftenFloatRes_XINT_TO_FP`, `_FP_EXTEND`, `_FP_ROUND`: the
                 // conversion routine over the operand as the integer that
@@ -1623,7 +1630,11 @@ impl<'a> TypeLegalizer<'a> {
                 let pointer = self.dag.value_type(slot);
                 let offset = self.dag.get_constant(step, pointer);
                 let high_slot = self.dag.get_node(ISD::Add, pointer, &[slot, offset]);
-                (self.dag.get_load(half, store, slot, info), self.dag.get_load(half, store, high_slot, info))
+                let (lo, hi) =
+                    (self.dag.get_load(half, store, slot, info), self.dag.get_load(half, store, high_slot, info));
+                // `hasBigEndianPartOrdering`: the word at the slot is the high
+                // one
+                if self.dag.config().big_endian { (hi, lo) } else { (lo, hi) }
             }
             ISD::BitCast if self.tli.types.is_type_legal(self.dag.value_type(self.dag.operand(value, 0))) => {
                 // `ExpandIntRes_BITCAST` from a same-size integer: its low
@@ -1770,6 +1781,30 @@ impl<'a> TypeLegalizer<'a> {
                 )
             }
             ISD::FShl | ISD::FShr => self.expand_funnel_shift(value, half),
+            // `ExpandIntRes_Rotate`: delegate to the funnel shift of the value
+            // with itself.
+            op @ (ISD::Rotl | ISD::Rotr) => {
+                let funnel = if op == ISD::Rotl { ISD::FShl } else { ISD::FShr };
+                let x = self.dag.operand(value, 0);
+                let by = self.dag.operand(value, 1);
+                let whole = self.dag.get_node(funnel, vt, &[x, x, by]);
+                self.split_integer(whole, half)
+            }
+            ISD::VAArg => {
+                // `ExpandRes_VAARG`: two reads of the half type, the first
+                // with the type's alignment, the second with none; the chain
+                // of the second replaces the node's.
+                let (chain, list, source) =
+                    (self.dag.operand(value, 0), self.dag.operand(value, 1), self.dag.operand(value, 2));
+                let align = self.dag.operand(value, 3);
+                let first = self.dag.get_node_multi(ISD::VAArg, &[half, EVT::OTHER], &[chain, list, source, align]);
+                let none = self.dag.get_constant_with(0, EVT::I32, true, false);
+                let chain = SDValue { node: first.node, res: 1 };
+                let second = self.dag.get_node_multi(ISD::VAArg, &[half, EVT::OTHER], &[chain, list, source, none]);
+                self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: second.node, res: 1 });
+                let (first, second) = (SDValue { node: first.node, res: 0 }, SDValue { node: second.node, res: 0 });
+                if self.dag.config().big_endian { (second, first) } else { (first, second) }
+            }
             op => return Err(LegalizeError::Unsupported { op, ty: vt, what: "expand result" }),
         };
         self.set_expanded_integer(value, lo, hi);
@@ -1848,6 +1883,18 @@ impl<'a> TypeLegalizer<'a> {
     ) -> Result<(SDValue, SDValue), LegalizeError> {
         let (input, amount) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
         if let Some(amt) = self.dag.constant(amount) {
+            // DEVIATE: the pin shifts by a constant inline. A function tuned
+            // for size calls the shift routine where the shifts beyond whole
+            // moves cost more than the call (z80 lshl5: 60 B, the call 5).
+            // Exit: none; a size policy the pin lacks.
+            if self.tli.has_size_libcall_name(op, vt)
+                && self.tli.calls_for_size_shift(amt, u128::from(vt.size_in_bits()))
+            {
+                let amount = self.dag.get_constant(amt, self.shift_amount_type(half));
+                if let Some(pair) = self.expand_by_libcall(value, op, half, op == ISD::Sra, [input, amount]) {
+                    return Ok(pair);
+                }
+            }
             return Ok(self.expand_shift_by_constant(op, input, amt, vt, half));
         }
         let parts = match op {
@@ -2444,11 +2491,35 @@ impl<'a> TypeLegalizer<'a> {
         (lo, self.dag.get_node(ISD::Truncate, half, &[upper]))
     }
 
+    /// Whether the product of `lhs` and `rhs` is known to fit `bits`: the
+    /// significant bits of the two (`computeKnownBits` leading zeros) add up to
+    /// no more.
+    fn product_fits(
+        &self,
+        lhs: SDValue,
+        rhs: SDValue,
+        bits: u32,
+    ) -> bool {
+        let active = |value: SDValue| {
+            let known = super::known_bits::known_bits(self.dag, value);
+            let leading = (0..known.width).rev().take_while(|bit| known.zero >> bit & 1 == 1).count() as u32;
+            known.width - leading
+        };
+        active(lhs) + active(rhs) <= bits
+    }
+
     /// `ExpandIntRes_MUL` through `expandMUL_LOHI`: the full product of the low
     /// halves, plus the two cross products in the high half. Two operands that
     /// are both zero-extended or both sign-extended (by their known bits) need
-    /// no cross products. No library call is made: the pin has none for the
-    /// types that come here, and `force_expand_multiply` is its fallback.
+    /// no cross products. Without a widening multiply the library call
+    /// (`RTLIB::MUL_I32`) is made, else `force_expand_multiply`.
+    ///
+    /// DEVIATE: the call is made only where the target names a routine for
+    /// functions tuned for size. The pin calls any named routine; m68k, 6502
+    /// and wasm name one and expanded inline until now, and their output stays
+    /// as it was until their owners measure the call. Exit: those targets
+    /// measured. Nor is it made where the product fits a half: a byte times
+    /// a constant is a few instructions, less than the call and the routine.
     fn expand_mul(
         &mut self,
         value: SDValue,
@@ -2488,6 +2559,11 @@ impl<'a> TypeLegalizer<'a> {
             (both, SDValue { node: both.node, res: 1 })
         } else if self.tli.is_operation_legal_or_custom(ISD::MulHU, half) {
             (self.dag.get_node(ISD::Mul, half, &[ll, rl]), self.dag.get_node(ISD::MulHU, half, &[ll, rl]))
+        } else if self.tli.has_size_libcall_name(ISD::Mul, self.dag.value_type(value))
+            && !self.product_fits(lhs, rhs, bits)
+            && let Some(pair) = self.expand_by_libcall(value, ISD::Mul, half, false, [lhs, rhs])
+        {
+            return Ok(pair);
         } else {
             return Ok(self.force_expand_multiply(ll, rl, lh, rh));
         };
@@ -2807,7 +2883,8 @@ impl<'a> TypeLegalizer<'a> {
                 .dag
                 .get_node_flags(ISD::BuildPair, pointer, &[moved, selector], super::dag::SDNodeFlags::PAIR_FAR);
         }
-        // `getObjectPtrOffset`: the offset stays inside the object, so the add cannot wrap.
+        // `getObjectPtrOffset`: the offset stays inside the object, so the add
+        // cannot wrap.
         self.dag.get_object_ptr_offset(ptr, step as i64)
     }
 

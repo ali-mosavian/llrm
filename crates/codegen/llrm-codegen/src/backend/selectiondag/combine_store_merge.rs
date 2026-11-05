@@ -413,8 +413,11 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let value = self.dag.get_constant(joined, stored);
         let ptr = self.dag.operand(first, 2);
         let new = self.dag.get_store(chain, value, ptr, info);
+        // `WorklistInserter`: what the DAG makes is queued as it is made.
+        self.add_to_worklist(value.node);
+        self.add_to_worklist(new.node);
         for link in stores {
-            self.replace_value(link.store, new);
+            self.combine_store_to(link.store, new);
         }
         self.add_to_worklist(chain.node);
         true

@@ -1390,6 +1390,47 @@ define cc 1000 i32 @f(i32 %a) {
     assert!(!call.clobbers.contains(&RegId::ESI) && !call.clobbers.contains(&RegId::EDI), "{:?}", call.clobbers);
 }
 
+/// Every call said it may write any memory: the DAG selector set the effects to
+/// `ANY` where the old one read the callee's attributes, so queens' `es` load
+/// (`mov es,[si+2]`) could not be made again after `call SAFE`, a
+/// `memory(read)` function, and was spilled and reloaded each trip.
+#[test]
+fn a_call_of_a_read_only_function_does_not_write_memory() {
+    let ir = "target datalayout = \"e-p:16:16-i32:16-n8:16\"
+declare i16 @ro(i16) memory(read)
+declare i16 @any(i16)
+define i16 @f(i16 %a) {
+  %r = call i16 @ro(i16 %a)
+  %s = call i16 @any(i16 %r)
+  ret i16 %s
+}
+";
+    let module = crate::testing::module(ir).expect("parses");
+    let (facts, _) = crate::backend::calleefacts::CalleeFacts::of(&module);
+    let contracts = super::dag_function::RuntimeContracts {
+        hole: 0,
+        abi: &Stub { flags: false },
+        segments: &crate::backend::target::BASIC,
+        runtime: false,
+        frame_zeroed: false,
+        facts: Some(&facts),
+    };
+    let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
+    let done = super::dag_function::selected_in_pool(
+        &module,
+        "f",
+        &llrm_x86_m16::M16,
+        crate::backend::cpu::profile("486").expect("a cpu"),
+        &[],
+        Some(&contracts),
+        pool,
+    )
+    .unwrap_or_else(|why| panic!("{}", why.0));
+    let insns = done.body.insns();
+    let writes: Vec<bool> = insns.iter().filter_map(|one| one.call.as_ref().map(|call| call.writes())).collect();
+    assert_eq!(writes, [false, true], "the read-only callee, then the unknown one");
+}
+
 /// At m16 a value kept in SI across `B$DDIM` was wrong code: runtime.toml names
 /// SI and DI clobbered for it and the call here left them alone (tests/check/
 /// qb/split_frame_address.bas hoisted `lea si, [bp-44]` over two of them, #5838
@@ -1563,4 +1604,94 @@ fn four_byte_loads_combined_high_byte_first_are_one_load_and_a_bswap() {
     let names = names(LOADS_BIG_ENDIAN).expect("selects");
     assert!(names.iter().any(|n| n == "bswap"), "{names:?}");
     assert!(!names.iter().any(|n| n == "shl" || n == "or"), "{names:?}");
+}
+
+/// `set_odds` looked for the block an edge belongs to among every block of the
+/// body, for every edge: 220 M Ir of memory_expansion -O2's instruction
+/// selection (221 functions), four times the blocks costing sixteen times the
+/// work. An edge looks in its own piece.
+#[test]
+fn the_odds_of_a_branch_are_found_in_its_piece_not_in_every_block() {
+    use crate::model::lir::{LirBlock, LirBody};
+    use llrm_mir::module::BlockId;
+    let odds = |count: i64| {
+        let blocks = (0..count)
+            .map(|at| LirBlock { succ: vec![(at + 1) % count, (at + 2) % count].into(), ..LirBlock::new(at, vec![]) })
+            .collect::<Vec<_>>();
+        let mut body =
+            LirBody::new("odds", 0, crate::model::lir::shared(blocks), Default::default(), Default::default());
+        let edges: Vec<(BlockId, BlockId, u32)> = (0..count)
+            .flat_map(|at| {
+                [
+                    (BlockId(at as u32), BlockId(((at + 1) % count) as u32), 1u32),
+                    (BlockId(at as u32), BlockId(((at + 2) % count) as u32), 3u32),
+                ]
+            })
+            .collect();
+        let block_at: llrm_support::hash::HashMap<u32, i64> = (0..count).map(|at| (at as u32, at)).collect();
+        super::dag_function::set_odds(&mut body, &edges, &block_at);
+        assert_eq!(body.odds.taken.len(), edges.len(), "every edge states its odds");
+        (body.facts.0.counted("odds-examined"), edges.len())
+    };
+    let (examined, edges) = odds(400);
+    assert!(examined <= 2 * edges, "{examined} blocks examined for {edges} edges");
+}
+
+/// Every function ran `consts::known` and `exposed_frames` over its whole body
+/// to find loop trip counts, loops or none (67 M Ir of 6.9 G on
+/// memory_expansion -O2 m64). A function without a loop derives nothing and
+/// states no trips; one with a loop still does.
+#[test]
+fn test_a_function_without_a_loop_derives_no_trip_counts() {
+    let layout = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n";
+    let flat = "define i32 @f(i32 %a) {\nentry:\n  %r = add i32 %a, 1\n  ret i32 %r\n}\n";
+    let looped = "define i32 @f(i32 %n) {
+entry:
+  br label %head
+head:
+  %i = phi i32 [ 0, %entry ], [ %next, %head ]
+  %next = add i32 %i, 1
+  %done = icmp eq i32 %next, 8
+  br i1 %done, label %out, label %head
+out:
+  ret i32 %next
+}
+";
+    let derivations = |text: &str| {
+        let before = llrm_analysis::consts::scratch_derivations();
+        let module = crate::testing::module(&format!("{layout}{text}")).expect("parses");
+        let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+            .expect("selects");
+        (llrm_analysis::consts::scratch_derivations() - before, done.body.loop_trip_counts.len())
+    };
+    assert_eq!(derivations(flat), (0, 0), "a loop-free function worked out the facts of its body");
+    let (derived, trips) = derivations(looped);
+    assert!(derived >= 1 && trips == 1, "the loop lost its trips: {derived} derivations, {trips} counts");
+}
+
+/// A function's branch probabilities were calculated twice in a selection, once
+/// for the multiply prices' block frequencies and once more for the builder's
+/// edge probabilities (11.5 M Ir in `build_block`, memory_expansion -O2 m64).
+#[test]
+fn test_a_selection_calculates_the_branch_probabilities_once() {
+    let layout = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n";
+    let text = format!(
+        "{layout}define i32 @f(i32 %a, i32 %b) {{
+entry:
+  %m = mul i32 %a, %b
+  %c = icmp slt i32 %m, 10
+  br i1 %c, label %lo, label %hi
+lo:
+  ret i32 1
+hi:
+  ret i32 2
+}}
+"
+    );
+    let before = llrm_mir::counts::get(llrm_mir::counts::Event::BranchProbabilities);
+    let module = crate::testing::module(&text).expect("parses");
+    selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .expect("selects");
+    let made = llrm_mir::counts::get(llrm_mir::counts::Event::BranchProbabilities) - before;
+    assert_eq!(made, 1, "{made} branch probability calculations for one function");
 }

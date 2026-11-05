@@ -220,6 +220,18 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch
             uc.reg_write(UC_X86_REG_AX, 2)
             carry(True)
 
+    def attributes(ax):
+        # Borland's open() asks for the attributes first (_chmod): get (AL=0) says whether the file is there, set (AL=1) is taken.
+        if ax & 0xFF == 1:
+            carry(False)
+            return
+        if dos_path(cstring(uc.reg_read(UC_X86_REG_DS), uc.reg_read(UC_X86_REG_DX))).is_file():
+            uc.reg_write(UC_X86_REG_CX, 0x20)  # archive
+            carry(False)
+        else:
+            uc.reg_write(UC_X86_REG_AX, 2)  # file not found
+            carry(True)
+
     def read_(ax):
         handle, count = uc.reg_read(UC_X86_REG_BX), uc.reg_read(UC_X86_REG_CX)
         got = state["files"][handle].read(count) if handle in state["files"] else b""
@@ -362,7 +374,7 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch
         0x02: print_char, 0x30: version, 0x2C: time_, 0x35: get_vector, 0x33: break_flag, 0x06: console_io,
         0x0B: input_status, 0x4A: resize, 0x25: set_vector, 0x0E: accepted, 0x42: seek,
         0x19: current_drive, 0x47: get_directory, 0x1A: set_dta, 0x2F: get_dta, 0x41: unlink, 0x4E: find_first,
-        0x4F: find_next, 0x3B: accepted, 0x39: accepted, 0x3A: accepted,
+        0x4F: find_next, 0x43: attributes, 0x3B: accepted, 0x39: accepted, 0x3A: accepted,
     }
 
     def interrupt(uc, number, _):

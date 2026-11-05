@@ -41,8 +41,9 @@ use llrm_mir::constantfolding::constant_fold_cast_operand;
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
-use llrm_mir::module::{Function, InstId, Operand, ValueDef};
-use llrm_mir::opcode::{CastOp, Flags, Opcode};
+use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
+use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
+use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
 
 use crate::edges::split_block_at;
 
@@ -288,6 +289,182 @@ fn branched(
     {
         function.move_to(inner, Position::Before(moved)).expect("a placed instruction");
     }
+}
+
+/// [`select_arms_sunk`] as a pass, after `cgpaddr`, at the speed rate only
+/// (-O2 and -O3: -O1 and -Os are strict bytes and the branch form is up to 3 B
+/// longer), where the target states `sinks_select_arms` and has no
+/// conditional move.
+pub struct SelectArms;
+
+impl FunctionPass for SelectArms {
+    fn name(&self) -> &'static str {
+        "cgpselectarms"
+    }
+
+    fn adds_memory_operations(&self) -> bool {
+        false
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut passes::Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let wanted = analyses.outer().target().tti().is_some_and(|tti| !tti.has_cmov() && tti.sinks_select_arms());
+        if wanted && select_arms_sunk(unit.context, unit.function) {
+            PreservedAnalyses::none()
+        } else {
+            PreservedAnalyses::all()
+        }
+    }
+}
+
+/// DEVIATE CS2 (owner x86-m32; exit 2026-12-10: the machine-level
+/// `EmitLoweredSelect` sinks the operand, or the target states a price): where
+/// the target has no conditional move, a select is a branch around a copy
+/// whatever is done, and an arm only the select reads (`x - 65521` of
+/// `x > 65520 ? x - 65521 : x`) is made on its own path instead of before the
+/// branch. The pin computes both operands first; that costs a register copy
+/// (`mov dst, x; sub dst, 65521; jae`) where gcc compares, and subtracts on
+/// the taken path (x_adler -O2: +7.5k clocks, x_isqrt +12.6k). Applied to
+/// integer selects with a pure, single-use arithmetic or extension arm in the
+/// select's block.
+pub fn select_arms_sunk(
+    context: &Context,
+    function: &mut Function,
+) -> bool {
+    let mut changed = false;
+    while let Some((select, yes, no)) = sinkable(context, function) {
+        sunk(function, select, yes, no);
+        changed = true;
+    }
+    changed
+}
+
+/// The first integer select with an arm to sink, and each arm's instruction.
+fn sinkable(
+    context: &Context,
+    function: &Function,
+) -> Option<(InstId, Option<InstId>, Option<InstId>)> {
+    for &block in function.layout() {
+        for select in function.iter_block(block) {
+            let one = function.instruction(select);
+            if one.opcode != Opcode::Select || !matches!(context.types.int_bits(one.ty), Some(8 | 16 | 32)) {
+                continue;
+            }
+            let [Operand::Value(_), yes, no] = one.operands[..] else { continue };
+            if yes == no {
+                continue;
+            }
+            let arm = |operand: Operand| -> Option<InstId> { sinkable_def(function, block, operand) };
+            let (yes, no) = (arm(yes), arm(no));
+            if yes.is_some() || no.is_some() {
+                return Some((select, yes, no));
+            }
+        }
+    }
+    None
+}
+
+/// The instruction of `block` that makes `operand`, where it is pure and only
+/// one instruction reads its value.
+fn sinkable_def(
+    function: &Function,
+    block: BlockId,
+    operand: Operand,
+) -> Option<InstId> {
+    let Operand::Value(value) = operand else { return None };
+    let ValueDef::Instruction(inst) = function.value(value).def else { return None };
+    let pure = matches!(
+        function.instruction(inst).opcode,
+        Opcode::Binary(
+            BinaryOp::Add
+                | BinaryOp::Sub
+                | BinaryOp::Mul
+                | BinaryOp::Shl
+                | BinaryOp::LShr
+                | BinaryOp::AShr
+                | BinaryOp::And
+                | BinaryOp::Or
+                | BinaryOp::Xor
+        ) | Opcode::Cast(CastOp::ZExt | CastOp::SExt | CastOp::Trunc)
+    );
+    (pure && function.parent(inst) == Some(block) && function.users(value).has_one_use()).then_some(inst)
+}
+
+/// `arm` and what only it reads (`3 * x` of `3 * x + 1`), in block order: the
+/// whole chain moves, or the selector no longer folds it (`lea [x+x*2+1]`).
+fn arm_chain(
+    function: &Function,
+    block: BlockId,
+    arm: InstId,
+) -> Vec<InstId> {
+    let mut found = vec![arm];
+    let mut at = 0;
+    while at < found.len() {
+        for operand in function.instruction(found[at]).operands.clone() {
+            if let Some(def) = sinkable_def(function, block, operand)
+                && !found.contains(&def)
+            {
+                found.push(def);
+            }
+        }
+        at += 1;
+    }
+    function.iter_block(block).filter(|inst| found.contains(inst)).collect()
+}
+
+/// `select c, a, b` made `br c, ..` with each sunk arm in a block of its own
+/// and a phi of the arms in the join.
+fn sunk(
+    function: &mut Function,
+    select: InstId,
+    yes: Option<InstId>,
+    no: Option<InstId>,
+) {
+    let one = function.instruction(select).clone();
+    let [condition, yes_value, no_value] = one.operands[..] else { unreachable!("a select") };
+    let result = one.result.expect("a select's value");
+    let home = function.parent(select).expect("a placed select");
+    let join = split_block_at(function, home, select);
+    let jump = function.terminator(home).expect("the jump the split made");
+    let void = function.instruction(jump).ty;
+    function.erase(jump).expect("nothing reads a jump");
+    let mut side_of = |function: &mut Function, arm: Option<InstId>| -> (BlockId, Operand) {
+        let Some(inst) = arm else { return (home, Operand::Block(join)) };
+        let side = function.create_block(None);
+        function.insert_block(side, Some(home)).expect("a new block");
+        for moved in arm_chain(function, home, inst) {
+            function.move_to(moved, Position::End(side)).expect("a placed instruction");
+        }
+        let back = function.create_instruction(Opcode::Br, void, vec![Operand::Block(join)], Flags::default(), None);
+        function.insert(back, Position::End(side)).expect("an unplaced instruction");
+        (side, Operand::Block(side))
+    };
+    // The true arm's block first after `home`: it is the branch's fallthrough, as
+    // `EmitLoweredSelect` places the false copy after the branch to the join.
+    let (no_from, no_target) = side_of(function, no);
+    let (yes_from, yes_target) = side_of(function, yes);
+    let branch = function.create_instruction(
+        Opcode::Br,
+        void,
+        vec![condition, yes_target, no_target],
+        Flags::default(),
+        None,
+    );
+    function.insert(branch, Position::End(home)).expect("an unplaced instruction");
+    let phi = function.create_instruction(
+        Opcode::Phi,
+        one.ty,
+        vec![yes_value, Operand::Block(yes_from), no_value, Operand::Block(no_from)],
+        Flags::default(),
+        None,
+    );
+    function.insert(phi, Position::Before(select)).expect("an unplaced instruction");
+    let value = function.instruction(phi).result.expect("a phi's value");
+    function.replace_all_uses_with(result, Operand::Value(value));
+    function.erase(select).expect("nothing reads it now");
 }
 
 #[cfg(test)]

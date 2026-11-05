@@ -50,14 +50,14 @@ fn pipeline_runs(
 }
 
 /// The passes a body ran, per `LLRM_DEBUG=runs` line, for the lines of a run
-/// that a stage of the interprocedural step (`ipa-...`, `promote.`, `ipsccp.`)
-/// asked for.
+/// that a stage of the interprocedural step (`ipa-...`, `ipsccp.`) asked for.
+/// `promote.` keeps the full list on purpose (the minimal one left Nib
+/// quicksort's far sort arguments unfolded; `recorded`).
 fn passes_run_by_ipa_stages(lines: &[String]) -> Vec<(String, usize)> {
     lines
         .iter()
         .filter(|line| {
-            line.starts_with("body ")
-                && ["trigger \"ipa-", "trigger \"promote.", "trigger \"ipsccp."].iter().any(|one| line.contains(one))
+            line.starts_with("body ") && ["trigger \"ipa-", "trigger \"ipsccp."].iter().any(|one| line.contains(one))
         })
         .map(|line| {
             let runs = line.split(" pass runs").next().and_then(|head| head.rsplit(' ').next());
@@ -79,12 +79,145 @@ fn test_a_body_changed_by_an_interprocedural_stage_does_not_rerun_the_list() {
         &crate::pipeline::Applied { options: crate::pipeline::Options::speed(), ..Default::default() },
     );
     let reruns = passes_run_by_ipa_stages(&lines);
-    assert!(
-        !reruns.is_empty(),
-        "no stage reran a body: {:?}",
-        lines.iter().filter(|l| l.starts_with("body ")).map(|l| &l[..60.min(l.len())]).collect::<Vec<_>>()
-    );
     assert!(reruns.iter().all(|(_, runs)| *runs < 10), "the list ran again: {reruns:?}");
+}
+
+/// The late list (loop-load-elim, slp, the late unroll) ran before the
+/// interprocedural stages, which then ran the simplification list again over
+/// the bodies it had grown: `main` of memory_expansion entered GVN at 6051,
+/// 6052 and 6058 instructions, and the whole module summed 30,988 at GVN
+/// where the pin's 8,332. The late list is a body's last run.
+#[test]
+fn test_the_late_list_is_a_bodys_last_run() {
+    let lines = pipeline_runs(
+        &format!("{}{DESCRIPTOR}", llrm_analysis::testing::DOS),
+        &crate::pipeline::Applied { options: crate::pipeline::Options::speed(), ..Default::default() },
+    );
+    // A run's steps come before its `body` line; the late list has the
+    // late unroll's slot.
+    let mut late: Vec<String> = Vec::new();
+    let mut steps_late = false;
+    let mut after_late: Vec<String> = Vec::new();
+    for line in &lines {
+        if line.starts_with("step ") {
+            steps_late |= line.contains("unroll@1476");
+        } else if line.starts_with("body ") {
+            let name = line.rsplit("name ").next().unwrap_or_default().to_owned();
+            if late.contains(&name) {
+                after_late.push(name.clone());
+            }
+            if steps_late {
+                late.push(name);
+            }
+            steps_late = false;
+        }
+    }
+    assert!(!late.is_empty(), "no body ran the late list: {lines:?}");
+    assert!(after_late.is_empty(), "bodies run again after the late list: {after_late:?}");
+}
+
+/// `check_locals` calls the two functions it is handed through its own
+/// stack slots: inlined into `main` the calls become direct only after the
+/// simplification, so a second round inlines them (`DevirtSCCRepeatedPass`).
+const APPLY_TWO: &str = "@x = internal global [700 x i8] zeroinitializer
+@y = internal global [700 x i8] zeroinitializer
+@src = internal global [700 x i8] zeroinitializer
+declare i16 @memcmp(ptr, ptr, i16)
+
+define internal void @lc(ptr %d, ptr %s) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %i1, %loop ]
+  %sp = getelementptr inbounds i8, ptr %s, i16 %i
+  %v = load i8, ptr %sp
+  %dp = getelementptr inbounds i8, ptr %d, i16 %i
+  store i8 %v, ptr %dp
+  %i1 = add nuw nsw i16 %i, 1
+  %c = icmp slt i16 %i1, 700
+  br i1 %c, label %loop, label %done
+done:
+  ret void
+}
+
+define internal void @lr(ptr %d, ptr %s) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %i1, %loop ]
+  %sp = getelementptr inbounds i8, ptr %s, i16 %i
+  %v = load i8, ptr %sp
+  %dp = getelementptr inbounds i8, ptr %d, i16 %i
+  store i8 %v, ptr %dp
+  %i1 = add nuw nsw i16 %i, 1
+  %c = icmp slt i16 %i1, 700
+  br i1 %c, label %loop, label %done
+done:
+  ret void
+}
+
+define internal i16 @differ(ptr %a, ptr %b, i16 %n) noinline {
+  %c = call i16 @memcmp(ptr %a, ptr %b, i16 %n)
+  ret i16 %c
+}
+
+define internal i16 @check_locals(ptr %f, ptr %g) {
+  %f.addr = alloca ptr
+  %g.addr = alloca ptr
+  store ptr %f, ptr %f.addr
+  store ptr %g, ptr %g.addr
+  %f1 = load ptr, ptr %f.addr
+  call void %f1(ptr @x, ptr @src)
+  %g1 = load ptr, ptr %g.addr
+  call void %g1(ptr @y, ptr @src)
+  %d = call i16 @differ(ptr @x, ptr @y, i16 700)
+  ret i16 %d
+}
+
+define i16 @top() {
+  %r = call i16 @check_locals(ptr @lc, ptr @lr)
+  ret i16 %r
+}
+";
+
+/// A body took the inliner's calls and then the function passes twice when the
+/// callee's calls became direct only after the simplification: `main` of
+/// memory_expansion ran the list twice where the pin's inliner worklist takes
+/// the new calls before the function passes run once.
+#[test]
+fn test_calls_that_a_splice_exposes_are_inlined_before_the_list_runs() {
+    let lines = pipeline_runs(
+        &format!("{}{APPLY_TWO}", llrm_analysis::testing::DOS),
+        &crate::pipeline::Applied { options: crate::pipeline::Options::speed(), ..Default::default() },
+    );
+    let walks = |name: &str| {
+        lines
+            .iter()
+            .filter(|line| {
+                line.starts_with("body ")
+                    && line.contains("trigger \"walk.\"")
+                    && line.ends_with(&format!("name {name}"))
+            })
+            .count()
+    };
+    assert_eq!(walks("top"), 1, "the list ran again over top: {lines:?}");
+}
+
+/// A promotion edited the caller's call site after the caller had run the
+/// list, and `promote.` ran the list over it again (`main` of
+/// memory_expansion: three runs, 833M instructions in the last). The pin runs
+/// ArgumentPromotion per component before its callers are visited.
+#[test]
+fn test_a_caller_of_a_promoted_function_runs_the_list_once() {
+    let lines = pipeline_runs(
+        &format!("{}{DESCRIPTOR}", llrm_analysis::testing::DOS),
+        &crate::pipeline::Applied { options: crate::pipeline::Options::speed(), ..Default::default() },
+    );
+    let again: Vec<&String> = lines
+        .iter()
+        .filter(|line| line.starts_with("body ") && line.contains("trigger \"promote.\"") && line.ends_with("name top"))
+        .collect();
+    assert!(again.is_empty(), "the caller ran the list again after the promotion: {again:?}");
 }
 
 const TWO_CONSTANTS: &str = "define internal i16 @g(i16 %k, i16 %x) noinline {
@@ -280,6 +413,8 @@ fn test_a_recursion_with_copies_runs_the_simplify_list_twice() {
             |program: &mut llrm_mir::program::Program| {
                 let mut analyses = Default::default();
                 let mut walk = crate::walk::Walk {
+                    promote_rate: None,
+                    rerun_unchanged: true,
                     speed_rate: true,
                     inline: crate::inline::Threshold { recursive: true, ..Default::default() },
                     simplify: Box::new(|_, _, _, _| {}),
@@ -343,6 +478,8 @@ fn test_a_caller_of_a_peeled_recursion_is_a_body_with_self_copies() {
             |program: &mut llrm_mir::program::Program| {
                 let mut analyses = Default::default();
                 let mut walk = crate::walk::Walk {
+                    promote_rate: None,
+                    rerun_unchanged: true,
                     speed_rate: true,
                     inline: crate::inline::Threshold { recursive: true, ..Default::default() },
                     simplify: Box::new(|_, _, _, _| {}),
@@ -492,6 +629,8 @@ b0:
         std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
             let mut walk = crate::walk::Walk {
+                promote_rate: None,
+                rerun_unchanged: true,
                 speed_rate: true,
                 inline: crate::inline::Threshold { recursive: true, ..Default::default() },
                 simplify: Box::new(|_, _, _, _| {}),
@@ -713,6 +852,8 @@ fn test_only_a_tree_recursion_waits_for_its_tail_call_elimination() {
             std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
             |program: &mut llrm_mir::program::Program| {
                 let mut walk = crate::walk::Walk {
+                    promote_rate: None,
+                    rerun_unchanged: true,
                     speed_rate: true,
                     inline: crate::inline::Threshold { recursive, ..Default::default() },
                     simplify: Box::new(|_, _, _, _| {}),
@@ -814,6 +955,8 @@ b0:
             std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
             |program: &mut llrm_mir::program::Program| {
                 let mut walk = crate::walk::Walk {
+                    promote_rate: None,
+                    rerun_unchanged: true,
                     speed_rate: true,
                     inline: crate::inline::Threshold { recursive, ..Default::default() },
                     simplify: Box::new(|_, _, _, _| {}),
@@ -868,6 +1011,8 @@ fn walked_top_with(
         std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
             let mut walk = crate::walk::Walk {
+                promote_rate: None,
+                rerun_unchanged: true,
                 speed_rate: true,
                 inline: crate::inline::Threshold { recursive, ..Default::default() },
                 simplify: Box::new(|_, _, _, _| {}),
@@ -1342,6 +1487,8 @@ b0:
         move |program: &mut llrm_mir::program::Program| {
             let seen = std::rc::Rc::clone(&seen);
             let mut walk = crate::walk::Walk {
+                promote_rate: None,
+                rerun_unchanged: true,
                 speed_rate: true,
                 inline: crate::inline::Threshold { limit: 0, ..Default::default() },
                 simplify: Box::new(move |module, analyses, _, _| {
@@ -2279,6 +2426,8 @@ fn test_a_recursion_the_cap_refuses_keeps_its_tail_call_elimination_slot() {
             std::rc::Rc::new(llrm_x86_m16::Dos { recursive_inlining: REC_1, ..llrm_x86_m16::Dos::default() }),
             |program: &mut llrm_mir::program::Program| {
                 let mut walk = crate::walk::Walk {
+                    promote_rate: None,
+                    rerun_unchanged: true,
                     speed_rate: true,
                     inline: crate::inline::Threshold::new(225),
                     simplify: Box::new(|_, _, _, _| {}),
@@ -2573,17 +2722,33 @@ fn m32_tree_calls(
 /// bench fib at m32 -O2 was 334151 clocks against gcc's 210636: the pin's
 /// inliner copies no recursive callee, gcc's `recursive_inlining` copies fib
 /// into itself to depth 8 (REC-2).
-#[cfg(feature = "gcc-gpl")]
 #[test]
 fn test_m32_copies_a_tree_recursion_into_itself_at_speed() {
     let calls = m32_fib_calls(crate::pipeline::Options::default());
     assert!(calls > 8, "fib was not copied into itself, {calls} calls of it");
 }
 
+/// fib at m32 -O2 was copied into itself to the 150 `gcc_insns` the pass allowed
+/// and ran 240256 clocks against gcc's 210636 (gcc's cap is 450; -O2 now takes it,
+/// 99687 clocks); -O3 keeps 150 (rectwo and bintree are worse with 450 there).
+#[test]
+fn test_m32_o2_copies_fib_to_gccs_growth_cap_and_o3_to_the_old_one() {
+    let o2 = m32_fib_calls(crate::pipeline::Options::default());
+    let o3 = m32_fib_calls(crate::pipeline::Options::speed());
+    assert!(o2 > o3, "-O2 made {o2} calls of fib, -O3 {o3}");
+}
+
+/// fib at -O1 was copied into itself (334152 -> 424014 clocks, 69 -> 649 B):
+/// gcc inlines no function at -O1, recursive ones included.
+#[test]
+fn test_m32_copies_no_recursion_at_o1() {
+    let calls = m32_fib_calls(crate::pipeline::Options::basic());
+    assert!(calls <= 3, "fib was copied into itself at -O1, {calls} calls of it");
+}
+
 /// gcc rejects the recursive edge of quicksort and bintree at -O2
 /// ("max-inline-insns-auto limit reached", growth 25-28 and 15-22 against 15)
 /// and takes it at -O3 (30): a body that grows past 15 is copied at -O3 only.
-#[cfg(feature = "gcc-gpl")]
 #[test]
 fn test_m32_copies_a_recursion_whose_edge_grows_past_15_only_at_o3() {
     let o2 = m32_tree_calls(6, crate::pipeline::Options::default());
@@ -2603,7 +2768,7 @@ fn test_gcc_size_counts_a_branch_a_call_and_its_arguments_as_gcc_does() {
     let module = parsed(&tree_recursion(0).replace("@tree", "@fib"));
     let (_, _, fib) =
         module.functions().find(|(_, _, f)| !f.is_declaration() && f.parameters().len() == 1).expect("fib");
-    assert_eq!((llrm_gpl_gcc::gcc_size(fib), crate::inline::recursive_edge_growth(fib)), (13, 7));
+    assert_eq!((llrm_gpl_gcc::gcc_size(fib), llrm_gpl_gcc::recursive_edge_growth(fib)), (13, 7));
 }
 
 /// bench bintree's `insert` (three parameters, gcc size 22, edge growth 16 by
@@ -2643,17 +2808,8 @@ rec:
     );
     let (_, _, insert) = module.functions().next().expect("insert");
     let size = llrm_gpl_gcc::gcc_size(insert);
-    assert_eq!(crate::inline::recursive_edge_growth(insert), size - 6);
-    assert!(size - crate::inline::recursive_edge_growth(insert) == 6, "the call term scales with parameters");
-}
-
-/// Without `gcc-gpl` the edge bar cannot be computed: m32 copies no recursion
-/// and its code equals the pin's (REC-2 is inert).
-#[cfg(not(feature = "gcc-gpl"))]
-#[test]
-fn test_m32_copies_no_recursion_without_the_gcc_feature() {
-    let calls = m32_fib_calls(crate::pipeline::Options::default());
-    assert!(calls <= 3, "fib was copied into itself without gcc-gpl, {calls} calls of it");
+    assert_eq!(llrm_gpl_gcc::recursive_edge_growth(insert), size - 6);
+    assert!(size - llrm_gpl_gcc::recursive_edge_growth(insert) == 6, "the call term scales with parameters");
 }
 
 /// gcc-derived code (`llrm-gpl-gcc`, GPL-3.0-or-later) is optional and off: a
@@ -2685,5 +2841,43 @@ fn test_the_default_build_links_no_gcc_derived_crate() {
             continue;
         }
         assert!(!text.contains("llrm-gpl-gcc"), "{} depends on the GPL crate", manifest.display());
+    }
+}
+
+/// The bar of the recursive edge (DEVIATE REC-2) as the 12 self-recursive
+/// functions of the corpus meet it: gcc 15 copies fib, hanoi, recpow and
+/// rectwo into themselves at -O2 (edge growth <= 15) and at -O3 (<= 30) also
+/// bintree `walk`, recchop `chop`, x_hanoi2 `mv`, quicksort `sort` and queens
+/// `place`, never x_mergesort `msort` (growth 67). Fitted on these, `gcc_insns`
+/// of queens 22 sits on the m32 O3 edge.
+#[test]
+fn test_the_m32_edge_bar_makes_gccs_decision_for_every_corpus_recursion() {
+    // (module, function, copied at -O2, copied at -O3)
+    let table: [(&str, &str, &str, bool, bool); 10] = [
+        ("fib", include_str!("testdata/rec2/fib.ll"), "fib_", true, true),
+        ("hanoi", include_str!("testdata/rec2/hanoi.ll"), "hanoi_", true, true),
+        ("recpow", include_str!("testdata/rec2/recpow.ll"), "power_", true, true),
+        ("rectwo", include_str!("testdata/rec2/rectwo.ll"), "paths_", true, true),
+        ("bintree", include_str!("testdata/rec2/bintree.ll"), "walk_", false, true),
+        ("recchop", include_str!("testdata/rec2/recchop.ll"), "chop_", false, true),
+        ("x_hanoi2", include_str!("testdata/rec2/x_hanoi2.ll"), "mv_", false, true),
+        ("quicksort", include_str!("testdata/rec2/quicksort.ll"), "sort_", false, true),
+        ("queens", include_str!("testdata/rec2/queens.ll"), "place_", false, true),
+        ("x_mergesort", include_str!("testdata/rec2/x_mergesort.ll"), "msort_", false, false),
+    ];
+    let m32 = crate::indvars::tests::m32();
+    let (o2_bar, o3_bar) = m32.tti().and_then(|tti| tti.recursive_edge_growth()).expect("m32 states the bar");
+    for (name, text, function, o2, o3) in table {
+        let module = parsed(text);
+        let (_, _, body) = module
+            .functions()
+            .find(|(_, global, _)| global.name.as_deref() == Some(function))
+            .unwrap_or_else(|| panic!("{name}: no {function}"));
+        let insns = crate::inline::recursive_edge_growth(body);
+        assert_eq!(
+            (insns <= o2_bar, insns <= o3_bar),
+            (o2, o3),
+            "{name} {function}: gcc_insns {insns}, bars {o2_bar}/{o3_bar}"
+        );
     }
 }

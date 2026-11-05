@@ -50,6 +50,11 @@ pub struct Tuning {
     /// (the runtime unroll, the unroll-and-jam outer count) may total; none:
     /// the pass's own, 150.
     pub unroll_partial_threshold: Option<u32>,
+    /// The `PartialThreshold` the unroll-and-jam (D1) counts the outer loop
+    /// against; none: `unroll_partial_threshold`'s. The outer loop holds the
+    /// inner one, which stays rolled, so a loop-buffer sized threshold
+    /// refuses every nest.
+    pub unroll_jam_partial_threshold: Option<u32>,
     /// How many values the x87 register stack holds (8) where floats live
     /// there (a target without SSE2 floating point); none: floats are not
     /// held on a stack. The loop unroll caps its copies by it.
@@ -69,6 +74,15 @@ pub struct Tuning {
     /// code, summed over its sites. false: the pin's `OptSizeThreshold` 50
     /// alone decides, which allows the growth.
     pub inline_size_guard_at_size: bool,
+    /// With `inline_size_guard_at_size`, the bound holds a callee with one
+    /// site too (otherwise only two or more: the pin's single-site inline
+    /// stands). A callee that stays and is copied once only grows the code.
+    pub inline_size_guard_single_site: bool,
+    /// A size build rotates a loop only when the header's exit test folds in
+    /// the preheader (RS1): an unfolded copy is a compare and a branch, more
+    /// than the loop-closing jump it removes. false: the pass's header limit
+    /// alone.
+    pub rotation_guard_must_fold_at_size: bool,
     /// A constant offset of an address is a displacement the access folds;
     /// SimplifyCFG's sinking of two such accesses behind a phi of the offsets
     /// is refused (it costs the displacement). false: the pin's.
@@ -78,11 +92,39 @@ pub struct Tuning {
     /// `max-inline-insns-recursive` (`Tti::recursive_inlining`); none: the
     /// pin's inliner.
     pub recursive_inlining: Option<(u32, i64)>,
-    /// gcc's `max-inline-insns-auto` at -O2 and -O3 (15, 30): the most a copy
-    /// of the recursive callee may grow its caller
-    /// (`want_inline_small_function_p`) for `recursive_inlining` to run on
-    /// it; none: no such bar.
+    /// gcc's `max-inline-insns-auto` at -O2 and -O3 (15, 30 of its size
+    /// units) as the most `gcc_insns` a recursive callee may have for
+    /// `recursive_inlining` to run on it, calibrated per target; none: no
+    /// such bar.
     pub recursive_edge_growth: Option<(i64, i64)>,
+    /// DEVIATE REC-2: what the copies of a recursive function in itself may add
+    /// at (-O2, -O3), in `gcc_insns` (gcc's `max-inline-insns-recursive`, 450);
+    /// none: `inline::MAX_INLINE_INSNS_RECURSIVE`.
+    pub recursive_inlining_growth: Option<(i64, i64)>,
+    /// DEVIATE PL6: the first iteration of an innermost loop is peeled where
+    /// its entry constants fold enough of the body to pay the copy at the
+    /// speed rate (`Tti::peels_folded_entry`). false: the pin's
+    /// `computePeelCount`.
+    pub peel_folded_entry: bool,
+    /// DEVIATE UP1: a full unroll the pin's threshold allows is made only
+    /// where the clocks it saves repay the bytes it adds at this rate in
+    /// thousandths of a clock a byte (`Tti::unroll_milliclocks_per_byte`) at
+    /// -O2/-O3. 0: the pin's threshold alone.
+    pub unroll_milliclocks_per_byte: i64,
+    /// DEVIATE CS2: where there is no conditional move, a select's arm only
+    /// it reads is made on its own path (`Tti::sinks_select_arms`). false: the
+    /// pin's, both operands before the branch.
+    pub sink_select_arms: bool,
+    /// DEVIATE MEM-1: an `llvm.memcpy` of a length known only at run time, in
+    /// a function not tuned for size, is `rep movsd` and `rep movsb` inline,
+    /// not a call of `memcpy` (gcc's `rep_prefix_4_byte` stringop strategy for
+    /// the 486 and P5). false: the pin's `EmitTargetCodeForMemcpy`, a libcall.
+    pub inline_variable_memcpy: bool,
+    /// DEVIATE REC5-1 (owner w2, exit 2026-11-20): IPSCCP widens a range that
+    /// keeps growing to its half-line, keeping the sign, not to overdefined
+    /// (the pin). recpow -O2: `i % 97` of a loop counter was a signed divide
+    /// all the way into the callee.
+    pub ipsccp_widen_keeps_sign: bool,
 }
 
 impl Tuning {
@@ -102,15 +144,38 @@ impl Tuning {
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,
         unroll_partial_threshold: None,
+        unroll_jam_partial_threshold: None,
         x87_stack_slots: None,
         unswitch_threshold: None,
         inline_threshold: None,
         split_merged_conditions: false,
         inline_size_guard_at_size: false,
+        inline_size_guard_single_site: false,
+        rotation_guard_must_fold_at_size: false,
         keep_constant_displacements: false,
         recursive_inlining: None,
         recursive_edge_growth: None,
+        recursive_inlining_growth: None,
+        peel_folded_entry: false,
+        unroll_milliclocks_per_byte: 0,
+        sink_select_arms: false,
+        inline_variable_memcpy: false,
+        ipsccp_widen_keeps_sign: false,
     };
+}
+
+/// What a target says of `GlobalMerge`
+/// ([GlobalMerge.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/GlobalMerge.cpp));
+/// a target that merges nothing answers none.
+#[derive(Clone, Copy, Debug)]
+pub struct GlobalMerge {
+    /// The reach of a base register's immediate: `MaxOffset`.
+    pub max_offset: u64,
+    /// `OnlyOptimizeForSize`: only uses in `minsize` functions count.
+    pub size_only: bool,
+    /// The object format is Mach-O: the merged struct is `internal`, not
+    /// `private`.
+    pub mach_o: bool,
 }
 
 /// Where the target keeps no program data, as linear addresses: old
@@ -171,6 +236,13 @@ pub trait Machine {
     /// overrides. A target with no entry here takes `Tuning::PIN`.
     fn tuning(&self) -> Tuning {
         Tuning::PIN
+    }
+
+    /// Whether IPSCCP runs a second time after ArgumentPromotion changed a body
+    /// (DEVIATE SD443, exit 2026-11-07: interprocedural.rs). The pin runs it
+    /// once; a target that matches the pin's output turns it off.
+    fn second_ipsccp(&self) -> bool {
+        true
     }
 
     /// Clocks a byte of code is worth, in thousandths, where a decision is
@@ -299,6 +371,15 @@ pub trait Machine {
 
     /// The indexed addresses a memory access may use, native form first.
     fn address_forms(&self) -> Vec<AddressForm>;
+
+    /// How `GlobalMerge` runs at `-O3` (`aggressive`) or below; none where
+    /// the target does not run it.
+    fn global_merge(
+        &self,
+        _aggressive: bool,
+    ) -> Option<GlobalMerge> {
+        None
+    }
 
     /// Whether a `width`-byte load at an address a multiple of `align` may
     /// trap wherever it points. By default any may: only one known
@@ -472,6 +553,9 @@ pub struct OperationCosts {
     pub pieces_clear: i64,
     pub pieces_set_size: i64,
     pub pieces_clear_size: i64,
+    /// Bytes of the widest store a constant memset expands to; 0: the
+    /// target's pointer width, a dword at least.
+    pub memset_store: i64,
     /// The fewest case values for which a switch is a jump table (gcc's
     /// `case_values_threshold`); 0: the target has no table jump.
     pub jump_table: i64,
@@ -594,6 +678,7 @@ impl Default for OperationCosts {
             pieces_clear: 0,
             pieces_set_size: 0,
             pieces_clear_size: 0,
+            memset_store: 0,
             jump_table: 0,
             cache_line: 0,
             line_fill_clocks: 0,

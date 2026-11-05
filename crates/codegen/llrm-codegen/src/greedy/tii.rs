@@ -184,6 +184,13 @@ pub trait TargetInstrInfo {
         cell: &Mem,
     ) -> Arc<Insn>;
 
+    /// Whether the target stores one lane of a spilled register on its own: a
+    /// store whose cell has an `offset` into the register's slot. The pin
+    /// stores a sub-register with `storeRegToStackSlot(.., SubIdx)`.
+    fn stores_lanes(&self) -> bool {
+        false
+    }
+
     /// Whether `one` reads the register every unprefixed access reads, so a
     /// split puts a reload of it ahead of `one`.
     fn needs_data_group(
@@ -487,6 +494,23 @@ pub fn load_reg_from_stack_slot(
         Vec::new(),
     );
     _with(&inserted, |made| made.spill_reload = true)
+}
+
+/// The cell of the `width` bytes `offset` up in a spill slot: the same slot,
+/// its `offset` one more than the lane's so that no lane has the offset a
+/// whole cell has (0). [`lane_offset`] reads it back.
+pub fn lane_cell(
+    cell: &Mem,
+    offset: u32,
+    width: u32,
+) -> Mem {
+    Mem { offset: i64::from(offset) + 1, width, ..cell.clone() }
+}
+
+/// The bytes above the start of the slot a [`lane_cell`] names; None for a
+/// cell that is a whole slot.
+pub fn lane_offset(cell: &Mem) -> Option<u32> {
+    (cell.addr.is_some() && cell.offset > 0).then(|| (cell.offset - 1) as u32)
 }
 
 /// `X86InstrInfo::storeRegToStackSlot`, as `InlineSpiller::insertSpill` calls

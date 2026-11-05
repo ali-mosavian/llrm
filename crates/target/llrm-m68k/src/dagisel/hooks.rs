@@ -24,6 +24,12 @@ pub enum Cpu {
     M68060,
 }
 
+impl Default for Cpu {
+    fn default() -> Cpu {
+        Cpu::M68000
+    }
+}
+
 impl Cpu {
     /// The CPU's column in `timings.times`.
     pub fn name(self) -> &'static str {

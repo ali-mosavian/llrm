@@ -128,6 +128,7 @@ const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("aarch64-atomic-cfg-tidy", |options, on| options.atomic_cfg_tidy = on),
     ("llrm-cgpaddr", |options, on| options.cgpaddr = on),
     ("llrm-typepromotion", |options, on| options.typepromotion = on),
+    ("llrm-zero-merge", |options, on| options.zero_merge = on),
     ("llrm-spares", |options, on| options.spare_loads = on),
     ("llrm-homes", |options, on| options.stored_homes = on),
     ("llrm-stable-loads", |options, on| options.stable_loads = on),

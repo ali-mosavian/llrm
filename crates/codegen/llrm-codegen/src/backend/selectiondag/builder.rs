@@ -26,7 +26,7 @@ use super::fold::mask;
 use super::function_lowering::FunctionLoweringInfo;
 use super::isd::{CondCode, ISD};
 use super::mvt::{EVT, MVT};
-use super::target_calling::{Ext, In, Out, Site, TargetCalling};
+use super::target_calling::{ByVal, Ext, In, Out, Site, TargetCalling};
 use crate::backend::isel::{Convention, Parameter, convention_for};
 
 /// An instruction the builder does not translate yet; the shadow harness
@@ -634,6 +634,9 @@ impl<'a> Builder<'a> {
             tail_candidate: None,
             sibcall: false,
             variadic_call: false,
+            variadic_count: true,
+            win64_va: false,
+            variadic_shadows: Vec::new(),
             call_attrs_move_arguments: false,
             call_sret: Vec::new(),
             call_result_assert: None,
@@ -679,6 +682,15 @@ struct Builder<'a> {
     /// The call `visit_call` is lowering is to a variadic function: at m64
     /// `lower_call` sets `al` to the vector registers it uses.
     variadic_call: bool,
+    /// The convention of the variadic call being lowered counts its vector
+    /// registers in `al` (SysV); Win64 has no count.
+    variadic_count: bool,
+    /// The function being lowered keeps Win64's `va_list`, the bare pointer.
+    win64_va: bool,
+    /// Win64: the integer register of each argument position, where a vector
+    /// argument of a variadic call is copied as well
+    /// (`LowerCall`'s "XMM reg to the corresponding shadow reg").
+    variadic_shadows: Vec<RegId>,
     /// The call being lowered has an argument whose attribute moves it
     /// (`relocating_attribute`).
     call_attrs_move_arguments: bool,
@@ -1156,7 +1168,7 @@ impl Builder<'_> {
         if self.module.signature(self.function.ty).2 {
             self.dag.var_args_frame_index = Some(-(fixed + 1));
             if self.target.dag.pointer == EVT::I64 {
-                self.save_variadic_registers()?;
+                self.save_variadic_registers(fixed)?;
             }
         }
         Ok(())
@@ -1174,6 +1186,8 @@ impl Builder<'_> {
             return Ok(false);
         }
         let vt = self.type_of(result)?;
+        // Under soft float a float result is the integer of its width.
+        let vt = self.soft_float_integer(vt).unwrap_or(vt);
         if vt.is_floating_point() || !vt.is_integer() {
             return Ok(false);
         }
@@ -1208,6 +1222,7 @@ impl Builder<'_> {
                 split,
                 sret: true,
                 ext: Ext::Any,
+                byval: None,
             }));
         }
         let hidden_parts = ins.len();
@@ -1222,6 +1237,9 @@ impl Builder<'_> {
             let at = parameters.iter().position(|one| *one == arg).unwrap_or(0);
             let attrs = self.function.parameter_attrs.get(at).map_or(&[][..], Vec::as_slice);
             let sret = has_sret(attrs);
+            // `CCPassByVal`: a target that copies the bytes into the argument
+            // area is told their size and alignment
+            let byval = if calling.byval_in_area() { self.byval_of(attrs) } else { None };
             let ext = if llrm_mir::memory::has(attrs, "signext") {
                 Ext::Sign
             } else if llrm_mir::memory::has(attrs, "zeroext") {
@@ -1236,7 +1254,7 @@ impl Builder<'_> {
                 let parts = self.calling_parts(vt)?;
                 leaves.push((vt, parts.len(), pointer));
                 let split = parts.len() > 1;
-                ins.extend(parts.into_iter().map(|part| In { vt: part, pointer, arg_vt: vt, split, sret, ext }));
+                ins.extend(parts.into_iter().map(|part| In { vt: part, pointer, arg_vt: vt, split, sret, ext, byval }));
             }
             shapes.push(leaves);
         }
@@ -1325,7 +1343,11 @@ impl Builder<'_> {
                 self.dag.set_root(copy);
                 self.info.variadic_buffer = Some(reg);
             }
-            self.dag.var_args_frame_index = Some(-(offsets.len() as i32 + 1));
+            let index = -(offsets.len() as i32 + 1);
+            if let Some(offset) = calling.variadic_frame_offset(&ins) {
+                self.dag.fixed_offsets.insert(index, offset);
+            }
+            self.dag.var_args_frame_index = Some(index);
         }
         Ok(())
     }
@@ -1336,11 +1358,17 @@ impl Builder<'_> {
     /// `va_start` names. The vector registers' half of the area (48..176)
     /// is left unwritten until floating point is selected at m64 (DEVIATE
     /// SD238: a `double` passed to such a function is not read back).
-    fn save_variadic_registers(&mut self) -> Result<(), Refused> {
+    fn save_variadic_registers(
+        &mut self,
+        fixed: i32,
+    ) -> Result<(), Refused> {
         let calling = self.full_arch()?.calling();
         let Some(found) = calling.by_number(self.function.calling_convention) else {
             return Err(Refused("va_start at m64 in a function with no convention"));
         };
+        if found.positional {
+            return self.home_variadic_registers(found, fixed);
+        }
         let named: usize = self
             .convention
             .parameters
@@ -1410,6 +1438,45 @@ impl Builder<'_> {
         }
         let fp_offset = (found.argument_registers.len() * 8 + named_vectors * 16) as u32;
         self.dag.var_args_save = Some((save, named as u32 * 8, fp_offset));
+        Ok(())
+    }
+
+    /// `LowerFormalArguments` under Win64: each unnamed integer register is
+    /// stored to its home slot in the caller's shadow space, and `va_start`
+    /// points at the first of them, a plain `char *` (no register save area,
+    /// no vector registers).
+    fn home_variadic_registers(
+        &mut self,
+        found: &llrm_target::calling::Convention,
+        fixed: i32,
+    ) -> Result<(), Refused> {
+        let pointer = self.target.dag.pointer;
+        let named = self.convention.parameters.len();
+        let first = self.full_arch()?.first_argument_offset(false);
+        let mut object = fixed;
+        for (at, name) in found.argument_registers.iter().enumerate().skip(named) {
+            object += 1;
+            self.dag.fixed_offsets.insert(-object, first + at as i64 * 8);
+            let vreg = self.info.new_reg();
+            self.live_ins.push((self.arch.register_named(name), vreg));
+            let entry = self.dag.entry_node();
+            let value = self.dag.get_copy_from_reg(entry, vreg, pointer);
+            let address = self.dag.get_frame_index(pointer, -object);
+            let info = MemInfo {
+                mem_vt: pointer,
+                align: 8,
+                volatile: false,
+                base: MemBase::Stack(-object),
+                ext: None,
+                space: 0,
+                ordering: None,
+            };
+            let root = self.control_root();
+            let store = self.dag.get_store(root, value, address, info);
+            self.dag.set_root(store);
+        }
+        self.dag.var_args_frame_index = Some(-(fixed + 1));
+        self.win64_va = true;
         Ok(())
     }
 
@@ -1610,6 +1677,23 @@ impl Builder<'_> {
         Ok(())
     }
 
+    /// A call of `llrm.x86.udiv64by32 hi, lo, d` (DEVIATE DV1): the divide
+    /// instruction's quotient and remainder as the low and high halves of the
+    /// `i64` result.
+    fn visit_wide_divide(
+        &mut self,
+        instruction: &llrm_mir::module::Instruction,
+    ) -> Result<(), Refused> {
+        let arguments = &instruction.operands[..instruction.operands.len() - 1];
+        let [hi, lo, divisor] = arguments else { return Err(Refused("a wide divide of other than three operands")) };
+        let (hi, lo, divisor) = (self.get_value(*hi)?, self.get_value(*lo)?, self.get_value(*divisor)?);
+        let node = self.dag.get_node_multi(super::x86isd::LLRM_UDIV64BY32, &[EVT::I32, EVT::I32], &[hi, lo, divisor]);
+        let pair = [SDValue { node: node.node, res: 0 }, SDValue { node: node.node, res: 1 }];
+        let value = self.dag.get_node(ISD::BuildPair, EVT::I64, &pair);
+        self.set_value(instruction.result.ok_or(Refused("a wide divide without a result"))?, value);
+        Ok(())
+    }
+
     /// `X86ISD::CALL`, `callseq_end`, then the result read back.
     fn visit_call(
         &mut self,
@@ -1632,6 +1716,12 @@ impl Builder<'_> {
             .and_then(|name| llrm_mir::atomic::decode(&name))
         {
             return self.visit_atomic(instruction, atomic);
+        }
+        if direct
+            .and_then(|global| self.module.global(global).name.owned())
+            .is_some_and(|name| llrm_mir::intrinsics::is_wide_divide(&name))
+        {
+            return self.visit_wide_divide(instruction);
         }
         if let Some(intrinsic) = direct.and_then(|global| self.module.global(global).intrinsic()) {
             let name = direct.and_then(|global| self.module.global(global).name.owned()).unwrap_or_default();
@@ -1825,6 +1915,12 @@ impl Builder<'_> {
             }
         }
         self.variadic_call = variadic;
+        let found = self.full_arch().ok().and_then(|arch| arch.calling().by_number(info.calling_convention));
+        self.variadic_count = found.is_none_or(|found| found.variadic_vector_register.is_some());
+        self.variadic_shadows = found
+            .filter(|found| variadic && found.positional)
+            .map(|found| found.argument_registers.iter().map(|name| self.arch.register_named(name)).collect())
+            .unwrap_or_default();
         self.call_result_assert = extension_assert(&info.return_attrs);
         self.call_result_range_bits = llrm_mir::valuetracking::pattern::call_range(
             &llrm_mir::valuetracking::Query::new(self.module, self.function, self.layout),
@@ -1941,6 +2037,36 @@ impl Builder<'_> {
         attrs: &[llrm_mir::opcode::Attribute],
     ) -> bool {
         relocating_attribute(attrs).is_some_and(|name| !calling.passes_in_place(name))
+    }
+
+    /// `ArgFlags.getByValSize()` and `getNonZeroByValAlign()` of a parameter
+    /// or call argument with `attrs`: the pointee's size and the `align`
+    /// attribute (4 where absent, `CCPassByVal<4, 4>`'s minimum).
+    fn byval_of(
+        &self,
+        attrs: &[llrm_mir::opcode::Attribute],
+    ) -> Option<ByVal> {
+        use llrm_mir::opcode::Attribute;
+        let ty = attrs
+            .iter()
+            .find_map(
+                |attr| match attr {
+                    Attribute::Type(name, ty) if name == "byval" => Some(*ty),
+                    _ => None,
+                },
+            )?;
+        let align = attrs
+            .iter()
+            .find_map(
+                |attr| match attr {
+                    Attribute::Int(name, value) if name == "align" => Some(*value),
+                    _ => None,
+                },
+            );
+        Some(ByVal {
+            size: self.layout.alloc_size(&self.module.context.types, ty) as u32,
+            align: align.unwrap_or(4) as u32,
+        })
     }
 
     fn calling(&self) -> Option<&'static dyn TargetCalling> {
@@ -2064,7 +2190,9 @@ impl Builder<'_> {
         flags_answer: bool,
     ) -> Result<Option<SDValue>, Refused> {
         let sibling = std::mem::take(&mut self.sibcall);
-        if sibling || flags_answer || (byvals.iter().any(Option::is_some) && !calling.byval_by_reference()) {
+        let in_area = calling.byval_in_area();
+        if sibling || flags_answer || (byvals.iter().any(Option::is_some) && !calling.byval_by_reference() && !in_area)
+        {
             return Err(Refused("tail call, flags answer or byval with a target's calling hook"));
         }
         if std::mem::take(&mut self.call_attrs_move_arguments) {
@@ -2074,7 +2202,8 @@ impl Builder<'_> {
         let mut values = values.to_vec();
         for (value, byval) in values.iter_mut().zip(byvals) {
             let Some((size, align)) = *byval else { continue };
-            if size == 0 {
+            // the hook copies the bytes into the argument area itself
+            if size == 0 || in_area {
                 continue;
             }
             let opt_size = self.has_opt_size();
@@ -2113,6 +2242,12 @@ impl Builder<'_> {
                     split,
                     variadic: at >= variadic_from,
                     sret: sret_args.get(at).copied().unwrap_or(false),
+                    byval: byvals
+                        .get(at)
+                        .copied()
+                        .flatten()
+                        .filter(|_| in_area)
+                        .map(|(size, align)| ByVal { size: size as u32, align: align as u32 }),
                 });
             }
         }
@@ -2124,7 +2259,8 @@ impl Builder<'_> {
         if demoted {
             let types = &self.module.context.types;
             let size = self.layout.alloc_size(types, result_type) as u32;
-            // `LowerCallTo`: the object has the result type's preferred alignment.
+            // `LowerCallTo`: the object has the result type's preferred
+            // alignment.
             let align = self.layout.pref_align(types, result_type) as u32;
             let index = self.info.new_stack_object(size, align);
             let address = self.dag.get_frame_index(self.target.dag.pointer, index);
@@ -2141,6 +2277,7 @@ impl Builder<'_> {
                     split,
                     variadic: false,
                     sret: true,
+                    byval: None,
                 })
                 .collect();
             outs.splice(0..0, hidden);
@@ -2171,6 +2308,7 @@ impl Builder<'_> {
                     split,
                     sret: false,
                     ext: Ext::Any,
+                    byval: None,
                 }));
             }
         }
@@ -2306,6 +2444,7 @@ impl Builder<'_> {
         let mut stores = Vec::new();
         let mut copies: Vec<(RegId, SDValue)> = Vec::new();
         let mut stack_pointer = None;
+        let shadows = std::mem::take(&mut self.variadic_shadows);
         for (at, (value, parameter)) in values.iter().zip(&plan.parameters).enumerate() {
             let vt = self.dag.value_type(*value);
             let (part_vt, parts) = match parameter {
@@ -2414,6 +2553,12 @@ impl Builder<'_> {
                         } else {
                             reg
                         };
+                        if reg.is_xmm()
+                            && let Some(&shadow) = shadows.get(at)
+                        {
+                            let bits = self.dag.get_node(ISD::BitCast, EVT::I64, &[piece]);
+                            copies.push((shadow, bits));
+                        }
                         copies.push((reg, piece));
                     }
                 }
@@ -2422,7 +2567,7 @@ impl Builder<'_> {
         }
         // X86's `LowerCall`: a variadic call under SysV x86-64 passes the
         // number of vector registers it uses in `al`
-        if std::mem::take(&mut self.variadic_call) && self.target.dag.pointer == EVT::I64 {
+        if std::mem::take(&mut self.variadic_call) && self.variadic_count && self.target.dag.pointer == EVT::I64 {
             let vectors = plan
                 .parameters
                 .iter()
@@ -2602,7 +2747,8 @@ impl Builder<'_> {
             let vt = self.dag.value_type(value);
             let pointer = self.target.dag.pointer;
             let address = self.dag.get_copy_from_reg(chain, reg, pointer);
-            // `visitRet`: stored at the preferred alignment of the returned type.
+            // `visitRet`: stored at the preferred alignment of the returned
+            // type.
             let align = match self.function.operand_type(&self.module.context, operand) {
                 Some(ty) => self.layout.pref_align(&self.module.context.types, ty) as u32,
                 None => 1,
@@ -2643,7 +2789,16 @@ impl Builder<'_> {
                 let pieces = self.split_for_calling(value, ext)?;
                 let split = pieces.len() > 1;
                 for piece in pieces {
-                    outs.push(Out { value: piece, ext, pointer, arg_vt, split, variadic: false, sret: false });
+                    outs.push(Out {
+                        value: piece,
+                        ext,
+                        pointer,
+                        arg_vt,
+                        split,
+                        variadic: false,
+                        sret: false,
+                        byval: None,
+                    });
                 }
             }
         }
@@ -2659,6 +2814,7 @@ impl Builder<'_> {
                 split: false,
                 sret: false,
                 variadic: false,
+                byval: None,
             });
         }
         calling.accepts(&self.dag, Site::Return, &outs, &[]).map_err(Refused)?;
@@ -3068,6 +3224,7 @@ impl Builder<'_> {
             Opcode::FNeg => self.visit_fneg(&instruction)?,
             Opcode::Select => self.visit_select(&instruction)?,
             Opcode::Freeze => self.visit_freeze(&instruction)?,
+            Opcode::VaArg => self.visit_va_arg(&instruction)?,
             Opcode::ExtractValue(indices) => self.visit_extract_value(&instruction, indices)?,
             Opcode::InsertValue(indices) => self.visit_insert_value(&instruction, indices)?,
             Opcode::Load { align, volatile } => self.visit_load(inst, &instruction, *align, *volatile)?,

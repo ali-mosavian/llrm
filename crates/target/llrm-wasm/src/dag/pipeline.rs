@@ -160,17 +160,25 @@ impl CombineHooks for WasmCombines {
         true
     }
 
+    /// `visitMUL`'s `(mul (add x, c1), c2)` is `(add (mul x, c2), c1*c2)`
+    /// (DAGCombiner.cpp#L5080), for a single-use add where
+    /// `isMulAddWithConstProfitable` holds, which is the pin's default for
+    /// wasm.
+    fn fold_mul_of_add_with_constant(&self) -> bool {
+        true
+    }
+
+    /// `tryStoreMergeOfConstants`: two byte stores are one `i32.store16`, a
+    /// truncating store of the promoted type (`isTruncStoreLegal(i32, i16)`).
+    fn merge_stores_via_trunc_store(&self) -> bool {
+        true
+    }
+
     fn merge_stores_after_legalization(
         &self,
         _mem: EVT,
     ) -> bool {
         // The pin's default; EVT holds no vectors yet.
-        true
-    }
-
-    /// The pin runs `SimplifyDemandedBits` of `ADD`/`SUB`/`MUL` for every
-    /// target.
-    fn simplify_demanded_add_sub_mul(&self) -> bool {
         true
     }
 }

@@ -307,6 +307,69 @@ pub struct MemCmpExpansionOptions {
     pub allowed_tail_expansions: Vec<u32>,
 }
 
+/// The fields of `HardwareLoopInfo` a target sets in
+/// `isHardwareLoopProfitable`; the pass keeps the rest (the exit block, branch
+/// and count it finds).
+///
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/TargetTransformInfo.h#L104>
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HardwareLoopTarget {
+    /// `CountType`'s width: the pin's default is 32
+    /// (`hardware-loop-counter-bitwidth`).
+    pub count_bits: u32,
+    /// `LoopDecrement`: what `llvm.loop.decrement` takes off the counter.
+    pub loop_decrement: u64,
+    /// `IsNestingLegal`: a loop inside another may be a hardware loop.
+    pub is_nesting_legal: bool,
+    /// `CounterInReg`: the counter is a register value carried round the loop
+    /// by a phi (`loop.decrement.reg`), not state the target keeps.
+    pub counter_in_reg: bool,
+    /// `PerformEntryTest`: the loop's entry guard may be folded into the
+    /// counter's set (`test.set.loop.iterations`).
+    pub perform_entry_test: bool,
+    /// Beyond the pin (PPC's `checkCallInLoop` is its own check): the counter
+    /// is lost across a call, so a loop that calls is left alone.
+    pub rejects_calls: bool,
+    /// Beyond the pin: the counter is one more register, so a loop is
+    /// converted only where its own counter dies, replaced by this one.
+    pub requires_dead_counter: bool,
+}
+
+impl Default for HardwareLoopTarget {
+    /// `HardwareLoopInfo(L)`'s defaults.
+    fn default() -> Self {
+        HardwareLoopTarget {
+            count_bits: 32,
+            loop_decrement: 1,
+            is_nesting_legal: false,
+            counter_in_reg: false,
+            perform_entry_test: false,
+            rejects_calls: false,
+            requires_dead_counter: false,
+        }
+    }
+}
+
+/// An argument of a call, as the call sequence sees it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CallArgument {
+    /// The value's type; none for an aggregate or a vector.
+    pub ty: Option<Ty>,
+    /// The bytes copied onto the stack, for a `byval` argument.
+    pub byval_bytes: Option<u64>,
+}
+
+/// A call site: its arguments and the static frame its callee builds.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CallShape {
+    pub arguments: Vec<CallArgument>,
+    /// The bytes of the callee's static allocas.
+    pub callee_frame_bytes: u64,
+    /// The bytes of the caller's static allocas: a caller with none has no
+    /// frame, and an inlined callee's moves into it instead of vanishing.
+    pub caller_frame_bytes: u64,
+}
+
 /// The target a cost is for.
 pub trait Tti {
     /// The implementation's name, for what reports which target priced a
@@ -366,12 +429,55 @@ pub trait Tti {
         false
     }
 
+    /// The cost model the inliner counts a callee's size with, where the
+    /// target's `CodeSize` is not bytes: the same model with `CodeSize` in
+    /// bytes of code. None: `CodeSize` as it is. The other passes keep
+    /// `CodeSize` in the pin's units, which their thresholds are in.
+    fn inline_size_view(&self) -> Option<std::rc::Rc<dyn Tti>> {
+        None
+    }
+
+    /// What one call costs the caller and the callee together, in `kind`:
+    /// the call and return, the arguments' setup (a by-value copy, a push
+    /// past the argument registers), and the frame the callee builds and tears
+    /// down. Inlining removes all of it, so the inliner's size and rate bounds
+    /// read it in place of the call instruction's flat price. None: the pin's
+    /// flat price (the call as one instruction and one per argument).
+    fn call_sequence_cost(
+        &self,
+        shape: &CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        let _ = (shape, kind);
+        None
+    }
+
+    /// What building and tearing down the callee's frame costs in `kind`,
+    /// once per call executed. Inlining removes it from the callee, which then
+    /// stays or dies: in bytes it is saved once, when the callee dies, and
+    /// only where the caller already has a frame. None: no frame term.
+    fn callee_frame_cost(
+        &self,
+        shape: &CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        let _ = (shape, kind);
+        None
+    }
+
     /// What a byte of growth is worth, in thousandths of a clock, to a speed
     /// caller's inline (D11 at speed): the growth is refused when it costs
     /// more than the call's latency saves, weighted by the site's frequency.
     /// 0: the pin's threshold alone.
     fn speed_inline_milliclocks_per_byte(&self) -> i64 {
         0
+    }
+
+    /// Whether one wider store of constants may start off its own size
+    /// (`allowsMemoryAccess` calls the unaligned store fast). False: it starts
+    /// at a multiple of its size.
+    fn merges_unaligned_stores(&self) -> bool {
+        false
     }
 
     /// Whether a size build's loop rotation copies a header only when the copy
@@ -382,12 +488,27 @@ pub trait Tti {
         false
     }
 
+    /// Whether a size build's loop rotation copies a header only when its
+    /// exit test folds in the preheader (RS1). False: the pass's header limit
+    /// alone.
+    fn rotation_guard_must_fold_at_size(&self) -> bool {
+        false
+    }
+
     /// The fewest calls a callee has in the module for the bound above to hold
     /// its sites (a callee called once is the pin's: the copy
     /// meets constants the cost model follows, and folds with the sites around
     /// it).
     fn opt_size_inline_guard_min_sites(&self) -> i64 {
         1
+    }
+
+    /// Whether the bound above stands down where the pin's own cost, net of
+    /// the instructions it folds, is below zero: the pin counts that inline as
+    /// shrinking the caller (a one-instruction wrapper, a callee whose body
+    /// folds away). False: the bound holds whatever the cost.
+    fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {
+        false
     }
 
     /// Whether a constant address offset may become a phi: false where the
@@ -454,6 +575,13 @@ pub trait Tti {
         0
     }
 
+    /// DEVIATE UP1: what a code byte a full unroll adds is worth in
+    /// thousandths of a clock at -O2/-O3, where the unroll must save that many
+    /// clocks to be made (`loopunrollprice`); 0: the pin's threshold alone.
+    fn unroll_milliclocks_per_byte(&self) -> i64 {
+        0
+    }
+
     /// `Tuning::multiply_by_clocks`.
     fn multiply_by_clocks(&self) -> bool {
         false
@@ -467,6 +595,33 @@ pub trait Tti {
     /// `Subtarget.canUseCMOV()`: false where a `select` is lowered to a branch.
     fn has_cmov(&self) -> bool {
         true
+    }
+
+    /// DEVIATE D5 (`twoentryphi.rs`): what each select costs beyond its own
+    /// price when folding a two-entry phi (a select is a branch and a move
+    /// where there is no conditional move). 0: as at the pin, which does not
+    /// count the selects. `optsize`: the function is a size build.
+    fn select_branch_extra(
+        &self,
+        optsize: bool,
+    ) -> i64 {
+        let _ = optsize;
+        0
+    }
+
+    /// `Tuning::sink_select_arms`.
+    fn sinks_select_arms(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::inline_variable_memcpy`.
+    fn inlines_variable_memcpy(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::ipsccp_widen_keeps_sign`.
+    fn ipsccp_widen_keeps_sign(&self) -> bool {
+        false
     }
 
     /// DEVIATE U1: the bar (unrolled size) an `optsize` loop of at most this
@@ -492,9 +647,22 @@ pub trait Tti {
         None
     }
 
-    /// DEVIATE REC-2: gcc's growth bar of the recursive edge at (-O2, -O3);
+    /// DEVIATE PL6: whether a loop's first iteration is peeled where its entry
+    /// constants fold enough of it to pay the copy at the speed rate.
+    fn peels_folded_entry(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE REC-2: gcc's growth bar of the recursive edge at (-O2, -O3),
+    /// in `gcc_insns` of the callee;
     /// none: no bar.
     fn recursive_edge_growth(&self) -> Option<(i64, i64)> {
+        None
+    }
+
+    /// DEVIATE REC-2: what the copies of a recursive function in itself may add
+    /// at (-O2, -O3), in `gcc_insns`; none: the pass's own.
+    fn recursive_inlining_growth(&self) -> Option<(i64, i64)> {
         None
     }
 
@@ -526,10 +694,27 @@ pub trait Tti {
         None
     }
 
+    /// The `PartialThreshold` of the unroll-and-jam's outer loop (its tuning
+    /// table); none: `unroll_partial_threshold_override`'s.
+    fn unroll_jam_partial_threshold_override(&self) -> Option<u32> {
+        None
+    }
+
     /// The target's `-unswitch-threshold` (its tuning table); none: the pin's
     /// 50.
     fn unswitch_threshold_override(&self) -> Option<i64> {
         None
+    }
+
+    /// `isHardwareLoopProfitable`: whether the target counts loops in hardware
+    /// (`djnz`, `dbra`, `loop`), and how, in `info`. The hook sees no loop
+    /// yet: no target reads one (DEVIATE 3 of `hardwareloops`). Off by
+    /// default; the pass does not run for a target that says no.
+    fn is_hardware_loop_profitable(
+        &self,
+        _info: &mut HardwareLoopTarget,
+    ) -> bool {
+        false
     }
 
     /// `getUnrollingPreferences` given the loop's shape, which targets read
@@ -857,6 +1042,41 @@ pub trait Tti {
         false
     }
 
+    /// Beyond the pin (AArch64 and ARM step by any small immediate): whether a
+    /// post-increment access of `access_bytes` may step its pointer by `step`
+    /// bytes. m68k's `(An)+` steps by the access size and no other amount.
+    fn is_post_inc_step_legal(
+        &self,
+        _access_bytes: i64,
+        _step: i64,
+    ) -> bool {
+        true
+    }
+
+    /// Beyond the pin: whether a size build keeps a loop whose closed form
+    /// (`rewriteLoopExitValues`) costs more code than the loop, as the 16-bit
+    /// targets do. m68k's wide multiplies are library calls.
+    fn sizes_exit_values(&self) -> bool {
+        false
+    }
+
+    /// Beyond the pin: whether a function built for size turns a store or
+    /// copy loop into a `memset` or `memcpy` call (`LoopIdiomRecognize`). The
+    /// pin does; a target whose call setup and library routine are more bytes
+    /// than the loop (m68k: three pushes, `jsr`, `lea` against a four
+    /// instruction loop) says false.
+    fn memory_idioms_at_optsize(&self) -> bool {
+        true
+    }
+
+    /// Beyond the pin: whether a shift by a variable amount needs the count
+    /// in one fixed register (x86's `cl`), which costs a move and holds the
+    /// register. A size build then keeps `mul X, select(c, 8, 2)` rather than
+    /// the pin's `shl X, select(c, 3, 1)` (`visitMul`'s `tryGetLog2`).
+    fn variable_shift_count_in_fixed_register(&self) -> bool {
+        false
+    }
+
     /// Beyond the pin: whether a strict exit compare of a unit-stride counter
     /// that never passes its bound should become `!=` (`exitne`). Counting to
     /// zero and testing `!=` is cheap where a decrement sets the flags and one
@@ -865,6 +1085,17 @@ pub trait Tti {
     /// default; a target opts in where it measured a win.
     fn prefers_exit_ne(&self) -> bool {
         false
+    }
+
+    /// A target's value of the pin's `cl::opt` `SCEVCheapExpansionBudget`
+    /// (default 4), for a function built for size or not: the operations
+    /// `IndVarSimplify`'s test replacement may spend on a loop's exit limit.
+    /// [pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L41)
+    fn lftr_expansion_budget(
+        &self,
+        _optsize: bool,
+    ) -> u32 {
+        4
     }
 
     /// `isNumRegsMajorCostOfLSR`.
@@ -937,10 +1168,30 @@ pub trait Tti {
         8
     }
 
+    /// The values LICM may hold across a loop before it refuses a promotion
+    /// (DEVIATE LP1, `licm/pressure.rs` in llrm-transforms): the register count
+    /// by default; `None` where registers are not what a value is held in and
+    /// the pin promotes without a cap.
+    fn licm_register_limit(&self) -> Option<u32> {
+        Some(self.number_of_gpr_registers())
+    }
+
     /// The registers LSR keeps back from `number_of_gpr_registers` when it
     /// also counts what the loop keeps live (DEVIATE LU3c); the pin's one.
     fn lsr_reserved_registers(&self) -> u32 {
         1
+    }
+
+    /// `TCC_Basic` in this target's cost units for `kind` (DEVIATE TB1; the
+    /// pin's is the constant 1): the SCEV expansion budgets
+    /// (`isHighCostExpansion`, 4 of them) are counted in it. A target whose
+    /// costs are not about one per instruction (the Z80 prices in machine
+    /// cycles) says what a basic instruction costs.
+    fn tcc_basic(
+        &self,
+        _kind: CostKind,
+    ) -> Cost {
+        Cost::BASIC
     }
 
     /// DEVIATE LU12: whether the adds of a use whose fixups all lie after the
@@ -1088,6 +1339,16 @@ pub trait Tti {
             ty,
             Ty::Int(8 | 16 | 32) | Ty::Float | Ty::Double | Ty::Pointer
         )
+    }
+
+    /// `haveFastSqrt`: a legal `FSQRT` on `ty`
+    /// ([BasicTTIImpl.h:674](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L674)).
+    /// Default: none, for a target without an FPU or a sqrt instruction.
+    fn have_fast_sqrt(
+        &self,
+        _ty: Ty,
+    ) -> bool {
+        false
     }
 
     /// `shouldBuildLookupTables`: whether the target jumps through a table

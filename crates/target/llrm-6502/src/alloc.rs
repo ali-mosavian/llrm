@@ -11,7 +11,6 @@
 //! here; `select::function_text` falls back to the cell path. Exit: every
 //! opcode built.
 
-use llrm_support::hash::{HashMap, HashSet};
 use std::fmt::Write;
 
 use llrm_lir::registers::RegId;
@@ -21,6 +20,7 @@ use llrm_spike_mf::{
     Block, Inst, Jump, Kind, MFunction, Operand, Reg, Target, branch_fold, forward_reloads, machine_sink_in_place,
     remove_identity_copies, remove_redundant_copies_between, reschedule_kills,
 };
+use llrm_support::hash::{HashMap, HashSet};
 
 use crate::asm::{Asm, Inst as AsmInst, Line, Op as AsmOp};
 use crate::dagisel::generated::ids::opcode as op;
@@ -407,6 +407,9 @@ struct Builder {
     /// Pointers written as two bytes, packed into their pair after the
     /// instruction.
     packs: Vec<(Reg, Reg, Reg)>,
+    /// The half of a pointer cell a byte copy wrote, until the other half
+    /// arrives and the pair is packed (a pointer returned in a and x).
+    halves: HashMap<String, (bool, Reg)>,
     /// Cells defined once, by an immediate load: they fold into the user.
     constants: HashMap<String, i64>,
     /// Cells loaded once from a global and read once by an add, subtract or
@@ -415,6 +418,8 @@ struct Builder {
     block_of: HashMap<String, u32>,
     /// How many times each cell or register has been defined so far.
     versions: HashMap<String, u32>,
+    /// High halves of pointer cells written as plain bytes: the pair never sees them.
+    lost_halves: HashSet<String>,
     /// The compare whose flags the next branch reads, and the ones saved to
     /// cells for later.
     pending: Option<Compare>,
@@ -435,6 +440,10 @@ struct Compare {
     /// Over words, for Z only: the high bytes are compared when the low are
     /// equal.
     zero: bool,
+    /// The right side is this global in memory, read where the flags are made
+    /// (`cmp g; sbc g+1`); `b` names nothing. Kept only when no store, call
+    /// or saved flags lie between the compare and the end of its block.
+    memory: Option<String>,
 }
 
 impl Builder {
@@ -474,12 +483,37 @@ impl Builder {
         if !name.starts_with("v_") && !name.starts_with("w_") {
             return Err(Unsupported(format!("operand {name}")));
         }
+        if self.lost_halves.contains(name) {
+            return Err(Unsupported(format!("{name}, the high half of a pointer cell, is written as a byte")));
+        }
         if let Some(r) = self.bytes.get(name) {
             return Ok(*r);
+        }
+        // A half of a pointer cell lives in its pair: a read of it unpacks
+        // the pair. Without this the half was a byte nothing defined
+        // (strs -O2: "a unique value" in the coalescer).
+        let word = name.strip_suffix("+1").unwrap_or(name);
+        if self.pointers.contains(word) {
+            let (low, high) = self.read_word(word)?;
+            return Ok(if name.ends_with("+1") { high } else { low });
         }
         let r = self.fresh();
         self.bytes.insert(name.to_owned(), r);
         Ok(r)
+    }
+
+    /// Whether `name` is a word with a half known to be a constant: an ALU op
+    /// takes that half as an immediate, and a step by a constant is its own
+    /// form.
+    fn has_known_half(
+        &self,
+        name: &str,
+    ) -> bool {
+        let base = name.strip_suffix("+1").unwrap_or(name);
+        !self.pointers.contains(base)
+            && (self.constants.contains_key(base)
+                || self.constants.contains_key(&format!("{base}+1"))
+                || self.word_constant(base).is_some())
     }
 
     /// The two bytes of `name` when it is a word loaded once from an
@@ -510,6 +544,47 @@ impl Builder {
         unpack.early_clobber = true;
         self.push(unpack);
         Ok((low, high))
+    }
+
+    /// `d := s` for bytes, where either may be a half of a pointer cell: a
+    /// half read is unpacked from the pair, and the two halves written are
+    /// packed into it when the second arrives.
+    fn copy_byte(
+        &mut self,
+        d: &str,
+        s: &str,
+    ) -> Result<(), Unsupported> {
+        let half = |b: &Builder, n: &str| {
+            let word = n.strip_suffix("+1").unwrap_or(n);
+            b.pointers.contains(word).then(|| (word.to_owned(), n.ends_with("+1")))
+        };
+        let source = match half(self, s) {
+            Some((word, high)) => {
+                let (low, top) = self.read_word(&word)?;
+                if high { top } else { low }
+            }
+            None => self.byte(s)?,
+        };
+        let Some((word, high)) = half(self, d) else {
+            self.define(d);
+            let d = self.byte(d)?;
+            self.copy(d, source);
+            return Ok(());
+        };
+        let Some((other_high, other)) = self.halves.remove(&word) else {
+            self.halves.insert(word, (high, source));
+            return Ok(());
+        };
+        if other_high == high {
+            return Err(Unsupported(format!("half of {word} written twice")));
+        }
+        let (low, top) = if high { (other, source) } else { (source, other) };
+        self.define(&word);
+        let pair = self.pointer(&word)?;
+        let mut pack = Inst::new(Kind::Op("PACK"), vec![Operand::Def(pair), Operand::Use(low), Operand::Use(top)]);
+        pack.early_clobber = true;
+        self.push(pack);
+        Ok(())
     }
 
     /// The bytes to write a word through: a pointer cell gets two new bytes
@@ -605,6 +680,9 @@ impl Builder {
         name: &str,
     ) {
         *self.versions.entry(name.to_owned()).or_default() += 1;
+        if name.strip_suffix("+1").is_some_and(|word| self.pointers.contains(word)) {
+            self.lost_halves.insert(name.to_owned());
+        }
     }
 
     fn version(
@@ -670,6 +748,33 @@ impl Builder {
         }
     }
 
+    /// The pending compare, if its right side is a global, with that global
+    /// loaded into a cell now: what the compare reads from here on cannot
+    /// change under a later store or call.
+    fn load_compared_global(
+        &mut self,
+        at: usize,
+    ) -> Result<(), Unsupported> {
+        let Some(Compare { a, word, memory: Some(symbol), .. }) = self.pending.clone() else { return Ok(()) };
+        let cell = format!("{}___cmpm{at}", if word { "w" } else { "v" });
+        let acc = Reg::Phys(reg::A);
+        if word {
+            let (low, high) = self.write_word(&cell)?;
+            for (d, half) in [low, high].into_iter().zip([symbol.clone(), format!("{symbol}+1")]) {
+                self.push(Inst::new(Kind::Op("LDM"), vec![Operand::Def(acc), Operand::Symbol(half, 0)]));
+                self.copy(d, acc);
+            }
+        } else {
+            self.define(&cell);
+            let d = self.byte(&cell)?;
+            self.push(Inst::new(Kind::Op("LDM"), vec![Operand::Def(acc), Operand::Symbol(symbol, 0)]));
+            self.copy(d, acc);
+        }
+        let version = self.version(&cell);
+        self.pending = Some(Compare { a, b: (cell, version), word, zero: false, memory: None });
+        Ok(())
+    }
+
     /// `COPY a, lhs; CMP a, rhs` again, as the flags' producer: the operands
     /// must hold what they held at the first compare.
     ///
@@ -681,9 +786,9 @@ impl Builder {
         code: i64,
         branch: bool,
     ) -> Result<(), Unsupported> {
-        let Compare { a, b, word, zero } =
+        let Compare { a, b, word, zero, memory } =
             self.pending.clone().ok_or_else(|| Unsupported("flags with no compare".into()))?;
-        if self.version(&a.0) != a.1 || self.version(&b.0) != b.1 {
+        if self.version(&a.0) != a.1 || memory.is_none() && self.version(&b.0) != b.1 {
             return Err(Unsupported("a compare's operand changed before its branch".into()));
         }
         let acc = Reg::Phys(reg::A);
@@ -737,9 +842,10 @@ impl Builder {
         }
         let (lhs, rhs) = if word {
             let (al, ah) = self.read_word(&a.0)?;
-            let rhs = match self.word_constant(&b.0) {
-                Some(bytes) => bytes.map(Operand::Imm),
-                None => {
+            let rhs = match (&memory, self.word_constant(&b.0)) {
+                (Some(symbol), _) => [Operand::Symbol(symbol.clone(), 0), Operand::Symbol(format!("{symbol}+1"), 0)],
+                (None, Some(bytes)) => bytes.map(Operand::Imm),
+                (None, None) => {
                     let (bl, bh) = self.read_word(&b.0)?;
                     for r in [bl, bh] {
                         self.require(r, Class::MEM)?;
@@ -750,9 +856,10 @@ impl Builder {
             ([al, ah], rhs)
         } else {
             let lhs = self.byte(&a.0)?;
-            let rhs = match self.constants.get(&b.0) {
-                Some(value) => Operand::Imm(*value & 0xFF),
-                None => {
+            let rhs = match (&memory, self.constants.get(&b.0)) {
+                (Some(symbol), _) => Operand::Symbol(symbol.clone(), 0),
+                (None, Some(value)) => Operand::Imm(*value & 0xFF),
+                (None, None) => {
                     let r = self.byte(&b.0)?;
                     self.require(r, Class::MEM)?;
                     Operand::Use(r)
@@ -895,11 +1002,40 @@ impl Builder {
             self.copy(d, a);
             return Ok(());
         }
+        if is_zeroing(mnemonic, &second) {
+            self.push(Inst::new(Kind::Op("LDI"), vec![Operand::Def(d), Operand::Imm(0)]));
+            return Ok(());
+        }
         if let Some(carry) = carry {
             self.push(Inst::new(Kind::Op(carry), vec![]));
         }
         self.copy(acc, a);
         self.push(Inst::new(Kind::Op(mnemonic), vec![Operand::Def(acc), Operand::Use(acc), second]));
+        self.copy(d, acc);
+        Ok(())
+    }
+
+    /// `d := a op g[i]` for a global indexed by a byte: x takes the index, the
+    /// op reads `g,x`.
+    fn alu_indexed(
+        &mut self,
+        mnemonic: &'static str,
+        carry: Option<&'static str>,
+        d: &str,
+        a: &str,
+        symbol: String,
+        index: &str,
+    ) -> Result<(), Unsupported> {
+        let (acc, x) = (Reg::Phys(reg::A), Reg::Phys(reg::X));
+        self.define(d);
+        let (d, a, index) = (self.byte(d)?, self.byte(a)?, self.byte(index)?);
+        self.copy(x, index);
+        if let Some(carry) = carry {
+            self.push(Inst::new(Kind::Op(carry), vec![]));
+        }
+        self.copy(acc, a);
+        let second = Operand::Symbol(format!("{symbol},x"), 0);
+        self.push(Inst::new(Kind::Op(mnemonic), vec![Operand::Def(acc), Operand::Use(acc), second, Operand::Use(x)]));
         self.copy(d, acc);
         Ok(())
     }
@@ -919,6 +1055,68 @@ impl Builder {
             .iter()
             .filter(|cell| self.constants.get(*cell).is_some_and(|v| is_identity(mnemonic, &Operand::Imm(*v & 0xFF))))
             .count()
+    }
+
+    /// `d := a - 1` or `a + 1` on a word: the low byte steps, the high only
+    /// when the low wrapped (`lda lo; bne; dec hi; dec lo`, 11 clocks against
+    /// 22 for the carry chain; `inc lo; bne; inc hi`; a byte in x or y steps
+    /// by inx/iny/dex/dey). Not for a pointer, which has its own pair bump.
+    fn word_step(
+        &mut self,
+        mnemonic: &str,
+        d: &str,
+        a: &str,
+        b: &str,
+    ) -> Result<bool, Unsupported> {
+        let up = match (mnemonic, self.word_constant(b)) {
+            ("ADC", Some([1, 0])) => true,
+            ("ADC", Some([255, 255])) | ("SBC", Some([1, 0])) => false,
+            _ => return Ok(false),
+        };
+        if self.in_pair(d) || self.in_pair(a) {
+            return Ok(false);
+        }
+        let (al, ah) = self.read_word(a)?;
+        let (dl, dh) = self.write_word(d)?;
+        self.copy(dl, al);
+        self.copy(dh, ah);
+        // `inc` has no accumulator form on the 6502 (`dec` loads through it)
+        if up {
+            for r in [dl, dh] {
+                self.require(r, Class(Class::X | Class::Y | Class::M))?;
+            }
+        }
+        let mut operands = vec![Operand::Def(dl), Operand::Def(dh), Operand::Use(dl), Operand::Use(dh)];
+        if !up {
+            operands.push(Operand::Def(Reg::Phys(reg::A)));
+        }
+        self.push(Inst::new(Kind::Op(if up { "INC16" } else { "DEC16" }), operands));
+        Ok(true)
+    }
+
+    /// `d := a op g` for a word global: the op reads `g` for the low byte and
+    /// `g+1` for the high, as a memory operand.
+    fn alu16_mem(
+        &mut self,
+        mnemonic: &'static str,
+        carry: Option<&'static str>,
+        d: &str,
+        a: &str,
+        symbol: String,
+    ) -> Result<(), Unsupported> {
+        let (al, ah) = self.read_word(a)?;
+        let second = [Operand::Symbol(symbol.clone(), 0), Operand::Symbol(format!("{symbol}+1"), 0)];
+        let (dl, dh) = self.write_word(d)?;
+        let acc = Reg::Phys(reg::A);
+        if let Some(carry) = carry {
+            self.push(Inst::new(Kind::Op(carry), vec![]));
+        }
+        for ((d, a), b) in [(dl, al), (dh, ah)].into_iter().zip(second) {
+            self.copy(acc, a);
+            self.push(Inst::new(Kind::Op(mnemonic), vec![Operand::Def(acc), Operand::Use(acc), b]));
+            self.copy(d, acc);
+        }
+        Ok(())
     }
 
     /// The same on a pair, the carry running from the low byte to the high.
@@ -945,6 +1143,26 @@ impl Builder {
                 operands.push(Operand::Def(Reg::Phys(reg::A)));
             }
             let mut bump = Inst::new(Kind::Op("PADD"), operands);
+            bump.ties = vec![(0, 1)];
+            self.push(bump);
+            return Ok(());
+        }
+        // a pointer minus a small constant: the low byte steps down, the high
+        // on borrow
+        if self.in_pair(d)
+            && self.in_pair(a)
+            && let Some(n) = match (mnemonic, self.word_constant(b)) {
+                ("ADC", Some([lo, 255])) if lo > 0 => Some(256 - lo),
+                ("SBC", Some([n, 0])) if n > 0 => Some(n),
+                _ => None,
+            }
+        {
+            let source = self.pointer(a)?;
+            self.define(d);
+            let dest = self.pointer(d)?;
+            let operands =
+                vec![Operand::Def(dest), Operand::Use(source), Operand::Imm(n), Operand::Def(Reg::Phys(reg::A))];
+            let mut bump = Inst::new(Kind::Op("PSUB"), operands);
             bump.ties = vec![(0, 1)];
             self.push(bump);
             return Ok(());
@@ -1011,6 +1229,10 @@ impl Builder {
                 self.copy(d, a);
                 continue;
             }
+            if is_zeroing(mnemonic, &b) {
+                self.push(Inst::new(Kind::Op("LDI"), vec![Operand::Def(d), Operand::Imm(0)]));
+                continue;
+            }
             if half == 1 && low_kept && b == Operand::Imm(1) {
                 self.copy(d, a);
                 self.push(Inst::new(
@@ -1031,6 +1253,45 @@ impl Builder {
     }
 }
 
+/// Whether the global a compare reads is the same wherever its flags are
+/// read: no store, call or raw text lies between it and the end of its block,
+/// and every flags cell it is saved to is loaded back inside that stretch. The
+/// flags are made again where they are read, so the read must still see the
+/// value the compare saw.
+fn memory_holds_until_flags_are_read(
+    items: &[Item],
+    compare: usize,
+) -> bool {
+    let end = items[compare + 1..]
+        .iter()
+        .position(|item| matches!(item, Item::Label(_)))
+        .map_or(items.len(), |at| compare + 1 + at);
+    let mut saved = Vec::new();
+    for item in &items[compare + 1..end] {
+        let Item::Inst(inst) = item else { return false };
+        let opcode = inst.opcode;
+        if opcode == spill::SAVE_FLAGS {
+            saved.extend(inst.operands.first());
+            continue;
+        }
+        let (_, stores) = crate::dagisel::generated::instrinfo::memory_flags(opcode);
+        if stores || matches!(opcode, op::JSR | op::JSRI | op::STZABS) {
+            return false;
+        }
+    }
+    items
+        .iter()
+        .enumerate()
+        .all(
+            |(at, item)| match item {
+                Item::Inst(inst) if inst.opcode == spill::LOAD_FLAGS => {
+                    !inst.operands.first().is_some_and(|cell| saved.contains(&cell)) || compare < at && at < end
+                }
+                _ => true,
+            },
+        )
+}
+
 /// A logical op whose immediate leaves the byte as it was: `x ^ 0`, `x | 0`, `x
 /// & 255`.
 fn is_identity(
@@ -1041,6 +1302,15 @@ fn is_identity(
         (mnemonic, second),
         ("EOR" | "ORA", Operand::Imm(0)) | ("AND", Operand::Imm(255))
     )
+}
+
+/// A logical op whose immediate makes the byte zero whatever it was: `x & 0`
+/// (the high half of a zero-extended byte masked by 255 was `lda #0; and #0`).
+fn is_zeroing(
+    mnemonic: &str,
+    second: &Operand,
+) -> bool {
+    matches!((mnemonic, second), ("AND", Operand::Imm(0)))
 }
 
 fn name(operand: &Machine) -> Result<&str, Unsupported> {
@@ -1060,9 +1330,10 @@ fn immediate(operand: &Machine) -> Result<i64, Unsupported> {
 /// The word cells that are a pointer somewhere: the base of a `(zp),y`
 /// access, or the address of a frame object.
 ///
-/// A pointer stays one through a copy and through an add of a constant 1..=255
-/// (`p++`, `p += k`), in both directions, so a pointer walked round a loop is
-/// bumped in its pair instead of unpacked, added and packed every trip.
+/// A pointer stays one through a copy and through an add of a constant
+/// 1..=255 or -1..=-255 (`p++`, `p += k`, `--p`), in both directions, so a
+/// pointer walked round a loop is bumped in its pair instead of unpacked, added
+/// and packed every trip.
 ///
 /// DEVIATE (6502-7): pointer-ness is worked out from how the cells are used,
 /// and an add of a constant is found by following the cell that holds it; the
@@ -1077,7 +1348,10 @@ fn pointer_cells(
     let constant = |cell: &String| {
         let low = constants.get(cell).copied();
         let high = constants.get(&format!("{cell}+1")).copied();
-        matches!((low, high), (Some(1..=255), Some(0)) | (Some(0), Some(1)))
+        matches!(
+            (low, high),
+            (Some(1..=255), Some(0 | 255)) | (Some(0), Some(1))
+        )
     };
     // a cell read or written as plain bytes anywhere stays a word cell
     let mut plain: HashSet<String> = HashSet::default();
@@ -1088,7 +1362,7 @@ fn pointer_cells(
             let word = cell.strip_suffix("+1").unwrap_or(cell);
             let pointer_use = cell == word
                 && match *opcode {
-                    op::COPY16 => true,
+                    op::COPY16 | op::CMP16 | op::CMPZ16 => true,
                     op::ADD16 => matches!(&operands[2], Machine::Reg(b) if constant(b)),
                     op::LDP8 | op::LDP16 | op::STP8 | op::STP16 | op::LDPI8 | op::STPI8 | op::LDPZ | op::STPZ => {
                         at == 1
@@ -1175,6 +1449,18 @@ fn constants(items: &[Item]) -> HashMap<String, i64> {
         let word = cell.strip_suffix("+1").unwrap_or(cell);
         defs[cell] == 1 && defs[word] == 1 && (cell.starts_with("v_") || cell.starts_with("w_"))
     });
+    // a word masked by a word whose high byte is zero has a zero high byte (the
+    // mask 255 that zero-extends an any-extended byte)
+    for item in items {
+        let Item::Inst(MInst { opcode: op::AND16, operands, .. }) = item else { continue };
+        if let [Machine::Reg(d), _, Machine::Reg(mask)] = &operands[..]
+            && defs[d] == 1
+            && (d.starts_with("v_") || d.starts_with("w_"))
+            && values.get(&format!("{mask}+1")) == Some(&0)
+        {
+            values.insert(format!("{d}+1"), 0);
+        }
+    }
     // a byte copied once from a constant is that constant (the zero high half
     // of a widened byte)
     for item in items {
@@ -1205,14 +1491,16 @@ pub fn build_with_places(
     items: &[Item],
     places: Vec<llrm_codegen::model::lir::SrcLoc>,
 ) -> Result<(MFunction<Class>, Vec<Vec<String>>), Unsupported> {
-    // A block starts at a label that follows an instruction (or the first).
+    // A block starts at a label that follows an instruction (or the first). The
+    // entry block stays apart from a loop header that follows it directly: the
+    // entry has no predecessors.
     let mut labels: Vec<Vec<String>> = vec![Vec::new()];
     let mut block_of = HashMap::default();
     let mut after_inst = false;
     for item in items {
         match item {
             Item::Label(l) => {
-                if after_inst {
+                if after_inst || labels.len() == 1 && !labels[0].is_empty() {
                     labels.push(Vec::new());
                     after_inst = false;
                 }
@@ -1228,9 +1516,11 @@ pub fn build_with_places(
         bytes: HashMap::default(),
         pointers: pointer_cells(items, &constants(items)),
         packs: Vec::new(),
+        halves: HashMap::default(),
         constants: constants(items),
         block_of,
         versions: HashMap::default(),
+        lost_halves: HashSet::default(),
         pending: None,
         saved: HashMap::default(),
         current: 0,
@@ -1239,14 +1529,16 @@ pub fn build_with_places(
         b.function.blocks.push(Block { id: id as u32, ..Block::default() });
     }
     let mut after_inst = false;
-    for item in items {
+    let mut entry_labeled = false;
+    for (at, item) in items.iter().enumerate() {
         let inst = match item {
             Item::Label(_) => {
-                if after_inst {
+                if after_inst || b.current == 0 && entry_labeled {
                     b.current += 1;
                     after_inst = false;
                     b.pending = None;
                 }
+                entry_labeled = true;
                 continue;
             }
             // the flags are not kept across the phi copies: a compare is redone
@@ -1259,11 +1551,7 @@ pub fn build_with_places(
         after_inst = true;
         let o = &inst.operands;
         match inst.opcode {
-            op::COPY8 => {
-                b.define(name(&o[0])?);
-                let (d, s) = (b.byte(name(&o[0])?)?, b.byte(name(&o[1])?)?);
-                b.copy(d, s);
-            }
+            op::COPY8 => b.copy_byte(name(&o[0])?, name(&o[1])?)?,
             op::COPY16 => {
                 let (d, src) = (name(&o[0])?, name(&o[1])?);
                 if b.in_pair(d) && b.in_pair(src) {
@@ -1308,6 +1596,17 @@ pub fn build_with_places(
                 let symbol = address(&o[2], &o[3]).map_err(Unsupported)?;
                 b.alu_with(mnemonic, carry, name(&o[0])?, name(&o[1])?, Operand::Symbol(symbol, 0))?
             }
+            op::ADD8MX | op::SUB8MX | op::AND8MX | op::OR8MX | op::XOR8MX => {
+                let (mnemonic, carry) = match inst.opcode {
+                    op::ADD8MX => ("ADC", Some("CLC")),
+                    op::SUB8MX => ("SBC", Some("SEC")),
+                    op::AND8MX => ("AND", None),
+                    op::OR8MX => ("ORA", None),
+                    _ => ("EOR", None),
+                };
+                let symbol = indexed_address(&o[2], &o[3]).map_err(Unsupported)?;
+                b.alu_indexed(mnemonic, carry, name(&o[0])?, name(&o[1])?, symbol, name(&o[4])?)?
+            }
             op::SUB8 => b.alu("SBC", Some("SEC"), name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             // one register read and written: `d := a`, then `d` in place
             op::INC8 | op::DEC8 => {
@@ -1320,11 +1619,54 @@ pub fn build_with_places(
             op::AND8 => b.alu("AND", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             op::OR8 => b.alu("ORA", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             op::XOR8 => b.alu("EOR", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
-            op::ADD16 => b.alu16("ADC", Some("CLC"), name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
-            op::SUB16 => b.alu16("SBC", Some("SEC"), name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
+            op::ADD16 => {
+                let (d, a, c) = (name(&o[0])?, name(&o[1])?, name(&o[2])?);
+                if !b.word_step("ADC", d, a, c)? {
+                    b.alu16("ADC", Some("CLC"), d, a, c)?
+                }
+            }
+            op::SUB16 => {
+                let (d, a, c) = (name(&o[0])?, name(&o[1])?, name(&o[2])?);
+                if !b.word_step("SBC", d, a, c)? {
+                    b.alu16("SBC", Some("SEC"), d, a, c)?
+                }
+            }
             op::AND16 => b.alu16("AND", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             op::OR16 => b.alu16("ORA", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             op::XOR16 => b.alu16("EOR", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
+            op::ADD16M | op::SUB16M | op::AND16M | op::OR16M | op::XOR16M => {
+                let (mnemonic, carry) = match inst.opcode {
+                    op::ADD16M => ("ADC", Some("CLC")),
+                    op::SUB16M => ("SBC", Some("SEC")),
+                    op::AND16M => ("AND", None),
+                    op::OR16M => ("ORA", None),
+                    _ => ("EOR", None),
+                };
+                let symbol = address(&o[2], &o[3]).map_err(Unsupported)?;
+                let (d, a) = (name(&o[0])?, name(&o[1])?);
+                if !b.has_known_half(a) {
+                    b.alu16_mem(mnemonic, carry, d, a, symbol)?
+                } else {
+                    // a constant half on the left has its own forms (`n - 1`
+                    // borrows by branch, a mask keeps the
+                    // halves it leaves): the global
+                    // is loaded into a cell and the ordinary word op runs
+                    let cell = format!("w___m{at}");
+                    let acc = Reg::Phys(reg::A);
+                    let (low, high) = b.write_word(&cell)?;
+                    for (r, half) in [low, high].into_iter().zip([symbol.clone(), format!("{symbol}+1")]) {
+                        b.push(Inst::new(Kind::Op("LDM"), vec![Operand::Def(acc), Operand::Symbol(half, 0)]));
+                        b.copy(r, acc);
+                    }
+                    // the loaded cell is the left operand, as the ordinary form
+                    // has it, except in a subtraction,
+                    // where the load was the right one
+                    let (left, right) = if inst.opcode == op::SUB16M { (a, cell.as_str()) } else { (cell.as_str(), a) };
+                    if !matches!(inst.opcode, op::ADD16M | op::SUB16M) || !b.word_step(mnemonic, d, left, right)? {
+                        b.alu16(mnemonic, carry, d, left, right)?
+                    }
+                }
+            }
             op::SHL8 | op::SRL8 | op::SRA8 => {
                 let step = match inst.opcode {
                     op::SHL8 => "ASL",
@@ -1354,6 +1696,25 @@ pub fn build_with_places(
                     let value = b.byte(name(&o[0])?)?;
                     b.copy(acc, value);
                     b.push(Inst::new(Kind::Op("STM"), vec![Operand::Use(acc), Operand::Symbol(symbol, 0)]));
+                }
+            }
+            // a word global: its two halves, g and g+1
+            op::LDABS16 | op::STABS16 => {
+                let symbol = address(&o[1], &o[2]).map_err(Unsupported)?;
+                let acc = Reg::Phys(reg::A);
+                let halves = [symbol.clone(), format!("{symbol}+1")];
+                if inst.opcode == op::LDABS16 {
+                    let (low, high) = b.write_word(name(&o[0])?)?;
+                    for (d, half) in [low, high].into_iter().zip(halves) {
+                        b.push(Inst::new(Kind::Op("LDM"), vec![Operand::Def(acc), Operand::Symbol(half, 0)]));
+                        b.copy(d, acc);
+                    }
+                } else {
+                    let (low, high) = b.read_word(name(&o[0])?)?;
+                    for (value, half) in [low, high].into_iter().zip(halves) {
+                        b.copy(acc, value);
+                        b.push(Inst::new(Kind::Op("STM"), vec![Operand::Use(acc), Operand::Symbol(half, 0)]));
+                    }
                 }
             }
             op::LDAX | op::STAX => {
@@ -1386,7 +1747,24 @@ pub fn build_with_places(
                     b: (c.to_owned(), b.version(c)),
                     word: false,
                     zero: false,
+                    memory: None,
                 });
+            }
+            // a global on the right of a compare: read at the compare, kept
+            // as a memory operand only while it cannot change before the
+            // flags are last read
+            op::CMP8M | op::CMP16M => {
+                let (a, symbol) = (name(&o[1])?, address(&o[2], &o[3]).map_err(Unsupported)?);
+                b.pending = Some(Compare {
+                    a: (a.to_owned(), b.version(a)),
+                    b: (String::new(), 0),
+                    word: inst.opcode == op::CMP16M,
+                    zero: false,
+                    memory: Some(symbol),
+                });
+                if !memory_holds_until_flags_are_read(items, at) {
+                    b.load_compared_global(at)?;
+                }
             }
             op::CMPZ16 => {
                 let (a, c) = (name(&o[1])?, name(&o[2])?);
@@ -1395,6 +1773,7 @@ pub fn build_with_places(
                     b: (c.to_owned(), b.version(c)),
                     word: true,
                     zero: true,
+                    memory: None,
                 });
             }
             // the carry out of the first goes into the next: the instructions
@@ -1407,6 +1786,12 @@ pub fn build_with_places(
             op::SUBO16 => b.alu16("SBC", Some("SEC"), name(&o[0])?, name(&o[2])?, name(&o[3])?)?,
             op::ADDOC16 => b.alu16("ADC", None, name(&o[0])?, name(&o[2])?, name(&o[3])?)?,
             op::SUBOC16 => b.alu16("SBC", None, name(&o[0])?, name(&o[2])?, name(&o[3])?)?,
+            code if code == spill::UNREACHABLE => {
+                let mut end = Inst::new(Kind::Op("UNREACHABLE"), Vec::new());
+                end.terminator = true;
+                end.barrier = true;
+                b.push(end);
+            }
             // C into a byte and back: `lda #0; rol a` and `lsr a`
             code if code == spill::SAVE_CARRY => {
                 b.define(name(&o[0])?);
@@ -1555,6 +1940,7 @@ pub fn build_with_places(
                     b: (c.to_owned(), b.version(c)),
                     word: true,
                     zero: false,
+                    memory: None,
                 });
             }
             spill_op if spill_op == spill::SAVE_FLAGS => {
@@ -1865,6 +2251,9 @@ pub fn build_with_places(
         }
         b.flush_packs();
     }
+    if let Some(word) = b.halves.keys().next() {
+        return Err(Unsupported(format!("one half of {word} written alone")));
+    }
     remove_dead(&mut b.function);
     narrow_remainder_calls(&mut b.function);
     b.function.place_unlocated();
@@ -1947,6 +2336,88 @@ fn narrow_remainder_calls(function: &mut MFunction<Class>) {
             for (i, from) in results {
                 let narrowed = if from == rc(6) { reg::A } else { reg::X };
                 block.insts[i].operands[1] = Operand::Use(Reg::Phys(narrowed));
+            }
+        }
+    }
+}
+
+/// At size, a call of a runtime routine that has a compact variant calls it
+/// (`routines.toml`'s `[compact]`).
+fn call_compact_routines(function: &mut MFunction<Class>) {
+    for inst in function.blocks.iter_mut().flat_map(|block| &mut block.insts) {
+        if inst.kind != Kind::Op("JSR") {
+            continue;
+        }
+        if let Some(Operand::Symbol(name, _)) = inst.operands.first_mut()
+            && let Some(compact) = crate::routines::compact_variant(name)
+        {
+            *name = compact.to_owned();
+        }
+    }
+}
+
+/// A carry made into a byte and read back with only moves and loads between
+/// (`SAVEC; copy; ..; copy; LOADC`) stays in C: the 32-bit add paid
+/// `lda #0; rol a; lsr a` between its two halves. A byte nothing reads goes
+/// too.
+///
+/// Every producer of a carry saves it and every consumer loads it, so that
+/// nothing the scheduler or allocator puts between the two can lose it; the
+/// moves and loads here do not touch C.
+fn keep_carry_in_c(function: &mut MFunction<Class>) {
+    let mut reads: HashMap<u32, usize> = HashMap::default();
+    for operand in function.blocks.iter().flat_map(|b| &b.insts).flat_map(|i| &i.operands) {
+        if let Operand::Use(Reg::Virt(v)) = operand {
+            *reads.entry(*v).or_default() += 1;
+        }
+    }
+    let acc = Reg::Phys(reg::A);
+    let saved = |insts: &[Inst], at: usize| match (insts.get(at).map(|i| i.kind), insts.get(at + 1)) {
+        (Some(Kind::Op("SAVEC")), Some(next)) => match (next.kind, &next.operands[..]) {
+            (Kind::Copy, [Operand::Def(Reg::Virt(v)), Operand::Use(from)]) if *from == acc => Some(*v),
+            _ => None,
+        },
+        _ => None,
+    };
+    let moves = |inst: &Inst| matches!(inst.kind, Kind::Copy | Kind::Op("LDM" | "LDI" | "STM"));
+    for block in &mut function.blocks {
+        let mut at = 0;
+        while at < block.insts.len() {
+            let Some(cell) = saved(&block.insts, at) else {
+                // the byte was dropped as unread: the save is a write of A that
+                // the next load overwrites
+                let overwritten = block
+                    .insts
+                    .get(at + 1)
+                    .is_some_and(
+                        |next| matches!(
+                            (next.kind, &next.operands[..]),
+                            (Kind::Copy, [Operand::Def(to), Operand::Use(from)]) if *to == acc && *from != acc
+                        ),
+                    );
+                if block.insts[at].kind == Kind::Op("SAVEC") && overwritten {
+                    block.insts.remove(at);
+                } else {
+                    at += 1;
+                }
+                continue;
+            };
+            let count = reads.get(&cell).copied().unwrap_or(0);
+            let load = (at + 2..block.insts.len().saturating_sub(1)).find(|&j| {
+                matches!(
+                    (block.insts[j].kind, &block.insts[j].operands[..]),
+                    (Kind::Copy, [Operand::Def(to), Operand::Use(Reg::Virt(v))]) if *to == acc && *v == cell
+                ) && block.insts[j + 1].kind == Kind::Op("LOADC")
+            });
+            match (count, load) {
+                (0, _) => {
+                    block.insts.drain(at..at + 2);
+                }
+                (1, Some(j)) if block.insts[at + 2..j].iter().all(moves) => {
+                    block.insts.drain(j..j + 2);
+                    block.insts.drain(at..at + 2);
+                }
+                _ => at += 1,
             }
         }
     }
@@ -2497,6 +2968,10 @@ fn emit_with<const STACK: bool>(
     // an instruction goes to the one path that reads it; a bump of a pointer is
     // then done in place, and the read of the old pointer that follows it
     // goes first
+    if TUNING.with(|t| t.get()) == Tuning::SIZE {
+        call_compact_routines(&mut function);
+    }
+    keep_carry_in_c(&mut function);
     let sunk = sink && machine_sink_in_place::<Mos<STACK>>(&mut function);
     let shared = share && crate::sharecmp::share_compares(&mut function);
     reschedule_kills::<Mos<STACK>>(&mut function);
@@ -2635,6 +3110,53 @@ fn emit_with<const STACK: bool>(
                         .unwrap();
                     }
                 }
+                // d := d + 1 on two cells: the high byte steps when the low
+                // wrapped
+                (Kind::Op("INC16"), _) => {
+                    made += 1;
+                    let step = |r| match r {
+                        reg::X => "inx".to_owned(),
+                        reg::Y => "iny".to_owned(),
+                        cell => format!("inc {}", register_name(cell)),
+                    };
+                    let (low, high) = (step(regs[0]), step(regs[1]));
+                    writeln!(out, "  {low}\n  bne _pa{made}\n  {high}\n_pa{made}:").unwrap();
+                }
+                // d := d - 1 on two cells: the high byte steps when the low was
+                // 0
+                (Kind::Op("DEC16"), _) => {
+                    made += 1;
+                    // a byte in x or y is read through a and stepped by dex/dey
+                    let read = |r| match r {
+                        reg::X => "txa".to_owned(),
+                        reg::Y => "tya".to_owned(),
+                        cell => format!("lda {}", register_name(cell)),
+                    };
+                    let step = |r| match r {
+                        reg::X => "dex".to_owned(),
+                        reg::Y => "dey".to_owned(),
+                        cell => format!("dec {}", register_name(cell)),
+                    };
+                    let (load, low, high) = (read(regs[0]), step(regs[0]), step(regs[1]));
+                    writeln!(out, "  {load}\n  bne _pa{made}\n  {high}\n_pa{made}:\n  {low}").unwrap();
+                }
+                // d := s - k on a pair: the low byte stepped down, the high on
+                // borrow
+                (Kind::Op("PSUB"), [_, _, Operand::Imm(k), ..]) => {
+                    let (d, s) = (regs[0], regs[1]);
+                    parallel_move(&mut out, &[(lane(d, 0), lane(s, 0)), (lane(d, 1), lane(s, 1))], false);
+                    made += 1;
+                    let (low, high) = (register_name(lane(d, 0)), register_name(lane(d, 1)));
+                    if *k == 1 {
+                        writeln!(out, "  lda {low}\n  bne _pa{made}\n  dec {high}\n_pa{made}:\n  dec {low}").unwrap();
+                    } else {
+                        writeln!(
+                            out,
+                            "  sec\n  lda {low}\n  sbc #{k}\n  sta {low}\n  bcs _pa{made}\n  dec {high}\n_pa{made}:"
+                        )
+                        .unwrap();
+                    }
+                }
                 (Kind::Op("PINCH"), _) => {
                     let (d, s) = (regs[0], regs[1]);
                     parallel_move(&mut out, &[(lane(d, 0), lane(s, 0)), (lane(d, 1), lane(s, 1))], a_live);
@@ -2688,8 +3210,10 @@ fn emit_with<const STACK: bool>(
                     let jump = tail_call(block, i, pending);
                     // the speed variants of the variable long shifts move whole
                     // bytes first: 45 bytes more each, linked once, for 200
-                    // clocks fewer per 8 bits
-                    let fast = matches!(callee.as_str(), "__ashlsi3" | "__lshrsi3" | "__ashrsi3")
+                    // clocks fewer per 8 bits; the multiply stops at the last
+                    // set byte of its multiplier: 19 bytes more, a third of the
+                    // clocks for a byte
+                    let fast = matches!(callee.as_str(), "__ashlsi3" | "__lshrsi3" | "__ashrsi3" | "__mulsi3")
                         && TUNING.with(|t| t.get()).clocks_per_byte <= 1;
                     writeln!(out, "  {} {callee}{}", if jump { "jmp" } else { "jsr" }, if fast { "_fast" } else { "" })
                         .unwrap()
@@ -2798,6 +3322,7 @@ fn emit_with<const STACK: bool>(
                 (Kind::Op("INC" | "DEC"), _) => {
                     out.push_str(&form_text(inst.kind, &inst.operands, &regs, cmos, &slot_name).unwrap())
                 }
+                (Kind::Op("UNREACHABLE"), _) => {}
                 (Kind::Op("CLC"), _) => out.push_str("  clc\n"),
                 (Kind::Op("SEC"), _) => out.push_str("  sec\n"),
                 (Kind::Op("ADC" | "SBC" | "AND" | "ORA" | "EOR"), [_, _, _, ..]) => {
@@ -2828,9 +3353,20 @@ fn emit_with<const STACK: bool>(
                 (Kind::Op("LEA"), [_, _, _, Operand::Imm(n)]) => {
                     let n = i64::from(*n as u16);
                     let n = if n >= old { n + spilled } else { n };
-                    writeln!(out, "  clc\n  lda rc0\n  adc #{}", n & 0xFF).unwrap();
-                    move_byte(&mut out, regs[0], reg::A, false, None);
-                    writeln!(out, "  lda rc1\n  adc #{}", (n >> 8) & 0xFF).unwrap();
+                    // a low byte of 0 adds nothing and carries nothing
+                    if n & 0xFF == 0 {
+                        writeln!(out, "  lda rc0").unwrap();
+                        move_byte(&mut out, regs[0], reg::A, false, None);
+                        if n >> 8 == 0 {
+                            writeln!(out, "  lda rc1").unwrap();
+                        } else {
+                            writeln!(out, "  clc\n  lda rc1\n  adc #{}", (n >> 8) & 0xFF).unwrap();
+                        }
+                    } else {
+                        writeln!(out, "  clc\n  lda rc0\n  adc #{}", n & 0xFF).unwrap();
+                        move_byte(&mut out, regs[0], reg::A, false, None);
+                        writeln!(out, "  lda rc1\n  adc #{}", (n >> 8) & 0xFF).unwrap();
+                    }
                     move_byte(&mut out, regs[1], reg::A, false, None);
                 }
                 // against zero, a load or an ALU result has already set the
@@ -3035,8 +3571,28 @@ fn emit_with<const STACK: bool>(
     }
     let slots: Vec<(String, usize)> =
         if STACK { Vec::new() } else { slots.iter().map(|(slot, class)| (slot_name(*slot), size_of(class))).collect() };
+    let returns_a = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .filter(|inst| inst.kind == Kind::Op("RTS"))
+        .flat_map(|inst| &inst.operands)
+        .any(|operand| matches!(operand, Operand::Use(Reg::Phys(r)) if *r == reg::A));
+    // `jsr callee` reads `a` when the call lists it among the arguments
+    let mut a_callees = std::collections::BTreeSet::new();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts).filter(|inst| inst.kind == Kind::Op("JSR")) {
+        if let [Operand::Symbol(callee, _), arguments @ ..] = &inst.operands[..]
+            && arguments.iter().any(|operand| matches!(operand, Operand::Use(Reg::Phys(r)) if *r == reg::A))
+        {
+            a_callees.insert(callee.clone());
+            a_callees.insert(format!("{callee}_fast"));
+        }
+    }
     Ok((
-        own_labels(&finish(out, source.map(|(file, scope)| (file, scope, &function.places[..]))), &function.name),
+        own_labels(
+            &finish(out, source.map(|(file, scope)| (file, scope, &function.places[..])), !returns_a, a_callees),
+            &function.name,
+        ),
         slots,
         sunk,
         shared,
@@ -3084,7 +3640,11 @@ fn own_labels(
 fn finish(
     mut code: Asm,
     lines_of: Option<(&str, Option<u32>, &[llrm_codegen::model::lir::SrcLoc])>,
+    no_a_result: bool,
+    a_callees: std::collections::BTreeSet<String>,
 ) -> String {
+    code.no_a_result = no_a_result;
+    code.a_callees = a_callees;
     crate::peephole::run(&mut code);
     crate::relax::relax(&mut code);
     if let Some((file, scope, places)) = lines_of {

@@ -33,6 +33,8 @@ def GR8 : RegisterClass<"Z80", [i8], 8, (add A, B, C, D, E, H, L)>;
 def ACC : RegisterClass<"Z80", [i8], 8, (add A)>;
 def GR16 : RegisterClass<"Z80", [i16], 8, (add BC, DE, HL)>;
 def HLR : RegisterClass<"Z80", [i16], 8, (add HL)>;
+def DER : RegisterClass<"Z80", [i16], 8, (add DE)>;
+def BCR : RegisterClass<"Z80", [i16], 8, (add BC)>;
 def IDX : RegisterClass<"Z80", [i16], 8, (add IX, IY)>;
 def IYR : RegisterClass<"Z80", [i16], 8, (add IY)>;
 def SPR : RegisterClass<"Z80", [i16], 8, (add SP)>;
@@ -47,6 +49,10 @@ def SDTZ80Cmov : SDTypeProfile<1, 4, [SDTCisSameAs<0, 1>, SDTCisSameAs<1, 2>, SD
 def Z80setcc : SDNode<"Z80ISD::SETCC", SDTZ80Setcc>;
 def Z80cmov : SDNode<"Z80ISD::CMOV", SDTZ80Cmov>;
 def Z80cmp : SDNode<"Z80ISD::CMP", SDTZ80Cmp>;
+// The compare of the next word of a long: a - b - carry, the carry the flags of the word before's compare. The last
+// operand is 1 for a signed order, which the carry is then made to hold.
+def SDTZ80Cmpc : SDTypeProfile<1, 4, [SDTCisVT<0, i8>, SDTCisSameAs<1, 2>, SDTCisVT<3, i8>, SDTCisVT<4, i8>]>;
+def Z80cmpc : SDNode<"Z80ISD::CMPC", SDTZ80Cmpc>;
 def Z80brcond : SDNode<"Z80ISD::BRCOND", SDTZ80Brcond, [SDNPHasChain]>;
 def SDT_Z80CallSeqStart : SDCallSeqStart<[SDTCisVT<0, i16>, SDTCisVT<1, i16>]>;
 def SDT_Z80CallSeqEnd : SDCallSeqEnd<[SDTCisVT<0, i16>, SDTCisVT<1, i16>]>;
@@ -54,6 +60,12 @@ def Z80callseq_start : SDNode<"ISD::CALLSEQ_START", SDT_Z80CallSeqStart, [SDNPHa
 def Z80callseq_end : SDNode<"ISD::CALLSEQ_END", SDT_Z80CallSeqEnd, [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
 def SDT_Z80Call : SDTypeProfile<0, -1, [SDTCisVT<0, i16>]>;
 def Z80call : SDNode<"Z80ISD::CALL", SDT_Z80Call, [SDNPHasChain, SDNPOutGlue, SDNPOptInGlue, SDNPVariadic]>;
+// ldir: copy BC bytes from (HL) to (DE), forward one byte at a time (so an overlap repeats), leaving HL and DE after
+// the last byte and BC zero. These take the destination in HL and the source in DE, as the runtime's memcpy does, and
+// swap them with `ex de,hl` (1 B, 4 T) when emitted. LDIRG skips the copy when BC is zero (the bare ldir would copy
+// 65536 bytes).
+def SDTZ80Ldir : SDTypeProfile<0, 3, [SDTCisVT<0, i16>, SDTCisVT<1, i16>, SDTCisVT<2, i16>]>;
+def Z80ldirg : SDNode<"Z80ISD::LDIRG", SDTZ80Ldir, [SDNPHasChain, SDNPMayLoad, SDNPMayStore]>;
 // A store to SP + offset in the call frame the callseq opens. The Z80 has no SP-relative store, so the pseudo is
 // expanded after frame layout; PUSH, one byte and 11 T, is the later call-frame optimization.
 def SDT_Z80StSP : SDTypeProfile<0, 2, [SDTCisInt<0>, SDTCisVT<1, i16>]>;
@@ -149,6 +161,13 @@ defm XOR : Logic16<"xor", xor>;
 // one instruction each; i32 and i64 come in through the carry forms later.
 let Defs = [F], Constraints = "$d = $a" in
   def SUB16 : Z80Inst<(outs HLR:$d), (ins HLR:$a, GR16:$b), "sub hl, $b", [(set i16:$d, (sub i16:$a, i16:$b))]>;
+
+// adc hl,rr / sbc hl,rr: the high word of a long add or subtract, the carry of the low word's op coming in.
+// No pattern: `use_the_carry` makes them from the compare that rebuilt the carry.
+let Defs = [F], Uses = [F], Constraints = "$d = $a" in {
+  def ADC16 : Z80Inst<(outs HLR:$d), (ins HLR:$a, GR16:$b), "adc hl, $b", []>;
+  def SBC16 : Z80Inst<(outs HLR:$d), (ins HLR:$a, GR16:$b), "sbc hl, $b", []>;
+}
 
 // Shifts by a constant: one SLA/SRL/SRA (or add hl,hl, srl h; rr l) per bit, expanded when emitted.
 multiclass Shift<string n, RegisterClass rc, ValueType vt> {
@@ -299,6 +318,13 @@ def : Pat<(i16 (anyext GR8:$a)), (ZEXT8 GR8:$a)>;
 let Defs = [F, A] in
   def SEXT8 : Z80Inst<(outs GR16:$d), (ins ACC:$a), "sext $d, $a", [(set i16:$d, (sext i8:$a))]>;
 
+// ldir copies (hl) to (de) bc times. The guarded form tests bc first (a, f clobbered); the bare one is for a count
+// known to be nonzero.
+let mayLoad = 1, mayStore = 1, Defs = [HL, DE, BC, F, A] in
+  def LDIRG : Z80Inst<(outs), (ins HLR:$d, DER:$s, BCR:$n), "ldirg $d, $s, $n", [(Z80ldirg i16:$d, i16:$s, i16:$n)]>;
+let mayLoad = 1, mayStore = 1, Defs = [HL, DE, BC, F] in
+  def LDIR : Z80Inst<(outs), (ins HLR:$d, DER:$s, BCR:$n), "ldir $d, $s, $n", []>;
+
 // A global's address is a 16-bit immediate the linker fills in.
 def : Pat<(i16 (Z80wrapper tglobaladdr:$a)), (LD16ri tglobaladdr:$a)>;
 
@@ -318,3 +344,10 @@ def : Pat<(i16 (xor (shl GR16:$x, (i8 8)), GR16:$y)),
 // A byte loaded and widened: the load, and a zero high byte.
 def : Pat<(i16 (zextloadi8 i16:$p)), (ZEXT8 (LD8rm i16:$p))>;
 def : Pat<(i16 (extloadi8 i16:$p)), (ZEXT8 (LD8rm i16:$p))>;
+
+// The next word of a long compare: sbc of the two byte pairs with the carry of the compare before, the carry out the
+// long's borrow. Last in the file so the other instructions keep their numbers.
+let Defs = [A] in {
+  def CP16C : Z80Inst<(outs Flags:$f), (ins GR16:$a, GR16:$b, Flags:$c, i8imm:$s), "cp16c $a, $b", [(set i8:$f, (Z80cmpc i16:$a, i16:$b, i8:$c, (i8 imm:$s)))]>;
+  def CP16Ci : Z80Inst<(outs Flags:$f), (ins GR16:$a, i16imm:$b, Flags:$c, i8imm:$s), "cp16c $a, $b", [(set i8:$f, (Z80cmpc i16:$a, (i16 imm:$b), i8:$c, (i8 imm:$s)))]>;
+}

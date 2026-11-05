@@ -145,6 +145,32 @@ fn unsigned_word_division() {
     }
 }
 
+/// The compact word divide (`__udivhi3c`, `__umodhi3c`: the bit loop alone,
+/// picked at -Os) agrees with the fast one for every case above, divisors of a
+/// byte and under, a divisor of 0x8000 and over (the remainder carries out of
+/// 16 bits), and zero (the all-ones quotient, the dividend as remainder).
+#[test]
+fn the_compact_word_division_agrees_with_the_fast_one() {
+    for (a, b, quotient, remainder) in [
+        (50000, 7, 7142, 6),
+        (60000, 40000, 1, 20000),
+        (65535, 256, 255, 255),
+        (12345, 10, 1234, 5),
+        (65535, 1, 65535, 0),
+        (65535, 255, 257, 0),
+        (65535, 129, 508, 3),
+        (255, 255, 1, 0),
+        (0, 9, 0, 0),
+        (65535, 32768, 1, 32767),
+        (65535, 65535, 1, 0),
+        (40000, 0, 65535, 40000),
+    ] {
+        let n = format!("c{a}-{b}");
+        assert_eq!(word(&format!("udivhic-{n}"), &two_words(a, b), "__udivhi3c"), quotient, "{a} / {b}");
+        assert_eq!(word(&format!("umodhic-{n}"), &two_words(a, b), "__umodhi3c"), remainder, "{a} % {b}");
+    }
+}
+
 /// Division truncates toward zero and the remainder has the dividend's sign: -7
 /// / 2 = -3 r -1, 7 / -2 = -3 r 1, -7 / -2 = 3 r -1. As bytes: -7 = 249, -3 =
 /// 253, -1 = 255, -2 = 254.
@@ -215,6 +241,38 @@ fn multiply_longs_gives_the_low_32_bits() {
     for (a, b, want) in [(70000, 3, 0x33450), (65535, 65537, 0xFFFF_FFFF), (100000, 100000, 0x540B_E400)] {
         assert_eq!(long(&format!("mulsi-{a}-{b}"), "__mulsi3", a, b), want, "{a} * {b}");
     }
+}
+
+/// The multiplier's bytes above its last set one are not walked: the carries
+/// of the early exit sit between bytes, so a multiplier with zero bytes below,
+/// between and above its set bytes is tried, and so are 0 and 2^31.
+#[test]
+fn multiply_longs_stops_when_the_multiplier_is_spent() {
+    for (a, b) in [
+        (123_456_789u32, 0u32),
+        (0, 99),
+        (7, 0x100),
+        (7, 0x0100_0000),
+        (0x0102_0304, 0x0001_0001),
+        (0x0102_0304, 0x8000_0000),
+        (0x0102_0304, 0x8000_0001),
+        (3, 0x00FF_FF00),
+    ] {
+        for routine in ["__mulsi3", "__mulsi3_fast"] {
+            assert_eq!(long(&format!("mulsi-exit-{a}-{b}{routine}"), routine, a, b), a.wrapping_mul(b), "{routine}: {a} * {b}");
+        }
+    }
+}
+
+/// `x * 15` walked all 32 bits of the multiplier: 2054 clocks, 10x gcc's loop
+/// in shrink_wrapped_frame (`n * i` over a 16 trip loop). The speed variant
+/// stops at the last set byte of 15: a third of that.
+#[test]
+fn multiply_longs_by_a_byte_is_not_a_walk_of_32_bits() {
+    let setup = "  lda #0\n  sta __sa+1\n  sta __sa+2\n  sta __sa+3\n  sta __sb+1\n  sta __sb+2\n  sta __sb+3\n  lda #100\n  sta __sa\n  lda #15\n  sta __sb\n";
+    let with = common::cycles_with("mulsi-clocks", &format!("{setup}  jsr __mulsi3_fast\n"), "");
+    let without = common::cycles_with("mulsi-clocks-none", setup, "");
+    assert!(with - without < 1000, "{} clocks", with - without);
 }
 
 /// 4000000000 / 7 = 571428571 (0x220F4EDB) r 3; 4000000000 / 3000000000 = 1 r

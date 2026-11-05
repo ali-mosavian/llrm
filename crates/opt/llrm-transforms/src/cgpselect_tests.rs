@@ -142,3 +142,78 @@ b0:
     );
     assert!(!changed, "{text}");
 }
+
+/// `x > 65520 ? x - 65521 : x` computed the subtraction before the branch
+/// every select makes where there is no conditional move: a copy and a
+/// subtract on both paths (x_adler -O2 +7.5k clocks over gcc).
+#[test]
+fn test_a_select_arm_only_the_select_reads_is_made_on_its_own_path() {
+    let mut module = parsed(
+        "define i32 @f(i32 %x) {
+b0:
+  %c = icmp ugt i32 %x, 65520
+  %d = add i32 %x, -65521
+  %r = select i1 %c, i32 %d, i32 %x
+  ret i32 %r
+}
+",
+    );
+    let llrm_mir::module::Module { context, globals, .. } = &mut module;
+    let llrm_mir::module::GlobalKind::Function(function) = &mut globals[0].kind else { panic!("a function") };
+    assert!(super::select_arms_sunk(context, function));
+    let text = printed(&module);
+    assert!(!text.contains("select"), "{text}");
+    let (before, after) = text.split_once("add i32").expect("the subtraction");
+    assert!(before.contains("br i1 %c"), "the branch comes first: {text}");
+    assert!(after.contains("phi i32"), "{text}");
+}
+
+/// Control: an arm another instruction reads stays before the branch.
+#[test]
+fn test_a_select_arm_with_a_second_reader_stays() {
+    let mut module = parsed(
+        "define i32 @f(i32 %x) {
+b0:
+  %c = icmp ugt i32 %x, 65520
+  %d = add i32 %x, -65521
+  %r = select i1 %c, i32 %d, i32 %x
+  %t = add i32 %r, %d
+  ret i32 %t
+}
+",
+    );
+    let llrm_mir::module::Module { context, globals, .. } = &mut module;
+    let llrm_mir::module::GlobalKind::Function(function) = &mut globals[0].kind else { panic!("a function") };
+    assert!(!super::select_arms_sunk(context, function));
+}
+
+/// `x & 1 ? 3 * x + 1 : x >> 1`: the multiply moved with the add, or the
+/// selector had `lea [x + x*2]; inc` where it folds one `lea [x + x*2 + 1]`
+/// (x_collatz -O3 +5.9k clocks).
+#[test]
+fn test_a_select_arm_moves_with_the_instructions_only_it_reads() {
+    let mut module = parsed(
+        "define i32 @f(i32 %x) {
+b0:
+  %b = and i32 %x, 1
+  %c = icmp ne i32 %b, 0
+  %m = mul i32 %x, 3
+  %d = add i32 %m, 1
+  %h = lshr i32 %x, 1
+  %r = select i1 %c, i32 %d, i32 %h
+  ret i32 %r
+}
+",
+    );
+    let llrm_mir::module::Module { context, globals, .. } = &mut module;
+    let llrm_mir::module::GlobalKind::Function(function) = &mut globals[0].kind else { panic!("a function") };
+    assert!(super::select_arms_sunk(context, function));
+    let text = printed(&module);
+    let branch = text.find("br i1 %c").expect("the branch");
+    for what in ["mul i32", "add i32 %m", "lshr i32"] {
+        assert!(text.find(what).expect(what) > branch, "{what} after the branch: {text}");
+    }
+    // The true arm's block follows the branch, as the pin's lowered select places it
+    // (x_collatz -O3 +1196 clocks with the false arm first).
+    assert!(text.find("add i32 %m").unwrap() < text.find("lshr i32").unwrap(), "{text}");
+}

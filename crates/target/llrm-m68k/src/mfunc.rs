@@ -110,8 +110,20 @@ pub fn op_inst(
         cheap_as_move: desc.has(flag::CHEAP_AS_A_MOVE),
         commutable: desc.has(flag::COMMUTABLE),
         rematerializable: desc.has(flag::REMATERIALIZABLE),
+        early_clobber: clears_before_it_reads(name),
         ..Inst::new(Kind::Op(name), operands)
     }
+}
+
+/// Whether `name` writes its result before it has read its address: a zero
+/// extending load into a register is `moveq #0` then `move.b`
+/// (`ExpandMOVSZX_RM`), so the result may not be a register the address names.
+///
+/// DEVIATE: the pin's description leaves the result free to share the
+/// address's register, and its expansion falls back to `move.b; and.l #255`
+/// (10 bytes against 6). Reason: best of gcc and clang is the goal. Exit: none.
+fn clears_before_it_reads(name: &str) -> bool {
+    crate::expand::extension(name).is_some_and(|(signed, _, mode, _)| !signed && mode != 'd')
 }
 
 /// The machine function over m68k's classes.
@@ -557,6 +569,12 @@ pub fn emit(
             }
         }
         emitter.function.fixed.extend(one.dag.fixed_offsets.clone());
+        if one.ends_unreachable {
+            let mut end = Inst::new(Kind::Op("UNREACHABLE"), Vec::new());
+            end.terminator = true;
+            end.barrier = true;
+            insts.push(end);
+        }
         let mut block = Block { id: one.block.0, insts, phis: Vec::new() };
         block.place_unlocated();
         emitter.function.blocks.push(block);

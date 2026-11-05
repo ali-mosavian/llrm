@@ -414,6 +414,7 @@ pub mod x86isd {
     pub const LLRM_PORT: u16 = 24586;
     pub const LLRM_PTRDIFF: u16 = 24583;
     pub const LLRM_TC_RETURN: u16 = 24587;
+    pub const LLRM_UDIV64BY32: u16 = 24593;
     pub const LLRM_WINDOW: u16 = 24581;
     pub const LLRM_ZERO128: u16 = 24591;
     pub const LOR: u16 = 662;
@@ -726,6 +727,7 @@ pub mod x86 {
     pub const ADD16mr: u16 = 583;
     pub const ADD32mi: u16 = 614;
     pub const ADD32mr: u16 = 624;
+    pub const ADD64rr: u16 = 685;
     pub const ADD8mi: u16 = 696;
     pub const ADD8mr: u16 = 702;
     pub const AH: u16 = 1;
@@ -824,6 +826,8 @@ pub mod x86 {
     pub const SBB32rr: u16 = 4208;
     pub const SBB8mi: u16 = 4240;
     pub const SBB8mr: u16 = 4244;
+    pub const SHL64ri: u16 = 4381;
+    pub const SHR64ri: u16 = 4569;
     pub const SS: u16 = 68;
     pub const SUB16mi: u16 = 4744;
     pub const SUB16mr: u16 = 4754;
@@ -833,10 +837,14 @@ pub mod x86 {
     pub const SUB8mr: u16 = 4873;
     pub const TEST16mi: u16 = 5007;
     pub const TEST16ri: u16 = 5009;
+    pub const TEST16rr: u16 = 5010;
     pub const TEST32mi: u16 = 5012;
     pub const TEST32ri: u16 = 5014;
+    pub const TEST32rr: u16 = 5015;
+    pub const TEST64rr: u16 = 5020;
     pub const TEST8mi: u16 = 5022;
     pub const TEST8ri: u16 = 5024;
+    pub const TEST8rr: u16 = 5025;
     pub const UCOM_Fpr32: u16 = 5096;
     pub const UCOM_Fpr64: u16 = 5097;
     pub const UCOM_Fpr80: u16 = 5098;
@@ -866,6 +874,7 @@ pub mod x86 {
         (583, "ADD16mr"),
         (614, "ADD32mi"),
         (624, "ADD32mr"),
+        (685, "ADD64rr"),
         (696, "ADD8mi"),
         (702, "ADD8mr"),
         (804, "AND16mi"),
@@ -946,6 +955,8 @@ pub mod x86 {
         (4208, "SBB32rr"),
         (4240, "SBB8mi"),
         (4244, "SBB8mr"),
+        (4381, "SHL64ri"),
+        (4569, "SHR64ri"),
         (4744, "SUB16mi"),
         (4754, "SUB16mr"),
         (4785, "SUB32mi"),
@@ -954,10 +965,14 @@ pub mod x86 {
         (4873, "SUB8mr"),
         (5007, "TEST16mi"),
         (5009, "TEST16ri"),
+        (5010, "TEST16rr"),
         (5012, "TEST32mi"),
         (5014, "TEST32ri"),
+        (5015, "TEST32rr"),
+        (5020, "TEST64rr"),
         (5022, "TEST8mi"),
         (5024, "TEST8ri"),
+        (5025, "TEST8rr"),
         (5096, "UCOM_Fpr32"),
         (5097, "UCOM_Fpr64"),
         (5098, "UCOM_Fpr80"),
@@ -1223,6 +1238,7 @@ pub fn x86isd_id(name: &str) -> Option<u16> {
         "LLRM_PORT" => 24586,
         "LLRM_PTRDIFF" => 24583,
         "LLRM_TC_RETURN" => 24587,
+        "LLRM_UDIV64BY32" => 24593,
         "LLRM_WINDOW" => 24581,
         "LLRM_ZERO128" => 24591,
         "LOR" => 662,

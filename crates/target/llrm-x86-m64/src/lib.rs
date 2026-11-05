@@ -317,6 +317,18 @@ impl llrm_target::Target for M64 {
         4
     }
 
+    /// X86ISelLowering.cpp: `setPrefLoopAlignment(Align(16))`.
+    fn pref_loop_alignment(&self) -> u8 {
+        4
+    }
+
+    /// DEVIATE SD545 (owner anyisa, exit 2026-11-20): the pin pads a loop
+    /// header with up to 15 bytes; gcc's `.p2align 4,,10` pads at most 10.
+    /// -O2 m32 `jpeg_single` ran 15 one-byte nops 14,457 times.
+    fn loop_alignment_max_skip(&self) -> u8 {
+        10
+    }
+
     /// Every x86-64 has `nopl` (`FeatureNOPL`): X86AsmBackend uses up to ten
     /// bytes.
     fn max_nop_bytes(&self) -> u8 {
@@ -335,7 +347,8 @@ impl llrm_target::Target for M64 {
         price: &dyn Fn(&str) -> i64,
         prefix: i64,
     ) -> OperationCosts {
-        OPCOSTS.operations(price, prefix)
+        // SSE2 is the baseline: a constant memset is stores of an xmm register.
+        OperationCosts { memset_store: 16, ..OPCOSTS.operations(price, prefix) }
     }
 
     fn register_capacity(&self) -> i64 {
@@ -359,12 +372,31 @@ impl llrm_target::Target for M64 {
                     .map(|one| {
                         one.with_tuning(llrm_mir::target::Tuning {
                             inline_size_guard_at_size: true,
-                            // No byte/clock rate is stated for m64 (oversight 2026-11-03): a constant
-                            // multiply is decomposed only where the chain is no larger than the `imul`.
+                            // DEVIATE SZ2 (owner m64, exit 2026-11-19): the bound holds a
+                            // callee with one site too; the pin copies it (crc, floats,
+                            // tile -Os: gcc keeps the call, +40 B each).
+                            inline_size_guard_single_site: true,
+                            rotation_guard_must_fold_at_size: true,
+                            // No byte/clock rate is stated for m64 (oversight
+                            // 2026-11-03): a constant multiply is decomposed
+                            // only where the chain is no larger than
+                            // the `imul`.
                             price_pin_multiplies: true,
                             // DEVIATE REC-2, as m32
                             recursive_inlining: Some((8, 450)),
-                            recursive_edge_growth: Some((15, 30)),
+                            // gcc's 15/30 size units in `gcc_insns` (m64 counts the sext/gep of its IR).
+                            recursive_edge_growth: Some((16, 31)),
+                            // DEVIATE REC-2, as m32: -O2 takes gcc's 450 (fib 25941 -> 10793
+                            // clk, frames -20%, rectwo -12%; -O3 stays at 150). Owner m64,
+                            // exit 2026-11-20.
+                            recursive_inlining_growth: Some((450, 150)),
+                            // DEVIATE REC5-1 (owner w2, exit 2026-11-20), as m32.
+                            ipsccp_widen_keeps_sign: true,
+                            // DEVIATE UJ2 (owner m64, exit 2026-11-14): BasicTTIImpl's
+                            // 28-micro-op loop buffer gave the jam of an outer loop
+                            // of that size a count of 0 (particle -O3: 15850 cycles,
+                            // gcc's jam 10262); the full-unroll threshold instead.
+                            unroll_jam_partial_threshold: Some(300),
                             ..llrm_mir::target::Tuning::PIN
                         })
                     })

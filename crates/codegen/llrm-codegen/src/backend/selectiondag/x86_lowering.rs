@@ -136,6 +136,10 @@ pub struct X86Lowering<'a> {
     pub sse2: bool,
     /// `hasMinSize`: llrm's `-Os` as well as `-Oz`.
     pub min_size: bool,
+    /// The target adds three-address (`lea`) and the build is for speed: flat
+    /// 32-bit and 64-bit, not `-Os`. DEVIATE SD448
+    /// ([`combine_masked_xor_difference`]) is made there only.
+    pub three_address_adds: bool,
     /// The pin chains an `i16` multiply by a constant: it promotes it to `i32`
     /// ([L64277][promote]) and `combineMul` builds the `lea`/shift chain there.
     /// Where `i16` is not promoted (m16, `is_desirable_to_promote_op`) the same
@@ -173,6 +177,16 @@ pub struct MulPricing<'a> {
 }
 
 impl CombineHooks for X86Lowering<'_> {
+    /// `X86TargetLowering::mergeStoresAfterLegalization`: `!MemVT.isVector()`.
+    /// The only vector a store here holds is the opaque 16 bytes of an SSE
+    /// move (`I128`).
+    fn merge_stores_after_legalization(
+        &self,
+        mem: EVT,
+    ) -> bool {
+        mem != EVT::Simple(MVT::I128)
+    }
+
     /// `foldBinOpIntoSelect`, `visitXOR`'s `(xor (and x, y), y)` and `SimplifySetCC`'s
     /// GE/LE canonicalization: the pin runs them on x86. Judged on `bintree`, `jpeg_*`
     /// and `particle` (m16 and C, `-Os`/`-O2`): fewer bytes or clocks, none worse. The
@@ -183,7 +197,35 @@ impl CombineHooks for X86Lowering<'_> {
         true
     }
 
+    /// `visitBRCOND`'s `rebuildSetCC`: `!bad` on an `i1` global is `cmp byte [bad], 1; jne`,
+    /// not `mov al; not al; test al, 1; jne` (jpeg_fixed `-Os` m64, 2 sites, 8 B). The
+    /// m16 judging cost a byte, so only the 64-bit lowering asks.
+    /// DEVIATE: off at m16 and m32. Exit 2026-12-01.
+    fn rebuild_brcond_condition(&self) -> bool {
+        self.zext_free
+    }
+
+    /// `visitAND`'s `(and (extload i1), 1)` is a `zextload`, so the branch above
+    /// compares the loaded byte without `and al, 1`. DEVIATE: m64 only, with it.
+    fn fold_and_of_extload(&self) -> bool {
+        self.zext_free
+    }
+
     fn fold_xor_of_and_with_mask(&self) -> bool {
+        true
+    }
+
+    /// `BuildSDIV`/`BuildUDIV` widen to a legal `i64` multiply for an `i32`
+    /// divisor too (`imul rax, rcx, 0xCCCCCCCD; shr rax, 35`), where ours kept
+    /// the `div` (an `i32` has no `MULHS` here). Where `i64` is not legal
+    /// (m16, m32) `can_do(Mul, i64)` refuses it.
+    fn widen_multiply_high_any_width(&self) -> bool {
+        true
+    }
+
+    /// `visitSRA`'s `(sra (trunc (srl x, c1)), c2)` is `(trunc (sra x, c1 + c2))`:
+    /// the widened divide's `shr 32; sar k` is one `sar 32 + k`.
+    fn fold_sra_of_trunc_of_shift(&self) -> bool {
         true
     }
 
@@ -222,13 +264,6 @@ impl CombineHooks for X86Lowering<'_> {
         narrow: EVT,
     ) -> bool {
         !(wide == EVT::I32 && narrow == EVT::I16)
-    }
-
-    /// DEVIATE: the `ADD`/`SUB`/`MUL` case of `SimplifyDemandedBits` runs where
-    /// the target narrows (it carries `ShrinkDemandedOp`); the 16 and 32-bit
-    /// targets are judged later. Exit 2026-11-20.
-    fn simplify_demanded_add_sub_mul(&self) -> bool {
-        self.zext_free
     }
 
     fn is_compare_with_flags(
@@ -324,7 +359,7 @@ impl CombineHooks for X86Lowering<'_> {
             ISD::Mul => combine_mul(dag, node, level, self.min_size, self.i16_mul_chains, self.profile),
             ISD::SetCC => combine_integer_setcc(dag, node, level),
             ISD::Add => combine_add(dag, node),
-            ISD::Sub => combine_sub(dag, node),
+            ISD::Sub => combine_sub(dag, node, self.three_address_adds),
             x86isd::ADD | x86isd::SUB => combine_x86_add_sub(dag, node),
             x86isd::CMOV => combine_cmov(dag, node),
             x86isd::SETCC => combine_setcc(dag, node),
@@ -342,7 +377,7 @@ impl CombineHooks for X86Lowering<'_> {
         demanded: u128,
         _level: CombineLevel,
     ) -> Option<Option<SDValue>> {
-        x86_shrink_demanded_constant(dag, op, demanded)
+        x86_shrink_demanded_constant(dag, op, demanded, self.i16_mul_chains)
     }
 
     fn promote_type(
@@ -363,6 +398,7 @@ fn x86_shrink_demanded_constant(
     dag: &mut SelectionDAG,
     op: SDValue,
     demanded: u128,
+    keep_imm8: bool,
 ) -> Option<Option<SDValue>> {
     if dag.opcode(op) != ISD::And {
         return None;
@@ -380,11 +416,26 @@ fn x86_shrink_demanded_constant(
         return Some(None);
     }
     if zero_extend & !(mask | !demanded) != 0 {
-        return None;
+        // DEVIATE SD212c, m16 only (`keep_imm8` is `i16_mul_chains`, the
+        // DEVIATE M1 / SD441 switch): the generic shrink would turn an imm8
+        // mask (`-64`) into an imm32 (`0x0FFFFFC0`), 3 B longer for the same
+        // work. Keep it. Exit: with the M1 review, 2026-12-01; owner
+        // llrm-target-wasm.
+        return (keep_imm8 && mask & !demanded != 0 && is_imm8_mask(mask, vt.size_in_bits())).then_some(None);
     }
     let new_mask = dag.get_constant(zero_extend, vt);
     let x = dag.operand(op, 0);
     Some(Some(dag.get_node(ISD::And, vt, &[x, new_mask])))
+}
+
+/// A mask of 16 bits or more that an `and` encodes as a sign-extended imm8.
+fn is_imm8_mask(mask: u128, bits: u32) -> bool {
+    if bits < 16 {
+        return false;
+    }
+    let sign = 1u128 << (bits - 1);
+    let signed = if mask & sign != 0 { (mask as i128) - (1i128 << bits) } else { mask as i128 };
+    (-128..=127).contains(&signed)
 }
 
 /// Whether this target promotes `i16` (and `i8` multiply) operations to `i32`
@@ -1421,11 +1472,45 @@ fn combine_uint_to_fp(
 /// `combineSub`: `combineAddOrSubToADCOrSBB` ([`super::x86_carry`]), then
 /// `combineSubSetcc`. (The `SUB(…, SBB)` and `~A - ~B` folds are not
 /// translated, SD219.)
+///
+/// DEVIATE SD448: then, where `lea_adds`, [`combine_masked_xor_difference`].
 fn combine_sub(
     dag: &mut SelectionDAG,
     node: SDValue,
+    lea_adds: bool,
 ) -> Option<SDValue> {
-    super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node).or_else(|| combine_sub_setcc(dag, node))
+    super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node)
+        .or_else(|| combine_sub_setcc(dag, node))
+        .or_else(|| lea_adds.then(|| combine_masked_xor_difference(dag, node)).flatten())
+}
+
+/// DEVIATE SD448 (exit 2026-11-14, when the pin's `convertToThreeAddressWithLEA`
+/// takes 8-bit adds on 32-bit targets, TA-10): `sub C, (xor X, M)` is `add X,
+/// C - M` when `M` is a low-bit mask and `X` has no bits above it, so the
+/// `xor` is `M - X`. `__floatsisf`'s shift amount `26 - (n ^ 31)` is `n - 5`:
+/// one `lea` where the `sub` took `mov cl, 26; sub cl, bl`. Where the target
+/// has no three-address add (m16) the `add` needs a copy and is a byte longer,
+/// so it is not made there.
+fn combine_masked_xor_difference(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let (minuend, xor) = (dag.operand(node, 0), dag.operand(node, 1));
+    let c = dag.constant(minuend)?;
+    if dag.opcode(xor) != ISD::Xor {
+        return None;
+    }
+    let (x, m) = (dag.operand(xor, 0), dag.constant(dag.operand(xor, 1))?);
+    if m == 0 || m & m.wrapping_add(1) != 0 {
+        return None;
+    }
+    let mask = super::fold::mask(vt.size_in_bits());
+    if (m | super::known_bits::known_bits(dag, x).zero) & mask != mask {
+        return None;
+    }
+    let delta = dag.get_constant(c.wrapping_sub(m) & mask, vt);
+    Some(dag.get_node(ISD::Add, vt, &[x, delta]))
 }
 
 /// `combineSubSetcc` ([L60838][pin]): `sub C, zext(setcc)` is
@@ -1911,7 +1996,8 @@ fn lower_vastart(
         NodeData::FrameIndex(slot) => MemBase::Stack(slot),
         _ => MemBase::Unknown,
     };
-    if pointer != EVT::I64 {
+    // Win64's `va_list` is the pointer alone (`LowerWin64_VASTART`).
+    if pointer != EVT::I64 || dag.var_args_save.is_none() {
         let first = dag.get_frame_index(pointer, index);
         let info = MemInfo {
             mem_vt: pointer,

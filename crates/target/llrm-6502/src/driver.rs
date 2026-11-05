@@ -127,9 +127,14 @@ fn reserved(name: &str) -> bool {
 }
 
 /// `text` with every `@name` that `reserved` prefixed by `__r_`, a name C code
-/// cannot spell, so the assembly names the symbol and not the opcode. A string
-/// that is not a symbol's quoted name (`c"user@x"`) is copied as it is.
-fn without_reserved_symbols(text: &str) -> String {
+/// cannot spell, so the assembly names the symbol and not the opcode; where
+/// the platform has a `c_symbol_prefix`, every C symbol takes that instead
+/// (intrinsics, `llvm.*`, and the private `.str` names are not C symbols). A
+/// string that is not a symbol's quoted name (`c"user@x"`) is copied as it is.
+fn without_reserved_symbols(
+    text: &str,
+    c_symbol_prefix: &str,
+) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(at) = rest.find(['@', '"']) {
@@ -154,7 +159,10 @@ fn without_reserved_symbols(text: &str) -> String {
         if quote {
             out.push('"');
         }
-        if reserved(&body[..end]) {
+        let name = &body[..end];
+        if !c_symbol_prefix.is_empty() && !name.starts_with("llvm.") && !name.starts_with('.') {
+            out.push_str(c_symbol_prefix);
+        } else if reserved(name) {
             out.push_str("__r_");
         }
         rest = body;
@@ -169,7 +177,8 @@ fn program(
     request: &Request,
 ) -> Result<Program, String> {
     let mut module =
-        llrm_mir::parse::module(&without_reserved_symbols(&without_triple(text))).map_err(|error| error.to_string())?;
+        llrm_mir::parse::module(&without_reserved_symbols(&without_triple(text), &request.platform.c_symbol_prefix))
+            .map_err(|error| error.to_string())?;
     module.refuse_aliases("the 6502")?;
     llrm_mir::parse::upgrade_lifetimes(&mut module);
     let layout = Mos.layout().datalayout;
@@ -182,11 +191,20 @@ fn program(
     if request.level != Level::O0 {
         let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
         let mut options = request.level.options();
+        options.second_inline = !request.passes.iter().any(|flag| flag == "-fno-second-inline")
+            && std::env::var_os("LLRM_6502_NO_ROUND2").is_none();
         for flag in &request.passes {
             apply_pass_flag(&mut options, flag);
         }
         llrm_transforms::pipeline::applied(&mut program, &Applied { options, only: None, dump })?;
         program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
+        let static_locals = !request.passes.iter().any(|flag| flag == "-fno-static-locals")
+            && std::env::var_os("LLRM_6502_NO_STATIC_LOCALS").is_none();
+        if static_locals {
+            for module in &mut program.modules {
+                crate::staticlocals::applied(module, request.level != Level::Os)?;
+            }
+        }
     }
     Ok(program)
 }
@@ -387,6 +405,12 @@ fn data_text(
         }
         if crate::select::exported(global.linkage) && label == name {
             out.push_str(&format!(".export {label}\n"));
+        }
+        // a variable of zeros is BSS, which the platform's startup clears: it
+        // costs no bytes in the image
+        if !variable.constant && words.is_empty() && bytes.iter().all(|&b| b == 0) {
+            out.push_str(&format!(".segment \"BSS\"\n{label}: .res {}\n.segment \"CODE\"\n", bytes.len().max(1)));
+            continue;
         }
         out.push_str(&format!(".segment \"{}\"\n{label}:\n", if variable.constant { "RODATA" } else { "DATA" }));
         let mut at = 0;

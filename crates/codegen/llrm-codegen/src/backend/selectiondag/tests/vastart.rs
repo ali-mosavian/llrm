@@ -11,8 +11,10 @@ fn legalize(dag: &mut SelectionDAG) {
             cmov: false,
             sse2: false,
             min_size: false,
+            three_address_adds: false,
             i16_mul_chains: false,
-            sext_load: false, zext_free: false,
+            sext_load: false,
+            zext_free: false,
             profile: None,
         },
     )
@@ -72,4 +74,31 @@ fn va_end_is_its_chain_and_va_copy_is_a_load_and_a_store() {
     dag2.set_root(end);
     legalize(&mut dag2);
     assert_eq!(dag2.get_root(), chain);
+}
+
+/// `va_arg i32` with a 4-byte ABI alignment reads the list pointer, rounds it
+/// up to 4, steps it by 4, stores it back and loads from the rounded pointer
+/// (`expandVAArg`). Left as a `vaarg` the matcher has no pattern for it and the
+/// function was refused.
+#[test]
+fn va_arg_loads_from_the_aligned_list_pointer_and_advances_it() {
+    let mut dag = dag();
+    let ap = list(&mut dag, 0);
+    let chain = dag.entry_node();
+    let source = dag.get_src_value(0);
+    let align = dag.get_constant_with(4, EVT::I32, true, false);
+    let arg = dag.get_node_multi(ISD::VAArg, &[EVT::I32, EVT::OTHER], &[chain, ap, source, align]);
+    dag.set_root(SDValue { node: arg.node, res: 1 });
+    legalize(&mut dag);
+    let root = dag.get_root();
+    let value = root.node;
+    assert_eq!(dag.opcode(SDValue { node: value, res: 0 }), ISD::Load);
+    let at = dag.operand(SDValue { node: value, res: 0 }, 1);
+    assert_eq!(dag.opcode(at), ISD::And);
+    let stored = dag.operand(SDValue { node: value, res: 0 }, 0);
+    assert_eq!(dag.opcode(stored), ISD::Store);
+    assert_eq!(dag.operand(stored, 2), ap);
+    let next = dag.operand(stored, 1);
+    assert_eq!((dag.opcode(next), dag.operand(next, 0)), (ISD::Add, at));
+    assert_eq!(dag.constant(dag.operand(next, 1)), Some(4));
 }

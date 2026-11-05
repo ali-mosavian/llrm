@@ -12,7 +12,18 @@
 //! reported, as `TargetLoweringOpt::CombineTo` does.
 //!
 //! # Runs
-//! `visitAND`, `visitOR`, `visitXOR`, `visitSHL` and `visitSRL` call it last.
+//! The pin's `DAGCombiner` asks it from `visitADDLike`
+//! ([L3133](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L3133)),
+//! `visitMUL`
+//! ([L5155](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L5155)),
+//! `visitUDIV` (L5511), `visitMULHU` (L5821), `visitIMINMAX` (L6580),
+//! `visitAND`, `visitOR`, `visitXOR`, `visitRotate` (L10995), `visitSHL`,
+//! `visitSRA` (L11707), `visitSRL`, `visitFunnelShift`, `visitTRUNCATE` and
+//! `visitSIGN_EXTEND_INREG`; here every one is called last. DEVIATE SD212b:
+//! in `visitADDLike`, `visitRotate` and `visitSRA` the pin's call stands
+//! before folds that follow it, ours after all of them; `visitMULHU` has no
+//! other fold here. Exit: those visits translated whole, with the rest of
+//! their folds. Owner llrm-target-wasm, review 2026-12-10.
 //! Covered opcodes: `and`, `or`, `xor`, `shl`, `srl`, `rotl` and `rotr` by a
 //! constant, the three extensions' zero and any forms, `trunc`. The rest fall
 //! back to `computeKnownBits`.
@@ -217,6 +228,34 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
     /// AssumeSingleUse)`. `Ok` is "nothing changed" with the known bits;
     /// `Err` is "rewritten".
     fn sdb(
+        &mut self,
+        op: SDValue,
+        demanded_in: u128,
+        depth: u32,
+        assume_single_use: bool,
+        tlo: &mut Tlo,
+    ) -> Result<KnownBits, ()> {
+        let result = self.sdb_inner(op, demanded_in, depth, assume_single_use, tlo);
+        if result.is_err() {
+            // "Disable the nsw and nuw flags. We can no longer guarantee that
+            // we won't wrap after simplification": `Op->dropFlags`
+            // where an operand was simplified, for `SHL`,
+            // `TRUNCATE`, `ADD`, `SUB` and `MUL` (NoWrap), `OR`
+            // (Disjoint) and `ZERO_EXTEND` (NonNeg).
+            let dropped = match self.dag.opcode(op) {
+                ISD::Shl | ISD::Truncate | ISD::Add | ISD::Sub | ISD::Mul => super::dag::SDNodeFlags(
+                    super::dag::SDNodeFlags::NO_UNSIGNED_WRAP.0 | super::dag::SDNodeFlags::NO_SIGNED_WRAP.0,
+                ),
+                ISD::Or => super::dag::SDNodeFlags::DISJOINT,
+                ISD::ZeroExtend => super::dag::SDNodeFlags::NON_NEG,
+                _ => super::dag::SDNodeFlags::default(),
+            };
+            self.dag.drop_flags(op, dropped);
+        }
+        result
+    }
+
+    fn sdb_inner(
         &mut self,
         op: SDValue,
         demanded_in: u128,
@@ -646,7 +685,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             // `SimplifyDemandedBits` of `ADD`, `SUB` and `MUL`: they demand
             // nothing above their highest demanded bit; a constant addend whose
             // low bits are all ones becomes -1.
-            ISD::Add | ISD::Sub | ISD::Mul if self.hooks.simplify_demanded_add_sub_mul() => {
+            ISD::Add | ISD::Sub | ISD::Mul => {
                 let (op0, op1) = (self.dag.operand(op, 0), self.dag.operand(op, 1));
                 let length = 128 - demanded.leading_zeros();
                 let low = mask(length);

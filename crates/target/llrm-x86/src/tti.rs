@@ -568,6 +568,10 @@ impl Tti for X86 {
         self.tuning.speed_milliclocks_per_byte
     }
 
+    fn unroll_milliclocks_per_byte(&self) -> i64 {
+        self.tuning.unroll_milliclocks_per_byte
+    }
+
     fn multiply_by_clocks(&self) -> bool {
         self.tuning.multiply_by_clocks
     }
@@ -600,6 +604,10 @@ impl Tti for X86 {
         self.tuning.unroll_partial_threshold
     }
 
+    fn unroll_jam_partial_threshold_override(&self) -> Option<u32> {
+        self.tuning.unroll_jam_partial_threshold
+    }
+
     fn unswitch_threshold_override(&self) -> Option<i64> {
         self.tuning.unswitch_threshold
     }
@@ -613,6 +621,26 @@ impl Tti for X86 {
 
     fn recursive_edge_growth(&self) -> Option<(i64, i64)> {
         self.tuning.recursive_edge_growth
+    }
+
+    fn recursive_inlining_growth(&self) -> Option<(i64, i64)> {
+        self.tuning.recursive_inlining_growth
+    }
+
+    fn peels_folded_entry(&self) -> bool {
+        self.tuning.peel_folded_entry
+    }
+
+    fn sinks_select_arms(&self) -> bool {
+        self.tuning.sink_select_arms
+    }
+
+    fn inlines_variable_memcpy(&self) -> bool {
+        self.tuning.inline_variable_memcpy
+    }
+
+    fn ipsccp_widen_keeps_sign(&self) -> bool {
+        self.tuning.ipsccp_widen_keeps_sign
     }
 
     fn priced_self_inlining(&self) -> Option<(u32, i64)> {
@@ -632,7 +660,15 @@ impl Tti for X86 {
     }
 
     fn opt_size_inline_guard_min_sites(&self) -> i64 {
-        if self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard) { 1 } else { 2 }
+        if self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard) || self.tuning.inline_size_guard_single_site {
+            1
+        } else {
+            2
+        }
+    }
+
+    fn rotation_guard_must_fold_at_size(&self) -> bool {
+        self.tuning.rotation_guard_must_fold_at_size
     }
 
     fn constant_offset_phi_is_cheap(&self) -> bool {
@@ -668,7 +704,8 @@ impl Tti for X86 {
         load_sizes.extend([4, 2, 1]);
         Some(MemCmpExpansionOptions {
             load_sizes,
-            // X86ISelLowering.cpp#L2946: MaxLoadsPerMemcmp and its OptSize twin.
+            // X86ISelLowering.cpp#L2946: MaxLoadsPerMemcmp and its OptSize
+            // twin.
             max_num_loads: 2,
             num_loads_per_block: if is_zero_cmp { 2 } else { 1 },
             allow_overlapping_loads: true,
@@ -697,6 +734,14 @@ impl Tti for X86 {
         _signed: bool,
     ) -> bool {
         self.is_type_legal(Ty::Int(bits))
+    }
+
+    /// `FSQRT` is legal on every scalar float: the SSE instruction, or x87's.
+    fn have_fast_sqrt(
+        &self,
+        ty: Ty,
+    ) -> bool {
+        matches!(ty, Ty::Float | Ty::Double | Ty::X87)
     }
 
     fn is_type_legal(
@@ -1234,6 +1279,12 @@ impl Tti for X86 {
 
     /// `X86TTIImpl::getArithmeticInstrCost`, scalars:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L255
+    /// The count must sit in `cl`. Not in real mode: its six registers spill
+    /// the multiplier's select (pack_ref -Os m16: +24 B).
+    fn variable_shift_count_in_fixed_register(&self) -> bool {
+        self.real_mode.is_none()
+    }
+
     fn arithmetic_cost(
         &self,
         op: ArithOp,

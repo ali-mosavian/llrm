@@ -280,6 +280,14 @@ fn intrinsic_prices() -> &'static Prices {
 }
 
 impl Tti for AArch64 {
+    /// `FSQRT` is legal on `f32` and `f64`.
+    fn have_fast_sqrt(
+        &self,
+        ty: llrm_mir::tti::Ty,
+    ) -> bool {
+        matches!(ty, llrm_mir::tti::Ty::Float | llrm_mir::tti::Ty::Double)
+    }
+
     fn name(&self) -> &'static str {
         "AArch64"
     }
@@ -296,6 +304,10 @@ impl Tti for AArch64 {
     /// (w15-arm64-rate-proposal-11-03.md); widened to 30 clean cells by 11-12.
     fn speed_inline_milliclocks_per_byte(&self) -> i64 {
         250_000
+    }
+
+    fn merges_unaligned_stores(&self) -> bool {
+        true
     }
 
     /// A `sext`/`zext` of a load is the extending load (`ldrsb`, `ldrh`, ...)
