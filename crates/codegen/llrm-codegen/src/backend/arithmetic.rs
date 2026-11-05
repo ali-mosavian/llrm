@@ -326,7 +326,7 @@ fn positive_chains<'a>(
             .any(|form| form.index_width == 4 && form.scales.contains(&scale) && !form.secondary);
         (with_lea && native)
             .then(|| {
-                llrm_mir::target::three_operand(
+                llrm_mir::target::three_operand_of(
                     &target.operations,
                     &target.address_forms,
                     4,

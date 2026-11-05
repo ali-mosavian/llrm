@@ -673,7 +673,7 @@ impl OperationCosts {
 /// index, unscaled, no prefix); any other takes a form that scales, which
 /// costs its address-size prefix, and runs under the operand-size prefix a
 /// dword does.
-pub fn three_operand(
+pub fn three_operand_of(
     costs: &OperationCosts,
     forms: &[AddressForm],
     width: i64,
@@ -690,6 +690,19 @@ pub fn three_operand(
         return Some(costs.address_dword + costs.address_third * parts.saturating_sub(2) as i64 + form.use_cost - costs.prefix);
     }
     Some(costs.sized(costs.address, width, operand) + form.use_cost)
+}
+
+/// [`three_operand_of`] for an address of two parts (a base and an index, or a
+/// base and a displacement).
+pub fn three_operand(
+    costs: &OperationCosts,
+    forms: &[AddressForm],
+    width: i64,
+    operand: i64,
+    scale: i64,
+    word: bool,
+) -> Option<i64> {
+    three_operand_of(costs, forms, width, operand, scale, word, 2)
 }
 
 impl Default for OperationCosts {
@@ -926,11 +939,11 @@ mod operand_size_tests {
     fn a_native_dword_address_is_priced_and_a_word_one_needs_a_word_form() {
         let costs = OperationCosts { address: 2, prefix: 1, ..OperationCosts::default() };
         let flat = [form(4, false, 0)];
-        assert_eq!(three_operand(&costs, &flat, 4, 4, 2, false, 2), Some(2));
-        assert_eq!(three_operand(&costs, &flat, 2, 4, 1, true, 2), None);
+        assert_eq!(three_operand(&costs, &flat, 4, 4, 2, false), Some(2));
+        assert_eq!(three_operand(&costs, &flat, 2, 4, 1, true), None);
         let real = [form(2, false, 0), form(4, true, 1)];
-        assert_eq!(three_operand(&costs, &real, 4, 2, 2, false, 2), Some(2 + 1 + 1));
-        assert_eq!(three_operand(&costs, &real, 2, 2, 1, true, 2), Some(2));
+        assert_eq!(three_operand(&costs, &real, 4, 2, 2, false), Some(2 + 1 + 1));
+        assert_eq!(three_operand(&costs, &real, 2, 2, 1, true), Some(2));
     }
 
     /// Real mode's `lea`: 3 bytes in words (`8D 40 07`), 5 as dwords behind the
@@ -942,11 +955,11 @@ mod operand_size_tests {
     fn a_dword_lea_is_priced_by_its_parts_and_a_word_one_is_not() {
         let costs = OperationCosts { address: 6, prefix: 1, address_dword: 10, address_third: 2, ..OperationCosts::default() };
         let real = [form(2, false, 0), form(4, true, 1)];
-        assert_eq!(three_operand(&costs, &real, 2, 2, 1, true, 3), Some(6));
-        assert_eq!(three_operand(&costs, &real, 4, 2, 1, false, 2), Some(10));
-        assert_eq!(three_operand(&costs, &real, 4, 2, 1, false, 3), Some(12));
+        assert_eq!(three_operand_of(&costs, &real, 2, 2, 1, true, 3), Some(6));
+        assert_eq!(three_operand(&costs, &real, 4, 2, 1, false), Some(10));
+        assert_eq!(three_operand_of(&costs, &real, 4, 2, 1, false, 3), Some(12));
         let unstated = OperationCosts { address: 6, prefix: 1, ..OperationCosts::default() };
-        assert_eq!(three_operand(&unstated, &real, 4, 2, 1, false, 3), Some(8));
+        assert_eq!(three_operand_of(&unstated, &real, 4, 2, 1, false, 3), Some(8));
     }
 }
 

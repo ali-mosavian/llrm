@@ -626,11 +626,12 @@ mod encoding_tests {
     /// bytes): inc + add (5 bytes) lost to the six-byte `lea`.
     #[test]
     fn a_lea_is_priced_at_its_encoding_by_width_and_parts() {
-        use llrm_mir::target::{Machine, three_operand};
+        use llrm_mir::target::{Machine, three_operand, three_operand_of};
         let sized = super::Dos::default().size_costs();
         let forms = super::address_forms(&sized, 0);
-        let price = |width, word, parts| three_operand(&sized, &forms, width, 2, 1, word, parts).expect("a form");
-        assert_eq!((price(2, true, 3), price(4, false, 2), price(4, false, 3)), (2 * 3, 2 * 5, 2 * 6));
+        let price = |width, word| three_operand(&sized, &forms, width, 2, 1, word).expect("a form");
+        let three = three_operand_of(&sized, &forms, 4, 2, 1, false, 3).expect("a form");
+        assert_eq!((price(2, true), price(4, false), three), (2 * 3, 2 * 5, 2 * 6));
     }
 
     /// A fill's bytes are the instructions it becomes as encoded: `rep stos`

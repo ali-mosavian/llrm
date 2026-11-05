@@ -2233,7 +2233,7 @@ fn _affine_address(
     // no prefix and reads no dword register.
     let scale = address.scale;
     let width = i64::from(dest.width);
-    let Some(form) = llrm_mir::target::three_operand(
+    let Some(form) = llrm_mir::target::three_operand_of(
         &cpu.operations,
         &cpu.address_forms,
         width,
