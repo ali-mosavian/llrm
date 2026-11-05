@@ -205,6 +205,18 @@ impl CombineHooks for X86Lowering<'_> {
         true
     }
 
+    /// `visitORCommutative`'s `(or (and x, y), x)` is `x`: the pin runs it on
+    /// x86. No corpus cell reaches it (the mid-end absorbs first).
+    fn fold_or_absorption(&self) -> bool {
+        true
+    }
+
+    /// `reduceLoadWidth` through a `freeze` between the mask and the load: the
+    /// pin runs it on x86. No corpus cell reaches it.
+    fn reduce_load_width_through_freeze(&self) -> bool {
+        true
+    }
+
     /// `visitBRCOND`'s `rebuildSetCC`: `!bad` on an `i1` global is `cmp byte [bad], 1; jne`,
     /// not `mov al; not al; test al, 1; jne` (jpeg_fixed `-Os` m64, 2 sites, 8 B). The
     /// m16 judging cost a byte, so only the 64-bit lowering asks.
