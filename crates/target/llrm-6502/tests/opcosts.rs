@@ -63,3 +63,18 @@ fn the_6502_prices_are_the_assembled_sizes_of_their_sequences() {
     }
     assert_eq!((clocks.native_bits, bytes.native_bits), (8, 8));
 }
+
+/// The machine stated no registers (0), so no pressure was ever priced: a loop
+/// holding more values than the register file had was never seen to spill.
+/// The numbers are the allocator's pools, and the register file of
+/// `registers.regs`: a, x, y, `rc2`..`rc15`, of which `rc8`..`rc15` survive a
+/// call.
+#[test]
+fn the_6502_states_the_register_file_the_allocator_has() {
+    let machine = llrm_6502::driver::machine();
+    let (bytes, kept) = llrm_6502::alloc::register_file(0);
+    assert_eq!((machine.registers(), machine.call_registers()), (bytes, kept));
+    assert_eq!((bytes, kept), (3 + 14, 8), "a, x, y, rc2..rc15; rc8..rc15 kept");
+    // a platform with more scratch cells has more bytes and the same kept ones
+    assert_eq!(llrm_6502::alloc::register_file(24), (bytes + 8, kept));
+}

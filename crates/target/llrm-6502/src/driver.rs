@@ -368,12 +368,20 @@ impl llrm_mir::target::Machine for Mos6502Machine {
         BYTES.get_or_init(|| crate::opcosts::bytes(crate::dagisel::hooks::Cpu::Mos6502)).clone()
     }
 
+    /// The bytes the allocator can put a value in on the smallest zero page
+    /// (`a`, `x`, `y`, `rc2`..`rc15`). 0 left every pressure estimate off: no
+    /// loop was ever too wide for the registers.
+    ///
+    /// DEVIATE (6502-OPCOSTS): `Room` counts values, not bytes, so a wide value
+    /// takes one of these. Exit: residents weighed by `OperationCosts::words`
+    /// (2026-11-20).
     fn registers(&self) -> i64 {
-        llrm_mir::target::Neutral.registers()
+        crate::alloc::register_file(0).0
     }
 
+    /// The bytes a call leaves: the callee-kept cells `rc8`..`rc15`.
     fn call_registers(&self) -> i64 {
-        llrm_mir::target::Neutral.call_registers()
+        crate::alloc::register_file(0).1
     }
 
     fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {
