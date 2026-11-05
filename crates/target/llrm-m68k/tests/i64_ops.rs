@@ -36,3 +36,14 @@ fn a_float_to_i64_calls_the_runtime_and_keeps_both_words() {
         }
     }
 }
+
+/// m68k names `__muldi3` but no routine for a function tuned for size, and
+/// expanded a double-word multiply inline on the 68000. The legalizer called
+/// the routine for every target that named one, so the multiply became a call
+/// (2 of 4 programs of a wide-multiply identity run changed).
+#[test]
+fn a_double_word_multiply_stays_inline_on_the_68000() {
+    let ir = "define i64 @f(i64 %a, i64 %b) { %r = mul i64 %a, %b ret i64 %r }";
+    let out = text_with(&module(ir), "f", Cpu::M68000, Options::default()).expect("compiles");
+    assert!(!out.contains("__muldi3"), "{out}");
+}

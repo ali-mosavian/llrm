@@ -2457,6 +2457,23 @@ impl<'a> TypeLegalizer<'a> {
         (lo, self.dag.get_node(ISD::Truncate, half, &[upper]))
     }
 
+    /// Whether the product of `lhs` and `rhs` is known to fit `bits`: the
+    /// significant bits of the two (`computeKnownBits` leading zeros) add up to
+    /// no more.
+    fn product_fits(
+        &self,
+        lhs: SDValue,
+        rhs: SDValue,
+        bits: u32,
+    ) -> bool {
+        let active = |value: SDValue| {
+            let known = super::known_bits::known_bits(self.dag, value);
+            let leading = (0..known.width).rev().take_while(|bit| known.zero >> bit & 1 == 1).count() as u32;
+            known.width - leading
+        };
+        active(lhs) + active(rhs) <= bits
+    }
+
     /// `ExpandIntRes_MUL` through `expandMUL_LOHI`: the full product of the low
     /// halves, plus the two cross products in the high half. Two operands that
     /// are both zero-extended or both sign-extended (by their known bits) need
@@ -2467,7 +2484,8 @@ impl<'a> TypeLegalizer<'a> {
     /// functions tuned for size. The pin calls any named routine; m68k, 6502
     /// and wasm name one and expanded inline until now, and their output stays
     /// as it was until their owners measure the call. Exit: those targets
-    /// measured.
+    /// measured. Nor is it made where the product fits a half: a byte times
+    /// a constant is a few instructions, less than the call and the routine.
     fn expand_mul(
         &mut self,
         value: SDValue,
@@ -2508,6 +2526,7 @@ impl<'a> TypeLegalizer<'a> {
         } else if self.tli.is_operation_legal_or_custom(ISD::MulHU, half) {
             (self.dag.get_node(ISD::Mul, half, &[ll, rl]), self.dag.get_node(ISD::MulHU, half, &[ll, rl]))
         } else if self.tli.has_size_libcall_name(ISD::Mul, self.dag.value_type(value))
+            && !self.product_fits(lhs, rhs, bits)
             && let Some(pair) = self.expand_by_libcall(value, ISD::Mul, half, false, [lhs, rhs])
         {
             return Ok(pair);
