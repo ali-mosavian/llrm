@@ -249,6 +249,19 @@ fn test_the_folded_branch_carries_the_merged_weights() {
     assert!(out.contains("branch_weights\", i32 11, i32 9"), "{out}");
 }
 
+/// Weights on both branches merge to the pin's pair; a check that weighted only the
+/// first branch could not tell that the second's were dropped.
+#[test]
+fn test_weights_on_both_branches_merge() {
+    let both = WEIGHTED.replace("label %t, label %e\n", "label %t, label %e, !prof !1\n");
+    let out = simplify(&format!(
+        "{both}\n!0 = !{{!\"branch_weights\", i32 1, i32 9}}\n!1 = !{{!\"branch_weights\", i32 3, i32 7}}\n"
+    ));
+    assert!(!out.contains("label %bb"), "{out}");
+    // PBI `br %a, t, bb` (1, 9), BI (3, 7): (1 * 10 + 9 * 3, 9 * 7).
+    assert!(out.contains("branch_weights\", i32 37, i32 63"), "{out}");
+}
+
 /// A first branch decided 99.9% one way is not speculated through: the pin
 /// asks `getPredictableBranchThreshold` before it folds.
 #[test]
