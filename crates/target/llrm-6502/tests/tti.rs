@@ -162,3 +162,19 @@ done:
     assert!(!text.contains("crctable"), "{text}");
     assert!(text.contains("phi"), "{text}");
 }
+
+/// The inliner counted a callee in `CodeSize` units (an `i32` add is 4) against
+/// a call of bytes: it priced the 6502's 13-byte long add like a 4-byte call.
+/// The size view the inliner reads counts encoded bytes, the plain model
+/// keeps the units the other passes' thresholds are in.
+#[test]
+fn the_inliners_size_view_counts_bytes_and_the_plain_model_units() {
+    use llrm_mir::tti::{ArithOp, CostKind, OperandInfo, Ty, Tti};
+    let plain = llrm_6502::tti::Mos6502::new();
+    let view = plain.inline_size_view().expect("a size view");
+    let add = |tti: &dyn Tti| tti.arithmetic_cost(ArithOp::Add, Ty::Int(32), CostKind::CodeSize, OperandInfo::ANY, OperandInfo::ANY).value;
+    assert_eq!(add(&plain), 4, "the units");
+    assert_eq!(add(&*view), 25, "lda, adc, sta a byte and clc once");
+    let latency = |tti: &dyn Tti| tti.arithmetic_cost(ArithOp::Add, Ty::Int(32), CostKind::Latency, OperandInfo::ANY, OperandInfo::ANY).value;
+    assert_eq!(latency(&plain), latency(&*view), "clocks are not touched");
+}
