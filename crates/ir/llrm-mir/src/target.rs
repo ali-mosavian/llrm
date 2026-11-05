@@ -59,6 +59,9 @@ pub struct Tuning {
     /// largest count that divides it (2 or more) rather than one that leaves
     /// a remainder: the remainder is a copy of the whole nest.
     pub unroll_jam_exact_count: bool,
+    /// `ConstantHoisting` runs after LSR, as the pin's `addIRPasses` does for
+    /// every target (CH-STAGED: enabled target by target, each with its A/B).
+    pub constant_hoisting: bool,
     /// How many values the x87 register stack holds (8) where floats live
     /// there (a target without SSE2 floating point); none: floats are not
     /// held on a stack. The loop unroll caps its copies by it.
@@ -160,6 +163,7 @@ impl Tuning {
         unroll_partial_threshold: None,
         unroll_jam_partial_threshold: None,
         unroll_jam_exact_count: false,
+        constant_hoisting: false,
         x87_stack_slots: None,
         unswitch_threshold: None,
         inline_threshold: None,

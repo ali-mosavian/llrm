@@ -510,7 +510,7 @@ impl Options {
             "dse" => self.drop_stores,
             "sink" => self.sink,
             "sroa" | "promote" => self.promote,
-            "lsr" | "canonfreeze" | "maskscale" | "hardwareloops" => self.strength && self.lsr,
+            "lsr" | "canonfreeze" | "maskscale" | "hardwareloops" | "constanthoisting" => self.strength && self.lsr,
             "indvars" | "window" | "gepoffset" => self.strength,
             "cgpaddr" | "cgpselectarms" => self.strength && self.cgpaddr,
             "extload" => self.extload,
@@ -1514,6 +1514,12 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // nothing for a target that counts no loop in hardware.
         if applied.options.wanted("hardwareloops") {
             passes.push(Box::new(crate::hardwareloops::HardwareLoops));
+        }
+        // `TargetPassConfig::addIRPasses` (pin l.874): ConstantHoisting
+        // follows LSR; it hoists nothing for a target whose constants all
+        // cost the basic one.
+        if applied.options.wanted("constanthoisting") {
+            passes.push(Box::new(crate::constanthoisting::ConstantHoisting));
         }
     }
     passes
