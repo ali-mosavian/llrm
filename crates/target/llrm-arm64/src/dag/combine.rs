@@ -18,7 +18,7 @@
 //! `performMulCombine` in `AArch64ISelLowering.cpp`, pin d1106deb71cc.
 
 use llrm_codegen::backend::selectiondag::dag_combiner::CombineLevel;
-use llrm_codegen::backend::selectiondag::isd::ISD;
+use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{SDValue, SelectionDAG};
 use llrm_dagisel::generated::aarch64::ids::isd as a64;
@@ -420,4 +420,152 @@ pub fn shrink_demanded_constant(
     let encoded = crate::mc::immediate::logical(new, size)?;
     let encoded = dag.get_constant_with(u128::from(encoded), vt, true, false);
     Some(Some(dag.get_node(ISD::Machine(u32::from(new_opcode)), vt, &[x, encoded])))
+}
+
+/// `-aarch64-max-xors`.
+const MAX_XORS: u32 = 16;
+
+/// `isLegalCondCmpImmediate`: a `ccmp` takes a 5-bit unsigned immediate (or its
+/// negation, as `ccmn`).
+fn legal_cond_cmp_immediate(value: i128) -> bool {
+    value > -32 && value < 32
+}
+
+/// `hasLegalCmpImmediate`: no operand is a constant `cmp`/`cmn` cannot encode.
+fn has_legal_cmp_immediate(
+    dag: &SelectionDAG,
+    pair: (SDValue, SDValue),
+) -> bool {
+    [pair.0, pair.1].into_iter().all(|one| super::lowering::signed_constant(dag, one).is_none_or(super::lowering::legal_cmp_immed))
+}
+
+/// `hasLegalCondCmpImmediate`.
+fn has_legal_cond_cmp_immediate(
+    dag: &SelectionDAG,
+    pair: (SDValue, SDValue),
+) -> bool {
+    [pair.0, pair.1].into_iter().all(|one| super::lowering::signed_constant(dag, one).is_none_or(legal_cond_cmp_immediate))
+}
+
+/// `hasCheapXorImmediateThatNeedsCondCmpReg`: a constant that does not fit a
+/// `ccmp` but is a logical immediate.
+fn has_cheap_xor_immediate_that_needs_cond_cmp_reg(
+    dag: &SelectionDAG,
+    pair: (SDValue, SDValue),
+) -> bool {
+    [pair.0, pair.1].into_iter().any(|one| {
+        let (Some(value), Some(signed)) = (dag.constant(one), super::lowering::signed_constant(dag, one)) else {
+            return false;
+        };
+        let width = dag.value_type(one).size_in_bits();
+        legal_cond_cmp_immediate(signed) == false
+            && crate::mc::immediate::logical(value as u64, if width <= 32 { 32 } else { 64 }).is_some()
+    })
+}
+
+/// `isOrXorChain`: the leaves of a tree of one-use `or`s over `xor`s.
+fn is_or_xor_chain(
+    dag: &mut SelectionDAG,
+    mut n: SDValue,
+    leaves: &mut u32,
+    xors: &mut u32,
+    saw_xor: &mut bool,
+    require_legal: bool,
+    work: &mut Vec<(SDValue, SDValue)>,
+) -> bool {
+    if *leaves == MAX_XORS {
+        return false;
+    }
+    if dag.opcode(n) == ISD::ZeroExtend && dag.has_one_use(n.node) {
+        n = dag.operand(n, 0);
+    }
+    if dag.opcode(n) == ISD::Xor {
+        let pair = (dag.operand(n, 0), dag.operand(n, 1));
+        if require_legal && !has_legal_cmp_immediate(dag, pair) {
+            return false;
+        }
+        work.push(pair);
+        *leaves += 1;
+        *xors += 1;
+        *saw_xor = true;
+        return true;
+    }
+    if dag.opcode(n) == ISD::Or && dag.has_one_use(n.node) {
+        let (a, b) = (dag.operand(n, 0), dag.operand(n, 1));
+        return is_or_xor_chain(dag, a, leaves, xors, saw_xor, require_legal, work)
+            && is_or_xor_chain(dag, b, leaves, xors, saw_xor, require_legal, work);
+    }
+    if dag.opcode(n) == ISD::Or {
+        return false;
+    }
+    let vt = dag.value_type(n);
+    if !vt.is_integer() {
+        return false;
+    }
+    // A xor with zero may have been folded away: a leaf compared with zero.
+    let zero = dag.get_constant(0, vt);
+    work.push((n, zero));
+    *leaves += 1;
+    true
+}
+
+/// `performOrXorChainCombine`: `(or (xor a b) (xor c d)) ==/!= 0` as
+/// `a == b && c == d` (a `cmp` and `ccmp`s), for integers of up to 64 bits.
+/// DEVIATE: `hasMinSize` is not told apart from `optsize`, so `-Oz` keeps the
+/// default limit (the pin raises it to `-aarch64-max-xors`). Owner arm64, exit
+/// 2026-11-30.
+pub fn or_xor_chain(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (lhs, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
+    let lvt = dag.value_type(lhs);
+    if !lvt.is_integer() || lvt.size_in_bits() > 64 {
+        return None;
+    }
+    let cond = super::lowering::cond_of(dag, dag.operand(node, 2));
+    if !matches!(cond, CondCode::SetEq | CondCode::SetNe)
+        || !dag.is_null_constant(rhs)
+        || dag.opcode(lhs) != ISD::Or
+        || !dag.has_one_use(lhs.node)
+    {
+        return None;
+    }
+    let vt = dag.value_type(node);
+    let require_legal = dag.users(node).collect::<Vec<_>>().into_iter().any(|user| {
+        let user = SDValue { node: user, res: 0 };
+        dag.opcode(user) == ISD::BrCond || dag.opcode(user) == ISD::Target(a64::BRCOND)
+    });
+    let (mut leaves, mut xors, mut saw_xor) = (0, 0, false);
+    let mut work = Vec::new();
+    if !is_or_xor_chain(dag, lhs, &mut leaves, &mut xors, &mut saw_xor, require_legal, &mut work) || !saw_xor {
+        return None;
+    }
+    let mut limit = 5;
+    if xors >= 6 {
+        limit = 6;
+        if xors == leaves {
+            limit = xors.min(8);
+        }
+    }
+    if work.len() as u32 > limit {
+        return None;
+    }
+    if work.len() > 2 && work.iter().any(|&pair| has_cheap_xor_immediate_that_needs_cond_cmp_reg(dag, pair)) {
+        return None;
+    }
+    // Only the leading compare uses the wider `cmp` immediate.
+    if let Some(first) = work
+        .iter()
+        .position(|&pair| has_legal_cmp_immediate(dag, pair) && !has_legal_cond_cmp_immediate(dag, pair))
+    {
+        work.swap(0, first);
+    }
+    let logic = if cond == CondCode::SetEq { ISD::And } else { ISD::Or };
+    let mut compare = dag.get_setcc(vt, work[0].0, work[0].1, cond);
+    for &(a, b) in &work[1..] {
+        let next = dag.get_setcc(vt, a, b, cond);
+        compare = dag.get_node(logic, vt, &[compare, next]);
+    }
+    Some(compare)
 }
