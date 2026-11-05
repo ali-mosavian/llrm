@@ -233,6 +233,55 @@ fn a_flag_definition_wanted_across_a_flag_writer_is_cloned() {
     assert!(!(last_add < at_test && at_test < at_adc), "a flag writer between the add and the adc: {order:?}");
 }
 
+const SUBS: u32 = 10;
+const CALL: u32 = 11;
+const BCC: u32 = 12;
+
+struct CallInfo;
+
+impl SchedInfo for CallInfo {
+    fn num_defs(
+        &self,
+        opcode: u32,
+    ) -> usize {
+        usize::from(matches!(opcode, SUBS | LOAD))
+    }
+
+    fn implicit_defs(
+        &self,
+        opcode: u32,
+    ) -> &[u16] {
+        if opcode == SUBS { &[FLAGS] } else { &[] }
+    }
+
+    fn is_call(
+        &self,
+        opcode: u32,
+    ) -> bool {
+        opcode == CALL
+    }
+}
+
+/// `n - 12` is the call's argument and its flags decide a branch after the
+/// call, which clobbers them: arm64 emitted `sub w0, w0, #12; bl f; b.eq`, the
+/// branch reading the call's leftovers (fib10: 49 for 55). The pin finds the
+/// clobber in the call's `RegisterMask` operand (`CheckForLiveRegDefMasked`)
+/// and clones the `subs` below the call.
+#[test]
+fn a_flag_definition_live_across_a_call_is_recomputed_after_it() {
+    let mut dag = dag();
+    let entry = dag.entry_node();
+    let n = load(&mut dag, 1, entry);
+    let subs = machine(&mut dag, SUBS, &[EVT::I32, EVT::I32], &[n]);
+    let mask = dag.get_register_mask_clobbering(&[FLAGS]);
+    let call = machine(&mut dag, CALL, &[EVT::OTHER], &[chain_of(n), subs, mask]);
+    let bcc = machine(&mut dag, BCC, &[EVT::OTHER], &[call, SDValue { node: subs.node, res: 1 }]);
+    let order = schedule(&dag, bcc, &CallInfo);
+    let last_subs = (0..order.len()).rev().find(|&i| order[i].nodes.contains(&subs.node)).expect("scheduled");
+    assert!(position(&order, call) < last_subs, "the branch reads flags the call clobbered: {order:?}");
+    assert!(last_subs < position(&order, bcc), "{order:?}");
+}
+
 /// A load addressed by a target constant pool entry or frame slot got a unit
 /// for the address, as `isPassiveNode` leaves none: the extra unit shifted the
 /// queue order, so `recfloat` stacked its two FP constants the other way round.
