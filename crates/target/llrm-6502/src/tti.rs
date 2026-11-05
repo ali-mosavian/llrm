@@ -173,12 +173,12 @@ impl Tti for Mos6502 {
         true
     }
 
-    /// Rule 2 of the inliner's policy (user 11-04): at `-O2`/`-O3` a byte of
-    /// growth must buy 3 clocks of call latency, weighted by the site's
-    /// frequency. Provisional until the corpus fixes it.
-    fn speed_inline_milliclocks_per_byte(&self) -> i64 {
-        3000
-    }
+    // Rule 2 (user 11-04, a byte of growth must buy 3 clocks at -O2/-O3) is off:
+    // `speed_inline_milliclocks_per_byte` stays 0. DEVIATE 6502-RATE: the
+    // frequency the rule weighs with caps a loop at about 32 trips, where
+    // div_constants_long runs 1500, so it priced 6.8 KB for 4.05M clocks
+    // (600 clk/B) and tail_calls +12.6k clocks for 944 B. Owner: llrm-target-6502.
+    // Exit: a frequency that knows the trip count, 2026-11-20.
 
     /// `jsr` and `rts`, and each argument byte through a cell (`lda`, `sta`).
     fn call_sequence_cost(
