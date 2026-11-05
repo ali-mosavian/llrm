@@ -57,12 +57,20 @@ pub struct Mos6502 {
     byte_bits: u32,
     /// The pointer, in bits (`p:16`).
     pointer_bits: u32,
+    /// `CostKind::CodeSize` is bytes of code, not byte-wide operations: the
+    /// view the inliner counts a callee in ([`Tti::inline_size_view`]). The
+    /// other passes' limits are in the units above.
+    code_size_bytes: bool,
 }
 
 impl Mos6502 {
     pub fn new() -> Mos6502 {
         let layout = DataLayout::parse(&Mos.layout().datalayout).expect("the 6502's datalayout parses");
-        Mos6502 { byte_bits: layout.largest_legal_integer(), pointer_bits: layout.pointer(0).bits }
+        Mos6502 {
+            byte_bits: layout.largest_legal_integer(),
+            pointer_bits: layout.pointer(0).bits,
+            code_size_bytes: false,
+        }
     }
 
     /// The byte-wide operations a value of `ty` takes.
@@ -80,6 +88,24 @@ impl Mos6502 {
         i64::from(bits.div_ceil(self.byte_bits).max(1))
     }
 
+    /// Bytes of code of `units` byte-wide operations of one kind, where the
+    /// view counts bytes: `price(parts)` for the operation, `units` otherwise.
+    fn code(
+        &self,
+        kind: CostKind,
+        units: i64,
+        price: impl FnOnce() -> i64,
+    ) -> Cost {
+        if self.code_size_bytes && kind == CostKind::CodeSize { Cost::of(price()) } else { Cost::of(units) }
+    }
+
+    /// A call to a runtime routine: `jsr` and the operands in `rc2..` (4 bytes
+    /// a byte-wide part), or past a word the long form through `__sa` and
+    /// `__sb` (measured, `x * C` of 32 bits: 59 bytes).
+    fn routine_bytes(parts: i64) -> i64 {
+        if parts <= 2 { 3 + 4 * parts } else { 14 * parts + 3 }
+    }
+
     /// A call to a runtime routine whose loop costs `clocks` units.
     fn call(
         &self,
@@ -88,6 +114,7 @@ impl Mos6502 {
         clocks: i64,
     ) -> Cost {
         match kind {
+            CostKind::CodeSize if self.code_size_bytes => Cost::of(Self::routine_bytes(parts)),
             CostKind::CodeSize | CostKind::SizeAndLatency => Cost::of(2 + parts),
             CostKind::RecipThroughput | CostKind::Latency => Cost::of(clocks),
         }
@@ -113,8 +140,11 @@ impl Tti for Mos6502 {
     ) -> Cost {
         let parts = self.parts(ty);
         match op {
-            CmpSel::ICmp => Cost::of(parts),
-            CmpSel::Select => Cost::of(parts + 1),
+            // `lda; cmp` per byte (4 B; 11 B a byte past a word, which is a
+            // chain of byte compares and the booleans that join them)
+            CmpSel::ICmp => self.code(kind, parts, || if parts <= 2 { 4 * parts } else { 11 * parts }),
+            // `lda #1; bcc; lda #0` per byte
+            CmpSel::Select => self.code(kind, parts + 1, || 6 * parts + 1),
             // soft float: a call
             CmpSel::FCmp => self.call(parts, kind, 10 * parts * parts + 10),
         }
@@ -147,6 +177,63 @@ impl Tti for Mos6502 {
         true
     }
 
+    // Rule 2 (user 11-04, a byte of growth must buy 3 clocks at -O2/-O3) is
+    // off: `speed_inline_milliclocks_per_byte` stays 0. DEVIATE 6502-RATE:
+    // the frequency the rule weighs with caps a loop at about 32 trips,
+    // where div_constants_long runs 1500, so it priced 6.8 KB for 4.05M
+    // clocks (600 clk/B) and tail_calls +12.6k clocks for 944 B. Owner:
+    // llrm-target-6502. Exit: a frequency that knows the trip count,
+    // 2026-11-20.
+
+    /// A 32-bit counter or product is four byte adds; the datalayout's `n8`
+    /// made LSR leave all of them (shrink_wrapped_frame: `n * i` a 32-bit
+    /// multiply per trip, 56k of its 64k clocks). Not 16: with it the
+    /// switch_* and byval_inline cells grew on both axes (DEVIATE LSR-N,
+    /// exit 2026-11-20).
+    fn lsr_native_integer_widths(&self) -> &'static [u32] {
+        &[32]
+    }
+
+    /// `jsr` and `rts`, and each argument byte through a cell (`lda`, `sta`).
+    fn call_sequence_cost(
+        &self,
+        shape: &CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        let bytes: i64 = shape
+            .arguments
+            .iter()
+            .map(|argument| match argument.byval_bytes {
+                Some(bytes) => bytes as i64,
+                None => argument.ty.map_or(1, |ty| self.parts(ty)),
+            })
+            .sum();
+        Some(match kind {
+            CostKind::CodeSize if self.code_size_bytes => Cost::of(3 + 4 * bytes),
+            CostKind::CodeSize | CostKind::SizeAndLatency => Cost::of(2 + bytes),
+            CostKind::RecipThroughput | CostKind::Latency => Cost::of(12 + 6 * bytes),
+        })
+    }
+
+    /// The soft-stack frame a callee with static allocas builds and tears
+    /// down: `rs0` adjusted both ways (30 clocks, `staticlocals`).
+    fn callee_frame_cost(
+        &self,
+        shape: &CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        (shape.callee_frame_bytes > 0).then(|| match kind {
+            CostKind::CodeSize if self.code_size_bytes => Cost::of(24),
+            CostKind::CodeSize | CostKind::SizeAndLatency => Cost::of(2),
+            CostKind::RecipThroughput | CostKind::Latency => Cost::of(30),
+        })
+    }
+
+    // The same model counting encoded bytes where `CostKind::CodeSize` asks.
+    fn inline_size_view(&self) -> Option<std::rc::Rc<dyn Tti>> {
+        Some(std::rc::Rc::new(Mos6502 { code_size_bytes: true, ..*self }))
+    }
+
     fn has_cmov(&self) -> bool {
         false
     }
@@ -155,10 +242,11 @@ impl Tti for Mos6502 {
         &self,
         _: MemoryOp,
         ty: Ty,
-        _: CostKind,
+        kind: CostKind,
         _: bool,
     ) -> Cost {
-        Cost::of(self.parts(ty))
+        // `ldy #n; lda (rc),y` is 4 bytes a byte
+        self.code(kind, self.parts(ty), || 4 * self.parts(ty))
     }
 
     fn cf_instr_cost(
@@ -166,7 +254,9 @@ impl Tti for Mos6502 {
         phi: bool,
         kind: CostKind,
     ) -> Cost {
-        Basic.cf_instr_cost(phi, kind)
+        // a phi is a copy the allocator coalesces; a branch is `bne l` (2) and
+        // the jump past the other arm (3)
+        self.code(kind, Basic.cf_instr_cost(phi, kind).value, || if phi { 0 } else { 3 })
     }
 
     fn int_imm_cost(
@@ -225,8 +315,11 @@ impl Tti for Mos6502 {
         let (to, from) = (self.parts(dst), self.parts(src));
         match op {
             CastKind::Trunc | CastKind::BitCast => Cost::FREE,
-            CastKind::ZExt | CastKind::PtrToInt | CastKind::IntToPtr => Cost::of((to - from).max(0)),
-            CastKind::SExt => Cost::of(2 * (to - from).max(0)),
+            // `lda #0; sta` a new byte; the sign byte is a branch and a fill
+            CastKind::ZExt | CastKind::PtrToInt | CastKind::IntToPtr => {
+                self.code(kind, (to - from).max(0), || 4 * (to - from).max(0))
+            }
+            CastKind::SExt => self.code(kind, 2 * (to - from).max(0), || 8 * (to - from).max(0)),
             // soft float: a call
             _ => self.call(to.max(from), kind, 10 * to.max(from).pow(2) + 10),
         }
@@ -244,14 +337,16 @@ impl Tti for Mos6502 {
         let parts = self.parts(ty);
         let constant = first.constant || second.constant;
         match op {
-            Add | Sub | And | Or | Xor | FNeg => Cost::of(parts),
-            Shl | LShr | AShr if second.constant => Cost::of(parts),
+            // `lda; adc; sta` a byte, `clc` once
+            Add | Sub | And | Or | Xor | FNeg => self.code(kind, parts, || 6 * parts + 1),
+            // a rotate chain, 4 bytes a byte
+            Shl | LShr | AShr if second.constant => self.code(kind, parts, || 4 * parts),
             Shl | LShr | AShr => self.call(parts, kind, 6 * parts),
-            Mul if second.power_of_two || first.power_of_two => Cost::of(parts),
-            Mul if constant => Cost::of(3 * parts),
+            Mul if second.power_of_two || first.power_of_two => self.code(kind, parts, || 4 * parts),
+            Mul if constant => self.code(kind, 3 * parts, || 14 * parts),
             Mul => self.call(parts, kind, 10 * parts * parts + 10),
-            UDiv if second.power_of_two => Cost::of(parts),
-            URem if second.power_of_two => Cost::of(parts),
+            UDiv if second.power_of_two => self.code(kind, parts, || 4 * parts),
+            URem if second.power_of_two => self.code(kind, parts, || 2 * parts),
             UDiv | URem | SDiv | SRem => self.call(parts, kind, 22 * parts * parts + 3),
             // soft float: a call
             FAdd | FSub | FMul | FDiv | FRem => self.call(parts, kind, 10 * parts * parts + 10),

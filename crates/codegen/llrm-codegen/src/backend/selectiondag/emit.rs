@@ -1202,6 +1202,13 @@ impl Emitter<'_, '_> {
                     self.ss_copies.insert(n);
                 }
                 self.es_is_ss = self.ss_copies.contains(&n);
+                // An inline block that takes ES as an input (a backward
+                // string move) requires it there: it runs with the selector
+                // it asked for, not what a far access left in ES.
+                if self.feeds_call(n) {
+                    let held = self.made_again_for_fixed_use(selector);
+                    self.arguments.push((held, llrm_lir::registers::RegId::ES));
+                }
                 Ok(())
             }
             ISD::CopyToReg
@@ -1992,7 +1999,11 @@ impl Emitter<'_, '_> {
             None => {
                 let mut clobbers =
                     self.ctx.conventions.clobbers(callee).unwrap_or_else(|| self.ctx.caller_saved.clone());
-                clobbers.extend(self.arguments.iter().map(|(_, register)| *register));
+                // An inline block names what it writes: an input it does not
+                // list (ES for a string move) survives it.
+                if !matches!(callee, Some(Callee::Named(name)) if llrm_mir::intrinsics::asm(name).is_some()) {
+                    clobbers.extend(self.arguments.iter().map(|(_, register)| *register));
+                }
                 clobbers
             }
         };
@@ -2009,6 +2020,7 @@ impl Emitter<'_, '_> {
                 .into_iter()
                 .filter(|register| *register != self.ctx.stack_pointer)
                 .collect(),
+            block: matches!(callee, Some(Callee::Named(name)) if llrm_mir::intrinsics::asm(name).is_some()),
         });
         let mut uses = _read(&what);
         let requires = std::mem::take(&mut self.arguments);

@@ -355,6 +355,20 @@ impl Printer<'_> {
                 let to = name_of(self, 0)?;
                 self.push(format!("{mnemonic} {to}"));
             }
+            // the word stepped when the condition holds: `jr` over the step
+            // on its opposite (a step leaves the flags alone)
+            "INC16c" | "DEC16c" => {
+                let Some(Operand::Imm(cond)) = inst.operands.get(2) else {
+                    return Err("a conditional step without a condition".to_owned());
+                };
+                let opposite =
+                    ["z", "nz", "c", "nc"].get(*cond as usize).ok_or("a conditional step on an unknown condition")?;
+                let to = name_of(self, 0)?;
+                let skip = format!("{}$", self.out.iter().filter(|line| !matches!(line, Line::Loc(_))).count());
+                self.push(format!("jr {opposite}, {skip}"));
+                self.push(format!("{} {to}", op[..3].to_lowercase()));
+                self.out.push(Line::Label(skip));
+            }
             "INC16x2" | "INC16x3" | "DEC16x2" | "DEC16x3" => {
                 let mnemonic = op[..3].to_lowercase();
                 let to = name_of(self, 0)?;
@@ -674,6 +688,11 @@ impl Printer<'_> {
                     self.push(if down { "push bc" } else { "pop bc" });
                 }
                 self.call_bytes = if down { 2 * pushes } else { 0 };
+            }
+            "PUSHARG" => {
+                let pair = self.register(inst, 0)?;
+                self.push(format!("push {}", name(pair)));
+                self.call_bytes += 2;
             }
             "STSP8" | "STSP16" => {
                 let Some(Operand::Imm(offset)) = inst.operands.get(1) else {
@@ -1018,10 +1037,12 @@ impl Printer<'_> {
         let (mut carry, mut zero, mut other) = (false, false, None);
         for one in &self.flag_readers(rest) {
             {
-                match (one.kind, one.operands.get(1)) {
-                    (Kind::Op("SETCC8"), Some(Operand::Imm(2 | 3)))
+                // a conditional step names its condition after the word
+                let condition = if matches!(one.kind, Kind::Op("INC16c" | "DEC16c")) { 2 } else { 1 };
+                match (one.kind, one.operands.get(condition)) {
+                    (Kind::Op("SETCC8" | "INC16c" | "DEC16c"), Some(Operand::Imm(2 | 3)))
                     | (Kind::Op("JPC" | "JPNC" | "RETC" | "RETNC" | "CP16C" | "CP16Ci"), _) => carry = true,
-                    (Kind::Op("SETCC8"), Some(Operand::Imm(0 | 1)))
+                    (Kind::Op("SETCC8" | "INC16c" | "DEC16c"), Some(Operand::Imm(0 | 1)))
                     | (Kind::Op("JPZ" | "JPNZ" | "RETZ" | "RETNZ"), _) => zero = true,
                     (Kind::Op(name), _) => other = Some(name),
                     (Kind::Copy, _) => {}
@@ -1525,6 +1546,52 @@ pub fn reads(function: &MFunction) -> llrm_support::hash::HashMap<u32, usize> {
     reads
 }
 
+/// The bytes of stack arguments a call has reserved when each block is
+/// entered. Branch folding hoists the reservation of a call that both arms of
+/// a branch make into the block ahead of it, so a count kept in the order
+/// blocks are printed was the one the arm before had left: the second arm
+/// stored its arguments 6 B off (a `u64` shifted one way or the other, -O2).
+fn call_bytes_at_entry(function: &MFunction) -> Vec<i64> {
+    let index: llrm_support::hash::HashMap<u32, usize> =
+        function.blocks.iter().enumerate().map(|(at, block)| (block.id, at)).collect();
+    let mut entry: Vec<Option<i64>> = vec![None; function.blocks.len()];
+    let mut work = Vec::new();
+    if !entry.is_empty() {
+        entry[0] = Some(0);
+        work.push(0);
+    }
+    while let Some(at) = work.pop() {
+        let block = &function.blocks[at];
+        let mut bytes = entry[at].unwrap_or(0);
+        for inst in &block.insts {
+            match (inst.kind, inst.operands.first()) {
+                (Kind::Op("ADJCALLSTACKDOWN"), Some(Operand::Imm(size))) if *size != 0 => bytes = 2 * ((size + 1) / 2),
+                (Kind::Op("ADJCALLSTACKUP"), Some(Operand::Imm(size))) if *size != 0 => bytes = 0,
+                (Kind::Op("PUSHARG"), _) => bytes += 2,
+                _ => {}
+            }
+        }
+        let falls = !block.insts.last().is_some_and(|inst| inst.barrier);
+        let targets = block
+            .insts
+            .iter()
+            .flat_map(|inst| &inst.operands)
+            .filter_map(
+                |operand| match operand {
+                    Operand::Block(id) => index.get(id).copied(),
+                    _ => None,
+                },
+            );
+        for to in targets.chain(falls.then_some(at + 1).filter(|next| *next < function.blocks.len())) {
+            if entry[to].is_none() {
+                entry[to] = Some(bytes);
+                work.push(to);
+            }
+        }
+    }
+    entry.into_iter().map(|bytes| bytes.unwrap_or(0)).collect()
+}
+
 /// `reads` is [`reads`] of the function as the allocator left it: the copies
 /// it dropped as identities were reads too.
 pub fn finish(
@@ -1535,6 +1602,7 @@ pub fn finish(
     reads: llrm_support::hash::HashMap<u32, usize>,
 ) -> Result<Vec<Line>, String> {
     let mut function = tail_calls(function);
+    push_arguments(&mut function, assignment);
     let frame = layout(&function, slots);
     let pushed = entry_pushes(&mut function, assignment, &frame);
     let function = &function;
@@ -1564,7 +1632,9 @@ pub fn finish(
             printer.push(line);
         }
     }
+    let call_bytes = call_bytes_at_entry(function);
     for (at, block) in function.blocks.iter().enumerate() {
+        printer.call_bytes = call_bytes[at];
         printer.out.push(Line::Label(label(number, block.id)));
         let mut shown = None;
         let next = function.blocks.get(at + 1).map(|block| block.id);
@@ -2067,11 +2137,88 @@ fn flag_and_b_free(text: &str) -> bool {
     }
 }
 
+/// The stack arguments of a call, all words in a register pair, are pushed in
+/// place of reserving the area with `push bc` and storing into it: `ld hl, #0;
+/// push hl` is 4 B where `push bc; ld hl, #0; ld -32(ix), l; ld -31(ix), h`
+/// is 10. `X86CallFrameOptimization`, which turns the stores of a reserved
+/// call frame into pushes, for the stores that run from the top word down.
+fn push_arguments(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) {
+    let pair_of = |operand: Option<&Operand>| {
+        let register = match operand {
+            Some(Operand::Use(Reg::Virt(v))) => assignment.0[*v as usize],
+            Some(Operand::Use(Reg::Phys(id))) => *id,
+            _ => return None,
+        };
+        [reg::BC, reg::DE, reg::HL].into_iter().find(|pair| register == *pair)
+    };
+    for block in &mut function.blocks {
+        let mut at = 0;
+        while at < block.insts.len() {
+            let Kind::Op("ADJCALLSTACKDOWN") = block.insts[at].kind else {
+                at += 1;
+                continue;
+            };
+            let Some(Operand::Imm(bytes @ 2..=16)) = block.insts[at].operands.first().cloned() else {
+                at += 1;
+                continue;
+            };
+            let mut stores = Vec::new();
+            let mut next = bytes - 2;
+            let mut legal = bytes % 2 == 0;
+            let mut end = at + 1;
+            while legal && end < block.insts.len() && !block.insts[end].call {
+                let inst = &block.insts[end];
+                match inst.kind {
+                    Kind::Op("STSP16") => {
+                        legal = matches!(
+                            inst.operands.get(1),
+                            Some(Operand::Imm(offset)) if *offset == next
+                        ) && pair_of(inst.operands.first()).is_some();
+                        stores.push(end);
+                        next -= 2;
+                    }
+                    Kind::Op("STSP8" | "ADJCALLSTACKDOWN" | "ADJCALLSTACKUP" | "PUSHP" | "POPP") => legal = false,
+                    _ => {}
+                }
+                end += 1;
+            }
+            let called = end < block.insts.len() && block.insts[end].call;
+            if !(legal && called && next == -2) {
+                at += 1;
+                continue;
+            }
+            for &store in &stores {
+                block.insts[store].kind = Kind::Op("PUSHARG");
+            }
+            block.insts.remove(at);
+        }
+    }
+}
+
 /// `call f; ret` is `jp f`: the callee returns to our caller with its result
 /// in the registers ours would be returned in. Only a call that put nothing on
 /// the stack (the caller cleans up after it).
 fn tail_calls(function: &MFunction) -> MFunction {
     let mut function = function.clone();
+    // The frame is gone when the callee runs, so a local whose address was
+    // taken may be read by it; LLVM marks no such call `tail`.
+    let escapes = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .any(
+            |inst| inst.kind == Kind::Op("LEAFI")
+                && matches!(
+                    inst.operands.get(1),
+                    Some(Operand::Frame(index)) if function.locals.iter().any(|&(local, ..)| local == *index)
+                ),
+        );
+    if escapes {
+        return function;
+    }
     for block in &mut function.blocks {
         let insts = &block.insts;
         let n = insts.len();
@@ -2084,7 +2231,11 @@ fn tail_calls(function: &MFunction) -> MFunction {
             {
                 let symbol = insts[at].operands.first().cloned();
                 if let Some(symbol @ Operand::Symbol(..)) = symbol {
-                    let mut tail = Inst::new(Kind::Op("TAILCALL"), vec![symbol]);
+                    // the call's argument registers stay read: the copies that
+                    // fill them are not dead
+                    let mut operands = insts[at].operands.clone();
+                    operands[0] = symbol;
+                    let mut tail = Inst::new(Kind::Op("TAILCALL"), operands);
                     tail.terminator = true;
                     tail.barrier = true;
                     block.insts.truncate(at);

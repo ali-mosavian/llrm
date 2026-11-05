@@ -137,5 +137,6 @@ macho = "_*"
 2 = ["rax"]
 4 = ["rax"]
 8 = ["rax"]
+16 = ["rax", "rdx"]
 pointer = ["rax"]
 float = ["xmm0"]

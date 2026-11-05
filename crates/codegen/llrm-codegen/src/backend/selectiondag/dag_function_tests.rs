@@ -1640,7 +1640,7 @@ fn the_odds_of_a_branch_are_found_in_its_piece_not_in_every_block() {
 /// Every function ran `consts::known` and `exposed_frames` over its whole body
 /// to find loop trip counts, loops or none (67 M Ir of 6.9 G on
 /// memory_expansion -O2 m64). A function without a loop derives nothing and
-/// states no trips; one with a loop still does.
+/// states no trips; one with a loop states its trips and derives no facts.
 #[test]
 fn test_a_function_without_a_loop_derives_no_trip_counts() {
     let layout = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n";
@@ -1666,7 +1666,9 @@ out:
     };
     assert_eq!(derivations(flat), (0, 0), "a loop-free function worked out the facts of its body");
     let (derived, trips) = derivations(looped);
-    assert!(derived >= 1 && trips == 1, "the loop lost its trips: {derived} derivations, {trips} counts");
+    // The mid-end's `Registers` is empty by design; a fixed point over the
+    // body for the trips (33.6 M, memory_expansion -O2 m64) bought nothing.
+    assert!(derived == 0 && trips == 1, "the loop lost its trips or derived the facts: {derived} derivations, {trips} counts");
 }
 
 /// A function's branch probabilities were calculated twice in a selection, once

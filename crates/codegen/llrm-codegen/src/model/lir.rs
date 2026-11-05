@@ -46,6 +46,11 @@ pub struct CallMemory {
     /// as it does before writing it. Empty where the callee's contract is what
     /// the call went by.
     pub disturbs: BTreeSet<RegId>,
+    /// An inline block of bytes laid down at the site (`llrm.ia16.asm`): it
+    /// writes the registers its instruction lists and no others, which a
+    /// call of a routine does not promise (a segment register it does not
+    /// list still holds what it did).
+    pub block: bool,
 }
 
 impl CallMemory {
@@ -810,11 +815,19 @@ impl Insn {
     }
 
     /// Whether it may write memory its operands do not name: a call or
-    /// barrier with no `call` to list what it touches.
+    /// barrier with no `call` to list what it touches. The call-frame pseudos
+    /// (`ADJCALLSTACKDOWN`/`UP`) only move the stack pointer: they write no
+    /// memory.
     #[must_use]
     pub fn unmodeled_write(&self) -> bool {
         self.call.is_none()
-            && self.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Call | Operation::Barrier))
+            && self.what.as_ref().is_some_and(|what| {
+                matches!(what.op, Operation::Call | Operation::Barrier)
+                    && !matches!(
+                        what.name.as_deref(),
+                        Some("call_frame_setup" | "call_frame_destroy")
+                    )
+            })
     }
 
     /// Whether this instruction puts bytes out, which its machine form

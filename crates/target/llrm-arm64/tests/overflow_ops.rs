@@ -38,3 +38,13 @@ fn an_inverted_unsigned_add_overflow_bit_is_one_csinc_on_the_inverted_condition(
     assert!(text.contains("csinc w0, wzr, wzr, hs"), "{text}");
     assert!(!text.contains("eor"), "{text}");
 }
+
+/// A loop that ends on the carry of its counter branched on `adds`' flags
+/// (`b.lo`); the swapped branch was `adds`, `csinc`, `tbz`: one instruction
+/// more per iteration (sieve +1024, scroll +96000 under CGP-MATH-1).
+#[test]
+fn a_branch_on_the_overflow_bit_reads_the_flags_of_the_add() {
+    let text = body("loop");
+    assert!(text.contains("adds") && (text.contains("b.lo") || text.contains("b.hs")), "{text}");
+    assert!(!text.contains("csinc") && !text.contains("tbz"), "{text}");
+}

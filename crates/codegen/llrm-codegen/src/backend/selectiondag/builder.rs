@@ -1843,7 +1843,21 @@ impl Builder<'_> {
             None => called,
         };
         let mut values = Vec::new();
+        // The argument each value belongs to: a target's hook is given an
+        // aggregate argument leaf by leaf (`ComputeValueVTs` in `visitCall`).
+        let mut owner: Vec<usize> = Vec::new();
         for (at, argument) in arguments.iter().enumerate() {
+            let aggregate = self.calling().is_some()
+                && self.function.operand_type(&self.module.context, *argument).is_some_and(|ty| self.is_aggregate(ty));
+            if aggregate {
+                for leaf in self.value_parts(*argument)? {
+                    self.parts(self.dag.value_type(leaf))?;
+                    values.push(leaf);
+                    owner.push(at);
+                }
+                continue;
+            }
+            owner.push(at);
             let value = self.get_value(*argument)?;
             // The dword is for a stack cell or an integer register; a target
             // that owns the call (`calling`) or an xmm argument takes the
@@ -1857,7 +1871,7 @@ impl Builder<'_> {
             self.parts(self.dag.value_type(value))?;
             values.push(value);
         }
-        let attrs = |at: usize| info.argument_attrs.get(at).map_or(&[][..], Vec::as_slice);
+        let attrs = |at: usize| info.argument_attrs.get(owner[at]).map_or(&[][..], Vec::as_slice);
         let extends: Vec<ISD> = (0..values.len())
             .map(|at| {
                 if llrm_mir::memory::has(attrs(at), "signext") {
@@ -1927,8 +1941,8 @@ impl Builder<'_> {
             instruction,
         )
         .map(|range| range.get_min_signed_bits());
-        self.fixed_args = named;
-        self.call_sret = info.argument_attrs.iter().map(|attrs| has_sret(attrs)).collect();
+        self.fixed_args = owner.iter().filter(|argument| **argument < named).count();
+        self.call_sret = owner.iter().map(|argument| info.argument_attrs.get(*argument).is_some_and(|attrs| has_sret(attrs))).collect();
         self.call_attrs_move_arguments = match self.calling() {
             Some(calling) => info.argument_attrs.iter().any(|attrs| self.moves_argument(calling, attrs)),
             None => info.argument_attrs.iter().any(|attrs| relocating_attribute(attrs).is_some()),

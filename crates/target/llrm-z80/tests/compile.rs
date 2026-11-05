@@ -1124,11 +1124,12 @@ fn the_z80_convention_is_parsed_once() {
 
 /// A call with a stack argument from a frame of 200 bytes was refused ("a
 /// stack argument -142 from ix"; `div_constants_long`): the argument area
-/// is 142 bytes below IX, past the byte displacement. It is addressed from IY.
+/// is 142 bytes below IX, past the byte displacement. It is addressed from IY
+/// (byte arguments: words are pushed).
 #[test]
 fn a_stack_argument_beyond_the_ix_displacement_is_stored_through_iy() {
     let text = compiled(
-        "declare void @use(ptr)\ndeclare i32 @g(i32, i32)\ndefine i32 @f(i32 %a, i32 %b) {\n  %buf = alloca [200 x i8]\n  call void @use(ptr %buf)\n  %r = call i32 @g(i32 %a, i32 %b)\n  ret i32 %r\n}",
+        "declare void @use(ptr)\ndeclare i32 @g(i32, i32, i8, i8, i8)\ndefine i32 @f(i32 %a, i32 %b) {\n  %buf = alloca [200 x i8]\n  call void @use(ptr %buf)\n  %r = call i32 @g(i32 %a, i32 %b, i8 1, i8 2, i8 3)\n  ret i32 %r\n}",
         "f",
     );
     assert!(text.contains("add iy, sp") && text.contains("(iy)"), "{text}");
@@ -1713,4 +1714,72 @@ fn a_long_subtract_borrow_shared_with_the_order_chain_still_fuses() {
     let text = compiled("define i64 @f(i64 %a, i64 %b) optsize {\n  %r = sub i64 %a, %b\n  ret i64 %r\n}", "f");
     let instructions = text.lines().filter(|line| line.starts_with('\t') && !line.trim_start().starts_with('.')).count();
     assert!(instructions <= 135, "{instructions} instructions:\n{text}");
+}
+
+/// `line` passed the address of its local to `kernel` and ended in `jp
+/// _kernel` with the frame already popped: `kernel` ran over the local it was
+/// handed (frame_address_stack_args -Oz printed 13599, not 13346).
+#[test]
+fn a_call_given_the_address_of_a_local_is_not_a_tail_jump() {
+    let out = compiled(
+        "declare void @use(ptr)\ndefine void @f() {\n  %a = alloca [4 x i8]\n  call void @use(ptr %a)\n  ret void\n}",
+        "f",
+    );
+    assert!(out.contains("call _use") && !out.contains("jp _use"), "{out}");
+}
+
+/// The same call without a local to reach is still a tail jump.
+#[test]
+fn a_call_with_no_local_to_reach_is_a_tail_jump() {
+    let out =
+        compiled("declare void @use(i16)\ndefine void @f(i16 %x) {\n  call void @use(i16 %x)\n  ret void\n}", "f");
+    assert!(out.contains("jp _use"), "{out}");
+}
+
+/// `x + 1` and `x - 1` on a long rebuilt the low word's carry by a compare, a
+/// `ld h, #1` / `jr` / `dec h` byte and an add: 19 B and 20 B. The carry is a
+/// zero test of the low word and the high word steps behind a `jr` (12 B).
+#[test]
+fn a_long_step_of_one_is_a_zero_test_and_a_conditional_step() {
+    let ir = "define i32 @inc(i32 %x) {\n  %r = add i32 %x, 1\n  ret i32 %r\n}\n\
+              define i32 @dec(i32 %x) {\n  %r = add i32 %x, -1\n  ret i32 %r\n}";
+    let ir = format!("target datalayout = \"{DATALAYOUT}\"\n{ir}");
+    for (name, step) in [("inc", "inc"), ("dec", "dec")] {
+        let out = text(&ir, name, 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+        let instructions = out.lines().filter(|l| l.starts_with('\t') && !l.trim_start().starts_with('.')).count();
+        assert!(out.contains("jr nz") && !out.contains("sbc") && !out.contains("sub a"), "{name}\n{out}");
+        assert!(out.contains(&format!("\t{step} ")) && instructions <= 12, "{name}: {instructions}\n{out}");
+    }
+}
+
+/// The divisor's high word of a long divide went on the stack as `push bc`
+/// (a reserved slot) and two stores into it from `ix`: 10 B for the word, and
+/// 60 B in each `div_constants_long` function. It is `ld rr, #0; push rr`.
+#[test]
+fn the_stack_word_of_a_long_divide_is_pushed_not_stored() {
+    let ir = "define i32 @q(i32 %x) {\n  %r = sdiv i32 %x, 3\n  ret i32 %r\n}";
+    let ir = format!("target datalayout = \"{DATALAYOUT}\"\n{ir}");
+    let out = text(&ir, "q", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+    let lines: Vec<&str> = out.lines().map(str::trim).collect();
+    let call =
+        lines.iter().position(|l| l.contains("call __divsi3")).unwrap_or_else(|| panic!("no divide call\n{out}"));
+    let push = lines[..call].iter().rposition(|l| l.starts_with("push")).unwrap_or_else(|| panic!("no push\n{out}"));
+    let pair = lines[push].trim_start_matches("push ");
+    assert_eq!(lines[push - 1], format!("ld {pair}, #0"), "{out}");
+    assert!(
+        !lines[push..call].iter().any(|l| l.starts_with("ld -") && l.contains("(ix)")),
+        "stored into the slot\n{out}"
+    );
+}
+
+/// The shift routines of the z80 (`__ashlsi3` and the others) read their count
+/// from `a`, one byte; the pin makes a library shift's amount the C `int`, so
+/// the shared legalizer's default would hand them a word in `bc` and every
+/// shift of a long by a constant would be wrong. z80 keeps the byte until its
+/// helpers take a word (`with_narrow_library_shift`).
+#[test]
+fn a_long_shift_routine_takes_its_count_in_a_as_a_byte() {
+    let shifted = compiled("define i32 @f(i32 %a) optsize {\n  %r = shl i32 %a, 5\n  ret i32 %r\n}", "f");
+    assert!(shifted.contains("ld a, #5"), "{shifted}");
+    assert!(!shifted.contains("ld bc, #5") && !shifted.contains("ld hl, #5"), "{shifted}");
 }

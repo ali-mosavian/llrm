@@ -977,4 +977,16 @@ impl Lowering for AArch64Lowering {
     ) -> u32 {
         bits.max(32)
     }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.h#L339
+    // Overflow ops for a check alone are cheap here: the base class's answer
+    // with the math taken as used.
+    fn should_form_overflow_op(
+        &self,
+        op: llrm_mir::lowering::OverflowOp,
+        bits: u32,
+        _math_used: bool,
+    ) -> bool {
+        op == llrm_mir::lowering::OverflowOp::UAdd && llrm_mir::lowering::simple_int(bits)
+    }
 }

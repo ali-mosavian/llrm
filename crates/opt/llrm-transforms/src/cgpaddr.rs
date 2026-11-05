@@ -36,6 +36,9 @@
 //!
 //! A phi whose arms differ in kind stays.
 //!
+//! (C1 is not what left leas in m64 quicksort -O3: that was the missing
+//! base-as-register retry in `matched_over`.)
+//!
 //! DEVIATE C1 (m32): the rest of CodeGenPrepare's work is done by isel, which
 //! rebuilds an address expression in the block that uses it, and by the select
 //! lowering; the width of a switch condition is `cgpswitch`'s
@@ -199,6 +202,28 @@ impl FunctionPass for CgpAddr {
         // Blocks and edges are as they were.
         let one_flag = !analyses.outer().target().multiple_condition_registers();
         let sunk_compares = one_flag && compares_sunk(unit.context, &analyses.outer().globals, unit.function);
+        // `optimizeCmp`'s overflow combines, before its other steps.
+        let math = match analyses.outer().target().lowering() {
+            Some(lowering) => {
+                let outer = std::rc::Rc::clone(analyses.outer());
+                crate::cgpmath::overflow_math_formed(
+                    unit.context,
+                    &outer.globals,
+                    unit.layout,
+                    unit.declared,
+                    &*lowering,
+                    &mut |function| {
+                        let loops = analyses.get::<Loops>(&*unit.context, unit.layout, function);
+                        (
+                            llrm_analysis::cfg::natural(function, &loops),
+                            analyses.get::<Dominators>(&*unit.context, unit.layout, function),
+                        )
+                    },
+                    unit.function,
+                )
+            }
+            None => false,
+        };
         let compares = match analyses.outer().target().lowering() {
             Some(lowering) => {
                 let outer = std::rc::Rc::clone(analyses.outer());
@@ -286,6 +311,7 @@ impl FunctionPass for CgpAddr {
             || remainders
             || compares
             || switches
+            || math
         {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else if closed {
@@ -631,6 +657,23 @@ fn matched(
     address: Operand,
     depth: u32,
 ) -> Mode {
+    matched_over(unit, tti, space, block, bytes, address, depth, false)
+}
+
+/// [`matched`]; `opaque` reads the base operand of the `gep` as a register
+/// without matching it (the retry of `matchOperationAddr`'s GEP case:
+/// "try stuffing the base into a register instead of matching it",
+/// [L5408](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L5408)).
+fn matched_over(
+    unit: &passes::Unit,
+    tti: &dyn Tti,
+    space: u32,
+    block: BlockId,
+    bytes: u64,
+    address: Operand,
+    depth: u32,
+    opaque: bool,
+) -> Mode {
     let plain = || Mode { base: address, reg: None, offset: 0, index: None, insts: Vec::new(), in_bounds: true };
     let Operand::Value(value) = address else { return plain() };
     let ValueDef::Instruction(gep) = unit.function.value(value).def else { return plain() };
@@ -663,7 +706,11 @@ fn matched(
     if variable.len() > 1 {
         return plain();
     }
-    let inner = matched(unit, tti, space, block, bytes, instruction.operands[0], depth - 1);
+    let inner = if opaque {
+        Mode { base: instruction.operands[0], reg: None, offset: 0, index: None, insts: Vec::new(), in_bounds: true }
+    } else {
+        matched(unit, tti, space, block, bytes, instruction.operands[0], depth - 1)
+    };
     let mut insts = inner.insts;
     let mut in_bounds = inner.in_bounds && instruction.flags.contains(Flags::INBOUNDS);
     let mut reg = inner.reg;
@@ -680,6 +727,18 @@ fn matched(
         {
             reg = Some(held);
             Some((instruction.operands[1 + at], scale))
+        }
+        // The base matched an index of its own: match this one against the
+        // base as a register; a second conflict is a failure.
+        // DEVIATE CGP2 (owner anyisa, exit 2026-11-20): not in real mode. The
+        // sunk address keeps its base and index live to the store; with four
+        // registers that grew m16 bintree -Os by 5 bytes and
+        // phi_slot_unknown_arm -O1 by 9 (an added spill slot and a select made
+        // through `setge`). The pin has no such gate (its code16 build has
+        // 32-bit registers, so it is no oracle here); the exit makes this a
+        // register-pressure price.
+        (Some(_), Some(_)) if !opaque && tti.scaled_index_insns() == 0 => {
+            return matched_over(unit, tti, space, block, bytes, address, depth, true);
         }
         (Some(_), Some(_)) => return plain(),
         // `matchScaledValue` of scale 1 is `matchAddr(ScaleReg)`

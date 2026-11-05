@@ -2406,15 +2406,170 @@ fn function_text(
     rest[..end].to_owned()
 }
 
-/// A long multiply of two variables calls the variant that stops at the last
-/// set byte of the multiplier where clocks count, and the 19 bytes shorter
-/// walk of all 32 bits tuned for size (shrink_wrapped_frame: 159k clocks v
-/// gcc's 19k).
+/// `__mulsi3_fast` linked 19 bytes more into 13 of 72 programs and ran faster
+/// in 11; in struct_with_i64 and frame_address_stack_args the multiply never
+/// runs and the bytes were all cost. A long multiply calls `__mulsi3` at every
+/// level until a priced rule picks the variant.
 #[test]
-fn a_long_multiply_of_variables_calls_the_variant_for_the_level() {
+fn a_long_multiply_links_the_compact_routine_at_every_level() {
     let ir = module("define i32 @f(i32 %a, i32 %b) {\n  %r = mul i32 %a, %b\n  ret i32 %r\n}");
+    for level in [Level::O2, Level::Os] {
+        let text = assembly(&ir, &Request::new(level)).unwrap();
+        assert!(text.contains("__mulsi3") && !text.contains("__mulsi3_fast"), "{text}");
+    }
+}
+
+/// LSR left every 16- and 32-bit induction variable of the 6502 alone (its
+/// datalayout is `n8`, so the pin's `IVUsers` found none): `x[i] = n * i` called
+/// `__mulsi3` on every trip, 56k of shrink_wrapped_frame's 64k clocks. At speed
+/// the 32-bit product is a running sum.
+#[test]
+fn a_32_bit_product_of_the_counter_is_a_running_sum_at_speed() {
+    let ir = module(
+        "define i32 @f(i32 %n) {
+entry:
+  %a = alloca [16 x i32], align 1
+  br label %fill
+fill:
+  %i = phi i32 [ 0, %entry ], [ %next, %fill ]
+  %product = mul nuw nsw i32 %i, %n
+  %index = trunc i32 %i to i16
+  %slot = getelementptr inbounds [4 x i8], ptr %a, i16 %index
+  store i32 %product, ptr %slot, align 1
+  %next = add nuw nsw i32 %i, 1
+  %filled = icmp eq i32 %next, 16
+  br i1 %filled, label %sum, label %fill
+sum:
+  %j = phi i32 [ 0, %fill ], [ %jn, %sum ]
+  %total = phi i32 [ 0, %fill ], [ %t, %sum ]
+  %jx = trunc i32 %j to i16
+  %cell = getelementptr inbounds [4 x i8], ptr %a, i16 %jx
+  %v = load i32, ptr %cell, align 1
+  %t = add i32 %total, %v
+  %jn = add nuw nsw i32 %j, 1
+  %done = icmp eq i32 %jn, 16
+  br i1 %done, label %exit, label %sum
+exit:
+  ret i32 %t
+}",
+    );
     let fast = assembly(&ir, &Request::new(Level::O2)).unwrap();
-    assert!(fast.contains("__mulsi3_fast"), "{fast}");
-    let small = assembly(&ir, &Request::new(Level::Os)).unwrap();
-    assert!(small.contains("__mulsi3") && !small.contains("__mulsi3_fast"), "{small}");
+    assert!(!fast.contains("__mulsi3"), "{fast}");
+}
+
+/// A `byval` argument of 40 bytes is copied by a call of `memcpy` the builder
+/// names itself; the 6502 left its callee an `ExternalSymbol` and refused
+/// (`CannotSelect("ExternalSymbol")`: byval_struct, byval_inline and
+/// byval_initializes at -O0, any caller that does not inline the callee).
+#[test]
+fn a_byval_argument_over_the_inline_limit_is_copied_by_a_memcpy_call() {
+    let ir = module(
+        r#"%big = type { [40 x i8] }
+declare i32 @sum(ptr byval(%big) align 1, i32)
+define i32 @f(ptr %p) {
+  %r = call i32 @sum(ptr byval(%big) align 1 %p, i32 100)
+  ret i32 %r
+}"#,
+    );
+    for level in [Level::O0, Level::O2, Level::Os] {
+        let text = assembly(&ir, &Request::new(level)).unwrap_or_else(|e| panic!("{level:?}: {e}"));
+        assert!(text.contains("jsr memcpy"), "{level:?}\n{text}");
+    }
+}
+
+/// `llvm.usub.sat.i32` returned the inverse: 0 where the subtract does not
+/// borrow and the wrapped difference where it does (`sat_builtins`: 4e9 - 5
+/// gave 0, 5 - 4e9 gave 294967301). The borrow was read as the carry.
+#[test]
+fn a_32_bit_saturating_subtract_clamps_at_zero_only_on_a_borrow() {
+    let ir = module(
+        r#"declare i32 @llvm.usub.sat.i32(i32, i32)
+@big = global i32 4000000000
+@small = global i32 5
+define i8 @no_borrow() {
+  %a = load i32, ptr @big
+  %b = load i32, ptr @small
+  %r = call i32 @llvm.usub.sat.i32(i32 %a, i32 %b)
+  %t = trunc i32 %r to i8
+  ret i8 %t
+}
+define i8 @borrow() {
+  %a = load i32, ptr @small
+  %b = load i32, ptr @big
+  %r = call i32 @llvm.usub.sat.i32(i32 %a, i32 %b)
+  %t = trunc i32 %r to i8
+  %h = lshr i32 %r, 24
+  %ht = trunc i32 %h to i8
+  %o = or i8 %t, %ht
+  ret i8 %o
+}"#,
+    );
+    for level in [Level::O1, Level::O2, Level::Os] {
+        let text = assembly(&ir, &Request::new(level)).unwrap_or_else(|e| panic!("{e}"));
+        // 4000000000 - 5 = 0xEE6B27FB; 5 - 4000000000 clamps to 0
+        assert_eq!(exit_code_of(&text, "no_borrow"), 0xFB, "{level:?}\n{text}");
+        assert_eq!(exit_code_of(&text, "borrow"), 0, "{level:?}\n{text}");
+    }
+}
+
+/// A library shift took its amount as a byte (the shift-amount type) where the
+/// pin makes it the library's `int`, a 16-bit word here: a helper written in C
+/// (`u64 __ashldi3(u64, int)`, compiler-rt) read a high byte the caller never
+/// stored, whatever the stack held. `dirty` leaves 0xFF on the stack first.
+#[test]
+fn a_library_shift_passes_its_amount_as_the_c_int() {
+    let ir = module(
+        r#"define i64 @__ashldi3(i64 %x, i16 %n) noinline {
+  %w = zext i16 %n to i64
+  ret i64 %w
+}
+@n = global i8 3
+@x = global i64 1
+define void @dirty() noinline {
+  %a = alloca [32 x i8]
+  %p0 = getelementptr i8, ptr %a, i16 0
+  store volatile i8 -1, ptr %p0
+  %p1 = getelementptr i8, ptr %a, i16 1
+  store volatile i8 -1, ptr %p1
+  %p2 = getelementptr i8, ptr %a, i16 2
+  store volatile i8 -1, ptr %p2
+  %p3 = getelementptr i8, ptr %a, i16 3
+  store volatile i8 -1, ptr %p3
+  %p4 = getelementptr i8, ptr %a, i16 4
+  store volatile i8 -1, ptr %p4
+  %p5 = getelementptr i8, ptr %a, i16 5
+  store volatile i8 -1, ptr %p5
+  %p6 = getelementptr i8, ptr %a, i16 6
+  store volatile i8 -1, ptr %p6
+  %p7 = getelementptr i8, ptr %a, i16 7
+  store volatile i8 -1, ptr %p7
+  %p8 = getelementptr i8, ptr %a, i16 8
+  store volatile i8 -1, ptr %p8
+  %p9 = getelementptr i8, ptr %a, i16 9
+  store volatile i8 -1, ptr %p9
+  %p10 = getelementptr i8, ptr %a, i16 10
+  store volatile i8 -1, ptr %p10
+  %p11 = getelementptr i8, ptr %a, i16 11
+  store volatile i8 -1, ptr %p11
+  ret void
+}
+define i64 @shift() noinline {
+  %v = load i64, ptr @x
+  %c = load i8, ptr @n
+  %z = zext i8 %c to i64
+  %r = shl i64 %v, %z
+  ret i64 %r
+}
+define i8 @high_byte_of_the_amount() {
+  call void @dirty()
+  %r = call i64 @shift()
+  %h = lshr i64 %r, 8
+  %t = trunc i64 %h to i8
+  ret i8 %t
+}"#,
+    );
+    for level in [Level::O0, Level::O2, Level::Os] {
+        let text = assembly(&ir, &Request::new(level)).unwrap_or_else(|e| panic!("{level:?}: {e}"));
+        assert_eq!(exit_code_of(&text, "high_byte_of_the_amount"), 0, "{level:?}\n{text}");
+    }
 }

@@ -688,6 +688,7 @@ mod tests {
             effects: llrm_mir::memory::Effects { reads: true, writes: true },
             private: vec![],
             disturbs: Default::default(),
+            block: false,
         }));
         Arc::new(one)
     }

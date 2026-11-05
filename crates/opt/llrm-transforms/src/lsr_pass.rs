@@ -211,7 +211,13 @@ fn plan_loop(
     let safe_to_speculate =
         |inst: InstId| crate::licm::hoist::is_safe_to_speculatively_execute_in(context, layout, function, outer, inst);
     let is_ephemeral = |inst: InstId| ephemeral.contains(&inst);
-    let env_users = Env { safe_to_speculate: &safe_to_speculate, ephemeral: &is_ephemeral };
+    let env_users = Env {
+        safe_to_speculate: &safe_to_speculate,
+        ephemeral: &is_ephemeral,
+        // DEVIATE LSR-N holds at speed only: at `-Os` a counter LSR adds for a
+        // wide loop grew tail_calls by 354 bytes.
+        native_widths: if size { &[] } else { tti.lsr_native_integer_widths() },
+    };
     let mut users = match carried {
         Some(users) => {
             users.assert_current(se, &cx, &env_users);

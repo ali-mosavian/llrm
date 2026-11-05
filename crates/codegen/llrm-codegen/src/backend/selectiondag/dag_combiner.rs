@@ -2291,6 +2291,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if op == ISD::Srl && self.dag.opcode(n0) == ISD::Sra && self.dag.constant(n1) == Some(width - 1) {
             return Some(self.dag.get_node(ISD::Srl, vt, &[self.dag.operand(n0, 0), n1]));
         }
+        if let Some(folded) = self.shift_of_shifted_logic(node) {
+            return Some(folded);
+        }
         if self.dag.opcode(n0) != op {
             return None;
         }
@@ -2305,6 +2308,51 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(self.dag.get_node(op, vt, &[x, amount]));
         }
         Some(self.dag.get_constant(0, vt))
+    }
+
+    /// `combineShiftOfShiftedLogic` (reached from `visitShiftByConstant`):
+    /// `shift (logic (shift X, c0), Y), c1` is `logic (shift X, c0 + c1),
+    /// (shift Y, c1)`, for a one-use logic op and a one-use inner shift of the
+    /// same kind.
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L10794>
+    fn shift_of_shifted_logic(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (op, logic, c1) = (self.dag.opcode(node), self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let amount = self.dag.constant(c1)?;
+        if !self.dag.has_one_use(logic.node) {
+            return None;
+        }
+        let logic_op = self.dag.opcode(logic);
+        if !matches!(logic_op, ISD::And | ISD::Or | ISD::Xor) {
+            return None;
+        }
+        // "Do not turn a 'not' into a regular xor."
+        if logic_op == ISD::Xor
+            && self.dag.constant(self.dag.operand(logic, 1)).is_some_and(|c| c == super::fold::mask(self.dag.value_type(logic).size_in_bits()))
+        {
+            return None;
+        }
+        let vt = self.dag.value_type(node);
+        let width = u128::from(vt.size_in_bits());
+        let first = |dag: &SelectionDAG, v: SDValue| -> Option<(SDValue, u128)> {
+            if dag.opcode(v) != op || !dag.has_one_use(v.node) {
+                return None;
+            }
+            let c0 = dag.constant(dag.operand(v, 1))?;
+            (c0 + amount < width).then(|| (dag.operand(v, 0), c0))
+        };
+        let (lhs, rhs) = (self.dag.operand(logic, 0), self.dag.operand(logic, 1));
+        let ((x, c0), y) = match (first(self.dag, lhs), first(self.dag, rhs)) {
+            (Some(found), _) => (found, rhs),
+            (None, Some(found)) => (found, lhs),
+            _ => return None,
+        };
+        let sum = self.dag.get_constant(c0 + amount, self.dag.value_type(c1));
+        let shifted_x = self.dag.get_node(op, vt, &[x, sum]);
+        let shifted_y = self.dag.get_node(op, vt, &[y, c1]);
+        Some(self.dag.get_node(logic_op, vt, &[shifted_x, shifted_y]))
     }
 
     /// `visitSHL`: `shl (srl x, c1), c2` is `and (srl x, c1 - c2), (-1 << c1

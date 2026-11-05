@@ -263,8 +263,6 @@ pub fn functions_with(
         }
         machine.frame_pointer =
             llrm_codegen::backend::framefree::frame_pointer_policy(&function.attrs).map(str::to_owned);
-        crate::prepass::run(&mut machine);
-        dump("Prepass", &machine);
         let optsize = function
             .attrs
             .iter()
@@ -274,6 +272,8 @@ pub fn functions_with(
                     llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
                 ),
             );
+        crate::prepass::run(&mut machine, optsize);
+        dump("Prepass", &machine);
         if !llrm_support::env_flag!("LLRM_ARM64_NO_COMBINE") {
             crate::combine::run(&mut machine, optsize);
             dump("Combine", &machine);
@@ -316,6 +316,7 @@ pub fn functions_with(
                 Some(Ok(allocation)) => allocation,
                 Some(Err(why)) => {
                     eprintln!("greedy: @{name}: {why}");
+                    GREEDY_FALLBACKS.with(|count| count.set(count.get() + 1));
                     crate::regalloc::allocate(machine)
                 }
                 None => crate::regalloc::allocate(machine),
@@ -419,6 +420,15 @@ pub fn object_with(
 }
 
 /// The assembly of the lowered functions, one instruction a line.
+thread_local! {
+    static GREEDY_FALLBACKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many functions this thread has sent from greedy to the linear scan.
+pub fn greedy_fallbacks() -> usize {
+    GREEDY_FALLBACKS.with(std::cell::Cell::get)
+}
+
 pub fn assembly(
     text: &str,
     platform: Platform,

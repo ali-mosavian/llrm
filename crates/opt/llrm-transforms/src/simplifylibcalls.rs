@@ -50,7 +50,7 @@ use llrm_mir::constantfolding::{Env, read_byte_array_from_global};
 use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::edit::Position;
 use llrm_mir::libfunc::{Generic, LibFunc, Routine, TargetLibraryInfo};
-use llrm_mir::module::{InstId, Operand};
+use llrm_mir::module::{InstId, Operand, UnnamedAddr};
 use llrm_mir::opcode::{Attribute, CallInfo, CastOp, Flags, Opcode};
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses, Unit};
 use llrm_mir::types::Type;
@@ -414,7 +414,7 @@ fn string(
     let i8 = unit.context.types.int(8);
     let ty = unit.context.types.intern(Type::Array { element: i8, count: raw.len() as u64 });
     let initializer = unit.context.constant(Constant { ty, kind: ConstantKind::Bytes(raw) });
-    let global = unit.declared.table("str", ty, initializer);
+    let global = unit.declared.table("str", ty, initializer, UnnamedAddr::Global);
     let pointer = unit.context.types.ptr(0);
     Operand::Constant(unit.context.constant(Constant { ty: pointer, kind: ConstantKind::Global(global) }))
 }
