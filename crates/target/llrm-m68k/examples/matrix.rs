@@ -13,7 +13,9 @@ use std::process::Command;
 use llrm_m68k::compile::{Item, Options, items, items_with};
 use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::isa::Cpu as Model;
-use llrm_m68k::kernels::{Arg, data, library_data, library_table, program_with_data, source_in, table};
+use llrm_m68k::kernels::{
+    Arg, data, keep_named, library_data, library_table, program_with_data, source_in, table,
+};
 use llrm_m68k::object::{assemble, executable, write_executable};
 
 #[allow(dead_code)]
@@ -206,6 +208,11 @@ fn main() {
         (library_table(), library_data())
     } else {
         (table().into_iter().map(|(name, args, expected)| (name, args, expected, true)).collect(), data())
+    };
+    // `MATRIX_PROGS=partition,hex` keeps the named programs; an unknown name stops the run
+    let rows = match std::env::var("MATRIX_PROGS") {
+        Ok(only) => keep_named(rows, |row| row.0, &only).unwrap_or_else(|why| panic!("MATRIX_PROGS: {why}")),
+        Err(_) => rows,
     };
     let cpus = [
         ("68000", Cpu::M68000, Model::M68000),
