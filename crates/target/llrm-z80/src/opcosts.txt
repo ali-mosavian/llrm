@@ -1,0 +1,71 @@
+# What z80 code costs by operation: each MIR operation as a sum of the prices of the instruction forms it becomes
+# (src/timing/z80.csv has the bytes and T-states of the forms; the aliases below are checked against it and against the
+# assembler by tests/opcosts.rs). The machine's word is 16 bits: a word moved through memory is two byte instructions
+# (`ld b,5(ix)` is 3 B), a word added in `hl` one. Only the bytes are read for now (`Machine::byte_costs`); the clock
+# side is wired after the shared clock accessor lands.
+[operations]
+add = add_hl
+multiply = call + 2*mov_rr
+divide = call + 2*mov_rr
+multiply_long = call + 4*mov_rr
+multiply_high = call + 4*mov_rr
+divide_long = call + 4*mov_rr
+divide_margin = 0
+shift = srl_r + rr_r
+address = add_hl
+carry = carry(ld_rn, add_hl, srl_r, mov_rr)
+carry_step = step(add_hl)
+load = 2*ld_ix
+store = 2*st_ix
+store_immediate = 2*st_ix_n
+memory_update = 2*inc_ix
+branch = jr
+prefix = 0
+move = 2*mov_rr
+call = call
+return = ret
+argument = push + 2*ld_ix
+pop = pop
+adjust = ld_hl_nn + add_hl_sp + ld_sp_hl
+return_pops = 0
+float_add = call + 4*mov_rr
+float_multiply = call + 4*mov_rr
+float_divide = call + 4*mov_rr
+float_load = 4*ld_ix
+float_load_folded = 0
+float_store = 4*st_ix
+float_release = 0
+float_to_int = call + 2*mov_rr
+float_compare = call + 4*mov_rr
+extend = ld_rn
+set = ld_rn + rla
+fill = 3*ld_hl_nn + ldir
+fill_cell = 0
+fill_segment = 0
+copy = 3*ld_hl_nn + ldir
+copy_cell = 0
+copy_variable = 0
+direction = 0
+unroll_budget = 0
+
+# alias = the bytes of the csv form (see tests/opcosts.rs for the form and the assembly of each)
+[bytes]
+add_hl = 1
+mov_rr = 1
+ld_ix = 3
+st_ix = 3
+st_ix_n = 4
+inc_ix = 3
+jr = 2
+call = 3
+ret = 1
+push = 1
+pop = 1
+ld_hl_nn = 3
+add_hl_sp = 1
+ld_sp_hl = 1
+srl_r = 2
+rr_r = 2
+ld_rn = 2
+rla = 1
+ldir = 2
