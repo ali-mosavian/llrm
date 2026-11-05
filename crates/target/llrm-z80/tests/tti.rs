@@ -65,3 +65,32 @@ fn calls_cost_more_and_every_operation_is_priced() {
     assert!(arith(Mul, Ty::Int(8), CostKind::Latency) > arith(Add, Ty::Int(16), CostKind::Latency));
     assert!(arith(UDiv, Ty::Int(16), CostKind::Latency) > arith(Mul, Ty::Int(16), CostKind::Latency));
 }
+
+/// The few-trip `optsize` unroll rule reads `Tti::unroll_few_trips_adding_no_bytes`,
+/// a shared pass's hook that only the Z80 may answer: another target
+/// answering it would change its -Os unrolling unmeasured.
+#[test]
+fn only_the_z80_answers_the_few_trip_unroll_hook() {
+    let targets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let mut answering = Vec::new();
+    for entry in std::fs::read_dir(targets).unwrap() {
+        let dir = entry.unwrap().path().join("src");
+        if !dir.is_dir() {
+            continue;
+        }
+        let mut stack = vec![dir];
+        while let Some(path) = stack.pop() {
+            for child in std::fs::read_dir(&path).unwrap() {
+                let child = child.unwrap().path();
+                if child.is_dir() {
+                    stack.push(child);
+                } else if child.extension().is_some_and(|e| e == "rs")
+                    && std::fs::read_to_string(&child).unwrap().contains("fn unroll_few_trips_adding_no_bytes")
+                {
+                    answering.push(child.strip_prefix(targets).unwrap().to_string_lossy().into_owned());
+                }
+            }
+        }
+    }
+    assert_eq!(answering, ["llrm-z80/src/tti.rs"], "targets answering the hook");
+}
