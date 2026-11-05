@@ -452,7 +452,7 @@ pub fn to_lir<T: Target>(
                         .iter()
                         .filter(|info| info.def || info.index == k)
                         .cloned()
-                        .map(|info| OperandInfo { index: 0, ..info })
+                        .map(|info| OperandInfo { index: 0, lane: Some((lane.bytes, lane.offset)), ..info })
                         .collect();
                     infos.push((COPY, part));
                     insns.push(Arc::new(made.lane_copy(lane, 2 * ordinal)));
@@ -982,6 +982,10 @@ struct OperandInfo {
     /// What the instruction costs in each, aligned with `order`
     /// (`Target::operand_cost`).
     costs: Vec<u32>,
+    /// For the part of a lane-built pair: the bytes and offset of the lane the
+    /// copy writes. A copy greedy makes beside it, of the whole pair, is
+    /// another instruction.
+    lane: Option<(u32, u32)>,
 }
 
 impl OperandInfo {
@@ -1000,7 +1004,7 @@ impl OperandInfo {
             }
             _ => None,
         };
-        Self { def, index, hint, order, costs }
+        Self { def, index, hint, order, costs, lane: None }
     }
 
     /// The cheapest this instruction is in any of `registers` it prices.
@@ -1030,8 +1034,12 @@ fn operands_in<'a>(
     if what.name.as_deref() != Some(name) {
         return Vec::new();
     }
+    let lane_dest = |bytes: u32, offset: u32| {
+        matches!(what.dests.first(), Some(Loc::Held(held)) if held.width == bytes && held.offset == offset)
+    };
     infos
         .iter()
+        .filter(|info| info.lane.is_none_or(|(bytes, offset)| lane_dest(bytes, offset)))
         .filter_map(|info| {
             let loc = if info.def { what.dests.get(info.index) } else { what.sources.get(info.index) };
             match loc {
@@ -1248,6 +1256,10 @@ fn is_literal_move(one: &Insn) -> bool {
         && one.delivers.is_empty()
         && one.clobbers.is_empty()
         && one.symbol != Some(true)
+        // a lane def makes part of its value: making it again does not
+        && one.def_lanes.is_empty()
+        && one.partial_defs.is_empty()
+        && !one.undef_super
         && what.op == Operation::Move
         && matches!(
             what.dests.as_slice(),
@@ -1845,13 +1857,16 @@ pub fn from_lir<T: Target>(
             let source = &original.blocks[from].insts[inst];
             // a copy into a lane of a pair: a move into the register of that lane
             if name == Some(COPY) && !insn.def_lanes.is_empty() {
-                let (Some(Loc::Held(to)), Some(Loc::Held(source))) = (what.dests.first(), what.sources.first()) else {
-                    return Err("a lane copy that does not move a value".into());
-                };
-                let dest = lane_or_number(to, &mut classes, &mut number);
-                let from = lane_or_number(source, &mut classes, &mut number);
-                insts.push(Inst::new(Kind::Copy, vec![Operand::Def(dest), Operand::Use(from)]));
-                continue;
+                // a source that is no value (a physical register) stays as written
+                if let Some(Loc::Held(source)) = what.sources.first() {
+                    let Some(Loc::Held(to)) = what.dests.first() else {
+                        return Err("a lane copy that does not move a value".into());
+                    };
+                    let dest = lane_or_number(to, &mut classes, &mut number);
+                    let from = lane_or_number(source, &mut classes, &mut number);
+                    insts.push(Inst::new(Kind::Copy, vec![Operand::Def(dest), Operand::Use(from)]));
+                    continue;
+                }
             }
             // a copy a split made stands beside an instruction and claims none
             // of its bytes, whatever that instruction is
@@ -1960,4 +1975,32 @@ fn allocate_greedy_pinned<T: Target>(
     crate::spill::share_slots(&mut back.function, &mut back.slots);
     *function = back.function;
     Ok((back.assignment, back.slots))
+}
+
+#[cfg(test)]
+mod lane_def_tests {
+    use super::*;
+
+    fn literal(lane: bool) -> Insn {
+        let what = Semantics {
+            dests: vec![Loc::Held(Held { value: 5, width: 1, offset: 0 })],
+            sources: vec![Loc::Imm(Imm { value: 0, width: 1, address: None })],
+            ..Semantics::new(Operation::Move)
+        };
+        let mut one = Insn::new(0, Some((0, 0)), Some(what), vec![5], Vec::new());
+        if lane {
+            one.def_lanes = vec![(5, ValueLanes::at(0, 1))];
+            one.partial_defs = vec![5];
+        }
+        one
+    }
+
+    /// The low byte of a pair, written alone, was taken for the pair: the
+    /// spiller made it again where the pair was read and dropped the high
+    /// byte written beside it (`mul_constants` -O2 summed a stale byte).
+    #[test]
+    fn a_byte_written_into_a_pair_is_not_a_literal_to_make_again() {
+        assert!(is_literal_move(&literal(false)));
+        assert!(!is_literal_move(&literal(true)));
+    }
 }
