@@ -1786,3 +1786,15 @@ fn the_stack_word_of_a_long_divide_is_pushed_not_stored() {
         "stored into the slot\n{out}"
     );
 }
+
+/// The shift routines of the z80 (`__ashlsi3` and the others) read their count
+/// from `a`, one byte; the pin makes a library shift's amount the C `int`, so
+/// the shared legalizer's default would hand them a word in `bc` and every
+/// shift of a long by a constant would be wrong. z80 keeps the byte until its
+/// helpers take a word (`with_narrow_library_shift`).
+#[test]
+fn a_long_shift_routine_takes_its_count_in_a_as_a_byte() {
+    let shifted = compiled("define i32 @f(i32 %a) optsize {\n  %r = shl i32 %a, 5\n  ret i32 %r\n}", "f");
+    assert!(shifted.contains("ld a, #5"), "{shifted}");
+    assert!(!shifted.contains("ld bc, #5") && !shifted.contains("ld hl, #5"), "{shifted}");
+}
