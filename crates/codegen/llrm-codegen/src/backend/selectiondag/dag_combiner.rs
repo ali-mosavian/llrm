@@ -3073,7 +3073,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 let constant = self.dag.get_constant(bits & 0xFFFF_FFFF_FFFF_FFFF, EVT::I64);
                 Some(self.dag.get_store(chain, constant, ptr, int_info(EVT::I64, info.align, info.base)))
             }
-            EVT::Simple(MVT::F64) if !tli.is_fp_imm_legal(MVT::F64, bits) => {
+            // `ST->isSimple()`: a volatile store is not split, as the pin
+            // leaves it. (The pin also asks `isOperationLegalOrCustom(STORE,
+            // i32)`; not asked here, which would change targets whose i32
+            // store is illegal.)
+            EVT::Simple(MVT::F64) if !info.volatile && !tli.is_fp_imm_legal(MVT::F64, bits) => {
                 let lo = self.dag.get_constant(bits & 0xFFFF_FFFF, EVT::I32);
                 let hi = self.dag.get_constant((bits >> 32) & 0xFFFF_FFFF, EVT::I32);
                 // the high word comes first on a big-endian target
