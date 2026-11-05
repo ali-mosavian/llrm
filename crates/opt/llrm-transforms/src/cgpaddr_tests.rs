@@ -210,6 +210,7 @@ impl llrm_mir::target::Machine for Flat {
             registers: None,
             tuning: llrm_mir::target::Tuning::PIN,
             loop_micro_op_buffer: 0,
+            position_independent: std::cell::Cell::new(true),
         }))
     }
 }

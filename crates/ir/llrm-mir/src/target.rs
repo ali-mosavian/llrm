@@ -55,6 +55,10 @@ pub struct Tuning {
     /// inner one, which stays rolled, so a loop-buffer sized threshold
     /// refuses every nest.
     pub unroll_jam_partial_threshold: Option<u32>,
+    /// The unroll-and-jam (D1) takes, of a known outer trip count, the
+    /// largest count that divides it (2 or more) rather than one that leaves
+    /// a remainder: the remainder is a copy of the whole nest.
+    pub unroll_jam_exact_count: bool,
     /// How many values the x87 register stack holds (8) where floats live
     /// there (a target without SSE2 floating point); none: floats are not
     /// held on a stack. The loop unroll caps its copies by it.
@@ -145,6 +149,7 @@ impl Tuning {
         unroll_max_percent_threshold_boost: None,
         unroll_partial_threshold: None,
         unroll_jam_partial_threshold: None,
+        unroll_jam_exact_count: false,
         x87_stack_slots: None,
         unswitch_threshold: None,
         inline_threshold: None,
