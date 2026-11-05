@@ -100,6 +100,16 @@ fn qemu_cpu_for(path: &str) -> &'static str {
 mod tests {
     use super::*;
 
+    /// muldiv is not a leaf in the crate's 68000 code (it calls `__mulsi3`),
+    /// and the tool refused every `CYCLES_LLC` row of it ("not a leaf"), so no
+    /// div/mul change (DIVSL) could be measured. A driver's own code decides.
+    #[test]
+    fn an_external_drivers_rows_are_priced_whatever_the_crates_leaf_flag() {
+        assert!(llc_prices(true, false));
+        assert!(llc_prices(true, true));
+        assert!(!llc_prices(false, false));
+    }
+
     /// gas assembled `bgt L` with a 16-bit displacement: a table priced the
     /// compiler's text 2 B a branch above its own encoder.
     #[test]
@@ -573,16 +583,6 @@ fn main() {
             }
             println!("| {name} | {} |", cells.join(" | "));
         }
-    }
-
-    /// muldiv is not a leaf in the crate's 68000 code (it calls `__mulsi3`),
-    /// and the tool refused every `CYCLES_LLC` row of it ("not a leaf"), so no
-    /// div/mul change (DIVSL) could be measured. A driver's own code decides.
-    #[test]
-    fn an_external_drivers_rows_are_priced_whatever_the_crates_leaf_flag() {
-        assert!(llc_prices(true, false));
-        assert!(llc_prices(true, true));
-        assert!(!llc_prices(false, false));
     }
 
     /// A kernel that calls a runtime routine laid out after it priced only
