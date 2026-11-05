@@ -80,6 +80,10 @@ pub struct M68k {
     pub cpu: crate::dagisel::hooks::Cpu,
     /// The 68020's scaled index, `(d8, An, Xn*2/4/8)`; the 68000 has none.
     pub scaled_index: bool,
+    /// `CodeSize` in bytes of code, which the inliner counts a callee with
+    /// ([`Tti::inline_size_view`]); the other passes' thresholds are in the
+    /// pin's units, where it is false.
+    pub code_size_bytes: bool,
 }
 
 impl M68k {
@@ -114,6 +118,37 @@ impl Tti for M68k {
 
     fn name(&self) -> &'static str {
         "M68k"
+    }
+
+    fn call_sequence_cost(
+        &self,
+        shape: &llrm_mir::tti::CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        Some(crate::sizes::call_sequence(self.cpu, shape, kind))
+    }
+
+    fn callee_frame_cost(
+        &self,
+        shape: &llrm_mir::tti::CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        crate::sizes::callee_frame(self.cpu, shape, kind)
+    }
+
+    fn speed_inline_milliclocks_per_byte(&self) -> i64 {
+        crate::sizes::INLINE_MILLICLOCKS_PER_BYTE
+    }
+
+    /// A size build refuses an inline of a callee that stays when it grows
+    /// the code (SZ1): the callee's bytes against the call sequence's.
+    fn opt_size_inline_by_code_size(&self) -> bool {
+        true
+    }
+
+    /// The inliner counts a callee in bytes of code (`sizes`).
+    fn inline_size_view(&self) -> Option<Rc<dyn Tti>> {
+        Some(Rc::new(M68k { code_size_bytes: true, ..*self }))
     }
 
     /// `TargetLoweringBase::isLegalAddressingMode`.
@@ -188,7 +223,7 @@ impl Tti for M68k {
         ty: Ty,
         kind: CostKind,
     ) -> Cost {
-        if kind == CostKind::CodeSize {
+        if kind == CostKind::CodeSize && self.code_size_bytes {
             return crate::sizes::cmp_sel(op, ty);
         }
         Basic.cmp_sel_cost(op, ty, kind)
@@ -201,7 +236,7 @@ impl Tti for M68k {
         kind: CostKind,
         indexed: bool,
     ) -> Cost {
-        if kind == CostKind::CodeSize {
+        if kind == CostKind::CodeSize && self.code_size_bytes {
             return crate::sizes::memory(op, ty, indexed);
         }
         Basic.memory_op_cost(op, ty, kind, indexed)
@@ -212,7 +247,7 @@ impl Tti for M68k {
         phi: bool,
         kind: CostKind,
     ) -> Cost {
-        if kind == CostKind::CodeSize {
+        if kind == CostKind::CodeSize && self.code_size_bytes {
             return crate::sizes::control_flow(phi);
         }
         Basic.cf_instr_cost(phi, kind)
@@ -251,7 +286,7 @@ impl Tti for M68k {
         from: Ty,
         kind: CostKind,
     ) -> Cost {
-        if kind == CostKind::CodeSize {
+        if kind == CostKind::CodeSize && self.code_size_bytes {
             return crate::sizes::cast(op, to, from);
         }
         Basic.cast_cost(op, to, from, kind)
@@ -304,7 +339,7 @@ impl Tti for M68k {
         left: OperandInfo,
         right: OperandInfo,
     ) -> Cost {
-        if kind == CostKind::CodeSize {
+        if kind == CostKind::CodeSize && self.code_size_bytes {
             return crate::sizes::arithmetic(op, ty, right, self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020));
         }
         // DEVIATE: the pin's base class prices a multiply or divide it expands

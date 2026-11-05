@@ -1982,8 +1982,9 @@ impl<'a> Analyzer<'a> {
         inst: InstId,
     ) -> i64 {
         let Some(tti) = self.site.tti else { return 0 };
+        let view = tti.inline_size_view();
         llrm_mir::instructioncost::instruction_cost(
-            tti,
+            view.as_deref().unwrap_or(tti),
             self.context,
             self.site.layout,
             &self.site.module.globals,
@@ -2002,8 +2003,9 @@ impl<'a> Analyzer<'a> {
         if let Some(sequence) = self.call_sequence(llrm_mir::tti::CostKind::CodeSize) {
             return sequence;
         }
+        let view = tti.inline_size_view();
         let size = llrm_mir::instructioncost::instruction_cost(
-            tti,
+            view.as_deref().unwrap_or(tti),
             self.context,
             self.site.layout,
             &self.site.module.globals,

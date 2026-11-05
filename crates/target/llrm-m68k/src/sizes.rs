@@ -120,3 +120,77 @@ pub fn cast(
         _ => libcall(pieces(from)),
     })
 }
+
+// ---- the call sequence and the frame ------------------------------------
+
+use llrm_mir::tti::{CallShape, CostKind};
+
+use crate::dagisel::hooks::Cpu;
+
+/// What a byte of code is worth at speed, in thousandths of a clock: one
+/// byte is four clocks.
+///
+/// DEVIATE: the pin's M68k states none. Reason: oversight's provisional rate
+/// for the 68000..68060 (11-04), to be re-derived from `timings.times`. Exit
+/// 2026-11-20.
+pub const INLINE_MILLICLOCKS_PER_BYTE: i64 = 4000;
+
+/// `form` (GNU syntax, `bytes` long) on `cpu`, as the unit of `kind`.
+fn form(
+    cpu: Cpu,
+    text: &str,
+    bytes: i64,
+    kind: CostKind,
+) -> i64 {
+    match kind {
+        CostKind::CodeSize => bytes,
+        _ => i64::from(
+            crate::timing::cost(cpu, text, bytes as u32, true)
+                .unwrap_or_else(|why| panic!("the m68k timing tables: {why}"))
+                .clocks,
+        ),
+    }
+}
+
+/// The call, its arguments and the return it ends with: `jsr`, one
+/// `move.l (n,%sp),-(%sp)` per stack word (a by-value aggregate is its words),
+/// the `addq`/`lea` that pops them, and the callee's `rts`.
+pub fn call_sequence(
+    cpu: Cpu,
+    shape: &CallShape,
+    kind: CostKind,
+) -> Cost {
+    let words: i64 = shape
+        .arguments
+        .iter()
+        .map(|argument| match argument.byval_bytes {
+            Some(bytes) => (bytes as i64).div_ceil(4).max(1),
+            None => argument.ty.map_or(1, pieces),
+        })
+        .sum();
+    let mut total = form(cpu, "jsr 0x1000:l", 6, kind) + form(cpu, "rts", 2, kind);
+    total += words * form(cpu, "move.l (4,%sp), -(%sp)", 4, kind);
+    if words > 0 {
+        total += if words <= 2 {
+            form(cpu, &format!("addq.l #{}, %sp", words * 4), 2, kind)
+        } else {
+            form(cpu, &format!("lea ({},%sp), %sp", words * 4), 4, kind)
+        };
+    }
+    Cost::of(total)
+}
+
+/// The frame a callee with static allocas builds and tears down:
+/// `link.w %a6,#-n` and `unlk %a6`. None: a leaf with no locals has none.
+///
+/// DEVIATE: the registers a callee saves are not in the call's shape; a
+/// `movem` pair is not counted. Reason: `CallShape` carries no register
+/// pressure. Exit 2026-11-20.
+pub fn callee_frame(
+    cpu: Cpu,
+    shape: &CallShape,
+    kind: CostKind,
+) -> Option<Cost> {
+    (shape.callee_frame_bytes > 0)
+        .then(|| Cost::of(form(cpu, "link.w %a6, #-8", 4, kind) + form(cpu, "unlk %a6", 2, kind)))
+}
