@@ -121,3 +121,22 @@ b0:
     assert!(found.contains(&id(&module, "only")));
     assert!(!found.contains(&id(&module, "exported")) && !found.contains(&id(&module, "taken")));
 }
+
+/// `addressed` pushed every constant operand on its worklist and walked it
+/// again: a body naming one function in a thousand stores cost a thousand
+/// visits (92 M Ir over the 26-program m64 corpus, called ~20 times a file).
+#[test]
+fn addressed_visits_each_constant_once_however_many_operands_name_it() {
+    let visits = |stores: usize| {
+        let body: String = (0..stores).map(|_| "  store ptr @taken, ptr @slot\n").collect();
+        let text = format!(
+            "@slot = global ptr null\ndefine void @taken() {{\nb0:\n  ret void\n}}\ndefine void @f() {{\nb0:\n{body}  ret void\n}}\n"
+        );
+        let module = parse::module(&text).expect("parses");
+        let before = crate::counts::get(crate::counts::Event::ConstantsEmbedded);
+        let addressed = crate::callgraph::addressed(&module);
+        assert!(addressed.contains(&id(&module, "taken")));
+        crate::counts::get(crate::counts::Event::ConstantsEmbedded) - before
+    };
+    assert_eq!(visits(5), visits(500));
+}

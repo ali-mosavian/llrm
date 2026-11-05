@@ -77,7 +77,7 @@ use std::hash::{Hash, Hasher};
 use llrm_analysis::manager::{GlobalsAA, Summaries};
 use llrm_mir::context::{Context, GlobalId};
 use llrm_mir::footprint::{self, Footprint};
-use llrm_mir::module::{Change, Function, GlobalKind, Mark, MetadataOperand, Operand};
+use llrm_mir::module::{Change, Function, GlobalKind, Mark, MetadataOperand};
 use llrm_mir::passes::{Outer, Unit, read};
 use llrm_support::hash::HashMap;
 
@@ -400,34 +400,13 @@ fn named(
     metadata: &[llrm_mir::module::MetadataNode],
     outer: &Outer,
 ) -> BTreeSet<GlobalId> {
-    let mut out = named_by_body(context, function);
+    let mut out = llrm_analysis::globalsaa::named_by_body(context, function);
     // Metadata is only added to in a run, so a module of the proxy's metadata's
     // length names what the proxy saw: found once per proxy, not per body.
     if metadata.len() == outer.metadata.len() {
         out.extend(outer.memo(0, || MetadataNamed(metadata_named(context, metadata))).0.iter().copied());
     } else {
         out.extend(metadata_named(context, metadata));
-    }
-    out
-}
-
-/// The globals `function`'s personality and operands name, each constant
-/// visited once.
-pub(crate) fn named_by_body(
-    context: &Context,
-    function: &Function,
-) -> BTreeSet<GlobalId> {
-    let mut out = BTreeSet::new();
-    let mut seen = llrm_analysis::globalsaa::Visited::default();
-    if let Some(one) = function.personality {
-        llrm_analysis::globalsaa::embedded_once(context, one, &mut seen, &mut out);
-    }
-    for (_, inst) in function.walk() {
-        for operand in &function.instruction(inst).operands {
-            if let Operand::Constant(id) = operand {
-                llrm_analysis::globalsaa::embedded_once(context, *id, &mut seen, &mut out);
-            }
-        }
     }
     out
 }
@@ -491,7 +470,7 @@ mod tests {
             let module = stores(count);
             let f = module.globals.iter().find_map(|one| one.function()).expect("a function");
             let before = llrm_mir::counts::get(llrm_mir::counts::Event::ConstantsEmbedded);
-            let named = super::named_by_body(&module.context, f);
+            let named = llrm_analysis::globalsaa::named_by_body(&module.context, f);
             assert_eq!(named.len(), 1);
             llrm_mir::counts::get(llrm_mir::counts::Event::ConstantsEmbedded) - before
         };

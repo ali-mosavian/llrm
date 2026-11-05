@@ -191,16 +191,7 @@ pub(crate) fn held_by_live(module: &Module) -> BTreeSet<GlobalId> {
         match &global.kind {
             GlobalKind::Function(function) => {
                 pending.push(id);
-                let mut named = BTreeSet::new();
-                function.personality.iter().for_each(|&one| embedded(&module.context, one, &mut named));
-                for (_, inst) in function.walk() {
-                    for operand in &function.instruction(inst).operands {
-                        if let Operand::Constant(one) = operand {
-                            embedded(&module.context, *one, &mut named);
-                        }
-                    }
-                }
-                pending.extend(named);
+                pending.extend(llrm_analysis::globalsaa::named_by_body(&module.context, function));
             }
             GlobalKind::Variable(_) if !matches!(global.linkage, Linkage::Internal | Linkage::Private) => {
                 pending.push(id);

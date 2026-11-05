@@ -293,3 +293,18 @@ b0:
         assert!(!line.contains("unnamed_addr"), "{line}\n{after}");
     }
 }
+
+/// `held_by_live` walked every constant operand of every body again: a body
+/// naming one global in a thousand stores cost a thousand visits (31 M Ir of
+/// GlobalSRA over the 26-program m64 corpus).
+#[test]
+fn held_by_live_visits_each_constant_of_a_body_once() {
+    let visits = |stores: usize| {
+        let body: String = (0..stores).map(|_| "  store i32 1, ptr @g\n").collect();
+        let module = parsed(&format!("@g = internal global i32 0\ndefine void @f() {{\nb0:\n{body}  ret void\n}}\n"));
+        let before = llrm_mir::counts::get(llrm_mir::counts::Event::ConstantsEmbedded);
+        crate::globalopt::held_by_live(&module);
+        llrm_mir::counts::get(llrm_mir::counts::Event::ConstantsEmbedded) - before
+    };
+    assert_eq!(visits(5), visits(500));
+}

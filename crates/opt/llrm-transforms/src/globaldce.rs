@@ -94,7 +94,7 @@ use llrm_analysis::globalsaa::embedded;
 use llrm_analysis::manager::{GlobalsAA, GlobalsModRefAnalysis};
 use llrm_mir::callgraph::Defined;
 use llrm_mir::context::GlobalId;
-use llrm_mir::module::{GlobalKind, GlobalValue, Linkage, Operand};
+use llrm_mir::module::{GlobalKind, GlobalValue, Linkage};
 use llrm_mir::program::{Program, ProgramAnalyses, ProgramPass};
 
 pub struct GlobalDce;
@@ -164,14 +164,7 @@ pub fn live(program: &Program) -> BTreeSet<Defined> {
                 variable.initializer.iter().for_each(|&one| embedded(&module.context, one, &mut named))
             }
             GlobalKind::Function(function) => {
-                function.personality.iter().for_each(|&one| embedded(&module.context, one, &mut named));
-                for (_, inst) in function.walk() {
-                    for operand in &function.instruction(inst).operands {
-                        if let Operand::Constant(one) = operand {
-                            embedded(&module.context, *one, &mut named);
-                        }
-                    }
-                }
+                named = llrm_analysis::globalsaa::named_by_body(&module.context, function)
             }
         }
         for one in named {

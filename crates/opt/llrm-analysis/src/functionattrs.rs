@@ -477,12 +477,9 @@ fn check_function_memory_access(
 /// the new `memory(...)` of each member of the SCC whose attribute narrows.
 pub fn infer_memory(
     module: &Module,
+    layout: &DataLayout,
     members: &[GlobalId],
 ) -> Vec<(GlobalId, MemoryEffects)> {
-    let layout = module
-        .datalayout
-        .as_deref()
-        .map_or_else(Default::default, |text| llrm_mir::datalayout::DataLayout::parse(text).unwrap_or_default());
     // DEVIATE F3: a `noipa` body is not a member.
     let set: BTreeSet<GlobalId> = members
         .iter()
@@ -492,7 +489,7 @@ pub fn infer_memory(
     let mut me = MemoryEffects::none();
     let mut recursive = MemoryEffects::none();
     for &id in &set {
-        let (always, argument) = check_function_memory_access(module, &layout, id, &set);
+        let (always, argument) = check_function_memory_access(module, layout, id, &set);
         me = me.union(always);
         recursive = recursive.union(argument);
         if me == MemoryEffects::unknown() {
@@ -517,9 +514,10 @@ pub fn infer_memory(
 /// The members whose attributes changed.
 pub fn stamp_memory(
     module: &mut Module,
+    layout: &DataLayout,
     members: &[GlobalId],
 ) -> Vec<GlobalId> {
-    let found = infer_memory(module, members);
+    let found = infer_memory(module, layout, members);
     let mut changed = Vec::new();
     for (id, effects) in found {
         let llrm_mir::module::GlobalKind::Function(function) = &mut module.globals[id.0 as usize].kind else {
@@ -704,7 +702,7 @@ pub fn post_order_with(
         .filter(|&id| module.global(id).function().is_some_and(|one| !llrm_mir::facts::opaque(one)))
         .collect();
     let list: Vec<GlobalId> = set.iter().copied().collect();
-    let mut changed: BTreeSet<GlobalId> = stamp_memory(module, &list).into_iter().collect();
+    let mut changed: BTreeSet<GlobalId> = stamp_memory(module, layout, &list).into_iter().collect();
     changed.extend(crate::argumentattrs::add_argument_attrs(module, &set));
     changed.extend(crate::initializes::add_initializes(module, layout, &set));
     changed.extend(crate::initializes::add_access_ranges(module, layout, &set));

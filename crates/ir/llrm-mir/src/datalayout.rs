@@ -112,6 +112,7 @@ fn bytes(bits: u64) -> u64 {
 
 impl DataLayout {
     pub fn parse(text: &str) -> Result<Self, String> {
+        crate::counts::bump(crate::counts::Event::DataLayoutParses);
         let mut layout = Self::default();
         for spec in text.split('-').filter(|one| !one.is_empty()) {
             let (head, rest) = spec.split_at(spec.find(|c: char| c.is_ascii_digit() || c == ':').unwrap_or(spec.len()));

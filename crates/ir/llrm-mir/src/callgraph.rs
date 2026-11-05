@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::context::{ConstantExpr, ConstantKind, GlobalId};
+use crate::context::{ConstantExpr, ConstantId, ConstantKind, GlobalId};
 use crate::memory;
 use crate::module::{Function, GlobalKind, InstId, Linkage, MetadataOperand, Module, Operand};
 use crate::opcode::Opcode;
@@ -336,37 +336,53 @@ pub fn addressed(module: &Module) -> BTreeSet<GlobalId> {
     let context = &module.context;
     let mut out = BTreeSet::new();
     let mut work = Vec::new();
+    // Each interned constant is walked once, however many operands name it.
+    let mut seen = crate::dense::IdSet::<u32>::new();
+    let mut named = |work: &mut Vec<ConstantId>, id: ConstantId| {
+        if seen.insert(id.index() as u32) {
+            work.push(id);
+        }
+    };
     for (_, _, function) in module.functions() {
-        work.extend(function.personality);
+        for id in function.personality {
+            named(&mut work, id);
+        }
         for (_, inst) in function.walk() {
             let instruction = function.instruction(inst);
             let skip = usize::from(memory::callee(context, function, inst).is_some());
             let kept = instruction.operands.len() - skip;
-            work.extend(
-                instruction.operands[..kept]
-                    .iter()
-                    .filter_map(|&operand| if let Operand::Constant(id) = operand { Some(id) } else { None }),
-            );
+            for &operand in &instruction.operands[..kept] {
+                if let Operand::Constant(id) = operand {
+                    named(&mut work, id);
+                }
+            }
         }
     }
-    work.extend(module.globals.iter().filter_map(|global| {
-        if let GlobalKind::Variable(variable) = &global.kind { variable.initializer } else { None }
-    }));
+    for global in &module.globals {
+        if let GlobalKind::Variable(variable) = &global.kind {
+            for id in variable.initializer {
+                named(&mut work, id);
+            }
+        }
+    }
     for node in &module.metadata {
-        work.extend(
-            node.operands
-                .iter()
-                .filter_map(|operand| if let MetadataOperand::Constant(id) = operand { Some(*id) } else { None }),
-        );
+        for operand in &node.operands {
+            if let MetadataOperand::Constant(id) = operand {
+                named(&mut work, *id);
+            }
+        }
     }
     while let Some(id) = work.pop() {
+        crate::counts::bump(crate::counts::Event::ConstantsEmbedded);
         match &context.get(id).kind {
             ConstantKind::Global(global) => {
                 out.insert(*global);
             }
-            ConstantKind::Aggregate(members) => work.extend(members),
-            ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => work.extend(operands),
-            ConstantKind::Expr(ConstantExpr::Cast { value, .. }) => work.push(*value),
+            ConstantKind::Aggregate(members) => members.iter().for_each(|&one| named(&mut work, one)),
+            ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => {
+                operands.iter().for_each(|&one| named(&mut work, one))
+            }
+            ConstantKind::Expr(ConstantExpr::Cast { value, .. }) => named(&mut work, *value),
             _ => {}
         }
     }

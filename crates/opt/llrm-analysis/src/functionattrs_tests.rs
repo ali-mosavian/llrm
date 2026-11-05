@@ -182,7 +182,7 @@ fn memory_of(
 ) -> Vec<(String, ModRefInfo, ModRefInfo)> {
     let module = parsed(text);
     let members: Vec<GlobalId> = names.iter().map(|one| module.named(one).expect("a global")).collect();
-    infer_memory(&module, &members)
+    infer_memory(&module, &DataLayout::default(), &members)
         .into_iter()
         .map(|(id, me)| {
             (
@@ -296,8 +296,8 @@ b0:
 ",
     );
     let (inner, outer) = (module.named("inner").unwrap(), module.named("outer").unwrap());
-    assert_eq!(stamp_memory(&mut module, &[inner]), [inner]);
-    assert_eq!(stamp_memory(&mut module, &[outer]), [outer]);
+    assert_eq!(stamp_memory(&mut module, &DataLayout::default(), &[inner]), [inner]);
+    assert_eq!(stamp_memory(&mut module, &DataLayout::default(), &[outer]), [outer]);
     for id in [inner, outer] {
         let attrs = &module.global(id).function().unwrap().attrs;
         assert!(MemoryEffects::of_attrs(attrs).does_not_access_memory());
@@ -427,4 +427,26 @@ b0:
         (one.no_free, one.no_sync)
     };
     assert_eq!((flags("a"), flags("b"), flags("leaf")), ((true, true), (false, false), (true, true)));
+}
+
+fn many_leaves(count: usize) -> String {
+    (0..count)
+        .map(|n| format!("define i32 @f{n}(i32 %x) {{\nb0:\n  %y = add i32 %x, {n}\n  ret i32 %y\n}}\n"))
+        .collect()
+}
+
+/// `infer_memory` parsed the module's datalayout text for every SCC: 2241
+/// parses (18 M Ir) over the 26-program m64 corpus. The cost must not grow
+/// with the number of components.
+#[test]
+fn the_datalayout_is_not_parsed_for_each_component() {
+    use llrm_mir::counts::{Event, get};
+    let parses = |count: usize| {
+        let mut module = parsed(&many_leaves(count));
+        module.datalayout = Some("e-m:e-i64:64-n8:16:32:64-S128".into());
+        let before = get(Event::DataLayoutParses);
+        infer_module(&mut module, &DataLayout::default(), Spaces::FLAT);
+        get(Event::DataLayoutParses) - before
+    };
+    assert_eq!((parses(2), parses(40)), (0, 0));
 }

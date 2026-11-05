@@ -84,7 +84,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use llrm_mir::context::{ConstantExpr, ConstantId, ConstantKind, Context, GlobalId};
-use llrm_mir::module::{GlobalKind, GlobalValue, InstId, Linkage, Mark, MetadataOperand, Module, Operand};
+use llrm_mir::module::{Function, GlobalKind, GlobalValue, InstId, Linkage, Mark, MetadataOperand, Module, Operand};
 use llrm_mir::opcode::{Attribute, Opcode};
 use llrm_mir::passes::{Declarations, ModuleAnalyses};
 use llrm_mir::program::{Program, ProgramAnalyses, ProgramAnalysis, ProgramProxy, defines};
@@ -310,6 +310,27 @@ fn embedded_fresh(
         ConstantKind::Expr(ConstantExpr::Cast { value, .. }) => embedded_once(context, *value, seen, out),
         _ => {}
     }
+}
+
+/// The globals `function`'s personality and operands name, each constant
+/// visited once.
+pub fn named_by_body(
+    context: &Context,
+    function: &Function,
+) -> BTreeSet<GlobalId> {
+    let mut out = BTreeSet::new();
+    let mut seen = Visited::default();
+    if let Some(one) = function.personality {
+        embedded_once(context, one, &mut seen, &mut out);
+    }
+    for (_, inst) in function.walk() {
+        for operand in &function.instruction(inst).operands {
+            if let Operand::Constant(id) = operand {
+                embedded_once(context, *id, &mut seen, &mut out);
+            }
+        }
+    }
+    out
 }
 
 /// Whether the call `at` may call back into the module: LLVM's
