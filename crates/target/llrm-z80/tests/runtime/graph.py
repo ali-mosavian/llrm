@@ -33,5 +33,18 @@ with tempfile.TemporaryDirectory() as w:
     if size != (0x790 - 0x78E) + (0x914 - 0x790):
         print(f"__modsi3 counted as {size} B, the divide under its truncated map name is missing")
         ok = False
+# the size family of the long long divide must not reach the speed family's code: `neg64` sat under `__moddi3`, the
+# size entries reached it, and -Os counted 368 B of fast paths it never runs
+for entry in ("__s_udivdi3", "__s_umoddi3", "__s_divdi3", "__s_moddi3"):
+    seen, todo = {entry}, [entry]
+    while todo:
+        for callee in graph.get(todo.pop(), ()):
+            if callee not in seen:
+                seen.add(callee)
+                todo.append(callee)
+    speed = seen & {"__udivdi3", "__umoddi3", "__divdi3", "__moddi3"}
+    if speed:
+        print(f"{entry} reaches the speed routines {sorted(speed)}")
+        ok = False
 print("ALL OK" if ok else "FAILED")
 sys.exit(0 if ok else 1)

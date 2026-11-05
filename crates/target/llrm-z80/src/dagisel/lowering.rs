@@ -122,6 +122,13 @@ pub fn target_lowering() -> TargetLowering {
             tl.set_libcall_name(op, vt, name);
         }
     }
+    // the long long divide has a smaller routine (one step per dividend bit)
+    // for a function tuned for size
+    for (op, name) in
+        [SDiv, UDiv, SRem, URem].into_iter().zip(["__s_divdi3", "__s_udivdi3", "__s_moddi3", "__s_umoddi3"])
+    {
+        tl.set_size_libcall_name(op, MVT::I64, name);
+    }
     // softened floats: compiler-rt's routines
     tl.set_soft_float_libcall_names();
     tl.set_operation_action(BrCond, MVT::Other, Action::Custom);

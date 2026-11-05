@@ -13,3 +13,14 @@ fn constant_halfwords_off_a_doubleword_are_doubleword_stores() {
     assert_eq!(stores, 2, "{asm}");
     assert!(!asm.contains("strh"), "{asm}");
 }
+
+/// Constants stored between stores of another array were kept apart by the
+/// merge pass (a store ended the span): 22 halfword stores where the 16 of the
+/// other array are all that is left once the constants are wide (matmul -O2:
+/// 1500 bytes, pin 1412).
+#[test]
+fn constants_between_stores_of_another_object_are_merged() {
+    let asm = driver::assembly(include_str!("data/store_merge_interleaved.ll"), Platform::Linux, Level::O2).expect("lowers");
+    let halfwords = asm.lines().map(str::trim).filter(|line| line.starts_with("strh ")).count();
+    assert_eq!(halfwords, 16, "{asm}");
+}
