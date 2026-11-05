@@ -96,6 +96,11 @@ pub fn fold_argument_loads(function: &mut MFunction) {
             }
         }
         let [(user, index)] = readers[..] else { continue };
+        // a branch after the load may read the codes it set (`cmpelim` took
+        // its `tst` for them); the folded user does not set them there
+        if codes_are_read(&function.blocks[load_at.0].insts, load_at.1) {
+            continue;
+        }
         if reaches_phi || rewritten.contains(&user) {
             continue;
         }
@@ -121,6 +126,26 @@ pub fn fold_argument_loads(function: &mut MFunction) {
                 },
             );
     }
+}
+
+/// Whether an instruction after the one at `at` reads the codes it set before
+/// anything sets them again.
+fn codes_are_read(
+    insts: &[llrm_spike_mf::Inst],
+    at: usize,
+) -> bool {
+    if !insts[at].sets_flags {
+        return false;
+    }
+    for inst in &insts[at + 1..] {
+        if inst.reads_flags {
+            return true;
+        }
+        if inst.sets_flags || inst.call {
+            return false;
+        }
+    }
+    false
 }
 
 /// The store that writes what a slot holds as `store` writes a register:
