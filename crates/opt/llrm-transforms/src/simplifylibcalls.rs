@@ -30,9 +30,10 @@
 //!   formed only where the compile states them in `Options::library`, as
 //!   `strlen` is (loopidiom D11); the pin reads the triple. Exit:
 //!   `Target::library` naming them.
-//! - D2: the other arms (`sprintf`, `snprintf`, the other `str*`, `mem*`, math)
+//! - D2: the other arms (`sprintf`, `snprintf`, the other `str*`, `memchr`, math)
 //!   are untranslated, and so are `iprintf`/`__small_printf`,
-//!   `optimizeErrorReporting` and the argument annotations.
+//!   `optimizeErrorReporting` and the argument annotations. The `memcpy`
+//!   family is `memops.rs`.
 //! - D3: `strcmp` of two strings whose lengths are known but whose contents are
 //!   not (a PHI or select of literals) is not rewritten: `GetStringLength` here
 //!   reads a constant global only.

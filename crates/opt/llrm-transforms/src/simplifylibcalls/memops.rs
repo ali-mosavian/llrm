@@ -9,6 +9,10 @@
 //!   `copyFlags` are not translated: the intrinsic gets `align 1` and nothing
 //!   of the call's attributes, flags or metadata, and the arguments are not
 //!   annotated `nonnull`/`dereferenceable` (`annotateNonNullAndDereferenceable`).
+//! - DEVIATE M3 (owner w2, exit 2026-11-30): `mempcpy` and `memccpy` are
+//!   available on every target here (`Generic`); the pin marks them
+//!   unavailable on Windows (TargetLibraryInfo.cpp#L387, #L801-L802), so a
+//!   call of a user's own `mempcpy` there is rewritten here and not in the pin.
 //! - DEVIATE M2 (owner w2, exit 2026-11-30): a pointer in a non-default
 //!   address space is left as the call (the pin's intrinsic is overloaded on
 //!   it; the table here names the default space only).
