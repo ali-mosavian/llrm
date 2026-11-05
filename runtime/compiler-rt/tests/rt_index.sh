@@ -2,8 +2,9 @@
 # usage: tests/rt_index.sh GROUP... -> "symbol<TAB>file<TAB>needs": each global symbol the group's members define, its source file, and the symbols it
 # calls that another member of the same group defines. A resolver pulls the member of an undefined symbol, then its needs.
 cd "$(dirname "$0")/.."; T=$(mktemp -d); trap 'rm -r $T' EXIT; : > $T/def; : > $T/und
-for f in $(tests/fp_sources.sh "$@"); do
-  o=$T/$(echo $f | tr / _).o; cc -c -O2 -fno-builtin -Iinclude -DSF_INTABI "$f" -o $o || exit 1
+# RT_CFLAGS: extra compiler flags (the target config); RT_EXTRA: sources the config adds (6502: config/6502/sf32_6502.c).
+for f in $(tests/fp_sources.sh "$@") $RT_EXTRA; do
+  o=$T/$(echo $f | tr / _).o; cc -c -O2 -fno-builtin -Iinclude -DSF_INTABI $RT_CFLAGS "$f" -o $o || exit 1
   nm --defined-only -g $o | awk -v f=$f '{print $3 "\t" f}' >> $T/def
   nm -u $o | awk -v f=$f '{print f "\t" $2}' >> $T/und
 done
