@@ -3,19 +3,21 @@
 
 #ifndef SF_CONV64_H
 #define SF_CONV64_H
-static inline sf64 from_mag(uint64_t sign, uint64_t u)
-{
-    if (!u) return 0;
-    int n = 63 - sf_clz64(u);
-    uint64_t m = n > 55 ? sf_shr_sticky64(u, n - 55) : u << (55 - n);
-    return SF_PACK(sign, n + 1023, m);
-}
 /* A 32-bit magnitude always fits the 53-bit significand: no rounding, and every shift stays in 32-bit halves. */
-static inline sf64 from_mag32(uint64_t sign, uint32_t x)
+/* Not `inline`: the callers must share one copy (m68k -Os: two inlined copies grew float.c by 324 B). */
+static sf64 from_mag32(uint64_t sign, uint32_t x)
 {
     if (!x) return 0;
     int n = 31 - sf_clz32(x);
     uint32_t y = x << (31 - n); /* top bit set */
     return sign + (((uint64_t)(((uint32_t)n + 1022u) << 20) + (y >> 11)) << 32) + ((uint64_t)(y << 21));
+}
+static sf64 from_mag(uint64_t sign, uint64_t u)
+{
+    uint32_t hi = (uint32_t)(u >> 32);
+    if (!hi) return from_mag32(sign, (uint32_t)u);
+    int n = 63 - sf_clz32(hi);
+    uint64_t m = n > 55 ? sf_shr_sticky64(u, n - 55) : u << (55 - n);
+    return SF_PACK(sign, n + 1023, m);
 }
 #endif
