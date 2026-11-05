@@ -18,7 +18,7 @@
 //! stays in a register for the whole of it. Reason: best of gcc and clang is
 //! the goal, and gcc compares against the slot. At speed the memory source
 //! costs clocks in the loop, so only a function built for size folds. Exit:
-//! none.
+//! review 2026-11-20.
 //!
 //! # See also
 //! `TargetInstrInfo::foldMemoryOperand`.

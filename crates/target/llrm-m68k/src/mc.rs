@@ -133,7 +133,14 @@ fn print_method(
         "ARIPD" => format!("-({})", print_operand(inst, at)?),
         "ARID" => format!("({},{})", print_disp(inst, at)?, print_operand(inst, at + 1)?),
         "ARII" => {
-            format!("({},{},{})", print_disp(inst, at)?, print_operand(inst, at + 1)?, print_operand(inst, at + 2)?)
+            let scale =
+                crate::dagisel::scaled::scale_of(inst.opcode).map_or(String::new(), |scale| format!(".l*{scale}"));
+            format!(
+                "({},{},{}{scale})",
+                print_disp(inst, at)?,
+                print_operand(inst, at + 1)?,
+                print_operand(inst, at + 2)?
+            )
         }
         "AL" => match operand(inst, at)? {
             Operand::Symbol(name, addend) => symbol(name, *addend),
