@@ -1135,6 +1135,19 @@ fn a_stack_argument_beyond_the_ix_displacement_is_stored_through_iy() {
     assert!(text.contains("add iy, sp") && text.contains("(iy)"), "{text}");
 }
 
+/// `memory_expansion` at -Os was refused ("a conditional return in a function
+/// with a frame"): `return_conditionally` turned `jp cc` over a bare `ret` into
+/// `ret cc` without asking for a frame, and a `ret cc` skips the epilogue. The
+/// function (two 700-byte arrays) keeps the jump.
+#[test]
+fn an_early_return_in_a_function_with_a_frame_compiles() {
+    let ir = include_str!("kernels/ir/conditional_return_with_frame.ll");
+    for level in [Level::O2, Level::Os] {
+        let out = text(ir, "lc1", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{level:?}: {why}"));
+        assert!(out.contains("pop ix"), "{level:?}: {out}");
+    }
+}
+
 /// A float argument or result killed the compiler ("legal parts: Type(F32)",
 /// 8 programs of tests/run/c); it is softened to an integer now (#6578), so
 /// passing one through is register moves and a return, no routine.

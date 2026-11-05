@@ -433,13 +433,16 @@ fn allocate_once(
     }
     place_copies_where_needed(&mut function, &assignment);
     read_copies_at_their_source(&mut function, &assignment);
-    return_conditionally(&mut function);
     let size = |class| if Z80Registers::bytes_of(class) == 1 { 1 } else { 2 };
     let mut slots: Vec<(i32, usize)> = slots.into_iter().map(|(slot, class)| (slot, size(class))).collect();
     if slots_are_a_stack(&mut function, &assignment) {
         slots.clear();
     } else {
         spills_first(&mut function, &assignment);
+    }
+    // A conditional return skips the epilogue, so a function with a frame keeps its jump.
+    if !expand::needs_frame(&function, &slots) {
+        return_conditionally(&mut function);
     }
     Ok(((function, assignment, slots, reads), held))
 }

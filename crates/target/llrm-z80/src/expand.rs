@@ -1407,6 +1407,11 @@ fn shift_count(inst: &Inst) -> Result<i64, String> {
     }
 }
 
+/// Whether `function` with spill `slots` keeps an IX frame.
+pub(crate) fn needs_frame(function: &MFunction, slots: &[(i32, usize)]) -> bool {
+    layout(function, slots).active
+}
+
 /// The frame of `function`: its static allocas, then the spill `slots`.
 fn layout(
     function: &MFunction,
