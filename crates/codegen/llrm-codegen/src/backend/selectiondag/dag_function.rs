@@ -396,6 +396,17 @@ impl CallConventions<'_> {
 }
 
 impl super::emit::Conventions for CallConventions<'_> {
+    fn effects(
+        &self,
+        callee: Option<&Callee>,
+    ) -> llrm_mir::memory::Effects {
+        let Some(Callee::Global(id)) = callee else { return llrm_mir::memory::Effects::ANY };
+        let callees = self.contracts.and_then(|contracts| contracts.facts).and_then(|facts| facts.callees());
+        callees
+            .and_then(|callees| callees.get(&llrm_mir::context::GlobalId(*id)).map(|summary| summary.effects))
+            .unwrap_or(llrm_mir::memory::Effects::ANY)
+    }
+
     fn written(
         &self,
         callee: Option<&Callee>,
