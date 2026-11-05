@@ -654,6 +654,23 @@ fn matched(
     address: Operand,
     depth: u32,
 ) -> Mode {
+    matched_over(unit, tti, space, block, bytes, address, depth, false)
+}
+
+/// [`matched`]; `opaque` reads the base operand of the `gep` as a register
+/// without matching it (the retry of `matchOperationAddr`'s GEP case:
+/// "try stuffing the base into a register instead of matching it",
+/// [L5408](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L5408)).
+fn matched_over(
+    unit: &passes::Unit,
+    tti: &dyn Tti,
+    space: u32,
+    block: BlockId,
+    bytes: u64,
+    address: Operand,
+    depth: u32,
+    opaque: bool,
+) -> Mode {
     let plain = || Mode { base: address, reg: None, offset: 0, index: None, insts: Vec::new(), in_bounds: true };
     let Operand::Value(value) = address else { return plain() };
     let ValueDef::Instruction(gep) = unit.function.value(value).def else { return plain() };
@@ -686,7 +703,11 @@ fn matched(
     if variable.len() > 1 {
         return plain();
     }
-    let inner = matched(unit, tti, space, block, bytes, instruction.operands[0], depth - 1);
+    let inner = if opaque {
+        Mode { base: instruction.operands[0], reg: None, offset: 0, index: None, insts: Vec::new(), in_bounds: true }
+    } else {
+        matched(unit, tti, space, block, bytes, instruction.operands[0], depth - 1)
+    };
     let mut insts = inner.insts;
     let mut in_bounds = inner.in_bounds && instruction.flags.contains(Flags::INBOUNDS);
     let mut reg = inner.reg;
@@ -703,6 +724,11 @@ fn matched(
         {
             reg = Some(held);
             Some((instruction.operands[1 + at], scale))
+        }
+        // The base matched an index of its own: match this one against the
+        // base as a register; a second conflict is a failure.
+        (Some(_), Some(_)) if !opaque => {
+            return matched_over(unit, tti, space, block, bytes, address, depth, true);
         }
         (Some(_), Some(_)) => return plain(),
         // `matchScaledValue` of scale 1 is `matchAddr(ScaleReg)`
