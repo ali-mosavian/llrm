@@ -13,6 +13,7 @@ stops the run and is reported, never guessed.
 from __future__ import annotations
 
 import io
+import os
 import struct
 import sys
 from pathlib import Path
@@ -52,6 +53,9 @@ def _prices():
     return harness.cost, harness.multiplier_of, harness.clocks.prefixes
 
 
+# Instructions a run may take before it is stopped: LLRM_ICOUNT_LIMIT raises it for a program the reference compiler makes slow (Turbo C's
+# 8086 long multiply: stft_fixed and jpeg_fixed run past 400 M).
+LIMIT = int(os.environ.get("LLRM_ICOUNT_LIMIT", 400_000_000))
 NEVER_ENTERED = "the region was never entered"
 
 
@@ -109,7 +113,7 @@ def dos_file(cwd: Path, name: str) -> Path:
     return path
 
 
-def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch: set | None = None, only: tuple[int, int] | None = None, whole: bool = False, stdin: bytes | None = None, profile: dict | None = None) -> Run:
+def run(exe: Path, entry: int | None, cwd: Path, limit: int = LIMIT, watch: set | None = None, only: tuple[int, int] | None = None, whole: bool = False, stdin: bytes | None = None, profile: dict | None = None) -> Run:
     """`exe` to its exit; `entry` is the linear address, from the image's first byte, of the function whose
     work is counted (None: count nothing, only run). `only` is a range of such addresses: of the region, what runs outside it
     (the scene around the code under test) is not counted, and the region still ends where `entry` returns. Files the program
@@ -143,7 +147,10 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch
     prefixes = {}  # address -> operand- and address-size prefixes it carries
     target = None if entry is None else LOAD * 16 + entry
 
+    steps = [0]
+
     def step(uc, address, size, _):
+        steps[0] += 1
         if watch is not None:
             watch.add(address - LOAD * 16)
         if profile is not None:
@@ -431,6 +438,10 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch
         result.error = result.error or f"emulator: {error} at {uc.reg_read(UC_X86_REG_CS):x}:{uc.reg_read(UC_X86_REG_IP):x}"
     for handle, file in state["files"].items():
         file.close()
+    if result.exit_code is None and not result.error and steps[0] >= limit:
+        # unicorn stops quietly at `limit` instructions: the program has not finished, not failed to return
+        result.error = f"stopped at the {limit}-instruction limit (LLRM_ICOUNT_LIMIT raises it)"
+        return result
     if whole and result.exit_code is not None:
         result.region = counts
     elif entry is not None and state["done"]:

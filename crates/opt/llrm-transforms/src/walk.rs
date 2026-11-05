@@ -326,7 +326,7 @@ impl ProgramPass for Walk {
                                 decided.as_mut(),
                                 (tti.as_deref().is_some_and(|tti| {
                                     size != crate::inlinecost::CallerSize::Speed
-                                        || tti.speed_inline_milliclocks_per_byte() > 0
+                                        || tti.inline_policy().by_rate > 0
                                 }))
                                 .then_some(&mut trials),
                             )
@@ -537,7 +537,7 @@ impl ProgramPass for Walk {
                                 // takes a trial that grows the code where the
                                 // clocks it saves are worth the growth.
                                 let rate = if self.speed_rate {
-                                    tti.speed_milliclocks_per_byte().max(tti.speed_inline_milliclocks_per_byte())
+                                    tti.speed_milliclocks_per_byte().max(tti.inline_policy().by_rate)
                                 } else {
                                     0
                                 };
