@@ -306,6 +306,14 @@ impl Tti for AArch64 {
         250_000
     }
 
+    /// DEVIATE UP1 (arm64): a full unroll at -O2/-O3 must save 250 clocks for
+    /// each byte it adds, the bar's price (score = instructions + 250 per
+    /// byte). Without it matmul -O2 is 1560 B against gcc's 304 for 3x fewer
+    /// instructions. Exit: the per-target clock model (2026-11-20).
+    fn unroll_milliclocks_per_byte(&self) -> i64 {
+        250_000
+    }
+
     fn merges_unaligned_stores(&self) -> bool {
         true
     }
