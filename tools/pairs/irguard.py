@@ -18,6 +18,32 @@ def check(text: str, cpu: str, name: str = "<ir>") -> None:
         raise SystemExit(f"irguard: {name}: target-cpu {sorted(bad)} but the llc is run with {cpu}")
 
 
+def missing_dso_local(text: str) -> list[str]:
+    """Functions and globals a PIC target would reach through the GOT/PLT: no `dso_local`, not `internal`/`private`. The pin's llc is
+    PIC on clang IR, ours is not, so a same-IR byte compare at x86-64 reads the GOT/PLT loads as ours being smaller (2026-11-05:
+    jpeg_fixed x86_64 read -276 B, really +78 B). Intrinsics are skipped."""
+    missing = []
+    for line in text.splitlines():
+        if line.startswith(("define ", "declare ")):
+            head = line.partition("(")[0]
+            words, name = head.split(), re.findall(r"@([^\s(]+)", head)
+        elif line.startswith("@") and "=" in line:
+            left, _, right = line.partition("=")
+            words = [word for word in right.split() if word not in ("global", "constant")][:6]
+            name = [left.strip()[1:].strip('"')]
+        else:
+            continue
+        if name and not name[-1].startswith("llvm.") and not {"dso_local", "internal", "private"} & set(words):
+            missing.append(name[-1])
+    return missing
+
+
+def check_dso_local(text: str, name: str = "<ir>") -> None:
+    missing = missing_dso_local(text)
+    if missing:
+        raise SystemExit(f"irguard: {name}: {len(missing)} symbols without dso_local (first: {missing[0]}); the pin's llc would be PIC and ours not")
+
+
 SHIFT = re.compile(r"\b((?:shl|lshr|ashr)(?: (?:nuw|nsw|exact))* i(\d+) [^,\n]+, (\d+))\b")
 
 

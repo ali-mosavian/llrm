@@ -222,6 +222,17 @@ impl Tti for M68k {
         Basic.cast_cost(op, to, from, kind)
     }
 
+    /// DEVIATE 20: a speed build prices each select a two-entry phi would
+    /// become as the branch and move it lowers to (gcd 44 -> 26 B,
+    /// 236 -> 138 clk); a size build folds, where the select is smaller.
+    /// Exit 2026-11-12.
+    fn select_branch_extra(
+        &self,
+        optsize: bool,
+    ) -> i64 {
+        if optsize { 0 } else { 1 }
+    }
+
     fn sizes_exit_values(&self) -> bool {
         true
     }
