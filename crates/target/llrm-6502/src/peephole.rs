@@ -52,7 +52,8 @@ fn flags_unread_after(
 ) -> bool {
     for line in &lines[from..] {
         let Line::Inst(inst) = line else { return false };
-        // a jump leaves the block: no block reads the flags its predecessor left
+        // a jump leaves the block: no block reads the flags its predecessor
+        // left
         if inst.op == Op::Jmp {
             return true;
         }
@@ -204,15 +205,23 @@ fn leaves_cell_and_registers(
     let Line::Inst(Inst { op, operand, .. }) = line else { return false };
     match op {
         Op::Clc | Op::Sec | Op::Nop => true,
-        Op::Sta | Op::Stx | Op::Sty => operand.is_cell() && operand != load,
+        // a store changes no register, and no cell but its own: a global named
+        // directly or indexed is not a cell, a zero-page indexed store or one
+        // through a pointer may be
+        Op::Sta | Op::Stx | Op::Sty | Op::Stz => match operand {
+            Operand::Direct(_) => operand != load,
+            Operand::Indexed(name, _) => !(name.starts_with("rc") || name.starts_with("s_")),
+            _ => false,
+        },
         _ => false,
     }
 }
 
-/// `sta m` then `lda m` (likewise `x` and `y`) of a zero-page or spill cell:
-/// the register still holds it, so the load goes. It also set the zero and sign
-/// flags, so it stays when a branch reads them before anything sets them again.
-/// A carry flag op or a store to another cell between the two changes neither.
+/// `sta m` or `lda m` then `lda m` (likewise `x` and `y`) of a zero-page or
+/// spill cell: the register still holds it, so the load goes. It also set the
+/// zero and sign flags, so it stays when a branch reads them before anything
+/// sets them again. A carry flag op or a store to anything but `m` between the
+/// two changes neither.
 pub fn drop_reloads(asm: &mut Asm) {
     let lines = &asm.lines;
     let keep: Vec<bool> = (0..lines.len())
@@ -230,7 +239,7 @@ pub fn drop_reloads(asm: &mut Asm) {
                     .rev()
                     .find(|before| !leaves_cell_and_registers(before, operand))
                     .and_then(Line::inst)
-                    .is_some_and(|before| before.op == store && before.operand == *operand)
+                    .is_some_and(|before| (before.op == store || before.op == *load) && before.operand == *operand)
                 && flags_unread_after(lines, at + 1);
             !reload
         })

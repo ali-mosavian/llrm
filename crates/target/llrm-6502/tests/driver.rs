@@ -1968,3 +1968,18 @@ fn a_store_or_a_call_between_a_compare_and_its_branch_does_not_change_what_it_re
         assert!(text.contains("lda g"), "{between}: g was never read before the write:\n{text}");
     }
 }
+
+/// `a = x; b = x;` loaded `x` from its cell twice (`lda rc2; sta a; lda rc2;
+/// sta b`): the store to `a` changes neither the register nor the cell. x16
+/// fin's eleven zero stores were `lda rc2; sta g` eleven times (a byte and a
+/// clock each).
+#[test]
+fn a_byte_stored_twice_is_loaded_once() {
+    let ir = module(
+        "@a = global i8 0\n@b = global i8 0\n@c = global i8 0\n\
+         define void @k(i8 %x) {\n  store i8 %x, ptr @a\n  store i8 %x, ptr @b\n  store i8 %x, ptr @c\n  ret void\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert_eq!(text.matches("lda rc2").count(), 1, "the byte was loaded again:\n{text}");
+    assert_eq!(text.matches("sta ").count(), 3, "{text}");
+}
