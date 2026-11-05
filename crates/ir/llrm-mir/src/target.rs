@@ -74,6 +74,10 @@ pub struct Tuning {
     /// code, summed over its sites. false: the pin's `OptSizeThreshold` 50
     /// alone decides, which allows the growth.
     pub inline_size_guard_at_size: bool,
+    /// With `inline_size_guard_at_size`, the bound holds a callee with one
+    /// site too (otherwise only two or more: the pin's single-site inline
+    /// stands). A callee that stays and is copied once only grows the code.
+    pub inline_size_guard_single_site: bool,
     /// A constant offset of an address is a displacement the access folds;
     /// SimplifyCFG's sinking of two such accesses behind a phi of the offsets
     /// is refused (it costs the displacement). false: the pin's.
@@ -88,6 +92,10 @@ pub struct Tuning {
     /// `recursive_inlining` to run on it, calibrated per target; none: no
     /// such bar.
     pub recursive_edge_growth: Option<(i64, i64)>,
+    /// DEVIATE REC-2: what the copies of a recursive function in itself may add
+    /// at (-O2, -O3), in `gcc_insns` (gcc's `max-inline-insns-recursive`, 450);
+    /// none: `inline::MAX_INLINE_INSNS_RECURSIVE`.
+    pub recursive_inlining_growth: Option<(i64, i64)>,
     /// DEVIATE PL6: the first iteration of an innermost loop is peeled where
     /// its entry constants fold enough of the body to pay the copy at the
     /// speed rate (`Tti::peels_folded_entry`). false: the pin's
@@ -132,9 +140,11 @@ impl Tuning {
         inline_threshold: None,
         split_merged_conditions: false,
         inline_size_guard_at_size: false,
+        inline_size_guard_single_site: false,
         keep_constant_displacements: false,
         recursive_inlining: None,
         recursive_edge_growth: None,
+        recursive_inlining_growth: None,
         peel_folded_entry: false,
         sink_select_arms: false,
         inline_variable_memcpy: false,

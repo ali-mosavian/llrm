@@ -619,6 +619,10 @@ impl Tti for X86 {
         self.tuning.recursive_edge_growth
     }
 
+    fn recursive_inlining_growth(&self) -> Option<(i64, i64)> {
+        self.tuning.recursive_inlining_growth
+    }
+
     fn peels_folded_entry(&self) -> bool {
         self.tuning.peel_folded_entry
     }
@@ -652,7 +656,11 @@ impl Tti for X86 {
     }
 
     fn opt_size_inline_guard_min_sites(&self) -> i64 {
-        if self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard) { 1 } else { 2 }
+        if self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard) || self.tuning.inline_size_guard_single_site {
+            1
+        } else {
+            2
+        }
     }
 
     fn constant_offset_phi_is_cheap(&self) -> bool {
