@@ -56,6 +56,9 @@ def check(code: dict[int, list[str]], symbols: dict[str, int], tables: str) -> l
         if start is None or size is None or start not in code:
             continue
         name = names.get(start, label)
+        listed = [off for off, _, _ in codes_of(part)]
+        if listed != sorted(listed, reverse=True):
+            problems.append(f"{name}: unwind codes are not listed last instruction first: offsets {listed}")
         have = sorted((off, kind, ops.split()[0].upper() if kind in ("PushNonVol", "SaveNonVol", "SaveXMM128") else ops) for off, kind, ops in codes_of(part))
         want = sorted(e for e in expected(code[start], int(size.group(1))) if e[0] is not None)
         # an allocation prints in slots of eight (AllocLarge) or bytes+8 (AllocSmall): compare by kind and offset
