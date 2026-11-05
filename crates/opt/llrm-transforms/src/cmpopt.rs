@@ -46,7 +46,7 @@ use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
 use llrm_mir::valuetracking::{Query, nonzero, pattern};
 
 /// `Query` over `function` with no analyses.
-fn query<'a>(
+pub(crate) fn query<'a>(
     context: &'a Context,
     globals: &'a [GlobalValue],
     layout: &'a DataLayout,

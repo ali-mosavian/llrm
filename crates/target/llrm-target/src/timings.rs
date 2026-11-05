@@ -34,6 +34,9 @@ pub struct CpuTable {
     /// tail duplication (`TailDupPlacementThreshold`), where the target states
     /// a smaller bound than the pin's (2, 4 at -O3); `None`: the pin's.
     pub tail_dup_placement_threshold: Option<i64>,
+    /// Clocks a mispredicted branch costs (`MCSchedModel::MispredictPenalty`);
+    /// `None`: the target states none.
+    pub mispredict_penalty: Option<i64>,
     /// Form and clocks, in file order.
     pub clocks: Vec<(String, i64)>,
     pub latency: Vec<(String, i64)>,
@@ -174,6 +177,7 @@ impl Timings {
                     ("scalars", "tail_dup_placement_threshold") => {
                         table.tail_dup_placement_threshold = Some(number()?)
                     }
+                    ("scalars", "mispredict_penalty") => table.mispredict_penalty = Some(number()?),
                     ("scalars", other) => return Err(format!("{at}: no scalar `{other}`")),
                     ("clocks", form) => table.clocks.push((form.to_owned(), number()?)),
                     (_, form) => table.latency.push((form.to_owned(), number()?)),

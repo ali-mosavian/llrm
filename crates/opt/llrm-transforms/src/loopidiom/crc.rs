@@ -25,7 +25,7 @@
 
 use llrm_mir::context::Context;
 use llrm_mir::edit::Position;
-use llrm_mir::module::{Function, InstId, Operand};
+use llrm_mir::module::{Function, InstId, Operand, UnnamedAddr};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::tti::{ArithOp, CmpSel, Cost, CostKind, MemoryOp, OperandInfo, Tti, Ty};
 use llrm_mir::types::{Type, TypeId};
@@ -228,7 +228,7 @@ impl LoopIdiomRecognize {
             ty: array,
             kind: llrm_mir::context::ConstantKind::Aggregate(cells),
         });
-        let table = run.declared.table(".crctable", array, initial);
+        let table = run.declared.table(".crctable", array, initial, UnnamedAddr::None);
 
         let iv_phi = l.get_canonical_induction_variable(context, &*function).expect("a canonical induction variable");
         let iv = Operand::Value(function.instruction(iv_phi).result.expect("a value"));

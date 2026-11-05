@@ -82,9 +82,17 @@ pub enum Domain {
     Other,
 }
 
+/// The overflow node a compare and a sum or difference become
+/// (`ISD::UADDO`, `ISD::USUBO`), for `should_form_overflow_op`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OverflowOp {
+    UAdd,
+    USub,
+}
+
 /// Whether an integer of `bits` is a simple value type (`MVT`), the only ones
 /// `getLoadExtAction` has an entry for; any other is `Expand`.
-fn simple_int(bits: u32) -> bool {
+pub fn simple_int(bits: u32) -> bool {
     matches!(bits, 1 | 2 | 4 | 8 | 16 | 32 | 64 | 128)
 }
 
@@ -136,6 +144,20 @@ pub trait Lowering {
     ) -> bool {
         let _ = (op, bits);
         false
+    }
+
+    /// `shouldFormOverflowOp(op, EVT(iN), math_used)`
+    /// ([TargetLowering.h#L3623](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/TargetLowering.h#L3623)):
+    /// whether a compare of a sum or difference with an operand becomes the
+    /// overflow node. The base class's: no operation is legal here, so only
+    /// an add whose sum is read besides the compare, on a simple type.
+    fn should_form_overflow_op(
+        &self,
+        op: OverflowOp,
+        bits: u32,
+        math_used: bool,
+    ) -> bool {
+        op == OverflowOp::UAdd && math_used && simple_int(bits)
     }
 
     /// `isLoadExtLegal` (`getLoadExtAction(..) == Legal`,

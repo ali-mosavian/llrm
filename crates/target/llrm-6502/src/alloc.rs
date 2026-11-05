@@ -282,6 +282,16 @@ impl<const STACK: bool> Target for Mos<STACK> {
         }
     }
 
+    // DEVIATE 3b-1 (owner greedy-subreg): a pair is built and taken apart by
+    // lane, as the pin's sub-register coalescing does.
+    fn lowers_lanes() -> bool {
+        true
+    }
+
+    fn joins_lanes() -> bool {
+        true
+    }
+
     fn moves_lanes(inst: &Inst) -> bool {
         matches!(inst.kind, Kind::Op("PACK" | "UNPACK"))
     }
@@ -3210,10 +3220,10 @@ fn emit_with<const STACK: bool>(
                     let jump = tail_call(block, i, pending);
                     // the speed variants of the variable long shifts move whole
                     // bytes first: 45 bytes more each, linked once, for 200
-                    // clocks fewer per 8 bits; the multiply stops at the last
-                    // set byte of its multiplier: 19 bytes more, a third of the
-                    // clocks for a byte
-                    let fast = matches!(callee.as_str(), "__ashlsi3" | "__lshrsi3" | "__ashrsi3" | "__mulsi3")
+                    // clocks fewer per 8 bits. `__mulsi3_fast` (19 bytes more)
+                    // is not chosen: a site that never runs or has a constant
+                    // multiplier priced as run once still links it
+                    let fast = matches!(callee.as_str(), "__ashlsi3" | "__lshrsi3" | "__ashrsi3")
                         && TUNING.with(|t| t.get()).clocks_per_byte <= 1;
                     writeln!(out, "  {} {callee}{}", if jump { "jmp" } else { "jsr" }, if fast { "_fast" } else { "" })
                         .unwrap()
