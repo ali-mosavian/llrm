@@ -1939,13 +1939,52 @@ pub fn allocate_greedy<T: Target>(
     registers: Regs,
     size: bool,
 ) -> Result<(Assignment, Vec<(i32, T::Class)>), String> {
+    let name = function.name.clone();
     let first = allocate_greedy_pinned::<T>(function, registers, size, T::joins_pinned_copies());
-    match first {
+    let result = match first {
         Err(why) if T::joins_pinned_copies() && why.ends_with("greedy could not allocate") => {
-            allocate_greedy_pinned::<T>(function, registers, size, false).map_err(|_| why)
+            let second = allocate_greedy_pinned::<T>(function, registers, size, false);
+            if second.is_ok() {
+                record_refusal(&name, &why, true);
+            }
+            second.map_err(|_| why)
         }
         other => other,
+    };
+    if let Err(why) = &result {
+        record_refusal(&name, why, false);
     }
+    result
+}
+
+/// A function greedy would not take as it was, for the audit of silent
+/// fallbacks: a target that answers a refusal with another allocator, or with
+/// a second try, shows nothing else.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Refusal {
+    pub function: String,
+    pub why: String,
+    /// Allocated on a second try (DEVIATE PJ1) rather than refused.
+    pub retried: bool,
+}
+
+static REFUSALS: std::sync::Mutex<Vec<Refusal>> = std::sync::Mutex::new(Vec::new());
+
+fn record_refusal(
+    function: &str,
+    why: &str,
+    retried: bool,
+) {
+    if llrm_support::env_flag!("LLRM_GREEDY_REFUSALS") {
+        eprintln!("greedy refusal: @{function}: {why}{}", if retried { " (allocated on the second try)" } else { "" });
+    }
+    let one = Refusal { function: function.to_owned(), why: why.to_owned(), retried };
+    REFUSALS.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(one);
+}
+
+/// The refusals since the last call, oldest first.
+pub fn take_refusals() -> Vec<Refusal> {
+    std::mem::take(&mut *REFUSALS.lock().unwrap_or_else(|poisoned| poisoned.into_inner()))
 }
 
 fn allocate_greedy_pinned<T: Target>(
