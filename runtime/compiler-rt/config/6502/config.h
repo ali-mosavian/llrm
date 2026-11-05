@@ -11,4 +11,6 @@
 #endif
 /* mul and div come from config/6502/sf32_6502.c (add stays generic: its tight form is 415 B larger). */
 #define SF_EXT_MULDIV 1
+/* The i64 shift libcalls pass the count as a byte (the target's shift-amount type), not as an int: lib/int/int64.c reads it as one. */
+#define SFB_SHIFT_T unsigned char
 #endif
