@@ -1419,3 +1419,27 @@ def test_skipped_rows_are_counted_in_the_header_by_reason():
     """sfm16_* had no native column and nothing said so. Each skip reason prints once with the number of programs it left without a row."""
     measured = {("a", "gcc64", "O2"): {"skip": "why"}, ("a", "clang64", "O2"): {"skip": "why"}, ("b", "gcc64", "O2"): {"skip": "why"}, ("b", "c64", "O2"): {"instructions": 1}}
     assert bench.skip_lines(measured) == ["SKIP why (2 programs)"]
+
+
+def test_watcom_links_error086_when_the_library_has_no_doserror(tmp_path, monkeypatch):
+    """stft_single's Watcom build died at jwlink E2028 `__doserror_` undefined (clibm.lib's creatdos and opendos want it; the shipped dictionary has no definition): the Watcom column had no row. The link is retried with error086.obj, the module that defines it."""
+    obj = tmp_path / "error086.obj"
+    obj.write_bytes(b"")
+    monkeypatch.setattr(bench, "DOSERROR_OBJ", obj)
+    links = []
+
+    def host(command, *a, **k):
+        links.append(command)
+        if len(links) == 1:
+            raise bench.dosbatch.BuildError("jwlink: Error! E2028: __doserror_ is an undefined reference")
+
+    monkeypatch.setattr(bench.dosbatch, "_host", host)
+    monkeypatch.setattr(bench.dosbatch, "c_support", lambda *a, **k: [])
+    monkeypatch.setattr(bench.cpulimit, "run", lambda *a, **k: types.SimpleNamespace(returncode=0, stderr="", stdout=""))
+    variant = next(one for one in bench.variants(bench.BENCH / "hanoi") if one.language == "c")
+    work = tmp_path / "w"
+    work.mkdir()
+    (work / "F000.obj").write_bytes(b"")
+    built = bench.build_watcom(variant, "O2", work, "F000")
+    assert not isinstance(built, str), built
+    assert str(obj) not in links[0] and str(obj) in links[1]
