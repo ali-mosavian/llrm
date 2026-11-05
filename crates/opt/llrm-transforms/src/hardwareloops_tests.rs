@@ -5,7 +5,7 @@ use llrm_mir::passes::{Declared, Outer};
 use llrm_mir::tti::{ArithOp, Basic, CastKind, CmpSel, Cost, CostKind, ImmUser, MemoryOp, OperandInfo, Ty};
 use llrm_mir::tti::{HardwareLoopTarget, Tti};
 
-use crate::testing::{parsed, printed};
+use crate::testing::{parsed, printed, results};
 
 /// `Basic`'s prices, the ones a `Tti` must state.
 macro_rules! basic_prices {
@@ -100,6 +100,10 @@ macro_rules! basic_prices {
 struct Counts {
     bits: u32,
     nesting: bool,
+    /// The counter is a register value carried by a phi.
+    phi: bool,
+    /// Only where the loop's own counter dies, and not across a call.
+    careful: bool,
 }
 
 impl Tti for Counts {
@@ -111,6 +115,9 @@ impl Tti for Counts {
     ) -> bool {
         info.count_bits = self.bits;
         info.is_nesting_legal = self.nesting;
+        info.counter_in_reg = self.phi;
+        info.requires_dead_counter = self.careful;
+        info.rejects_calls = self.careful;
         true
     }
 }
@@ -160,7 +167,7 @@ exit:
 /// branch reads the decrement, so the counter phi and the compare are gone.
 #[test]
 fn test_a_counted_loop_sets_its_trips_and_branches_on_the_decrement() {
-    let (changed, after) = converted(&counted(10), &Counts { bits: 8, nesting: false });
+    let (changed, after) = converted(&counted(10), &Counts { bits: 8, nesting: false, phi: false, careful: false });
     assert!(changed, "{after}");
     let (before_loop, in_loop) = after.split_once("loop:").expect("a loop block");
     assert!(before_loop.contains("call void @llvm.set.loop.iterations.i8(i8 10)"), "{after}");
@@ -182,7 +189,7 @@ fn test_a_target_that_counts_no_loops_changes_nothing() {
 /// one-byte counter holds it. The pin's width test on the type would refuse.
 #[test]
 fn test_a_sixteen_bit_count_that_fits_a_byte_counter_is_taken() {
-    let (changed, after) = converted(&counted(54), &Counts { bits: 8, nesting: false });
+    let (changed, after) = converted(&counted(54), &Counts { bits: 8, nesting: false, phi: false, careful: false });
     assert!(changed, "{after}");
     assert!(after.contains("@llvm.set.loop.iterations.i8(i8 54)"), "{after}");
 }
@@ -191,7 +198,7 @@ fn test_a_sixteen_bit_count_that_fits_a_byte_counter_is_taken() {
 /// in a byte: the counter wraps round to run 256 times, as `djnz` with B = 0.
 #[test]
 fn test_two_hundred_fifty_six_trips_wrap_to_zero_in_a_byte() {
-    let (changed, after) = converted(&counted(256), &Counts { bits: 8, nesting: false });
+    let (changed, after) = converted(&counted(256), &Counts { bits: 8, nesting: false, phi: false, careful: false });
     assert!(changed, "{after}");
     assert!(after.contains("@llvm.set.loop.iterations.i8(i8 0)"), "{after}");
 }
@@ -199,7 +206,7 @@ fn test_two_hundred_fifty_six_trips_wrap_to_zero_in_a_byte() {
 /// 300 trips do not fit a byte counter: the loop stays.
 #[test]
 fn test_a_count_wider_than_the_counter_leaves_the_loop() {
-    let (changed, after) = converted(&counted(300), &Counts { bits: 8, nesting: false });
+    let (changed, after) = converted(&counted(300), &Counts { bits: 8, nesting: false, phi: false, careful: false });
     assert!(!changed, "{after}");
     assert!(!after.contains("llvm.loop"), "{after}");
 }
@@ -226,7 +233,7 @@ exit:
   ret void
 }
 ";
-    let (changed, after) = converted(text, &Counts { bits: 8, nesting: false });
+    let (changed, after) = converted(text, &Counts { bits: 8, nesting: false, phi: false, careful: false });
     assert!(changed, "{after}");
     let (before_loop, in_loop) = after.split_once("loop:").expect("a loop block");
     assert!(before_loop.contains("@llvm.set.loop.iterations.i8(i8 %n)"), "{after}");
@@ -249,7 +256,7 @@ exit:
   ret void
 }
 ";
-    let (changed, after) = converted(text, &Counts { bits: 16, nesting: false });
+    let (changed, after) = converted(text, &Counts { bits: 16, nesting: false, phi: false, careful: false });
     assert!(!changed, "{after}");
 }
 
@@ -279,7 +286,7 @@ exit:
 /// tried where the target does not allow a hardware loop inside another.
 #[test]
 fn test_only_the_inner_loop_of_a_nest_converts() {
-    let (changed, after) = converted(NEST, &Counts { bits: 8, nesting: false });
+    let (changed, after) = converted(NEST, &Counts { bits: 8, nesting: false, phi: false, careful: false });
     assert!(changed, "{after}");
     assert_eq!(after.matches("call void @llvm.set.loop.iterations").count(), 1, "{after}");
     assert!(after.contains("(i8 4)"), "the inner loop's trips: {after}");
@@ -289,7 +296,7 @@ fn test_only_the_inner_loop_of_a_nest_converts() {
 /// Where nesting is legal both loops are counted.
 #[test]
 fn test_both_loops_of_a_nest_convert_where_nesting_is_legal() {
-    let (changed, after) = converted(NEST, &Counts { bits: 8, nesting: true });
+    let (changed, after) = converted(NEST, &Counts { bits: 8, nesting: true, phi: false, careful: false });
     assert!(changed, "{after}");
     assert!(after.contains("(i8 4)") && after.contains("(i8 6)"), "{after}");
 }
@@ -297,11 +304,124 @@ fn test_both_loops_of_a_nest_convert_where_nesting_is_legal() {
 /// A loop that already holds a counter is not counted twice.
 #[test]
 fn test_a_converted_loop_is_not_converted_again() {
-    let (_, once) = converted(&counted(10), &Counts { bits: 8, nesting: false });
+    let (_, once) = converted(&counted(10), &Counts { bits: 8, nesting: false, phi: false, careful: false });
     let mut module = parsed(&once);
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
     let mut declared = Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
-    let tti = Counts { bits: 8, nesting: false };
+    let tti = Counts { bits: 8, nesting: false, phi: false, careful: false };
     assert!(!super::converted(context, &layout, function, &mut declared, &outer, &tti), "{once}");
+}
+
+/// The phi form carries the count in a register: it starts at the trips, the
+/// branch tests what is left, and the interpreter gets the same answers as
+/// the loop it replaced.
+#[test]
+fn test_a_register_counter_is_a_phi_the_interpreter_agrees_with() {
+    let text = "define i16 @f(i16 %x) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %i.next, %loop ]
+  %s = phi i16 [ 0, %entry ], [ %s.next, %loop ]
+  %s.next = add i16 %s, %x
+  %i.next = add nuw i16 %i, 1
+  %c = icmp ne i16 %i.next, 10
+  br i1 %c, label %loop, label %exit
+exit:
+  ret i16 %s.next
+}
+";
+    let mut module = parsed(&format!("{DOS}{text}"));
+    let before = module.clone();
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut declared = Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let tti = Counts { bits: 8, nesting: false, phi: true, careful: false };
+    assert!(super::converted(context, &layout, function, &mut declared, &outer, &tti));
+    declared.place(&mut module).expect("declarations");
+    let after = printed(&module);
+    let (before_loop, in_loop) = after.split_once("loop:").expect("a loop block");
+    assert!(before_loop.contains("= call i8 @llvm.start.loop.iterations.i8(i8 10)"), "{after}");
+    assert!(in_loop.contains("%loop.iterations = phi i8 [ %"), "{after}");
+    assert!(in_loop.contains("= call i8 @llvm.loop.decrement.reg.i8(i8 %loop.iterations, i8 1)"), "{after}");
+    assert!(in_loop.contains("icmp ne i8 %"), "{after}");
+    assert_eq!(results(&module, &[&[3], &[7]]), results(&before, &[&[3], &[7]]), "{after}");
+}
+
+/// A target that wants its counter's register back converts only where the
+/// loop's own counter dies. `counted` stores through `%i`, so the counter
+/// lives on: the loop is left, instead of getting a second counter.
+#[test]
+fn test_a_loop_whose_counter_lives_on_is_left_where_the_target_wants_it_dead() {
+    let (changed, after) = converted(&counted(10), &Counts { bits: 8, nesting: false, phi: true, careful: true });
+    assert!(!changed, "{after}");
+}
+
+/// The counter is read by its update and the compare alone: it dies.
+#[test]
+fn test_a_loop_whose_counter_only_counts_is_converted_where_the_target_wants_it_dead() {
+    let text = "define i16 @f(i16 %x) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %i.next, %loop ]
+  %s = phi i16 [ 0, %entry ], [ %s.next, %loop ]
+  %s.next = add i16 %s, %x
+  %i.next = add nuw i16 %i, 1
+  %c = icmp ne i16 %i.next, 10
+  br i1 %c, label %loop, label %exit
+exit:
+  ret i16 %s.next
+}
+";
+    let (changed, after) = converted(text, &Counts { bits: 8, nesting: false, phi: true, careful: true });
+    assert!(changed, "{after}");
+}
+
+/// A call in the loop takes the counter's register: left alone.
+#[test]
+fn test_a_loop_that_calls_is_left_where_the_target_loses_its_counter_to_calls() {
+    let text = "declare void @g()
+define void @f(i16 %x) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %i.next, %loop ]
+  call void @g()
+  %i.next = add nuw i16 %i, 1
+  %c = icmp ne i16 %i.next, 10
+  br i1 %c, label %loop, label %exit
+exit:
+  ret void
+}
+";
+    let (changed, after) = converted(text, &Counts { bits: 8, nesting: false, phi: true, careful: true });
+    assert!(!changed, "{after}");
+    let (changed, after) = converted(text, &Counts { bits: 8, nesting: false, phi: true, careful: false });
+    assert!(changed, "{after}");
+}
+
+/// The old counter was a cycle of a phi and its update, dead once the compare
+/// goes: it stayed in the loop, a 16-bit update beside the byte counter
+/// (rep_count: +18 B, +6.6% clocks at -O2).
+#[test]
+fn test_the_counter_the_hardware_replaces_is_deleted() {
+    let text = "define i16 @f(i16 %x) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %i.next, %loop ]
+  %s = phi i16 [ 0, %entry ], [ %s.next, %loop ]
+  %s.next = add i16 %s, %x
+  %i.next = add nuw i16 %i, 1
+  %c = icmp ne i16 %i.next, 10
+  br i1 %c, label %loop, label %exit
+exit:
+  ret i16 %s.next
+}
+";
+    let (_, after) = converted(text, &Counts { bits: 8, nesting: false, phi: true, careful: true });
+    assert!(!after.contains("%i.next") && !after.contains("%i = phi"), "{after}");
+    assert!(after.contains("%s = phi"), "the sum stays: {after}");
 }

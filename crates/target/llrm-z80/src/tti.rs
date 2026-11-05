@@ -279,6 +279,22 @@ impl Tti for Z80Tti {
         priced(&["add hl;bc"], kind)
     }
 
+    /// HardwareLoops: a counted loop keeps its count in a byte register,
+    /// which `djnz` counts down. Only where the loop's own counter dies (the
+    /// byte replaces the word) and nothing in the loop calls (a call takes
+    /// every register).
+    fn is_hardware_loop_profitable(
+        &self,
+        info: &mut llrm_mir::tti::HardwareLoopTarget,
+    ) -> bool {
+        info.count_bits = 8;
+        info.counter_in_reg = true;
+        info.is_nesting_legal = true;
+        info.requires_dead_counter = true;
+        info.rejects_calls = true;
+        true
+    }
+
     /// SZ1, rule 1: a size build keeps a callee bigger than its call. The pin's
     /// `OptSizeThreshold` 50 allows growth, and a word update is 6 B where the
     /// call is 3.

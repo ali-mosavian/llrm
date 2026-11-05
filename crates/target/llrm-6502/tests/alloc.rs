@@ -2982,6 +2982,18 @@ fn a_reload_before_a_jump_goes() {
     );
 }
 
+/// x16basic-c `fp_fin`: a zero word live across a call took `rc8`/`rc9`, for a
+/// `pha`/`pla` pair each, instead of being made again at its three reads. A
+/// remade literal has no store, so its definition is not part of the spill's
+/// cost.
+#[test]
+fn a_zero_across_a_call_is_made_again_not_kept_in_a_saved_cell() {
+    let ir = "declare i16 @chrget(i16)\n@a = external global i16\n@b = external global i16\n\
+              define i8 @f() {\n  %c = call i16 @chrget(i16 0)\n  store i16 0, ptr @a\n  store i16 0, ptr @b\n  %t = trunc i16 %c to i8\n  ret i8 %t\n}";
+    let text = compile_at(ir, "f", 16, Tuning::SIZE);
+    assert!(!text.contains("pha"), "{text}");
+}
+
 /// x16basic-c `strs.c` -O2 (`fn_chrd`) did not compile: a word used as a
 /// pointer has its high byte stored elsewhere. The byte was read as a cell
 /// nothing defined, and the coalescer panicked ("a unique value").

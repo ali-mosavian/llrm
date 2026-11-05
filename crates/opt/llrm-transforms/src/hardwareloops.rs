@@ -28,8 +28,10 @@
 //! changes nothing anywhere until a target lowers the intrinsics.
 //!
 //! # Limits
-//! Only the form without a phi counter and without an entry test is made
-//! (`llvm.loop.decrement`, `llvm.set.loop.iterations`).
+//! No entry test is made (`llvm.test.set.loop.iterations`). A target whose
+//! counter is a register value (`counter_in_reg`) gets the phi form:
+//! `llvm.start.loop.iterations`, a phi, `llvm.loop.decrement.reg` and `icmp ne
+//! 0`, which the interpreter runs.
 //!
 //! DEVIATE 1: `isHardwareLoopCandidate` rejects an exit count whose type is
 //! wider than the counter. Here the count is taken when its unsigned range
@@ -54,6 +56,11 @@
 //!
 //! DEVIATE 5: a loop is eligible only in LoopSimplify form (the pin inserts a
 //! preheader where there is none). Exit: `InsertPreheaderForLoop`.
+//!
+//! DEVIATE 6: when the exit test was `icmp` of a counter that only the test and
+//! its own update read (the phi and the update read each other), that counter
+//! is deleted. The pin leaves the cycle, which `RecursivelyDelete...` does not
+//! see as dead. Exit: none.
 //!
 //! # See also
 //! `HardwareLoopsImpl::TryConvertLoop`, `HardwareLoop::Create`,
@@ -101,6 +108,11 @@ impl FunctionPass for HardwareLoops {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
+        // `LLRM_NO_HARDWARE_LOOPS`: the A/B switch of the other translated
+        // passes.
+        if llrm_support::env_flag!("LLRM_NO_HARDWARE_LOOPS") {
+            return PreservedAnalyses::all();
+        }
         let outer = Rc::clone(analyses.outer());
         let Some(tti) = outer.target().tti() else { return PreservedAnalyses::all() };
         // DEVIATE 3: asked once, for a target that wants no loop converted
@@ -310,33 +322,85 @@ impl Run<'_> {
             // Make sure this blocks ends with a conditional branch. Note that
             // this block may not be the loop latch block, even if the loop has
             // a latch block.
-            let Some((exit_branch, _)) = branch_of(self.function, bb) else { continue };
+            let Some((exit_branch, cond)) = branch_of(self.function, bb) else { continue };
+            if target.requires_dead_counter && dying_counter(self.function, cond).is_none() {
+                continue;
+            }
+            if target.rejects_calls && calls_in(&cx, &lp) {
+                continue;
+            }
             return Some(Info { target, exit_branch, exit_count: ec });
         }
         None
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/HardwareLoops.cpp#L360
-    /// `HardwareLoop::Create` without a phi counter or an entry test.
+    /// `HardwareLoop::Create` without an entry test.
     fn create(
         &mut self,
         header: BlockId,
         info: Info,
     ) -> bool {
         let Some((preheader, count)) = self.init_loop_count(header, &info) else { return false };
-        // InsertIterationSetup
         let count_ty = self.context.types.int(info.target.count_bits);
-        let void = self.context.types.void();
+        let i1 = self.context.types.int(1);
         let terminator = self.function.terminator(preheader).expect("a terminator");
-        self.insert_intrinsic_call(terminator, "llvm.set.loop.iterations", count_ty, void, &[count]);
-        // InsertLoopDec
         let decrement = Operand::Constant(
             self.context
                 .constant(Constant { ty: count_ty, kind: ConstantKind::Int(u128::from(info.target.loop_decrement)) }),
         );
-        let i1 = self.context.types.int(1);
-        let new_cond = self.insert_intrinsic_call(info.exit_branch, "llvm.loop.decrement", count_ty, i1, &[decrement]);
         let old_cond = self.function.instruction(info.exit_branch).operands[0];
+        // DEVIATE 6: the counter the hardware replaces is a phi and its
+        // update, which read each other: dead, but not trivially.
+        let dead_counter = dying_counter(self.function, old_cond);
+        let new_cond = if info.target.counter_in_reg {
+            // InsertIterationSetup: the count, carried by a phi
+            let setup =
+                self.insert_intrinsic_call(terminator, "llvm.start.loop.iterations", count_ty, count_ty, &[count]);
+            // InsertLoopRegDec: its first operand is the phi, below
+            let dec = self.insert_intrinsic_call(
+                info.exit_branch,
+                "llvm.loop.decrement.reg",
+                count_ty,
+                count_ty,
+                &[count, decrement],
+            );
+            // InsertPHICounter
+            let latch = self.function.parent(info.exit_branch).expect("a placed branch");
+            let at = self.function.iter_block(header).find(|&one| self.function.instruction(one).opcode != Opcode::Phi);
+            let phi = self
+                .function
+                .create_instruction(
+                    Opcode::Phi,
+                    count_ty,
+                    llrm_analysis::occurrence::from_arms(&[(setup, preheader), (dec, latch)]),
+                    Flags::default(),
+                    Some("loop.iterations"),
+                );
+            self.function.insert(phi, Position::Before(at.expect("a terminated header"))).expect("a placed header");
+            let counter = Operand::Value(self.function.instruction(phi).result.expect("a phi's value"));
+            let dec_call = crate::lftr::def_of(self.function, dec).expect("the decrement's call");
+            self.function.set_operand(dec_call, 0, counter);
+            // UpdateBranch
+            let zero = Operand::Constant(self.context.constant(Constant { ty: count_ty, kind: ConstantKind::Int(0) }));
+            let cmp = self
+                .function
+                .create_instruction(
+                    Opcode::ICmp(llrm_mir::opcode::IntPredicate::Ne),
+                    i1,
+                    vec![dec, zero],
+                    Flags::default(),
+                    None,
+                );
+            self.function.insert(cmp, Position::Before(info.exit_branch)).expect("a placed branch");
+            Operand::Value(self.function.instruction(cmp).result.expect("a compare's value"))
+        } else {
+            // InsertIterationSetup
+            let void = self.context.types.void();
+            self.insert_intrinsic_call(terminator, "llvm.set.loop.iterations", count_ty, void, &[count]);
+            // InsertLoopDec
+            self.insert_intrinsic_call(info.exit_branch, "llvm.loop.decrement", count_ty, i1, &[decrement])
+        };
         self.function.set_operand(info.exit_branch, 0, new_cond);
         // The false branch must exit the loop.
         let taken = self.taken(info.exit_branch);
@@ -355,6 +419,19 @@ impl Run<'_> {
         // The old condition may be dead now, and may have even created a dead
         // PHI (the original induction variable).
         self.delete_trivially_dead(old_cond);
+        if let Some((phi, update)) = dead_counter {
+            // each reads the other: both let go before either goes
+            for inst in [update, phi] {
+                if !self.function.is_erased(inst) {
+                    self.function.set_operands(inst, Vec::new());
+                }
+            }
+            for inst in [update, phi] {
+                if !self.function.is_erased(inst) {
+                    self.function.erase(inst).expect("a dead counter");
+                }
+            }
+        }
         // Run through the basic blocks of the loop and see if any of them have
         // dead PHIs that can be removed.
         let blocks: Vec<BlockId> = {
@@ -515,6 +592,81 @@ fn fits(
     width <= bits || se.get_unsigned_range_max(cx, ec).active_bits() <= bits
 }
 
+/// Whether the exit test is `icmp x, bound` of an induction variable that
+/// nothing else reads: the phi and its update are read by each other and the
+/// compare alone, so the hardware counter replaces it.
+fn dying_counter(
+    function: &Function,
+    cond: Operand,
+) -> Option<(InstId, InstId)> {
+    let cmp = crate::lftr::def_of(function, cond)?;
+    if !matches!(function.instruction(cmp).opcode, Opcode::ICmp(_)) {
+        return None;
+    }
+    let reads = |value: Operand| -> Vec<InstId> {
+        match value {
+            Operand::Value(id) => function.users(id).iter().map(|one| one.user).collect(),
+            _ => Vec::new(),
+        }
+    };
+    let operands = function.instruction(cmp).operands.clone();
+    operands.iter().find_map(|&side| {
+        let inst = crate::lftr::def_of(function, side)?;
+        let (phi, update) = match function.instruction(inst).opcode {
+            Opcode::Phi => {
+                let result = Operand::Value(function.instruction(inst).result.expect("a phi's value"));
+                let update = reads(result)
+                    .into_iter()
+                    .find(|&user| matches!(function.instruction(user).opcode, Opcode::Binary(_)) && user != cmp);
+                (inst, update?)
+            }
+            Opcode::Binary(_) => {
+                let phi = function.instruction(inst).operands.iter().find_map(|&one| {
+                    crate::lftr::def_of(function, one).filter(|&d| function.instruction(d).opcode == Opcode::Phi)
+                });
+                (phi?, inst)
+            }
+            _ => return None,
+        };
+        let phi_value = Operand::Value(function.instruction(phi).result.expect("a phi's value"));
+        let update_value = Operand::Value(function.instruction(update).result.expect("an update's value"));
+        (reads(phi_value).iter().all(|&user| user == update || user == cmp)
+            && reads(update_value).iter().all(|&user| user == phi || user == cmp))
+        .then_some((phi, update))
+    })
+}
+
+/// Whether the loop calls anything but a hint (a counter in a register does
+/// not live across a call, and a copy loop uses the counter's pair).
+fn calls_in(
+    cx: &llrm_analysis::scev::Cx,
+    lp: &llrm_mir::loopinfo::Loop<'_, BlockId>,
+) -> bool {
+    use llrm_mir::intrinsics::Intrinsic;
+    lp.get_blocks()
+        .iter()
+        .any(
+            |&block| cx.function
+                .iter_block(block)
+                .any(
+                    |inst| matches!(cx.function.instruction(inst).opcode, Opcode::Call(_))
+                        && !matches!(
+                            crate::local::intrinsic_of(cx.context, cx.globals, cx.function, inst),
+                            Some(
+                                Intrinsic::Assume
+                                    | Intrinsic::LifetimeStart
+                                    | Intrinsic::LifetimeEnd
+                                    | Intrinsic::Prefetch
+                                    | Intrinsic::FakeUse
+                                    | Intrinsic::NoAliasScopeDecl
+                                    | Intrinsic::Expect
+                                    | Intrinsic::Restrict
+                            )
+                        ),
+                ),
+        )
+}
+
 /// Whether the loop already holds a counter intrinsic.
 fn contains_hardware_loop_intrinsic(
     cx: &llrm_analysis::scev::Cx,
@@ -529,7 +681,13 @@ fn contains_hardware_loop_intrinsic(
                 .any(
                     |inst| matches!(
                         crate::local::intrinsic_of(cx.context, cx.globals, cx.function, inst),
-                        Some(Intrinsic::SetLoopIterations | Intrinsic::TestSetLoopIterations | Intrinsic::LoopDecrement)
+                        Some(
+                            Intrinsic::SetLoopIterations
+                                | Intrinsic::TestSetLoopIterations
+                                | Intrinsic::StartLoopIterations
+                                | Intrinsic::LoopDecrement
+                                | Intrinsic::LoopDecrementReg
+                        )
                     ),
                 ),
         )
