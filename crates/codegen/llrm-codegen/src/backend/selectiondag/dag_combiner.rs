@@ -122,6 +122,12 @@ pub trait CombineHooks {
         false
     }
 
+    /// `DataLayout::isLittleEndian`: whether the first of several merged
+    /// stores is the least significant part of the joined value.
+    fn little_endian(&self) -> bool {
+        true
+    }
+
     /// `mergeStoresAfterLegalization`: stores of `mem` are also merged once
     /// types are legal, to catch the stores legalization made (a promoted
     /// `i16` store is a truncating `i32` one). The pin's default is true and
@@ -1716,11 +1722,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 // `zext (trunc x)` is `x` resized when the bits the truncate
                 // drops are zero, which `nuw` promises
                 // ([L2474](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L2474)).
-                let (op_bits, mid_bits, dest_bits) = (
-                    self.dag.value_type(x).size_in_bits(),
-                    self.dag.value_type(n0).size_in_bits(),
-                    vt.size_in_bits(),
-                );
+                let (op_bits, mid_bits, dest_bits) =
+                    (self.dag.value_type(x).size_in_bits(), self.dag.value_type(n0).size_in_bits(), vt.size_in_bits());
                 let dropped = if op_bits == mid_bits {
                     0
                 } else {
@@ -2330,7 +2333,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         // "Do not turn a 'not' into a regular xor."
         if logic_op == ISD::Xor
-            && self.dag.constant(self.dag.operand(logic, 1)).is_some_and(|c| c == super::fold::mask(self.dag.value_type(logic).size_in_bits()))
+            && self
+                .dag
+                .constant(self.dag.operand(logic, 1))
+                .is_some_and(|c| c == super::fold::mask(self.dag.value_type(logic).size_in_bits()))
         {
             return None;
         }
