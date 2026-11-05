@@ -196,7 +196,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         node: SDValue,
     ) -> EVT {
         match self.dag.opcode(node) {
-            ISD::Br | ISD::BrCond | ISD::BrCC | ISD::BrJT => EVT::OTHER,
+            ISD::Br | ISD::BrCond | ISD::BrCC | ISD::BrJT | ISD::VAArg => EVT::OTHER,
             ISD::SIntToFp | ISD::UIntToFp | ISD::LRint | ISD::LLRint => self.dag.value_type(self.dag.operand(node, 0)),
             ISD::SignExtendInReg => match self.dag.node(self.dag.operand(node, 1)).data {
                 NodeData::ValueType(inner) => inner,
@@ -862,6 +862,46 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 let (chain, value) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
                 let register = self.dag.get_phys_register(self.dag.value_type(value), sp);
                 Some(vec![self.dag.get_node(ISD::CopyToReg, EVT::OTHER, &[chain, register, value])])
+            }
+            // `expandVAArg`: load the list pointer, round it up to the
+            // type's ABI alignment when that exceeds the minimum stack
+            // argument alignment (1: no target here sets one), step it by the
+            // type's allocation size, store it back and load the value.
+            ISD::VAArg => {
+                let vt = self.dag.value_type(node);
+                let (chain, list) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+                let align = self.dag.constant(self.dag.operand(node, 3)).unwrap_or(1) as u32;
+                let pointer = self.dag.config().pointer;
+                let info = |mem_vt: EVT, align: u32| MemInfo {
+                    mem_vt,
+                    align,
+                    volatile: false,
+                    base: MemBase::Unknown,
+                    ext: None,
+                    space: 0,
+                    ordering: None,
+                };
+                let list_load = self.dag.get_load(pointer, chain, list, info(pointer, pointer.size_in_bits() / 8));
+                let mut at = SDValue { node: list_load.node, res: 0 };
+                if align > 1 {
+                    let add = self.dag.get_constant(u128::from(align - 1), pointer);
+                    at = self.dag.get_node(ISD::Add, pointer, &[at, add]);
+                    let mask = self.dag.get_constant((-i128::from(align)) as u128, pointer);
+                    at = self.dag.get_node(ISD::And, pointer, &[at, mask]);
+                }
+                let size = (vt.size_in_bits().div_ceil(8)).next_multiple_of(align.max(1));
+                let step = self.dag.get_constant(u128::from(size), pointer);
+                let next = self.dag.get_node(ISD::Add, pointer, &[at, step]);
+                let stored = self
+                    .dag
+                    .get_store(
+                        SDValue { node: list_load.node, res: 1 },
+                        next,
+                        list,
+                        info(pointer, pointer.size_in_bits() / 8),
+                    );
+                let value = self.dag.get_load(vt, stored, at, info(vt, align.max(1)));
+                Some(vec![SDValue { node: value.node, res: 0 }, SDValue { node: value.node, res: 1 }])
             }
             ISD::VACopy => {
                 let (chain, dest, src) =

@@ -201,6 +201,8 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         VAStart => pin::VASTART,
         VAEnd => pin::VAEND,
         VACopy => pin::VACOPY,
+        // `ISD::VAARG` is 335, one below `VACOPY`; no pattern names it.
+        VAArg => 335,
         SrcValue => pin::SRCVALUE,
         // sdag-a's codes are private and named (`x86isd::name`), the pin's
         // number comes from the name; sdag-b's lowering writes the pin's
@@ -490,10 +492,12 @@ impl<'a> DagisAdapter<'a> {
         &self,
         node: u32,
     ) -> bool {
-        self.live_user_nodes(node).into_iter().any(|user| {
-            !matches!(self.dag.nodes()[user as usize].opcode, ISD::Machine(_))
-                && self.node_id.get(user as usize).is_none_or(|id| *id != -1)
-        })
+        self.live_user_nodes(node)
+            .into_iter()
+            .any(
+                |user| !matches!(self.dag.nodes()[user as usize].opcode, ISD::Machine(_))
+                    && self.node_id.get(user as usize).is_none_or(|id| *id != -1),
+            )
     }
 
     /// The live nodes that read a result of `node`, in creation order, once

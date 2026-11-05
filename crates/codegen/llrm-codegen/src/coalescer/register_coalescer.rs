@@ -492,8 +492,8 @@ fn update_reg_defs_uses(
         }
         // `setReg` rewrites the operand where it stands: the instruction keeps
         // its identity.
-        let renamed = Arc::new(Arc::unwrap_or_clone(renamed).standing_for(&old));
-        lis.rename_instr(block, key, renamed);
+        renamed.stand_for(&old);
+        lis.rename_value_in_instr(block, key, src, dst, renamed);
     }
 }
 
@@ -1085,4 +1085,47 @@ fn eliminate_undef_copy(
     state.erased.insert(copy);
     lis.remove_instr(block, copy);
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use indexmap::IndexMap;
+
+    use super::*;
+    use crate::model::lir::{Insn, LirBlock, LirBody};
+
+    fn insn(
+        defines: &[u32],
+        uses: &[u32],
+    ) -> Arc<Insn> {
+        Arc::new(Insn::new(0, None, None, defines.to_vec(), uses.to_vec()))
+    }
+
+    /// `updateRegDefsUses` took every operand of an instruction out of its
+    /// lists and put them back to rename one value: the operands of the other
+    /// values moved to the ends of their lists (4.5 k Ir an instruction in
+    /// jpeg_fixed m64, the pin's `setReg` is 1 k). Only the renamed values'
+    /// lists are edited.
+    #[test]
+    fn test_renaming_a_value_leaves_the_operand_lists_of_the_others_in_place() {
+        let (first, both, last) = (insn(&[5], &[]), insn(&[], &[5, 7]), insn(&[], &[5]));
+        let block = LirBlock {
+            at: 0,
+            insns: vec![Arc::clone(&first), Arc::clone(&both), Arc::clone(&last)].into(),
+            succ: vec![].into(),
+            phis: vec![].into(),
+            cold: false,
+            align: 0,
+            max_skip: 0,
+        };
+        let body = LirBody::new("f", 0, vec![block.into()], IndexMap::default(), IndexMap::default());
+        let mut lis = LiveIntervals::new(&body);
+        update_reg_defs_uses(&mut lis, &mut State::new(), 7, 9, None, None, false);
+        let order = |value| lis.operands(value).iter().map(|operand| operand.instr).collect::<Vec<_>>();
+        assert_eq!(order(5), [first.id(), both.id(), last.id()], "the others' operands stayed in place");
+        assert_eq!(order(9), [both.id()]);
+        assert!(order(7).is_empty());
+    }
 }

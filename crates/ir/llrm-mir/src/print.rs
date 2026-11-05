@@ -793,6 +793,7 @@ impl Printer<'_> {
                 }
                 text
             }
+            Opcode::VaArg => format!("va_arg {}, {}", typed(0), self.ty(inst.ty)),
             Opcode::Load { align, volatile } => {
                 let align = align.map(|one| format!(", align {one}")).unwrap_or_default();
                 format!("load {}{}, {}{align}", if *volatile { "volatile " } else { "" }, self.ty(inst.ty), typed(0))
