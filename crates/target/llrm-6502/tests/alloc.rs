@@ -3011,3 +3011,19 @@ fn a_byte_written_to_a_pointer_cells_high_half_is_refused() {
     let refused = build("f", &items).err().expect("the write is refused");
     assert!(refused.0.contains("w_p+1"), "{}", refused.0);
 }
+
+/// `ldy #0; pha; lda #0; sta rc8; pla`: a zero made into a cell while `a` is
+/// live, with `y` already holding it (tests/run/c os_files, memory_expansion
+/// -Os: 30 of these in one function, 4 bytes where `sty rc8` is 2).
+#[test]
+fn a_literal_made_into_a_cell_is_stored_from_the_index_register_that_holds_it() {
+    use llrm_6502::peephole::drop_known_loads;
+    assert_eq!(
+        pass(drop_known_loads, "  ldy #0\n  pha\n  lda #0\n  sta rc8\n  pla\n  lda rc8\n  rts\n"),
+        "  ldy #0\n  sty rc8\n  lda rc8\n  rts\n"
+    );
+    let other = "  ldy #1\n  pha\n  lda #0\n  sta rc8\n  pla\n  lda rc8\n  rts\n";
+    assert_eq!(pass(drop_known_loads, other), other, "y holds another value");
+    let read = "  ldy #0\n  pha\n  lda #0\n  sta rc8\n  pla\n  beq l\n  rts\n";
+    assert_eq!(pass(drop_known_loads, read), read, "the branch reads the flags pla set");
+}
