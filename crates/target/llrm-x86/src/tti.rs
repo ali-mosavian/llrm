@@ -667,6 +667,10 @@ impl Tti for X86 {
         }
     }
 
+    fn unroll_promotion_fits_registers(&self) -> bool {
+        self.tuning.unroll_promotion_fits_registers
+    }
+
     fn constant_offset_phi_is_cheap(&self) -> bool {
         !self.tuning.keep_constant_displacements
     }

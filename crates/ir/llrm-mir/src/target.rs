@@ -78,6 +78,10 @@ pub struct Tuning {
     /// site too (otherwise only two or more: the pin's single-site inline
     /// stands). A callee that stays and is copied once only grows the code.
     pub inline_size_guard_single_site: bool,
+    /// A full unroll's discount for a local array it makes constant-indexed
+    /// (promoted to registers) holds only while the promoted elements fit the
+    /// register file (UP1). false: every such access is free.
+    pub unroll_promotion_fits_registers: bool,
     /// A constant offset of an address is a displacement the access folds;
     /// SimplifyCFG's sinking of two such accesses behind a phi of the offsets
     /// is refused (it costs the displacement). false: the pin's.
@@ -146,6 +150,7 @@ impl Tuning {
         split_merged_conditions: false,
         inline_size_guard_at_size: false,
         inline_size_guard_single_site: false,
+        unroll_promotion_fits_registers: false,
         keep_constant_displacements: false,
         recursive_inlining: None,
         recursive_edge_growth: None,

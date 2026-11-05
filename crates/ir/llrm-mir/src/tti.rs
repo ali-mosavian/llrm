@@ -480,6 +480,12 @@ pub trait Tti {
         false
     }
 
+    /// Whether a priced full unroll counts a promoted local array's accesses
+    /// as free only while its elements fit the registers (UP1).
+    fn unroll_promotion_fits_registers(&self) -> bool {
+        false
+    }
+
     /// The fewest calls a callee has in the module for the bound above to hold
     /// its sites (a callee called once is the pin's: the copy
     /// meets constants the cost model follows, and folds with the sites around

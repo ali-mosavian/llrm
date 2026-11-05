@@ -376,6 +376,12 @@ impl llrm_target::Target for M64 {
                             // callee with one site too; the pin copies it (crc, floats,
                             // tile -Os: gcc keeps the call, +40 B each).
                             inline_size_guard_single_site: true,
+                            // DEVIATE UP1 at m64 (owner m64, exit 2026-11-20, with
+                            // x86-m32's): a full unroll repays its bytes at 312
+                            // milliclocks a byte, the m64 net rate (fpbench -O2:
+                            // 6-trip fp nests, +815 B for -75 clocks, gcc keeps them).
+                            unroll_milliclocks_per_byte: 312,
+                            unroll_promotion_fits_registers: true,
                             // No byte/clock rate is stated for m64 (oversight
                             // 2026-11-03): a constant multiply is decomposed
                             // only where the chain is no larger than
