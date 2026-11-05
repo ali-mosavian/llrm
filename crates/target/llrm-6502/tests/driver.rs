@@ -2066,6 +2066,62 @@ fn a_zero_extended_loaded_byte_has_no_mask_of_zero() {
     assert!(instructions <= 22, "{instructions} instructions:\n{text}");
 }
 
+/// A pointer walked by a constant and compared with its end (`for (p = vartab;
+/// p != arytab; p += 7)`, x16 `vars` lookup): the pointer stayed unpacked, its
+/// step built in `a`, `x` and `y` and stored back each trip, and its compare
+/// read the halves through `x` and `y`: 23 instructions a trip where 14 do,
+/// 490085 clocks for 120 lookups. A compare is a use a pointer pair serves, and
+/// a half loaded into an index register only to be moved to `a` is loaded into
+/// `a`.
+#[test]
+fn a_pointer_stepped_by_a_constant_and_compared_is_bumped_in_its_pair() {
+    let mut table = Vec::new();
+    for entry in 0..4 {
+        for byte in 0..7 {
+            table.push(format!("i8 {}", if byte < 2 { 1 + 2 * entry + byte } else { 0 }));
+        }
+    }
+    let ir = module(&format!(
+        "@tab = global [28 x i8] [{}]\n@vartab = global ptr @tab\n@arytab = global ptr getelementptr (i8, ptr @tab, i16 28)\n\
+         @n0 = global i8 5\n@n1 = global i8 6\n\
+         define ptr @find() {{\n  %1 = load ptr, ptr @vartab\n  %2 = load ptr, ptr @arytab\n  %3 = icmp eq ptr %1, %2\n  \
+         br i1 %3, label %18, label %4\n\
+         4:\n  %5 = load i8, ptr @n0\n  %6 = load i8, ptr @n1\n  br label %7\n\
+         7:\n  %8 = phi ptr [ %1, %4 ], [ %16, %15 ]\n  %9 = load i8, ptr %8\n  %10 = icmp eq i8 %9, %5\n  \
+         br i1 %10, label %11, label %15\n\
+         11:\n  %12 = getelementptr inbounds i8, ptr %8, i16 1\n  %13 = load i8, ptr %12\n  %14 = icmp eq i8 %13, %6\n  \
+         br i1 %14, label %18, label %15\n\
+         15:\n  %16 = getelementptr inbounds i8, ptr %8, i16 7\n  %17 = icmp eq ptr %16, %2\n  br i1 %17, label %18, label %7\n\
+         18:\n  %19 = phi ptr [ null, %0 ], [ null, %15 ], [ %8, %11 ]\n  ret ptr %19\n}}\n\
+         define i8 @t() {{\n  %r = call ptr @find()\n  %a = ptrtoint ptr %r to i16\n  %b = ptrtoint ptr @tab to i16\n  \
+         %d = sub i16 %a, %b\n  %lo = trunc i16 %d to i8\n  ret i8 %lo\n}}",
+        table.join(", ")
+    ));
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap();
+    assert_eq!(exit_code_with(&text, "t", llrm_6502::RUNTIME), 14, "{text}");
+    let step = text.find("adc #7").expect("the step by 7");
+    let trip = &text[step..text[step..].find("rts").map_or(text.len(), |at| step + at)];
+    for staged in ["tax", "tay", "ldy rc"] {
+        assert!(!trip.contains(staged), "`{staged}` after the step:\n{text}");
+    }
+}
+
+/// A frame address (`rc0` plus 3) copied into a pointer pair went through the
+/// index registers: `adc #3; tax; lda rc1; adc #0; tay; stx rc6; sty rc7`
+/// (x16 `crunch` 1147 B, `flow` -57 B here): the sums are in `a`, so `sta rc6`.
+#[test]
+fn a_frame_address_is_stored_from_a_not_through_the_index_registers() {
+    let ir = module(
+        "@g = global ptr null\n@h = global ptr null\ndeclare void @use(ptr)\n\
+         define void @f() {\n  %a = alloca [8 x i8]\n  %q = getelementptr inbounds i8, ptr %a, i16 3\n  \
+         store volatile ptr %q, ptr @g\n  %r = getelementptr inbounds i8, ptr %a, i16 5\n  store volatile ptr %r, ptr @h\n  \
+         call void @use(ptr %q)\n  ret void\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap();
+    let transfers = text.lines().filter(|line| matches!(line.trim(), "tax" | "tay")).count();
+    assert!(transfers <= 4, "{transfers} transfers into the index registers:\n{text}");
+}
+
 /// `SAddO`, `SSubO` and `SMulO` on a word were refused ("convert node to
 /// libcall"); they compile now, and the value and the overflow bit must be
 /// right at the edges (30000 + 30000, -32768 - 1, 181 * 181), not just
