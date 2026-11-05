@@ -1021,7 +1021,7 @@ fn _pays(
 /// What one trip of the loop through `blocks` costs, in `costs`' units. In
 /// bytes the loop's counter work is the step and its branch: the phi is a
 /// register, the address an operand, the test the step's flags.
-fn trip_cost<'a>(
+pub(crate) fn trip_cost<'a>(
     context: &Context,
     layout: &DataLayout,
     function: &Function,
@@ -1036,7 +1036,7 @@ fn trip_cost<'a>(
 /// `trip_cost` in clocks: a jump to the next block is the layout's and runs
 /// nothing, so a trip pays for its one conditional branch (matmul nib -O2: the
 /// row-zeroing nest has two `br`s and one `jne`).
-fn trip_clocks<'a>(
+pub(crate) fn trip_clocks<'a>(
     context: &Context,
     layout: &DataLayout,
     function: &Function,

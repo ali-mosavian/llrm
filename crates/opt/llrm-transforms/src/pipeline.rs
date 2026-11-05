@@ -237,6 +237,11 @@ pub struct Options {
     /// off); `strength` turns it off with the other address passes.
     pub lsr: bool,
     pub unroll: bool,
+    /// A second CGSCC walk after the dead globals and loops are gone: the first
+    /// walk prices a callee before the folds that empty it (a static callee
+    /// whose last caller folds away). llrm only; off by default, the 6502 turns
+    /// it on. DEVIATE 6502-SZ1, exit 2026-11-20.
+    pub second_inline: bool,
     /// clang's `PTO.LoopUnrolling` (`UnrollLoops`, on above -O1,
     /// [CompilerInvocation.cpp#L1936](https://github.com/llvm/llvm-project/blob/d1106deb71cc/clang/lib/Frontend/CompilerInvocation.cpp#L1936)):
     /// off, the full unroll of the LLVM order only takes a loop that asks
@@ -330,6 +335,7 @@ impl Default for Options {
             typepromotion: true,
             lsr: true,
             unroll: true,
+            second_inline: false,
             loop_unrolling: true,
             peel: true,
             loopidioms: true,
@@ -1228,6 +1234,7 @@ pub fn recorded(
             manager.add_program(crate::walk::Walk {
                 inline: applied.options.inline,
                 speed_rate: applied.options.prices_bytes(),
+                rerun_unchanged: true,
                 promote_rate: Some(if applied.options.prefers_size() {
                     0
                 } else {
@@ -1317,6 +1324,26 @@ pub fn recorded(
     // GlobalDCE after inlining.
     manager.add_program(globaldce::GlobalDce);
     manager.add_program(availableexternally::EliminateAvailableExternally);
+    if applied.options.second_inline && applied.options.inline.limit != 0 {
+        manager.compute::<GlobalsAA>();
+        manager.compute::<GlobalsModRefAnalysis>();
+        let mut simplify = Fixed::linear(&walked("walk2"), Phase::Simplify);
+        manager.add_program(crate::walk::Walk {
+            inline: applied.options.inline,
+            speed_rate: applied.options.prices_bytes(),
+            rerun_unchanged: false,
+            promote_rate: Some(if applied.options.prefers_size() {
+                0
+            } else {
+                applied.options.limits.milliclocks_per_byte
+            }),
+            simplify: Box::new(move |module, analyses, id, stage| {
+                TRIGGER.with(|trigger| *trigger.borrow_mut() = stage.to_owned());
+                rerun(module, analyses, id, &mut simplify, true).unwrap_or_else(|error| panic!("pipeline: {error}"));
+                TRIGGER.with(|trigger| trigger.borrow_mut().clear());
+            }),
+        });
+    }
     // `ReversePostOrderFunctionAttrsPass` (PassBuilderPipelines.cpp:1542).
     manager.add_module(crate::rpoattrs::ReversePostOrderFunctionAttrs);
     // Once the callers that remain are the ones that stay: an internal function

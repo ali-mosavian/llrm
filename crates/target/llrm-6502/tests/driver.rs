@@ -2253,6 +2253,24 @@ fn the_array_of_a_function_that_calls_a_declaration_stays_on_the_stack() {
     assert!(!text.contains("_local"), "{text}");
 }
 
+/// byvalue_struct_address (tests/run/c): `bar` stores a static that `main`
+/// reads, and costs more than its call at -Os until `main` has folded the read
+/// away with the store. The first walk of the inliner prices it whole and
+/// leaves `jsr bar` (23 bytes became 120, 62 instructions for 13); the second
+/// walk finds it small.
+#[test]
+fn a_callee_emptied_by_a_fold_in_its_caller_is_inlined_by_the_second_walk() {
+    let ir = include_str!("data/byvalue_struct_address.ll");
+    let mut request = Request::new(Level::Os);
+    request.passes.push("-fno-second-inline".to_owned());
+    let once = assembly(ir, &request).unwrap();
+    let twice = assembly(ir, &Request::new(Level::Os)).unwrap();
+    assert!(once.contains("jsr bar"), "the first walk alone no longer leaves the call:\n{once}");
+    assert!(!twice.contains("jsr bar"), "the callee is still called:\n{twice}");
+    let size = |text: &str| text.lines().filter(|line| line.starts_with("  ")).count();
+    assert!(size(&twice) * 2 < size(&once), "{} instructions against {}", size(&twice), size(&once));
+}
+
 /// The start-up zeroing of the new BSS costs 15 clocks a byte, once: a
 /// function called once, outside any loop, with a 24-byte array it touches
 /// twice, gave `tail_calls` 360 clocks for 46 saved. It keeps the stack where
@@ -2279,4 +2297,32 @@ define i8 @t() {
     let size = assembly(&ir, &Request::new(Level::Os)).unwrap();
     assert!(size.contains("_local0"), "-Os counts bytes:\n{size}");
     assert_eq!(exit_code_of(&size, "t"), 7, "{size}");
+}
+
+/// call_keeps (tests/run/c): `churn` is settled after the first walk, and
+/// Reassociate ranks by the layout, so the second walk's Simplify list
+/// reordered its xor chain for no gain: 26 bytes more at -Os. A rerun over a
+/// body no call was spliced into stays only where the body gets smaller.
+#[test]
+fn the_second_walk_leaves_a_settled_body_as_it_was() {
+    let ir = include_str!("data/call_keeps.ll");
+    let mut request = Request::new(Level::Os);
+    request.passes.push("-fno-second-inline".to_owned());
+    let once = assembly(ir, &request).unwrap();
+    let twice = assembly(ir, &Request::new(Level::Os)).unwrap();
+    let size = |text: &str| text.lines().filter(|line| line.starts_with("  ")).count();
+    assert!(size(&twice) <= size(&once), "{} instructions against {}", size(&twice), size(&once));
+}
+
+/// recmany_o1 (tests/run/c): the rerun over `bench_recmany` "saved" one unit of
+/// the estimate (an add's operand) and kept a Reassociate reorder of a settled
+/// chain: 16 bytes more at -Os. One unit does not keep a rerun.
+#[test]
+fn a_rerun_that_saves_one_unit_of_the_estimate_is_not_kept() {
+    let ir = include_str!("data/recmany_o1.ll");
+    let mut request = Request::new(Level::Os);
+    request.passes.push("-fno-second-inline".to_owned());
+    let once = assembly(ir, &request).unwrap();
+    let twice = assembly(ir, &Request::new(Level::Os)).unwrap();
+    assert_eq!(twice, once, "the second walk changed a program it has nothing to inline in");
 }

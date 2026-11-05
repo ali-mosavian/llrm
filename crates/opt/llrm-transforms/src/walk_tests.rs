@@ -414,6 +414,7 @@ fn test_a_recursion_with_copies_runs_the_simplify_list_twice() {
                 let mut analyses = Default::default();
                 let mut walk = crate::walk::Walk {
                     promote_rate: None,
+                    rerun_unchanged: true,
                     speed_rate: true,
                     inline: crate::inline::Threshold { recursive: true, ..Default::default() },
                     simplify: Box::new(|_, _, _, _| {}),
@@ -478,6 +479,7 @@ fn test_a_caller_of_a_peeled_recursion_is_a_body_with_self_copies() {
                 let mut analyses = Default::default();
                 let mut walk = crate::walk::Walk {
                     promote_rate: None,
+                    rerun_unchanged: true,
                     speed_rate: true,
                     inline: crate::inline::Threshold { recursive: true, ..Default::default() },
                     simplify: Box::new(|_, _, _, _| {}),
@@ -628,6 +630,7 @@ b0:
         |program: &mut llrm_mir::program::Program| {
             let mut walk = crate::walk::Walk {
                 promote_rate: None,
+                rerun_unchanged: true,
                 speed_rate: true,
                 inline: crate::inline::Threshold { recursive: true, ..Default::default() },
                 simplify: Box::new(|_, _, _, _| {}),
@@ -850,6 +853,7 @@ fn test_only_a_tree_recursion_waits_for_its_tail_call_elimination() {
             |program: &mut llrm_mir::program::Program| {
                 let mut walk = crate::walk::Walk {
                     promote_rate: None,
+                    rerun_unchanged: true,
                     speed_rate: true,
                     inline: crate::inline::Threshold { recursive, ..Default::default() },
                     simplify: Box::new(|_, _, _, _| {}),
@@ -952,6 +956,7 @@ b0:
             |program: &mut llrm_mir::program::Program| {
                 let mut walk = crate::walk::Walk {
                     promote_rate: None,
+                    rerun_unchanged: true,
                     speed_rate: true,
                     inline: crate::inline::Threshold { recursive, ..Default::default() },
                     simplify: Box::new(|_, _, _, _| {}),
@@ -1007,6 +1012,7 @@ fn walked_top_with(
         |program: &mut llrm_mir::program::Program| {
             let mut walk = crate::walk::Walk {
                 promote_rate: None,
+                rerun_unchanged: true,
                 speed_rate: true,
                 inline: crate::inline::Threshold { recursive, ..Default::default() },
                 simplify: Box::new(|_, _, _, _| {}),
@@ -1482,6 +1488,7 @@ b0:
             let seen = std::rc::Rc::clone(&seen);
             let mut walk = crate::walk::Walk {
                 promote_rate: None,
+                rerun_unchanged: true,
                 speed_rate: true,
                 inline: crate::inline::Threshold { limit: 0, ..Default::default() },
                 simplify: Box::new(move |module, analyses, _, _| {
@@ -2420,6 +2427,7 @@ fn test_a_recursion_the_cap_refuses_keeps_its_tail_call_elimination_slot() {
             |program: &mut llrm_mir::program::Program| {
                 let mut walk = crate::walk::Walk {
                     promote_rate: None,
+                    rerun_unchanged: true,
                     speed_rate: true,
                     inline: crate::inline::Threshold::new(225),
                     simplify: Box::new(|_, _, _, _| {}),
