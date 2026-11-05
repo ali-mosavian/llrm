@@ -275,6 +275,15 @@ pub trait Machine {
         self.costs()
     }
 
+    /// What each operation costs in real code bytes, for the decisions that
+    /// weigh bytes against clocks at a rate (`Tti::*_milliclocks_per_byte`):
+    /// unit prices there are bytes of a fixed-width target only if this says
+    /// so. Not the pin's thresholds, which read instruction units. By default
+    /// `size_costs`.
+    fn byte_costs(&self) -> OperationCosts {
+        self.size_costs()
+    }
+
     /// Whether a division by a constant stays a divide instruction on
     /// `bits`-bit values, `size` saying the build is for size
     /// (`isIntDivCheap`, read the other way): the remainder is then the

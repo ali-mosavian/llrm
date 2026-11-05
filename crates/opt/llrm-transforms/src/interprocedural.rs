@@ -276,7 +276,7 @@ impl ProgramPass for Interprocedural {
         analyses: &mut ProgramAnalyses,
     ) -> Result<(), String> {
         let pipeline = &mut self.pipeline;
-        let costs = if self.rate.is_some() { program.target.size_costs() } else { program.target.costs() };
+        let costs = if self.rate.is_some() { program.target.byte_costs() } else { program.target.costs() };
         let clocks = program.target.costs();
         let loose = self.rate.map(|_| &clocks);
         let rate = self.rate.unwrap_or(0);
