@@ -102,5 +102,10 @@ class AbGuard(unittest.TestCase):
         self.assertIn("LLRM_NO_STACKS=1", done.stderr)
 
 
+    def test_print_only_debug_variables_are_accepted(self):
+        """LLRM_DEBUG=runs and LLRM_MIR_STAGES left the object md5 unchanged on 4 programs; refusing them blocked a diagnostic run."""
+        done = self.run_guard(self.c2, extra={"LLRM_DEBUG": "runs", "LLRM_MIR_STAGES": "/x"})
+        self.assertEqual(done.returncode, 0, done.stderr)
+
 if __name__ == "__main__":
     unittest.main()
