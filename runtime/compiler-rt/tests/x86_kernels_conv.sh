@@ -16,7 +16,7 @@ declare -A CRTF=([cmp]=comparesf2 [floatsi]=floatsisf [fixsi]=fixsfsi)
 declare -A SFPF=([cmp]=lesf2 [floatsi]=floatsisf [fixsi]=fixsfsi)
 declare -A OURS_PROTO=([cmp]='int __lesf2(sfu32, sfu32);' [floatsi]='sfu32 __floatsisf(sfi32);' [fixsi]='sfi32 __fixsfsi(sfu32);')
 declare -A OURS_BODY=([cmp]='acc += __lesf2(V[i % NV][0], V[i % NV][1]) > 0;' [floatsi]='acc += __floatsisf((sfi32)V[i % NV][0]);' [fixsi]='if (V[i % NV][9] != 0xDEADBEEFu) acc += (sfu32)__fixsfsi(V[i % NV][0]);')
-declare -A F_BODY=([cmp]='acc += __lesf2(u2f(V[i % NV][0]), u2f(V[i % NV][1])) > 0;' [floatsi]='acc += f2u(__floatsisf((int)V[i % NV][0]));' [fixsi]='if (V[i % NV][9] != 0xDEADBEEFu) acc += (unsigned int)__fixsfsi(u2f(V[i % NV][0]));')
+declare -A F_BODY=([cmp]='acc += vfp(u2f(V[i % NV][0]), u2f(V[i % NV][1])) > 0;' [floatsi]='acc += f2u(vfp((int)V[i % NV][0]));' [fixsi]='if (V[i % NV][9] != 0xDEADBEEFu) acc += (unsigned int)vfp(u2f(V[i % NV][0]));')
 for op in cmp floatsi fixsi; do
   fn=${FN[$op]}
   n=x_sf_$op; mkdir -p $K/$n
@@ -33,9 +33,10 @@ for op in cmp floatsi fixsi; do
   gcc -m32 -O0 -w $K/$n/$n.c $T/rep.c -o $T/r_$n && $T/r_$n > $K/$n/$n.out
   n=x_crt_$op; mkdir -p $K/$n
   { echo 'extern void report(long value);'
-    $P -ffreestanding -m32 -E -P -I$CRT $CRT/${CRTF[$op]}.c | sed "/Qcomplex/d; /COMPILER_RT_ALIAS/d"
+    $P -ffreestanding -m32 -E -P -I$CRT $CRT/${CRTF[$op]}.c | sed '/Qcomplex/d; /__alias__/d'
     echo 'int __fe_getround(void) { return 0; }'; echo 'int __fe_raise_inexact(void) { return 0; }'
     sed 's/uint32_t/unsigned int/' $T/vectors.h; echo "$FLOATIO"
+    echo "static __typeof__(__$fn) *volatile vfp = __$fn; /* a call, as a library user pays it: gcc inlines a one-TU function into the loop */"
     echo "long bench_$n(long n) { long i; unsigned int acc = 0; for (i = 0; i < n; ++i) { ${F_BODY[$op]} } return (long)acc; }"
     echo "int main(void) { report(bench_$n($NV)); return 0; }"; } > $K/$n/$n.c
   gcc -m32 -O0 -w $K/$n/$n.c $T/rep.c -o $T/r_$n && $T/r_$n > $K/$n/$n.out
@@ -44,6 +45,7 @@ for op in cmp floatsi fixsi; do
     gcc -m32 -E -P -I$S/soft-fp -I$S/config/i386 -I$S -I$S/../include $S/soft-fp/${SFPF[$op]}.c
     echo 'void __sfp_handle_exceptions(int x) { (void)x; }'
     sed 's/uint32_t/unsigned int/' $T/vectors.h; echo "$FLOATIO"
+    echo "static __typeof__(__$fn) *volatile vfp = __$fn; /* a call, as a library user pays it: gcc inlines a one-TU function into the loop */"
     echo "long bench_$n(long n) { long i; unsigned int acc = 0; for (i = 0; i < n; ++i) { ${F_BODY[$op]} } return (long)acc; }"
     echo "int main(void) { report(bench_$n($NV)); return 0; }"; } > $K/$n/$n.c
   gcc -m32 -O0 -w $K/$n/$n.c $T/rep.c -o $T/r_$n && $T/r_$n > $K/$n/$n.out

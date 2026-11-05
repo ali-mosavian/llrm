@@ -311,6 +311,20 @@ pub trait Target {
     ) -> Option<Inst> {
         None
     }
+    /// Whether `spill_store_lane` is stated.
+    fn spills_lanes() -> bool {
+        false
+    }
+    /// The instruction that stores `register`, one lane of a spilled value of
+    /// `offset` bytes up, to frame `slot`.
+    fn spill_store_lane(
+        _class: Self::Class,
+        _register: Reg,
+        _slot: i32,
+        _offset: u32,
+    ) -> Option<Inst> {
+        None
+    }
     /// `foldMemoryOperand`: `inst` with its only read of the spilled `register`
     /// taken straight from frame `slot`, where the target has an
     /// instruction form for that; the reload then goes.
@@ -537,6 +551,18 @@ pub fn two_address<C>(function: &mut MFunction<C>) {
                 copy.origin = inst.origin;
                 out.push(copy);
                 inst.operands[used] = Operand::Use(destination);
+                // The other uses of the source read the copy too
+                // (`processTiedPairs`, TwoAddressInstructionPass.cpp#L1722):
+                // `x = add y, y` is `x = y; x = add x, x`, so `y` can die here
+                // and share x's register. Not under early clobber, where x is
+                // written before the uses read.
+                if !inst.early_clobber {
+                    for (at, operand) in inst.operands.iter_mut().enumerate() {
+                        if at != used && matches!(operand, Operand::Use(other) if *other == source) {
+                            *operand = Operand::Use(destination);
+                        }
+                    }
+                }
             }
             out.push(inst);
         }

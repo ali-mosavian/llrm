@@ -479,6 +479,7 @@ fn simplify_loop_cfg(
 /// changed.
 pub fn loop_simplify_cfg(
     context: &Context,
+    layout: &llrm_mir::datalayout::DataLayout,
     function: &mut Function,
 ) -> bool {
     let mut loops = loops_of(function);
@@ -503,7 +504,7 @@ pub fn loop_simplify_cfg(
     if changed {
         // The loops a loop left need LCSSA phis for what the loop reads of
         // them.
-        let _ = crate::lcssa::closed(function);
+        let _ = crate::lcssa::closed(context, layout, function);
     }
     changed
 }
@@ -528,7 +529,7 @@ impl FunctionPass for LoopSimplifyCfg {
         unit: &mut Unit,
         _analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        if loop_simplify_cfg(&*unit.context, unit.function) {
+        if loop_simplify_cfg(&*unit.context, unit.layout, unit.function) {
             PreservedAnalyses::none()
         } else {
             PreservedAnalyses::all()

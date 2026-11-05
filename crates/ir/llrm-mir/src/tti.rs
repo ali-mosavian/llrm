@@ -390,6 +390,14 @@ pub trait Tti {
         1
     }
 
+    /// Whether the bound above stands down where the pin's own cost, net of
+    /// the instructions it folds, is below zero: the pin counts that inline as
+    /// shrinking the caller (a one-instruction wrapper, a callee whose body
+    /// folds away). False: the bound holds whatever the cost.
+    fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {
+        false
+    }
+
     /// Whether a constant address offset may become a phi: false where the
     /// access folds it as a displacement and the target says to keep it. A
     /// boolean as the pin's `replacingOperandWithVariableIsCheap` is: a
@@ -467,6 +475,23 @@ pub trait Tti {
     /// `Subtarget.canUseCMOV()`: false where a `select` is lowered to a branch.
     fn has_cmov(&self) -> bool {
         true
+    }
+
+    /// DEVIATE D5 (`twoentryphi.rs`): what each select costs beyond its own
+    /// price when folding a two-entry phi (a select is a branch and a move
+    /// where there is no conditional move). 0: as at the pin, which does not
+    /// count the selects. `optsize`: the function is a size build.
+    fn select_branch_extra(
+        &self,
+        optsize: bool,
+    ) -> i64 {
+        let _ = optsize;
+        0
+    }
+
+    /// `Tuning::sink_select_arms`.
+    fn sinks_select_arms(&self) -> bool {
+        false
     }
 
     /// DEVIATE U1: the bar (unrolled size) an `optsize` loop of at most this
@@ -880,6 +905,15 @@ pub trait Tti {
     /// targets do. m68k's wide multiplies are library calls.
     fn sizes_exit_values(&self) -> bool {
         false
+    }
+
+    /// Beyond the pin: whether a function built for size turns a store or
+    /// copy loop into a `memset` or `memcpy` call (`LoopIdiomRecognize`). The
+    /// pin does; a target whose call setup and library routine are more bytes
+    /// than the loop (m68k: three pushes, `jsr`, `lea` against a four
+    /// instruction loop) says false.
+    fn memory_idioms_at_optsize(&self) -> bool {
+        true
     }
 
     /// Beyond the pin: whether a strict exit compare of a unit-stride counter

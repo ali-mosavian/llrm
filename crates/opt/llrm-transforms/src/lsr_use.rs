@@ -219,7 +219,7 @@ impl Use {
         f: &Formula,
         l: BlockId,
     ) -> bool {
-        assert!(f.is_canonical(se, l), "Invalid canonical representation");
+        debug_assert!(f.is_canonical(se, l), "Invalid canonical representation");
         if !self.formulae.is_empty() && self.rigid_formula {
             return false;
         }
@@ -354,7 +354,7 @@ pub fn is_am_completely_folded_formula(
 ) -> bool {
     // Either a canonical formula or a scale is right; a non-canonical one with
     // no scale is not.
-    assert!(f.is_canonical(se, l) || f.scale != 0);
+    debug_assert!(f.is_canonical(se, l) || f.scale != 0);
     is_am_completely_folded_between(
         tti,
         min_offset,
@@ -587,7 +587,7 @@ impl Cost {
         if self.is_loser() {
             return;
         }
-        assert!(f.is_canonical(r.se, r.l), "Cost is accurate only for canonical formula");
+        debug_assert!(f.is_canonical(r.se, r.l), "Cost is accurate only for canonical formula");
         let (prev_add_rec, prev_regs, prev_base_adds) = (self.c.add_rec_cost, self.c.num_regs, self.c.num_base_adds);
         for reg in f.scaled_reg.into_iter().chain(f.base_regs.iter().copied()) {
             if visited.contains(&reg) {

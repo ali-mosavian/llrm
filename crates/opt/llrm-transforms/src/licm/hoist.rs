@@ -307,6 +307,11 @@ fn hoist_min_max(
 ) -> Option<Reassociation> {
     let function = &*unit.function;
     let logic = function.instruction(inst);
+    // Only these can be `m_LogicalAnd` or `m_LogicalOr`.
+    if !matches!(logic.opcode, Opcode::Binary(BinaryOp::And | BinaryOp::Or) | Opcode::Select) {
+        return None;
+    }
+    llrm_mir::counts::bump(llrm_mir::counts::Event::HoistMinMaxQueries);
     let result = logic.result?;
     let query = llrm_mir::valuetracking::Query {
         context: unit.context,

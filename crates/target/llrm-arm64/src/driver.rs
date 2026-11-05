@@ -325,15 +325,44 @@ pub fn functions_with(
         dump("OrderCopies", &machine);
         // The shared greedy allocator, unless `LLRM_ARM64_LINEAR` asks for the
         // linear scan; a function greedy refuses goes to the scan, reported.
-        let greedy = (!llrm_support::env_flag!("LLRM_ARM64_LINEAR")).then(|| crate::lir_view::allocate(&mut machine, optsize));
-        let allocation = match greedy {
-            Some(Ok(allocation)) => allocation,
-            Some(Err(why)) => {
-                eprintln!("greedy: @{name}: {why}");
-                crate::regalloc::allocate(&mut machine)
+        // `x16`/`x17` are the lowerer's scratch pair where an offset does not
+        // encode; they are the allocator's while the frame stays small. A
+        // spill slot is at most 16 B, a register mostly 8: between the two
+        // bounds the allocation is kept only if the frame came out small.
+        let (tight, loose) = crate::frame::scratch_estimate(&machine);
+        let snapshot = (tight && !loose).then(|| machine.clone());
+        crate::lir_view::set_frame_pointer_free(
+            platform != Platform::Darwin
+                && !(machine.calls
+                    || machine.dynamic
+                    || llrm_codegen::backend::framefree::keeps_frame_pointer(
+                        machine.frame_pointer.as_deref(),
+                        machine.calls,
+                    )),
+        );
+        let allocate = |machine: &mut crate::mfunc::MFunc, scratch: bool| {
+            crate::lir_view::set_scratch_free(scratch);
+            // The shared greedy allocator, unless `LLRM_ARM64_LINEAR` asks for
+            // the linear scan; a function greedy refuses goes to the scan,
+            // reported.
+            let greedy =
+                (!llrm_support::env_flag!("LLRM_ARM64_LINEAR")).then(|| crate::lir_view::allocate(machine, optsize));
+            match greedy {
+                Some(Ok(allocation)) => allocation,
+                Some(Err(why)) => {
+                    eprintln!("greedy: @{name}: {why}");
+                    crate::regalloc::allocate(machine)
+                }
+                None => crate::regalloc::allocate(machine),
             }
-            None => crate::regalloc::allocate(&mut machine),
         };
+        let mut allocation = allocate(&mut machine, tight);
+        if let Some(before) = snapshot
+            && crate::frame::frame_bound(&machine, 0) >= crate::frame::SCRATCH_FREE_BELOW
+        {
+            machine = before;
+            allocation = allocate(&mut machine, false);
+        }
         dump("RegAlloc", &machine);
         crate::copyprop::run(&mut machine);
         crate::postrasink::run(&mut machine);
@@ -342,7 +371,13 @@ pub fn functions_with(
         let blocks = crate::frame::lower(&machine, &allocation, platform == Platform::Darwin)
             .map_err(|why| format!("@{name}: {why}"))?;
         let mut tables = crate::jumptable::tables_of(&machine);
-        let blocks = crate::layout::fold(blocks, &mut tables);
+        let blocks = crate::layout::fold(
+            blocks,
+            &mut tables,
+            &crate::layout::edge_odds(module, function, &program.layout, &machine),
+            optsize,
+            &crate::mfunc::returned_registers(&machine),
+        );
         let blocks = crate::pairs::fold(blocks);
         let mut blocks = crate::ldst_update::fold(blocks, &crate::mfunc::returned_registers(&machine));
         crate::jumptable::compress(&mut blocks, &mut tables).map_err(|why| format!("@{name}: {why}"))?;

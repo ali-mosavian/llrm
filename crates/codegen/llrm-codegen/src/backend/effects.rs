@@ -91,6 +91,32 @@ mod tests {
             assert_eq!(served(Regs(info), bits, &load).is_some(), known, "{bits} bits");
         }
     }
+    /// A frame cell reached by a 64-bit index was served as unknown (the
+    /// frame token is a word register until the layout names it): liveness
+    /// took the move as reading every register, and FixupBW kept
+    /// `mov di, word ptr [rsp+rsi*2]` for want of a dead upper half
+    /// (shellsort -O2 +25% clocks against clang).
+    #[test]
+    fn a_frame_cell_with_a_wide_index_reads_the_index_at_m64() {
+        use crate::model::ir::{Addr, Reg, Space};
+        use llrm_lir::registers::RegId;
+        let mut cell = Mem::new(Some(Addr::new(Space::Frame, -128)), 2);
+        cell.through = RegId::BP;
+        cell.index = Some(Held { value: 40, width: 8, offset: 0 });
+        cell.index_through = RegId::RAX;
+        cell.scale = 2;
+        let load = Semantics {
+            name: Some("mov".into()),
+            dests: vec![Loc::Reg(Reg { register: RegId::DX, width: 2 })],
+            sources: vec![Loc::Mem(cell)],
+            ..Semantics::new(Operation::Move)
+        };
+        match served(Regs(&llrm_x86_m64::REGISTER_INFO), 64, &load) {
+            Some(llrm_x86::effects::Served::Known(found)) => assert!(found.reads.contains(&RegId::RAX), "{found:?}"),
+            other => panic!("{other:?}"),
+        }
+    }
+
     /// `or eax, -1` read `eax` as `or eax, 5` does: the verifier called the
     /// -Os `mov eax, -1` it replaced a read of an undefined register.
     #[test]

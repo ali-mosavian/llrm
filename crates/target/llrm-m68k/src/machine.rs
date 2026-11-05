@@ -21,8 +21,12 @@ use llrm_mir::tti::{
 };
 
 /// The m68k cost model the passes of the mid-end read.
-#[derive(Clone, Debug, Default)]
-pub struct M68kMachine;
+#[derive(Clone, Copy, Debug, Default)]
+pub struct M68kMachine {
+    /// The processor the code is for: a fact of the target description, read
+    /// by the cost model through [`M68k::cpu`].
+    pub cpu: crate::dagisel::hooks::Cpu,
+}
 
 impl Machine for M68kMachine {
     fn foreign_span(
@@ -35,7 +39,7 @@ impl Machine for M68kMachine {
     }
 
     fn tti(&self) -> Option<Rc<dyn Tti>> {
-        Some(Rc::new(M68k::default()))
+        Some(Rc::new(M68k::for_cpu(self.cpu)))
     }
 
     fn spaces(&self) -> Spaces {
@@ -72,8 +76,17 @@ impl Machine for M68kMachine {
 /// The m68k `TargetTransformInfo`: the base class's answers.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct M68k {
+    /// The processor the code is for; the 68000 where none is given.
+    pub cpu: crate::dagisel::hooks::Cpu,
     /// The 68020's scaled index, `(d8, An, Xn*2/4/8)`; the 68000 has none.
     pub scaled_index: bool,
+}
+
+impl M68k {
+    /// The cost model of `cpu`.
+    pub fn for_cpu(cpu: crate::dagisel::hooks::Cpu) -> M68k {
+        M68k { cpu, ..M68k::default() }
+    }
 }
 
 impl Tti for M68k {
@@ -109,7 +122,11 @@ impl Tti for M68k {
         &self,
         optsize: bool,
     ) -> u32 {
-        if optsize { 0 } else { 4 }
+        // DEVIATE 18 (exit 2026-11-12): from the 68020 on, a `cmp.l` with a
+        // memory limit costs little more than the `subq` of a counter, so the
+        // `smax` guard of the rewritten exit (8 B) is not repaid. The 68000
+        // keeps the pin's 4: there the compare is 10 clk per trip dearer.
+        if optsize || self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020) { 0 } else { 4 }
     }
 
     /// DEVIATE: the pin's M68k states no preference; `(An)+` steps a pointer
@@ -205,8 +222,43 @@ impl Tti for M68k {
         Basic.cast_cost(op, to, from, kind)
     }
 
+    /// DEVIATE 20: each select a two-entry phi would become costs the branch
+    /// and move it lowers to, in bytes as in clocks (a fold saves one branch
+    /// and adds a move per select). gcd -O2 44 -> 26 B, 236 -> 138 clk; -Os
+    /// 44 -> 26 B. Exit 2026-11-12.
+    fn select_branch_extra(
+        &self,
+        _optsize: bool,
+    ) -> i64 {
+        1
+    }
+
     fn sizes_exit_values(&self) -> bool {
         true
+    }
+
+    /// DEVIATE 19: `addi`/`subi`/`addq` and `cmpi` take any 32-bit immediate;
+    /// the pin's M68k lowering keeps the base class's `false`. Exit
+    /// 2026-11-12.
+    fn is_legal_add_immediate(
+        &self,
+        imm: i64,
+    ) -> bool {
+        i32::try_from(imm).is_ok()
+    }
+
+    fn is_legal_icmp_immediate(
+        &self,
+        imm: i64,
+    ) -> bool {
+        i32::try_from(imm).is_ok()
+    }
+
+    /// DEVIATE 17: a size build keeps a store or copy loop (a `memset` call
+    /// is three pushes, `jsr` and `lea`: 16 B, the loop 10 to 14). Exit
+    /// 2026-11-12.
+    fn memory_idioms_at_optsize(&self) -> bool {
+        false
     }
 
     fn arithmetic_cost(

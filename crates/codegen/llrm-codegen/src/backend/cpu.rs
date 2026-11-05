@@ -112,6 +112,8 @@ pub struct Profile {
     pub ports: llrm_target::PortTable,
     /// The operand size an instruction has without a prefix, in bytes.
     pub operand_bytes: i64,
+    /// `Target::bsf_rep_prefix`.
+    pub bsf_rep_prefix: bool,
     /// `getPrefLoopAlignment` as a power of two; 0: loops are not aligned.
     pub loop_alignment: u8,
     pub call_register_capacity: i64,
@@ -275,6 +277,22 @@ impl Profile {
         (self.model)(&self.cpu_prices())
     }
 
+    /// `target`, with the private convention the ABI `family` states: Win64's
+    /// is every function's, so `private` does not move one to System V's.
+    pub fn target_under(
+        &self,
+        arch: &dyn Target,
+        family: Option<&str>,
+    ) -> std::rc::Rc<dyn llrm_mir::target::Machine> {
+        let mut prices = self.cpu_prices();
+        let family = family.unwrap_or(&arch.calling().default);
+        if arch.calling().abi_private.contains_key(family) {
+            prices.private =
+                private_convention_under(arch, Some(family), llrm_support::env_flag!("LLRM_PRIVATE_WATCALL"));
+        }
+        (self.model)(&prices)
+    }
+
     /// The form that indexes by a dword register: where a target has one, a
     /// 16-bit target's behind the address-size prefix (`secondary`), a flat
     /// one's native.
@@ -318,6 +336,7 @@ impl Profile {
             foreign: arch.flat_foreign(),
             ports: arch.flat_ports(),
             operand_bytes: arch.operand_bytes(),
+            bsf_rep_prefix: arch.bsf_rep_prefix(),
             loop_alignment: arch.pref_loop_alignment(),
             call_register_capacity: arch.callee_saved().len() as i64,
             float_register_capacity: arch.float_stack() as i64,
@@ -900,8 +919,18 @@ fn private_convention(
     arch: &dyn Target,
     instrument: bool,
 ) -> Option<llrm_mir::target::PrivateConvention> {
+    private_convention_under(arch, None, instrument)
+}
+
+/// `private_convention` under the ABI family `family` (the default's without
+/// one): the family may state its own.
+pub fn private_convention_under(
+    arch: &dyn Target,
+    family: Option<&str>,
+    instrument: bool,
+) -> Option<llrm_mir::target::PrivateConvention> {
     let calling = arch.calling();
-    let private = calling.private()?;
+    let private = calling.private_under(family)?;
     let private = calling.private_instrument().filter(|_| instrument).unwrap_or(private);
     let to = llrm_target::calling::Calling::number_of(private.cc.as_deref())?;
     let mut from: Vec<u32> = calling

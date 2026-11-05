@@ -1715,6 +1715,17 @@ fn a_loop_solved_twice_has_its_register_units_counted_once() {
     assert_eq!(counted, 1, "{after}");
 }
 
+/// The pin's space was generated again beside the end-biased one: every loop
+/// the end-biased formulae touch generated twice (LSR calls x2.0 the pin's on
+/// memory_expansion). It is taken from the first generation.
+#[test]
+fn a_loop_solved_twice_has_its_formulae_generated_once() {
+    let before = crate::lsr_generate::reuse_formulae_generated();
+    let after = reduced_real(QUEENS_INNER, &six_registers());
+    let generated = crate::lsr_generate::reuse_formulae_generated() - before;
+    assert_eq!(generated, 1, "{after}");
+}
+
 #[test]
 fn a_loop_the_pin_makes_a_pointer_of_stays_one_when_end_biased_formulae_exist_in_real_mode() {
     let after = reduced_real(QUEENS_INNER, &six_registers());

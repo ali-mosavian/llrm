@@ -98,3 +98,32 @@ def test_fewer_functions_compared_than_the_least_is_a_failed_run_not_a_pass():
     """One function compared out of a corpus read as ok: an almost empty run proves nothing."""
     assert d.verdict(2, 0, ours_emit=True, strip=False, least=3) == 2
     assert d.verdict(3, 0, ours_emit=True, strip=False, least=3) == 0
+
+
+def test_a_function_after_one_that_differs_in_length_is_still_compared():
+    """Functions were matched by start offset: one longer function in our object moved every later function, and a run of identical functions read as 'refused (code differs)' (0 compared on the Win64 fixtures)."""
+    table = (0x10, 4, "No frame pointer used", ("UOP_AllocSmall 40",))
+    pin_code = {0: ["0 a", "4 body"], 0x20: ["0 b"]}
+    our_code = {0: ["0 x", "4 body"], 0x30: ["0 b"]}
+    pin_symbols, our_symbols = {"f": 0, "g": 0x20}, {"f": 0, "g": 0x30}
+    pin_tables, our_tables = {0: table, 0x20: table}, {0: table, 0x30: table}
+    same, different, refused, _, _ = d.compare(pin_code, our_code, pin_tables, our_tables, pin_symbols, our_symbols)
+    assert (same, different, refused) == (1, 0, 1)
+
+
+def test_a_body_that_differs_after_the_prolog_is_still_compared():
+    """Whole-function equality refused every fixture (0 compared) over a different body or a nop of padding, though the unwind codes depend on the prolog alone."""
+    table = (0x10, 4, "No frame pointer used", ("UOP_AllocSmall 40",))
+    code_pin = {0: ["0 sub rsp, 40", "4 lea eax", "8 ret"]}
+    code_our = {0: ["0 sub rsp, 40", "4 lea eax, 1", "9 nop", "a ret"]}
+    same, different, refused, _, _ = d.compare(code_pin, code_our, {0: table}, {0: table}, {"f": 0}, {"f": 0})
+    assert (same, different, refused) == (1, 0, 0)
+    code_our = {0: ["0 sub rsp, 56", "4 lea eax"]}
+    assert d.compare(code_pin, code_our, {0: table}, {0: table}, {"f": 0}, {"f": 0})[2] == 1
+
+
+def test_nothing_compared_is_a_failed_run_not_a_pass():
+    """An empty comparison reads as ok: the verdict is 2 below `least` whatever else it saw."""
+    assert d.verdict(0, 0, True, False) == 2
+    assert d.verdict(2, 0, True, False, least=3) == 2
+    assert d.verdict(3, 0, True, False, least=3) == 0

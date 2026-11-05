@@ -326,6 +326,21 @@ fn test_the_join_map_names_the_survivor_of_each_absorbed_value() {
     assert_eq!((map.survivor(1), map.survivor(2)), (1, 2), "a copy left stays two values: {map:?}");
 }
 
+/// `RegisterCoalescer` returns at once for a function that exposes
+/// `returns_twice`: a copy joined across a `setjmp` merges a variable the first
+/// return never set with a predictable one. basic.c's `main` (a `setjmp`) was
+/// coalesced like any other function.
+#[test]
+fn test_a_function_that_returns_twice_keeps_its_copies() {
+    let (a, c, r) = (def(1), copy(2, 1), read(2));
+    let mut was = body(&[(&[a, c, r], &[])]);
+    let (_, joined) = super::env::joined_with_map(&was, &AnyClass, &[0]);
+    assert_ne!(joined.survivor(1), 1, "a plain copy joins: {joined:?}");
+    was.returns_twice = true;
+    let (_, kept) = super::env::joined_with_map(&was, &AnyClass, &[0]);
+    assert_eq!((kept.survivor(1), kept.survivor(2)), (1, 2), "{kept:?}");
+}
+
 /// wasm and m68k run the pin's coalescer with `JoinGlobalCopies` false
 /// (`enableMachineScheduler()` is false there): the copies of a block are
 /// tried top-down in one list, terminals last. The translation had only the
@@ -1536,6 +1551,68 @@ fn test_a_byte_joined_into_a_lane_before_the_pair_is_live_keeps_the_other_lane()
     let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
     let definer = kept.iter().find(|insn| insn.def_lanes.iter().any(|(v, _)| *v == 2)).expect("the byte's def");
     assert_eq!(definer.partial_defs, vec![2], "premise: the def is of a lane of the pair; it keeps the rest");
+}
+
+/// The high byte is computed before the low one's copy, which starts the pair
+/// (`undef_super`). Once the high byte joins its lane the pair is live at the
+/// low copy: it must keep the high lane, else the high byte's def reads dead
+/// and is deleted (lz4c -Oz returned 0x57b3).
+#[test]
+fn test_a_lane_def_after_a_joined_lane_keeps_it() {
+    let (d3, d1) = (def_at(3, 1), def_at(1, 1));
+    let (lo, hi) = (lane_copy(2, 0, 1), lane_copy(2, 1, 3));
+    let mut starts = (*lo).clone();
+    starts.undef_super = true;
+    let lo = Arc::new(starts);
+    let was = body(&[(&[d3, d1, Arc::clone(&lo), Arc::clone(&hi), read_at(2, 2)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    for v in 1..=3 {
+        lis.interval(v);
+    }
+    let mut state = State::new();
+    let result = join_copy(&mut lis, &LaneViews, &mut state, &mut Default::default(), hi.id());
+    assert_eq!(result, JoinResult::Joined);
+    let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
+    let low = kept.iter().find(|insn| insn.def_lanes.iter().any(|(_, lanes)| *lanes == llrm_lir::valuelanes::ValueLanes::at(0, 1))).expect("the low copy");
+    assert!(!low.undef_super && low.partial_defs == vec![2], "{low:?}");
+}
+
+/// The low lane copy of a pair that an earlier join left plain (no
+/// `undef_super`, nothing kept) stands over the high lane once that joins:
+/// it must keep it too, else the low def is the only one the high lane's
+/// readers see and the main range loses the high lane's stretch (lz4c -O2
+/// asserted "Inconsistent LiveInterval" in the union).
+#[test]
+fn test_a_plain_lane_def_keeps_a_lane_joined_after_it() {
+    let (d3, d1) = (def_at(3, 1), def_at(1, 1));
+    let (lo, hi) = (lane_copy(2, 0, 1), lane_copy(2, 1, 3));
+    assert!(!lo.undef_super && !lo.partial_defs.contains(&2), "premise: the low copy keeps nothing");
+    let was = body(&[(&[d3, d1, Arc::clone(&lo), Arc::clone(&hi), read_at(2, 2)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    for v in 1..=3 {
+        lis.interval(v);
+    }
+    let mut state = State::new();
+    let result = join_copy(&mut lis, &LaneViews, &mut state, &mut Default::default(), hi.id());
+    assert_eq!(result, JoinResult::Joined);
+    let kept = lis.blocks().iter().flatten().cloned().collect::<Vec<_>>();
+    let low = kept.iter().find(|insn| insn.def_lanes.iter().any(|(_, lanes)| *lanes == llrm_lir::valuelanes::ValueLanes::at(0, 1))).expect("the low copy");
+    assert!(low.partial_defs == vec![2], "{low:?}");
+}
+
+/// A byte copied into the low lane of a pair names the same width at the same
+/// offset as a copy between two bytes, so it was taken for one: the byte (`al`)
+/// shares no palette with the pair (`ax`) whole, and the copy stayed (crc16 -Oz
+/// round-tripped a byte through `h`). Its lane def says it is a lane.
+#[test]
+fn test_a_byte_copied_into_the_low_lane_is_a_lane_copy_not_a_byte_copy() {
+    let env = env_with_palettes(&[(1, &[RegId::AL]), (2, &[RegId::AX])]);
+    assert!(!env.can_share(1, 2), "premise: the byte and the pair share no registers whole");
+    assert!(env.can_share_sub(1, 2), "premise: al is the low byte of ax");
+    let lane = lane_copy(2, 0, 1);
+    let pair = super::pair::CoalescerPair::set_registers(&lane, &env).expect("a lane of the pair");
+    assert!(pair.is_partial() && pair.lane_offset() == 0, "the byte is the pair's low lane");
+    assert!(super::pair::full_copy(&lane).is_none(), "a lane def is not a full copy");
 }
 
 /// A byte joins the lane of a pair only where some register of the pair's

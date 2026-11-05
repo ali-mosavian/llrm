@@ -225,3 +225,10 @@ fn an_x87_literal_round_trips() {
     assert!(crate::print::module(&module).contains(half_plus));
     assert!(parse::module(&text.replace(half_plus, "0xK3FFF8000000000000000")).is_ok());
 }
+
+/// `(x + 0.0) + 0.0`: a sum with a +0.0 operand is never -0.0, so the second
+/// add is the first. The fold answered for constants alone.
+#[test]
+fn a_sum_with_positive_zero_plus_positive_zero_is_that_sum() {
+    check("  %t = fadd float %x, 0.0\n  %r = fadd float %t, 0.0\n", Some("%t"));
+}

@@ -260,6 +260,7 @@ fn prepare(
             changed = true;
             continue;
         }
+        llrm_mir::counts::bump(llrm_mir::counts::Event::CombineInitial);
         worklist.push(inst);
     }
     changed
@@ -567,6 +568,7 @@ fn drain(
     visit: fn(&mut Combiner, InstId) -> Visit,
 ) -> bool {
     let mut changed = false;
+    llrm_mir::counts::bump(llrm_mir::counts::Event::CombineDrains);
     while !c.worklist.is_empty() {
         // Walk deferred instructions, deleting the dead among them (and so,
         // chain by chain, what only they read), and push the rest.
@@ -594,6 +596,7 @@ fn drain(
         if c.env.sinking && try_to_sink(c, inst) {
             changed = true;
         }
+        llrm_mir::counts::bump(llrm_mir::counts::Event::CombineVisits);
         match visit(c, inst) {
             Visit::None => {}
             Visit::Erased => changed = true,

@@ -145,6 +145,15 @@ pub trait Conventions {
         None
     }
 
+    /// What a call of `callee` may read and write, as its attributes state it
+    /// (`llrm_mir::memory::of`); any memory where they are not known.
+    fn effects(
+        &self,
+        _callee: Option<&Callee>,
+    ) -> llrm_mir::memory::Effects {
+        llrm_mir::memory::Effects::ANY
+    }
+
     /// The registers a call of `callee` keeps only the pushed part of (a
     /// 16-bit push of a 32-bit register): their upper half is destroyed.
     fn clobbers_high(
@@ -211,6 +220,10 @@ pub struct EmitContext<'a> {
     /// The multiple a call's argument area is rounded to, so a call finds the
     /// stack aligned (`aligned_calls`); 1 where calls need none.
     pub call_alignment: i64,
+    /// The function's convention changes the stack pointer only in the
+    /// prologue and epilogue: its calls' areas are frame pseudos, reserved
+    /// there, at any width.
+    pub reserved_calls: bool,
     pub map: &'a OpcodeMap,
     pub names: &'a HashMap<u16, &'a str>,
     /// The jump tables of the function, by `JumpTable` index.
@@ -336,11 +349,21 @@ pub struct EmitState {
     /// The bytes of the float type (4, 8 or 10) of each LIR value that is a DAG
     /// value of a float type: `LirBody::float_bytes`, which a spill rounds to.
     pub float_bytes: std::collections::BTreeMap<u32, u32>,
+    /// Whether every value of a `float_bytes` number is exactly an f32 the
+    /// program holds: a load of one or a constant. A spill of such a value as
+    /// a dword loses no bit, wherever the language keeps wider temporaries.
+    pub float_exact: std::collections::BTreeMap<u32, bool>,
 }
 
 impl Default for EmitState {
     fn default() -> EmitState {
-        EmitState { vregs: HashMap::default(), next_value: 1, at: 1, float_bytes: Default::default() }
+        EmitState {
+            vregs: HashMap::default(),
+            next_value: 1,
+            at: 1,
+            float_bytes: Default::default(),
+            float_exact: Default::default(),
+        }
     }
 }
 
@@ -499,6 +522,15 @@ pub fn emit_in(
         };
         let widest = emitter.state.float_bytes.entry(*number).or_insert(0);
         *widest = bytes.max(*widest);
+        let node = dag.node(*value);
+        // `flds`, `fldz` and `fld1`: the f32 the program holds.
+        let exact = bytes == 4
+            && matches!(
+                node.opcode,
+                ISD::Machine(op) if emitter.ctx.names.get(&(op as u16)).is_some_and(|name| matches!(*name, "LD_Fp32m" | "LD_Fp032" | "LD_Fp132"))
+            );
+        let all = emitter.state.float_exact.entry(*number).or_insert(true);
+        *all &= exact;
     }
     let mut blocks = emitter.blocks;
     if ctx.address_mode == AddrMode::Real16 {
@@ -1916,7 +1948,7 @@ impl Emitter<'_, '_> {
             }
         };
         let memory = Arc::new(crate::model::lir::CallMemory {
-            effects: llrm_mir::memory::Effects::ANY,
+            effects: self.ctx.conventions.effects(callee),
             private: Vec::new(),
             // A callee that pops its own arguments lists SP among what it
             // disturbs; the pushes and the call account for that, and a
@@ -2479,9 +2511,10 @@ impl Emitter<'_, '_> {
                 let bytes = (bytes + self.ctx.call_alignment - 1) / self.ctx.call_alignment * self.ctx.call_alignment;
                 // Flat 32-bit: the pin's pseudos, which `callframe.rs` turns
                 // into pushes or `sub`/`add` (DEVIATE CF4).
-                if self.ctx.address_mode == AddrMode::Flat32 {
+                if self.ctx.address_mode == AddrMode::Flat32 || self.ctx.reserved_calls {
                     if bytes != 0 {
-                        let imm = |value: i64| Loc::Imm(Imm { value, width: 4, address: None });
+                        let width = if self.ctx.address_mode == AddrMode::Flat64 { 8 } else { 4 };
+                        let imm = |value: i64| Loc::Imm(Imm { value, width, address: None });
                         let (pseudo, sources) = if name.starts_with("ADJCALLSTACKDOWN") {
                             ("call_frame_setup", vec![imm(bytes), imm(0), imm(0)])
                         } else {

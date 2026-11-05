@@ -127,9 +127,14 @@ fn reserved(name: &str) -> bool {
 }
 
 /// `text` with every `@name` that `reserved` prefixed by `__r_`, a name C code
-/// cannot spell, so the assembly names the symbol and not the opcode. A string
-/// that is not a symbol's quoted name (`c"user@x"`) is copied as it is.
-fn without_reserved_symbols(text: &str) -> String {
+/// cannot spell, so the assembly names the symbol and not the opcode; where
+/// the platform has a `c_symbol_prefix`, every C symbol takes that instead
+/// (intrinsics, `llvm.*`, and the private `.str` names are not C symbols). A
+/// string that is not a symbol's quoted name (`c"user@x"`) is copied as it is.
+fn without_reserved_symbols(
+    text: &str,
+    c_symbol_prefix: &str,
+) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(at) = rest.find(['@', '"']) {
@@ -154,7 +159,10 @@ fn without_reserved_symbols(text: &str) -> String {
         if quote {
             out.push('"');
         }
-        if reserved(&body[..end]) {
+        let name = &body[..end];
+        if !c_symbol_prefix.is_empty() && !name.starts_with("llvm.") && !name.starts_with('.') {
+            out.push_str(c_symbol_prefix);
+        } else if reserved(name) {
             out.push_str("__r_");
         }
         rest = body;
@@ -169,7 +177,8 @@ fn program(
     request: &Request,
 ) -> Result<Program, String> {
     let mut module =
-        llrm_mir::parse::module(&without_reserved_symbols(&without_triple(text))).map_err(|error| error.to_string())?;
+        llrm_mir::parse::module(&without_reserved_symbols(&without_triple(text), &request.platform.c_symbol_prefix))
+            .map_err(|error| error.to_string())?;
     module.refuse_aliases("the 6502")?;
     llrm_mir::parse::upgrade_lifetimes(&mut module);
     let layout = Mos.layout().datalayout;

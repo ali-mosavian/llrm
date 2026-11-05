@@ -24,6 +24,8 @@ HERE = Path(__file__).resolve().parent
 LINK_TEXT_BASE = 1 << 16
 sys.path.insert(0, str(HERE.parent))
 import targetdesc  # noqa: E402
+sys.path.insert(0, str(HERE))
+import irguard  # noqa: E402
 
 PINNED_BIN = Path(os.environ.get("LLVM_BIN") or Path.home() / "scratch/llvm-build/bin")  # LLVM d1106deb71cc
 FEATURES = {"x86": "-sse,-sse2,-mmx"}  # what an i486 has not: stated, so no default of the tool's can add it
@@ -131,6 +133,8 @@ def backend_ir(dump: Path) -> Path | None:
 def llc(args: list[str], text: str, of: Target | None = None, bin_dir: Path | None = None) -> subprocess.CompletedProcess:
     """`llc` over `text` retargeted to `of`, told `-mtriple`, `-mcpu` and `-mattr` besides."""
     of = _need(of)
+    if of.triple.startswith(("x86_64", "aarch64")) and (missing := irguard.missing_dso_local(text)):
+        raise Refused(f"the pin's llc is PIC on this IR and ours is not: {len(missing)} symbols without dso_local (first: {missing[0]}); add dso_local before a same-IR compare")
     cmd = [_tool("llc", bin_dir), f"-mtriple={of.triple}", f"-mcpu={of.cpu}", f"-mattr={of.features}", *args, "-"]
     done = subprocess.run(cmd, input=retarget(text, of), capture_output=True, text=True)
     done.stdout = f"; {header(of)}\n" + done.stdout

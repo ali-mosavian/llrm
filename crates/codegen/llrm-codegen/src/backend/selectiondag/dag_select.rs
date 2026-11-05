@@ -58,6 +58,9 @@ pub enum Refusal {
 
 /// x86 as a [`DagTarget`]: its lowering tables, hooks and selector tables.
 pub struct X86Target<'a, 'p> {
+    /// What the blocks selected before this one learned of the registers they
+    /// copy (`FunctionLoweringInfo::LiveOutRegInfo`).
+    pub live: &'a mut super::function_lowering::FunctionLoweringInfo,
     pub tli: &'a TargetLowering,
     pub lowering: &'a mut X86Lowering<'p>,
     pub chooser: X86Chooser<'a>,
@@ -91,17 +94,29 @@ impl<'p> DagTarget for X86Target<'_, 'p> {
         (&super::dagisel_adapter::X86Registers, &mut self.chooser)
     }
 
+    /// `getCopyFromRegs`' assertions: what an earlier block knew of the
+    /// registers this one reads.
+    fn prepare(
+        &mut self,
+        dag: &mut SelectionDAG,
+    ) {
+        super::live_out::assert_live_out_copies(dag, self.live);
+    }
+
     fn preprocess(
         &mut self,
         dag: &mut SelectionDAG,
         temporaries: &mut dyn super::x86_preprocess::FrameObjects,
     ) {
+        // `ComputeLiveOutVRegInfo`: after the legalizers, before the assertions go.
+        super::live_out::compute_live_out_vreg_info(dag, self.live);
         super::x86_preprocess::preprocess(dag, temporaries, self.lowering.sse2);
     }
 }
 
 /// The pin's pipeline for one block's DAG.
 pub fn select_block(
+    live: &mut super::function_lowering::FunctionLoweringInfo,
     dag: &mut SelectionDAG,
     tli: &TargetLowering,
     lowering: &mut X86Lowering<'_>,
@@ -116,7 +131,7 @@ pub fn select_block(
 ) -> Result<Emitted, Refusal> {
     let units = select_units(
         dag,
-        &mut X86Target { tli, lowering, chooser: X86Chooser { selector, hooks }, arch },
+        &mut X86Target { live, tli, lowering, chooser: X86Chooser { selector, hooks }, arch },
         info,
         temporaries,
     )?;

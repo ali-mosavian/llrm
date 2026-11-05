@@ -136,6 +136,17 @@ impl Tti for Mos6502 {
         up.threshold = FULL_UNROLL_UNITS;
     }
 
+    /// SZ1: at -Os an inline that stays must not grow the code. The pin's
+    /// `OptSizeThreshold` 50 inlines a 27-instruction `chrget` into nine
+    /// callers, 84 bytes each against a 3-byte call.
+    fn opt_size_inline_by_code_size(&self) -> bool {
+        true
+    }
+
+    fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {
+        true
+    }
+
     fn has_cmov(&self) -> bool {
         false
     }

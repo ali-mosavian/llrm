@@ -570,7 +570,7 @@ impl RegAlloc {
         body = constrain::hoisted(&constrained_body, &fixed);
         // A copy of an undefined value the constraints made is undefined too.
         if body.insns().iter().any(|one| crate::processimpdefs::implicit_def_of(one).is_some()) {
-            body = crate::processimpdefs::processed(&body);
+            body = crate::processimpdefs::processed_before_allocation(&body);
         }
         let clash: BTreeSet<u32> = fixed
             .keys()

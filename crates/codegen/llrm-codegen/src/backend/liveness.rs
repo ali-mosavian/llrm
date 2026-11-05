@@ -90,7 +90,7 @@ pub fn _return_state(regs: Regs) -> Vec<RegId> {
 pub fn _universe(regs: Regs) -> Lanes {
     let mut lanes = _flag_lanes(0xFFFF_FFFF);
     for register in regs.integer_registers().iter().copied().chain(regs.segments()) {
-        lanes.extend(_lanes(regs, register));
+        lanes.include(_lanes(regs, register));
     }
     lanes
 }
@@ -313,7 +313,7 @@ pub fn _declared(
         // architectural state its generated epilogue itself needs.
         let mut reads: Lanes = one.requires.iter().flat_map(|(held, register)| held_lanes(held, *register)).collect();
         for register in _return_state(regs) {
-            reads.extend(_lanes(regs, register));
+            reads.include(_lanes(regs, register));
         }
         let writes = _universe(regs).minus(&reads);
         return Some((reads, writes));
@@ -325,7 +325,7 @@ pub fn _declared(
     // A callee runs on the caller's frame chain, stack and data group.
     if one.what.as_ref().is_some_and(|what| what.op == Operation::Call) {
         for register in _return_state(regs) {
-            reads.extend(_lanes(regs, register));
+            reads.include(_lanes(regs, register));
         }
     }
     // A transfer's decoded effects are unavailable, but its explicit operands
@@ -333,22 +333,22 @@ pub fn _declared(
     // before the calling convention clobbers it.
     for source in one.what.as_ref().map_or(&[][..], |what| what.sources.as_slice()) {
         if let Loc::Reg(source) = source {
-            reads.extend(_lanes(regs, source.register));
+            reads.include(_lanes(regs, source.register));
         }
         // `selector` is a `Held`, never an `ir.Reg`.
         if let Some(at) = source.address() {
-            reads.extend(_lanes(regs, at.through));
-            reads.extend(_lanes(regs, at.index_through));
+            reads.include(_lanes(regs, at.through));
+            reads.include(_lanes(regs, at.index_through));
         }
     }
     let mut writes: Lanes = one.delivers.iter().flat_map(|(held, register)| held_lanes(held, *register)).collect();
     for register in &one.clobbers {
-        writes.extend(_lanes(regs, *register));
+        writes.include(_lanes(regs, *register));
     }
     for register in &one.clobbers_high {
         writes.extend(_lanes(regs, *register).into_iter().filter(|lane| lane.1 >= 2));
     }
-    writes.extend(_flag_lanes(0xFFFF_FFFF));
+    writes.include(_flag_lanes(0xFFFF_FFFF));
     Some((reads, writes))
 }
 

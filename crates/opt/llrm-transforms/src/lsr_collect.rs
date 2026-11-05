@@ -500,6 +500,34 @@ pub struct Collection<'a, 'b> {
 }
 
 impl<'a, 'b> Collection<'a, 'b> {
+    /// The collection as it stands: the uses with their formulae, to be taken
+    /// on from here two ways.
+    pub fn fork(&self) -> Self {
+        Self {
+            cx: self.cx,
+            tti: self.tti,
+            l: self.l,
+            safe_to_expand: self.safe_to_expand,
+            hardware_loop_profitable: self.hardware_loop_profitable,
+            iv_inc_insert_pos: self.iv_inc_insert_pos,
+            iv_inc_block: self.iv_inc_block,
+            uses: self.uses.clone(),
+            use_map: self.use_map.clone(),
+            reg_uses: self.reg_uses.clone(),
+            factors: self.factors.clone(),
+            types: self.types.clone(),
+            baseline_cost: self.baseline_cost.clone(),
+            changed: self.changed,
+            swapped_compares: self.swapped_compares.clone(),
+            insert_attempts: self.insert_attempts,
+            other_register_units: self.other_register_units,
+            ignore_pressure: std::cell::Cell::new(self.ignore_pressure.get()),
+            size: self.size,
+            rated: std::cell::Cell::new(self.rated.get()),
+            chain_uses: self.chain_uses.clone(),
+        }
+    }
+
     /// The registers other values of the loop hold, as the rating counts them.
     pub fn pressure_units(&self) -> u32 {
         if self.ignore_pressure.get() { 0 } else { self.other_register_units }

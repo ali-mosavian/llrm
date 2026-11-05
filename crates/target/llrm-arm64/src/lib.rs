@@ -26,6 +26,7 @@ pub mod pairs;
 pub mod prepass;
 pub mod regalloc;
 pub mod shrinkwrap;
+pub mod taildup;
 pub mod sibcall;
 pub mod copyprop;
 pub mod memcluster;
