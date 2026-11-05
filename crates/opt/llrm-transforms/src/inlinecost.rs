@@ -2164,18 +2164,6 @@ impl<'a> Analyzer<'a> {
                 })
                 && self.grows_the_code()
         };
-        if llrm_support::env_flag!("LLRM_EXP_INLINETRACE") {
-            eprintln!(
-                "[inlinetrace-verdict] grows={grows} size={} call={} k={} dies={} sole={} speed={} cost={} pin={pin}",
-                self.size_units,
-                self.call_size(),
-                self.site.callee_calls,
-                self.site.callee_dies,
-                self.site.sole_call_to_local,
-                self.site.caller_size == CallerSize::Speed,
-                self.cost
-            );
-        }
         self.blocked_by_bound = grows && self.cost < pin;
         if grows {
             // The verdict is `cost < threshold`: the call stays.

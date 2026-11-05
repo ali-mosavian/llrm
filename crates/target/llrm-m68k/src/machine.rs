@@ -50,12 +50,6 @@ impl Machine for M68kMachine {
         OperationCosts::default()
     }
 
-    /// Bytes of code, which the inliner's trial of a body and the store
-    /// merger compare; `costs` stays in the pin's units.
-    fn size_costs(&self) -> OperationCosts {
-        crate::sizes::operation_bytes(self.cpu)
-    }
-
     /// `d0`..`d7`, `a0`..`a5`.
     fn registers(&self) -> i64 {
         14
@@ -112,6 +106,16 @@ impl Tti for M68k {
         (Some(32), Some(400))
     }
 
+    /// `InlineParams::DefaultThreshold`, 50 where the pin's is 225: a call is
+    /// about 20 B (arguments, `jsr`, `addq`, `rts`) and 50 clk, so a copy of a
+    /// body pays for itself only up to a dozen instructions; a 30-operation
+    /// body at six sites was inlined six times. 300 seeds -O2 68020: 516950
+    /// -> 472526 B, the 24 programs unchanged. DEVIATE: the pin's target sets
+    /// none. Exit: review 2026-11-20.
+    fn inline_threshold_override(&self) -> Option<i64> {
+        Some(50)
+    }
+
     fn name(&self) -> &'static str {
         "M68k"
     }
@@ -130,10 +134,6 @@ impl Tti for M68k {
         kind: CostKind,
     ) -> Option<Cost> {
         crate::sizes::callee_frame(self.cpu, shape, kind)
-    }
-
-    fn speed_inline_milliclocks_per_byte(&self) -> i64 {
-        crate::sizes::INLINE_MILLICLOCKS_PER_BYTE
     }
 
     /// A size build refuses an inline of a callee that stays when it grows
