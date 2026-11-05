@@ -28,7 +28,7 @@ const TRIAL_FUNCTION: usize = 1500;
 fn measure(run: &mut Run) -> (i64, i64) {
     let analyzed = Analyzed::of(run);
     let clocks = crate::profit::costs(run.outer);
-    let bytes = run.outer.target().size_costs();
+    let bytes = run.outer.target().byte_costs();
     let mut se = ScalarEvolution::new();
     let cx = Cx {
         context: &*run.context,
