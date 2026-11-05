@@ -199,6 +199,28 @@ impl FunctionPass for CgpAddr {
         // Blocks and edges are as they were.
         let one_flag = !analyses.outer().target().multiple_condition_registers();
         let sunk_compares = one_flag && compares_sunk(unit.context, &analyses.outer().globals, unit.function);
+        // `optimizeCmp`'s overflow combines, before its other steps.
+        let math = match analyses.outer().target().lowering() {
+            Some(lowering) => {
+                let outer = std::rc::Rc::clone(analyses.outer());
+                crate::cgpmath::overflow_math_formed(
+                    unit.context,
+                    &outer.globals,
+                    unit.layout,
+                    unit.declared,
+                    &*lowering,
+                    &mut |function| {
+                        let loops = analyses.get::<Loops>(&*unit.context, unit.layout, function);
+                        (
+                            llrm_analysis::cfg::natural(function, &loops),
+                            analyses.get::<Dominators>(&*unit.context, unit.layout, function),
+                        )
+                    },
+                    unit.function,
+                )
+            }
+            None => false,
+        };
         let compares = match analyses.outer().target().lowering() {
             Some(lowering) => {
                 let outer = std::rc::Rc::clone(analyses.outer());
@@ -286,6 +308,7 @@ impl FunctionPass for CgpAddr {
             || remainders
             || compares
             || switches
+            || math
         {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else if closed {
