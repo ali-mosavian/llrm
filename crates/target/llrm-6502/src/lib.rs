@@ -8,6 +8,7 @@ pub mod driver;
 pub mod elf;
 pub mod emit;
 pub mod frame;
+pub mod hotdivision;
 pub mod opcosts;
 pub mod peephole;
 pub mod platform;

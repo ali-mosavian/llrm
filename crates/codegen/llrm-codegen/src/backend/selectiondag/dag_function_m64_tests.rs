@@ -1319,3 +1319,24 @@ entry:
     assert!(names.iter().any(|n| n == "and" || n == "movzx" || n == "mov"), "premise: selected, got {names:?}");
     assert!(!names.iter().any(|n| n.starts_with("movsx")), "a free zero extension, not movsxd: {names:?}");
 }
+
+/// `store volatile double 1.5` was an xmm load of the constant and an xmm store
+/// (m64 float rows, the pool entry stayed); the pin stores the integer image of
+/// a volatile one too (`replaceStoreOfFPConstant` L24395, `legalOrCustom(STORE,
+/// i64)`).
+#[test]
+fn an_m64_volatile_double_constant_store_is_an_integer_store_of_its_image() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define void @f(ptr %p) {
+entry:
+  store volatile double 1.5, ptr %p
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let names: Vec<_> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.clone()).collect();
+    assert!(!names.iter().any(|n| n.starts_with("movs")), "no xmm load of the constant: {names:?}");
+}

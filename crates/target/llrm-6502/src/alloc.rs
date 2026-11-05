@@ -82,6 +82,23 @@ thread_local! {
     static IMAGINARY: std::cell::Cell<u8> = const { std::cell::Cell::new(BASE_CELLS) };
     static TUNING: std::cell::Cell<Tuning> = const { std::cell::Cell::new(Tuning::SPEED) };
     static SPIKE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether a long division by a divisor not known to be a byte calls the
+    /// speed routine with the pin-structure wide path, and not the one with
+    /// the small wide path (see [`with_fast_division`]).
+    static FAST_DIVISION: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// `f` with the wide speed division allowed or not. Linked once, it costs
+/// 141 bytes (`hotdivision`): a module keeps it only where a division site runs
+/// often enough to pay that (`select::module_text`).
+pub fn with_fast_division<R>(
+    allowed: bool,
+    f: impl FnOnce() -> R,
+) -> R {
+    let before = FAST_DIVISION.with(|a| a.replace(allowed));
+    let result = f();
+    FAST_DIVISION.with(|a| a.set(before));
+    result
 }
 
 /// `f` with the shared callee-save helpers allowed or not. A function that
@@ -1926,6 +1943,16 @@ pub fn build_with_places(
                     op::SRL32 => "__lshrsi3",
                     _ => "__ashrsi3",
                 };
+                // a divisor whose three upper bytes are known zero is a byte
+                // (1 to 255): the speed division has an entry that links the
+                // byte loop and not the wide path
+                let byte_divisor = matches!(code, op::UDIV32 | op::SDIV32 | op::UREM32 | op::SREM32) && {
+                    let (low, high) = (name(&o[4])?, name(&o[5])?);
+                    [format!("{low}+1"), high.to_owned(), format!("{high}+1")]
+                        .iter()
+                        .all(|cell| b.constants.get(cell) == Some(&0))
+                };
+                let routine = if byte_divisor { format!("{routine}_byte") } else { routine.to_owned() };
                 let acc = Reg::Phys(reg::A);
                 let mut stores = Vec::new();
                 for (at, source) in [name(&o[2])?, name(&o[3])?].into_iter().enumerate() {
@@ -1946,7 +1973,7 @@ pub fn build_with_places(
                     b.copy(acc, value);
                     b.push(Inst::new(Kind::Op("STM"), vec![Operand::Use(acc), Operand::Symbol(symbol, 0)]));
                 }
-                let mut jsr = Inst::new(Kind::Op("JSR"), vec![Operand::Symbol(routine.to_owned(), 0)]);
+                let mut jsr = Inst::new(Kind::Op("JSR"), vec![Operand::Symbol(routine, 0)]);
                 jsr.call = true;
                 b.push(jsr);
                 let (first, second) = (b.write_word(name(&o[0])?)?, b.write_word(name(&o[1])?)?);
@@ -3240,12 +3267,26 @@ fn emit_with<const STACK: bool>(
                     // (compiler-rt's `__udivXi3` does, by `clz`): 107 bytes
                     // more, linked once, for 2000 clocks fewer a call
                     // (loop_interchange -O2 13.9M -> 5.9M).
-                    let fast = matches!(
-                        callee.as_str(),
-                        "__ashlsi3" | "__lshrsi3" | "__ashrsi3" | "__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3"
-                    ) && TUNING.with(|t| t.get()).clocks_per_byte <= 1;
-                    writeln!(out, "  {} {callee}{}", if jump { "jmp" } else { "jsr" }, if fast { "_fast" } else { "" })
-                        .unwrap()
+                    // `_byte` marks the byte-divisor entry of the four
+                    // divisions only: a program's own function may end in it
+                    let (callee, byte) = match callee.strip_suffix("_byte") {
+                        Some(base @ ("__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3")) => (base, true),
+                        _ => (callee.as_str(), false),
+                    };
+                    let speed = TUNING.with(|t| t.get()).clocks_per_byte <= 1;
+                    let division = matches!(callee, "__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3");
+                    let entry = if !speed {
+                        ""
+                    } else if division && byte {
+                        "_fast_byte"
+                    } else if division && !FAST_DIVISION.with(|f| f.get()) {
+                        "_fast_small"
+                    } else if division || matches!(callee, "__ashlsi3" | "__lshrsi3" | "__ashrsi3") {
+                        "_fast"
+                    } else {
+                        ""
+                    };
+                    writeln!(out, "  {} {callee}{entry}", if jump { "jmp" } else { "jsr" }).unwrap()
                 }
                 // return address, then target-1, then rts into the callee; its
                 // own rts lands on the label
