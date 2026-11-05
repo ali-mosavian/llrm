@@ -361,6 +361,10 @@ impl Printer<'_> {
                     self.push(format!("add hl, {}", name(source)));
                 }
             }
+            "ADC16" | "SBC16" => {
+                let source = name_of(self, 2)?;
+                self.push(format!("{} hl, {source}", op[..3].to_lowercase()));
+            }
             "SUB16" => {
                 let source = name_of(self, 2)?;
                 self.push("or a, a");
@@ -752,6 +756,9 @@ impl Printer<'_> {
                     return Ok(());
                 }
                 let slot = self.frame_slots(index, 0, 1)?.remove(0);
+                if op == "RELOAD8" && self.held_since_stored(&[(slot.clone(), register.to_owned())]) {
+                    return Ok(());
+                }
                 if op == "RELOAD8" && self.reload_is_operand(inst, rest) {
                     self.folded = Some((self.register(inst, 0)?, slot));
                     return Ok(());
@@ -787,6 +794,13 @@ impl Printer<'_> {
                     return Ok(());
                 }
                 let slots = self.frame_slots(index, 0, 2)?;
+                if op == "RELOAD16" {
+                    let stores: Vec<(String, String)> =
+                        slots.iter().zip([lo, hi]).map(|(slot, byte)| (slot.clone(), name(byte).to_owned())).collect();
+                    if self.held_since_stored(&stores) {
+                        return Ok(());
+                    }
+                }
                 for (byte, slot) in [lo, hi].into_iter().zip(slots) {
                     self.push(if op == "SPILL16" {
                         format!("ld {slot}, {}", name(byte))
@@ -886,6 +900,14 @@ impl Printer<'_> {
         }
         self.skip = 1;
         true
+    }
+
+    /// [`held_since_stored`] over what is printed so far.
+    fn held_since_stored(
+        &self,
+        stores: &[(String, String)],
+    ) -> bool {
+        held_since_stored(&self.out, stores)
     }
 
     /// [`Self::dead_after`] for both bytes of `pair`, and the pair itself.
@@ -1540,10 +1562,79 @@ fn ends_flow(text: &str) -> bool {
         || text.strip_prefix("jp ").or_else(|| text.strip_prefix("jr ")).is_some_and(|rest| !rest.contains(','))
 }
 
+/// Whether the registers still hold what was just stored to their slots:
+/// the stores `ld slot, reg` are among the last lines printed, and nothing
+/// since mentions a register or a slot, or is a label, a jump, a call or an
+/// instruction with registers of its own (`ldir`, `djnz`). The allocator
+/// splits a range round an `inc hl; inc hl` and reloads what never left.
+fn held_since_stored(
+    out: &[Line],
+    stores: &[(String, String)],
+) -> bool {
+    let Some((last_slot, last_register)) = stores.last() else { return false };
+    if stores.iter().any(|(_, register)| register == "a") {
+        return false;
+    }
+    let want = |(slot, register): &(String, String)| format!("ld {slot}, {register}");
+    let mut lines: Vec<&str> = Vec::new();
+    for line in out.iter().rev() {
+        match line {
+            Line::Loc(_) => {}
+            Line::Label(_) => return false,
+            Line::Inst(text) => lines.push(text),
+        }
+        if lines.len() > 24 {
+            return false;
+        }
+        if lines.last().is_some_and(|text| *text == format!("ld {last_slot}, {last_register}")) {
+            break;
+        }
+    }
+    // `lines` is newest first, ending at the last store; the stores before
+    // it are the lines directly behind
+    let Some(at) = lines.len().checked_sub(1) else { return false };
+    let stored: Vec<&str> = out
+        .iter()
+        .filter_map(|line| if let Line::Inst(text) = line { Some(text.as_str()) } else { None })
+        .rev()
+        .skip(at)
+        .take(stores.len())
+        .collect();
+    let in_order = stored.iter().rev().zip(stores).all(|(text, store)| **text == want(store));
+    if !in_order {
+        return false;
+    }
+    let touched = |word: &str| {
+        stores.iter().any(|(_, register)| {
+            word == register || (word.len() == 2 && word.contains(register.as_str()) && word != "ix" && word != "iy")
+        })
+    };
+    lines[..at].iter().all(|text| {
+        let mut words = text.split([' ', ',', '(', ')', '+']).filter(|word| !word.is_empty());
+        let first = words.next().unwrap_or("");
+        !HIDDEN.contains(&first) && !words.any(touched) && !stores.iter().any(|(slot, _)| text.contains(slot.as_str()))
+    })
+}
+
+/// Instructions that leave, or use registers of their own.
+const HIDDEN: [&str; 14] =
+    ["call", "ret", "jp", "jr", "djnz", "ldir", "lddr", "ldi", "ldd", "cpir", "cpdr", "exx", "rst", "halt"];
+
+/// Whether `text` names `pair` or a byte of it.
+fn mentions(
+    text: &str,
+    pair: &str,
+) -> bool {
+    text.split([' ', ',', '(', ')', '+'])
+        .filter(|word| !word.is_empty())
+        .skip(1)
+        .any(|word| word == pair || (word.len() == 1 && pair.contains(word)))
+}
+
 /// `dec rr` then `inc rr` of the same pair, or the reverse, is nothing: neither
-/// touches the flags. A word stored through a pointer leaves it where it was
-/// (`inc hl; ld (hl), d; dec hl`), and a pointer stepped by one after that
-/// undoes the restore.
+/// touches the flags, and nothing between may name the pair. A word stored
+/// through a pointer leaves it where it was (`inc hl; ld (hl), d; dec hl`), and
+/// a pointer stepped by one after that undoes the restore.
 fn cancel_steps(lines: Vec<Line>) -> Vec<Line> {
     fn step(line: &Line) -> Option<(i32, &str)> {
         let Line::Inst(text) = line else { return None };
@@ -1554,14 +1645,30 @@ fn cancel_steps(lines: Vec<Line>) -> Vec<Line> {
     }
     let mut out: Vec<Line> = Vec::with_capacity(lines.len());
     for line in lines {
-        let undoes = match (step(&line), out.last().and_then(step)) {
-            (Some((sign, pair)), Some(last)) => last == (-sign, pair),
-            _ => false,
-        };
-        if undoes {
-            out.pop();
-        } else {
-            out.push(line);
+        // the step it undoes: `dec hl` ... `inc hl` with nothing between that
+        // names the pair, a label, or a jump
+        let undone = step(&line).and_then(|(sign, pair)| {
+            for (at, earlier) in out.iter().enumerate().rev().take(12) {
+                match earlier {
+                    Line::Loc(_) => continue,
+                    Line::Label(_) => return None,
+                    Line::Inst(text) => {
+                        if step(earlier) == Some((-sign, pair)) {
+                            return Some(at);
+                        }
+                        if mentions(text, pair) || HIDDEN.contains(&text.split(' ').next().unwrap_or("")) {
+                            return None;
+                        }
+                    }
+                }
+            }
+            None
+        });
+        match undone {
+            Some(at) => {
+                out.remove(at);
+            }
+            None => out.push(line),
         }
     }
     out
@@ -1917,6 +2024,33 @@ mod tests {
         ];
         let kept = drop_unreachable(lines);
         assert_eq!(kept, vec![inst("ret z"), inst("jr L1"), label("L1"), inst("ld a, b"), inst("ret")]);
+    }
+
+    /// `dec hl; ...; inc hl` round lines that do not name the pair was kept:
+    /// the copy loop of loop_fusion -O3 ran 15 instructions a trip.
+    #[test]
+    fn a_step_is_undone_across_lines_that_leave_the_pair_alone() {
+        let inst = |text: &str| Line::Inst(text.to_owned());
+        let kept = cancel_steps(vec![inst("dec hl"), inst("ld -2(ix), c"), inst("inc hl")]);
+        assert_eq!(kept, vec![inst("ld -2(ix), c")]);
+        let kept = cancel_steps(vec![inst("dec hl"), inst("ld (hl), d"), inst("inc hl")]);
+        assert_eq!(kept.len(), 3, "a store through the pointer reads it: {kept:?}");
+    }
+
+    /// A pair stored to its slot and reloaded after lines that leave it alone
+    /// was loaded again (loop_fusion -O3: 4 B and 34 T a trip).
+    #[test]
+    fn a_reload_of_what_was_just_stored_is_not_printed() {
+        let inst = |text: &str| Line::Inst(text.to_owned());
+        let stores = vec![("-2(ix)".to_owned(), "c".to_owned()), ("-1(ix)".to_owned(), "b".to_owned())];
+        let out = vec![inst("ld -2(ix), c"), inst("ld -1(ix), b"), inst("inc hl"), inst("inc de")];
+        assert!(held_since_stored(&out, &stores));
+        let out = vec![inst("ld -2(ix), c"), inst("ld -1(ix), b"), inst("add hl, bc")];
+        assert!(!held_since_stored(&out, &stores), "bc is read, not changed, but stays out of the proof");
+        let out = vec![inst("ld -2(ix), c"), inst("ld -1(ix), b"), inst("ld c, 5")];
+        assert!(!held_since_stored(&out, &stores));
+        let out = vec![inst("ld -2(ix), c"), inst("ld -1(ix), b"), inst("call _f")];
+        assert!(!held_since_stored(&out, &stores));
     }
 
     /// A loop with two jumps back to its head was counted as two nested
