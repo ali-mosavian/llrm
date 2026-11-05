@@ -2856,10 +2856,8 @@ fn stack_addressed(
     if std::env::var_os("LLRM_CHECK_FRAME").is_some() {
         let caller = std::panic::Location::caller();
         let mut asks = ASKS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let entry = asks.entry(procedure.name.to_string()).or_default();
-        entry.push((caller.line(), found.is_some()));
-        if entry.iter().any(|(_, was)| *was != found.is_some()) {
-            eprintln!("frame-flip {}: {:?}", procedure.name, entry);
+        if let Some(flip) = record_ask(&mut asks, &procedure.name, caller.line(), found.is_some()) {
+            eprintln!("frame-flip {}: {flip:?}", procedure.name);
         }
     }
     found
@@ -2869,12 +2867,31 @@ fn stack_addressed(
 static ASKS: std::sync::Mutex<std::collections::BTreeMap<String, Vec<(u32, bool)>>> =
     std::sync::Mutex::new(std::collections::BTreeMap::new());
 
-/// The number of asks per function, for a run that set `LLRM_CHECK_FRAME`.
+type Asks = std::collections::BTreeMap<String, Vec<(u32, bool)>>;
+
+/// Notes an ask of `name` from `line` that answered `answer`; the asks so far
+/// where this one differs from an earlier one.
+fn record_ask(
+    asks: &mut Asks,
+    name: &str,
+    line: u32,
+    answer: bool,
+) -> Option<Vec<(u32, bool)>> {
+    let entry = asks.entry(name.to_owned()).or_default();
+    entry.push((line, answer));
+    entry.iter().any(|(_, was)| *was != answer).then(|| entry.clone())
+}
+
+/// The asks per function and per caller line, for a run that set `LLRM_CHECK_FRAME`:
+/// `frame asks: F functions, N asks, K flips; by caller line: L1 n1, L2 n2 ...`.
 pub fn frame_asks_report() -> String {
     let asks = ASKS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let total: usize = asks.values().map(Vec::len).sum();
     let flips = asks.values().filter(|one| one.iter().any(|(_, was)| *was != one[0].1)).count();
-    format!("frame asks: {} functions, {} asks, {} flips", asks.len(), total, flips)
+    let mut lines = std::collections::BTreeMap::<u32, usize>::new();
+    asks.values().flatten().for_each(|(line, _)| *lines.entry(*line).or_default() += 1);
+    let by_line: Vec<String> = lines.iter().map(|(line, count)| format!("{line} {count}")).collect();
+    format!("frame asks: {} functions, {} asks, {} flips; by caller line: {}", asks.len(), total, flips, by_line.join(", "))
 }
 
 fn stack_addressed_trial(
@@ -3878,6 +3895,18 @@ mod tests {
     //! select encodes it.
 
     use super::*;
+
+    /// MASM-RB1 step A's instrument: a second ask that answers differently from
+    /// the first is a flip, and the same answer is not (a recorder that never
+    /// reports would read every function as stable).
+    #[test]
+    fn the_frame_ask_recorder_reports_a_changed_answer_and_only_that() {
+        let mut asks = Asks::new();
+        assert_eq!(record_ask(&mut asks, "f", 10, true), None);
+        assert_eq!(record_ask(&mut asks, "f", 20, true), None);
+        assert_eq!(record_ask(&mut asks, "f", 30, false), Some(vec![(10, true), (20, true), (30, false)]));
+        assert_eq!(record_ask(&mut asks, "g", 10, false), None);
+    }
 
     /// A block of one instruction on `line`, leading to `succ`.
     fn lined(
