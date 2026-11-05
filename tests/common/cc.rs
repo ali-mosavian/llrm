@@ -100,6 +100,7 @@ impl LlrmC {
 
     fn command(&mut self) -> Command {
         let wide = self.arguments.iter().any(|one| one == "-m32");
+        let flat64 = self.arguments.iter().any(|one| one == "-m64");
         // llrm-c chose by the output's extension: `-o x.obj` compiled, `-o
         // x.asm` wrote the listing; llrm-cc links unless told `-c` or
         // `-S`.
@@ -115,7 +116,7 @@ impl LlrmC {
         };
         let mut command = Command::new(env!("CARGO_BIN_EXE_llrm-cc"));
         command
-            .env("LLRM_CC_TARGET", if wide { "x86_32-wat" } else { "x86_16-wat" })
+            .env("LLRM_CC_TARGET", if flat64 { "x86_64-linux" } else if wide { "x86_32-wat" } else { "x86_16-wat" })
             .args(self.arguments.iter().filter(|one| *one != "-m16" && *one != "-m32"))
             .args(stop);
         // In the order they were asked, as `Command` does: a removal beside a
