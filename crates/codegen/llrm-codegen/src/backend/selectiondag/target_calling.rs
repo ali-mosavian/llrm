@@ -41,6 +41,14 @@ impl Ext {
     }
 }
 
+/// `ISD::ArgFlagsTy`'s `ByValSize` and `ByValAlign`: an aggregate passed by
+/// value, in the bytes of the argument area.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ByVal {
+    pub size: u32,
+    pub align: u32,
+}
+
 /// An `ISD::OutputArg` with its value: a part of an argument of a call or of
 /// a returned value.
 #[derive(Clone, Copy, Debug)]
@@ -58,6 +66,9 @@ pub struct Out {
     /// The argument is one of a call's variadic ones
     /// (`CallLoweringInfo::IsVarArg` past `NumFixedArgs`).
     pub variadic: bool,
+    /// `ArgFlags.isByVal()`: `value` is the address of the bytes to copy into
+    /// the argument area (a target whose `byval_in_area` says so).
+    pub byval: Option<ByVal>,
 }
 
 /// An `ISD::InputArg`: a part of a formal argument or of a call's result.
@@ -74,6 +85,9 @@ pub struct In {
     /// `ArgFlags.isSExt()` / `isZExt()`: how a part narrower than its register
     /// is extended.
     pub ext: Ext,
+    /// `ArgFlags.isByVal()`: the part is the address of the bytes the caller
+    /// copied into the argument area (a target whose `byval_in_area` says so).
+    pub byval: Option<ByVal>,
 }
 
 /// `MachineFrameInfo::CreateFixedObject`: size, offset from the first
@@ -140,6 +154,13 @@ pub trait TargetCalling: Debug + Sync {
     /// A target that puts the bytes in the argument area says no, and a call
     /// with one is refused.
     fn byval_by_reference(&self) -> bool {
+        false
+    }
+
+    /// Whether a `byval` argument's bytes are copied into the argument area
+    /// (`CCPassByVal`), the callee reading them from there; a `byval` part
+    /// then carries its [`ByVal`] and the hook places and copies it.
+    fn byval_in_area(&self) -> bool {
         false
     }
 
@@ -276,7 +297,7 @@ pub trait TargetCalling: Debug + Sync {
     /// keeps them elsewhere.
     fn variadic_frame_offset(
         &self,
-        _fixed: usize,
+        _fixed: &[In],
     ) -> Option<i64> {
         None
     }
