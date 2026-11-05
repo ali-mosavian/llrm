@@ -82,6 +82,8 @@ use llrm_mir::valuetracking::AssumptionCache;
 use crate::looppeel::PeelingPreferences;
 use crate::loopunroll::{Exit, Options as UnrollOptions, Unrolled, unroll_loop_blocks};
 
+mod price;
+
 const UNROLL_THRESHOLD_DEFAULT: u32 = 150;
 const UNROLL_THRESHOLD_AGGRESSIVE: u32 = 300;
 const UNROLL_MAX_PERCENT_THRESHOLD_BOOST: u32 = 400;
@@ -1002,7 +1004,8 @@ fn should_full_unroll(
         up.threshold
     };
     if unrolled_size < u64::from(few) {
-        return Some(full_unroll_trip_count);
+        return price::full_unroll_pays(run, analyzed, lp, eph, full_unroll_trip_count, uce, up)
+            .then_some(full_unroll_trip_count);
     }
 
     // The loop is not that small, but it can still be fully unrolled if that
@@ -1023,7 +1026,8 @@ fn should_full_unroll(
         let boost = full_unroll_boosting_factor(&cost, up.max_percent_threshold_boost);
         let boosted_threshold = (u64::from(up.threshold) * u64::from(boost) / 100) as u32;
         if cost.unrolled_cost < boosted_threshold {
-            return Some(full_unroll_trip_count);
+            return price::full_unroll_pays(run, analyzed, lp, eph, full_unroll_trip_count, uce, up)
+                .then_some(full_unroll_trip_count);
         }
     }
     None

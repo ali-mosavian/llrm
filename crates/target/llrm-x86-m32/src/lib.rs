@@ -94,6 +94,10 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // estimate becomes gcc's own size count (translated, not fitted).
         recursive_edge_growth: Some((12, 22)),
         peel_folded_entry: true,
+        // DEVIATE UP1 (owner x86-m32; exit 2026-11-20: the pin's cost model or
+        // gcc's unroll estimate priced in clocks and bytes replaces it): a
+        // full unroll must repay its bytes at the speed rate.
+        unroll_milliclocks_per_byte: per_byte,
         sink_select_arms: true,
         ..llrm_mir::target::Tuning::PIN
     }

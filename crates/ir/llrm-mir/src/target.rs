@@ -93,6 +93,11 @@ pub struct Tuning {
     /// speed rate (`Tti::peels_folded_entry`). false: the pin's
     /// `computePeelCount`.
     pub peel_folded_entry: bool,
+    /// DEVIATE UP1: a full unroll the pin's threshold allows is made only
+    /// where the clocks it saves repay the bytes it adds at this rate in
+    /// thousandths of a clock a byte (`Tti::unroll_milliclocks_per_byte`) at
+    /// -O2/-O3. 0: the pin's threshold alone.
+    pub unroll_milliclocks_per_byte: i64,
     /// DEVIATE CS2: where there is no conditional move, a select's arm only
     /// it reads is made on its own path (`Tti::sinks_select_arms`). false: the
     /// pin's, both operands before the branch.
@@ -126,6 +131,7 @@ impl Tuning {
         recursive_inlining: None,
         recursive_edge_growth: None,
         peel_folded_entry: false,
+        unroll_milliclocks_per_byte: 0,
         sink_select_arms: false,
     };
 }

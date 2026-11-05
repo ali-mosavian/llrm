@@ -568,6 +568,10 @@ impl Tti for X86 {
         self.tuning.speed_milliclocks_per_byte
     }
 
+    fn unroll_milliclocks_per_byte(&self) -> i64 {
+        self.tuning.unroll_milliclocks_per_byte
+    }
+
     fn multiply_by_clocks(&self) -> bool {
         self.tuning.multiply_by_clocks
     }
