@@ -203,6 +203,7 @@ class ReferenceFloatTests(unittest.TestCase):
             got = self._counts(lambda variant, where: bench.build_watcom(variant, "O2", where, "F000"), name)
             self.assertGreater(got.get("instructions", 0), 0, got)
 
+    @unittest.skipUnless(bench.DOSERROR_OBJ.exists(), "needs error086.obj from an Open Watcom v2 clib build under LLRM_OW")
     def test_watcom_gives_a_program_with_much_data_the_stack_that_is_left(self):
         """stft_single (7K of data) did not link with the 60K stack: DGROUP exceeds 64k by 2000 bytes. The stack shrinks by what is over."""
         import tempfile
