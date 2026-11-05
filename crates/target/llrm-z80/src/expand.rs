@@ -1546,6 +1546,52 @@ pub fn reads(function: &MFunction) -> llrm_support::hash::HashMap<u32, usize> {
     reads
 }
 
+/// The bytes of stack arguments a call has reserved when each block is
+/// entered. Branch folding hoists the reservation of a call that both arms of
+/// a branch make into the block ahead of it, so a count kept in the order
+/// blocks are printed was the one the arm before had left: the second arm
+/// stored its arguments 6 B off (a `u64` shifted one way or the other, -O2).
+fn call_bytes_at_entry(function: &MFunction) -> Vec<i64> {
+    let index: llrm_support::hash::HashMap<u32, usize> =
+        function.blocks.iter().enumerate().map(|(at, block)| (block.id, at)).collect();
+    let mut entry: Vec<Option<i64>> = vec![None; function.blocks.len()];
+    let mut work = Vec::new();
+    if !entry.is_empty() {
+        entry[0] = Some(0);
+        work.push(0);
+    }
+    while let Some(at) = work.pop() {
+        let block = &function.blocks[at];
+        let mut bytes = entry[at].unwrap_or(0);
+        for inst in &block.insts {
+            match (inst.kind, inst.operands.first()) {
+                (Kind::Op("ADJCALLSTACKDOWN"), Some(Operand::Imm(size))) if *size != 0 => bytes = 2 * ((size + 1) / 2),
+                (Kind::Op("ADJCALLSTACKUP"), Some(Operand::Imm(size))) if *size != 0 => bytes = 0,
+                (Kind::Op("PUSHARG"), _) => bytes += 2,
+                _ => {}
+            }
+        }
+        let falls = !block.insts.last().is_some_and(|inst| inst.barrier);
+        let targets = block
+            .insts
+            .iter()
+            .flat_map(|inst| &inst.operands)
+            .filter_map(
+                |operand| match operand {
+                    Operand::Block(id) => index.get(id).copied(),
+                    _ => None,
+                },
+            );
+        for to in targets.chain(falls.then_some(at + 1).filter(|next| *next < function.blocks.len())) {
+            if entry[to].is_none() {
+                entry[to] = Some(bytes);
+                work.push(to);
+            }
+        }
+    }
+    entry.into_iter().map(|bytes| bytes.unwrap_or(0)).collect()
+}
+
 /// `reads` is [`reads`] of the function as the allocator left it: the copies
 /// it dropped as identities were reads too.
 pub fn finish(
@@ -1586,7 +1632,9 @@ pub fn finish(
             printer.push(line);
         }
     }
+    let call_bytes = call_bytes_at_entry(function);
     for (at, block) in function.blocks.iter().enumerate() {
+        printer.call_bytes = call_bytes[at];
         printer.out.push(Line::Label(label(number, block.id)));
         let mut shown = None;
         let next = function.blocks.get(at + 1).map(|block| block.id);
