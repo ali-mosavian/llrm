@@ -127,9 +127,10 @@ fn apply(
     found: Found,
 ) {
     let Found { flag, copies, add, other, condition, subtract } = found;
-    // `de`: `hl` stays free for the arithmetic around the step (Oz tail_calls
-    // 1872 B in hl, 1753 B in de)
-    let stepped = Reg::Phys(reg::DE);
+    // An add steps in de and a subtract in hl, where its sum is read. Any pair
+    // for the allocator, one fixed pair for both and the other way round each
+    // lost cells (Oz: ulong divisions 14661 B, 14544 B; here 14113 B).
+    let stepped = Reg::Phys(if subtract { reg::HL } else { reg::DE });
     let flags = Reg::Phys(reg::FLAGS);
     let origin = insts[add].origin;
     let mut copy = Inst::new(Kind::Copy, vec![Operand::Def(stepped), Operand::Use(Reg::Virt(other))]);
