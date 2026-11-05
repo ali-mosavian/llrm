@@ -1421,6 +1421,12 @@ def test_skipped_rows_are_counted_in_the_header_by_reason():
     assert bench.skip_lines(measured) == ["SKIP why (2 programs)"]
 
 
+def test_a_noted_row_is_counted_in_the_header_by_its_note():
+    """parity/*/clang64 Os rows carry "pc-rel vs abs data refs": kept, not errors, and counted as NOTE lines."""
+    measured = {("a", "clang64", "Os"): {"instructions": 1, "note": "n"}, ("b", "clang64", "Os"): {"instructions": 2, "note": "n"}, ("b", "c64", "Os"): {"instructions": 3}}
+    assert bench.note_lines(measured) == ["NOTE n (2 cells)"]
+
+
 def test_watcom_links_error086_when_the_library_has_no_doserror(tmp_path, monkeypatch):
     """stft_single's Watcom build died at jwlink E2028 `__doserror_` undefined (clibm.lib's creatdos and opendos want it; the shipped dictionary has no definition): the Watcom column had no row. The link is retried with error086.obj, the module that defines it."""
     obj = tmp_path / "error086.obj"
