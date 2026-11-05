@@ -2631,3 +2631,26 @@ fn a_long_remainder_calls_the_fast_routine_at_o2_and_not_at_os() {
     let small = assembly(&ir, &Request::new(Level::Os)).unwrap();
     assert!(small.contains("__modsi3") && !small.contains("_fast"), "{small}");
 }
+
+/// A long division whose divisor is known to be a byte (a constant, or a
+/// zero-extended byte) called the general routine and linked the 141 B wide
+/// path with it: `a % 5` cost +141 B for nothing. At speed it calls the byte
+/// entry; a divisor of any width, and -Os, keep their routines.
+#[test]
+fn a_long_division_by_a_known_byte_calls_the_byte_entry_at_speed() {
+    for (opcode, routine) in [("udiv", "__udivsi3"), ("sdiv", "__divsi3"), ("urem", "__umodsi3"), ("srem", "__modsi3")] {
+        let by_constant = module(&format!("define i32 @f(i32 %a) {{\n  %r = {opcode} i32 %a, 5\n  ret i32 %r\n}}"));
+        let by_byte = module(&format!(
+            "define i32 @f(i32 %a, i8 %b) {{\n  %d = zext i8 %b to i32\n  %r = {opcode} i32 %a, %d\n  ret i32 %r\n}}"
+        ));
+        let by_word = module(&format!("define i32 @f(i32 %a, i32 %b) {{\n  %r = {opcode} i32 %a, %b\n  ret i32 %r\n}}"));
+        for (ir, what) in [(&by_constant, "a constant"), (&by_byte, "a zero-extended byte")] {
+            let text = assembly(ir, &Request::new(Level::O2)).unwrap();
+            assert!(text.contains(&format!("{routine}_fast_byte")), "{opcode} by {what}:\n{text}");
+            let small = assembly(ir, &Request::new(Level::Os)).unwrap();
+            assert!(!small.contains("_byte") && !small.contains("_fast"), "{opcode} by {what} at -Os:\n{small}");
+        }
+        let text = assembly(&by_word, &Request::new(Level::O2)).unwrap();
+        assert!(text.contains(&format!("{routine}_fast")) && !text.contains("_byte"), "{opcode} by a word:\n{text}");
+    }
+}

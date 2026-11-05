@@ -603,3 +603,33 @@ fn a_long_modulo_runs_for_the_quotients_bits_not_the_dividends_bytes() {
     assert!(two_bits < 800, "3000009 % 1000003: {two_bits} clocks");
     assert!(none < 350, "999999 % 1000003: {none} clocks");
 }
+
+/// Every program with a division linked the wide path (+141 B over the old
+/// routine), `a % 5` included: its divisor is a byte and runs the byte loop. A
+/// byte-divisor entry links the byte loop only.
+#[test]
+fn a_byte_divisor_entry_links_the_byte_loop_and_not_the_wide_path() {
+    for routine in ["__udivsi3_fast_byte", "__umodsi3_fast_byte", "__divsi3_fast_byte", "__modsi3_fast_byte"] {
+        let text = common::pipeline::reachable_runtime(&format!("  jsr {routine}\n"));
+        assert!(text.contains("udivmod32_fast_byte:"), "{routine} does not reach the byte loop");
+        assert!(!text.contains("udivmod32_wide:"), "{routine} links the wide path");
+    }
+}
+
+/// The byte entries agree with the dividend's and divisor's arithmetic (a
+/// negative dividend included) for divisors 1..=255.
+#[test]
+fn the_byte_divisor_entries_divide_like_the_general_ones() {
+    let cases = [(3_000_009u32, 7u32), (0xFFFF_FFFF, 255), (100, 100), (99, 100), (0x8000_0001, 3), (0, 9), (1, 1)];
+    for (routine, general) in [
+        ("__udivsi3_fast_byte", "__udivsi3_fast"),
+        ("__umodsi3_fast_byte", "__umodsi3_fast"),
+        ("__divsi3_fast_byte", "__divsi3_fast"),
+        ("__modsi3_fast_byte", "__modsi3_fast"),
+    ] {
+        for (a, b) in cases {
+            let name = format!("{routine}-{a}-{b}");
+            assert_eq!(long(&name, routine, a, b), long(&format!("g{name}"), general, a, b), "{routine} {a} {b}");
+        }
+    }
+}

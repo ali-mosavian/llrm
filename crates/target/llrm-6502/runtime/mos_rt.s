@@ -930,19 +930,11 @@ memmove:
 
 ; ---- speed variants of the 32-bit division (after the other routines: their addresses, and the
 ; page crossings the clock tests count, stay where they were) ----
-udivmod32_fast:                      ; the speed variant: __sa / __sb -> __sa, __sa % __sb -> __sr (unsigned)
-  lda #0
-  sta __sr
-  sta __sr+1
+udivmod32_fast_byte:                 ; __sa / __sb -> __sa, __sa % __sb -> __sr for a divisor of 1 to 255 (the caller
+  lda #0                        ; knows it; a zero divisor gives the quotient all ones, the remainder unspecified)
+  sta __sr+1                    ; the remainder stays in A, a byte at a time
   sta __sr+2
   sta __sr+3
-  lda __sb+1                    ; a divisor below 256: the remainder stays in A, a byte at a time
-  ora __sb+2
-  ora __sb+3
-  bne @wide
-  lda __sb
-  beq @wide                     ; a zero divisor takes the general path: its quotient is all ones
-  lda #0
   ldx #3
 @byte:
   ldy #8
@@ -962,7 +954,17 @@ udivmod32_fast:                      ; the speed variant: __sa / __sb -> __sa, _
   bpl @byte
   sta __sr
   rts
-@wide:
+
+udivmod32_fast:                      ; the speed variant: __sa / __sb -> __sa, __sa % __sb -> __sr (unsigned)
+  lda __sb+1                    ; a divisor below 256 takes the byte loop
+  ora __sb+2
+  ora __sb+3
+  bne udivmod32_wide
+  lda __sb
+  beq udivmod32_wide            ; a zero divisor takes the wide path: its quotient is all ones
+  jmp udivmod32_fast_byte
+
+udivmod32_wide:
   lda __sb                      ; a zero divisor: all-ones quotient, the dividend as remainder
   ora __sb+1
   ora __sb+2
@@ -1120,9 +1122,18 @@ udivmod32_fast:                      ; the speed variant: __sa / __sb -> __sa, _
 __udivsi3_fast:                 ; __sa / __sb -> __sa
   jmp udivmod32_fast
 
+.export __udivsi3_fast_byte
+__udivsi3_fast_byte:            ; __sa / __sb -> __sa, a divisor of 1 to 255
+  jmp udivmod32_fast_byte
+
 .export __umodsi3_fast
 __umodsi3_fast:                 ; __sa % __sb -> __sa
   jsr udivmod32_fast
+  jmp copy_sr_to_sa
+
+.export __umodsi3_fast_byte
+__umodsi3_fast_byte:            ; __sa % __sb -> __sa, a divisor of 1 to 255
+  jsr udivmod32_fast_byte
   jmp copy_sr_to_sa
 
 divmod32s_fast:                 ; the signs split off, then the speed division
@@ -1164,3 +1175,34 @@ __modsi3_fast:                  ; __sa % __sb -> __sa (signed, the sign of the d
 @done:
   rts
 
+divmod32s_fast_byte:            ; the dividend's sign split off (the divisor is 1 to 255), then the byte loop
+  lda #0
+  sta __sg
+  lda __sa+3
+  bpl @a
+  lda #3
+  sta __sg
+  jsr neg_sa
+@a:
+  jmp udivmod32_fast_byte
+
+.export __divsi3_fast_byte
+__divsi3_fast_byte:             ; __sa / __sb -> __sa (signed), a divisor of 1 to 255
+  jsr divmod32s_fast_byte
+  lda __sg
+  and #1
+  beq @done
+  jsr neg_sa
+@done:
+  rts
+
+.export __modsi3_fast_byte
+__modsi3_fast_byte:             ; __sa % __sb -> __sa (signed), a divisor of 1 to 255
+  jsr divmod32s_fast_byte
+  jsr copy_sr_to_sa
+  lda __sg
+  and #2
+  beq @done
+  jsr neg_sa
+@done:
+  rts
