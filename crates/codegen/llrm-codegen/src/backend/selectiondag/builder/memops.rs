@@ -1300,10 +1300,11 @@ impl Builder<'_> {
         }
         let dword = self.dag.get_value_type_node(EVT::I32);
         let rep = self.dag.get_node_multi(x86isd::REP_MOVS, &[EVT::OTHER, EVT::GLUE], &[chain, dword, glue]);
-        // a length whose low two bits are known zero (`n << 2`) has no byte
-        // tail
+        // DEVIATE MEM-1: where the target inlines variable copies, a length
+        // whose low two bits are known zero (`n << 2`) has no byte tail
+        let inlines = self.target.tti.as_ref().is_some_and(|tti| tti.0.inlines_variable_memcpy());
         if self.constant_size(count).is_some_and(|bytes| bytes % 4 == 0)
-            || super::super::known_bits::masked_value_is_zero(&self.dag, count, 3)
+            || inlines && super::super::known_bits::masked_value_is_zero(&self.dag, count, 3)
         {
             return SDValue { node: rep.node, res: 0 };
         }
