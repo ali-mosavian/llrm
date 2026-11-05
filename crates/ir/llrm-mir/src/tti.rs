@@ -1132,6 +1132,14 @@ pub trait Tti {
         8
     }
 
+    /// The values LICM may hold across a loop before it refuses a promotion
+    /// (DEVIATE LP1, `licm/pressure.rs` in llrm-transforms): the register count
+    /// by default; `None` where registers are not what a value is held in and
+    /// the pin promotes without a cap.
+    fn licm_register_limit(&self) -> Option<u32> {
+        Some(self.number_of_gpr_registers())
+    }
+
     /// The registers LSR keeps back from `number_of_gpr_registers` when it
     /// also counts what the loop keeps live (DEVIATE LU3c); the pin's one.
     fn lsr_reserved_registers(&self) -> u32 {
