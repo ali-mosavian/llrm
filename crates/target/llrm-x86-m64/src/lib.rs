@@ -380,12 +380,14 @@ impl llrm_target::Target for M64 {
                             // arrays that exceed the registers are not free (fpbench -O2
                             // +815 B for -75 clocks). The byte rate follows the clock pricing.
                             // DEVIATE UP1 at m64 (owner m64, exit 2026-11-20, with
-                            // x86-m32's): a full unroll repays its bytes at 312
-                            // milliclocks a byte, the m64 net rate (fpbench -O2:
+                            // x86-m32's): a full unroll repays its bytes at a
+                            // rate in milliclocks a byte (fpbench -O2:
                             // 6-trip fp nests, +815 B for -75 clocks, gcc keeps them).
-                            // 312 is x86-m32's 486 line-fill rate, borrowed: UNMEASURED at m64
+                            // 156: a cold 64 B line fill is 10 clocks (L2 chase 14-16 minus
+                            // L1 chase 4), measured on a Ryzen 9 9950X3D (Zen 5); a model
+                            // choice, not validated by the warm-loop clock columns
                             // (row M64-RATE, owner m64, exit 2026-11-20).
-                            unroll_milliclocks_per_byte: 312,
+                            unroll_milliclocks_per_byte: 156,
                             unroll_promotion_fits_registers: true,
                             rotation_guard_must_fold_at_size: true,
                             // No byte/clock rate is stated for m64 (oversight
