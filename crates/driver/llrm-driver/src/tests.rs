@@ -3672,6 +3672,35 @@ fn a_copy_of_a_full_width_value_stays_a_qword_copy_at_m64() {
     assert!(listing.contains("mov rbx, rdi") && !listing.contains("mov ebx, edi"), "{listing}");
 }
 
+/// SysV x86-64 passes an `i128` in two consecutive registers and returns it in
+/// RAX:RDX; with fewer than two left it takes 16 aligned bytes of the stack.
+/// It was refused ("a i128 value"), and with only the size known the second
+/// half was read from the first one's bytes.
+#[test]
+fn a_sysv_i128_argument_takes_two_registers_or_sixteen_aligned_stack_bytes() {
+    let listing_of = |body: &str, name: &str| {
+        let text = format!("{SYSV}{body}");
+        let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &text, name).unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let add = listing_of("define i128 @f(i128 %a, i128 %b) {\n  %r = add i128 %a, %b\n  ret i128 %r\n}\n", "f");
+    assert!(add.contains("adc") && !add.contains("[rsp"), "registers rdi:rsi and rdx:rcx: {add}");
+    // Five integers leave R9 alone: the pair goes to the stack, the next
+    // integer takes R9.
+    let spilled = listing_of(
+        "define i128 @f(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i128 %x, i64 %g) {\n  %p = add i128 %x, 1\n  %q = zext i64 %g to i128\n  %r = add i128 %p, %q\n  ret i128 %r\n}\n",
+        "f",
+    );
+    assert!(spilled.contains("[rsp+8]") && spilled.contains("[rsp+16]") && spilled.contains("r9"), "{spilled}");
+    // A seventh integer on the stack leaves the pair 8 bytes off its
+    // 16-byte alignment: it skips them.
+    let aligned = listing_of(
+        "define i128 @f(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i64 %f, i64 %g, i128 %h) {\n  %p = zext i64 %g to i128\n  %r = add i128 %h, %p\n  ret i128 %r\n}\n",
+        "f",
+    );
+    assert!(aligned.contains("[rsp+8]") && aligned.contains("[rsp+24]") && aligned.contains("[rsp+32]"), "{aligned}");
+}
+
 /// Win64 puts argument `n` in RCX, RDX, R8, R9 by position, the fifth on the
 /// stack above the 32-byte home area the caller reserved.
 #[test]
