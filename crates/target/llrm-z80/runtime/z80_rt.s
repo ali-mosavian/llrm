@@ -588,6 +588,122 @@ udivmoddi:
 	xor	a,#4
 	ld	-17(ix),a
 loop64:
+	ld	a,12(ix)
+	or	a,13(ix)
+	or	a,14(ix)
+	or	a,15(ix)
+	jp	nz,d64_big
+; a divisor of 32 bits or less: the dividend (hl de, then hl' de') shifts left through a
+; 32-bit remainder (bc' low, bc high), the quotient bits entering below it; its leading zeros are skipped. The
+; steps left are at -18(ix)
+d64_small:
+	ld	-18(ix),#64
+	ld	l,-16(ix)
+	ld	h,-15(ix)
+	ld	e,-14(ix)
+	ld	d,-13(ix)
+	exx
+	ld	l,-12(ix)
+	ld	h,-11(ix)
+	ld	e,-10(ix)
+	ld	d,-9(ix)
+	ld	bc,#0
+	exx
+	ld	bc,#0
+d64_sk:	exx
+	bit	7,d
+	exx
+	jr	nz,d64_st
+	add	hl,hl
+	ex	de,hl
+	adc	hl,hl
+	ex	de,hl
+	exx
+	adc	hl,hl
+	ex	de,hl
+	adc	hl,hl
+	ex	de,hl
+	exx
+	dec	-18(ix)
+	jr	nz,d64_sk
+	jr	d64_fn
+d64_st:	add	hl,hl
+	ex	de,hl
+	adc	hl,hl
+	ex	de,hl
+	exx
+	adc	hl,hl
+	ex	de,hl
+	adc	hl,hl
+	ex	de,hl
+	rl	c
+	rl	b
+	exx
+	rl	c
+	rl	b
+	push	bc
+	exx
+	push	bc
+	ld	a,c
+	sub	a,8(ix)
+	ld	c,a
+	ld	a,b
+	sbc	a,9(ix)
+	ld	b,a
+	exx
+	ld	a,c
+	sbc	a,10(ix)
+	ld	c,a
+	ld	a,b
+	sbc	a,11(ix)
+	ld	b,a
+	jr	c,d64_no
+	pop	af
+	pop	af
+	inc	l
+	jr	d64_nx
+d64_no:	exx
+	pop	bc
+	exx
+	pop	bc
+d64_nx:	dec	-18(ix)
+	jp	nz,d64_st
+d64_fn:	ld	-16(ix),l
+	ld	-15(ix),h
+	ld	-14(ix),e
+	ld	-13(ix),d
+	ld	-6(ix),c
+	ld	-5(ix),b
+	exx
+	ld	-12(ix),l
+	ld	-11(ix),h
+	ld	-10(ix),e
+	ld	-9(ix),d
+	ld	-8(ix),c
+	ld	-7(ix),b
+	jp	fin64
+; a divisor of more than 32 bits: over a dividend of 32 bits or less the quotient is zero and the remainder the
+; dividend; otherwise the restoring loop, one step per dividend bit
+d64_big:
+	ld	a,-12(ix)
+	or	a,-11(ix)
+	or	a,-10(ix)
+	or	a,-9(ix)
+	jr	nz,d64_slow
+	ld	a,-16(ix)
+	ld	-8(ix),a
+	ld	-16(ix),#0
+	ld	a,-15(ix)
+	ld	-7(ix),a
+	ld	-15(ix),#0
+	ld	a,-14(ix)
+	ld	-6(ix),a
+	ld	-14(ix),#0
+	ld	a,-13(ix)
+	ld	-5(ix),a
+	ld	-13(ix),#0
+	jp	fin64
+d64_slow:
 	ld	-18(ix),#64
 3$:	push	ix
 	pop	hl
@@ -640,7 +756,7 @@ loop64:
 7$:	inc	-16(ix)
 8$:	dec	-18(ix)
 	jp	nz,3$
-	push	ix
+fin64:	push	ix
 	pop	hl
 	ld	de,#-16
 	add	hl,de

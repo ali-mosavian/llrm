@@ -213,6 +213,12 @@ def main():
     allok &= check("__moddi3", "QQ>Q", lambda a, b: (s64(a) - tdiv64(s64(a), s64(b)) * s64(b)) & ((1 << 64) - 1), sq)
     for nm, f in (("__ashldi3", lambda a, b: a << b & ((1 << 64) - 1)), ("__lshrdi3", lambda a, b: a >> b), ("__ashrdi3", lambda a, b: s64(a) >> b & ((1 << 64) - 1))):
         allok &= check(nm, "QA>Q", f, [(a, b) for a in q64 for b in (0, 1, 7, 8, 9, 15, 16, 31, 32, 33, 47, 56, 63)])
+    # A long long divide takes one step per quotient bit; at one per dividend bit these cost 97k and 103k T.
+    for a, b, bar in ((0x123456789ABCDEF0, 1000003, 25000), (1000000, 10, 18000)):
+        t = cost64("__udivdi3", a, b)
+        if t > bar:
+            print(f"FAIL __udivdi3 ({a:#x}, {b}) took {t} T, bar {bar}")
+            allok = False
     print("ALL OK" if allok else "FAILURES")
     for nm, sig, args in (("__mulqi3", "A,L>A", (7, 6)), ("__mulqi3", "A,L>A", (200, 255)), ("__udivqi3", "A,L>A", (200, 7)), ("__mulhi3", "HL,DE>DE", (1234, 56)), ("__mulhi3", "HL,DE>DE", (56, 1234)), ("__udivhi3", "HL,DE>DE", (40000, 10)), ("__umodhi3", "HL,DE>DE", (40000, 10)), ("__ashlhi3", "HL,A>DE", (1, 5)), ("__divqi3", "A,L>A", (200, 7)), ("__divhi3", "HL,DE>DE", (40000, 10)), ("__ashlsi3", "L,A>L", (1, 20)), ("__udivsi3", "LL>L", (1000000, 10)), ("__divsi3", "LL>L", (1000000, 10))):
         print(f"{nm}{args}: {cost(nm, sig, args)} T")
