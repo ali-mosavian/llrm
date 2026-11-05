@@ -1898,7 +1898,14 @@ fn text_of(
             symbol(&mut out, format!("C${file}${line}$0_0${number}_0"));
         }
     }
-    out.push_str(&format!("{}::\n", crate::data::symbol(name)));
+    // an `internal` function is the module's own: `name:` is local to it, so
+    // two modules may each define a helper of that name (`static inline`
+    // `sf_clz64` in the f64 mul and div clashed at link)
+    let local = selected
+        .iter()
+        .find(|(one, ..)| one == name)
+        .is_some_and(|(_, source, _)| source.as_ref().is_ok_and(|s| s.local));
+    out.push_str(&format!("{}{}\n", crate::data::symbol(name), if local { ":" } else { "::" }));
     for line in lines_in(selected, name, number, request)? {
         match line {
             Line::Label(label) => out.push_str(&format!("{label}:\n")),
