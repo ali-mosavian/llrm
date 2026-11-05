@@ -227,9 +227,9 @@ pub fn join_copy(
         return join_lane(lis, env, state, current_erased, &cp, copy, block);
     }
     // DEVIATE C14: `JoinVals` has no lane masks, so a join of whole values
-    // that have lane defs is refused (series step 4).
+    // that have lane defs renames and recomputes (series step 4).
     if !cp.is_partial() && (has_lane_defs(lis, cp.src_reg()) || has_lane_defs(lis, cp.dst_reg())) {
-        return JoinResult::Rejected;
+        return join_whole_with_lanes(lis, env, state, current_erased, &cp, copy, block);
     }
     let result = join_virt_regs(lis, state, &cp);
     if result != JoinResult::Joined {
@@ -293,6 +293,42 @@ fn has_lane_defs(
     value: u32,
 ) -> bool {
     lis.operands(value).iter().any(|operand| operand.is_def && operand.lanes != Operand::ALL)
+}
+
+/// The join of a whole-value copy where a side has lane defs. DEVIATE C14: the
+/// pin's `JoinVals` carries lane masks; here the join is refused where the two
+/// ranges are live together anywhere but from the copy (the destination's
+/// value is the source's there), and made by renaming `src` to `dst` and
+/// computing the interval afresh. Exit: `JoinVals` with lane masks (series
+/// step 4, 2026-11-24).
+fn join_whole_with_lanes(
+    lis: &mut LiveIntervals,
+    env: &dyn CoalescerEnv,
+    state: &mut State,
+    current_erased: &mut HashSet<InstrKey>,
+    cp: &CoalescerPair,
+    copy: InstrKey,
+    block: usize,
+) -> JoinResult {
+    // A pinned value's interval is not computed afresh from its defs.
+    if env.keeps(cp.src_reg()) || env.keeps(cp.dst_reg()) {
+        return JoinResult::Rejected;
+    }
+    let copy_at = lis.indexes.get_instruction_index(copy);
+    let src = lis.interval(cp.src_reg()).range.clone();
+    let dst = lis.interval(cp.dst_reg()).range.clone();
+    if lanes_overlap(&dst, &src, &copy_at) {
+        return JoinResult::Rejected;
+    }
+    env.narrow(cp.dst_reg(), cp.src_reg());
+    let _ = current_erased;
+    state.erased.insert(copy);
+    lis.remove_instr(block, copy);
+    update_reg_defs_uses(lis, state, cp.src_reg(), cp.dst_reg(), None, None, false);
+    lis.remove_interval(cp.src_reg());
+    lis.remove_interval(cp.dst_reg());
+    keep_joined_lanes_through_undef_defs(lis, cp.dst_reg());
+    JoinResult::Joined
 }
 
 /// The join of a lane copy: `src` is the bytes `cp.lanes()` of `dst`. DEVIATE
