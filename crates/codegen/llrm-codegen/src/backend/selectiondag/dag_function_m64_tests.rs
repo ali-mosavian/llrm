@@ -374,7 +374,8 @@ entry:
 /// `va_start` at m64 was refused ("the SysV register save area is not
 /// translated"; `varargs` of `tests/llc`). A variadic function stores the five
 /// argument registers its one named parameter left in the register save area,
-/// then the four fields of the `va_list`: nine stores.
+/// then the `va_list`: eight stores, `gp_offset` and `fp_offset` as one qword
+/// (`mergeStoresAfterLegalization`, #7153; the pin's `movabsq`).
 #[test]
 fn a_variadic_function_saves_the_argument_registers_and_fills_the_list() {
     use crate::model::ir::{Loc, Operation};
@@ -400,7 +401,7 @@ define i32 @f(i32 %n, ...) {
         .filter_map(|i| i.what.as_ref())
         .filter(|w| w.op == Operation::Move && matches!(w.dests.first(), Some(Loc::Mem(cell)) if cell.width != 16))
         .count();
-    assert_eq!(stores, 9);
+    assert_eq!(stores, 8);
 }
 
 /// `ret {i32, i64}` returned `eax = x`, `edx = x >> 16`: the one-integer path
@@ -1208,9 +1209,10 @@ define i32 @f({params}, ...) {{
             .filter_map(|i| i.what.as_ref())
             .filter(|w| w.op == Operation::Move)
             .filter_map(|w| match (&w.dests[..], &w.sources[..]) {
-                ([Loc::Mem(cell)], [Loc::Imm(imm)]) if cell.width == 4 && imm.address.is_none() => Some(imm.value),
+                ([Loc::Held(_)], [Loc::Imm(imm)]) if imm.width == 8 && imm.address.is_none() => Some(imm.value),
                 _ => None,
             })
+            .flat_map(|pair| [pair & 0xffff_ffff, pair >> 32])
             .collect();
         found.sort_unstable();
         found
