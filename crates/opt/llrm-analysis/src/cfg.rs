@@ -403,6 +403,8 @@ impl Dominance {
         function: &Function,
         at: i64,
     ) -> Option<i64> {
+        #[cfg(test)]
+        IMMEDIATE_QUERIES.with(|count| count.set(count.get() + 1));
         self.tree(function).immediate_dominator(block(at)).map(id)
     }
 
@@ -870,6 +872,8 @@ dead:
 
 #[cfg(test)]
 thread_local! {
+    /// `Dominance::immediate` queries on this thread.
+    pub(crate) static IMMEDIATE_QUERIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// The frontier maps made on this thread.
     pub(crate) static FRONTIERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
