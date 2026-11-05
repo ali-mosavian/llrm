@@ -3,9 +3,13 @@
 #include "fp_mul_vec.h"
 float sfb_mulsf3(float, float);
 double sfb_muldf3(double, double);
+#ifndef REPS
+#define REPS 1
+#endif
 int run(void)
 {
     int bad = 0;
+    for (int rep = 0; rep < REPS; rep++)
     for (unsigned i = 0; i < sizeof V / sizeof V[0]; i++) {
         if (V[i].op == 0) {
             union { unsigned u; float f; } a = { (unsigned)V[i].a }, b = { (unsigned)V[i].b }, r;
