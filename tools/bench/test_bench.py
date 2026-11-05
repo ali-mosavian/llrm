@@ -1320,3 +1320,19 @@ def test_a_reference_that_did_not_build_is_named_in_the_standing(tmp_path, monke
     measured = {("x", "c", "O2"): dict(SIZED), ("x", "tcpp", "O2"): {"error": "link: E2028 _isatty"}}
     text = "\n".join(bench.standing(measured, [], ["O2"]))
     assert "REFERENCE BROKEN tcpp" in text and "E2028" in text, text
+
+
+def test_references_blessed_from_other_sources_are_refused(tmp_path, monkeypatch):
+    """textfill and the parity kernels were edited after the 10-15 bless: bcc, tc, ow and tcpp all drifted on those rows and it read as four
+    compilers moving. A program's sources are recorded when its references are blessed, and judging refuses a mismatch."""
+    (tmp_path / "x").mkdir()
+    (tmp_path / "x" / "bench.toml").write_text('[region]\nc = "f"\n')
+    (tmp_path / "x" / "x.c").write_text("int f(void){return 1;}\n")
+    monkeypatch.setattr(bench, "BENCH", tmp_path)
+    bench.write_expected(tmp_path / "x", {("x", "bcc", "O2"): SIZED}, "x", "t")
+    assert bench.stale_corpus(tmp_path / "x") is None
+    (tmp_path / "x" / "x.c").write_text("int f(void){return 2;}\n")
+    assert "sources changed since the references were blessed" in bench.stale_corpus(tmp_path / "x")
+    assert any("sources changed" in one for one in bench.judge({("x", "c", "O2"): dict(SIZED), ("x", "bcc", "O2"): dict(SIZED)}, ["x"], ["O2"]))
+    assert bench.write_expected(tmp_path / "x", {("x", "bcc", "O2"): SIZED}, "x", "again")  # a bless records the new sources
+    assert bench.stale_corpus(tmp_path / "x") is None
