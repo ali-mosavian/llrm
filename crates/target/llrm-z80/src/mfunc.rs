@@ -323,9 +323,14 @@ impl Emitter<'_> {
                 }
                 let mut reads_flags = false;
                 // flags another instruction overwrote since their compare:
-                // compare again
+                // compare again. A compare that takes the carry of another
+                // is compared again with it.
+                let mut carried: Vec<Inst> = Vec::new();
                 for op in &n.ops {
                     let key = (op.node, op.res);
+                    if let Some(group) = self.flag_groups.get(&key) {
+                        carried.extend(group.clone());
+                    }
                     if self.flags_now != Some(key) {
                         if let Some(group) = self.flag_groups.get(&key) {
                             into.extend(group.clone());
@@ -405,7 +410,8 @@ impl Emitter<'_> {
                 });
                 match flags_key {
                     Some(key) => {
-                        self.flag_groups.insert(key, into[group_start..].to_vec());
+                        self.flag_groups
+                            .insert(key, carried.into_iter().chain(into[group_start..].iter().cloned()).collect());
                         self.flags_now = Some(key);
                     }
                     None if desc.implicit_defs.contains(&pin::F) || desc.has(flag::CALL) => self.flags_now = None,
