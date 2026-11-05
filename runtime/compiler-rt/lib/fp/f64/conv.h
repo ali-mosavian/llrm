@@ -4,7 +4,7 @@
 #ifndef SF_CONV64_H
 #define SF_CONV64_H
 /* A 32-bit magnitude always fits the 53-bit significand: no rounding, and every shift stays in 32-bit halves. */
-#ifdef SF_CONV_NOINLINE /* wasm -O2 inlines both helpers: f64 float.c 287 -> 655 B */
+#if defined(SF_CONV_NOINLINE) || (defined(SF_CONV_DIRECT32) && !defined(SF_CLZ64)) /* wasm -O2 inlines both helpers: f64 float.c 287 -> 655 B */
 #define SF_CONV_FN __attribute__((noinline)) static
 #else
 #define SF_CONV_FN static
@@ -45,6 +45,11 @@ SF_CONV_FN sf64 from_mag(uint64_t sign, uint64_t u)
 #ifdef SF_CLZ64 /* native 64-bit clz: one normaliser and no pack call (a program using only conversions links 52-168 B, not 300) */
     if (!u) return 0;
     return round_mag(sign, u, 63 - sf_clz64(u));
+#elif defined(SF_CONV_DIRECT32) /* the 32-bit conversions call from_mag32 themselves: this one is the 64-bit normaliser only */
+    if (!u) return 0;
+    int n = 63 - sf_clz64(u);
+    uint64_t m = n > 55 ? sf_shr_sticky64(u, n - 55) : u << (55 - n);
+    return SF_PACK(sign, n + 1023, m);
 #else /* pack is shared with the arithmetic: inlining the rounding grew float.c (m68k +126 B, x86 m64 +66) */
     uint32_t hi = (uint32_t)(u >> 32);
     if (!hi) return from_mag32(sign, (uint32_t)u);
@@ -53,7 +58,7 @@ SF_CONV_FN sf64 from_mag(uint64_t sign, uint64_t u)
     return SF_PACK(sign, n + 1023, m);
 #endif
 }
-#else /* SF_NO_EXACT32: one 64-bit path, no second normaliser (x86 m32 -Os: the second path costs +25 B) */
+#else /* SF_NO_EXACT32: one 64-bit path, no second normaliser (m68k: the second path costs +12..20 B) */
 static inline sf64 from_mag(uint64_t sign, uint64_t u)
 {
     if (!u) return 0;
