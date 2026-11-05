@@ -5,7 +5,7 @@
 #
 # Rows in OUT/rows.txt: SAME|DIFF wasm32 LEVEL NAME, NA (the front end rejects the source: DOS-only keywords, a missing header),
 # FAIL wasm32 LEVEL NAME RC_BASE RC_HEAD (a backend refused it). Refuses two dists that share an llrm-llc or an llrm-wasm-llc.
-# Exit 1 if any DIFF or any FAIL whose two codes differ. IDENTITY_SAME_LLC=1 allows a head that changes only the frontend.
+# Exit 1 if any DIFF, any FAIL whose two codes differ or are not a refusal (1, 2: 127, 124, a signal is a broken tool), or no SAME row. IDENTITY_SAME_LLC=1 allows a head that changes only the frontend.
 set -u
 base=${1:?base dir}; new=${2:?head dir}; out=${3:?out dir}
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -31,4 +31,5 @@ export -f one
 for level in O1 O2 O3 Os; do ls bench/*/*.c tests/run/c/*.c | sed "s|^|$level |"; done | xargs -P "${JOBS:-4}" -L 1 bash -c 'one $0 $1' | sort > "$out/rows.txt"
 cut -d' ' -f1 "$out/rows.txt" | uniq -c
 grep -v '^\(SAME\|NA\)' "$out/rows.txt"
-! grep -q '^DIFF' "$out/rows.txt" && ! awk '$1=="FAIL" && $5!=$6{bad=1} END{exit !bad}' "$out/rows.txt"
+# Fails on a DIFF, a FAIL whose codes differ, a FAIL with any code but a refusal (1, 2), or no SAME row (nothing compared).
+awk '$1=="DIFF"{bad=1} $1=="FAIL" && ($5!=$6 || $5<1 || $5>2){bad=1} $1=="SAME"{same=1} END{exit (bad || !same)}' "$out/rows.txt"
