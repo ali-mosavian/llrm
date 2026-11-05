@@ -1011,3 +1011,22 @@ fn the_default_inline_policy_is_made_from_the_hooks_a_target_states() {
     assert_eq!(x86(false).inline_policy().by_size, None);
     assert!(x86(true).inline_policy().by_size.is_some());
 }
+
+/// The byte price at speed counts at -O2 and -O3 only (`prices_bytes`). At arm64
+/// -O1 it refused `next` at 68 of 79 sites in jpeg_single (cost 95 held to
+/// threshold 95), left `getbit` small and inlined it: +589k instructions
+/// against the pin's -O1.
+#[test]
+fn the_speed_byte_price_does_not_refuse_an_inline_below_o2() {
+    use llrm_mir::tti::{InlinePolicy, Tti};
+    let arm = llrm_arm64::tti::AArch64::of_cpu("generic").unwrap();
+    let priced = PolicyOnly(InlinePolicy { by_rate: arm.inline_policy().by_rate, ..InlinePolicy::PIN });
+    let at = |prices_bytes| {
+        let params = InlineParams { compute_full_inline_cost: true, prices_bytes, ..InlineParams::from_level(2) };
+        priced_params(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&priced), params, (2, false))
+    };
+    let (cost, threshold) = at(true);
+    assert!(cost >= threshold, "the premise: -O2 refuses it ({cost} against {threshold})");
+    let (cost, threshold) = at(false);
+    assert!(cost < threshold, "-O1 inlines it as the pin does ({cost} against {threshold})");
+}
