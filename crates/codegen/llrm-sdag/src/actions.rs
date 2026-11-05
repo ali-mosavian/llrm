@@ -121,6 +121,9 @@ pub struct TargetLowering {
     /// like): the runtime routine a `LibCall` action calls. Empty unless the
     /// target fills it.
     libcall_names: HashMap<(ISD, MVT), &'static str>,
+    /// The routine a function tuned for size calls where it differs from
+    /// `libcall_names`'.
+    size_libcall_names: HashMap<(ISD, MVT), &'static str>,
     /// The object spelling of a routine's name where the convention decorates
     /// it (`___addsf3@3`).
     libcall_symbols: HashMap<String, (String, u32)>,
@@ -148,6 +151,7 @@ impl TargetLowering {
             keeps_f64_constants: false,
             cmov: false,
             libcall_names: HashMap::default(),
+            size_libcall_names: HashMap::default(),
             libcall_symbols: HashMap::default(),
             sext_cheaper_i32_i64: false,
             sdiv_pow2_cmov: None,
@@ -205,8 +209,17 @@ impl TargetLowering {
         self.libcall_names.insert((op, vt), name);
     }
 
-    /// `getLibcallName` of the routine `op` of `vt` calls, if the target has
-    /// one.
+    /// The routine `op` of `vt` calls in a function tuned for size, where a
+    /// smaller one than [`Self::set_libcall_name`]'s exists.
+    pub fn set_size_libcall_name(
+        &mut self,
+        op: ISD,
+        vt: MVT,
+        name: &'static str,
+    ) {
+        self.size_libcall_names.insert((op, vt), name);
+    }
+
     /// The routine `name` is spelled `symbol` in the object.
     pub fn set_libcall_symbol(
         &mut self,
@@ -234,13 +247,16 @@ impl TargetLowering {
         self.libcall_symbols.get(name).map_or_else(|| name.to_owned(), |(symbol, _)| symbol.clone())
     }
 
+    /// `getLibcallName` of the routine `op` of `vt` calls, if the target has
+    /// one.
     pub fn libcall_name(
         &self,
         op: ISD,
         vt: EVT,
     ) -> Option<&'static str> {
         let EVT::Simple(vt) = vt else { return None };
-        self.libcall_names.get(&(op, vt)).copied()
+        let sized = self.opt_for_size.then(|| self.size_libcall_names.get(&(op, vt)).copied()).flatten();
+        sized.or_else(|| self.libcall_names.get(&(op, vt)).copied())
     }
 
     pub fn set_operation_action(
@@ -852,6 +868,20 @@ mod tests {
 
     fn a64() -> TargetLowering {
         TargetLowering::aarch64(Aarch64Features::default())
+    }
+
+    /// A function tuned for size called the speed routine of a divide: a
+    /// target's smaller one was never asked for.
+    #[test]
+    fn a_function_tuned_for_size_calls_the_size_routine() {
+        let mut t = TargetLowering::empty(TargetLoweringInfo::aarch64());
+        t.set_libcall_name(ISD::UDiv, MVT::I64, "__fast");
+        t.set_size_libcall_name(ISD::UDiv, MVT::I64, "__small");
+        t.set_libcall_name(ISD::SDiv, MVT::I64, "__only");
+        assert_eq!(t.libcall_name(ISD::UDiv, EVT::I64), Some("__fast"));
+        t.set_opt_for_size(true);
+        assert_eq!(t.libcall_name(ISD::UDiv, EVT::I64), Some("__small"));
+        assert_eq!(t.libcall_name(ISD::SDiv, EVT::I64), Some("__only"), "no size routine: the one routine");
     }
 
     /// An x86 table's `i8` set-cc result and `i8` register class were the
