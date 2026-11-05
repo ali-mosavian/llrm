@@ -20,3 +20,18 @@ define i1 @no(i64 %a, i64 %b) {
   ret i1 %n
 }
 
+
+define void @loop(ptr %p, i64 %s) {
+entry:
+  br label %l
+l:
+  %i = phi i64 [ %s, %entry ], [ %m, %l ]
+  %a = getelementptr i8, ptr %p, i64 %i
+  store volatile i8 -1, ptr %a
+  %o = call { i64, i1 } @llvm.uadd.with.overflow.i64(i64 %i, i64 1)
+  %m = extractvalue { i64, i1 } %o, 0
+  %ov = extractvalue { i64, i1 } %o, 1
+  br i1 %ov, label %x, label %l
+x:
+  ret void
+}
