@@ -1196,6 +1196,12 @@ def main() -> int:
     if args.json and not args.shard:
         args.json.write_text(json.dumps({"/".join(key): value for key, value in measured.items()}, indent=1))
         args.json.with_name(args.json.name + ".harness").write_text(basecounts.harness_digest() + "\n")
+        import stamp
+
+        # Each compiler's build commit and md5 beside the counts; with LLRM_EXPECT_SHA named, one built from a commit that is not its ancestor is refused.
+        expect = os.environ.get("LLRM_EXPECT_SHA")
+        recorded = stamp.require_ancestor(BIN, expect, ROOT) if expect else stamp.dist_stamps(BIN)
+        args.json.with_name(args.json.name + ".provenance").write_text(json.dumps({name: {"sha": sha, "md5": md5} for name, (sha, md5) in recorded.items()}, indent=1) + "\n")
     print("HARNESS", basecounts.harness_digest())
     unbuilt = [f"{'/'.join(key)}: {value['error']}" for key, value in measured.items() if "error" in value and not value["error"].startswith("skipped: ")]
     if unbuilt and (args.record or args.no_judge):  # a base or leg with cells that did not build is no base: say how many, exit nonzero
