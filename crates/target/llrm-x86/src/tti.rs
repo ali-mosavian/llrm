@@ -685,6 +685,10 @@ impl Tti for X86 {
         }
     }
 
+    fn unroll_promotion_fits_registers(&self) -> bool {
+        self.tuning.unroll_promotion_fits_registers
+    }
+
     fn rotation_guard_must_fold_at_size(&self) -> bool {
         self.tuning.rotation_guard_must_fold_at_size
     }
