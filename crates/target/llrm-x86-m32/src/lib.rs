@@ -760,16 +760,17 @@ mod tests {
     #[test]
     fn m32_x87_byte_rows_split_register_and_memory_forms() {
         let sizes = OPCOSTS.size_costs();
-        // Mean encoded bytes of the 16 float bench programs at -Os, per form.
-        for (form, estimate, measured) in [
-            ("register add", sizes.float_add, 2.00),
-            ("fld m", sizes.float_load, 4.33),
-            ("fstp m", sizes.float_store, 4.06),
-            ("add m", sizes.float_add + sizes.float_load_folded, 5.22),
-            ("fstp st", sizes.float_release, 2.00),
+        // Mean encoded bytes of 71 float programs at -O2/-Os, per form, with the band of
+        // estimate/measured the integer rows hold: 1.4-1.5 for memory, 2 for register.
+        for (form, estimate, measured, band) in [
+            ("register add", sizes.float_add, 2.00, 1.9..=2.1),
+            ("fld m", sizes.float_load, 5.56, 1.3..=1.6),
+            ("fstp m", sizes.float_store, 4.12, 1.3..=1.6),
+            ("add m", sizes.float_add + sizes.float_load_folded, 5.87, 1.3..=1.6),
+            ("fstp st", sizes.float_release, 2.00, 0.9..=1.1),
         ] {
             let ratio = estimate as f64 / measured;
-            assert!((0.85..=2.15).contains(&ratio), "{form}: {estimate} B estimated, {measured} B encoded");
+            assert!(band.contains(&ratio), "{form}: {estimate} B estimated, {measured} B encoded");
         }
         assert_eq!(sizes.float_add, sizes.add, "a register x87 add is the integer register row");
         assert!(sizes.float_load_folded > 0, "a memory operand costs bytes over the register form");
