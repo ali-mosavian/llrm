@@ -554,10 +554,11 @@ impl ProgramPass for Walk {
                                         .map(|body| function_clocks(module, &program.layout, tti, body))
                                         .sum();
                                     let gone: i64 = if credit > 0 {
-                                        callees
-                                            .iter()
-                                            .map(|body| function_bytes(module, &program.layout, &costs, body))
-                                            .sum()
+                                        let sites: Vec<GlobalId> =
+                                            calls.iter().filter_map(|one| trials[one].callee).collect();
+                                        dying_callees_bytes(module, &sites, |body| {
+                                            function_bytes(module, &program.layout, &costs, body)
+                                        })
                                     } else {
                                         0
                                     };
@@ -627,14 +628,21 @@ impl ProgramPass for Walk {
                                         growth
                                     );
                                 }
-                                // At speed with a byte price only the sites of a callee that
-                                // goes with them are tried, and the price decides: the
-                                // module loses the callee, and the copies meet the
-                                // constants (a stack bracket, a trip count) the cost
-                                // model does not follow. One site of a callee that stays
-                                // widens the caller's registers for its whole body (jpeg
-                                // `decode` with `getbit` inlined: five more register
-                                // pairs saved on every call, +441k instructions).
+                                // At speed with a byte price only the sites of
+                                // a callee that
+                                // goes with them are tried, and the price
+                                // decides: the
+                                // module loses the callee, and the copies meet
+                                // the constants
+                                // (a stack bracket, a trip count) the cost
+                                // model does not follow. One site of a callee
+                                // that stays
+                                // widens the caller's registers for its whole
+                                // body (jpeg
+                                // `decode` with `getbit` inlined: five more
+                                // register
+                                // pairs saved on every call, +441k
+                                // instructions).
                                 let priced = rate > 0 && size == crate::inlinecost::CallerSize::Speed;
                                 if if priced {
                                     credit > 0 && growth * rate <= saved * 1000
@@ -650,8 +658,7 @@ impl ProgramPass for Walk {
                                                     &program.target.size_costs(),
                                                     &kept,
                                                 ))
-                                }
-                                {
+                                } {
                                     best = tried;
                                     accepted.extend(calls);
                                 } else {
@@ -980,7 +987,10 @@ impl SelfInline {
                         growth: tti
                             .as_deref()
                             .and_then(|tti| tti.recursive_inlining_growth())
-                            .map_or(crate::inline::MAX_INLINE_INSNS_RECURSIVE, |(o2, o3)| if self.o3 { o3 } else { o2 }),
+                            .map_or(
+                                crate::inline::MAX_INLINE_INSNS_RECURSIVE,
+                                |(o2, o3)| if self.o3 { o3 } else { o2 },
+                            ),
                     };
                     copies =
                         crate::inline::expanded_all(context, function, &by, &available, None, &mut declared, metadata)?;
@@ -1125,6 +1135,19 @@ pub(crate) fn function_bytes(
         .sum()
 }
 
+/// SZ2: the bytes the module loses when the callees of a trial's `sites` go
+/// with them: each callee once, however many of its sites the trial inlines.
+fn dying_callees_bytes(
+    module: &Module,
+    sites: &[GlobalId],
+    bytes: impl Fn(&llrm_mir::module::Function) -> i64,
+) -> i64 {
+    let mut distinct = sites.to_vec();
+    distinct.sort_unstable();
+    distinct.dedup();
+    distinct.into_iter().filter_map(|callee| module.global(callee).function()).map(|body| bytes(body)).sum()
+}
+
 /// SZ2: the clocks of `function` run once, by the target's latency model.
 fn function_clocks(
     module: &Module,
@@ -1149,10 +1172,10 @@ fn function_clocks(
         .sum()
 }
 
-/// Units a rerun of the Simplify list over a settled body must save to stay: one
-/// is the wobble of the operand-sensitive estimate (recmany_o1 "saved" 1 by an
-/// add's operand and kept a Reassociate reorder, +16 B). Of the 75 reruns kept
-/// on the corpus, 14 save one unit and the rest more.
+/// Units a rerun of the Simplify list over a settled body must save to stay:
+/// one is the wobble of the operand-sensitive estimate (recmany_o1 "saved" 1 by
+/// an add's operand and kept a Reassociate reorder, +16 B). Of the 75 reruns
+/// kept on the corpus, 14 save one unit and the rest more.
 const GUARD: i64 = 1;
 
 /// SZ2: the code size of body `id`, by the target's cost model for bytes.

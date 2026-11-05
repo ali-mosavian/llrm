@@ -914,23 +914,29 @@ impl Convention {
         let slot = |position: usize| Place::Stack(self.slot_bytes * position as i64);
         // The hidden result pointer is the first argument: it takes the first
         // position, and the named ones follow.
-        let first = reserved.len();
-        for (index, &kind) in arguments.iter().enumerate() {
-            let position = first + index;
+        let mut position = reserved.len();
+        for &kind in arguments {
+            // A wide integer is two words (the legalizer splits it): two
+            // consecutive positions, both registers or both stack slots. A
+            // pair across the fourth position is the caller's to refuse.
+            let width = if kind == Kind::Wide { 2 } else { 1 };
             let register = match kind {
-                Kind::Word | Kind::Sized(_) => self.argument_registers.get(position),
-                Kind::Float(_) => self.float_argument_registers.get(position),
-                Kind::Wide | Kind::Memory(_) => None,
+                Kind::Word | Kind::Sized(_) => self.argument_registers.get(position).map(|name| vec![name.clone()]),
+                Kind::Float(_) => self.float_argument_registers.get(position).map(|name| vec![name.clone()]),
+                Kind::Wide => (position + 1 < self.argument_registers.len())
+                    .then(|| self.argument_registers[position..position + 2].to_vec()),
+                Kind::Memory(_) => None,
             };
             places.push(match register {
-                Some(name) => {
-                    used.push(name.clone());
-                    Place::Registers(vec![name.clone()])
+                Some(names) => {
+                    used.extend(names.iter().cloned());
+                    Place::Registers(names)
                 }
                 None => slot(position),
             });
+            position += width;
         }
-        let stack_bytes = (self.slot_bytes * (first + arguments.len()) as i64).max(self.shadow_bytes);
+        let stack_bytes = (self.slot_bytes * position as i64).max(self.shadow_bytes);
         Placement { places, used, stack_bytes }
     }
 

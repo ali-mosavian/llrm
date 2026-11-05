@@ -2728,9 +2728,10 @@ fn test_m32_copies_a_tree_recursion_into_itself_at_speed() {
     assert!(calls > 8, "fib was not copied into itself, {calls} calls of it");
 }
 
-/// fib at m32 -O2 was copied into itself to the 150 `gcc_insns` the pass allowed
-/// and ran 240256 clocks against gcc's 210636 (gcc's cap is 450; -O2 now takes it,
-/// 99687 clocks); -O3 keeps 150 (rectwo and bintree are worse with 450 there).
+/// fib at m32 -O2 was copied into itself to the 150 `gcc_insns` the pass
+/// allowed and ran 240256 clocks against gcc's 210636 (gcc's cap is 450; -O2
+/// now takes it, 99687 clocks); -O3 keeps 150 (rectwo and bintree are worse
+/// with 450 there).
 #[test]
 fn test_m32_o2_copies_fib_to_gccs_growth_cap_and_o3_to_the_old_one() {
     let o2 = m32_fib_calls(crate::pipeline::Options::default());
@@ -2744,6 +2745,15 @@ fn test_m32_o2_copies_fib_to_gccs_growth_cap_and_o3_to_the_old_one() {
 fn test_m32_copies_no_recursion_at_o1() {
     let calls = m32_fib_calls(crate::pipeline::Options::basic());
     assert!(calls <= 3, "fib was copied into itself at -O1, {calls} calls of it");
+}
+
+/// -Os is strict bytes: quicksort, bintree and hanoi are the same object with
+/// D10 on or off at m32 and x86_64 -Os (247, 229, 47 B), so no recursive copy
+/// is made there (the rate levels' 1261 B shape never reaches -Os).
+#[test]
+fn test_m32_copies_no_recursion_at_os() {
+    let calls = m32_tree_calls(6, crate::pipeline::Options::size());
+    assert!(calls <= 3, "a recursion was copied into itself at -Os, {calls} calls of it");
 }
 
 /// gcc rejects the recursive edge of quicksort and bintree at -O2
@@ -2880,4 +2890,35 @@ fn test_the_m32_edge_bar_makes_gccs_decision_for_every_corpus_recursion() {
             "{name} {function}: gcc_insns {insns}, bars {o2_bar}/{o3_bar}"
         );
     }
+}
+
+/// A speed trial of three calls to one dying callee credited the callee's bytes
+/// three times (the sum ran over the sites): 7 calls to a 139-byte callee
+/// counted 973 bytes gone, the trial read -338 B of growth where the built
+/// code grew 496, and the priced m68k rule lost 22 KB at -O2.
+#[test]
+fn test_a_trial_credits_a_dying_callee_once_however_many_sites_it_inlines() {
+    let module = parsed(
+        "define internal i32 @h(i32 %x) {
+b1:
+  %a = add i32 %x, 1
+  %b = mul i32 %a, 3
+  ret i32 %b
+}
+
+define i32 @f(i32 %x) {
+b1:
+  %p = call i32 @h(i32 %x)
+  %q = call i32 @h(i32 %p)
+  %r = call i32 @h(i32 %q)
+  ret i32 %r
+}
+",
+    );
+    let h = module.globals.iter().position(|global| global.name.as_deref() == Some("h")).expect("h");
+    let h = llrm_mir::context::GlobalId(h as u32);
+    let one = super::dying_callees_bytes(&module, &[h], |body| body.walk().count() as i64);
+    let three = super::dying_callees_bytes(&module, &[h, h, h], |body| body.walk().count() as i64);
+    assert_eq!(one, 3);
+    assert_eq!(three, one, "the callee goes once");
 }

@@ -911,3 +911,32 @@ define i64 @f(i32 %hi, i32 %lo, i32 %d) {
     assert_eq!(names.iter().filter(|n| n.as_str() == "div").count(), 1, "{names:?}");
     assert!(!names.iter().any(|n| n.as_str() == "call"), "{names:?}");
 }
+
+const OVERFLOW_LOOP: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare {i32,i1} @llvm.uadd.with.overflow.i32(i32, i32)
+define void @f(ptr %p, i32 %s) {
+entry:
+  br label %l
+l:
+  %i = phi i32 [ %s, %entry ], [ %m, %l ]
+  %a = getelementptr i8, ptr %p, i32 %i
+  store volatile i8 -1, ptr %a
+  %o = call {i32,i1} @llvm.uadd.with.overflow.i32(i32 %i, i32 1)
+  %m = extractvalue {i32,i1} %o, 0
+  %ov = extractvalue {i32,i1} %o, 1
+  br i1 %ov, label %x, label %l
+x:
+  ret void
+}
+";
+
+/// A loop that ends on the carry of its counter's `uadd.with.overflow` branched
+/// on the flags of the add (`inc; jne`). The builder swaps the branch whose
+/// true successor follows into `xor ov, 1`, and the widened bit was tested
+/// through `sete; not; test`, three instructions per iteration (m16 `inc si;
+/// sete al; not al; test al, 1; jne`).
+#[test]
+fn a_branch_on_the_overflow_bit_reads_the_flags_of_the_add() {
+    let all = names(OVERFLOW_LOOP).unwrap();
+    assert!(!all.iter().any(|name| name.starts_with("set") || name == "not" || name == "test"), "{all:?}");
+}

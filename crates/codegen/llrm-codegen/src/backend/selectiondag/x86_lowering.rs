@@ -1094,6 +1094,14 @@ fn lower_brcond(
             return Some(branches);
         }
     }
+    // `ISD::isOverflowIntrOpRes`: a branch on the overflow of an add or a
+    // subtract reads the flags of the arithmetic, itself, its inverse
+    // (`xor ov, 1`, what the builder makes of a branch whose true successor
+    // follows), or a compare of it with 0 or 1.
+    if let Some((code, flags)) = overflow_branch(dag, cond) {
+        let code = cond_code(dag, code);
+        return Some(dag.get_node(x86isd::BRCOND, EVT::OTHER, &[chain, dest, code, flags]));
+    }
     let (code, flags) = if dag.opcode(cond) == ISD::SetCC && dag.value_type(dag.operand(cond, 0)).is_integer() {
         let (lhs, rhs) = (dag.operand(cond, 0), dag.operand(cond, 1));
         let cc = cond_of(dag, dag.operand(cond, 2));
@@ -1120,6 +1128,87 @@ fn lower_brcond(
         (code, flags)
     };
     Some(dag.get_node(x86isd::BRCOND, EVT::OTHER, &[chain, dest, code, flags]))
+}
+
+/// `getX86XALUOOp` for the overflow result `ov` of an unsigned add or
+/// subtract: the condition that says it overflowed and the flags of the
+/// arithmetic.
+fn xalu_condition(
+    dag: &mut SelectionDAG,
+    ov: SDValue,
+) -> Option<(u128, SDValue)> {
+    if ov.res != 1 || !matches!(dag.opcode(ov), ISD::UAddO | ISD::USubO) {
+        return None;
+    }
+    let (lhs, rhs) = (dag.operand(ov, 0), dag.operand(ov, 1));
+    let vt = dag.value_type(lhs);
+    let (opcode, code) = match dag.opcode(ov) {
+        ISD::UAddO => (x86isd::ADD, if dag.constant(rhs) == Some(1) { cond::E } else { cond::B }),
+        _ => (x86isd::SUB, cond::B),
+    };
+    let value = dag.get_node_multi(opcode, &[vt, EVT::I32], &[lhs, rhs]);
+    Some((code, SDValue { node: value.node, res: 1 }))
+}
+
+/// A branch on `xor (X86ISD::SETCC cc, flags), 1` or of an overflow bit (under
+/// `and 1`, once the boolean is widened): the flags with the opposite condition. Type
+/// legalization has widened an overflow bit by the time the branch is lowered;
+/// the pin sees it as `setcc ov != 1` and takes the opposite there.
+fn inverted_setcc(
+    dag: &mut SelectionDAG,
+    cond: SDValue,
+) -> Option<(u128, SDValue)> {
+    let (mut value, mut invert, mut peeled) = (cond, false, false);
+    loop {
+        match dag.opcode(value) {
+            ISD::And if dag.constant(dag.operand(value, 1)) == Some(1) => value = dag.operand(value, 0),
+            ISD::Xor if dag.constant(dag.operand(value, 1)).is_some_and(|c| c & 1 == 1) => {
+                invert = !invert;
+                value = dag.operand(value, 0);
+            }
+            _ => break,
+        }
+        peeled = true;
+    }
+    if !peeled {
+        return None;
+    }
+    let (code, flags) = if dag.opcode(value) == x86isd::SETCC {
+        (dag.constant(dag.operand(value, 0))?, dag.operand(value, 1))
+    } else {
+        xalu_condition(dag, value)?
+    };
+    Some((if invert { code ^ 1 } else { code }, flags))
+}
+
+/// `LowerConditionalBranch`'s overflow cases: the condition is the overflow
+/// result, or `setcc ov ==|!= 0|1`, or its `xor` with 1 (the pin's
+/// `rebuildSetCC` makes that `setcc ov != 1`).
+fn overflow_branch(
+    dag: &mut SelectionDAG,
+    cond: SDValue,
+) -> Option<(u128, SDValue)> {
+    if let Some(found) = xalu_condition(dag, cond) {
+        return Some(found);
+    }
+    if let Some(found) = inverted_setcc(dag, cond) {
+        return Some(found);
+    }
+    let (ov, invert) = match dag.opcode(cond) {
+        ISD::Xor if dag.constant(dag.operand(cond, 1)) == Some(1) => (dag.operand(cond, 0), true),
+        ISD::SetCC if dag.value_type(dag.operand(cond, 0)).is_integer() => {
+            let rhs = dag.constant(dag.operand(cond, 1))?;
+            let cc = cond_of(dag, dag.operand(cond, 2));
+            if !matches!(cc, CondCode::SetEq | CondCode::SetNe) || rhs > 1 {
+                return None;
+            }
+            // `(CC == SETEQ) == isNullConstant(RHS)` takes the opposite.
+            (dag.operand(cond, 0), (cc == CondCode::SetEq) == (rhs == 0))
+        }
+        _ => return None,
+    };
+    let (code, flags) = xalu_condition(dag, ov)?;
+    Some((if invert { code ^ 1 } else { code }, flags))
 }
 
 /// `LowerBRCOND` of a float compare. `une` is two branches to the target
