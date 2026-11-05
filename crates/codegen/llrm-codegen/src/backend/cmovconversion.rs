@@ -301,7 +301,13 @@ fn latency_of(
 ) -> i64 {
     match form_of(one) {
         None => 0,
-        Some(form) => cpu.latency(form).map_or(1, |clocks| clocks.max(1)),
+        Some(form) => match cpu.latency(form) {
+            Ok(clocks) => clocks.max(1),
+            Err(_) => {
+                llrm_support::debug!("cmov", "no latency row for {form}");
+                1
+            }
+        },
     }
 }
 
@@ -436,6 +442,14 @@ fn profitable_groups(
     }
     let diff = [loop_depth[0].plain - loop_depth[0].branch, loop_depth[1].plain - loop_depth[1].branch];
 
+    llrm_support::debug!(
+        "cmov",
+        "loop of {} blocks: depth plain {:?} branch {:?}, diff {diff:?}, {} groups",
+        blocks.len(),
+        loop_depth.map(|one| one.plain),
+        loop_depth.map(|one| one.branch),
+        groups.len()
+    );
     // Step 2: is the loop worth it.
     if diff[1] < GAIN_CYCLE_THRESHOLD {
         return Vec::new();
@@ -472,6 +486,7 @@ fn profitable_groups(
                 let at = index_of[&key(one)];
                 let condition = plain_of(at, 2);
                 let value = depth_of_branch(plain_of(at, 0), plain_of(at, 1));
+                llrm_support::debug!("cmov", "  cmov condition {condition} value {value} penalty {penalty}");
                 value <= condition && (condition - value) * 4 >= penalty
             })
         })
@@ -726,6 +741,7 @@ pub fn converted(
     }
 
     // The groups of registers, in the innermost loops.
+    llrm_support::debug!("cmov", "penalty {:?}, {} loops", cpu.mispredict_penalty, found.len());
     if let Some(penalty) = cpu.mispredict_penalty {
         let headers: Vec<i64> = found.iter().map(|one| one.header).collect();
         let first_sets = work.loops.clone();
