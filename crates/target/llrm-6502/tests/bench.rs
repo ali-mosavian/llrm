@@ -265,6 +265,14 @@ fn cmos(tag: &str) -> bool {
     tag.split('-').next().is_some_and(|t| t.ends_with('m'))
 }
 
+/// Bytes of code put before the function: `BENCH_PAD`. sim65 charges a cycle
+/// for a branch or an indexed access that crosses a page, so one layout's
+/// cycles move by about 2% with the code's address; a run is made at several
+/// paddings and the cycles averaged (`tools/bench-pads.sh`).
+pub fn pad_bytes() -> u32 {
+    std::env::var("BENCH_PAD").ok().and_then(|n| n.parse().ok()).unwrap_or(0)
+}
+
 fn link(
     dir: &Path,
     kernel: &Kernel,
@@ -280,7 +288,13 @@ fn link(
     let function_file = format!("f-{}.s", tag.split('-').next().unwrap());
     let _ = function;
     let target = if cmos(tag) { "sim65c02" } else { "sim6502" };
-    tool(dir, "cl65", &["-t", target, "-o", &bin, &drv, &function_file])?;
+    let pad = pad_bytes();
+    if pad == 0 {
+        tool(dir, "cl65", &["-t", target, "-o", &bin, &drv, &function_file])?;
+    } else {
+        std::fs::write(dir.join("pad.s"), format!(".segment \"CODE\"\n.res {pad}\n")).unwrap();
+        tool(dir, "cl65", &["-t", target, "-o", &bin, &drv, "pad.s", &function_file])?;
+    }
     Ok(dir.join(bin))
 }
 
