@@ -2200,8 +2200,13 @@ fn built(
     let mut cfi = numbers
         .filter(|_| plain)
         .map(|(frame, stack)| CfiState::entry(procedure.registers.slot, stack, frame, procedure.registers.stack));
+    // The frame register is the prologue's symbolic `FRAME`, which the register
+    // file does not name: it is the target's frame pointer.
     let hardware = |loc: &Loc| match loc {
-        Loc::Reg(one) => regs.name(one.register).and_then(llrm_x86::mc::win64unwind::hardware),
+        Loc::Reg(one) => {
+            let register = if one.register == FRAME { procedure.registers.pointer } else { one.register };
+            regs.name(register).and_then(llrm_x86::mc::win64unwind::hardware)
+        }
         _ => None,
     };
     let vector = |loc: &Loc| match loc {
