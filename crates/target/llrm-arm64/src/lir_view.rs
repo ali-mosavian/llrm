@@ -542,6 +542,18 @@ impl AllocTarget for Arm64 {
         true
     }
 
+    /// The coalescer makes a definition again for a copy only if it is
+    /// `isAsCheapAsAMove`; `MOVaddr` is not (the pair is two instructions),
+    /// so a copy of an address stays a `mov`. The spiller takes it still.
+    fn literal_move_wins(
+        literal: &llrm_codegen::model::lir::Insn,
+        _source: &[RegId],
+        _destination: &[RegId],
+        _size: bool,
+    ) -> bool {
+        literal.what.as_ref().is_none_or(|what| what.name.as_deref() != Some("AddPageOffset"))
+    }
+
     fn candidates(class: Class) -> Vec<RegId> {
         match class {
             Class::Gpr => gpr_order(),
