@@ -108,6 +108,8 @@ pub enum Event {
     CombineInitial,
     /// An instruction put on the combine worklist that was not already on it.
     CombineInserts,
+    /// A `BranchProbabilityInfo` calculated for a function.
+    BranchProbabilities,
     /// A constant visited for the globals it holds the address of
     /// (`globalsaa::embedded_once`).
     ConstantsEmbedded,
@@ -115,7 +117,7 @@ pub enum Event {
 
 const SLOTS: usize = 64;
 
-const NAMES: [&str; 40] = [
+const NAMES: [&str; 41] = [
     "function_clones",
     "function_forks",
     "machinings",
@@ -155,6 +157,7 @@ const NAMES: [&str; 40] = [
     "combine_visits",
     "combine_initial",
     "combine_inserts",
+    "branch_probabilities",
     "constants_embedded",
 ];
 
@@ -172,7 +175,7 @@ thread_local! {
     static PASSES: RefCell<Vec<PassRow>> = const { RefCell::new(Vec::new()) };
     /// (pass, analysis, misses): the analyses a pass made the manager compute.
     static ASKS: RefCell<Vec<(&'static str, &'static str, u64)>> = const { RefCell::new(Vec::new()) };
-    static EVENTS: [Cell<u64>; 40] = const { [const { Cell::new(0) }; 40] };
+    static EVENTS: [Cell<u64>; 41] = const { [const { Cell::new(0) }; 41] };
     /// (name, hits, misses) by the address of the name, which is a literal.
     static FOUND: [Cell<usize>; SLOTS] = const { [const { Cell::new(0) }; SLOTS] };
     static ANALYSES: RefCell<Vec<(&'static str, u64, u64)>> = const { RefCell::new(Vec::new()) };
