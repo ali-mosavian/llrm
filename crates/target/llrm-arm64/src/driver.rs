@@ -152,6 +152,7 @@ pub fn optimized_at(
     level: Level,
 ) -> Result<(), String> {
     let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
+    crate::taildup::AGGRESSIVE.store(level == Level::O3, std::sync::atomic::Ordering::Relaxed);
     let mut options = level.options();
     for flag in PASS_FLAGS.lock().unwrap().iter() {
         llrm_codegen::driver::flags::apply_pass_flag(&mut options, flag);
