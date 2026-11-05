@@ -16,15 +16,26 @@ fn lowered(
     tti: &dyn Tti,
     text: &str,
 ) -> (Option<i64>, usize) {
+    lowered_declaring(tti, text, 0)
+}
+
+/// As `lowered`, the last `declared` globals of `text` given as the ones the
+/// passes declared after the module's.
+fn lowered_declaring(
+    tti: &dyn Tti,
+    text: &str,
+    declared: usize,
+) -> (Option<i64>, usize) {
     let module = llrm_mir::parse::module(&format!("target datalayout = \"{}\"\n{text}", Platform::Linux.datalayout())).expect("parses");
     let layout = DataLayout::parse(module.datalayout.as_deref().expect("a datalayout")).expect("layout");
     let (id, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
     let declarations: Vec<_> = module.globals.iter().cloned().collect();
     let count = function.walk().count();
+    let (module_globals, declared) = declarations.split_at(declarations.len() - declared);
     let request = LoweredFunction {
-        declared: &[],
+        declared,
         context: &module.context,
-        globals: &declarations,
+        globals: module_globals,
         metadata: &module.metadata,
         layout: &layout,
         function,
@@ -83,4 +94,14 @@ fn many_live_floats_cost_their_spills() {
     let together = lowered(&*arm64(), &body(true));
     assert_eq!(spread.1, together.1, "the same IR instructions");
     assert!(together.0.expect("lowers") > spread.0.expect("lowers"), "{together:?} against {spread:?}");
+}
+
+/// The copy of a trial calls a function a pass declared after the module's
+/// globals: the first lowered trial indexed past the module's globals and
+/// panicked in six cells (lru, jpeg_fixed, jpeg_single at -O2 and -O3).
+#[test]
+fn a_copy_calling_a_function_the_passes_declared_lowers() {
+    let text = "define void @f() {\n  call void @g()\n  ret void\n}\ndeclare void @g()\n";
+    let (bytes, _) = lowered_declaring(&*arm64(), text, 1);
+    assert!(bytes.is_some_and(|bytes| bytes > 0));
 }
