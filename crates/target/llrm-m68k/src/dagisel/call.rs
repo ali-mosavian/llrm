@@ -290,6 +290,15 @@ impl TargetCalling for M68kCalling {
         M68kCalling::lower_formal_arguments(self, dag, chain, ins, fixed)
     }
 
+    /// The variadic arguments start where the named ones' stack words end.
+    fn variadic_frame_offset(
+        &self,
+        fixed: usize,
+    ) -> Option<i64> {
+        let (offsets, _) = self.place(fixed);
+        Some(offsets.last().map_or(0, |last| last + 4))
+    }
+
     fn lower_return(
         &self,
         dag: &mut SelectionDAG,

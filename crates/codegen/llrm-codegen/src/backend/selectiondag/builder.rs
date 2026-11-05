@@ -1339,7 +1339,11 @@ impl Builder<'_> {
                 self.dag.set_root(copy);
                 self.info.variadic_buffer = Some(reg);
             }
-            self.dag.var_args_frame_index = Some(-(offsets.len() as i32 + 1));
+            let index = -(offsets.len() as i32 + 1);
+            if let Some(offset) = calling.variadic_frame_offset(ins.len()) {
+                self.dag.fixed_offsets.insert(index, offset);
+            }
+            self.dag.var_args_frame_index = Some(index);
         }
         Ok(())
     }

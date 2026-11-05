@@ -86,6 +86,7 @@ pub fn program_for(
     text: &str,
     cpu: Cpu,
 ) -> Result<Program, String> {
+    let text = crate::vaarg::without_va_arg(text);
     let mut kept = String::with_capacity(text.len());
     for line in text.lines() {
         if line.starts_with("target triple") || line.starts_with(';') {
