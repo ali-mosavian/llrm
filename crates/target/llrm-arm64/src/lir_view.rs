@@ -471,6 +471,17 @@ pub fn set_frame_pointer_free(free: bool) {
     FP_FREE.store(free, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Whether `x16` and `x17` may be allocated: the frame needs no scratch.
+static SCRATCH_FREE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_scratch_free(free: bool) {
+    SCRATCH_FREE.store(free, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn scratch_free() -> bool {
+    SCRATCH_FREE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 fn frame_pointer_free() -> bool {
     FP_FREE.load(std::sync::atomic::Ordering::Relaxed)
 }
@@ -484,7 +495,13 @@ fn gpr_order() -> Vec<RegId> {
     // The caller-saved registers first, then x19..x28. x16 and x17 are the
     // frame lowerer's scratch registers; x15 and, off Darwin, x18 are
     // allocatable (the pin's `getReservedRegs` reserves x18 on Darwin only).
-    let extra: Vec<u32> = if darwin() { vec![15] } else { vec![15, 18] };
+    let mut extra: Vec<u32> = vec![15];
+    if scratch_free() {
+        extra.extend([16, 17]);
+    }
+    if !darwin() {
+        extra.push(18);
+    }
     (9..=14u32)
         .chain((0..=8).rev())
         .chain(extra)

@@ -31,3 +31,28 @@ fn darwin_never_allocates_x29() {
         .collect();
     assert!(used.is_empty(), "x29 stays the frame pointer: {used:?}");
 }
+
+/// With `x29` free the leaf still ran out of registers: `x16` and `x17` were
+/// the lowerer's, reserved for the offsets a large frame cannot encode.
+#[test]
+fn a_small_frame_gives_x16_and_x17_to_the_allocator() {
+    let _one_at_a_time = LOCK.lock().unwrap_or_else(|held| held.into_inner());
+    let asm = driver::assembly(include_str!("data/frame_pointer_free.ll"), Platform::Linux, Level::O2).expect("lowers");
+    assert!(asm.contains("x16") && asm.contains("x17"), "{asm}");
+}
+
+/// A frame of 24 KB needs the pair for its offsets: they stay out of the
+/// allocation (every use is an address built from `sp`).
+#[test]
+fn a_large_frame_keeps_x16_and_x17_for_its_offsets() {
+    let _one_at_a_time = LOCK.lock().unwrap_or_else(|held| held.into_inner());
+    let asm = driver::assembly(include_str!("data/frame_scratch_big.ll"), Platform::Linux, Level::O2).expect("lowers");
+    let data_uses: Vec<&str> = asm
+        .lines()
+        .filter(|line| {
+            (line.contains("x16") || line.contains("x17"))
+                && !(line.contains("sp") || line.contains("movz") || line.contains("movk") || line.contains("[x1"))
+        })
+        .collect();
+    assert!(data_uses.is_empty(), "{data_uses:?}");
+}

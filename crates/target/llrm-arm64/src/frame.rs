@@ -147,6 +147,20 @@ fn object_uses(function: &MFunc) -> Vec<u64> {
 /// order is the index order, the first object at the top, and its `sub sp; str
 /// [sp, #8]` is two instructions the fold makes one (exit: none, the rule is
 /// the better one).
+/// The frame's size by `per_register` bytes for each register, as a bound on
+/// what spilling adds: locals, the registers, the saves.
+pub fn frame_bound(
+    function: &MFunc,
+    per_register: u64,
+) -> u64 {
+    let (_, locals) = place_objects(function);
+    locals + per_register * u64::from(function.next_register) + 512
+}
+
+/// The frame size at which an offset may need a scratch register
+/// (`x16`/`x17`, the lowerer's pair): below it, no offset does.
+pub const SCRATCH_FREE_BELOW: u64 = 4000;
+
 fn place_objects(function: &MFunc) -> (Vec<u64>, u64) {
     let uses = object_uses(function);
     let size = |at: usize| function.slots[at].size.max(1);
