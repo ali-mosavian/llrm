@@ -2107,9 +2107,28 @@ pub fn unroll_loops(run: &mut Run) -> bool {
         let capacity = run.function.block_capacity();
         let body = lp.get_blocks().to_vec();
         let holds_loops = lp.get_sub_loops().next().is_some();
+        let inside: Vec<BlockId> = if holds_loops {
+            analyzed
+                .loops
+                .get_loops_in_preorder()
+                .iter()
+                .filter(|one| one.get_header() != header && lp.contains_loop(Some(**one)))
+                .map(|one| one.get_header())
+                .collect()
+        } else {
+            Vec::new()
+        };
         let result = try_to_unroll_loop(run, &analyzed, lp);
         if result == Unrolled::Unmodified {
             continue;
+        }
+        // The loops of a nest whose outer loop is unrolled are its copies'
+        // loops, whichever copy keeps the first ids: they are priced as the
+        // copies are (`price.rs`, loops this run made).
+        if result == Unrolled::Fully {
+            for one in &inside {
+                run.first.remove(one);
+            }
         }
         let peeled = result == Unrolled::Peeled;
         changed = true;
