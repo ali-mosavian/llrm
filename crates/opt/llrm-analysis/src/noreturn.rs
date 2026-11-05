@@ -290,17 +290,58 @@ pub fn stranded(
     blocks.iter().map(|block| block.at).filter(|at| !returning.contains(at)).collect()
 }
 
+thread_local! {
+    /// The blocks that reach a return, for the body state last asked about.
+    static RETURNING: std::cell::RefCell<Option<(llrm_mir::module::Mark, std::rc::Rc<IdSet<i64>>)>> =
+        const { std::cell::RefCell::new(None) };
+    static RETURNING_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has found a body's returning blocks, for a test.
+pub fn returning_builds() -> usize {
+    RETURNING_BUILDS.with(std::cell::Cell::get)
+}
+
+/// The blocks from which some path reaches a `ret`, found backward from the
+/// returns once per state of `function`: its mark names the state, which every
+/// edit moves.
+fn returning_blocks(function: &Function) -> std::rc::Rc<IdSet<i64>> {
+    let now = function.mark();
+    if let Some(held) = RETURNING.with(|held| {
+        held.borrow().as_ref().filter(|(mark, _)| *mark == now).map(|(_, blocks)| std::rc::Rc::clone(blocks))
+    }) {
+        return held;
+    }
+    RETURNING_BUILDS.with(|count| count.set(count.get() + 1));
+    let mut returning = IdSet::new();
+    let mut pending: Vec<i64> = cfg::graph(function).iter().map(|block| block.at).filter(|&at| _returns(function, at)).collect();
+    while let Some(at) = pending.pop() {
+        if returning.insert(at) {
+            pending.extend(function.predecessors(cfg::block(at)).into_iter().map(cfg::id));
+        }
+    }
+    let returning = std::rc::Rc::new(returning);
+    RETURNING.with(|held| *held.borrow_mut() = Some((now, std::rc::Rc::clone(&returning))));
+    returning
+}
+
 /// Whether every block of `starts` is in [`stranded`]: none reaches a return
-/// or `header`.
+/// or `header`. A start in the returning blocks decides it at once; the others
+/// reach no return, so the search for `header` stays in the blocks that do
+/// not.
 pub fn all_stranded(
     function: &Function,
     header: i64,
     starts: &IdSet<i64>,
 ) -> bool {
+    let returning = returning_blocks(function);
+    if starts.iter().any(|at| returning.contains(&at)) {
+        return false;
+    }
     let mut seen = IdSet::new();
     let mut pending: Vec<i64> = starts.iter().collect();
     while let Some(at) = pending.pop() {
-        if at == header || _returns(function, at) {
+        if at == header {
             return false;
         }
         if seen.insert(at) {

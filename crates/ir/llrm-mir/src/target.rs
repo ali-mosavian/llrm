@@ -127,6 +127,8 @@ pub struct Tuning {
     /// a function not tuned for size, is `rep movsd` and `rep movsb` inline,
     /// not a call of `memcpy` (gcc's `rep_prefix_4_byte` stringop strategy for
     /// the 486 and P5). false: the pin's `EmitTargetCodeForMemcpy`, a libcall.
+    /// Linux x86-64 stays false: glibc's `memcpy` of 0-32 bytes is 6.4 TSC
+    /// ticks a call, `rep movsb` 8.2 (Ryzen 9 9950X3D, fsrm; 2026-11-05).
     pub inline_variable_memcpy: bool,
     /// DEVIATE REC5-1 (owner w2, exit 2026-11-20): IPSCCP widens a range that
     /// keeps growing to its half-line, keeping the sign, not to overdefined
