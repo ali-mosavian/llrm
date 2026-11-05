@@ -292,13 +292,23 @@ def warnings(head: str, description: str, base: str = BASE, cwd: Path = ROOT, ti
     return [] if BODY_CHECKS == "refuse" else body_checks(head, description, base, cwd, title)
 
 
+CONVENTIONAL = re.compile(r"(feat|fix|perf|refactor|test|docs|build|ci|chore|style|revert)(\([^)]+\))?!?: \S")
+
+
+def subject_refusals(title: str) -> list[str]:
+    """The squash subject is the PR title: a merge-commit line or a non-conventional title must not land."""
+    if not title or CONVENTIONAL.match(title):
+        return []
+    return [f"squash subject {title!r} is not `type(scope): description` (a 'Merge ...' title is a merge-commit line): retitle the PR"]
+
+
 def refusals(head: str, description: str, base: str = BASE, cwd: Path = ROOT, title: str = "") -> list[str]:
     """Why this head may not be squashed into `base`; empty if it may."""
     if subprocess.run(["git", "merge-base", "--is-ancestor", base, head], cwd=cwd).returncode:
         return [f"the PR head does not contain {base}: merge it in first (a stale head squashes other PRs' work away)"]
     why = [f"{page}: still links to {path}, which the squash deletes; remove or repoint the link in this PR" for path, page in dead_links(base, head, cwd)]
     soft = body_checks(head, description, base, cwd, title) if BODY_CHECKS == "refuse" else []
-    return soft + why + conflict_markers(base, head, cwd) + assistant_mentions(title, description, base, head, cwd)
+    return subject_refusals(title) + soft + why + conflict_markers(base, head, cwd) + assistant_mentions(title, description, base, head, cwd)
 
 
 PRECHECK_CACHE = LANDED_LOG.parent / "precheck-cache.json"  # (PR head sha, release/next sha) -> the verdict line, and the head's own check failures per sha: ~40 candidates per cycle must not rebuild the dev checkout each
