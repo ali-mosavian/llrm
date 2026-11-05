@@ -168,11 +168,11 @@ fn candidate(
         && !what.indirect
         && one.defines.len() == 1
         && matches!(what.dests.as_slice(), [Loc::Held(_)])
-        && (loads_invariant
-            || what
-                .sources
-                .iter()
-                .all(|place| held(place) || (what.op == Operation::Address && matches!(place, Loc::Mem(_)))))
+        // A `lea` is the pin's candidate (its source is a memory operand here),
+        // but making it one cost m32 quicksort -O3 +9.7% clk, `x_life` -O3
+        // +2.6% and `x_transpose` +14 B (#7261): out until it is re-landed with
+        // an m32 clock check.
+        && (loads_invariant || what.sources.iter().all(held))
         && one.call.is_none()
         && one.group.is_none()
         && !one.volatile()
@@ -1032,11 +1032,12 @@ mod tests {
         Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses))
     }
 
-    /// `lea v10, [v1+v1*2]` made again in the next block was not a candidate
-    /// (its source is a memory operand), so a loop's `3*acc` was recomputed
-    /// after the loop: countdown +3 B at m32.
+    /// #7261 made a `lea` a candidate and m32 quicksort -O3 got +9.7% clk,
+    /// `x_life` -O3 +2.6%, `x_transpose` +14 B, while the countdown's `3*acc`
+    /// lost 3 B less. Out again: the `lea` of the same base and index stays
+    /// where it is. Re-land with the m32 bench rows (ignored below).
     #[test]
-    fn test_a_lea_of_the_same_base_and_index_is_made_once() {
+    fn test_a_lea_of_the_same_base_and_index_is_not_shared() {
         let lea = |at, into, from| {
             let memory = Mem {
                 base: Some(Held { value: from, width: 4, offset: 0 }),
@@ -1060,7 +1061,7 @@ mod tests {
                 .count()
         };
         assert_eq!(count(&body), 2, "the premise: two leas");
-        assert_eq!(count(&shared(&body, &RegisterClasses::m16())), 1);
+        assert_eq!(count(&shared(&body, &RegisterClasses::m16())), 2);
     }
 
     /// The guard of the test above: a `lea` of another index or another scale

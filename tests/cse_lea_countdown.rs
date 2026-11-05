@@ -38,14 +38,20 @@ fn countdown(flags: &[&str]) -> (String, Vec<String>) {
 /// counter's `dec`, which leaves CF alone, made the block's end look live. 45
 /// -> 48 B at -Os, 170 -> 173 at -O2.
 #[test]
-fn the_triple_is_made_once_and_the_decrement_stays_a_dec() {
+fn the_decrement_stays_a_dec() {
     for flags in [&["-Os"][..], &["-O2"][..]] {
         let (text, lines) = countdown(flags);
         let decrements = lines.iter().filter(|line| line.starts_with("lea ") && line.ends_with("-1]")).count();
         assert_eq!(decrements, 0, "{flags:?}\n{text}");
-        if flags == ["-Os"] {
-            let triples = lines.iter().filter(|line| line.starts_with("lea ") && line.ends_with("*2]")).count();
-            assert_eq!(triples, 1, "{flags:?}\n{text}");
-        }
     }
+}
+
+/// The `lea` CSE of #7261, out for the m32 regressions (quicksort -O3,
+/// `x_life`): re-land with the m32 bench rows.
+#[test]
+#[ignore = "lea CSE: re-land with an m32 clock check"]
+fn the_triple_is_made_once() {
+    let (text, lines) = countdown(&["-Os"]);
+    let triples = lines.iter().filter(|line| line.starts_with("lea ") && line.ends_with("*2]")).count();
+    assert_eq!(triples, 1, "{text}");
 }
