@@ -60,6 +60,8 @@ pub struct TargetLoweringInfo {
     shift_amount: ShiftAmount,
     /// `getSetCCResultType` for a scalar: x86 compares into an `i8`.
     set_cc_result: MVT,
+    /// `TargetLibraryInfo::getIntSize`, where the target states it.
+    int_size: Option<u32>,
 }
 
 /// What `getScalarShiftAmountTy` returns.
@@ -95,7 +97,14 @@ impl TargetLoweringInfo {
                 integers[below] = (TypeAction::PromoteInteger, nearest_legal);
             }
         }
-        TargetLoweringInfo { integers, far, soft_float: false, shift_amount: ShiftAmount::I8, set_cc_result: MVT::I8 }
+        TargetLoweringInfo {
+            integers,
+            far,
+            soft_float: false,
+            shift_amount: ShiftAmount::I8,
+            set_cc_result: MVT::I8,
+            int_size: None,
+        }
     }
 
     /// The target has no FPU: `f32` and `f64` are softened to `i32` and
@@ -128,6 +137,23 @@ impl TargetLoweringInfo {
     ) -> TargetLoweringInfo {
         self.set_cc_result = vt;
         self
+    }
+
+    /// The C `int` of the target's library, in bits: the type a library
+    /// shift takes its amount in (`ExpandIntRes_Shift`). DEVIATE: a target
+    /// that does not state it keeps passing the amount in its shift-amount
+    /// type, where the pin makes it an `int` (16 for the 16-bit arches, else
+    /// 32). Owner: each target. Exit: 2026-11-20.
+    pub fn with_int_size(
+        mut self,
+        bits: u32,
+    ) -> TargetLoweringInfo {
+        self.int_size = Some(bits);
+        self
+    }
+
+    pub fn int_size(&self) -> Option<u32> {
+        self.int_size
     }
 
     pub fn shift_amount(&self) -> ShiftAmount {
