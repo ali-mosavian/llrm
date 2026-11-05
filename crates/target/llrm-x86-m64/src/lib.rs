@@ -378,6 +378,10 @@ impl llrm_target::Target for M64 {
                             recursive_inlining: Some((8, 450)),
                             // gcc's 15/30 size units in `gcc_insns` (m64 counts the sext/gep of its IR).
                             recursive_edge_growth: Some((16, 31)),
+                            // DEVIATE REC-2, as m32: -O2 takes gcc's 450 (fib 25941 -> 10793
+                            // clk, frames -20%, rectwo -12%; -O3 stays at 150). Owner m64,
+                            // exit 2026-11-20.
+                            recursive_inlining_growth: Some((450, 150)),
                             // DEVIATE REC5-1 (owner w2, exit 2026-11-20), as m32.
                             ipsccp_widen_keeps_sign: true,
                             // DEVIATE UJ2 (owner m64, exit 2026-11-14): BasicTTIImpl's
