@@ -43,6 +43,15 @@ pub(super) fn full_unroll_pays(
     if rate <= 0 || run.options.opt_size || run.options.min_size || run.options.opt_level < 2 {
         return true;
     }
+    // A loop of known trips in a nest of loops of known trips is a step to
+    // unrolling the whole nest, whose counters are then all constants: what the
+    // outer loops make constant (a table's element, a divisor) folds in the
+    // copies and this loop's own analysis cannot see it (tests/run
+    // int64_division: 7 x 6 divisions fold to constants; vetoed, 14 -> 198
+    // instructions). The pin's threshold decides it.
+    if encloses_known_trips(run, se, analyzed, lp, up.full_unroll_max_count) {
+        return true;
+    }
     let clocks = crate::profit::costs(run.outer);
     let bytes = run.outer.target().size_costs();
     let blocks = lp.get_blocks();
@@ -301,4 +310,37 @@ fn local_array_at(
             Operand::Block(_) => return None,
         }
     }
+}
+
+/// Whether `lp` is innermost and has an enclosing loop, and every loop around
+/// it runs a known number of trips, at most `most`.
+fn encloses_known_trips(
+    run: &Run,
+    se: &mut ScalarEvolution,
+    analyzed: &Analyzed,
+    lp: Loop,
+    most: u32,
+) -> bool {
+    if !lp.is_innermost() || lp.get_parent_loop().is_none() {
+        return false;
+    }
+    let cx = llrm_analysis::scev::Cx {
+        context: &*run.context,
+        globals: run.globals,
+        metadata: run.metadata,
+        function: &*run.function,
+        layout: run.layout,
+        loops: &analyzed.loops,
+        tree: &analyzed.tree,
+        assumptions: &analyzed.assumptions,
+    };
+    let mut around = lp.get_parent_loop();
+    while let Some(parent) = around {
+        let trips = se.get_small_constant_trip_count(&cx, parent.get_header());
+        if trips == 0 || trips > most {
+            return false;
+        }
+        around = parent.get_parent_loop();
+    }
+    true
 }
