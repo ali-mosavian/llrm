@@ -17,8 +17,7 @@
 //! out, named where they stood: the factorization of `(A && B) || (C && B)`,
 //! `~(A & B) & (A | B)`, the `select (~a | c)`, `(c & b)`, `(a | c)` and
 //! `(c & ~b)` forms (`getFreelyInverted`), `isCheckForZeroAndMulWithOverflow`,
-//! `foldBooleanAndOr` (and/or/xor family), the implied-condition
-//! simplifications and `FoldOrOfLogicalAnds`.
+//! the implied-condition simplifications and `FoldOrOfLogicalAnds`.
 //!
 //! DEVIATE 3: `prof` branch weights are dropped where the arms swap.
 //!
@@ -34,6 +33,7 @@ use llrm_mir::valuetracking::guarantee::implies_poison;
 use llrm_mir::valuetracking::pattern;
 
 use crate::combine::{Combiner, Visit};
+use crate::combine_icmp_logic::fold_boolean_and_or;
 use crate::combine_shared::{has_one_use, query, replace_operand};
 use crate::combine_visit_select::{Fold, Sel};
 
@@ -49,6 +49,7 @@ const FOLDS: &[Fold] = &[
     de_morgan_or,
     select_deciding_itself_true,
     select_deciding_itself_false,
+    boolean_and_or_folded,
 ];
 
 /// `foldSelectOfBools`: the first of `FOLDS` that applies to an `i1` select
@@ -258,6 +259,23 @@ fn select_deciding_itself_false(
     }
     replace_operand(c, inst, 0, a);
     Some(Visit::Changed)
+}
+
+/// `select c, x, false` and `select c, true, x` through `foldBooleanAndOr`
+/// with `IsLogical`
+/// ([InstCombineSelect.cpp#L3967](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineSelect.cpp#L3967)):
+/// two compares of one value as a range check, for one.
+fn boolean_and_or_folded(
+    c: &mut Combiner,
+    inst: InstId,
+    sel: &Sel,
+) -> Option<Visit> {
+    let is_and = c.is_false(sel.if_false);
+    if !is_and && !c.is_true(sel.if_true) {
+        return None;
+    }
+    let other = if is_and { sel.if_true } else { sel.if_false };
+    Some(Visit::Replace(fold_boolean_and_or(c, inst, sel.cond, other, is_and, true)?))
 }
 
 #[cfg(test)]
