@@ -383,3 +383,29 @@ x:
         "{closed}"
     );
 }
+
+/// L4: an exit phi goes after the block's own phis, as the old pass put it.
+/// Placed first, as the pin does, x86 jpeg Os grew 5..38 B and 6502 grep Os 38 B:
+/// the allocator adds spills for some orders of an exit's phis (row QR-1).
+#[test]
+fn test_an_exit_phi_goes_after_the_phis_the_block_already_has() {
+    let closed = closed_once(
+        "define i16 @f(i16 %n) {
+b0:
+  br label %h
+
+h:
+  %i = phi i16 [ 0, %b0 ], [ %i2, %h ]
+  %i2 = add i16 %i, 1
+  %t = icmp ult i16 %i2, %n
+  br i1 %t, label %h, label %x
+
+x:
+  %old = phi i16 [ 5, %h ]
+  %r = add i16 %old, %i2
+  ret i16 %r
+}
+",
+    );
+    assert!(closed.contains("x:\n  %old = phi i16 [ 5, %h ]\n  %i2.lcssa = phi i16 [ %i2, %h ]\n"), "{closed}");
+}

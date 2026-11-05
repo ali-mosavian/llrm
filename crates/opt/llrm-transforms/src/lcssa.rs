@@ -17,7 +17,7 @@
 //! - A candidate's uses outside the loop (a phi's counting at its incoming
 //!   block) are rewritten. A use in an unreachable block becomes poison.
 //! - Each exit block its definition dominates gets a phi, named after the value
-//!   with `.lcssa`, placed first in the block, with one input per predecessor.
+//!   with `.lcssa`, placed after the block's phis (L4), with one input per predecessor.
 //!   An input from a block outside the loop is itself rewritten.
 //! - A use in an exit block reads that block's phi, a lone new phi is read
 //!   directly, and any other use goes through `SsaUpdater`, which places a phi
@@ -85,6 +85,10 @@
 //! - L2 No `ScalarEvolution` and no debug records: the pin caches the SCEV of a
 //!   new phi and moves `dbg.value`s; neither is kept here (S1 of `ssaupdater`).
 //! - L3 A phi's inputs come in predecessor id order, not use-list order.
+//! - L4 An exit phi goes after the block's phis, in value-id order (2026-11-05, w2,
+//!   exit 2026-11-12, row QR-1): the pin puts it first. The register allocator adds
+//!   spills for some orders of an exit block's phis where the pin's code size is
+//!   constant; the old order is the one that does not (x86 jpeg Os, 6502 grep Os).
 //!
 //! # See also
 //! LLVM's
@@ -156,7 +160,7 @@ fn form_on_all_loops(
     tree: &DomTree,
     info: &LoopInfo,
 ) -> Result<bool, String> {
-    let mut form = Form { context, layout, function, tree, info, exit_blocks: HashMap::new() };
+    let mut form = Form { context, layout, function, tree, info, exit_blocks: HashMap::new(), placed: HashMap::new() };
     let mut changed = false;
     for top in info.top_level_loops() {
         changed |= form.recursively(top)?;
@@ -173,6 +177,8 @@ struct Form<'a> {
     info: &'a LoopInfo,
     /// The loops' exit blocks, found once each: closing adds phis, no edge.
     exit_blocks: HashMap<LoopId, Rc<[BlockId]>>,
+    /// The phis this run added, with the value each closes (L4).
+    placed: HashMap<InstId, ValueId>,
 }
 
 impl Form<'_> {
@@ -337,7 +343,8 @@ impl Form<'_> {
                 let phi = exit_phi(self.function, value);
                 let incoming = preds.iter().map(|&pred| (Operand::Value(value), pred)).collect::<Vec<_>>();
                 self.function.set_operands(phi, from_arms(&incoming));
-                insert_first(self.function, exit, phi)?;
+                insert_in_value_order(self.function, exit, phi, value, &self.placed)?;
+                self.placed.insert(phi, value);
                 // An exit with a predecessor outside the loop: that input is
                 // rewritten in terms of a different phi.
                 for (at, &pred) in preds.iter().enumerate() {
@@ -363,9 +370,8 @@ impl Form<'_> {
                     user_block = self.incoming_block(one);
                 }
                 // A use in an exit block reads the phi placed there.
-                let front = self.function.iter_block(user_block).next();
+                let front = added.iter().copied().find(|&one| self.function.parent(one) == Some(user_block));
                 if let Some(front) = front
-                    && self.function.instruction(front).opcode == Opcode::Phi
                     && exits.contains(&user_block)
                 {
                     let phi = self.function.instruction(front).result.expect("a phi's value");
@@ -427,14 +433,30 @@ impl Form<'_> {
     }
 }
 
-/// Places `phi` first in `block`: `insertBefore(ExitBB->begin())`.
-fn insert_first(
+/// Places `phi` for `value` after the block's phis and the phis this run added
+/// for lower values (DEVIATE L4: the pin puts it first in the block).
+fn insert_in_value_order(
     function: &mut Function,
     block: BlockId,
     phi: InstId,
+    value: ValueId,
+    added: &HashMap<InstId, ValueId>,
 ) -> Result<(), String> {
-    let first = function.iter_block(block).next();
-    function.insert(phi, first.map_or(Position::End(block), Position::Before))
+    let mut first_other = None;
+    for inst in function.iter_block(block) {
+        if function.instruction(inst).opcode != Opcode::Phi {
+            first_other = Some(inst);
+            break;
+        }
+        match added.get(&inst) {
+            Some(&of) if of > value => {
+                first_other = Some(inst);
+                break;
+            }
+            _ => {}
+        }
+    }
+    function.insert(phi, first_other.map_or(Position::End(block), Position::Before))
 }
 
 /// `block`'s instructions other than its phis, in order.
