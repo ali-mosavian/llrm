@@ -41,6 +41,7 @@ pub mod regalloc;
 pub mod scaledindex;
 pub mod target;
 pub mod timing;
+pub mod vaarg;
 
 use llrm_lir::registers::{RegId, Row};
 

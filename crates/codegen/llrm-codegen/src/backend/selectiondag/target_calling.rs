@@ -270,6 +270,17 @@ pub trait TargetCalling: Debug + Sync {
         None
     }
 
+    /// `LowerFormalArguments` of a variadic function: the offset in the stack
+    /// arguments of the first variadic one (`CreateFixedObject(1, StackSize,
+    /// true)`), which `va_start` stores the address of; none for a target that
+    /// keeps them elsewhere.
+    fn variadic_frame_offset(
+        &self,
+        _fixed: usize,
+    ) -> Option<i64> {
+        None
+    }
+
     /// `SelectionDAGTargetInfo::EmitTargetCodeForMemcpy` (and `Memmove`, which
     /// the pin routes to it on wasm): the node that copies `size` bytes, or
     /// none to leave it to the inline expansion and the library call.
