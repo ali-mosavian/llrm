@@ -62,6 +62,7 @@ use crate::model::lir::{Block, Insn, LirBlock, LirBody, Phi};
 
 struct Info {
     source_order: bool,
+    m64: bool,
 }
 
 impl SchedInfo for Info {
@@ -95,6 +96,15 @@ impl SchedInfo for Info {
         reg: u16,
     ) -> bool {
         Some(reg) == super::dagisel_adapter::pin_register(super::dagisel_adapter::EFLAGS_ID)
+    }
+
+    // `ADJCALLSTACKDOWN32`/`64` and `ADJCALLSTACKUP32`/`64`, numbered alike in every x86 table.
+    fn call_frame_setup(&self) -> Option<u32> {
+        Some(if self.m64 { 768 } else { 767 })
+    }
+
+    fn call_frame_destroy(&self) -> Option<u32> {
+        Some(if self.m64 { 770 } else { 769 })
     }
 }
 
@@ -386,6 +396,17 @@ impl CallConventions<'_> {
 }
 
 impl super::emit::Conventions for CallConventions<'_> {
+    fn effects(
+        &self,
+        callee: Option<&Callee>,
+    ) -> llrm_mir::memory::Effects {
+        let Some(Callee::Global(id)) = callee else { return llrm_mir::memory::Effects::ANY };
+        let callees = self.contracts.and_then(|contracts| contracts.facts).and_then(|facts| facts.callees());
+        callees
+            .and_then(|callees| callees.get(&llrm_mir::context::GlobalId(*id)).map(|summary| summary.effects))
+            .unwrap_or(llrm_mir::memory::Effects::ANY)
+    }
+
     fn written(
         &self,
         callee: Option<&Callee>,
@@ -681,6 +702,42 @@ pub fn selected(
     selected_in_pool(module, name, arch, cpu, libcalls, None, &mut Pool::new(module.globals.len() as i64))
 }
 
+/// The table for a target `bits` wide with `features`, built once per thread
+/// and copied for each function: the constructors fill thousands of entries
+/// (65.7 M instructions of tiny600's 4 724 M, 600 functions).
+fn lowering_for(
+    bits: u32,
+    features: Features,
+    build: impl FnOnce() -> TargetLowering,
+) -> TargetLowering {
+    type Key = (u32, [bool; 8]);
+    thread_local! {
+        static TABLES: std::cell::RefCell<Vec<(Key, TargetLowering)>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let key: Key = (
+        bits,
+        [
+            features.cmov,
+            features.bmi,
+            features.lzcnt,
+            features.popcnt,
+            features.movbe,
+            features.shld_slow,
+            features.sse2,
+            features.soft_float,
+        ],
+    );
+    TABLES.with(|tables| {
+        let mut tables = tables.borrow_mut();
+        if let Some((_, found)) = tables.iter().find(|(known, _)| *known == key) {
+            return found.clone();
+        }
+        let made = build();
+        tables.push((key, made.clone()));
+        made
+    })
+}
+
 pub fn selected_in_pool(
     module: &Module,
     name: &str,
@@ -808,14 +865,17 @@ fn selected_in(
     let mut tli = if m16 {
         // `useSoftFloat()`, or no x87 among the function's target features.
         let soft_float = crate::backend::isel::soft_float(&function.attrs);
-        TargetLowering::x86_16(Features { soft_float, ..Features::default() }, MVT::I16)
+        let features = Features { soft_float, ..Features::default() };
+        lowering_for(16, features, || TargetLowering::x86_16(features, MVT::I16))
     } else if m64 {
-        TargetLowering::x86_64(Features { sse2: arch.scalar_sse(), cmov: true, ..Features::default() }, MVT::I64)
+        let features = Features { sse2: arch.scalar_sse(), cmov: true, ..Features::default() };
+        lowering_for(64, features, || TargetLowering::x86_64(features, MVT::I64))
     } else {
         // The machine fact is the cost model's: the same `has_cmov` SimplifyCFG
         // reads.
         let cmov = cpu.target().tti().is_some_and(|tti| tti.has_cmov());
-        TargetLowering::x86_32(Features { cmov, ..Features::default() }, MVT::I32)
+        let features = Features { cmov, ..Features::default() };
+        lowering_for(32, features, || TargetLowering::x86_32(features, MVT::I32))
     };
     // The soft-float routines are spelled as the C compiler spelled their
     // definitions.
@@ -892,8 +952,16 @@ fn selected_in(
     // `LowerFormalArguments`: the first variadic argument is the next fixed
     // object, where the convention puts the first stack argument it does not
     // name.
+    // Under Win64 the unnamed register arguments are homed in the caller's
+    // shadow space, one cell each, contiguous with the stack ones.
+    let positional = arch.calling().by_number(function.calling_convention).filter(|found| found.positional);
     if module.signature(function.ty).2 {
-        cells.push(convention.stack_arguments);
+        match &positional {
+            Some(found) if convention.parameters.len() < found.argument_registers.len() => {
+                cells.extend((convention.parameters.len()..found.argument_registers.len()).map(|at| arch.first_argument_offset(false) + at as i64 * 8));
+            }
+            _ => cells.push(convention.stack_arguments),
+        }
     }
     let frame = Frame::new(cells, contracts.map_or(0, |one| one.hole));
     // The function's static allocas are frame objects 0, 1, ... in the order
@@ -948,7 +1016,7 @@ fn selected_in(
     }
     // `LowerFormalArguments`' register save area: 6 * 8 bytes of integer
     // registers and 8 * 16 of vector ones.
-    if m64 && module.signature(function.ty).2 {
+    if m64 && module.signature(function.ty).2 && positional.is_none() {
         info.variadic_save = Some(Temporaries(&frame).create_stack_temporary(176, 16));
     }
     let mut hooks = X86Hooks::new(Options {
@@ -1092,6 +1160,7 @@ fn selected_in(
         }
         let arrived = arrival_widths(&built.dag, &built.live_ins);
         let done = select_block(
+            &mut info,
             &mut built.dag,
             &tli,
             &mut X86Lowering {
@@ -1127,7 +1196,7 @@ fn selected_in(
             },
             &selector,
             &mut hooks,
-            &Info { source_order: true },
+            &Info { source_order: true, m64 },
             &ctx,
             &mut state,
             block_at[&block.0],
@@ -1375,6 +1444,13 @@ fn selected_in(
     if cpu.rounds_float_spills || cpu.spills_extended {
         let table =
             state.float_bytes.iter().map(|(number, bytes)| (*number, if cpu.spills_extended { 10 } else { *bytes }));
+        body.float_bytes = std::sync::Arc::new(table.collect());
+    } else {
+        // Nib keeps the qword (D-RFP1), but not for what is exactly an f32:
+        // a dword holds it whole (`fld dword` and back), and is what the
+        // value's own type spills as.
+        let exact = |number: &u32, bytes: &u32| *bytes == 4 && state.float_exact.get(number) == Some(&true);
+        let table = state.float_bytes.iter().map(|(number, bytes)| (*number, if exact(number, bytes) { 4 } else { 8 }));
         body.float_bytes = std::sync::Arc::new(table.collect());
     }
     body.returns_twice = llrm_mir::memory::calls_returns_twice(module, function);
@@ -1638,7 +1714,7 @@ impl Values {
 /// (`addSuccessorWithProb`: a conditional branch's two, a merged condition's
 /// cases), on the blocks whose machine edges they are. An edge nobody stated
 /// has none.
-fn set_odds(
+pub(super) fn set_odds(
     body: &mut LirBody,
     edges: &[(llrm_mir::module::BlockId, llrm_mir::module::BlockId, u32)],
     block_at: &HashMap<u32, i64>,
@@ -1657,20 +1733,25 @@ fn set_odds(
             piece_of.insert(one.at, current);
         }
     }
+    // The blocks that end in a branch, by the piece they belong to: an edge
+    // looks in its piece, not in every block of the body.
+    let mut branching: HashMap<i64, Vec<(i64, &[i64])>> = HashMap::default();
+    for one in body.blocks.iter().filter(|one| one.succ.len() >= 2) {
+        if let Some(&piece) = piece_of.get(&one.at) {
+            branching.entry(piece).or_default().push((one.at, one.succ.as_slice()));
+        }
+    }
     for &(from, to, probability) in edges {
         let (Some(&first), Some(&to_at)) = (block_at.get(&from.0), block_at.get(&to.0)) else { continue };
         // A select made into branches splits the block, and the branch ends
         // the last piece (`transferSuccessorsAndUpdatePHIs`): the edges are
         // that piece's.
-        let Some(lir) = body
-            .blocks
-            .iter()
-            .filter(|one| piece_of.get(&one.at) == Some(&first) && one.succ.len() >= 2 && one.succ.contains(&to_at))
-            .last()
-        else {
+        let candidates = branching.get(&first).map_or(&[][..], Vec::as_slice);
+        body.facts.0.bump_by("odds-examined", candidates.len());
+        let Some(&(at, _)) = candidates.iter().rfind(|(_, succ)| succ.contains(&to_at)) else {
             continue;
         };
-        *stated.entry((lir.at, to_at)).or_insert(0) += u64::from(probability);
+        *stated.entry((at, to_at)).or_insert(0) += u64::from(probability);
     }
     // `normalizeSuccProbs`: the edges of a block share one.
     let mut total: IndexMap<i64, u64> = IndexMap::default();
@@ -1789,4 +1870,31 @@ pub(super) fn read_before_defined(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod lowering_cache_tests {
+    use super::*;
+
+    /// Every function built its target's action tables again: 109 K
+    /// instructions each, 65.7 M of tiny600's 4 724 M. One build per kind of
+    /// target and feature set, however many functions ask.
+    #[test]
+    fn test_the_action_tables_of_a_target_are_built_once_for_all_its_functions() {
+        let features = Features { sse2: true, cmov: true, ..Features::default() };
+        let built = std::cell::Cell::new(0);
+        for _ in 0..50 {
+            lowering_for(64, features, || {
+                built.set(built.get() + 1);
+                TargetLowering::x86_64(features, MVT::I64)
+            });
+        }
+        assert_eq!(built.get(), 1);
+        let other = Features { sse2: false, ..features };
+        lowering_for(64, other, || {
+            built.set(built.get() + 1);
+            TargetLowering::x86_64(other, MVT::I64)
+        });
+        assert_eq!(built.get(), 2, "another feature set is another table");
+    }
 }

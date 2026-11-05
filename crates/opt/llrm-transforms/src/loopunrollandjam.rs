@@ -673,7 +673,7 @@ fn update_phi_blocks_and_values(
 /// the epilog loop, which runs at most `count` times, copied out where its
 /// maximum trip count is `count` (the complete unroll; a partial one is not
 /// translated: nothing then is done).
-fn unroll_remainder_loop(
+pub(crate) fn unroll_remainder_loop(
     run: &mut Run,
     epilog_header: BlockId,
     count: u32,
@@ -708,6 +708,8 @@ fn unroll_remainder_loop(
     }
     let tree = DomTree::of(run.function);
     let loops = LoopInfo::analyze(run.function, || &tree);
+    // `globals` gained the `llvm.assume` declaration the epilog guard needs,
+    // which the module's memoized `Outer::assume_declared` does not know.
     let assumptions = AssumptionCache::of(run.context, &globals, run.metadata, run.function);
     let Some(lp) = loops.get_loop_for(epilog_header) else { return };
     let mut se = ScalarEvolution::new();
@@ -740,12 +742,18 @@ fn unroll_remainder_loop(
     let latches = lp.get_loop_latches(cx.function);
     let capacity = run.function.block_capacity();
     let options = crate::loopunroll::Options { count, max_trip_count: count, max_or_zero, exits };
-    if let Err(error) =
-        crate::loopunroll::unroll_loop_blocks(run.function, epilog_header, &body, &latches, &options, &mut run.emptied)
-    {
+    if let Err(error) = crate::loopunroll::unroll_loop_blocks(
+        run.function,
+        epilog_header,
+        &body,
+        &latches,
+        &options,
+        &mut run.emptied,
+        &mut |_, _, _| {},
+    ) {
         panic!("remainder unroll: {error}");
     }
-    let _ = crate::lcssa::closed(run.function);
+    let _ = crate::lcssa::closed(run.context, run.layout, run.function);
     let analyzed = Analyzed::of(run);
     let after = crate::loopunrollpass::unrolled_blocks(run, capacity, &body);
     simplify_loop_after_unroll(run, Some(&analyzed.loops), &after);
@@ -1423,6 +1431,7 @@ impl LoopUnrollAndJam {
             let memory_unit = llrm_analysis::memory::Unit::within(&*run.context, run.layout, &*run.function, run.outer);
             let mut aa = AggregateAA::new();
             aa.add_aa_result(BasicAA::new(&memory_unit));
+            aa.add_aa_result(llrm_analysis::scopednoaliasaa::ScopedNoAliasAA::new(&memory_unit));
             aa.add_aa_result(TypeBasedAA::new(&memory_unit));
             let mut di = DependenceInfo::new(&mut aa, &memory_unit, &cx, self.options.da);
             is_safe_to_unroll_and_jam(&cx, se, &mut di, l)
@@ -1543,7 +1552,7 @@ impl FunctionPass for LoopUnrollAndJam {
         // only if a loop is unrolled and jammed (as in `loopinterchange`).
         let saved = unit.function.clone();
         crate::loopsimplify::simplified(unit.function);
-        let _ = crate::lcssa::closed(unit.function);
+        let _ = crate::lcssa::closed(unit.context, unit.layout, unit.function);
         let mut run = Run {
             context: unit.context,
             layout: unit.layout,
@@ -1557,6 +1566,7 @@ impl FunctionPass for LoopUnrollAndJam {
             declared: unit.declared,
             emptied: Vec::new(),
             peeled: Default::default(),
+            finished: Default::default(),
             created: Vec::new(),
             scev: llrm_analysis::scev::ScalarEvolution::new(),
             options: UnrollOptions {
@@ -1565,6 +1575,7 @@ impl FunctionPass for LoopUnrollAndJam {
                 min_size: false,
                 only_when_forced: false,
                 prepare_for_lto: false,
+                target_unrolling: false,
             },
         };
         let mut changed = false;

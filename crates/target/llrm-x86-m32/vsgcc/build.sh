@@ -45,9 +45,11 @@ for o in O1 O3; do $LLRM --target=x86_32-wat ${LLRM_FLAGS:-} -mabi=$ABI $LLRM_LD
 cd $O/b
 # Our m32 target states a stack alignment of 4 (S32); the pin's and gcc's Linux default is 16, which keeps a reserved call frame where 4 pushes.
 F="$REF_LD -Dfar= -m32 -march=i486 -fno-pic -fno-stack-protector -fcf-protection=none -fno-asynchronous-unwind-tables"
+# VSGCC_NOVEC=1: the scalar column, both competitors with their vectorizers off (gcc 13 runs its vectorizer at O2/O3 even with no SIMD)
+NV_GCC=; NV_CLANG=; [ -z "${VSGCC_NOVEC:-}" ] || { NV_GCC="-fno-tree-vectorize -fno-tree-slp-vectorize"; NV_CLANG="-fno-vectorize -fno-slp-vectorize"; }
 for o in O1 O2 O3 Os; do
-  gcc $F -mpreferred-stack-boundary=2 -$o -c -o $P.gcc$o.o $S 2>$P.gcc$o.err || echo "FAIL gcc$o $P"
-  $CLANG $F -mstack-alignment=4 -$o -c -o $P.clang$o.o $S 2>$P.clang$o.err || echo "FAIL clang$o $P"
+  gcc $F $NV_GCC -mpreferred-stack-boundary=2 -$o -c -o $P.gcc$o.o $S 2>$P.gcc$o.err || echo "FAIL gcc$o $P"
+  $CLANG $F $NV_CLANG -mstack-alignment=4 -$o -c -o $P.clang$o.o $S 2>$P.clang$o.err || echo "FAIL clang$o $P"
   CS="gcc clang"
   if [ $o = O2 ] || [ $o = Os ]; then  # the ELF build of llrm is for loops.py
     $LLRM --target=x86_32-wat ${LLRM_FLAGS:-} -mabi=$ABI $LLRM_LD -$o -march=i486 -fobject-format=elf -c -o $P.llrmElf$o.o $S 2>$P.llrmElf$o.err || echo "FAIL llrmElf$o $P"

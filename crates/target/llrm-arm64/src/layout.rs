@@ -5,7 +5,9 @@
 //! simplified: no frequencies, so a chain follows the first successor that is
 //! not placed).
 
-use std::collections::{HashMap, HashSet};
+use llrm_spike_mf::cfg::Cfg;
+use llrm_spike_mf::placement::{Graph, Layout, Odds, place};
+use llrm_support::hash::{HashMap, HashSet};
 
 use crate::frame::Lowered;
 use crate::jumptable::Table;
@@ -50,7 +52,7 @@ fn forwards(blocks: &[Lowered]) -> HashMap<String, String> {
             _ => None,
         })
         .collect();
-    let mut out = HashMap::new();
+    let mut out = HashMap::default();
     for (&from, &to) in &direct {
         // A chain, with a bound against a loop of empty blocks.
         let mut end = to;
@@ -93,33 +95,70 @@ fn inverse_over(
     }
 }
 
+/// The branch probabilities by `(from, to)` label number
+/// (`MachineBranchProbabilityInfo`): the IR's, then what the selector kept
+/// for the edges its merged conditions made.
+pub fn edge_odds(
+    module: &llrm_mir::module::Module,
+    function: &llrm_mir::module::Function,
+    layout: &llrm_mir::datalayout::DataLayout,
+    machine: &crate::mfunc::MFunc,
+) -> Odds {
+    use llrm_mir::blockfrequency::BranchProbability;
+    let bpi = llrm_analysis::bpi::BranchProbabilityInfo::of(
+        llrm_analysis::bpi::Module {
+            context: &module.context,
+            declarations: &module.globals,
+            metadata: &module.metadata,
+            layout,
+        },
+        function,
+    );
+    // A block's label number is its place among the selector's ids, or in
+    // the IR's layout where there are none.
+    let ids: Vec<u32> = if machine.block_ids.is_empty() {
+        function.layout().iter().map(|block| block.0).collect()
+    } else {
+        machine.block_ids.clone()
+    };
+    let position: HashMap<u32, u32> = ids.iter().enumerate().map(|(at, &id)| (id, at as u32)).collect();
+    let mut odds = Odds::default();
+    for &block in function.layout() {
+        let Some(&from) = position.get(&block.0) else { continue };
+        for (index, to) in llrm_mir::loopinfo::children(function, block).enumerate() {
+            let Some(&to) = position.get(&to.0) else { continue };
+            let probability = bpi.get_edge_probability(function, block, index);
+            let entry = odds.entry((from, to)).or_insert((BranchProbability::get_zero(), index));
+            entry.0 = entry.0 + probability;
+        }
+    }
+    let mut rank: HashMap<u32, usize> = HashMap::default();
+    let mut kept: HashSet<(u32, u32)> = HashSet::default();
+    for &(from, to, numerator) in &machine.edge_probs {
+        let (Some(&from), Some(&to)) = (position.get(&from), position.get(&to)) else { continue };
+        let index = rank.entry(from).or_insert(0);
+        let probability = BranchProbability::new(numerator, 1 << 31);
+        // The first time an edge is named it replaces the IR's; a second
+        // naming (both arms to one block) adds.
+        if kept.insert((from, to)) {
+            odds.insert((from, to), (probability, *index));
+        } else if let Some(entry) = odds.get_mut(&(from, to)) {
+            entry.0 = entry.0 + probability;
+        }
+        *index += 1;
+    }
+    odds
+}
+
 pub fn fold(
     mut blocks: Vec<Lowered>,
     tables: &mut [Table],
+    odds: &Odds,
+    optsize: bool,
+    exits: &[crate::mc::visit::Reg],
 ) -> Vec<Lowered> {
     if blocks.is_empty() {
         return blocks;
-    }
-    // A branch to a block that only returns is the return (`TailDuplicator`'s
-    // return blocks).
-    let returns: HashSet<String> = blocks
-        .iter()
-        .filter(|block| matches!(block.insts.as_slice(), [Inst::Ret { .. }]))
-        .map(|block| block.label.clone())
-        .collect();
-    for at in 0..blocks.len() {
-        let ret = match blocks[at].insts.last() {
-            Some(Inst::Branch { link: false, target: Target::Label(label) }) if returns.contains(label) => blocks
-                .iter()
-                .find(|block| &block.label == label)
-                .and_then(|block| Some((block.insts.first().cloned()?, block.locs.first().copied().flatten()))),
-            _ => None,
-        };
-        // The copy keeps the return's own source place, not the branch's.
-        if let Some((ret, place)) = ret {
-            *blocks[at].insts.last_mut().expect("a branch") = ret;
-            *blocks[at].locs.last_mut().expect("a place per instruction") = place;
-        }
     }
     // A fall-through becomes a branch, so that blocks can move.
     for at in 0..blocks.len() - 1 {
@@ -166,12 +205,11 @@ pub fn fold(
         }
     }
     let table_of: HashMap<&str, &Table> = tables.iter().map(|table| (table.base.as_str(), table)).collect();
-    // Reachable blocks, placed by following fall-through chains.
+    // Reachable blocks, in `MachineBlockPlacement`'s order.
     let index: HashMap<&str, usize> = blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at)).collect();
     let successors = |at: usize| -> Vec<usize> {
-        let block = &blocks[at];
         let mut out: Vec<usize> = Vec::new();
-        for inst in &block.insts {
+        for inst in &blocks[at].insts {
             match inst {
                 // The jump through a table goes to every entry.
                 Inst::Label(base) => {
@@ -182,43 +220,140 @@ pub fn fold(
                 _ => out.extend(label_of(inst).and_then(|label| index.get(label).copied())),
             }
         }
-        let _ = at;
         out
     };
-    let mut placed: Vec<usize> = Vec::new();
-    let mut seen: HashSet<usize> = HashSet::new();
+    let mut reachable: Vec<usize> = Vec::new();
+    let mut seen: HashSet<usize> = HashSet::default();
     let mut pending: Vec<usize> = vec![0];
-    while let Some(start) = pending.pop() {
-        let mut current = start;
-        loop {
-            if !seen.insert(current) {
-                break;
-            }
-            placed.push(current);
-            let next = successors(current);
-            // Follow the successor that is the fall-through (the last branch's
-            // target, or the next block), push the rest to be placed later.
-            let mut chain = None;
-            for &candidate in next.iter().rev() {
-                if !seen.contains(&candidate) && chain.is_none() {
-                    chain = Some(candidate);
-                } else if !seen.contains(&candidate) {
-                    pending.push(candidate);
-                }
-            }
-            match chain {
-                Some(candidate) => current = candidate,
-                None => break,
+    seen.insert(0);
+    while let Some(at) = pending.pop() {
+        reachable.push(at);
+        for next in successors(at) {
+            if seen.insert(next) {
+                pending.push(next);
             }
         }
     }
+    reachable.sort_unstable();
+    let dense: HashMap<usize, usize> = reachable.iter().enumerate().map(|(new, &old)| (old, new)).collect();
+    let edges: Vec<Vec<usize>> =
+        reachable.iter().map(|&old| successors(old).into_iter().map(|next| dense[&next]).collect()).collect();
+    // The IR's block number is the label's last field; a block a pass made
+    // has none the odds know.
+    let numbered = |old: usize| blocks[old].label.rsplit('.').next().is_some_and(|n| n.parse::<u32>().is_ok());
+    let ids: Vec<u32> = reachable
+        .iter()
+        .enumerate()
+        .map(|(new, &old)| {
+            blocks[old].label.rsplit('.').next().and_then(|n| n.parse().ok()).unwrap_or(u32::MAX - new as u32)
+        })
+        .collect();
+    // A block made to split a critical edge takes the odds of the edge it
+    // splits (the pin carries them through the split).
+    let mut odds = odds.clone();
+    for (new, &old) in reachable.iter().enumerate() {
+        let (&[to], false) = (edges[new].as_slice(), numbered(old)) else { continue };
+        let from: Vec<usize> = (0..edges.len()).filter(|&one| edges[one].contains(&new)).collect();
+        if let [from] = from[..]
+            && let Some(&split) = odds.get(&(ids[from], ids[to]))
+        {
+            odds.insert((ids[from], ids[new]), split);
+        }
+    }
+    // DEVIATE: an entry that a branch returns to (the pin's IR never has one;
+    // block forwarding can make one) keeps the layout order, as frequencies
+    // need an entry that is no loop header. Exit: 11-12.
+    let mut likelihood: HashMap<(String, String), u32> = HashMap::default();
+    let placed: Vec<usize> = if edges.iter().any(|next| next.contains(&0)) {
+        reachable.clone()
+    } else {
+        let cfg = Cfg::from_successors(edges.clone());
+        let graph = Graph::from_cfg(&cfg, &ids, vec![false; ids.len()], &odds, optsize);
+        for (from, next) in edges.iter().enumerate() {
+            for &to in next {
+                likelihood.insert(
+                    (blocks[reachable[from]].label.clone(), blocks[reachable[to]].label.clone()),
+                    graph.probability(from, to).get_numerator(),
+                );
+            }
+        }
+        let pinned = place(&graph);
+        // DEVIATE: the old first-successor chain is kept unless placement
+        // executes fewer jumps by the same frequencies; the pin's
+        // placement ignores that cost (quicksort's swap path gains a
+        // `b`). Exit: none while the pin's does.
+        let jumps = |order: &[usize]| -> u128 {
+            order
+                .iter()
+                .enumerate()
+                .map(|(at, &new)| {
+                    let insts = &blocks[reachable[new]].insts;
+                    let jump = match insts.last() {
+                        Some(Inst::Branch { link: false, target: Target::Label(label) }) => index.get(label.as_str()),
+                        _ => None,
+                    };
+                    let cond = insts
+                        .len()
+                        .checked_sub(2)
+                        .and_then(|before| label_of(&insts[before]))
+                        .filter(|_| jump.is_some())
+                        .and_then(|label| index.get(label));
+                    let next = order.get(at + 1).map(|&one| reachable[one]);
+                    let falls = |target: Option<&usize>| target.is_some_and(|t| Some(*t) == next);
+                    let costs = match (cond, jump) {
+                        (_, None) => false,
+                        (None, Some(_)) => !falls(jump),
+                        (Some(_), Some(_)) => !falls(jump) && !falls(cond),
+                    };
+                    u128::from(costs) * u128::from(graph.frequency(new).get_frequency())
+                })
+                .sum()
+        };
+        // The chain the selector's order gives: follow the last unplaced
+        // successor, push the rest.
+        let identity: Vec<usize> = {
+            let mut placed: Vec<usize> = Vec::new();
+            let mut seen = vec![false; edges.len()];
+            let mut pending: Vec<usize> = vec![0];
+            while let Some(start) = pending.pop() {
+                let mut current = start;
+                while !std::mem::replace(&mut seen[current], true) {
+                    placed.push(current);
+                    let mut chain = None;
+                    for &candidate in edges[current].iter().rev() {
+                        if seen[candidate] {
+                            continue;
+                        }
+                        if chain.is_none() {
+                            chain = Some(candidate);
+                        } else {
+                            pending.push(candidate);
+                        }
+                    }
+                    match chain {
+                        Some(next) => current = next,
+                        None => break,
+                    }
+                }
+            }
+            placed
+        };
+        let order = if jumps(&pinned) < jumps(&identity) { pinned } else { identity };
+        order.into_iter().map(|new| reachable[new]).collect()
+    };
     let mut taken: Vec<Option<Lowered>> = blocks.into_iter().map(Some).collect();
     let mut ordered: Vec<Lowered> = placed.into_iter().map(|at| taken[at].take().expect("placed once")).collect();
+    // The pin copies in layout order (`TailDuplicator`, then
+    // `MachineCopyPropagation`): a jump to the block next to it stays a
+    // fall-through.
+    crate::taildup::tail_duplicate(&mut ordered, optsize);
+    crate::taildup::drop_unreferenced(&mut ordered, tables);
+    crate::taildup::propagate_backward(&mut ordered, exits);
     // A branch to the next block falls through; a conditional branch over an
     // unconditional one is the inverse conditional (`cbz`/`tbz` too).
     for at in 0..ordered.len() {
         let next = ordered.get(at + 1).map(|block| block.label.clone());
-        let Lowered { insts, locs, .. } = &mut ordered[at];
+        let Lowered { insts, locs, label: ordered_label } = &mut ordered[at];
         if let (Some(Inst::Branch { link: false, target: Target::Label(label) }), Some(next)) = (insts.last(), &next)
             && label == next
         {
@@ -234,6 +369,24 @@ pub fn fold(
             locs.truncate(locs.len() - 2);
             insts.push(inverse);
             locs.push(place);
+        }
+        // `optimizeBranches`: a block that ends in a conditional branch and a
+        // jump takes the likelier successor by the conditional branch.
+        if insts.len() >= 2
+            && let Some(Inst::Branch { link: false, target: Target::Label(unlikely) }) = insts.last()
+            && let Some(taken) = label_of(&insts[insts.len() - 2])
+            && !matches!(insts[insts.len() - 2], Inst::Branch { .. })
+            && let (Some(&via_jump), Some(&via_branch)) = (
+                likelihood.get(&(ordered_label.clone(), unlikely.clone())),
+                likelihood.get(&(ordered_label.clone(), taken.to_owned())),
+            )
+            && via_jump > via_branch
+            && let Some(flipped) = inverse_over(&insts[insts.len() - 2], unlikely, Some(taken))
+        {
+            let jump = Inst::Branch { link: false, target: Target::Label(taken.to_owned()) };
+            let len = insts.len();
+            insts[len - 2] = flipped;
+            insts[len - 1] = jump;
         }
     }
     ordered
@@ -272,7 +425,7 @@ mod tests {
             block("b", vec![ret()]),
             block("c", vec![ret()]),
         ];
-        let out = fold(blocks, &mut []);
+        let out = fold(blocks, &mut [], &Odds::default(), false, &[]);
         let rets = out.iter().flat_map(|block| &block.insts).filter(|inst| matches!(inst, Inst::Ret { .. })).count();
         let targets: Vec<_> = out
             .iter()

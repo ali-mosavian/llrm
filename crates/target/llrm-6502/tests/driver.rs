@@ -57,6 +57,87 @@ fn the_size_level_is_priced_in_bytes() {
     assert!(!speed.contains("dex") && !speed.contains("dey"), "-O2:\n{speed}");
 }
 
+/// `n - 1` on a word went through the carry chain (`clc; adc #255` on each
+/// byte, 22 clocks) where `lda lo; bne; dec hi; dec lo` borrows by branch (11):
+/// memcmp's and strncmp's counters, a clock row against gcc. The borrow still
+/// runs: 0x0100 - 1 = 0x00FF, 1 - 1 = 0, 0 - 1 = 0xFFFF.
+#[test]
+fn a_word_minus_one_borrows_by_branch() {
+    let probe = |name: &str, start: i32| {
+        format!(
+            "@{name}_k = global i16 {start}\ndefine i8 @{name}() {{\n  %v = load volatile i16, ptr @{name}_k\n  \
+             %d = add i16 %v, -1\n  %lo = trunc i16 %d to i8\n  %h = lshr i16 %d, 8\n  %hi = trunc i16 %h to i8\n  \
+             %s = shl i8 %hi, 1\n  %r = xor i8 %lo, %s\n  ret i8 %r\n}}\n"
+        )
+    };
+    let ir = module(&[probe("borrow", 256), probe("one", 1), probe("wrap", 0)].concat());
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(!text.contains("adc #255") && text.contains("dec"), "the carry chain:\n{text}");
+    assert_eq!(exit_code_of(&text, "borrow"), 0xFF, "{text}");
+    assert_eq!(exit_code_of(&text, "one"), 0, "{text}");
+    assert_eq!(exit_code_of(&text, "wrap"), 1, "{text}");
+}
+
+/// A byte added to an accumulator from a global indexed by a byte loaded the
+/// element, then added a cell (`lda g,x; clc; adc rc2; sta rc2`), where the 6502
+/// has `adc g,x` and the accumulator can stay in A: sum4 at -Os 22 B against
+/// llvm-mos's 13, sum_arr, sum16, schr. The sum of 1 2 3 4 is 10.
+#[test]
+fn an_indexed_global_is_the_operand_of_the_add() {
+    let ir = module(
+        r#"@arr = global [4 x i8] c"\01\02\03\04"
+@n = global i8 4
+define i8 @probe() {
+entry:
+  %n = load volatile i8, ptr @n
+  br label %loop
+loop:
+  %i = phi i8 [ 0, %entry ], [ %i2, %loop ]
+  %s = phi i8 [ 0, %entry ], [ %s2, %loop ]
+  %z = zext i8 %i to i16
+  %p = getelementptr i8, ptr @arr, i16 %z
+  %b = load i8, ptr %p
+  %s2 = add i8 %s, %b
+  %i2 = add i8 %i, 1
+  %c = icmp eq i8 %i2, %n
+  br i1 %c, label %done, label %loop
+done:
+  ret i8 %s2
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(text.contains("adc arr,x") && !text.contains("lda arr,x"), "the element was loaded:\n{text}");
+    assert_eq!(exit_code_of(&text, "probe"), 10, "{text}");
+}
+
+/// `t[(a + b) >> 1]` on bytes is a pointer plus an `i16` whose high byte is
+/// known zero. Selected as a 16-bit add into the pointer and `ldy #0; lda (rc),y`
+/// (bsearch8: 78 B against llvm-mos's 53) instead of the byte index in Y.
+#[test]
+fn an_index_with_a_known_zero_high_byte_is_the_y_of_the_load() {
+    let ir = module(
+        "define i8 @ldm(ptr %t, i8 %a, i8 %b) {\n  %x = zext i8 %a to i16\n  %y = zext i8 %b to i16\n  \
+         %s = add nuw nsw i16 %x, %y\n  %m = lshr i16 %s, 1\n  %p = getelementptr inbounds i8, ptr %t, i16 %m\n  \
+         %v = load i8, ptr %p\n  ret i8 %v\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(text.contains(",y") && !text.contains("ldy #0"), "the pointer was added in 16 bits:\n{text}");
+}
+
+/// A pointer a call returns (a and x) was copied into its cell a byte at a
+/// time, and the load through it asked the cell for a pair: "a value needed in
+/// two places". `*p()`, `char *q = malloc(4); *q = 1` and cc65's basic.c
+/// `factor` did not compile at any level. The byte at `val` is 42.
+#[test]
+fn a_pointer_a_call_returns_is_loaded_through() {
+    let ir = module(
+        "@val = global i8 42\ndefine weak noinline ptr @p() {\n  ret ptr @val\n}\n\
+         define i8 @g() {\n  %q = call ptr @p()\n  %v = load i8, ptr %q\n  ret i8 %v\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O1)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "g"), 42, "{text}");
+}
+
 /// `LLRM_6502_ZERO_PAGE` sets the platform's zero page, whichever way the
 /// platform is named. It was read before the row's own `--platform=sim65`,
 /// which put the 26 back: a sweep of 16..26 read flat, 4362 bytes at every
@@ -1274,6 +1355,40 @@ fn a_compare_against_a_word_boundary_tests_only_the_high_word_in_both_polarities
     assert_eq!(instructions(&greater), instructions(&less), "the polarity changed the code:\n{greater}\n{less}");
 }
 
+/// A softened `double` bitcast to `i64` takes the halves of its softened
+/// integer (`ExpandIntRes_BITCAST`), not a stack slot. Guards the bytes of
+/// 0x3FF8000000000001: 0x3F on top, 0xF8 next, 0x01 at the bottom.
+#[test]
+fn a_double_bitcast_to_i64_keeps_its_bytes() {
+    let ir = module(
+        r#"@d = global double 0x3FF8000000000001
+define i8 @top() {
+  %x = load double, ptr @d
+  %i = bitcast double %x to i64
+  %t = lshr i64 %i, 56
+  %b = trunc i64 %t to i8
+  ret i8 %b
+}
+define i8 @mid() {
+  %x = load double, ptr @d
+  %i = bitcast double %x to i64
+  %t = lshr i64 %i, 48
+  %b = trunc i64 %t to i8
+  ret i8 %b
+}
+define i8 @bottom() {
+  %x = load double, ptr @d
+  %i = bitcast double %x to i64
+  %b = trunc i64 %i to i8
+  ret i8 %b
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert_eq!(exit_code_of(&text, "top"), 0x3F, "{text}");
+    assert_eq!(exit_code_of(&text, "mid"), 0xF8, "{text}");
+    assert_eq!(exit_code_of(&text, "bottom"), 0x01, "{text}");
+}
+
 /// A 64-bit add carried between its words by compares: the legalizer tested the
 /// carry operation at the 32-bit half, which is no legal type here, instead of
 /// the 16-bit piece it expands to, so `a + b` took 163 instructions with a
@@ -1341,6 +1456,120 @@ define i8 @fits() {
     let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(exit_code_of(&text, "wraps"), 1, "{text}");
     assert_eq!(exit_code_of(&text, "fits"), 0, "{text}");
+}
+
+/// A borrow compared with a byte was loaded back into C for a `cmp` that takes
+/// a byte: `llrm-6502-llc` refused X16 BASIC's `fp_fin` at -O2 ("operand c"),
+/// and with it all of mathlib.c. The fixture is that function cut to the 60
+/// blocks that still refused; it compiles, and the compare reads the saved
+/// 0 or 1.
+#[test]
+fn a_borrow_compared_with_a_byte_is_the_saved_byte_not_c() {
+    let ir = module(include_str!("data/borrow_compared_with_a_byte.ll"));
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("fp_fin:"), "{text}");
+}
+
+/// The carry between the two halves of a 32-bit add was made into a byte and
+/// read back (`lda #0; rol a; lsr a`), and the carry out of the last half into
+/// a byte nothing read. `0x1FFFF + 1` has byte 2 equal to 2.
+#[test]
+fn a_wide_add_keeps_its_carry_in_c() {
+    let ir = module(
+        r#"@a = internal global i32 131071
+@b = internal global i32 1
+define i8 @probe() {
+  %x = load volatile i32, ptr @a
+  %y = load volatile i32, ptr @b
+  %s = add i32 %x, %y
+  %h = lshr i32 %s, 16
+  %t = trunc i32 %h to i8
+  ret i8 %t
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(!text.contains("rol a"), "a carry made into a byte:\n{text}");
+    assert_eq!(exit_code_of(&text, "probe"), 2, "{text}");
+}
+
+/// A word sum of two bytes and a carry (`s = a + b + c; c = s >> 8`, the
+/// extended-precision `adc` of a C helper) was two byte adds and a third for
+/// the carry, each carry a byte of its own: 100 instructions for a four-byte
+/// add, not 14. It is `adc` on the bytes. `0xFF + 1` carries into `0xFE + 1 +
+/// 1` = 0x100: low byte 0, carry 1; `1 + 1` does not, and `0xFE + 1` is 0xFF.
+#[test]
+fn a_word_sum_of_bytes_and_a_carry_is_an_adc() {
+    let probe = |name: &str, a0: u8, b0: u8, ret: &str| {
+        format!(
+            r#"define i8 @{name}() {{
+  %a0 = load volatile i8, ptr @a0
+  %b0 = load volatile i8, ptr @b0
+  %a1 = load volatile i8, ptr @a1
+  %b1 = load volatile i8, ptr @b1
+  %s0 = add i8 %a0, %b0
+  %o0 = icmp ult i8 %s0, %b0
+  %c0 = zext i1 %o0 to i16
+  %x = zext i8 %a1 to i16
+  %y = zext i8 %b1 to i16
+  %t = add nuw nsw i16 %c0, %x
+  %u = add nuw nsw i16 %t, %y
+  %hi = lshr i16 %u, 8
+  %lo = trunc i16 %u to i8
+  %c = trunc i16 %hi to i8
+  ret i8 %{ret}
+}}"#
+        )
+    };
+    let globals = |a0: u8, b0: u8| {
+        format!(
+            "@a0 = internal global i8 {a0}\n@b0 = internal global i8 {b0}\n@a1 = internal global i8 -2\n@b1 = internal global i8 1\n"
+        )
+    };
+    for (a0, b0, lo, carry) in [(255u8, 1u8, 0, 1), (1, 1, 255, 0)] {
+        for (name, ret, want) in [("lo", "lo", lo), ("carry", "c", carry)] {
+            let ir = module(&format!("{}{}", globals(a0, b0), probe(name, a0, b0, ret)));
+            let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(exit_code_of(&text, name), want, "{a0}+{b0}:\n{text}");
+            let body = text.split(&format!("{name}:")).nth(1).unwrap_or_default();
+            let body = body.split("rts").next().unwrap_or_default();
+            let count = body.lines().filter(|l| l.starts_with("  ") && !l.starts_with("  .")).count();
+            assert!(count <= 30, "{count} instructions for a carry through a word sum:\n{text}");
+        }
+    }
+}
+
+/// A size build copied a 20-instruction callee into every caller: the pin's
+/// `OptSizeThreshold` allows growth, and the 6502 expands each i16 update to a
+/// dozen bytes where the call is three. On X16 BASIC, `chrget` went into nine
+/// callers (84 B each) and the 24 files were 34094 B, 28730 B with the bound.
+/// `step` is called from three places and stays one body.
+#[test]
+fn a_size_build_does_not_copy_a_callee_bigger_than_its_call() {
+    let updates: String = (0..6)
+        .map(|i| {
+            format!("  %v{i} = load i16, ptr @g{i}\n  %w{i} = add i16 %v{i}, {}\n  store i16 %w{i}, ptr @g{i}\n", 7 + i)
+        })
+        .collect();
+    let globals: String = (0..6).map(|i| format!("@g{i} = global i16 0\n")).collect();
+    let ir = module(&format!(
+        "{globals}define void @step() {{\n{updates}  ret void\n}}\ndefine void @one() {{\n  call void @step()\n  ret void\n}}\n\
+         define void @two() {{\n  call void @step()\n  call void @step()\n  ret void\n}}"
+    ));
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    let calls = text.matches("jsr step").count() + text.matches("jmp step").count();
+    assert_eq!(calls, 3, "step was copied into its callers:\n{text}");
+}
+
+/// The bound above stood in front of an inline the pin's own cost counts as
+/// shrinking (`to_double` at cost -30): `classify` kept its calls, so main
+/// could not fold its constants: 185 B grew to 1708 B (tests/run/c
+/// uint64_to_float). The fixture is that program's IR.
+#[test]
+fn a_size_build_still_inlines_what_the_cost_model_finds_negative() {
+    let ir = module(include_str!("data/uint64_to_float_chain.ll"));
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    let lines = text.lines().count();
+    assert!(lines < 300, "{lines} lines: classify kept its calls and main its constants unfolded:\n{text}");
 }
 
 /// A loaded `i1` that a `select` or an extension tests was selected into a
@@ -1418,4 +1647,260 @@ define i8 @sub_overflow() {
     // 1 + 1; 2 - 65535 = 3 with a borrow: 3 + 1
     assert_eq!(exit_code_of(&text, "add_overflow"), 2, "{text}");
     assert_eq!(exit_code_of(&text, "sub_overflow"), 4, "{text}");
+}
+
+/// `__builtin_clz` and `__builtin_ctz` (`llvm.ctlz.i32`, `llvm.cttz.i32`) failed
+/// to compile for the 6502 ("CtLzZeroPoison ... convert node to libcall"): any C
+/// program using them was lost. `check` counts the results that are wrong for
+/// 0, 1, 0x80000000 and 0xFFFFFFFF, with and without the zero-is-poison flag.
+#[test]
+fn a_32_bit_clz_and_ctz_count_correctly() {
+    let ir = module(
+        r#"@v0 = global i32 0
+@v1 = global i32 1
+@v2 = global i32 2147483648
+@v3 = global i32 4294967295
+declare i32 @llvm.ctlz.i32(i32, i1)
+declare i32 @llvm.cttz.i32(i32, i1)
+define i8 @check() {
+  %x0 = load volatile i32, ptr @v0
+  %x1 = load volatile i32, ptr @v1
+  %x2 = load volatile i32, ptr @v2
+  %x3 = load volatile i32, ptr @v3
+  %clz0 = call i32 @llvm.ctlz.i32(i32 %x0, i1 false)
+  %bad0 = icmp ne i32 %clz0, 32
+  %w0 = zext i1 %bad0 to i8
+  %clz1 = call i32 @llvm.ctlz.i32(i32 %x1, i1 false)
+  %bad1 = icmp ne i32 %clz1, 31
+  %w1 = zext i1 %bad1 to i8
+  %clz1p = call i32 @llvm.ctlz.i32(i32 %x1, i1 true)
+  %bad2 = icmp ne i32 %clz1p, 31
+  %w2 = zext i1 %bad2 to i8
+  %clz2 = call i32 @llvm.ctlz.i32(i32 %x2, i1 false)
+  %bad3 = icmp ne i32 %clz2, 0
+  %w3 = zext i1 %bad3 to i8
+  %clz2p = call i32 @llvm.ctlz.i32(i32 %x2, i1 true)
+  %bad4 = icmp ne i32 %clz2p, 0
+  %w4 = zext i1 %bad4 to i8
+  %clz3 = call i32 @llvm.ctlz.i32(i32 %x3, i1 false)
+  %bad5 = icmp ne i32 %clz3, 0
+  %w5 = zext i1 %bad5 to i8
+  %clz3p = call i32 @llvm.ctlz.i32(i32 %x3, i1 true)
+  %bad6 = icmp ne i32 %clz3p, 0
+  %w6 = zext i1 %bad6 to i8
+  %ctz0 = call i32 @llvm.cttz.i32(i32 %x0, i1 false)
+  %bad7 = icmp ne i32 %ctz0, 32
+  %w7 = zext i1 %bad7 to i8
+  %ctz1 = call i32 @llvm.cttz.i32(i32 %x1, i1 false)
+  %bad8 = icmp ne i32 %ctz1, 0
+  %w8 = zext i1 %bad8 to i8
+  %ctz1p = call i32 @llvm.cttz.i32(i32 %x1, i1 true)
+  %bad9 = icmp ne i32 %ctz1p, 0
+  %w9 = zext i1 %bad9 to i8
+  %ctz2 = call i32 @llvm.cttz.i32(i32 %x2, i1 false)
+  %bad10 = icmp ne i32 %ctz2, 31
+  %w10 = zext i1 %bad10 to i8
+  %ctz2p = call i32 @llvm.cttz.i32(i32 %x2, i1 true)
+  %bad11 = icmp ne i32 %ctz2p, 31
+  %w11 = zext i1 %bad11 to i8
+  %ctz3 = call i32 @llvm.cttz.i32(i32 %x3, i1 false)
+  %bad12 = icmp ne i32 %ctz3, 0
+  %w12 = zext i1 %bad12 to i8
+  %ctz3p = call i32 @llvm.cttz.i32(i32 %x3, i1 true)
+  %bad13 = icmp ne i32 %ctz3p, 0
+  %w13 = zext i1 %bad13 to i8
+  %s0 = add i8 0, %w0
+  %s1 = add i8 %s0, %w1
+  %s2 = add i8 %s1, %w2
+  %s3 = add i8 %s2, %w3
+  %s4 = add i8 %s3, %w4
+  %s5 = add i8 %s4, %w5
+  %s6 = add i8 %s5, %w6
+  %s7 = add i8 %s6, %w7
+  %s8 = add i8 %s7, %w8
+  %s9 = add i8 %s8, %w9
+  %s10 = add i8 %s9, %w10
+  %s11 = add i8 %s10, %w11
+  %s12 = add i8 %s11, %w12
+  %s13 = add i8 %s12, %w13
+  ret i8 %s13
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "check"), 0, "{text}");
+}
+
+#[test]
+fn a_loop_right_after_an_empty_entry_block_is_not_the_entry() {
+    // -O0 `while (*tp) tp++;` (basic.c st_rem): the empty entry and the loop
+    // header shared block 0 and "entry block is a loop header" panicked
+    let ir = module(
+        "@s = global [3 x i8] c\"ab\\00\"\n@tp = internal global ptr @s\n\
+         define i8 @g() {\n  br label %h\n\
+         h:\n  %p = load ptr, ptr @tp\n  %c = load i8, ptr %p\n  %z = icmp ne i8 %c, 0\n  br i1 %z, label %b, label %x\n\
+         b:\n  %q = getelementptr inbounds i8, ptr %p, i32 1\n  store ptr %q, ptr @tp\n  br label %h\n\
+         x:\n  ret i8 7\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O0)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "g"), 7, "{text}");
+}
+
+#[test]
+fn a_pointer_minus_one_borrows_by_branch() {
+    // a backward copy (k_memmove): `--p` was `clc; adc #255; adc #255` through a
+    // pack/unpack, 885 clocks against the hand routine's 418
+    let ir = module(
+        "@n = global i8 4\n\
+         define i8 @g() {\n\
+         \x20 %n = load volatile i8, ptr @n\n\
+         \x20 %s0 = inttoptr i16 49154 to ptr\n  %d0 = inttoptr i16 45058 to ptr\n\
+         \x20 %a = inttoptr i16 49150 to ptr\n  store volatile i8 1, ptr %a\n\
+         \x20 %b = inttoptr i16 49151 to ptr\n  store volatile i8 2, ptr %b\n\
+         \x20 %c = inttoptr i16 49152 to ptr\n  store volatile i8 3, ptr %c\n\
+         \x20 %e = inttoptr i16 49153 to ptr\n  store volatile i8 4, ptr %e\n\
+         \x20 br label %l\n\
+         l:\n\
+         \x20 %i = phi i8 [ %n, %0 ], [ %j, %l ]\n\
+         \x20 %s = phi ptr [ %s0, %0 ], [ %s2, %l ]\n\
+         \x20 %d = phi ptr [ %d0, %0 ], [ %d2, %l ]\n\
+         \x20 %s2 = getelementptr inbounds i8, ptr %s, i32 -1\n\
+         \x20 %d2 = getelementptr inbounds i8, ptr %d, i32 -1\n\
+         \x20 %v = load volatile i8, ptr %s2\n  store volatile i8 %v, ptr %d2\n\
+         \x20 %j = sub i8 %i, 1\n  %z = icmp ne i8 %j, 0\n  br i1 %z, label %l, label %x\n\
+         x:\n\
+         \x20 %lo = inttoptr i16 45054 to ptr\n  %hi = inttoptr i16 45057 to ptr\n\
+         \x20 %f = load volatile i8, ptr %lo\n  %h = load volatile i8, ptr %hi\n\
+         \x20 %m = mul i8 %f, 16\n  %r = add i8 %m, %h\n  ret i8 %r\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "g"), 20, "{text}");
+    assert!(!text.contains("adc #255"), "{text}");
+}
+
+#[test]
+fn the_frame_address_at_offset_zero_is_the_stack_pointer_copied() {
+    // k_itoa's `tmp[n]`: `clc; lda rc0; adc #0; sta; lda rc1; adc #0; sta` (13 B)
+    // for the address of the first byte of the frame, a copy of the pair (8 B)
+    let ir = module(
+        "@n = global i8 5\n\
+         define i8 @g() {\n\
+         \x20 %a = alloca [16 x i8]\n  %n = load volatile i8, ptr @n\n\
+         \x20 %p = getelementptr inbounds [16 x i8], ptr %a, i8 0, i8 %n\n\
+         \x20 store volatile i8 42, ptr %p\n  %v = load volatile i8, ptr %p\n  ret i8 %v\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "g"), 42, "{text}");
+    assert!(!text.contains("lda rc0\n  adc #0"), "{text}");
+}
+
+#[test]
+fn a_word_plus_one_carries_by_branch() {
+    // strnlen's index: `clc; lda lo; adc #1; sta lo; lda hi; adc #0; sta hi`
+    // (13 B) where `inc lo; bne; inc hi` is 6
+    let ir = module(
+        "@n = global i16 300\n@sink = global i16 0\n\
+         define i8 @g() {\n\
+         \x20 %n = load volatile i16, ptr @n\n  br label %l\n\
+         l:\n\
+         \x20 %i = phi i16 [ 0, %0 ], [ %j, %l ]\n\
+         \x20 %j = add i16 %i, 1\n  store volatile i16 %j, ptr @sink\n\
+         \x20 %c = icmp ult i16 %j, %n\n  br i1 %c, label %l, label %x\n\
+         x:\n\
+         \x20 %r = trunc i16 %j to i8\n  ret i8 %r\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "g"), 44, "{text}");
+    assert!(!text.contains("adc #1\n"), "{text}");
+}
+
+#[test]
+fn a_zero_filled_variable_is_bss_not_image_bytes() {
+    // basic.c: prog[8192], tok, xv ... were `.byte 0,0,...` in DATA, 8721 B of
+    // image where gcc's BSS has none
+    let ir = module(
+        "@buf = global [4096 x i8] zeroinitializer\n@one = global i8 1\n\
+         define i8 @g() {\n  %p = getelementptr inbounds [4096 x i8], ptr @buf, i16 0, i16 4000\n\
+         \x20 %v = load volatile i8, ptr %p\n  %o = load volatile i8, ptr @one\n  %r = add i8 %v, %o\n  ret i8 %r\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O1)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "g"), 1, "{text}");
+    assert!(text.contains("buf: .res 4096"), "{text}");
+    assert!(!text.contains(".byte 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n  .byte 0,0,0,0"), "{text}");
+}
+
+#[test]
+fn a_word_divide_calls_the_compact_routine_at_size_and_the_fast_one_at_speed() {
+    // k_itoa at -Os linked the divide's short-divisor path too: 89 B against
+    // sdcc's 64 for a bare divide
+    let ir = module(
+        "@a = global i16 50000\n@b = global i16 7\n\
+         define i8 @g() {\n\
+         \x20 %a = load volatile i16, ptr @a\n  %b = load volatile i16, ptr @b\n\
+         \x20 %q = udiv i16 %a, %b\n  %r = urem i16 %a, %b\n  %s = add i16 %q, %r\n\
+         \x20 %t = lshr i16 %s, 8\n  %u = xor i16 %s, %t\n  %v = trunc i16 %u to i8\n  ret i8 %v\n}",
+    );
+    let size = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(size.contains("jsr __udivhi3c"), "{size}");
+    let speed = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(speed.contains("jsr __udivhi3\n"), "{speed}");
+    // 50000 / 7 = 7142 r 6: 7148 = 0x1BEC, 0x1B ^ 0x1BEC low byte 0xEC ^ 0x1B = 0xF7
+    for text in [&size, &speed] {
+        let linked = format!("{text}\n{}", common::pipeline::reachable_runtime(text));
+        assert_eq!(exit_code_of(&linked, "g"), 0xF7, "{linked}");
+}
+}
+
+#[test]
+fn a_word_step_never_holds_a_byte_in_a_on_the_plain_6502() {
+    // the high byte of x + 1, returned: it came out in A and the carry step was
+    // `inc a`, a 65C02 opcode ca65 --cpu 6502 refuses (x16basic-c: seven sites)
+    let ir = module(
+        "@n = global i16 255\n\
+         define i8 @g() {\n\
+         \x20 %x = load volatile i16, ptr @n\n  %y = add i16 %x, 1\n\
+         \x20 %h = lshr i16 %y, 8\n  %r = trunc i16 %h to i8\n  ret i8 %r\n}",
+    );
+    for level in [Level::O2, Level::Os] {
+        let text = assembly(&ir, &Request::new(level)).unwrap_or_else(|e| panic!("{e}"));
+        assert!(!text.contains("inc a") && !text.contains("dec a"), "{text}");
+        assert_eq!(exit_code_of(&text, "g"), 1, "{text}");
+    }
+}
+
+#[test]
+fn a_word_global_is_loaded_and_stored_by_absolute_address() {
+    // x16basic-c: 270 sites loaded a u16 global through a pointer cell, `ldx #<(g);
+    // ldy #>(g); stx; sty; ldy #0; lda (p),y; ldy #1; lda (p),y` (19 B) where
+    // `lda g; ldx g+1` is 5
+    let ir = module(
+        "@w = global i16 300\n@v = global i16 0\n\
+         define i8 @g() {\n\
+         \x20 %a = load i16, ptr @w\n  %b = add i16 %a, 2\n  store i16 %b, ptr @v\n\
+         \x20 %c = load i16, ptr @v\n  %h = lshr i16 %c, 8\n  %hl = trunc i16 %h to i8\n  %l = trunc i16 %c to i8\n\
+         \x20 %r = add i8 %hl, %l\n  ret i8 %r\n}",
+    );
+    for level in [Level::O2, Level::Os] {
+        let text = assembly(&ir, &Request::new(level)).unwrap_or_else(|e| panic!("{e}"));
+        // 302 = 0x012E: 1 + 0x2E = 47
+        assert_eq!(exit_code_of(&text, "g"), 47, "{text}");
+        assert!(!text.contains("#<(w)") && !text.contains("#<(v)"), "{text}");
+    }
+}
+
+/// A C global named `sp` was exported as `sp`, which cc65's sim6502 library
+/// defines too: `ld65` stopped with "Duplicate external identifier: 'sp'" on
+/// x16basic-c's `prog.c`. On the cc65 row it is `_sp`, as cc65 names it; on
+/// plain sim65 the name is unchanged.
+#[test]
+fn a_c_global_takes_the_platforms_symbol_prefix() {
+    let ir = module("@sp = dso_local global i8 0\ndefine void @set(i8 %x) {\n  store i8 %x, ptr @sp\n  ret void\n}");
+    let on = |name: &str| {
+        let platform = llrm_6502::driver::platform_named(name).expect("a platform");
+        assembly(&ir, &Request { platform, ..Request::new(Level::O2) }).expect("compiles")
+    };
+    let cc65 = on("sim65-cc65");
+    assert!(cc65.contains(".export _sp") && cc65.contains("_sp: .res 1"), "{cc65}");
+    assert!(cc65.contains("sta _sp") && !cc65.contains("sta sp"), "{cc65}");
+    let plain = on("sim65");
+    assert!(plain.contains(".export sp") && plain.contains("sta sp"), "{plain}");
 }

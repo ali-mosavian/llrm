@@ -40,7 +40,7 @@
 //! # Runs
 //! At the end of `alloc::emit_with`, before branch relaxation.
 
-use std::collections::HashSet;
+use llrm_support::hash::HashSet;
 
 use crate::asm::{Asm, Flags, Index, Inst, Line, Op, Operand, Registers};
 
@@ -52,6 +52,10 @@ fn flags_unread_after(
 ) -> bool {
     for line in &lines[from..] {
         let Line::Inst(inst) = line else { return false };
+        // a jump leaves the block: no block reads the flags its predecessor left
+        if inst.op == Op::Jmp {
+            return true;
+        }
         match inst.flags() {
             Flags::Keeps => {}
             Flags::Of(_) | Flags::Sets => return true,
@@ -262,7 +266,7 @@ pub fn drop_cancelling_transfers(asm: &mut Asm) {
 /// `jmp l` where `l:` is directly followed by `rts` (past other labels): the
 /// `rts` itself, one byte and one jump shorter.
 pub fn jump_to_return(asm: &mut Asm) {
-    let mut returns: HashSet<String> = HashSet::new();
+    let mut returns: HashSet<String> = HashSet::default();
     let mut returning = false;
     for line in asm.lines.iter().rev() {
         match line {
@@ -573,5 +577,5 @@ fn carry_branch(
             return None;
         }
     };
-    (copied && dead_from(&asm.lines, at + 1, tested, &mut HashSet::new())).then_some((carry, from))
+    (copied && dead_from(&asm.lines, at + 1, tested, &mut HashSet::default())).then_some((carry, from))
 }

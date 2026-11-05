@@ -13,6 +13,11 @@ fn compiled(
     text(&ir, name, 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"))
 }
 
+/// -O2 without the full unroll, for the tests that need crc16's spills.
+fn unrolled_off() -> Request {
+    Request { passes: vec!["-fno-unroll-loops".into()], ..Request::new(Level::O2) }
+}
+
 #[test]
 fn dump() {
     for (name, ir) in [
@@ -146,24 +151,26 @@ fn the_prologue_pushes_the_arguments_a_function_keeps_in_its_frame() {
     assert!(!insts.iter().any(|line| line.starts_with("ld -") && line.contains("(ix), ")), "{insts:?}");
 }
 
-/// crc16 reloaded its pointer from the slot at SP with `ld c, -3(ix)` / `ld b,
+/// crc16 (loops not unrolled, which would free the registers it spilled)
+/// reloaded its pointer from the slot at SP with `ld c, -3(ix)` / `ld b,
 /// -2(ix)`, 6 B and 38 T-states on each of its trips; `pop bc` / `push bc` is 2
 /// B and 21.
 #[test]
 fn the_slot_at_sp_is_reloaded_by_pop_and_push() {
     let ir = include_str!("kernels/ir/crc16.ll");
-    let out = text(ir, "crc16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let out = text(ir, "crc16", 0, &unrolled_off()).unwrap_or_else(|why| panic!("{why}"));
     let lines: Vec<&str> = out.lines().map(str::trim).collect();
     assert!(lines.windows(2).any(|pair| pair == ["pop bc", "push bc"]), "{out}");
 }
 
-/// A spilled byte was reloaded into a register just to be compared
+/// A spilled byte (crc16, loops not unrolled) was reloaded into a register
+/// just to be compared
 /// (`ld c, -1(ix)` / `cp a, c`): a byte more and 4 T-states than `cp a,
 /// -1(ix)`.
 #[test]
 fn a_reloaded_operand_is_read_from_the_frame() {
     let ir = include_str!("kernels/ir/crc16.ll");
-    let out = text(ir, "crc16", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let out = text(ir, "crc16", 0, &unrolled_off()).unwrap_or_else(|why| panic!("{why}"));
     assert!(out.lines().any(|line| line.trim().starts_with("cp a, ") && line.ends_with("(ix)")), "{out}");
 }
 
@@ -346,10 +353,11 @@ fn an_add_after_the_loop_is_rated_once_not_every_trip() {
 
 /// `sum4`'s rotated loop was `dec b; inc hl; jr nz`: the pointer step sat
 /// between the decrement and the branch, so no `djnz` formed (12 B, 172 T, 22
-/// instructions at -O2; 11 B, 160 T, 18 with it).
+/// instructions at -O2; 11 B, 160 T, 18 with it). sum4 is unrolled at -O2 now;
+/// sum_arr has the same loop.
 #[test]
 fn a_decrement_behind_a_pointer_step_is_a_djnz() {
-    let out = text(include_str!("kernels/ir/sum4.ll"), "sum4", 0, &Request::new(Level::O2)).expect("compiles");
+    let out = text(include_str!("kernels/ir/sum_arr.ll"), "sum_arr", 0, &Request::new(Level::O2)).expect("compiles");
     assert!(out.contains("djnz") && !out.contains("dec b"), "{out}");
 }
 
@@ -1400,25 +1408,26 @@ fn a_jump_outside_every_loop_is_jr_even_when_speed_comes_first() {
     assert!(!out.lines().any(|line| line.trim_start().starts_with("jp ")), "{out}");
 }
 
+/// The driver turned the unroller off: sum4's four-trip loop ran 160 clocks at
+/// -O2, 104 unrolled. A loop of four trips is copied out where speed comes
+/// first, and stays a loop at -Oz.
+#[test]
+fn a_four_trip_loop_is_unrolled_where_speed_comes_first_and_not_at_oz() {
+    let ir = include_str!("kernels/ir/sum4.ll");
+    let fast = text(ir, "sum4", 0, &Request::new(Level::O2)).expect("compiles");
+    let small = text(ir, "sum4", 0, &Request::new(Level::Oz)).expect("compiles");
+    assert!(!fast.contains("djnz") && !fast.contains(" L0_"), "{fast}");
+    assert!(small.contains("djnz"), "{small}");
+}
+
 /// lz4's match copy kept the source as `dst + offset` (a base add, `pop bc;
 /// push bc; add hl,bc`) and its pointers in ix slots: 102905 clocks at -O2,
 /// gcc's end-pointer loop 35781. Both copies, the literals and the match, are
-/// loops of registers: load, store, two increments, the count.
+/// byte loops of registers, and an `ldir` each: 19721.
 #[test]
-fn a_match_copy_loop_keeps_its_pointers_in_registers() {
+fn the_literal_and_match_copies_are_an_ldir_each() {
     let out = text(include_str!("kernels/ir/lz4.ll"), "lz4", 0, &Request::new(Level::O2)).expect("compiles");
-    let copies = out
-        .split("\nL0_")
-        .filter(|block| {
-            let lines: Vec<&str> = block.lines().collect();
-            let label = lines[0].trim_end_matches(':');
-            lines.len() <= 9
-                && lines.iter().any(|line| line.trim_start().starts_with("ld (") && line.ends_with(", a"))
-                && lines.last().is_some_and(|last| last.trim() == format!("jr nz, L0_{label}"))
-                && !lines.iter().any(|line| line.contains("(ix)"))
-        })
-        .count();
-    assert_eq!(copies, 2, "{out}");
+    assert_eq!(out.matches("\tldir").count(), 2, "{out}");
 }
 
 /// reverse -Oz kept `p + i` and `p + j` as base adds to spare a register, and
@@ -1429,4 +1438,102 @@ fn reverse_at_oz_does_not_live_in_the_frame() {
     let out = text(include_str!("kernels/ir/reverse.ll"), "reverse", 0, &Request::new(Level::Oz)).expect("compiles");
     let frame = out.lines().filter(|line| line.contains("(ix)")).count();
     assert!(frame <= 10, "{frame} frame accesses\n{out}");
+}
+
+/// crc16's inner loop of eight trips kept its counter and branch: `dec h; jr
+/// nz` is 16 T a bit, 7135 T for 12 bytes against gcc's 5134. Where speed
+/// comes first it is copied out (the pin's threshold: +67 B, -2490 T, past 1 B
+/// = 3 T); at -Oz it stays a loop.
+#[test]
+fn an_eight_trip_loop_is_unrolled_where_speed_comes_first_and_not_at_oz() {
+    let ir = include_str!("kernels/ir/crc16.ll");
+    let fast = text(ir, "crc16", 0, &Request::new(Level::O2)).expect("compiles");
+    let small = text(ir, "crc16", 0, &Request::new(Level::Oz)).expect("compiles");
+    assert!(!fast.contains("dec h"), "{fast}");
+    assert!(small.contains("dec h"), "{small}");
+}
+
+const MEMCPY: &str = "declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)\n\
+    define void @mc(ptr %d, ptr %s, i16 %n) {\n  call void @llvm.memcpy.p0.p0.i16(ptr %d, ptr %s, i16 %n, i1 false)\n  ret void\n}";
+
+/// A `memcpy` of a length known only at run time called `__memcpy`: the call, a
+/// push, a swap, the same test of the count, the same `ldir`, a pop and a
+/// return, about 60 T more than the copy. Where speed comes first it is the
+/// test and `ldir` inline; tuned for size it stays the call, 4 B less.
+#[test]
+fn a_memcpy_of_unknown_length_is_an_ldir_behind_a_test_of_the_count_where_speed_comes_first() {
+    let ir = format!("target datalayout = \"{DATALAYOUT}\"\n{MEMCPY}");
+    let fast = text(&ir, "mc", 0, &Request::new(Level::O2)).expect("compiles");
+    let small = text(&ir, "mc", 0, &Request::new(Level::Oz)).expect("compiles");
+    assert!(fast.contains("or a, c\n\tjr z, ") && fast.contains("ldir") && !fast.contains("__memcpy"), "{fast}");
+    assert!(small.contains("__memcpy") && !small.contains("ldir"), "{small}");
+}
+
+/// `ldir` copies forward, so a `memmove` with the destination above the source
+/// would overwrite its own source: the runtime's routine picks the direction,
+/// and the inline form is only for `memcpy`.
+#[test]
+fn a_memmove_is_still_a_call() {
+    let ir = format!(
+        "target datalayout = \"{DATALAYOUT}\"\ndeclare void @llvm.memmove.p0.p0.i16(ptr, ptr, i16, i1)\n\
+         define void @mm(ptr %d, ptr %s, i16 %n) {{\n  call void @llvm.memmove.p0.p0.i16(ptr %d, ptr %s, i16 %n, i1 false)\n  ret void\n}}"
+    );
+    let out = text(&ir, "mm", 0, &Request::new(Level::O2)).expect("compiles");
+    assert!(out.contains("__memmove") && !out.contains("ldir"), "{out}");
+}
+
+/// The last block of `asm` that holds `add a, (hl)` and the loop's count step.
+fn checksum_loop(asm: &str) -> String {
+    asm.split("\nL0_")
+        .filter(|block| block.contains("add a, (hl)") && block.contains("dec bc"))
+        .last()
+        .unwrap_or_else(|| panic!("no checksum loop in\n{asm}"))
+        .to_owned()
+}
+
+/// A loop over `c[0..n]` after a loop that used up the registers: the pointer
+/// was copied into `hl` for `add a,(hl)` and stepped after it, so it overlapped
+/// `hl`'s range and could not be `hl`; the pointer, the count and both sums
+/// were in the frame, five `(ix)` accesses a trip against none.
+#[test]
+fn a_pointer_read_through_hl_and_stepped_after_stays_in_hl() {
+    let out = compiled(
+        "define i16 @rs1(ptr %a, ptr %b, ptr %c, i16 %n) {\n  %z = icmp eq i16 %n, 0\n  br i1 %z, label %out, label %l1\n\
+         l1:\n  %i = phi i16 [ 0, %0 ], [ %i1, %l1 ]\n  %pa = getelementptr inbounds nuw i8, ptr %a, i16 %i\n  \
+         %pb = getelementptr inbounds nuw i8, ptr %b, i16 %i\n  %pc = getelementptr inbounds nuw i8, ptr %c, i16 %i\n  \
+         %x = load i8, ptr %pa\n  %y = load i8, ptr %pb\n  %s = add i8 %x, %y\n  store i8 %s, ptr %pc\n  \
+         %i1 = add nuw i16 %i, 1\n  %c1 = icmp ult i16 %i1, %n\n  br i1 %c1, label %l1, label %l2\n\
+         l2:\n  %j = phi i16 [ 0, %l1 ], [ %j1, %l2 ]\n  %u = phi i8 [ 0, %l1 ], [ %u1, %l2 ]\n  \
+         %v = phi i8 [ 0, %l1 ], [ %v1, %l2 ]\n  %pj = getelementptr inbounds nuw i8, ptr %c, i16 %j\n  \
+         %w = load i8, ptr %pj\n  %u1 = add i8 %u, %w\n  %v1 = add i8 %v, %u1\n  %j1 = add nuw i16 %j, 1\n  \
+         %c2 = icmp ult i16 %j1, %n\n  br i1 %c2, label %l2, label %done\n\
+         done:\n  %hi = zext i8 %v1 to i16\n  %sh = shl i16 %hi, 8\n  %lo = zext i8 %u1 to i16\n  %r = or i16 %sh, %lo\n  \
+         ret i16 %r\nout:\n  ret i16 0\n}",
+        "rs1",
+    );
+    let body = checksum_loop(&out);
+    assert!(!body.contains("(ix)") && !body.contains("ld l, c"), "{out}");
+}
+
+/// lz4c's checksum loop over `out[i]` kept `out + i` as a base add with the
+/// bound and `out` read from the frame every trip, 150 T a byte against gcc's
+/// 106: the exit count `umax(1, n) - 1` cost 6 against a budget of 4 basic
+/// instructions. lz4c -O2 111095 T against gcc's 103309; 102805 stepping a
+/// pointer and counting down in `bc`, which still loaded and stored the
+/// pointer's slot every trip; 54659 with the pointer in `hl` across the back
+/// edge.
+#[test]
+fn lz4cs_checksum_loop_steps_a_pointer_in_hl_and_counts_down() {
+    let out = text(include_str!("kernels/ir/lz4c.ll"), "lz4c", 0, &Request::new(Level::O2)).expect("compiles");
+    let body = checksum_loop(&out);
+    assert!(!body.contains("add hl, bc") && !body.contains("(ix)"), "{out}");
+}
+
+/// scmp's exit merged `zext c` and `0` into a pair and subtracted its low
+/// byte: `ld c, a` / `ld b, #0` made a high byte nothing read, and `ld bc, #0`
+/// another, 33 B and 165 T against SDCC's 24 B and 147 T. The pair is a byte.
+#[test]
+fn a_pair_only_its_low_byte_is_read_from_is_a_byte() {
+    let out = text(include_str!("kernels/ir/scmp.ll"), "scmp", 0, &Request::new(Level::O2)).expect("compiles");
+    assert!(!out.contains("ld b, #0") && !out.contains("ld bc, #0"), "{out}");
 }

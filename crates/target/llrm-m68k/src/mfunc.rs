@@ -20,7 +20,7 @@
 //! # See also
 //! `llvm/lib/CodeGen/SelectionDAG/InstrEmitter.cpp`, pin d1106deb71cc.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
@@ -110,8 +110,20 @@ pub fn op_inst(
         cheap_as_move: desc.has(flag::CHEAP_AS_A_MOVE),
         commutable: desc.has(flag::COMMUTABLE),
         rematerializable: desc.has(flag::REMATERIALIZABLE),
+        early_clobber: clears_before_it_reads(name),
         ..Inst::new(Kind::Op(name), operands)
     }
+}
+
+/// Whether `name` writes its result before it has read its address: a zero
+/// extending load into a register is `moveq #0` then `move.b`
+/// (`ExpandMOVSZX_RM`), so the result may not be a register the address names.
+///
+/// DEVIATE: the pin's description leaves the result free to share the
+/// address's register, and its expansion falls back to `move.b; and.l #255`
+/// (10 bytes against 6). Reason: best of gcc and clang is the goal. Exit: none.
+fn clears_before_it_reads(name: &str) -> bool {
+    crate::expand::extension(name).is_some_and(|(signed, _, mode, _)| !signed && mode != 'd')
 }
 
 /// The machine function over m68k's classes.
@@ -169,7 +181,7 @@ struct Emitter<'a> {
     /// again, and cannot be run again (they have a result besides the
     /// codes, or touch memory): the codes are copied to a register right
     /// after them (`InsertCopiesAndMoveSuccs`).
-    save: std::collections::HashSet<u32>,
+    save: llrm_support::hash::HashSet<u32>,
     /// The register the codes of a node in `save` were copied to.
     saved: HashMap<u32, Reg>,
 }
@@ -315,9 +327,9 @@ impl Emitter<'_> {
     fn nodes_to_save(
         &self,
         block: &Selected,
-    ) -> std::collections::HashSet<u32> {
+    ) -> llrm_support::hash::HashSet<u32> {
         let mut flags_from: Option<u32> = None;
-        let mut save = std::collections::HashSet::new();
+        let mut save = llrm_support::hash::HashSet::default();
         for unit in &block.units {
             for &node in unit.nodes.iter().rev() {
                 let value = SDValue { node, res: 0 };
@@ -515,14 +527,14 @@ pub fn emit(
     let mut emitter = Emitter {
         dag: &first.dag,
         function: MFunction::new(name),
-        values: HashMap::new(),
-        builder: HashMap::new(),
+        values: HashMap::default(),
+        builder: HashMap::default(),
         flags_from: None,
         save: Default::default(),
-        saved: HashMap::new(),
+        saved: HashMap::default(),
     };
     emitter.function.locals.extend(first.locals.iter().copied());
-    let mut place_numbers: HashMap<llrm_codegen::model::lir::SrcLoc, usize> = HashMap::new();
+    let mut place_numbers: HashMap<llrm_codegen::model::lir::SrcLoc, usize> = HashMap::default();
     for one in blocks {
         emitter.dag = &one.dag;
         emitter.values.clear();
@@ -557,6 +569,12 @@ pub fn emit(
             }
         }
         emitter.function.fixed.extend(one.dag.fixed_offsets.clone());
+        if one.ends_unreachable {
+            let mut end = Inst::new(Kind::Op("UNREACHABLE"), Vec::new());
+            end.terminator = true;
+            end.barrier = true;
+            insts.push(end);
+        }
         let mut block = Block { id: one.block.0, insts, phis: Vec::new() };
         block.place_unlocated();
         emitter.function.blocks.push(block);
@@ -766,8 +784,8 @@ pub fn expand_cmov(function: &mut MFunction) -> Result<(), String> {
             restore.sets_flags = true;
             tail.insert(second, restore);
         }
-        let mut head_value: HashMap<Reg, Reg> = HashMap::new();
-        let mut other_value: HashMap<Reg, Reg> = HashMap::new();
+        let mut head_value: HashMap<Reg, Reg> = HashMap::default();
+        let mut other_value: HashMap<Reg, Reg> = HashMap::default();
         let mut phis = Vec::new();
         for cmov in &cmovs {
             let (result, on_false, on_true, cond) = cmov_parts(cmov)?;

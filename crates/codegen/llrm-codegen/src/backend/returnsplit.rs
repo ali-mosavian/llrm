@@ -84,10 +84,10 @@ fn split_body(procedure: &masm::Procedure) -> Option<LirBody> {
     }
     let by_at: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let predecessors = jumps::_predecessors(&body.blocks);
-    let base = save_of(procedure, body);
-    if base.is_some_and(|at| at != body.entry) {
-        return None;
-    }
+    // Where the frame is set up, asked once and only of a body with an edge to
+    // split: the shrink wrapping it costs ran for every function of three
+    // blocks (42M of the 43M this pass cost memory_expansion -O2).
+    let mut base: Option<Option<i64>> = None;
     for tail in &body.blocks {
         let Some((load, cell)) = reload_return(tail) else { continue };
         let parents = predecessors.get(&tail.at)?;
@@ -104,6 +104,9 @@ fn split_body(procedure: &masm::Procedure) -> Option<LirBody> {
         }
         if edges.is_empty() {
             continue;
+        }
+        if base.get_or_insert_with(|| save_of(procedure, body)).is_some_and(|at| at != body.entry) {
+            return None;
         }
         let all = rebuilt(body, tail, &load, &edges);
         let Some(save) = save_of(procedure, &all) else { continue };
@@ -345,4 +348,62 @@ fn rebuilt(
     let place = made.iter().position(|block| block.at == tail.at).map_or(made.len(), |index| index + 1);
     made.splice(place..place, extra);
     body.with_blocks(made)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::ir::{Imm, Loc};
+
+    fn insn(
+        at: i64,
+        op: Operation,
+        name: &str,
+    ) -> Arc<Insn> {
+        let what = Semantics {
+            name: Some(name.into()),
+            sources: vec![Loc::Imm(Imm { value: 1, width: 4, address: None })],
+            ..Semantics::new(op)
+        };
+        Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![], vec![]))
+    }
+
+    /// `split` asked for the shrink wrap of every function of three blocks
+    /// before it looked for a return to split: 65 wraps of 650,000
+    /// instructions each in memory_expansion -O2, in functions with none. A
+    /// body with no block that reloads a cell and returns asks for none.
+    #[test]
+    fn test_a_body_with_no_return_to_split_is_not_shrink_wrapped() {
+        let block = |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| {
+            LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) }
+        };
+        let blocks = vec![
+            block(0, vec![1, 2], vec![insn(0, Operation::Branch, "jne")]),
+            block(1, vec![2], vec![insn(1, Operation::Jump, "jmp")]),
+            block(2, vec![], vec![insn(2, Operation::Return, "ret")]),
+        ];
+        let body = LirBody::new(
+            "plain",
+            0,
+            crate::model::lir::shared(blocks),
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let procedure = masm::Procedure {
+            name: "plain".into(),
+            public: true,
+            far: false,
+            body,
+            reserve: 0,
+            callees: IndexMap::default(),
+            interrupt: None,
+            size: false,
+            entry: 0,
+            stack_check: None,
+            probe_stack: None,
+            registers: llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
+        };
+        let done = split(procedure);
+        assert_eq!(done.body.facts.0.counted("shrinkwrap"), 0);
+    }
 }

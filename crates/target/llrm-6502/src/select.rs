@@ -13,7 +13,6 @@
 //! checks selection and emission, not allocation. Exit: the shared allocator
 //! takes the 6502 (post-parity).
 
-use std::collections::HashMap;
 use std::fmt::Write;
 
 use llrm_codegen::backend::frameobjects::Object;
@@ -24,6 +23,7 @@ use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{NodeData, SDValue};
 use llrm_mir::context::GlobalId;
 use llrm_mir::module::{BlockId, Module};
+use llrm_support::hash::HashMap;
 
 use crate::REGISTER_INFO;
 use crate::alloc;
@@ -74,7 +74,7 @@ struct Cells<'a> {
     deferred: Vec<MInst>,
     /// The successors the current block branches to by label, for the edge
     /// blocks.
-    branched_to: std::collections::HashSet<u32>,
+    branched_to: llrm_support::hash::HashSet<u32>,
 }
 
 impl Cells<'_> {
@@ -131,8 +131,12 @@ pub fn function_text(
             },
         );
     let (items, _, places) = function_items_with_places(module, name, selection)?;
-    let (function, labels) =
+    let (mut function, labels) =
         alloc::build_with_places(name, &items, places).map_err(|why| format!("{name}: {}", why.0))?;
+    function.returns_twice = module
+        .named(name)
+        .and_then(|id| module.global(id).function())
+        .is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
     let (code, slots) = alloc::emit(
         function,
         &labels,
@@ -195,7 +199,7 @@ pub fn function_items_with_places(
     selection: &Selection,
 ) -> Result<(Vec<Item>, (Vec<String>, Vec<String>), Vec<llrm_codegen::model::lir::SrcLoc>), String> {
     let mut places: Vec<llrm_codegen::model::lir::SrcLoc> = Vec::new();
-    let mut number_of: HashMap<llrm_codegen::model::lir::SrcLoc, u32> = HashMap::new();
+    let mut number_of: HashMap<llrm_codegen::model::lir::SrcLoc, u32> = HashMap::default();
     let blocks = &selection.blocks;
     let (laid_out, fixed) = lay_out_frame(blocks, &selection.locals);
     let mut cells = Cells {
@@ -203,11 +207,11 @@ pub fn function_items_with_places(
         next: 0,
         bytes: Vec::new(),
         words: Vec::new(),
-        virtual_regs: HashMap::new(),
+        virtual_regs: HashMap::default(),
         widths: selection.widths.clone(),
         frame: laid_out,
         fixed,
-        saved: HashMap::new(),
+        saved: HashMap::default(),
         deferred: Vec::new(),
         branched_to: Default::default(),
     };
@@ -218,7 +222,7 @@ pub fn function_items_with_places(
     }
     for one in blocks {
         body.push(Item::Label(block_label(name, one.block.0)));
-        let mut values: HashMap<(u32, u8), Operand> = HashMap::new();
+        let mut values: HashMap<(u32, u8), Operand> = HashMap::default();
         for &(register, vreg) in &one.live_ins {
             let from = REGISTER_INFO.name(register).ok_or("a live-in with no name")?;
             let bits = if from.starts_with("rs") { 16 } else { 8 };
@@ -273,6 +277,19 @@ pub fn function_items_with_places(
                     body.push(Item::Inst(inst));
                 }
             }
+        }
+        // An IR `unreachable` emits nothing in the pin (the machine block has
+        // no successors); here a block with no terminator falls into the next
+        // one, so the end is stated.
+        let ends_unreachable = module.named(name).and_then(|id| module.global(id).function()).is_some_and(|function| {
+            // a block a lowering made out of an IR block has no number there
+            (one.block.0 as usize) < function.block_capacity()
+                && function
+                    .terminator(one.block)
+                    .is_some_and(|last| function.instruction(last).opcode == llrm_mir::opcode::Opcode::Unreachable)
+        });
+        if ends_unreachable {
+            body.push(Item::Inst(MInst::new(crate::emit::spill::UNREACHABLE, Vec::new())));
         }
         if split {
             // The edge taken by falling into the next block copies in line; the
@@ -618,7 +635,14 @@ fn lower(
                         }
                         let at = location(module, name, one, input, values, cells)?;
                         match &at {
-                            Operand::Reg(text) if cells.saved.contains_key(text) => {
+                            // a carry read as a value (a compare of two bits)
+                            // is the saved byte, 0 or 1; only a carry operand
+                            // is loaded back into C
+                            Operand::Reg(text)
+                                if cells.saved.contains_key(text)
+                                    && !(cells.saved[text]
+                                        && desc.operands.get(operands.len()).is_some_and(|o| o.reg_class != CARRY)) =>
+                            {
                                 let carry = cells.saved[text];
                                 before.push(MInst::new(
                                     if carry { spill::LOAD_CARRY } else { spill::LOAD_FLAGS },

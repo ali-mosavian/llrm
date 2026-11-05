@@ -2804,7 +2804,8 @@ done:
 fn a_hot_count_takes_x_from_a_count_held_for_later() {
     let text = compile(TWO_COPIES, "two");
     let first = text.split("two_b2:").nth(1).and_then(|rest| rest.split("two_b1:").next()).expect("loop");
-    assert!(first.contains("  tax\n"), "the first loop's count is not in x:\n{text}");
+    // the count's high byte steps in x (`dex` on a borrow, once `adc #255; tax`)
+    assert!(first.contains("  dex\n"), "the first loop's count is not in x:\n{text}");
 }
 
 /// A byte stored before it is tested against zero is still the byte in `a`,
@@ -2908,4 +2909,15 @@ fn every_block_has_a_label_whatever_order_the_folding_laid_its_new_ones() {
     for block in &function.blocks {
         assert!(!all[block.id as usize].is_empty(), "block {} has no label: {all:?}", block.id);
     }
+}
+
+/// `lda #0; sta rc5; lda rc5; sta rc6; jmp` (x16basic-c mathlib): the reload
+/// stayed because the scan for who reads its flags stopped at the jump's target.
+#[test]
+fn a_reload_before_a_jump_goes() {
+    use llrm_6502::peephole::drop_reloads;
+    assert_eq!(
+        pass(drop_reloads, "  sta rc5\n  lda rc5\n  sta rc6\n  jmp L\n"),
+        "  sta rc5\n  sta rc6\n  jmp L\n"
+    );
 }

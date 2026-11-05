@@ -97,6 +97,7 @@ const FLOATS: [MVT; 3] = [MVT::F32, MVT::F64, MVT::F80];
 const ALL: [MVT; 10] =
     [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64, MVT::I128, MVT::F32, MVT::F64, MVT::F80, MVT::Other];
 
+#[derive(Clone)]
 pub struct TargetLowering {
     pub types: TargetLoweringInfo,
     operations: HashMap<(ISD, MVT), Action>,
@@ -551,11 +552,24 @@ impl TargetLowering {
         features: Features,
         ptr: MVT,
     ) -> TargetLowering {
-        if !features.soft_float {
-            return Self::x86(TargetLoweringInfo::x86_16(), features, ptr, false);
-        }
         use ISD::*;
-        let mut t = Self::x86(TargetLoweringInfo::x86_16().with_soft_float(), features, ptr, false);
+        let info = TargetLoweringInfo::x86_16();
+        let mut t = if features.soft_float {
+            Self::x86(info.with_soft_float(), features, ptr, false)
+        } else {
+            Self::x86(info, features, ptr, false)
+        };
+        // DEVIATE SD542: the pin promotes an `i16` trailing count to `i32` to
+        // avoid the 0x66 prefix; at m16 `i16` is the native width and the
+        // promoted form is a dword scan plus a dword spill. Owner m16.
+        // Exit 2026-11-20.
+        if !features.bmi {
+            t.set_ops(&[CtTz], &[MVT::I16], Action::Custom);
+            t.set_ops(&[CtTzZeroPoison], &[MVT::I16], Action::Legal);
+        }
+        if !features.soft_float {
+            return t;
+        }
         // The x87 lowerings of a compare, a select and an extension have no
         // registers to work in: the type legalizer softens them first.
         t.set_ops(&[Select, SetCC, FpExtend], &[MVT::F32, MVT::F64], Action::Expand);
@@ -896,10 +910,11 @@ mod tests {
         assert_eq!(t.operation_action(ISD::FpExtend, EVT::Simple(MVT::F64)), Action::Custom);
     }
 
-    /// CSSC turns scalar `ctpop` from a vector sequence into one instruction.
+    /// CSSC turns scalar `ctpop` into one instruction; without it the node
+    /// is expanded until vector MIR lands (DEVIATE SD533), not `Custom`.
     #[test]
     fn aarch64_ctpop_follows_cssc() {
-        assert_eq!(a64().operation_action(ISD::CtPop, EVT::I32), Action::Custom);
+        assert_eq!(a64().operation_action(ISD::CtPop, EVT::I32), Action::Expand);
         let cssc = TargetLowering::aarch64(Aarch64Features { cssc: true, ..Default::default() });
         assert_eq!(cssc.operation_action(ISD::CtPop, EVT::I32), Action::Legal);
     }

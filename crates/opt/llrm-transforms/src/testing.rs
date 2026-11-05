@@ -162,6 +162,15 @@ pub struct Tuned {
     pub no_global_base: bool,
     /// `Tti::prefers_exit_ne`.
     pub exit_ne: bool,
+    /// `ctlz` costs one unit, as on a target with a count-leading-zeros
+    /// instruction.
+    pub cheap_ctlz: bool,
+    /// `FSQRT` is legal on `double`.
+    pub fast_sqrt: bool,
+    /// `Tuning::price_fills`.
+    pub price_fills: bool,
+    /// No constant memset is stored inline: every fill is a `rep stos`.
+    pub rep_fills: bool,
 }
 
 use llrm_mir::tti;
@@ -170,17 +179,41 @@ use llrm_mir::tti;
 #[derive(Default)]
 pub struct Flagged {
     pub exit_ne: bool,
+    /// `ctlz` costs one unit, as on a target with a count-leading-zeros
+    /// instruction.
+    pub cheap_ctlz: bool,
+    pub fast_sqrt: bool,
     pub no_cmov: bool,
     pub no_global_base: bool,
 }
 
 impl llrm_mir::tti::Tti for Flagged {
+    fn have_fast_sqrt(
+        &self,
+        ty: tti::Ty,
+    ) -> bool {
+        self.fast_sqrt && ty == tti::Ty::Double
+    }
+
     fn prefers_exit_ne(&self) -> bool {
         self.exit_ne
     }
 
     fn has_cmov(&self) -> bool {
         !self.no_cmov
+    }
+
+    fn intrinsic_cost(
+        &self,
+        name: &str,
+        ret: Option<tti::Ty>,
+        args: &[tti::Ty],
+        kind: tti::CostKind,
+    ) -> tti::Cost {
+        if self.cheap_ctlz && name.starts_with("llvm.ctlz.") {
+            return tti::Cost::BASIC;
+        }
+        tti::Basic.intrinsic_cost(name, ret, args, kind)
     }
 
     fn cmp_sel_cost(
@@ -280,10 +313,26 @@ impl llrm_mir::lowering::Lowering for FoldsMasks {
 }
 
 impl llrm_mir::target::Machine for Tuned {
+    fn tuning(&self) -> llrm_mir::target::Tuning {
+        let inline = if self.rep_fills { 0 } else { llrm_mir::target::Tuning::PIN.max_stores_per_memset };
+        let inline_size = if self.rep_fills { 0 } else { llrm_mir::target::Tuning::PIN.max_stores_per_memset_opt_size };
+        llrm_mir::target::Tuning {
+            price_fills: self.price_fills,
+            max_stores_per_memset: inline,
+            max_stores_per_memset_opt_size: inline_size,
+            ..llrm_mir::target::Tuning::PIN
+        }
+    }
+
     fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
-        (self.exit_ne || self.no_global_base).then(|| {
-            std::rc::Rc::new(Flagged { exit_ne: self.exit_ne, no_cmov: false, no_global_base: self.no_global_base })
-                as _
+        (self.exit_ne || self.no_global_base || self.cheap_ctlz || self.fast_sqrt).then(|| {
+            std::rc::Rc::new(Flagged {
+                exit_ne: self.exit_ne,
+                no_cmov: false,
+                no_global_base: self.no_global_base,
+                cheap_ctlz: self.cheap_ctlz,
+                fast_sqrt: self.fast_sqrt,
+            }) as _
         })
     }
 
@@ -360,4 +409,23 @@ impl llrm_mir::target::Machine for Tuned {
 pub fn stamped(module: &mut Module) -> Result<Vec<GlobalId>, String> {
     let mut analyses = llrm_mir::passes::ModuleAnalyses::of(module, std::rc::Rc::new(llrm_mir::target::Neutral));
     crate::interprocedural::stamped(module, &mut analyses)
+}
+
+/// The data layout the tests that need one share.
+pub fn layout() -> llrm_mir::datalayout::DataLayout {
+    llrm_mir::datalayout::DataLayout::parse("e-m:e-p:32:32-f64:32:64-f80:32-n8:16:32-S128").expect("a layout")
+}
+
+/// @f of `module` closed in LCSSA form; whether anything changed.
+pub fn closed(module: &mut Module) -> Result<bool, String> {
+    closed_named(module, "f")
+}
+
+/// The function `name` of `module` closed in LCSSA form.
+pub fn closed_named(
+    module: &mut Module,
+    name: &str,
+) -> Result<bool, String> {
+    let (context, function) = module.function_mut(name).expect("the function");
+    crate::lcssa::closed(context, &layout(), function)
 }

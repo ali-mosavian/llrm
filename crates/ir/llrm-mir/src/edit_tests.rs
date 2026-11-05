@@ -1035,7 +1035,7 @@ fn a_block_takes_the_name_of_another_and_a_taken_name_gets_a_number() {
 }
 
 /// A `switch` with two cases to one block is two edges: a phi there has two
-/// inputs from it, and the exit phis of lcssa, lcssamerges and LSR gave one.
+/// inputs from it, and the exit phis of lcssa and LSR gave one.
 #[test]
 fn a_switch_with_two_cases_to_a_block_is_two_edge_predecessors() {
     let text = "define i16 @f(i16 %x) {\nentry:\n  switch i16 %x, label %d [\n    i16 1, label %t\n    i16 2, label %t\n  ]\n\nt:\n  ret i16 1\n\nd:\n  ret i16 2\n}\n";

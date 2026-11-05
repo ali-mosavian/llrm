@@ -195,7 +195,14 @@ pub fn optimized_at(
     llrm_transforms::pipeline::applied(program, &Applied { dump, options, ..Applied::default() })?;
     // The pin's PreISelIntrinsicLowering: the selector never sees the
     // intrinsic.
-    program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)
+    program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
+    // `addIRPasses`: GlobalMerge, after the mid-end, before selection.
+    if let Some(merge) = program.target.global_merge(level == Level::O3) {
+        for module in &mut program.modules {
+            llrm_transforms::globalmerge::merged(module, &program.layout, &merge)?;
+        }
+    }
+    Ok(())
 }
 
 /// The routines the C link of this target resolves, by their IR names (the
@@ -289,32 +296,37 @@ pub fn functions_with(
                 return Err(format!("@{name}: read before written: {undefined:?}"));
             }
         }
+        machine.frame_pointer =
+            llrm_codegen::backend::framefree::frame_pointer_policy(&function.attrs).map(str::to_owned);
         crate::prepass::run(&mut machine);
         dump("Prepass", &machine);
+        let optsize = function
+            .attrs
+            .iter()
+            .any(
+                |attr| matches!(
+                    attr,
+                    llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
+                ),
+            );
         if !llrm_support::env_flag!("LLRM_ARM64_NO_COMBINE") {
-            let size = function
-                .attrs
-                .iter()
-                .any(
-                    |attr| matches!(
-                        attr,
-                        llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
-                    ),
-                );
-            crate::combine::run(&mut machine, size);
+            crate::combine::run(&mut machine, optsize);
             dump("Combine", &machine);
         }
+        crate::cmpzero::run(&mut machine);
+        dump("CmpZero", &machine);
         crate::flagcse::run(&mut machine);
         dump("FlagCse", &machine);
-        crate::storecluster::run(&mut machine);
-        dump("StoreCluster", &machine);
+        crate::memcluster::run(&mut machine);
+        dump("MemCluster", &machine);
         crate::sibcall::run(&mut machine);
         dump("SibCall", &machine);
         crate::prepass::order_copies(&mut machine);
         dump("OrderCopies", &machine);
         // The shared greedy allocator, unless `LLRM_ARM64_LINEAR` asks for the
         // linear scan; a function greedy refuses goes to the scan, reported.
-        let greedy = (!llrm_support::env_flag!("LLRM_ARM64_LINEAR")).then(|| crate::lir_view::allocate(&mut machine));
+        let greedy =
+            (!llrm_support::env_flag!("LLRM_ARM64_LINEAR")).then(|| crate::lir_view::allocate(&mut machine, optsize));
         let allocation = match greedy {
             Some(Ok(allocation)) => allocation,
             Some(Err(why)) => {
@@ -324,11 +336,20 @@ pub fn functions_with(
             None => crate::regalloc::allocate(&mut machine),
         };
         dump("RegAlloc", &machine);
+        crate::copyprop::run(&mut machine);
+        crate::postrasink::run(&mut machine);
+        dump("PostRaSink", &machine);
         let variables = crate::frame::variable_offsets(&machine, &allocation, platform == Platform::Darwin);
         let blocks = crate::frame::lower(&machine, &allocation, platform == Platform::Darwin)
             .map_err(|why| format!("@{name}: {why}"))?;
         let mut tables = crate::jumptable::tables_of(&machine);
-        let blocks = crate::layout::fold(blocks, &mut tables);
+        let blocks = crate::layout::fold(
+            blocks,
+            &mut tables,
+            &crate::layout::edge_odds(module, function, &program.layout, &machine),
+            optsize,
+            &crate::mfunc::returned_registers(&machine),
+        );
         let blocks = crate::pairs::fold(blocks);
         let mut blocks = crate::ldst_update::fold(blocks, &crate::mfunc::returned_registers(&machine));
         crate::jumptable::compress(&mut blocks, &mut tables).map_err(|why| format!("@{name}: {why}"))?;

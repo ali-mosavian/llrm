@@ -51,7 +51,7 @@ pub struct Prepared {
     selections: Selections,
     /// With `-g`: the source file and start line of each function, from one
     /// parse of the module.
-    sources: std::collections::HashMap<String, (String, Option<u32>)>,
+    sources: llrm_support::hash::HashMap<String, (String, Option<u32>)>,
 }
 
 impl Prepared {
@@ -127,8 +127,11 @@ fn machine_function_with(
     let (_, source, scheduled) =
         selected.iter().find(|(one, ..)| one == name).ok_or_else(|| format!("no function @{name}"))?;
     let selection = if crate::dagisel::pipeline::ILP.with(std::cell::Cell::get) { scheduled } else { source };
-    let mut function = emit(name, selection.as_ref().map_err(Clone::clone)?)?;
+    let selection = selection.as_ref().map_err(Clone::clone)?;
+    let mut function = emit(name, selection)?;
+    function.returns_twice = selection.returns_twice;
     expand_cmov(&mut function)?;
+    crate::ldir::copy_loops_to_ldir(&mut function);
     if duplicate {
         tail_duplicate_returns(&mut function);
     }
@@ -142,7 +145,7 @@ fn machine_function_with(
 /// virtual registers alone, touches no memory and has no other effect goes.
 fn eliminate_dead(function: &mut MFunction) {
     loop {
-        let mut read = std::collections::HashSet::new();
+        let mut read = llrm_support::hash::HashSet::default();
         for inst in function.blocks.iter().flat_map(|block| &block.insts) {
             for operand in &inst.operands {
                 if let Operand::Use(Reg::Virt(v)) = operand {
@@ -194,7 +197,7 @@ pub fn allocated(
         .map(|(function, assignment, slots, _)| (function, assignment, slots))
 }
 
-type Allocated = (MFunction, Assignment, Vec<(i32, usize)>, std::collections::HashMap<u32, usize>);
+type Allocated = (MFunction, Assignment, Vec<(i32, usize)>, llrm_support::hash::HashMap<u32, usize>);
 
 fn allocated_with(
     selected: &Selections,
@@ -216,29 +219,67 @@ fn allocated_with(
     // B against 427).
     let (plain, with) = (allocate(function, name, request.level), allocate(hoisted, name, request.level));
     match (plain, with) {
-        (Ok(plain), Ok(with)) => match (priced_in_loops(&plain), priced_in_loops(&with)) {
-            (Some(one), Some(other)) if cheaper(request.level, one, other) => Ok(plain),
-            _ => Ok(with),
-        },
+        (Ok(plain), Ok(with)) => {
+            match (priced_in_loops(&plain, request.level), priced_in_loops(&with, request.level)) {
+                (Some(one), Some(other)) if cheaper(request.level, one, other) => Ok(plain),
+                _ => Ok(with),
+            }
+        }
         (_, Ok(with)) => Ok(with),
         (plain, Err(_)) => plain,
     }
 }
 
 /// Bytes and the clocks weighted by loop depth of an allocated function.
-fn priced_in_loops(one: &Allocated) -> Option<(u32, u64)> {
+fn priced_in_loops(
+    one: &Allocated,
+    level: Level,
+) -> Option<(u32, u64)> {
     let (function, assignment, slots, reads) = one;
-    finish(function, assignment, 0, slots, reads.clone()).ok().map(|lines| expand::price_in_loops(&lines))
+    expand::PRICING.with(|one| one.set(priced_before_peepholes(level)));
+    let lines = finish(function, assignment, 0, slots, reads.clone());
+    expand::PRICING.with(|one| one.set(false));
+    lines.ok().map(|lines| expand::price_in_loops(&lines))
 }
 
-/// Whether the price `one` beats `other`: bytes first at the size levels,
-/// weighted clocks first otherwise.
+/// Whether a variant is priced before the printer's peepholes. At the speed
+/// levels the price is weighted clocks, good to a few tenths of a percent, and
+/// a peephole moved a near-tie to the worse variant (copy_runs -O2: 2 B and
+/// 600 T). At the size levels the price is bytes, exact, and a peephole's
+/// bytes are real: without them pattern_fill -Os chose a variant 1 B bigger.
+fn priced_before_peepholes(level: Level) -> bool {
+    !matches!(level, Level::Os | Level::Oz)
+}
+
+/// Whether the price `one` beats `other`: bytes first at the size levels;
+/// otherwise weighted clocks plus 3 clocks a byte (1 B = 3 T), so a variant
+/// that is bigger and no faster by that rate does not win on a clock alone.
 fn cheaper(
     level: Level,
     one: (u32, u64),
     other: (u32, u64),
 ) -> bool {
-    if matches!(level, Level::Os | Level::Oz) { one < other } else { (one.1, one.0) < (other.1, other.0) }
+    let priced = |(bytes, clocks): (u32, u64)| clocks + 3 * u64::from(bytes);
+    if matches!(level, Level::Os | Level::Oz) { one < other } else { priced(one) < priced(other) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A variant 61 B bigger for 107 clocks fewer won on the clocks alone
+    /// (tail_calls -O1, 4444 B to 4505 B); at 1 B = 3 T it loses.
+    #[test]
+    fn variants_are_priced_with_the_peepholes_only_at_the_size_levels() {
+        assert!(priced_before_peepholes(Level::O2) && priced_before_peepholes(Level::O3));
+        assert!(!priced_before_peepholes(Level::Os) && !priced_before_peepholes(Level::Oz));
+    }
+
+    #[test]
+    fn a_bigger_variant_does_not_win_on_fewer_clocks_alone() {
+        assert!(!cheaper(Level::O2, (4505, 85_000), (4444, 85_107)));
+        assert!(cheaper(Level::O2, (4440, 85_000), (4444, 85_107)));
+    }
 }
 
 /// Allocates `function`; where the first allocation fails, once more with the
@@ -249,9 +290,9 @@ fn cheaper(
 ///
 /// Where the choice can allocate better, the other choices are allocated too
 /// and the cheaper by the loop's weighted clocks stays, bytes first at the
-/// size levels and clocks first otherwise: the argument copies joined or not
-/// (a constant kept in a register of its own, or not), and a byte wanted both
-/// in `a` and in a register of its own loaded through `a` or through `hl`.
+/// size levels and clocks plus 3 a byte otherwise: the argument copies joined
+/// or not (a constant kept in a register of its own, or not), and a byte wanted
+/// both in `a` and in a register of its own loaded through `a` or through `hl`.
 fn allocate(
     function: MFunction,
     name: &str,
@@ -317,7 +358,7 @@ fn improved(
     }
     for (unjoined, strict) in others {
         let Ok((other, _)) = allocate_with(unjoined, strict, function.clone(), name, level) else { continue };
-        if let (Some(now), Some(then)) = (priced_in_loops(&best), priced_in_loops(&other)) {
+        if let (Some(now), Some(then)) = (priced_in_loops(&best, level), priced_in_loops(&other, level)) {
             if cheaper(level, then, now) {
                 best = other;
             }
@@ -343,10 +384,19 @@ fn allocate_once(
     strict: bool,
     level: Level,
 ) -> Result<(Allocated, bool), String> {
+    if std::env::var("LLRM_NO_Z80_NARROW").is_err() {
+        crate::narrow::narrow_low_only_pairs(&mut function);
+    }
     two_address(&mut function);
     let held = read_bytes_through_their_pairs(&mut function, strict);
     use_the_shift_carry(&mut function);
     sink_copies_before_allocation(&mut function);
+    if std::env::var("LLRM_NO_Z80_FORWARD").is_err() {
+        crate::forward::read_pairs_from_their_registers(&mut function);
+        if std::env::var("LLRM_NO_Z80_CARRY").is_err() {
+            crate::forward::carry_pairs_across_edges(&mut function);
+        }
+    }
     if std::env::var("LLRM_Z80_DUMP").is_ok_and(|one| one == name) {
         dump(&function);
     }
@@ -488,7 +538,7 @@ fn read_bytes_through_their_pairs(
     };
     // the values wanted in `a`: some use is a copy into `a` or into such a
     // value
-    let mut in_a = std::collections::HashSet::<u32>::new();
+    let mut in_a = llrm_support::hash::HashSet::<u32>::default();
     loop {
         let before = in_a.len();
         for inst in function.blocks.iter().flat_map(|block| &block.insts) {
@@ -507,7 +557,7 @@ fn read_bytes_through_their_pairs(
     // the two is cheaper depends on the pressure on `hl`, so `strict` holds
     // such a byte back and the caller tries both
     let mut held = false;
-    let read_elsewhere: std::collections::HashSet<u32> = function
+    let read_elsewhere: llrm_support::hash::HashSet<u32> = function
         .blocks
         .iter()
         .flat_map(|block| &block.insts)
@@ -718,7 +768,7 @@ pub fn spills_first(
 fn hoist_constants(function: &mut MFunction) -> bool {
     let mut moved = false;
     let cfg = Cfg::new(function);
-    let mut defs = std::collections::HashMap::<u32, usize>::new();
+    let mut defs = llrm_support::hash::HashMap::<u32, usize>::default();
     for inst in function.blocks.iter().flat_map(|block| &block.insts) {
         for operand in &inst.operands {
             if let Operand::Def(Reg::Virt(v)) = operand {
@@ -848,7 +898,7 @@ pub fn sink_copies_to_the_branch(
 /// the branch, so it lived beside the value it replaces and the two could not
 /// share a register (minmax's `lo`: a register more, spilled).
 pub fn sink_copies_before_allocation(function: &mut MFunction) {
-    let mut defs = std::collections::HashMap::<u32, u32>::new();
+    let mut defs = llrm_support::hash::HashMap::<u32, u32>::default();
     for inst in function.blocks.iter().flat_map(|block| &block.insts) {
         for operand in &inst.operands {
             if let Operand::Def(Reg::Virt(v)) = operand {
@@ -1460,8 +1510,8 @@ fn sunk_operand(
     value: Reg,
 ) -> Option<Vec<usize>> {
     let insts = &function.blocks[block].insts[..p];
-    let mut uses: std::collections::HashMap<Reg, usize> = std::collections::HashMap::new();
-    let mut defs: std::collections::HashMap<Reg, usize> = std::collections::HashMap::new();
+    let mut uses: llrm_support::hash::HashMap<Reg, usize> = llrm_support::hash::HashMap::default();
+    let mut defs: llrm_support::hash::HashMap<Reg, usize> = llrm_support::hash::HashMap::default();
     for one in &function.blocks {
         for inst in &one.insts {
             for operand in &inst.operands {
@@ -1639,8 +1689,8 @@ fn expand_cmov(function: &mut MFunction) -> Result<(), String> {
         let taken = tail.iter().take_while(|inst| same(inst)).count();
         let cmovs: Vec<Inst> = tail.drain(..taken).collect();
         let branch = branch_for(first).ok_or_else(|| format!("a CMOV on condition {first}"))?;
-        let mut head_value = std::collections::HashMap::new();
-        let mut other_value = std::collections::HashMap::new();
+        let mut head_value = llrm_support::hash::HashMap::default();
+        let mut other_value = llrm_support::hash::HashMap::default();
         let mut phis = Vec::new();
         for cmov in &cmovs {
             let (result, on_false, on_true, cond) = cmov_parts(cmov)?;

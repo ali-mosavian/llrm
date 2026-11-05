@@ -355,12 +355,19 @@ pub struct MFunc {
     /// objects are addressed from the frame pointer and outgoing arguments are
     /// made room for around each call.
     pub dynamic: bool,
+    /// The function's `"frame-pointer"` attribute (`all`, `non-leaf`, ...).
+    pub frame_pointer: Option<String>,
     /// The frame object each source variable lives in (`llvm.dbg.declare` of
     /// an `alloca`), by the variable's metadata node.
     pub declared: Vec<(llrm_mir::MetadataId, u32)>,
     /// The constants the function loads from memory (`MachineConstantPool`),
     /// each under the label its address is taken from.
     pub pool: Vec<PoolEntry>,
+    /// The selector's block ids in label order, and the branch probabilities
+    /// it kept for the edges it split (`(from, to, numerator / 2^31)`); empty
+    /// when the selector kept none.
+    pub block_ids: Vec<u32>,
+    pub edge_probs: Vec<(u32, u32, u32)>,
 }
 
 /// A constant pool entry: `bytes` at `align`, under `label`.
@@ -484,7 +491,7 @@ pub fn sequence_copies(
 /// The virtual registers some path reads before writing: a phi copy that
 /// missed an edge leaves one (`LLRM_ARM64_VERIFY`).
 pub fn undefined_reads(function: &MFunc) -> Vec<Reg> {
-    use std::collections::HashSet;
+    use llrm_support::hash::HashSet;
     let labels: HashMap<&str, usize> =
         function.blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at)).collect();
     let count = function.blocks.len();

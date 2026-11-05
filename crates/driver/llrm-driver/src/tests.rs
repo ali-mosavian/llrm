@@ -1972,10 +1972,7 @@ fn a_probed_frame_ending_in_a_sibling_call_gives_its_stack_back_first() {
     // The red zone may take some of the frame's bytes; what the prologue
     // takes the exit gives back.
     let taken = lines.iter().find_map(|line| line.strip_prefix("sub rsp, ")).unwrap_or_else(|| panic!("{listing}"));
-    assert!(
-        lines[jmp - 1] == format!("add rsp, {taken}") || lines[jmp - 1].starts_with("mov rsp, rbp"),
-        "{listing}"
-    );
+    assert!(lines[jmp - 1] == format!("add rsp, {taken}") || lines[jmp - 1].starts_with("mov rsp, rbp"), "{listing}");
 }
 
 /// The `.xdata` of an x86-64 module written as COFF, found by `.pdata`'s
@@ -2635,6 +2632,16 @@ fn the_first_row_of_a_function_is_its_scope_line_at_m32() {
     }
 }
 
+/// bench/jpeg_fixed compiled from unoptimized IR at -O2 panicked in the
+/// allocator ("Cannot overlap different values"): `v = implicit_def` before a
+/// loop and `v := cmove v, x` in it, where the `implicit_def` was dropped and
+/// the read stayed, so `v` was live from the function's entry.
+#[test]
+fn a_loop_carried_value_the_entry_path_never_set_is_allocated() {
+    let text = include_str!("../tests/data/implicit_def_loop_carried_m64_o2.ll");
+    compiled(&flags(&["-O2"]), text, "f").expect("compiles");
+}
+
 /// An instruction with no place at the top of a block is line 0 in the pin,
 /// and not a statement; ours left the place of the block before it on every
 /// instruction, so a loop's `-O2` table had no line-0 row at all.
@@ -3002,6 +3009,57 @@ fn a_16_byte_clear_is_xorps_and_one_16_byte_store_at_m64() {
     let has = |start: &str| listing.lines().any(|line| line.trim().starts_with(start));
     assert!(has("xorps") && has("movaps"), "{listing}");
     assert!(!listing.contains("qword"), "{listing}");
+}
+
+/// m64 never stated `pref_loop_alignment`, so its loops were laid out
+/// unaligned where the pin pads every loop header to 16 bytes (not in
+/// size-tuned code).
+#[test]
+fn a_loop_header_is_16_aligned_at_m64_unless_tuned_for_size() {
+    let ir = || {
+        format!(
+            "target datalayout = \"@m64-datalayout@\"\n\
+             target triple = \"x86_64-unknown-linux-gnu\"\n\
+             define i64 @f(ptr %p, i64 %n) {{\n\
+             entry:\n  br label %l\n\
+             l:\n  %i = phi i64 [ 0, %entry ], [ %j, %l ]\n  %s = phi i64 [ 0, %entry ], [ %t, %l ]\n\
+             \x20 %q = getelementptr i64, ptr %p, i64 %i\n  %v = load i64, ptr %q\n  %t = add i64 %s, %v\n\
+             \x20 %j = add i64 %i, 1\n  %c = icmp ult i64 %j, %n\n  br i1 %c, label %l, label %x\n\
+             x:\n  ret i64 %t\n}}\n"
+        )
+    };
+    let listing = |level: &str| {
+        let (built, _) = compiled(&flags(&["-m64", level, "--isel=dag"]), &ir(), "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let plain = listing("-O2");
+    assert!(plain.contains("    align 16\n"), "{plain}");
+    let small = listing("-Os");
+    assert!(!small.contains("    align 16\n"), "{small}");
+}
+
+/// A jump table's index register is copied by the switch lowering itself, not
+/// through `getCopyFromRegs`, so no live-out `AssertZext` wraps it. With one,
+/// the narrowed shift needed a `mov eax, edi` re-zero-extending the index in
+/// the table block (jpeg_fixed +3 B per table).
+#[test]
+fn a_jump_table_index_is_not_zero_extended_again_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @a()\ndeclare void @b()\ndeclare void @c()\ndeclare void @d()\n\
+                define void @f(i32 %x) {\n\
+                \x20 switch i32 %x, label %e [ i32 192, label %la\n i32 193, label %lb\n i32 194, label %lc\n i32 195, label %ld ]\n\
+                la:\n  call void @a()\n  ret void\nlb:\n  call void @b()\n  ret void\n\
+                lc:\n  call void @c()\n  ret void\nld:\n  call void @d()\n  ret void\ne:\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("movsx rcx, dword ptr"), "{listing}");
+    let moves: Vec<&str> = listing
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("mov e") && line.split(", ").nth(1).is_some_and(|r| r.starts_with('e')))
+        .collect();
+    assert!(moves.is_empty(), "{listing}");
 }
 
 /// A local declared `align 16` sat at `[rsp+4]`: the frame clamped every
@@ -3420,8 +3478,8 @@ fn a_register_fill_and_a_quadword_copy_at_m64_are_rep_string_instructions() {
 }
 
 /// `mov rdi, rbx` (3 B) of a value a dword write zeroed above bit 31 is `mov
-/// edi, ebx` (2 B): the pin emits the `movq`, gcc the dword (bench_io, os_files,
-/// os_find +1 B over release/next).
+/// edi, ebx` (2 B): the pin emits the `movq`, gcc the dword (bench_io,
+/// os_files, os_find +1 B over release/next).
 #[test]
 fn a_copy_of_a_zero_extended_dword_is_a_dword_copy_at_m64() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
@@ -3443,4 +3501,189 @@ fn a_copy_of_a_full_width_value_stays_a_qword_copy_at_m64() {
     let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("mov rbx, rdi") && !listing.contains("mov ebx, edi"), "{listing}");
+}
+
+/// Win64 puts argument `n` in RCX, RDX, R8, R9 by position, the fifth on the
+/// stack above the 32-byte home area the caller reserved.
+#[test]
+fn a_win64_function_takes_its_arguments_by_position_above_the_home_area() {
+    let text = format!(
+        "{SYSV}declare i64 @g(i64, i64, i64, i64, i64)\ndefine i64 @f(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e) {{\n  %r = call i64 @g(i64 %e, i64 %d, i64 %c, i64 %b, i64 %a)\n  %s = add i64 %r, 1\n  ret i64 %s\n}}\n"
+    );
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag", "-mabi=win64"]), &text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    // g(e, d, c, b, a): the fifth argument is stack slot 4 over the 32-byte
+    // home area, and the callee's own fifth is above it, past the return
+    // address.
+    assert!(lines.contains(&"mov qword ptr [rsp+32], rcx"), "{listing}");
+    assert!(lines.contains(&"sub rsp, 48"), "{listing}");
+    assert!(lines.contains(&"mov rcx, qword ptr [rsp+96]"), "{listing}");
+    assert!(!listing.contains("rdi") && !listing.contains("rsi"), "SysV registers: {listing}");
+}
+
+/// A Win64 function that keeps doubles in xmm6/xmm7 across a call must save
+/// and reload them (callee-saved there); with no save it clobbered the
+/// caller's xmm6/xmm7. SysV has none callee-saved and gets no `movaps`.
+#[test]
+fn a_win64_function_saves_the_xmm_registers_it_keeps_across_a_call() {
+    let body = "declare double @g(double)\ndefine double @f(double %a, double %b) {\n  %x = call double @g(double %a)\n  %y = call double @g(double %b)\n  %s = fadd double %x, %y\n  %t = fadd double %s, %a\n  %u = fadd double %t, %b\n  ret double %u\n}\n";
+    let text = format!("{SYSV}{body}");
+    let listing_of = |abi: &str| {
+        let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag", abi]), &text, "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let win = listing_of("-mabi=win64");
+    let lines: Vec<&str> = win.lines().map(str::trim).collect();
+    let offset = |line: &&str| -> Option<i64> {
+        let rest = line.strip_prefix("movaps xmmword ptr [rsp+")?;
+        rest.split(']').next()?.parse().ok()
+    };
+    let saves: Vec<i64> = lines.iter().filter_map(offset).collect();
+    let reloads = lines.iter().filter(|line| line.starts_with("movaps xmm") && line.contains(", xmmword ptr [rsp+")).count();
+    assert!(saves.len() >= 2 && reloads == saves.len(), "{win}");
+    assert!(saves.iter().all(|at| at % 16 == 0), "movaps faults off a 16-byte boundary: {win}");
+    let sysv = listing_of("-mabi=sysv");
+    assert!(!sysv.contains("movaps"), "{sysv}");
+}
+
+/// With an `alloca` the stack pointer moves after the prologue, so the xmm
+/// reloads must address the saves from the frame register, not `rsp`.
+#[test]
+fn a_win64_function_with_alloca_reloads_its_xmm_saves_through_the_frame_register() {
+    let body = "declare double @g(double, ptr)\ndefine double @f(double %a, double %b, i64 %n) {\n  %p = alloca i8, i64 %n, align 16\n  %x = call double @g(double %a, ptr %p)\n  %y = call double @g(double %b, ptr %p)\n  %s = fadd double %x, %y\n  %t = fadd double %s, %a\n  %u = fadd double %t, %b\n  ret double %u\n}\n";
+    let text = format!("{SYSV}{body}");
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag", "-mabi=win64"]), &text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    // The frame register lies the pushes and the `sub` above the stack pointer.
+    let pushes = lines.iter().take_while(|l| !l.starts_with("sub rsp")).filter(|l| l.starts_with("push") && **l != "push rbp").count() as i64;
+    let sub: i64 = lines.iter().find_map(|l| l.strip_prefix("sub rsp, ")?.parse().ok()).unwrap();
+    let distance = 8 * pushes + sub;
+    let number = |l: &str, open: &str| -> i64 {
+        let rest = &l[l.find(open).unwrap() + open.len()..];
+        rest.split(']').next().unwrap().replace('+', "").parse().unwrap()
+    };
+    let saves: Vec<i64> =
+        lines.iter().filter(|l| l.starts_with("movaps xmmword ptr [rsp+")).map(|l| number(l, "[rsp")).collect();
+    let reloads: Vec<i64> =
+        lines.iter().filter(|l| l.starts_with("movaps xmm") && l.contains(", xmmword ptr [rbp")).map(|l| number(l, "[rbp")).collect();
+    assert!(!saves.is_empty(), "{listing}");
+    assert_eq!(reloads, saves.iter().map(|at| at - distance).collect::<Vec<_>>(), "{listing}");
+}
+
+/// Win64 passes a variadic call's double in both the vector and the integer
+/// register of its position (`printf("%f", d)` reads it from RDX).
+#[test]
+fn a_win64_variadic_call_repeats_a_double_in_the_integer_register() {
+    let body = "declare i32 @p(ptr, ...)\ndefine i32 @f(ptr %s, double %d) {\n  %r = call i32 (ptr, ...) @p(ptr %s, double %d)\n  ret i32 %r\n}\n";
+    let text = format!("{SYSV}{body}");
+    let listing_of = |abi: &str| {
+        let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag", abi]), &text, "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let win = listing_of("-mabi=win64");
+    assert!(win.contains("movq rdx, xmm1"), "{win}");
+    assert!(!win.contains("mov al"), "Win64 has no vector count: {win}");
+    let sysv = listing_of("-mabi=sysv");
+    assert!(sysv.contains("mov al, 1") && !sysv.contains("rdx"), "{sysv}");
+}
+
+/// A Win64 variadic function finds its unnamed register arguments in the home
+/// area: the callee stores RDX, R8 and R9 there, and `va_start` points at the
+/// first.
+#[test]
+fn a_win64_variadic_function_homes_its_register_arguments_for_va_start() {
+    let body = "declare void @llvm.va_start.p0(ptr)\ndefine i32 @f(i32 %n, ...) {\n  %ap = alloca ptr\n  call void @llvm.va_start.p0(ptr %ap)\n  %p = load ptr, ptr %ap\n  %v = load i32, ptr %p\n  ret i32 %v\n}\n";
+    let text = format!("{SYSV}{body}");
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag", "-mabi=win64"]), &text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    // The homes of RDX, R8 and R9: the return address is at [rsp], the home of
+    // the first argument above it.
+    let below: i64 = lines.iter().find_map(|l| l.strip_prefix("sub rsp, ")?.parse().ok()).unwrap_or(0);
+    for (at, register) in [(16, "rdx"), (24, "r8"), (32, "r9")] {
+        let home = format!("mov qword ptr [rsp+{}], ", at + below);
+        assert!(lines.iter().any(|l| l.starts_with(&home)), "{register} not homed {at} above the return address: {listing}");
+    }
+    assert!(!listing.contains("test al"), "SysV register save area: {listing}");
+    // Win64 has no red zone: nothing is written below the stack pointer.
+    assert!(!listing.contains("[rsp-"), "{listing}");
+}
+
+/// Win64 passes the hidden result pointer in RCX, the first position, so the
+/// next argument is in RDX; the callee returns the pointer in RAX.
+#[test]
+fn a_win64_struct_result_shifts_the_arguments_by_one_position() {
+    let body = "define void @f(ptr sret([3 x i64]) align 8 %o, i64 %a) {\n  store i64 %a, ptr %o\n  ret void\n}\ndeclare void @h(ptr sret([3 x i64]) align 8, i64)\ndefine void @g(ptr %p) {\n  call void @h(ptr sret([3 x i64]) align 8 %p, i64 5)\n  ret void\n}\n";
+    let text = format!("{SYSV}{body}");
+    let listing_of = |name: &str| {
+        let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag", "-mabi=win64"]), &text, name).unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let callee = listing_of("f");
+    assert!(callee.contains("], rdx"), "{callee}");
+    assert!(callee.contains("mov rax, rcx"), "{callee}");
+    let caller = listing_of("g");
+    assert!(caller.contains("dx, 5"), "{caller}");
+}
+
+/// A variadic Win64 function with a variable-sized `alloca` homes its
+/// register arguments through the frame register: the stack pointer moves.
+#[test]
+fn a_win64_variadic_function_with_alloca_homes_through_the_frame_register() {
+    let body = "declare void @llvm.va_start.p0(ptr)\ndeclare void @u(ptr, ptr)\ndefine void @f(i64 %n, ...) {\n  %ap = alloca ptr\n  call void @llvm.va_start.p0(ptr %ap)\n  %buf = alloca i8, i64 %n, align 16\n  call void @u(ptr %buf, ptr %ap)\n  ret void\n}\n";
+    let text = format!("{SYSV}{body}");
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag", "-mabi=win64"]), &text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    for at in [24, 32, 40] {
+        let home = format!("mov qword ptr [rbp+{at}], ");
+        assert!(listing.contains(&home), "[rbp+{at}] not a home: {listing}");
+    }
+    assert!(!listing.contains("[rsp-"), "{listing}");
+}
+
+/// Row W64-1: Win64 shapes with their own ABI rules (a 128-bit integer, a
+/// vector, a by-value struct) are refused, not passed in SysV's way.
+#[test]
+fn a_win64_function_with_an_unprobed_shape_is_refused() {
+    // (function, whether it is the Win64 refusal that stops it: the selector
+    // refuses a 128-bit integer and a vector under SysV too)
+    let cases = [
+        ("define i128 @f(i128 %a) {\n  ret i128 %a\n}\n", false),
+        ("define <4 x i32> @f(<4 x i32> %a) {\n  ret <4 x i32> %a\n}\n", false),
+        ("define i64 @f(ptr byval([3 x i64]) align 8 %p) {\n  %v = load i64, ptr %p\n  ret i64 %v\n}\n", true),
+    ];
+    for (body, by_row) in cases {
+        let text = format!("{SYSV}{body}");
+        let refused = compiled(&flags(&["-m64", "-O2", "--isel=dag", "-mabi=win64"]), &text, "f").err();
+        assert!(refused.is_some(), "silently compiled: {body}");
+        if by_row {
+            assert!(refused.as_ref().is_some_and(|why| why.contains("W64-1")), "{refused:?} for {body}");
+            assert!(compiled(&flags(&["-m64", "-O2", "--isel=dag", "-mabi=sysv"]), &text, "f").is_ok(), "{body}");
+        }
+    }
+}
+
+/// `(x & 0xffff0000) == 0` on an `i64` is a shift and a 16-bit test, the pin's
+/// shifted-mask case of `X86ISD::CMP`: the mask needs a 64-bit immediate
+/// otherwise, and the `and` held a copy of `x` live. Not translated, it was
+/// `mov`, `and`, `test rax, rax`.
+#[test]
+fn a_64_bit_compare_with_a_shifted_mask_is_a_shift_and_a_narrow_test() {
+    let listing_of = |mask: u64| {
+        let body = format!(
+            "define i1 @f(i64 %x) {{\n  %a = and i64 %x, {mask}\n  %c = icmp eq i64 %a, 0\n  ret i1 %c\n}}\n"
+        );
+        let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &format!("{SYSV}{body}"), "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let middle = listing_of(0xFFFF_0000);
+    assert!(middle.contains("shr rdi, 16") && middle.contains("test di, di"), "{middle}");
+    assert!(!middle.contains("and "), "{middle}");
+    // A mask reaching the low bit is a `shl` (one reaching the sign bit is
+    // `icmp ult` before selection).
+    let low = listing_of(0x0000_FFFF_FFFF_FFFF);
+    assert!(low.contains("shl rdi, 16"), "{low}");
+    assert!(!low.contains("and ") && !low.contains("movabs"), "{low}");
 }

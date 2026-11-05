@@ -27,6 +27,11 @@ pub struct Tuning {
     /// What a byte is worth in thousandths of a clock at speed; 0: bytes and
     /// clocks are not traded.
     pub speed_milliclocks_per_byte: i64,
+    /// A fill is weighed against its loop on the target's prices at every
+    /// level (`loopidioms::fills_pay`): strictly where the rate is 0 (neither
+    /// clocks nor bytes may grow), by the rate where it is not. false: the
+    /// pin's, which forms the memset whenever the stores allow.
+    pub price_fills: bool,
     /// A multiply by a constant at speed is the chain of fewest clocks the
     /// CPU's table gives, with no byte term (gcc's `synth_mult` at
     /// -O1..-O3); false: the chain where `speed_milliclocks_per_byte` pays
@@ -73,11 +78,20 @@ pub struct Tuning {
     /// `max-inline-insns-recursive` (`Tti::recursive_inlining`); none: the
     /// pin's inliner.
     pub recursive_inlining: Option<(u32, i64)>,
-    /// gcc's `max-inline-insns-auto` at -O2 and -O3 (15, 30): the most a copy
-    /// of the recursive callee may grow its caller
-    /// (`want_inline_small_function_p`) for `recursive_inlining` to run on
-    /// it; none: no such bar.
+    /// gcc's `max-inline-insns-auto` at -O2 and -O3 (15, 30 of its size
+    /// units) as the most `gcc_insns` a recursive callee may have for
+    /// `recursive_inlining` to run on it, calibrated per target; none: no
+    /// such bar.
     pub recursive_edge_growth: Option<(i64, i64)>,
+    /// DEVIATE PL6: the first iteration of an innermost loop is peeled where
+    /// its entry constants fold enough of the body to pay the copy at the
+    /// speed rate (`Tti::peels_folded_entry`). false: the pin's
+    /// `computePeelCount`.
+    pub peel_folded_entry: bool,
+    /// DEVIATE CS2: where there is no conditional move, a select's arm only
+    /// it reads is made on its own path (`Tti::sinks_select_arms`). false: the
+    /// pin's, both operands before the branch.
+    pub sink_select_arms: bool,
 }
 
 impl Tuning {
@@ -91,6 +105,7 @@ impl Tuning {
         max_stores_per_memmove_opt_size: 4,
         size_milliclocks_per_byte: 0,
         speed_milliclocks_per_byte: 0,
+        price_fills: false,
         multiply_by_clocks: false,
         price_pin_multiplies: false,
         unroll_threshold: None,
@@ -104,7 +119,23 @@ impl Tuning {
         keep_constant_displacements: false,
         recursive_inlining: None,
         recursive_edge_growth: None,
+        peel_folded_entry: false,
+        sink_select_arms: false,
     };
+}
+
+/// What a target says of `GlobalMerge`
+/// ([GlobalMerge.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/GlobalMerge.cpp));
+/// a target that merges nothing answers none.
+#[derive(Clone, Copy, Debug)]
+pub struct GlobalMerge {
+    /// The reach of a base register's immediate: `MaxOffset`.
+    pub max_offset: u64,
+    /// `OnlyOptimizeForSize`: only uses in `minsize` functions count.
+    pub size_only: bool,
+    /// The object format is Mach-O: the merged struct is `internal`, not
+    /// `private`.
+    pub mach_o: bool,
 }
 
 /// Where the target keeps no program data, as linear addresses: old
@@ -165,6 +196,13 @@ pub trait Machine {
     /// overrides. A target with no entry here takes `Tuning::PIN`.
     fn tuning(&self) -> Tuning {
         Tuning::PIN
+    }
+
+    /// Whether IPSCCP runs a second time after ArgumentPromotion changed a body
+    /// (DEVIATE SD443, exit 2026-11-07: interprocedural.rs). The pin runs it
+    /// once; a target that matches the pin's output turns it off.
+    fn second_ipsccp(&self) -> bool {
+        true
     }
 
     /// Clocks a byte of code is worth, in thousandths, where a decision is
@@ -294,6 +332,15 @@ pub trait Machine {
     /// The indexed addresses a memory access may use, native form first.
     fn address_forms(&self) -> Vec<AddressForm>;
 
+    /// How `GlobalMerge` runs at `-O3` (`aggressive`) or below; none where
+    /// the target does not run it.
+    fn global_merge(
+        &self,
+        _aggressive: bool,
+    ) -> Option<GlobalMerge> {
+        None
+    }
+
     /// Whether a `width`-byte load at an address a multiple of `align` may
     /// trap wherever it points. By default any may: only one known
     /// dereferenceable runs where the program would not have run it.
@@ -381,6 +428,9 @@ pub struct OperationCosts {
     pub carry_step: i64,
     pub load: i64,
     pub store: i64,
+    /// A constant stored to memory: the register store, plus the immediate
+    /// in code bytes.
+    pub store_immediate: i64,
     pub memory_update: i64,
     pub branch: i64,
     pub prefix: i64,
@@ -417,11 +467,25 @@ pub struct OperationCosts {
     /// last reader is past (x87 `fstp st(0)`): one held across a loop is
     /// released after it.
     pub float_release: i64,
+    /// A float converted to an integer (`fistp` under the control word that
+    /// truncates, and the word back); 0 where the target converts in one cheap
+    /// instruction.
+    pub float_to_int: i64,
+    /// A float compare whose answer is in a register (x87 `fcom`, `fnstsw`,
+    /// `sahf`); 0 where the target states none.
+    pub float_compare: i64,
     pub extend: i64,
     /// A comparison held as a value (`setcc`), before it is extended.
     pub set: i64,
     pub fill: i64,
     pub fill_cell: i64,
+    /// What of `fill` is the save and restore of a segment register around the
+    /// string instruction; 0 where the fill needs none.
+    pub fill_segment: i64,
+    /// `Tuning::max_stores_per_memset` for these prices: a constant memset of
+    /// at most that many stores is stores, not a fill; 0: the table does not
+    /// say.
+    pub memset_stores: i64,
     /// The code bytes of the routine a fill through a huge pointer is laid
     /// down as, in a table priced by bytes; 0 where there is none.
     pub huge_fill: i64,
@@ -449,6 +513,9 @@ pub struct OperationCosts {
     pub pieces_clear: i64,
     pub pieces_set_size: i64,
     pub pieces_clear_size: i64,
+    /// Bytes of the widest store a constant memset expands to; 0: the
+    /// target's pointer width, a dword at least.
+    pub memset_store: i64,
     /// The fewest case values for which a switch is a jump table (gcc's
     /// `case_values_threshold`); 0: the target has no table jump.
     pub jump_table: i64,
@@ -533,6 +600,7 @@ impl Default for OperationCosts {
             carry_step: 1,
             load: 1,
             store: 1,
+            store_immediate: 1,
             memory_update: 1,
             branch: 1,
             prefix: 0,
@@ -551,10 +619,14 @@ impl Default for OperationCosts {
             folds_loads: false,
             float_store: 1,
             float_release: 0,
+            float_to_int: 0,
+            float_compare: 0,
             extend: 1,
             set: 1,
             fill: 1,
             fill_cell: 1,
+            fill_segment: 0,
+            memset_stores: 0,
             huge_fill: 0,
             huge_copy: 0,
             copy: 1,
@@ -566,6 +638,7 @@ impl Default for OperationCosts {
             pieces_clear: 0,
             pieces_set_size: 0,
             pieces_clear_size: 0,
+            memset_store: 0,
             jump_table: 0,
             cache_line: 0,
             line_fill_clocks: 0,

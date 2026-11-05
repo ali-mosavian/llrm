@@ -44,7 +44,7 @@ struct Frame {
     /// Bytes below IX.
     size: i64,
     /// The offset from IX of each object, by frame index.
-    offsets: std::collections::HashMap<i32, i64>,
+    offsets: llrm_support::hash::HashMap<i32, i64>,
     /// Whether the function sets IX up at all.
     active: bool,
 }
@@ -69,7 +69,7 @@ struct Printer<'a> {
     /// The blocks that are only a `ret`.
     returns_bare: Vec<u32>,
     /// How many times each virtual register is read.
-    reads: std::collections::HashMap<u32, usize>,
+    reads: llrm_support::hash::HashMap<u32, usize>,
     /// A reload the next instruction reads from the frame itself: the register
     /// it would have gone to, and the cell.
     folded: Option<(RegId, String)>,
@@ -113,6 +113,11 @@ pub(crate) fn register_list(register: RegId) -> String {
 /// `hl`, `bc` or `de` as the pointer of an `ld a,(rr)`.
 fn pointer(register: RegId) -> Result<&'static str, String> {
     if is_pair(register) { Ok(name(register)) } else { Err(format!("{} is no pointer pair", name(register))) }
+}
+
+thread_local! {
+    /// Set while a variant is priced: the printer leaves its peepholes out.
+    pub static PRICING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 fn is_pair(register: RegId) -> bool {
@@ -351,8 +356,10 @@ impl Printer<'_> {
                 self.push(format!("{mnemonic} {to}"));
             }
             "ADD16" => {
-                let source = name_of(self, 2)?;
-                self.push(format!("add hl, {source}"));
+                let source = self.register(inst, 2)?;
+                if !self.add_small_constant(source, rest) && !self.step_pair_through_hl(source, rest) {
+                    self.push(format!("add hl, {}", name(source)));
+                }
             }
             "SUB16" => {
                 let source = name_of(self, 2)?;
@@ -375,6 +382,12 @@ impl Printer<'_> {
                     self.push(rotate);
                 }
                 self.push(format!("and a, #{}", 0xFFu32 >> count));
+            }
+            // the sign of the accumulator: its bit 7 into the carry and
+            // out again (`sra a` seven times is 14 B)
+            "SRA8" if shift_count(inst)? == 7 && name_of(self, 0)? == "a" => {
+                self.push("add a, a");
+                self.push("sbc a, a");
             }
             "SHL8" | "SRL8" | "SRA8" => {
                 let to = name_of(self, 0)?;
@@ -547,6 +560,21 @@ impl Printer<'_> {
                 // `dec` would change the zero flag a later reader of the same
                 // compare wants
                 self.push(if self.flags_dead(rest) { format!("dec {to}") } else { format!("ld {to}, #0") });
+                self.out.push(Line::Label(skip));
+            }
+            // destination hl, source de, count bc: `ex de,hl` makes them
+            // `ldir`'s. A count of zero is 65536 here; `LDIRG` skips it.
+            "LDIR" => {
+                self.push("ex de, hl");
+                self.push("ldir");
+            }
+            "LDIRG" => {
+                let skip = format!("{}$", self.out.iter().filter(|line| !matches!(line, Line::Loc(_))).count());
+                self.push("ld a, b");
+                self.push("or a, c");
+                self.push(format!("jr z, {skip}"));
+                self.push("ex de, hl");
+                self.push("ldir");
                 self.out.push(Line::Label(skip));
             }
             "AND16i" | "OR16i" | "XOR16i" => {
@@ -734,6 +762,15 @@ impl Printer<'_> {
                     format!("ld {register}, {slot}")
                 });
             }
+            "SPILL8L" => {
+                let index = self.frame_index(inst, 0)?;
+                let register = name_of(self, 1)?;
+                let Some(Operand::Imm(offset)) = inst.operands.get(2) else {
+                    return Err("a lane spill with no offset".to_owned());
+                };
+                let slot = self.frame_slots(index, *offset, 1)?.remove(0);
+                self.push(format!("ld {slot}, {register}"));
+            }
             "SPILL16" | "RELOAD16" => {
                 let (index, register) =
                     if op == "SPILL16" { (self.frame_index(inst, 0)?, 1) } else { (self.frame_index(inst, 1)?, 0) };
@@ -764,6 +801,7 @@ impl Printer<'_> {
                 }
                 self.push(format!("ret {}", op[3..].to_lowercase()));
             }
+            "UNREACHABLE" => {}
             "RET" => {
                 if self.frame.active {
                     self.push("ld sp, ix");
@@ -774,6 +812,80 @@ impl Printer<'_> {
             other => return Err(format!("{other} is not expanded yet")),
         }
         Ok(())
+    }
+
+    /// `ld rr, #k` then `add hl, rr` with k in 2..=3 or -3..=-2, `rr` and the
+    /// carry dead after: `inc hl` / `dec hl` k times, 2-3 B against 4 B. It is
+    /// done here, not in selection, where a pointer that stays live needs a
+    /// copy and the allocation gets worse.
+    fn add_small_constant(
+        &mut self,
+        source: RegId,
+        rest: &[Inst],
+    ) -> bool {
+        if PRICING.with(|one| one.get()) {
+            return false;
+        }
+        let Some(Line::Inst(last)) = self.out.last() else { return false };
+        let Some(value) = last
+            .strip_prefix("ld ")
+            .and_then(|text| text.strip_prefix(name(source)))
+            .and_then(|text| text.strip_prefix(", #"))
+            .and_then(|text| text.parse::<i32>().ok())
+        else {
+            return false;
+        };
+        let value = if value >= 0x8000 { value - 0x1_0000 } else { value };
+        if !(2..=3).contains(&value.abs()) || !is_pair(source) || source == reg::HL {
+            return false;
+        }
+        if !self.flags_dead(rest) || !self.pair_dead_after(source, rest) {
+            return false;
+        }
+        self.out.pop();
+        for _ in 0..value.abs() {
+            self.push(if value > 0 { "inc hl" } else { "dec hl" });
+        }
+        true
+    }
+
+    /// `ld hl, #k; add hl, rr; ex de, hl` (the sum copied back into `rr`, `hl`
+    /// dead after, the carry too) with k in 1..=3 or -3..=-1: `inc rr` / `dec
+    /// rr` k times, 1-3 B against 5. A pointer kept in `de` or `bc` was
+    /// stepped through `hl`.
+    fn step_pair_through_hl(
+        &mut self,
+        source: RegId,
+        rest: &[Inst],
+    ) -> bool {
+        if PRICING.with(|one| one.get()) {
+            return false;
+        }
+        let Some(Line::Inst(last)) = self.out.last() else { return false };
+        let Some(value) = last.strip_prefix("ld hl, #").and_then(|text| text.parse::<i32>().ok()) else {
+            return false;
+        };
+        let value = if value >= 0x8000 { value - 0x1_0000 } else { value };
+        if !(1..=3).contains(&value.abs()) || source == reg::HL || !is_pair(source) {
+            return false;
+        }
+        let Some(copy) = rest.first().filter(|inst| inst.kind == Kind::Copy) else { return false };
+        let [Operand::Def(to), Operand::Use(from)] = copy.operands[..] else { return false };
+        if self.physical(to) != source || self.physical(from) != reg::HL || !self.flags_dead(rest) {
+            return false;
+        }
+        self.at.1 += 1;
+        let hl_dead = self.pair_dead_after(reg::HL, &rest[1..]);
+        self.at.1 -= 1;
+        if !hl_dead {
+            return false;
+        }
+        self.out.pop();
+        for _ in 0..value.abs() {
+            self.push(format!("{} {}", if value > 0 { "inc" } else { "dec" }, name(source)));
+        }
+        self.skip = 1;
+        true
     }
 
     /// [`Self::dead_after`] for both bytes of `pair`, and the pair itself.
@@ -910,6 +1022,20 @@ impl Printer<'_> {
                 self.push(format!("ld a, {}", name(ah)));
                 self.push(format!("or a, {}", name(al)));
             }
+            // two pairs, one of them `hl`: `sbc hl, rr` sets zero for the whole
+            // word (`add hl, rr` leaves it alone and puts `hl` back)
+            (false, true)
+                if al == reg::L
+                    && matches!(inst.operands.get(2), Some(Operand::Use(_)))
+                    && self.register(inst, 2)? != reg::HL =>
+            {
+                let other = name(self.register(inst, 2)?);
+                self.push("or a, a");
+                self.push(format!("sbc hl, {other}"));
+                if !self.pair_dead_after(reg::HL, rest) {
+                    self.push(format!("add hl, {other}"));
+                }
+            }
             (false, true) => {
                 self.push(format!("ld a, {}", name(al)));
                 self.push(format!("sub a, {bl}"));
@@ -973,7 +1099,7 @@ impl Printer<'_> {
             _ => return Ok(false),
         };
         // nothing but these reads the registers' virtual values
-        let mut inside: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+        let mut inside: llrm_support::hash::HashMap<u32, usize> = llrm_support::hash::HashMap::default();
         for inst in &rest[..taken] {
             for operand in &inst.operands {
                 if let Operand::Use(Reg::Virt(v)) = operand {
@@ -1208,23 +1334,35 @@ fn layout(
     slots: &[(i32, usize)],
 ) -> Frame {
     let mut frame = Frame::default();
-    for &(index, size, _) in &function.locals {
-        frame.size += size;
-        frame.offsets.insert(index, -frame.size);
-    }
     // Slots alone: bytes first, then the words, so the last word lies at SP and
     // each word is one `push`.
     let aligned = function.locals.is_empty() && slots.iter().all(|&(_, size)| size == 1 || size == 2);
-    let mut ordered = slots.to_vec();
     if aligned {
+        let mut ordered = slots.to_vec();
         ordered.sort_by_key(|&(_, size)| size);
-    }
-    for (index, size) in ordered {
-        if aligned && size == 2 && frame.size % 2 == 1 {
-            frame.size += 1;
+        for (index, size) in ordered {
+            if size == 2 && frame.size % 2 == 1 {
+                frame.size += 1;
+            }
+            frame.size += size as i64;
+            frame.offsets.insert(index, -frame.size);
         }
-        frame.size += size as i64;
-        frame.offsets.insert(index, -frame.size);
+    } else {
+        // The smallest objects lie nearest IX: `ld -n(ix), r` reaches 128 bytes
+        // below it, and past that every access is `ld iy, #n; add iy, sp`.
+        // Spill slots and scalars came after a local array and lay beyond its
+        // 8 KB (tests/run/c/fill_nest).
+        let mut objects: Vec<(i32, i64)> = function.locals.iter().map(|&(index, size, _)| (index, size)).collect();
+        objects.extend(slots.iter().map(|&(index, size)| (index, size as i64)));
+        // A frame within IX's reach keeps its locals first and its slots last,
+        // the last slot lying at SP (`pop` then `push` for a reload).
+        if objects.iter().map(|&(_, size)| size).sum::<i64>() > 127 {
+            objects.sort_by_key(|&(_, size)| size);
+        }
+        for (index, size) in objects {
+            frame.size += size;
+            frame.offsets.insert(index, -frame.size);
+        }
     }
     for (&index, &offset) in &function.fixed {
         frame.offsets.insert(index, FIRST_ARGUMENT + offset);
@@ -1317,8 +1455,8 @@ fn entry_pushes(
 /// The instructions of `function` with the registers `assignment` gave them.
 /// `slots` are the spill slots and their sizes in bytes.
 /// How many times each virtual register is read, copies included.
-pub fn reads(function: &MFunction) -> std::collections::HashMap<u32, usize> {
-    let mut reads = std::collections::HashMap::new();
+pub fn reads(function: &MFunction) -> llrm_support::hash::HashMap<u32, usize> {
+    let mut reads = llrm_support::hash::HashMap::default();
     for inst in function.blocks.iter().flat_map(|block| &block.insts) {
         for operand in &inst.operands {
             if let Operand::Use(Reg::Virt(v)) = operand {
@@ -1336,7 +1474,7 @@ pub fn finish(
     assignment: &Assignment,
     number: usize,
     slots: &[(i32, usize)],
-    reads: std::collections::HashMap<u32, usize>,
+    reads: llrm_support::hash::HashMap<u32, usize>,
 ) -> Result<Vec<Line>, String> {
     let mut function = tail_calls(function);
     let frame = layout(&function, slots);
@@ -1393,7 +1531,7 @@ pub fn finish(
             printer.instruction(inst, next, &block.insts[index + 1..])?;
         }
     }
-    Ok(drop_unreachable(printer.out))
+    Ok(drop_unreachable(cancel_steps(printer.out)))
 }
 
 /// Whether `text` ends the flow: `ret`, `jp L` or `jr L` with no condition.
@@ -1402,11 +1540,38 @@ fn ends_flow(text: &str) -> bool {
         || text.strip_prefix("jp ").or_else(|| text.strip_prefix("jr ")).is_some_and(|rest| !rest.contains(','))
 }
 
+/// `dec rr` then `inc rr` of the same pair, or the reverse, is nothing: neither
+/// touches the flags. A word stored through a pointer leaves it where it was
+/// (`inc hl; ld (hl), d; dec hl`), and a pointer stepped by one after that
+/// undoes the restore.
+fn cancel_steps(lines: Vec<Line>) -> Vec<Line> {
+    fn step(line: &Line) -> Option<(i32, &str)> {
+        let Line::Inst(text) = line else { return None };
+        text.strip_prefix("inc ")
+            .map(|pair| (1, pair))
+            .or_else(|| text.strip_prefix("dec ").map(|pair| (-1, pair)))
+            .filter(|(_, pair)| matches!(*pair, "bc" | "de" | "hl"))
+    }
+    let mut out: Vec<Line> = Vec::with_capacity(lines.len());
+    for line in lines {
+        let undoes = match (step(&line), out.last().and_then(step)) {
+            (Some((sign, pair)), Some(last)) => last == (-sign, pair),
+            _ => false,
+        };
+        if undoes {
+            out.pop();
+        } else {
+            out.push(line);
+        }
+    }
+    out
+}
+
 /// `ret z` stands in for a branch to a block that is only a `ret`, which
 /// leaves the block with no reader: the code after an unconditional `ret` or
 /// jump, up to the next label something names, never runs.
 fn drop_unreachable(lines: Vec<Line>) -> Vec<Line> {
-    let named: std::collections::HashSet<&str> = lines
+    let named: llrm_support::hash::HashSet<&str> = lines
         .iter()
         .filter_map(|line| match line {
             Line::Inst(text) => Some(text.split([' ', ',']).filter(|word| !word.is_empty())),
@@ -1527,7 +1692,7 @@ pub fn price(lines: &[Line]) -> (u32, u32) {
 /// loop it is in, a loop being the lines from a label to a jump back to it:
 /// what two allocations of a loop are compared by.
 pub fn price_in_loops(lines: &[Line]) -> (u32, u64) {
-    let labels: std::collections::HashMap<&str, usize> = lines
+    let labels: llrm_support::hash::HashMap<&str, usize> = lines
         .iter()
         .enumerate()
         .filter_map(|(at, line)| match line {
@@ -1602,7 +1767,7 @@ pub fn relax(
     const REACH: i64 = 100;
     let mut at = 0;
     let mut starts = Vec::with_capacity(lines.len());
-    let mut labels = std::collections::HashMap::new();
+    let mut labels = llrm_support::hash::HashMap::default();
     for line in &lines {
         starts.push(at);
         if let Line::Label(name) = line {

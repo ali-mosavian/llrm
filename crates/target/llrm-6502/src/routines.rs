@@ -26,3 +26,21 @@ pub fn copy_prices() -> CopyPrices {
         byte_clocks: (number("byte_clocks_speed"), number("byte_clocks_size")),
     }
 }
+
+/// The compact variant of the runtime routine `name`, called at size, if it has one.
+pub fn compact_variant(name: &str) -> Option<&'static str> {
+    static TABLE: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
+    TABLE
+        .get_or_init(|| {
+            let doc: toml::Table = ROUTINES.parse().expect("routines.toml is well formed");
+            doc.get("compact")
+                .and_then(|t| t.as_table())
+                .expect("a [compact] table")
+                .iter()
+                .map(|(fast, compact)| (fast.clone(), compact.as_str().expect("a routine name").to_owned()))
+                .collect()
+        })
+        .iter()
+        .find(|(fast, _)| fast == name)
+        .map(|(_, compact)| compact.as_str())
+}

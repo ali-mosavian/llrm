@@ -138,7 +138,14 @@ impl LoopCtx<'_> {
         &self,
         inst: InstId,
     ) -> bool {
-        let block = self.state.moved.borrow().get(&inst).copied().or_else(|| self.function.parent(inst));
+        let moved = self.state.moved.borrow();
+        let block = if moved.is_empty() {
+            None
+        } else {
+            llrm_mir::counts::bump(llrm_mir::counts::Event::LoopCtxMovedLookups);
+            moved.get(&inst).copied()
+        }
+        .or_else(|| self.function.parent(inst));
         block.is_some_and(|block| self.contains_block(block))
     }
 
@@ -251,8 +258,13 @@ pub fn decide(
     }
     let outer = std::rc::Rc::clone(analyses.outer());
     let registers = analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
+    // The manager's, taken at entry: asking each alloca's uses at every alias
+    // query was 11 of the pass's 36 M Ir on jpeg_fixed. Nothing here makes an
+    // alloca or a new use of one's address.
+    let frames = analyses.get::<llrm_analysis::manager::ExposedFrames>(unit.context, unit.layout, unit.function);
     let memory = llrm_analysis::memory::Unit::within(unit.context, unit.layout, unit.function, &outer)
         .with_registers(&registers)
+        .with_exposed(&frames)
         .with_shape(&shape);
     let (mut mssa, accesses) = llrm_analysis::mssa::shadow::translated(&memory);
     let aa = AliasQuery::new(&memory, &accesses);
@@ -349,6 +361,10 @@ pub fn run(
     }
     let outer = std::rc::Rc::clone(analyses.outer());
     let registers = analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
+    // The manager's, taken at entry: asking each alloca's uses at every alias
+    // query was 11 of the pass's 36 M Ir on jpeg_fixed. Nothing here makes an
+    // alloca or a new use of one's address.
+    let frames = analyses.get::<llrm_analysis::manager::ExposedFrames>(unit.context, unit.layout, unit.function);
     let innermost = innermost_loops(&shape);
     // Found on the first ask, once.
     let exposed = promote::Exposed::default();
@@ -356,12 +372,14 @@ pub fn run(
     // made afresh of the body says. (Phis left non-minimal in cycles of
     // irreducible control flow, as LLVM's updater leaves them, are not
     // compared.)
-    let check_graph = |unit: &passes::Unit, built: &Built, what: &str| {
+    let check_graph = |unit: &passes::Unit, built: &Built, what: &dyn Fn() -> String| {
         if !llrm_support::env_flag!("LLRM_CHECK_LICM_GRAPH") || !shape.dominance.irreducible(unit.function).is_empty() {
             return;
         }
+        let what = what();
         let memory = llrm_analysis::memory::Unit::within(unit.context, unit.layout, unit.function, &outer)
             .with_registers(&registers)
+            .with_exposed(&frames)
             .with_shape(&shape);
         // The accesses the manager would make of the body now, as the kept
         // graph's were: a call's footprint from its callee's summary.
@@ -402,6 +420,7 @@ pub fn run(
             let $view: &passes::Unit = &*unit;
             let memory = llrm_analysis::memory::Unit::within($view.context, $view.layout, $view.function, &outer)
                 .with_registers(&registers)
+                .with_exposed(&frames)
                 .with_shape(&shape);
             if graph.is_none() {
                 // The manager's graph of this body, cloned: the updater edits
@@ -486,12 +505,14 @@ pub fn run(
         check_graph(
             unit,
             graph.as_ref().expect("a graph"),
-            &format!(
-                "the sinking and hoisting of the loop at {header:?}: {} sunk, {} hoisted, {} reassociated",
-                sunk.len(),
-                hoisted.len(),
-                reassociated.len()
-            ),
+            &|| {
+                format!(
+                    "the sinking and hoisting of the loop at {header:?}: {} sunk, {} hoisted, {} reassociated",
+                    sunk.len(),
+                    hoisted.len(),
+                    reassociated.len()
+                )
+            },
         );
         let Some(preheader) = preheader else { continue };
         // The stores of a promotion go before the first instruction of each
@@ -550,7 +571,7 @@ pub fn run(
                 check_graph(
                     unit,
                     graph.as_ref().expect("a graph"),
-                    &format!("promoting {:?} out of the loop at {header:?}", found.pointers),
+                    &|| format!("promoting {:?} out of the loop at {header:?}", found.pointers),
                 );
                 decisions
                     .promoted
@@ -686,9 +707,13 @@ fn promotion_round(
     let exits = promote::unique_exit_blocks(ctx);
     let mut candidates = 0;
     let mut promoted = Vec::new();
-    // Taken once for the loop: the rounds after a promotion see the same room.
-    let room = room.get_or_insert_with(|| pressure::Pressure::of(unit, outer, ctx).map(|held| held.room()));
     let mut found_candidates = promote::collect_promotion_candidates(unit, ctx, mssa, aa, &safety);
+    if found_candidates.is_empty() {
+        return (candidates, promoted);
+    }
+    // Taken once for the loop, and only where something may be promoted: the
+    // rounds after a promotion see the same room.
+    let room = room.get_or_insert_with(|| pressure::Pressure::of(unit, outer, ctx).map(|held| held.room()));
     if room.is_some() {
         found_candidates
             .sort_by_key(|candidate| std::cmp::Reverse(promote::accesses_of(unit, ctx, &candidate.pointers)));

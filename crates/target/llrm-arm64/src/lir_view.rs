@@ -3,7 +3,7 @@
 //! between the two, so the view keeps the original [`MFunc`] and writes the
 //! allocator's registers into it.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use llrm_lir::registers::{RegId, Regs};
@@ -103,6 +103,55 @@ fn content(op: &Op) -> i64 {
     hasher.finish() as i64
 }
 
+/// The `adrp` and `add :lo12:` the pin keeps as one `MOVaddr` until after
+/// allocation (`AArch64ExpandPseudo`): a page register defined once, read by
+/// one `add` of the same symbol in the same block. By block: the index of the
+/// `add` and of its `adrp`. As one instruction the allocator can make the
+/// address again where it is needed instead of spilling it.
+fn address_pairs(function: &MFunc) -> Vec<HashMap<usize, usize>> {
+    let mut seen: HashMap<Reg, (u32, u32)> = HashMap::default();
+    for op in function.blocks.iter().flat_map(|block| &block.ops) {
+        let mut op = op.clone();
+        op.visit(&mut |register, role| {
+            let count = seen.entry(register.key()).or_default();
+            match role {
+                Role::Def => count.0 += 1,
+                Role::Use => count.1 += 1,
+                Role::UseDef => {
+                    count.0 += 1;
+                    count.1 += 1;
+                }
+            }
+        });
+    }
+    function
+        .blocks
+        .iter()
+        .map(|block| {
+            let mut pages: HashMap<Reg, (usize, &Target)> = HashMap::default();
+            let mut pairs = HashMap::default();
+            for (at, op) in block.ops.iter().enumerate() {
+                match op {
+                    Op::I(Inst::Adr { page: true, rd, target, got: false })
+                        if seen.get(&Reg::Gpr(*rd)) == Some(&(1, 1)) =>
+                    {
+                        pages.insert(Reg::Gpr(*rd), (at, target));
+                    }
+                    Op::I(Inst::AddPageOffset { rn, target, .. }) => {
+                        if let Some(&(adrp, page_target)) = pages.get(&Reg::Gpr(*rn))
+                            && page_target == target
+                        {
+                            pairs.insert(at, adrp);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            pairs
+        })
+        .collect()
+}
+
 /// The allocator's function for `function`, registers of both classes numbered
 /// from zero.
 pub fn view(function: &MFunc) -> MFunction<Class> {
@@ -114,10 +163,16 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
     let labels: HashMap<&str, u32> =
         function.blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at as u32)).collect();
     let mut origin = 0u32;
+    let pairs = address_pairs(function);
     for (at, block) in function.blocks.iter().enumerate() {
         let mut insts = Vec::new();
-        for op in &block.ops {
+        let first_halves: Vec<usize> = pairs[at].values().copied().collect();
+        for (index, op) in block.ops.iter().enumerate() {
             origin += 1;
+            if first_halves.contains(&index) {
+                continue;
+            }
+            let fused = pairs[at].contains_key(&index);
             let (kind, terminator, barrier, call) = match op {
                 Op::I(inst) => (
                     Kind::Op(name_of(inst)),
@@ -153,8 +208,13 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
             let mut operands = Vec::new();
             let mut ties = Vec::new();
             let mut op = op.clone();
+            let mut page_read = fused;
             op.visit(&mut |register, role| {
                 let key = register.key();
+                // The page register of a fused `MOVaddr` is not a value.
+                if fused && role == Role::Use && std::mem::take(&mut page_read) {
+                    return;
+                }
                 let reg = to_lir(key);
                 if let LirReg::Virt(n) = reg {
                     lir.classes[n as usize] = match key {
@@ -183,7 +243,7 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
                     .extend(targets.iter().filter_map(|label| labels.get(label.as_str())).map(|&b| Operand::Block(b)));
             }
             if kind != Kind::Copy {
-                operands.push(Operand::Imm(content(&op)));
+                operands.push(Operand::Imm(if fused { content(&op).wrapping_add(1) } else { content(&op) }));
             }
             let mut inst = LirInst::new(kind, operands);
             inst.ties = ties;
@@ -206,12 +266,13 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
                 Op::I(Inst::Svc { .. } | Inst::Dmb { .. } | Inst::Atomic { .. })
             );
             inst.early_clobber = matches!(op, Op::I(Inst::Atomic { .. }) | Op::JumpTable { .. });
-            inst.rematerializable = matches!(
-                op,
-                Op::Imm { .. }
-                    | Op::I(Inst::FpMoveImm { .. } | Inst::Adr { .. })
-                    | Op::I(Inst::MoveWide { op: Wide::Zero | Wide::Not, .. })
-            );
+            inst.rematerializable = fused
+                || matches!(
+                    op,
+                    Op::Imm { .. }
+                        | Op::I(Inst::FpMoveImm { .. } | Inst::Adr { .. })
+                        | Op::I(Inst::MoveWide { op: Wide::Zero | Wide::Not, .. })
+                );
             inst.invariant_load = matches!(
                 &op,
                 Op::I(Inst::Load { mmo, .. }) if mmo.object == crate::mc::inst::MemObject::ConstantPool
@@ -233,14 +294,22 @@ pub fn rebuild(
     assignment: &Assignment,
     spill_slots: &[(i32, Class)],
 ) {
-    let mut originals: HashMap<i64, Op> = HashMap::new();
+    let mut originals: HashMap<i64, Op> = HashMap::default();
     for op in function.blocks.iter().flat_map(|block| &block.ops) {
         originals.entry(content(op)).or_insert_with(|| op.clone());
+    }
+    // The fused `MOVaddr`s stand under the content `view` gave them.
+    let pairs = address_pairs(function);
+    let mut fused: HashMap<i64, Op> = HashMap::default();
+    for (block, pairs) in function.blocks.iter().zip(&pairs) {
+        for &add in pairs.keys() {
+            fused.entry(content(&block.ops[add]).wrapping_add(1)).or_insert_with(|| block.ops[add].clone());
+        }
     }
     // The place of each operation, by the number `view` gave it.
     let places: Vec<_> =
         function.blocks.iter().flat_map(|block| (0..block.ops.len()).map(|at| block.ops.loc(at))).collect();
-    let mut slots: HashMap<i32, u32> = HashMap::new();
+    let mut slots: HashMap<i32, u32> = HashMap::default();
     for (slot, class) in spill_slots {
         let (size, align) = if *class == Class::Quad { (16, 16) } else { (8, 8) };
         slots.insert(*slot, function.slot(size, align));
@@ -284,6 +353,14 @@ pub fn rebuild(
                     let quad = registers[0].1 == Class::Quad;
                     ops.push(spill_access(reg_at(0), slot, name == "SpillLoad", quad));
                 }
+                Kind::Op(_) if matches!(inst.operands.last(), Some(Operand::Imm(hash)) if fused.contains_key(hash)) => {
+                    // `AArch64ExpandPseudo`: `adrp rd` and `add rd, rd, :lo12:`.
+                    let Some(Operand::Imm(hash)) = inst.operands.last() else { unreachable!() };
+                    let Op::I(Inst::AddPageOffset { target, .. }) = &fused[hash] else { unreachable!() };
+                    let Reg::Gpr(rd) = reg_at(0) else { panic!("a page offset into a vector register") };
+                    ops.push(Op::I(Inst::Adr { page: true, rd, target: target.clone(), got: false }));
+                    ops.push(Op::I(Inst::AddPageOffset { rd, rn: rd, target: target.clone() }));
+                }
                 Kind::Op(_) => {
                     let Some(Operand::Imm(hash)) = inst.operands.last() else { panic!("an operation with no content") };
                     let mut op = originals[hash].clone();
@@ -300,7 +377,7 @@ pub fn rebuild(
                     ops.push(op);
                 }
             }
-            if ops.len() > before {
+            for _ in before..ops.len() {
                 locs.push(if inst.origin == 0 { None } else { places[inst.origin as usize - 1] });
             }
         }
@@ -347,10 +424,10 @@ pub fn written_callee_saved(function: &MFunc) -> Allocation {
 }
 
 /// `function` with every register physical, by the shared greedy allocator.
-pub fn allocate(function: &mut MFunc) -> Result<Allocation, String> {
+pub fn allocate(function: &mut MFunc, size: bool) -> Result<Allocation, String> {
     let mut lir = view(function);
     crate::licm::hoist(&mut lir);
-    let (assignment, slots) = allocate_greedy::<Arm64>(&mut lir, Regs(&crate::REGISTER_INFO), false)?;
+    let (assignment, slots) = allocate_greedy::<Arm64>(&mut lir, Regs(&crate::REGISTER_INFO), size)?;
     rebuild(function, &lir, &assignment, &slots);
     Ok(written_callee_saved(function))
 }
@@ -539,6 +616,37 @@ mod tests {
         let lines: Vec<_> =
             (0..back.blocks[0].ops.len()).map(|at| back.blocks[0].ops.loc(at).map(|l| l.line)).collect();
         assert_eq!(lines, [Some(8), Some(9), Some(10), Some(11)], "the copy of x0 into itself (line 7) goes");
+    }
+
+    /// The pin keeps `adrp` + `add :lo12:` of one symbol as a single `MOVaddr`
+    /// until after allocation, so the allocator can make the address again
+    /// where it is read (jpeg_single -O3: the address was stored and
+    /// reloaded across a call, +252 B). Here the pair is one rematerializable
+    /// instruction that defines one value, and it expands into the register
+    /// greedy chose.
+    #[test]
+    fn an_address_pair_is_one_rematerializable_instruction_until_after_allocation() {
+        let mut function = MFunc::new("f");
+        let (page, address) = (function.gpr(), function.gpr());
+        let target = Target::Symbol { name: "_msg".into(), addend: 0 };
+        let ops = vec![
+            Op::I(Inst::Adr { page: true, rd: page, target: target.clone(), got: false }),
+            Op::I(Inst::AddPageOffset { rd: address, rn: page, target: target.clone() }),
+            Op::Return { uses: vec![Reg::Gpr(address)], tail: None },
+        ];
+        function.blocks.push(MBlock { label: "L0".into(), ops: OpList::from(ops) });
+        let lir = view(&function);
+        let insts = &lir.blocks[0].insts;
+        assert_eq!(insts.len(), 2, "the pair is one instruction and the return: {insts:?}");
+        assert!(insts[0].rematerializable, "{:?}", insts[0]);
+        let defs = insts[0].operands.iter().filter(|o| matches!(o, Operand::Def(_))).count();
+        let uses = insts[0].operands.iter().filter(|o| matches!(o, Operand::Use(_))).count();
+        assert_eq!((defs, uses), (1, 0), "{:?}", insts[0]);
+        let mut back = function.clone();
+        rebuild(&mut back, &lir, &Assignment(vec![crate::reg::X5, crate::reg::X6]), &[]);
+        let ops = &back.blocks[0].ops;
+        assert_eq!(ops[0], Op::I(Inst::Adr { page: true, rd: Gpr(6), target: target.clone(), got: false }), "{ops:?}");
+        assert_eq!(ops[1], Op::I(Inst::AddPageOffset { rd: Gpr(6), rn: Gpr(6), target }), "{ops:?}");
     }
 
     /// The registers greedy chose go back into the original operations, a

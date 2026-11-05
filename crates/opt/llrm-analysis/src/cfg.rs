@@ -264,8 +264,11 @@ impl Around for Loop {
         &self,
         function: &Function,
     ) -> Option<i64> {
-        let entering = self.entering(function);
-        let [one] = entering.iter().copied().collect::<Vec<_>>()[..] else { return None };
+        let mut entering = function.predecessors(block(self.header)).into_iter().map(id).filter(|at| !self.body.contains(at));
+        let one = entering.next()?;
+        if entering.next().is_some() {
+            return None;
+        }
         (successors_of(function, one) == [self.header]).then_some(one)
     }
 }
@@ -460,6 +463,8 @@ impl Dominance {
         &self,
         function: &Function,
     ) -> BTreeMap<i64, BTreeSet<i64>> {
+        #[cfg(test)]
+        FRONTIERS.with(|count| count.set(count.get() + 1));
         let mut found = function.layout().iter().map(|&one| (id(one), BTreeSet::new())).collect::<BTreeMap<_, _>>();
         for &one in function.layout() {
             let at = id(one);
@@ -861,4 +866,10 @@ dead:
         assert_eq!(reaching("b3"), ["b0", "b1", "b2", "b3"]);
         assert_eq!(reaching("b4"), ["b0", "b1", "b2", "b3", "b4", "dead"]);
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The frontier maps made on this thread.
+    pub(crate) static FRONTIERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }

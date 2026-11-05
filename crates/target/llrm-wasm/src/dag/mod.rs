@@ -58,7 +58,8 @@ pub fn signature(
         return Err(format!("@{name} has no function type"));
     };
     let pointer = if width == Width::W32 { ValType::I32 } else { ValType::I64 };
-    // `canLowerReturn` is false for an `i128` (two parts, no multivalue ABI): the result goes through a pointer, the first parameter.
+    // `canLowerReturn` is false for an `i128` (two parts, no multivalue ABI):
+    // the result goes through a pointer, the first parameter.
     let returns_i128 = matches!(module.context.types.get(*returns), Type::Int(128));
     let mut params: Vec<ValType> = if returns_i128 { vec![pointer] } else { Vec::new() };
     for &ty in parameters {
@@ -125,8 +126,8 @@ pub fn compile_function(
 /// each function was quadratic in the function count.
 #[derive(Clone, Default)]
 pub struct ModuleFacts {
-    nothrow: std::sync::Arc<std::collections::HashSet<String>>,
-    callee_memory: std::sync::Arc<std::collections::HashMap<String, (bool, bool)>>,
+    nothrow: std::sync::Arc<llrm_support::hash::HashSet<String>>,
+    callee_memory: std::sync::Arc<llrm_support::hash::HashMap<String, (bool, bool)>>,
     tables: std::cell::OnceCell<llrm_codegen::backend::constpool::Symbols>,
 }
 
@@ -191,8 +192,7 @@ pub fn compile_function_with(
     lower_memory_pseudos(&mut f);
     // A routine the legalizer or the builder calls (`fmod`, `memcpy`) is in no
     // module: its signature is what the call passes and returns.
-    let library_calls =
-        library_callees(&f, module, if width == Width::W32 { ValType::I32 } else { ValType::I64 });
+    let library_calls = library_callees(&f, module, if width == Width::W32 { ValType::I32 } else { ValType::I64 });
     argument_move(&mut f);
     set_p2align_operands(&mut f);
     fix_br_table_defaults(&mut f);
@@ -282,7 +282,7 @@ pub static MODULE_FACTS_BUILT: std::sync::atomic::AtomicUsize = std::sync::atomi
 /// What each function of `module` reads and writes (`doesNotAccessMemory`,
 /// `onlyReadsMemory`); a callee that is no function of it is assumed to do
 /// both.
-fn callee_memory(module: &Module) -> std::collections::HashMap<String, (bool, bool)> {
+fn callee_memory(module: &Module) -> llrm_support::hash::HashMap<String, (bool, bool)> {
     module
         .functions()
         .filter_map(|(_, global, function)| {
@@ -294,8 +294,8 @@ fn callee_memory(module: &Module) -> std::collections::HashMap<String, (bool, bo
 
 /// The callees `WebAssembly::mayThrow` takes as not throwing: functions marked
 /// `nounwind`, the three that never throw, and the libcalls it lists.
-fn non_throwing(module: &Module) -> std::collections::HashSet<String> {
-    let mut found: std::collections::HashSet<String> = module
+fn non_throwing(module: &Module) -> llrm_support::hash::HashSet<String> {
+    let mut found: llrm_support::hash::HashSet<String> = module
         .functions()
         .filter(|(_, global, function)| {
             function.attrs.iter().any(|one| {
@@ -324,8 +324,8 @@ fn library_callees(
     f: &Function,
     module: &Module,
     pointer: ValType,
-) -> std::collections::HashMap<String, (Vec<ValType>, Vec<ValType>)> {
-    let mut found = std::collections::HashMap::new();
+) -> llrm_support::hash::HashMap<String, (Vec<ValType>, Vec<ValType>)> {
+    let mut found = llrm_support::hash::HashMap::default();
     for inst in f.blocks.iter().flatten().filter(|inst| inst.opcode == crate::dagisel::post_ids::CALL) {
         let Some(&Operand::Sym(at)) = inst.operands.iter().find(|operand| matches!(operand, Operand::Sym(_))) else {
             continue;
@@ -340,7 +340,8 @@ fn library_callees(
             .iter()
             .filter_map(|operand| match operand {
                 Operand::Use(reg) => Some(f.vreg_type(*reg)),
-                // A frame object's address, before the frame lowering gives it a register (an `sret` slot).
+                // A frame object's address, before the frame lowering gives it
+                // a register (an `sret` slot).
                 Operand::Frame(_) => Some(pointer),
                 _ => None,
             })

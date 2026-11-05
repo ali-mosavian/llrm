@@ -67,12 +67,25 @@ pub fn cpu_of(name: &str) -> Result<Cpu, String> {
 /// The machine the mid-end is handed: its cost model prices the passes that
 /// need one (loop strength reduction, the CRC recognizer).
 pub fn machine() -> Rc<dyn Machine> {
-    Rc::new(M68kMachine)
+    machine_for(Cpu::default())
+}
+
+/// [`machine`] for `cpu`.
+pub fn machine_for(cpu: Cpu) -> Rc<dyn Machine> {
+    Rc::new(M68kMachine { cpu })
 }
 
 /// `text`, LLVM IR from clang, as a program: the lines and words MIR's reader
 /// leaves out of LLVM dropped, the datalayout checked against the target's.
 pub fn program(text: &str) -> Result<Program, String> {
+    program_for(text, Cpu::default())
+}
+
+/// [`program`] for `cpu`.
+pub fn program_for(
+    text: &str,
+    cpu: Cpu,
+) -> Result<Program, String> {
     let mut kept = String::with_capacity(text.len());
     for line in text.lines() {
         if line.starts_with("target triple") || line.starts_with(';') {
@@ -90,7 +103,7 @@ pub fn program(text: &str) -> Result<Program, String> {
         Some(stated) => return Err(format!("the module's datalayout `{stated}` is not m68k's `{expected}`")),
         None => return Err(format!("the module states no datalayout; m68k's is `{expected}`")),
     }
-    Program::new(vec![module], machine())
+    Program::new(vec![module], machine_for(cpu))
 }
 
 /// `text` through the shared mid-end at `level` and the m68k backend, as
@@ -129,10 +142,11 @@ pub fn assembly_dumping(
 /// module's own mid-end, once: what both the assembly and the object print.
 fn lowered(
     text: &str,
+    cpu: Cpu,
     level: Level,
     dump: Option<&std::path::Path>,
 ) -> Result<Module, String> {
-    let mut program = program(text)?;
+    let mut program = program_for(text, cpu)?;
     let options = MidEnd { library: c_library(), ..level.mid_end() };
     if let Some(dump) = dump {
         std::fs::create_dir_all(dump).map_err(|error| format!("{}: {error}", dump.display()))?;
@@ -145,7 +159,7 @@ fn lowered(
     program.modules.iter_mut().try_for_each(|module| llrm_codegen::backend::compares::expanded(module, |_| true))?;
     // The mid-end is the module's, run once: `text_with` runs it over the whole
     // module for each function it is given.
-    crate::compile::mid_end(&program.modules[0])
+    crate::compile::mid_end_for(&program.modules[0], cpu)
 }
 
 /// [`assembly`] with the debug lines and the stage dump chosen.
@@ -156,7 +170,7 @@ pub fn assembly_with(
     debug: bool,
     dump: Option<&std::path::Path>,
 ) -> Result<String, String> {
-    let optimized = lowered(text, level, dump)?;
+    let optimized = lowered(text, cpu, level, dump)?;
     let module = &optimized;
     let backend = Options { size: matches!(level, Level::Os | Level::Oz), debug, mid_end: false, ..Options::default() };
     let mut out = String::new();
@@ -194,10 +208,10 @@ pub fn object(
         .lines()
         .find_map(|line| line.strip_prefix("source_filename = \"")?.strip_suffix('"'))
         .map_or_else(|| name.rsplit('/').next().unwrap_or(name), |one| one);
-    let module = lowered(text, level, None)?;
+    let module = lowered(text, cpu, level, None)?;
     let backend = Options { size: matches!(level, Level::Os | Level::Oz), mid_end: false, ..Options::default() };
     let mut items = Vec::new();
-    let mut exports = std::collections::HashMap::new();
+    let mut exports = llrm_support::hash::HashMap::default();
     for (_, global, function) in module.functions() {
         if function.is_declaration() {
             continue;

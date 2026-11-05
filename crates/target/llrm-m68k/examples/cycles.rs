@@ -13,7 +13,6 @@
 //! A `*` marks a total that holds a data-dependent term at its bound; `?`
 //! counts executed instructions the tables do not cover.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -23,6 +22,7 @@ use llrm_m68k::isa::Cpu as Model;
 use llrm_m68k::kernels::{data, library_data, library_table, program_with_data, source_in, table};
 use llrm_m68k::object::{assemble, executable, write_executable};
 use llrm_m68k::timing::{cost_on, from_gnu};
+use llrm_support::hash::HashMap;
 
 /// Executed instructions read before a run is called runaway.
 const CAP: usize = 2_000_000;
@@ -98,9 +98,29 @@ fn qemu_cpu_for(path: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// gas assembled `bgt L` with a 16-bit displacement: a table priced the
+    /// compiler's text 2 B a branch above its own encoder.
+    #[test]
+    fn a_branch_to_a_label_is_left_for_gas_to_relax() {
+        assert_eq!(
+            relaxed("\tbgt\t.LBB0_2\n\tbra\t.L3\n\tbsr\tf\n\tbne\t(%a0)\n"),
+            "\tjgt\t.LBB0_2\n\tjra\t.L3\n\tjbsr\tf\n\tbne\t(%a0)\n"
+        );
+    }
+
+    /// The 68020 table compiled with `-mcpu=68000`: its clocks were 68000 code
+    /// on 68020 timing, and crc16 was judged on them.
+    #[test]
+    fn a_processors_table_is_compiled_and_assembled_for_it() {
+        assert_eq!(driver_cpu("68020"), "-mcpu=68020");
+        assert_eq!(assembler_arch("68020"), "-m68020");
+    }
+
     use std::process::Command;
 
-    use super::{qemu_cpu_for, trace};
+    use super::{parse_listing, qemu_cpu_for, trace};
 
     /// A 68020 program (`divu.l`) assembled and linked with the m68k binutils;
     /// `None` without `$GCC_M68K`.
@@ -161,11 +181,12 @@ fn functions() -> Vec<String> {
 }
 
 /// `(address, text)` of every instruction of `objdump -d`, and the address
-/// ranges of the priced functions.
+/// ranges of the priced functions: `callees` besides the wanted ones.
 fn listing(
     gcc: &Path,
     exe: &Path,
     harness: bool,
+    callees: &[&str],
 ) -> (Vec<(u32, String)>, Vec<std::ops::Range<u32>>) {
     let out = Command::new(gcc.join("usr/bin/m68k-linux-gnu-objdump"))
         .env("LD_LIBRARY_PATH", gcc.join("usr/lib/x86_64-linux-gnu"))
@@ -173,11 +194,21 @@ fn listing(
         .arg(exe)
         .output()
         .expect("m68k-linux-gnu-objdump runs");
-    let wanted = functions();
+    let mut wanted = functions();
+    wanted.extend(callees.iter().map(|name| (*name).to_owned()));
+    parse_listing(&String::from_utf8_lossy(&out.stdout), &wanted, harness)
+}
+
+/// [`listing`] of the text `objdump -d` printed.
+fn parse_listing(
+    objdump: &str,
+    wanted: &[String],
+    harness: bool,
+) -> (Vec<(u32, String)>, Vec<std::ops::Range<u32>>) {
     let mut lines = Vec::new();
     let mut ranges = Vec::new();
     let mut open: Option<u32> = None;
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
+    for line in objdump.lines() {
         if let Some((address, name)) = line.split_once(" <").and_then(|(a, rest)| Some((a, rest.strip_suffix(">:")?))) {
             let address = u32::from_str_radix(address, 16).unwrap();
             if let Some(start) = open.take() {
@@ -212,8 +243,10 @@ fn price(
     exe: &Path,
     models: &[Model],
     harness: bool,
+    callees: &[&str],
+    qemu: &str,
 ) -> Total {
-    let (lines, ranges) = listing(gcc, exe, harness);
+    let (lines, ranges) = listing(gcc, exe, harness, callees);
     let at: HashMap<u32, (usize, &str)> = lines
         .iter()
         .enumerate()
@@ -225,11 +258,11 @@ fn price(
         let cpu = std::env::var("CYCLES_QEMU_CPU").unwrap_or_else(|_| qemu_cpu_for(&exe.to_string_lossy()).to_owned());
         (200_000_000, cpu)
     } else {
-        (CAP, "m68000".to_owned())
+        (CAP, qemu.to_owned())
     };
     let pcs = trace(exe, cap, &cpu);
     let mut total = Total { insns: 0, clocks: vec![0; models.len()], partial: false, unknown: 0 };
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = llrm_support::hash::HashSet::default();
     // CYCLES_LISTING=1: each distinct executed instruction, its count and
     // clocks
     let mut counts: std::collections::BTreeMap<u32, usize> = std::collections::BTreeMap::new();
@@ -275,6 +308,53 @@ fn price(
     total
 }
 
+/// `asm` with each branch to a label as the gas pseudo-branch that picks its
+/// own displacement: gas assembles `bgt L` with a 16-bit displacement however
+/// near L is, where this compiler's own encoder (and gcc's `jgt`) use 8 bits
+/// when they fit. Priced as printed, every forward branch cost 2 B and some
+/// clocks more than the code the compiler writes (max -O2 18 B against 16).
+fn relaxed(asm: &str) -> String {
+    const CONDITIONS: [&str; 14] = ["hi", "ls", "cc", "cs", "ne", "eq", "vc", "vs", "pl", "mi", "ge", "lt", "gt", "le"];
+    asm.lines()
+        .map(|line| {
+            let Some((indent, rest)) = line.split_once(|c: char| !c.is_whitespace()).map(|(indent, _)| {
+                let at = indent.len();
+                (&line[..at], &line[at..])
+            }) else {
+                return line.to_owned();
+            };
+            let Some((mnemonic, operand)) = rest.split_once(char::is_whitespace) else { return line.to_owned() };
+            let label = operand.trim().starts_with(|c: char| c == '.' || c.is_alphabetic() || c == '_');
+            let pseudo = match mnemonic {
+                "bra" => Some("jra".to_owned()),
+                "bsr" => Some("jbsr".to_owned()),
+                _ => mnemonic
+                    .strip_prefix('b')
+                    .filter(|condition| CONDITIONS.contains(condition))
+                    .map(|condition| format!("j{condition}")),
+            };
+            match pseudo {
+                Some(pseudo) if label => format!("{indent}{pseudo}\t{}", operand.trim()),
+                _ => line.to_owned(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n"
+}
+
+/// The driver's flag for the processor a table is for: the code is compiled
+/// for the processor it is then run and priced on (the tool once compiled
+/// every table for the 68000, so the 68020 column priced 68000 code).
+fn driver_cpu(cpu: &str) -> String {
+    format!("-mcpu={cpu}")
+}
+
+/// The assembler's flag for the same processor.
+fn assembler_arch(cpu: &str) -> String {
+    format!("-m{cpu}")
+}
+
 /// `CYCLES_LLC=llrm-m68k-llc`: the code of `k` is that driver's assembly for
 /// the kernel's IR, assembled by the gas of `$GCC_M68K`, instead of this
 /// crate's own output. Leaf code only: a relocation is not resolved.
@@ -284,18 +364,21 @@ fn assembled(
     ir: &str,
     size: bool,
     dir: &Path,
+    cpu: &str,
 ) -> Option<Vec<u8>> {
     let input = dir.join("llc.ll");
     std::fs::write(&input, ir).unwrap();
     let asm = dir.join("llc.s");
     let status = Command::new(llc)
-        .args(["-S", "-mcpu=68000", if size { "-Os" } else { "-O2" }, "-o"])
+        .args(["-S".to_owned(), driver_cpu(cpu)])
+        .arg(std::env::var("CYCLES_LLC_LEVEL").unwrap_or_else(|_| (if size { "-Os" } else { "-O2" }).to_owned()))
+        .arg("-o")
         .arg(&asm)
         .arg(&input)
         .status()
         .unwrap();
     assert!(status.success(), "the llc failed");
-    let text = format!(".text\n{}", std::fs::read_to_string(&asm).unwrap());
+    let text = format!(".text\n{}", relaxed(&std::fs::read_to_string(&asm).unwrap()));
     let source = dir.join("llc_in.s");
     std::fs::write(&source, text).unwrap();
     let object = dir.join("llc.o");
@@ -308,7 +391,8 @@ fn assembled(
             .unwrap();
         assert!(status.success(), "{tool} failed");
     };
-    run("as", vec!["-m68000".as_ref(), source.as_os_str(), "-o".as_ref(), object.as_os_str()]);
+    let arch = assembler_arch(cpu);
+    run("as", vec![arch.as_ref(), source.as_os_str(), "-o".as_ref(), object.as_os_str()]);
     let relocations = Command::new(bin("objdump"))
         .env("LD_LIBRARY_PATH", gcc.join("usr/lib/x86_64-linux-gnu"))
         .arg("-r")
@@ -367,7 +451,7 @@ fn main() {
             .collect();
         println!("| exe | insns | {} |", heads.join(" | "));
         for path in std::env::args().skip(2) {
-            let total = price(&gcc, Path::new(&path), &models, true);
+            let total = price(&gcc, Path::new(&path), &models, true, &[], "m68000");
             let mark = if total.partial { "*" } else { "" };
             let unknown = if total.unknown > 0 { format!(" ?{}", total.unknown) } else { String::new() };
             let cells: Vec<String> =
@@ -378,7 +462,7 @@ fn main() {
         return;
     }
     if let Some(exe) = std::env::var_os("CYCLES_EXE") {
-        let total = price(&gcc, Path::new(&exe), &models, false);
+        let total = price(&gcc, Path::new(&exe), &models, false, &[], "m68000");
         let clocks: Vec<String> = models.iter().zip(&total.clocks).map(|(cpu, clk)| format!("{cpu:?} {clk}")).collect();
         println!(
             "insns {} clocks {} unpriced {} partial {}",
@@ -399,56 +483,86 @@ fn main() {
         let module = llrm_mir::parse::module(&source_in(&set, "h")).unwrap();
         items(&module, "h", Cpu::M68000).unwrap()
     });
-    let names: Vec<String> = models.iter().map(|cpu| format!("{cpu:?}").trim_start_matches('M').to_owned()).collect();
-    let clock_heads =
-        |prefix: &str| names.iter().map(|name| format!("{prefix}{name} clk")).collect::<Vec<_>>().join(" | ");
-    println!("| kernel | B | insns | {} | -Os B | -Os insns | {} |", clock_heads(""), clock_heads("-Os "));
-    println!("|{}", "---|".repeat(5 + 2 * models.len()));
+    // With `CYCLES_LLC` the code is that driver's for one processor, so each
+    // processor gets a table of its own: compiled, assembled, run and priced
+    // for it. Without, the crate's own 68000 code is priced on every model.
     let llc_mode = std::env::var_os("CYCLES_LLC").is_some();
-    for (name, args, expected, leaf) in rows {
-        if llc_mode && !leaf {
-            println!("| {name} | not a leaf: size and clocks need the runtime linked |");
-            continue;
+    let groups: Vec<Vec<Model>> =
+        if llc_mode { models.iter().map(|one| vec![*one]).collect() } else { vec![models.clone()] };
+    for models in groups {
+        let cpu_name = format!("{:?}", models[0]).trim_start_matches('M').to_owned();
+        let qemu = if llc_mode { format!("m{cpu_name}") } else { "m68000".to_owned() };
+        let qemu = qemu.as_str();
+        if llc_mode {
+            println!("## {cpu_name} build");
         }
-        let mut text = source_in(&set, name);
-        let mut runtime_names: Vec<&str> = Vec::new();
-        if !leaf {
-            text.push_str(source_in(&set, "rt").split_once('\n').map_or("", |(_, rest)| rest));
-            runtime_names = vec!["__mulsi3", "__udivsi3", "__umodsi3", "__divsi3", "__modsi3"];
-        }
-        let module = llrm_mir::parse::module(&text).unwrap();
-        let runtime: Vec<Item> =
-            runtime_names.iter().flat_map(|one| items(&module, one, Cpu::M68000).unwrap()).collect();
-        let mut cells = Vec::new();
-        for options in [Options::default(), Options { size: true, ..Options::default() }] {
-            let mut code = items_with(&module, "k", Cpu::M68000, options).unwrap();
-            if let (Some(llc), true) = (std::env::var_os("CYCLES_LLC"), leaf) {
-                let Some(bytes) = assembled(Path::new(&llc), &gcc, &source_in(&set, name), options.size, &dir) else {
-                    cells.push("calls the runtime".to_owned());
-                    continue;
+        let names: Vec<String> =
+            models.iter().map(|cpu| format!("{cpu:?}").trim_start_matches('M').to_owned()).collect();
+        let clock_heads =
+            |prefix: &str| names.iter().map(|name| format!("{prefix}{name} clk")).collect::<Vec<_>>().join(" | ");
+        println!("| kernel | B | insns | {} | -Os B | -Os insns | {} |", clock_heads(""), clock_heads("-Os "));
+        println!("|{}", "---|".repeat(5 + 2 * models.len()));
+        for (name, args, expected, leaf) in &rows {
+            let (name, expected, leaf) = (*name, *expected, *leaf);
+            if llc_mode && !leaf {
+                println!("| {name} | not a leaf: size and clocks need the runtime linked |");
+                continue;
+            }
+            let mut text = source_in(&set, name);
+            let mut runtime_names: Vec<&str> = Vec::new();
+            if !leaf {
+                text.push_str(source_in(&set, "rt").split_once('\n').map_or("", |(_, rest)| rest));
+                runtime_names = vec!["__mulsi3", "__udivsi3", "__umodsi3", "__divsi3", "__modsi3"];
+            }
+            let module = llrm_mir::parse::module(&text).unwrap();
+            let runtime: Vec<Item> =
+                runtime_names.iter().flat_map(|one| items(&module, one, Cpu::M68000).unwrap()).collect();
+            let mut cells = Vec::new();
+            for options in [Options::default(), Options { size: true, ..Options::default() }] {
+                let mut code = items_with(&module, "k", Cpu::M68000, options).unwrap();
+                if let (Some(llc), true) = (std::env::var_os("CYCLES_LLC"), leaf) {
+                    let Some(bytes) =
+                        assembled(Path::new(&llc), &gcc, &source_in(&set, name), options.size, &dir, &cpu_name)
+                    else {
+                        cells.push("calls the runtime".to_owned());
+                        continue;
+                    };
+                    code = vec![Item::Label("k".to_owned()), Item::Bytes(bytes)];
+                }
+                let size = {
+                    let mut all = code.clone();
+                    all.extend(runtime.iter().cloned());
+                    assemble(&all, 0).unwrap().code.len() - assemble(&runtime, 0).map_or(0, |one| one.code.len())
                 };
-                code = vec![Item::Label("k".to_owned()), Item::Bytes(bytes)];
+                code.extend(helper.clone().unwrap_or_default());
+                code.extend(runtime.clone());
+                let exe = dir.join(format!("{name}.elf"));
+                write_executable(&exe, &executable(&program_with_data(&args, code, &block)).unwrap()).unwrap();
+                if llc_mode {
+                    let status =
+                        Command::new("timeout").args(["10", "qemu-m68k", "-cpu", qemu]).arg(&exe).status().unwrap();
+                    assert_eq!(status.code(), Some(expected), "{name}: the llc's code gives another result");
+                }
+                let total = price(&gcc, &exe, &models, false, &runtime_names, qemu);
+                let mark = if total.partial { "*" } else { "" };
+                let unknown = if total.unknown > 0 { format!(" ?{}", total.unknown) } else { String::new() };
+                let clocks: Vec<String> = total.clocks.iter().map(|one| format!("{one}{mark}{unknown}")).collect();
+                cells.push(format!("{size} | {} | {}", total.insns, clocks.join(" | ")));
             }
-            let size = {
-                let mut all = code.clone();
-                all.extend(runtime.iter().cloned());
-                assemble(&all, 0).unwrap().code.len() - assemble(&runtime, 0).map_or(0, |one| one.code.len())
-            };
-            code.extend(helper.clone().unwrap_or_default());
-            code.extend(runtime.clone());
-            let exe = dir.join(format!("{name}.elf"));
-            write_executable(&exe, &executable(&program_with_data(&args, code, &block)).unwrap()).unwrap();
-            if llc_mode {
-                let status =
-                    Command::new("timeout").args(["10", "qemu-m68k", "-cpu", "m68000"]).arg(&exe).status().unwrap();
-                assert_eq!(status.code(), Some(expected), "{name}: the llc's code gives another result");
-            }
-            let total = price(&gcc, &exe, &models, false);
-            let mark = if total.partial { "*" } else { "" };
-            let unknown = if total.unknown > 0 { format!(" ?{}", total.unknown) } else { String::new() };
-            let clocks: Vec<String> = total.clocks.iter().map(|one| format!("{one}{mark}{unknown}")).collect();
-            cells.push(format!("{size} | {} | {}", total.insns, clocks.join(" | ")));
+            println!("| {name} | {} |", cells.join(" | "));
         }
-        println!("| {name} | {} |", cells.join(" | "));
+    }
+
+    /// A kernel that calls a runtime routine laid out after it priced only
+    /// `k`: the routine's instructions were in no range, so muldiv's clocks and
+    /// instruction count left out every multiply and divide.
+    #[test]
+    fn a_priced_function_brings_the_routines_it_calls() {
+        let objdump =
+            "00000100 <k>:\n 100:\tjsr 200\n 106:\trts\n\n00000200 <__mulsi3>:\n 200:\tmulu.w d1,d0\n 202:\trts\n";
+        let only_k = parse_listing(objdump, &["k".to_owned()], false).1;
+        let with_callee = parse_listing(objdump, &["k".to_owned(), "__mulsi3".to_owned()], false).1;
+        assert!(!only_k.iter().any(|range| range.contains(&0x200)), "{only_k:?}");
+        assert!(with_callee.iter().any(|range| range.contains(&0x200)), "{with_callee:?}");
     }
 }

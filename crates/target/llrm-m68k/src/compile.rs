@@ -8,7 +8,7 @@ use llrm_mir::module::Module;
 
 use crate::dagisel::function::select_function_with;
 use crate::dagisel::hooks::Cpu;
-use crate::expand::{Line, finish};
+use crate::expand::{Line, finish_with};
 use crate::flags::preserve_flags;
 use crate::machine::{M68k, M68kMachine};
 use crate::mc;
@@ -47,6 +47,9 @@ pub struct Options {
     /// Push and pop the saved registers where that is no larger and no
     /// slower than the pin's `suba.l` and `movem` into slots.
     pub push_frame: bool,
+    /// Outgoing arguments as pushes where that is cheaper than stores into the
+    /// reserved call area ([`crate::callpush`]).
+    pub push_arguments: bool,
     /// `addq` and `subq` for an immediate of 1 to 8, which the pin has no
     /// instruction for.
     pub short: bool,
@@ -63,6 +66,7 @@ impl Options {
         source_order: false,
         indexed: false,
         push_frame: false,
+        push_arguments: false,
         short: false,
         debug: false,
     };
@@ -76,6 +80,7 @@ impl Default for Options {
             source_order: false,
             indexed: true,
             push_frame: true,
+            push_arguments: true,
             short: true,
             debug: false,
         }
@@ -101,7 +106,7 @@ pub fn items_with(
 ) -> Result<Vec<Item>, String> {
     let optimized;
     let module = if options.mid_end {
-        optimized = mid_end_described_by(module, &M68k::default(), Some(Rc::new(M68kMachine)))?;
+        optimized = mid_end_described_by(module, &M68k::for_cpu(cpu), Some(Rc::new(M68kMachine { cpu })))?;
         &optimized
     } else {
         module
@@ -113,11 +118,17 @@ pub fn items_with(
         || module.global(id).function().is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
     let blocks = select_function_with(module, name, cpu, options.source_order, options.indexed, options.short)?;
     let mut function = emit(name, &blocks)?;
+    function.returns_twice =
+        module.global(id).function().is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
     if options.short {
         crate::cmpelim::eliminate_tests(&mut function);
+        crate::shiftadd::shifts_to_adds(&mut function);
         crate::negadd::negative_adds_to_subq(&mut function);
         crate::addrarith::address_adds(&mut function, cpu, wants_size);
         crate::foldload::fold_loads(&mut function);
+        if wants_size {
+            crate::foldarg::fold_argument_loads(&mut function);
+        }
     }
     expand_cmov(&mut function)?;
     machine_sink(&mut function);
@@ -140,6 +151,8 @@ pub fn items_with(
         crate::chain::post_increment_chains(&mut function, &assignment, cpu, wants_size);
         crate::narrow::merge_logic_immediates(&mut function, &assignment);
         crate::narrow::narrow_logic_immediates(&mut function, &assignment);
+        crate::consts::materialize_constants(&mut function, &assignment, cpu, wants_size);
+        crate::constreg::constant_into_destination(&mut function, &assignment);
     }
     remove_identity_copies(&mut function, &assignment);
     remove_redundant_copies(&mut function, &assignment);
@@ -149,6 +162,9 @@ pub fn items_with(
         &crate::REGISTER_INFO,
         &slots,
     );
+    if options.short {
+        crate::cmpdup::drop_repeated_compares(&mut function, &assignment);
+    }
     preserve_flags(&mut function, &assignment)?;
     branch_fold(&mut function, &assignment);
     crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size);
@@ -163,7 +179,16 @@ pub fn items_with(
             epilogue_begin: false,
         }));
     }
-    for line in finish(&function, &assignment, number, &slots, cpu, options.push_frame)? {
+    for line in finish_with(
+        &function,
+        &assignment,
+        number,
+        &slots,
+        cpu,
+        options.push_frame,
+        options.short,
+        options.push_arguments.then_some(wants_size),
+    )? {
         out.push(match line {
             Line::Label(at) => Item::Label(format!(".LBB{number}_{at}")),
             Line::Inst(inst) => Item::Inst(inst),
@@ -265,7 +290,15 @@ pub fn mid_end_runs() -> usize {
 /// loop strength reduction, priced by [`M68k`]. (`llc` runs no `opt` pipeline;
 /// the bench's reference does not either.)
 pub fn mid_end(module: &Module) -> Result<Module, String> {
-    mid_end_described_by(module, &M68k::default(), Some(Rc::new(M68kMachine)))
+    mid_end_for(module, Cpu::default())
+}
+
+/// [`mid_end`] for `cpu`.
+pub fn mid_end_for(
+    module: &Module,
+    cpu: Cpu,
+) -> Result<Module, String> {
+    mid_end_described_by(module, &M68k::for_cpu(cpu), Some(Rc::new(M68kMachine { cpu })))
 }
 
 /// [`mid_end`] with another target description: what a test compares the
