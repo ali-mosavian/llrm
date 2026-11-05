@@ -98,3 +98,18 @@ fn a_counter_keeps_the_bases_when_the_end_biased_one_costs_setup() {
     let text = llrm_mir::print::module(&module);
     assert!(text.contains(", 32\n") && !text.contains("i32 32\n  %scevgep"), "{text}");
 }
+
+/// quicksort's 4092-trip check loop (wasm32 -O1/-O2/-O3, +10 B on the pin's
+/// 956): LG3's count-to-zero solution (a `ptr + 4100` base, the counter from
+/// -4092) tied the pin's on instructions plus setup and won on the tie, though
+/// its constants are the wider ones. A tie keeps the pin's solution.
+#[test]
+fn a_tie_with_the_pins_solution_keeps_the_pins_counter() {
+    let mut module = llrm_mir::parse::module(include_str!("lsr/sorted_check.ll")).expect("parses");
+    let mut manager = PassManager::default();
+    let elements = llrm_transforms::pipeline_text::parse("loop-reduce").expect("pipeline");
+    llrm_transforms::pipeline_text::build(&elements, &mut manager).ok().expect("builds");
+    manager.run_module(&mut module, Rc::new(WasmMachine)).expect("runs");
+    let text = llrm_mir::print::module(&module);
+    assert!(!text.contains("[ -4092"), "{text}");
+}

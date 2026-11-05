@@ -326,8 +326,8 @@ fn plan_loop(
                 || pin_cost.is_less(tti, &cost)
                 || (!folds_base_and_counter
                     && (cost.c.num_base_adds > pin_cost.c.num_base_adds
-                        || cost.c.insns + cost.c.setup_cost > pin_cost.c.insns + pin_cost.c.setup_cost)));
-        llrm_support::debug!("lsr", "  pin's space solved: kept {kept}");
+                        || cost.c.insns + cost.c.setup_cost >= pin_cost.c.insns + pin_cost.c.setup_cost)));
+        llrm_support::debug!("lsr", "  pin's space solved: kept {kept}: pin {:?} against {:?}", pin_cost.c, cost.c);
         if kept {
             lsr = pin;
             solution = pin_solution;
