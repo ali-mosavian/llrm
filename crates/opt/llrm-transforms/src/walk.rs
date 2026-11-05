@@ -183,6 +183,11 @@ pub struct Walk {
     /// The interprocedural step's byte-for-clock rate (None: bytes), which
     /// prices an ArgumentPromotion.
     pub promote_rate: Option<i64>,
+    /// The Simplify list reruns over a body no call was spliced into. Off in
+    /// the second walk (DEVIATE 6502-SZ1): there the rerun stays only where the
+    /// body gets smaller, for Reassociate ranks by the layout and reorders a
+    /// settled chain at no gain (call_keeps +26 B).
+    pub rerun_unchanged: bool,
 }
 
 /// DEVIATE REC-1: the recursion a program is given. `-finline-recursive` asks
@@ -446,7 +451,19 @@ impl ProgramPass for Walk {
                             repeats += 1;
                             continue;
                         }
-                        (self.simplify)(module, &mut modules[at], id, "walk.");
+                        if spliced || self.rerun_unchanged {
+                            (self.simplify)(module, &mut modules[at], id, "walk.");
+                        } else if let Some(tti) = tti.as_deref() {
+                            let kept = function_mut(module, id).1.clone();
+                            let before = body_size(module, &program.layout, tti, id);
+                            (self.simplify)(module, &mut modules[at], id, "walk.again.");
+                            if body_size(module, &program.layout, tti, id) >= before {
+                                *function_mut(module, id).1 = kept;
+                                modules[at].changed(id);
+                                modules[at]
+                                    .invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
+                            }
+                        }
                         if let (Some(before), Some(tti)) = (spliced_body, tti.as_deref()) {
                             // SZ2: each refused site is inlined into the body
                             // as it stood before

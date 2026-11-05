@@ -2298,3 +2298,18 @@ define i8 @t() {
     assert!(size.contains("_local0"), "-Os counts bytes:\n{size}");
     assert_eq!(exit_code_of(&size, "t"), 7, "{size}");
 }
+
+/// call_keeps (tests/run/c): `churn` is settled after the first walk, and
+/// Reassociate ranks by the layout, so the second walk's Simplify list
+/// reordered its xor chain for no gain: 26 bytes more at -Os. A rerun over a
+/// body no call was spliced into stays only where the body gets smaller.
+#[test]
+fn the_second_walk_leaves_a_settled_body_as_it_was() {
+    let ir = include_str!("data/call_keeps.ll");
+    let mut request = Request::new(Level::Os);
+    request.passes.push("-fno-second-inline".to_owned());
+    let once = assembly(ir, &request).unwrap();
+    let twice = assembly(ir, &Request::new(Level::Os)).unwrap();
+    let size = |text: &str| text.lines().filter(|line| line.starts_with("  ")).count();
+    assert!(size(&twice) <= size(&once), "{} instructions against {}", size(&twice), size(&once));
+}
