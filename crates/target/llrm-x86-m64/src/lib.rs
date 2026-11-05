@@ -388,6 +388,10 @@ impl llrm_target::Target for M64 {
                             // measured on a Ryzen 9 9950X3D is 10 clocks = 156 mclk/B; at 156
                             // fcmp_all -O2 grew 63% for 10% fewer instructions, so it stays 312.
                             unroll_milliclocks_per_byte: 312,
+                            // Zen 5, perf cycles:u, independent ops (card m64idwork/ctl/RT-RESULT.txt):
+                            // taken cmp+je 0.60 clk, add 0.21 clk. An upper bound; fp unvalidated.
+                            // Retired when the throughput rows (CostKind plan) land.
+                            unroll_control_milliclocks: Some((600, 210)),
                             unroll_promotion_fits_registers: true,
                             rotation_guard_must_fold_at_size: true,
                             // No byte/clock rate is stated for m64 (oversight

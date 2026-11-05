@@ -127,6 +127,12 @@ pub struct Tuning {
     /// thousandths of a clock a byte (`Tti::unroll_milliclocks_per_byte`) at
     /// -O2/-O3. 0: the pin's threshold alone.
     pub unroll_milliclocks_per_byte: i64,
+    /// M64-CONTROL (stopgap, exit 2026-11-08; retired when the throughput
+    /// rows of the CostKind plan land): what a full unroll's loop control
+    /// costs, as (taken branch, add) in thousandths of a clock, from
+    /// throughput. None: the operation rows' latencies, as the pin's target
+    /// that has no throughput rows.
+    pub unroll_control_milliclocks: Option<(i64, i64)>,
     /// DEVIATE CS2: where there is no conditional move, a select's arm only
     /// it reads is made on its own path (`Tti::sinks_select_arms`). false: the
     /// pin's, both operands before the branch.
@@ -180,6 +186,7 @@ impl Tuning {
         recursive_tre_first: (false, false),
         peel_folded_entry: false,
         unroll_milliclocks_per_byte: 0,
+        unroll_control_milliclocks: None,
         sink_select_arms: false,
         inline_variable_memcpy: false,
         ipsccp_widen_keeps_sign: false,

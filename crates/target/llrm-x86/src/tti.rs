@@ -579,6 +579,10 @@ impl Tti for X86 {
         self.tuning.unroll_milliclocks_per_byte
     }
 
+    fn unroll_control_milliclocks(&self) -> Option<(i64, i64)> {
+        self.tuning.unroll_control_milliclocks
+    }
+
     fn multiply_by_clocks(&self) -> bool {
         self.tuning.multiply_by_clocks
     }

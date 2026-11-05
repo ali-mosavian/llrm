@@ -614,3 +614,14 @@ fn test_the_unroll_cost_analysis_reads_the_loops_expressions_the_pass_already_ma
     let made = get(Event::ScevNodes) - before;
     assert!(made <= 29, "{made} expressions were made for one loop");
 }
+
+/// memmove_overlap -O2/-O3 m64 grew 225 B for no clock gain: the unroll was
+/// paid the latency of a branch and two adds per trip (8 trips: 37 clk at
+/// branch 3, add 1), which Zen 5 retires beside the body (7 clk).
+#[test]
+fn a_loops_control_is_priced_at_the_throughput_where_the_target_gives_it() {
+    use super::price::loop_control;
+    assert_eq!(loop_control(8, (3, 1), None), 7 * 3 + 8 * 2);
+    assert_eq!(loop_control(8, (3, 1), Some((600, 210))), (7 * 600 + 8 * 2 * 210) / 1000);
+    assert!(loop_control(8, (3, 1), Some((600, 210))) < loop_control(8, (3, 1), None));
+}

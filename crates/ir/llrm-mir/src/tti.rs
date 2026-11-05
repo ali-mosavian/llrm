@@ -648,6 +648,11 @@ pub trait Tti {
         0
     }
 
+    /// `Tuning::unroll_control_milliclocks`.
+    fn unroll_control_milliclocks(&self) -> Option<(i64, i64)> {
+        None
+    }
+
     /// `Tuning::multiply_by_clocks`.
     fn multiply_by_clocks(&self) -> bool {
         false

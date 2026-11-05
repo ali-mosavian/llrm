@@ -115,7 +115,7 @@ pub(super) fn full_unroll_pays(
     // unit: a taken back edge is several clocks (the i486's `jne` 3), the
     // counter's step and the compare one each (lru: a 3-trip loop saved 6
     // clocks by the average, 25 run).
-    let control = (i64::from(trips) - 1) * clocks.branch + i64::from(trips) * 2 * clocks.add;
+    let control = loop_control(trips, (clocks.branch, clocks.add), run.tti.unroll_control_milliclocks());
     let averaged = i64::from(trips) * (i64::from(up.be_insns) + 1) * body_clocks / rolled_units;
     let constant_clocks = constant_clocks + (control - averaged).max(0);
     let constant_clocks = constant_clocks + i64::from(trips) * promoted_runs * clocks.load;
@@ -382,4 +382,16 @@ fn encloses_known_trips(
         around = parent.get_parent_loop();
     }
     true
+}
+
+/// Clocks of `trips` trips' loop control: a taken branch on all but the last and
+/// two adds (counter step, compare) on each. `throughput` (M64-CONTROL, a
+/// stopgap until the throughput rows land) is (branch, add) in milliclocks
+/// where the CPU overlaps them with the body; None: the rows' `(branch, add)`.
+pub(super) fn loop_control(trips: u32, (branch, add): (i64, i64), throughput: Option<(i64, i64)>) -> i64 {
+    let trips = i64::from(trips);
+    match throughput {
+        Some((branch, add)) => ((trips - 1) * branch + trips * 2 * add) / 1000,
+        None => (trips - 1) * branch + trips * 2 * add,
+    }
 }
