@@ -263,13 +263,6 @@ const ROWS: &[Disposition] = &[
     ),
     row(
         Late,
-        "loop-rotate",
-        Why::Missing,
-        "the late loop nest's rotate; DEFERRED: pin ablation (2026-10-27) QCport 65 IRs 3 IRs / -3 instr (i486 -O2), 4 / -2 (m16 -Os); QB 58 IRs 1 / +1 (the pin parses 58 of 101); C examples/bench 49 IRs 3 / -14 (i486 -O2), 3 / -12 (m16 -Os), the pass adds instructions there; revisit after parity-green",
-        "w4",
-    ),
-    row(
-        Late,
         "loop-deletion",
         Why::Missing,
         "pin ablation (2026-10-27, entry kept alive): late loop-deletion changes 0 of 65 QCport, 0 of 49 C examples/bench, 0 of 58 QB (m16 -Os; the pin parses 58 of 101); DEFERRED, revisit after parity-green",

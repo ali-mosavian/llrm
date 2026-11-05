@@ -28,9 +28,11 @@ b2:
 
 fn unrolled_for(cpu: &str) -> (bool, String) {
     let mut module = llrm_mir::parse::module(UNKNOWN_TRIPS).expect("parses");
-    let function = module.function_mut("f").expect("@f").1;
+    let layout =
+        llrm_mir::datalayout::DataLayout::parse("e-m:e-p:32:32-f64:32:64-f80:32-n8:16:32-S128").expect("layout");
+    let (context, function) = module.function_mut("f").expect("@f");
     llrm_transforms::loopsimplify::simplified(function);
-    llrm_transforms::lcssa::closed(function).expect("closes");
+    llrm_transforms::lcssa::closed(context, &layout, function).expect("closes");
     let tti = X86::of_cpu(cpu).expect("a cpu");
     let options = Options {
         opt_level: 2,

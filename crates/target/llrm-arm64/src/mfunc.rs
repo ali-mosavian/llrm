@@ -363,6 +363,11 @@ pub struct MFunc {
     /// The constants the function loads from memory (`MachineConstantPool`),
     /// each under the label its address is taken from.
     pub pool: Vec<PoolEntry>,
+    /// The selector's block ids in label order, and the branch probabilities
+    /// it kept for the edges it split (`(from, to, numerator / 2^31)`); empty
+    /// when the selector kept none.
+    pub block_ids: Vec<u32>,
+    pub edge_probs: Vec<(u32, u32, u32)>,
 }
 
 /// A constant pool entry: `bytes` at `align`, under `label`.

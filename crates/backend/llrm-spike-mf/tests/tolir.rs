@@ -1915,3 +1915,25 @@ fn test_pricing_the_joins_of_a_value_does_not_read_its_uses_again() {
     assert_eq!(converted.joined().iter().count(), copies, "premise: every copy joins");
     assert!(visits <= copies, "{visits} operand scans for {reads} reads and {copies} joins");
 }
+
+/// `x = add y, y` tied to its first source copied only the tied use: `y` was
+/// read again by the add, stayed live beside `x`, and the two could not share
+/// a register (`move.l (a0), d1; move.l d1, d0; add.l d1, d0` for `y + y`,
+/// 8 B in the m68k seeds). The pin reads the copy for every use of the source
+/// (`processTiedPairs`).
+#[test]
+fn test_a_tied_instruction_reads_the_copy_for_every_use_of_its_source() {
+    let mut f = MFunction::<()>::new("double");
+    f.classes = vec![(); 2];
+    let mut entry = Block { id: 0, ..Block::default() };
+    entry.insts.push(op("load", vec![Operand::Def(v(0))]));
+    let mut add = op("add", vec![Operand::Def(v(1)), Operand::Use(v(0)), Operand::Use(v(0))]);
+    add.ties = vec![(0, 1)];
+    entry.insts.push(add);
+    entry.insts.push(op("store", vec![Operand::Use(v(1))]));
+    entry.insts.push(ret());
+    f.blocks = vec![entry];
+    let f = lowered(f);
+    let add = f.blocks[0].insts.iter().find(|inst| matches!(inst.kind, Kind::Op("add"))).expect("the add");
+    assert_eq!(add.operands, vec![Operand::Def(v(1)), Operand::Use(v(1)), Operand::Use(v(1))], "{:?}", add.operands);
+}

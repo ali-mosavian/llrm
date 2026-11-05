@@ -538,9 +538,7 @@ pub(super) fn unswitch_nontrivial_invariants(
         let root = def_of(run, cond).expect("a partial unswitch has an instruction as the condition");
         let cond_is_or = logical(run, root, false).is_some();
         let cond_is_and = logical(run, root, true).is_some();
-        if !cond_is_or
-            && (cond_is_and || candidate.partial.as_ref().is_some_and(|info| !info.known_value))
-        {
+        if !cond_is_or && (cond_is_and || candidate.partial.as_ref().is_some_and(|info| !info.known_value)) {
             direction = false;
             cloned_succ = 1;
         }
@@ -744,7 +742,7 @@ pub(super) fn unswitch_nontrivial_invariants(
     // We can change which blocks are exit blocks of all the cloned sibling
     // loops, the current loop, and any parent loops which shared exit blocks
     // with the current loop: re-form LCSSA, then dedicated exits (SU8).
-    let _ = crate::lcssa::formed(run.function);
+    let _ = crate::lcssa::closed(run.context, run.layout, run.function);
     crate::loopsimplify::simplified(run.function);
 
     let cloned_headers = vmaps.iter().filter_map(|vmap| vmap.blocks.get(&header).copied()).collect();

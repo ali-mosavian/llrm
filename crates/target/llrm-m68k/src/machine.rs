@@ -226,6 +226,23 @@ impl Tti for M68k {
         true
     }
 
+    /// DEVIATE 19: `addi`/`subi`/`addq` and `cmpi` take any 32-bit immediate;
+    /// the pin's M68k lowering keeps the base class's `false`. Exit
+    /// 2026-11-12.
+    fn is_legal_add_immediate(
+        &self,
+        imm: i64,
+    ) -> bool {
+        i32::try_from(imm).is_ok()
+    }
+
+    fn is_legal_icmp_immediate(
+        &self,
+        imm: i64,
+    ) -> bool {
+        i32::try_from(imm).is_ok()
+    }
+
     /// DEVIATE 17: a size build keeps a store or copy loop (a `memset` call
     /// is three pushes, `jsr` and `lea`: 16 B, the loop 10 to 14). Exit
     /// 2026-11-12.

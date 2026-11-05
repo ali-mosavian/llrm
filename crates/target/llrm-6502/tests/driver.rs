@@ -1904,3 +1904,67 @@ fn a_c_global_takes_the_platforms_symbol_prefix() {
     let plain = on("sim65");
     assert!(plain.contains(".export sp") && plain.contains("sta sp"), "{plain}");
 }
+
+/// `a - b + strend` copied the word global into two cells (`lda strend; sta
+/// rc2; lda strend+1; sta rc3`) and added the cells: four instructions the
+/// byte forms never needed. A word global read once by an add is the memory
+/// operand of both halves, as a byte global is (x16 getspa, linget).
+#[test]
+fn a_word_global_read_once_by_an_add_is_the_memory_operand_of_both_halves() {
+    let ir = module(
+        "@g = global i16 0\n\
+         define i16 @f(i16 %a, i16 %b) {\n  %s = sub i16 %a, %b\n  %v = load i16, ptr @g\n  %r = add i16 %s, %v\n  ret i16 %r\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(text.contains("adc g\n") && text.contains("adc g+1\n"), "no memory operand:\n{text}");
+    assert!(!text.contains("lda g\n"), "the global was loaded into a cell first:\n{text}");
+}
+
+/// A store between the word load and its add must not change what the add
+/// reads: the load keeps its place, so the add reads a cell.
+#[test]
+fn a_store_between_a_word_load_and_its_add_does_not_change_what_the_add_reads() {
+    let ir = module(
+        "@g = global i16 0\n\
+         define i16 @f(i16 %x) {\n  %a = load i16, ptr @g\n  store i16 %x, ptr @g\n  %b = add i16 %a, %x\n  ret i16 %b\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    let (read, written) = (text.find("adc g"), text.find("sta g"));
+    assert!(read.is_none() || read < written, "the add reads g after the store:\n{text}");
+}
+
+/// `if (n < strend)` loaded the word global into two cells and compared the
+/// cells (`lda strend; sta rc4; lda strend+1; sta rc5; cmp rc4; sbc rc5`):
+/// four instructions and two cells more than `cmp strend; sbc strend+1`
+/// (x16 getspa). A byte global is the same.
+#[test]
+fn a_global_compared_by_a_branch_is_the_memory_operand_of_the_compare() {
+    for (ty, flags) in [("i16", ["cmp g\n", "sbc g+1\n"]), ("i8", ["cpx g\n", "cpx g\n"])] {
+        let ir = module(&format!(
+            "@g = global {ty} 0\ndeclare void @h()\n\
+             define void @f({ty} %x) {{\n  %v = load {ty}, ptr @g\n  %c = icmp ult {ty} %x, %v\n  \
+             br i1 %c, label %t, label %e\nt:\n  call void @h()\n  ret void\ne:\n  ret void\n}}"
+        ));
+        let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+        assert!(flags.iter().all(|read| text.contains(read)), "{ty}: no memory operand:\n{text}");
+        assert!(!text.contains("lda g"), "{ty}: the global was loaded into a cell first:\n{text}");
+    }
+}
+
+/// The flags are made where the branch reads them. A store to the global, or a
+/// call, between the compare and its branch must not change what is compared:
+/// the compare reads the global before the store.
+#[test]
+fn a_store_or_a_call_between_a_compare_and_its_branch_does_not_change_what_it_reads() {
+    for between in ["store i16 %y, ptr @g", "call void @other()"] {
+        let ir = module(&format!(
+            "@g = global i16 0\ndeclare void @h()\ndeclare void @other()\n\
+             define void @f(i16 %x, i16 %y) {{\n  %v = load i16, ptr @g\n  %c = icmp ult i16 %x, %v\n  {between}\n  \
+             br i1 %c, label %t, label %e\nt:\n  call void @h()\n  ret void\ne:\n  ret void\n}}"
+        ));
+        let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+        let after = text.find("sta g").into_iter().chain(text.find("jsr other")).min().expect("the write");
+        assert!(text.find("cmp g").is_none_or(|read| read < after), "{between}: the compare reads g after it:\n{text}");
+        assert!(text.contains("lda g"), "{between}: g was never read before the write:\n{text}");
+    }
+}

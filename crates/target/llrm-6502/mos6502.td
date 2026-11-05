@@ -173,6 +173,21 @@ let Defs = [P], mayLoad = 1, AddedComplexity = 30 in {
   def OR8M : MOSInst<(outs Imag8:$d), (ins Imag8:$a, absaddr:$m), "or8m $d, $a, $m", [(set i8:$d, (or i8:$a, (load MOSAbs:$m)))]>;
   def XOR8M : MOSInst<(outs Imag8:$d), (ins Imag8:$a, absaddr:$m), "xor8m $d, $a, $m", [(set i8:$d, (xor i8:$a, (load MOSAbs:$m)))]>;
 }
+// A word op whose second operand is a word global: CLC; LDA alo; ADC g; STA dlo; LDA ahi; ADC g+1; STA dhi. The same fold
+// rules as the byte forms: one use, no store between.
+let Defs = [P], mayLoad = 1, AddedComplexity = 30 in {
+  def ADD16M : MOSInst<(outs Imag16:$d), (ins Imag16:$a, absaddr:$m), "add16m $d, $a, $m", [(set i16:$d, (add i16:$a, (load MOSAbs:$m)))]>;
+  def SUB16M : MOSInst<(outs Imag16:$d), (ins Imag16:$a, absaddr:$m), "sub16m $d, $a, $m", [(set i16:$d, (sub i16:$a, (load MOSAbs:$m)))]>;
+  def AND16M : MOSInst<(outs Imag16:$d), (ins Imag16:$a, absaddr:$m), "and16m $d, $a, $m", [(set i16:$d, (and i16:$a, (load MOSAbs:$m)))]>;
+  def OR16M : MOSInst<(outs Imag16:$d), (ins Imag16:$a, absaddr:$m), "or16m $d, $a, $m", [(set i16:$d, (or i16:$a, (load MOSAbs:$m)))]>;
+  def XOR16M : MOSInst<(outs Imag16:$d), (ins Imag16:$a, absaddr:$m), "xor16m $d, $a, $m", [(set i16:$d, (xor i16:$a, (load MOSAbs:$m)))]>;
+}
+// A compare against a global: LDA a; CMP g (words: LDA alo; CMP g; LDA ahi; SBC g+1). The flags are made where they
+// are read (alloc.rs), which keeps the memory operand only while nothing can change the global before then.
+let mayLoad = 1, AddedComplexity = 30 in {
+  def CMP8M : MOSInst<(outs Flags:$f), (ins Imag8:$a, absaddr:$m), "cmp8m $f, $a, $m", [(set i8:$f, (MOScmp i8:$a, (load MOSAbs:$m)))]>;
+  def CMP16M : MOSInst<(outs Flags:$f), (ins Imag16:$a, absaddr:$m), "cmp16m $f, $a, $m", [(set i8:$f, (MOScmp i16:$a, (load MOSAbs:$m)))]>;
+}
 // The same with a global indexed by a byte: LDX i; LDA a; ADC g,x.
 let Defs = [P], mayLoad = 1, AddedComplexity = 30 in {
   def ADD8MX : MOSInst<(outs Imag8:$d), (ins Imag8:$a, absx:$m), "add8mx $d, $a, $m", [(set i8:$d, (add i8:$a, (load MOSAbsX:$m)))]>;

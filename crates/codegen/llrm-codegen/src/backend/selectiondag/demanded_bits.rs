@@ -656,7 +656,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             // `SimplifyDemandedBits` of `ADD`, `SUB` and `MUL`: they demand
             // nothing above their highest demanded bit; a constant addend whose
             // low bits are all ones becomes -1.
-            ISD::Add | ISD::Sub | ISD::Mul if self.hooks.simplify_demanded_add_sub_mul() => {
+            ISD::Add | ISD::Sub | ISD::Mul => {
                 let (op0, op1) = (self.dag.operand(op, 0), self.dag.operand(op, 1));
                 let length = 128 - demanded.leading_zeros();
                 let low = mask(length);

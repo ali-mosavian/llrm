@@ -31,7 +31,7 @@ fn a_compare_branch_over_a_jump_is_the_inverse_compare_branch() {
             ],
         );
         let exit = block("exit", vec![Inst::Ret { rn: Gpr(30) }]);
-        let out = fold(vec![top, exit], &mut []);
+        let out = fold(vec![top, exit], &mut [], &Default::default(), false, &[]);
         assert!(
             matches!(
                 out[0].insts.as_slice(),
@@ -54,7 +54,7 @@ fn a_test_branch_over_a_jump_is_the_inverse_test_branch() {
         ],
     );
     let exit = block("exit", vec![Inst::Ret { rn: Gpr(30) }]);
-    let out = fold(vec![top, exit], &mut []);
+    let out = fold(vec![top, exit], &mut [], &Default::default(), false, &[]);
     assert!(
         matches!(
             out[0].insts.as_slice(),

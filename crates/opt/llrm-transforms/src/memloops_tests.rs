@@ -62,3 +62,22 @@ fn a_copy_of_a_constant_length_is_no_candidate() {
     crate::memloops::expanded(&mut after, &|_| true).expect("expands");
     assert_eq!(calls_in(&after), 1);
 }
+
+/// A call with fewer than three operands (a scope marker, a one-argument
+/// function) indexed operand 2 before asking whether it was a copy:
+/// `candidates` panicked with "the len is 1 but the index is 2" on every 6502
+/// program that kept a `noalias.scope.decl` after inlining (struct_with_i64,
+/// sysv_abi, ia16_abi, bitfield_long_long).
+#[test]
+fn a_call_of_fewer_than_three_operands_is_no_candidate_and_no_panic() {
+    let text = TEXT.replace(
+        "define i16 @f",
+        "declare void @llvm.experimental.noalias.scope.decl()\ndeclare void @llvm.lifetime.start.p0(i64, ptr)\ndefine i16 @f",
+    )
+    .replace(
+        "%x = load i8, ptr %q0",
+        "call void @llvm.experimental.noalias.scope.decl()\n  call void @llvm.lifetime.start.p0(i64 8, ptr %a)\n  %x = load i8, ptr %q0",
+    );
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    assert_eq!(crate::memloops::candidates(&module), vec!["f".to_owned()]);
+}

@@ -937,8 +937,29 @@ impl Graph {
         size: bool,
     ) -> Graph {
         let cfg = Cfg::new(function);
-        let count = function.blocks.len();
-        let id = |at: usize| function.blocks[at].id;
+        let ids: Vec<u32> = function.blocks.iter().map(|block| block.id).collect();
+        let pinned = (0..ids.len())
+            .map(|at| {
+                analyze(function, at).is_none()
+                    && at + 1 < ids.len()
+                    && !function.blocks[at].insts.last().is_some_and(|last| last.barrier)
+            })
+            .collect();
+        Graph::from_cfg(&cfg, &ids, pinned, odds, size)
+    }
+
+    /// The graph of `cfg`, block `at` numbered `ids[at]` in `odds`; `pinned`
+    /// blocks stay with their layout successor
+    /// ([`Layout::keeps_fall_through`]).
+    pub fn from_cfg(
+        cfg: &Cfg,
+        ids: &[u32],
+        pinned: Vec<bool>,
+        odds: &Odds,
+        size: bool,
+    ) -> Graph {
+        let count = ids.len();
+        let id = |at: usize| ids[at];
         let succs: Vec<Vec<usize>> = (0..count)
             .map(|from| {
                 let mut list = cfg.succs[from].clone();
@@ -976,14 +997,7 @@ impl Graph {
             let info = BlockFrequencyInfo::calculate(&machine, &Probabilities(&probs), &ci);
             (0..count).map(|block| info.get_block_freq(BlockId(block as u32))).collect()
         };
-        let pinned = (0..count)
-            .map(|at| {
-                analyze(function, at).is_none()
-                    && at + 1 < count
-                    && !function.blocks[at].insts.last().is_some_and(|last| last.barrier)
-            })
-            .collect();
-        let loops = loop_forest(&cfg);
+        let loops = loop_forest(cfg);
         Graph { counts_jumps: false, succs, preds, probs, freqs, pinned, loops, size }
     }
 }

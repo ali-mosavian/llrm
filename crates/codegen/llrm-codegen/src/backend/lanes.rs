@@ -161,7 +161,14 @@ thread_local! {
 }
 
 fn active() -> &'static Table {
+    #[cfg(test)]
+    TABLE_READS.with(|count| count.set(count.get() + 1));
     ACTIVE.with(Cell::get).unwrap_or(&X86)
+}
+
+#[cfg(test)]
+thread_local! {
+    static TABLE_READS: Cell<usize> = const { Cell::new(0) };
 }
 
 /// The register file's lane table in force until this drops.
@@ -182,7 +189,13 @@ pub fn enter(regs: Regs) -> Guard {
 }
 
 fn bit(lane: &Lane) -> Option<u32> {
-    let table = active();
+    bit_in(active(), lane)
+}
+
+fn bit_in(
+    table: &Table,
+    lane: &Lane,
+) -> Option<u32> {
     let slot = lane.0.index();
     (slot < REGISTERS && lane.1 < u32::from(table.bytes[slot]))
         .then(|| u32::from(table.first[slot]) + lane.1.min(u32::from(table.count[slot]) - 1))
@@ -334,6 +347,14 @@ impl Lanes {
         Iter(self.0 & other.0, active())
     }
 
+    /// Every lane of `other` added: `extend` of its lanes, as one word operation.
+    pub fn include(
+        &mut self,
+        other: Self,
+    ) {
+        self.0 |= other.0;
+    }
+
     // The same operations as sets, without an iterator between.
     pub fn or(
         &self,
@@ -440,8 +461,9 @@ impl Extend<Lane> for Lanes {
         &mut self,
         lanes: I,
     ) {
+        let table = active();
         for lane in lanes {
-            self.insert(lane);
+            self.0 |= 1 << bit_in(table, &lane).unwrap_or_else(|| panic!("{lane:?} is no lane"));
         }
     }
 }
@@ -572,6 +594,24 @@ mod tests {
 
     /// `span` must name the lanes a byte-by-byte `collect` names, including a
     /// root's upper bytes folded into one lane.
+    /// `Lanes::extend` read the thread's lane table once for each lane it added
+    /// (27 M Ir self over a memory_expansion -O2 compile, 111,780 `_lanes`
+    /// asks in the peephole alone); it reads it once, and `include` of a
+    /// mask reads it never.
+    #[test]
+    fn extend_reads_the_lane_table_once_and_include_never() {
+        let lanes: Vec<Lane> = X86.lanes.iter().copied().take(6).collect();
+        let before = TABLE_READS.with(Cell::get);
+        let mut extended = Lanes::new();
+        extended.extend(lanes.iter().copied());
+        assert_eq!(TABLE_READS.with(Cell::get) - before, 1, "one table read for six lanes");
+        let before = TABLE_READS.with(Cell::get);
+        let mut included = Lanes::new();
+        included.include(extended);
+        assert_eq!(TABLE_READS.with(Cell::get) - before, 0);
+        assert_eq!(included, extended);
+    }
+
     #[test]
     fn span_matches_the_lanes_of_each_byte() {
         let registers: BTreeSet<RegId> = X86.lanes.iter().map(|lane| lane.0).collect();
