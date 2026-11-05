@@ -641,6 +641,12 @@ pub trait Tti {
         None
     }
 
+    /// The `PartialThreshold` of the unroll-and-jam's outer loop (its tuning
+    /// table); none: `unroll_partial_threshold_override`'s.
+    fn unroll_jam_partial_threshold_override(&self) -> Option<u32> {
+        None
+    }
+
     /// The target's `-unswitch-threshold` (its tuning table); none: the pin's
     /// 50.
     fn unswitch_threshold_override(&self) -> Option<i64> {

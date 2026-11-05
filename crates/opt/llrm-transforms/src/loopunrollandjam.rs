@@ -1384,6 +1384,10 @@ impl LoopUnrollAndJam {
             up.unroll_and_jam = true;
             up.partial = true;
             up.runtime = true;
+            // The target's own `PartialThreshold` for the outer loop (UJ2).
+            if let Some(threshold) = run.tti.unroll_jam_partial_threshold_override() {
+                up.partial_threshold = threshold;
+            }
         }
         if let Some(runtime) = self.options.runtime {
             up.runtime = runtime;

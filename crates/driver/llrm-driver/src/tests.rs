@@ -3097,6 +3097,41 @@ fn the_call_pad_lies_above_the_locals_at_m64() {
     assert!(listing.contains("[rsp]") || listing.contains("lea rdi, [rsp]"), "{listing}");
 }
 
+/// -O3 unroll-and-jam never fired on x86-64: the outer loop's size (28) was
+/// held to `BasicTTIImpl`'s 28-micro-op loop buffer, so the count was 0
+/// (particle: 15850 cycles; gcc's jam of two outer trips, 10262). Jammed, the
+/// copies of `px += vx` share one load of `vx`: `px += 3 * vx`.
+#[test]
+fn a_nest_with_loads_invariant_in_the_outer_loop_is_jammed_at_o3_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @px = global [101 x i16] zeroinitializer\n@vx = global [101 x i16] zeroinitializer\n\
+                @py = global [101 x i16] zeroinitializer\n@vy = global [101 x i16] zeroinitializer\n\
+                define void @f() {\nentry:\n  br label %outer\n\
+                outer:\n  %t = phi i16 [ 1, %entry ], [ %t1, %next ]\n  br label %inner\n\
+                inner:\n  %i = phi i64 [ 0, %outer ], [ %i1, %inner ]\n\
+                \x20 %a = getelementptr inbounds nuw [2 x i8], ptr @px, i64 %i\n  %x = load i16, ptr %a\n\
+                \x20 %b = getelementptr inbounds nuw [2 x i8], ptr @vx, i64 %i\n  %v = load i16, ptr %b\n\
+                \x20 %s = add i16 %v, %x\n  store i16 %s, ptr %a\n\
+                \x20 %c = getelementptr inbounds nuw [2 x i8], ptr @py, i64 %i\n  %y = load i16, ptr %c\n\
+                \x20 %d = getelementptr inbounds nuw [2 x i8], ptr @vy, i64 %i\n  %w = load i16, ptr %d\n\
+                \x20 %r = add i16 %w, %y\n  store i16 %r, ptr %c\n\
+                \x20 %i1 = add nuw nsw i64 %i, 1\n  %e = icmp eq i64 %i1, 101\n  br i1 %e, label %next, label %inner\n\
+                next:\n  %t1 = add nuw nsw i16 %t, 1\n  %f = icmp eq i16 %t1, 101\n  br i1 %f, label %done, label %outer\n\
+                done:\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O3", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    // Jammed by three: `px += 3 * vx` is `lea r, [v+v]` then `add r, v`.
+    let tripled = listing.lines().map(str::trim).filter(|line| {
+        line.strip_prefix("lea ")
+            .and_then(|rest| rest.split_once('['))
+            .and_then(|(_, inside)| inside.strip_suffix(']'))
+            .and_then(|inside| inside.split_once('+'))
+            .is_some_and(|(a, b)| a == b)
+    });
+    assert!(tripled.count() >= 2, "{listing}");
+}
+
 /// A local declared `align 16` sat at `[rsp+4]`: the frame clamped every
 /// alignment to 4 (bintree's array; a 16-byte `movaps` clear of it would
 /// fault).
