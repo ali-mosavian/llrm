@@ -355,6 +355,15 @@ pub trait CombineHooks {
         false
     }
 
+    /// `add x, (zext i1 y)` is `sub x, (sext i1 y)` where booleans are 0/-1:
+    /// the sign extension of a compare is the cheaper one (`slt; extb.l` 4 B
+    /// against `slt; and.l #1` 8 B on the 68020), and the pin's `sub x, (zext
+    /// i1 y)` to `add x, (sext i1 y)` fold has no dual for the add.
+    /// DEVIATE: not in the pin. Exit: review 2026-11-20.
+    fn sub_of_sign_extended_bool(&self) -> bool {
+        false
+    }
+
     /// The type `BuildUDIV` widens `vt` to for an uncooperative divisor
     /// ([L7031]: `i32` to `i64`), or `None` where the target does not.
     fn widened_unsigned_divide_type(
@@ -2117,6 +2126,19 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(self.dag.get_constant(ones, vt));
         }
         let plain = |dag: &SelectionDAG, v: SDValue| dag.constant(v).filter(|_| !dag.is_opaque(v)).is_some();
+        if self.hooks.sub_of_sign_extended_bool()
+            && self.dag.config().boolean_contents == super::dag::BooleanContents::ZeroOrNegativeOne
+        {
+            for (zext, other) in [(n1, n0), (n0, n1)] {
+                if self.dag.opcode(zext) == ISD::ZeroExtend
+                    && self.dag.value_type(self.dag.operand(zext, 0)) == EVT::I1
+                    && !plain(self.dag, other)
+                {
+                    let sext = self.dag.get_node(ISD::SignExtend, vt, &[self.dag.operand(zext, 0)]);
+                    return Some(self.dag.get_node(ISD::Sub, vt, &[other, sext]));
+                }
+            }
+        }
         if plain(self.dag, n1) {
             if self.dag.opcode(n0) == ISD::Sub {
                 let (n00, n01) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));

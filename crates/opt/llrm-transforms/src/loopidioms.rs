@@ -1085,8 +1085,12 @@ pub(crate) fn variable_copy_pays(
     callees: &Callees,
     blocks: &[BlockId],
     costs: &OperationCosts,
+    bytes_only: bool,
 ) -> bool {
-    trip_cost(context, layout, function, callees, blocks.iter(), costs, true) > costs.copy + costs.copy_variable
+    // Priced against clocks too (-O2/-O3), the call's bytes are not the whole
+    // cost: x_radix -O2 went 657 -> 370 B and +18% clocks.
+    let call = if bytes_only { costs.copy_variable } else { 0 };
+    trip_cost(context, layout, function, callees, blocks.iter(), costs, true) > costs.copy + call
 }
 
 /// DEVIATE, for `loopidiom`: whether `fills` fills, for the `stores` stores of
