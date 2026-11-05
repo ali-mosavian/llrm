@@ -449,6 +449,7 @@ fn time_saved(
     // out.
     let weight =
         |block| frequency.get(&cfg::id(block)).copied().unwrap_or(profit::UNIT).min(MAX_FREQUENCY * profit::UNIT);
+    let addresses = constant_addresses(body, &values, &reached);
     let (mut unknown, mut kept) = (0, 0);
     for (block, inst) in body.walk() {
         if matches!(body.instruction(inst).opcode, Opcode::Phi) {
@@ -456,7 +457,8 @@ fn time_saved(
         }
         let price = profit::operation(&module.context, layout, body, callees, inst, costs).unwrap_or(0) * weight(block);
         unknown += price;
-        if reached.contains(&block) && !folded.contains(&inst) {
+        // A constant address is an immediate of the access that uses it.
+        if reached.contains(&block) && !folded.contains(&inst) && !addresses.contains(&inst) {
             kept += price;
         }
     }
@@ -483,6 +485,52 @@ fn time_saved(
             }),
         );
     ((unknown - kept) / profit::UNIT, hint)
+}
+
+/// The `getelementptr`s in reached blocks whose base is a constant (a global)
+/// or another such address, and whose every index is a constant or a known
+/// actual: the access that uses one takes it as a displacement, so it costs
+/// nothing (GCC's `ipa-cp` prices the same fold through the address
+/// expression).
+fn constant_addresses(
+    body: &Function,
+    known: &IndexMap<llrm_mir::module::ValueId, consts::Known>,
+    reached: &BTreeSet<llrm_mir::module::BlockId>,
+) -> BTreeSet<InstId> {
+    let mut found = BTreeSet::new();
+    let mut values = BTreeSet::new();
+    loop {
+        let before = found.len();
+        for &block in body.layout() {
+            if !reached.contains(&block) {
+                continue;
+            }
+            for inst in body.iter_block(block) {
+                let instruction = body.instruction(inst);
+                let Some(result) = instruction.result else { continue };
+                if !matches!(instruction.opcode, Opcode::GetElementPtr { .. }) || found.contains(&inst) {
+                    continue;
+                }
+                let base = match instruction.operands[0] {
+                    Operand::Constant(_) => true,
+                    Operand::Value(v) => values.contains(&v),
+                    Operand::Block(_) => false,
+                };
+                let indices = instruction.operands[1..].iter().all(|index| match index {
+                    Operand::Constant(_) => true,
+                    Operand::Value(v) => known.contains_key(v),
+                    Operand::Block(_) => false,
+                });
+                if base && indices {
+                    found.insert(inst);
+                    values.insert(result);
+                }
+            }
+        }
+        if found.len() == before {
+            return found;
+        }
+    }
 }
 
 /// Whether `id` is a function the program runs once: `main`.

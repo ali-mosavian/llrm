@@ -1231,3 +1231,49 @@ fn stamping_does_not_summarize_every_global_for_each_function() {
     let (few, many) = (scans(4), scans(32));
     assert!(many <= few + 2, "4 functions: {few} scans, 32: {many}");
 }
+
+/// `row` indexes a global: with it known, the address of its cell is an
+/// immediate, and a loop of stores through it saves the address arithmetic.
+/// `time_saved` priced that fold at nothing, so a call with only that
+/// constant (hanoi2's `mv(n, 0, 2, 1)`: 28% of its clocks to gcc, which cloned
+/// it) was never cloned.
+const CONSTANT_ROW: &str = "@cells = global [4 x [8 x i16]] zeroinitializer
+
+define i16 @fill(i16 %row, i16 %n) {
+b0:
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %body ]
+  %go = icmp slt i16 %i, %n
+  br i1 %go, label %body, label %done
+
+body:
+  %p = getelementptr [8 x i16], ptr @cells, i16 %row
+  %q = getelementptr i16, ptr %p, i16 %i
+  store i16 %i, ptr %q
+  %i1 = add nsw i16 %i, 1
+  br label %head
+
+done:
+  ret i16 0
+}
+
+define i16 @f(i16 %n) {
+b0:
+  %a = call i16 @fill(i16 2, i16 %n)
+  %b = call i16 @fill(i16 2, i16 %n)
+  ret i16 %a
+}
+";
+
+#[test]
+fn test_a_constant_index_into_a_global_is_priced_as_a_saving() {
+    let cloned = |clone: bool| {
+        let mut module = parsed(CONSTANT_ROW);
+        stepped(&mut module, &["f"], 20, Threshold { cp_clone: clone, ..Threshold::none() });
+        module.named("fill.constprop.1").is_some()
+    };
+    assert!(!cloned(false));
+    assert!(cloned(true));
+}
