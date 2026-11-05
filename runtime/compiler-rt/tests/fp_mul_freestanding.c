@@ -1,8 +1,13 @@
-/* Freestanding driver: lib/fp f32 and f64 multiply against the host vectors in fp_mul_vec.h; run() returns the number of wrong results.
+/* Freestanding driver: lib/fp f32 and f64 multiply, divide, int-to-float against the host vectors in fp_mul_vec.h; run() returns the number of wrong results.
  * wasm32: exported run(), called from node. riscv64/aarch64: _start exits with min(fails, 255) through the exit system call. */
 #include "fp_mul_vec.h"
 float sfb_mulsf3(float, float);
 double sfb_muldf3(double, double);
+float sfb_divsf3(float, float);
+double sfb_divdf3(double, double);
+float sfb_floatsisf(int);
+double sfb_floatsidf(int);
+double sfb_floatdidf(long long);
 #ifndef REPS
 #define REPS 1
 #endif
@@ -11,15 +16,20 @@ int run(void)
     int bad = 0;
     for (int rep = 0; rep < REPS; rep++)
     for (unsigned i = 0; i < sizeof V / sizeof V[0]; i++) {
-        if (V[i].op == 0) {
-            union { unsigned u; float f; } a = { (unsigned)V[i].a }, b = { (unsigned)V[i].b }, r;
-            r.f = sfb_mulsf3(a.f, b.f);
-            if (r.u != (unsigned)V[i].want) bad++;
-        } else {
-            union { unsigned long long u; double f; } a = { V[i].a }, b = { V[i].b }, r;
-            r.f = sfb_muldf3(a.f, b.f);
-            if (r.u != V[i].want) bad++;
+        int op = V[i].op;
+        union { unsigned long long u; double f; } a = { V[i].a }, b = { V[i].b }, r;
+        union { unsigned u; float f; } fa = { (unsigned)V[i].a }, fb = { (unsigned)V[i].b }, fr;
+        switch (op) {
+        case 0: fr.f = sfb_mulsf3(fa.f, fb.f); break;
+        case 2: fr.f = sfb_divsf3(fa.f, fb.f); break;
+        case 4: fr.f = sfb_floatsisf((int)V[i].a); break;
+        case 1: r.f = sfb_muldf3(a.f, b.f); break;
+        case 3: r.f = sfb_divdf3(a.f, b.f); break;
+        case 5: r.f = sfb_floatsidf((int)V[i].a); break;
+        default: r.f = sfb_floatdidf((long long)V[i].a); break;
         }
+        if (op == 0 || op == 2 || op == 4) bad += fr.u != (unsigned)V[i].want;
+        else bad += r.u != V[i].want;
     }
     return bad;
 }
