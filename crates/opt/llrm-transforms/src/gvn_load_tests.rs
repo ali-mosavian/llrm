@@ -287,6 +287,50 @@ b4:
     assert_eq!(text.matches("load i16, ptr @h").count(), 2, "the preheader's and the one after the call:\n{text}");
 }
 
+/// grep -Os, wasm32: the pin's `Value::canBeFreed` is true for a GEP
+/// instruction, so `fail[x]` loaded in an inner loop header was carried in a
+/// phi (an extra phi and reload, +21 B) where the pin keeps the load in the
+/// loop.
+#[test]
+fn test_a_loop_header_load_through_a_gep_instruction_is_not_loaded_in_the_preheader() {
+    let (text, changed) = loaded(
+        "define void @w() {
+b0:
+  store i16 5, ptr @h
+  ret void
+}
+
+define i16 @f(i16 %x, i16 %n, i1 %c) {
+b0:
+  %p = getelementptr i16, ptr @h, i16 %x
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %j, %b3 ]
+  %s = phi i16 [ 0, %b0 ], [ %t, %b3 ]
+  %r = load i16, ptr %p
+  %t = add i16 %s, %r
+  %skip = icmp eq i16 %i, 1
+  br i1 %skip, label %b2, label %b3
+
+b2:
+  call void @w()
+  br label %b3
+
+b3:
+  %j = add i16 %i, 1
+  %more = icmp slt i16 %j, %n
+  br i1 %more, label %b1, label %b4
+
+b4:
+  ret i16 %t
+}
+",
+        &[&[0, 3, 1], &[0, 1, 0], &[2, 5, 1]],
+    );
+    assert!(!changed && text.matches("load i16").count() == 1, "the load stays in the loop:\n{text}");
+}
+
 #[test]
 fn test_a_load_of_a_part_of_a_wider_store_is_cut_from_it() {
     let (text, changed) = loaded(
