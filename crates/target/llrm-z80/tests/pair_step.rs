@@ -60,3 +60,48 @@ fn a_step_instruction_prints_its_incs() {
     ]);
     assert!(asm.starts_with("inc hl\ninc hl\ninc hl\nret"), "{asm}");
 }
+
+fn adds_two(after: Vec<Inst>) -> MFunction {
+    let phys = |r| Reg::Phys(r);
+    let mut insts = vec![Inst::new(Kind::Op("LD16ri"), vec![Operand::Def(Reg::Virt(8)), Operand::Imm(2)]), {
+        let mut add = Inst::new(
+            Kind::Op("ADD16"),
+            vec![Operand::Def(phys(reg::HL)), Operand::Use(phys(reg::HL)), Operand::Use(Reg::Virt(8))],
+        );
+        add.sets_flags = true;
+        add
+    }];
+    insts.extend(after);
+    let mut function = MFunction::new("f");
+    function.blocks = vec![Block { id: 0, insts, phis: Vec::new() }];
+    function
+}
+
+fn flag_setter() -> Inst {
+    let mut cp = Inst::new(Kind::Op("CP16"), vec![Operand::Use(Reg::Phys(reg::HL)), Operand::Use(Reg::Phys(reg::DE))]);
+    cp.sets_flags = true;
+    cp
+}
+
+/// `ld rr, #2; add hl, rr` made the allocator keep a pair for the 2 the printer
+/// then erased: fill_nest's loop constant `ld bc, #4660` was made again on
+/// every trip (3 B, 10 T each) with `bc` free. A step by two whose carry the
+/// next compare overwrites is one instruction on `hl`.
+#[test]
+fn an_add_of_two_whose_carry_is_dead_becomes_a_step() {
+    let mut function = adds_two(vec![flag_setter()]);
+    assert!(llrm_z80::step::step_by_small_constants(&mut function));
+    let kinds: Vec<_> = function.blocks[0].insts.iter().map(|inst| inst.kind).collect();
+    assert_eq!(kinds, [Kind::Op("INC16x2"), Kind::Op("CP16")]);
+}
+
+/// A wide add reads the carry of the low word's `add hl, rr`: that add stays.
+#[test]
+fn an_add_of_two_whose_carry_is_read_stays() {
+    let mut reader =
+        Inst::new(Kind::Op("ADC16"), vec![Operand::Def(Reg::Phys(reg::DE)), Operand::Use(Reg::Phys(reg::DE))]);
+    reader.reads_flags = true;
+    let mut function = adds_two(vec![reader]);
+    assert!(!llrm_z80::step::step_by_small_constants(&mut function));
+    assert_eq!(function.blocks[0].insts[1].kind, Kind::Op("ADD16"));
+}
