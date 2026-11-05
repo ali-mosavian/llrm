@@ -1162,3 +1162,27 @@ fn erasing_one_block_tests_no_layout_entry_and_keeps_the_order() {
     assert_eq!(f.layout(), &expected[..]);
     assert!(!f.is_placed(made[20]));
 }
+
+const TWO_USERS: &str = "define i16 @f(i16 %a) {\nentry:\n  %x = add i16 %a, 1\n  %y = mul i16 %a, 2\n  %z = sub i16 %y, %x\n  ret i16 %z\n";
+
+/// The reader ignored `uselistorder`, so a module written with
+/// `-emit-llvm-uselists` was read with the textual order of its uses and
+/// every pass that walks users saw them in the wrong order.
+#[test]
+fn uselistorder_reorders_the_uses_of_a_value() {
+    let users = |text: &str| {
+        let mut module = module(text);
+        let f = function(&mut module);
+        let a = f.parameters()[0];
+        f.users(a).snapshot().iter().map(|one| one.user).collect::<Vec<_>>()
+    };
+    let (x, y) = (InstId(0), InstId(1));
+    assert_eq!(users(&format!("{TWO_USERS}}}\n")), [y, x], "newest first");
+    assert_eq!(users(&format!("{TWO_USERS}  uselistorder i16 %a, {{ 1, 0 }}\n}}\n")), [x, y]);
+}
+
+#[test]
+fn uselistorder_with_the_wrong_count_is_refused() {
+    let text = format!("{TWO_USERS}  uselistorder i16 %a, {{ 2, 1, 0 }}\n}}\n");
+    assert!(parse::module(&text).is_err());
+}

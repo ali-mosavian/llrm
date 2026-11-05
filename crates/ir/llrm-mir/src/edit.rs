@@ -49,6 +49,16 @@ impl Function {
         }
     }
 
+    /// `uselistorder`: see [`UseLists::sort_by_keys`]; the number of uses found
+    /// when it is not `keys.len()`.
+    pub(crate) fn sort_uses(
+        &mut self,
+        held: Held,
+        keys: &[u32],
+    ) -> Result<(), usize> {
+        self.uses.sort_by_keys(held, keys)
+    }
+
     fn add_use(
         &mut self,
         operand: Operand,

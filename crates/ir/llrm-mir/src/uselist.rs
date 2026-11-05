@@ -315,6 +315,41 @@ impl UseLists {
         (head != NIL).then(|| self.nodes[head as usize].at)
     }
 
+    /// LLVM's `Value::sortUseList` as `uselistorder` drives it
+    /// ([`LLParser::sortUseListOrder`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/AsmParser/LLParser.cpp#L9579)):
+    /// the use at position `i` of the list gets the key `keys[i]`, and the list
+    /// is sorted by key. The number of uses must be `keys.len()`.
+    pub fn sort_by_keys(
+        &mut self,
+        of: Held,
+        keys: &[u32],
+    ) -> Result<(), usize> {
+        let mut uses: Vec<(u32, u32)> = Vec::with_capacity(keys.len());
+        let mut at = self.head_of(of);
+        while at != NIL {
+            if uses.len() == keys.len() {
+                return Err(uses.len() + 1);
+            }
+            uses.push((keys[uses.len()], at));
+            at = self.nodes[at as usize].next;
+        }
+        if uses.len() != keys.len() {
+            return Err(uses.len());
+        }
+        uses.sort_by_key(|&(key, _)| key);
+        let mut next = NIL;
+        for &(_, node) in uses.iter().rev() {
+            self.nodes[node as usize].next = next;
+            if next != NIL {
+                self.nodes[next as usize].prev = node;
+            }
+            next = node;
+        }
+        self.nodes[next as usize].prev = NIL;
+        *self.head_mut(of) = next;
+        Ok(())
+    }
+
     pub fn clear_all(&mut self) {
         self.heads.fill(NIL);
         self.block_heads.fill(NIL);

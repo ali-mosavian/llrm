@@ -63,6 +63,8 @@ struct Local {
     /// Records read, to stand before the next instruction.
     pending_records: Vec<(MetadataId, DebugWhat, Option<MetadataId>, Option<MetadataId>)>,
     next_slot: u32,
+    /// `uselistorder` directives read: what they reorder, the keys, the line.
+    use_orders: Vec<(crate::uselist::Held, Vec<u32>, usize)>,
 }
 
 impl Parser {
@@ -333,6 +335,9 @@ impl Parser {
                 Token::Global(name) if self.alias_names.contains_key(&name) => self.alias(name)?,
                 Token::Global(name) => self.global_variable(name)?,
                 Token::Word(word) if word == "declare" || word == "define" => self.function(word == "define")?,
+                Token::Word(word) if word == "uselistorder" || word == "uselistorder_bb" => {
+                    while !matches!(self.next(), Token::Punct('}') | Token::Eof) {}
+                }
                 Token::MetadataName(name) => self.named_metadata(name)?,
                 Token::MetadataId(number) => self.metadata_definition(number)?,
                 _ => return self.fail(format!("unexpected {} at the top level", self.describe())),
@@ -672,6 +677,7 @@ impl Parser {
             pending_blocks: HashMap::default(),
             pending_records: Vec::new(),
             next_slot: 0,
+            use_orders: Vec::new(),
         };
         self.expect_punct('(')?;
         let mut parameters = Vec::new();
@@ -733,6 +739,14 @@ impl Parser {
             self.body(&mut local)?;
         }
         local.function.index();
+        for (held, keys, line) in std::mem::take(&mut local.use_orders) {
+            if let Err(found) = local.function.sort_uses(held, &keys) {
+                return Err(ParseError {
+                    line,
+                    message: format!("uselistorder: {} indexes for a value with {found} uses", keys.len()),
+                });
+            }
+        }
         self.module.globals[id.0 as usize] = GlobalValue {
             name: self.module.globals[id.0 as usize].name.clone(),
             linkage,
@@ -1584,6 +1598,9 @@ impl Parser {
                     self.next();
                     break;
                 }
+                Token::Word(word) if current.is_none() && (word == "uselistorder" || word == "uselistorder_bb") => {
+                    self.use_order(local, word == "uselistorder_bb")?;
+                }
                 Token::Label(name) => {
                     if current.is_some() {
                         return self.fail("a block ends with its terminator");
@@ -1621,6 +1638,43 @@ impl Parser {
             let name =
                 local.values.iter().find(|(_, id)| **id == value).map(|(name, _)| display(name)).unwrap_or_default();
             return Err(ParseError { line, message: format!("%{name} is used but never defined") });
+        }
+        Ok(())
+    }
+
+    /// `uselistorder Type Value, { keys }` or `uselistorder_bb @f, %block,
+    /// { keys }`, at the end of a body; a global's at the top level is skipped.
+    fn use_order(
+        &mut self,
+        local: &mut Local,
+        block: bool,
+    ) -> Parsed<()> {
+        let line = self.line();
+        self.next();
+        let held = if block {
+            let Token::Global(_) = self.next() else { return self.fail("expected a function") };
+            self.expect_punct(',')?;
+            let Token::Local(name) = self.next() else { return self.fail("expected a block") };
+            crate::uselist::Held::Block(self.block_id(local, name).0)
+        } else {
+            match self.typed_value(local)?.1 {
+                Operand::Value(id) => crate::uselist::Held::Value(id.0),
+                Operand::Block(id) => crate::uselist::Held::Block(id.0),
+                Operand::Constant(_) => crate::uselist::Held::Constant(u32::MAX),
+            }
+        };
+        self.expect_punct(',')?;
+        self.expect_punct('{')?;
+        let mut keys = Vec::new();
+        loop {
+            keys.push(self.unsigned()? as u32);
+            if !self.eat_punct(',') {
+                break;
+            }
+        }
+        self.expect_punct('}')?;
+        if !matches!(held, crate::uselist::Held::Constant(_)) {
+            local.use_orders.push((held, keys, line));
         }
         Ok(())
     }
