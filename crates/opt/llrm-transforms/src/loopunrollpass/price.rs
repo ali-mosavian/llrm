@@ -54,6 +54,13 @@ pub(super) fn full_unroll_pays(
     // copies and this loop's own analysis cannot see it (tests/run
     // int64_division: 7 x 6 divisions fold to constants; vetoed, 14 -> 198
     // instructions). The pin's threshold decides it.
+    // A loop an unroll of this run made is part of a nest whose outer loop was
+    // decided: the copies of the inner loops follow it (nbody -O2: the 4-trip
+    // outer loop unrolls, its 3-, 2- and 1-trip inner copies were each priced
+    // alone and kept rolled, +38,016).
+    if !run.first.contains(&lp.get_header()) {
+        return true;
+    }
     if encloses_known_trips(run, se, analyzed, lp, up.full_unroll_max_count) {
         return true;
     }
@@ -68,11 +75,7 @@ pub(super) fn full_unroll_pays(
     // DEVIATE UP1 trial pricing (`trial.rs`): the loops the pin's threshold
     // allows, and the rules above leave to the estimate, are tried on a copy.
     match run.trial {
-        Trial::Estimate => {}
-        Trial::Collect => {
-            run.deferred.push(lp.get_header());
-            return false;
-        }
+        Trial::Estimate | Trial::Collect => {}
         Trial::Skip => return false,
         // The candidate and the loops in it, and the copies its unroll makes:
         // the whole nest as the pin decides it, so that what unrolling the
@@ -157,7 +160,29 @@ pub(super) fn full_unroll_pays(
         lp,
         &format!("priced unroll: {trips} trips, saves {saved} clk, adds {added} B (body {body_bytes} B; units {unrolled_units} of {rolled_units}, promoted {promoted}), rate {rate}"),
     );
+    // Only a loop whose estimate lands near the bar is worth a trial: far on
+    // either side the copy and its Simplify list would change nothing.
+    if matches!(run.trial, Trial::Collect) && near_the_bar(saved, added, rate, run.tti.unroll_trial_margin()) {
+        if llrm_support::debug::enabled("unroll") {
+            eprintln!("unroll: collect {:?}: estimate saves {saved} clk, adds {added} B", lp.get_header());
+        }
+        run.deferred.push(lp.get_header());
+        return false;
+    }
     unroll_pays(saved, added, rate)
+}
+
+/// Whether the saving and the cost of a priced unroll are within `margin`
+/// (a factor either way) of each other at `rate`.
+pub(crate) fn near_the_bar(
+    saved: i64,
+    added: i64,
+    rate: i64,
+    margin: i64,
+) -> bool {
+    let (gain, cost) = (i128::from(saved) * 1000, i128::from(added) * i128::from(rate));
+    let margin = i128::from(margin);
+    gain < cost * margin && cost < gain * margin
 }
 
 /// The operands of the loops inside `lp` that each copy of its body makes a
@@ -447,4 +472,19 @@ fn bounds_few_trips(
         inside.extend(one.get_sub_loops());
     }
     follows
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A trial for a loop whose estimate is far from the bar cost 13% of the
+    /// compile's instructions (nbody, lru) and changed nothing.
+    #[test]
+    fn only_an_estimate_near_the_bar_is_tried() {
+        assert!(near_the_bar(100, 100, 250_000 / 250, 4));
+        assert!(!near_the_bar(1000, 1, 250_000, 4));
+        assert!(!near_the_bar(1, 1000, 250_000, 4));
+        assert!(!near_the_bar(0, 0, 250_000, 4));
+    }
 }

@@ -666,6 +666,12 @@ pub trait Tti {
         None
     }
 
+    /// How far from the pay-off bar, as a factor either way, a priced full
+    /// unroll's estimate still earns a trial (DEVIATE UP1).
+    fn unroll_trial_margin(&self) -> i64 {
+        4
+    }
+
     /// `Tuning::multiply_by_clocks`.
     fn multiply_by_clocks(&self) -> bool {
         false

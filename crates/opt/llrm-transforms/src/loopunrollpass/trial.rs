@@ -126,7 +126,7 @@ impl LoopFullUnroll {
             if llrm_support::debug::enabled("unroll") {
                 let name = unit.function.block(header).name.clone().unwrap_or_default();
                 eprintln!(
-                    "unroll: %{name}: trial unroll: saves {saved} clk, adds {added} B (rate {rate}): {}",
+                    "unroll: {header:?} %{name}: trial unroll: saves {saved} clk, adds {added} B (rate {rate}): {}",
                     if pays { "unrolled" } else { "kept rolled" }
                 );
             }

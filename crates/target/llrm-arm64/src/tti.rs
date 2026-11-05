@@ -321,6 +321,10 @@ impl Tti for AArch64 {
         true
     }
 
+    fn unroll_trial_margin(&self) -> i64 {
+        1 << 20
+    }
+
     fn lowered_bytes(
         &self,
         function: &llrm_mir::tti::LoweredFunction,
