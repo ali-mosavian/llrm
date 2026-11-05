@@ -740,7 +740,10 @@ fn matched_over(
         (Some(_), Some(_)) if !opaque && (retry || tti.scaled_index_insns() == 0) => {
             return matched_over(unit, tti, retry, space, block, bytes, address, depth, true);
         }
-        (Some(_), Some(_)) => return plain(),
+        (Some(_), Some(_)) => {
+            RETRY_REACHED.set(true);
+            return plain();
+        }
         // `matchScaledValue` of scale 1 is `matchAddr(ScaleReg)`
         // ([CodeGenPrepare.cpp
         // L4604](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/CodeGenPrepare.cpp#L4604)):
@@ -798,6 +801,11 @@ fn matched_over(
 
 /// Each load and store whose address is made in another block, with the address
 /// made where it is used; whether any was.
+thread_local! {
+    /// Whether a match reached the retry's conflict without being allowed it.
+    static RETRY_REACHED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// DEVIATE CGP2 (owner anyisa, exit 2026-11-20): in real mode the retry (the
 /// base matched as a register beside an index of its own) keeps the base and
 /// the index live to the access, and with four registers that can cost more
@@ -810,6 +818,21 @@ fn sunk_priced(
     analyses: &Analyses,
     tti: &dyn Tti,
 ) -> bool {
+    // Most functions never reach the retry: match without making anything,
+    // and clone only for one that does.
+    RETRY_REACHED.set(false);
+    for (block, inst) in unit.function.walk().collect::<Vec<_>>() {
+        let Some(at) = address_of(unit.function, inst) else { continue };
+        let address = unit.function.instruction(inst).operands[at];
+        if let Some(Type::Pointer(space)) =
+            unit.function.operand_type(unit.context, address).map(|ty| unit.context.types.get(ty).clone())
+        {
+            matched(unit, tti, false, space, block, access_bytes(unit, inst), address, DEPTH);
+        }
+    }
+    if !RETRY_REACHED.get() {
+        return sunk(unit, tti, false);
+    }
     let mut trial = unit.function.clone();
     let plain = sunk(unit, tti, false);
     let retried = {
