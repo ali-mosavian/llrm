@@ -516,9 +516,171 @@ udm_done:
 ; stack (8(ix) up) or, for a shift, a count byte at 8(ix). The caller pops its arguments.
 
 ; The mode is in a: 0 quotient of unsigned, 1 remainder of unsigned, 2 quotient of signed, 3 remainder of signed.
-; Restoring division over a frame: the dividend shifts left through the remainder, 64 steps, the quotient bit
+; The size family (`__s_`, chosen for a function tuned for size) is the restoring division over a frame: the dividend shifts left through the remainder, 64 steps, the quotient bit
 ; entering at the bottom. Frame: -16..-9 quotient/dividend, -8..-1 remainder, -17 mode (bit 2 quotient negative,
 ; bit 3 remainder negative), -18 steps left, -19 carry out of the remainder, -21,-20 result pointer.
+	.globl __s_udivdi3
+__s_udivdi3:
+	xor	a
+	jr	udivmoddi_s
+	.globl __s_umoddi3
+__s_umoddi3:
+	ld	a,#1
+	jr	udivmoddi_s
+	.globl __s_divdi3
+__s_divdi3:
+	ld	a,#2
+	jr	udivmoddi_s
+	.globl __s_moddi3
+__s_moddi3:
+	ld	a,#3
+udivmoddi_s:
+	push	ix
+	ld	ix,#0
+	add	ix,sp
+	ld	iy,#-21
+	add	iy,sp
+	ld	sp,iy
+	ld	-21(ix),l
+	ld	-20(ix),h
+	ld	-17(ix),a
+	ld	-16(ix),e
+	ld	-15(ix),d
+	ld	-14(ix),c
+	ld	-13(ix),b
+	ld	a,4(ix)
+	ld	-12(ix),a
+	ld	a,5(ix)
+	ld	-11(ix),a
+	ld	a,6(ix)
+	ld	-10(ix),a
+	ld	a,7(ix)
+	ld	-9(ix),a
+	xor	a
+	ld	b,#8
+	push	ix
+	pop	hl
+	ld	de,#-8
+	add	hl,de
+1$:	ld	(hl),a
+	inc	hl
+	djnz	1$
+	bit	1,-17(ix)
+	jr	z,loop64s
+	bit	7,-9(ix)
+	jr	z,2$
+	push	ix
+	pop	hl
+	ld	de,#-16
+	add	hl,de
+	call	neg64
+	ld	a,-17(ix)
+	xor	a,#12
+	ld	-17(ix),a
+2$:	bit	7,15(ix)
+	jr	z,loop64s
+	push	ix
+	pop	hl
+	ld	de,#8
+	add	hl,de
+	call	neg64
+	ld	a,-17(ix)
+	xor	a,#4
+	ld	-17(ix),a
+loop64s:
+	.globl __s_slow
+__s_slow:
+d64_slow:
+	ld	-18(ix),#64
+3$:	push	ix
+	pop	hl
+	ld	de,#-16
+	add	hl,de
+	sla	(hl)
+	ld	b,#15
+4$:	inc	hl
+	rl	(hl)
+	djnz	4$
+	sbc	a,a
+	ld	-19(ix),a
+	push	ix
+	pop	hl
+	ld	de,#8
+	add	hl,de
+	ex	de,hl
+	push	ix
+	pop	hl
+	ld	bc,#-8
+	add	hl,bc
+	or	a,a
+	ld	b,#8
+5$:	ld	a,(hl)
+	ex	de,hl
+	sbc	a,(hl)
+	ex	de,hl
+	ld	(hl),a
+	inc	hl
+	inc	de
+	djnz	5$
+	jr	nc,7$
+	ld	a,-19(ix)
+	or	a,a
+	jr	nz,7$
+	ld	bc,#-8
+	add	hl,bc
+	ex	de,hl
+	add	hl,bc
+	ex	de,hl
+	or	a,a
+	ld	b,#8
+6$:	ld	a,(de)
+	adc	a,(hl)
+	ld	(hl),a
+	inc	hl
+	inc	de
+	djnz	6$
+	jr	8$
+7$:	inc	-16(ix)
+8$:	dec	-18(ix)
+	jp	nz,3$
+fin64:	push	ix
+	pop	hl
+	ld	de,#-16
+	add	hl,de
+	bit	0,-17(ix)
+	jr	z,9$
+	ld	de,#8
+	add	hl,de
+	bit	3,-17(ix)
+	jr	10$
+9$:	bit	2,-17(ix)
+10$:	jr	z,11$
+	call	neg64
+	ld	bc,#-8
+	add	hl,bc
+11$:	ld	e,-21(ix)
+	ld	d,-20(ix)
+	ld	bc,#8
+	ldir
+	ld	e,-21(ix)
+	ld	d,-20(ix)
+	ld	sp,ix
+	pop	ix
+	ret
+
+; Negates the eight bytes at hl in place; hl is left at their end.
+neg64:
+	ld	b,#8
+	or	a,a
+1$:	ld	a,#0
+	sbc	a,(hl)
+	ld	(hl),a
+	inc	hl
+	djnz	1$
+	ret
+
+; The speed family keeps the same frame and result; a divisor of 32 bits or less runs in registers, so the
+; dividend's leading zeros cost a shift each and not a quotient step. The size family does not reach this code.
 	.globl __udivdi3
 __udivdi3:
 	xor	a
@@ -689,7 +851,7 @@ d64_big:
 	or	a,-11(ix)
 	or	a,-10(ix)
 	or	a,-9(ix)
-	jr	nz,d64_slow
+	jp	nz,d64_slow
 	ld	a,-16(ix)
 	ld	-8(ix),a
 	ld	-16(ix),#0
@@ -703,94 +865,6 @@ d64_big:
 	ld	-5(ix),a
 	ld	-13(ix),#0
 	jp	fin64
-d64_slow:
-	ld	-18(ix),#64
-3$:	push	ix
-	pop	hl
-	ld	de,#-16
-	add	hl,de
-	sla	(hl)
-	ld	b,#15
-4$:	inc	hl
-	rl	(hl)
-	djnz	4$
-	sbc	a,a
-	ld	-19(ix),a
-	push	ix
-	pop	hl
-	ld	de,#8
-	add	hl,de
-	ex	de,hl
-	push	ix
-	pop	hl
-	ld	bc,#-8
-	add	hl,bc
-	or	a,a
-	ld	b,#8
-5$:	ld	a,(hl)
-	ex	de,hl
-	sbc	a,(hl)
-	ex	de,hl
-	ld	(hl),a
-	inc	hl
-	inc	de
-	djnz	5$
-	jr	nc,7$
-	ld	a,-19(ix)
-	or	a,a
-	jr	nz,7$
-	ld	bc,#-8
-	add	hl,bc
-	ex	de,hl
-	add	hl,bc
-	ex	de,hl
-	or	a,a
-	ld	b,#8
-6$:	ld	a,(de)
-	adc	a,(hl)
-	ld	(hl),a
-	inc	hl
-	inc	de
-	djnz	6$
-	jr	8$
-7$:	inc	-16(ix)
-8$:	dec	-18(ix)
-	jp	nz,3$
-fin64:	push	ix
-	pop	hl
-	ld	de,#-16
-	add	hl,de
-	bit	0,-17(ix)
-	jr	z,9$
-	ld	de,#8
-	add	hl,de
-	bit	3,-17(ix)
-	jr	10$
-9$:	bit	2,-17(ix)
-10$:	jr	z,11$
-	call	neg64
-	ld	bc,#-8
-	add	hl,bc
-11$:	ld	e,-21(ix)
-	ld	d,-20(ix)
-	ld	bc,#8
-	ldir
-	ld	e,-21(ix)
-	ld	d,-20(ix)
-	ld	sp,ix
-	pop	ix
-	ret
-
-; Negates the eight bytes at hl in place; hl is left at their end.
-neg64:
-	ld	b,#8
-	or	a,a
-1$:	ld	a,#0
-	sbc	a,(hl)
-	ld	(hl),a
-	inc	hl
-	djnz	1$
-	ret
 
 ; A shift of a long long by the count byte at 8(ix), left, logical right or arithmetic right (a = 0, 1, 2): the
 ; operand is written to the result, shifted whole bytes with ldir/lddr, then the rest a bit at a time. Frame: -2,-1

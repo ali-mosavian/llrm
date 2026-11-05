@@ -162,6 +162,16 @@ def main():
     global RTREL
     p = sh(["cp", RT, "rt.s"]); 
     RTREL = build("rt", open(f"{W}/rt.s").read())
+    # The link map cuts a symbol at 9 characters, and the byte counts of tests/kernels/measure.py read it: two
+    # routines alike in them were counted as one (`__udivdi3_s` hid the size routine's bytes behind the speed one's).
+    names = re.findall(r"^(__\w+):", open(RT).read(), re.M)
+    cut = {}
+    for name in names:
+        cut.setdefault(name[:9], []).append(name)
+    clash = [group for group in cut.values() if len(group) > 1]
+    if clash:
+        print(f"FAIL routine names alike in 9 characters: {clash}")
+        sys.exit(1)
     rnd = random.Random(1)
     edges16 = [0, 1, 2, 3, 7, 8, 9, 10, 15, 16, 100, 255, 256, 257, 1000, 1234, 4096, 32767, 32768, 32769, 40000, 65534, 65535]
     allok = True
@@ -205,12 +215,13 @@ def main():
     def tdiv64(a, b): q = abs(a) // abs(b); return q if (a < 0) == (b < 0) else -q
     qp = [(a, b) for a in q64 for b in q64 if b][::3]
     qp += [(a, b) for a in q64 for b in (1, 2, 10, 3)]
-    allok &= check("__udivdi3", "QQ>Q", lambda a, b: a // b, qp)
-    allok &= check("__umoddi3", "QQ>Q", lambda a, b: a % b, qp)
-    # the quotient of the most negative value by -1 overflows in C
-    sq = [p for p in qp if not (p[0] == 1 << 63 and p[1] == (1 << 64) - 1)]
-    allok &= check("__divdi3", "QQ>Q", lambda a, b: tdiv64(s64(a), s64(b)) & ((1 << 64) - 1), sq)
-    allok &= check("__moddi3", "QQ>Q", lambda a, b: (s64(a) - tdiv64(s64(a), s64(b)) * s64(b)) & ((1 << 64) - 1), sq)
+    for pre in ("__", "__s_"):
+        allok &= check(pre + "udivdi3", "QQ>Q", lambda a, b: a // b, qp)
+        allok &= check(pre + "umoddi3", "QQ>Q", lambda a, b: a % b, qp)
+        # the quotient of the most negative value by -1 overflows in C
+        sq = [p for p in qp if not (p[0] == 1 << 63 and p[1] == (1 << 64) - 1)]
+        allok &= check(pre + "divdi3", "QQ>Q", lambda a, b: tdiv64(s64(a), s64(b)) & ((1 << 64) - 1), sq)
+        allok &= check(pre + "moddi3", "QQ>Q", lambda a, b: (s64(a) - tdiv64(s64(a), s64(b)) * s64(b)) & ((1 << 64) - 1), sq)
     for nm, f in (("__ashldi3", lambda a, b: a << b & ((1 << 64) - 1)), ("__lshrdi3", lambda a, b: a >> b), ("__ashrdi3", lambda a, b: s64(a) >> b & ((1 << 64) - 1))):
         allok &= check(nm, "QA>Q", f, [(a, b) for a in q64 for b in (0, 1, 7, 8, 9, 15, 16, 31, 32, 33, 47, 56, 63)])
     # A long long divide takes one step per quotient bit; at one per dividend bit these cost 97k and 103k T.

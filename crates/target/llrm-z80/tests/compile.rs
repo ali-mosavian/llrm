@@ -1013,7 +1013,8 @@ fn a_word_in_de_is_stored_to_a_global_without_moving_it() {
 fn a_comparison_used_as_a_value_is_a_byte_that_is_one_or_zero() {
     let ir = include_str!("kernels/ir/carry32.ll");
     let out = text(ir, "carry32", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
-    // the carry fusion has since turned the compare and its byte into `adc hl, rr`
+    // the carry fusion has since turned the compare and its byte into `adc hl,
+    // rr`
     assert!(out.contains("adc hl, ") && !out.contains("SETCC8"), "{out}");
 }
 
@@ -1610,4 +1611,22 @@ fn a_counted_loop_counts_its_trips_in_a_byte() {
     let out = text(&ir, "copy", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     assert!(out.contains("ld b, #200"), "{out}");
     assert!(!out.contains("or a, e"), "the word count is tested no more: {out}");
+}
+
+/// A function tuned for size called the long long divide made for speed: the
+/// routine is 179 B more to link (data_int64 and int64_division, -Os). It
+/// calls the size routine; any other function the speed one.
+#[test]
+fn a_function_tuned_for_size_calls_the_small_long_long_divide() {
+    let body = |attr: &str| {
+        format!(
+            "define i64 @f(i64 %a, i64 %b) {attr} {{\n  %q = udiv i64 %a, %b\n  %r = srem i64 %a, %b\n  %s = add i64 %q, %r\n  ret i64 %s\n}}"
+        )
+    };
+    for attr in ["optsize", "minsize"] {
+        let out = compiled(&body(attr), "f");
+        assert!(out.contains("call __s_udivdi3") && out.contains("call __s_moddi3"), "{attr}: {out}");
+    }
+    let out = compiled(&body(""), "f");
+    assert!(out.contains("call __udivdi3") && !out.contains("_s\n"), "{out}");
 }
