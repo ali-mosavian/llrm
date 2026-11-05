@@ -1142,7 +1142,22 @@ pub fn applied(
     program: &mut Program,
     applied: &Applied,
 ) -> Result<(), String> {
-    recorded(program, applied).map(|_| ())
+    recorded(program, applied).map(|_| ())?;
+    // EXPERIMENT (SIZE-UNITS calibration, removed before the PR): the byte estimate of every
+    // function the mid-end leaves, to set against the object's symbol sizes.
+    if std::env::var_os("LLRM_EXP_FNBYTES").is_some() {
+        let costs = program.target.size_costs();
+        for module in &program.modules {
+            for (_, global, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
+                eprintln!(
+                    "fnbytes {} {}",
+                    global.name.as_deref().unwrap_or("?"),
+                    crate::walk::function_bytes(module, &program.layout, &costs, function)
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 /// What runs on each body before the interprocedural step: the rounds, or
