@@ -1,6 +1,6 @@
 # target  failures  cause; owner; exit   (a ratchet: lower by hand when fixed; a missing llc is not a baseline: the dist must have it)
 x86_16-wat 2 geometry (main.h), queens (__uint128_t); host glibc headers were the other 40 on x86_16-dos (Watcom libc is the DOS rule, targets.toml x86_16-wat); owner softfloat; exit 11-20
-x86_32-wat 3 geometry (main.h), queens (__uint128_t), bits (warning as error); Watcom libc headers, no host leak (x86_32-dos extdata leaks glibc errno.h); owner softfloat; exit 11-20
-x86_32-dos 4 geometry (main.h), extdata (glibc errno.h), queens (__uint128_t), bits (warning as error); owner softfloat; exit 11-20
+x86_32-wat 3 geometry (main.h), queens (__uint128_t), bits (llrm-llc panics, liverangecalc.rs:338 "a unique value"); Watcom libc headers, no host leak (x86_32-dos extdata leaks glibc errno.h); owner softfloat; exit 11-20
+x86_32-dos 4 geometry (main.h), extdata (glibc errno.h), queens (__uint128_t), bits (llrm-llc panics, liverangecalc.rs:338 "a unique value"); owner softfloat; exit 11-20
 x86_64-linux 2 geometry (main.h), bench/parity/sum_three (far pointer, 16-bit source); owner softfloat; exit 11-20
 arm64-linux 2 geometry (main.h), bench/parity/sum_three (far pointer, 16-bit source); owner softfloat; exit 11-20
