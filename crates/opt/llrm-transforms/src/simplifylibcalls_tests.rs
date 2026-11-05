@@ -110,3 +110,45 @@ fn test_the_library_table_is_built_once_per_module() {
     assert!(one > 0);
     assert_eq!(table_reads(50), one);
 }
+
+/// `memcpy`, `memmove`, `memset` and `mempcpy` calls stayed library calls
+/// (the arms were missing: `optimizeMemCpy` and the others), so the DAG never
+/// saw an intrinsic to expand inline and `mempcpy`/`memccpy` never did.
+#[test]
+fn test_the_memory_functions_become_their_intrinsics() {
+    let after = run(
+        "declare ptr @memcpy(ptr, ptr, i16)\n\
+         declare ptr @memmove(ptr, ptr, i16)\n\
+         declare ptr @memset(ptr, i16, i16)\n\
+         declare ptr @mempcpy(ptr, ptr, i16)\n\
+         define ptr @f(ptr %d, ptr %s, i16 %n, i16 %c) {\nb0:\n\
+         \x20 %a = call ptr @memcpy(ptr %d, ptr %s, i16 %n)\n\
+         \x20 %b = call ptr @memmove(ptr %a, ptr %s, i16 %n)\n\
+         \x20 %m = call ptr @memset(ptr %b, i16 %c, i16 %n)\n\
+         \x20 %p = call ptr @mempcpy(ptr %m, ptr %s, i16 %n)\n\
+         \x20 ret ptr %p\n}\n",
+    );
+    for gone in ["call ptr @memcpy", "call ptr @memmove", "call ptr @memset", "call ptr @mempcpy"] {
+        assert!(!after.contains(gone), "{gone} stayed:\n{after}");
+    }
+    for made in ["llvm.memcpy.p0.p0.i16", "llvm.memmove.p0.p0.i16", "llvm.memset.p0.i16"] {
+        assert!(after.contains(made), "no {made}:\n{after}");
+    }
+    assert!(after.contains("getelementptr inbounds"), "mempcpy's result is dst + n:\n{after}");
+}
+
+/// A `memccpy` of a constant count from a constant string up to a byte in it
+/// is a `memcpy` of the bytes through the stop byte, the result the byte after
+/// it (`optimizeMemCCpy`); a byte not in the first `n` gives null.
+#[test]
+fn test_memccpy_of_a_constant_string_is_a_memcpy_through_the_stop_byte() {
+    let after = run(
+        "@s = private constant [6 x i8] c\"hello\\00\"\n\
+         declare ptr @memccpy(ptr, ptr, i16, i16)\n\
+         define ptr @f(ptr %d) {\nb0:\n\
+         \x20 %r = call ptr @memccpy(ptr %d, ptr @s, i16 108, i16 5)\n\
+         \x20 ret ptr %r\n}\n",
+    );
+    assert!(!after.contains("call ptr @memccpy"), "{after}");
+    assert!(after.contains("llvm.memcpy.p0.p0.i16(ptr align 1 %d, ptr align 1 @s, i16 3"), "{after}");
+}
