@@ -628,6 +628,7 @@ impl Builder {
     ) -> Result<Reg, Unsupported> {
         if let Some(n) = name.strip_prefix("rs").and_then(|n| n.parse::<u8>().ok()) {
             return match n {
+                0 => Ok(Reg::Phys(reg::RS0)),
                 1 => Ok(Reg::Phys(reg::RS1)),
                 2 => Ok(Reg::Phys(reg::RS2)),
                 3 => Ok(Reg::Phys(reg::RS3)),
@@ -651,7 +652,7 @@ impl Builder {
         &self,
         name: &str,
     ) -> bool {
-        self.pointers.contains(name) || matches!(name, "rs1" | "rs2" | "rs3")
+        self.pointers.contains(name) || matches!(name, "rs0" | "rs1" | "rs2" | "rs3")
     }
 
     fn word(
@@ -679,7 +680,7 @@ impl Builder {
                 self.function.classes[v as usize] = met;
                 Ok(())
             }
-            Reg::Phys(p) if is_cell(p) => Ok(()),
+            Reg::Phys(p) if is_cell(p) || p == reg::RS0 || is_pair(p) => Ok(()),
             Reg::Phys(_) => Err(Unsupported("a register as a memory operand".into())),
         }
     }
