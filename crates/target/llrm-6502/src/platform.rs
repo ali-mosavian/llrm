@@ -13,9 +13,10 @@ pub const ATARI8_LD65: &str = include_str!("machines/atari8.cfg");
 pub const SIM65: &str = include_str!("machines/sim65.toml");
 
 /// Every platform row; the stubs are marked `status = "stub"` in their file.
-pub const ROWS: [&str; 6] = [
+pub const ROWS: [&str; 7] = [
     C64,
     SIM65,
+    include_str!("machines/sim65-cc65.toml"),
     include_str!("machines/apple2.toml"),
     include_str!("machines/atari8.toml"),
     include_str!("machines/nes.toml"),
@@ -34,6 +35,10 @@ pub struct Platform {
     pub zero_page: u8,
     /// Where the soft stack (`rs0`) starts; it grows down.
     pub soft_stack: u16,
+    /// What the platform's C libraries put before a C symbol (cc65's `_`), so
+    /// `sp` in C is `_sp` and does not meet the `sp` of the runtime; empty
+    /// where a row does not say.
+    pub c_symbol_prefix: String,
 }
 
 impl Platform {
@@ -52,6 +57,10 @@ impl Platform {
                 Some(_) => u8::try_from(number("zero_page")?).map_err(|_| "zero_page is not 8 bits")?,
             },
             soft_stack: u16::try_from(number("soft_stack")?).map_err(|_| "soft_stack is not 16 bits")?,
+            c_symbol_prefix: match table.get("c_symbol_prefix") {
+                None => String::new(),
+                Some(prefix) => prefix.as_str().ok_or("platform.c_symbol_prefix is not a string")?.to_owned(),
+            },
         })
     }
 }

@@ -477,6 +477,11 @@ pub trait Tti {
         true
     }
 
+    /// `Tuning::sink_select_arms`.
+    fn sinks_select_arms(&self) -> bool {
+        false
+    }
+
     /// DEVIATE U1: the bar (unrolled size) an `optsize` loop of at most this
     /// many trips is fully unrolled under, where the target says so: its
     /// body's tests fold on the trip, and few copies cost little; none: the

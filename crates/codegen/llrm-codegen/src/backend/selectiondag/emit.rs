@@ -336,11 +336,21 @@ pub struct EmitState {
     /// The bytes of the float type (4, 8 or 10) of each LIR value that is a DAG
     /// value of a float type: `LirBody::float_bytes`, which a spill rounds to.
     pub float_bytes: std::collections::BTreeMap<u32, u32>,
+    /// Whether every value of a `float_bytes` number is exactly an f32 the
+    /// program holds: a load of one or a constant. A spill of such a value as
+    /// a dword loses no bit, wherever the language keeps wider temporaries.
+    pub float_exact: std::collections::BTreeMap<u32, bool>,
 }
 
 impl Default for EmitState {
     fn default() -> EmitState {
-        EmitState { vregs: HashMap::default(), next_value: 1, at: 1, float_bytes: Default::default() }
+        EmitState {
+            vregs: HashMap::default(),
+            next_value: 1,
+            at: 1,
+            float_bytes: Default::default(),
+            float_exact: Default::default(),
+        }
     }
 }
 
@@ -499,6 +509,13 @@ pub fn emit_in(
         };
         let widest = emitter.state.float_bytes.entry(*number).or_insert(0);
         *widest = bytes.max(*widest);
+        let node = dag.node(*value);
+        // `flds`, `fldz` and `fld1`: the f32 the program holds.
+        let exact = bytes == 4
+            && matches!(node.opcode, ISD::Machine(op)
+                if emitter.ctx.names.get(&(op as u16)).is_some_and(|name| matches!(*name, "LD_Fp32m" | "LD_Fp032" | "LD_Fp132")));
+        let all = emitter.state.float_exact.entry(*number).or_insert(true);
+        *all &= exact;
     }
     let mut blocks = emitter.blocks;
     if ctx.address_mode == AddrMode::Real16 {

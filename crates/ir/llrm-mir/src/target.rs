@@ -88,6 +88,10 @@ pub struct Tuning {
     /// speed rate (`Tti::peels_folded_entry`). false: the pin's
     /// `computePeelCount`.
     pub peel_folded_entry: bool,
+    /// DEVIATE CS2: where there is no conditional move, a select's arm only
+    /// it reads is made on its own path (`Tti::sinks_select_arms`). false: the
+    /// pin's, both operands before the branch.
+    pub sink_select_arms: bool,
 }
 
 impl Tuning {
@@ -116,6 +120,7 @@ impl Tuning {
         recursive_inlining: None,
         recursive_edge_growth: None,
         peel_folded_entry: false,
+        sink_select_arms: false,
     };
 }
 

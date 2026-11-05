@@ -1434,6 +1434,13 @@ fn selected_in(
         let table =
             state.float_bytes.iter().map(|(number, bytes)| (*number, if cpu.spills_extended { 10 } else { *bytes }));
         body.float_bytes = std::sync::Arc::new(table.collect());
+    } else {
+        // Nib keeps the qword (D-RFP1), but not for what is exactly an f32:
+        // a dword holds it whole (`fld dword` and back), and is what the
+        // value's own type spills as.
+        let exact = |number: &u32, bytes: &u32| *bytes == 4 && state.float_exact.get(number) == Some(&true);
+        let table = state.float_bytes.iter().map(|(number, bytes)| (*number, if exact(number, bytes) { 4 } else { 8 }));
+        body.float_bytes = std::sync::Arc::new(table.collect());
     }
     body.returns_twice = llrm_mir::memory::calls_returns_twice(module, function);
     body.min_size = cpu.min_size || llrm_mir::memory::has(&function.attrs, "minsize");
