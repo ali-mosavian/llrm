@@ -13,8 +13,8 @@
 //! function for function, each naming its C++ original, and verified against
 //! LLVM's own constructors through `tools/scev/oracle.cpp`.
 
-/// SCEV's ranges are 256 bits wide: `willNotOverflow` widens an `i128` operation
-/// to `i256`.
+/// SCEV's ranges are 256 bits wide: `willNotOverflow` widens an `i128`
+/// operation to `i256`.
 pub type ConstantRange = llrm_mir::constantrange::Range<llrm_mir::apint::U256>;
 
 pub mod analysis;
@@ -806,6 +806,7 @@ fn llvm_opcode(
         O::Phi => 57,
         O::Call(_) => 58,
         O::Select => 59,
+        O::VaArg => 62,
         O::ExtractValue(_) => 66,
         O::InsertValue(_) => 67,
         O::LandingPad { .. } => 68,

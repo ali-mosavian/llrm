@@ -930,6 +930,7 @@ impl<'m> Machine<'m> {
                     }
                     Opcode::Unreachable => return undefined("unreachable was reached"),
                     Opcode::Resume | Opcode::LandingPad { .. } => return unsupported("unwinding"),
+                    Opcode::VaArg => return unsupported("va_arg"),
                     Opcode::Call(_) | Opcode::Invoke(_) => {
                         let invoke = matches!(instruction.opcode, Opcode::Invoke(_));
                         let count = ops.len() - if invoke { 3 } else { 1 };

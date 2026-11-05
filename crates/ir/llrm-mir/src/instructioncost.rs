@@ -381,6 +381,6 @@ pub fn instruction_cost_with(
                 None => Cost::INVALID,
             }
         }
-        Opcode::Unreachable | Opcode::Resume | Opcode::LandingPad { .. } => Cost::BASIC,
+        Opcode::Unreachable | Opcode::Resume | Opcode::LandingPad { .. } | Opcode::VaArg => Cost::BASIC,
     }
 }
