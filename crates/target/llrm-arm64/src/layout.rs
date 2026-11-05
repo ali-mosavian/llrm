@@ -244,9 +244,10 @@ fn merge_return_tails(blocks: &mut Vec<Lowered>) {
                     let ((one, one_insts), (other, other_insts)) = (&ending[x], &ending[y]);
                     let length = common_tail(one_insts, other_insts);
                     let real = one_insts[one_insts.len() - length..].iter().filter(|i| counts(i)).count();
-                    // The same two blocks again, or a tail that is a whole block
-                    // `forwards` merges.
-                    let whole = length == blocks[*one].insts.len() && length == blocks[*other].insts.len();
+                    // Two blocks that are only a jump: `forwards` merges those.
+                    let whole = length == 1
+                        && blocks[*one].insts.len() == 1
+                        && blocks[*other].insts.len() == 1;
                     let found = (*one.min(other), *one.max(other), length);
                     if real >= TAIL_MERGE_SIZE
                         && !whole
