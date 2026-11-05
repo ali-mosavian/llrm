@@ -2844,9 +2844,11 @@ fn inert(callee: &Callee) -> bool {
 /// way, inline code, an indirect call whose callee may pop, a frame register
 /// read as a value) the frame stays.
 /// `stack_addressed`, and under `LLRM_CHECK_FRAME` a record of every ask: the
-/// caller, and whether the frame register could be omitted. A function whose
-/// answer differs between asks is reported (the single-decision frame, MASM-RB1
-/// plan step A, relies on it never differing).
+/// caller, the label number, a fingerprint of the procedure asked about, whether
+/// the frame register could be omitted and a fingerprint of the items answered.
+/// The single-decision frame (MASM-RB1 plan step B) relies on the answer not
+/// changing between asks, and on an ask repeated with the same input getting the
+/// same output (so a result may be kept).
 #[track_caller]
 fn stack_addressed(
     procedure: &Procedure,
@@ -2854,44 +2856,95 @@ fn stack_addressed(
 ) -> Option<Vec<Item>> {
     let found = stack_addressed_trial(procedure, number);
     if std::env::var_os("LLRM_CHECK_FRAME").is_some() {
-        let caller = std::panic::Location::caller();
+        let ask = Ask {
+            line: std::panic::Location::caller().line(),
+            number,
+            some: found.is_some(),
+            input: fingerprint(&format!("{procedure:?}")),
+            output: fingerprint(&format!("{found:?}")),
+        };
         let mut asks = ASKS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(flip) = record_ask(&mut asks, &procedure.name, caller.line(), found.is_some()) {
-            eprintln!("frame-flip {}: {flip:?}", procedure.name);
+        let kinds = record_ask(&mut asks, &procedure.name, ask);
+        if kinds.iter().any(|kind| *kind != "repeat") {
+            eprintln!("frame-flip {} {kinds:?}: {:?}", procedure.name, asks[&*procedure.name]);
         }
     }
     found
 }
 
-/// Per function: (the line of the ask, its answer), in order.
-static ASKS: std::sync::Mutex<std::collections::BTreeMap<String, Vec<(u32, bool)>>> =
-    std::sync::Mutex::new(std::collections::BTreeMap::new());
+fn fingerprint(text: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    hasher.finish()
+}
 
-type Asks = std::collections::BTreeMap<String, Vec<(u32, bool)>>;
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Ask {
+    line: u32,
+    number: usize,
+    some: bool,
+    input: u64,
+    output: u64,
+}
 
-/// Notes an ask of `name` from `line` that answered `answer`; the asks so far
-/// where this one differs from an earlier one.
+/// Per function, in order.
+static ASKS: std::sync::Mutex<Asks> = std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+type Asks = std::collections::BTreeMap<String, Vec<Ask>>;
+
+/// Notes `ask` of `name`; what it shows against the earlier asks: `answer` where
+/// the frame register's omissibility differs from an earlier one, `output` where
+/// an earlier ask with the same input and number gave another output (a result
+/// cannot be kept), and `repeat` where one did give the same (it could be).
 fn record_ask(
     asks: &mut Asks,
     name: &str,
-    line: u32,
-    answer: bool,
-) -> Option<Vec<(u32, bool)>> {
+    ask: Ask,
+) -> Vec<&'static str> {
     let entry = asks.entry(name.to_owned()).or_default();
-    entry.push((line, answer));
-    entry.iter().any(|(_, was)| *was != answer).then(|| entry.clone())
+    let mut kinds = Vec::new();
+    if entry.iter().any(|one| one.some != ask.some) {
+        kinds.push("answer");
+    }
+    if let Some(same) = entry.iter().find(|one| one.input == ask.input && one.number == ask.number) {
+        kinds.push(if same.some == ask.some && same.output == ask.output { "repeat" } else { "output" });
+    }
+    entry.push(ask);
+    kinds
 }
 
-/// The asks per function and per caller line, for a run that set `LLRM_CHECK_FRAME`:
-/// `frame asks: F functions, N asks, K flips; by caller line: L1 n1, L2 n2 ...`.
+/// The asks, for a run that set `LLRM_CHECK_FRAME`: functions, asks, functions
+/// whose answer changed, asks that disagreed with an earlier ask of the same
+/// input, asks that repeated one, and the asks by caller line.
 pub fn frame_asks_report() -> String {
     let asks = ASKS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let total: usize = asks.values().map(Vec::len).sum();
-    let flips = asks.values().filter(|one| one.iter().any(|(_, was)| *was != one[0].1)).count();
+    let flips = asks.values().filter(|one| one.iter().any(|ask| ask.some != one[0].some)).count();
+    let (mut output, mut repeat) = (0, 0);
+    for one in asks.values() {
+        for (index, ask) in one.iter().enumerate() {
+            if let Some(same) = one[..index].iter().find(|before| before.input == ask.input && before.number == ask.number) {
+                if same.some == ask.some && same.output == ask.output {
+                    repeat += 1;
+                } else {
+                    output += 1;
+                }
+            }
+        }
+    }
     let mut lines = std::collections::BTreeMap::<u32, usize>::new();
-    asks.values().flatten().for_each(|(line, _)| *lines.entry(*line).or_default() += 1);
+    asks.values().flatten().for_each(|ask| *lines.entry(ask.line).or_default() += 1);
     let by_line: Vec<String> = lines.iter().map(|(line, count)| format!("{line} {count}")).collect();
-    format!("frame asks: {} functions, {} asks, {} flips; by caller line: {}", asks.len(), total, flips, by_line.join(", "))
+    format!(
+        "frame asks: {} functions, {} asks, {} flips, {} output-changed, {} repeats; by caller line: {}",
+        asks.len(),
+        total,
+        flips,
+        output,
+        repeat,
+        by_line.join(", ")
+    )
 }
 
 fn stack_addressed_trial(
@@ -3896,16 +3949,22 @@ mod tests {
 
     use super::*;
 
-    /// MASM-RB1 step A's instrument: a second ask that answers differently from
-    /// the first is a flip, and the same answer is not (a recorder that never
-    /// reports would read every function as stable).
+    /// MASM-RB1 steps A and B's instrument. A later ask that answers differently
+    /// from an earlier one is an `answer` flip; an ask with the input of an
+    /// earlier one is a `repeat` where the output is the same and an `output`
+    /// change where it is not; different inputs with the same answer show
+    /// nothing (a recorder that never reports would read every function as
+    /// stable).
     #[test]
-    fn the_frame_ask_recorder_reports_a_changed_answer_and_only_that() {
+    fn the_frame_ask_recorder_reports_a_changed_answer_and_a_changed_output() {
+        let ask = |line, some, input, output| Ask { line, number: 0, some, input, output };
         let mut asks = Asks::new();
-        assert_eq!(record_ask(&mut asks, "f", 10, true), None);
-        assert_eq!(record_ask(&mut asks, "f", 20, true), None);
-        assert_eq!(record_ask(&mut asks, "f", 30, false), Some(vec![(10, true), (20, true), (30, false)]));
-        assert_eq!(record_ask(&mut asks, "g", 10, false), None);
+        assert!(record_ask(&mut asks, "f", ask(10, true, 1, 100)).is_empty());
+        assert!(record_ask(&mut asks, "f", ask(20, true, 2, 200)).is_empty());
+        assert_eq!(record_ask(&mut asks, "f", ask(30, true, 1, 100)), vec!["repeat"]);
+        assert_eq!(record_ask(&mut asks, "f", ask(40, true, 2, 999)), vec!["output"]);
+        assert_eq!(record_ask(&mut asks, "f", ask(50, false, 3, 300)), vec!["answer"]);
+        assert!(record_ask(&mut asks, "g", ask(10, false, 1, 100)).is_empty());
     }
 
     /// A block of one instruction on `line`, leading to `succ`.
