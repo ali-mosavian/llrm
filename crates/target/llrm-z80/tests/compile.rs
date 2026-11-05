@@ -1630,3 +1630,31 @@ fn a_function_tuned_for_size_calls_the_small_long_long_divide() {
     let out = compiled(&body(""), "f");
     assert!(out.contains("call __udivdi3") && !out.contains("_s\n"), "{out}");
 }
+
+/// A long multiplied by a constant was split into its halves, each half
+/// shifted and subtracted, in a function tuned for size: `x * 31` was 99 B and
+/// `x * 1000` 185 B, where a call is 14 (div_constants_short, mul_constants,
+/// -Os). A function tuned for size calls `__mulsi3`; the others keep the
+/// halves.
+#[test]
+fn a_function_tuned_for_size_calls_the_long_multiply() {
+    let body = |attr: &str| {
+        format!(
+            "define i32 @f(i32 %a, i32 %b, i32 %c) {attr} {{\n  %r = mul i32 %a, %b\n  %s = mul i32 %r, %c\n  ret i32 %s\n}}"
+        )
+    };
+    let out = compiled(&body("optsize"), "f");
+    assert!(out.contains("call __mulsi3"), "{out}");
+    let out = compiled(&body(""), "f");
+    assert!(!out.contains("__mulsi3"), "{out}");
+}
+
+/// The routine is 57 B: one small multiply in a module called it at -Os and
+/// the program grew (copy_runs +10 B, switch_jump_table +31 B). A module
+/// needs two long multiplies for the call.
+#[test]
+fn one_long_multiply_in_a_module_stays_inline_at_size() {
+    let ir = "define i32 @f(i32 %a) optsize {\n  %r = mul i32 %a, 31\n  ret i32 %r\n}";
+    let out = compiled(ir, "f");
+    assert!(!out.contains("__mulsi3"), "{out}");
+}
