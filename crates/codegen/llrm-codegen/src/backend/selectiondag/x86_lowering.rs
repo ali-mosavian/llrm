@@ -1573,13 +1573,15 @@ fn combine_sub(
         .or_else(|| lea_adds.then(|| combine_masked_xor_difference(dag, node)).flatten())
 }
 
-/// DEVIATE SD448 (exit 2026-11-20, last extension: then removed by translating
-/// the pin, or a row with a new owner; when the pin's `convertToThreeAddressWithLEA`
-/// takes 8-bit adds on 32-bit targets, TA-10): `sub C, (xor X, M)` is `add X,
-/// C - M` when `M` is a low-bit mask and `X` has no bits above it, so the
-/// `xor` is `M - X`. `__floatsisf`'s shift amount `26 - (n ^ 31)` is `n - 5`:
-/// one `lea` where the `sub` took `mov cl, 26; sub cl, bl`. Where the target
-/// has no three-address add (m16) the `add` needs a copy and is a byte longer,
+/// DEVIATE SD448 (owner x86-m32; recheck 2026-11-20 and at every pin bump,
+/// dropped where the pin has the fold): `sub C, (xor X, M)` is `add X, C - M`
+/// when `M` is a low-bit mask and `X` has no bits above it, so the `xor` is
+/// `M - X`. `__floatsisf`'s shift amount `26 - (n ^ 31)` is `n - 5`: one
+/// `lea` where the `sub` took `mov cl, 26; sub cl, bl`. The pin has no such
+/// fold, and its `convertToThreeAddressWithLEA` takes no 8-bit add on 32-bit
+/// targets (TA-10). 0 larger cells over 18 row-levels; m32 -O2 2 smaller,
+/// -O3 9 smaller (to -32 B); m64 and arm64 identical. Where the target has
+/// no three-address add (m16) the `add` needs a copy and is a byte longer,
 /// so it is not made there.
 fn combine_masked_xor_difference(
     dag: &mut SelectionDAG,

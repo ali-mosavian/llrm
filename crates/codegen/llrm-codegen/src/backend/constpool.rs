@@ -154,7 +154,10 @@ pub fn wide_first<'a>(entries: impl Iterator<Item = (&'a [u8], i64)>) -> Vec<(&'
 /// so an 8-aligned double after a dword global padded 4 bytes (x_horner -Os
 /// m32: data 84 B against gcc's 80, code +2, 208 vs 202 B). The rest keep
 /// their order.
-pub fn gap_filled<'a>(entries: impl Iterator<Item = (&'a [u8], i64)>, at: i64) -> Vec<(&'a [u8], i64)> {
+pub fn gap_filled<'a>(
+    entries: impl Iterator<Item = (&'a [u8], i64)>,
+    at: i64,
+) -> Vec<(&'a [u8], i64)> {
     let mut all = wide_first(entries);
     let wide = all.iter().take_while(|(bytes, _)| bytes.len() >= 8).count();
     if wide == 0 {
@@ -164,11 +167,15 @@ pub fn gap_filled<'a>(entries: impl Iterator<Item = (&'a [u8], i64)>, at: i64) -
     let mut at = at;
     let mut filled = Vec::new();
     loop {
-        let fits = [4_usize, 2, 1].into_iter().find_map(|size| {
-            let room = (8 - at % 8) % 8;
-            let one = (size as i64) <= room && at % size as i64 == 0;
-            one.then(|| narrow.iter().position(|(bytes, _)| bytes.len() == size)).flatten()
-        });
+        let fits = [4_usize, 2, 1]
+            .into_iter()
+            .find_map(
+                |size| {
+                    let room = (8 - at % 8) % 8;
+                    let one = (size as i64) <= room && at % size as i64 == 0;
+                    one.then(|| narrow.iter().position(|(bytes, _)| bytes.len() == size)).flatten()
+                },
+            );
         let Some(found) = fits else { break };
         let one = narrow.remove(found);
         at += one.0.len() as i64;
@@ -228,7 +235,10 @@ pub fn narrowest(value: f64) -> Vec<u8> {
 mod tests {
     use super::gap_filled;
 
-    fn order(entries: &[(&[u8], i64)], at: i64) -> Vec<i64> {
+    fn order(
+        entries: &[(&[u8], i64)],
+        at: i64,
+    ) -> Vec<i64> {
         gap_filled(entries.iter().copied(), at).into_iter().map(|(_, id)| id).collect()
     }
 
