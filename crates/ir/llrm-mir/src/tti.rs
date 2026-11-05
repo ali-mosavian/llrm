@@ -488,6 +488,13 @@ pub trait Tti {
         false
     }
 
+    /// Whether a size build's loop rotation copies a header only when its
+    /// exit test folds in the preheader (RS1). False: the pass's header limit
+    /// alone.
+    fn rotation_guard_must_fold_at_size(&self) -> bool {
+        false
+    }
+
     /// The fewest calls a callee has in the module for the bound above to hold
     /// its sites (a callee called once is the pin's: the copy
     /// meets constants the cost model follows, and folds with the sites around
@@ -1060,6 +1067,14 @@ pub trait Tti {
     /// instruction loop) says false.
     fn memory_idioms_at_optsize(&self) -> bool {
         true
+    }
+
+    /// Beyond the pin: whether a shift by a variable amount needs the count
+    /// in one fixed register (x86's `cl`), which costs a move and holds the
+    /// register. A size build then keeps `mul X, select(c, 8, 2)` rather than
+    /// the pin's `shl X, select(c, 3, 1)` (`visitMul`'s `tryGetLog2`).
+    fn variable_shift_count_in_fixed_register(&self) -> bool {
+        false
     }
 
     /// Beyond the pin: whether a strict exit compare of a unit-stride counter

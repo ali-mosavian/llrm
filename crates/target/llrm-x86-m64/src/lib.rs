@@ -376,6 +376,7 @@ impl llrm_target::Target for M64 {
                             // callee with one site too; the pin copies it (crc, floats,
                             // tile -Os: gcc keeps the call, +40 B each).
                             inline_size_guard_single_site: true,
+                            rotation_guard_must_fold_at_size: true,
                             // No byte/clock rate is stated for m64 (oversight
                             // 2026-11-03): a constant multiply is decomposed
                             // only where the chain is no larger than

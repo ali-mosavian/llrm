@@ -667,6 +667,10 @@ impl Tti for X86 {
         }
     }
 
+    fn rotation_guard_must_fold_at_size(&self) -> bool {
+        self.tuning.rotation_guard_must_fold_at_size
+    }
+
     fn constant_offset_phi_is_cheap(&self) -> bool {
         !self.tuning.keep_constant_displacements
     }
@@ -1275,6 +1279,12 @@ impl Tti for X86 {
 
     /// `X86TTIImpl::getArithmeticInstrCost`, scalars:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L255
+    /// The count must sit in `cl`. Not in real mode: its six registers spill
+    /// the multiplier's select (pack_ref -Os m16: +24 B).
+    fn variable_shift_count_in_fixed_register(&self) -> bool {
+        self.real_mode.is_none()
+    }
+
     fn arithmetic_cost(
         &self,
         op: ArithOp,

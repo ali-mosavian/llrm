@@ -16,7 +16,10 @@ use llrm_codegen::backend::selectiondag::known_bits::masked_value_is_zero;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::{LoadExt, NodeData, SDValue, SelectionDAG};
 
-pub struct MosCombines;
+/// `sized`: the function is tuned for size (`optsize`, `minsize`).
+pub struct MosCombines {
+    pub sized: bool,
+}
 
 impl CombineHooks for MosCombines {
     fn has_target_combine(
@@ -35,7 +38,7 @@ impl CombineHooks for MosCombines {
         match dag.opcode(node) {
             ISD::Add => widened_add_with_carry(dag, node),
             ISD::Srl | ISD::Truncate => half_of_pair(dag, node),
-            _ => decompose_mul(dag, node),
+            _ => decompose_mul(dag, node, self.sized),
         }
     }
 }
@@ -190,9 +193,10 @@ fn carry_in(
 fn decompose_mul(
     dag: &mut SelectionDAG,
     node: SDValue,
+    sized: bool,
 ) -> Option<SDValue> {
     let vt = dag.value_type(node);
-    if vt != EVT::I8 && vt != EVT::I16 {
+    if vt != EVT::I8 && vt != EVT::I16 && vt != EVT::I32 {
         return None;
     }
     let (x, c) = (dag.operand(node, 0), dag.operand(node, 1));
@@ -213,6 +217,14 @@ fn decompose_mul(
     };
     let amount = bits.trailing_zeros() + zeros;
     if amount >= width {
+        return None;
+    }
+    // A long multiply is a call of about 59 bytes with its arguments. In a
+    // function tuned for size the expansion has to be no longer, and measured
+    // (x * C at -Os) it is only where a shift is whole bytes (`2^8 +- 1`,
+    // `2^16 +- 1`, `2^24 +- 1`, also `2^9 +- 1`); `x * 3` is 74 bytes. At
+    // speed it saves ~2200 clocks a multiply for ~15 bytes.
+    if vt == EVT::I32 && sized && !(amount >= 8 && amount % 8 <= 1 && zeros % 8 == 0) {
         return None;
     }
     let shift = |dag: &mut SelectionDAG, value: SDValue, by: u32| {

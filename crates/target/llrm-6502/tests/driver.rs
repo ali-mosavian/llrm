@@ -2368,3 +2368,40 @@ fn a_counter_stepped_before_a_call_that_needs_no_a_is_a_dec() {
     assert!(text.contains("dec n") && !text.contains("adc n"), "{text}");
     assert_eq!(exit_code_of(&text, "t"), 6, "{text}");
 }
+
+/// licm_graph_callee_footprint (tests/run/c): `state * 3UL` was a call of
+/// `__mulsi3` (2263 clocks a trip, 10x gcc's loop). A long multiply by `2^N +-
+/// 1` is a shift and an add where clocks count (-O2): the call is 59 bytes and
+/// ~2200 clocks, the expansion ~75 and ~100. Tuned for size it stays a call
+/// unless the shift is whole bytes (`x * 257` is 52 bytes), measured at -Os.
+#[test]
+fn a_long_multiply_by_a_near_power_of_two_is_shifts_where_clocks_count() {
+    let ir = module(
+        "define i32 @by3(i32 %x) noinline {\n  %r = mul i32 %x, 3\n  ret i32 %r\n}\n\
+         define i32 @by257(i32 %x) noinline {\n  %r = mul i32 %x, 257\n  ret i32 %r\n}\n\
+         define i8 @t3() {\n  %v = call i32 @by3(i32 16909060)\n  %h = lshr i32 %v, 8\n  %r = trunc i32 %h to i8\n  ret i8 %r\n}\n\
+         define i8 @t257() {\n  %v = call i32 @by257(i32 16909060)\n  %h = lshr i32 %v, 8\n  %r = trunc i32 %h to i8\n  ret i8 %r\n}",
+    );
+    let fast = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(!fast.contains("__mulsi3"), "{fast}");
+    let linked = format!("{fast}\n{}", common::pipeline::reachable_runtime(&fast));
+    assert_eq!(exit_code_of(&linked, "t3"), 0x09, "{fast}");
+    assert_eq!(exit_code_of(&linked, "t257"), 0x07, "{fast}");
+    // tuned for size: the call stays for 3, not for 257
+    let ir = ir.replace("noinline {", "noinline optsize {");
+    let small = assembly(&ir, &Request::new(Level::Os)).unwrap();
+    let (by3, by257) = (function_text(&small, "by3"), function_text(&small, "by257"));
+    assert!(by3.contains("__mulsi3"), "{by3}");
+    assert!(!by257.contains("__mulsi3"), "{by257}");
+}
+
+/// The lines of function `name` in `text`, up to the next label of a function.
+fn function_text(
+    text: &str,
+    name: &str,
+) -> String {
+    let start = text.find(&format!("\n{name}:")).unwrap_or_else(|| panic!("no {name}:\n{text}"));
+    let rest = &text[start + 1..];
+    let end = rest.find("\n.export").unwrap_or(rest.len());
+    rest[..end].to_owned()
+}
