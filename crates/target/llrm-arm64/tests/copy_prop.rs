@@ -42,3 +42,14 @@ fn a_spilled_zero_is_stored_from_the_zero_register() {
     });
     assert!(!zeroed, "{asm}");
 }
+
+/// The spilled-zero store kept the remat flag of the definition it was cloned
+/// from, greedy refused the function ("no definition of the function") and the
+/// linear scan left `add x9, x10, #1; mov x10, x9` in jpeg_single's inner
+/// loops: +19% instructions at -Os.
+#[test]
+fn a_function_with_a_spilled_zero_stays_on_greedy() {
+    let before = driver::greedy_fallbacks();
+    driver::assembly(include_str!("data/zero_spill_os.ll"), Platform::Linux, Level::O2).expect("lowers");
+    assert_eq!(driver::greedy_fallbacks(), before, "fell back to the linear scan");
+}

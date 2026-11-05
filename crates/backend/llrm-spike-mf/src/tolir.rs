@@ -1392,6 +1392,9 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
             });
             out.defines.retain(|value| *value != reg);
             out.spill_store = true;
+            // The store is not the definition it was cloned from: `from_lir`
+            // must not look it up among the function's definitions.
+            out.rematerialized = false;
             return Some(Arc::new(out));
         }
         let (name, at) = self.foldable.get((one.at / 2) as usize).copied().flatten()?;
