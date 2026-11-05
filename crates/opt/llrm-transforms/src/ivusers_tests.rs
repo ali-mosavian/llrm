@@ -156,64 +156,6 @@ fn the_walk_is_linear_in_the_users() {
     assert!(large <= 2 * small + 4, "{small} questions for 100 loads, {large} for 200");
 }
 
-/// IU1 walked the whole layout to place the blocks of a loop's users, for each
-/// loop: memory_expansion -O2 paid 63 M instructions for 471 loops (`IdMap`
-/// `from_iter`), quadratic in the function. The function makes the places once
-/// for all its loops.
-#[test]
-fn test_the_block_places_are_made_once_for_all_the_loops_of_a_function() {
-    let mut text = String::from("define i32 @f(ptr %p, i32 %n) {\nentry:\n  br label %l0\n");
-    for k in 0..6 {
-        let from = if k == 0 { "entry".to_string() } else { format!("x{}", k - 1) };
-        let next = if k == 5 { "end".to_string() } else { format!("l{}", k + 1) };
-        text += &format!(
-            "l{k}:\n  %i{k} = phi i32 [ 0, %{from} ], [ %n{k}, %l{k} ]\n  %a{k} = getelementptr i32, ptr %p, i32 %i{k}\n  %v{k} = load i32, ptr %a{k}\n  %n{k} = add i32 %i{k}, 1\n  %c{k} = icmp slt i32 %n{k}, %n\n  br i1 %c{k}, label %l{k}, label %x{k}\nx{k}:\n  %r{k} = add i32 %n{k}, %v{k}\n  br label %{next}\n"
-        );
-    }
-    text += "end:\n  ret i32 0\n}\n";
-    let module = llrm_mir::parse::module(&text).expect("a module");
-    let (_, _, function) = module.functions().next().expect("a function");
-    let layout = DataLayout::parse("e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32").unwrap();
-    let tree = DomTree::of(function);
-    let loops = LoopInfo::analyze(function, || &tree);
-    let assumptions = AssumptionCache::new(&module, function);
-    let cx = Cx {
-        context: &module.context,
-        globals: &module.globals,
-        metadata: &module.metadata,
-        function,
-        layout: &layout,
-        loops: &loops,
-        tree: &tree,
-        assumptions: &assumptions,
-    };
-    let mut se = ScalarEvolution::new();
-    let env = Env { safe_to_speculate: &|_| true, ephemeral: &|_| false };
-    let before = llrm_mir::module::block_places_built();
-    let headers: Vec<_> = loops.top_level_loops().map(|one| one.get_header()).collect();
-    assert_eq!(headers.len(), 6);
-    for header in headers {
-        IvUsers::of(&mut se, &cx, header, &env);
-    }
-    assert_eq!(llrm_mir::module::block_places_built() - before, 1);
-}
-
-/// IU1 ordered every instruction of the function to sort the two users of a
-/// value: d_faces -O2 paid 1.9 M instructions for 34 loops
-/// (`IdMap::from_iter`). The users alone are ordered, however much else the
-/// function holds.
-#[test]
-fn test_sorting_the_users_orders_no_more_than_the_users() {
-    let mut text = String::from("define i32 @f(ptr %p, i32 %n) {\nentry:\n  %z0 = add i32 %n, 1\n");
-    for k in 1..300 {
-        text += &format!("  %z{k} = add i32 %z{}, {k}\n", k - 1);
-    }
-    text += "  br label %loop\nloop:\n  %i = phi i32 [ 0, %entry ], [ %next, %loop ]\n  %a = getelementptr i32, ptr %p, i32 %i\n  %v = load i32, ptr %a\n  %next = add i32 %i, 1\n  %c = icmp slt i32 %next, %n\n  br i1 %c, label %loop, label %exit\nexit:\n  %r = add i32 %next, %v\n  ret i32 %r\n}\n";
-    with_users(&text, |_, _, users, _, _| {
-        assert!(users.ordered_instructions() <= 8, "{} instructions ordered", users.ordered_instructions());
-    });
-}
-
 /// A carried set that an edit made stale is told from a current one. The
 /// uses of the loop with its exit test on the counter and on the stepped
 /// counter differ in the compare's operand.
@@ -240,4 +182,39 @@ fn a_set_carried_past_an_edit_that_changed_a_use_differs_from_a_fresh_one() {
 fn the_users_of_an_induction_variable_grow_no_set() {
     with_users(ARRAY, |_, _, users, _, _| assert!(!users.uses.is_empty()));
     assert_eq!(GROWN.with(Cell::get), 0);
+}
+
+/// Two loads written before the header read `%i` as a forward reference:
+/// LLVM resolves them when `%i` is defined, in the order that makes the
+/// earlier one first in the use list, so the earlier load is walked first.
+/// IVUsers followed descending program order (IU1): the later load first, a
+/// different tie-break in LSR's register choice (m64 matmul -Os +17 B).
+#[test]
+fn test_users_are_visited_in_use_list_order() {
+    const FORWARD: &str = "define i32 @f(ptr %p, ptr %q, i32 %n) {
+entry:
+  br label %loop
+one:
+  %a1 = getelementptr i32, ptr %p, i32 %i
+  %v1 = load i32, ptr %a1
+  br label %two
+two:
+  %a2 = getelementptr i32, ptr %q, i32 %i
+  %v2 = load i32, ptr %a2
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %two ]
+  %next = add i32 %i, 1
+  %c = icmp slt i32 %next, %n
+  br i1 %c, label %one, label %exit
+exit:
+  ret i32 %next
+}
+";
+    with_users(FORWARD, |cx, _, users, _, _| {
+        let order: Vec<_> = users.uses.iter().map(|u| named(cx, u).1).collect();
+        let first = order.iter().position(|o| o.trim_start_matches('%') == "a1").expect("the first load is a user");
+        let second = order.iter().position(|o| o.trim_start_matches('%') == "a2").expect("the second load is a user");
+        assert!(first < second, "the earlier forward reference is first in the use list: {order:?}");
+    });
 }
