@@ -222,6 +222,17 @@ impl Tti for M68k {
         Basic.cast_cost(op, to, from, kind)
     }
 
+    /// DEVIATE 20: each select a two-entry phi would become costs the branch
+    /// and move it lowers to, in bytes as in clocks (a fold saves one branch
+    /// and adds a move per select). gcd -O2 44 -> 26 B, 236 -> 138 clk; -Os
+    /// 44 -> 26 B. Exit 2026-11-12.
+    fn select_branch_extra(
+        &self,
+        _optsize: bool,
+    ) -> i64 {
+        1
+    }
+
     fn sizes_exit_values(&self) -> bool {
         true
     }

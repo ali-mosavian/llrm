@@ -355,6 +355,20 @@ fn assembler_arch(cpu: &str) -> String {
     format!("-m{cpu}")
 }
 
+/// The IR `CYCLES_LLC` compiles: `$CYCLES_RAW_IR_DIR/<set>/<name>.ll` where
+/// there is one (clang's output with no passes, what `llrm-cc` hands the
+/// driver), else the bench's own IR. Some bench IR is hand-written (gcd's
+/// selects), so a gap measured on it is not the shipped path's.
+fn shipped_source(
+    set: &str,
+    name: &str,
+) -> String {
+    std::env::var_os("CYCLES_RAW_IR_DIR")
+        .map(|dir| Path::new(&dir).join(set).join(format!("{name}.ll")))
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .unwrap_or_else(|| source_in(set, name))
+}
+
 /// `CYCLES_LLC=llrm-m68k-llc`: the code of `k` is that driver's assembly for
 /// the kernel's IR, assembled by the gas of `$GCC_M68K`, instead of this
 /// crate's own output. Leaf code only: a relocation is not resolved.
@@ -522,7 +536,7 @@ fn main() {
                 let mut code = items_with(&module, "k", Cpu::M68000, options).unwrap();
                 if let (Some(llc), true) = (std::env::var_os("CYCLES_LLC"), leaf) {
                     let Some(bytes) =
-                        assembled(Path::new(&llc), &gcc, &source_in(&set, name), options.size, &dir, &cpu_name)
+                        assembled(Path::new(&llc), &gcc, &shipped_source(&set, name), options.size, &dir, &cpu_name)
                     else {
                         cells.push("calls the runtime".to_owned());
                         continue;
