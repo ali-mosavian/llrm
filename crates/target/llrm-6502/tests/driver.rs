@@ -1994,6 +1994,22 @@ fn a_byte_stored_twice_is_loaded_once() {
     assert_eq!(text.matches("sta ").count(), 3, "{text}");
 }
 
+/// A zero kept in a callee-saved cell across a call was loaded and compared
+/// as `lda rc8` / `cmp rc8`, two bytes each like `cmp #0`, but the compare
+/// against zero after `lda cf` stayed because the cell hid the zero (x16
+/// fin). The cell's immediate is read as an immediate, and the compare goes.
+#[test]
+fn a_zero_in_a_callee_saved_cell_is_compared_as_zero() {
+    let ir = module(
+        "@cf = global i8 0\n@g1 = global i8 0\n@g2 = global i8 0\ndeclare i8 @chrget(i8)\n\
+         define i8 @f() {\n  store i8 0, ptr @g1\n  %c = call i8 @chrget(i8 0)\n  store i8 0, ptr @g2\n  \
+         %v = load i8, ptr @cf\n  %z = icmp eq i8 %v, 0\n  %i = add i8 %c, 1\n  %r = select i1 %z, i8 %c, i8 %i\n  ret i8 %r\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap();
+    assert!(!text.contains("cmp rc"), "a zero was compared from a cell:\n{text}");
+    assert!(!text.contains("cmp #0"), "a compare against zero follows a load of the flag:\n{text}");
+}
+
 /// `SAddO`, `SSubO` and `SMulO` on a word were refused ("convert node to
 /// libcall"); they compile now, and the value and the overflow bit must be
 /// right at the edges (30000 + 30000, -32768 - 1, 181 * 181), not just
