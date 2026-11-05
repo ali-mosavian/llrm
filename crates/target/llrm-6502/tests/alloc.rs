@@ -2336,6 +2336,32 @@ fn a_reload_across_a_carry_op_or_another_cells_store_goes() {
     }
 }
 
+/// `lda rc5; sta g; lda rc5; sta h` loaded the cell twice (x16 fin: eleven
+/// zero stores, each `lda rc2; sta g`): a store to a global changes neither the
+/// register nor the cell. A zero-page indexed store, a store through a pointer,
+/// a write to the cell, a label and a branch on the flags are kept.
+#[test]
+fn a_load_repeated_across_a_store_to_a_global_goes() {
+    use llrm_6502::peephole::drop_reloads;
+    assert_eq!(
+        pass(drop_reloads, "  lda rc5\n  sta g\n  lda rc5\n  sta h\n  rts\n"),
+        "  lda rc5\n  sta g\n  sta h\n  rts\n"
+    );
+    assert_eq!(
+        pass(drop_reloads, "  lda rc5\n  sta g,x\n  lda rc5\n  adc rc6\n  rts\n"),
+        "  lda rc5\n  sta g,x\n  adc rc6\n  rts\n"
+    );
+    for kept in [
+        "  lda rc5\n  sta rc6,y\n  lda rc5\n  adc rc6\n",
+        "  lda rc5\n  sta (rc2),y\n  lda rc5\n  adc rc6\n",
+        "  lda rc5\n  inc rc5\n  lda rc5\n  adc rc6\n",
+        "  lda rc5\nl:\n  lda rc5\n  adc rc6\n",
+        "  lda rc5\n  sta g\n  lda rc5\n  beq l\n",
+    ] {
+        assert_eq!(pass(drop_reloads, kept), kept);
+    }
+}
+
 /// `cmp #0` with a label between it and its branch (`lz4`, 4 sites): a path
 /// that jumps to the label brings its own flags, and this path's come from `a`.
 /// A label before the compare joins paths whose flags differ.
