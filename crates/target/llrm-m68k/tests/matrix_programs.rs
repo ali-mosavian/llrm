@@ -16,6 +16,7 @@ fn a_program_filter_keeps_exactly_the_named_programs() {
 
 #[test]
 fn an_unknown_or_empty_program_filter_is_an_error() {
-    assert!(keep_named(table(), |row| row.0, "arrmax,nosuch").unwrap_err().contains("nosuch"));
+    let why = keep_named(table(), |row| row.0, "arrmax,nosuch").err().expect("an unknown name is an error");
+    assert!(why.contains("nosuch"), "{why}");
     assert!(keep_named(table(), |row| row.0, "").is_err());
 }
