@@ -1256,6 +1256,10 @@ fn is_literal_move(one: &Insn) -> bool {
         && one.delivers.is_empty()
         && one.clobbers.is_empty()
         && one.symbol != Some(true)
+        // a lane def makes part of its value: making it again does not
+        && one.def_lanes.is_empty()
+        && one.partial_defs.is_empty()
+        && !one.undef_super
         && what.op == Operation::Move
         && matches!(
             what.dests.as_slice(),
@@ -1968,4 +1972,32 @@ fn allocate_greedy_pinned<T: Target>(
     crate::spill::share_slots(&mut back.function, &mut back.slots);
     *function = back.function;
     Ok((back.assignment, back.slots))
+}
+
+#[cfg(test)]
+mod lane_def_tests {
+    use super::*;
+
+    fn literal(lane: bool) -> Insn {
+        let what = Semantics {
+            dests: vec![Loc::Held(Held { value: 5, width: 1, offset: 0 })],
+            sources: vec![Loc::Imm(Imm { value: 0, width: 1, address: None })],
+            ..Semantics::new(Operation::Move)
+        };
+        let mut one = Insn::new(0, Some((0, 0)), Some(what), vec![5], Vec::new());
+        if lane {
+            one.def_lanes = vec![(5, ValueLanes::at(0, 1))];
+            one.partial_defs = vec![5];
+        }
+        one
+    }
+
+    /// The low byte of a pair, written alone, was taken for the pair: the
+    /// spiller made it again where the pair was read and dropped the high
+    /// byte written beside it (`mul_constants` -O2 summed a stale byte).
+    #[test]
+    fn a_byte_written_into_a_pair_is_not_a_literal_to_make_again() {
+        assert!(is_literal_move(&literal(false)));
+        assert!(!is_literal_move(&literal(true)));
+    }
 }
