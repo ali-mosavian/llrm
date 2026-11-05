@@ -143,6 +143,7 @@ pub mod calleefacts;
 pub mod callregs;
 pub mod cfi;
 pub mod classes;
+pub mod cmovconversion;
 pub mod combiner;
 pub mod comparefold;
 pub mod compares;
