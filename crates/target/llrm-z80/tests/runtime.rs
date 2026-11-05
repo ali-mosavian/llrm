@@ -177,3 +177,17 @@ fn the_programs_of_this_crate_run_and_print_what_c_does() {
         .is_some_and(|rest| rest.split_once(" of ").is_some_and(|(passed, total)| passed == total));
     assert!(done.status.success() && all, "{text}");
 }
+
+/// The corpus byte counts charge a program for the runtime routines it reaches. The graph missed a fall-through
+/// (`__modsi3` into `__udivmodsi4`) and a jump into a local label (`__udivdi3` into `udivmoddi`, under `__moddi3`),
+/// so a program with a long `%` was counted without the divide.
+#[test]
+fn the_runtime_graph_reaches_a_routine_by_falling_or_jumping_into_it() {
+    let dir = env!("CARGO_MANIFEST_DIR");
+    let done = Command::new("python3")
+        .args(["-I", &format!("{dir}/tests/runtime/graph.py"), &format!("{dir}/runtime/z80_rt.s")])
+        .output()
+        .expect("python3 runs");
+    let text = String::from_utf8_lossy(&done.stdout);
+    assert!(done.status.success() && text.contains("ALL OK"), "{text}\n{}", String::from_utf8_lossy(&done.stderr));
+}
