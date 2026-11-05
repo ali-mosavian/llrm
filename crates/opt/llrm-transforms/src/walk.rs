@@ -248,6 +248,7 @@ impl ProgramPass for Walk {
         program: &mut Program,
         analyses: &mut ProgramAnalyses,
     ) -> Result<(), String> {
+        crate::argpromotion::walk_begins();
         let mut modules = managers(program, analyses);
         let roots = roots(program);
         let recursion = Recursion::of(
@@ -719,6 +720,7 @@ impl ProgramPass for Walk {
                         crate::argpromotion::promoted_among(module, &program.layout, priced, bytes, Some(&members))
                     {
                         modules[at].changed(id);
+                        crate::argpromotion::walk_promoted();
                         if visited.contains(&id) {
                             (self.simplify)(module, &mut modules[at], id, "promote.");
                         }
