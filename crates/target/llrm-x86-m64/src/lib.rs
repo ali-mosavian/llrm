@@ -383,6 +383,8 @@ impl llrm_target::Target for M64 {
                             // x86-m32's): a full unroll repays its bytes at 312
                             // milliclocks a byte, the m64 net rate (fpbench -O2:
                             // 6-trip fp nests, +815 B for -75 clocks, gcc keeps them).
+                            // 312 is x86-m32's 486 line-fill rate, borrowed: UNMEASURED at m64
+                            // (row M64-RATE, owner m64, exit 2026-11-20).
                             unroll_milliclocks_per_byte: 312,
                             unroll_promotion_fits_registers: true,
                             rotation_guard_must_fold_at_size: true,
