@@ -2010,6 +2010,24 @@ fn a_zero_in_a_callee_saved_cell_is_compared_as_zero() {
     assert!(!text.contains("cmp #0"), "a compare against zero follows a load of the flag:\n{text}");
 }
 
+/// A byte loaded and zero-extended to a word had its high half masked as
+/// `lda #0; and #0` and a cell for it (#7165 expanded the extending load to an
+/// any-extend and a mask 255): `zext(a) + zext(b)` took 30 instructions where
+/// 21 do, and `struct_odd_sizes` -Os grew 74 B. A mask of zero is a zero, and
+/// the high half of a word masked by 255 is known to be zero.
+#[test]
+fn a_zero_extended_loaded_byte_has_no_mask_of_zero() {
+    let ir = module(
+        "@a = global i8 0\n@b = global i8 0\n\
+         define i16 @f() {\n  %1 = load i8, ptr @a\n  %2 = zext i8 %1 to i16\n  %3 = load i8, ptr @b\n  \
+         %4 = zext i8 %3 to i16\n  %5 = add i16 %2, %4\n  ret i16 %5\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap();
+    assert!(!text.contains("and #0"), "a byte was masked by zero:\n{text}");
+    let instructions = text.lines().filter(|line| line.starts_with("  ")).count();
+    assert!(instructions <= 22, "{instructions} instructions:\n{text}");
+}
+
 /// `SAddO`, `SSubO` and `SMulO` on a word were refused ("convert node to
 /// libcall"); they compile now, and the value and the overflow bit must be
 /// right at the edges (30000 + 30000, -32768 - 1, 181 * 181), not just
