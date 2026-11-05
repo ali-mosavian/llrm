@@ -25,3 +25,28 @@ fn copied_constant_bytes_keep_their_order() {
         }
     }
 }
+
+const WORDS: &str = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"
+declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)
+@w = private unnamed_addr constant { i32, i32 } { i32 100000, i32 200000 }, align 4
+@h = private unnamed_addr constant { i16, i16 } { i16 258, i16 772 }, align 2
+define void @f(ptr %d, ptr %e) {
+  call void @llvm.memcpy.p0.p0.i32(ptr align 4 %d, ptr align 4 @w, i32 8, i1 false)
+  call void @llvm.memcpy.p0.p0.i32(ptr align 2 %e, ptr align 2 @h, i32 4, i1 false)
+  ret void
+}
+";
+
+/// Integer elements are read as the numbers they are: `{ 100000, 200000 }` was
+/// stored as 0xa0860100 (local_initializers -O0 printed 16777216 for 1).
+#[test]
+fn copied_constant_integers_keep_their_value() {
+    for cpu in ["68000", "68020"] {
+        let asm = assembly(WORDS, cpu_of(cpu).unwrap(), Level::O0).unwrap_or_else(|why| panic!("{cpu}: {why}"));
+        assert!(asm.contains("#100000") && asm.contains("#200000"), "{cpu}: a word was byte-swapped:\n{asm}");
+        assert!(
+            asm.contains("#16909060") || asm.contains("#258") && asm.contains("#772"),
+            "{cpu}: a halfword was byte-swapped:\n{asm}"
+        );
+    }
+}

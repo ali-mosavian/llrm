@@ -859,6 +859,19 @@ impl Builder<'_> {
         Some((Some(bytes), from))
     }
 
+    /// The low `count` bytes of `bits` as the target lays them in memory.
+    fn memory_bytes(
+        &self,
+        bits: u128,
+        count: usize,
+    ) -> Vec<u8> {
+        if self.dag.config().big_endian {
+            bits.to_be_bytes()[16 - count..].to_vec()
+        } else {
+            bits.to_le_bytes()[..count].to_vec()
+        }
+    }
+
     /// `ReadDataFromGlobal`: the constant's bytes at `at`, where the layout
     /// puts them; `None` for anything but integers, floats and aggregates of
     /// them.
@@ -876,12 +889,12 @@ impl Builder<'_> {
                 let width = types.int_bits(constant.ty)?;
                 (width % 8 == 0).then_some(())?;
                 let count = (width / 8) as usize;
-                bytes.get_mut(at..at + count)?.copy_from_slice(&bits.to_le_bytes()[..count]);
+                bytes.get_mut(at..at + count)?.copy_from_slice(&self.memory_bytes(*bits, count));
             }
             ConstantKind::Float(bits) => match types.get(constant.ty) {
                 Type::Float(kind @ (FloatKind::Float | FloatKind::Double)) => {
                     let count = kind.value_bytes() as usize;
-                    bytes.get_mut(at..at + count)?.copy_from_slice(&bits.to_le_bytes()[..count]);
+                    bytes.get_mut(at..at + count)?.copy_from_slice(&self.memory_bytes(u128::from(*bits), count));
                 }
                 _ => return None,
             },
