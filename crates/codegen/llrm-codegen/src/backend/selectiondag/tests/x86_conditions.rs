@@ -145,7 +145,7 @@ fn x86_runs_the_pin_combines_the_corpus_judged_better() {
     use super::super::dag_combiner::CombineHooks;
     let hooks = X86Lowering { cmov: true, sse2: false, min_size: false, three_address_adds: false, i16_mul_chains: false, sext_load: false, zext_free: false, profile: None };
     assert!(hooks.fold_bin_op_into_select() && hooks.fold_xor_of_and_with_mask() && hooks.canonicalize_ge_le());
-    assert!(!hooks.rebuild_brcond_condition() && !hooks.fold_mul_of_add_with_constant());
+    assert!(!hooks.rebuild_brcond_condition() && hooks.fold_mul_of_add_with_constant());
     let m64 = X86Lowering { zext_free: true, ..hooks };
     assert!(m64.rebuild_brcond_condition() && m64.fold_and_of_extload());
 }

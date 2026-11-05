@@ -1319,3 +1319,25 @@ entry:
     assert!(names.iter().any(|n| n == "and" || n == "movzx" || n == "mov"), "premise: selected, got {names:?}");
     assert!(!names.iter().any(|n| n.starts_with("movsx")), "a free zero extension, not movsxd: {names:?}");
 }
+
+/// `x*5 + (x+3)*5` kept a separate `add` (m64 -O2 mul_constants +489 B over the pin):
+/// x86's `(x+3)*5` was not rewritten to `x*5 + 15`, so `x*5` was not shared.
+#[test]
+fn an_m64_multiply_of_a_sum_shares_the_multiply_of_its_addend() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i32 @f(i32 %x) {
+entry:
+  %a = add i32 %x, 3
+  %m1 = mul i32 %a, 5
+  %m2 = mul i32 %x, 5
+  %s = add i32 %m1, %m2
+  ret i32 %s
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let names: Vec<_> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.clone()).collect();
+    assert!(!names.iter().any(|n| &**n == "add"), "x*5 is shared, +15 folds into the sum's lea: {names:?}");
+}
