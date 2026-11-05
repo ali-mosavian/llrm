@@ -1362,6 +1362,7 @@ impl<'a> Commuter<'a> {
         at: usize,
         regs: llrm_lir::registers::Regs,
         bits: u32,
+        flags_dead_out: &dyn Fn() -> bool,
     ) -> bool {
         let mi = Arc::clone(&work[at]);
         // Only an instruction the pass would untie: tied, and writing another
@@ -1440,7 +1441,7 @@ impl<'a> Commuter<'a> {
                 if (mi_writes_flags && reads)
                     || (writes
                         && (mi_reads_flags
-                            || (mi_writes_flags && !flags_dead_after(work, end + place, regs, bits, || false))))
+                            || (mi_writes_flags && !flags_dead_after(work, end + place, regs, bits, flags_dead_out))))
                 {
                     return false;
                 }

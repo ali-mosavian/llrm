@@ -157,7 +157,9 @@ pub fn tied(
             }
             // `rescheduleMIBelowKill`: a tied instruction whose source dies in
             // a later reader goes below it.
-            if commuted.is_none() && walk.reschedule_mi_below_kill(&mut work, place, body.regs(), body.bits) {
+            if commuted.is_none()
+                && walk.reschedule_mi_below_kill(&mut work, place, body.regs(), body.bits, &flags_dead_out)
+            {
                 continue;
             }
             // DEVIATE TA-9 (exit 2026-11-20): an x87 load that kills the
