@@ -203,7 +203,7 @@ fn callee_intrinsic(
 }
 
 /// How much an access in a block of loop depth `depth` counts: 10 a level.
-fn weight(depth: usize) -> f64 {
+pub(crate) fn weight(depth: usize) -> f64 {
     10f64.powi(depth.min(3) as i32)
 }
 
@@ -238,13 +238,13 @@ fn accesses(
     total
 }
 
-fn block_depths(function: &llrm_mir::module::Function) -> BTreeMap<i64, usize> {
+pub(crate) fn block_depths(function: &llrm_mir::module::Function) -> BTreeMap<i64, usize> {
     loops::depth(&cfg::graph(function), function.entry().map(cfg::id))
 }
 
 /// For each defined function, how many times its call sites in the module
 /// run per run of their callers, a call in a loop counting 10 a level.
-fn call_weights(module: &Module) -> BTreeMap<usize, f64> {
+pub(crate) fn call_weights(module: &Module) -> BTreeMap<usize, f64> {
     let mut found: BTreeMap<usize, f64> = BTreeMap::new();
     for global in &module.globals {
         let GlobalKind::Function(function) = &global.kind else { continue };
