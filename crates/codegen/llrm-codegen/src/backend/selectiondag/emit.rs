@@ -3022,6 +3022,10 @@ impl Emitter<'_, '_> {
                 return Ok(Some(()));
             }
             // `llvm.trap`: the `TRAP` node the intrinsic made.
+            "INT3" => {
+                self.push(Operation::Nothing, "int3", Vec::new(), Vec::new());
+                return Ok(Some(()));
+            }
             "TRAP" => {
                 self.push(Operation::Nothing, "ud2", Vec::new(), Vec::new());
                 return Ok(Some(()));

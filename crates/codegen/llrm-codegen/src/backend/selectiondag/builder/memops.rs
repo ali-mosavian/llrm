@@ -90,6 +90,16 @@ impl Builder<'_> {
                 self.dag.set_root(trap);
                 Ok(())
             }
+            // `case Intrinsic::debugtrap`: a `DEBUGTRAP` node (selected as `int3`).
+            Intrinsic::DebugTrap => {
+                let root = self.root();
+                let trap = self.dag.get_node(ISD::DebugTrap, EVT::OTHER, &[root]);
+                self.dag.set_root(trap);
+                Ok(())
+            }
+            // `case Intrinsic::ubsantrap`: `UBSAN_UD1` (a `ud1` with the kind as its
+            // displacement) is not translated: a named refusal, not a panic.
+            Intrinsic::UbsanTrap => Err(Refused("llvm.ubsantrap: M16-UBSANTRAP, not translated")),
             // `case Intrinsic::experimental_noalias_scope_decl: return;`
             Intrinsic::Assume | Intrinsic::Prefetch | Intrinsic::FakeUse | Intrinsic::NoAliasScopeDecl => Ok(()),
             // `SelectionDAGBuilder.cpp#L7680`: the region information is

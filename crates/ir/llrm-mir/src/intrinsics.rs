@@ -132,6 +132,11 @@ pub enum Intrinsic {
     /// `llvm.trap`: the program stops here (`ud2` on x86); control does not
     /// continue.
     Trap,
+    /// `llvm.debugtrap`: a breakpoint (`int3` on x86).
+    DebugTrap,
+    /// `llvm.ubsantrap`: stops with the sanitizer's check kind (`ud1 kind(%eax), %eax`
+    /// on x86, `X86MCInstLower.cpp` `UBSAN_UD1`); not translated.
+    UbsanTrap,
     /// `llvm.fake.use`: keeps its operands live for a debugger at `-Og`; no
     /// code runs it.
     FakeUse,
@@ -756,6 +761,22 @@ const TABLE: [Spec; 82] = [
         overloads: &[],
         returns: Slot::Void,
         parameters: &[],
+        own: None,
+    },
+    Spec {
+        name: "llvm.debugtrap",
+        intrinsic: Intrinsic::DebugTrap,
+        overloads: &[],
+        returns: Slot::Void,
+        parameters: &[],
+        own: None,
+    },
+    Spec {
+        name: "llvm.ubsantrap",
+        intrinsic: Intrinsic::UbsanTrap,
+        overloads: &[],
+        returns: Slot::Void,
+        parameters: &[Slot::Int(8)],
         own: None,
     },
     Spec {
