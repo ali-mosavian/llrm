@@ -349,3 +349,37 @@ fn test_closing_builds_the_loop_forest_once() {
     closed(&mut module).unwrap();
     assert_eq!(get(Event::Forests) - before, 1);
 }
+
+/// Exit phis come in the order the values are defined, as the pin's:
+/// the worklist pops the last value first and each phi goes first in the block.
+/// The old pass sorted them by value id; the order is what the backend reacts to.
+#[test]
+fn test_exit_phis_follow_the_order_of_their_definitions() {
+    let closed = closed_once(
+        "define i16 @f(i16 %n) {
+b0:
+  br label %h
+
+h:
+  %i = phi i16 [ 0, %b0 ], [ %i2, %h ]
+  %a = add i16 %i, 1
+  %b = add i16 %i, 2
+  %c = add i16 %i, 3
+  %i2 = add i16 %i, 1
+  %t = icmp ult i16 %i2, %n
+  br i1 %t, label %h, label %x
+
+x:
+  %r1 = add i16 %a, %b
+  %r2 = add i16 %r1, %c
+  ret i16 %r2
+}
+",
+    );
+    let phis = closed.lines().filter(|line| line.contains(".lcssa = phi")).collect::<Vec<_>>();
+    assert_eq!(
+        phis,
+        ["  %a.lcssa = phi i16 [ %a, %h ]", "  %b.lcssa = phi i16 [ %b, %h ]", "  %c.lcssa = phi i16 [ %c, %h ]"],
+        "{closed}"
+    );
+}
