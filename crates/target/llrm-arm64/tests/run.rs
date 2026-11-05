@@ -46,7 +46,7 @@ fn executed(program: &Path) -> Outcome {
 }
 
 fn compare(name: &str) {
-    let isel = std::env::var("ARM64_ISEL").unwrap_or_else(|_| "hand".into());
+    let isel = std::env::var("ARM64_ISEL").unwrap_or_else(|_| "dag".into());
     compare_with(name, &isel);
 }
 
