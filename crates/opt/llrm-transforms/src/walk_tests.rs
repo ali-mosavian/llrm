@@ -2728,6 +2728,58 @@ fn test_m32_copies_a_tree_recursion_into_itself_at_speed() {
     assert!(calls > 8, "fib was not copied into itself, {calls} calls of it");
 }
 
+/// Calls of `@paths` after the default pipeline on x86-m32: bench rectwo's
+/// lattice-path count, `paths(n-1, m) + paths(n, m-1)` with two ways out.
+fn m32_paths_calls(options: crate::pipeline::Options) -> usize {
+    let mut module = parsed(
+        "define i32 @paths(i32 %n, i32 %m) {
+b0:
+  %zn = icmp eq i32 %n, 0
+  %zm = icmp eq i32 %m, 0
+  %done = or i1 %zn, %zm
+  br i1 %done, label %base, label %rec
+
+base:
+  ret i32 1
+
+rec:
+  %a = sub i32 %n, 1
+  %b = sub i32 %m, 1
+  %x = call i32 @paths(i32 %a, i32 %m)
+  %y = call i32 @paths(i32 %n, i32 %b)
+  %s = add i32 %x, %y
+  ret i32 %s
+}
+
+define i32 @main() {
+b0:
+  %r = call i32 @paths(i32 9, i32 9)
+  ret i32 %r
+}
+",
+    );
+    llrm_mir::program::Program::lend(
+        &mut module,
+        crate::indvars::tests::m32(),
+        |program: &mut llrm_mir::program::Program| {
+            crate::pipeline::applied(program, &crate::pipeline::Applied { options, ..Default::default() })
+        },
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    llrm_mir::print::module(&module).matches("call i32 @paths").count()
+}
+
+/// bench rectwo at m32 -O3 ran 1230664 clocks against gcc's 555904: the copies were made of the
+/// two-call body and kept 43 calls; gcc eliminates the tail call first and nests the loop it
+/// leaves (466986 clocks that way). The body here is the same shape. -O2 keeps the tree's copies
+/// (fib's pure calls merge across them: 99618 clocks against 228901).
+#[test]
+fn test_m32_o3_paths_is_copied_as_nested_loops_not_as_a_tree_of_calls() {
+    let calls = m32_paths_calls(crate::pipeline::Options::speed());
+    assert!(calls <= 8, "paths kept {calls} calls of itself");
+}
+
 /// fib at m32 -O2 was copied into itself to the 150 `gcc_insns` the pass
 /// allowed and ran 240256 clocks against gcc's 210636 (gcc's cap is 450; -O2
 /// now takes it, 99687 clocks); -O3 keeps 150 (rectwo and bintree are worse

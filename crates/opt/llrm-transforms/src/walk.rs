@@ -772,6 +772,18 @@ pub(crate) fn self_calls(
     id: GlobalId,
     for_size: bool,
 ) -> Option<llrm_support::hash::SparseIdMap<llrm_mir::module::InstId, f64>> {
+    self_calls_from(module, layout, id, for_size, 2)
+}
+
+/// `self_calls` with `fewest` distinct self calls: one for a body whose tail-call
+/// elimination has already left a single call in a loop.
+pub(crate) fn self_calls_from(
+    module: &Module,
+    layout: &llrm_mir::datalayout::DataLayout,
+    id: GlobalId,
+    for_size: bool,
+    fewest: usize,
+) -> Option<llrm_support::hash::SparseIdMap<llrm_mir::module::InstId, f64>> {
     let function = module.global(id).function()?;
     let pure = {
         let effects = llrm_mir::memory::stated(&function.attrs);
@@ -787,7 +799,7 @@ pub(crate) fn self_calls(
             distinct.push((operands, inst));
         }
     }
-    if for_size || distinct.len() < 2 {
+    if for_size || distinct.len() < fewest {
         return None;
     }
     let frequencies = crate::inlinecost::call_frequencies(module, layout, function);
@@ -938,7 +950,21 @@ impl SelfInline {
                 module.functions().filter(|(_, _, function)| waiting(function)).map(|(id, _, _)| id).collect();
             for id in marked {
                 let mut copies = 0;
-                let frequencies = self_calls(module, &program.layout, id, self.for_size).filter(|_| {
+                // DEVIATE REC-2: where the target says so, the tail-call elimination comes first and
+                // the copies are made of the loop it leaves (gcc's order).
+                let tre_first = {
+                    let (o2, o3) = program.target.tti().map_or((false, false), |tti| tti.recursive_tre_first());
+                    if self.o3 { o3 } else { o2 }
+                };
+                if tre_first {
+                    function_mut(module, id).1.attrs.retain(
+                        |one| !matches!(one, llrm_mir::opcode::Attribute::Flag(flag) if flag == crate::tailcallelim::DEFERRED),
+                    );
+                    modules[at].changed(id);
+                    modules[at].invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
+                    (self.simplify)(module, &mut modules[at], id, "tre-first.");
+                }
+                let frequencies = self_calls_from(module, &program.layout, id, self.for_size, if tre_first { 1 } else { 2 }).filter(|_| {
                     let bar = edge_growth_bar(program.target.tti().as_deref(), self.o3);
                     let body = module.global(id).function().expect("a marked function");
                     crate::inline::recursive_edge_growth(body) <= bar
