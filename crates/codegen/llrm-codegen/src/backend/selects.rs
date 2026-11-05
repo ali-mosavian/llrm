@@ -22,6 +22,14 @@
 //! (`TargetLowering::expandAddSubSat`, `TargetLowering.cpp`) to a subtraction
 //! and a conditional move. Exit: the legalizer's expansion lands.
 //!
+//! DEVIATE S4 (no number): `llvm.{u}{add,sub}.with.overflow` is expanded here
+//! to the operation and `icmp ult`, for the selectors that have no UADDO
+//! (`--isel=old`, shadow): CodeGenPrepare forms the intrinsic on every x86 width
+//! (`shouldFormOverflowOp`), and the old selector stopped at
+//! "@llvm.uadd.with.overflow.i16" (nib and qb tests). The pin's legalizer expands
+//! UADDO the same way (`TargetLowering::expandUADDSUBO`). Exit: the old selector
+//! is deleted.
+//!
 //! DEVIATE S2 (no number): the pin keeps the select to instruction selection.
 //! CodeGenPrepare's `optimizeSelectInst` forms no branch where
 //! `isPredictableSelectExpensive` is false (in-order i486, `CodeGenPrepare.cpp`
@@ -144,6 +152,56 @@ pub fn minmax_expanded(module: &mut Module) -> Result<(), String> {
                 chosen
             };
             function.replace_all_uses_with(call.result.ok_or("a min or max value")?, chosen);
+            function.erase(inst)?;
+        }
+        let overflowing: Vec<(InstId, BinaryOp)> = function
+            .walk()
+            .filter_map(|(_, inst)| {
+                let instruction = function.instruction(inst);
+                let Some(&Operand::Constant(callee)) = instruction.operands.last() else { return None };
+                let ConstantKind::Global(callee) = context.get(callee).kind else { return None };
+                match (matches!(instruction.opcode, Opcode::Call(_)), intrinsics[callee.0 as usize]) {
+                    (true, Some(Intrinsic::WithOverflow { op: op @ (BinaryOp::Add | BinaryOp::Sub), signed: false })) => {
+                        Some((inst, op))
+                    }
+                    _ => None,
+                }
+            })
+            .collect();
+        for (inst, op) in overflowing {
+            let call = function.instruction(inst).clone();
+            let [a, b, _] = call.operands[..] else { return Err("an overflow operation of two operands".into()) };
+            let pair = call.result.ok_or("an overflow value")?;
+            let users: Vec<(InstId, u32)> = function
+                .users(pair)
+                .iter()
+                .map(|one| {
+                    let user = function.instruction(one.user);
+                    match &user.opcode {
+                        Opcode::ExtractValue(path) if path.len() == 1 => Ok((one.user, path[0])),
+                        _ => Err("an overflow pair read other than by extractvalue".to_owned()),
+                    }
+                })
+                .collect::<Result<_, _>>()?;
+            let operand_ty = function.operand_type(context, a).ok_or("an overflow operand type")?;
+            let bit = context.types.int(1);
+            let before = |function: &mut Function, opcode, ty, operands: Vec<Operand>| -> Result<Operand, String> {
+                let made = function.create_instruction(opcode, ty, operands, Flags::default(), None);
+                function.insert(made, Position::Before(inst))?;
+                Ok(Operand::Value(function.instruction(made).result.expect("a value")))
+            };
+            let math = before(function, Opcode::Binary(op), operand_ty, vec![a, b])?;
+            // `a + b` wrapped iff the sum is below `a`; `a - b` iff `a` is below `b`.
+            let flag = if op == BinaryOp::Add {
+                before(function, Opcode::ICmp(IntPredicate::Ult), bit, vec![math, a])?
+            } else {
+                before(function, Opcode::ICmp(IntPredicate::Ult), bit, vec![a, b])?
+            };
+            for (user, field) in users {
+                let value = function.instruction(user).result.ok_or("an extracted value")?;
+                function.replace_all_uses_with(value, if field == 0 { math } else { flag });
+                function.erase(user)?;
+            }
             function.erase(inst)?;
         }
     }
@@ -618,6 +676,43 @@ entry:
             let arguments = vec![Val::Int { bits: a, width: 16 }, Val::Int { bits: b, width: 16 }];
             assert_eq!(run(&after, "f", arguments.clone(), 100).unwrap(), Val::Int { bits: want, width: 16 });
             assert_eq!(run(&before, "f", arguments, 100).unwrap(), Val::Int { bits: want, width: 16 });
+        }
+    }
+
+    /// CodeGenPrepare's `uadd.with.overflow.i16` reached `--isel=old` (nib and qb
+    /// tests, 30 red since #7304): "@llvm.uadd.with.overflow.i16" was refused.
+    /// The sum and the carry, with the same answers.
+    #[test]
+    fn test_an_unsigned_overflow_pair_becomes_an_operation_and_a_compare() {
+        let text = "declare { i16, i1 } @llvm.uadd.with.overflow.i16(i16, i16)
+declare { i16, i1 } @llvm.usub.with.overflow.i16(i16, i16)
+define i16 @f(i16 %a, i16 %b) {
+entry:
+  %s = call { i16, i1 } @llvm.uadd.with.overflow.i16(i16 %a, i16 %b)
+  %sum = extractvalue { i16, i1 } %s, 0
+  %carry = extractvalue { i16, i1 } %s, 1
+  %d = call { i16, i1 } @llvm.usub.with.overflow.i16(i16 %a, i16 %b)
+  %diff = extractvalue { i16, i1 } %d, 0
+  %borrow = extractvalue { i16, i1 } %d, 1
+  %c = zext i1 %carry to i16
+  %w = zext i1 %borrow to i16
+  %c2 = shl i16 %c, 1
+  %x = add i16 %sum, %diff
+  %y = add i16 %x, %c2
+  %z = add i16 %y, %w
+  ret i16 %z
+}
+";
+        let mut after = llrm_mir::parse::module(text).unwrap();
+        super::minmax_expanded(&mut after).unwrap();
+        assert_eq!(llrm_mir::verify::verify(&after), Vec::<String>::new(), "{}", llrm_mir::print::module(&after));
+        assert!(!llrm_mir::print::module(&after).contains("= call"), "{}", llrm_mir::print::module(&after));
+        for (a, b) in [(5u128, 3u128), (3, 5), (0xFFFF, 1), (0, 0), (0x8000, 0x8000)] {
+            let sum = (a + b) & 0xFFFF;
+            let diff = a.wrapping_sub(b) & 0xFFFF;
+            let want = (sum + diff + (u128::from(a + b > 0xFFFF) << 1) + u128::from(a < b)) & 0xFFFF;
+            let arguments = vec![Val::Int { bits: a, width: 16 }, Val::Int { bits: b, width: 16 }];
+            assert_eq!(run(&after, "f", arguments, 100).unwrap(), Val::Int { bits: want, width: 16 });
         }
     }
 
