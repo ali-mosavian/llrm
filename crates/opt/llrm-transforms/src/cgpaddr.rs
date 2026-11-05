@@ -227,7 +227,15 @@ impl FunctionPass for CgpAddr {
         let compares = match analyses.outer().target().lowering() {
             Some(lowering) => {
                 let outer = std::rc::Rc::clone(analyses.outer());
-                crate::cmpopt::compares_optimized(unit.context, &outer.globals, unit.layout, &*lowering, unit.function)
+                crate::cmpopt::compares_optimized(
+                    unit.context,
+                    unit.metadata,
+                    unit.declared,
+                    &outer.globals,
+                    unit.layout,
+                    &*lowering,
+                    unit.function,
+                )
             }
             None => false,
         };
