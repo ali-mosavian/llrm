@@ -49,6 +49,10 @@ def SDTZ80Cmov : SDTypeProfile<1, 4, [SDTCisSameAs<0, 1>, SDTCisSameAs<1, 2>, SD
 def Z80setcc : SDNode<"Z80ISD::SETCC", SDTZ80Setcc>;
 def Z80cmov : SDNode<"Z80ISD::CMOV", SDTZ80Cmov>;
 def Z80cmp : SDNode<"Z80ISD::CMP", SDTZ80Cmp>;
+// The compare of the next word of a long: a - b - carry, the carry the flags of the word before's compare. The last
+// operand is 1 for a signed order, which the carry is then made to hold.
+def SDTZ80Cmpc : SDTypeProfile<1, 4, [SDTCisVT<0, i8>, SDTCisSameAs<1, 2>, SDTCisVT<3, i8>, SDTCisVT<4, i8>]>;
+def Z80cmpc : SDNode<"Z80ISD::CMPC", SDTZ80Cmpc>;
 def Z80brcond : SDNode<"Z80ISD::BRCOND", SDTZ80Brcond, [SDNPHasChain]>;
 def SDT_Z80CallSeqStart : SDCallSeqStart<[SDTCisVT<0, i16>, SDTCisVT<1, i16>]>;
 def SDT_Z80CallSeqEnd : SDCallSeqEnd<[SDTCisVT<0, i16>, SDTCisVT<1, i16>]>;
@@ -224,6 +228,9 @@ let mayLoad = 1 in
 let Defs = [A] in {
   def CP16 : Z80Inst<(outs Flags:$f), (ins GR16:$a, GR16:$b), "cp16 $a, $b", [(set i8:$f, (Z80cmp i16:$a, i16:$b))]>;
   def CP16i : Z80Inst<(outs Flags:$f), (ins GR16:$a, i16imm:$b), "cp16 $a, $b", [(set i8:$f, (Z80cmp i16:$a, (i16 imm:$b)))]>;
+  // sbc of the two byte pairs with the carry of the compare before: the carry out is the long's borrow.
+  def CP16C : Z80Inst<(outs Flags:$f), (ins GR16:$a, GR16:$b, Flags:$c, i8imm:$s), "cp16c $a, $b", [(set i8:$f, (Z80cmpc i16:$a, i16:$b, i8:$c, (i8 imm:$s)))]>;
+  def CP16Ci : Z80Inst<(outs Flags:$f), (ins GR16:$a, i16imm:$b, Flags:$c, i8imm:$s), "cp16c $a, $b", [(set i8:$f, (Z80cmpc i16:$a, (i16 imm:$b), i8:$c, (i8 imm:$s)))]>;
 }
 def BIT7_8 : Z80Inst<(outs Flags:$f), (ins GR8:$a), "bit 7, $a", [(set i8:$f, (Z80tsts i8:$a))]>;
 def BIT7_16 : Z80Inst<(outs Flags:$f), (ins GR16:$a), "bit7 $a", [(set i8:$f, (Z80tsts i16:$a))]>;
