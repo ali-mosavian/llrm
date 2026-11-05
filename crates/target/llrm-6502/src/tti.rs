@@ -173,6 +173,48 @@ impl Tti for Mos6502 {
         true
     }
 
+    /// Rule 2 of the inliner's policy (user 11-04): at `-O2`/`-O3` a byte of
+    /// growth must buy 3 clocks of call latency, weighted by the site's
+    /// frequency. Provisional until the corpus fixes it.
+    fn speed_inline_milliclocks_per_byte(&self) -> i64 {
+        3000
+    }
+
+    /// `jsr` and `rts`, and each argument byte through a cell (`lda`, `sta`).
+    fn call_sequence_cost(
+        &self,
+        shape: &CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        let bytes: i64 = shape
+            .arguments
+            .iter()
+            .map(|argument| match argument.byval_bytes {
+                Some(bytes) => bytes as i64,
+                None => argument.ty.map_or(1, |ty| self.parts(ty)),
+            })
+            .sum();
+        Some(match kind {
+            CostKind::CodeSize if self.code_size_bytes => Cost::of(3 + 4 * bytes),
+            CostKind::CodeSize | CostKind::SizeAndLatency => Cost::of(2 + bytes),
+            CostKind::RecipThroughput | CostKind::Latency => Cost::of(12 + 6 * bytes),
+        })
+    }
+
+    /// The soft-stack frame a callee with static allocas builds and tears
+    /// down: `rs0` adjusted both ways (30 clocks, `staticlocals`).
+    fn callee_frame_cost(
+        &self,
+        shape: &CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        (shape.callee_frame_bytes > 0).then(|| match kind {
+            CostKind::CodeSize if self.code_size_bytes => Cost::of(24),
+            CostKind::CodeSize | CostKind::SizeAndLatency => Cost::of(2),
+            CostKind::RecipThroughput | CostKind::Latency => Cost::of(30),
+        })
+    }
+
     // The same model counting encoded bytes where `CostKind::CodeSize` asks.
     fn inline_size_view(&self) -> Option<std::rc::Rc<dyn Tti>> {
         Some(std::rc::Rc::new(Mos6502 { code_size_bytes: true, ..*self }))
