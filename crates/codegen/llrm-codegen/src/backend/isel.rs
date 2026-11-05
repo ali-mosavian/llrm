@@ -596,18 +596,42 @@ pub fn convention_for_abi(
     if interrupt && widths.iter().any(|&one| one != 2) {
         return refuse("an interrupt handler's parameter that is not a register");
     }
-    // Row W64-1 (owner x86-m64, exit 2026-11-14): Win64's by-value structs,
-    // 128-bit integers and vectors are passed by the ABI's own rules (a
-    // pointer to a caller copy, XMM0, ...), not probed: refused, not guessed.
+    // Row W64-1 (owner x86-m64, exit 2026-11-14): Win64's by-value structs and
+    // vectors are passed by the ABI's own rules (a pointer to a caller copy,
+    // XMM0, ...), not probed: refused, not guessed. A 128-bit integer is two
+    // i64 words (CC_X86_Win64_C has no rule for it): refused only where the
+    // pair would straddle the fourth register, which the pin splits between
+    // R9 and the stack.
     if registers.is_some_and(|entry| entry.positional) {
+        let wide = |ty: TypeId| matches!(types.get(ty), Type::Int(128));
         let unprobed = |ty: TypeId| match types.get(ty) {
-            Type::Int(bits) => *bits > 64,
+            Type::Int(bits) => *bits > 128,
             Type::Vector { .. } => true,
             _ => false,
         };
         let shape = |index: usize| byval_type(parameter_attrs.get(index).map_or(&[], Vec::as_slice)).is_some();
         if param_types.iter().enumerate().any(|(index, &ty)| unprobed(ty) || shape(index)) || unprobed(result) {
-            return refuse("a Win64 by-value struct, 128-bit integer or vector argument or result (row W64-1)");
+            return refuse("a Win64 by-value struct, vector or integer wider than 128 bits (row W64-1)");
+        }
+        let registers_len = registers.map_or(0, |entry| entry.argument_registers.len());
+        let mut position = usize::from(
+            param_types
+                .iter()
+                .enumerate()
+                .any(|(index, _)| class_of(parameter_attrs.get(index).map_or(&[], Vec::as_slice)) == Some(llrm_mir::opcode::RESULT_POINTER)),
+        );
+        for (index, &ty) in param_types.iter().enumerate() {
+            if class_of(parameter_attrs.get(index).map_or(&[], Vec::as_slice)) == Some(llrm_mir::opcode::RESULT_POINTER) {
+                continue;
+            }
+            if wide(ty) {
+                if position + 1 == registers_len {
+                    return refuse("a Win64 128-bit integer split between R9 and the stack (row W64-1)");
+                }
+                position += 2;
+            } else {
+                position += 1;
+            }
         }
     }
     let mut parameters = Vec::new();
