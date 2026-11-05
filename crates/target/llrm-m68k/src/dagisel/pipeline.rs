@@ -241,7 +241,6 @@ impl DagTarget for M68kTarget<'_> {
     ) {
         if self.short {
             super::short::narrow(dag);
-            super::regimm::widen(dag);
         }
     }
 }

@@ -60,3 +60,22 @@ fn the_register_forms_compute_the_same() {
         assert_eq!(code, Some(((107 + (101 << 7)) & 255) as i32), "{cpu:?}");
     }
 }
+
+/// With every data register the function uses live across the `and`, the
+/// immediate form stays: the rewrite never adds a spill, a copy or a saved
+/// register (`d3` would cost a `movem`).
+#[test]
+fn no_free_data_register_keeps_the_immediate_form() {
+    let ir = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"
+define i32 @g(i32 %a, i32 %b) {
+  %m = and i32 %a, 15
+  %x = add i32 %m, %b
+  %y = add i32 %x, %a
+  %z = mul i32 %y, %b
+  ret i32 %z
+}
+";
+    let asm = assembly(ir, cpu_of("68020").unwrap(), Level::Os).unwrap_or_else(|why| panic!("{why}"));
+    assert!(asm.contains("and.l\t#15"), "{asm}");
+    assert!(!asm.contains("moveq\t#15") && !asm.contains("movem"), "{asm}");
+}
