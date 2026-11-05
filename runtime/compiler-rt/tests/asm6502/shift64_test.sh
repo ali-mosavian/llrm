@@ -1,9 +1,9 @@
 #!/bin/sh
-# usage: LLRM_CC=path/to/llrm-cc [MOS_RT=mos_rt.s] [CFG=0] tests/asm6502/shift64_test.sh -> the 6502 i64 shift libcalls against lib/int/int64.c on sim65: ten counts, three shifts, the exit code is
-# a byte fold of the results and must equal the host's. The shift libcall passes the count as a byte; with CFG=0 (no config/6502/config.h, an int count) the helper reads a garbage high byte and the fold differs.
+# usage: LLRM_CC=path/to/llrm-cc [MOS_RT=mos_rt.s] tests/asm6502/shift64_test.sh -> the 6502 i64 shift libcalls against lib/int/int64.c on sim65: ten counts, three shifts, the exit code is
+# a byte fold of the results and must equal the host's. A llrm-cc that passes the libcall count as an i8 (before #7392) against the helper's C `int n` makes the helper read a garbage high byte: exit 0, host 44.
 set -e
 cd "$(dirname "$0")/../.."; T=$(mktemp -d); trap 'rm -r $T' EXIT
-MOS_RT=${MOS_RT:-$PWD/../../crates/target/llrm-6502/runtime/mos_rt.s}; INC="-include $PWD/config/6502/config.h"; [ "${CFG-1}" = 0 ] && INC=
+MOS_RT=${MOS_RT:-$PWD/../../crates/target/llrm-6502/runtime/mos_rt.s}; INC="-include $PWD/config/6502/config.h"
 cat > $T/m.c <<'C'
 typedef unsigned long long u64; typedef long long i64;
 volatile unsigned char cnt[10] = {0, 1, 7, 8, 17, 31, 32, 33, 45, 63};

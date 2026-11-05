@@ -94,12 +94,8 @@ i64 SFB_NAME(moddi3)(i64 n, i64 d)
     return (i64)join(na ? neg(r) : r);
 }
 
-/* The count type: libgcc's int, or the target's shift-amount type when its libcall passes the count narrower (SFB_SHIFT_T from the config: 6502 passes a byte).
-   Shifts: libgcc's (value, count) signatures. A count of 64 or more gives 0, or the sign for the arithmetic shift. */
-#ifndef SFB_SHIFT_T
-#define SFB_SHIFT_T int
-#endif
-u64 SFB_NAME(ashldi3)(u64 x, SFB_SHIFT_T n)
+/* Shifts: libgcc's (value, int count) signatures. A count of 64 or more gives 0, or the sign for the arithmetic shift. */
+u64 SFB_NAME(ashldi3)(u64 x, int n)
 {
     pair a = split(x), r = { 0, 0 };
     if ((unsigned)n >= 64) return 0;
@@ -109,7 +105,7 @@ u64 SFB_NAME(ashldi3)(u64 x, SFB_SHIFT_T n)
     return join(r);
 }
 
-u64 SFB_NAME(lshrdi3)(u64 x, SFB_SHIFT_T n)
+u64 SFB_NAME(lshrdi3)(u64 x, int n)
 {
     pair a = split(x), r = { 0, 0 };
     if ((unsigned)n >= 64) return 0;
@@ -119,7 +115,7 @@ u64 SFB_NAME(lshrdi3)(u64 x, SFB_SHIFT_T n)
     return join(r);
 }
 
-i64 SFB_NAME(ashrdi3)(i64 x, SFB_SHIFT_T n)
+i64 SFB_NAME(ashrdi3)(i64 x, int n)
 {
     pair a = split((u64)x), r;
     uint32_t sign = (uint32_t)((int32_t)a.hi >> 31);
