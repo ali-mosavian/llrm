@@ -466,6 +466,13 @@ pub const fn step_cost(add: i64) -> i64 {
 /// Machine-neutral costs a MIR profitability decision may compare.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct OperationCosts {
+    /// The target's native integer width in bits where an operation on a wider
+    /// integer is several of the native one (an 8-bit machine adds an `i32` in
+    /// four byte adds): the prices of `add`, `load`, `store`, `move` and
+    /// `shift` are per native word and `profit::operation` multiplies them by
+    /// [`OperationCosts::words`]. 0: a price is for the operation as the type
+    /// has it, as on every target but the 6502.
+    pub native_bits: i64,
     pub add: i64,
     pub multiply: i64,
     pub divide: i64,
@@ -608,6 +615,15 @@ impl OperationCosts {
         }
     }
 
+    /// How many native words an integer of `bits` bits is: one where the
+    /// target states no native width.
+    pub fn words(
+        &self,
+        bits: u32,
+    ) -> i64 {
+        if self.native_bits > 0 { (i64::from(bits) + self.native_bits - 1) / self.native_bits } else { 1 }.max(1)
+    }
+
     /// What a caller pays to take `words` words of arguments off the stack.
     pub fn cleanup(
         &self,
@@ -653,6 +669,7 @@ pub fn three_operand(
 impl Default for OperationCosts {
     fn default() -> Self {
         Self {
+            native_bits: 0,
             add: 1,
             multiply: 1,
             divide: 1,

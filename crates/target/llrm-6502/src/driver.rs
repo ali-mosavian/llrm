@@ -356,8 +356,16 @@ impl llrm_mir::target::Machine for Mos6502Machine {
         llrm_mir::target::Neutral.spaces()
     }
 
+    /// Clocks and bytes of the sequences the backend emits, per native byte
+    /// (`crate::opcosts`); `byte_costs` falls back to the bytes.
     fn costs(&self) -> llrm_mir::target::OperationCosts {
-        llrm_mir::target::Neutral.costs()
+        static CLOCKS: std::sync::OnceLock<llrm_mir::target::OperationCosts> = std::sync::OnceLock::new();
+        CLOCKS.get_or_init(|| crate::opcosts::clocks(crate::dagisel::hooks::Cpu::Mos6502)).clone()
+    }
+
+    fn size_costs(&self) -> llrm_mir::target::OperationCosts {
+        static BYTES: std::sync::OnceLock<llrm_mir::target::OperationCosts> = std::sync::OnceLock::new();
+        BYTES.get_or_init(|| crate::opcosts::bytes(crate::dagisel::hooks::Cpu::Mos6502)).clone()
     }
 
     fn registers(&self) -> i64 {
