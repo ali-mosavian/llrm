@@ -92,7 +92,7 @@ fn copy_call(
 fn emit_intrinsic(
     unit: &mut Unit,
     site: &Site,
-    callee: llrm_mir::module::GlobalId,
+    callee: llrm_mir::context::GlobalId,
     function_type: TypeId,
     mut operands: Vec<Operand>,
     pointers: usize,

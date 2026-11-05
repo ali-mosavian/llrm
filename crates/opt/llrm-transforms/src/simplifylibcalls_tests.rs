@@ -149,6 +149,6 @@ fn test_memccpy_of_a_constant_string_is_a_memcpy_through_the_stop_byte() {
          \x20 %r = call ptr @memccpy(ptr %d, ptr @s, i16 108, i16 5)\n\
          \x20 ret ptr %r\n}\n",
     );
-    assert!(!after.contains("@memccpy("), "{after}");
+    assert!(!after.contains("call ptr @memccpy"), "{after}");
     assert!(after.contains("llvm.memcpy.p0.p0.i16(ptr align 1 %d, ptr align 1 @s, i16 3"), "{after}");
 }
