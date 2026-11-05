@@ -32,6 +32,11 @@ class Rule(unittest.TestCase):
         with self.assertRaises(SystemExit):
             folded(table)
 
+    def test_a_program_below_the_floor_has_no_main_and_is_not_judged(self):
+        # fsgs_call_callee on x86-m32: a callee file, smaller than the empty main
+        table = {"__empty__": {"Os": 11, "O2": 13}, "callee": {"Os": 5, "O2": 5}, "tiny": {"Os": 20, "O2": 20}}
+        self.assertEqual(sorted(folded(table)), ["tiny"])
+
     def test_an_exemption_names_its_reason(self):
         import tempfile
         with tempfile.NamedTemporaryFile("w", suffix=".allow", delete=False) as f:
