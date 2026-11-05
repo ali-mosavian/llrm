@@ -455,7 +455,7 @@ mod tests {
             ("mov_mr", Instruction::with2(Code::Mov_rm64_r64, slot(), RAX).unwrap()),
             ("mov_mi", Instruction::with2(Code::Mov_rm64_imm32, slot(), 1000i32).unwrap()),
             ("alu_mr", Instruction::with2(Code::Add_rm64_r64, slot(), RAX).unwrap()),
-            ("jcc", Instruction::with_branch(Code::Je_rel8_64, 2).unwrap()),
+            ("jcc", Instruction::with_branch(Code::Je_rel8_64, 0x1010).unwrap()),
             ("call_near", Instruction::with_branch(Code::Call_rel32_64, 0x1000).unwrap()),
             ("ret_near", Instruction::with(Code::Retnq)),
             ("pop_r", Instruction::with1(Code::Pop_r64, RAX).unwrap()),
@@ -474,13 +474,17 @@ mod tests {
             ("sse_move", Instruction::with2(Code::Movsd_xmm_xmmm64, XMM0, slot()).unwrap()),
             ("sse_compare", Instruction::with2(Code::Ucomisd_xmm_xmmm64, XMM0, XMM1).unwrap()),
             ("sse_logic", Instruction::with2(Code::Xorps_xmm_xmmm128, XMM0, XMM1).unwrap()),
-            ("rep_stos", Instruction::with_rep_stosq(64)),
+            ("rep_stos", Instruction::with_rep_stosq(64).unwrap()),
             ("mov_ri", Instruction::with2(Code::Mov_r32_imm32, EAX, 1000i32).unwrap()),
-            ("rep_movs", Instruction::with_rep_movsq(64)),
+            ("rep_movs", Instruction::with_rep_movsq(64).unwrap()),
         ];
         let text = include_str!("opcosts.txt");
         let table = text.split("[bytes]").nth(1).unwrap().split("\n[").next().unwrap();
-        let named = table.lines().filter(|line| !line.starts_with('#') && line.contains('=')).count();
+        // `*_cell` entries are the bytes per further cell of a repeated form, not instructions.
+        let named = table
+            .lines()
+            .filter(|line| !line.starts_with('#') && line.contains('=') && !line.contains("_cell"))
+            .count();
         assert_eq!(named, forms.len(), "a form in [bytes] has no encoding here");
         for (form, instruction) in forms {
             let mut encoder = Encoder::new(64);
