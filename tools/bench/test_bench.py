@@ -205,6 +205,18 @@ class ReferenceFloatTests(unittest.TestCase):
             self.assertGreater(got.get("instructions", 0), 0, got)
 
 
+@unittest.skipUnless(bench.references_available() and (bench.BORLAND["tcpp"][0] / "lib" / "CS.LIB").exists(), "needs Turbo C++ 3.0")
+class TurboCppTests(unittest.TestCase):
+    def test_a_turbo_cpp_program_links(self):
+        """tcpp links failed on `_isatty` (CM.LIB(SETUPIO) needs CS.LIB): every tcpp column was an error."""
+        import tempfile
+
+        variant = next(one for one in bench.variants(bench.BENCH / "floats") if one.language == "c")
+        with tempfile.TemporaryDirectory(dir=bench.llrmbin.target_dir()) as where:
+            built = bench.build_borland("tcpp", [(variant, "T000")], "O2", Path(where))["T000"]
+            self.assertNotIsInstance(built, str, built)
+
+
 SIZED = {"instructions": 100, "memory_operands": 40, "code_bytes": 200, "data_bytes": 10, "bss_bytes": 4}
 
 
@@ -1295,3 +1307,13 @@ def test_compare_runs_refuses_sides_measured_from_different_sources(tmp_path, ca
 
 def test_source_digests_change_with_the_program_source():
     assert bench.source_digests(["fib"])["fib"] != bench.source_digests(["queens"])["queens"]
+
+
+def test_a_reference_that_did_not_build_is_named_in_the_standing(tmp_path, monkeypatch):
+    """tcpp failed to link (`_isatty`) on every program and the standing printed no tcpp line at all: a broken column read as a missing one."""
+    (tmp_path / "x").mkdir()
+    (tmp_path / "x" / "bench.toml").write_text('[region]\nc = "f"\n')
+    monkeypatch.setattr(bench, "BENCH", tmp_path)
+    measured = {("x", "c", "O2"): dict(SIZED), ("x", "tcpp", "O2"): {"error": "link: E2028 _isatty"}}
+    text = "\n".join(bench.standing(measured, [], ["O2"]))
+    assert "REFERENCE BROKEN tcpp" in text and "E2028" in text, text
