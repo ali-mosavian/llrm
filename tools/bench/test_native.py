@@ -205,3 +205,24 @@ def test_pic_mode_reads_a_known_object_of_each_compiler_as_its_mode(compiler, tm
         obj = tmp_path / f"t{flag}.o"
         assert subprocess.run([*program, "-O2", flag, "-c", str(source), "-o", str(obj)], env=env).returncode == 0
         assert native.pic_mode(obj) == want, (compiler, flag)
+
+
+def test_a_compile_that_hangs_is_a_failed_row_naming_the_limit_and_leaves_no_child(tmp_path, monkeypatch):
+    """An orphaned `gcc` of x_hanoi2.O2 ran 11.5 h: subprocess.run(timeout=) killed the driver, not its children, and the hang was no row. A compile past the wall-clock limit is a failed row with the command and the limit, and its process group is dead."""
+    import os
+    import time
+
+    pidfile = tmp_path / "child.pid"
+    stub = tmp_path / "stub-cc"
+    stub.write_text(f"#!/bin/sh\nsleep 300 &\necho $! > {pidfile}\nwait\n")
+    stub.chmod(0o755)
+    monkeypatch.setattr(native, "compile_command", lambda *a, **k: ([str(stub)], dict(os.environ)))
+    monkeypatch.setattr(native, "COMPILE_SECONDS", 1)
+    started = time.monotonic()
+    why = native.compile_to("gcc64", tmp_path, tmp_path, tmp_path / "x.c", "O2", tmp_path / "x.o", tmp_path, ())
+    assert time.monotonic() - started < 30
+    assert why and "timed out after 1 s" in why and "stub-cc" in why, why
+    time.sleep(0.2)
+    pid = int(pidfile.read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
