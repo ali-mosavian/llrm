@@ -64,6 +64,8 @@ def physical_defines() -> list[str]:
     return [f"-DPHYSICAL_{name.upper()}=0x{address:X}UL" for name, address in tomllib.loads(text)["physical"].items()]
 
 
+# The module that defines `__doserror_`, which the shipped clibm.lib's creatdos/opendos ask for and its dictionary does not give (stft_single, which creates and opens files).
+DOSERROR_OBJ = Path(os.environ.get("LLRM_OW", Path.home() / "scratch/ow-src")) / "bld/clib/_dos/library/msdos.086/mm/error086.obj"
 OW = Path(os.environ.get("OW_BIN", Path.home() / "work/personal/open-watcom-v2/build/binbuild"))
 # Open Watcom's own medium-model C library, 8087 maths library and start-up (an OW v2 release; the tree's build of them
 # needs its generated headers and 16-bit bootstrap, which this checkout lacks)
@@ -332,6 +334,12 @@ def skip_lines(measured: dict) -> list[str]:
     return [f"SKIP {why} ({len({key[0] for key, value in measured.items() if value.get('skip') == why})} programs)" for why in sorted({value["skip"] for value in measured.values() if "skip" in value})]
 
 
+def note_lines(measured: dict) -> list[str]:
+    """One `NOTE reason (N cells)` line per distinct note on a kept row, so an annotated row is counted in the header, not only carried in the json."""
+    notes = [value["note"] for value in measured.values() if "note" in value]
+    return [f"NOTE {why} ({notes.count(why)} cells)" for why in sorted(set(notes))]
+
+
 def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
     """Counts of one built variant: the entry address from its map, the emulated run, the output check, and the bytes
     of its own object `obj` (tools/sizes.py): not the image, which holds the start-up and the libraries as well."""
@@ -377,15 +385,19 @@ def build_watcom(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Pat
     if done.returncode != 0 or not obj.exists():
         return "compile: " + (done.stderr or done.stdout).strip()[-300:]
     support = dosbatch.c_support(dosbatch.REAL_MODE, work)
+    extra: list[str] = []  # error086.obj, once the library turns out not to define `__doserror_`
     stack = 60 * 1024  # the most DGROUP holds: a deep recursion (recsum, 2000 frames) overran the 16K one into the code; a program with more data gets what is left
     while True:
         try:
             # Watcom names main `main_`; its start-up asks for `_cstart_` and the library calls it
             dosbatch._host([str(BIN / "jwlink"), "option", "quiet", "option", f"map={listing}", "option", "start=_cstart_", "option", f"stack={stack}", *dosbatch.linkrecipe.link(dosbatch.REAL_MODE, "format"), "name", str(exe),
-                            "libpath", str(OWLIB / "dos"), "libpath", str(OWLIB), "file", str(obj), *[word for one in support for word in ("file", str(one))],
+                            "libpath", str(OWLIB / "dos"), "libpath", str(OWLIB), "file", str(obj), *extra, *[word for one in support for word in ("file", str(one))],
                             "library", "clibm.lib", "library", "math87m.lib", "library", "noemu87.lib"])
             break
         except dosbatch.BuildError as error:
+            if "__doserror_ is an undefined reference" in str(error) and not extra and DOSERROR_OBJ.exists():
+                extra = ["file", str(DOSERROR_OBJ)]
+                continue
             over = re.search(r"DGROUP exceeds 64k by (\d+) bytes", str(error))
             if not over or stack <= 4096:
                 return f"build: {error}"
@@ -1308,6 +1320,7 @@ def main() -> int:
         args.json.with_name(args.json.name + ".provenance").write_text(json.dumps({name: {"sha": sha, "md5": md5} for name, (sha, md5) in recorded.items()}, indent=1) + "\n")
     print("HARNESS", basecounts.harness_digest())
     print(*skip_lines(measured), sep="\n")
+    print(*note_lines(measured), sep="\n")
     unbuilt = [f"{'/'.join(key)}: {value['error']}" for key, value in measured.items() if "error" in value and not value["error"].startswith("skipped: ")]
     if unbuilt and (args.record or args.no_judge):  # a base or leg with cells that did not build is no base: say how many, exit nonzero
         print(f"NOHEAD {len(unbuilt)} cells did not build:", *unbuilt[:20], sep="\n  ")

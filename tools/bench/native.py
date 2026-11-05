@@ -107,13 +107,13 @@ def pic_mode(obj: Path) -> str:
 
 
 def mismatch(row: dict, column: str, obj: Path, ours: Path) -> dict:
-    """`row`, or an error where the reported column's object is a different position-independence than ours (c64nopic) that the same program compiled to: a
-    pc-relative table beside an absolute one differs by a `lea` per access (hanoi2 -O2 read 10.6% behind clang with the pic one against the nopic one, 16% ahead
-    like for like)."""
+    """`row`, annotated "pc-rel vs abs data refs" where the reported column's object reaches data the other way than ours (c64nopic): a pc-relative table beside an
+    absolute one differs by a `lea` per access (hanoi2 -O2 read 10.6% behind clang with the pic one against the nopic one, 16% ahead like for like). A note, not an
+    error: parity/*/clang64 Os is pc-relative where ours writes `mov $sym`, as -fno-pic clang does by flag and the pin does by shape."""
     if column not in REPORTED or column == NOPIC or "error" in row or "skip" in row or not obj.exists() or not ours.exists():
         return row
     theirs, mine = pic_mode(obj), pic_mode(ours)
-    return row if "unknown" in (theirs, mine) or theirs == mine else {"error": f"pic mode: {column} is {theirs}, ours is {mine}"}
+    return row if "unknown" in (theirs, mine) or theirs == mine else {**row, "note": f"pc-rel vs abs data refs: {column} is {theirs}, ours is {mine}"}
 
 
 def checked_object(work: Path, program: str, column: str, opt: str) -> Path:
