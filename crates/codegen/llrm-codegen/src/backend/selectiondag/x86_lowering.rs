@@ -237,6 +237,20 @@ impl CombineHooks for X86Lowering<'_> {
         true
     }
 
+    /// `X86TargetLowering::shouldTransformSignedTruncationCheck`: a scalar
+    /// check whose type and kept width are both a size `movsx` takes (8, 16,
+    /// 32, 64). `(add x, 1<<(k-1)) u< 1<<k` then is `sext_inreg x, k == x`: no
+    /// 64-bit constant, one `movslq; cmp` for the add, the constant and the
+    /// compare.
+    fn should_transform_signed_truncation_check(
+        &self,
+        vt: EVT,
+        kept_bits: u32,
+    ) -> bool {
+        let movsx = |bits: u32| matches!(bits, 8 | 16 | 32 | 64);
+        vt.is_integer() && movsx(vt.size_in_bits()) && movsx(kept_bits)
+    }
+
     fn canonicalize_ge_le(&self) -> bool {
         true
     }
