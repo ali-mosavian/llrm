@@ -26,7 +26,7 @@ use super::fold::mask;
 use super::function_lowering::FunctionLoweringInfo;
 use super::isd::{CondCode, ISD};
 use super::mvt::{EVT, MVT};
-use super::target_calling::{Ext, In, Out, Site, TargetCalling};
+use super::target_calling::{ByVal, Ext, In, Out, Site, TargetCalling};
 use crate::backend::isel::{Convention, Parameter, convention_for};
 
 /// An instruction the builder does not translate yet; the shadow harness
@@ -1222,6 +1222,7 @@ impl Builder<'_> {
                 split,
                 sret: true,
                 ext: Ext::Any,
+                byval: None,
             }));
         }
         let hidden_parts = ins.len();
@@ -1236,6 +1237,9 @@ impl Builder<'_> {
             let at = parameters.iter().position(|one| *one == arg).unwrap_or(0);
             let attrs = self.function.parameter_attrs.get(at).map_or(&[][..], Vec::as_slice);
             let sret = has_sret(attrs);
+            // `CCPassByVal`: a target that copies the bytes into the argument
+            // area is told their size and alignment
+            let byval = if calling.byval_in_area() { self.byval_of(attrs) } else { None };
             let ext = if llrm_mir::memory::has(attrs, "signext") {
                 Ext::Sign
             } else if llrm_mir::memory::has(attrs, "zeroext") {
@@ -1250,7 +1254,7 @@ impl Builder<'_> {
                 let parts = self.calling_parts(vt)?;
                 leaves.push((vt, parts.len(), pointer));
                 let split = parts.len() > 1;
-                ins.extend(parts.into_iter().map(|part| In { vt: part, pointer, arg_vt: vt, split, sret, ext }));
+                ins.extend(parts.into_iter().map(|part| In { vt: part, pointer, arg_vt: vt, split, sret, ext, byval }));
             }
             shapes.push(leaves);
         }
@@ -1340,7 +1344,7 @@ impl Builder<'_> {
                 self.info.variadic_buffer = Some(reg);
             }
             let index = -(offsets.len() as i32 + 1);
-            if let Some(offset) = calling.variadic_frame_offset(ins.len()) {
+            if let Some(offset) = calling.variadic_frame_offset(&ins) {
                 self.dag.fixed_offsets.insert(index, offset);
             }
             self.dag.var_args_frame_index = Some(index);
@@ -2032,6 +2036,28 @@ impl Builder<'_> {
         relocating_attribute(attrs).is_some_and(|name| !calling.passes_in_place(name))
     }
 
+    /// `ArgFlags.getByValSize()` and `getNonZeroByValAlign()` of a parameter
+    /// or call argument with `attrs`: the pointee's size and the `align`
+    /// attribute (4 where absent, `CCPassByVal<4, 4>`'s minimum).
+    fn byval_of(
+        &self,
+        attrs: &[llrm_mir::opcode::Attribute],
+    ) -> Option<ByVal> {
+        use llrm_mir::opcode::Attribute;
+        let ty = attrs.iter().find_map(|attr| match attr {
+            Attribute::Type(name, ty) if name == "byval" => Some(*ty),
+            _ => None,
+        })?;
+        let align = attrs.iter().find_map(|attr| match attr {
+            Attribute::Int(name, value) if name == "align" => Some(*value),
+            _ => None,
+        });
+        Some(ByVal {
+            size: self.layout.alloc_size(&self.module.context.types, ty) as u32,
+            align: align.unwrap_or(4) as u32,
+        })
+    }
+
     fn calling(&self) -> Option<&'static dyn TargetCalling> {
         self.target.target_nodes.and_then(|t| t.calling)
     }
@@ -2153,7 +2179,11 @@ impl Builder<'_> {
         flags_answer: bool,
     ) -> Result<Option<SDValue>, Refused> {
         let sibling = std::mem::take(&mut self.sibcall);
-        if sibling || flags_answer || (byvals.iter().any(Option::is_some) && !calling.byval_by_reference()) {
+        let in_area = calling.byval_in_area();
+        if sibling
+            || flags_answer
+            || (byvals.iter().any(Option::is_some) && !calling.byval_by_reference() && !in_area)
+        {
             return Err(Refused("tail call, flags answer or byval with a target's calling hook"));
         }
         if std::mem::take(&mut self.call_attrs_move_arguments) {
@@ -2163,7 +2193,8 @@ impl Builder<'_> {
         let mut values = values.to_vec();
         for (value, byval) in values.iter_mut().zip(byvals) {
             let Some((size, align)) = *byval else { continue };
-            if size == 0 {
+            // the hook copies the bytes into the argument area itself
+            if size == 0 || in_area {
                 continue;
             }
             let opt_size = self.has_opt_size();
@@ -2202,6 +2233,12 @@ impl Builder<'_> {
                     split,
                     variadic: at >= variadic_from,
                     sret: sret_args.get(at).copied().unwrap_or(false),
+                    byval: byvals
+                        .get(at)
+                        .copied()
+                        .flatten()
+                        .filter(|_| in_area)
+                        .map(|(size, align)| ByVal { size: size as u32, align: align as u32 }),
                 });
             }
         }
@@ -2230,6 +2267,7 @@ impl Builder<'_> {
                     split,
                     variadic: false,
                     sret: true,
+                    byval: None,
                 })
                 .collect();
             outs.splice(0..0, hidden);
@@ -2260,6 +2298,7 @@ impl Builder<'_> {
                     split,
                     sret: false,
                     ext: Ext::Any,
+                    byval: None,
                 }));
             }
         }
@@ -2739,7 +2778,7 @@ impl Builder<'_> {
                 let pieces = self.split_for_calling(value, ext)?;
                 let split = pieces.len() > 1;
                 for piece in pieces {
-                    outs.push(Out { value: piece, ext, pointer, arg_vt, split, variadic: false, sret: false });
+                    outs.push(Out { value: piece, ext, pointer, arg_vt, split, variadic: false, sret: false, byval: None });
                 }
             }
         }
@@ -2755,6 +2794,7 @@ impl Builder<'_> {
                 split: false,
                 sret: false,
                 variadic: false,
+                byval: None,
             });
         }
         calling.accepts(&self.dag, Site::Return, &outs, &[]).map_err(Refused)?;
