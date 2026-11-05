@@ -264,7 +264,8 @@ impl Around for Loop {
         &self,
         function: &Function,
     ) -> Option<i64> {
-        let mut entering = function.predecessors(block(self.header)).into_iter().map(id).filter(|at| !self.body.contains(at));
+        let mut entering =
+            function.predecessors(block(self.header)).into_iter().map(id).filter(|at| !self.body.contains(at));
         let one = entering.next()?;
         if entering.next().is_some() {
             return None;

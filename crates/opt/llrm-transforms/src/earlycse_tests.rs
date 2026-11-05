@@ -266,8 +266,10 @@ fn test_the_memory_graph_early_cse_updated_is_the_one_the_next_pass_gets() {
 /// A pass that edits and keeps nothing still drops it: the graph after is new.
 #[test]
 fn test_the_memory_graph_is_computed_again_after_a_pass_that_keeps_nothing() {
-    let (_, misses) =
-        mssa_misses_over(vec![Box::new(crate::testing::AsksMssa { forgets: true }), Box::new(crate::testing::AsksMssa { forgets: false })]);
+    let (_, misses) = mssa_misses_over(vec![
+        Box::new(crate::testing::AsksMssa { forgets: true }),
+        Box::new(crate::testing::AsksMssa { forgets: false }),
+    ]);
     assert_eq!(misses, 2, "a pass that named nothing kept MemorySSA");
 }
 

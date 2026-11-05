@@ -504,18 +504,14 @@ pub fn run(
             )
             .unwrap_or_else(|why| panic!("licm: {why}"));
         }
-        check_graph(
-            unit,
-            graph.as_ref().expect("a graph"),
-            &|| {
-                format!(
-                    "the sinking and hoisting of the loop at {header:?}: {} sunk, {} hoisted, {} reassociated",
-                    sunk.len(),
-                    hoisted.len(),
-                    reassociated.len()
-                )
-            },
-        );
+        check_graph(unit, graph.as_ref().expect("a graph"), &|| {
+            format!(
+                "the sinking and hoisting of the loop at {header:?}: {} sunk, {} hoisted, {} reassociated",
+                sunk.len(),
+                hoisted.len(),
+                reassociated.len()
+            )
+        });
         let Some(preheader) = preheader else { continue };
         // The stores of a promotion go before the first instruction of each
         // exit block that is not a phi, taken before any promotion: the
@@ -570,11 +566,9 @@ pub fn run(
                 apply::promote(&mut *unit.function, &mut *unit.context, &mut kept, &site, found)
                     .unwrap_or_else(|why| panic!("licm: {why}"));
                 last_store = kept.last_store;
-                check_graph(
-                    unit,
-                    graph.as_ref().expect("a graph"),
-                    &|| format!("promoting {:?} out of the loop at {header:?}", found.pointers),
-                );
+                check_graph(unit, graph.as_ref().expect("a graph"), &|| {
+                    format!("promoting {:?} out of the loop at {header:?}", found.pointers)
+                });
                 decisions
                     .promoted
                     .push(

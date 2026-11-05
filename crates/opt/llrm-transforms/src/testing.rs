@@ -455,8 +455,8 @@ impl llrm_mir::passes::FunctionPass for AsksMssa {
     }
 }
 
-/// The MemorySSA computations (hits, misses) a pipeline of `passes` makes over `text`,
-/// each pass checked by `verify_invalidation` against a fresh build.
+/// The MemorySSA computations (hits, misses) a pipeline of `passes` makes over
+/// `text`, each pass checked by `verify_invalidation` against a fresh build.
 pub fn mssa_misses_over(
     text: &str,
     passes: Vec<Box<dyn llrm_mir::passes::FunctionPass>>,
