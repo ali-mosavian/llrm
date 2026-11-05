@@ -353,6 +353,9 @@ struct EstimatedUnrollCost {
     /// PL6: what the first iteration's instructions cost once counted (those a
     /// later iteration or a side effect needs), zero where not priced.
     first_iteration: u32,
+    /// The bytes of the instructions the copies keep (the analysis folds the rest): the
+    /// unit costs above are SizeAndLatency, and a call is about 8 of them and 8 bytes.
+    unrolled_bytes: i64,
     /// The multiplies and divides of one rolled trip, and of the first trip
     /// once counted: what the entry values make cheaper there is the peel's
     /// gain.
@@ -486,6 +489,7 @@ fn analyze_loop_unroll_cost(
     max_unrolled_loop_size: u32,
     max_iterations_count_to_analyze: u32,
     clocks: Option<&llrm_mir::target::OperationCosts>,
+    through_calls: bool,
 ) -> Option<EstimatedUnrollCost> {
     // Only analyze inner loops: the cost of nested loops cannot be estimated
     // and inner loops are not visited again.
@@ -504,6 +508,7 @@ fn analyze_loop_unroll_cost(
     let mut simplified_values = IdMap::<llrm_mir::module::ValueId, Operand>::new();
     let mut unrolled_cost = Cost::FREE;
     let mut first_iteration = Cost::FREE;
+    let mut unrolled_bytes = 0_i64;
     let mut heavy_rolled = Cost::FREE;
     let mut heavy_first = Cost::FREE;
     let mut heavy_folded = 0_i64;
@@ -654,7 +659,13 @@ fn analyze_loop_unroll_cost(
                         }
                         _ => true,
                     };
-                    if lowered {
+                    // DEVIATE UP1-CALL (owner x87, exit 2026-11-20: the pin's
+                    // `getInstructionCost` of a call or gcc's estimate prices it): the
+                    // pin gives up on a call, and the priced unroll then takes the
+                    // copies as the whole body (static_pointers: 7 x `push imm; call`
+                    // priced 305 B, was 6 B smaller). A call here is one instruction
+                    // the copies keep, with the operands that feed it.
+                    if lowered && !through_calls {
                         why(run, lp, "cannot analyze: a call");
                         return None;
                     }
@@ -671,6 +682,7 @@ fn analyze_loop_unroll_cost(
                         &mut inst_cost_map,
                         &mut unrolled_cost,
                         &mut first_iteration,
+&mut unrolled_bytes,
                         &mut heavy_first,
                         kind,
                         clocks,
@@ -769,6 +781,7 @@ fn analyze_loop_unroll_cost(
                 &mut inst_cost_map,
                 &mut unrolled_cost,
                 &mut first_iteration,
+&mut unrolled_bytes,
                 &mut heavy_first,
                 kind,
                 clocks,
@@ -804,6 +817,7 @@ fn analyze_loop_unroll_cost(
                     &mut inst_cost_map,
                     &mut unrolled_cost,
                     &mut first_iteration,
+&mut unrolled_bytes,
                     &mut heavy_first,
                     kind,
                     clocks,
@@ -820,6 +834,7 @@ fn analyze_loop_unroll_cost(
         unrolled_cost: unrolled_cost.value as u32,
         rolled_dynamic_cost: rolled_dynamic_cost.value as u32,
         first_iteration: first_iteration.value as u32,
+        unrolled_bytes,
         heavy_rolled: heavy_rolled.value as u32,
         heavy_first: heavy_first.value as u32,
         heavy_folded: heavy_folded as u32,
@@ -867,6 +882,7 @@ fn add_cost_recursively(
     inst_cost_map: &mut llrm_support::hash::HashMap<(InstId, u32), InstState>,
     unrolled_cost: &mut Cost,
     first_iteration: &mut Cost,
+    unrolled_bytes: &mut i64,
     heavy_first: &mut Cost,
     kind: CostKind,
     clocks: Option<&llrm_mir::target::OperationCosts>,
@@ -943,6 +959,11 @@ fn add_cost_recursively(
                         Cost::of,
                     );
                 *unrolled_cost = *unrolled_cost + price;
+                if !matches!(operation.opcode, Opcode::Phi | Opcode::GetElementPtr { .. } | Opcode::ICmp(_)) {
+                    let size = run.outer.target().size_costs();
+                    *unrolled_bytes += crate::profit::operation(run.context, run.layout, run.function, run.callees, inst, &size)
+                        .unwrap_or(size.add);
+                }
                 if iteration == 0 {
                     *first_iteration = *first_iteration + price;
                     if is_heavy(&operation.opcode) {
@@ -1023,6 +1044,7 @@ fn should_full_unroll(
         max_unrolled_loop_size,
         up.max_iterations_count_to_analyze,
         None,
+        false,
     ) {
         let boost = full_unroll_boosting_factor(&cost, up.max_percent_threshold_boost);
         let boosted_threshold = (u64::from(up.threshold) * u64::from(boost) / 100) as u32;
@@ -1189,7 +1211,7 @@ fn peels_folded_entry(
     let costs = crate::profit::costs(run.outer);
     // One trip, read for what the entry values change in its multiplies and
     // divides (what only feeds a next trip is not in that count).
-    let Some(cost) = analyze_loop_unroll_cost(run, se, analyzed, lp, 1, eph, u32::MAX, 1, Some(&costs)) else {
+    let Some(cost) = analyze_loop_unroll_cost(run, se, analyzed, lp, 1, eph, u32::MAX, 1, Some(&costs), false) else {
         return false;
     };
     // The multiplies and divides the first trip's entry values remove or
