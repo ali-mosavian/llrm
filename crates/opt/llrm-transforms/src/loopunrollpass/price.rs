@@ -40,7 +40,10 @@ pub(super) fn full_unroll_pays(
     up: &UnrollingPreferences,
 ) -> bool {
     let rate = run.tti.unroll_milliclocks_per_byte();
-    if rate <= 0 || run.options.opt_size || run.options.min_size || run.options.opt_level < 2 {
+    // The early LoopFullUnrollPass unrolls a callee before the inliner sees it
+    // (the pin's order): a veto here leaves a small rolled helper that is then
+    // inlined, and unrolled, at every site (jpeg_fixed -O2 +530 B).
+    if !run.options.target_unrolling || rate <= 0 || run.options.opt_size || run.options.min_size || run.options.opt_level < 2 {
         return true;
     }
     // A loop of known trips in a nest of loops of known trips is a step to
