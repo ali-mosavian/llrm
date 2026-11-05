@@ -1066,6 +1066,17 @@ impl Builder<'_> {
                     _ if strings_exist && matches!(which, Intrinsic::MemCpy) && !self.runtime_has("memcpy") => {
                         self.rep_movs_dwords(root, dst, other, size)
                     }
+                    // DEVIATE MEM-1: a length known at run time is `rep movsd`
+                    // inline at speed where the target's tuning says so (the pin
+                    // calls `memcpy`)
+                    _ if strings_exist
+                        && matches!(which, Intrinsic::MemCpy)
+                        && constant.is_none()
+                        && !opt_size
+                        && self.target.tuning.inline_variable_memcpy =>
+                    {
+                        self.rep_movs_dwords(root, dst, other, size)
+                    }
                     // a move a pass proved forward, past the inline limit: `rep
                     // movs` ascends, as the move needs (DEVIATE: the pin calls
                     // `memmove`; at m16 the old selector inlines it, 2.2x on

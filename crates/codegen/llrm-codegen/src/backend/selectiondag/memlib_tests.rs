@@ -215,3 +215,17 @@ fn a_constant_clear_for_size_without_memset_steps_by_whole_words() {
     let dump = built_from(module, "clear", &BuilderTarget::m32().with_libcalls(&[])).expect("builds");
     assert!(dump.contains("$ecx, Constant:i32<64>") && dump.contains("ValueType:ch:i32"), "{dump}");
 }
+
+/// x_mergesort -O3 at m32: the three copy loops of `msort` became `call
+/// _memcpy` (three pushes, the call, the callee's setup: ~35 clk each, 72146
+/// clk against 54487 with the loops left). With the target's tuning bit a
+/// variable length is `rep movsd` inline at speed, and the call at size.
+#[test]
+fn a_variable_copy_is_rep_movs_at_speed_where_the_tuning_says_so() {
+    let mut target = BuilderTarget::m32().with_libcalls(&["memcpy"]);
+    let before = built("copy", &target).expect("builds");
+    assert!(before.contains("'memcpy'") && !before.contains("REP_MOVS"), "premise: the pin's call\n{before}");
+    target.tuning.inline_variable_memcpy = true;
+    let after = built("copy", &target).expect("builds");
+    assert!(after.contains("REP_MOVS") && !after.contains("'memcpy'"), "{after}");
+}

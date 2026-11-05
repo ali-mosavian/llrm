@@ -92,6 +92,11 @@ pub struct Tuning {
     /// it reads is made on its own path (`Tti::sinks_select_arms`). false: the
     /// pin's, both operands before the branch.
     pub sink_select_arms: bool,
+    /// DEVIATE MEM-1: an `llvm.memcpy` of a length known only at run time, in
+    /// a function not tuned for size, is `rep movsd` and `rep movsb` inline,
+    /// not a call of `memcpy` (gcc's `rep_prefix_4_byte` stringop strategy for
+    /// the 486 and P5). false: the pin's `EmitTargetCodeForMemcpy`, a libcall.
+    pub inline_variable_memcpy: bool,
 }
 
 impl Tuning {
@@ -121,6 +126,7 @@ impl Tuning {
         recursive_edge_growth: None,
         peel_folded_entry: false,
         sink_select_arms: false,
+        inline_variable_memcpy: false,
     };
 }
 

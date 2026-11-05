@@ -95,6 +95,13 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         recursive_edge_growth: Some((12, 22)),
         peel_folded_entry: true,
         sink_select_arms: true,
+        // DEVIATE MEM-1 (the pin's `EmitTargetCodeForMemcpy`, X86SelectionDAGInfo.cpp
+        // L328, leaves a variable length to a libcall): at -O2/-O3 on the 486
+        // and P5, the only CPUs this target accepts, it is `rep movsd` inline,
+        // as gcc's `rep_prefix_4_byte`. x_mergesort -O3: three copy loops of
+        // 1-3 element tails became `call _memcpy` (~35 clk each, 72146 clk
+        // against 54487 with the loops left). Owner w2. Exit 2026-11-20.
+        inline_variable_memcpy: true,
         ..llrm_mir::target::Tuning::PIN
     }
 }
