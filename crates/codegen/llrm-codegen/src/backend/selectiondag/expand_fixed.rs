@@ -2,6 +2,8 @@
 //! ([L12704](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L12704))
 //! and `expandShlSat`
 //! ([L12541](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L12541)),
+//! and `expandCMP`
+//! ([L12505](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L12505)),
 //! for the operation legalizer.
 //!
 //! The vector forms are not translated; this target has no vector types.
@@ -153,6 +155,37 @@ pub fn expand_shl_sat(
     };
     let overflowed = dag.get_setcc(bool_vt, lhs, original, CondCode::SetNe);
     dag.get_select(vt, overflowed, saturated, result)
+}
+
+/// `expandCMP` for `SCMP` and `UCMP`: `(lhs > rhs) - (lhs < rhs)` in the
+/// boolean type, or two selects when the boolean is one bit wide or its high
+/// bits are undefined. (`preferSelectsOverBooleanArithmetic` is false for the
+/// targets that reach this.)
+pub fn expand_cmp(
+    dag: &mut SelectionDAG,
+    tli: &TargetLowering,
+    node: SDValue,
+) -> SDValue {
+    use super::dag::BooleanContents;
+    let unsigned = dag.opcode(node) == ISD::UCmp;
+    let (lhs, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
+    let vt = dag.value_type(lhs);
+    let result = dag.value_type(node);
+    let bool_vt = tli.types.set_cc_result_type(vt);
+    let (lt, gt) = if unsigned { (CondCode::SetULt, CondCode::SetUGt) } else { (CondCode::SetLt, CondCode::SetGt) };
+    let mut is_lt = dag.get_setcc(bool_vt, lhs, rhs, lt);
+    let mut is_gt = dag.get_setcc(bool_vt, lhs, rhs, gt);
+    if bool_vt.size_in_bits() == 1 {
+        let (one, zero) = (dag.get_constant(1, result), dag.get_constant(0, result));
+        let zero_or_one = dag.get_select(result, is_gt, one, zero);
+        let minus_one = dag.get_all_ones_constant(result);
+        return dag.get_select(result, is_lt, minus_one, zero_or_one);
+    }
+    if dag.config().boolean_contents == BooleanContents::ZeroOrNegativeOne {
+        std::mem::swap(&mut is_gt, &mut is_lt);
+    }
+    let difference = dag.get_node(ISD::Sub, bool_vt, &[is_gt, is_lt]);
+    dag.get_sext_or_trunc(difference, result)
 }
 
 /// `forceExpandWideMUL` ([L12637][wide]): the product of two `lhs`-wide values

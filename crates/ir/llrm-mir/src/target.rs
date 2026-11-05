@@ -113,6 +113,10 @@ pub struct Tuning {
     /// at (-O2, -O3), in `gcc_insns` (gcc's `max-inline-insns-recursive`, 450);
     /// none: `inline::MAX_INLINE_INSNS_RECURSIVE`.
     pub recursive_inlining_growth: Option<(i64, i64)>,
+    /// DEVIATE REC-2: at (-O2, -O3) a tree recursion's tail calls are eliminated before it is
+    /// copied into itself (gcc: `pass_tail_recursion` runs early, `passes.def` before `pass_ipa_inline`),
+    /// not after (D10).
+    pub recursive_tre_first: (bool, bool),
     /// DEVIATE PL6: the first iteration of an innermost loop is peeled where
     /// its entry constants fold enough of the body to pay the copy at the
     /// speed rate (`Tti::peels_folded_entry`). false: the pin's
@@ -173,6 +177,7 @@ impl Tuning {
         recursive_inlining: None,
         recursive_edge_growth: None,
         recursive_inlining_growth: None,
+        recursive_tre_first: (false, false),
         peel_folded_entry: false,
         unroll_milliclocks_per_byte: 0,
         sink_select_arms: false,
@@ -466,6 +471,13 @@ pub const fn step_cost(add: i64) -> i64 {
 /// Machine-neutral costs a MIR profitability decision may compare.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct OperationCosts {
+    /// The target's native integer width in bits where an operation on a wider
+    /// integer is several of the native one (an 8-bit machine adds an `i32` in
+    /// four byte adds): the prices of `add`, `load`, `store`, `move` and
+    /// `shift` are per native word and `profit::operation` multiplies them by
+    /// [`OperationCosts::words`]. 0: a price is for the operation as the type
+    /// has it, as on every target but the 6502.
+    pub native_bits: i64,
     pub add: i64,
     pub multiply: i64,
     pub divide: i64,
@@ -608,6 +620,15 @@ impl OperationCosts {
         }
     }
 
+    /// How many native words an integer of `bits` bits is: one where the
+    /// target states no native width.
+    pub fn words(
+        &self,
+        bits: u32,
+    ) -> i64 {
+        if self.native_bits > 0 { (i64::from(bits) + self.native_bits - 1) / self.native_bits } else { 1 }.max(1)
+    }
+
     /// What a caller pays to take `words` words of arguments off the stack.
     pub fn cleanup(
         &self,
@@ -653,6 +674,7 @@ pub fn three_operand(
 impl Default for OperationCosts {
     fn default() -> Self {
         Self {
+            native_bits: 0,
             add: 1,
             multiply: 1,
             divide: 1,

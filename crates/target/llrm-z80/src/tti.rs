@@ -43,18 +43,6 @@ use crate::driver::Level;
 use crate::target::Z80;
 use crate::timing::cost;
 
-/// Whether a spill slot may be a `push` and a `pop` at `level`.
-///
-/// Only where bytes decide (`-Os`, `-Oz`). At -O2 and -O3 the conversion lost
-/// the frame-bottom peek (`pop bc; push bc`, 21 T against 38 T through IX) on
-/// a slot read all through a loop: div_constants_short -O2 +290,566 T, nine
-/// functions 51,353 T slower and three 57,055 T faster (executed splice), a
-/// loss the loop-weighted price cannot see (no branch frequencies).
-/// Exit: a stack-top slot read by pop and push (row Z80-SS-O2, by 2026-11-20).
-pub fn spills_as_push_pop(level: Level) -> bool {
-    matches!(level, Level::Os | Level::Oz)
-}
-
 /// The bytes and T-states of `forms`, each taken on its taken path.
 fn sum(forms: &[&str]) -> (i64, i64) {
     forms
