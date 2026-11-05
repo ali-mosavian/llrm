@@ -45,6 +45,12 @@ fn is_cond(inst: &Inst) -> bool {
     matches!(inst.opcode, op::BR_IF | op::BR_UNLESS)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many successor lists `Tails::successors` built.
+    static SUCCESSOR_LISTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 struct Tails<'a> {
     f: &'a mut Function,
     /// The blocks in layout order.
@@ -106,7 +112,9 @@ impl TailMergeFunction for Tails<'_> {
         &self,
         block: usize,
     ) -> Vec<usize> {
-        let mut out = Vec::new();
+        #[cfg(test)]
+        SUCCESSOR_LISTS.with(|count| count.set(count.get() + 1));
+        let mut out = Vec::with_capacity(self.f.succs[block].len());
         for &to in &self.f.succs[block] {
             if !out.contains(&to) {
                 out.push(to);
@@ -121,10 +129,24 @@ impl TailMergeFunction for Tails<'_> {
     ) -> Vec<usize> {
         let mut cache = self.preds.borrow_mut();
         let preds = cache.get_or_insert_with(|| {
-            let mut preds = vec![Vec::new(); self.f.blocks.len()];
+            // Each list is sized once: an edge counts once per block it leaves,
+            // however many of that block's branches name the target.
+            let mut counts = vec![0usize; self.f.blocks.len()];
+            let mut last = vec![usize::MAX; self.f.blocks.len()];
             for &from in &self.layout {
-                for to in self.successors(from) {
-                    preds[to].push(from);
+                for &to in &self.f.succs[from] {
+                    if last[to] != from {
+                        last[to] = from;
+                        counts[to] += 1;
+                    }
+                }
+            }
+            let mut preds: Vec<Vec<usize>> = counts.into_iter().map(Vec::with_capacity).collect();
+            for &from in &self.layout {
+                for &to in &self.f.succs[from] {
+                    if preds[to].last() != Some(&from) {
+                        preds[to].push(from);
+                    }
                 }
             }
             preds
@@ -441,5 +463,20 @@ mod tests {
         assert!(tail_merge(&mut f, false));
         assert_eq!(consts(&f, 10..13), 3);
         succs_match_code(&f);
+    }
+
+    /// Rebuilding the predecessors after every edge change called
+    /// `successors` for every block, one fresh growing list each: 410 k lists
+    /// and 151 M Ir (6%) in wasm `div_constants_long`. The cache builds from
+    /// the edges, none of those lists, and a block that branches twice to one
+    /// target is its predecessor once.
+    #[test]
+    fn the_predecessors_are_built_without_a_list_per_block() {
+        let mut f = two_arms();
+        f.succs = vec![vec![1, 2, 1], vec![], vec![]];
+        let tails = Tails { f: &mut f, layout: vec![0, 1, 2], for_size: false, preds: std::cell::RefCell::new(None) };
+        SUCCESSOR_LISTS.with(|count| count.set(0));
+        assert_eq!((tails.predecessors(1), tails.predecessors(2), tails.predecessors(0)), (vec![0], vec![0], vec![]));
+        assert_eq!(SUCCESSOR_LISTS.with(std::cell::Cell::get), 0);
     }
 }
