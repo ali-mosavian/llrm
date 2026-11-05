@@ -2419,6 +2419,44 @@ fn a_long_multiply_links_the_compact_routine_at_every_level() {
     }
 }
 
+/// LSR left every 16- and 32-bit induction variable of the 6502 alone (its
+/// datalayout is `n8`, so the pin's `IVUsers` found none): `x[i] = n * i` called
+/// `__mulsi3` on every trip, 56k of shrink_wrapped_frame's 64k clocks. At speed
+/// the 32-bit product is a running sum.
+#[test]
+fn a_32_bit_product_of_the_counter_is_a_running_sum_at_speed() {
+    let ir = module(
+        "define i32 @f(i32 %n) {
+entry:
+  %a = alloca [16 x i32], align 1
+  br label %fill
+fill:
+  %i = phi i32 [ 0, %entry ], [ %next, %fill ]
+  %product = mul nuw nsw i32 %i, %n
+  %index = trunc i32 %i to i16
+  %slot = getelementptr inbounds [4 x i8], ptr %a, i16 %index
+  store i32 %product, ptr %slot, align 1
+  %next = add nuw nsw i32 %i, 1
+  %filled = icmp eq i32 %next, 16
+  br i1 %filled, label %sum, label %fill
+sum:
+  %j = phi i32 [ 0, %fill ], [ %jn, %sum ]
+  %total = phi i32 [ 0, %fill ], [ %t, %sum ]
+  %jx = trunc i32 %j to i16
+  %cell = getelementptr inbounds [4 x i8], ptr %a, i16 %jx
+  %v = load i32, ptr %cell, align 1
+  %t = add i32 %total, %v
+  %jn = add nuw nsw i32 %j, 1
+  %done = icmp eq i32 %jn, 16
+  br i1 %done, label %exit, label %sum
+exit:
+  ret i32 %t
+}",
+    );
+    let fast = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(!fast.contains("__mulsi3"), "{fast}");
+}
+
 /// A `byval` argument of 40 bytes is copied by a call of `memcpy` the builder
 /// names itself; the 6502 left its callee an `ExternalSymbol` and refused
 /// (`CannotSelect("ExternalSymbol")`: byval_struct, byval_inline and
