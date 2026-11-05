@@ -2406,15 +2406,15 @@ fn function_text(
     rest[..end].to_owned()
 }
 
-/// A long multiply of two variables calls the variant that stops at the last
-/// set byte of the multiplier where clocks count, and the 19 bytes shorter
-/// walk of all 32 bits tuned for size (shrink_wrapped_frame: 159k clocks v
-/// gcc's 19k).
+/// `__mulsi3_fast` linked 19 bytes more into 13 of 72 programs and ran faster
+/// in 11; in struct_with_i64 and frame_address_stack_args the multiply never
+/// runs and the bytes were all cost. A long multiply calls `__mulsi3` at every
+/// level until a priced rule picks the variant.
 #[test]
-fn a_long_multiply_of_variables_calls_the_variant_for_the_level() {
+fn a_long_multiply_links_the_compact_routine_at_every_level() {
     let ir = module("define i32 @f(i32 %a, i32 %b) {\n  %r = mul i32 %a, %b\n  ret i32 %r\n}");
-    let fast = assembly(&ir, &Request::new(Level::O2)).unwrap();
-    assert!(fast.contains("__mulsi3_fast"), "{fast}");
-    let small = assembly(&ir, &Request::new(Level::Os)).unwrap();
-    assert!(small.contains("__mulsi3") && !small.contains("__mulsi3_fast"), "{small}");
+    for level in [Level::O2, Level::Os] {
+        let text = assembly(&ir, &Request::new(level)).unwrap();
+        assert!(text.contains("__mulsi3") && !text.contains("__mulsi3_fast"), "{text}");
+    }
 }
