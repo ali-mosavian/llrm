@@ -3039,3 +3039,44 @@ fn a_literal_made_into_a_cell_is_stored_from_the_index_register_that_holds_it() 
     let read = "  ldy #0\n  pha\n  lda #0\n  sta rc8\n  pla\n  beq l\n  rts\n";
     assert_eq!(pass(drop_known_loads, read), read, "the branch reads the flags pla set");
 }
+
+/// A pointer's halves read for a word compare: `ldy rc7; lda rc6; cmp rc2; bne l; tya; cmp rc3`.
+#[test]
+fn a_high_half_loaded_into_y_and_moved_to_a_is_loaded_into_a() {
+    use llrm_6502::peephole::load_straight_into_a;
+    assert_eq!(
+        pass(
+            load_straight_into_a,
+            "  ldy rc7\n  lda rc6\n  cmp rc2\n  bne l\n  tya\n  cmp rc3\nl:\n  bne top\n  ldy #0\n  rts\ntop:\n  ldy #0\n  rts\n"
+        ),
+        "  lda rc6\n  cmp rc2\n  bne l\n  lda rc7\n  cmp rc3\nl:\n  bne top\n  ldy #0\n  rts\ntop:\n  ldy #0\n  rts\n"
+    );
+}
+
+/// `adc #3; tax; lda rc1; adc #0; tay; stx rc6; sty rc7` (a frame address, x16
+/// crunch): the sums are in `a` when transferred, so they are stored there.
+/// Kept: the register read between, the cell touched between, the register
+/// live after, a label between.
+#[test]
+fn a_byte_transferred_to_an_index_register_to_be_stored_is_stored_from_a() {
+    use llrm_6502::peephole::store_before_transfer;
+    assert_eq!(
+        pass(
+            store_before_transfer,
+            "  clc\n  lda rc0\n  adc #3\n  tax\n  lda rc1\n  adc #0\n  tay\n  stx rc6\n  sty rc7\n  ldy #0\n  sta (rc6),y\n  ldx #0\n  rts\n"
+        ),
+        "  clc\n  lda rc0\n  adc #3\n  sta rc6\n  lda rc1\n  adc #0\n  sta rc7\n  ldy #0\n  sta (rc6),y\n  ldx #0\n  rts\n"
+    );
+    for kept in [
+        // the register is read between
+        "  lda rc0\n  tax\n  lda rc1\n  sta rc5,x\n  stx rc6\n  ldx #0\n  rts\n",
+        // the cell is read between
+        "  lda rc0\n  tax\n  lda rc6\n  stx rc6\n  ldx #0\n  rts\n",
+        // the register is live after
+        "  lda rc0\n  tax\n  lda rc1\n  stx rc6\n  txa\n  rts\n",
+        // a label between
+        "  lda rc0\n  tax\nl:\n  lda rc1\n  stx rc6\n  ldx #0\n  rts\n",
+    ] {
+        assert_eq!(pass(store_before_transfer, kept), kept);
+    }
+}

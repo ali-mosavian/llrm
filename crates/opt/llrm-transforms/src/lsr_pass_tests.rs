@@ -1731,3 +1731,37 @@ fn a_loop_the_pin_makes_a_pointer_of_stays_one_when_end_biased_formulae_exist_in
     let after = reduced_real(QUEENS_INNER, &six_registers());
     assert!(after.contains("phi ptr"), "{after}");
 }
+
+/// An unroll's remainder loop (`n & 3` trips at most three) stored through
+/// `@g`: counting from `-4*trips` up to zero saves a compare a trip and costs
+/// a shift, a negate and an add before the loop. In `recchop` that was +14 B
+/// and +4% cycles against the pin's count-up with a compare.
+#[test]
+fn a_remainder_loop_of_few_trips_keeps_its_count_up_compare() {
+    let (changed, after) = reduced_on(
+        FLAT,
+        "@g = global [64 x i32] zeroinitializer
+define void @f(i32 %n, i32 %init) {
+entry:
+  %t = and i32 %n, 3
+  %go = icmp ne i32 %t, 0
+  br i1 %go, label %loop, label %exit
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %k = add nuw nsw i32 %init, %i
+  %a = getelementptr i32, ptr @g, i32 %k
+  %v = load i32, ptr %a
+  store i32 %v, ptr %a
+  %next = add nuw nsw i32 %i, 1
+  %c = icmp eq i32 %next, %t
+  br i1 %c, label %exit, label %loop
+exit:
+  ret void
+}
+",
+        "core2",
+        &[&[1, 0], &[2, 3], &[3, 5]],
+    );
+    let _ = changed;
+    assert!(!after.contains("-4"), "{after}");
+}
