@@ -58,9 +58,6 @@ impl CombineHooks for Asks {
     fn reassociate_compare_pairs(&self) -> bool {
         true
     }
-    fn simplify_demanded_add_sub_mul(&self) -> bool {
-        true
-    }
     fn store_fp_constant_as_i64(&self) -> bool {
         true
     }
@@ -653,23 +650,14 @@ fn masked_add_of_a_high_constant(dag: &mut SelectionDAG) {
 }
 
 /// `(x + 0xff) & 0xff` kept the addend: every demanded bit of it is set, so the
-/// pin makes it `-1` (`SimplifyDemandedBits`, `ADD`).
+/// pin makes it `-1` (`SimplifyDemandedBits`, `ADD`), for every target.
 #[test]
-fn an_addend_of_all_demanded_ones_is_minus_one_where_the_target_asks() {
+fn an_addend_of_all_demanded_ones_is_minus_one() {
     let mut dag = dag();
     masked_add_of_a_high_constant(&mut dag);
     DagCombiner::new(&mut dag, &mut Asks, CombineLevel::BeforeLegalizeTypes).run();
     let sum = dag.operand(dag.get_root(), 0);
     assert_eq!(dag.constant(dag.operand(sum, 1)), Some(u128::from(u32::MAX)));
-}
-
-#[test]
-fn a_target_that_does_not_ask_keeps_the_addend() {
-    let mut dag = dag();
-    masked_add_of_a_high_constant(&mut dag);
-    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
-    let sum = dag.operand(dag.get_root(), 0);
-    assert_eq!(dag.constant(dag.operand(sum, 1)), Some(0xff));
 }
 
 fn volatile_double_store(dag: &mut SelectionDAG) {

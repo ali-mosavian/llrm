@@ -115,6 +115,11 @@ fn pointer(register: RegId) -> Result<&'static str, String> {
     if is_pair(register) { Ok(name(register)) } else { Err(format!("{} is no pointer pair", name(register))) }
 }
 
+thread_local! {
+    /// Set while a variant is priced: the printer leaves its peepholes out.
+    pub static PRICING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 fn is_pair(register: RegId) -> bool {
     register == reg::BC || register == reg::DE || register == reg::HL
 }
@@ -351,8 +356,10 @@ impl Printer<'_> {
                 self.push(format!("{mnemonic} {to}"));
             }
             "ADD16" => {
-                let source = name_of(self, 2)?;
-                self.push(format!("add hl, {source}"));
+                let source = self.register(inst, 2)?;
+                if !self.add_small_constant(source, rest) && !self.step_pair_through_hl(source, rest) {
+                    self.push(format!("add hl, {}", name(source)));
+                }
             }
             "SUB16" => {
                 let source = name_of(self, 2)?;
@@ -807,6 +814,80 @@ impl Printer<'_> {
         Ok(())
     }
 
+    /// `ld rr, #k` then `add hl, rr` with k in 2..=3 or -3..=-2, `rr` and the
+    /// carry dead after: `inc hl` / `dec hl` k times, 2-3 B against 4 B. It is
+    /// done here, not in selection, where a pointer that stays live needs a
+    /// copy and the allocation gets worse.
+    fn add_small_constant(
+        &mut self,
+        source: RegId,
+        rest: &[Inst],
+    ) -> bool {
+        if PRICING.with(|one| one.get()) {
+            return false;
+        }
+        let Some(Line::Inst(last)) = self.out.last() else { return false };
+        let Some(value) = last
+            .strip_prefix("ld ")
+            .and_then(|text| text.strip_prefix(name(source)))
+            .and_then(|text| text.strip_prefix(", #"))
+            .and_then(|text| text.parse::<i32>().ok())
+        else {
+            return false;
+        };
+        let value = if value >= 0x8000 { value - 0x1_0000 } else { value };
+        if !(2..=3).contains(&value.abs()) || !is_pair(source) || source == reg::HL {
+            return false;
+        }
+        if !self.flags_dead(rest) || !self.pair_dead_after(source, rest) {
+            return false;
+        }
+        self.out.pop();
+        for _ in 0..value.abs() {
+            self.push(if value > 0 { "inc hl" } else { "dec hl" });
+        }
+        true
+    }
+
+    /// `ld hl, #k; add hl, rr; ex de, hl` (the sum copied back into `rr`, `hl`
+    /// dead after, the carry too) with k in 1..=3 or -3..=-1: `inc rr` / `dec
+    /// rr` k times, 1-3 B against 5. A pointer kept in `de` or `bc` was
+    /// stepped through `hl`.
+    fn step_pair_through_hl(
+        &mut self,
+        source: RegId,
+        rest: &[Inst],
+    ) -> bool {
+        if PRICING.with(|one| one.get()) {
+            return false;
+        }
+        let Some(Line::Inst(last)) = self.out.last() else { return false };
+        let Some(value) = last.strip_prefix("ld hl, #").and_then(|text| text.parse::<i32>().ok()) else {
+            return false;
+        };
+        let value = if value >= 0x8000 { value - 0x1_0000 } else { value };
+        if !(1..=3).contains(&value.abs()) || source == reg::HL || !is_pair(source) {
+            return false;
+        }
+        let Some(copy) = rest.first().filter(|inst| inst.kind == Kind::Copy) else { return false };
+        let [Operand::Def(to), Operand::Use(from)] = copy.operands[..] else { return false };
+        if self.physical(to) != source || self.physical(from) != reg::HL || !self.flags_dead(rest) {
+            return false;
+        }
+        self.at.1 += 1;
+        let hl_dead = self.pair_dead_after(reg::HL, &rest[1..]);
+        self.at.1 -= 1;
+        if !hl_dead {
+            return false;
+        }
+        self.out.pop();
+        for _ in 0..value.abs() {
+            self.push(format!("{} {}", if value > 0 { "inc" } else { "dec" }, name(source)));
+        }
+        self.skip = 1;
+        true
+    }
+
     /// [`Self::dead_after`] for both bytes of `pair`, and the pair itself.
     fn pair_dead_after(
         &self,
@@ -940,6 +1021,20 @@ impl Printer<'_> {
             (false, true) if bl == "#0" && bh == "#0" => {
                 self.push(format!("ld a, {}", name(ah)));
                 self.push(format!("or a, {}", name(al)));
+            }
+            // two pairs, one of them `hl`: `sbc hl, rr` sets zero for the whole
+            // word (`add hl, rr` leaves it alone and puts `hl` back)
+            (false, true)
+                if al == reg::L
+                    && matches!(inst.operands.get(2), Some(Operand::Use(_)))
+                    && self.register(inst, 2)? != reg::HL =>
+            {
+                let other = name(self.register(inst, 2)?);
+                self.push("or a, a");
+                self.push(format!("sbc hl, {other}"));
+                if !self.pair_dead_after(reg::HL, rest) {
+                    self.push(format!("add hl, {other}"));
+                }
             }
             (false, true) => {
                 self.push(format!("ld a, {}", name(al)));
@@ -1436,13 +1531,40 @@ pub fn finish(
             printer.instruction(inst, next, &block.insts[index + 1..])?;
         }
     }
-    Ok(drop_unreachable(printer.out))
+    Ok(drop_unreachable(cancel_steps(printer.out)))
 }
 
 /// Whether `text` ends the flow: `ret`, `jp L` or `jr L` with no condition.
 fn ends_flow(text: &str) -> bool {
     text == "ret"
         || text.strip_prefix("jp ").or_else(|| text.strip_prefix("jr ")).is_some_and(|rest| !rest.contains(','))
+}
+
+/// `dec rr` then `inc rr` of the same pair, or the reverse, is nothing: neither
+/// touches the flags. A word stored through a pointer leaves it where it was
+/// (`inc hl; ld (hl), d; dec hl`), and a pointer stepped by one after that
+/// undoes the restore.
+fn cancel_steps(lines: Vec<Line>) -> Vec<Line> {
+    fn step(line: &Line) -> Option<(i32, &str)> {
+        let Line::Inst(text) = line else { return None };
+        text.strip_prefix("inc ")
+            .map(|pair| (1, pair))
+            .or_else(|| text.strip_prefix("dec ").map(|pair| (-1, pair)))
+            .filter(|(_, pair)| matches!(*pair, "bc" | "de" | "hl"))
+    }
+    let mut out: Vec<Line> = Vec::with_capacity(lines.len());
+    for line in lines {
+        let undoes = match (step(&line), out.last().and_then(step)) {
+            (Some((sign, pair)), Some(last)) => last == (-sign, pair),
+            _ => false,
+        };
+        if undoes {
+            out.pop();
+        } else {
+            out.push(line);
+        }
+    }
+    out
 }
 
 /// `ret z` stands in for a branch to a block that is only a `ret`, which
