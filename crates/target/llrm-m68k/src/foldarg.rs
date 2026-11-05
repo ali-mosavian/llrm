@@ -9,7 +9,9 @@
 //! (`ADD32dr` is `ADD32dp`) makes that instruction read the slot. The load and
 //! the copies go, and so does the register that held the argument. A user
 //! that is a compare of the value with another reads the codes the other way
-//! round, so the conditions after it are swapped as in [`foldload`].
+//! round, so the conditions after it are swapped as in [`foldload`]. A user
+//! that stores the value (not to the call area) stores from the slot instead,
+//! the bytes of the long that its width names (`move.b 11(%sp), (%a1)+`).
 //!
 //! DEVIATE: the pin folds a load only into a user in its own block
 //! (`PeepholeOptimizer::optimizeLoadInstr`), so an argument read in a loop
@@ -26,7 +28,7 @@
 use llrm_spike_mf::{Kind, Operand, Reg};
 use llrm_support::hash::{HashMap, HashSet};
 
-use crate::dagisel::local;
+use crate::dagisel::{indexed, local};
 use crate::foldload::{commutes, swapped_readers};
 use crate::mfunc::{MFunction, op_inst};
 
@@ -121,6 +123,18 @@ pub fn fold_argument_loads(function: &mut MFunction) {
     }
 }
 
+/// The store that writes what a slot holds as `store` writes a register:
+/// `MOV8od_WB` is `MOV8op_WB`, `MOV8fd` is `MOV8fp`.
+fn store_twin(store: &str) -> Option<String> {
+    if let Some(twin) = indexed::slot_store_twin(store) {
+        return Some(twin.to_owned());
+    }
+    let stem = store.strip_prefix("MOV")?;
+    let (bits, rest) = stem.split_at(stem.find(|c: char| !c.is_ascii_digit())?);
+    let [to, from] = rest.as_bytes() else { return None };
+    (matches!(to, b'j' | b'p' | b'f') && matches!(from, b'd' | b'r')).then(|| format!("MOV{bits}{}p", *to as char))
+}
+
 /// `user` with its register operand `index` read from the slot, and the
 /// conditions after it as they read once a compare's operands change places.
 fn fold_user(
@@ -133,6 +147,36 @@ fn fold_user(
     let insts = &function.blocks[user.0].insts;
     let inst = &insts[user.1];
     let Kind::Op(name) = inst.kind else { return None };
+    if let Some(twin) = store_twin(name) {
+        // a store of the slot's bytes: the low ones of a big-endian long
+        let bits: i64 = name.strip_prefix("MOV")?.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()?;
+        // a store to the call area is for `callpush`, which pushes from the
+        // slot
+        let to_stack = inst
+            .operands
+            .iter()
+            .any(
+                |operand| match operand {
+                    Operand::Use(Reg::Virt(base)) => insts[..user.1].iter().any(|before| {
+                        matches!(
+                            (before.kind, &before.operands[..]),
+                            (Kind::Copy, [Operand::Def(Reg::Virt(copy)), Operand::Use(Reg::Phys(_))]) if copy == base
+                        )
+                    }),
+                    _ => false,
+                },
+            );
+        if index + 1 != inst.operands.len() || to_stack {
+            return None;
+        }
+        let mut operands = inst.operands.clone();
+        operands.pop();
+        operands.extend([Operand::Imm(displacement + 4 - bits / 8), Operand::Frame(slot)]);
+        let desc = local::desc(local::code_of(&twin)?)?;
+        let mut folded = op_inst(local::name_of(u32::from(local::code_of(&twin)?))?, desc, operands);
+        folded.origin = inst.origin;
+        return Some((folded, Vec::new()));
+    }
     let twin = name.strip_suffix("32dr").map(|stem| format!("{stem}32dp"))?;
     let twin = local::name_of(u32::from(local::code_of(&twin)?))?;
     let source = usize::from(local::text(name)?.2.first()?.at);
