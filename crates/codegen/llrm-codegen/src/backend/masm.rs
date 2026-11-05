@@ -1280,6 +1280,14 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     // and the gap is reserved with them.
     let slot = procedure.registers.slot;
     let align = procedure.registers.align.max(slot);
+    // A 64-bit frame aligns the locals' base to the widest object, as the pin
+    // aligns each object to its own and only the total to the stack
+    // (`calculateFrameObjectOffsets`); the call alignment is `frame`'s below.
+    let align = if procedure.body.bits == 64 && procedure.body.object_align > 0 {
+        procedure.body.object_align.min(align)
+    } else {
+        align
+    };
     // Where the frame register is omitted and that is settled without a size
     // comparison (`frame_omitted`), its cell is not reserved: the return
     // address and the registers are what the locals are aligned below. The

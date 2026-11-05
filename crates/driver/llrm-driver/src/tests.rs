@@ -3062,6 +3062,24 @@ fn a_jump_table_index_is_not_zero_extended_again_at_m64() {
     assert!(moves.is_empty(), "{listing}");
 }
 
+/// The locals' base was aligned to the stack's 16 below the pushed registers
+/// (the pin aligns each object to its own and only the total to the stack):
+/// a function with one int local and two saved registers had `sub rsp, 24`
+/// and the local at `[rsp+12]`, the pin `push rax` and `[rsp+4]`.
+#[test]
+fn a_one_int_local_costs_one_stack_slot_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare i32 @g(ptr)\n\
+                define i32 @calls(i32 %x) {\n\
+                \x20 %p = alloca i32, align 4\n  store i32 %x, ptr %p\n\
+                \x20 %a = call i32 @g(ptr %p)\n  %b = call i32 @g(ptr %p)\n  %s = add i32 %a, %b\n  ret i32 %s\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "calls").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("push rax"), "{listing}");
+    assert!(!listing.contains("sub rsp, 24"), "{listing}");
+}
+
 /// A local declared `align 16` sat at `[rsp+4]`: the frame clamped every
 /// alignment to 4 (bintree's array; a 16-byte `movaps` clear of it would
 /// fault).
