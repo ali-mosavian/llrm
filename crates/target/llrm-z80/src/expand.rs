@@ -78,6 +78,9 @@ struct Printer<'a> {
     /// Bytes of stack arguments reserved below the frame, while a call is being
     /// set up.
     call_bytes: i64,
+    /// Bytes of spills pushed (`PUSHP`) and not yet popped: they lie above the
+    /// stack arguments of a call.
+    spill_bytes: i64,
     /// The live lanes of the allocated function, and the block and
     /// instruction being printed.
     liveness: llrm_spike_mf::livephys::PhysLiveness,
@@ -702,8 +705,9 @@ impl Printer<'_> {
                 // displacement; a frame past that sets IY to the area's
                 // first byte (`ld iy, #n; add iy, sp`), when nothing holds IY.
                 let width = if op == "STSP8" { 1 } else { 2 };
-                let from_ix: Vec<i64> =
-                    (0..width).map(|extra| offset + extra - self.frame.below_ix() - self.call_bytes).collect();
+                let from_ix: Vec<i64> = (0..width)
+                    .map(|extra| offset + extra - self.frame.below_ix() - self.call_bytes - self.spill_bytes)
+                    .collect();
                 let places: Vec<String> = if from_ix.iter().all(|at| (-128..=127).contains(at)) {
                     from_ix.iter().map(|at| format!("{at}(ix)")).collect()
                 } else if self.iy_is_live() {
@@ -730,7 +734,7 @@ impl Printer<'_> {
                     .get(&self.frame_index(inst, 1)?)
                     .copied()
                     .ok_or("a frame object with no place")?;
-                self.push(format!("ld hl, #{}", offset + self.frame.below_ix() + self.call_bytes));
+                self.push(format!("ld hl, #{}", offset + self.frame.below_ix() + self.call_bytes + self.spill_bytes));
                 self.push("add hl, sp");
             }
             "LD8rf" | "LD16rf" | "LD8fr" | "LD16fr" | "LD8fi" => {
@@ -773,6 +777,7 @@ impl Printer<'_> {
                     .find(|pair| REGISTER_INFO.root(register) == *pair)
                     .ok_or("a push of something that is no pair")?;
                 self.push(format!("{} {}", if op == "PUSHP" { "push" } else { "pop" }, name(pair)));
+                self.spill_bytes += if op == "PUSHP" { 2 } else { -2 };
             }
             "SPILL8" | "RELOAD8" => {
                 let (index, register) =
@@ -822,6 +827,7 @@ impl Printer<'_> {
                 let (lo, hi) = lanes(self.register(inst, register)?)?;
                 if op == "RELOAD16"
                     && self.call_bytes == 0
+                    && self.spill_bytes == 0
                     && self.frame.offsets.get(&index) == Some(&-self.frame.below_ix())
                 {
                     // the slot at SP: `pop` then `push` is 2 B where two loads
@@ -1280,7 +1286,7 @@ impl Printer<'_> {
         if self.iy_is_live() {
             return Err(format!("frame object {index} is {at} from ix and iy is live"));
         }
-        self.iy_to_stack(at + self.frame.below_ix() + self.call_bytes);
+        self.iy_to_stack(at + self.frame.below_ix() + self.call_bytes + self.spill_bytes);
         Ok((0..count).map(|byte| format!("{byte}(iy)")).collect())
     }
 
@@ -1560,23 +1566,25 @@ pub fn reads(function: &MFunction) -> llrm_support::hash::HashMap<u32, usize> {
 /// a branch make into the block ahead of it, so a count kept in the order
 /// blocks are printed was the one the arm before had left: the second arm
 /// stored its arguments 6 B off (a `u64` shifted one way or the other, -O2).
-fn call_bytes_at_entry(function: &MFunction) -> Vec<i64> {
+pub(crate) fn call_bytes_at_entry(function: &MFunction) -> Vec<(i64, i64)> {
     let index: llrm_support::hash::HashMap<u32, usize> =
         function.blocks.iter().enumerate().map(|(at, block)| (block.id, at)).collect();
-    let mut entry: Vec<Option<i64>> = vec![None; function.blocks.len()];
+    let mut entry: Vec<Option<(i64, i64)>> = vec![None; function.blocks.len()];
     let mut work = Vec::new();
     if !entry.is_empty() {
-        entry[0] = Some(0);
+        entry[0] = Some((0, 0));
         work.push(0);
     }
     while let Some(at) = work.pop() {
         let block = &function.blocks[at];
-        let mut bytes = entry[at].unwrap_or(0);
+        let (mut bytes, mut spilled) = entry[at].unwrap_or((0, 0));
         for inst in &block.insts {
             match (inst.kind, inst.operands.first()) {
                 (Kind::Op("ADJCALLSTACKDOWN"), Some(Operand::Imm(size))) if *size != 0 => bytes = 2 * ((size + 1) / 2),
                 (Kind::Op("ADJCALLSTACKUP"), Some(Operand::Imm(size))) if *size != 0 => bytes = 0,
                 (Kind::Op("PUSHARG"), _) => bytes += 2,
+                (Kind::Op("PUSHP"), _) => spilled += 2,
+                (Kind::Op("POPP"), _) => spilled -= 2,
                 _ => {}
             }
         }
@@ -1593,12 +1601,12 @@ fn call_bytes_at_entry(function: &MFunction) -> Vec<i64> {
             );
         for to in targets.chain(falls.then_some(at + 1).filter(|next| *next < function.blocks.len())) {
             if entry[to].is_none() {
-                entry[to] = Some(bytes);
+                entry[to] = Some((bytes, spilled));
                 work.push(to);
             }
         }
     }
-    entry.into_iter().map(|bytes| bytes.unwrap_or(0)).collect()
+    entry.into_iter().map(|bytes| bytes.unwrap_or((0, 0))).collect()
 }
 
 /// `reads` is [`reads`] of the function as the allocator left it: the copies
@@ -1632,6 +1640,7 @@ pub fn finish(
         folded: None,
         skip: 0,
         call_bytes: 0,
+        spill_bytes: 0,
         liveness,
         function,
         at: (0, 0),
@@ -1643,7 +1652,7 @@ pub fn finish(
     }
     let call_bytes = call_bytes_at_entry(function);
     for (at, block) in function.blocks.iter().enumerate() {
-        printer.call_bytes = call_bytes[at];
+        (printer.call_bytes, printer.spill_bytes) = call_bytes[at];
         printer.out.push(Line::Label(label(number, block.id)));
         let mut shown = None;
         let next = function.blocks.get(at + 1).map(|block| block.id);

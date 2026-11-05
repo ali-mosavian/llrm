@@ -73,11 +73,50 @@ def check(code: dict[int, list[str]], symbols: dict[str, int], tables: str) -> l
     return problems
 
 
+def patched(data: bytes) -> bytes | None:
+    """`data`, a COFF object, with the code offset of the first unwind code of the first UNWIND_INFO in `.xdata` made 1 larger: the compiler's own
+    data with one offset wrong, the control that the checker fails on real output. None where the object has no `.xdata` or no unwind code.
+    UNWIND_INFO is version/flags, size of prolog, count of codes, frame register/offset, then 2-byte codes (offset in the prolog, op/info)."""
+    sections = int.from_bytes(data[2:4], "little")
+    optional = int.from_bytes(data[16:18], "little")
+    for index in range(sections):
+        header = 20 + optional + 40 * index
+        if data[header : header + 6] == b".xdata":
+            raw = int.from_bytes(data[header + 20 : header + 24], "little")
+            if int.from_bytes(data[header + 16 : header + 20], "little") < 6 or data[raw + 2] == 0:
+                return None
+            out = bytearray(data)
+            out[raw + 4] += 1
+            return bytes(out)
+    return None
+
+
+def control(obj: str, tools: str) -> bool:
+    """Whether the checker flags `obj` once its first unwind code offset is made wrong; False where there is none to make wrong."""
+    import tempfile  # noqa: PLC0415
+
+    with open(obj, "rb") as handle:
+        wrong = patched(handle.read())
+    if wrong is None:
+        return False
+    with tempfile.NamedTemporaryFile(suffix=".obj") as copy:
+        copy.write(wrong)
+        copy.flush()
+        dump = lambda *flags: subprocess.run([f"{tools}/llvm-objdump", *flags, copy.name], capture_output=True, text=True, check=True).stdout
+        return bool(check(code_of(dump("-d", "--no-show-raw-insn")), symbols_of(dump("-t")), dump("-u")))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("objects", nargs="+")
+    parser.add_argument("--control", action="store_true", help="the real-output control: make one unwind-code offset wrong in each object and require the checker to flag it")
     parser.add_argument("--tools", default=str(Path.home() / "scratch/llvm-build-aarch64/bin"))
     args = parser.parse_args()
+    if args.control:
+        made = [obj for obj in args.objects if (data := Path(obj).read_bytes()) and patched(data) is not None]
+        flagged = [obj for obj in made if control(obj, args.tools)]
+        print(f"unwind_win64_check --control: {len(flagged)} of {len(made)} patchable objects ({len(args.objects)} given) flagged after a code offset was made wrong")
+        return 0 if made and len(flagged) == len(made) else 3
     bad = checked = 0
     for obj in args.objects:
         dump = lambda *flags: subprocess.run([f"{args.tools}/llvm-objdump", *flags, obj], capture_output=True, text=True, check=True).stdout

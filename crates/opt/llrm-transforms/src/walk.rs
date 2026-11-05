@@ -435,12 +435,26 @@ impl ProgramPass for Walk {
                         // passes run once (`InlinerPass::run`'s `Calls`).
                         // DEVIATE: bounded by `DEVIRT_REPEATS` rounds; the
                         // pin's worklist has no cap. Owner w2, exit 2026-11-12.
+                        // The pin pushes every site the splice brings
+                        // (`InlinedCallSites`, Inliner.cpp#L422-L444); a count
+                        // against `was` misses one when this round's splices
+                        // also took away calls to the same callee (`g` brings
+                        // `f` as the earlier `f` sites go). So the calls of
+                        // each callee spliced here are the brought ones.
+                        let brought: Vec<GlobalId> = constant
+                            .iter()
+                            .filter(|(call, _)| module.global(id).function().is_some_and(|one| one.parent(**call).is_none()))
+                            .filter_map(|(_, one)| module.global(one.callee?).function())
+                            .flat_map(|body| calls_of(&module.context, body))
+                            .map(|(callee, _)| callee)
+                            .collect();
                         let worklisted = spliced
                             && trials.is_empty()
                             && repeats + 1 < DEVIRT_REPEATS
                             && mid.iter().any(|(callee, count)| {
                                 let before = was.iter().find(|(seen, _)| seen == callee).map_or(0, |&(_, count)| count);
-                                (before == 0 || (*count > before && !recursive.contains(callee)))
+                                (before == 0
+                                    || ((*count > before || brought.contains(callee)) && !recursive.contains(callee)))
                                     && module.global(*callee).function().is_some_and(|one| !one.layout().is_empty())
                             });
                         if worklisted {
@@ -542,7 +556,7 @@ impl ProgramPass for Walk {
                                     0
                                 };
                                 let (saved, growth) = if size == crate::inlinecost::CallerSize::Speed && rate > 0 {
-                                    let costs = program.target.size_costs();
+                                    let costs = program.target.byte_costs();
                                     let now = module.global(id).function().expect("a body");
                                     let callees: Vec<&llrm_mir::module::Function> = calls
                                         .iter()
@@ -842,7 +856,7 @@ pub(crate) fn priced_copy_depth(
     let Some(&first) = sites.first() else { return 0 };
     let arguments = body.instruction(first).operands.len().saturating_sub(1);
     let calls: f64 = sites.iter().map(|one| frequencies.get(one).copied().unwrap_or(0.0)).sum();
-    let bytes = program_target.size_costs();
+    let bytes = program_target.byte_costs();
     let price = llrm_mir::callprice::CallPrice::new(&program_target.costs(), &bytes, arguments, rate);
     let overhead = price.clocks as f64;
     let net = (function_bytes(module, layout, &bytes, body) - price.bytes).max(0) as f64;

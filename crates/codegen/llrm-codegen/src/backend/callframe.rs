@@ -34,8 +34,8 @@
 //! N/A: the Darwin and Win64 conditions of `isLegal`, the stack probe, the
 //! 64-bit forms (`PUSH64`, `INSERT_SUBREG`) and `BuildCFI` (LIR has no CFI
 //! instruction). DEVIATE CF2 (no number yet): `hasVarSizedObjects` is not in
-//! LIR; the pass is given it (false until row 80). Owner llrm-target-x86-m16, review
-//! 2026-11-20.
+//! LIR; the pass is given it (false until row 80). Owner llrm-target-x86-m16,
+//! review 2026-11-20.
 //!
 //! [L147]:
 //! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86CallFrameOptimization.cpp#L147
@@ -614,10 +614,21 @@ impl CallFrameOpt {
                 // `and [m], 0` and `or [m], -1` push their immediate.
                 (Operation::Binary, [_, Loc::Imm(imm)]) => (Loc::Imm(imm.clone()), vec![]),
                 (Operation::Move, [Loc::Imm(imm)]) => (Loc::Imm(imm.clone()), vec![]),
+                // The push keeps the store's operand flags: a value the store
+                // reads undefined (`ProcessImplicitDefs` erased its definition)
+                // is read undefined by the push too.
+                (Operation::Move, [Loc::Held(held)]) if store.undefs.contains(&held.value) => {
+                    (Loc::Held(*held), vec![])
+                }
                 (Operation::Move, [Loc::Held(held)]) => (Loc::Held(*held), vec![held.value]),
                 _ => unreachable!("Unexpected Opcode!"),
             };
             let mut pushed = Insn::new(at, Some((at, at)), Some(push_what(source_loc.clone())), vec![], extra_uses);
+            if let Loc::Held(held) = &source_loc
+                && store.undefs.contains(&held.value)
+            {
+                pushed.undefs = vec![held.value];
+            }
             // If a push from memory is not slow here, fold the argument's load.
             if let Loc::Held(held) = source_loc
                 && !self.slow_two_mem_ops
@@ -783,6 +794,21 @@ mod tests {
             after.blocks[0].insns[1..3].iter().map(|one| one.what.as_ref().unwrap().sources.clone()).collect();
         assert_eq!(pushes, [vec![imm(4)], vec![held(1)]]);
         assert_eq!(imm_of(&after.blocks[0].insns[0], 2), Some(8));
+    }
+
+    /// `printf("%d", undef)` at -O1: the store read its value undefined, the
+    /// push built from it read it as a real use of a value nothing defines,
+    /// and the allocator panicked "a unique value" (bits.c).
+    #[test]
+    fn a_push_made_from_an_undef_read_reads_it_undefined() {
+        let mut undef_store = (*store(0, held(1), vec![])).clone();
+        undef_store.undefs = vec![1];
+        // Two stores: one push is not worth the adjustments.
+        let after =
+            pass().run(&body(vec![setup(8), store(4, imm(4), vec![]), Arc::new(undef_store), call(), destroy(8)]));
+        let push = &after.blocks[0].insns[2];
+        assert_eq!(name_of(push), Some("push"));
+        assert_eq!((push.uses.clone(), push.undefs.clone()), (vec![], vec![1]), "{push:?}");
     }
 
     /// A gap in the slots (slot 1 stored, slot 0 not) is left as stores.

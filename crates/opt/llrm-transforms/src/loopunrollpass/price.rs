@@ -4,8 +4,6 @@
 //! body costs in code (x_ld_max: the 8-trip inner loop, copied 8 times,
 //! 232 -> 755 bytes at m32 -O2 for a few clocks).
 
-use std::collections::HashSet;
-
 use llrm_mir::module::{Linkage, ValueDef, ValueId};
 
 use super::*;
@@ -60,7 +58,7 @@ pub(super) fn full_unroll_pays(
         return true;
     }
     let clocks = crate::profit::costs(run.outer);
-    let bytes = run.outer.target().size_costs();
+    let bytes = run.outer.target().byte_costs();
     let blocks = lp.get_blocks();
     let body_bytes = trip_cost(run.context, run.layout, run.function, run.callees, blocks.iter(), &bytes, true);
     let body_clocks = trip_clocks(run.context, run.layout, run.function, run.callees, blocks.iter(), &clocks);
@@ -143,11 +141,11 @@ fn constant_operand_uses(
     run: &Run,
     analyzed: &Analyzed,
     lp: Loop,
-) -> (i64, HashSet<ValueId>) {
+) -> (i64, IdSet<ValueId>) {
     let function = &*run.function;
     let header = lp.get_header();
     let (Some(preheader), Some(latch)) = (lp.get_loop_preheader(function), lp.get_loop_latch(function)) else {
-        return (0, HashSet::new());
+        return (0, IdSet::new());
     };
     let depth = lp.get_loop_depth();
     let own: Vec<InstId> = lp
@@ -167,7 +165,7 @@ fn constant_operand_uses(
         .filter(|&inst| matches!(incoming(inst, preheader), Some(Operand::Constant(_))))
         .collect();
     let known = loop {
-        let mut known: HashSet<ValueId> = counters.iter().filter_map(|&inst| function.instruction(inst).result).collect();
+        let mut known: IdSet<ValueId> = counters.iter().filter_map(|&inst| function.instruction(inst).result).collect();
         let mut grew = true;
         while grew {
             grew = false;
@@ -248,11 +246,11 @@ fn promoted_accesses(
     run: &Run,
     analyzed: &Analyzed,
     lp: Loop,
-    known: &HashSet<ValueId>,
+    known: &IdSet<ValueId>,
 ) -> (i64, i64, usize, usize) {
     let function = &*run.function;
     let (mut found, mut runs) = (0, 0);
-    let (mut ints, mut floats): (HashSet<ValueId>, HashSet<ValueId>) = (HashSet::new(), HashSet::new());
+    let (mut ints, mut floats): (IdSet<ValueId>, IdSet<ValueId>) = (IdSet::new(), IdSet::new());
     for &block in lp.get_blocks() {
         let nested = analyzed.loops.get_loop_depth(block).saturating_sub(lp.get_loop_depth());
         for inst in function.iter_block(block) {
@@ -312,7 +310,7 @@ enum Base {
 fn local_array_at(
     run: &Run,
     mut pointer: Operand,
-    known: &HashSet<ValueId>,
+    known: &IdSet<ValueId>,
 ) -> Option<Base> {
     let function = &*run.function;
     let mut indexed = false;
