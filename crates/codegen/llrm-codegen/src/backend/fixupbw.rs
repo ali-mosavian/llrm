@@ -87,6 +87,10 @@ pub struct FixupBw {
     /// word load (`Profile::widens_load`).
     pub widens_byte: bool,
     pub widens_word: bool,
+    /// Bytes are strict (-O1, -Os, -Oz): a form longer than the one it
+    /// replaces is not made (the pin widens a byte load at -O1, `8A /r` to
+    /// `0F B6 /r`, a byte more). DEVIATE FB2, exit 2026-11-12 (M64-FBW-O1).
+    pub strict_bytes: bool,
 }
 
 impl LIRTransform for FixupBw {
@@ -107,6 +111,20 @@ impl LIRTransform for FixupBw {
 }
 
 impl FixupBw {
+    /// The replacement `new` is allowed: it encodes, and where bytes are
+    /// strict it is no longer than `one`.
+    fn short_enough(
+        &self,
+        bits: u32,
+        one: &Insn,
+        new: &Insn,
+    ) -> bool {
+        if self.strict_bytes {
+            return crate::backend::peep::guards::no_longer_when_strict(bits, one, new);
+        }
+        short_in_real_mode_at(bits, one, new)
+    }
+
     /// `runOnMachineFunction`: every block.
     fn fixed(
         &self,
@@ -207,7 +225,7 @@ impl FixupBw {
     ) -> Option<Insn> {
         let wide = Self::super_reg_dest_if_dead(regs, dest, dead, one.undef_super)?;
         let new = rebuilt(one, "movzx", Operation::Extend, wide, None);
-        (free_fields(one, WIDENING_LOAD) && short_in_real_mode_at(bits, one, &new)).then_some(new)
+        (free_fields(one, WIDENING_LOAD) && self.short_enough(bits, one, &new)).then_some(new)
     }
 
     /// `tryReplaceCopy`: a byte or word copy is the dword copy.
@@ -228,7 +246,7 @@ impl FixupBw {
         }
         let Loc::Reg(wide_src) = make::dword_of(regs, src) else { unreachable!("a register") };
         let new = rebuilt(one, "mov", Operation::Move, wide, Some(Loc::Reg(wide_src)));
-        (free_fields(one, WIDENING) && short_in_real_mode_at(bits, one, &new)).then_some(new)
+        (free_fields(one, WIDENING) && self.short_enough(bits, one, &new)).then_some(new)
     }
 
     /// `tryReplaceExtend`: a byte extended to a word is extended to a dword.
@@ -253,7 +271,7 @@ impl FixupBw {
         }
         let new = rebuilt(one, &name, Operation::Extend, wide, None);
         let fields = if src.is_some() { WIDENING } else { WIDENING_LOAD };
-        (free_fields(one, fields) && short_in_real_mode_at(bits, one, &new)).then_some(new)
+        (free_fields(one, fields) && self.short_enough(bits, one, &new)).then_some(new)
     }
 }
 
@@ -320,7 +338,7 @@ mod tests {
             IndexMap::default(),
         );
         body.bits = 32;
-        let done = FixupBw { size: false, widens_byte: true, widens_word: true }.fixed(&body);
+        let done = FixupBw { size: false, widens_byte: true, widens_word: true, strict_bytes: false }.fixed(&body);
         let one = &done.blocks[0].insns[0];
         let what = one.what.as_ref().expect("semantics");
         (what.name.as_deref().expect("a name").to_owned(), what.dests[0].clone())
@@ -358,7 +376,7 @@ mod tests {
             IndexMap::default(),
         );
         body.bits = 32;
-        let done = FixupBw { size: false, widens_byte: true, widens_word: true }.fixed(&body);
+        let done = FixupBw { size: false, widens_byte: true, widens_word: true, strict_bytes: false }.fixed(&body);
         done.blocks[0].insns[0].what.as_ref().expect("semantics").name.clone().expect("a name").to_string()
     }
 
@@ -407,8 +425,39 @@ mod tests {
             IndexMap::default(),
         );
         body.bits = 64;
-        let done = FixupBw { size: false, widens_byte: true, widens_word: true }.fixed(&body);
+        let done = FixupBw { size: false, widens_byte: true, widens_word: true, strict_bytes: false }.fixed(&body);
         let name = done.blocks[0].insns[0].what.as_ref().and_then(|what| what.name.clone()).expect("a name");
         assert_eq!(&*name, "movzx");
+    }
+    /// `mov cl, [esi]` then nothing: the extending load is a byte longer
+    /// (`8A /r`, `0F B6 /r`). Where bytes are strict (-O1) it stays; at speed
+    /// it widens. memory_expansion -O1 was +62 B at m64.
+    #[test]
+    fn a_byte_load_stays_where_bytes_are_strict_and_widens_at_speed() {
+        let kept = |strict_bytes: bool| {
+            let cell = Loc::Mem(crate::model::ir::Mem { through: RegId::ESI, ..crate::model::ir::Mem::new(None, 1) });
+            let load = Arc::new(Insn::new(
+                0,
+                Some((0, 0)),
+                Some(copy(reg(RegId::CL, 1), cell)),
+                vec![],
+                vec![],
+            ));
+            let ret = Semantics { name: Some("ret".into()), ..Semantics::new(Operation::Return) };
+            let mut ret = Insn::new(1, Some((1, 1)), Some(ret), vec![], vec![]);
+            ret.reads_complete = true;
+            let mut body = LirBody::new(
+                "f",
+                0,
+                vec![LirBlock::new(0, vec![load, Arc::new(ret)]).into()],
+                IndexMap::default(),
+                IndexMap::default(),
+            );
+            body.bits = 32;
+            let done = FixupBw { size: false, widens_byte: true, widens_word: true, strict_bytes }.fixed(&body);
+            done.blocks[0].insns[0].what.as_ref().and_then(|what| what.name.clone()).expect("a name").to_string()
+        };
+        assert_eq!(kept(true), "mov");
+        assert_eq!(kept(false), "movzx");
     }
 }
