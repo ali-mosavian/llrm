@@ -2992,3 +2992,22 @@ fn the_high_byte_of_a_pointer_word_is_read_from_its_pair() {
     assert!(text.contains("sta facmoh"), "{text}");
     assert!(text.contains("sta (rc"), "{text}");
 }
+
+/// A pointer cell lives in its pair, so a plain byte written to its high half
+/// never reached the pointer. The builder took the write and went on (the
+/// wrong address, no message); it now refuses and names the cell.
+#[test]
+fn a_byte_written_to_a_pointer_cells_high_half_is_refused() {
+    use llrm_6502::alloc::build;
+    use llrm_6502::dagisel::generated::ids::opcode as op;
+    use llrm_6502::emit::{MInst, Operand};
+    use llrm_6502::select::Item;
+    let items = vec![
+        Item::Inst(MInst::new(op::LDI8, vec![Operand::reg("w_p"), Operand::Imm(7)])),
+        Item::Inst(MInst::new(op::LDI8, vec![Operand::reg("w_p+1"), Operand::Imm(5)])),
+        Item::Inst(MInst::new(op::LDI8, vec![Operand::reg("v_a"), Operand::Imm(1)])),
+        Item::Inst(MInst::new(op::STP8, vec![Operand::reg("v_a"), Operand::reg("w_p"), Operand::Imm(0)])),
+    ];
+    let refused = build("f", &items).err().expect("the write is refused");
+    assert!(refused.0.contains("w_p+1"), "{}", refused.0);
+}
