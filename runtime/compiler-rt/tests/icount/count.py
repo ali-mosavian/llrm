@@ -3,7 +3,7 @@ import re, subprocess, sys
 q, elf = sys.argv[1], sys.argv[2]
 objd = 'aarch64' in q   # qemu prints no disassembly for aarch64: count fixed 4-byte insns from the OBJD-T hex
 log = elf + '.qlog'
-subprocess.run([q, '-d', 'in_asm,exec,nochain', '-D', log, elf], check=False)
+subprocess.run([q, '-d', 'in_asm,exec,nochain', '-D', log, elf], check=False, stdout=subprocess.DEVNULL)
 n_tb = {}; cur = None; execs = 0; total = 0
 for l in open(log, errors='replace'):
     if l.startswith('IN:'): cur = None
