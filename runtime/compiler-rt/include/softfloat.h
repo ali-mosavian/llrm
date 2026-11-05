@@ -40,7 +40,14 @@ static inline double b2d(sf64 b) { union { double f; sf64 b; } u; u.b = b; retur
  * is never the default). Bits are also what wasm32 needs: it has float and double but no fp128 in MIR, and passes unsigned __int128 as two i64 and returns it through an
  * sret pointer, exactly the tf libcalls' convention. SF_INTABI makes float and double bits too. */
 #ifdef __SIZEOF_INT128__
-#ifdef SF_QUAD_FLOAT128
+#if defined(SF_QUAD_LONGDOUBLE) /* aarch64/riscv64 Linux: the tf libcalls take the IEEE quad `long double` in vector/FP registers, not as bits */
+#if __LDBL_MANT_DIG__ != 113
+#error "SF_QUAD_LONGDOUBLE needs a binary128 long double"
+#endif
+typedef long double sf_quad;
+static inline sf128 q2b(sf_quad f) { union { sf_quad f; sf128 b; } u; u.f = f; return u.b; }
+static inline sf_quad b2q(sf128 b) { union { sf_quad f; sf128 b; } u; u.b = b; return u.f; }
+#elif defined(SF_QUAD_FLOAT128)
 typedef __float128 sf_quad;
 static inline sf128 q2b(sf_quad f) { union { sf_quad f; sf128 b; } u; u.f = f; return u.b; }
 static inline sf_quad b2q(sf128 b) { union { sf_quad f; sf128 b; } u; u.b = b; return u.f; }
