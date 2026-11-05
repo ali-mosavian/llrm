@@ -2405,3 +2405,16 @@ fn function_text(
     let end = rest.find("\n.export").unwrap_or(rest.len());
     rest[..end].to_owned()
 }
+
+/// A long multiply of two variables calls the variant that stops at the last
+/// set byte of the multiplier where clocks count, and the 19 bytes shorter
+/// walk of all 32 bits tuned for size (shrink_wrapped_frame: 159k clocks v
+/// gcc's 19k).
+#[test]
+fn a_long_multiply_of_variables_calls_the_variant_for_the_level() {
+    let ir = module("define i32 @f(i32 %a, i32 %b) {\n  %r = mul i32 %a, %b\n  ret i32 %r\n}");
+    let fast = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(fast.contains("__mulsi3_fast"), "{fast}");
+    let small = assembly(&ir, &Request::new(Level::Os)).unwrap();
+    assert!(small.contains("__mulsi3") && !small.contains("__mulsi3_fast"), "{small}");
+}
