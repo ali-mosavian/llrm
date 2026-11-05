@@ -1123,3 +1123,28 @@ fn test_the_renaming_does_not_scan_the_blocks_for_immediate_dominators() {
     let queries = crate::cfg::IMMEDIATE_QUERIES.with(std::cell::Cell::get);
     assert!(queries < 10, "{queries} immediate-dominator queries for a 41-block build");
 }
+
+/// The AA stack is made once for the batch of questions, as the pin's one
+/// `AAResults`. It was made and dropped per question: 7,375 stacks and 1.1 M Ir
+/// of drops over jpeg_fixed.
+#[test]
+fn test_the_alias_stack_is_made_once_per_batch_of_questions() {
+    use super::alias::AliasQuery;
+    let parsed = Parsed::new(&loads_and_a_store(64));
+    let unit = parsed.unit();
+    let accesses = Accesses::plain(&unit, &crate::consts::Calls::default());
+    let aa = AliasQuery::new(&unit, &accesses);
+    let store = unit
+        .function
+        .walk()
+        .map(|(_, inst)| inst)
+        .find(|&inst| accesses.writes(inst).is_some_and(|w| !w.is_empty()))
+        .expect("the store");
+    let locations: Vec<_> = unit.function.walk().filter_map(|(_, inst)| aa.location_of(inst)).collect();
+    for loc in &locations {
+        aa.mod_set_loc(store, loc);
+    }
+    let (_, worked) = aa.questions();
+    assert!(worked > 1, "{worked} questions worked out");
+    assert_eq!(aa.stacks_made(), 1, "a stack per question: {} for {worked}", aa.stacks_made());
+}
