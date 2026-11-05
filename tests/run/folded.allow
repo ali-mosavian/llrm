@@ -1,0 +1,4 @@
+# Programs small by design: nothing in them is an input the compiler could fold. name<TAB>reason
+os_console	OS shim test: the program is two write calls on a literal
+os_exit	OS shim test: the program is report, exit, report
+long_double_stride	ABI layout test: it reports sizeof and an address difference, constants by definition
