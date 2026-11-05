@@ -12,9 +12,9 @@ const STRUCTCOPY: &str = include_str!("fixtures/structcopy_raw.ll");
 #[test]
 fn memcpys_arguments_are_pushed_whatever_order_they_were_stored_in() {
     let out = assembly(STRUCTCOPY, cpu_of("68000").unwrap(), Level::Os).expect("compiles");
-    assert_eq!(out.matches("-(%sp)").count(), 4, "a2 and three pushes expected:\n{out}");
-    assert!(!out.contains("lea\t(-"), "a call area is still reserved:\n{out}");
     let before_call = out.split("jsr").next().unwrap();
-    let pushed: Vec<&str> = before_call.lines().filter(|l| l.ends_with("-(%sp)")).collect();
-    assert!(pushed[1].contains("#22"), "the length goes first (last argument):\n{out}");
+    let pushes: Vec<&str> = before_call.lines().filter(|l| l.ends_with("-(%sp)") || l.starts_with("\tpea")).collect();
+    assert_eq!(pushes.len(), 4, "a2 and three pushes expected:\n{out}");
+    assert!(!out.contains("lea\t(-"), "a call area is still reserved:\n{out}");
+    assert!(pushes[1].contains("22"), "the length goes first (last argument):\n{out}");
 }
