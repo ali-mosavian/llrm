@@ -565,6 +565,8 @@ impl TargetLowering {
                     UMulFixSat,
                     SShlSat,
                     UShlSat,
+                    SCmp,
+                    UCmp,
                 ],
                 &[vt],
                 Action::Expand,
