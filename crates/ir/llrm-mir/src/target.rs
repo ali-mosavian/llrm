@@ -82,6 +82,10 @@ pub struct Tuning {
     /// site too (otherwise only two or more: the pin's single-site inline
     /// stands). A callee that stays and is copied once only grows the code.
     pub inline_size_guard_single_site: bool,
+    /// A full unroll's discount for a local array it makes constant-indexed
+    /// (promoted to registers) holds only while the promoted elements fit the
+    /// register file (UP1). false: every such access is free.
+    pub unroll_promotion_fits_registers: bool,
     /// A size build rotates a loop only when the header's exit test folds in
     /// the preheader (RS1): an unfolded copy is a compare and a branch, more
     /// than the loop-closing jump it removes. false: the pass's header limit
@@ -156,6 +160,7 @@ impl Tuning {
         split_merged_conditions: false,
         inline_size_guard_at_size: false,
         inline_size_guard_single_site: false,
+        unroll_promotion_fits_registers: false,
         rotation_guard_must_fold_at_size: false,
         keep_constant_displacements: false,
         recursive_inlining: None,

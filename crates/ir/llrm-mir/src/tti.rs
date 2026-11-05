@@ -540,6 +540,12 @@ pub trait Tti {
         false
     }
 
+    /// Whether a priced full unroll counts a promoted local array's accesses
+    /// as free only while its elements fit the registers (UP1).
+    fn unroll_promotion_fits_registers(&self) -> bool {
+        false
+    }
+
     /// Whether a size build's loop rotation copies a header only when its
     /// exit test folds in the preheader (RS1). False: the pass's header limit
     /// alone.
