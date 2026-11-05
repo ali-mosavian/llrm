@@ -429,6 +429,14 @@ pub trait Tti {
         false
     }
 
+    /// The cost model the inliner counts a callee's size with, where the
+    /// target's `CodeSize` is not bytes: the same model with `CodeSize` in
+    /// bytes of code. None: `CodeSize` as it is. The other passes keep
+    /// `CodeSize` in the pin's units, which their thresholds are in.
+    fn inline_size_view(&self) -> Option<std::rc::Rc<dyn Tti>> {
+        None
+    }
+
     /// What one call costs the caller and the callee together, in `kind`:
     /// the call and return, the arguments' setup (a by-value copy, a push
     /// past the argument registers), and the frame the callee builds and tears
