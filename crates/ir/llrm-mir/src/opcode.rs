@@ -581,7 +581,7 @@ impl Attribute {
     }
 }
 
-pub const FLAG_ATTRIBUTES: [&str; 50] = [
+pub const FLAG_ATTRIBUTES: [&str; 51] = [
     "alwaysinline",
     "builtin",
     "cold",
@@ -594,6 +594,7 @@ pub const FLAG_ATTRIBUTES: [&str; 50] = [
     "inlinehint",
     "inreg",
     "llrm-mulsi3",
+    "llrm-promoted-in-walk",
     "llrm-self-copied",
     "minsize",
     "mustprogress",
