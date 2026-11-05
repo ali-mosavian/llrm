@@ -279,6 +279,26 @@ impl Tti for Z80Tti {
         priced(&["add hl;bc"], kind)
     }
 
+    /// SZ1, rule 1: a size build keeps a callee bigger than its call. The pin's
+    /// `OptSizeThreshold` 50 allows growth, and a word update is 6 B where the
+    /// call is 3.
+    fn opt_size_inline_by_code_size(&self) -> bool {
+        true
+    }
+
+    /// Where the pin's own cost is negative the inline shrinks the caller (a
+    /// wrapper, a callee that folds away): the bound stands down.
+    fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {
+        true
+    }
+
+    /// The pin counts a call as one unit and one per argument; here a unit is a
+    /// byte, and `call nn` is 3 with `ld rr,#nn` or a pair move 2 to 3 per
+    /// word argument: 250% makes one argument 5 B (2 units) and three 9 B (4).
+    fn call_code_size_percent(&self) -> i64 {
+        250
+    }
+
     // There is no conditional move: a `select` is a branch on the Z80.
     fn has_cmov(&self) -> bool {
         false
