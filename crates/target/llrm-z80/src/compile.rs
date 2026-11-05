@@ -52,9 +52,19 @@ pub struct Prepared {
     /// With `-g`: the source file and start line of each function, from one
     /// parse of the module.
     sources: llrm_support::hash::HashMap<String, (String, Option<u32>)>,
+    /// The functions with internal or private linkage.
+    local: std::collections::HashSet<String>,
 }
 
 impl Prepared {
+    /// Whether `name` is a function whose symbol stays in this object.
+    pub fn is_local(
+        &self,
+        name: &str,
+    ) -> bool {
+        self.local.contains(name)
+    }
+
     /// The functions the module defines.
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.selections.iter().map(|(name, ..)| name.as_str())
@@ -68,7 +78,27 @@ pub fn prepare(
 ) -> Result<Prepared, String> {
     SELECTION_RUNS.with(|runs| runs.set(runs.get() + 1));
     let sources = if request.debug { crate::driver::sources_of(ir) } else { Default::default() };
-    Ok(Prepared { selections: Selections::new(selections_both(ir, request)?), sources })
+    Ok(Prepared {
+        selections: Selections::new(selections_both(ir, request)?),
+        sources,
+        local: local_names(ir, request),
+    })
+}
+
+/// The functions and variables the module defines with internal or private
+/// linkage: their symbols are labels of this object, not exports (a module
+/// of the soft-float library carries its own `sf_clz32`).
+pub fn local_names(
+    ir: &str,
+    request: &Request,
+) -> std::collections::HashSet<String> {
+    let Ok(program) = crate::driver::program(ir, request) else { return Default::default() };
+    program.modules[0]
+        .globals
+        .iter()
+        .filter(|global| llrm_mir::image::Export::of(global.linkage) == llrm_mir::image::Export::Local)
+        .filter_map(|global| global.name.as_deref().map(str::to_owned))
+        .collect()
 }
 
 type SelectionKey = (String, Vec<(String, String)>);
@@ -1443,7 +1473,8 @@ pub fn text(
     request: &Request,
 ) -> Result<String, String> {
     let source = request.debug.then(|| crate::driver::source_of(ir, name)).flatten();
-    text_of(source, &cached_selections(ir, request)?, name, number, request)
+    let local = local_names(ir, request).contains(name);
+    text_of(source, &cached_selections(ir, request)?, name, number, request, local)
 }
 
 /// [`text`] of a function of a [`Prepared`] module.
@@ -1454,7 +1485,7 @@ pub fn text_in(
     request: &Request,
 ) -> Result<String, String> {
     let source = prepared.sources.get(name).cloned();
-    text_of(source, &prepared.selections, name, number, request)
+    text_of(source, &prepared.selections, name, number, request, prepared.is_local(name))
 }
 
 fn text_of(
@@ -1463,6 +1494,7 @@ fn text_of(
     name: &str,
     number: usize,
     request: &Request,
+    local: bool,
 ) -> Result<String, String> {
     let file = source.as_ref().map(|(file, _)| file.clone());
     let mut out = String::new();
@@ -1475,7 +1507,7 @@ fn text_of(
             symbol(&mut out, format!("C${file}${line}$0_0${number}_0"));
         }
     }
-    out.push_str(&format!("{}::\n", crate::data::symbol(name)));
+    out.push_str(&format!("{}{}\n", crate::data::symbol(name), if local { ":" } else { "::" }));
     for line in lines_in(selected, name, number, request)? {
         match line {
             Line::Label(label) => out.push_str(&format!("{label}:\n")),

@@ -32,7 +32,9 @@ fn main() {
     let names: Vec<String> = prepared.names().map(str::to_owned).collect();
     let mut module = String::from("\t.area _CODE\n");
     for (number, name) in names.iter().enumerate() {
-        module.push_str(&format!("\t.globl {}\n", llrm_z80::data::symbol(name)));
+        if !prepared.is_local(name) {
+            module.push_str(&format!("\t.globl {}\n", llrm_z80::data::symbol(name)));
+        }
         match text_in(&prepared, name, number, &request) {
             Ok(text) => module.push_str(&text),
             Err(why) => eprintln!("REFUSED @{name}: {why}"),

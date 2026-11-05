@@ -1771,3 +1771,25 @@ fn the_stack_word_of_a_long_divide_is_pushed_not_stored() {
         "stored into the slot\n{out}"
     );
 }
+
+/// Every function and variable was exported (`.globl`, `name::`), the internal
+/// ones too: seven soft-float modules each exported their own `sf_clz32` and
+/// sdld warned of a multiple definition. An internal or private symbol is a
+/// label of its object.
+#[test]
+fn an_internal_symbol_is_a_local_label_and_an_external_one_an_export() {
+    let ir = "@gi = internal global i16 5\n@ge = global i16 6\n\
+              define internal i16 @helper(i16 %a) {\n  %r = add i16 %a, 7\n  ret i16 %r\n}\n\
+              define i16 @pub(i16 %a) {\n  %r = call i16 @helper(i16 %a)\n  ret i16 %r\n}";
+    let ir = format!("target datalayout = \"{DATALAYOUT}\"\n{ir}");
+    let request = Request::new(Level::O0);
+    let local = text(&ir, "helper", 0, &request).unwrap_or_else(|why| panic!("{why}"));
+    assert!(local.contains("_helper:\n") && !local.contains("_helper::"), "{local}");
+    let export = text(&ir, "pub", 1, &request).unwrap_or_else(|why| panic!("{why}"));
+    assert!(export.contains("_pub::"), "{export}");
+    let prepared = llrm_z80::compile::prepare(&ir, &request).unwrap_or_else(|why| panic!("{why}"));
+    assert!(prepared.is_local("helper") && !prepared.is_local("pub"));
+    let data = llrm_z80::data::text(&ir, &request).unwrap_or_else(|why| panic!("{why}"));
+    assert!(data.contains("_gi:\n") && !data.contains("_gi::") && !data.contains(".globl _gi"), "{data}");
+    assert!(data.contains(".globl _ge\n_ge::"), "{data}");
+}
