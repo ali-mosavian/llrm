@@ -311,6 +311,10 @@ mod tests {
             // LowerMemIntrinsics.cpp makes the pattern loop's GEP `inbounds`;
             // `memsetpattern.rs` sets the flag on it and reads none.
             "memsetpattern.rs",
+            // SimplifyLibCalls.cpp's `optimizeMemPCpy` and `optimizeMemCCpy`
+            // return `CreateInBoundsGEP(i8, dst, n)`; `memops.rs` sets the flag
+            // on that new GEP and reads none.
+            "memops.rs",
             // SelectionDAGBuilder.cpp copies `nsw`, `nuw` and a GEP's
             // `inbounds` into the node's SDNodeFlags (`visitBinary`,
             // `visitGetElementPtr`); the DAG grants no promise from them.

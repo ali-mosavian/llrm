@@ -197,6 +197,14 @@ impl CombineHooks for X86Lowering<'_> {
         true
     }
 
+    /// `replaceStoreOfFPConstant`: a `double` constant is stored as an `i64`
+    /// (m64) or two `i32` (m32). The pin runs it on x86 (`isFPImmLegal` keeps
+    /// only +-0.0, +-1.0). Judged by all allocated bytes: m64 smaller in 9 of
+    /// 9 cells (the pool entry goes).
+    fn store_fp_constant_as_i64(&self) -> bool {
+        true
+    }
+
     /// `visitBRCOND`'s `rebuildSetCC`: `!bad` on an `i1` global is `cmp byte [bad], 1; jne`,
     /// not `mov al; not al; test al, 1; jne` (jpeg_fixed `-Os` m64, 2 sites, 8 B). The
     /// m16 judging cost a byte, so only the 64-bit lowering asks.
@@ -227,6 +235,20 @@ impl CombineHooks for X86Lowering<'_> {
     /// the widened divide's `shr 32; sar k` is one `sar 32 + k`.
     fn fold_sra_of_trunc_of_shift(&self) -> bool {
         true
+    }
+
+    /// `X86TargetLowering::shouldTransformSignedTruncationCheck`: a scalar
+    /// check whose type and kept width are both a size `movsx` takes (8, 16,
+    /// 32, 64). `(add x, 1<<(k-1)) u< 1<<k` then is `sext_inreg x, k == x`: no
+    /// 64-bit constant, one `movslq; cmp` for the add, the constant and the
+    /// compare.
+    fn should_transform_signed_truncation_check(
+        &self,
+        vt: EVT,
+        kept_bits: u32,
+    ) -> bool {
+        let movsx = |bits: u32| matches!(bits, 8 | 16 | 32 | 64);
+        vt.is_integer() && movsx(vt.size_in_bits()) && movsx(kept_bits)
     }
 
     fn canonicalize_ge_le(&self) -> bool {

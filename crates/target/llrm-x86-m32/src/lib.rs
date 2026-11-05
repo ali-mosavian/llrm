@@ -754,6 +754,28 @@ mod tests {
         assert_eq!(model.costs().load, 1, "the clock prices are the CPU's");
     }
 
+    /// The x87 byte rows were a flat 6: a register `faddp` (2 B encoded) priced at 3x,
+    /// and the memory operand of `fadd m` at 0 (`x87_add_m` = `x87_add`), so folding
+    /// a load looked free at -Os. A register form is the integer register row.
+    #[test]
+    fn m32_x87_byte_rows_split_register_and_memory_forms() {
+        let sizes = OPCOSTS.size_costs();
+        // Mean encoded bytes of 71 float programs at -O2/-Os, per form, with the band of
+        // estimate/measured the integer rows hold: 1.4-1.5 for memory, 2 for register.
+        for (form, estimate, measured, band) in [
+            ("register add", sizes.float_add, 2.00, 1.9..=2.1),
+            ("fld m", sizes.float_load, 5.56, 1.3..=1.6),
+            ("fstp m", sizes.float_store, 4.12, 1.3..=1.6),
+            ("add m", sizes.float_add + sizes.float_load_folded, 5.87, 1.3..=1.6),
+            ("fstp st", sizes.float_release, 2.00, 0.9..=1.1),
+        ] {
+            let ratio = estimate as f64 / measured;
+            assert!(band.contains(&ratio), "{form}: {estimate} B estimated, {measured} B encoded");
+        }
+        assert_eq!(sizes.float_add, sizes.add, "a register x87 add is the integer register row");
+        assert!(sizes.float_load_folded > 0, "a memory operand costs bytes over the register form");
+    }
+
     /// A condition held as a value had no price: `phiopt` priced it as the
     /// `movzx` after it (3 clocks) and made x_switch 59% slower (45,159 clocks
     /// to 71,757) where `setcc` is 4 clocks on a 486 and 3 bytes.
