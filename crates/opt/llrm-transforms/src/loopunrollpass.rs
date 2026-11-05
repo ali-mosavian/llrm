@@ -1321,6 +1321,13 @@ pub(crate) fn compute_unroll_count(
         return 0;
     }
     if !up.runtime {
+        // DEVIATE UP2: a priced runtime unroll where the target enables none.
+        let priced = price::runtime_unroll_count(run, analyzed, lp, uce, up, max_trip_count);
+        if priced >= 2 {
+            up.runtime = true;
+            up.allow_remainder = true;
+            return priced;
+        }
         return 0;
     }
 

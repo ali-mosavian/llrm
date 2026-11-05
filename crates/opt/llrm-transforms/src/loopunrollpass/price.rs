@@ -7,6 +7,7 @@
 use std::collections::HashSet;
 
 use llrm_mir::module::{ValueDef, ValueId};
+use llrm_mir::opcode::BinaryOp;
 
 use super::*;
 use crate::loopidioms::{trip_clocks, trip_cost};
@@ -301,4 +302,107 @@ fn local_array_at(
             Operand::Block(_) => return None,
         }
     }
+}
+
+/// DEVIATE UP2 (owner x86-m32; exit 2026-11-20): the count of a runtime unroll
+/// the target has not enabled, where the clocks the copies save repay the
+/// bytes they add (and the remainder loop's) at the speed rate. A loop of a
+/// run-time trip count runs the counter's steps and the back edge once a trip;
+/// gcc at -O3 unrolls it (x_ld_matmul: 12 trips, 9170 clocks). 0: none.
+pub(super) fn runtime_unroll_count(
+    run: &Run,
+    analyzed: &Analyzed,
+    lp: Loop,
+    uce: &UnrollCostEstimator,
+    up: &UnrollingPreferences,
+    max_trip_count: u32,
+) -> u32 {
+    let rate = run.tti.unroll_milliclocks_per_byte();
+    if rate <= 0
+        || !run.options.target_unrolling
+        || run.options.opt_size
+        || run.options.min_size
+        || run.options.opt_level < 2
+        || !lp.is_innermost()
+    {
+        return 0;
+    }
+    let function = &*run.function;
+    // The copies of a loop that fills the x87 stack spill it.
+    if super::float_stack_overflow(run, lp).is_some() {
+        return 0;
+    }
+    // A loop with a call keeps its own overhead: the copies save the little.
+    // (an intrinsic that is no call, `fmuladd`, is not one).
+    if lp.get_blocks().iter().any(|&block| {
+        function.iter_block(block).any(|inst| {
+            matches!(function.instruction(inst).opcode, Opcode::Call(_))
+                && !crate::licm::hoist::is_safe_to_speculatively_execute_in(
+                    run.context,
+                    run.layout,
+                    function,
+                    run.outer,
+                    inst,
+                )
+        })
+    }) {
+        return 0;
+    }
+    {
+        let is_float = |value: ValueId| {
+            llrm_mir::tti::Ty::of(&run.context.types, function.value(value).ty).is_some_and(|ty| ty.is_float())
+        };
+        let peak = llrm_analysis::liveness::pressure_in(function, lp.get_blocks(), &|v| !is_float(v));
+        why(run, lp, &format!("rt pressure {peak} of {}", crate::profit::registers(run.outer).registers));
+    }
+    let clocks = crate::profit::costs(run.outer);
+    let bytes = run.outer.target().size_costs();
+    let blocks = lp.get_blocks();
+    let body_bytes = trip_cost(run.context, run.layout, function, run.callees, blocks.iter(), &bytes, true);
+    // The counters the copies step once: the header phis stepped by a constant.
+    let header = lp.get_header();
+    let latch = lp.get_loop_latch(function);
+    let steps = latch.map_or(0, |latch| {
+        function
+            .iter_block(header)
+            .take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi)
+            .filter(|&inst| {
+                let phi = function.instruction(inst);
+                let Some(result) = phi.result else { return false };
+                let Some(pair) = phi.operands.chunks(2).find(|pair| pair[1] == Operand::Block(latch)) else {
+                    return false;
+                };
+                let Operand::Value(next) = pair[0] else { return false };
+                let ValueDef::Instruction(def) = function.value(next).def else { return false };
+                let step = function.instruction(def);
+                matches!(step.opcode, Opcode::Binary(BinaryOp::Add | BinaryOp::Sub))
+                    && step.operands[0] == Operand::Value(result)
+                    && matches!(step.operands[1], Operand::Constant(_))
+            })
+            .count() as i64
+    });
+    let edge_clocks = clocks.branch + steps * clocks.add;
+    let edge_bytes = bytes.branch + steps * bytes.add;
+    let trips = if max_trip_count != 0 { i64::from(max_trip_count).min(ASSUMED_TRIPS) } else { ASSUMED_TRIPS };
+    let runs = ASSUMED_TRIPS.pow((lp.get_loop_depth() - 1).min(2));
+    for count in [8_u32, 4, 2] {
+        // The unrolled body runs at least twice, and fits the partial bar.
+        if i64::from(count) * 2 > trips || uce.unrolled_loop_size(up, count) > u64::from(up.partial_threshold) {
+            continue;
+        }
+        let kept = i64::from(count);
+        let saved = trips * edge_clocks * (kept - 1) / kept * runs;
+        // The copies, and the remainder loop (the rolled body and its test).
+        let added = (kept - 1) * (body_bytes - edge_bytes).max(0) + body_bytes + bytes.branch * 2;
+        why(
+            run,
+            lp,
+            &format!("priced runtime unroll by {count}: saves {saved} clk, adds {added} B (body {body_bytes} B)"),
+        );
+        let _ = analyzed;
+        if unroll_pays(saved, added, rate) {
+            return count;
+        }
+    }
+    0
 }
