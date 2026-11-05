@@ -1714,3 +1714,21 @@ fn a_long_subtract_borrow_shared_with_the_order_chain_still_fuses() {
     let instructions = text.lines().filter(|line| line.starts_with('\t') && !line.trim_start().starts_with('.')).count();
     assert!(instructions <= 135, "{instructions} instructions:\n{text}");
 }
+
+/// An `internal` function or variable was exported like any other: the soft-float
+/// library's modules each define `sf_clz32`, and a program that took two of them
+/// failed to link ("Multiple definition of _sf_clz32"; float_in_place_update at
+/// -Os). The module's own symbols are labels no other module sees.
+#[test]
+fn an_internal_function_is_not_exported() {
+    let ir = format!(
+        "target datalayout = \"{DATALAYOUT}\"\n@v = internal global i16 1\ndefine internal i16 @helper() noinline {{\n  %x = load volatile i16, ptr @v\n  ret i16 %x\n}}\ndefine i16 @entry() {{\n  %r = call i16 @helper()\n  ret i16 %r\n}}"
+    );
+    let request = Request::new(Level::Os);
+    let helper = text(&ir, "helper", 0, &request).unwrap_or_else(|why| panic!("{why}"));
+    let entry = text(&ir, "entry", 1, &request).unwrap_or_else(|why| panic!("{why}"));
+    assert!(helper.starts_with("_helper:\n"), "{helper}");
+    assert!(entry.starts_with("_entry::\n"), "{entry}");
+    let data = llrm_z80::data::text(&ir, &request).unwrap_or_else(|why| panic!("{why}"));
+    assert!(data.contains("_v:\n") && !data.contains("_v::"), "{data}");
+}
