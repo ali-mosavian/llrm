@@ -2004,6 +2004,25 @@ fn a_win64_variadic_tail_call_stays_a_call() {
     assert!(jumps(&sysv), "{sysv}");
 }
 
+/// An internal x86-64 function whose callers are all seen, or one marked
+/// `fastcc`, popped its stack arguments (`ret 16`) and its callers did not
+/// clean up. The pin's `isCalleePop` is false for `fastcc` there (no
+/// `GuaranteedTailCallOpt`), so the callee returns with a plain `ret` and the
+/// caller removes the area (QCport corpus: `os_locals_between_pushes`).
+#[test]
+fn an_x86_64_fastcc_function_returns_with_a_plain_ret() {
+    let text = format!(
+        "{SYSV}define internal fastcc i64 @work(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i64 %f, i64 %g, i64 %h) noinline {{\n  %x = add i64 %a, %h\n  %y = add i64 %x, %g\n  ret i64 %y\n}}\n\
+         define i64 @f(i64 %x) {{\n  %p = call fastcc i64 @work(i64 %x, i64 %x, i64 %x, i64 %x, i64 %x, i64 %x, i64 %x, i64 %x)\n  %q = add i64 %p, 1\n  ret i64 %q\n}}\n"
+    );
+    for abi in ["-mabi=sysv", "-mabi=win64"] {
+        let (built, _) = compiled(&flags(&["-m64", "-O0", abi]), &text, "work").unwrap();
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        let returns: Vec<&str> = listing.lines().map(str::trim).filter(|line| line.starts_with("ret")).collect();
+        assert!(!returns.is_empty() && returns.iter().all(|line| *line == "ret"), "{abi}: {listing}");
+    }
+}
+
 /// The `.xdata` of an x86-64 module written as COFF, found by `.pdata`'s
 /// layout: the frames the compiler declared (`.seh_*`) against the bytes read
 /// back from the same code agree.

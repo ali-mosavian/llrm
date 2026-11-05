@@ -126,6 +126,10 @@ pub struct Convention {
     /// caller, removes its stack arguments (`calleepop`), where that is no
     /// convention MIR already names (`fastcc` is C's).
     pub pops_as: Option<String>,
+    /// No callee-pops twin of this convention exists: the pin's `isCalleePop`
+    /// is false for `fastcc` on x86-64 (no `GuaranteedTailCallOpt`), so a
+    /// function never takes a `ret N` form of it and `fastcc` is not one.
+    pub no_pop_twin: bool,
     /// How a symbol is written in each object format, `*` standing for its name
     /// and `^*` for its name in capitals (`spell`).
     pub symbol: BTreeMap<String, String>,
@@ -259,6 +263,7 @@ const KEYS: &[&str] = &[
     "entry_clobbers_all",
     "variadic",
     "pops_as",
+    "no_pop_twin",
     "symbol",
     "aggregate_pointer_register",
     "aggregate_pointer_far",
@@ -525,6 +530,9 @@ impl Calling {
         number: u32,
     ) -> Option<u32> {
         let from = self.by_number(number)?;
+        if from.no_pop_twin {
+            return None;
+        }
         // The convention that removes them itself has none to take: `like`
         // carried `pops_as` to it.
         match &from.pops_as {
@@ -729,6 +737,7 @@ impl Convention {
             },
             variadic: table.contains_key("variadic").then(|| text("variadic")).transpose()?,
             pops_as: table.contains_key("pops_as").then(|| text("pops_as")).transpose()?,
+            no_pop_twin: flag("no_pop_twin")?,
             symbol,
             slot_bytes: integer("slot_bytes")?,
             stack_alignment: table.contains_key("stack_alignment").then(|| integer("stack_alignment")).transpose()?,
