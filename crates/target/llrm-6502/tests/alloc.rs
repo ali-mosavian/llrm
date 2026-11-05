@@ -3039,3 +3039,16 @@ fn a_literal_made_into_a_cell_is_stored_from_the_index_register_that_holds_it() 
     let read = "  ldy #0\n  pha\n  lda #0\n  sta rc8\n  pla\n  beq l\n  rts\n";
     assert_eq!(pass(drop_known_loads, read), read, "the branch reads the flags pla set");
 }
+
+/// A pointer's halves read for a word compare: `ldy rc7; lda rc6; cmp rc2; bne l; tya; cmp rc3`.
+#[test]
+fn a_high_half_loaded_into_y_and_moved_to_a_is_loaded_into_a() {
+    use llrm_6502::peephole::load_straight_into_a;
+    assert_eq!(
+        pass(
+            load_straight_into_a,
+            "  ldy rc7\n  lda rc6\n  cmp rc2\n  bne l\n  tya\n  cmp rc3\nl:\n  bne top\n  ldy #0\n  rts\ntop:\n  ldy #0\n  rts\n"
+        ),
+        "  lda rc6\n  cmp rc2\n  bne l\n  lda rc7\n  cmp rc3\nl:\n  bne top\n  ldy #0\n  rts\ntop:\n  ldy #0\n  rts\n"
+    );
+}

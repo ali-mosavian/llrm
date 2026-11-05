@@ -2,7 +2,7 @@
 //! instructions.
 //!
 //! # How it works
-//! Six passes walk the lines of an [`Asm`] once each. What an instruction does
+//! Seven passes walk the lines of an [`Asm`] once each. What an instruction does
 //! to `a` and to the zero and sign flags comes from [`crate::asm::Op::flags`],
 //! so a pass asks "does this instruction set the flags" and does not list
 //! mnemonics:
@@ -22,6 +22,9 @@
 //!   on zero or sign, after an instruction that set those flags from that
 //!   register. Labels between the two do not matter: a path that jumps to one
 //!   brings its own flags.
+//! - [`load_straight_into_a`]: `ldx m; ...; txa` (likewise `ldy` and `tya`)
+//!   with only loads and stores of other bytes between, and `x` dead after the
+//!   transfer: `lda m`.
 //! - [`drop_cancelling_transfers`]: `tya; tay` and its three twins: the second
 //!   moves what the first just moved.
 //! - [`branch_on_shift_carry`]: `ldx m; bpl` after `asl|rol c` where `c` held
@@ -92,6 +95,7 @@ pub fn run(asm: &mut Asm) {
     drop_reloads(asm);
     drop_known_loads(asm);
     drop_zero_compares(asm);
+    load_straight_into_a(asm);
     drop_cancelling_transfers(asm);
     branch_on_shift_carry(asm);
     jump_to_return(asm);
@@ -372,6 +376,80 @@ pub fn drop_reloads(asm: &mut Asm) {
         })
         .collect();
     retain(asm, &keep);
+}
+
+/// `ldx m; ...; txa` (likewise `ldy m` and `tya`): `lda m`, where between the
+/// two only `a` and the flags are worked on, nothing writes `m` or touches the
+/// index register, every branch goes where the register is dead, and it is dead
+/// after the transfer. The flags are those of `m` either way. (A word compare
+/// that read a pointer's high half through `y` was `ldy rc7; lda rc6; cmp rc2;
+/// bne; tya; cmp rc3`.)
+pub fn load_straight_into_a(asm: &mut Asm) {
+    // one load each round: the transfer of the first may stand between the
+    // second and its own
+    while load_straight_once(asm) {}
+}
+
+fn load_straight_once(asm: &mut Asm) -> bool {
+    let lines = &asm.lines;
+    let label_at = |name: &str| lines.iter().position(|line| matches!(line, Line::Label(l) if l == name));
+    let mut drops: Vec<(usize, usize)> = Vec::new();
+    for (at, line) in lines.iter().enumerate() {
+        let Line::Inst(Inst { op: load @ (Op::Ldx | Op::Ldy), operand: from @ Operand::Direct(_), .. }) = line else {
+            continue;
+        };
+        let (transfer, register) = if *load == Op::Ldx { (Op::Txa, Registers::X) } else { (Op::Tya, Registers::Y) };
+        let mut to = None;
+        for (next, line) in lines.iter().enumerate().skip(at + 1) {
+            let Line::Inst(Inst { op, operand, .. }) = line else { break };
+            if *op == transfer {
+                to = Some(next);
+                break;
+            }
+            let index = if register == Registers::X { Index::X } else { Index::Y };
+            let touches_index = matches!(operand, Operand::Indexed(_, i) if *i == index)
+                || matches!((operand, register), (Operand::IndirectX(_), Registers::X) | (Operand::IndirectY(_), Registers::Y));
+            let quiet = !touches_index
+                && match op {
+                    Op::Clc | Op::Sec | Op::Nop | Op::Lda | Op::Cmp | Op::Adc | Op::Sbc | Op::And | Op::Ora | Op::Eor => true,
+                    Op::Sta => matches!(operand, Operand::Direct(_)) && operand != from,
+                    Op::Beq | Op::Bne | Op::Bcc | Op::Bcs | Op::Bmi | Op::Bpl => match operand {
+                        Operand::Direct(target) => label_at(target)
+                            .is_some_and(|label| dead_from(lines, label, register, &mut HashSet::default())),
+                        _ => false,
+                    },
+                    // the other index register: a load or store of another byte
+                    Op::Ldx | Op::Stx if register == Registers::Y => {
+                        matches!(operand, Operand::Direct(_) | Operand::Imm(_)) && (*op == Op::Ldx || operand != from)
+                    }
+                    Op::Ldy | Op::Sty if register == Registers::X => {
+                        matches!(operand, Operand::Direct(_) | Operand::Imm(_)) && (*op == Op::Ldy || operand != from)
+                    }
+                    _ => false,
+                };
+            if !quiet {
+                break;
+            }
+        }
+        if let Some(to) = to
+            && dead_from(lines, to + 1, register, &mut HashSet::default())
+        {
+            drops.push((at, to));
+        }
+    }
+    let changed = !drops.is_empty();
+    let mut keep = vec![true; asm.lines.len()];
+    for (at, to) in drops {
+        let Line::Inst(Inst { operand, .. }) = &asm.lines[at] else { continue };
+        let operand = operand.clone();
+        if let Line::Inst(inst) = &mut asm.lines[to] {
+            inst.op = Op::Lda;
+            inst.operand = operand;
+        }
+        keep[at] = false;
+    }
+    retain(asm, &keep);
+    changed
 }
 
 /// `tya; tay`, `tay; tya`, `txa; tax` and `tax; txa`: the second transfer
