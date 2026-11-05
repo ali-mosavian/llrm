@@ -45,4 +45,13 @@ check x86_32-linux x86_m32 floatdidf 538
 check x86_32-linux x86_m32 floatundidf 494
 check x86_64-linux x86_m64 floatdidf 323
 check x86_64-linux x86_m64 floatundidf 275
+# -O2 must stay byte-identical to the build without the -Os knobs (SF_CONV_DIRECT32, SF_CONV_WIDE32): a clock claim for -O2 needs the same code. Found 2026-11-05: SF_CONV_WIDE32 was not gated and changed m64 -O2.
+same_o2() { # target config
+  printf '#undef SF_CONV_DIRECT32\n#undef SF_CONV_WIDE32\n' > $T/und.h
+  for v in with without; do inc=; [ $v = without ] && inc="-include $T/und.h"
+    LLRM_CC_TARGET=$1 $D/llrm-cc -O2 -w -include stdint.h -include config/$2/config.h $inc "-DSF_NAME(n)=sfb_##n" -Iinclude -c lib/fp/f64/float.c -o $T/o2_$v.o || { echo "FAIL: $1 -O2 did not compile"; bad=1; return; }
+    objcopy -O binary -j .text $T/o2_$v.o $T/o2_$v.bin; done
+  cmp -s $T/o2_with.bin $T/o2_without.bin || { echo "FAIL: $1 -O2 float.c differs when the -Os knobs are removed"; bad=1; }; }
+same_o2 x86_32-linux x86_m32
+same_o2 x86_64-linux x86_m64
 [ $bad = 0 ] && echo "f64_float_x86_size ok"; exit $bad
