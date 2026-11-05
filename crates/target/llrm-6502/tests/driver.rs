@@ -2573,3 +2573,50 @@ define i8 @high_byte_of_the_amount() {
         assert_eq!(exit_code_of(&text, "high_byte_of_the_amount"), 0, "{level:?}\n{text}");
     }
 }
+
+/// Stack arguments (the long arguments past `rc2..rc7`) were reached through a
+/// frame pointer built per access: `clc; lda rc0; adc #n; sta rcA; lda rc1;
+/// adc #0; sta rcB; ldy #0; lda (rcA),y` (13 B, or an 8 B copy of `rc0`; x16
+/// tail_calls -Os +463 B vs gcc). The frame index belongs in the address as
+/// `rc0` plus a `ldy` offset: `ldy #n; lda (rc0),y`.
+#[test]
+fn a_stack_argument_is_read_through_rc0_without_a_frame_pointer() {
+    let ir = module(
+        "@x = global [3 x i32] zeroinitializer\n\
+         define i8 @sum(i32 %a, i32 %b, i32 %c) noinline {\n  %s = add i32 %a, %b\n  %t = add i32 %s, %c\n  \
+         %m = lshr i32 %t, 8\n  %u = lshr i32 %t, 24\n  %p = trunc i32 %m to i8\n  %q = trunc i32 %u to i8\n  \
+         %r = add i8 %p, %q\n  ret i8 %r\n}\n\
+         define i8 @t() {\n  %a = load volatile i32, ptr @x\n  %pb = getelementptr i32, ptr @x, i16 1\n  \
+         %b = load volatile i32, ptr %pb\n  %pc = getelementptr i32, ptr @x, i16 2\n  %c = load volatile i32, ptr %pc\n  \
+         %r = call i8 @sum(i32 %a, i32 %b, i32 %c)\n  ret i8 %r\n}",
+    )
+    .replace(
+        "@x = global [3 x i32] zeroinitializer",
+        "@x = global [3 x i32] [i32 16909060, i32 270544960, i32 65538]",
+    );
+    for level in [Level::Os, Level::O2] {
+        let text = assembly(&ir, &Request::new(level)).unwrap();
+        let body = &text[text.find("sum:").expect("sum")..];
+        let body = &body[..body.find("rts").expect("rts of sum")];
+        let builds = body.matches("lda rc0\n  adc").count() + body.matches("lda rc0\n  sta").count();
+        assert_eq!(builds, 0, "{builds} frame-pointer builds in sum at {level:?}:\n{body}");
+        assert_eq!(exit_code_of(&text, "t"), 68, "{text}");
+    }
+}
+
+/// A frame object past the 255 bytes one `(zp),Y` offset reaches still takes a
+/// built address; folding frame objects into `rc0` plus `ldy` must not turn
+/// such a frame into a refusal ("past the 255") or a wrapped offset.
+#[test]
+fn a_local_past_255_bytes_from_rc0_is_still_reached() {
+    let ir = module(
+        "define i8 @t() {\n  %a = alloca [300 x i8]\n  %p = getelementptr inbounds i8, ptr %a, i16 3\n  \
+         %q = getelementptr inbounds i8, ptr %a, i16 290\n  store volatile i8 5, ptr %p\n  \
+         store volatile i8 9, ptr %q\n  %x = load volatile i8, ptr %p\n  %y = load volatile i8, ptr %q\n  \
+         %r = add i8 %x, %y\n  ret i8 %r\n}",
+    );
+    for level in [Level::Os, Level::O2] {
+        let text = assembly(&ir, &Request::new(level)).unwrap();
+        assert_eq!(exit_code_of(&text, "t"), 14, "{text}");
+    }
+}
