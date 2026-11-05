@@ -3569,8 +3569,28 @@ fn emit_with<const STACK: bool>(
     }
     let slots: Vec<(String, usize)> =
         if STACK { Vec::new() } else { slots.iter().map(|(slot, class)| (slot_name(*slot), size_of(class))).collect() };
+    let returns_a = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .filter(|inst| inst.kind == Kind::Op("RTS"))
+        .flat_map(|inst| &inst.operands)
+        .any(|operand| matches!(operand, Operand::Use(Reg::Phys(r)) if *r == reg::A));
+    // `jsr callee` reads `a` when the call lists it among the arguments
+    let mut a_callees = std::collections::BTreeSet::new();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts).filter(|inst| inst.kind == Kind::Op("JSR")) {
+        if let [Operand::Symbol(callee, _), arguments @ ..] = &inst.operands[..]
+            && arguments.iter().any(|operand| matches!(operand, Operand::Use(Reg::Phys(r)) if *r == reg::A))
+        {
+            a_callees.insert(callee.clone());
+            a_callees.insert(format!("{callee}_fast"));
+        }
+    }
     Ok((
-        own_labels(&finish(out, source.map(|(file, scope)| (file, scope, &function.places[..]))), &function.name),
+        own_labels(
+            &finish(out, source.map(|(file, scope)| (file, scope, &function.places[..])), !returns_a, a_callees),
+            &function.name,
+        ),
         slots,
         sunk,
         shared,
@@ -3618,7 +3638,11 @@ fn own_labels(
 fn finish(
     mut code: Asm,
     lines_of: Option<(&str, Option<u32>, &[llrm_codegen::model::lir::SrcLoc])>,
+    no_a_result: bool,
+    a_callees: std::collections::BTreeSet<String>,
 ) -> String {
+    code.no_a_result = no_a_result;
+    code.a_callees = a_callees;
     crate::peephole::run(&mut code);
     crate::relax::relax(&mut code);
     if let Some((file, scope, places)) = lines_of {
