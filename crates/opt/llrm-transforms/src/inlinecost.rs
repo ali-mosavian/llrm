@@ -1982,8 +1982,9 @@ impl<'a> Analyzer<'a> {
         inst: InstId,
     ) -> i64 {
         let Some(tti) = self.site.tti else { return 0 };
+        let view = tti.inline_size_view();
         llrm_mir::instructioncost::instruction_cost(
-            tti,
+            view.as_deref().unwrap_or(tti),
             self.context,
             self.site.layout,
             &self.site.module.globals,
@@ -2002,8 +2003,9 @@ impl<'a> Analyzer<'a> {
         if let Some(sequence) = self.call_sequence(llrm_mir::tti::CostKind::CodeSize) {
             return sequence;
         }
+        let view = tti.inline_size_view();
         let size = llrm_mir::instructioncost::instruction_cost(
-            tti,
+            view.as_deref().unwrap_or(tti),
             self.context,
             self.site.layout,
             &self.site.module.globals,
@@ -2111,7 +2113,7 @@ impl<'a> Analyzer<'a> {
     /// not trade bytes for clocks.
     fn grows_more_than_it_saves(&self) -> bool {
         let Some(tti) = self.site.tti else { return false };
-        let rate = tti.speed_inline_milliclocks_per_byte();
+        let rate = tti.inline_policy().by_rate;
         let growth = self.growth_per_site();
         // Growth under one call's size is inside the estimate's resolution: the
         // sites of a dying callee fold differently and must not split.
@@ -2156,9 +2158,10 @@ impl<'a> Analyzer<'a> {
         } else {
             !self.site.sole_call_to_local
                 && self.site.tti.is_some_and(|tti| {
-                    tti.opt_size_inline_by_code_size()
-                        && self.site.callee_calls >= tti.opt_size_inline_guard_min_sites()
-                        && !(tti.opt_size_inline_guard_yields_to_negative_cost() && self.cost < 0)
+                    tti.inline_policy().by_size.is_some_and(|rule| {
+                        self.site.callee_calls >= rule.min_sites
+                            && !(rule.yields_to_negative_cost && self.cost < 0)
+                    })
                 })
                 && self.grows_the_code()
         };

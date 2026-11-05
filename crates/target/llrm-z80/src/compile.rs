@@ -396,6 +396,9 @@ fn allocate_once(
     if std::env::var("LLRM_NO_Z80_STEP").is_err() {
         crate::step::step_by_small_constants(&mut function);
     }
+    if std::env::var("LLRM_NO_Z80_BUMP").is_err() {
+        crate::bump::step_by_flags(&mut function);
+    }
     sink_copies_before_allocation(&mut function);
     if std::env::var("LLRM_NO_Z80_FORWARD").is_err() {
         crate::forward::read_pairs_from_their_registers(&mut function);

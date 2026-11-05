@@ -243,6 +243,38 @@ fn multiply_longs_gives_the_low_32_bits() {
     }
 }
 
+/// The multiplier's bytes above its last set one are not walked: the carries
+/// of the early exit sit between bytes, so a multiplier with zero bytes below,
+/// between and above its set bytes is tried, and so are 0 and 2^31.
+#[test]
+fn multiply_longs_stops_when_the_multiplier_is_spent() {
+    for (a, b) in [
+        (123_456_789u32, 0u32),
+        (0, 99),
+        (7, 0x100),
+        (7, 0x0100_0000),
+        (0x0102_0304, 0x0001_0001),
+        (0x0102_0304, 0x8000_0000),
+        (0x0102_0304, 0x8000_0001),
+        (3, 0x00FF_FF00),
+    ] {
+        for routine in ["__mulsi3", "__mulsi3_fast"] {
+            assert_eq!(long(&format!("mulsi-exit-{a}-{b}{routine}"), routine, a, b), a.wrapping_mul(b), "{routine}: {a} * {b}");
+        }
+    }
+}
+
+/// `x * 15` walked all 32 bits of the multiplier: 2054 clocks, 10x gcc's loop
+/// in shrink_wrapped_frame (`n * i` over a 16 trip loop). The speed variant
+/// stops at the last set byte of 15: a third of that.
+#[test]
+fn multiply_longs_by_a_byte_is_not_a_walk_of_32_bits() {
+    let setup = "  lda #0\n  sta __sa+1\n  sta __sa+2\n  sta __sa+3\n  sta __sb+1\n  sta __sb+2\n  sta __sb+3\n  lda #100\n  sta __sa\n  lda #15\n  sta __sb\n";
+    let with = common::cycles_with("mulsi-clocks", &format!("{setup}  jsr __mulsi3_fast\n"), "");
+    let without = common::cycles_with("mulsi-clocks-none", setup, "");
+    assert!(with - without < 1000, "{} clocks", with - without);
+}
+
 /// 4000000000 / 7 = 571428571 (0x220F4EDB) r 3; 4000000000 / 3000000000 = 1 r
 /// 1000000000 (a divisor above 2^31 needs the carry out of the shifted
 /// remainder); 123456789 / 1 = itself r 0.

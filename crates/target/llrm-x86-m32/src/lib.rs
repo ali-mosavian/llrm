@@ -85,6 +85,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         x87_stack_slots: Some(8),
         speed_milliclocks_per_byte: per_byte,
         inline_size_guard_at_size: true,
+        // DEVIATE SZ2 (owner x86-m32, exit 2026-11-20): -Os keeps a once-called callee whose copy grows the code (gcc does; the pin copies it).
+        inline_size_guard_single_site: true,
         // DEVIATE REC-2: gcc 15.2's `max-inline-recursive-depth` 8 and
         // `max-inline-insns-recursive` 450, at -O2/-O3 (never -Os). Owner w10.
         recursive_inlining: Some((8, 450)),
@@ -98,6 +100,10 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // O3 card is open). Owner x86-m32, exit 2026-11-20.
         recursive_inlining_growth: Some((450, 150)),
         peel_folded_entry: true,
+        // DEVIATE UP1 (owner x86-m32; exit 2026-11-20: the pin's cost model or
+        // gcc's unroll estimate priced in clocks and bytes replaces it): a
+        // full unroll must repay its bytes at the speed rate.
+        unroll_milliclocks_per_byte: per_byte,
         sink_select_arms: true,
         // DEVIATE MEM-1 (the pin's `EmitTargetCodeForMemcpy`,
         // X86SelectionDAGInfo.cpp L328, leaves a variable length to a libcall):

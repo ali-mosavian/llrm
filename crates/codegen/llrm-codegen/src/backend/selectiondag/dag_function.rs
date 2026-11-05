@@ -1151,17 +1151,23 @@ fn selected_in(
     let speed_goal = !(cpu.size || cpu.min_size || bytes_beat_clocks);
     let mul_by_clocks = speed_goal && cpu.target().tti().is_some_and(|tti| tti.multiply_by_clocks());
     let price_pin = speed_goal && cpu.target().tti().is_some_and(|tti| tti.price_pin_multiplies());
+    // The function's one `BranchProbabilityInfo`: the builder's edge
+    // probabilities read the same one (the pin has it as an analysis).
     let frequencies = ((mul_rate > 0 || price_pin) && !mul_by_clocks).then(|| {
-        let bpi = llrm_analysis::bpi::BranchProbabilityInfo::of(
-            llrm_analysis::bpi::Module {
-                context: &module.context,
-                declarations: &module.globals,
-                metadata: &module.metadata,
-                layout: &layout,
-            },
-            function,
-        );
-        llrm_analysis::blockfreq::BlockFrequencies::of_bpi(function, &bpi)
+        let bpi = info
+            .bpi
+            .get_or_insert_with(
+                || llrm_analysis::bpi::BranchProbabilityInfo::of(
+                    llrm_analysis::bpi::Module {
+                        context: &module.context,
+                        declarations: &module.globals,
+                        metadata: &module.metadata,
+                        layout: &layout,
+                    },
+                    function,
+                ),
+            );
+        llrm_analysis::blockfreq::BlockFrequencies::of_bpi(function, bpi)
     });
     for (block, parent, mut built) in work {
         if !built.live_ins.is_empty() && block != function.layout()[0] {
@@ -1536,8 +1542,10 @@ fn selected_in(
     // The loops whose trips `induction` proves, as the old route states them:
     // the executed-work estimate (the route choice's, `LLRM_DEBUG=cost`) reads
     // 31 in 32 for a loop without them.
-    {
-        let shape = llrm_analysis::cfg::Shape::of(function);
+    // A function without a loop has none to prove, and the facts below are a
+    // fixed point over the whole body.
+    let shape = llrm_analysis::cfg::Shape::of(function);
+    if !shape.loops.is_empty() {
         let unit = llrm_analysis::memory::Unit::of(module, &layout, function)
             .with_spaces(arch.layout().spaces.roles)
             .with_shape(&shape);

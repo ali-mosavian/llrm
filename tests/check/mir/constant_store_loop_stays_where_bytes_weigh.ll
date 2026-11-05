@@ -1,5 +1,5 @@
-; RUN: llrm-llc -O2 -march=i486 --isel=dag -S -o /dev/stdout %s
-; m16 weighs bytes over clocks at every level. A 3-trip loop of constant stores became memsets, then ~12 `mov [mem], imm` (9-10 B each) against a ~40 B loop (lru bas/bq16 -O2, +33..35 B). The -Os byte rule runs at speed there now.
+; RUN: llrm-llc -Os -march=i486 --isel=dag -S -o /dev/stdout %s
+; m16 -Os weighs bytes strictly. A 3-trip loop of constant stores became memsets, then 9 `mov [mem], imm` (72 B) against a ~42 B loop (lru bas/bq16, +33..35 B). At -O2 the rate (1 clk = 2 B) prices it instead: see constant_store_loop_is_stores_when_clocks_pay_on_m16.ll.
 target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3"
 
 @a = global [3 x i16] zeroinitializer

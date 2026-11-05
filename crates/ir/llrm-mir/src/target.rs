@@ -55,6 +55,10 @@ pub struct Tuning {
     /// inner one, which stays rolled, so a loop-buffer sized threshold
     /// refuses every nest.
     pub unroll_jam_partial_threshold: Option<u32>,
+    /// The unroll-and-jam (D1) takes, of a known outer trip count, the
+    /// largest count that divides it (2 or more) rather than one that leaves
+    /// a remainder: the remainder is a copy of the whole nest.
+    pub unroll_jam_exact_count: bool,
     /// How many values the x87 register stack holds (8) where floats live
     /// there (a target without SSE2 floating point); none: floats are not
     /// held on a stack. The loop unroll caps its copies by it.
@@ -78,6 +82,11 @@ pub struct Tuning {
     /// site too (otherwise only two or more: the pin's single-site inline
     /// stands). A callee that stays and is copied once only grows the code.
     pub inline_size_guard_single_site: bool,
+    /// A size build rotates a loop only when the header's exit test folds in
+    /// the preheader (RS1): an unfolded copy is a compare and a branch, more
+    /// than the loop-closing jump it removes. false: the pass's header limit
+    /// alone.
+    pub rotation_guard_must_fold_at_size: bool,
     /// A constant offset of an address is a displacement the access folds;
     /// SimplifyCFG's sinking of two such accesses behind a phi of the offsets
     /// is refused (it costs the displacement). false: the pin's.
@@ -101,6 +110,11 @@ pub struct Tuning {
     /// speed rate (`Tti::peels_folded_entry`). false: the pin's
     /// `computePeelCount`.
     pub peel_folded_entry: bool,
+    /// DEVIATE UP1: a full unroll the pin's threshold allows is made only
+    /// where the clocks it saves repay the bytes it adds at this rate in
+    /// thousandths of a clock a byte (`Tti::unroll_milliclocks_per_byte`) at
+    /// -O2/-O3. 0: the pin's threshold alone.
+    pub unroll_milliclocks_per_byte: i64,
     /// DEVIATE CS2: where there is no conditional move, a select's arm only
     /// it reads is made on its own path (`Tti::sinks_select_arms`). false: the
     /// pin's, both operands before the branch.
@@ -135,17 +149,20 @@ impl Tuning {
         unroll_max_percent_threshold_boost: None,
         unroll_partial_threshold: None,
         unroll_jam_partial_threshold: None,
+        unroll_jam_exact_count: false,
         x87_stack_slots: None,
         unswitch_threshold: None,
         inline_threshold: None,
         split_merged_conditions: false,
         inline_size_guard_at_size: false,
         inline_size_guard_single_site: false,
+        rotation_guard_must_fold_at_size: false,
         keep_constant_displacements: false,
         recursive_inlining: None,
         recursive_edge_growth: None,
         recursive_inlining_growth: None,
         peel_folded_entry: false,
+        unroll_milliclocks_per_byte: 0,
         sink_select_arms: false,
         inline_variable_memcpy: false,
         ipsccp_widen_keeps_sign: false,
