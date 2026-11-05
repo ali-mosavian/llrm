@@ -140,7 +140,7 @@ enum Pending {
     Function(String, crate::types::TypeId),
     /// A library routine: its convention and what the library states of it.
     Routine(String, crate::types::TypeId, u32, Vec<crate::opcode::Attribute>, Vec<crate::opcode::Attribute>),
-    Table(String, crate::module::GlobalVariable),
+    Table(String, crate::module::GlobalVariable, crate::module::UnnamedAddr),
 }
 
 /// The size of each function a global variable's initializer names.
@@ -403,11 +403,11 @@ impl Declared {
                         kind: GlobalKind::Function(Box::new(function)),
                     }
                 }
-                Pending::Table(name, variable) => GlobalValue {
+                Pending::Table(name, variable, unnamed_addr) => GlobalValue {
                     name: name.clone().into(),
                     linkage: crate::module::Linkage::Private,
                     visibility: crate::module::Visibility::Default,
-                    unnamed_addr: Default::default(),
+                    unnamed_addr: *unnamed_addr,
                     address_space: 0,
                     kind: GlobalKind::Variable(variable.clone()),
                 },
@@ -547,23 +547,26 @@ impl Declared {
         id
     }
 
-    /// A private constant of type `ty`, `initializer` its value, named `stem`
-    /// and the first number after it that no global has; a table already made
-    /// with the same type and value is that one.
+    /// A private constant of type `ty`, `initializer` its value, `unnamed_addr`
+    /// as the pass that makes it states, named `stem` and the first number
+    /// after it that no global has; a table already made with the same type,
+    /// value and `unnamed_addr` is that one.
     pub fn table(
         &mut self,
         stem: &str,
         ty: crate::types::TypeId,
         initializer: crate::context::ConstantId,
+        unnamed_addr: crate::module::UnnamedAddr,
     ) -> GlobalId {
         let same = |one: &Pending| {
             matches!(
                 one,
-                Pending::Table(_, held) if held.ty == ty && held.initializer == Some(initializer)
+                Pending::Table(_, held, unnamed)
+                    if held.ty == ty && held.initializer == Some(initializer) && *unnamed == unnamed_addr
             )
         };
         if let Some(at) = self.pending.iter().position(same) {
-            let Pending::Table(name, _) = &self.pending[at] else { unreachable!("a table") };
+            let Pending::Table(name, ..) = &self.pending[at] else { unreachable!("a table") };
             let name = name.clone();
             return self.names()[&name];
         }
@@ -579,7 +582,7 @@ impl Declared {
             initializer: Some(initializer),
             align: None,
         };
-        self.pending.push(Pending::Table(name, variable));
+        self.pending.push(Pending::Table(name, variable, unnamed_addr));
         id
     }
 
@@ -608,8 +611,9 @@ impl Declared {
                     }
                     (name, id)
                 }
-                Pending::Table(name, variable) => {
+                Pending::Table(name, variable, unnamed_addr) => {
                     let id = module.add_variable(&name, variable, crate::module::Linkage::Private)?;
+                    module.globals[id.0 as usize].unnamed_addr = unnamed_addr;
                     (name, id)
                 }
             };
