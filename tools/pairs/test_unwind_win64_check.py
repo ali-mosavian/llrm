@@ -88,3 +88,14 @@ def test_codes_listed_first_instruction_first_are_a_problem():
     lines = FRAMED_TABLE.strip("\n").split("\n")
     head, rows = lines[:4], lines[4:]
     assert any("not listed last instruction first" in p for p in _problems("\n" + "\n".join(head + rows[::-1]) + "\n"))
+
+
+def test_the_control_makes_exactly_the_first_unwind_code_offset_wrong():
+    """A COFF header, one `.xdata` section header, then UNWIND_INFO: version 1, prolog 4, one code (offset 1, push), no frame register. Only the code's offset changes, by 1."""
+    info = bytes([1, 4, 1, 0, 1, 0x50, 0, 0])
+    header = (0x8664).to_bytes(2, "little") + (1).to_bytes(2, "little") + bytes(12) + (0).to_bytes(2, "little") + bytes(2)
+    section = b".xdata\0\0" + bytes(8) + len(info).to_bytes(4, "little") + (60).to_bytes(4, "little") + bytes(16)
+    data = header + section + info
+    out = c.patched(data)
+    assert out is not None and [i for i, (a, b) in enumerate(zip(data, out)) if a != b] == [60 + 4] and out[64] == 2
+    assert c.patched(header + section + bytes([1, 0, 0, 0])) is None  # no unwind code: nothing to make wrong
