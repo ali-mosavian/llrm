@@ -197,6 +197,21 @@ class ReferenceFloatTests(unittest.TestCase):
             got = self._counts(lambda variant, where: bench.build_watcom(variant, "O2", where, "F000"), name)
             self.assertGreater(got.get("instructions", 0), 0, got)
 
+    def test_watcom_runs_a_2000_deep_recursion(self):
+        """recsum, recmany and recfloat (2000 frames, not tail-called by Watcom) overran the 16K stack into the code: invalid instruction, no ow row."""
+        for name in ("recsum", "recmany", "recfloat"):
+            got = self._counts(lambda variant, where: bench.build_watcom(variant, "O2", where, "F000"), name)
+            self.assertGreater(got.get("instructions", 0), 0, got)
+
+    def test_watcom_gives_a_program_with_much_data_the_stack_that_is_left(self):
+        """stft_single (7K of data) did not link with the 60K stack: DGROUP exceeds 64k by 2000 bytes. The stack shrinks by what is over."""
+        import tempfile
+
+        variant = next(one for one in bench.variants(bench.BENCH / "stft_single") if one.language == "c")
+        with tempfile.TemporaryDirectory(dir=bench.llrmbin.target_dir()) as where:
+            built = bench.build_watcom(variant, "O2", Path(where), "F000")
+        self.assertNotIsInstance(built, str, built)
+
     @unittest.skipUnless((bench.BORLAND["tc"][0] / "lib" / "MATHM.LIB").exists(), "needs Turbo C 2.01")
     def test_a_turbo_c_program_with_a_define_and_a_float_links_and_prints_its_output(self):
         """TC 2.01 read `#define` after a bare LF as an illegal character (no row for the 4 programs with one), and its MATHM.LIB was empty (no floats)."""
@@ -230,6 +245,20 @@ class TurboCHeaderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=bench.llrmbin.target_dir()) as where:
             built = bench.build_borland("tc", [(variant, "H000")], "O2", Path(where))["H000"]
         self.assertNotIsInstance(built, str, built)
+
+
+@unittest.skipUnless(bench.references_available() and (bench.BORLAND["tcpp"][0] / "lib" / "CM.LIB").exists(), "needs Turbo C++ 3.0")
+class TurboCppHugeTests(unittest.TestCase):
+    def test_a_turbo_cpp_program_with_a_huge_array_runs(self):
+        """huge.c spells `__huge`, which Turbo C++ 3.0 does not know ("Declaration syntax error"): no tcpp row."""
+        import tempfile
+
+        variant = next(one for one in bench.variants(bench.BENCH / "huge") if one.language == "c")
+        with tempfile.TemporaryDirectory(dir=bench.llrmbin.target_dir()) as where:
+            built = bench.build_borland("tcpp", [(variant, "U000")], "O2", Path(where))["U000"]
+            self.assertNotIsInstance(built, str, built)
+            got = bench.measure(("U000", built[0], built[1], variant.region, bench.expected_output(bench.BENCH / "huge"), built[0].with_suffix(".OBJ")))
+        self.assertGreater(got.get("instructions", 0), 0, got)
 
 
 SIZED = {"instructions": 100, "memory_operands": 40, "code_bytes": 200, "data_bytes": 10, "bss_bytes": 4}

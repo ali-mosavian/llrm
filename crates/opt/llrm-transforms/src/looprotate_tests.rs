@@ -17,6 +17,7 @@ fn rotated(module: &mut Module) -> bool {
     let options = Options {
         max_header_size: 16,
         priced_at_size: false,
+        guard_must_fold: false,
         rotation_only: false,
         is_util_mode: false,
         prepare_for_lto: false,
@@ -212,6 +213,7 @@ declare i16 @late(i16)
     let options = Options {
         max_header_size: 16,
         priced_at_size: false,
+        guard_must_fold: false,
         rotation_only: false,
         is_util_mode: false,
         prepare_for_lto: false,
@@ -381,6 +383,7 @@ fn rotated_priced(module: &mut Module) -> bool {
     let options = Options {
         max_header_size: 16,
         priced_at_size: true,
+        guard_must_fold: false,
         rotation_only: false,
         is_util_mode: false,
         prepare_for_lto: false,
@@ -436,6 +439,7 @@ fn rotated_checking(check_exit_count: bool) -> bool {
     let options = Options {
         max_header_size: 16,
         priced_at_size: false,
+        guard_must_fold: false,
         rotation_only: false,
         is_util_mode: false,
         prepare_for_lto: false,
@@ -475,6 +479,7 @@ fn test_check_exit_count_asks_with_one_session_for_all_the_loops_it_leaves() {
     let options = Options {
         max_header_size: 16,
         priced_at_size: false,
+        guard_must_fold: false,
         rotation_only: false,
         is_util_mode: false,
         prepare_for_lto: false,
@@ -559,4 +564,69 @@ b3:
     assert_eq!(aa.alias(&stores[0], &loads[0]), AliasResult::NoAlias, "premise: the copy's own pair");
     assert_eq!(aa.alias(&stores[1], &loads[1]), AliasResult::NoAlias, "premise: the loop's own pair");
     assert_eq!(aa.alias(&stores[0], &loads[1]), AliasResult::MayAlias, "{}", printed(&module));
+}
+
+/// `rotated` as a size build where an unfolded guard is refused (RS1).
+fn rotated_guard_must_fold(text: &str) -> bool {
+    let mut module = parsed(text);
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::testing::closed(&mut module).expect("closes");
+    let tti = X86::of_cpu("i486").expect("a cpu");
+    let options = Options {
+        max_header_size: 16,
+        priced_at_size: false,
+        guard_must_fold: true,
+        rotation_only: false,
+        is_util_mode: false,
+        prepare_for_lto: false,
+        check_exit_count: false,
+    };
+    rotate_function(&mut module, "f", &tti, options).expect("rotates")
+}
+
+/// A loop that stops on a loaded value: its two-instruction header (compare
+/// and branch) copied to the preheader is an unfolded guard, and no trip
+/// count follows. Rotating it grew jpeg_fixed Os by 118 B over 20-odd loops.
+const UNCOUNTED: &str = "define i16 @f(ptr %p) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %v = load i16, ptr %p
+  %go = icmp ne i16 %v, 0
+  br i1 %go, label %b2, label %b3
+
+b2:
+  %next = add i16 %i, 1
+  store i16 %next, ptr %p
+  br label %b1
+
+b3:
+  ret i16 %i
+}
+";
+
+/// -Os (RS1): a loop whose exit test is neither folded by the preheader's
+/// values nor counted is left alone; the same loop is rotated without the
+/// rule.
+#[test]
+fn test_a_size_build_leaves_an_uncounted_loop_whose_guard_does_not_fold() {
+    assert!(!rotated_guard_must_fold(UNCOUNTED));
+    assert!(rotated(&mut parsed(UNCOUNTED)));
+}
+
+/// -Os (RS1): `i < n` counts its trips, so it is rotated (queens' column
+/// loop is +18 B unrotated).
+#[test]
+fn test_a_size_build_rotates_a_counted_loop() {
+    assert!(rotated_guard_must_fold(COUNTED));
+}
+
+/// -Os (RS1): a guard the preheader's values decide (`0 < 8`) is removed by
+/// the rotation, so it is rotated.
+#[test]
+fn test_a_size_build_rotates_a_loop_whose_guard_folds() {
+    assert!(rotated_guard_must_fold(&COUNTED.replace("%n)", "%y)").replace("i16 %i, %n", "i16 %i, 8")));
 }

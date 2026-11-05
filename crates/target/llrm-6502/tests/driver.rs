@@ -2405,3 +2405,16 @@ fn function_text(
     let end = rest.find("\n.export").unwrap_or(rest.len());
     rest[..end].to_owned()
 }
+
+/// `__mulsi3_fast` linked 19 bytes more into 13 of 72 programs and ran faster
+/// in 11; in struct_with_i64 and frame_address_stack_args the multiply never
+/// runs and the bytes were all cost. A long multiply calls `__mulsi3` at every
+/// level until a priced rule picks the variant.
+#[test]
+fn a_long_multiply_links_the_compact_routine_at_every_level() {
+    let ir = module("define i32 @f(i32 %a, i32 %b) {\n  %r = mul i32 %a, %b\n  ret i32 %r\n}");
+    for level in [Level::O2, Level::Os] {
+        let text = assembly(&ir, &Request::new(level)).unwrap();
+        assert!(text.contains("__mulsi3") && !text.contains("__mulsi3_fast"), "{text}");
+    }
+}

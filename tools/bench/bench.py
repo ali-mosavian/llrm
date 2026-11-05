@@ -371,14 +371,20 @@ def build_watcom(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Pat
     done = cpulimit.run([str(OW / "bwcc"), "-zq", "-mm", "-ecc", "-s", "-DOWREF", "-4", "-fpi87", f"-i={OWLIB.parent / 'h'}", *physical_defines(), *flags, str(variant.source), f"-fo={obj}"], 300, capture_output=True, text=True)
     if done.returncode != 0 or not obj.exists():
         return "compile: " + (done.stderr or done.stdout).strip()[-300:]
-    try:
-        support = dosbatch.c_support(dosbatch.REAL_MODE, work)
-        # Watcom names main `main_`; its start-up asks for `_cstart_` and the library calls it
-        dosbatch._host([str(BIN / "jwlink"), "option", "quiet", "option", f"map={listing}", "option", "start=_cstart_", "option", "stack=16k", *dosbatch.linkrecipe.link(dosbatch.REAL_MODE, "format"), "name", str(exe),
-                        "libpath", str(OWLIB / "dos"), "libpath", str(OWLIB), "file", str(obj), *[word for one in support for word in ("file", str(one))],
-                        "library", "clibm.lib", "library", "math87m.lib", "library", "noemu87.lib"])
-    except dosbatch.BuildError as error:
-        return f"build: {error}"
+    support = dosbatch.c_support(dosbatch.REAL_MODE, work)
+    stack = 60 * 1024  # the most DGROUP holds: a deep recursion (recsum, 2000 frames) overran the 16K one into the code; a program with more data gets what is left
+    while True:
+        try:
+            # Watcom names main `main_`; its start-up asks for `_cstart_` and the library calls it
+            dosbatch._host([str(BIN / "jwlink"), "option", "quiet", "option", f"map={listing}", "option", "start=_cstart_", "option", f"stack={stack}", *dosbatch.linkrecipe.link(dosbatch.REAL_MODE, "format"), "name", str(exe),
+                            "libpath", str(OWLIB / "dos"), "libpath", str(OWLIB), "file", str(obj), *[word for one in support for word in ("file", str(one))],
+                            "library", "clibm.lib", "library", "math87m.lib", "library", "noemu87.lib"])
+            break
+        except dosbatch.BuildError as error:
+            over = re.search(r"DGROUP exceeds 64k by (\d+) bytes", str(error))
+            if not over or stack <= 4096:
+                return f"build: {error}"
+            stack -= -(-int(over.group(1)) // 16) * 16
     return exe, listing
 
 
@@ -418,6 +424,9 @@ def omf_library_module(library: Path, name: str, out: Path) -> Path:
     raise KeyError(f"{name} is not a module of {library}")
 
 
+BORLAND_DEFINES = {"tcpp": ["-D__huge=huge"]}  # Turbo C++ 3.0 knows `huge`, not `__huge` (BCC 3.1 and Watcom know both); TC 2.01 has no huge arrays at all: its row stays an error
+
+
 def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str, work: Path) -> dict[str, tuple[Path, Path] | str]:
     """A Borland-family reference (BORLAND), every program in one DOSBox boot. Keyed by stem.
     Linked with the toolchain's own start-up (C0M) and libraries: the floating-point programs need its FP87 and MATHM,
@@ -436,7 +445,7 @@ def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str,
             header = folder / "bench_io.h"
             if header.exists():
                 header.write_bytes(header.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
-    subprocess.run([str(ROOT / "tools" / "callconv" / "bcc.sh"), str(folder), *[f"{stem}.c {levels[opt]} {" ".join(physical_defines())}".strip() for _, stem in variants_]],
+    subprocess.run([str(ROOT / "tools" / "callconv" / "bcc.sh"), str(folder), *[f"{stem}.c {levels[opt]} {" ".join([*physical_defines(), *BORLAND_DEFINES.get(language, [])])}".strip() for _, stem in variants_]],
                    env={**os.environ, "CCROOT": str(home.parent), "CCDIR": home.name, "CCEXE": compiler}, capture_output=True, timeout=1800)
     support = [word for one in dosbatch.c_support(dosbatch.REAL_MODE, folder) for word in ("file", str(one))]
     out: dict[str, tuple[Path, Path] | str] = {}

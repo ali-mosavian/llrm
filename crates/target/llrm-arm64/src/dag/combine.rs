@@ -5,6 +5,10 @@
 //! the pin does, so the selector sees `ADDXrs` and not a `MOVi32imm` and a
 //! `MADD`.
 //!
+//! `performAddCombineForShiftedOperands` moves a one-use shift or extend of
+//! `(shift - y) + z` to the outer add, so it becomes `(z - y) + shift` and the
+//! shift folds into the add's shifted-register form.
+//!
 //! DEVIATE SD524: the `hasALULSLFast` decompositions are omitted (apple-m1 does
 //! not have the feature); the vector, SVE and `rdsvl` parts do not apply to the
 //! scalar table; `isOnlyUsedAsMemoryAddress` does not look at indexed
@@ -57,6 +61,77 @@ fn binary(
 ) -> SDValue {
     let vt = dag.value_type(a);
     dag.get_node(op, vt, &[a, b])
+}
+
+/// `isExtendOrShiftOperand`.
+fn is_extend_or_shift_operand(
+    dag: &SelectionDAG,
+    n: SDValue,
+) -> bool {
+    match dag.opcode(n) {
+        ISD::SignExtend | ISD::ZeroExtend | ISD::AnyExtend => {
+            matches!(dag.value_type(dag.operand(n, 0)), EVT::I32 | EVT::I16 | EVT::I8)
+        }
+        ISD::SignExtendInReg => matches!(
+            dag.node(dag.operand(n, 1)).data,
+            llrm_codegen::backend::selectiondag::NodeData::ValueType(EVT::I32 | EVT::I16 | EVT::I8)
+        ),
+        ISD::And => matches!(dag.constant(dag.operand(n, 1)), Some(0xff | 0xffff | 0xffff_ffff)),
+        ISD::Shl | ISD::Srl | ISD::Sra => dag.constant(dag.operand(n, 1)).is_some(),
+        _ => false,
+    }
+}
+
+/// `performAddCombineSubShift`: `(n - y) + z` is `(z - y) + n` when `n` is an
+/// extend or shift operand.
+fn add_combine_sub_shift(
+    dag: &mut SelectionDAG,
+    sub: SDValue,
+    z: SDValue,
+) -> Option<SDValue> {
+    let one_use_extend = |dag: &SelectionDAG, n: SDValue| dag.has_one_use(n.node) && is_extend_or_shift_operand(dag, n);
+    // Constant or one-use-shift `z` would revert the combine forever.
+    if dag.constant(z).is_some() || one_use_extend(dag, z) {
+        return None;
+    }
+    if dag.opcode(sub) != ISD::Sub || !dag.has_one_use(sub.node) {
+        return None;
+    }
+    let shift = dag.operand(sub, 0);
+    if !one_use_extend(dag, shift) {
+        return None;
+    }
+    let y = dag.operand(sub, 1);
+    let new_sub = binary(dag, ISD::Sub, z, y);
+    Some(binary(dag, ISD::Add, new_sub, shift))
+}
+
+/// `performAddCombineForShiftedOperands`.
+pub fn add_combine_for_shifted_operands(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    if vt != EVT::I32 && vt != EVT::I64 {
+        return None;
+    }
+    let (lhs, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
+    if let Some(found) = add_combine_sub_shift(dag, lhs, rhs) {
+        return Some(found);
+    }
+    if let Some(found) = add_combine_sub_shift(dag, rhs, lhs) {
+        return Some(found);
+    }
+    // Both shifted by immediates: the smaller shift (<= 4) goes on the right.
+    let shl_amount = |dag: &SelectionDAG, v: SDValue| {
+        (dag.opcode(v) == ISD::Shl).then(|| dag.constant(dag.operand(v, 1))).flatten()
+    };
+    match (shl_amount(dag, lhs), shl_amount(dag, rhs)) {
+        (Some(l), Some(r)) if l <= 4 && r > 4 && dag.has_one_use(lhs.node) => {
+            Some(binary(dag, ISD::Add, rhs, lhs))
+        }
+        _ => None,
+    }
 }
 
 /// `performMulCombine`, the scalar integer part.

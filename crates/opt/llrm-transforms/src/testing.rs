@@ -429,3 +429,46 @@ pub fn closed_named(
     let (context, function) = module.function_mut(name).expect("the function");
     crate::lcssa::closed(context, &layout(), function)
 }
+
+/// Asks for the manager's MemorySSA and says nothing else; `forgets` returns
+/// `none()`, as a pass that edited without naming what it kept.
+pub struct AsksMssa {
+    pub forgets: bool,
+}
+
+impl llrm_mir::passes::FunctionPass for AsksMssa {
+    fn name(&self) -> &'static str {
+        "asks-mssa"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        analyses: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        analyses.get::<llrm_analysis::manager::MemorySsa>(unit.context, unit.layout, unit.function);
+        if self.forgets {
+            llrm_mir::passes::PreservedAnalyses::none()
+        } else {
+            llrm_mir::passes::PreservedAnalyses::all()
+        }
+    }
+}
+
+/// The MemorySSA computations (hits, misses) a pipeline of `passes` makes over
+/// `text`, each pass checked by `verify_invalidation` against a fresh build.
+pub fn mssa_misses_over(
+    text: &str,
+    passes: Vec<Box<dyn llrm_mir::passes::FunctionPass>>,
+) -> (u64, u64) {
+    let mut module = parsed(text);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.verify_invalidation = true;
+    for pass in passes {
+        manager.add_boxed(pass);
+    }
+    let before = llrm_mir::counts::analysed("mssa");
+    manager.run_module(&mut module, std::rc::Rc::new(Tuned::default())).unwrap();
+    let after = llrm_mir::counts::analysed("mssa");
+    (after.0 - before.0, after.1 - before.1)
+}

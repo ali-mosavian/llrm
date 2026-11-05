@@ -889,7 +889,14 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                     let mask = self.dag.get_constant((-i128::from(align)) as u128, pointer);
                     at = self.dag.get_node(ISD::And, pointer, &[at, mask]);
                 }
-                let size = (vt.size_in_bits().div_ceil(8)).next_multiple_of(align.max(1));
+                // `getTypeAllocSize(VT)`: the legalizer holds no layout, and a
+                // power-of-two scalar's allocation size is its store size
+                // (no layout here aligns one beyond its size). The operand
+                // align is the whole type's, so rounding to it would step a
+                // half of an expanded `double` by 8, not 4.
+                let bytes = vt.size_in_bits().div_ceil(8);
+                let size =
+                    if vt.size_in_bits().is_power_of_two() { bytes } else { bytes.next_multiple_of(align.max(1)) };
                 let step = self.dag.get_constant(u128::from(size), pointer);
                 let next = self.dag.get_node(ISD::Add, pointer, &[at, step]);
                 let stored = self

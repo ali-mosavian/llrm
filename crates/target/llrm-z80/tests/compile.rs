@@ -1714,3 +1714,39 @@ fn a_long_subtract_borrow_shared_with_the_order_chain_still_fuses() {
     let instructions = text.lines().filter(|line| line.starts_with('\t') && !line.trim_start().starts_with('.')).count();
     assert!(instructions <= 135, "{instructions} instructions:\n{text}");
 }
+
+/// `line` passed the address of its local to `kernel` and ended in `jp
+/// _kernel` with the frame already popped: `kernel` ran over the local it was
+/// handed (frame_address_stack_args -Oz printed 13599, not 13346).
+#[test]
+fn a_call_given_the_address_of_a_local_is_not_a_tail_jump() {
+    let out = compiled(
+        "declare void @use(ptr)\ndefine void @f() {\n  %a = alloca [4 x i8]\n  call void @use(ptr %a)\n  ret void\n}",
+        "f",
+    );
+    assert!(out.contains("call _use") && !out.contains("jp _use"), "{out}");
+}
+
+/// The same call without a local to reach is still a tail jump.
+#[test]
+fn a_call_with_no_local_to_reach_is_a_tail_jump() {
+    let out =
+        compiled("declare void @use(i16)\ndefine void @f(i16 %x) {\n  call void @use(i16 %x)\n  ret void\n}", "f");
+    assert!(out.contains("jp _use"), "{out}");
+}
+
+/// `x + 1` and `x - 1` on a long rebuilt the low word's carry by a compare, a
+/// `ld h, #1` / `jr` / `dec h` byte and an add: 19 B and 20 B. The carry is a
+/// zero test of the low word and the high word steps behind a `jr` (12 B).
+#[test]
+fn a_long_step_of_one_is_a_zero_test_and_a_conditional_step() {
+    let ir = "define i32 @inc(i32 %x) {\n  %r = add i32 %x, 1\n  ret i32 %r\n}\n\
+              define i32 @dec(i32 %x) {\n  %r = add i32 %x, -1\n  ret i32 %r\n}";
+    let ir = format!("target datalayout = \"{DATALAYOUT}\"\n{ir}");
+    for (name, step) in [("inc", "inc"), ("dec", "dec")] {
+        let out = text(&ir, name, 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+        let instructions = out.lines().filter(|l| l.starts_with('\t') && !l.trim_start().starts_with('.')).count();
+        assert!(out.contains("jr nz") && !out.contains("sbc") && !out.contains("sub a"), "{name}\n{out}");
+        assert!(out.contains(&format!("\t{step} ")) && instructions <= 12, "{name}: {instructions}\n{out}");
+    }
+}
