@@ -1,13 +1,18 @@
 # flags: -O2 -march=i486 | -O2 -march=i486 -m32
 # data: @signal
 # Short-time Fourier transform in f32, as stft_single.c: a 256-point Hann-windowed FFT of every 128-sample hop of SIGNAL,
-# the 129 bin powers of each frame written to SPECTRA. Module vars cannot be floats: those arrays are locals.
+# the 129 bin powers of each frame written to SPECTRA.
 import std.io as io
 
 const N: i16 = 256
 const HOP: i16 = 128
 const BINS: i16 = 129
 
+var tw_re: f32[128] = [0.0] * 128
+var tw_im: f32[128] = [0.0] * 128
+var window: f32[256] = [0.0] * 256
+var re: f32[256] = [0.0] * 256
+var im: f32[256] = [0.0] * 256
 var rev: u8[256] = [0] * 256
 var block: i16[256] = [0] * 256
 var row: u16[129] = [0] * 129
@@ -53,11 +58,6 @@ fn put(file: &mut io.File) -> bool:
                 return false
 
 fn bench_stft_single() -> i32:
-    let mut tw_re: f32[128] = [0.0] * 128
-    let mut tw_im: f32[128] = [0.0] * 128
-    let mut window: f32[256] = [0.0] * 256
-    let mut re: f32[256] = [0.0] * 256
-    let mut im: f32[256] = [0.0] * 256
     let mut c: f32 = 1.0
     let mut s: f32 = 0.0
     for k in 0..HOP:

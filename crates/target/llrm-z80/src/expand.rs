@@ -355,6 +355,13 @@ impl Printer<'_> {
                 let to = name_of(self, 0)?;
                 self.push(format!("{mnemonic} {to}"));
             }
+            "INC16x2" | "INC16x3" | "DEC16x2" | "DEC16x3" => {
+                let mnemonic = op[..3].to_lowercase();
+                let to = name_of(self, 0)?;
+                for _ in 0..op[6..].parse::<u32>().map_err(|_| format!("{op} is not a step"))? {
+                    self.push(format!("{mnemonic} {to}"));
+                }
+            }
             "ADD16" => {
                 let source = self.register(inst, 2)?;
                 if !self.add_small_constant(source, rest) && !self.step_pair_through_hl(source, rest) {
