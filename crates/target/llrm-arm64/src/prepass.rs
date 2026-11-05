@@ -839,9 +839,8 @@ fn within_pressure(
     use crate::regalloc::pool;
     let made: HashMap<Reg, &Op> =
         candidates.iter().filter_map(|op| defined(op).map(|register| (register, op))).collect();
-    let (mut reads, mut calls) = (HashMap::<Reg, usize>::default(), false);
+    let mut reads = HashMap::<Reg, usize>::default();
     for op in blocks.iter().flat_map(|&block| &probe.blocks[block].ops) {
-        calls |= matches!(op, Op::Call { .. });
         for used in op.defs_and_uses().1 {
             if made.contains_key(&used) {
                 *reads.entry(used).or_default() += 1;
@@ -849,14 +848,15 @@ fn within_pressure(
         }
     }
     let (held_gprs, held_fprs) = peak_pressure(probe, blocks, cfg, live, &made);
-    // Across a call only the callee-saved registers keep a value.
+    // `CanCauseHighRegPressure`: the whole class counts, calls or not (the
+    // allocator splits or remakes what does not fit).
     let room = |gpr: bool| {
         let (kept, rest) = if gpr {
             (pool::GPR_CALLEE_SAVED.len(), crate::lir_view::gpr_caller_saved_count())
         } else {
             (pool::FPR_CALLEE_SAVED.len(), pool::FPR_CALLER_SAVED.len())
         };
-        (if calls { kept } else { rest }).saturating_sub(if gpr { held_gprs } else { held_fprs })
+        (kept + rest).saturating_sub(if gpr { held_gprs } else { held_fprs })
     };
     // Equal values made in different blocks are one value once hoisted (the
     // `cse` after it joins them): they cost one register, and are read by all.
