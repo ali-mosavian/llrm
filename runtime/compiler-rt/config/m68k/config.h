@@ -7,4 +7,5 @@
 #define SF_DIV_HW32 1
 #define SF_SPECIALS_ONCE 1 /* 68020: mul -4.3% executed instructions, text -20 B; on the 68000 it costs 18..30 B */
 #endif
+#define SF_NO_EXACT32 1 /* f64 int conversions: the 32-bit exact path costs +12..20 B here */
 #endif
