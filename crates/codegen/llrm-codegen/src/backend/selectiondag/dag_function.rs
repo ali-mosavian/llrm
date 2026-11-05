@@ -1551,7 +1551,9 @@ fn selected_in(
             .with_shape(&shape);
         let exposed = llrm_analysis::memory::exposed_frames(&unit);
         let unit = unit.with_exposed(&exposed);
-        let registers = llrm_analysis::consts::known(&unit);
+        // The mid-end's `Registers` is empty by design (constants are folded
+        // into the body), so the trips are proven from the body alone.
+        let registers = IndexMap::default();
         let unit = unit.with_registers(&registers);
         body.loop_trip_counts =
             crate::backend::isel::proven_trips(&unit, &shape, &registers, |block| block_at.get(&block.0).copied());
