@@ -532,8 +532,11 @@ struct Tables<'h> {
 /// mass of a deep loop nest of checked accesses exceeds the flow entering its
 /// outer loop, block frequency loses about half per level, and call sites after
 /// the nest fall under the 2% cold bound (jpeg_fixed `convert` and `restart`:
-/// 0.0014 of entry, against 0.33 unchecked). Owner: qb-metadata. Exit: 2026-11-30.
-const NEVER_TAKEN_WEIGHT: u32 = i32::MAX as u32;
+/// 0.0014 of entry, against 0.33 unchecked). `(1 << 26) - 1` is the smallest
+/// ratio that keeps those sites warm in the pin's inliner (`(1 << 24) - 1` does
+/// not); `i32::MAX` made the frequency verifier's 1e-9 slack flag x87 blocks
+/// (fpbench Os under LLRM_VERIFY). Owner: qb-metadata. Exit: 2026-11-30.
+const NEVER_TAKEN_WEIGHT: u32 = (1 << 26) - 1;
 
 /// The `!dbg` metadata kind: the source line an instruction came from.
 pub const DEBUG_LINE: &str = "dbg";
