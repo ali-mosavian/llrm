@@ -1037,6 +1037,7 @@ pub fn assembled(
         options.arch.frame_registers(),
         word,
         Regs(options.arch.registers()),
+        object.stack_check.is_some(),
     ));
     let mut data = Vec::new();
     for segment in &object.segments {

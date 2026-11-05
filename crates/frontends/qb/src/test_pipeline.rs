@@ -261,11 +261,13 @@ fn test_a_module_without_a_handler_leaves_the_statement_word_zero() {
 
     use crate::{compile as qb_compile, driver as qb_driver};
 
-    let object = |lines: &[&str]| {
+    let object = |lines: &[&str], stack: bool| {
         let directory = tempfile::TempDir::new().unwrap();
         let basic = directory.path().join("T.BAS");
         std::fs::write(&basic, format!("{}\r\n", lines.join("\r\n"))).unwrap();
-        let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("pds71", "pds71"), None).unwrap();
+        let mut frontend = qb_driver::Frontend::new("pds71", "pds71");
+        frontend.checked_stack = stack;
+        let program = qb_driver::parsed(&basic, &frontend, None).unwrap();
         let bytes = qb_compile::object_bytes(
             &program,
             Path::new("T.BAS"),
@@ -276,8 +278,12 @@ fn test_a_module_without_a_handler_leaves_the_statement_word_zero() {
         let records = llrm_omf::omf::parse(&bytes).expect("parses");
         llrm_omf::module::of(&records).expect("a module")
     };
-    let plain = object(&["PRINT \"before\"", "STOP", "END"]);
+    let plain = object(&["PRINT \"before\"", "STOP", "END"], false);
     assert!(!plain.operands.contains_key(&0x0A), "OF_STA is fixed up with no handler");
-    let handled = object(&["ON ERROR GOTO oops", "PRINT \"before\"", "STOP", "END", "oops:", "RESUME NEXT"]);
+    let handled = object(&["ON ERROR GOTO oops", "PRINT \"before\"", "STOP", "END", "oops:", "RESUME NEXT"], false);
     assert!(handled.operands.contains_key(&0x0A), "OF_STA is missing with a handler");
+    // BC /D keeps the word: -fsanitize=stack's report names "line No line
+    // number".
+    let stacked = object(&["PRINT \"before\"", "STOP", "END"], true);
+    assert!(stacked.operands.contains_key(&0x0A), "OF_STA is dropped under -fsanitize=stack");
 }
