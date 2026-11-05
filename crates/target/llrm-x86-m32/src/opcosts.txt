@@ -47,7 +47,10 @@ fill_cell = rep_stos_cell
 fill_segment = 0
 copy = rep_movs + 3*mov_ri
 copy_cell = rep_movs_cell
-copy_variable = 0
+# A copy whose length is known only at run time is a call of memcpy (flat code has no ES and no inline count loop to
+# fall back on), not the `rep movs` above: the call and the stack cleanup less the string instruction, and the two
+# ALU operations that make the count and the exit value. A byte loop of 26 stays a loop (x_jpeg_fixed `next` -Os).
+copy_variable = call_near + alu_ri - rep_movs + 2*alu_rr
 direction = 2*alu_rr
 # The operations a completely unrolled loop may total, before the work its copy no longer does boosts it up to
 # fourfold (peelsize). From LLVM's `-unroll-threshold-default` (150; -O3's 300 is twice it), whose 400% boost the
