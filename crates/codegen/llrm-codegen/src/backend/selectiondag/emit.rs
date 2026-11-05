@@ -1741,6 +1741,11 @@ impl Emitter<'_, '_> {
         let op = Operation::named(&form.operation)
             .ok_or_else(|| EmitError::Unsupported(format!("{name}: operation {}", form.operation)))?;
         self.push(op, &form.name, dests, sources);
+        if name.split('|').next().is_some_and(|pin| pin.ends_with("_DB"))
+            && let Some(last) = self.blocks.last_mut().and_then(|block| block.insns.last_mut())
+        {
+            *last = Arc::new(Insn { disjoint: true, ..(**last).clone() });
+        }
         Ok(())
     }
 

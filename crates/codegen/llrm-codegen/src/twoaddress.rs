@@ -639,6 +639,13 @@ pub enum ThreeAddress {
     Wide,
 }
 
+/// What `convertToThreeAddress` reads `one` as: its name, an `or` of disjoint
+/// bits (`ADDnn_DB`) as an `add`.
+pub fn adds_as(one: &Insn) -> Option<&str> {
+    let name = one.what.as_ref()?.name.as_deref();
+    if one.disjoint && name == Some("or") { Some("add") } else { name }
+}
+
 /// The `lea` of `d := a + k` or `d := a + b`, three-address, or None where the
 /// instruction is not such an add or sub of dwords: the instruction
 /// `convertToThreeAddress` makes of an `ADD32ri`, `ADD32rr` or `SUB32ri`.
@@ -651,9 +658,10 @@ pub fn three_address(
         return None;
     }
     let what = one.what.as_ref()?;
+    let name = adds_as(one);
     // `INC32r` and `DEC32r`: `lea [a + 1]`, `lea [a - 1]`.
     if what.op == Operation::Unary
-        && let Some(name @ ("inc" | "dec")) = what.name.as_deref()
+        && let Some(name @ ("inc" | "dec")) = name
         && what.dests.len() == 1
         && what.sources.len() == 1
         && one.group.is_none()
@@ -684,7 +692,7 @@ pub fn three_address(
         return Some(Arc::new(made));
     }
     if what.op != Operation::Binary
-        || !matches!(what.name.as_deref(), Some("add" | "sub" | "shl"))
+        || !matches!(name, Some("add" | "sub" | "shl"))
         || what.dests.len() != 1
         || what.sources.len() != 2
         || one.group.is_some()
@@ -701,7 +709,7 @@ pub fn three_address(
     let qword = width == 8 && mode == ThreeAddress::Wide;
     // `ADD8ri`, `ADD16ri`, `ADD8rr`, `ADD16rr` (not `SUB8ri`, `SUB16ri`: the
     // pin's FIXME) through `LEA64_32r`.
-    let narrow = narrow_lea(mode, width) && what.name.as_deref() == Some("add");
+    let narrow = narrow_lea(mode, width) && name == Some("add");
     if !(width == 4 || word || qword || narrow) || base.width != width || into.value == base.value {
         return None;
     }
@@ -710,7 +718,7 @@ pub fn three_address(
         _ if narrow => Held { width: 4, ..*held },
         _ => *held,
     };
-    let cell = match (&what.sources[1], what.name.as_deref()) {
+    let cell = match (&what.sources[1], name) {
         // `SHL32ri` by 1 to 3: `[a + a]` for 1, `[a*4]`, `[a*8]` for the rest
         // (the index alone takes a 32-bit displacement, as the pin's does).
         (Loc::Imm(Imm { value: shift @ 1..=3, address: None, .. }), Some("shl"))
