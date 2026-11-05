@@ -12,7 +12,7 @@ use crate::loopidioms::{trip_clocks, trip_cost};
 /// How many times a loop of unknown trip count is assumed to run, as the
 /// pin's branch probabilities do (`LBH_TAKEN_WEIGHT` 124 : `LBH_NONTAKEN_WEIGHT`
 /// 4, a back edge taken 31 times in 32).
-const ASSUMED_TRIPS: i64 = 32;
+pub(super) const ASSUMED_TRIPS: i64 = 32;
 
 /// Whether `saved` clocks repay `added` bytes at `rate` thousandths of a clock
 /// a byte: the one profit rule of a priced unroll, shared by every target.
@@ -56,6 +56,17 @@ pub(super) fn full_unroll_pays(
     // instructions). The pin's threshold decides it.
     if encloses_known_trips(run, se, analyzed, lp, up.full_unroll_max_count) {
         return true;
+    }
+    // DEVIATE UP1 trial pricing (`trial.rs`): the loops the pin's threshold
+    // allows, and the rules above leave to the estimate, are tried on a copy.
+    match run.trial {
+        Trial::Estimate => {}
+        Trial::Collect => {
+            run.deferred.push(lp.get_header());
+            return false;
+        }
+        Trial::Skip => return false,
+        Trial::Force(header) => return header == lp.get_header(),
     }
     let clocks = crate::profit::costs(run.outer);
     let bytes = run.outer.target().byte_costs();

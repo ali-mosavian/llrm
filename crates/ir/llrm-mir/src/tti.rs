@@ -648,6 +648,13 @@ pub trait Tti {
         0
     }
 
+    /// DEVIATE UP1 trial pricing: a full unroll is judged on a copy of the
+    /// function that runs the Simplify list (`loopunrollpass/trial.rs`),
+    /// not by the estimate; false: the estimate.
+    fn unroll_trial(&self) -> bool {
+        false
+    }
+
     /// `Tuning::multiply_by_clocks`.
     fn multiply_by_clocks(&self) -> bool {
         false

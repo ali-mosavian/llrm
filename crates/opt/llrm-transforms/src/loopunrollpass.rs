@@ -83,6 +83,7 @@ use crate::looppeel::PeelingPreferences;
 use crate::loopunroll::{Exit, Options as UnrollOptions, Unrolled, unroll_loop_blocks};
 
 mod price;
+mod trial;
 
 const UNROLL_THRESHOLD_DEFAULT: u32 = 150;
 const UNROLL_THRESHOLD_AGGRESSIVE: u32 = 300;
@@ -108,6 +109,20 @@ pub struct Options {
     /// `LoopUnrollPass` rather than `LoopFullUnrollPass`: `AllowPartial` and
     /// `UpperBound` are the target's, not forced off.
     pub target_unrolling: bool,
+}
+
+/// Who prices a full unroll the pin's threshold allows, where the target
+/// prices bytes (`Tti::unroll_milliclocks_per_byte`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Trial {
+    /// The estimate of `price::full_unroll_pays`.
+    Estimate,
+    /// Not unrolled: the loop is noted in `Run::deferred` for a trial.
+    Collect,
+    /// Not unrolled and not noted: the cleanup of a trial.
+    Skip,
+    /// Only this loop is unrolled: the trial's copy, and its acceptance.
+    Force(BlockId),
 }
 
 /// What the pass reads and changes.
@@ -138,6 +153,10 @@ pub struct Run<'a> {
     /// The expressions of the passes before (`Scevs`), current while the
     /// function is as they left it: dropped at the first change.
     pub scev: ScalarEvolution,
+    /// How a loop the pin's threshold allows is priced (DEVIATE UP1).
+    pub trial: Trial,
+    /// The headers of the loops `Trial::Collect` left for a trial.
+    pub deferred: Vec<BlockId>,
 }
 
 /// `TransformationMode`.
@@ -2211,6 +2230,20 @@ pub fn unroll_loops(run: &mut Run) -> bool {
     changed
 }
 
+/// How the slot prices the full unrolls the pin's threshold allows.
+#[derive(Clone, Default)]
+pub enum Pricing {
+    /// The estimate of `price::full_unroll_pays`.
+    #[default]
+    Estimate,
+    /// A trial unroll (`trial.rs`) where the target prices bytes: the builder
+    /// makes the cleanup list the trial runs, once.
+    Trial(std::rc::Rc<dyn Fn() -> Box<dyn FunctionPass>>),
+    /// Loops the threshold allows are left alone: the slot of a trial's own
+    /// cleanup.
+    Skip,
+}
+
 /// `LoopFullUnrollPass` as a slot of the pipeline.
 pub struct LoopFullUnroll {
     pub opt_level: u32,
@@ -2224,6 +2257,46 @@ pub struct LoopFullUnroll {
     /// The headers of the loops the last run made, for the slot after it: the
     /// loop pass manager's worklist.
     pub created: std::rc::Rc<std::cell::RefCell<Vec<BlockId>>>,
+    pub pricing: Pricing,
+}
+
+impl LoopFullUnroll {
+    fn run_with<'a>(
+        &self,
+        unit: &'a mut Unit,
+        outer: &'a llrm_mir::passes::Outer,
+        tti: &'a dyn Tti,
+        scev: ScalarEvolution,
+        trial: Trial,
+    ) -> Run<'a> {
+        Run {
+            context: unit.context,
+            layout: unit.layout,
+            globals: &outer.globals,
+            metadata: unit.metadata,
+            callees: outer.callees(),
+            this: unit.id,
+            tti,
+            function: unit.function,
+            outer,
+            declared: unit.declared,
+            emptied: Vec::new(),
+            peeled: Default::default(),
+            finished: IdSet::new(),
+            created: Vec::new(),
+            scev,
+            trial,
+            deferred: Vec::new(),
+            options: Options {
+                opt_level: self.opt_level,
+                opt_size: self.opt_size,
+                min_size: false,
+                only_when_forced: self.only_when_forced,
+                prepare_for_lto: false,
+                target_unrolling: self.target_unrolling,
+            },
+        }
+    }
 }
 
 impl FunctionPass for LoopFullUnroll {
@@ -2243,39 +2316,28 @@ impl FunctionPass for LoopFullUnroll {
         let outer = std::rc::Rc::clone(analyses.outer());
         let tti = crate::looprotate::target_tti(outer.target());
         let held = analyses.get::<llrm_analysis::scev::analysis::Scevs>(unit.context, unit.layout, unit.function);
-        let mut run = Run {
-            context: unit.context,
-            layout: unit.layout,
-            globals: &outer.globals,
-            metadata: unit.metadata,
-            callees: outer.callees(),
-            this: unit.id,
-            tti: &*tti,
-            function: unit.function,
-            outer: &outer,
-            declared: unit.declared,
-            emptied: Vec::new(),
-            peeled: Default::default(),
-            finished: IdSet::new(),
-            created: Vec::new(),
-            scev: held.take(),
-            options: Options {
-                opt_level: self.opt_level,
-                opt_size: self.opt_size,
-                min_size: false,
-                only_when_forced: self.only_when_forced,
-                prepare_for_lto: false,
-                target_unrolling: self.target_unrolling,
-            },
+        let first = match &self.pricing {
+            Pricing::Estimate => Trial::Estimate,
+            Pricing::Trial(_) if tti.unroll_trial() => Trial::Collect,
+            Pricing::Trial(_) => Trial::Estimate,
+            Pricing::Skip => Trial::Skip,
         };
-        let changed = unroll_loops(&mut run);
-        *self.created.borrow_mut() = std::mem::take(&mut run.created);
-        if changed {
-            PreservedAnalyses::none()
-        } else {
+        let mut run = self.run_with(unit, &outer, &*tti, held.take(), first);
+        let mut changed = unroll_loops(&mut run);
+        let mut created = std::mem::take(&mut run.created);
+        let deferred = std::mem::take(&mut run.deferred);
+        if !changed {
             held.put(std::mem::replace(&mut run.scev, ScalarEvolution::new()));
-            PreservedAnalyses::all()
         }
+        drop(run);
+        if let Pricing::Trial(cleanup) = &self.pricing {
+            for more in self.accepted(unit, &outer, &*tti, &deferred, cleanup) {
+                created.extend(more);
+                changed = true;
+            }
+        }
+        *self.created.borrow_mut() = created;
+        if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
 }
 
@@ -2320,6 +2382,8 @@ pub fn unroll_function(
         finished: IdSet::new(),
         created: Vec::new(),
         scev: ScalarEvolution::new(),
+        trial: Trial::Estimate,
+        deferred: Vec::new(),
     };
     let unrolled = unroll_loops(&mut run);
     declared.place(module)?;

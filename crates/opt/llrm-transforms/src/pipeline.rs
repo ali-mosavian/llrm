@@ -536,6 +536,8 @@ pub struct Applied {
     /// Where each body's changed steps are written, `N/NNN-stage.ll`, the
     /// Nth body run; the manager writes the module after it there.
     pub dump: Option<PathBuf>,
+    /// The Simplify list of a trial unroll: its unroll slot judges nothing.
+    pub trial_cleanup: bool,
 }
 
 /// `LLRM_NO_MEM2REG`, read once: set, the round's `Promote` stays the
@@ -921,6 +923,14 @@ pub(crate) fn llvm_order(
                     only_when_forced: !applied.options.loop_unrolling,
                     target_unrolling: true,
                     created: Default::default(),
+                    pricing: if applied.trial_cleanup {
+                        loopunrollpass::Pricing::Skip
+                    } else {
+                        let inner = Applied { dump: None, trial_cleanup: true, ..applied.clone() };
+                        loopunrollpass::Pricing::Trial(std::rc::Rc::new(move || {
+                            Box::new(Fixed::linear(&inner, Phase::Simplify)) as Box<dyn FunctionPass>
+                        }))
+                    },
                 }),
             ),
             sroa("sroa@1494"),
@@ -1038,6 +1048,7 @@ pub(crate) fn llvm_order(
                         only_when_forced: !applied.options.loop_unrolling,
                         target_unrolling: false,
                         created: std::rc::Rc::clone(&created),
+                        pricing: loopunrollpass::Pricing::Estimate,
                     }),
                 ),
                 // The loops the unroll made go on to LPM2's passes: indvars on
