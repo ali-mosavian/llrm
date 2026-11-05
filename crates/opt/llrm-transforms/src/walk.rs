@@ -542,7 +542,7 @@ impl ProgramPass for Walk {
                                     0
                                 };
                                 let (saved, growth) = if size == crate::inlinecost::CallerSize::Speed && rate > 0 {
-                                    let costs = program.target.size_costs();
+                                    let costs = program.target.byte_costs();
                                     let now = module.global(id).function().expect("a body");
                                     let callees: Vec<&llrm_mir::module::Function> = calls
                                         .iter()
@@ -842,7 +842,7 @@ pub(crate) fn priced_copy_depth(
     let Some(&first) = sites.first() else { return 0 };
     let arguments = body.instruction(first).operands.len().saturating_sub(1);
     let calls: f64 = sites.iter().map(|one| frequencies.get(one).copied().unwrap_or(0.0)).sum();
-    let bytes = program_target.size_costs();
+    let bytes = program_target.byte_costs();
     let price = llrm_mir::callprice::CallPrice::new(&program_target.costs(), &bytes, arguments, rate);
     let overhead = price.clocks as f64;
     let net = (function_bytes(module, layout, &bytes, body) - price.bytes).max(0) as f64;
