@@ -23,7 +23,7 @@ use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
 use llrm_codegen::backend::selectiondag::legalize_dag::Hooks;
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
 use llrm_codegen::backend::selectiondag::{Action, LoadExt, SDNodeFlags, SDValue, SelectionDAG, TargetLowering};
-use llrm_codegen::backend::selectiondag::{NodeData, TargetLoweringInfo};
+use llrm_codegen::backend::selectiondag::{MemBase, MemInfo, NodeData, TargetLoweringInfo};
 
 use super::generated::ids::isd as ids;
 use super::hooks::Cpu;
@@ -153,9 +153,16 @@ pub fn target_lowering(cpu: Cpu) -> TargetLowering {
 pub struct M68kLowering {
     /// Form `(An)+` and `-(An)` accesses; the pin sets no indexed action.
     pub indexed: bool,
+    /// The beyond-pin size rewrites (`addq`, `extb.l`, `sub` of a sign-extended
+    /// compare).
+    pub short: bool,
 }
 
 impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLowering {
+    fn sub_of_sign_extended_bool(&self) -> bool {
+        self.short
+    }
+
     fn is_indexed_legal(
         &self,
         _is_load: bool,
@@ -209,6 +216,7 @@ impl Hooks for M68kLowering {
             ISD::Select => Some(lower_select(dag, node)),
             ISD::BrCond => Some(lower_brcond(dag, node)),
             ISD::GlobalAddress => Some(super::call::lower_global_address(dag, node)),
+            ISD::VAStart => lower_vastart(dag, node),
             ISD::SAddO | ISD::UAddO | ISD::SSubO | ISD::USubO | ISD::SMulO | ISD::UMulO => lower_xalu(dag, node),
             _ => None,
         }
@@ -715,4 +723,21 @@ fn lower_brcond(
         (code, emit_test(dag, cond_value, cond::NE))
     };
     dag.get_node(m68kisd::BRCOND, EVT::OTHER, &[chain, dest, code, flags])
+}
+
+/// `M68kTargetLowering::LowerVASTART`: `va_start` stores the address of the
+/// first variadic argument's slot (`VarArgsFrameIndex`) through the list.
+fn lower_vastart(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let index = dag.var_args_frame_index?;
+    let (chain, list) = (dag.operand(node, 0), dag.operand(node, 1));
+    let first = dag.get_frame_index(EVT::I32, index);
+    let base = match dag.node(list).data {
+        NodeData::FrameIndex(slot) => MemBase::Stack(slot),
+        _ => MemBase::Unknown,
+    };
+    let info = MemInfo { mem_vt: EVT::I32, align: 2, volatile: false, base, ext: None, space: 0, ordering: None };
+    Some(dag.get_store(chain, first, list, info))
 }

@@ -476,6 +476,7 @@ struct InstState {
 #[allow(clippy::too_many_arguments)]
 fn analyze_loop_unroll_cost(
     run: &mut Run,
+    se: &mut ScalarEvolution,
     analyzed: &Analyzed,
     lp: Loop,
     trip_count: u32,
@@ -498,8 +499,6 @@ fn analyze_loop_unroll_cost(
     let latch = lp.get_loop_latch(run.function).expect("a latch");
     let preheader = lp.get_loop_preheader(run.function).expect("a preheader");
     let kind = if run.options.min_size { CostKind::CodeSize } else { CostKind::SizeAndLatency };
-    let mut se = ScalarEvolution::new();
-
     let mut simplified_values = IdMap::<llrm_mir::module::ValueId, Operand>::new();
     let mut unrolled_cost = Cost::FREE;
     let mut first_iteration = Cost::FREE;
@@ -545,7 +544,7 @@ fn analyze_loop_unroll_cost(
             simplified_values.insert(phi, value);
         }
 
-        let mut analyzer = UnrolledInstAnalyzer::new(&mut se, iteration);
+        let mut analyzer = UnrolledInstAnalyzer::new(se, iteration);
 
         let mut bb_worklist: Vec<BlockId> = vec![header];
         let mut in_worklist = IdSet::<BlockId>::new();
@@ -605,7 +604,7 @@ fn analyze_loop_unroll_cost(
                         loops: &analyzed.loops,
                         tree: &analyzed.tree,
                         assumptions: &analyzed.assumptions,
-                        se: &mut se,
+                        se: &mut *se,
                         header,
                     };
                     analyzer.visit(&mut env, &mut simplified_values, inst)
@@ -976,6 +975,7 @@ fn add_cost_recursively(
 /// `shouldFullUnroll`.
 fn should_full_unroll(
     run: &mut Run,
+    se: &mut ScalarEvolution,
     analyzed: &Analyzed,
     lp: Loop,
     eph: &IdSet<InstId>,
@@ -1012,6 +1012,7 @@ fn should_full_unroll(
         (u64::from(up.threshold) * u64::from(up.max_percent_threshold_boost) / 100).min(u64::from(u32::MAX)) as u32;
     if let Some(cost) = analyze_loop_unroll_cost(
         run,
+        se,
         analyzed,
         lp,
         full_unroll_trip_count,
@@ -1157,6 +1158,7 @@ fn simplified_clocks(
 /// the copy is the loop's size at about `BYTES_PER_COST` bytes a unit.
 fn peels_folded_entry(
     run: &mut Run,
+    se: &mut ScalarEvolution,
     analyzed: &Analyzed,
     lp: Loop,
     eph: &IdSet<InstId>,
@@ -1183,7 +1185,7 @@ fn peels_folded_entry(
     let costs = crate::profit::costs(run.outer);
     // One trip, read for what the entry values change in its multiplies and
     // divides (what only feeds a next trip is not in that count).
-    let Some(cost) = analyze_loop_unroll_cost(run, analyzed, lp, 1, eph, u32::MAX, 1, Some(&costs)) else {
+    let Some(cost) = analyze_loop_unroll_cost(run, se, analyzed, lp, 1, eph, u32::MAX, 1, Some(&costs)) else {
         return false;
     };
     // The multiplies and divides the first trip's entry values remove or
@@ -1248,7 +1250,7 @@ pub(crate) fn compute_unroll_count(
     // 3rd priority is exact full unrolling: it eliminates all copies of some
     // exit test.
     if trip_count != 0
-        && let Some(factor) = should_full_unroll(run, analyzed, lp, eph, trip_count, uce, up)
+        && let Some(factor) = should_full_unroll(run, se, analyzed, lp, eph, trip_count, uce, up)
     {
         return factor;
     }
@@ -1259,7 +1261,7 @@ pub(crate) fn compute_unroll_count(
         && max_trip_count != 0
         && (up.upper_bound || max_or_zero)
         && max_trip_count <= up.max_upper_bound
-        && let Some(factor) = should_full_unroll(run, analyzed, lp, eph, max_trip_count, uce, up)
+        && let Some(factor) = should_full_unroll(run, se, analyzed, lp, eph, max_trip_count, uce, up)
     {
         return factor;
     }
@@ -1282,7 +1284,7 @@ pub(crate) fn compute_unroll_count(
             && already == 0
             && pp.allow_peeling
             && crate::looppeel::can_peel(&cx, lp)
-            && peels_folded_entry(run, analyzed, lp, eph, loop_size, up)
+            && peels_folded_entry(run, se, analyzed, lp, eph, loop_size, up)
         {
             pp.peel_count = 1;
         }
@@ -1639,6 +1641,11 @@ fn try_to_unroll_loop(
     let mut remade = None;
     if run.options.target_unrolling && trip_count == 0 {
         if trip_multiple % count != 0 {
+            // `EpilogProfitability` (LoopUnroll.cpp#L1058): the epilog only
+            // where a header phi starts at an integer constant.
+            let use_epilog = lp.get_loop_preheader(run.function).is_some_and(|pre| {
+                crate::loopunrollruntime::is_epilog_profitable(run.context, run.function, header, pre)
+            });
             let expansion =
                 llrm_analysis::scev::expand_cost::MachineCosts { tti: run.outer.target().tti(), minimum_size: false };
             let mut session = llrm_analysis::scev::analysis::ScevSession::of(run.context, run.function, run.outer);
@@ -1650,8 +1657,14 @@ fn try_to_unroll_loop(
                 outer: run.outer,
                 tti: &expansion,
             };
-            let done =
-                crate::loopunrollruntime::unroll_runtime_loop_remainder(&mut env, &mut session, header, count, false);
+            let done = crate::loopunrollruntime::unroll_runtime_loop_remainder(
+                &mut env,
+                &mut session,
+                header,
+                count,
+                false,
+                use_epilog,
+            );
             let Some(epilog) = done else {
                 why(run, lp, "the remainder loop could not be generated");
                 return Unrolled::Unmodified;
@@ -1944,6 +1957,38 @@ pub(crate) fn simplify_loop_after_unroll(
     }
 }
 
+/// `!CompletelyUnroll`: the loop headed by `header` is a loop after the unroll,
+/// its header reached from one of `after` (the preheader is not).
+fn is_still_a_loop(
+    run: &Run,
+    header: BlockId,
+    after: &[BlockId],
+) -> bool {
+    run.function.predecessors(header).into_iter().any(|one| after.contains(&one))
+}
+
+/// The `SimplifyIVs` half of `simplifyLoopAfterUnroll`
+/// ([LoopUnroll.cpp:350](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopUnroll.cpp#L350)),
+/// run when the unroll is partial (`!CompletelyUnroll && Count > 1`):
+/// `simplifyLoopIVs`, then `loadCSE`. `analyzed` describes the function before
+/// the IVs are simplified, whose edits leave its blocks and edges as they are.
+fn simplify_ivs_and_load_cse(
+    run: &mut Run,
+    analyzed: &Analyzed,
+    header: BlockId,
+) {
+    let _ = crate::simplifyindvar::simplified_loop_ivs(
+        run.context,
+        run.layout,
+        run.function,
+        run.declared,
+        run.outer,
+        header,
+    );
+    run.scev = ScalarEvolution::new();
+    crate::loopunrollloadcse::load_cse(run, analyzed, header);
+}
+
 /// The blocks `UnrollLoop` hands `simplifyLoopAfterUnroll`: the loop's own that
 /// remain (`body`) and those made since the function had `capacity` blocks.
 pub(crate) fn unrolled_blocks(
@@ -2056,7 +2101,13 @@ pub fn unroll_loops(run: &mut Run) -> bool {
         // after every loop they were `n^2` over `n` loops in a function).
         if parent_header.is_none() && !holds_loops {
             let after = unrolled_blocks(run, capacity, &body);
-            simplify_loop_after_unroll(run, None, &after);
+            if is_still_a_loop(run, header, &after) {
+                let fresh = Analyzed::of(run);
+                simplify_ivs_and_load_cse(run, &fresh, header);
+                simplify_loop_after_unroll(run, Some(&fresh.loops), &after);
+            } else {
+                simplify_loop_after_unroll(run, None, &after);
+            }
             continue;
         }
         // `UnrollLoop` closes the outer loop's SSA form
@@ -2066,6 +2117,9 @@ pub fn unroll_loops(run: &mut Run) -> bool {
         // The blocks `UnrollLoop` hands `simplifyLoopAfterUnroll`: the loop's
         // own that remain and the ones it made.
         let after = unrolled_blocks(run, capacity, &body);
+        if is_still_a_loop(run, header, &after) {
+            simplify_ivs_and_load_cse(run, &analyzed, header);
+        }
         simplify_loop_after_unroll(run, Some(&analyzed.loops), &after);
         analyzed = Analyzed::of(run);
         // `UnrollLoop` puts the loops it cloned back in loop-simplify form

@@ -792,7 +792,7 @@ pub(crate) fn unroll_and_jam_loop(
             tti: expansion,
         };
         let done =
-            crate::loopunrollruntime::unroll_runtime_loop_remainder(&mut env, &mut session, header, count, false);
+            crate::loopunrollruntime::unroll_runtime_loop_remainder(&mut env, &mut session, header, count, false, true);
         if done.is_none() {
             llrm_support::debug!("unroll-jam", "the remainder loop could not be generated");
             return Jammed::Unmodified;
@@ -1384,6 +1384,10 @@ impl LoopUnrollAndJam {
             up.unroll_and_jam = true;
             up.partial = true;
             up.runtime = true;
+            // The target's own `PartialThreshold` for the outer loop (UJ2).
+            if let Some(threshold) = run.tti.unroll_jam_partial_threshold_override() {
+                up.partial_threshold = threshold;
+            }
         }
         if let Some(runtime) = self.options.runtime {
             up.runtime = runtime;

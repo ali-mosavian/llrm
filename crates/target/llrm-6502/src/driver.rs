@@ -196,6 +196,13 @@ fn program(
         }
         llrm_transforms::pipeline::applied(&mut program, &Applied { options, only: None, dump })?;
         program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
+        let static_locals = !request.passes.iter().any(|flag| flag == "-fno-static-locals")
+            && std::env::var_os("LLRM_6502_NO_STATIC_LOCALS").is_none();
+        if static_locals {
+            for module in &mut program.modules {
+                crate::staticlocals::applied(module)?;
+            }
+        }
     }
     Ok(program)
 }

@@ -2982,6 +2982,18 @@ fn a_reload_before_a_jump_goes() {
     );
 }
 
+/// x16basic-c `fp_fin`: a zero word live across a call took `rc8`/`rc9`, for a
+/// `pha`/`pla` pair each, instead of being made again at its three reads. A
+/// remade literal has no store, so its definition is not part of the spill's
+/// cost.
+#[test]
+fn a_zero_across_a_call_is_made_again_not_kept_in_a_saved_cell() {
+    let ir = "declare i16 @chrget(i16)\n@a = external global i16\n@b = external global i16\n\
+              define i8 @f() {\n  %c = call i16 @chrget(i16 0)\n  store i16 0, ptr @a\n  store i16 0, ptr @b\n  %t = trunc i16 %c to i8\n  ret i8 %t\n}";
+    let text = compile_at(ir, "f", 16, Tuning::SIZE);
+    assert!(!text.contains("pha"), "{text}");
+}
+
 /// x16basic-c `strs.c` -O2 (`fn_chrd`) did not compile: a word used as a
 /// pointer has its high byte stored elsewhere. The byte was read as a cell
 /// nothing defined, and the coalescer panicked ("a unique value").
@@ -3010,4 +3022,61 @@ fn a_byte_written_to_a_pointer_cells_high_half_is_refused() {
     ];
     let refused = build("f", &items).err().expect("the write is refused");
     assert!(refused.0.contains("w_p+1"), "{}", refused.0);
+}
+
+/// `ldy #0; pha; lda #0; sta rc8; pla`: a zero made into a cell while `a` is
+/// live, with `y` already holding it (tests/run/c os_files, memory_expansion
+/// -Os: 30 of these in one function, 4 bytes where `sty rc8` is 2).
+#[test]
+fn a_literal_made_into_a_cell_is_stored_from_the_index_register_that_holds_it() {
+    use llrm_6502::peephole::drop_known_loads;
+    assert_eq!(
+        pass(drop_known_loads, "  ldy #0\n  pha\n  lda #0\n  sta rc8\n  pla\n  lda rc8\n  rts\n"),
+        "  ldy #0\n  sty rc8\n  lda rc8\n  rts\n"
+    );
+    let other = "  ldy #1\n  pha\n  lda #0\n  sta rc8\n  pla\n  lda rc8\n  rts\n";
+    assert_eq!(pass(drop_known_loads, other), other, "y holds another value");
+    let read = "  ldy #0\n  pha\n  lda #0\n  sta rc8\n  pla\n  beq l\n  rts\n";
+    assert_eq!(pass(drop_known_loads, read), read, "the branch reads the flags pla set");
+}
+
+/// A pointer's halves read for a word compare: `ldy rc7; lda rc6; cmp rc2; bne l; tya; cmp rc3`.
+#[test]
+fn a_high_half_loaded_into_y_and_moved_to_a_is_loaded_into_a() {
+    use llrm_6502::peephole::load_straight_into_a;
+    assert_eq!(
+        pass(
+            load_straight_into_a,
+            "  ldy rc7\n  lda rc6\n  cmp rc2\n  bne l\n  tya\n  cmp rc3\nl:\n  bne top\n  ldy #0\n  rts\ntop:\n  ldy #0\n  rts\n"
+        ),
+        "  lda rc6\n  cmp rc2\n  bne l\n  lda rc7\n  cmp rc3\nl:\n  bne top\n  ldy #0\n  rts\ntop:\n  ldy #0\n  rts\n"
+    );
+}
+
+/// `adc #3; tax; lda rc1; adc #0; tay; stx rc6; sty rc7` (a frame address, x16
+/// crunch): the sums are in `a` when transferred, so they are stored there.
+/// Kept: the register read between, the cell touched between, the register
+/// live after, a label between.
+#[test]
+fn a_byte_transferred_to_an_index_register_to_be_stored_is_stored_from_a() {
+    use llrm_6502::peephole::store_before_transfer;
+    assert_eq!(
+        pass(
+            store_before_transfer,
+            "  clc\n  lda rc0\n  adc #3\n  tax\n  lda rc1\n  adc #0\n  tay\n  stx rc6\n  sty rc7\n  ldy #0\n  sta (rc6),y\n  ldx #0\n  rts\n"
+        ),
+        "  clc\n  lda rc0\n  adc #3\n  sta rc6\n  lda rc1\n  adc #0\n  sta rc7\n  ldy #0\n  sta (rc6),y\n  ldx #0\n  rts\n"
+    );
+    for kept in [
+        // the register is read between
+        "  lda rc0\n  tax\n  lda rc1\n  sta rc5,x\n  stx rc6\n  ldx #0\n  rts\n",
+        // the cell is read between
+        "  lda rc0\n  tax\n  lda rc6\n  stx rc6\n  ldx #0\n  rts\n",
+        // the register is live after
+        "  lda rc0\n  tax\n  lda rc1\n  stx rc6\n  txa\n  rts\n",
+        // a label between
+        "  lda rc0\n  tax\nl:\n  lda rc1\n  stx rc6\n  ldx #0\n  rts\n",
+    ] {
+        assert_eq!(pass(store_before_transfer, kept), kept);
+    }
 }

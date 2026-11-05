@@ -307,6 +307,49 @@ pub struct MemCmpExpansionOptions {
     pub allowed_tail_expansions: Vec<u32>,
 }
 
+/// The fields of `HardwareLoopInfo` a target sets in
+/// `isHardwareLoopProfitable`; the pass keeps the rest (the exit block, branch
+/// and count it finds).
+///
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/TargetTransformInfo.h#L104>
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HardwareLoopTarget {
+    /// `CountType`'s width: the pin's default is 32
+    /// (`hardware-loop-counter-bitwidth`).
+    pub count_bits: u32,
+    /// `LoopDecrement`: what `llvm.loop.decrement` takes off the counter.
+    pub loop_decrement: u64,
+    /// `IsNestingLegal`: a loop inside another may be a hardware loop.
+    pub is_nesting_legal: bool,
+    /// `CounterInReg`: the counter is a register value carried round the loop
+    /// by a phi (`loop.decrement.reg`), not state the target keeps.
+    pub counter_in_reg: bool,
+    /// `PerformEntryTest`: the loop's entry guard may be folded into the
+    /// counter's set (`test.set.loop.iterations`).
+    pub perform_entry_test: bool,
+    /// Beyond the pin (PPC's `checkCallInLoop` is its own check): the counter
+    /// is lost across a call, so a loop that calls is left alone.
+    pub rejects_calls: bool,
+    /// Beyond the pin: the counter is one more register, so a loop is
+    /// converted only where its own counter dies, replaced by this one.
+    pub requires_dead_counter: bool,
+}
+
+impl Default for HardwareLoopTarget {
+    /// `HardwareLoopInfo(L)`'s defaults.
+    fn default() -> Self {
+        HardwareLoopTarget {
+            count_bits: 32,
+            loop_decrement: 1,
+            is_nesting_legal: false,
+            counter_in_reg: false,
+            perform_entry_test: false,
+            rejects_calls: false,
+            requires_dead_counter: false,
+        }
+    }
+}
+
 /// An argument of a call, as the call sequence sees it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CallArgument {
@@ -420,6 +463,13 @@ pub trait Tti {
     /// 0: the pin's threshold alone.
     fn speed_inline_milliclocks_per_byte(&self) -> i64 {
         0
+    }
+
+    /// Whether one wider store of constants may start off its own size
+    /// (`allowsMemoryAccess` calls the unaligned store fast). False: it starts
+    /// at a multiple of its size.
+    fn merges_unaligned_stores(&self) -> bool {
+        false
     }
 
     /// Whether a size build's loop rotation copies a header only when the copy
@@ -542,6 +592,16 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::inline_variable_memcpy`.
+    fn inlines_variable_memcpy(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::ipsccp_widen_keeps_sign`.
+    fn ipsccp_widen_keeps_sign(&self) -> bool {
+        false
+    }
+
     /// DEVIATE U1: the bar (unrolled size) an `optsize` loop of at most this
     /// many trips is fully unrolled under, where the target says so: its
     /// body's tests fold on the trip, and few copies cost little; none: the
@@ -606,10 +666,27 @@ pub trait Tti {
         None
     }
 
+    /// The `PartialThreshold` of the unroll-and-jam's outer loop (its tuning
+    /// table); none: `unroll_partial_threshold_override`'s.
+    fn unroll_jam_partial_threshold_override(&self) -> Option<u32> {
+        None
+    }
+
     /// The target's `-unswitch-threshold` (its tuning table); none: the pin's
     /// 50.
     fn unswitch_threshold_override(&self) -> Option<i64> {
         None
+    }
+
+    /// `isHardwareLoopProfitable`: whether the target counts loops in hardware
+    /// (`djnz`, `dbra`, `loop`), and how, in `info`. The hook sees no loop
+    /// yet: no target reads one (DEVIATE 3 of `hardwareloops`). Off by
+    /// default; the pass does not run for a target that says no.
+    fn is_hardware_loop_profitable(
+        &self,
+        _info: &mut HardwareLoopTarget,
+    ) -> bool {
+        false
     }
 
     /// `getUnrollingPreferences` given the loop's shape, which targets read

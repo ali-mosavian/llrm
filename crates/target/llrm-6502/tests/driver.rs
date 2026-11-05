@@ -2010,10 +2010,122 @@ fn a_zero_in_a_callee_saved_cell_is_compared_as_zero() {
     assert!(!text.contains("cmp #0"), "a compare against zero follows a load of the flag:\n{text}");
 }
 
+/// `UMulO` on a word was refused ("convert node to libcall", `overflow_builtins.c`
+/// of tests/run/c): its flag's extension was not lowered. It computes the
+/// product and the carry out of the 16 bits, at the edges (255 * 257 fits,
+/// 256 * 256 and 4096 * 16 do not).
+#[test]
+fn an_unsigned_word_multiply_with_overflow_computes_its_value_and_its_flag() {
+    let pairs: [(u16, u16); 10] = [
+        (0, 0),
+        (1, 65535),
+        (255, 257),
+        (256, 256),
+        (65535, 65535),
+        (300, 200),
+        (4096, 16),
+        (255, 258),
+        (2, 32768),
+        (1, 32768),
+    ];
+    let mut ir = String::from("declare { i16, i1 } @llvm.umul.with.overflow.i16(i16, i16)\n");
+    for (k, (a, b)) in pairs.iter().enumerate() {
+        ir += &format!(
+            "@a_um{k} = global i16 {}\n@b_um{k} = global i16 {}\n\
+             define i8 @t_um{k}() {{\n  %a = load volatile i16, ptr @a_um{k}\n  %b = load volatile i16, ptr @b_um{k}\n  \
+             %r = call {{ i16, i1 }} @llvm.umul.with.overflow.i16(i16 %a, i16 %b)\n  \
+             %v = extractvalue {{ i16, i1 }} %r, 0\n  %o = extractvalue {{ i16, i1 }} %r, 1\n  \
+             %lo = trunc i16 %v to i8\n  %h = lshr i16 %v, 8\n  %hi = trunc i16 %h to i8\n  %x = xor i8 %lo, %hi\n  \
+             %m = select i1 %o, i8 -128, i8 0\n  %y = xor i8 %x, %m\n  ret i8 %y\n}}\n",
+            *a as i16, *b as i16
+        );
+    }
+    let text = assembly(&module(&ir), &Request::new(Level::O2)).unwrap();
+    for (k, (a, b)) in pairs.iter().enumerate() {
+        let (value, overflow) = a.overflowing_mul(*b);
+        let want = (value & 0xFF) as i32 ^ (value >> 8) as i32 ^ if overflow { 0x80 } else { 0 };
+        assert_eq!(exit_code_with(&text, &format!("t_um{k}"), llrm_6502::RUNTIME), want, "umul({a}, {b}) = {value}, overflow {overflow}");
+    }
+}
+
+/// A byte loaded and zero-extended to a word had its high half masked as
+/// `lda #0; and #0` and a cell for it (#7165 expanded the extending load to an
+/// any-extend and a mask 255): `zext(a) + zext(b)` took 30 instructions where
+/// 21 do, and `struct_odd_sizes` -Os grew 74 B. A mask of zero is a zero, and
+/// the high half of a word masked by 255 is known to be zero.
+#[test]
+fn a_zero_extended_loaded_byte_has_no_mask_of_zero() {
+    let ir = module(
+        "@a = global i8 0\n@b = global i8 0\n\
+         define i16 @f() {\n  %1 = load i8, ptr @a\n  %2 = zext i8 %1 to i16\n  %3 = load i8, ptr @b\n  \
+         %4 = zext i8 %3 to i16\n  %5 = add i16 %2, %4\n  ret i16 %5\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap();
+    assert!(!text.contains("and #0"), "a byte was masked by zero:\n{text}");
+    let instructions = text.lines().filter(|line| line.starts_with("  ")).count();
+    assert!(instructions <= 22, "{instructions} instructions:\n{text}");
+}
+
+/// A pointer walked by a constant and compared with its end (`for (p = vartab;
+/// p != arytab; p += 7)`, x16 `vars` lookup): the pointer stayed unpacked, its
+/// step built in `a`, `x` and `y` and stored back each trip, and its compare
+/// read the halves through `x` and `y`: 23 instructions a trip where 14 do,
+/// 490085 clocks for 120 lookups. A compare is a use a pointer pair serves, and
+/// a half loaded into an index register only to be moved to `a` is loaded into
+/// `a`.
+#[test]
+fn a_pointer_stepped_by_a_constant_and_compared_is_bumped_in_its_pair() {
+    let mut table = Vec::new();
+    for entry in 0..4 {
+        for byte in 0..7 {
+            table.push(format!("i8 {}", if byte < 2 { 1 + 2 * entry + byte } else { 0 }));
+        }
+    }
+    let ir = module(&format!(
+        "@tab = global [28 x i8] [{}]\n@vartab = global ptr @tab\n@arytab = global ptr getelementptr (i8, ptr @tab, i16 28)\n\
+         @n0 = global i8 5\n@n1 = global i8 6\n\
+         define ptr @find() {{\n  %1 = load ptr, ptr @vartab\n  %2 = load ptr, ptr @arytab\n  %3 = icmp eq ptr %1, %2\n  \
+         br i1 %3, label %18, label %4\n\
+         4:\n  %5 = load i8, ptr @n0\n  %6 = load i8, ptr @n1\n  br label %7\n\
+         7:\n  %8 = phi ptr [ %1, %4 ], [ %16, %15 ]\n  %9 = load i8, ptr %8\n  %10 = icmp eq i8 %9, %5\n  \
+         br i1 %10, label %11, label %15\n\
+         11:\n  %12 = getelementptr inbounds i8, ptr %8, i16 1\n  %13 = load i8, ptr %12\n  %14 = icmp eq i8 %13, %6\n  \
+         br i1 %14, label %18, label %15\n\
+         15:\n  %16 = getelementptr inbounds i8, ptr %8, i16 7\n  %17 = icmp eq ptr %16, %2\n  br i1 %17, label %18, label %7\n\
+         18:\n  %19 = phi ptr [ null, %0 ], [ null, %15 ], [ %8, %11 ]\n  ret ptr %19\n}}\n\
+         define i8 @t() {{\n  %r = call ptr @find()\n  %a = ptrtoint ptr %r to i16\n  %b = ptrtoint ptr @tab to i16\n  \
+         %d = sub i16 %a, %b\n  %lo = trunc i16 %d to i8\n  ret i8 %lo\n}}",
+        table.join(", ")
+    ));
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap();
+    assert_eq!(exit_code_with(&text, "t", llrm_6502::RUNTIME), 14, "{text}");
+    let step = text.find("adc #7").expect("the step by 7");
+    let trip = &text[step..text[step..].find("rts").map_or(text.len(), |at| step + at)];
+    for staged in ["tax", "tay", "ldy rc"] {
+        assert!(!trip.contains(staged), "`{staged}` after the step:\n{text}");
+    }
+}
+
+/// A frame address (`rc0` plus 3) copied into a pointer pair went through the
+/// index registers: `adc #3; tax; lda rc1; adc #0; tay; stx rc6; sty rc7`
+/// (x16 `crunch` 1147 B, `flow` -57 B here): the sums are in `a`, so `sta rc6`.
+#[test]
+fn a_frame_address_is_stored_from_a_not_through_the_index_registers() {
+    let ir = module(
+        "@g = global ptr null\n@h = global ptr null\ndeclare void @use(ptr)\n\
+         define void @f() {\n  %a = alloca [8 x i8]\n  %q = getelementptr inbounds i8, ptr %a, i16 3\n  \
+         store volatile ptr %q, ptr @g\n  %r = getelementptr inbounds i8, ptr %a, i16 5\n  store volatile ptr %r, ptr @h\n  \
+         call void @use(ptr %q)\n  ret void\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap();
+    let transfers = text.lines().filter(|line| matches!(line.trim(), "tax" | "tay")).count();
+    assert!(transfers <= 4, "{transfers} transfers into the index registers:\n{text}");
+}
+
 /// `SAddO`, `SSubO` and `SMulO` on a word were refused ("convert node to
 /// libcall"); they compile now, and the value and the overflow bit must be
 /// right at the edges (30000 + 30000, -32768 - 1, 181 * 181), not just
-/// accepted. `UMulO` is still refused (tests/overflow_ops.rs).
+/// accepted.
 #[test]
 fn a_signed_word_overflow_operation_computes_its_value_and_its_flag() {
     let pairs: [(i16, i16); 7] =
@@ -2042,4 +2154,101 @@ fn a_signed_word_overflow_operation_computes_its_value_and_its_flag() {
             assert_eq!(exit_code_with(&text, &format!("t_{op}{k}"), llrm_6502::RUNTIME), want, "{op}({a}, {b}) = {value}, overflow {overflow}");
         }
     }
+}
+
+/// `fp_bfmultt`'s arrays (`f[3 - j + k]`) lived on the soft stack: every
+/// element access added `rc0`, a constant and the index in 16 bits, and the
+/// function adjusted `rc0` both ways (the X16 mathlib's multiply, 77% of its
+/// clocks). A function nothing re-enters has one activation, so its array is
+/// global (`lda g,x`): no frame, and the values over two calls are still its
+/// own.
+#[test]
+fn the_array_of_a_function_nothing_re_enters_is_global() {
+    let ir = module(
+        r#"declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture)
+declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture)
+define i8 @fill(i8 %n) noinline norecurse {
+entry:
+  %a = alloca [6 x i8]
+  call void @llvm.lifetime.start.p0(i64 6, ptr %a)
+  br label %store
+store:
+  %i = phi i8 [ 0, %entry ], [ %i2, %store ]
+  %x = mul i8 %i, 3
+  %w = zext i8 %i to i16
+  %p = getelementptr i8, ptr %a, i16 %w
+  store volatile i8 %x, ptr %p
+  %i2 = add i8 %i, 1
+  %c = icmp ult i8 %i2, 6
+  br i1 %c, label %store, label %sum
+sum:
+  %j = phi i8 [ 0, %store ], [ %j2, %sum ]
+  %t = phi i8 [ 0, %store ], [ %t2, %sum ]
+  %v = zext i8 %j to i16
+  %q = getelementptr i8, ptr %a, i16 %v
+  %e = load volatile i8, ptr %q
+  %t2 = add i8 %t, %e
+  %j2 = add i8 %j, 1
+  %d = icmp ult i8 %j2, %n
+  br i1 %d, label %sum, label %out
+out:
+  call void @llvm.lifetime.end.p0(i64 6, ptr %a)
+  ret i8 %t2
+}
+define i8 @twice() {
+  %x = call i8 @fill(i8 4)
+  %y = call i8 @fill(i8 3)
+  %z = add i8 %x, %y
+  ret i8 %z
+}"#,
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(text.contains("_local0") && !text.contains("sta rc0"), "the array is on the soft stack:\n{text}");
+    assert_eq!(exit_code_of(&text, "twice"), 27, "{text}");
+}
+
+/// What re-enters a function keeps its stack: with the array global, the
+/// recursion below returns 0 where each activation's own `a[0]` makes 6.
+#[test]
+fn the_array_of_a_function_that_can_be_re_entered_stays_on_the_stack() {
+    let body = |name: &str, call: &str| {
+        format!(
+            "define i8 @{name}(i8 %n) noinline {{\n  %a = alloca [4 x i8]\n  store volatile i8 %n, ptr %a\n  \
+             %z = icmp eq i8 %n, 0\n  br i1 %z, label %done, label %go\ngo:\n  %m = sub i8 %n, 1\n  {call}\n  \
+             %v = load volatile i8, ptr %a\n  %s = add i8 %r, %v\n  ret i8 %s\ndone:\n  ret i8 0\n}}\n"
+        )
+    };
+    let driver = |name: &str| format!("define i8 @run_{name}() {{\n  %r = call i8 @{name}(i8 3)\n  ret i8 %r\n}}\n");
+    let direct = [body("direct", "%r = call i8 @direct(i8 %m)"), driver("direct")].concat();
+    let indirect = [
+        "@table = global ptr @through\n".to_owned(),
+        body("through", "%f = load ptr, ptr @table\n  %r = call i8 %f(i8 %m)"),
+        driver("through"),
+    ]
+    .concat();
+    let outer = [
+        "@back = global ptr @outer\ndefine i8 @mid(i8 %n) noinline {\n  %f = load ptr, ptr @back\n  \
+         %r = call i8 %f(i8 %n)\n  ret i8 %r\n}\n"
+            .to_owned(),
+        body("outer", "%r = call i8 @mid(i8 %m)"),
+        driver("outer"),
+    ]
+    .concat();
+    for (name, ir) in [("direct", direct), ("through", indirect), ("outer", outer)] {
+        let text = assembly(&module(&ir), &Request::new(Level::O2)).unwrap();
+        assert!(!text.contains("_local"), "{name}: an array shared by activations:\n{text}");
+        assert_eq!(exit_code_of(&text, &format!("run_{name}")), 6, "{name}:\n{text}");
+    }
+}
+
+/// A call to a declaration may come back into the function (a callback): not
+/// `norecurse`, so the array stays on the stack.
+#[test]
+fn the_array_of_a_function_that_calls_a_declaration_stays_on_the_stack() {
+    let ir = module(
+        "declare void @elsewhere(ptr)\ndefine void @f() {\n  %a = alloca [4 x i8]\n  \
+         call void @elsewhere(ptr %a)\n  ret void\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(!text.contains("_local"), "{text}");
 }

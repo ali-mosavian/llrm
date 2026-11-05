@@ -399,10 +399,31 @@ def stage_shared_headers(folder: Path, text: bytes) -> bytes:
     return text.replace(b'"../bench_io.h"', b'"bench_io.h"')
 
 
+def omf_library_module(library: Path, name: str, out: Path) -> Path:
+    """The object module `name` of an OMF library (LIB header, pages of modules up to the dictionary), written to `out`."""
+    data = library.read_bytes()
+    page, dictionary = int.from_bytes(data[1:3], "little") + 3, int.from_bytes(data[3:7], "little")
+    pos, module, title = page, bytearray(), ""
+    while pos < dictionary:
+        kind, length = data[pos], int.from_bytes(data[pos + 1:pos + 3], "little")
+        module += data[pos:pos + 3 + length]
+        if kind == 0x80:  # THEADR
+            title = data[pos + 4:pos + 4 + data[pos + 3]].decode("latin-1")
+        pos += 3 + length
+        if kind in (0x8A, 0x8B):  # MODEND: the next module starts on a page boundary
+            if title.upper() == name.upper():
+                out.write_bytes(module)
+                return out
+            module, pos = bytearray(), -(-pos // page) * page
+    raise KeyError(f"{name} is not a module of {library}")
+
+
 def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str, work: Path) -> dict[str, tuple[Path, Path] | str]:
     """A Borland-family reference (BORLAND), every program in one DOSBox boot. Keyed by stem.
     Linked with the toolchain's own start-up (C0M) and libraries: the floating-point programs need its FP87 and MATHM,
-    which ask C0M for `__version` and `_errno`. Only `report` comes from the corpus's ext.asm."""
+    which ask C0M for `__version` and `_errno`. Only `report` comes from the corpus's ext.asm.
+    Turbo C++ 3.0's CM.LIB (SETUPIO) calls `_isatty`, which jwlink does not find in CM.LIB's dictionary: tcpp links that module as a file.
+    (CS.LIB defines it too, but small-model: it linked, and 94 of 116 programs then never entered their kernel.)"""
     home, compiler, levels = BORLAND[language]
     folder = work / f"{language}{opt}"
     folder.mkdir(parents=True)
@@ -423,7 +444,8 @@ def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str,
             continue
         lib = home / "lib"
         try:
-            dosbatch._host([str(BIN / "jwlink"), "option", "quiet", "option", f"map={listing}", *dosbatch.linkrecipe.link(dosbatch.REAL_MODE, "format"), "name", str(exe), "file", str(lib / "C0M.OBJ"), "file", str(obj), *support,
+            extra = ["file", str(omf_library_module(lib / "CM.LIB", "ISATTY", folder / "ISATTY.OBJ"))] if language == "tcpp" else []
+            dosbatch._host([str(BIN / "jwlink"), "option", "quiet", "option", f"map={listing}", *dosbatch.linkrecipe.link(dosbatch.REAL_MODE, "format"), "name", str(exe), "file", str(lib / "C0M.OBJ"), "file", str(obj), *extra, *support,
                             "library", str(lib / "CM.LIB"), "library", str((BCC / "lib" if language == "tcpp" else lib) / "FP87.LIB"), "library", str(lib / "MATHM.LIB")])
         except dosbatch.BuildError as error:
             out[stem] = f"link: {error}"
@@ -1020,6 +1042,9 @@ def standing(measured: dict, selected: list[str], opts: list[str]) -> list[str]:
                         parts.append(f"{title} {100 * (geomean(ratios) - 1):+.1f}% (n={len(ratios)})")
                 if skipped:
                     parts.append(f"folded, out of the geomeans: {', '.join(skipped)}")
+                broken = [f"{name}: {measured[(name, reference, opt)]['error']}" for name in map(directory_name, benchmarks(selected)) if "error" in measured.get((name, reference, opt), {})]
+                if broken:  # a reference that did not build is no column, not an empty one
+                    lines.append(f"REFERENCE BROKEN {reference} -{level}: {len(broken)} programs unmeasured, e.g. {broken[0][:200]}")
                 if parts:
                     lines.append(f"llrm {language} -{opt} vs {reference} {'/O' if reference in BASIC_REFERENCES else '-' + level}: " + ", ".join(parts))
     return lines

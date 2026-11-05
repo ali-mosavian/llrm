@@ -12,8 +12,13 @@
 #if !defined(SF_CMP_SPLIT) || defined(SF_CMP_ONLY_CMP) || (defined(SF_CMP_ONLY_GE) && !defined(__OPTIMIZE_SIZE__))
 static int SF_N(sf_cmp_bits)(SF_T a, SF_T b)
 {
+#if defined(SF_WIDE_ABS_MASK) && SF_W > 32 /* masks, not shifts, where a 64-bit shift is a double-word shift (shld+shl): m32 f64 cmp -O2 -12.7% clk, -23 B; m68k -O2 -112 B. Not for one word (m68k f32 +84 B) nor wasm (native i64 shift, +224 B) */
+    if ((a & ~(SF_T)SF_SIGN) > SF_INF || (b & ~(SF_T)SF_SIGN) > SF_INF) return 1;
+    if (!((a | b) & ~(SF_T)SF_SIGN)) return 0;
+#else
     if (SF_N(is_nan)(a) || SF_N(is_nan)(b)) return 1;
     if (!((a | b) << 1)) return 0;
+#endif
     SF_S x = (SF_S)a, y = (SF_S)b;
     if ((x & y) < 0) { SF_S t = x; x = y; y = t; } /* both negative: reversed order */
     if (x < y) return -1;

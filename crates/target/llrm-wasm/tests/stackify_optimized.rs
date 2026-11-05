@@ -101,6 +101,54 @@ fn adjacent_stores_merge_when_optimizing() {
     assert!(!body(&o2, "s").contains("i32.store16"), "{o2}");
 }
 
+const TWO_BYTE_STORES: &str = "define void @s(ptr %p) {
+entry:
+  store i8 66, ptr %p
+  %q = getelementptr i8, ptr %p, i32 1
+  store i8 77, ptr %q
+  ret void
+}
+";
+
+/// Two adjacent constant byte stores stayed two `i32.store8`: the combiner's
+/// truncating-store merge was off for wasm, so jpeg_fixed's BMP header kept
+/// 4 more stores and 43 bytes over the pin at `-Os`.
+#[test]
+fn adjacent_byte_stores_of_constants_are_one_store16() {
+    let o2 = asm(TWO_BYTE_STORES, Level::O2);
+    assert!(body(&o2, "s").matches("i32.store16").count() == 1 && !body(&o2, "s").contains("i32.store8"), "{o2}");
+}
+
+const MASKED_GLOBAL_INDEX: &str =
+    "target datalayout = \"e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-i128:128-n32:64-S128-ni:1:10:20\"
+@counts = global [256 x i16] zeroinitializer
+define void @f(i8 %d, i16 %seed) {
+entry:
+  %z = zext i8 %d to i32
+  %m = mul nuw nsw i32 %z, 7
+  %s = zext i16 %seed to i32
+  %a = add nuw nsw i32 %m, %s
+  %i = and i32 %a, 255
+  %p = getelementptr inbounds nuw [2 x i8], ptr @counts, i32 %i
+  %v = load i16, ptr %p
+  %w = add i16 %v, 1
+  store i16 %w, ptr %p
+  ret void
+}
+";
+
+/// A demanded-bits rewrite of an operand left `nuw`/`nsw` on the `mul`, `add`
+/// and `shl` above it (the pin clears them: "we can no longer guarantee that
+/// we won't wrap"), so the `add nuw` of the address folded `counts` into the
+/// load and store offsets, 5 bytes of relocation each; the pin keeps one
+/// `i32.const counts` and `i32.add` (histo, 1 byte over the pin at `-Os`).
+#[test]
+fn a_rewritten_operand_clears_the_wrap_flags_so_the_global_is_not_folded_into_the_offset() {
+    let o2 = asm(MASKED_GLOBAL_INDEX, Level::O2);
+    let f = body(&o2, "f");
+    assert!(f.contains("i32.const\tcounts") && !f.contains("i32.load16_u\tcounts"), "{f}");
+}
+
 const SEQUENTIAL: &str = "declare void @h(i32)
 define void @k(i32 %x) {
 entry:

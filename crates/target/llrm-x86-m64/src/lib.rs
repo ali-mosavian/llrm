@@ -374,6 +374,13 @@ impl llrm_target::Target for M64 {
                             recursive_inlining: Some((8, 450)),
                             // gcc's 15/30 size units in `gcc_insns` (m64 counts the sext/gep of its IR).
                             recursive_edge_growth: Some((16, 31)),
+                            // DEVIATE REC5-1 (owner w2, exit 2026-11-20), as m32.
+                            ipsccp_widen_keeps_sign: true,
+                            // DEVIATE UJ2 (owner m64, exit 2026-11-14): BasicTTIImpl's
+                            // 28-micro-op loop buffer gave the jam of an outer loop
+                            // of that size a count of 0 (particle -O3: 15850 cycles,
+                            // gcc's jam 10262); the full-unroll threshold instead.
+                            unroll_jam_partial_threshold: Some(300),
                             ..llrm_mir::target::Tuning::PIN
                         })
                     })

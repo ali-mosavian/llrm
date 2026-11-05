@@ -97,7 +97,7 @@ impl Builder<'_> {
                 Ok(())
             }
             // a hint the passes read: its value is its argument
-            Intrinsic::Expect | Intrinsic::Restrict => {
+            Intrinsic::Expect | Intrinsic::Restrict | Intrinsic::StartLoopIterations => {
                 let value = self.get_value(instruction.operands[0])?;
                 self.set_value(instruction.result.ok_or(Refused("a hint without a result"))?, value);
                 Ok(())
@@ -134,6 +134,15 @@ impl Builder<'_> {
             | Intrinsic::LRint
             | Intrinsic::LLRint
             | Intrinsic::Unary(_) => self.visit_math(instruction, intrinsic),
+            // the counter a phi carries, less what an iteration takes off
+            Intrinsic::LoopDecrementReg => {
+                let (left, right) =
+                    (self.get_value(instruction.operands[0])?, self.get_value(instruction.operands[1])?);
+                let vt = self.type_of(instruction.ty)?;
+                let node = self.dag.get_node(ISD::Sub, vt, &[left, right]);
+                self.set_value(instruction.result.ok_or(Refused("a decrement without a result"))?, node);
+                Ok(())
+            }
             _ => Err(Refused("intrinsic call")),
         }
     }
@@ -1066,6 +1075,17 @@ impl Builder<'_> {
                     _ if strings_exist && matches!(which, Intrinsic::MemCpy) && !self.runtime_has("memcpy") => {
                         self.rep_movs_dwords(root, dst, other, size)
                     }
+                    // DEVIATE MEM-1: a length known at run time is `rep movsd`
+                    // inline at speed where the target's tuning says so (the
+                    // pin calls `memcpy`)
+                    _ if strings_exist
+                        && matches!(which, Intrinsic::MemCpy)
+                        && constant.is_none()
+                        && !opt_size
+                        && self.target.tti.as_ref().is_some_and(|tti| tti.0.inlines_variable_memcpy()) =>
+                    {
+                        self.rep_movs_dwords(root, dst, other, size)
+                    }
                     // a move a pass proved forward, past the inline limit: `rep
                     // movs` ascends, as the move needs (DEVIATE: the pin calls
                     // `memmove`; at m16 the old selector inlines it, 2.2x on
@@ -1280,7 +1300,12 @@ impl Builder<'_> {
         }
         let dword = self.dag.get_value_type_node(EVT::I32);
         let rep = self.dag.get_node_multi(x86isd::REP_MOVS, &[EVT::OTHER, EVT::GLUE], &[chain, dword, glue]);
-        if self.constant_size(count).is_some_and(|bytes| bytes % 4 == 0) {
+        // DEVIATE MEM-1: where the target inlines variable copies, a length
+        // whose low two bits are known zero (`n << 2`) has no byte tail
+        let inlines = self.target.tti.as_ref().is_some_and(|tti| tti.0.inlines_variable_memcpy());
+        if self.constant_size(count).is_some_and(|bytes| bytes % 4 == 0)
+            || inlines && super::super::known_bits::masked_value_is_zero(&self.dag, count, 3)
+        {
             return SDValue { node: rep.node, res: 0 };
         }
         let three = self.dag.get_constant(3, pointer);

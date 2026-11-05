@@ -600,6 +600,10 @@ impl Tti for X86 {
         self.tuning.unroll_partial_threshold
     }
 
+    fn unroll_jam_partial_threshold_override(&self) -> Option<u32> {
+        self.tuning.unroll_jam_partial_threshold
+    }
+
     fn unswitch_threshold_override(&self) -> Option<i64> {
         self.tuning.unswitch_threshold
     }
@@ -621,6 +625,14 @@ impl Tti for X86 {
 
     fn sinks_select_arms(&self) -> bool {
         self.tuning.sink_select_arms
+    }
+
+    fn inlines_variable_memcpy(&self) -> bool {
+        self.tuning.inline_variable_memcpy
+    }
+
+    fn ipsccp_widen_keeps_sign(&self) -> bool {
+        self.tuning.ipsccp_widen_keeps_sign
     }
 
     fn priced_self_inlining(&self) -> Option<(u32, i64)> {

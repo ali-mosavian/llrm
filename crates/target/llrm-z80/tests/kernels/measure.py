@@ -99,18 +99,46 @@ def shutil_copy(a, b):
 
 
 def runtime_calls(path):
-    """The runtime's routines and the routines each one calls or jumps to."""
-    graph, current = {}, None
+    """The runtime's routines (the `__name` labels) and the routines each one calls, jumps to or falls into. A jump
+    to a local label reaches the routine that holds it (the byte count is the distance between map symbols, and the
+    map has only the global ones): `__modsi3` falls into `__udivmodsi4`, `__udivdi3` jumps into `udivmoddi`, which
+    sits under `__moddi3`. Both were left out, and a program that divides a long was counted without the divide."""
+    rows, owner, current = [], {}, None
     for line in open(path):
         line = line.split(";")[0]
-        m = re.match(r"(\w+)::?", line)
-        if m:
-            current = m.group(1)
-            graph.setdefault(current, set())
-        for target in re.findall(r"\b(?:call|jp|jr)\s+(?:\w+\s*,\s*)?(__\w+)", line):
-            if current:
-                graph[current].add(target)
+        label = re.match(r"\s*(\w+)::?", line)
+        if label:
+            name = label.group(1)
+            if name.startswith("__"):
+                current = name
+            owner[name] = current
+            line = line[label.end():]
+        line = re.sub(r"^\s*\w+\$:", "", line)  # a numbered local label may share the line with an instruction
+        words = line.split()
+        rows.append((label.group(1) if label else None, current, [] if words and words[0].startswith(".") else words))
+    graph, previous = {}, None
+    for name, current, words in rows:
+        if name and name.startswith("__"):
+            graph.setdefault(name, set())
+            if previous and previous[0] != name and falls_through(previous[1]):
+                graph[previous[0]].add(name)
+        if words and current:
+            for target in re.findall(r"\b(?:call|jp|jr)\s+(?:\w+\s*,\s*)?(\w+)", " ".join(words)):
+                target = target if target.startswith("__") else owner.get(target)
+                if target and target != current:
+                    graph[current].add(target)
+            previous = (current, words)
     return graph
+
+
+def falls_through(words):
+    """Whether control can run past the statement `words` into the next label: not after `ret`, `halt` or an
+    unconditional `jp` / `jr`."""
+    if words[0] in ("ret", "halt", "reti", "retn"):
+        return len(words) > 1
+    if words[0] in ("jp", "jr"):
+        return "," in " ".join(words[1:])
+    return True
 
 
 def runtime_bytes(w, graph, kernel_text):
@@ -129,6 +157,8 @@ def runtime_bytes(w, graph, kernel_text):
     addr = {n: a for a, n in symbols}
     size = 0
     for name in wanted:
+        # the map cuts a name at 9 characters: `__udivmodsi4` is listed as `__udivmod`
+        name = name if name in addr else name[:9]
         if name not in addr:
             continue
         following = [a for a, n in symbols if a > addr[name] and not n.startswith(("s__", "l__"))]

@@ -258,6 +258,9 @@ fn a_dword_add_that_keeps_its_source_is_a_lea_at_m64() {
 /// again is made once for the first call and the loop, and again for the last
 /// call, as the pin has it (`lea` into a callee-saved register, then a `lea`
 /// into `rdi` at the end). It was made three times: CSE4 refused the share.
+/// Since #6878 (cpu-model unroll preferences) the pin runtime-unrolls this
+/// loop by 8: the address is made for the first call, the unrolled loop, the
+/// remainder loop and the last call.
 #[test]
 fn a_symbol_address_before_a_loop_is_shared_with_it_and_made_again_after_a_call_at_m64() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
@@ -273,7 +276,8 @@ fn a_symbol_address_before_a_loop_is_shared_with_it_and_made_again_after_a_call_
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     // The first call's argument and the loop's address, then the last call's.
     let made = listing.lines().filter(|line| line.contains("offset g")).count();
-    assert_eq!(made, 2, "{listing}");
+    assert_eq!(made, 4, "{listing}");
+    assert_eq!(listing.matches("movzx").count(), 9, "unrolled by 8 plus the remainder loop: {listing}");
 }
 
 /// A symbol's address passed to four calls in one block was made four times
@@ -2156,7 +2160,8 @@ fn a_cleaned_up_argument_push_gives_the_frame_address_back() {
 /// A frame whose registers are pushed before the locals' space (`saved_first`,
 /// every x86-64 frame with a pushed register) had no `.eh_frame`: the entry
 /// was not declared. The bytes are the pin's for `push rbx; sub rsp, 32 ...
-/// add rsp, 32; pop rbx; ret`.
+/// add rsp, 32; pop rbx; ret`. The local is at `[rsp]` (FR1, the call pad above
+/// it): `lea rdi, [rsp]` is a byte shorter than `[rsp+8]`, so 33 bytes.
 #[test]
 fn a_frame_with_pushed_registers_before_its_locals_has_the_pins_eh_frame() {
     let text = format!(
@@ -2167,7 +2172,7 @@ fn a_frame_with_pushed_registers_before_its_locals_has_the_pins_eh_frame() {
     assert_eq!(
         eh_frame_of(&text),
         hex("1400000000000000017a5200017810011b0c07089001000\
-             01c0000001c000000000000002200000000410e10440e3083025b0e10410e0800")
+             01c0000001c000000000000002100000000410e10440e3083025a0e10410e0800")
     );
 }
 
@@ -3097,6 +3102,41 @@ fn the_call_pad_lies_above_the_locals_at_m64() {
     assert!(listing.contains("[rsp]") || listing.contains("lea rdi, [rsp]"), "{listing}");
 }
 
+/// -O3 unroll-and-jam never fired on x86-64: the outer loop's size (28) was
+/// held to `BasicTTIImpl`'s 28-micro-op loop buffer, so the count was 0
+/// (particle: 15850 cycles; gcc's jam of two outer trips, 10262). Jammed, the
+/// copies of `px += vx` share one load of `vx`: `px += 3 * vx`.
+#[test]
+fn a_nest_with_loads_invariant_in_the_outer_loop_is_jammed_at_o3_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @px = global [101 x i16] zeroinitializer\n@vx = global [101 x i16] zeroinitializer\n\
+                @py = global [101 x i16] zeroinitializer\n@vy = global [101 x i16] zeroinitializer\n\
+                define void @f() {\nentry:\n  br label %outer\n\
+                outer:\n  %t = phi i16 [ 1, %entry ], [ %t1, %next ]\n  br label %inner\n\
+                inner:\n  %i = phi i64 [ 0, %outer ], [ %i1, %inner ]\n\
+                \x20 %a = getelementptr inbounds nuw [2 x i8], ptr @px, i64 %i\n  %x = load i16, ptr %a\n\
+                \x20 %b = getelementptr inbounds nuw [2 x i8], ptr @vx, i64 %i\n  %v = load i16, ptr %b\n\
+                \x20 %s = add i16 %v, %x\n  store i16 %s, ptr %a\n\
+                \x20 %c = getelementptr inbounds nuw [2 x i8], ptr @py, i64 %i\n  %y = load i16, ptr %c\n\
+                \x20 %d = getelementptr inbounds nuw [2 x i8], ptr @vy, i64 %i\n  %w = load i16, ptr %d\n\
+                \x20 %r = add i16 %w, %y\n  store i16 %r, ptr %c\n\
+                \x20 %i1 = add nuw nsw i64 %i, 1\n  %e = icmp eq i64 %i1, 101\n  br i1 %e, label %next, label %inner\n\
+                next:\n  %t1 = add nuw nsw i16 %t, 1\n  %f = icmp eq i16 %t1, 101\n  br i1 %f, label %done, label %outer\n\
+                done:\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O3", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    // Jammed by three: `px += 3 * vx` is `lea r, [v+v]` then `add r, v`.
+    let tripled = listing.lines().map(str::trim).filter(|line| {
+        line.strip_prefix("lea ")
+            .and_then(|rest| rest.split_once('['))
+            .and_then(|(_, inside)| inside.strip_suffix(']'))
+            .and_then(|inside| inside.split_once('+'))
+            .is_some_and(|(a, b)| a == b)
+    });
+    assert!(tripled.count() >= 2, "{listing}");
+}
+
 /// A local declared `align 16` sat at `[rsp+4]`: the frame clamped every
 /// alignment to 4 (bintree's array; a 16-byte `movaps` clear of it would
 /// fault).
@@ -3552,8 +3592,8 @@ fn a_win64_function_takes_its_arguments_by_position_above_the_home_area() {
     // home area, and the callee's own fifth is above it, past the return
     // address.
     assert!(lines.contains(&"mov qword ptr [rsp+32], rcx"), "{listing}");
-    assert!(lines.contains(&"sub rsp, 48"), "{listing}");
-    assert!(lines.contains(&"mov rcx, qword ptr [rsp+96]"), "{listing}");
+    assert!(lines.contains(&"sub rsp, 40"), "{listing}");
+    assert!(lines.contains(&"mov rcx, qword ptr [rsp+80]"), "{listing}");
     assert!(!listing.contains("rdi") && !listing.contains("rsi"), "SysV registers: {listing}");
 }
 

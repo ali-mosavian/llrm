@@ -150,6 +150,118 @@ pub fn edge_odds(
     odds
 }
 
+/// The fewest instructions a shared tail has (`BranchFolder`'s
+/// `-tail-merge-size`).
+const TAIL_MERGE_SIZE: usize = 3;
+
+/// Whether `inst` is an instruction of the tail: not a directive.
+fn counts(inst: &Inst) -> bool {
+    !matches!(inst, Inst::Cfi(_) | Inst::Label(_))
+}
+
+/// How many instructions at the end of `one` and `other` are the same, and
+/// the tail holds no label.
+fn common_tail(
+    one: &[Inst],
+    other: &[Inst],
+) -> usize {
+    let mut length = 0;
+    while length < one.len()
+        && length < other.len()
+        && one[one.len() - 1 - length] == other[other.len() - 1 - length]
+        && !matches!(one[one.len() - 1 - length], Inst::Label(_))
+    {
+        length += 1;
+    }
+    length
+}
+
+/// Blocks that return alike share the end they have in common
+/// (`BranchFolder::TryTailMergeBlocks`): the longer common tail of two
+/// returns, of at least `TAIL_MERGE_SIZE` instructions, is one block, and the
+/// blocks branch to it. The epilogue of a function with two exits was written
+/// twice (`rectwo` -O2: +16 B).
+///
+/// DEVIATE: only blocks that end in a return (the pin merges the tails of
+/// any blocks that end alike), and the tail is shared between two blocks at a
+/// time, the longest first. Exit: 11-12.
+fn merge_return_tails(blocks: &mut Vec<Lowered>) {
+    // The block that is only a return, where there is one: a block that
+    // returns, or jumps there, ends the same way.
+    let bare = |blocks: &[Lowered]| -> Option<(String, Inst)> {
+        blocks.iter().find_map(|block| match block.insts.as_slice() {
+            [ret @ Inst::Ret { .. }] => Some((block.label.clone(), ret.clone())),
+            _ => None,
+        })
+    };
+    let ends_alike = |blocks: &[Lowered], at: usize, bare: &Option<(String, Inst)>| -> Option<Vec<Inst>> {
+        let mut insts = blocks[at].insts.clone();
+        match (insts.last(), bare) {
+            (Some(Inst::Ret { .. }), None) => Some(insts),
+            (Some(last), Some((label, ret))) if last == ret || matches!(last, Inst::Branch { link: false, target: Target::Label(to) } if to == label) => {
+                if blocks[at].label == *label || insts.len() < 2 {
+                    return None;
+                }
+                *insts.last_mut()? = Inst::Branch { link: false, target: Target::Label(label.clone()) };
+                Some(insts)
+            }
+            _ => None,
+        }
+    };
+    loop {
+        let bare_block = bare(blocks);
+        let ending: Vec<(usize, Vec<Inst>)> = (0..blocks.len())
+            .filter_map(|at| ends_alike(blocks, at, &bare_block).map(|insts| (at, insts)))
+            .collect();
+        if ending.len() > 64 {
+            return;
+        }
+        let mut best: Option<(usize, usize, usize)> = None;
+        for (a, (one, one_insts)) in ending.iter().enumerate() {
+            for (other, other_insts) in &ending[a + 1..] {
+                let length = common_tail(one_insts, other_insts);
+                let real = one_insts[one_insts.len() - length..].iter().filter(|i| counts(i)).count();
+                // The same two blocks again, or a tail that is a whole block
+                // `forwards` merges.
+                let whole = length == blocks[*one].insts.len() && length == blocks[*other].insts.len();
+                if real >= TAIL_MERGE_SIZE && !whole && best.is_none_or(|(_, _, longest)| length > longest) {
+                    best = Some((*one, *other, length));
+                }
+            }
+        }
+        let Some((one, other, length)) = best else { return };
+        for at in [one, other] {
+            if let Some(insts) = ends_alike(blocks, at, &bare_block) {
+                blocks[at].insts = insts;
+            }
+        }
+        // The tail is a block of its own, unless one of the two is only the tail.
+        let (keep, branch) = if length == blocks[other].insts.len() {
+            (other, one)
+        } else if length == blocks[one].insts.len() {
+            (one, other)
+        } else {
+            let at = blocks[other].insts.len() - length;
+            let tail = Lowered {
+                label: format!("{}.tail", blocks[other].label),
+                insts: blocks[other].insts.split_off(at),
+                locs: blocks[other].locs.split_off(at),
+            };
+            let label = tail.label.clone();
+            blocks[other].insts.push(Inst::Branch { link: false, target: Target::Label(label) });
+            blocks[other].locs.push(None);
+            blocks.insert(other + 1, tail);
+            (other + 1, one)
+        };
+        let label = blocks[keep].label.clone();
+        let at = blocks[branch].insts.len() - length;
+        blocks[branch].insts.truncate(at);
+        blocks[branch].locs.truncate(at);
+        blocks[branch].insts.push(Inst::Branch { link: false, target: Target::Label(label) });
+        blocks[branch].locs.push(None);
+    }
+}
+
 pub fn fold(
     mut blocks: Vec<Lowered>,
     tables: &mut [Table],
@@ -177,6 +289,7 @@ pub fn fold(
             blocks[at].locs.push(None);
         }
     }
+    merge_return_tails(&mut blocks);
     // The entry is never forwarded away.
     let entry = blocks[0].label.clone();
     let mut forward = forwards(&blocks);

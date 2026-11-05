@@ -1272,7 +1272,7 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
             procedure
         };
     }
-    if !eligible || (pushed == 0 && !rebuilt && procedure.body.vector_saves.is_empty()) {
+    if !eligible {
         return procedure;
     }
     // The locals keep their alignment from BP (an 8-byte cell at 4 mod 8
@@ -1296,6 +1296,15 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
         let held = frame_held(&procedure);
         (!procedure.size || held || procedure.registers.free) && stack_addressed(&procedure, 0).is_some()
     };
+    // A caller whose frame is only its call area has no cell for the frame
+    // register either (Win64's home area: pin `sub rsp, 40`, not 56).
+    if pushed == 0
+        && !rebuilt
+        && procedure.body.vector_saves.is_empty()
+        && !(dropped && procedure.reserve != 0 && aligns_for_calls(&procedure))
+    {
+        return procedure;
+    }
     let above = if dropped { slot } else { 0 };
     // Nothing is aligned where there are no locals: a leaf with two pushed
     // registers had a `push rax` slot, and a caller with one had `sub rsp, 16`
@@ -4317,15 +4326,16 @@ mod tests {
         assert!(!has(&lines, "mov sp, bp") && !has(&lines, "pop bp"));
     }
 
-    /// Tuned for size, a frame with locals opened with `enter N,0` (4 bytes
-    /// against 6, but 14 clocks against 3 on the 486, 407 QCport
-    /// functions): no level opens one.
+    /// A frame with locals is opened with `enter N,0` at -Os (4 bytes against
+    /// 6, but 14 clocks against 3 on the 486: ENTER16, #6997) and with
+    /// `push bp; mov bp, sp; sub sp, N` at any other level. A frame without
+    /// locals never uses it.
     #[test]
-    fn test_no_level_opens_a_frame_with_enter() {
-        for size in [true, false] {
-            let entered = _printed_entering(vec![through_bp()], 4, size);
-            assert_eq!(entered[1..4], ["push bp", "mov bp, sp", "sub sp, 4"], "size {size}: {entered:?}");
-        }
+    fn test_only_a_size_build_opens_a_frame_with_enter() {
+        let sized = _printed_entering(vec![through_bp()], 4, true);
+        assert_eq!(sized[1], "enter 4, 0", "{sized:?}");
+        let fast = _printed_entering(vec![through_bp()], 4, false);
+        assert_eq!(fast[1..4], ["push bp", "mov bp, sp", "sub sp, 4"], "{fast:?}");
         let bare = _printed_entering(vec![through_bp()], 0, true);
         assert_eq!(bare[1..3], ["push bp", "mov bp, sp"]);
     }
@@ -4351,7 +4361,7 @@ mod tests {
             reserve,
             callees: IndexMap::default(),
             interrupt: None,
-            size: true,
+            size: false,
             entry: 0,
             stack_check: check,
             probe_stack: None,
