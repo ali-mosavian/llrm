@@ -1320,3 +1320,47 @@ fn test_a_clone_is_credited_with_the_clones_its_recursion_makes() {
     stepped(&mut module, &["f"], 20, Threshold { cp_clone: true, ..Threshold::none() });
     assert!(module.named("down.constprop.1").is_some(), "{}", printed(&module));
 }
+
+/// `down` halves the range it passes on: `(row + hi) / 2` is no pass-through
+/// of one parameter, so GCC follows no chain of contexts from it. Credited
+/// with the contexts anyway, recchop got nine clones (+3485 B, 650 clk) at
+/// -O3.
+const HALVING: &str = "@cells = global [8 x [8 x i16]] zeroinitializer
+
+define void @down(i16 %row, i16 %hi, i16 %x) {
+b0:
+  %done = icmp eq i16 %row, %hi
+  br i1 %done, label %out, label %go
+
+go:
+  %p = getelementptr [8 x i16], ptr @cells, i16 %row
+  %a = add i16 %x, 1
+  %b = mul i16 %a, %x
+  %c = add i16 %b, %a
+  %d = mul i16 %c, %b
+  %e = add i16 %d, %c
+  %f = mul i16 %e, %d
+  store i16 %f, ptr %p
+  %s = add i16 %row, %hi
+  %m = udiv i16 %s, 2
+  call void @down(i16 %m, i16 %hi, i16 %e)
+  br label %out
+
+out:
+  ret void
+}
+
+define void @f(i16 %x) {
+b0:
+  call void @down(i16 0, i16 7, i16 %x)
+  call void @down(i16 0, i16 7, i16 3)
+  ret void
+}
+";
+
+#[test]
+fn test_a_recursion_that_halves_a_range_makes_no_chain_of_contexts() {
+    let mut module = parsed(HALVING);
+    stepped(&mut module, &["f"], 20, Threshold { cp_clone: true, ..Threshold::none() });
+    assert!(module.named("down.constprop.1").is_none(), "{}", printed(&module));
+}

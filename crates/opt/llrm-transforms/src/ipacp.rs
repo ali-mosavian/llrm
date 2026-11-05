@@ -342,6 +342,35 @@ pub fn cloned(
     changed
 }
 
+/// GCC follows a recursive call's actual only as a pass-through jump function:
+/// a constant, a parameter, or one operation on a single parameter and a
+/// constant (`ipa_compute_jump_functions`). `(lo + hi) / 2` is no such value,
+/// so a recursion that halves a range makes no chain of contexts.
+fn is_simple_jump(
+    body: &Function,
+    operand: Operand,
+) -> bool {
+    let Operand::Value(value) = operand else { return true };
+    if body.parameters().contains(&value) {
+        return true;
+    }
+    let llrm_mir::module::ValueDef::Instruction(made) = body.value(value).def else { return false };
+    let instruction = body.instruction(made);
+    if !matches!(instruction.opcode, Opcode::Binary(_)) {
+        return false;
+    }
+    let parameters: BTreeSet<_> = instruction
+        .operands
+        .iter()
+        .filter_map(|one| match one {
+            Operand::Value(v) if body.parameters().contains(v) => Some(*v),
+            _ => None,
+        })
+        .collect();
+    let constants = instruction.operands.iter().filter(|one| matches!(one, Operand::Constant(_))).count();
+    parameters.len() == 1 && parameters.len() + constants == instruction.operands.len()
+}
+
 /// What a context is worth, with what the contexts it passes to its own calls
 /// are worth: GCC's `propagate_effects` adds a value's benefit to the value
 /// that produces it, times `ipa-cp-max-recursive-depth` less the level, so a
@@ -546,6 +575,9 @@ fn time_saved(
             .iter()
             .zip(&instruction.operands)
             .map(|(&parameter, &operand)| {
+                if !is_simple_jump(body, operand) {
+                    return None;
+                }
                 let number = consts::_operand(&unit, operand, &values, None)?;
                 let value = number.n.to_string().parse::<i128>().ok()?;
                 module.context.types.int_bits(body.value(parameter).ty)?;
