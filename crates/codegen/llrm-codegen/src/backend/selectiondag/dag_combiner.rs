@@ -3076,6 +3076,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             EVT::Simple(MVT::F64) if !tli.is_fp_imm_legal(MVT::F64, bits) => {
                 let lo = self.dag.get_constant(bits & 0xFFFF_FFFF, EVT::I32);
                 let hi = self.dag.get_constant((bits >> 32) & 0xFFFF_FFFF, EVT::I32);
+                // the high word comes first on a big-endian target
+                let (lo, hi) = if self.hooks.little_endian() { (lo, hi) } else { (hi, lo) };
                 let first = self.dag.get_store(chain, lo, ptr, int_info(EVT::I32, info.align, info.base));
                 // A far pointer is no integer: its offset word moves, by 4.
                 let next = if self.dag.value_type(ptr) == MVT::Far.into() {
