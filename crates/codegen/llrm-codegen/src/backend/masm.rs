@@ -1314,7 +1314,8 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     // stack alignment below the locals (`calculateFrameObjectOffsets`, the
     // final `alignTo(Offset, StackAlign)`), so its lowest local sits at
     // `[rsp+pad]`, a disp8 more than ours. Where the frame register is
-    // omitted the pad goes above the locals instead, as the base layout had it.
+    // omitted the pad goes above the locals instead, as the base layout had it,
+    // unless that moves them off the widest object's alignment (below).
     let pad = if procedure.body.bits == 64 && dropped && procedure.reserve != 0 && aligns_for_calls(&procedure) {
         let call = procedure.registers.align;
         let rounded = (procedure.reserve + slot - 1) / slot * slot;
