@@ -261,6 +261,14 @@ fn our_vt(vt: Vt) -> EVT {
 /// raw id.
 pub const EFLAGS_ID: llrm_lir::registers::RegId = llrm_lir::registers::RegId::from_raw(255);
 
+/// The registers an x86 call clobbers that the scheduler must see in its
+/// `RegisterMask` operand: `EFLAGS` (the pin lists the whole caller-saved set;
+/// DEVIATE SCM1: only the flags, the one live physical register that crosses a
+/// call in this DAG. Exit: with the per-target CC clobber lists).
+pub fn call_clobbered_flags() -> Vec<u16> {
+    pin_register(EFLAGS_ID).into_iter().collect()
+}
+
 /// The register of the pin's register number `register` that the builder names
 /// as a physical register (`NodeData::PhysReg`); `None` for `$noreg` (0) and
 /// the ones with no id.
