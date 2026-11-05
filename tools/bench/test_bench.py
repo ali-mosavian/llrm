@@ -203,6 +203,7 @@ class ReferenceFloatTests(unittest.TestCase):
             got = self._counts(lambda variant, where: bench.build_watcom(variant, "O2", where, "F000"), name)
             self.assertGreater(got.get("instructions", 0), 0, got)
 
+    @unittest.skipUnless(bench.DOSERROR_OBJ.exists(), "needs error086.obj from an Open Watcom v2 clib build under LLRM_OW")
     def test_watcom_gives_a_program_with_much_data_the_stack_that_is_left(self):
         """stft_single (7K of data) did not link with the 60K stack: DGROUP exceeds 64k by 2000 bytes. The stack shrinks by what is over."""
         import tempfile
@@ -1154,6 +1155,15 @@ def test_no_c_parity_source_hands_its_kernel_constants():
             assert "volatile" in text, f"{source.name} sets its kernel's inputs from constants: clang folds the call"
 
 
+def test_a_nib_parity_kernel_with_constant_inputs_is_not_left_for_the_compiler_to_fold():
+    """parity/qmove/nib read 1 instruction (kernel and helper folded to a constant: no @noipa) and the row was unmeasured. The Nib files that fold the same way, control and qmove, mark kernel and helper @noipa."""
+    for name, functions in (("control", ("parity_control", "bench_control")), ("qmove", ("pl_ground_accel", "bench_qmove"))):
+        lines = (bench.BENCH / "parity" / name / f"{name}.nib").read_text().splitlines()
+        for function in functions:
+            at = next(i for i, line in enumerate(lines) if line.startswith(f"fn {function}("))
+            assert lines[at - 1].strip() == "@noipa", f"{name}.nib: {function} is not @noipa"
+
+
 def test_a_file_program_is_counted_with_its_declared_files_in_a_folder_of_its_own(tmp_path, monkeypatch):
     """jpeg_fixed, jpeg_single, stft_fixed and stft_single were timed only: 40 m16 rows had no instructions or clocks. Counted with no
     input file, stft_fixed printed -1 for 30825279; the emulator now gets the files the source's `data:` header names."""
@@ -1404,3 +1414,39 @@ def test_an_emulated_reference_program_is_fed_its_corpus_cut(tmp_path, monkeypat
     assert [one.read_bytes() for one in files] == [b"x" * 10] and want == ["cut"] and counted
     plain = bench.Variant("grep", "c", folder / "grep.c", "f", None, "qb45", True, ("in.dat",), 10, False)
     assert bench.counting_input(plain, folder, tmp_path / "ci2") == ((), ["full"], False)
+
+
+def test_skipped_rows_are_counted_in_the_header_by_reason():
+    """sfm16_* had no native column and nothing said so. Each skip reason prints once with the number of programs it left without a row."""
+    measured = {("a", "gcc64", "O2"): {"skip": "why"}, ("a", "clang64", "O2"): {"skip": "why"}, ("b", "gcc64", "O2"): {"skip": "why"}, ("b", "c64", "O2"): {"instructions": 1}}
+    assert bench.skip_lines(measured) == ["SKIP why (2 programs)"]
+
+
+def test_a_noted_row_is_counted_in_the_header_by_its_note():
+    """parity/*/clang64 Os rows carry "pc-rel vs abs data refs": kept, not errors, and counted as NOTE lines."""
+    measured = {("a", "clang64", "Os"): {"instructions": 1, "note": "n"}, ("b", "clang64", "Os"): {"instructions": 2, "note": "n"}, ("b", "c64", "Os"): {"instructions": 3}}
+    assert bench.note_lines(measured) == ["NOTE n (2 cells)"]
+
+
+def test_watcom_links_error086_when_the_library_has_no_doserror(tmp_path, monkeypatch):
+    """stft_single's Watcom build died at jwlink E2028 `__doserror_` undefined (clibm.lib's creatdos and opendos want it; the shipped dictionary has no definition): the Watcom column had no row. The link is retried with error086.obj, the module that defines it."""
+    obj = tmp_path / "error086.obj"
+    obj.write_bytes(b"")
+    monkeypatch.setattr(bench, "DOSERROR_OBJ", obj)
+    links = []
+
+    def host(command, *a, **k):
+        links.append(command)
+        if len(links) == 1:
+            raise bench.dosbatch.BuildError("jwlink: Error! E2028: __doserror_ is an undefined reference")
+
+    monkeypatch.setattr(bench.dosbatch, "_host", host)
+    monkeypatch.setattr(bench.dosbatch, "c_support", lambda *a, **k: [])
+    monkeypatch.setattr(bench.cpulimit, "run", lambda *a, **k: types.SimpleNamespace(returncode=0, stderr="", stdout=""))
+    variant = next(one for one in bench.variants(bench.BENCH / "hanoi") if one.language == "c")
+    work = tmp_path / "w"
+    work.mkdir()
+    (work / "F000.obj").write_bytes(b"")
+    built = bench.build_watcom(variant, "O2", work, "F000")
+    assert not isinstance(built, str), built
+    assert str(obj) not in links[0] and str(obj) in links[1]

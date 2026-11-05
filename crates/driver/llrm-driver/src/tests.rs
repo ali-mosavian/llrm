@@ -2004,6 +2004,30 @@ fn the_declared_win64_prologue_is_what_the_code_bytes_say() {
     assert_eq!(declared, read, "{:?}", frame.seh);
 }
 
+/// A Win64 function with a frame register (`alloca`) pushes RBP and sets it
+/// from RSP; its `.seh_pushreg rbp` and `.seh_setframe rbp, 0` were left out
+/// (the frame register is not a register of the file the directives read), so
+/// the unwind data held the allocation alone and an unwinder lost the frame.
+#[test]
+fn a_win64_frame_register_has_its_seh_directives() {
+    let body = "declare i64 @g(ptr)\ndefine i64 @f(i64 %n) {\n  %p = alloca i8, i64 %n, align 16\n  %r = call i64 @g(ptr %p)\n  ret i64 %r\n}\n";
+    let text = format!("{SYSV}{body}");
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag", "-mabi=win64"]), &text, "f").unwrap();
+    let object = llrm_codegen::backend::objbuild::built(
+        &built,
+        "f.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .unwrap();
+    let frame = object.frames.first().expect("a declared frame");
+    let section = &object.sections[frame.section];
+    let body = &section.image[frame.offset..frame.offset + frame.length];
+    let declared = llrm_x86::mc::win64unwind::from_seh("f", &frame.seh).unwrap();
+    let read = llrm_x86::mc::win64unwind::from_prologue("f", body).unwrap();
+    assert_eq!(declared, read, "{:?}", frame.seh);
+}
+
 /// The pin pushes the callee-saved registers `ebp, ebx, edi, esi`
 /// (`clang -target i386-unknown-linux-gnu -O2` on this function, with and
 /// without `-fno-omit-frame-pointer`): the last of CSR_32 (`esi, edi, ebx,
@@ -3721,6 +3745,31 @@ fn a_win64_function_takes_its_arguments_by_position_above_the_home_area() {
 /// A Win64 function that keeps doubles in xmm6/xmm7 across a call must save
 /// and reload them (callee-saved there); with no save it clobbered the
 /// caller's xmm6/xmm7. SysV has none callee-saved and gets no `movaps`.
+/// Win64 splits a 128-bit integer into two i64 pieces, each taking the next
+/// argument position (pin `llc`: `f(i128, i128)` is RCX:RDX and R8:R9, the
+/// result RAX:RDX; a pair past the fourth position is stack slots 4 and 5,
+/// `[rsp+40]` and `[rsp+48]`). The module was refused (row W64-1).
+#[test]
+fn a_win64_i128_argument_is_two_consecutive_i64_positions() {
+    let listing_of = |body: &str| {
+        let text = format!("{SYSV}{body}");
+        let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag", "-mabi=win64"]), &text, "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let add = listing_of("define i128 @f(i128 %a, i128 %b) {\n  %r = add i128 %a, %b\n  ret i128 %r\n}\n");
+    assert!(add.contains("adc") && add.contains("r8") && add.contains("r9") && !add.contains("[rsp"), "{add}");
+    let stacked = listing_of(
+        "define i64 @f(i64 %a, i64 %b, i64 %c, i64 %d, i128 %x) {\n  %t = trunc i128 %x to i64\n  %s = lshr i128 %x, 64\n  %u = trunc i128 %s to i64\n  %r = sub i64 %t, %u\n  ret i64 %r\n}\n",
+    );
+    assert!(stacked.contains("[rsp+40]") && stacked.contains("[rsp+48]"), "{stacked}");
+    // A call passes the pair in R8:R9 after the first two arguments (a tail
+    // call here) and the result comes back in RAX:RDX.
+    let call = listing_of(
+        "declare i128 @g(i64, i64, i128)\ndefine i128 @f(i64 %a, i128 %b) {\n  %r = call i128 @g(i64 %a, i64 %a, i128 %b)\n  ret i128 %r\n}\n",
+    );
+    assert!(call.contains("jmp g") && call.contains("mov r9, r8") && call.contains("mov r8, rax"), "{call}");
+}
+
 #[test]
 fn a_win64_function_saves_the_xmm_registers_it_keeps_across_a_call() {
     let body = "declare double @g(double)\ndefine double @f(double %a, double %b) {\n  %x = call double @g(double %a)\n  %y = call double @g(double %b)\n  %s = fadd double %x, %y\n  %t = fadd double %s, %a\n  %u = fadd double %t, %b\n  ret double %u\n}\n";
@@ -3846,7 +3895,7 @@ fn a_win64_function_with_an_unprobed_shape_is_refused() {
     // (function, whether it is the Win64 refusal that stops it: the selector
     // refuses a 128-bit integer and a vector under SysV too)
     let cases = [
-        ("define i128 @f(i128 %a) {\n  ret i128 %a\n}\n", false),
+        ("define i256 @f(i256 %a) {\n  ret i256 %a\n}\n", false),
         ("define <4 x i32> @f(<4 x i32> %a) {\n  ret <4 x i32> %a\n}\n", false),
         ("define i64 @f(ptr byval([3 x i64]) align 8 %p) {\n  %v = load i64, ptr %p\n  ret i64 %v\n}\n", true),
     ];

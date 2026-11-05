@@ -27,6 +27,8 @@ def test_a_program_runs_natively_only_with_main_an_expected_output_and_no_far_po
     assert native.candidates(program(tmp_path, "g", out=None)) is None
     assert native.candidates(program(tmp_path, "h", "char far *p; int main(void) { return 0; }\n")) is None
     assert native.candidates(program(tmp_path, "i", "int f(void) { return 0; }\n")) is None
+    assert native.candidates(program(tmp_path, "l", "typedef unsigned char sfu8; typedef long sfi32;\nint main(void) { return 0; }\n")) is None
+    assert native.candidates(program(tmp_path, "m", "typedef unsigned long sfu32;\nint main(void) { return 0; }\n")) is None
     assert native.candidates(program(tmp_path, "j", "char __huge *p; int main(void) { return 0; }\n")) is None
     assert native.candidates(program(tmp_path, "k", "// data: photo.jpg\n" + PROGRAM)) is None  # jpeg and stft printed the file name where a number was expected
 
@@ -156,5 +158,50 @@ def test_pic_mode_reads_the_objects_relocations_not_the_flag(tmp_path):
         modes[flag] = native.pic_mode(obj)
     assert modes == {"-fPIE": "pic", "-fno-pic": "nopic"}
     row = {"instructions": 1}
-    assert native.mismatch(row, "clang64", tmp_path / "t-fno-pic.o", tmp_path / "t-fPIE.o") == {"error": "pic mode: clang64 is nopic, ours is pic"}
+    noted = {**row, "note": "pc-rel vs abs data refs: clang64 is nopic, ours is pic"}
+    assert native.mismatch(row, "clang64", tmp_path / "t-fno-pic.o", tmp_path / "t-fPIE.o") == noted  # the hanoi2 shape: the row is kept, with the note
+    assert native.mismatch(row, "clang64", tmp_path / "t-fPIE.o", tmp_path / "t-fno-pic.o")["note"] == "pc-rel vs abs data refs: clang64 is pic, ours is nopic"  # the parity/algebra Os shape
     assert native.mismatch(row, "clang64", tmp_path / "t-fno-pic.o", tmp_path / "t-fno-pic.o") == row
+
+
+def test_a_program_with_a_32_bit_long_is_a_skip_row_with_its_reason_not_a_missing_one(tmp_path, monkeypatch):
+    """sfm16_* (9 programs) had no gcc/clang column and no row saying so: the missing bar read as met. Each now has a skip row per native column."""
+    directory = tmp_path / "sf"
+    directory.mkdir()
+    (directory / "sf.c").write_text("typedef unsigned char sfu8; typedef long sfi32;\nint main(void) { return 0; }\n")
+    (directory / "sf.out").write_text("1\n")
+    assert native.spells_int32_as_long(directory)
+    monkeypatch.setattr(native, "perf_missing", lambda: None)
+    rows = native.measure([("sf", directory)], tmp_path, ["O2", "Os"], tmp_path / "w", tmp_path)
+    assert {key[2] for key in rows} == {"O2", "Os"} and {key[1] for key in rows} >= {"gcc64", "clang64"}
+    assert all(row == {"skip": native.NO_NATIVE_LONG} for row in rows.values())
+
+
+def test_pic_mode_is_read_from_the_sized_object_not_the_wrapper_pointer_beside_it(tmp_path):
+    """hanoi gcc64/clang64 O2 were error rows (`pic mode: gcc64 is pic, ours is mixed`) for 2 cells: the check read the counted object, where the harness's global pointer is a pc-relative data reference in every column. It reads the sized one."""
+    for name in ("hanoi.gcc64.O2.o", "hanoi.gcc64.O2.sized.o", "hanoi.c64nopic.O2.o"):
+        (tmp_path / name).write_bytes(b"")
+    assert native.checked_object(tmp_path, "hanoi", "gcc64", "O2").name == "hanoi.gcc64.O2.sized.o"
+    assert native.checked_object(tmp_path, "hanoi", native.NOPIC, "O2").name == "hanoi.c64nopic.O2.o"
+
+
+@pytest.mark.parametrize("compiler", ("gcc", "clang", "ours"))
+def test_pic_mode_reads_a_known_object_of_each_compiler_as_its_mode(compiler, tmp_path):
+    """Positive controls: -fPIC and -fPIE read pic, -fno-pic reads nopic, per compiler, on code with a .bss load beside an indexed .rodata one. gcc -fno-pic wrote an
+    absolute .rodata reference beside a pc-relative .bss one and read `mixed`, so 16 sfm16 gcc64/clang64 O2 cells were error rows against ours (nopic)."""
+    import subprocess
+
+    import llrmbin
+
+    source = tmp_path / "t.c"
+    source.write_text("static int a[100];\nstatic int b;\nstatic const float k[4] = {1.5f, 2.5f, 3.5f, 4.5f};\nint f(int i) { return a[i]++ + b; }\nfloat g(int i) { return k[i & 3]; }\n")
+    if compiler == "ours":
+        program, env = [str(llrmbin.compiler(llrmbin.bin_dir())), "-m64"], {**__import__("os").environ, "LLRM_CC_TARGET": "x86_64-linux"}
+    else:
+        if shutil.which(compiler) is None or shutil.which("readelf") is None:
+            pytest.skip(f"no {compiler} or readelf")
+        program, env = [compiler], None
+    for flag, want in (("-fPIC", "pic"), ("-fPIE", "pic"), ("-fno-pic", "nopic")):
+        obj = tmp_path / f"t{flag}.o"
+        assert subprocess.run([*program, "-O2", flag, "-c", str(source), "-o", str(obj)], env=env).returncode == 0
+        assert native.pic_mode(obj) == want, (compiler, flag)

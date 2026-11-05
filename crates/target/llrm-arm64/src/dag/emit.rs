@@ -1120,6 +1120,44 @@ impl Emitter<'_> {
         }
     }
 
+    /// `pointer_at` for an access of `bytes`: an offset the instruction cannot
+    /// encode (scaled unsigned 12 bits, or unscaled signed 9) is added to the
+    /// base first, as selecting the access at `ptr + offset` does.
+    fn access_at(
+        &mut self,
+        value: SDValue,
+        offset: u64,
+        bytes: u8,
+    ) -> Result<Addr, String> {
+        let legal = |imm: i64| {
+            let size = i64::from(bytes);
+            (imm >= 0 && imm % size == 0 && imm / size <= 4095) || (-256..=255).contains(&imm)
+        };
+        let Addr::Offset { base, imm } = self.pointer_at(value, offset)? else { return self.pointer_at(value, offset) };
+        if legal(imm) {
+            return Ok(Addr::Offset { base, imm });
+        }
+        let (mut base, mut rest) = (base, imm);
+        // The high part first (`add rd, rn, #hi, lsl #12`), then the low.
+        for (part, shift12) in [(rest >> 12, true), (rest & 0xfff, false)] {
+            if part == 0 || (!shift12 && legal(part)) {
+                continue;
+            }
+            let rd = self.mf.gpr();
+            self.ops.push(Op::I(Inst::AddSubImm {
+                op: AddSub { subtract: false, set_flags: false },
+                width: Width::X,
+                rd,
+                rn: base,
+                imm12: part as u16,
+                shift12,
+            }));
+            base = rd;
+            rest -= if shift12 { part << 12 } else { part };
+        }
+        Ok(Addr::Offset { base, imm: rest })
+    }
+
     /// `str q<n>, [slot, #offset]`: an unnamed `q` argument register saved
     /// whole.
     fn save_q(
@@ -1200,7 +1238,7 @@ impl Emitter<'_> {
                         reg: scalar,
                     },
                 };
-                let addr = self.pointer_at(operand(1), offset)?;
+                let addr = self.access_at(operand(1), offset, bytes)?;
                 self.ops.push(Op::I(Inst::Store { mem, addr, mmo: mmo.clone() }));
             }
             return Ok(());
@@ -1212,12 +1250,12 @@ impl Emitter<'_> {
             let mut loaded = Vec::new();
             for &(bytes, offset) in chunk {
                 let mem = self.piece(bytes);
-                let addr = self.pointer_at(operand(2), offset)?;
+                let addr = self.access_at(operand(2), offset, bytes)?;
                 self.ops.push(Op::I(Inst::Load { mem, addr, mmo: mmo.clone() }));
                 loaded.push(mem);
             }
-            for (&(_, offset), mem) in chunk.iter().zip(loaded) {
-                let addr = self.pointer_at(operand(1), offset)?;
+            for (&(bytes, offset), mem) in chunk.iter().zip(loaded) {
+                let addr = self.access_at(operand(1), offset, bytes)?;
                 self.ops.push(Op::I(Inst::Store { mem, addr, mmo: mmo.clone() }));
             }
         }
