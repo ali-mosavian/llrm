@@ -1251,6 +1251,9 @@ pub static BARE: LazyLock<IndexMap<&'static str, &'static str>> = LazyLock::new(
         ("pushad", "PUSHAD"),
         ("popad", "POPAD"),
         ("cld", "CLD"),
+        // Windows 64-bit pads a function that ends in a call with it
+        // (X86AvoidTrailingCall)
+        ("int3", "INT3"),
         ("std", "STD"),
         // a call of one: its flags pushed first, as the interrupt does
         ("pushf", "PUSHFW"),
