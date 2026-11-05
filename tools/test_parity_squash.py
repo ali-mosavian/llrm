@@ -2228,3 +2228,13 @@ def test_the_integration_branches_and_forks_are_never_deleted(head, cross):
 def test_a_failed_delete_is_reported_not_raised_because_the_landing_is_already_done():
     run, calls = fake_gh(delete_rc=1)
     assert "not deleted" in ps.delete_merged_head("6400", run=run, sleep=lambda s: None)
+
+
+def test_a_squash_subject_that_is_not_conventional_is_refused(tmp_path):
+    """#7472 landed as 'Merge remote-tracking branch ...': the PR title became the commit subject unchecked."""
+    repo, head = stale_merge(tmp_path)
+    merge = "Merge remote-tracking branch 'origin/release/next' into w15/x"
+    for title in (merge, "update stuff", "Fix: capital type"):
+        assert any("subject" in w for w in ps.refusals(head, "Reverts: lvi", base="main", cwd=repo, title=title)), title
+    for title in ("fix(tools): gate scripts fail closed", "perf(combine)!: min/max of extended operands", "docs: notes"):
+        assert ps.refusals(head, "Reverts: lvi", base="main", cwd=repo, title=title) == [], title
