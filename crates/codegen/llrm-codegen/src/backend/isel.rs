@@ -601,7 +601,9 @@ pub fn convention_for_abi(
     // XMM0, ...), not probed: refused, not guessed. A 128-bit integer is two
     // i64 words (CC_X86_Win64_C has no rule for it): refused only where the
     // pair would straddle the fourth register, which the pin splits between
-    // R9 and the stack.
+    // R9 and the stack. Row W64-2 (owner object-refactor, exit when vectors
+    // open): clang hands `__int128` over as `ptr align 16` arguments and a
+    // `<2 x i64>` result in XMM0, which the vector refusal below still stops.
     if registers.is_some_and(|entry| entry.positional) {
         let wide = |ty: TypeId| matches!(types.get(ty), Type::Int(128));
         let unprobed = |ty: TypeId| match types.get(ty) {
