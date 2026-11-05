@@ -127,9 +127,58 @@ pub(super) fn full_unroll_pays(
     why(
         run,
         lp,
-        &format!("priced unroll: {trips} trips, saves {saved} clk, adds {added} B (body {body_bytes} B; units {unrolled_units} of {rolled_units}, promoted {promoted}), rate {rate}"),
+        &Priced {
+            trips,
+            saved,
+            added,
+            body_bytes,
+            units: unrolled_units,
+            rolled: rolled_units,
+            promoted,
+            ints,
+            floats,
+            float_file: run.outer.target().float_registers(),
+            rate,
+        }
+        .line(),
     );
     unroll_pays(saved, added, rate)
+}
+
+/// What a priced unroll weighed, the line of `LLRM_DEBUG=unroll`: `floats` and
+/// `ints` are the local arrays whose elements the copies make registers, and
+/// `float_file` the target's stated float register file (0 where unstated).
+pub(super) struct Priced {
+    pub trips: u32,
+    pub saved: i64,
+    pub added: i64,
+    pub body_bytes: i64,
+    pub units: i64,
+    pub rolled: i64,
+    pub promoted: i64,
+    pub ints: usize,
+    pub floats: usize,
+    pub float_file: i64,
+    pub rate: i64,
+}
+
+impl Priced {
+    pub(super) fn line(&self) -> String {
+        format!(
+            "priced unroll: {} trips, saves {} clk, adds {} B (body {} B; units {} of {}, promoted {}, ints {}, floats {}), float file {}, rate {}",
+            self.trips,
+            self.saved,
+            self.added,
+            self.body_bytes,
+            self.units,
+            self.rolled,
+            self.promoted,
+            self.ints,
+            self.floats,
+            self.float_file,
+            self.rate
+        )
+    }
 }
 
 /// The operands of the loops inside `lp` that each copy of its body makes a

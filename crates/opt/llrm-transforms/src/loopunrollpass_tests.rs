@@ -614,3 +614,27 @@ fn test_the_unroll_cost_analysis_reads_the_loops_expressions_the_pass_already_ma
     let made = get(Event::ScevNodes) - before;
     assert!(made <= 29, "{made} expressions were made for one loop");
 }
+
+/// nbody -O2 at m32 priced its 4-trip loop over four float arrays at "saves 2176
+/// clk, adds 0 B" and unrolled it, +18.5k clocks: the line said nothing of the
+/// arrays or the float file a reader needs to see why. It carries both now.
+#[test]
+fn a_priced_unroll_line_names_the_arrays_trips_and_float_file() {
+    let line = super::price::Priced {
+        trips: 4,
+        saved: 2176,
+        added: 0,
+        body_bytes: 54,
+        units: 40,
+        rolled: 13,
+        promoted: 6,
+        ints: 0,
+        floats: 4,
+        float_file: 8,
+        rate: 312,
+    }
+    .line();
+    for want in ["4 trips", "ints 0", "floats 4", "float file 8", "rate 312"] {
+        assert!(line.contains(want), "{want} missing from: {line}");
+    }
+}
