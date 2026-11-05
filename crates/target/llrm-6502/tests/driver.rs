@@ -2620,3 +2620,14 @@ fn a_local_past_255_bytes_from_rc0_is_still_reached() {
         assert_eq!(exit_code_of(&text, "t"), 14, "{text}");
     }
 }
+
+/// The speed variants of the long division are called at -O2 and not at -Os:
+/// the small routines are the Os bytes (the speed ones are 107 B more).
+#[test]
+fn a_long_remainder_calls_the_fast_routine_at_o2_and_not_at_os() {
+    let ir = module("define i32 @f(i32 %a, i32 %b) {\n  %r = srem i32 %a, %b\n  ret i32 %r\n}");
+    let fast = assembly(&ir, &Request::new(Level::O2)).unwrap();
+    assert!(fast.contains("__modsi3_fast"), "{fast}");
+    let small = assembly(&ir, &Request::new(Level::Os)).unwrap();
+    assert!(small.contains("__modsi3") && !small.contains("_fast"), "{small}");
+}

@@ -95,9 +95,7 @@ impl Combiner<'_> {
             }
             match self.function.instruction(user).opcode {
                 Opcode::Select | Opcode::Br => {
-                    let mut operands = self.function.instruction(user).operands.clone();
-                    operands.swap(1, 2);
-                    self.function.set_operands(user, operands);
+                    crate::profswap::swap_arms(self.context, self.env.metadata, self.declared, self.function, user);
                 }
                 _ => self.replace_inst_with(user, v),
             }

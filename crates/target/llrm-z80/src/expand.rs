@@ -767,7 +767,7 @@ impl Printer<'_> {
                     }
                 }
             }
-            "PUSHP" | "POPP" => {
+            "PUSHP" | "POPP" | "PEEKP" => {
                 if self.call_bytes != 0 {
                     return Err("a pushed spill inside the stack arguments of a call".to_owned());
                 }
@@ -776,6 +776,12 @@ impl Printer<'_> {
                     .into_iter()
                     .find(|pair| REGISTER_INFO.root(register) == *pair)
                     .ok_or("a push of something that is no pair")?;
+                if op == "PEEKP" {
+                    // the slot on top stays: it is read again
+                    self.push(format!("pop {}", name(pair)));
+                    self.push(format!("push {}", name(pair)));
+                    return Ok(());
+                }
                 self.push(format!("{} {}", if op == "PUSHP" { "push" } else { "pop" }, name(pair)));
                 self.spill_bytes += if op == "PUSHP" { 2 } else { -2 };
             }
@@ -2198,7 +2204,9 @@ fn push_arguments(
                         stores.push(end);
                         next -= 2;
                     }
-                    Kind::Op("STSP8" | "ADJCALLSTACKDOWN" | "ADJCALLSTACKUP" | "PUSHP" | "POPP") => legal = false,
+                    Kind::Op("STSP8" | "ADJCALLSTACKDOWN" | "ADJCALLSTACKUP" | "PUSHP" | "POPP" | "PEEKP") => {
+                        legal = false
+                    }
                     _ => {}
                 }
                 end += 1;

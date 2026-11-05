@@ -3235,9 +3235,15 @@ fn emit_with<const STACK: bool>(
                     // bytes first: 45 bytes more each, linked once, for 200
                     // clocks fewer per 8 bits. `__mulsi3_fast` (19 bytes more)
                     // is not chosen: a site that never runs or has a constant
-                    // multiplier priced as run once still links it
-                    let fast = matches!(callee.as_str(), "__ashlsi3" | "__lshrsi3" | "__ashrsi3")
-                        && TUNING.with(|t| t.get()).clocks_per_byte <= 1;
+                    // multiplier priced as run once still links it. The long
+                    // division and remainder start at the quotient's first bit
+                    // (compiler-rt's `__udivXi3` does, by `clz`): 107 bytes
+                    // more, linked once, for 2000 clocks fewer a call
+                    // (loop_interchange -O2 13.9M -> 5.9M).
+                    let fast = matches!(
+                        callee.as_str(),
+                        "__ashlsi3" | "__lshrsi3" | "__ashrsi3" | "__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3"
+                    ) && TUNING.with(|t| t.get()).clocks_per_byte <= 1;
                     writeln!(out, "  {} {callee}{}", if jump { "jmp" } else { "jsr" }, if fast { "_fast" } else { "" })
                         .unwrap()
                 }

@@ -16,6 +16,7 @@ fn simplify(text: &str) -> String {
     let mut declared = Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
     simplified(context, &spec, &mut declared, function);
+    declared.place(&mut module).unwrap();
     printed(&module)
 }
 
@@ -166,11 +167,12 @@ b4:
     let outer = Outer::of(&module, None);
     let layout = DataLayout::default();
     let spec = Speculation { tti: &llrm_mir::tti::Basic, layout: &layout, outer: &outer };
+    let mut declared = Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
     let entry = function.entry().expect("an entry");
     let bb = function.successors(entry)[0];
     let before = crate::branchtocommon::SAFE_TO_MERGE_ASKS.with(|count| count.get());
-    assert!(!crate::branchtocommon::folded(context, &spec, function, bb));
+    assert!(!crate::branchtocommon::folded(context, &spec, &mut declared, function, bb));
     assert_eq!(crate::branchtocommon::SAFE_TO_MERGE_ASKS.with(|count| count.get()), before);
 }
 
@@ -212,4 +214,79 @@ fn test_a_load_through_a_pointer_aligned_as_the_load_is_speculated() {
     let after = simplify(&two_length_tests("align 2 "));
     assert_eq!(after.matches("br i1").count(), 0, "{after}");
     assert!(after.contains("select"), "{after}");
+}
+
+const WEIGHTED: &str = "declare void @g1()
+
+declare void @g2()
+
+define void @f(i1 noundef %a, i16 noundef %x) {
+p:
+  br i1 %a, label %t, label %bb, !prof !0
+
+bb:
+  %b = icmp eq i16 %x, 0
+  br i1 %b, label %t, label %e
+
+t:
+  call void @g1()
+  ret void
+
+e:
+  call void @g2()
+  ret void
+}
+";
+
+/// Inverting the predecessor's branch left its weights behind, and the folded
+/// branch kept the predecessor's weights though its condition had changed:
+/// the fold now computes the pin's `PredTrue*SuccTrue` pair.
+#[test]
+fn test_the_folded_branch_carries_the_merged_weights() {
+    let out = simplify(&format!("{WEIGHTED}\n!0 = !{{!\"branch_weights\", i32 1, i32 9}}\n"));
+    assert!(!out.contains("label %bb"), "{out}");
+    // PBI `br %a, t, bb` (1, 9), BI unweighted (1, 1): (1 * 2 + 9 * 1, 9 * 1).
+    assert!(out.contains("branch_weights\", i32 11, i32 9"), "{out}");
+}
+
+/// A first branch decided 99.9% one way is not speculated through: the pin
+/// asks `getPredictableBranchThreshold` before it folds.
+#[test]
+fn test_a_probably_decided_first_branch_is_not_folded_through() {
+    let out = simplify(&format!("{WEIGHTED}\n!0 = !{{!\"branch_weights\", i32 999, i32 1}}\n"));
+    assert!(out.contains("label %bb"), "{out}");
+}
+
+/// The predecessor is inverted to meet the successor; its weights went with
+/// the arms in the pin (`InvertBranch` swaps successors), not stayed behind.
+#[test]
+fn test_inverting_the_predecessor_swaps_its_weights_before_they_merge() {
+    let out = simplify(
+        "declare void @g1()
+
+declare void @g2()
+
+define void @f(i1 noundef %a, i16 noundef %x) {
+p:
+  br i1 %a, label %e, label %bb, !prof !0
+
+bb:
+  %b = icmp eq i16 %x, 0
+  br i1 %b, label %t, label %e
+
+t:
+  call void @g1()
+  ret void
+
+e:
+  call void @g2()
+  ret void
+}
+
+!0 = !{!\"branch_weights\", i32 1, i32 9}
+",
+    );
+    // Inverted: (9, 1) for `br !a, bb, e`; BI unweighted (1, 1): (9 * 1, 1 * 2
+    // + 9 * 1).
+    assert!(out.contains("branch_weights\", i32 9, i32 11"), "{out}");
 }
