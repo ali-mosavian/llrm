@@ -59,10 +59,7 @@ fn the_extended_value_is_right_under_qemu() {
 /// The bytes binutils makes of `extb.l %dn`, for each data register.
 #[test]
 fn extb_encodes_as_binutils_does() {
-    let Some(root) = std::env::var("GCC_M68K").ok().filter(|root| !root.is_empty()) else {
-        assert!(std::env::var("M68K_ISA_SKIP_ORACLE").is_ok_and(|flag| flag == "1"), "GCC_M68K is not set");
-        return;
-    };
+    let Some(root) = support::oracle_root() else { return };
     let tool = |name: &str| {
         let mut command = std::process::Command::new(format!("{root}/usr/bin/m68k-linux-gnu-{name}"));
         command.env("LD_LIBRARY_PATH", format!("{root}/usr/lib/x86_64-linux-gnu"));

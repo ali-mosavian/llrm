@@ -13,11 +13,7 @@ const VALUES: [u32; 13] =
 const COUNTS: [u32; 10] = [0, 1, 3, 7, 8, 31, 32, 33, 63, 64];
 
 fn tool(name: &str) -> Option<Command> {
-    let root = std::env::var("GCC_M68K").ok().filter(|root| !root.is_empty());
-    let Some(root) = root else {
-        assert!(std::env::var("M68K_ISA_SKIP_ORACLE").is_ok_and(|flag| flag == "1"), "GCC_M68K is not set");
-        return None;
-    };
+    let root = support::oracle_root()?;
     let mut command = Command::new(format!("{root}/usr/bin/m68k-linux-gnu-{name}"));
     command.env("LD_LIBRARY_PATH", format!("{root}/usr/lib/x86_64-linux-gnu"));
     Some(command)
