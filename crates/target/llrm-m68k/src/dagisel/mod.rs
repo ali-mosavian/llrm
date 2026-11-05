@@ -6,6 +6,7 @@ pub mod addr;
 #[path = "generated/asm.rs"]
 pub mod asm;
 pub mod call;
+pub mod divrem;
 #[rustfmt::skip]
 #[path = "generated/enc.rs"]
 pub mod enc;
