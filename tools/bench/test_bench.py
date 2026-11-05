@@ -247,6 +247,20 @@ class TurboCHeaderTests(unittest.TestCase):
         self.assertNotIsInstance(built, str, built)
 
 
+@unittest.skipUnless(bench.references_available() and (bench.BORLAND["tcpp"][0] / "lib" / "CM.LIB").exists(), "needs Turbo C++ 3.0")
+class TurboCppHugeTests(unittest.TestCase):
+    def test_a_turbo_cpp_program_with_a_huge_array_runs(self):
+        """huge.c spells `__huge`, which Turbo C++ 3.0 does not know ("Declaration syntax error"): no tcpp row."""
+        import tempfile
+
+        variant = next(one for one in bench.variants(bench.BENCH / "huge") if one.language == "c")
+        with tempfile.TemporaryDirectory(dir=bench.llrmbin.target_dir()) as where:
+            built = bench.build_borland("tcpp", [(variant, "U000")], "O2", Path(where))["U000"]
+            self.assertNotIsInstance(built, str, built)
+            got = bench.measure(("U000", built[0], built[1], variant.region, bench.expected_output(bench.BENCH / "huge"), built[0].with_suffix(".OBJ")))
+        self.assertGreater(got.get("instructions", 0), 0, got)
+
+
 SIZED = {"instructions": 100, "memory_operands": 40, "code_bytes": 200, "data_bytes": 10, "bss_bytes": 4}
 
 
