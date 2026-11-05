@@ -744,7 +744,7 @@ fn emit_module<'h>(
         place_facts,
         field_facts,
         variables: HashMap::default(),
-        never_taken: never_taken(&mut module),
+        never_taken: [MetadataId(0); 2],
     };
     tables.tags.arrays(&mut module, hir);
     match fact_nodes(&mut module, &tables.spaces, hir, &tables.types) {
@@ -757,6 +757,8 @@ fn emit_module<'h>(
         Ok(classes) => tables.classes = classes,
         Err(why) => refused.push((hir.name.clone(), why)),
     }
+    // After the nodes the language states, so theirs keep their numbers.
+    tables.never_taken = never_taken(&mut module);
     let objects: HashMap<i64, &model::DataObject> = hir.data.iter().map(|one| (one.id, one)).collect();
     let sizes = sizes(hir, &tables.types);
     let mut defined = Vec::new();
