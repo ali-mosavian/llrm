@@ -28,7 +28,10 @@ runner=${LLRM_CC_RUN:-}
 reftriple=${LLRM_CC_REF_TRIPLE:-}
 refrun=; [ -z "$reftriple" ] || refrun=$runner
 out=$(mktemp -d); trap 'rm -rf "$out"' EXIT
-progs=${*:-$(cd "$dir" && ls *.c | sed 's/\.c$//')}
+progs=${*:-$(cd "$dir" && ls *.c 2>/dev/null | sed 's/\.c$//')}
+[ -n "$progs" ] || { echo "cc_check: no programs in $dir" >&2; exit 2; }
+# A runner that is not there runs neither side: rc 127 and empty output on both reads as agreement.
+[ -z "$runner" ] || command -v "${runner%% *}" >/dev/null 2>&1 || { echo "cc_check: LLRM_CC_RUN '$runner' is not executable" >&2; exit 2; }
 bad=0
 for p in $progs; do
   src=$dir/$p.c
