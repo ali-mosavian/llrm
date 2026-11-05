@@ -777,6 +777,7 @@ impl LoopIdiomRecognize {
                 callees,
                 &blocks,
                 costs,
+                run.clocks.is_none(),
             ) {
                 return (false, false);
             }
