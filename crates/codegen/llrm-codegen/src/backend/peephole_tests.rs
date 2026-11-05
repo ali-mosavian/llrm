@@ -4128,6 +4128,7 @@ fn _high_extract_body(tail: Vec<Arc<Insn>>) -> LirBody {
         effects: llrm_mir::memory::Effects::NONE,
         private: vec![],
         disturbs: Default::default(),
+        block: false,
     };
     let load = Insn {
         symbol: Some(false),

@@ -46,6 +46,11 @@ pub struct CallMemory {
     /// as it does before writing it. Empty where the callee's contract is what
     /// the call went by.
     pub disturbs: BTreeSet<RegId>,
+    /// An inline block of bytes laid down at the site (`llrm.ia16.asm`): it
+    /// writes the registers its instruction lists and no others, which a
+    /// call of a routine does not promise (a segment register it does not
+    /// list still holds what it did).
+    pub block: bool,
 }
 
 impl CallMemory {

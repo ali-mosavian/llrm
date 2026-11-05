@@ -17,6 +17,13 @@ import bench  # noqa: E402
 BASE = {"instructions": 100, "memory_operands": 40}
 
 
+def scratch_dir():
+    """Cargo's target directory, made if the tree has none (CARGO_TARGET_DIR elsewhere): temp dirs for the tool tests live under it."""
+    where = bench.llrmbin.target_dir()
+    where.mkdir(parents=True, exist_ok=True)
+    return where
+
+
 class GateTests(unittest.TestCase):
     def test_the_baseline_itself_passes(self):
         self.assertEqual(bench.against("x", dict(BASE), BASE), [])
@@ -169,7 +176,7 @@ class BccTests(unittest.TestCase):
         import tempfile
 
         variant = next(one for one in bench.variants(bench.BENCH / "floats") if one.language == "c")
-        with tempfile.TemporaryDirectory(dir=bench.llrmbin.target_dir()) as where:
+        with tempfile.TemporaryDirectory(dir=scratch_dir()) as where:
             built = bench.build_borland("bcc", [(variant, "B000")], "O2", Path(where))["B000"]
             self.assertNotIsInstance(built, str, built)
             got = bench.measure(("B000", built[0], built[1], variant.region, bench.expected_output(bench.BENCH / "floats"), built[0].with_suffix(".OBJ")))
@@ -182,7 +189,7 @@ class ReferenceFloatTests(unittest.TestCase):
         import tempfile
 
         variant = next(one for one in bench.variants(bench.BENCH / name) if one.language == "c")
-        with tempfile.TemporaryDirectory(dir=bench.llrmbin.target_dir()) as where:
+        with tempfile.TemporaryDirectory(dir=scratch_dir()) as where:
             built = build(variant, Path(where))
             self.assertNotIsInstance(built, str, built)
             return bench.measure(("F000", built[0], built[1], variant.region, bench.expected_output(bench.BENCH / name), next(built[0].parent.glob(built[0].stem + ".[oO][bB][jJ]"))))
@@ -203,12 +210,13 @@ class ReferenceFloatTests(unittest.TestCase):
             got = self._counts(lambda variant, where: bench.build_watcom(variant, "O2", where, "F000"), name)
             self.assertGreater(got.get("instructions", 0), 0, got)
 
+    @unittest.skipUnless(bench.DOSERROR_OBJ.exists(), "needs error086.obj from an Open Watcom v2 clib build under LLRM_OW")
     def test_watcom_gives_a_program_with_much_data_the_stack_that_is_left(self):
         """stft_single (7K of data) did not link with the 60K stack: DGROUP exceeds 64k by 2000 bytes. The stack shrinks by what is over."""
         import tempfile
 
         variant = next(one for one in bench.variants(bench.BENCH / "stft_single") if one.language == "c")
-        with tempfile.TemporaryDirectory(dir=bench.llrmbin.target_dir()) as where:
+        with tempfile.TemporaryDirectory(dir=scratch_dir()) as where:
             built = bench.build_watcom(variant, "O2", Path(where), "F000")
         self.assertNotIsInstance(built, str, built)
 
@@ -228,7 +236,7 @@ class TurboCppTests(unittest.TestCase):
         import tempfile
 
         variant = next(one for one in bench.variants(bench.BENCH / "floats") if one.language == "c")
-        with tempfile.TemporaryDirectory(dir=bench.llrmbin.target_dir()) as where:
+        with tempfile.TemporaryDirectory(dir=scratch_dir()) as where:
             built = bench.build_borland("tcpp", [(variant, "T000")], "O2", Path(where))["T000"]
             self.assertNotIsInstance(built, str, built)
             got = bench.measure(("T000", built[0], built[1], variant.region, bench.expected_output(bench.BENCH / "floats"), built[0].with_suffix(".OBJ")))
@@ -242,7 +250,7 @@ class TurboCHeaderTests(unittest.TestCase):
         import tempfile
 
         variant = next(one for one in bench.variants(bench.BENCH / "jpeg_single") if one.language == "c")
-        with tempfile.TemporaryDirectory(dir=bench.llrmbin.target_dir()) as where:
+        with tempfile.TemporaryDirectory(dir=scratch_dir()) as where:
             built = bench.build_borland("tc", [(variant, "H000")], "O2", Path(where))["H000"]
         self.assertNotIsInstance(built, str, built)
 
@@ -254,7 +262,7 @@ class TurboCppHugeTests(unittest.TestCase):
         import tempfile
 
         variant = next(one for one in bench.variants(bench.BENCH / "huge") if one.language == "c")
-        with tempfile.TemporaryDirectory(dir=bench.llrmbin.target_dir()) as where:
+        with tempfile.TemporaryDirectory(dir=scratch_dir()) as where:
             built = bench.build_borland("tcpp", [(variant, "U000")], "O2", Path(where))["U000"]
             self.assertNotIsInstance(built, str, built)
             got = bench.measure(("U000", built[0], built[1], variant.region, bench.expected_output(bench.BENCH / "huge"), built[0].with_suffix(".OBJ")))
@@ -1139,6 +1147,8 @@ def test_a_kernel_folded_to_a_constant_is_an_error_not_a_row(tmp_path, monkeypat
     monkeypatch.setattr(bench.run_tests, "lines", lambda text: ["15007"])
     monkeypatch.setattr(bench.sizes, "data_bytes", lambda obj: (0, 0))
     monkeypatch.setattr(bench.sizes, "code_size", lambda obj: bench.sizes.CodeSize(0, 0))
+    monkeypatch.setattr(bench.sizes, "is_elf", lambda obj: False)  # the stubbed object is never written
+    monkeypatch.setattr(bench.sizes, "externs", lambda obj: [])
     job = ("V0", exe, tmp_path / "x.map", "bench_control", ["15007"], tmp_path / "x.obj")
     monkeypatch.setattr(bench.icount, "run", run(2))
     assert "kernel folded away" in bench.measure(job)["error"]
@@ -1184,6 +1194,8 @@ def test_a_file_program_is_counted_with_its_declared_files_in_a_folder_of_its_ow
     monkeypatch.setattr(bench.run_tests, "lines", lambda text: ["1"])
     monkeypatch.setattr(bench.sizes, "data_bytes", lambda obj: (0, 0))
     monkeypatch.setattr(bench.sizes, "code_size", lambda obj: bench.sizes.CodeSize(0, 0))
+    monkeypatch.setattr(bench.sizes, "is_elf", lambda obj: False)  # the stubbed object is never written
+    monkeypatch.setattr(bench.sizes, "externs", lambda obj: [])
     bench.measure(("V0", exe, tmp_path / "x.map", "BenchX", ["1"], tmp_path / "x.obj", (data,)))
     assert seen["files"] == ["PHOTO.JPG"], seen
 
