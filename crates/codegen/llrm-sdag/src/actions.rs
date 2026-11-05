@@ -157,6 +157,9 @@ impl TargetLowering {
             sdiv_pow2_cmov: None,
         };
         table.set_default_integer_libcalls();
+        // `TargetLoweringBase`: `VAARG` is expanded unless the target says
+        // otherwise.
+        table.set_operation_action(ISD::VAArg, MVT::Other, Action::Expand);
         table
     }
 

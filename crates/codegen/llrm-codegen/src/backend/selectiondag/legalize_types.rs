@@ -502,6 +502,13 @@ impl<'a> TypeLegalizer<'a> {
                 self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: load.node, res: 1 });
                 load
             }
+            ISD::VAArg => {
+                // `SoftenFloatRes_VAARG`: the same read as an integer.
+                let ops: Vec<SDValue> = (0..4).map(|at| self.dag.operand(value, at)).collect();
+                let read = self.dag.get_node_multi(ISD::VAArg, &[int, EVT::OTHER], &ops);
+                self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: read.node, res: 1 });
+                SDValue { node: read.node, res: 0 }
+            }
             op @ (ISD::SIntToFp | ISD::UIntToFp | ISD::FpExtend | ISD::FpRound) => {
                 // `SoftenFloatRes_XINT_TO_FP`, `_FP_EXTEND`, `_FP_ROUND`: the
                 // conversion routine over the operand as the integer that
@@ -1782,6 +1789,21 @@ impl<'a> TypeLegalizer<'a> {
                 let by = self.dag.operand(value, 1);
                 let whole = self.dag.get_node(funnel, vt, &[x, x, by]);
                 self.split_integer(whole, half)
+            }
+            ISD::VAArg => {
+                // `ExpandRes_VAARG`: two reads of the half type, the first
+                // with the type's alignment, the second with none; the chain
+                // of the second replaces the node's.
+                let (chain, list, source) =
+                    (self.dag.operand(value, 0), self.dag.operand(value, 1), self.dag.operand(value, 2));
+                let align = self.dag.operand(value, 3);
+                let first = self.dag.get_node_multi(ISD::VAArg, &[half, EVT::OTHER], &[chain, list, source, align]);
+                let none = self.dag.get_constant_with(0, EVT::I32, true, false);
+                let chain = SDValue { node: first.node, res: 1 };
+                let second = self.dag.get_node_multi(ISD::VAArg, &[half, EVT::OTHER], &[chain, list, source, none]);
+                self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: second.node, res: 1 });
+                let (first, second) = (SDValue { node: first.node, res: 0 }, SDValue { node: second.node, res: 0 });
+                if self.dag.config().big_endian { (second, first) } else { (first, second) }
             }
             op => return Err(LegalizeError::Unsupported { op, ty: vt, what: "expand result" }),
         };

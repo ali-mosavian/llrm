@@ -147,6 +147,37 @@ impl Builder<'_> {
         }
     }
 
+    /// `getSrcValue` of the IR pointer `operand`.
+    fn src_value_of(
+        &mut self,
+        operand: Operand,
+    ) -> SDValue {
+        let key = match operand {
+            Operand::Value(value) => value.0,
+            Operand::Constant(id) => 1 << 31 | id.index() as u32,
+            _ => 0,
+        };
+        self.dag.get_src_value(key)
+    }
+
+    /// `visitVAArg`: `VAARG` of the list at the root, the type's ABI
+    /// alignment as the last operand; the chain it returns is the new root.
+    pub(super) fn visit_va_arg(
+        &mut self,
+        instruction: &Instruction,
+    ) -> Result<(), Refused> {
+        let vt = self.type_of(instruction.ty)?;
+        let align = self.layout.align(&self.module.context.types, instruction.ty);
+        let root = self.root();
+        let list = self.get_value(instruction.operands[0])?;
+        let source = self.src_value_of(instruction.operands[0]);
+        let align = self.dag.get_constant_with(align as u128, EVT::I32, true, false);
+        let node = self.dag.get_node_multi(ISD::VAArg, &[vt, EVT::OTHER], &[root, list, source, align]);
+        self.dag.set_root(SDValue { node: node.node, res: 1 });
+        self.set_value(instruction.result.ok_or(Refused("a va_arg without a result"))?, node);
+        Ok(())
+    }
+
     /// `visitVAStart`, `visitVAEnd`, `visitVACopy`: the node on the root with
     /// a `SrcValue` per list.
     fn visit_va(
@@ -176,12 +207,7 @@ impl Builder<'_> {
             ops.push(self.get_value(*operand)?);
         }
         for operand in &instruction.operands[..ops.len() - 1] {
-            let key = match operand {
-                Operand::Value(value) => value.0,
-                Operand::Constant(id) => 1 << 31 | id.index() as u32,
-                _ => 0,
-            };
-            ops.push(self.dag.get_src_value(key));
+            ops.push(self.src_value_of(*operand));
         }
         let code = match intrinsic {
             Intrinsic::VaStart => ISD::VAStart,
