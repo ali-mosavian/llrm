@@ -158,3 +158,33 @@ def test_pic_mode_reads_the_objects_relocations_not_the_flag(tmp_path):
     row = {"instructions": 1}
     assert native.mismatch(row, "clang64", tmp_path / "t-fno-pic.o", tmp_path / "t-fPIE.o") == {"error": "pic mode: clang64 is nopic, ours is pic"}
     assert native.mismatch(row, "clang64", tmp_path / "t-fno-pic.o", tmp_path / "t-fno-pic.o") == row
+
+
+def test_pic_mode_is_read_from_the_sized_object_not_the_wrapper_pointer_beside_it(tmp_path):
+    """hanoi gcc64/clang64 O2 were error rows (`pic mode: gcc64 is pic, ours is mixed`) for 2 cells: the check read the counted object, where the harness's global pointer is a pc-relative data reference in every column. It reads the sized one."""
+    for name in ("hanoi.gcc64.O2.o", "hanoi.gcc64.O2.sized.o", "hanoi.c64nopic.O2.o"):
+        (tmp_path / name).write_bytes(b"")
+    assert native.checked_object(tmp_path, "hanoi", "gcc64", "O2").name == "hanoi.gcc64.O2.sized.o"
+    assert native.checked_object(tmp_path, "hanoi", native.NOPIC, "O2").name == "hanoi.c64nopic.O2.o"
+
+
+@pytest.mark.parametrize("compiler", ("gcc", "clang", "ours"))
+def test_pic_mode_reads_a_known_object_of_each_compiler_as_its_mode(compiler, tmp_path):
+    """Positive controls: -fPIC and -fPIE read pic, -fno-pic reads nopic, per compiler, on code with a .bss load beside an indexed .rodata one. gcc -fno-pic wrote an
+    absolute .rodata reference beside a pc-relative .bss one and read `mixed`, so 16 sfm16 gcc64/clang64 O2 cells were error rows against ours (nopic)."""
+    import subprocess
+
+    import llrmbin
+
+    source = tmp_path / "t.c"
+    source.write_text("static int a[100];\nstatic int b;\nstatic const float k[4] = {1.5f, 2.5f, 3.5f, 4.5f};\nint f(int i) { return a[i]++ + b; }\nfloat g(int i) { return k[i & 3]; }\n")
+    if compiler == "ours":
+        program, env = [str(llrmbin.compiler(llrmbin.bin_dir())), "-m64"], {**__import__("os").environ, "LLRM_CC_TARGET": "x86_64-linux"}
+    else:
+        if shutil.which(compiler) is None or shutil.which("readelf") is None:
+            pytest.skip(f"no {compiler} or readelf")
+        program, env = [compiler], None
+    for flag, want in (("-fPIC", "pic"), ("-fPIE", "pic"), ("-fno-pic", "nopic")):
+        obj = tmp_path / f"t{flag}.o"
+        assert subprocess.run([*program, "-O2", flag, "-c", str(source), "-o", str(obj)], env=env).returncode == 0
+        assert native.pic_mode(obj) == want, (compiler, flag)
