@@ -3,13 +3,13 @@
 //! between the two, so the view keeps the original [`MFunc`] and writes the
 //! allocator's registers into it.
 
-use llrm_support::hash::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use llrm_lir::registers::{RegId, Regs};
 use llrm_spike_mf::mfunc::{Block, Inst as LirInst, Kind, MFunction, Operand, Reg as LirReg};
 use llrm_spike_mf::regalloc::{Assignment, Target as AllocTarget};
 use llrm_spike_mf::tolir::allocate_greedy;
+use llrm_support::hash::HashMap;
 
 use crate::flagcse::writes_flags;
 use crate::mc::inst::{Gpr, Inst, Target, Vreg, Wide};
@@ -353,8 +353,14 @@ pub fn rebuild(
                     let quad = registers[0].1 == Class::Quad;
                     ops.push(spill_access(reg_at(0), slot, name == "SpillLoad", quad));
                 }
-                Kind::Op(_) if matches!(inst.operands.last(), Some(Operand::Imm(hash)) if fused.contains_key(hash)) => {
-                    // `AArch64ExpandPseudo`: `adrp rd` and `add rd, rd, :lo12:`.
+                Kind::Op(_)
+                    if matches!(
+                        inst.operands.last(),
+                        Some(Operand::Imm(hash)) if fused.contains_key(hash)
+                    ) =>
+                {
+                    // `AArch64ExpandPseudo`: `adrp rd` and `add rd, rd,
+                    // :lo12:`.
                     let Some(Operand::Imm(hash)) = inst.operands.last() else { unreachable!() };
                     let Op::I(Inst::AddPageOffset { target, .. }) = &fused[hash] else { unreachable!() };
                     let Reg::Gpr(rd) = reg_at(0) else { panic!("a page offset into a vector register") };
@@ -408,7 +414,10 @@ pub fn written_callee_saved(function: &MFunc) -> Allocation {
         let (defs, _) = op.defs_and_uses();
         for register in defs {
             match register {
-                Reg::Gpr(Gpr(n)) if (19..=28).contains(&n) && !allocation.saved_gprs.contains(&n) => {
+                Reg::Gpr(Gpr(n))
+                    if ((19..=28).contains(&n) || (n == 29 && frame_pointer_free()))
+                        && !allocation.saved_gprs.contains(&n) =>
+                {
                     allocation.saved_gprs.push(n)
                 }
                 Reg::Fpr(Vreg(n)) if (8..=15).contains(&n) && !allocation.saved_fprs.contains(&n) => {
@@ -424,7 +433,10 @@ pub fn written_callee_saved(function: &MFunc) -> Allocation {
 }
 
 /// `function` with every register physical, by the shared greedy allocator.
-pub fn allocate(function: &mut MFunc, size: bool) -> Result<Allocation, String> {
+pub fn allocate(
+    function: &mut MFunc,
+    size: bool,
+) -> Result<Allocation, String> {
     let mut lir = view(function);
     crate::licm::hoist(&mut lir);
     let (assignment, slots) = allocate_greedy::<Arm64>(&mut lir, Regs(&crate::REGISTER_INFO), size)?;
@@ -451,6 +463,29 @@ fn darwin() -> bool {
     DARWIN.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Whether the next function has no frame record, so `x29` is an ordinary
+/// callee-saved register (`getReservedRegs` reserves it when `hasFP`).
+static FP_FREE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_frame_pointer_free(free: bool) {
+    FP_FREE.store(free, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether `x16` and `x17` may be allocated: the frame needs no scratch.
+static SCRATCH_FREE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_scratch_free(free: bool) {
+    SCRATCH_FREE.store(free, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn scratch_free() -> bool {
+    SCRATCH_FREE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn frame_pointer_free() -> bool {
+    FP_FREE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The caller-saved general registers the allocator hands out.
 pub fn gpr_caller_saved_count() -> usize {
     15 + 1 + usize::from(!darwin())
@@ -460,8 +495,20 @@ fn gpr_order() -> Vec<RegId> {
     // The caller-saved registers first, then x19..x28. x16 and x17 are the
     // frame lowerer's scratch registers; x15 and, off Darwin, x18 are
     // allocatable (the pin's `getReservedRegs` reserves x18 on Darwin only).
-    let extra: Vec<u32> = if darwin() { vec![15] } else { vec![15, 18] };
-    (9..=14u32).chain((0..=8).rev()).chain(extra).chain(19..=28).map(|n| id(Class::Gpr, n)).collect()
+    let mut extra: Vec<u32> = vec![15];
+    if scratch_free() {
+        extra.extend([16, 17]);
+    }
+    if !darwin() {
+        extra.push(18);
+    }
+    (9..=14u32)
+        .chain((0..=8).rev())
+        .chain(extra)
+        .chain(19..=28)
+        .chain(frame_pointer_free().then_some(29))
+        .map(|n| id(Class::Gpr, n))
+        .collect()
 }
 
 fn callee_saved_fpr(id: RegId) -> bool {
@@ -516,7 +563,8 @@ impl AllocTarget for Arm64 {
     fn reserved(root: RegId) -> bool {
         // sp/xzr, the frame pointer, the link register and the platform
         // register.
-        [crate::reg::X29, crate::reg::X30, crate::reg::SP, crate::reg::XZR].contains(&root)
+        [crate::reg::X30, crate::reg::SP, crate::reg::XZR].contains(&root)
+            || (root == crate::reg::X29 && !frame_pointer_free())
             || (darwin() && root == crate::reg::X18)
     }
 

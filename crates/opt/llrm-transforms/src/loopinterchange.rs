@@ -1641,7 +1641,7 @@ impl FunctionPass for Interchange {
         // kept if no loops are interchanged.
         let saved = unit.function.clone();
         crate::loopsimplify::simplified(unit.function);
-        let _ = crate::lcssa::formed(unit.function);
+        let _ = crate::lcssa::closed(unit.context, unit.layout, unit.function);
 
         let mut session = ScevSession::of(unit.context, unit.function, &outer);
         let tops: Vec<BlockId> = {

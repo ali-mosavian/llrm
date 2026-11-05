@@ -173,6 +173,16 @@ pub struct MulPricing<'a> {
 }
 
 impl CombineHooks for X86Lowering<'_> {
+    /// `X86TargetLowering::mergeStoresAfterLegalization`: `!MemVT.isVector()`.
+    /// The only vector a store here holds is the opaque 16 bytes of an SSE
+    /// move (`I128`).
+    fn merge_stores_after_legalization(
+        &self,
+        mem: EVT,
+    ) -> bool {
+        mem != EVT::Simple(MVT::I128)
+    }
+
     /// `foldBinOpIntoSelect`, `visitXOR`'s `(xor (and x, y), y)` and `SimplifySetCC`'s
     /// GE/LE canonicalization: the pin runs them on x86. Judged on `bintree`, `jpeg_*`
     /// and `particle` (m16 and C, `-Os`/`-O2`): fewer bytes or clocks, none worse. The

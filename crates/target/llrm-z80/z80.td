@@ -158,6 +158,13 @@ defm XOR : Logic16<"xor", xor>;
 let Defs = [F], Constraints = "$d = $a" in
   def SUB16 : Z80Inst<(outs HLR:$d), (ins HLR:$a, GR16:$b), "sub hl, $b", [(set i16:$d, (sub i16:$a, i16:$b))]>;
 
+// adc hl,rr / sbc hl,rr: the high word of a long add or subtract, the carry of the low word's op coming in.
+// No pattern: `use_the_carry` makes them from the compare that rebuilt the carry.
+let Defs = [F], Uses = [F], Constraints = "$d = $a" in {
+  def ADC16 : Z80Inst<(outs HLR:$d), (ins HLR:$a, GR16:$b), "adc hl, $b", []>;
+  def SBC16 : Z80Inst<(outs HLR:$d), (ins HLR:$a, GR16:$b), "sbc hl, $b", []>;
+}
+
 // Shifts by a constant: one SLA/SRL/SRA (or add hl,hl, srl h; rr l) per bit, expanded when emitted.
 multiclass Shift<string n, RegisterClass rc, ValueType vt> {
   let Defs = [F], Constraints = "$d = $a" in {

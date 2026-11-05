@@ -1840,5 +1840,7 @@ pub fn emit(
     // The blocks made for critical edges lie after the function's own.
     emitter.mf.blocks.extend(edges);
     emitter.mf.pool = emitter.pool.take();
+    emitter.mf.block_ids = first.layout.clone();
+    emitter.mf.edge_probs = first.edge_probs.clone();
     Ok(emitter.mf)
 }

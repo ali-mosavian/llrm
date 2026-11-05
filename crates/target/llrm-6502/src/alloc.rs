@@ -438,6 +438,10 @@ struct Compare {
     /// Over words, for Z only: the high bytes are compared when the low are
     /// equal.
     zero: bool,
+    /// The right side is this global in memory, read where the flags are made
+    /// (`cmp g; sbc g+1`); `b` names nothing. Kept only when no store, call
+    /// or saved flags lie between the compare and the end of its block.
+    memory: Option<String>,
 }
 
 impl Builder {
@@ -483,6 +487,20 @@ impl Builder {
         let r = self.fresh();
         self.bytes.insert(name.to_owned(), r);
         Ok(r)
+    }
+
+    /// Whether `name` is a word with a half known to be a constant: an ALU op
+    /// takes that half as an immediate, and a step by a constant is its own
+    /// form.
+    fn has_known_half(
+        &self,
+        name: &str,
+    ) -> bool {
+        let base = name.strip_suffix("+1").unwrap_or(name);
+        !self.pointers.contains(base)
+            && (self.constants.contains_key(base)
+                || self.constants.contains_key(&format!("{base}+1"))
+                || self.word_constant(base).is_some())
     }
 
     /// The two bytes of `name` when it is a word loaded once from an
@@ -714,6 +732,33 @@ impl Builder {
         }
     }
 
+    /// The pending compare, if its right side is a global, with that global
+    /// loaded into a cell now: what the compare reads from here on cannot
+    /// change under a later store or call.
+    fn load_compared_global(
+        &mut self,
+        at: usize,
+    ) -> Result<(), Unsupported> {
+        let Some(Compare { a, word, memory: Some(symbol), .. }) = self.pending.clone() else { return Ok(()) };
+        let cell = format!("{}___cmpm{at}", if word { "w" } else { "v" });
+        let acc = Reg::Phys(reg::A);
+        if word {
+            let (low, high) = self.write_word(&cell)?;
+            for (d, half) in [low, high].into_iter().zip([symbol.clone(), format!("{symbol}+1")]) {
+                self.push(Inst::new(Kind::Op("LDM"), vec![Operand::Def(acc), Operand::Symbol(half, 0)]));
+                self.copy(d, acc);
+            }
+        } else {
+            self.define(&cell);
+            let d = self.byte(&cell)?;
+            self.push(Inst::new(Kind::Op("LDM"), vec![Operand::Def(acc), Operand::Symbol(symbol, 0)]));
+            self.copy(d, acc);
+        }
+        let version = self.version(&cell);
+        self.pending = Some(Compare { a, b: (cell, version), word, zero: false, memory: None });
+        Ok(())
+    }
+
     /// `COPY a, lhs; CMP a, rhs` again, as the flags' producer: the operands
     /// must hold what they held at the first compare.
     ///
@@ -725,9 +770,9 @@ impl Builder {
         code: i64,
         branch: bool,
     ) -> Result<(), Unsupported> {
-        let Compare { a, b, word, zero } =
+        let Compare { a, b, word, zero, memory } =
             self.pending.clone().ok_or_else(|| Unsupported("flags with no compare".into()))?;
-        if self.version(&a.0) != a.1 || self.version(&b.0) != b.1 {
+        if self.version(&a.0) != a.1 || memory.is_none() && self.version(&b.0) != b.1 {
             return Err(Unsupported("a compare's operand changed before its branch".into()));
         }
         let acc = Reg::Phys(reg::A);
@@ -781,9 +826,10 @@ impl Builder {
         }
         let (lhs, rhs) = if word {
             let (al, ah) = self.read_word(&a.0)?;
-            let rhs = match self.word_constant(&b.0) {
-                Some(bytes) => bytes.map(Operand::Imm),
-                None => {
+            let rhs = match (&memory, self.word_constant(&b.0)) {
+                (Some(symbol), _) => [Operand::Symbol(symbol.clone(), 0), Operand::Symbol(format!("{symbol}+1"), 0)],
+                (None, Some(bytes)) => bytes.map(Operand::Imm),
+                (None, None) => {
                     let (bl, bh) = self.read_word(&b.0)?;
                     for r in [bl, bh] {
                         self.require(r, Class::MEM)?;
@@ -794,9 +840,10 @@ impl Builder {
             ([al, ah], rhs)
         } else {
             let lhs = self.byte(&a.0)?;
-            let rhs = match self.constants.get(&b.0) {
-                Some(value) => Operand::Imm(*value & 0xFF),
-                None => {
+            let rhs = match (&memory, self.constants.get(&b.0)) {
+                (Some(symbol), _) => Operand::Symbol(symbol.clone(), 0),
+                (None, Some(value)) => Operand::Imm(*value & 0xFF),
+                (None, None) => {
                     let r = self.byte(&b.0)?;
                     self.require(r, Class::MEM)?;
                     Operand::Use(r)
@@ -1027,6 +1074,31 @@ impl Builder {
         Ok(true)
     }
 
+    /// `d := a op g` for a word global: the op reads `g` for the low byte and
+    /// `g+1` for the high, as a memory operand.
+    fn alu16_mem(
+        &mut self,
+        mnemonic: &'static str,
+        carry: Option<&'static str>,
+        d: &str,
+        a: &str,
+        symbol: String,
+    ) -> Result<(), Unsupported> {
+        let (al, ah) = self.read_word(a)?;
+        let second = [Operand::Symbol(symbol.clone(), 0), Operand::Symbol(format!("{symbol}+1"), 0)];
+        let (dl, dh) = self.write_word(d)?;
+        let acc = Reg::Phys(reg::A);
+        if let Some(carry) = carry {
+            self.push(Inst::new(Kind::Op(carry), vec![]));
+        }
+        for ((d, a), b) in [(dl, al), (dh, ah)].into_iter().zip(second) {
+            self.copy(acc, a);
+            self.push(Inst::new(Kind::Op(mnemonic), vec![Operand::Def(acc), Operand::Use(acc), b]));
+            self.copy(d, acc);
+        }
+        Ok(())
+    }
+
     /// The same on a pair, the carry running from the low byte to the high.
     fn alu16(
         &mut self,
@@ -1155,6 +1227,45 @@ impl Builder {
         }
         Ok(())
     }
+}
+
+/// Whether the global a compare reads is the same wherever its flags are
+/// read: no store, call or raw text lies between it and the end of its block,
+/// and every flags cell it is saved to is loaded back inside that stretch. The
+/// flags are made again where they are read, so the read must still see the
+/// value the compare saw.
+fn memory_holds_until_flags_are_read(
+    items: &[Item],
+    compare: usize,
+) -> bool {
+    let end = items[compare + 1..]
+        .iter()
+        .position(|item| matches!(item, Item::Label(_)))
+        .map_or(items.len(), |at| compare + 1 + at);
+    let mut saved = Vec::new();
+    for item in &items[compare + 1..end] {
+        let Item::Inst(inst) = item else { return false };
+        let opcode = inst.opcode;
+        if opcode == spill::SAVE_FLAGS {
+            saved.extend(inst.operands.first());
+            continue;
+        }
+        let (_, stores) = crate::dagisel::generated::instrinfo::memory_flags(opcode);
+        if stores || matches!(opcode, op::JSR | op::JSRI | op::STZABS) {
+            return false;
+        }
+    }
+    items
+        .iter()
+        .enumerate()
+        .all(
+            |(at, item)| match item {
+                Item::Inst(inst) if inst.opcode == spill::LOAD_FLAGS => {
+                    !inst.operands.first().is_some_and(|cell| saved.contains(&cell)) || compare < at && at < end
+                }
+                _ => true,
+            },
+        )
 }
 
 /// A logical op whose immediate leaves the byte as it was: `x ^ 0`, `x | 0`, `x
@@ -1373,7 +1484,7 @@ pub fn build_with_places(
     }
     let mut after_inst = false;
     let mut entry_labeled = false;
-    for item in items {
+    for (at, item) in items.iter().enumerate() {
         let inst = match item {
             Item::Label(_) => {
                 if after_inst || b.current == 0 && entry_labeled {
@@ -1477,6 +1588,39 @@ pub fn build_with_places(
             op::AND16 => b.alu16("AND", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             op::OR16 => b.alu16("ORA", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             op::XOR16 => b.alu16("EOR", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
+            op::ADD16M | op::SUB16M | op::AND16M | op::OR16M | op::XOR16M => {
+                let (mnemonic, carry) = match inst.opcode {
+                    op::ADD16M => ("ADC", Some("CLC")),
+                    op::SUB16M => ("SBC", Some("SEC")),
+                    op::AND16M => ("AND", None),
+                    op::OR16M => ("ORA", None),
+                    _ => ("EOR", None),
+                };
+                let symbol = address(&o[2], &o[3]).map_err(Unsupported)?;
+                let (d, a) = (name(&o[0])?, name(&o[1])?);
+                if !b.has_known_half(a) {
+                    b.alu16_mem(mnemonic, carry, d, a, symbol)?
+                } else {
+                    // a constant half on the left has its own forms (`n - 1`
+                    // borrows by branch, a mask keeps the
+                    // halves it leaves): the global
+                    // is loaded into a cell and the ordinary word op runs
+                    let cell = format!("w___m{at}");
+                    let acc = Reg::Phys(reg::A);
+                    let (low, high) = b.write_word(&cell)?;
+                    for (r, half) in [low, high].into_iter().zip([symbol.clone(), format!("{symbol}+1")]) {
+                        b.push(Inst::new(Kind::Op("LDM"), vec![Operand::Def(acc), Operand::Symbol(half, 0)]));
+                        b.copy(r, acc);
+                    }
+                    // the loaded cell is the left operand, as the ordinary form
+                    // has it, except in a subtraction,
+                    // where the load was the right one
+                    let (left, right) = if inst.opcode == op::SUB16M { (a, cell.as_str()) } else { (cell.as_str(), a) };
+                    if !matches!(inst.opcode, op::ADD16M | op::SUB16M) || !b.word_step(mnemonic, d, left, right)? {
+                        b.alu16(mnemonic, carry, d, left, right)?
+                    }
+                }
+            }
             op::SHL8 | op::SRL8 | op::SRA8 => {
                 let step = match inst.opcode {
                     op::SHL8 => "ASL",
@@ -1557,7 +1701,24 @@ pub fn build_with_places(
                     b: (c.to_owned(), b.version(c)),
                     word: false,
                     zero: false,
+                    memory: None,
                 });
+            }
+            // a global on the right of a compare: read at the compare, kept
+            // as a memory operand only while it cannot change before the
+            // flags are last read
+            op::CMP8M | op::CMP16M => {
+                let (a, symbol) = (name(&o[1])?, address(&o[2], &o[3]).map_err(Unsupported)?);
+                b.pending = Some(Compare {
+                    a: (a.to_owned(), b.version(a)),
+                    b: (String::new(), 0),
+                    word: inst.opcode == op::CMP16M,
+                    zero: false,
+                    memory: Some(symbol),
+                });
+                if !memory_holds_until_flags_are_read(items, at) {
+                    b.load_compared_global(at)?;
+                }
             }
             op::CMPZ16 => {
                 let (a, c) = (name(&o[1])?, name(&o[2])?);
@@ -1566,6 +1727,7 @@ pub fn build_with_places(
                     b: (c.to_owned(), b.version(c)),
                     word: true,
                     zero: true,
+                    memory: None,
                 });
             }
             // the carry out of the first goes into the next: the instructions
@@ -1732,6 +1894,7 @@ pub fn build_with_places(
                     b: (c.to_owned(), b.version(c)),
                     word: true,
                     zero: false,
+                    memory: None,
                 });
             }
             spill_op if spill_op == spill::SAVE_FLAGS => {

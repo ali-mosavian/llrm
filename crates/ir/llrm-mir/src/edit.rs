@@ -1763,13 +1763,23 @@ impl Function {
                 return Err(format!("block {} still has {users} users", block.0));
             }
         }
-        let mut gone = crate::dense::IdSet::<BlockId>::new();
-        for &block in blocks {
-            gone.insert(block);
-        }
         LAYOUT_SCANNED.with(|scanned| scanned.set(scanned.get() + self.layout.len()));
         self.places.invalidate();
-        self.layout.retain(|one| !gone.contains(one));
+        if let [only] = blocks {
+            // One block, the usual call: find it and shift the tail. A set
+            // lookup for every entry of the layout was 16 k Ir a call on
+            // memory_expansion (`empty_block_removed`, 1,550 calls).
+            if let Some(at) = self.layout.iter().position(|one| one == only) {
+                self.layout.remove(at);
+            }
+        } else {
+            let mut gone = crate::dense::IdSet::<BlockId>::new();
+            for &block in blocks {
+                gone.insert(block);
+            }
+            LAYOUT_TESTED.with(|tested| tested.set(tested.get() + self.layout.len()));
+            self.layout.retain(|one| !gone.contains(one));
+        }
         for &block in blocks {
             self.release_name(block);
             self.blocks[block.0 as usize].erased = true;
@@ -1783,6 +1793,14 @@ impl Function {
 thread_local! {
     /// Layout entries looked over to take blocks out of it.
     static LAYOUT_SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Layout entries tested against a set of blocks to erase.
+    static LAYOUT_TESTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many layout entries this thread has tested against a set of blocks, for
+/// a test that erasing one block tests none.
+pub fn layout_tested() -> usize {
+    LAYOUT_TESTED.with(std::cell::Cell::get)
 }
 
 /// How many layout entries this thread has looked over to erase blocks, for a

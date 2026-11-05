@@ -410,3 +410,22 @@ pub fn stamped(module: &mut Module) -> Result<Vec<GlobalId>, String> {
     let mut analyses = llrm_mir::passes::ModuleAnalyses::of(module, std::rc::Rc::new(llrm_mir::target::Neutral));
     crate::interprocedural::stamped(module, &mut analyses)
 }
+
+/// The data layout the tests that need one share.
+pub fn layout() -> llrm_mir::datalayout::DataLayout {
+    llrm_mir::datalayout::DataLayout::parse("e-m:e-p:32:32-f64:32:64-f80:32-n8:16:32-S128").expect("a layout")
+}
+
+/// @f of `module` closed in LCSSA form; whether anything changed.
+pub fn closed(module: &mut Module) -> Result<bool, String> {
+    closed_named(module, "f")
+}
+
+/// The function `name` of `module` closed in LCSSA form.
+pub fn closed_named(
+    module: &mut Module,
+    name: &str,
+) -> Result<bool, String> {
+    let (context, function) = module.function_mut(name).expect("the function");
+    crate::lcssa::closed(context, &layout(), function)
+}

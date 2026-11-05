@@ -222,8 +222,36 @@ impl Tti for M68k {
         Basic.cast_cost(op, to, from, kind)
     }
 
+    /// DEVIATE 20: each select a two-entry phi would become costs the branch
+    /// and move it lowers to, in bytes as in clocks (a fold saves one branch
+    /// and adds a move per select). gcd -O2 44 -> 26 B, 236 -> 138 clk; -Os
+    /// 44 -> 26 B. Exit 2026-11-12.
+    fn select_branch_extra(
+        &self,
+        _optsize: bool,
+    ) -> i64 {
+        1
+    }
+
     fn sizes_exit_values(&self) -> bool {
         true
+    }
+
+    /// DEVIATE 19: `addi`/`subi`/`addq` and `cmpi` take any 32-bit immediate;
+    /// the pin's M68k lowering keeps the base class's `false`. Exit
+    /// 2026-11-12.
+    fn is_legal_add_immediate(
+        &self,
+        imm: i64,
+    ) -> bool {
+        i32::try_from(imm).is_ok()
+    }
+
+    fn is_legal_icmp_immediate(
+        &self,
+        imm: i64,
+    ) -> bool {
+        i32::try_from(imm).is_ok()
     }
 
     /// DEVIATE 17: a size build keeps a store or copy loop (a `memset` call

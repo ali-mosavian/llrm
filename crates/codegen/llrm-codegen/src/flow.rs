@@ -308,6 +308,7 @@ pub fn machine_with<'a>(
             size: target.size,
             widens_byte: target.widens_load(1)?,
             widens_word: target.widens_load(2)?,
+            strict_bytes: target.size || target.min_size || !target.speed_rate,
         }),
         Box::new(crate::backend::fixupleas::FixupLeas {
             slow_3ops: target.slow_3ops_lea(),

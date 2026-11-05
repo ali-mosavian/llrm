@@ -1390,6 +1390,47 @@ define cc 1000 i32 @f(i32 %a) {
     assert!(!call.clobbers.contains(&RegId::ESI) && !call.clobbers.contains(&RegId::EDI), "{:?}", call.clobbers);
 }
 
+/// Every call said it may write any memory: the DAG selector set the effects to
+/// `ANY` where the old one read the callee's attributes, so queens' `es` load
+/// (`mov es,[si+2]`) could not be made again after `call SAFE`, a
+/// `memory(read)` function, and was spilled and reloaded each trip.
+#[test]
+fn a_call_of_a_read_only_function_does_not_write_memory() {
+    let ir = "target datalayout = \"e-p:16:16-i32:16-n8:16\"
+declare i16 @ro(i16) memory(read)
+declare i16 @any(i16)
+define i16 @f(i16 %a) {
+  %r = call i16 @ro(i16 %a)
+  %s = call i16 @any(i16 %r)
+  ret i16 %s
+}
+";
+    let module = crate::testing::module(ir).expect("parses");
+    let (facts, _) = crate::backend::calleefacts::CalleeFacts::of(&module);
+    let contracts = super::dag_function::RuntimeContracts {
+        hole: 0,
+        abi: &Stub { flags: false },
+        segments: &crate::backend::target::BASIC,
+        runtime: false,
+        frame_zeroed: false,
+        facts: Some(&facts),
+    };
+    let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
+    let done = super::dag_function::selected_in_pool(
+        &module,
+        "f",
+        &llrm_x86_m16::M16,
+        crate::backend::cpu::profile("486").expect("a cpu"),
+        &[],
+        Some(&contracts),
+        pool,
+    )
+    .unwrap_or_else(|why| panic!("{}", why.0));
+    let insns = done.body.insns();
+    let writes: Vec<bool> = insns.iter().filter_map(|one| one.call.as_ref().map(|call| call.writes())).collect();
+    assert_eq!(writes, [false, true], "the read-only callee, then the unknown one");
+}
+
 /// At m16 a value kept in SI across `B$DDIM` was wrong code: runtime.toml names
 /// SI and DI clobbered for it and the call here left them alone (tests/check/
 /// qb/split_frame_address.bas hoisted `lea si, [bp-44]` over two of them, #5838
