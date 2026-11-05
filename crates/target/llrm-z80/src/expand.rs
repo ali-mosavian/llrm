@@ -1786,6 +1786,15 @@ fn form(text: &str) -> String {
     let wide = operands.first().is_some_and(|one| matches!(one.as_str(), "bc" | "de" | "hl" | "ix" | "iy" | "sp"));
     let kind = |one: &str, first: bool| -> String {
         match one {
+            // every condition times alike: the table has `nz`
+            "nz" | "z" | "nc" | "c" | "po" | "pe" | "p" | "m"
+                if first
+                    && matches!(mnemonic, "jp" | "jr" | "call" | "ret")
+                    && (operands.len() == 2 || mnemonic == "ret") =>
+            {
+                "nz".to_owned()
+            }
+            "de" if mnemonic == "ex" => "de".to_owned(),
             "a" if first && matches!(mnemonic, "add" | "adc" | "sbc") => "a".to_owned(),
             "a" | "b" | "c" | "d" | "e" | "h" | "l" => "b".to_owned(),
             "bc" | "de" | "af" => "bc".to_owned(),
@@ -1837,6 +1846,7 @@ fn table_cost(key: &str) -> Option<crate::timing::Cost> {
     crate::timing::cost(key)
         .or_else(|| crate::timing::cost(&key.replace("hl", "bc")))
         .or_else(|| crate::timing::cost(&key.replace("ix", "bc")))
+        .or_else(|| crate::timing::cost(&key.replace("iy", "ix")))
         .or_else(|| (key == "ld b;b").then(|| crate::timing::cost("ld b;c")).flatten())
 }
 
