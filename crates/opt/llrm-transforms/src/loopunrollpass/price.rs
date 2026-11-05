@@ -68,11 +68,7 @@ pub(super) fn full_unroll_pays(
     // DEVIATE UP1 trial pricing (`trial.rs`): the loops the pin's threshold
     // allows, and the rules above leave to the estimate, are tried on a copy.
     match run.trial {
-        Trial::Estimate => {}
-        Trial::Collect => {
-            run.deferred.push(lp.get_header());
-            return false;
-        }
+        Trial::Estimate | Trial::Collect => {}
         Trial::Skip => return false,
         // The candidate and the loops in it, and the copies its unroll makes:
         // the whole nest as the pin decides it, so that what unrolling the
@@ -157,7 +153,28 @@ pub(super) fn full_unroll_pays(
         lp,
         &format!("priced unroll: {trips} trips, saves {saved} clk, adds {added} B (body {body_bytes} B; units {unrolled_units} of {rolled_units}, promoted {promoted}), rate {rate}"),
     );
+    // Only a loop whose estimate lands near the bar is worth a trial: far on
+    // either side the copy and its Simplify list would change nothing.
+    if matches!(run.trial, Trial::Collect) && near_the_bar(saved, added, rate) {
+        run.deferred.push(lp.get_header());
+        return false;
+    }
     unroll_pays(saved, added, rate)
+}
+
+/// How far from the bar, as a factor either way, an estimate still earns a
+/// trial. Estimates that miss by more are not the ones the trials overturned.
+const TRIAL_MARGIN: i64 = 4;
+
+/// Whether the saving and the cost of a priced unroll are within
+/// `TRIAL_MARGIN` of each other at `rate`.
+pub(crate) fn near_the_bar(
+    saved: i64,
+    added: i64,
+    rate: i64,
+) -> bool {
+    let (gain, cost) = (saved * 1000, added * rate);
+    gain < cost * TRIAL_MARGIN && cost < gain * TRIAL_MARGIN
 }
 
 /// The operands of the loops inside `lp` that each copy of its body makes a
@@ -447,4 +464,19 @@ fn bounds_few_trips(
         inside.extend(one.get_sub_loops());
     }
     follows
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A trial for a loop whose estimate is far from the bar cost 13% of the
+    /// compile's instructions (nbody, lru) and changed nothing.
+    #[test]
+    fn only_an_estimate_near_the_bar_is_tried() {
+        assert!(near_the_bar(100, 100, 250_000 / 250));
+        assert!(!near_the_bar(1000, 1, 250_000));
+        assert!(!near_the_bar(1, 1000, 250_000));
+        assert!(!near_the_bar(0, 0, 250_000));
+    }
 }
