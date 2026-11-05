@@ -181,3 +181,22 @@ fn a_prolog_whose_trip_count_divides_by_four_gives_the_right_sum() {
     assert!(ran.status.success(), "{}", String::from_utf8_lossy(&ran.stderr));
     assert_eq!(String::from_utf8_lossy(&ran.stdout).trim(), "ok");
 }
+
+/// The prolog's `.unr` phis take `poison` from the skip edge; the copies they
+/// left in the loop were not joined (`conflict (deferred)`: a COPY of an
+/// `IMPLICIT_DEF` register is a valid value), 22 `local.set`s where the pin's
+/// coalescer leaves 11 (x87_arguments +176 B over the pin).
+#[test]
+fn the_poison_phis_of_a_prolog_leave_no_loop_copies() {
+    let ir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ir/unroll_prolog_run.ll");
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-wasm-llc"))
+        .args(["-S", "-O2", "-o", "-"])
+        .arg(ir)
+        .output()
+        .expect("llrm-wasm-llc");
+    assert!(out.status.success());
+    let text = String::from_utf8_lossy(&out.stdout);
+    let body = text.split("\nrun:").nth(1).and_then(|rest| rest.split("end_function").next()).expect("run");
+    let sets = body.matches("local.set").count();
+    assert!(sets <= 12, "{sets} local.set:\n{body}");
+}
