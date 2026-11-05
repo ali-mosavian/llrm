@@ -66,6 +66,10 @@ pub struct X86 {
     /// the rest (`LoopMicroOpBufferSize = -1`).
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86SchedSandyBridge.td#L28
     pub loop_micro_op_buffer: u32,
+    /// The program's code is position independent (clang's "PIC Level"); set
+    /// by `Program::new`. A symbol in long mode is then `[rip + symbol]`
+    /// without index or displacement.
+    pub position_independent: std::cell::Cell<bool>,
 }
 
 /// T6: the 16-bit target's address forms and registers, from its description
@@ -150,6 +154,7 @@ impl X86 {
                 registers: None,
                 tuning: llrm_mir::target::Tuning::PIN,
                 loop_micro_op_buffer: 0,
+                position_independent: std::cell::Cell::new(true),
             }),
             "core2" => Some(X86 {
                 cmov: true,
@@ -161,6 +166,7 @@ impl X86 {
                 registers: None,
                 tuning: llrm_mir::target::Tuning::PIN,
                 loop_micro_op_buffer: 28,
+                position_independent: std::cell::Cell::new(true),
             }),
             // `-march=x86-64`: the baseline of long mode, SSE2
             // and `TuningMacroFusion` (X86.td `X86_64V1Tuning`).
@@ -174,6 +180,7 @@ impl X86 {
                 registers: None,
                 tuning: llrm_mir::target::Tuning::PIN,
                 loop_micro_op_buffer: 28,
+                position_independent: std::cell::Cell::new(true),
             }),
             _ => None,
         }
@@ -592,6 +599,13 @@ impl Tti for X86 {
     /// `getUnrollingPreferences` then enables partial and runtime unrolling
     /// (`Tti::get_unrolling_preferences`):
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L768-L803
+    fn set_position_independent(
+        &self,
+        position_independent: bool,
+    ) {
+        self.position_independent.set(position_independent);
+    }
+
     fn loop_micro_op_buffer_size(&self) -> u32 {
         self.loop_micro_op_buffer
     }
@@ -602,6 +616,10 @@ impl Tti for X86 {
 
     fn unroll_partial_threshold_override(&self) -> Option<u32> {
         self.tuning.unroll_partial_threshold
+    }
+
+    fn unroll_jam_exact_count(&self) -> bool {
+        self.tuning.unroll_jam_exact_count
     }
 
     fn unroll_jam_partial_threshold_override(&self) -> Option<u32> {
@@ -1074,7 +1092,7 @@ impl Tti for X86 {
         // symbol is `[rip + symbol]`, which takes no displacement
         // beside it and no index (the `isPositionIndependent() && is64Bit()`
         // rule).
-        if self.quad && base_gv && (base_offset != 0 || scale > 1) {
+        if self.quad && self.position_independent.get() && base_gv && (base_offset != 0 || scale > 1) {
             return false;
         }
         match scale {

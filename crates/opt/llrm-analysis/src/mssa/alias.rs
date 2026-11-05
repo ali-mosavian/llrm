@@ -105,6 +105,12 @@ pub struct AliasQuery<'a> {
     /// How many of those walks were made, for the test that holds it to one a
     /// pointer.
     bases_walked: std::cell::Cell<u64>,
+    /// The AA stack, made at the first question and kept (`AAResults` is one
+    /// object the pin's passes hold); it was made and dropped per question
+    /// (2.2 M Ir on jpeg_fixed).
+    stack: std::cell::OnceCell<RefCell<crate::aggregate::AggregateAA<'a, crate::aggregate::DefaultAA<'a>>>>,
+    /// How many stacks were made, for the test that holds it to one.
+    stacks_made: std::cell::Cell<u32>,
 }
 
 /// A width large enough to stand for 'any byte after the pointer'.
@@ -128,23 +134,25 @@ impl<'a> AliasQuery<'a> {
             >::default())),
             bases: Default::default(),
             bases_walked: Default::default(),
+            stack: std::cell::OnceCell::new(),
+            stacks_made: Default::default(),
         }
     }
 
-    /// The AA stack the pin's default pipeline asks: TBAA, BasicAA and, where
-    /// the module analysis is held, GlobalsAA.
-    fn stack(&self) -> crate::aggregate::AggregateAA<'a> {
-        let unit = self.unit;
-        let mut stack = crate::aggregate::AggregateAA::new().with_unit(unit);
-        // The pin's order (`buildDefaultAAPipeline`): BasicAA first, so that
-        // type-based answers are asked only of what it leaves MayAlias.
-        stack.add_aa_result(crate::basicaa::BasicAA::new(unit));
-        stack.add_aa_result(crate::scopednoaliasaa::ScopedNoAliasAA::new(unit));
-        stack.add_aa_result(crate::typebasedaa::TypeBasedAA::new(unit));
-        if let Some(info) = unit.globals_mr {
-            stack.add_aa_result(crate::globalsmodref::GlobalsAAResult::new(unit, info));
-        }
-        stack
+    /// The AA stack the pin's default pipeline asks: BasicAA, scoped no-alias,
+    /// TBAA and, where the module analysis is held, GlobalsAA.
+    fn stack(&self) -> std::cell::RefMut<'_, crate::aggregate::AggregateAA<'a, crate::aggregate::DefaultAA<'a>>> {
+        self.stack
+            .get_or_init(|| {
+                self.stacks_made.set(self.stacks_made.get() + 1);
+                RefCell::new(crate::aggregate::AggregateAA::default_pipeline(self.unit))
+            })
+            .borrow_mut()
+    }
+
+    /// The AA stacks made so far.
+    pub fn stacks_made(&self) -> u32 {
+        self.stacks_made.get()
     }
 
     /// The walks down a pointer's GEP chain made so far.
