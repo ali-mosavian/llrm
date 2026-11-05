@@ -5,7 +5,7 @@ use crate::testing::{parsed, printed};
 fn simplified(text: &str) -> (String, bool) {
     let mut module = parsed(text);
     let (context, function) = module.function_mut("f").expect("@f");
-    let changed = loop_simplify_cfg(context, function);
+    let changed = loop_simplify_cfg(context, &crate::testing::layout(), function);
     (printed(&module), changed)
 }
 
@@ -143,7 +143,7 @@ fn the_analyses_are_made_once_where_no_loop_changes() {
     let mut module = parsed(&text);
     let (context, function) = module.function_mut("f").expect("@f");
     let before = llrm_mir::counts::get(llrm_mir::counts::Event::Dominators);
-    let changed = loop_simplify_cfg(context, function);
+    let changed = loop_simplify_cfg(context, &crate::testing::layout(), function);
     let built = llrm_mir::counts::get(llrm_mir::counts::Event::Dominators) - before;
     assert!(!changed);
     assert_eq!(built, 1, "one tree for three loops that do not change");

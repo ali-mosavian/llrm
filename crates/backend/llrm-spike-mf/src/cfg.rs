@@ -88,8 +88,12 @@ fn immediate_dominators(
 
 impl Cfg {
     pub fn new<C>(function: &MFunction<C>) -> Cfg {
-        let count = function.blocks.len();
-        let mut succs = successors(function);
+        Cfg::from_successors(successors(function))
+    }
+
+    /// The graph of blocks numbered `0..succs.len()`, block 0 the entry.
+    pub fn from_successors(mut succs: Vec<Vec<usize>>) -> Cfg {
+        let count = succs.len();
         for list in &mut succs {
             let mut seen = Vec::new();
             list.retain(|one| {
