@@ -4,17 +4,22 @@
 #ifndef SF_CONV64_H
 #define SF_CONV64_H
 /* A 32-bit magnitude always fits the 53-bit significand: no rounding, and every shift stays in 32-bit halves. */
+#ifdef SF_CONV_NOINLINE /* wasm -O2 inlines both helpers: f64 float.c 287 -> 655 B */
+#define SF_CONV_FN __attribute__((noinline)) static
+#else
+#define SF_CONV_FN static
+#endif
 #ifndef SF_NO_EXACT32
 /* Not `inline`: the callers must share one copy (m68k -Os: two inlined copies grew float.c by 324 B). */
 /* A 32-bit magnitude always fits the 53-bit significand: no rounding, and every shift stays in 32-bit halves. */
-__attribute__((noinline)) static sf64 from_mag32(uint64_t sign, uint32_t x)
+SF_CONV_FN sf64 from_mag32(uint64_t sign, uint32_t x)
 {
     if (!x) return 0;
     int n = 31 - sf_clz32(x);
     uint32_t y = x << (31 - n); /* top bit set */
     return sign + (((uint64_t)(((uint32_t)n + 1022u) << 20) + (y >> 11)) << 32) + ((uint64_t)(y << 21));
 }
-__attribute__((noinline)) static sf64 from_mag(uint64_t sign, uint64_t u)
+SF_CONV_FN sf64 from_mag(uint64_t sign, uint64_t u)
 {
     uint32_t hi = (uint32_t)(u >> 32);
     if (!hi) return from_mag32(sign, (uint32_t)u);
