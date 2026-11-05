@@ -1334,24 +1334,23 @@ impl Builder<'_> {
         {
             return SDValue { node: rep.node, res: 0 };
         }
+        // The tail starts where the dword copy ended: `dst + (n - n % 4)`.
+        // Leaving di/si out reloaded the copy's start (the tail rewrote the
+        // first bytes and left the last ones uncopied).
         let three = self.dag.get_constant(3, pointer);
         let bytes = self.dag.get_node(ISD::And, pointer, &[count, three]);
-        let copy = self
-            .dag
-            .get_copy_to_phys_reg(
-                SDValue { node: rep.node, res: 0 },
-                cx,
-                bytes,
-                Some(SDValue { node: rep.node, res: 1 }),
-            );
+        let whole = self.dag.get_node(ISD::Sub, pointer, &[count, bytes]);
+        let next_dst = self.dag.get_node(ISD::Add, pointer, &[dst, whole]);
+        let next_src = self.dag.get_node(ISD::Add, pointer, &[src, whole]);
+        let mut chain = SDValue { node: rep.node, res: 0 };
+        let mut glue = SDValue { node: rep.node, res: 1 };
+        for (reg, value) in [(cx, bytes), (di, next_dst), (si, next_src)] {
+            let copy = self.dag.get_copy_to_phys_reg(chain, reg, value, Some(glue));
+            chain = SDValue { node: copy.node, res: 0 };
+            glue = SDValue { node: copy.node, res: 1 };
+        }
         let byte = self.dag.get_value_type_node(EVT::I8);
-        let rep = self
-            .dag
-            .get_node_multi(
-                x86isd::REP_MOVS,
-                &[EVT::OTHER, EVT::GLUE],
-                &[SDValue { node: copy.node, res: 0 }, byte, SDValue { node: copy.node, res: 1 }],
-            );
+        let rep = self.dag.get_node_multi(x86isd::REP_MOVS, &[EVT::OTHER, EVT::GLUE], &[chain, byte, glue]);
         SDValue { node: rep.node, res: 0 }
     }
 
