@@ -3160,6 +3160,33 @@ fn fib_is_copied_into_itself_to_gccs_growth_cap_at_o2_only_at_m64() {
     assert!(o2 > o3, "-O2 made {o2} calls of fib, -O3 {o3}");
 }
 
+/// An `i32` divided by a constant at m64 was `mov ecx, 0xcccccccd; mul ecx;
+/// shr edx, 3` (the one-operand `mul`, 4 clocks, edx:eax); the pin widens it
+/// to `imul rax, rcx; shr rax, 35` (switch -O2: 31690 cycles, clang 27667).
+#[test]
+fn an_i32_division_by_a_constant_is_one_wide_imul_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i32 @f(i32 %x) {\n  %r = udiv i32 %x, 10\n  ret i32 %r\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("imul rax, rcx") && listing.contains("shr rax, 35"), "{listing}");
+    assert!(!listing.contains("mul ecx") && !listing.contains("div"), "{listing}");
+}
+
+/// The signed form left `shr rax, 32; sar eax, 2` where the pin has one `sar
+/// rax, 34` (`visitSRA`: `sra (trunc (srl x, 32)), 2` is `trunc (sra x, 34)`).
+#[test]
+fn a_signed_i32_division_by_ten_merges_its_shifts_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i32 @f(i32 %x) {\n  %r = sdiv i32 %x, 10\n  ret i32 %r\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("sar rax, 34"), "{listing}");
+    assert!(!listing.contains("shr rax, 32"), "{listing}");
+}
+
 /// A local declared `align 16` sat at `[rsp+4]`: the frame clamped every
 /// alignment to 4 (bintree's array; a 16-byte `movaps` clear of it would
 /// fault).

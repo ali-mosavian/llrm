@@ -220,6 +220,18 @@ impl TargetLowering {
         self.size_libcall_names.insert((op, vt), name);
     }
 
+    /// Whether `op` of `vt` has a routine for functions tuned for size.
+    pub fn has_size_libcall_name(
+        &self,
+        op: ISD,
+        vt: EVT,
+    ) -> bool {
+        matches!(
+            vt,
+            EVT::Simple(vt) if self.size_libcall_names.contains_key(&(op, vt))
+        )
+    }
+
     /// The routine `name` is spelled `symbol` in the object.
     pub fn set_libcall_symbol(
         &mut self,
@@ -766,6 +778,12 @@ impl TargetLowering {
         // (BuildSDIV finds neither MULHS nor SMUL_LOHI there); only i32
         // has the two-result multiply (`MUL32r`).
         t.set_ops(&[SMulLoHi, UMulLoHi], &[MVT::I8, MVT::I16], Expand);
+        // At 64 bits BuildSDIV/BuildUDIV find no two-result multiply for an
+        // `i32` either and widen it (`imul rax, rcx, 0xCCCCCCCD; shr rax,
+        // 35`), where ours took the one-operand `mul ecx` (edx:eax).
+        if is64 {
+            t.set_ops(&[SMulLoHi, UMulLoHi], &[MVT::I32], Expand);
+        }
         // fixed-point multiply is expanded by `expandFixedPointMul` (the base
         // default)
         t.set_ops(&[SMulFix], &[MVT::I8, MVT::I16, MVT::I32], Expand);
