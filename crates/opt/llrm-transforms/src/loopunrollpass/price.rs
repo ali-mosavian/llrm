@@ -24,6 +24,88 @@ pub(crate) fn unroll_pays(
     saved * 1000 >= added * rate
 }
 
+/// What the copies of a full unroll add to the code, in bytes: the analysis
+/// folds away what the copies do not keep, and the rest is priced at the
+/// body's average bytes a unit (byval_struct: a 41-trip loop of constants is
+/// two instructions, not 41 copies). With the body's bytes and clocks, the
+/// units and the analysis.
+struct Added {
+    bytes: i64,
+    body_bytes: i64,
+    body_clocks: i64,
+    rolled_units: i64,
+    unrolled_units: i64,
+    analysis: Option<EstimatedUnrollCost>,
+}
+
+fn code_added(
+    run: &mut Run,
+    se: &mut ScalarEvolution,
+    analyzed: &Analyzed,
+    lp: Loop,
+    eph: &IdSet<InstId>,
+    trips: u32,
+    uce: &UnrollCostEstimator,
+    up: &UnrollingPreferences,
+) -> Added {
+    let clocks = crate::profit::costs(run.outer);
+    let bytes = run.outer.target().byte_costs();
+    let blocks = lp.get_blocks();
+    let body_bytes = trip_cost(run.context, run.layout, run.function, run.callees, blocks.iter(), &bytes, true);
+    let body_clocks = trip_clocks(run.context, run.layout, run.function, run.callees, blocks.iter(), &clocks);
+    // What the copies need not run: the instructions the analysis simplifies
+    // (the counter, the exit test, folded loads), at the body's average clocks
+    // a unit; where it cannot analyze (a loop around loops), the back edge of
+    // every trip, and the operands the copies make constant (below).
+    let analysis = analyze_loop_unroll_cost(
+        run,
+        se,
+        analyzed,
+        lp,
+        trips,
+        eph,
+        u32::MAX,
+        trips,
+        None,
+        true,
+    );
+    let rolled_units = i64::from(uce.rolled_loop_size().max(1));
+    let unrolled_units = analysis
+        .as_ref()
+        .map_or(uce.unrolled_loop_size(up, trips) as i64, |cost| i64::from(cost.unrolled_cost));
+    let added = match analysis.as_ref() {
+        Some(cost) if cost.through_call => (cost.unrolled_bytes - body_bytes).max(0),
+        _ => ((unrolled_units - rolled_units).max(0) * body_bytes) / rolled_units,
+    };
+    Added { bytes: added, body_bytes, body_clocks, rolled_units, unrolled_units, analysis }
+}
+
+/// Whether a full unroll of `lp` adds no code: the copies, less what the
+/// analysis folds, are not bigger than the loop. Where the target says so
+/// (`Tti::unroll_few_trips_adding_no_bytes`) an `optsize` loop of few trips is
+/// unrolled on that alone.
+pub(super) fn full_unroll_adds_no_code(
+    run: &mut Run,
+    se: &mut ScalarEvolution,
+    analyzed: &Analyzed,
+    lp: Loop,
+    eph: &IdSet<InstId>,
+    trips: u32,
+    uce: &UnrollCostEstimator,
+    up: &UnrollingPreferences,
+) -> bool {
+    let added = code_added(run, se, analyzed, lp, eph, trips, uce, up);
+    why(
+        run,
+        lp,
+        &format!(
+            "unroll at optsize: {trips} trips add {} B (body {} B; units {} of {})",
+            added.bytes, added.body_bytes, added.unrolled_units, added.rolled_units
+        ),
+    );
+    added.bytes == 0
+}
+
 /// Whether the full unroll of `lp` by `trips` stays, at the target's rate
 /// (`Tti::unroll_milliclocks_per_byte`). Only at -O2/-O3: -Os and -Oz hold to
 /// the pin's bytes.
@@ -59,36 +141,8 @@ pub(super) fn full_unroll_pays(
     }
     let clocks = crate::profit::costs(run.outer);
     let bytes = run.outer.target().byte_costs();
-    let blocks = lp.get_blocks();
-    let body_bytes = trip_cost(run.context, run.layout, run.function, run.callees, blocks.iter(), &bytes, true);
-    let body_clocks = trip_clocks(run.context, run.layout, run.function, run.callees, blocks.iter(), &clocks);
-    // What the copies need not run: the instructions the analysis simplifies
-    // (the counter, the exit test, folded loads), at the body's average clocks
-    // a unit; where it cannot analyze (a loop around loops), the back edge of
-    // every trip, and the operands the copies make constant (below).
-    let analysis = analyze_loop_unroll_cost(
-        run,
-        se,
-        analyzed,
-        lp,
-        trips,
-        eph,
-        u32::MAX,
-        trips,
-        None,
-        true,
-    );
-    // The code the copies add, at the body's average bytes a unit: what the
-    // analysis folds away is not emitted (byval_struct: a 41-trip loop of
-    // constants is two instructions, not 41 copies).
-    let rolled_units = i64::from(uce.rolled_loop_size().max(1));
-    let unrolled_units = analysis
-        .as_ref()
-        .map_or(uce.unrolled_loop_size(up, trips) as i64, |cost| i64::from(cost.unrolled_cost));
-    let added = match analysis.as_ref() {
-        Some(cost) if cost.through_call => (cost.unrolled_bytes - body_bytes).max(0),
-        _ => ((unrolled_units - rolled_units).max(0) * body_bytes) / rolled_units,
-    };
+    let Added { bytes: added, body_bytes, body_clocks, rolled_units, unrolled_units, analysis } =
+        code_added(run, se, analyzed, lp, eph, trips, uce, up);
     let (nested_uses, known) = constant_operand_uses(run, analyzed, lp);
     // The accesses of a local array the copies make constant-indexed: the
     // array is promoted to registers, so they cost no clocks and no bytes

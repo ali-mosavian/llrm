@@ -1026,6 +1026,14 @@ fn should_full_unroll(
     // When computing the unrolled size, note that BEInsns are not replicated
     // like the rest of the loop body.
     let unrolled_size = uce.unrolled_loop_size(up, full_unroll_trip_count);
+    // DEVIATE U1: an `optsize` loop of few trips whose copies add no code is
+    // unrolled (the pin's bar is `OptSizeThreshold`, 0 on x86).
+    if run.options.opt_size
+        && run.tti.unroll_few_trips_adding_no_bytes().is_some_and(|trips| full_unroll_trip_count <= trips)
+        && price::full_unroll_adds_no_code(run, se, analyzed, lp, eph, full_unroll_trip_count, uce, up)
+    {
+        return Some(full_unroll_trip_count);
+    }
     // DEVIATE U1: a loop of few trips is held to the target's `optsize` bar
     // (the pin's is `OptSizeThreshold`, 0 on x86).
     let few = if run.options.opt_size {
