@@ -32,8 +32,6 @@ def folded(table):
         if missing:
             raise SystemExit(f"no `__empty__` row at {', '.join(missing)} (needed for {prog}): the floor is not measured")
         above = {lv: size - floor[lv] for lv, size in levels.items()}
-        if min(above.values()) < 0:
-            continue  # smaller than the empty main: a file with no main, nothing to compare
         if all(a <= FEW for a in above.values()):
             out[prog] = f"{max(above.values())} B above the floor at every level ({above})"
         elif "O2" in above and "Os" in above and above["O2"] * 3 < above["Os"]:
