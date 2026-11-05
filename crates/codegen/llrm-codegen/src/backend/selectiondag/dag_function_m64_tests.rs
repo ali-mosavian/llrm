@@ -1364,8 +1364,9 @@ entry:
     assert!(names.iter().any(|n| n.starts_with("movs")), "a sign extension: {names:?}");
 }
 
-/// `x*5 + (x+3)*5` kept a separate `add` (m64 -O2 mul_constants +489 B over the pin):
-/// x86's `(x+3)*5` was not rewritten to `x*5 + 15`, so `x*5` was not shared.
+/// `x*5 + (x+3)*5` kept a separate `add` (m64 -O2 mul_constants +489 B over the
+/// pin): x86's `(x+3)*5` was not rewritten to `x*5 + 15`, so `x*5` was not
+/// shared.
 #[test]
 fn an_m64_multiply_of_a_sum_shares_the_multiply_of_its_addend() {
     let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
