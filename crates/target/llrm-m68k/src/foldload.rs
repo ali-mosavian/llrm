@@ -24,7 +24,7 @@ use crate::dagisel::{indexed, local};
 use crate::mfunc::{Class, MFunction, op_inst, operand_class};
 
 /// How many instructions read each virtual register.
-fn use_counts(function: &MFunction) -> Vec<u32> {
+pub(crate) fn use_counts(function: &MFunction) -> Vec<u32> {
     let mut counts = vec![0; function.classes.len()];
     for block in &function.blocks {
         for phi in &block.phis {
