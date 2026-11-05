@@ -82,6 +82,22 @@ thread_local! {
     static IMAGINARY: std::cell::Cell<u8> = const { std::cell::Cell::new(BASE_CELLS) };
     static TUNING: std::cell::Cell<Tuning> = const { std::cell::Cell::new(Tuning::SPEED) };
     static SPIKE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether a long division by a divisor not known to be a byte calls the
+    /// wide speed routine (see [`with_fast_division`]).
+    static FAST_DIVISION: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// `f` with the wide speed division allowed or not. Linked once, it costs
+/// 141 bytes (`hotdivision`): a module keeps it only where a division site runs
+/// often enough to pay that (`select::module_text`).
+pub fn with_fast_division<R>(
+    allowed: bool,
+    f: impl FnOnce() -> R,
+) -> R {
+    let before = FAST_DIVISION.with(|a| a.replace(allowed));
+    let result = f();
+    FAST_DIVISION.with(|a| a.set(before));
+    result
 }
 
 /// `f` with the shared callee-save helpers allowed or not. A function that
@@ -3250,20 +3266,23 @@ fn emit_with<const STACK: bool>(
                     // (compiler-rt's `__udivXi3` does, by `clz`): 107 bytes
                     // more, linked once, for 2000 clocks fewer a call
                     // (loop_interchange -O2 13.9M -> 5.9M).
-                    // `_byte` marks the byte-divisor entry of the four divisions
-                    // only: a function of the program may end in it
+                    // `_byte` marks the byte-divisor entry of the four
+                    // divisions only: a program's own function may end in it
                     let (callee, byte) = match callee.strip_suffix("_byte") {
                         Some(base @ ("__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3")) => (base, true),
                         _ => (callee.as_str(), false),
                     };
-                    let fast = matches!(
-                        callee,
-                        "__ashlsi3" | "__lshrsi3" | "__ashrsi3" | "__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3"
-                    ) && TUNING.with(|t| t.get()).clocks_per_byte <= 1;
-                    let entry = match (fast, byte) {
-                        (true, true) => "_fast_byte",
-                        (true, false) => "_fast",
-                        _ => "",
+                    let speed = TUNING.with(|t| t.get()).clocks_per_byte <= 1;
+                    let division = matches!(callee, "__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3");
+                    let entry = if division && speed && byte {
+                        "_fast_byte"
+                    } else if speed
+                        && (matches!(callee, "__ashlsi3" | "__lshrsi3" | "__ashrsi3")
+                            || division && FAST_DIVISION.with(|f| f.get()))
+                    {
+                        "_fast"
+                    } else {
+                        ""
                     };
                     writeln!(out, "  {} {callee}{entry}", if jump { "jmp" } else { "jsr" }).unwrap()
                 }
