@@ -18,6 +18,11 @@
 //!
 //! DEVIATE 3: constant expressions are skipped (`combine_addsub` DEVIATE 4).
 //!
+//! DEVIATE 4: `C - (X ^ M)` is `X + (C - M)` when `M` is a low-bit mask and
+//! `X` has no bits above it ([`fold_constant_minus_masked_xor`]); the pin
+//! keeps the `sub`, which costs a `mov cl, C; sub cl, bl` where gcc has one
+//! `lea`. Exit 2026-11-14: remove when the pin does the same.
+//!
 //! # How it works
 //! After the shared prologue (simplify, phi operands, `x - -y`, shl
 //! factoring), a constant minuend is folded into an add/select/phi, a
@@ -380,6 +385,28 @@ fn defining_with(
     is(&c.function.instruction(def).opcode).then_some(def)
 }
 
+/// DEVIATE 4: `C - (X ^ M)` --> `X + (C - M)` when `M` is a low-bit mask and
+/// the bits of `X` above it are known zero, so the `xor` is `M - X`.
+fn fold_constant_minus_masked_xor(
+    c: &mut Combiner,
+    inst: InstId,
+    op0: Operand,
+    op1: Operand,
+) -> Option<Visit> {
+    let (k, w) = int_constant(c, op0)?;
+    let q = query(c, Some(inst));
+    let (x, m) = {
+        let (x, m, _) = binop(&q, op1, BinaryOp::Xor)?;
+        (x, pattern::low_bit_mask(&q, m)?.0)
+    };
+    let zero = known::compute_known_bits(&q, x, 0).zero;
+    if (m | zero) & mask(w) != mask(w) {
+        return None;
+    }
+    let delta = c.int(c.type_of(x), k.wrapping_sub(m) & mask(w));
+    Some(c.replace_with_binop(inst, BinaryOp::Add, x, delta, Flags::default()))
+}
+
 /// An integer-constant minuend (:2689): a mask minuend is an `xor` when the
 /// subtrahend has no other bits, and the masked-sub identity.
 fn fold_constant_mask_minuend(
@@ -734,9 +761,10 @@ pub fn visit_sub(
         return found;
     }
     // DEVIATE 2: isFreeToInvert (~X - ~Y); DEVIATE 1: vector_reduce_add.
-    let steps: [fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>; 9] = [
+    let steps: [fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>; 10] = [
         fold_constant_minuend,
         fold_constant_mask_minuend,
+        fold_constant_minus_masked_xor,
         fold_negated_remainder,
         fold_bitwise_difference,
         fold_and_difference,
