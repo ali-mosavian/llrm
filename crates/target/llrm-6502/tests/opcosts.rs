@@ -15,8 +15,8 @@ fn assembled(
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("opcosts-{class}"));
     std::fs::create_dir_all(&dir).unwrap();
     let equates: String = (0..16).map(|n| format!("rc{n} = ${:02X}\n", 0x80 + n)).collect();
-    let source = format!("{equates}.export start\nf:\n  rts\nstart:\n  {text}");
-    std::fs::write(dir.join("p.s"), source.replace(".import f\n", "")).unwrap();
+    let source = format!("{equates}.export start\ncallee:\n  rts\nstart:\n  {text}");
+    std::fs::write(dir.join("p.s"), source.replace(".import callee\n", "")).unwrap();
     std::fs::write(
         dir.join("p.cfg"),
         "MEMORY { M: start=$0200, size=$1000, file=\"%O\"; }\nSEGMENTS { CODE: load=M, type=ro; }\n",
@@ -27,7 +27,7 @@ fn assembled(
         let out = Command::new(program).args(args).current_dir(&dir).output().expect(program);
         assert!(out.status.success(), "{program}: {}", String::from_utf8_lossy(&out.stderr));
     }
-    // the leading `rts` of `f` is one byte
+    // the leading `rts` of `callee` is one byte
     std::fs::metadata(dir.join("p.bin")).unwrap().len() as i64 - 1
 }
 

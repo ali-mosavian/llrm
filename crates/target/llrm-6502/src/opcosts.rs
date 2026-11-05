@@ -33,7 +33,7 @@ pub const SNIPPETS: &[(&str, &str)] = &[
     ("shift", "asl rc2\n"),
     ("branch", "lda rc2\n  cmp rc3\n  bne l\nl:\n"),
     ("address", "clc\n  lda rc2\n  adc #1\n  sta rc2\n  lda rc3\n  adc #0\n  sta rc3\n"),
-    ("call", ".import f\n  jsr f\n"),
+    ("call", ".import callee\n  jsr callee\n"),
     ("return", "rts\n"),
 ];
 
