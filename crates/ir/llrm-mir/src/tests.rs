@@ -226,6 +226,32 @@ fn appending_linkage_is_read_and_printed_as_llvm_spells_it() {
 
 /// `@llvm.used`'s `section "llvm.metadata"` was read and then dropped by the
 /// printer, so a printed module lost it (the pipeline's text round trips).
+/// A COFF string literal is `linkonce_odr ... comdat` under a `$name = comdat
+/// any` line; the reader stopped at the `$` ("unexpected `$` at the top
+/// level"), so `llrm-llc` refused `static_pointers` and `strlen_idiom` from
+/// tests/run/c compiled for Windows (`LLParser::parseComdat`).
+#[test]
+fn a_comdat_declaration_and_its_marker_are_read() {
+    let text = "$\"??_C@_02@ab\" = comdat any\n$f = comdat largest\n\
+        @\"??_C@_02@ab\" = linkonce_odr constant [3 x i8] c\"ab\\00\", comdat, align 1\n\
+        @g = linkonce_odr global i32 0, comdat($f)\n\
+        define linkonce_odr void @f() comdat {\n  ret void\n}\n";
+    let module = parse::module(text).unwrap_or_else(|error| panic!("{error}\n{text}"));
+    assert_eq!(module.comdats["??_C@_02@ab"], "any");
+    assert_eq!(module.comdats["f"], "largest");
+    assert_eq!(module.comdat_of["??_C@_02@ab"], "??_C@_02@ab");
+    assert_eq!(module.comdat_of["g"], "f");
+    assert_eq!(module.comdat_of["f"], "f");
+}
+
+/// The pin refuses a comdat used and never declared, and one declared twice.
+#[test]
+fn an_undeclared_or_repeated_comdat_is_refused() {
+    assert!(refusal("@g = global i32 0, comdat($c)\n").contains("undefined comdat '$c'"));
+    assert!(refusal("$c = comdat any\n$c = comdat any\n").contains("redefinition of comdat '$c'"));
+    assert!(refusal("$c = comdat sometimes\n").contains("unknown selection kind"));
+}
+
 #[test]
 fn a_global_section_survives_printing() {
     let text = "@llvm.used = appending global [1 x ptr] [ptr @f], section \"llvm.metadata\"\n\ndefine void @f() {\n  ret void\n}\n";

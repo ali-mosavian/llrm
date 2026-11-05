@@ -636,6 +636,10 @@ mod tests {
             // `visitSwitchInst`'s `switch (X << C)` is `switch X` when the
             // `shl` is `nuw` or `nsw`; the `shl` is read, never rewritten.
             "combine_switch.rs",
+            // `zeromerge` makes one `inbounds` GEP per member of the new
+            // `alloca` it builds (llrm only); it reads no flag off an
+            // existing instruction.
+            "zeromerge.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =
