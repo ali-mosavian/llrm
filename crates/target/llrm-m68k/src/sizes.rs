@@ -194,3 +194,54 @@ pub fn callee_frame(
     (shape.callee_frame_bytes > 0)
         .then(|| Cost::of(form(cpu, "link.w %a6, #-8", 4, kind) + form(cpu, "unlk %a6", 2, kind)))
 }
+
+// ---- the operation table the inliner's trials and the store merger read ---
+
+use llrm_mir::target::OperationCosts;
+
+/// The bytes of code of each operation, as [`arithmetic`] and the others
+/// count them, for the decisions made on `OperationCosts` (the inliner's
+/// trial of a body, store merging); `costs()` keeps the pin's units.
+pub fn operation_bytes(cpu: Cpu) -> OperationCosts {
+    let long = cpu.at_least(Cpu::M68020);
+    let muldiv_long = if long { 4 } else { libcall(2) };
+    OperationCosts {
+        add: 2,
+        multiply: 2,
+        divide: 4,
+        multiply_long: muldiv_long,
+        divide_long: muldiv_long,
+        multiply_high: 2,
+        shift: 2,
+        address: 4,
+        carry: 0,
+        carry_step: 0,
+        load: 4,
+        store: 4,
+        store_immediate: 6,
+        memory_update: 4,
+        branch: 3,
+        r#move: 2,
+        call: 6,
+        return_: 2,
+        argument: 4,
+        pop: 2,
+        adjust: 3,
+        float_add: libcall(4),
+        float_multiply: libcall(4),
+        float_divide: libcall(4),
+        float_load: 4,
+        float_load_folded: 4,
+        float_store: 4,
+        float_to_int: libcall(2),
+        float_compare: libcall(4),
+        extend: 2,
+        set: 6,
+        fill: libcall(3),
+        fill_cell: 0,
+        copy: libcall(3),
+        copy_cell: 0,
+        direction: 0,
+        ..OperationCosts::default()
+    }
+}

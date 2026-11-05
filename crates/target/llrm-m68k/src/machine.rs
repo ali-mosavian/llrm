@@ -50,6 +50,12 @@ impl Machine for M68kMachine {
         OperationCosts::default()
     }
 
+    /// Bytes of code, which the inliner's trial of a body and the store
+    /// merger compare; `costs` stays in the pin's units.
+    fn size_costs(&self) -> OperationCosts {
+        crate::sizes::operation_bytes(self.cpu)
+    }
+
     /// `d0`..`d7`, `a0`..`a5`.
     fn registers(&self) -> i64 {
         14
