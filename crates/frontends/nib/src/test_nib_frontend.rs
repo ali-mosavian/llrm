@@ -3386,3 +3386,17 @@ fn a_fixed_point_divide_is_one_truncating_divide() {
     let lines = kdiv.lines().filter(|line| !line.trim().is_empty()).count();
     assert!(lines <= 25, "{lines} lines: {kdiv}");
 }
+
+#[test]
+fn test_a_failed_check_edge_carries_the_never_taken_weights() {
+    // The panic edge of a check was left to the unreachable default (9.5e-7); in a deep nest of
+    // checked loops that mass exceeded the flow entering the outer loop (jpeg_fixed Os).
+    let directory = tempfile::tempdir().expect("a directory");
+    let text = "@export(\"cdecl16\")\nfn value(i: i16) -> i16:\n    let a: i16[8] = [1] * 8\n    return a[i]\n";
+    let program = parsed(&written(&directory, "weighted.nib", text));
+    let mir = emitted_text(&program);
+    let value = defined(&mir, "_value");
+
+    assert!(value.lines().any(|line| line.contains("br i1 ") && line.contains("!prof")), "{value}");
+    assert!(mir.contains("branch_weights\", i32 2147483647, i32 1"), "{mir}");
+}

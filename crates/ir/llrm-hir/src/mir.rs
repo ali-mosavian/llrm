@@ -445,6 +445,19 @@ fn class_tags(
     Ok(tags)
 }
 
+/// The `!prof` nodes `branch_weights` for a conditional branch whose first
+/// target never runs, and for one whose second does not.
+fn never_taken(module: &mut Module) -> [MetadataId; 2] {
+    let word = module.context.types.int(32);
+    let mut node = |weights: [u32; 2]| {
+        let mut operands = vec![MetadataOperand::String("branch_weights".to_owned())];
+        operands.extend(weights.map(|one| MetadataOperand::Constant(module.context.int(word, i128::from(one)))));
+        module.metadata.push(MetadataNode { distinct: false, operands });
+        MetadataId(module.metadata.len() as u32 - 1)
+    };
+    [node([1, NEVER_TAKEN_WEIGHT]), node([NEVER_TAKEN_WEIGHT, 1])]
+}
+
 struct Tables<'h> {
     /// The target's address spaces: what the HIR's near, far, segment, huge and
     /// fixed addresses are.
@@ -507,7 +520,20 @@ struct Tables<'h> {
     field_facts: HashMap<(i64, i64), Vec<Fact>>,
     /// Each frame variable's `!var` node, by its function and place.
     variables: HashMap<(i64, i64), MetadataId>,
+    /// `!prof` for a branch whose first target never runs, and whose second.
+    never_taken: [MetadataId; 2],
 }
+
+/// The weight of an edge a program practically never takes, against 1 for the
+/// other: a panic path ending `unreachable` (a failed bounds, shift, conversion,
+/// division or key check). DEVIATE from clang, whose checks and the pin's
+/// unreachable default both use `(1 << 20) - 1` (`MDBuilder.h:46`
+/// `kLikelyBranchWeight`, `EmitCheck` in `CGExpr.cpp`): at that 9.5e-7 the panic
+/// mass of a deep loop nest of checked accesses exceeds the flow entering its
+/// outer loop, block frequency loses about half per level, and call sites after
+/// the nest fall under the 2% cold bound (jpeg_fixed `convert` and `restart`:
+/// 0.0014 of entry, against 0.33 unchecked). Owner: qb-metadata. Exit: 2026-11-30.
+const NEVER_TAKEN_WEIGHT: u32 = i32::MAX as u32;
 
 /// The `!dbg` metadata kind: the source line an instruction came from.
 pub const DEBUG_LINE: &str = "dbg";
@@ -718,6 +744,7 @@ fn emit_module<'h>(
         place_facts,
         field_facts,
         variables: HashMap::default(),
+        never_taken: never_taken(&mut module),
     };
     tables.tags.arrays(&mut module, hir);
     match fact_nodes(&mut module, &tables.spaces, hir, &tables.types) {
@@ -2673,6 +2700,24 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             {
                 for &(kind, node) in nodes {
                     self.b.function.annotate(inst, kind, node);
+                }
+            }
+            if let TerminatorKind::Branch = block.terminator.kind
+                && let Some(inst) = self.b.function.terminator(self.b.current().expect("a placed block"))
+            {
+                let ends = |target: &i64| {
+                    self.function
+                        .blocks
+                        .iter()
+                        .any(|one| one.id == *target && matches!(one.terminator.kind, TerminatorKind::Unreachable))
+                };
+                if let [first, second] = block.terminator.targets[..] {
+                    // Both targets unreachable states nothing.
+                    match (ends(&first), ends(&second)) {
+                        (true, false) => self.b.function.annotate(inst, "prof", self.tables.never_taken[0]),
+                        (false, true) => self.b.function.annotate(inst, "prof", self.tables.never_taken[1]),
+                        _ => {}
+                    }
                 }
             }
         }
