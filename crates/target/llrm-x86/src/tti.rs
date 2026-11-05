@@ -631,6 +631,10 @@ impl Tti for X86 {
         self.tuning.inline_variable_memcpy
     }
 
+    fn ipsccp_widen_keeps_sign(&self) -> bool {
+        self.tuning.ipsccp_widen_keeps_sign
+    }
+
     fn priced_self_inlining(&self) -> Option<(u32, i64)> {
         self.real_mode.as_ref()?.priced_self_inlining
     }
