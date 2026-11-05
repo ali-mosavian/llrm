@@ -106,16 +106,6 @@ impl Tti for M68k {
         (Some(32), Some(400))
     }
 
-    /// `InlineParams::DefaultThreshold`, 50 where the pin's is 225: a call is
-    /// about 20 B (arguments, `jsr`, `addq`, `rts`) and 50 clk, so a copy of a
-    /// body pays for itself only up to a dozen instructions; a 30-operation
-    /// body at six sites was inlined six times. 300 seeds -O2 68020: 516950
-    /// -> 472526 B, the 24 programs unchanged. DEVIATE: the pin's target sets
-    /// none. Exit: review 2026-11-20.
-    fn inline_threshold_override(&self) -> Option<i64> {
-        Some(50)
-    }
-
     fn name(&self) -> &'static str {
         "M68k"
     }
