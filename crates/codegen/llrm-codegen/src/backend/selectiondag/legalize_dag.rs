@@ -281,10 +281,14 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             };
             let part = self.dag.get_ext_load(super::actions::LoadExt::ZExtLoad, vt, chain, piece_ptr, piece_info);
             chains.push(SDValue { node: part.node, res: 1 });
-            let part = if at == 0 {
+            // the pieces lie widest first in memory: the low bits first on a
+            // little-endian target, the high bits first on a big-endian one
+            let shift =
+                if self.dag.config().big_endian { info.mem_vt.size_in_bits() - at - piece.size_in_bits() } else { at };
+            let part = if shift == 0 {
                 part
             } else {
-                let by = self.dag.get_constant(u128::from(at), EVT::I8);
+                let by = self.dag.get_constant(u128::from(shift), EVT::I8);
                 self.dag.get_node(ISD::Shl, vt, &[part, by])
             };
             joined = Some(match joined {
