@@ -44,7 +44,7 @@ pub fn use_the_carry(function: &mut MFunction) -> bool {
     let mut changed = false;
     for block in &mut function.blocks {
         while let Some(found) = recognised(&block.insts, &reads) {
-            apply(&mut block.insts, found);
+            apply(&mut block.insts, &mut function.classes, found);
             changed = true;
         }
     }
@@ -52,8 +52,13 @@ pub fn use_the_carry(function: &mut MFunction) -> bool {
 }
 
 struct Found {
-    /// The high word's `Copy AH <- a; ADD16 / SUB16; Copy v <- AH`.
-    high: [usize; 3],
+    /// The high word's `Copy AH <- a; ADD16 / SUB16; Copy v <- AH`; none where
+    /// the high word is added to the carry alone.
+    high: Option<[usize; 3]>,
+    /// The high word's value where the byte was the operand copied into hl.
+    added: Option<u32>,
+    /// A copy made between the low op and the high add, moved up with the pair.
+    hoist: Option<usize>,
     /// The compare, the condition byte and its widening.
     carry: [usize; 3],
     /// The final `Copy AH <- v` and the add of the carry; its result copy
@@ -97,7 +102,27 @@ fn recognised(
             Kind::Op("SUB16") => true,
             _ => continue,
         };
-        let [Operand::Def(_), Operand::Use(_), Operand::Use(Reg::Virt(z))] = last.operands[..] else { continue };
+        let [Operand::Def(_), Operand::Use(_), Operand::Use(Reg::Virt(rhs))] = last.operands[..] else { continue };
+        let Some(into) = insts[..f].iter().rposition(|i| defines(i, hl)) else { continue };
+        if into + 1 != f || insts[into].kind != Kind::Copy {
+            continue;
+        }
+        let [_, Operand::Use(Reg::Virt(copied))] = insts[into].operands[..] else { continue };
+        // the carry's byte is the added operand, or (a sum only) the one
+        // copied into hl
+        let widened = |v: u32| {
+            insts[..f]
+                .iter()
+                .rposition(|i| defines(i, Reg::Virt(v)))
+                .is_some_and(|at| insts[at].kind == Kind::Op("ZEXT8"))
+        };
+        let (z, high_sum, commuted) = if widened(rhs) {
+            (rhs, copied, false)
+        } else if !subtract && widened(copied) {
+            (copied, rhs, true)
+        } else {
+            continue;
+        };
         // the byte: zext8 <- setcc8 (carry) <- cp16
         let Some(zext) = insts[..f].iter().rposition(|i| defines(i, Reg::Virt(z))) else { continue };
         let [Operand::Def(_), Operand::Use(Reg::Virt(c))] = insts[zext].operands[..] else { continue };
@@ -145,35 +170,53 @@ fn recognised(
             continue;
         }
         // the high word's own op
-        let Some(into) = insts[..f].iter().rposition(|i| defines(i, hl)) else { continue };
-        if into + 1 != f || insts[into].kind != Kind::Copy {
-            continue;
-        }
-        let [_, Operand::Use(Reg::Virt(high_sum))] = insts[into].operands[..] else { continue };
-        let Some(out) = insts[..into].iter().rposition(|i| defines(i, Reg::Virt(high_sum))) else { continue };
-        if insts[out].kind != Kind::Copy || out < 2 {
-            continue;
-        }
-        let high_op = out - 1;
-        let high_in = out - 2;
-        let high = &insts[high_op];
-        let wanted = if subtract { Kind::Op("SUB16") } else { Kind::Op("ADD16") };
-        if high.kind != wanted || insts[high_in].kind != Kind::Copy || !defines(&insts[high_in], hl) {
-            continue;
-        }
-        let [Operand::Def(_), Operand::Use(_), Operand::Use(Reg::Virt(high_rhs))] = high.operands[..] else { continue };
-        let [_, Operand::Use(Reg::Virt(high_lhs))] = insts[high_in].operands[..] else { continue };
-        // the compare, the byte and the high sum are read once, and the
-        // operands of the high op exist where the pair will stand
-        if [high_sum, c, z].iter().any(|v| reads.get(v) != Some(&1)) {
-            continue;
-        }
         let defined_before = |v: u32| match insts.iter().position(|i| defines(i, Reg::Virt(v))) {
             Some(at) => at < low_out,
             None => true,
         };
-        if !defined_before(high_lhs) || !defined_before(high_rhs) {
+        if [c, z].iter().any(|v| reads.get(v) != Some(&1)) {
             continue;
+        }
+        // the high words' own sum (`Copy AH <- a; ADD16; Copy v <- AH`), or a
+        // plain value: a long grown by a widened word has no high addend
+        let wanted = if subtract { Kind::Op("SUB16") } else { Kind::Op("ADD16") };
+        let chain = (|| {
+            if commuted {
+                return None;
+            }
+            let out = insts[..into].iter().rposition(|i| defines(i, Reg::Virt(high_sum)))?;
+            if insts[out].kind != Kind::Copy || out < 2 || reads.get(&high_sum) != Some(&1) {
+                return None;
+            }
+            let (high_op, high_in) = (out - 1, out - 2);
+            let high = &insts[high_op];
+            if high.kind != wanted || insts[high_in].kind != Kind::Copy || !defines(&insts[high_in], hl) {
+                return None;
+            }
+            let [Operand::Def(_), Operand::Use(_), Operand::Use(Reg::Virt(high_rhs))] = high.operands[..] else {
+                return None;
+            };
+            let [_, Operand::Use(Reg::Virt(high_lhs))] = insts[high_in].operands[..] else { return None };
+            (defined_before(high_lhs) && defined_before(high_rhs)).then_some([high_in, high_op, out])
+        })();
+        // a plain value made after the low op by a copy of an earlier one moves
+        // up with the pair
+        let mut hoist = None;
+        if chain.is_none() && !defined_before(high_sum) {
+            let made = insts.iter().position(|i| defines(i, Reg::Virt(high_sum)));
+            let ok = made
+                .filter(|&at| at > low_out && at < f)
+                .filter(
+                    |&at| matches!(
+                        insts[at].operands[..],
+                        [Operand::Def(_), Operand::Use(Reg::Virt(src))] if defined_before(src)
+                    ) && insts[at].kind == Kind::Copy
+                        && reads.get(&high_sum) == Some(&1),
+                );
+            match ok {
+                Some(at) => hoist = Some(at),
+                None => continue,
+            }
         }
         // the result copy follows the pair now: nothing may read its value
         // between the old place and the new
@@ -187,7 +230,9 @@ fn recognised(
             continue;
         }
         return Some(Found {
-            high: [high_in, high_op, out],
+            high: chain,
+            added: commuted.then_some(high_sum),
+            hoist,
             carry: [cp, set, zext],
             last: [into, f],
             low_out,
@@ -199,15 +244,34 @@ fn recognised(
 
 fn apply(
     insts: &mut Vec<Inst>,
+    classes: &mut Vec<crate::mfunc::Class>,
     found: Found,
 ) {
     let flags = Reg::Phys(reg::FLAGS);
-    let Found { high, carry, last, low_out, subtract } = found;
+    let Found { high, added: commuted, hoist, carry, last, low_out, subtract } = found;
     // the low op now leaves its carry for the pair behind it
     let low = low_out - 1;
     insts[low].operands.push(Operand::Def(flags));
-    let mut high_in = insts[high[0]].clone();
-    let mut wide = insts[high[1]].clone();
+    let mut added = Vec::new();
+    if let Some(at) = hoist {
+        added.push(insts[at].clone());
+    }
+    let (mut high_in, mut wide) = match high {
+        Some(high) => (insts[high[0]].clone(), insts[high[1]].clone()),
+        None => {
+            // no high addend: a zero in a register of its own
+            let zero = classes.len() as u32;
+            classes.push(crate::mfunc::Class::Gr16);
+            added.push(Inst::new(Kind::Op("LD16ri"), vec![Operand::Def(Reg::Virt(zero)), Operand::Imm(0)]));
+            let mut wide = insts[last[1]].clone();
+            wide.operands[2] = Operand::Use(Reg::Virt(zero));
+            let mut into = insts[last[0]].clone();
+            if let Some(value) = commuted {
+                into.operands[1] = Operand::Use(Reg::Virt(value));
+            }
+            (into, wide)
+        }
+    };
     wide.kind = Kind::Op(if subtract { "SBC16" } else { "ADC16" });
     wide.reads_flags = true;
     wide.sets_flags = true;
@@ -217,12 +281,14 @@ fn apply(
     high_in.origin = insts[last[1]].origin;
     // the high sum's copy out is gone with its op; the result copy follows
     // the pair
-    let mut gone: Vec<usize> = high.iter().chain(&carry).chain(&last).copied().collect();
+    let mut gone: Vec<usize> = high.iter().flatten().chain(&carry).chain(&last).copied().collect();
     gone.push(last[1] + 1);
+    gone.extend(hoist);
     gone.sort_unstable();
     let behind = low_out + 1 - gone.iter().filter(|&&at| at <= low_out).count();
     for &at in gone.iter().rev() {
         insts.remove(at);
     }
-    insts.splice(behind..behind, [high_in, wide, result]);
+    added.extend([high_in, wide, result]);
+    insts.splice(behind..behind, added);
 }

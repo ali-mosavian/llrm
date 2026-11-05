@@ -35,3 +35,15 @@ fn a_long_subtract_borrows_in_the_flag() {
     let text = assembly("sub", "define i32 @g(i32 %a, i32 %b) {\n  %r = sub i32 %a, %b\n  ret i32 %r\n}\n");
     assert!(text.matches("sbc hl, ").count() == 2 && !text.contains("jr c"), "{text}");
 }
+
+/// A long grown by a widened word: the high word has no addend of its own and
+/// the carry was still rebuilt by a compare (mem_length_boundaries_m32 -O2: the
+/// 32-bit sum of a loop, 11 instructions a trip beyond `adc hl, rr`).
+#[test]
+fn a_long_grown_by_a_word_carries_in_the_flag() {
+    let text = assembly(
+        "widened",
+        "define i32 @g(i32 %a, i16 %b) {\n  %e = zext i16 %b to i32\n  %r = add i32 %a, %e\n  ret i32 %r\n}\n",
+    );
+    assert!(text.contains("adc hl, ") && !text.contains("jr c"), "{text}");
+}

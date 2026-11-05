@@ -1553,7 +1553,7 @@ pub fn finish(
             printer.instruction(inst, next, &block.insts[index + 1..])?;
         }
     }
-    Ok(drop_unreachable(cancel_steps(printer.out)))
+    Ok(drop_unreachable(forward_high_bytes(cancel_steps(printer.out))))
 }
 
 /// Whether `text` ends the flow: `ret`, `jp L` or `jr L` with no condition.
@@ -1629,6 +1629,42 @@ fn mentions(
         .filter(|word| !word.is_empty())
         .skip(1)
         .any(|word| word == pair || (word.len() == 1 && pair.contains(word)))
+}
+
+/// `ld R1, S1; ld R2, S2; ld R1, R2; ld R2, #0`: a pair copied in order to read
+/// the high byte of a copy, widened. The first load is overwritten and the
+/// second is read once: `ld R1, S2; ld R2, #0`, 2 B less.
+fn forward_high_bytes(lines: Vec<Line>) -> Vec<Line> {
+    fn load(line: &Line) -> Option<(&str, &str)> {
+        let Line::Inst(text) = line else { return None };
+        let (to, from) = text.strip_prefix("ld ")?.split_once(", ")?;
+        let byte = |r: &str| matches!(r, "b" | "c" | "d" | "e" | "h" | "l");
+        (byte(to) && (byte(from) || from == "#0")).then_some((to, from))
+    }
+    let mut out: Vec<Line> = Vec::with_capacity(lines.len());
+    for line in lines {
+        let fused = (|| {
+            let (r2, zero) = load(&line)?;
+            if zero != "#0" || out.len() < 3 {
+                return None;
+            }
+            let at = out.len() - 3;
+            let (r1, s1) = load(&out[at])?;
+            let (r2b, s2) = load(&out[at + 1])?;
+            let (r1b, r2c) = load(&out[at + 2])?;
+            (r2b == r2 && r2c == r2 && r1b == r1 && r1 != r2 && s1 != "#0" && s2 != "#0" && s2 != r1 && s2 != r2)
+                .then(|| (at, r1.to_owned(), s2.to_owned()))
+        })();
+        match fused {
+            Some((at, r1, s2)) => {
+                out.truncate(at);
+                out.push(Line::Inst(format!("ld {r1}, {s2}")));
+                out.push(line);
+            }
+            None => out.push(line),
+        }
+    }
+    out
 }
 
 /// `dec rr` then `inc rr` of the same pair, or the reverse, is nothing: neither
@@ -2051,6 +2087,18 @@ mod tests {
         assert!(!held_since_stored(&out, &stores));
         let out = vec![inst("ld -2(ix), c"), inst("ld -1(ix), b"), inst("call _f")];
         assert!(!held_since_stored(&out, &stores));
+    }
+
+    /// A pair copied, its high byte read from the copy and widened was four
+    /// loads (switch_table_holes -Os: 5 B over the allocation before).
+    #[test]
+    fn the_high_byte_of_a_copied_pair_is_read_from_the_source() {
+        let inst = |text: &str| Line::Inst(text.to_owned());
+        let lines = vec![inst("ld c, l"), inst("ld b, h"), inst("ld c, b"), inst("ld b, #0")];
+        assert_eq!(forward_high_bytes(lines), vec![inst("ld c, h"), inst("ld b, #0")]);
+        // the copy read again is kept
+        let lines = vec![inst("ld c, l"), inst("ld b, h"), inst("ld c, b"), inst("ld b, #0"), inst("add hl, bc")];
+        assert_eq!(forward_high_bytes(lines).len(), 3);
     }
 
     /// A loop with two jumps back to its head was counted as two nested
