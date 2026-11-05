@@ -10,12 +10,4 @@ static inline sf64 from_mag(uint64_t sign, uint64_t u)
     uint64_t m = n > 55 ? sf_shr_sticky64(u, n - 55) : u << (55 - n);
     return SF_PACK(sign, n + 1023, m);
 }
-/* A 32-bit magnitude always fits the 53-bit significand: no rounding, and every shift stays in 32-bit halves. */
-static inline sf64 from_mag32(uint64_t sign, uint32_t x)
-{
-    if (!x) return 0;
-    int n = 31 - sf_clz32(x);
-    uint32_t y = x << (31 - n); /* top bit set */
-    return sign + (((uint64_t)(((uint32_t)n + 1022u) << 20) + (y >> 11)) << 32) + ((uint64_t)(y << 21));
-}
 #endif
