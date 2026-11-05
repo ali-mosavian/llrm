@@ -4,7 +4,9 @@
 #ifndef SF_CONV64_H
 #define SF_CONV64_H
 /* A 32-bit magnitude always fits the 53-bit significand: no rounding, and every shift stays in 32-bit halves. */
+#ifndef SF_NO_EXACT32
 /* Not `inline`: the callers must share one copy (m68k -Os: two inlined copies grew float.c by 324 B). */
+/* A 32-bit magnitude always fits the 53-bit significand: no rounding, and every shift stays in 32-bit halves. */
 static sf64 from_mag32(uint64_t sign, uint32_t x)
 {
     if (!x) return 0;
@@ -20,4 +22,13 @@ static sf64 from_mag(uint64_t sign, uint64_t u)
     uint64_t m = n > 55 ? sf_shr_sticky64(u, n - 55) : u << (55 - n);
     return SF_PACK(sign, n + 1023, m);
 }
+#else /* SF_NO_EXACT32: one 64-bit path, no second normaliser (x86 m32 -Os: the second path costs +25 B) */
+static inline sf64 from_mag(uint64_t sign, uint64_t u)
+{
+    if (!u) return 0;
+    int n = 63 - sf_clz64(u);
+    uint64_t m = n > 55 ? sf_shr_sticky64(u, n - 55) : u << (55 - n);
+    return SF_PACK(sign, n + 1023, m);
+}
+#endif
 #endif
