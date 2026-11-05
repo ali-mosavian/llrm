@@ -92,6 +92,9 @@ fn label_of(inst: &Inst) -> Option<&str> {
 /// sees the instruction by name and this, and `rebuild` finds the operation
 /// again by it.
 /// `mov xd, xzr`: the register-31 source of a copy is the zero register.
+/// The name of the definition of zero (`mov xd, xzr`).
+const ZERO: &str = "Zero";
+
 fn is_zero_copy(op: &Op) -> bool {
     matches!(op, Op::Copy { dst: Reg::Gpr(_), src: Reg::Gpr(Gpr(31)) })
 }
@@ -183,7 +186,7 @@ pub fn view(function: &MFunc) -> MFunction<Class> {
             let (kind, terminator, barrier, call) = match op {
                 // A copy of the zero register is a move of 0: made again where
                 // it is read (`reMaterializeTrivialDef`), not copied from one value.
-                Op::Copy { .. } if zero => (Kind::Op("Imm"), false, false, false),
+                Op::Copy { .. } if zero => (Kind::Op(ZERO), false, false, false),
                 Op::I(inst) => (
                     Kind::Op(name_of(inst)),
                     matches!(
@@ -616,6 +619,18 @@ impl AllocTarget for Arm64 {
         let mut inst = LirInst::new(Kind::Op("SpillStore"), vec![Operand::Use(register), Operand::Frame(slot)]);
         inst.may_store = true;
         Some(inst)
+    }
+
+    fn is_zero_def(name: &str) -> bool {
+        name == ZERO
+    }
+
+    /// `str xzr, [slot]`.
+    fn zero_store(
+        _class: Class,
+        slot: i32,
+    ) -> Option<LirInst> {
+        Self::spill_store(Class::Gpr, LirReg::Phys(crate::reg::XZR), slot)
     }
 
     fn spill_load(

@@ -1375,6 +1375,25 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
         cell: &Mem,
     ) -> Option<Arc<Insn>> {
         let what = one.what.as_ref()?;
+        if one.group.is_none()
+            && !what.sources.iter().any(|loc| matches!(loc, Loc::Held(_)))
+            && what.name.as_deref().is_some_and(T::is_zero_def)
+            && let [Loc::Held(held)] = what.dests.as_slice()
+            && held.value == reg
+            && held.width as u32 <= cell.width
+        {
+            // A spilled zero is stored as the zero register: the definition
+            // becomes the store.
+            let mut out = (**one).clone();
+            out.what = Some(Semantics {
+                dests: vec![Loc::Mem(Mem { width: held.width as u32, ..cell.clone() })],
+                sources: Vec::new(),
+                ..what.clone()
+            });
+            out.defines.retain(|value| *value != reg);
+            out.spill_store = true;
+            return Some(Arc::new(out));
+        }
         let (name, at) = self.foldable.get((one.at / 2) as usize).copied().flatten()?;
         if what.name.as_deref() != Some(name) || one.group.is_some() {
             return None;
@@ -1793,14 +1812,22 @@ pub fn from_lir<T: Target>(
                 locs.iter().filter_map(|loc| if let Loc::Held(held) = loc { Some(held.value) } else { None }).collect()
             };
             if (insn.spill_store || insn.spill_reload) && !insn.rematerialized {
-                let value =
-                    held(&what.dests).into_iter().chain(held(&what.sources)).next().ok_or("a spill of nothing")?;
+                let value = held(&what.dests).into_iter().chain(held(&what.sources)).next();
                 let cell = what
                     .dests
                     .iter()
                     .chain(&what.sources)
                     .find_map(|loc| if let Loc::Mem(cell) = loc { Some(cell) } else { None });
                 let slot = slot_of(cell.ok_or_else(|| format!("a spill with no cell: {what:?}"))?);
+                let Some(value) = value else {
+                    // A zero stored from the zero register (`fold_memory_operand`).
+                    let made = T::zero_store(T::any(), slot).ok_or("the target states no zero store")?;
+                    insts.push(made);
+                    if !slots.iter().any(|(one, _)| *one == slot) {
+                        slots.push((slot, T::any()));
+                    }
+                    continue;
+                };
                 let register = number(value, &mut classes);
                 let class = classes[match register {
                     Reg::Virt(v) => v as usize,
