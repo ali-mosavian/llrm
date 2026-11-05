@@ -1,2 +1,45 @@
-reason = "ch default (user decision 2026-10-12) and the shrinkwrap, frequency and layout fixes landed with it: the rows main's bq16/bq32 columns add moved by -0.1% to +0.05% except nbody bq32 -O2 (+4.6%, the guard and rotated loops of the BASIC loops); the rest fewer instructions"
-blessed = "2026-10-12"
+reason = "C references re-blessed 2026-11-05: corpus edits since 10-15 (parity kernels volatile inputs, textfill DOS-only); tcpp links CM.LIB ISATTY (#7243)"
+blessed = "2026-11-05"
+corpus = "a09e3cace5c1a533d3c8abc04084be40"
+
+[bcc.O2]
+instructions = 33056
+memory_operands = 7017
+code_bytes = 145
+data_bytes = 12
+bss_bytes = 0
+
+[bcc.Os]
+instructions = 33057
+memory_operands = 7017
+code_bytes = 143
+data_bytes = 12
+bss_bytes = 0
+
+[tc.O2]
+instructions = 32056
+memory_operands = 9013
+code_bytes = 133
+data_bytes = 24
+bss_bytes = 0
+
+[tc.Os]
+instructions = 32056
+memory_operands = 9013
+code_bytes = 131
+data_bytes = 24
+bss_bytes = 0
+
+[tcpp.O2]
+instructions = 35060
+memory_operands = 7017
+code_bytes = 151
+data_bytes = 12
+bss_bytes = 0
+
+[tcpp.Os]
+instructions = 35060
+memory_operands = 7017
+code_bytes = 149
+data_bytes = 12
+bss_bytes = 0
