@@ -580,6 +580,10 @@ pub(crate) fn _identities_dropped(body: &LirBody) -> LirBody {
             }
             let Some(store) = block.insns.get(next) else { continue };
             if !same.iter().any(|alias| cell_move(store, false) == Some((*alias, cell))) {
+                if let Some(later) = store_kept_value(&block.insns, at, value, cell) {
+                    changed = true;
+                    gone[later] = true;
+                }
                 continue;
             }
             changed = true;
@@ -593,6 +597,82 @@ pub(crate) fn _identities_dropped(body: &LirBody) -> LirBody {
         blocks.push(LirBlock { insns: insns.into(), ..block.clone().into_inner() }.into());
     }
     if changed { body.with_blocks(blocks) } else { body.clone() }
+}
+
+/// How far past a load `store_kept_value` looks.
+const KEPT_VALUE_WINDOW: usize = 8;
+
+/// The index of a store that puts back what the load at `at` took from `cell`:
+/// the same value (or a copy of it) to the same cell, with nothing between
+/// that writes the cell, defines the value, or may write memory the cell
+/// shares (a store through a pointer, a call).
+///
+/// DEVIATE D-SSC2 (exit 2026-11-20): `RemoveDeadStores` takes only the store
+/// that follows the load at once (its FIXME: "could be much more
+/// aggressive"). A region split's loop piece loads an invariant slot and stores
+/// it back on exit with the loop's reads between; the store is one per trip.
+fn store_kept_value(
+    insns: &[Arc<Insn>],
+    at: usize,
+    value: u32,
+    cell: (i64, u32),
+) -> Option<usize> {
+    let mut same = vec![value];
+    let overlaps = |disp: i64, width: u32| disp < cell.0 + i64::from(cell.1) && cell.0 < disp + i64::from(width);
+    for next in at + 1..insns.len().min(at + 1 + KEPT_VALUE_WINDOW) {
+        let one = &insns[next];
+        if same.iter().any(|alias| _cell_move(one, false, true) == Some((*alias, cell))) {
+            return Some(next);
+        }
+        let what = one.what.as_ref()?;
+        if one.group.is_some()
+            || !one.clobbers.is_empty()
+            || matches!(
+                what.op,
+                Operation::Call
+                    | Operation::Barrier
+                    | Operation::Escape
+                    | Operation::Copy
+                    | Operation::Fill
+                    | Operation::Push
+                    | Operation::Pop
+                    | Operation::Leave
+                    | Operation::Restore
+                    | Operation::Exchange
+                    | Operation::Jump
+                    | Operation::Branch
+                    | Operation::Return
+                    | Operation::Data
+            )
+        {
+            return None;
+        }
+        // Memory it writes: only a plain frame cell that is not this one.
+        for dest in &what.dests {
+            if let Loc::Mem(place) = dest {
+                let plain =
+                    place.addr.is_some_and(|addr| addr.space == Space::Frame && !overlaps(addr.disp, place.width))
+                        && place.index.is_none()
+                        && place.index_through == RegId::None;
+                if !plain {
+                    return None;
+                }
+            }
+        }
+        // A copy of the value is the value; any other write to it ends the
+        // search.
+        match one.copy_of() {
+            Some((to, from)) if same.contains(&from) => {
+                same.push(to);
+                continue;
+            }
+            _ => {}
+        }
+        if one.defines.iter().any(|defined| same.contains(defined)) {
+            return None;
+        }
+    }
+    None
 }
 
 /// Spill-slot colors already present in the current rewritten body, and
