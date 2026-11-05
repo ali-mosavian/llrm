@@ -285,6 +285,7 @@ impl CombineHooks for Aarch64Lowering {
             ISD::GlobalAddress => self.global_address_combine(dag, node),
             ISD::Add => super::combine::add_combine_for_shifted_operands(dag, node),
             ISD::Sub => super::combine::conditional_sub(dag, node),
+            ISD::SetCC => super::combine::or_xor_chain(dag, node),
             ISD::Shl | ISD::Srl | ISD::Sra | ISD::Rotr if level == CombineLevel::AfterLegalizeDag => {
                 super::combine::shift_amount_mod(dag, node)
             }
