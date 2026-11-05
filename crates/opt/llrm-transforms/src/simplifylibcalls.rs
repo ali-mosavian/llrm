@@ -56,6 +56,7 @@ use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, PreservedAnaly
 use llrm_mir::types::Type;
 
 mod compare;
+mod memops;
 
 /// One table per module: the target's library, else the pin's defaults for
 /// the pointer's width.
@@ -498,6 +499,11 @@ impl FunctionPass for SimplifyLibCalls {
                 LibFunc::Strncmp => compare::str_n_cmp(unit, &site, &outer),
                 LibFunc::Memcmp => compare::mem_cmp(unit, &site, true),
                 LibFunc::Bcmp => compare::mem_cmp(unit, &site, false),
+                LibFunc::Memcpy => memops::mem_copy(unit, &site, crate::loopidioms::How::Apart),
+                LibFunc::Memmove => memops::mem_copy(unit, &site, crate::loopidioms::How::Overlapping),
+                LibFunc::Mempcpy => memops::mem_p_cpy(unit, &site),
+                LibFunc::Memset => memops::mem_set(unit, &site),
+                LibFunc::Memccpy => memops::mem_c_cpy(unit, &site),
                 _ => None,
             };
             let Some(rewrite) = rewrite else { continue };
