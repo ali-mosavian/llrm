@@ -2418,3 +2418,38 @@ fn a_long_multiply_links_the_compact_routine_at_every_level() {
         assert!(text.contains("__mulsi3") && !text.contains("__mulsi3_fast"), "{text}");
     }
 }
+
+/// `llvm.usub.sat.i32` returned the inverse: 0 where the subtract does not
+/// borrow and the wrapped difference where it does (`sat_builtins`: 4e9 - 5
+/// gave 0, 5 - 4e9 gave 294967301). The borrow was read as the carry.
+#[test]
+fn a_32_bit_saturating_subtract_clamps_at_zero_only_on_a_borrow() {
+    let ir = module(
+        r#"declare i32 @llvm.usub.sat.i32(i32, i32)
+@big = global i32 4000000000
+@small = global i32 5
+define i8 @no_borrow() {
+  %a = load i32, ptr @big
+  %b = load i32, ptr @small
+  %r = call i32 @llvm.usub.sat.i32(i32 %a, i32 %b)
+  %t = trunc i32 %r to i8
+  ret i8 %t
+}
+define i8 @borrow() {
+  %a = load i32, ptr @small
+  %b = load i32, ptr @big
+  %r = call i32 @llvm.usub.sat.i32(i32 %a, i32 %b)
+  %t = trunc i32 %r to i8
+  %h = lshr i32 %r, 24
+  %ht = trunc i32 %h to i8
+  %o = or i8 %t, %ht
+  ret i8 %o
+}"#,
+    );
+    for level in [Level::O1, Level::O2, Level::Os] {
+        let text = assembly(&ir, &Request::new(level)).unwrap_or_else(|e| panic!("{e}"));
+        // 4000000000 - 5 = 0xEE6B27FB; 5 - 4000000000 clamps to 0
+        assert_eq!(exit_code_of(&text, "no_borrow"), 0xFB, "{level:?}\n{text}");
+        assert_eq!(exit_code_of(&text, "borrow"), 0, "{level:?}\n{text}");
+    }
+}
