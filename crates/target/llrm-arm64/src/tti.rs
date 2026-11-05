@@ -314,6 +314,13 @@ impl Tti for AArch64 {
         250_000
     }
 
+    /// DEVIATE UP1 trial pricing (arm64, exit 2026-11-20): the estimate priced
+    /// nbody's 3-trip loops as growing 14 B where the unroll shrinks the code
+    /// 56 B. The pin has no price here.
+    fn unroll_trial(&self) -> bool {
+        true
+    }
+
     fn merges_unaligned_stores(&self) -> bool {
         true
     }
