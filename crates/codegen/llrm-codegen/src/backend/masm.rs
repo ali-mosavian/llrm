@@ -1272,7 +1272,7 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
             procedure
         };
     }
-    if !eligible || (pushed == 0 && !rebuilt && procedure.body.vector_saves.is_empty()) {
+    if !eligible {
         return procedure;
     }
     // The locals keep their alignment from BP (an 8-byte cell at 4 mod 8
@@ -1296,6 +1296,15 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
         let held = frame_held(&procedure);
         (!procedure.size || held || procedure.registers.free) && stack_addressed(&procedure, 0).is_some()
     };
+    // A caller whose frame is only its call area has no cell for the frame
+    // register either (Win64's home area: pin `sub rsp, 40`, not 56).
+    if pushed == 0
+        && !rebuilt
+        && procedure.body.vector_saves.is_empty()
+        && !(dropped && procedure.reserve != 0 && aligns_for_calls(&procedure))
+    {
+        return procedure;
+    }
     let above = if dropped { slot } else { 0 };
     // Nothing is aligned where there are no locals: a leaf with two pushed
     // registers had a `push rax` slot, and a caller with one had `sub rsp, 16`
