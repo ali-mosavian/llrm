@@ -150,6 +150,12 @@ pub enum Intrinsic {
     /// the count is not zero, which lets it guard a loop that may run no
     /// iteration.
     TestSetLoopIterations,
+    /// `llvm.start.loop.iterations`: as `set.loop.iterations`, and its
+    /// argument again, to be carried round the loop by a phi.
+    StartLoopIterations,
+    /// `llvm.loop.decrement.reg`: its first argument, the iterations still to
+    /// run, less its second: the next value of the phi that carries them.
+    LoopDecrementReg,
     /// `llvm.loop.decrement`: takes its argument off the loop counter and
     /// says whether the loop goes on. Only a target that opts in to hardware
     /// loops has one.
@@ -550,7 +556,7 @@ thread_local! {
     static PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-const TABLE: [Spec; 80] = [
+const TABLE: [Spec; 82] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -691,6 +697,22 @@ const TABLE: [Spec; 80] = [
         overloads: &[Kind::Int],
         returns: Slot::Int(1),
         parameters: &[Slot::Any(0)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.start.loop.iterations",
+        intrinsic: Intrinsic::StartLoopIterations,
+        overloads: &[Kind::Int],
+        returns: Slot::Any(0),
+        parameters: &[Slot::Any(0)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.loop.decrement.reg",
+        intrinsic: Intrinsic::LoopDecrementReg,
+        overloads: &[Kind::Int],
+        returns: Slot::Any(0),
+        parameters: INTS,
         own: None,
     },
     Spec {
