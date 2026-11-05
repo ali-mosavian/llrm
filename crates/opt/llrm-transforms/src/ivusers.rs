@@ -50,10 +50,9 @@ pub struct Env<'a> {
     pub safe_to_speculate: &'a dyn Fn(InstId) -> bool,
     /// Membership in the loop's ephemeral values.
     pub ephemeral: &'a dyn Fn(InstId) -> bool,
-    /// DEVIATE LSR-N: the widest integer LSR takes as native where the
-    /// datalayout's `n` names fewer (`Tti::lsr_native_integer_bits`); 0: the
-    /// datalayout's.
-    pub native_bits: u32,
+    /// DEVIATE LSR-N: widths LSR takes as native besides the datalayout's `n`
+    /// (`Tti::lsr_native_integer_widths`).
+    pub native_widths: &'a [u32],
 }
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/IVUsers.h#L33
@@ -237,7 +236,7 @@ impl IvUsers {
         // 64-bit IV in 32-bit code for one 64-bit cast is no gain.
         let ty = cx.function.operand_type(cx.context, value).and_then(|ty| se.ty_of(cx, ty)).expect("a SCEVable type");
         let width = se.get_type_size_in_bits(cx, ty);
-        if width > 64 || !(cx.layout.legal_integer(width) || width <= env.native_bits) {
+        if width > 64 || !(cx.layout.legal_integer(width) || env.native_widths.contains(&width)) {
             return false;
         }
         // An ephemeral value is removed later anyway.

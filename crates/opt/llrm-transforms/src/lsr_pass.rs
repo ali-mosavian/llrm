@@ -216,7 +216,7 @@ fn plan_loop(
         ephemeral: &is_ephemeral,
         // DEVIATE LSR-N holds at speed only: at `-Os` a counter LSR adds for a
         // wide loop grew tail_calls by 354 bytes.
-        native_bits: if size { 0 } else { tti.lsr_native_integer_bits() },
+        native_widths: if size { &[] } else { tti.lsr_native_integer_widths() },
     };
     let mut users = match carried {
         Some(users) => {
