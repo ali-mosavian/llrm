@@ -16,7 +16,7 @@
 file=${LG_LOAD_FILE:-/proc/loadavg}; poll=${LG_POLL:-15}
 stop5=${LG_STOP_5M:-28}; stop1=${LG_STOP_1M:-38}; resume5=${LG_RESUME_5M:-26}; resume1=${LG_RESUME_1M:-20}; start1=${LG_START_1M:-25}
 [ "${LG_QUIET:-}" = 1 ] && start1=${LG_QUIET_1M:-20}
-base=${LG_SLOTS:-3}; high=${LG_SLOTS_HIGH:-5}; wide=${LG_SLOTS_MAX:-7}; widen1=${LG_WIDEN_1M:-20}; narrow1=${LG_NARROW_1M:-22}
+base=${LG_SLOTS:-3}; high=${LG_SLOTS_HIGH:-5}; wide=${LG_SLOTS_MAX:-7}; widest=${LG_SLOTS_WIDEST:-10}; widest1=${LG_WIDEST_1M:-14}; widen1=${LG_WIDEN_1M:-20}; narrow1=${LG_NARROW_1M:-22}
 slot_dir=${LG_SLOT_DIR:-/tmp/buildslots/load_guard}
 prio=${LG_PRIO_FILE:-$slot_dir/prio}; tier=${LG_TIER:-4}
 log() { echo "load_guard: $(date -u +%H:%MZ) $*" >&2; }
@@ -40,20 +40,23 @@ slot_count() {  # slot_count L1: prints the count
   local now; now=$(cat "$slot_dir/slots_now" 2>/dev/null || echo "$base")
   if above "$widen1" "$1"; then now=$high; elif ! above "$narrow1" "$1"; then now=$base; fi
   echo "$now" > "$slot_dir/slots_now"  # the hysteresis state is the 3/5 count; the wide count is derived each time
-  if above "${LG_WIDE_1M:-18}" "$1" && awk -v kb="$(awk '/^MemAvailable:/{print $2}' "${LG_MEMINFO:-/proc/meminfo}")" -v gb="${LG_MEM_MIN_GB:-40}" 'BEGIN{exit !(kb>=gb*1024*1024)}'; then now=$wide; fi
+  if awk -v kb="$(awk '/^MemAvailable:/{print $2}' "${LG_MEMINFO:-/proc/meminfo}")" -v gb="${LG_MEM_MIN_GB:-40}" 'BEGIN{exit !(kb>=gb*1024*1024)}'; then
+    if above "$widest1" "$1"; then now=$widest; elif above "${LG_WIDE_1M:-18}" "$1"; then now=$wide; fi
+  fi
+  echo "$now" > "$slot_dir/slots_wide"
   echo "$now"
 }
 
-# ---- order: one line "tier start pid" per waiter in $prio, edited under the same lock discipline ----
+# ---- order: one line "tier start pid start_line" per waiter in $prio, edited under the same lock discipline ----
 prio_edit() {  # prio_edit add|del|first: first prints ok when no live waiter precedes this one
   local fd out=""; exec {fd}>"$slot_dir/prio.lock"; flock "$fd"
   touch "$prio"
   # drop waiters whose process is gone
-  while read -r t st pid; do kill -0 "$pid" 2>/dev/null && echo "$t $st $pid"; done < "$prio" > "$prio.new"
+  while read -r t st pid q; do kill -0 "$pid" 2>/dev/null && echo "$t $st $pid $q"; done < "$prio" > "$prio.new"
   case $1 in
-    add) echo "$tier $(date +%s.%N) $$" >> "$prio.new" ;;
-    del) grep -v " $$\$" "$prio.new" > "$prio.tmp"; mv "$prio.tmp" "$prio.new" ;;
-    first) out=$(sort -k1,1n -k2,2n "$prio.new" | head -1 | awk -v me="$$" '{print ($3==me)?"ok":"no"}') ;;
+    add) echo "$tier $(date +%s.%N) $$ $start1" >> "$prio.new" ;;
+    del) grep -v " $$ " "$prio.new" > "$prio.tmp"; mv "$prio.tmp" "$prio.new" ;;
+    first) out=$(sort -k1,1n -k2,2n "$prio.new" | awk -v me="$$" -v l1="$2" '{q=($4==""?25:$4)} q+0>l1+0{print ($3==me)?"ok":"no"; exit}') ;;
   esac
   mv "$prio.new" "$prio"; exec {fd}>&-
   [ "$1" != first ] || [ "$out" = ok ]
@@ -67,10 +70,10 @@ admit() {
     read -r l1 _ < "$file"
     slots=$(slot_count "$l1")
     busy=0
-    for i in $(seq 1 "$wide"); do  # slots beyond the current count stay held by running jobs
+    for i in $(seq 1 "$widest"); do  # slots beyond the current count stay held by running jobs
       exec {slot_fd}>"$slot_dir/slot.$i"
       if flock -n "$slot_fd"; then
-        if [ "$busy" -lt "$slots" ] && above "$start1" "$l1" && { [ "${LG_NO_WAIT:-}" = 1 ] || prio_edit first; } && settled "$l1"; then [ "${LG_NO_WAIT:-}" = 1 ] || prio_edit del; trap - EXIT; log "admit slot $i (1m $l1, slots $slots) tier $tier"; return 0; fi
+        if [ "$busy" -lt "$slots" ] && above "$start1" "$l1" && { [ "${LG_NO_WAIT:-}" = 1 ] || prio_edit first "$l1"; } && settled "$l1"; then [ "${LG_NO_WAIT:-}" = 1 ] || prio_edit del; trap - EXIT; log "admit slot $i (1m $l1, slots $slots) tier $tier"; return 0; fi
         flock -u "$slot_fd"
       else
         busy=$((busy + 1))
