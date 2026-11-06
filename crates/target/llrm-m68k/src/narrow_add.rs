@@ -15,9 +15,10 @@
 //! needs no reader of the codes after it ([`flags_read_after`], inside the
 //! block, as `narrow.rs` asks).
 //!
-//! DEVIATE: the pin keeps the 32-bit add; gcc narrows it. Reason: best of gcc
-//! and clang is the goal. [`sites`] lists the candidates; [`narrow_adds`]
-//! rewrites the sound ones.
+//! DEVIATE 1 (owner m68k, PR exit 2026-11-20): the pin has no analogue and
+//! keeps the 32-bit add; gcc narrows it (`addi.b`, `addq`). Reason: best of
+//! gcc and clang is the goal. [`sites`] lists the candidates;
+//! [`narrow_adds`] rewrites the sound ones.
 
 use std::collections::HashMap;
 
