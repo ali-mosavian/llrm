@@ -1629,7 +1629,7 @@ fn combine_sub(
         .or_else(|| lea_adds.then(|| combine_masked_xor_difference(dag, node)).flatten())
 }
 
-/// DEVIATE SD448 (owner x86-m32; recheck 2026-11-20 and at every pin bump,
+/// DEVIATE SD448 (owner x87; recheck 2026-11-20 and at every pin bump,
 /// dropped where the pin has the fold): `sub C, (xor X, M)` is `add X, C - M`
 /// when `M` is a low-bit mask and `X` has no bits above it, so the `xor` is
 /// `M - X`. `__floatsisf`'s shift amount `26 - (n ^ 31)` is `n - 5`: one
