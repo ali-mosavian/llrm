@@ -2850,11 +2850,13 @@ impl ModuleAnalyses {
         counted(kind.name, false);
         let fresh = (kind.run)(module, self);
         if check_modules() {
-            assert!(
-                self.agrees_afresh(kind, module, &*fresh),
-                "{}: brought up to date, it is not what working it out afresh gives",
-                kind.name
-            );
+            if let Err(detail) = self.agrees_afresh(kind, module, &*fresh) {
+                panic!(
+                    "{}: brought up to date, it is not what working it out afresh gives (running @{}){detail}",
+                    kind.name,
+                    running_function()
+                );
+            }
         }
         if why() {
             let class = match self.dropped.get(&kind.id) {
@@ -2876,17 +2878,25 @@ impl ModuleAnalyses {
         result
     }
 
-    /// Whether `result` is what `kind` gives worked out afresh.
+    /// Whether `result` is what `kind` gives worked out afresh; else what differs, where the analysis can say.
     fn agrees_afresh(
         &mut self,
         kind: Kind,
         module: &Module,
         result: &dyn Any,
-    ) -> bool {
+    ) -> Result<(), String> {
         self.scratch = true;
         let again = (kind.run)(module, self);
         self.scratch = false;
-        (kind.agree)(result, &*again)
+        if (kind.agree)(result, &*again) {
+            return Ok(());
+        }
+        let (Some(kept), Some(afresh)) = (result.downcast_ref::<Vec<GlobalValue>>(), again.downcast_ref::<Vec<GlobalValue>>()) else {
+            return Err(String::new());
+        };
+        let Some(at) = kept.iter().zip(afresh).position(|(a, b)| a != b) else { return Err(String::new()) };
+        let name = module.global(GlobalId(at as u32)).name.as_deref().unwrap_or("?");
+        Err(format!("; @{name} (id {at}) kept {:.300?} afresh {:.300?}", kept[at], afresh[at]))
     }
 
     /// `agrees_afresh` for a test: `M` run twice as `LLRM_CHECK_MODULES` runs it.
@@ -2897,7 +2907,7 @@ impl ModuleAnalyses {
     ) -> bool {
         let kind = Kind::of::<M>();
         let first = (kind.run)(module, self);
-        self.agrees_afresh(kind, module, &*first)
+        self.agrees_afresh(kind, module, &*first).is_ok()
     }
 
     /// Drops what `preserved` does not keep.
