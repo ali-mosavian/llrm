@@ -50,7 +50,11 @@ slot_count() {  # slot_count L1: prints the count
 
 # ---- order: one line "tier start pid start_line" per waiter in $prio, edited under the same lock discipline ----
 prio_edit() {  # prio_edit add|del|first: first prints ok when no live waiter precedes this one
-  local fd out=""; exec {fd}>"$slot_dir/prio.lock"; flock "$fd"
+  # A TERM that lands inside this function runs the EXIT trap (prio_edit del) in the same shell: a second flock on a new descriptor
+  # waits for the lock this shell already holds. The wait is bounded (LG_LOCK_WAIT, 2 s); a waiter's line that was not removed is
+  # pruned by the next editor, which drops pids that are gone.
+  local fd out=""; exec {fd}>"$slot_dir/prio.lock"
+  flock -w "${LG_LOCK_WAIT:-2}" "$fd" || { exec {fd}>&-; return 1; }
   touch "$prio"
   # drop waiters whose process is gone
   while read -r t st pid q; do kill -0 "$pid" 2>/dev/null && echo "$t $st $pid $q"; done < "$prio" > "$prio.new"
