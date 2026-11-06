@@ -20,5 +20,5 @@ map=()
 [ -z "${LLRM_6502_MAP:-}" ] || map=(-m "$LLRM_6502_MAP")
 # llrm-cc hands over the ca65 text as the "objects"
 objs=("$work/start.s"); n=0
-for text in "$@"; do n=$((n + 1)); cp "$text" "$work/p$n.s"; objs+=("$work/p$n.s"); done
+for text in "$@"; do n=$((n + 1)); { echo ".autoimport +"; cat "$text"; } > "$work/p$n.s"; objs+=("$work/p$n.s"); done
 cl65 -t sim6502 "${map[@]}" -o "$out" "${objs[@]}" "$lib"
