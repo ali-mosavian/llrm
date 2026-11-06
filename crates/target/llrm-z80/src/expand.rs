@@ -1996,6 +1996,14 @@ pub fn price(lines: &[Line]) -> (u32, u32) {
     (bytes, clocks)
 }
 
+/// The trips of a loop the lines do not count: the pin's loop branch heuristic
+/// takes the back edge with probability 124/128 (`LBH_TAKEN_WEIGHT` and
+/// `LBH_NONTAKEN_WEIGHT` in `BranchProbabilityInfo.cpp`), 32 trips. It was 8
+/// here, a number of this port's own: a variant saving 4 T in a loop of 32
+/// trips against one costing 3 T in a loop of 10 was ranked by loops of 8
+/// alike (split_loops -O1 +870 T).
+const UNCOUNTED_TRIPS: u64 = 32;
+
 /// The trips of the loop between `head` and its jump back at `end` when the
 /// lines count it: `djnz` or `dec r; jr nz` closing it, and `ld r, #n` for that
 /// register ahead of the head with nothing between that writes it or starts a
@@ -2105,7 +2113,7 @@ pub fn price_relaxed(
 }
 
 /// [`price`] with the clocks of an instruction counted once for each trip of
-/// each loop it is in (eight where the lines do not count them), a loop being
+/// each loop it is in ([`UNCOUNTED_TRIPS`] where the lines do not count them), a loop being
 /// the lines from a label to a jump back to it: what two allocations of a loop
 /// are compared by.
 pub fn price_in_loops(lines: &[Line]) -> (u32, u64) {
@@ -2149,7 +2157,7 @@ fn price_loops(
             *end = (*end).max(at);
         }
     }
-    // a loop runs its counted trips where the lines show them, else eight; the
+    // a loop runs its counted trips where the lines show them, else the pin's 32; the
     // weights of up to three enclosing loops multiply
     let mut weight = vec![1u64; lines.len()];
     let mut levels = vec![0u32; lines.len()];
@@ -2167,7 +2175,7 @@ fn price_loops(
             }),
             _ => counted,
         }
-        .unwrap_or(8);
+        .unwrap_or(UNCOUNTED_TRIPS);
         for at in head..=end {
             if levels[at] < 3 {
                 weight[at] *= trips;

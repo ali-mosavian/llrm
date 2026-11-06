@@ -86,16 +86,16 @@ fn a_counted_loop_is_priced_by_its_trips() {
 /// uncounted, eight trips, and priced 2x to 25x too low.
 #[test]
 fn a_counted_loop_weighs_the_same_in_any_shape() {
-    let plain = price_in_loops(&lines_of(&["ld a, #20", "L0_1:", "inc hl", "dec a", "jr nz, L0_1"]));
+    let plain = price_in_loops(&lines_of(&["ld a, #200", "L0_1:", "inc hl", "dec a", "jr nz, L0_1"]));
     let loads_between =
-        price_in_loops(&lines_of(&["ld a, #20", "L0_1:", "inc hl", "dec a", "ld c, l", "ld b, h", "jr nz, L0_1"]));
+        price_in_loops(&lines_of(&["ld a, #200", "L0_1:", "inc hl", "dec a", "ld c, l", "ld b, h", "jr nz, L0_1"]));
     let entered_at_the_test = price_in_loops(&lines_of(&[
-        "ld a, #20", "ld -1(ix), a", "jr L0_2", "L0_1:", "inc hl", "L0_2:", "dec a", "jr nz, L0_1",
+        "ld a, #200", "ld -1(ix), a", "jr L0_2", "L0_1:", "inc hl", "L0_2:", "dec a", "jr nz, L0_1",
     ]));
-    // counted: 22 or 30 T a trip for 20 trips; read as uncounted, 8 trips, they stay under 270
-    assert!(plain.1 > 400, "plain {plain:?}");
-    assert!(loads_between.1 > 400, "loads {loads_between:?}");
-    assert!(entered_at_the_test.1 > 400, "entered {entered_at_the_test:?}");
+    // counted: 22 or 30 T a trip for 200 trips; read as uncounted, 32 trips, they stay under 1000
+    assert!(plain.1 > 2000, "plain {plain:?}");
+    assert!(loads_between.1 > 2000, "loads {loads_between:?}");
+    assert!(entered_at_the_test.1 > 2000, "entered {entered_at_the_test:?}");
 }
 
 /// A loop one variant counts weighs the same in the variant that closes it
@@ -105,11 +105,20 @@ fn a_counted_loop_weighs_the_same_in_any_shape() {
 #[test]
 fn a_loop_counted_in_one_variant_weighs_the_same_in_another() {
     forget_trips();
-    let counted = lines_of(&["ld a, #20", "L0_1:", "inc hl", "dec a", "jr nz, L0_1"]);
-    let tested_at_the_top = lines_of(&["ld a, #20", "L0_1:", "inc hl", "dec a", "jr z, L0_9", "jp L0_1", "L0_9:"]);
+    let counted = lines_of(&["ld a, #100", "L0_1:", "inc hl", "dec a", "jr nz, L0_1"]);
+    let tested_at_the_top = lines_of(&["ld a, #100", "L0_1:", "inc hl", "dec a", "jr z, L0_9", "jp L0_1", "L0_9:"]);
     let before = price_emitted(&tested_at_the_top, true);
     price_emitted(&counted, true);
     let after = price_emitted(&tested_at_the_top, true);
     forget_trips();
     assert!(after.1 > 2 * before.1, "before {before:?}, after {after:?}");
+}
+
+/// A loop nothing counts runs the pin's 32 trips (its back edge is taken 124 in
+/// 128), not the 8 this port had: split_loops -O1 ranked a variant saving 4 T
+/// in a loop of 32 below one costing 3 T in a loop of 10, +870 T.
+#[test]
+fn a_loop_nothing_counts_runs_thirty_two_trips() {
+    let uncounted = price_in_loops(&lines_of(&["L0_1:", "inc hl", "jp L0_1"]));
+    assert_eq!(uncounted.1, 32 * (6 + 10), "{uncounted:?}");
 }
