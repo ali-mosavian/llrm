@@ -170,6 +170,12 @@ impl Tti for Wasm {
         None
     }
 
+    /// Virtual registers: nothing spills, so LSR rates registers as the pin
+    /// does, against `getNumberOfRegisters() - 1` alone.
+    fn lsr_counts_live_registers(&self) -> bool {
+        false
+    }
+
     /// `WebAssemblyTargetLowering::isLegalAddressingMode`: offsets add as
     /// unsigned without wrapping, so a negative one is refused; no register is
     /// scaled; every other form is legal.

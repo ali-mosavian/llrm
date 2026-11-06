@@ -1263,6 +1263,14 @@ pub trait Tti {
         &[]
     }
 
+    /// Whether LSR counts the values a loop keeps live against the register
+    /// limit (DEVIATE LU7, which the pin does not have). A target with virtual
+    /// registers and no spills (wasm) says no, and its limit is the pin's:
+    /// `number_of_gpr_registers() - 1`.
+    fn lsr_counts_live_registers(&self) -> bool {
+        true
+    }
+
     /// The registers LSR keeps back from `number_of_gpr_registers` when it
     /// also counts what the loop keeps live (DEVIATE LU3c); the pin's one.
     fn lsr_reserved_registers(&self) -> u32 {

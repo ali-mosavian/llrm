@@ -1086,6 +1086,9 @@ pub fn loop_register_units(
     l: BlockId,
 ) -> u32 {
     UNITS_COMPUTED.with(|n| n.set(n.get() + 1));
+    if !tti.lsr_counts_live_registers() {
+        return 0;
+    }
     let Some(lp) = cx.loops.get_loop_for(l) else { return 0 };
     let word = tti.gpr_bits();
     let mut weights: llrm_mir::dense::IdMap<llrm_mir::module::ValueId, usize> = llrm_mir::dense::IdMap::new();

@@ -366,6 +366,22 @@ fn loop_carried_values_that_are_not_recurrences_take_registers() {
     assert_eq!(units, [2, 4]);
 }
 
+/// huffman_decode wasm: the live-value count (LU7) cut the register limit to 2
+/// in a loop of 5 values, so 5 registers added 3 instructions to the cost the
+/// pin never adds (wasm has virtual registers): +9 B at four levels. A target
+/// with no spills counts none.
+#[test]
+fn a_target_without_spills_counts_no_live_values_against_the_register_limit() {
+    let text = "define i32 @f(ptr %p, i32 %n) {\nentry:\n  br label %loop\nloop:\n  %i = phi i32 [ 0, %entry ], [ %next, %loop ]\n  %s = phi i32 [ 0, %entry ], [ %s2, %loop ]\n  %a = getelementptr i32, ptr %p, i32 %i\n  %v = load i32, ptr %a\n  %s2 = add i32 %s, %v\n  %next = add nuw i32 %i, 1\n  %c = icmp eq i32 %next, %n\n  br i1 %c, label %exit, label %loop\nexit:\n  ret i32 %s2\n}\n";
+    let mut units = Vec::new();
+    generated(text, |cx, se, _, header| {
+        units.push(crate::lsr_collect::loop_register_units(se, cx, &X86::of_cpu("i486").unwrap(), header));
+        units.push(crate::lsr_collect::loop_register_units(se, cx, &llrm_wasm::machine::Wasm, header));
+    });
+    assert!(units[0] >= 1, "premise: the loop keeps a value live ({units:?})");
+    assert_eq!(units[1], 0, "{units:?}");
+}
+
 /// nibbles -Os (+3 B): the outer loop's counter lives across the inner loop
 /// and holds a register there, but only the inner loop's own values were
 /// counted, so LSR spent a register the outer counter then spilled for.
