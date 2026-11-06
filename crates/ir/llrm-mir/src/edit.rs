@@ -39,12 +39,32 @@ impl Function {
                 self.parent[inst.0 as usize] = Some(block);
             }
         }
+        // The reader's order. A use of a value the text defines later is a use
+        // of a placeholder, which hands its uses over when the definition is
+        // read (`replaceAllUsesWith` moves them head first): they enter the
+        // value's list after the definition, the earliest ending first.
+        let mut forward: Vec<Vec<(Use, bool)>> = vec![Vec::new(); self.values.len()];
         for inst in 0..self.instructions.len() {
             let operands = self.instructions[inst].operands.clone();
             let phi = self.instructions[inst].opcode == Opcode::Phi;
             self.uses.slots(inst as u32, operands.len());
             for (index, operand) in operands.into_iter().enumerate() {
-                self.add_use(operand, Use { user: InstId(inst as u32), index: index as u32 }, phi);
+                let at = Use { user: InstId(inst as u32), index: index as u32 };
+                match operand {
+                    Operand::Value(value)
+                        if matches!(self.values[value.0 as usize].def, ValueDef::Instruction(def) if def.0 as usize >= inst) =>
+                    {
+                        forward[value.0 as usize].push((at, phi));
+                    }
+                    _ => self.add_use(operand, at, phi),
+                }
+            }
+            if let Some(result) = self.instructions[inst].result
+                && !forward[result.0 as usize].is_empty()
+            {
+                for (at, phi) in std::mem::take(&mut forward[result.0 as usize]).into_iter().rev() {
+                    self.add_use(Operand::Value(result), at, phi);
+                }
             }
         }
     }
