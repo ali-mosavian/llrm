@@ -88,6 +88,7 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         imul_at_size: true,
         x87_stack_slots: Some(8),
         x87_share_negated_products: true,
+        unroll_promotion_fits_x87_stack: true,
         speed_milliclocks_per_byte: per_byte,
         // DEVIATE SZ1 (owner x86-m32, exit 2026-11-20): D11 holds at -Os, so a
         // callee whose copies grow the code stays a call (called_once_os:

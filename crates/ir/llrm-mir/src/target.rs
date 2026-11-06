@@ -106,6 +106,11 @@ pub struct Tuning {
     /// (promoted to registers) holds only while the promoted elements fit the
     /// register file (UP1). false: every such access is free.
     pub unroll_promotion_fits_registers: bool,
+    /// UP1 for the floats of an x87 target: the register file a promoted
+    /// float array's elements must fit is the x87 stack (`x87_stack_slots`,
+    /// 8), which holds nothing across the nest's inner loops. Ints keep the
+    /// rule above. false: floats are free (DEVIATE UP1-X87, owner x87).
+    pub unroll_promotion_fits_x87_stack: bool,
     /// A size build rotates a loop only when the header's exit test folds in
     /// the preheader (RS1): an unfolded copy is a compare and a branch, more
     /// than the loop-closing jump it removes. false: the pass's header limit
@@ -198,6 +203,7 @@ impl Tuning {
         inline_size_guard_at_size: false,
         inline_size_guard_single_site: false,
         unroll_promotion_fits_registers: false,
+        unroll_promotion_fits_x87_stack: false,
         rotation_guard_must_fold_at_size: false,
         rotation_header_priced_at_size: false,
         keep_constant_displacements: false,
@@ -1012,6 +1018,7 @@ mod tests {
         );
         assert_eq!(pin.x87_stack_slots, None);
         assert!(!pin.x87_share_negated_products);
+        assert!(!pin.unroll_promotion_fits_x87_stack);
         assert!(!pin.slots_loop_width_rule);
         assert_eq!(pin.inline_threshold, None);
     }
