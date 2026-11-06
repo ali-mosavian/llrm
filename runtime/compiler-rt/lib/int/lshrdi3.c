@@ -3,10 +3,9 @@
 
 u64 SFB_NAME(lshrdi3)(u64 x, int n)
 {
-    pair a = split(x), r;
-    int bm = 32 - n;
-    if (!n) return x;
-    if (bm <= 0) { r.hi = 0; r.lo = a.hi >> -bm; }
-    else { r.hi = a.hi >> n; r.lo = (a.lo >> n) | (a.hi << bm); }
+    pair a = split(x), r = { 0, 0 };
+    if (n >= 32) r.lo = a.hi >> (n - 32);
+    else if (n) { r.hi = a.hi >> n; r.lo = (a.lo >> n) | (a.hi << (32 - n)); }
+    else r = a;
     return join(r);
 }
