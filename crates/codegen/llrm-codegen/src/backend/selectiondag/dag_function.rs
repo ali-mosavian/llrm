@@ -1170,7 +1170,10 @@ fn selected_in(
     // before selection).
     let mul_rate = if cpu.size || cpu.min_size || bytes_beat_clocks { 0 } else { cpu.speed_milliclocks_per_byte() };
     let speed_goal = !(cpu.size || cpu.min_size || bytes_beat_clocks);
-    let mul_by_clocks = speed_goal && cpu.target().tti().is_some_and(|tti| tti.multiply_by_clocks());
+    // -O1 prices no byte (`speed_rate` is off there) and is strict: SD446 takes a
+    // chain only where it costs no more bytes than the `imul` (rate: `BYTES_STRICT`).
+    let mul_by_clocks = speed_goal && cpu.speed_rate && cpu.target().tti().is_some_and(|tti| tti.multiply_by_clocks());
+    let mul_bytes_strict = speed_goal && !cpu.speed_rate && cpu.target().tti().is_some_and(|tti| tti.multiply_by_clocks());
     let price_pin = speed_goal && cpu.target().tti().is_some_and(|tti| tti.price_pin_multiplies());
     // The function's one `BranchProbabilityInfo`: the builder's edge
     // probabilities read the same one (the pin has it as an analysis).
@@ -1224,6 +1227,15 @@ fn selected_in(
                         freq: 1.0,
                         milliclocks_per_byte: mul_rate,
                         by_clocks: true,
+                        price_pin: false,
+                    })
+                } else if mul_bytes_strict {
+                    Some(super::x86_lowering::MulPricing {
+                        cpu,
+                        arch,
+                        freq: 1.0,
+                        milliclocks_per_byte: super::x86_lowering::BYTES_STRICT,
+                        by_clocks: false,
                         price_pin: false,
                     })
                 } else {

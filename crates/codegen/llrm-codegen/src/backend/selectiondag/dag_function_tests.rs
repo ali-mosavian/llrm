@@ -811,6 +811,32 @@ define i32 @f(i32 %a) {
     assert_eq!(names.iter().filter(|n| *n == "imul").count(), 0, "{names:?}");
 }
 
+/// m32 -O1 turned every constant multiply into a `lea`/`shl` chain (SD446 with
+/// no byte term): tests/run/c/mul_constants was 2684 B against the pin's 2131 B
+/// with 0 `imul` to its 35. -O1 is strict: `x * 1664525` (a chain costs more
+/// bytes than the 6-byte `imul`) stays an `imul`.
+#[test]
+fn at_m32_o1_a_multiply_by_a_wide_constant_stays_an_imul() {
+    let module = crate::testing::module(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a) {
+  %r = mul i32 %a, 1664525
+  ret i32 %r
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::tuned_optimizing(
+        &llrm_x86_m32::M32, "486", false, true, false, true, false, false, false, false, true, false, false,
+    )
+    .expect("a 486")
+    .clone();
+    let done = selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    assert_eq!(names.iter().filter(|n| *n == "imul").count(), 1, "{names:?}");
+}
+
 /// `u8 % 6` at `-Os` with the divide kept was `CannotSelect("UDivRem")` (SD302:
 /// no byte divide): examples/dice.nib and easing.nib stopped compiling.
 #[test]

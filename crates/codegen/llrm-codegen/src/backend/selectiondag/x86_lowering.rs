@@ -166,6 +166,10 @@ pub struct X86Lowering<'a> {
     pub profile: Option<MulPricing<'a>>,
 }
 
+/// A byte costs more than any clocks saved: a chain is taken only where it is
+/// no larger than the `imul` (-O1).
+pub const BYTES_STRICT: i64 = 1_000_000;
+
 /// The sheet, the target and the block a constant multiply is priced against.
 #[derive(Clone, Copy)]
 pub struct MulPricing<'a> {
