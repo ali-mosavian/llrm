@@ -2757,8 +2757,12 @@ impl ModuleAnalyses {
 
     /// The result of `M` a pass dropped, handed over to the run that brings it
     /// up to date: not kept, so that it is the only holder where nothing else
-    /// holds it. A run that does not take it leaves it to be compared.
+    /// holds it. A run that does not take it leaves it to be compared. None
+    /// for a run afresh (`LLRM_CHECK_MODULES`), which keeps nothing of the last.
     pub fn take_dropped<M: ModuleAnalysis>(&mut self) -> Option<Rc<M::Result>> {
+        if self.scratch {
+            return None;
+        }
         let one = self.dropped.remove(&TypeId::of::<M>())?;
         self.taken.insert(TypeId::of::<M>());
         Some(one.downcast::<M::Result>().expect("keyed by its type"))
@@ -2846,11 +2850,8 @@ impl ModuleAnalyses {
         counted(kind.name, false);
         let fresh = (kind.run)(module, self);
         if check_modules() {
-            self.scratch = true;
-            let again = (kind.run)(module, self);
-            self.scratch = false;
             assert!(
-                (kind.agree)(&*fresh, &*again),
+                self.agrees_afresh(kind, module, &*fresh),
                 "{}: brought up to date, it is not what working it out afresh gives",
                 kind.name
             );
@@ -2873,6 +2874,30 @@ impl ModuleAnalyses {
         let result = self.dropped.remove(&kind.id).filter(|old| (kind.agree)(&**old, &*fresh)).unwrap_or(fresh);
         self.results.insert(kind.id, (kind, Rc::clone(&result)));
         result
+    }
+
+    /// Whether `result` is what `kind` gives worked out afresh.
+    fn agrees_afresh(
+        &mut self,
+        kind: Kind,
+        module: &Module,
+        result: &dyn Any,
+    ) -> bool {
+        self.scratch = true;
+        let again = (kind.run)(module, self);
+        self.scratch = false;
+        (kind.agree)(result, &*again)
+    }
+
+    /// `agrees_afresh` for a test: `M` run twice as `LLRM_CHECK_MODULES` runs it.
+    #[cfg(test)]
+    pub(crate) fn run_agrees_afresh<M: ModuleAnalysis>(
+        &mut self,
+        module: &Module,
+    ) -> bool {
+        let kind = Kind::of::<M>();
+        let first = (kind.run)(module, self);
+        self.agrees_afresh(kind, module, &*first)
     }
 
     /// Drops what `preserved` does not keep.

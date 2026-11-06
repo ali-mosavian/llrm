@@ -495,6 +495,27 @@ mod tests {
 
     use super::Dos;
 
+    /// The x87 byte rows were a flat 6: a register `faddp` (2 B encoded) priced at 3x,
+    /// and the memory operand of `fadd m` at 0 (`x87_add_m` = `x87_add`), so folding
+    /// a load looked free at -Os. A register form is the integer register row.
+    #[test]
+    fn m16_x87_byte_rows_split_register_and_memory_forms() {
+        let sizes = super::DESCRIPTION.size_costs();
+        // Mean encoded bytes of the 16 float bench programs at -Os, per form.
+        for (form, estimate, measured) in [
+            ("register add", sizes.float_add, 2.00),
+            ("fld m", sizes.float_load, 3.28),
+            ("fstp m", sizes.float_store, 2.92),
+            ("add m", sizes.float_add + sizes.float_load_folded, 3.69),
+            ("fstp st", sizes.float_release, 2.00),
+        ] {
+            let ratio = estimate as f64 / measured;
+            assert!((0.85..=2.15).contains(&ratio), "{form}: {estimate} B estimated, {measured} B encoded");
+        }
+        assert_eq!(sizes.float_add, sizes.add, "a register x87 add is the integer register row");
+        assert!(sizes.float_load_folded > 0, "a memory operand costs bytes over the register form");
+    }
+
     /// BASIC's convention (MIR's cc 1000, `pascal far`) had no row in
     /// calling.toml, so the DAG path took a call of it to destroy every
     /// register, SI and DI too, and spilled the pointer it kept in SI (the
