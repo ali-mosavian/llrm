@@ -2,7 +2,7 @@
 
 use llrm_z80::compile::text;
 use llrm_z80::driver::{Level, Request};
-use llrm_z80::expand::{Line, price_emitted, price_in_loops};
+use llrm_z80::expand::{Line, forget_trips, price_emitted, price_in_loops};
 
 fn price(text: &str) -> (u32, u64) {
     price_in_loops(&[Line::Inst(text.to_owned())])
@@ -44,6 +44,7 @@ fn counted_loop(counter: &str) -> Vec<Line> {
 /// (3 B, 16 T): the two were priced alike, before the jumps are relaxed.
 #[test]
 fn a_counter_in_b_prices_below_one_in_c() {
+    forget_trips();
     let (b, c) = (price_emitted(&counted_loop("b"), true), price_emitted(&counted_loop("c"), true));
     assert!(b.0 < c.0 && b.1 < c.1, "b {b:?} c {c:?}");
 }
@@ -95,4 +96,20 @@ fn a_counted_loop_weighs_the_same_in_any_shape() {
     assert!(plain.1 > 400, "plain {plain:?}");
     assert!(loads_between.1 > 400, "loads {loads_between:?}");
     assert!(entered_at_the_test.1 > 400, "entered {entered_at_the_test:?}");
+}
+
+/// A loop one variant counts weighs the same in the variant that closes it
+/// another way: loop_interchange -O1 closed its loop by `jp` after a test at
+/// its top, was priced at 8 trips against 20, and came out 32 B and 78416 T
+/// worse than the variant it replaced.
+#[test]
+fn a_loop_counted_in_one_variant_weighs_the_same_in_another() {
+    forget_trips();
+    let counted = lines_of(&["ld a, #20", "L0_1:", "inc hl", "dec a", "jr nz, L0_1"]);
+    let tested_at_the_top = lines_of(&["ld a, #20", "L0_1:", "inc hl", "dec a", "jr z, L0_9", "jp L0_1", "L0_9:"]);
+    let before = price_emitted(&tested_at_the_top, true);
+    price_emitted(&counted, true);
+    let after = price_emitted(&tested_at_the_top, true);
+    forget_trips();
+    assert!(after.1 > 2 * before.1, "before {before:?}, after {after:?}");
 }

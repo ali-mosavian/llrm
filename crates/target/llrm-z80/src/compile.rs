@@ -209,6 +209,7 @@ fn allocated_with(
     duplicate: bool,
 ) -> Result<Allocated, String> {
     SLOT_BY_CONFLICTS.with(|one| one.set(request.slot_by_conflicts));
+    expand::forget_trips();
     let mut function = machine_function_with(selected, name, duplicate)?;
     eliminate_phis_with(&mut function, false);
     let mut hoisted = function.clone();
@@ -526,6 +527,8 @@ fn allocate_once(
                 "stack-price {name} {level:?} peek {peek} conflicts {by_conflicts} best {best_price:?} stacked {now:?}"
             );
         }
+        // the best is priced again: this candidate may have shown trips it hid
+        best_price = priced_in_loops(&best, level);
         if keeps_stacked(level, best_price, now) {
             best = stacked;
             best_price = now;
@@ -1896,7 +1899,7 @@ fn lines_in(
     crate::dagisel::pipeline::ILP.with(|one| one.set(false));
     match (source, ilp) {
         (Ok(source), Ok(ilp)) => {
-            let price = |lines: &[Line]| expand::price_emitted(lines, !matches!(request.level, Level::Os | Level::Oz));
+            let price = |lines: &[Line]| expand::price_relaxed(lines, !matches!(request.level, Level::Os | Level::Oz));
             Ok(if cheaper(request.level, price(&ilp), price(&source)) { ilp } else { source })
         }
         (Ok(one), Err(_)) | (Err(_), Ok(one)) => Ok(one),

@@ -2084,7 +2084,20 @@ fn leaves_flags(text: &str) -> bool {
 /// counter in `b`. Priced before it, a counter in `c` cost the same as one in
 /// `b`, and the pick took the allocation 3 T a trip slower (byval_struct -O1:
 /// +83 T for -1 B).
+///
+/// The loops' trips are shared between the variants of a function
+/// ([`forget_trips`] at its start): a loop one variant counts weighs the same
+/// in the variant whose shape hides the count (loop_interchange -O1: the loop
+/// closed by `jp` after a test at its top, priced at 8 trips against 20).
 pub fn price_emitted(
+    lines: &[Line],
+    speed: bool,
+) -> (u32, u64) {
+    price_loops(&relax(lines.to_vec(), speed), true)
+}
+
+/// [`price_emitted`] without the trips the function's other variants showed.
+pub fn price_relaxed(
     lines: &[Line],
     speed: bool,
 ) -> (u32, u64) {
@@ -2096,6 +2109,24 @@ pub fn price_emitted(
 /// the lines from a label to a jump back to it: what two allocations of a loop
 /// are compared by.
 pub fn price_in_loops(lines: &[Line]) -> (u32, u64) {
+    price_loops(lines, false)
+}
+
+thread_local! {
+    /// The trips of the loops the lines of this function have shown, by the
+    /// label of the loop's head (a block's label: the same in every variant).
+    static TRIPS: std::cell::RefCell<std::collections::BTreeMap<String, u64>> = const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+}
+
+/// Forget the trips the previous function showed.
+pub fn forget_trips() {
+    TRIPS.with(|trips| trips.borrow_mut().clear());
+}
+
+fn price_loops(
+    lines: &[Line],
+    shared: bool,
+) -> (u32, u64) {
     let labels: llrm_support::hash::HashMap<&str, usize> = lines
         .iter()
         .enumerate()
@@ -2123,7 +2154,20 @@ pub fn price_in_loops(lines: &[Line]) -> (u32, u64) {
     let mut weight = vec![1u64; lines.len()];
     let mut levels = vec![0u32; lines.len()];
     for (head, end) in reach {
-        let trips = counted_trips(lines, head, end).unwrap_or(8);
+        let counted = counted_trips(lines, head, end);
+        let trips = match (&lines[head], shared) {
+            // a variant that hides the count behind its shape takes the one another showed
+            (Line::Label(name), true) => TRIPS.with(|known| {
+                let mut known = known.borrow_mut();
+                if let Some(count) = counted {
+                    let entry = known.entry(name.clone()).or_insert(0);
+                    *entry = (*entry).max(count);
+                }
+                known.get(name).copied()
+            }),
+            _ => counted,
+        }
+        .unwrap_or(8);
         for at in head..=end {
             if levels[at] < 3 {
                 weight[at] *= trips;
