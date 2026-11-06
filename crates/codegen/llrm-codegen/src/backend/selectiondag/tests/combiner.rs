@@ -159,7 +159,7 @@ fn an_i16_multiply_is_a_chain_where_the_target_asks_and_an_imul_otherwise() {
         let product = dag.get_node(ISD::Mul, EVT::I16, &[x, k]);
         dag.set_root(product);
         let mut lowering =
-            X86Lowering { cmov: false, sse2: false, min_size, three_address_adds: false, i16_mul_chains: chains, sext_load: false, zext_free: false, profile: None };
+            X86Lowering { imul_if_smaller: false, cmov: false, sse2: false, min_size, three_address_adds: false, i16_mul_chains: chains, sext_load: false, zext_free: false, profile: None };
         DagCombiner::new(&mut dag, &mut lowering, CombineLevel::AfterLegalizeTypes).run();
         dag.opcode(dag.get_root())
     };
