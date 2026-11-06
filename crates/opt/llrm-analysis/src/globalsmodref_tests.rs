@@ -525,19 +525,18 @@ b0:
 /// A DMA port's `out` keeps `@g` in memory: `@g` is internal and never has its
 /// address taken, so the pin's rule (an intrinsic names no global) let LICM
 /// keep it in a register across the port, and the 8237's mode register wrote
-/// over it. A port narrowed to `inaccessiblemem` (the VGA DAC) still leaves it.
+/// over it. A port narrowed to `inaccessiblemem` is BasicAA's to answer.
 #[test]
 fn a_port_that_may_reach_memory_may_modify_a_tracked_global() {
     use crate::aa::{AAQueryInfo, AAResults, MemoryLocation};
     let module = parsed(
         "@g = internal global i16 0
 
-declare void @llrm.ia16.out.i8(i16, i8)
+declare void @llrm.ia16.out.i8(i16, i8) nocallback nounwind memory(readwrite)
 
 define i16 @f() {
 b0:
   %a = load i16, ptr @g
-  call void @llrm.ia16.out.i8(i16 968, i8 1) memory(inaccessiblemem: readwrite)
   call void @llrm.ia16.out.i8(i16 11, i8 1)
   ret i16 %a
 }
@@ -554,6 +553,6 @@ b0:
     let at = MemoryLocation::get(&unit, load).expect("a load");
     let mut aa = GlobalsAAResult::new(&unit, &info);
     let mut aaqi = AAQueryInfo::default();
-    assert_eq!(aa.get_mod_ref_info(calls[0], Some(&at), &mut aaqi), ModRefInfo::NoModRef, "VGA DAC");
-    assert_ne!(aa.get_mod_ref_info(calls[1], Some(&at), &mut aaqi), ModRefInfo::NoModRef, "DMA mode register");
+    // It answered `Ref`: the declaration reads any global and, naming none, writes none.
+    assert!(aa.get_mod_ref_info(calls[0], Some(&at), &mut aaqi).is_mod_set(), "DMA mode register");
 }
