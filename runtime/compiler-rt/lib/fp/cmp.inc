@@ -20,9 +20,14 @@ static int SF_N(sf_cmp_bits)(SF_T a, SF_T b)
     if (!((a | b) << 1)) return 0;
 #endif
     SF_S x = (SF_S)a, y = (SF_S)b;
+#ifdef SF_CMP_BRANCHY /* compiler-rt's form: same-sign operands compare as they are, else reversed, each side three-way on branches (no swap selects) */
+    if ((x & y) >= 0) return x < y ? -1 : x != y;
+    return x > y ? -1 : x != y;
+#else
     if ((x & y) < 0) { SF_S t = x; x = y; y = t; } /* both negative: reversed order */
     if (x < y) return -1;
     if (x == y) return 0;
     return 1;
+#endif
 }
 #endif
