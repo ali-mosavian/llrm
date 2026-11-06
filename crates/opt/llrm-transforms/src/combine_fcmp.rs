@@ -31,7 +31,7 @@ use llrm_mir::valuetracking::range::{SelectPatternFlavor, match_select_pattern};
 use crate::combine::{Combiner, Visit};
 use crate::combine_shared::{get_complexity, match_symmetric_pair, query, replace_operand};
 use crate::floatfold::float;
-use llrm_mir::knownfpclass::FC_NAN;
+use llrm_mir::fpclass::FC_NAN;
 
 /// `visitFCmpInst`.
 pub fn visit_fcmp(
