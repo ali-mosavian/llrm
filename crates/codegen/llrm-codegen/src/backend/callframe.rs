@@ -425,7 +425,13 @@ impl CallFrameOpt {
         let name = what.name.as_deref().unwrap_or_default();
         // The stores of the frame, and the constant stores written as `and` and
         // `or`.
-        if let [Loc::Mem(_)] = what.dests.as_slice() {
+        if let [Loc::Mem(cell)] = what.dests.as_slice() {
+            // `MOV32mi`/`MOV32mr` (and the 64-bit forms): a store narrower than
+            // the slot is no push (a one-byte struct passed by value stored a
+            // byte register, which `push` cannot take).
+            if i64::from(cell.width) != self.slot {
+                return Class::Exit;
+            }
             match (what.op, name) {
                 (Operation::Binary, "and") => {
                     return if imm_of(one, 1) == Some(0) { Class::Convert } else { Class::Exit };
@@ -783,6 +789,26 @@ mod tests {
 
     fn names(body: &LirBody) -> Vec<String> {
         body.blocks[0].insns.iter().map(|one| name_of(one).unwrap().to_owned()).collect()
+    }
+
+    /// A byte store into the frame (the copy of a one-byte struct passed by
+    /// value) became `push r8`, which does not encode: `struct T { char x; }`
+    /// passed uninitialised failed in the backend at -O1/-O2 (wc_mixed).
+    #[test]
+    fn a_store_narrower_than_a_slot_stays_a_store() {
+        let cell = Mem { through: RegId::SP, offset: 0, ..Mem::new(None, 1) };
+        let byte = insn(
+            1,
+            Operation::Move,
+            "mov",
+            vec![Loc::Mem(cell)],
+            vec![Loc::Held(Held { value: 1, width: 1, offset: 0 })],
+            vec![],
+            vec![1],
+        );
+        let before = body(vec![setup(4), byte, call(), destroy(4)]);
+        let after = pass().run(&before);
+        assert_eq!(names(&after), ["call_frame_setup", "mov", "call", "call_frame_destroy"]);
     }
 
     /// The pinned `llc -run-pass=x86-cf-opt` on a frame of two stores, `mov
