@@ -4138,8 +4138,9 @@ impl Emitter<'_, '_> {
             return Ok(Loc::Imm(Imm { value: sign_extend(bits, w * 8), width: w, address: None }));
         }
         if let Some((mnemonic, cell)) = self.lazy.get(&value).cloned() {
-            // DEVIATE SD234: the pin loads `LD_F1` once for all its readers; a
-            // call or block end is the only place the stack cannot hold it
+            // DEVIATE SD234: the pin loads `LD_F1` and a multi-use pool constant
+            // once for all its readers; a call or block end is the only place
+            // the stack cannot hold it
             let at = (self.stack_breaks, self.blocks.len());
             // A pool constant with one reader is loaded there, for the memory
             // operand it folds into; with several it is one load, as the pin
