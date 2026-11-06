@@ -25,14 +25,14 @@
 //! |---|---|---|
 //! | [`removeUndefIntroducingPredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9230) | `removed` | MIRROR; D1 |
 //!
-//! - D1. A conditional branch keeps no `llvm.assume` of its guarding condition:
-//!   a function pass cannot declare `llvm.assume`, a global of the module.
-//!   Exit: the pass given the module's declarations (issue to file with the
-//!   first user of an intrinsic created by a function pass).
+//! - D1. (retired) the pass is given the module's declarations, so a conditional
+//!   branch keeps the `llvm.assume` of its guarding condition.
 
-use llrm_mir::context::Context;
+use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
-use llrm_mir::opcode::{Flags, Opcode};
+use llrm_mir::opcode::{CallInfo, Flags, Opcode, Tail};
+use llrm_mir::passes::Declared;
+use llrm_mir::types::Type;
 
 use crate::twoentryphi::Speculation;
 
@@ -48,11 +48,50 @@ fn made_unreachable(
     function.insert(end, llrm_mir::edit::Position::End(block)).expect("a placed block");
 }
 
+/// `Builder.CreateAssumption(cond)` before `at`, with `CreateNot` first when `negated`.
+fn assumed(
+    context: &mut Context,
+    declared: &mut Declared,
+    function: &mut Function,
+    at: InstId,
+    condition: Operand,
+    negated: bool,
+) {
+    let before = |function: &mut Function, opcode, ty, operands| {
+        let new = function.create_instruction(opcode, ty, operands, Flags::default(), None);
+        function.insert(new, llrm_mir::edit::Position::Before(at)).expect("a placed instruction");
+        new
+    };
+    let mut condition = condition;
+    if negated {
+        let ty = function.operand_type(context, condition).expect("a value");
+        let ones = Operand::Constant(context.int(ty, -1));
+        let not = before(function, Opcode::Binary(llrm_mir::opcode::BinaryOp::Xor), ty, vec![condition, ones]);
+        condition = Operand::Value(function.instruction(not).result.expect("a value"));
+    }
+    let void = context.types.void();
+    let ty = function.operand_type(context, condition).expect("a value");
+    let function_type = context.types.intern(Type::Function { returns: void, parameters: vec![ty], variadic: false });
+    let callee = declared.declare("llvm.assume", function_type);
+    let pointer = context.types.ptr(0);
+    let callee = Operand::Constant(context.constant(Constant { ty: pointer, kind: ConstantKind::Global(callee) }));
+    let info = CallInfo {
+        function_type,
+        calling_convention: 0,
+        return_attrs: Vec::new(),
+        argument_attrs: vec![Vec::new()],
+        attrs: Vec::new(),
+        tail: Tail::default(),
+    };
+    before(function, Opcode::Call(Box::new(info)), void, vec![condition, callee]);
+}
+
 /// The predecessor of `block` that gives it an input that is undefined
 /// behavior no longer reaches it. Whether one did.
 pub fn removed(
-    context: &Context,
+    context: &mut Context,
     spec: &Speculation,
+    declared: &mut Declared,
     function: &mut Function,
     block: BlockId,
 ) -> bool {
@@ -87,6 +126,8 @@ pub fn removed(
                     } else {
                         let void = function.instruction(last).ty;
                         let to = if *taken == block { *other } else { *taken };
+                        // Preserves the guarding condition, which no dominating condition may give.
+                        assumed(context, declared, function, last, operands[0], *taken == block);
                         function.erase(last).expect("a terminator defines nothing");
                         let jump = function.create_instruction(
                             Opcode::Br,

@@ -736,7 +736,7 @@ impl GlobalsModRef {
         global: GlobalId,
         argument_may_reach: impl FnOnce() -> ModRefInfo,
     ) -> ModRefInfo {
-        let global_value: &GlobalValue = &globals[global.0 as usize];
+        let Some(global_value) = globals.get(global.0 as usize) else { return ModRefInfo::ModRef };
         if !(local(global_value.linkage) || self.unexported.contains(&global))
             || self.unknown_functions_with_local_linkage
         {
@@ -762,6 +762,23 @@ pub struct GlobalsAAResult<'a> {
 }
 
 impl<'a> GlobalsAAResult<'a> {
+    /// Whether `callee` is an I/O port intrinsic.
+    fn is_port(
+        &self,
+        callee: GlobalId,
+    ) -> bool {
+        // A global a pass declared after the Unit was built has no entry here:
+        // not a port.
+        matches!(
+            self.unit
+                .globals
+                .get(callee.0 as usize)
+                .and_then(|global| global.name.as_deref())
+                .and_then(llrm_mir::intrinsics::Intrinsic::named),
+            Some(llrm_mir::intrinsics::Intrinsic::PortIn | llrm_mir::intrinsics::Intrinsic::PortOut)
+        )
+    }
+
     pub fn new(
         unit: &'a crate::memory::Unit<'a>,
         info: &'a GlobalsModRef,
@@ -1014,6 +1031,18 @@ impl crate::aa::AAResults for GlobalsAAResult<'_> {
         let Operand::Constant(id) = object else { return ModRefInfo::ModRef };
         let ConstantKind::Global(global) = self.unit.context.get(id).kind else { return ModRefInfo::ModRef };
         let callee = llrm_mir::memory::callee(self.unit.context, self.unit.function, inst);
+        // DEVIATE QB-PORT-GMR-1: the pin takes a call that names no pointer to
+        // touch only escaped memory, as it takes an intrinsic to touch no
+        // global. A port whose device may reach memory (DMA, or unlisted: the
+        // ports pass leaves `other` on the call, and narrows the rest to
+        // `inaccessiblemem`) writes any memory, a non-escaped global too. The
+        // pin has no such ports. Exit: none, the target's fact.
+        if callee.is_some_and(|one| self.is_port(one)) {
+            let reach = crate::basicaa::call_memory_effects(self.unit, inst).mod_ref(crate::aa::IRMemLocation::Other);
+            if !reach.is_no_mod_ref() {
+                return reach;
+            }
+        }
         self.info.get_mod_ref_info_for_global(self.unit.globals, callee, global, || self.for_argument(inst, global))
     }
 

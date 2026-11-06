@@ -1428,9 +1428,20 @@ fn why(
     reason: &str,
 ) {
     if llrm_support::debug::enabled("unroll") {
-        let name = run.function.block(lp.get_header()).name.clone().unwrap_or_default();
-        eprintln!("unroll: %{name}: {reason}");
+        let owner = run.this.and_then(|id| (*run.globals[id.0 as usize].name).clone()).unwrap_or_default();
+        eprintln!("unroll: {}: {reason}", loop_label(run.function, lp.get_header(), &owner));
     }
+}
+
+/// `@function %label` of a loop's header: the label the IR dumps print, so a
+/// debug line finds its loop there (an unnamed block prints as its slot).
+fn loop_label(
+    function: &Function,
+    header: BlockId,
+    owner: &str,
+) -> String {
+    let labels = llrm_mir::print::block_labels(function);
+    format!("@{owner} %{}", labels[&header])
 }
 
 /// `tryToUnrollLoop`, for the full unroll pass.
@@ -1503,20 +1514,6 @@ fn try_to_unroll_loop(
     if up.threshold == 0 && (!up.partial || up.partial_threshold == 0) && !opt_for_size {
         why(run, lp, "all thresholds are zero");
         return Unrolled::Unmodified;
-    }
-
-    // DEVIATE U3: on a float stack, copies of a body whose floats do not fit
-    // twice are interleaved past the stack and spill. The aggressive bar's
-    // extra growth is where that cost more than the loop (nbody_single and
-    // fpbench -O3: 57 stores and 90 reloads against 30 and 30 rolled), while
-    // within the default bar the unrolled loop won (-O2: nbody_single -2.5%,
-    // fpbench -4.0%), so such a body is held to the default bar. Owner
-    // llrm-target-x86-m32, exit 2026-11-20.
-    if let Some(peak) = float_stack_overflow(run, lp) {
-        if up.threshold > UNROLL_THRESHOLD_DEFAULT {
-            why(run, lp, &format!("{peak} floats live in a body, past half the float stack: the default bar"));
-            up.threshold = UNROLL_THRESHOLD_DEFAULT;
-        }
     }
 
     let eph = ephemeral_values(run, analyzed, lp);
@@ -1602,6 +1599,25 @@ fn try_to_unroll_loop(
     if trip_count == 0 {
         max_trip_count = se.get_small_constant_max_trip_count(&cx, header);
         max_or_zero = se.is_backedge_taken_count_max_or_zero(&cx, header);
+    }
+
+    // DEVIATE U3: on a float stack, copies of a body whose floats do not fit
+    // twice are interleaved past the stack and spill, where the unroll keeps
+    // more floats live across its trips: the elements of an array it both
+    // reads and writes are forwarded from copy to copy, one value each
+    // (nbody_single and fpbench -O3: 57 stores and 90 reloads against 30 and
+    // 30 rolled, -O2 within the default bar the unroll won: -2.5%, -4.0%).
+    // Such a body is held to the default bar only then: independent trips
+    // keep nothing across them (x_jpeg_single -O3: three 8-trip loops of 9
+    // floats, held to 150 and 2.3M clocks slower than the pin's unroll).
+    // Owner llrm-target-x86-m32, exit 2026-11-20.
+    if let Some(peak) = float_stack_overflow(run, lp) {
+        let kept = if trip_count == 0 { usize::MAX } else { price::forwarded_floats(run, analyzed, lp, trip_count) };
+        let depth = run.tti.x87_stack_slots().map_or(0, |slots| slots as usize);
+        if !opt_for_size && up.threshold > UNROLL_THRESHOLD_DEFAULT && peak.saturating_add(kept) > peak.max(depth) {
+            why(run, lp, &format!("{peak} floats live in a body, {kept} kept across its trips: the default bar"));
+            up.threshold = UNROLL_THRESHOLD_DEFAULT;
+        }
     }
 
     let pinfo = UnrollPragmaInfo::of(run, &options);

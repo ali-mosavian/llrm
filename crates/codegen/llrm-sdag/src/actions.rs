@@ -300,6 +300,16 @@ impl TargetLowering {
         vt: EVT,
     ) -> Option<&'static str> {
         let EVT::Simple(vt) = vt else { return None };
+        if vt == MVT::F128 {
+            // `RTLIB::ADD_F128` and the rest: every target calls the compiler-rt routine
+            return match op {
+                ISD::FAdd => libcalls::name(Libcall::Add(vt)),
+                ISD::FSub => libcalls::name(Libcall::Sub(vt)),
+                ISD::FMul => libcalls::name(Libcall::Mul(vt)),
+                ISD::FDiv => libcalls::name(Libcall::Div(vt)),
+                _ => None,
+            };
+        }
         let sized = self.opt_for_size.then(|| self.size_libcall_names.get(&(op, vt)).copied()).flatten();
         sized.or_else(|| self.libcall_names.get(&(op, vt)).copied())
     }
