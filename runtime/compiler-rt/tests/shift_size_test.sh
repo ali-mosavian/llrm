@@ -8,4 +8,7 @@ for c in 68000 68020; do for f in ashldi3 lshrdi3 ashrdi3; do
   n=$(size -A $T/o.o | awk '$1==".text"{print $2}')
   [ "$n" -le 80 ] || { echo "FAIL: m68k-$c $f.c is $n B (bound 80)"; bad=1; }
 done; done
+# x86 m32: the signed-compare form lost the range the shld match needs (52 B, main 50); unsigned 41.
+LLRM_CC_TARGET=x86_32-linux $D/llrm-cc -Os -c -Iinclude -Ilib/int -include config/x86_m32/config.h lib/int/ashldi3.c -o $T/o.o || exit 2
+n=$(size -A $T/o.o | awk '$1==".text"{print $2}'); [ "$n" -le 46 ] || { echo "FAIL: x86_32 ashldi3.c is $n B (bound 46)"; bad=1; }
 [ $bad = 0 ] && echo "shift_size ok"; exit $bad
