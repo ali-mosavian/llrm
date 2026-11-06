@@ -263,8 +263,12 @@ impl ProgramPass for Walk {
             last_call_to_static: self.inline.last,
             ..crate::inlinecost::InlineParams::from_level(if self.inline.limit >= 250 { 3 } else { 2 })
         };
-        // The target's tuning table.
-        if let Some(threshold) = program.target.tti().and_then(|tti| tti.inline_threshold_override()) {
+        // The target's tuning table: its bar is for bytes, which rule at -O1
+        // and for size; at speed the pin's applies (m16: the 50 left
+        // jpeg_fixed's helpers calls, +42% clocks).
+        if let Some(threshold) =
+            program.target.tti().filter(|_| !self.speed_rate).and_then(|tti| tti.inline_threshold_override())
+        {
             params.default_threshold = threshold;
         }
         let size = self.inline.caller_size();
@@ -325,8 +329,7 @@ impl ProgramPass for Walk {
                                 tti.as_deref(),
                                 decided.as_mut(),
                                 (tti.as_deref().is_some_and(|tti| {
-                                    size != crate::inlinecost::CallerSize::Speed
-                                        || tti.inline_policy().by_rate > 0
+                                    size != crate::inlinecost::CallerSize::Speed || tti.inline_policy().by_rate > 0
                                 }))
                                 .then_some(&mut trials),
                             )
@@ -409,7 +412,9 @@ impl ProgramPass for Walk {
                                 .1
                                 .attrs
                                 .push(llrm_mir::opcode::Attribute::Flag(crate::tailcallelim::DEFERRED.to_owned()));
-                            // The flag is part of its declaration: the analyses that list declarations patch only what is told changed.
+                            // The flag is part of its declaration: the analyses
+                            // that list declarations patch only what is told
+                            // changed.
                             modules[at].changed(id);
                         }
                         for (call, callee, cost) in decided.iter().flatten() {
@@ -445,7 +450,9 @@ impl ProgramPass for Walk {
                         // each callee spliced here are the brought ones.
                         let brought: Vec<GlobalId> = constant
                             .iter()
-                            .filter(|(call, _)| module.global(id).function().is_some_and(|one| one.parent(**call).is_none()))
+                            .filter(|(call, _)| {
+                                module.global(id).function().is_some_and(|one| one.parent(**call).is_none())
+                            })
                             .filter_map(|(_, one)| module.global(one.callee?).function())
                             .flat_map(|body| calls_of(&module.context, body))
                             .map(|(callee, _)| callee)
@@ -795,8 +802,8 @@ pub(crate) fn self_calls(
     self_calls_from(module, layout, id, for_size, 2)
 }
 
-/// `self_calls` with `fewest` distinct self calls: one for a body whose tail-call
-/// elimination has already left a single call in a loop.
+/// `self_calls` with `fewest` distinct self calls: one for a body whose
+/// tail-call elimination has already left a single call in a loop.
 pub(crate) fn self_calls_from(
     module: &Module,
     layout: &llrm_mir::datalayout::DataLayout,
@@ -924,10 +931,18 @@ pub(crate) fn take_walk_promotions(
         for (index, global) in module.globals.iter_mut().enumerate() {
             if let llrm_mir::module::GlobalKind::Function(function) = &mut global.kind {
                 let before = function.attrs.len();
-                function.attrs.retain(|attr| !matches!(attr, llrm_mir::opcode::Attribute::Flag(flag) if flag == PROMOTED_IN_WALK));
+                function
+                    .attrs
+                    .retain(
+                        |attr| !matches!(
+                            attr,
+                            llrm_mir::opcode::Attribute::Flag(flag) if flag == PROMOTED_IN_WALK
+                        ),
+                    );
                 if function.attrs.len() != before {
                     found = true;
-                    // The mark is part of the declaration the analyses list; the second IPSCCP restates only some bodies.
+                    // The mark is part of the declaration the analyses list;
+                    // the second IPSCCP restates only some bodies.
                     modules[at].changed(GlobalId(index as u32));
                 }
             }
@@ -996,25 +1011,35 @@ impl SelfInline {
                 module.functions().filter(|(_, _, function)| waiting(function)).map(|(id, _, _)| id).collect();
             for id in marked {
                 let mut copies = 0;
-                // DEVIATE REC-2: where the target says so, the tail-call elimination comes first and
-                // the copies are made of the loop it leaves (gcc's order).
+                // DEVIATE REC-2: where the target says so, the tail-call
+                // elimination comes first and the copies are
+                // made of the loop it leaves (gcc's order).
                 let tre_first = {
                     let (o2, o3) = program.target.tti().map_or((false, false), |tti| tti.recursive_tre_first());
                     if self.o3 { o3 } else { o2 }
                 };
                 if tre_first {
-                    function_mut(module, id).1.attrs.retain(
-                        |one| !matches!(one, llrm_mir::opcode::Attribute::Flag(flag) if flag == crate::tailcallelim::DEFERRED),
-                    );
+                    function_mut(module, id)
+                        .1
+                        .attrs
+                        .retain(
+                            |one| !matches!(
+                                one,
+                                llrm_mir::opcode::Attribute::Flag(flag) if flag == crate::tailcallelim::DEFERRED
+                            ),
+                        );
                     modules[at].changed(id);
                     modules[at].invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                     (self.simplify)(module, &mut modules[at], id, "tre-first.");
                 }
-                let frequencies = self_calls_from(module, &program.layout, id, self.for_size, if tre_first { 1 } else { 2 }).filter(|_| {
-                    let bar = edge_growth_bar(program.target.tti().as_deref(), self.o3);
-                    let body = module.global(id).function().expect("a marked function");
-                    crate::inline::recursive_edge_growth(body) <= bar
-                });
+                let frequencies =
+                    self_calls_from(module, &program.layout, id, self.for_size, if tre_first { 1 } else { 2 }).filter(
+                        |_| {
+                            let bar = edge_growth_bar(program.target.tti().as_deref(), self.o3);
+                            let body = module.global(id).function().expect("a marked function");
+                            crate::inline::recursive_edge_growth(body) <= bar
+                        },
+                    );
                 if let Some(frequencies) = frequencies {
                     let tti = program.target.tti();
                     let (depth, callee) = match (
