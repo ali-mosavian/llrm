@@ -1,3 +1,8 @@
+#ifdef SF_CMP_OUTLINE /* the cmp entry stays one body: the inliner would copy it into the entries that call it */
+#define SF_CMP_CORE __attribute__((noinline))
+#else
+#define SF_CMP_CORE
+#endif
 /* The order of two operands: -1, 0, 1, and 1 when a NaN operand makes them unordered. Two arguments only, so an entry point that
  * passes its own arguments on is a tail jump. With SF_CMP_SPLIT (a target that links whole objects per entry) each entry is its own file and the core lives in the cmp entry alone (cmp_cmp.c); the others tail-jump or call it; gt and ge, which need the reversed compare, call it at -Os and carry their own copy otherwise (a far call costs more than the bytes it saves). */
 #ifdef SF_CMP_SPLIT
@@ -32,8 +37,5 @@ static inline int SF_N(sf_cmp_un)(SF_T a, SF_T b, int un) /* un: the result for 
     return 1;
 #endif
 }
-#ifdef SF_CMP_OUTLINE /* a target that links whole objects and has no alias: one core, the entries tail-jump (m32 f64 -O2: seven inlined copies were 1026 B) */
-__attribute__((noinline))
-#endif
 static int SF_N(sf_cmp_bits)(SF_T a, SF_T b) { return SF_N(sf_cmp_un)(a, b, 1); }
 #endif
