@@ -81,3 +81,36 @@ fn fast_isel_constant_return_computes_the_same_answer() {
     let ran = Command::new(scratch.path().join("a.out")).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&ran.stdout), "5\n");
 }
+
+const ARITH: &str = "extern int printf(const char *, ...);\n\
+    int g(int a, int b)\n{\n    int s = a + b;\n    if (s < 10) s = s - 1;\n    return (s & 255) ^ 3;\n}\n\
+    int main(void)\n{\n    printf(\"%d %d\\n\", g(2, 3), g(20, 7));\n    return 0;\n}\n";
+
+/// m32 integer core: parameters, locals, add/sub/and/xor, a compare and a
+/// branch go through FastISel (`g` is recorded `fast`). The run-corpus check
+/// of the answer is `tools/cc_check.sh` with `LLRM_FAST_ISEL=1`.
+#[test]
+fn fast_isel_takes_the_m32_integer_core() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(scratch.path().join("a.c"), ARITH).unwrap();
+    let run = |fast: bool| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_llrm-cc"));
+        command
+            .env("LLRM_CC_TARGET", "x86_32-linux")
+            .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+            .env("LLRM_VERIFY", "1")
+            .current_dir(scratch.path())
+            .args(["-O0", "-S", "a.c", "-o", if fast { "fast.s" } else { "dag.s" }]);
+        if fast {
+            command.env("LLRM_FAST_ISEL", "1");
+        }
+        let out = command.output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    };
+    run(false);
+    run(true);
+    let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+    assert!(report.lines().any(|line| line == "g fast" || line == "_g fast"), "g not taken: {report}");
+    let fast = std::fs::read_to_string(scratch.path().join("fast.s")).unwrap();
+    assert!(fast.contains("cmp") && fast.contains("ret"), "{fast}");
+}

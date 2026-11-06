@@ -111,6 +111,9 @@ pub fn select_units<T: DagTarget>(
         do_instruction_selection_with(dag, registers, |adapter, node| select.select(adapter, node))
     })?;
     target.postprocess(dag);
+    if llrm_support::env_var("LLRM_DAGDUMP").is_some_and(|mode| mode == "selected") {
+        eprintln!("selected:\n{}", dag.dump());
+    }
     let root = dag.get_root();
     Ok(crate::support::debug::timed("dag schedule", || schedule(dag, root, info)))
 }
