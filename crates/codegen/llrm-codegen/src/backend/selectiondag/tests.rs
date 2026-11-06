@@ -33,6 +33,7 @@ mod dead_load;
 mod demanded_bits;
 mod div_by_constant;
 mod div_cheap;
+mod use_div_rem;
 mod expand_node;
 mod ext_of_load;
 mod extract_element;
