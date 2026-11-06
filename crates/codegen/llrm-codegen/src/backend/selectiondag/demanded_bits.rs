@@ -725,7 +725,12 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         known: KnownBits,
         tlo: &mut Tlo,
     ) -> Result<KnownBits, ()> {
-        if demanded & !(known.zero | known.one) == 0 && self.dag.constant(op).is_none() {
+        // [L3175]: "Avoid folding to a constant if any OpaqueConstant is
+        // involved": a hoisted constant (`bitcast iN C`) stays a register.
+        //
+        // [L3175]: https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L3175
+        let opaque_operand = self.dag.node(op).ops.iter().any(|&operand| self.dag.is_opaque(operand));
+        if demanded & !(known.zero | known.one) == 0 && self.dag.constant(op).is_none() && !opaque_operand {
             let vt = self.dag.value_type(op);
             let constant = self.dag.get_constant(known.one, vt);
             return Self::combine_to(tlo, op, constant);
