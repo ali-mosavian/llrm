@@ -25,4 +25,4 @@ for c in 68000 68020; do
   done
 done
 $D/cycles --exe $(ls $O/ours_* $O/libgcc_* 2> /dev/null | sort) > $O/RESULT.md
-cat $O/RESULT.md
+cat $O/RESULT.md; python3 $H/table.py $O/RESULT.md > $O/TABLE.md; cat $O/TABLE.md
