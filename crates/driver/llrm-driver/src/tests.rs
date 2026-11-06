@@ -4052,3 +4052,35 @@ fn a_multiply_add_with_a_shared_inner_add_keeps_its_add_immediates_at_m64() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(!has_wide_immediate(&listing), "{listing}");
 }
+
+/// ZIMM priced `0x9E3779B9` at one instruction in a size build too, so
+/// ConstantHoisting kept every `mov r32, imm32` (5 B) where one register
+/// copy (3 B) did: `mul_constants` -Os +30 B.
+#[test]
+fn a_zero_extended_constant_used_many_times_in_a_size_build_is_materialized_once_at_m64() {
+    // Eight loops, each seeded with the same constant, as `mul_constants` has.
+    let loops: String = (0..8)
+        .map(|i| {
+            format!(
+                "pre{i}:\n  br label %l{i}\n\
+                 l{i}:\n  %x{i} = phi i64 [ 2654435769, %pre{i} ], [ %n{i}, %l{i} ]\n\
+                 \x20 %c{i} = phi i64 [ 0, %pre{i} ], [ %d{i}, %l{i} ]\n\
+                 \x20 %m{i} = mul i64 %x{i}, 1664525\n  %n{i} = add i64 %m{i}, 1013904223\n\
+                 \x20 %d{i} = add i64 %c{i}, 1\n  %e{i} = icmp eq i64 %d{i}, 200\n\
+                 \x20 br i1 %e{i}, label %o{i}, label %l{i}\n\
+                 o{i}:\n  call void @g(i64 %n{i})\n  br label %pre{next}\n",
+                next = i + 1
+            )
+        })
+        .collect();
+    let text = format!(
+        "target datalayout = \"@m64-datalayout@\"\n\
+         target triple = \"x86_64-unknown-linux-gnu\"\n\
+         declare void @g(i64)\n\
+         define void @f() optsize {{\nentry:\n  br label %pre0\n{loops}pre8:\n  ret void\n}}\n"
+    );
+    let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), &text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let loads = listing.lines().filter(|line| line.contains("0x9e3779b9") || line.contains("2654435769")).count();
+    assert_eq!(loads, 1, "{listing}");
+}
