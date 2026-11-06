@@ -156,6 +156,11 @@ pub struct Tuning {
     /// (the pin). recpow -O2: `i % 97` of a loop counter was a signed divide
     /// all the way into the callee.
     pub ipsccp_widen_keeps_sign: bool,
+    /// DEVIATE ARM64-MASKIV (owners w15 arm64, w12 LSR; exit 2026-12-15): an
+    /// address `zext(and(addrec, 2^n-1))` gets a wide induction variable and
+    /// the mask is applied at the use, so the multiply leaves the loop (gcc's
+    /// ivopts). false: the pin's LSR, which takes no narrow-IV reduction.
+    pub widen_masked_iv: bool,
 }
 
 impl Tuning {
@@ -199,6 +204,7 @@ impl Tuning {
         sink_select_arms: false,
         inline_variable_memcpy: false,
         ipsccp_widen_keeps_sign: false,
+        widen_masked_iv: false,
     };
 }
 

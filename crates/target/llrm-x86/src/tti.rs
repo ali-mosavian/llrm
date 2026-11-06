@@ -751,6 +751,10 @@ impl Tti for X86 {
         self.tuning.ipsccp_widen_keeps_sign
     }
 
+    fn widens_masked_iv(&self) -> bool {
+        self.tuning.widen_masked_iv
+    }
+
     fn priced_self_inlining(&self) -> Option<(u32, i64)> {
         self.real_mode.as_ref()?.priced_self_inlining
     }

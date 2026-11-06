@@ -314,6 +314,11 @@ impl Tti for AArch64 {
         250_000
     }
 
+    /// DEVIATE ARM64-MASKIV (exit 2026-12-15): see `Tuning::widen_masked_iv`.
+    fn widens_masked_iv(&self) -> bool {
+        true
+    }
+
     fn merges_unaligned_stores(&self) -> bool {
         true
     }
