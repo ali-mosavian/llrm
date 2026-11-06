@@ -33,13 +33,6 @@ fn constant(
     op_inst(name, desc, vec![Operand::Def(Reg::Virt(register)), Operand::Imm(value)])
 }
 
-fn moveq(
-    register: u32,
-    value: i64,
-) -> Inst {
-    constant("MOVQ", register, value)
-}
-
 fn branch_if_not_equal() -> Inst {
     let desc = local::code_of("Bne8").and_then(local::desc).expect("Bne8");
     op_inst("Bne8", desc, vec![Operand::Block(0)])
@@ -91,7 +84,7 @@ fn a_sum_in_the_top_half_of_the_word_needs_the_codes_unread() {
 #[test]
 fn a_write_between_forgets_the_bound_and_a_small_immediate_is_left_to_addq() {
     assert_eq!(found(vec![imm_row("AND32di", 0, 15), imm_row("XOR32di", 0, 0xFFFF_0000u32 as i64), imm_row("ADD32di", 0, 48)]), vec![]);
-    assert_eq!(found(vec![moveq(0, 3), imm_row("ADD32di", 0, 4)]), vec![]);
+    assert_eq!(found(vec![constant("MOVI32ri", 0, 3), imm_row("ADD32di", 0, 4)]), vec![]);
 }
 
 /// The value moves in a one-predecessor chain: the second block starts from the first's end.

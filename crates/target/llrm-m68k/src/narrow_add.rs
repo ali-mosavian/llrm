@@ -4,7 +4,7 @@
 //!
 //! # How it works
 //! [`sites`] walks each block with the upper bound of every data register's
-//! unsigned value: `moveq`, `and.l`, `lsr.l`, a zero extension and a copy give
+//! unsigned value: `move.l #imm`, `and.l`, `lsr.l`, a zero extension and a copy give
 //! one, anything else that writes the register forgets it, a call forgets all.
 //! A block with one predecessor starts from that predecessor's end (to
 //! [`CHAIN_DEPTH`] blocks back); any other starts with nothing known. The row
@@ -94,8 +94,8 @@ fn step(
         return;
     }
     let new = match (inst.kind, &inst.operands[..]) {
-        // `MOVI32ri` is the constant load selection emits; `MOVQ` and `MOV32ri` are its other forms
-        (Kind::Op("MOVQ" | "MOV32ri" | "MOVI32ri"), [Operand::Def(_), Operand::Imm(k)])
+        // `MOVI32ri` is the constant load selection emits (`MOVQ` is only made when the text is expanded)
+        (Kind::Op("MOV32ri" | "MOVI32ri"), [Operand::Def(_), Operand::Imm(k)])
             if (0..=i64::from(u32::MAX)).contains(k) =>
         {
             Some(*k as u32)
