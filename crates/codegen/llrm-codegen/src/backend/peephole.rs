@@ -152,7 +152,7 @@ fn count(
     counter.get(&value).copied().unwrap_or(0)
 }
 
-fn emit(
+pub(crate) fn emit(
     bits: u32,
     what: &Semantics,
 ) -> Option<select::Emitted> {
