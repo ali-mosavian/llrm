@@ -683,7 +683,8 @@ fn dead_from(
                 _,
             ) => (indexed(if bit == Registers::X { Index::X } else { Index::Y }), false),
             (Op::Lda | Op::Ldx | Op::Ldy, _) => (indexed(if bit == Registers::X { Index::X } else { Index::Y }), false),
-            (Op::Rts, _) => return bit == Registers::A && exits.no_a_result,
+            // results are in A:X (`abi.rs`): Y is never read by a return
+            (Op::Rts, _) => return bit == Registers::Y || (bit == Registers::A && exits.no_a_result),
             (Op::Jsr, _) if bit == Registers::A => {
                 // the callee clobbers `a`: it is dead unless it was an argument
                 let callee = match &inst.operand {
