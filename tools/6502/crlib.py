@@ -24,15 +24,15 @@ def index(rt):
                 _INDEX[rt].setdefault(symbol, file)
         return _INDEX[rt]
 
-def member(rt, cc, file, flags):
+def member(rt, cc, file, flags, target="6502-sim65"):
     """ca65 text of `file` compiled for the 6502 with `flags` (the program's level), cached. Exports are cut to the globals the index names:
     llrm-cc exports statics too, and two members would then define the same helper."""
-    key = (rt, cc, file, tuple(flags))
+    key = (rt, cc, file, tuple(flags), target)
     with _LOCK:
         if key in _MEMBERS:
             return _MEMBERS[key]
     keep = set(index(rt))
-    done = subprocess.run([cc, "--target=6502-sim65", *flags, "-S", "-w", "-DSF_INTABI", "-include", str(rt / "config/6502/config.h"), "-I", str(rt / "include"), str(rt / file), "-o", "/dev/stdout"],
+    done = subprocess.run([cc, f"--target={target}", *flags, "-S", "-w", "-DSF_INTABI", "-include", str(rt / "config/6502/config.h"), "-I", str(rt / "include"), str(rt / file), "-o", "/dev/stdout"],
                           capture_output=True, text=True)
     if done.returncode:
         raise RuntimeError(f"{file}: " + done.stderr[-300:])

@@ -69,6 +69,14 @@ def split_rt(text, zp=0x80, cells=26):
     out["__rt_cells"] = head + ".export " + ", ".join(cell_names) + "\n" + "\n".join(bss) + "\n"
     return out
 
+def startup(platform="sim65-cc65"):
+    """The object a program is linked with first: a constructor (cc65 runs them before `main`) that points the soft stack, rc0:rc1, at the
+    platform's `soft_stack`. The platform's numbers are read from its description, not copied."""
+    import tomllib
+    p = tomllib.loads((ROOT / "crates/target/llrm-6502/src/machines" / f"{platform}.toml").read_text())["platform"]
+    return (f".constructor __rt_init, 24\nrc0 = ${p['imag_base']:02X}\nrc1 = ${p['imag_base'] + 1:02X}\n.code\n__rt_init:\n"
+            f"  lda #<${p['soft_stack']:04X}\n  sta rc0\n  lda #>${p['soft_stack']:04X}\n  sta rc1\n  rts\n")
+
 def pulled(map_text):
     """{object or archive member: bytes of CODE+RODATA+DATA} the link took, without the driver and cc65's own library."""
     sizes, cur = {}, None
@@ -81,15 +89,20 @@ def pulled(map_text):
     return sizes
 
 def main():
-    cc, out = sys.argv[1], Path(sys.argv[2]).resolve()
-    work = Path(sys.argv[3]) if len(sys.argv) > 3 else Path(tempfile.mkdtemp(prefix="rt-"))
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if "--startup" in sys.argv:
+        print(startup(), end="")
+        return
+    target = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--target=")), "6502-sim65")
+    cc, out = args[0], Path(args[1]).resolve()
+    work = Path(args[2]) if len(args) > 2 else Path(tempfile.mkdtemp(prefix="rt-"))
     work.mkdir(parents=True, exist_ok=True)
     sys.path.insert(0, str(HERE))
     import crlib
     rt = ROOT / "runtime" / "compiler-rt"
     sources = {f"mos_{k}": v for k, v in split_rt(MOS_RT.read_text()).items()}
     for f in sorted(set(crlib.index(rt).values())):
-        sources[f.replace("/", "_")[:-2]] = ".autoimport +\n" + crlib.member(rt, cc, f, ["-Os"])
+        sources[f.replace("/", "_")[:-2]] = ".autoimport +\n" + crlib.member(rt, cc, f, ["-Os"], target)
     objs = []
     for stem, text in sources.items():
         (work / f"{stem}.s").write_text(text)
