@@ -197,8 +197,32 @@ pub trait FrameMap {
     }
 }
 
+/// What the x87 forms cost, in clocks per form and in thousandths of a clock
+/// per code byte: the prices [`Emitter::sharing_pays`] weighs a pool constant
+/// loaded once against a memory operand at each reader.
+#[derive(Clone, Copy, Debug)]
+pub struct X87Prices {
+    pub load: i64,
+    pub add: i64,
+    pub add_m: i64,
+    pub mul: i64,
+    pub mul_m: i64,
+    pub div: i64,
+    pub div_m: i64,
+    pub milliclocks_per_byte: i64,
+    /// The bytes of `fld m` / `fadd m` on a pool cell (6 flat, 4 real mode);
+    /// the register forms take 2.
+    pub memory_bytes: i64,
+}
+
 /// The pin's machine opcode names, by number.
 pub struct EmitContext<'a> {
+    /// DEVIATE X87-POOL-SHARE (owner x87, exit 2026-11-20): the prices that
+    /// decide whether a pool constant read several times is loaded once (the
+    /// pin: `IsProfitableToFold` needs `hasOneUse`) or read as a memory
+    /// operand at each reader, where that is cheaper (i486: `fmul m` 14 clocks
+    /// against `fmul st` 16). None: the pin's rule.
+    pub x87_prices: Option<X87Prices>,
     /// The registers a call destroys (EAX, ECX, EDX at m32).
     pub caller_saved: &'a std::collections::BTreeSet<llrm_lir::registers::RegId>,
     /// The stack pointer: a `CopyFromReg` of it is the base `SP`, not a value.
@@ -2007,7 +2031,10 @@ impl Emitter<'_, '_> {
                     self.ctx.conventions.clobbers(callee).unwrap_or_else(|| self.ctx.caller_saved.clone());
                 // An inline block names what it writes: an input it does not
                 // list (ES for a string move) survives it.
-                if !matches!(callee, Some(Callee::Named(name)) if llrm_mir::intrinsics::asm(name).is_some()) {
+                if !matches!(
+                    callee,
+                    Some(Callee::Named(name)) if llrm_mir::intrinsics::asm(name).is_some()
+                ) {
                     clobbers.extend(self.arguments.iter().map(|(_, register)| *register));
                 }
                 clobbers
@@ -2026,7 +2053,10 @@ impl Emitter<'_, '_> {
                 .into_iter()
                 .filter(|register| *register != self.ctx.stack_pointer)
                 .collect(),
-            block: matches!(callee, Some(Callee::Named(name)) if llrm_mir::intrinsics::asm(name).is_some()),
+            block: matches!(
+                callee,
+                Some(Callee::Named(name)) if llrm_mir::intrinsics::asm(name).is_some()
+            ),
         });
         let mut uses = _read(&what);
         let requires = std::mem::take(&mut self.arguments);
@@ -4135,6 +4165,43 @@ impl Emitter<'_, '_> {
         }
     }
 
+    /// Whether one load of the pool constant `value` beats a memory operand at
+    /// each of its readers (DEVIATE X87-POOL-SHARE, see [`EmitContext`]): the
+    /// load and the register forms against the memory forms, clocks plus
+    /// bytes at the target's rate. A size build, or no prices: shared (fewer
+    /// bytes from two readers on).
+    fn sharing_pays(
+        &self,
+        value: SDValue,
+    ) -> bool {
+        let Some(p) = self.ctx.x87_prices else { return true };
+        if self.ctx.opt_size {
+            return true;
+        }
+        let rate = p.milliclocks_per_byte;
+        let (mut fold, mut shared) = (0i64, p.load * 1000 + p.memory_bytes * rate);
+        for user in self.dag.users(value) {
+            let reads =
+                self.dag.node(SDValue { node: user, res: 0 }).ops.iter().filter(|op| **op == value).count() as i64;
+            let name = match self.dag.opcode(SDValue { node: user, res: 0 }) {
+                ISD::Machine(op) => self.ctx.names.get(&(op as u16)).copied().unwrap_or(""),
+                _ => "",
+            };
+            let (register, memory) = if name.contains("MUL") {
+                (p.mul, p.mul_m)
+            } else if name.contains("DIV") {
+                (p.div, p.div_m)
+            } else {
+                (p.add, p.add_m)
+            };
+            fold += reads * (memory * 1000 + p.memory_bytes * rate);
+            shared += reads * (register * 1000 + 2 * rate);
+        }
+        // The tables hold whole clocks: a difference under one is rounding,
+        // and the old shape (a memory operand at each reader) stays.
+        shared + 1000 <= fold
+    }
+
     fn operand(
         &mut self,
         value: SDValue,
@@ -4144,10 +4211,15 @@ impl Emitter<'_, '_> {
             return Ok(Loc::Imm(Imm { value: sign_extend(bits, w * 8), width: w, address: None }));
         }
         if let Some((mnemonic, cell)) = self.lazy.get(&value).cloned() {
-            // DEVIATE SD234: the pin loads `LD_F1` once for all its readers; a
-            // call or block end is the only place the stack cannot hold it
+            // DEVIATE SD234: the pin loads `LD_F1` and a multi-use pool
+            // constant once for all its readers; a call or block
+            // end is the only place the stack cannot hold it
             let at = (self.stack_breaks, self.blocks.len());
-            let constant = cell.is_none();
+            // A pool constant with one reader is loaded there, for the memory
+            // operand it folds into; with several it is one load, as the pin
+            // keeps it (`IsProfitableToFold` needs `hasOneUse`), unless the
+            // CPU's prices make a memory operand at each reader cheaper.
+            let constant = cell.is_none() || (!self.dag.has_one_use(value.node) && self.sharing_pays(value));
             if constant {
                 if let Some(&(held, breaks, blocks)) = self.loaded.get(&value) {
                     if (breaks, blocks) == at {
