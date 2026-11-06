@@ -92,4 +92,41 @@ class Members(unittest.TestCase):
         for other in ("__udivdi3", "__muldi3", "__lshrdi3"):
             self.assertNotIn(other + ":", text)
 
+@unittest.skipUnless(os.path.exists(CC) and os.path.exists(RT), "needs a llrm-cc and a runtime (OURS_TEST_CC, OURS_TEST_RT)")
+class Archive(unittest.TestCase):
+    """The shipped runtime is an archive of per-routine objects and ld65 pulls members by undefined symbol: a program of three shifts links the
+    three shifts (and the runtime routines they call), not the divides (11135 B when the i64 routines were one object; 2026-11-06)."""
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp()
+        subprocess.run([sys.executable, os.path.join(HERE, "mkrt.py"), CC, os.path.join(cls.tmp, "rt.lib"), os.path.join(cls.tmp, "w")],
+                       check=True, capture_output=True, timeout=1200)
+
+    def link(self, program):
+        sys.path.insert(0, HERE)
+        import mkrt
+        src = Path(HERE).resolve().parents[1] / "tests" / "run" / "c" / f"{program}.c"
+        env = {**os.environ, "OURS_RT": RT, "OURS_PADS": "0"}
+        driver = subprocess.run([sys.executable, "-c", "import ours_cr; print(ours_cr.driver())"], cwd=HERE, env=env, capture_output=True, text=True, check=True).stdout
+        tmp = self.tmp
+        Path(tmp, "d.s").write_text(driver)
+        subprocess.run([CC, "--target=6502-sim65", "-Os", "-S", "-w", "-fsigned-char", "-I", os.path.join(HERE, "inc"), str(src), "-o", os.path.join(tmp, "o.s")], check=True)
+        Path(tmp, "f.s").write_text(".autoimport +\n" + Path(tmp, "o.s").read_text())
+        r = subprocess.run(["cl65", "-t", "sim6502", "-m", "x.map", "-o", "x.bin", "d.s", "f.s", "rt.lib"], cwd=tmp, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr[-300:])
+        return mkrt.pulled(Path(tmp, "x.map").read_text())
+
+    def test_a_shift_program_links_the_shifts_and_no_divide(self):
+        got = self.link("shift_int64_variable")
+        names = " ".join(got)
+        for shift in ("ashldi3", "lshrdi3", "ashrdi3"):
+            self.assertIn(shift, names)
+        for divide in ("udivdi3", "divdi3", "muldi3"):
+            self.assertNotIn(divide, names)
+        self.assertLess(sum(got.values()), 4000, got)
+
+    def test_a_helper_two_routines_share_is_one_member(self):
+        got = self.link("recdeep")
+        self.assertEqual(sorted(n for n in got if "udivmod32" in n), ["mos___rt_udivmod32.o"], got)
+
 if __name__ == "__main__": unittest.main()
