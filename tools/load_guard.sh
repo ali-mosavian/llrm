@@ -37,13 +37,14 @@ settled() {  # settled L1
 
 # The slot count is shared state (hysteresis needs the last value), kept in slot_dir/slots_now.
 slot_count() {  # slot_count L1: prints the count
-  local now; now=$(cat "$slot_dir/slots_now" 2>/dev/null || echo "$base")
+  local now; now=$(cat "$slot_dir/slots_now" 2>/dev/null)
+  [ -n "$now" ] || now=$base  # another waiter's write may have truncated the file just now: empty broke `[ $busy -lt $slots ]`
   if above "$widen1" "$1"; then now=$high; elif ! above "$narrow1" "$1"; then now=$base; fi
-  echo "$now" > "$slot_dir/slots_now"  # the hysteresis state is the 3/5 count; the wide count is derived each time
+  echo "$now" > "$slot_dir/slots_now.$$" && mv "$slot_dir/slots_now.$$" "$slot_dir/slots_now"  # temp + mv: a reader never sees it empty. The hysteresis state is the 3/5 count; the wide count is derived each time
   if awk -v kb="$(awk '/^MemAvailable:/{print $2}' "${LG_MEMINFO:-/proc/meminfo}")" -v gb="${LG_MEM_MIN_GB:-40}" 'BEGIN{exit !(kb>=gb*1024*1024)}'; then
     if above "$widest1" "$1"; then now=$widest; elif above "${LG_WIDE_1M:-22}" "$1"; then now=$wide; fi
   fi
-  echo "$now" > "$slot_dir/slots_wide"
+  echo "$now" > "$slot_dir/slots_wide.$$" && mv "$slot_dir/slots_wide.$$" "$slot_dir/slots_wide"
   echo "$now"
 }
 
