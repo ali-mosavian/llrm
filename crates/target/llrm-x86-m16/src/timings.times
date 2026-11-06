@@ -122,6 +122,7 @@ mul_r32                =    =    =     =    =    =    =    =
 leave                   =    =    2    =    =    =    =    =
 x87_load                =    =    =    =    =    =    =    =   # GCC's i386 table: x87 loads/stores eight units, arithmetic 23/27/88. Memory arithmetic includes both components.
 x87_exchange           =     =    =    =    =    =    =    =   # 80387 register exchange is eighteen clocks.
+x87_copy               =     =    =    =    =    =    =    =
 x87_store               =    =    =    =    =    =    =    =
 x87_convert_store      =    =     =    =    =    =   =    = 
 x87_add                =     =    =    =    =    =    =    =
@@ -205,6 +206,7 @@ mul_r32                =    =    =     =    =    =    =    =
 leave                   =    =    2    =    =    =    =    =
 x87_load                =    =    =    =    =    =    =    =
 x87_exchange           =     =    =    =    =    =    =    =
+x87_copy               =     =    =    =    =    =    =    =
 x87_store               =    =    =    =    =    =    =    =
 x87_convert_store      =    =     =    =    =    =   =    = 
 x87_add                =     =    =    =    =    =    =    =
