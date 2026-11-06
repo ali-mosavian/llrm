@@ -322,6 +322,8 @@ impl LegalizeHooks for Aarch64Lowering {
             }
             ISD::Abs | ISD::AbsMinPoison => super::lowering::lower_abs(dag, node),
             ISD::VAArg => super::lowering::lower_vaarg(dag, node),
+            // Declined: the legalizer expands it, as the pin's `SDValue()`.
+            ISD::FShl | ISD::FShr => return super::lowering::lower_funnel_shift(dag, node),
             ISD::BrCond => super::lowering::lower_brcond(dag, node),
             ISD::BrCC => super::lowering::lower_br_cc_node(dag, node),
             ISD::SIntToFp | ISD::UIntToFp => super::lowering::lower_int_to_fp(dag, node),
@@ -482,7 +484,7 @@ pub fn select_block(
     // `ComputeLiveOutVRegInfo`: after the legalizer, before the assertions go.
     llrm_codegen::backend::selectiondag::live_out::compute_live_out_vreg_info(dag, info);
     let selector = Selector::new(table::TABLE);
-    let mut hooks = super::hooks::Aarch64Hooks::new(globals.clone());
+    let mut hooks = super::hooks::Aarch64Hooks::new(globals.clone(), opt_for_size);
     do_instruction_selection_with(dag, &Aarch64Ids::new(), |adapter, node| {
         select_frame_index(adapter, node)
             .or_else(|| select_indexed_load(adapter, node))

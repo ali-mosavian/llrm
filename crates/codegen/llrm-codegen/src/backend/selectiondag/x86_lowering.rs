@@ -191,10 +191,21 @@ impl CombineHooks for X86Lowering<'_> {
     /// GE/LE canonicalization: the pin runs them on x86. Judged on `bintree`, `jpeg_*`
     /// and `particle` (m16 and C, `-Os`/`-O2`): fewer bytes or clocks, none worse. The
     /// other default-off combines either changed nothing there or cost a byte
-    /// (`rebuild_brcond_condition`, `fold_mul_of_add_with_constant`) and stay off.
+    /// (`rebuild_brcond_condition`) and stay off.
     /// DEVIATE: the remaining pin combines stay off for x86. Exit 2026-12-01.
     fn fold_bin_op_into_select(&self) -> bool {
         true
+    }
+
+    /// `visitMUL`'s `(mul (add x, c1), c2)` is `(add (mul x, c2), c1*c2)` when the other
+    /// multiply of `x` by `c2` is in the DAG: the pin's x86 runs it
+    /// (`isMulAddWithConstProfitable` has no X86 override). Judged on the whole
+    /// corpus: 16 cells smaller (-1795 B), m16 -Os lru +1 B (a 6-byte real-mode `lea`).
+    /// DEVIATE: off at m16 outside `-Os`: the constant leaves a 3-part `lea` for a
+    /// trailing `add`, regparm3_matrix_4/_22 -40..-62 B but +62..+84 instructions,
+    /// +38 and +32 clk-eq at 1 clk = 2 B (the pin splits too). Exit 2026-12-01.
+    fn fold_mul_of_add_with_constant(&self) -> bool {
+        !self.i16_mul_chains || self.min_size
     }
 
     /// `replaceStoreOfFPConstant`: a `double` constant is stored as an `i64`
@@ -1607,12 +1618,15 @@ fn combine_sub(
         .or_else(|| lea_adds.then(|| combine_masked_xor_difference(dag, node)).flatten())
 }
 
-/// DEVIATE SD448 (exit 2026-11-14, when the pin's `convertToThreeAddressWithLEA`
-/// takes 8-bit adds on 32-bit targets, TA-10): `sub C, (xor X, M)` is `add X,
-/// C - M` when `M` is a low-bit mask and `X` has no bits above it, so the
-/// `xor` is `M - X`. `__floatsisf`'s shift amount `26 - (n ^ 31)` is `n - 5`:
-/// one `lea` where the `sub` took `mov cl, 26; sub cl, bl`. Where the target
-/// has no three-address add (m16) the `add` needs a copy and is a byte longer,
+/// DEVIATE SD448 (owner x86-m32; recheck 2026-11-20 and at every pin bump,
+/// dropped where the pin has the fold): `sub C, (xor X, M)` is `add X, C - M`
+/// when `M` is a low-bit mask and `X` has no bits above it, so the `xor` is
+/// `M - X`. `__floatsisf`'s shift amount `26 - (n ^ 31)` is `n - 5`: one
+/// `lea` where the `sub` took `mov cl, 26; sub cl, bl`. The pin has no such
+/// fold, and its `convertToThreeAddressWithLEA` takes no 8-bit add on 32-bit
+/// targets (TA-10). 0 larger cells over 18 row-levels; m32 -O2 2 smaller,
+/// -O3 9 smaller (to -32 B); m64 and arm64 identical. Where the target has
+/// no three-address add (m16) the `add` needs a copy and is a byte longer,
 /// so it is not made there.
 fn combine_masked_xor_difference(
     dag: &mut SelectionDAG,
@@ -2497,8 +2511,11 @@ fn lower_shift_parts(
 /// `isKnownNeverZero`, the part known bits answer: some bit is known set.
 /// DEVIATE SD304: the pin also looks through `or`, `shl`, `zext`, `smax` and
 /// the like; a value they prove non-zero costs one `cmov` more here. Reason:
-/// no general query yet. Exit: with the combiner's `isKnownNeverZero`.
-/// Owner sdag-c. Review 2026-12-10.
+/// no general query yet. Measured 2026-11-06 12:3xZ: a counter for what the wider query
+/// proves beyond known bits (or, select, shl, extensions, max) saw 0 hits in the 10
+/// corpus programs that lower ctlz/cttz (m16/m32/m64 -O2), and a probe with a umax
+/// and an `or` argument already dropped the guard. No cell; port with the combiner's
+/// `isKnownNeverZero` when one needs it. Owner sdag-c. Review 2026-12-10.
 fn is_known_never_zero(
     dag: &SelectionDAG,
     value: SDValue,

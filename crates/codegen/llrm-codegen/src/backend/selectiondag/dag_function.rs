@@ -921,7 +921,7 @@ fn selected_in(
         // recsum +18, x_binsearch +18, x_switch_dense +13). Isolated divides
         // are smaller kept than in gcc or clang. Decision: keep the divide at
         // -Os, the pin's `int_div_cheap(min_size)` is not taken. Owner x86-m32;
-        // closed 2026-11-06 (no exit; reopen if the cost model changes). m16 -Os was
+        // open, exit 2026-11-20 (kept by measurement 2026-11-06). m16 -Os was
         // +763 B over 309 programs (2026-10-27). Cost: an idiv is ~40 clocks
         // on a 486 where the multiply is ~13.
         .with_int_div_cheap(cpu.size || cpu.min_size)

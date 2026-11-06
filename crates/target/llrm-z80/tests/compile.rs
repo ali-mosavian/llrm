@@ -1647,6 +1647,78 @@ fn a_function_tuned_for_size_calls_the_small_long_long_divide() {
     assert!(out.contains("call __udivdi3") && !out.contains("_s\n"), "{out}");
 }
 
+/// A function tuned for size called the long divide made for speed: 391 B to
+/// link where the register-only routine is 76 (div_constants_ulong, -Os: +278 B
+/// against SDCC). It calls the size routine, for the signed and the unsigned
+/// divide and remainder; any other function the speed one.
+#[test]
+fn a_function_tuned_for_size_calls_the_small_long_divide() {
+    let body = |attr: &str, ops: [&str; 2]| {
+        format!(
+            "define i32 @f(i32 %a, i32 %b) {attr} {{\n  %q = {} i32 %a, %b\n  %r = {} i32 %b, %a\n  %s = add i32 %q, %r\n  ret i32 %s\n}}",
+            ops[0], ops[1]
+        )
+    };
+    for (ops, small, fast) in [
+        (["udiv", "urem"], ["call __s_udivsi3", "call __s_umodsi3"], ["call __udivsi3", "call __umodsi3"]),
+        (["sdiv", "srem"], ["call __s_divsi3", "call __s_modsi3"], ["call __divsi3", "call __modsi3"]),
+    ] {
+        for attr in ["optsize", "minsize"] {
+            let out = compiled(&body(attr, ops), "f");
+            assert!(small.iter().all(|call| out.contains(call)), "{attr} {ops:?}: {out}");
+        }
+        let out = compiled(&body("", ops), "f");
+        assert!(fast.iter().all(|call| out.contains(call)) && !out.contains("__s_"), "{ops:?}: {out}");
+    }
+}
+
+/// A long divided and taken the remainder of by the same operands was two calls
+/// (`x / d` and `x % d` of div_constants: two 388 B-routine runs of the same
+/// loop). They are one call to the routine that stores the remainder through an
+/// address (the pin's `useDivRem`); a divide alone, or a remainder of other
+/// operands, keeps its own call.
+#[test]
+fn a_long_divide_and_remainder_of_the_same_operands_are_one_call() {
+    let body = |attr: &str, ops: [&str; 2]| {
+        format!(
+            "define i32 @f(i32 %a, i32 %b) {attr} {{\n  %q = {} i32 %a, %b\n  %r = {} i32 %a, %b\n  %s = add i32 %q, %r\n  ret i32 %s\n}}",
+            ops[0], ops[1]
+        )
+    };
+    for (ops, fast, small, others) in [
+        (["udiv", "urem"], "call __udivremsi4", "call __s_udivremsi4", ["__udivsi3", "__umodsi3"]),
+        (["sdiv", "srem"], "call __divremsi4", "call __s_divremsi4", ["__divsi3", "__modsi3"]),
+    ] {
+        for (attr, call) in [("", fast), ("optsize", small)] {
+            let out = compiled(&body(attr, ops), "f");
+            assert_eq!(out.matches("call").count(), 1, "{ops:?} {attr}: {out}");
+            assert!(out.contains(call), "{ops:?} {attr}: {out}");
+        }
+        let alone =
+            compiled(&format!("define i32 @f(i32 %a, i32 %b) {{\n  %q = {} i32 %a, %b\n  ret i32 %q\n}}", ops[0]), "f");
+        assert!(alone.contains(&format!("call {}", others[0])) && !alone.contains("rem"), "{ops:?} alone: {alone}");
+    }
+}
+
+/// A word divided and taken the remainder of by the same operands was a divide,
+/// a multiply and a subtract (`x % d` as `x - (x / d) * d`: `__udivhi3`,
+/// `__mulhi3`, 14 B a site more than the remainder call). They are one call;
+/// the routine leaves the quotient in `de` and the remainder in `hl`.
+#[test]
+fn a_word_divide_and_remainder_of_the_same_operands_are_one_call() {
+    for (ops, call) in [(["udiv", "urem"], "call __udivhi3"), (["sdiv", "srem"], "call __divremhi4")] {
+        for attr in ["", "optsize"] {
+            let ir = format!(
+                "define i16 @f(i16 %a, i16 %b) {attr} {{\n  %q = {} i16 %a, %b\n  %r = {} i16 %a, %b\n  %s = add i16 %q, %r\n  ret i16 %s\n}}",
+                ops[0], ops[1]
+            );
+            let out = compiled(&ir, "f");
+            assert_eq!(out.matches("call").count(), 1, "{ops:?} {attr}: {out}");
+            assert!(out.contains(call) && !out.contains("__mulhi3"), "{ops:?} {attr}: {out}");
+        }
+    }
+}
+
 /// A long multiplied by a constant was split into its halves, each half
 /// shifted and subtracted, in a function tuned for size: `x * 31` was 99 B and
 /// `x * 1000` 185 B, where a call is 14 (div_constants_short, mul_constants,
