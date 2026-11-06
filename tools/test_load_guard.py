@@ -279,6 +279,28 @@ class Resume(Env, unittest.TestCase):
         self.assertEqual(state(pgid), "T")
 
 
+class SlotFile(Env, unittest.TestCase):
+    """A waiter's `echo > slots_now` truncates the file; another waiter's `cat` then read an empty count, `[ $busy -lt $slots ]` failed
+    with "integer expression expected", and that pass admitted nobody (13:39Z, every waiter's log)."""
+
+    def test_slot_count_in_the_mid_band_never_prints_empty_beside_a_truncating_writer(self):
+        os.makedirs(self.slots)
+        slot_file = os.path.join(self.slots, "slots_now")
+        open(slot_file, "w").write("3\n")
+        script = open(GUARD).read()
+        start = script.index("slot_count() {")
+        body = script[start:script.index("\n}\n", start) + 3]
+        harness = (
+            "above() { awk -v a=\"$1\" -v b=\"$2\" 'BEGIN{exit !(a>b)}'; }\n"
+            f"base=3 high=5 widen1=20 narrow1=22 wide=7 widest=10 widest1=14 slot_dir={self.slots}\n{body}\n"
+            f"( while :; do : > {slot_file}; echo 3 > {slot_file}; done ) & w=$!\n"
+            "empty=0; for i in $(seq 1 400); do n=$(slot_count 21 2>/dev/null | tail -1); [ -n \"$n\" ] || empty=$((empty+1)); done\n"
+            "kill $w; echo empty=$empty\n"
+        )
+        done = subprocess.run(["bash", "-c", harness], capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.stdout.strip().splitlines()[-1], "empty=0", done.stdout + done.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
 
