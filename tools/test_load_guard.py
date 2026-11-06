@@ -381,6 +381,15 @@ class Drain(Env, unittest.TestCase):
             job.wait(timeout=15)
         self.assertEqual(open(log).read().split(), ["2", "4"])
 
+    def test_a_waiter_whose_prio_line_was_erased_is_still_admitted(self):
+        """An old-copy waiter's prune read 'tier start pid 25' as pid '<pid> 25' and dropped every new line: new waiters never became first and starved with slots free."""
+        self.set_load(30.0, 30.0)
+        waiter = self.start("true", LG_TIER="3", LG_SETTLE="0", LG_POLL="0.05")
+        time.sleep(0.5)
+        open(os.path.join(self.slots, "prio"), "w").close()
+        self.set_load(1.0, 1.0)
+        self.assertEqual(waiter.wait(timeout=10), 0, "the waiter never became first after its line was erased")
+
     def test_ten_slots_at_one_minute_13_with_80_gb_available(self):
         self.assertEqual(self.admitted(13.0, 80, wanted=12), 10)
 

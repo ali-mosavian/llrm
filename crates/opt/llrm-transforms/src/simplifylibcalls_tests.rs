@@ -226,4 +226,49 @@ fn test_strlen_in_an_ordered_comparison_is_not_the_load() {
         "  %r = call i16 @strlen(ptr %p)\n  %c = icmp ugt i16 %r, 0\n  ret i1 %c",
     );
     assert!(after.contains("call i16 @strlen"), "{after}");
+
+fn printf_of(global: &str, argument: &str) -> String {
+    run(&format!(
+        "{global}\ndeclare i16 @printf(ptr, ...)\n\
+         define void @f() {{\nb0:\n  %i = getelementptr i8, ptr @s, i16 1\n  \
+         %r = call i16 (ptr, ...) @printf({argument})\n  ret void\n}}\n"
+    ))
+}
+
+/// `getConstantStringInfo` follows a constant offset into the global: the
+/// pin turns `printf(@s + 1)` into `puts("hi")`; a direct-global-only read
+/// left the `printf` call.
+#[test]
+fn test_printf_of_a_constant_gep_into_a_string_is_puts() {
+    let after = printf_of("@s = private constant [6 x i8] c\"xhi\\0A\\00\\00\"", "ptr %i");
+    assert!(after.contains("@puts"), "{after}");
+    assert!(!after.contains("call i16 (ptr, ...) @printf"), "{after}");
+}
+
+/// The same through a constant-expression GEP operand.
+#[test]
+fn test_printf_of_a_constant_expression_gep_is_puts() {
+    let after = printf_of(
+        "@s = private constant [6 x i8] c\"xhi\\0A\\00\\00\"",
+        "ptr getelementptr (i8, ptr @s, i16 1)",
+    );
+    assert!(after.contains("@puts"), "{after}");
+    assert!(!after.contains("call i16 (ptr, ...) @printf"), "{after}");
+}
+
+/// An array with no NUL is the whole tail for `TrimAtNul`: the pin folds
+/// `printf(c"hi\n")` to `puts("hi")`; ours returned none and kept the call.
+#[test]
+fn test_printf_of_an_array_without_a_nul_is_puts() {
+    let after = printf_of("@s = private constant [3 x i8] c\"hi\\0A\"", "ptr @s");
+    assert!(after.contains("@puts"), "{after}");
+    assert!(!after.contains("call i16 (ptr, ...) @printf"), "{after}");
+}
+
+/// A `zeroinitializer` string is the empty string: the pin drops
+/// `printf("")` (result 0); ours kept the call.
+#[test]
+fn test_printf_of_a_zeroinitializer_string_is_dropped() {
+    let after = printf_of("@s = private constant [4 x i8] zeroinitializer", "ptr @s");
+    assert!(!after.contains("call i16 (ptr, ...) @printf"), "{after}");
 }
