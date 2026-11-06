@@ -17,14 +17,6 @@
 //! Nothing runs it yet: stage 3 of the translation of LSR.
 //!
 //! # Limits
-//! DEVIATE IU1: users of a value are visited in descending program order, not
-//! use-list order. Use-list order is edit history; the pin's order on parsed
-//! IR is the only reproducible one, and it breaks ties in LSR's register
-//! choice. Cost (IU1-COST): one map of the layout per loop and a block's
-//! instruction numbers, where the pin has none (it was a map of every
-//! instruction: 1.9 M on d_faces -O2). Exit: use lists keep LLVM's order.
-//! Owner: w-5. Review: 2026-11-19.
-//!
 //! DEVIATE: whether an instruction is safe to speculate and whether it is
 //! ephemeral are asked of the caller (`Env`), which holds what they need.
 //! Walks each value's users once, with a visited set: O(users).
@@ -34,7 +26,7 @@ use std::cell::RefCell;
 use llrm_analysis::scev::expr::{Kind, Scev};
 use llrm_analysis::scev::{Cx, ScalarEvolution};
 use llrm_mir::dense::IdSet;
-use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
+use llrm_mir::module::{BlockId, InstId, Operand};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::valuetracking::pattern::phi_incoming;
 
@@ -74,8 +66,6 @@ pub struct IvUsers {
     pub l: BlockId,
     pub uses: Vec<IvStrideUse>,
     processed: IdSet<InstId>,
-    /// How many users had their place worked out.
-    ordered: usize,
 }
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/IVUsers.cpp#L52
@@ -198,7 +188,7 @@ impl IvUsers {
     ) -> Self {
         #[cfg(test)]
         BUILDS.with(|made| made.set(made.get() + 1));
-        let mut users = Self { l, uses: Vec::new(), processed: IdSet::with_capacity(cx.function.instruction_count()), ordered: 0 };
+        let mut users = Self { l, uses: Vec::new(), processed: IdSet::with_capacity(cx.function.instruction_count()) };
         let phis: Vec<InstId> =
             cx.function.iter_block(l).take_while(|&inst| cx.function.instruction(inst).opcode == Opcode::Phi).collect();
         for phi in phis {
@@ -252,17 +242,11 @@ impl IvUsers {
         let l = self.l;
         let lp = cx.loops.get_loop_for(l).expect("a loop");
         let mut users: Vec<InstId> = cx.function.users(result).iter().map(|one| one.user).collect();
-        if users.len() > 1 {
-            self.ordered += users.len();
-            // The function keeps each block's index in the layout, made once
-            // for all the loops (IU1).
-            let place = |user: &InstId| {
-                let block = cx.function.parent(*user)?;
-                Some((cx.function.layout_index(block)?, cx.function.number_in_block(*user)?))
-            };
-            users.sort_by_key(|user| std::cmp::Reverse(place(user)));
-            // One instruction using the result twice sorts to one place.
-            users.dedup();
+        // `for (Use &U : I->uses())` with `UniqueUsers`: the use-list order, a
+        // user once.
+        {
+            let mut seen = std::collections::HashSet::new();
+            users.retain(|user| seen.insert(*user));
         }
         for user in users {
             // Do not recurse into a phi twice.
@@ -307,68 +291,12 @@ impl IvUsers {
         true
     }
 
-    /// How many instructions had their place in program order worked out: the
-    /// users sorted, not the function.
-    pub fn ordered_instructions(&self) -> usize {
-        self.ordered
-    }
-
     /// `isIVUserOrOperand`: whether the walk reached `inst`.
     pub fn is_iv_user_or_operand(
         &self,
         inst: InstId,
     ) -> bool {
         self.processed.contains(&inst)
-    }
-
-    /// The exit test `old` was moved beside the branch, or copied there as
-    /// `copy`, which is then a use of its own: whether the uses are still the
-    /// ones [`Self::of`] would make. They are not where the test's operand has
-    /// users the move put out of program order (IU1); then they are made again.
-    pub fn carry_exit_test(
-        &mut self,
-        function: &Function,
-        old: InstId,
-        copy: Option<InstId>,
-    ) -> bool {
-        let Some(at) = self.uses.iter().position(|u| u.user == old) else { return true };
-        // A test of two induction variables is a user of both: which of them
-        // finds it first depends on where it is.
-        let walked = |value: &Operand| match value {
-            Operand::Value(v) => {
-                matches!(
-                    function.value(*v).def,
-                    ValueDef::Instruction(def) if self.processed.contains(&def)
-                )
-            }
-            _ => false,
-        };
-        if function.instruction(old).operands.iter().filter(|op| walked(op)).count() > 1 {
-            return false;
-        }
-        let place = |user: InstId| {
-            let block = function.parent(user)?;
-            let index = function.layout().iter().position(|&one| one == block)?;
-            Some((index, function.number_in_block(user)?))
-        };
-        if let Some(copy) = copy {
-            // The copy is found just before the test it copies, or among the
-            // descendants of a user between them: only the first is kept.
-            let Operand::Value(value) = self.uses[at].operand else { return false };
-            let mut users: Vec<InstId> = function.users(value).iter().map(|one| one.user).collect();
-            users.sort_by_key(|&user| std::cmp::Reverse(place(user)));
-            users.dedup();
-            let next = users.iter().position(|&user| user == copy).and_then(|i| users.get(i + 1));
-            if next != Some(&old) {
-                return false;
-            }
-            let mut one = self.uses[at].clone();
-            one.user = copy;
-            self.uses.insert(at, one);
-        }
-        let operand = self.uses[at].operand;
-        let places: Vec<_> = self.uses.iter().filter(|u| u.operand == operand).map(|u| place(u.user)).collect();
-        places.windows(2).all(|pair| pair[0] >= pair[1])
     }
 
     /// `transformToPostInc`: the use of `cond` takes the post-incremented value

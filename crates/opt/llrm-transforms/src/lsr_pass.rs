@@ -170,6 +170,9 @@ fn nearest_common_dominator(
 /// changes the IR that `IvUsers` was built over. Cost: d_faces -O2, 38
 /// constructions against the pin's 32, about 0.5 M of 16.8 M instructions (3%).
 /// Exit: reuse `IvUsers` across the IR edit. Owner w-5. Review 2026-11-19.
+/// A compare the edit moved or copied is a use of its own: the set is no longer
+/// carried then (`carry_exit_test` judged it against program order, which the
+/// walk no longer uses).
 /// What `LSRInstance`'s constructor decides for the loop with header `header`:
 /// the plan, or none where the loop is left as it is. `marked` are the exit
 /// tests already edited to take the post-incremented value; none until the
@@ -447,20 +450,21 @@ pub fn reduced_held(
                     size,
                 ) {
                     Outcome::Planned(None) => break,
-                    Outcome::Edit(edits, mut users) => {
+                    Outcome::Edit(edits, users) => {
                         llrm_mir::counts::bump(llrm_mir::counts::Event::LsrPrepared);
                         let applied = lsr_prepare::apply(function, &context.types, header, &edits);
-                        marked = Some(applied.marked.clone());
-                        // A moved or copied test is the same use; `OptimizeMax`
-                        // makes a new compare, so its users are made again.
-                        if edits.iter().all(|edit| edit.max.is_none()) {
-                            let ok = applied.moved.iter().all(|&test| users.carry_exit_test(function, test, None))
-                                && applied
-                                    .copied
-                                    .iter()
-                                    .all(|&(old, copy)| users.carry_exit_test(function, old, Some(copy)));
-                            carried = ok.then_some(users);
+                        // An edit that moves or copies no compare leaves the
+                        // uses as they were. A compare
+                        // it moved or copied changed its operand's
+                        // use list, so the uses are made again over the edited
+                        // loop.
+                        if edits.iter().all(|edit| edit.max.is_none())
+                            && applied.moved.is_empty()
+                            && applied.copied.is_empty()
+                        {
+                            carried = Some(users);
                         }
+                        marked = Some(applied.marked);
                         changed = true;
                         continue;
                     }
