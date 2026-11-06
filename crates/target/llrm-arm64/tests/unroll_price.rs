@@ -8,6 +8,11 @@ fn labels(source: &str) -> usize {
     asm.lines().filter(|line| line.starts_with(".L")).count()
 }
 
+fn branches(source: &str) -> usize {
+    let asm = driver::assembly(source, Platform::Linux, Level::O2).expect("lowers");
+    asm.lines().filter(|line| line.starts_with("\tb") || line.starts_with("\tcb") || line.starts_with("\ttb")).count()
+}
+
 /// nbody -O2: the triangular nest's inner copies were priced alone and kept
 /// rolled, 38,049 instructions where the pin runs 14,233. The unrolled nest
 /// has 10 labels.
@@ -21,5 +26,5 @@ fn a_nest_whose_inner_count_follows_the_outer_counter_is_the_pins_decision() {
 /// the pin's 80 / 332. Adjacent constant stores merge into stp.
 #[test]
 fn init_loops_whose_stores_merge_when_unrolled_are_unrolled() {
-    assert_eq!(labels(include_str!("data/bench_lru_init.ll")), 0);
+    assert_eq!(branches(include_str!("data/bench_lru_init.ll")), 0);
 }
