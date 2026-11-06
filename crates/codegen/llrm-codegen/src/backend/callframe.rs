@@ -806,9 +806,10 @@ mod tests {
             vec![],
             vec![1],
         );
-        let before = body(vec![setup(4), byte, call(), destroy(4)]);
+        // Two slots, as one push alone is never worth the adjustments.
+        let before = body(vec![setup(8), store(4, imm(4), vec![]), byte, call(), destroy(8)]);
         let after = pass().run(&before);
-        assert_eq!(names(&after), ["call_frame_setup", "mov", "call", "call_frame_destroy"]);
+        assert_eq!(names(&after), ["call_frame_setup", "mov", "mov", "call", "call_frame_destroy"]);
     }
 
     /// The pinned `llc -run-pass=x86-cf-opt` on a frame of two stores, `mov
