@@ -16,10 +16,19 @@ case $tgt in
        bytes() { local s=0 h; for h in $(wasm-objdump -h "$1" | awk '$1=="Code"||$1=="Data"' | grep -o 'size=0x[0-9a-f]*' | cut -d= -f2); do s=$((s + h)); done; echo $s; } ;;
   *) echo "target: m32 or wasm32" >&2; exit 2 ;;
 esac
+# The x87 return shim: what moving an integer-register result into st0 costs (clang -O2 i486: a wrapper of g() returning float/double, less the tail-call wrapper), added
+# to ours in the `+x87` columns so a starred compiler-rt cell can be ranked against a like-for-like one.
+shim64=0; shim32=0
+if [ $tgt = m32 ]; then
+  printf 'extern unsigned long long g64(void); extern unsigned g32(void);\ndouble w64(void) { union { unsigned long long u; double d; } x; x.u = g64(); return x.d; }\nfloat w32(void) { union { unsigned u; float f; } x; x.u = g32(); return x.f; }\nunsigned long long b64(void) { return g64(); }\nunsigned b32(void) { return g32(); }\n' > $T/shim.c
+  /usr/bin/clang --target=i486-linux-gnu -march=i486 -O2 -fno-pic -fno-asynchronous-unwind-tables -c $T/shim.c -o $T/shim.o
+  sz() { echo $((16#$(nm -S $T/shim.o | awk -v n=$1 '$4==n{print $2}'))); }
+  shim64=$(( $(sz w64) - $(sz b64) )); shim32=$(( $(sz w32) - $(sz b32) ))
+fi
 # op: ours file | crt routines (summed) | libgcc routines (summed)
 ops="add+sub:add_sub:adddf3,subdf3:addsf3,subsf3 mul:mul:muldf3:mulsf3 div:div:divdf3:divsf3 neg:neg:negdf2:negsf2 fix_si:fix_si:fixdfsi:fixsfsi fix_usi:fix_usi:fixunsdfsi:fixunssfsi float:float:floatsidf,floatunsidf,floatdidf,floatundidf:floatsisf cmp:cmp:comparedf2:comparesf2"
 for O in Os O2; do
-  echo "== $tgt -$O (bytes)"; printf "%-9s %7s %7s %7s | %7s %7s %7s\n" op ours64 crt64 gcc64 ours32 crt32 gcc32
+  echo "== $tgt -$O (bytes)"; printf "%-9s %7s %7s %7s | %7s %7s %7s | %9s %9s\n" op ours64 crt64 gcc64 ours32 crt32 gcc32 ours64+x87 ours32+x87
   for spec in $ops; do IFS=: read name file c64 c32 <<<"$spec"
     [ -z "${ROWS_ONLY:-}" ] || [ "$name" = "$ROWS_ONLY" ] || continue
     row=()
@@ -39,6 +48,9 @@ for O in Os O2; do
       case $name in add+sub|mul|div|neg|float) [ $tgt = m32 ] && [ "$c" != ERR ] && c="$c*";; esac
       row+=("$o" "$c" "$g")
     done
-    printf "%-9s %7s %7s %7s | %7s %7s %7s\n" "$name" "${row[@]}"
+    x64=-; x32=-
+    case "${row[1]}" in *"*") [ "${row[0]}" = ERR ] || x64=$((${row[0]} + shim64));; esac
+    case "${row[4]}" in *"*") [ "${row[3]}" = ERR ] || x32=$((${row[3]} + shim32));; esac
+    printf "%-9s %7s %7s %7s | %7s %7s %7s | %9s %9s\n" "$name" "${row[@]}" $x64 $x32
   done
 done
