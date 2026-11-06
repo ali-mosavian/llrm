@@ -191,10 +191,21 @@ impl CombineHooks for X86Lowering<'_> {
     /// GE/LE canonicalization: the pin runs them on x86. Judged on `bintree`, `jpeg_*`
     /// and `particle` (m16 and C, `-Os`/`-O2`): fewer bytes or clocks, none worse. The
     /// other default-off combines either changed nothing there or cost a byte
-    /// (`rebuild_brcond_condition`, `fold_mul_of_add_with_constant`) and stay off.
+    /// (`rebuild_brcond_condition`) and stay off.
     /// DEVIATE: the remaining pin combines stay off for x86. Exit 2026-12-01.
     fn fold_bin_op_into_select(&self) -> bool {
         true
+    }
+
+    /// `visitMUL`'s `(mul (add x, c1), c2)` is `(add (mul x, c2), c1*c2)` when the other
+    /// multiply of `x` by `c2` is in the DAG: the pin's x86 runs it
+    /// (`isMulAddWithConstProfitable` has no X86 override). Judged on the whole
+    /// corpus: 16 cells smaller (-1795 B), m16 -Os lru +1 B (a 6-byte real-mode `lea`).
+    /// DEVIATE: off at m16 outside `-Os`: the constant leaves a 3-part `lea` for a
+    /// trailing `add`, regparm3_matrix_4/_22 -40..-62 B but +62..+84 instructions,
+    /// +38 and +32 clk-eq at 1 clk = 2 B (the pin splits too). Exit 2026-12-01.
+    fn fold_mul_of_add_with_constant(&self) -> bool {
+        !self.i16_mul_chains || self.min_size
     }
 
     /// `replaceStoreOfFPConstant`: a `double` constant is stored as an `i64`
