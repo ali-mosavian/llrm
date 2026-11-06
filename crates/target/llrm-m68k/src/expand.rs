@@ -186,7 +186,9 @@ pub fn frame_ops_priced(
 ///
 /// DEVIATE from the pin, which has neither: gcc pushes each register. At two
 /// registers the bytes are equal and the clocks lower from the 68020 on
-/// (68020: `movem` pair 34, four `move.l` 22; 68040 9 against 4). Exit: none.
+/// (68020: `movem` pair 34, four `move.l` 22; 68040 9 against 4). From three
+/// registers `movem` is smaller and stays (fnptr +4 B, partition 040 +8 B in
+/// the first A/B). Exit: none.
 pub fn frame_ops_choosing(
     layout: &frame::Layout,
     push_frame: bool,
@@ -207,11 +209,18 @@ pub fn frame_ops_choosing(
         Ok(ours_bytes <= pin_bytes && ours_clocks <= pin_clocks)
     };
     let mut best: Option<((i64, i64), (Vec<FrameOp>, Vec<FrameOp>))> = None;
+    // the first candidate that passes is the `movem` push; a later one must not
+    // be larger than it (strict on bytes: no m68k byte rate is derived)
+    let mut bytes_limit = usize::MAX;
     for (opening, closing) in pushed {
         if !(no_worse(&opening, &pin_opening)? && no_worse(&closing, &pin_closing)?) {
             continue;
         }
         let ((ob, oc), (cb, cc)) = (cost(&opening)?, cost(&closing)?);
+        if ob + cb > bytes_limit {
+            continue;
+        }
+        bytes_limit = bytes_limit.min(ob + cb);
         let ranked = key(ob + cb, oc + cc);
         if best.as_ref().is_none_or(|(held, _)| ranked < *held) {
             best = Some((ranked, (opening, closing)));

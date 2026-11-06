@@ -52,6 +52,19 @@ fn the_movem_push_stays_on_a_tie_and_where_it_is_smaller() {
     assert!(!each(&size), "{size:?}");
 }
 
+/// Three registers: the `move.l` form is 2 B larger each way, so a byte-strict
+/// rule keeps `movem` at every CPU and level (fnptr was 42 → 46 B, partition at
+/// the 68040 +8 B).
+#[test]
+fn a_larger_push_is_never_taken() {
+    for cpu in [Cpu::M68000, Cpu::M68020, Cpu::M68040, Cpu::M68060] {
+        for size in [false, true] {
+            let ops = chosen(vec![reg::D2, reg::D3, reg::A2], cpu, size);
+            assert!(!each(&ops), "{cpu:?} size={size}: {ops:?}");
+        }
+    }
+}
+
 const COUNTGT: &str = include_str!("../bench/kernels/countgt.ll");
 
 #[test]
