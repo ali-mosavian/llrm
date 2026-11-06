@@ -1974,6 +1974,32 @@ fn test_a_loop_block_nothing_falls_into_is_aligned() {
     assert!(align(m16).iter().all(|(_, align)| *align == 0), "m16 aligns nothing");
 }
 
+/// DEVIATE ALIGN-O1: below -O2 (`speed_rate` off) a target that says so
+/// aligns no loop, as gcc: m32 `mandel` -O1 ran 5,376 one-byte nops, gcc 0.
+#[test]
+fn test_a_target_that_does_not_align_at_o1_aligns_no_loop_there() {
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_move(1, imm(0)), _jump(2, 3)], vec![3]).into(),
+            block(8, vec![_move(8, bx())], vec![3]).into(),
+            block(3, vec![_compare(3), _branch(4, "jl", 8), _jump(5, 17)], vec![8, 17]).into(),
+            block(17, vec![_return(17)], vec![]).into(),
+        ],
+    );
+    let mut on = cpu::profile("486").unwrap().clone();
+    on.loop_alignment = 4;
+    on.speed_rate = false;
+    let aligned_blocks = |one: &cpu::Profile| aligned(&source, one).blocks.iter().filter(|one| one.align != 0).count();
+    on.align_loops_at_o1 = true;
+    assert_eq!(aligned_blocks(&on), 1, "the pin's -O1 aligns");
+    on.align_loops_at_o1 = false;
+    assert_eq!(aligned_blocks(&on), 0, "m32 -O1 aligns nothing");
+    on.speed_rate = true;
+    assert_eq!(aligned_blocks(&on), 1, "-O2 aligns");
+}
+
 /// DEVIATE SD545: an aligned loop header takes at most the target's
 /// `loop_max_skip` bytes of padding. jpeg_single -O2 m32 padded 15 bytes of
 /// one-byte nops before a loop it falls into 58% of the time, 216,077 nops

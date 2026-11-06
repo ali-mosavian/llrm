@@ -118,6 +118,9 @@ pub struct Profile {
     pub loop_alignment: u8,
     /// `Target::loop_alignment_max_skip`.
     pub loop_max_skip: u8,
+    /// `Target::align_loops_at_o1`; below -O2 (`speed_rate` off) loops are
+    /// aligned only where this holds.
+    pub align_loops_at_o1: bool,
     pub call_register_capacity: i64,
     /// The floating values it holds in registers at once.
     pub float_register_capacity: i64,
@@ -356,6 +359,7 @@ impl Profile {
             bsf_rep_prefix: arch.bsf_rep_prefix(),
             loop_alignment: arch.pref_loop_alignment(),
             loop_max_skip: arch.loop_alignment_max_skip(),
+            align_loops_at_o1: arch.align_loops_at_o1(),
             call_register_capacity: arch.callee_saved().len() as i64,
             float_register_capacity: arch.float_stack() as i64,
             address_scales: BTreeSet::from([1]),
