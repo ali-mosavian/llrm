@@ -7,11 +7,13 @@
 //! BMI2). Either operand folds from memory, the multiply being commutative; the
 //! product halves that are used are copied out of `EAX` and `EDX`.
 //!
-//! Numbered deviation: **SD303** `orderRegForMul` (swap so the operand already
-//! in `EAX` is the implicit one) is skipped: it reads the live-in physical
-//! register of a virtual `CopyFromReg`, which the DAG does not carry. At worst
-//! one extra copy. Owner sdag-c. Exit: live-in map in the adapter. Review
-//! 2026-12-10.
+//! `orderRegForMul` ([L5280][order]) swaps the operands when the second one
+//! already sits in the implicit register, so no copy is needed; the live-in
+//! physical register of a virtual `CopyFromReg` comes from
+//! [`AddrDag::live_in_physical`].
+//!
+//! [order]:
+//! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L5280
 //!
 //! # Used by
 //! [`crate::x86_select::select_node`].
@@ -24,6 +26,25 @@ use crate::generated::ids::{isd, mvt, x86};
 use crate::x86_addr::AddrDag;
 use crate::x86_divrem::copy_results;
 use crate::x86_hooks::{Cpu, X86Hooks};
+
+/// `orderRegForMul`: swap so the operand already in `lo` is the implicit one.
+fn order_reg_for_mul<D: AddrDag>(
+    dag: &D,
+    n0: &mut SDValue,
+    n1: &mut SDValue,
+    lo: u16,
+) {
+    let phys = |v: SDValue| {
+        if dag.opcode(v.node) != isd::CopyFromReg {
+            return None;
+        }
+        let reg = dag.operand(v.node, 1).node;
+        dag.live_in_physical(reg).or_else(|| dag.register_of(reg))
+    };
+    if phys(*n1) == Some(lo) && phys(*n0) != Some(lo) {
+        std::mem::swap(n0, n1);
+    }
+}
 
 /// Selects `node`; false when its type is one the pin's case has no row for:
 /// `i32`, and `i64` at 64 bits.
@@ -53,6 +74,10 @@ pub fn select_mul_lohi<D: AddrDag>(
         if folded.is_some() {
             std::mem::swap(&mut n0, &mut n1);
         }
+    }
+
+    if folded.is_none() {
+        order_reg_for_mul(dag, &mut n0, &mut n1, lo);
     }
 
     // DEVIATE SD444: where the multiply ends early on the r/m operand, a
@@ -117,6 +142,10 @@ pub fn select_mul_flags<D: AddrDag>(
         if folded.is_some() {
             std::mem::swap(&mut n0, &mut n1);
         }
+    }
+
+    if folded.is_none() {
+        order_reg_for_mul(dag, &mut n0, &mut n1, lo);
     }
 
     let entry = dag.entry_node();

@@ -1500,6 +1500,33 @@ mod mul_lohi {
     fn a_signed_wide_multiply_is_imul32r() {
         assert!(multiply(isd::SMUL_LOHI).contains(&x86::IMUL32r));
     }
+
+    /// `a * b` where `b` arrives in `EAX` (virtual register 2, live-in `EAX`)
+    /// and `a` in `EDX`: the pin swaps so `b` is the implicit operand. Without
+    /// the swap the selector copied `b` out of `EAX` into `EDX` and `a` into
+    /// `EAX` (4 instructions for a 32x32 multiply, 2 after).
+    #[test]
+    fn the_operand_already_in_eax_is_the_implicit_one() {
+        let mut dag = TestDag::new();
+        let (a, b) = (dag.input(1, mvt::i32), dag.input(2, mvt::i32));
+        dag.live_ins = vec![(1, x86::EDX), (2, x86::EAX)];
+        let node = dag.node(isd::UMUL_LOHI, &[mvt::i32, mvt::i32], &[a, b]);
+        dag.node(isd::ADD, &[mvt::i32], &[SDValue::new(node, 0), SDValue::new(node, 1)]);
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::I486,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            multiply_early_out: false,
+            address_mode: crate::x86_addr::AddrMode::Flat32,
+        });
+        assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, node), Outcome::Selected);
+        let copied = dag.nodes.iter().find(|n| n.opcode == isd::CopyToReg).unwrap().ops[2];
+        assert_eq!(copied, b);
+        let mul = dag.nodes.iter().find(|n| n.machine == Some(x86::MUL32r)).unwrap();
+        assert_eq!(mul.ops[0], a);
+    }
 }
 
 mod llrm_intrinsics {

@@ -388,6 +388,9 @@ pub struct SelectionDAG {
     pub(super) survivors: Vec<u32>,
     /// The `IROrder` of the `SDLoc` in force: nodes made now carry it.
     pub cur_order: u32,
+    /// The physical register each virtual register arrives in (`getLiveInPhysReg`), by
+    /// virtual register number: set for the entry block's arguments.
+    pub live_in_phys: llrm_support::hash::HashMap<u32, llrm_lir::registers::RegId>,
     /// The source line of the IR instruction at each `IROrder` (0: none), from
     /// the `!dbg` the builder read: `SDLoc`'s line.
     pub lines: Vec<Option<crate::model::lir::SrcLoc>>,
@@ -505,6 +508,7 @@ impl SelectionDAG {
             dead_work: Vec::new(),
             survivors: Vec::new(),
             cur_order: 0,
+            live_in_phys: Default::default(),
             lines: Vec::new(),
             inst_order: Vec::new(),
             expanded_integers: Default::default(),
