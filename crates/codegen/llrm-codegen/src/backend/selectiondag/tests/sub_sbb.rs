@@ -41,12 +41,14 @@ fn a_negated_shifted_bit_is_a_bit_test_and_sbb() {
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
     let mut hooks = X86Lowering {
         imul_if_smaller: false,
+        share_products: false,
         cmov: false,
         sse2: false,
         min_size: false,
         three_address_adds: false,
         i16_mul_chains: false,
-        sext_load: false, zext_free: false,
+        sext_load: false,
+        zext_free: false,
         profile: None,
     };
     DagCombiner::new(&mut dag, &mut hooks, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();

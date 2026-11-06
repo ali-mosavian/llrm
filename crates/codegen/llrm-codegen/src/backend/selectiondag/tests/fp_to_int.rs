@@ -16,12 +16,14 @@ fn converted(
         &tli,
         &mut X86Lowering {
             imul_if_smaller: false,
+            share_products: false,
             cmov: false,
             sse2: false,
             min_size: false,
             three_address_adds: false,
             i16_mul_chains: false,
-            sext_load: false, zext_free: false,
+            sext_load: false,
+            zext_free: false,
             profile: None,
         },
     )
@@ -75,12 +77,14 @@ fn an_unsigned_i64_conversion_subtracts_two_to_the_63_and_flips_the_sign() {
     let converted = dag.get_node(ISD::FpToUInt, EVT::I64, &[x]);
     let root = X86Lowering {
         imul_if_smaller: false,
+        share_products: false,
         cmov: false,
         sse2: false,
         min_size: false,
         three_address_adds: false,
         i16_mul_chains: false,
-        sext_load: false, zext_free: false,
+        sext_load: false,
+        zext_free: false,
         profile: None,
     }
     .lower_operation(&mut dag, converted)
@@ -109,12 +113,14 @@ fn an_i64_result_is_lowered_by_the_target_then_split() {
     dag.set_root(low);
     let mut hooks = X86Lowering {
         imul_if_smaller: false,
+        share_products: false,
         cmov: false,
         sse2: false,
         min_size: false,
         three_address_adds: false,
         i16_mul_chains: false,
-        sext_load: false, zext_free: false,
+        sext_load: false,
+        zext_free: false,
         profile: None,
     };
     let mut legalizer = TypeLegalizer::new(&mut dag, &tli).with_hooks(&mut hooks);

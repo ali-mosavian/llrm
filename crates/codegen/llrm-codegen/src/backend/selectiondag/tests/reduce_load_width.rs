@@ -31,6 +31,17 @@ fn combined_with(
     dag.set_root(root);
     let mut hooks =
         X86Lowering { imul_if_smaller: false, cmov: true, sse2: false, min_size: false, three_address_adds: false, i16_mul_chains: false, sext_load, zext_free: false, profile: None };
+    let mut hooks = X86Lowering {
+        share_products: false,
+        cmov: true,
+        sse2: false,
+        min_size: false,
+        three_address_adds: false,
+        i16_mul_chains: false,
+        sext_load,
+        zext_free: false,
+        profile: None,
+    };
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
     DagCombiner::new(&mut dag, &mut hooks, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
     let root = dag.get_root();

@@ -300,6 +300,17 @@ impl TargetLowering {
         vt: EVT,
     ) -> Option<&'static str> {
         let EVT::Simple(vt) = vt else { return None };
+        if vt == MVT::F128 {
+            // `RTLIB::ADD_F128` and the rest: every target calls the
+            // compiler-rt routine
+            return match op {
+                ISD::FAdd => libcalls::name(Libcall::Add(vt)),
+                ISD::FSub => libcalls::name(Libcall::Sub(vt)),
+                ISD::FMul => libcalls::name(Libcall::Mul(vt)),
+                ISD::FDiv => libcalls::name(Libcall::Div(vt)),
+                _ => None,
+            };
+        }
         let sized = self.opt_for_size.then(|| self.size_libcall_names.get(&(op, vt)).copied()).flatten();
         sized.or_else(|| self.libcall_names.get(&(op, vt)).copied())
     }
@@ -718,6 +729,15 @@ impl TargetLowering {
             }
         }
         t.set_trunc_store_action(MVT::F64, MVT::F32, Expand);
+
+        // `f128` is a legal type (`FPR128`) without arithmetic: the operations
+        // are RTLIB calls, the compares and selects and the conversions to and
+        // from it are `Custom` (`LowerF128Call`).
+        let quad = [MVT::F128];
+        t.set_ops(&[FAdd, FSub, FMul, FDiv], &quad, LibCall);
+        t.set_ops(&[ConstantFP], &quad, Expand);
+        t.set_ops(&[SetCC, BrCC, Select, SelectCC], &quad, Custom);
+        t.set_ops(&[FpExtend], &quad, Custom);
 
         // Atomics.
         let narrow = [MVT::I8, MVT::I16, MVT::I32, MVT::I64];

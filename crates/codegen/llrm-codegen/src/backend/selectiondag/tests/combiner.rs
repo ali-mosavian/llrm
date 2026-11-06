@@ -44,12 +44,14 @@ fn x86(
         dag,
         &mut X86Lowering {
             imul_if_smaller: false,
+            share_products: false,
             cmov: false,
             sse2: false,
             min_size: false,
             three_address_adds: false,
             i16_mul_chains: false,
-            sext_load: false, zext_free: false,
+            sext_load: false,
+            zext_free: false,
             profile: None,
         },
         level,
@@ -160,6 +162,17 @@ fn an_i16_multiply_is_a_chain_where_the_target_asks_and_an_imul_otherwise() {
         dag.set_root(product);
         let mut lowering =
             X86Lowering { imul_if_smaller: false, cmov: false, sse2: false, min_size, three_address_adds: false, i16_mul_chains: chains, sext_load: false, zext_free: false, profile: None };
+        let mut lowering = X86Lowering {
+            share_products: false,
+            cmov: false,
+            sse2: false,
+            min_size,
+            three_address_adds: false,
+            i16_mul_chains: chains,
+            sext_load: false,
+            zext_free: false,
+            profile: None,
+        };
         DagCombiner::new(&mut dag, &mut lowering, CombineLevel::AfterLegalizeTypes).run();
         dag.opcode(dag.get_root())
     };
@@ -173,12 +186,14 @@ fn an_i16_multiply_is_a_chain_where_the_target_asks_and_an_imul_otherwise() {
         dag.set_root(product);
         let mut lowering = X86Lowering {
             imul_if_smaller: false,
+            share_products: false,
             cmov: false,
             sse2: false,
             min_size: false,
             three_address_adds: false,
             i16_mul_chains: true,
-            sext_load: false, zext_free: false,
+            sext_load: false,
+            zext_free: false,
             profile: None,
         };
         DagCombiner::new(&mut dag, &mut lowering, CombineLevel::AfterLegalizeTypes).run();
@@ -217,16 +232,24 @@ fn a_constant_the_pin_leaves_an_imul_is_the_chain_where_the_block_is_hot() {
         let product = mul_by(&mut dag, x, 43);
         dag.set_root(product);
         let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
-        let pricing =
-            MulPricing { cpu: m16, arch: &llrm_x86_m16::M16, freq, milliclocks_per_byte: rate, by_clocks: false, price_pin: false };
+        let pricing = MulPricing {
+            cpu: m16,
+            arch: &llrm_x86_m16::M16,
+            freq,
+            milliclocks_per_byte: rate,
+            by_clocks: false,
+            price_pin: false,
+        };
         let mut lowering = X86Lowering {
             imul_if_smaller: false,
+            share_products: false,
             cmov: false,
             sse2: false,
             min_size,
             three_address_adds: false,
             i16_mul_chains: false,
-            sext_load: false, zext_free: false,
+            sext_load: false,
+            zext_free: false,
             profile: priced.then_some(pricing),
         };
         DagCombiner::new(&mut dag, &mut lowering, CombineLevel::AfterLegalizeTypes).with_tli(&tli).run();
@@ -257,12 +280,14 @@ fn the_i16_chain_is_built_exactly_where_i16_is_not_promoted() {
         let sum = dag.get_node(ISD::Add, EVT::I16, &[x, y]);
         let lowering = X86Lowering {
             imul_if_smaller: false,
+            share_products: false,
             cmov: false,
             sse2: false,
             min_size: false,
             three_address_adds: false,
             i16_mul_chains: !promotes_i16(&tli),
-            sext_load: false, zext_free: false,
+            sext_load: false,
+            zext_free: false,
             profile: None,
         };
         assert_eq!(promotes_i16(&tli), promotes);
@@ -397,12 +422,14 @@ fn a_not_of_a_float_compare_does_not_make_a_code_the_target_expands() {
         &mut dag,
         &mut X86Lowering {
             imul_if_smaller: false,
+            share_products: false,
             cmov: false,
             sse2: false,
             min_size: false,
             three_address_adds: false,
             i16_mul_chains: false,
-            sext_load: false, zext_free: false,
+            sext_load: false,
+            zext_free: false,
             profile: None,
         },
         CombineLevel::AfterLegalizeDag,

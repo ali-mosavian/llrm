@@ -15,12 +15,14 @@ fn legalized(
         &tli,
         &mut X86Lowering {
             imul_if_smaller: false,
+            share_products: false,
             cmov: false,
             sse2: false,
             min_size: false,
             three_address_adds: false,
             i16_mul_chains: false,
-            sext_load: false, zext_free: false,
+            sext_load: false,
+            zext_free: false,
             profile: None,
         },
     )
@@ -80,12 +82,14 @@ fn equal_constants_share_a_pool_entry() {
         &tli,
         &mut X86Lowering {
             imul_if_smaller: false,
+            share_products: false,
             cmov: false,
             sse2: false,
             min_size: false,
             three_address_adds: false,
             i16_mul_chains: false,
-            sext_load: false, zext_free: false,
+            sext_load: false,
+            zext_free: false,
             profile: None,
         },
     )
@@ -110,12 +114,14 @@ fn a_target_that_takes_every_float_constant_keeps_it() {
             &tli,
             &mut X86Lowering {
                 imul_if_smaller: false,
+                share_products: false,
                 cmov: false,
                 sse2: false,
                 min_size: false,
                 three_address_adds: false,
                 i16_mul_chains: false,
-                sext_load: false, zext_free: false,
+                sext_load: false,
+                zext_free: false,
                 profile: None,
             },
         )

@@ -26,6 +26,11 @@ class DriversRefuseSwitches(unittest.TestCase):
         done = run("identity.sh", LLRM_NO_COMBINE="a b")
         self.assertIn("LLRM_NO_COMBINE=a b", done.stderr)
 
+    def test_identity_does_not_refuse_the_verify_switch_it_sets_itself(self):
+        """identity.sh exports LLRM_VERIFY=1 for both sides, then its own ab_env_check refused it: the script exited 2 before any compile (since #7506)."""
+        done = run("identity.sh")
+        self.assertNotIn("changes the pipeline", done.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

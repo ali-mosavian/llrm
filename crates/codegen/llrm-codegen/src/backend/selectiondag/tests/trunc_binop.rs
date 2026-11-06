@@ -13,12 +13,14 @@ fn combined(build: impl FnOnce(&mut SelectionDAG, SDValue) -> SDValue) -> (Selec
     dag.set_root(root);
     let mut hooks = X86Lowering {
         imul_if_smaller: false,
+        share_products: false,
         cmov: true,
         sse2: false,
         min_size: false,
         three_address_adds: false,
         i16_mul_chains: false,
-        sext_load: false, zext_free: false,
+        sext_load: false,
+        zext_free: false,
         profile: None,
     };
     DagCombiner::new(&mut dag, &mut hooks, CombineLevel::BeforeLegalizeTypes).run();

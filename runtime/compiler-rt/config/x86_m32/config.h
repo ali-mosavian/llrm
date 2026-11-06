@@ -19,6 +19,7 @@ unsigned long long llrm_udiv64by32(unsigned hi, unsigned lo, unsigned d) __asm__
 #endif
 #define SF_NORM_SUB_FIRST 1 /* the shift count lives in cl: m32 mul -Os 102727 -> 101059 clk, -55 B in the -Os image */
 #define SF_CLZ32(x) ((int)__builtin_clz(x))
+#define SF_CMP_OUTLINE 1 /* compare entries call one core: f64 cmp.c -O2 1026 -> see tests/cmp_outline_size_test.sh */
 #define SF_WIDE_ABS_MASK 1 /* f64 compare: masks, not 64-bit shifts */
 #define SF_STICKY_MASK 1 /* f64 mul: mask test for the sticky bit */
 #endif
