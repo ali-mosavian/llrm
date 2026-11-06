@@ -155,7 +155,7 @@ pub fn select_block(
         info,
         temporaries,
     )?;
-    emit_in(dag, &units, ctx, state, first_at).map_err(Refusal::Emit)
+    crate::support::debug::timed("dag emit", || emit_in(dag, &units, ctx, state, first_at)).map_err(Refusal::Emit)
 }
 
 /// `SelectCodeCommon` for `AssertSext` and `AssertZext`: each is its operand.
