@@ -9,6 +9,11 @@
 #else
 #define SF_CONV_FN static
 #endif
+#ifdef SF_CONV_MAG_NOINLINE /* only the 64-bit normaliser shared: the int32 entries stay inline */
+#define SF_MAG_FN __attribute__((noinline)) static
+#else
+#define SF_MAG_FN SF_CONV_FN
+#endif
 /* n = index of the top set bit of u (u != 0); round to nearest even at bit 52. Needs no pack: n <= 63 means at most 11 bits are dropped, and a carry out of the
  * significand lands in the exponent field by the addition (the implicit bit is added with m). */
 #ifdef SF_CLZ64
@@ -40,7 +45,7 @@ SF_CONV_FN sf64 from_mag32(uint64_t sign, uint32_t x)
     return sign + (((uint64_t)(((uint32_t)n + 1022u) << 20) + (y >> 11)) << 32) + ((uint64_t)(y << 21));
 #endif
 }
-SF_CONV_FN sf64 from_mag(uint64_t sign, uint64_t u)
+SF_MAG_FN sf64 from_mag(uint64_t sign, uint64_t u)
 {
 #ifdef SF_CLZ64 /* native 64-bit clz: one normaliser and no pack call (a program using only conversions links 52-168 B, not 300) */
     if (!u) return 0;
