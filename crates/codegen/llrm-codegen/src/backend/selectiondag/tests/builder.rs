@@ -238,8 +238,7 @@ fn a_call_register_mask_names_the_conventions_caller_saved_registers() {
     let module = llrm_mir::parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
     let layout = DataLayout::parse(module.datalayout.as_deref().expect("a datalayout")).expect("a datalayout");
     let target = BuilderTarget::m32().with_libcalls(&["memcpy", "memmove", "memset"]);
-    // the pin numbers `phys_reg` knows: ECX has none, so it cannot be a live physical definition either
-    let wanted: Vec<u16> = [RegId::EAX, RegId::EDX]
+    let wanted: Vec<u16> = [RegId::EAX, RegId::ECX, RegId::EDX]
         .into_iter()
         .map(|reg| super::super::dagisel_adapter::pin_register(reg).expect("a pin number"))
         .collect();
