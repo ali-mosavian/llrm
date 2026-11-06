@@ -367,8 +367,12 @@ class Drain(Env, unittest.TestCase):
     def test_five_slots_at_one_minute_17_with_30_gb_available(self):
         self.assertEqual(self.admitted(17.0, 30), 5)
 
-    def test_five_slots_at_one_minute_19_with_80_gb_available(self):
-        self.assertEqual(self.admitted(19.0, 80), 5)
+    def test_seven_slots_at_one_minute_21_with_80_gb_available(self):
+        """Five slots at 1m 18.5 left 34 waiters queued with load 18 and the start limit 25: slots, not load, were the bottleneck."""
+        self.assertEqual(self.admitted(21.0, 80), 7)
+
+    def test_three_slots_at_one_minute_23_with_80_gb_available(self):
+        self.assertEqual(self.admitted(23.0, 80), 3)
 
     def test_a_waiter_wakes_within_ten_seconds_of_the_load_dropping(self):
         """The 15 s default poll let only the head waiter admit every 15-30 s: 38 queued at 1m 8, five slots free."""
