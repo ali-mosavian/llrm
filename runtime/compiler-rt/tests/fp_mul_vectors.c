@@ -16,6 +16,14 @@ static uint64_t pick(int dbl)
     case 3: e = 1; break;
     default: e = bias - 20 + rnd() % 40; break;
     }
+    if (k >= 5) { /* edge mantissas: the quotient/product corrections (Newton reciprocal) fire near 1, powers of two and all-ones */
+        uint64_t all = (1ull << mb) - 1, h = 1ull << (mb - 1);
+        static const int pick_kind[] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+        switch (pick_kind[rnd() % 8]) {
+        case 0: man = 0; break; case 1: man = 1; break; case 2: man = all; break; case 3: man = all - 1; break;
+        case 4: man = h; break; case 5: man = h - 1; break; case 6: man = h + 1; break; default: man = all - (rnd() % 16); break;
+        }
+    }
     return sign << (mb + eb) | (uint64_t)e << mb | man;
 }
 int main(int argc, char **argv)
