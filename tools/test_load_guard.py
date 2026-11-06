@@ -319,7 +319,21 @@ class TermInsideTheQueue(Env, unittest.TestCase):
             guard = self.start("true", PATH=path, **env)
             time.sleep(0.4 + 0.07 * attempt)
             guard.terminate()
-            self.assertTrue(until(lambda: guard.poll() is not None, 5), f"attempt {attempt}: stuck on its own lock")
+            self.assertTrue(until(lambda: guard.poll() is not None, 3), f"attempt {attempt}: stuck on its own lock")  # LG_LOCK_WAIT 2 s
+            self.assertTrue(until(lambda: self.slots_free(), 2), f"attempt {attempt}: a slot stayed locked after the exit")
+
+    def slots_free(self):
+        import fcntl
+        slot_dir = os.path.join(self.dir.name, "slots")
+        for name in os.listdir(slot_dir):
+            if not name.startswith("slot."):
+                continue
+            with open(os.path.join(slot_dir, name)) as f:
+                try:
+                    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError:
+                    return False
+        return True
 
 
 if __name__ == "__main__":
