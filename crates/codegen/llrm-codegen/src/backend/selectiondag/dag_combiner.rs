@@ -53,8 +53,29 @@ pub enum CombineLevel {
     AfterLegalizeDag,
 }
 
+/// The machine opcodes of a target's multiply of two half-width operands into
+/// a full-width product (`mulu.w` / `muls.w`).
+#[derive(Clone, Copy)]
+pub struct HalfMul {
+    pub half: EVT,
+    pub unsigned: u32,
+    pub signed: u32,
+}
+
 /// `TLI.hasTargetDAGCombine` and `TLI.PerformDAGCombine`.
 pub trait CombineHooks {
+    /// `(mul x, y)` of operands known to fit half the width is the target's
+    /// half-by-half multiply. The pin has no such rule: its M68k multiplies
+    /// two `i32` with `muls.l` (68020) or a libcall (68000), never `muls.w`.
+    /// DEVIATE: off by default; m68k opts in per CPU. Exit: none, while the
+    /// pin has no known-bits multiply selection.
+    fn mul_of_halves(
+        &self,
+        _vt: EVT,
+    ) -> Option<HalfMul> {
+        None
+    }
+
     /// `TLI.convertSelectOfConstantsToMath`: a select of two constants is an
     /// extend of the condition plus a constant. The pin's default is false;
     /// DEVIATE: true here because this combiner was written for x86, which
@@ -3241,7 +3262,38 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 }
             }
         }
+        if let Some(half) = self.hooks.mul_of_halves(vt) {
+            if let Some(product) = self.mul_of_halves(n0, n1, vt, half) {
+                return Some(product);
+            }
+        }
         self.reassociate_ops(ISD::Mul, n0, n1, self.dag.node(node).flags)
+    }
+
+    /// The half-by-half multiply of `x * y`, where both are known to fit the
+    /// half type unsigned (high bits zero) or both signed (sign bits above
+    /// the half's width). A constant operand is left to the pin's folds.
+    fn mul_of_halves(
+        &mut self,
+        x: SDValue,
+        y: SDValue,
+        vt: EVT,
+        half: HalfMul,
+    ) -> Option<SDValue> {
+        if self.dag.constant(x).is_some() || self.dag.constant(y).is_some() {
+            return None;
+        }
+        let (width, narrow) = (vt.size_in_bits(), half.half.size_in_bits());
+        let high = super::fold::mask(width) & !super::fold::mask(narrow);
+        let opcode = if [x, y].iter().all(|&v| super::known_bits::masked_value_is_zero(self.dag, v, high)) {
+            half.unsigned
+        } else if [x, y].iter().all(|&v| super::known_bits::num_sign_bits(self.dag, v) > width - narrow) {
+            half.signed
+        } else {
+            return None;
+        };
+        let low = self.dag.get_node(ISD::Truncate, half.half, &[y]);
+        Some(self.dag.get_node(ISD::Machine(opcode), vt, &[x, low]))
     }
 
     /// The shifts and the add or subtract of `x * c` for `c = +-(2^n +- 1) <<

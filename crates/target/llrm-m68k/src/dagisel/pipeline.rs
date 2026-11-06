@@ -186,7 +186,7 @@ pub fn select_block_with(
     frame: &mut Temporaries,
 ) -> Result<Vec<Unit>, Refusal> {
     let tli = target_lowering(cpu);
-    let mut lowering = M68kLowering { indexed, short, absolute_data };
+    let mut lowering = M68kLowering { indexed, short, absolute_data, half_mul: short && super::lowering::prefers_word_multiply(cpu) };
     let selector = Selector::new(match cpu {
         Cpu::M68000 | Cpu::M68010 => m68k_m68000::TABLE,
         Cpu::M68020 | Cpu::M68030 | Cpu::M68040 | Cpu::M68060 => m68k_m68020::TABLE,
