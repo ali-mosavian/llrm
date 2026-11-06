@@ -1803,3 +1803,23 @@ fn at_os_a_multiply_that_ties_in_bytes_takes_the_chain_on_m32() {
     let imuls = done.body.insns().iter().filter(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("imul"))).count();
     assert_eq!(imuls, 0, "a tie in bytes is the chain's");
 }
+
+/// `t[3 * i]` on `int` is `mul i, 12` feeding an add: the `shl 2` folds into the
+/// address scale, so the chain is one `lea` (bintree -Os: `imul` kept, 0 B saved,
+/// +40k clk): the chain wins.
+#[test]
+fn at_os_a_multiply_whose_shift_folds_into_an_address_takes_the_chain_on_m32() {
+    let ir = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(ptr %t, i32 %a) {
+  %m = mul i32 %a, 12
+  %p = getelementptr i8, ptr %t, i32 %m
+  %v = load i32, ptr %p
+  ret i32 %v
+}
+";
+    let module = crate::testing::module(ir).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", true).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let imuls = done.body.insns().iter().filter(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("imul"))).count();
+    assert_eq!(imuls, 0, "the scale folds, so the chain ties the imul");
+}

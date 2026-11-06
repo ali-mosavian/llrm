@@ -415,7 +415,14 @@ impl CombineHooks for X86Lowering<'_> {
                     } else {
                         6
                     };
-                    chain_bytes(dag, *chain, dag.operand(node, 0)) <= imul
+                    // A trailing `shl 1..3` whose users are all adds folds into the
+                    // address's scale (`t[3 * i]` as `[t + r*4]`): no bytes of its own.
+                    let scale = |shift: SDValue| dag.constant(dag.operand(shift, 1)).is_some_and(|by| (1..=3).contains(&by));
+                    let folds = dag.opcode(*chain) == ISD::Shl
+                        && scale(*chain)
+                        && dag.users(node).all(|user| dag.opcode(SDValue { node: user, res: 0 }) == ISD::Add);
+                    let body = if folds { dag.operand(*chain, 0) } else { *chain };
+                    chain_bytes(dag, body, dag.operand(node, 0)) <= imul
                 })
             }
             ISD::Mul => combine_mul(dag, node, level, self.min_size, self.i16_mul_chains, self.profile),
