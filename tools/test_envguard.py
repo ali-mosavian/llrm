@@ -37,3 +37,11 @@ def test_the_off_switch_of_the_llvm_order_is_refused_by_name():
     """The order is on by default; a run with LLRM_NO_LLVM_ORDER in one side only compared two pipelines, not two commits."""
     with pytest.raises(SystemExit, match="LLRM_NO_LLVM_ORDER=1"):
         envguard.require_clean("abmeasure", {"LLRM_NO_LLVM_ORDER": "1", "PATH": "/bin"})
+
+
+def test_a_pipeline_switch_outside_the_three_families_is_refused_and_a_tool_location_is_not():
+    """LLRM_WASM_BACKEND_ONLY is none of CHECK_/EXP_/NO_ and skipped the mid-end on one side; the guard let it through."""
+    with pytest.raises(SystemExit, match="LLRM_WASM_BACKEND_ONLY=1"):
+        envguard.require_clean("abmeasure", {"LLRM_WASM_BACKEND_ONLY": "1"})
+    envguard.require_clean("abmeasure", {"LLRM_OW": "/ow", "LLRM_PIN_CLANG": "/c"})
+
