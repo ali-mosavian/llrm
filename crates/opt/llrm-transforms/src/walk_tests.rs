@@ -220,6 +220,28 @@ fn test_a_caller_of_a_promoted_function_runs_the_list_once() {
     assert!(again.is_empty(), "the caller ran the list again after the promotion: {again:?}");
 }
 
+/// The mark that tells the module-wide step the walk promoted a body is read
+/// and removed there: it must not reach the module a later stage prints.
+#[test]
+fn test_the_walks_promotion_mark_does_not_reach_the_printed_module() {
+    let mut module = parsed(&format!("{}{DESCRIPTOR}", llrm_analysis::testing::DOS));
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
+        |program: &mut llrm_mir::program::Program| {
+            program.exports.entries.insert("top".to_owned());
+            crate::pipeline::applied(
+                program,
+                &crate::pipeline::Applied { options: crate::pipeline::Options::speed(), ..Default::default() },
+            )
+        },
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let text = crate::testing::printed(&module);
+    assert!(!text.contains("llrm-promoted-in-walk"), "the mark stayed on a body:\n{text}");
+}
+
 const TWO_CONSTANTS: &str = "define internal i16 @g(i16 %k, i16 %x) noinline {
 b0:
   br label %head
@@ -2728,9 +2750,62 @@ fn test_m32_copies_a_tree_recursion_into_itself_at_speed() {
     assert!(calls > 8, "fib was not copied into itself, {calls} calls of it");
 }
 
-/// fib at m32 -O2 was copied into itself to the 150 `gcc_insns` the pass allowed
-/// and ran 240256 clocks against gcc's 210636 (gcc's cap is 450; -O2 now takes it,
-/// 99687 clocks); -O3 keeps 150 (rectwo and bintree are worse with 450 there).
+/// Calls of `@paths` after the default pipeline on x86-m32: bench rectwo's
+/// lattice-path count, `paths(n-1, m) + paths(n, m-1)` with two ways out.
+fn m32_paths_calls(options: crate::pipeline::Options) -> usize {
+    let mut module = parsed(
+        "define i32 @paths(i32 %n, i32 %m) {
+b0:
+  %zn = icmp eq i32 %n, 0
+  %zm = icmp eq i32 %m, 0
+  %done = or i1 %zn, %zm
+  br i1 %done, label %base, label %rec
+
+base:
+  ret i32 1
+
+rec:
+  %a = sub i32 %n, 1
+  %b = sub i32 %m, 1
+  %x = call i32 @paths(i32 %a, i32 %m)
+  %y = call i32 @paths(i32 %n, i32 %b)
+  %s = add i32 %x, %y
+  ret i32 %s
+}
+
+define i32 @main() {
+b0:
+  %r = call i32 @paths(i32 9, i32 9)
+  ret i32 %r
+}
+",
+    );
+    llrm_mir::program::Program::lend(
+        &mut module,
+        crate::indvars::tests::m32(),
+        |program: &mut llrm_mir::program::Program| {
+            crate::pipeline::applied(program, &crate::pipeline::Applied { options, ..Default::default() })
+        },
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    llrm_mir::print::module(&module).matches("call i32 @paths").count()
+}
+
+/// bench rectwo at m32 -O3 ran 1230664 clocks against gcc's 555904: the copies were made of the
+/// two-call body and kept 43 calls; gcc eliminates the tail call first and nests the loop it
+/// leaves (466986 clocks that way). The body here is the same shape. -O2 keeps the tree's copies
+/// (fib's pure calls merge across them: 99618 clocks against 228901).
+#[test]
+fn test_m32_o3_paths_is_copied_as_nested_loops_not_as_a_tree_of_calls() {
+    let calls = m32_paths_calls(crate::pipeline::Options::speed());
+    assert!(calls <= 8, "paths kept {calls} calls of itself");
+}
+
+/// fib at m32 -O2 was copied into itself to the 150 `gcc_insns` the pass
+/// allowed and ran 240256 clocks against gcc's 210636 (gcc's cap is 450; -O2
+/// now takes it, 99687 clocks); -O3 keeps 150 (rectwo and bintree are worse
+/// with 450 there).
 #[test]
 fn test_m32_o2_copies_fib_to_gccs_growth_cap_and_o3_to_the_old_one() {
     let o2 = m32_fib_calls(crate::pipeline::Options::default());
@@ -2744,6 +2819,15 @@ fn test_m32_o2_copies_fib_to_gccs_growth_cap_and_o3_to_the_old_one() {
 fn test_m32_copies_no_recursion_at_o1() {
     let calls = m32_fib_calls(crate::pipeline::Options::basic());
     assert!(calls <= 3, "fib was copied into itself at -O1, {calls} calls of it");
+}
+
+/// -Os is strict bytes: quicksort, bintree and hanoi are the same object with
+/// D10 on or off at m32 and x86_64 -Os (247, 229, 47 B), so no recursive copy
+/// is made there (the rate levels' 1261 B shape never reaches -Os).
+#[test]
+fn test_m32_copies_no_recursion_at_os() {
+    let calls = m32_tree_calls(6, crate::pipeline::Options::size());
+    assert!(calls <= 3, "a recursion was copied into itself at -Os, {calls} calls of it");
 }
 
 /// gcc rejects the recursive edge of quicksort and bintree at -O2
@@ -2880,4 +2964,35 @@ fn test_the_m32_edge_bar_makes_gccs_decision_for_every_corpus_recursion() {
             "{name} {function}: gcc_insns {insns}, bars {o2_bar}/{o3_bar}"
         );
     }
+}
+
+/// A speed trial of three calls to one dying callee credited the callee's bytes
+/// three times (the sum ran over the sites): 7 calls to a 139-byte callee
+/// counted 973 bytes gone, the trial read -338 B of growth where the built
+/// code grew 496, and the priced m68k rule lost 22 KB at -O2.
+#[test]
+fn test_a_trial_credits_a_dying_callee_once_however_many_sites_it_inlines() {
+    let module = parsed(
+        "define internal i32 @h(i32 %x) {
+b1:
+  %a = add i32 %x, 1
+  %b = mul i32 %a, 3
+  ret i32 %b
+}
+
+define i32 @f(i32 %x) {
+b1:
+  %p = call i32 @h(i32 %x)
+  %q = call i32 @h(i32 %p)
+  %r = call i32 @h(i32 %q)
+  ret i32 %r
+}
+",
+    );
+    let h = module.globals.iter().position(|global| global.name.as_deref() == Some("h")).expect("h");
+    let h = llrm_mir::context::GlobalId(h as u32);
+    let one = super::dying_callees_bytes(&module, &[h], |body| body.walk().count() as i64);
+    let three = super::dying_callees_bytes(&module, &[h, h, h], |body| body.walk().count() as i64);
+    assert_eq!(one, 3);
+    assert_eq!(three, one, "the callee goes once");
 }

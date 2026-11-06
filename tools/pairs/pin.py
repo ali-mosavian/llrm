@@ -29,6 +29,7 @@ import irguard  # noqa: E402
 
 PINNED_BIN = Path(os.environ.get("LLVM_BIN") or Path.home() / "scratch/llvm-build/bin")  # LLVM d1106deb71cc
 FEATURES = {"x86": "-sse,-sse2,-mmx"}  # what an i486 has not: stated, so no default of the tool's can add it
+CPU_FEATURES = {"x86-64": "+sse,+sse2,+mmx"}  # what the x86-64 baseline has: floats go through SSE, as clang's do
 
 
 class Refused(Exception):
@@ -55,7 +56,8 @@ def target(mode: str, optsize: bool = False) -> Target:
     if found is None:
         raise Refused(f"no target `{mode}` in the target description: {sorted(targetdesc.targets())}")
     arch = found.get("tti", "X86").lower()
-    return Target(found["llvm_triple"], found["llvm_cpu"], found["datalayout"], FEATURES.get(arch, ""), optsize)
+    features = CPU_FEATURES.get(found["llvm_cpu"]) or FEATURES.get(arch, "")
+    return Target(found["llvm_triple"], found["llvm_cpu"], found["datalayout"], features, optsize)
 
 
 def header(of: Target) -> str:

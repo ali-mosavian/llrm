@@ -30,6 +30,8 @@ pub enum Name {
 pub enum Token {
     Local(Name),
     Global(Name),
+    /// `$name` or `$"quoted name"`: a comdat.
+    Comdat(String),
     /// `!name`: named metadata or an attachment's kind.
     MetadataName(String),
     /// `!12`.
@@ -97,6 +99,16 @@ pub fn lex(text: &str) -> Result<Vec<(Token, usize)>, ParseError> {
                 };
                 at = next;
                 out.push((if c == b'%' { Token::Local(name) } else { Token::Global(name) }, line));
+            }
+            b'$' => {
+                let (name, next) = match name_at(bytes, at + 1) {
+                    Ok(Some((Name::Named(name), next))) => (name, next),
+                    Ok(Some((Name::Numbered(number), next))) => (number.to_string(), next),
+                    Ok(None) => return fail(line, "a name must follow `$`".to_owned()),
+                    Err(message) => return fail(line, message),
+                };
+                at = next;
+                out.push((Token::Comdat(name), line));
             }
             b'!' => {
                 let start = at + 1;

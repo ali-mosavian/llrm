@@ -79,6 +79,18 @@ impl Machine for WasmMachine {
         OperationCosts::default()
     }
 
+    /// The code bytes of one instruction of each class, as assembled
+    /// (`tests/size_costs.rs` reads them back with `wasm-objdump`): a memory
+    /// access is the opcode, the alignment and an offset of one LEB byte; a
+    /// `br_if` the opcode and its depth; a call the opcode and the padded
+    /// five-byte function index of a relocatable object. The ALU classes and
+    /// the float operations are one opcode byte, the default's 1. Not
+    /// priced here (the default stands): the `local.get`/`local.set` traffic,
+    /// the constants, and the `block`/`end` of a branch.
+    fn size_costs(&self) -> OperationCosts {
+        OperationCosts { load: 3, store: 3, float_load: 3, float_store: 3, branch: 2, call: 6, ..self.costs() }
+    }
+
     fn registers(&self) -> i64 {
         REGISTERS
     }

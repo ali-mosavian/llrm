@@ -199,7 +199,7 @@ fn legal_arith_immed(immed: u64) -> bool {
 }
 
 /// `AArch64_AM::isLegalCmpImmed`: also as the `ADDS` of its negation.
-fn legal_cmp_immed(value: i128) -> bool {
+pub(super) fn legal_cmp_immed(value: i128) -> bool {
     legal_arith_immed(value.unsigned_abs().try_into().unwrap_or(u64::MAX))
 }
 
@@ -721,6 +721,16 @@ pub fn lower_brcond(
         } else {
             (cond, CondCode::SetNe)
         };
+    // `LowerBR_CC`'s `setcc([su]{add,sub,mul}o ==|!= 0|1)`: the branch reads the
+    // flags of the arithmetic, on the condition that says overflow (opposite
+    // for the inverted bit).
+    let overflow = bit(dag, tested).unwrap_or(tested);
+    if is_xalu_overflow(dag, overflow)
+        && let Some((_, flags, overflowed)) = xalu_flags(dag, overflow.node)
+    {
+        let ccode = cond_const(dag, if code == CondCode::SetEq { overflowed ^ 1 } else { overflowed });
+        return Some(dag.get_node(ISD::Target(a64::BRCOND), EVT::OTHER, &[chain, dest, ccode, flags]));
+    }
     // `br_cc setne (and|or of compares), 1` (the pin's inversion by `setne
     // -1`): a `CCMP` chain.
     let tree = bit(dag, tested).unwrap_or(tested);

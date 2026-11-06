@@ -46,6 +46,11 @@ pub struct CallMemory {
     /// as it does before writing it. Empty where the callee's contract is what
     /// the call went by.
     pub disturbs: BTreeSet<RegId>,
+    /// An inline block of bytes laid down at the site (`llrm.ia16.asm`): it
+    /// writes the registers its instruction lists and no others, which a
+    /// call of a routine does not promise (a segment register it does not
+    /// list still holds what it did).
+    pub block: bool,
 }
 
 impl CallMemory {
@@ -186,6 +191,10 @@ pub struct Insn {
     /// far pointer's offset and selector, or of a long's halves), as the DAG's
     /// `PAIR_FAR`/`PAIR_LONG` marked it at selection.
     pub pair: Option<PairKind>,
+    /// An `or` of operands that share no bit, selected as the pin's `ADDnn_DB`:
+    /// two-address conversion may make it an `lea` as it would an `add`;
+    /// otherwise it is an `or`.
+    pub disjoint: bool,
     /// The source line of the MIR instruction it was selected from (`!dbg`).
     pub line: Option<SrcLoc>,
     pub debug: DebugTags,
@@ -717,6 +726,7 @@ impl Insn {
             invariant: false,
             reads_complete: false,
             pair: None,
+            disjoint: false,
             line: None,
             debug: DebugTags::default(),
             declared: None,
@@ -1393,6 +1403,10 @@ pub struct LirBody {
     /// would have held is not reserved, the locals lie directly below the
     /// pushed registers.
     pub slot_dropped: bool,
+    /// ShrinkWrap does not run: the pin adds it only when optimizing
+    /// (`TargetPassConfig::addMachinePasses`), so the frame and the registers
+    /// are set up at the entry.
+    pub unwrapped: bool,
     /// The widest alignment any object of the frame wants (an alloca's, a
     /// spill slot's as its width), 0 when not known: what a 64-bit frame
     /// aligns the locals' base to, not the stack's (the pin aligns each
@@ -1613,6 +1627,7 @@ impl LirBody {
             cfa_variables: false,
             saved_first: false,
             slot_dropped: false,
+            unwrapped: false,
             object_align: 0,
             over_aligned: Vec::new(),
             frame_exit: None,
@@ -1687,6 +1702,7 @@ impl LirBody {
             cfa_variables: self.cfa_variables,
             saved_first: self.saved_first,
             slot_dropped: self.slot_dropped,
+            unwrapped: self.unwrapped,
             object_align: self.object_align,
             over_aligned: self.over_aligned.clone(),
             frame_exit: self.frame_exit,
@@ -2197,5 +2213,24 @@ mod tests {
         assert_eq!(line(&Insn::new(3, None, None, Vec::new(), Vec::new())), "     3 None req=() del=()");
         assert_eq!(pyrepr::tuple::<i64>(&[2]), "(2,)");
         assert_eq!(pyrepr::tuple::<i64>(&[2, 3]), "(2, 3)");
+    }
+
+    /// A failed check's edge stated at `NEVER_TAKEN_WEIGHT` to 1 (isel: that many
+    /// 2^31sts) vanished when a split gave it a share of 1/16: `rerouted` rounds
+    /// to the unit as the pin does (`BranchProbability.h:140`, no clamp), a block
+    /// on that path then had a table entry and no odds into it, and
+    /// `LLRM_VERIFY=1` rejected x87 floatalloc blocks (fpbench Os at `i32::MAX`).
+    #[test]
+    fn test_a_never_taken_edge_survives_a_sixteenth_share() {
+        use crate::hir::mir::NEVER_TAKEN_WEIGHT;
+        use crate::model::lir::BlockOdds;
+
+        let units = (BlockOdds::CERTAIN / (f64::from(NEVER_TAKEN_WEIGHT) + 1.0)).round() as u32;
+        let mut odds = BlockOdds::default();
+        odds.taken.insert((1, 2), units);
+        odds.taken.insert((1, 3), BlockOdds::CERTAIN as u32 - units);
+        odds.rerouted(1, &[2, 3], 2, &[(4, 1.0 / 16.0)]);
+
+        assert!(odds.taken[&(1, 4)] > 0, "the split edge has {} units", odds.taken[&(1, 4)]);
     }
 }

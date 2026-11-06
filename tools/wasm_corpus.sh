@@ -5,12 +5,16 @@
 #   WASM_CPU         -mcpu for both sides (mvp: the secondary column; default: the pin's generic)
 # The stub is the same bytes on both sides: `run` calls main and answers a hash of what main reported.
 set -u
+. "$(dirname "$0")/ab_env.sh"; ab_env_check || exit 2
 ulimit -v 16777216 # one runaway compile must not take the box
 root=$(cd "$(dirname "$0")/.." && pwd)
 clang=${LLRM_CLANG_WASM:-$HOME/scratch/llvm-build-clang-wasm/bin/clang}
 llrm_cc=${LLRM_CC:-$(python3 "$root/tools/llrmbin.py" bin)/llrm-cc}
 out=$(mktemp -d); trap 'rm -rf "$out"' EXIT
 level=$1; shift
+# A broken tool is a failure of the run, not a row: exit 2 without it; exit 1 when no program was measured.
+[ -x "$clang" ] && [ -x "$llrm_cc" ] || { echo "wasm_corpus: missing compiler ($clang, $llrm_cc)" >&2; exit 2; }
+[ $# -gt 0 ] || { echo "wasm_corpus: no program given" >&2; exit 2; }
 cpu=${WASM_CPU:+-mcpu=$WASM_CPU}
 cat > "$out/stub.c" <<'EOF'
 int __main_void(void) __attribute__((weak));
@@ -38,7 +42,7 @@ int run(void)
     return (int)state;
 }
 EOF
-"$clang" --target=wasm32 -O2 -c "$out/stub.c" -o "$out/stub.o"
+"$clang" --target=wasm32 -O2 -c "$out/stub.c" -o "$out/stub.o" || { echo "wasm_corpus: the pin clang cannot compile the stub" >&2; exit 2; }
 
 # Section sizes of a relocatable object, summed over its sections of that name.
 section() { wasm-objdump -h "$2" | sed -n "s/^ *$1 start=.*(size=0x\\([0-9a-f]*\\)).*/\\1/p" | while read -r h; do echo $((16#$h)); done; }
@@ -54,6 +58,7 @@ count() {
 }
 
 printf '%-22s %9s %9s %12s %12s %9s %9s  %s\n' program llrm_B clang_B llrm_instr clang_instr llrm_code clang_code result
+measured=0
 for f in "$@"; do
   n=$(basename "$f" .c)
   LLRM_CLANG_WASM=$clang LLRM_CC_TARGET=wasm32 timeout 300 "$llrm_cc" "-$level" $cpu -c "$f" -I"$root/bench" -I"$root/runtime/shared/posix" -o "$out/$n.l.o" 2> "$out/$n.err" ||
@@ -68,4 +73,6 @@ for f in "$@"; do
   else ok="DIFFERENT($lv/$cv)"; fi
   printf '%-22s %9s %9s %12s %12s %9s %9s  %s\n' "$n" "$(image "$out/$n.l.o")" "$(image "$out/$n.c.o")" "${li:-0}" "${ci:-0}" \
     "$(code "$out/$n.l.o")" "$(code "$out/$n.c.o")" "$ok"
+  measured=$((measured + 1))
 done
+[ "$measured" -gt 0 ] || { echo "wasm_corpus: no program was measured" >&2; exit 1; }

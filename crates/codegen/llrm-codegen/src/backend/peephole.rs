@@ -152,7 +152,7 @@ fn count(
     counter.get(&value).copied().unwrap_or(0)
 }
 
-fn emit(
+pub(crate) fn emit(
     bits: u32,
     what: &Semantics,
 ) -> Option<select::Emitted> {
@@ -1492,7 +1492,8 @@ impl std::hash::Hasher for Both {
 /// What `_register_effects_of` reads of `what`: the operation, the registers
 /// and widths of its operands and the registers an address is reached through.
 /// Not the value numbers of unplaced values, an immediate (but whether a shift
-/// count is a multiple of 32), or the displacement and symbol of a cell.
+/// count is a multiple of 32, and whether it is all ones: `or r, -1` reads
+/// nothing), or the displacement and symbol of a cell.
 fn shape<H: std::hash::Hasher>(
     what: &Semantics,
     into: &mut H,
@@ -1511,7 +1512,13 @@ fn shape<H: std::hash::Hasher>(
             match place {
                 Loc::Reg(one) => (0u8, one).hash(into),
                 Loc::Held(one) => (1u8, one.width).hash(into),
-                Loc::Imm(one) => (2u8, one.width, one.value & 31 == 0).hash(into),
+                Loc::Imm(one) => (
+                    2u8,
+                    one.width,
+                    one.value & 31 == 0,
+                    one.value == -1 || (one.width < 8 && one.value == (1i64 << (8 * one.width)) - 1),
+                )
+                    .hash(into),
                 Loc::Mem(one) => (
                     3u8,
                     one.addr.map(|addr| (addr.space, addr.base, addr.segment, addr.index & 1)),
@@ -2226,13 +2233,14 @@ fn _affine_address(
     // no prefix and reads no dword register.
     let scale = address.scale;
     let width = i64::from(dest.width);
-    let Some(form) = llrm_mir::target::three_operand(
+    let Some(form) = llrm_mir::target::three_operand_of(
         &cpu.operations,
         &cpu.address_forms,
         width,
         i64::from(cpu.operand_bytes),
         scale,
         word,
+        terms.len() + usize::from(disp != 0),
     ) else {
         return Ok(None);
     };

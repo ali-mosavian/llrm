@@ -477,3 +477,216 @@ fn the_memory_routines_return_the_destination() {
         assert_eq!(got, 0, "{routine} did not return dst");
     }
 }
+
+/// The cases of the 32-bit division tests: edges, then a fixed pseudo-random
+/// walk over dividend and divisor widths (a divisor below 256 and one that
+/// skips dividend bytes take other paths in the speed routines).
+fn division_cases() -> Vec<(u32, u32)> {
+    let mut cases = vec![
+        (0, 0),
+        (0, 5),
+        (5, 0),
+        (1, 1),
+        (u32::MAX, 1),
+        (u32::MAX, u32::MAX),
+        (0x8000_0000, u32::MAX),
+        (0x8000_0000, 1),
+        (3_000_000, 100_003),
+        (100_003, 100_003),
+        (100_002, 100_003),
+        (255, 1),
+        (256, 255),
+        (65_535, 257),
+        (0x0100_0000, 3),
+        (0x7FFF_FFFF, 0x10000),
+    ];
+    for d in [2u32, 3, 5, 7, 10, 100, 127, 128, 129, 254, 255, 256, 257] {
+        for a in [0, 1, d - 1, d, d + 1, 255, 256, 65_535, 65_536, 0x7FFF_FFFF, 0x8000_0000, u32::MAX, 123_456_789] {
+            cases.push((a, d));
+        }
+    }
+    let mut state = 0x2545_F491u32;
+    let mut next = move || {
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        state
+    };
+    for _ in 0..60 {
+        let wa = [1, 7, 8, 9, 15, 16, 17, 24, 25, 31, 32][(next() >> 8) as usize % 11];
+        let wb = [1, 3, 8, 9, 16, 17, 24, 32][(next() >> 8) as usize % 8];
+        let (a, b) = (next(), next());
+        cases.push((a >> (32 - wa), b >> (32 - wb)));
+    }
+    cases
+}
+
+/// Runs `routine` over `cases`, `want` the result each should leave in
+/// `__sa`: the number of cases it got wrong, 255 at most.
+fn division_mismatches(
+    name: &str,
+    routine: &str,
+    cases: &[(u32, u32)],
+    want: impl Fn(u32, u32) -> u32,
+) -> i32 {
+    assert!(cases.len() < 256);
+    let mut table = String::from(".segment \"RODATA\"\nthe_cases:\n");
+    for &(a, b) in cases {
+        table += &format!("  .dword {a}, {b}, {}\n", want(a, b));
+    }
+    table += ".segment \"CODE\"\n";
+    let mut main = String::from("  lda #<the_cases\n  sta rc2\n  lda #>the_cases\n  sta rc3\n  lda #0\n  sta rc4\n  sta rc5\nthe_next:\n");
+    for (cell, from) in [("__sa", 0), ("__sb", 4)] {
+        for at in 0..4 {
+            main += &format!("  ldy #{}\n  lda (rc2),y\n  sta {cell}+{at}\n", from + at);
+        }
+    }
+    main += &format!("  jsr {routine}\n");
+    for at in 0..4 {
+        main += &format!("  ldy #{}\n  lda (rc2),y\n  cmp __sa+{at}\n  bne the_wrong\n", 8 + at);
+    }
+    main += "  jmp the_right\nthe_wrong:\n  inc rc4\nthe_right:\n  clc\n  lda rc2\n  adc #12\n  sta rc2\n  bcc the_same_page\n  inc rc3\nthe_same_page:\n  inc rc5\n";
+    main += &format!("  lda rc5\n  cmp #{}\n  beq the_end\n  jmp the_next\nthe_end:\n  lda rc4\n", cases.len());
+    common::run_with(name, &main, &table)
+}
+
+/// The speed variants of the 32-bit division and the small ones give the
+/// same results: quotient and remainder, unsigned and signed, a zero divisor
+/// (all ones over the dividend, as the walk of 32 trips left it), INT_MIN / -1
+/// and the dividend bytes that are skipped.
+#[test]
+fn long_division_routines_agree_with_the_machine_on_edges_and_a_walk() {
+    let cases = division_cases();
+    let unsigned = |a: u32, b: u32| if b == 0 { (u32::MAX, a) } else { (a / b, a % b) };
+    let signed = |a: u32, b: u32| {
+        let (x, y) = (a as i32, b as i32);
+        if y == 0 { (if x < 0 { 1 } else { u32::MAX }, a) } else { (x.wrapping_div(y) as u32, x.wrapping_rem(y) as u32) }
+    };
+    for suffix in ["", "_fast"] {
+        for (routine, quotient, which) in [("udivsi3", true, 0), ("umodsi3", false, 0), ("divsi3", true, 1), ("modsi3", false, 1)] {
+            let name = format!("__{routine}{suffix}");
+            let wrong = division_mismatches(&format!("div-{routine}{suffix}"), &name, &cases, |a, b| {
+                let (q, r) = if which == 0 { unsigned(a, b) } else { signed(a, b) };
+                if quotient { q } else { r }
+            });
+            assert_eq!(wrong, 0, "{name}: {wrong} of {} cases wrong", cases.len());
+        }
+    }
+}
+
+/// `x % 100003` on a 6-digit x walked all 32 bits: 4192 clocks a call, 1.8x
+/// gcc's, and loop_interchange -O2 spent 13.9M of its clocks on 3072 of
+/// them. The speed variant takes the dividend's bytes into the remainder
+/// while it stays below the divisor.
+#[test]
+fn a_long_modulo_by_a_17_bit_divisor_does_not_walk_32_trips() {
+    let setup = "  lda #$C0\n  sta __sa\n  lda #$C6\n  sta __sa+1\n  lda #$2D\n  sta __sa+2\n  lda #0\n  sta __sa+3\n  lda #$A3\n  sta __sb\n  lda #$86\n  sta __sb+1\n  lda #1\n  sta __sb+2\n  lda #0\n  sta __sb+3\n";
+    let with = common::cycles_with("modsi-clocks", &format!("{setup}  jsr __modsi3_fast\n"), "");
+    let without = common::cycles_with("modsi-clocks-none", setup, "");
+    assert!(with - without < 1800, "{} clocks", with - without);
+}
+
+/// `(x * 3 + p) % 1000003` ran 8 trips of the bit loop for a 22-bit dividend
+/// and a 20-bit divisor whatever the quotient (1189 clocks a call, 2.2x
+/// llvm-mos's loop around it): it started from whole bytes. The pin's
+/// compiler-rt `__udivXi3` runs for the quotient's bit length.
+#[test]
+fn a_long_modulo_runs_for_the_quotients_bits_not_the_dividends_bytes() {
+    let clocks = |name: &str, a: u32, b: u32| {
+        let load = |at: &str, v: u32| {
+            (0..4).map(|k| format!("  lda #{}\n  sta {at}+{k}\n", (v >> (8 * k)) & 255)).collect::<String>()
+        };
+        let setup = format!("{}{}", load("__sa", a), load("__sb", b));
+        let with = common::cycles_with(&format!("{name}-with"), &format!("{setup}  jsr __modsi3_fast\n"), "");
+        with - common::cycles_with(&format!("{name}-none"), &setup, "")
+    };
+    let two_bits = clocks("modsi-q2", 3_000_009, 1_000_003);
+    let none = clocks("modsi-q0", 999_999, 1_000_003);
+    assert!(two_bits < 800, "3000009 % 1000003: {two_bits} clocks");
+    assert!(none < 350, "999999 % 1000003: {none} clocks");
+}
+
+/// Every program with a division linked the wide path (+141 B over the old
+/// routine), `a % 5` included: its divisor is a byte and runs the byte loop. A
+/// byte-divisor entry links the byte loop only.
+#[test]
+fn a_byte_divisor_entry_links_the_byte_loop_and_not_the_wide_path() {
+    for routine in ["__udivsi3_fast_byte", "__umodsi3_fast_byte", "__divsi3_fast_byte", "__modsi3_fast_byte"] {
+        let text = common::pipeline::reachable_runtime(&format!("  jsr {routine}\n"));
+        assert!(text.contains("udivmod32_fast_byte:"), "{routine} does not reach the byte loop");
+        assert!(!text.contains("udivmod32_wide:"), "{routine} links the wide path");
+    }
+}
+
+/// The byte entries agree with the dividend's and divisor's arithmetic (a
+/// negative dividend included) for divisors 1..=255.
+#[test]
+fn the_byte_divisor_entries_divide_like_the_general_ones() {
+    let cases = [(3_000_009u32, 7u32), (0xFFFF_FFFF, 255), (100, 100), (99, 100), (0x8000_0001, 3), (0, 9), (1, 1)];
+    for (routine, general) in [
+        ("__udivsi3_fast_byte", "__udivsi3_fast"),
+        ("__umodsi3_fast_byte", "__umodsi3_fast"),
+        ("__divsi3_fast_byte", "__divsi3_fast"),
+        ("__modsi3_fast_byte", "__modsi3_fast"),
+    ] {
+        for (a, b) in cases {
+            let name = format!("{routine}-{a}-{b}");
+            assert_eq!(long(&name, routine, a, b), long(&format!("g{name}"), general, a, b), "{routine} {a} {b}");
+        }
+    }
+}
+
+/// The routines a cold module calls are the first speed variant: they link no
+/// pin-structure wide path (141 B more) and divide like the hot ones.
+#[test]
+fn the_small_speed_division_links_no_wide_path_and_divides_like_the_hot_one() {
+    let cases =
+        [(3_000_009u32, 1_000_003u32), (0xFFFF_FFFF, 255), (40_000, 0xFFFF_FFFD), (70_000, 300), (99, 100), (7, 0)];
+    for (routine, hot) in [
+        ("__udivsi3_fast_small", "__udivsi3_fast"),
+        ("__umodsi3_fast_small", "__umodsi3_fast"),
+        ("__divsi3_fast_small", "__divsi3_fast"),
+        ("__modsi3_fast_small", "__modsi3_fast"),
+    ] {
+        let text = common::pipeline::reachable_runtime(&format!("  jsr {routine}\n"));
+        assert!(text.contains("udivmod32_fast_small:") && !text.contains("udivmod32_wide:"), "{routine}: {text}");
+        let hot_text = common::pipeline::reachable_runtime(&format!("  jsr {hot}\n"));
+        assert!(hot_text.contains("udivmod32_wide:") && !hot_text.contains("_small"), "{hot}: {hot_text}");
+        for (a, b) in cases {
+            let name = format!("{routine}-{a}-{b}");
+            assert_eq!(long(&name, routine, a, b), long(&format!("h{name}"), hot, a, b), "{routine} {a} {b}");
+        }
+    }
+}
+
+/// The hot threshold is derived from what the pin-structure wide path saves a
+/// call (`hotdivision::SAVED_CLOCKS`, the mean over these ten shapes; the
+/// median is 224, the four shapes with a divisor above 16 bits that the corpus
+/// sites hit save 328 on average). This re-measures the same ten shapes: it
+/// shows the constant is not stale if the routines change, not that the ten
+/// are the call mix of a program.
+#[test]
+fn the_wide_path_saves_a_call_what_the_hot_threshold_assumes() {
+    let shapes = [
+        (3_000_009u32, 1_000_003u32),
+        (70_000, 300),
+        (12_345_678, 257),
+        (4_000_000_000, 65_537),
+        (2_147_483_647, 1000),
+        (100_000, 300),
+        (1_000_000, 70_000),
+        (99, 100_000),
+        (4_000_000_000, 300),
+        (16_777_216, 256),
+    ];
+    let clocks = |routine: &str, a: u32, b: u32| {
+        let load = |at: &str, v: u32| {
+            (0..4).map(|k| format!("  lda #{}\n  sta {at}+{k}\n", (v >> (8 * k)) & 255)).collect::<String>()
+        };
+        let setup = format!("{}{}", load("__sa", a), load("__sb", b));
+        let with = common::cycles_with(&format!("{routine}-{a}-{b}"), &format!("{setup}  jsr {routine}\n"), "");
+        with - common::cycles_with(&format!("none-{routine}-{a}-{b}"), &setup, "")
+    };
+    let saved: i64 =
+        shapes.iter().map(|&(a, b)| clocks("__udivsi3_fast_small", a, b) - clocks("__udivsi3_fast", a, b)).sum();
+    let mean = saved as f64 / shapes.len() as f64;
+    assert!(mean >= llrm_6502::hotdivision::SAVED_CLOCKS * 0.9, "the wide path saves {mean} clocks a call");
+}

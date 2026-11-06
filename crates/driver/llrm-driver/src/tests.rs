@@ -1254,6 +1254,29 @@ fn a_prefetch_hint_compiles_to_no_code() {
     assert!(!listing.contains("prefetch"), "{listing}");
 }
 
+/// `__builtin_trap` is `llvm.trap`: `llrm-llc` panicked on it ("no entry found
+/// for key", assemble.rs) at every x86 target, for the call was of a name with
+/// no declaration behind it. It is `ud2` (`TRAP`), and `llvm.debugtrap` is
+/// `int3`. `llvm.ubsantrap` (`UBSAN_UD1`) is not translated: a named refusal,
+/// not a panic.
+#[test]
+fn the_trap_intrinsics_select_or_are_refused_by_name() {
+    let one = |name: &str, call: &str| {
+        let text = format!(
+            "target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i486-unknown-linux-gnu\"\n\
+             declare void @{name}\ndefine void @f() {{\n  call void @{call}\n  unreachable\n}}\n"
+        );
+        compiled(&flags(&["-m32"]), &text, "f")
+    };
+    for (name, call, wanted) in [("llvm.trap()", "llvm.trap()", "ud2"), ("llvm.debugtrap()", "llvm.debugtrap()", "int3")] {
+        let (built, _) = one(name, call).unwrap_or_else(|why| panic!("{name}: {why}"));
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        assert!(listing.contains(wanted), "{name}: {listing}");
+    }
+    let why = one("llvm.ubsantrap(i8)", "llvm.ubsantrap(i8 1)").map(|_| ()).unwrap_err();
+    assert!(why.contains("llvm.ubsantrap"), "{why}");
+}
+
 /// `-Og` makes clang write `llvm.fake.use` (a debugger keeps a value live);
 /// `llrm-llc` refused the module, "@f_: @llvm.fake.use", and `-Og` compiled
 /// nothing through `llrm-cc`.
@@ -1979,6 +2002,50 @@ fn a_probed_frame_ending_in_a_sibling_call_gives_its_stack_back_first() {
     assert!(lines[jmp - 1] == format!("add rsp, {taken}") || lines[jmp - 1].starts_with("mov rsp, rbp"), "{listing}");
 }
 
+/// The listing of `tail call @g(...)` then `ret`, built with `abi` at -O2.
+fn tail_call_listing(abi: &str, signature: &str, arguments: &str) -> String {
+    // a variadic call names its callee's type: `i32 (i32, ...) @g`
+    let text = format!(
+        "{SYSV}declare i32 @g{signature}\ndefine i32 @f(i32 %x) {{\n  %r = tail call i32 {} @g({arguments})\n  ret i32 %r\n}}\n",
+        if signature.contains("...") { "(i32, ...)" } else { "(i32, i32)" }
+    );
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag", abi]), &text, "f").unwrap();
+    llrm_codegen::backend::masm::text(&built).unwrap()
+}
+
+/// A variadic tail call under Win64 became `jmp g`; the pin keeps `call g`
+/// then `ret` (`isEligibleForSiblingCallOpt`: no variadic sibling call when
+/// either side is Win64). SysV, and a Win64 call of a fixed signature, still jump.
+#[test]
+fn a_win64_variadic_tail_call_stays_a_call() {
+    let jumps = |listing: &str| listing.lines().any(|line| line.trim().starts_with("jmp g"));
+    let variadic = tail_call_listing("-mabi=win64", "(i32, ...)", "i32 %x, i32 %x");
+    assert!(!jumps(&variadic) && variadic.contains("call g"), "{variadic}");
+    let fixed = tail_call_listing("-mabi=win64", "(i32, i32)", "i32 %x, i32 %x");
+    assert!(jumps(&fixed), "{fixed}");
+    let sysv = tail_call_listing("-mabi=sysv", "(i32, ...)", "i32 %x, i32 %x");
+    assert!(jumps(&sysv), "{sysv}");
+}
+
+/// An internal x86-64 function whose callers are all seen, or one marked
+/// `fastcc`, popped its stack arguments (`ret 16`) and its callers did not
+/// clean up. The pin's `isCalleePop` is false for `fastcc` there (no
+/// `GuaranteedTailCallOpt`), so the callee returns with a plain `ret` and the
+/// caller removes the area (QCport corpus: `os_locals_between_pushes`).
+#[test]
+fn an_x86_64_fastcc_function_returns_with_a_plain_ret() {
+    let text = format!(
+        "{SYSV}define internal fastcc i64 @work(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i64 %f, i64 %g, i64 %h) noinline {{\n  %x = add i64 %a, %h\n  %y = add i64 %x, %g\n  ret i64 %y\n}}\n\
+         define i64 @f(i64 %x) {{\n  %p = call fastcc i64 @work(i64 %x, i64 %x, i64 %x, i64 %x, i64 %x, i64 %x, i64 %x, i64 %x)\n  %q = add i64 %p, 1\n  ret i64 %q\n}}\n"
+    );
+    for abi in ["-mabi=sysv", "-mabi=win64"] {
+        let (built, _) = compiled(&flags(&["-m64", "-O0", abi]), &text, "work").unwrap();
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        let returns: Vec<&str> = listing.lines().map(str::trim).filter(|line| line.starts_with("ret")).collect();
+        assert!(!returns.is_empty() && returns.iter().all(|line| *line == "ret"), "{abi}: {listing}");
+    }
+}
+
 /// The `.xdata` of an x86-64 module written as COFF, found by `.pdata`'s
 /// layout: the frames the compiler declared (`.seh_*`) against the bytes read
 /// back from the same code agree.
@@ -1997,6 +2064,30 @@ fn the_declared_win64_prologue_is_what_the_code_bytes_say() {
     .unwrap();
     let frame = object.frames.first().expect("a declared frame");
     assert!(!frame.seh.is_empty(), "no .seh_* directive reached the frame");
+    let section = &object.sections[frame.section];
+    let body = &section.image[frame.offset..frame.offset + frame.length];
+    let declared = llrm_x86::mc::win64unwind::from_seh("f", &frame.seh).unwrap();
+    let read = llrm_x86::mc::win64unwind::from_prologue("f", body).unwrap();
+    assert_eq!(declared, read, "{:?}", frame.seh);
+}
+
+/// A Win64 function with a frame register (`alloca`) pushes RBP and sets it
+/// from RSP; its `.seh_pushreg rbp` and `.seh_setframe rbp, 0` were left out
+/// (the frame register is not a register of the file the directives read), so
+/// the unwind data held the allocation alone and an unwinder lost the frame.
+#[test]
+fn a_win64_frame_register_has_its_seh_directives() {
+    let body = "declare i64 @g(ptr)\ndefine i64 @f(i64 %n) {\n  %p = alloca i8, i64 %n, align 16\n  %r = call i64 @g(ptr %p)\n  ret i64 %r\n}\n";
+    let text = format!("{SYSV}{body}");
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag", "-mabi=win64"]), &text, "f").unwrap();
+    let object = llrm_codegen::backend::objbuild::built(
+        &built,
+        "f.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .unwrap();
+    let frame = object.frames.first().expect("a declared frame");
     let section = &object.sections[frame.section];
     let body = &section.image[frame.offset..frame.offset + frame.length];
     let declared = llrm_x86::mc::win64unwind::from_seh("f", &frame.seh).unwrap();
@@ -3721,6 +3812,31 @@ fn a_win64_function_takes_its_arguments_by_position_above_the_home_area() {
 /// A Win64 function that keeps doubles in xmm6/xmm7 across a call must save
 /// and reload them (callee-saved there); with no save it clobbered the
 /// caller's xmm6/xmm7. SysV has none callee-saved and gets no `movaps`.
+/// Win64 splits a 128-bit integer into two i64 pieces, each taking the next
+/// argument position (pin `llc`: `f(i128, i128)` is RCX:RDX and R8:R9, the
+/// result RAX:RDX; a pair past the fourth position is stack slots 4 and 5,
+/// `[rsp+40]` and `[rsp+48]`). The module was refused (row W64-1).
+#[test]
+fn a_win64_i128_argument_is_two_consecutive_i64_positions() {
+    let listing_of = |body: &str| {
+        let text = format!("{SYSV}{body}");
+        let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag", "-mabi=win64"]), &text, "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let add = listing_of("define i128 @f(i128 %a, i128 %b) {\n  %r = add i128 %a, %b\n  ret i128 %r\n}\n");
+    assert!(add.contains("adc") && add.contains("r8") && add.contains("r9") && !add.contains("[rsp"), "{add}");
+    let stacked = listing_of(
+        "define i64 @f(i64 %a, i64 %b, i64 %c, i64 %d, i128 %x) {\n  %t = trunc i128 %x to i64\n  %s = lshr i128 %x, 64\n  %u = trunc i128 %s to i64\n  %r = sub i64 %t, %u\n  ret i64 %r\n}\n",
+    );
+    assert!(stacked.contains("[rsp+40]") && stacked.contains("[rsp+48]"), "{stacked}");
+    // A call passes the pair in R8:R9 after the first two arguments (a tail
+    // call here) and the result comes back in RAX:RDX.
+    let call = listing_of(
+        "declare i128 @g(i64, i64, i128)\ndefine i128 @f(i64 %a, i128 %b) {\n  %r = call i128 @g(i64 %a, i64 %a, i128 %b)\n  ret i128 %r\n}\n",
+    );
+    assert!(call.contains("jmp g") && call.contains("mov r9, r8") && call.contains("mov r8, rax"), "{call}");
+}
+
 #[test]
 fn a_win64_function_saves_the_xmm_registers_it_keeps_across_a_call() {
     let body = "declare double @g(double)\ndefine double @f(double %a, double %b) {\n  %x = call double @g(double %a)\n  %y = call double @g(double %b)\n  %s = fadd double %x, %y\n  %t = fadd double %s, %a\n  %u = fadd double %t, %b\n  ret double %u\n}\n";
@@ -3846,7 +3962,7 @@ fn a_win64_function_with_an_unprobed_shape_is_refused() {
     // (function, whether it is the Win64 refusal that stops it: the selector
     // refuses a 128-bit integer and a vector under SysV too)
     let cases = [
-        ("define i128 @f(i128 %a) {\n  ret i128 %a\n}\n", false),
+        ("define i256 @f(i256 %a) {\n  ret i256 %a\n}\n", false),
         ("define <4 x i32> @f(<4 x i32> %a) {\n  ret <4 x i32> %a\n}\n", false),
         ("define i64 @f(ptr byval([3 x i64]) align 8 %p) {\n  %v = load i64, ptr %p\n  ret i64 %v\n}\n", true),
     ];

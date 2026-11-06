@@ -2,6 +2,7 @@
 # tools/llc_backend_diff.sh [PROG...]: the backend alone. llrm's IR after its mid-end (the switchconv stage) is
 # compiled by llrm-llc and by the pinned llc -O2; prints .text bytes and instruction counts of each.
 set -u
+. "$(dirname "$0")/ab_env.sh"; ab_env_check || exit 2
 root=$(cd "$(dirname "$0")/.." && pwd)
 b=${LLRM_PIN_BIN:-$HOME/scratch/llvm-build/bin}
 llrm=${LLRM_LLC:-$root/target/debug/llrm-llc}

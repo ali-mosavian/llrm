@@ -82,6 +82,23 @@ thread_local! {
     static IMAGINARY: std::cell::Cell<u8> = const { std::cell::Cell::new(BASE_CELLS) };
     static TUNING: std::cell::Cell<Tuning> = const { std::cell::Cell::new(Tuning::SPEED) };
     static SPIKE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether a long division by a divisor not known to be a byte calls the
+    /// speed routine with the pin-structure wide path, and not the one with
+    /// the small wide path (see [`with_fast_division`]).
+    static FAST_DIVISION: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// `f` with the wide speed division allowed or not. Linked once, it costs
+/// 141 bytes (`hotdivision`): a module keeps it only where a division site runs
+/// often enough to pay that (`select::module_text`).
+pub fn with_fast_division<R>(
+    allowed: bool,
+    f: impl FnOnce() -> R,
+) -> R {
+    let before = FAST_DIVISION.with(|a| a.replace(allowed));
+    let result = f();
+    FAST_DIVISION.with(|a| a.set(before));
+    result
 }
 
 /// `f` with the shared callee-save helpers allowed or not. A function that
@@ -118,6 +135,18 @@ fn imaginary() -> u8 {
 /// Scratch comes before the kept cells: using one costs no save and restore.
 fn cells() -> impl Iterator<Item = RegId> {
     (2..8).chain(BASE_CELLS..imaginary()).chain(8..BASE_CELLS).map(rc)
+}
+
+/// How many bytes a value may live in on the platform with `zero_page` cells
+/// (`BASE_CELLS` at least): `a`, `x`, `y` and [`cells`], and how many of those
+/// a callee keeps. The register file `Machine::registers`/`call_registers`
+/// state to the mid-end, counted from the allocator's own pools.
+pub fn register_file(zero_page: u8) -> (i64, i64) {
+    let before = IMAGINARY.with(|n| n.replace(zero_page.clamp(BASE_CELLS, MOST_CELLS)));
+    let bytes = 3 + cells().count() as i64;
+    let kept = cells().filter(|&cell| preserved(cell)).count() as i64;
+    IMAGINARY.with(|n| n.set(before));
+    (bytes, kept)
 }
 
 /// The pairs a pointer may live in: `rs1`..`rs3` over `rc2`..`rc7`, the scratch
@@ -628,6 +657,7 @@ impl Builder {
     ) -> Result<Reg, Unsupported> {
         if let Some(n) = name.strip_prefix("rs").and_then(|n| n.parse::<u8>().ok()) {
             return match n {
+                0 => Ok(Reg::Phys(reg::RS0)),
                 1 => Ok(Reg::Phys(reg::RS1)),
                 2 => Ok(Reg::Phys(reg::RS2)),
                 3 => Ok(Reg::Phys(reg::RS3)),
@@ -651,7 +681,7 @@ impl Builder {
         &self,
         name: &str,
     ) -> bool {
-        self.pointers.contains(name) || matches!(name, "rs1" | "rs2" | "rs3")
+        self.pointers.contains(name) || matches!(name, "rs0" | "rs1" | "rs2" | "rs3")
     }
 
     fn word(
@@ -679,7 +709,7 @@ impl Builder {
                 self.function.classes[v as usize] = met;
                 Ok(())
             }
-            Reg::Phys(p) if is_cell(p) => Ok(()),
+            Reg::Phys(p) if is_cell(p) || p == reg::RS0 || is_pair(p) => Ok(()),
             Reg::Phys(_) => Err(Unsupported("a register as a memory operand".into())),
         }
     }
@@ -1913,6 +1943,16 @@ pub fn build_with_places(
                     op::SRL32 => "__lshrsi3",
                     _ => "__ashrsi3",
                 };
+                // a divisor whose three upper bytes are known zero is a byte
+                // (1 to 255): the speed division has an entry that links the
+                // byte loop and not the wide path
+                let byte_divisor = matches!(code, op::UDIV32 | op::SDIV32 | op::UREM32 | op::SREM32) && {
+                    let (low, high) = (name(&o[4])?, name(&o[5])?);
+                    [format!("{low}+1"), high.to_owned(), format!("{high}+1")]
+                        .iter()
+                        .all(|cell| b.constants.get(cell) == Some(&0))
+                };
+                let routine = if byte_divisor { format!("{routine}_byte") } else { routine.to_owned() };
                 let acc = Reg::Phys(reg::A);
                 let mut stores = Vec::new();
                 for (at, source) in [name(&o[2])?, name(&o[3])?].into_iter().enumerate() {
@@ -1933,7 +1973,7 @@ pub fn build_with_places(
                     b.copy(acc, value);
                     b.push(Inst::new(Kind::Op("STM"), vec![Operand::Use(acc), Operand::Symbol(symbol, 0)]));
                 }
-                let mut jsr = Inst::new(Kind::Op("JSR"), vec![Operand::Symbol(routine.to_owned(), 0)]);
+                let mut jsr = Inst::new(Kind::Op("JSR"), vec![Operand::Symbol(routine, 0)]);
                 jsr.call = true;
                 b.push(jsr);
                 let (first, second) = (b.write_word(name(&o[0])?)?, b.write_word(name(&o[1])?)?);
@@ -2430,6 +2470,186 @@ fn keep_carry_in_c(function: &mut MFunction<Class>) {
                 _ => at += 1,
             }
         }
+    }
+}
+
+/// A flag compare of the old value of a word, made after the step that
+/// replaced it, is made before the step: `inx; bne; iny` and `inc m; bne; inc
+/// m+1` leave the carry as it was (they set N and Z), and a branch on the
+/// carry alone (`bcc`, `bcs`) reads what the compare left. The old value then
+/// needs no copy to outlive the step, and the copies that were made for it
+/// go to the passes after (`remove_redundant_copies_between`).
+///
+/// DEVIATE (6502-LANE-COPY): the pin folds a flag-setting instruction into
+/// its compare in `TargetInstrInfo::optimizeCompareInstr`
+/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/PeepholeOptimizer.cpp>)
+/// and has no pass that moves a compare above an instruction that leaves
+/// the carry alone. Exit 2026-11-20 (a generated flags description of the
+/// instruction tables).
+///
+/// The run `T` after the step `S` is copies, loads and the compare itself,
+/// ending at the last instruction that sets the flags, and a `bcc` or `bcs`
+/// follows. `T` moves to just before `S` when
+/// - it reads nothing `S` writes (the old value, not the new one), and writes
+///   nothing `S` reads;
+/// - what it writes (the accumulator and the flags) is dead after it, and the
+///   flags were not live into `S`;
+/// - an earlier copy of what `S` writes is what it reads (otherwise there is
+///   nothing to save).
+pub fn compare_before_step(
+    function: &mut MFunction<Class>,
+    at: &dyn Fn(Reg) -> RegId,
+) {
+    let flags = reg::FLAGS;
+    let regs = |inst: &Inst, def: bool| -> Vec<RegId> {
+        inst.operands
+            .iter()
+            .filter_map(|o| match o {
+                Operand::Def(r) if def => Some(at(*r)),
+                Operand::Use(r) if !def => Some(at(*r)),
+                _ => None,
+            })
+            .collect()
+    };
+    loop {
+        let after = live_after(function, at);
+        let mut moved = false;
+        'blocks: for (b, block) in function.blocks.iter_mut().enumerate() {
+            for s in 1..block.insts.len() {
+                if !matches!(block.insts[s].kind, Kind::Op("INC16" | "DEC16")) {
+                    continue;
+                }
+                let (step_writes, step_reads) = (regs(&block.insts[s], true), regs(&block.insts[s], false));
+                // the run: copies, loads, compares; `last` is its last flag
+                // setter
+                let mut last = None;
+                let mut end = s + 1;
+                while let Some(inst) = block.insts.get(end) {
+                    if !matches!(inst.kind, Kind::Copy | Kind::Op("LDI" | "CMP" | "SBC")) {
+                        break;
+                    }
+                    if inst.sets_flags {
+                        last = Some(end);
+                    }
+                    end += 1;
+                }
+                let Some(last) = last else { continue };
+                // only copies and loads between the last flag setter and a
+                // carry branch
+                let carry_branch = block.insts.get(end).is_some_and(|i| matches!(i.kind, Kind::Op("BCC" | "BCS")));
+                if !carry_branch {
+                    continue;
+                }
+                let run = s + 1..=last;
+                let (mut reads, mut writes) = (Vec::new(), Vec::new());
+                for inst in &block.insts[run.clone()] {
+                    for r in regs(inst, false) {
+                        if !writes.contains(&r) {
+                            reads.push(r);
+                        }
+                    }
+                    writes.extend(regs(inst, true));
+                }
+                let sound = !reads.iter().any(|r| step_writes.contains(r))
+                    && !writes.iter().any(|r| *r != flags && step_reads.contains(r))
+                    && !writes.iter().any(|r| *r != flags && after[b][last].contains(r))
+                    && !after[b][s - 1].contains(&flags);
+                // an earlier copy of a register the step writes is what the run
+                // reads
+                let saves = block
+                    .insts[..s]
+                    .iter()
+                    .enumerate()
+                    .any(
+                        |(k, inst)| matches!(
+                            (inst.kind, &inst.operands[..]),
+                            (Kind::Copy, [Operand::Def(to), Operand::Use(from)])
+                                if reads.contains(&at(*to))
+                                    && step_writes.contains(&at(*from))
+                                    && block.insts[k + 1..s].iter().all(|i| {
+                                        let written = regs(i, true);
+                                        !written.contains(&at(*to)) && !written.contains(&at(*from))
+                                    })
+                        ),
+                    );
+                if sound && saves {
+                    let run: Vec<Inst> = block.insts.drain(run).collect();
+                    for (n, inst) in run.into_iter().enumerate() {
+                        block.insts.insert(s + n, inst);
+                    }
+                    moved = true;
+                    forward_old_copies(function, at, b, s + (last - s));
+                    break 'blocks;
+                }
+            }
+        }
+        if !moved {
+            return;
+        }
+    }
+}
+
+/// The copies of the old value that the step outlived are no longer needed
+/// once the compare has moved above it: a copy `to := from` of a register the
+/// step at `step` writes, whose readers before the step are all copies, and
+/// that nothing reads after it, goes; the readers take `from` (it still holds
+/// the old value there).
+fn forward_old_copies(
+    function: &mut MFunction<Class>,
+    at: &dyn Fn(Reg) -> RegId,
+    b: usize,
+    step: usize,
+) {
+    let after = live_after(function, at);
+    let block = &mut function.blocks[b];
+    let written = |inst: &Inst| -> Vec<RegId> {
+        inst.operands.iter().filter_map(|o| if let Operand::Def(r) = o { Some(at(*r)) } else { None }).collect()
+    };
+    let step_writes = written(&block.insts[step]);
+    let mut gone = Vec::new();
+    for k in 0..step {
+        let (to, from) = match (block.insts[k].kind, &block.insts[k].operands[..]) {
+            (Kind::Copy, [Operand::Def(to), Operand::Use(from)]) => (*to, *from),
+            _ => continue,
+        };
+        let (to_at, from_at) = (at(to), at(from));
+        // a copy into a register may be free (a reload through x leaves the
+        // value there): only a copy into a cell is a store to save
+        if !is_cell(to_at)
+            || !step_writes.contains(&from_at)
+            || step_writes.contains(&to_at)
+            || after[b][step].contains(&to_at)
+        {
+            continue;
+        }
+        let between = k + 1..step;
+        let reads_to = |inst: &Inst| inst.operands.iter().any(|o| matches!(o, Operand::Use(r) if at(*r) == to_at));
+        let untouched = block
+            .insts[between.clone()]
+            .iter()
+            .all(
+                |i| {
+                    let w = written(i);
+                    !w.contains(&to_at) && !w.contains(&from_at) && (!reads_to(i) || i.kind == Kind::Copy)
+                },
+            );
+        if !untouched {
+            continue;
+        }
+        for inst in &mut block.insts[between] {
+            if inst.kind != Kind::Copy {
+                continue;
+            }
+            for o in &mut inst.operands {
+                if matches!(o, Operand::Use(r) if at(*r) == to_at) {
+                    *o = Operand::Use(from);
+                }
+            }
+        }
+        gone.push(k);
+    }
+    for k in gone.into_iter().rev() {
+        block.insts.remove(k);
     }
 }
 
@@ -3009,6 +3229,7 @@ fn emit_with<const STACK: bool>(
         Reg::Virt(v) => assignment.0[v as usize],
         Reg::Phys(p) => p,
     };
+    compare_before_step(&mut function, &at);
     remove_identity_copies::<Mos<STACK>>(&mut function, &assignment);
     remove_redundant_copies_between::<Mos<STACK>>(&mut function, &assignment, |_| true, |_| true);
     // a reload of a slot whose register nothing has written is that register; x
@@ -3222,11 +3443,31 @@ fn emit_with<const STACK: bool>(
                     // bytes first: 45 bytes more each, linked once, for 200
                     // clocks fewer per 8 bits. `__mulsi3_fast` (19 bytes more)
                     // is not chosen: a site that never runs or has a constant
-                    // multiplier priced as run once still links it
-                    let fast = matches!(callee.as_str(), "__ashlsi3" | "__lshrsi3" | "__ashrsi3")
-                        && TUNING.with(|t| t.get()).clocks_per_byte <= 1;
-                    writeln!(out, "  {} {callee}{}", if jump { "jmp" } else { "jsr" }, if fast { "_fast" } else { "" })
-                        .unwrap()
+                    // multiplier priced as run once still links it. The long
+                    // division and remainder start at the quotient's first bit
+                    // (compiler-rt's `__udivXi3` does, by `clz`): 107 bytes
+                    // more, linked once, for 2000 clocks fewer a call
+                    // (loop_interchange -O2 13.9M -> 5.9M).
+                    // `_byte` marks the byte-divisor entry of the four
+                    // divisions only: a program's own function may end in it
+                    let (callee, byte) = match callee.strip_suffix("_byte") {
+                        Some(base @ ("__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3")) => (base, true),
+                        _ => (callee.as_str(), false),
+                    };
+                    let speed = TUNING.with(|t| t.get()).clocks_per_byte <= 1;
+                    let division = matches!(callee, "__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3");
+                    let entry = if !speed {
+                        ""
+                    } else if division && byte {
+                        "_fast_byte"
+                    } else if division && !FAST_DIVISION.with(|f| f.get()) {
+                        "_fast_small"
+                    } else if division || matches!(callee, "__ashlsi3" | "__lshrsi3" | "__ashrsi3") {
+                        "_fast"
+                    } else {
+                        ""
+                    };
+                    writeln!(out, "  {} {callee}{entry}", if jump { "jmp" } else { "jsr" }).unwrap()
                 }
                 // return address, then target-1, then rts into the callee; its
                 // own rts lands on the label
@@ -3598,9 +3839,49 @@ fn emit_with<const STACK: bool>(
             a_callees.insert(format!("{callee}_fast"));
         }
     }
+    let returns_x = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .filter(|inst| inst.kind == Kind::Op("RTS"))
+        .flat_map(|inst| &inst.operands)
+        .any(|operand| matches!(operand, Operand::Use(Reg::Phys(r)) if *r == reg::X));
+    // `jsr callee` reads `x` when the call lists it among the arguments
+    let mut x_callees = std::collections::BTreeSet::new();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts).filter(|inst| inst.kind == Kind::Op("JSR")) {
+        if let [Operand::Symbol(callee, _), arguments @ ..] = &inst.operands[..]
+            && arguments.iter().any(|operand| matches!(operand, Operand::Use(Reg::Phys(r)) if *r == reg::X))
+        {
+            x_callees.insert(callee.clone());
+            x_callees.insert(format!("{callee}_fast"));
+        }
+    }
+    let returns_y = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .filter(|inst| inst.kind == Kind::Op("RTS"))
+        .flat_map(|inst| &inst.operands)
+        .any(|operand| matches!(operand, Operand::Use(Reg::Phys(r)) if *r == reg::Y));
+    // `jsr callee` reads `y` when the call lists it among the arguments
+    let mut y_callees = std::collections::BTreeSet::new();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts).filter(|inst| inst.kind == Kind::Op("JSR")) {
+        if let [Operand::Symbol(callee, _), arguments @ ..] = &inst.operands[..]
+            && arguments.iter().any(|operand| matches!(operand, Operand::Use(Reg::Phys(r)) if *r == reg::Y))
+        {
+            y_callees.insert(callee.clone());
+            y_callees.insert(format!("{callee}_fast"));
+        }
+    }
     Ok((
         own_labels(
-            &finish(out, source.map(|(file, scope)| (file, scope, &function.places[..])), !returns_a, a_callees),
+            &finish(
+                out,
+                source.map(|(file, scope)| (file, scope, &function.places[..])),
+                (!returns_a, a_callees),
+                (!returns_x, x_callees),
+                (!returns_y, y_callees),
+            ),
             &function.name,
         ),
         slots,
@@ -3650,11 +3931,16 @@ fn own_labels(
 fn finish(
     mut code: Asm,
     lines_of: Option<(&str, Option<u32>, &[llrm_codegen::model::lir::SrcLoc])>,
-    no_a_result: bool,
-    a_callees: std::collections::BTreeSet<String>,
+    (no_a_result, a_callees): (bool, std::collections::BTreeSet<String>),
+    (no_x_result, x_callees): (bool, std::collections::BTreeSet<String>),
+    (no_y_result, y_callees): (bool, std::collections::BTreeSet<String>),
 ) -> String {
     code.no_a_result = no_a_result;
     code.a_callees = a_callees;
+    code.no_x_result = no_x_result;
+    code.x_callees = x_callees;
+    code.no_y_result = no_y_result;
+    code.y_callees = y_callees;
     crate::peephole::run(&mut code);
     crate::relax::relax(&mut code);
     if let Some((file, scope, places)) = lines_of {

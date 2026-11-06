@@ -89,6 +89,18 @@ b0:
     assert_eq!(far_stores(&after), 1, "{after}");
 }
 
+/// The walk's promotion mark is removed from every function before the second IPSCCP; the analyses that list declarations kept it on
+/// the functions the solver did not restate (`LLRM_CHECK_MODULES`: "@ADDNODE kept ... Flag(llrm-promoted-in-walk), afresh without it").
+#[test]
+fn the_walks_promotion_mark_is_told_removed_to_the_analyses() {
+    let mut module = parsed(include_str!("fixtures/bintree_before_ipo.ll"));
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+        llrm_mir::passes::with_module_check(|| pipeline::applied(program, &Applied::default()))
+    })
+    .and_then(|done| done)
+    .unwrap();
+}
+
 /// bintree's own IR (llrm-qb, whole program, before the optimizer): `walk`
 /// passes `t(3*at+1)` by reference and stores the slot back after each
 /// recursive call. With the copy-out kept, `walk` took the descriptor by
