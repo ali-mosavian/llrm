@@ -348,6 +348,28 @@ class Drain(Env, unittest.TestCase):
     def test_five_slots_at_one_minute_19_with_80_gb_available(self):
         self.assertEqual(self.admitted(19.0, 80), 5)
 
+    def test_ten_slots_at_one_minute_13_with_80_gb_available(self):
+        self.assertEqual(self.admitted(13.0, 80, wanted=12), 10)
+
+    def test_seven_slots_at_one_minute_15_with_80_gb_available(self):
+        self.assertEqual(self.admitted(15.0, 80, wanted=12), 7)
+
+    def test_five_slots_at_one_minute_13_with_30_gb_available(self):
+        self.assertEqual(self.admitted(13.0, 30, wanted=12), 5)
+
+    def test_slots_wide_file_holds_the_wide_count(self):
+        self.admitted(13.0, 80, wanted=1)
+        self.assertEqual(open(os.path.join(self.slots, "slots_wide")).read().strip(), "10")
+
+    def test_a_quiet_head_does_not_block_a_normal_waiter_at_one_minute_22(self):
+        """A LG_QUIET tier-1 waiter (start line 20) at the head of the queue starved every normal waiter in the 20-25 band."""
+        self.set_load(22.0, 22.0)
+        quiet = self.start("sleep", "30", LG_TIER="1", LG_QUIET="1", LG_SETTLE="0")
+        time.sleep(0.5)
+        normal = self.start("true", LG_TIER="4", LG_SETTLE="0")
+        self.assertEqual(normal.wait(timeout=5), 0, "the quiet head blocked a waiter whose start line is 25")
+        self.assertIsNone(quiet.poll())
+
     def test_tier_order_holds_with_the_wider_count(self):
         self.set_load(30.0, 30.0)
         log = os.path.join(self.dir.name, "order")
