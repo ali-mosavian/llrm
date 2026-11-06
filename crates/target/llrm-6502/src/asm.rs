@@ -381,6 +381,11 @@ pub struct Asm {
     /// other that is not a runtime routine (`__`) writes `x` as a result: the
     /// `mos` convention passes arguments in `rc2..` and returns `a:x`.
     pub x_callees: std::collections::BTreeSet<String>,
+    /// The function returns nothing in `y`: a `rts` does not read it.
+    pub no_y_result: bool,
+    /// The routines this function calls with an argument in `y` (see
+    /// [`Self::x_callees`]).
+    pub y_callees: std::collections::BTreeSet<String>,
     /// The place the instructions written from now on get.
     pub place: u32,
     /// What was written since the last newline.

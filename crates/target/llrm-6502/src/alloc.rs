@@ -2496,7 +2496,7 @@ fn keep_carry_in_c(function: &mut MFunction<Class>) {
 ///   flags were not live into `S`;
 /// - an earlier copy of what `S` writes is what it reads (otherwise there is
 ///   nothing to save).
-fn compare_before_step(
+pub fn compare_before_step(
     function: &mut MFunction<Class>,
     at: &dyn Fn(Reg) -> RegId,
 ) {
@@ -3856,6 +3856,23 @@ fn emit_with<const STACK: bool>(
             x_callees.insert(format!("{callee}_fast"));
         }
     }
+    let returns_y = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .filter(|inst| inst.kind == Kind::Op("RTS"))
+        .flat_map(|inst| &inst.operands)
+        .any(|operand| matches!(operand, Operand::Use(Reg::Phys(r)) if *r == reg::Y));
+    // `jsr callee` reads `y` when the call lists it among the arguments
+    let mut y_callees = std::collections::BTreeSet::new();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts).filter(|inst| inst.kind == Kind::Op("JSR")) {
+        if let [Operand::Symbol(callee, _), arguments @ ..] = &inst.operands[..]
+            && arguments.iter().any(|operand| matches!(operand, Operand::Use(Reg::Phys(r)) if *r == reg::Y))
+        {
+            y_callees.insert(callee.clone());
+            y_callees.insert(format!("{callee}_fast"));
+        }
+    }
     Ok((
         own_labels(
             &finish(
@@ -3863,6 +3880,7 @@ fn emit_with<const STACK: bool>(
                 source.map(|(file, scope)| (file, scope, &function.places[..])),
                 (!returns_a, a_callees),
                 (!returns_x, x_callees),
+                (!returns_y, y_callees),
             ),
             &function.name,
         ),
@@ -3915,11 +3933,14 @@ fn finish(
     lines_of: Option<(&str, Option<u32>, &[llrm_codegen::model::lir::SrcLoc])>,
     (no_a_result, a_callees): (bool, std::collections::BTreeSet<String>),
     (no_x_result, x_callees): (bool, std::collections::BTreeSet<String>),
+    (no_y_result, y_callees): (bool, std::collections::BTreeSet<String>),
 ) -> String {
     code.no_a_result = no_a_result;
     code.a_callees = a_callees;
     code.no_x_result = no_x_result;
     code.x_callees = x_callees;
+    code.no_y_result = no_y_result;
+    code.y_callees = y_callees;
     crate::peephole::run(&mut code);
     crate::relax::relax(&mut code);
     if let Some((file, scope, places)) = lines_of {

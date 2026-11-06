@@ -606,6 +606,9 @@ struct Exits<'a> {
     /// not a runtime routine (`__`) writes `x` without reading it. `None`:
     /// every call reads it.
     x_callees: Option<&'a std::collections::BTreeSet<String>>,
+    /// The same for `y`.
+    no_y_result: bool,
+    y_callees: Option<&'a std::collections::BTreeSet<String>>,
 }
 
 impl<'a> Exits<'a> {
@@ -615,6 +618,8 @@ impl<'a> Exits<'a> {
             a_callees: Some(&asm.a_callees),
             no_x_result: asm.no_x_result,
             x_callees: Some(&asm.x_callees),
+            no_y_result: asm.no_y_result,
+            y_callees: Some(&asm.y_callees),
         }
     }
 }
@@ -696,16 +701,20 @@ fn dead_from(
             ) => (indexed(if bit == Registers::X { Index::X } else { Index::Y }), false),
             (Op::Lda | Op::Ldx | Op::Ldy, _) => (indexed(if bit == Registers::X { Index::X } else { Index::Y }), false),
             (Op::Rts, _) => {
-                return bit == Registers::A && exits.no_a_result || bit == Registers::X && exits.no_x_result;
+                return bit == Registers::A && exits.no_a_result
+                    || bit == Registers::X && exits.no_x_result
+                    || bit == Registers::Y && exits.no_y_result;
             }
-            (Op::Jsr, _) if bit == Registers::X => {
-                // the callee writes `x` (a result) unless it was an argument; a
-                // runtime routine may take one in `x` that no instruction lists
+            (Op::Jsr, _) if bit == Registers::X || bit == Registers::Y => {
+                // the callee writes `x` (a result) or `y` (scratch) unless it was
+                // an argument; a runtime routine may take one that no
+                // instruction lists
                 let callee = match &inst.operand {
                     Operand::Direct(name) if !name.starts_with("__") => name,
                     _ => return false,
                 };
-                match exits.x_callees {
+                let callees = if bit == Registers::X { exits.x_callees } else { exits.y_callees };
+                match callees {
                     Some(set) if !set.contains(callee) => return true,
                     _ => return false,
                 }
