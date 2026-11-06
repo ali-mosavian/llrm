@@ -4,7 +4,7 @@ A link order that followed set iteration (PYTHONHASHSEED) moved code across page
 same runtime, 201888 clocks under seed 0 and 201946 under seed 3 (2026-11-06), a +58 clock floor on every "worse cell" claim.
 ours_cr.py without OURS_RT used a stale default runtime (/tmp/nv/w6/mos_rt_28a5.s): 8 programs failed to link at -O1..-O3
 (the folded sweep, 2026-11-05) and an A/B could have compared one side against the wrong runtime. It must refuse and say why."""
-import os, subprocess, sys, tempfile, unittest
+import os, re, subprocess, sys, tempfile, unittest
 from pathlib import Path
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -91,5 +91,99 @@ class Members(unittest.TestCase):
         self.assertIn("__ashldi3:", text)
         for other in ("__udivdi3", "__muldi3", "__lshrdi3"):
             self.assertNotIn(other + ":", text)
+
+@unittest.skipUnless(os.path.exists(CC) and os.path.exists(RT), "needs a llrm-cc and a runtime (OURS_TEST_CC, OURS_TEST_RT)")
+class Archive(unittest.TestCase):
+    """The shipped runtime is an archive of per-routine objects and ld65 pulls members by undefined symbol: a program of three shifts links the
+    three shifts (and the runtime routines they call), not the divides (11135 B when the i64 routines were one object; 2026-11-06)."""
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp()
+        subprocess.run([sys.executable, os.path.join(HERE, "mkrt.py"), CC, os.path.join(cls.tmp, "rt.lib"), os.path.join(cls.tmp, "w")],
+                       check=True, capture_output=True, timeout=1200)
+
+    def link(self, program):
+        sys.path.insert(0, HERE)
+        import mkrt
+        src = Path(HERE).resolve().parents[1] / "tests" / "run" / "c" / f"{program}.c"
+        env = {**os.environ, "OURS_RT": RT, "OURS_PADS": "0"}
+        driver = subprocess.run([sys.executable, "-c", "import ours_cr; print(ours_cr.driver())"], cwd=HERE, env=env, capture_output=True, text=True, check=True).stdout
+        tmp = self.tmp
+        Path(tmp, "d.s").write_text(driver)
+        subprocess.run([CC, "--target=6502-sim65", "-Os", "-S", "-w", "-fsigned-char", "-I", os.path.join(HERE, "inc"), str(src), "-o", os.path.join(tmp, "o.s")], check=True)
+        Path(tmp, "f.s").write_text(".autoimport +\n" + Path(tmp, "o.s").read_text())
+        r = subprocess.run(["cl65", "-t", "sim6502", "-m", "x.map", "-o", "x.bin", "d.s", "f.s", "rt.lib"], cwd=tmp, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr[-300:])
+        return mkrt.pulled(Path(tmp, "x.map").read_text())
+
+    def test_a_shift_program_links_the_shifts_and_no_divide(self):
+        got = self.link("shift_int64_variable")
+        names = " ".join(got)
+        for shift in ("ashldi3", "lshrdi3", "ashrdi3"):
+            self.assertIn(shift, names)
+        for divide in ("udivdi3", "divdi3", "muldi3"):
+            self.assertNotIn(divide, names)
+        self.assertLess(sum(got.values()), 4000, got)
+
+    def test_the_text_level_runtime_reaches_what_the_archive_pulls(self):
+        """Rust tests (and ours_cr) still paste `reachable_runtime`'s text where they price the assembly; it must stay the same set of
+        routines as the link pulls. Comments are stripped first: `__ashrsi3_fast` reached memset, memcpy and memmove through the comment
+        that introduces them (+ their bytes in every program that shifts a long by a variable)."""
+        sys.path.insert(0, HERE)
+        os.environ["OURS_RT"] = RT
+        os.environ["OURS_PADS"] = "0"
+        import mkrt, ours_cr
+        text = mkrt.MOS_RT.read_text()
+        ours_cr.RT = re.sub(r";.*", "", text)
+        labels = {n: [x.strip() for x in re.search(r"^\.export (.*)$", t, re.M).group(1).split(",")] for n, t in mkrt.split_rt(text).items()}
+        cells = {"__sa", "__ra", "__sb", "__st", "__sr", "__sg"}
+        Path(self.tmp, "start.s").write_text(mkrt.startup())
+        for routine in re.findall(r"^\.export (__\w+)", text, re.M):
+            wanted = set(re.findall(r"^([A-Za-z_]\w*):", ours_cr.reachable_runtime(f"  jsr {routine}\n"), re.M)) - cells
+            Path(self.tmp, "q.s").write_text(f".autoimport +\n.export _main\n_main:\n  jsr {routine}\n  rts\n")
+            r = subprocess.run(["cl65", "-t", "sim6502", "-m", "q.map", "-o", "q.bin", "start.s", "q.s", "rt.lib"], cwd=self.tmp, capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr[-300:])
+            got = set()
+            for member in mkrt.pulled(Path(self.tmp, "q.map").read_text()):
+                if member.startswith("mos_") and member != "mos___rt_cells.o":
+                    got |= {x.removeprefix("__rt_") if x.startswith("__rt_") else x for x in labels[member[4:-2]]}
+            self.assertEqual(wanted, got - cells, routine)
+
+    def test_a_helper_two_routines_share_is_one_member(self):
+        got = self.link("recdeep")
+        self.assertEqual(sorted(n for n in got if "udivmod32" in n), ["mos___rt_udivmod32.o"], got)
+
+LINK_CC = os.environ.get("OURS_TEST_LINK_CC", os.path.expanduser("~/scratch/s4/frozen-setcc/lnk/llrm-cc"))
+
+@unittest.skipUnless(os.path.exists(LINK_CC), "needs a llrm-cc with the 6502-cc65 link recipe (OURS_TEST_LINK_CC)")
+class DriverLink(unittest.TestCase):
+    """`llrm-cc --target=6502-cc65 prog.c -o prog.bin` links through tools/targets/6502-link.sh: the runtime is an archive of per-routine
+    objects and ld65 pulls the members a program calls. Before, the 6502 rows stopped at -S and the harnesses pasted the runtime's text."""
+    def build(self, source):
+        tmp = tempfile.mkdtemp()
+        Path(tmp, "p.c").write_text(source)
+        env = {**os.environ, "LLRM_6502_MAP": os.path.join(tmp, "p.map")}
+        r = subprocess.run([LINK_CC, "--target=6502-cc65", "-Os", os.path.join(tmp, "p.c"), "-o", os.path.join(tmp, "p.bin")],
+                           capture_output=True, text=True, env=env, timeout=1500)
+        self.assertEqual(r.returncode, 0, r.stderr[-400:])
+        sys.path.insert(0, HERE)
+        import mkrt
+        members = mkrt.pulled(Path(tmp, "p.map").read_text())
+        code = subprocess.run(["sim65", os.path.join(tmp, "p.bin")], capture_output=True, timeout=60).returncode
+        return code, members
+
+    def test_a_multiply_program_links_the_multiply_and_no_divide_or_shift(self):
+        code, members = self.build("unsigned long a = 70000, b = 3;\nint main(void) { return (int)((a * b) >> 8) & 0x7f; }\n")
+        self.assertEqual(code, ((70000 * 3) >> 8) & 0x7F)
+        self.assertIn("mos___mulsi3.o", members)
+        self.assertEqual([m for m in members if "div" in m or "mod" in m or "di3" in m], [], members)
+
+    def test_a_shift_program_links_the_three_shifts_and_no_other_i64_routine(self):
+        code, members = self.build("unsigned long long v = 0x0123456789ABCDEFULL;\nvolatile unsigned c = 13;\n"
+                                   "int main(void) { return (int)(((v << c) >> 56) ^ (v >> c) ^ (unsigned long long)((long long)v >> c)) & 0x7f; }\n")
+        v, c, m64 = 0x0123456789ABCDEF, 13, (1 << 64) - 1
+        self.assertEqual(code, ((((v << c) & m64) >> 56) ^ (v >> c) ^ (v >> c)) & 0x7F)
+        i64 = sorted(m for m in members if m.startswith("lib_int_"))
+        self.assertEqual(i64, ["lib_int_ashldi3.o", "lib_int_ashrdi3.o", "lib_int_lshrdi3.o"], members)
 
 if __name__ == "__main__": unittest.main()
