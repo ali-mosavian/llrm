@@ -1,5 +1,5 @@
 /* Integer builtins vs C integer semantics. Division by zero follows sf_int.h. */
-/* cc -O2 -fno-builtin -Iinclude '-DSFB_NAME(n)=sfb_##n' tests/host_int.c lib/int/int32.c lib/int/int64.c */
+/* cc -O2 -fno-builtin -Iinclude '-DSFB_NAME(n)=sfb_##n' tests/host_int.c lib/int/int32.c $(tests/fp_sources.sh int64) */
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>

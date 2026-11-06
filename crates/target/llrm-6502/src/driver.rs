@@ -356,16 +356,32 @@ impl llrm_mir::target::Machine for Mos6502Machine {
         llrm_mir::target::Neutral.spaces()
     }
 
+    /// Clocks and bytes of the sequences the backend emits, per native byte
+    /// (`crate::opcosts`); `byte_costs` falls back to the bytes.
     fn costs(&self) -> llrm_mir::target::OperationCosts {
-        llrm_mir::target::Neutral.costs()
+        static CLOCKS: std::sync::OnceLock<llrm_mir::target::OperationCosts> = std::sync::OnceLock::new();
+        CLOCKS.get_or_init(|| crate::opcosts::clocks(crate::dagisel::hooks::Cpu::Mos6502)).clone()
     }
 
+    fn size_costs(&self) -> llrm_mir::target::OperationCosts {
+        static BYTES: std::sync::OnceLock<llrm_mir::target::OperationCosts> = std::sync::OnceLock::new();
+        BYTES.get_or_init(|| crate::opcosts::bytes(crate::dagisel::hooks::Cpu::Mos6502)).clone()
+    }
+
+    /// The bytes the allocator can put a value in on the smallest zero page
+    /// (`a`, `x`, `y`, `rc2`..`rc15`). 0 left every pressure estimate off: no
+    /// loop was ever too wide for the registers.
+    ///
+    /// DEVIATE (6502-OPCOSTS): `Room` counts values, not bytes, so a wide value
+    /// takes one of these. Exit: residents weighed by `OperationCosts::words`
+    /// (2026-11-20).
     fn registers(&self) -> i64 {
-        llrm_mir::target::Neutral.registers()
+        crate::alloc::register_file(0).0
     }
 
+    /// The bytes a call leaves: the callee-kept cells `rc8`..`rc15`.
     fn call_registers(&self) -> i64 {
-        llrm_mir::target::Neutral.call_registers()
+        crate::alloc::register_file(0).1
     }
 
     fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {

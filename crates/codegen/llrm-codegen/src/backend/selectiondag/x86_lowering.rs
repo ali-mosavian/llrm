@@ -191,9 +191,40 @@ impl CombineHooks for X86Lowering<'_> {
     /// GE/LE canonicalization: the pin runs them on x86. Judged on `bintree`, `jpeg_*`
     /// and `particle` (m16 and C, `-Os`/`-O2`): fewer bytes or clocks, none worse. The
     /// other default-off combines either changed nothing there or cost a byte
-    /// (`rebuild_brcond_condition`, `fold_mul_of_add_with_constant`) and stay off.
+    /// (`rebuild_brcond_condition`) and stay off.
     /// DEVIATE: the remaining pin combines stay off for x86. Exit 2026-12-01.
     fn fold_bin_op_into_select(&self) -> bool {
+        true
+    }
+
+    /// `visitMUL`'s `(mul (add x, c1), c2)` is `(add (mul x, c2), c1*c2)` when the other
+    /// multiply of `x` by `c2` is in the DAG: the pin's x86 runs it
+    /// (`isMulAddWithConstProfitable` has no X86 override). Judged on the whole
+    /// corpus: 16 cells smaller (-1795 B), m16 -Os lru +1 B (a 6-byte real-mode `lea`).
+    /// DEVIATE: off at m16 outside `-Os`: the constant leaves a 3-part `lea` for a
+    /// trailing `add`, regparm3_matrix_4/_22 -40..-62 B but +62..+84 instructions,
+    /// +38 and +32 clk-eq at 1 clk = 2 B (the pin splits too). Exit 2026-12-01.
+    fn fold_mul_of_add_with_constant(&self) -> bool {
+        !self.i16_mul_chains || self.min_size
+    }
+
+    /// `replaceStoreOfFPConstant`: a `double` constant is stored as an `i64`
+    /// (m64) or two `i32` (m32). The pin runs it on x86 (`isFPImmLegal` keeps
+    /// only +-0.0, +-1.0). Judged by all allocated bytes: m64 smaller in 9 of
+    /// 9 cells (the pool entry goes).
+    fn store_fp_constant_as_i64(&self) -> bool {
+        true
+    }
+
+    /// `visitORCommutative`'s `(or (and x, y), x)` is `x`: the pin runs it on
+    /// x86. No corpus cell reaches it (the mid-end absorbs first).
+    fn fold_or_absorption(&self) -> bool {
+        true
+    }
+
+    /// `reduceLoadWidth` through a `freeze` between the mask and the load: the
+    /// pin runs it on x86. No corpus cell reaches it.
+    fn reduce_load_width_through_freeze(&self) -> bool {
         true
     }
 
@@ -227,6 +258,20 @@ impl CombineHooks for X86Lowering<'_> {
     /// the widened divide's `shr 32; sar k` is one `sar 32 + k`.
     fn fold_sra_of_trunc_of_shift(&self) -> bool {
         true
+    }
+
+    /// `X86TargetLowering::shouldTransformSignedTruncationCheck`: a scalar
+    /// check whose type and kept width are both a size `movsx` takes (8, 16,
+    /// 32, 64). `(add x, 1<<(k-1)) u< 1<<k` then is `sext_inreg x, k == x`: no
+    /// 64-bit constant, one `movslq; cmp` for the add, the constant and the
+    /// compare.
+    fn should_transform_signed_truncation_check(
+        &self,
+        vt: EVT,
+        kept_bits: u32,
+    ) -> bool {
+        let movsx = |bits: u32| matches!(bits, 8 | 16 | 32 | 64);
+        vt.is_integer() && movsx(vt.size_in_bits()) && movsx(kept_bits)
     }
 
     fn canonicalize_ge_le(&self) -> bool {
@@ -1573,12 +1618,15 @@ fn combine_sub(
         .or_else(|| lea_adds.then(|| combine_masked_xor_difference(dag, node)).flatten())
 }
 
-/// DEVIATE SD448 (exit 2026-11-14, when the pin's `convertToThreeAddressWithLEA`
-/// takes 8-bit adds on 32-bit targets, TA-10): `sub C, (xor X, M)` is `add X,
-/// C - M` when `M` is a low-bit mask and `X` has no bits above it, so the
-/// `xor` is `M - X`. `__floatsisf`'s shift amount `26 - (n ^ 31)` is `n - 5`:
-/// one `lea` where the `sub` took `mov cl, 26; sub cl, bl`. Where the target
-/// has no three-address add (m16) the `add` needs a copy and is a byte longer,
+/// DEVIATE SD448 (owner x86-m32; recheck 2026-11-20 and at every pin bump,
+/// dropped where the pin has the fold): `sub C, (xor X, M)` is `add X, C - M`
+/// when `M` is a low-bit mask and `X` has no bits above it, so the `xor` is
+/// `M - X`. `__floatsisf`'s shift amount `26 - (n ^ 31)` is `n - 5`: one
+/// `lea` where the `sub` took `mov cl, 26; sub cl, bl`. The pin has no such
+/// fold, and its `convertToThreeAddressWithLEA` takes no 8-bit add on 32-bit
+/// targets (TA-10). 0 larger cells over 18 row-levels; m32 -O2 2 smaller,
+/// -O3 9 smaller (to -32 B); m64 and arm64 identical. Where the target has
+/// no three-address add (m16) the `add` needs a copy and is a byte longer,
 /// so it is not made there.
 fn combine_masked_xor_difference(
     dag: &mut SelectionDAG,

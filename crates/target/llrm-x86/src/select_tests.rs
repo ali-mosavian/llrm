@@ -92,7 +92,7 @@ fn test_byte_copy_for_nbody_timer() {
     for source in [RegId::CL, RegId::AH, RegId::BL, RegId::DH] {
         let what = sem(Operation::Move, Some("mov"), vec![rg(RegId::AL, 1)], vec![rg(source, 1)], None, false);
         let instruction = decoded(&made(emitted(&what)).code, 0);
-        assert_eq!(instruction.code(), Code::Mov_r8_rm8);
+        assert_eq!(instruction.code(), Code::Mov_rm8_r8);
         assert_eq!(instruction.op0_register(), (RegId::AL).iced());
         assert_eq!(instruction.op1_register(), source.iced());
     }
@@ -133,7 +133,7 @@ fn test_a_move_decodes_back_to_the_move_that_was_asked_for() {
                 continue;
             }
             let back = decoded(&made(r#move(into, outof, At::bits16(0))).code, 0);
-            assert_eq!(back.code(), Code::Mov_r32_rm32);
+            assert_eq!(back.code(), Code::Mov_rm32_r32);
             assert_eq!(back.op0_register(), into.iced());
             assert_eq!(back.op1_register(), outof.iced());
         }

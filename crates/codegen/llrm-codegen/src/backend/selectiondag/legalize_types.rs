@@ -101,6 +101,18 @@ impl<'a> TypeLegalizer<'a> {
     }
 
     /// `getShiftAmountTy` for a shift of `vt` (`i8` on x86).
+    /// The type a library shift takes its amount in: `EVT::getIntegerVT(
+    /// getIntSize())`.
+    fn libcall_shift_amount_type(
+        &self,
+        vt: EVT,
+    ) -> EVT {
+        if self.tli.types.narrow_library_shift() {
+            return self.shift_amount_type(vt);
+        }
+        EVT::integer(self.tli.types.int_size())
+    }
+
     fn shift_amount_type(
         &self,
         vt: EVT,
@@ -1887,7 +1899,7 @@ impl<'a> TypeLegalizer<'a> {
             if self.tli.has_size_libcall_name(op, vt)
                 && self.tli.calls_for_size_shift(amt, u128::from(vt.size_in_bits()))
             {
-                let amount = self.dag.get_constant(amt, self.shift_amount_type(half));
+                let amount = self.dag.get_constant(amt, self.libcall_shift_amount_type(half));
                 if let Some(pair) = self.expand_by_libcall(value, op, half, op == ISD::Sra, [input, amount]) {
                     return Ok(pair);
                 }
@@ -1916,6 +1928,8 @@ impl<'a> TypeLegalizer<'a> {
             if let Some(pair) = self.expand_shift_with_known_amount_bit(op, (lo, hi), amount, half) {
                 return Ok(pair);
             }
+            // the pin passes the amount as the library's `int`
+            let amount = self.dag.get_zext_or_trunc(amount, self.libcall_shift_amount_type(half));
             return self
                 .expand_by_libcall(value, op, half, op == ISD::Sra, [input, amount])
                 .ok_or(LegalizeError::Unsupported { op, ty: vt, what: "expand shift to a library call" });

@@ -83,6 +83,23 @@ impl Builder<'_> {
                 }
                 Ok(())
             }
+            // `case Intrinsic::trap`: a `TRAP` node on the chain (selected as `ud2`).
+            Intrinsic::Trap => {
+                let root = self.root();
+                let trap = self.dag.get_node(ISD::Trap, EVT::OTHER, &[root]);
+                self.dag.set_root(trap);
+                Ok(())
+            }
+            // `case Intrinsic::debugtrap`: a `DEBUGTRAP` node (selected as `int3`).
+            Intrinsic::DebugTrap => {
+                let root = self.root();
+                let trap = self.dag.get_node(ISD::DebugTrap, EVT::OTHER, &[root]);
+                self.dag.set_root(trap);
+                Ok(())
+            }
+            // `case Intrinsic::ubsantrap`: `UBSAN_UD1` (a `ud1` with the kind as its
+            // displacement) is not translated: a named refusal, not a panic.
+            Intrinsic::UbsanTrap => Err(Refused("llvm.ubsantrap: M16-UBSANTRAP, not translated")),
             // `case Intrinsic::experimental_noalias_scope_decl: return;`
             Intrinsic::Assume | Intrinsic::Prefetch | Intrinsic::FakeUse | Intrinsic::NoAliasScopeDecl => Ok(()),
             // `SelectionDAGBuilder.cpp#L7680`: the region information is
@@ -540,7 +557,9 @@ impl Builder<'_> {
                 let mut value = 0u128;
                 for at in 0..width {
                     let byte = bytes.as_ref().and_then(|bytes| bytes.get((base + src_off + at) as usize)).copied();
-                    value |= u128::from(byte.unwrap_or(0)) << (8 * at);
+                    // the first byte is the low bits on a little-endian target
+                    let place = if self.dag.config().big_endian { width - at - 1 } else { at };
+                    value |= u128::from(byte.unwrap_or(0)) << (8 * place);
                 }
                 let value = self.dag.get_constant(value, vt);
                 let to = self.dag.get_object_ptr_offset(dst, dst_off as i64);
@@ -857,6 +876,19 @@ impl Builder<'_> {
         Some((Some(bytes), from))
     }
 
+    /// The low `count` bytes of `bits` as the target lays them in memory.
+    fn memory_bytes(
+        &self,
+        bits: u128,
+        count: usize,
+    ) -> Vec<u8> {
+        if self.dag.config().big_endian {
+            bits.to_be_bytes()[16 - count..].to_vec()
+        } else {
+            bits.to_le_bytes()[..count].to_vec()
+        }
+    }
+
     /// `ReadDataFromGlobal`: the constant's bytes at `at`, where the layout
     /// puts them; `None` for anything but integers, floats and aggregates of
     /// them.
@@ -874,12 +906,12 @@ impl Builder<'_> {
                 let width = types.int_bits(constant.ty)?;
                 (width % 8 == 0).then_some(())?;
                 let count = (width / 8) as usize;
-                bytes.get_mut(at..at + count)?.copy_from_slice(&bits.to_le_bytes()[..count]);
+                bytes.get_mut(at..at + count)?.copy_from_slice(&self.memory_bytes(*bits, count));
             }
             ConstantKind::Float(bits) => match types.get(constant.ty) {
                 Type::Float(kind @ (FloatKind::Float | FloatKind::Double)) => {
                     let count = kind.value_bytes() as usize;
-                    bytes.get_mut(at..at + count)?.copy_from_slice(&bits.to_le_bytes()[..count]);
+                    bytes.get_mut(at..at + count)?.copy_from_slice(&self.memory_bytes(u128::from(*bits), count));
                 }
                 _ => return None,
             },
@@ -1433,11 +1465,7 @@ impl Builder<'_> {
         if flat && tail {
             return self.backward_rep_movsb(chain, dst, src, size);
         }
-        // `push ds; pop es`: both pointers are near, in DS; ES holds whatever
-        // the last far access left. It is not an input: a selector carried
-        // in ES from before the block was a far access's, and a near move
-        // wrote through it (idiom_edges.c bytes_down at -O2).
-        let mut code = if flat { vec![0xFD, 0xF3, 0xA5] } else { vec![0x1E, 0x07, 0xFD, 0xF3, 0x66, 0xA5] };
+        let mut code = if flat { vec![0xFD, 0xF3, 0xA5] } else { vec![0xFD, 0xF3, 0x66, 0xA5] };
         if tail {
             code.extend([0x83, 0xC6, 0x03, 0x83, 0xC7, 0x03, 0x89, 0xD1, 0xF3, 0xA4]);
         }
@@ -1456,6 +1484,14 @@ impl Builder<'_> {
             names.push(name_of(strings.expect("a flat move has no tail").tail));
             values.push(rest);
         }
+        // ES is an input the emit step requires (`feeds_call`): the block
+        // leaves it as the selector it was given, so late cleanup keeps one
+        // load for every string move and drops it after a far access.
+        let segment = strings.map(|strings| (name_of(strings.destination_segment), self.segment_of(None)));
+        if let Some((name, selector)) = segment {
+            names.push(name);
+            values.push(selector);
+        }
         let block = llrm_mir::intrinsics::AsmBlock {
             code,
             inputs: names.iter().map(|name| (*name).into()).collect(),
@@ -1463,7 +1499,7 @@ impl Builder<'_> {
             clobbers: names
                 .iter()
                 .copied()
-                .chain(strings.map(|strings| name_of(strings.destination_segment)))
+                .filter(|name| Some(*name) != segment.map(|(es, _)| es))
                 .map(Into::into)
                 .collect(),
             memory: true,
@@ -1503,6 +1539,7 @@ impl Builder<'_> {
         let name_of = |register| self.arch.registers().name(register).expect("a described register");
         // A flat target names no string registers: `cx`, `si` and `di` are
         // its operands, and ES already holds what `pop es` loads.
+        let segment = strings.map(|strings| (name_of(strings.destination_segment), self.segment_of(None)));
         let operands = match strings {
             Some(strings) => {
                 [(name_of(strings.count), count), (name_of(strings.source), from), (name_of(strings.destination), to)]
@@ -1513,22 +1550,17 @@ impl Builder<'_> {
             }
         };
         let block = llrm_mir::intrinsics::AsmBlock {
-            // `push ds; pop es` first at m16, as the dword move does.
-            code: if strings.is_some() { vec![0x1E, 0x07, 0xFD, 0xF3, 0xA4, 0xFC] } else { vec![0xFD, 0xF3, 0xA4, 0xFC] },
-            inputs: operands.iter().map(|(name, _)| (*name).into()).collect(),
+            code: vec![0xFD, 0xF3, 0xA4, 0xFC],
+            inputs: operands.iter().map(|(name, _)| *name).chain(segment.map(|(es, _)| es)).map(Into::into).collect(),
             outputs: Vec::new(),
-            clobbers: operands
-                .iter()
-                .map(|(name, _)| *name)
-                .chain(strings.map(|strings| name_of(strings.destination_segment)))
-                .map(Into::into)
-                .collect(),
+            clobbers: operands.iter().map(|(name, _)| (*name).into()).collect(),
             memory: true,
             fixups: Vec::new(),
         };
         let name = llrm_mir::intrinsics::asm_name(&block);
         let registers: Vec<_> = operands
             .into_iter()
+            .chain(segment)
             .map(|(name, value)| (self.sized_register(self.arch.register_named(name), pointer), value))
             .collect();
         let (chain, _) = lower_asm(&mut self.dag, chain, &name, &[], &registers, &[]);

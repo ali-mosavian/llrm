@@ -9,7 +9,7 @@ use llrm_mir::program::Program;
 use llrm_mir::target::Machine;
 use llrm_transforms::pipeline::{Applied, Options as MidEnd};
 
-use crate::compile::{Options, text_with};
+use crate::compile::{CodeModel, Options, text_with};
 use crate::dagisel::hooks::Cpu;
 use crate::machine::M68kMachine;
 
@@ -170,9 +170,27 @@ pub fn assembly_with(
     debug: bool,
     dump: Option<&std::path::Path>,
 ) -> Result<String, String> {
+    assembly_in(text, cpu, level, debug, dump, CodeModel::Small)
+}
+
+/// [`assembly_with`] in the code model `model` (`-mcmodel`).
+pub fn assembly_in(
+    text: &str,
+    cpu: Cpu,
+    level: Level,
+    debug: bool,
+    dump: Option<&std::path::Path>,
+    model: CodeModel,
+) -> Result<String, String> {
     let optimized = lowered(text, cpu, level, dump)?;
     let module = &optimized;
-    let backend = Options { size: matches!(level, Level::Os | Level::Oz), debug, mid_end: false, ..Options::default() };
+    let backend = Options {
+        size: matches!(level, Level::Os | Level::Oz),
+        debug,
+        mid_end: false,
+        code_model: model,
+        ..Options::default()
+    };
     let mut out = String::new();
     for (_, global, function) in module.functions() {
         if function.is_declaration() {
@@ -201,6 +219,17 @@ pub fn object(
     level: Level,
     name: &str,
 ) -> Result<Vec<u8>, String> {
+    object_in(text, cpu, level, name, CodeModel::Small)
+}
+
+/// [`object`] in the code model `model` (`-mcmodel`).
+pub fn object_in(
+    text: &str,
+    cpu: Cpu,
+    level: Level,
+    name: &str,
+    model: CodeModel,
+) -> Result<Vec<u8>, String> {
     // The file symbol is the module's own `source_filename`, as the pin's: the
     // path of a scratch IR file would differ between two compiles of one
     // source.
@@ -209,7 +238,12 @@ pub fn object(
         .find_map(|line| line.strip_prefix("source_filename = \"")?.strip_suffix('"'))
         .map_or_else(|| name.rsplit('/').next().unwrap_or(name), |one| one);
     let module = lowered(text, cpu, level, None)?;
-    let backend = Options { size: matches!(level, Level::Os | Level::Oz), mid_end: false, ..Options::default() };
+    let backend = Options {
+        size: matches!(level, Level::Os | Level::Oz),
+        mid_end: false,
+        code_model: model,
+        ..Options::default()
+    };
     let mut items = Vec::new();
     let mut exports = llrm_support::hash::HashMap::default();
     for (_, global, function) in module.functions() {

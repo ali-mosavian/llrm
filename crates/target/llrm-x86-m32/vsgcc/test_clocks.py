@@ -71,3 +71,9 @@ def test_an_extended_load_and_store_cost_what_the_486_sheet_says_not_the_dword_f
     assert harness.cost(one(32, 0xDB, 0x38), False, True, 0) == clocks.UNTABLED["fstp_m80"] == 6     # fstp tbyte [eax]
     assert harness.cost(one(32, 0xD9, 0x18), False, True, 0) == clocks.UNTABLED["fst_m32"] == 7       # fstp dword [eax]
     assert harness.cost(one(32, 0xDD, 0x18), False, True, 0) == clocks.clocks("x87_store") == 8       # fstp qword [eax]
+
+def test_a_register_copy_costs_what_the_486_sheet_says_and_the_compilers_table_agrees():
+    """`fld st(i)` is 4 clocks on the 486 sheet (240440-002, Table 10.3), `fld m64` 3. The compiler's table priced the copy as the load, so a
+    hoisted operand copied each trip looked free (nbody -O2 m16). The harness figure is the sheet's, not read from the table: the two must agree."""
+    assert harness.cost(one(32, 0xD9, 0xC1), False, True, 0) == clocks.UNTABLED["fld_reg"] == clocks.clocks("x87_copy") == 4   # fld st(1)
+    assert clocks.clocks("x87_copy") == clocks.clocks("x87_load") + 1

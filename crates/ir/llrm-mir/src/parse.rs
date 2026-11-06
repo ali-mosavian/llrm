@@ -43,6 +43,8 @@ struct Parser {
     /// Each alias the pre-scan found, with what an operand naming it is: its
     /// aliasee, or none where the alias may be interposed.
     alias_names: HashMap<Name, Option<Name>>,
+    /// The comdats named by a global or function, which must be declared.
+    comdat_uses: Vec<(String, usize)>,
     /// Global values referred to, with the pointer type each use gave them.
     global_uses: Vec<(GlobalId, TypeId, usize)>,
     defined_globals: HashSet<GlobalId>,
@@ -73,6 +75,7 @@ impl Parser {
             module: Module::default(),
             globals: HashMap::default(),
             alias_names: HashMap::default(),
+            comdat_uses: Vec::new(),
             global_uses: Vec::new(),
             defined_globals: HashSet::default(),
             groups: HashMap::default(),
@@ -335,12 +338,63 @@ impl Parser {
                 Token::Word(word) if word == "declare" || word == "define" => self.function(word == "define")?,
                 Token::MetadataName(name) => self.named_metadata(name)?,
                 Token::MetadataId(number) => self.metadata_definition(number)?,
+                Token::Comdat(name) => self.comdat_definition(name)?,
                 _ => return self.fail(format!("unexpected {} at the top level", self.describe())),
             }
         }
     }
 
+    /// `$name = comdat KIND` (`LLParser::parseComdat`).
+    fn comdat_definition(
+        &mut self,
+        name: String,
+    ) -> Parsed<()> {
+        self.next();
+        self.expect_punct('=')?;
+        if !self.eat_word("comdat") {
+            return self.fail("expected comdat keyword");
+        }
+        let kind = self.word()?;
+        if !["any", "exactmatch", "largest", "nodeduplicate", "samesize"].contains(&kind.as_str()) {
+            return self.fail(format!("unknown selection kind `{kind}`"));
+        }
+        if self.module.comdats.insert(name.clone(), kind).is_some() {
+            return self.fail(format!("redefinition of comdat '${name}'"));
+        }
+        Ok(())
+    }
+
+    /// `comdat` or `comdat($name)` after `own`'s declaration: the comdat of
+    /// the same name, or the one named (`LLParser::parseOptionalComdat`).
+    fn comdat_of(
+        &mut self,
+        own: Option<String>,
+    ) -> Parsed<()> {
+        let line = self.line();
+        let name = if self.eat_punct('(') {
+            let Token::Comdat(name) = self.peek().clone() else {
+                return self.fail("expected a comdat name after `comdat(`");
+            };
+            self.next();
+            self.expect_punct(')')?;
+            name
+        } else {
+            let Some(own) = own.clone() else { return self.fail("a comdat marker needs a named global") };
+            own
+        };
+        self.comdat_uses.push((name.clone(), line));
+        if let Some(own) = own {
+            self.module.comdat_of.insert(own, name);
+        }
+        Ok(())
+    }
+
     fn finish(mut self) -> Parsed<Module> {
+        for (name, line) in std::mem::take(&mut self.comdat_uses) {
+            if !self.module.comdats.contains_key(&name) {
+                return Err(ParseError { line, message: format!("use of undefined comdat '${name}'") });
+            }
+        }
         for (name, id) in &self.globals {
             if !self.defined_globals.contains(id) {
                 return Err(ParseError { line: 0, message: format!("@{} is used but never defined", display(name)) });
@@ -598,6 +652,9 @@ impl Parser {
                 if let Some(name) = self.module.globals[id.0 as usize].name.owned() {
                     self.module.sections.insert(name, section);
                 }
+            } else if self.eat_word("comdat") {
+                let own = self.module.globals[id.0 as usize].name.owned();
+                self.comdat_of(own)?;
             } else {
                 return self.fail(format!("unexpected {} after a global", self.describe()));
             }
@@ -712,6 +769,10 @@ impl Parser {
             if let Some(name) = self.module.globals[id.0 as usize].name.owned() {
                 self.module.sections.insert(name, section);
             }
+        }
+        if self.eat_word("comdat") {
+            let own = self.module.globals[id.0 as usize].name.owned();
+            self.comdat_of(own)?;
         }
         if self.eat_word("personality") {
             let ty = self.ty()?;

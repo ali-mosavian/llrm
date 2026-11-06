@@ -122,6 +122,12 @@ pub trait CombineHooks {
         false
     }
 
+    /// `DataLayout::isLittleEndian`: whether the first of several merged
+    /// stores is the least significant part of the joined value.
+    fn little_endian(&self) -> bool {
+        true
+    }
+
     /// `mergeStoresAfterLegalization`: stores of `mem` are also merged once
     /// types are legal, to catch the stores legalization made (a promoted
     /// `i16` store is a truncating `i32` one). The pin's default is true and
@@ -1716,11 +1722,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 // `zext (trunc x)` is `x` resized when the bits the truncate
                 // drops are zero, which `nuw` promises
                 // ([L2474](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L2474)).
-                let (op_bits, mid_bits, dest_bits) = (
-                    self.dag.value_type(x).size_in_bits(),
-                    self.dag.value_type(n0).size_in_bits(),
-                    vt.size_in_bits(),
-                );
+                let (op_bits, mid_bits, dest_bits) =
+                    (self.dag.value_type(x).size_in_bits(), self.dag.value_type(n0).size_in_bits(), vt.size_in_bits());
                 let dropped = if op_bits == mid_bits {
                     0
                 } else {
@@ -2330,7 +2333,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         // "Do not turn a 'not' into a regular xor."
         if logic_op == ISD::Xor
-            && self.dag.constant(self.dag.operand(logic, 1)).is_some_and(|c| c == super::fold::mask(self.dag.value_type(logic).size_in_bits()))
+            && self
+                .dag
+                .constant(self.dag.operand(logic, 1))
+                .is_some_and(|c| c == super::fold::mask(self.dag.value_type(logic).size_in_bits()))
         {
             return None;
         }
@@ -3067,9 +3073,15 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 let constant = self.dag.get_constant(bits & 0xFFFF_FFFF_FFFF_FFFF, EVT::I64);
                 Some(self.dag.get_store(chain, constant, ptr, int_info(EVT::I64, info.align, info.base)))
             }
-            EVT::Simple(MVT::F64) if !tli.is_fp_imm_legal(MVT::F64, bits) => {
+            // `ST->isSimple()`: a volatile store is not split, as the pin
+            // leaves it. (The pin also asks `isOperationLegalOrCustom(STORE,
+            // i32)`; not asked here, which would change targets whose i32
+            // store is illegal.)
+            EVT::Simple(MVT::F64) if !info.volatile && !tli.is_fp_imm_legal(MVT::F64, bits) => {
                 let lo = self.dag.get_constant(bits & 0xFFFF_FFFF, EVT::I32);
                 let hi = self.dag.get_constant((bits >> 32) & 0xFFFF_FFFF, EVT::I32);
+                // the high word comes first on a big-endian target
+                let (lo, hi) = if self.hooks.little_endian() { (lo, hi) } else { (hi, lo) };
                 let first = self.dag.get_store(chain, lo, ptr, int_info(EVT::I32, info.align, info.base));
                 // A far pointer is no integer: its offset word moves, by 4.
                 let next = if self.dag.value_type(ptr) == MVT::Far.into() {

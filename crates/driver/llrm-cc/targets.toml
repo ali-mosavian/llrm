@@ -5,6 +5,7 @@
 # `description` names the crate whose `[c]` states sizeof(int, long, void *, ...); `wchar_bytes` and `long_double_bytes` are the row's libc's departures from it (tests/c_abi.rs
 # holds the front end to them; the triple's default decides nothing).
 # `llc_program` (default llrm-llc) and `llc_level` (default true: it takes -O<n>) say how the backend is run; a row without a level must give `llc_level_reason`.
+# `llc_mcmodel` (default false) says the backend takes `-mcmodel=` and clang does not (the pin's clang refuses it for m68k): the flag goes to the backend alone.
 # `clang_env` names an environment variable holding a clang for the target (m16's carries the i8086 patch).
 # `link` is the recipe for objects to an executable; `{objects}` and `{flags}` stand for lists, `{output}` for a path, `{root}` for the llrm checkout.
 
@@ -199,7 +200,7 @@ llc_program = "llrm-6502-llc"
 object = "ca65"
 link = ["sh", "-c", "echo 'llrm-cc: the 6502 rows stop at -S' >&2; exit 1"]
 
-# The 6502 rows for a program linked with cc65's sim6502 libraries: every C symbol takes cc65's `_` (`sp` is `_sp`, `main` is the `_main`
+# The 6502 rows for a program linked with cc65's sim6502 libraries and the runtime archive (tools/targets/6502-link.sh): every C symbol takes cc65's `_` (`sp` is `_sp`, `main` is the `_main`
 # crt0 calls), so none meets a library symbol. The rows above keep bare names, which the runtime tests' hand glue names.
 [6502-cc65]
 description = "6502"
@@ -210,7 +211,7 @@ clang = ["-target", "msp430", "-funsigned-char", "-fpack-struct=1"]
 llc = ["--platform=sim65-cc65", "--cpu=6502"]
 llc_program = "llrm-6502-llc"
 object = "ca65"
-link = ["sh", "-c", "echo 'llrm-cc: the 6502 rows stop at -S' >&2; exit 1"]
+link = ["{root}/tools/targets/6502-link.sh", "6502", "{output}", "{objects}"]
 
 [65c02-cc65]
 description = "6502"
@@ -221,7 +222,7 @@ clang = ["-target", "msp430", "-funsigned-char", "-fpack-struct=1"]
 llc = ["--platform=sim65-cc65", "--cpu=65c02"]
 llc_program = "llrm-6502-llc"
 object = "ca65"
-link = ["sh", "-c", "echo 'llrm-cc: the 6502 rows stop at -S' >&2; exit 1"]
+link = ["{root}/tools/targets/6502-link.sh", "65c02", "{output}", "{objects}"]
 
 # m68k Linux: -S is gas text, -c an ELF32 relocatable with .text and the data sections; no link line yet.
 # The pin's clang gives the target a 64-bit long double (`[c]` of the description).
@@ -232,6 +233,7 @@ datalayout = "{datalayout:m68k}"
 clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68000", "-ffreestanding"]
 llc = ["-mcpu=68000"]
 llc_program = "llrm-m68k-llc"
+llc_mcmodel = true
 object = "elf"
 link = []
 
@@ -242,6 +244,7 @@ datalayout = "{datalayout:m68k}"
 clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68020", "-ffreestanding"]
 llc = ["-mcpu=68020"]
 llc_program = "llrm-m68k-llc"
+llc_mcmodel = true
 object = "elf"
 link = []
 
@@ -252,6 +255,7 @@ datalayout = "{datalayout:m68k}"
 clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68010", "-ffreestanding"]
 llc = ["-mcpu=68010"]
 llc_program = "llrm-m68k-llc"
+llc_mcmodel = true
 object = "elf"
 link = []
 
@@ -262,6 +266,7 @@ datalayout = "{datalayout:m68k}"
 clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68030", "-ffreestanding"]
 llc = ["-mcpu=68030"]
 llc_program = "llrm-m68k-llc"
+llc_mcmodel = true
 object = "elf"
 link = []
 
@@ -272,6 +277,7 @@ datalayout = "{datalayout:m68k}"
 clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68040", "-ffreestanding"]
 llc = ["-mcpu=68040"]
 llc_program = "llrm-m68k-llc"
+llc_mcmodel = true
 object = "elf"
 link = []
 
@@ -282,6 +288,7 @@ datalayout = "{datalayout:m68k}"
 clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68060", "-ffreestanding"]
 llc = ["-mcpu=68060"]
 llc_program = "llrm-m68k-llc"
+llc_mcmodel = true
 object = "elf"
 link = []
 

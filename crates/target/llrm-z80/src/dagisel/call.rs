@@ -182,7 +182,9 @@ pub fn lower_call(
         let vt = dag.value_type(out.value);
         operands.push(dag.get_phys_register(vt, register));
     }
-    operands.push(dag.get_register_mask());
+    // DEVIATE SCM1 (as x86's `call_clobbered_flags`): only the flags, the one live physical register that crosses
+    // a call in this DAG; the scheduler recomputes a flags value after the call. Exit: with the per-target clobber lists.
+    operands.push(dag.get_register_mask_clobbering(&[super::generated::ids::reg::F]));
     operands.extend(glue);
     let call = dag.get_node_multi(CALL, &[EVT::OTHER, EVT::GLUE], &operands);
     let end =

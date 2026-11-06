@@ -5,6 +5,7 @@ user-mode instructions of one run of `bench_main_`, the difference of 101 runs a
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -107,13 +108,13 @@ def pic_mode(obj: Path) -> str:
 
 
 def mismatch(row: dict, column: str, obj: Path, ours: Path) -> dict:
-    """`row`, or an error where the reported column's object is a different position-independence than ours (c64nopic) that the same program compiled to: a
-    pc-relative table beside an absolute one differs by a `lea` per access (hanoi2 -O2 read 10.6% behind clang with the pic one against the nopic one, 16% ahead
-    like for like)."""
+    """`row`, annotated "pc-rel vs abs data refs" where the reported column's object reaches data the other way than ours (c64nopic): a pc-relative table beside an
+    absolute one differs by a `lea` per access (hanoi2 -O2 read 10.6% behind clang with the pic one against the nopic one, 16% ahead like for like). A note, not an
+    error: parity/*/clang64 Os is pc-relative where ours writes `mov $sym`, as -fno-pic clang does by flag and the pin does by shape."""
     if column not in REPORTED or column == NOPIC or "error" in row or "skip" in row or not obj.exists() or not ours.exists():
         return row
     theirs, mine = pic_mode(obj), pic_mode(ours)
-    return row if "unknown" in (theirs, mine) or theirs == mine else {"error": f"pic mode: {column} is {theirs}, ours is {mine}"}
+    return row if "unknown" in (theirs, mine) or theirs == mine else {**row, "note": f"pc-rel vs abs data refs: {column} is {theirs}, ours is {mine}"}
 
 
 def checked_object(work: Path, program: str, column: str, opt: str) -> Path:
@@ -131,10 +132,28 @@ def compile_command(compiler: str, binary: Path, source: Path, opt: str, out: Pa
     return [program, "-fno-pic", *flags], dict(os.environ)
 
 
+COMPILE_SECONDS = int(os.environ.get("LLRM_BENCH_COMPILE_TIMEOUT", 600))  # wall clock for one external compile or link
+
+
+def run_limited(command: list[str], seconds: int | None = None, **kwargs) -> subprocess.CompletedProcess | str:
+    """`subprocess.run(command, capture_output, text)` in a process group of its own, or the text "timed out after N s: <command>" when it outlives `seconds`: the group is killed, so the compiler's children (gcc's cc1, ld) die with it. `subprocess.run(timeout=)` kills only the direct child: an orphaned `gcc` ran 11.5 h."""
+    seconds = COMPILE_SECONDS if seconds is None else seconds
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True, **kwargs)
+    try:
+        out, err = process.communicate(timeout=seconds)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.communicate()
+        return f"timed out after {seconds} s: {' '.join(map(str, command[:6]))}"
+    return subprocess.CompletedProcess(command, process.returncode, out, err)
+
+
 def compile_to(compiler: str, binary: Path, directory: Path, source: Path, opt: str, out: Path, bench: Path, extra: tuple[str, ...]) -> str | None:
     """Compile `source` to `out`; None, or the first line of why not."""
     command, env = compile_command(compiler, binary, source, opt, out, bench)
-    built = subprocess.run([*command[:1], *extra, *command[1:]], capture_output=True, text=True, cwd=directory, env=env, timeout=1800)
+    built = run_limited([*command[:1], *extra, *command[1:]], cwd=directory, env=env)
+    if isinstance(built, str):
+        return built
     return None if built.returncode == 0 and out.exists() else (built.stderr.strip().splitlines() or ["failed"])[-1][:160]
 
 
@@ -152,7 +171,9 @@ def measure_one(compiler: str, binary: Path, directory: Path, source: Path, opt:
             return {"error": "compile: " + why}
     else:
         counted_obj = obj
-    linked = subprocess.run(["gcc", "-static", "-no-pie", "-o", str(exe), str(counted_obj), str(DRIVER), str(POSIX / "os.c"), "-I", str(POSIX), "-lm"], capture_output=True, text=True)
+    linked = run_limited(["gcc", "-static", "-no-pie", "-o", str(exe), str(counted_obj), str(DRIVER), str(POSIX / "os.c"), "-I", str(POSIX), "-lm"])
+    if isinstance(linked, str):
+        return {"error": "link: " + linked}
     if linked.returncode != 0:
         return {"error": "link: " + (linked.stderr.strip().splitlines() or ["failed"])[-1][:160]}
     ran = subprocess.run([str(exe), "31"], capture_output=True, text=True, cwd=directory, timeout=600)

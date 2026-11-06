@@ -199,6 +199,10 @@ pub fn assembled_by(
     let mut shared: IndexMap<String, Vec<u8>> = IndexMap::default();
     let mut shared_registers = None;
     let mut data = Vec::new();
+    // A variable of zeros moves to `.data?` after this (`zero_to_bss`): where
+    // one is among `data`, the pool's start offset in `.data` is not known
+    // here.
+    let mut zero_may_move = false;
     let mut far_data = Vec::new();
     let mut sectioned: IndexMap<String, Vec<masm::Datum>> = IndexMap::default();
     let mut huge_objects: Vec<(String, Vec<masm::Datum>)> = Vec::new();
@@ -282,6 +286,12 @@ pub fn assembled_by(
                 } else if matches!(global.address_space, FAR_SPACE | HUGE_SPACE) {
                     far_data.extend(datums);
                 } else {
+                    zero_may_move |= !variable.constant
+                        && datums.iter().all(|one| match one {
+                            masm::Datum::Align(_) | masm::Datum::Label(_) => true,
+                            masm::Datum::Bytes(bytes) => bytes.iter().all(|byte| *byte == 0),
+                            _ => false,
+                        });
                     data.extend(datums);
                 }
                 if global.linkage == llrm_mir::Linkage::External {
@@ -409,6 +419,7 @@ pub fn assembled_by(
                 // Copies of returns and split tails only make code better: -O0
                 // has neither.
                 let procedure = if !cpu.optimized {
+                    let procedure = masm::Procedure { body: LirBody { unwrapped: true, ..procedure.body }, ..procedure };
                     if let Some(why) = masm::realign_refusal(&procedure) {
                         return Err(why);
                     }
@@ -458,7 +469,14 @@ pub fn assembled_by(
         procedures.push(masm::routine_procedure(&name, code, registers, Regs(arch.registers())));
     }
     let flat_elf = arch.object().default == llrm_target::object::Format::Elf && arch.object().code_model().flat();
-    for (bytes, id) in crate::backend::constpool::wide_first(pool.borrow().entries()) {
+    // A flat ELF object keeps the pool in mergeable sections, with no gap to fill.
+    let entries = pool.borrow();
+    let pooled = if flat_elf || zero_may_move {
+        crate::backend::constpool::wide_first(entries.entries())
+    } else {
+        crate::backend::constpool::gap_filled(entries.entries(), masm::data_size(&data, 0))
+    };
+    for (bytes, id) in pooled {
         let name = format!("$K{id}");
         names.insert((Space::Segment, id), name.clone());
         // A double is on an 8-byte boundary: a 486 takes 3 clocks more for one

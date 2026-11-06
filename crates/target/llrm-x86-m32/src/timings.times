@@ -87,6 +87,7 @@ rep_movs     =   =
 rep_movs_cell =  =
 x87_load     =   =
 x87_exchange =   =
+x87_copy     =   =
 x87_store    =   =
 x87_release 3   1
 x87_add      =   =
@@ -170,6 +171,7 @@ rep_movs     =   =
 rep_movs_cell =  =
 x87_load     =   =
 x87_exchange =   =
+x87_copy     =   =
 x87_store    =   =
 x87_release 3   1
 x87_add      =   =

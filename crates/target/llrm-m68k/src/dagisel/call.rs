@@ -453,17 +453,19 @@ impl TargetCalling for M68kCalling {
     }
 }
 
-/// `LowerGlobalAddress`: `WrapperPC (TargetGlobalAddress)`, the offset folded
-/// into the symbol. A global the PIC model reaches through the GOT is not
-/// translated (see the DEVIATE above): `lower_operation` assumes the small
-/// code model without PIC, where every reference is direct.
+/// `LowerGlobalAddress`: `WrapperPC (TargetGlobalAddress)`, or `Wrapper` where
+/// the code model makes the address absolute (`classifyGlobalReference`), the
+/// offset folded into the symbol. A global the PIC model reaches through the
+/// GOT is not translated (see the DEVIATE above): `lower_operation` assumes
+/// no PIC, where every reference is direct.
 pub fn lower_global_address(
     dag: &mut SelectionDAG,
     node: SDValue,
+    absolute: bool,
 ) -> SDValue {
     let NodeData::Global { symbol, offset } = dag.node(node).data else {
         unreachable!("GlobalAddress has a global payload")
     };
     let address = dag.get_target_global_address(EVT::I32, symbol, offset);
-    dag.get_node(m68kisd::WRAPPER_PC, EVT::I32, &[address])
+    dag.get_node(if absolute { m68kisd::WRAPPER } else { m68kisd::WRAPPER_PC }, EVT::I32, &[address])
 }

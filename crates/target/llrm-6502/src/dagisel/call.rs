@@ -171,7 +171,8 @@ pub fn lower_call(
         let vt = dag.value_type(out.value);
         operands.push(dag.get_phys_register(vt, register));
     }
-    operands.push(dag.get_register_mask());
+    // the scheduler's live-register check reads the mask: a call clobbers the flags
+    operands.push(dag.get_register_mask_clobbering(&[super::generated::ids::reg::P]));
     operands.extend(glue);
     let call = dag.get_node_multi(CALL, &[EVT::OTHER, EVT::GLUE], &operands);
     let end =

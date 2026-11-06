@@ -30,9 +30,50 @@ pub enum Item {
     Loc(crate::expand::Row),
 }
 
+/// The pin's code model (`-mcmodel`), which decides how a global is reached
+/// (`M68kSubtarget::classifyGlobalReference`, without PIC): small, PC-relative
+/// with a 16-bit displacement; medium, absolute on the 68000 and 68010 and
+/// PC-relative from the 68020; large, absolute. The assembler relaxes only
+/// branches, so data farther than 32 KiB from the code needs medium on the
+/// 68000 or large.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum CodeModel {
+    #[default]
+    Small,
+    Medium,
+    Large,
+}
+
+impl CodeModel {
+    /// `-mcmodel=NAME`: `small`, `medium` or `large`.
+    pub fn parse(name: &str) -> Result<CodeModel, String> {
+        match name {
+            "small" => Ok(CodeModel::Small),
+            "medium" => Ok(CodeModel::Medium),
+            "large" => Ok(CodeModel::Large),
+            other => Err(format!("`{other}` is not a code model (small, medium, large)")),
+        }
+    }
+
+    /// Whether a global's address is an absolute one on `cpu`.
+    pub fn absolute_data(
+        self,
+        cpu: Cpu,
+    ) -> bool {
+        match self {
+            CodeModel::Small => false,
+            CodeModel::Medium => !cpu.at_least(Cpu::M68020),
+            CodeModel::Large => true,
+        }
+    }
+}
+
 /// What the compiler may do beyond the pin's output.
 #[derive(Clone, Copy, Debug)]
 pub struct Options {
+    /// The pin's code model: how a global's address is formed
+    /// ([`CodeModel::absolute_data`]).
+    pub code_model: CodeModel,
     /// Run the shared IR mid-end (`-O2`) first, as `llc -O2` is given
     /// optimized IR by `opt`.
     pub mid_end: bool,
@@ -61,6 +102,7 @@ impl Options {
     /// The pin's output, instruction for instruction: what `llc` and `llvm-mc`
     /// can be compared with.
     pub const PINNED: Options = Options {
+        code_model: CodeModel::Small,
         mid_end: false,
         size: false,
         source_order: false,
@@ -75,6 +117,7 @@ impl Options {
 impl Default for Options {
     fn default() -> Options {
         Options {
+            code_model: CodeModel::Small,
             mid_end: true,
             size: false,
             source_order: false,
@@ -116,7 +159,15 @@ pub fn items_with(
         module.functions().filter(|(_, _, one)| !one.is_declaration()).position(|(one, _, _)| one == id).unwrap_or(0);
     let wants_size = options.size
         || module.global(id).function().is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
-    let blocks = select_function_with(module, name, cpu, options.source_order, options.indexed, options.short)?;
+    let blocks = select_function_with(
+        module,
+        name,
+        cpu,
+        options.source_order,
+        options.indexed,
+        options.short,
+        options.code_model.absolute_data(cpu),
+    )?;
     let mut function = emit(name, &blocks)?;
     function.returns_twice =
         module.global(id).function().is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
@@ -162,6 +213,7 @@ pub fn items_with(
         crate::consts::materialize_constants(&mut function, &assignment, cpu, wants_size);
         crate::constreg::constant_into_destination(&mut function, &assignment);
         crate::constreg::immediate_from_free_register(&mut function, &assignment);
+        crate::narrow_add::narrow_adds(&mut function, &assignment);
     }
     remove_identity_copies(&mut function, &assignment);
     remove_redundant_copies(&mut function, &assignment);

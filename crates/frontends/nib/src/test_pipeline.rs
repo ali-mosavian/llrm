@@ -456,7 +456,9 @@ fn test_an_exported_symbol_is_spelled_as_the_object_format_asks() {
 
 /// #6736 gave the `promote.` rerun the minimal cleanup list: `sort` kept its length parameter, the bounds checks
 /// and a far array pointer (`ret 4`), which the full list folds into a two-index call on the stack array. Nib
-/// quicksort -O2 went from 258,793 to 324,077 clocks (+25%) and from 334 to 411 B.
+/// quicksort -O2 went from 258,793 to 324,077 clocks (+25%) and from 334 to 411 B (those figures are #6736's, fixed by #6916).
+/// #7082 brought the same `ret 4` back by another cause (the walk's promotion left the second IPSCCP unrun, #7476): measured
+/// on its own, Nib quicksort m16 -O2 355 -> 331 B and 5.2% fewer executed instructions (base de3796acc7).
 #[test]
 fn test_sort_takes_only_its_two_indices_after_the_ipo_reruns() {
     let function = _nib("quicksort", "main", "_sort");

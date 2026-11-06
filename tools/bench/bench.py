@@ -64,6 +64,8 @@ def physical_defines() -> list[str]:
     return [f"-DPHYSICAL_{name.upper()}=0x{address:X}UL" for name, address in tomllib.loads(text)["physical"].items()]
 
 
+# The module that defines `__doserror_`, which the shipped clibm.lib's creatdos/opendos ask for and its dictionary does not give (stft_single, which creates and opens files).
+DOSERROR_OBJ = Path(os.environ.get("LLRM_OW", Path.home() / "scratch/ow-src")) / "bld/clib/_dos/library/msdos.086/mm/error086.obj"
 OW = Path(os.environ.get("OW_BIN", Path.home() / "work/personal/open-watcom-v2/build/binbuild"))
 # Open Watcom's own medium-model C library, 8087 maths library and start-up (an OW v2 release; the tree's build of them
 # needs its generated headers and 16-bit bootstrap, which this checkout lacks)
@@ -332,6 +334,12 @@ def skip_lines(measured: dict) -> list[str]:
     return [f"SKIP {why} ({len({key[0] for key, value in measured.items() if value.get('skip') == why})} programs)" for why in sorted({value["skip"] for value in measured.values() if "skip" in value})]
 
 
+def note_lines(measured: dict) -> list[str]:
+    """One `NOTE reason (N cells)` line per distinct note on a kept row, so an annotated row is counted in the header, not only carried in the json."""
+    notes = [value["note"] for value in measured.values() if "note" in value]
+    return [f"NOTE {why} ({notes.count(why)} cells)" for why in sorted(set(notes))]
+
+
 def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
     """Counts of one built variant: the entry address from its map, the emulated run, the output check, and the bytes
     of its own object `obj` (tools/sizes.py): not the image, which holds the start-up and the libraries as well."""
@@ -373,19 +381,23 @@ def build_watcom(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Pat
     from the corpus's ext.asm."""
     obj, exe, listing = work / f"{stem}.obj", work / f"{stem}.exe", work / f"{stem}.map"
     flags = ["-ox", "-oe=0"] if opt == "O2" else ["-os", "-ol"]  # -oe=0: the kernel stays a call, as llrm-c compiles it
-    done = cpulimit.run([str(OW / "bwcc"), "-zq", "-mm", "-ecc", "-s", "-DOWREF", "-4", "-fpi87", f"-i={OWLIB.parent / 'h'}", *physical_defines(), *flags, str(variant.source), f"-fo={obj}"], 300, capture_output=True, text=True)
+    done = cpulimit.run([str(OW / "bwcc"), "-zq", "-mm", "-ecc", "-s", "-DOWREF", "-4", "-fpi87", f"-i={OWLIB.parent / 'h'}", *physical_defines(), *flags, str(variant.source), f"-fo={obj}"], 300, capture_output=True, text=True, timeout=native.COMPILE_SECONDS)
     if done.returncode != 0 or not obj.exists():
         return "compile: " + (done.stderr or done.stdout).strip()[-300:]
     support = dosbatch.c_support(dosbatch.REAL_MODE, work)
+    extra: list[str] = []  # error086.obj, once the library turns out not to define `__doserror_`
     stack = 60 * 1024  # the most DGROUP holds: a deep recursion (recsum, 2000 frames) overran the 16K one into the code; a program with more data gets what is left
     while True:
         try:
             # Watcom names main `main_`; its start-up asks for `_cstart_` and the library calls it
             dosbatch._host([str(BIN / "jwlink"), "option", "quiet", "option", f"map={listing}", "option", "start=_cstart_", "option", f"stack={stack}", *dosbatch.linkrecipe.link(dosbatch.REAL_MODE, "format"), "name", str(exe),
-                            "libpath", str(OWLIB / "dos"), "libpath", str(OWLIB), "file", str(obj), *[word for one in support for word in ("file", str(one))],
+                            "libpath", str(OWLIB / "dos"), "libpath", str(OWLIB), "file", str(obj), *extra, *[word for one in support for word in ("file", str(one))],
                             "library", "clibm.lib", "library", "math87m.lib", "library", "noemu87.lib"])
             break
         except dosbatch.BuildError as error:
+            if "__doserror_ is an undefined reference" in str(error) and not extra and DOSERROR_OBJ.exists():
+                extra = ["file", str(DOSERROR_OBJ)]
+                continue
             over = re.search(r"DGROUP exceeds 64k by (\d+) bytes", str(error))
             if not over or stack <= 4096:
                 return f"build: {error}"
@@ -450,8 +462,8 @@ def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str,
             header = folder / "bench_io.h"
             if header.exists():
                 header.write_bytes(header.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
-    subprocess.run([str(ROOT / "tools" / "callconv" / "bcc.sh"), str(folder), *[f"{stem}.c {levels[opt]} {" ".join([*physical_defines(), *BORLAND_DEFINES.get(language, [])])}".strip() for _, stem in variants_]],
-                   env={**os.environ, "CCROOT": str(home.parent), "CCDIR": home.name, "CCEXE": compiler}, capture_output=True, timeout=1800)
+    native.run_limited([str(ROOT / "tools" / "callconv" / "bcc.sh"), str(folder), *[f"{stem}.c {levels[opt]} {" ".join([*physical_defines(), *BORLAND_DEFINES.get(language, [])])}".strip() for _, stem in variants_]],
+                   env={**os.environ, "CCROOT": str(home.parent), "CCDIR": home.name, "CCEXE": compiler}, seconds=1800)
     support = [word for one in dosbatch.c_support(dosbatch.REAL_MODE, folder) for word in ("file", str(one))]
     out: dict[str, tuple[Path, Path] | str] = {}
     for _, stem in variants_:
@@ -533,7 +545,7 @@ def measure_references(selected: list[str], opts: list[str], work: Path, timing:
             for source, target in ((f"{stem}.EXE", exe), (f"{stem}.MAP", listing), (f"{stem}.OBJ", obj)):
                 shutil.copy(folder / reference / source, target)
             own(key, stem, directory, variant, (exe, listing), obj)
-    with ProcessPoolExecutor() as pool:
+    with ProcessPoolExecutor(max_workers=workers()) as pool:
         for (key, _), counts in zip(owned, pool.map(measure, [job for _, job in owned])):
             out[key] = counts
     if timing:
@@ -601,12 +613,24 @@ def measure_flat(flat: dict, work: Path) -> dict[tuple[str, str, str], dict]:
         data, bss = sizes.data_bytes(obj)
         return key, {"instructions": ran.inclusive[region.upper()], **code_fields(obj), "data_bytes": data, "bss_bytes": bss} | (flat_clocks(key, image, region, ran.inclusive[region.upper()], work / f"{stem}-{key[2]}") if image else {})
 
-    with ThreadPoolExecutor() as pool:
+    with ThreadPoolExecutor(max_workers=workers()) as pool:
         found = dict(pool.map(one, flat.items()))
     return {key: counts for key, counts in found.items() if key[0] != "startup"}
 
 
 START = time.monotonic()
+
+
+def workers() -> int:
+    """Pool size: the guard's base slot count, so a bench run takes no more cores than one admitted job (a storm of 32 workers starved the others)."""
+    return max(1, int(os.environ.get("LG_SLOTS") or 3))
+
+
+def guarded_argv() -> list[str] | None:
+    """The command that runs this one under tools/load_guard.sh, or None when it already is."""
+    if os.environ.get("LG_GUARDED") == "1":
+        return None
+    return [str(Path(__file__).resolve().parents[1] / "load_guard.sh"), sys.executable, *sys.argv]
 
 
 def cores() -> str:
@@ -635,7 +659,7 @@ def measure_all(selected: list[str], opts: list[str], work: Path, timing: bool =
         for opt in opts:
             out |= measure_opt(selected, opt, work, timing)
     else:
-        with ProcessPoolExecutor(max_workers=len(opts)) as pool:
+        with ProcessPoolExecutor(max_workers=min(len(opts), workers())) as pool:
             for part in pool.map(measure_opt, [selected] * len(opts), opts, [work] * len(opts), [timing] * len(opts)):
                 out |= part
     if ONLY is None or native.OURS in ONLY:
@@ -656,7 +680,7 @@ def measure_opt(selected: list[str], opt: str, work: Path, timing: bool = False)
     todo = [(directory, variant) for directory, variant in everything if not tools_missing(variant)]
     stems = {(v.name, v.language): f"V{at:03d}" for at, (_, v) in enumerate(todo)}
     objects = qbbuild.runtimes(work / f"runtime-{opt}") if any(v.language in OURS_BASIC for _, v in todo) else None
-    with ThreadPoolExecutor() as pool:
+    with ThreadPoolExecutor(max_workers=workers()) as pool:
         built = list(pool.map(lambda one: build(one[1], opt, folder, stems[(one[1].name, one[1].language)], objects), todo))
     stage(f"{opt}: built {len(todo)} programs")
     basic = {stems[(v.name, v.language)]: (b[0], v.dialect) for (_, v), b in zip(todo, built) if v.language in BASIC_LANGUAGES and not isinstance(b, str)}
@@ -685,7 +709,7 @@ def measure_opt(selected: list[str], opt: str, work: Path, timing: bool = False)
             files, want, counted = counting_input(variant, directory, folder / "ci-input" / stem)
             jobs.append((key, (stem, exe, listing, variant.region if counted else None, want, folder / f"{stem}.obj", files)))
             needs[key] = timing_input(variant, directory, None if timing else folder / "ci-input" / stem)
-    with ProcessPoolExecutor() as pool:
+    with ProcessPoolExecutor(max_workers=workers()) as pool:
         counted = [(key, job) for key, job in jobs if job is not None]
         for (key, _), counts in zip(counted, pool.map(measure, [job for _, job in counted])):
             out[key] = counts
@@ -1250,6 +1274,8 @@ def merge(folder: Path, count: int, opts: list[str], record: bool) -> int:
 
 
 def main() -> int:
+    if (argv := guarded_argv()) and os.environ.get("LG_BENCH_UNGUARDED") != "1":
+        os.execv(argv[0], argv)
     parser = argparse.ArgumentParser()
     parser.add_argument("select", nargs="*")
     parser.add_argument("--opt", nargs="+", default=["O2", "Os"])
@@ -1308,6 +1334,7 @@ def main() -> int:
         args.json.with_name(args.json.name + ".provenance").write_text(json.dumps({name: {"sha": sha, "md5": md5} for name, (sha, md5) in recorded.items()}, indent=1) + "\n")
     print("HARNESS", basecounts.harness_digest())
     print(*skip_lines(measured), sep="\n")
+    print(*note_lines(measured), sep="\n")
     unbuilt = [f"{'/'.join(key)}: {value['error']}" for key, value in measured.items() if "error" in value and not value["error"].startswith("skipped: ")]
     if unbuilt and (args.record or args.no_judge):  # a base or leg with cells that did not build is no base: say how many, exit nonzero
         print(f"NOHEAD {len(unbuilt)} cells did not build:", *unbuilt[:20], sep="\n  ")

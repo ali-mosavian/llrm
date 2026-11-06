@@ -46,7 +46,9 @@ pub mod cond {
 
 pub fn target_lowering() -> TargetLowering {
     use ISD::*;
-    let mut tl = TargetLowering::empty(TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false).with_soft_float());
+    let mut tl = TargetLowering::empty(
+        TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false).with_soft_float().with_narrow_library_shift(),
+    );
     tl.init_actions();
     for vt in [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64] {
         for ext in [LoadExt::SExtLoad, LoadExt::ZExtLoad, LoadExt::ExtLoad] {
@@ -134,6 +136,13 @@ pub fn target_lowering() -> TargetLowering {
         tl.set_size_libcall_name(op, MVT::I32, name);
     }
     tl.set_size_shift_call(8, 10);
+    // the long divide has a smaller routine for a function tuned for size
+    // (one step per dividend bit, registers alone: 76 B against 391)
+    for (op, name) in
+        [SDiv, UDiv, SRem, URem].into_iter().zip(["__s_divsi3", "__s_udivsi3", "__s_modsi3", "__s_umodsi3"])
+    {
+        tl.set_size_libcall_name(op, MVT::I32, name);
+    }
     // the long long divide has a smaller routine (one step per dividend bit)
     // for a function tuned for size
     for (op, name) in
