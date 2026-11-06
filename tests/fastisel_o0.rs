@@ -143,3 +143,33 @@ fn fast_isel_takes_a_call_and_a_divide_at_m32() {
     let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     assert!(asm.contains("idiv") && asm.contains("call"), "{asm}");
 }
+
+/// Slice 4: at m32 a pointer is an `i32`. `get` loads through a pointer
+/// parameter and `put` stores through one; both were declined for the type.
+#[test]
+fn fast_isel_takes_pointers_at_m32() {
+    let source = "int get(int *p) { return *p; }\n\
+                  void put(int *p, int v) { *p = v + 1; }\n\
+                  int main(void) { int x = 1; put(&x, 4); return get(&x) == 5 ? 0 : 1; }\n";
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(scratch.path().join("a.c"), source).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_32-linux")
+        .env("LLRM_FAST_ISEL", "1")
+        .env("LLRM_VERIFY", "1")
+        .env("LLRM_DEBUG", "isel")
+        .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+        .current_dir(scratch.path())
+        .args(["-O0", "-S", "a.c", "-o", "a.s"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+    for name in ["get", "put"] {
+        assert!(
+            report.lines().any(|line| line == format!("{name} fast") || line == format!("_{name} fast")),
+            "{name} not taken: {report}{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}

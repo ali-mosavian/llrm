@@ -42,6 +42,11 @@ pub fn take_took() -> bool {
     TOOK.with(|took| took.replace(false))
 }
 
+/// A 32-bit integer, or at m32 a pointer in the default space (the same register).
+fn word(types: &llrm_mir::types::Types, ty: llrm_mir::types::TypeId, m32: bool) -> bool {
+    types.int_bits(ty) == Some(32) || (m32 && matches!(types.get(ty), llrm_mir::types::Type::Pointer(0)))
+}
+
 /// FastISel's blocks for every block of `function`, or none: one block it
 /// cannot take sends the whole function to the DAG path.
 // DEVIATE F1: hand-written subset; exit 2026-11-27 (a generator over X86GenFastISel.inc).
@@ -62,7 +67,7 @@ pub fn build_all(
         return None;
     }
     // every parameter is a 4-byte stack cell: fixed object -(n + 1)
-    let int32 = |ty| module.context.types.int_bits(ty) == Some(32);
+    let int32 = |ty| word(&module.context.types, ty, m32);
     let (returns, parameters, _) = module.signature(function.ty);
     if parameters.iter().any(|&ty| !int32(ty))
         || convention.parameters.len() != parameters.len()
@@ -180,19 +185,29 @@ impl Fast<'_> {
         }
     }
 
-    /// `[base, scale, index, disp, segment]` of a frame object.
+    /// `[base, scale, index, disp, segment]` of a frame object, or of the pointer in a register.
     fn address(&mut self, pointer: Operand) -> Option<Vec<SDValue>> {
-        let Operand::Value(value) = pointer else { return None };
         if !self.m32 {
             return None;
         }
-        let object = *self.info.static_allocas.get(&value)?;
-        let ValueDef::Instruction(def) = self.function.value(value).def else { return None };
-        let Opcode::Alloca { allocated, .. } = self.function.instruction(def).opcode else { return None };
-        if self.module.context.types.int_bits(allocated) != Some(32) {
-            return None;
+        if let Operand::Value(value) = pointer
+            && let Some(&object) = self.info.static_allocas.get(&value)
+        {
+            let ValueDef::Instruction(def) = self.function.value(value).def else { return None };
+            let Opcode::Alloca { allocated, .. } = self.function.instruction(def).opcode else { return None };
+            if !word(&self.module.context.types, allocated, true) {
+                return None;
+            }
+            return Some(self.frame(object));
         }
-        Some(self.frame(object))
+        let base = self.value(pointer)?;
+        Some(vec![
+            base,
+            self.dag.get_constant_with(1, EVT::I8, true, false),
+            self.dag.get_register(EVT::I32, 0),
+            self.dag.get_constant_with(0, EVT::I32, true, false),
+            self.dag.get_register(EVT::I16, 0),
+        ])
     }
 
     fn eax_reg(&self) -> Option<llrm_lir::registers::RegId> {
@@ -251,7 +266,7 @@ impl Fast<'_> {
                     self.info.static_allocas.get(&instruction.result?)?;
                 }
                 Opcode::Load { volatile: false, .. } => {
-                    if self.module.context.types.int_bits(instruction.ty) != Some(32) {
+                    if !word(&self.module.context.types, instruction.ty, self.m32) {
                         return None;
                     }
                     let mut ops = self.address(instruction.operands[0])?;
@@ -261,6 +276,10 @@ impl Fast<'_> {
                     self.values.insert(instruction.result?, load);
                 }
                 Opcode::Store { volatile: false, .. } => {
+                    let stored = self.function.operand_type(&self.module.context, instruction.operands[0])?;
+                    if !word(&self.module.context.types, stored, self.m32) {
+                        return None;
+                    }
                     let mut ops = self.address(instruction.operands[1])?;
                     let op = if let Some(imm) = self.int(instruction.operands[0]) {
                         ops.push(self.dag.get_constant_with(imm as u128, EVT::I32, true, false));
@@ -299,7 +318,7 @@ impl Fast<'_> {
                     if variadic || arguments.len() != parameters.len() || self.module.global(global).function().is_none_or(|callee| callee.calling_convention != call.calling_convention) {
                         return None;
                     }
-                    let int32 = |ty| self.module.context.types.int_bits(ty) == Some(32);
+                    let int32 = |ty| word(&self.module.context.types, ty, true);
                     let void = self.module.context.types.is_void(returns);
                     if !parameters.iter().all(|&ty| int32(ty)) || !(void || int32(returns)) {
                         return None;
