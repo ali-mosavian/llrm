@@ -218,6 +218,8 @@ impl TargetLoweringInfo {
                 None => match mvt {
                     MVT::F32 if self.soft_float => (TypeAction::SoftenFloat, EVT::I32),
                     MVT::F64 if self.soft_float => (TypeAction::SoftenFloat, EVT::I64),
+                    // no target has a quad register: `ppcf128`/`f128` are softened everywhere
+                    MVT::F128 => (TypeAction::SoftenFloat, EVT::I128),
                     _ => (TypeAction::Legal, vt),
                 },
             },

@@ -285,7 +285,14 @@ pub fn select_function(
                 };
                 let to = function.parent(def).ok_or("a phi outside a block")?.0;
                 let dst = *info.value_regs.get(&phi).ok_or("a phi with no register")?;
-                Ok(PhiCopy { to, dst, src, ty: super::value_type(module, function.value(phi).ty, width)? })
+                // a phi of an `i128` or `f128` is two `i64` registers
+                let phi_type = function.value(phi).ty;
+                let ty = if super::is_wide(module.context.types.get(phi_type)) {
+                    ValType::I64
+                } else {
+                    super::value_type(module, phi_type, width)?
+                };
+                Ok(PhiCopy { to, dst, src, ty })
             })
             .collect::<Result<Vec<_>, String>>()?;
         let probs = llrm_mir::loopinfo::children(function, block)
