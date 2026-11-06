@@ -146,9 +146,7 @@ pub fn target_lowering() -> TargetLowering {
     // a divide and a remainder of the same long operands are one call, the
     // remainder stored through an address (`ExpandDivRemLibCall`; the pin's
     // `useDivRem` pairs them where the type is Custom, `lower_divrem`)
-    for (op, name, small) in
-        [(SDivRem, "__divremsi4", "__s_divremsi4"), (UDivRem, "__udivremsi4", "__s_udivremsi4")]
-    {
+    for (op, name, small) in [(SDivRem, "__divremsi4", "__s_divremsi4"), (UDivRem, "__udivremsi4", "__s_udivremsi4")] {
         tl.set_operation_action(op, MVT::I32, Action::Custom);
         tl.set_libcall_name(op, MVT::I32, name);
         tl.set_size_libcall_name(op, MVT::I32, small);
@@ -169,7 +167,8 @@ pub fn target_lowering() -> TargetLowering {
 
 /// The custom lowerings.
 pub struct Z80Lowering {
-    /// The function is tuned for size: the small routines (`set_size_libcall_name`).
+    /// The function is tuned for size: the small routines
+    /// (`set_size_libcall_name`).
     pub sized: bool,
 }
 
@@ -239,7 +238,16 @@ impl Z80Lowering {
                     dag.get_node(ISD::Srl, EVT::I32, &[value, by])
                 };
                 let part = dag.get_node(ISD::Truncate, EVT::I16, &[part]);
-                outs.push(Out { value: part, ext, pointer: false, arg_vt: EVT::I32, split: true, variadic: false, sret: false, byval: None });
+                outs.push(Out {
+                    value: part,
+                    ext,
+                    pointer: false,
+                    arg_vt: EVT::I32,
+                    split: true,
+                    variadic: false,
+                    sret: false,
+                    byval: None,
+                });
             }
         }
         outs.push(Out {
@@ -252,14 +260,33 @@ impl Z80Lowering {
             sret: false,
             byval: None,
         });
-        let ins = vec![In { vt: EVT::I16, pointer: false, arg_vt: EVT::I32, split: true, sret: false, ext: Ext::Any, byval: None }; 2];
+        let ins = vec![
+            In {
+                vt: EVT::I16,
+                pointer: false,
+                arg_vt: EVT::I32,
+                split: true,
+                sret: false,
+                ext: Ext::Any,
+                byval: None
+            };
+            2
+        ];
         let callee = dag.get_target_external_symbol(EVT::I16, name);
         let root = dag.entry_node();
         let (chain, values) = lower_call(dag, root, callee, &outs, &ins).ok()?;
         let [lo, hi] = values[..] else { return None };
         let quotient = dag.get_node(ISD::BuildPair, EVT::I32, &[lo, hi]);
         let address = dag.get_frame_index(EVT::I16, cell);
-        let info = MemInfo { mem_vt: EVT::I32, align: 1, volatile: false, base: MemBase::Stack(cell), ext: None, space: 0, ordering: None };
+        let info = MemInfo {
+            mem_vt: EVT::I32,
+            align: 1,
+            volatile: false,
+            base: MemBase::Stack(cell),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
         let remainder = dag.get_load(EVT::I32, chain, address, info);
         Some(dag.get_node_multi(ISD::MergeValues, &[EVT::I32, EVT::I32], &[quotient, remainder]))
     }
@@ -354,7 +381,15 @@ impl Hooks for Z80Lowering {
             EVT::I64 => Vec::new(),
             _ => {
                 vec![
-                    In { vt: part_vt, pointer: false, arg_vt: ret, split: ret == EVT::I32, sret: false, ext: Ext::Any, byval: None };
+                    In {
+                        vt: part_vt,
+                        pointer: false,
+                        arg_vt: ret,
+                        split: ret == EVT::I32,
+                        sret: false,
+                        ext: Ext::Any,
+                        byval: None
+                    };
                     if ret == EVT::I32 { 2 } else { 1 }
                 ]
             }

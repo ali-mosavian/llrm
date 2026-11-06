@@ -35,7 +35,9 @@ fn live(
     dag: &SelectionDAG,
     op: ISD,
 ) -> usize {
-    dag.node_ids().filter(|&id| dag.opcode(SDValue { node: id, res: 0 }) == op && dag.has_users(SDValue { node: id, res: 0 })).count()
+    dag.node_ids()
+        .filter(|&id| dag.opcode(SDValue { node: id, res: 0 }) == op && dag.has_users(SDValue { node: id, res: 0 }))
+        .count()
 }
 
 /// A custom `DIVREM` of a type the target holds in no register, with a routine

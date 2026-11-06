@@ -1694,10 +1694,8 @@ fn a_long_divide_and_remainder_of_the_same_operands_are_one_call() {
             assert_eq!(out.matches("call").count(), 1, "{ops:?} {attr}: {out}");
             assert!(out.contains(call), "{ops:?} {attr}: {out}");
         }
-        let alone = compiled(
-            &format!("define i32 @f(i32 %a, i32 %b) {{\n  %q = {} i32 %a, %b\n  ret i32 %q\n}}", ops[0]),
-            "f",
-        );
+        let alone =
+            compiled(&format!("define i32 @f(i32 %a, i32 %b) {{\n  %q = {} i32 %a, %b\n  ret i32 %q\n}}", ops[0]), "f");
         assert!(alone.contains(&format!("call {}", others[0])) && !alone.contains("rem"), "{ops:?} alone: {alone}");
     }
 }
