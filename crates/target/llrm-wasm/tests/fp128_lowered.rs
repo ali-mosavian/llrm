@@ -46,3 +46,22 @@ fn an_fp128_phi_is_two_i64_registers() {
         assert!(String::from_utf8_lossy(&out.stdout).contains("call\t__addtf3"), "{level}");
     }
 }
+
+/// A two-register phi (`i128`/`fp128`) copied only its first register on the back edge, so the
+/// second half stayed stale: `long_double_variadic -O2` returned 0 where pin clang returns 13.
+#[test]
+fn both_registers_of_a_wide_phi_are_copied_on_the_back_edge() {
+    let ir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ir/i128_phi_swap.ll");
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-wasm-llc"))
+        .args(["-S", "-O0", "-o", "-"])
+        .arg(ir)
+        .output()
+        .expect("llrm-wasm-llc");
+    let asm = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    // registers 7..=10 are the four halves of the two phis: set at entry and again on the back edge
+    for r in 7..=10 {
+        let n = asm.matches(&format!("local.set\t{r}\n")).count();
+        assert!(n >= 2, "register {r} set {n} time(s) in:\n{asm}");
+    }
+}

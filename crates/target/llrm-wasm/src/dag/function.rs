@@ -276,25 +276,26 @@ pub fn select_function(
         let mut built = build_block(module, function, &layout, &target, &arch, &convention, &mut info, block)
             .map_err(|why| why.0.to_owned())?;
         let extras = std::mem::take(&mut built.extra);
-        let phis = built
-            .phi_updates
-            .iter()
-            .map(|&(phi, src)| {
-                let llrm_mir::module::ValueDef::Instruction(def) = function.value(phi).def else {
-                    return Err("a phi that is no instruction".to_owned());
-                };
-                let to = function.parent(def).ok_or("a phi outside a block")?.0;
-                let dst = *info.value_regs.get(&phi).ok_or("a phi with no register")?;
-                // a phi of an `i128` or `f128` is two `i64` registers
-                let phi_type = function.value(phi).ty;
-                let ty = if super::is_wide(module.context.types.get(phi_type)) {
-                    ValType::I64
-                } else {
-                    super::value_type(module, phi_type, width)?
-                };
-                Ok(PhiCopy { to, dst, src, ty })
-            })
-            .collect::<Result<Vec<_>, String>>()?;
+        // A phi of two registers (an `i128`, an `f128`) is updated part by part: the k-th source goes to the k-th register of the phi
+        let mut seen: std::collections::HashMap<_, usize> = std::collections::HashMap::new();
+        let mut phis = Vec::new();
+        for &(phi, src) in &built.phi_updates {
+            let llrm_mir::module::ValueDef::Instruction(def) = function.value(phi).def else {
+                return Err("a phi that is no instruction".to_owned());
+            };
+            let to = function.parent(def).ok_or("a phi outside a block")?.0;
+            let base = *info.value_regs.get(&phi).ok_or("a phi with no register")?;
+            let part = seen.entry(phi).or_insert(0);
+            let dst = *info.part_regs(base, *part + 1).last().expect("a register");
+            *part += 1;
+            let phi_type = function.value(phi).ty;
+            let ty = if super::is_wide(module.context.types.get(phi_type)) {
+                ValType::I64
+            } else {
+                super::value_type(module, phi_type, width)?
+            };
+            phis.push(PhiCopy { to, dst, src, ty });
+        }
         let probs = llrm_mir::loopinfo::children(function, block)
             .enumerate()
             .map(|(at, to)| (to.0, bpi.get_edge_probability(function, block, at).get_numerator()))
