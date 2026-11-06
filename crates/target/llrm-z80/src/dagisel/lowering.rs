@@ -143,6 +143,17 @@ pub fn target_lowering() -> TargetLowering {
     {
         tl.set_size_libcall_name(op, MVT::I32, name);
     }
+    // a divide and a remainder of the same long operands are one call, the
+    // remainder stored through an address (`ExpandDivRemLibCall`; the pin's
+    // `useDivRem` pairs them where the type is Custom, `lower_divrem`)
+    for (op, name, small) in [
+        (SDivRem, "__divremsi4", "__s_divremsi4"),
+        (UDivRem, "__udivremsi4", "__s_udivremsi4"),
+    ] {
+        tl.set_operation_action(op, MVT::I32, Action::Custom);
+        tl.set_libcall_name(op, MVT::I32, name);
+        tl.set_size_libcall_name(op, MVT::I32, small);
+    }
     // the long long divide has a smaller routine (one step per dividend bit)
     // for a function tuned for size
     for (op, name) in
@@ -158,7 +169,10 @@ pub fn target_lowering() -> TargetLowering {
 }
 
 /// The custom lowerings.
-pub struct Z80Lowering;
+pub struct Z80Lowering {
+    /// The function is tuned for size: the small routines (`set_size_libcall_name`).
+    pub sized: bool,
+}
 
 impl Z80Lowering {
     /// A shift by a constant is selected as it is; by a variable it is the call
@@ -196,6 +210,62 @@ impl Z80Lowering {
     }
 }
 
+impl Z80Lowering {
+    /// `ExpandDivRemLibCall`: one call to the routine that returns the
+    /// quotient and stores the remainder through the address it is given, the
+    /// last argument; the remainder is loaded back after the call.
+    fn lower_divrem(
+        &mut self,
+        dag: &mut SelectionDAG,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        use super::call::{Ext, In, Out, lower_call};
+        let signed = dag.opcode(node) == ISD::SDivRem;
+        let name = match (signed, self.sized) {
+            (true, false) => "__divremsi4",
+            (false, false) => "__udivremsi4",
+            (true, true) => "__s_divremsi4",
+            (false, true) => "__s_udivremsi4",
+        };
+        let ext = if signed { Ext::Sign } else { Ext::Zero };
+        let cell = dag.create_stack_temporary(4, 1);
+        let mut outs = Vec::new();
+        for at in 0..2 {
+            let value = dag.operand(node, at);
+            for word in 0..2u128 {
+                let part = if word == 0 {
+                    value
+                } else {
+                    let by = dag.get_constant(16, EVT::I8);
+                    dag.get_node(ISD::Srl, EVT::I32, &[value, by])
+                };
+                let part = dag.get_node(ISD::Truncate, EVT::I16, &[part]);
+                outs.push(Out { value: part, ext, pointer: false, arg_vt: EVT::I32, split: true, variadic: false, sret: false, byval: None });
+            }
+        }
+        outs.push(Out {
+            value: dag.get_frame_index(EVT::I16, cell),
+            ext: Ext::Any,
+            pointer: true,
+            arg_vt: EVT::I16,
+            split: false,
+            variadic: false,
+            sret: false,
+            byval: None,
+        });
+        let ins = vec![In { vt: EVT::I16, pointer: false, arg_vt: EVT::I32, split: true, sret: false, ext: Ext::Any, byval: None }; 2];
+        let callee = dag.get_target_external_symbol(EVT::I16, name);
+        let root = dag.entry_node();
+        let (chain, values) = lower_call(dag, root, callee, &outs, &ins).ok()?;
+        let [lo, hi] = values[..] else { return None };
+        let quotient = dag.get_node(ISD::BuildPair, EVT::I32, &[lo, hi]);
+        let address = dag.get_frame_index(EVT::I16, cell);
+        let info = MemInfo { mem_vt: EVT::I32, align: 1, volatile: false, base: MemBase::Stack(cell), ext: None, space: 0, ordering: None };
+        let remainder = dag.get_load(EVT::I32, chain, address, info);
+        Some(dag.get_node_multi(ISD::MergeValues, &[EVT::I32, EVT::I32], &[quotient, remainder]))
+    }
+}
+
 impl Hooks for Z80Lowering {
     fn lower_operation(
         &mut self,
@@ -205,6 +275,7 @@ impl Hooks for Z80Lowering {
         match dag.opcode(node) {
             ISD::Shl | ISD::Srl | ISD::Sra => self.lower_shift(dag, node),
             ISD::Sub => Some(lower_sub(dag, node)),
+            ISD::SDivRem | ISD::UDivRem if dag.value_type(node) == EVT::I32 => self.lower_divrem(dag, node),
             ISD::SetCC => lower_setcc(dag, node),
             ISD::SetCCCarry => lower_setcc_carry(dag, node),
             ISD::Select => Some(lower_select(dag, node)),
