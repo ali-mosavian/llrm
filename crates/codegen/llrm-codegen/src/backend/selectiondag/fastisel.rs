@@ -82,8 +82,13 @@ pub fn build_all(
         let next = layout.get(at + 1).copied();
         let dag = fresh_dag(module, function, target, info, block, None);
         let chain = dag.entry_node();
-        let dag = Fast { module, function, info: &*info, names: &names, eax, m32, dag, chain, values: Default::default(), next }
-            .block(block)?;
+        let mut declined = String::new();
+        let dag = Fast { module, function, info: &*info, names: &names, eax, any_eax: arch.registers().named(arch.register_named("eax"), 4), esp: arch.stack_pointer(), edx: arch.registers().named(arch.register_named("edx"), 4), m32, dag, chain, values: Default::default(), next }
+            .block(block, &mut declined);
+        let Some(dag) = dag else {
+            llrm_support::debug!("isel", "fast declined at {declined}");
+            return None;
+        };
         blocks.push((
             block,
             BlockDag { dag, phi_updates: Vec::new(), live_ins: Vec::new(), extra: Vec::new(), tail_calls: Vec::new(), values: Vec::new() },
@@ -105,6 +110,16 @@ struct Names {
     cmp_ri: u16,
     /// `add`, `sub`, `and`, `or`, `xor` with a register and with an immediate.
     alu: [(u16, u16); 5],
+    /// m32 only so far: calls and the signed divide.
+    calls: Option<Calls>,
+}
+
+struct Calls {
+    call_down: u16,
+    call_up: u16,
+    call: u16,
+    cdq: u16,
+    idiv: u16,
 }
 
 impl Names {
@@ -121,6 +136,15 @@ impl Names {
             cmp_rr: opcode("CMP32rr")?,
             cmp_ri: opcode("CMP32ri")?,
             alu: [pair("ADD")?, pair("SUB")?, pair("AND")?, pair("OR")?, pair("XOR")?],
+            calls: (|| {
+                Some(Calls {
+                    call_down: opcode("ADJCALLSTACKDOWN32")?,
+                    call_up: opcode("ADJCALLSTACKUP32")?,
+                    call: opcode("CALLpcrel32")?,
+                    cdq: opcode("CDQ")?,
+                    idiv: opcode("IDIV32r")?,
+                })
+            })(),
         })
     }
 }
@@ -131,6 +155,9 @@ struct Fast<'a> {
     info: &'a FunctionLoweringInfo,
     names: &'a Names,
     eax: Option<llrm_lir::registers::RegId>,
+    any_eax: llrm_lir::registers::RegId,
+    esp: llrm_lir::registers::RegId,
+    edx: llrm_lir::registers::RegId,
     /// Frame objects are addressed at m32 only so far (F3).
     m32: bool,
     dag: SelectionDAG,
@@ -168,6 +195,10 @@ impl Fast<'_> {
         Some(self.frame(object))
     }
 
+    fn eax_reg(&self) -> Option<llrm_lir::registers::RegId> {
+        Some(self.any_eax)
+    }
+
     fn frame(&mut self, object: i32) -> Vec<SDValue> {
         vec![
             self.dag.get_target_frame_index(EVT::I32, object),
@@ -182,6 +213,8 @@ impl Fast<'_> {
     fn value(&mut self, operand: Operand) -> Option<SDValue> {
         match operand {
             Operand::Constant(_) => {
+                // DEVIATE F4: the pin (X86MaterializeInt) makes 0 with `MOV32r0` (xor) and a 64-bit
+                // constant with `getMOVriOpcode`; here every constant is `MOV32ri`. Exit 2026-11-27 with F1.
                 let imm = self.dag.get_constant_with(self.int(operand)? as u128, EVT::I32, true, false);
                 Some(self.node(self.names.mov_ri, &[EVT::I32], &[imm]))
             }
@@ -204,13 +237,14 @@ impl Fast<'_> {
         }
     }
 
-    fn block(mut self, block: BlockId) -> Option<SelectionDAG> {
+    fn block(mut self, block: BlockId, declined: &mut String) -> Option<SelectionDAG> {
         self.chain = self.dag.entry_node();
         let insts: Vec<_> = self.function.iter_block(block).collect();
         let mut at = 0;
         while at < insts.len() {
             let instruction = self.function.instruction(insts[at]).clone();
             at += 1;
+            *declined = format!("{:?}", instruction.opcode);
             match &instruction.opcode {
                 Opcode::Alloca { .. } => {
                     // a static alloca is its frame object
@@ -239,6 +273,73 @@ impl Fast<'_> {
                     ops.push(self.chain);
                     let store = self.node(op, &[EVT::OTHER], &ops);
                     self.chain = store;
+                }
+                Opcode::Binary(op @ (llrm_mir::opcode::BinaryOp::SDiv | llrm_mir::opcode::BinaryOp::SRem)) => {
+                    // `cdq; idiv r`: the quotient in eax, the remainder in edx
+                    let calls = self.names.calls.as_ref()?;
+                    if !self.m32 || self.module.context.types.int_bits(instruction.ty) != Some(32) {
+                        return None;
+                    }
+                    let (left, right) = (self.value(instruction.operands[0])?, self.value(instruction.operands[1])?);
+                    let eax = self.eax_reg()?;
+                    let copy = self.dag.get_copy_to_phys_reg(self.dag.entry_node(), eax, left, None);
+                    let glue = SDValue { node: copy.node, res: 1 };
+                    let sign = self.node(calls.cdq, &[EVT::GLUE], &[glue]);
+                    let divided = self.node(calls.idiv, &[EVT::GLUE], &[right, sign]);
+                    let register = if matches!(op, llrm_mir::opcode::BinaryOp::SDiv) { eax } else { self.edx };
+                    let result = self.dag.get_copy_from_phys_reg(self.dag.entry_node(), register, EVT::I32, divided);
+                    self.values.insert(instruction.result?, SDValue { node: result.node, res: 0 });
+                }
+                Opcode::Call(call) if self.m32 && call.calling_convention == self.function.calling_convention => {
+                    let calls = self.names.calls.as_ref()?;
+                    let (callee, arguments) = instruction.operands.split_last()?;
+                    let Operand::Constant(callee) = *callee else { return None };
+                    let ConstantKind::Global(global) = self.module.context.get(callee).kind else { return None };
+                    let (returns, parameters, variadic) = self.module.signature(call.function_type);
+                    if variadic || arguments.len() != parameters.len() || self.module.global(global).function().is_none_or(|callee| callee.calling_convention != call.calling_convention) {
+                        return None;
+                    }
+                    let int32 = |ty| self.module.context.types.int_bits(ty) == Some(32);
+                    let void = self.module.context.types.is_void(returns);
+                    if !parameters.iter().all(|&ty| int32(ty)) || !(void || int32(returns)) {
+                        return None;
+                    }
+                    let values: Vec<SDValue> = arguments.iter().map(|&one| self.value(one)).collect::<Option<_>>()?;
+                    let bytes = self.dag.get_constant_with(4 * values.len() as u128, EVT::I32, true, false);
+                    let zero = self.dag.get_constant_with(0, EVT::I32, true, false);
+                    let down = self.node(calls.call_down, &[EVT::I32, EVT::OTHER, EVT::GLUE], &[bytes, zero, zero, self.chain]);
+                    let after_down = SDValue { node: down.node, res: 1 };
+                    let mut stores = Vec::new();
+                    for (at, value) in values.into_iter().enumerate() {
+                        let esp_register = self.dag.get_phys_register(EVT::I32, self.esp);
+                        let esp = self.dag.get_node_multi(ISD::CopyFromReg, &[EVT::I32, EVT::OTHER], &[after_down, esp_register]);
+                        let scale = self.dag.get_constant_with(1, EVT::I8, true, false);
+                        let noreg = self.dag.get_register(EVT::I32, 0);
+                        let disp = self.dag.get_constant_with(4 * at as u128, EVT::I32, true, false);
+                        let segment = self.dag.get_register(EVT::I16, 0);
+                        stores.push(self.node(
+                            self.names.mov_mr,
+                            &[EVT::OTHER],
+                            &[esp, scale, noreg, disp, segment, value, after_down],
+                        ));
+                    }
+                    let chain = if stores.is_empty() { after_down } else { self.dag.get_token_factor(&stores) };
+                    let target = self.dag.get_target_global_address(EVT::I32, global.0, 0);
+                    let mask = self.dag.get_register_mask_clobbering(&super::dagisel_adapter::call_clobbered_flags());
+                    let called = self.node(calls.call, &[EVT::OTHER, EVT::GLUE], &[target, mask, chain]);
+                    let up = self.node(
+                        calls.call_up,
+                        &[EVT::I32, EVT::OTHER, EVT::GLUE],
+                        &[bytes, zero, SDValue { node: called.node, res: 0 }, SDValue { node: called.node, res: 1 }],
+                    );
+                    let mut chain = SDValue { node: up.node, res: 1 };
+                    if !void {
+                        let eax = self.eax_reg()?;
+                        let result = self.dag.get_copy_from_phys_reg(chain, eax, EVT::I32, SDValue { node: up.node, res: 2 });
+                        chain = SDValue { node: result.node, res: 1 };
+                        self.values.insert(instruction.result?, SDValue { node: result.node, res: 0 });
+                    }
+                    self.chain = chain;
                 }
                 Opcode::Binary(op) => {
                     use llrm_mir::opcode::BinaryOp::*;

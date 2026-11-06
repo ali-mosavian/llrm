@@ -114,3 +114,32 @@ fn fast_isel_takes_the_m32_integer_core() {
     let fast = std::fs::read_to_string(scratch.path().join("fast.s")).unwrap();
     assert!(fast.contains("cmp") && fast.contains("ret"), "{fast}");
 }
+
+const CALLS: &str = "extern int printf(const char *, ...);\n\
+    static int inc(int x) { return x + 1; }\n\
+    int h(int a, int b)\n{\n    return inc(a) / b;\n}\n\
+    int main(void)\n{\n    printf(\"%d\\n\", h(9, 2));\n    return 0;\n}\n";
+
+/// Slice 3: a call with an argument and a signed divide go through FastISel.
+/// `h` calls `inc` and divides; until calls and `idiv` are selected the
+/// function falls back to the DAG and this fails.
+#[test]
+fn fast_isel_takes_a_call_and_a_divide_at_m32() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(scratch.path().join("a.c"), CALLS).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_32-linux")
+        .env("LLRM_FAST_ISEL", "1")
+        .env("LLRM_VERIFY", "1")
+        .env("LLRM_DEBUG", "isel")
+        .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+        .current_dir(scratch.path())
+        .args(["-O0", "-S", "a.c", "-o", "a.s"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+    assert!(report.lines().any(|line| line == "h fast" || line == "_h fast"), "h not taken: {report}{}", String::from_utf8_lossy(&out.stderr));
+    let asm = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    assert!(asm.contains("idiv") && asm.contains("call"), "{asm}");
+}
