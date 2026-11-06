@@ -143,7 +143,7 @@ use crate::{
     adce, algebraic, availableexternally, bdce, calleepop, cgpaddr, constmerge, dead, deadstore, decide, extload,
     fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs, inferspace,
     inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam,
-    loopunrollpass, mem2reg, memcpyopt, mldstmotion, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg,
+    loopunrollpass, mem2reg, memcpyopt, mldstmotion, partialinline, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg,
     switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window, zeromerge,
 };
 
@@ -1383,6 +1383,11 @@ pub fn recorded(
     // Each loop's counters chosen once, on the loop the passes above leave.
     for pass in strength_slot(applied) {
         manager.add_boxed(pass);
+    }
+    // `addIRPasses`: PartiallyInlineLibCalls follows LSR (the pin's
+    // `-disable-partial-libcall-inlining` is `LLRM_NO_PARTIAL_LIBCALLS`).
+    if applied.options.wanted("partialinline") && !llrm_support::env_flag!("LLRM_NO_PARTIAL_LIBCALLS") {
+        manager.add(partialinline::PartiallyInlineLibCalls);
     }
     // On the pointers LSR chose: a huge one a loop keeps in one window is far
     // there.
