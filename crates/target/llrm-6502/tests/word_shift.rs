@@ -7,21 +7,28 @@ use llrm_6502::dagisel::hooks::Cpu;
 use llrm_6502::driver::{Level, Request, assembly};
 use llrm_6502::timing::estimate;
 
+/// Bytes of the function `f` in `ir`, from its label to its `rts`.
+fn measure(
+    level: Level,
+    ir: &str,
+) -> (u32, String) {
+    let text = assembly(ir, &Request::new(level)).unwrap_or_else(|e| panic!("{e}"));
+    let from = text.find("f:").unwrap_or_else(|| panic!("no `f:` in\n{text}"));
+    let body: String = text[from..].split("  rts").next().unwrap().to_owned() + "  rts\n";
+    (estimate(Cpu::Mos6502, &body).unwrap_or_else(|e| panic!("{e}\n{body}")).bytes, body)
+}
+
 /// Bytes of `f` for `x <op> k`, from its label to its `rts`.
 fn bytes(
     level: Level,
     op: &str,
     k: u32,
 ) -> (u32, String) {
-    let name = "f";
     let ir = format!(
-        "target datalayout = \"{}\"\ndefine i16 @{name}(i16 %x) {{\n  %r = {op} i16 %x, {k}\n  ret i16 %r\n}}\n",
+        "target datalayout = \"{}\"\ndefine i16 @f(i16 %x) {{\n  %r = {op} i16 %x, {k}\n  ret i16 %r\n}}\n",
         datalayout()
     );
-    let text = assembly(&ir, &Request::new(level)).unwrap_or_else(|e| panic!("{e}"));
-    let from = text.find(&format!("{name}:")).unwrap_or_else(|| panic!("no `{name}:` in\n{text}"));
-    let body: String = text[from..].split("  rts").next().unwrap().to_owned() + "  rts\n";
-    (estimate(Cpu::Mos6502, &body).unwrap_or_else(|e| panic!("{e}\n{body}")).bytes, body)
+    measure(level, &ir)
 }
 
 /// The chain through A, by hand under the ABI (rc2:rc3 in, A:X out):
@@ -156,5 +163,19 @@ fn every_word_shift_gives_the_value_of_the_shift() {
             let failed = exit_code_of(&text, "probe");
             assert_eq!(failed, 0, "{level:?} x={value:#06x}: shift #{failed} (of shl, lshr, ashr by 1..15) is wrong");
         }
+    }
+}
+
+/// `x * 40` was two shifts of `x`, by 5 and by 3: 53 bytes at -O2 against 44
+/// for a shift by 3 and a shift of that by 2.
+#[test]
+fn a_multiply_by_a_factor_of_two_times_a_power_plus_one_shifts_once_and_chains() {
+    for (level, ceiling) in [(Level::O2, 44), (Level::Os, 42)] {
+        let ir = format!(
+            "target datalayout = \"{}\"\ndefine i16 @f(i8 %x) {{\n  %z = zext i8 %x to i16\n  %r = mul i16 %z, 40\n  ret i16 %r\n}}\n",
+            datalayout()
+        );
+        let (got, body) = measure(level, &ir);
+        assert!(got <= ceiling, "{level:?}: {got} B for x * 40 against {ceiling}:\n{body}");
     }
 }

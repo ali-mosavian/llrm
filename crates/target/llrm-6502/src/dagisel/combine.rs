@@ -268,8 +268,11 @@ fn decompose_mul(
         let by = dag.get_constant(u128::from(by), EVT::I8);
         dag.get_node(ISD::Shl, vt, &[value, by])
     };
-    let high = shift(dag, x, amount);
+    // `x * 40` is `(x << 3) + ((x << 3) << 2)`: the shift by the factors of
+    // two is made once and the other reads it (two shifts of `x` were eight
+    // steps, not five)
     let low = if zeros == 0 { x } else { shift(dag, x, zeros) };
+    let high = if zeros == 0 { shift(dag, x, amount) } else { shift(dag, low, amount - zeros) };
     let mut result = dag.get_node(if add { ISD::Add } else { ISD::Sub }, vt, &[high, low]);
     if signed < 0 {
         let zero = dag.get_constant(0, vt);
