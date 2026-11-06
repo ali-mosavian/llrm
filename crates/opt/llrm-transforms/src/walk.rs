@@ -915,14 +915,21 @@ pub const SELF_COPIED: &str = "llrm-self-copied";
 const PROMOTED_IN_WALK: &str = "llrm-promoted-in-walk";
 
 /// Whether the walk promoted any body; the marks are removed.
-pub(crate) fn take_walk_promotions(program: &mut Program) -> bool {
+pub(crate) fn take_walk_promotions(
+    program: &mut Program,
+    modules: &mut [ModuleAnalyses],
+) -> bool {
     let mut found = false;
-    for module in &mut program.modules {
-        for global in &mut module.globals {
+    for (at, module) in program.modules.iter_mut().enumerate() {
+        for (index, global) in module.globals.iter_mut().enumerate() {
             if let llrm_mir::module::GlobalKind::Function(function) = &mut global.kind {
                 let before = function.attrs.len();
                 function.attrs.retain(|attr| !matches!(attr, llrm_mir::opcode::Attribute::Flag(flag) if flag == PROMOTED_IN_WALK));
-                found |= function.attrs.len() != before;
+                if function.attrs.len() != before {
+                    found = true;
+                    // The mark is part of the declaration the analyses list; the second IPSCCP restates only some bodies.
+                    modules[at].changed(GlobalId(index as u32));
+                }
             }
         }
     }

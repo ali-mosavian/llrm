@@ -1774,9 +1774,22 @@ fn why_printed() -> bool {
     *ON.get_or_init(|| llrm_env::set("LLRM_WHY"))
 }
 
+thread_local! {
+    static CHECKING_MODULES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs `body` with `LLRM_CHECK_MODULES` on for this thread, for a test of a pass that must tell the analyses what it changed
+/// (the variable is read once per process, so a test cannot set it).
+pub fn with_module_check<R>(body: impl FnOnce() -> R) -> R {
+    let before = CHECKING_MODULES.with(|on| on.replace(true));
+    let done = body();
+    CHECKING_MODULES.with(|on| on.set(before));
+    done
+}
+
 fn check_modules() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_MODULES"))
+    CHECKING_MODULES.with(std::cell::Cell::get) || *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_MODULES"))
 }
 
 pub(crate) fn check_captures() -> bool {
