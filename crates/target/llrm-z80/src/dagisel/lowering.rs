@@ -146,9 +146,12 @@ pub fn target_lowering() -> TargetLowering {
     // a divide and a remainder of the same long operands are one call, the
     // remainder stored through an address (`ExpandDivRemLibCall`; the pin's
     // `useDivRem` pairs them where the type is Custom, `lower_divrem`)
-    for (op, name) in [(SDivRem, "__divremsi4"), (UDivRem, "__udivremsi4")] {
+    for (op, name, small) in
+        [(SDivRem, "__divremsi4", "__s_divremsi4"), (UDivRem, "__udivremsi4", "__s_udivremsi4")]
+    {
         tl.set_operation_action(op, MVT::I32, Action::Custom);
         tl.set_libcall_name(op, MVT::I32, name);
+        tl.set_size_libcall_name(op, MVT::I32, small);
     }
     // the long long divide has a smaller routine (one step per dividend bit)
     // for a function tuned for size
@@ -165,7 +168,10 @@ pub fn target_lowering() -> TargetLowering {
 }
 
 /// The custom lowerings.
-pub struct Z80Lowering;
+pub struct Z80Lowering {
+    /// The function is tuned for size: the small routines (`set_size_libcall_name`).
+    pub sized: bool,
+}
 
 impl Z80Lowering {
     /// A shift by a constant is selected as it is; by a variable it is the call
@@ -214,7 +220,12 @@ impl Z80Lowering {
     ) -> Option<SDValue> {
         use super::call::{Ext, In, Out, lower_call};
         let signed = dag.opcode(node) == ISD::SDivRem;
-        let name = if signed { "__divremsi4" } else { "__udivremsi4" };
+        let name = match (signed, self.sized) {
+            (true, false) => "__divremsi4",
+            (false, false) => "__udivremsi4",
+            (true, true) => "__s_divremsi4",
+            (false, true) => "__s_udivremsi4",
+        };
         let ext = if signed { Ext::Sign } else { Ext::Zero };
         let cell = dag.create_stack_temporary(4, 1);
         let mut outs = Vec::new();

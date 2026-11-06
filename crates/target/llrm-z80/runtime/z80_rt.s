@@ -557,6 +557,222 @@ udm_done:
 	pop	ix
 	ret
 
+; ---- long quotient and remainder in one call, the speed family (`__udivremsi4`, `__divremsi4`) ---------------------
+; The arguments of the others and the address of a long for the remainder on the stack above the divisor's high word;
+; the quotient is returned (de low, hl high), the remainder stored through the address. The divisor aligned under the
+; dividend, one step per quotient bit, as `__udivsi3` (its own copy of the steps: a program that pairs a divide and a
+; remainder and also divides alone pays for both, the plain routines are as they were).
+	.globl __udivremsi4
+__udivremsi4:
+	push	ix
+	ld	ix,#0
+	add	ix,sp
+	push	af
+	push	bc
+	push	de
+	push	hl
+	ld	hl,#0
+	push	hl
+	push	hl
+	push	hl
+	call	__dvr_core
+	.globl __dvr_ep
+__dvr_ep:
+	ld	l,6(ix)
+	ld	h,7(ix)
+	ld	a,-12(ix)
+	ld	(hl),a
+	inc	hl
+	ld	a,-11(ix)
+	ld	(hl),a
+	inc	hl
+	ld	a,-10(ix)
+	ld	(hl),a
+	inc	hl
+	ld	a,-9(ix)
+	ld	(hl),a
+	ld	e,-8(ix)
+	ld	d,-7(ix)
+	ld	l,-6(ix)
+	ld	h,-5(ix)
+	ld	sp,ix
+	pop	ix
+	ret
+; signed: the magnitudes divided, the quotient negated if the signs differ, the remainder if the dividend is negative.
+; -1(ix): bit 2 the quotient is negative, bit 3 the remainder.
+	.globl __divremsi4
+__divremsi4:
+	push	ix
+	ld	ix,#0
+	add	ix,sp
+	xor	a
+	push	af
+	push	bc
+	push	de
+	push	hl
+	ld	hl,#0
+	push	hl
+	push	hl
+	push	hl
+	bit	7,-5(ix)
+	jr	z,1$
+	xor	a
+	sub	a,-8(ix)
+	ld	-8(ix),a
+	ld	a,#0
+	sbc	a,-7(ix)
+	ld	-7(ix),a
+	ld	a,#0
+	sbc	a,-6(ix)
+	ld	-6(ix),a
+	ld	a,#0
+	sbc	a,-5(ix)
+	ld	-5(ix),a
+	ld	a,#12
+	ld	-1(ix),a
+1$:	bit	7,5(ix)
+	jr	z,2$
+	xor	a
+	sub	a,-4(ix)
+	ld	-4(ix),a
+	ld	a,#0
+	sbc	a,-3(ix)
+	ld	-3(ix),a
+	ld	a,#0
+	sbc	a,4(ix)
+	ld	4(ix),a
+	ld	a,#0
+	sbc	a,5(ix)
+	ld	5(ix),a
+	ld	a,-1(ix)
+	xor	a,#4
+	ld	-1(ix),a
+2$:	call	__dvr_core
+	bit	3,-1(ix)
+	jr	z,3$
+	xor	a
+	sub	a,-12(ix)
+	ld	-12(ix),a
+	ld	a,#0
+	sbc	a,-11(ix)
+	ld	-11(ix),a
+	ld	a,#0
+	sbc	a,-10(ix)
+	ld	-10(ix),a
+	ld	a,#0
+	sbc	a,-9(ix)
+	ld	-9(ix),a
+3$:	bit	2,-1(ix)
+	jp	z,__dvr_ep
+	xor	a
+	sub	a,-8(ix)
+	ld	-8(ix),a
+	ld	a,#0
+	sbc	a,-7(ix)
+	ld	-7(ix),a
+	ld	a,#0
+	sbc	a,-6(ix)
+	ld	-6(ix),a
+	ld	a,#0
+	sbc	a,-5(ix)
+	ld	-5(ix),a
+	jp	__dvr_ep
+	.globl __dvr_core
+__dvr_core:
+dvr_lp0:	ld	l,-8(ix)
+	ld	h,-7(ix)
+	ld	e,-4(ix)
+	ld	d,-3(ix)
+	exx
+	ld	l,-6(ix)
+	ld	h,-5(ix)
+	ld	e,4(ix)
+	ld	d,5(ix)
+	ld	bc,#0
+	exx
+	ld	bc,#0
+	xor	a,a
+; a divisor of zero: the quotient is all ones, the remainder the dividend
+	ld	a,e
+	or	a,d
+	exx
+	or	a,e
+	or	a,d
+	exx
+	jr	nz,dvr_nz
+	ld	bc,#0xFFFF
+	exx
+	ld	bc,#0xFFFF
+	exx
+	jr	dvr_out
+dvr_nz:	xor	a,a
+dvr_al:	exx
+	bit	7,d
+	exx
+	jr	nz,dvr_lp
+	sla	e
+	rl	d
+	exx
+	rl	e
+	rl	d
+	exx
+	or	a,a
+	sbc	hl,de
+	exx
+	sbc	hl,de
+	exx
+	jr	c,dvr_ov
+	add	hl,de
+	exx
+	adc	hl,de
+	exx
+	inc	a
+	jr	dvr_al
+; the divisor passed the dividend: back one place
+dvr_ov:	add	hl,de
+	exx
+	adc	hl,de
+	srl	d
+	rr	e
+	exx
+	rr	d
+	rr	e
+dvr_lp:	or	a,a
+	sbc	hl,de
+	exx
+	sbc	hl,de
+	exx
+	jr	c,dvr_no
+	scf
+	jr	dvr_q
+dvr_no:	add	hl,de
+	exx
+	adc	hl,de
+	exx
+	or	a,a
+dvr_q:	rl	c
+	rl	b
+	exx
+	rl	c
+	rl	b
+	srl	d
+	rr	e
+	exx
+	rr	d
+	rr	e
+	dec	a
+	jp	p,dvr_lp
+dvr_out:	ld	-12(ix),l
+	ld	-11(ix),h
+	ld	-8(ix),c
+	ld	-7(ix),b
+	exx
+	ld	-10(ix),l
+	ld	-9(ix),h
+	ld	-6(ix),c
+	ld	-5(ix),b
+	ret
+
 ; ---- long divide and remainder, the size family (`__s_`, chosen for a function tuned for size) --------------------
 ; The same arguments and results as `__udivsi3` and the others. The restoring division, one step per dividend bit
 ; (32), over registers alone: the dividend, and the quotient as its bits leave, is de and de', the remainder hl and
@@ -633,8 +849,8 @@ sdm_n:	dec	a
 ; (that is the stack above the return address, then the divisor's high word, then the address); the quotient is
 ; returned (de low, hl high), the remainder stored through the address. Over the same register-only core as the size
 ; family: a program that pairs a divide and a remainder pays for this one routine and the core, no frame routine.
-	.globl __udivremsi4
-__udivremsi4:
+	.globl __s_udivremsi4
+__s_udivremsi4:
 	call	sdu
 	push	de
 	push	hl
@@ -665,8 +881,8 @@ __udivremsi4:
 	ret
 ; signed: the magnitudes divided, the quotient negated if the signs differ, the remainder if the dividend is negative.
 ; -1(ix): bit 0 the quotient is negative, bit 1 the remainder is.
-	.globl __divremsi4
-__divremsi4:
+	.globl __s_divremsi4
+__s_divremsi4:
 	push	ix
 	ld	ix,#0
 	add	ix,sp
