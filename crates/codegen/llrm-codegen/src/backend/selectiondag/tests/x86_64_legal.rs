@@ -34,6 +34,7 @@ fn legalized_add(tli: &TargetLowering) -> (SelectionDAG, SDValue) {
         &mut dag,
         tli,
         &mut X86Lowering {
+            imul_if_smaller: false,
             cmov: true,
             sse2: false,
             min_size: false,
@@ -73,6 +74,7 @@ fn an_i64_select_is_a_cmov() {
         &mut dag,
         &tli,
         &mut X86Lowering {
+            imul_if_smaller: false,
             cmov: true,
             sse2: false,
             min_size: false,
@@ -112,6 +114,7 @@ fn legalized_float_op(
         &mut dag,
         &tli,
         &mut X86Lowering {
+            imul_if_smaller: false,
             cmov: true,
             sse2: false,
             min_size: false,
@@ -192,6 +195,7 @@ fn fcopysign_of_a_float_is_two_masks_and_an_or() {
         &mut dag,
         &tli,
         &mut X86Lowering {
+            imul_if_smaller: false,
             cmov: true,
             sse2: false,
             min_size: false,
@@ -225,6 +229,7 @@ fn an_f32_to_f64_extend_survives_legalization() {
         &mut dag,
         &tli,
         &mut X86Lowering {
+            imul_if_smaller: false,
             cmov: true,
             sse2: false,
             min_size: false,
@@ -262,6 +267,7 @@ fn int_to_float_at_sse2_is_a_register_convert() {
             &mut dag,
             &tli,
             &mut X86Lowering {
+                imul_if_smaller: false,
                 cmov: true,
                 sse2: true,
                 min_size: false,
@@ -300,6 +306,7 @@ fn float_to_int_at_sse2_is_a_register_convert() {
             &mut dag,
             &tli,
             &mut X86Lowering {
+                imul_if_smaller: false,
                 cmov: true,
                 sse2: true,
                 min_size: false,
@@ -333,6 +340,7 @@ fn a_float_compare_at_sse2_is_fcmp_and_setcc() {
         &mut dag,
         &tli,
         &mut X86Lowering {
+            imul_if_smaller: false,
             cmov: true,
             sse2: true,
             min_size: false,
@@ -364,6 +372,7 @@ fn a_float_constant_at_sse2_is_a_pool_load() {
         &mut dag,
         &tli,
         &mut X86Lowering {
+            imul_if_smaller: false,
             cmov: true,
             sse2: true,
             min_size: false,
@@ -398,6 +407,7 @@ fn a_dynamic_alloca_moves_the_stack_pointer() {
         &mut dag,
         &tli,
         &mut X86Lowering {
+            imul_if_smaller: false,
             cmov: true,
             sse2: false,
             min_size: false,
@@ -435,6 +445,7 @@ fn stacksave_and_stackrestore_copy_the_stack_pointer() {
         &mut dag,
         &tli,
         &mut X86Lowering {
+            imul_if_smaller: false,
             cmov: true,
             sse2: false,
             min_size: false,

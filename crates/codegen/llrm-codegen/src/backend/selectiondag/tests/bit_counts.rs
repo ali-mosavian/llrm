@@ -45,6 +45,7 @@ fn legalized_by(
         &mut dag,
         tli,
         &mut X86Lowering {
+            imul_if_smaller: false,
             cmov: true,
             sse2: false,
             min_size: false,
@@ -137,6 +138,7 @@ fn abs_without_cmov_is_xor_with_the_sign_then_subtract_it() {
         &mut dag,
         &tli,
         &mut X86Lowering {
+            imul_if_smaller: false,
             cmov: false,
             sse2: false,
             min_size: false,

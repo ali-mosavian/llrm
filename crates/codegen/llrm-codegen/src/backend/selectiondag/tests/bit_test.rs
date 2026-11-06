@@ -14,6 +14,7 @@ fn lowered(
         &mut dag,
         &tli,
         &mut X86Lowering {
+            imul_if_smaller: false,
             cmov: false,
             sse2: false,
             min_size: false,

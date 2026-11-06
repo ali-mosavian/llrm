@@ -136,6 +136,10 @@ pub struct X86Lowering<'a> {
     pub sse2: bool,
     /// `hasMinSize`: llrm's `-Os` as well as `-Oz`.
     pub min_size: bool,
+    /// `-Os` on a target that keeps `imul` only where it is strictly smaller
+    /// than the pin's chain (DEVIATE MUL-OS): `min_size` then holds for the
+    /// other rules, not for `combineMul`.
+    pub imul_if_smaller: bool,
     /// The target adds three-address (`lea`) and the build is for speed: flat
     /// 32-bit and 64-bit, not `-Os`. DEVIATE SD448
     /// ([`combine_masked_xor_difference`]) is made there only.
@@ -401,6 +405,19 @@ impl CombineHooks for X86Lowering<'_> {
         level: CombineLevel,
     ) -> Option<SDValue> {
         match dag.opcode(node) {
+            ISD::Mul if self.imul_if_smaller => {
+                combine_mul(dag, node, level, false, self.i16_mul_chains, self.profile).filter(|chain| {
+                    let imul = if dag.constant(dag.operand(node, 1)).is_some_and(|bits| {
+                        let bits = bits as u32 as i32;
+                        (-128..128).contains(&bits)
+                    }) {
+                        3
+                    } else {
+                        6
+                    };
+                    chain_bytes(dag, *chain, dag.operand(node, 0)) <= imul
+                })
+            }
             ISD::Mul => combine_mul(dag, node, level, self.min_size, self.i16_mul_chains, self.profile),
             ISD::SetCC => combine_integer_setcc(dag, node, level),
             ISD::Add => combine_add(dag, node),
@@ -2244,6 +2261,33 @@ fn combine_mul_special(
 }
 
 /// `combineMul`, the scalar integer part: `x * c` as `lea`s, shifts, adds.
+/// Bytes of the chain `combine_mul` built for `x * c` (the `x` is free): a
+/// shift 3 (2 by one), an add or subtract 2, a `lea` form 3, and 2 for each
+/// further read of `x` (the copy a two-address instruction takes).
+fn chain_bytes(
+    dag: &SelectionDAG,
+    chain: SDValue,
+    x: SDValue,
+) -> u32 {
+    if chain == x || dag.constant(chain).is_some() {
+        return 0;
+    }
+    let mut bytes = match dag.opcode(chain) {
+        ISD::Shl => 2 + u32::from(dag.constant(dag.operand(chain, 1)) != Some(1)),
+        x86isd::MUL_IMM => 3,
+        _ => 2,
+    };
+    for index in 0..dag.node(chain).ops.len() {
+        let operand = dag.operand(chain, index);
+        if operand == x {
+            bytes += if index == 0 { 0 } else { 2 };
+        } else {
+            bytes += chain_bytes(dag, operand, x);
+        }
+    }
+    bytes
+}
+
 fn combine_mul(
     dag: &mut SelectionDAG,
     node: SDValue,

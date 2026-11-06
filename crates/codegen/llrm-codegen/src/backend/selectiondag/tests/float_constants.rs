@@ -14,6 +14,7 @@ fn legalized(
         &mut dag,
         &tli,
         &mut X86Lowering {
+            imul_if_smaller: false,
             cmov: false,
             sse2: false,
             min_size: false,
@@ -78,6 +79,7 @@ fn equal_constants_share_a_pool_entry() {
         &mut dag,
         &tli,
         &mut X86Lowering {
+            imul_if_smaller: false,
             cmov: false,
             sse2: false,
             min_size: false,
@@ -107,6 +109,7 @@ fn a_target_that_takes_every_float_constant_keeps_it() {
             &mut graph,
             &tli,
             &mut X86Lowering {
+                imul_if_smaller: false,
                 cmov: false,
                 sse2: false,
                 min_size: false,

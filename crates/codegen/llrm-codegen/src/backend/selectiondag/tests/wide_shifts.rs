@@ -121,6 +121,7 @@ fn shl_parts_is_a_funnel_shift_a_shift_and_a_cmov_on_bit_five() {
         &mut dag,
         &tli,
         &mut X86Lowering {
+            imul_if_smaller: false,
             cmov: false,
             sse2: false,
             min_size: false,

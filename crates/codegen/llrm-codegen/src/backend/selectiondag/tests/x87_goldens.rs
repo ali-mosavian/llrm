@@ -67,6 +67,7 @@ fn selected(text: &str) -> BTreeMap<String, Result<Counts, String>> {
                 dag,
                 &tli,
                 &mut X86Lowering {
+                    imul_if_smaller: false,
                     cmov: false,
                     sse2: false,
                     min_size: false,

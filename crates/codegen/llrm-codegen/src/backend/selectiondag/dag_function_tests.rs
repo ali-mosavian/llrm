@@ -1792,3 +1792,14 @@ fn at_os_a_multiply_by_eleven_stays_one_imul_on_m32() {
     assert_eq!(imuls(true), 1, "-Os: one imul");
     assert_eq!(imuls(false), 0, "speed: the chain");
 }
+
+/// `x * 5` is one 3-byte `lea` against a 3-byte `imul` (bintree, particle -Os:
+/// the `imul` kept, 0 B saved, +55% clocks): a tie takes the chain.
+#[test]
+fn at_os_a_multiply_that_ties_in_bytes_takes_the_chain_on_m32() {
+    let module = crate::testing::module(&TIMES_ELEVEN.replace("11", "5")).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", true).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let imuls = done.body.insns().iter().filter(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("imul"))).count();
+    assert_eq!(imuls, 0, "a tie in bytes is the chain's");
+}

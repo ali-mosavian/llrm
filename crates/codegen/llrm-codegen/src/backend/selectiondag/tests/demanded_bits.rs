@@ -213,6 +213,7 @@ fn a_narrowed_shift_takes_the_targets_amount_type() {
     let root = dag.get_node(ISD::And, EVT::I64, &[shl, mask]);
     dag.set_root(root);
     let mut hooks = X86Lowering {
+        imul_if_smaller: false,
         cmov: true,
         sse2: false,
         min_size: false,
@@ -363,6 +364,7 @@ fn and_mask_under_a_shift(m16: bool) -> Option<u128> {
     let root = shift(&mut dag, ISD::Shl, and, 4);
     dag.set_root(root);
     let mut hooks = X86Lowering {
+        imul_if_smaller: false,
         cmov: true,
         sse2: false,
         min_size: false,

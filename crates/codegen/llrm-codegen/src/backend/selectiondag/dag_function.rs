@@ -1187,6 +1187,7 @@ fn selected_in(
                 min_size: cpu.min_size
                     || bytes_beat_clocks
                     || (cpu.size && cpu.target().tti().is_some_and(|tti| tti.imul_at_size())),
+                imul_if_smaller: cpu.size && !cpu.min_size && cpu.target().tti().is_some_and(|tti| tti.imul_at_size()),
                 three_address_adds: !(cpu.size || cpu.min_size)
                     && !matches!(
                         cpu.three_address(),

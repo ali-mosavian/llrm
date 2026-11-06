@@ -24,6 +24,7 @@ fn legalized(
         &mut dag,
         &tli,
         &mut X86Lowering {
+            imul_if_smaller: false,
             cmov: false,
             sse2: false,
             min_size: false,
@@ -93,6 +94,7 @@ fn an_unsigned_i64_adds_the_fudge_when_the_sign_was_set() {
     let converted = dag.get_node(ISD::UIntToFp, double(), &[x]);
     dag.set_root(converted);
     let mut hooks = X86Lowering {
+        imul_if_smaller: false,
         cmov: false,
         sse2: false,
         min_size: false,

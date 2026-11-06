@@ -186,6 +186,7 @@ fn x86_narrows_a_mask_over_a_frozen_extending_load() {
     let mut dag = dag();
     super::pin_folds::masked_frozen_extload(&mut dag);
     let mut x86 = X86Lowering {
+        imul_if_smaller: false,
         cmov: true,
         sse2: false,
         min_size: false,
