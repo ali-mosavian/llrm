@@ -314,6 +314,12 @@ impl Tti for AArch64 {
         250_000
     }
 
+    /// UP1-REG: promoted array elements are registers only while the arrays fit
+    /// the file (matmul -O2: three 64-element arrays priced at 0 B, +452 B).
+    fn unroll_promotion_fits_registers(&self) -> bool {
+        true
+    }
+
     fn merges_unaligned_stores(&self) -> bool {
         true
     }

@@ -24,3 +24,15 @@ fn a_nest_whose_inner_count_follows_the_outer_counter_is_the_pins_decision() {
 fn init_loops_whose_stores_merge_when_unrolled_are_unrolled() {
     assert_eq!(labels(include_str!("data/bench_lru.ll")), 11);
 }
+
+fn instructions(source: &str) -> usize {
+    let asm = driver::assembly(source, Platform::Linux, Level::O2).expect("lowers");
+    asm.lines().filter(|line| line.starts_with('\t') && !line.starts_with("\t.")).count()
+}
+
+#[test]
+fn probe_matmul() {
+    let source = include_str!("data/bench_matmul.ll");
+    std::fs::write("/tmp/mm_fixed.s", driver::assembly(source, Platform::Linux, Level::O2).unwrap()).unwrap();
+    eprintln!("PROBE matmul labels={} instructions={}", labels(source), instructions(source));
+}

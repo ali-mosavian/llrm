@@ -108,7 +108,8 @@ pub(super) fn full_unroll_pays(
     // The accesses of a local array the copies make constant-indexed: the
     // array is promoted to registers, so they cost no clocks and no bytes
     // (frameless: `local[i]` filled and read by two 12-trip loops).
-    let (mut promoted, mut promoted_runs, ints, floats, rmw) = promoted_accesses(run, analyzed, lp, &known);
+    let (mut promoted, mut promoted_runs, ints, floats, rmw, int_elements, float_elements) =
+        promoted_accesses(run, analyzed, lp, &known);
     // DEVIATE UP1-REG (owner m64, exit 2026-11-20): the promoted elements are
     // registers only while they fit: more than the file holds, and they are
     // stack slots again (fpbench -O2 m64: four 6-element float arrays, 24
@@ -116,7 +117,13 @@ pub(super) fn full_unroll_pays(
     if run.tti.unroll_promotion_fits_registers() {
         let machine = run.outer.target();
         let float_room = if machine.float_registers() > 0 { machine.float_registers() } else { machine.registers() };
-        if ints as i64 * i64::from(trips) > machine.registers() || floats as i64 * i64::from(trips) > float_room {
+        // The arrays as a whole, not the elements one loop touches: a[i][k] and
+        // b[k][j] touch 16 of 128 values (matmul -O2: priced at 0 B, +452 B).
+        if ints as i64 * i64::from(trips) > machine.registers()
+            || floats as i64 * i64::from(trips) > float_room
+            || int_elements > machine.registers()
+            || float_elements > float_room
+        {
             promoted = 0;
             promoted_runs = 0;
         }
@@ -315,7 +322,7 @@ fn promoted_accesses(
     analyzed: &Analyzed,
     lp: Loop,
     known: &IdSet<ValueId>,
-) -> (i64, i64, usize, usize, usize) {
+) -> (i64, i64, usize, usize, usize, i64, i64) {
     let function = &*run.function;
     let (mut found, mut runs) = (0, 0);
     let (mut ints, mut floats): (IdSet<ValueId>, IdSet<ValueId>) = (IdSet::new(), IdSet::new());
@@ -376,7 +383,33 @@ fn promoted_accesses(
             }
         }
     }
-    (found, runs, ints.len(), floats.len(), rmw.len())
+    let elements = |roots: &IdSet<ValueId>| -> i64 {
+        roots
+            .iter()
+            .map(|&root| match function.value(root).def {
+                ValueDef::Instruction(def) => match function.instruction(def).opcode {
+                    Opcode::Alloca { allocated, .. } => scalar_count(run.context, allocated),
+                    _ => 1,
+                },
+                _ => 1,
+            })
+            .fold(0, i64::saturating_add)
+    };
+    (found, runs, ints.len(), floats.len(), rmw.len(), elements(&ints), elements(&floats))
+}
+
+/// The scalars an object of `ty` holds.
+fn scalar_count(
+    context: &Context,
+    ty: llrm_mir::types::TypeId,
+) -> i64 {
+    use llrm_mir::types::Type;
+    match context.types.get(ty) {
+        Type::Array { element, count } => i64::try_from(*count).unwrap_or(i64::MAX).saturating_mul(scalar_count(context, *element)),
+        Type::Vector { element, count } => i64::from(*count).saturating_mul(scalar_count(context, *element)),
+        Type::Struct { fields, .. } => fields.iter().map(|&field| scalar_count(context, field)).fold(0, i64::saturating_add),
+        _ => 1,
+    }
 }
 
 /// The float values a full unroll of `lp` by `trips` keeps live across its
