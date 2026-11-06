@@ -623,7 +623,7 @@ START = time.monotonic()
 
 def workers() -> int:
     """Pool size: the guard's base slot count, so a bench run takes no more cores than one admitted job (a storm of 32 workers starved the others)."""
-    return max(1, int(os.environ.get("LG_SLOTS") or 3))
+    return cpulimit.pool_workers()
 
 
 def guarded_argv() -> list[str] | None:
