@@ -942,6 +942,19 @@ fn a_reachable_routine_gets_the_macros_it_uses() {
     assert!(runtime.contains("__umodsi3:"));
 }
 
+/// The comment that introduces the memory routines follows `__ashrsi3_fast`'s
+/// block and names `memset`, `memcpy` and `memmove`: the text read it as a
+/// reference, so every program shifting a long by a variable (and the byte
+/// count the table priced) carried all three.
+#[test]
+fn a_name_in_a_comment_does_not_reach_its_routine() {
+    let runtime = reachable_runtime("  jsr __ashrsi3_fast\n");
+    assert!(runtime.contains("__ashrsi3_fast:"));
+    for name in ["memset:", "memcpy:", "memmove:"] {
+        assert!(!runtime.contains(name), "{name} reached through a comment");
+    }
+}
+
 /// A host program that loops forever is killed at the limit and leaves no
 /// process behind. It was run with no limit, and the loops of differential
 /// seeds piled up at 97% CPU for an hour. `host_run` returned after sending

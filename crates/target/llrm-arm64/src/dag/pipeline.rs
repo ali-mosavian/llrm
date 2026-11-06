@@ -260,7 +260,7 @@ impl CombineHooks for Aarch64Lowering {
     ) -> bool {
         matches!(
             op,
-            ISD::Mul | ISD::Add | ISD::Sub | ISD::And | ISD::Or | ISD::GlobalAddress | ISD::Shl | ISD::Srl | ISD::Sra | ISD::Rotr
+            ISD::Mul | ISD::Add | ISD::Sub | ISD::And | ISD::Or | ISD::SetCC | ISD::GlobalAddress | ISD::Shl | ISD::Srl | ISD::Sra | ISD::Rotr
         )
     }
 
@@ -285,6 +285,7 @@ impl CombineHooks for Aarch64Lowering {
             ISD::GlobalAddress => self.global_address_combine(dag, node),
             ISD::Add => super::combine::add_combine_for_shifted_operands(dag, node),
             ISD::Sub => super::combine::conditional_sub(dag, node),
+            ISD::SetCC => super::combine::or_xor_chain(dag, node),
             ISD::Shl | ISD::Srl | ISD::Sra | ISD::Rotr if level == CombineLevel::AfterLegalizeDag => {
                 super::combine::shift_amount_mod(dag, node)
             }
@@ -481,7 +482,7 @@ pub fn select_block(
     // `ComputeLiveOutVRegInfo`: after the legalizer, before the assertions go.
     llrm_codegen::backend::selectiondag::live_out::compute_live_out_vreg_info(dag, info);
     let selector = Selector::new(table::TABLE);
-    let mut hooks = super::hooks::Aarch64Hooks::new(globals.clone());
+    let mut hooks = super::hooks::Aarch64Hooks::new(globals.clone(), opt_for_size);
     do_instruction_selection_with(dag, &Aarch64Ids::new(), |adapter, node| {
         select_frame_index(adapter, node)
             .or_else(|| select_indexed_load(adapter, node))

@@ -1605,3 +1605,31 @@ fn test_the_symbol_table_follows_a_rename_and_a_new_global() {
     module.globals.swap(0, 2);
     assert_eq!(module.named("f2"), Some(crate::context::GlobalId(0)), "a moved global");
 }
+
+/// wasm `memory_expansion` lr9: an alloca captured by a later call made BasicAA
+/// answer "may alias" against a pointer parameter, so the pin's byte-copy
+/// merge never happened in ours (18 load/store ops where the pin made 9). The
+/// pin: a parameter cannot point to a slot of this activation, captured or
+/// not; a pointer loaded from memory still can, once the slot is captured.
+#[test]
+fn a_captured_slot_does_not_alias_a_pointer_parameter_but_a_loaded_pointer_may() {
+    use crate::alias::{Alias, Location, alias};
+    use crate::{datalayout::DataLayout, memory::callees, module::Operand};
+    let module = parse::module(
+        "declare void @esc(ptr)\n\
+         define void @f(ptr %p, ptr %pp) {\n  %a = alloca [8 x i8], align 1\n  call void @esc(ptr %a)\n  \
+         %q = load ptr, ptr %pp, align 4\n  ret void\n}\n",
+    )
+    .unwrap();
+    let (_, _, function) = module.functions().find(|(_, _, f)| f.parameters().len() == 2).unwrap();
+    let results: Vec<_> = function.instructions.iter().filter_map(|i| i.result).collect();
+    let (slot, loaded) = (results[0], results[1]);
+    let at = |pointer| Location { pointer, bytes: 1, tbaa: None };
+    let verdict = |one: Operand, other: Operand| {
+        alias(&module.context, &DataLayout::default(), &callees(&module), &module.metadata, function, at(one), at(other))
+    };
+    let parameter = Operand::Value(function.parameters()[0]);
+    assert_eq!(verdict(parameter, Operand::Value(slot)), Alias::No);
+    assert_eq!(verdict(Operand::Value(slot), parameter), Alias::No);
+    assert_eq!(verdict(Operand::Value(loaded), Operand::Value(slot)), Alias::May);
+}

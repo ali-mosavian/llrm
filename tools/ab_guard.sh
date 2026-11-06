@@ -4,6 +4,8 @@
 # (upstream: $AB_UPSTREAM, default origin/release/next), the binaries differ, every counts file is non-empty,
 # and $AB_BASE_ARGV / $AB_HEAD_ARGV (the command lines the two sides run) each carry an explicit -O level:
 # llrm-wasm-llc once defaulted to -O0 against the pin's -O2 and a phantom gap was chased. Both lines are printed.
+# Any LLRM_* variable outside AB_ENV_OK (ab_env.sh, tool locations) is refused unless $AB_ALLOW_ENV names it: LLRM_WASM_BACKEND_ONLY
+# skipped the mid-end on one side and a second cause was chased for 40 minutes. The LLRM_* environment is printed.
 repo=$1 base=$2 head=$3 bbin=$4 hbin=$5; shift 5
 no() { echo "ab_guard: $*" >&2; exit 2; }
 up=${AB_UPSTREAM:-origin/release/next}
@@ -20,3 +22,5 @@ for side in BASE HEAD; do
 done
 echo "ab_guard: base argv: $AB_BASE_ARGV"
 echo "ab_guard: head argv: $AB_HEAD_ARGV"
+. "$(dirname "$0")/ab_env.sh"
+ab_env_check || exit 2

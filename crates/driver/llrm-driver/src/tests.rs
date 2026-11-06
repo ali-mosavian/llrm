@@ -1254,6 +1254,29 @@ fn a_prefetch_hint_compiles_to_no_code() {
     assert!(!listing.contains("prefetch"), "{listing}");
 }
 
+/// `__builtin_trap` is `llvm.trap`: `llrm-llc` panicked on it ("no entry found
+/// for key", assemble.rs) at every x86 target, for the call was of a name with
+/// no declaration behind it. It is `ud2` (`TRAP`), and `llvm.debugtrap` is
+/// `int3`. `llvm.ubsantrap` (`UBSAN_UD1`) is not translated: a named refusal,
+/// not a panic.
+#[test]
+fn the_trap_intrinsics_select_or_are_refused_by_name() {
+    let one = |name: &str, call: &str| {
+        let text = format!(
+            "target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i486-unknown-linux-gnu\"\n\
+             declare void @{name}\ndefine void @f() {{\n  call void @{call}\n  unreachable\n}}\n"
+        );
+        compiled(&flags(&["-m32"]), &text, "f")
+    };
+    for (name, call, wanted) in [("llvm.trap()", "llvm.trap()", "ud2"), ("llvm.debugtrap()", "llvm.debugtrap()", "int3")] {
+        let (built, _) = one(name, call).unwrap_or_else(|why| panic!("{name}: {why}"));
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        assert!(listing.contains(wanted), "{name}: {listing}");
+    }
+    let why = one("llvm.ubsantrap(i8)", "llvm.ubsantrap(i8 1)").map(|_| ()).unwrap_err();
+    assert!(why.contains("llvm.ubsantrap"), "{why}");
+}
+
 /// `-Og` makes clang write `llvm.fake.use` (a debugger keeps a value live);
 /// `llrm-llc` refused the module, "@f_: @llvm.fake.use", and `-Og` compiled
 /// nothing through `llrm-cc`.
@@ -1977,6 +2000,50 @@ fn a_probed_frame_ending_in_a_sibling_call_gives_its_stack_back_first() {
     // takes the exit gives back.
     let taken = lines.iter().find_map(|line| line.strip_prefix("sub rsp, ")).unwrap_or_else(|| panic!("{listing}"));
     assert!(lines[jmp - 1] == format!("add rsp, {taken}") || lines[jmp - 1].starts_with("mov rsp, rbp"), "{listing}");
+}
+
+/// The listing of `tail call @g(...)` then `ret`, built with `abi` at -O2.
+fn tail_call_listing(abi: &str, signature: &str, arguments: &str) -> String {
+    // a variadic call names its callee's type: `i32 (i32, ...) @g`
+    let text = format!(
+        "{SYSV}declare i32 @g{signature}\ndefine i32 @f(i32 %x) {{\n  %r = tail call i32 {} @g({arguments})\n  ret i32 %r\n}}\n",
+        if signature.contains("...") { "(i32, ...)" } else { "(i32, i32)" }
+    );
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag", abi]), &text, "f").unwrap();
+    llrm_codegen::backend::masm::text(&built).unwrap()
+}
+
+/// A variadic tail call under Win64 became `jmp g`; the pin keeps `call g`
+/// then `ret` (`isEligibleForSiblingCallOpt`: no variadic sibling call when
+/// either side is Win64). SysV, and a Win64 call of a fixed signature, still jump.
+#[test]
+fn a_win64_variadic_tail_call_stays_a_call() {
+    let jumps = |listing: &str| listing.lines().any(|line| line.trim().starts_with("jmp g"));
+    let variadic = tail_call_listing("-mabi=win64", "(i32, ...)", "i32 %x, i32 %x");
+    assert!(!jumps(&variadic) && variadic.contains("call g"), "{variadic}");
+    let fixed = tail_call_listing("-mabi=win64", "(i32, i32)", "i32 %x, i32 %x");
+    assert!(jumps(&fixed), "{fixed}");
+    let sysv = tail_call_listing("-mabi=sysv", "(i32, ...)", "i32 %x, i32 %x");
+    assert!(jumps(&sysv), "{sysv}");
+}
+
+/// An internal x86-64 function whose callers are all seen, or one marked
+/// `fastcc`, popped its stack arguments (`ret 16`) and its callers did not
+/// clean up. The pin's `isCalleePop` is false for `fastcc` there (no
+/// `GuaranteedTailCallOpt`), so the callee returns with a plain `ret` and the
+/// caller removes the area (QCport corpus: `os_locals_between_pushes`).
+#[test]
+fn an_x86_64_fastcc_function_returns_with_a_plain_ret() {
+    let text = format!(
+        "{SYSV}define internal fastcc i64 @work(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, i64 %f, i64 %g, i64 %h) noinline {{\n  %x = add i64 %a, %h\n  %y = add i64 %x, %g\n  ret i64 %y\n}}\n\
+         define i64 @f(i64 %x) {{\n  %p = call fastcc i64 @work(i64 %x, i64 %x, i64 %x, i64 %x, i64 %x, i64 %x, i64 %x, i64 %x)\n  %q = add i64 %p, 1\n  ret i64 %q\n}}\n"
+    );
+    for abi in ["-mabi=sysv", "-mabi=win64"] {
+        let (built, _) = compiled(&flags(&["-m64", "-O0", abi]), &text, "work").unwrap();
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        let returns: Vec<&str> = listing.lines().map(str::trim).filter(|line| line.starts_with("ret")).collect();
+        assert!(!returns.is_empty() && returns.iter().all(|line| *line == "ret"), "{abi}: {listing}");
+    }
 }
 
 /// The `.xdata` of an x86-64 module written as COFF, found by `.pdata`'s

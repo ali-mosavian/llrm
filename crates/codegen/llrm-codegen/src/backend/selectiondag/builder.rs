@@ -2606,7 +2606,7 @@ impl Builder<'_> {
         for (reg, value) in &copies {
             ops.push(self.dag.get_phys_register(self.dag.value_type(*value), *reg));
         }
-        ops.push(self.dag.get_register_mask());
+        ops.push(self.dag.get_register_mask_clobbering(&super::dagisel_adapter::call_clobbered_flags()));
         ops.extend(glue);
         if sibling {
             // `X86ISD::TC_RETURN`: the callee, the stack adjustment (none: the
