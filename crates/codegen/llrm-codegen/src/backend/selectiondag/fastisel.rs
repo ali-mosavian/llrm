@@ -42,6 +42,12 @@ pub fn take_took() -> bool {
     TOOK.with(|took| took.replace(false))
 }
 
+/// Logs why FastISel left a whole function to the DAG (`LLRM_DEBUG=isel`).
+fn declined<T>(why: &str) -> Option<T> {
+    llrm_support::debug!("isel", "fast declined: {why}");
+    None
+}
+
 /// A 32-bit integer, or at m32 a pointer in the default space (the same register).
 fn word(types: &llrm_mir::types::Types, ty: llrm_mir::types::TypeId, m32: bool) -> bool {
     types.int_bits(ty) == Some(32) || (m32 && matches!(types.get(ty), llrm_mir::types::Type::Pointer(0)))
@@ -65,7 +71,7 @@ pub fn build_all(
 ) -> Option<Vec<(BlockId, BlockDag)>> {
     let m32 = arch.object().bitness == 32;
     if !(m32 || arch.object().bitness == 64) || module.signature(function.ty).2 {
-        return None;
+        return declined("a variadic function or another width");
     }
     // every parameter is a 4-byte stack cell: fixed object -(n + 1)
     let int32 = |ty| word(&module.context.types, ty, m32);
@@ -74,11 +80,11 @@ pub fn build_all(
         || convention.parameters.len() != parameters.len()
         || convention.parameters.iter().any(|one| !matches!(one, crate::backend::isel::Parameter::Cell(_)))
     {
-        return None;
+        return declined("a parameter that is not a 4-byte stack cell");
     }
     let returns_int = int32(returns);
     if !returns_int && !module.context.types.is_void(returns) {
-        return None;
+        return declined("a result that is not an int, a pointer or void");
     }
     let eax = (returns_int && convention.returns.len() == 1).then(|| arch.registers().named(convention.returns[0], 4));
     let names = Names::new(opcode)?;
