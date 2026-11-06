@@ -967,48 +967,60 @@ impl LIRTransform for MachineScheduler {
         let registers = &self.classes;
         let segments = &self.segments;
         Ok(scheduled(&body, registers.available.len(), |body, counted| {
-            let confined = regclass::classes(body, &BTreeSet::new(), segments, registers);
-            let mut widths: IndexMap<u32, i64> = IndexMap::default();
-            for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
-                if let Some(what) = &one.what {
-                    for place in what.dests.iter().chain(&what.sources) {
-                        if let Loc::Held(held) = place {
-                            let held_width = i64::from(held.width);
-                            let width = widths.entry(held.value).or_insert(held_width);
-                            *width = (*width).max(held_width);
-                        }
-                    }
-                }
-            }
-            let everywhere: Vec<RegId> = registers.available.iter().map(|&reg| body.regs().root(reg)).collect();
-            // A value no register list confines takes `everywhere`: shared, not
-            // copied.
-            let allowed: Vec<(u32, i64, Option<Vec<RegId>>)> = widths
-                .iter()
-                .filter(|&(&value, _)| counted(value))
-                .map(|(&value, &width)| {
-                    let roots = confined.get(&value).map(|set| set.iter().map(|&reg| body.regs().root(reg)).collect());
-                    (value, width, roots)
-                })
-                .collect();
-            // DEVIATE MS5: a target with no pressure sets (m16) counts every
-            // value once against one set of its allocatable registers.
-            let Some((sets, limits)) = registers.pressure.as_ref() else {
-                let mut model = Model::new(vec![registers.available.len() as u32]);
-                let one: Rc<[usize]> = Rc::from(vec![0]);
-                for (value, _, _) in &allowed {
-                    model.count(*value, 1, one.clone());
-                }
-                return model;
-            };
-            Model::of_values(
-                sets,
-                body.regs(),
-                |set| limits[set],
-                allowed.iter().map(|(value, width, roots)| (*value, *width, roots.as_deref().unwrap_or(&everywhere))),
-            )
+            pressure_model(body, registers, segments, counted)
         }))
     }
+}
+
+/// The pressure model of `body`: the class and sets each counted value is
+/// confined to (`regclass::classes`), each set's limit from the target's
+/// pressure sets. Shared by the pre-RA scheduler and EarlyMachineLICM.
+pub(crate) fn pressure_model(
+    body: &LirBody,
+    registers: &RegisterClasses,
+    segments: &Segments,
+    counted: &dyn Fn(u32) -> bool,
+) -> Model {
+    let confined = regclass::classes(body, &BTreeSet::new(), segments, registers);
+    let mut widths: IndexMap<u32, i64> = IndexMap::default();
+    for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        if let Some(what) = &one.what {
+            for place in what.dests.iter().chain(&what.sources) {
+                if let Loc::Held(held) = place {
+                    let held_width = i64::from(held.width);
+                    let width = widths.entry(held.value).or_insert(held_width);
+                    *width = (*width).max(held_width);
+                }
+            }
+        }
+    }
+    let everywhere: Vec<RegId> = registers.available.iter().map(|&reg| body.regs().root(reg)).collect();
+    // A value no register list confines takes `everywhere`: shared, not
+    // copied.
+    let allowed: Vec<(u32, i64, Option<Vec<RegId>>)> = widths
+        .iter()
+        .filter(|&(&value, _)| counted(value))
+        .map(|(&value, &width)| {
+            let roots = confined.get(&value).map(|set| set.iter().map(|&reg| body.regs().root(reg)).collect());
+            (value, width, roots)
+        })
+        .collect();
+    // DEVIATE MS5: a target with no pressure sets (m16) counts every
+    // value once against one set of its allocatable registers.
+    let Some((sets, limits)) = registers.pressure.as_ref() else {
+        let mut model = Model::new(vec![registers.available.len() as u32]);
+        let one: Rc<[usize]> = Rc::from(vec![0]);
+        for (value, _, _) in &allowed {
+            model.count(*value, 1, one.clone());
+        }
+        return model;
+    };
+    Model::of_values(
+        sets,
+        body.regs(),
+        |set| limits[set],
+        allowed.iter().map(|(value, width, roots)| (*value, *width, roots.as_deref().unwrap_or(&everywhere))),
+    )
 }
 
 /// The values of the float operations: the x87 stack is its own register set,
@@ -1078,14 +1090,15 @@ pub fn scheduled(
                     insns.iter().flat_map(|one| one.defines.iter().chain(&one.uses)).copied().collect();
                 values.sort_unstable();
                 values.dedup();
-                now = values
-                    .iter()
-                    .copied()
-                    .filter(|&value| counted(value) && live.live_out(block.at, value))
-                    .collect();
+                now =
+                    values.iter().copied().filter(|&value| counted(value) && live.live_out(block.at, value)).collect();
                 // The x87 values live below the block count in the stack's set
                 // (the pin: every live-out register is in the bottom pressure).
-                now87 = values.iter().copied().filter(|&value| stack.contains(&value) && live.live_out(block.at, value)).collect();
+                now87 = values
+                    .iter()
+                    .copied()
+                    .filter(|&value| stack.contains(&value) && live.live_out(block.at, value))
+                    .collect();
                 if regions.iter().any(|region| region.len() > limit / 2)
                     && let Some(make) = model.take()
                 {

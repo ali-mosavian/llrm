@@ -505,6 +505,13 @@ pub trait Target {
     /// The register a frame's cells are addressed through.
     fn frame_register(&self) -> RegId;
 
+    /// Whether `MachineLICM` refuses a hoist by the register pressure of the
+    /// loop (the pin's `CanCauseHighRegPressure`); false: by the count of
+    /// values the loop names against the registers (the rule before it).
+    fn hoist_by_pressure(&self) -> bool {
+        true
+    }
+
     /// The pressure sets of the register classes and each set's limit, for a
     /// target that has them (the pre-RA scheduler tracks pressure per set).
     fn pressure(&self) -> Option<(&'static pressure::PressureSets, Vec<u32>)> {

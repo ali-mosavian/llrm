@@ -193,6 +193,7 @@ pub fn machine_with<'a>(
         // EarlyMachineLICM, ahead of MachineCSE).
         Box::new(crate::backend::machinelicm::MachineLicm {
             classes: Rc::clone(classes),
+            segments: segments.clone(),
             size: target.size || target.min_size,
         }),
         // After the loop-invariant values are in the preheader: streams that
@@ -200,7 +201,8 @@ pub fn machine_with<'a>(
         Box::new(crate::backend::ivshare::IvShare { classes: Rc::clone(classes) }),
         // A counted loop's index ends at zero (DEVIATE LSR3).
         Box::new(crate::backend::ivzero::IvZero { classes: Rc::clone(classes) }),
-        // Where the block runs often enough, `and d,s,mask` for `movzx d,s.low` (DEVIATE MA1).
+        // Where the block runs often enough, `and d,s,mask` for `movzx d,s.low`
+        // (DEVIATE MA1).
         Box::new(crate::backend::maskbyand::MaskByAnd {
             clocks_saved: target.cost("movzx")? - target.cost("alu_ri")?,
             milliclocks_per_byte: target.speed_milliclocks_per_byte(),

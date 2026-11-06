@@ -103,6 +103,14 @@ impl llrm_target::Target for M16 {
         GENERAL.len() as i64
     }
 
+    // DEVIATE ML1-M16 (owner x86-m32, exit 2026-11-20): the pin's gate, on the
+    // x86 pressure sets, keeps a loop-invariant `lea` and load in the loop on
+    // 16-bit code, where the address registers are three of six (bintree -O1
+    // +6,579 clk, quicksort -O2 +2,838 clk); the count rule stays.
+    fn hoist_by_pressure(&self) -> bool {
+        false
+    }
+
     fn pressure(&self) -> Option<(&'static llrm_target::pressure::PressureSets, Vec<u32>)> {
         Some((
             &PRESSURE,
