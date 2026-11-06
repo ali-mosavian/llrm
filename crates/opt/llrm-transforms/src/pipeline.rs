@@ -656,7 +656,7 @@ impl FunctionPass for Slot {
         let count = |unit: &Unit| -> i64 {
             unit.function.layout().iter().map(|&b| unit.function.iter_block(b).count() as i64).sum()
         };
-        if std::env::var_os("W2_SLOT_COUNT").is_none() {
+        if !llrm_support::env_flag!("W2_SLOT_COUNT") {  // read once: this runs for every pass of every function
             return self.inner.run(unit, analyses);
         }
         let before = count(unit);
