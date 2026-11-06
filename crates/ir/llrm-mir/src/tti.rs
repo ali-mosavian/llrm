@@ -1448,6 +1448,11 @@ pub trait Tti {
         true
     }
 
+    /// `Tuning::partial_libcalls_skip_at_size`.
+    fn partial_libcalls_skip_at_size(&self) -> bool {
+        false
+    }
+
     /// `shouldBuildLookupTables`: whether the target jumps through a table
     /// (X86 and AArch64: `BRIND` is legal).
     fn should_build_lookup_tables(&self) -> bool {

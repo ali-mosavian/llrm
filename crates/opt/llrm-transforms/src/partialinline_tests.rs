@@ -110,13 +110,24 @@ b0:
     assert_eq!(text.matches("phi double").count(), 2, "{text}");
 }
 
-/// DEVIATE PIL-OS: the pin splits at -Os too, which grows the code; a function
-/// with `optsize` (or `minsize`) keeps its call, and -Os stays at base bytes.
+/// DEVIATE PIL-OS: the pin splits at -Os too, which grows the code. Where the
+/// target's `Tuning` says so, a function with `optsize` (or `minsize`) keeps
+/// its call; elsewhere it is the pin's, split.
 #[test]
-fn an_optsize_function_keeps_its_sqrt_call() {
+fn an_optsize_function_keeps_its_sqrt_call_where_the_tuning_says_so() {
     for attr in ["optsize", "minsize"] {
-        let text = run(&SQRT.replace("double %x) {", &format!("double %x) {attr} {{")), fast());
-        assert!(!text.contains("call.sqrt"), "{attr}\n{text}");
-        assert_eq!(text.matches("call double @sqrt").count(), 1, "{attr}\n{text}");
+        let text = SQRT.replace("double %x) {", &format!("double %x) {attr} {{"));
+        let kept = run(&text, Tuned { skip_partial_at_size: true, ..fast() });
+        assert!(!kept.contains("call.sqrt"), "{attr}\n{kept}");
+        assert_eq!(kept.matches("call double @sqrt").count(), 1, "{attr}\n{kept}");
+        let pins = run(&text, fast());
+        assert!(pins.contains("call.sqrt:"), "the pin's default splits at size\n{attr}\n{pins}");
     }
+}
+
+/// The tuning is for functions tuned for size alone: a plain function is still split.
+#[test]
+fn the_size_tuning_leaves_a_speed_function_split() {
+    let text = run(SQRT, Tuned { skip_partial_at_size: true, ..fast() });
+    assert!(text.contains("call.sqrt:"), "{text}");
 }

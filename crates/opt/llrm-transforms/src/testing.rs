@@ -169,6 +169,8 @@ pub struct Tuned {
     pub fast_sqrt: bool,
     /// `Tti::is_fcmp_ord_cheaper_than_fcmp_zero` is false, as X86's.
     pub ord_dear: bool,
+    /// `Tuning::partial_libcalls_skip_at_size`.
+    pub skip_partial_at_size: bool,
     /// `Tuning::price_fills`.
     pub price_fills: bool,
     /// No constant memset is stored inline: every fill is a `rep stos`.
@@ -186,6 +188,7 @@ pub struct Flagged {
     pub cheap_ctlz: bool,
     pub fast_sqrt: bool,
     pub ord_dear: bool,
+    pub skip_partial_at_size: bool,
     pub no_cmov: bool,
     pub no_global_base: bool,
 }
@@ -196,6 +199,10 @@ impl llrm_mir::tti::Tti for Flagged {
         ty: tti::Ty,
     ) -> bool {
         self.fast_sqrt && matches!(ty, tti::Ty::Double | tti::Ty::Float)
+    }
+
+    fn partial_libcalls_skip_at_size(&self) -> bool {
+        self.skip_partial_at_size
     }
 
     fn is_fcmp_ord_cheaper_than_fcmp_zero(
@@ -335,7 +342,7 @@ impl llrm_mir::target::Machine for Tuned {
     }
 
     fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
-        (self.exit_ne || self.no_global_base || self.cheap_ctlz || self.fast_sqrt || self.ord_dear).then(|| {
+        (self.exit_ne || self.no_global_base || self.cheap_ctlz || self.fast_sqrt || self.ord_dear || self.skip_partial_at_size).then(|| {
             std::rc::Rc::new(Flagged {
                 exit_ne: self.exit_ne,
                 no_cmov: false,
@@ -343,6 +350,7 @@ impl llrm_mir::target::Machine for Tuned {
                 cheap_ctlz: self.cheap_ctlz,
                 fast_sqrt: self.fast_sqrt,
                 ord_dear: self.ord_dear,
+                skip_partial_at_size: self.skip_partial_at_size,
             }) as _
         })
     }

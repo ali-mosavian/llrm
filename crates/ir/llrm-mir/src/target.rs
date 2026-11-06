@@ -135,6 +135,11 @@ pub struct Tuning {
     /// it reads is made on its own path (`Tti::sinks_select_arms`). false: the
     /// pin's, both operands before the branch.
     pub sink_select_arms: bool,
+    /// DEVIATE PIL-OS (owner alim, exit 2026-11-27): PartiallyInlineLibCalls
+    /// leaves a call in a function tuned for size (`optsize`, `minsize`)
+    /// alone. false: the pin's, which splits it there too and grows the code
+    /// by a compare, a branch and a copy of the call.
+    pub partial_libcalls_skip_at_size: bool,
     /// DEVIATE MEM-1: an `llvm.memcpy` of a length known only at run time, in
     /// a function not tuned for size, is `rep movsd` and `rep movsb` inline,
     /// not a call of `memcpy` (gcc's `rep_prefix_4_byte` stringop strategy for
@@ -186,6 +191,7 @@ impl Tuning {
         peel_folded_entry: false,
         unroll_milliclocks_per_byte: 0,
         sink_select_arms: false,
+        partial_libcalls_skip_at_size: false,
         inline_variable_memcpy: false,
         ipsccp_widen_keeps_sign: false,
     };

@@ -774,6 +774,10 @@ impl Tti for X86 {
         matches!(ty, Ty::Float | Ty::Double | Ty::X87)
     }
 
+    fn partial_libcalls_skip_at_size(&self) -> bool {
+        self.tuning.partial_libcalls_skip_at_size
+    }
+
     /// `X86TTIImpl::isFCmpOrdCheaperThanFCmpZero`
     /// ([X86TargetTransformInfo.cpp#L7435](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L7435)).
     fn is_fcmp_ord_cheaper_than_fcmp_zero(

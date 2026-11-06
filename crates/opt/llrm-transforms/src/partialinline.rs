@@ -25,10 +25,11 @@
 //! Why it matters here: a `sqrt` that sets `errno` is a call; with this it is
 //! an instruction on the path that has no error.
 //!
-//! DEVIATE PIL-OS: a function with `optsize` or `minsize` is skipped. The pin
-//! splits there too, which grows -Os code by a compare, a branch and a copy of
-//! the call, and -Os is strict bytes. Owner: alim; exit 2026-11-27, revisit
-//! when the -Os rows allow.
+//! DEVIATE PIL-OS: where the target's `Tuning::partial_libcalls_skip_at_size`
+//! is on (x86, arm64, wasm), a function with `optsize` or `minsize` is
+//! skipped. The pin splits there too, which grows -Os code by a compare, a
+//! branch and a copy of the call, and -Os is strict bytes. Owner: alim; exit
+//! 2026-11-27, revisit when the -Os rows allow.
 //!
 //! DEVIATE PI2: MIR's text has no `strictfp`; the check reads the attribute
 //! where a front end states it, and no test can state it.
@@ -72,11 +73,17 @@ impl FunctionPass for PartiallyInlineLibCalls {
         unit: &mut Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        if unit.function.attrs.iter().any(|one| matches!(one, Attribute::Flag(flag) if flag == "optsize" || flag == "minsize")) {
-            return PreservedAnalyses::all();
-        }
         let outer = analyses.outer().clone();
         let Some(tti) = outer.target().tti() else { return PreservedAnalyses::all() };
+        let for_size = unit
+            .function
+            .attrs
+            .iter()
+            .any(|one| matches!(one, Attribute::Flag(flag) if flag == "optsize" || flag == "minsize"));
+        // `LLRM_PIL_SKIP_AT_SIZE` runs the per-target -Os A/B before a description turns the field on.
+        if for_size && (tti.partial_libcalls_skip_at_size() || llrm_support::env_flag!("LLRM_PIL_SKIP_AT_SIZE")) {
+            return PreservedAnalyses::all();
+        }
         let info = target_library_info(&outer, unit.layout.pointer(0).index_bits);
         let mut blocks: Vec<BlockId> = unit.function.layout().to_vec();
         let mut changed = false;
