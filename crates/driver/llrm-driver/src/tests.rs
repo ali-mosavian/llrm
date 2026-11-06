@@ -736,15 +736,22 @@ fn an_alloca_with_a_constant_count_reserves_all_its_elements() {
 
 /// A `select` of a loaded value stopped the matcher at m64 ("node transform
 /// `GetOppositeBranchCondition` is not translated"): the table folds the load
-/// into `cmov` with the condition inverted (`inv_cond_XFORM`).
+/// into `cmov` with the condition inverted (`inv_cond_XFORM`). Since
+/// CmovConversion (#6867, `ForceMemOperand`) the pin's own output is a branch
+/// over the load: pin llc -O2 on this function (IR md5 5e6d4960) is
+/// `mov rax, rcx; cmp rsi, rdx; jl .L; mov rax, [rdi]; ret`.
 #[test]
-fn a_select_of_a_loaded_value_is_a_cmov_from_memory() {
+fn a_select_of_a_loaded_value_is_a_branch_over_the_load() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 define i64 @f(ptr %p, i64 %x, i64 %y, i64 %z) {\n  %a = load i64, ptr %p\n  %c = icmp slt i64 %x, %y\n  %r = select i1 %c, i64 %z, i64 %a\n  ret i64 %r\n}\n";
     let (built, _) = compiled(&flags(&["-O2", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(listing.lines().any(|line| line.trim().starts_with("cmovge") && line.contains('[')), "{listing}");
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    let branch = lines.iter().position(|line| line.starts_with("jl")).unwrap_or_else(|| panic!("{listing}"));
+    let loads: Vec<usize> = (0..lines.len()).filter(|&at| lines[at].contains("[rdi]")).collect();
+    assert!(loads.len() == 1 && loads[0] > branch, "the load is in the false arm only\n{listing}");
+    assert!(!listing.contains("cmov"), "{listing}");
 }
 
 /// Setting a bit of an `i64` by a variable index stopped the emitter
