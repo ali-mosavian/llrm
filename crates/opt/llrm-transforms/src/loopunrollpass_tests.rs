@@ -787,5 +787,7 @@ fn test_unrolling_nests_makes_the_analyses_again_only_after_a_cfg_edit() {
         super::MADE.with(|made| made.get())
     };
     let (small, large) = (made(4), made(8));
-    assert!(large <= 3 * 8 + 2, "4 nests: {small} builds, 8 nests: {large}");
+    // Four more nests cost at most two builds each (kept: one; remade after
+    // every step: three).
+    assert!(large - small <= 4 * 2, "4 nests: {small} builds, 8 nests: {large}");
 }
