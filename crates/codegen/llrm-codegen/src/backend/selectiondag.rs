@@ -208,6 +208,8 @@ mod dagisel_tests;
 #[cfg(test)]
 mod emit_tests;
 #[cfg(test)]
+mod exact_shift_tests;
+#[cfg(test)]
 mod extload_tests;
 #[cfg(test)]
 mod fallthrough_tests;
