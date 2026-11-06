@@ -82,6 +82,11 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
     let per_byte = llrm_target::timings::derived_byte_rate(costs.cache_line, costs.line_fill_clocks);
     llrm_mir::target::Tuning {
         multiply_by_clocks: true,
+        // DEVIATE UNROLL-O1 (owner x86-m32, exit 2026-11-27): gcc completely
+        // unrolls small constant-trip nests at -O1 (x_life O1: 64k taken
+        // `jne` against gcc's 16k); clang's `UnrollLoops` is off at -O1
+        // (CompilerInvocation.cpp#L1936), so the pin unrolls forced loops only.
+        unroll_at_o1: true,
         x87_stack_slots: Some(8),
         speed_milliclocks_per_byte: per_byte,
         // DEVIATE SZ1 (owner x86-m32, exit 2026-11-20): D11 holds at -Os, so a callee whose copies grow the code stays a call (called_once_os: gcc -Os does; the pin inlines it).

@@ -59,6 +59,9 @@ pub struct Tuning {
     /// largest count that divides it (2 or more) rather than one that leaves
     /// a remainder: the remainder is a copy of the whole nest.
     pub unroll_jam_exact_count: bool,
+    /// The full unroll also runs at -O1 (clang's `UnrollLoops` is off there, so
+    /// the pin takes only forced loops): DEVIATE UNROLL-O1.
+    pub unroll_at_o1: bool,
     /// How many values the x87 register stack holds (8) where floats live
     /// there (a target without SSE2 floating point); none: floats are not
     /// held on a stack. The loop unroll caps its copies by it.
@@ -168,6 +171,7 @@ impl Tuning {
         unroll_partial_threshold: None,
         unroll_jam_partial_threshold: None,
         unroll_jam_exact_count: false,
+        unroll_at_o1: false,
         x87_stack_slots: None,
         slots_loop_width_rule: false,
         unswitch_threshold: None,

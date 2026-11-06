@@ -1498,7 +1498,7 @@ fn try_to_unroll_loop(
 
     // When automatic unrolling is disabled, do not unroll unless overridden for
     // this loop.
-    if run.options.only_when_forced && tm != Mode::ForcedByUser {
+    if run.options.only_when_forced && tm != Mode::ForcedByUser && !run.tti.unroll_at_o1() {
         return Unrolled::Unmodified;
     }
 
