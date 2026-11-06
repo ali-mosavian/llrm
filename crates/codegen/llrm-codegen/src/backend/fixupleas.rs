@@ -55,6 +55,8 @@ pub struct FixupLeas {
     pub slow_3ops: bool,
     pub slow_incdec: bool,
     pub size: bool,
+    /// DEVIATE M16-LEA-1: split an in-place `lea` where the encoder says the split is shorter.
+    pub shrink_in_place: bool,
 }
 
 impl LIRTransform for FixupLeas {
@@ -71,9 +73,17 @@ impl LIRTransform for FixupLeas {
         body: LirBody,
     ) -> Result<LirBody, String> {
         let (regs, bits) = (body.regs(), body.bits);
+        // The pin visits LEAs only: a body with none is not solved for
+        // liveness (13M of memory_expansion -O2, whose blocks held few).
+        if !body.blocks.iter().any(|block| block.insns.iter().any(|one| is_lea(one))) {
+            return Ok(body);
+        }
         let exits = liveness::dead_at_exit(&body);
         let mut out = body.clone();
         for block in &mut out.blocks {
+            if !block.insns.iter().any(|one| is_lea(one)) {
+                continue;
+            }
             let dead = _dead_after(regs, bits, block, exits[&block.at].clone());
             let mut current = block.clone();
             let mut at = 0;
@@ -81,11 +91,17 @@ impl LIRTransform for FixupLeas {
             while at < current.insns.len() {
                 if is_lea(&current.insns[at]) {
                     let opt_inc_dec = !self.slow_incdec || self.size;
-                    let rewritten = opt_two_addr_lea(regs, &current, at, &dead, opt_inc_dec).or_else(|| {
-                        self.slow_3ops
-                            .then(|| process_instr_for_slow_3op_lea(regs, &current, at, &dead, opt_inc_dec))
-                            .flatten()
-                    });
+                    let rewritten = opt_two_addr_lea(regs, &current, at, &dead, opt_inc_dec)
+                        .or_else(|| {
+                            self.slow_3ops
+                                .then(|| process_instr_for_slow_3op_lea(regs, &current, at, &dead, opt_inc_dec))
+                                .flatten()
+                        })
+                        .or_else(|| {
+                            (self.shrink_in_place && self.size)
+                                .then(|| shorter_in_place_split(regs, bits, &current, at, &dead))
+                                .flatten()
+                        });
                     if let Some(rewritten) = rewritten {
                         current = current.with_insns(rewritten);
                     }
@@ -180,6 +196,16 @@ pub fn opt_two_addr_lea(
     let what = lea.what.as_ref()?;
     let ([Loc::Reg(d)], [source]) = (what.dests.as_slice(), what.sources.as_slice()) else { return None };
     let (symbol, base, index, scale, offset) = lea_cell(source)?;
+    // `LEA64_32r` has 64-bit operands but a 32-bit result: its registers are
+    // compared by their 32-bit halves.
+    let half = |register: RegId| {
+        if d.width == 4 && register != RegId::None && regs.width_of(register) == Some(8) {
+            regs.named(register, 4)
+        } else {
+            register
+        }
+    };
+    let (base, index) = (half(base), half(index));
     if symbol || scale > 1 || !arithmetic_flags().is_subset(dead.get(&id(lea))?) || !free_fields(lea, EXACT) {
         return None;
     }
@@ -215,6 +241,75 @@ pub fn opt_two_addr_lea(
         return opt_lea_alu(regs, block, at, dead);
     }
     None
+}
+
+/// DEVIATE M16-LEA-1 (owner m16, exit 2026-11-12): `lea r,[r+x+k]` as the
+/// slow-3-ops split (`add r,x` then `add`/`inc`/`dec r`) where the encoder
+/// counts fewer bytes for the split than for the `lea`. The pin splits only
+/// for `slow-3ops-lea` CPUs ([L752][pin]); in real mode the `lea` carries
+/// `67 66` (`lea eax,[eax+edx+1]` is 6 B, `add eax,edx; inc eax` 5 B). In
+/// place only: with a live source the split needs a copy.
+///
+/// [pin]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FixupLEAs.cpp#L752
+pub fn shorter_in_place_split(
+    regs: Regs,
+    bits: u32,
+    block: &LirBlock,
+    at: usize,
+    dead: &DeadAfter,
+) -> Option<Vec<Arc<Insn>>> {
+    let lea = &block.insns[at];
+    let what = lea.what.as_ref()?;
+    let ([Loc::Reg(d)], [source]) = (what.dests.as_slice(), what.sources.as_slice()) else { return None };
+    let (_, base, index, scale, offset) = lea_cell(source)?;
+    let same = |a: RegId, b: RegId| a != RegId::None && regs.root(a) == regs.root(b);
+    if scale != 1
+        || offset == 0
+        || base == RegId::None
+        || index == RegId::None
+        || !(same(d.register, base) || same(d.register, index))
+        || !arithmetic_flags().is_subset(dead.get(&id(lea))?)
+        || !free_fields(lea, EXACT)
+    {
+        return None;
+    }
+    let other = if same(d.register, base) { index } else { base };
+    let names = alu_names();
+    let step = |op: Operation, name: &str, sources: Vec<Loc>| {
+        Arc::new(Insn {
+            what: Some(Semantics { op, name: Some(name.into()), dests: vec![Loc::Reg(*d)], sources, ..what.clone() }),
+            ..(**lea).clone()
+        })
+    };
+    let steps = [
+        step(
+            Operation::Binary,
+            names.add,
+            vec![Loc::Reg(*d), Loc::Reg(Reg { register: other, width: d.width })],
+        ),
+        match offset {
+            1 | -1 => step(Operation::Unary, if offset == 1 { names.inc } else { names.dec }, vec![Loc::Reg(*d)]),
+            _ => step(
+                Operation::Binary,
+                names.add,
+                vec![Loc::Reg(*d), Loc::Imm(Imm { value: offset, width: d.width, address: None })],
+            ),
+        },
+    ];
+    let bytes = |one: &Insn| crate::backend::peephole::emit(bits, one.what.as_ref()?).map(|made| made.code.len());
+    let after = steps.iter().map(|one| bytes(one)).sum::<Option<usize>>()?;
+    if after >= bytes(lea)? {
+        return None;
+    }
+    let mut out = Vec::with_capacity(block.insns.len() + 1);
+    for (position, one) in block.insns.iter().enumerate() {
+        if position == at {
+            out.extend(steps.iter().cloned());
+        } else {
+            out.push(Arc::clone(one));
+        }
+    }
+    Some(out)
 }
 
 /// `processInstrForSlow3OpLEA` (L752), for `slow-3ops-lea` CPUs (`x86-64`): a
@@ -690,6 +785,25 @@ mod tests {
         LirBlock { succ: succ.into(), ..LirBlock::new(0, insns) }
     }
 
+    /// The pass solved lane liveness of every function and walked every block
+    /// for what is dead after each instruction, though the pin looks at LEAs
+    /// only: 13M Ir of memory_expansion -O2. A body with none asks nothing.
+    #[test]
+    fn a_body_with_no_lea_is_not_solved_for_liveness() {
+        let blocks = vec![block(vec![mov(0, RegId::EAX, RegId::ECX), load(1, RegId::EDX)], vec![])];
+        let body = LirBody::new(
+            "plain",
+            0,
+            crate::model::lir::shared(blocks),
+            crate::support::hash::IndexMap::default(),
+            crate::support::hash::IndexMap::default(),
+        );
+        let before = crate::backend::liveness::exits_computed();
+        let done = FixupLeas::default().transform(body.clone()).expect("a body");
+        assert_eq!(crate::backend::liveness::exits_computed(), before, "liveness was solved");
+        assert!(done.blocks.iter().zip(&body.blocks).all(|(one, two)| one.insns.same_insns(&two.insns)));
+    }
+
     #[test]
     fn a_write_to_a_byte_of_a_register_is_a_write_of_the_register() {
         let al = insn(0, Operation::Move, "mov", vec![reg(RegId::AL, 1)], vec![reg(RegId::CL, 1)]);
@@ -797,6 +911,67 @@ mod tests {
             let dead: DeadAfter = [(key, kept)].into_iter().collect();
             assert!(opt_two_addr_lea(regs(), &b, 0, &dead, true).is_none(), "flag {live:#x} live");
         }
+    }
+
+    /// `lea eax,[eax+ecx+k]` in real mode (67 66 8D, the sum of the encoder's
+    /// bytes): 6 B up to a byte displacement, 9 B past it. The split `add
+    /// eax,ecx` + `inc`/`dec` is 5 B, with an `add eax,k` 7 B (k a byte) or
+    /// 9 B. Only the unit offsets are shorter split: at -Os `x + y + 1` was the
+    /// 6 B `lea` where the pin's two-address sequence is 5 B.
+    #[test]
+    fn an_in_place_three_part_lea_splits_only_where_the_encoder_counts_fewer_bytes() {
+        let split_of = |offset: i64, dest: RegId| {
+            let address = crate::model::ir::AddressRef {
+                through: RegId::EAX,
+                index_through: RegId::ECX,
+                scale: 1,
+                offset,
+                ..crate::model::ir::AddressRef::new(None)
+            };
+            let lea = insn(0, Operation::Address, "lea", vec![reg(dest, 4)], vec![Loc::Address(address)]);
+            let b = block(vec![lea], vec![]);
+            let dead: DeadAfter = [(id(&b.insns[0]), arithmetic_flags())].into_iter().collect();
+            shorter_in_place_split(regs(), 16, &b, 0, &dead).map(|made| {
+                made.iter().map(|one| one.what.as_ref().unwrap().name.as_deref().unwrap().to_owned()).collect::<Vec<_>>()
+            })
+        };
+        let names = |parts: &[&str]| Some(parts.iter().map(|one| one.to_string()).collect::<Vec<_>>());
+        assert_eq!(split_of(1, RegId::EAX), names(&["add", "inc"]));
+        assert_eq!(split_of(-1, RegId::EAX), names(&["add", "dec"]));
+        for kept in [2, 127, 128, 300, -128, -129] {
+            assert_eq!(split_of(kept, RegId::EAX), None, "offset {kept}: the lea is not longer");
+        }
+        // A destination that is neither term needs a copy for the split.
+        assert_eq!(split_of(1, RegId::EDX), None);
+    }
+
+    /// `lea ecx,[rcx+1]` (`LEA64_32r`: 64-bit base, 32-bit result) is `inc
+    /// ecx`: the pin compares the 32-bit halves of its registers. The
+    /// 64-bit base never equalled the 32-bit destination, so the byte add
+    /// the three-address pass made an `lea` stayed one (grep m64 -Os, +1 B
+    /// against the add).
+    #[test]
+    fn a_lea_of_a_wide_base_into_its_dword_is_an_inc() {
+        let m64 = Regs(&llrm_x86_m64::REGISTER_INFO);
+        let address =
+            crate::model::ir::AddressRef { through: RegId::RCX, offset: 1, ..crate::model::ir::AddressRef::new(None) };
+        let lea = insn(0, Operation::Address, "lea", vec![reg(RegId::ECX, 4)], vec![Loc::Address(address)]);
+        let b = block(vec![lea], vec![]);
+        let dead: DeadAfter = [(id(&b.insns[0]), arithmetic_flags())].into_iter().collect();
+        let made = opt_two_addr_lea(m64, &b, 0, &dead, true).expect("an inc");
+        assert_eq!(made[0].what.as_ref().unwrap().name.as_deref(), Some("inc"));
+    }
+
+    /// `lea ebx,[bx+1]` at m16 wraps its address at 16 bits: `inc ebx` would
+    /// not. Only a 64-bit base is read by its low half.
+    #[test]
+    fn a_lea_of_a_word_base_into_its_dword_is_no_inc() {
+        let address =
+            crate::model::ir::AddressRef { through: RegId::BX, offset: 1, ..crate::model::ir::AddressRef::new(None) };
+        let lea = insn(0, Operation::Address, "lea", vec![reg(RegId::EBX, 4)], vec![Loc::Address(address)]);
+        let b = block(vec![lea], vec![]);
+        let dead: DeadAfter = [(id(&b.insns[0]), arithmetic_flags())].into_iter().collect();
+        assert!(opt_two_addr_lea(regs(), &b, 0, &dead, true).is_none());
     }
 
     #[test]
@@ -907,7 +1082,7 @@ mod tests {
             vec![reg(RegId::RDI, 8), Loc::Imm(Imm { value: 8, width: 8, address: None })],
         );
         let ret = Arc::new(Insn {
-            requires: vec![(crate::model::ir::Held { value: 7, width: 8 }, RegId::RAX)],
+            requires: vec![(crate::model::ir::Held { value: 7, width: 8, offset: 0 }, RegId::RAX)],
             reads_complete: true,
             ..Insn::new(2, Some((2, 2)), Some(Semantics::new(Operation::Return)), vec![], vec![7])
         });

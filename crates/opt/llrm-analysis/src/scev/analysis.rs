@@ -124,7 +124,7 @@ impl Analysis for Assumes {
         analyses: &mut Analyses,
     ) -> AssumptionCache {
         let outer = analyses.outer();
-        AssumptionCache::of(context, &outer.globals, &outer.metadata, function)
+        AssumptionCache::of_declared(context, &outer.globals, &outer.metadata, function, outer.assume_declared())
     }
 }
 
@@ -213,13 +213,23 @@ pub struct ScevSession {
     scev: ScalarEvolution,
 }
 
+thread_local! {
+    static SESSIONS_MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many sessions this thread made, for a test that a pass asking many
+/// questions of one function does not make a session for each.
+pub fn sessions_made() -> usize {
+    SESSIONS_MADE.with(std::cell::Cell::get)
+}
+
 impl ScevSession {
     pub fn of(
         context: &llrm_mir::context::Context,
         function: &Function,
         outer: &llrm_mir::passes::Outer,
     ) -> Self {
-        Self::within(context, &outer.globals, &outer.metadata, function)
+        Self::within_declared(context, &outer.globals, &outer.metadata, function, outer.assume_declared())
     }
 
     /// [`ScevSession::of`] for a caller that holds the module's globals and
@@ -230,9 +240,22 @@ impl ScevSession {
         metadata: &[llrm_mir::module::MetadataNode],
         function: &Function,
     ) -> Self {
+        Self::within_declared(context, globals, metadata, function, llrm_mir::valuetracking::assume_declared(globals))
+    }
+
+    /// [`ScevSession::within`], told whether the module declares `llvm.assume`:
+    /// a caller that holds the answer does not scan every global per function.
+    pub fn within_declared(
+        context: &llrm_mir::context::Context,
+        globals: &[llrm_mir::module::GlobalValue],
+        metadata: &[llrm_mir::module::MetadataNode],
+        function: &Function,
+        declared: bool,
+    ) -> Self {
+        SESSIONS_MADE.with(|made| made.set(made.get() + 1));
         let tree = DomTree::of(function);
         let loops = LoopInfo::analyze(function, || &tree);
-        let assumptions = AssumptionCache::of(context, globals, metadata, function);
+        let assumptions = AssumptionCache::of_declared(context, globals, metadata, function, declared);
         Self { tree, loops, assumptions, scev: ScalarEvolution::new() }
     }
 

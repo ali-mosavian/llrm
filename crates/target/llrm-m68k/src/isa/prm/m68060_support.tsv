@@ -1,0 +1,245 @@
+instruction	class	status	condition	page	table
+ABCD	integer	hardware	-	D-1	Table D-1
+ADD	integer	hardware	-	D-1	Table D-1
+ADDA	integer	hardware	-	D-1	Table D-1
+ADDI	integer	hardware	-	D-1	Table D-1
+ADDQ	integer	hardware	-	D-1	Table D-1
+ADDX	integer	hardware	-	D-1	Table D-1
+AND	integer	hardware	-	D-1	Table D-1
+ANDI	integer	hardware	-	D-1	Table D-1
+ANDI to CCR	integer	hardware	-	D-1	Table D-1
+ANDI to SR	integer	hardware	privileged (fn 1)	D-1	Table D-1
+ASL, ASR	integer	hardware	-	D-1	Table D-1
+Bcc	integer	hardware	-	D-1	Table D-1
+BCHG	integer	hardware	-	D-1	Table D-1
+BCLR	integer	hardware	-	D-1	Table D-1
+BFCHG	integer	hardware	-	D-1	Table D-1
+BFCLR	integer	hardware	-	D-1	Table D-1
+BFEXTS	integer	hardware	-	D-1	Table D-1
+BFEXTU	integer	hardware	-	D-1	Table D-1
+BFFFO	integer	hardware	-	D-1	Table D-1
+BFINS	integer	hardware	-	D-2	Table D-1
+BFSET	integer	hardware	-	D-2	Table D-1
+BFTST	integer	hardware	-	D-2	Table D-1
+BGND	integer	n/a	blank in MC68060 column	D-2	Table D-1
+BKPT	integer	hardware	-	D-2	Table D-1
+BRA	integer	hardware	-	D-2	Table D-1
+BSET	integer	hardware	-	D-2	Table D-1
+BSR	integer	hardware	-	D-2	Table D-1
+BTST	integer	hardware	-	D-2	Table D-1
+CALLM	integer	n/a	blank in MC68060 column	D-2	Table D-1
+CAS, CAS2	integer	unimplemented	mark X,3 (fn 3); C-5 lists CAS only for misaligned <ea> and CAS2 always	D-2	Table D-1
+CHK	integer	hardware	-	D-2	Table D-1
+CHK2	integer	unimplemented	mark 3 (fn 3)	D-2	Table D-1
+CINV	integer	hardware	privileged (fn 1)	D-2	Table D-1
+CLR	integer	hardware	-	D-2	Table D-1
+CMP	integer	hardware	-	D-2	Table D-1
+CMPA	integer	hardware	-	D-2	Table D-1
+CMPI	integer	hardware	-	D-2	Table D-1
+CMPM	integer	hardware	-	D-2	Table D-1
+CMP2	integer	unimplemented	mark 3 (fn 3)	D-2	Table D-1
+cpBcc	integer	n/a	blank in MC68060 column	D-2	Table D-1
+cpDBcc	integer	n/a	blank in MC68060 column	D-2	Table D-1
+cpGEN	integer	n/a	blank in MC68060 column	D-2	Table D-1
+cpRESTORE	integer	n/a	blank in MC68060 column	D-2	Table D-1
+cpSAVE	integer	n/a	blank in MC68060 column	D-2	Table D-1
+cpScc	integer	n/a	blank in MC68060 column	D-2	Table D-1
+cpTRAPcc	integer	n/a	blank in MC68060 column	D-2	Table D-1
+CPUSH	integer	hardware	privileged (fn 1)	D-2	Table D-1
+DBcc	integer	hardware	-	D-2	Table D-1
+DIVS	integer	unimplemented	mark X,3 (fn 3); C-5 names the 64/32 form only	D-2	Table D-1
+DIVSL	integer	hardware	mark X; conflicts with C-5, which lists the 64/32 DIVS.L form as unimplemented	D-2	Table D-1
+DIVU	integer	unimplemented	mark X,3 (fn 3); C-5 names the 64/32 form only	D-2	Table D-1
+DIVUL	integer	hardware	mark X; conflicts with C-5, which lists the 64/32 DIVU.L form as unimplemented	D-2	Table D-1
+EOR	integer	hardware	-	D-2	Table D-1
+EORI	integer	hardware	-	D-2	Table D-1
+EORI to CCR	integer	hardware	-	D-2	Table D-1
+EORI to SR	integer	hardware	privileged (fn 1)	D-2	Table D-1
+EXG	integer	hardware	-	D-2	Table D-1
+EXT	integer	hardware	-	D-2	Table D-1
+EXTB	integer	hardware	-	D-2	Table D-1
+FABS	fpu	hardware	fn 2	D-2	Table D-1
+FSABS, FDABS	fpu	hardware	fn 2	D-2	Table D-1
+FACOS	fpu	unimplemented	software-supported (fn 3)	D-2	Table D-1; also 6-11, C-3
+FADD	fpu	hardware	fn 2	D-2	Table D-1
+FSADD, FDADD	fpu	hardware	fn 2	D-2	Table D-1
+FASIN	fpu	unimplemented	software-supported (fn 3)	D-2	Table D-1; also 6-11, C-3
+FATAN	fpu	unimplemented	software-supported (fn 3)	D-3	Table D-1; also 6-11, C-3
+FATANH	fpu	unimplemented	software-supported (fn 3)	D-3	Table D-1; also 6-11, C-3
+FBcc	fpu	hardware	fn 2	D-3	Table D-1
+FCMP	fpu	hardware	fn 2	D-3	Table D-1
+FCOS	fpu	unimplemented	software-supported (fn 3)	D-3	Table D-1; also 6-11, C-3
+FCOSH	fpu	unimplemented	software-supported (fn 3)	D-3	Table D-1; also 6-11, C-3
+FDBcc	fpu	unimplemented	software-supported (fn 3)	D-3	Table D-1; also 6-11, C-3
+FDIV	fpu	hardware	fn 2	D-3	Table D-1
+FSDIV, FDDIV	fpu	hardware	fn 2	D-3	Table D-1
+FETOX	fpu	unimplemented	software-supported (fn 3)	D-3	Table D-1; also 6-11, C-3
+FETOXM1	fpu	unimplemented	software-supported (fn 3)	D-3	Table D-1; also 6-11, C-3
+FGETEXP	fpu	unimplemented	software-supported (fn 3)	D-3	Table D-1; also 6-11, C-3
+FGETMAN	fpu	unimplemented	software-supported (fn 3)	D-3	Table D-1; also 6-11, C-3
+FINT	fpu	hardware	fn 2	D-3	Table D-1; not in 6-11 or C-3
+FINTRZ	fpu	hardware	fn 2	D-3	Table D-1; not in 6-11 or C-3
+FLOG10	fpu	unimplemented	software-supported (fn 3)	D-3	Table D-1; also 6-11, C-3
+FLOG2	fpu	unimplemented	software-supported (fn 3)	D-3	Table D-1; also 6-11, C-3
+FLOGN	fpu	unimplemented	software-supported (fn 3)	D-3	Table D-1; also 6-11, C-3
+FLOGNP1	fpu	unimplemented	software-supported (fn 3)	D-3	Table D-1; also 6-11, C-3
+FMOD	fpu	unimplemented	software-supported (fn 3)	D-3	Table D-1; also 6-11, C-3
+FMOVE	fpu	hardware	fn 2	D-3	Table D-1
+FSMOVE, FDMOVE	fpu	hardware	fn 2	D-3	Table D-1
+FMOVECR	fpu	unimplemented	software-supported (fn 3)	D-3	Table D-1; also 6-11, C-3
+FMOVEM	fpu	unimplemented	mark X,2,3: dynamic register list only (6-11, C-3); static list hardware by implication	D-3	Table D-1; also 6-11, C-3
+FMUL	fpu	hardware	fn 2	D-3	Table D-1
+FSMUL, FDMUL	fpu	hardware	fn 2	D-3	Table D-1
+FNEG	fpu	hardware	fn 2	D-3	Table D-1
+FSNEG, FDNEG	fpu	hardware	fn 2	D-3	Table D-1
+FNOP	fpu	hardware	fn 2	D-3	Table D-1
+FREM	fpu	unimplemented	software-supported (fn 3)	D-3	Table D-1; also 6-11, C-3
+FRESTORE	fpu	hardware	fn 2; privileged (fn 1)	D-3	Table D-1
+FSAVE	fpu	hardware	fn 2; mnemonic marked with asterisk, no note on page	D-3	Table D-1
+FSCALE	fpu	unimplemented	software-supported (fn 3)	D-3	Table D-1; also 6-11, C-3
+FScc	fpu	unimplemented	software-supported (fn 3)	D-3	Table D-1; also 6-11, C-3
+FSGLDIV	fpu	unimplemented	mark 2,3 (fn 3); conflict: absent from 6-11 and C-3, timed in 10-25	D-3	Table D-1; 10-25
+FSGLMUL	fpu	unimplemented	mark 2,3 (fn 3); conflict: absent from 6-11 and C-3, timed in 10-25	D-3	Table D-1; 10-25
+FSIN	fpu	unimplemented	software-supported (fn 3)	D-3	Table D-1; also 6-11, C-3
+FSINCOS	fpu	unimplemented	software-supported (fn 3)	D-3	Table D-1; also 6-11, C-3
+FSINH	fpu	unimplemented	software-supported (fn 3)	D-3	Table D-1; also 6-11, C-3
+FSQRT	fpu	hardware	fn 2	D-3	Table D-1
+FSSQRT, FDSQRT	fpu	hardware	fn 2	D-3	Table D-1
+FSUB	fpu	hardware	fn 2	D-3	Table D-1
+FSSUB, FDSUB	fpu	hardware	fn 2	D-3	Table D-1
+FTAN	fpu	unimplemented	software-supported (fn 3)	D-3	Table D-1; also 6-11, C-3
+FTANH	fpu	unimplemented	software-supported (fn 3)	D-3	Table D-1; also 6-11, C-3
+FTENTOX	fpu	unimplemented	software-supported (fn 3)	D-4	Table D-1; also 6-11, C-3
+FTRAPcc	fpu	unimplemented	software-supported (fn 3)	D-4	Table D-1; also 6-11, C-3
+FTST	fpu	hardware	fn 2	D-4	Table D-1
+FTWOTOX	fpu	unimplemented	software-supported (fn 3)	D-4	Table D-1; also 6-11, C-3
+ILLEGAL	integer	hardware	-	D-4	Table D-1
+JMP	integer	hardware	-	D-4	Table D-1
+JSR	integer	hardware	-	D-4	Table D-1
+LEA	integer	hardware	-	D-4	Table D-1
+LINK	integer	hardware	-	D-4	Table D-1
+LPSTOP	integer	n/a	blank in MC68060 column	D-4	Table D-1
+LSL, LSR	integer	hardware	-	D-4	Table D-1
+MOVE	integer	hardware	-	D-4	Table D-1
+MOVEA	integer	hardware	-	D-4	Table D-1
+MOVE from CCR	integer	hardware	-	D-4	Table D-1
+MOVE to CCR	integer	hardware	-	D-4	Table D-1
+MOVE from SR	integer	hardware	privileged (fn 1)	D-4	Table D-1
+MOVE to SR	integer	hardware	privileged (fn 1)	D-4	Table D-1
+MOVE USP	integer	hardware	privileged (fn 1)	D-4	Table D-1
+MOVE16	integer	hardware	-	D-4	Table D-1
+MOVEC	integer	hardware	privileged (fn 1)	D-4	Table D-1
+MOVEM	integer	hardware	-	D-4	Table D-1
+MOVEP	integer	unimplemented	blank in MC68060 column (D-4); C-5 lists it as unimplemented	D-4	Table D-1; C-5
+MOVEQ	integer	hardware	-	D-4	Table D-1
+MOVES	integer	hardware	privileged (fn 1)	D-4	Table D-1
+MULS	integer	unimplemented	mark X,3 (fn 3); C-5 names the 32*32=>64 form only	D-4	Table D-1
+MULU	integer	unimplemented	mark X,3 (fn 3); C-5 names the 32*32=>64 form only	D-4	Table D-1
+NBCD	integer	hardware	-	D-4	Table D-1
+NEG	integer	hardware	-	D-4	Table D-1
+NEGX	integer	hardware	-	D-4	Table D-1
+NOP	integer	hardware	-	D-4	Table D-1
+NOT	integer	hardware	-	D-4	Table D-1
+OR	integer	hardware	-	D-4	Table D-1
+ORI	integer	hardware	-	D-4	Table D-1
+ORI to CCR	integer	hardware	-	D-4	Table D-1
+ORI to SR	integer	hardware	privileged (fn 1)	D-4	Table D-1
+PACK	integer	hardware	-	D-4	Table D-1
+PBcc	integer	n/a	blank in MC68060 column	D-4	Table D-1
+PDBcc	integer	n/a	blank in MC68060 column	D-4	Table D-1
+PEA	integer	hardware	-	D-4	Table D-1
+PFLUSH	integer	hardware	privileged (fn 1)	D-4	Table D-1
+PFLUSHA	integer	n/a	blank in MC68060 column	D-4	Table D-1
+PFLUSHR	integer	n/a	blank in MC68060 column	D-4	Table D-1
+PFLUSHS	integer	n/a	blank in MC68060 column	D-4	Table D-1
+PLPA	integer	hardware	privileged (fn 1)	D-4	Table D-1
+PLOAD	integer	n/a	blank in MC68060 column	D-5	Table D-1
+PMOVE	integer	n/a	blank in MC68060 column	D-5	Table D-1
+PRESTORE	integer	n/a	blank in MC68060 column	D-5	Table D-1
+PSAVE	integer	n/a	blank in MC68060 column	D-5	Table D-1
+PScc	integer	n/a	blank in MC68060 column	D-5	Table D-1
+PTEST	integer	n/a	blank in MC68060 column	D-5	Table D-1
+PTRAPcc	integer	n/a	blank in MC68060 column	D-5	Table D-1
+PVALID	integer	n/a	blank in MC68060 column	D-5	Table D-1
+RESET	integer	hardware	privileged (fn 1)	D-5	Table D-1
+ROL, ROR	integer	hardware	-	D-5	Table D-1
+ROXL, ROXR	integer	hardware	-	D-5	Table D-1
+RTD	integer	hardware	-	D-5	Table D-1
+RTE	integer	hardware	privileged (fn 1)	D-5	Table D-1
+RTM	integer	n/a	blank in MC68060 column	D-5	Table D-1
+RTR	integer	hardware	-	D-5	Table D-1
+RTS	integer	hardware	-	D-5	Table D-1
+SBCD	integer	hardware	-	D-5	Table D-1
+Scc	integer	hardware	-	D-5	Table D-1
+STOP	integer	hardware	privileged (fn 1)	D-5	Table D-1
+SUB	integer	hardware	-	D-5	Table D-1
+SUBA	integer	hardware	-	D-5	Table D-1
+SUBI	integer	hardware	-	D-5	Table D-1
+SUBQ	integer	hardware	-	D-5	Table D-1
+SUBX	integer	hardware	-	D-5	Table D-1
+SWAP	integer	hardware	-	D-5	Table D-1
+TAS	integer	hardware	-	D-5	Table D-1
+TBLS, TBLSN	integer	n/a	blank in MC68060 column	D-5	Table D-1
+TBLU, TBLUN	integer	n/a	blank in MC68060 column	D-5	Table D-1
+TRAP	integer	hardware	-	D-5	Table D-1
+TRAPcc	integer	hardware	-	D-5	Table D-1
+TRAPV	integer	hardware	-	D-5	Table D-1
+TST	integer	hardware	-	D-5	Table D-1
+UNLK	integer	hardware	-	D-5	Table D-1
+UNPK	integer	hardware	-	D-5	Table D-1
+MULS.L <ea>,Dr:Dq (32*32=>64)	integer	unimplemented	32*32 => 64 form only	C-5	C-5 list (text C-4); 8.2.4 p 8-8
+MULU.L <ea>,Dr:Dq (32*32=>64)	integer	unimplemented	32*32 => 64 form only	C-5	C-5 list (text C-4); 8.2.4 p 8-8
+DIVS.L <ea>,Dr:Dq (64/32=>32r,32q)	integer	unimplemented	64/32 => 32r,32q form only	C-5	C-5 list (text C-4); 8.2.4 p 8-8
+DIVU.L <ea>,Dr:Dq (64/32=>32r,32q)	integer	unimplemented	64/32 => 32r,32q form only	C-5	C-5 list (text C-4); 8.2.4 p 8-8
+MOVEP Dx,(d16,Ay)	integer	unimplemented	size = W or L	C-5	C-5 list (text C-4); 8.2.4 p 8-8
+MOVEP (d16,Ay),Dx	integer	unimplemented	size = W or L	C-5	C-5 list (text C-4); 8.2.4 p 8-8
+CHK2 <ea>,Rn	integer	unimplemented	size = B, W, or L	C-5	C-5 list (text C-4); 8.2.4 p 8-8
+CMP2 <ea>,Rn	integer	unimplemented	size = B, W, or L	C-5	C-5 list (text C-4); 8.2.4 p 8-8
+CAS2 Dc1:Dc2,Du1:Du2,(Rn1):(Rn2)	integer	unimplemented	size = W or L	C-5	C-5 list (text C-4); 8.2.4 p 8-8
+CAS Dc,Du,<ea>	integer	unimplemented	size = W or L, misaligned <ea> only	C-5	C-5 list (text C-4); 8.2.4 p 8-8
+data type: normalized, SGL	fpu	hardware	-	C-13	Table C-4
+data type: normalized, DBL	fpu	hardware	-	C-13	Table C-4
+data type: normalized, EXT	fpu	hardware	-	C-13	Table C-4
+data type: normalized, packed decimal real (DEC)	fpu	unimplemented	legend U: handled by M68060SP	C-13	Table C-4; text 6.5.2 p 6-21
+data type: normalized, byte integer	integer	hardware	-	C-13	Table C-4
+data type: normalized, word integer	integer	hardware	-	C-13	Table C-4
+data type: normalized, long-word integer	integer	hardware	-	C-13	Table C-4
+data type: zero, SGL	fpu	hardware	-	C-13	Table C-4
+data type: zero, DBL	fpu	hardware	-	C-13	Table C-4
+data type: zero, EXT	fpu	hardware	-	C-13	Table C-4
+data type: zero, packed decimal real (DEC)	fpu	unimplemented	legend U: handled by M68060SP	C-13	Table C-4
+data type: zero, byte integer	integer	hardware	-	C-13	Table C-4
+data type: zero, word integer	integer	hardware	-	C-13	Table C-4
+data type: zero, long-word integer	integer	hardware	-	C-13	Table C-4
+data type: infinity, SGL	fpu	hardware	-	C-13	Table C-4
+data type: infinity, DBL	fpu	hardware	-	C-13	Table C-4
+data type: infinity, EXT	fpu	hardware	-	C-13	Table C-4
+data type: infinity, packed decimal real (DEC)	fpu	unimplemented	legend U: handled by M68060SP	C-13	Table C-4
+data type: infinity, byte integer	integer	n/a	dash, no legend on page	C-13	Table C-4
+data type: infinity, word integer	integer	n/a	dash, no legend on page	C-13	Table C-4
+data type: infinity, long-word integer	integer	n/a	dash, no legend on page	C-13	Table C-4
+data type: NAN, SGL	fpu	hardware	-	C-13	Table C-4
+data type: NAN, DBL	fpu	hardware	-	C-13	Table C-4
+data type: NAN, EXT	fpu	hardware	-	C-13	Table C-4
+data type: NAN, packed decimal real (DEC)	fpu	unimplemented	legend U: handled by M68060SP	C-13	Table C-4
+data type: NAN, byte integer	integer	n/a	dash, no legend on page	C-13	Table C-4
+data type: NAN, word integer	integer	n/a	dash, no legend on page	C-13	Table C-4
+data type: NAN, long-word integer	integer	n/a	dash, no legend on page	C-13	Table C-4
+data type: denormalized, SGL	fpu	unimplemented	legend U: handled by M68060SP; 6.5.2 p 6-21	C-13	Table C-4
+data type: denormalized, DBL	fpu	unimplemented	legend U: handled by M68060SP; 6.5.2 p 6-21	C-13	Table C-4
+data type: denormalized, EXT	fpu	unimplemented	legend U: handled by M68060SP; 6.5.2 p 6-21	C-13	Table C-4
+data type: denormalized, packed decimal real (DEC)	fpu	unimplemented	legend U: handled by M68060SP	C-13	Table C-4
+data type: denormalized, byte integer	integer	n/a	dash, no legend on page	C-13	Table C-4
+data type: denormalized, word integer	integer	n/a	dash, no legend on page	C-13	Table C-4
+data type: denormalized, long-word integer	integer	n/a	dash, no legend on page	C-13	Table C-4
+data type: unnormalized, SGL	fpu	n/a	dash, no legend on page	C-13	Table C-4
+data type: unnormalized, DBL	fpu	n/a	dash, no legend on page	C-13	Table C-4
+data type: unnormalized, EXT	fpu	unimplemented	legend U: handled by M68060SP; 6.5.2 p 6-21	C-13	Table C-4
+data type: unnormalized, packed decimal real (DEC)	fpu	unimplemented	legend U: handled by M68060SP	C-13	Table C-4
+data type: unnormalized, byte integer	integer	n/a	dash, no legend on page	C-13	Table C-4
+data type: unnormalized, word integer	integer	n/a	dash, no legend on page	C-13	Table C-4
+data type: unnormalized, long-word integer	integer	n/a	dash, no legend on page	C-13	Table C-4
+FMOVEM.X <dynamic register list>	fpu	unimplemented	unimplemented effective address	C-13	Table C-3; 6-11; 6.5.3 p 6-22
+FMOVEM.L #immediate, control register list	fpu	unimplemented	more than one control register (6.5.3); C-3 says 2 or 3	C-13	Table C-3; 6-11; 6.5.3 p 6-22
+F<op>.X #immediate,FPn	fpu	unimplemented	extended-precision immediate source	C-13	Table C-3; 6-11; 6.5.3 p 6-22
+F<op>.P #immediate,FPn	fpu	unimplemented	packed BCD immediate source	C-13	Table C-3; 6-11; 6.5.3 p 6-22

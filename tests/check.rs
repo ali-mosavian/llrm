@@ -336,3 +336,16 @@ fn test_check_max_holds_a_known_gap_to_its_ceiling() {
     assert!(check("a\nx\nx\nx\nc\n", source).is_err(), "three are one too many");
     assert!(check("a\nx\nx\nx\n", "; CHECK: a\n; CHECK-MAX-2: x").is_err(), "a trailing ceiling covers the rest");
 }
+
+/// An unset toolchain variable made `llrm-cc` fall back to the system clang: 69 false reds on 2026-11-05.
+#[test]
+fn test_an_unset_toolchain_variable_is_named() {
+    let none = |_: &str| None;
+    assert_eq!(common::cc::missing_env(none, false, false), ["LLRM_PIN_CLANG", "LLRM_OW", "LLRM_CLANG_M16"]);
+    assert_eq!(common::cc::missing_env(none, true, false), ["LLRM_PIN_CLANG", "LLRM_OW"]);
+    assert_eq!(common::cc::missing_env(none, false, true), ["LLRM_PIN_CLANG"]);
+    let set = |_: &str| Some(std::ffi::OsString::from("/"));
+    assert!(common::cc::missing_env(set, false, false).is_empty(), "set to an existing path: nothing missing");
+    let gone = |_: &str| Some(std::ffi::OsString::from("/no/such/clang"));
+    assert_eq!(common::cc::missing_env(gone, false, true), ["LLRM_PIN_CLANG"], "a path that does not exist counts");
+}

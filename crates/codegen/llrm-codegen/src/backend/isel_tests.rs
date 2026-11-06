@@ -78,8 +78,13 @@ fn assembled_by(
 ) -> String {
     let module =
         assemble::assembled(&parsed(text), abi, "T_TEXT", ProfileOrName::Name(cpu), segments).expect("assembles");
-    crate::backend::objbuild::written_as(&module, "t.asm", crate::backend::objbuild::CodeLayout::OneSegment)
-        .expect("encodes");
+    crate::backend::objbuild::written_as(
+        &module,
+        "t.asm",
+        crate::backend::objbuild::CodeLayout::OneSegment,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .expect("encodes");
     masm::text(&module).expect("prints")
 }
 
@@ -110,6 +115,7 @@ fn listing_float_store(
         false,
         true,
         false,
+        true,
     )
     .expect("the 486 profile");
     let module = assemble::assembled(
@@ -185,9 +191,9 @@ done:
 }
 ";
     let got = listing(text, "sum");
-    // The comparison stays flags beside its branch; the phis' zeros are made in
-    // the entry, which runs a copy of the test and falls into the loop (the
-    // likelier way) rather than copy the return over it. The scheduler may put
+    // The comparison stays flags beside its branch. m16's tail-duplication
+    // threshold is 1 (#6827), so the test is not copied into the loop: it
+    // closes with `jmp` (the mid-end rotates real loops first). The scheduler may put
     // the load of n and the two zeros in any order and register names, so the
     // test pins the shape: three entry instructions (the load and two zeros),
     // the test, and the loop with the registers its instructions name.
@@ -207,13 +213,13 @@ done:
     assert_eq!(
         &got[6..],
         [
+            "L0_1:".to_owned(),
             format!("cmp {i}, {n}"),
             "jge L0_8".to_owned(),
             "L0_5:".to_owned(),
             format!("add {sum}, {i}"),
             format!("inc {i}"),
-            format!("cmp {i}, {n}"),
-            "jl L0_5".to_owned(),
+            "jmp L0_1".to_owned(),
             "L0_8:".to_owned(),
             "pop bp".to_owned(),
             "retf".to_owned(),
@@ -1342,7 +1348,9 @@ b1:
 
 /// A call names its callee as the procedure is defined: runtime.nib's
 /// `buffers.allocate`, no assembler symbol, was defined as `G$0` but called
-/// as `_buffers.allocate`, and the runtime did not link.
+/// as `_buffers.allocate`, and the runtime did not link. The private name keeps
+/// the source name, cleaned (`G$0$buffers$allocate`), so an object says where a
+/// function came from.
 #[test]
 fn test_a_call_names_an_internal_callee_as_it_is_defined() {
     let text = "define internal i16 @buffers.allocate() addrspace(1) {
@@ -1354,8 +1362,26 @@ define i16 @f() addrspace(1) {
 }
 ";
     let text = assembled(text);
-    assert!(text.contains("G$0 proc far"), "{text}");
-    assert!(text.lines().any(|line| line.trim() == "call far ptr G$0"), "{text}");
+    assert!(text.contains("G$0$buffers$allocate proc far"), "{text}");
+    assert!(text.lines().any(|line| line.trim() == "call far ptr G$0$buffers$allocate"), "{text}");
+}
+
+/// A library function's private name starts with the library it came from:
+/// `std.io.File.open` is `G$0$std$io$File$open`. The size tool counts a Nib
+/// object's standard-library instantiations apart from the program's own by it;
+/// they were `G$n` alone, and stft_fixed read 560 library bytes as its code.
+#[test]
+fn test_a_library_function_keeps_its_origin_in_its_private_name() {
+    let text = "define internal i16 @std.io.File.open() addrspace(1) {
+  ret i16 1
+}
+define i16 @f() addrspace(1) {
+  %v = call addrspace(1) i16 @std.io.File.open()
+  ret i16 %v
+}
+";
+    let text = assembled(text);
+    assert!(text.contains("G$0$std$io$File$open proc far"), "{text}");
 }
 
 /// Constant folding leaves `br i1 true` and a float constant as an operand,
@@ -1386,7 +1412,7 @@ b3:
             "L0_0:",
             "fnstcw word ptr [bp-4]",
             "fnstcw word ptr [bp-6]",
-            "or word ptr [bp-6], 3072",
+            "or byte ptr [bp-5], 12",
             "fld dword ptr $K1",
             "fadd dword ptr $K2",
             "fldcw word ptr [bp-6]",
@@ -1642,7 +1668,7 @@ fn test_a_float_to_an_integer_is_stored_toward_zero() {
             "L0_0:",
             "fnstcw word ptr [bp-6]",
             "fnstcw word ptr [bp-8]",
-            "or word ptr [bp-8], 3072",
+            "or byte ptr [bp-7], 12",
             "fld qword ptr [bp+6]",
             "fldcw word ptr [bp-8]",
             "fist word ptr [bp-2]",
@@ -2223,7 +2249,7 @@ define void @f(double %x) addrspace(1) {
             "L0_0:",
             "fnstcw word ptr [bp-2]",
             "fnstcw word ptr [bp-4]",
-            "or word ptr [bp-4], 3072",
+            "or byte ptr [bp-3], 12",
             "fld qword ptr [bp+6]",
             "fldcw word ptr [bp-4]",
             "fist word ptr b",
@@ -4633,9 +4659,13 @@ fn test_dbg_lines_become_linnum() {
         assemble::assembled(&module, &qb(), "T_TEXT", ProfileOrName::Name("486"), &crate::backend::target::BASIC)
             .expect("assembles");
     let records = |assembled: &crate::backend::masm::Module| {
-        let object =
-            crate::backend::objbuild::written_as(assembled, "t.asm", crate::backend::objbuild::CodeLayout::OneSegment)
-                .expect("encodes");
+        let object = crate::backend::objbuild::written_as(
+            assembled,
+            "t.asm",
+            crate::backend::objbuild::CodeLayout::OneSegment,
+            llrm_target::Target::objects(&llrm_x86_m32::M32),
+        )
+        .expect("encodes");
         llrm_omf::omf::parse(&object).expect("parses")
     };
     // Lines alone are a BASIC statement table's, not -g.
@@ -4646,15 +4676,17 @@ fn test_dbg_lines_become_linnum() {
         dialect: Default::default(),
         return_register: String::new(),
         frame: None,
-        producer: llrm_object::debug::Producer::Native,
+        producer: llrm_debug::Producer::Native,
         frame_register: "ebp".into(),
         cfa: false,
         ranges: false,
         file: Vec::new(),
         registers: Vec::new(),
+        target: llrm_debug::DebugTarget::of(32),
         types: Vec::new(),
         nodes: Default::default(),
         procedures: Default::default(),
+        declarations: Vec::new(),
         globals: Vec::new(),
         source: None,
         scopes: Default::default(),
@@ -5211,6 +5243,38 @@ fn test_a_fixed_address_pointer_selects_as_a_far_one() {
     assert_eq!(listing(4), listing(1));
 }
 
+/// An invariant scope is not code either (SelectionDAGBuilder.cpp#L7680: the
+/// region information is discarded): a body with `invariant.start` and `.end`
+/// selects as the same body without. They were refused.
+#[test]
+fn test_invariant_markers_are_no_code() {
+    let text = |markers: bool| {
+        let (start, end) = if markers {
+            (
+                "%s = call ptr @llvm.invariant.start.p0(i64 16, ptr %x)",
+                "call void @llvm.invariant.end.p0(ptr %s, i64 16, ptr %x)",
+            )
+        } else {
+            ("", "")
+        };
+        format!(
+            "declare ptr @llvm.invariant.start.p0(i64 immarg, ptr nocapture)
+declare void @llvm.invariant.end.p0(ptr, i64 immarg, ptr nocapture)
+define i16 @f(i16 %a, i16 %c) addrspace(1) {{
+  %x = alloca [8 x i16]
+  %p = getelementptr inbounds [8 x i16], ptr %x, i16 0, i16 %c
+  store volatile i16 %a, ptr %p
+  {start}
+  %v = load volatile i16, ptr %p
+  {end}
+  ret i16 %v
+}}
+"
+        )
+    };
+    assert_eq!(listing(&text(true), "f"), listing(&text(false), "f"));
+}
+
 /// A scope's lifetime markers are not code: a body with them selects as the
 /// same body without. They were refused: `@llvm.lifetime.start.p0`.
 #[test]
@@ -5500,9 +5564,13 @@ fn decoded_object(text: &str) -> (Vec<iced_x86::Instruction>, Vec<usize>, Vec<us
     let module =
         assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Name("486"), &crate::backend::target::BASIC)
             .expect("assembles");
-    let bytes =
-        crate::backend::objbuild::written_as(&module, "t.asm", crate::backend::objbuild::CodeLayout::OneSegment)
-            .expect("encodes");
+    let bytes = crate::backend::objbuild::written_as(
+        &module,
+        "t.asm",
+        crate::backend::objbuild::CodeLayout::OneSegment,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .expect("encodes");
     let records = omf::parse(&bytes).expect("parses");
     let (code, _, size) = omf::code_segment(&records).expect("a code segment");
     let image = omf::segment_image(&records, code, size);
@@ -5847,7 +5915,15 @@ fn a_parameter_is_a_cell_a_register_or_gone() {
     let parameters = named.iter().enumerate().map(|(at, name)| (at as i64, (*name).to_owned(), int)).collect();
     di::add_function(
         &mut module,
-        &di::Function { function: "f".into(), module: false, name: "f".into(), r#type: int, parameters },
+        &di::Function {
+            function: "f".into(),
+            module: false,
+            name: "f".into(),
+            r#type: int,
+            parameters,
+            all_calls: false,
+            scope_line: None,
+        },
     );
     // a in a cell, b in AX, c in DX:AX; d is past the three the function has.
     let convention = Convention {
@@ -7101,4 +7177,62 @@ out:
     let listing = listing_on("486", text, "g");
     assert!(listing.iter().any(|line| line.starts_with("fcom dword ptr")), "{listing:?}");
     assert!(!listing.iter().any(|line| line.starts_with("fxch")), "{listing:?}");
+}
+
+mod expression_notes {
+    use llrm_debug::ExprOp;
+    use llrm_mir::DwOp;
+    use llrm_mir::module::DwBinary;
+
+    use crate::backend::isel::expression_note;
+    use crate::model::lir::{NoteArg, NoteExpr, NoteValue};
+
+    fn expr(
+        args: Vec<NoteArg>,
+        ops: Vec<ExprOp>,
+        value: bool,
+    ) -> NoteValue {
+        NoteValue::Expr(std::sync::Arc::new(NoteExpr { args, ops, value }))
+    }
+
+    /// A leading `DW_OP_deref` on a lone value (no `DW_OP_stack_value`) says
+    /// the variable lives in the memory the value addresses: a note of a value
+    /// that was not, and the dereference lost, made the pointer the variable.
+    #[test]
+    fn a_leading_deref_makes_the_value_an_address() {
+        let (note, piece) = expression_note(vec![NoteValue::Value(3)], vec![DwOp::Deref], false);
+        assert_eq!(piece, None);
+        assert_eq!(note, expr(vec![NoteArg::Value(3)], vec![ExprOp::Arg(0)], false));
+    }
+
+    /// A deref after other operations, then `DW_OP_stack_value`, is a value.
+    #[test]
+    fn a_deref_inside_a_value_expression_stays() {
+        let ops = vec![DwOp::PlusUconst(4), DwOp::Deref, DwOp::StackValue];
+        let (note, _) = expression_note(vec![NoteValue::Value(3)], ops, false);
+        assert_eq!(
+            note,
+            expr(vec![NoteArg::Value(3)], vec![ExprOp::Arg(0), ExprOp::PlusUconst(4), ExprOp::Deref], true)
+        );
+    }
+
+    /// A trailing fragment is the part of the variable, not an operation.
+    #[test]
+    fn a_trailing_fragment_is_the_piece() {
+        let ops =
+            vec![DwOp::Arg(0), DwOp::Constu(2), DwOp::Binary(DwBinary::Shl), DwOp::Fragment { offset: 32, size: 16 }];
+        let (note, piece) = expression_note(vec![NoteValue::Value(7)], ops, true);
+        assert_eq!(piece, Some((4, 2)));
+        assert_eq!(note, expr(vec![NoteArg::Value(7)], vec![ExprOp::Arg(0), ExprOp::Constu(2), ExprOp::Shl], true));
+    }
+
+    /// An argument no operation names, an operation not read, or an argument
+    /// with no value says nothing rather than a wrong value.
+    #[test]
+    fn what_cannot_be_said_is_nothing() {
+        let said = |args: Vec<NoteValue>, ops: Vec<DwOp>| expression_note(args, ops, true).0;
+        assert_eq!(said(vec![NoteValue::Value(1)], vec![DwOp::Arg(1)]), NoteValue::Nothing);
+        assert_eq!(said(vec![NoteValue::Value(1)], vec![DwOp::Arg(0), DwOp::Other]), NoteValue::Nothing);
+        assert_eq!(said(vec![NoteValue::Nothing], vec![DwOp::Arg(0)]), NoteValue::Nothing);
+    }
 }

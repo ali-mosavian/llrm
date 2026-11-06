@@ -1,0 +1,63 @@
+# The m68k DAG selector's source: read by tools/dagisel/regen-target.sh and `llrm-dagisel-gen --target`.
+# A td outside the LLVM tree (llvm_dir empty) needs `defm : RemapAllTargetPseudoPointerOperands<RC>;`
+# or -gen-instr-info fails. Its ids_includes name `GenInstrInfo.inc` and `GenRegisterInfo.inc`.
+# The cpu, atom, dynamic, types and node_predicate tables are features.toml's (llrm-dagisel-gen).
+[target]
+name = "m68k"
+llvm_build = "llvm-build-m68k"
+ns = "M68k::"
+isd = "M68kISD::"
+llvm_dir = "M68k"
+td = "M68k.td"
+out = "src/dagisel/generated"
+# The asm strings of the instructions (asm.rs), for the printer.
+asm = "M68k"
+# The binary encodings (enc.rs), for the object writer.
+enc = "M68k"
+cpus = ["m68000", "m68020"]
+# Named by the hand code (src/dagisel/addr.rs, hooks.rs, pipeline.rs).
+extra_symbols = [
+  "ISD::ATOMIC_CMP_SWAP", "M68k::PC", "M68kISD::GLOBAL_BASE_REG", "M68kISD::Wrapper", "M68kISD::WrapperPC", "M68kISD::SUB",
+  # Every register: the pin numbers `pipeline.rs` maps to ours.
+  "M68k::A0", "M68k::A1", "M68k::A2", "M68k::A3", "M68k::A4", "M68k::A5", "M68k::A6", "M68k::BD0", "M68k::BD1", "M68k::BD2", "M68k::BD3", "M68k::BD4", "M68k::BD5", "M68k::BD6", "M68k::BD7", "M68k::D0", "M68k::D1", "M68k::D2", "M68k::D3", "M68k::D4", "M68k::D5", "M68k::D6", "M68k::D7", "M68k::WA0", "M68k::WA1", "M68k::WA2", "M68k::WA3", "M68k::WA4", "M68k::WA5", "M68k::WA6", "M68k::WD0", "M68k::WD1", "M68k::WD2", "M68k::WD3", "M68k::WD4", "M68k::WD5", "M68k::WD6", "M68k::WD7", "M68k::WSP",
+]
+ids_includes = [
+  "#define GET_INSTRINFO_ENUM",
+  '#include "M68kGenInstrInfo.inc"',
+  "#define GET_REGINFO_ENUM",
+  '#include "M68kGenRegisterInfo.inc"',
+  '#include "M68kSelectionDAGInfo.h"',
+]
+
+# `Proc<>` feature lists of M68k.td: ISA00 (68000), ISA20 (68020).
+[cpu.m68000]
+features = []
+
+[cpu.m68020]
+features = ["ISA20"]
+
+[atom]
+"Subtarget->atLeastM68020()" = ["ISA20"]
+# Position-dependent code: no PIC yet.
+"TM.isPositionIndependent()" = false
+
+[types]
+dead_prefixes = ["v", "nxv"]
+
+[node_predicate]
+# One name per predicate is enough (`M68kInstrInfo.td`, `TargetSelectionDAG.td`). The first four are
+# llrm-dagisel's; `mx_*` are in `src/dagisel/predicates.rs`.
+unindexedstore = "unindexed_store"
+store = "non_truncating_store"
+load = "non_extending_load"
+unindexedload = "unindexed_load"
+Mxloadi16 = "mx_loadi16"
+Mxloadi32 = "mx_loadi32"
+extloadi8 = "memory_vt_i8"
+extloadi16 = "memory_vt_i16"
+atomic_cmp_swap_i32 = "memory_vt_i32"
+Mximm8_1to8 = "mx_imm_1to8"
+Mxstoreloadi8_safe = "mx_store_load_safe"
+sextload = "sext_load"
+zextload = "zext_load"
+extload = "ext_load"

@@ -233,6 +233,65 @@ fn a_flag_definition_wanted_across_a_flag_writer_is_cloned() {
     assert!(!(last_add < at_test && at_test < at_adc), "a flag writer between the add and the adc: {order:?}");
 }
 
+const SUBS: u32 = 10;
+const CALL: u32 = 11;
+const BCC: u32 = 12;
+
+struct CallInfo(u16);
+
+impl SchedInfo for CallInfo {
+    fn num_defs(
+        &self,
+        opcode: u32,
+    ) -> usize {
+        usize::from(matches!(opcode, SUBS | LOAD))
+    }
+
+    fn implicit_defs(
+        &self,
+        opcode: u32,
+    ) -> &[u16] {
+        if opcode == SUBS { std::slice::from_ref(&self.0) } else { &[] }
+    }
+
+    fn is_call(
+        &self,
+        opcode: u32,
+    ) -> bool {
+        opcode == CALL
+    }
+
+    fn has_cross_copy_class(
+        &self,
+        reg: u16,
+    ) -> bool {
+        reg == self.0
+    }
+}
+
+/// `n - 12` is the call's argument and its flags decide a branch after the
+/// call, which clobbers them: arm64 emitted `sub w0, w0, #12; bl f; b.eq`, the
+/// branch reading the call's leftovers (fib10: 49 for 55). The pin finds the
+/// clobber in the call's `RegisterMask` operand (`CheckForLiveRegDefMasked`)
+/// and clones the `subs` below the call.
+#[test]
+fn a_flag_definition_live_across_a_call_is_recomputed_after_it() {
+    let eflags_id = super::dagisel_adapter::EFLAGS_ID;
+    let eflags = super::dagisel_adapter::pin_register(eflags_id).expect("EFLAGS has a pin number");
+    let mut dag = dag();
+    let entry = dag.entry_node();
+    let n = load(&mut dag, 1, entry);
+    let subs = machine(&mut dag, SUBS, &[EVT::I32, EVT::I32], &[n]);
+    let mask = dag.get_register_mask_clobbering(&[eflags]);
+    let call = machine(&mut dag, CALL, &[EVT::OTHER], &[chain_of(n), subs, mask]);
+    let copy = dag.get_copy_to_phys_reg(call, eflags_id, SDValue { node: subs.node, res: 1 }, None);
+    let bcc = machine(&mut dag, BCC, &[EVT::OTHER], &[SDValue { node: copy.node, res: 0 }, SDValue { node: copy.node, res: 1 }]);
+    let order = schedule(&dag, bcc, &CallInfo(eflags));
+    let last_subs = (0..order.len()).rev().find(|&i| order[i].nodes.contains(&subs.node)).expect("scheduled");
+    assert!(position(&order, call) < last_subs, "the branch reads flags the call clobbered: {order:?}");
+    assert!(last_subs < position(&order, bcc), "{order:?}");
+}
+
 /// A load addressed by a target constant pool entry or frame slot got a unit
 /// for the address, as `isPassiveNode` leaves none: the extra unit shifted the
 /// queue order, so `recfloat` stacked its two FP constants the other way round.
@@ -246,4 +305,340 @@ fn target_address_leaves_are_not_scheduled() {
     let b = machine(&mut dag, LOAD, &[EVT::I32, EVT::OTHER], &[slot, chain_of(a)]);
     let order = schedule(&dag, b, &Info);
     assert_eq!(order.len(), 2, "{order:?}");
+}
+
+struct CopyInfo {
+    flags: [u16; 1],
+    clobbers: bool,
+}
+
+impl SchedInfo for CopyInfo {
+    fn num_defs(
+        &self,
+        opcode: u32,
+    ) -> usize {
+        usize::from(matches!(opcode, ADD | LOAD | CMP))
+    }
+
+    fn implicit_defs(
+        &self,
+        opcode: u32,
+    ) -> &[u16] {
+        if matches!(opcode, CMP) { &self.flags } else { &[] }
+    }
+
+    fn is_call(
+        &self,
+        _opcode: u32,
+    ) -> bool {
+        false
+    }
+
+    fn has_cross_copy_class(
+        &self,
+        reg: u16,
+    ) -> bool {
+        reg == self.flags[0]
+    }
+
+    fn copy_clobbers(&self) -> Option<u16> {
+        self.clobbers.then_some(self.flags[0])
+    }
+
+    fn preference(&self) -> super::schedule::Preference {
+        super::schedule::Preference::Ilp
+    }
+}
+
+/// `cmp; copy; br`: the copy of a loop-carried value is chained before the
+/// branch and nothing else orders it, so it landed between the compare and
+/// its branch. On M68k a copy becomes a `move`, which sets the flags, and the
+/// compiler saved them around it (`move.w %sr,-(%sp)` .. `move.w (%sp)+,%ccr`
+/// in `hex`'s loop). A target that says its copies clobber the flag register
+/// gets the copy before the compare.
+#[test]
+fn a_copy_that_clobbers_the_flags_is_not_scheduled_between_the_compare_and_its_branch() {
+    let flags = super::dagisel_adapter::pin_register(super::dagisel_adapter::EFLAGS_ID).expect("a pin number");
+    let build = |clobbers: bool| {
+        let mut dag = dag();
+        let entry = dag.entry_node();
+        let a = load(&mut dag, 1, entry);
+        let b = load(&mut dag, 2, chain_of(a));
+        let cmp = machine(&mut dag, CMP, &[EVT::I32, EVT::I32], &[a, b]);
+        let to_flags = dag.get_copy_to_phys_reg(
+            entry,
+            super::dagisel_adapter::EFLAGS_ID,
+            SDValue { node: cmp.node, res: 1 },
+            None,
+        );
+        let copy = dag.get_copy_to_reg(chain_of(b), 100, a);
+        let branch = machine(&mut dag, BR, &[EVT::OTHER], &[copy, SDValue { node: to_flags.node, res: 1 }]);
+        let order = schedule(&dag, branch, &CopyInfo { flags: [flags], clobbers });
+        let (at_cmp, at_copy, at_branch) = (position(&order, cmp), position(&order, copy), position(&order, branch));
+        (at_cmp < at_copy && at_copy < at_branch, format!("{order:?}"))
+    };
+    let (between, order) = build(false);
+    assert!(between, "premise: a target that says nothing gets the copy between: {order}");
+    let (between, order) = build(true);
+    assert!(!between, "{order}");
+}
+
+/// A DAG in which two nodes are each other's operands is a cycle among the
+/// units. The z80 selected `select i1` of a loaded bit into a compare of its
+/// own result, and `calc_sethi_ullman` walked the cycle until the memory ran
+/// out (tests/run/c `huffman_decode`: no end after 5 minutes). It stops with a
+/// message naming the units.
+#[test]
+#[should_panic(expected = "dependence cycle")]
+fn a_cycle_among_the_units_stops_the_scheduler_with_a_message() {
+    let mut dag = dag();
+    let entry = dag.entry_node();
+    let a = load(&mut dag, 1, entry);
+    let p = machine(&mut dag, ADD, &[EVT::I32], &[a, a]);
+    let q = machine(&mut dag, MUL, &[EVT::I32], &[p, a]);
+    let r = machine(&mut dag, ADD, &[EVT::I32], &[q, a]);
+    dag.replace_all_uses_with(p, r);
+    let root = store(&mut dag, r, 4, chain_of(a));
+    schedule(&dag, root, &Info);
+}
+
+struct PressureInfo {
+    limit: u32,
+}
+
+impl SchedInfo for PressureInfo {
+    fn num_defs(
+        &self,
+        opcode: u32,
+    ) -> usize {
+        usize::from(matches!(opcode, ADD | LOAD | MUL))
+    }
+
+    fn implicit_defs(
+        &self,
+        _opcode: u32,
+    ) -> &[u16] {
+        &[]
+    }
+
+    fn is_call(
+        &self,
+        _opcode: u32,
+    ) -> bool {
+        false
+    }
+
+    fn preference(&self) -> super::schedule::Preference {
+        super::schedule::Preference::Ilp
+    }
+
+    fn reg_pressure_limit(
+        &self,
+        _class: u16,
+    ) -> u32 {
+        self.limit
+    }
+}
+
+fn random_dag(seed: u64) -> (SelectionDAG, SDValue, Vec<SDValue>) {
+    let mut state = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    let mut next = move |n: usize| {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((state >> 33) as usize) % n
+    };
+    let mut dag = dag();
+    let entry = dag.entry_node();
+    let mut values = Vec::new();
+    for i in 0..3 + next(3) {
+        values.push(load(&mut dag, 10 + i as u32, entry));
+    }
+    for _ in 0..2 + next(4) {
+        let (x, y) = (values[next(values.len())], values[next(values.len())]);
+        values.push(machine(&mut dag, ADD, &[EVT::I32], &[x, y]));
+    }
+    let mut stores = Vec::new();
+    for i in 0..2 + next(2) {
+        let v = values[values.len() - 1 - next(3.min(values.len()))];
+        stores.push(store(&mut dag, v, 40 + i as u32, entry));
+    }
+    let root = dag.get_token_factor(&stores);
+    (dag, root, values)
+}
+
+/// The most values live at once when the units run in `order`: a value is
+/// live from its unit until the last unit that reads it.
+fn peak_live(
+    dag: &SelectionDAG,
+    order: &[Unit],
+) -> usize {
+    let at = |node: u32| order.iter().position(|unit| unit.nodes.contains(&node));
+    let mut peak = 0;
+    for step in 0..order.len() {
+        let live = order[..=step]
+            .iter()
+            .flat_map(|unit| unit.nodes.iter().copied())
+            .filter(|&node| {
+                matches!(
+                    dag.node(SDValue { node, res: 0 }).opcode,
+                    ISD::Machine(op) if matches!(op, ADD | LOAD)
+                ) && dag.users(SDValue { node, res: 0 }).any(|user| at(user).is_some_and(|when| when > step))
+            })
+            .count();
+        peak = peak.max(live);
+    }
+    peak
+}
+
+fn peak_with_limit(
+    seed: u64,
+    limit: u32,
+) -> usize {
+    let (dag, root, _) = random_dag(seed);
+    peak_live(&dag, &schedule(&dag, root, &PressureInfo { limit }))
+}
+
+/// The ILP queue put the unit that adds the least pressure first in every
+/// class, as the pin does with `getRegPressureLimit` 0, whatever the target
+/// said: values were kept live to no end on a target with registers to spare
+/// (the Z80's lz4 copy loop held five pairs). A class under its limit does not
+/// count; one at it does. Seed 134: two values live at most at limit 0, four
+/// when the class is never at its limit, two again once the limit is 2.
+#[test]
+fn a_class_under_its_pressure_limit_does_not_steer_the_ilp_queue() {
+    assert_eq!(peak_with_limit(134, 0), 2);
+    assert_eq!(peak_with_limit(134, 100), 4, "the limit is read");
+    assert_eq!(peak_with_limit(134, 2), 2, "the pressure reaches the limit");
+}
+
+/// A target that sets no limit gets the pin's 0: m68k's schedules must not
+/// move.
+#[test]
+fn a_target_without_a_pressure_limit_schedules_as_a_limit_of_zero() {
+    struct Default;
+    impl SchedInfo for Default {
+        fn num_defs(
+            &self,
+            opcode: u32,
+        ) -> usize {
+            usize::from(matches!(opcode, ADD | LOAD | MUL))
+        }
+        fn implicit_defs(
+            &self,
+            _opcode: u32,
+        ) -> &[u16] {
+            &[]
+        }
+        fn is_call(
+            &self,
+            _opcode: u32,
+        ) -> bool {
+            false
+        }
+        fn preference(&self) -> super::schedule::Preference {
+            super::schedule::Preference::Ilp
+        }
+    }
+    for seed in 0..200 {
+        let (dag, root, _) = random_dag(seed);
+        let (zero_dag, zero_root, _) = random_dag(seed);
+        assert_eq!(
+            schedule(&dag, root, &Default),
+            schedule(&zero_dag, zero_root, &PressureInfo { limit: 0 }),
+            "seed {seed}"
+        );
+    }
+}
+
+struct FlagValue {
+    fixed: bool,
+    pref: super::schedule::Preference,
+}
+
+impl SchedInfo for FlagValue {
+    fn num_defs(
+        &self,
+        opcode: u32,
+    ) -> usize {
+        usize::from(matches!(opcode, ADD | LOAD | CMP))
+    }
+
+    fn implicit_defs(
+        &self,
+        opcode: u32,
+    ) -> &[u16] {
+        if matches!(opcode, ADD) { &[FLAGS] } else { &[] }
+    }
+
+    fn is_call(
+        &self,
+        _opcode: u32,
+    ) -> bool {
+        false
+    }
+
+    fn fixed_register_def(
+        &self,
+        opcode: u32,
+        _result: usize,
+    ) -> Option<u16> {
+        (self.fixed && opcode == CMP).then_some(FLAGS)
+    }
+
+    fn source_order(&self) -> bool {
+        self.pref == super::schedule::Preference::Source
+    }
+
+    fn preference(&self) -> super::schedule::Preference {
+        self.pref
+    }
+}
+
+/// `cmp` and an `add` (which writes the flags) both feed `br`.
+fn flag_dag(seed: u64) -> (SelectionDAG, SDValue, SDValue, SDValue) {
+    let mut state = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    let mut next = move |n: usize| {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((state >> 33) as usize) % n
+    };
+    let mut dag = dag();
+    let entry = dag.entry_node();
+    let mut vals: Vec<SDValue> = (0..2 + next(3)).map(|i| load(&mut dag, 1 + i as u32, entry)).collect();
+    let order_cmp_first = next(2) == 0;
+    let make_cmp = |dag: &mut SelectionDAG, vals: &[SDValue], next: &mut dyn FnMut(usize) -> usize| {
+        machine(dag, CMP, &[EVT::I8], &[vals[next(vals.len())], vals[next(vals.len())]])
+    };
+    let mut cmp = None;
+    if order_cmp_first {
+        cmp = Some(make_cmp(&mut dag, &vals, &mut next));
+    }
+    for _ in 0..1 + next(3) {
+        let (x, y) = (vals[next(vals.len())], vals[next(vals.len())]);
+        vals.push(machine(&mut dag, ADD, &[EVT::I32], &[x, y]));
+    }
+    let cmp = cmp.unwrap_or_else(|| make_cmp(&mut dag, &vals, &mut next));
+    let sum = *vals.last().unwrap();
+    let keep = dag.get_copy_to_reg(entry, 100, sum);
+    let branch = machine(&mut dag, BR, &[EVT::OTHER], &[cmp, keep]);
+    (dag, branch, cmp, sum)
+}
+
+/// A compare whose result is the flags register itself (the Z80's `cp`, `outs
+/// Flags:$f`) was a value to the scheduler, so an `add`, which writes the
+/// flags, went between the compare and the branch that reads it, and the
+/// compare was issued again (`find` under the ILP queue: 17 bytes, 379
+/// T-states, against 16 and 337). A target that says the result is the register
+/// gets the compare next to its branch.
+#[test]
+fn a_flag_writer_is_not_scheduled_between_a_compare_and_the_branch_that_reads_it() {
+    let pref = super::schedule::Preference::Ilp;
+    let between = |fixed: bool| {
+        let (dag, branch, cmp, sum) = flag_dag(8);
+        let order = schedule(&dag, branch, &FlagValue { fixed, pref });
+        let (c, s, b) = (position(&order, cmp), position(&order, sum), position(&order, branch));
+        (c < s && s < b, format!("cmp {c} add {s} br {b}"))
+    };
+    let (split, order) = between(false);
+    assert!(split, "premise: a target that says nothing gets the add between: {order}");
+    let (split, order) = between(true);
+    assert!(!split, "{order}");
 }

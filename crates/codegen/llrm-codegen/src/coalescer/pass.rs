@@ -75,6 +75,12 @@ use crate::model::lir::LirBody;
 use crate::model::passes::LIRTransform;
 use crate::support::hash::IndexMap;
 
+#[cfg(test)]
+thread_local! {
+    /// Allocation orders `llvm_env` made.
+    static ORDERS_MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub struct Coalescer {
     pub pinned: IndexMap<u32, RegId>,
     pub segments: Segments,
@@ -148,14 +154,21 @@ impl Coalescer {
         }
         let everything: BTreeSet<RegId> = self.classes.available.iter().copied().collect();
         let mut palettes: IndexMap<u32, BTreeSet<RegId>> = IndexMap::default();
+        // Values of one class share an allocation order: it is made once.
+        let mut made: crate::support::hash::HashMap<Option<&BTreeSet<RegId>>, BTreeSet<RegId>> = Default::default();
         for block in &body.blocks {
             for one in block.insns.iter() {
                 for value in one.defines.iter().chain(&one.uses) {
-                    palettes
-                        .entry(*value)
-                        .or_insert_with(
-                            || target::order(where_of.get(value), &self.segments, &self.classes).into_iter().collect(),
-                        );
+                    palettes.entry(*value).or_insert_with(|| {
+                        let class = where_of.get(value);
+                        made.entry(class)
+                            .or_insert_with(|| {
+                                #[cfg(test)]
+                                ORDERS_MADE.with(|one| one.set(one.get() + 1));
+                                target::order(class, &self.segments, &self.classes).into_iter().collect()
+                            })
+                            .clone()
+                    });
                 }
             }
         }
@@ -166,7 +179,28 @@ impl Coalescer {
         }
         let depths = ranges::depths_shared(body);
         let depth = body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect();
-        Some((crate::coalescer::env::TargetEnv { palettes: palettes.into(), pins, size: self.size }, depth))
+        Some((
+            crate::coalescer::env::TargetEnv {
+                palettes: palettes.into(),
+                pins,
+                size: self.size,
+                keep_pinned: false,
+                joins_global_copies: true,
+                joins_pinned_copies: true,
+                joins_sub_registers: true,
+                joins_lanes: false,
+                aliases: Default::default(),
+                should_join: None,
+                freq: Vec::new(),
+                remat: None,
+                remat_wins: None,
+                regs: None,
+                kind_of: None,
+                kinds: Default::default(),
+                check_kinds: false,
+            },
+            depth,
+        ))
     }
 }
 
@@ -196,7 +230,7 @@ mod tests {
         value: u32,
         width: u32,
     ) -> Loc {
-        Loc::Held(Held { value, width })
+        Loc::Held(Held { value, width, offset: 0 })
     }
 
     fn _move(
@@ -284,6 +318,29 @@ mod tests {
         let emitted = select::emit(insns[0].what.as_ref().expect("semantics"), 3, None, false, false, None);
         assert!(emitted.is_some());
         assert!(emitted.unwrap().code.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod palette_tests {
+    use super::{Coalescer, ORDERS_MADE};
+    use crate::backend::classes::RegisterClasses;
+    use crate::backend::regalloc_input::{Calls, before_phase};
+
+    /// Every value was given its own `order` (a walk of the machine's
+    /// registers and a set built from it): 4 M Ir of memory_expansion's
+    /// coalescer. Values of one class share one.
+    #[test]
+    fn test_values_of_one_class_share_one_allocation_order() {
+        let (body, _) = before_phase(Calls::Everything, "sievejumps.ll", "bench_sieve", "486", "Coalescer");
+        let classes = RegisterClasses::m16();
+        let segments = crate::backend::target::BUILT_IN.clone();
+        let coalescer = Coalescer::new(None, &segments, &classes);
+        let before = ORDERS_MADE.with(std::cell::Cell::get);
+        let (env, _) = coalescer.llvm_env(&body).expect("no phis");
+        let made = ORDERS_MADE.with(std::cell::Cell::get) - before;
+        let values = env.palettes.borrow().len();
+        assert!(values > 8 * made, "{values} palettes took {made} orders");
     }
 }
 

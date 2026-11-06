@@ -57,10 +57,44 @@ const MAX_LOOKUP: usize = 6;
 pub(crate) struct Decomposed {
     base: Operand,
     offset: i128,
-    /// `(index value, scale)`, a scale never zero.
-    vars: Vec<(Operand, i128)>,
+    vars: Vec<VarIndex>,
     inbounds: bool,
     nuw: bool,
+}
+
+/// `VariableGEPIndex`: an index value times a scale, never zero. The casts of
+/// `CastedValue` are the sign extension or truncation to the index width; the
+/// linear expression `GetLinearExpression` finds through them is not
+/// translated, so a value is its own, times 1, plus 0.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct VarIndex {
+    value: Operand,
+    scale: i128,
+    /// The GEP that contributed it (`CxtI`).
+    cxt: Option<llrm_mir::module::InstId>,
+    /// `IsNSW`: the GEP is `nusw`.
+    nsw: bool,
+    negated: bool,
+    sext_bits: u32,
+    trunc_bits: u32,
+}
+
+impl VarIndex {
+    /// `CastedValue::hasSameCastsAs`.
+    fn same_casts_as(
+        &self,
+        other: &VarIndex,
+    ) -> bool {
+        self.sext_bits == other.sext_bits && self.trunc_bits == other.trunc_bits
+    }
+
+    /// `VariableGEPIndex::hasNegatedScaleOf`.
+    fn has_negated_scale_of(
+        &self,
+        other: &VarIndex,
+    ) -> bool {
+        if self.negated == other.negated { self.scale == -other.scale } else { self.scale == other.scale }
+    }
 }
 
 /// A load or store's place as `DecomposeGEPExpression` finds it: the object its
@@ -374,7 +408,7 @@ impl<'a> BasicAA<'a> {
                 found.base = operand;
                 continue;
             }
-            let Some(one) = self.defining(operand) else { break };
+            let Some((inst_id, one)) = self.unit.defining(operand) else { break };
             match &one.opcode {
                 Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) if self.transparent(one) => {
                     operand = one.operands[0]
@@ -391,17 +425,33 @@ impl<'a> BasicAA<'a> {
                     let (constant, variable) =
                         self.unit.layout.collect_offset(&self.unit.context.types, *source, &indices);
                     found.offset += constant;
+                    let nsw = one.flags.contains(Flags::NUSW) || one.flags.contains(Flags::INBOUNDS);
+                    let index_bits = self.unit.layout.pointer(0).index_bits;
                     for (at, scale) in variable {
-                        let (index, scale) = (one.operands[1 + at], scale as i128);
-                        match found.vars.iter().position(|(had, _)| *had == index) {
-                            Some(have) => {
-                                found.vars[have].1 += scale;
-                                if found.vars[have].1 == 0 {
-                                    found.vars.remove(have);
-                                }
-                            }
-                            None if scale != 0 => found.vars.push((index, scale)),
-                            None => {}
+                        let (index, mut scale) = (one.operands[1 + at], scale as i128);
+                        let bits = self.unit.int_bits(index).unwrap_or(index_bits);
+                        let (sext_bits, trunc_bits) =
+                            (index_bits.saturating_sub(bits), bits.saturating_sub(index_bits));
+                        // The same value and casts add their scales.
+                        if let Some(have) = found.vars.iter().position(|had| {
+                            had.value == index && had.sext_bits == sext_bits && had.trunc_bits == trunc_bits
+                        }) {
+                            scale += found.vars.remove(have).scale;
+                        }
+                        if scale != 0 {
+                            found
+                                .vars
+                                .push(
+                                    VarIndex {
+                                        value: index,
+                                        scale,
+                                        cxt: Some(inst_id),
+                                        nsw,
+                                        negated: false,
+                                        sext_bits,
+                                        trunc_bits,
+                                    },
+                                );
                         }
                     }
                     operand = one.operands[0];
@@ -1039,18 +1089,27 @@ impl<'a> BasicAA<'a> {
         // d1 - d2.
         d1.nuw &= d1.offset >= d2.offset;
         d1.offset -= d2.offset;
-        for (value, scale) in d2.vars.iter().copied() {
-            match d1.vars.iter().position(|(had, _)| *had == value) {
-                Some(have) => {
-                    if d1.vars[have].1 != scale {
-                        d1.nuw &= d1.vars[have].1 >= scale;
-                        d1.vars[have].1 -= scale;
+        for src in d2.vars.iter().copied() {
+            let found = d1.vars.iter().position(|dest| dest.value == src.value && dest.same_casts_as(&src));
+            match found {
+                Some(at) => {
+                    let dest = &mut d1.vars[at];
+                    // Normalise `negated` if the nsw flag goes anyway.
+                    if dest.negated {
+                        dest.scale = -dest.scale;
+                        dest.negated = false;
+                        dest.nsw = false;
+                    }
+                    if dest.scale != src.scale {
+                        d1.nuw &= dest.scale >= src.scale;
+                        dest.scale -= src.scale;
+                        dest.nsw = false;
                     } else {
-                        d1.vars.remove(have);
+                        d1.vars.remove(at);
                     }
                 }
                 None => {
-                    d1.vars.push((value, -scale));
+                    d1.vars.push(VarIndex { negated: true, ..src });
                     d1.nuw = false;
                 }
             }
@@ -1119,10 +1178,19 @@ impl<'a> BasicAA<'a> {
         let (Some(bytes1), Some(bytes2)) = (size1.value(), size2.value()) else { return AliasResult::MayAlias };
         // The variable part is a multiple of the GCD of the scales (a scale
         // without nsw is known only down to its lowest set bit).
-        let gcd = d1.vars.iter().map(|(_, scale)| 1i128 << scale.unsigned_abs().trailing_zeros().min(100)).fold(0, gcd);
+        let gcd = d1.vars.iter().map(|var| 1i128 << var.scale.unsigned_abs().trailing_zeros().min(100)).fold(0, gcd);
         if gcd > 0 {
             let modulus = d1.offset.rem_euclid(gcd);
             if modulus >= i128::from(bytes2) && gcd - modulus >= i128::from(bytes1) {
+                return AliasResult::NoAlias;
+            }
+        }
+        // If a minimum absolute variable offset can be established, it proves
+        // the two accesses far enough apart.
+        if let Some(min_abs) = self.compute_min_abs_var_offset(&d1, aaqi) {
+            // The constant offset has added at least +/-min_abs to it.
+            let (low, high) = (d1.offset - min_abs, d1.offset + min_abs);
+            if low < 0 && -low >= i128::from(bytes1) && high >= 0 && high >= i128::from(bytes2) {
                 return AliasResult::NoAlias;
             }
         }
@@ -1220,7 +1288,27 @@ impl BasicAA<'_> {
                     verdict = self.alias_check(&place, loc, aaqi);
                 }
                 if verdict != AliasResult::NoAlias {
-                    narrowed = narrowed.union(arg.intersect(self.get_arg_mod_ref_info(call, at)));
+                    let touched = arg.intersect(self.get_arg_mod_ref_info(call, at));
+                    // The bytes the callee's body touches through the parameter
+                    // (DEVIATE I3, see `initializes::accessed`; the pin's loop
+                    // here has no ranges).
+                    let stated = |key| {
+                        callee
+                            .and_then(|one| one.parameter_attrs.get(at as usize))
+                            .and_then(|attrs| llrm_mir::memory::access_ranges(attrs, key))
+                    };
+                    let mut kept = ModRefInfo::NoModRef;
+                    for (key, kind) in
+                        [(llrm_mir::memory::READS, ModRefInfo::Ref), (llrm_mir::memory::WRITES, ModRefInfo::Mod)]
+                    {
+                        let apart = stated(key)
+                            .is_some_and(|ranges| self.apart_from(op.operands[at as usize], loc, &ranges, aaqi));
+                        if !apart {
+                            kept = kept.union(touched.intersect(kind));
+                        }
+                    }
+                    let touched = kept;
+                    narrowed = narrowed.union(touched);
                 }
                 if narrowed == arg {
                     break;
@@ -1245,6 +1333,120 @@ impl BasicAA<'_> {
             .and_then(|one| self.unit.globals.get(one.0 as usize)?.name.as_deref())
             .is_some_and(|name| name.starts_with("llvm.invariant.start"));
         if invariant_start { ModRefInfo::Ref } else { ModRefInfo::ModRef }
+    }
+}
+
+impl BasicAA<'_> {
+    /// Whether `loc` lies in the object `argument` points into, outside every
+    /// byte range `[low, high)` counted from `argument`: a constant offset of
+    /// both from one base, and a precise size of `loc`.
+    fn apart_from(
+        &self,
+        argument: Operand,
+        loc: &MemoryLocation,
+        ranges: &[(i64, i64)],
+        aaqi: &mut AAQueryInfo,
+    ) -> bool {
+        let Some(size) = loc.size.value().filter(|_| matches!(loc.size, LocationSize::Precise(_))) else {
+            return false;
+        };
+        let (one, other) = (self.decompose(argument, aaqi), self.decompose(loc.ptr, aaqi));
+        if one.base != other.base || !one.vars.is_empty() || !other.vars.is_empty() {
+            return false;
+        }
+        let (start, end) = (other.offset, other.offset + i128::from(size));
+        ranges.iter().all(|&(low, high)| end <= one.offset + i128::from(low) || one.offset + i128::from(high) <= start)
+    }
+}
+
+impl BasicAA<'_> {
+    /// `computeMinAbsVarOffset`
+    /// ([:1996](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/BasicAliasAnalysis.cpp#L1996)):
+    /// the least absolute value the variable part of the offset can have, if
+    /// one is established.
+    fn compute_min_abs_var_offset(
+        &self,
+        gep: &Decomposed,
+        aaqi: &AAQueryInfo,
+    ) -> Option<i128> {
+        use llrm_mir::knownbits::KnownBits;
+        use llrm_mir::valuetracking::Query;
+        let index_bits = self.unit.layout.pointer(0).index_bits;
+        let query = |cxt| {
+            Query { globals: self.unit.globals, ..Query::bare(self.unit.context, self.unit.function, self.unit.layout) }
+                .with_cxt(cxt)
+        };
+        // `abs(V * Scale) >= abs(Scale)` holds in the presence of potentially
+        // wrapping math.
+        let multiply_by_scale_no_wrap = |var: &VarIndex| {
+            if var.nsw {
+                return true;
+            }
+            let original = self.unit.int_bits(var.value).unwrap_or(index_bits);
+            // `Scale` below `2^(width - original)` cannot wrap.
+            let room = i64::from(index_bits) - i64::from(original);
+            room > 0 && var.scale >= 0 && var.scale < 1i128 << room.min(100)
+        };
+        match &gep.vars[..] {
+            [var] => {
+                if var.trunc_bits == 0
+                    && llrm_mir::valuetracking::nonzero::is_known_non_zero(&query(var.cxt), var.value, 0)
+                    && multiply_by_scale_no_wrap(var)
+                {
+                    // If V != 0 then abs(VarIndex) >= abs(Scale).
+                    return Some(var.scale.abs());
+                }
+                None
+            }
+            [var0, var1] => {
+                // VarIndex = Scale*V0 + (-Scale)*V1; V0 != V1 then
+                // abs(VarIndex) >= abs(Scale). Values across loop iterations
+                // are not compared.
+                if var0.trunc_bits != 0
+                    || !var0.same_casts_as(var1)
+                    || aaqi.may_be_cross_iteration
+                    || !multiply_by_scale_no_wrap(var0)
+                    || !multiply_by_scale_no_wrap(var1)
+                {
+                    return None;
+                }
+                if var0.has_negated_scale_of(var1) {
+                    let cxt = var0.cxt.or(var1.cxt);
+                    return llrm_mir::valuetracking::nonzero::is_known_non_equal(
+                        &query(cxt),
+                        var0.value,
+                        var1.value,
+                        0,
+                    )
+                    .then(|| var0.scale.abs());
+                }
+                // The generalisation to different scales: with
+                // ScaleGCD = gcd(|S0|, |S1|), C0*V0 != C1*V1 gives
+                // abs(VarIndex) >= ScaleGCD. Scales must differ in sign once
+                // negated.
+                let effective_negative = |var: &VarIndex| var.negated ^ (var.scale < 0);
+                if effective_negative(var0) == effective_negative(var1) {
+                    return None;
+                }
+                let (abs0, abs1) = (var0.scale.abs(), var1.scale.abs());
+                let scale_gcd = gcd(abs0, abs1);
+                let (c0, c1) = (abs0 / scale_gcd, abs1 / scale_gcd);
+                // One is provably even and the other odd, in the known bits.
+                let known = |var: &VarIndex, c: i128| {
+                    let bits = self.unit.int_bits(var.value)?;
+                    let value = llrm_mir::valuetracking::known::compute_known_bits(&query(var.cxt), var.value, 0);
+                    let wide = if var.sext_bits > 0 { value.sext(bits + var.sext_bits) } else { value };
+                    let constant = KnownBits::constant(wide.width, (c as u128) & llrm_mir::context::mask(wide.width));
+                    Some(KnownBits::mul(&wide, &constant, false))
+                };
+                let (known0, known1) = (known(var0, c0)?, known(var1, c1)?);
+                if known0.width == known1.width && KnownBits::ne(&known0, &known1) == Some(true) {
+                    return Some(scale_gcd);
+                }
+                None
+            }
+            _ => None,
+        }
     }
 }
 
@@ -2290,5 +2492,21 @@ b2:
         assert_eq!(aa.alias(&at("p"), &at("p"), &mut AAQueryInfo::default(), None), AliasResult::MustAlias);
         assert_eq!(aa.alias(&at("p"), &at("p"), &mut crossing, None), AliasResult::MayAlias);
         assert_eq!(aa.alias(&at("a"), &at("a"), &mut crossing, None), AliasResult::MustAlias);
+    }
+
+    /// `gep inbounds [4 x i8], @g, %j` with `%j` known non-zero is at least
+    /// four bytes from `@g` (`computeMinAbsVarOffset`, one variable index):
+    /// the pin says NoAlias for four-byte accesses; with `%j` unknown the two
+    /// may overlap. LICM kept `@a[0]` in memory across a loop over `@a[%i]`
+    /// for `nbody_single` (+38 B) and `fpbench` (+53 B) for want of it.
+    #[test]
+    fn an_index_known_non_zero_puts_a_gep_a_whole_scale_from_its_base() {
+        let body = |index: &str| {
+            format!(
+                "@g = internal global [64 x i32] zeroinitializer\ndefine i32 @f(i32 %x) {{\nentry:\n  %j = {index}\n  %a = getelementptr inbounds [4 x i8], ptr @g, i32 %j\n  %b = getelementptr inbounds i8, ptr @g, i32 0\n  ret i32 0\n}}\n"
+            )
+        };
+        assert_eq!(answer(&body("or i32 %x, 1"), "a", "b", 4), AliasResult::NoAlias);
+        assert_eq!(answer(&body("add i32 %x, 0"), "a", "b", 4), AliasResult::MayAlias);
     }
 }

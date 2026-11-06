@@ -7,7 +7,21 @@ fn legalized(offset: i64) -> (SelectionDAG, SDValue) {
     let mut dag = dag();
     let global = dag.get_global_address(EVT::I32, 3, offset);
     dag.set_root(global);
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false }).run().unwrap();
+    DagLegalizer::new(
+        &mut dag,
+        &tli,
+        &mut X86Lowering {
+            cmov: false,
+            sse2: false,
+            min_size: false,
+            three_address_adds: false,
+            i16_mul_chains: false,
+            sext_load: false, zext_free: false,
+            profile: None,
+        },
+    )
+    .run()
+    .unwrap();
     let root = dag.get_root();
     (dag, root)
 }

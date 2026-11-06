@@ -121,12 +121,41 @@ fn create_mem(
     Instruction::with1(code, memory).map_err(|error| error.to_string())
 }
 
+/// The form the pin writes for a register-to-register `op r, r`: the one whose
+/// ModRM `r/m` field is the destination (`MOV32rr` is `89 /r`, `ADD32rr` `01 /r`,
+/// X86InstrMisc.td and X86InstrArithmetic.td), not iced's `op r, r/m` (`8B`,
+/// `03`), the pin's `_REV` twin that only a disassembler reads. Same length,
+/// same operands, other bytes.
+fn pin_form(code: Code) -> Code {
+    static TWINS: LazyLock<std::collections::HashMap<Code, Code>> = LazyLock::new(|| {
+        let named: std::collections::HashMap<String, Code> =
+            Code::values().map(|one| (format!("{one:?}"), one)).collect();
+        let mut twins = std::collections::HashMap::new();
+        for one in Code::values() {
+            let name = format!("{one:?}");
+            let Some((mnemonic, forms)) = name.split_once('_') else { continue };
+            if !matches!(mnemonic, "Mov" | "Add" | "Or" | "Adc" | "Sbb" | "And" | "Sub" | "Xor" | "Cmp") {
+                continue;
+            }
+            let Some((register, memory)) = forms.split_once('_') else { continue };
+            let (Some(width), Some(other)) = (register.strip_prefix('r'), memory.strip_prefix("rm")) else { continue };
+            if width == other && matches!(width, "8" | "16" | "32" | "64") {
+                if let Some(twin) = named.get(&format!("{mnemonic}_rm{width}_r{width}")) {
+                    twins.insert(one, *twin);
+                }
+            }
+        }
+        twins
+    });
+    TWINS.get(&code).copied().unwrap_or(code)
+}
+
 fn create_reg_reg(
     code: Code,
     one: RegId,
     other: RegId,
 ) -> Result<Instruction, String> {
-    Instruction::with2(code, one.iced(), other.iced()).map_err(|error| error.to_string())
+    Instruction::with2(pin_form(code), one.iced(), other.iced()).map_err(|error| error.to_string())
 }
 
 fn create_reg_i32(
@@ -374,6 +403,17 @@ pub fn operand_of(
     place_operand(&what.address(), what.base.is_some(), what.index.is_some(), bits)
 }
 
+/// A frame cell reached through the frame token (a word register) by a wide
+/// index: no encoding until the frame layout names the frame register, but
+/// the registers it reads are known.
+pub fn awaits_frame_layout(what: &ir::Mem) -> bool {
+    what.addr.is_some_and(|addr| addr.space == Space::Frame)
+        && what.index.is_some()
+        && what.index_through != RegId::None
+        && width_of(what.index_through) >= Some(4)
+        && width_of(if what.through == RegId::None { RegId::BP } else { what.through }) < Some(4)
+}
+
 /// An address as an encodable memory operand, and whether it is relocated.
 /// `based` and `indexed`: a pass made a value of the cell's base or index, and
 /// `through` is where the allocation put it.
@@ -404,9 +444,9 @@ pub fn place_operand(
     match addr.space {
         // Long mode reaches a symbol through the instruction pointer: `[rip +
         // disp32]`, the displacement a PC32 relocation. A symbol plus a
-        // register has no such form.
-        Space::Segment | Space::External if bits == 64 => {
-            (!based && addr.base == (RegId::None).iced()).then(|| (rip_operand(), true))
+        // register is the absolute disp32 of static code (`sym(%rax)`).
+        Space::Segment | Space::External if bits == 64 && !based => {
+            (addr.base == (RegId::None).iced()).then(|| (rip_operand(), true))
         }
         Space::Segment | Space::External => {
             // Once a pass makes a value of the offset, `through` is where the
@@ -481,6 +521,17 @@ pub fn got_symbol(
 ) -> Option<Emitted> {
     (width_of(into)? == 8).then_some(())?;
     _assemble(&raised(create_reg_mem(Code::Mov_r64_rm64, into, rip_operand())), at, true)
+}
+
+/// `mov into32, symbol`: the address of a symbol as a value in static code,
+/// zero-extended (R_X86_64_32; the pin's `MOV32ri64`).
+pub fn load_symbol_zero_extended(
+    into: RegId,
+    at: At,
+) -> Option<Emitted> {
+    (width_of(into)? == 8).then_some(())?;
+    let made = create_reg_i32(Code::Mov_r32_imm32, into.full_register32(), 0).ok()?;
+    _assemble(&made, at, true)
 }
 
 /// `lea into, [rip + symbol]`: the address of a symbol as a value in long mode.
@@ -840,6 +891,7 @@ pub fn lowered(what: &Semantics) -> Option<Vec<Semantics>> {
         target: None,
         indirect: false,
         table: Vec::new(),
+        table_id: None,
         repeat: false,
         pops: None,
     };
@@ -1239,6 +1291,10 @@ pub static BARE: LazyLock<IndexMap<&'static str, &'static str>> = LazyLock::new(
         ("pushad", "PUSHAD"),
         ("popad", "POPAD"),
         ("cld", "CLD"),
+        // Windows 64-bit pads a function that ends in a call with it
+        // (X86AvoidTrailingCall)
+        ("int3", "INT3"),
+        ("ud2", "UD2"),
         ("std", "STD"),
         // a call of one: its flags pushed first, as the interrupt does
         ("pushf", "PUSHFW"),
@@ -1521,7 +1577,7 @@ pub fn address_operand(
     if cell.addr.is_some() && cell.index_through == RegId::None {
         return place_operand(
             &ir::AddressRef { through: cell.through, ..ir::AddressRef::new(cell.addr) },
-            false,
+            bits == 64 && cell.through != RegId::None,
             false,
             bits,
         );
@@ -1694,7 +1750,7 @@ pub fn funnel(
     count: Option<i64>,
     at: At,
 ) -> Option<Emitted> {
-    let width = width_of(dest).filter(|bytes| matches!(bytes, 2 | 4) && width_of(other) == Some(*bytes))?;
+    let width = width_of(dest).filter(|bytes| matches!(bytes, 2 | 4 | 8) && width_of(other) == Some(*bytes))?;
     if !["shld", "shrd"].contains(&name) {
         return None;
     }
@@ -2465,6 +2521,9 @@ pub fn emit_in(
             // `mov sreg,imm` the machine has no encoding for.
             (Loc::Reg(into), Loc::Imm(imm)) if seg(into.register) => load_segment(into.register, imm.value, at),
             (Loc::Reg(into), Loc::Reg(outof)) => r#move(into.register, outof.register, at),
+            (Loc::Reg(into), Loc::Imm(imm)) if at.bits == 64 && imm.width == 4 && imm.address.is_some() => {
+                load_symbol_zero_extended(into.register, at)
+            }
             (Loc::Reg(into), Loc::Imm(imm))
                 if at.bits == 64 && imm.address.is_some_and(|addr| addr.space == Space::External) =>
             {
@@ -2984,7 +3043,7 @@ mod sweep_support {
         value: u32,
         width: u32,
     ) -> ir::Held {
-        ir::Held { value, width }
+        ir::Held { value, width, offset: 0 }
     }
 
     pub fn hd(
@@ -3065,6 +3124,7 @@ mod sweep_support {
             indirect,
             table: Vec::new(),
             repeat: false,
+            table_id: None,
             pops: None,
         }
     }

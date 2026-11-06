@@ -1,0 +1,19 @@
+#title,"10.6 INTEGER UNIT INSTRUCTION TIMINGS: DIVS.W, DIVU.W* | DIVS.L, DIVU.L, DIVSL.L, DIVUL.L* | JMP",page,10-20,notes,"*This instruction interlocks the <ea> calculate and execute stages. Execution time for a DIV/0 exception taken and exception processing is approximately 16 + <ea> calculate clocks. For example, DIV.W #0,Dn takes approximately 24 clocks in both the <ea> calculate and execute times to execute the divide instruction, perform exception stacking, fetch the exception vector, and prefetch the next instruction."
+Addressing Mode,"DIVS.W, DIVU.W* <ea> Calculate","DIVS.W, DIVU.W* Execute","DIVS.L, DIVU.L, DIVSL.L, DIVUL.L* <ea> Calculate","DIVS.L, DIVU.L, DIVSL.L, DIVUL.L* Execute",JMP <ea> Calculate,JMP Execute
+Dn,8,27,9,44,—,—
+An,—,—,—,—,—,—
+(An),8,27,9,44,3,2L + 1
+(An)+,8,27,9,44,—,—
+–(An),8,27,9,44,—,—
+"(d 16,An)",8,27,11,2L + 44,4,3L + 1
+"(d 16,PC)",11,3L + 27,12,3L + 44,6,5L + 1
+"(xxx).W, (xxx).L",8,27,11,2L + 44,3,2L + 1
+#<xxx>,8,27,10,1L + 44,—,—
+"(d 8,An,Xn)",11,30,12,47,6,6
+"(d 8,PC,Xn)",12,1L + 30,13,1L + 47,7,1L + 6
+"(BR,Xn)",13,1L + 31,14,1L + 48,8,1L + 7
+"(bd,BR,Xn)",14,1L + 32,15,1L + 49,9,1L + 8
+"([bd,BR,Xn])",17,1L + 35,18,1L + 52,12,1L + 11
+"([bd,BR,Xn],od)",18,1L + 36,19,1L + 53,12,1L + 11
+"([bd,BR],Xn)",18,3L + 34,19,3L + 51,13,3L + 10
+"([bd,BR],Xn,od)",19,3L + 35,20,3L + 52,14,3L + 11

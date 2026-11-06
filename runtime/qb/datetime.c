@@ -11,6 +11,7 @@ static void put2(char *to, unsigned value)
     to[1] = (char)('0' + value % 10);
 }
 
+#pragma aux B_DTSR "B$DTSR"
 #pragma aux B_FDAT "B$FDAT"
 #pragma aux B_FTIM "B$FTIM"
 #pragma aux B_SDAT "B$SDAT"
@@ -137,4 +138,37 @@ void B_STIM(SD *text)
     if (dev_time_set(hours, minutes, seconds))
         qb_error(BE_ILLFUN);
     str_tmp_free(text);
+}
+
+/* Days from 1970-01-01 to the first of `month` (1 to 12) of `year`: a civil date's day count, proleptic Gregorian. */
+static long days_to_first_of(long year, long month)
+{
+    long era, year_of_era, day_of_year;
+
+    year -= month <= 2;
+    era = (year >= 0 ? year : year - 399) / 400;
+    year_of_era = year - era * 400;
+    day_of_year = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5;
+    return era * 146097 + year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year - 719468;
+}
+
+enum { DAYS_1899_12_30_TO_1970 = 25569 };
+
+/* B$DTSR: DATESERIAL(year, month, day), the days since 1899-12-30 as a DOUBLE whose address is returned. A year of 0
+   to 99 is 1900 to 1999; a month or day out of range carries into the next (month 14 is February of the next year, day
+   0 the last day of the month before). A date outside the years 100 to 9999 is Illegal function call. */
+double *B_DTSR(short year, short month, short day)
+{
+    static double serial;
+    long y = year >= 0 && year <= 99 ? 1900 + year : year, m = (long)month - 1, days;
+
+    if (y < 100 || y > 9999)
+        qb_error(BE_ILLFUN);
+    y += m >= 0 ? m / 12 : -((11 - m) / 12);
+    m = ((m % 12) + 12) % 12 + 1;
+    if (y < 100 || y > 9999)
+        qb_error(BE_ILLFUN);
+    days = days_to_first_of(y, m) + (long)day - 1 + DAYS_1899_12_30_TO_1970;
+    serial = (double)days;
+    return &serial;
 }

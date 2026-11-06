@@ -101,13 +101,23 @@ fn replacing_operand_is_cheap(
 ) -> bool {
     match &function.instruction(inst).opcode {
         Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem) => index != 1,
+        Opcode::GetElementPtr { .. }
+            if index >= 1
+                && matches!(
+                    function.instruction(inst).operands[index],
+                    Operand::Constant(_)
+                )
+                && !spec.tti.constant_offset_phi_is_cheap() =>
+        {
+            false
+        }
         _ => !calls_intrinsic(context, spec, function, inst),
     }
 }
 
 /// `canReplaceOperandWithVariable`: the operand `index` of `inst` may be a phi
 /// or a select instead of what it is.
-fn can_replace_operand_with_variable(
+pub(crate) fn can_replace_operand_with_variable(
     context: &Context,
     spec: &Speculation,
     function: &Function,

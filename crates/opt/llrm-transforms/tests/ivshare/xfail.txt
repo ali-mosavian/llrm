@@ -1,0 +1,8 @@
+# rows that do not have their form yet: row reason
+B03.p16 end-biased formulae not built (S3)
+B12.p16 end-biased formulae not built (S3)
+F09.p16 end-biased formulae not built (S3)
+F12.p16 end-biased formulae not built (S3)
+F21.p16 end-biased formulae not built (S3)
+F23.p16 end-biased formulae not built (S3)
+F34.p16 end-biased formulae not built (S3)

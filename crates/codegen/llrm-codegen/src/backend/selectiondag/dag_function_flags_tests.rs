@@ -839,3 +839,104 @@ fn a_string_compare_read_in_a_later_block_is_exported() {
     let done = select_with_flags_answers(QB_COMPARE_READ_LATER);
     assert!(done.is_ok(), "{:?}", done.err());
 }
+
+const ZEXT_NNEG_BESIDE_SEXT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(ptr %p) optsize {
+b1:
+  %v = load i16, ptr %p
+  %z = zext nneg i16 %v to i32
+  %s = sext i16 %v to i32
+  %neg = icmp slt i16 %v, 0
+  br i1 %neg, label %b2, label %b3
+b2:
+  %m = mul nsw i32 %s, 7
+  br label %b5
+b3:
+  %n = mul nuw nsw i32 %z, 5
+  br label %b5
+b5:
+  %r = phi i32 [ %m, %b2 ], [ %n, %b3 ]
+  ret i32 %r
+}
+";
+
+/// A `zext nneg` beside a `sext` of one load that a signed compare reads kept
+/// a `movzx` after the `movsx` load: parity/branch bq32 -Os, +2 B. The pin's
+/// `visitZERO_EXTEND` makes the `zext nneg` of the extended load's truncate the
+/// load.
+#[test]
+fn a_zext_nneg_of_a_load_a_signed_compare_reads_is_the_sext() {
+    let names = names(ZEXT_NNEG_BESIDE_SEXT).unwrap();
+    assert!(names.iter().any(|n| n == "movsx"), "premise: the sext is selected, got {names:?}");
+    assert!(!names.iter().any(|n| n == "movzx"), "the zext nneg is the sext: {names:?}");
+}
+
+/// The same, with the `sext` made first so the `zext nneg` is combined first:
+/// the pin's `tryToFoldExtOfLoad` (`NonNegZExt`) makes it the `sext` load.
+#[test]
+fn a_zext_nneg_combined_before_the_sext_of_its_load_is_the_sext() {
+    let flipped = ZEXT_NNEG_BESIDE_SEXT.replace(
+        "  %z = zext nneg i16 %v to i32\n  %s = sext i16 %v to i32\n",
+        "  %s = sext i16 %v to i32\n  %z = zext nneg i16 %v to i32\n",
+    );
+    assert_ne!(flipped, ZEXT_NNEG_BESIDE_SEXT, "premise: the order flips");
+    let names = names(&flipped).unwrap();
+    assert!(names.iter().any(|n| n == "movsx"), "premise: the sext is selected, got {names:?}");
+    assert!(!names.iter().any(|n| n == "movzx"), "the zext nneg is the sext: {names:?}");
+}
+
+/// `llrm.x86.udiv64by32` is the divide instruction: no call is made, `div`
+/// follows the two moves into `edx:eax`, and the result halves are the
+/// quotient (`eax`) and the remainder (`edx`). softfloat's f64 divide took
+/// 385841 clocks against libgcc's 197850 with a software 64 by 32 divide.
+#[test]
+fn a_udiv64by32_call_is_a_div_not_a_call() {
+    let ir = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare i64 @llrm.x86.udiv64by32(i32, i32, i32) readnone
+define i64 @f(i32 %hi, i32 %lo, i32 %d) {
+  %r = call i64 @llrm.x86.udiv64by32(i32 %hi, i32 %lo, i32 %d)
+  ret i64 %r
+}
+";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<String> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter_map(|w| w.name.as_deref().map(str::to_owned))
+        .collect();
+    assert_eq!(names.iter().filter(|n| n.as_str() == "div").count(), 1, "{names:?}");
+    assert!(!names.iter().any(|n| n.as_str() == "call"), "{names:?}");
+}
+
+const OVERFLOW_LOOP: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare {i32,i1} @llvm.uadd.with.overflow.i32(i32, i32)
+define void @f(ptr %p, i32 %s) {
+entry:
+  br label %l
+l:
+  %i = phi i32 [ %s, %entry ], [ %m, %l ]
+  %a = getelementptr i8, ptr %p, i32 %i
+  store volatile i8 -1, ptr %a
+  %o = call {i32,i1} @llvm.uadd.with.overflow.i32(i32 %i, i32 1)
+  %m = extractvalue {i32,i1} %o, 0
+  %ov = extractvalue {i32,i1} %o, 1
+  br i1 %ov, label %x, label %l
+x:
+  ret void
+}
+";
+
+/// A loop that ends on the carry of its counter's `uadd.with.overflow` branched
+/// on the flags of the add (`inc; jne`). The builder swaps the branch whose
+/// true successor follows into `xor ov, 1`, and the widened bit was tested
+/// through `sete; not; test`, three instructions per iteration (m16 `inc si;
+/// sete al; not al; test al, 1; jne`).
+#[test]
+fn a_branch_on_the_overflow_bit_reads_the_flags_of_the_add() {
+    let all = names(OVERFLOW_LOOP).unwrap();
+    assert!(!all.iter().any(|name| name.starts_with("set") || name == "not" || name == "test"), "{all:?}");
+}

@@ -21,7 +21,9 @@ fn check(
     let before = results(&module, inputs);
     let outer = Outer::of(&module, None);
     let layout = DataLayout::parse("e-p:32:32-i64:32-n8:16:32").expect("a layout");
-    let tti = X86::of_cpu("i486").expect("a cpu");
+    // These bodies are checked against the pin's select forms, so the cpu has a
+    // cmov.
+    let tti = X86::of_cpu("pentiumpro").expect("a cpu");
     let spec = Speculation { tti: &tti, layout: &layout, outer: &outer };
     let mut declared = Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
@@ -483,7 +485,7 @@ end:
   ret i16 %s
 }
 ",
-        "@switch.table.0 = private constant [3 x i8] [i8 8, i8 8, i8 9]
+        "@switch.table.0 = private unnamed_addr constant [3 x i8] [i8 8, i8 8, i8 9]
 
 define i16 @f(i16 %x) {
 b0:
@@ -515,7 +517,7 @@ end:
 fn test_array_cells_are_as_narrow_as_the_values_need() {
     check(
         &diamond("i32", &[(0, 0), (1, 1), (2, 2), (3, 1), (4, 0), (5, 2), (6, 1), (7, 0), (8, 2), (9, 1)], 0),
-        "@switch.table.0 = private constant [10 x i8] [i8 0, i8 1, i8 2, i8 1, i8 0, i8 2, i8 1, i8 0, i8 2, i8 1]
+        "@switch.table.0 = private unnamed_addr constant [10 x i8] [i8 0, i8 1, i8 2, i8 1, i8 0, i8 2, i8 1, i8 0, i8 2, i8 1]
 
 define i32 @f(i32 %x) {
 b0:
@@ -577,7 +579,7 @@ fn test_the_table_load_stays_behind_its_range_check() {
     text += &format!("{}, [ 1, %d ]\n  ret i32 %p\n}}\n", arms.join(", "));
     check16(
         &text,
-        "@switch.table.0 = private constant [12 x i8] [i8 3, i8 14, i8 15, i8 92, i8 65, i8 35, i8 89, i8 79, i8 32, i8 38, i8 46, i8 26]
+        "@switch.table.0 = private unnamed_addr constant [12 x i8] [i8 3, i8 14, i8 15, i8 92, i8 65, i8 35, i8 89, i8 79, i8 32, i8 38, i8 46, i8 26]
 
 define i32 @f(i32 %x) {
 b0:
@@ -628,4 +630,24 @@ fn test_no_jump_tables_keeps_the_switch_a_tree_of_compares() {
     simplified_with(&Options::L1438, context, &spec, &mut declared, function);
     declared.place(&mut module).expect("the declarations are placed");
     assert!(printed(&module).contains("switch.table"), "premise: {}", printed(&module));
+}
+
+/// A switch table was `private constant`, without `unnamed_addr` as SimplifyCFG
+/// makes it: ConstantMerge never merged two identical ones, so wasm32 `switch`
+/// at O1..O3 held 35 data bytes to the pin's 18.
+#[test]
+fn test_a_switch_table_is_unnamed_addr() {
+    let cases: Vec<(i128, i128)> =
+        (0..12).map(|at| (at, [3, 14, 15, 92, 65, 35, 89, 79, 32, 38, 46, 26][at as usize])).collect();
+    let text = diamond("i32", &cases, 1);
+    let mut module = parsed(&text);
+    let outer = Outer::of(&module, None);
+    let layout = DataLayout::parse("e-p:32:32-i64:32-n8:16:32").expect("a layout");
+    let tti = X86::of_cpu("i486").expect("a cpu");
+    let spec = Speculation { tti: &tti, layout: &layout, outer: &outer };
+    let mut declared = Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    simplified_with(&Options::L1438, context, &spec, &mut declared, function);
+    declared.place(&mut module).expect("the declarations are placed");
+    assert!(printed(&module).contains("private unnamed_addr constant"), "{}", printed(&module));
 }

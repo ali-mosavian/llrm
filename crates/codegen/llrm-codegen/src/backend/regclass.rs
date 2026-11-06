@@ -139,8 +139,9 @@ pub fn classes(
 /// instructions that name it, which a value made from another by the spiller or
 /// a split does not inherit. None where its instructions confine it to nothing.
 ///
-/// DEVIATE CF-1: the m16 `[base+index]` pairs colour base {BX} and index
-/// {SI,DI}; the pin has no such model. A pair member keeps its side.
+/// A `[base+index]` pair member keeps its side: the bases and indexes are the
+/// target's (`RegisterClasses::word_bases`, `word_indexes`: m16's {BX} and
+/// {SI,DI}), a fact of the encoding, not a deviation.
 /// DEVIATE CF-4: the answer comes from `classes` over the whole body, so a call
 /// costs a body; a caller that makes many values asks `classes` once.
 ///
@@ -209,6 +210,10 @@ pub struct Use {
     pub role: Role,
     /// The instruction writes the value there, rather than reads it.
     pub defining: bool,
+    /// A half of an address pair the roles left registers for: it confines the
+    /// value to the addressing registers, and only `distinct_classes`' cold
+    /// reads use it.
+    pub spare: bool,
 }
 
 /// Every read that confines a value on its own, a byte operand or an address
@@ -741,7 +746,15 @@ fn collected(
                         // The reads are kept only for a caller that asks for
                         // them.
                         if let Some(uses) = uses.as_deref_mut() {
-                            uses.push(Use { block: at, insn: position, value, class: choices.clone(), role, defining });
+                            uses.push(Use {
+                                block: at,
+                                insn: position,
+                                value,
+                                class: choices.clone(),
+                                role,
+                                defining,
+                                spare: false,
+                            });
                         }
                         _restrict(&mut out, value, choices);
                     }
@@ -786,16 +799,20 @@ fn collected(
     if let Some(uses) = uses.as_deref_mut() {
         for (block, insn, base, index) in pair_sites {
             for (value, role, kind) in [(base, Role::Base, Kind::WordBases), (index, Role::Index, Kind::WordIndexes)] {
-                if out.get(&value).is_some_and(BTreeSet::is_empty) {
-                    uses.push(Use {
-                        block,
-                        insn,
-                        value,
-                        class: kind.registers(registers).clone(),
-                        role,
-                        defining: false,
-                    });
-                }
+                let none = out.get(&value).is_some_and(BTreeSet::is_empty);
+                uses.push(Use {
+                    block,
+                    insn,
+                    value,
+                    class: if none {
+                        kind.registers(registers).clone()
+                    } else {
+                        registers.word_bases.union(&registers.word_indexes).copied().collect()
+                    },
+                    role,
+                    defining: false,
+                    spare: !none,
+                });
             }
         }
     }
@@ -1308,8 +1325,8 @@ mod tests {
     fn test_a_segment_only_a_phi_reads_has_the_class_of_its_web() {
         let (entry_segment, segment, base, loaded) = (1, 2, 3, 4);
         let cell = Mem {
-            base: Some(Held { value: base, width: 2 }),
-            selector: Some(Held { value: segment, width: 2 }),
+            base: Some(Held { value: base, width: 2, offset: 0 }),
+            selector: Some(Held { value: segment, width: 2, offset: 0 }),
             ..Mem::new(Some(Addr { segment: (RegId::ES).iced(), ..Addr::new(Space::Far, 0) }), 2)
         };
         let semantics = |op, name: &str, dests, sources, target| Semantics {
@@ -1319,7 +1336,7 @@ mod tests {
             target,
             ..Semantics::new(op)
         };
-        let held = |value| Loc::Held(Held { value, width: 2 });
+        let held = |value| Loc::Held(Held { value, width: 2, offset: 0 });
         let make =
             |at, defines: Vec<u32>, uses: Vec<u32>, what| Arc::new(Insn::new(at, None, Some(what), defines, uses));
         let entry = LirBlock {
@@ -1405,7 +1422,7 @@ mod tests {
     #[test]
     fn test_a_stored_word_recomputes_to_no_class_and_its_base_keeps_one() {
         let (base, word) = (1, 2);
-        let held = |value| Loc::Held(Held { value, width: 2 });
+        let held = |value| Loc::Held(Held { value, width: 2, offset: 0 });
         let semantics = |op, name: &str, dests, sources| Semantics {
             name: Some(name.into()),
             dests,
@@ -1415,7 +1432,7 @@ mod tests {
         let imm = |value| Loc::Imm(crate::model::ir::Imm { value, width: 2, address: None });
         let make =
             |at, defines: Vec<u32>, uses: Vec<u32>, what| Arc::new(Insn::new(at, None, Some(what), defines, uses));
-        let cell = Mem { base: Some(Held { value: base, width: 2 }), ..Mem::new(None, 2) };
+        let cell = Mem { base: Some(Held { value: base, width: 2, offset: 0 }), ..Mem::new(None, 2) };
         let block = LirBlock {
             at: 0,
             insns: vec![
@@ -1451,7 +1468,7 @@ mod tests {
     fn test_an_operand_is_xmm_by_its_form_not_its_width() {
         let regs = Regs(&llrm_x86_m64::REGISTER_INFO);
         let restricted = |name: &str, width: u32| {
-            let held = |value| Loc::Held(Held { value, width });
+            let held = |value| Loc::Held(Held { value, width, offset: 0 });
             let what = Semantics {
                 name: Some(name.into()),
                 dests: vec![held(1)],
@@ -1476,11 +1493,20 @@ pub(crate) fn untouchable(body: &LirBody) -> BTreeSet<u32> {
     out
 }
 
-/// Values no general register holds: x87 values and wider ones, and every phi
-/// web they join.
+/// Values no general register holds: x87 values, those wider than the widest
+/// general register (4 bytes at least: a pair), those an instruction fills
+/// into an xmm register, and every phi web they join.
 pub(crate) fn floating(body: &LirBody) -> BTreeSet<u32> {
     let regs = body.regs();
+    let widest = regs
+        .entries()
+        .filter(|(_, one)| one.classes & (llrm_lir::registers::class::GPR | llrm_lir::registers::class::INT) != 0)
+        .map(|(_, one)| one.bits / 8)
+        .max()
+        .unwrap_or(0)
+        .max(4);
     let mut out: BTreeSet<u32> = BTreeSet::new();
+    let mut items: Vec<Item> = Vec::new();
     for one in body.insns() {
         if one.what.as_ref().is_some_and(|what| target::_on_the_stack(regs, what) || what.op.is_x87()) {
             out.extend(one.uses.iter().chain(&one.defines).copied());
@@ -1488,9 +1514,16 @@ pub(crate) fn floating(body: &LirBody) -> BTreeSet<u32> {
         // A value no general register holds: a float, whatever reads it.
         for place in one.what.iter().flat_map(|what| what.dests.iter().chain(&what.sources)) {
             for held in crate::model::ir::values(place) {
-                if held.width > 4 {
+                if held.width > widest {
                     out.insert(held.value);
                 }
+            }
+        }
+        items.clear();
+        contribution(regs, &*one, &mut items);
+        for item in &items {
+            if let Item::Restrict { value, kind: Kind::Xmm, .. } = item {
+                out.insert(*value);
             }
         }
     }

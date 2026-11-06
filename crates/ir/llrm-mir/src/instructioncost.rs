@@ -43,7 +43,8 @@ fn operand_info(
     }
 }
 
-fn operand_type(
+/// The type of an operand; none for a block.
+pub fn operand_type(
     context: &Context,
     function: &Function,
     operand: Operand,
@@ -94,6 +95,46 @@ fn cast_of(op: CastOp) -> Option<CastKind> {
         CastOp::BitCast => CastKind::BitCast,
         CastOp::FPRound | CastOp::AddrSpaceCast => return None,
     })
+}
+
+/// A `select` of booleans with a constant arm is a logic operation, not a
+/// choice: `select x, y, false` is `x & y` and `select x, true, y` is `x | y`.
+/// The operation and the arm it takes as its second operand.
+pub fn select_logic(
+    context: &Context,
+    ty: TypeId,
+    on_true: Operand,
+    on_false: Operand,
+) -> Option<(ArithOp, Operand)> {
+    if !matches!(context.types.get(ty), Type::Int(1)) {
+        return None;
+    }
+    if constant_int(context, on_false) == Some(0) {
+        Some((ArithOp::And, on_true))
+    } else if constant_int(context, on_true) == Some(1) {
+        Some((ArithOp::Or, on_false))
+    } else {
+        None
+    }
+}
+
+/// The cost of a `select` of type `ty` between `on_true` and `on_false`.
+pub fn select_cost(
+    context: &Context,
+    tti: &dyn Tti,
+    ty: TypeId,
+    condition: Operand,
+    on_true: Operand,
+    on_false: Operand,
+    kind: CostKind,
+) -> Cost {
+    let Some(result) = Ty::of(&context.types, ty) else { return Cost::INVALID };
+    match select_logic(context, ty, on_true, on_false) {
+        Some((op, second)) => {
+            tti.arithmetic_cost(op, result, kind, operand_info(context, condition), operand_info(context, second))
+        }
+        None => tti.cmp_sel_cost(CmpSel::Select, result, kind),
+    }
 }
 
 /// `isa<Constant>`-and-a-small-integer: the value of an integer constant.
@@ -152,7 +193,7 @@ fn gep_cost(
             })
         })
         .collect();
-    let (offset, variable) = layout.collect_offset(&context.types, source, &indices);
+    let (offset, variable, target) = layout.collect_offset_typed(&context.types, source, &indices);
     // No addressing mode takes two scale registers.
     if variable.len() > 1 {
         return Cost::BASIC;
@@ -161,10 +202,10 @@ fn gep_cost(
     // A scaled index that costs instructions of its own (real mode's prefixed
     // form) is not free in the address.
     let folds = scale <= 1 || tti.scaled_index_insns() == 0;
-    let legal = match access_bytes {
-        Some(bytes) => tti.is_legal_addressing_mode_for(bytes, base_global, offset as i64, !base_global, scale),
-        None => tti.is_legal_addressing_mode(base_global, offset as i64, !base_global, scale),
-    };
+    // `if (!AccessType) AccessType = TargetType`: without a load or store to
+    // ask about, the type the last index selects stands in for it.
+    let bytes = access_bytes.unwrap_or_else(|| layout.alloc_size(&context.types, target));
+    let legal = tti.is_legal_addressing_mode_for(bytes, base_global, offset as i64, !base_global, scale);
     if folds && legal { Cost::FREE } else { Cost::BASIC }
 }
 
@@ -332,24 +373,7 @@ pub fn instruction_cost_with(
                 None => Cost::INVALID,
             }
         }
-        Opcode::Select => {
-            // `select x, y, false` is `x & y` and `select x, true, y` is `x |
-            // y`.
-            let boolean = matches!(context.types.get(operation.ty), Type::Int(1));
-            let false_arm = constant_int(context, operands[2]) == Some(0);
-            let true_arm = constant_int(context, operands[1]) == Some(1);
-            if boolean && (false_arm || true_arm) {
-                let (op, second) = if false_arm { (ArithOp::And, 1) } else { (ArithOp::Or, 2) };
-                return match result {
-                    Some(ty) => tti.arithmetic_cost(op, ty, kind, info(0), info(second)),
-                    None => Cost::INVALID,
-                };
-            }
-            match result {
-                Some(ty) => tti.cmp_sel_cost(CmpSel::Select, ty, kind),
-                None => Cost::INVALID,
-            }
-        }
+        Opcode::Select => select_cost(context, tti, operation.ty, operands[0], operands[1], operands[2], kind),
         Opcode::ICmp(_) | Opcode::FCmp(_) => {
             let op = if matches!(operation.opcode, Opcode::ICmp(_)) { CmpSel::ICmp } else { CmpSel::FCmp };
             match modelled(operands[0]) {
@@ -357,6 +381,6 @@ pub fn instruction_cost_with(
                 None => Cost::INVALID,
             }
         }
-        Opcode::Unreachable | Opcode::Resume | Opcode::LandingPad { .. } => Cost::BASIC,
+        Opcode::Unreachable | Opcode::Resume | Opcode::LandingPad { .. } | Opcode::VaArg => Cost::BASIC,
     }
 }

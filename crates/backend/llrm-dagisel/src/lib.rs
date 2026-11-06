@@ -19,6 +19,7 @@
 pub mod dag;
 #[rustfmt::skip]
 pub mod generated;
+pub mod aarch64_predicates;
 pub mod instr;
 pub mod interp;
 pub mod matcher;
@@ -30,12 +31,15 @@ pub mod x86_fcmp;
 pub mod x86_fplogic;
 pub mod x86_hooks;
 pub mod x86_llrm;
+pub mod x86_memop128;
 pub mod x86_mul;
 pub mod x86_rmw;
 pub mod x86_select;
 pub mod x86_shift;
 pub mod x86_test;
 
+#[cfg(test)]
+mod aarch64_tests;
 /// A small DAG and hooks for the tests and for `examples/price.rs`.
 pub mod testing;
 #[cfg(test)]

@@ -123,6 +123,11 @@ def symbols(path: Path) -> tuple[set[str], set[str]]:
     return defined, needed
 
 
+def runtime_sources(portable: list[Path], own: list[Path]) -> list[Path]:
+    """The sources one build compiles: the target's own, and the portable C that none of them replaces (`qbruntime.portable_not_replaced`)."""
+    return sorted([*qbruntime.portable_not_replaced(portable, own), *own])
+
+
 def build(work: Path) -> dict[str, Path]:
     """The runtime's objects, by source name: the portable C, the target's own, and the OS layer's."""
     work.mkdir(parents=True, exist_ok=True)
@@ -130,7 +135,7 @@ def build(work: Path) -> dict[str, Path]:
     made: dict[str, Path] = {}
     failures = []
     tree, tools = _tree(), _stamp(dosbatch.c_frontend(), "jwasm", "jwlink") + "|" + dosbatch.clang_identity()
-    for source in sorted([*RUNTIME.glob("*.c"), *qbruntime.platform_sources_of(PLATFORM)]):
+    for source in runtime_sources(list(RUNTIME.glob("*.c")), qbruntime.platform_sources_of(PLATFORM)):
         if source.name == "start.asm":
             continue
         obj = work / f"{source.stem}.obj"
@@ -183,12 +188,17 @@ def data_files(source: Path) -> tuple[Path, ...]:
 
 def basic_key(source: Path, flags: tuple[str, ...]) -> str:
     """What decides the object a BASIC source compiles to: its bytes, the flags, and the compiler's build."""
-    return f"basic|{source.read_bytes().hex()}|{flags}|{_stamp('llrm-qb')}"
+    return f"basic|{source.read_bytes().hex()}|{flags}|{_stamp('llrm-qb')}|{_environment()}"
 
 
 def runtime_key(source: Path, tree: str, tools: str) -> str:
     """What decides a runtime object: its source, every source and header of the runtime, and the tools' builds."""
-    return f"runtime|{source}|{tree}|{tools}"
+    return f"runtime|{source}|{tree}|{tools}|{_environment()}"
+
+
+def _environment() -> str:
+    """The compiler's own switches (`LLRM_*`) change what it emits: an object made under one is not another's."""
+    return repr(sorted((name, value) for name, value in os.environ.items() if name.startswith("LLRM_")))
 
 
 def compile_basic(source: Path, obj: Path, flags: tuple[str, ...] = ("-O2",)) -> str | None:

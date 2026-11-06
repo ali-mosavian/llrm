@@ -25,6 +25,11 @@ import qcport_run as qr  # noqa: E402
 dosbatch = qr.dosbatch
 
 
+def compiler(root: Path = HERE.parent, env=os.environ) -> Path:
+    """The gate builds into CARGO_TARGET_DIR and names the binaries LLRM_BIN: qcport and oracle-qcport failed `FileNotFoundError .../target/release/llrm-cc`."""
+    return Path(env["LLRM_BIN"]) / "llrm-cc" if env.get("LLRM_BIN") else root / "target/release/llrm-cc"
+
+
 def main() -> int:
     argv = sys.argv[1:]
     row = os.environ.get("QCPORT_CC_ROW", "x86_16-dos")
@@ -39,7 +44,7 @@ def main() -> int:
     qcport, include, borland = qr.required("QCPORT"), qr.required("QCPORT_INC"), qr.required("QCPORT_BORLAND")
     borland_include = qr.required("LLRM_BORLAND_INC")
     root = HERE.parent
-    cc = root / "target/release/llrm-cc"
+    cc = compiler(root)
     built_already = Path(os.environ["QCPORT_OBJECTS"]).expanduser() if os.environ.get("QCPORT_OBJECTS") else None
     sources = sorted(source for part in qr.MODULES for source in (qcport / part).glob("*.c"))
     dirs = [flag for part in (*qr.MODULES, "qgl") for flag in ("-I", str(qcport / part))]

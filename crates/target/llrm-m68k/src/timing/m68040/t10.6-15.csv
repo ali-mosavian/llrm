@@ -1,0 +1,19 @@
+#title,"10.6 INTEGER UNIT INSTRUCTION TIMINGS: ROXL, ROXR | Scc | SUBA",page,10-27,notes,"*Immediate count specified for shift count/shift count specified in register, respectively."
+Addressing Mode,"ROXL, ROXR <ea> Calculate","ROXL, ROXR Execute",Scc <ea> Calculate,Scc Execute,SUBA <ea> Calculate,SUBA Execute
+Dn,1,5/6 *,1,2,1,1
+An,—,—,—,—,1,2
+(An),1,2,1,2,1,2
+(An)+,1,2,1,2,2,1L + 2
+–(An),1,2,1,2,2,1L + 2
+"(d 16,An)",1,2,1,2,2,1L + 2
+"(d 16,PC)",—,—,—,—,3,2L + 2
+"(xxx).W, (xxx).L",1,2,1,2,1,2
+#<xxx>,—,—,—,—,1,2
+"(d 8,An,Xn)",3,4,4,5,4,5
+"(d 8,PC,Xn)",—,—,—,—,5,1L + 5
+"(BR,Xn)",6,1L + 6,6,1L + 6,6,1L + 6
+"(bd,BR,Xn)",7,1L + 7,7,1L + 7,7,1L + 7
+"([bd,BR,Xn])",9,1L + 9,10,1L + 10,9,1L + 9
+"([bd,BR,Xn],od)",10,1L + 10,11,1L + 11,10,1L + 10
+"([bd,BR],Xn)",10,3L + 8,11,3L + 9,10,3L + 8
+"([bd,BR],Xn,od)",11,3L + 9,12,3L + 10,11,3L + 9

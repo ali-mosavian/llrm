@@ -20,7 +20,7 @@ fn dump(
         .expect("f");
     let convention = crate::backend::isel::convention(&module, &layout, id, arch).expect("a convention");
     let mut info = FunctionLoweringInfo::new(function);
-    build_block(&module, function, &layout, target, arch, &convention, &mut info, function.entry().unwrap())
+    build_block(&module, function, &layout, target, &arch, &convention, &mut info, function.entry().unwrap())
         .unwrap_or_else(|why| panic!("{}", why.0))
         .dag
         .dump()

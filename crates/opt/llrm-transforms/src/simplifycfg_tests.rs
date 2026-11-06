@@ -627,6 +627,77 @@ b0:
     );
 }
 
+/// The fold with a `cmov`-less select, on the i486's `Flagged` profile.
+fn folded_without_cmov(text: &str) -> String {
+    let flagged = crate::testing::Flagged { no_cmov: true, ..Default::default() };
+    let mut module = parsed(text);
+    let outer = Outer::of(&module, None);
+    let layout = DataLayout::default();
+    let spec = Speculation { tti: &flagged, layout: &layout, outer: &outer };
+    let mut declared = Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    super::simplified(context, &spec, &mut declared, function);
+    printed(&module)
+}
+
+/// Where a select is a branch (no cmov, the i486) its price counts against the
+/// fold's budget, which the pin's does not: arms of two instructions each (the
+/// pin's 4) plus the select are over it, and keep their branch. m32 -O2 made
+/// x_isqrt's loop 11.7 instructions against gcc's 7.1, x_mergesort 1.63x gcc's
+/// clocks, and x_crc32 1179 B against gcc's 161.
+#[test]
+fn test_where_a_select_is_a_branch_arms_with_more_code_keep_their_branch() {
+    let diamond = "define i16 @f(i16 %x, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %a = add i16 %x, 1
+  %y = mul i16 %a, 3
+  br label %b3
+
+b2:
+  %b = sub i16 %x, 1
+  %z = mul i16 %b, 5
+  br label %b3
+
+b3:
+  %p = phi i16 [ %y, %b1 ], [ %z, %b2 ]
+  ret i16 %p
+}
+";
+    assert_eq!(folded_without_cmov(diamond), diamond);
+}
+
+/// parity/control at m16 -O2 (`total += v + i` or `total -= v - i` by the
+/// parity of `i`): one instruction an arm is under the budget with the select
+/// counted, so it folds early as the pin's does, and the inlined loop is
+/// evaluated to its constant. Declining it left the loop (tip `mov eax, 15007`
+/// against #6318's 100 lines of loop).
+#[test]
+fn test_where_a_select_is_a_branch_a_diamond_of_one_instruction_an_arm_still_folds() {
+    let text = folded_without_cmov(
+        "define i16 @f(i16 %x, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %y = add i16 %x, 1
+  br label %b3
+
+b2:
+  %z = sub i16 %x, 1
+  br label %b3
+
+b3:
+  %p = phi i16 [ %y, %b1 ], [ %z, %b2 ]
+  ret i16 %p
+}
+",
+    );
+    assert!(text.contains("select i1 %c"), "{text}");
+}
+
 /// Five instructions cost more than the budget (4): the branch stays.
 #[test]
 fn test_an_arm_dearer_than_the_budget_keeps_its_branch() {
@@ -1300,4 +1371,158 @@ bx:
     let after = printed(&module);
     assert!(!after.contains("br i1"), "{after}");
     assert_eq!(results(&module, inputs), before);
+}
+
+/// SimplifyCFG prices speculation by `TCK_CodeSize` in a `minsize` function
+/// (`validateAndCostRequiredSelects`, `performBranchToCommonDestFolding`); the
+/// kind was always `SizeAndLatency`. On the i486 only a divide is priced
+/// differently (2 against 4), so the kind is checked where it is chosen.
+#[test]
+fn test_a_minsize_function_is_priced_by_code_size() {
+    use llrm_mir::tti::CostKind;
+    let text = "define void @f() {\nb0:\n  ret void\n}\n";
+    let mut module = parsed(text);
+    let (_, function) = module.function_mut("f").expect("@f");
+    assert_eq!(crate::speculate::cost_kind(function), CostKind::SizeAndLatency);
+    for attr in ["optsize", "minsize"] {
+        let mut module = parsed(&text.replace("@f()", &format!("@f() {attr}")));
+        let (_, function) = module.function_mut("f").expect("@f");
+        let expected = if attr == "minsize" { CostKind::CodeSize } else { CostKind::SizeAndLatency };
+        assert_eq!(crate::speculate::cost_kind(function), expected, "{attr}");
+    }
+}
+
+/// `FoldInstsToUnreachable`: what follows a call to a `noreturn` function was
+/// kept (and the block it jumps to with it), though control never gets there.
+#[test]
+fn test_the_code_after_a_call_that_never_returns_is_cut_and_the_block_ends_in_unreachable() {
+    let mut module = parsed(
+        "declare void @die() noreturn
+
+define void @f(i16 %x) {
+b0:
+  call void @die()
+  br label %b1
+
+b1:
+  ret void
+}
+",
+    );
+    assert!(simplify(&mut module));
+    assert_eq!(
+        printed(&module),
+        "declare void @die() noreturn
+
+define void @f(i16 %x) {
+b0:
+  call void @die()
+  unreachable
+}
+"
+    );
+}
+
+/// A loop reads a new `%2 = next()` each pass (jpeg_fixed's marker loop) and
+/// switches on it; the latch is an empty block back to the header. The
+/// `switch %2` before the latch was folded with the header's: its default
+/// went to the header's default as if the same `%2` reached the header again.
+/// A marker no case names (208..216 here) then went round the tests for ever:
+/// wasm32 -O1..-Os hung where the pin returns 1.
+#[test]
+fn test_a_switch_is_not_folded_with_the_header_that_reads_a_new_value() {
+    let text = "@n = global i32 0
+@m = global i32 0
+
+define i32 @next() {
+b0:
+  %v = load i32, ptr @n
+  %w = add i32 %v, 1
+  store i32 %w, ptr @n
+  %r = add i32 %v, 208
+  ret i32 %r
+}
+
+define void @message(ptr %p) {
+b0:
+  store i32 1, ptr @m
+  ret void
+}
+
+@.str = private unnamed_addr constant [4 x i8] c\"p\\0D\\0A\\00\", align 1
+@.str.1 = private unnamed_addr constant [4 x i8] c\"a\\0D\\0A\\00\", align 1
+@.str.2 = private unnamed_addr constant [4 x i8] c\"b\\0D\\0A\\00\", align 1
+
+define i32 @f() {
+  br label %1
+
+1:
+  %2 = call i32 @next()
+  switch i32 %2, label %9 [
+    i32 196, label %3
+    i32 192, label %5
+    i32 194, label %8
+  ]
+
+3:
+  %4 = call i32 @next()
+  br label %22
+
+5:
+  %6 = call i32 @next()
+  %7 = call i32 @next()
+  br label %22
+
+8:
+  call void @message(ptr noundef @.str)
+  br label %23
+
+9:
+  %10 = add i32 %2, -201
+  %11 = icmp ult i32 %10, 7
+  %12 = icmp ne i32 %2, 204
+  %13 = and i1 %11, %12
+  br i1 %13, label %14, label %15
+
+14:
+  call void @message(ptr noundef @.str.1)
+  br label %23
+
+15:
+  %16 = add i32 %2, -193
+  %17 = icmp ult i32 %16, 15
+  br i1 %17, label %switch.early.test, label %19
+
+switch.early.test:
+  switch i32 %2, label %18 [
+    i32 200, label %22
+    i32 204, label %22
+  ]
+
+18:
+  call void @message(ptr noundef @.str.2)
+  br label %23
+
+19:
+  switch i32 %2, label %22 [
+    i32 221, label %20
+    i32 217, label %23
+  ]
+
+20:
+  %21 = call i32 @next()
+  br label %22
+
+22:
+  br label %1
+
+23:
+  %24 = phi i32 [ 0, %8 ], [ 0, %14 ], [ 0, %18 ], [ 1, %19 ]
+  ret i32 %24
+}
+";
+    let mut module = parsed(text);
+    let before = results(&module, &[&[]]);
+    simplify_with(&super::Options::L1438, &mut module);
+    assert_eq!(results(&module, &[&[]]), before, "{}", printed(&module));
 }

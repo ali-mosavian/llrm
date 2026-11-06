@@ -2,9 +2,9 @@
 //! read through an `and 255` is a byte load at `p + 1`, `and (load p), 255` a
 //! byte `zextload`.
 //!
-//! DEVIATE SD249: only the `srl`, `sra` and `and` openings (the `truncate`
-//! one is [`DagCombiner::reduce_load_width`] in `dag_combiner.rs`); no
-//! look-through `freeze`, no `shl` left shift, and `isLegalNarrowLdSt` takes
+//! DEVIATE SD249: only the `srl`, `sra`, `sext_inreg` and `and` openings (the
+//! `truncate` one is [`DagCombiner::reduce_load_width`] in `dag_combiner.rs`);
+//! no look-through `freeze`, no `shl` left shift, and `isLegalNarrowLdSt` takes
 //! every x86 access as allowed (unaligned loads are legal there). Owner
 //! sdag-b.
 //!
@@ -39,7 +39,19 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if !vt.is_integer() || vt.size_in_bits() > 64 {
             return None;
         }
-        let n0 = self.dag.operand(node, 0);
+        let mut n0 = self.dag.operand(node, 0);
+        // Look through a freeze between the `and` and the load; it is put back
+        // on the narrowed load. DEVIATE: only a freeze with one use.
+        // Exit: x86 judged.
+        let mut frozen = None;
+        if op == ISD::And
+            && self.hooks.reduce_load_width_through_freeze()
+            && self.dag.opcode(n0) == ISD::Freeze
+            && self.dag.has_one_use(n0.node)
+        {
+            frozen = Some(n0);
+            n0 = self.dag.operand(n0, 0);
+        }
         let mut ext_type: Option<LoadExt>;
         let mut ext_vt: EVT;
         let mut shift = 0u32;
@@ -59,6 +71,14 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 if matches!(info.ext, Some(LoadExt::SExtLoad | LoadExt::ZExtLoad)) && info.ext != ext_type {
                     return None;
                 }
+            }
+            ISD::SignExtendInReg => {
+                let super::dag::NodeData::ValueType(narrow) = self.dag.node(self.dag.operand(node, 1)).data else {
+                    return None;
+                };
+                self.load_info(n0)?;
+                ext_type = Some(LoadExt::SExtLoad);
+                ext_vt = narrow;
             }
             ISD::And => {
                 let mask = self
@@ -129,7 +149,14 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if !self.legal_narrow(load, &info, ext_type, ext_vt, shift) {
             return None;
         }
-        let offset = i64::from(shift / 8);
+        // `AdjustBigEndianShift`
+        let store_bits = |bits: u32| bits.div_ceil(8) * 8;
+        let adjusted = if self.dag.config().big_endian {
+            store_bits(info.mem_vt.size_in_bits()) - store_bits(ext_vt.size_in_bits()) - shift
+        } else {
+            shift
+        };
+        let offset = i64::from(adjusted / 8);
         let (chain, ptr) = (self.dag.operand(load, 0), self.dag.operand(load, 1));
         let ptr = if offset == 0 { ptr } else { self.dag.get_object_ptr_offset(ptr, offset) };
         let base = match info.base {
@@ -145,6 +172,18 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         };
         self.replace_value(SDValue { node: load.node, res: 1 }, SDValue { node: new.node, res: 1 });
         let mut result = new;
+        if frozen.is_some() {
+            result = self.dag.get_node(ISD::Freeze, vt, &[result]);
+            let kind = match ext_type {
+                Some(LoadExt::ZExtLoad) => Some(ISD::AssertZext),
+                Some(LoadExt::SExtLoad) => Some(ISD::AssertSext),
+                _ => None,
+            };
+            if let Some(kind) = kind {
+                let asserted = self.dag.get_value_type_node(ext_vt);
+                result = self.dag.get_node(kind, vt, &[result, asserted]);
+            }
+        }
         if shifted_offset != 0 {
             let by = self.dag.get_constant(u128::from(shifted_offset), vt);
             result = self.dag.get_node(ISD::Shl, vt, &[result, by]);

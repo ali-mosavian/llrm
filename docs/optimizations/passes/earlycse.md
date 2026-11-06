@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/earlycse.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/earlycse.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/earlycse.rs sha256:aea80fdf90e53103c750d9710d65cefe89398ca53ade3710cb25ebd2b6cf7939 -->
+<!-- src: crates/opt/llrm-transforms/src/earlycse.rs sha256:2d83fa4d05554a24c060dc48df59162d77ae19f0330745ad15ed7b37c9b676a0 -->
 
 # earlycse
 
@@ -11,14 +11,14 @@ A translation of `llvm/lib/Transforms/Scalar/EarlyCSE.cpp` at d1106deb71cc;
 each function carries the permalink of the one it translates. What is not
 translated is marked DEVIATE with its reason:
 
-- DEVIATE no `invariant.start`, `guard`, `sideeffect`, `pseudoprobe`, masked
-  or target memory intrinsics, memset forwarding, fences or atomics: MIR has
-  none (or `fill` makes them later). `llvm.assume` is handled.
+- DEVIATE no `guard`, `sideeffect`, `pseudoprobe`, masked or target memory
+  intrinsics, memset forwarding, fences or atomics: MIR has none (or `fill`
+  makes them later). `llvm.assume` is handled.
 - DEVIATE flags are intersected whenever a value is reused (`combineIRFlags`
   does it only when poison-generating flags remain).
 - DEVIATE a call's attributes are not intersected; a call that only reads or
   only writes memory (`memory::of`, which counts every location including
-  `inaccessiblemem`) is numbered unless it is an `llvm.`/`llrm.` marker.
+  `inaccessiblemem`) is numbered unless it is an `llrm.` marker.
 - DEVIATE a GEP's constant offset is taken for byte GEPs only.
 - DEVIATE MemorySSA is the translated `Mssa`, built once for the function as
   it was and not updated (`MSSAUpdater`); an erased store stays a def in it,

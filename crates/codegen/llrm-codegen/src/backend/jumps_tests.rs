@@ -26,6 +26,14 @@ fn cx() -> Loc {
     Loc::Reg(Reg { register: RegId::CX, width: 2 })
 }
 
+fn dx() -> Loc {
+    Loc::Reg(Reg { register: RegId::DX, width: 2 })
+}
+
+fn si() -> Loc {
+    Loc::Reg(Reg { register: RegId::SI, width: 2 })
+}
+
 fn imm(value: i64) -> Loc {
     Loc::Imm(Imm { value, width: 2, address: None })
 }
@@ -107,6 +115,7 @@ fn listed(
         size: false,
         entry: 0,
         stack_check: None,
+        probe_stack: None,
         registers: llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
     };
     masm::_procedure(&procedure, &IndexMap::default(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect()
@@ -1499,7 +1508,7 @@ fn test_for_size_a_join_of_two_instructions_is_not_copied() {
     let join = || vec![_move(30, imm(3)), _return(31)];
     let speed = placed(&diamond_joined(0.9, join())).unwrap();
     assert!(speed.blocks.iter().all(|one| one.at != 30), "copied for speed");
-    let size = _placed(&diamond_joined(0.9, join()), true, false).unwrap();
+    let size = _placed(&diamond_joined(0.9, join()), true, false, None).unwrap();
     assert!(size.blocks.iter().any(|one| one.at == 30), "kept for size");
 }
 
@@ -1508,10 +1517,22 @@ fn test_for_size_a_join_of_two_instructions_is_not_copied() {
 #[test]
 fn test_at_o3_a_join_of_four_instructions_is_copied() {
     let join = || vec![_move(30, imm(3)), _move(31, imm(4)), _move(32, imm(5)), _return(33)];
-    let o2 = _placed(&diamond_joined(0.9, join()), false, false).unwrap();
+    let o2 = _placed(&diamond_joined(0.9, join()), false, false, None).unwrap();
     assert!(o2.blocks.iter().any(|one| one.at == 30), "kept at -O2");
-    let o3 = _placed(&diamond_joined(0.9, join()), false, true).unwrap();
+    let o3 = _placed(&diamond_joined(0.9, join()), false, true, None).unwrap();
     assert!(o3.blocks.iter().all(|one| one.at != 30), "copied at -O3");
+}
+
+/// A target's `tail_dup_placement_threshold` below the pin's bound keeps a join
+/// the pin would copy: at m16 -O2 a copied compare-and-branch tail cost bytes
+/// and clocks (qlight, grep: +84 B, +3.1M clk).
+#[test]
+fn test_a_target_threshold_keeps_a_join_the_pin_copies() {
+    let join = || vec![_move(30, imm(3)), _return(31)];
+    let pin = _placed(&diamond_joined(0.9, join()), false, false, None).unwrap();
+    assert!(pin.blocks.iter().all(|one| one.at != 30), "copied by the pin's bound");
+    let target = _placed(&diamond_joined(0.9, join()), false, false, Some(1)).unwrap();
+    assert!(target.blocks.iter().any(|one| one.at == 30), "kept at the target's bound");
 }
 
 /// Only a block that goes to the join and nowhere else takes a copy: one that
@@ -1567,7 +1588,7 @@ fn test_a_copied_test_keeps_its_loops_odds() {
 #[test]
 fn test_for_size_a_diamond_is_placed_as_for_speed() {
     let order =
-        |body: LirBody| _placed(&body, true, false).unwrap().blocks.iter().map(|one| one.at).collect::<Vec<_>>();
+        |body: LirBody| _placed(&body, true, false, None).unwrap().blocks.iter().map(|one| one.at).collect::<Vec<_>>();
     assert_eq!(order(weighted_diamond(0.7)), vec![1, 10, 20, 30]);
     assert_eq!(order(weighted_diamond(0.9)), vec![1, 10, 30, 20]);
 }
@@ -1774,7 +1795,8 @@ fn test_the_liveness_of_some_values_is_what_the_solve_of_all_of_them_gives() {
                 let uses = if next(3) > 0 { vec![next(6) as u32] } else { Vec::new() };
                 let mut one = Insn::new(at * 10 + step as i64, None, None, defines, uses);
                 if next(5) == 0 {
-                    one.requires = vec![(crate::model::ir::Held { value: next(6) as u32, width: 2 }, RegId::AX)];
+                    one.requires =
+                        vec![(crate::model::ir::Held { value: next(6) as u32, width: 2, offset: 0 }, RegId::AX)];
                 }
                 insns.push(Arc::new(one));
             }
@@ -1950,6 +1972,32 @@ fn test_a_loop_block_nothing_falls_into_is_aligned() {
     size.size = true;
     assert!(align(&size).iter().all(|(_, align)| *align == 0), "size aligns nothing");
     assert!(align(m16).iter().all(|(_, align)| *align == 0), "m16 aligns nothing");
+}
+
+/// DEVIATE SD545: an aligned loop header takes at most the target's
+/// `loop_max_skip` bytes of padding. jpeg_single -O2 m32 padded 15 bytes of
+/// one-byte nops before a loop it falls into 58% of the time, 216,077 nops
+/// executed (+1.4%).
+#[test]
+fn test_an_aligned_loop_header_gives_up_a_pad_longer_than_the_targets_limit() {
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_move(1, imm(0)), _jump(2, 3)], vec![3]).into(),
+            block(8, vec![_move(8, bx())], vec![3]).into(),
+            block(3, vec![_compare(3), _branch(4, "jl", 8), _jump(5, 17)], vec![8, 17]).into(),
+            block(17, vec![_return(17)], vec![]).into(),
+        ],
+    );
+    let mut on = cpu::profile("486").unwrap().clone();
+    on.loop_alignment = 4;
+    on.loop_max_skip = 10;
+    let skip =
+        |one: &cpu::Profile| aligned(&source, one).blocks.iter().map(|one| (one.at, one.max_skip)).collect::<Vec<_>>();
+    assert_eq!(skip(&on), [(1, 0), (8, 10), (3, 0), (17, 0)]);
+    on.loop_max_skip = 0;
+    assert!(skip(&on).iter().all(|(_, skip)| *skip == 0), "no limit stated, no limit set");
 }
 
 /// A table jump's index to a block that only jumps goes to where it jumps: the
@@ -2298,6 +2346,94 @@ fn test_a_zeroing_xor_both_ways_begin_with_is_hoisted_above_the_compare() {
     assert!(at < lines.iter().position(|line| line.starts_with("cmp")).unwrap(), "{lines:?}");
 }
 
+/// One way puts an unrelated move ahead of the zeroing `xor` both ways need
+/// (`for (...) sum += ...; return sum` at -Os: `mov esi, 1` before `xor ecx,
+/// ecx` in the loop's entry, the bare `xor` on the skip edge): the leading-run
+/// hoist saw different first instructions and left two xors, 4 B over main/gcc
+/// (idiv_loop_os, recgcd 114 B against 110 B).
+#[test]
+fn test_a_zeroing_xor_behind_an_unrelated_move_is_hoisted_above_the_compare() {
+    let zero = |at| _inserted(_insn(at, Operation::Binary, "xor", vec![cx()], vec![cx(), cx()], None));
+    let lines = _printed(vec![
+        block(1, vec![_compare(1), _branch(2, "je", 9)], vec![9, 4]).into(),
+        block(
+            4,
+            vec![
+                _inserted(_insn(4, Operation::Move, "mov", vec![bx()], vec![imm(1)], None)),
+                zero(5),
+                _move(6, bx()),
+                _return(7),
+            ],
+            vec![],
+        )
+        .into(),
+        block(9, vec![zero(9), _move(10, ax()), _return(11)], vec![]).into(),
+    ]);
+    assert_eq!(lines.iter().filter(|line| line.as_str() == "xor cx, cx").count(), 1, "{lines:?}");
+    let at = lines.iter().position(|line| line.as_str() == "xor cx, cx").unwrap();
+    assert!(at < lines.iter().position(|line| line.starts_with("cmp")).unwrap(), "{lines:?}");
+}
+
+/// The ways end with the same tail, the move both have behind an unrelated one
+/// (a duplicated join, m16 sfm16_float_add -O2): tail merging takes the whole
+/// tail, and lifting the move out left tails that no longer merged, +4 B.
+#[test]
+fn test_a_move_inside_the_tail_both_ways_end_with_is_not_lifted() {
+    let copy = |at| _inserted(_insn(at, Operation::Move, "mov", vec![cx()], vec![si()], None));
+    let lines = _printed(vec![
+        block(1, vec![_compare(1), _branch(2, "je", 9)], vec![9, 4]).into(),
+        block(
+            4,
+            vec![_inserted(_insn(4, Operation::Move, "mov", vec![dx()], vec![imm(1)], None)), copy(5), _return(7)],
+            vec![],
+        )
+        .into(),
+        block(9, vec![copy(9), _return(11)], vec![]).into(),
+    ]);
+    let at = lines.iter().position(|line| line.as_str() == "mov cx, si").unwrap();
+    assert!(at > lines.iter().position(|line| line.starts_with("cmp")).unwrap(), "{lines:?}");
+}
+
+/// One way jumps to the block the other falls into: the tail is the same
+/// (m16 sfm16_float_add -O2 again, the lift ran on the jump's difference).
+#[test]
+fn test_a_jump_where_the_other_way_falls_does_not_hide_the_common_tail() {
+    let copy = |at| _inserted(_insn(at, Operation::Move, "mov", vec![cx()], vec![si()], None));
+    let lines = _printed(vec![
+        block(1, vec![_compare(1), _branch(2, "je", 9)], vec![9, 4]).into(),
+        block(4, vec![_inserted(_insn(4, Operation::Move, "mov", vec![dx()], vec![imm(1)], None)), copy(5), _jump(6, 20)], vec![20]).into(),
+        block(9, vec![copy(9)], vec![20]).into(),
+        block(20, vec![_return(20)], vec![]).into(),
+    ]);
+    let at = lines.iter().position(|line| line.as_str() == "mov cx, si").unwrap();
+    assert!(at > lines.iter().position(|line| line.starts_with("cmp")).unwrap(), "{lines:?}");
+}
+
+/// The move the `xor` would pass is what the `xor` reads: it stays behind it.
+#[test]
+fn test_a_def_that_reads_what_the_move_before_it_writes_is_not_lifted() {
+    let lines = _printed(vec![
+        block(1, vec![_compare(1), _branch(2, "je", 9)], vec![9, 4]).into(),
+        block(
+            4,
+            vec![
+                _inserted(_insn(4, Operation::Move, "mov", vec![cx()], vec![imm(1)], None)),
+                _inserted(_insn(5, Operation::Binary, "add", vec![bx()], vec![bx(), cx()], None)),
+                _return(7),
+            ],
+            vec![],
+        )
+        .into(),
+        block(
+            9,
+            vec![_inserted(_insn(9, Operation::Binary, "add", vec![bx()], vec![bx(), cx()], None)), _return(11)],
+            vec![],
+        )
+        .into(),
+    ]);
+    assert_eq!(lines.iter().filter(|line| line.as_str() == "add bx, cx").count(), 2, "{lines:?}");
+}
+
 fn lined(
     one: Arc<Insn>,
     line: u32,
@@ -2401,4 +2537,149 @@ fn test_copy_propagation_runs_again_after_the_control_flow() {
     };
     let optimized = names("386");
     assert_eq!(&optimized[optimized.len() - 2..], ["ControlFlow", "CopyPropagation"]);
+}
+
+fn dword() -> Loc {
+    Loc::Reg(Reg { register: RegId::EAX, width: 4 })
+}
+
+/// `mov eax, value; <test|cmp> eax, ..; <cc> 3; jmp 2` in block 1, and the two
+/// ways out.
+fn constant_compare(
+    value: i64,
+    name: &str,
+    other: Loc,
+    cc: &str,
+) -> LirBody {
+    let load =
+        _insn(1, Operation::Move, "mov", vec![dword()], vec![Loc::Imm(Imm { value, width: 4, address: None })], None);
+    let compare = _insn(1, Operation::Compare, name, vec![], vec![dword(), other], None);
+    let mut source = body(
+        "f",
+        0,
+        vec![
+            block(0, vec![_branch(0, "jp", 2), _jump(0, 1)], vec![2, 1]).into(),
+            block(
+                1,
+                vec![load, compare, _branch(1, cc, 3), _jump(1, 2)].into_iter().map(_inserted).collect(),
+                vec![3, 2],
+            )
+            .into(),
+            block(2, vec![_move(2, imm(0)), _jump(2, 3)], vec![3]).into(),
+            block(3, vec![_return(3)], vec![]).into(),
+        ],
+    );
+    source.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+    source
+}
+
+fn names(result: &LirBody) -> Vec<String> {
+    result
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter(|one| !one.is_meta())
+        .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+        .collect()
+}
+
+/// qlight's byte clamp ended `mov eax, 255; test eax, eax; jg out` on the
+/// path that had just set eax to 255: a compare and a branch that always go
+/// one way, +5 bytes and 2 instructions on every clamped value.
+#[test]
+fn test_a_branch_on_a_compare_of_a_loaded_constant_goes_one_way() {
+    let eax = dword();
+    let cases = [
+        // (constant, compare, other operand, branch, taken)
+        (255, "test", eax.clone(), "jg", true),
+        (255, "test", eax.clone(), "jle", false),
+        (0, "test", eax.clone(), "je", true),
+        (-1, "test", eax.clone(), "js", true),
+        (-1, "test", eax.clone(), "jb", false),
+        (255, "cmp", Loc::Imm(Imm { value: 255, width: 4, address: None }), "jge", true),
+        (255, "cmp", Loc::Imm(Imm { value: 256, width: 4, address: None }), "jge", false),
+        // unsigned: 0xFFFFFFFF is above 1; signed it is below.
+        (-1, "cmp", Loc::Imm(Imm { value: 1, width: 4, address: None }), "ja", true),
+        (-1, "cmp", Loc::Imm(Imm { value: 1, width: 4, address: None }), "jl", true),
+        // signed overflow: i32::MIN < 1 though the difference is positive.
+        (i64::from(i32::MIN), "cmp", Loc::Imm(Imm { value: 1, width: 4, address: None }), "jl", true),
+        (i64::from(i32::MAX), "cmp", Loc::Imm(Imm { value: -1, width: 4, address: None }), "jg", true),
+    ];
+    for (value, name, other, cc, taken) in cases {
+        let result = threaded(&placed(&constant_compare(value, name, other, cc)).unwrap());
+        let got = names(&result);
+        assert!(!got.iter().any(|one| one == name), "{name} {cc} {value}: {got:?}");
+        // Nothing follows a jump: an anchor after it made `masm` refuse to
+        // free the frame register (qlight at -m32 kept `push ebp`).
+        for block in &result.blocks {
+            let ends = block
+                .insns
+                .iter()
+                .position(
+                    |one| one.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Jump | Operation::Return)),
+                );
+            assert!(ends.is_none_or(|at| at + 1 == block.insns.len()), "{name} {cc} {value}: {:?}", block.insns);
+        }
+        assert!(!got.iter().any(|one| one == cc), "{name} {cc} {value}: the branch stays {got:?}");
+        let jumps = got.iter().filter(|one| *one == "jmp").count();
+        assert_eq!(jumps > 0, taken, "{name} {cc} {value}: a decided branch is a jump or nothing {got:?}");
+    }
+}
+
+/// A write to the register between the load and the compare, or a compare
+/// that is not the one before the branch's flags, decides nothing.
+#[test]
+fn test_a_branch_after_the_constant_is_changed_keeps_its_compare() {
+    let mut source = constant_compare(255, "test", dword(), "jg");
+    let byte = _insn(
+        1,
+        Operation::Move,
+        "mov",
+        vec![Loc::Reg(Reg { register: RegId::AX, width: 1 })],
+        vec![Loc::Imm(Imm { value: 0, width: 1, address: None })],
+        None,
+    );
+    let block = source.blocks[1].clone();
+    let mut insns = block.insns.to_vec();
+    insns.insert(1, byte);
+    source.blocks[1] = block.with_insns(insns).into_inner().into();
+    let got = names(&threaded(&source));
+    assert!(got.iter().any(|one| one == "test"), "{got:?}");
+}
+
+/// Deciding a branch removed the flow into a block, and the blocks it led to
+/// kept their recorded runs: the verifier read "block 0x78 runs 0.009 times,
+/// its predecessors 0.001" and llrm-nib failed on jpeg_single at -Os.
+#[test]
+fn test_a_decided_branch_leaves_no_stale_frequency_downstream() {
+    let mut source = constant_compare(255, "test", dword(), "jg");
+    source.blocks[2] = block(2, vec![_move(2, imm(0)), _jump(2, 4)], vec![4]).into();
+    source.blocks.push(block(4, vec![_return(4)], vec![]).into());
+    let table = [(0, 1.0), (1, 0.5), (2, 1.0), (3, 1.0), (4, 3.0)].into_iter().collect();
+    source.frequencies = Some(Arc::new(crate::model::lir::BlockFrequencies(table)));
+
+    let result = threaded(&source);
+
+    assert_eq!(Frequency::violations(&result), Vec::<String>::new());
+}
+
+/// The tail merge sorts its candidates by `hash_of`, so a digest that moved
+/// with any field of `Semantics` reordered the merges: a field added for
+/// something else (`table_id`) swapped two landing labels of level.nib m16 -O2
+/// (objects fd6a6eb8 and ce3fe036). The pin's `HashMachineInstr` hashes the
+/// operation and the operands only.
+#[test]
+fn the_tail_merge_digest_ignores_what_is_no_operand_and_sees_what_is() {
+    let one = _insn(1, Operation::Move, "mov", vec![ax()], vec![imm(3)], None);
+    let with = |change: &dyn Fn(&mut Semantics)| {
+        let mut what = one.what.clone().expect("semantics");
+        change(&mut what);
+        tailmerge::hash_of(&Insn::new(1, Some((1, 1)), Some(what), Vec::new(), Vec::new()))
+    };
+    let base = tailmerge::hash_of(&one);
+    assert_eq!(base, with(&|what| what.repeat = true), "repeat is no operand");
+    assert_eq!(base, with(&|what| what.pops = Some(4)), "pops is no operand");
+    assert_ne!(base, with(&|what| what.sources = vec![imm(4)]), "an immediate is an operand");
+    assert_ne!(base, with(&|what| what.dests = vec![bx()]), "a register is an operand");
+    assert_ne!(base, with(&|what| what.name = Some("add".into())), "the opcode is hashed");
 }

@@ -6,14 +6,14 @@
 //! each function carries the permalink of the one it translates. What is not
 //! translated is marked DEVIATE with its reason:
 //!
-//! - DEVIATE no `invariant.start`, `guard`, `sideeffect`, `pseudoprobe`, masked
-//!   or target memory intrinsics, memset forwarding, fences or atomics: MIR has
-//!   none (or `fill` makes them later). `llvm.assume` is handled.
+//! - DEVIATE no `guard`, `sideeffect`, `pseudoprobe`, masked or target memory
+//!   intrinsics, memset forwarding, fences or atomics: MIR has none (or `fill`
+//!   makes them later). `llvm.assume` is handled.
 //! - DEVIATE flags are intersected whenever a value is reused (`combineIRFlags`
 //!   does it only when poison-generating flags remain).
 //! - DEVIATE a call's attributes are not intersected; a call that only reads or
 //!   only writes memory (`memory::of`, which counts every location including
-//!   `inaccessiblemem`) is numbered unless it is an `llvm.`/`llrm.` marker.
+//!   `inaccessiblemem`) is numbered unless it is an `llrm.` marker.
 //! - DEVIATE a GEP's constant offset is taken for byte GEPs only.
 //! - DEVIATE MemorySSA is the translated `Mssa`, built once for the function as
 //!   it was and not updated (`MSSAUpdater`); an erased store stays a def in it,
@@ -89,7 +89,7 @@ const MSSA_OPT_CAP: usize = 500;
 
 /// ScopedHashTable: `insert` shadows, `lookup` finds the innermost, and
 /// leaving a scope takes back what it inserted.
-struct Scoped<K, V> {
+pub(crate) struct Scoped<K, V> {
     map: HashMap<K, V>,
     /// What each insert shadowed, to put back when its scope is left: a
     /// table of one value a key, not a stack of them.
@@ -98,15 +98,15 @@ struct Scoped<K, V> {
 }
 
 impl<K: std::hash::Hash + Eq + Clone, V> Scoped<K, V> {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self { map: HashMap::default(), inserted: Vec::new(), marks: Vec::new() }
     }
 
-    fn enter(&mut self) {
+    pub(crate) fn enter(&mut self) {
         self.marks.push(self.inserted.len());
     }
 
-    fn leave(&mut self) {
+    pub(crate) fn leave(&mut self) {
         let mark = self.marks.pop().expect("a scope entered");
         while self.inserted.len() > mark {
             let (key, shadowed) = self.inserted.pop().expect("a key");
@@ -121,7 +121,7 @@ impl<K: std::hash::Hash + Eq + Clone, V> Scoped<K, V> {
         }
     }
 
-    fn insert(
+    pub(crate) fn insert(
         &mut self,
         key: K,
         value: V,
@@ -130,7 +130,7 @@ impl<K: std::hash::Hash + Eq + Clone, V> Scoped<K, V> {
         self.inserted.push((key, shadowed));
     }
 
-    fn lookup(
+    pub(crate) fn lookup(
         &self,
         key: &K,
     ) -> Option<&V> {
@@ -402,7 +402,9 @@ struct Walk<'a> {
     analyses: &'a FunctionAnalyses,
     values: Scoped<SimpleKey, Operand>,
     loads: Scoped<Operand, LoadValue>,
-    invariants: Scoped<(Operand, TypeId), u32>,
+    /// `AvailableInvariants`: a location is its pointer and the bytes it
+    /// covers.
+    invariants: Scoped<(Operand, u64), u32>,
     calls: Scoped<SimpleKey, (InstId, u32)>,
     geps: Scoped<GepKey, Operand>,
     generation: u32,
@@ -580,13 +582,26 @@ impl Walk<'_> {
                 if effects.reads || effects.writes {
                     return None;
                 }
-                key(Tag::Call(info.function_type, info.calling_convention), operands)
+                // Handle intrinsics with commutative operands
+                // (`SimpleValue::getHashValue`, EarlyCSE.cpp:298).
+                let mut operands = operands.to_vec();
+                if operands.len() >= 3
+                    && self.intrinsic(inst).is_some_and(commutative_intrinsic)
+                    && operands[0] > operands[1]
+                {
+                    operands.swap(0, 1);
+                }
+                key(Tag::Call(info.function_type, info.calling_convention), &operands)
             }
             _ => None,
         }
     }
 
-    /// A call to an `llvm.` or `llrm.` function: a marker, not a computation.
+    /// A call to an `llrm.` function: a marker, not a computation. An `llvm.`
+    /// call is numbered like any call that touches no memory and returns a
+    /// value (`SimpleValue::canHandle`: `doesNotAccessMemory` and not void),
+    /// `umin` and the like included; the ones that return nothing are skipped
+    /// by their result.
     fn marker(
         &self,
         inst: InstId,
@@ -594,7 +609,27 @@ impl Walk<'_> {
         memory::callee(self.context, self.function, inst)
             .and_then(|global| self.view.globals.get(global.0 as usize))
             .and_then(|global| global.name.as_deref())
-            .is_some_and(|name| name.starts_with("llvm.") || name.starts_with("llrm."))
+            .is_some_and(|name| name.starts_with("llrm."))
+    }
+
+    /// The intrinsic a call names, its type suffixes aside.
+    fn intrinsic(
+        &self,
+        inst: InstId,
+    ) -> Option<llrm_mir::intrinsics::Intrinsic> {
+        memory::callee(self.context, self.function, inst)
+            .and_then(|global| self.view.globals.get(global.0 as usize))
+            .and_then(|global| global.name.as_deref())
+            .and_then(llrm_mir::intrinsics::Intrinsic::named)
+    }
+
+    /// The bytes a load or store of `ty` covers: the size of its
+    /// `MemoryLocation`.
+    fn location_bytes(
+        &self,
+        ty: TypeId,
+    ) -> u64 {
+        self.view.layout.store_size(&self.context.types, ty)
     }
 
     fn named(
@@ -734,7 +769,7 @@ impl Walk<'_> {
             return true;
         }
         let (Some(pointer), Some(ty)) = (self.pointer(inst), self.value_type(inst)) else { return false };
-        self.invariants.lookup(&(pointer, ty)).is_some_and(|&became| became <= generation)
+        self.invariants.lookup(&(pointer, self.location_bytes(ty))).is_some_and(|&became| became <= generation)
     }
 
     /// `EarlyCSE::isSameMemGeneration`
@@ -1010,6 +1045,25 @@ impl Walk<'_> {
                 }
                 continue;
             }
+            // An `invariant.start` makes its location invariant for the rest of
+            // the scope (EarlyCSE.cpp#L1459): the stores after it need not be
+            // consumed.
+            if matches!(self.function.instruction(inst).opcode, Opcode::Call(_))
+                && self.intrinsic(inst) == Some(llrm_mir::intrinsics::Intrinsic::InvariantStart)
+            {
+                let call = self.function.instruction(inst);
+                // If there are any uses, the scope might end.
+                let scoped = call.result.is_some_and(|result| !self.function.users(result).is_empty());
+                if !scoped && let Some(size) = llrm_mir::intrinsics::length(self.context, call.operands[0]) {
+                    // Don't start a scope if we already have a better one
+                    // pushed.
+                    let key = (call.operands[1], size);
+                    if self.invariants.lookup(&key).is_none() {
+                        self.invariants.insert(key, self.generation);
+                    }
+                }
+                continue;
+            }
             // If the instruction can be simplified, replace it with its
             // simpler value.
             if let Some(value) = simplify_instruction_in(
@@ -1066,9 +1120,9 @@ impl Walk<'_> {
                     self.generation += 1;
                 }
                 if self.function.instruction(inst).metadata.iter().any(|(kind, _)| kind == "invariant.load") {
-                    let ty = self.function.instruction(inst).ty;
-                    if self.invariants.lookup(&(pointer, ty)).is_none() {
-                        self.invariants.insert((pointer, ty), self.generation);
+                    let key = (pointer, self.location_bytes(self.function.instruction(inst).ty));
+                    if self.invariants.lookup(&key).is_none() {
+                        self.invariants.insert(key, self.generation);
                     }
                 }
                 if let Some(in_val) = self.loads.lookup(&pointer).copied()
@@ -1276,7 +1330,14 @@ impl FunctionPass for EarlyCse {
         let before = unit.function.fork();
         let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
         let view = View::within(unit.context, unit.layout, &before, &outer).with_shape(&shape);
-        let simplifier = FunctionAnalyses::of(unit.context, view.globals, view.metadata, view.layout, &before);
+        let simplifier = FunctionAnalyses::of_declared(
+            unit.context,
+            view.globals,
+            view.metadata,
+            view.layout,
+            &before,
+            outer.assume_declared(),
+        );
         let shape = view.shape();
         // The manager's graph of this body, cloned: the removals below update
         // the clone, which is put back (`MemorySSAUpdater`, as EarlyCSE.cpp
@@ -1335,3 +1396,16 @@ impl FunctionPass for EarlyCse {
 #[cfg(test)]
 #[path = "earlycse_tests.rs"]
 mod tests;
+
+/// `Intrinsic::isCommutative` of the intrinsics MIR has: the first two
+/// arguments may be exchanged.
+fn commutative_intrinsic(intrinsic: llrm_mir::intrinsics::Intrinsic) -> bool {
+    use llrm_mir::intrinsics::Intrinsic;
+    match intrinsic {
+        Intrinsic::MinMax { .. } => true,
+        Intrinsic::Saturating { op, .. } | Intrinsic::WithOverflow { op, .. } => {
+            matches!(op, BinaryOp::Add | BinaryOp::Mul)
+        }
+        _ => false,
+    }
+}

@@ -19,6 +19,10 @@ typedef struct Decimal {
    digits QB prints and the numbers it reads). */
 long double i8_scale(long double x, int k);
 
+/* The math pack the digits follow: QB 4.5's and VBDOS's (16 digits, the default) or PDS 7.1's (15). */
+void i8_select_pack(int pds);
+unsigned i8_digits(void);
+
 /* The digits of `value`; an infinity or NaN comes out as the text 1#INF, 1#NAN
    or 1#IND, as in QB. */
 void i8_output(double value, Decimal *out);

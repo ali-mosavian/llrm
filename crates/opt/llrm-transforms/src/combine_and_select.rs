@@ -12,7 +12,7 @@
 //! DEVIATE 1: no floating-point folds (`fabs` of a bitcast) and no vectors.
 //!
 //! DEVIATE 2: `narrowMaskedBinOp`, `foldAndOrOfSelectUsingImpliedCond`,
-//! `matchDeMorgansLaws`, `foldCastedBitwiseLogic`,
+//! `matchDeMorgansLaws`,
 //! `foldBinopOfSextBoolToSelect` and the tail from
 //! `sinkNotIntoOtherHandOfLogicalOp` on are the next strip.
 //!
@@ -41,6 +41,7 @@ use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::valuetracking::{Query, known, pattern};
 
 use crate::combine::{Combiner, Visit};
+use crate::combine_casted_logic::fold_casted_bitwise_logic;
 use crate::combine_shared::{binop, has_one_use, query, width};
 
 /// `m_Not(P)`: the operand of the `not` of `v`.
@@ -335,8 +336,14 @@ pub fn fold_and_select(
     op0: Operand,
     op1: Operand,
 ) -> Option<Visit> {
-    let steps: [fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>; 5] =
-        [fold_sign_mask_of_shifted_zext, fold_xor_or_not, fold_bool_extension, fold_decremented_flag, fold_sign_splat];
+    let steps: [fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>; 6] = [
+        fold_sign_mask_of_shifted_zext,
+        fold_xor_or_not,
+        fold_casted_bitwise_logic,
+        fold_bool_extension,
+        fold_decremented_flag,
+        fold_sign_splat,
+    ];
     steps.iter().find_map(|step| step(c, inst, op0, op1))
 }
 

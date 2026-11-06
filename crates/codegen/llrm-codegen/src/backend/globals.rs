@@ -88,9 +88,9 @@ pub fn space(
 
 /// Each global's assembler name, keyed as an `Addr` names it: its name as
 /// `linked` mangles it, as LLVM's Mangler does. An internal global's name
-/// is free, so one no assembler takes becomes `G$n`, as does an external one
-/// defined here (a frontend names it for the object); an imported one must be
-/// a symbol once mangled. An intrinsic has none.
+/// is free, so one no assembler takes becomes `G$n$cleaned name`, as does an
+/// external one defined here (a frontend names it for the object); an imported
+/// one must be a symbol once mangled. An intrinsic has none.
 /// The group index naming a far variable's segment, `seg name`.
 pub fn segment_of(global: GlobalId) -> i64 {
     SEGMENTS + i64::from(global.0)
@@ -109,7 +109,9 @@ pub fn names(
         let id = GlobalId(at as u32);
         // An intrinsic is lowered where it is called, never linked.
         if global.name.as_deref().is_some_and(|name| {
-            (llrm_mir::intrinsics::is_reserved(name) && !is_list(name)) || llrm_mir::atomic::decode(name).is_some()
+            (llrm_mir::intrinsics::is_reserved(name) && !is_list(name))
+                || llrm_mir::intrinsics::is_wide_divide(name)
+                || llrm_mir::atomic::decode(name).is_some()
         }) {
             continue;
         }
@@ -119,12 +121,51 @@ pub fn names(
         } else if global.linkage == llrm_mir::Linkage::External && space(module, id) == Space::External {
             return Err(format!("@{name} is no assembler symbol"));
         } else {
-            format!("G${at}")
+            private_name(at, &name)
         };
         out.extend(segment_name(module, id, &symbol, spaces));
         out.insert((space(module, id), i64::from(id.0)), symbol);
     }
     Ok(out)
+}
+
+/// The visibility of each global that has one other than the default, and the
+/// aliases, by their names in the object. An alias is linked as a global is.
+pub fn exports(
+    module: &Module,
+    names: &IndexMap<(Space, i64), String>,
+    linked: &dyn Fn(&str) -> String,
+) -> (std::collections::BTreeMap<String, llrm_object::Visibility>, Vec<super::masm::Alias>) {
+    use llrm_mir::module::{Linkage, Visibility as Mir};
+    let visible = |visibility: Mir| match visibility {
+        Mir::Default => None,
+        Mir::Hidden => Some(llrm_object::Visibility::Hidden),
+        Mir::Protected => Some(llrm_object::Visibility::Protected),
+    };
+    let mut visibility = std::collections::BTreeMap::new();
+    for (at, global) in module.globals.iter().enumerate() {
+        let id = GlobalId(at as u32);
+        if let (Some(visible), Some(name)) =
+            (visible(global.visibility), names.get(&(space(module, id), i64::from(id.0))))
+        {
+            visibility.insert(name.clone(), visible);
+        }
+    }
+    let mut aliases = Vec::new();
+    for alias in &module.aliases {
+        let Some(target) = names.get(&(space(module, alias.aliasee), i64::from(alias.aliasee.0))) else { continue };
+        let name = linked(&alias.name);
+        if let Some(visible) = visible(alias.visibility) {
+            visibility.insert(name.clone(), visible);
+        }
+        let binding = match alias.linkage {
+            Linkage::Internal | Linkage::Private => llrm_object::Binding::Local,
+            Linkage::Weak | Linkage::WeakOdr | Linkage::LinkOnce | Linkage::LinkOnceOdr => llrm_object::Binding::Weak,
+            _ => llrm_object::Binding::Public,
+        };
+        aliases.push(super::masm::Alias { name, target: target.clone(), binding });
+    }
+    (visibility, aliases)
 }
 
 /// A far global's segment, named for `symbol`: a far pointer to code, as
@@ -152,6 +193,21 @@ pub fn is_compiler_only(name: &str) -> bool {
 
 fn is_list(name: &str) -> bool {
     name == CONSTRUCTORS
+}
+
+/// `G$n` for a name no assembler takes, followed by the name with every
+/// character an assembler refuses made `$`: `std.io.File.open` is
+/// `G$7$std$io$File$open`. The index keeps names that agree once cleaned apart;
+/// the rest tells a reader of the object (a size tool) where the function came
+/// from.
+fn private_name(
+    at: usize,
+    name: &str,
+) -> String {
+    let cleaned: String =
+        name.chars().map(|one| if one.is_ascii_alphanumeric() || "_@?".contains(one) { one } else { '$' }).collect();
+    let cleaned = cleaned.trim_matches('$');
+    if cleaned.is_empty() { format!("G${at}") } else { format!("G${at}${cleaned}") }
 }
 
 fn is_symbol(name: &str) -> bool {
@@ -236,23 +292,16 @@ pub fn datums(
     Ok(out)
 }
 
-/// The function pointers of `llvm.global_ctors`' `{ i32 priority, ptr function,
-/// ptr data }` entries, lowest priority first and in order within one, as
-/// `AsmPrinter::emitXXStructorList` sorts them; an entry without a function is
-/// dropped.
-fn constructors(
+/// The functions of `llvm.global_ctors`' `{ i32 priority, ptr function, ptr
+/// data }` entries with their priority and offset, lowest priority first and in
+/// order within one, as `AsmPrinter::emitXXStructorList` sorts them; an entry
+/// without a function is dropped.
+pub fn constructor_entries(
     module: &Module,
     layout: &DataLayout,
     list: ConstantId,
-    names: &IndexMap<(Space, i64), String>,
-    out: &mut Vec<Datum>,
-) -> Result<(), String> {
+) -> Result<Vec<(i128, GlobalId, i64)>, String> {
     let context = &module.context;
-    let bytes = layout.pointer(0).bits / 8;
-    if bytes < 4 {
-        return Err("llvm.global_ctors: the 16-bit DOS start-up runs no constructor table".to_owned());
-    }
-    out.insert(0, Datum::Align(crate::backend::masm::Align { to: i64::from(bytes) }));
     let entries = match &context.get(list).kind {
         ConstantKind::Aggregate(entries) => entries.clone(),
         _ => Vec::new(),
@@ -268,10 +317,27 @@ fn constructors(
             continue;
         }
         let (global, offset) = target(module, layout, function)?;
-        found.push((priority, global, offset));
+        found.push((priority as i128, global, offset));
     }
     found.sort_by_key(|(priority, ..)| *priority);
-    for (_, global, offset) in found {
+    Ok(found)
+}
+
+/// The function pointers of `llvm.global_ctors`, in `constructor_entries`
+/// order.
+fn constructors(
+    module: &Module,
+    layout: &DataLayout,
+    list: ConstantId,
+    names: &IndexMap<(Space, i64), String>,
+    out: &mut Vec<Datum>,
+) -> Result<(), String> {
+    let bytes = layout.pointer(0).bits / 8;
+    if bytes < 4 {
+        return Err("llvm.global_ctors: the 16-bit DOS start-up runs no constructor table".to_owned());
+    }
+    out.insert(0, Datum::Align(crate::backend::masm::Align { to: i64::from(bytes) }));
+    for (_, global, offset) in constructor_entries(module, layout, list)? {
         let name = names[&(space(module, global), i64::from(global.0))].clone();
         out.push(Datum::Pointer(Pointer { name, offset, far: false, bytes }));
     }
@@ -323,6 +389,7 @@ impl Initializer<'_> {
                 _ => self.bytes(&bits.to_le_bytes()[..size]),
             },
             ConstantKind::Float80(bits) => self.bytes(&llrm_mir::types::x87_image(*bits)),
+            ConstantKind::Float128(_) => return Err("an fp128 initializer: no emission yet".to_owned()),
             // An undef initializer is any bytes: zero. A poison one is a hole
             // of a switch lookup table (the pin's holes are `poison` too),
             // which the guard never indexes. `emitGlobalConstantImpl` writes

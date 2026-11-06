@@ -1,0 +1,5 @@
+# Flat binaries (CP/M .COM first) are written by the spike itself, not a linker object.
+formats = ["raw"]
+default = "raw"
+bitness = 16
+header = []

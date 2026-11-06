@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/combiner.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/combiner.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/combiner.rs sha256:8a24528e8df9d31229b70628b12de8947446e08877ee045065d80d33907461ae -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/combiner.rs sha256:11d3e1c914993a82564615e0948504f1d8e5a65d70e2227b9ba9c819dcf9c0e3 -->
 
 # combiner
 
@@ -46,11 +46,12 @@ On SSA, after `leaopt` and before `phielim` (the pin's `addILPOpts`, after
 not X86's. Optimizing for size does not take the pin's shortcut.
 
 DEVIATE MC1 (owner funcattrs-port, exit 2026-11-13): the trace is the
-block alone (`MachineTraceMetrics` `TS_MinInstrCount` also follows the
-predecessors and the physical registers: the stack pointer around calls
-orders two calls there, and here nothing does); a value made outside the
-block has depth 0 and the latency of its definition. Exit: a trace analysis
-on LIR.
+block alone. `MachineTraceMetrics`
+([updatePhysDepsDownwards](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineTraceMetrics.cpp#L745))
+also follows predecessors and every physical register; here only the stack
+pointer around calls does, as a chain of `CALL_FRAME_LATENCY` per call, so
+two calls arrive in order (still O(n)). A value made outside the block has
+depth 0 and the latency of its definition. Exit: a trace analysis on LIR.
 
 DEVIATE MC2 (owner funcattrs-port, exit 2026-11-13): the latency table is
 the default one written above, read from the operands (a memory source is a

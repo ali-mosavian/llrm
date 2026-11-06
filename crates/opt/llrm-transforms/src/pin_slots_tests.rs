@@ -256,23 +256,9 @@ const ROWS: &[Disposition] = &[
     ),
     row(
         Late,
-        "drop-unnecessary-assumes",
-        Why::Missing,
-        "pin ablation (2026-10-27): 0 IRs of 65 QCport (i486 -O2 and m16 -Os), 0 of 58 QB (m16 -Os; the pin parses 58 of 101), 0 of 49 C examples/bench (m16 -Os and i486 -O2); DEFERRED, revisit after parity-green",
-        "w4",
-    ),
-    row(
-        Late,
         "alignment-from-assumptions",
         Why::Missing,
         "pin ablation (2026-10-27): 0 IRs of 65 QCport (i486 -O2 and m16 -Os), 0 of 58 QB (m16 -Os; the pin parses 58 of 101), 0 of 49 C examples/bench (m16 -Os and i486 -O2); DEFERRED, revisit after parity-green",
-        "w4",
-    ),
-    row(
-        Late,
-        "loop-rotate",
-        Why::Missing,
-        "the late loop nest's rotate; DEFERRED: pin ablation (2026-10-27) QCport 65 IRs 3 IRs / -3 instr (i486 -O2), 4 / -2 (m16 -Os); QB 58 IRs 1 / +1 (the pin parses 58 of 101); C examples/bench 49 IRs 3 / -14 (i486 -O2), 3 / -12 (m16 -Os), the pass adds instructions there; revisit after parity-green",
         "w4",
     ),
     row(
@@ -320,13 +306,6 @@ const ROWS: &[Disposition] = &[
     row(
         Late,
         "mergeicmps",
-        Why::Missing,
-        "DEFERRED, 0/77 IRs (12 bench + 65 QCport); revisit after parity-green",
-        "w-4, 11-09",
-    ),
-    row(
-        Late,
-        "expand-memcmp",
         Why::Missing,
         "DEFERRED, 0/77 IRs (12 bench + 65 QCport); revisit after parity-green",
         "w-4, 11-09",
@@ -523,15 +502,7 @@ const OURS_ONLY: &[(&str, &str)] = &[
     ),
     ("772: loopsimplify@772 + lcssa@772", "as 764"),
     (
-        "669: cvp@669",
-        "-O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot)",
-    ),
-    (
         "787: inferspace@787",
-        "-O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot)",
-    ),
-    (
-        "810: cvp@810",
         "-O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot)",
     ),
     (

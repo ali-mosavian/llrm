@@ -44,9 +44,12 @@ use super::joinvals::JoinVals;
 use super::pair::{CoalescerEnv, CoalescerPair, full_copy};
 use crate::backend::twoaddr::commutative;
 use crate::liveness::liveintervals::LiveIntervals;
-use crate::liveness::liverange::{LiveInterval, Segment, Vn};
-use crate::liveness::slotindex::InstrKey;
-use crate::model::ir::Loc;
+use crate::liveness::liverange::{LiveInterval, LiveRange, Segment, Vn};
+use crate::liveness::liverangecalc::Operand;
+use crate::liveness::slotindex::{InstrKey, SlotIndex};
+use crate::model::ir::{Held, Loc};
+use crate::model::lir::Insn;
+use llrm_lir::valuelanes::ValueLanes;
 use crate::support::hash::{HashMap, HashSet};
 
 /// Whether `one` does nothing but define its values: a copy or a definition
@@ -103,6 +106,8 @@ pub struct State {
     /// `MachineInstr*` survives its operands being rewritten; a key here is
     /// the instruction's identity, so the lists of copies follow the moves.
     moved: HashMap<InstrKey, InstrKey>,
+    /// `(absorbed, survivor)` of each join, in order.
+    pub renames: Vec<(u32, u32)>,
 }
 
 impl State {
@@ -151,6 +156,14 @@ pub fn join_copy(
     let Some(mut cp) = CoalescerPair::set_registers(&copy_insn, env) else {
         return JoinResult::Rejected;
     };
+    // DEVIATE C13: with the joins between widths off, such a copy is as it
+    // was before they existed: no pair, nothing below touches it.
+    if cp.is_partial() && !env.joins_sub_registers() {
+        return JoinResult::Rejected;
+    }
+    if !env.should_coalesce(lis, copy, cp.src_reg(), cp.dst_reg()) {
+        return JoinResult::Rejected;
+    }
     let block = lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(copy));
     // Dead code elimination. This really should be handled by MachineDCE, but
     // sometimes dead copies slip through, and we can't generate invalid live
@@ -182,9 +195,41 @@ pub fn join_copy(
         lis.remove_instr(block, copy);
         return JoinResult::Joined;
     }
-    // When possible, let DstReg be the larger interval.
-    if lis.interval(cp.src_reg()).size() > lis.interval(cp.dst_reg()).size() {
+    // When possible, let DstReg be the larger interval; a kept value stays. A
+    // partial pair keeps its wide value (`!CP.isPartial()`), so a narrow value
+    // that is kept is not joined.
+    let (keeps_src, keeps_dst) = (env.keeps(cp.src_reg()), env.keeps(cp.dst_reg()));
+    // `canJoinPhys`: only a reserved register is joined with; a pinned value
+    // is not one unless the target says so.
+    if keeps_src != keeps_dst && !env.joins_pinned_copies() {
+        return JoinResult::Rejected;
+    }
+    if cp.is_partial() {
+        if keeps_src {
+            return JoinResult::Rejected;
+        }
+    } else if keeps_src != keeps_dst {
+        if keeps_src {
+            cp.flip();
+        }
+    } else if lis.interval(cp.src_reg()).size() > lis.interval(cp.dst_reg()).size() {
         cp.flip();
+    }
+    // A value joined into a pinned one takes the units of its register: no
+    // range on an overlapping register may meet it.
+    if env.keeps(cp.dst_reg()) {
+        let joining = lis.interval(cp.src_reg()).clone();
+        if env.aliases(cp.dst_reg()).into_iter().any(|other| lis.interval(other).overlaps(&joining)) {
+            return JoinResult::Rejected;
+        }
+    }
+    if cp.is_partial() && (cp.lane_offset() != 0 || has_lane_defs(lis, cp.dst_reg())) {
+        return join_lane(lis, env, state, current_erased, &cp, copy, block);
+    }
+    // DEVIATE C14: `JoinVals` has no lane masks, so a join of whole values
+    // that have lane defs renames and recomputes (series step 4).
+    if !cp.is_partial() && (has_lane_defs(lis, cp.src_reg()) || has_lane_defs(lis, cp.dst_reg())) {
+        return join_whole_with_lanes(lis, env, state, current_erased, &cp, copy, block);
     }
     let result = join_virt_regs(lis, state, &cp);
     if result != JoinResult::Joined {
@@ -192,6 +237,11 @@ pub fn join_copy(
         // if it is cheap.
         if re_materialize_def(lis, env, state, copy) {
             return JoinResult::Joined;
+        }
+        // The rest are for a copy between values of one width
+        // (`!CP.isPartial()`).
+        if cp.is_partial() {
+            return result;
         }
         // If we can eliminate the copy without merging the live segments, do
         // so now.
@@ -215,7 +265,13 @@ pub fn join_copy(
     // other. Make sure the resulting register is set to the right register
     // class.
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/RegisterCoalescer.cpp#L2244-L2247
-    env.narrow(cp.dst_reg(), cp.src_reg());
+    if cp.is_partial() && cp.lane_offset() != 0 {
+        env.narrow_lane(cp.dst_reg(), cp.src_reg(), cp.lane_offset());
+    } else if cp.is_partial() {
+        env.narrow_sub(cp.dst_reg(), cp.src_reg());
+    } else {
+        env.narrow(cp.dst_reg(), cp.src_reg());
+    }
     // CopyMI has been erased by joinVirtRegs at this point. Remove it from
     // ErasedInstrs since the work list does not add a successful join back.
     // This keeps ErasedInstrs from growing needlessly.
@@ -224,11 +280,156 @@ pub fn join_copy(
         current_erased.insert(copy);
     }
     // Rewrite all SrcReg operands to DstReg.
-    update_reg_defs_uses(lis, state, cp.src_reg(), cp.dst_reg());
+    update_reg_defs_uses(lis, state, cp.src_reg(), cp.dst_reg(), cp.is_partial().then_some(cp.lane_offset()), None, false);
     // SrcReg is guaranteed to be the register whose live interval that is
     // being merged.
     lis.remove_interval(cp.src_reg());
     JoinResult::Joined
+}
+
+/// Whether some def of `value` names the lanes it defines.
+fn has_lane_defs(
+    lis: &LiveIntervals,
+    value: u32,
+) -> bool {
+    lis.operands(value).iter().any(|operand| operand.is_def && operand.lanes != Operand::ALL)
+}
+
+/// The join of a whole-value copy where a side has lane defs. DEVIATE C14: the
+/// pin's `JoinVals` carries lane masks; here the join is refused where the two
+/// ranges are live together anywhere but from the copy (the destination's
+/// value is the source's there), and made by renaming `src` to `dst` and
+/// computing the interval afresh. Exit: `JoinVals` with lane masks (series
+/// step 4, 2026-11-24).
+fn join_whole_with_lanes(
+    lis: &mut LiveIntervals,
+    env: &dyn CoalescerEnv,
+    state: &mut State,
+    current_erased: &mut HashSet<InstrKey>,
+    cp: &CoalescerPair,
+    copy: InstrKey,
+    block: usize,
+) -> JoinResult {
+    // A pinned value's interval is not computed afresh from its defs.
+    if env.keeps(cp.src_reg()) || env.keeps(cp.dst_reg()) {
+        return JoinResult::Rejected;
+    }
+    let copy_at = lis.indexes.get_instruction_index(copy);
+    let src = lis.interval(cp.src_reg()).range.clone();
+    let dst = lis.interval(cp.dst_reg()).range.clone();
+    if lanes_overlap(&dst, &src, &copy_at) {
+        return JoinResult::Rejected;
+    }
+    env.narrow(cp.dst_reg(), cp.src_reg());
+    let _ = current_erased;
+    state.erased.insert(copy);
+    lis.remove_instr(block, copy);
+    update_reg_defs_uses(lis, state, cp.src_reg(), cp.dst_reg(), None, None, false);
+    lis.remove_interval(cp.src_reg());
+    lis.remove_interval(cp.dst_reg());
+    keep_joined_lanes_through_undef_defs(lis, cp.dst_reg());
+    JoinResult::Joined
+}
+
+/// The join of a lane copy: `src` is the bytes `cp.lanes()` of `dst`. DEVIATE
+/// C14: the pin runs `JoinVals` once per sub-range of the destination
+/// (`mergeSubRangeInto`); here the join is refused where `src` is live
+/// together with the destination's range for those lanes (the copy's own def
+/// excepted), and made by renaming `src` into the lane and computing the
+/// destination's interval afresh, which builds its sub-ranges from the lane
+/// defs. Exit: `JoinVals` with lane masks (series step 4, 2026-11-24).
+fn join_lane(
+    lis: &mut LiveIntervals,
+    env: &dyn CoalescerEnv,
+    state: &mut State,
+    current_erased: &mut HashSet<InstrKey>,
+    cp: &CoalescerPair,
+    copy: InstrKey,
+    block: usize,
+) -> JoinResult {
+    // A def of `src` that names lanes of its own, or keeps the rest of it,
+    // would need its lanes shifted too: left alone.
+    if has_lane_defs(lis, cp.src_reg()) || lis.operands(cp.src_reg()).iter().any(|operand| operand.reads_reg && operand.is_def) {
+        return JoinResult::Rejected;
+    }
+    let copy_at = lis.indexes.get_instruction_index(copy);
+    let src = lis.interval(cp.src_reg()).range.clone();
+    let dst = lis.interval(cp.dst_reg());
+    let dst = dst.range_for_lanes(cp.lanes()).unwrap_or_else(|| dst.range.clone());
+    if lanes_overlap(&dst, &src, &copy_at) {
+        return JoinResult::Rejected;
+    }
+    env.narrow_lane(cp.dst_reg(), cp.src_reg(), cp.lane_offset());
+    let _ = current_erased;
+    // The copy kept the other lanes of `dst`: so does the def that replaces it,
+    // whether or not `dst`'s interval is live there yet (the lane joins that
+    // would make it so may come later).
+    let keeps_rest = lis.instr(copy).partial_defs.contains(&cp.dst_reg());
+    state.erased.insert(copy);
+    lis.remove_instr(block, copy);
+    update_reg_defs_uses(lis, state, cp.src_reg(), cp.dst_reg(), Some(cp.lane_offset()), Some(cp.lanes()), keeps_rest);
+    lis.remove_interval(cp.src_reg());
+    lis.remove_interval(cp.dst_reg());
+    keep_joined_lanes_through_undef_defs(lis, cp.dst_reg());
+    JoinResult::Joined
+}
+
+/// A lane def flagged to start the value (`undef_super`) that now stands after
+/// a joined def of another lane keeps that lane: the pin's `Reads` is `dst`
+/// live at the def. Left flagged, the earlier lane's def was dead (nothing
+/// read it past the later one) and went with it (lz4c -Oz lost the high byte
+/// of a pair).
+fn keep_joined_lanes_through_undef_defs(
+    lis: &mut LiveIntervals,
+    dst: u32,
+) {
+    let mut keys: Vec<InstrKey> = lis
+        .operands(dst)
+        .iter()
+        .filter(|operand| operand.is_def && !operand.reads_reg && operand.lanes != Operand::ALL && lis.has_instr(operand.instr))
+        .map(|operand| operand.instr)
+        .collect();
+    keys.sort_unstable();
+    keys.dedup();
+    let mut changed = false;
+    for key in keys {
+        let at = lis.indexes.get_instruction_index(key);
+        let old = Arc::clone(lis.instr(key));
+        let mine = old.def_lanes.iter().filter(|(value, _)| *value == dst).fold(None, |all: Option<ValueLanes>, (_, lanes)| {
+            Some(all.map_or(*lanes, |a| a.union(*lanes)))
+        });
+        let Some(mine) = mine else { continue };
+        let live_other = lis.interval(dst).sub_ranges().iter().any(|sub| !sub.lanes.overlaps(mine) && sub.range.live_at(&at));
+        if live_other {
+            let block = lis.indexes.get_mbb_from_index(&at);
+            let mut made = (*old).clone();
+            made.undef_super = false;
+            if !made.partial_defs.contains(&dst) {
+                made.partial_defs.push(dst);
+            }
+            // A pending lane copy keeps its identity: the work list names it.
+            lis.rewrite_instr(block, key, Arc::new(made.standing_for(&old)));
+            changed = true;
+        }
+    }
+    if changed {
+        lis.remove_interval(dst);
+    }
+}
+
+/// Whether two ranges are live together anywhere but where one starts at
+/// `copy_at`, the copy that joins them.
+fn lanes_overlap(
+    a: &LiveRange,
+    b: &LiveRange,
+    copy_at: &SlotIndex,
+) -> bool {
+    a.segments.iter().any(|x| {
+        b.segments.iter().any(|y| {
+            let start = std::cmp::max(&x.start, &y.start);
+            start < std::cmp::min(&x.end, &y.end) && !SlotIndex::is_same_instr(start, copy_at)
+        })
+    })
 }
 
 /// `joinVirtRegs`.
@@ -284,24 +485,82 @@ fn join_virt_regs(
     JoinResult::Joined
 }
 
-/// `updateRegDefsUses`: every instruction that names `src` names `dst`.
+/// `updateRegDefsUses`: every instruction that names `src` names `dst`. For a
+/// partial pair (`src` is a sub-register of `dst`) a def of `src` becomes a
+/// def that reads `dst` where the instruction reads `src` or `dst` is live
+/// into it or `keeps_rest` (the lane copy it replaces read the rest), and a def
+/// that starts the value where not (`MO.setIsUndef(!Reads)`).
 fn update_reg_defs_uses(
     lis: &mut LiveIntervals,
     state: &mut State,
     src: u32,
     dst: u32,
+    partial: Option<u32>,
+    lanes: Option<ValueLanes>,
+    keeps_rest: bool,
 ) {
     lis.rename_input(src, dst);
+    state.renames.push((src, dst));
     let mut keys: Vec<InstrKey> = lis.operands(src).iter().map(|operand| operand.instr).collect();
     keys.sort_unstable();
     keys.dedup();
     for key in keys {
         let block = lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(key));
-        let renamed = Arc::clone(lis.instr(key)).renamed(&|value| if value == src { dst } else { value });
-        let new = renamed.id();
-        lis.rewrite_instr(block, key, renamed);
-        state.moved.insert(key, new);
+        let old = Arc::clone(lis.instr(key));
+        let at_lane = match partial {
+            Some(offset) if offset != 0 => at_lane(&old, src, offset),
+            _ => Arc::clone(&old),
+        };
+        let mut renamed = at_lane.renamed(&|value| if value == src { dst } else { value });
+        if partial.is_some() && old.defines.contains(&src) {
+            let at = lis.indexes.get_instruction_index(key);
+            // the lanes a copy keeps are not read when this instruction
+            // defines them itself: another lane of `dst` was joined here first
+            let reads = (keeps_rest && !old.defines.contains(&dst)) || old.uses.contains(&src) || lis.interval(dst).live_at(&at);
+            if reads && !renamed.partial_defs.contains(&dst) {
+                let mut made = (*renamed).clone();
+                made.partial_defs.push(dst);
+                renamed = Arc::new(made);
+            }
+        }
+        if let Some(lanes) = lanes.filter(|_| old.defines.contains(&src)) {
+            let mut made = (*renamed).clone();
+            // one entry per def of `dst`, in the order of the defs: this def
+            // stands after the defs of `dst` that come before it
+            let at = old.defines.iter().position(|v| *v == src).unwrap_or(0);
+            let before = old.defines[..at].iter().filter(|v| **v == dst).count();
+            let place = made.def_lanes.iter().enumerate().filter(|(_, (v, _))| *v == dst).nth(before).map_or(made.def_lanes.len(), |(i, _)| i);
+            made.def_lanes.insert(place, (dst, lanes));
+            renamed = Arc::new(made);
+        }
+        // `setReg` rewrites the operand where it stands: the instruction keeps
+        // its identity.
+        renamed.stand_for(&old);
+        lis.rename_value_in_instr(block, key, src, dst, renamed);
     }
+}
+
+/// `src` is the lane of a wider value at byte `offset` (`SrcIdx`/`DstIdx`):
+/// the operands that name it name that byte, so that renamed to the wide value
+/// they stay the same bytes.
+fn at_lane(
+    insn: &Arc<Insn>,
+    src: u32,
+    offset: u32,
+) -> Arc<Insn> {
+    let Some(what) = &insn.what else { return Arc::clone(insn) };
+    let mut made = (**insn).clone();
+    let shift =
+        |place: &Loc| {
+            llrm_lir::mapped(place, |held| {
+                if held.value == src { Held { offset: held.offset + offset, ..*held } } else { *held }
+            })
+        };
+    let mut moved = what.clone();
+    moved.dests = what.dests.iter().map(shift).collect();
+    moved.sources = what.sources.iter().map(shift).collect();
+    made.what = Some(moved);
+    Arc::new(made)
 }
 
 /// `reMaterializeDef`
@@ -347,6 +606,9 @@ fn re_materialize_def(
     // DEVIATE C10: in a build for size the copy (2 bytes) becomes the move
     // (3 to 5) and pays for itself only where the source's own move goes.
     if env.tuned_for_size() && lis.operands(src.value).len() > 2 {
+        return false;
+    }
+    if !env.remat_wins(&def_insn, src.value, dst.value) {
         return false;
     }
     let block = lis.indexes.get_mbb_from_index(&at);
@@ -829,7 +1091,7 @@ fn eliminate_undef_copy(
         made.what = Some(crate::model::ir::Semantics {
             op: crate::model::ir::Operation::Nothing,
             name: Some(crate::processimpdefs::IMPLICIT_DEF.into()),
-            dests: vec![Loc::Held(crate::model::ir::Held { value: dst, width })],
+            dests: vec![Loc::Held(crate::model::ir::Held { value: dst, width, offset: 0 })],
             sources: Vec::new(),
             ..crate::model::ir::Semantics::new(crate::model::ir::Operation::Nothing)
         });
@@ -866,4 +1128,47 @@ fn eliminate_undef_copy(
     state.erased.insert(copy);
     lis.remove_instr(block, copy);
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use indexmap::IndexMap;
+
+    use super::*;
+    use crate::model::lir::{Insn, LirBlock, LirBody};
+
+    fn insn(
+        defines: &[u32],
+        uses: &[u32],
+    ) -> Arc<Insn> {
+        Arc::new(Insn::new(0, None, None, defines.to_vec(), uses.to_vec()))
+    }
+
+    /// `updateRegDefsUses` took every operand of an instruction out of its
+    /// lists and put them back to rename one value: the operands of the other
+    /// values moved to the ends of their lists (4.5 k Ir an instruction in
+    /// jpeg_fixed m64, the pin's `setReg` is 1 k). Only the renamed values'
+    /// lists are edited.
+    #[test]
+    fn test_renaming_a_value_leaves_the_operand_lists_of_the_others_in_place() {
+        let (first, both, last) = (insn(&[5], &[]), insn(&[], &[5, 7]), insn(&[], &[5]));
+        let block = LirBlock {
+            at: 0,
+            insns: vec![Arc::clone(&first), Arc::clone(&both), Arc::clone(&last)].into(),
+            succ: vec![].into(),
+            phis: vec![].into(),
+            cold: false,
+            align: 0,
+            max_skip: 0,
+        };
+        let body = LirBody::new("f", 0, vec![block.into()], IndexMap::default(), IndexMap::default());
+        let mut lis = LiveIntervals::new(&body);
+        update_reg_defs_uses(&mut lis, &mut State::new(), 7, 9, None, None, false);
+        let order = |value| lis.operands(value).iter().map(|operand| operand.instr).collect::<Vec<_>>();
+        assert_eq!(order(5), [first.id(), both.id(), last.id()], "the others' operands stayed in place");
+        assert_eq!(order(9), [both.id()]);
+        assert!(order(7).is_empty());
+    }
 }

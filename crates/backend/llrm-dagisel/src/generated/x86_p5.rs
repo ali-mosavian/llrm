@@ -4,7 +4,7 @@
 
 #![allow(clippy::all, unused_imports)]
 
-use crate::dag::{Dag, Hooks, PatternContext, SDValue};
+use crate::dag::{Dag, Hooks, PatternContext, SDValue, X86Predicates};
 use crate::matcher::{Emit, Matcher::*, Slice, Table, Vt};
 use crate::predicates;
 
@@ -15144,7 +15144,7 @@ pub fn pattern_predicate<C: PatternContext>(ctx: &C, id: u16) -> bool {
 }
 
 /// The node predicates the table checks.
-pub fn node_predicate<D: Dag, H: Hooks<D>>(dag: &D, hooks: &H, value: SDValue, id: u16) -> bool {
+pub fn node_predicate<D: Dag, H: X86Predicates<D>>(dag: &D, hooks: &H, value: SDValue, id: u16) -> bool {
     let args = (dag, hooks, value);
     match id {
         1 => predicates::non_extending_load(args),

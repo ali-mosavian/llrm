@@ -1035,7 +1035,7 @@ fn a_block_takes_the_name_of_another_and_a_taken_name_gets_a_number() {
 }
 
 /// A `switch` with two cases to one block is two edges: a phi there has two
-/// inputs from it, and the exit phis of lcssa, lcssamerges and LSR gave one.
+/// inputs from it, and the exit phis of lcssa and LSR gave one.
 #[test]
 fn a_switch_with_two_cases_to_a_block_is_two_edge_predecessors() {
     let text = "define i16 @f(i16 %x) {\nentry:\n  switch i16 %x, label %d [\n    i16 1, label %t\n    i16 2, label %t\n  ]\n\nt:\n  ret i16 1\n\nd:\n  ret i16 2\n}\n";
@@ -1109,4 +1109,56 @@ fn rewriting_a_phi_after_its_first_arms_relinks_only_what_changed() {
     let links = crate::uselist::LINKS.with(std::cell::Cell::get);
     assert!(links <= 4, "{links} operands relinked for a rewrite that changed the end");
     assert!(f.check_uses().is_empty());
+}
+
+const ASSIGNED: &str = "define i16 @f(i16 %a) {\nentry:\n  %p = alloca i16, !DIAssignID !1\n  %x = add i16 %a, 1\n  store i16 %x, ptr %p, !DIAssignID !2\n  #dbg_assign(i16 %x, !0, !3, !2, ptr %p, !3, !4)\n  ret i16 %x\n}\n\n!0 = !{!\"v\"}\n!1 = distinct !{}\n!2 = distinct !{}\n!3 = !{}\n!4 = !{}\n";
+
+/// An assignment record follows its value and address like any other record:
+/// replaced where another value stands for them, and gone (not the whole
+/// record, whose id ties it to the store) once they are erased. `#dbg_assign`
+/// was refused by the parser, so no pass met one.
+#[test]
+fn an_assignment_record_follows_its_value_and_address_and_keeps_its_id() {
+    let mut parsed = module(ASSIGNED);
+    let f = function(&mut parsed);
+    let (x, value) = named(f, "x");
+    let (_, pointer) = named(f, "p");
+    let a = f.parameters()[0];
+    let assign = |f: &Function| match f
+        .debug_records()
+        .iter()
+        .map(|one| one.what)
+        .find(|one| matches!(one, crate::DebugWhat::Assign { .. }))
+    {
+        Some(crate::DebugWhat::Assign { value, address, id, .. }) => (value, address, id),
+        other => panic!("{other:?}"),
+    };
+    let (before, _, id) = (assign(f).0, (), assign(f).2);
+    assert_eq!(before, Some(Operand::Value(value)));
+    f.replace_value(value, Operand::Value(a));
+    assert_eq!(assign(f).0, Some(Operand::Value(a)));
+    assert_eq!(assign(f).1, Some(Operand::Value(pointer)));
+    assert_eq!(assign(f).2, id);
+    let _ = x;
+}
+
+/// `erase_block` tested every entry of the layout against a set of the blocks
+/// to erase: 16 k Ir for each of the 1,550 `empty_block_removed` calls of a
+/// memory_expansion -O2 compile. One block is found and taken out; the order
+/// of the rest stands.
+#[test]
+fn erasing_one_block_tests_no_layout_entry_and_keeps_the_order() {
+    let mut module = module("define void @f() {\nentry:\n  ret void\n}\n");
+    let f = function(&mut module);
+    let made: Vec<_> = (0..50).map(|k| f.create_block(Some(&format!("b{k}")))).collect();
+    for &block in &made {
+        f.insert_block(block, None).expect("placed");
+    }
+    let before = crate::edit::layout_tested();
+    f.erase_block(made[20]).expect("empty and unnamed");
+    assert_eq!(crate::edit::layout_tested(), before, "no entry was tested against a set");
+    let mut expected = vec![f.entry().unwrap()];
+    expected.extend(made.iter().copied().filter(|&one| one != made[20]));
+    assert_eq!(f.layout(), &expected[..]);
+    assert!(!f.is_placed(made[20]));
 }

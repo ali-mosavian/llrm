@@ -63,6 +63,7 @@ use llrm_mir::valuetracking::{Query, known, pattern};
 use crate::combine::{Combiner, Visit};
 use crate::combine_icmp_binop::fold_icmp_bin_op;
 use crate::combine_icmp_const::fold_icmp_inst_with_constant;
+use crate::combine_icmp_equality::fold_icmp_equality;
 use crate::combine_shared::{get_complexity, has_one_use, query};
 
 /// `ICmpInst::isSigned`.
@@ -131,6 +132,30 @@ fn new_icmp(
 ) -> Visit {
     let i1 = c.context.types.int(1);
     c.replace_with_new(inst, Opcode::ICmp(pred), i1, vec![a, b], Flags::default())
+}
+
+/// `Op0 pred Op1 -> ~Op1 pred ~Op0, if this allows us to drop an instruction`
+/// ([:8205](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L8205)):
+/// both sides are free to invert and one of the inversions eats an
+/// instruction.
+fn fold_icmp_of_inverted_operands(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    op0: Operand,
+    op1: Operand,
+) -> Option<Visit> {
+    c.context.types.int_bits(c.type_of(op0))?;
+    let (mut consumes0, mut consumes1) = (false, false);
+    let (one0, one1) = (has_one_use(c, op0), has_one_use(c, op1));
+    c.get_freely_inverted(inst, op0, one0, false, &mut consumes0)?;
+    c.get_freely_inverted(inst, op1, one1, false, &mut consumes1)?;
+    if !(consumes0 || consumes1) {
+        return None;
+    }
+    let inv0 = c.get_freely_inverted(inst, op0, one0, true, &mut consumes0)?;
+    let inv1 = c.get_freely_inverted(inst, op1, one1, true, &mut consumes1)?;
+    Some(new_icmp(c, inst, pred.swapped(), inv0, inv1))
 }
 
 /// `visitICmpInst`.
@@ -232,6 +257,9 @@ pub fn visit_icmp(
     if let Some(r) = fold_icmp_with_pointer_cast(c, inst, pred, op0, op1) {
         return r;
     }
+    if let Some(r) = fold_icmp_of_inverted_operands(c, inst, pred, op0, op1) {
+        return r;
+    }
     for operand in [op0, op1] {
         if let Operand::Value(value) = operand
             && let ValueDef::Instruction(phi) = c.function.value(value).def
@@ -254,6 +282,9 @@ pub fn visit_icmp(
         return r;
     }
     if let Some(r) = fold_select_icmp(c, inst, pred.swapped(), op1, op0) {
+        return r;
+    }
+    if let Some(r) = fold_icmp_equality(c, inst, pred, op0, op1) {
         return r;
     }
     // OWED: foldICmpInstWithConstantNotInt, the rest of foldICmpCommutative,
@@ -352,7 +383,7 @@ fn fold_gep_icmp(
     let index_ty = c.index_type(lhs_gep.ty);
     if base.ptr == Some(rhs) && can_fold(base.lhs_flags) && !c.is_expensive(&base) {
         // ((gep Ptr, OFFSET) cmp Ptr) ---> (OFFSET cmp 0)
-        let offset = c.emit_gep_offsets(inst, &base.lhs_geps, base.lhs_flags, index_ty);
+        let offset = c.emit_gep_offsets(inst, &base.lhs_geps, base.lhs_flags, index_ty, true);
         let zero = c.int(c.type_of(offset), 0);
         return Some(new_icmp_of(c, base.lhs_flags, offset, zero));
     }
@@ -411,8 +442,8 @@ fn fold_gep_icmp(
             }
         }
         if fold {
-            let l = c.emit_gep_offsets(inst, &base.lhs_geps, base.lhs_flags, index_ty);
-            let r = c.emit_gep_offsets(inst, &base.rhs_geps, base.rhs_flags, index_ty);
+            let l = c.emit_gep_offsets(inst, &base.lhs_geps, base.lhs_flags, index_ty, true);
+            let r = c.emit_gep_offsets(inst, &base.rhs_geps, base.rhs_flags, index_ty, true);
             return Some(new_icmp_of(c, base.lhs_flags.and(base.rhs_flags), l, r));
         }
     }
@@ -760,43 +791,12 @@ fn canonicalize_icmp_predicate(
     if is_canonical_predicate(pred) {
         return None;
     }
-    let result = c.function.instruction(inst).result?;
-    let users: Vec<(InstId, u32)> = c.function.users(result).iter().map(|one| (one.user, one.index)).collect();
-    for &(user, index) in &users {
-        let one = c.function.instruction(user);
-        let ok = match &one.opcode {
-            // Only as the condition, and not a logical and/or: absorbing the
-            // not would hide that pattern.
-            Opcode::Select => {
-                index == 0 && {
-                    let q = query(c, None);
-                    let value = Operand::Value(one.result?);
-                    pattern::logical_and(&q, value).is_none() && pattern::logical_or(&q, value).is_none()
-                }
-            }
-            Opcode::Br => one.operands.len() == 3,
-            Opcode::Binary(BinaryOp::Xor) => pattern::not(&query(c, None), Operand::Value(one.result?)).is_some(),
-            _ => false,
-        };
-        if !ok {
-            return None;
-        }
+    if !c.can_freely_invert_all_users_of(inst, None) {
+        return None;
     }
     c.function.set_icmp_predicate(inst, pred.inverse());
-    for (user, _) in users {
-        match c.function.instruction(user).opcode {
-            Opcode::Select | Opcode::Br => {
-                let mut operands = c.function.instruction(user).operands.clone();
-                operands.swap(1, 2);
-                c.function.set_operands(user, operands);
-                c.add_to_worklist(user);
-            }
-            _ => {
-                c.replace_inst_with(user, Operand::Value(result));
-                c.add_to_worklist(user);
-            }
-        }
-    }
+    let result = c.function.instruction(inst).result?;
+    c.freely_invert_all_users_of(Operand::Value(result), None);
     Some(Visit::Changed)
 }
 

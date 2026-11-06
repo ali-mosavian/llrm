@@ -387,6 +387,7 @@ mod tests {
             IndexMap::default(),
         );
         let frame = |saved: Vec<(RegId, RegId)>| llrm_target::FrameRegisters {
+            vector_saved: Vec::new(),
             pointer: RegId::BP,
             stack: RegId::SP,
             saved,
@@ -395,8 +396,12 @@ mod tests {
             optional: false,
             enter: false,
             wrap_split_size: false,
+            red_zone: 0,
             slot_scratch: None,
             free: false,
+            kept: false,
+            exit_cfi: true,
+            saved_first: false,
         };
         let facts = CalleeFacts::of(&parsed(LEAF)).0;
         facts.record(
@@ -442,6 +447,7 @@ mod tests {
             IndexMap::default(),
         );
         let frame = llrm_target::FrameRegisters {
+            vector_saved: Vec::new(),
             pointer: RegId::BP,
             stack: RegId::SP,
             saved: vec![],
@@ -450,8 +456,12 @@ mod tests {
             optional: false,
             enter: false,
             wrap_split_size: false,
+            red_zone: 0,
             slot_scratch: None,
             free: false,
+            kept: false,
+            exit_cfi: true,
+            saved_first: false,
         };
         let calls = IndexMap::from_iter([(7, "release".to_owned())]);
         facts.record("trim", &body, &frame, &calls);

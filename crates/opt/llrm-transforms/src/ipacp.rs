@@ -111,6 +111,7 @@ use llrm_analysis::memory::Unit;
 use llrm_analysis::{cfg, consts};
 use llrm_mir::context::{Constant, ConstantId, ConstantKind, GlobalId};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::IdSet;
 use llrm_mir::memory::Callees;
 use llrm_mir::module::Function;
 use llrm_mir::module::{GlobalKind, GlobalValue, InstId, Linkage, Module, Operand};
@@ -262,9 +263,21 @@ pub fn cloned(
         let replaces = private.contains(&name)
             && !addressed.contains(&name)
             && counts.get(&name).copied().unwrap_or(0) == sites.len() as i64;
-        let (saved, loops) = time_saved(module, layout, body, &known, &callees, costs);
+        let (saved, loops, _) = time_saved(module, layout, name, body, &known, &callees, costs);
+        let level = state.made.get(&origin).copied().unwrap_or(0);
+        let chain = chain_benefit(
+            module,
+            layout,
+            name,
+            body,
+            &known,
+            &callees,
+            costs,
+            level,
+            &mut BTreeMap::new(),
+        );
         let frequency: i64 = sites.iter().map(|site| site.2).sum();
-        let mut benefit = (saved / TIME_SCALE + if loops { LOOP_HINT_BONUS } else { 0 }) * frequency / profit::UNIT;
+        let mut benefit = chain.saturating_mul(frequency) / profit::UNIT;
         // GCC's `incorporate_penalties`: a function in a cycle with others, not
         // one that calls itself.
         let own = body.walk().any(|(_, inst)| llrm_mir::memory::callee(&module.context, body, inst) == Some(name));
@@ -314,6 +327,7 @@ pub fn cloned(
                 GlobalValue {
                     name: called.into(),
                     linkage: Linkage::Internal,
+                    visibility: llrm_mir::Visibility::Default,
                     unnamed_addr: unnamed,
                     address_space: space,
                     kind: GlobalKind::Function(Box::new(copy)),
@@ -329,17 +343,83 @@ pub fn cloned(
     changed
 }
 
+/// GCC follows a recursive call's actual only as a pass-through jump function:
+/// a constant, a parameter, or one operation on a single parameter and a
+/// constant (`ipa_compute_jump_functions`). `(lo + hi) / 2` is no such value,
+/// so a recursion that halves a range makes no chain of contexts.
+fn is_simple_jump(
+    body: &Function,
+    operand: Operand,
+) -> bool {
+    let Operand::Value(value) = operand else { return true };
+    if body.parameters().contains(&value) {
+        return true;
+    }
+    let llrm_mir::module::ValueDef::Instruction(made) = body.value(value).def else { return false };
+    let instruction = body.instruction(made);
+    if !matches!(instruction.opcode, Opcode::Binary(_)) {
+        return false;
+    }
+    let parameters: BTreeSet<_> = instruction
+        .operands
+        .iter()
+        .filter_map(|one| match one {
+            Operand::Value(v) if body.parameters().contains(v) => Some(*v),
+            _ => None,
+        })
+        .collect();
+    let constants = instruction.operands.iter().filter(|one| matches!(one, Operand::Constant(_))).count();
+    parameters.len() == 1 && parameters.len() + constants == instruction.operands.len()
+}
+
+/// What a context is worth, with what the contexts it passes to its own calls
+/// are worth: GCC's `propagate_effects` adds a value's benefit to the value
+/// that produces it, times `ipa-cp-max-recursive-depth` less the level, so a
+/// clone for `row = 0` is credited with the rows after it.
+fn chain_benefit(
+    module: &Module,
+    layout: &DataLayout,
+    name: GlobalId,
+    body: &Function,
+    known: &[Option<ConstantId>],
+    callees: &Callees,
+    costs: &OperationCosts,
+    level: usize,
+    memo: &mut BTreeMap<(Vec<Option<ConstantId>>, usize), i64>,
+) -> i64 {
+    if let Some(&done) = memo.get(&(known.to_vec(), level)) {
+        return done;
+    }
+    // A context met again while it is priced adds nothing.
+    memo.insert((known.to_vec(), level), 0);
+    let (saved, loops, next) = time_saved(module, layout, name, body, known, callees, costs);
+    let mut benefit = saved / TIME_SCALE + if loops { LOOP_HINT_BONUS } else { 0 };
+    if level + 1 < MAX_CLONES {
+        for (context, frequency) in next {
+            if context.as_slice() == known {
+                continue;
+            }
+            let after = chain_benefit(module, layout, name, body, &context, callees, costs, level + 1, memo);
+            let factor = (MAX_CLONES - level) as i64;
+            benefit = benefit.saturating_add(after.saturating_mul(factor).saturating_mul(frequency) / profit::UNIT);
+        }
+    }
+    memo.insert((known.to_vec(), level), benefit);
+    benefit
+}
+
 /// GCC's `time_benefit`: the clocks a call no longer spends in `body` given its
 /// known actuals: what they fold, and what only a branch they decide reaches,
 /// each at its block's frequency (a loop that does not run saves its trips).
 fn time_saved(
     module: &Module,
     layout: &DataLayout,
+    name: GlobalId,
     body: &Function,
     known: &[Option<ConstantId>],
     callees: &Callees,
     costs: &OperationCosts,
-) -> (i64, bool) {
+) -> (i64, bool, Vec<(Vec<Option<ConstantId>>, i64)>) {
     let unit = Unit::of(module, layout, body);
     let mut values = IndexMap::default();
     for (&parameter, constant) in body.parameters().iter().zip(known) {
@@ -352,14 +432,14 @@ fn time_saved(
     // block's branch can go there; a phi is the meet of its reached edges. A
     // loop whose first test is decided never runs.
     let mut folded = BTreeSet::new();
-    let mut reached = BTreeSet::new();
+    let mut reached = IdSet::new();
     let mut edges: BTreeSet<(llrm_mir::module::BlockId, llrm_mir::module::BlockId)> = BTreeSet::new();
-    let mut varying: BTreeSet<llrm_mir::module::ValueId> = BTreeSet::new();
+    let mut varying: IdSet<llrm_mir::module::ValueId> = IdSet::new();
     reached.extend(body.entry());
     // Whether `operand` is a value of the body no block has made yet.
     let unseen = |operand: &Operand,
                   values: &IndexMap<llrm_mir::module::ValueId, consts::Known>,
-                  varying: &BTreeSet<llrm_mir::module::ValueId>| {
+                  varying: &IdSet<llrm_mir::module::ValueId>| {
         matches!(
             operand,
             Operand::Value(v) if !values.contains_key(v) && !varying.contains(v) && matches!(body.value(*v).def, llrm_mir::module::ValueDef::Instruction(made) if consts::_defined(&unit, made) == Some(*v))
@@ -448,6 +528,7 @@ fn time_saved(
     // out.
     let weight =
         |block| frequency.get(&cfg::id(block)).copied().unwrap_or(profit::UNIT).min(MAX_FREQUENCY * profit::UNIT);
+    let addresses = constant_addresses(body, &values, &reached);
     let (mut unknown, mut kept) = (0, 0);
     for (block, inst) in body.walk() {
         if matches!(body.instruction(inst).opcode, Opcode::Phi) {
@@ -455,7 +536,8 @@ fn time_saved(
         }
         let price = profit::operation(&module.context, layout, body, callees, inst, costs).unwrap_or(0) * weight(block);
         unknown += price;
-        if reached.contains(&block) && !folded.contains(&inst) {
+        // A constant address is an immediate of the access that uses it.
+        if reached.contains(&block) && !folded.contains(&inst) && !addresses.contains(&inst) {
             kept += price;
         }
     }
@@ -481,7 +563,79 @@ fn time_saved(
                 }
             }),
         );
-    ((unknown - kept) / profit::UNIT, hint)
+    // The contexts the body's calls of itself pass on: what the known actuals
+    // make constant at each (GCC's `propagate_effects` follows them).
+    let mut next: Vec<(Vec<Option<ConstantId>>, i64)> = Vec::new();
+    for (block, inst) in body.walk() {
+        if !reached.contains(&block) || llrm_mir::memory::callee(&module.context, body, inst) != Some(name) {
+            continue;
+        }
+        let instruction = body.instruction(inst);
+        let context: Vec<Option<ConstantId>> = body
+            .parameters()
+            .iter()
+            .zip(&instruction.operands)
+            .map(|(&parameter, &operand)| {
+                if !is_simple_jump(body, operand) {
+                    return None;
+                }
+                let number = consts::_operand(&unit, operand, &values, None)?;
+                let value = number.n.to_string().parse::<i128>().ok()?;
+                module.context.types.int_bits(body.value(parameter).ty)?;
+                Some(module.context.int(body.value(parameter).ty, value))
+            })
+            .collect();
+        if context.iter().any(Option::is_some) {
+            next.push((context, weight(block)));
+        }
+    }
+    ((unknown - kept) / profit::UNIT, hint, next)
+}
+
+/// The `getelementptr`s in reached blocks whose base is a constant (a global)
+/// or another such address, and whose every index is a constant or a known
+/// actual: the access that uses one takes it as a displacement, so it costs
+/// nothing (GCC's `ipa-cp` prices the same fold through the address
+/// expression).
+fn constant_addresses(
+    body: &Function,
+    known: &IndexMap<llrm_mir::module::ValueId, consts::Known>,
+    reached: &IdSet<llrm_mir::module::BlockId>,
+) -> IdSet<InstId> {
+    let mut found = IdSet::new();
+    let mut values = IdSet::new();
+    loop {
+        let before = found.len();
+        for &block in body.layout() {
+            if !reached.contains(&block) {
+                continue;
+            }
+            for inst in body.iter_block(block) {
+                let instruction = body.instruction(inst);
+                let Some(result) = instruction.result else { continue };
+                if !matches!(instruction.opcode, Opcode::GetElementPtr { .. }) || found.contains(&inst) {
+                    continue;
+                }
+                let base = match instruction.operands[0] {
+                    Operand::Constant(_) => true,
+                    Operand::Value(v) => values.contains(&v),
+                    Operand::Block(_) => false,
+                };
+                let indices = instruction.operands[1..].iter().all(|index| match index {
+                    Operand::Constant(_) => true,
+                    Operand::Value(v) => known.contains_key(v),
+                    Operand::Block(_) => false,
+                });
+                if base && indices {
+                    found.insert(inst);
+                    values.insert(result);
+                }
+            }
+        }
+        if found.len() == before {
+            return found;
+        }
+    }
 }
 
 /// Whether `id` is a function the program runs once: `main`.

@@ -38,14 +38,14 @@
 //! TwoAddressInstructionPass.cpp#L801, #L1402): no copy of `a` is made, so the
 //! result can join a loop's register while `a` stays in its own.
 //!
-//! DEVIATE TA-4 (no exit while the target reads addresses through a prefix): a
-//! dword or 16-bit result of a `lea` at m16 is the 32-bit prefixed form
-//! (`lea ecx, [eax-1]`), which costs a prefix byte where the pin's `LEA32r` has
-//! none, and the 16-bit address registers (BX/BP, SI/DI) are not used; there
-//! the adds and subs convert and the shifts stay the peephole's, which fuses
-//! them with the add after them (`ThreeAddress::AddSub`).
-//! `upperzero::wide_roots` does not count a `lea` cell: it is arithmetic, not
-//! an address read.
+//! Where the target's dword address form is behind a prefix (m16;
+//! `Profile::three_address`, from the target's address forms) a dword or 16-bit
+//! result of a `lea` is the 32-bit prefixed form (`lea ecx, [eax-1]`), a byte
+//! longer than the pin's `LEA32r`, and the 16-bit address registers (BX/BP,
+//! SI/DI) are not used. There the adds and subs convert and the shifts stay the
+//! peephole's, which fuses them with the add after them
+//! (`ThreeAddress::AddSub`). `upperzero::wide_roots` does not count a `lea`
+//! cell: it is arithmetic, not an address read.
 //!
 //! `isProfitableToConv3Addr`: a source that dies is also converted when the
 //! sum is to end in a register other than the one the source arrives in
@@ -97,21 +97,27 @@ pub struct BodyFacts {
     state: std::cell::RefCell<State>,
 }
 
+struct Slot {
+    insn: Arc<Insn>,
+    /// The order stamp in `block`.
+    stamp: u64,
+    block: usize,
+}
+
 struct State {
-    insns: HashMap<InstrKey, Arc<Insn>>,
+    /// Each instruction with its place: one lookup, where three maps took
+    /// three.
+    slots: HashMap<InstrKey, Slot>,
     /// The instructions of each block by order stamp: the stamps rise along the
     /// block, with gaps, so an instruction goes between two others (or moves)
     /// without renumbering the rest, as the pin's intrusive list does.
     blocks: Vec<std::collections::BTreeMap<u64, Arc<Insn>>>,
-    /// The stamp of each instruction in its block.
-    stamp_of: HashMap<InstrKey, u64>,
-    block_of: HashMap<InstrKey, usize>,
     /// The instructions that read or define each value, and whether each
     /// defines it (`use_def_nodbg_operands`).
-    operands: HashMap<u32, indexmap::IndexSet<(InstrKey, bool)>>,
+    operands: HashMap<u32, indexmap::IndexSet<(InstrKey, bool), rustc_hash::FxBuildHasher>>,
     /// The instructions that define each value: a few, where a value read N
     /// times lists N operands.
-    defs: HashMap<u32, indexmap::IndexSet<InstrKey>>,
+    defs: HashMap<u32, indexmap::IndexSet<InstrKey, rustc_hash::FxBuildHasher>>,
     lv: crate::liveness::livevariables::LiveVariables,
 }
 
@@ -152,8 +158,8 @@ impl State {
             .get(&value)
             .into_iter()
             .flatten()
-            .filter(|(key, _)| self.block_of.get(key) == Some(&block))
-            .map(|(key, _)| (self.stamp_of[key], &self.insns[key]))
+            .filter_map(|(key, _)| self.slots.get(key).filter(|slot| slot.block == block))
+            .map(|slot| (slot.stamp, &slot.insn))
             .collect();
         naming.sort_unstable_by_key(|(stamp, _)| *stamp);
         naming.dedup_by_key(|(stamp, _)| *stamp);
@@ -194,11 +200,14 @@ impl State {
                 let old = std::mem::take(&mut self.blocks[block]);
                 for (n, (_, one)) in old.into_iter().enumerate() {
                     let stamp = (n as u64 + 1) * GAP;
-                    self.stamp_of.insert(one.id(), stamp);
+                    // `one` of a `replace` is out of the slots already.
+                    if let Some(slot) = self.slots.get_mut(&one.id()) {
+                        slot.stamp = stamp;
+                    }
                     self.blocks[block].insert(stamp, one);
                 }
-                lo = lo_key.map(|one| self.stamp_of[&one.id()]);
-                hi = hi_key.map(|one| self.stamp_of[&one.id()]);
+                lo = lo_key.map(|one| self.slots[&one.id()].stamp);
+                hi = hi_key.map(|one| self.slots[&one.id()].stamp);
                 fits(lo, hi).expect("a renumbered block has room")
             }
         };
@@ -297,10 +306,8 @@ impl BodyFacts {
     /// as the pass edits.
     pub fn of(body: &LirBody) -> Self {
         let mut state = State {
-            insns: HashMap::default(),
+            slots: HashMap::default(),
             blocks: Vec::new(),
-            stamp_of: HashMap::default(),
-            block_of: HashMap::default(),
             operands: HashMap::default(),
             defs: HashMap::default(),
             lv: crate::liveness::livevariables::LiveVariables::from_dataflow(body),
@@ -310,9 +317,7 @@ impl BodyFacts {
             for (n, one) in block.insns.iter().enumerate() {
                 let stamp = (n as u64 + 1) << 20;
                 kept.insert(stamp, Arc::clone(one));
-                state.stamp_of.insert(one.id(), stamp);
-                state.insns.insert(one.id(), Arc::clone(one));
-                state.block_of.insert(one.id(), at);
+                state.slots.insert(one.id(), Slot { insn: Arc::clone(one), stamp, block: at });
                 state.add_operands(one);
             }
             state.blocks.push(kept);
@@ -333,14 +338,14 @@ impl BodyFacts {
         &self,
         key: InstrKey,
     ) -> Option<usize> {
-        self.state.borrow().block_of.get(&key).copied()
+        self.state.borrow().slots.get(&key).map(|slot| slot.block)
     }
 
     fn insn(
         &self,
         key: InstrKey,
     ) -> Arc<Insn> {
-        Arc::clone(&self.state.borrow().insns[&key])
+        Arc::clone(&self.state.borrow().slots[&key].insn)
     }
 
     /// The last reader of `value` in `block` after `after`, when no definition
@@ -356,7 +361,7 @@ impl BodyFacts {
     ) -> Option<InstrKey> {
         use crate::liveness::livevariables::Site;
         let state = self.state.borrow();
-        let floor = *state.stamp_of.get(&after)?;
+        let floor = state.slots.get(&after)?.stamp;
         let (stamp, key) = state
             .lv
             .var_info(value)?
@@ -364,17 +369,14 @@ impl BodyFacts {
             .iter()
             .filter(|kill| kill.block == block)
             .filter_map(|kill| match kill.site {
-                Site::Insn(key) => state.stamp_of.get(&key).map(|stamp| (*stamp, key)),
+                Site::Insn(key) => state.slots.get(&key).map(|slot| (slot.stamp, key)),
                 Site::Phi(_) => None,
             })
             .max()?;
-        let reads = state.insns[&key].uses.contains(&value);
-        let defined_after = state
-            .defs
-            .get(&value)
-            .is_some_and(
-                |defs| defs.iter().any(|def| state.block_of.get(def) == Some(&block) && state.stamp_of[def] > stamp),
-            );
+        let reads = state.slots[&key].insn.uses.contains(&value);
+        let defined_after = state.defs.get(&value).is_some_and(|defs| {
+            defs.iter().any(|def| state.slots.get(def).is_some_and(|slot| slot.block == block && slot.stamp > stamp))
+        });
         (stamp > floor && reads && !defined_after).then_some(key)
     }
 
@@ -399,16 +401,12 @@ impl BodyFacts {
         new: Arc<Insn>,
     ) {
         let mut state = self.state.borrow_mut();
-        let before = Arc::clone(&state.insns[&old]);
+        let gone = state.slots.remove(&old).expect("an instruction of the block");
+        let (before, at) = (gone.insn, gone.stamp);
         state.remove_operands(&before);
-        state.insns.remove(&old);
-        state.block_of.remove(&old);
-        let at = state.stamp_of.remove(&old).expect("an instruction of the block");
         state.blocks[block].insert(at, Arc::clone(&new));
-        state.stamp_of.insert(new.id(), at);
-        state.block_of.insert(new.id(), block);
         state.add_operands(&new);
-        state.insns.insert(new.id(), Arc::clone(&new));
+        state.slots.insert(new.id(), Slot { insn: Arc::clone(&new), stamp: at, block });
         state.retarget_kills(&before, std::slice::from_ref(&new), block);
     }
 
@@ -423,18 +421,19 @@ impl BodyFacts {
         before: Option<InstrKey>,
     ) {
         let mut state = self.state.borrow_mut();
-        let from = state.stamp_of.remove(&key).expect("an instruction of the block");
+        let from = state.slots[&key].stamp;
         let moved = state.blocks[block].remove(&from).expect("an instruction of the block");
         let after = match before {
-            Some(one) => state.stamp_of[&one],
+            Some(one) => state.slots[&one].stamp,
             None => u64::MAX,
         };
         let lo = state.blocks[block].range(..after).next_back().map(|(stamp, _)| *stamp);
         let hi = (after != u64::MAX).then_some(after);
         let (stamps, ..) = state.stamps_between(block, lo, hi, 1);
         state.blocks[block].insert(stamps[0], Arc::clone(&moved));
-        state.stamp_of.insert(key, stamps[0]);
-        let moved = Arc::clone(&state.insns[&key]);
+        let slot = state.slots.get_mut(&key).expect("an instruction of the block");
+        slot.stamp = stamps[0];
+        let moved = Arc::clone(&slot.insn);
         state.refresh_named(&moved, block);
     }
 
@@ -451,11 +450,9 @@ impl BodyFacts {
     ) {
         let (last, rest) = made.split_last().expect("an instruction replaced by none");
         let mut state = self.state.borrow_mut();
-        let before = Arc::clone(&state.insns[&one.id()]);
+        let gone = state.slots.remove(&one.id()).expect("an instruction of the block");
+        let (before, at) = (gone.insn, gone.stamp);
         state.remove_operands(&before);
-        state.insns.remove(&one.id());
-        state.block_of.remove(&one.id());
-        let at = state.stamp_of.remove(&one.id()).expect("an instruction of the block");
         let lo = state.blocks[block].range(..at).next_back().map(|(stamp, _)| *stamp);
         let (stamps, ..) = state.stamps_between(block, lo, Some(at), rest.len());
         // A renumbering moved `one` too: its stamp is read again.
@@ -470,17 +467,12 @@ impl BodyFacts {
         };
         for (new, stamp) in rest.iter().zip(&stamps) {
             state.blocks[block].insert(*stamp, Arc::clone(new));
-            state.stamp_of.insert(new.id(), *stamp);
-            state.block_of.insert(new.id(), block);
             state.add_operands(new);
-            state.insns.insert(new.id(), Arc::clone(new));
+            state.slots.insert(new.id(), Slot { insn: Arc::clone(new), stamp: *stamp, block });
         }
-        state.stamp_of.remove(&one.id());
         state.blocks[block].insert(at, Arc::clone(last));
-        state.stamp_of.insert(last.id(), at);
-        state.block_of.insert(last.id(), block);
         state.add_operands(last);
-        state.insns.insert(last.id(), Arc::clone(last));
+        state.slots.insert(last.id(), Slot { insn: Arc::clone(last), stamp: at, block });
         state.retarget_kills(&before, made, block);
     }
 
@@ -566,6 +558,35 @@ fn movable(one: &Insn) -> bool {
         })
 }
 
+/// An `fld` of a memory cell onto the x87 stack: the one reader of a pointer
+/// that is safe to move above an integer instruction (the pin's
+/// `isSafeToMove` of a load, `rescheduleKillAboveMI`).
+fn is_x87_load(one: &Insn) -> bool {
+    use crate::model::ir::Operation as Op;
+    let Some(what) = one.what.as_ref() else { return false };
+    what.op == Op::FloatLoad
+        && what.name.as_deref() == Some("fld")
+        && !barrier(one)
+        && matches!(what.sources.as_slice(), [Loc::Mem(_)])
+        && what.dests.iter().all(|place| matches!(place, Loc::Held(held) if held.width == 10))
+}
+
+/// Whether `one` reads or writes the x87 stack or a memory cell.
+fn touches_x87_or_memory(one: &Insn) -> bool {
+    use crate::model::ir::Operation as Op;
+    let Some(what) = one.what.as_ref() else { return true };
+    matches!(
+        what.op,
+        Op::FloatLoad | Op::FloatStore | Op::FloatArith | Op::FloatArithPop | Op::FloatUnary
+    )
+        || what
+            .dests
+            .iter()
+            .chain(&what.sources)
+            .any(|place| place.st_index().is_some() || matches!(place, Loc::Held(held) if held.width == 10))
+        || what.dests.iter().any(|place| matches!(place, Loc::Mem(_)))
+}
+
 fn flag_lanes(
     one: &Insn,
     regs: llrm_lir::registers::Regs,
@@ -610,9 +631,19 @@ pub enum ThreeAddress {
     /// takes a 16-bit address form: `lea ax, [bx + k]`.
     AddSubWords,
     All,
+    /// `All` without the byte and word adds (DEVIATE TA-10 off): flat 32-bit
+    /// at `-Os`, where a `lea`'s fourth byte-capable register costs a spill.
+    Dwords,
     /// `All` on a target that addresses with 64-bit registers: `lea eax, [rdi +
     /// k]` (`LEA64_32r`), the base read at its full width.
     Wide,
+}
+
+/// What `convertToThreeAddress` reads `one` as: its name, an `or` of disjoint
+/// bits (`ADDnn_DB`) as an `add`.
+pub fn adds_as(one: &Insn) -> Option<&str> {
+    let name = one.what.as_ref()?.name.as_deref();
+    if one.disjoint && name == Some("or") { Some("add") } else { name }
 }
 
 /// The `lea` of `d := a + k` or `d := a + b`, three-address, or None where the
@@ -627,17 +658,18 @@ pub fn three_address(
         return None;
     }
     let what = one.what.as_ref()?;
+    let name = adds_as(one);
     // `INC32r` and `DEC32r`: `lea [a + 1]`, `lea [a - 1]`.
     if what.op == Operation::Unary
-        && let Some(name @ ("inc" | "dec")) = what.name.as_deref()
+        && let Some(name @ ("inc" | "dec")) = name
         && what.dests.len() == 1
         && what.sources.len() == 1
         && one.group.is_none()
         && one.requires.is_empty()
         && one.delivers.is_empty()
         && let (Loc::Held(into), Loc::Held(base)) = (&what.dests[0], &what.sources[0])
-        && into.width == 4
-        && base.width == 4
+        && (into.width == 4 || (into.width == 8 && mode == ThreeAddress::Wide) || narrow_lea(mode, into.width))
+        && base.width == into.width
         && into.value != base.value
     {
         let offset = if name == "inc" { 1 } else { -1 };
@@ -645,18 +677,22 @@ pub fn three_address(
         made.what = Some(Semantics {
             op: Operation::Address,
             name: Some("lea".into()),
-            dests: vec![Loc::Held(*into)],
+            dests: vec![Loc::Held(if narrow_lea(mode, into.width) { Held { width: 4, ..*into } } else { *into })],
             sources: vec![Loc::Mem(Mem {
-                base: Some(if mode == ThreeAddress::Wide { Held { width: 8, ..*base } } else { *base }),
+                base: Some(match mode {
+                    ThreeAddress::Wide => Held { width: 8, ..*base },
+                    _ if narrow_lea(mode, into.width) => Held { width: 4, ..*base },
+                    _ => *base,
+                }),
                 offset,
-                ..Mem::new(None, 4)
+                ..Mem::new(None, into.width)
             })],
             ..Semantics::new(Operation::Address)
         });
         return Some(Arc::new(made));
     }
     if what.op != Operation::Binary
-        || !matches!(what.name.as_deref(), Some("add" | "sub" | "shl"))
+        || !matches!(name, Some("add" | "sub" | "shl"))
         || what.dests.len() != 1
         || what.sources.len() != 2
         || one.group.is_some()
@@ -670,15 +706,26 @@ pub fn three_address(
     let word = width == 2
         && mode == ThreeAddress::AddSubWords
         && matches!(what.sources[1], Loc::Imm(Imm { address: None, .. }));
-    if !(width == 4 || word) || base.width != width || into.value == base.value {
+    let qword = width == 8 && mode == ThreeAddress::Wide;
+    // `ADD8ri`, `ADD16ri`, `ADD8rr`, `ADD16rr` (not `SUB8ri`, `SUB16ri`: the
+    // pin's FIXME) through `LEA64_32r`.
+    let narrow = narrow_lea(mode, width) && name == Some("add");
+    if !(width == 4 || word || qword || narrow) || base.width != width || into.value == base.value {
         return None;
     }
-    let wide = |held: &Held| if mode == ThreeAddress::Wide { Held { width: 8, ..*held } } else { *held };
-    let cell = match (&what.sources[1], what.name.as_deref()) {
+    let wide = |held: &Held| match mode {
+        ThreeAddress::Wide => Held { width: 8, ..*held },
+        _ if narrow => Held { width: 4, ..*held },
+        _ => *held,
+    };
+    let cell = match (&what.sources[1], name) {
         // `SHL32ri` by 1 to 3: `[a + a]` for 1, `[a*4]`, `[a*8]` for the rest
         // (the index alone takes a 32-bit displacement, as the pin's does).
         (Loc::Imm(Imm { value: shift @ 1..=3, address: None, .. }), Some("shl"))
-            if matches!(mode, ThreeAddress::All | ThreeAddress::Wide) =>
+            if matches!(
+                mode,
+                ThreeAddress::All | ThreeAddress::Dwords | ThreeAddress::Wide
+            ) =>
         {
             Mem {
                 base: (*shift == 1).then_some(wide(base)),
@@ -686,11 +733,16 @@ pub fn three_address(
                 scale: if *shift == 1 { 1 } else { 1 << shift },
                 offset: 0,
                 disp_width: if *shift == 1 { 0 } else { 4 },
-                ..Mem::new(Some(ir::Addr::new(ir::Space::Literal, 0)), 4)
+                ..Mem::new(Some(ir::Addr::new(ir::Space::Literal, 0)), width)
             }
         }
         (_, Some("shl")) => return None,
         (Loc::Imm(Imm { value, address: None, .. }), name) => {
+            let value = &match width {
+                1 => i64::from(*value as i8),
+                2 if narrow => i64::from(*value as i16),
+                _ => *value,
+            };
             let step = if name == Some("sub") { value.checked_neg()? } else { *value };
             // A word unit step stays `inc`: with the source in an address
             // register the `lea` is three bytes against the INC's one, and
@@ -698,22 +750,48 @@ pub fn three_address(
             if word && step.abs() == 1 {
                 return None;
             }
-            Mem { base: Some(wide(base)), offset: step, ..Mem::new(None, width) }
+            // `ADD64ri32`: a displacement is 32 bits.
+            if qword && i32::try_from(step).is_err() {
+                return None;
+            }
+            Mem { base: Some(wide(base)), offset: step, ..Mem::new(None, if narrow { 4 } else { width }) }
         }
-        (Loc::Held(index), Some("add")) if index.width == 4 && index.value != into.value => {
-            Mem { base: Some(wide(base)), index: Some(wide(index)), scale: 1, offset: 0, ..Mem::new(None, 4) }
-        }
+        (Loc::Held(index), Some("add")) if index.width == width && index.value != into.value => Mem {
+            base: Some(wide(base)),
+            index: Some(wide(index)),
+            scale: 1,
+            offset: 0,
+            ..Mem::new(None, width.max(4))
+        },
         _ => return None,
     };
     let mut made = one.clone();
     made.what = Some(Semantics {
         op: Operation::Address,
         name: Some("lea".into()),
-        dests: vec![Loc::Held(*into)],
+        dests: vec![Loc::Held(if narrow { Held { width: 4, ..*into } } else { *into })],
         sources: vec![Loc::Mem(cell)],
         ..Semantics::new(Operation::Address)
     });
     Some(Arc::new(made))
+}
+
+/// `convertToThreeAddressWithLEA`: a byte or word `add`, `inc` or `dec` is a
+/// `LEA64_32r` of the source read whole, where registers are 64 bits
+/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrInfo.cpp#L1228>).
+///
+/// DEVIATE TA-10: also a `LEA32r` on a flat 32-bit target (`All`), the pin's
+/// own TODO at that line. `__floatsisf`'s `mov ecx, eax; add cl, -5` is `lea
+/// ecx, [eax - 5]`. Off at `-Os` ([`ThreeAddress::Dwords`]): the result takes
+/// one of the four byte-capable registers, and 11 m32 -Os cells grew from the
+/// spill that cost (greedy's region split of the shift count, not the lea).
+/// Exit 2026-11-20, or when greedy lands that split fix: re-run the 11 cells
+/// with it on; remove when the pin does the same.
+fn narrow_lea(
+    mode: ThreeAddress,
+    width: u32,
+) -> bool {
+    matches!(mode, ThreeAddress::Wide | ThreeAddress::All) && matches!(width, 1 | 2)
 }
 
 /// Whether the flags `insns[index]` writes are written again, in its block,
@@ -725,13 +803,13 @@ pub fn flags_dead_after(
     index: usize,
     regs: llrm_lir::registers::Regs,
     bits: u32,
-    dead_out: bool,
+    dead_out: impl FnOnce() -> bool,
 ) -> bool {
     use crate::backend::precse::{Flags, flags_after};
     match flags_after(regs, bits, insns, index, false) {
         Flags::Read => false,
         Flags::Dead => true,
-        Flags::Out => dead_out,
+        Flags::Out => dead_out(),
     }
 }
 
@@ -1294,6 +1372,7 @@ impl<'a> Commuter<'a> {
         at: usize,
         regs: llrm_lir::registers::Regs,
         bits: u32,
+        flags_dead_out: &dyn Fn() -> bool,
     ) -> bool {
         let mi = Arc::clone(&work[at]);
         // Only an instruction the pass would untie: tied, and writing another
@@ -1344,7 +1423,7 @@ impl<'a> Commuter<'a> {
             end += 1;
         }
         // The flags it reads or writes are not to be read or written between.
-        let writes_flags = flags_touched(&mi, regs, bits);
+        let Some((mi_reads_flags, mi_writes_flags)) = flag_lanes(&mi, regs, bits) else { return false };
         // The kill is within the eleven instructions the walk below allows.
         let Some(found) = work[end.min(work.len())..].iter().take(11).position(|one| {
             #[cfg(test)]
@@ -1355,7 +1434,7 @@ impl<'a> Commuter<'a> {
         };
         let last = end + found;
         let mut visited = 0;
-        for other in &work[end..=last] {
+        for (place, other) in work[end..=last].iter().enumerate() {
             if visited > 10 {
                 return false;
             }
@@ -1363,8 +1442,19 @@ impl<'a> Commuter<'a> {
             if barrier(other) {
                 return false;
             }
-            if writes_flags && !flags_untouched(other, regs, bits) {
-                return false;
+            // The pin's register test on EFLAGS: an instruction between that
+            // reads them, or writes them where they are read, is
+            // not crossed; a dead write is (`!MO.isDead() &&
+            // regOverlapsSet(Defs, MOReg)`).
+            if mi_reads_flags || mi_writes_flags {
+                let Some((reads, writes)) = flag_lanes(other, regs, bits) else { return false };
+                if (mi_writes_flags && reads)
+                    || (writes
+                        && (mi_reads_flags
+                            || (mi_writes_flags && !flags_dead_after(work, end + place, regs, bits, flags_dead_out))))
+                {
+                    return false;
+                }
             }
             if other.defines.iter().any(|value| uses.contains(value) || defs.contains(value)) {
                 return false;
@@ -1446,6 +1536,7 @@ impl<'a> Commuter<'a> {
         at: usize,
         regs: llrm_lir::registers::Regs,
         bits: u32,
+        only_x87_load: bool,
     ) -> bool {
         let mi = Arc::clone(&work[at]);
         let Some(what) = mi.what.as_ref().filter(|what| crate::backend::twoaddr::ties(what)) else { return false };
@@ -1464,7 +1555,11 @@ impl<'a> Commuter<'a> {
         let kill = self.facts.insn(kill_key);
         // A copy is left to the coalescer (the pin moves one only for a folded
         // load, which has no case here).
-        if crate::coalescer::pair::full_copy(&kill).is_some() || !movable(&kill) {
+        let x87_load = is_x87_load(&kill);
+        if (only_x87_load && !x87_load)
+            || crate::coalescer::pair::full_copy(&kill).is_some()
+            || !(movable(&kill) || x87_load)
+        {
             return false;
         }
         if let Some(what) = kill.what.as_ref()
@@ -1491,7 +1586,8 @@ impl<'a> Commuter<'a> {
                 kills.push(value);
             }
         }
-        let touches_flags = flags_touched(&kill, regs, bits);
+        // An x87 load reads no integer flags, whatever the decoder knows of it.
+        let touches_flags = !x87_load && flags_touched(&kill, regs, bits);
         // The kill is within the eleven instructions the walk below allows.
         let Some(found) = work[at + 1..].iter().take(11).position(|one| {
             #[cfg(test)]
@@ -1508,6 +1604,11 @@ impl<'a> Commuter<'a> {
             }
             visited += 1;
             if barrier(other) {
+                return false;
+            }
+            // A load of the x87 stack moves up past integer instructions
+            // only: nothing that touches the stack or writes memory.
+            if x87_load && (touches_x87_or_memory(other)) {
                 return false;
             }
             if touches_flags && !flags_untouched(other, regs, bits) {
@@ -1584,12 +1685,38 @@ mod tests {
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
+    /// A byte `add` of a constant is a `lea` on flat targets (`All`, DEVIATE
+    /// TA-10: `mov ecx, eax; add cl, -5` in `__floatsisf`, five bytes for
+    /// three) and `Wide`, not on a 16-bit one.
+    #[test]
+    fn test_a_byte_add_is_a_lea_on_flat_targets() {
+        let held = |value: u32| Held { value, width: 1, offset: 0 };
+        let what = Semantics {
+            name: Some("add".into()),
+            dests: vec![Loc::Held(held(2))],
+            sources: vec![Loc::Held(held(1)), Loc::Imm(crate::model::ir::Imm { value: 236, width: 1, address: None })],
+            ..Semantics::new(Operation::Binary)
+        };
+        let one = Insn::new(0, Some((0, 0)), Some(what), vec![2], vec![1]);
+        for mode in [ThreeAddress::AddSub, ThreeAddress::AddSubWords, ThreeAddress::Dwords] {
+            assert!(three_address(&one, mode).is_none(), "{mode:?}");
+        }
+        for (mode, base_width) in [(ThreeAddress::All, 4), (ThreeAddress::Wide, 8)] {
+            let made = three_address(&one, mode).expect("a lea");
+            let lea = made.what.as_ref().unwrap();
+            assert_eq!(lea.name.as_deref(), Some("lea"));
+            let Loc::Mem(cell) = &lea.sources[0] else { panic!("{lea:?}") };
+            assert_eq!(cell.offset, -20, "the byte immediate is signed");
+            assert_eq!(cell.base.map(|b| b.width), Some(base_width), "{mode:?}: the source is read whole");
+        }
+    }
+
     /// `process_copy` entered every instruction of a block in a std `HashSet`
     /// (SipHash, 409 Ir an insert, 0.86 M of d_faces' 11.7 M in TwoAddress)
     /// though only an instruction that carries a copy has anything to read.
     #[test]
     fn test_process_copy_remembers_only_an_instruction_that_carries_a_copy() {
-        let held = |value: u32| Held { value, width: 4 };
+        let held = |value: u32| Held { value, width: 4, offset: 0 };
         let plain = {
             let what = Semantics {
                 name: Some("mov".into()),
@@ -1636,7 +1763,7 @@ mod tests {
     /// the same way before and after keeps its kill at the new instruction.
     #[test]
     fn test_replacing_a_tied_pair_remakes_only_the_kills_whose_naming_changed() {
-        let held = |value: u32| Held { value, width: 4 };
+        let held = |value: u32| Held { value, width: 4, offset: 0 };
         let make = |at: i64, op: Operation, name: &str, defines: Vec<u32>, uses: Vec<u32>| {
             let what = Semantics {
                 name: Some(name.into()),
@@ -1670,7 +1797,7 @@ mod tests {
     #[test]
     fn test_replacing_tied_pairs_walks_the_instructions_naming_the_value_not_the_block() {
         use crate::liveness::livevariables::WALKED;
-        let held = |value: u32| Held { value, width: 4 };
+        let held = |value: u32| Held { value, width: 4, offset: 0 };
         let make = |at: i64, op: Operation, name: &str, defines: Vec<u32>, uses: Vec<u32>| {
             let what = Semantics {
                 name: Some(name.into()),
@@ -1705,7 +1832,7 @@ mod tests {
     }
 
     fn tied_pairs_sharing_a_source(count: i64) -> (BodyFacts, Vec<Arc<Insn>>) {
-        let held = |value: u32| Held { value, width: 4 };
+        let held = |value: u32| Held { value, width: 4, offset: 0 };
         let make = |at: i64, op: Operation, name: &str, defines: Vec<u32>, uses: Vec<u32>| {
             let what = Semantics {
                 name: Some(name.into()),

@@ -1,0 +1,22 @@
+// Prints `name value` for every symbol a target's GenDAGISel.inc names (see ids.cpp.in).
+// regen-target.sh fills in the includes, enums and lists.
+#include "llvm/CodeGen/ISDOpcodes.h"
+#include "llvm/CodeGen/TargetOpcodes.h"
+#include "llvm/CodeGen/ValueTypes.h"
+// @INCLUDES@
+#include <cstdio>
+
+using namespace llvm;
+
+// Defined by the library a header would link against; nothing here needs it.
+namespace llvm { int DisableABIBreakingChecks = 0; }
+
+// @ENUMS@
+
+#define P(sym) std::printf("%s %lld\n", #sym, (long long)(sym))
+
+int main() {
+  @MEMBERS@
+  @SYMBOLS@
+  return 0;
+}

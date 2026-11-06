@@ -1,0 +1,10 @@
+#title,Table 9-15. Conditional Instruction Execution Times,page,9-10,notes,
+Instruction,Displacement,Branch Taken,Branch Not Taken
+Bcc,Byte,10(2/0),6(1/0)
+,Word,10(2/0),10(2/0)
+BRA,Byte,10(2/0),—
+,Word,10(2/0),—
+BSR,Byte,18(2/2),—
+,Word,18(2/2),—
+DBcc,cc true,—,10(2/0)
+,cc false,10(2/0),16(3/0)

@@ -1,6 +1,6 @@
 """toolchain/clangfetch.sh puts a clang tree where the setup action looks when the cache misses.
 
-Run 40780286803 (the pull request feat/parity into main) restored neither clang tree: the caches were saved on refs/heads/feat/parity, which
+Run 40780286803 (the pull request release/next into main) restored neither clang tree: the caches were saved on refs/heads/release/next, which
 a pull request into main cannot read. LLRM_PIN_CLANG stayed unset and every llrm-cc row failed on ~/scratch/llvm-build/bin/clang."""
 
 import os

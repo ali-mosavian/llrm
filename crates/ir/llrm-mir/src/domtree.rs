@@ -657,6 +657,15 @@ impl<const POST: bool> DomTreeBase<POST> {
         self.children_of(node).into_iter().filter_map(|child| self.block_of(child)).collect()
     }
 
+    /// `children` as an iterator over the node's child list, no copy.
+    pub fn child_blocks(
+        &self,
+        block: BlockId,
+    ) -> ChildBlocks<'_, POST> {
+        let next = self.node(Some(block)).map_or(NO, |node| self.at(node).first_child);
+        ChildBlocks { tree: self, next }
+    }
+
     /// `getDescendants`: every block dominated by `r`, `r` first.
     ///
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/GenericDomTree.h#L422>
@@ -2758,6 +2767,27 @@ impl<'a, G: DomGraph, const POST: bool> SemiNca<'a, G, POST> {
     }
 }
 
+/// The blocks a node immediately dominates, first child first.
+pub struct ChildBlocks<'a, const POST: bool> {
+    tree: &'a DomTreeBase<POST>,
+    next: Node,
+}
+
+impl<const POST: bool> Iterator for ChildBlocks<'_, POST> {
+    type Item = BlockId;
+
+    fn next(&mut self) -> Option<BlockId> {
+        while self.next != NO {
+            let node = self.next;
+            self.next = self.tree.at(node).sibling;
+            if let Some(block) = self.tree.block_of(node) {
+                return Some(block);
+            }
+        }
+        None
+    }
+}
+
 impl PartialEq for DomTreeBase<false> {
     /// Two trees are the same where `compare` finds no difference.
     fn eq(
@@ -2853,6 +2883,15 @@ impl DomTree {
         }
         if !self.is_reachable(b) {
             return true;
+        }
+        // A phi is dominated only if the definition dominates every possible
+        // use in its block: an earlier phi of that block does not
+        // (`dominates(Value *, Instruction *)`, [L123][phi]).
+        //
+        // [phi]:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Dominators.cpp#L123
+        if function.instruction(user).opcode == crate::opcode::Opcode::Phi {
+            return false;
         }
         function.comes_before(def, user)
     }

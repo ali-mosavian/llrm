@@ -77,6 +77,20 @@ impl FunctionPass for LoopStrengthReduce {
         let Some(tti) = outer.target().tti() else { return PreservedAnalyses::all() };
         // The expressions of the passes before, as the pin keeps one SE for
         // the loop passes; handed back below where the CFG is as it was.
+        // Beyond the pin: a counter only some trips step gets a pointer first,
+        // where the target's address takes no scale and asks for it.
+        if !self.size
+            && tti.mirrors_conditional_counters()
+            && crate::mirror::mirrored(
+                unit.context,
+                unit.layout,
+                unit.function,
+                &outer,
+                &outer.target().address_forms(),
+            )
+        {
+            analyses.invalidate(unit.function, &PreservedAnalyses::none());
+        }
         let held = analyses.get::<Scevs>(unit.context, unit.layout, unit.function);
         let (changed, scev) = reduced_held(
             unit.context,
@@ -172,17 +186,17 @@ fn plan_loop(
     header: BlockId,
     marked: Option<&[InstId]>,
     carried: Option<IvUsers>,
+    shadowed: bool,
     stress_chains: bool,
+    size: bool,
 ) -> Outcome {
     let planned = |plan| Outcome::Planned(plan);
     let cx = env.cx(context, function);
     let Some(lp) = cx.loops.get_loop_for(header) else { return planned(None) };
-    // Loop simplify form, or stay out of trouble; and the innermost loops
-    // only: the outer ones wait for a model of them.
+    // Loop simplify form, or stay out of trouble.
     if lp.get_loop_preheader(function).is_none()
         || lp.get_loop_latch(function).is_none()
         || !lp.has_dedicated_exits(function)
-        || !lp.is_innermost()
     {
         return planned(None);
     }
@@ -197,7 +211,13 @@ fn plan_loop(
     let safe_to_speculate =
         |inst: InstId| crate::licm::hoist::is_safe_to_speculatively_execute_in(context, layout, function, outer, inst);
     let is_ephemeral = |inst: InstId| ephemeral.contains(&inst);
-    let env_users = Env { safe_to_speculate: &safe_to_speculate, ephemeral: &is_ephemeral };
+    let env_users = Env {
+        safe_to_speculate: &safe_to_speculate,
+        ephemeral: &is_ephemeral,
+        // DEVIATE LSR-N holds at speed only: at `-Os` a counter LSR adds for a
+        // wide loop grew tail_calls by 354 bytes.
+        native_widths: if size { &[] } else { tti.lsr_native_integer_widths() },
+    };
     let mut users = match carried {
         Some(users) => {
             users.assert_current(se, &cx, &env_users);
@@ -215,7 +235,9 @@ fn plan_loop(
         function.terminator(lp.get_loop_latch(function).expect("a latch")).expect("a terminator");
     match marked {
         None => {
-            if let Some(shadow) = lsr_prepare::analyze_shadow(se, &cx, header, &users) {
+            // `OptimizeShadowIV` makes one variable and breaks (DEVIATE LS-SH:
+            // more where floats live on the x87 stack).
+            if let Some(shadow) = lsr_prepare::analyze_shadow(se, &cx, tti, header, &users, shadowed) {
                 return Outcome::Shadow(shadow);
             }
             let edits = lsr_prepare::analyze(se, &cx, tti, header, &users);
@@ -231,6 +253,13 @@ fn plan_loop(
         }
     }
 
+    // Skip nested loops until we can model them better with formulae: the
+    // shadow variables and the exit tests above are made on every loop, as the
+    // pin's constructor does before it looks at the nesting.
+    if !lp.is_innermost() {
+        return planned(None);
+    }
+
     // Chains are looked for where the number of registers is what costs.
     let chains = if tti.is_num_regs_major_cost_of_lsr() {
         crate::lsr_chain::collect_chains(se, &cx, header, &users, &is_ephemeral, stress_chains)
@@ -238,19 +267,78 @@ fn plan_loop(
         Default::default()
     };
     let safe_to_expand = |se: &mut ScalarEvolution, s: Scev| rewriter.is_safe_to_expand(&cx, se, s);
-    let mut lsr = Collection::new(&cx, tti, header, &safe_to_expand, false, iv_inc_insert_pos);
-    lsr.chain_uses = chains.inc_set.clone();
-    lsr.collect_interesting_types_and_factors(se, &users);
-    lsr.collect_fixups_and_initial_formulae(se, &users);
-    lsr.collect_loop_invariant_fixups_and_formulae(se);
+    // The loop's register units do not change between the two builds.
+    let units = std::cell::Cell::new(None);
+    let build = |se: &mut ScalarEvolution| {
+        let mut lsr = Collection::new(&cx, tti, header, &safe_to_expand, false, iv_inc_insert_pos);
+        lsr.other_register_units = match units.get() {
+            Some(counted) => counted,
+            None => {
+                let counted = crate::lsr_collect::loop_register_units(se, &cx, tti, header);
+                units.set(Some(counted));
+                counted
+            }
+        };
+        lsr.size = size;
+        llrm_support::debug!("lsr", "  other registers: {}", lsr.other_register_units);
+        lsr.chain_uses = chains.inc_set.clone();
+        lsr.collect_interesting_types_and_factors(se, &users);
+        lsr.collect_fixups_and_initial_formulae(se, &users);
+        lsr.collect_loop_invariant_fixups_and_formulae(se);
+        lsr
+    };
+    let counts =
+        |lsr: &Collection| lsr.uses.iter().map(|one| one.formulae.len().to_string()).collect::<Vec<_>>().join(" ");
+    let narrowed = |se: &mut ScalarEvolution, lsr: &mut Collection| {
+        llrm_support::debug!("lsr", "  formulae per use: {}", counts(lsr));
+        lsr.filter_out_undesirable_dedicated_registers(se);
+        llrm_support::debug!("lsr", "  after filtering: {}", counts(lsr));
+        lsr.narrow_search_space_using_heuristics(se);
+        llrm_support::debug!("lsr", "  after narrowing: {}", counts(lsr));
+    };
+    let mut lsr = build(se);
     if lsr.uses.is_empty() {
         return planned(None);
     }
     // The formulae for each use, and the search space made small enough.
     lsr.generate_all_reuse_formulae(se);
-    lsr.filter_out_undesirable_dedicated_registers(se);
-    lsr.narrow_search_space_using_heuristics(se);
-    let solution = lsr.solve(se);
+    // The pin's space as generated, for the second solve below.
+    let mut pin = lsr.fork();
+    let pin_counts = counts(&lsr);
+    // DEVIATE LG3's formulae (beyond the pin) join the space before its
+    // narrowing, as the formulae they share registers with do.
+    lsr.generate_end_biased(se);
+    let beyond = counts(&lsr) != pin_counts;
+    narrowed(se, &mut lsr);
+    let (mut solution, cost) = lsr.solve_with_cost(se);
+    if beyond {
+        // The registers of those formulae can cut the pin's solution out of
+        // the search (a use must reuse the registers already chosen), as they
+        // did queens -O2 (+57859 clocks, 236848 against 170823 at -Os): the
+        // pin's space is solved too, and its solution kept where it costs
+        // less than the one with them, or where theirs adds a base to the
+        // counter in an address the pin's does not, on a target that
+        // cannot fold it: they save a compare, which that add outweighs
+        // (wasm's copy epilog, jpeg_fixed `emit`).
+        narrowed(se, &mut pin);
+        let (pin_solution, pin_cost) = pin.solve_with_cost(se);
+        // A target with no register-plus-register address (wasm) pays an add
+        // for each base added to the counter, and the code it adds outside the
+        // loop must not outweigh the instructions it saves in it (nbody -O1:
+        // four `base + 32` against one compare).
+        let folds_base_and_counter = tti.is_legal_addressing_mode(false, 0, true, 1);
+        let kept = !pin_solution.is_empty()
+            && (solution.is_empty()
+                || pin_cost.is_less(tti, &cost)
+                || (!folds_base_and_counter
+                    && (cost.c.num_base_adds > pin_cost.c.num_base_adds
+                        || cost.c.insns + cost.c.setup_cost > pin_cost.c.insns + pin_cost.c.setup_cost)));
+        llrm_support::debug!("lsr", "  pin's space solved: kept {kept}");
+        if kept {
+            lsr = pin;
+            solution = pin_solution;
+        }
+    }
     if solution.is_empty() {
         return planned(None);
     }
@@ -333,6 +421,8 @@ pub fn reduced_held(
         let mut marked: Option<Vec<InstId>> = None;
         // The users of the first look, kept through the edit of the exit tests.
         let mut carried: Option<IvUsers> = None;
+        // The one shadow variable the loop gets.
+        let mut shadowed = false;
         for _ in 0..6 {
             // What the edits since changed is no longer what the expressions
             // say; the rest of them stay, as they do in LLVM.
@@ -352,7 +442,9 @@ pub fn reduced_held(
                     header,
                     marked.as_deref(),
                     carried.take(),
+                    shadowed,
                     stress_chains,
+                    size,
                 ) {
                     Outcome::Planned(None) => break,
                     Outcome::Edit(edits, mut users) => {
@@ -375,6 +467,7 @@ pub fn reduced_held(
                     Outcome::Shadow(edit) => {
                         llrm_mir::counts::bump(llrm_mir::counts::Event::LsrPrepared);
                         lsr_prepare::apply_shadow(function, context, &edit);
+                        shadowed = true;
                         changed = true;
                         continue;
                     }
@@ -411,10 +504,12 @@ pub fn reduced_held(
                         body: &lp_blocks,
                         iv_inc_insert_pos: plan.iv_inc_insert_pos,
                         dead: Vec::new(),
+                        hoisted: Vec::new(),
                         changed: false,
                     };
                     run.implement_solution(&plan);
                     let dead = std::mem::take(&mut run.dead);
+                    let hoisted = std::mem::take(&mut run.hoisted);
                     let rewrote = run.changed;
                     // `ImplementSolution`: the dead instructions go first, so
                     // the increments move over only the
@@ -432,6 +527,7 @@ pub fn reduced_held(
                         body: &lp_blocks,
                         iv_inc_insert_pos: plan.iv_inc_insert_pos,
                         dead: Vec::new(),
+                        hoisted,
                         changed: false,
                     };
                     run.move_increments();

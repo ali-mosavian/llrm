@@ -10,7 +10,15 @@ fn load(
 ) -> SDValue {
     let ptr = dag.get_register(EVT::I32, 7);
     let chain = dag.entry_node();
-    let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot), ext: None, space: 0 };
+    let info = MemInfo {
+        mem_vt: vt,
+        align: 1,
+        volatile: false,
+        base: MemBase::Stack(slot),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     dag.get_load(vt, chain, ptr, info)
 }
 
@@ -111,4 +119,195 @@ fn a_shift_amount_is_made_an_i8() {
     let root = dag.get_root();
     assert_eq!(dag.opcode(root), ISD::Shl);
     assert_eq!(dag.value_type(dag.operand(root, 1)), EVT::I8);
+}
+
+/// A target that expands the unordered float codes (wasm has `lt`/`le`/`gt`/
+/// `ge`/`eq`/`ne` and no `ule`) was refused at `setcc` ("convert node to
+/// libcall"): only x86's `oeq` and `une` were translated.
+/// `LegalizeSetCCCondCode` swaps the operands, inverts the code, or joins two
+/// compares.
+#[test]
+fn an_unordered_float_code_the_target_expands_is_inverted_swapped_or_split() {
+    let f64 = EVT::Simple(MVT::F64);
+    let mut tli = TargetLowering::empty(TargetLoweringInfo::x86_32());
+    for cc in
+        [CondCode::SetULt, CondCode::SetULe, CondCode::SetUGt, CondCode::SetUGe, CondCode::SetUEq, CondCode::SetONe]
+    {
+        tli.set_cond_code_action(cc, MVT::F64, Action::Expand);
+    }
+    let compare = |cc: CondCode| {
+        let mut dag = dag();
+        let (a, b) = (dag.get_register(f64, 1), dag.get_register(f64, 2));
+        let setcc = dag.get_setcc(EVT::I8, a, b, cc);
+        dag.set_root(setcc);
+        DagLegalizer::new(&mut dag, &tli, &mut NoHooks).run().unwrap();
+        let root = dag.get_root();
+        let code = |dag: &SelectionDAG, node: SDValue| match dag.node(dag.operand(node, 2)).data {
+            NodeData::CondCode(cc) => cc,
+            other => panic!("not a code: {other:?}"),
+        };
+        match dag.opcode(root) {
+            ISD::SetCC => (ISD::SetCC, vec![code(&dag, root)]),
+            op => {
+                let operands = [dag.operand(root, 0), dag.operand(root, 1)];
+                (op, operands.iter().filter(|o| dag.opcode(**o) == ISD::SetCC).map(|o| code(&dag, *o)).collect())
+            }
+        }
+    };
+    // `ule` is not legal: the inverse, `ogt`, is, and the result is negated.
+    assert_eq!(compare(CondCode::SetULe), (ISD::Xor, vec![CondCode::SetOGt]));
+    // `ult` swapped is `ugt`, also expanded; its inverse `oge` is legal.
+    assert_eq!(compare(CondCode::SetULt), (ISD::Xor, vec![CondCode::SetOGe]));
+    // `ueq` has no inverse or swap the target takes: `eq` or unordered.
+    assert_eq!(compare(CondCode::SetUEq), (ISD::Or, vec![CondCode::SetEq, CondCode::SetUo]));
+}
+
+/// A `UAddO` or `USubO` the target expands was refused ("convert node to
+/// libcall", Z80 `overflow_builtins`). `expandUADDSUBO`: the wrapped
+/// operation and an unsigned compare of its result with an operand, and for
+/// `+ 1` and `+ -1` the compares against 0.
+#[test]
+fn an_unsigned_overflow_op_the_target_expands_is_the_wrapped_op_and_a_compare() {
+    let i16 = EVT::Simple(MVT::I16);
+    let mut tli = TargetLowering::empty(TargetLoweringInfo::x86_32());
+    for op in [ISD::UAddO, ISD::USubO, ISD::UAddOCarry, ISD::USubOCarry] {
+        tli.set_operation_action(op, MVT::I16, Action::Expand);
+    }
+    // the overflow bit of `op a, b` as (compare code, its left operand's
+    // opcode, its right operand is `a`)
+    let overflow = |op: ISD, b: Option<u128>| {
+        let mut dag = dag();
+        let a = dag.get_register(i16, 1);
+        let b = match b {
+            Some(value) => dag.get_constant(value, i16),
+            None => dag.get_register(i16, 2),
+        };
+        let both = dag.get_node_multi(op, &[i16, EVT::I8], &[a, b]);
+        dag.set_root(SDValue { node: both.node, res: 1 });
+        DagLegalizer::new(&mut dag, &tli, &mut NoHooks).run().unwrap();
+        let root = dag.get_root();
+        assert_eq!(dag.opcode(root), ISD::SetCC);
+        let NodeData::CondCode(cc) = dag.node(dag.operand(root, 2)).data else { panic!("no code") };
+        let (left, right) = (dag.operand(root, 0), dag.operand(root, 1));
+        (cc, dag.opcode(left), dag.opcode(right) == ISD::Constant, right == a)
+    };
+    assert_eq!(overflow(ISD::UAddO, None), (CondCode::SetULt, ISD::Add, false, true));
+    assert_eq!(overflow(ISD::USubO, None), (CondCode::SetUGt, ISD::Sub, false, true));
+    assert_eq!(overflow(ISD::UAddO, Some(1)), (CondCode::SetEq, ISD::Add, true, false));
+    assert_eq!(overflow(ISD::UAddO, Some(0xFFFF)), (CondCode::SetNe, ISD::Register, true, false));
+}
+
+/// A `UMulO` the target expands was refused next ("convert node to libcall",
+/// Z80 `overflow_builtins`). `expandMULO`: by a power of two a shift and its
+/// shift back compared with the operand; otherwise the high half of the
+/// product (here `forceExpandWideMUL`, as `i32` is not a type) compared with 0.
+#[test]
+fn an_unsigned_multiply_with_overflow_the_target_expands_is_a_shift_or_a_high_half() {
+    let i16 = EVT::Simple(MVT::I16);
+    let mut tli = TargetLowering::empty(TargetLoweringInfo::x86_32());
+    tli.set_operation_action(ISD::UMulO, MVT::I16, Action::Expand);
+    let overflow = |b: Option<u128>| {
+        let mut dag = dag();
+        let a = dag.get_register(i16, 1);
+        let b = match b {
+            Some(value) => dag.get_constant(value, i16),
+            None => dag.get_register(i16, 2),
+        };
+        let both = dag.get_node_multi(ISD::UMulO, &[i16, EVT::I8], &[a, b]);
+        dag.set_root(SDValue { node: both.node, res: 1 });
+        DagLegalizer::new(&mut dag, &tli, &mut NoHooks).run().unwrap();
+        let root = dag.get_root();
+        assert_eq!(dag.opcode(root), ISD::SetCC);
+        let NodeData::CondCode(cc) = dag.node(dag.operand(root, 2)).data else { panic!("no code") };
+        let (left, right) = (dag.operand(root, 0), dag.operand(root, 1));
+        (cc, dag.opcode(left), dag.opcode(right) == ISD::Constant, right == a)
+    };
+    assert_eq!(overflow(Some(8)), (CondCode::SetNe, ISD::Srl, false, true));
+    let (cc, _, zero, _) = overflow(None);
+    assert_eq!((cc, zero), (CondCode::SetNe, true));
+}
+
+/// A `SAddO` or `SSubO` the target expands was refused next ("convert node to
+/// libcall", Z80 `overflow_builtins`). `expandSADDSUBO`: the wrapped operation
+/// and two signed compares, of `rhs` with 0 and the sum with `lhs`, or of
+/// `lhs` with `rhs` and the difference with 0.
+#[test]
+fn a_signed_overflow_op_the_target_expands_is_the_wrapped_op_and_two_sign_compares() {
+    let i16 = EVT::Simple(MVT::I16);
+    let mut tli = TargetLowering::empty(TargetLoweringInfo::x86_32());
+    for op in [ISD::SAddO, ISD::SSubO] {
+        tli.set_operation_action(op, MVT::I16, Action::Expand);
+    }
+    // the opcodes reachable from the overflow bit, and the codes of its
+    // compares
+    let reached = |tli: &TargetLowering, op: ISD| {
+        let mut dag = dag();
+        let (a, b) = (dag.get_register(i16, 1), dag.get_register(i16, 2));
+        let both = dag.get_node_multi(op, &[i16, EVT::I8], &[a, b]);
+        dag.set_root(SDValue { node: both.node, res: 1 });
+        DagLegalizer::new(&mut dag, tli, &mut NoHooks).run().unwrap();
+        let (mut ops, mut codes, mut work) = (Vec::new(), Vec::new(), vec![dag.get_root()]);
+        while let Some(node) = work.pop() {
+            ops.push(dag.opcode(node));
+            if let NodeData::CondCode(cc) = dag.node(node).data {
+                codes.push(cc);
+            }
+            work.extend((0..dag.node(node).ops.len()).map(|at| dag.operand(node, at)));
+        }
+        (ops, codes)
+    };
+    // the saturating operation is legal: the sum differs from it
+    let (_, codes) = reached(&tli, ISD::SAddO);
+    assert_eq!(codes, [CondCode::SetNe]);
+    tli.set_operation_action(ISD::SAddSat, MVT::I16, Action::Expand);
+    tli.set_operation_action(ISD::SSubSat, MVT::I16, Action::Expand);
+    for (op, wrapped) in [(ISD::SAddO, ISD::Add), (ISD::SSubO, ISD::Sub)] {
+        let (ops, codes) = reached(&tli, op);
+        assert!(ops.contains(&wrapped) && !ops.contains(&op), "{ops:?}");
+        assert_eq!(codes.iter().filter(|cc| **cc == CondCode::SetLt).count(), 2, "{codes:?}");
+    }
+}
+
+/// `frem`, `fsin` and `lrint` marked `LibCall` were refused ("convert node to
+/// libcall"): only the two-operand integer routines were translated. The call
+/// takes every operand of the node, and `lrint` of a double returns an integer.
+#[test]
+fn a_float_routine_is_a_libcall_with_all_its_operands() {
+    #[derive(Default)]
+    struct Calls(Vec<(&'static str, usize, EVT)>);
+    impl Hooks for Calls {
+        fn lower_operation(
+            &mut self,
+            _dag: &mut SelectionDAG,
+            _node: SDValue,
+        ) -> Option<SDValue> {
+            None
+        }
+        fn make_lib_call(
+            &mut self,
+            dag: &mut SelectionDAG,
+            name: &'static str,
+            args: &[SDValue],
+            ret: EVT,
+            _signed: bool,
+        ) -> Option<SDValue> {
+            self.0.push((name, args.len(), ret));
+            Some(dag.get_register(ret, 40 + self.0.len() as u32))
+        }
+    }
+    let f64 = EVT::Simple(MVT::F64);
+    let mut tli = TargetLowering::empty(TargetLoweringInfo::x86_32());
+    for (op, name) in [(ISD::FRem, "fmod"), (ISD::FSin, "sin"), (ISD::LRint, "lrint")] {
+        tli.set_operation_action(op, MVT::F64, Action::LibCall);
+        tli.set_libcall_name(op, MVT::F64, name);
+    }
+    let mut dag = dag();
+    let (a, b) = (dag.get_register(f64, 1), dag.get_register(f64, 2));
+    let rem = dag.get_node(ISD::FRem, f64, &[a, b]);
+    let sin = dag.get_node(ISD::FSin, f64, &[rem]);
+    let rint = dag.get_node(ISD::LRint, EVT::I32, &[sin]);
+    dag.set_root(rint);
+    let mut calls = Calls::default();
+    DagLegalizer::new(&mut dag, &tli, &mut calls).run().unwrap();
+    assert_eq!(calls.0, vec![("lrint", 1, EVT::I32), ("sin", 1, f64), ("fmod", 2, f64)]);
 }

@@ -16,9 +16,11 @@ import qbbuild  # noqa: E402
 import qbruntime  # noqa: E402
 
 
-@pytest.fixture(scope="module")
-def found(tmp_path_factory):
-    """Each bench program built for both targets and run, a session a target: {name: {target: (status, same as its .out)}}."""
+@pytest.fixture(scope="module", params=[("-O2",), ("-O2", "--whole-program")], ids=["separate", "whole-program"])
+def found(request, tmp_path_factory):
+    """Each bench program built for both targets and run, a session a target: {name: {target: (status, same as its .out)}}.
+    Built whole-program too: the facts that flag lets the frontend state (invariant loads, noalias) must not change a program's output;
+    grep on the flat target printed wrong counts when a flat array's origin was marked invariant."""
     if not qbruntime.dosbatch.DOSBOX.exists():
         pytest.skip("DOSBox-X is unavailable")
     work = tmp_path_factory.mktemp("qb32")
@@ -28,7 +30,7 @@ def found(tmp_path_factory):
     wanted = {}
     for at, name in enumerate(qbruntime.MILESTONE_ONE):
         source = qbruntime.dosbatch.ROOT / "bench" / name / f"{name}.bas"
-        for target, built in qbbuild.build(source, work / name, objects, tolerant=True).items():
+        for target, built in qbbuild.build(source, work / name, objects, request.param, tolerant=True).items():
             if isinstance(built, str):
                 out[name][target] = (f"build: {built}", False)
                 continue

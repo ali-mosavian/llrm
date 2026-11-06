@@ -1,0 +1,35 @@
+# 6502: an 8-bit machine with 16-bit addresses in one flat space. Every integer is byte-aligned; i16..i64 are
+# the type legalizer's chains of bytes.
+mode = 8
+llvm_triple = "mos-unknown-none"
+llvm_cpu = "mos6502"
+
+datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8"
+
+# No multiply, divide, shift by a variable or bit count instruction: the compiler expands them (to libcalls
+# where a loop is too big).
+expand = ["abs", "bitreverse", "bswap", "ctlz", "ctpop", "cttz", "fshl", "fshr", "scmp", "ucmp"]
+
+[spaces]
+near = 0
+far = 0
+data = 0
+stack = 0
+
+[pointers]
+2 = "near"
+
+# The C front end's sizes in bytes (clang's msp430 with -funsigned-char -fpack-struct=1, the front end llrm-cc runs
+# for this target). cc65's `double` is 4 and has no `long long`; clang's are 8, which no table here can hide.
+[c]
+int = 2
+long = 4
+long_long = 8
+pointer = 2
+function_pointer = 2
+size_t = 2
+ptrdiff_t = 2
+wchar_t = 2
+double = 8
+long_double = 8
+enum = 2

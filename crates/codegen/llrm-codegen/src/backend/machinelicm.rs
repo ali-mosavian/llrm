@@ -16,7 +16,10 @@
 //!   loop with no call and a free stack slot, in a function that never writes
 //!   the control word (`constant_load`), or a load in a block that runs on
 //!   every trip of a loop with no store, call or volatile access
-//!   (`InitializeLoadsHoistableLoops` L1472, `IsGuaranteedToExecute`);
+//!   (`InitializeLoadsHoistableLoops` L1472, `IsGuaranteedToExecute`); DEVIATE
+//!   ML2: an `fld1`/`fldz` and its `fchs` also move where the function writes
+//!   the control word, when the loop is innermost and only arithmetic reads
+//!   them (below);
 //! - every value it reads is defined outside the loop or was hoisted
 //!   (`IsLoopInvariantInst`);
 //! - it is not as cheap as a move (`IsProfitableToHoist`: a cheap instruction
@@ -28,9 +31,31 @@
 //!   the loop standing for the pressure: DEVIATE ML1, the pin tracks the live
 //!   registers of each block of the loop).
 //!
-//! DEVIATE ML2: no preheader is made where a loop has none; no load folded
-//! into its reader is taken apart (`ExtractHoistableLoad`); no CSE of the
-//! hoisted value (`MayCSE`).
+//! Not ported, priced at no yield (release/next 34d21c9f34, every C, nib and
+//! BASIC program at -Os and -O2, counters in a throwaway build):
+//! `getOrCreatePreheader` splitting an edge: the 6 to 32 loops per language
+//! and level without a preheader hold 0 hoistable instructions;
+//! `ExtractHoistableLoad`: 0 instructions, none of the 158 loop instructions
+//! flagged invariant (`isDereferenceableInvariantLoad`) is a folded load;
+//! `MayCSE`: only reached in the pin's high-pressure branch for an instruction
+//! outside a block that runs every trip, where the `constant` path above
+//! already hoists what the allocator can make again.
+//!
+//! DEVIATE ML2, exit 2026-11-20: the pin's `FLD1` and `FLDZ` read `$fpcw`,
+//! which the function's `FLDCW` (for an `fptosi`) writes, so nothing moves and
+//! `fld1; fchs; faddp` (18 clk) is made on every trip of a loop that adds
+//! `-1.0`. Both and `fchs` are exact under any rounding control. A constant
+//! that an `fchs` flips moves, with the flip, when the loop is innermost,
+//! stores no x87 value, every reader is an arithmetic instruction beside a
+//! register (a compare wants the constant on top, a memory operand makes the
+//! held value be copied: `fxch`es and `fld st(i)` cost what the hoist saves)
+//! and the stack has room (`CARRY_RESERVE`); not at -Os, where the `fstp` that
+//! ends the carried value costs 2 B (as X1). A plain `fld1`/`fldz` stays: it
+//! saves 4 clk and the loop's back edge pays `fxch`es (recfloat, +8%).
+//! x_ld_abs -O2 13,320 -> 12,693 clk (gcc 13,113) at 80 bits, 12,684 ->
+//! 12,057 at 64; double x_horner -O2 92,084 -> 83,304. The exit: does the
+//! pin's `isConstantPhysReg` stop counting `FLD1`/`FLDZ`, or gcc's reg-stack
+//! keep the same cells.
 //!
 //! # Example
 //! A loop that adds `a[i] * k3` where `k3 := k + 3` is made inside it (the
@@ -52,16 +77,18 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use crate::analysis::loops as loopy;
 use crate::backend::classes::RegisterClasses;
+use crate::backend::licm_core as licm;
 use crate::backend::liveness;
-use crate::model::ir::{Loc, Mem, Operation};
+use crate::model::ir::{Loc, Mem, Operation, Semantics};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
-use crate::support::hash::{HashMap, HashSet};
 
 pub struct MachineLicm {
     pub classes: Rc<RegisterClasses>,
+    /// -Os, -Oz: a carried constant costs the `fstp` that ends it (DEVIATE X1
+    /// is off).
+    pub size: bool,
 }
 
 impl LIRTransform for MachineLicm {
@@ -77,7 +104,7 @@ impl LIRTransform for MachineLicm {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(hoisted(&body, &self.classes))
+        Ok(hoisted_sized(&body, &self.classes, self.size))
     }
 }
 
@@ -123,6 +150,108 @@ fn constant_load(one: &Insn) -> bool {
         && !one.volatile()
         && !one.spill_reload
         && !one.spill_store
+}
+
+/// `fld m80` of a constant-pool entry (`Insn::invariant`): the value is made
+/// again on every trip, where gcc's reg-stack leaves it on the x87 stack.
+/// DEVIATE X1, exit 2026-11-20: the load reads `$fpcw`, which the pin's
+/// `IsLoopInvariantInst` accepts only where nothing in the function writes it
+/// (`fisttp` here does); `fld` of an extended constant does not depend on the
+/// rounding control, so it moves regardless and the stack carries it as it
+/// carries `fldz`. Only the 10-byte entries: a dword or qword one folds into
+/// its reader (`fmul m64`, `fcomp m32`), and carried it costs an `fxch` each
+/// trip to put the other operand where the compare wants it (x_ld_clamp +1,304
+/// clk).
+fn pool_load(one: &Insn) -> bool {
+    one.what.as_ref().is_some_and(|what| {
+        what.op == Operation::FloatLoad
+            && what.name.as_deref() == Some("fld")
+            && matches!(
+                what.sources.as_slice(),
+                [Loc::Mem(cell)] if cell.selector.is_none() && !cell.stack_argument && cell.width == 10
+            )
+            && matches!(what.dests.as_slice(), [Loc::Held(_)])
+    }) && one.invariant()
+        && one.defines.len() == 1
+        && one.uses.is_empty()
+        && one.call.is_none()
+        && one.group.is_none()
+        && !one.volatile()
+        && !one.spill_reload
+        && !one.spill_store
+}
+
+/// Stack slots a loop keeps free of hoisted constants for its own temporaries
+/// (an operation's two operands and a result).
+const CARRY_RESERVE: usize = 3;
+
+/// `fchs`: the sign flip of an x87 value, exact under any rounding control.
+/// Moves with the constant it flips (`IsLoopInvariantInst` has every value it
+/// reads defined outside the loop or hoisted).
+fn sign_flip(one: &Insn) -> bool {
+    one.what.as_ref().is_some_and(|what| {
+        what.op == Operation::FloatUnary
+            && what.name.as_deref() == Some("fchs")
+            && matches!(what.sources.as_slice(), [Loc::Held(_)])
+            && matches!(what.dests.as_slice(), [Loc::Held(_)])
+    }) && one.defines.len() == 1
+        && one.uses.len() == 1
+        && one.call.is_none()
+        && one.group.is_none()
+        && !one.volatile()
+        && !one.spill_reload
+        && !one.spill_store
+}
+
+/// The loop has no loop inside it: one block it holds is the target of a back
+/// edge. A value held across an inner loop costs stack depth there for a saving
+/// once per outer trip.
+fn innermost(facts: &licm::Facts<'_, Wrapped>) -> bool {
+    facts
+        .inside_blocks()
+        .flat_map(|block| block.succ.iter().filter(move |&&to| to <= block.at))
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
+        <= 1
+}
+
+/// The instructions of the loop that read `value`.
+fn reads<'a>(
+    facts: &'a licm::Facts<'_, Wrapped>,
+    value: u32,
+) -> impl Iterator<Item = &'a Wrapped> {
+    facts
+        .inside_blocks()
+        .flat_map(|block| block.insns.iter())
+        .filter(move |one| one.0.uses.contains(&value))
+}
+
+/// Every read of `value` in the loop is an x87 arithmetic operand beside a
+/// register, directly or through a sign flip: held on the stack it is `st(i)`
+/// of the operation. A compare wants it on top, so holding it costs an `fxch`
+/// (4 clocks) where `fldz` is 4.
+fn read_by_arithmetic(
+    facts: &licm::Facts<'_, Wrapped>,
+    value: u32,
+) -> bool {
+    // Two registers: with a memory operand the constant is copied (`fld st(0)`,
+    // 4 clk, as `fld1` is) and the hoist saves nothing.
+    let arithmetic = |one: &Insn| {
+        one.what
+            .as_ref()
+            .is_some_and(
+                |what| (matches!(what.op, Operation::FloatArith | Operation::FloatArithPop)
+                    || matches!(
+                        what.name.as_deref(),
+                        Some("fadd" | "fsub" | "fsubr" | "fmul" | "fdiv" | "fdivr")
+                    ))
+                    && what.sources.iter().all(|source| matches!(source, Loc::Held(_))),
+            )
+    };
+    reads(facts, value).all(|one| {
+        arithmetic(&one.0)
+            || sign_flip(&one.0) && one.0.defines.first().is_some_and(|&flipped| read_by_arithmetic(facts, flipped))
+    })
 }
 
 /// `IsLICMCandidate` for what this pass moves. `loads`: the loop has nothing
@@ -173,17 +302,273 @@ fn candidate(
         && !crate::backend::machinesink::as_cheap_as_a_move(one)
 }
 
+/// An x86 instruction as the shared pass reads it.
+#[derive(Clone)]
+struct Wrapped(Arc<Insn>);
+
+impl licm::Inst for Wrapped {
+    fn defines(&self) -> &[u32] {
+        &self.0.defines
+    }
+
+    fn uses(&self) -> &[u32] {
+        &self.0.uses
+    }
+
+    fn each_value(
+        &self,
+        each: impl FnMut(u32),
+    ) {
+        self.0.each_value(each);
+    }
+
+    fn is_copy(&self) -> bool {
+        self.0
+            .what
+            .as_ref()
+            .is_some_and(
+                |what| what.op == Operation::Move
+                    && matches!(
+                        (what.dests.as_slice(), what.sources.as_slice()),
+                        ([Loc::Held(_)], [Loc::Held(_)])
+                    ),
+            )
+    }
+
+    fn is_move(&self) -> bool {
+        self.0.what.as_ref().is_some_and(|what| what.op == Operation::Move)
+    }
+
+    fn is_meta(&self) -> bool {
+        self.0.is_meta()
+    }
+
+    fn is_jump(&self) -> bool {
+        self.0.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Jump | Operation::Branch))
+    }
+
+    /// `isIdenticalTo` with the definitions ignored: the same operation over
+    /// the same values and operands, defining registers of the same widths.
+    fn identical(
+        &self,
+        other: &Self,
+    ) -> bool {
+        let (Some(one), Some(two)) = (&self.0.what, &other.0.what) else { return false };
+        // DEVIATE X2 (owner m64, exit 2026-11-20): an x87 value is a stack
+        // entry and the allocator gives each loop-carried entry its own
+        // definition; the pin's RFP registers are virtual until the stackifier
+        // (X86FloatingPoint), which copes with one register feeding two. Two
+        // `fldz` stay two values.
+        if one.dests.iter().any(|place| matches!(place, Loc::Held(held) if held.width == 10)) {
+            return false;
+        }
+        let widths = |what: &Semantics| -> Vec<Option<u32>> {
+            what.dests.iter().map(|place| if let Loc::Held(held) = place { Some(held.width) } else { None }).collect()
+        };
+        one.op == two.op
+            && one.name == two.name
+            && one.sources == two.sources
+            && widths(one) == widths(two)
+            && self.0.uses == other.0.uses
+            && self.0.defines.len() == other.0.defines.len()
+    }
+
+    fn rename_use(
+        &mut self,
+        from: u32,
+        to: u32,
+    ) {
+        #[cfg(test)]
+        RENAMES.with(|renames| renames.set(renames.get() + 1));
+        self.0 = self.0.renamed(&|value| if value == from { to } else { value });
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Calls of `Wrapped::rename_use`.
+    static RENAMES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The x86 half of the pass: which instructions move (`IsLICMCandidate`,
+/// `IsProfitableToHoist`, the x87 constants, the flags).
+struct X86<'a> {
+    body: &'a LirBody,
+    classes: &'a RegisterClasses,
+    regs: llrm_lir::registers::Regs,
+    floating: std::collections::BTreeSet<u32>,
+    control_word_written: bool,
+    /// The loop being walked.
+    calls: bool,
+    floats_named: usize,
+    named: usize,
+    loads: bool,
+    size: bool,
+}
+
+impl licm::Policy<Wrapped> for X86<'_> {
+    /// A carried constant is read on every trip, the accumulators beside it as
+    /// often: it lies under them on the stack, where `fadd m64` finds the
+    /// accumulator on top (to_double: two `fxch` a trip with it above).
+    fn leads(
+        &self,
+        one: &Wrapped,
+    ) -> bool {
+        pool_load(&one.0)
+    }
+
+    fn begin(
+        &mut self,
+        facts: &licm::Facts<'_, Wrapped>,
+    ) {
+        self.named = facts.named.iter().filter(|value| !self.floating.contains(value)).count();
+        self.floats_named = facts.named.iter().filter(|value| self.floating.contains(value)).count();
+        // An x87 value cannot be live across a call (`floatassign` does not
+        // spill across one), and the stack holds `float_stack` values.
+        let inside = || facts.inside_blocks();
+        self.calls = inside().any(|block| {
+            block.insns.iter().any(|one| {
+                one.0.call.is_some()
+                    || one.0.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Call | Operation::Barrier))
+            })
+        });
+        // `InitializeLoadsHoistableLoops`: no store, call or ordered load in
+        // the loop, its inner loops among it.
+        self.loads = !inside().any(|block| block.insns.iter().any(|one| keeps_loads(&one.0)));
+    }
+
+    fn movable(
+        &mut self,
+        facts: &licm::Facts<'_, Wrapped>,
+        at: i64,
+        insns: &[Wrapped],
+        index: usize,
+    ) -> bool {
+        let one = &insns[index].0;
+        let value = one.defines.first().copied();
+        let flags = |lanes: &crate::backend::lanes::Lanes| {
+            lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
+        };
+        // An x87 constant is hoisted where the control word is constant and the
+        // stack has room (`constant_load`).
+        if constant_load(one) && !self.control_word_written {
+            return !self.calls && self.floats_named < self.body.float_stack;
+        }
+        // DEVIATE ML2 (as X1): `fld1`/`fldz` and `fchs` are exact under any
+        // rounding control, so the control word the function writes
+        // does not keep them in the loop.
+        if constant_load(one) || sign_flip(one) {
+            // A loop that stores an x87 value works around a held constant with
+            // `fxch`es (x_ld_to_float, 64-bit, +530 clk).
+            let stores = facts.inside_blocks().any(|block| {
+                block.insns.iter().any(|read| read.0.what.as_ref().is_some_and(|what| what.op == Operation::FloatStore))
+            });
+            // Only a constant that is flipped: `fld1; fchs` a trip (10 clk) is
+            // what holding saves; a plain `fld1` saves 4 clk, and
+            // the `fxch`es at the loop's back edge cost more (recfloat, +8%).
+            let flipped = value.is_some_and(|value| reads(facts, value).any(|read| sign_flip(&read.0)));
+            if constant_load(one) && !flipped {
+                return false;
+            }
+            // A flip takes the slot of the constant it flips; a constant they
+            // all flip is held as the flipped one.
+            let room = sign_flip(one) || self.floats_named + CARRY_RESERVE < self.body.float_stack;
+            if stores
+                || self.size
+                || self.calls
+                || !room
+                || !innermost(facts)
+                || !value.is_some_and(|value| read_by_arithmetic(facts, value))
+            {
+                return false;
+            }
+            if constant_load(one) {
+                self.floats_named += 1;
+            }
+            return true;
+        }
+        if pool_load(one) {
+            if self.size || self.calls || self.floats_named + CARRY_RESERVE >= self.body.float_stack {
+                return false;
+            }
+            self.floats_named += 1;
+            return true;
+        }
+        let loads_here = self.loads && (facts.every_trip)(at);
+        let limit = self.classes.available.len();
+        let mut movable = candidate(one, self.classes, loads_here)
+            && value.is_some_and(|value| !self.floating.contains(&value))
+            && self.named < limit;
+        // `IsProfitableToHoist`: "Trivially rematerializable instructions
+        // should always be hoisted providing the register allocator can just
+        // pull them down again", unless a copy in the loop takes the value.
+        let constant = value.is_some_and(|value| {
+            one.uses.is_empty()
+                && facts.defs.get(&value) == Some(&1)
+                && !facts.copied.contains(&value)
+                && !self.floating.contains(&value)
+                && one.defines.len() == 1
+                && one.call.is_none()
+                && one.group.is_none()
+                && one.clobbers.is_empty()
+                && one.requires.is_empty()
+                && one.delivers.is_empty()
+                && crate::greedy::remat::is_trivially_re_materializable(one, false)
+        });
+        if constant && !movable {
+            return true;
+        }
+        if movable {
+            let (regs, bits) = (self.regs, self.body.bits);
+            let effect = liveness::effect(regs, bits, one);
+            let name = one.what.as_ref().and_then(|what| what.name.as_deref()).unwrap_or("");
+            let reads = matches!(name, "adc" | "sbb" | "rcl" | "rcr")
+                || effect.as_ref().is_some_and(|effect| flags(&effect.all_reads()));
+            let sets = effect.as_ref().is_none_or(|effect| flags(&effect.writes));
+            if reads {
+                movable = false;
+            } else if sets {
+                // Flags set here must not be read below, in the block.
+                for later in &insns[index + 1..] {
+                    match liveness::effect(regs, bits, &later.0) {
+                        Some(next) if flags(&next.all_reads()) => {
+                            movable = false;
+                            break;
+                        }
+                        Some(next) if flags(&next.writes) => break,
+                        Some(_) => {}
+                        None if later.0.what.as_ref().is_some_and(|what| {
+                            what.op == Operation::Move
+                                || what.op == Operation::Jump
+                                || matches!(what.name.as_deref(), Some("jcxz" | "jecxz" | "loop"))
+                        }) => {}
+                        None => {
+                            movable = false;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        movable
+    }
+}
+
 /// `body` with the loop-invariant computations in the preheaders.
 pub fn hoisted(
     body: &LirBody,
     classes: &RegisterClasses,
 ) -> LirBody {
+    hoisted_sized(body, classes, false)
+}
+
+/// `hoisted`, where `size` keeps the x87 pool constants in their loops.
+pub fn hoisted_sized(
+    body: &LirBody,
+    classes: &RegisterClasses,
+    size: bool,
+) -> LirBody {
     let Some(regs) = body.registers else { return body.clone() };
-    let found = loopy::loops(&body.blocks, Some(body.entry));
-    if found.is_empty() {
-        return body.clone();
-    }
-    let floating = crate::backend::regclass::floating(body);
     let control_word_written = body
         .insns()
         .iter()
@@ -194,266 +579,48 @@ pub fn hoisted(
                     |what| what.op == Operation::FloatStore && matches!(what.name.as_deref(), Some("fisttp" | "fistt")),
                 ),
         );
-    let dominance = loopy::dominance(&body.blocks, Some(body.entry));
-    let mut blocks: Vec<crate::model::lir::Block> = body.blocks.clone();
-    let place: HashMap<i64, usize> = blocks.iter().enumerate().map(|(number, block)| (block.at, number)).collect();
-    // Where each value is defined: the block, by position.
-    let mut defined: HashMap<u32, i64> = HashMap::default();
-    for block in &blocks {
-        for phi in block.phis.iter() {
-            defined.insert(phi.result, block.at);
-        }
-        for one in block.insns.iter() {
-            for &value in &one.defines {
-                defined.insert(value, block.at);
-            }
-        }
-    }
-    // The values one instruction defines: a constant made twice is not hoisted.
-    let mut defs: HashMap<u32, usize> = HashMap::default();
-    for block in &blocks {
-        for one in block.insns.iter() {
-            for &value in &one.defines {
-                *defs.entry(value).or_default() += 1;
-            }
-        }
-    }
-    let mut order: Vec<&loopy::Loop> = found.iter().collect();
-    order.sort_by_key(|one| one.body.to_set().len());
-    let mut changed = false;
-    for lp in order {
-        let inside = lp.body.to_set();
-        let outside_entries: Vec<i64> = blocks
-            .iter()
-            .filter(|block| !inside.contains(&block.at) && block.succ.contains(&lp.header))
-            .map(|block| block.at)
-            .collect();
-        let [pre] = outside_entries[..] else { continue };
-        let pre_at = place[&pre];
-        if blocks[pre_at].succ.len() != 1 {
-            continue;
-        }
-        // The values the loop reads from outside, and its phis: the registers
-        // it holds across its trips, which the hoisted one joins.
-        let named: HashSet<u32> = inside
-            .iter()
-            .flat_map(|at| {
-                let block = &blocks[place[at]];
-                block
-                    .insns
-                    .iter()
-                    .flat_map(|one| one.uses.iter().copied())
-                    .filter(|value| defined.get(value).is_none_or(|home| !inside.contains(home)))
-                    .chain(block.phis.iter().map(|phi| phi.result))
-                    .collect::<Vec<_>>()
-            })
-            .filter(|value| !floating.contains(value))
-            .collect();
-        // `HasLoopPHIUse`: the values a copy in the loop reads; a cheap
-        // instruction whose value a copy takes would make one more copy.
-        let copied: HashSet<u32> = inside
-            .iter()
-            .flat_map(|at| blocks[place[at]].insns.iter())
-            .filter(|one| {
-                one.what
-                    .as_ref()
-                    .is_some_and(
-                        |what| what.op == Operation::Move
-                            && matches!(
-                                (what.dests.as_slice(), what.sources.as_slice()),
-                                ([Loc::Held(_)], [Loc::Held(_)])
-                            ),
-                    )
-            })
-            .flat_map(|one| one.uses.iter().copied())
-            .collect();
-        let copied = {
-            // `HasLoopPHIUse`: a def a phi of the loop (or of an exit block,
-            // for any of its predecessors) takes, directly or through copies
-            // in the loop: the join of a state machine takes a constant from
-            // each case, and 262 of them hoisted were live across all the
-            // loop.
-            let mut taken = copied;
-            let exits = inside
+    let blocks: Vec<licm::Block<Wrapped>> = body
+        .blocks
+        .iter()
+        .map(|block| licm::Block {
+            at: block.at,
+            succ: block.succ.to_vec(),
+            phis: block
+                .phis
                 .iter()
-                .flat_map(|at| blocks[place[at]].succ.iter().copied())
-                .filter(|to| !inside.contains(to) && place.contains_key(to));
-            for at in inside.iter().copied().chain(exits) {
-                for phi in blocks[place[&at]].phis.iter() {
-                    taken.extend(phi.incoming.iter().map(|(_, value)| *value));
-                }
-            }
-            let copies: Vec<(u32, Vec<u32>)> = inside
-                .iter()
-                .flat_map(|at| blocks[place[at]].insns.iter())
-                .filter(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Move))
-                .filter_map(|one| Some((*one.defines.first()?, one.uses.to_vec())))
-                .collect();
-            while copies
-                .iter()
-                .any(|(result, uses)| taken.contains(result) && uses.iter().any(|value| taken.insert(*value)))
-            {
-            }
-            taken
-        };
-        let limit = classes.available.len();
-        // An x87 value cannot be live across a call (`floatassign` does not
-        // spill across one), and the stack holds `float_stack` values.
-        let calls = inside
-            .iter()
-            .any(
-                |at| blocks[place[at]].insns.iter().any(|one| {
-                    one.call.is_some()
-                        || one.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Call | Operation::Barrier))
-                }),
-            );
-        let floats_named = inside
-            .iter()
-            .flat_map(|at| {
-                let block = &blocks[place[at]];
-                block
-                    .insns
-                    .iter()
-                    .flat_map(|one| one.uses.iter().copied())
-                    .filter(|value| defined.get(value).is_none_or(|home| !inside.contains(home)))
-                    .chain(block.phis.iter().map(|phi| phi.result))
-                    .collect::<Vec<_>>()
-            })
-            .filter(|value| floating.contains(value))
-            .collect::<HashSet<u32>>()
-            .len();
-        // `InitializeLoadsHoistableLoops`: no store, call or ordered load in
-        // the loop, its inner loops among it.
-        let loads = !inside.iter().any(|at| blocks[place[at]].insns.iter().any(|one| keeps_loads(one)));
-        // `IsGuaranteedToExecute`: the header, or a block over every exiting
-        // block.
-        let exiting: Vec<i64> =
-            inside.iter().copied().filter(|at| blocks[place[at]].succ.iter().any(|to| !inside.contains(to))).collect();
-        let every_trip = |at: i64| at == lp.header || exiting.iter().all(|&out| dominance.dominates(at, out));
-        let mut moved: Vec<Arc<Insn>> = Vec::new();
-        let mut hoisted_values: HashSet<u32> = HashSet::default();
-        loop {
-            let mut any = false;
-            for at in blocks.iter().map(|block| block.at).filter(|at| inside.contains(at)).collect::<Vec<_>>() {
-                let number = place[&at];
-                let loads_here = loads && every_trip(at);
-                let mut keep: Vec<Arc<Insn>> = Vec::new();
-                let insns: Vec<Arc<Insn>> = blocks[number].insns.iter().cloned().collect();
-                for (index, one) in insns.iter().enumerate() {
-                    let value = one.defines.first().copied();
-                    let invariant = one.uses.iter().all(|used| {
-                        hoisted_values.contains(used) || defined.get(used).is_none_or(|home| !inside.contains(home))
-                    });
-                    let flags = |lanes: &crate::backend::lanes::Lanes| {
-                        lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
-                    };
-                    // An x87 constant is hoisted where the control word is
-                    // constant and the stack has room (`constant_load`).
-                    if constant_load(one) {
-                        if !control_word_written && !calls && floats_named < body.float_stack {
-                            hoisted_values.extend(value);
-                            moved.push(Arc::clone(one));
-                            any = true;
-                        } else {
-                            keep.push(Arc::clone(one));
-                        }
-                        continue;
-                    }
-                    let mut movable = candidate(one, classes, loads_here)
-                        && invariant
-                        && value.is_some_and(|value| !floating.contains(&value))
-                        && named.len() < limit;
-                    // `IsProfitableToHoist`: "Trivially rematerializable
-                    // instructions should always be hoisted providing the
-                    // register allocator can just pull them down again", unless
-                    // a copy in the loop takes the value.
-                    let constant = value.is_some_and(|value| {
-                        one.uses.is_empty()
-                            && defs.get(&value) == Some(&1)
-                            && !copied.contains(&value)
-                            && !floating.contains(&value)
-                            && one.defines.len() == 1
-                            && one.call.is_none()
-                            && one.group.is_none()
-                            && one.clobbers.is_empty()
-                            && one.requires.is_empty()
-                            && one.delivers.is_empty()
-                            && crate::greedy::remat::is_trivially_re_materializable(one, false)
-                    });
-                    if constant && !movable {
-                        hoisted_values.extend(value);
-                        moved.push(Arc::clone(one));
-                        any = true;
-                        continue;
-                    }
-                    if movable {
-                        let effect = liveness::effect(regs, body.bits, one);
-                        let name = one.what.as_ref().and_then(|what| what.name.as_deref()).unwrap_or("");
-                        let reads = matches!(name, "adc" | "sbb" | "rcl" | "rcr")
-                            || effect.as_ref().is_some_and(|effect| flags(&effect.all_reads()));
-                        let sets = effect.as_ref().is_none_or(|effect| flags(&effect.writes));
-                        if reads {
-                            movable = false;
-                        } else if sets {
-                            // Flags set here must not be read below, in the
-                            // block.
-                            for later in &insns[index + 1..] {
-                                match liveness::effect(regs, body.bits, later) {
-                                    Some(next) if flags(&next.all_reads()) => {
-                                        movable = false;
-                                        break;
-                                    }
-                                    Some(next) if flags(&next.writes) => break,
-                                    Some(_) => {}
-                                    None if later.what.as_ref().is_some_and(|what| {
-                                        what.op == Operation::Move
-                                            || what.op == Operation::Jump
-                                            || matches!(what.name.as_deref(), Some("jcxz" | "jecxz" | "loop"))
-                                    }) => {}
-                                    None => {
-                                        movable = false;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if movable {
-                        hoisted_values.extend(value);
-                        moved.push(Arc::clone(one));
-                        any = true;
-                    } else {
-                        keep.push(Arc::clone(one));
-                    }
-                }
-                if keep.len() != blocks[number].insns.len() {
-                    blocks[number] = blocks[number].with_insns(keep);
-                }
-            }
-            if !any {
-                break;
-            }
-        }
-        if moved.is_empty() {
-            continue;
-        }
-        changed = true;
-        for one in &moved {
-            for &value in &one.defines {
-                defined.insert(value, pre);
-            }
-        }
-        let mut insns: Vec<Arc<Insn>> = blocks[pre_at].insns.iter().cloned().collect();
-        let end = insns.iter().rposition(|one| !one.is_meta()).filter(|&last| {
-            insns[last].what.as_ref().is_some_and(|what| matches!(what.op, Operation::Jump | Operation::Branch))
-        });
-        let at = end.unwrap_or(insns.len());
-        for (offset, one) in moved.into_iter().enumerate() {
-            insns.insert(at + offset, one);
-        }
-        blocks[pre_at] = blocks[pre_at].with_insns(insns);
-    }
-    if changed { body.with_blocks(blocks) } else { body.clone() }
+                .map(|phi| licm::Phi {
+                    result: phi.result,
+                    incoming: phi.incoming.iter().map(|(_, value)| *value).collect(),
+                })
+                .collect(),
+            insns: block.insns.iter().cloned().map(Wrapped).collect(),
+        })
+        .collect();
+    let mut policy = X86 {
+        body,
+        classes,
+        regs,
+        floating: crate::backend::regclass::floating(body),
+        control_word_written,
+        calls: false,
+        floats_named: 0,
+        named: 0,
+        loads: false,
+        size,
+    };
+    let Some(moved) = licm::hoist(&blocks, body.entry, &mut policy) else { return body.clone() };
+    let blocks: Vec<crate::model::lir::Block> = body
+        .blocks
+        .iter()
+        .zip(moved)
+        .map(|(block, after)| {
+            let insns: Vec<Arc<Insn>> = after.insns.into_iter().map(|one| one.0).collect();
+            let same = insns.len() == block.insns.len()
+                && insns.iter().zip(block.insns.iter()).all(|(a, b)| Arc::ptr_eq(a, b));
+            if same { block.clone() } else { block.with_insns(insns) }
+        })
+        .collect();
+    body.with_blocks(blocks)
 }
 
 #[cfg(test)]
@@ -466,7 +633,7 @@ mod tests {
     use crate::support::hash::IndexMap;
 
     fn held(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 4 })
+        Loc::Held(Held { value, width: 4, offset: 0 })
     }
 
     fn insn(
@@ -519,6 +686,149 @@ mod tests {
         assert_eq!(names(1), ["mov", "jcxz"]);
     }
 
+    /// `EliminateCSE` renamed the readers of one duplicate at a time, each
+    /// rename visiting every instruction of the function: 19 duplicates in a
+    /// loop of 140 instructions made about 2,700 `rename_use` calls, and
+    /// `lir machinelicm` of jpeg_single went from 8.7M to 51M instructions.
+    /// Only a reader of a duplicate is renamed.
+    #[test]
+    fn test_the_readers_of_duplicates_are_renamed_without_visiting_the_whole_body() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let duplicates = 20u32;
+        let mut inside = Vec::new();
+        for number in 0..duplicates {
+            let value = 10 + 2 * number;
+            let at = i64::from(10 + 3 * number);
+            inside.push(insn(at, Operation::Binary, "add", vec![held(value)], vec![held(1), held(2)], vec![value], vec![1, 2]));
+            inside.push(insn(
+                at + 1,
+                Operation::Compare,
+                "cmp",
+                vec![],
+                vec![held(value), held(3)],
+                vec![],
+                vec![value, 3],
+            ));
+        }
+        for number in 0..100u32 {
+            let value = 200 + number;
+            inside.push(insn(
+                i64::from(100 + number),
+                Operation::Move,
+                "mov",
+                vec![held(value)],
+                vec![held(3)],
+                vec![value],
+                vec![3],
+            ));
+        }
+        inside.push(insn(500, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]));
+        let mut body = LirBody::new(
+            "loop",
+            0,
+            vec![
+                block(0, vec![1], vec![insn(0, Operation::Jump, "jmp", vec![], vec![], vec![], vec![])]).into(),
+                block(1, vec![1, 2], inside).into(),
+                block(2, vec![], vec![insn(501, Operation::Return, "ret", vec![], vec![], vec![], vec![])]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1, 2, 3].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        RENAMES.with(|renames| renames.set(0));
+        let done = hoisted(&body, &RegisterClasses::m16());
+        let adds = done.blocks[0].insns.iter().filter(|one| one.what.as_ref().and_then(|w| w.name.as_deref()) == Some("add")).count();
+        assert_eq!(adds, 1, "the premise: the duplicates are made once");
+        let renames = RENAMES.with(|renames| renames.get());
+        assert!(renames <= 3 * duplicates as usize, "{renames}");
+    }
+
+    /// After a round of renames the sweep visited every instruction of the
+    /// function, loop after loop: 2.9M `rename_uses` calls on
+    /// memory_expansion -O2. Only a block that reads a renamed value is swept.
+    #[test]
+    fn test_blocks_that_read_no_duplicate_are_not_swept_for_renames() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let mut inside = Vec::new();
+        for number in 0..5u32 {
+            let value = 10 + 2 * number;
+            let at = i64::from(10 + 3 * number);
+            inside.push(insn(at, Operation::Binary, "add", vec![held(value)], vec![held(1), held(2)], vec![value], vec![1, 2]));
+            inside.push(insn(at + 1, Operation::Compare, "cmp", vec![], vec![held(value), held(3)], vec![], vec![value, 3]));
+        }
+        inside.push(insn(500, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]));
+        let tail = 200i64;
+        let mut blocks = vec![
+            block(0, vec![1], vec![insn(0, Operation::Jump, "jmp", vec![], vec![], vec![], vec![])]).into(),
+            block(1, vec![1, 1000], inside).into(),
+        ];
+        for number in 0..tail {
+            let at = 1000 + number;
+            let next = if number + 1 == tail { vec![] } else { vec![at + 1] };
+            let value = 5000 + number as u32;
+            blocks.push(
+                block(at, next, vec![insn(at * 10, Operation::Move, "mov", vec![held(value)], vec![held(3)], vec![value], vec![3])])
+                    .into(),
+            );
+        }
+        let mut body = LirBody::new("loop", 0, blocks, IndexMap::default(), IndexMap::default());
+        body.inputs = [1, 2, 3].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        crate::backend::licm_core::SWEPT.with(|swept| swept.set(0));
+        let done = hoisted(&body, &RegisterClasses::m16());
+        let adds = done.blocks[0].insns.iter().filter(|one| one.what.as_ref().and_then(|w| w.name.as_deref()) == Some("add")).count();
+        assert_eq!(adds, 1, "the premise: the duplicates are made once");
+        let swept = crate::backend::licm_core::SWEPT.with(|swept| swept.get());
+        assert!(swept <= 40, "{swept}");
+    }
+
+    /// The policy read every block of the function, filtered to the loop's,
+    /// for each loop: with 400 loops of 3 blocks, memory_expansion's
+    /// `lir machinelicm` spent 60M instructions in `begin`. It reads the
+    /// loop's blocks only.
+    #[test]
+    fn test_a_loop_is_read_through_its_own_blocks_not_the_functions() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let loops = 60i64;
+        let mut blocks: Vec<LirBlock> = Vec::new();
+        for number in 0..loops {
+            let (pre, body) = (10 * number, 10 * number + 1);
+            let value = 100 + number as u32;
+            blocks.push(block(pre, vec![body], vec![insn(pre, Operation::Jump, "jmp", vec![], vec![], vec![], vec![])]));
+            let next = if number + 1 == loops { 10 * loops } else { 10 * (number + 1) };
+            blocks.push(
+                block(
+                    body,
+                    vec![body, next],
+                    vec![
+                        insn(body * 10, Operation::Binary, "add", vec![held(value)], vec![held(1), held(2)], vec![value], vec![1, 2]),
+                        insn(body * 10 + 1, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]),
+                    ],
+                ),
+            );
+        }
+        blocks.push(block(10 * loops, vec![], vec![insn(99999, Operation::Return, "ret", vec![], vec![], vec![], vec![])]));
+        let mut body = LirBody::new("loops", 0, blocks.into_iter().map(crate::model::lir::Block::from).collect(), IndexMap::default(), IndexMap::default());
+        body.inputs = [1, 2, 3].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        crate::backend::licm_core::READ.with(|read| read.set(0));
+        let done = hoisted(&body, &RegisterClasses::m16());
+        let hoisted_adds = done
+            .blocks
+            .iter()
+            .filter(|one| one.at % 10 == 0)
+            .flat_map(|one| one.insns.iter())
+            .filter(|one| one.what.as_ref().and_then(|w| w.name.as_deref()) == Some("add"))
+            .count();
+        assert_eq!(hoisted_adds as i64, loops, "the premise: every loop's add is made before it");
+        let read = crate::backend::licm_core::READ.with(|read| read.get());
+        assert!(read <= 8 * loops as usize, "{read}");
+    }
+
     /// bintree's `insert` at -O1, a loop after `tailrecurse`: `t[3*node]` is
     /// read on every trip of a loop that stores nothing. The pin's
     /// EarlyMachineLICM hoists its `lea` and load (`AllowedToHoistLoads`);
@@ -532,8 +842,8 @@ mod tests {
         let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
         let cell = |base: u32, index: u32, scale: i64| {
             Loc::Mem(Mem {
-                base: Some(Held { value: base, width: 4 }),
-                index: Some(Held { value: index, width: 4 }),
+                base: Some(Held { value: base, width: 4, offset: 0 }),
+                index: Some(Held { value: index, width: 4, offset: 0 }),
                 scale,
                 ..Mem::new(None, 4)
             })
@@ -593,7 +903,7 @@ mod tests {
             |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
         let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
         let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
-        let wide = |value: u32| Loc::Held(Held { value, width: 10 });
+        let wide = |value: u32| Loc::Held(Held { value, width: 10, offset: 0 });
         let run = |call: bool, truncating: bool| {
             let one = insn(10, Operation::FloatLoad, "fld1", vec![wide(10)], vec![], vec![10], vec![]);
             let add =
@@ -631,8 +941,214 @@ mod tests {
         assert_eq!(run(false, false), ["fld1", "jmp"]);
         assert_eq!(run(true, false), ["jmp"]);
         // recfloat -O2: the pin's `FLDCW` for the `fptosi` after the loop
-        // makes `$fpcw` non-constant, so `fld1` stays in the loop.
+        // makes `$fpcw` non-constant, so `fld1` stays in the loop (ML2 holds
+        // it only to flip it: `test_a_flipped_x87_constant_is_held...`).
         assert_eq!(run(false, true), ["jmp"]);
+    }
+
+    /// FRAC.BAS `fracline2` (qb): two `fldz` made before the loop were one
+    /// value after EliminateCSE, read by both loop-carried entries of the x87
+    /// stack: "floating stack input is unavailable" (once "value#10 is read
+    /// but never defined"). Each x87 value is its own stack entry, so two
+    /// constant loads stay two values.
+    #[test]
+    fn test_two_hoisted_x87_constants_stay_two_values() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
+        let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let wide = |value: u32| Loc::Held(Held { value, width: 10, offset: 0 });
+        let first = insn(10, Operation::FloatLoad, "fldz", vec![wide(10)], vec![], vec![10], vec![]);
+        let second = insn(11, Operation::FloatLoad, "fldz", vec![wide(11)], vec![], vec![11], vec![]);
+        let read_first =
+            insn(12, Operation::Binary, "fadd", vec![wide(12)], vec![wide(1), wide(10)], vec![12], vec![1, 10]);
+        let read_second =
+            insn(13, Operation::Binary, "fadd", vec![wide(13)], vec![wide(12), wide(11)], vec![13], vec![12, 11]);
+        let mut body = LirBody::new(
+            "loop",
+            0,
+            vec![
+                block(0, vec![1], vec![jump(0)]).into(),
+                block(1, vec![1, 2], vec![first, second, read_first, read_second, branch(14)]).into(),
+                block(2, vec![], vec![insn(15, Operation::Return, "ret", vec![], vec![], vec![], vec![])]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1].into_iter().collect();
+        body.float_stack = 8;
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let done = hoisted(&body, &RegisterClasses::m16());
+        let before: Vec<u32> = done.blocks[0]
+            .insns
+            .iter()
+            .filter(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("fldz")))
+            .flat_map(|one| one.defines.iter().copied())
+            .collect();
+        assert_eq!(before, [10, 11]);
+    }
+
+    /// x_ld_abs -O2 at m32: the unrolled copies of `x[i] - 16 - r` made `-1.0`
+    /// (`fld1; fchs`, 10 clk) and added it (8) on every inner trip, 13,320 clk
+    /// of gcc's 13,113. Held across the loop it is one `fadd st, st(i)`. A
+    /// compare wants its constant on top, where holding it costs an `fxch`
+    /// for the `fldz` it saves; a loop with a loop inside it holds the value
+    /// across the inner loop for a saving once an outer trip.
+    #[test]
+    fn test_a_flipped_x87_constant_is_held_by_an_innermost_loop_that_adds_it() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
+        let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let wide = |value: u32| Loc::Held(Held { value, width: 10, offset: 0 });
+        // `reader`: what takes the flipped constant; `nested`: the loop has a
+        // loop inside it.
+        let run = |reader: &str, nested: bool, size: bool, extra: &str| {
+            let one = insn(10, Operation::FloatLoad, "fld1", vec![wide(10)], vec![], vec![10], vec![]);
+            let flip = insn(11, Operation::FloatUnary, "fchs", vec![wide(11)], vec![wide(10)], vec![11], vec![10]);
+            let other = if extra == "mem" { Loc::Mem(Mem::new(None, 8)) } else { wide(1) };
+            let read =
+                insn(12, Operation::Binary, reader, vec![wide(12)], vec![other, wide(11)], vec![12], vec![1, 11]);
+            let store = insn(
+                17,
+                Operation::FloatStore,
+                "fstp",
+                vec![Loc::Mem(Mem::new(None, 8))],
+                vec![wide(12)],
+                vec![],
+                vec![12],
+            );
+            let mut blocks = vec![block(0, vec![1], vec![jump(0)]).into()];
+            if nested {
+                blocks.push(block(1, vec![2], vec![one, flip, read]).into());
+                blocks.push(block(2, vec![2, 3], vec![branch(13)]).into());
+                blocks.push(block(3, vec![1, 4], vec![branch(14)]).into());
+            } else {
+                let mut inside = vec![one, flip, read];
+                if extra == "store" {
+                    inside.push(store);
+                }
+                inside.push(branch(13));
+                blocks.push(block(1, vec![1, 2], inside).into());
+            }
+            // The function writes the control word (`fisttp` after the loop).
+            let exit = vec![
+                insn(16, Operation::FloatStore, "fisttp", vec![], vec![wide(12)], vec![], vec![12]),
+                insn(15, Operation::Return, "ret", vec![], vec![], vec![], vec![]),
+            ];
+            blocks.push(block(blocks.len() as i64, vec![], exit).into());
+            let mut body = LirBody::new("loop", 0, blocks, IndexMap::default(), IndexMap::default());
+            body.inputs = [1].into_iter().collect();
+            body.float_stack = 8;
+            body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+            let done = hoisted_sized(&body, &RegisterClasses::m16(), size);
+            done.blocks[0]
+                .insns
+                .iter()
+                .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(run("fadd", false, false, ""), ["fld1", "fchs", "jmp"]);
+        assert_eq!(run("fcom", false, false, ""), ["jmp"]);
+        assert_eq!(run("fadd", true, false, ""), ["jmp"]);
+        assert_eq!(run("fadd", false, true, ""), ["jmp"], "-Os: the `fstp` that ends the carried value costs 2 B");
+        assert_eq!(run("fadd", false, false, "store"), ["jmp"], "x_ld_to_float, 64-bit: `fxch`es around the store");
+        assert_eq!(
+            run("fadd", false, false, "mem"),
+            ["jmp"],
+            "x_ld_div, 64-bit: the held value is copied, `fld st(0)`"
+        );
+    }
+
+    /// A loop-invariant `fld m80` of a constant-pool entry was made on every
+    /// trip (6 clk and a popping `fmulp`; gcc keeps the value on the stack):
+    /// x_ld_to_int -O2 +3,533 clk of 18,000 at m32. It is made once, ahead of
+    /// the loop, where the function writes the control word too (`fisttp`),
+    /// but not where a call is in the loop or the stack has no room left for
+    /// the loop's own temporaries.
+    #[test]
+    fn test_an_x87_pool_constant_is_made_before_a_loop_that_leaves_stack_room() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
+        let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let wide = |value: u32| Loc::Held(Held { value, width: 10, offset: 0 });
+        // `others`: floating values the loop reads from outside it, besides the
+        // accumulator.
+        let run = |others: u32, call: bool, truncating: bool, width: u32, size: bool| {
+            let pool = Loc::Mem(Mem::new(None, width));
+            let load = Arc::new(Insn {
+                invariant: true,
+                ..(*insn(10, Operation::FloatLoad, "fld", vec![wide(10)], vec![pool], vec![10], vec![])).clone()
+            });
+            let mut inside = vec![load];
+            let mut last = 1;
+            for (at, value) in (0..others).zip(100..) {
+                let sum = 200 + value;
+                inside.push(insn(
+                    20 + at as i64,
+                    Operation::Binary,
+                    "fadd",
+                    vec![wide(sum)],
+                    vec![wide(last), wide(value)],
+                    vec![sum],
+                    vec![last, value],
+                ));
+                last = sum;
+            }
+            inside.push(insn(
+                11,
+                Operation::Binary,
+                "fmul",
+                vec![wide(11)],
+                vec![wide(last), wide(10)],
+                vec![11],
+                vec![last, 10],
+            ));
+            if call {
+                inside.push(insn(12, Operation::Call, "call", vec![], vec![], vec![], vec![]));
+            }
+            inside.push(branch(13));
+            let mut exit = vec![insn(14, Operation::Return, "ret", vec![], vec![], vec![], vec![])];
+            if truncating {
+                exit.insert(0, insn(15, Operation::FloatStore, "fisttp", vec![], vec![wide(11)], vec![], vec![11]));
+            }
+            let mut body = LirBody::new(
+                "loop",
+                0,
+                vec![
+                    block(0, vec![1], vec![jump(0)]).into(),
+                    block(1, vec![1, 2], inside).into(),
+                    block(2, vec![], exit).into(),
+                ],
+                IndexMap::default(),
+                IndexMap::default(),
+            );
+            body.inputs = [1].into_iter().chain(100..100 + others).collect();
+            body.float_stack = 8;
+            body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+            let done = hoisted_sized(&body, &RegisterClasses::m16(), size);
+            done.blocks[0]
+                .insns
+                .iter()
+                .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(run(0, false, false, 10, false), ["fld", "jmp"]);
+        // The control word is written after the loop: `fld` does not read its
+        // rounding.
+        assert_eq!(run(0, false, true, 10, false), ["fld", "jmp"]);
+        // Four values held across the loop and the constant leave three slots.
+        assert_eq!(run(3, false, false, 10, false), ["fld", "jmp"]);
+        // One more and the loop's own temporaries would not fit.
+        assert_eq!(run(4, false, false, 10, false), ["jmp"]);
+        assert_eq!(run(0, true, false, 10, false), ["jmp"]);
+        // A dword or qword entry folds into its reader and stays there.
+        assert_eq!(run(0, false, false, 4, false), ["jmp"]);
+        assert_eq!(run(0, false, false, 8, false), ["jmp"]);
+        // -Os: the `fstp` that ends the carried constant is a byte the loop did
+        // not cost.
+        assert_eq!(run(0, false, false, 10, true), ["jmp"]);
     }
 
     /// A constant made in the loop that a phi of the loop takes (the join of a
@@ -672,5 +1188,39 @@ mod tests {
         };
         assert_eq!(run(true), (1, 2), "the phi's copy stays");
         assert_eq!(run(false), (2, 1), "no phi takes it: hoisted");
+    }
+
+    /// m64 nbody_single at -O1/-O2: `mov r64, offset sym` made on every trip of
+    /// a loop was kept there, three per trip, against the pin's one before the
+    /// loop (+18% executed): `floating` took every value wider than 4 bytes
+    /// for a float, an 8-byte address among them.
+    #[test]
+    fn test_a_symbol_address_of_eight_bytes_is_made_before_the_loop() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
+        let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let wide = |value: u32| Loc::Held(Held { value, width: 8, offset: 0 });
+        let address = Loc::Imm(llrm_lir::Imm {
+            value: 0,
+            width: 8,
+            address: Some(llrm_lir::Addr::new(llrm_lir::Space::Segment, 0)),
+        });
+        let constant = insn(10, Operation::Move, "mov", vec![wide(10)], vec![address], vec![10], vec![]);
+        let mut body = LirBody::new(
+            "loop",
+            0,
+            vec![
+                block(0, vec![1], vec![jump(0)]).into(),
+                block(1, vec![1, 2], vec![constant, branch(11)]).into(),
+                block(2, vec![], vec![insn(12, Operation::Return, "ret", vec![], vec![], vec![], vec![])]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m64::REGISTER_INFO));
+        let done = hoisted(&body, &RegisterClasses::of(&llrm_x86_m64::M64));
+        assert_eq!((done.blocks[0].insns.len(), done.blocks[1].insns.len()), (2, 1));
     }
 }

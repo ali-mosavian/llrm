@@ -11,8 +11,21 @@ fn lowered(code: CondCode) -> (SelectionDAG, SDValue) {
     let zero = dag.get_constant(0, EVT::I32);
     let outer = dag.get_setcc(EVT::I8, wide, zero, code);
     dag.set_root(outer);
-    legalized(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false }, &llrm_x86_m32::M32)
-        .unwrap();
+    legalized(
+        &mut dag,
+        &tli,
+        &mut X86Lowering {
+            cmov: false,
+            sse2: false,
+            min_size: false,
+            three_address_adds: false,
+            i16_mul_chains: false,
+            sext_load: false, zext_free: false,
+            profile: None,
+        },
+        &llrm_x86_m32::M32,
+    )
+    .unwrap();
     let root = dag.get_root();
     (dag, root)
 }

@@ -2,15 +2,18 @@
 //! far (`proc near`/`retf`), and a data pointer is near (`[bx]`) or far
 //! (`es:[bx]`). Needs the i8086 clang (`LLRM_CLANG_M16`).
 
+#[path = "common/target_dir.rs"]
+mod target_dir;
+
 use std::path::Path;
 use std::process::Command;
 
 fn listing(model: &str) -> String {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let out = std::env::temp_dir().join(format!("llrm-cc-model-{model}-{}.s", std::process::id()));
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_16-dos")
-        .env("LLRM_LLC", root.join("target/release/llrm-llc"))
+        .env("LLRM_LLC", target_dir::of(&root).join("release/llrm-llc"))
         .args(["-S", "-O1", &format!("-mcmodel={model}"), "-o"])
         .arg(&out)
         .arg(root.join("tests/cc/models/models.c"))
@@ -57,9 +60,9 @@ fn the_borland_probes_compile_in_every_model() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     for probe in ["conventions", "defaults", "lists", "pointers"] {
         for model in ["small", "medium", "compact", "large", "huge"] {
-            let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
                 .env("LLRM_CC_TARGET", "x86_16-dos")
-                .env("LLRM_LLC", root.join("target/release/llrm-llc"))
+                .env("LLRM_LLC", target_dir::of(&root).join("release/llrm-llc"))
                 .args(["-S", "-O1", &format!("-mcmodel={model}"), "-o", "/dev/null"])
                 .arg(root.join("tests/cc/models").join(format!("{probe}.c")))
                 .output()
@@ -80,9 +83,9 @@ fn watcom_pragmas_name_symbols_and_segments() {
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let out = std::env::temp_dir().join(format!("llrm-cc-pragmas-{}.obj", std::process::id()));
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_16-dos")
-        .env("LLRM_LLC", root.join("target/release/llrm-llc"))
+        .env("LLRM_LLC", target_dir::of(&root).join("release/llrm-llc"))
         .args(["-c", "-O1", "-o"])
         .arg(&out)
         .arg(root.join("tests/cc/pragmas/pragmas.c"))
@@ -110,9 +113,9 @@ fn a_constant_huge_offset_carries_a_64k_step_into_the_selector() {
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let out = std::env::temp_dir().join(format!("llrm-cc-hugeconst-{}.s", std::process::id()));
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_16-dos")
-        .env("LLRM_LLC", root.join("target/release/llrm-llc"))
+        .env("LLRM_LLC", target_dir::of(&root).join("release/llrm-llc"))
         .args(["-S", "-O2", "-o"])
         .arg(&out)
         .arg(root.join("tests/cc/models/hugeconst.c"))
@@ -136,9 +139,9 @@ fn a_program_runs_in_each_model() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     for model in ["small", "medium", "compact", "large", "huge"] {
         let exe = std::env::temp_dir().join(format!("llrm-cc-run-{model}-{}.exe", std::process::id()));
-        let built = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        let built = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
             .env("LLRM_CC_TARGET", "x86_16-dos")
-            .env("LLRM_LLC", root.join("target/release/llrm-llc"))
+            .env("LLRM_LLC", target_dir::of(&root).join("release/llrm-llc"))
             .args(["-w", "-O2", &format!("-mcmodel={model}"), "-o"])
             .arg(&exe)
             .arg(root.join("tests/cc/dos/sieve.c"))
@@ -174,9 +177,9 @@ fn a_static_huge_object_past_a_segment_is_consecutive_segments() {
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let compile = |extra: &[&str], output: &Path| {
-        Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
             .env("LLRM_CC_TARGET", "x86_16-dos")
-            .env("LLRM_LLC", root.join("target/release/llrm-llc"))
+            .env("LLRM_LLC", target_dir::of(&root).join("release/llrm-llc"))
             .args(["-w", "-O2"])
             .args(extra)
             .arg("-o")
@@ -224,9 +227,9 @@ fn the_flat_dos_row_reads_far_and_huge_and_names_the_text_screen() {
         "short __far a[4];\nlong __huge *p;\nint f(void) { volatile unsigned char *s = (unsigned char *)PHYSICAL_TEXT_SCREEN; return a[1] + (p != 0) + *s; }\n",
     )
     .unwrap();
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_32-dos")
-        .env("LLRM_LLC", root.join("target/release/llrm-llc"))
+        .env("LLRM_LLC", target_dir::of(&root).join("release/llrm-llc"))
         .args(["-O1", "-w", "-S", "-o"])
         .arg(dir.join("a.s"))
         .arg(dir.join("a.c"))
@@ -246,10 +249,14 @@ fn plain_char_is_unsigned_only_under_the_watcom_abi() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("a.c"), "int f(char *p) { return *p; }\n").unwrap();
     for (row, plain) in [("x86_16-dos", "-mabi=cdecl"), ("x86_32-dos", "-mabi=sysv")] {
+        if row == "x86_16-dos" && std::env::var_os("LLRM_CLANG_M16").is_none() {
+            eprintln!("skipped {row}: LLRM_CLANG_M16 names no i8086 clang");
+            continue;
+        }
         for (abi, unsigned) in [(plain, false), ("-mabi=watcom", true)] {
-            let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
                 .env("LLRM_CC_TARGET", row)
-                .env("LLRM_LLC", root.join("target/release/llrm-llc"))
+                .env("LLRM_LLC", target_dir::of(&root).join("release/llrm-llc"))
                 .args(["-O1", "-w", abi, "-S", "-o"])
                 .arg(dir.join("a.s"))
                 .arg(dir.join("a.c"))
@@ -261,4 +268,11 @@ fn plain_char_is_unsigned_only_under_the_watcom_abi() {
         }
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_llc_is_looked_up_in_the_cargo_target_dir_when_one_is_set() {
+    let root = Path::new("/repo");
+    assert_eq!(target_dir::from(root, Some("/elsewhere".into())), Path::new("/elsewhere"));
+    assert_eq!(target_dir::from(root, None), Path::new("/repo/target"));
 }

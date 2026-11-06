@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lsr_narrow.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lsr_narrow.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lsr_narrow.rs sha256:468d7dc2f2b32f35dc0f38282c7cc9ad56294bec0f92d5b53de573e3d6436432 -->
+<!-- src: crates/opt/llrm-transforms/src/lsr_narrow.rs sha256:f2a9acbb48f169b03ceed2383a64522c2ba15f0886993d34988b68ae63ec742b -->
 
 # lsr_narrow
 
@@ -24,6 +24,5 @@ share: the formulae without it go, one is left per use.
 Nothing runs it yet: stage 4 of the translation of LSR.
 
 ## Limits
-DEVIATE: `NarrowSearchSpaceByFilterPostInc` (post-indexed addressing, x86
-prefers none) and `NarrowSearchSpaceByDeletingCostlyFormulas`
-(`-lsr-exp-narrow`, off by default) are not ported.
+DEVIATE: `NarrowSearchSpaceByDeletingCostlyFormulas` (`-lsr-exp-narrow`,
+off by default) is not ported.

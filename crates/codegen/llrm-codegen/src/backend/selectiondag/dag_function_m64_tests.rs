@@ -1,6 +1,8 @@
 //! x86-64 (m64): quadword arithmetic, the SysV call sequence, loops over
 //! arrays.
 
+use llrm_target::Target;
+
 use super::dag_function::selected;
 
 /// An m64 sum of two `i64` arguments stopped at emit with
@@ -372,7 +374,8 @@ entry:
 /// `va_start` at m64 was refused ("the SysV register save area is not
 /// translated"; `varargs` of `tests/llc`). A variadic function stores the five
 /// argument registers its one named parameter left in the register save area,
-/// then the four fields of the `va_list`: nine stores.
+/// then the `va_list`: eight stores, `gp_offset` and `fp_offset` as one qword
+/// (`mergeStoresAfterLegalization`, #7153; the pin's `movabsq`).
 #[test]
 fn a_variadic_function_saves_the_argument_registers_and_fills_the_list() {
     use crate::model::ir::{Loc, Operation};
@@ -398,7 +401,7 @@ define i32 @f(i32 %n, ...) {
         .filter_map(|i| i.what.as_ref())
         .filter(|w| w.op == Operation::Move && matches!(w.dests.first(), Some(Loc::Mem(cell)) if cell.width != 16))
         .count();
-    assert_eq!(stores, 9);
+    assert_eq!(stores, 8);
 }
 
 /// `ret {i32, i64}` returned `eax = x`, `edx = x >> 16`: the one-integer path
@@ -498,12 +501,13 @@ entry:
     }
 }
 
-/// A dense switch at m64 was lowered to `BR_JT` over a `WrapperRIP` table
-/// address, which nothing selects ("CannotSelect Target(954)", `-O0` tests/llc
-/// switches): the target prices no jump table, so the DAG makes compares as the
-/// MIR pass does.
+/// A dense switch at m64 is a jump table of offsets, read through a register
+/// as the pin's PIC code does (`movslq (table,idx,4)`, `add table`, `jmp *`).
+/// It was compares (the target priced no table: `WrapperRIP` of a table
+/// address was `CannotSelect Target(954)`), and a 256-case state machine cost
+/// the allocator 400 M instructions against the pin's 12 M.
 #[test]
-fn a_dense_switch_at_m64_is_compares_not_a_jump_table() {
+fn a_dense_switch_at_m64_is_a_register_jump_through_a_table() {
     let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
 define i32 @f(i32 %x) {
 entry:
@@ -520,7 +524,10 @@ d: ret i32 0
     let module = llrm_mir::parse::module(text).expect("parses");
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
-    assert!(done.body.insns().iter().all(|i| i.what.as_ref().is_none_or(|w| !w.indirect)));
+    let insns = done.body.insns();
+    let jumps: Vec<_> = insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.indirect).collect();
+    assert_eq!(jumps.len(), 1);
+    assert!(jumps[0].table.len() >= 6 && jumps[0].table_id.is_some(), "{:?}", jumps[0]);
 }
 
 /// A block fill or copy at m64 reached `REP_STOSB_64` / `REP_MOVSB_64` with the
@@ -790,7 +797,8 @@ entry:
     let module = llrm_mir::parse::module(text).expect("parses");
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
-    let names: Vec<_> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_string)).collect();
     assert!(names.iter().any(|n| &**n == "mul"), "{names:?}");
 }
 
@@ -809,7 +817,8 @@ entry:
     let module = llrm_mir::parse::module(text).expect("parses");
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
-    let names: Vec<_> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_string)).collect();
     assert!(names.iter().any(|n| &**n == "cvtsi2sd"), "{names:?}");
 }
 
@@ -835,6 +844,31 @@ entry:
         .filter_map(|i| i.what.as_ref())
         .find(|w| w.op == crate::model::ir::Operation::Return && w.name.as_deref() == Some("jmp"));
     assert!(jump.is_some(), "a jmp that returns");
+}
+
+/// A tail call through a pointer that arrives in `rdi` jumped through a copy
+/// (`mov rax,rdi; jmp *rax`, one instruction more than the pin's `jmp *rdi`):
+/// the call's register was the first free one, not the one the pointer held.
+#[test]
+fn an_m64_sibling_call_through_an_argument_jumps_through_its_own_register() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define void @f(ptr %p) {
+entry:
+  tail call void %p()
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
+    let insns = done.body.insns();
+    let jump = insns
+        .iter()
+        .find(|i| i.what.as_ref().is_some_and(|w| w.indirect && w.name.as_deref() == Some("jmp")))
+        .expect("an indirect jmp");
+    let regs = llrm_lir::registers::Regs(llrm_x86_m64::M64.registers());
+    let (_, through) = jump.requires.last().expect("the callee's register");
+    assert_eq!(regs.root(*through), regs.root(llrm_lir::registers::RegId::RDI));
 }
 
 /// A function returning a `double` at m64 carried the x87 return pseudo (an
@@ -876,7 +910,8 @@ entry:
     let module = llrm_mir::parse::module(text).expect("parses");
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
     let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
-    let names: Vec<_> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_string)).collect();
     assert!(names.iter().any(|n| &**n == "cvttss2si"), "{names:?}");
     assert!(names.iter().all(|n| !n.starts_with("fist")), "{names:?}");
 }
@@ -960,6 +995,25 @@ entry:
   %b = extractvalue { i64, i48 } %v, 1
   %z = zext i48 %b to i64
   ret i64 %z
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+}
+
+/// A call argument of `i40` (a 5-byte struct passed by value, struct_odd_sizes
+/// at -O0) stopped at `Legalize(Unsupported CopyToReg i40 "promote operand")`:
+/// the register copy kept the argument's width. It is any-extended to `i64`.
+#[test]
+fn an_m64_call_with_an_odd_wide_argument_is_selected() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare i32 @g(i40)
+define i32 @f(i32 %x) {
+entry:
+  %q = zext i32 %x to i40
+  %r = call i32 @g(i40 %q)
+  ret i32 %r
 }
 ";
     let module = llrm_mir::parse::module(text).expect("parses");
@@ -1058,6 +1112,43 @@ entry:
     assert!(done.body.insns().iter().any(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("and"))));
 }
 
+/// `store i1` stopped at `Legalize(Unsupported {op: Store, ty: I1, what:
+/// "promote operand"})`: the promoted value is stored as one byte.
+#[test]
+fn a_store_of_an_i1_value_is_promoted_to_a_byte_store() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define void @f(ptr %p, i1 %b) {
+entry:
+  store i1 %b, ptr %p, align 1
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let stores = done
+        .body
+        .insns()
+        .iter()
+        .filter(|i| {
+            i.what.as_ref().is_some_and(|w| {
+                w.name.as_deref() == Some("mov") && matches!(w.dests.first(), Some(crate::model::ir::Loc::Mem(_)))
+            })
+        })
+        .count();
+    assert_eq!(stores, 1, "one byte store");
+    let m32 = "target datalayout = \"e-p:32:32-n8:16:32\"
+define void @f(ptr %p, i1 %b) {
+entry:
+  store i1 %b, ptr %p, align 1
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(m32).expect("parses");
+    let cpu = crate::backend::cpu::profile("486").expect("a cpu");
+    selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).expect("selected at m32");
+}
+
 /// A store of an `i48` (a packed struct's member) stopped at
 /// `Legalize(Unsupported Store i48 "promote operand")` (gcc.c-torture
 /// 20131127-1 at -O2): the pin stores the promoted value in a dword and a word.
@@ -1085,4 +1176,190 @@ entry:
         })
         .count();
     assert_eq!(stores, 2, "a dword and a word");
+}
+
+/// `va_start` wrote `gp_offset = 8 * (named registers of both kinds)` and a
+/// fixed `fp_offset` of 48. gcc.c-torture va-arg-26 (six named floats, then a
+/// `double`) read the `double` from the area's slot 0 and aborted; va-arg-12,
+/// -16 and -18 (named doubles past xmm7, or mixed with integers) the same.
+/// The list starts at the first unnamed register of each kind: `gp_offset`
+/// counts the named integers, `fp_offset` is 48 plus 16 per named vector
+/// register, at most 176.
+#[test]
+fn va_start_counts_named_integer_and_vector_registers_apart() {
+    use crate::model::ir::{Loc, Operation};
+    let offsets = |params: &str| -> Vec<i64> {
+        let text = format!(
+            "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare void @llvm.va_start.p0(ptr)
+define i32 @f({params}, ...) {{
+  %ap = alloca [24 x i8], align 8
+  call void @llvm.va_start.p0(ptr %ap)
+  ret i32 0
+}}
+"
+        );
+        let module = llrm_mir::parse::module(&text).expect("parses");
+        let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+        let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
+        let mut found: Vec<i64> = done
+            .body
+            .insns()
+            .iter()
+            .filter_map(|i| i.what.as_ref())
+            .filter(|w| w.op == Operation::Move)
+            .filter_map(|w| match (&w.dests[..], &w.sources[..]) {
+                ([Loc::Held(_)], [Loc::Imm(imm)]) if imm.width == 8 && imm.address.is_none() => Some(imm.value),
+                _ => None,
+            })
+            .flat_map(|pair| [pair & 0xffff_ffff, pair >> 32])
+            .collect();
+        found.sort_unstable();
+        found
+    };
+    assert_eq!(offsets("float %a, float %b, float %c, float %d, float %e, float %g"), [0, 144]);
+    assert_eq!(offsets("i32 %n, double %x, i64 %m"), [16, 64]);
+    let nine = "double %a, double %b, double %c, double %d, double %e, double %g, double %h, double %i, double %j";
+    assert_eq!(offsets(nine), [0, 176]);
+}
+
+/// `stacksave` was read where its value was used: the copy of the stack
+/// pointer came after the `alloca` it should have preceded, so the
+/// `stackrestore` that followed restored the already lowered pointer and never
+/// freed the array. gcc.c-torture vla-dealloc-1, 20040811-1 and pr43220
+/// (a `goto` back before a variable-length array) ran out of stack at -O1.
+#[test]
+fn a_stacksave_is_read_before_the_alloca_it_precedes() {
+    use crate::model::ir::{Loc, Operation};
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare ptr @llvm.stacksave.p0()
+declare void @llvm.stackrestore.p0(ptr)
+@p = global ptr null
+define void @f(i64 %n) {
+  %s = call ptr @llvm.stacksave.p0()
+  %a = alloca i32, i64 %n, align 16
+  store volatile ptr %a, ptr @p
+  call void @llvm.stackrestore.p0(ptr %s)
+  ret void
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
+    let sp = llrm_lir::registers::RegId::RSP;
+    let insns = done.body.insns();
+    let moves: Vec<_> = insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.op == Operation::Move).collect();
+    let reads: Vec<usize> =
+        (0..moves.len()).filter(|&at| matches!(&moves[at].sources[..], [Loc::Reg(r)] if r.register == sp)).collect();
+    let writes: Vec<usize> =
+        (0..moves.len()).filter(|&at| matches!(&moves[at].dests[..], [Loc::Reg(r)] if r.register == sp)).collect();
+    assert_eq!((reads.len(), writes.len()), (2, 2), "the save, the alloca's read; the alloca's write, the restore");
+    assert!(reads.iter().all(|read| *read < writes[0]), "both reads precede the first write: {reads:?} {writes:?}");
+}
+
+/// A load of seven bytes (`i56`, a packed bit-field struct) read only the
+/// first four: the memory type split into a power of two and a rest that was
+/// no type, so it stayed one load. gcc.c-torture pr57344-2 read `s[1].b` from
+/// bits the load never fetched and aborted.
+#[test]
+fn a_seven_byte_load_reads_all_seven_bytes() {
+    use crate::model::ir::Loc;
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+@s = global [16 x i8] zeroinitializer
+define i64 @f() {
+  %1 = load i56, ptr getelementptr inbounds nuw (i8, ptr @s, i64 8), align 8
+  %2 = zext i56 %1 to i64
+  ret i64 %2
+}
+define void @g(i56 %v) {
+  store i56 %v, ptr getelementptr inbounds nuw (i8, ptr @s, i64 8), align 8
+  ret void
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let bytes = |name: &str, load: bool| -> u32 {
+        let done = selected(&module, name, &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
+        let insns = done.body.insns();
+        insns
+            .iter()
+            .filter_map(|i| i.what.as_ref())
+            .filter_map(|w| match (load, &w.dests[..], &w.sources[..]) {
+                (true, [_], [Loc::Mem(cell)]) | (false, [Loc::Mem(cell)], [_]) => Some(cell.width),
+                _ => None,
+            })
+            .sum()
+    };
+    assert_eq!(bytes("f", true), 7, "loaded");
+    assert_eq!(bytes("g", false), 7, "stored");
+}
+
+/// A `sext` of a value whose sign bit is zero kept a `movsxd` where the pin's
+/// `visitSIGN_EXTEND` makes it a `zext nneg`, the free `mov r32, r32`:
+/// bench ring and tile +1 B.
+#[test]
+fn an_m64_sext_of_a_value_with_a_zero_sign_bit_is_a_free_zero_extension() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i64 @f(i32 %a) {
+entry:
+  %m = and i32 %a, 255
+  %s = sext i32 %m to i64
+  ret i64 %s
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_string)).collect();
+    assert!(names.iter().any(|n| n == "and" || n == "movzx" || n == "mov"), "premise: selected, got {names:?}");
+    assert!(!names.iter().any(|n| n.starts_with("movsx")), "a free zero extension, not movsxd: {names:?}");
+}
+
+/// `store volatile double 1.5` was an xmm load of the constant and an xmm store
+/// (m64 float rows, the pool entry stayed); the pin stores the integer image of
+/// a volatile one too (`replaceStoreOfFPConstant` L24395, `legalOrCustom(STORE,
+/// i64)`).
+#[test]
+fn an_m64_volatile_double_constant_store_is_an_integer_store_of_its_image() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define void @f(ptr %p) {
+entry:
+  store volatile double 1.5, ptr %p
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let names: Vec<_> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.clone()).collect();
+    assert!(!names.iter().any(|n| n.starts_with("movs")), "no xmm load of the constant: {names:?}");
+}
+
+/// `(x + 2^31) u< 2^32` is the check that an `i64` fits an `i32`. It stayed an
+/// `add`, a 10-byte `movabs` of the limit and a compare (m64 -Os
+/// widening_multiply +20 B over the pin's `movslq; cmp; jne`): x86's
+/// `shouldTransformSignedTruncationCheck` was off.
+#[test]
+fn an_m64_signed_truncation_check_is_a_sign_extension_compare() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i1 @f(i64 %x) {
+entry:
+  %a = add i64 %x, 2147483648
+  %c = icmp ult i64 %a, 4294967296
+  ret i1 %c
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let names: Vec<_> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.clone()).collect();
+    assert!(!names.iter().any(|n| &**n == "add"), "the add is gone: {names:?}");
+    assert!(names.iter().any(|n| n.starts_with("movs")), "a sign extension: {names:?}");
 }

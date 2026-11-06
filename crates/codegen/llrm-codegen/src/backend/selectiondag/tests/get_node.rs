@@ -231,3 +231,52 @@ fn an_inexact_single_quotient_is_not_folded_under_extended_evaluation() {
     assert_eq!(divide(false), (true, true));
     assert_eq!(divide(true), (false, true));
 }
+
+/// Two loads of one address on one chain that differ only in their atomic
+/// ordering are two nodes: merged, an `acquire` load would be selected as the
+/// plain load its twin is.
+#[test]
+fn loads_that_differ_in_ordering_are_not_merged() {
+    use llrm_mir::opcode::AtomicOrdering;
+
+    use crate::backend::selectiondag::{MemBase, MemInfo};
+    let mut dag = dag();
+    let ptr = dag.get_register(EVT::I32, 7);
+    let chain = dag.entry_node();
+    let info = |ordering| MemInfo {
+        mem_vt: EVT::I32,
+        align: 4,
+        volatile: false,
+        base: MemBase::Unknown,
+        ext: None,
+        space: 0,
+        ordering,
+    };
+    let plain = dag.get_load(EVT::I32, chain, ptr, info(None));
+    let acquire = dag.get_load(EVT::I32, chain, ptr, info(Some(AtomicOrdering::Acquire)));
+    let again = dag.get_load(EVT::I32, chain, ptr, info(Some(AtomicOrdering::Acquire)));
+    assert_ne!(plain.node, acquire.node);
+    assert_eq!(acquire.node, again.node, "equal accesses still share one node");
+}
+
+/// A token factor nothing reads is deleted at once (`DeleteNode`), so the
+/// token factor it read is no longer shared. Left in place it kept
+/// `hasOneUse` false, `visitTokenFactor` could not flatten the nest, and the
+/// alias walk ran past depth 18 (wasm matmul -O2: 2 `i64.store` where the pin
+/// has 6).
+#[test]
+fn a_dead_token_factor_no_longer_counts_as_a_user_of_its_operand() {
+    let mut dag = dag();
+    let x = arg(&mut dag, EVT::I32, 1);
+    let entry = dag.entry_node();
+    let a = dag.get_copy_to_reg(entry, 1, x);
+    let b = dag.get_copy_to_reg(entry, 2, x);
+    let c = dag.get_copy_to_reg(entry, 3, x);
+    let d = dag.get_copy_to_reg(entry, 4, x);
+    let inner = dag.get_token_factor(&[a, b]);
+    let _kept = dag.get_token_factor(&[inner, c]);
+    let dead = dag.get_token_factor(&[inner, d]);
+    assert!(!dag.has_one_use(inner.node), "two token factors read it");
+    dag.delete_dead(dead.node);
+    assert!(dag.has_one_use(inner.node), "the dead one let go of it");
+}

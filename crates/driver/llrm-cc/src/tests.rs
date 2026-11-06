@@ -86,7 +86,7 @@ fn the_watcom_abi_defines_the_watcall_keyword_away() {
 fn debug_flags_reach_clang_and_the_backend() {
     let one = built("-gcodeview -c x.c");
     assert!(one.clang.iter().any(|flag| flag == "-g"), "{:?}", one.clang);
-    assert!(one.clang.iter().any(|flag| flag == "-fexperimental-assignment-tracking=disabled"), "{:?}", one.clang);
+    assert!(one.clang.iter().all(|flag| !flag.starts_with("-fexperimental-assignment-tracking")), "{:?}", one.clang);
     assert_eq!(one.llc, words("-gcodeview"));
     assert!(built("-g0 -c x.c").clang.iter().all(|flag| flag != "-g"));
 }
@@ -141,17 +141,42 @@ fn mabi_goes_to_the_backend_after_the_tables_own() {
     assert_eq!(args[last], "-mabi=regparm3");
 }
 
-#[test]
-fn the_opt_level_reaches_the_arm64_backend() {
-    // With `llc_level = false` on the arm64-macos row -O0..-Os never reached
-    // llrm-arm64-llc: a size or speed measured through llrm-cc at any level
-    // was the backend's default.
-    let table = targets(TARGETS).unwrap();
-    for (flag, level) in [("-O0", "-O0"), ("-O1", "-O1"), ("-Os", "-Os")] {
-        let one = built(&format!("{flag} -c x.c"));
-        let args = llc_args(&table["arm64-macos"], &one, Path::new("x.ll"), Path::new("x.o"));
-        assert_eq!(args.first().map(String::as_str), Some(level), "{args:?}");
+/// With `llc_level = false` on an arm64 row -O0..-Os never reached
+/// llrm-arm64-llc: arm64-linux and arm64-glibc ran every -O level through the
+/// -O2 mid-end (116 qemu counts that were four copies of one). A row that takes
+/// no level must say why.
+fn rows_dropping_the_level(table: &str) -> Vec<String> {
+    let table = targets(table).unwrap();
+    let mut bad = vec![];
+    for (name, row) in &table {
+        for level in ["-O0", "-O1", "-O2", "-Os"] {
+            let one = built(&format!("{level} -c x.c"));
+            let args = llc_args(row, &one, Path::new("x.ll"), Path::new("x.o"));
+            let reaches = args.first().map(String::as_str) == Some(level);
+            let reasoned = row.llc_level_reason.as_deref().is_some_and(|why| !why.is_empty());
+            if !reaches && !reasoned {
+                bad.push(format!("{name} at {level}: {args:?}"));
+            }
+        }
     }
+    bad
+}
+
+#[test]
+fn the_opt_level_reaches_every_backend_or_the_row_says_why() {
+    let bad = rows_dropping_the_level(TARGETS);
+    assert!(bad.is_empty(), "{bad:#?}");
+}
+
+#[test]
+fn a_row_without_a_level_and_without_a_reason_is_found() {
+    let at = TARGETS.find("[arm64-linux]").unwrap();
+    let (head, rest) = TARGETS.split_at(at);
+    let row = format!("{head}{}", rest.replacen("llc_level = true", "llc_level = false", 1));
+    let bad = rows_dropping_the_level(&row);
+    assert!(bad.iter().any(|line| line.starts_with("arm64-linux")), "{bad:#?}");
+    let said = row.replacen("llc_level = false", "llc_level = false\nllc_level_reason = \"takes no level\"", 1);
+    assert!(rows_dropping_the_level(&said).is_empty());
 }
 
 /// The Watcom front end's tests pass the backend's switches (`-march`,
@@ -243,4 +268,104 @@ fn os_layer_answers_without_llrm_c_or_clang() {
     assert_eq!(said.unwrap().trim(), "start.asm");
     assert!(os_layer(&words("-O2 x.c")).is_none());
     assert!(os_layer(&words("--os-layer start")).unwrap().is_err());
+}
+
+/// The 6502 rows name their own backend and platform, and the level reaches it.
+/// A row with the default `llrm-llc` handed the msp430 IR to the x86 backend.
+#[test]
+fn the_6502_rows_select_their_own_backend_and_cpu() {
+    let table = targets(TARGETS).unwrap();
+    let one = built("-Os -S x.c");
+    for (row, cpu) in [("6502-sim65", "--cpu=6502"), ("65c02-sim65", "--cpu=65c02")] {
+        assert_eq!(table[row].llc_program, "llrm-6502-llc", "{row}");
+        let args = llc_args(&table[row], &one, Path::new("x.ll"), Path::new("x.s"));
+        assert_eq!(args[..3], ["-Os", "--platform=sim65", cpu], "{row}: {args:?}");
+        assert!(args.contains(&"-S".to_owned()), "{row}: {args:?}");
+        assert_eq!(table[row].c_abi.as_ref().map(|c| (c.int, c.pointer)), Some((2, 2)), "{row}");
+    }
+    assert_eq!(table["x86_64-linux"].llc_program, "llrm-llc");
+}
+
+/// A C global `sp` collided with cc65's own `sp` at link. The cc65 rows name
+/// the platform whose C symbols take cc65's `_`; the sim65 rows keep bare
+/// names.
+#[test]
+fn the_cc65_rows_take_the_platform_with_cc65s_symbol_prefix() {
+    let table = targets(TARGETS).unwrap();
+    let one = built("-Os -S x.c");
+    for (row, cpu) in [("6502-cc65", "--cpu=6502"), ("65c02-cc65", "--cpu=65c02")] {
+        let args = llc_args(&table[row], &one, Path::new("x.ll"), Path::new("x.s"));
+        assert_eq!(args[..3], ["-Os", "--platform=sim65-cc65", cpu], "{row}: {args:?}");
+    }
+}
+
+/// `-ffp-contract=off` was put on every machine that fuses a multiply-add, so
+/// arm64 never formed `fmadd` where the pin's clang and gcc do. No row turns
+/// contraction off; a user who wants unfused results says so.
+#[test]
+fn no_row_turns_contraction_off_by_itself_and_the_flag_still_reaches_clang() {
+    let table = targets(TARGETS).unwrap();
+    for (name, target) in &table {
+        assert!(!target.clang.iter().any(|flag| flag.starts_with("-ffp-contract")), "{name}");
+    }
+    let one = built("-ffp-contract=off -c x.c");
+    assert!(one.clang.iter().any(|flag| flag == "-ffp-contract=off"), "{:?}", one.clang);
+}
+
+/// The z80 row names its own backend program and the C sizes of its
+/// description. A row with the default `llrm-llc` handed the msp430 IR to the
+/// x86 backend.
+#[test]
+fn the_z80_row_selects_its_own_backend() {
+    let table = targets(TARGETS).unwrap();
+    assert_eq!(table["z80-sdcc"].llc_program, "llrm-z80-llc");
+    let args = llc_args(&table["z80-sdcc"], &built("-O2 -S x.c"), Path::new("x.ll"), Path::new("x.s"));
+    assert!(args.contains(&"-S".to_owned()) && args.contains(&"-O2".to_owned()), "{args:?}");
+    assert_eq!(table["z80-sdcc"].c_abi.as_ref().map(|c| (c.int, c.long, c.pointer)), Some((2, 4, 2)));
+}
+
+/// Every build spawned `clang --version` just to check the pin: ~6M
+/// instructions on a 31M compile of grep. A clang unchanged in path, size and
+/// mtime is now judged once; a changed or non-pin one is asked again.
+#[test]
+fn an_unchanged_pin_clang_is_asked_its_version_once() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = std::env::temp_dir().join(format!("llrm-cc-pin-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let count = dir.join("count");
+    let clang = dir.join("clang");
+    let script = |said: &str| {
+        std::fs::write(&clang, format!("#!/bin/sh\necho x >> {}\necho {said}\n", count.display())).unwrap();
+        std::fs::set_permissions(&clang, std::fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    let spawns = || std::fs::read_to_string(&count).unwrap_or_default().lines().count();
+    script(pin());
+    assert!(check_pin(&clang).is_ok());
+    assert!(check_pin(&clang).is_ok());
+    assert_eq!(spawns(), 1, "the second check spawned again");
+    script(&format!("{} changed", pin()));
+    assert!(check_pin(&clang).is_ok());
+    assert_eq!(spawns(), 2, "a clang of another size was trusted unasked");
+    script("not-a-pin");
+    assert!(check_pin(&clang).is_err(), "a replaced non-pin clang passed on the old stamp");
+    assert!(check_pin(&clang).is_err());
+    assert_eq!(spawns(), 4);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The shared flags keep their meaning for every other target: x86_16 reads `-mcmodel` for near and far code, so clang
+/// gets it there, and no backend of a row without `llc_mcmodel` is handed a flag it never took. The m68k row's clang
+/// is not given the flag (it refuses it) and its backend is.
+#[test]
+fn mcmodel_goes_to_the_m68k_backend_and_not_to_its_clang() {
+    let table = targets(TARGETS).unwrap();
+    let one = built("-O2 -mcmodel=medium -c x.c");
+    let m68k = &table["m68k-68000"];
+    assert!(llc_args(m68k, &one, Path::new("x.ll"), Path::new("x.o")).iter().any(|arg| arg == "-mcmodel=medium"));
+    assert!(!clang_flags(m68k, &one).iter().any(|arg| arg == "-mcmodel=medium"));
+    for (name, row) in table.iter().filter(|(name, _)| !name.starts_with("m68k-")) {
+        assert!(!row.llc_mcmodel, "{name}");
+        assert!(clang_flags(row, &one).iter().any(|arg| arg == "-mcmodel=medium"), "{name}: clang lost the flag");
+        assert!(!llc_args(row, &one, Path::new("x.ll"), Path::new("x.o")).iter().any(|arg| arg == "-mcmodel=medium"), "{name}");
+    }
 }

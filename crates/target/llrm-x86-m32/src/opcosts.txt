@@ -6,12 +6,20 @@
 add = alu_rr
 multiply = imul_r32
 divide = idiv_r32
+multiply_long = imul_r32
+multiply_high = smul_min_w4
+divide_long = idiv_r32
+# None: the multiply-high is priced at the 486's shortest multiply (`multiply_high`), the dividend being the multiplier.
+divide_margin = 0
 shift = shift_ri
 address = lea
+address_dword = 0
+address_third = 0
 carry = carry(movzx, alu_rr, shift_ri, mov_rr)
 carry_step = step(alu_rr)
 load = mov_rm
 store = mov_mr
+store_immediate = mov_mr
 memory_update = alu_mr
 branch = jcc
 prefix = prefix
@@ -30,13 +38,21 @@ float_load = x87_load
 float_load_folded = x87_add_m - x87_add
 float_store = x87_store
 float_release = x87_release
+# A double to an integer: fistp, and the control word loaded around it and put back.
+float_to_int = x87_convert_store + 2*x87_control_load
+# fcom, fnstsw and sahf: a float compare as a flag-register answer.
+float_compare = x87_compare + sahf
 extend = movzx
 set = setcc
 fill = rep_stos + 2*mov_ri
 fill_cell = rep_stos_cell
+fill_segment = 0
 copy = rep_movs + 3*mov_ri
 copy_cell = rep_movs_cell
-copy_variable = 0
+# A copy whose length is known only at run time is a call of memcpy (flat code has no ES and no inline count loop to
+# fall back on), not the `rep movs` above: the call and the stack cleanup less the string instruction, and the two
+# ALU operations that make the count and the exit value. A byte loop of 26 stays a loop (x_jpeg_fixed `next` -Os).
+copy_variable = call_near + alu_ri - rep_movs + 2*alu_rr
 direction = 2*alu_rr
 # The operations a completely unrolled loop may total, before the work its copy no longer does boosts it up to
 # fourfold (peelsize). From LLVM's `-unroll-threshold-default` (150; -O3's 300 is twice it), whose 400% boost the
@@ -52,6 +68,7 @@ unroll_budget = 150
 alu_rr = 4
 xchg_rr = 4
 imul_r32 = 6
+smul_min_w4 = 6
 idiv_r32 = 6
 shift_ri = 6
 lea = 6
@@ -60,6 +77,7 @@ setcc = 3
 mov_rr = 4
 mov_rm = 6
 mov_mr = 6
+mov_mi = 10
 alu_mr = 6
 jcc = 2
 call_near = 5
@@ -67,11 +85,14 @@ ret_near = 1
 pop_r = 1
 alu_ri = 3
 ret_pop = 3
-x87_add = 6
-x87_add_m = 6
-x87_mul = 6
-x87_div = 6
-x87_load = 6
+# x87 by operand form: twice the encoded bytes for a register form, 1.5x for a memory
+# form (the integer memory rows' est/actual, 1.4-1.5). Measured, 71 float programs at
+# -O2/-Os, ELF: reg 2.00 B (n=2,608), fld m 5.56, fstp m 4.12, fadd m 5.87 (n=7,329).
+x87_add = 4
+x87_add_m = 9
+x87_mul = 4
+x87_div = 4
+x87_load = 8
 x87_store = 6
 x87_release = 2
 rep_stos = 2
@@ -84,5 +105,9 @@ rep_movs_cell = 0
 # What differs when the sums are over bytes. A word of argument is its push and its share of the cleanup, as
 # x86-m16's: not measured on flat code.
 [size]
+# The conversion is priced in clocks only; its bytes are not a cost of the select.
+float_to_int = 0
+float_compare = 0
 prefix = 1
+store_immediate = mov_mi
 argument = 2

@@ -1,0 +1,10 @@
+#title,11.6.18 Save and Restore Operations,page,11-51,notes,none printed on page
+Group,Mark,Instruction or Address Mode,Operands or Condition,Head,Tail,I-Cache Case,No-Cache Case
+,,Bus Cycle Fault (Short),,0,0,36(1/0/10),38(1/2/10)
+,,Bus Cycle Fault (Long),,0,0,62(1/0/24),64(1/2/24)
+,,RTE (Normal Four Word),,1,0,18(4/0/0),20(4/2/0)
+,,RTE (Six Word),,1,0,18(4/0/0),20(4/2/0)
+,,RTE (Throwaway),,1,0,12(4/0/0),12(4/0/0)
+,,RTE (Coprocessor),,1,0,26(7/0/0),26(7/2/0)
+,,RTE (Short Fault),,1,0,36(10/0/0),26(10/2/0)
+,,RTE (Long Fault),,1,0,76(25/0/0),76(25/2/0)

@@ -32,7 +32,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if self.dag.constant(n0).is_some() && self.dag.constant(n1).is_none() {
             return Some(self.dag.get_node(op, vt, &[n1, n0]));
         }
-        if let Some(reassociated) = self.reassociate_ops(op, n0, n1) {
+        if let Some(reassociated) = self.reassociate_ops(op, n0, n1, self.dag.node(node).flags) {
             return Some(reassociated);
         }
         // Fold sign-extension masks using an arithmetic shift.

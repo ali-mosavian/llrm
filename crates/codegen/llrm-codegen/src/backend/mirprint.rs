@@ -200,6 +200,7 @@ fn flags_are_read(text: &mut String) {
 /// One instruction as MIR lines.
 fn instruction(
     one: &Insn,
+    at: &[i64],
     targets: &[usize],
     jumps: &mut usize,
     symbols: &mut BTreeSet<i64>,
@@ -232,8 +233,8 @@ fn instruction(
                 writeln!(
                     out,
                     "    {} = COPY {}",
-                    vreg(&Held { value: *to, width: to_width })?,
-                    vreg(&Held { value: *from, width: from_width })?
+                    vreg(&Held { value: *to, width: to_width, offset: 0 })?,
+                    vreg(&Held { value: *from, width: from_width, offset: 0 })?
                 )
                 .unwrap();
             }
@@ -386,11 +387,19 @@ fn instruction(
             writeln!(out, "    JMP32m $noreg, {}, {}, %jump-table.{table}, $noreg", m.scale, vreg(index)?).unwrap();
         }
         ("jmp", None, []) => {
-            let to = targets.get(*jumps).or(targets.last()).ok_or("a jump without a successor")?;
+            let to = what
+                .target
+                .and_then(|to| at.iter().position(|a| *a == to))
+                .or_else(|| targets.get(*jumps).or(targets.last()).copied())
+                .ok_or("a jump without a successor")?;
             writeln!(out, "    JMP_1 %bb.{to}").unwrap();
         }
         (jump, None, []) if condition(jump).is_some() => {
-            let taken = targets.first().ok_or("a branch without a successor")?;
+            let taken = what
+                .target
+                .and_then(|to| at.iter().position(|a| *a == to))
+                .or_else(|| targets.first().copied())
+                .ok_or("a branch without a successor")?;
             *jumps = 1;
             writeln!(out, "    JCC_1 %bb.{taken}, {}, implicit $eflags", condition(jump).unwrap()).unwrap();
         }
@@ -441,6 +450,10 @@ fn instruction(
         (set, Some(Loc::Held(d)), []) if set.starts_with("set") && condition(&format!("j{}", &set[3..])).is_some() => {
             let code = condition(&format!("j{}", &set[3..])).unwrap_or(0);
             writeln!(out, "    {} = SETCCr {code}, implicit $eflags", vreg(d)?).unwrap()
+        }
+        (set, Some(Loc::Mem(m)), []) if set.starts_with("set") && condition(&format!("j{}", &set[3..])).is_some() => {
+            let code = condition(&format!("j{}", &set[3..])).unwrap_or(0);
+            writeln!(out, "    SETCCm {}, {code}, implicit $eflags", cell(m, symbols)?).unwrap()
         }
         ("cmp", None, [Loc::Mem(m), Loc::Imm(i)]) => {
             writeln!(out, "    CMP{}mi {}, {}, implicit-def $eflags", bits(m.width)?, cell(m, symbols)?, immediate(i)?).unwrap()
@@ -517,6 +530,27 @@ fn instruction(
 /// A register whose first definition writes only part of it has nothing to keep
 /// of the rest: the pin's verifier wants that said (`undef %5.sub_8bit = ...`).
 fn undef_first_partial_defs(text: &str) -> String {
+    // A register read only in part never needs the rest of it: each partial
+    // write is `undef`, wherever the paths that write it meet.
+    let mut whole = BTreeSet::new();
+    let mut partial = BTreeSet::new();
+    for line in text.lines() {
+        let reads = line.split_once(" = ").map_or(line, |(_, reads)| reads);
+        let bytes = reads.as_bytes();
+        for (at, _) in reads.match_indices('%') {
+            let end = (at + 1..bytes.len()).find(|&k| !bytes[k].is_ascii_digit()).unwrap_or(bytes.len());
+            if end == at + 1 {
+                continue;
+            }
+            let value = &reads[at + 1..end];
+            if reads[end..].starts_with(".sub_") {
+                partial.insert(value)
+            } else {
+                whole.insert(value)
+            };
+        }
+    }
+    let only_in_part: BTreeSet<&str> = partial.difference(&whole).copied().collect();
     let mut defined = BTreeSet::new();
     let mut out = String::with_capacity(text.len());
     for line in text.lines() {
@@ -527,7 +561,7 @@ fn undef_first_partial_defs(text: &str) -> String {
             && token[1..].split('.').next().is_some_and(|n| n.bytes().all(|b| b.is_ascii_digit()) && !n.is_empty());
         if marked {
             let value = token[1..].split('.').next().unwrap_or("").to_owned();
-            if token.contains(".sub_") && !defined.contains(&value) {
+            if token.contains(".sub_") && (!defined.contains(&value) || only_in_part.contains(value.as_str())) {
                 let indent = &line[..line.len() - line.trim_start().len()];
                 out.push_str(&format!("{indent}undef {}\n", line.trim_start()));
                 defined.insert(value);
@@ -744,7 +778,7 @@ pub fn mir(
             }) {
                 flags_are_read(&mut text);
             }
-            instruction(one, &targets, &mut jumps, &mut symbols, &mut callees, &register_only, &mut text)
+            instruction(one, &at, &targets, &mut jumps, &mut symbols, &mut callees, &register_only, &mut text)
                 .map_err(|why| format!("block {n}: {why}"))?;
             // A value pinned to a register is that register from its
             // definition on: the `$cl = COPY` an instruction's implicit use
@@ -764,8 +798,16 @@ pub fn mir(
         // A block that falls off its end reaches its successor by the next
         // block or by a jump MIR must spell.
         let ends = block.insns.last().and_then(|one| one.what.as_ref()).map(|w| w.name.as_deref().unwrap_or(""));
+        let taken = block
+            .insns
+            .last()
+            .and_then(|one| one.what.as_ref())
+            .and_then(|w| w.target)
+            .and_then(|to| at.iter().position(|a| *a == to));
         let fell = match (jumps, targets.as_slice(), ends) {
-            (1, [_, other], Some(last)) if condition(last).is_some() => Some(*other),
+            (1, [first, second], Some(last)) if condition(last).is_some() => {
+                Some(if taken == Some(*second) { *first } else { *second })
+            }
             (0, [only], Some(last)) if last != "jmp" && !last.is_empty() => Some(*only),
             _ => None,
         };
@@ -839,7 +881,7 @@ mod tests {
     use crate::support::hash::IndexMap;
 
     fn held(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 4 })
+        Loc::Held(Held { value, width: 4, offset: 0 })
     }
 
     fn insn(
@@ -900,8 +942,8 @@ mod tests {
         let setup = insn("call_frame_setup", Operation::Move, vec![], vec![imm(4), imm(0), imm(0)]);
         let push = insn("push", Operation::Push, vec![], vec![held(1)]);
         let call = Arc::new(Insn {
-            requires: vec![(Held { value: 1, width: 4 }, RegId::ECX)],
-            delivers: vec![(Held { value: 2, width: 4 }, RegId::EAX)],
+            requires: vec![(Held { value: 1, width: 4, offset: 0 }, RegId::ECX)],
+            delivers: vec![(Held { value: 2, width: 4, offset: 0 }, RegId::EAX)],
             ..Insn::clone(&insn("call", Operation::Call, vec![], vec![]))
         });
         let destroy = insn("call_frame_destroy", Operation::Move, vec![], vec![imm(4), imm(0)]);
@@ -1000,13 +1042,26 @@ mod tests {
         assert!(text.contains("%2 = SETCCr 13, implicit $eflags"), "{text}");
     }
 
+    /// `sete [cell]` (a flag read stored straight to memory) was refused, so
+    /// x_life's -Os function never reached the pin.
+    #[test]
+    fn test_a_set_on_flags_into_a_cell_prints() {
+        let cell = Loc::Mem(llrm_lir::Mem::new(Some(llrm_lir::Addr::new(llrm_lir::Space::Frame, 8)), 1));
+        let set = insn("sete", Operation::Unary, vec![cell], vec![]);
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![set, ret]))];
+        let body = LirBody::new("setm", 0, blocks, IndexMap::default(), IndexMap::default());
+        let text = mir(&body, &IndexMap::default()).expect("prints");
+        assert!(text.contains("SETCCm %fixed-stack.0, 1, $noreg, 0, $noreg, 4, implicit $eflags"), "{text}");
+    }
+
     /// A nameless instruction that is not a return (a marker) printed as
     /// `RET 0`, which ended the block early for the pin.
     #[test]
     fn test_a_switch_through_a_table_prints_its_jump_table() {
         use llrm_lir::{Addr, Mem, Space};
         let mut table = Mem::new(Some(Addr::new(Space::Segment, 7)), 4);
-        table.index = Some(Held { value: 1, width: 4 });
+        table.index = Some(Held { value: 1, width: 4, offset: 0 });
         table.scale = 4;
         let jump = insn("jmp", Operation::Branch, vec![], vec![Loc::Mem(table)]);
         let ret = insn("", Operation::Return, vec![], vec![]);
@@ -1030,7 +1085,7 @@ mod tests {
     fn test_an_indexed_local_array_cell_is_an_indexed_stack_object() {
         use llrm_lir::{Addr, Mem, Space};
         let mut cell = Mem::new(Some(Addr::new(Space::Frame, -64)), 4);
-        cell.index = Some(Held { value: 2, width: 4 });
+        cell.index = Some(Held { value: 2, width: 4, offset: 0 });
         cell.scale = 4;
         let load = insn("mov", Operation::Move, vec![held(1)], vec![Loc::Mem(cell)]);
         let ret = insn("", Operation::Return, vec![], vec![]);
@@ -1066,6 +1121,20 @@ mod tests {
             "    %5.sub_8bit = MOV8ri 1\n    %5.sub_8bit = MOV8ri 2\n    %6 = COPY %5\n",
         );
         assert_eq!(text, "    undef %5.sub_8bit = MOV8ri 1\n    %5.sub_8bit = MOV8ri 2\n    %6 = COPY %5\n");
+    }
+
+    /// A byte written on three paths and read only as a byte (x_life's
+    /// `sete`/`mov bl, 1`/`xor` merge): only the first textual write was
+    /// `undef`, and the pin's verifier aborted on the other two.
+    #[test]
+    fn test_every_partial_write_of_a_register_only_read_in_part_is_undef() {
+        let text = super::undef_first_partial_defs(
+            "    %5.sub_8bit = MOV8ri 1\n    %5 = MOV32ri 0\n    %5.sub_8bit = MOV8ri 2\n    MOV8mr %7, 1, $noreg, 0, $noreg, %5.sub_8bit\n",
+        );
+        assert_eq!(
+            text,
+            "    undef %5.sub_8bit = MOV8ri 1\n    %5 = MOV32ri 0\n    undef %5.sub_8bit = MOV8ri 2\n    MOV8mr %7, 1, $noreg, 0, $noreg, %5.sub_8bit\n"
+        );
     }
 
     #[test]
@@ -1281,8 +1350,8 @@ mod tests {
     /// trip (x_cordic), where its own MIR is `$cl = COPY %k.sub_8bit`.
     #[test]
     fn a_copy_into_a_pinned_value_is_a_copy_into_its_register() {
-        let k = Loc::Held(Held { value: 1, width: 4 });
-        let count = Loc::Held(Held { value: 2, width: 4 });
+        let k = Loc::Held(Held { value: 1, width: 4, offset: 0 });
+        let count = Loc::Held(Held { value: 2, width: 4, offset: 0 });
         let start =
             insn("mov", Operation::Move, vec![held(1)], vec![Loc::Imm(Imm { value: 0, width: 4, address: None })]);
         let copy = insn("mov", Operation::Move, vec![count.clone()], vec![k]);

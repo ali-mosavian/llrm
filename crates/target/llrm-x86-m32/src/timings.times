@@ -43,6 +43,9 @@ jump_table              =    =
 # the Pentium's, Pentium Pro's, K5's and K6's 32 (Intel and AMD's manuals), the
 # Athlon's and Core 2's 64. The 386 has no cache on the chip.
 cache_line             =    = 
+# Clocks to fill one such line (a burst): the instruction cache's cost of a code byte once per run; 486 and Pentium state it
+# (their CPU files), later CPUs do not.
+line_fill_clocks             =    = 
 pairing                 =    =
 
 [clocks]
@@ -84,6 +87,7 @@ rep_movs     =   =
 rep_movs_cell =  =
 x87_load     =   =
 x87_exchange =   =
+x87_copy     =   =
 x87_store    =   =
 x87_release 3   1
 x87_add      =   =
@@ -100,6 +104,7 @@ x87_add_i    =    =
 x87_mul_i    =    =
 x87_div_i    =   = 
 x87_cmp_i    =    =
+x87_compare  =    =
 x87_control_load = =
 x87_control_store = =
 mul_r16      =   = 
@@ -166,6 +171,7 @@ rep_movs     =   =
 rep_movs_cell =  =
 x87_load     =   =
 x87_exchange =   =
+x87_copy     =   =
 x87_store    =   =
 x87_release 3   1
 x87_add      =   =
@@ -182,6 +188,7 @@ x87_add_i    =    =
 x87_mul_i    =    =
 x87_div_i    =   = 
 x87_cmp_i    =    =
+x87_compare  =    =
 x87_control_load = =
 x87_control_store = =
 mul_r16      =   = 

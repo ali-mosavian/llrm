@@ -16,6 +16,7 @@ fn visit(
         Opcode::Binary(BinaryOp::FSub) => super::visit_fsub(c, inst),
         // `simplifyCastInst`, as every visit starts with.
         Opcode::Cast(_) => crate::combine_muldivrem::simplify_first(c, inst).map_or(Visit::None, Visit::Replace),
+        Opcode::Call(_) => c.visit_call(inst),
         _ => Visit::None,
     }
 }
@@ -130,4 +131,135 @@ fn test_a_subtraction_from_negative_zero_is_a_negation_and_of_a_negation_an_addi
     assert!(out.contains("fneg double %x"), "{out}");
     let out = combined("double", "  %n = fneg double %x\n  %r = fsub double %x, %n\n");
     assert!(out.contains("fadd double %x, %x"), "{out}");
+}
+
+/// `@f(double %x)` returning `%r` after `visitCallInst` of `fmuladd`, with the
+/// intrinsic declared.
+fn fused(body: &str) -> String {
+    let mut module = parsed(&format!(
+        "declare double @llvm.fmuladd.f64(double, double, double)\ndefine double @f(double %x, i32 %n) {{\nb0:\n{body}  ret double %r\n}}\n"
+    ));
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit);
+    printed(&module)
+}
+
+/// x_horner on the pin (`opt -O2`): the Horner seed `fmuladd(0.0, x, 1.5)` with
+/// `x = i * 0.01` (finite, not negative) is `0.0 + 1.5`, so the loop's first
+/// step is 1.5. Ours kept the call, and with it `fldz; fmul st(0), st(1)`
+/// in each trip: x_horner at m32 ran 102484 clocks against the pin's 92080.
+#[test]
+fn test_a_fmuladd_with_a_zero_factor_and_a_finite_non_negative_other_folds_to_its_addend() {
+    let out = fused(
+        "  %f = uitofp i32 %n to double\n  %k = fmul nnan double %f, 1.0e-2\n  %r = call double @llvm.fmuladd.f64(double 0.0, double %k, double 1.5)\n",
+    );
+    assert!(out.contains("ret double 1.500000e+00"), "{out}");
+    let kept = fused("  %r = call double @llvm.fmuladd.f64(double 0.0, double %x, double 1.5)\n");
+    assert!(
+        kept.contains("llvm.fmuladd.f64(double 0.000000e+00, double %x"),
+        "x may be infinite or NaN: the call stays: {kept}"
+    );
+}
+
+/// `fmul` of a phi with a constant left the multiply after the phi: no
+/// `foldBinOpIntoSelectOrPhi` in `visit_fadd_or_fmul`. bench fpbench kept 11
+/// float phis the pin's instcombine removes (the multiply and `fptosi` of
+/// each fold into the phi arms).
+#[test]
+fn an_fmul_of_a_phi_with_a_constant_is_a_phi_of_the_products() {
+    let mut module = parsed(
+        "define float @f(i1 %c, float %x) {
+b0:
+  br i1 %c, label %join, label %exit
+exit:
+  br label %join
+join:
+  %p = phi float [ 2.000000e+00, %b0 ], [ %x, %exit ]
+  %r = fmul float %p, 6.400000e+01
+  ret float %r
+}
+",
+    );
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit);
+    let after = printed(&module);
+    assert!(after.contains("phi float [ 1.280000e+02, %b0 ]"), "the constant arm is the product: {after}");
+    assert!(after.contains("fmul float %x, 6.400000e+01"), "the other arm multiplies in its block: {after}");
+    assert!(!after.contains("fmul float %p"), "{after}");
+}
+
+/// A chain `t += s_k` over guarded sums (x86_fp80, whose constants
+/// `computeKnownFPClass` did not know): `p = phi(+0.0, x + 0.0)` is never
+/// -0.0, so `0.0 + p` is `p` and `p + phi(+0.0, y + 0.0)` folds into the
+/// arm of the second phi (the pin's instcombine). Left alone, every add of an
+/// unrolled `t += ld_sum(..)` sank to the end of the function: 8 live x87
+/// sums, 3 spills where the pin has 1 (x_ld_sum -O2).
+#[test]
+fn a_sum_chain_over_zero_started_phis_folds_into_the_arms() {
+    let mut module = parsed(
+        "define x86_fp80 @f(i1 %g, x86_fp80 %x, x86_fp80 %y) {
+entry:
+  br i1 %g, label %l0, label %m0
+l0:
+  %a = fadd x86_fp80 %x, 0.0
+  br label %m0
+m0:
+  %p0 = phi x86_fp80 [ 0.0, %entry ], [ %a, %l0 ]
+  %t0 = fadd x86_fp80 0.0, %p0
+  br i1 %g, label %l1, label %m1
+l1:
+  %b = fadd x86_fp80 %y, 0.0
+  br label %m1
+m1:
+  %p1 = phi x86_fp80 [ 0.0, %m0 ], [ %b, %l1 ]
+  %t1 = fadd x86_fp80 %t0, %p1
+  ret x86_fp80 %t1
+}
+",
+    );
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit);
+    let after = printed(&module);
+    assert!(after.contains("fadd x86_fp80 %p0, %b"), "the add moved into the arm of the second phi: {after}");
+    assert!(!after.contains("%t1"), "{after}");
+}
+
+/// `fadd nsz p0, p1` where `p0` cannot take the operation (`p1` is defined
+/// below it) but `p1` can: operand 1 got no turn once operand 0 was a phi that
+/// did not fold, so a chain `t += phi(..)` of guarded sums kept all its adds
+/// at the end (x_ld_sum -O2: 8 live x87 sums, the pin's 7).
+#[test]
+fn a_binop_of_two_phis_tries_the_second_when_the_first_does_not_fold() {
+    let mut module = parsed(
+        "define float @f(i1 %g, float %x, float %y) {
+entry:
+  br i1 %g, label %l0, label %m0
+l0:
+  %a = fmul float %x, 3.0
+  br label %m0
+m0:
+  %p0 = phi float [ 0.0, %entry ], [ %a, %l0 ]
+  br i1 %g, label %l1, label %m1
+l1:
+  %b = fmul float %y, 3.0
+  br label %m1
+m1:
+  %p1 = phi float [ 0.0, %m0 ], [ %b, %l1 ]
+  %t = fadd nsz float %p0, %p1
+  ret float %t
+}
+",
+    );
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit);
+    let after = printed(&module);
+    assert!(after.contains("fadd nsz float %p0, %b"), "the add moved into the arm of the second phi: {after}");
 }

@@ -29,9 +29,14 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent))
+import elfsize  # noqa: E402
 import irguard  # noqa: E402
+import llrmbin  # noqa: E402
 import omfcode  # noqa: E402
 import pin  # noqa: E402
+
+BRANCH = os.environ.get("LAND_BRANCH", "release/next")  # the integration branch (tools/landing/branch.sh)
 
 ROOT = HERE.parents[1]
 
@@ -94,7 +99,7 @@ def clang_flags(machine: str) -> tuple[str, list[str]]:
 
 def pin_text_size(obj: Path) -> int:
     out = subprocess.run(["size", "-A", str(obj)], capture_output=True, text=True).stdout
-    return sum(int(line.split()[1]) for line in out.splitlines() if line.startswith(".text"))
+    return elfsize.text_bytes(out)
 
 
 NOP = re.compile(r"^(nop\w*|data16|cs nop\w*|xchg\s+ax,ax|xchg\s+eax,eax)\b")
@@ -279,8 +284,9 @@ def one(source: Path, machine: str, level: str, llc: str, work: Path, old: bool,
     level_flag = "-O2" if level in ("O2", "Os") else f"-{level}"
     pin_asm, pin_obj = work / f"{stem}.pin.s", work / f"{stem}.pin.o"
     for args, out in ((["-x86-asm-syntax=intel", "-filetype=asm"], pin_asm), (["-filetype=obj"], pin_obj)):
+        llrmbin.fresh(out)
         run = pin.llc([level_flag, "-frame-pointer=none", *args, "-o", str(out)], text, target)
-        if run.returncode or not out.exists():
+        if not llrmbin.produced(run, out):
             return "pin llc: " + (run.stderr.strip().splitlines() or ["failed"])[0]
     if forced_frame(pin_asm.read_text(), text):
         return "pin asm keeps a frame pointer the source did not force"
@@ -289,15 +295,16 @@ def one(source: Path, machine: str, level: str, llc: str, work: Path, old: bool,
         return subprocess.run([llc, f"-m{cfg['bits']}", f"-{level}", f"-march={cfg['march']}", f"--isel={isel}", *abi_flags(cfg, ours_text), *extra, str(ours_in)], capture_output=True, text=True)
 
     asm = work / f"{stem}.ours.s"
+    llrmbin.fresh(asm)
     made = ours("dag", "-S", "-o", str(asm))
-    if made.returncode:
+    if not llrmbin.produced(made, asm):
         return "ours: " + (made.stderr.strip().splitlines() or ["failed"])[0]
 
     def bytes_of(isel: str) -> tuple[int, int] | None:
         """Code bytes of the object, and the same without its nops."""
         obj = Path(tempfile.mktemp(suffix=".obj", dir=work))
         ran = ours(isel, "-o", str(obj))
-        if ran.returncode or not obj.exists():
+        if not llrmbin.produced(ran, obj):
             return None
         data = obj.read_bytes()
         return omfcode.code_bytes_of(data)[0], padding_free(omfcode.code_blob_of(data), int(cfg["bits"]))
@@ -391,7 +398,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--work", required=True)
     parser.add_argument("--jobs", type=int, default=4)
     parser.add_argument("--old", action="store_true")
-    parser.add_argument("--ref", default="origin/feat/parity", help="the branch the llc should be built on")
+    parser.add_argument("--ref", default=f"origin/{BRANCH}", help="the branch the llc should be built on")
     parser.add_argument("--max-behind", type=int, default=20, help="commits behind --ref before the header warns")
     parser.add_argument("--dyn", action="store_true", help="m32 only: also run each kernel in the vsgcc harness (dyn.py) and rank flagged rows by dynamic clocks")
     parser.add_argument("--reopt", action="store_true", help="clang's -O IR re-run through the pin's opt, then both llcs (not the default: see front_end_flags)")

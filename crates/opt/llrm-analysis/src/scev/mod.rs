@@ -13,6 +13,10 @@
 //! function for function, each naming its C++ original, and verified against
 //! LLVM's own constructors through `tools/scev/oracle.cpp`.
 
+/// SCEV's ranges are 256 bits wide: `willNotOverflow` widens an `i128`
+/// operation to `i256`.
+pub type ConstantRange = llrm_mir::constantrange::Range<llrm_mir::apint::U256>;
+
 pub mod analysis;
 pub mod ap;
 pub mod arith;
@@ -66,6 +70,8 @@ pub mod predicated;
 pub mod print;
 pub mod quadratic;
 pub mod range;
+#[cfg(test)]
+mod range_attribute_tests;
 #[cfg(test)]
 mod range_factoring_tests;
 #[cfg(test)]
@@ -261,9 +267,9 @@ pub struct ScalarEvolution {
     /// `ProvingSplitPredicate`.
     pub(super) proving_split_predicate: bool,
     /// `UnsignedRanges`.
-    pub(super) unsigned_ranges: HashMap<Scev, llrm_mir::constantrange::ConstantRange>,
+    pub(super) unsigned_ranges: HashMap<Scev, ConstantRange>,
     /// `SignedRanges`.
-    pub(super) signed_ranges: HashMap<Scev, llrm_mir::constantrange::ConstantRange>,
+    pub(super) signed_ranges: HashMap<Scev, ConstantRange>,
     /// `ConstantMultipleCache`.
     pub(super) constant_multiple_cache: HashMap<Scev, Ap>,
     /// `getNotSCEV` of a non-constant: built once per expression (it is
@@ -315,8 +321,19 @@ impl Default for ScalarEvolution {
     }
 }
 
+thread_local! {
+    static MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many [`ScalarEvolution`]s this thread made, for a test that a pass
+/// asking many questions of one function keeps one table of expressions.
+pub fn made() -> usize {
+    MADE.with(std::cell::Cell::get)
+}
+
 impl ScalarEvolution {
     pub fn new() -> Self {
+        MADE.with(|made| made.set(made.get() + 1));
         let mut se = Self {
             nodes: Vec::new(),
             unique: HashMap::with_capacity_and_hasher(256, Default::default()),
@@ -702,7 +719,7 @@ pub fn value_id(
             K::Zero => 2,
             K::Bytes(_) => 3,
             K::Int(_) => 5,
-            K::Float(_) | K::Float80(_) => 7,
+            K::Float(_) | K::Float80(_) | K::Float128(_) => 7,
             K::Null => 9,
             K::Aggregate(_) => match cx.context.types.get(cx.context.get(id).ty) {
                 MirType::Array { .. } => 11,
@@ -800,6 +817,7 @@ fn llvm_opcode(
         O::Phi => 57,
         O::Call(_) => 58,
         O::Select => 59,
+        O::VaArg => 62,
         O::ExtractValue(_) => 66,
         O::InsertValue(_) => 67,
         O::LandingPad { .. } => 68,

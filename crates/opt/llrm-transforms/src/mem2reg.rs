@@ -450,6 +450,65 @@ fn declared_variables(
         .collect()
 }
 
+/// The variable fragments the `#dbg_assign` records linked to `alloca` say
+/// something of, one record each (`AssignmentTrackingInfo::init`).
+fn assigned_variables(
+    function: &Function,
+    alloca: InstId,
+) -> Vec<(llrm_mir::MetadataId, Option<llrm_mir::MetadataId>)> {
+    let mut out: Vec<(llrm_mir::MetadataId, Option<llrm_mir::MetadataId>)> = Vec::new();
+    for at in function.assignment_markers(alloca) {
+        let record = function.debug_records()[at];
+        if !out.contains(&(record.variable, record.expression)) {
+            out.push((record.variable, record.expression));
+        }
+    }
+    out
+}
+
+/// `AssignmentTrackingInfo::updateForDeletedStore`: the `#dbg_assign`s linked
+/// to `store` become `#dbg_value`s where they stand, and are deleted; a
+/// variable of `assigned` with none linked to the store is its stored value
+/// from the store on. PromoteMemoryToRegister.cpp#L148
+fn update_for_deleted_store(
+    context: &Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    alloca: InstId,
+    assigned: &[(llrm_mir::MetadataId, Option<llrm_mir::MetadataId>)],
+    store: InstId,
+    stored: Operand,
+) {
+    if assigned.is_empty() {
+        return;
+    }
+    let markers = function.assignment_markers(store);
+    let mut seen = Vec::new();
+    for &at in &markers {
+        let record = function.debug_records()[at];
+        let llrm_mir::DebugWhat::Assign { value, .. } = record.what else { continue };
+        seen.push((record.variable, record.expression));
+        let what = value.map_or(llrm_mir::DebugWhat::Gone, llrm_mir::DebugWhat::Value);
+        function.add_debug_record_with(record.before, record.variable, what, record.expression, record.location);
+    }
+    function.remove_debug_records(&markers);
+    for &(variable, expression) in assigned {
+        if !seen.contains(&(variable, expression)) {
+            convert_declares_to_values(context, layout, function, alloca, &[variable], store, stored);
+        }
+    }
+}
+
+/// `at::deleteAssignmentMarkers`: the `#dbg_assign`s linked to `alloca` go with
+/// it. PromoteMemoryToRegister.cpp#L680
+fn delete_assignment_markers(
+    function: &mut Function,
+    alloca: InstId,
+) {
+    let markers = function.assignment_markers(alloca);
+    function.remove_debug_records(&markers);
+}
+
 /// `ConvertDebugDeclareToDebugValue`: before `at`, each of `variables` is
 /// `value`: all of it, or the `bytes` of it that the value covers.
 /// PromoteMemoryToRegister.cpp#L118 (`Local.cpp`)
@@ -534,8 +593,10 @@ fn rewrite_single_store_alloca(
     }
     // The variable is the stored value from the store on.
     let variables = declared_variables(function, address);
+    let assigned = assigned_variables(function, alloca);
     let stored = function.instruction(only_store).operands[0];
     convert_declares_to_values(context, layout, function, alloca, &variables, only_store, stored);
+    update_for_deleted_store(context, layout, function, alloca, &assigned, only_store, stored);
     function.erase(only_store).expect("a store has no users");
     lbi.delete_value(only_store);
     erase_alloca(function, alloca);
@@ -551,6 +612,7 @@ fn erase_alloca(
     for user in function.users(address).iter().map(|one| one.user).collect::<Vec<_>>() {
         function.erase(user).expect("a derived pointer nothing uses");
     }
+    delete_assignment_markers(function, alloca);
     function.erase(alloca).expect("nothing uses it any more");
 }
 
@@ -613,9 +675,11 @@ fn promote_single_block_alloca(
     }
     // The stores and the alloca are dead.
     let variables = declared_variables(function, address);
+    let assigned = assigned_variables(function, alloca);
     for (_, store) in stores {
         let stored = function.instruction(store).operands[0];
         convert_declares_to_values(context, layout, function, alloca, &variables, store, stored);
+        update_for_deleted_store(context, layout, function, alloca, &assigned, store, stored);
         function.erase(store).expect("a store has no users");
         lbi.delete_value(store);
     }
@@ -680,6 +744,9 @@ struct PromoteMem2Reg<'a> {
     alloca_value_types: Vec<Option<TypeId>>,
     /// The variables declared to live in each alloca (`AllocaDPUsers`).
     alloca_variables: Vec<Vec<llrm_mir::MetadataId>>,
+    /// `AllocaATInfo`: the fragments of variables the `#dbg_assign`s of each
+    /// alloca name.
+    alloca_assigned: Vec<Vec<(llrm_mir::MetadataId, Option<llrm_mir::MetadataId>)>>,
     visited: IdSet<BlockId>,
     incoming_vals: VectorWithUndo,
     worklist: Vec<RenamePassData>,
@@ -784,6 +851,7 @@ impl<'a> PromoteMem2Reg<'a> {
 
             self.alloca_value_types[alloca_num] = info.value_type;
             self.alloca_variables[alloca_num] = declared_variables(self.function, address);
+            self.alloca_assigned[alloca_num] = assigned_variables(self.function, alloca);
             self.alloca_lookup.insert(address, alloca_num);
 
             // The blocks that define the value, and those it is live into.
@@ -837,6 +905,7 @@ impl<'a> PromoteMem2Reg<'a> {
                 let value = poison(self.context, ty);
                 self.function.replace_value(address, value);
             }
+            delete_assignment_markers(self.function, alloca);
             self.function.erase(alloca).expect("nothing uses it");
         }
 
@@ -1038,7 +1107,15 @@ impl<'a> PromoteMem2Reg<'a> {
                 let result = self.function.instruction(inst).result.expect("a phi's value");
                 self.incoming_vals.set(alloca_no, Operand::Value(result));
                 // And the variable is the phi from the top of the block.
-                let variables = std::mem::take(&mut self.alloca_variables[alloca_no]);
+                let mut variables = std::mem::take(&mut self.alloca_variables[alloca_no]);
+                // `updateForNewPhi`: each fragment an assign names is the phi
+                // too.
+                let declared = variables.len();
+                for &(variable, _) in &self.alloca_assigned[alloca_no] {
+                    if !variables.contains(&variable) {
+                        variables.push(variable);
+                    }
+                }
                 let top =
                     self.function.iter_block(block).find(|&one| self.function.instruction(one).opcode != Opcode::Phi);
                 if let Some(top) = top {
@@ -1053,6 +1130,7 @@ impl<'a> PromoteMem2Reg<'a> {
                         Operand::Value(result),
                     );
                 }
+                variables.truncate(declared);
                 self.alloca_variables[alloca_no] = variables;
             }
         }
@@ -1092,6 +1170,9 @@ impl<'a> PromoteMem2Reg<'a> {
                         value,
                     );
                     self.alloca_variables[alloca_no] = variables;
+                    let assigned = std::mem::take(&mut self.alloca_assigned[alloca_no]);
+                    update_for_deleted_store(self.context, self.layout, self.function, alloca, &assigned, inst, value);
+                    self.alloca_assigned[alloca_no] = assigned;
                     self.function.erase(inst).expect("a store has no users");
                 }
                 _ => {}
@@ -1193,6 +1274,7 @@ pub(crate) fn promote_mem_to_reg(
         alloca_lookup: Default::default(),
         alloca_value_types: vec![None; count],
         alloca_variables: vec![Vec::new(); count],
+        alloca_assigned: vec![Vec::new(); count],
         visited: Default::default(),
         incoming_vals: VectorWithUndo { values: Vec::new(), undo: Vec::new() },
         worklist: Vec::new(),

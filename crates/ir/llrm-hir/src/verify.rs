@@ -208,7 +208,9 @@ fn _facts(module: &model::Module) -> Result<(), InvalidHIR> {
             Subject::Instruction { function: id, id: at } => index.instruction(id, at).is_some_and(|i| match fact {
                 // Of what it yields, and of what it accesses.
                 llrm_mir::facts::Fact::Range(_) => !i.results.is_empty(),
-                llrm_mir::facts::Fact::Align(_) => matches!(i.op, model::Op::Load | model::Op::Store),
+                llrm_mir::facts::Fact::Align(_) | llrm_mir::facts::Fact::Access(_) => {
+                    matches!(i.op, model::Op::Load | model::Op::Store)
+                }
                 _ => true,
             }),
             Subject::Operand { function: id, instruction, operand } => {

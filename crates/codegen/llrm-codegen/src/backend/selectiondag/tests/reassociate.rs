@@ -65,7 +65,15 @@ fn a_chain_of_stored_increments_is_x_plus_k() {
     let one = dag.get_constant(1, EVT::I32);
     let a = dag.get_node(ISD::Add, EVT::I32, &[x, one]);
     let b = dag.get_node(ISD::Add, EVT::I32, &[a, one]);
-    let info = MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Stack(0), ext: None, space: 0 };
+    let info = MemInfo {
+        mem_vt: EVT::I32,
+        align: 4,
+        volatile: false,
+        base: MemBase::Stack(0),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     let first = dag.get_store(dag.entry_node(), a, ptr, info.clone());
     let second = dag.get_store(first, b, ptr, info);
     dag.set_root(second);

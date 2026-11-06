@@ -87,6 +87,14 @@ fn cost_model(prices: &llrm_target::CpuPrices) -> std::rc::Rc<dyn llrm_mir::targ
 }
 
 impl llrm_target::Target for M16 {
+    fn objects(&self) -> &'static dyn llrm_debug::DebugObjectTarget {
+        &llrm_x86::mc::X86Objects
+    }
+
+    fn debug_target(&self) -> llrm_debug::DebugTarget {
+        llrm_x86::mc::fixup::debug_target(16)
+    }
+
     fn registers(&self) -> &'static llrm_lir::registers::Info {
         &REGISTER_INFO
     }
@@ -212,6 +220,12 @@ impl llrm_target::Target for M16 {
         0
     }
 
+    /// DEVIATE SD543: no `rep` on `bsf`; the 386, 486 and Pentium have no
+    /// `tzcnt`, so the pin's prefix is a dead byte. Owner m16. Exit 2026-11-20.
+    fn bsf_rep_prefix(&self) -> bool {
+        false
+    }
+
     /// DEVIATE E2-1: no loop is aligned (the pin's is 16 bytes).
     fn pref_loop_alignment(&self) -> u8 {
         0
@@ -315,6 +329,10 @@ impl llrm_target::Target for M16 {
 
     fn frame_register(&self) -> RegId {
         llrm_x86::calling::frame(CALLING.native())
+    }
+
+    fn frame_enter(&self) -> bool {
+        CALLING.native().frame_enter
     }
 
     /// Past BP and a 2-byte return address, or a 4-byte far one.
@@ -587,7 +605,17 @@ mod tuning_tests {
         assert_eq!(table.max_stores_per_memset_opt_size, 4);
         assert_eq!((table.max_stores_per_memcpy_opt_size, table.max_stores_per_memmove_opt_size), (2, 2));
         assert_eq!(table.size_milliclocks_per_byte, 10_000);
+        assert_eq!(
+            table.speed_milliclocks_per_byte,
+            crate::timings::speed_milliclocks_per_byte(),
+            "the compiler reads the judge's row"
+        );
+        assert_eq!(table.speed_milliclocks_per_byte, 500, "policy: user 2026-10-31, 1 clk = 2 B");
         assert_eq!((table.unroll_threshold, table.unroll_max_percent_threshold_boost), (Some(0), Some(100)));
+        assert_eq!(table.unroll_partial_threshold, Some(0));
+        assert_eq!(table.x87_stack_slots, Some(8));
+        assert!(table.slots_loop_width_rule, "m16 keeps a word out of a loop-held wider stack slot (SLOTS-LOOPWIDTH)");
+        assert_eq!(table.unswitch_threshold, Some(0));
         assert_eq!(
             Tuning {
                 max_stores_per_memset: 16,
@@ -597,9 +625,21 @@ mod tuning_tests {
                 max_stores_per_memcpy_opt_size: 4,
                 max_stores_per_memmove_opt_size: 4,
                 size_milliclocks_per_byte: 0,
+                multiply_by_clocks: false,
+                price_pin_multiplies: false,
+                speed_milliclocks_per_byte: 0,
+                price_fills: false,
                 unroll_threshold: None,
                 unroll_max_percent_threshold_boost: None,
+                unroll_partial_threshold: None,
+                x87_stack_slots: None,
+                slots_loop_width_rule: false,
+                rotation_header_priced_at_size: false,
+                unswitch_threshold: None,
                 inline_threshold: None,
+                split_merged_conditions: false,
+                inline_size_guard_at_size: false,
+                keep_constant_displacements: false,
                 ..table
             },
             Tuning::PIN

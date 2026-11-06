@@ -26,6 +26,9 @@
 //!    counts decide are folded by those.
 //! 4. `lftr::replaced` (`linearFunctionTestReplace`; `LLRM_NO_SCEV_LFTR`): an
 //!    exit tests a counter against the value it has at the last trip.
+//!    `exitne::strengthened` (beyond the pin; `LLRM_NO_SCEV_EXITNE`) then makes
+//!    `!=` the strict compare of a unit-stride counter that never passes its
+//!    bound, which LFTR left.
 //! 5. `exitsink::sunk`: final updates only exit phis read move to the exits.
 //!
 //! # Example
@@ -229,6 +232,10 @@ impl FunctionPass for IndVars {
         // pass: a loop's trip count is worked out once, not once for each step.
         // A step that changed the body drops the expressions its edits touched;
         // the blocks and edges stay, so the tree and the loops do not.
+        // First, as the pin's `rewriteNonIntegerIVs`: a float counter is an
+        // integer one before ScalarEvolution looks at the loop.
+        let floats =
+            crate::floativ::enabled() && crate::floativ::converted(unit.context, unit.layout, unit.function, &outer);
         let mut session = ScevSession::of(unit.context, unit.function, &outer);
         // The expressions of the pass before, as the pin keeps one SE for the
         // loop passes; handed back below, current.
@@ -302,20 +309,34 @@ impl FunctionPass for IndVars {
         let tested = self.lftr
             && crate::lftr::enabled()
             && crate::lftr::replaced_in(&mut session, unit.context, unit.layout, unit.function, unit.declared, &outer);
+        // After LFTR, which owns the exits it can rewrite against a trip count.
+        let strengthened = crate::exitne::enabled()
+            && outer.target().tti().is_some_and(|tti| tti.prefers_exit_ne())
+            && crate::exitne::strengthened_in(&mut session, unit.context, unit.layout, unit.function, &outer);
         let found = analyses.get::<passes::Loops>(unit.context, unit.layout, unit.function);
         let loops = cfg::natural(unit.function, &found);
         let sunk = crate::exitsink::sunk(unit.function, &loops);
         // The pin deletes what an edit stopped reading as it goes; a sweep of
         // the function (0.8 M Ir on d_faces' largest body) found the same.
-        let dead = (compared || rewrote || canonical || optimized || predicated || tested || sunk || merged) && {
-            match unit.function.touched_since(start) {
-                Some(touched) => {
-                    let seeds: Vec<_> = touched.named.iter().collect();
-                    dead::dead_from(unit.context, outer.callees(), unit.function, seeds)
+        let dead = (floats
+            || compared
+            || rewrote
+            || canonical
+            || strengthened
+            || optimized
+            || predicated
+            || tested
+            || sunk
+            || merged)
+            && {
+                match unit.function.touched_since(start) {
+                    Some(touched) => {
+                        let seeds: Vec<_> = touched.named.iter().collect();
+                        dead::dead_from(unit.context, outer.callees(), unit.function, seeds)
+                    }
+                    None => dead::dead(unit.context, outer.callees(), unit.function),
                 }
-                None => dead::dead(unit.context, outer.callees(), unit.function),
-            }
-        };
+            };
         // The edits after the last step (lftr, the sinking, the dead code).
         // The sinking moves instructions no count reads, LFTR keeps the exit
         // count it was built from and the dead code is values

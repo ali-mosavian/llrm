@@ -1,7 +1,7 @@
 //! A small DAG for the tests and for pricing: nodes in a vector, uses found by
 //! scanning.
 
-use crate::dag::{Dag, FpClass, Hooks, LoadExt, MemRef, SDValue};
+use crate::dag::{Dag, FpClass, Hooks, LoadExt, MemRef, SDValue, X86Predicates};
 use crate::generated::ids::{isd, mvt};
 use crate::matcher::{Opcode, Vt};
 use crate::x86_addr::{AddrDag, Symbol, Wrapped};
@@ -22,6 +22,11 @@ pub struct Node {
     /// The segment register the memory node addresses through.
     pub segment: Option<u16>,
     pub dead: bool,
+    /// `SDNodeFlags::hasNoUnsignedWrap` (`add nuw`).
+    pub no_unsigned_wrap: bool,
+    /// `AtomicSDNode::getMergedOrdering` as LLVM's number; none for a plain
+    /// access.
+    pub atomic_ordering: Option<u8>,
 }
 
 #[derive(Default)]
@@ -341,12 +346,35 @@ impl Dag for TestDag {
     ) -> bool {
         false
     }
+    fn atomic_ordering(
+        &self,
+        node: u32,
+    ) -> Option<u8> {
+        self.nodes[node as usize].atomic_ordering
+    }
+    fn has_no_unsigned_wrap(
+        &self,
+        node: u32,
+    ) -> bool {
+        self.nodes[node as usize].no_unsigned_wrap
+    }
+    /// Known bits of the two shapes a pattern asks about: a constant, and an
+    /// `and` with a constant (a bit the constant clears is zero). Anything else
+    /// is not known to be zero.
     fn masked_value_is_zero(
         &self,
-        _: SDValue,
-        _: u64,
+        value: SDValue,
+        mask: u64,
     ) -> bool {
-        false
+        let node = &self.nodes[value.node as usize];
+        let zeros = |constant: i64| constant as u64 & mask == 0;
+        match (node.opcode, node.constant) {
+            (_, Some(constant)) => zeros(constant),
+            (op, None) if op == isd::AND => {
+                node.ops.iter().any(|operand| self.nodes[operand.node as usize].constant.is_some_and(|c| zeros(c)))
+            }
+            _ => false,
+        }
     }
     fn have_no_common_bits_set(
         &self,
@@ -638,6 +666,15 @@ impl Hooks<TestDag> for TestHooks {
     ) -> bool {
         false
     }
+    fn may_load_store(
+        &self,
+        _: u16,
+    ) -> (bool, bool) {
+        (true, true)
+    }
+}
+
+impl X86Predicates<TestDag> for TestHooks {
     fn has_sse_unaligned_mem(&self) -> bool {
         false
     }
@@ -684,12 +721,6 @@ impl Hooks<TestDag> for TestHooks {
         _: u32,
     ) -> bool {
         true
-    }
-    fn may_load_store(
-        &self,
-        _: u16,
-    ) -> (bool, bool) {
-        (true, true)
     }
 }
 

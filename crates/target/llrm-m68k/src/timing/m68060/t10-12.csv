@@ -1,0 +1,4 @@
+#title,Clear (CLR) Execution Times,page,10-18,notes,"¹ Add 2(1/0) cycles to the (bd,An,Xi*SF) time for a memory indirect address."
+Size,Dn,An,(An),(An)+,-(An),"(d16,An)","(d8,An,Xi*SF)","(bd,An,Xi*SF)¹",(xxx).WL
+"Byte, Word",1(0/0),—,1(0/1),1(0/1),1(0/1),1(0/1),1(0/1),2(0/1),1(0/1)
+Long,1(0/0),—,1(0/1),1(0/1),1(0/1),1(0/1),1(0/1),2(0/1),1(0/1)

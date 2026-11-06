@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Reads the pin's X86GenInstrInfo.inc (-gen-instr-info) into one line per instruction.
 
-    instrinfo.py X86GenInstrInfo.inc OUT.txt SYMBOLS.txt
+    instrinfo.py X86GenInstrInfo.inc OUT.txt SYMBOLS.txt [NAMESPACE]
 
 The opcode column of the pin's rows is not used: m16.td adds instructions and shifts every number
 after them, so a row is named, and the name is looked up in the pin's headers or `own_ids.txt`.
@@ -15,9 +15,10 @@ import re
 import sys
 
 src, out, symbols_out = sys.argv[1:4]
+ns = (sys.argv[4] if len(sys.argv) > 4 else "X86") + "::"  # the target namespace; x86 by default
 text = open(src).read()
 
-row = re.compile(r"^\s*\{ (\d+),\s*(\d+),\s*(\d+),\s*(\d+),\s*\d+,\s*(\d+),\s*(\d+),\s*X86OpInfoBase \+ (\d+),\s*(\d+),\s*(.*?),\s*0x[0-9a-fA-F]+ULL \},\s*// (\w+)$")
+row = re.compile(r"^\s*\{ (\d+),\s*(\d+),\s*(\d+),\s*(\d+),\s*\d+,\s*(\d+),\s*(\d+),\s*\w+OpInfoBase \+ (\d+),\s*(\d+),\s*(.*?),\s*0x[0-9a-fA-F]+ULL \},\s*// (\w+)$")
 
 implicit_start = text.index("  }, {\n    /* 0 */")
 implicit_end = text.index("  }, {", implicit_start + 5)
@@ -59,9 +60,9 @@ with open(out, "w") as f:
         names.update(uses + defs)
         ops = operands[int(opoff): int(opoff) + int(numops)]
         for cls, kind, _ in ops:
-            names.update(n for n in (cls, kind) if n.startswith("X86::"))
+            names.update(n for n in (cls, kind) if n.startswith(ns))
         op_text = " ".join(f"{c}|{k}|{t}" for c, k, t in ops)
         f.write(f"{name} {numops} {numdefs} {size} {','.join(flag_names) or '-'} "
                 f"{','.join(uses) or '-'} {','.join(defs) or '-'} {op_text}\n")
 with open(symbols_out, "w") as f:
-    f.write("\n".join(sorted(n for n in names if n.startswith("X86::"))) + "\n")
+    f.write("\n".join(sorted(n for n in names if n.startswith(ns))) + "\n")

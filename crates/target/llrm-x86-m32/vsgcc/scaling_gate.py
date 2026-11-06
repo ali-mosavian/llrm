@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Growth of llrm-c's cost with size: the cost at N/2, N and 2N on generated programs, per axis and level and per step of the compile.
+"""Growth of llrm-cc's cost with size: the cost at N/2, N and 2N on generated programs, per axis and level and per step of the compile.
 
     python3 scaling_gate.py [--jobs N]        print the costs as JSON (tools/measure.py compares them with the merge-base's)
 
-Cost is user-space instructions (`perf stat`), less what llrm-c spends on an empty file: work done, so the ratio is the same on a
+Cost is user-space instructions (`perf stat`), less what llrm-cc spends on an empty file: work done, so the ratio is the same on a
 loaded host. tools/measure.py gates D = c(2N) - 3c(N) + 2c(N/2) = 1.5kN^2 of c = a + bN + kN^2: nil for fixed and linear work, so a
-saving of either does not move it and a pass that goes quadratic does. Per step, llrm-c's LLRM_DEBUG=time
+saving of either does not move it and a pass that goes quadratic does. Per step, llrm-cc's LLRM_DEBUG=time
 [instr] rows give each step's own instructions; a step with LOW or more of the work is read. Exit 77 without a counter.
 The generated programs are scaling.py's AXES; SIZES holds the N per axis.
 """

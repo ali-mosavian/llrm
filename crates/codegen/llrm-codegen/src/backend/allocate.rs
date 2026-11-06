@@ -254,7 +254,7 @@ pub fn allocate(
     classes: &RegisterClasses,
 ) -> Result<Assignment, Error> {
     let mut frame = Frame::new(0);
-    Ok(greedy_rewritten(body, pinned, unspillable, protected, cpu, segments, classes, &[], &mut frame)?.0)
+    Ok(greedy_rewritten(body, pinned, unspillable, protected, cpu, segments, classes, &[], false, &mut frame)?.0)
 }
 
 thread_local! {
@@ -277,6 +277,7 @@ pub fn greedy_rewritten(
     segments: &Segments,
     classes: &RegisterClasses,
     saved: &[RegId],
+    basic_semantics: bool,
     frame: &mut Frame,
 ) -> Result<(Assignment, LirBody, BTreeSet<u32>), Error> {
     targets::profile(cpu).map_err(Error::Value)?;
@@ -306,8 +307,12 @@ pub fn greedy_rewritten(
         sets: Some(&sets),
         stable_loads: targets::profile(cpu).map_or(true, |profile| profile.stable_loads),
         saved,
+        tii: &crate::greedy::tii::X86InstrInfo { bits: current.bits, classes, basic_semantics },
+        tri: &crate::greedy::targetinfo::X86RegisterInfo,
+        size: crate::greedy::greedy::OPT_SIZE.with(std::cell::Cell::get),
+        lane_pins: false,
     };
-    let mode = crate::greedy::shadow::Mode::Inline { frame: &mut *frame, classes };
+    let mode = crate::greedy::shadow::Mode::Inline { frame: &mut *frame };
     let decided = crate::greedy::shadow::decide_with(&inputs, mode);
     if llrm_support::env_flag!("LLRM_GREEDY_TRACE") {
         if let Some(d) = &decided {
@@ -333,7 +338,7 @@ pub fn greedy_rewritten(
     let Some(decided) = decided.filter(|decided| decided.report.stats.failed == 0 && !decided.spill_failed) else {
         return Err(Error::Value(format!("{}: the greedy allocator could not place every range", body.name)));
     };
-    let Some(edited) = decided.edited else {
+    let Some(mut edited) = decided.edited else {
         return Err(Error::Value(format!("{}: the greedy allocator wrote no body", body.name)));
     };
     if llrm_support::env_flag!("LLRM_GREEDY_TRACE") {
@@ -355,6 +360,30 @@ pub fn greedy_rewritten(
         );
     }
     GREEDY_RUNS.with(|runs| runs.set((runs.get().0 + 1, runs.get().1, runs.get().2)));
+    if llrm_support::env_flag!("LLRM_LDV_DUMP") {
+        crate::backend::livedebugvariables::dump(
+            &edited,
+            &decided.placed,
+            &decided.spilled,
+            &decided.parents,
+            frame,
+            saved,
+        );
+    }
+    if llrm_support::env_flag!("LLRM_LDV_EMIT") {
+        let found = crate::backend::livedebugvariables::ranges_of(
+            &edited,
+            &decided.placed,
+            &decided.spilled,
+            &decided.parents,
+            &|value| crate::backend::frame::FrameInfo::home(&*frame, value),
+            &frame.stacks,
+            saved,
+        );
+        let slots = found.insns.iter().map(|&(slot, id)| (id, slot)).collect();
+        edited = edited.with_slots(&slots);
+        edited.placed = Arc::new(crate::backend::livedebugvariables::Placed { ranges: found.flow, insns: found.insns });
+    }
     let r#where: IndexMap<u32, RegId> = decided.placed.into_iter().collect();
     Ok((
         Assignment { r#where, spilled: BTreeSet::new(), cost: 0.0, optimal: false, why: "llvm greedy".to_owned() },
@@ -409,6 +438,10 @@ pub struct RegAlloc {
     /// one costs a `push` and a `pop` (`tryAssignCSRFirstTime`). None: it
     /// costs nothing.
     pub saved: Vec<RegId>,
+    /// A build for size (`MF->getFunction().hasOptSize()`).
+    pub size: bool,
+    /// The module is BASIC's: faults are observed in statement order.
+    pub basic_semantics: bool,
 }
 
 impl RegAlloc {
@@ -428,7 +461,18 @@ impl RegAlloc {
             segments: segments.clone(),
             classes: Rc::clone(classes),
             saved: Vec::new(),
+            size: false,
+            basic_semantics: false,
         })
+    }
+
+    /// For a build for size.
+    pub fn with_size(
+        mut self,
+        size: bool,
+    ) -> Self {
+        self.size = size;
+        self
     }
 
     /// With the registers the function's convention keeps.
@@ -437,6 +481,15 @@ impl RegAlloc {
         saved: Vec<RegId>,
     ) -> Self {
         self.saved = saved;
+        self
+    }
+
+    /// With BASIC's fault order observed.
+    pub fn with_basic_semantics(
+        mut self,
+        basic_semantics: bool,
+    ) -> Self {
+        self.basic_semantics = basic_semantics;
         self
     }
 
@@ -515,6 +568,10 @@ impl RegAlloc {
         self.pinned.retain(|value, register| !(regs.is_segment(*register) && confined.get(value) == Some(&selectors)));
         let (constrained_body, fixed) = constrain::constrained(&body, Some(&self.pinned), &self.classes);
         body = constrain::hoisted(&constrained_body, &fixed);
+        // A copy of an undefined value the constraints made is undefined too.
+        if body.insns().iter().any(|one| crate::processimpdefs::implicit_def_of(one).is_some()) {
+            body = crate::processimpdefs::processed_before_allocation(&body);
+        }
         let clash: BTreeSet<u32> = fixed
             .keys()
             .copied()
@@ -558,6 +615,7 @@ impl RegAlloc {
         // Each spill gets a slot of its own; they are shared once, over the
         // allocation (`crate::backend::slots::slots_colored`).
         frame.borrow_mut().defer_colours = true;
+        crate::greedy::greedy::OPT_SIZE.with(|size| size.set(self.size));
         let allocated = greedy_rewritten(
             &body,
             Some(&pins),
@@ -567,6 +625,7 @@ impl RegAlloc {
             &segments,
             &self.classes,
             &self.saved,
+            self.basic_semantics,
             &mut frame.borrow_mut(),
         );
         frame.borrow_mut().defer_colours = false;
@@ -574,7 +633,11 @@ impl RegAlloc {
         drop(base);
         llrm_support::debug!("regalloc", "{}: {} insns, {} spilled", body.name, out.insns().len(), spilled.len());
         let colored = llrm_support::debug::timed("spill slots shared", || {
-            crate::backend::slots::slots_colored(&out, &mut frame.borrow_mut())
+            crate::backend::slots::slots_colored(
+                &out,
+                &mut frame.borrow_mut(),
+                cpu.target().tuning().slots_loop_width_rule,
+            )
         });
         let _apply = llrm_support::debug::span("regalloc apply");
         crate::backend::rewriter::rewrite(&colored, &got, &self.classes)
@@ -729,7 +792,7 @@ mod tests {
         value: u32,
         width: u32,
     ) -> Loc {
-        Loc::Held(Held { value, width })
+        Loc::Held(Held { value, width, offset: 0 })
     }
 
     fn imm(
@@ -791,6 +854,7 @@ mod tests {
             &target::BUILT_IN,
             &crate::backend::classes::RegisterClasses::m16(),
             &[],
+            false,
             &mut Frame::new(0),
         );
         let message = got.err().map(|error| error.to_string()).expect("an error, not a fallback allocation");
@@ -1103,8 +1167,8 @@ mod tests {
     fn test_an_operand_read_as_undef_is_placed_in_any_register() {
         let what = Semantics {
             name: Some("mov".into()),
-            dests: vec![Loc::Held(Held { value: 2, width: 2 })],
-            sources: vec![Loc::Held(Held { value: 9, width: 2 })],
+            dests: vec![Loc::Held(Held { value: 2, width: 2, offset: 0 })],
+            sources: vec![Loc::Held(Held { value: 9, width: 2, offset: 0 })],
             ..Semantics::new(Operation::Move)
         };
         let mut one = Insn::new(0, None, Some(what), vec![2], Vec::new());
@@ -1123,8 +1187,8 @@ mod tests {
     fn test_a_byte_read_as_undef_does_not_take_a_register_without_a_byte() {
         let what = Semantics {
             name: Some("movzx".into()),
-            dests: vec![Loc::Held(Held { value: 2, width: 2 })],
-            sources: vec![Loc::Held(Held { value: 9, width: 1 })],
+            dests: vec![Loc::Held(Held { value: 2, width: 2, offset: 0 })],
+            sources: vec![Loc::Held(Held { value: 9, width: 1, offset: 0 })],
             ..Semantics::new(Operation::Extend)
         };
         let mut one = Insn::new(0, None, Some(what), vec![2], Vec::new());
@@ -1143,7 +1207,7 @@ mod tests {
     /// `shl`/`sar` mask no longer turns into an `sbb`).
     #[test]
     fn test_an_undef_sbb_source_is_the_destination_register() {
-        let held = |value: u32| Loc::Held(Held { value, width: 2 });
+        let held = |value: u32| Loc::Held(Held { value, width: 2, offset: 0 });
         let what = Semantics {
             name: Some("sbb".into()),
             dests: vec![held(2)],
@@ -1191,7 +1255,8 @@ mod tests {
 
     fn _based_cell() -> Insn {
         let r#where = Addr { base: (RegId::SI).iced(), ..Addr::new(Space::Segment, 0x10) };
-        let cell = Mem { disp_width: 2, base: Some(Held { value: 21, width: 2 }), ..Mem::new(Some(r#where), 2) };
+        let cell =
+            Mem { disp_width: 2, base: Some(Held { value: 21, width: 2, offset: 0 }), ..Mem::new(Some(r#where), 2) };
         let what = semantics(Operation::Move, "mov", vec![held(30, 2)], vec![Loc::Mem(cell)]);
         Insn::new(0x100, Some((0x100, 0x104)), Some(what), vec![30], vec![21])
     }
@@ -1209,7 +1274,7 @@ mod tests {
             .expect("placed");
             let Loc::Mem(got) = got else { panic!("not a cell: {got:?}") };
             assert_eq!(got.through, regs.named(register, 2), "{register:?}: {:?}", got.through);
-            assert_eq!(got.base, Some(Held { value: 21, width: 2 }), "the cell stopped naming its value");
+            assert_eq!(got.base, Some(Held { value: 21, width: 2, offset: 0 }), "the cell stopped naming its value");
             assert_eq!(got.addr, was.addr, "addr");
             assert_eq!(got.width, was.width, "width");
             assert_eq!(got.offset, was.offset, "offset");
@@ -1229,7 +1294,7 @@ mod tests {
             vec![21],
             vec![],
         );
-        call.delivers = vec![(Held { value: 21, width: 2 }, RegId::AX)];
+        call.delivers = vec![(Held { value: 21, width: 2, offset: 0 }, RegId::AX)];
         let mut body = _one_block(vec![call, _based_cell()]);
         body.pins = pins(&[(21, RegId::EAX)]);
         let placed = _through_regalloc(body, &[(21, RegId::EAX)]);
@@ -1247,8 +1312,12 @@ mod tests {
     #[test]
     fn test_a_based_cell_keeps_the_register_the_allocation_gave_its_base() {
         let r#where = Addr { base: (RegId::SI).iced(), ..Addr::new(Space::Literal, 0x2) };
-        let cell =
-            Mem { offset: 2, disp_width: 1, base: Some(Held { value: 17, width: 2 }), ..Mem::new(Some(r#where), 2) };
+        let cell = Mem {
+            offset: 2,
+            disp_width: 1,
+            base: Some(Held { value: 17, width: 2, offset: 0 }),
+            ..Mem::new(Some(r#where), 2)
+        };
         let load = Insn::new(
             0xA2,
             Some((0xA2, 0xA4)),
@@ -1264,7 +1333,11 @@ mod tests {
         .expect("applies");
         let read = cell_of(&got.blocks[0].insns[0]);
         assert_eq!(read.through, RegId::BX, "the cell is still reached through {:?}", read.through);
-        assert_eq!(read.base, Some(Held { value: 17, width: 2 }), "the cell stopped saying which value reached it");
+        assert_eq!(
+            read.base,
+            Some(Held { value: 17, width: 2, offset: 0 }),
+            "the cell stopped saying which value reached it"
+        );
         assert_eq!((read.addr, read.width, read.offset, read.disp_width), (Some(r#where), 2, 2, 1));
     }
 
@@ -1284,7 +1357,7 @@ mod tests {
         );
         let mut call =
             Insn::new(3, Some((3, 8)), Some(semantics(Operation::Call, "call", vec![], vec![])), vec![], vec![2]);
-        call.requires = vec![(Held { value: 2, width: 2 }, RegId::CX)];
+        call.requires = vec![(Held { value: 2, width: 2, offset: 0 }, RegId::CX)];
         let got = _through_regalloc(_one_block(vec![made, call]), &[(2, RegId::SI)]);
         let insns = &got.blocks[0].insns;
         assert_eq!(insns.len(), 3, "the pre-call copy is missing: {} instructions", insns.len());
@@ -1421,7 +1494,7 @@ mod tests {
     #[test]
     #[ignore = "fails in Python too: the surviving case raises Unplaced, not a spill"]
     fn test_call_redefinition_is_not_a_value_surviving_the_clobber() {
-        let one = Loc::Held(Held { value: 1, width: 2 });
+        let one = Loc::Held(Held { value: 1, width: 2, offset: 0 });
         let before = Insn::new(
             0,
             Some((0, 1)),
@@ -1498,14 +1571,14 @@ mod tests {
         let index =
             _instruction(3, semantics(Operation::Move, "mov", vec![held(3, 2)], vec![imm(1, 2)]), vec![3], vec![]);
         let source = Mem {
-            base: Some(Held { value: 1, width: 2 }),
-            index: Some(Held { value: 3, width: 2 }),
+            base: Some(Held { value: 1, width: 2, offset: 0 }),
+            index: Some(Held { value: 3, width: 2, offset: 0 }),
             scale: 1,
             ..Mem::new(Some(Addr::new(Space::Literal, 0)), 2)
         };
         let destination = Mem {
-            base: Some(Held { value: 2, width: 2 }),
-            index: Some(Held { value: 3, width: 2 }),
+            base: Some(Held { value: 2, width: 2, offset: 0 }),
+            index: Some(Held { value: 3, width: 2, offset: 0 }),
             scale: 1,
             ..Mem::new(Some(Addr { segment: (RegId::ES).iced(), ..Addr::new(Space::Far, 0) }), 2)
         };
@@ -1542,8 +1615,8 @@ mod tests {
         let index =
             _instruction(3, semantics(Operation::Move, "mov", vec![held(2, 2)], vec![imm(1, 2)]), vec![2], vec![]);
         let cell = Mem {
-            base: Some(Held { value: 1, width: 2 }),
-            index: Some(Held { value: 2, width: 2 }),
+            base: Some(Held { value: 1, width: 2, offset: 0 }),
+            index: Some(Held { value: 2, width: 2, offset: 0 }),
             scale: 1,
             ..Mem::new(Some(Addr::new(Space::Literal, 0)), 2)
         };
@@ -1560,8 +1633,8 @@ mod tests {
     #[test]
     fn test_retained_owner_influences_commutative_address_roles_before_allocation() {
         let cell = Mem {
-            base: Some(Held { value: 1, width: 2 }),
-            index: Some(Held { value: 2, width: 2 }),
+            base: Some(Held { value: 1, width: 2, offset: 0 }),
+            index: Some(Held { value: 2, width: 2, offset: 0 }),
             ..Mem::new(Some(Addr::new(Space::Far, 0)), 2)
         };
         let read = _load(3, 3, cell, vec![1, 2]);
@@ -1576,7 +1649,8 @@ mod tests {
 
     #[test]
     fn test_32_bit_secondary_base_is_not_confined_to_16_bit_address_registers() {
-        let cell = Mem { base: Some(Held { value: 1, width: 4 }), ..Mem::new(Some(Addr::new(Space::Far, 0)), 2) };
+        let cell =
+            Mem { base: Some(Held { value: 1, width: 4, offset: 0 }), ..Mem::new(Some(Addr::new(Space::Far, 0)), 2) };
         let body = body_of("secondary-base-class", 0, vec![_load(2, 2, cell, vec![1])]);
 
         assert!(
@@ -1603,7 +1677,7 @@ mod tests {
     fn test_an_address_value_takes_the_class_a_base_register_must_be_in() {
         for through in [RegId::BX, RegId::SI] {
             let got = classes(
-                &_celled(Some(Held { value: 21, width: 2 }), through),
+                &_celled(Some(Held { value: 21, width: 2, offset: 0 }), through),
                 &BTreeSet::new(),
                 &target::BUILT_IN,
                 &crate::backend::classes::RegisterClasses::m16(),
@@ -1636,7 +1710,7 @@ mod tests {
     fn test_dead_call_result_does_not_create_an_undefined_copy() {
         let mut call =
             Insn::new(0, Some((0, 3)), Some(semantics(Operation::Call, "call", vec![], vec![])), vec![1], vec![]);
-        call.delivers = vec![(Held { value: 1, width: 2 }, RegId::AX)];
+        call.delivers = vec![(Held { value: 1, width: 2, offset: 0 }, RegId::AX)];
         let (lowered, _fixed) = constrain::constrained(
             &body_of("dead result", 0, vec![call]),
             Some(&pins(&[(1, RegId::EAX)])),
@@ -1661,7 +1735,7 @@ mod tests {
             identity.symbol = Some(covers == Some((1, 3)));
             let mut returning =
                 Insn::new(2, None, Some(semantics(Operation::Return, "", vec![], vec![])), vec![], vec![2]);
-            returning.requires = vec![(Held { value: 2, width: 2 }, RegId::AX)];
+            returning.requires = vec![(Held { value: 2, width: 2, offset: 0 }, RegId::AX)];
             let body = LirBody { inputs: values(&[1]), ..body_of("fixed-identity", 1, vec![identity, returning]) };
 
             let placed = crate::backend::rewriter::rewrite(
@@ -1766,7 +1840,7 @@ mod tests {
         let load = semantics(
             Operation::FloatLoad,
             "fld",
-            vec![Loc::Held(Held { value: 7, width: 10 })],
+            vec![Loc::Held(Held { value: 7, width: 10, offset: 0 })],
             vec![Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, -8)), 8))],
         );
         let one = Arc::new(Insn::new(1, Some((1, 1)), Some(load), vec![7], vec![]));

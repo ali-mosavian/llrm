@@ -333,6 +333,88 @@ pub fn keeps_division(
 /// A target's cost model, built from a CPU's prices: what the passes ask of it.
 pub type CostModel = fn(&CpuPrices) -> Rc<dyn llrm_mir::target::Machine>;
 
+/// What the DAG builder asks of a target for every target. The x86-style paths
+/// (calling.toml conventions, string instructions, libcall routines) read the
+/// whole [`Target`] through [`BuilderArch::full`], which a target without one
+/// answers with `None` and the builder refuses.
+pub trait BuilderArch {
+    fn registers(&self) -> &'static llrm_lir::registers::Info;
+    fn register_named(
+        &self,
+        name: &str,
+    ) -> RegId;
+    fn stack_slot_bytes(&self) -> i64;
+    fn stack_alignment(&self) -> i64;
+    /// The address-space roles (`layout().spaces.roles`).
+    fn roles(&self) -> llrm_mir::spaces::Spaces;
+    fn full(&self) -> Option<&dyn Target>;
+}
+
+impl<T: Target> BuilderArch for T {
+    fn registers(&self) -> &'static llrm_lir::registers::Info {
+        Target::registers(self)
+    }
+    fn register_named(
+        &self,
+        name: &str,
+    ) -> RegId {
+        Target::register_named(self, name)
+    }
+    fn stack_slot_bytes(&self) -> i64 {
+        Target::stack_slot_bytes(self)
+    }
+    fn stack_alignment(&self) -> i64 {
+        Target::stack_alignment(self)
+    }
+    fn roles(&self) -> llrm_mir::spaces::Spaces {
+        Target::layout(self).spaces.roles
+    }
+    fn full(&self) -> Option<&dyn Target> {
+        Some(self)
+    }
+}
+
+impl BuilderArch for &dyn Target {
+    fn registers(&self) -> &'static llrm_lir::registers::Info {
+        Target::registers(*self)
+    }
+    fn register_named(
+        &self,
+        name: &str,
+    ) -> RegId {
+        Target::register_named(*self, name)
+    }
+    fn stack_slot_bytes(&self) -> i64 {
+        Target::stack_slot_bytes(*self)
+    }
+    fn stack_alignment(&self) -> i64 {
+        Target::stack_alignment(*self)
+    }
+    fn roles(&self) -> llrm_mir::spaces::Spaces {
+        Target::layout(*self).spaces.roles
+    }
+    fn full(&self) -> Option<&dyn Target> {
+        Some(*self)
+    }
+}
+
+/// Which register allocator compiles a target's functions
+/// (`TargetPassConfig::createRegAllocPass`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Allocator {
+    /// The translated greedy allocator, which the pin runs for every target
+    /// that has one.
+    Greedy,
+    /// The spike graph-colouring allocator (`llrm-spike-mf`): a target waits
+    /// on it until its greedy port lands.
+    Spike,
+    /// An allocator of the target's own.
+    Own,
+    /// None: the pin's target replaces register allocation (wasm's
+    /// `addRegAssignAndRewriteOptimized` returns false).
+    None,
+}
+
 /// A target, as the driver picks one by name: what a frontend of it starts
 /// from. The passes' view of a target grows here as the backend stops naming
 /// one (docs/machine/targets.md).
@@ -340,8 +422,24 @@ pub trait Target {
     /// The target's name, for messages.
     fn name(&self) -> &'static str;
 
+    /// Its object writers and what each format says of the code it holds
+    /// (LLVM's `MCObjectWriter` and `MCAsmInfo`), which the backend is handed
+    /// instead of naming a target.
+    fn objects(&self) -> &'static dyn llrm_debug::DebugObjectTarget;
+
+    /// The machine as a debug writer reads it (`MCRegisterInfo` and the
+    /// fixup kinds of a segment): everything but the register file, which the
+    /// caller reads from [`Target::registers_text`] once.
+    fn debug_target(&self) -> llrm_debug::DebugTarget;
+
     /// The platform description a frontend of this target defaults to.
     fn machine(&self) -> Machine;
+
+    /// The allocator that compiles this target's functions: the pin's choice
+    /// unless the target says otherwise.
+    fn register_allocator(&self) -> Allocator {
+        Allocator::Greedy
+    }
 
     /// Whether `--isel` unnamed selects through the DAG, not the old selector.
     fn selects_by_dag(&self) -> bool {
@@ -562,6 +660,14 @@ pub trait Target {
     /// The CPU a compile is priced for where none is asked.
     fn default_cpu(&self) -> &'static str;
 
+    /// Whether a `bsf` whose flags are dead carries the `rep` prefix, the
+    /// TZCNT encoding (`X86MCInstLower`). A processor without `tzcnt` runs it
+    /// as `bsf`, so the prefix is a dead byte there; the pin emits it for
+    /// compatibility with later processors.
+    fn bsf_rep_prefix(&self) -> bool {
+        true
+    }
+
     /// `TargetLowering::getPrefFunctionAlignment` as a power of two (X86: 16
     /// bytes, 4); 0: functions are not aligned.
     fn pref_function_alignment(&self) -> u8 {
@@ -571,6 +677,13 @@ pub trait Target {
     /// `TargetLowering::getPrefLoopAlignment` as a power of two (X86: 16
     /// bytes, 4); 0: loops are not aligned.
     fn pref_loop_alignment(&self) -> u8 {
+        0
+    }
+
+    /// The most bytes of padding a loop header's alignment may take (the
+    /// `MaxBytesForAlignment` the pin's X86 never sets, gcc's `.p2align
+    /// 4,,10`); 0: no limit.
+    fn loop_alignment_max_skip(&self) -> u8 {
         0
     }
 
@@ -595,13 +708,13 @@ pub trait Target {
     /// How deep the floating register stack is: the roots of class `x87` its
     /// register file states.
     fn float_stack(&self) -> usize {
-        registers::parse(&self.registers_text()).map_or(0, |all| registers::of_class(&all, "x87").len())
+        registers::float_facts(&self.registers_text()).0
     }
 
     /// Whether scalar floating point lives in SSE registers: its register
     /// file states roots of class `xmm`.
     fn scalar_sse(&self) -> bool {
-        registers::parse(&self.registers_text()).is_ok_and(|all| !registers::of_class(&all, "xmm").is_empty())
+        registers::float_facts(&self.registers_text()).1
     }
 
     /// The indexed addresses a memory access may use, priced by `costs` (its
@@ -655,13 +768,18 @@ pub trait Target {
             pointer: self.frame_register(),
             stack: self.stack_pointer(),
             saved: self.callee_saved(),
+            vector_saved: Vec::new(),
             slot: self.stack_slot_bytes(),
             align: self.stack_alignment(),
             optional: self.frame_optional(),
+            saved_first: self.frame_saved_first(),
             enter: self.frame_enter(),
             wrap_split_size: self.frame_wrap_split_size(),
+            red_zone: self.frame_red_zone(),
             slot_scratch: self.frame_slot_scratch(),
             free: false,
+            kept: false,
+            exit_cfi: true,
         }
     }
 
@@ -675,6 +793,13 @@ pub trait Target {
     /// Whether a function that needs no frame register may leave it out
     /// (`calling.toml`'s `frame_optional`).
     fn frame_optional(&self) -> bool {
+        false
+    }
+
+    /// Whether the registers a function keeps are pushed before the space for
+    /// its locals even where it calls nothing (`calling.toml`'s
+    /// `frame_saved_first`).
+    fn frame_saved_first(&self) -> bool {
         false
     }
 
@@ -695,6 +820,12 @@ pub trait Target {
     fn frame_wrap_split_size(&self) -> bool {
         false
     }
+
+    /// The bytes below the stack pointer a leaf frame may use (`calling.toml`'s
+    /// `frame_red_zone`).
+    fn frame_red_zone(&self) -> i64 {
+        0
+    }
 }
 
 /// The registers a procedure's frame is made of. LIR names the frame register
@@ -706,6 +837,9 @@ pub struct FrameRegisters {
     pub stack: RegId,
     /// Each callee-saved register by its full register and the one pushed.
     pub saved: Vec<(RegId, RegId)>,
+    /// The callee-saved vector registers (Win64's xmm6-15), each by its full
+    /// register and itself: saved with `movaps` into the frame, not pushed.
+    pub vector_saved: Vec<(RegId, RegId)>,
     /// The bytes the stack is kept a multiple of.
     pub slot: i64,
     /// The bytes the stack pointer is a multiple of at a call, as the callee
@@ -714,16 +848,30 @@ pub struct FrameRegisters {
     pub align: i64,
     /// A function that needs no frame register may leave it out.
     pub optional: bool,
+    /// The registers are pushed before the locals' space even where nothing is
+    /// called.
+    pub saved_first: bool,
     /// A frame tuned for size opens with `enter`.
     pub enter: bool,
     /// A size build may skip the frame on an early exit into a shared return.
     pub wrap_split_size: bool,
+    /// The bytes below the stack pointer a leaf function's locals may use
+    /// without a `sub`; 0 where the ABI has no red zone.
+    pub red_zone: i64,
     /// The registers a one-slot frame pushes and pops (`calling.toml`'s
     /// `frame_slot_push`/`frame_slot_pop`), where it does.
     pub slot_scratch: Option<(RegId, RegId)>,
     /// The function has no frame register: it holds a value, and a frame cell
     /// is addressed through the stack pointer.
     pub free: bool,
+    /// The function's `"frame-pointer"` attribute keeps the frame register
+    /// even where nothing needs it
+    /// (`MachineFunction::disableFramePointerElim`).
+    pub kept: bool,
+    /// The exits state the frame address as they move it
+    /// (`X86FrameLowering::emitEpilogue`'s `NeedsDwarfCFI`); an object
+    /// format whose unwinder does not read them (Mach-O, COFF) turns it off.
+    pub exit_cfi: bool,
 }
 
 impl FrameRegisters {

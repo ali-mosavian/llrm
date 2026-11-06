@@ -1,4 +1,6 @@
 """Regression tests of the instrument: each name says what went wrong and what it produced."""
+import re
+import os
 import json
 from pathlib import Path
 
@@ -54,6 +56,14 @@ def test_a_divide_gcc_sends_to_libgcc_is_counted_in_its_code(built):
     obj = subprocess.run(["size", "-A", str(harness.OUT / "b" / "x_ll_div.gccO2.o")], capture_output=True, text=True).stdout
     object_text = sum(int(l.split()[1]) for l in obj.splitlines() if l.startswith(".text"))
     assert harness.code_bytes("x_ll_div", "gccO2") > object_text + 500, object_text
+
+
+def test_the_per_mnemonic_clocks_add_up_to_the_clocks_of_the_run(built):
+    """--hist prints which instruction kinds the clocks go to (f64 div: 800 IMULs at 31 clocks were the whole gap to libgcc); a table that
+    drops or double-counts an instruction would point at the wrong one, so its sum must be the run's clocks and its counts the instructions."""
+    r = harness.run("fib", "gccO2")
+    assert sum(clk for _, clk in r["by_op"].values()) + r["misaligned"] * harness.MISALIGNED == r["clocks"]
+    assert sum(count for count, _ in r["by_op"].values()) == r["ins"]
 
 
 def test_kernel_inlined_into_main_is_not_counted_as_zero(built):
@@ -117,7 +127,7 @@ def test_enter_costs_what_the_486_charges_for_it():
 def test_every_x_kernel_has_its_source_and_its_self_check():
     """The kernels live beside the harness, not in bench/: a lookup in bench/ alone found neither file."""
     names = sorted(p.name for p in harness.KERNELS.iterdir())
-    assert len(names) == 41 and all(n.startswith("x_") for n in names)
+    assert len(names) == 66 and all(n.startswith("x_") for n in names)
     for n in names:
         assert (harness.source_dir(n) / f"{n}.c").is_file() and harness.source_dir(n) == harness.KERNELS / n
         assert harness.source_dir(n).joinpath(f"{n}.out").read_text().split()
@@ -144,6 +154,25 @@ def test_run_sh_builds_the_programs_programs_py_lists_and_no_file():
     listed = subprocess.run([sys.executable, str(HERE / "programs.py")], capture_output=True, text=True, check=True).stdout.split()
     assert listed and all((harness.BENCH / name).is_dir() or (HERE / "kernels" / name).is_dir() for name in listed), listed
     assert "bench_io.h" not in listed and "programs.py" in (HERE / "run.sh").read_text()
+
+
+def test_ctime_times_the_programs_programs_py_lists_and_no_file():
+    """`ctime.py` listed `ls bench` and timed `bench_io.h` as a program: the run stopped before writing ctime.json."""
+    import importlib
+    import ctime
+    importlib.reload(ctime)
+    names = sorted(ctime.programs.sources())
+    assert names and "bench_io.h" not in names and all(ctime.cmds(n) for n in names), names
+
+
+def test_levels_time_gives_llrm_cc_its_tree_and_skips_programs_gcc_cannot_build(monkeypatch):
+    """`levels_time.py` ran llrm-cc without LLRM_OW (the -O0 bench/bintree compile exited 1) and handed gcc bench/jpeg_fixed, which needs bench_io.h."""
+    import levels_time
+    monkeypatch.delenv("LLRM_OW", raising=False)
+    levels_time.setup()
+    assert os.environ.get("LLRM_OW")
+    names = levels_time.bench_sources()
+    assert "bintree" in names and "jpeg_fixed" not in names, sorted(names)
 
 
 def test_every_x87_encoding_has_a_clock_price():
@@ -201,3 +230,80 @@ def test_code_bytes_counts_text_only_not_the_unwind_tables_the_pin_emits(tmp_pat
     assert done.returncode == 0, done.stderr
     monkeypatch.setattr(harness, "OUT", tmp_path)
     assert harness.code_bytes("p", "pinllc") == 100
+
+
+def test_data_bytes_counts_the_constants_gcc_keeps_in_rodata_not_only_text(tmp_path, monkeypatch):
+    """The m32 table's bytes were .text only: gcc's 12 B of .rodata.cst4 in fpbench was invisible and llrm's constants in _DATA likewise, though the order was .text plus data."""
+    import subprocess
+    (tmp_path / "b").mkdir()
+    (tmp_path / "t.s").write_text(".text\n.fill 100,1,0x90\n.section .rodata.cst4,\"aM\",@progbits,4\n.long 1,2,3\n.data\n.long 1\n.bss\n.fill 64\n")
+    done = subprocess.run(["gcc", "-m32", "-c", str(tmp_path / "t.s"), "-o", str(tmp_path / "b" / "p.gccO2.o")], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    monkeypatch.setattr(harness, "OUT", tmp_path)
+    assert harness.data_bytes("p", "gccO2") == 16
+
+
+def test_code_bytes_leaves_out_alignment_padding(tmp_path, monkeypatch):
+    """The leg counted whole .text: a loop gcc aligned with nops read as growth (the judge's code_bytes leaves padding out, so the two disagreed).
+    6 bytes of code, `.p2align 4`, 1 byte of code: 17 bytes in the section, 7 of code and 10 of padding."""
+    import subprocess
+    (tmp_path / "b").mkdir()
+    (tmp_path / "t.s").write_text(".text\nmovl $1,%eax\nret\n.p2align 4\nret\n")
+    done = subprocess.run(["gcc", "-m32", "-c", str(tmp_path / "t.s"), "-o", str(tmp_path / "b" / "p.gccO2.o")], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    monkeypatch.setattr(harness, "OUT", tmp_path)
+    monkeypatch.setattr(harness, "archive_code", lambda prog, variant: 0)
+    assert harness.code_size("p", "gccO2") == (7, 10)
+    assert harness.code_bytes("p", "gccO2") == 7
+
+
+def build_ld(tmp_path, width, stub, **env):
+    """build.sh of x_ldmath into a fresh work directory at `width`; the finished process."""
+    import subprocess
+    work = tmp_path / f"ld{width}"
+    (work / "o").mkdir(parents=True)
+    (work / "b").mkdir()
+    for name in ("stub.o", "stub.elf", "stub.elf.src"):
+        (work / name).write_bytes((stub / name).read_bytes())
+    return work, subprocess.run([str(HERE / "build.sh"), "x_ldmath"], capture_output=True, text=True,
+                                env={**os.environ, "VSGCC_WORK": str(work), "VSGCC_LD": str(width), "VSGCC_ONLY": "llrm", **env} if env else {**os.environ, "VSGCC_WORK": str(work), "VSGCC_LD": str(width)})
+
+
+def bss_bytes(work, compiler="llrmElfO2"):
+    """The .bss of x_ldmath's ELF object of `compiler`: its three static arrays of 48 long doubles."""
+    import subprocess
+    out = subprocess.run(["size", "-A", str(work / "b" / f"x_ldmath.{compiler}.o")], capture_output=True, text=True).stdout
+    return next(int(l.split()[1]) for l in out.splitlines() if l.startswith(".bss"))
+
+
+def test_long_double_is_one_width_in_llrm_and_the_reference(tmp_path, built):
+    """x_ldmath, x_ldconv and x_ldcmp compared llrm's 8-byte long double with gcc's 12: the rows were doubles against 80-bit code."""
+    for width, element in ((80, 12), (64, 8)):
+        work, done = build_ld(tmp_path, width, built)
+        assert done.returncode == 0 and "FAIL" not in done.stdout, (width, done.stdout, done.stderr)
+        assert (work / "ld").read_text() == str(width)
+        assert re.fullmatch(r"[0-9a-f]{12}\+[0-9a-f]{12}", (work / "o" / "x_ldmath.cc").read_text()), "build.sh stamps the llrm-cc and llrm-llc it used"
+        assert bss_bytes(work) == bss_bytes(work, "gccO2") == 3 * 48 * element, (width, bss_bytes(work), bss_bytes(work, "gccO2"))
+
+
+def test_a_build_whose_long_double_is_not_the_reference_s_is_refused(tmp_path, built):
+    work, done = build_ld(tmp_path, 80, built, VSGCC_LLRM_LD="-mlong-double-64")
+    assert done.returncode != 0 and "FAIL long double: llrm is 8 bytes, the reference 12 (80 bit)" in done.stdout, (done.stdout, done.stderr)
+    assert build_ld(tmp_path, 70, built)[1].returncode == 2
+
+
+def test_novec_build_turns_gccs_vectorizer_off(built, tmp_path):
+    """gcc 13 vectorizes at -O3 even for i486 (nbody_fixed O3 1,514 B/4.60M clocks vs 1,960 B/4.63M scalar): the table had no scalar column.
+    VSGCC_NOVEC=1 builds gcc with -fno-tree-vectorize -fno-tree-slp-vectorize: its -O3 object changes, clang's does not."""
+    import subprocess
+    work = tmp_path / "novec"
+    (work / "o").mkdir(parents=True)
+    (work / "b").mkdir()
+    for name in ("stub.o", "stub.elf", "stub.elf.src"):
+        (work / name).write_bytes((built / name).read_bytes())
+    done = subprocess.run([str(HERE / "build.sh"), "nbody"], capture_output=True, text=True,
+                          env={**os.environ, "VSGCC_WORK": str(work), "VSGCC_NOVEC": "1"})
+    assert done.returncode == 0 and "FAIL" not in done.stdout, (done.stdout, done.stderr)
+    obj = lambda w, c: (w / "b" / f"nbody.{c}O3.o").read_bytes()
+    assert obj(work, "gcc") != obj(built, "gcc")
+    assert obj(work, "clang") == obj(built, "clang")

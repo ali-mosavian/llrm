@@ -19,17 +19,18 @@
 //!   result     c1=copy v ... use ... c0=copy c1     the rest stays on the stack
 //! ```
 //!
-//! DEVIATE D-RS1: no register classes: `RegClassInfo.isProperSubClass` is
-//! false, so `SingleInstrs` is false and `tryInstructionSplit` is not
-//! translated; a value is one class here (the shadow allocator's whole root).
+//! DEVIATE D-RS1: `RegClassInfo.isProperSubClass` is false unless the target
+//! says a value's order has a larger one (`TargetInstrInfo::larger_order`), so
+//! `SingleInstrs` is false for the shadow allocator's roots and
+//! `tryInstructionSplit` returns at once; a value is one class here (no
+//! subranges).
 //!
 //! DEVIATE D-RS2: no `IMPLICIT_DEF`: `addSplitConstraints`' test of the last
 //! instruction for an implicit def is dropped, LIR has none.
 //!
-//! DEVIATE D-RS3: no `trySplitAroundHintReg` (as in `greedy`);
-//! `shouldRegionSplitForVirtReg` is true (it only declines a huge
-//! rematerializable value, and rematerialization is recognised per definition,
-//! `greedy/remat.rs`).
+//! DEVIATE D-RS3: `shouldRegionSplitForVirtReg` is true (it only declines a
+//! huge rematerializable value, and rematerialization is recognised per
+//! definition, `greedy/remat.rs`).
 //!
 //! DEVIATE D-RS4: `DebugVars->splitRegister` and the verifier calls are not
 //! here: LIR has neither.
@@ -46,6 +47,7 @@
 use std::rc::Rc;
 
 use llrm_lir::registers::RegId;
+use llrm_mir::blockfrequency::branchprobability::BranchProbability;
 use llrm_mir::blockfrequency::frequency::BlockFrequency;
 
 use super::edgebundles::EdgeBundles;
@@ -131,8 +133,8 @@ impl GlobalSplitCandidate {
 
 /// What the splitting analyses keep for a function: built once from its CFG,
 /// frequencies and loops.
-pub struct SplitSupport {
-    pub env: Box<dyn SplitEnv>,
+pub struct SplitSupport<'a> {
+    pub env: Box<dyn SplitEnv + 'a>,
     pub mbfi: MachineBlockFrequencyInfo,
     pub bundles: Rc<EdgeBundles>,
     pub placer: SpillPlacement,
@@ -146,10 +148,10 @@ pub struct SplitSupport {
     split_constraints: Vec<BlockConstraint>,
 }
 
-impl SplitSupport {
+impl<'a> SplitSupport<'a> {
     /// `succs[n]` are the successors of block `n`.
     pub fn new(
-        env: Box<dyn SplitEnv>,
+        env: Box<dyn SplitEnv + 'a>,
         mbfi: MachineBlockFrequencyInfo,
         succs: &[Vec<usize>],
     ) -> Self {
@@ -173,17 +175,17 @@ impl SplitSupport {
 
 /// The parts of the allocator the splits work on, borrowed apart so the editor
 /// can hold the live intervals while the extra info is read.
-pub struct Splitter<'p> {
+pub struct Splitter<'p, 'a> {
     pub lis: &'p mut LiveIntervals,
     pub matrix: &'p mut LiveRegMatrix,
     pub extra: &'p mut ExtraRegInfo,
-    pub ss: &'p mut SplitSupport,
+    pub ss: &'p mut SplitSupport<'a>,
     pub env: &'p dyn GreedyEnv,
     pub original: &'p HashMap<u32, u32>,
     pub hints: &'p mut std::collections::BTreeMap<u32, Vec<Hint>>,
 }
 
-impl Splitter<'_> {
+impl Splitter<'_, '_> {
     /// `trySplit`
     /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L1975>):
     /// try to split `virt`, making it assignable. Returns a register when it
@@ -218,8 +220,7 @@ impl Splitter<'_> {
             if phys.is_some() || !new_vregs.is_empty() {
                 return phys;
             }
-            // tryInstructionSplit: not translated (D-RS1).
-            return None;
+            return self.try_instruction_split(virt, new_vregs);
         }
 
         self.analyze(virt);
@@ -640,8 +641,8 @@ impl Splitter<'_> {
         assert!(num_global_intvs != 0, "No global intervals configured");
 
         // Isolate even single instructions when dealing with a proper
-        // sub-class: none here (D-RS1).
-        let single_instrs = false;
+        // sub-class.
+        let single_instrs = self.env.is_proper_subclass(se.edit().parent());
 
         // First handle all the blocks with uses.
         let use_blocks = self.ss.sa.get_use_blocks().to_vec();
@@ -975,7 +976,14 @@ impl Splitter<'_> {
     fn calc_spill_cost(
         &self,
         virt: &Rc<LiveInterval>,
+        remat_defs_free: bool,
     ) -> BlockFrequency {
+        // DEVIATE CSR4 (exit 2026-11-20, with CSR3 `csr_spill_first`, ours not the
+        // pin's; the pin's caller is `tryAssignCSRFirstTime`): a rematerializable range is not stored, and
+        // its definition goes when every use recomputes the value, so the
+        // writes cost nothing. Only for `csr_spill_first` targets; LLVM
+        // charges them (its callee-saved cost is too small to matter).
+        let writes_free = remat_defs_free && self.ss.env.is_rematerializable(virt.reg());
         let mut cost = 0u64;
         let mut seen: Vec<(InstrKey, bool, bool)> = Vec::new();
         for operand in self.lis.operands(virt.reg()) {
@@ -991,7 +999,7 @@ impl Splitter<'_> {
         for (key, reads, writes) in seen {
             let at = self.lis.indexes.get_instruction_index(key);
             let block = self.lis.indexes.get_mbb_from_index(&at) as u32;
-            cost += (u64::from(reads) + u64::from(writes)) * self.block_freq(block).get_frequency();
+            cost += (u64::from(reads) + u64::from(writes && !writes_free)) * self.block_freq(block).get_frequency();
         }
         BlockFrequency(cost)
     }
@@ -1003,9 +1011,10 @@ impl Splitter<'_> {
         &mut self,
         virt: &Rc<LiveInterval>,
         csr_cost: BlockFrequency,
+        remat_defs_free: bool,
     ) -> bool {
         self.analyze(virt);
-        self.calc_spill_cost(virt) >= csr_cost
+        self.calc_spill_cost(virt, remat_defs_free) >= csr_cost
     }
 
     /// The `RS_New`/`RS_Assign` half of `tryAssignCSRFirstTime`
@@ -1031,6 +1040,36 @@ impl Splitter<'_> {
         // Perform the actual pre-splitting.
         self.do_region_split(virt, best_cand, false, new_vregs);
         false
+    }
+
+    /// The rest of `trySplitAroundHintReg`
+    /// (RegAllocGreedy.cpp#L1376): the cost is the frequency of the blocks
+    /// holding the copies the split would delete, scaled by
+    /// `SplitThresholdForRegWithHint` (75%) so that it splits in colder blocks.
+    pub fn split_around_hint_reg(
+        &mut self,
+        hint: RegId,
+        virt: &Rc<LiveInterval>,
+        blocks: &[u32],
+        new_vregs: &mut Vec<u32>,
+    ) -> bool {
+        let mut cost = BlockFrequency(0);
+        for block in blocks {
+            cost = cost + self.block_freq(*block);
+        }
+        cost = cost * BranchProbability::new(75, 100);
+        if cost == BlockFrequency(0) {
+            return false;
+        }
+        let mut num_cands = 0usize;
+        let mut best_cand = NO_CAND;
+        self.analyze(virt);
+        self.calculate_region_split_cost_around_reg(hint, &mut cost, &mut num_cands, &mut best_cand);
+        if best_cand == NO_CAND {
+            return false;
+        }
+        self.do_region_split(virt, best_cand, false, new_vregs);
+        true
     }
 
     /// `doRegionSplit`
@@ -1092,8 +1131,7 @@ impl Splitter<'_> {
         virt: &Rc<LiveInterval>,
         new_vregs: &mut Vec<u32>,
     ) -> Option<RegId> {
-        // D-RS1: no proper sub-classes.
-        let single_instrs = false;
+        let single_instrs = self.env.is_proper_subclass(virt.reg());
         let mut delegate = NoDelegate;
         let mut se = SplitEditor::new();
         se.reset(self.lis, LiveRangeEdit::new(virt.reg(), &mut delegate), SPLIT_SPILL_MODE);
@@ -1215,6 +1253,60 @@ impl Splitter<'_> {
             }
         }
         gap_weight
+    }
+
+    /// `tryInstructionSplit`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L1584>):
+    /// split a live range around individual instructions. Normally not
+    /// worthwhile, since the spiller does the same; but when the range is in a
+    /// constrained class, the pieces can move to a larger one.
+    fn try_instruction_split(
+        &mut self,
+        virt: &Rc<LiveInterval>,
+        new_vregs: &mut Vec<u32>,
+    ) -> Option<RegId> {
+        // There is no point to this if there are no larger sub-classes.
+        // DEVIATE: no subranges (D-RS1), so that is the only way in.
+        if !self.env.is_proper_subclass(virt.reg()) {
+            return None;
+        }
+        let mut delegate = NoDelegate;
+        let mut se = SplitEditor::new();
+        se.reset(self.lis, LiveRangeEdit::new(virt.reg(), &mut delegate), ComplementSpillMode::Size);
+
+        let uses = self.ss.sa.get_use_slots().to_vec();
+        if uses.len() <= 1 {
+            return None;
+        }
+
+        // Split around every non-copy instruction if this split will relax the
+        // constraints on the virtual register. Otherwise, splitting just
+        // inserts uncoalescable copies that do not help the allocation.
+        for &slot in &uses {
+            if let Some(key) = self.lis.indexes.get_instruction_from_index(&slot) {
+                let insn = self.lis.instr(key);
+                if insn.copy_of().is_some() || !self.env.constrains(insn, virt.reg()) {
+                    continue;
+                }
+            }
+            let mut cx = self.cx();
+            se.open_intv(&mut cx);
+            let seg_start = se.enter_intv_before(&mut cx, slot);
+            let seg_stop = se.leave_intv_after(&mut cx, slot);
+            se.use_intv(seg_start, seg_stop);
+        }
+
+        if se.edit().empty() {
+            return None;
+        }
+
+        self.finish_editor(&mut se);
+        self.collect_new_regs(&se, new_vregs);
+        // Assign all new registers to RS_Spill. This was the last chance.
+        for i in 0..se.edit().size() {
+            self.extra.set_stage(se.edit().get(i), LiveRangeStage::Spill);
+        }
+        None
     }
 
     /// `tryLocalSplit`

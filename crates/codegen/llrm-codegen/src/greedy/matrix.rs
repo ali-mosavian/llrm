@@ -35,6 +35,7 @@
 //! the greedy allocator (`greedy`).
 
 use llrm_lir::registers::RegId;
+use llrm_lir::valuelanes::ValueLanes;
 
 use super::virtregmap::{RegUnit, RegisterInfo, VirtRegMap};
 use crate::liveness::liveintervalunion::{LiveIntervalUnion, Query, VReg};
@@ -259,7 +260,8 @@ impl LiveRegMatrix {
     ) {
         self.vrm.assign_virt2phys(virt.reg(), phys);
         for unit in self.tri.regunits(phys) {
-            self.union_of(unit).unify(virt.reg(), &virt.range);
+            let held = self.unit_range(virt, phys, unit);
+            self.union_of(unit).unify(virt.reg(), held.as_ref().unwrap_or(&virt.range));
         }
         self.num_assigned += 1;
     }
@@ -273,11 +275,32 @@ impl LiveRegMatrix {
         let phys = self.vrm.get_phys(virt.reg()).expect("unassigning a register that has none");
         self.vrm.clear_virt(virt.reg());
         for unit in self.tri.regunits(phys) {
+            let held = self.unit_range(virt, phys, unit);
             if let Some(union) = self.matrix.get_mut(unit as usize) {
-                union.extract(virt.reg(), &virt.range);
+                union.extract(virt.reg(), held.as_ref().unwrap_or(&virt.range));
             }
         }
         self.num_unassigned += 1;
+    }
+
+    /// What `virt` holds in `unit` when it sits in `phys`
+    /// ([`foreachUnit`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveRegMatrix.cpp#L89)'s
+    /// range): the sub-ranges that name the lanes of the value this unit
+    /// covers. None where the value has no sub-ranges: its range is read whole.
+    fn unit_range(
+        &self,
+        virt: &LiveInterval,
+        phys: RegId,
+        unit: RegUnit,
+    ) -> Option<LiveRange> {
+        if !virt.has_sub_ranges() {
+            return None;
+        }
+        // Unit lanes are the root's bytes, the upper two sharing one; the
+        // value starts at the register's lowest byte.
+        let low = (self.tri.regs.lanes(phys) as u32 & 0xf).trailing_zeros();
+        let bytes: u16 = if unit % 4 == 2 { 0b1100 } else { 1 << (unit % 4) };
+        virt.range_for_lanes(ValueLanes(bytes >> low))
     }
 
     /// `isPhysRegUsed`: any unit of the register holds a segment.
@@ -286,6 +309,19 @@ impl LiveRegMatrix {
         phys: RegId,
     ) -> bool {
         self.tri.regunits(phys).any(|unit| self.matrix.get(unit as usize).is_some_and(|union| !union.empty()))
+    }
+
+    /// What a cached query is about: the register and the stretches asked for.
+    /// A value with sub-ranges is asked for the lanes of each register's unit,
+    /// so one register has several ranges.
+    fn range_key(
+        vreg: VReg,
+        lr: &LiveRange,
+    ) -> u64 {
+        lr.segments.iter().fold(u64::from(vreg), |key, segment| {
+            let key = key.wrapping_mul(0x100000001b3) ^ segment.start.get_index() as u64;
+            key.wrapping_mul(0x100000001b3) ^ segment.end.get_index() as u64
+        })
     }
 
     /// `query` (LiveRegMatrix.cpp#L160) followed by `checkInterference()`: does
@@ -300,7 +336,7 @@ impl LiveRegMatrix {
         self.grow(unit);
         let union = &self.matrix[unit as usize];
         let q = &mut self.queries[unit as usize];
-        q.init(self.user_tag, u64::from(vreg), u64::from(unit), union);
+        q.init(self.user_tag, Self::range_key(vreg, lr), u64::from(unit), union);
         q.check_interference(lr, union)
     }
 
@@ -316,8 +352,16 @@ impl LiveRegMatrix {
         self.grow(unit);
         let union = &self.matrix[unit as usize];
         let q = &mut self.queries[unit as usize];
-        q.init(self.user_tag, u64::from(vreg), u64::from(unit), union);
+        q.init(self.user_tag, Self::range_key(vreg, lr), u64::from(unit), union);
         q.interfering_vregs(lr, union, max).to_vec()
+    }
+
+    /// The register `reg` is a view of, in the target's description.
+    pub fn root(
+        &self,
+        reg: RegId,
+    ) -> RegId {
+        self.tri.regs.root(reg)
     }
 
     /// `checkRegMaskInterference` (LiveRegMatrix.cpp#L127): `virt` crosses an
@@ -328,7 +372,7 @@ impl LiveRegMatrix {
         virt: &LiveInterval,
         phys: RegId,
     ) -> bool {
-        self.reg_mask_of(virt).is_some_and(|roots| roots.contains(&crate::model::ir::root(phys)))
+        self.reg_mask_of(virt).is_some_and(|roots| roots.contains(&self.tri.regs.root(phys)))
     }
 
     /// The registers `virt` loses to the instructions it is live across, kept
@@ -372,7 +416,8 @@ impl LiveRegMatrix {
         }
         // Check the matrix for virtual register interference.
         for unit in self.tri.regunits(phys) {
-            if self.query_check(virt.reg(), &virt.range, unit) {
+            let held = self.unit_range(virt, phys, unit);
+            if self.query_check(virt.reg(), held.as_ref().unwrap_or(&virt.range), unit) {
                 return InterferenceKind::VirtReg;
             }
         }
@@ -483,6 +528,56 @@ mod tests {
         assert_eq!(extra.len(), 1);
     }
 
+    /// A value with two lanes live at different times holds each unit of its
+    /// register only while that lane is live: the low byte early, the high byte
+    /// late. Read whole it held both units for the whole span, so a value live
+    /// only in the gap between them was refused both.
+    #[test]
+    fn test_a_value_with_sub_ranges_holds_a_unit_while_its_lane_is_live() {
+        let at = indexes();
+        let mut matrix = LiveRegMatrix::new(info(), Box::new(NoFixed));
+        let mut held = interval(1, 10, 40, &at);
+        let (lo, hi) = (ValueLanes::at(0, 1), ValueLanes::at(1, 1));
+        for (lanes, from, to) in [(lo, 10, 20), (hi, 30, 40)] {
+            let one = interval(1, from, to, &at).range;
+            held.create_sub_range(lanes).range = one;
+        }
+        matrix.assign(&held, RegId::AX);
+        matrix.invalidate_virt_regs();
+        let in_the_gap = interval(2, 22, 28, &at);
+        assert_eq!(matrix.check_interference(&in_the_gap, RegId::AL), InterferenceKind::Free);
+        assert_eq!(matrix.check_interference(&in_the_gap, RegId::AH), InterferenceKind::Free);
+        let early = interval(3, 12, 18, &at);
+        assert_eq!(matrix.check_interference(&early, RegId::AL), InterferenceKind::VirtReg);
+        assert_eq!(
+            matrix.check_interference(&early, RegId::AH),
+            InterferenceKind::Free,
+            "ah holds the high lane only late"
+        );
+        let late = interval(4, 32, 38, &at);
+        assert_eq!(matrix.check_interference(&late, RegId::AH), InterferenceKind::VirtReg);
+        assert_eq!(matrix.check_interference(&late, RegId::AL), InterferenceKind::Free);
+        matrix.unassign(&held);
+        matrix.invalidate_virt_regs();
+        assert_eq!(matrix.check_interference(&early, RegId::AL), InterferenceKind::Free);
+        assert!(!matrix.is_phys_reg_used(RegId::AX));
+    }
+
+    /// A value with sub-ranges is asked about a different range for each unit
+    /// of a register; the cached answer of one unit's range was served for the
+    /// next (the key was the register alone), so a register was called free
+    /// over a lane that was held (lz4c -O2 assigned a pair over two others).
+    #[test]
+    fn test_a_cached_answer_is_for_the_range_asked_not_the_register() {
+        let at = indexes();
+        let mut matrix = LiveRegMatrix::new(info(), Box::new(NoFixed));
+        matrix.assign(&interval(2, 30, 40, &at), RegId::AL);
+        matrix.invalidate_virt_regs();
+        let unit = matrix.tri().regunits(RegId::AL).next().expect("al has a unit");
+        assert!(!matrix.query_check(1, &interval(1, 10, 20, &at).range, unit), "premise: nothing there");
+        assert!(matrix.query_check(1, &interval(1, 32, 38, &at).range, unit), "the same register, another range");
+    }
+
     #[test]
     fn test_a_register_interferes_with_a_virtual_register_that_holds_a_unit_of_it() {
         let at = indexes();
@@ -555,5 +650,56 @@ mod tests {
         assert_eq!(matrix.check_interference(&probe, RegId::BX), InterferenceKind::RegUnit);
         assert_eq!(matrix.check_interference(&probe, RegId::CX), InterferenceKind::VirtReg);
         assert_eq!(matrix.check_interference(&probe, RegId::DX), InterferenceKind::Free);
+    }
+
+    /// A description that roots `BX` at `EAX`, which iced's table does not.
+    fn rooted_elsewhere() -> Regs {
+        use llrm_lir::registers::{Entry, Info};
+        let base = &llrm_x86_m16::REGISTER_INFO;
+        let mut table = base.table;
+        let bx = table[RegId::BX.index()].expect("bx is listed");
+        table[RegId::BX.index()] = Some(Entry { root: RegId::EAX, ..bx });
+        Regs(Box::leak(Box::new(Info {
+            table,
+            frame: base.frame,
+            stack: base.stack,
+            loads: base.loads,
+            scratch: base.scratch,
+            bytes: base.bytes,
+            data_segment: base.data_segment,
+            stack_segment: base.stack_segment,
+            code_segment: base.code_segment,
+            far_segment: base.far_segment,
+            widths: base.widths,
+            effects: base.effects,
+            cache: Default::default(),
+            views: base.views,
+        })))
+    }
+
+    /// The matrix asked iced's `ROOT_OF` whether a call destroyed a register,
+    /// so a target whose ids are not iced's got an x86 family: a register the
+    /// description roots at the destroyed one was reported free.
+    #[test]
+    fn test_a_call_mask_is_read_through_the_descriptions_roots() {
+        let at = indexes();
+        let mut matrix = LiveRegMatrix::new(RegisterInfo::new(rooted_elsewhere()), Box::new(Calls));
+        let probe = interval(2, 12, 18, &at);
+        assert_eq!(matrix.check_interference(&probe, RegId::BX), InterferenceKind::RegMask);
+    }
+
+    /// Greedy reads roots from the description; x86 results are unchanged only
+    /// while each x86 file roots a register where iced's table does.
+    #[test]
+    fn test_the_x86_files_root_every_register_as_iced_does() {
+        for (name, info) in [
+            ("m16", &llrm_x86_m16::REGISTER_INFO),
+            ("m32", &llrm_x86_m32::REGISTER_INFO),
+            ("m64", &llrm_x86_m64::REGISTER_INFO),
+        ] {
+            for entry in info.table.iter().flatten() {
+                assert_eq!(info.root(entry.id), entry.id.root(), "{name}: {} is rooted differently", entry.name);
+            }
+        }
     }
 }

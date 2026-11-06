@@ -345,3 +345,47 @@ b:
     assert!(after.contains("br i1 %x, label %b, label %a"), "{after}");
     assert!(!after.contains("icmp"), "{after}");
 }
+
+/// `not (icmp ..)` with other users is the inverse compare when every user can
+/// take the inversion (`canFreelyInvertAllUsersOf`): here a branch swaps its
+/// successors. Before, only a one-use compare was inverted, so a loop exit
+/// `select (not c), true, d` kept its `xor` and its `select` where the pin has
+/// `or` (memory_expansion -O2: 217 of each).
+#[test]
+fn a_not_of_a_compare_with_invertible_users_is_the_inverse_compare() {
+    let mut module = parsed(
+        "define i32 @f(i64 noundef %p, i64 noundef %q) {\nb0:\n  %c = icmp eq i64 %p, %q\n  %n = xor i1 %c, true\n  %d = icmp eq i64 %p, 1199\n  %r = select i1 %n, i1 true, i1 %d\n  br i1 %r, label %x, label %y\nx:\n  br i1 %c, label %z, label %y\ny:\n  ret i32 1\nz:\n  ret i32 0\n}\n",
+    );
+    combined(&mut module);
+    let out = printed(&module);
+    assert!(!out.contains("xor i1"), "{out}");
+    assert!(out.contains("icmp ne i64 %p, %q"), "{out}");
+}
+
+/// The profile of InstCombine's work had no counters: "visits at parity with
+/// the pin" was read from callgrind call counts. A function with nothing to
+/// fold is drained once and each instruction visited exactly once; a fold
+/// re-adds its users, so visits exceed the initial list.
+#[test]
+fn drains_visits_and_inserts_count_the_worklist() {
+    use llrm_mir::counts::{Event, get};
+    let counts = || [Event::CombineDrains, Event::CombineVisits, Event::CombineInitial, Event::CombineInserts].map(get);
+    let delta = |before: [u64; 4]| {
+        let now = counts();
+        [0, 1, 2, 3].map(|i| now[i] - before[i])
+    };
+    let before = counts();
+    let mut module = parsed("define i16 @f(i16 %x, i16 %y) {\nb0:\n  %a = add i16 %x, %y\n  ret i16 %a\n}\n");
+    assert!(!combined(&mut module));
+    let [drains, visits, initial, inserts] = delta(before);
+    assert_eq!((drains, visits, initial), (1, 2, 2));
+    assert_eq!(inserts, initial);
+
+    let before = counts();
+    let mut module = parsed(
+        "define i16 @f(i16 %x) {\nb0:\n  %a = add i16 %x, 0\n  %b = sub i16 %a, %x\n  ret i16 %b\n}\n",
+    );
+    assert!(combined(&mut module));
+    let [_, visits, initial, inserts] = delta(before);
+    assert!(visits > initial - 1 && inserts >= initial, "{visits} {initial} {inserts}");
+}

@@ -62,7 +62,7 @@ Flags, from [build.sh](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de0581
 
 ### What it prints
 
-`harness.py` prints one JSON line: `ins` (executed instructions), `mem` (memory operands, `lea` excluded), `nops`, `clocks`, `code` (bytes), `ok` (the program's `report()` values equal its `.out`), `got`. `table.py` prints one row per program, compiler and level (`instr`, `mem ops`, `486 clk`, `nops`, `code B`, llrm/gcc and llrm/clang ratios) and, per level and counter, the geomean and worst ratio of llrm over gcc and over clang, with the bench programs and the `x_` kernels as separate groups. It refuses a program that lacks a variant or reports a value other than the `.out`.
+`harness.py` prints one JSON line: `ins` (executed instructions), `mem` (memory operands, `lea` excluded), `nops`, `clocks`, `code` (bytes of .text) and `data` (.data and .rodata; bss is not counted), `ok` (the program's `report()` values equal its `.out`), `got`. `table.py` prints one row per program, compiler and level (`instr`, `mem ops`, `486 clk`, `nops`, `text+data B`, llrm/gcc and llrm/clang ratios) and, per level and counter, the geomean and worst ratio of llrm over gcc and over clang, with the bench programs and the `x_` kernels as separate groups. It refuses a program that lacks a variant or reports a value other than the `.out`.
 
 `loops.py` prints the hottest natural loop of a kernel per variant, one line per instruction with executions per iteration of the header. Use it to read why a ratio is what it is.
 

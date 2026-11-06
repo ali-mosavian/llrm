@@ -28,6 +28,19 @@ pub enum Ext {
     FpExt,
 }
 
+/// How an extension's user reads it, for `is_ext_free_impl`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExtUser {
+    /// A `shl` by a constant.
+    ConstShl,
+    /// An index of a `getelementptr` whose indexed type is `store_bits` wide.
+    Gep { store_bits: u64 },
+    /// A `trunc` back to the extended value's own type.
+    SameTypeTrunc,
+    /// Any other user.
+    Other,
+}
+
 /// The operations of `ISD` that an IR instruction becomes
 /// (`TargetLowering::InstructionOpcodeToISD`), for the legality hook.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -69,9 +82,17 @@ pub enum Domain {
     Other,
 }
 
+/// The overflow node a compare and a sum or difference become
+/// (`ISD::UADDO`, `ISD::USUBO`), for `should_form_overflow_op`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OverflowOp {
+    UAdd,
+    USub,
+}
+
 /// Whether an integer of `bits` is a simple value type (`MVT`), the only ones
 /// `getLoadExtAction` has an entry for; any other is `Expand`.
-fn simple_int(bits: u32) -> bool {
+pub fn simple_int(bits: u32) -> bool {
     matches!(bits, 1 | 2 | 4 | 8 | 16 | 32 | 64 | 128)
 }
 
@@ -87,15 +108,21 @@ pub trait Lowering {
         false
     }
 
-    /// `TargetTransformInfo::hasDivRemOp(iN, IsSigned)`: whether the target
-    /// has one divide that makes the quotient and the remainder
-    /// (`isOperationLegal(SDIVREM/UDIVREM)`). The base class has none.
-    fn has_div_rem_op(
+    /// Whether the target's `addCodeGenPrepare` runs the `TypePromotion` pass
+    /// (`AArch64TargetMachine`, `ARMTargetMachine`). The base class does not.
+    fn runs_type_promotion(&self) -> bool {
+        false
+    }
+
+    /// `isSExtCheaperThanZExt(EVT(iFROM), EVT(iTO))`
+    /// ([TargetLowering.h](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/include/llvm/CodeGen/TargetLowering.h)):
+    /// the base class says no.
+    fn is_sext_cheaper_than_zext(
         &self,
-        bits: u32,
-        signed: bool,
+        from_bits: u32,
+        to_bits: u32,
     ) -> bool {
-        let _ = (bits, signed);
+        let _ = (from_bits, to_bits);
         false
     }
 
@@ -117,6 +144,20 @@ pub trait Lowering {
     ) -> bool {
         let _ = (op, bits);
         false
+    }
+
+    /// `shouldFormOverflowOp(op, EVT(iN), math_used)`
+    /// ([TargetLowering.h#L3623](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/TargetLowering.h#L3623)):
+    /// whether a compare of a sum or difference with an operand becomes the
+    /// overflow node. The base class's: no operation is legal here, so only
+    /// an add whose sum is read besides the compare, on a simple type.
+    fn should_form_overflow_op(
+        &self,
+        op: OverflowOp,
+        bits: u32,
+        math_used: bool,
+    ) -> bool {
+        op == OverflowOp::UAdd && math_used && simple_int(bits)
     }
 
     /// `isLoadExtLegal` (`getLoadExtAction(..) == Legal`,
@@ -182,6 +223,17 @@ pub trait Lowering {
             Ext::ZExt => self.is_zext_free(from_bits, to_bits),
             Ext::SExt => false,
         }
+    }
+
+    /// `isExtFreeImpl(const Instruction*)` (TargetLowering.h#L3245), asked
+    /// after `is_ext_free` says no, with how each user reads the extension.
+    /// The base class says no.
+    fn is_ext_free_impl(
+        &self,
+        users: &[ExtUser],
+    ) -> bool {
+        let _ = users;
+        false
     }
 
     /// `isMaskAndCmp0FoldingBeneficial` (TargetLowering.h): whether an `and`

@@ -1038,3 +1038,98 @@ done:
 fn the_edits_after_the_last_step_leave_the_trip_counts_standing() {
     assert_eq!(counts_over_a_sink_and_deletion(), 1);
 }
+
+/// memcpy's `while (n-- > 0)` after the guard: `ugt %i, 1` on a counter that
+/// starts at `n >= 1`.
+const DOWN_COUNTER: &str = "define i32 @f(i32 %n) {
+entry:
+  %g = icmp sgt i32 %n, 0
+  br i1 %g, label %loop, label %exit
+loop:
+  %i = phi i32 [ %n, %entry ], [ %dec, %loop ]
+  %dec = add i32 %i, -1
+  %c = icmp ugt i32 %i, 1
+  br i1 %c, label %loop, label %exit
+exit:
+  ret i32 0
+}
+";
+
+/// `exitne` turned the compare to `!=` on x86 and moved nine `bq32` rows the
+/// wrong way (jpeg +75 insns). A target that does not say it prefers the
+/// rewrite keeps the pin's IR.
+#[test]
+fn test_a_target_that_does_not_prefer_exit_ne_keeps_the_strict_compare() {
+    let mut module = parsed(DOWN_COUNTER);
+    let text = crate::testing::managed_on(&mut module, IndVars { lftr: false, size: false }, Default::default());
+    assert!(text.contains("icmp ugt i32 %i, 1"), "{text}");
+}
+
+#[test]
+fn test_a_target_that_prefers_exit_ne_gets_the_not_equal_compare() {
+    let mut module = parsed(DOWN_COUNTER);
+    let machine = crate::testing::Tuned { exit_ne: true, ..Default::default() };
+    let text = crate::testing::managed_on(&mut module, IndVars { lftr: false, size: false }, machine);
+    assert!(text.contains("icmp ne i32 %i, 1"), "{text}");
+}
+
+/// `willNotOverflow` widens the `i128` add of a restoring divide's counter to
+/// `i256`, and `ConstantRange` stopped at 128 bits: IndVars panicked
+/// ("outside 1..=128") compiling the quad-precision divide `div.c`.
+#[test]
+fn an_i128_loop_is_widened_by_indvars_without_a_panic() {
+    let text = "define i128 @f(i128 %a, i128 %b) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %i.next, %latch ]
+  %r = phi i128 [ %a, %entry ], [ %r.shl, %latch ]
+  %q = phi i128 [ 0, %entry ], [ %q.next, %latch ]
+  %ge = icmp uge i128 %r, %b
+  br i1 %ge, label %sub, label %latch
+sub:
+  %d = sub i128 %r, %b
+  br label %latch
+latch:
+  %r.new = phi i128 [ %d, %sub ], [ %r, %loop ]
+  %q.next = phi i128 [ 1, %sub ], [ %q, %loop ]
+  %r.shl = shl i128 %r.new, 1
+  %i.next = add nsw i32 %i, 1
+  %c = icmp slt i32 %i.next, 117
+  br i1 %c, label %loop, label %exit
+exit:
+  ret i128 %q.next
+}
+";
+    let mut module = parsed(text);
+    managed(&mut module, IndVars { lftr: true, size: false });
+    assert!(printed(&module).contains("define i128 @f"), "{}", printed(&module));
+}
+
+/// Sequential counted loops on one bound. The pin's loop passes visit them
+/// in program order, so each loop's trip count finds the earlier ones'
+/// already made; visited last first, one query recursed through every loop
+/// before it (about 5 KB of stack each; 1666 loops overflowed 8 MB, as
+/// `llrm-pass indvars` did at 2400 loops).
+#[test]
+fn many_loops_on_one_bound_do_not_nest_their_trip_count_queries() {
+    const LOOPS: usize = 120;
+    let mut text = String::from("define i32 @f(i32 %n) {\nb0:\n  br label %h0\n");
+    for i in 0..LOOPS {
+        let from = if i == 0 { "b0".to_string() } else { format!("m{}", i - 1) };
+        let next = if i + 1 == LOOPS { "x".to_string() } else { format!("h{}", i + 1) };
+        text += &format!(
+            "h{i}:\n  %i{i} = phi i32 [ 0, %{from} ], [ %j{i}, %h{i} ]\n  %j{i} = add nsw i32 %i{i}, 1\n  %c{i} = icmp slt i32 %j{i}, %n\n  br i1 %c{i}, label %h{i}, label %m{i}\nm{i}:\n  br label %{next}\n"
+        );
+    }
+    text += "x:\n  ret i32 0\n}\n";
+    // Small enough that one nested query per loop overflows.
+    let ran = std::thread::Builder::new()
+        .stack_size(STACK)
+        .spawn(move || widening(&text).0)
+        .expect("a thread")
+        .join();
+    assert!(ran.is_ok(), "the query recursion overflowed a {STACK} byte stack");
+}
+
+const STACK: usize = 2 << 20;

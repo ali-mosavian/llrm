@@ -23,7 +23,11 @@ fn object_of(name: &str) -> Vec<Rc<omf::Record>> {
         llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
     let options = llrm_codegen::driver::Options { pipeline, ..llrm_driver::m16_options_old(machine) };
     let built = super::compile::selected(&text, name, None, &options).expect("compiles");
-    omf::parse(&objbuild::written(&built, &format!("{name}.c")).expect("writes")).expect("parses")
+    omf::parse(
+        &objbuild::written(&built, &format!("{name}.c"), llrm_target::Target::objects(&llrm_x86_m32::M32))
+            .expect("writes"),
+    )
+    .expect("parses")
 }
 
 /// Every parameter, local, static and global with its C type; `(void)`
@@ -145,7 +149,7 @@ fn a_debug_member_with_half_a_bit_field_is_refused() {
 /// had no `formal_parameter`.
 #[test]
 fn the_model_tells_parameters_from_locals_and_places_the_code() {
-    use llrm_object::debug::Kind;
+    use llrm_debug::Kind;
     let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/debug.cgs")).expect("reads");
     let machine =
         llrm_codegen::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
@@ -153,8 +157,14 @@ fn the_model_tells_parameters_from_locals_and_places_the_code() {
         llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
     let options = llrm_codegen::driver::Options { pipeline, ..llrm_driver::m16_options_old(machine) };
     let built = super::compile::selected(&text, "debug", None, &options).expect("compiles");
-    let object = objbuild::built(&built, "debug.c", objbuild::CodeLayout::OneSegment).expect("builds");
-    let info = object.debug.expect("-g's information rides on the object");
+    let object = objbuild::built(
+        &built,
+        "debug.c",
+        objbuild::CodeLayout::OneSegment,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .expect("builds");
+    let info = object.debug.clone().expect("-g's information rides on the object");
     let f = info.functions.iter().find(|one| one.name == "f").expect("f");
     let kinds: Vec<(&str, Kind)> = f.variables.iter().map(|one| (one.name.as_str(), one.kind)).collect();
     assert_eq!(
@@ -178,8 +188,10 @@ fn the_model_tells_parameters_from_locals_and_places_the_code() {
     assert_eq!(lines, [15, 16, 17]);
     assert!(info.lines.iter().all(|one| one.file == 0));
     // The target's register file, once, for writers that know no target.
-    assert_eq!(info.frame_register, "ebp");
-    let number = |name: &str| info.registers.iter().find(|one| one.name == name).map(|one| (one.dwarf, one.codeview));
+    assert_eq!(info.registers().frame, "ebp");
+    let number = |name: &str| {
+        info.registers().registers.iter().find(|one| one.name == name).map(|one| (one.dwarf, one.codeview))
+    };
     // DWARF's is Open Watcom's (dwregx86.h): BP is 33.
     assert_eq!(number("bp"), Some((Some(33), Some(14))));
 }

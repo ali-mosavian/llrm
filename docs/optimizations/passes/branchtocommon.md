@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/branchtocommon.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/branchtocommon.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/branchtocommon.rs sha256:a21ae900929f68fdf3ee49404552cfe6e4450675fff77dd32e2d11c39c3a74fd -->
+<!-- src: crates/opt/llrm-transforms/src/branchtocommon.rs sha256:963367ada9148b9d7a16a3a36df1c89f4dd062d9eaf91fef605891889011825f -->
 
 # branchtocommon
 
@@ -38,7 +38,7 @@ The block's comparison runs in the predecessor:
 | [`InvertBranch`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/BasicBlockUtils.cpp#L1879) | `inverted` | MIRROR |
 | `simplifycfg-branch-fold-threshold` (2), `-bonus-inst-threshold` (1), `-branch-fold-common-dest-vector-multiplier` (2) | `FOLD_THRESHOLD`, `BONUS_THRESHOLD`, `VECTOR_MULTIPLIER` | MIRROR |
 
-- D1. No pseudo probes, no `minsize` (the cost kind is size and latency).
+- D1. No pseudo probes (a `minsize` function is priced as `CodeSize`).
 - D2. The MIR has no branch weights or `!unpredictable`: the fold is never
   held back for a predictable branch, and no weights are computed.
 - D3. No debug locations. The bonus instructions lose the metadata that can

@@ -49,13 +49,13 @@
 use llrm_mir::apfloat;
 use llrm_mir::constantfolding;
 use llrm_mir::context::{mask, signed};
-use llrm_mir::dense::IdMap;
 use llrm_mir::hash::HashMap;
 use llrm_mir::module::{InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::simplify::simplify_instruction_in;
 use llrm_mir::types::{Type, TypeId};
 use llrm_mir::valuetracking::pattern::{self, IntrinsicId};
+use llrm_mir::valuetracking::guarantee::SmallSet;
 use llrm_mir::valuetracking::signbits::{compute_max_significant_bits, compute_num_sign_bits};
 use llrm_mir::valuetracking::{Query, known, nonzero};
 
@@ -312,14 +312,19 @@ struct Evaluator<'a, 'b> {
     c: &'a Combiner<'b>,
     /// `CxtI`.
     cxt: InstId,
-    visited: IdMap<InstId, bool>,
+    /// `SmallDenseMap<Value *, bool, 8>` as two sets: the values visited, and
+    /// those among them that can be evaluated. A paged `IdMap` allocated and
+    /// zeroed a page table the size of the function on each call (1.8 k Ir
+    /// self in `can_evaluate_truncated` against the pin's 0.9 k in all).
+    visited: SmallSet<InstId, 8>,
+    evaluable: SmallSet<InstId, 8>,
     pending: Vec<InstId>,
 }
 
 impl Evaluator<'_, '_> {
     /// `allPendingVisited`.
     fn all_pending_visited(&self) -> bool {
-        self.pending.iter().all(|user| self.visited.contains_key(user))
+        self.pending.iter().all(|user| self.visited.contains(user))
     }
 
     /// `canEvaluate` (:338): the wrapper that tracks visits and many-use
@@ -336,10 +341,9 @@ impl Evaluator<'_, '_> {
         }
         let Some(i) = def_of(c, v) else { return false };
         // False by default, so a loop of users answers false.
-        if let Some(&known) = self.visited.get(&i) {
-            return known;
+        if !self.visited.insert(i) {
+            return self.evaluable.contains(&i);
         }
-        self.visited.insert(i, false);
         // A many-use value is decided here only if all its users are in the
         // tree: they are pending until the end.
         if let Operand::Value(value) = v
@@ -357,7 +361,9 @@ impl Evaluator<'_, '_> {
             Pred::Truncated => self.truncated_pred(i, ty),
             Pred::SExtd => self.sextd_pred(i, ty),
         };
-        self.visited.insert(i, result);
+        if result {
+            self.evaluable.insert(i);
+        }
         result
     }
 
@@ -512,7 +518,7 @@ fn can_evaluate_truncated(
     ty: TypeId,
     cxt: InstId,
 ) -> bool {
-    let mut evaluator = Evaluator { c, cxt, visited: IdMap::new(), pending: Vec::new() };
+    let mut evaluator = Evaluator { c, cxt, visited: SmallSet::default(), evaluable: SmallSet::default(), pending: Vec::new() };
     // Whether all users of the many-use values were visited is asked last,
     // outside the recursion.
     evaluator.can_evaluate(v, ty, Pred::Truncated) && evaluator.all_pending_visited()
@@ -527,7 +533,7 @@ fn can_evaluate_sextd(
 ) -> bool {
     // The context instruction is read by the truncating predicates only.
     let Some(cxt) = def_of(c, v) else { return can_always_evaluate_in_type(c, v, ty) };
-    let mut evaluator = Evaluator { c, cxt, visited: IdMap::new(), pending: Vec::new() };
+    let mut evaluator = Evaluator { c, cxt, visited: SmallSet::default(), evaluable: SmallSet::default(), pending: Vec::new() };
     evaluator.can_evaluate(v, ty, Pred::SExtd) && evaluator.all_pending_visited()
 }
 
@@ -718,7 +724,7 @@ fn evaluate_in_different_type(
 
 /// `InstCombinerImpl::isEliminableCastPair` (:198): the one cast that is the
 /// pair `first`, `second`, if there is one.
-fn is_eliminable_cast_pair(
+pub(crate) fn is_eliminable_cast_pair(
     c: &Combiner,
     first: InstId,
     second: InstId,
@@ -809,11 +815,12 @@ pub fn common_cast_transforms(
     // with operands that are different sizes than its condition may inhibit
     // other folds and lead to worse codegen.
     if let Some(select) = def_of(c, src).filter(|&def| c.function.instruction(def).opcode == Opcode::Select) {
-        let cmp = def_of(c, c.function.instruction(select).operands[0])
-            .filter(|&def| matches!(
+        let cmp = def_of(c, c.function.instruction(select).operands[0]).filter(|&def| {
+            matches!(
                 c.function.instruction(def).opcode,
-                Opcode::ICmp(_) | Opcode::FCmp(_)
-            ));
+                Opcode::ICmp(_) | Opcode::FCmp(_) | Opcode::Cast(CastOp::Trunc)
+            )
+        });
         let compares_select_type =
             cmp.is_some_and(|cmp| c.type_of(c.function.instruction(cmp).operands[0]) == c.type_of(src));
         let narrows = matches!(

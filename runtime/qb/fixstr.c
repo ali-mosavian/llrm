@@ -1,5 +1,6 @@
 /* Fixed-length strings (STRING * n in a TYPE or a variable): assigning one and
    reading one as a variable-length string. */
+#include "fixstr.h"
 #include "nhstutil.h"
 #include "qb.h"
 
@@ -12,13 +13,7 @@
    `target`: cut to fit, or padded with blanks. */
 void B_ASSN(qb_data_ptr source, int source_length, qb_data_ptr target, int length)
 {
-    char *to = QB_NEAR_OF(target);
-    const char *from = QB_NEAR_OF(source);
-    int kept = source_length < length ? source_length : length;
-
-    copy_bytes(to, from, kept);
-    for (to += kept; kept < length; kept++)
-        *to++ = ' ';
+    fixed_assign(QB_NEAR_OF(target), QB_NEAR_OF(source), source_length, length);
 }
 
 /* B$LDFS: the `length` bytes at `field` as a temporary string. */

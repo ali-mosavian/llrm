@@ -129,13 +129,13 @@ const ALIASES: [(&str, &str); 14] = [
 ];
 
 /// A condition code by its canonical name.
-fn cond(name: &str) -> Option<&'static str> {
+pub(crate) fn cond(name: &str) -> Option<&'static str> {
     let name = ALIASES.iter().find(|(from, _)| *from == name).map_or(name, |(_, to)| to);
     OPPOSITES.iter().flat_map(|&(a, b)| [a, b]).find(|one| *one == name)
 }
 
 /// `GetOppositeBranchCondition`.
-fn opposite(cond: &str) -> &'static str {
+pub(crate) fn opposite(cond: &str) -> &'static str {
     OPPOSITES
         .iter()
         .find_map(|&(a, b)| {
@@ -228,7 +228,7 @@ fn make(
 }
 
 fn byte(value: u32) -> Loc {
-    Loc::Held(Held { value, width: 1 })
+    Loc::Held(Held { value, width: 1, offset: 0 })
 }
 
 /// The bytes already holding a condition, by code (`CondRegArray`).
@@ -957,7 +957,7 @@ mod tests {
     use crate::support::hash::IndexMap;
 
     fn held(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 4 })
+        Loc::Held(Held { value, width: 4, offset: 0 })
     }
 
     fn pseudo(

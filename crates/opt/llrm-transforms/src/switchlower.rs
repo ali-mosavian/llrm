@@ -75,7 +75,7 @@
 use llrm_mir::context::{Constant, ConstantId, ConstantKind, Context, mask, signed};
 use llrm_mir::dense::IdMap;
 use llrm_mir::edit::Position;
-use llrm_mir::module::{BlockId, Function, InstId, Operand};
+use llrm_mir::module::{BlockId, Function, InstId, Operand, UnnamedAddr};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
 use llrm_mir::target::OperationCosts;
@@ -436,7 +436,7 @@ impl Lowering<'_, '_> {
             let array = self.unit.context.types.intern(Type::Array { element: cell, count: cells.len() as u64 });
             let members: Vec<ConstantId> = cells.iter().map(|&one| self.unit.context.int(cell, one as i128)).collect();
             let initial = self.unit.context.constant(Constant { ty: array, kind: ConstantKind::Aggregate(members) });
-            let table = self.unit.declared.table("switch.table", array, initial);
+            let table = self.unit.declared.table("switch.table", array, initial, UnnamedAddr::Global);
             let base = self.unit.context.constant(Constant { ty: address, kind: ConstantKind::Global(table) });
             let place = self.put(
                 load,

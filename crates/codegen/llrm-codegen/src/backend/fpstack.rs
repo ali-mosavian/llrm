@@ -52,6 +52,20 @@
 //! are split first, as `floatalloc` does (`_split_for_the_stack`): the values
 //! are popped on that edge only.
 //!
+//! DEVIATE 9 (owner x87, exit 2026-11-20): a memory-form operation (`fadd
+//! [m]`) whose other operand dies below the top is `fld [m]` and the popping
+//! operation (`faddp st(i)`) where the target prices `fxch` and the memory
+//! form above them, not `fxch` and `fadd [m]` (`unfold_memory_form`). The pin
+//! keeps the memory form and exchanges.
+//!
+//! DEVIATE 10 (owner x87, exit 2026-11-20): a memory-form operation (`fsub
+//! [m]`) whose other operand stays live is `fld [m]` and the register form
+//! reading that operand (`fsubr st, st(i)`) where the target prices the copy
+//! (`fld st(i)`) and the memory form above the load and the register form
+//! (`unfold_copy_form`). The pin copies the operand and keeps the memory form
+//! (`handleOneArgFPRW`'s `duplicateToTop` branch, <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FloatingPoint.cpp#L1300-L1304>):
+//! on a 486 `fld st(i)` is 4 clocks and `fld m` 3 (nbody -O2 m16, 1,200 trips).
+//!
 //! DEVIATE 4: an unreachable block with live floating values has no predecessor
 //! to fix its entry; its live values are taken in ascending order (LLVM
 //! asserts).
@@ -82,6 +96,7 @@ use std::sync::Arc;
 use llrm_lir::registers::RegId;
 
 use crate::backend::classes::RegisterClasses;
+use crate::backend::cpu::Profile;
 use crate::backend::floatalloc;
 use crate::backend::floatalloc::{
     _float_copy, _floating, _reversed, _terminators, _two_values, inserted, name_is, semantics, st, unlowered, unnamed,
@@ -187,6 +202,14 @@ struct Fps<'a> {
     next: Option<(usize, HashSet<u32>, Vec<u32>)>,
     /// Positions of stores already emitted with the one before them.
     swallowed: BTreeSet<usize>,
+    /// DEVIATE 9: per operation (add, mul, div), whether the target prices
+    /// `fxch` and the memory form above `fld` and the register form.
+    unfold: [bool; 3],
+    /// DEVIATE 10: per operation, whether the target prices the copy (`fld
+    /// st(i)`) and the memory form above `fld` and the register form.
+    unfold_copy: [bool; 3],
+    /// The order (`st(0)` first) the block's exit bundle is already fixed to.
+    exit_order: Option<Vec<u32>>,
 }
 
 /// `getNextFPInstruction`-free `PopTable` of the names this port emits: the
@@ -541,6 +564,11 @@ impl Fps<'_> {
             && !results.is_empty()
         {
             let Loc::Held(kept) = what.sources[0] else { unreachable!("checked above") };
+            if self.unfold_memory_form(step, kept.value, &what, results[0])?
+                || self.unfold_copy_form(step, kept.value, &what, results[0])?
+            {
+                return Ok(());
+            }
             let sources = std::iter::once(st(0)).chain(what.sources[1..].iter().cloned()).collect();
             self.handle_one_arg_fprw(step, kept.value, Semantics { dests: vec![st(0)], sources, ..what }, results[0])?;
         } else {
@@ -659,6 +687,125 @@ impl Fps<'_> {
         self.emit(Semantics { name, sources: vec![st(0)], ..what });
         self.values.remove(0);
         Ok(())
+    }
+
+    /// DEVIATE 9 (exit 2026-11-20): `fadd [m]` reads and writes `st(0)`, so a
+    /// dying operand below the top costs an `fxch` to bring it up, and often a
+    /// second to put the next value back (`t += (float)v` in a loop with two
+    /// constants above `t`). Where the target prices that above `fld [m]` and
+    /// the register form, the load is made again and the operation writes the
+    /// operand's slot and pops: `fld [m]; faddp st(i), st(0)`, as gcc has it.
+    /// True when it emitted the instruction.
+    fn unfold_memory_form(
+        &mut self,
+        step: &Step,
+        kept: u32,
+        what: &Semantics,
+        result: u32,
+    ) -> Result<bool, Raised> {
+        let [_, cell @ Loc::Mem(memory)] = what.sources.as_slice() else { return Ok(false) };
+        let class = match what.name.as_deref() {
+            Some("fadd" | "fsub" | "fsubr") => 0,
+            Some("fmul") => 1,
+            Some("fdiv" | "fdivr") => 2,
+            _ => return Ok(false),
+        };
+        let slot = self.slot(kept)?;
+        if !self.unfold[class]
+            || !matches!(memory.width, 4 | 8)
+            || slot == 0
+            || !step.kills(kept)
+            || self.values.len() >= self.depth
+            || !self.leaves_the_top_wanted(step, slot, result)
+        {
+            return Ok(false);
+        }
+        let scratch = self.take_fresh();
+        self.emit(Semantics {
+            op: Operation::FloatLoad,
+            name: Some("fld".into()),
+            dests: vec![st(0)],
+            sources: vec![cell.clone()],
+            ..what.clone()
+        });
+        self.push(scratch)?;
+        // The operand is one slot lower now; the result replaces it.
+        let other = slot + 1;
+        let name = what.name.clone().expect("matched above");
+        self.insert(semantics(Operation::FloatArith, &name, vec![st(other)], vec![st(other), st(0)]));
+        self.pop_stack_after();
+        self.values[slot] = result;
+        Ok(true)
+    }
+
+    /// DEVIATE 10: the memory form on a copy of an operand that stays is `fld
+    /// [m]` and the register form reading the operand where it lies: `fsub
+    /// [m]` (operand - cell) is `fld [m]; fsubr st, st(i)`. True when it
+    /// emitted the instruction.
+    fn unfold_copy_form(
+        &mut self,
+        step: &Step,
+        kept: u32,
+        what: &Semantics,
+        result: u32,
+    ) -> Result<bool, Raised> {
+        let [_, cell @ Loc::Mem(memory)] = what.sources.as_slice() else { return Ok(false) };
+        let (class, name) = match what.name.as_deref() {
+            Some("fadd") => (0, "fadd"),
+            Some("fsub") => (0, "fsubr"),
+            Some("fsubr") => (0, "fsub"),
+            Some("fmul") => (1, "fmul"),
+            Some("fdiv") => (2, "fdivr"),
+            Some("fdivr") => (2, "fdiv"),
+            _ => return Ok(false),
+        };
+        if !self.unfold_copy[class]
+            || !matches!(memory.width, 4 | 8)
+            || step.kills(kept)
+            || self.values.len() >= self.depth
+        {
+            return Ok(false);
+        }
+        let slot = self.slot(kept)?;
+        self.emit(Semantics {
+            op: Operation::FloatLoad,
+            name: Some("fld".into()),
+            dests: vec![st(0)],
+            sources: vec![cell.clone()],
+            ..what.clone()
+        });
+        self.push(result)?;
+        // The operand is one slot lower now; the cell is on top, the result's place.
+        self.insert(semantics(Operation::FloatArith, name, vec![st(0)], vec![st(0), st(slot + 1)]));
+        Ok(true)
+    }
+
+    /// The two layouts the memory form can leave differ in `result` and the
+    /// current top `top` having changed places (the form exchanges `result` up,
+    /// the unfolded one leaves it in `slot`). The unfolded one is the one to
+    /// take when what comes next wants `top` first: the next read in the
+    /// block, else the order the exit bundle is fixed to. An exchange the
+    /// later code needs anyway is not saved by it.
+    fn leaves_the_top_wanted(
+        &self,
+        step: &Step,
+        slot: usize,
+        result: u32,
+    ) -> bool {
+        let top = self.values[0];
+        match (step.next_read.get(&top), step.next_read.get(&result)) {
+            (Some(top_at), Some(result_at)) => top_at < result_at,
+            (Some(_), None) => true,
+            (None, Some(_)) => false,
+            (None, None) => {
+                let Some(order) = &self.exit_order else { return false };
+                let wants =
+                    |value: u32, place: usize| order.iter().position(|one| *one == value).is_some_and(|at| at != place);
+                let old = usize::from(wants(result, 0)) + usize::from(wants(top, slot));
+                let new = usize::from(wants(top, 0)) + usize::from(wants(result, slot));
+                new < old
+            }
+        }
     }
 
     /// `handleOneArgFPRW`: the top replaced by a value computed from it.
@@ -909,7 +1056,7 @@ impl Fps<'_> {
         let held = match word.delivers.iter().find(|(_, register)| *register == self.status_word) {
             Some(&(held, _)) => held,
             None => {
-                let held = Held { value: self.take_fresh(), width: 2 };
+                let held = Held { value: self.take_fresh(), width: 2, offset: 0 };
                 word.defines.push(held.value);
                 word.delivers.push((held, self.status_word));
                 word.widths.push((held.value, 2));
@@ -1002,16 +1149,6 @@ fn steps(
     found
 }
 
-/// DEVIATE 6: the order a bundle still to be fixed should take.
-/// `finishBlockStack` lets the first exit to reach a bundle choose its order.
-/// A block that only passes the stack on (no floating instruction, or only
-/// copies, which rename) leads on to a bundle that may already be fixed (a
-/// loop's header, reached by the back edge): the order that bundle has, seen
-/// back through the renames, is taken, so the exit that fixes it shuffles once
-/// there and no later edge of the loop shuffles again. Followed through at most
-/// `DEPTH` such blocks.
-const DEPTH: usize = 3;
-
 thread_local! {
     /// The blocks `Ahead::renames` has scanned, counted for the test that fixes
     /// it at one scan a block.
@@ -1021,6 +1158,15 @@ thread_local! {
 /// What `Ahead::renames` found, by block.
 type Renamed = RefCell<HashMap<i64, Option<Vec<(u32, u32)>>>>;
 
+/// DEVIATE 6: the order a bundle still to be fixed should take.
+/// `finishBlockStack` lets the first exit to reach a bundle choose its order.
+/// A block that only passes the stack on (no floating instruction, or only
+/// copies, which rename) leads on to a bundle that may already be fixed (a
+/// loop's header, reached by the back edge): the order that bundle has, seen
+/// back through the renames, is taken, so the exit that fixes it shuffles once
+/// there and no later edge of the loop shuffles again. Followed through such
+/// blocks until a fixed bundle, a block that does more, or a block already
+/// seen: each block once a call, so a loop of renames ends.
 struct Ahead<'a> {
     renamed: &'a Renamed,
     at_of: &'a IndexMap<i64, &'a Block>,
@@ -1069,18 +1215,21 @@ impl Ahead<'_> {
     }
 
     /// The order the values entering `at` should be in, from what lies ahead.
+    /// `seen` holds the blocks this call has been through.
     fn order(
         &self,
         at: i64,
-        depth: usize,
+        seen: &mut HashSet<i64>,
     ) -> Option<Vec<u32>> {
+        if !seen.insert(at) {
+            return None;
+        }
         let block = self.at_of.get(&at)?;
         let pairs = self.renames(block)?;
         let exit = &self.live_bundles.get(&self.bundles.of[&at].1)?;
         let after = match &exit.fixed {
             Some(fixed) => fixed.clone(),
-            None if depth > 0 => block.succ.iter().find_map(|next| self.order(*next, depth - 1))?,
-            None => return None,
+            None => block.succ.iter().find_map(|next| self.order(*next, seen))?,
         };
         // Back through the copies: a value a copy wrote was the copy's source.
         Some(
@@ -1097,10 +1246,11 @@ fn successor_order(
     block: &Block,
     mask: &BTreeSet<u32>,
 ) -> Option<Vec<u32>> {
+    let mut seen = HashSet::default();
     block
         .succ
         .iter()
-        .find_map(|next| ahead.order(*next, DEPTH))
+        .find_map(|next| ahead.order(*next, &mut seen))
         .filter(|order| order.len() == mask.len() && order.iter().all(|value| mask.contains(value)))
 }
 
@@ -1132,6 +1282,7 @@ fn depth_first(body: &LirBody) -> Vec<i64> {
 pub(super) fn converted(
     body: &LirBody,
     classes: &RegisterClasses,
+    cpu: Option<&Profile>,
 ) -> Result<LirBody, Raised> {
     let valued = crate::backend::fpregs::valued(body);
     let body = valued.as_ref().unwrap_or(body);
@@ -1210,6 +1361,31 @@ pub(super) fn converted(
         deferred: None,
         next: None,
         swallowed: BTreeSet::new(),
+        exit_order: None,
+        unfold_copy: ["add", "mul", "div"].map(|class| {
+            let price = |key: String| cpu.and_then(|cpu| cpu.cost(&key).ok());
+            match (
+                price("x87_copy".into()),
+                price("x87_load".into()),
+                price(format!("x87_{class}")),
+                price(format!("x87_{class}_m")),
+            ) {
+                (Some(copy), Some(load), Some(register), Some(memory)) => copy + memory > load + register,
+                _ => false,
+            }
+        }),
+        unfold: ["add", "mul", "div"].map(|class| {
+            let price = |key: String| cpu.and_then(|cpu| cpu.cost(&key).ok());
+            match (
+                price("x87_exchange".into()),
+                price("x87_load".into()),
+                price(format!("x87_{class}")),
+                price(format!("x87_{class}_m")),
+            ) {
+                (Some(exchange), Some(load), Some(register), Some(memory)) => exchange + memory > load + register,
+                _ => false,
+            }
+        }),
     };
     let border = |at: i64| Arc::new(inserted(at, semantics(Operation::Nothing, "", Vec::new(), Vec::new())));
     let mut made: IndexMap<i64, Block> = IndexMap::default();
@@ -1223,6 +1399,7 @@ pub(super) fn converted(
         let entered = fps.setup_block_stack(&mut bundle, &floats(&live_in[&at]));
         live_bundles.insert(entry, bundle);
         entered?;
+        fps.exit_order = live_bundles.get(&exit).and_then(|bundle| bundle.fixed.clone());
         let cut = _terminators(block);
         let steps = steps(block, cut, &floats(&live_out[&at]));
         for (at_step, step) in steps.iter().enumerate() {

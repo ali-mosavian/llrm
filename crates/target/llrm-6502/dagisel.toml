@@ -1,0 +1,47 @@
+# The 6502 DAG selector's source: read by tools/dagisel/regen-target.sh and `llrm-dagisel-gen --target`.
+# The cpu, atom, dynamic, types and node_predicate tables are features.toml's (llrm-dagisel-gen).
+[target]
+name = "mos"
+llvm_build = "llvm-build"
+ns = "MOS::"
+isd = "MOSISD::"
+llvm_dir = ""
+td = "mos6502.td"
+out = "src/dagisel/generated"
+cpus = ["mos6502", "w65c02"]
+own_ids = "own_ids.txt"
+# Named by the hand code (src/emit.rs): instructions no pattern selects.
+extra_symbols = [
+  "MOS::COPY8", "MOS::COPY16", "MOS::CMP8", "MOS::BEQ", "MOS::BNE", "MOS::BCC", "MOS::BCS", "MOS::JMP", "MOS::JSR", "MOS::ADJSP", "MOS::LEASP16", "MVT::i32", "MOS::sub_lo", "MOS::sub_hi",
+  # Every register: the pin numbers `pipeline.rs` maps to ours.
+  "MOS::A", "MOS::X", "MOS::Y", "MOS::C", "MOS::RC0", "MOS::RC1", "MOS::RC2", "MOS::RC3", "MOS::RC4", "MOS::RC5", "MOS::RC6", "MOS::RC7", "MOS::RS0", "MOS::RS1", "MOS::RS2", "MOS::RS3",
+]
+ids_includes = [
+  "#define GET_INSTRINFO_ENUM",
+  '#include "GenInstrInfo.inc"',
+  "#define GET_REGINFO_ENUM",
+  '#include "GenRegisterInfo.inc"',
+]
+
+# The NMOS 6502 has no extra features; the 65C02 adds CMOS.
+[cpu.mos6502]
+features = []
+
+[cpu.w65c02]
+features = ["CMOS"]
+
+[atom]
+"Subtarget->hasCMOS()" = ["CMOS"]
+
+[types]
+dead_prefixes = ["v", "nxv"]
+
+[node_predicate]
+unindexedstore = "unindexed_store"
+store = "non_truncating_store"
+load = "non_extending_load"
+unindexedload = "unindexed_load"
+extloadi8 = "memory_vt_i8"
+sextload = "sext_load"
+zextload = "zext_load"
+extload = "ext_load"

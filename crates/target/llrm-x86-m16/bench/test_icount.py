@@ -179,6 +179,35 @@ done:"""
         result = self.run_body(body, bytes([7]), "fname db 'C:\\DATA.BIN', 0\nbuf db 0")
         self.assertEqual((result.error, result.exit_code), ("", 7))
 
+    def test_a_program_that_asks_for_a_files_attributes_learns_whether_it_exists(self):
+        """Borland's open() calls `int 21h ah=43h` first: bcc, tc and tcpp stopped with `int 21h ah=0x43` on jpeg_single, jpeg_fixed,
+        stft_single and stft_fixed and had no reference row. Found: carry clear; missing: carry set, AX=2."""
+        body = """    mov dx, offset fname
+    mov ax, 4300h
+    int 21h
+    jc fail
+    mov al, 7
+    jmp done
+fail:
+    mov al, ah
+    cmp ax, 2
+done:"""
+        found = self.run_body(body, b"x", "fname db 'DATA.BIN', 0")
+        self.assertEqual((found.error, found.exit_code), ("", 7))
+        missing = self.run_body(body.replace("DATA", "NONE"), b"x", "fname db 'NONE.BIN', 0")
+        self.assertEqual((missing.error, missing.exit_code), ("", 0))
+
+    def test_a_program_still_running_at_the_limit_says_so(self):
+        """tc and tcpp run stft_fixed and jpeg_fixed past 400 M instructions (8086 long multiply): the cells read "the region was entered but
+        never returned", as if the program were broken. The run stopped at the limit; it says that."""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            (directory / "S.ASM").write_text(EXIT_WITH.format(body="spin:\n    jmp spin", data="dummy db 0"))
+            subprocess.run([str(BIN / "jwasm"), "-q", "-c", "-Cp", "-Zg", "-omf", f"-Fo{directory}/S.OBJ", str(directory / "S.ASM")], check=True)
+            subprocess.run([str(BIN / "jwlink"), "option", "quiet", "format", "dos", "name", str(directory / "S.EXE"), "file", str(directory / "S.OBJ")], check=True)
+            result = icount.run(directory / "S.EXE", None, directory, limit=5000, whole=True)
+        self.assertIn("5000-instruction limit", result.error)
+
 
 class MapTests(unittest.TestCase):
     def test_a_name_matches_as_each_language_spells_it(self):
@@ -191,3 +220,24 @@ class MapTests(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+
+
+def test_a_dos_name_finds_the_file_of_another_case(tmp_path):
+    """stft_fixed opens SIGNAL and the corpus file is `signal`: the emulator opened nothing and the program printed -1."""
+    (tmp_path / "signal").write_bytes(b"x")
+    assert icount.dos_file(tmp_path, "SIGNAL") == tmp_path / "signal"
+    assert icount.dos_file(tmp_path, "C:\\SIGNAL") == tmp_path / "signal"
+    assert icount.dos_file(tmp_path, "NEW") == tmp_path / "NEW"
+
+
+@unittest.skipUnless((BIN / "jwasm").exists(), "needs jwasm and jwlink beside llrm's binaries (cargo build)")
+def test_a_program_that_never_resets_the_fpu_starts_at_dos_control_word(tmp_path):
+    """Unicorn starts with FPCW 0 (single precision): stft_single nib, which has no fninit, printed 204598972 for DOSBox's 78803551."""
+    program = (
+        ".model small\n.386\n.387\n.stack 256\n.data\ncw dw 0\n.code\nstart:\n    mov ax, @data\n    mov ds, ax\n"
+        "    fnstcw [cw]\n    mov ah, 40h\n    mov bx, 1\n    mov cx, 2\n    mov dx, offset cw\n    int 21h\n    mov ax, 4C00h\n    int 21h\nend start\n"
+    )
+    (tmp_path / "F.ASM").write_text(program)
+    subprocess.run([str(BIN / "jwasm"), "-q", "-c", "-Cp", "-Zg", "-omf", f"-Fo{tmp_path}/F.OBJ", str(tmp_path / "F.ASM")], check=True)
+    subprocess.run([str(BIN / "jwlink"), "option", "quiet", "format", "dos", "name", str(tmp_path / "F.EXE"), "file", str(tmp_path / "F.OBJ")], check=True)
+    assert icount.run(tmp_path / "F.EXE", None, tmp_path, whole=True).output == b"\x7f\x03"

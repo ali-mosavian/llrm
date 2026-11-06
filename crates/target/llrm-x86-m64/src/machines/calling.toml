@@ -7,6 +7,11 @@ private = "sysv64"
 [abi.sysv]
 convention = "sysv64"
 
+[abi.win64]
+convention = "win64"
+# X86CallingConv.td: a Win64 subtarget sends every calling convention (`fastcc` too) through CC_X86_Win64_C.
+private = "win64"
+
 # sysv64: the System V AMD64 ABI as gcc and clang emit it on Linux (X86CallingConv.td's CC_X86_64_C and
 # RetCC_X86_64_C). Integer and pointer arguments take RDI, RSI, RDX, RCX, R8, R9 in order, then the stack in
 # 8-byte slots pushed right to left, which the caller removes; the stack is 16-byte aligned at the call.
@@ -22,8 +27,13 @@ stack_alignment = 16
 aligned_calls = true
 order = "right-to-left"
 cleanup = "caller"
+# X86::isCalleePop is false for Fast/GHC/Tail without GuaranteedTailCallOpt: no `ret N` form of C on x86-64.
+no_pop_twin = true
 argument_registers = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"]
 float_argument_registers = ["xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7"]
+# An __int128 takes two consecutive free registers (CC_X86_64_I128), else 16 aligned bytes of the stack.
+wide_pairs = [["rdi", "rsi"], ["rsi", "rdx"], ["rdx", "rcx"], ["rcx", "r8"], ["r8", "r9"]]
+wide_stack_align = 16
 sized_arguments = true
 skip_memory = true
 backfill = false
@@ -32,13 +42,17 @@ return_address_bytes = 8
 first_argument_offset = 16
 frame = "rbp"
 frame_optional = true
+# The pin pushes the registers a function keeps before the space for its locals, call or none.
+frame_saved_first = true
 frame_wrap_split_size = true
+# System V: a leaf function keeps up to 128 bytes of locals below rsp (X86FrameLowering::has128ByteRedZone).
+frame_red_zone = 128
 # A one-slot frame is `push rax` / `pop rcx` (X86FrameLowering emitSPUpdate): rcx carries no result.
 frame_slot_push = "rax"
 frame_slot_pop = "rcx"
 stack = "rsp"
-# Each as (the root its family is rooted at, the register a prologue pushes).
-preserved = [["ebx", "rbx"], ["ebp", "rbp"], ["r12d", "r12"], ["r13d", "r13"], ["r14d", "r14"], ["r15d", "r15"]]
+# Each as (the root its family is rooted at, the register a prologue pushes), in X86CallingConv.td's CSR_64 order: a prologue pushes them last to first, and a frame register freed to hold a value takes its place in it.
+preserved = [["ebx", "rbx"], ["r12d", "r12"], ["r13d", "r13"], ["r14d", "r14"], ["r15d", "r15"], ["ebp", "rbp"]]
 clobbered = ["rax", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11", "flags", "st0", "st1", "st2", "st3", "st4", "st5", "st6", "st7", "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7", "xmm8", "xmm9", "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15"]
 entry_state = ["df_clear", "x87_empty"]
 aggregate = "hidden-pointer"
@@ -48,17 +62,80 @@ aggregate_pointer_register = "rdi"
 aggregate_pointer_returned = "rax"
 aggregate_pointer_popped_by = "caller"
 promotion = "slot"
-wide_slots = 1
+wide_slots = 2
 variadic_float = "double"
 # A variadic call tells the callee in AL how many vector registers carry arguments, so its prologue saves them.
 variadic_vector_register = "rax"
 # The unnamed argument registers are saved in a register save area and the list names it.
 va_list = "sysv-amd64"
 
+# Mach-O takes C's leading underscore; ELF and COFF x86-64 take the name as written.
 [sysv64.symbol]
 elf = "*"
+coff = "*"
+macho = "_*"
 
 [sysv64.result]
+1 = ["rax"]
+2 = ["rax"]
+4 = ["rax"]
+8 = ["rax"]
+16 = ["rax", "rdx"]
+pointer = ["rax"]
+float = ["xmm0"]
+
+# win64: the Microsoft x64 convention (X86CallingConv.td's CC_X86_Win64_C and RetCC_X86_64_C). Argument n takes RCX, RDX,
+# R8, R9 or XMM0-3 by its position, whichever file it belongs to, then the stack slot n; the caller reserves 32 bytes of
+# home area for the four registers in every call. RBX, RBP, RDI, RSI, R12-R15 and XMM6-15 are kept (the frame lowerer
+# saves an xmm with `movaps` and declares it with .seh_savexmm, a general register with `push`); there is no red zone. Variadic calls (a float in both files), aggregates
+# in registers and `va_list` are not modelled yet.
+[win64]
+cc = "win64"
+# X86CallingConv.td sends every convention through CC_X86_Win64_C on a Win64 subtarget.
+serves = ["fast"]
+# The stack pointer changes only in the prologue and epilogue: every call's area (the home area too) is reserved there.
+reserve_call_frame = true
+slot_bytes = 8
+stack_alignment = 16
+aligned_calls = true
+order = "right-to-left"
+cleanup = "caller"
+no_pop_twin = true
+argument_registers = ["rcx", "rdx", "r8", "r9"]
+float_argument_registers = ["xmm0", "xmm1", "xmm2", "xmm3"]
+positional = true
+shadow_bytes = 32
+sized_arguments = true
+return_address_bytes = 8
+# From RBP after `push rbp; mov rbp, rsp`: saved RBP and the return address; the home area is stack slots 0-3.
+first_argument_offset = 16
+frame = "rbp"
+frame_optional = true
+frame_saved_first = true
+frame_wrap_split_size = true
+frame_slot_push = "rax"
+frame_slot_pop = "rcx"
+stack = "rsp"
+preserved = [["ebx", "rbx"], ["ebp", "rbp"], ["edi", "rdi"], ["esi", "rsi"], ["r12d", "r12"], ["r13d", "r13"], ["r14d", "r14"], ["r15d", "r15"], ["xmm6", "xmm6"], ["xmm7", "xmm7"], ["xmm8", "xmm8"], ["xmm9", "xmm9"], ["xmm10", "xmm10"], ["xmm11", "xmm11"], ["xmm12", "xmm12"], ["xmm13", "xmm13"], ["xmm14", "xmm14"], ["xmm15", "xmm15"]]
+clobbered = ["rax", "rcx", "rdx", "r8", "r9", "r10", "r11", "flags", "st0", "st1", "st2", "st3", "st4", "st5", "st6", "st7", "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5"]
+entry_state = ["df_clear", "x87_empty"]
+aggregate = "hidden-pointer"
+aggregate_in_register_bytes = []
+aggregate_pointer = "register"
+aggregate_pointer_register = "rcx"
+aggregate_pointer_returned = "rax"
+aggregate_pointer_popped_by = "caller"
+promotion = "slot"
+wide_slots = 1
+variadic_float = "double"
+
+# COFF takes the name as written.
+[win64.symbol]
+elf = "*"
+coff = "*"
+macho = "_*"
+
+[win64.result]
 1 = ["rax"]
 2 = ["rax"]
 4 = ["rax"]

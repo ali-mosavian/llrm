@@ -139,7 +139,7 @@
 
 use std::collections::BTreeSet;
 
-use llrm_analysis::cfg;
+use llrm_analysis::cfg::{self, Around};
 use llrm_analysis::graph::loops::Loop;
 use llrm_analysis::induction::{self, AffineOperand, CountedLoop};
 use llrm_analysis::memory::{MemRef, Unit};
@@ -198,6 +198,8 @@ impl FunctionPass for LoopIdioms {
 /// that a pair of constants is not made one dword store under `-Os`.
 pub struct Merge {
     pub size: bool,
+    /// Also the wider stores (`mergestores`), not only the memsets.
+    pub widen: bool,
 }
 
 impl FunctionPass for Merge {
@@ -213,7 +215,8 @@ impl FunctionPass for Merge {
         let memset =
             crate::memcpyoptimizer::run_impl(unit.context, unit.layout, unit.function, analyses.outer(), unit.declared);
         let bytes = analyses.outer().target().size_costs();
-        let copies = !llrm_support::env_flag!("LLRM_NO_MERGE_COPIES")
+        let copies = self.widen
+            && !llrm_support::env_flag!("LLRM_NO_MERGE_COPIES")
             && crate::mergestores::merged_copies(
                 unit.context,
                 unit.layout,
@@ -222,14 +225,15 @@ impl FunctionPass for Merge {
                 analyses.outer(),
                 self.size.then(|| (&mut *unit.declared, &bytes)),
             );
-        let constants = crate::mergestores::merged_constants(
-            unit.context,
-            unit.layout,
-            analyses.outer().callees(),
-            unit.function,
-            analyses.outer(),
-            self.size,
-        );
+        let constants = self.widen
+            && crate::mergestores::merged_constants(
+                unit.context,
+                unit.layout,
+                analyses.outer().callees(),
+                unit.function,
+                analyses.outer(),
+                self.size,
+            );
         if constants | memset | copies { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
 }
@@ -295,6 +299,15 @@ pub fn filled_with(
     }) {
         return false;
     }
+    // DEVIATE 17 (exit 2026-11-12, `Tti::memory_idioms_at_optsize`): a size
+    // build keeps its loops where the call costs more bytes than the loop.
+    let for_size = size
+        || function.attrs.iter().any(
+            |attr| matches!(attr, llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"),
+        );
+    if for_size && outer.target().tti().is_some_and(|tti| !tti.memory_idioms_at_optsize()) {
+        return false;
+    }
     let costs = if size { outer.target().size_costs() } else { outer.target().costs() };
     let bytes = outer.target().size_costs();
     let mut changed = false;
@@ -307,7 +320,20 @@ pub fn filled_with(
                 _fill(&unit.with_registers(facts), callees, &loop_, &costs, &bytes, size)
             };
             if let Some(found) = found {
-                _filled(context, declared, function, &found);
+                _filled(context, layout, declared, function, &found);
+                standing.changed();
+                changed = true;
+                continue 'again;
+            }
+            let split = if found.is_none() {
+                let unit = Unit::within(context, layout, function, outer).with_shape(&shape);
+                let facts = standing.of(&unit);
+                _split(&unit.with_registers(facts), callees, &loop_, &costs, &bytes, size)
+            } else {
+                None
+            };
+            if let Some(split) = split {
+                _hoist(context, layout, declared, function, &split);
                 standing.changed();
                 changed = true;
                 continue 'again;
@@ -406,26 +432,7 @@ fn _fill(
     size: bool,
 ) -> Option<_Found> {
     let function = unit.function;
-    let header = cfg::block(loop_.header);
-    if loop_.latches.len() != 1 {
-        return None;
-    }
-    // Tested before its trips: the header tests and the body is a straight line
-    // back to it, in whatever order its blocks lie. Tested after
-    // them: the body is a straight line from the header to the latch, which
-    // tests (a loop entered behind a copy of its test).
-    let successors = function.successors(header);
-    let posttested = loop_.body.len() == 1 || !successors.iter().any(|to| !loop_.body.contains(&cfg::id(*to)));
-    let (chain, latch, test) = if posttested {
-        let chain = _chain_after(function, header, loop_)?;
-        let latch = *chain.last().expect("a chain has blocks");
-        (chain, latch, latch)
-    } else {
-        let chain = _chain(function, header, loop_)?;
-        let latch = *chain.last().expect("a chain has blocks");
-        (chain, latch, header)
-    };
-    let exit = *function.successors(test).iter().find(|to| !loop_.body.contains(&cfg::id(**to)))?;
+    let (header, chain, latch, test, exit, posttested) = _shape(function, loop_)?;
 
     // A loop is a fill only if what it does besides arithmetic is stores, loads
     // and memsets that `_stored` or `_copied` take: asked before its trips are
@@ -641,6 +648,251 @@ fn _fill(
     })
 }
 
+/// A loop's header, the straight line of blocks its trips run, its latch, the
+/// block that tests, the exit, and whether it tests after them.
+fn _shape(
+    function: &Function,
+    loop_: &Loop,
+) -> Option<(BlockId, Vec<BlockId>, BlockId, BlockId, BlockId, bool)> {
+    let header = cfg::block(loop_.header);
+    if loop_.latches.len() != 1 {
+        return None;
+    }
+    // Tested before its trips: the header tests and the body is a straight line
+    // back to it, in whatever order its blocks lie. Tested after
+    // them: the body is a straight line from the header to the latch, which
+    // tests (a loop entered behind a copy of its test).
+    let successors = function.successors(header);
+    let posttested = loop_.body.len() == 1 || !successors.iter().any(|to| !loop_.body.contains(&cfg::id(*to)));
+    let (chain, latch, test) = if posttested {
+        let chain = _chain_after(function, header, loop_)?;
+        let latch = *chain.last().expect("a chain has blocks");
+        (chain, latch, latch)
+    } else {
+        let chain = _chain(function, header, loop_)?;
+        let latch = *chain.last().expect("a chain has blocks");
+        (chain, latch, header)
+    };
+    let exit = *function.successors(test).iter().find(|to| !loop_.body.contains(&cfg::id(**to)))?;
+    Some((header, chain, latch, test, exit, posttested))
+}
+
+/// A loop's fills that stay where the loop is not one: LLVM's
+/// `LoopIdiomRecognize` takes each store by itself, a memset ahead of the loop
+/// and the loop for what else it does.
+struct _Split {
+    preheader: BlockId,
+    fills: Vec<_Hoisted>,
+    /// The memset's pointer space and length width.
+    memset: (u32, u32),
+}
+
+/// A store of a split loop and the memset it becomes.
+struct _Hoisted {
+    effect: InstId,
+    root: Operand,
+    start: BigInt,
+    byte: Byte,
+    length: BigInt,
+}
+
+/// The fills of `loop_`, a loop of a known count whose other stores and loads
+/// touch other objects, that are as many memsets before it. Not a loop of
+/// fills only: that one is `_fill`'s whole.
+fn _split(
+    unit: &Unit,
+    callees: &Callees,
+    loop_: &Loop,
+    costs: &OperationCosts,
+    bytes_costs: &OperationCosts,
+    size: bool,
+) -> Option<_Split> {
+    // Priced like the loop's other fills; what a memset saves under `-Os`
+    // is a store of the loop that stays.
+    if size {
+        return None;
+    }
+    let function = unit.function;
+    let (header, chain, _, _, _, posttested) = _shape(function, loop_)?;
+    let preheader = cfg::block(loop_.preheader(function)?);
+    if loop_.exits(function).len() != 1 {
+        return None;
+    }
+    let plain = |inst: InstId| memory::speculatable(unit.context, callees, function, inst);
+    // A loop tested before its trips runs its header once more than its body.
+    if !posttested
+        && operations(function, header)
+            .into_iter()
+            .any(|inst| function.terminator(header) != Some(inst) && !plain(inst))
+    {
+        return None;
+    }
+    let proof = induction::counted(unit, loop_, None, true).into_iter().find(|proof| {
+        proof.posttested == posttested && proof.count.as_ref().is_some_and(|count| *count > BigInt::from(0))
+    })?;
+    let count = proof.count.clone()?;
+    let still = induction::invariant(function, &loop_.body);
+    let counters = induction::basics(unit, loop_);
+    let walk = induction::recurrences(unit, loop_, &counters);
+    let (mut fills, mut kept): (Vec<_Hoisted>, Vec<MemRef>) = (Vec::new(), Vec::new());
+    for &block in &chain {
+        for inst in operations(function, block) {
+            if function.terminator(block) == Some(inst) {
+                continue;
+            }
+            let op = function.instruction(inst);
+            let hoisted = match _stored(unit, callees, inst, &still) {
+                Some((pointer, byte, bytes)) if !matches!(byte, Byte::Pattern(..)) => {
+                    let formula = match pointer {
+                        Operand::Value(address) => walk.values.get(&address).filter(|one| one.pointer.is_some()),
+                        _ => None,
+                    };
+                    formula.and_then(|formula| {
+                        let width = formula.width();
+                        let bounded = unit.layout.pointer(unit.space(pointer)?).index_bits == width
+                            && proof.width() <= width
+                            && &count * &bytes < BigInt::from(1) << width;
+                        let start = formula.start.known()?;
+                        (bounded && formula.step.known()? == bytes).then(|| _Hoisted {
+                            effect: inst,
+                            root: formula.pointer.expect("a rooted pointer"),
+                            start,
+                            byte,
+                            length: &count * &bytes,
+                        })
+                    })
+                }
+                _ => None,
+            };
+            if let Some(hoisted) = hoisted {
+                fills.push(hoisted);
+                continue;
+            }
+            let address = match op.opcode {
+                Opcode::Store { .. } => op.operands[1],
+                Opcode::Load { .. } => op.operands[0],
+                _ if plain(inst) => continue,
+                _ => return None,
+            };
+            let at = MemRef::at(unit, address, 1);
+            if !at.object || at.root.is_none() {
+                return None;
+            }
+            kept.push(at);
+        }
+    }
+    if fills.is_empty() || kept.is_empty() {
+        return None;
+    }
+    // Each fill's object is its own, and none the loop's other accesses reach.
+    let objects = fills.iter().map(|fill| MemRef::at(unit, fill.root, 1)).collect::<Vec<_>>();
+    for (at, one) in objects.iter().enumerate() {
+        let rest = objects[at + 1..].iter().chain(kept.iter());
+        if !one.object || one.root.is_none() || rest.into_iter().any(|other| other.root == one.root || !other.object) {
+            return None;
+        }
+    }
+    // Over the trips the loop makes, the stores it keeps are what the memsets
+    // cost.
+    let trips = count.to_i64()?;
+    let word = match costs.memset_store {
+        0 => i64::from(unit.layout.pointer(0).bits / 8).max(4),
+        stored => stored,
+    };
+    let priced = |fill: &_Hoisted| {
+        let zero = matches!(fill.byte, Byte::Number(0));
+        let length = fill.length.to_i64()?;
+        let stored = Some((length, zero));
+        let store =
+            |costs: &OperationCosts| if costs.store_immediate > 0 { costs.store_immediate } else { costs.store };
+        // The stores the memset replaces are the trips of the loop only where
+        // the target expands a small memset inline and unrolls a loop of few
+        // trips; a loop that stays rolled holds one store, whose bytes the
+        // memset must not exceed (x86-16 nbody_fixed -O2 grew 7).
+        let stores = if costs.memset_store > 0 { trips } else { 1 };
+        Some(
+            trips * store(costs) >= fill_price(costs, size, trips, Some(trips), stored, word)
+                && stores * store(bytes_costs) >= fill_price(bytes_costs, true, trips, Some(trips), stored, word),
+        )
+    };
+    if !fills.iter().all(|fill| priced(fill) == Some(true)) {
+        return None;
+    }
+    let space = unit.space(fills[0].root)?;
+    let width = unit.layout.pointer(space).index_bits;
+    Some(_Split { preheader, fills, memset: (space, width) })
+}
+
+/// Each fill of `split` a memset ahead of its loop, its store gone.
+fn _hoist(
+    context: &mut Context,
+    layout: &DataLayout,
+    declared: &mut Declared,
+    function: &mut Function,
+    split: &_Split,
+) {
+    let at = function.terminator(split.preheader).expect("a preheader branch");
+    let (space, width) = split.memset;
+    let void = context.types.void();
+    let pointer_type = context.types.ptr(0);
+    let i8 = context.types.int(8);
+    for fill in &split.fills {
+        let align = match function.instruction(fill.effect).opcode {
+            Opcode::Store { align, .. } => align.or_else(|| {
+                let ty = function.operand_type(context, function.instruction(fill.effect).operands[0])?;
+                Some(layout.align(&context.types, ty))
+            }),
+            _ => None,
+        };
+        let destination = if fill.start == BigInt::from(0) {
+            fill.root
+        } else {
+            let ty = function.operand_type(context, fill.root).expect("a typed pointer");
+            let offset = counting::constant(context, &fill.start, width);
+            let gep = function.create_instruction(
+                Opcode::GetElementPtr { source: i8 },
+                ty,
+                vec![fill.root, offset],
+                Flags::default(),
+                None,
+            );
+            function.insert(gep, Position::Before(at)).expect("a placed branch");
+            Operand::Value(function.instruction(gep).result.expect("a pointer"))
+        };
+        let byte = match fill.byte {
+            Byte::Operand(byte) => byte,
+            Byte::Number(byte) => counting::constant(context, &BigInt::from(byte), 8),
+            Byte::Pattern(value) => value,
+        };
+        let (callee, function_type) = _memset(context, declared, space, width);
+        let callee =
+            Operand::Constant(context.constant(Constant { ty: pointer_type, kind: ConstantKind::Global(callee) }));
+        let mut argument_attrs = vec![Vec::new(); 4];
+        if let Some(align) = align {
+            argument_attrs[0].push(llrm_mir::opcode::Attribute::Int("align".to_owned(), align));
+        }
+        let info = CallInfo {
+            function_type,
+            calling_convention: 0,
+            return_attrs: Vec::new(),
+            argument_attrs,
+            attrs: Vec::new(),
+            tail: Default::default(),
+        };
+        let length = counting::constant(context, &fill.length, width);
+        let off = counting::constant(context, &BigInt::from(0), 1);
+        let call = function.create_instruction(
+            Opcode::Call(Box::new(info)),
+            void,
+            vec![destination, byte, length, off, callee],
+            Flags::default(),
+            None,
+        );
+        function.insert(call, Position::Before(at)).expect("a placed branch");
+        function.erase(fill.effect).expect("an effect has no result");
+    }
+}
+
 /// The first of a loop's fills as `_fill` takes the only one, and the others as
 /// `Extra`s, where every effect of the loop is a fill of a plain byte, each
 /// strides by its cell over bytes no other reaches. The loop's trips then fill
@@ -769,7 +1021,7 @@ fn _pays(
 /// What one trip of the loop through `blocks` costs, in `costs`' units. In
 /// bytes the loop's counter work is the step and its branch: the phi is a
 /// register, the address an operand, the test the step's flags.
-fn trip_cost<'a>(
+pub(crate) fn trip_cost<'a>(
     context: &Context,
     layout: &DataLayout,
     function: &Function,
@@ -778,14 +1030,43 @@ fn trip_cost<'a>(
     costs: &OperationCosts,
     size: bool,
 ) -> i64 {
+    trip_total(context, layout, function, callees, blocks, costs, size, true)
+}
+
+/// `trip_cost` in clocks: a jump to the next block is the layout's and runs
+/// nothing, so a trip pays for its one conditional branch (matmul nib -O2: the
+/// row-zeroing nest has two `br`s and one `jne`).
+pub(crate) fn trip_clocks<'a>(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    callees: &Callees,
+    blocks: impl Iterator<Item = &'a BlockId>,
+    costs: &OperationCosts,
+) -> i64 {
+    trip_total(context, layout, function, callees, blocks, costs, true, false)
+}
+
+fn trip_total<'a>(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    callees: &Callees,
+    blocks: impl Iterator<Item = &'a BlockId>,
+    costs: &OperationCosts,
+    size: bool,
+    jumps: bool,
+) -> i64 {
     blocks
         .flat_map(|&block| operations(function, block))
         .filter(|&inst| {
-            !size
-                || !matches!(
-                    function.instruction(inst).opcode,
+            let one = function.instruction(inst);
+            let jump = one.opcode == Opcode::Br && one.operands.len() == 1;
+            (jumps || !jump)
+                && (!size || !matches!(
+                    one.opcode,
                     Opcode::Phi | Opcode::GetElementPtr { .. } | Opcode::ICmp(_)
-                )
+                ))
         })
         .map(|inst| profit::operation(context, layout, function, callees, inst, costs).unwrap_or(costs.add))
         .sum()
@@ -796,7 +1077,8 @@ fn trip_cost<'a>(
 /// pin lowers that copy to a libc call, which llrm has none of: the string
 /// instruction takes ES, three registers, the count split in dwords and odd
 /// bytes, and a second `rep movs` (x_mergesort msort at m16 -Os: three sites,
-/// 16 bytes over the loop each).
+/// 16 bytes over the loop each). Owner w2, exit 2026-11-20: the DAG's
+/// variable-length copy (MEM-1) prices it at m16 as it does at m32.
 pub(crate) fn variable_copy_pays(
     context: &Context,
     layout: &DataLayout,
@@ -804,14 +1086,20 @@ pub(crate) fn variable_copy_pays(
     callees: &Callees,
     blocks: &[BlockId],
     costs: &OperationCosts,
+    bytes_only: bool,
 ) -> bool {
-    trip_cost(context, layout, function, callees, blocks.iter(), costs, true) > costs.copy + costs.copy_variable
+    // Priced against clocks too (-O2/-O3), the call's bytes are not the whole
+    // cost: x_radix -O2 went 657 -> 370 B and +18% clocks.
+    let call = if bytes_only { costs.copy_variable } else { 0 };
+    trip_cost(context, layout, function, callees, blocks.iter(), costs, true) > costs.copy + call
 }
 
 /// DEVIATE, for `loopidiom`: whether `fills` fills, for the `stores` stores of
 /// the loop over `blocks`, are fewer code bytes than the loop. A loop of one
 /// store is always filled; of several, each fill is a `rep stos` with ES set
-/// around it, and the stores of one object with one value merge into one.
+/// around it, and the stores of one object with one value merge into one. Only
+/// where the target's fill has that segment setup (`fill_segment`); elsewhere
+/// the pin's rule stands and every such loop is filled.
 pub(crate) fn fills_pay(
     context: &Context,
     layout: &DataLayout,
@@ -822,28 +1110,72 @@ pub(crate) fn fills_pay(
     stores: i64,
     fills: i64,
     kept: i64,
+    at_speed: bool,
     clocks: Option<(&OperationCosts, i64, Option<i64>, Option<i64>)>,
+    inline: Option<InlineFills>,
 ) -> bool {
+    // `clocks`' last entry is the cells the fill stores in all: a cell is a
+    // `stos` of a dword, or the pattern's own cell.
     // The loop stays for the stores of computed values: a fill saves one
     // store, less than itself.
     if kept > 0 {
         return false;
     }
-    // The table doubles an operation that becomes more than one instruction;
-    // a fill's three immediate loads are 2 to 3 bytes each, not 6: three
-    // quarters of `fill` is its real size (12 to 13 of 18 bytes at m16).
+    // `costs.fill` is the fill as encoded: its loads are the instructions.
     let loop_bytes = trip_cost(context, layout, function, callees, blocks.iter(), costs, true);
-    (stores < 2 || fills_cheaper(loop_bytes, fills, costs.fill))
+    // At speed under a clock price (m16 -O2: 1 clock = 2 B) with the trips
+    // known, the bytes are in the price: a fill larger than the loop still pays
+    // for the clocks it saves. At -Os, or for unknown trips, the bytes decide.
+    let priced = at_speed && clocks.is_some_and(|(_, _, trips, cells)| trips.is_some() && cells.is_some());
+    // A small constant fill is stored inline, not as a `rep stos`.
+    let each_fill =
+        inline.filter(|inline| inline.stores() <= inline.max_stores).map_or(costs.fill, |inline| inline.price(costs));
+    (stores < 2 || priced || fills_cheaper(loop_bytes, fills, each_fill))
         && clocks.is_none_or(|(clocks, rate, trips, width)| {
             // The clocks the fill adds against the bytes it saves, as the
             // backend prices a memset's fill against its stores. The loop
             // stays when its extra bytes buy fewer clocks than that.
-            let (Some(trips), Some(width)) = (trips, width) else { return true };
-            let each = trip_cost(context, layout, function, callees, blocks.iter(), clocks, true);
-            let fill = fills * clocks.fill + trips * width * clocks.fill_cell;
-            let saved = loop_bytes - 3 * fills * costs.fill / 4;
+            let (Some(trips), Some(cells)) = (trips, width) else { return true };
+            let each = trip_clocks(context, layout, function, callees, blocks.iter(), clocks);
+            // At speed the backend stores a small constant fill inline
+            // (`MaxStoresPerMemset`) and uses `rep stos` for the rest.
+            let (fill, fill_bytes) = match inline.filter(|inline| inline.stores() <= inline.max_stores) {
+                Some(inline) => (fills * inline.price(clocks), fills * inline.price(costs)),
+                None => (fills * clocks.fill + cells * clocks.fill_cell, fills * costs.fill),
+            };
+            let saved = loop_bytes - fill_bytes;
+            if rate == 0 {
+                // No rate: neither metric may grow.
+                return fill <= trips * each && saved >= 0;
+            }
             clocks_pay(saved, rate, fill, trips * each)
         })
+}
+
+/// A fill the backend may store inline: `bytes` long, and the most stores a
+/// constant memset takes before it is a `rep stos`
+/// (`Tuning::max_stores_per_memset`).
+#[derive(Clone, Copy)]
+pub(crate) struct InlineFills {
+    pub max_stores: i64,
+    pub bytes: i64,
+}
+
+impl InlineFills {
+    /// Its stores: dwords, then a word and a byte for the tail.
+    pub(crate) fn stores(self) -> i64 {
+        self.bytes / 4 + i64::from(self.bytes % 4 >= 2) + self.bytes % 2
+    }
+
+    /// What those stores cost in `prices`: a dword store carries the
+    /// operand-size prefix where the target has one (`fill_is_smaller`).
+    pub(crate) fn price(
+        self,
+        prices: &OperationCosts,
+    ) -> i64 {
+        let dwords = self.bytes / 4;
+        dwords * (prices.store_immediate + prices.prefix) + (self.stores() - dwords) * prices.store_immediate
+    }
 }
 
 /// Whether the `saved` bytes of the fill are worth the clocks it adds over
@@ -857,14 +1189,13 @@ fn clocks_pay(
     saved * rate >= (fill - looped) * 1000
 }
 
-/// Whether a loop of `loop_bytes` is more than `fills` fills of `fill` bytes by
-/// the table, three quarters of which is their real size.
+/// Whether a loop of `loop_bytes` is more than `fills` fills of `fill` bytes.
 fn fills_cheaper(
     loop_bytes: i64,
     fills: i64,
     fill: i64,
 ) -> bool {
-    4 * loop_bytes > 3 * fills * fill
+    loop_bytes > fills * fill
 }
 
 /// What a copy of `length` bytes costs: the loads and stores isel expands it to
@@ -901,6 +1232,35 @@ fn _cheaper(
     _cheaper_by(each, known, most, costs, size, moved, 1, None)
 }
 
+/// What one memset costs over `trips` cells: its stores while they are under
+/// the CPU's ratio, as isel expands it (`stored`: its length known, and
+/// whether it is zeros), else the string instruction.
+fn fill_price(
+    costs: &OperationCosts,
+    size: bool,
+    trips: i64,
+    known: Option<i64>,
+    stored: Option<(i64, bool)>,
+    word: i64,
+) -> i64 {
+    let string = costs.fill + trips * costs.fill_cell;
+    match (stored, known) {
+        // The fill's length known: stores while they are under the CPU's
+        // ratio, as `memset` expands it (a CPU with none states keeps the
+        // cells it has always taken).
+        (Some((length, zero)), _) if costs.pieces(size, zero) > 0 => {
+            let pieces = length / word + i64::from((length % word).count_ones());
+            if pieces < costs.pieces(size, zero) {
+                pieces * costs.store
+            } else {
+                costs.fill + (length + word - 1) / word * costs.fill_cell
+            }
+        }
+        (_, Some(count)) if count <= 16 => count * costs.store,
+        _ => string,
+    }
+}
+
 /// `_cheaper`, for a loop whose trips are `fills` fills, each its own memset.
 fn _cheaper_by(
     each: i64,
@@ -916,23 +1276,7 @@ fn _cheaper_by(
     // Isel expands a few cells to stores, as gcc's by-pieces rule says, and a
     // few bytes of a copy to loads and stores.
     let Some((bytes, backward)) = moved else {
-        let string = costs.fill + trips * costs.fill_cell;
-        let fill = match (stored, known) {
-            // The fill's length known: stores while they are under the CPU's
-            // ratio, as `memset` expands it (a CPU with none states keeps the
-            // cells it has always taken).
-            (Some((length, zero)), _) if costs.pieces(size, zero) > 0 => {
-                let pieces = length / 4 + i64::from((length % 4).count_ones());
-                if pieces < costs.pieces(size, zero) {
-                    pieces * costs.store
-                } else {
-                    costs.fill + (length + 3) / 4 * costs.fill_cell
-                }
-            }
-            (_, Some(count)) if count <= 16 => count * costs.store,
-            _ => string,
-        };
-        return trips * each > fills * fill;
+        return trips * each > fills * fill_price(costs, size, trips, known, stored, 4);
     };
     let copy = match known {
         Some(count) => copy_price(costs, count * bytes, backward),
@@ -1000,6 +1344,7 @@ pub(crate) fn _copy(
 /// The loop made one trip that fills.
 fn _filled(
     context: &mut Context,
+    layout: &DataLayout,
     declared: &mut Declared,
     function: &mut Function,
     found: &_Found,
@@ -1113,11 +1458,33 @@ fn _filled(
         off,
         Operand::Constant(seeds.context.constant(Constant { ty: pointer, kind: ConstantKind::Global(callee) })),
     ]);
+    // A memset's destination keeps the alignment its stores had, the least of
+    // them: without it the backend fills by bytes (`rep stosb`).
+    let dest_align = matches!(found.stored, Stored::Fill(..))
+        .then(|| {
+            std::iter::once(found.effect)
+                .chain(found.absorbed.iter().copied())
+                .map(|store| match function.instruction(store).opcode {
+                    // No `align` is the type's ABI alignment.
+                    Opcode::Store { align, .. } => align.or_else(|| {
+                        let ty = function.operand_type(context, function.instruction(store).operands[0])?;
+                        Some(layout.align(&context.types, ty))
+                    }),
+                    _ => None,
+                })
+                .try_fold(u64::MAX, |least, align| align.map(|align| least.min(align)))
+        })
+        .flatten()
+        .filter(|align| *align != u64::MAX);
+    let mut argument_attrs = vec![Vec::new(); 4];
+    if let Some(align) = dest_align {
+        argument_attrs[0].push(llrm_mir::opcode::Attribute::Int("align".to_owned(), align));
+    }
     let info = CallInfo {
         function_type,
         calling_convention: 0,
         return_attrs: Vec::new(),
-        argument_attrs: vec![Vec::new(); 4],
+        argument_attrs,
         attrs: Vec::new(),
         tail: Default::default(),
     };
@@ -1308,8 +1675,11 @@ fn _stored(
         return Some((pointer, Byte::Number(byte), bytes));
     }
     // LLVM's memset_pattern16: the cell is a word or dword; the stored value
-    // need not be a constant.
-    matches!(width, 16 | 32).then_some((pointer, Byte::Pattern(value), bytes))
+    // need not be a constant. Not over a pointer whose index is wider than the
+    // default space's (a huge array): the count would be wider than the
+    // target's `rep stos` takes, and isel cannot lower it.
+    let counted = unit.layout.pointer(unit.space(pointer)?).index_bits <= unit.layout.pointer(0).index_bits;
+    (matches!(width, 16 | 32) && counted).then_some((pointer, Byte::Pattern(value), bytes))
 }
 
 /// The store and load of `one` and `other`, where the store writes the loaded

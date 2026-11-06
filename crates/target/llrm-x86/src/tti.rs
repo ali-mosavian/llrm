@@ -49,13 +49,27 @@ pub struct X86 {
     /// X86.td lists it); `branchfusion` is a Bulldozer-and-newer feature none
     /// of the profiles has.
     pub macro_fusion: bool,
+    /// `FeatureCMOV` (X86.td): the i386, i486, pentium, k5 and k6 have none.
+    pub cmov: bool,
     /// Long mode: the integer registers are 64 bits wide (`is64Bit`).
     pub quad: bool,
     /// What real mode's addressing and register file make of the hooks LSR
     /// reads (T6); none: the 32-bit mode's.
     pub real_mode: Option<RealMode>,
+    /// General registers a value may sit in, where the target's description
+    /// states them (frame and stack pointers excluded); none: the pin's count.
+    pub registers: Option<u32>,
     /// The target's tuning table (`Machine::tuning`); the pin's by default.
     pub tuning: llrm_mir::target::Tuning,
+    /// `getSchedModel().LoopMicroOpBufferSize` of the cpu's model: 28 for the
+    /// `SandyBridgeModel` of `core2` and `x86-64`, 0 for the `GenericModel` of
+    /// the rest (`LoopMicroOpBufferSize = -1`).
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86SchedSandyBridge.td#L28
+    pub loop_micro_op_buffer: u32,
+    /// The program's code is position independent (clang's "PIC Level"); set
+    /// by `Program::new`. A symbol in long mode is then `[rip + symbol]`
+    /// without index or displacement.
+    pub position_independent: std::cell::Cell<bool>,
 }
 
 /// T6: the 16-bit target's address forms and registers, from its description
@@ -73,6 +87,10 @@ pub struct RealMode {
     /// The space of huge pointers: an offset there carries into the selector,
     /// so an address is one register and no more.
     pub huge_space: Option<u32>,
+    /// Registers the target's cheapest address form can name (a base and an
+    /// index of its classes, the frame's excluded); none: any general
+    /// register.
+    pub address_registers: Option<u32>,
     /// The target's `-Os` growth guard for inlining (SZ1, D11): a callee that
     /// stays is inlined into an `optsize` caller only if its code does not
     /// outgrow the call. The pin has none (its `OptSizeThreshold` 50 counts
@@ -86,6 +104,12 @@ pub struct RealMode {
     /// (trips, bar): an `optsize` loop of at most that many trips is fully
     /// unrolled under that unrolled size (DEVIATE U1). (0, 0): the pin's.
     pub unroll_size_few_trips: (u32, u32),
+    /// DEVIATE REC-1: (depth, callee size) of the recursion taken at speed;
+    /// none: the pin's.
+    pub recursive_inlining: Option<(u32, i64)>,
+    /// DEVIATE REC-1: the ceilings of the priced copies of a function in
+    /// itself (`Tti::priced_self_inlining`); none: `recursive_inlining`.
+    pub priced_self_inlining: Option<(u32, i64)>,
 }
 
 impl RealMode {
@@ -103,34 +127,60 @@ impl X86 {
         if self.quad { 64 } else { 32 }
     }
 
+    /// The profile of the baseline cpu of `triple`'s architecture: the 32-bit
+    /// ones by their `-march` (`i686` is `pentiumpro`), `x86_64` long mode.
+    pub fn of_triple(triple: &str) -> Option<X86> {
+        let cpu = match triple.split('-').next()? {
+            "x86_64" => "x86-64",
+            "i386" => "i386",
+            "i486" => "i486",
+            "i586" => "pentium",
+            "i686" => "pentiumpro",
+            _ => return None,
+        };
+        X86::of_cpu(cpu)
+    }
+
     /// The profile of a `-march` llrm supports.
     pub fn of_cpu(cpu: &str) -> Option<X86> {
         match cpu {
             "i386" | "i486" | "pentium" | "pentiumpro" | "k5" | "k6" | "athlon" => Some(X86 {
+                cmov: !matches!(cpu, "i386" | "i486" | "pentium" | "k5" | "k6"),
                 sse1: false,
                 sse2: false,
                 macro_fusion: false,
                 quad: false,
                 real_mode: None,
+                registers: None,
                 tuning: llrm_mir::target::Tuning::PIN,
+                loop_micro_op_buffer: 0,
+                position_independent: std::cell::Cell::new(true),
             }),
             "core2" => Some(X86 {
+                cmov: true,
                 sse1: true,
                 sse2: true,
                 macro_fusion: true,
                 quad: false,
                 real_mode: None,
+                registers: None,
                 tuning: llrm_mir::target::Tuning::PIN,
+                loop_micro_op_buffer: 28,
+                position_independent: std::cell::Cell::new(true),
             }),
             // `-march=x86-64`: the baseline of long mode, SSE2
             // and `TuningMacroFusion` (X86.td `X86_64V1Tuning`).
             "x86-64" => Some(X86 {
+                cmov: true,
                 sse1: true,
                 sse2: true,
                 macro_fusion: true,
                 quad: true,
                 real_mode: None,
+                registers: None,
                 tuning: llrm_mir::target::Tuning::PIN,
+                loop_micro_op_buffer: 28,
+                position_independent: std::cell::Cell::new(true),
             }),
             _ => None,
         }
@@ -154,6 +204,14 @@ impl X86 {
         real_mode: RealMode,
     ) -> X86 {
         X86 { real_mode: Some(real_mode), ..self.clone() }
+    }
+
+    /// The registers the target's description allocates.
+    pub fn with_registers(
+        &self,
+        registers: u32,
+    ) -> X86 {
+        X86 { registers: Some(registers), ..self.clone() }
     }
 
     /// The target's tuning table.
@@ -513,8 +571,102 @@ impl Tti for X86 {
         self.tuning.inline_threshold
     }
 
+    fn speed_milliclocks_per_byte(&self) -> i64 {
+        self.tuning.speed_milliclocks_per_byte
+    }
+
+    fn unroll_milliclocks_per_byte(&self) -> i64 {
+        self.tuning.unroll_milliclocks_per_byte
+    }
+
+    fn multiply_by_clocks(&self) -> bool {
+        self.tuning.multiply_by_clocks
+    }
+
+    fn price_pin_multiplies(&self) -> bool {
+        self.tuning.price_pin_multiplies
+    }
+
+    fn has_cmov(&self) -> bool {
+        self.cmov
+    }
+
     fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
         (self.tuning.unroll_threshold, self.tuning.unroll_max_percent_threshold_boost)
+    }
+
+    /// `X86.td` gives `core2` and `x86-64` the `SandyBridgeModel`; the base
+    /// `getUnrollingPreferences` then enables partial and runtime unrolling
+    /// (`Tti::get_unrolling_preferences`):
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L768-L803
+    fn set_position_independent(
+        &self,
+        position_independent: bool,
+    ) {
+        self.position_independent.set(position_independent);
+    }
+
+    fn loop_micro_op_buffer_size(&self) -> u32 {
+        self.loop_micro_op_buffer
+    }
+
+    fn x87_stack_slots(&self) -> Option<u32> {
+        self.tuning.x87_stack_slots.filter(|_| !self.sse2)
+    }
+
+    fn unroll_partial_threshold_override(&self) -> Option<u32> {
+        self.tuning.unroll_partial_threshold
+    }
+
+    fn unroll_jam_exact_count(&self) -> bool {
+        self.tuning.unroll_jam_exact_count
+    }
+
+    fn unroll_jam_partial_threshold_override(&self) -> Option<u32> {
+        self.tuning.unroll_jam_partial_threshold
+    }
+
+    fn unswitch_threshold_override(&self) -> Option<i64> {
+        self.tuning.unswitch_threshold
+    }
+
+    fn recursive_inlining(&self) -> Option<(u32, i64)> {
+        match self.real_mode.as_ref() {
+            Some(real) => real.recursive_inlining,
+            None => self.tuning.recursive_inlining,
+        }
+    }
+
+    fn recursive_edge_growth(&self) -> Option<(i64, i64)> {
+        self.tuning.recursive_edge_growth
+    }
+
+    fn recursive_inlining_growth(&self) -> Option<(i64, i64)> {
+        self.tuning.recursive_inlining_growth
+    }
+
+    fn recursive_tre_first(&self) -> (bool, bool) {
+        self.tuning.recursive_tre_first
+    }
+
+    fn peels_folded_entry(&self) -> bool {
+        self.tuning.peel_folded_entry
+    }
+
+    fn sinks_select_arms(&self) -> bool {
+        self.tuning.sink_select_arms
+    }
+
+    fn inlines_variable_memcpy(&self) -> bool {
+        self.tuning.inline_variable_memcpy
+    }
+
+    fn ipsccp_widen_keeps_sign(&self) -> bool {
+        self.tuning.ipsccp_widen_keeps_sign
+    }
+
+    fn priced_self_inlining(&self) -> Option<(u32, i64)> {
+        self.real_mode.as_ref()?.priced_self_inlining
     }
 
     fn unroll_size_few_trips(&self) -> Option<(u32, u32)> {
@@ -526,7 +678,31 @@ impl Tti for X86 {
     /// says so (`RealMode::inline_size_guard`): at m32 -Os follows the pin
     /// (crc, tile and recchop grow 52, 42 and 15 bytes there).
     fn opt_size_inline_by_code_size(&self) -> bool {
-        self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard)
+        self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard) || self.tuning.inline_size_guard_at_size
+    }
+
+    fn opt_size_inline_guard_min_sites(&self) -> i64 {
+        if self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard) || self.tuning.inline_size_guard_single_site {
+            1
+        } else {
+            2
+        }
+    }
+
+    fn unroll_promotion_fits_registers(&self) -> bool {
+        self.tuning.unroll_promotion_fits_registers
+    }
+
+    fn rotation_guard_must_fold_at_size(&self) -> bool {
+        self.tuning.rotation_guard_must_fold_at_size
+    }
+
+    fn rotation_header_priced_at_size(&self) -> bool {
+        self.tuning.rotation_header_priced_at_size
+    }
+
+    fn constant_offset_phi_is_cheap(&self) -> bool {
+        !self.tuning.keep_constant_displacements
     }
 
     /// A call is 5 bytes and the push of an argument 1 to 4, against 2 to 3 for
@@ -539,6 +715,63 @@ impl Tti for X86 {
 
     fn float_code_size_percent(&self) -> i64 {
         self.real_mode.as_ref().map_or(100, |real| real.float_code_size_percent)
+    }
+
+    // X86TTIImpl::enableMemCmpExpansion
+    // (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L7513).
+    // DEVIATE X1 (exit 2026-11-30, same permalink): the 16-, 32- and 64-byte
+    // vector load sizes of an equality compare are left out (vectors are
+    // deferred); the pin takes them from `getPreferVectorWidth`.
+    fn enable_mem_cmp_expansion(
+        &self,
+        _opt_size: bool,
+        is_zero_cmp: bool,
+    ) -> Option<MemCmpExpansionOptions> {
+        let mut load_sizes = Vec::new();
+        if self.quad {
+            load_sizes.push(8);
+        }
+        load_sizes.extend([4, 2, 1]);
+        Some(MemCmpExpansionOptions {
+            load_sizes,
+            // X86ISelLowering.cpp#L2946: MaxLoadsPerMemcmp and its OptSize
+            // twin.
+            max_num_loads: 2,
+            num_loads_per_block: if is_zero_cmp { 2 } else { 1 },
+            allow_overlapping_loads: true,
+            allowed_tail_expansions: Vec::new(),
+        })
+    }
+
+    // X86TargetLowering::allowsMisalignedMemoryAccesses
+    // (X86ISelLoweringCall.cpp#L371): any size, but a non-temporal vector.
+    fn allows_misaligned_memory_accesses(
+        &self,
+        _bits: u32,
+        _address_space: u32,
+        _align: u64,
+    ) -> bool {
+        true
+    }
+
+    // X86TTIImpl::hasDivRemOp (X86TargetTransformInfo.cpp#L7421) asks
+    // `isOperationLegal(SDIVREM/UDIVREM, VT)`; X86ISelLowering sets the scalar
+    // divides to `Expand` (L340) and leaves the two-result ones at the base
+    // class's `Legal`, so every register type has one.
+    fn has_div_rem_op(
+        &self,
+        bits: u32,
+        _signed: bool,
+    ) -> bool {
+        self.is_type_legal(Ty::Int(bits))
+    }
+
+    /// `FSQRT` is legal on every scalar float: the SSE instruction, or x87's.
+    fn have_fast_sqrt(
+        &self,
+        ty: Ty,
+    ) -> bool {
+        matches!(ty, Ty::Float | Ty::Double | Ty::X87)
     }
 
     fn is_type_legal(
@@ -773,6 +1006,53 @@ impl Tti for X86 {
         cost
     }
 
+    /// `X86TTIImpl::getIntImmCostIntrin`:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L7040
+    fn int_imm_cost_intrin(
+        &self,
+        name: &str,
+        index: u32,
+        imm: i128,
+        bits: u32,
+    ) -> Cost {
+        if bits == 0 {
+            return Cost::FREE;
+        }
+        let name = name.strip_prefix("llvm.").unwrap_or(name);
+        // `getBitWidth() <= 64 && isSignedIntN(width)`.
+        let extended = if bits >= 128 { imm } else { (imm << (128 - bits)) >> (128 - bits) };
+        let fits = |width: u32| bits <= 64 && (-(1i128 << (width - 1))..1i128 << (width - 1)).contains(&extended);
+        let overflow = ["sadd", "uadd", "ssub", "usub", "smul", "umul"]
+            .iter()
+            .any(|op| name.strip_prefix(op).is_some_and(|rest| rest.starts_with(".with.overflow")));
+        if overflow {
+            if index == 1 && fits(32) {
+                return Cost::FREE;
+            }
+        } else if name.starts_with("experimental.stackmap") {
+            if index < 2 || fits(64) {
+                return Cost::FREE;
+            }
+        } else if name.starts_with("experimental.patchpoint") {
+            if index < 4 || fits(64) {
+                return Cost::FREE;
+            }
+        } else {
+            return Cost::FREE;
+        }
+        self.int_imm_cost(imm, bits)
+    }
+
+    /// `X86TargetLowering::isIntDivCheap`: only at `minsize`.
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L65389
+    fn prefer_to_keep_constants_attached(
+        &self,
+        div_rem_by_constant: bool,
+        min_size: bool,
+    ) -> bool {
+        div_rem_by_constant && !min_size
+    }
+
     /// `X86TargetLowering::isTruncateFree`:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L36743
     fn is_truncate_free(
@@ -824,7 +1104,7 @@ impl Tti for X86 {
         // symbol is `[rip + symbol]`, which takes no displacement
         // beside it and no index (the `isPositionIndependent() && is64Bit()`
         // rule).
-        if self.quad && base_gv && (base_offset != 0 || scale > 1) {
+        if self.quad && self.position_independent.get() && base_gv && (base_offset != 0 || scale > 1) {
             return false;
         }
         match scale {
@@ -905,12 +1185,33 @@ impl Tti for X86 {
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L173
     /// Eight general registers, sixteen in long mode (`getNumberOfRegisters`).
     fn number_of_gpr_registers(&self) -> u32 {
-        self.real_mode.as_ref().map_or(if self.quad { 16 } else { 8 }, |real| real.registers)
+        self.real_mode.as_ref().map_or(self.registers.unwrap_or(if self.quad { 16 } else { 8 }), |real| real.registers)
     }
 
-    /// `lea` forms `base + index + displacement` in one instruction.
-    fn address_form_adds_offsets(&self) -> bool {
+    /// Real mode declares the registers the allocator has, and the live count
+    /// LSR keeps is exact there: the six fill (PLASMA's loop, 4 + 2 live).
+    fn lsr_reserved_registers(&self) -> u32 {
+        u32::from(self.real_mode.is_none())
+    }
+
+    /// `[bp+disp]` and `[esp+disp]` reach a stack slot with no register to hold
+    /// it.
+    fn frame_address_is_free(&self) -> bool {
         true
+    }
+
+    /// 64 in long mode, else 32 (also at m16, on a 386 or later).
+    fn gpr_bits(&self) -> u32 {
+        if self.quad { 64 } else { 32 }
+    }
+
+    /// `lea` forms `base + index + displacement` in one instruction, from 16
+    /// bits up: there is no 8-bit `lea`.
+    fn address_form_adds_offsets(
+        &self,
+        bits: u32,
+    ) -> bool {
+        bits >= 16
     }
 
     /// DEVIATE LU4: real mode keeps the loop as written where LSR's own model
@@ -925,9 +1226,20 @@ impl Tti for X86 {
         self.real_mode.is_some()
     }
 
+    fn mirrors_conditional_counters(&self) -> bool {
+        self.real_mode.is_some()
+    }
+
     /// Real mode forms a scaled index with an address-size prefix.
     fn lsr_drops_spilling_solution(&self) -> bool {
         self.real_mode.is_some()
+    }
+
+    fn address_registers(&self) -> u32 {
+        self.real_mode
+            .as_ref()
+            .and_then(|real| real.address_registers)
+            .unwrap_or_else(|| self.number_of_gpr_registers())
     }
 
     fn scaled_index_insns(&self) -> u32 {
@@ -997,6 +1309,12 @@ impl Tti for X86 {
 
     /// `X86TTIImpl::getArithmeticInstrCost`, scalars:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L255
+    /// The count must sit in `cl`. Not in real mode: its six registers spill
+    /// the multiplier's select (pack_ref -Os m16: +24 B).
+    fn variable_shift_count_in_fixed_register(&self) -> bool {
+        self.real_mode.is_none()
+    }
+
     fn arithmetic_cost(
         &self,
         op: ArithOp,

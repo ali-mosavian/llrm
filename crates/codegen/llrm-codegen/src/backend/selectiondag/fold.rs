@@ -308,7 +308,7 @@ impl SelectionDAG {
         flags: SDNodeFlags,
     ) -> Folded {
         // canonicalizeCommutativeBinop: constant to the right
-        if opcode.is_commutative_binop() && self.constant(n1).is_some() && self.constant(n2).is_none() {
+        if opcode.is_commutative_binop() && self.is_constant_int(n1) && !self.is_constant_int(n2) {
             std::mem::swap(&mut n1, &mut n2);
         }
         let n2_const = self.constant(n2);
@@ -433,7 +433,6 @@ impl SelectionDAG {
 
         if self.opcode(n2) == ISD::Undef {
             let both = self.opcode(n1) == ISD::Undef;
-            let width = vt.size_in_bits();
             let value = match opcode {
                 ISD::Xor if both => Some(self.get_constant(0, vt)),
                 ISD::Xor | ISD::Add | ISD::PtrAdd | ISD::Sub => Some(n2),
@@ -444,8 +443,8 @@ impl SelectionDAG {
                 ISD::Or | ISD::SAddSat | ISD::UAddSat | ISD::UMax => {
                     Some(if both { n2 } else { self.get_all_ones_constant(vt) })
                 }
-                ISD::SMax => Some(if both { n2 } else { self.get_constant(mask(width - 1), vt) }),
-                ISD::SMin => Some(if both { n2 } else { self.get_constant(1u128 << (width - 1), vt) }),
+                ISD::SMax => Some(if both { n2 } else { self.get_constant(mask(vt.size_in_bits() - 1), vt) }),
+                ISD::SMin => Some(if both { n2 } else { self.get_constant(1u128 << (vt.size_in_bits() - 1), vt) }),
                 _ => None,
             };
             if let Some(value) = value {
@@ -661,6 +660,22 @@ impl SelectionDAG {
             return super::fp_value::quiet_nan(vt).map(|bits| self.get_constant_fp(bits, vt));
         }
         None
+    }
+
+    /// `isConstantIntBuildVectorOrConstantInt`: a constant, or a global
+    /// address whose offset folds (`isOffsetFoldingLegal`).
+    pub fn is_constant_int(
+        &self,
+        value: SDValue,
+    ) -> bool {
+        if self.constant(value).is_some() {
+            return true;
+        }
+        let NodeData::Global { symbol, .. } = self.node(value).data else { return false };
+        self.config.global_addresses_constant
+            && self.opcode(value) == ISD::GlobalAddress
+            && self.config.offset_folding
+            && self.local_symbols.get(symbol as usize).copied().unwrap_or(true)
     }
 
     /// `FoldSymbolOffset`: `(add Sym, c)` and `(sub Sym, c)` as `Sym+c`.

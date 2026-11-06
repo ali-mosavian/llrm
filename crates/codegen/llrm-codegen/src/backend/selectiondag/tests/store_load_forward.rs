@@ -13,7 +13,7 @@ fn info(
     vt: EVT,
     slot: i32,
 ) -> MemInfo {
-    MemInfo { mem_vt: vt, align: 4, volatile: false, base: MemBase::Stack(slot), ext: None, space: 0 }
+    MemInfo { mem_vt: vt, align: 4, volatile: false, base: MemBase::Stack(slot), ext: None, space: 0, ordering: None }
 }
 
 /// `store value -> [slot_store]; x = load [slot_load]; store x -> [out]`: the
@@ -95,4 +95,28 @@ fn a_stored_double_is_not_forwarded() {
     combine(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes);
     let root = dag.get_root();
     assert_eq!(dag.opcode(dag.operand(root, 1)), ISD::Load);
+}
+
+/// nbody_single (wasm32, O3) kept four `f32.load`s of globals the entry block
+/// had just stored a constant to: +36 B over the pin, which forwards a stored
+/// float on a target whose floats are in registers.
+#[test]
+fn a_stored_float_is_forwarded_where_floats_are_not_on_a_stack() {
+    const F32: EVT = EVT::Simple(MVT::F32);
+    let forwarded = |fp_stack: bool| {
+        let mut dag = SelectionDAG::new(DagConfig { fp_stack, ..DagConfig::default() });
+        let entry = dag.entry_node();
+        let ptr = dag.get_register(EVT::I32, 7);
+        let out = dag.get_register(EVT::I32, 8);
+        let value = dag.get_register(F32, 5);
+        let store = dag.get_store(entry, value, ptr, info(F32, 1));
+        let loaded = dag.get_load(F32, store, ptr, info(F32, 1));
+        let last = dag.get_store(SDValue { node: loaded.node, res: 1 }, loaded, out, info(F32, 9));
+        dag.set_root(last);
+        combine(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes);
+        let root = dag.get_root();
+        dag.operand(root, 1) == value
+    };
+    assert!(forwarded(false));
+    assert!(!forwarded(true));
 }

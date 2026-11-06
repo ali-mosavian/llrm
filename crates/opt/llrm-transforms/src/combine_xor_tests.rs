@@ -251,3 +251,94 @@ b0:
     let out = printed(&module);
     assert!(out.contains("icmp sge i32 %x, %y") && out.contains("icmp ne i32 %x, 0") && !out.contains("xor"), "{out}");
 }
+
+/// `@f` of `text` after `visitXor` alone.
+fn combined_text(text: &str) -> String {
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit);
+    printed(&module)
+}
+
+/// `sinkNotIntoLogicalOp`: `~(a < 10 | b < 26)` is `a >= 10 & b >= 26`, the
+/// compares inverted instead of a `not` over the `or` (`opt`: `and i1 %a,
+/// %b` of two inverted compares). Left alone, ispunct kept an 18th instruction.
+#[test]
+fn a_not_of_an_or_of_compares_is_an_and_of_inverted_compares() {
+    let out = combined_text(
+        "define i1 @f(i16 %x, i16 %y) {
+b0:
+  %a = icmp ult i16 %x, 10
+  %b = icmp ult i16 %y, 26
+  %o = or i1 %a, %b
+  %n = xor i1 %o, true
+  ret i1 %n
+}
+",
+    );
+    assert!(
+        out.contains("icmp uge i16 %x, 10")
+            && out.contains("icmp uge i16 %y, 26")
+            && out.contains(" and i1 ")
+            && !out.contains("xor i1"),
+        "{out}"
+    );
+}
+
+/// The same for a logical or (`select a, true, b`), and the branch on the
+/// result swaps its successors instead of keeping a `not`.
+#[test]
+fn a_not_of_a_logical_or_of_compares_is_a_logical_and_and_a_branch_swaps() {
+    let out = combined_text(
+        "define i1 @f(i16 %x, i16 %y) {
+b0:
+  %a = icmp ult i16 %x, 10
+  %b = icmp ult i16 %y, 26
+  %o = select i1 %a, i1 true, i1 %b
+  %n = xor i1 %o, true
+  ret i1 %n
+}
+",
+    );
+    assert!(out.contains("select i1 %") && out.contains("i1 false") && !out.contains("xor i1"), "{out}");
+    let out = combined_text(
+        "define void @f(i16 %x, i16 %y, ptr %p) {
+b0:
+  %a = icmp ult i16 %x, 10
+  %b = icmp ult i16 %y, 26
+  %o = or i1 %a, %b
+  %n = xor i1 %o, true
+  br i1 %n, label %t, label %e
+t:
+  store i16 1, ptr %p
+  ret void
+e:
+  ret void
+}
+",
+    );
+    assert!(out.contains(" and i1 ") && !out.contains("xor i1"), "{out}");
+}
+
+/// A user that cannot take the inverted value (here an `add` of the zero
+/// extension) keeps the `not`: nothing is sunk.
+#[test]
+fn a_not_of_an_or_with_a_user_that_cannot_be_inverted_stays() {
+    let out = combined_text(
+        "define i16 @f(i16 %x, i16 %y) {
+b0:
+  %a = icmp ult i16 %x, 10
+  %b = icmp ult i16 %y, 26
+  %o = or i1 %a, %b
+  %z = zext i1 %o to i16
+  %n = xor i1 %o, true
+  %m = zext i1 %n to i16
+  %r = add i16 %z, %m
+  ret i16 %r
+}
+",
+    );
+    assert!(out.contains(" or i1 %a, %b") && out.contains("xor i1"), "{out}");
+}

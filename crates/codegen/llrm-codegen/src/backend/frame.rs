@@ -401,6 +401,54 @@ impl Frame {
     }
 }
 
+/// What the spiller asks of the target's stack frame (`MachineFrameInfo`):
+/// where a spilled value lives, and the cell that names it.
+pub trait FrameInfo {
+    /// The slot a spilled value was given, once it has one.
+    fn home(
+        &self,
+        key: u32,
+    ) -> Option<i64>;
+
+    /// A cell of `width` bytes for the value `key`, giving it a slot if it
+    /// has none (`CreateSpillStackObject`).
+    fn cell(
+        &mut self,
+        key: u32,
+        width: u32,
+    ) -> Result<Mem, Refused>;
+
+    /// `LiveStacks`: each home's segments, as `InlineSpiller` wrote them.
+    fn set_stacks(
+        &mut self,
+        stacks: IndexMap<i64, Vec<(i64, i64)>>,
+    );
+}
+
+impl FrameInfo for Frame {
+    fn home(
+        &self,
+        key: u32,
+    ) -> Option<i64> {
+        self.slots.get(&SlotKey::from(key)).copied()
+    }
+
+    fn cell(
+        &mut self,
+        key: u32,
+        width: u32,
+    ) -> Result<Mem, Refused> {
+        Frame::cell(self, key, width)
+    }
+
+    fn set_stacks(
+        &mut self,
+        stacks: IndexMap<i64, Vec<(i64, i64)>>,
+    ) {
+        self.stacks = stacks;
+    }
+}
+
 /// Whether `addr` is a frame cell proper: the indexed form of an array (a
 /// literal displacement through BP) is not tagged, since a literal address's
 /// `index` may be a symbol's.
@@ -501,7 +549,7 @@ mod tests {
         const DX: RegId = RegId::DX;
         const SI: RegId = RegId::SI;
         for registers in [vec![CX], vec![BX, CX], vec![AX, BX, CX, DX, SI, DI]] {
-            let size = Held { value: 100, width: 2 };
+            let size = Held { value: 100, width: 2, offset: 0 };
             let init = Insn::new(
                 0,
                 Some((0, 3)),
@@ -516,7 +564,7 @@ mod tests {
             );
             let operands: Vec<Held> = registers
                 .iter()
-                .map(|&reg| if reg == CX { size } else { Held { value: reg.index() as u32, width: 2 } })
+                .map(|&reg| if reg == CX { size } else { Held { value: reg.index() as u32, width: 2, offset: 0 } })
                 .collect();
             let mut call = Insn::new(
                 3,
@@ -540,12 +588,12 @@ mod tests {
             address.what = Some(semantics(
                 Operation::Move,
                 "lea",
-                vec![Loc::Held(Held { value: 101, width: 2 })],
+                vec![Loc::Held(Held { value: 101, width: 2, offset: 0 })],
                 vec![Loc::Address(AddressRef::new(Some(Addr::new(Space::Frame, -32))))],
             ));
             let addressed = body_of(vec![init.clone(), call.clone(), address]);
             assert_eq!(of(&addressed, Some(&calls), "", None).unwrap().slot(200_i64, 2), Ok(-34));
-            for required in [vec![], vec![(Held { value: 999, width: 2 }, CX)]] {
+            for required in [vec![], vec![(Held { value: 999, width: 2, offset: 0 }, CX)]] {
                 let mut invalid_call = call.clone();
                 invalid_call.requires = required;
                 let invalid = body_of(vec![init.clone(), invalid_call]);

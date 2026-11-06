@@ -97,13 +97,16 @@
 //! the restore, or where it falls into it. A block that reaches the restore any
 //! other way refuses the placement (`saverestore`'s DEVIATE 2).
 //!
-//! DEVIATE 2: under `size` (the m16 `-Os` targets) a restore that needs the
-//! epilogue on an edge, or that does not end in a return, is refused; the
-//! registers stay saved at the entry. The pin wraps those and duplicates the
-//! `ret` into each early exit, which costs a byte per exit, and the branch that
-//! skips the epilogue grows past its short form (QCport m16 -Os +9 B, nothing
-//! smaller). Exit: the placement is made as the pin does once jumps are sized
-//! after the epilogue is placed.
+//! DEVIATE 2: under `size` (the m16 `-Os` targets) a restore is wrapped only
+//! where it adds no byte: one epilogue, on the late path's fall-through or
+//! unconditional jump, that pushes no short branch past its range (127 forward,
+//! 128 back; sizes from the encoder). Two epilogues, a landing pad for a taken
+//! edge, or a branch that would grow keep the registers saved at the entry. The
+//! pin wraps all of those and duplicates the `ret` into each early exit, which
+//! costs a byte per exit (QCport m16 -Os +9 B; queens bq16 +12 B with three
+//! exits). Before: every split refused (fib bq16 -Os 1017956 clocks); now fib
+//! 908496 at the same bytes. Exit: the placement is made as the pin does once
+//! jumps are sized after the epilogue is placed.
 //!
 //! # See also
 //! LLVM's
@@ -132,6 +135,7 @@ pub enum Piece {
 /// Where a procedure sets its pieces up that are not set up at its entry:
 /// at the top of the block of `opens`, in that order, and taken back before
 /// the return of `closes`, in that order, before what the entry set up.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Wrap {
     pub opens: BTreeMap<i64, Vec<Piece>>,
     pub closes: BTreeMap<i64, Vec<Piece>>,
@@ -160,6 +164,12 @@ pub fn named(
     found
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Walks of an instruction's operands by `any_named`.
+    static NAMED_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Whether `test` holds of a register `one` names (`named`'s, as it finds
 /// them, none collected): what `useOrDefCSROrFI` asks of each operand.
 fn any_named(
@@ -167,6 +177,8 @@ fn any_named(
     one: &Insn,
     mut test: impl FnMut(RegId) -> bool,
 ) -> bool {
+    #[cfg(test)]
+    NAMED_WALKS.with(|walks| walks.set(walks.get() + 1));
     if one.call.iter().flat_map(|call| call.disturbs.iter()).any(|register| test(regs.root(*register))) {
         return true;
     }
@@ -201,6 +213,31 @@ fn touches_frame(one: &Insn) -> bool {
     what.dests.iter().chain(&what.sources).any(Loc::in_frame)
 }
 
+/// What `wrapped` was asked of a body and what it answered: the wrap of a
+/// function is asked up to five times (`saved_first`, `Sequences::of`,
+/// `returnsplit::save_of`) with the same arguments, and each ask worked out
+/// the dominators, cycles, frequencies and uses of the whole body again.
+/// ShrinkWrap runs once in the pin. Its answer depends on the instructions
+/// (identity, as `Stamp`), the edges and entry, and the arguments, so a body
+/// that differs in any is asked afresh.
+#[derive(Default)]
+struct Asked(Vec<Answer>);
+
+struct Answer {
+    stamp: crate::analysis::facts::Stamp,
+    shape: (i64, bool, u8, Vec<Vec<i64>>),
+    args: (BTreeSet<RegId>, Option<(RegId, RegId)>, bool, bool),
+    wrap: Option<Wrap>,
+}
+
+/// The asks kept per body: a body rewritten between asks leaves the old ones
+/// behind.
+const ASKS_KEPT: usize = 4;
+
+fn shape_of(body: &LirBody) -> (i64, bool, u8, Vec<Vec<i64>>) {
+    (body.entry, body.noreturn, body.bits as u8, body.blocks.iter().map(|block| block.succ.to_vec()).collect())
+}
+
 /// The wrap of `body` for the registers `kept`, and for the frame where `frame`
 /// names the frame register and the stack pointer, if one is worth having:
 /// `ShrinkWrapImpl`'s one Save and one Restore (`saverestore`), every piece set
@@ -218,6 +255,93 @@ pub fn wrapped(
     stack_addressed: bool,
     size: bool,
 ) -> Option<Wrap> {
+    let shape = shape_of(body);
+    let args = (kept.clone(), frame, stack_addressed, size);
+    let found = body.facts.0.stash::<Asked, _>(|asked| {
+        asked
+            .0
+            .iter()
+            .find(|answer| {
+                answer.args == args
+                    && answer.shape == shape
+                    && answer.stamp.differing(body).is_some_and(|changed| changed.is_empty())
+            })
+            .map(|answer| answer.wrap.clone())
+    });
+    if let Some(wrap) = found {
+        return wrap;
+    }
+    let wrap = wrapped_afresh(body, kept, frame, stack_addressed, size);
+    let answer = Answer { stamp: crate::analysis::facts::Stamp::of(body), shape, args, wrap: wrap.clone() };
+    body.facts.0.stash::<Asked, _>(|asked| {
+        if asked.0.len() == ASKS_KEPT {
+            asked.0.remove(0);
+        }
+        asked.0.push(answer);
+    });
+    wrap
+}
+
+/// The placement `saverestore` made for a body and the registers and frame it
+/// was asked for: it does not depend on `stack_addressed` or `size`, which
+/// only refuse a placement afterwards, so the two asks a procedure's frame
+/// decision makes (with and without the stack addressing the cells) solve once.
+#[derive(Default)]
+struct Placed(Vec<PlacedAnswer>);
+
+struct PlacedAnswer {
+    stamp: crate::analysis::facts::Stamp,
+    shape: (i64, bool, u8, Vec<Vec<i64>>),
+    args: (BTreeSet<RegId>, Option<(RegId, RegId)>),
+    placement: Option<saverestore::Placement>,
+}
+
+fn placed_once(
+    body: &LirBody,
+    kept: &BTreeSet<RegId>,
+    frame: Option<(RegId, RegId)>,
+    solve: impl FnOnce() -> Option<saverestore::Placement>,
+) -> Option<saverestore::Placement> {
+    let shape = shape_of(body);
+    let args = (kept.clone(), frame);
+    let found = body.facts.0.stash::<Placed, _>(|placed| {
+        placed
+            .0
+            .iter()
+            .find(|answer| {
+                answer.args == args
+                    && answer.shape == shape
+                    && answer.stamp.differing(body).is_some_and(|changed| changed.is_empty())
+            })
+            .map(|answer| answer.placement.clone())
+    });
+    if let Some(placement) = found {
+        return placement;
+    }
+    let placement = solve();
+    let answer = PlacedAnswer {
+        stamp: crate::analysis::facts::Stamp::of(body),
+        shape,
+        args,
+        placement: placement.clone(),
+    };
+    body.facts.0.stash::<Placed, _>(|placed| {
+        if placed.0.len() == ASKS_KEPT {
+            placed.0.remove(0);
+        }
+        placed.0.push(answer);
+    });
+    placement
+}
+
+fn wrapped_afresh(
+    body: &LirBody,
+    kept: &BTreeSet<RegId>,
+    frame: Option<(RegId, RegId)>,
+    stack_addressed: bool,
+    size: bool,
+) -> Option<Wrap> {
+    body.facts.0.bump("shrinkwrap");
     if body.noreturn || (kept.is_empty() && frame.is_none()) || body.blocks.is_empty() {
         return None;
     }
@@ -239,18 +363,30 @@ pub fn wrapped(
     }
     for with_frame in attempts {
         let uses = Uses::of(body, kept, frame.filter(|_| with_frame));
-        let Some(placement) = saverestore::run(&graph, &uses, &frequencies) else { continue };
+        let placed = placed_once(body, kept, frame.filter(|_| with_frame), || {
+            body.facts.0.bump("saverestore");
+            saverestore::run(&graph, &uses, &frequencies)
+        });
+        let Some(placement) = placed else { continue };
         // DEVIATE 1: the consumer makes no block to split the restore; it puts
         // the epilogue at the end of each predecessor, before its jump to the
         // restore or where it falls into it, and refuses any other.
         let split = placement.split.as_deref().unwrap_or_default();
-        // Under `size` the split changes where the early exit lands, and a
-        // branch over the epilogue grows past its short form (QCport m16 -Os
-        // +9 B, nothing smaller): the registers stay saved at the entry. The
-        // caller states `size` only for a target that says so (the pin has no
-        // such check).
-        if size && (!split.is_empty() || !uses.is_return(placement.restore)) {
-            continue;
+        // Under `size` the split is taken only where it adds no byte: one
+        // epilogue, on a fall-through or an unconditional jump, that pushes no
+        // short branch past its range (see DEVIATE 2). The caller states `size`
+        // only for a target that says so (the pin has no such check).
+        if size {
+            let pops = kept.len() + usize::from(with_frame);
+            let at = match (uses.is_return(placement.restore), split) {
+                (true, []) => None,
+                (true, [one]) if ends_on_edge_into(body, *one, placement.restore) => Some(*one),
+                (false, []) => Some(placement.restore),
+                _ => continue,
+            };
+            if at.is_some_and(|at| epilogue_outgrows_a_jump(body, at, pops)) {
+                continue;
+            }
         }
         if !split.iter().all(|&one| {
             ends_on_edge_into(body, one, placement.restore) || ends_on_taken_edge_into(body, one, placement.restore)
@@ -278,6 +414,31 @@ pub fn wrapped(
             };
             let from_save = reached_from(body, save, &torn_down);
             if body.blocks.iter().any(|block| from_save.contains(&block.at) && !from_entry.dominates(save, block.at)) {
+                continue;
+            }
+        }
+        // Registers pushed after the frame move the stack pointer under the
+        // `[sp+d]` operands of the blocks the Save reaches (a call's outgoing
+        // arguments): the push would be the first of them. The pin saves the
+        // frame and the registers together, so it has no such place.
+        if let (true, false, Some((_, stack))) = (framed, with_frame, frame) {
+            let stack = body.regs().root(stack);
+            let torn_down: Vec<(i64, i64)> = match &leaves {
+                Some(leaves) => leaves.iter().map(|&next| (restore, next)).collect(),
+                None => split.iter().map(|one| (body.blocks[one.0 as usize].at, restore)).collect(),
+            };
+            let from_save = reached_from(body, save, &torn_down);
+            let through_stack = |place: &Loc| match place {
+                Loc::Mem(ir::Mem { through, index_through, .. }) => {
+                    body.regs().root(*through) == stack || body.regs().root(*index_through) == stack
+                }
+                _ => false,
+            };
+            if body.blocks.iter().filter(|block| from_save.contains(&block.at)).any(|block| {
+                block.insns.iter().filter_map(|one| one.what.as_ref()).any(|what| {
+                    what.dests.iter().chain(&what.sources).any(&through_stack)
+                })
+            }) {
                 continue;
             }
         }
@@ -313,6 +474,94 @@ pub fn wrapped(
         });
     }
     None
+}
+
+/// The bytes of each instruction of a body, or none where one's size is not
+/// known: worked out once for the instructions a body has, not once for each
+/// of the up to five times a function's wrap is asked (the pin asks its
+/// analyses once).
+pub struct InstructionSizes;
+
+impl crate::analysis::facts::Fact for InstructionSizes {
+    type Result = Option<Vec<Vec<usize>>>;
+    type Inputs = crate::analysis::facts::Stamp;
+    const NAME: &'static str = "instruction-sizes";
+
+    fn run(body: &LirBody) -> Self::Result {
+        body.blocks
+            .iter()
+            .map(|block| {
+                block
+                    .insns
+                    .iter()
+                    .map(|insn| match &insn.what {
+                        None => Some(0),
+                        Some(what) => crate::backend::select::emit_in(body.bits, what, 0, None, true, false, None)
+                            .map(|made| made.code.len()),
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn inputs(body: &LirBody) -> crate::analysis::facts::Stamp {
+        crate::analysis::facts::Stamp::of(body)
+    }
+
+    fn held_by(
+        kept: &crate::analysis::facts::Stamp,
+        body: &LirBody,
+    ) -> bool {
+        kept.differing(body).is_some_and(|changed| changed.is_empty())
+    }
+}
+
+/// Whether `pops` one-byte pops at the end of block `at` push a short branch
+/// over them out of its range (127 forward, 128 back), or an instruction's size
+/// is not known: the epilogue is then not free in bytes.
+fn epilogue_outgrows_a_jump(
+    body: &LirBody,
+    at: BlockId,
+    pops: usize,
+) -> bool {
+    let sizes = body.facts.0.get::<InstructionSizes>(body);
+    let Some(sizes) = sizes.as_ref() else { return true };
+    let mut block_of: crate::support::hash::HashMap<i64, usize> = Default::default();
+    for (index, other) in body.blocks.iter().enumerate() {
+        block_of.entry(other.at).or_insert(index);
+    }
+    let mut start = Vec::with_capacity(sizes.len() + 1);
+    let mut offset = 0usize;
+    for block in sizes.iter() {
+        start.push(offset);
+        offset += block.iter().sum::<usize>();
+    }
+    start.push(offset);
+    let last = at.0 as usize;
+    let epilogue = start[last + 1];
+    for (b, block) in body.blocks.iter().enumerate() {
+        let mut end = start[b];
+        for (i, insn) in block.insns.iter().enumerate() {
+            end += sizes[b][i];
+            let Some(target) = insn.what.as_ref().and_then(|what| what.target) else { continue };
+            let Some(&t) = block_of.get(&target) else { continue };
+            // The block's own final jump has the epilogue before it.
+            if b == last && i + 1 == block.insns.len() {
+                continue;
+            }
+            // The bytes go in at `epilogue`: what starts at or after it moves.
+            let (low, high) = (end.min(start[t]), end.max(start[t]));
+            let moved = |place: usize| place >= epilogue;
+            let at_branch = end - sizes[b][i];
+            if moved(at_branch) != moved(start[t])
+                && high - low + pops > if start[t] >= end { 127 } else { 128 }
+                && high - low <= if start[t] >= end { 127 } else { 128 }
+            {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Whether the end of `from` is on its one edge into `to` and no other: it
@@ -385,10 +634,14 @@ fn reached_from(
     from: i64,
     cut: &[(i64, i64)],
 ) -> BTreeSet<i64> {
+    let mut block_of: crate::support::hash::HashMap<i64, &LirBlock> = Default::default();
+    for one in &body.blocks {
+        block_of.entry(one.at).or_insert(one);
+    }
     let mut seen = BTreeSet::from([from]);
     let mut work = vec![from];
     while let Some(at) = work.pop() {
-        let Some(block) = body.blocks.iter().find(|one| one.at == at) else { continue };
+        let Some(block) = block_of.get(&at) else { continue };
         for &next in block.succ.iter() {
             if !cut.contains(&(at, next)) && seen.insert(next) {
                 work.push(next);
@@ -436,9 +689,10 @@ impl<'a> Uses<'a> {
         one: &Insn,
     ) -> bool {
         let regs = self.body.regs();
-        (self.framed
-            && (touches_frame(one) || any_named(regs, one, |register| self.frame_registers.contains(&register))))
-            || any_named(regs, one, |register| self.kept.contains(&register))
+        (self.framed && touches_frame(one))
+            || any_named(regs, one, |register| {
+                (self.framed && self.frame_registers.contains(&register)) || self.kept.contains(&register)
+            })
     }
 
     fn block(
@@ -450,6 +704,18 @@ impl<'a> Uses<'a> {
 }
 
 impl Frame for Uses<'_> {
+    /// `X86FrameLowering::canUseAsPrologue`: the frame's `sub esp` writes the
+    /// flags, so a block entered with a flag live (a second `jcc` on one
+    /// `cmp`) cannot set it up. DEVIATE: the pin keeps the block and adjusts
+    /// with `lea`; here the Save moves up to a block the flags are not live
+    /// into.
+    fn can_use_as_prologue(
+        &self,
+        block: BlockId,
+    ) -> bool {
+        !self.framed || !crate::backend::peephole::flags_live_in(self.body, self.block(block).at)
+    }
+
     fn touches(
         &self,
         block: BlockId,
@@ -574,6 +840,21 @@ mod tests {
         assert_eq!(uses.scans.get(), 1);
     }
 
+    /// A framed ask walked the operands of an instruction twice, once for the
+    /// frame's registers and once for the kept ones: `insn_needs` was 28M Ir
+    /// of memory_expansion -O2. One walk tests both.
+    #[test]
+    fn test_an_instruction_is_walked_once_to_see_if_it_needs_the_frame_or_a_kept_register() {
+        let one = touch(0, RegId::EBX);
+        let kept = BTreeSet::from([RegId::EBX]);
+        let body = body(vec![block(0, vec![one.clone(), ret(2)], vec![])]);
+        let uses = Uses::of(&body, &kept, Some((RegId::EBP, RegId::ESP)));
+        assert!(uses.framed, "the premise: a framed ask");
+        let before = NAMED_WALKS.with(std::cell::Cell::get);
+        assert!(uses.insn_needs(&one));
+        assert_eq!(NAMED_WALKS.with(std::cell::Cell::get) - before, 1, "the operands were walked more than once");
+    }
+
     /// A register named only as the base or the index of a memory operand is
     /// a use: `any_named` must find both, as `named`'s set did.
     #[test]
@@ -587,6 +868,40 @@ mod tests {
             assert!(named(regs, &one).contains(&regs.root(register)));
         }
         assert!(!any_named(regs, &one, |named| named == regs.root(RegId::EDI)));
+    }
+
+    fn named_branch(
+        at: i64,
+        name: &str,
+        target: i64,
+    ) -> Arc<Insn> {
+        insn(at, Semantics { name: Some(name.into()), target: Some(target), ..Semantics::new(ir::Operation::Branch) })
+    }
+
+    /// `fib` with its recursion copied into itself four deep: `cmp edi,4; jb
+    /// early; push rbx; sub rsp,48; jne late`. The frame was set up in the
+    /// block of the second jump, whose flags the `sub` wrote: `fib(4)` took the
+    /// wrong arm and `fib(5)` returned 6 (bench frames printed 619185, not
+    /// 616371). The Save must sit where no flag is live.
+    #[test]
+    fn test_a_frame_is_not_set_up_in_a_block_entered_with_the_flags_live() {
+        let compare = insn(
+            0,
+            Semantics {
+                name: Some("cmp".into()),
+                sources: vec![Loc::Reg(Reg { register: RegId::EDI, width: 4 })],
+                ..Semantics::new(ir::Operation::Compare)
+            },
+        );
+        let blocks = vec![
+            block(0, vec![compare, named_branch(2, "jb", 30)], vec![30, 10]),
+            block(10, vec![touch(10, RegId::ESP), named_branch(12, "jne", 20)], vec![20, 14]),
+            block(14, vec![touch(14, RegId::ESP)], vec![20]),
+            block(20, vec![touch(20, RegId::ESP), ret(22)], vec![]),
+            block(30, vec![ret(30)], vec![]),
+        ];
+        let wrap = wrapped(&body(blocks), &BTreeSet::new(), Some((RegId::EBP, RegId::ESP)), false, false);
+        assert!(wrap.is_none_or(|wrap| !wrap.opens.contains_key(&10)), "the frame opens in the block the flags enter");
     }
 
     /// The early exit saved every register the late path uses, and popped them
@@ -633,17 +948,142 @@ mod tests {
         assert_eq!(wrap.closes_after, BTreeMap::from([(2, esi)]));
     }
 
-    /// Under `size` the late edge's epilogue moves the early exit past the pops
-    /// and a short branch grows (QCport m16 -Os +9 B): the save stays at the
-    /// entry.
+    /// fib bq16 -Os: the leaf (`n < 2`) pushed and popped si and di with the
+    /// rest because a split restore was refused, +10.8% clocks (1017956 vs
+    /// 908496). One epilogue on the late path's fall-through adds no byte, so
+    /// `size` takes it.
     #[test]
-    fn test_a_split_restore_is_refused_under_size() {
+    fn test_a_single_split_restore_is_taken_under_size_where_no_jump_outgrows() {
         let blocks = vec![
             block(0, vec![branch(2, 3)], vec![3, 2]),
             block(2, vec![touch(20, RegId::ESI)], vec![3]),
             block(3, vec![ret(30)], vec![]),
         ];
+        let wrap = wrapped(&body(blocks), &BTreeSet::from([RegId::ESI]), None, false, true).expect("a wrap");
+        assert_eq!(wrap.closes_after, BTreeMap::from([(2, vec![Piece::Saved(RegId::ESI)])]));
+    }
+
+    /// The wrap of a function is asked up to five times (`saved_first`,
+    /// `Sequences::of`, `save_of`), and each ask under `size` encoded every
+    /// instruction of the body again: 5.5 M Ir of 160 M on memory_expansion
+    /// -O2 (221 functions, 1131 asks). The sizes are worked out once.
+    #[test]
+    fn test_the_instruction_sizes_of_a_body_are_worked_out_once() {
+        let blocks = vec![
+            block(0, vec![branch(2, 3)], vec![3, 2]),
+            block(2, vec![touch(20, RegId::ESI)], vec![3]),
+            block(3, vec![ret(30)], vec![]),
+        ];
+        let body = body(blocks);
+        let kept = BTreeSet::from([RegId::ESI]);
+        for _ in 0..5 {
+            assert!(wrapped(&body, &kept, None, false, true).is_some(), "premise: the wrap is taken under size");
+        }
+        assert_eq!(body.facts.0.runs::<InstructionSizes>(), 1);
+    }
+
+    /// The wrap of a function is asked for up to five times with the same
+    /// arguments (`saved_first`, `Sequences::of`, `save_of`), each working out
+    /// the dominators, cycles, frequencies and uses of the whole body again:
+    /// 161 M Ir of memory_expansion -O2's assemble (1131 asks of 221
+    /// functions). It is worked out once.
+    #[test]
+    fn test_the_wrap_of_a_body_asked_five_times_is_worked_out_once() {
+        let blocks = vec![
+            block(0, vec![branch(2, 3)], vec![3, 2]),
+            block(2, vec![touch(20, RegId::ESI)], vec![3]),
+            block(3, vec![ret(30)], vec![]),
+        ];
+        let body = body(blocks);
+        let kept = BTreeSet::from([RegId::ESI]);
+        let first = wrapped(&body, &kept, None, false, false).expect("a wrap");
+        for _ in 0..4 {
+            assert_eq!(wrapped(&body, &kept, None, false, false).as_ref(), Some(&first));
+        }
+        assert_eq!(body.facts.0.counted("shrinkwrap"), 1);
+        let _ = wrapped(&body, &kept, None, false, true);
+        assert_eq!(body.facts.0.counted("shrinkwrap"), 2, "another argument is another ask");
+    }
+
+    /// The frame decision asks a body's wrap with and without the stack
+    /// addressing its cells; the placement does not depend on that, and was
+    /// solved for each (59M Ir of `saverestore::run` in memory_expansion -O2,
+    /// every procedure twice). One solve serves both.
+    #[test]
+    fn test_the_placement_of_a_body_is_solved_once_for_both_stack_addressings() {
+        let blocks = vec![
+            block(0, vec![branch(2, 3)], vec![3, 2]),
+            block(2, vec![touch(20, RegId::ESI)], vec![3]),
+            block(3, vec![ret(30)], vec![]),
+        ];
+        let body = body(blocks);
+        let kept = BTreeSet::from([RegId::ESI]);
+        let plain = wrapped(&body, &kept, None, false, false);
+        let addressed = wrapped(&body, &kept, None, true, false);
+        assert_eq!(body.facts.0.counted("shrinkwrap"), 2, "the premise: two asks");
+        assert_eq!(body.facts.0.counted("saverestore"), 1, "the placement was solved again");
+        assert!(plain.is_some() && addressed.is_some());
+    }
+
+    /// The answer stands for the body it was made for: the same instructions
+    /// on other edges (a rewrite that moves a successor) are asked afresh.
+    #[test]
+    fn test_a_body_with_other_edges_is_not_given_the_wrap_of_the_first() {
+        let insns = |n: i64| vec![touch(n, RegId::ESI)];
+        let make = |late: Vec<i64>| {
+            body(vec![
+                block(0, vec![branch(2, 3)], vec![3, 2]),
+                block(2, insns(20), late),
+                block(3, vec![ret(30)], vec![]),
+            ])
+        };
+        let kept = BTreeSet::from([RegId::ESI]);
+        let a = make(vec![3]);
+        let first = wrapped(&a, &kept, None, false, false);
+        // The same instructions, shared, behind another successor list.
+        let b = a.with_blocks(
+            a.blocks.iter().map(|one| if one.at == 2 { LirBlock { succ: vec![].into(), ..(**one).clone() }.into() } else { one.clone() }).collect(),
+        );
+        let second = wrapped(&b, &kept, None, false, false);
+        assert_eq!(b.facts.0.counted("shrinkwrap"), 2, "the second body was asked afresh");
+        assert!(first.is_some());
+        let _ = second;
+    }
+
+    /// queens bq16 -Os grew 12 B when three exits of the late path each got a
+    /// copy of the pops and a jump: more than one epilogue is refused.
+    #[test]
+    fn test_two_split_epilogues_are_refused_under_size() {
+        let blocks = vec![
+            block(0, vec![branch(2, 4)], vec![4, 2]),
+            block(2, vec![touch(20, RegId::ESI), branch(22, 4)], vec![4, 3]),
+            block(3, vec![touch(30, RegId::ESI)], vec![4]),
+            block(4, vec![ret(40)], vec![]),
+        ];
         assert!(wrapped(&body(blocks), &BTreeSet::from([RegId::ESI]), None, false, true).is_none());
+    }
+
+    /// The pops put between a short branch and its target push it past 127
+    /// bytes (QCport m16 -Os +9 B): the save stays at the entry.
+    #[test]
+    fn test_a_split_that_pushes_a_short_branch_out_of_range_is_refused_under_size() {
+        let fill = |count: i64| (0..count).map(|n| touch(100 + n, RegId::EAX)).collect::<Vec<_>>();
+        // At 16 bits `mov r32, imm` is 6 bytes: 19 of them and the two below
+        // are 126, the branch's whole range but one byte, and two pops
+        // make it 128.
+        let blocks = |count: i64| {
+            vec![
+                block(0, vec![branch(2, 3)], vec![3, 2]),
+                block(2, [vec![touch(20, RegId::ESI), touch(21, RegId::EDI)], fill(count)].concat(), vec![3]),
+                block(3, vec![ret(30)], vec![]),
+            ]
+        };
+        let both = BTreeSet::from([RegId::ESI, RegId::EDI]);
+        assert!(
+            wrapped(&body(blocks(10)), &both, None, false, true).is_some(),
+            "premise: a short branch is left alone"
+        );
+        assert!(wrapped(&body(blocks(19)), &both, None, false, true).is_none());
     }
 
     /// The late path that does not fall into the return but is laid out away

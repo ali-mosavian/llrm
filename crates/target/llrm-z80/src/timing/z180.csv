@@ -1,0 +1,5 @@
+# form,bytes,t_taken,t_not_taken,cpu
+# Forms the Z180 adds to the Z80. UNSOURCED: from memory of the Zilog Z180 manual (UM0050), which has not been fetched;
+# no oracle checks it (ucsim_z80 charges 0 T for mlt). Nothing prices a Z80 with it. Exit: fetch UM0050 (needs the
+# user's yes), check each row with tests/timing/manual_check.py, then replace this note with the citation.
+mlt bc,2,17,,z180

@@ -122,7 +122,13 @@ impl Analyzed {
     fn of(run: &Run) -> Self {
         let tree = Rc::new(DomTree::of(run.function));
         let loops = Rc::new(LoopInfo::analyze(run.function, || &*tree));
-        let assumptions = AssumptionCache::of(run.context, run.globals, run.metadata, run.function);
+        let assumptions = AssumptionCache::of_declared(
+            run.context,
+            run.globals,
+            run.metadata,
+            run.function,
+            run.outer.assume_declared(),
+        );
         Self { tree, loops, assumptions }
     }
 
@@ -133,7 +139,13 @@ impl Analyzed {
         tree: Rc<DomTree>,
         loops: Rc<LoopInfo>,
     ) -> Self {
-        let assumptions = AssumptionCache::of(run.context, run.globals, run.metadata, run.function);
+        let assumptions = AssumptionCache::of_declared(
+            run.context,
+            run.globals,
+            run.metadata,
+            run.function,
+            run.outer.assume_declared(),
+        );
         Self { tree, loops, assumptions }
     }
 }
@@ -744,7 +756,7 @@ fn break_loop_backedge(
     }
     // LCSSA form of the outermost loop, which may have lost a block.
     if had_parent {
-        let _ = crate::lcssa::closed(run.function);
+        let _ = crate::lcssa::closed(run.context, run.layout, run.function);
     }
 }
 

@@ -1,0 +1,7 @@
+#title,Status Register (SR) Instruction Execution Times,page,10-23,notes,"¹ For these instructions, add the effective address calculation time."
+Instruction,Execution Time
+ANDI to SR,12(0/0)
+EORI to SR,12(0/0)
+MOVE from SR,1(0/1)¹
+MOVE to SR,12(1/0)¹
+ORI to SR,5(0/0)

@@ -18,7 +18,7 @@ fn load(
         vt,
         chain,
         ptr,
-        MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(1), ext: None, space: 0 },
+        MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(1), ext: None, space: 0, ordering: None },
     )
 }
 
@@ -41,9 +41,21 @@ fn legalized_by(
     let x = load(&mut dag, vt);
     let count = dag.get_node(op, vt, &[x]);
     dag.set_root(count);
-    DagLegalizer::new(&mut dag, tli, &mut X86Lowering { cmov: true, sse2: false, min_size: false })
-        .run()
-        .expect("legalizes");
+    DagLegalizer::new(
+        &mut dag,
+        tli,
+        &mut X86Lowering {
+            cmov: true,
+            sse2: false,
+            min_size: false,
+            three_address_adds: false,
+            i16_mul_chains: false,
+            sext_load: false, zext_free: false,
+            profile: None,
+        },
+    )
+    .run()
+    .expect("legalizes");
     let root = dag.get_root();
     (dag, root)
 }
@@ -121,9 +133,21 @@ fn abs_without_cmov_is_xor_with_the_sign_then_subtract_it() {
     let abs = dag.get_node(ISD::Abs, EVT::I32, &[x]);
     dag.set_root(abs);
     let tli = TargetLowering::x86_32(Features { cmov: false, ..Features::default() }, MVT::I32);
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false })
-        .run()
-        .expect("legalizes");
+    DagLegalizer::new(
+        &mut dag,
+        &tli,
+        &mut X86Lowering {
+            cmov: false,
+            sse2: false,
+            min_size: false,
+            three_address_adds: false,
+            i16_mul_chains: false,
+            sext_load: false, zext_free: false,
+            profile: None,
+        },
+    )
+    .run()
+    .expect("legalizes");
 
     let root = dag.get_root();
     assert_eq!(dag.opcode(root), ISD::Sub);
@@ -132,14 +156,14 @@ fn abs_without_cmov_is_xor_with_the_sign_then_subtract_it() {
     assert_eq!((dag.opcode(flipped), dag.operand(flipped, 1)), (ISD::Xor, sign));
 }
 
-/// At m16 a word `cttz` is promoted to `i32` and made `bsf` as at m32: it was
-/// expanded to the parallel popcount (23 instructions for the pin's three).
+/// At m16 a word `cttz` stays a word (DEVIATE SD542): promoted to `i32`, as the
+/// pin does, it was a dword scan and spill in stft_single -O2 (+166,586 clocks).
 #[test]
-fn cttz_of_a_word_at_m16_is_promoted_like_m32() {
+fn cttz_of_a_word_at_m16_stays_a_word() {
     let tli = TargetLowering::x86_16(Features::default(), MVT::I16);
     let (dag, root) = legalized_by(&tli, ISD::CtTz, EVT::I16);
-    assert_eq!(dag.opcode(root), ISD::Truncate, "{}", dag.dump());
-    assert_eq!(dag.opcode(dag.operand(root, 0)), ISD::CtTzZeroPoison, "{}", dag.dump());
+    assert_eq!(dag.value_type(root), EVT::I16, "{}", dag.dump());
+    assert_ne!(dag.opcode(root), ISD::Truncate, "{}", dag.dump());
 }
 
 /// `cttz` of a word at m16 was refused at emit (`Unmapped("BSF32rr")`) and

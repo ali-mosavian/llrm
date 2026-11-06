@@ -90,7 +90,7 @@ fn identical(
     let (a, b) = (&one.insn, &other.insn);
     // The callee is not in the instruction: it is the routine the call's
     // position names (`Procedure::callees`).
-    if a.what.as_ref().is_some_and(|what| what.op == Operation::Call) {
+    if a.what.as_ref().is_some_and(|what| what.op == Operation::Call || what.is_sibling_call()) {
         match (calls.get(&a.at), calls.get(&b.at)) {
             (Some(x), Some(y)) if x == y => {}
             _ => return false,
@@ -108,9 +108,9 @@ fn identical(
 
 /// `HashMachineInstr` of the last instruction, from its operation and the
 /// registers it names.
-fn hash_of(one: &Insn) -> u64 {
+pub(super) fn hash_of(one: &Insn) -> u64 {
     let mut hasher = rustc_hash::FxHasher::default();
-    one.what.hash(&mut hasher);
+    one.what.as_ref().map(llrm_lir::Semantics::machine_hash).hash(&mut hasher);
     one.frame_adjust.hash(&mut hasher);
     for (_value, register) in &one.requires {
         register.hash(&mut hasher);

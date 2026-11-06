@@ -423,6 +423,16 @@ fn a_zext_of_a_select_with_a_constant_arm_goes_into_the_arms() {
     );
 }
 
+/// `commonCastTransforms` leaves a cast of a select alone when its condition is
+/// a `trunc` of the select's own type, as for a compare: `select_ext_const`
+/// folds the cast back out, so folding it in looped. A seed of the
+/// 6502 difftest ran `combine` to 80 GB.
+#[test]
+fn a_zext_of_a_select_on_a_trunc_of_its_own_type_stays() {
+    let body = "  %c = trunc i8 %a to i1\n  %s = select i1 %c, i8 %y, i8 5\n  %r = zext i8 %s to i16\n  ret i16 %r\n";
+    check("i16", "i8 %a, i8 %y", body, body);
+}
+
 /// `trunc(smax(zext(a) - zext(b), 0))` is `usub.sat(a, b)`. Stayed a wide
 /// subtract, a max and a truncate before.
 #[test]

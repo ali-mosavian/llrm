@@ -22,7 +22,8 @@
 //!   the same load, or
 //! - the parameter is `dereferenceable` for the field's bytes and nothing
 //!   writes them while the function runs (the pointer is `memory::invariant`,
-//!   or the function writes no memory).
+//!   the function writes no memory, or every load of the field is
+//!   `!invariant.load`).
 //!
 //! ```text
 //!  caller:  call f(ptr %d, i16 %k)           %n = load i16, ptr %d+4
@@ -41,7 +42,9 @@
 //! loads each caller gains (`load`), against the loads the function loses. At
 //! -Os the price is in bytes and the loads count at every call; otherwise in
 //! clocks, where a call inside a loop whose pointer the loop does not change
-//! counts no loads (they will be hoisted). A recursive function is promoted
+//! counts no loads (they will be hoisted), and a call passing the address of
+//! the caller's own alloca counts none at either level (the load is the
+//! caller's store). A recursive function is promoted
 //! when the extra words cost no more than the loads it saves.
 //!
 //! A slice descriptor read for its length (a Nib `&mut [T]`, a struct by
@@ -163,12 +166,36 @@ pub fn promoted(
     costs: &OperationCosts,
     size: bool,
 ) -> Vec<GlobalId> {
+    promoted_among(module, layout, costs, size, None)
+}
+
+/// [`promoted`] over the functions of `among` alone (None: all): the walk's
+/// component, as the pin's ArgumentPromotion runs per SCC in the CGSCC
+/// pipeline.
+pub fn promoted_among(
+    module: &mut Module,
+    layout: &DataLayout,
+    costs: &OperationCosts,
+    size: bool,
+    among: Option<&[GlobalId]>,
+) -> Vec<GlobalId> {
+    // The module-wide scans below are made for a function whose own uses of a
+    // pointer parameter allow a promotion, and only then.
+    if let Some(ids) = among
+        && !ids.iter().any(|&id| {
+            module.global(id).function().is_some_and(|function| {
+                (0..function.parameters().len()).any(|parameter| shaped(module, layout, id, parameter).is_some())
+            })
+        })
+    {
+        return Vec::new();
+    }
     let only = direct_only(module);
     let llrm_mir::callgraph::DirectCalls { sites, refused } = direct_calls(module);
     let callees = memory::callees(module);
     let mut changed = BTreeSet::new();
     for id in CallGraph::new(module).bottom_up() {
-        if !only.contains(&id) || refused.contains(&id) {
+        if !only.contains(&id) || refused.contains(&id) || among.is_some_and(|ids| !ids.contains(&id)) {
             continue;
         }
         let Some(calls) = sites.get(&id) else { continue };
@@ -194,17 +221,16 @@ fn words(
     (layout.alloc_size(&module.context.types, ty).max(2) as i64 + 1) / 2
 }
 
-#[allow(clippy::too_many_arguments)]
-fn planned(
+/// What the uses of parameter `parameter` of `id` are: its loaded fields, the
+/// recursive calls that pass it on and the addresses stepped to the fields.
+/// None where a use is anything else; the part of a promotion that reads the
+/// function alone.
+fn shaped(
     module: &Module,
     layout: &DataLayout,
-    callees: &memory::Callees,
     id: GlobalId,
     parameter: usize,
-    calls: &[(GlobalId, InstId)],
-    costs: &OperationCosts,
-    size: bool,
-) -> Option<Plan> {
+) -> Option<(llrm_mir::module::ValueId, Vec<Field>, Vec<InstId>, Vec<InstId>)> {
     let function = module.global(id).function()?;
     let context = &module.context;
     let value = *function.parameters().get(parameter)?;
@@ -276,6 +302,23 @@ fn planned(
     {
         return None;
     }
+    Some((value, fields, passed_on, steps))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn planned(
+    module: &Module,
+    layout: &DataLayout,
+    callees: &memory::Callees,
+    id: GlobalId,
+    parameter: usize,
+    calls: &[(GlobalId, InstId)],
+    costs: &OperationCosts,
+    size: bool,
+) -> Option<Plan> {
+    let function = module.global(id).function()?;
+    let context = &module.context;
+    let (value, fields, passed_on, steps) = shaped(module, layout, id, parameter)?;
     // The callers load before the call what the function loaded after it: where
     // the function loads it before it writes or calls anything, the value
     // is the same and the load happens either way; else its own promise
@@ -293,11 +336,24 @@ fn planned(
         })
         .collect();
     let covered = Facts::of(function.parameter_attrs.get(parameter).map_or(&[][..], |one| &one[..])).dereferenceable();
+    // A store to the function's own slot cannot reach the memory a caller's
+    // pointer names (LLVM asks alias analysis the same).
     let unwritten = memory::invariant(context, layout, function, Operand::Value(value))
-        || function.walk().all(|(_, inst)| !memory::of(context, callees, function, inst).writes);
+        || function.walk().all(|(_, inst)| {
+            let instruction = function.instruction(inst);
+            !memory::of(context, callees, function, inst).writes
+                || matches!(instruction.opcode, Opcode::Store { volatile: false, .. })
+                    && instruction
+                        .operands
+                        .get(1)
+                        .is_some_and(|&address| crate::copyback::in_a_local(function, address))
+        });
     for field in &fields {
         let first = field.loads.iter().all(|load| early.contains(load));
-        let promised = covered.is_some_and(|bytes| field.offset as u64 + field.bytes <= bytes) && unwritten;
+        // Loads the language states invariant read what nothing writes, as in
+        // LLVM's isSafeToPromoteArgument.
+        let fixed = field.loads.iter().all(|&load| memory::invariant_load(context, layout, function, load));
+        let promised = covered.is_some_and(|bytes| field.offset as u64 + field.bytes <= bytes) && (unwritten || fixed);
         if !first && !promised {
             return None;
         }
@@ -315,7 +371,14 @@ fn planned(
         .iter()
         .map(|&(caller, inst)| {
             let passes_on = caller == id && passed_on.contains(&inst);
-            let own = if passes_on || (!size && hoistable(module, caller, inst, parameter)) { 0 } else { loads };
+            let own = if passes_on
+                || (!size && hoistable(module, caller, inst, parameter))
+                || in_a_caller_local(module, caller, inst, parameter)
+            {
+                0
+            } else {
+                loads
+            };
             if size { own + extra } else { own + extra - loads }
         })
         .sum::<i64>()
@@ -324,6 +387,21 @@ fn planned(
     // it loaded, and the first call's loads are paid once.
     let worth = if !size && !passed_on.is_empty() { extra <= loads } else { delta <= 0 };
     worth.then_some(Plan { parameter, fields, passed_on, steps })
+}
+
+/// Whether call `inst` of `caller` passes the address of one of the caller's
+/// own allocas at `parameter`: the load it gains reads what the caller stored
+/// and is forwarded, and the slot dies.
+fn in_a_caller_local(
+    module: &Module,
+    caller: GlobalId,
+    inst: InstId,
+    parameter: usize,
+) -> bool {
+    module
+        .global(caller)
+        .function()
+        .is_some_and(|function| crate::copyback::in_a_local(function, function.instruction(inst).operands[parameter]))
 }
 
 /// Whether call `inst` of `caller` is in a loop its pointer argument at

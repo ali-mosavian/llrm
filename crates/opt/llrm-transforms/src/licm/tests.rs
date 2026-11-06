@@ -938,6 +938,300 @@ b3:
     assert!(block_of(&stated, "b0").iter().any(|line| line.contains("load i16, ptr @g")), "{stated}");
 }
 
+/// A loop around a load of `%q` that a store through `%p` cannot be ruled out
+/// of, with `start` in the entry block and `loop_start` in the loop (the
+/// printed function).
+fn invariant_start_loop(
+    start: &str,
+    loop_start: &str,
+) -> String {
+    licm_printed(&format!(
+        "declare ptr @llvm.invariant.start.p0(i64 immarg, ptr nocapture)
+declare void @llvm.invariant.end.p0(ptr, i64 immarg, ptr nocapture)
+
+define i16 @f(i16 %n, ptr %p, ptr dereferenceable(2) %q) {{
+b0:
+  {start}
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b2 ]
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  {loop_start}
+  %v = load i16, ptr %q
+  store i16 %i, ptr %p
+  %w = add i16 %i, %v
+  %i1 = add i16 %w, 1
+  br label %b1
+
+b3:
+  ret i16 %i
+}}
+"
+    ))
+}
+
+fn load_of_q_in(
+    printed: &str,
+    block: &str,
+) -> bool {
+    block_of(printed, block).iter().any(|line| line.contains("load i16, ptr %q"))
+}
+
+/// LICM.cpp#L1053 `isLoadInvariantInLoop`: an `invariant.start` over the
+/// load's address, in a block that properly dominates the loop's header and
+/// with no use of its own, lets the load leave past a store the loop cannot
+/// rule out. The load stayed (MIR had no `invariant.start`).
+#[test]
+fn test_a_load_under_a_dominating_invariant_start_leaves_past_a_store() {
+    let plain = invariant_start_loop("", "");
+    assert!(load_of_q_in(&plain, "b2"), "premise: without a scope the load stays: {plain}");
+    let scoped = invariant_start_loop("%s = call ptr @llvm.invariant.start.p0(i64 2, ptr %q)", "");
+    assert!(!load_of_q_in(&scoped, "b2") && load_of_q_in(&scoped, "b0"), "{scoped}");
+}
+
+/// The scope must cover the load (`LocSizeInBits <= InvariantSizeInBits`) and
+/// end nowhere (`II->use_empty()`), and must stand outside the loop
+/// (`properlyDominates(II->getParent(), CurLoop->getHeader())`); -1, an object
+/// of unknown size, covers nothing (`InvariantSize->isNegative()`).
+#[test]
+fn test_an_invariant_start_that_does_not_cover_or_ends_or_sits_in_the_loop_keeps_the_load() {
+    let narrow = invariant_start_loop("%s = call ptr @llvm.invariant.start.p0(i64 1, ptr %q)", "");
+    assert!(load_of_q_in(&narrow, "b2"), "a one byte scope does not cover an i16: {narrow}");
+    let ended = invariant_start_loop(
+        "%s = call ptr @llvm.invariant.start.p0(i64 2, ptr %q)\n  call void @llvm.invariant.end.p0(ptr %s, i64 2, ptr %q)",
+        "",
+    );
+    assert!(load_of_q_in(&ended, "b2"), "a scope that something ends is not one: {ended}");
+    let inside = invariant_start_loop("", "%s = call ptr @llvm.invariant.start.p0(i64 2, ptr %q)");
+    assert!(load_of_q_in(&inside, "b2"), "a scope inside the loop does not dominate its header: {inside}");
+    let unknown = invariant_start_loop("%s = call ptr @llvm.invariant.start.p0(i64 -1, ptr %q)", "");
+    assert!(load_of_q_in(&unknown, "b2"), "-1 is skipped: {unknown}");
+}
+
+const SCOPE_DECLS: &str = "declare ptr @llvm.invariant.start.p0(i64 immarg, ptr nocapture)
+declare void @llvm.invariant.end.p0(ptr, i64 immarg, ptr nocapture)
+";
+const START: &str = "%s = call ptr @llvm.invariant.start.p0(i64 2, ptr %q)";
+const END: &str = "call void @llvm.invariant.end.p0(ptr %s, i64 2, ptr %q)";
+
+/// A loop `b1`/`b2` around the load of `%q` and a store the load cannot be
+/// ruled out of, entered from `b0` and left to `b3`, with `{b0}` ahead of the
+/// branch, `{b1}` and `{b2}` in the loop and `{b3}` after it.
+fn scoped_loop(
+    b0: &str,
+    b1: &str,
+    b2: &str,
+    b3: &str,
+) -> String {
+    licm_printed(&format!(
+        "{SCOPE_DECLS}
+define i16 @f(i16 %n, ptr %p, ptr dereferenceable(2) %q) {{
+b0:
+  {b0}
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b2 ]
+  {b1}
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  {b2}
+  %v = load i16, ptr %q
+  store i16 %i, ptr %p
+  %w = add i16 %i, %v
+  %i1 = add i16 %w, 1
+  br label %b1
+
+b3:
+  {b3}
+  ret i16 %i
+}}
+"
+    ))
+}
+
+/// DEVIATE from LICM.cpp#L1086 (`II->use_empty()`): an `invariant.end` that
+/// cannot run between the start and the loop leaves the scope open at the
+/// header. The load stayed, the pin's answer for any end at all.
+#[test]
+fn test_an_invariant_end_after_the_loop_keeps_the_scope_open_for_the_load() {
+    let after = scoped_loop(START, "", "", END);
+    assert!(!load_of_q_in(&after, "b2") && load_of_q_in(&after, "b0"), "{after}");
+}
+
+/// The ends that do run between the start and the header close the scope the
+/// load needs: right after the start, in the header, in the body, on the
+/// entry path of a join, and when an outer loop runs the end again before the
+/// inner loop. Each hoisted the load past the store.
+#[test]
+fn test_an_invariant_end_that_can_run_before_the_header_keeps_the_load() {
+    let entry = scoped_loop(&format!("{START}\n  {END}"), "", "", "");
+    assert!(load_of_q_in(&entry, "b2"), "end right after the start: {entry}");
+    let header = scoped_loop(START, END, "", "");
+    assert!(load_of_q_in(&header, "b2"), "end in the header: {header}");
+    let body = scoped_loop(START, "", END, "");
+    assert!(load_of_q_in(&body, "b2"), "end in the body: {body}");
+}
+
+/// A side path that ends the scope and rejoins the loop's entry runs the end
+/// before the header; one that leaves the function does not.
+#[test]
+fn test_an_invariant_end_on_a_side_path_matters_only_if_it_rejoins_the_loop() {
+    let side = |leave: &str| {
+        licm_printed(&format!(
+            "{SCOPE_DECLS}
+define i16 @f(i16 %n, i1 %k, ptr %p, ptr dereferenceable(2) %q) {{
+b0:
+  {START}
+  br i1 %k, label %e, label %pre
+
+e:
+  {END}
+  {leave}
+
+pre:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %pre ], [ %i1, %b2 ]
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %v = load i16, ptr %q
+  store i16 %i, ptr %p
+  %w = add i16 %i, %v
+  %i1 = add i16 %w, 1
+  br label %b1
+
+b3:
+  ret i16 %i
+}}
+"
+        ))
+    };
+    let leaves = side("ret i16 0");
+    assert!(!load_of_q_in(&leaves, "b2"), "an end on a path that returns: {leaves}");
+    let rejoins = side("br label %pre");
+    assert!(load_of_q_in(&rejoins, "b2"), "an end on a path into the header: {rejoins}");
+}
+
+/// The start outside an outer loop and the end after the inner loop, in the
+/// outer body, runs before the inner header on the next outer round; with the
+/// start in the outer body too, it reopens the scope first.
+#[test]
+fn test_an_invariant_end_after_an_inner_loop_matters_if_the_outer_loop_repeats_it() {
+    let nest = |outer_entry: &str, outer_head: &str| {
+        licm_printed(&format!(
+            "{SCOPE_DECLS}
+define i16 @f(i16 %n, ptr %p, ptr dereferenceable(2) %q) {{
+b0:
+  {outer_entry}
+  br label %o
+
+o:
+  %j = phi i16 [ 0, %b0 ], [ %j1, %t ]
+  {outer_head}
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %o ], [ %i1, %b2 ]
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %t
+
+b2:
+  %v = load i16, ptr %q
+  store i16 %i, ptr %p
+  %w = add i16 %i, %v
+  %i1 = add i16 %w, 1
+  br label %b1
+
+t:
+  {END}
+  %j1 = add i16 %j, 1
+  %d = icmp slt i16 %j1, %n
+  br i1 %d, label %o, label %x
+
+x:
+  ret i16 %j
+}}
+"
+        ))
+    };
+    let outside = nest(START, "");
+    assert!(load_of_q_in(&outside, "b2"), "the end runs again before the inner header: {outside}");
+    let restarted = nest("", START);
+    assert!(!load_of_q_in(&restarted, "b2"), "the start comes after the end each round: {restarted}");
+}
+
+/// Two starts on one pointer: the one ended in the body no longer covers the
+/// load, the one never ended still does. Each is judged by its own ends.
+#[test]
+fn test_one_of_two_starts_on_a_pointer_ended_in_the_loop_leaves_the_other_to_cover() {
+    let two = |second_ended: bool| {
+        let end = if second_ended { "call void @llvm.invariant.end.p0(ptr %t, i64 2, ptr %q)" } else { "" };
+        scoped_loop(
+            &format!("{START}\n  %t = call ptr @llvm.invariant.start.p0(i64 2, ptr %q)"),
+            "",
+            &format!("call void @llvm.invariant.end.p0(ptr %s, i64 2, ptr %q)\n  {end}"),
+            "",
+        )
+    };
+    let one_open = two(false);
+    assert!(!load_of_q_in(&one_open, "b2"), "the second start is still open: {one_open}");
+    let both_ended = two(true);
+    assert!(load_of_q_in(&both_ended, "b2"), "both ended in the body: {both_ended}");
+}
+
+/// A scope that two starts reach through a phi is ended through the phi, which
+/// names neither start. The load stayed in the loop.
+#[test]
+fn test_an_invariant_end_through_a_phi_keeps_the_load() {
+    let printed = licm_printed(&format!(
+        "{SCOPE_DECLS}
+define i16 @f(i16 %n, i1 %k, ptr %p, ptr dereferenceable(2) %q) {{
+b0:
+  br i1 %k, label %a, label %c
+
+a:
+  %s = call ptr @llvm.invariant.start.p0(i64 2, ptr %q)
+  br label %j
+
+c:
+  %t = call ptr @llvm.invariant.start.p0(i64 2, ptr %q)
+  br label %j
+
+j:
+  %u = phi ptr [ %s, %a ], [ %t, %c ]
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %j ], [ %i1, %b2 ]
+  %cc = icmp slt i16 %i, %n
+  br i1 %cc, label %b2, label %b3
+
+b2:
+  %v = load i16, ptr %q
+  store i16 %i, ptr %p
+  %w = add i16 %i, %v
+  %i1 = add i16 %w, 1
+  br label %b1
+
+b3:
+  call void @llvm.invariant.end.p0(ptr %u, i64 2, ptr %q)
+  ret i16 %i
+}}
+"
+    ));
+    assert!(load_of_q_in(&printed, "b2"), "{printed}");
+}
+
 /// A GEP the target folds into the loop's load, also read by an exit phi: LLVM
 /// copies it into the exit and keeps it in the loop. llrm left the exit phi
 /// reading the loop's pointer, where `opt -passes=licm` re-forms the address
@@ -1344,4 +1638,485 @@ fn test_a_promotion_past_the_target_register_count_is_refused() {
     assert_eq!(counters_promoted(llrm_mir::target::Neutral), 10);
     assert_eq!(counters_promoted(llrm_x86_m16::Dos::default()), 3);
     assert_eq!(counters_promoted(I486(llrm_mir::target::Neutral)), 5);
+}
+
+/// The dot loop of a Nib zip (`i < a && i < b`, both bounds invariant) tested
+/// both bounds on every trip: the pin's LICM (`hoistMinMax`) makes one compare
+/// against `umin(a, b)`, the `umin` in the preheader.
+#[test]
+fn test_two_invariant_upper_bounds_become_one_compare_against_their_min() {
+    let after = licm_printed(
+        "define i16 @f(i16 %a, i16 %b) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %i1 = add nuw i16 %i, 1
+  %c1 = icmp ult i16 %i1, %a
+  %c2 = icmp ult i16 %i1, %b
+  %c = select i1 %c1, i1 %c2, i1 false
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}
+",
+    );
+    let entry = block_of(&after, "b0");
+    assert!(entry.iter().any(|line| line.contains("%invariant.umin = call i16 @llvm.umin.i16")), "{after}");
+    let body = block_of(&after, "b1");
+    assert_eq!(body.iter().filter(|line| line.contains("icmp")).count(), 1, "{after}");
+    assert!(body.iter().any(|line| line.contains("icmp ult i16 %i1, %invariant.umin")), "{after}");
+}
+
+/// A select does not evaluate its second compare on every path, so the bound
+/// the preheader now reads is frozen; the logical `and` form needs no freeze.
+#[test]
+fn test_a_select_freezes_the_second_bound_and_an_and_does_not() {
+    let select = "  %c = select i1 %c1, i1 %c2, i1 false\n";
+    let and = "  %c = and i1 %c1, %c2\n";
+    for (logic, frozen) in [(select, true), (and, false)] {
+        let text = format!(
+            "define i16 @f(i16 %a, i16 %b) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %i1 = add nuw i16 %i, 1
+  %c1 = icmp ult i16 %i1, %a
+  %c2 = icmp ult i16 %i1, %b
+{logic}  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}}
+"
+        );
+        let after = licm_printed(&text);
+        let entry = block_of(&after, "b0");
+        assert_eq!(entry.iter().any(|line| line.contains("freeze")), frozen, "{after}");
+        assert!(entry.iter().any(|line| line.contains("llvm.umin.i16")), "{after}");
+    }
+}
+
+/// `||` of two upper-bound tests is the min's inverse: exit when `i >= min`.
+/// Signed lower bounds take the max.
+#[test]
+fn test_or_of_bounds_and_signed_lower_bounds() {
+    let or = licm_printed(
+        "define i16 @f(i16 %a, i16 %b) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %i1 = add nuw i16 %i, 1
+  %c1 = icmp uge i16 %i1, %a
+  %c2 = icmp uge i16 %i1, %b
+  %c = or i1 %c1, %c2
+  br i1 %c, label %b2, label %b1
+
+b2:
+  ret i16 %i1
+}
+",
+    );
+    assert!(block_of(&or, "b0").iter().any(|line| line.contains("llvm.umin.i16")), "{or}");
+    let max = licm_printed(
+        "define i16 @f(i16 %a, i16 %b) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %i1 = add nuw i16 %i, 1
+  %c1 = icmp sgt i16 %i1, %a
+  %c2 = icmp sgt i16 %i1, %b
+  %c = and i1 %c1, %c2
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}
+",
+    );
+    assert!(block_of(&max, "b0").iter().any(|line| line.contains("llvm.smax.i16")), "{max}");
+}
+
+/// Mixed directions (`i < a && i > b`) have no single bound: untouched.
+#[test]
+fn test_opposite_directions_are_not_merged() {
+    let after = licm_printed(
+        "define i16 @f(i16 %a, i16 %b) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %i1 = add nuw i16 %i, 1
+  %c1 = icmp ult i16 %i1, %a
+  %c2 = icmp ugt i16 %i1, %b
+  %c = and i1 %c1, %c2
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}
+",
+    );
+    assert!(!after.contains("llvm.umin") && !after.contains("llvm.umax"), "{after}");
+}
+
+/// The loops of @f that `seeded` lets reach the memory graph.
+fn seeded_loops(text: &str) -> Vec<bool> {
+    use llrm_analysis::testing::{DOS, layout};
+    use llrm_mir::passes::{Analyses, Outer};
+    let module = parsed(&format!("{DOS}{text}"));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut module = module;
+    let (context, function) = module.function_mut("f").expect("@f");
+    let mut analyses = Analyses::new(std::rc::Rc::new(outer));
+    let shape = analyses.get::<llrm_analysis::cfg::Shape>(context, &layout, function);
+    let innermost = super::innermost_loops(&shape);
+    shape.loops.iter().map(|one| super::seeded(function, &shape, &innermost, one)).collect()
+}
+
+/// #6706 widened the `seeded` look to any `and`, `or` or select of a compare:
+/// nearly every loop then built MemorySSA and walked sink/hoist, licm 43.2M to
+/// 198.9M and mssa 88.2M to 165.6M instructions on memory_expansion.ll. A
+/// logical operation of two compares of variant values seeds nothing.
+#[test]
+fn a_logical_operation_of_variant_compares_does_not_seed_a_loop() {
+    let text = "define i16 @f(i16 %n, i16 %m) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %inc, %loop ]
+  %j = phi i16 [ 0, %entry ], [ %jnc, %loop ]
+  %a = icmp ult i16 %i, %j
+  %b = icmp slt i16 %j, %i
+  %c = and i1 %a, %b
+  %inc = add i16 %i, 1
+  %jnc = add i16 %j, 2
+  br i1 %c, label %loop, label %exit
+exit:
+  ret i16 %inc
+}
+";
+    assert_eq!(seeded_loops(text), [false]);
+}
+
+/// The look #6706 added still seeds the loop it can act on: two compares of
+/// one variant value against two invariant bounds.
+#[test]
+fn two_invariant_bounds_of_one_variant_value_seed_a_loop() {
+    let text = "define i16 @f(i16 %n, i16 %m) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %inc, %loop ]
+  %a = icmp ult i16 %i, %n
+  %b = icmp ult i16 %i, %m
+  %c = and i1 %a, %b
+  %inc = add i16 %i, 1
+  br i1 %c, label %loop, label %exit
+exit:
+  ret i16 %inc
+}
+";
+    assert_eq!(seeded_loops(text), [true]);
+}
+
+/// Every alias query between two stack slots asked `exposes` for each slot's
+/// uses afresh: LICM's alias queries took no `ExposedFrames`, and jpeg_fixed
+/// spent 11 of the pass's 36 M Ir in those scans. LICM reads the manager's
+/// set once.
+#[test]
+fn test_licm_alias_queries_do_not_rescan_each_slots_uses() {
+    let text = "define void @f(i16 %n) {
+b0:
+  %a = alloca i16
+  %b = alloca i16
+  %c = alloca i16
+  store i16 0, ptr %a
+  br label %head
+head:
+  %i = phi i16 [ 0, %b0 ], [ %j, %head ]
+  %x = load i16, ptr %a
+  %y = load i16, ptr %c
+  %s = add i16 %x, %y
+  store i16 %s, ptr %b
+  %j = add i16 %i, 1
+  %t = icmp slt i16 %j, %n
+  br i1 %t, label %head, label %exit
+exit:
+  ret void
+}
+";
+    let before = llrm_analysis::frameescape::scans();
+    decided(text);
+    assert_eq!(llrm_analysis::frameescape::scans() - before, 0);
+}
+
+/// `hoistSubAddAssociation`'s three shapes, `a` and `b` invariant:
+/// `(LV + a) - b` to `LV + (a - b)`, `(LV - a) - b` to `LV - (a + b)`,
+/// `(LV - a) + b` (either order) to `LV + (b - a)`. llrm kept the invariant
+/// sub or add in the loop, where `opt -passes=licm` hoists it.
+#[test]
+fn test_sub_and_add_chains_with_invariant_operands_are_reassociated_out() {
+    let text = |inner: &str, outer: &str| {
+        format!(
+            "define i16 @f(i16 %n, i16 %a, i16 %b) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %x = {inner}
+  %y = {outer}
+  %i1 = add i16 %i, %y
+  %c = icmp slt i16 %i1, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}}
+"
+        )
+    };
+    let cases = [
+        ("add i16 %i, %a", "sub i16 %x, %b", "%invariant.op = sub i16 %a, %b", "%y.reass = add i16 %i, %invariant.op"),
+        ("sub i16 %i, %a", "sub i16 %x, %b", "%invariant.op = add i16 %a, %b", "%y.reass = sub i16 %i, %invariant.op"),
+        ("sub i16 %i, %a", "add i16 %x, %b", "%invariant.op = sub i16 %b, %a", "%y.reass = add i16 %i, %invariant.op"),
+        ("sub i16 %i, %a", "add i16 %b, %x", "%invariant.op = sub i16 %b, %a", "%y.reass = add i16 %i, %invariant.op"),
+    ];
+    for (inner, outer, invariant, rebuilt) in cases {
+        let after = licm_printed(&text(inner, outer));
+        assert!(block_of(&after, "b0").iter().any(|line| line.contains(invariant)), "{inner} / {outer}\n{after}");
+        let body = block_of(&after, "b1");
+        assert!(body.iter().any(|line| line.contains(rebuilt)), "{inner} / {outer}\n{after}");
+        assert!(body.iter().all(|line| !line.contains("%x = ")), "{inner} / {outer}\n{after}");
+    }
+}
+
+/// `hoistAddSub`: `LV + C1 < C2` is `LV < C2 - C1` and `LV - C1 < C2` is
+/// `LV < C1 + C2` when the move cannot overflow; `C1 - LV < C2` is `LV > C1 -
+/// C2`. llrm kept the add in the loop, where `opt -passes=licm` hoists the
+/// bound.
+#[test]
+fn test_a_compare_of_an_add_or_sub_with_an_invariant_operand_is_reassociated_out() {
+    let text = |operation: &str, flags: &str, compare: &str, p: &str, q: &str| {
+        format!(
+            "define i16 @f(i16 %n, i16 %a, i16 %b) {{
+b0:
+  %p = {p}
+  %q = {q}
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %x = {operation} {flags} i16 {compare}
+  %go = icmp ult i16 %x, %q
+  %gz = zext i1 %go to i16
+  %j = add i16 %i, %gz
+  %i1 = add i16 %j, 1
+  %c = icmp slt i16 %i1, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}}
+"
+        )
+    };
+    // add: LV + C1 u< C2.
+    let after = licm_printed(&text("add", "nuw", "%i, %p", "and i16 %a, 255", "or i16 %b, 255"));
+    assert!(block_of(&after, "b0").iter().any(|line| line.contains("%invariant.op = sub nuw i16 %q, %p")), "{after}");
+    assert!(block_of(&after, "b1").iter().any(|line| line.contains("icmp ult i16 %i, %invariant.op")), "{after}");
+    assert!(block_of(&after, "b1").iter().all(|line| !line.contains("%x = ")), "{after}");
+    // sub: LV - C1 u< C2.
+    let after = licm_printed(&text("sub", "nuw", "%i, %p", "and i16 %a, 255", "and i16 %b, 255"));
+    assert!(block_of(&after, "b0").iter().any(|line| line.contains("%invariant.op = add nuw i16 %p, %q")), "{after}");
+    // C1 - LV u< C2: LV u> C1 - C2.
+    let after = licm_printed(&text("sub", "nuw", "%p, %i", "or i16 %a, 255", "and i16 %b, 255"));
+    assert!(block_of(&after, "b0").iter().any(|line| line.contains("%invariant.op = sub nuw i16 %p, %q")), "{after}");
+    assert!(block_of(&after, "b1").iter().any(|line| line.contains("icmp ugt i16 %i, %invariant.op")), "{after}");
+    // No wrap flag: untouched.
+    let after = licm_printed(&text("add", "", "%i, %p", "and i16 %a, 255", "or i16 %b, 255"));
+    assert!(!after.contains("invariant.op"), "{after}");
+}
+
+/// `m_NUWAddLike`: an `or disjoint` is the add `hoistAdd` takes, so `i | 1 u<
+/// 999` in a loop unrolled by two is `i u< 998` (wasm `floats` -O3 kept the
+/// `or` and its constant: +1000 instructions).
+#[test]
+fn test_a_compare_of_a_disjoint_or_with_an_invariant_operand_is_reassociated_out() {
+    let after = licm_printed(
+        "define i16 @f(i16 %n, i16 %a) {
+b0:
+  %p = and i16 %a, 255
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %x = or disjoint i16 %i, %p
+  %go = icmp ult i16 %x, 999
+  %gz = zext i1 %go to i16
+  %j = add i16 %i, %gz
+  %i1 = add i16 %j, 1
+  %c = icmp slt i16 %i1, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}
+",
+    );
+    assert!(block_of(&after, "b0").iter().any(|line| line.contains("%invariant.op = sub nuw i16 999, %p")), "{after}");
+    assert!(block_of(&after, "b1").iter().all(|line| !line.contains("%x = ")), "{after}");
+}
+
+/// `hoistMulAddAssociation`: `(a * x + b * y) * c` with `a`, `b`, `c` invariant
+/// is `(a * c) * x + (b * c) * y`, the two products made in the preheader.
+/// llrm left the whole tree in the loop, where `opt -passes=licm` hoists them.
+#[test]
+fn test_a_product_of_a_sum_of_products_with_invariant_factors_is_reassociated_out() {
+    let text = "define i16 @f(i16 %n, i16 %a, i16 %b, i16 %c) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %x = mul i16 %a, %i
+  %y = mul i16 %i, %b
+  %s = add nsw i16 %x, %y
+  %t = mul i16 %s, %c
+  %i1 = add i16 %i, %t
+  %k = icmp slt i16 %i1, %n
+  br i1 %k, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}
+";
+    let after = licm_printed(text);
+    let pre = block_of(&after, "b0");
+    assert!(pre.iter().any(|line| line.contains("= mul i16 %a, %c")), "{after}");
+    assert!(pre.iter().any(|line| line.contains("= mul i16 %b, %c")), "{after}");
+    let body = block_of(&after, "b1");
+    assert!(body.iter().all(|line| !line.contains("%t = ")), "{after}");
+    assert!(body.iter().any(|line| line.contains("%x.reass = mul i16 %factor.op.mul1, %i")), "{after}");
+}
+
+/// `Instruction::mayHaveSideEffects` of a call was the list of every location
+/// it writes (a `Vec` of `MemRef`s, `memory::stated` read three times over)
+/// asked for a yes: 1 M Ir of a jpeg_fixed -O2 compile in `sink_region` alone.
+/// Whether it writes is derived from its attributes, with no list.
+#[test]
+fn test_whether_a_call_in_a_loop_has_side_effects_derives_no_list() {
+    let text = "declare i16 @g(i16) nounwind willreturn
+define void @f(i16 %n) {
+b0:
+  br label %head
+head:
+  %i = phi i16 [ 0, %b0 ], [ %j, %head ]
+  %u = call i16 @g(i16 %i)
+  %v = call i16 @g(i16 %n)
+  %j = add i16 %i, 1
+  %t = icmp slt i16 %j, %n
+  br i1 %t, label %head, label %exit
+exit:
+  ret void
+}
+";
+    let before = llrm_analysis::memoryssa::lazy_lists();
+    let mut module = parsed(text);
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(Licm { apply: true, speculate: true });
+    passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("licm");
+    let made = llrm_analysis::memoryssa::lazy_lists() - before;
+    assert_eq!(made, 0, "{made} access lists made for a loop of calls");
+}
+
+/// A loop with nothing to promote priced its register pressure anyway: 1.6 M
+/// Ir of a jpeg_fixed -O2 compile, in 121 loops. It is priced only for a loop
+/// with a candidate.
+#[test]
+fn test_a_loop_with_nothing_to_promote_prices_no_register_pressure() {
+    let text = "define i16 @f(i16 %n) {
+b0:
+  br label %head
+head:
+  %i = phi i16 [ 0, %b0 ], [ %j, %head ]
+  %j = add i16 %i, 1
+  %t = icmp slt i16 %j, %n
+  br i1 %t, label %head, label %exit
+exit:
+  ret i16 %j
+}
+";
+    let before = super::pressure::COUNTED.with(std::cell::Cell::get);
+    let mut module = parsed(text);
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(Licm { apply: true, speculate: true });
+    passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("licm");
+    let priced = super::pressure::COUNTED.with(std::cell::Cell::get) - before;
+    assert_eq!(priced, 0, "pressure priced {priced} times for a loop with no memory access");
+}
+
+/// LICM hoists the load through `MemorySSAUpdater` and says it kept MemorySSA
+/// (LICM.cpp `PA.preserve<MemorySSAAnalysis>()`): the graph asked for after it
+/// is the one it updated. Before, the updater's graph was dropped with the
+/// pass's change and the next pass computed MemorySSA again (2 computations,
+/// not 1; 21 LICM misses against the pin's 11 on jpeg_fixed).
+#[test]
+fn test_the_memory_graph_licm_updated_is_the_one_the_next_pass_gets() {
+    let text = looped(GLOBALS, "", "", "  %v = load i16, ptr @g\n");
+    let (hits, misses) = crate::testing::mssa_misses_over(
+        &text,
+        vec![
+            Box::new(crate::testing::AsksMssa { forgets: false }),
+            Box::new(Licm { apply: true, speculate: true }),
+            Box::new(crate::testing::AsksMssa { forgets: false }),
+        ],
+    );
+    assert_eq!(misses, 1, "MemorySSA was computed again after LICM updated it");
+    assert!(hits >= 2, "LICM and the pass after it read the one graph: {hits} hits");
+}
+
+/// How many times `@f`'s loops were scanned for a block that may throw
+/// (`Decisions::safety_scans`).
+fn safety_scans(
+    text: &str,
+    apply: bool,
+) -> usize {
+    DECIDED.with(|all| *all.borrow_mut() = Decisions::default());
+    let mut module = parsed(text);
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(Licm { apply, speculate: true });
+    passes
+        .run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral))
+        .unwrap_or_else(|error| panic!("{error}\n{text}"));
+    DECIDED.with(|all| all.borrow().safety_scans)
+}
+
+/// The sinking, the hoisting and the promotion of one loop shared two
+/// `LoopSafety` that each scanned the loop (153 loops of `jpeg_fixed` scanned
+/// twice, 2 x 153 where the pin's one `ICFLoopSafetyInfo` per `runOnLoop`
+/// scans 153 times). Decided without edits, the loop is scanned once.
+#[test]
+fn test_a_loop_decided_without_edits_is_scanned_for_a_throwing_block_once() {
+    assert_eq!(safety_scans(&slot_loop("", "", "load i16, ptr %s"), false), 1);
+}
+
+/// With the edits made, what was found of the loop stands only until the next
+/// edit: the sinking and hoisting found nothing to do and share their scan with
+/// the first promotion round; the promotion edits the loop, so the second round
+/// scans again. A scan kept across that edit would answer for a loop that is no
+/// longer there.
+#[test]
+fn test_what_was_found_of_a_loop_is_dropped_by_the_next_edit() {
+    assert_eq!(safety_scans(&slot_loop("", "", "load i16, ptr %s"), true), 2);
 }

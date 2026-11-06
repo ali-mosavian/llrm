@@ -103,6 +103,26 @@ fn lifetime_markers_with_a_size(line: &str) -> String {
     line.to_owned()
 }
 
+/// `setFunctionAttributes` of `CommandFlags.cpp`
+/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/CommandFlags.cpp#L664>):
+/// `-frame-pointer=` gives each function without a `"frame-pointer"` attribute
+/// that policy.
+fn with_frame_pointer(
+    module: &mut llrm_mir::module::Module,
+    policy: &str,
+) {
+    use llrm_mir::opcode::Attribute;
+    for global in &mut module.globals {
+        let llrm_mir::module::GlobalKind::Function(function) = &mut global.kind else { continue };
+        if function.is_declaration()
+            || function.attrs.iter().any(|one| matches!(one, Attribute::Str(key, _) if key == "frame-pointer"))
+        {
+            continue;
+        }
+        function.attrs.push(Attribute::Str("frame-pointer".to_owned(), Some(policy.to_owned())));
+    }
+}
+
 fn bound(
     flags: &Flags,
     triple: Option<&str>,
@@ -208,6 +228,27 @@ fn decorate(
             global.name = Some(spelled).into();
         }
     }
+    // An alias is spelled as what it names is.
+    for at in 0..module.aliases.len() {
+        let aliasee = module.aliases[at].aliasee;
+        let convention = match module.global(aliasee).function() {
+            Some(one) => calling.by_number(one.calling_convention).unwrap_or(default),
+            None => calling.by_number(0).unwrap_or(default),
+        };
+        let mut name = module.aliases[at].name.clone();
+        // clang spells a regcall alias `__regcall3__NAME`, as its function; the
+        // function lost the prefix above when it took the ABI's convention.
+        if let Some(plain) = name.strip_prefix("__regcall3__")
+            && module.global(aliasee).function().is_some_and(|one| one.calling_convention != llrm_mir::opcode::REGCALL)
+        {
+            name = plain.to_owned();
+        }
+        let spelled = match name.strip_prefix('\u{1}') {
+            Some(exact) => Some(exact.to_owned()),
+            None => convention.decorated(format, &name),
+        };
+        module.aliases[at].name = spelled.unwrap_or(name);
+    }
     spellings
 }
 
@@ -227,12 +268,16 @@ fn with_default_convention(
     default: &llrm_target::calling::Convention,
     regcall_default: bool,
     c_library: bool,
+    watcom_library: bool,
 ) {
     let Some(number) = llrm_target::calling::Calling::number_of(default.cc.as_deref()).filter(|number| *number != 0)
     else {
         return;
     };
+    let served: Vec<u32> =
+        default.serves.iter().filter_map(|name| llrm_target::calling::Calling::number_of(Some(name))).collect();
     let takes = |convention: u32, variadic: bool| match (regcall_default, convention) {
+        (_, other) if served.contains(&other) => true,
         (false, 0) => true,
         (true, llrm_mir::opcode::REGCALL) => true,
         (true, 0) => variadic,
@@ -243,7 +288,7 @@ fn with_default_convention(
     let main_is_watcom = default.cc.as_deref() == Some("regparm3");
     // Where the ABI is the register-size one, the library's functions are Open
     // Watcom's whichever way the front end marks the rest.
-    let library_is_watcom = (!regcall_default || main_is_watcom) && !c_library;
+    let library_is_watcom = watcom_library && (!regcall_default || main_is_watcom) && !c_library;
     // clang gives the library functions it knows (`strlen`, `atan`) their C
     // convention whatever the default is, so `_strlen` was called where the
     // library has `strlen_`: a declaration or a definition of one (the float
@@ -370,6 +415,27 @@ pub fn compiled_dumping(
 ) -> Result<(masm::Module, llrm_target::object::Format), String> {
     let (triple, text) = without_triple(text);
     let bound = bound(flags, triple.as_deref())?;
+    // The system the module's triple names writes its own object format unless
+    // `-fobject-format=` says otherwise.
+    let system = bound
+        .target
+        .layout()
+        .platforms
+        .into_iter()
+        .find(|one| triple.as_deref().is_some_and(|stated| crate::same_system(&one.triple, stated)));
+    if let Some(why) = system.as_ref().and_then(|one| one.pending.as_ref()).filter(|_| !flags.allow_pending_abi) {
+        return Err(format!("{}: {why}; -fallow-pending-abi emits it anyway", triple.as_deref().unwrap_or_default()));
+    }
+    let mut flags = flags.clone();
+    if let Some(system) = system {
+        if flags.object_format.is_none() {
+            flags.object_format = Some(llrm_target::object::Format::parse(&system.format)?);
+        }
+        if flags.abi.is_none() {
+            flags.abi = system.abi;
+        }
+    }
+    let flags = &flags;
     let mut module = llrm_mir::parse::module(&text).map_err(|error| format!("{name}: {error}"))?;
     if llrm_codegen::support::debug::enabled("mir") {
         // The size of the program as read, before any pass: what the other
@@ -387,7 +453,12 @@ pub fn compiled_dumping(
     refuse_weak(&module, format.name())?;
     refuse_foreign_conventions(&module)?;
     allow_near_calls(&mut module);
-    with_default_convention(&mut module, default, flags.regcall_default, flags.c_library);
+    if let Some(policy) = &flags.frame_pointer {
+        with_frame_pointer(&mut module, policy);
+    }
+    // Open Watcom's library is the DOS one: the other systems' own libc keeps
+    // C's convention.
+    with_default_convention(&mut module, default, flags.regcall_default, flags.c_library, format.name() == "omf");
     crate::coerce::small_structs_as_scalars(&mut module, bound.target.calling())?;
     let spellings = decorate(&mut module, bound.target.calling(), default, format.name());
     // After the rename: the debug info names the symbols the object has.
@@ -413,6 +484,9 @@ pub fn compiled_dumping(
         .and_then(|_| bound.target.calling().by_number(llrm_mir::opcode::WATCALL))
         .unwrap_or(default);
     options.libcalls.extend(libm_calls(library, format.name()));
+    // The soft-float routines are C compiled under the program's own
+    // convention, not the Watcom library's.
+    options.libcalls.extend(soft_float_calls(default, format.name()));
     Ok((llrm_codegen::driver::compiled_module(module, name, &options)?, format))
 }
 
@@ -435,6 +509,24 @@ fn libm_calls(
         .collect()
 }
 
+/// The soft-float routines, spelled as the C compiler spells a definition of
+/// them: what a function with no x87 calls for a float operation. The runtime
+/// (`runtime/compiler-rt`) is C, so its objects carry the convention's
+/// spelling.
+fn soft_float_calls(
+    default: &llrm_target::calling::Convention,
+    format: &str,
+) -> Vec<(String, u32, String)> {
+    let number = llrm_target::calling::Calling::number_of(default.cc.as_deref()).unwrap_or(0);
+    let names = llrm_codegen::backend::selectiondag::libcalls::names().map(str::to_owned);
+    names
+        .map(|name| {
+            let symbol = default.decorated(format, &name).unwrap_or_else(|| name.clone());
+            (name, number, symbol)
+        })
+        .collect()
+}
+
 /// `-gcodeview` and `-gtd` where the object format cannot carry them, with the
 /// words the debug writers use: an object that holds another flavor than the
 /// one asked for must not be written.
@@ -443,7 +535,7 @@ fn refuse_debug_format(
     format: &str,
     bitness: u32,
 ) -> Result<(), String> {
-    use llrm_object::debug::Format;
+    use llrm_debug::Format;
     if !flags.debug {
         return Ok(());
     }
@@ -556,13 +648,34 @@ fn options_for(
             .filter_map(|one| one.as_str())
             .map(|name| (name.to_owned(), number, pattern.replace('*', name)))
             .collect();
-        if default.cc.as_deref() == Some("sysv") && default.symbol.contains_key(format) {
-            options.pipeline.library = vec![llrm_mir::libfunc::Routine {
-                standard: "strlen",
-                symbol: pattern.replace('*', "strlen"),
-                calling_convention: number,
-            }];
+        // `strlen` where the convention is System V's (DEVIATE D11 of
+        // `pipeline::Options::library`); the compare routines wherever the
+        // object is ELF, whose C library is a hosted one (`bcmp` is not in
+        // Watcom's or DOS's).
+        let stated: Option<Vec<&'static str>> = match default.cc.as_deref() {
+            Some("sysv") if default.symbol.contains_key(format) => {
+                Some(["strlen"].into_iter().chain(llrm_mir::libfunc::HOSTED_COMPARE).collect())
+            }
+            _ if format == "elf" => Some(llrm_mir::libfunc::HOSTED_COMPARE.to_vec()),
+            _ => None,
+        };
+        if let Some(names) = stated {
+            options.pipeline.library =
+                llrm_mir::libfunc::Routine::stated(names, |name| pattern.replace('*', name), number);
         }
+    }
+    // The pin's clang IR at 16 and 32 bits has the forwarding of a global's
+    // store the write-through `Promote` stands in for at -O1 (lru -29 B, -16
+    // clk at m16; -11 clk, -4 B at m32, the only m32 cell it moves). Nib and
+    // BASIC build their options by `m16_options` and keep it.
+    if matches!(bound.target.layout().mode, 16 | 32) {
+        options.pipeline.write_through = false;
+    }
+    // At -O1 the forwarding made jpeg_fixed/jpeg_single 345-348 B larger at m64
+    // (the pin's -O1 forwards it in InstCombine, not here); -Og, which has no
+    // GVN either, is smaller with it (row WT1, owner x86-m64, exit 2026-11-14).
+    if bound.target.layout().mode == 64 && flags.level == llrm_codegen::driver::flags::Level::O1 {
+        options.pipeline.write_through = false;
     }
     options
 }
@@ -588,6 +701,27 @@ mod options_tests {
         options_for(&bound, &flags, machine, format, default)
     }
 
+    /// The write-through `Promote` ran on the pin's clang IR at m16 and m32 -O1
+    /// and made `lru` larger (29 B at m16); the frontends that build for
+    /// m16 alone (Nib, BASIC) have no GVN there and keep it.
+    #[test]
+    fn clang_ir_at_m16_and_m32_has_no_write_through_and_the_m16_frontends_keep_it() {
+        assert!(!options(&["-m16"], "omf").pipeline.write_through);
+        assert!(!options(&["-m32"], "omf").pipeline.write_through);
+        assert!(crate::m16_options(crate::m16_machine()).pipeline.write_through);
+    }
+
+    /// The write-through `Promote` made jpeg_fixed -O1 348 B and jpeg_single
+    /// -O1 345 B larger at m64; it stays on at -Og and at the levels with GVN
+    /// `pre` (where it does not run); m16 and m32 never have it.
+    #[test]
+    fn clang_ir_at_o1_has_no_write_through_and_og_keeps_it() {
+        assert!(!options(&["-m64", "-O1"], "elf").pipeline.write_through);
+        assert!(!options(&["-m32", "-O1"], "elf").pipeline.write_through);
+        assert!(options(&["-m64", "-Og"], "elf").pipeline.write_through);
+        assert!(options(&["-m64", "-O2"], "elf").pipeline.write_through);
+    }
+
     /// `llrm-cc --dump DIR` reached the backend as an input file: "cannot
     /// specify -o with several inputs", and no stage was written.
     #[test]
@@ -601,6 +735,61 @@ mod options_tests {
         let written = std::fs::read_dir(&dir).unwrap().count();
         let _ = std::fs::remove_dir_all(&dir);
         assert!(written > 0, "no stage written");
+    }
+
+    /// A Windows module's `fastcc` function took System V's registers
+    /// (`edi`, `esi`) while its `ccc` ones took Win64's: `hanoi`'s recursion
+    /// called with `edi` and `esi` and read its own arguments from `ecx` and
+    /// `edx`. On a Win64 subtarget every convention is `CC_X86_Win64_C`.
+    #[test]
+    fn a_windows_fastcc_function_and_its_call_take_the_win64_registers() {
+        let text = "target datalayout = \"e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                    target triple = \"x86_64-pc-windows-msvc\"\n\
+                    define internal fastcc i32 @sub(i32 %a, i32 %b) noinline {\n  %r = sub i32 %a, %b\n  ret i32 %r\n}\n\
+                    define i32 @f(i32 %x, i32 %y) {\n  %r = call fastcc i32 @sub(i32 %y, i32 %x)\n  ret i32 %r\n}\n";
+        let mut flags = Flags::default();
+        flags.allow_pending_abi = true;
+        let (built, _) = compiled_dumping(&flags, text, "w", None).unwrap();
+        let assembly = masm::text(&built).unwrap();
+        let (callee, caller) = assembly.split_once("f proc near").expect("both functions");
+        assert!(callee.contains("sub eax, edx"), "the callee reads ecx and edx:\n{assembly}");
+        assert!(caller.contains("mov ecx, edx") && !caller.contains("edi") && !caller.contains("esi"), "{assembly}");
+    }
+
+    /// Every Win64 call moved the stack pointer around its 32 bytes of home
+    /// area (`sub rsp, 32` / `add rsp, 32` per call, `hanoi`'s loop included);
+    /// the pin reserves the area in the prologue, the only place the stack
+    /// pointer may change on Win64.
+    #[test]
+    fn a_windows_call_reserves_its_home_area_in_the_prologue() {
+        let text = "target datalayout = \"e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                    target triple = \"x86_64-pc-windows-msvc\"\n\
+                    declare i32 @g(i32)\n\
+                    define i32 @f(i32 %x) {\n  %a = call i32 @g(i32 %x)\n  %b = call i32 @g(i32 %a)\n  %c = add i32 %a, %b\n  ret i32 %c\n}\n";
+        let mut flags = Flags::default();
+        flags.allow_pending_abi = true;
+        let (built, _) = compiled_dumping(&flags, text, "w", None).unwrap();
+        let assembly = masm::text(&built).unwrap();
+        assert_eq!((assembly.matches("sub rsp").count(), assembly.matches("add rsp").count()), (1, 1), "{assembly}");
+    }
+
+    /// Windows turned a libc function's call into Open Watcom's `watcallcc`,
+    /// which the Win64 convention does not describe: `printf` of a double was
+    /// refused ("call the convention does not describe"). The Watcom library
+    /// is the DOS one (an OMF object); and a variadic double goes in its
+    /// position's XMM and its shadow GPR.
+    #[test]
+    fn a_windows_printf_of_a_double_keeps_win64_and_copies_it_to_the_shadow_register() {
+        let text = "target datalayout = \"e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                    target triple = \"x86_64-pc-windows-msvc\"\n\
+                    declare i32 @printf(ptr, ...)\n\
+                    @fmt = private constant [4 x i8] c\"%f\\0A\\00\"\n\
+                    define i32 @f(double %d, i32 %i) {\n  %r = call i32 (ptr, ...) @printf(ptr @fmt, double %d, i32 %i)\n  %s = add i32 %r, 1\n  ret i32 %s\n}\n";
+        let mut flags = Flags::default();
+        flags.allow_pending_abi = true;
+        let (built, _) = compiled_dumping(&flags, text, "w", None).unwrap();
+        let assembly = masm::text(&built).unwrap();
+        assert!(assembly.contains("movq rdx, xmm0") && assembly.contains("mov r8d, edx"), "{assembly}");
     }
 
     /// `llrm-cc` ran the backend with none of what the Watcom front end set
@@ -622,12 +811,18 @@ mod options_tests {
             "{:?}",
             sysv.libcalls
         );
-        assert_eq!(sysv.pipeline.library.len(), 1);
-        assert_eq!(sysv.pipeline.library[0].symbol, "_strlen");
+        let symbols: Vec<_> = sysv.pipeline.library.iter().map(|routine| routine.symbol.as_str()).collect();
+        assert_eq!(symbols, ["_strlen", "_memcmp", "_bcmp"]);
+        // x86-64 Linux: `memcmp` and `bcmp` (`memcmp(p, q, n) == 0` stayed a
+        // `memcmp` call there); its `strlen` is not stated. A DOS object states
+        // none: Watcom's library has no `bcmp`.
+        let long = options(&["-m64", "-mabi=sysv"], "elf");
+        let symbols: Vec<_> = long.pipeline.library.iter().map(|routine| routine.symbol.as_str()).collect();
+        assert_eq!(symbols, ["memcmp", "bcmp"]);
     }
 }
 
-fn compile(
+pub(crate) fn compile(
     flags: &Flags,
     source: &Path,
     dump: Option<&Path>,
@@ -640,7 +835,8 @@ fn compile(
     if flags.assembly {
         write_output(&output, masm::text(&built).map_err(|error| error.to_string())?)
     } else {
-        let bytes = objbuild::written_in(&built, file, objbuild::CodeLayout::OneSegment, format)
+        let objects = bound(flags, without_triple(&text).0.as_deref())?.target.objects();
+        let bytes = objbuild::written_in(&built, file, layout_of(flags, format), format, objects)
             .map_err(|error| error.to_string())?;
         write_output(&output, bytes)
     }
@@ -707,5 +903,18 @@ mod text_tests {
             "@x = global i32 0\ndeclare void @llvm.lifetime.start.p0(i64 immarg, ptr)\n  %1 = call i16 @llvm.ia16.in.i16(i16 %0)\n"
                 .replace("llvm.ia16", "llrm.ia16")
         );
+    }
+}
+
+/// One COMDAT per function where `-ffunction-sections` asks for it and the
+/// format has them (OMF); one segment for the module's code otherwise.
+fn layout_of(
+    flags: &Flags,
+    format: llrm_target::object::Format,
+) -> objbuild::CodeLayout {
+    if flags.function_sections && format == llrm_target::object::Format::Omf {
+        objbuild::CodeLayout::PerProcedure
+    } else {
+        objbuild::CodeLayout::OneSegment
     }
 }

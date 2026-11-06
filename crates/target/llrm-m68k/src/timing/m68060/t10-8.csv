@@ -1,0 +1,5 @@
+#title,MOVE16 Execution Times,page,10-15,notes,"¹ These execution times assume cache misses for both read and write MOVE16 accesses. Execution times are 11(1/1) if the read access hits in the operand data cache. Note, for this instruction the operand read/write refers to a line-sized transfer."
+Source,Destination / (Ax),Destination / (Ax)+,Destination / (xxx).L
+(Ay),—,—,18(1/1)¹
+(Ay)+,—,18(1/1)¹,18(1/1)¹
+(xxx).L,18(1/1)¹,18(1/1)¹,—

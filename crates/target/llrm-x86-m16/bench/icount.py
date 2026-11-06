@@ -13,18 +13,20 @@ stops the run and is reported, never guessed.
 from __future__ import annotations
 
 import io
+import os
 import struct
 import sys
 from pathlib import Path
 from dataclasses import field
 from dataclasses import dataclass
 
+from unicorn import x86_const
 from unicorn import UC_ARCH_X86, UC_HOOK_CODE, UC_HOOK_INTR, UC_MODE_16, Uc, UcError
 from unicorn.x86_const import (
     UC_X86_REG_AX, UC_X86_REG_BX, UC_X86_REG_CS, UC_X86_REG_CX, UC_X86_REG_DS, UC_X86_REG_DX, UC_X86_REG_EFLAGS, UC_X86_REG_SI,
-    UC_X86_REG_ES, UC_X86_REG_IP, UC_X86_REG_SP, UC_X86_REG_SS,
+    UC_X86_REG_ES, UC_X86_REG_FPCW, UC_X86_REG_IP, UC_X86_REG_SP, UC_X86_REG_SS,
 )
-from iced_x86 import Decoder, Mnemonic, OpKind
+from iced_x86 import Decoder, MemorySizeExt, Mnemonic, OpKind, Register, RegisterExt
 
 PSP = 0x1000
 LOAD = PSP + 0x10  # the image's first paragraph
@@ -51,6 +53,9 @@ def _prices():
     return harness.cost, harness.multiplier_of, harness.clocks.prefixes
 
 
+# Instructions a run may take before it is stopped: LLRM_ICOUNT_LIMIT raises it for a program the reference compiler makes slow (Turbo C's
+# 8086 long multiply: stft_fixed and jpeg_fixed run past 400 M).
+LIMIT = int(os.environ.get("LLRM_ICOUNT_LIMIT", 400_000_000))
 NEVER_ENTERED = "the region was never entered"
 
 
@@ -64,12 +69,29 @@ class Run:
     rep_iterations: int = 0  # flat target: the region's repeated string instructions' iterations after the first of each (tools/bench/flatcount.py)
 
 
+_NAME = {value: name for name, value in vars(Register).items() if name.isupper() and isinstance(value, int)}  # iced's Register is a module of ints
+
+
+def _segmented(uc, one):
+    """The multiplier of a MUL/IMUL whose operand is memory, read the way real mode addresses it: the effective segment register's base plus the
+    16-bit (or, with an address-size prefix, 32-bit) offset, and the operand's own width (vsgcc's reader takes 4 flat bytes of a 32-bit form)."""
+    offset = one.memory_displacement
+    for register, scale in ((one.memory_base, 1), (one.memory_index, one.memory_index_scale)):
+        if register != Register.NONE:
+            offset += uc.reg_read(getattr(x86_const, f"UC_X86_REG_{_NAME[register]}")) * scale
+    wide = any(RegisterExt.is_gpr32(r) for r in (one.memory_base, one.memory_index))
+    segment = uc.reg_read(getattr(x86_const, f"UC_X86_REG_{_NAME[one.memory_segment]}"))
+    return int.from_bytes(bytes(uc.mem_read(segment * 16 + (offset & (0xFFFFFFFF if wide else 0xFFFF)), MemorySizeExt.size(one.memory_size))), "little")
+
+
 def _multiplier(multiplier_of, uc, one):
-    """The multiplier operand's value, or None (the table's least) where vsgcc's reader does not know the operand's form:
-    it reads 32-bit forms, and a 16-bit program also multiplies by a memory operand through a segment."""
+    """The multiplier operand's value, or None (the table's least) where it cannot be read. A memory operand is read through its segment
+    (_segmented): vsgcc's reader is flat and raised on the 16-bit registers, so every such multiply was priced as the table's least."""
     try:
+        if one.op_kind(one.op_count - 1) == OpKind.MEMORY:
+            return _segmented(uc, one)
         return multiplier_of(uc, one)
-    except (KeyError, ValueError):
+    except (KeyError, ValueError, AttributeError):
         return None
 
 
@@ -80,7 +102,18 @@ def _decode(raw: bytes) -> tuple[int, bool, bool]:
     return memory, one.mnemonic in RETURNS, one.has_rep_prefix or one.has_repe_prefix or one.has_repne_prefix
 
 
-def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch: set | None = None, only: tuple[int, int] | None = None, whole: bool = False, stdin: bytes | None = None, profile: dict | None = None) -> Run:
+def dos_file(cwd: Path, name: str) -> Path:
+    """`C:\\DIR\\FILE` as a path under the program's directory: the drive and the leading backslash name the root, which is `cwd`. DOS names
+    ignore case: an existing file of another case (`signal` for `SIGNAL`) is the one named; stft_fixed read -1 from a corpus file `signal`."""
+    path = cwd / (name[2:] if name[1:2] == ":" else name).replace("\\", "/").lstrip("/")
+    if not path.exists() and path.parent.is_dir():
+        for one in path.parent.iterdir():
+            if one.name.lower() == path.name.lower():
+                return one
+    return path
+
+
+def run(exe: Path, entry: int | None, cwd: Path, limit: int = LIMIT, watch: set | None = None, only: tuple[int, int] | None = None, whole: bool = False, stdin: bytes | None = None, profile: dict | None = None) -> Run:
     """`exe` to its exit; `entry` is the linear address, from the image's first byte, of the function whose
     work is counted (None: count nothing, only run). `only` is a range of such addresses: of the region, what runs outside it
     (the scene around the code under test) is not counted, and the region still ends where `entry` returns. Files the program
@@ -104,6 +137,7 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch
     for register, value in ((UC_X86_REG_DS, PSP), (UC_X86_REG_ES, PSP), (UC_X86_REG_SS, LOAD + ss), (UC_X86_REG_SP, sp), (UC_X86_REG_CS, LOAD + cs), (UC_X86_REG_IP, ip)):
         uc.reg_write(register, value)
 
+    uc.reg_write(UC_X86_REG_FPCW, 0x037F)  # DOS's FPU state; Unicorn's own is 0 (single precision)
     result = Run()
     state = {"active": whole, "done": False, "entry_sp": -1 if whole else 0, "files": {0: io.BytesIO(stdin)} if stdin is not None else {}, "next": 5, "vectors": {}}
     counts = Counts()
@@ -113,7 +147,10 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch
     prefixes = {}  # address -> operand- and address-size prefixes it carries
     target = None if entry is None else LOAD * 16 + entry
 
+    steps = [0]
+
     def step(uc, address, size, _):
+        steps[0] += 1
         if watch is not None:
             watch.add(address - LOAD * 16)
         if profile is not None:
@@ -172,8 +209,7 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch
         uc.reg_write(UC_X86_REG_EFLAGS, (flags | 1) if on else (flags & ~1))
 
     def dos_path(name):
-        """`C:\\DIR\\FILE` as a path under the program's directory: the drive and the leading backslash name the root, which is `cwd`."""
-        return cwd / name[2:].replace("\\", "/").lstrip("/") if name[1:2] == ":" else cwd / name.replace("\\", "/").lstrip("/")
+        return dos_file(cwd, name)
 
     def exit_(ax):
         result.exit_code = ax & 0xFF
@@ -189,6 +225,18 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch
             carry(False)
         except OSError:
             uc.reg_write(UC_X86_REG_AX, 2)
+            carry(True)
+
+    def attributes(ax):
+        # Borland's open() asks for the attributes first (_chmod): get (AL=0) says whether the file is there, set (AL=1) is taken.
+        if ax & 0xFF == 1:
+            carry(False)
+            return
+        if dos_path(cstring(uc.reg_read(UC_X86_REG_DS), uc.reg_read(UC_X86_REG_DX))).is_file():
+            uc.reg_write(UC_X86_REG_CX, 0x20)  # archive
+            carry(False)
+        else:
+            uc.reg_write(UC_X86_REG_AX, 2)  # file not found
             carry(True)
 
     def read_(ax):
@@ -333,7 +381,7 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch
         0x02: print_char, 0x30: version, 0x2C: time_, 0x35: get_vector, 0x33: break_flag, 0x06: console_io,
         0x0B: input_status, 0x4A: resize, 0x25: set_vector, 0x0E: accepted, 0x42: seek,
         0x19: current_drive, 0x47: get_directory, 0x1A: set_dta, 0x2F: get_dta, 0x41: unlink, 0x4E: find_first,
-        0x4F: find_next, 0x3B: accepted, 0x39: accepted, 0x3A: accepted,
+        0x4F: find_next, 0x43: attributes, 0x3B: accepted, 0x39: accepted, 0x3A: accepted,
     }
 
     def interrupt(uc, number, _):
@@ -390,6 +438,10 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch
         result.error = result.error or f"emulator: {error} at {uc.reg_read(UC_X86_REG_CS):x}:{uc.reg_read(UC_X86_REG_IP):x}"
     for handle, file in state["files"].items():
         file.close()
+    if result.exit_code is None and not result.error and steps[0] >= limit:
+        # unicorn stops quietly at `limit` instructions: the program has not finished, not failed to return
+        result.error = f"stopped at the {limit}-instruction limit (LLRM_ICOUNT_LIMIT raises it)"
+        return result
     if whole and result.exit_code is not None:
         result.region = counts
     elif entry is not None and state["done"]:

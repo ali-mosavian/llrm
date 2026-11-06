@@ -24,6 +24,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import pin  # noqa: E402
+sys.path.insert(0, str(HERE.parent))
+import elfsize  # noqa: E402
 import pin_ablate  # noqa: E402
 
 HEAD = re.compile(r"^(?:# )?\*\*\* IR Dump After (.*?) \*\*\*:?$", re.M)
@@ -127,9 +129,7 @@ SOURCES = Path(os.environ.get("LLRM_CG_SOURCES", Path.home() / "scratch/rows/cc1
 
 
 def text_bytes(path: str) -> int:
-    sizes = subprocess.run(["objdump", "-h", path], capture_output=True, text=True).stdout
-    found = re.search(r"\.text\s+([0-9a-f]+)", sizes)
-    return int(found.group(1), 16) if found else 0
+    return elfsize.text_bytes(subprocess.run(["size", "-A", path], capture_output=True, text=True).stdout)
 
 
 def instructions_of(asm: str) -> int:

@@ -184,3 +184,71 @@ def test_the_stamp_is_read_from_llrm_llc_when_there_is_no_llrm_c(tmp_path, monke
         (tmp_path / name).write_text("")
     llrmbin.stamped(tmp_path)
     assert seen == ["llrm-llc"]
+
+
+def test_a_binary_that_needs_a_feature_the_rebuild_lacks_is_not_judged_stale(tmp_path):
+    """The runner rebuilds with `cargo build --release --bins`, which skips llrm-c (required-features c-legacy): a llrm-c left from an earlier build was older than a source, and every PR was REFUSED
+    "binaries still older than the merged tree after a rebuild: llrm-c" (#6302, 01:00). A binary the rebuild does build is still judged."""
+    repo, release = tmp_path / "repo", tmp_path / "t" / "release"
+    release.mkdir(parents=True)
+    repo.mkdir()
+    (repo / "Cargo.toml").write_text('[features]\ndefault = ["toolchain"]\ntoolchain = []\nc-legacy = []\n[[bin]]\nname = "llrm-c"\npath = "x.rs"\nrequired-features = ["c-legacy"]\n[[bin]]\nname = "llrm-cc"\npath = "y.rs"\n')
+    source = repo / "lib.rs"
+    source.write_text("")
+    for name in ("llrm-c", "llrm-cc"):
+        (release / name).write_text("")
+        (release / f"{name}.d").write_text(f"{release}/{name}: {source}\n")
+        os.utime(release / name, (1000, 1000))
+    assert llrmbin.stale_binaries(release, repo) == ["llrm-cc"]
+
+
+def test_two_dists_with_one_llrm_llc_are_refused_whatever_their_llrm_cc_is(tmp_path):
+    """llrm-cc only drives; the mid-end and the backends are in the llrm-llc beside it. A base and a head sharing one llrm-llc read SAME on every row (the wasm identity run of
+    #6710 read 0 DIFF where nbody -O2 moves 939 -> 910 B); the cause of that run is unproven, this is the check that would have stopped it."""
+    import pytest
+
+    base, head = tmp_path / "base", tmp_path / "head"
+    for folder, cc in ((base, b"cc one"), (head, b"cc two")):
+        folder.mkdir()
+        (folder / "llrm-cc").write_bytes(cc)
+        (folder / "llrm-llc").write_bytes(b"llc one")
+    with pytest.raises(SystemExit, match="same llrm-llc"):
+        llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc")
+    llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc", same_llc=True)
+    (head / "llrm-llc").write_bytes(b"llc two")
+    llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc")
+    (base / "llrm-llc").unlink()  # no llrm-llc to compare: nothing to refuse
+    llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc")
+
+
+def test_two_dists_with_one_llrm_wasm_llc_are_refused_though_their_llrm_llc_differ(tmp_path):
+    """llrm-cc runs the sibling llrm-wasm-llc for wasm32: /tmp/rm/fp_m10_base and fp_m10 held byte-identical ones, and the wasm identity run read 0 DIFF for a fold that
+    moves nbody -O2 939 -> 910 B. The llrm-llc check alone passed that pair."""
+    import pytest
+
+    base, head = tmp_path / "base", tmp_path / "head"
+    for folder, llc in ((base, b"llc one"), (head, b"llc two")):
+        folder.mkdir()
+        (folder / "llrm-cc").write_bytes(folder.name.encode())
+        (folder / "llrm-llc").write_bytes(llc)
+        (folder / "llrm-wasm-llc").write_bytes(b"wasm one")
+    names = ("llrm-llc", "llrm-wasm-llc")
+    llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc")  # the default names pass it, as before
+    with pytest.raises(SystemExit, match="same llrm-wasm-llc"):
+        llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc", names=names)
+    (head / "llrm-wasm-llc").write_bytes(b"wasm two")
+    llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc", names=names)
+    (base / "llrm-wasm-llc").unlink()
+    llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc", names=names)
+    with pytest.raises(SystemExit, match="missing llrm-wasm-llc"):
+        llrmbin.assert_distinct_llc(base / "llrm-cc", head / "llrm-cc", names=names, required=True)
+class CleanEnvTests(unittest.TestCase):
+    def test_a_pipeline_switch_is_refused_and_a_tool_location_is_printed(self):
+        """LLRM_WASM_BACKEND_ONLY on one side skipped the mid-end; a false second cause cost 40 minutes."""
+        with self.assertRaises(SystemExit) as caught:
+            llrmbin.assert_clean_env({"LLRM_WASM_BACKEND_ONLY": "1"})
+        self.assertIn("LLRM_WASM_BACKEND_ONLY", str(caught.exception))
+        self.assertEqual(llrmbin.assert_clean_env({"LLRM_OW": "/ow", "PATH": "/bin"}), ["LLRM_OW=/ow"])
+        self.assertEqual(llrmbin.assert_clean_env({"LLRM_NO_STACKS": "1", "AB_ALLOW_ENV": "LLRM_NO_STACKS"}), ["LLRM_NO_STACKS=1"])
+
+

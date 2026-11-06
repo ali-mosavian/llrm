@@ -30,6 +30,8 @@ pub enum Name {
 pub enum Token {
     Local(Name),
     Global(Name),
+    /// `$name` or `$"quoted name"`: a comdat.
+    Comdat(String),
     /// `!name`: named metadata or an attachment's kind.
     MetadataName(String),
     /// `!12`.
@@ -44,11 +46,13 @@ pub enum Token {
         negative: bool,
         magnitude: u128,
     },
-    /// A decimal floating literal, rounded once to a double and once to a
-    /// float: a float constant is the nearest float to the decimal, not to the
-    /// double nearest to it.
-    Float(f64, f32),
-    /// `f0x` and the digits of a float, double or x86_fp80: that type's bits.
+    /// A decimal floating literal, rounded once to a double, once to a float,
+    /// once to an x86_fp80's 80 bits and once to an fp128's 128: a constant is
+    /// the nearest value of its own type to the decimal, not to the double
+    /// nearest to it.
+    Float(f64, f32, u128, u128),
+    /// `f0x` and the digits of a float, double, x86_fp80 or fp128: that type's
+    /// bits.
     FloatBits {
         bits: u128,
         digits: usize,
@@ -57,6 +61,9 @@ pub enum Token {
     HexFloat(u64),
     /// `0xK` and 20 hex digits: an `x86_fp80`'s 80 bits.
     Float80(u128),
+    /// `0xL` and 32 hex digits: an `fp128`'s 128 bits, the low 64 first (the
+    /// pin's `HexToIntPair`).
+    Float128(u128),
     Str(Vec<u8>),
     /// `c"..."`.
     Bytes(Vec<u8>),
@@ -92,6 +99,16 @@ pub fn lex(text: &str) -> Result<Vec<(Token, usize)>, ParseError> {
                 };
                 at = next;
                 out.push((if c == b'%' { Token::Local(name) } else { Token::Global(name) }, line));
+            }
+            b'$' => {
+                let (name, next) = match name_at(bytes, at + 1) {
+                    Ok(Some((Name::Named(name), next))) => (name, next),
+                    Ok(Some((Name::Numbered(number), next))) => (number.to_string(), next),
+                    Ok(None) => return fail(line, "a name must follow `$`".to_owned()),
+                    Err(message) => return fail(line, message),
+                };
+                at = next;
+                out.push((Token::Comdat(name), line));
             }
             b'!' => {
                 let start = at + 1;
@@ -305,7 +322,7 @@ fn float_bits_at(
     text[at..].strip_prefix("f0x")?;
     let end = scan(bytes, at + 3, |b| b.is_ascii_hexdigit());
     let digits = &text[at + 3..end];
-    if digits.is_empty() || digits.len() > 20 || bytes.get(end).is_some_and(|b| is_name(*b)) {
+    if digits.is_empty() || digits.len() > 32 || bytes.get(end).is_some_and(|b| is_name(*b)) {
         return None;
     }
     Some((Token::FloatBits { bits: u128::from_str_radix(digits, 16).ok()?, digits: digits.len() }, end))
@@ -323,6 +340,19 @@ fn number_at(
             return Err(format!("0xK{digits}: an x86_fp80 literal is 20 hex digits"));
         }
         return Ok((Token::Float80(u128::from_str_radix(digits, 16).expect("hex digits")), end));
+    }
+    if text[at..].starts_with("0xL") {
+        let end = scan(bytes, at + 3, |b| b.is_ascii_hexdigit());
+        let digits = &text[at + 3..end];
+        if digits.len() != 32 {
+            return Err(format!("0xL{digits}: an fp128 literal is 32 hex digits"));
+        }
+        let (low, high) = digits.split_at(16);
+        let (low, high) = (u64::from_str_radix(low, 16), u64::from_str_radix(high, 16));
+        return Ok((
+            Token::Float128(u128::from(low.expect("hex digits")) | u128::from(high.expect("hex digits")) << 64),
+            end,
+        ));
     }
     if text[at..].starts_with("0x") {
         let end = scan(bytes, at + 2, |b| b.is_ascii_hexdigit());
@@ -349,5 +379,8 @@ fn number_at(
     }
     let value: f64 = text[at..end].parse().map_err(|_| format!("{} is not a number", &text[at..end]))?;
     let narrow: f32 = text[at..end].parse().map_err(|_| format!("{} is not a number", &text[at..end]))?;
-    Ok((Token::Float(value, narrow), end))
+    let wide = crate::decimal::x87_bits(&text[at..end]).ok_or_else(|| format!("{} is not a number", &text[at..end]))?;
+    let quad =
+        crate::decimal::quad_bits(&text[at..end]).ok_or_else(|| format!("{} is not a number", &text[at..end]))?;
+    Ok((Token::Float(value, narrow, wide, quad), end))
 }

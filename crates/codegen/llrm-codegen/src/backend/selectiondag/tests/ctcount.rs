@@ -11,7 +11,15 @@ fn combined(build: impl FnOnce(&mut SelectionDAG, SDValue) -> SDValue) -> (Selec
     let x = dag.get_register(EVT::I32, 5);
     let root = build(&mut dag, x);
     dag.set_root(root);
-    let mut hooks = X86Lowering { cmov: true, sse2: false, min_size: false };
+    let mut hooks = X86Lowering {
+        cmov: true,
+        sse2: false,
+        min_size: false,
+        three_address_adds: false,
+        i16_mul_chains: false,
+        sext_load: false, zext_free: false,
+        profile: None,
+    };
     DagCombiner::new(&mut dag, &mut hooks, CombineLevel::BeforeLegalizeTypes).run();
     let root = dag.get_root();
     (dag, root)

@@ -1,4 +1,5 @@
 // flags: -O2 -fsanitize=stack | -O2 -fsanitize=stack -m32
+// targets: x86-m16 x86-m32
 // A recursion that fits runs unchanged under -fsanitize=stack.
 extern void report(long value);
 int deep(int n)

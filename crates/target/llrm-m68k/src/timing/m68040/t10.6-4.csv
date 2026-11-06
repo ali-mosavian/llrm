@@ -1,0 +1,19 @@
+#title,"10.6 INTEGER UNIT INSTRUCTION TIMINGS: BFFFO [a,b] | BFINS [a,c] | BFTST [a]",page,10-16,notes,"a. This instruction interlocks the <ea> calculate and execute stages. b. If the bit field spans a long-word boundary, add two clocks to the execute time. Two memory addresses are accessed in this case. c. If the bit field spans a long-word boundary, add seven clocks to both the <ea> calculate and execute times. Two memory addresses are accessed in this case. d. If the bit field spans a long-word boundary, add ten and nine clocks to both the <ea> calculate and execute times, respectively. Two memory addresses are accessed in this case."
+Addressing Mode,"BFFFO [a,b] <ea> Calculate","BFFFO [a,b] Execute","BFINS [a,c] <ea> Calculate","BFINS [a,c] Execute",BFTST [a] <ea> Calculate,BFTST [a] Execute
+Dn,3/4 [d],6/7 [d],2/3 [d],5/6 [d],1/2 [d],3/4 [d]
+An,—,—,—,—,—,—
+(An),9,2L + 9,9,2L + 7,9,2L + 7
+(An)+,—,—,—,—,—,—
+–(An),—,—,—,—,—,—
+"(d 16,An)",9,2L + 9,9,2L + 7,9,2L + 7
+"(d 16,PC)",10,3L + 9,—,—,10,3L + 7
+"(xxx).W, (xxx).L",9,2L + 9,9,2L + 7,9,2L + 7
+#<xxx>,—,—,—,—,—,—
+"(d 8,An,Xn)",10,12,10,10,10,10
+"(d 8,PC,Xn)",11,1L + 12,—,—,11,1L + 10
+"(BR,Xn)",13,1L + 14,13,1L + 12,13,1L + 12
+"(bd,BR,Xn)",14,1L + 15,14,1L + 13,14,1L + 13
+"([bd,BR,Xn])",16,1L + 17,16,1L + 15,16,1L + 15
+"([bd,BR,Xn],od)",17,1L + 18,17,1L + 16,17,1L + 16
+"([bd,BR],Xn)",17,3L + 16,17,3L + 14,17,3L + 14
+"([bd,BR],Xn,od)",18,3L + 17,18,3L + 15,18,3L + 15

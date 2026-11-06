@@ -89,6 +89,9 @@ pub enum Intrinsic {
     /// Rounds to an integer as the rounding mode says: by default, to
     /// nearest, ties to even.
     LRint,
+    /// `llvm.llrint`: `LRint` with a `long long` result, which a target
+    /// without the instruction calls `llrint` for.
+    LLRint,
     MemSet,
     /// `llvm.experimental.memset.pattern`: its first argument's cells, as many
     /// as the third says and as wide as the second, each become the second.
@@ -102,6 +105,15 @@ pub enum Intrinsic {
     MemMove,
     LifetimeStart,
     LifetimeEnd,
+    /// `llvm.invariant.start`: from here the memory its second argument
+    /// reaches, as far as the constant first one says (-1: the whole object),
+    /// is never written, until the `invariant.end` of its result or the end of
+    /// the program. Returns the pointer-typed scope that ends it. A pass may
+    /// use it and no code runs it.
+    InvariantStart,
+    /// `llvm.invariant.end`: ends the scope its first argument, an
+    /// `invariant.start`'s result, began, over the same size and memory.
+    InvariantEnd,
     /// `llvm.assume`: its condition holds here, which a pass may use and no
     /// code checks. Undefined where it does not.
     Assume,
@@ -117,13 +129,45 @@ pub enum Intrinsic {
     /// `llvm.prefetch`: a hint to bring an address into the cache; no code is
     /// needed where the target has no prefetch instruction.
     Prefetch,
+    /// `llvm.trap`: the program stops here (`ud2` on x86); control does not
+    /// continue.
+    Trap,
+    /// `llvm.debugtrap`: a breakpoint (`int3` on x86).
+    DebugTrap,
+    /// `llvm.ubsantrap`: stops with the sanitizer's check kind (`ud1 kind(%eax), %eax`
+    /// on x86, `X86MCInstLower.cpp` `UBSAN_UD1`); not translated.
+    UbsanTrap,
     /// `llvm.fake.use`: keeps its operands live for a debugger at `-Og`; no
     /// code runs it.
     FakeUse,
+    /// `llvm.experimental.noalias.scope.decl`: a scope of `!alias.scope` and
+    /// `!noalias` starts here and lives for one run of the code around it; a
+    /// pass that copies the code gives the copy its own. MIR has no metadata
+    /// call operand, so the call has none and its scope list is the
+    /// `!noalias.scope.decl` attachment. No code runs it.
+    NoAliasScopeDecl,
     /// `llvm.expect`: its first argument, which the second says it is expected
     /// to be: a hint `lower-expect` turns into branch weights and removes
     /// (LowerExpectIntrinsic.cpp); no code runs it.
     Expect,
+    /// `llvm.set.loop.iterations`: the loop that follows runs its argument's
+    /// count of iterations (HardwareLoops.cpp); a target that has no counter
+    /// register lowers it to nothing.
+    SetLoopIterations,
+    /// `llvm.test.set.loop.iterations`: as `set.loop.iterations`, and whether
+    /// the count is not zero, which lets it guard a loop that may run no
+    /// iteration.
+    TestSetLoopIterations,
+    /// `llvm.start.loop.iterations`: as `set.loop.iterations`, and its
+    /// argument again, to be carried round the loop by a phi.
+    StartLoopIterations,
+    /// `llvm.loop.decrement.reg`: its first argument, the iterations still to
+    /// run, less its second: the next value of the phi that carries them.
+    LoopDecrementReg,
+    /// `llvm.loop.decrement`: takes its argument off the loop counter and
+    /// says whether the loop goes on. Only a target that opts in to hardware
+    /// loops has one.
+    LoopDecrement,
     /// `llrm.noalias`: its argument, which it, and what is based on it, is
     /// reached by no pointer that is not, while anything based on it is used:
     /// C's `restrict`, said of a loop's pointers by the pass that tested that
@@ -375,6 +419,8 @@ enum Slot {
     /// `{ T, i1 }` of the nth overloaded type.
     WithFlag(usize),
     Int(u32),
+    /// A pointer in address space 0, whatever the overload is.
+    Ptr,
     Void,
 }
 
@@ -499,7 +545,26 @@ const LIFETIME: &[Slot] = &[Slot::Int(64), Slot::Any(0)];
 const LIFETIME_PARAMETERS: &[&[&str]] = &[&["immarg"], &["nocapture"]];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 73] = [
+static NAMES: std::sync::OnceLock<crate::hash::HashMap<&'static str, Intrinsic>> = std::sync::OnceLock::new();
+
+thread_local! {
+    static NAMED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many names this thread has looked up, for a test that a query about a
+/// call does not name its callee again.
+pub fn names_looked_up() -> usize {
+    NAMED.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Names looked up by `named`, for a test that a lookup does not scan the
+    /// table.
+    static PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+const TABLE: [Spec; 85] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -579,6 +644,14 @@ const TABLE: [Spec; 73] = [
         own: None,
     },
     Spec {
+        name: "llvm.llrint",
+        intrinsic: Intrinsic::LLRint,
+        overloads: &[Kind::Int, Kind::Float],
+        returns: Slot::Any(0),
+        parameters: &[Slot::Any(1)],
+        own: None,
+    },
+    Spec {
         name: "llvm.memset",
         intrinsic: Intrinsic::MemSet,
         overloads: &[Kind::Pointer, Kind::Int],
@@ -619,6 +692,46 @@ const TABLE: [Spec; 73] = [
         own: None,
     },
     Spec {
+        name: "llvm.set.loop.iterations",
+        intrinsic: Intrinsic::SetLoopIterations,
+        overloads: &[Kind::Int],
+        returns: Slot::Void,
+        parameters: &[Slot::Any(0)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.test.set.loop.iterations",
+        intrinsic: Intrinsic::TestSetLoopIterations,
+        overloads: &[Kind::Int],
+        returns: Slot::Int(1),
+        parameters: &[Slot::Any(0)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.start.loop.iterations",
+        intrinsic: Intrinsic::StartLoopIterations,
+        overloads: &[Kind::Int],
+        returns: Slot::Any(0),
+        parameters: &[Slot::Any(0)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.loop.decrement.reg",
+        intrinsic: Intrinsic::LoopDecrementReg,
+        overloads: &[Kind::Int],
+        returns: Slot::Any(0),
+        parameters: INTS,
+        own: None,
+    },
+    Spec {
+        name: "llvm.loop.decrement",
+        intrinsic: Intrinsic::LoopDecrement,
+        overloads: &[Kind::Int],
+        returns: Slot::Int(1),
+        parameters: &[Slot::Any(0)],
+        own: None,
+    },
+    Spec {
         name: "llvm.is.constant",
         intrinsic: Intrinsic::IsConstant,
         overloads: &[Kind::Int],
@@ -643,11 +756,43 @@ const TABLE: [Spec; 73] = [
         own: None,
     },
     Spec {
+        name: "llvm.trap",
+        intrinsic: Intrinsic::Trap,
+        overloads: &[],
+        returns: Slot::Void,
+        parameters: &[],
+        own: None,
+    },
+    Spec {
+        name: "llvm.debugtrap",
+        intrinsic: Intrinsic::DebugTrap,
+        overloads: &[],
+        returns: Slot::Void,
+        parameters: &[],
+        own: None,
+    },
+    Spec {
+        name: "llvm.ubsantrap",
+        intrinsic: Intrinsic::UbsanTrap,
+        overloads: &[],
+        returns: Slot::Void,
+        parameters: &[Slot::Int(8)],
+        own: None,
+    },
+    Spec {
         name: "llvm.prefetch",
         intrinsic: Intrinsic::Prefetch,
         overloads: &[Kind::Pointer],
         returns: Slot::Void,
         parameters: &[Slot::Any(0), Slot::Int(32), Slot::Int(32), Slot::Int(32)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.experimental.noalias.scope.decl",
+        intrinsic: Intrinsic::NoAliasScopeDecl,
+        overloads: &[],
+        returns: Slot::Void,
+        parameters: &[],
         own: None,
     },
     Spec {
@@ -683,6 +828,24 @@ const TABLE: [Spec; 73] = [
         returns: Slot::Void,
         parameters: LIFETIME,
         own: Some(Own { attrs: LIFETIME_ATTRS, memory: &[(Some("argmem"), "write")], parameters: LIFETIME_PARAMETERS }),
+    },
+    // `Intrinsics.td` states both: the size is `immarg`, the scope result and
+    // argument are `ptr` whatever the overloaded pointer is.
+    Spec {
+        name: "llvm.invariant.start",
+        intrinsic: Intrinsic::InvariantStart,
+        overloads: &[Kind::Pointer],
+        returns: Slot::Ptr,
+        parameters: &[Slot::Int(64), Slot::Any(0)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.invariant.end",
+        intrinsic: Intrinsic::InvariantEnd,
+        overloads: &[Kind::Pointer],
+        returns: Slot::Void,
+        parameters: &[Slot::Ptr, Slot::Int(64), Slot::Any(0)],
+        own: None,
     },
     Spec {
         name: "llrm.ia16.in",
@@ -844,6 +1007,18 @@ pub fn window_name(
     format!("llrm.ia16.window.{}.{}", mangle(types, far), mangle(types, huge))
 }
 
+/// DEVIATE DV1: the 64 by 32 bit unsigned divides a target lowers by name
+/// (`unsigned long long f(unsigned hi, unsigned lo, unsigned d)`, the
+/// remainder in the high half of the result, the quotient in the low half):
+/// a plain declaration to every pass, a target's divide instruction in the
+/// backend. One table: a target adds its name as data.
+pub const WIDE_DIVIDES: &[&str] = &["llrm.x86.udiv64by32"];
+
+/// Whether `name` is one of [`WIDE_DIVIDES`].
+pub fn is_wide_divide(name: &str) -> bool {
+    WIDE_DIVIDES.contains(&name)
+}
+
 pub fn is_reserved(name: &str) -> bool {
     name.starts_with("llvm.") || name.starts_with("llrm.ia16.") || name.starts_with("llrm.noalias")
 }
@@ -858,6 +1033,7 @@ fn mangle(
         Type::Float(FloatKind::Float) => "f32".to_owned(),
         Type::Float(FloatKind::Double) => "f64".to_owned(),
         Type::Float(FloatKind::X86Fp80) => "f80".to_owned(),
+        Type::Float(FloatKind::F128) => "f128".to_owned(),
         Type::Pointer(space) => format!("p{space}"),
         _ => types.display(ty),
     }
@@ -887,17 +1063,24 @@ impl Intrinsic {
 
     /// The intrinsic `name` declares, its type suffixes aside.
     pub fn named(name: &str) -> Option<Intrinsic> {
+        NAMED.with(|made| made.set(made.get() + 1));
         if name.starts_with(CODE) {
             return Some(Intrinsic::Code);
         }
         if name.starts_with(ASM) {
             return Some(Intrinsic::Asm);
         }
-        TABLE
-            .iter()
-            .filter(|spec| name.strip_prefix(spec.name).is_some_and(|rest| rest.is_empty() || rest.starts_with('.')))
-            .max_by_key(|spec| spec.name.len())
-            .map(|spec| spec.intrinsic)
+        // The longest table name that is `name` or a `.`-cut prefix of it.
+        let names = NAMES.get_or_init(|| TABLE.iter().map(|spec| (spec.name, spec.intrinsic)).collect());
+        let mut cut = name;
+        loop {
+            #[cfg(test)]
+            PROBES.with(|probes| probes.set(probes.get() + 1));
+            if let Some(&found) = names.get(cut) {
+                return Some(found);
+            }
+            cut = &cut[..cut.rfind('.')?];
+        }
     }
 
     /// The function's attributes and each parameter's, where MIR states them;
@@ -1004,6 +1187,7 @@ impl Intrinsic {
                     _ => false,
                 },
                 Slot::Int(bits) => types.int_bits(ty) == Some(bits),
+                Slot::Ptr => matches!(types.get(ty), Type::Pointer(0)),
                 Slot::Void => types.is_void(ty),
             }
         };
@@ -1030,6 +1214,35 @@ impl Intrinsic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `named` compared the name with every one of the 76 table entries on each
+    /// call (2465 Ir a call, 211 M Ir in DSE of 600 memcpy/memset/store
+    /// triples): a lookup probes a name per `.`-cut, however long the
+    /// table.
+    #[test]
+    fn naming_an_intrinsic_does_not_scan_the_table() {
+        let before = PROBES.with(std::cell::Cell::get);
+        assert_eq!(Intrinsic::named("llvm.memcpy.p0.p0.i32"), Some(Intrinsic::MemCpy));
+        assert_eq!(Intrinsic::named("llvm.memset"), Some(Intrinsic::MemSet));
+        assert_eq!(Intrinsic::named("foo"), None);
+        let probes = PROBES.with(std::cell::Cell::get) - before;
+        assert!(probes <= 10, "{probes} names probed for 3 lookups");
+    }
+
+    /// Every table name, bare and with type suffixes, names its own intrinsic;
+    /// a name that only shares a prefix without a `.` names none.
+    #[test]
+    fn every_table_name_names_its_intrinsic_with_or_without_suffixes() {
+        for spec in TABLE.iter() {
+            assert_eq!(Intrinsic::named(spec.name), Some(spec.intrinsic), "{}", spec.name);
+            assert_eq!(Intrinsic::named(&format!("{}.p0.i32", spec.name)), Some(spec.intrinsic), "{}", spec.name);
+            assert!(
+                Intrinsic::named(&format!("{}x", spec.name)).is_none_or(|got| got != spec.intrinsic),
+                "{}",
+                spec.name
+            );
+        }
+    }
 
     /// An enumerated `llvm.*` intrinsic with no entry would have no
     /// attributes at all; only the ones MIR states itself have none.

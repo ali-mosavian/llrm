@@ -332,7 +332,7 @@ fn the_check_for_a_value_read_before_it_is_defined_is_linear_in_the_body() {
     let defining = |at: i64, defines: Vec<u32>, uses: Vec<u32>| {
         let what = Semantics {
             name: Some("mov".into()),
-            dests: vec![Loc::Held(Held { value: defines.first().copied().unwrap_or(0), width: 4 })],
+            dests: vec![Loc::Held(Held { value: defines.first().copied().unwrap_or(0), width: 4, offset: 0 })],
             sources: Vec::new(),
             ..Semantics::new(Operation::Move)
         };
@@ -730,6 +730,32 @@ fn at_os_a_remainder_by_a_constant_keeps_its_idiv() {
     assert!(names(true).iter().any(|n| n == "idiv"), "-Os: the divide stays: {:?}", names(true));
 }
 
+const M16_DIVIDES_BY_CONSTANTS: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-f80:16-n8:16:32\"
+define i16 @f(i16 %n) {
+  %m = mul i16 %n, 3
+  %q = sdiv i16 %m, 97
+  %u = udiv i16 %m, 11
+  %r = add i16 %q, %u
+  ret i16 %r
+}
+";
+
+/// A signed 16-bit divide by a constant at m16 -O2 keeps its `idiv`: priced at
+/// the sheet's shortest multiply the sequence won, and a row of `(n * 3) / 97 +
+/// (n * 3) / 11u` over n = 1..2000 went from 154025 clocks (76 B) to 172017 (89
+/// B), +11.7%. The dividend's width is not known here.
+#[test]
+fn at_m16_a_16_bit_divide_by_a_constant_keeps_its_divide() {
+    let module = crate::testing::module(M16_DIVIDES_BY_CONSTANTS).expect("parses");
+    for cpu in ["386", "486"] {
+        let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile(cpu).expect("a cpu"), &[])
+            .unwrap_or_else(|e| panic!("{}", e.0));
+        let names: Vec<String> =
+            done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+        assert!(names.iter().any(|n| n == "idiv"), "{cpu}: the signed divide stays: {names:?}");
+    }
+}
+
 /// `x * 24` at `-Os` was `shl 3` then `imul 3` (two 4-byte instructions at m16)
 /// where the pin keeps the one `imul` (`combineMul`: `hasMinSize` returns
 /// first): bench/mandel.nib m16 -Os, +8 B. The pin declines at `minsize`
@@ -761,6 +787,28 @@ define i32 @f(i32 %a) {{
     assert_eq!((count(&m32, "imul"), count(&m32, "shl")), (0, 1), "m32 -Os: {m32:?}");
     let seven = names("32", true, 7);
     assert_eq!(count(&seven, "imul"), 0, "m32 -Os x*7: {seven:?}");
+}
+
+/// m32 -O2 kept `x * 1664525` (the LCG step of x_iir, x_hash, x_histo2) an
+/// `imul`: 13-42 clocks by the multiplier on a 486 where gcc's `lea`/`shl`
+/// chain is a few; x_iir priced 130525 clk against gcc's 60034 (2.17x) with
+/// half its instructions.
+#[test]
+fn at_m32_speed_a_multiply_by_a_wide_constant_is_a_chain_not_an_imul() {
+    let module = crate::testing::module(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a) {
+  %r = mul i32 %a, 1664525
+  ret i32 %r
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).expect("m32 states a 486").clone();
+    let done = selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<String> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    assert_eq!(names.iter().filter(|n| *n == "imul").count(), 0, "{names:?}");
 }
 
 /// `u8 % 6` at `-Os` with the divide kept was `CannotSelect("UDivRem")` (SD302:
@@ -1016,11 +1064,7 @@ fn a_proved_move_at_m16_is_inline_string_code() {
         up.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
     assert!(names.iter().any(|n| n == "movsd") && names.iter().all(|n| n != "call"), "{names:?}");
     let down = move_3840_at_m16(", !llrm.backward !0");
-    assert!(
-        down.inline.values().any(|bytes| bytes[..] == [0x1E, 0x07, 0xFD, 0xF3, 0x66, 0xA5, 0xFC]),
-        "{:?}",
-        down.inline
-    );
+    assert!(down.inline.values().any(|bytes| bytes[..] == [0xFD, 0xF3, 0x66, 0xA5, 0xFC]), "{:?}", down.inline);
 }
 
 /// A forward string move of 3840 bytes (a multiple of four) was followed by
@@ -1255,6 +1299,35 @@ define i32 @f(i32 %a, i32 %b) {
     assert!(places.contains(&(7, 5)) && places.contains(&(8, 12)), "{places:?}");
 }
 
+/// Every function rebuilt the module's global-name table, so N functions in
+/// a module of N globals cost N^2 (27% of the 2400-function assemble).
+#[test]
+fn the_functions_of_a_module_share_one_table_of_global_names() {
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a) {
+entry:
+  ret i32 %a
+}
+define i32 @g(i32 %a) {
+entry:
+  ret i32 %a
+}
+",
+    )
+    .expect("parses");
+    let mut pool = crate::backend::constpool::Pool::new(module.globals.len() as i64);
+    let cpu = crate::backend::cpu::profile("386").expect("a cpu");
+    let mut select = |name: &str| {
+        super::dag_function::selected_in_pool(&module, name, &llrm_x86_m16::M16, cpu, &[], None, &mut pool)
+            .unwrap_or_else(|why| panic!("{}", why.0));
+        pool.symbols.clone().expect("the tables are kept for the next function")
+    };
+    let first = select("f");
+    let second = select("g");
+    assert!(std::rc::Rc::ptr_eq(&first.0, &second.0), "g rebuilt the table f made");
+}
+
 /// The scope and inlining call of a `!DILocation` were dropped: a function
 /// inlined twice left no way to tell the two bodies' instructions apart.
 #[test]
@@ -1315,6 +1388,47 @@ define cc 1000 i32 @f(i32 %a) {
     let insns = done.body.insns();
     let call = insns.iter().find(|one| one.call.is_some()).expect("a call");
     assert!(!call.clobbers.contains(&RegId::ESI) && !call.clobbers.contains(&RegId::EDI), "{:?}", call.clobbers);
+}
+
+/// Every call said it may write any memory: the DAG selector set the effects to
+/// `ANY` where the old one read the callee's attributes, so queens' `es` load
+/// (`mov es,[si+2]`) could not be made again after `call SAFE`, a
+/// `memory(read)` function, and was spilled and reloaded each trip.
+#[test]
+fn a_call_of_a_read_only_function_does_not_write_memory() {
+    let ir = "target datalayout = \"e-p:16:16-i32:16-n8:16\"
+declare i16 @ro(i16) memory(read)
+declare i16 @any(i16)
+define i16 @f(i16 %a) {
+  %r = call i16 @ro(i16 %a)
+  %s = call i16 @any(i16 %r)
+  ret i16 %s
+}
+";
+    let module = crate::testing::module(ir).expect("parses");
+    let (facts, _) = crate::backend::calleefacts::CalleeFacts::of(&module);
+    let contracts = super::dag_function::RuntimeContracts {
+        hole: 0,
+        abi: &Stub { flags: false },
+        segments: &crate::backend::target::BASIC,
+        runtime: false,
+        frame_zeroed: false,
+        facts: Some(&facts),
+    };
+    let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
+    let done = super::dag_function::selected_in_pool(
+        &module,
+        "f",
+        &llrm_x86_m16::M16,
+        crate::backend::cpu::profile("486").expect("a cpu"),
+        &[],
+        Some(&contracts),
+        pool,
+    )
+    .unwrap_or_else(|why| panic!("{}", why.0));
+    let insns = done.body.insns();
+    let writes: Vec<bool> = insns.iter().filter_map(|one| one.call.as_ref().map(|call| call.writes())).collect();
+    assert_eq!(writes, [false, true], "the read-only callee, then the unknown one");
 }
 
 /// At m16 a value kept in SI across `B$DDIM` was wrong code: runtime.toml names
@@ -1394,4 +1508,265 @@ define cc 1000 i16 @f(i16 %a) {
     let call = insns.iter().find(|one| one.call.is_some()).expect("a call");
     let disturbs = &call.call.as_ref().expect("a call").disturbs;
     assert!(disturbs.contains(&RegId::ESI) && disturbs.contains(&RegId::EDI), "{disturbs:?}");
+}
+
+const UREM_BY_251: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a) {
+  %r = urem i32 %a, 251
+  ret i32 %r
+}
+";
+
+/// The `mul` of `x % 251` by reciprocal, as (accumulator, r/m operand) with
+/// whether each is a constant made by a `mov`.
+fn urem_mul_operands(cpu: &str) -> (bool, bool) {
+    let module = crate::testing::module(UREM_BY_251).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile(cpu).expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let all = done.body.insns();
+    let insns: Vec<_> = all.iter().filter_map(|i| i.what.as_ref()).collect();
+    let constant = |held: &crate::model::ir::Loc| {
+        insns.iter().any(|i| i.dests.contains(held) && matches!(i.sources.as_slice(), [crate::model::ir::Loc::Imm(_)]))
+    };
+    let mul = insns.iter().find(|i| i.name.as_deref() == Some("mul")).expect("a mul");
+    (constant(&mul.sources[0]), constant(&mul.sources[1]))
+}
+
+/// frames, huge m16 486: `x % 251` was `mov edx, magic; mul edx`, the r/m
+/// operand the 31-bit magic the 486 reads (`mul` 43 clocks against 19 for a
+/// short dividend; +4M clocks on 7 rows). The magic goes in EAX and the
+/// dividend is the r/m operand. The P5, whose multiply takes 10 clocks whatever
+/// the operands, keeps the pin's order (SD444).
+#[test]
+fn on_a_486_the_magic_is_the_accumulator_and_the_dividend_the_multiplier() {
+    assert_eq!(urem_mul_operands("486"), (true, false));
+    assert_eq!(urem_mul_operands("P5"), (false, true));
+}
+
+const STORES_BIG_ENDIAN: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define void @f(ptr %p, i32 %x) {
+  %b3 = trunc i32 %x to i8
+  %s2 = lshr i32 %x, 8
+  %b2 = trunc i32 %s2 to i8
+  %s1 = lshr i32 %x, 16
+  %b1 = trunc i32 %s1 to i8
+  %s0 = lshr i32 %x, 24
+  %b0 = trunc i32 %s0 to i8
+  %p1 = getelementptr i8, ptr %p, i32 1
+  %p2 = getelementptr i8, ptr %p, i32 2
+  %p3 = getelementptr i8, ptr %p, i32 3
+  store i8 %b0, ptr %p
+  store i8 %b1, ptr %p1
+  store i8 %b2, ptr %p2
+  store i8 %b3, ptr %p3
+  ret void
+}
+";
+
+/// A 32-bit value stored a byte at a time, high byte first, was shifts and
+/// four byte stores (`put_be32`: 8 instructions); the pin's `mergeTruncStores`
+/// makes it `bswap` and one store.
+#[test]
+fn four_byte_stores_of_a_value_high_byte_first_are_a_bswap_and_one_store() {
+    let names = names(STORES_BIG_ENDIAN).expect("selects");
+    assert!(names.iter().any(|n| n == "bswap"), "{names:?}");
+    assert!(!names.iter().any(|n| n == "shr" || n == "shld"), "{names:?}");
+}
+
+const LOADS_BIG_ENDIAN: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(ptr %p) {
+  %p1 = getelementptr i8, ptr %p, i32 1
+  %p2 = getelementptr i8, ptr %p, i32 2
+  %p3 = getelementptr i8, ptr %p, i32 3
+  %l0 = load i8, ptr %p
+  %l1 = load i8, ptr %p1
+  %l2 = load i8, ptr %p2
+  %l3 = load i8, ptr %p3
+  %z0 = zext i8 %l0 to i32
+  %z1 = zext i8 %l1 to i32
+  %z2 = zext i8 %l2 to i32
+  %z3 = zext i8 %l3 to i32
+  %s0 = shl i32 %z0, 24
+  %s1 = shl i32 %z1, 16
+  %s2 = shl i32 %z2, 8
+  %o1 = or i32 %s0, %s1
+  %o2 = or i32 %o1, %s2
+  %o3 = or i32 %o2, %z3
+  ret i32 %o3
+}
+";
+
+/// A 32-bit value read a byte at a time, high byte first, was four byte loads
+/// and shifts and ors (`get_be32`); the pin's `MatchLoadCombine` makes it one
+/// load and a `bswap`.
+#[test]
+fn four_byte_loads_combined_high_byte_first_are_one_load_and_a_bswap() {
+    let names = names(LOADS_BIG_ENDIAN).expect("selects");
+    assert!(names.iter().any(|n| n == "bswap"), "{names:?}");
+    assert!(!names.iter().any(|n| n == "shl" || n == "or"), "{names:?}");
+}
+
+/// `set_odds` looked for the block an edge belongs to among every block of the
+/// body, for every edge: 220 M Ir of memory_expansion -O2's instruction
+/// selection (221 functions), four times the blocks costing sixteen times the
+/// work. An edge looks in its own piece.
+#[test]
+fn the_odds_of_a_branch_are_found_in_its_piece_not_in_every_block() {
+    use crate::model::lir::{LirBlock, LirBody};
+    use llrm_mir::module::BlockId;
+    let odds = |count: i64| {
+        let blocks = (0..count)
+            .map(|at| LirBlock { succ: vec![(at + 1) % count, (at + 2) % count].into(), ..LirBlock::new(at, vec![]) })
+            .collect::<Vec<_>>();
+        let mut body =
+            LirBody::new("odds", 0, crate::model::lir::shared(blocks), Default::default(), Default::default());
+        let edges: Vec<(BlockId, BlockId, u32)> = (0..count)
+            .flat_map(|at| {
+                [
+                    (BlockId(at as u32), BlockId(((at + 1) % count) as u32), 1u32),
+                    (BlockId(at as u32), BlockId(((at + 2) % count) as u32), 3u32),
+                ]
+            })
+            .collect();
+        let block_at: llrm_support::hash::HashMap<u32, i64> = (0..count).map(|at| (at as u32, at)).collect();
+        super::dag_function::set_odds(&mut body, &edges, &block_at);
+        assert_eq!(body.odds.taken.len(), edges.len(), "every edge states its odds");
+        (body.facts.0.counted("odds-examined"), edges.len())
+    };
+    let (examined, edges) = odds(400);
+    assert!(examined <= 2 * edges, "{examined} blocks examined for {edges} edges");
+}
+
+/// Every function ran `consts::known` and `exposed_frames` over its whole body
+/// to find loop trip counts, loops or none (67 M Ir of 6.9 G on
+/// memory_expansion -O2 m64). A function without a loop derives nothing and
+/// states no trips; one with a loop states its trips and derives no facts.
+#[test]
+fn test_a_function_without_a_loop_derives_no_trip_counts() {
+    let layout = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n";
+    let flat = "define i32 @f(i32 %a) {\nentry:\n  %r = add i32 %a, 1\n  ret i32 %r\n}\n";
+    let looped = "define i32 @f(i32 %n) {
+entry:
+  br label %head
+head:
+  %i = phi i32 [ 0, %entry ], [ %next, %head ]
+  %next = add i32 %i, 1
+  %done = icmp eq i32 %next, 8
+  br i1 %done, label %out, label %head
+out:
+  ret i32 %next
+}
+";
+    let derivations = |text: &str| {
+        let before = llrm_analysis::consts::scratch_derivations();
+        let module = crate::testing::module(&format!("{layout}{text}")).expect("parses");
+        let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+            .expect("selects");
+        (llrm_analysis::consts::scratch_derivations() - before, done.body.loop_trip_counts.len())
+    };
+    assert_eq!(derivations(flat), (0, 0), "a loop-free function worked out the facts of its body");
+    let (derived, trips) = derivations(looped);
+    // The mid-end's `Registers` is empty by design; a fixed point over the
+    // body for the trips (33.6 M, memory_expansion -O2 m64) bought nothing.
+    assert!(derived == 0 && trips == 1, "the loop lost its trips or derived the facts: {derived} derivations, {trips} counts");
+}
+
+/// A function's branch probabilities were calculated twice in a selection, once
+/// for the multiply prices' block frequencies and once more for the builder's
+/// edge probabilities (11.5 M Ir in `build_block`, memory_expansion -O2 m64).
+#[test]
+fn test_a_selection_calculates_the_branch_probabilities_once() {
+    let layout = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n";
+    let text = format!(
+        "{layout}define i32 @f(i32 %a, i32 %b) {{
+entry:
+  %m = mul i32 %a, %b
+  %c = icmp slt i32 %m, 10
+  br i1 %c, label %lo, label %hi
+lo:
+  ret i32 1
+hi:
+  ret i32 2
+}}
+"
+    );
+    let before = llrm_mir::counts::get(llrm_mir::counts::Event::BranchProbabilities);
+    let module = crate::testing::module(&text).expect("parses");
+    selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .expect("selects");
+    let made = llrm_mir::counts::get(llrm_mir::counts::Event::BranchProbabilities) - before;
+    assert_eq!(made, 1, "{made} branch probability calculations for one function");
+}
+
+/// A volatile `double` constant store at m32 was split into two `i32` stores
+/// once `store_fp_constant_as_i64` was on (float_conversions_loop +4 B over the
+/// pin's `fld; fstp`): the pin splits only a simple store (`ST->isSimple()`).
+#[test]
+fn a_volatile_double_constant_store_is_not_split_at_m32() {
+    let got = names(
+        "target datalayout = \"e-p:32:32-f64:32-n8:16:32\"
+define void @f(ptr %p) {
+entry:
+  store volatile double 10.0, ptr %p
+  ret void
+}
+",
+    )
+    .expect("selected");
+    // the one `mov` loads the pointer argument
+    let movs = got.iter().filter(|n| *n == "mov").count();
+    assert!(got.iter().any(|n| n == "fld") && movs == 1, "an x87 store, not two imm stores: {got:?}");
+}
+
+/// The simple store of the same constant is two `i32` stores, as the pin's.
+#[test]
+fn a_double_constant_store_is_two_integer_stores_at_m32() {
+    let got = names(
+        "target datalayout = \"e-p:32:32-f64:32-n8:16:32\"
+define void @f(ptr %p) {
+entry:
+  store double 10.0, ptr %p
+  ret void
+}
+",
+    )
+    .expect("selected");
+    // the pointer argument's load and two imm32 stores
+    let movs = got.iter().filter(|n| *n == "mov").count();
+    assert!(!got.iter().any(|n| n == "fld") && movs == 3, "two imm32 stores: {got:?}");
+}
+
+/// `(or (and x, y), x)` stayed an `and` and an `or` (x86 did not run the pin's
+/// `visitORCommutative` absorption): it is `x`.
+#[test]
+fn an_or_of_an_and_with_its_operand_is_that_operand() {
+    let got = names(
+        "target datalayout = \"e-p:32:32-f64:32-n8:16:32\"
+define i32 @f(i32 %x, i32 %y) {
+entry:
+  %a = and i32 %x, %y
+  %o = or i32 %a, %x
+  ret i32 %o
+}
+",
+    )
+    .expect("selected");
+    assert!(!got.iter().any(|n| n == "and" || n == "or"), "x is returned: {got:?}");
+}
+
+/// The same shape with a third operand is not absorbed (control).
+#[test]
+fn an_or_of_an_and_with_another_operand_is_kept() {
+    let got = names(
+        "target datalayout = \"e-p:32:32-f64:32-n8:16:32\"
+define i32 @f(i32 %x, i32 %y, i32 %z) {
+entry:
+  %a = and i32 %x, %y
+  %o = or i32 %a, %z
+  ret i32 %o
+}
+",
+    )
+    .expect("selected");
+    assert!(got.iter().any(|n| n == "and") && got.iter().any(|n| n == "or"), "{got:?}");
 }

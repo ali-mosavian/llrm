@@ -22,6 +22,9 @@
 //!   `computeKnownBits` (constants, `AND` with a constant, zero-extension,
 //!   constant shifts); the folds decline what it cannot prove. Owner sdag-c.
 //!   Exit: when the DAG API has known bits. Review 2026-12-10.
+//! - **SD251** `matchAddressRecursively`'s `ZERO_EXTEND` case has only the
+//!   `nuw` shift part: `zext(addlike)` and `zext(and(srl))` are not matched.
+//!   Exit 2026-11-20.
 //! - **SD35** The 64-bit and x32 branches, RIP-relative modes, large code
 //!   model, the TLS segment loads (`matchLoadInAddress`) and the vector forms
 //!   (`matchVectorAddress`) are left out: no such target here. m16 has its own
@@ -136,6 +139,18 @@ pub struct Wrapped {
 /// The DAG queries and constructors the address matchers need on top of
 /// [`Dag`].
 pub trait AddrDag: Dag {
+    /// `computeKnownBits(value).Zero`, within the value's width. A DAG with no
+    /// known-bits analysis answers [`known_zero`], the structural subset
+    /// (SD40).
+    fn known_zero_bits(
+        &self,
+        value: SDValue,
+    ) -> u64
+    where
+        Self: Sized,
+    {
+        known_zero(self, value, 0)
+    }
     /// `SelectionDAG::isADDLike`: an `OR` of disjoint bits, or an `XOR` with
     /// the sign bit.
     fn is_add_like(
@@ -761,6 +776,49 @@ impl<D: AddrDag> Matcher<'_, D> {
                     }
                 }
             }
+            isd::ZERO_EXTEND => {
+                // Widen a zero-extended `nuw` shift so the shift is the scale
+                // ([L2982][zext]). DEVIATE SD251: not the `zext(addlike)` and
+                // `zext(and(srl))` parts, which the pin matches here too.
+                // Exit 2026-11-20.
+                //
+                // [zext]:
+                // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L2982
+                if self.takes_scale(n, am) && am.index_reg.is_none() && am.scale == 1 {
+                    let mut src = self.operand(n, 0);
+                    let src_bits = vt_bits(self.dag.value_type(src));
+                    let mut mask = low_mask(src_bits);
+                    if self.opcode(src) == isd::AND && self.dag.has_one_use(src) {
+                        if let Some(m) = self.constant(self.operand(src, 1)) {
+                            mask = m as u64 & low_mask(src_bits);
+                            src = self.operand(src, 0);
+                        }
+                    }
+                    if self.opcode(src) == isd::SHL && self.dag.has_one_use(src) && self.dag.has_one_use(n) {
+                        if let Some(amount) = self.constant(self.operand(src, 1)).filter(|a| (0..=3).contains(a)) {
+                            let shl_src = self.operand(src, 0);
+                            let svt = self.dag.value_type(shl_src);
+                            let high = low_mask(src_bits) & !low_mask(src_bits - amount as u32) & mask;
+                            if self.dag.has_no_unsigned_wrap(src.node) || self.dag.known_zero_bits(shl_src) & high == high
+                            {
+                                let vt = self.dag.value_type(n);
+                                let mut res = shl_src;
+                                if mask != low_mask(src_bits) {
+                                    let m = self.dag.get_constant((mask >> amount) as i64, svt);
+                                    res = self.dag.get_node(isd::AND, svt, &[shl_src, m]);
+                                }
+                                let zext = self.dag.get_node(isd::ZERO_EXTEND, vt, &[res]);
+                                let new_shl = self.dag.get_node(isd::SHL, vt, &[zext, self.operand(src, 1)]);
+                                self.dag.replace_uses(n, new_shl);
+                                self.dag.remove_dead_node(n.node);
+                                am.scale = 1 << amount;
+                                am.index_reg = Some(self.match_index_recursively(zext, am, depth + 1));
+                                return false;
+                            }
+                        }
+                    }
+                }
+            }
             isd::SRL => {
                 if self.mode != AddrMode::Real16 && am.index_reg.is_none() && am.scale == 1 {
                     let and = self.operand(n, 0);
@@ -828,7 +886,10 @@ impl<D: AddrDag> Matcher<'_, D> {
             }
             isd::SUB => {
                 let backup = *am;
-                if self.match_address_recursively(self.operand(n, 0), am, depth + 1) || am.index_reg.is_some() {
+                if self.match_address_recursively(self.operand(n, 0), am, depth + 1)
+                    || am.index_reg.is_some()
+                    || self.is_rip_relative(am)
+                {
                     *am = backup;
                 } else if !self.fold_sub_rhs(n, am, &backup) {
                     return false;

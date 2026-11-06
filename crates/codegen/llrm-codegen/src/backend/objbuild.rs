@@ -61,9 +61,13 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
+use llrm_debug::{DebugObjectTarget, Described};
 use llrm_lir::registers::Regs;
+use llrm_object::assembler::AsmBackend;
+use llrm_support::hash::HashSet;
 use llrm_object::{Binding, Definition, Fix, Object, ObjectTarget, OmfGroup, Reloc, Role, Section, Symbol, Target};
 use llrm_target::object::{CodeModel, Format};
+use llrm_x86::mc::backend::X86Backend;
 
 use crate::backend::masm;
 use crate::backend::select;
@@ -83,7 +87,16 @@ pub const POINTER: Fix = Fix::plain(llrm_x86::mc::fixup::FAR_POINTER);
 /// says 0 for x86's, which made a far pointer in a 16-bit object trip the
 /// width assertion.
 fn width(fix: Fix) -> usize {
-    usize::from(llrm_x86::mc::fixup::kind_info(fix.kind).bits).div_ceil(8)
+    usize::from(backend(false, 0).kind_info(fix.kind).bits).div_ceil(8)
+}
+
+/// x86's assembler backend for `sixteen`-bit mode and a longest no-operation of
+/// `longest` bytes (its fixup table needs neither).
+fn backend(
+    sixteen: bool,
+    longest: usize,
+) -> X86Backend {
+    X86Backend { sixteen, wide: false, longest }
 }
 pub const OFFSET32: Fix = Fix::abs(4);
 pub const OFFSET64: Fix = Fix::abs(8);
@@ -103,6 +116,8 @@ fn data_role(
         "_DATA" => Role::Data,
         "_BSS" | "BSSB" => Role::Bss,
         "CONST" => Role::ROData,
+        // The pin's mergeable constant sections (`.rodata.cst4`...).
+        _ if name.starts_with(".rodata.cst") => Role::ROData,
         crate::backend::globals::INIT_SEGMENT => Role::InitFunctions,
         _ if far_bss => Role::Bss,
         _ => Role::Data,
@@ -252,6 +267,23 @@ pub struct Near {
     pub name: String,
     /// A sibling call's `jmp` (`E9`), not a `call` (`E8`).
     pub tail: bool,
+    /// The conditional jump a sibling call is folded into (`jcc name`).
+    pub cond: Option<String>,
+}
+
+impl Near {
+    /// The opcode bytes before the displacement.
+    fn opcode(
+        &self,
+        model: CodeModel,
+    ) -> Result<Vec<u8>, Unencodable> {
+        let Some(cond) = &self.cond else {
+            return Ok(vec![if self.tail { 0xE9 } else { 0xE8 }]);
+        };
+        let at = select::At { ip: 0, bits: model.bits() };
+        let long = select::branch(cond, 0, at, false).filter(|made| made.code.len() == 2 + model.displacement_bytes());
+        long.map(|made| made.code[..2].to_vec()).ok_or_else(|| Unencodable(format!("{cond} to {}", self.name)))
+    }
 }
 
 /// `Encoded`.
@@ -294,6 +326,8 @@ pub struct Segment {
     pub fixups: Vec<Fixup>,
     /// (source line, offset) of each line's first code, in order.
     pub lines: Vec<(SrcLoc, usize)>,
+    /// Where a line row is a statement whatever the row before it says.
+    pub forced: Vec<usize>,
     /// Each procedure body's bounds, in order.
     pub bodies: Vec<(masm::Mark, usize)>,
     /// The declared call frame information and where it stands.
@@ -320,6 +354,7 @@ impl Segment {
             spans: Vec::new(),
             fixups: Vec::new(),
             lines: Vec::new(),
+            forced: Vec::new(),
             bodies: Vec::new(),
             cfi: Vec::new(),
             seh: Vec::new(),
@@ -335,6 +370,7 @@ impl Segment {
     ) {
         match mark {
             masm::Mark::Line { line, .. } => self.line(line),
+            masm::Mark::ForceStmt => self.forced.push(self.image.len()),
             masm::Mark::Declared => self.declared.push(self.image.len()),
             bound => self.bodies.push((bound, self.image.len())),
         }
@@ -387,20 +423,18 @@ pub fn pack_into(
     buffer[at..at + 2].copy_from_slice(&(value as u16).to_le_bytes());
 }
 
-/// `value` into the bytes of a relocated field at `at` that hold an offset.
+/// `value` into the bytes of a relocated field at `at` that hold an offset (a
+/// far pointer's are its first two), refused where it does not fit them.
 fn pack_field(
     buffer: &mut [u8],
     at: usize,
     kind: Fix,
     value: i64,
-) {
-    if width(kind) == 8 {
-        buffer[at..at + 8].copy_from_slice(&value.to_le_bytes());
-    } else if width(kind) == 4 && kind != POINTER {
-        buffer[at..at + 4].copy_from_slice(&(value as u32).to_le_bytes());
-    } else {
-        pack_into(buffer, at, i64::from(value as u16));
-    }
+) -> Result<(), llrm_object::Unsupported> {
+    let bytes = if kind == POINTER { 2 } else { width(kind) };
+    // A far pointer's offset is its first two bytes: patched as data of that
+    // width.
+    llrm_x86::mc::backend::FIELDS.apply_fixup(buffer, at, Fix::abs(bytes).kind, kind.pc_rel, value, "")
 }
 
 /// What a relocated field holds, sign-extended from the bytes that hold an
@@ -433,7 +467,8 @@ fn live_inner(module: &masm::Module) -> Result<masm::Module, Error> {
     if !module.data.iter().any(|(_, items)| items.iter().any(|item| matches!(item, masm::Datum::Object(_)))) {
         return Ok(module.clone());
     }
-    let mut reached: BTreeSet<String> = module.publics.iter().cloned().collect();
+    let mut reached: BTreeSet<String> =
+        module.publics.iter().cloned().chain(module.aliases.iter().map(|alias| alias.target.clone())).collect();
     for (number, procedure) in module.procedures.iter().enumerate() {
         reached.insert(procedure.name.clone());
         for item in masm::listing(procedure, number)? {
@@ -485,7 +520,10 @@ fn live_inner(module: &masm::Module) -> Result<masm::Module, Error> {
     let mut pending: Vec<usize> = (0..units.len()).filter(|&index| kept[index]).collect();
     while let Some(index) = pending.pop() {
         for item in &units[index].2 {
-            if let masm::Datum::Pointer(masm::Pointer { name, .. }) | masm::Datum::SegmentWord(name) = item {
+            if let masm::Datum::Pointer(masm::Pointer { name, .. })
+            | masm::Datum::SegmentWord(name)
+            | masm::Datum::Difference(masm::Difference { name, .. }) = item
+            {
                 reached.insert(_target(name).to_owned());
             }
         }
@@ -521,16 +559,18 @@ pub enum CodeLayout {
 pub fn written(
     module: &masm::Module,
     source: &str,
+    objects: &dyn DebugObjectTarget,
 ) -> Result<Vec<u8>, Error> {
-    written_as(module, source, CodeLayout::OneSegment)
+    written_as(module, source, CodeLayout::OneSegment, objects)
 }
 
 pub fn written_as(
     module: &masm::Module,
     source: &str,
     layout: CodeLayout,
+    objects: &dyn DebugObjectTarget,
 ) -> Result<Vec<u8>, Error> {
-    written_in(module, source, layout, Format::Omf)
+    written_in(module, source, layout, Format::Omf, objects)
 }
 
 /// `module` as an object file of `format`.
@@ -539,13 +579,14 @@ pub fn written_in(
     source: &str,
     layout: CodeLayout,
     format: Format,
+    objects: &dyn DebugObjectTarget,
 ) -> Result<Vec<u8>, Error> {
     llrm_support::debug::timed("object write", || {
-        let object = built_inner(module, source, layout, format)?;
-        let bytes = serialized(&object, format)?;
+        let object = built_inner(module, source, layout, format, objects)?;
+        let bytes = serialized(objects, &object, format)?;
         if let Some(dir) = llrm_target::object::all_writers_dir() {
             for other in Format::ALL {
-                let written = if other == format { Ok(bytes.clone()) } else { serialized(&object, other) };
+                let written = if other == format { Ok(bytes.clone()) } else { serialized(objects, &object, other) };
                 match written {
                     Ok(written) => llrm_target::object::record_writer(&dir, other, &written),
                     Err(why) => llrm_target::object::record_refusal(&dir, other, &format!("{why:?}")),
@@ -556,21 +597,21 @@ pub fn written_in(
     })
 }
 
-/// What `format` says of the code it holds, from x86's table (the formats the
-/// layout tests use).
-pub fn asm_info(format: Format) -> llrm_object::AsmInfo {
-    llrm_x86::mc::X86Objects.asm_info(format.name()).unwrap_or_default()
+/// What `format` says of the code it holds, from the target's table.
+pub fn asm_info(
+    objects: &dyn ObjectTarget,
+    format: Format,
+) -> llrm_object::AsmInfo {
+    objects.asm_info(format.name()).unwrap_or_default()
 }
 
 /// `object` as a file of `format`.
 pub fn serialized(
-    object: &Object,
+    objects: &dyn DebugObjectTarget,
+    object: &Described,
     format: Format,
 ) -> Result<Vec<u8>, Error> {
-    match format {
-        Format::Omf => Ok(llrm_omf::write::write(object, &llrm_x86::mc::omf::X86Omf)?),
-        other => Ok(llrm_x86::mc::X86Objects.write_object(other.name(), object)?),
-    }
+    Ok(objects.write_described(format.name(), &object.object, object.debug.as_ref())?)
 }
 
 /// `module` laid out as an object.
@@ -578,8 +619,77 @@ pub fn built(
     module: &masm::Module,
     source: &str,
     layout: CodeLayout,
-) -> Result<Object, Error> {
-    built_inner(module, source, layout, Format::Omf)
+    objects: &dyn DebugObjectTarget,
+) -> Result<Described, Error> {
+    built_inner(module, source, layout, Format::Omf, objects)
+}
+
+/// [`built`] for `format`, which decides the code too (a Windows 64-bit frame
+/// past a page is probed).
+pub fn built_in(
+    module: &masm::Module,
+    source: &str,
+    layout: CodeLayout,
+    format: Format,
+    objects: &dyn DebugObjectTarget,
+) -> Result<Described, Error> {
+    built_inner(module, source, layout, format, objects)
+}
+
+/// A Windows 64-bit function probes the frames past a page through `__chkstk`
+/// (`X86FrameLowering::emitStackProbe`): the format decides it, as the triple
+/// does for LLVM. Only a target whose description names the probe's scratch
+/// register has the probe.
+fn stack_probed(
+    module: &mut masm::Module,
+    format: Format,
+) {
+    if format == Format::Coff {
+        for procedure in module.procedures.iter_mut().filter(|one| one.registers.slot_scratch.is_some()) {
+            procedure.probe_stack = Some("__chkstk".to_owned());
+        }
+        // Win64 has no red zone.
+        for procedure in module.procedures.iter_mut() {
+            procedure.registers.red_zone = 0;
+        }
+    }
+}
+
+/// The pin states no frame address at an exit on Darwin or Windows
+/// (`X86FrameLowering::emitEpilogue`: `NeedsDwarfCFI` is off for them); the
+/// format decides, as the triple does.
+fn exits_unstated(
+    module: &mut masm::Module,
+    format: Format,
+) {
+    if matches!(format, Format::MachO | Format::Coff) {
+        for procedure in &mut module.procedures {
+            procedure.registers.exit_cfi = false;
+        }
+    }
+}
+
+/// [`built`] for the writer of `format`: what that format's object holds.
+pub fn built_for(
+    module: &masm::Module,
+    source: &str,
+    layout: CodeLayout,
+    format: Format,
+    objects: &dyn DebugObjectTarget,
+) -> Result<Described, Error> {
+    built_inner(module, source, layout, format, objects)
+}
+
+/// Whether `format` drops the data no code reaches: an OMF object does; the
+/// jump tables of the others are read by the procedure that has them.
+fn drops_unreached_data(format: Format) -> bool {
+    format == Format::Omf
+}
+
+/// Whether `format` rewrites the procedures before they are encoded
+/// (`stack_probed`, `exits_unstated`).
+fn changes_procedures(format: Format) -> bool {
+    matches!(format, Format::Coff | Format::MachO)
 }
 
 fn built_inner(
@@ -587,8 +697,20 @@ fn built_inner(
     source: &str,
     layout: CodeLayout,
     format: Format,
-) -> Result<Object, Error> {
-    let module = &live(module)?;
+    objects: &dyn DebugObjectTarget,
+) -> Result<Described, Error> {
+    // Only an OMF object drops data no code reaches (a jump table is always
+    // read by the procedure that has it), and only COFF and Mach-O change the
+    // procedures: the module is copied for those alone.
+    let mut adjusted = std::borrow::Cow::Borrowed(module);
+    if drops_unreached_data(format) {
+        adjusted = std::borrow::Cow::Owned(live(module)?);
+    }
+    if changes_procedures(format) {
+        stack_probed(adjusted.to_mut(), format);
+        exits_unstated(adjusted.to_mut(), format);
+    }
+    let module = &*adjusted;
     // A procedure the program put in a segment of its own naming (`code_seg`)
     // is in that one, the rest in `code`.
     let segment_of = |procedure: usize| -> &str {
@@ -612,7 +734,11 @@ fn built_inner(
         .collect();
     let mut named: IndexMap<String, Segment> =
         IndexMap::from_iter([("_DATA".to_owned(), Segment::new("_DATA", Role::Data, true))]);
-    for (name, _items) in &module.data {
+    // The pin keeps a Mach-O x86-64 jump table in `__text`, after the code: the
+    // labels it differences are then in its own section and need no relocation.
+    let in_text =
+        |name: &str| format == Format::MachO && module.object.code_model() == CodeModel::Flat64 && name == "CONST";
+    for (name, _items) in module.data.iter().filter(|(name, _)| !in_text(name)) {
         if !named.contains_key(name) {
             named.insert(
                 name.clone(),
@@ -627,7 +753,7 @@ fn built_inner(
         segments.push(stack);
     }
     let mut symbols: IndexMap<String, (usize, usize)> = IndexMap::default();
-    for (name, items) in &module.data {
+    for (name, items) in module.data.iter().filter(|(name, _)| !in_text(name)) {
         let index = segments
             .iter()
             .position(|one| &one.name == name)
@@ -636,16 +762,32 @@ fn built_inner(
     }
     let mut sizes: IndexMap<String, usize> = IndexMap::default();
     for (index, group) in groups.iter().enumerate() {
-        _code(&mut segments[index], index, module, group, &mut symbols, &mut sizes, format)?;
+        _code(
+            &mut segments[index],
+            index,
+            module,
+            group,
+            &mut symbols,
+            &mut sizes,
+            asm_info(objects, format).pref_align,
+        )?;
+    }
+    for (_, items) in module.data.iter().filter(|(name, _)| in_text(name)) {
+        _data(&mut segments[0], 0, items, &mut symbols, module.object.code_model());
     }
     // The BASIC dialect's records name an address by its offset alone, so they
     // need the one code segment the module's code is in; CodeView 4 as C7
     // writes it has the segment in each address.
-    if module.debug.as_ref().is_some_and(|debug| debug.dialect == llrm_object::debug::Dialect::Bc) && groups.len() != 1
-    {
+    if module.debug.as_ref().is_some_and(|debug| debug.dialect == llrm_debug::Dialect::Bc) && groups.len() != 1 {
         return Err(Unencodable("-g of the BASIC dialect with a code segment per procedure".into()).into());
     }
-    let externs: IndexMap<String, String> = module.externs.iter().cloned().collect();
+    let mut externs: IndexMap<String, String> = module.externs.iter().cloned().collect();
+    // The probe routine is named by the frames that need it, nowhere else.
+    for probe in module.procedures.iter().filter_map(|one| one.probe_stack.as_ref()) {
+        if segments.iter().any(|segment| segment.fixups.iter().any(|one| _target(&one.name) == probe)) {
+            externs.entry(probe.clone()).or_insert_with(|| "near".to_owned());
+        }
+    }
     let mut object = object_of(module, source, segments, &symbols, &sizes, &externs)?;
     // A segment per procedure of one name is one segment to Microsoft's LINK,
     // which keeps the last one's length and loses the rest; a COMDAT per
@@ -688,7 +830,7 @@ pub fn _data(
                 segment.put(&vec![0; width(loc)], &[Fixup::new(0, loc, name.clone())]);
                 let at = segment.image.len() - width(loc);
                 if loc == OFFSET64 {
-                    pack_field(&mut segment.image, at, loc, *offset);
+                    segment.image[at..at + 8].copy_from_slice(&offset.to_le_bytes());
                 } else {
                     pack_into(&mut segment.image, at, offset & ((1_i64 << (8 * (*bytes).min(4))) - 1));
                 }
@@ -699,6 +841,26 @@ pub fn _data(
             }
             masm::Datum::Bytes(item) => segment.put(item, &[]),
             masm::Datum::SegmentWord(name) => segment.put(&[0, 0], &[Fixup::new(0, BASE, name.clone())]),
+            // `name - base`: the pc-relative fixup is `name - slot`, so the
+            // field holds `slot - base`.
+            masm::Datum::Difference(masm::Difference { name, base }) => {
+                let slot = segment.image.len();
+                let table = symbols[base].1;
+                match symbols.get(name) {
+                    // Both in this segment: the assembler's answer, no
+                    // relocation (Mach-O keeps the table in `__text`).
+                    Some(&(at, offset)) if at == index => {
+                        segment.put(&[0; 4], &[]);
+                        segment.image[slot..slot + 4]
+                            .copy_from_slice(&((offset as i64 - table as i64) as i32).to_le_bytes());
+                    }
+                    _ => {
+                        segment.put(&[0; 4], &[Fixup::new(0, Fix::pc_rel(4, 0), name.clone())]);
+                        segment.image[slot..slot + 4]
+                            .copy_from_slice(&((slot as i64 - table as i64) as i32).to_le_bytes());
+                    }
+                }
+            }
         }
     }
 }
@@ -712,9 +874,9 @@ pub fn _code(
     group: &[usize],
     symbols: &mut IndexMap<String, (usize, usize)>,
     sizes: &mut IndexMap<String, usize>,
-    format: Format,
+    pref_align: bool,
 ) -> Result<(), Error> {
-    _code_by(segment, index, module, group, symbols, sizes, asm_info(format).pref_align, |procedure, number| {
+    _code_by(segment, index, module, group, symbols, sizes, pref_align, |procedure, number| {
         masm::listing(procedure, number).map_err(|error| error.0)
     })
 }
@@ -781,7 +943,9 @@ pub fn _code_by(
             }
             Encoded::Align(_) | Encoded::Prefer { .. } => {
                 let pad = _size(item, at as i64, model);
-                segment.put(&llrm_x86::mc::backend::nops(pad, usize::from(module.padding.nop), model.segmented()), &[]);
+                let mut nops = Vec::new();
+                backend(model.segmented(), usize::from(module.padding.nop)).write_nop_data(&mut nops, pad);
+                segment.put(&nops, &[]);
                 let log2 = match item {
                     Encoded::Align(masm::CodeAlign { log2, .. }) => *log2,
                     Encoded::Prefer { computed, .. } => *computed,
@@ -792,22 +956,25 @@ pub fn _code_by(
             Encoded::Jump(Jump { name, label, long }) => {
                 segment.put(&_jump(name, labels[label], at, *long, model)?.code, &[])
             }
-            Encoded::Near(Near { name, tail }) if labels.contains_key(name) => {
-                let distance = labels[name] - (at as i64 + 1 + model.displacement_bytes() as i64);
+            Encoded::Near(near) if labels.contains_key(&near.name) => {
+                let name = &near.name;
+                let opcode = near.opcode(model)?;
+                let distance = labels[name] - (at as i64 + opcode.len() as i64 + model.displacement_bytes() as i64);
                 let far = || Unencodable(format!("a near call to {name} {distance} bytes away"));
                 let displacement = if model.flat() {
                     i32::try_from(distance).map_err(|_| far())?.to_le_bytes().to_vec()
                 } else {
                     i16::try_from(distance).map_err(|_| far())?.to_le_bytes().to_vec()
                 };
-                segment.put(&[&[if *tail { 0xE9 } else { 0xE8 }][..], &displacement].concat(), &[]);
+                segment.put(&[&opcode[..], &displacement].concat(), &[]);
             }
-            Encoded::Near(Near { name, tail }) => {
+            Encoded::Near(near) => {
+                let opcode = near.opcode(model)?;
                 segment.put(
-                    &vec![0; 1 + model.displacement_bytes()],
-                    &[Fixup::new(1, relative(model.displacement_bytes()), name.clone())],
+                    &vec![0; opcode.len() + model.displacement_bytes()],
+                    &[Fixup::new(opcode.len(), relative(model.displacement_bytes()), near.name.clone())],
                 );
-                segment.image[at] = if *tail { 0xE9 } else { 0xE8 };
+                segment.image[at..at + opcode.len()].copy_from_slice(&opcode);
             }
         }
         at = segment.image.len();
@@ -846,7 +1013,10 @@ pub fn _items(
             fixups: vec![Fixup::new(1, POINTER, name.clone())],
         })],
         masm::Item::Callee(masm::Callee { name, tail, .. }) => {
-            vec![Encoded::Near(Near { name: name.clone(), tail: *tail })]
+            vec![Encoded::Near(Near { name: name.clone(), tail: *tail, cond: None })]
+        }
+        masm::Item::TailIf { condition, callee } => {
+            vec![Encoded::Near(Near { name: callee.clone(), tail: true, cond: Some(condition.clone()) })]
         }
         masm::Item::Semantics(Semantics {
             op: Operation::Branch | Operation::Jump,
@@ -906,6 +1076,7 @@ pub fn _encoded(
     };
     let mut code = made.code.clone();
     let mut fixups: IndexMap<usize, Fixup> = IndexMap::default();
+    let beside_memory = what.dests.iter().chain(&what.sources).any(|one| matches!(one, Loc::Mem(_)));
     for one in what.dests.iter().chain(&what.sources) {
         let (at, loc, addend, addr) = match one {
             Loc::Mem(ir::Mem { addr: Some(addr), through, index_through, .. })
@@ -924,6 +1095,15 @@ pub fn _encoded(
             }
             // Long mode loads a symbol's address with `lea` from the
             // instruction pointer.
+            // Static code loads it with `mov r32, imm32`: an absolute field.
+            Loc::Imm(ir::Imm { address: Some(addr), value, width: 4, .. }) if model == CodeModel::Flat64 => {
+                (made.immediate_at, near, addr.disp + value, addr)
+            }
+            // Beside a memory operand the displacement is the memory's: the
+            // symbol is the sign-extended imm32 (`mov qword ptr [m], offset a`).
+            Loc::Imm(ir::Imm { address: Some(addr), value, .. }) if model == CodeModel::Flat64 && beside_memory => {
+                (made.immediate_at, near, addr.disp + value, addr)
+            }
             Loc::Imm(ir::Imm { address: Some(addr), value, .. }) if model == CodeModel::Flat64 => {
                 (made.displacement_at, near, addr.disp + value, addr)
             }
@@ -933,10 +1113,23 @@ pub fn _encoded(
         let Some(at) = at else {
             return Err(Unencodable(format!("{}: no field for {}", what.repr(), one.repr())));
         };
+        // Static code at 64 bits: a symbol beside a register is the absolute
+        // sign-extended `disp32`; alone it is `[rip + disp32]`.
+        let based = match one {
+            Loc::Mem(ir::Mem { through, index_through, .. })
+            | Loc::Address(ir::AddressRef { through, index_through, .. }) => {
+                *through != llrm_lir::registers::RegId::None || *index_through != llrm_lir::registers::RegId::None
+            }
+            _ => false,
+        };
         // Long mode reaches a symbol from the instruction pointer: the field is
         // relative to the instruction's end, and an address loaded for
         // a symbol defined elsewhere is its table entry's.
-        let loc = if model == CodeModel::Flat64 {
+        let loc = if model == CodeModel::Flat64 && matches!(one, Loc::Imm(ir::Imm { width: 4, .. })) {
+            loc
+        } else if model == CodeModel::Flat64 && (based || (beside_memory && matches!(one, Loc::Imm(_)))) {
+            llrm_x86::mc::fixup::abs_signed_4()
+        } else if model == CodeModel::Flat64 {
             let from = code.len() - at;
             if matches!(one, Loc::Imm(_)) && addr.space == Space::External {
                 llrm_x86::mc::fixup::got_pc_rel(from)
@@ -946,7 +1139,7 @@ pub fn _encoded(
         } else {
             loc
         };
-        pack_field(&mut code, at, loc, addend);
+        pack_field(&mut code, at, loc, addend).map_err(|error| Unencodable(error.0))?;
         let name = names
             .get(&(addr.space, addr.index))
             .unwrap_or_else(|| panic!("KeyError: ({}, {})", addr.space.repr(), addr.index));
@@ -1125,7 +1318,7 @@ pub fn _length(
                 2 + model.displacement_bytes()
             }
         }
-        Encoded::Near(_) => 1 + model.displacement_bytes(),
+        Encoded::Near(near) => near.cond.as_ref().map_or(1, |_| 2) + model.displacement_bytes(),
     }
 }
 
@@ -1172,7 +1365,7 @@ pub fn object_of(
     symbols: &IndexMap<String, (usize, usize)>,
     sizes: &IndexMap<String, usize>,
     externs: &IndexMap<String, String>,
-) -> Result<Object, Error> {
+) -> Result<Described, Error> {
     let model = module.object.code_model();
     let used: BTreeSet<String> = segments
         .iter()
@@ -1203,16 +1396,36 @@ pub fn object_of(
         segments.iter().enumerate().filter(|(_, segment)| grouped(segment)).map(|(index, _)| index).collect();
     let omf_groups = if members.is_empty() { Vec::new() } else { vec![OmfGroup { name: "DGROUP".into(), members }] };
 
+    let publics: HashSet<&String> = module.publics.iter().collect();
     let mut table: Vec<Symbol> = symbols
         .iter()
         .map(|(name, &(section, offset))| Symbol {
             name: name.clone(),
-            binding: if module.publics.contains(name) { Binding::Public } else { Binding::Local },
+            binding: if publics.contains(name) { Binding::Public } else { Binding::Local },
             definition: Definition::Defined { section, offset },
             size: sizes.get(name).copied().unwrap_or(0),
             group: None,
+            visibility: module.visibility.get(name).copied().unwrap_or_default(),
         })
         .collect();
+    // An alias is the address of what it names, under its own name.
+    for alias in &module.aliases {
+        let Some(&(section, offset)) = symbols.get(&alias.target) else {
+            return Err(Unencodable(format!(
+                "alias {} names {}, which this object does not define",
+                alias.name, alias.target
+            ))
+            .into());
+        };
+        table.push(Symbol {
+            name: alias.name.clone(),
+            binding: alias.binding,
+            definition: Definition::Defined { section, offset },
+            size: sizes.get(&alias.target).copied().unwrap_or(0),
+            group: None,
+            visibility: module.visibility.get(&alias.name).copied().unwrap_or_default(),
+        });
+    }
     // Data an object does not define is addressed in the group as its own data
     // is.
     table.extend(order.iter().map(|name| Symbol {
@@ -1221,6 +1434,7 @@ pub fn object_of(
         definition: Definition::Undefined,
         size: 0,
         group: (externs[*name] == "byte").then_some(0),
+        visibility: Default::default(),
     }));
     let index: IndexMap<String, usize> =
         table.iter().enumerate().map(|(at, symbol)| (symbol.name.clone(), at)).collect();
@@ -1228,10 +1442,14 @@ pub fn object_of(
     let debug = module
         .debug
         .as_ref()
-        .map(|debug| super::debuginfo::laid_out(debug, module, source, &segments, symbols, &index))
+        .map(|debug| super::debuginfo::laid_out(debug, module, source, &segments, symbols, sizes, &index))
         .transpose()
         .map_err(Unencodable)?;
-    let frames = if model == CodeModel::Flat64 { declared_frames(&segments, symbols, sizes) } else { Vec::new() };
+    let frames = if model == CodeModel::Segmented16 {
+        Vec::new()
+    } else {
+        declared_frames(model.bits(), &segments, symbols, sizes)
+    };
     let mut sections = Vec::new();
     for segment in segments {
         let Segment { name, role, near, mut image, spans, fixups, align, .. } = segment;
@@ -1243,8 +1461,13 @@ pub fn object_of(
             relocs.push(Reloc::new(one.at, one.kind, target, addend));
         }
         for one in &relocs {
-            if one.fix() != BASE {
-                pack_field(&mut image, one.at, one.fix(), 0);
+            if one.kind != BASE.kind {
+                pack_field(
+                    &mut image,
+                    one.at,
+                    Fix { kind: one.kind, pc_rel: one.pc_rel, pc_bias: 0, spec: one.spec },
+                    0,
+                )?;
             }
         }
         sections.push(Section { name, role, near, align, image, spans, relocs });
@@ -1254,44 +1477,49 @@ pub fn object_of(
     // was handed.
     let name =
         debug.as_ref().and_then(|info| info.files.first()).map_or_else(|| source.to_owned(), |file| file.name.clone());
-    Ok(Object {
-        name,
-        bits: match model {
-            CodeModel::Flat64 => 64u8,
-            CodeModel::Flat32 => 32u8,
-            CodeModel::Segmented16 => 16u8,
-        },
-        sections,
-        symbols: table,
-        omf_groups,
-        omf_comdat: Vec::new(),
-        frames,
+    Ok(Described {
         debug,
+        object: Object {
+            name,
+            bits: match model {
+                CodeModel::Flat64 => 64u8,
+                CodeModel::Flat32 => 32u8,
+                CodeModel::Segmented16 => 16u8,
+            },
+            sections,
+            symbols: table,
+            omf_groups,
+            omf_comdat: Vec::new(),
+            frames,
+        },
     })
 }
 
 /// The frames the procedures declared (`Item::Cfi`): one row where the frame
 /// address or a save changes, as the state after the directives at that offset.
 fn declared_frames(
+    bits: u32,
     segments: &[Segment],
     symbols: &IndexMap<String, (usize, usize)>,
     sizes: &IndexMap<String, usize>,
 ) -> Vec<llrm_object::Frame> {
+    use llrm_debug::FrameRow;
     use llrm_object::assembler::Cfi;
-    use llrm_object::debug::FrameRow;
-    let name = llrm_x86::mc::unwind::register_label;
+    let name = |number: u16| llrm_x86::mc::unwind::register_label(bits, number);
     let mut frames = Vec::new();
     for (section, segment) in segments.iter().enumerate() {
         for (symbol, &(home, start)) in symbols {
             let Some(&length) = sizes.get(symbol).filter(|_| home == section) else { continue };
-            let within = |at: &usize| (start..start + length).contains(at);
-            if !segment.declared.iter().any(within) {
+            let range = start..start + length;
+            if within(&segment.declared, |at| *at, &range).is_empty() {
                 continue;
             }
-            let entry = llrm_x86::mc::unwind::entry_row();
+            let entry = llrm_x86::mc::unwind::entry_row(bits);
             let mut state = entry.clone();
             let mut rows: Vec<FrameRow> = Vec::new();
-            for &(cfi, at) in segment.cfi.iter().filter(|(_, at)| within(at)) {
+            let mut ops = Vec::new();
+            for &(cfi, at) in within(&segment.cfi, |one| one.1, &range) {
+                ops.push(cfi);
                 match cfi {
                     Cfi::DefCfa { register, offset } => {
                         state.cfa_register = name(register);
@@ -1319,11 +1547,19 @@ fn declared_frames(
                     kept.push(row);
                 }
             }
-            let seh = segment.seh.iter().filter(|(_, at)| within(at)).map(|&(seh, at)| (at - start, seh)).collect();
-            frames.push(llrm_object::Frame { section, offset: start, length, rows: kept, seh });
+            let seh = within(&segment.seh, |one| one.1, &range).iter().map(|&(seh, at)| (at - start, seh)).collect();
+            frames.push(llrm_object::Frame { section, offset: start, length, rows: kept, cfi: ops, seh });
         }
     }
     frames
+}
+
+/// The items whose offset lies in `range`. Items are pushed at the image's
+/// length, so they are sorted by offset: a search per function, not a scan.
+fn within<'a, T>(items: &'a [T], at: impl Fn(&T) -> usize, range: &std::ops::Range<usize>) -> &'a [T] {
+    let from = items.partition_point(|item| at(item) < range.start);
+    let to = items.partition_point(|item| at(item) < range.end);
+    &items[from..to]
 }
 
 pub fn _target(name: &str) -> &str {
@@ -1401,6 +1637,7 @@ mod tests {
             size: false,
             entry: 0,
             stack_check: None,
+            probe_stack: None,
             registers: llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
         }
     }
@@ -1465,6 +1702,71 @@ mod tests {
             (segment.fixups[1].at, segment.fixups[1].kind, segment.fixups[1].name.as_str()),
             (2, BASE, "DGROUP")
         );
+    }
+
+    /// A position-independent jump table's entry is `name - table` in four
+    /// bytes: the slot is a pc-relative fixup to the code label, and its field
+    /// carries `slot - table`, so the linker's `S + A - P` is `name -
+    /// table`. A pointer-wide absolute entry (a PIE refuses) was all there was.
+    #[test]
+    fn test_a_table_entry_is_a_pc_relative_difference_from_the_table() {
+        let mut segment = Segment::new(".rodata", Role::Data, true);
+        let mut symbols = IndexMap::default();
+        let entry = |name: &str| masm::Datum::Difference(masm::Difference { name: name.into(), base: "$J1".into() });
+        let items = [
+            masm::Datum::Bytes(vec![9, 9]),
+            masm::Datum::Align(masm::Align { to: 4 }),
+            label("$J1"),
+            entry("L0"),
+            entry("L1"),
+        ];
+        _data(&mut segment, 0, &items, &mut symbols, CodeModel::Flat64);
+        assert_eq!(symbols["$J1"], (0, 4));
+        assert_eq!(segment.image.len(), 12);
+        let fixups: Vec<_> = segment.fixups.iter().map(|f| (f.at, f.name.as_str())).collect();
+        assert_eq!(fixups, [(4, "L0"), (8, "L1")]);
+        assert_eq!(&segment.image[4..12], &[0, 0, 0, 0, 4, 0, 0, 0]);
+    }
+
+    /// A table jump through a register names its table by the jump's
+    /// `table_id` (no memory cell to take it from) and gets entries that are
+    /// differences from the table: `jump_tables` found none and the symbol was
+    /// a `KeyError` at print. A jump through a cell keeps pointer-wide entries.
+    #[test]
+    fn test_a_register_table_jump_gets_a_table_of_differences() {
+        let held = Loc::Held(llrm_lir::Held { value: 1, width: 8, offset: 0 });
+        let jump = Semantics {
+            indirect: true,
+            table: vec![1, 2],
+            table_id: Some(7),
+            ..semantics(Operation::Jump, "jmp", vec![], vec![held])
+        };
+        let procedure = procedure(
+            "_f",
+            false,
+            body(
+                "f",
+                vec![
+                    block(0, vec![insn(0, jump)], vec![1, 2]).into(),
+                    block(1, vec![], vec![]).into(),
+                    block(2, vec![], vec![]).into(),
+                ],
+            ),
+            0,
+            vec![],
+        );
+        let module = llrm_mir::parse::module("target datalayout = \"e-p:64:64\"\n").unwrap();
+        let mut names = IndexMap::default();
+        let data = masm::jump_tables(&[procedure], &mut names, &module);
+        assert_eq!(names[&(Space::Segment, 7)], "$J7");
+        let entries: Vec<_> = data
+            .iter()
+            .filter_map(|datum| match datum {
+                masm::Datum::Difference(masm::Difference { base, .. }) => Some(base.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(entries, ["$J7", "$J7"]);
     }
 
     /// Fresh QB D_SURF retained 83 jumps whose target label was physically
@@ -1553,11 +1855,14 @@ mod tests {
         let leave = semantics(Operation::Return, "retf", vec![], vec![]);
         let insns = vec![insn(1, load), insn(2, call), insn(3, leave)];
         let built = masm::Module {
+            debug: None,
             registers: crate::backend::registerinfo::test_regs(),
             code: "GET_TEXT".into(),
             names: IndexMap::from_iter([((Space::External, 7), "_d".to_owned())]),
             externs: vec![("_f".into(), "far".into()), ("_d".into(), "byte".into())],
             publics: strings(&["_get"]),
+            visibility: Default::default(),
+            aliases: Vec::new(),
             data: vec![("_DATA".into(), vec![])],
             procedures: vec![procedure(
                 "_get",
@@ -1573,7 +1878,6 @@ mod tests {
             object: llrm_target::Target::object(&llrm_x86_m16::M16),
             requests: BTreeSet::new(),
             stack: 0,
-            debug: None,
         };
         assert_eq!(
             masm::text(&built).unwrap(),
@@ -1581,11 +1885,91 @@ mod tests {
              L0_1:\n    mov ax, word ptr _d\n    call far ptr _f\n    retf\n_get endp\nend\n"
         );
         assert_eq!(
-            written(&built, "get.c").unwrap(),
+            written(&built, "get.c", llrm_target::Target::objects(&llrm_x86_m32::M32)).unwrap(),
             hex("800700056765742e63a39622000004434f4445084745545f544558540444415441055f44415441064447524f55502a98\
                  07004809000302010a9807004800000504010f9a040006ff025b8c0900025f6400025f6600df900b000001045f676574\
                  000000c1a00d00010000a100009a00000000cb4c9c0a00c401160101cc045602558a02000074")
         );
+    }
+
+    /// `object_of` looked each symbol up in the module's public list, a
+    /// `Vec`: 4x the symbols cost about 16x the time (2400 tiny functions
+    /// spent 27% of the object write there).
+    #[test]
+    fn test_the_symbol_table_is_linear_in_the_symbols() {
+        let time = |count: usize| -> std::time::Duration {
+            let names: Vec<String> = (0..count).map(|at| format!("f{at}")).collect();
+            let module = masm::Module {
+                registers: crate::backend::registerinfo::test_regs(),
+                code: "M_TEXT".into(),
+                names: IndexMap::default(),
+                externs: vec![],
+                publics: names.clone(),
+                visibility: Default::default(),
+                aliases: vec![],
+                data: vec![],
+                procedures: vec![],
+                private: BTreeSet::new(),
+                far_bss: BTreeSet::new(),
+                code_segments: Default::default(),
+                padding: Default::default(),
+                object: llrm_target::Target::object(&llrm_x86_m16::M16),
+                requests: BTreeSet::new(),
+                stack: 0,
+                debug: None,
+            };
+            let symbols: IndexMap<String, (usize, usize)> = names.into_iter().map(|name| (name, (0, 0))).collect();
+            (0..3)
+                .map(|_| {
+                    let start = std::time::Instant::now();
+                    object_of(&module, "t.c", Vec::new(), &symbols, &IndexMap::default(), &IndexMap::default())
+                        .unwrap();
+                    start.elapsed()
+                })
+                .min()
+                .unwrap()
+        };
+        let (small, large) = (time(8000), time(32000));
+        assert!(large < small * 8, "4x the symbols took {large:?} against {small:?}");
+    }
+
+    /// A second name and a hidden export reach the object's symbol table: the
+    /// writers dropped an alias's symbol (another unit naming it failed to
+    /// link) and wrote every export with default visibility.
+    #[test]
+    fn an_alias_is_a_symbol_at_its_targets_address_and_a_hidden_export_is_hidden() {
+        let leave = semantics(Operation::Return, "retf", vec![], vec![]);
+        let module = masm::Module {
+            debug: None,
+            registers: crate::backend::registerinfo::test_regs(),
+            code: "GET_TEXT".into(),
+            names: IndexMap::default(),
+            externs: vec![],
+            publics: strings(&["_get"]),
+            visibility: std::collections::BTreeMap::from([("_get".to_owned(), llrm_object::Visibility::Hidden)]),
+            aliases: vec![masm::Alias { name: "_other".into(), target: "_get".into(), binding: Binding::Weak }],
+            data: vec![("_DATA".into(), vec![])],
+            procedures: vec![procedure(
+                "_get",
+                true,
+                body("get", vec![lir::LirBlock::new(1, vec![insn(1, leave)]).into()]),
+                0,
+                vec![],
+            )],
+            private: BTreeSet::new(),
+            far_bss: BTreeSet::new(),
+            code_segments: Default::default(),
+            padding: Default::default(),
+            object: llrm_target::Target::object(&llrm_x86_m16::M16),
+            requests: BTreeSet::new(),
+            stack: 0,
+        };
+        let described =
+            built(&module, "get.c", CodeLayout::OneSegment, llrm_target::Target::objects(&llrm_x86_m32::M32)).unwrap();
+        let symbol = |name: &str| described.object.symbols.iter().find(|one| one.name == name).unwrap();
+        let (get, other) = (symbol("_get"), symbol("_other"));
+        assert_eq!((get.visibility, get.binding), (llrm_object::Visibility::Hidden, Binding::Public));
+        assert_eq!((other.definition, other.binding), (get.definition, Binding::Weak));
     }
 
     /// `align 4` in a data segment pads to an offset, and an offset is an
@@ -1599,11 +1983,14 @@ mod tests {
             items.extend(to.map(|to| masm::Datum::Align(masm::Align { to })));
             items.push(masm::Datum::Bytes(vec![2]));
             let module = masm::Module {
+                debug: None,
                 registers: crate::backend::registerinfo::test_regs(),
                 code: "M_TEXT".into(),
                 names: IndexMap::default(),
                 externs: vec![],
                 publics: strings(&["_a"]),
+                visibility: Default::default(),
+                aliases: Vec::new(),
                 data: vec![("_DATA".into(), items)],
                 procedures: vec![],
                 private: BTreeSet::new(),
@@ -1613,9 +2000,10 @@ mod tests {
                 object: llrm_target::Target::object(&llrm_x86_m16::M16),
                 requests: BTreeSet::new(),
                 stack: 0,
-                debug: None,
             };
-            let records = omf::parse(&written(&module, "m.c").unwrap()).unwrap();
+            let records =
+                omf::parse(&written(&module, "m.c", llrm_target::Target::objects(&llrm_x86_m32::M32)).unwrap())
+                    .unwrap();
             // The code segment, then _DATA.
             records.iter().filter(|one| one.r#type & 0xFE == omf::SEGDEF).map(|one| one.body[0]).collect()
         };
@@ -1671,6 +2059,7 @@ mod tests {
             masm::InlinePart::Fixup("segment".into(), "_far".into(), 0),
         ];
         let rich = masm::Module {
+            debug: None,
             registers: crate::backend::registerinfo::test_regs(),
             code: "RICH_TEXT".into(),
             names: IndexMap::from_iter([
@@ -1683,6 +2072,8 @@ mod tests {
                 ("_b".into(), "byte".into()),
             ],
             publics: strings(&["_f", "_table"]),
+            visibility: Default::default(),
+            aliases: Vec::new(),
             data: vec![
                 (
                     "_DATA".into(),
@@ -1722,7 +2113,6 @@ mod tests {
             object: llrm_target::Target::object(&llrm_x86_m16::M16),
             requests: BTreeSet::new(),
             stack: 0,
-            debug: None,
         };
         assert_eq!(
             masm::text(&rich).unwrap(),
@@ -1739,12 +2129,12 @@ mod tests {
              \x20   retf\n_f endp\nend\n"
         );
         assert_eq!(
-            written(&rich, "rich.c").unwrap(),
+            written(&rich, "rich.c", llrm_target::Target::objects(&llrm_x86_m32::M32)).unwrap(),
             hex("80080006726963682e633b9649000004434f444509524943485f544558540444415441055f4441544103425353045f\
                  425353084641525f44415441074641525f534547044441544106534841524544064447524f555033980700482a0003\
                  0201e9980700a80d00050401a298070048050007060106980700681500090801d29807004802000b0a01019a08000c\
                  ff02ff03ff054b8c0500025f6200ac9009000001025f660500009a900d000102065f7461626c65000000f3a02e0001\
-                 0000568bf05ec3558bec83ec048b460683f803740ba30200bb0400e8e4ffebed90900200000068000007c9cb009c18\
+                 00005689c65ec35589e583ec048b460683f803740ba30200bb0400e8e4ffebed90900200000068000007c9cb359c18\
                  00c414140102c417140102c420140102c8225404c8255501eba0110002000001020300070707020000000000309c0a\
                  00c407140102cc0956014ca0190004000078797a78797a78797a78797a78797a78797a78797a56a006000500000100\
                  549c0500c4005404438a02000074")
@@ -1758,7 +2148,7 @@ mod tests {
         let regs = crate::backend::registerinfo::test_regs();
         let cell = ir::Mem {
             addr: Some(Addr { index: 3, ..Addr::new(Space::Segment, 1280) }),
-            index: Some(ir::Held { value: 1, width: 4 }),
+            index: Some(ir::Held { value: 1, width: 4, offset: 0 }),
             index_through: RegId::ESI,
             scale: 2,
             ..ir::Mem::new(None, 2)
@@ -1780,6 +2170,30 @@ mod tests {
         );
     }
 
+    /// `store ptr @a, ptr @sink` at -O2 -fno-pic encoded `mov [rip+disp], imm`
+    /// with one fixup: the immediate's symbol took the displacement's field, so
+    /// the store wrote 0 over the function `a` (sfm16 c64 -O2 segfaulted).
+    #[test]
+    fn test_a_store_of_a_symbol_to_a_symbol_has_a_fixup_for_each() {
+        let regs = crate::backend::registerinfo::test_regs();
+        let cell = ir::Mem {
+            addr: Some(Addr { index: 3, ..Addr::new(Space::External, 0) }),
+            ..ir::Mem::new(None, 8)
+        };
+        let value = ir::Imm { value: 0, width: 8, address: Some(Addr { index: 4, ..Addr::new(Space::External, 0) }) };
+        let what = semantics(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![Loc::Imm(value)]);
+        let names = IndexMap::from_iter([((Space::External, 3), "sink".to_owned()), ((Space::External, 4), "a".to_owned())]);
+
+        let piece = _encoded(regs, &what, &names, CodeModel::Flat64).unwrap();
+
+        let mut named: Vec<_> = piece.fixups.iter().map(|one| (one.name.as_str(), one.at)).collect();
+        named.sort_unstable();
+        assert_eq!(named.len(), 2, "{named:?}");
+        assert_eq!(named[0].0, "a");
+        assert_eq!(named[1].0, "sink");
+        assert_ne!(named[0].1, named[1].1, "both fixups on one field: {named:?}");
+    }
+
     /// Code was never aligned: every function began where the last ended.
     /// `emitFunctionHeader` aligns to 16 (`.p2align 4`, OMF and COFF); ELF's
     /// `.prefalign` aligns to no more than the body fills, so a 3-byte
@@ -1788,11 +2202,14 @@ mod tests {
     fn test_a_function_is_aligned_as_emitfunctionheader_does() {
         let small = |size: bool| {
             let mut module = masm::Module {
+                debug: None,
                 registers: crate::backend::registerinfo::test_regs(),
                 code: "M_TEXT".into(),
                 names: IndexMap::default(),
                 externs: vec![],
                 publics: vec![],
+                visibility: Default::default(),
+                aliases: Vec::new(),
                 data: vec![],
                 procedures: (0..3)
                     .map(|n| masm::Procedure {
@@ -1807,7 +2224,6 @@ mod tests {
                 object: llrm_target::Target::object(&llrm_x86_m32::M32),
                 requests: BTreeSet::new(),
                 stack: 0,
-                debug: None,
             };
             module.object = llrm_target::Target::object(&llrm_x86_m32::M32);
             module
@@ -1829,7 +2245,9 @@ mod tests {
             assert_eq!(["_f0", "_f1", "_f2"].map(|name| sizes[name]), [3, 3, 3], "pref_align {pref_align}");
             (["_f0", "_f1", "_f2"].map(|name| symbols[name].1), segment.align)
         };
-        let offsets = |format: Format, size: bool| offsets_with(asm_info(format).pref_align, size);
+        let offsets = |format: Format, size: bool| {
+            offsets_with(asm_info(llrm_target::Target::objects(&llrm_x86_m32::M32), format).pref_align, size)
+        };
         // `.prefalign` was `Format::Elf` by name: a format that only says
         // `pref_align` got `.p2align`.
         assert_eq!(offsets_with(true, false), ([0, 4, 8], 4), "a format that says pref_align");
@@ -1852,5 +2270,84 @@ mod tests {
         assert_eq!(items[at], masm::Item::Align(masm::CodeAlign { log2: 4, max_skip: 7 }));
         assert!(matches!(&items[at + 1], masm::Item::Label(label) if label.name == "L0_2"), "{items:?}");
         assert_eq!(items.iter().filter(|one| matches!(one, masm::Item::Align(_))).count(), 1);
+    }
+
+    /// An addend past its field's two bytes was wrapped into the field and
+    /// written (`0x12345` as `0x2345`); it is refused, and the ones that fit
+    /// (`-1`, `0xFFFF`) are written as before.
+    #[test]
+    fn an_addend_a_near_field_cannot_hold_is_refused() {
+        let mut image = [0xAA; 4];
+        assert!(pack_field(&mut image, 0, OFFSET, 0x12345).is_err());
+        assert_eq!(image, [0xAA; 4]);
+        pack_field(&mut image, 0, OFFSET, -1).unwrap();
+        pack_field(&mut image, 2, OFFSET, 0xFFFF).unwrap();
+        assert_eq!(image, [0xFF; 4]);
+    }
+
+    /// A procedure's `.seh_*` directives reached `Object.frames` only through
+    /// the call frame information, so a Win64 prologue declared on its own was
+    /// dropped and `.xdata` was read back from the bytes. They are the
+    /// function's, at offsets from its start.
+    #[test]
+    fn declared_seh_directives_reach_the_frame_at_function_relative_offsets() {
+        let mut segment = Segment::new("A_TEXT", Role::Text, true);
+        segment.declared.push(8);
+        segment.seh.push((llrm_object::Seh::PushReg(6), 9));
+        segment.seh.push((llrm_object::Seh::StackAlloc(32), 13));
+        let symbols: IndexMap<String, (usize, usize)> = [("f".to_owned(), (0, 8))].into_iter().collect();
+        let sizes: IndexMap<String, usize> = [("f".to_owned(), 20)].into_iter().collect();
+        let frames = declared_frames(64, &[segment], &symbols, &sizes);
+        assert_eq!(
+            frames.iter().map(|frame| (frame.offset, frame.seh.clone())).collect::<Vec<_>>(),
+            vec![(8, vec![(1, llrm_object::Seh::PushReg(6)), (5, llrm_object::Seh::StackAlloc(32))])]
+        );
+    }
+
+    /// `declared_frames` scanned every declared mark, CFI and SEH entry of a
+    /// segment for each function: four times the functions cost sixteen
+    /// times the work (object write 1.08/1.16 per doubling at 600/2400).
+    #[test]
+    fn the_frames_of_a_segment_are_linear_in_its_functions() {
+        let frames_of = |functions: usize| {
+            let mut segment = Segment::new("A_TEXT", Role::Text, true);
+            let mut symbols = IndexMap::default();
+            let mut sizes = IndexMap::default();
+            for at in 0..functions {
+                let name = format!("f{at}");
+                segment.declared.push(16 * at);
+                segment.cfi.push((llrm_object::assembler::Cfi::DefCfaOffset { offset: 16 }, 16 * at + 1));
+                symbols.insert(name.clone(), (0, 16 * at));
+                sizes.insert(name, 16);
+            }
+            let segments = [segment];
+            let best = (0..3)
+                .map(|_| {
+                    let started = std::time::Instant::now();
+                    let frames = declared_frames(64, &segments, &symbols, &sizes);
+                    assert_eq!(frames.len(), functions);
+                    started.elapsed()
+                })
+                .min()
+                .unwrap();
+            best
+        };
+        let (small, large) = (frames_of(4_000), frames_of(16_000));
+        assert!(large < small * 8, "4x the functions cost {:?} against {:?}", large, small);
+    }
+}
+
+#[cfg(test)]
+mod copy_tests {
+    use super::*;
+
+    /// An ELF x86-64 object ran `live`, which encoded every procedure and
+    /// cloned the module, to find no table dead: 13 M of jpeg_fixed's 27 M
+    /// instructions in `object write`. Only OMF reads a module that way.
+    #[test]
+    fn test_only_an_omf_object_looks_for_unreached_data_and_only_two_formats_change_procedures() {
+        let formats = [Format::Omf, Format::Coff, Format::MachO, Format::Elf];
+        assert_eq!(formats.map(drops_unreached_data), [true, false, false, false]);
+        assert_eq!(formats.map(changes_procedures), [false, true, true, false]);
     }
 }

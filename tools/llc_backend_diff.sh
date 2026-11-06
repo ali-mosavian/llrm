@@ -2,6 +2,7 @@
 # tools/llc_backend_diff.sh [PROG...]: the backend alone. llrm's IR after its mid-end (the switchconv stage) is
 # compiled by llrm-llc and by the pinned llc -O2; prints .text bytes and instruction counts of each.
 set -u
+. "$(dirname "$0")/ab_env.sh"; ab_env_check || exit 2
 root=$(cd "$(dirname "$0")/.." && pwd)
 b=${LLRM_PIN_BIN:-$HOME/scratch/llvm-build/bin}
 llrm=${LLRM_LLC:-$root/target/debug/llrm-llc}
@@ -16,7 +17,7 @@ for p in $progs; do
   [ -n "$stage" ] || { echo "$p: no switchconv stage"; continue; }
   (echo 'target triple = "x86_64-unknown-linux-gnu"'; grep -v '^target triple' "$stage") > "$out/$p.mid.ll"
   "$b/llc" -O2 -relocation-model=pic -filetype=obj "$out/$p.mid.ll" -o "$out/$p.llc.o" 2>> "$out/$p.err" || { echo "$p: llc failed"; head -2 "$out/$p.err"; continue; }
-  t() { size -A "$1" | awk '$1==".text"{print $2}'; }
+  t() { size -A "$1" | awk '$1==".text"||$1~/^\.text\./{s+=$2}END{print s+0}'; }
   n() { objdump -d --no-show-raw-insn "$1" | grep -cE '^ +[0-9a-f]+:'; }
   printf '%-10s %7s %7s   %7s %7s\n' "$p" "$(t $out/$p.llc.o)" "$(t $out/$p.llrm.o)" "$(n $out/$p.llc.o)" "$(n $out/$p.llrm.o)"
 done

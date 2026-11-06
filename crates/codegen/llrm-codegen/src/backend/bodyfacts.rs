@@ -662,7 +662,9 @@ pub(crate) fn _keeps(
             }
         }
     };
-    holds && !(!apart && _may_write(one, cell, sealed)) && !written.clone().any(meets)
+    // A register the cell is addressed by, written, names another cell.
+    let moved = one.defines.iter().any(|defined| define.uses.contains(defined));
+    holds && !moved && !(!apart && _may_write(one, cell, sealed)) && !written.clone().any(meets)
 }
 
 /// Whether allocated LIR names one fixed BP-relative frame range.
@@ -1095,14 +1097,14 @@ mod keeps_tests {
     #[test]
     fn test_a_store_through_a_register_does_not_keep_a_cell_of_its_symbol() {
         let symbol = |disp| Addr { index: 3, ..Addr::new(Space::Segment, disp) };
-        let held = |value| Held { value, width: 4 };
+        let held = |value| Held { value, width: 4, offset: 0 };
         let cell = Mem::new(Some(symbol(2)), 2);
         let load = Arc::new(Insn::new(
             1,
             None,
             Some(Semantics {
                 name: Some("mov".into()),
-                dests: vec![Loc::Held(Held { value: 9, width: 2 })],
+                dests: vec![Loc::Held(Held { value: 9, width: 2, offset: 0 })],
                 sources: vec![Loc::Mem(cell.clone())],
                 ..Semantics::new(Operation::Move)
             }),

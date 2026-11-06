@@ -97,17 +97,25 @@ define i32 @bench_tile() {
     .replace("@LAYOUT@", &common::datalayout("x86-m32"))
 }
 
-#[test]
-fn test_a_loop_the_early_unroll_refused_is_unrolled_late_at_o2() {
+fn movsx_count(level: &str) -> usize {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.ll"), tile()).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_llrm-llc"))
         .current_dir(scratch.path())
-        .args(["-m32", "-mabi=sysv", "-march=i486", "-O2", "--isel=dag", "-S", "-o", "-", "a.ll"])
+        .args(["-m32", "-mabi=sysv", "-march=i486", level, "--isel=dag", "-S", "-o", "-", "a.ll"])
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    let asm = String::from_utf8_lossy(&output.stdout);
-    let loads = asm.matches("movsx").count();
-    assert!(loads >= 40, "the 40 loads are copied out ({loads} movsx): {asm}");
+    String::from_utf8_lossy(&output.stdout).matches("movsx").count()
+}
+
+/// bench_tile (8-trip loops) at -O2: the pin's bar unrolls it (4271 clocks
+/// against 8321 rolled; best of gcc/clang is 4271). A flat 0 bar at -O2 kept it
+/// a loop (m32 decides on speed at -O2).
+#[test]
+fn test_a_loop_the_early_unroll_refused_is_unrolled_late_at_o2_and_o3() {
+    for level in ["-O2", "-O3"] {
+        let loads = movsx_count(level);
+        assert!(loads >= 40, "{level}: the 40 loads are copied out ({loads} movsx)");
+    }
 }

@@ -465,7 +465,7 @@ fn rich_assembled(
     // A host has no B$ENRA: every procedure frames itself (the zero fill above
     // covers what the runtime's frame would have cleared).
     let hosted = llrm_target::object::Format::parse(codegen.object_format)
-        .is_ok_and(|one| llrm_codegen::backend::objbuild::asm_info(one).hosted);
+        .is_ok_and(|one| llrm_codegen::backend::objbuild::asm_info(codegen.arch.objects(), one).hosted);
     let frames = module
         .functions
         .iter()
@@ -637,5 +637,5 @@ pub fn object_bytes(
         .map_err(|error| CompileError::Value(error.to_string()))?;
     let name = source.file_name().map_or_else(String::new, |one| one.to_string_lossy().into_owned());
     let format = llrm_target::object::Format::parse(codegen.object_format).map_err(CompileError::Value)?;
-    Ok(written_basic_in(&module, _header(program, codegen.arch.layout().mode)?, &name, format)?)
+    Ok(written_basic_in(&module, _header(program, codegen.arch.layout().mode)?, &name, format, codegen.arch.objects())?)
 }

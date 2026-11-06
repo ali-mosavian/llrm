@@ -201,6 +201,7 @@ fn _restore(
         indirect: false,
         table: Vec::new(),
         repeat: false,
+        table_id: None,
         pops: None,
     };
     let mut made = Insn::new(one.at, Some((at, at)), Some(what), vec![], vec![]);

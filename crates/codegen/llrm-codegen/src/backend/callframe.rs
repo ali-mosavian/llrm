@@ -18,18 +18,24 @@
 //! setup's adjustment is the bytes pushed, and a once-read load of the argument
 //! is folded into `push [m]` unless `slowTwoMemOps`.
 //!
-//! The input exists in LIR only as hand-built tests: selection pushes the
-//! arguments itself (DEVIATE CG6 of row 50, `pushfold.rs`), and the pass finds
-//! no setup in a body of ours. Its producer is the call lowering of the
-//! SelectionDAG port (`LowerCall`: `ADJCALLSTACKDOWN`, stores to `[esp+k]`);
-//! owner sdag-a, with the reserved call frame that prologue insertion (row 80,
-//! 2026-11-13) lays out. Until then the pass does nothing on the corpus.
+//! The producer is the call lowering of the SelectionDAG port: `LowerCall`
+//! stores the arguments to `[sp+k]` between `ADJCALLSTACKDOWN` and
+//! `ADJCALLSTACKUP`. `emit.rs` turns the pair into `call_frame_setup` /
+//! `call_frame_destroy` at m32 only (`AddrMode::Flat32`, DEVIATE CF4); the
+//! pass is in the flow at every x86 width. At m16 (`Real16`) and m64 `emit.rs`
+//! makes `sub sp, N` / `add sp, N - M` itself, so the pass finds no setup and
+//! changes nothing there. The m16 steps left: emit the pseudos for `Real16`
+//! (`slot` 2, 16-bit `Held` cells), let `ReserveCallFrame` lay the reserved
+//! area out in the m16 prologue, and re-check the readers of the old
+//! `sub`/`add` (`cfi.rs`, `framefree`, `call_pops`) and the m16 byte and clock
+//! rows. Pushes made at m32 selection time (DEVIATE CG6 of row 50,
+//! `pushfold.rs`) are not this pass's input.
 //!
 //! N/A: the Darwin and Win64 conditions of `isLegal`, the stack probe, the
 //! 64-bit forms (`PUSH64`, `INSERT_SUBREG`) and `BuildCFI` (LIR has no CFI
 //! instruction). DEVIATE CF2 (no number yet): `hasVarSizedObjects` is not in
-//! LIR; the pass is given it (false until row 80). Owner w-5, review
-//! 2026-11-13.
+//! LIR; the pass is given it (false until row 80). Owner llrm-target-x86-m16,
+//! review 2026-11-20.
 //!
 //! [L147]:
 //! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86CallFrameOptimization.cpp#L147
@@ -593,7 +599,9 @@ impl CallFrameOpt {
                 adjustment.value = context.expected_dist;
             }
         }
-        insns[setup_at] = Arc::new(setup);
+        // The fold looks the setup up by identity: keep the replacement.
+        let setup = Arc::new(setup);
+        insns[setup_at] = Arc::clone(&setup);
         let call = context.call.as_ref().expect("a call");
         for slot in (0..(context.expected_dist / self.slot) as usize).rev() {
             let store = Arc::clone(context.stores[slot].as_ref().expect("a store"));
@@ -608,19 +616,31 @@ impl CallFrameOpt {
                 // `and [m], 0` and `or [m], -1` push their immediate.
                 (Operation::Binary, [_, Loc::Imm(imm)]) => (Loc::Imm(imm.clone()), vec![]),
                 (Operation::Move, [Loc::Imm(imm)]) => (Loc::Imm(imm.clone()), vec![]),
+                // The push keeps the store's operand flags: a value the store
+                // reads undefined (`ProcessImplicitDefs` erased its definition)
+                // is read undefined by the push too.
+                (Operation::Move, [Loc::Held(held)]) if store.undefs.contains(&held.value) => {
+                    (Loc::Held(*held), vec![])
+                }
                 (Operation::Move, [Loc::Held(held)]) => (Loc::Held(*held), vec![held.value]),
                 _ => unreachable!("Unexpected Opcode!"),
             };
             let mut pushed = Insn::new(at, Some((at, at)), Some(push_what(source_loc.clone())), vec![], extra_uses);
+            if let Loc::Held(held) = &source_loc
+                && store.undefs.contains(&held.value)
+            {
+                pushed.undefs = vec![held.value];
+            }
             // If a push from memory is not slow here, fold the argument's load.
             if let Loc::Held(held) = source_loc
                 && !self.slow_two_mem_ops
-                && let Some(def_at) = self.can_fold_into_reg_push(body, &insns, context, held.value)
+                && let Some(def_at) = self.can_fold_into_reg_push(body, &insns, &setup, held.value)
             {
                 let def = Arc::clone(&insns[def_at]);
                 let [Loc::Mem(cell)] = def.what.as_ref().expect("semantics").sources.as_slice() else { unreachable!() };
                 pushed.what = Some(push_what(Loc::Mem(cell.clone())));
                 pushed.uses = def.uses.clone();
+                pushed.undefs = def.undefs.clone();
                 insns.remove(def_at);
             }
             let before_call = position(&insns, call);
@@ -648,7 +668,7 @@ impl CallFrameOpt {
         &self,
         body: &LirBody,
         insns: &[Arc<Insn>],
-        context: &CallContext,
+        setup: &Arc<Insn>,
         value: u32,
     ) -> Option<usize> {
         // Make sure this is the only use of the value.
@@ -663,7 +683,7 @@ impl CallFrameOpt {
         if reads != 1 {
             return None;
         }
-        let setup_at = insns.iter().position(|one| Arc::ptr_eq(one, &context.setup))?;
+        let setup_at = insns.iter().position(|one| Arc::ptr_eq(one, setup))?;
         let def_at = insns.iter().position(|one| {
             one.what.as_ref().is_some_and(|what| matches!(what.dests.as_slice(), [Loc::Held(h)] if h.value == value))
         })?;
@@ -751,7 +771,7 @@ mod tests {
     }
 
     fn held(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 4 })
+        Loc::Held(Held { value, width: 4, offset: 0 })
     }
 
     fn body(insns: Vec<Arc<Insn>>) -> LirBody {
@@ -777,6 +797,45 @@ mod tests {
             after.blocks[0].insns[1..3].iter().map(|one| one.what.as_ref().unwrap().sources.clone()).collect();
         assert_eq!(pushes, [vec![imm(4)], vec![held(1)]]);
         assert_eq!(imm_of(&after.blocks[0].insns[0], 2), Some(8));
+    }
+
+    /// `printf("%d", undef)` at -O1: the store read its value undefined, the
+    /// push built from it read it as a real use of a value nothing defines,
+    /// and the allocator panicked "a unique value" (bits.c).
+    #[test]
+    fn a_push_made_from_an_undef_read_reads_it_undefined() {
+        let mut undef_store = (*store(0, held(1), vec![])).clone();
+        undef_store.undefs = vec![1];
+        // Two stores: one push is not worth the adjustments.
+        let after =
+            pass().run(&body(vec![setup(8), store(4, imm(4), vec![]), Arc::new(undef_store), call(), destroy(8)]));
+        let push = &after.blocks[0].insns[2];
+        assert_eq!(name_of(push), Some("push"));
+        assert_eq!((push.uses.clone(), push.undefs.clone()), (vec![], vec![1]), "{push:?}");
+    }
+
+    /// `printf(0, g)` at m32 -O2 kept `mov eax, [g]; push eax`: the fold
+    /// looked the setup up by an `Arc` it had already replaced, so the load
+    /// was never folded (the pin emits `push [g]`). The push also keeps the
+    /// load's address operands, undef flags included.
+    #[test]
+    fn a_once_read_load_is_folded_into_its_push_keeping_its_operand_flags() {
+        let cell = Mem { through: RegId::DI, offset: 0, ..Mem::new(None, 4) };
+        let mut load =
+            (*insn(0, Operation::Move, "mov", vec![held(1)], vec![Loc::Mem(cell)], vec![1], vec![8])).clone();
+        load.undefs = vec![7];
+        let after = pass().run(&body(vec![
+            Arc::new(load),
+            setup(8),
+            store(4, imm(4), vec![]),
+            store(0, held(1), vec![1]),
+            call(),
+            destroy(8),
+        ]));
+        assert_eq!(names(&after), ["call_frame_setup", "push", "push", "call", "call_frame_destroy"]);
+        let push = &after.blocks[0].insns[2];
+        assert!(matches!(push.what.as_ref().unwrap().sources.as_slice(), [Loc::Mem(_)]), "{push:?}");
+        assert_eq!((push.uses.clone(), push.undefs.clone()), (vec![8], vec![7]), "{push:?}");
     }
 
     /// A gap in the slots (slot 1 stored, slot 0 not) is left as stores.

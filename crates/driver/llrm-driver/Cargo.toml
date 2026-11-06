@@ -10,6 +10,7 @@ llrm-codegen = { workspace = true }
 llrm-lir = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-object = { workspace = true }
+llrm-debug = { workspace = true }
 llrm-target = { workspace = true }
 llrm-x86 = { workspace = true }
 llrm-x86-m16 = { workspace = true }

@@ -14,6 +14,7 @@ void print_numeral(char *text, unsigned length, enum Terminator end);
 typedef struct UsingOps {
     void (*integer)(long value);
     void (*real)(double value, int is_double);
+    void (*currency)(long long value); /* ten-thousandths */
     void (*string)(SD *item);
     void (*end)(int newline);
 } UsingOps;

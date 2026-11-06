@@ -9,14 +9,32 @@
 #include "bigint.h"
 #include "i8out.h"
 
-enum { DIGITS = 16 };
+/* QB 4.5's and VBDOS's math pack gives sixteen digits and rounds up from a fraction of 2^64 - 922 * 10^16 / 2^64; PDS
+   7.1's gives fifteen and rounds half up exactly (a probe of 64 doubles under PDS 7.1 BC, all fitted). */
+enum { QB_DIGITS = 16, PDS_DIGITS = 15 };
 
-/* 2^64 - 922 * 10^16: the fraction, in units of 2^-64, from which the last
-   digit rounds up. */
-#define ROUND_UP_FROM 9226744073709551616ULL
+/* In units of 2^-64: the fraction from which the last digit rounds up. */
+#define QB_ROUND_UP_FROM 9226744073709551616ULL
+#define PDS_ROUND_UP_FROM 9223372036854775808ULL
 
-#define TEN_15 1000000000000000ULL
-#define TEN_16 10000000000000000ULL
+static unsigned digits_wanted = QB_DIGITS;
+static unsigned long long round_edge = QB_ROUND_UP_FROM;
+/* 10^(DIGITS-1) and 10^DIGITS */
+static unsigned long long ten_low = 1000000000000000ULL;
+static unsigned long long ten_high = 10000000000000000ULL;
+
+void i8_select_pack(int pds)
+{
+    digits_wanted = pds ? PDS_DIGITS : QB_DIGITS;
+    round_edge = pds ? PDS_ROUND_UP_FROM : QB_ROUND_UP_FROM;
+    ten_low = pds ? 100000000000000ULL : 1000000000000000ULL;
+    ten_high = pds ? 1000000000000000ULL : 10000000000000000ULL;
+}
+
+unsigned i8_digits(void)
+{
+    return digits_wanted;
+}
 
 /* Working numbers: kept off the stack, which is small, and used by one
    conversion at a time. */
@@ -82,7 +100,7 @@ static int quick_digits(int k, unsigned long long *digits, int *up)
     enum { MOST = 27 };
 
     long double ten_power, product, integral, threshold, difference;
-    int s = DIGITS - k, at;
+    int s = (int)digits_wanted - k, at;
 
     if (s < 0 || s > MOST)
         return 0;
@@ -92,7 +110,7 @@ static int quick_digits(int k, unsigned long long *digits, int *up)
     product = magnitude * ten_power;
     *digits = (unsigned long long)product;
     integral = (long double)(long long)*digits;
-    threshold = (long double)ROUND_UP_FROM / 18446744073709551616.0L;
+    threshold = (long double)round_edge / 18446744073709551616.0L;
     difference = product - integral - threshold;
     if (difference < 0.001L && difference > -0.001L)
         return 0;
@@ -112,7 +130,7 @@ static int quick_digits(int k, unsigned long long *digits, int *up)
    corrects k. */
 static unsigned long long digits_for(const Parts *parts, int k, int *up)
 {
-    int s = DIGITS - k;
+    int s = (int)digits_wanted - k;
     unsigned long long quick;
 
     *up = 0;
@@ -133,7 +151,7 @@ static unsigned long long digits_for(const Parts *parts, int k, int *up)
             big_keep_low(&digits_rest, lost);
             big_shr(&digits_number, lost);
             big_shl(&digits_rest, 64);
-            big_set(&digits_edge, ROUND_UP_FROM);
+            big_set(&digits_edge, round_edge);
             big_shl(&digits_edge, lost);
         }
     } else {
@@ -152,7 +170,7 @@ static unsigned long long digits_for(const Parts *parts, int k, int *up)
         digits_rest = digits_number;
         digits_number = digits_whole;
         big_shl(&digits_rest, 64);
-        big_set(&digits_edge, ROUND_UP_FROM);
+        big_set(&digits_edge, round_edge);
         big_mul_pow10(&digits_edge, cut);
     }
     *up = big_cmp(&digits_rest, &digits_edge) >= 0;
@@ -183,7 +201,7 @@ void i8_output(double value, Decimal *out)
     unsigned long long bits, q;
     Parts parts;
     int k, at, up;
-    unsigned count = DIGITS;
+    unsigned count;
 
     copy_bytes((char *)&bits, (const char *)&value, 8);
 #if QUICK_EXTENDED
@@ -203,19 +221,20 @@ void i8_output(double value, Decimal *out)
     k = guess_exponent(&parts);
     for (;;) {
         q = digits_for(&parts, k, &up);
-        if (q < TEN_15)
+        if (q < ten_low)
             k--;
-        else if (q >= TEN_16)
+        else if (q >= ten_high)
             k++;
         else
             break;
     }
     q += up;
-    if (q == TEN_16) {
-        q = TEN_15;
+    if (q == ten_high) {
+        q = ten_low;
         k++;
     }
-    for (at = DIGITS; at--; q /= 10)
+    count = digits_wanted;
+    for (at = (int)digits_wanted; at--; q /= 10)
         out->text[at] = '0' + (int)(q % 10);
     while (count > 1 && out->text[count - 1] == '0')
         count--;

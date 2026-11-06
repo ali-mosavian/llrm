@@ -10,9 +10,9 @@ use crate::hash::{HashMap, HashSet};
 use crate::intrinsics;
 use crate::lexer::{Name, ParseError, Token, lex};
 use crate::module::{
-    Block, BlockId, DebugRecord, DebugWhat, Function, GlobalKind, GlobalValue, GlobalVariable, InstId, Instruction,
-    LINKAGE, Linkage, MetadataId, MetadataNode, MetadataOperand, Module, Operand, Special, UnnamedAddr, ValueData,
-    ValueDef, ValueId,
+    Alias, Block, BlockId, DebugRecord, DebugWhat, Function, GlobalKind, GlobalValue, GlobalVariable, InstId,
+    Instruction, LINKAGE, Linkage, MetadataId, MetadataNode, MetadataOperand, Module, Operand, Special, UnnamedAddr,
+    VISIBILITY, ValueData, ValueDef, ValueId, Visibility,
 };
 use crate::opcode::{
     AtomicInfo, AtomicKind, AtomicOrdering, Attribute, BINARY, BinaryOp, CAST, CallInfo, CastOp, Clause,
@@ -31,14 +31,20 @@ pub fn module(text: &str) -> Parsed<Module> {
 }
 
 /// Constructs llrm has no producer for, named so the refusal says why.
-const OUTSIDE_SUBSET: [&str; 8] =
-    ["fp128", "ppc_fp128", "half", "bfloat", "blockaddress", "indirectbr", "dso_local", "triple"];
+const OUTSIDE_SUBSET: [&str; 7] = ["ppc_fp128", "half", "bfloat", "blockaddress", "indirectbr", "dso_local", "triple"];
 
 struct Parser {
     tokens: Vec<(Token, usize)>,
     at: usize,
     module: Module,
     globals: HashMap<Name, GlobalId>,
+    /// The names the pre-scan found defined as aliases: no instruction may use
+    /// one.
+    /// Each alias the pre-scan found, with what an operand naming it is: its
+    /// aliasee, or none where the alias may be interposed.
+    alias_names: HashMap<Name, Option<Name>>,
+    /// The comdats named by a global or function, which must be declared.
+    comdat_uses: Vec<(String, usize)>,
     /// Global values referred to, with the pointer type each use gave them.
     global_uses: Vec<(GlobalId, TypeId, usize)>,
     defined_globals: HashSet<GlobalId>,
@@ -68,6 +74,8 @@ impl Parser {
             at: 0,
             module: Module::default(),
             globals: HashMap::default(),
+            alias_names: HashMap::default(),
+            comdat_uses: Vec::new(),
             global_uses: Vec::new(),
             defined_globals: HashSet::default(),
             groups: HashMap::default(),
@@ -254,7 +262,13 @@ impl Parser {
                 Token::Global(name) => {
                     let defines = awaiting_function
                         || self.tokens.get(at + 1).is_some_and(|(next, _)| *next == Token::Punct('='));
-                    if defines {
+                    if let Some(operand) = (defines && !awaiting_function).then(|| self.alias_operand(at + 2)).flatten()
+                    {
+                        if self.alias_names.insert(name.clone(), operand).is_some() {
+                            let line = self.tokens[at].1;
+                            return Err(ParseError { line, message: format!("@{} is defined twice", display(name)) });
+                        }
+                    } else if defines {
                         if self.globals.contains_key(name) {
                             let line = self.tokens[at].1;
                             return Err(ParseError { line, message: format!("@{} is defined twice", display(name)) });
@@ -271,6 +285,7 @@ impl Parser {
                                     }
                                     .into(),
                                     linkage: Linkage::External,
+                                    visibility: Visibility::Default,
                                     unnamed_addr: UnnamedAddr::None,
                                     address_space: 0,
                                     kind: GlobalKind::Variable(GlobalVariable {
@@ -318,16 +333,68 @@ impl Parser {
                     self.string()?;
                 }
                 Token::Local(Name::Named(name)) => self.named_type(name)?,
+                Token::Global(name) if self.alias_names.contains_key(&name) => self.alias(name)?,
                 Token::Global(name) => self.global_variable(name)?,
                 Token::Word(word) if word == "declare" || word == "define" => self.function(word == "define")?,
                 Token::MetadataName(name) => self.named_metadata(name)?,
                 Token::MetadataId(number) => self.metadata_definition(number)?,
+                Token::Comdat(name) => self.comdat_definition(name)?,
                 _ => return self.fail(format!("unexpected {} at the top level", self.describe())),
             }
         }
     }
 
+    /// `$name = comdat KIND` (`LLParser::parseComdat`).
+    fn comdat_definition(
+        &mut self,
+        name: String,
+    ) -> Parsed<()> {
+        self.next();
+        self.expect_punct('=')?;
+        if !self.eat_word("comdat") {
+            return self.fail("expected comdat keyword");
+        }
+        let kind = self.word()?;
+        if !["any", "exactmatch", "largest", "nodeduplicate", "samesize"].contains(&kind.as_str()) {
+            return self.fail(format!("unknown selection kind `{kind}`"));
+        }
+        if self.module.comdats.insert(name.clone(), kind).is_some() {
+            return self.fail(format!("redefinition of comdat '${name}'"));
+        }
+        Ok(())
+    }
+
+    /// `comdat` or `comdat($name)` after `own`'s declaration: the comdat of
+    /// the same name, or the one named (`LLParser::parseOptionalComdat`).
+    fn comdat_of(
+        &mut self,
+        own: Option<String>,
+    ) -> Parsed<()> {
+        let line = self.line();
+        let name = if self.eat_punct('(') {
+            let Token::Comdat(name) = self.peek().clone() else {
+                return self.fail("expected a comdat name after `comdat(`");
+            };
+            self.next();
+            self.expect_punct(')')?;
+            name
+        } else {
+            let Some(own) = own.clone() else { return self.fail("a comdat marker needs a named global") };
+            own
+        };
+        self.comdat_uses.push((name.clone(), line));
+        if let Some(own) = own {
+            self.module.comdat_of.insert(own, name);
+        }
+        Ok(())
+    }
+
     fn finish(mut self) -> Parsed<Module> {
+        for (name, line) in std::mem::take(&mut self.comdat_uses) {
+            if !self.module.comdats.contains_key(&name) {
+                return Err(ParseError { line, message: format!("use of undefined comdat '${name}'") });
+            }
+        }
         for (name, id) in &self.globals {
             if !self.defined_globals.contains(id) {
                 return Err(ParseError { line: 0, message: format!("@{} is used but never defined", display(name)) });
@@ -390,6 +457,10 @@ impl Parser {
                     map(&mut record.variable);
                     record.expression.iter_mut().for_each(map);
                     record.location.iter_mut().for_each(map);
+                    if let DebugWhat::Assign { id, address_expression, .. } = &mut record.what {
+                        map(id);
+                        map(address_expression);
+                    }
                 }
                 for instruction in &mut function.instructions {
                     instruction.metadata.iter_mut().for_each(|(_, id)| map(id));
@@ -434,6 +505,16 @@ impl Parser {
         Linkage::External
     }
 
+    fn visibility(&mut self) -> Visibility {
+        if let Token::Word(word) = self.peek()
+            && let Some(visibility) = spelled(&VISIBILITY, word)
+        {
+            self.next();
+            return visibility;
+        }
+        Visibility::Default
+    }
+
     fn unnamed_addr(&mut self) -> UnnamedAddr {
         if self.eat_word("unnamed_addr") {
             UnnamedAddr::Global
@@ -475,6 +556,62 @@ impl Parser {
         Ok(space)
     }
 
+    /// For the definition whose `=` stands before `at`: none when it is no
+    /// alias (`alias` comes before any `global` or `constant`), else what an
+    /// operand naming it is, the first global after `alias`, none for a weak
+    /// alias, which a linker may replace.
+    fn alias_operand(
+        &self,
+        at: usize,
+    ) -> Option<Option<Name>> {
+        let mut interposable = false;
+        let mut seen = false;
+        for (token, _) in &self.tokens[at..] {
+            match token {
+                Token::Word(word) if word == "alias" => seen = true,
+                Token::Word(word) if !seen && (word == "global" || word == "constant") => return None,
+                Token::Word(word) if word == "define" || word == "declare" => return None,
+                Token::Word(word) if !seen => {
+                    interposable |= spelled(&LINKAGE, word).is_some_and(|linkage| linkage.is_interposable());
+                }
+                Token::Global(target) if seen => return Some((!interposable).then(|| target.clone())),
+                Token::Eof => return None,
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// `@a = linkage visibility alias T, ptr @target`. Only a plain global is
+    /// an aliasee (LLVM allows any constant): `Alias` says why.
+    fn alias(
+        &mut self,
+        name: Name,
+    ) -> Parsed<()> {
+        self.next();
+        self.expect_punct('=')?;
+        let Name::Named(text) = name else { return self.fail("an alias has a name") };
+        let linkage = self.linkage();
+        let visibility = self.visibility();
+        let unnamed_addr = self.unnamed_addr();
+        self.expect_word("alias")?;
+        let ty = self.ty()?;
+        self.expect_punct(',')?;
+        let pointer = self.ty()?;
+        let Type::Pointer(address_space) = *self.module.context.types.get(pointer) else {
+            return self.fail("an aliasee is a pointer");
+        };
+        let Token::Global(target) = self.next() else {
+            self.at -= 1;
+            return self.fail(format!("an aliasee is a global, found {}", self.describe()));
+        };
+        let Some(&aliasee) = self.globals.get(&target) else {
+            return self.fail(format!("@{} is never defined", display(&target)));
+        };
+        self.module.aliases.push(Alias { name: text, linkage, visibility, unnamed_addr, address_space, ty, aliasee });
+        Ok(())
+    }
+
     fn global_variable(
         &mut self,
         name: Name,
@@ -483,6 +620,7 @@ impl Parser {
         self.expect_punct('=')?;
         let id = self.globals[&name];
         let linkage = self.linkage();
+        let visibility = self.visibility();
         let unnamed_addr = self.unnamed_addr();
         let address_space = self.address_space()?;
         let externally_initialized = self.eat_word("externally_initialized");
@@ -514,6 +652,9 @@ impl Parser {
                 if let Some(name) = self.module.globals[id.0 as usize].name.owned() {
                     self.module.sections.insert(name, section);
                 }
+            } else if self.eat_word("comdat") {
+                let own = self.module.globals[id.0 as usize].name.owned();
+                self.comdat_of(own)?;
             } else {
                 return self.fail(format!("unexpected {} after a global", self.describe()));
             }
@@ -521,6 +662,7 @@ impl Parser {
         self.module.globals[id.0 as usize] = GlobalValue {
             name: self.module.globals[id.0 as usize].name.clone(),
             linkage,
+            visibility,
             unnamed_addr,
             address_space,
             kind: GlobalKind::Variable(GlobalVariable { externally_initialized, ty, constant, initializer, align }),
@@ -537,6 +679,7 @@ impl Parser {
             | Token::FloatBits { .. }
             | Token::HexFloat(_)
             | Token::Float80(_)
+            | Token::Float128(_)
             | Token::Bytes(_)
             | Token::Global(_) => !matches!(self.peek_at(1), Token::Punct('=')),
             Token::Punct('[' | '{' | '<') => true,
@@ -565,6 +708,7 @@ impl Parser {
             early.push((kind, self.metadata_id(number)));
         }
         let linkage = self.linkage();
+        let visibility = self.visibility();
         let calling_convention = self.calling_convention()?;
         let return_attrs = self.attributes(false)?;
         let returns = self.ty()?;
@@ -626,6 +770,10 @@ impl Parser {
                 self.module.sections.insert(name, section);
             }
         }
+        if self.eat_word("comdat") {
+            let own = self.module.globals[id.0 as usize].name.owned();
+            self.comdat_of(own)?;
+        }
         if self.eat_word("personality") {
             let ty = self.ty()?;
             local.function.personality = Some(self.constant(ty)?);
@@ -649,6 +797,7 @@ impl Parser {
         self.module.globals[id.0 as usize] = GlobalValue {
             name: self.module.globals[id.0 as usize].name.clone(),
             linkage,
+            visibility,
             unnamed_addr,
             address_space,
             kind: GlobalKind::Function(Box::new(local.function)),
@@ -818,6 +967,7 @@ impl Parser {
                 "float" => Type::Float(FloatKind::Float),
                 "double" => Type::Float(FloatKind::Double),
                 "x86_fp80" => Type::Float(FloatKind::X86Fp80),
+                "fp128" => Type::Float(FloatKind::F128),
                 "ptr" => Type::Pointer(self.address_space()?),
                 _ => match word.strip_prefix('i').and_then(|bits| bits.parse::<u32>().ok()) {
                     Some(bits) if (1..=128).contains(&bits) => Type::Int(bits),
@@ -909,6 +1059,20 @@ impl Parser {
         ty: TypeId,
         line: usize,
     ) -> Parsed<ConstantId> {
+        // An alias is its aliasee's address: an operand naming one names that.
+        let mut name = name.clone();
+        let mut hops = 0;
+        while let Some(entry) = self.alias_names.get(&name) {
+            let Some(target) = entry.clone() else {
+                return self.fail_on(line, format!("@{} is an alias a linker may replace", display(&name)));
+            };
+            name = target;
+            hops += 1;
+            if hops > 64 {
+                return self.fail_on(line, format!("@{} is an alias of itself", display(&name)));
+            }
+        }
+        let name = &name;
         let Some(&id) = self.globals.get(name) else {
             return self.fail_on(line, format!("@{} is never defined", display(name)));
         };
@@ -946,19 +1110,27 @@ impl Parser {
                 }
                 ConstantKind::Int(u128::from(word == "true"))
             }
-            Token::Float(value, narrow) => match shape {
+            Token::Float(value, narrow, wide, quad) => match shape {
                 Type::Float(FloatKind::Float) => ConstantKind::Float(u64::from(narrow.to_bits())),
+                Type::Float(FloatKind::F128) => ConstantKind::Float128(quad),
+                Type::Float(FloatKind::X86Fp80) => {
+                    crate::fp80::kind(&crate::apfloat::ApFloat::from_bits(crate::apfloat::X87_DOUBLE_EXTENDED, wide))
+                }
                 _ => self.float(&shape, value, line)?,
             },
             Token::FloatBits { bits, digits } => match shape {
                 Type::Float(FloatKind::Float) if digits == 8 => ConstantKind::Float(bits as u64),
                 Type::Float(FloatKind::Double) if digits == 16 => ConstantKind::Float(bits as u64),
-                Type::Float(FloatKind::X86Fp80) if digits == 20 => ConstantKind::Float(x86_fp80_to_f64(bits).to_bits()),
+                Type::Float(FloatKind::X86Fp80) if digits == 20 => {
+                    crate::fp80::kind(&crate::apfloat::ApFloat::from_bits(crate::apfloat::X87_DOUBLE_EXTENDED, bits))
+                }
+                Type::Float(FloatKind::F128) if digits == 32 => ConstantKind::Float128(bits),
                 Type::Float(kind) => {
                     let (name, width) = match kind {
                         FloatKind::Float => ("float", 8),
                         FloatKind::Double => ("double", 16),
                         FloatKind::X86Fp80 => ("x86_fp80", 20),
+                        FloatKind::F128 => ("fp128", 32),
                     };
                     return self.fail_on(line, format!("f0x{bits:0digits$X} is not a {name}'s {width} hex digits"));
                 }
@@ -969,6 +1141,10 @@ impl Parser {
                     crate::fp80::kind(&crate::apfloat::ApFloat::from_bits(crate::apfloat::X87_DOUBLE_EXTENDED, bits))
                 }
                 _ => return self.fail_on(line, "`0xK` is an x86_fp80"),
+            },
+            Token::Float128(bits) => match shape {
+                Type::Float(FloatKind::F128) => ConstantKind::Float128(bits),
+                _ => return self.fail_on(line, "`0xL` is an fp128"),
             },
             Token::HexFloat(bits) => self.float(&shape, f64::from_bits(bits), line)?,
             Token::Word(word) if word == "null" => {
@@ -1100,6 +1276,18 @@ impl Parser {
         line: usize,
     ) -> Parsed<ConstantKind> {
         match shape {
+            // `+inf`, `-inf` and the default quiet NaN, widened; a NaN with a
+            // payload would land in the wrong bits.
+            Type::Float(FloatKind::F128) => {
+                let canonical = value.is_nan() && value.to_bits() & !(1 << 63) == 0x7FF8_0000_0000_0000;
+                if value.is_nan() && !canonical || value.is_finite() {
+                    return self.fail_on(line, "an fp128 given as a 0x double literal");
+                }
+                let mut wide =
+                    crate::apfloat::ApFloat::from_bits(crate::apfloat::IEEE_DOUBLE, u128::from(value.to_bits()));
+                wide.convert(crate::apfloat::IEEE_QUAD, crate::fpclass::RoundingMode::NearestTiesToEven);
+                Ok(ConstantKind::Float128(wide.to_bits()))
+            }
             Type::Float(FloatKind::Double | FloatKind::X86Fp80) => Ok(ConstantKind::Float(value.to_bits())),
             Type::Float(FloatKind::Float) => {
                 let narrow = value as f32;
@@ -1233,6 +1421,25 @@ impl Parser {
 
     /// A debug record's expression or location: `!N` or a node written in
     /// place.
+    /// `operand`, unless it is `poison` or `undef`: what a record says of a
+    /// value that is gone.
+    fn live(
+        &self,
+        operand: Operand,
+    ) -> Option<Operand> {
+        match operand {
+            Operand::Constant(id)
+                if matches!(
+                    self.module.context.get(id).kind,
+                    ConstantKind::Poison | ConstantKind::Undef
+                ) =>
+            {
+                None
+            }
+            other => Some(other),
+        }
+    }
+
     fn record_node(&mut self) -> Parsed<MetadataId> {
         match self.metadata_operand()? {
             MetadataOperand::Node(id) => Ok(id),
@@ -1636,6 +1843,21 @@ impl Parser {
         let Token::Word(word) = self.next() else { unreachable!("a record") };
         self.expect_punct('(')?;
         let what = match word.as_str() {
+            "#dbg_value" if matches!(self.peek(), Token::MetadataName(name) if name == "DIArgList") => {
+                // clang's `!DIArgList(i32 %a, i32 %b)`: the values an
+                // expression's `DW_OP_LLVM_arg n` names.
+                self.next();
+                self.expect_punct('(')?;
+                let mut values = Vec::new();
+                while !self.eat_punct(')') {
+                    if !values.is_empty() {
+                        self.expect_punct(',')?;
+                    }
+                    values.push(self.typed_value(local)?.1);
+                }
+                self.expect_punct(',')?;
+                DebugWhat::Args(local.function.add_debug_args(values))
+            }
             "#dbg_declare" | "#dbg_value" | "#dbg_piece" => {
                 let (_, at) = self.typed_value(local)?;
                 self.expect_punct(',')?;
@@ -1645,6 +1867,14 @@ impl Parser {
                     // The piece's place in the variable follows its name.
                     _ => DebugWhat::Piece { value: at, offset: 0, bytes: 0 },
                 }
+            }
+            "#dbg_assign" => {
+                let (_, value) = self.typed_value(local)?;
+                let value = self.live(value);
+                self.expect_punct(',')?;
+                // The assignment's id, address and their expression follow
+                // the variable and the value's expression.
+                DebugWhat::Assign { value, address: None, id: MetadataId(0), address_expression: MetadataId(0) }
             }
             "#dbg_gonepiece" => DebugWhat::GonePiece { offset: 0, bytes: 0 },
             "#dbg_gone" => DebugWhat::Gone,
@@ -1666,10 +1896,29 @@ impl Parser {
             }
             other => other,
         };
+        let (mut expression, mut location) = (None, None);
+        let mut what = what;
+        if let DebugWhat::Assign { value, .. } = what {
+            // `, !DIExpression(), !id, ptr %a, !DIExpression(), !loc`
+            self.expect_punct(',')?;
+            expression = Some(self.record_node()?);
+            self.expect_punct(',')?;
+            let id = self.record_node()?;
+            self.expect_punct(',')?;
+            let (_, address) = self.typed_value(local)?;
+            let address = self.live(address);
+            self.expect_punct(',')?;
+            let address_expression = self.record_node()?;
+            self.expect_punct(',')?;
+            location = Some(self.record_node()?);
+            what = DebugWhat::Assign { value, address, id, address_expression };
+        }
         // clang's `, !DIExpression(), !loc` after a declare or value's
         // variable.
-        let (mut expression, mut location) = (None, None);
-        if matches!(what, DebugWhat::Declare(_) | DebugWhat::Value(_)) && self.eat_punct(',') {
+        if matches!(
+            what,
+            DebugWhat::Declare(_) | DebugWhat::Value(_) | DebugWhat::Args(_)
+        ) && self.eat_punct(',') {
             expression = Some(self.record_node()?);
             if self.eat_punct(',') {
                 location = Some(self.record_node()?);
@@ -1903,6 +2152,12 @@ impl Parser {
                     let ty = self.module.context.types.ptr(address_space);
                     (Opcode::Alloca { allocated, align, address_space }, ty, operands)
                 }
+                "va_arg" => {
+                    let (_, list) = self.typed_value(local)?;
+                    self.expect_punct(',')?;
+                    let ty = self.ty()?;
+                    (Opcode::VaArg, ty, vec![list])
+                }
                 "load" => {
                     let atomic = self.eat_word("atomic");
                     let volatile = self.eat_word("volatile");
@@ -2105,28 +2360,6 @@ pub fn display(name: &Name) -> String {
         Name::Named(text) => crate::print::quoted(text),
         Name::Numbered(number) => number.to_string(),
     }
-}
-
-/// The double nearest an x87 extended value (16 bits of sign and exponent, then
-/// the 64-bit significand with its integer bit explicit). The significand
-/// rounds to 53 bits once and the scaling is exact, so a result below the
-/// double normals is rounded twice.
-fn x86_fp80_to_f64(bits: u128) -> f64 {
-    let negative = bits >> 79 & 1 == 1;
-    let exponent = (bits >> 64 & 0x7FFF) as i32;
-    let significand = bits as u64;
-    let magnitude = match exponent {
-        0x7FFF if significand << 1 == 0 => f64::INFINITY,
-        0x7FFF => f64::NAN,
-        _ => {
-            // value = significand * 2^(exponent - 16383 - 63); a denormal has
-            // exponent 1's scale.
-            let scale = exponent.max(1) - 16383 - 63;
-            let (half, rest) = (scale / 2, scale - scale / 2);
-            significand as f64 * 2f64.powi(half) * 2f64.powi(rest)
-        }
-    };
-    if negative { -magnitude } else { magnitude }
 }
 
 /// LLVM's auto-upgrade, the other way: `llvm.lifetime.start` and `.end` lost

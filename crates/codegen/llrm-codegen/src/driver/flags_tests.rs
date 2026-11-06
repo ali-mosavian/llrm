@@ -421,3 +421,27 @@ fn test_the_removed_allocation_routes_flags_are_not_flags() {
         assert!(refused.contains("unknown option"), "{refused}");
     }
 }
+
+#[test]
+fn a_pass_flag_applies_to_given_options_and_unknown_ones_change_nothing() {
+    let mut options = Options::none();
+    options.unroll = false;
+    assert!(apply_pass_flag(&mut options, "-funroll-loops"));
+    assert!(options.unroll);
+    assert!(apply_pass_flag(&mut options, "-fno-unroll-loops"));
+    assert!(!options.unroll);
+    let before = format!("{options:?}");
+    assert!(!apply_pass_flag(&mut options, "-fno-such-pass"));
+    assert!(!apply_pass_flag(&mut options, "-O2"));
+    assert_eq!(format!("{options:?}"), before);
+}
+
+/// A pin `llc` runs its own CodeGenPrepare, so a shadow run leaves cgpaddr out
+/// to hand it the module before ours; the flag was an environment variable.
+#[test]
+fn the_llrm_cgpaddr_flag_leaves_the_pass_out() {
+    let mut options = Options::default();
+    assert!(options.cgpaddr);
+    assert!(apply_pass_flag(&mut options, "-fno-llrm-cgpaddr"));
+    assert!(!options.cgpaddr);
+}

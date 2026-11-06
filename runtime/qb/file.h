@@ -36,6 +36,8 @@ void B_MDIR(SD *name);
 void B_CDIR(SD *name);
 void B_RDIR(SD *name);
 void file_close(const int *channels, unsigned count);
+/* Every channel, and the buffers they held: CLEAR and RESET. */
+void file_close_all(void);
 void B_GET3(short channel, qb_data_ptr record, short length);
 void B_PUT3(short channel, qb_data_ptr record, short length);
 long B_FLOF(short channel);

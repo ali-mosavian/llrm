@@ -130,20 +130,247 @@ pub mod cond {
 }
 
 /// The custom lowerings, for a CPU with or without CMOV.
-pub struct X86Lowering {
+pub struct X86Lowering<'a> {
     pub cmov: bool,
     /// Scalar floats live in xmm registers (`isScalarFPTypeInSSEReg`).
     pub sse2: bool,
     /// `hasMinSize`: llrm's `-Os` as well as `-Oz`.
     pub min_size: bool,
+    /// The target adds three-address (`lea`) and the build is for speed: flat
+    /// 32-bit and 64-bit, not `-Os`. DEVIATE SD448
+    /// ([`combine_masked_xor_difference`]) is made there only.
+    pub three_address_adds: bool,
+    /// The pin chains an `i16` multiply by a constant: it promotes it to `i32`
+    /// ([L64277][promote]) and `combineMul` builds the `lea`/shift chain there.
+    /// Where `i16` is not promoted (m16, `is_desirable_to_promote_op`) the same
+    /// chain is built at `i16`, without the promotion's `66h`/`67h` prefixes.
+    /// Consequence of DEVIATE SD441, which holds the exit.
+    ///
+    /// [promote]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L64277
+    pub i16_mul_chains: bool,
+    /// `visitSIGN_EXTEND_INREG`'s `(sext_inreg (extload x))` is `(sextload x)`
+    /// (`movsx r, [m]`, not a load, `movsx`, `movsxd`). On for the x86 targets
+    /// (the 2026-11-03 A/B at m16, m32 and m64 has no larger cell from it).
+    pub sext_load: bool,
+    /// `X86TargetLowering::isZExtFree(i32, i64)`: `Subtarget.is64Bit()`.
+    pub zext_free: bool,
+    /// What prices a constant multiply that `combineMul` leaves an `imul`
+    /// (DEVIATE SD446); none keeps the pin's `imul`.
+    pub profile: Option<MulPricing<'a>>,
 }
 
-impl CombineHooks for X86Lowering {
+/// The sheet, the target and the block a constant multiply is priced against.
+#[derive(Clone, Copy)]
+pub struct MulPricing<'a> {
+    pub cpu: &'a crate::backend::cpu::Profile,
+    pub arch: &'a dyn llrm_target::Target,
+    /// The block's frequency over the entry's.
+    pub freq: f64,
+    /// `Tti::speed_milliclocks_per_byte`.
+    pub milliclocks_per_byte: i64,
+    /// `Tuning::multiply_by_clocks`: the fewest clocks, no byte term.
+    pub by_clocks: bool,
+    /// `Tuning::price_pin_multiplies`: the pin's decompositions are priced
+    /// too, and a tie keeps the `imul`.
+    pub price_pin: bool,
+}
+
+impl CombineHooks for X86Lowering<'_> {
+    /// `X86TargetLowering::mergeStoresAfterLegalization`: `!MemVT.isVector()`.
+    /// The only vector a store here holds is the opaque 16 bytes of an SSE
+    /// move (`I128`).
+    fn merge_stores_after_legalization(
+        &self,
+        mem: EVT,
+    ) -> bool {
+        mem != EVT::Simple(MVT::I128)
+    }
+
+    /// `foldBinOpIntoSelect`, `visitXOR`'s `(xor (and x, y), y)` and `SimplifySetCC`'s
+    /// GE/LE canonicalization: the pin runs them on x86. Judged on `bintree`, `jpeg_*`
+    /// and `particle` (m16 and C, `-Os`/`-O2`): fewer bytes or clocks, none worse. The
+    /// other default-off combines either changed nothing there or cost a byte
+    /// (`rebuild_brcond_condition`, `fold_mul_of_add_with_constant`) and stay off.
+    /// DEVIATE: the remaining pin combines stay off for x86. Exit 2026-12-01.
+    fn fold_bin_op_into_select(&self) -> bool {
+        true
+    }
+
+    /// `replaceStoreOfFPConstant`: a `double` constant is stored as an `i64`
+    /// (m64) or two `i32` (m32). The pin runs it on x86 (`isFPImmLegal` keeps
+    /// only +-0.0, +-1.0). Judged by all allocated bytes: m64 smaller in 9 of
+    /// 9 cells (the pool entry goes).
+    fn store_fp_constant_as_i64(&self) -> bool {
+        true
+    }
+
+    /// `visitORCommutative`'s `(or (and x, y), x)` is `x`: the pin runs it on
+    /// x86. No corpus cell reaches it (the mid-end absorbs first).
+    fn fold_or_absorption(&self) -> bool {
+        true
+    }
+
+    /// `reduceLoadWidth` through a `freeze` between the mask and the load: the
+    /// pin runs it on x86. No corpus cell reaches it.
+    fn reduce_load_width_through_freeze(&self) -> bool {
+        true
+    }
+
+    /// `visitBRCOND`'s `rebuildSetCC`: `!bad` on an `i1` global is `cmp byte [bad], 1; jne`,
+    /// not `mov al; not al; test al, 1; jne` (jpeg_fixed `-Os` m64, 2 sites, 8 B). The
+    /// m16 judging cost a byte, so only the 64-bit lowering asks.
+    /// DEVIATE: off at m16 and m32. Exit 2026-12-01.
+    fn rebuild_brcond_condition(&self) -> bool {
+        self.zext_free
+    }
+
+    /// `visitAND`'s `(and (extload i1), 1)` is a `zextload`, so the branch above
+    /// compares the loaded byte without `and al, 1`. DEVIATE: m64 only, with it.
+    fn fold_and_of_extload(&self) -> bool {
+        self.zext_free
+    }
+
+    fn fold_xor_of_and_with_mask(&self) -> bool {
+        true
+    }
+
+    /// `BuildSDIV`/`BuildUDIV` widen to a legal `i64` multiply for an `i32`
+    /// divisor too (`imul rax, rcx, 0xCCCCCCCD; shr rax, 35`), where ours kept
+    /// the `div` (an `i32` has no `MULHS` here). Where `i64` is not legal
+    /// (m16, m32) `can_do(Mul, i64)` refuses it.
+    fn widen_multiply_high_any_width(&self) -> bool {
+        true
+    }
+
+    /// `visitSRA`'s `(sra (trunc (srl x, c1)), c2)` is `(trunc (sra x, c1 + c2))`:
+    /// the widened divide's `shr 32; sar k` is one `sar 32 + k`.
+    fn fold_sra_of_trunc_of_shift(&self) -> bool {
+        true
+    }
+
+    /// `X86TargetLowering::shouldTransformSignedTruncationCheck`: a scalar
+    /// check whose type and kept width are both a size `movsx` takes (8, 16,
+    /// 32, 64). `(add x, 1<<(k-1)) u< 1<<k` then is `sext_inreg x, k == x`: no
+    /// 64-bit constant, one `movslq; cmp` for the add, the constant and the
+    /// compare.
+    fn should_transform_signed_truncation_check(
+        &self,
+        vt: EVT,
+        kept_bits: u32,
+    ) -> bool {
+        let movsx = |bits: u32| matches!(bits, 8 | 16 | 32 | 64);
+        vt.is_integer() && movsx(vt.size_in_bits()) && movsx(kept_bits)
+    }
+
+    fn canonicalize_ge_le(&self) -> bool {
+        true
+    }
+
+    /// Where `i16` is native (`i16_mul_chains`: m16) a dword's halves are the
+    /// registers it is returned and passed in.
+    fn split_dword_loads(&self) -> bool {
+        self.i16_mul_chains
+    }
+
+    fn pack_word_pairs(&self) -> bool {
+        true
+    }
+
+    fn fold_sext_in_reg_of_load(&self) -> bool {
+        self.sext_load
+    }
+
+    /// `X86TargetLowering::isTruncateFree` (any narrowing of integers) and
+    /// `isZExtFree` (i32 to i64 on x86-64).
+    fn free_narrowing(
+        &self,
+        wide: EVT,
+        narrow: EVT,
+    ) -> bool {
+        self.zext_free && wide == EVT::I64 && narrow == EVT::I32
+    }
+
+    /// `X86TargetLowering::isNarrowingProfitable`.
+    fn narrowing_profitable(
+        &self,
+        wide: EVT,
+        narrow: EVT,
+    ) -> bool {
+        !(wide == EVT::I32 && narrow == EVT::I16)
+    }
+
+    fn is_compare_with_flags(
+        &self,
+        user: ISD,
+    ) -> bool {
+        user == x86isd::CMP
+    }
+
+    /// DEVIATE G1 (x87 only: with SSE the conversion is in registers): the
+    /// `fist` to a scratch slot, the load of the slot and the store of it
+    /// become one `fist` to the store's address.
+    ///
+    /// Taken only when the slot is the pair's alone (the `fist` is read by
+    /// that load, the slot node by those two), the load's value is the store's
+    /// only input, all three are plain accesses of one width, and the
+    /// conversion does not widen (an unsigned `i32` goes through an `i64` slot
+    /// and is left). The new `fist` takes the store's chain, so it runs where
+    /// the store did and orders against every access as the store did.
+    /// O(1) per store.
+    fn store_of_converted_slot(
+        &self,
+        dag: &mut SelectionDAG,
+        store: SDValue,
+    ) -> Option<SDValue> {
+        if self.sse2 {
+            return None;
+        }
+        let (chain, value, address) = (dag.operand(store, 0), dag.operand(store, 1), dag.operand(store, 2));
+        let NodeData::Mem(stored) = dag.node(store).data else { return None };
+        let plain = |info: &MemInfo| !info.volatile && info.ordering.is_none() && info.ext.is_none();
+        if dag.opcode(value) != ISD::Load || !dag.has_one_use(value.node) || !plain(&stored) {
+            return None;
+        }
+        let NodeData::Mem(loaded) = dag.node(value).data else { return None };
+        if !plain(&loaded) || loaded.mem_vt != stored.mem_vt || dag.value_type(value) != stored.mem_vt {
+            return None;
+        }
+        let fist = dag.operand(value, 0);
+        if fist.res != 0 || !matches!(dag.opcode(fist), x86isd::FIST | x86isd::FP_TO_INT_IN_MEM) {
+            return None;
+        }
+        let NodeData::Mem(converted) = dag.node(fist).data else { return None };
+        let slot = dag.operand(fist, 2);
+        if !plain(&converted)
+            || converted.mem_vt != loaded.mem_vt
+            || dag.opcode(slot) != ISD::FrameIndex
+            || dag.operand(value, 1) != slot
+            || !dag.has_one_use(fist.node)
+            || dag.use_count_up_to(slot.node, 3) != 2
+        {
+            return None;
+        }
+        let info = MemInfo { align: stored.align, base: stored.base, space: stored.space, ..converted };
+        let opcode = dag.opcode(fist);
+        let converted_value = dag.operand(fist, 1);
+        // Chained where the store was, so every access that came before it in
+        // the program still comes before the `fist`, whatever it aliases.
+        Some(dag.intern(
+            opcode,
+            &[EVT::OTHER],
+            &[chain, converted_value, address],
+            SDNodeFlags::default(),
+            NodeData::Mem(info),
+        ))
+    }
+
     fn has_target_combine(
         &self,
         op: ISD,
     ) -> bool {
         op == ISD::Mul
+            || op == ISD::SetCC
             || op == ISD::Add
             || op == ISD::Sub
             || op == x86isd::ADD
@@ -163,9 +390,10 @@ impl CombineHooks for X86Lowering {
         level: CombineLevel,
     ) -> Option<SDValue> {
         match dag.opcode(node) {
-            ISD::Mul => combine_mul(dag, node, level, self.min_size),
+            ISD::Mul => combine_mul(dag, node, level, self.min_size, self.i16_mul_chains, self.profile),
+            ISD::SetCC => combine_integer_setcc(dag, node, level),
             ISD::Add => combine_add(dag, node),
-            ISD::Sub => combine_sub(dag, node),
+            ISD::Sub => combine_sub(dag, node, self.three_address_adds),
             x86isd::ADD | x86isd::SUB => combine_x86_add_sub(dag, node),
             x86isd::CMOV => combine_cmov(dag, node),
             x86isd::SETCC => combine_setcc(dag, node),
@@ -181,8 +409,9 @@ impl CombineHooks for X86Lowering {
         dag: &mut SelectionDAG,
         op: SDValue,
         demanded: u128,
+        _level: CombineLevel,
     ) -> Option<Option<SDValue>> {
-        x86_shrink_demanded_constant(dag, op, demanded)
+        x86_shrink_demanded_constant(dag, op, demanded, self.i16_mul_chains)
     }
 
     fn promote_type(
@@ -203,6 +432,7 @@ fn x86_shrink_demanded_constant(
     dag: &mut SelectionDAG,
     op: SDValue,
     demanded: u128,
+    keep_imm8: bool,
 ) -> Option<Option<SDValue>> {
     if dag.opcode(op) != ISD::And {
         return None;
@@ -220,17 +450,44 @@ fn x86_shrink_demanded_constant(
         return Some(None);
     }
     if zero_extend & !(mask | !demanded) != 0 {
-        return None;
+        // DEVIATE SD212c, m16 only (`keep_imm8` is `i16_mul_chains`, the
+        // DEVIATE M1 / SD441 switch): the generic shrink would turn an imm8
+        // mask (`-64`) into an imm32 (`0x0FFFFFC0`), 3 B longer for the same
+        // work. Keep it. Exit: with the M1 review, 2026-12-01; owner
+        // llrm-target-wasm.
+        return (keep_imm8 && mask & !demanded != 0 && is_imm8_mask(mask, vt.size_in_bits())).then_some(None);
     }
     let new_mask = dag.get_constant(zero_extend, vt);
     let x = dag.operand(op, 0);
     Some(Some(dag.get_node(ISD::And, vt, &[x, new_mask])))
 }
 
+/// A mask of 16 bits or more that an `and` encodes as a sign-extended imm8.
+fn is_imm8_mask(mask: u128, bits: u32) -> bool {
+    if bits < 16 {
+        return false;
+    }
+    let sign = 1u128 << (bits - 1);
+    let signed = if mask & sign != 0 { (mask as i128) - (1i128 << bits) } else { mask as i128 };
+    (-128..=127).contains(&signed)
+}
+
+/// Whether this target promotes `i16` (and `i8` multiply) operations to `i32`
+/// (SD441: not at m16). `is_desirable_to_promote_op` and the `i16` multiply
+/// chain both ask this, so the chain is built exactly where nothing promotes.
+pub fn promotes_i16(tli: &TargetLowering) -> bool {
+    !tli.types.has_far_pointer()
+}
+
 /// `isTypeDesirableForOp` (undesirable) and `IsDesirableToPromoteOp`: an `i16`
 /// operation, or an `i8` multiply by a constant, is done in `i32` unless an
-/// operand is a load the operation could fold. m32 only: the 16-bit target
-/// has no wider register to promote into.
+/// operand is a load the operation could fold.
+///
+/// DEVIATE SD441: not at m16. The pin promotes there too; in real mode each
+/// promoted op carries a `66h` prefix (a `lea` of it `67h` as well), which
+/// grows every `i16` op and breaks the m16 -Os rule. Exit: promotion priced
+/// against those prefix bytes and clocks. Until then `i16_mul_chains` builds
+/// the multiply's chain at `i16`.
 fn is_desirable_to_promote_op(
     dag: &SelectionDAG,
     tli: &TargetLowering,
@@ -238,7 +495,7 @@ fn is_desirable_to_promote_op(
 ) -> Option<EVT> {
     let vt = dag.value_type(op);
     let opcode = dag.opcode(op);
-    if tli.types.has_far_pointer() || !tli.types.is_type_legal(vt) {
+    if !promotes_i16(tli) || !tli.types.is_type_legal(vt) {
         return None;
     }
     let is8_mul_by_constant = vt == EVT::I8 && opcode == ISD::Mul && dag.constant(dag.operand(op, 1)).is_some();
@@ -301,7 +558,7 @@ fn is_desirable_to_promote_op(
     Some(EVT::I32)
 }
 
-impl Hooks for X86Lowering {
+impl Hooks for X86Lowering<'_> {
     fn lower_operation(
         &mut self,
         dag: &mut SelectionDAG,
@@ -317,7 +574,7 @@ impl Hooks for X86Lowering {
             ISD::GlobalAddress => lower_global_address(dag, node),
             ISD::VAStart => lower_vastart(dag, node),
             ISD::FpToSInt | ISD::FpToUInt => lower_fp_to_int(dag, node, self.sse2),
-            ISD::LRint => lower_lrint(dag, node),
+            ISD::LRint | ISD::LLRint => lower_lrint(dag, node),
             ISD::SIntToFp | ISD::UIntToFp => lower_int_to_fp(dag, node, self.sse2),
             ISD::ConstantPool => lower_constant_pool(dag, node),
             ISD::JumpTable => lower_jump_table(dag, node),
@@ -386,6 +643,17 @@ fn translate_cc(
                 return cond::NS;
             }
             CondCode::SetLt if bits == 0 => return cond::S,
+            // The pin gets this from `x <= C` -> `x < C + 1` ([L5358][pin]);
+            // x86's
+            // `canonicalize_ge_le` is off (DEVIATE in `dag_combiner`), so this
+            // is that rewrite's sign-test case. Exit: that hook on.
+            //
+            // [pin]:
+            // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L5358
+            CondCode::SetLe if all_ones => {
+                *rhs = dag.get_constant(0, vt);
+                return cond::S;
+            }
             CondCode::SetGe if bits == 0 => return cond::NS,
             CondCode::SetLt if bits == 1 => {
                 *rhs = dag.get_constant(0, vt);
@@ -860,6 +1128,14 @@ fn lower_brcond(
             return Some(branches);
         }
     }
+    // `ISD::isOverflowIntrOpRes`: a branch on the overflow of an add or a
+    // subtract reads the flags of the arithmetic, itself, its inverse
+    // (`xor ov, 1`, what the builder makes of a branch whose true successor
+    // follows), or a compare of it with 0 or 1.
+    if let Some((code, flags)) = overflow_branch(dag, cond) {
+        let code = cond_code(dag, code);
+        return Some(dag.get_node(x86isd::BRCOND, EVT::OTHER, &[chain, dest, code, flags]));
+    }
     let (code, flags) = if dag.opcode(cond) == ISD::SetCC && dag.value_type(dag.operand(cond, 0)).is_integer() {
         let (lhs, rhs) = (dag.operand(cond, 0), dag.operand(cond, 1));
         let cc = cond_of(dag, dag.operand(cond, 2));
@@ -886,6 +1162,87 @@ fn lower_brcond(
         (code, flags)
     };
     Some(dag.get_node(x86isd::BRCOND, EVT::OTHER, &[chain, dest, code, flags]))
+}
+
+/// `getX86XALUOOp` for the overflow result `ov` of an unsigned add or
+/// subtract: the condition that says it overflowed and the flags of the
+/// arithmetic.
+fn xalu_condition(
+    dag: &mut SelectionDAG,
+    ov: SDValue,
+) -> Option<(u128, SDValue)> {
+    if ov.res != 1 || !matches!(dag.opcode(ov), ISD::UAddO | ISD::USubO) {
+        return None;
+    }
+    let (lhs, rhs) = (dag.operand(ov, 0), dag.operand(ov, 1));
+    let vt = dag.value_type(lhs);
+    let (opcode, code) = match dag.opcode(ov) {
+        ISD::UAddO => (x86isd::ADD, if dag.constant(rhs) == Some(1) { cond::E } else { cond::B }),
+        _ => (x86isd::SUB, cond::B),
+    };
+    let value = dag.get_node_multi(opcode, &[vt, EVT::I32], &[lhs, rhs]);
+    Some((code, SDValue { node: value.node, res: 1 }))
+}
+
+/// A branch on `xor (X86ISD::SETCC cc, flags), 1` or of an overflow bit (under
+/// `and 1`, once the boolean is widened): the flags with the opposite condition. Type
+/// legalization has widened an overflow bit by the time the branch is lowered;
+/// the pin sees it as `setcc ov != 1` and takes the opposite there.
+fn inverted_setcc(
+    dag: &mut SelectionDAG,
+    cond: SDValue,
+) -> Option<(u128, SDValue)> {
+    let (mut value, mut invert, mut peeled) = (cond, false, false);
+    loop {
+        match dag.opcode(value) {
+            ISD::And if dag.constant(dag.operand(value, 1)) == Some(1) => value = dag.operand(value, 0),
+            ISD::Xor if dag.constant(dag.operand(value, 1)).is_some_and(|c| c & 1 == 1) => {
+                invert = !invert;
+                value = dag.operand(value, 0);
+            }
+            _ => break,
+        }
+        peeled = true;
+    }
+    if !peeled {
+        return None;
+    }
+    let (code, flags) = if dag.opcode(value) == x86isd::SETCC {
+        (dag.constant(dag.operand(value, 0))?, dag.operand(value, 1))
+    } else {
+        xalu_condition(dag, value)?
+    };
+    Some((if invert { code ^ 1 } else { code }, flags))
+}
+
+/// `LowerConditionalBranch`'s overflow cases: the condition is the overflow
+/// result, or `setcc ov ==|!= 0|1`, or its `xor` with 1 (the pin's
+/// `rebuildSetCC` makes that `setcc ov != 1`).
+fn overflow_branch(
+    dag: &mut SelectionDAG,
+    cond: SDValue,
+) -> Option<(u128, SDValue)> {
+    if let Some(found) = xalu_condition(dag, cond) {
+        return Some(found);
+    }
+    if let Some(found) = inverted_setcc(dag, cond) {
+        return Some(found);
+    }
+    let (ov, invert) = match dag.opcode(cond) {
+        ISD::Xor if dag.constant(dag.operand(cond, 1)) == Some(1) => (dag.operand(cond, 0), true),
+        ISD::SetCC if dag.value_type(dag.operand(cond, 0)).is_integer() => {
+            let rhs = dag.constant(dag.operand(cond, 1))?;
+            let cc = cond_of(dag, dag.operand(cond, 2));
+            if !matches!(cc, CondCode::SetEq | CondCode::SetNe) || rhs > 1 {
+                return None;
+            }
+            // `(CC == SETEQ) == isNullConstant(RHS)` takes the opposite.
+            (dag.operand(cond, 0), (cc == CondCode::SetEq) == (rhs == 0))
+        }
+        _ => return None,
+    };
+    let (code, flags) = xalu_condition(dag, ov)?;
+    Some((if invert { code ^ 1 } else { code }, flags))
 }
 
 /// `LowerBRCOND` of a float compare. `une` is two branches to the target
@@ -977,6 +1334,44 @@ fn check_bool_test(
     }
     let inner = dag.constant(dag.operand(test, 0))?;
     Some((dag.operand(test, 1), if opposite { inner ^ 1 } else { inner }))
+}
+
+/// `combineSetCC` ([L58770][pin]): `cmpeq(trunc(x), C)` is `cmpeq(x, C)` when
+/// the upper bits of `x` are zero, in the legal type `x` has: a `zeroext`
+/// `i16` argument is compared as the register it arrived in (`cmpl $5, %edi`,
+/// not `cmpw`, which takes a 66h prefix). Only the equality forms; the pin
+/// leaves `ult` and `ugt` at the narrow type.
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L58770-L58782
+fn combine_integer_setcc(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+    level: CombineLevel,
+) -> Option<SDValue> {
+    let NodeData::CondCode(cond) = dag.node(dag.operand(node, 2)).data else { return None };
+    let (lhs, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
+    if !matches!(cond, CondCode::SetEq | CondCode::SetNe)
+        || level == CombineLevel::BeforeLegalizeTypes
+        || dag.opcode(lhs) != ISD::Truncate
+        || dag.constant(rhs).is_none()
+    {
+        return None;
+    }
+    let source = dag.operand(lhs, 0);
+    let (source_vt, op_vt) = (dag.value_type(source), dag.value_type(lhs));
+    // A type the target holds in a register: not a pair (m16's dword).
+    let legal =
+        source_vt.size_in_bits() >= 32 && source_vt.size_in_bits() <= dag.config().pointer.size_in_bits().max(32);
+    if !legal {
+        return None;
+    }
+    let upper = super::fold::mask(source_vt.size_in_bits()) & !super::fold::mask(op_vt.size_in_bits());
+    if !super::known_bits::masked_value_is_zero(dag, source, upper) {
+        return None;
+    }
+    let constant = dag.get_zext_or_trunc(rhs, source_vt);
+    Some(dag.get_setcc(dag.value_type(node), source, constant, cond))
 }
 
 /// `combineX86SetCC`: a `setcc` of a boolean test reads the inner flags.
@@ -1200,11 +1595,48 @@ fn combine_uint_to_fp(
 /// `combineSub`: `combineAddOrSubToADCOrSBB` ([`super::x86_carry`]), then
 /// `combineSubSetcc`. (The `SUB(…, SBB)` and `~A - ~B` folds are not
 /// translated, SD219.)
+///
+/// DEVIATE SD448: then, where `lea_adds`, [`combine_masked_xor_difference`].
 fn combine_sub(
     dag: &mut SelectionDAG,
     node: SDValue,
+    lea_adds: bool,
 ) -> Option<SDValue> {
-    super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node).or_else(|| combine_sub_setcc(dag, node))
+    super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node)
+        .or_else(|| combine_sub_setcc(dag, node))
+        .or_else(|| lea_adds.then(|| combine_masked_xor_difference(dag, node)).flatten())
+}
+
+/// DEVIATE SD448 (owner x86-m32; recheck 2026-11-20 and at every pin bump,
+/// dropped where the pin has the fold): `sub C, (xor X, M)` is `add X, C - M`
+/// when `M` is a low-bit mask and `X` has no bits above it, so the `xor` is
+/// `M - X`. `__floatsisf`'s shift amount `26 - (n ^ 31)` is `n - 5`: one
+/// `lea` where the `sub` took `mov cl, 26; sub cl, bl`. The pin has no such
+/// fold, and its `convertToThreeAddressWithLEA` takes no 8-bit add on 32-bit
+/// targets (TA-10). 0 larger cells over 18 row-levels; m32 -O2 2 smaller,
+/// -O3 9 smaller (to -32 B); m64 and arm64 identical. Where the target has
+/// no three-address add (m16) the `add` needs a copy and is a byte longer,
+/// so it is not made there.
+fn combine_masked_xor_difference(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let (minuend, xor) = (dag.operand(node, 0), dag.operand(node, 1));
+    let c = dag.constant(minuend)?;
+    if dag.opcode(xor) != ISD::Xor {
+        return None;
+    }
+    let (x, m) = (dag.operand(xor, 0), dag.constant(dag.operand(xor, 1))?);
+    if m == 0 || m & m.wrapping_add(1) != 0 {
+        return None;
+    }
+    let mask = super::fold::mask(vt.size_in_bits());
+    if (m | super::known_bits::known_bits(dag, x).zero) & mask != mask {
+        return None;
+    }
+    let delta = dag.get_constant(c.wrapping_sub(m) & mask, vt);
+    Some(dag.get_node(ISD::Add, vt, &[x, delta]))
 }
 
 /// `combineSubSetcc` ([L60838][pin]): `sub C, zext(setcc)` is
@@ -1298,10 +1730,14 @@ fn combine_cmov(
     None
 }
 
-/// `getGlobalWrapperKind`: every symbol is addressed from `%rip` in 64-bit
-/// mode (small code model), the absolute `Wrapper` elsewhere.
-fn wrapper_kind(vt: EVT) -> ISD {
-    if vt == EVT::I64 { x86isd::WRAPPER_RIP } else { x86isd::WRAPPER }
+/// `getGlobalWrapperKind`: a symbol is addressed from `%rip` in 64-bit
+/// position-independent code (small code model), the absolute `Wrapper`
+/// elsewhere.
+pub(super) fn wrapper_kind(
+    dag: &SelectionDAG,
+    vt: EVT,
+) -> ISD {
+    if vt == EVT::I64 && !dag.config().absolute_symbols { x86isd::WRAPPER_RIP } else { x86isd::WRAPPER }
 }
 
 /// `LowerGlobalOrExternal` for a static, non-PIC global: `Wrapper
@@ -1321,7 +1757,7 @@ fn lower_global_address(
         SDNodeFlags::default(),
         NodeData::Global { symbol, offset: folded },
     );
-    let wrapped = dag.get_node(wrapper_kind(vt), vt, &[target]);
+    let wrapped = dag.get_node(wrapper_kind(dag, vt), vt, &[target]);
     Some(if rest == 0 {
         wrapped
     } else {
@@ -1339,7 +1775,7 @@ fn lower_constant_pool(
     let vt = dag.value_type(node);
     let target =
         dag.intern(ISD::TargetConstantPool, &[vt], &[], SDNodeFlags::default(), NodeData::PoolIndex(index, offset));
-    Some(dag.get_node(wrapper_kind(vt), vt, &[target]))
+    Some(dag.get_node(wrapper_kind(dag, vt), vt, &[target]))
 }
 
 /// `LowerJumpTable`: `Wrapper (TargetJumpTable)`.
@@ -1350,7 +1786,7 @@ fn lower_jump_table(
     let NodeData::JumpTable(index) = dag.node(node).data else { return None };
     let vt = dag.value_type(node);
     let target = dag.intern(ISD::TargetJumpTable, &[vt], &[], SDNodeFlags::default(), NodeData::JumpTable(index));
-    Some(dag.get_node(wrapper_kind(vt), vt, &[target]))
+    Some(dag.get_node(wrapper_kind(dag, vt), vt, &[target]))
 }
 
 /// `LowerXALUO`: the flags of `X86ISD::ADD`/`SUB`/`UMUL`/`SMUL`, and the
@@ -1496,8 +1932,15 @@ fn lower_fp_to_int(
         value = shifted;
         adjust = Some(flip);
     }
-    let info =
-        MemInfo { mem_vt: stored_vt, align: size, volatile: false, base: MemBase::Stack(index), ext: None, space: 0 };
+    let info = MemInfo {
+        mem_vt: stored_vt,
+        align: size,
+        volatile: false,
+        base: MemBase::Stack(index),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     let fist = dag.intern(
         x86isd::FP_TO_INT_IN_MEM,
         &[EVT::OTHER],
@@ -1526,8 +1969,15 @@ fn lower_lrint(
     let index = dag.create_stack_temporary(size, size);
     let slot = dag.get_frame_index(dag.config().pointer, index);
     let chain = dag.entry_node();
-    let info =
-        MemInfo { mem_vt: result_vt, align: size, volatile: false, base: MemBase::Stack(index), ext: None, space: 0 };
+    let info = MemInfo {
+        mem_vt: result_vt,
+        align: size,
+        volatile: false,
+        base: MemBase::Stack(index),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     let fist =
         dag.intern(x86isd::FIST, &[EVT::OTHER], &[chain, value, slot], SDNodeFlags::default(), NodeData::Mem(info));
     Some(dag.get_load(result_vt, fist, slot, info))
@@ -1583,6 +2033,19 @@ fn lower_int_to_fp(
             return Some(dag.get_node(ISD::SIntToFp, dst, &[wide]));
         }
     }
+    // DEVIATE SD332 (exit: the pin gains it; re-check at each pin bump): a
+    // plain one-use load of an `i16` or `i32` is `fild`ed from its own
+    // address, as combineSIntToFP does for `i64` only. The stack slot's store
+    // and reload are gone and `fimul`/`fiadd` read the operand in place.
+    if signed && matches!(src_vt, EVT::I16 | EVT::I32) && is_non_ext_load(dag, src) && dag.users(src).count() == 1 {
+        let NodeData::Mem(info) = dag.node(src).data else { return None };
+        if !info.volatile && info.ordering.is_none() && info.mem_vt == src_vt {
+            let (load_chain, address) = (dag.operand(src, 0), dag.operand(src, 1));
+            let fild = build_fild(dag, dst, src_vt, load_chain, address, info);
+            dag.replace_all_uses_with(SDValue { node: src.node, res: 1 }, SDValue { node: fild.node, res: 1 });
+            return Some(fild);
+        }
+    }
     let chain = dag.entry_node();
     let store_info = |index: i32, vt: EVT, size: u32| MemInfo {
         mem_vt: vt,
@@ -1591,6 +2054,7 @@ fn lower_int_to_fp(
         base: MemBase::Stack(index),
         ext: None,
         space: 0,
+        ordering: None,
     };
     if signed || (src_vt != EVT::I32 && src_vt != EVT::I64) {
         let size = src_vt.size_in_bits() / 8;
@@ -1631,6 +2095,7 @@ fn lower_int_to_fp(
         base: MemBase::ConstantPool(entry),
         ext: Some(super::actions::LoadExt::ExtLoad),
         space: 0,
+        ordering: None,
     };
     let fudge_value = dag.get_load(EVT::Simple(MVT::F80), SDValue { node: fild.node, res: 1 }, fudge_ptr, fudge_info);
     let sum = dag.get_node(ISD::FAdd, EVT::Simple(MVT::F80), &[fild, fudge_value]);
@@ -1657,25 +2122,32 @@ fn lower_vastart(
         NodeData::FrameIndex(slot) => MemBase::Stack(slot),
         _ => MemBase::Unknown,
     };
-    if pointer != EVT::I64 {
+    // Win64's `va_list` is the pointer alone (`LowerWin64_VASTART`).
+    if pointer != EVT::I64 || dag.var_args_save.is_none() {
         let first = dag.get_frame_index(pointer, index);
-        let info =
-            MemInfo { mem_vt: pointer, align: pointer.size_in_bits() / 8, volatile: false, base, ext: None, space: 0 };
+        let info = MemInfo {
+            mem_vt: pointer,
+            align: pointer.size_in_bits() / 8,
+            volatile: false,
+            base,
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
         return Some(dag.get_store(chain, first, list, info));
     }
-    let (save, gp_offset) = dag.var_args_save?;
+    let (save, gp_offset, fp_offset) = dag.var_args_save?;
     let mut stores = Vec::new();
     let fields: [(u128, EVT, SDValue); 4] = [
         (0, EVT::I32, dag.get_constant(u128::from(gp_offset), EVT::I32)),
-        // 6 * 8: the vector registers' part of the area starts there
-        (4, EVT::I32, dag.get_constant(48, EVT::I32)),
+        (4, EVT::I32, dag.get_constant(u128::from(fp_offset), EVT::I32)),
         (8, pointer, dag.get_frame_index(pointer, index)),
         (16, pointer, dag.get_frame_index(pointer, save)),
     ];
     for (offset, vt, value) in fields {
         let at = dag.get_constant(offset, pointer);
         let address = dag.get_node(ISD::Add, pointer, &[list, at]);
-        let info = MemInfo { mem_vt: vt, align: 4, volatile: false, base, ext: None, space: 0 };
+        let info = MemInfo { mem_vt: vt, align: 4, volatile: false, base, ext: None, space: 0, ordering: None };
         stores.push(dag.get_store(chain, value, address, info));
     }
     Some(dag.get_node(ISD::TokenFactor, EVT::OTHER, &stores))
@@ -1689,6 +2161,24 @@ fn log2(value: u128) -> u128 {
     u128::from(127 - value.leading_zeros())
 }
 
+/// `X86ISD::MUL_IMM` by 3, 5 or 9: the `lea` the matcher folds it into. An
+/// `i16` has no such `lea` pattern, so it is written as the add of a shift
+/// (`x + (x << 1)`), which the same matcher turns into one.
+fn mul_imm_node(
+    dag: &mut SelectionDAG,
+    x: SDValue,
+    by: u128,
+    vt: EVT,
+) -> SDValue {
+    if vt == EVT::I16 && matches!(by, 3 | 5 | 9) {
+        let amount = dag.get_constant(log2(by - 1), EVT::I8);
+        let shifted = dag.get_node(ISD::Shl, vt, &[x, amount]);
+        return dag.get_node(ISD::Add, vt, &[x, shifted]);
+    }
+    let by = dag.get_constant(by, vt);
+    dag.get_node(x86isd::MUL_IMM, vt, &[x, by])
+}
+
 /// `combineMulSpecial`: `x * c` for the constants that are a `lea` and a
 /// shift or an add.
 fn combine_mul_special(
@@ -1698,17 +2188,14 @@ fn combine_mul_special(
     vt: EVT,
 ) -> Option<SDValue> {
     let shl_add_or_sub = |dag: &mut SelectionDAG, mult: u128, shift: u128, add: bool| {
-        let by = dag.get_constant(mult, vt);
-        let product = dag.get_node(x86isd::MUL_IMM, vt, &[x, by]);
+        let product = mul_imm_node(dag, x, mult, vt);
         let amount = dag.get_constant(shift, EVT::I8);
         let shifted = dag.get_node(ISD::Shl, vt, &[product, amount]);
         dag.get_node(if add { ISD::Add } else { ISD::Sub }, vt, &[shifted, x])
     };
     let mul_mul_add = |dag: &mut SelectionDAG, first: u128, second: u128| {
-        let a = dag.get_constant(first, vt);
-        let once = dag.get_node(x86isd::MUL_IMM, vt, &[x, a]);
-        let b = dag.get_constant(second, vt);
-        let twice = dag.get_node(x86isd::MUL_IMM, vt, &[once, b]);
+        let once = mul_imm_node(dag, x, first, vt);
+        let twice = mul_imm_node(dag, once, second, vt);
         dag.get_node(ISD::Add, vt, &[twice, x])
     };
     match amount {
@@ -1751,9 +2238,11 @@ fn combine_mul(
     node: SDValue,
     level: CombineLevel,
     min_size: bool,
+    i16_chains: bool,
+    profile: Option<MulPricing<'_>>,
 ) -> Option<SDValue> {
     let vt = dag.value_type(node);
-    if vt != EVT::I32 {
+    if vt != EVT::I32 && !(vt == EVT::I16 && i16_chains) {
         return None;
     }
     let (x, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
@@ -1769,20 +2258,32 @@ fn combine_mul(
     if is_pow2(bits) || min_size || level == CombineLevel::BeforeLegalizeTypes {
         return None;
     }
-    let signed = i128::from(bits as u32 as i32);
+    let signed = if vt == EVT::I16 { i128::from(bits as u16 as i16) } else { i128::from(bits as u32 as i32) };
     let abs = signed.unsigned_abs();
     let negate = |dag: &mut SelectionDAG, value: SDValue| if signed < 0 { dag.get_negative(value, vt) } else { value };
     let shift = |dag: &mut SelectionDAG, value: SDValue, by: u128| {
         let by = dag.get_constant(by, EVT::I8);
         dag.get_node(ISD::Shl, vt, &[value, by])
     };
-    let mul_imm = |dag: &mut SelectionDAG, value: SDValue, by: u128| {
-        let by = dag.get_constant(by, vt);
-        dag.get_node(x86isd::MUL_IMM, vt, &[value, by])
-    };
+    let mul_imm = |dag: &mut SelectionDAG, value: SDValue, by: u128| mul_imm_node(dag, value, by, vt);
     if matches!(abs, 3 | 5 | 9) {
         let product = mul_imm(dag, x, abs);
         return Some(negate(dag, product));
+    }
+    // DEVIATE SD447: where the target prices the pin's decompositions, the
+    // sheet's chain decides alone: the pin's cases (`lea` pairs, `shl; sub`)
+    // cost an instruction and bytes the `imul` does not, and a tie keeps it.
+    // The pin: <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L51191>.
+    // A product `{3,5,9} << {1,2,3}` summed into an `add` keeps the pin's
+    // chain: its last step folds into the `add` as a scaled `lea`, which the
+    // sheet does not price.
+    // Exit 2026-11-20. Owner llrm-target-x86-m64.
+    let summed = signed > 0
+        && [3u128, 5, 9].iter().any(|base| abs % base == 0 && matches!(abs / base, 2 | 4 | 8))
+        && dag.has_one_use(node.node)
+        && dag.users(node).next().is_some_and(|user| dag.opcode(SDValue { node: user, res: 0 }) == ISD::Add);
+    if let Some(pricing) = profile.filter(|pricing| pricing.price_pin && !summed) {
+        return priced_chain(dag, x, signed as i64, vt, pricing);
     }
     let (mut first, mut second) = (0u128, 0u128);
     for divisor in [9u128, 5, 3] {
@@ -1827,7 +2328,74 @@ fn combine_mul(
             new_mul = Some(dag.get_node(ISD::Sub, vt, &[shifted, twice]));
         }
     }
+    // DEVIATE SD446: where the pin keeps `imul`, the sheet's cheaper chain.
+    if new_mul.is_none() {
+        new_mul = profile.and_then(|profile| priced_chain(dag, x, signed as i64, vt, profile));
+    }
     new_mul
+}
+
+/// `x * c` as the chain `arithmetic::chain_at_speed` accepts (the clocks it
+/// saves pay for its bytes at the block's frequency; the search is cached per
+/// constant, O(1) here), built from shifts, adds, subtracts and
+/// the `lea` forms. An `i16` has no `lea`: the narrow chain.
+///
+/// DEVIATE SD446: the pin's `combineMul` leaves an `imul` for a constant none
+/// of its cases covers (75, 251, 10000); on the 486 that is 13-42 clocks
+/// (Intel 240440-002 Table 10.1) against 2-4 for a chain. The search is
+/// GCC's `synth_mult`
+/// ([expmed.cc](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/expmed.cc)),
+/// the same as DEVIATE M1 in `arithmetic.rs`. Only where the target trades
+/// bytes for clocks at speed (m16: `speed_milliclocks_per_byte`); the block's
+/// frequency is the IR `BlockFrequencies` (the machine one does not exist at
+/// DAG time). Exit: none while the clocks decide. Owner sdag-d.
+fn priced_chain(
+    dag: &mut SelectionDAG,
+    x: SDValue,
+    c: i64,
+    vt: EVT,
+    pricing: MulPricing<'_>,
+) -> Option<SDValue> {
+    use crate::backend::arithmetic;
+    let width = if vt == EVT::I16 { 2 } else { 4 };
+    let MulPricing { cpu, arch, freq, milliclocks_per_byte, by_clocks, price_pin } = pricing;
+    let chain = if by_clocks {
+        arithmetic::chain_by_clocks(c, width, cpu)
+    } else {
+        arithmetic::priced_chain_at_speed(c, width, cpu, arch, freq, milliclocks_per_byte, price_pin)
+    }
+    .ok()??;
+    let shift = |dag: &mut SelectionDAG, value: SDValue, by: i64| {
+        let by = dag.get_constant(by as u128, EVT::I8);
+        dag.get_node(ISD::Shl, vt, &[value, by])
+    };
+    let mut value = x;
+    for (step, count) in chain {
+        value = match step {
+            "shl" => shift(dag, value, count),
+            "add" => dag.get_node(ISD::Add, vt, &[value, x]),
+            "sub" => dag.get_node(ISD::Sub, vt, &[value, x]),
+            "rsub" => dag.get_node(ISD::Sub, vt, &[x, value]),
+            "neg" => dag.get_negative(value, vt),
+            // `x + value * count`
+            "lea" => {
+                let scaled = shift(dag, value, i64::from(count.trailing_zeros()));
+                dag.get_node(ISD::Add, vt, &[scaled, x])
+            }
+            // `value + value * count`
+            "flea" => mul_imm_node(dag, value, count as u128 + 1, vt),
+            "fadd" => {
+                let scaled = shift(dag, value, count);
+                dag.get_node(ISD::Add, vt, &[value, scaled])
+            }
+            "fsub" => {
+                let scaled = shift(dag, value, count);
+                dag.get_node(ISD::Sub, vt, &[scaled, value])
+            }
+            _ => return None,
+        };
+    }
+    Some(value)
 }
 
 /// `LowerFunnelShift`, the scalar part ([L32188][pin]). An `i8` by a variable
@@ -1990,7 +2558,7 @@ fn mask_address(
     let splat = (0..128 / lane).fold(0u128, |all, at| all | mask << (at * lane));
     let pointer = dag.config().pointer;
     let pool = dag.get_constant_pool(pointer, splat, EVT::Simple(MVT::I128), true);
-    dag.get_node(wrapper_kind(pointer), pointer, &[pool])
+    dag.get_node(wrapper_kind(dag, pointer), pointer, &[pool])
 }
 
 /// `LowerFCOPYSIGN` for a scalar: `(mag & ~sign) | (sgn & sign)`, the sign

@@ -178,3 +178,34 @@ def test_the_cargo_of_a_dist_build_asks_buildslot_to_jump_the_queue(tmp_path):
     wrapper.chmod(0o755)
     build(scratch, repo, sha, {**env, "PAIR_CARGO": f"{wrapper} cargo"})
     assert seen.read_text().strip() == "0"
+
+
+def test_the_cargo_line_for_this_repos_head_names_bins_that_exist_with_the_features_they_require(tmp_path):
+    """pair_build exited 101 on every current sha: `target llrm-c in package llrm requires the features: c-legacy`, and objsweep --arm64 found no llrm-arm64-llc."""
+    import json
+    repo = Path(__file__).resolve().parents[2]
+    head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+    log = tmp_path / "args"
+    cargo = tmp_path / "cargo-stub"
+    cargo.write_text(f"""#!/bin/bash
+echo "$@" > {log}
+mkdir -p $CARGO_TARGET_DIR/dist
+while [ $# -gt 0 ]; do if [ "$1" = --bin ]; then echo "$2" > $CARGO_TARGET_DIR/dist/$2; fi; shift; done
+echo "llrm-c: $(pwd)/x" > $CARGO_TARGET_DIR/dist/llrm-c.d
+""")
+    cargo.chmod(0o755)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    try:
+        subprocess.run(["bash", str(SCRIPT), str(scratch), head], cwd=repo, env={**os.environ, "PAIR_CARGO": str(cargo)}, check=True)
+    finally:
+        subprocess.run(["git", "-C", str(repo), "worktree", "remove", "--force", str(scratch / f"wt-pair-{head}")], capture_output=True)
+    words = log.read_text().split()
+    bins = [words[i + 1] for i, w in enumerate(words) if w == "--bin"]
+    features = set(words[words.index("--features") + 1].split(",")) if "--features" in words else set()
+    meta = json.loads(subprocess.run(["cargo", "metadata", "--no-deps", "--format-version", "1", "--offline"], cwd=repo, check=True, capture_output=True, text=True).stdout)
+    targets = {t["name"]: t for p in meta["packages"] for t in p["targets"] if "bin" in t["kind"]}
+    assert {"llrm-c", "llrm-qb", "llrm-nib", "nibfront", "llrm-arm64-llc"} <= set(bins)
+    for name in bins:
+        assert name in targets, name
+        assert set(targets[name].get("required-features", [])) <= features, (name, targets[name].get("required-features"), features)

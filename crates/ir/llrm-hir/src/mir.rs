@@ -11,7 +11,7 @@ use std::collections::hash_map::Entry;
 
 use llrm_mir::build::Builder;
 use llrm_mir::datalayout::{DataLayout, float_bits};
-use llrm_mir::facts::{Fact, Inlining};
+use llrm_mir::facts::{Fact, Inlining, Region};
 use llrm_mir::{
     Attribute, BinaryOp, BlockId, CastOp, Constant, ConstantExpr, ConstantId, ConstantKind, Flags, FloatKind,
     FloatPredicate, Function, GlobalId, GlobalVariable, IntPredicate, Linkage, MetadataId, MetadataNode,
@@ -296,10 +296,14 @@ fn stored_type(
 }
 
 /// The `!tbaa` access tags that mark a frontend's promise that a far
-/// allocation is disjoint from every place: two siblings under one root.
+/// allocation is disjoint from every place: two siblings, both under
+/// `referent`, which is apart from `absolute`, memory the program owns nothing
+/// in.
 pub struct Tags {
     pub place: MetadataId,
     pub allocation: MetadataId,
+    pub absolute: MetadataId,
+    pub referent: MetadataId,
     /// The `!tbaa` access tag of each array allocation a function reaches
     /// through its descriptor, by function and descriptor place: a type of
     /// its own under `allocation`, so two arrays are apart and the generic
@@ -316,11 +320,19 @@ impl Tags {
             MetadataId(module.metadata.len() as u32 - 1)
         };
         let root = node(vec![MetadataOperand::String("llrm hir".to_owned())]);
-        let mut tag = |name: &str| {
-            let ty = node(vec![MetadataOperand::String(name.to_owned()), MetadataOperand::Node(root), zero.clone()]);
-            node(vec![MetadataOperand::Node(ty), MetadataOperand::Node(ty), zero.clone()])
+        let mut tag = |name: &str, parent: MetadataId| {
+            let ty = node(vec![MetadataOperand::String(name.to_owned()), MetadataOperand::Node(parent), zero.clone()]);
+            (ty, node(vec![MetadataOperand::Node(ty), MetadataOperand::Node(ty), zero.clone()]))
         };
-        Tags { place: tag("place"), allocation: tag("allocation"), arrays: HashMap::default() }
+        // `place` and `allocation` come first, naming the `referent` type that
+        // follows them as their parent.
+        let referent_type = MetadataId(root.0 + 5);
+        let (_, place) = tag("place", referent_type);
+        let (_, allocation) = tag("allocation", referent_type);
+        let (program, referent) = tag("referent", root);
+        assert_eq!(program, referent_type);
+        let (_, absolute) = tag("absolute", root);
+        Tags { place, allocation, absolute, referent, arrays: HashMap::default() }
     }
 
     /// A tag for each array a function of `hir` reaches through a descriptor
@@ -433,6 +445,19 @@ fn class_tags(
     Ok(tags)
 }
 
+/// The `!prof` nodes `branch_weights` for a conditional branch whose first
+/// target never runs, and for one whose second does not.
+fn never_taken(module: &mut Module) -> [MetadataId; 2] {
+    let word = module.context.types.int(32);
+    let mut node = |weights: [u32; 2]| {
+        let mut operands = vec![MetadataOperand::String("branch_weights".to_owned())];
+        operands.extend(weights.map(|one| MetadataOperand::Constant(module.context.int(word, i128::from(one)))));
+        module.metadata.push(MetadataNode { distinct: false, operands });
+        MetadataId(module.metadata.len() as u32 - 1)
+    };
+    [node([1, NEVER_TAKEN_WEIGHT]), node([NEVER_TAKEN_WEIGHT, 1])]
+}
+
 struct Tables<'h> {
     /// The target's address spaces: what the HIR's near, far, segment, huge and
     /// fixed addresses are.
@@ -449,6 +474,9 @@ struct Tables<'h> {
     /// The flags facts state of each instruction's operands, by function,
     /// instruction and operand index.
     operand_flags: HashMap<(i64, i64, i64), Flags>,
+    /// The region of memory a load or store reaches, by function and
+    /// instruction.
+    regions: HashMap<(i64, i64), Region>,
     array_order: model::ArrayOrder,
     /// The module body's ON ERROR GOTO handlers, which every procedure's pad
     /// calls.
@@ -492,7 +520,19 @@ struct Tables<'h> {
     field_facts: HashMap<(i64, i64), Vec<Fact>>,
     /// Each frame variable's `!var` node, by its function and place.
     variables: HashMap<(i64, i64), MetadataId>,
+    /// `!prof` for a branch whose first target never runs, and whose second.
+    never_taken: [MetadataId; 2],
 }
+
+/// The weight of an edge a program practically never takes, against 1 for the
+/// other: a panic path ending `unreachable` (a failed bounds, shift, conversion,
+/// division or key check). Clang's `EmitCheck` states `(1 << 20) - 1` for a
+/// check (`CGExpr.cpp:4367` `createLikelyBranchWeights`, `MDBuilder.h:46`
+/// `kLikelyBranchWeight`), the same ratio the pin's unreachable heuristic gives
+/// the edge without a `!prof`. Branch odds are 2^31sts (pin
+/// `BranchProbability.h:37`), so the edge keeps 2048 units. A larger ratio is a
+/// DEVIATE (see the 2^26-1 change).
+pub const NEVER_TAKEN_WEIGHT: u32 = (1 << 20) - 1;
 
 /// The `!dbg` metadata kind: the source line an instruction came from.
 pub const DEBUG_LINE: &str = "dbg";
@@ -650,6 +690,12 @@ fn emit_module<'h>(
             flags.insert(one.fact.flags());
         }
     }
+    let mut regions: HashMap<(i64, i64), Region> = HashMap::default();
+    for one in &hir.facts {
+        if let (Subject::Instruction { function, id }, Fact::Access(region)) = (one.subject, one.fact) {
+            regions.insert((function, id), region);
+        }
+    }
     let mut argument_facts: HashMap<(i64, i64), Vec<(i64, Fact)>> = HashMap::default();
     let mut operand_flags: HashMap<(i64, i64, i64), Flags> = HashMap::default();
     for one in &hir.facts {
@@ -673,6 +719,7 @@ fn emit_module<'h>(
         instruction_flags,
         argument_facts,
         operand_flags,
+        regions,
         array_order,
         module_handler: None,
         zeroed,
@@ -696,6 +743,7 @@ fn emit_module<'h>(
         place_facts,
         field_facts,
         variables: HashMap::default(),
+        never_taken: [MetadataId(0); 2],
     };
     tables.tags.arrays(&mut module, hir);
     match fact_nodes(&mut module, &tables.spaces, hir, &tables.types) {
@@ -708,6 +756,8 @@ fn emit_module<'h>(
         Ok(classes) => tables.classes = classes,
         Err(why) => refused.push((hir.name.clone(), why)),
     }
+    // After the nodes the language states, so theirs keep their numbers.
+    tables.never_taken = never_taken(&mut module);
     let objects: HashMap<i64, &model::DataObject> = hir.data.iter().map(|one| (one.id, one)).collect();
     let sizes = sizes(hir, &tables.types);
     let mut defined = Vec::new();
@@ -1191,7 +1241,10 @@ fn data_initializer(
         let mut address = target;
         if relocation.addend != 0 {
             let ty = context.types.ptr(space);
-            let index = context.int(i16, i128::from(relocation.addend));
+            // The offset is as wide as the near pointer (the datalayout's), as
+            // an address is.
+            let offset = context.types.int(8 * widths.near as u32);
+            let index = context.int(offset, i128::from(relocation.addend));
             let operands = vec![target, index];
             address = context.constant(Constant {
                 ty,
@@ -2650,6 +2703,24 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                     self.b.function.annotate(inst, kind, node);
                 }
             }
+            if let TerminatorKind::Branch = block.terminator.kind
+                && let Some(inst) = self.b.function.terminator(self.b.current().expect("a placed block"))
+            {
+                let ends = |target: &i64| {
+                    self.function
+                        .blocks
+                        .iter()
+                        .any(|one| one.id == *target && matches!(one.terminator.kind, TerminatorKind::Unreachable))
+                };
+                if let [first, second] = block.terminator.targets[..] {
+                    // Both targets unreachable states nothing.
+                    match (ends(&first), ends(&second)) {
+                        (true, false) => self.b.function.annotate(inst, "prof", self.tables.never_taken[0]),
+                        (false, true) => self.b.function.annotate(inst, "prof", self.tables.never_taken[1]),
+                        _ => {}
+                    }
+                }
+            }
         }
         if block.cold {
             mark_cold(self.b.function, self.blocks[&block.id]);
@@ -2763,7 +2834,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         for (group, object) in groups.iter().zip(self.objects.clone()) {
             let kind = match self.b.context.types.get(group.ty) {
                 Type::Int(_) => ConstantKind::Int(0),
-                Type::Float(_) => ConstantKind::Float(0),
+                Type::Float(kind) => ConstantKind::float_zero(*kind),
                 Type::Pointer(_) => ConstantKind::Null,
                 _ => {
                     let callee = Value::Constant(self.tables.callees[MEMSET]);
@@ -2902,6 +2973,16 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         Ok((pointer, ty, volatile, class.or(tag)))
     }
 
+    /// The tag of an element of a named array: `allocation` where the language
+    /// says the access reaches array elements, as an access through the array's
+    /// descriptor does, so the two are not called apart.
+    fn element_tag(&self) -> MetadataId {
+        match self.tables.regions.get(&(self.function.id, self.at_instruction)) {
+            Some(Region::Element) => self.tables.tags.allocation,
+            _ => self.tables.tags.place,
+        }
+    }
+
     fn untyped_place(
         &mut self,
         operand: &Operand,
@@ -2916,12 +2997,13 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let place = self.places[&one.place];
                 let element = self.tables.types[&place.r#type].element.ok_or("an array element of a non-array")?;
                 let (pointer, ty) = self.element(place, &one.indices, 0, element)?;
-                Ok((pointer, ty, place.volatile, Some(self.tables.tags.place)))
+                Ok((pointer, ty, place.volatile, Some(self.element_tag())))
             }
             Operand::ProjectedPlace(one) => {
                 let place = self.places[&one.place];
                 let (pointer, ty) = self.element(place, &one.indices, one.offset, one.r#type)?;
-                Ok((pointer, ty, place.volatile, Some(self.tables.tags.place)))
+                let tag = if one.indices.is_empty() { self.tables.tags.place } else { self.element_tag() };
+                Ok((pointer, ty, place.volatile, Some(tag)))
             }
             Operand::IndirectPlace(one) => {
                 let base = self
@@ -2934,7 +3016,10 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                     .addresses
                     .get(&one.base)
                     .is_some_and(|&size| one.offset >= 0 && one.offset + self.tables.types[&one.r#type].width <= size);
+                let region = self.tables.regions.get(&(self.function.id, self.at_instruction));
                 let tag = match one.allocation {
+                    _ if region == Some(&Region::Absolute) => Some(self.tables.tags.absolute),
+                    _ if region == Some(&Region::Referent) => Some(self.tables.tags.referent),
                     Some(descriptor) => Some(
                         self.tables
                             .tags
@@ -2943,7 +3028,14 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                             .copied()
                             .unwrap_or(self.tables.tags.allocation),
                     ),
-                    None => inside.then_some(self.tables.tags.place),
+                    None => match self.tables.regions.get(&(self.function.id, self.at_instruction)) {
+                        // The array is a parameter's: any caller's, so the
+                        // generic tag covers it.
+                        Some(Region::Element) => Some(self.tables.tags.allocation),
+                        Some(Region::Descriptor) => Some(self.tables.tags.place),
+                        Some(Region::Absolute | Region::Referent) => None,
+                        None => inside.then_some(self.tables.tags.place),
+                    },
                 };
                 Ok((
                     self.offset(base, one.offset, self.operand_flags(operand).contains(Flags::INBOUNDS)),

@@ -163,7 +163,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("reassociate@696", Simplify, "reassociate", Translated, ""),
     entry("constraint-elimination@699", Simplify, "constraint-elimination", Translated, ""),
     entry("loopsimplify@764", Simplify, "loop-simplify", Old, "loopsimplify-port"),
-    entry("lcssa@764", Simplify, "lcssa", Old, "lcssa-port"),
+    entry("lcssa@764", Simplify, "lcssa", Translated, ""),
     entry("loop-instsimplify@715", Simplify, "loop-instsimplify", Translated, ""),
     entry("loop-simplifycfg@716", Simplify, "loop-simplifycfg", Translated, ""),
     entry("floatloop@724", Simplify, "licm", Old, "licm-port"),
@@ -183,7 +183,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "criterion: the families of combine.rs `visitors` (add, icmp, gep, store, and what they call: phi, select) match `opt -passes=instcombine` on the cases of their tests; exit: the remaining visit* (sub, and/or/xor, mul/div/rem, shifts, casts, select, phi, load, alloca, calls) translated, then fold@N and dead@N deleted (instcombine-port); the opcodes of foldICmpBinOpWithConstant not yet translated (xor, or, mul, shl, shr, srem, div, sub, add: InstCombineCompares.cpp:4124; only and is, combine_icmp_const.rs) are owed by llrm-w-4, 2026-10-24 onward; on by default, LLRM_NO_COMBINE turns it off",
     ),
     entry("loopsimplify@772", Simplify, "loop-simplify", Old, "loopsimplify-port"),
-    entry("lcssa@772", Simplify, "lcssa", Old, "lcssa-port"),
+    entry("lcssa@772", Simplify, "lcssa", Translated, ""),
     entry("loopidiom@737", Simplify, "loop-idiom", Translated, ""),
     entry("loopidioms@737", Simplify, "loop-idiom", Old, "loop-idiom-port (the pricing, noncountable half)"),
     partial(
@@ -237,7 +237,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "criterion: DSE stage 1 (deadstore.rs) removes what opt -passes=dse does on near pointers (tools/llvmport/dsecompare.py, 9000 cases); exit: stages 2-3 (free as a terminator, calloc folding, dominating conditions)",
     ),
     entry("loopsimplify@823", Simplify, "loop-simplify", Old, "loopsimplify-port"),
-    entry("lcssa@823", Simplify, "lcssa", Old, "lcssa-port"),
+    entry("lcssa@823", Simplify, "lcssa", Translated, ""),
     entry("licm@823", Simplify, "licm<allowspeculation>", Translated, ""),
     partial(
         "combine@1403",
@@ -274,6 +274,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     // (`addPreInlinerPasses`, PGO instrumentation or use only) and #L1424
     // (`ExtraVectorizerPasses`, after the vectorizer) are not in the default
     // pipeline, and llrm has neither a profile nor a vectorizer.
+    entry("rotate@1621", Late, "loop-rotate<header-duplication;check-exit-count>", Translated, ""),
     entry(
         "loop-interchange@1631",
         Late,
@@ -317,12 +318,21 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "slp-vectorizer",
         "slpcompares.rs makes the wide compare the pin's SLP, VectorCombine and InstCombine leave of an and-chain of equalities of adjacent bytes; no vectors; criterion: the chain of eight bytes is one ldr and one cmp as the pin's (tests/slp_compares.rs); exit: vector types in the backend",
     ),
+    entry(
+        "drop-unnecessary-assumes@1360",
+        Late,
+        "drop-unnecessary-assumes<drop-deref>",
+        Translated,
+        "dropunnecessaryassumes.rs",
+    ),
     entry("infer-alignment@1362", Late, "infer-alignment", Translated, ""),
     entry("infer-alignment@1498", Late, "infer-alignment", Translated, ""),
+    entry("drop-unnecessary-assumes@1577", Late, "drop-unnecessary-assumes", Translated, "dropunnecessaryassumes.rs"),
     entry("float2int@1594", Late, "float2int", Translated, ""),
     entry("lower-constant-intrinsics@1597", Late, "lower-constant-intrinsics", Translated, ""),
     entry("instsimplify@1662", Late, "instsimplify", Translated, ""),
     entry("divrempairs@1667", Late, "div-rem-pairs", Translated, ""),
+    entry("expandmemcmp@1673", Late, "expand-memcmp", Translated, ""),
     entry("tailrec@1677", Late, "tailcallelim", Translated, ""),
     partial(
         "simplifycfg@1682",
@@ -338,8 +348,15 @@ pub(crate) const REGISTRY: &[Entry] = &[
     // Runs in the strength slot,
     // before `lsr`: `canonfreeze::CanonicalizeFreezeInLoops`.
     entry("canonfreeze", Module, "canon-freeze", Translated, ""),
+    // Runs in the strength slot, after `lsr`: `hardwareloops::HardwareLoops`.
+    entry("hardwareloops", Module, "hardware-loops", Translated, ""),
     entry("rotate@728", Simplify, "loop-rotate<header-duplication>", Translated, ""),
-    entry("indvars@753", Simplify, "indvars (LPM2 worklist: the loops the unroll made)", Translated, ""),
+    partial(
+        "indvars@753",
+        Simplify,
+        "indvars (LPM2 worklist: the loops the unroll made)",
+        "the same pass as indvars@738, whose module (indvars.rs) translates rewriteLoopExitValues and widenIV; criterion: as indvars@738; exit: as indvars@738",
+    ),
     entry("vector-combine", Simplify, "vector-combine", Missing, ""),
     // The machine phases of `llc`, one slot per phase of `flow::machine_with`
     // (`module@row`, the row of the table in `backend/mod.rs`).
@@ -370,6 +387,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "criterion: a SUB nothing reads is a CMP before allocation (optimizeCompareInstr, first switch), x_heapsort cmp/sub as the pin's; exit: the rest of optimizeCompareInstr (flags of an earlier instruction reused, NewCC, InstsToUpdate) and the other PeepholeOptimizer rewrites",
     ),
     entry("combiner@4", Backend, "machine-combiner (MachineCombiner.cpp)", Translated, ""),
+    entry("cmovconversion@4", Backend, "x86-cmov-conversion (X86CmovConversion.cpp)", Translated, ""),
     entry("liverangeshrink@4", Backend, "lrshrink (LiveRangeShrink.cpp)", Translated, ""),
     entry("phielim@4", Backend, "phi-node-elimination", Old, "lir-cleanup-poc"),
     partial(
@@ -383,6 +401,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("flagscopy@5", Backend, "x86-flags-copy-lowering (X86FlagsCopyLowering.cpp)", Translated, ""),
     entry("leaopt@5", Backend, "x86-optimize-leas (X86OptimizeLEAs.cpp)", Translated, ""),
     entry("floatfold@6", Backend, "x86 isel float folding (target)", Old, ""),
+    entry("floatsink@6", Backend, "x86 float load sinking (target; DEVIATE SD-SINK, no pin pass)", Old, ""),
     partial(
         "pushfold@6",
         Backend,
@@ -635,6 +654,18 @@ pub const ANALYSES: &[AnalysisEntry] = &[
     ),
     old_analysis("declarations", "Declarations", "none", "none: DEVIATE or delete candidate"),
     old_analysis(
+        "assume-declared",
+        "AssumeDeclared",
+        "none",
+        "none: DEVIATE; LLVM's AssumptionCache walks the body, we skip it where no llvm.assume is declared",
+    ),
+    old_analysis(
+        "global-names",
+        "GlobalNames",
+        "none",
+        "none: DEVIATE; LLVM reads names off the module, which needs no snapshot",
+    ),
+    old_analysis(
         "callees",
         "counted(\"callees\")",
         "none",
@@ -751,6 +782,8 @@ pub const ABSENT_AT_O1: &[&str] = &[
     "gvn@787",
     "jumpthreading@668",
     "jumpthreading@809",
+    "cvp@669",
+    "cvp@810",
     "dfajumpthreading@806",
     "tailrec@688",
     "aggressive-instcombine@678",
@@ -874,6 +907,12 @@ pub(crate) fn check_old_slots(
 #[cfg(test)]
 const SOURCE_NAMES: &[(&str, &str)] = &[("constraintelim", "constraintelimination")];
 
+/// Missing entries whose source file is the IR-level stand-in, not the MIR
+/// pass: `stack-coloring` groups the allocas before the DAG is built
+/// (`backend/stackcoloring.rs`, DEVIATE SC1; exit: the MIR pass).
+#[cfg(test)]
+const IR_LEVEL_STAND_IN: &[&str] = &["stack-coloring"];
+
 /// A Missing entry whose pass has a source file (`shrinkwrap.rs` for
 /// `shrink-wrap`): the row undercounts. `stems` are the file stems of every
 /// `.rs` under `crates`; names compare by their letters and digits, without a
@@ -890,7 +929,7 @@ pub(crate) fn check_missing_has_no_file(
     };
     let lying: Vec<String> = registry
         .iter()
-        .filter(|one| one.kind == Missing)
+        .filter(|one| one.kind == Missing && !IR_LEVEL_STAND_IN.contains(&one.slot))
         .filter(|one| {
             stems
                 .iter()

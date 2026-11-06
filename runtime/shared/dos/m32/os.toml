@@ -14,3 +14,6 @@ heap_bytes = 16777216
 # What the runtime's routines, DOS and an interrupt use below the deepest chain of frames the program
 # makes: the stack limit is the bottom plus this, and the stack the object adds covers it.
 stack_reserve = 512
+# The BASIC error the runtime's divide-fault handler (B$TRAPS, trap.asm) reports for exception 0; absent where the layer installs none. A
+# front end may then leave a signed divide's quotient overflow (-32768 \\ -1) to the processor.
+divide_fault_error = 11

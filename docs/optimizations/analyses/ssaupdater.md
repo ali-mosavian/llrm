@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/ssaupdater.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/ssaupdater.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/ssaupdater.rs sha256:d938f734823332495ca05558806d165ca83d80a869e3f8a64416a766ddb9af15 -->
+<!-- src: crates/opt/llrm-analysis/src/ssaupdater.rs sha256:b42ac3613a57a6f5a523b89e0f1887d2af8ffe6843141ef542590cfa57cbdf6d -->
 
 # ssaupdater
 
@@ -48,4 +48,4 @@ b4: use %v
 [`SSAUpdaterImpl`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Transforms/Utils/SSAUpdaterImpl.h).
 
 ## Used by
-Named by `jumpthreading`, `lcssa_form`, `loads`, `loadstorepromoter`, `looprotate`, `sroa`, `ssaupdater_walk_allocates_per_walk_not_per_block`, `ssaupdaterbulk`.
+Named by `jumpthreading`, `lcssa`, `lcssa_form`, `loads`, `loadstorepromoter`, `looprotate`, `sroa`, `ssaupdater_walk_allocates_per_walk_not_per_block`, `ssaupdaterbulk`.

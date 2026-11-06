@@ -338,7 +338,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O1 | Simplify | loop-idiom | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | loopidiom@737:Translated + loopidioms@737:Old |  |  |
 | -O1 | Simplify | indvars | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | indvars@738:Partial |  |  |
 | -O1 | Simplify | loop-deletion | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | loopdeletion@749:Translated |  |  |
-| -O1 | Simplify | loop-unroll-full | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | unroll@753:Translated + indvars@753:Translated |  |  |
+| -O1 | Simplify | loop-unroll-full | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | unroll@753:Translated + indvars@753:Partial |  |  |
 | -O1 | Simplify | sroa<modify-cfg> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | sroa@776:Translated |  |  |
 | -O1 | Simplify | memcpyopt | cgscc/devirt<4>/function<eager-inv;no-rerun> | ORDER | memcpyopt@818:Translated + merge@818:Partial | -O1 only: ours places it where the O2 list does; the pin's O1 list orders it differently (the one slot off the pin's order, by position) | unassigned (coordinator, 10-26) |
 | -O1 | Simplify | sccp | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | sccp@792:Translated |  |  |
@@ -448,7 +448,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O2 | Simplify | indvars | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | indvars@738:Partial |  |  |
 | -O2 | Simplify | extra-simple-loop-unswitch-passes | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MISSING |  | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -O2 | Simplify | loop-deletion | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | loopdeletion@749:Translated |  |  |
-| -O2 | Simplify | loop-unroll-full | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | unroll@753:Translated + indvars@753:Translated |  |  |
+| -O2 | Simplify | loop-unroll-full | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | unroll@753:Translated + indvars@753:Partial |  |  |
 | -O2 | Simplify | sroa<modify-cfg> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | sroa@776:Translated |  |  |
 | -O2 | Simplify | vector-combine | cgscc/devirt<4>/function<eager-inv;no-rerun> | N/A |  | vectors deferred (user ruling 10-20), -sse target Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out. |  |
 | -O2 | Simplify | mldst-motion<no-split-footer-bb> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MISSING |  | ablation 0 of 12 IRs | w-4, 11-09 |
@@ -565,7 +565,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O3 | Simplify | indvars | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | indvars@738:Partial |  |  |
 | -O3 | Simplify | extra-simple-loop-unswitch-passes | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MISSING |  | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -O3 | Simplify | loop-deletion | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | loopdeletion@749:Translated |  |  |
-| -O3 | Simplify | loop-unroll-full | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | unroll@753:Translated + indvars@753:Translated |  |  |
+| -O3 | Simplify | loop-unroll-full | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | unroll@753:Translated + indvars@753:Partial |  |  |
 | -O3 | Simplify | sroa<modify-cfg> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | sroa@776:Translated |  |  |
 | -O3 | Simplify | vector-combine | cgscc/devirt<4>/function<eager-inv;no-rerun> | N/A |  | vectors deferred (user ruling 10-20), -sse target Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out. |  |
 | -O3 | Simplify | mldst-motion<no-split-footer-bb> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MISSING |  | ablation 0 of 12 IRs | w-4, 11-09 |
@@ -684,7 +684,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -Os | Simplify | indvars | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | indvars@738:Partial |  |  |
 | -Os | Simplify | extra-simple-loop-unswitch-passes | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MISSING |  | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
 | -Os | Simplify | loop-deletion | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | loopdeletion@749:Translated |  |  |
-| -Os | Simplify | loop-unroll-full | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | unroll@753:Translated + indvars@753:Translated |  |  |
+| -Os | Simplify | loop-unroll-full | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | unroll@753:Translated + indvars@753:Partial |  |  |
 | -Os | Simplify | sroa<modify-cfg> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | sroa@776:Translated |  |  |
 | -Os | Simplify | vector-combine | cgscc/devirt<4>/function<eager-inv;no-rerun> | N/A |  | vectors deferred (user ruling 10-20), -sse target Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out. |  |
 | -Os | Simplify | mldst-motion<no-split-footer-bb> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MISSING |  | ablation 0 of 12 IRs | w-4, 11-09 |

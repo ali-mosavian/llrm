@@ -38,6 +38,7 @@ static void restore_first(void)
 #pragma aux B_RDR4 "B$RDR4"
 #pragma aux B_RDR8 "B$RDR8"
 #pragma aux B_RDSD "B$RDSD"
+#pragma aux B_RDCY "B$RDCY"
 
 /* B$RSTB: RESTORE to the first DATA line whose key is `line` or more (0 is the
    first line). */
@@ -110,8 +111,9 @@ static void read_number(byte type, qb_data_ptr destination)
         *(double QB_FAR *)destination = value.real;
 }
 
-/* B$RDSD: the item as a string, assigned to the descriptor `destination`. */
-void B_RDSD(qb_data_ptr destination)
+/* B$RDSD: the item as a string, assigned to the descriptor `destination`. The compiler passes a second word, the
+   length of a fixed string (B$RDFS reads those; 0 here), which the caller removes. */
+void B_RDSD(qb_data_ptr destination, short width)
 {
     ModuleData *data;
     const char *cursor = item_start(&data), *start;
@@ -144,4 +146,66 @@ void B_RDR4(qb_data_ptr destination)
 void B_RDR8(qb_data_ptr destination)
 {
     read_number(VT_R8, destination);
+}
+
+enum { CURRENCY_SCALE = 10000, CURRENCY_PLACES = 4 };
+
+/* The exact ten-thousandths of the plain decimal text at `text`, `[-+]digits[.digits]` up to a blank, comma or the
+   end, rounded half away from zero at the fifth place; false for any other form. A magnitude past the type's is
+   error 6. */
+static int exact_currency(const char *text, long long *out)
+{
+    unsigned long long whole = 0, fraction = 0, limit;
+    int negative = 0, places = 0, digits = 0, round_up = 0;
+
+    while (*text == ' ' || *text == '\t')
+        text++;
+    if (*text == '-' || *text == '+')
+        negative = *text++ == '-';
+    for (; *text >= '0' && *text <= '9'; text++, digits++) {
+        if (whole > 922337203685477ULL)
+            return 0;
+        whole = whole * 10 + (unsigned)(*text - '0');
+    }
+    if (*text == '.') {
+        for (text++; *text >= '0' && *text <= '9'; text++, digits++) {
+            if (places < CURRENCY_PLACES) {
+                fraction = fraction * 10 + (unsigned)(*text - '0');
+                places++;
+            } else if (places++ == CURRENCY_PLACES) {
+                round_up = *text >= '5';
+            }
+        }
+    }
+    if (!digits || !(*text == 0 || *text == ',' || *text == ' ' || *text == '\t' || *text == '\r' || *text == '\n'))
+        return 0;
+    for (; places < CURRENCY_PLACES; places++)
+        fraction *= 10;
+    whole = whole * CURRENCY_SCALE + fraction + (unsigned)round_up;
+    limit = negative ? 9223372036854775808ULL : 9223372036854775807ULL;
+    if (whole > limit)
+        qb_error(BE_OVERFLOW);
+    *out = negative ? (long long)(0ULL - whole) : (long long)whole;
+    return 1;
+}
+
+/* B$RDCY: the item as a CURRENCY, stored through `destination`. A plain decimal is read exactly (a double cannot hold
+   19 digits); an exponent or a type character goes through the double. */
+void B_RDCY(qb_data_ptr destination)
+{
+    ModuleData *data;
+    const char *cursor = item_start(&data), *begin = cursor;
+    FinValue value;
+    char delimiter = fin_number(&cursor, VT_R8, &value);
+    long long cents;
+
+    item_end(data, cursor, delimiter);
+    if (!exact_currency(begin, &cents)) {
+        double scaled = value.real * CURRENCY_SCALE;
+
+        if (scaled >= 9223372036854775808.0 || scaled < -9223372036854775808.0)
+            qb_error(BE_OVERFLOW);
+        cents = (long long)(scaled < 0 ? scaled - 0.5 : scaled + 0.5);
+    }
+    *(long long QB_FAR *)destination = cents;
 }

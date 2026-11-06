@@ -76,3 +76,15 @@ fn test_the_units_file_name_and_md5_are_kept() {
         Some(("dbg.c".to_owned(), Some("edf9135163a14d7b5141ba381daf995b".to_owned())))
     );
 }
+
+/// The callees `g` and `h` have `declare !dbg` subprograms and `f` is
+/// `DIFlagAllCallsDescribed`: before, the declarations became procedures of
+/// symbols the object does not define, and the flag was dropped.
+#[test]
+fn test_declared_callees_are_declarations_and_all_calls_described_is_kept() {
+    let module = imported(include_str!("clang/call_sites.ll"));
+    let declared: Vec<_> = debuginfo::declarations(&module).into_iter().map(|one| one.function).collect();
+    assert_eq!(declared, ["g", "h"]);
+    let functions = debuginfo::functions(&module);
+    assert_eq!(functions.iter().map(|one| (one.function.as_str(), one.all_calls)).collect::<Vec<_>>(), [("f", true)]);
+}

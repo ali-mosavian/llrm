@@ -409,6 +409,18 @@ pub fn _basic_listing(
     if !runtime_frame && !module_body {
         return Ok(listing);
     }
+    // The shell is compared and stripped as instructions: the unwind
+    // directives the listing declares for it describe a frame the runtime
+    // builds, and an OMF object has no place for them.
+    let listing: Vec<masm::Item> = listing
+        .into_iter()
+        .filter(|item| {
+            !matches!(
+                item,
+                masm::Item::Cfi(_) | masm::Item::Seh(_) | masm::Item::Mark(masm::Mark::Declared)
+            )
+        })
+        .collect();
     // The procedure's first line stands before its prologue.
     let (mut stripped, listing): (Vec<masm::Item>, &[masm::Item]) = match listing.split_first() {
         Some((line @ masm::Item::Mark(_), rest)) => (vec![line.clone()], rest),
@@ -479,8 +491,9 @@ pub fn written_basic(
     module: &masm::Module,
     header: Vec<u8>,
     name: &str,
+    objects: &dyn llrm_debug::DebugObjectTarget,
 ) -> Result<Vec<u8>, String> {
-    written_basic_in(module, header, name, llrm_target::object::Format::Omf)
+    written_basic_in(module, header, name, llrm_target::object::Format::Omf, objects)
 }
 
 /// `written_basic` in the object format of a host: the header and data
@@ -490,8 +503,9 @@ pub fn written_basic_in(
     header: Vec<u8>,
     name: &str,
     format: llrm_target::object::Format,
+    objects: &dyn llrm_debug::DebugObjectTarget,
 ) -> Result<Vec<u8>, String> {
-    timed("object write", || written_basic_inner(module, header, name, format))
+    timed("object write", || written_basic_inner(module, header, name, format, objects))
 }
 
 fn written_basic_inner(
@@ -499,6 +513,7 @@ fn written_basic_inner(
     header: Vec<u8>,
     name: &str,
     format: llrm_target::object::Format,
+    objects: &dyn llrm_debug::DebugObjectTarget,
 ) -> Result<Vec<u8>, String> {
     // Build the same semantic segments as backend.objbuild.written, then add
     // the BASIC-owned MODULE_CODE envelope before asking its canonical record
@@ -534,7 +549,7 @@ fn written_basic_inner(
         &every,
         &mut symbols,
         &mut Default::default(),
-        objbuild::asm_info(format).pref_align,
+        objbuild::asm_info(objects, format).pref_align,
         |procedure, number| _basic_listing(procedure, number),
     )
     .map_err(|error| error.to_string())?;
@@ -563,7 +578,13 @@ fn written_basic_inner(
         4 => objbuild::OFFSET32,
         _ => objbuild::OFFSET,
     };
-    code.fixups = [objbuild::Fixup::new(words.statements, offset_kind, statement_data)]
+    // A module with no row in its table states no line: BC /O leaves OF_STA 0,
+    // and B$STOP then reports "at address" where a non-zero word reports a
+    // line.
+    let has_rows =
+        module.procedures.last().is_some_and(|table| table.callees.values().any(|callee| callee.code.len() > 1));
+    code.fixups = has_rows
+        .then(|| objbuild::Fixup::new(words.statements, offset_kind, statement_data))
         .into_iter()
         .chain(
             NAMED
@@ -596,7 +617,7 @@ fn written_basic_inner(
     let externs: IndexMap<String, String> = module.externs.iter().cloned().collect();
     let object = objbuild::object_of(module, name, segments, &symbols, &Default::default(), &externs)
         .map_err(|error| error.to_string())?;
-    if objbuild::asm_info(format).hosted {
+    if objbuild::asm_info(objects, format).hosted {
         // A host's linker and C spell the runtime's `B$PESD` as `B_PESD`.
         let mut object = object;
         for symbol in &mut object.symbols {
@@ -614,11 +635,13 @@ fn written_basic_inner(
                     definition: llrm_object::Definition::Defined { section: code, offset: 0 },
                     size: header_size,
                     group: None,
+                    visibility: Default::default(),
                 },
             );
-        return objbuild::serialized(&object, format).map_err(|error| error.to_string());
+        return objbuild::serialized(objects, &object, format).map_err(|error| error.to_string());
     }
-    let emitted = llrm_omf::write::write(&object, &llrm_x86::mc::omf::X86Omf).map_err(|error| error.to_string())?;
+    let emitted = llrm_omf::write::write(&object.object, object.debug.as_ref(), &llrm_x86::mc::omf::X86Omf)
+        .map_err(|error| error.to_string())?;
     // QB's classes and combine modes shape a real-mode link; a flat object
     // keeps the ones its writer gave.
     if module.object.bitness != 16 {
@@ -894,7 +917,7 @@ pub fn object(
     options: &Options,
     name: &str,
 ) -> Result<Vec<u8>, String> {
-    written_basic(&assembled(module, object, runtime, options)?, object.header.clone(), name)
+    written_basic(&assembled(module, object, runtime, options)?, object.header.clone(), name, options.arch.objects())
 }
 
 /// The calls of the BASIC module object `object` lays out: its runtime's,
@@ -1014,6 +1037,7 @@ pub fn assembled(
         options.arch.frame_registers(),
         word,
         Regs(options.arch.registers()),
+        object.stack_check.is_some(),
     ));
     let mut data = Vec::new();
     for segment in &object.segments {
@@ -1085,12 +1109,11 @@ pub fn assembled(
     externs.extend(masm::stack_externs(&procedures, &mut names));
     externs.sort();
     externs.dedup();
-    let producer = if runtime == model::RuntimeProfile::Qb45 {
-        llrm_object::debug::Producer::Qb45
-    } else {
-        llrm_object::debug::Producer::Native
-    };
-    let mut debug = timed("debug info", || debuginfo::described(module, &names, producer, &*options.arch))?;
+    let producer =
+        if runtime == model::RuntimeProfile::Qb45 { llrm_debug::Producer::Qb45 } else { llrm_debug::Producer::Native };
+    let mut debug = timed("debug info", || {
+        debuginfo::described(module, &names, producer, &debuginfo::Machine::of(&*options.arch))
+    })?;
     if let Some(debug) = debug.as_mut() {
         debug.format = options.debug_format;
         debug.cfa = options.cfa_locations();
@@ -1102,6 +1125,8 @@ pub fn assembled(
         names,
         externs,
         publics: procedures.iter().filter(|one| one.public).map(|one| one.name.clone()).collect(),
+        visibility: Default::default(),
+        aliases: Vec::new(),
         data,
         procedures,
         private: object.private.clone(),
@@ -1215,6 +1240,7 @@ fn procedure(
         size: target.cpu.size,
         entry,
         stack_check,
+        probe_stack: None,
         // What allocation used: a freed frame register and the registers saved.
         registers: machined.registers.clone(),
     };

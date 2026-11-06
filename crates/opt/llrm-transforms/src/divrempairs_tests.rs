@@ -24,6 +24,195 @@ fn run(
     printed(&module)
 }
 
+/// `Basic`'s prices with a divide-remainder op, as a target's `Tti` states it.
+struct DivRemTti(bool);
+
+impl llrm_mir::tti::Tti for DivRemTti {
+    fn has_div_rem_op(
+        &self,
+        _: u32,
+        _: bool,
+    ) -> bool {
+        self.0
+    }
+
+    fn cmp_sel_cost(
+        &self,
+        op: llrm_mir::tti::CmpSel,
+        ty: llrm_mir::tti::Ty,
+        kind: llrm_mir::tti::CostKind,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.cmp_sel_cost(op, ty, kind)
+    }
+
+    fn memory_op_cost(
+        &self,
+        op: llrm_mir::tti::MemoryOp,
+        ty: llrm_mir::tti::Ty,
+        kind: llrm_mir::tti::CostKind,
+        stored_constant: bool,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.memory_op_cost(op, ty, kind, stored_constant)
+    }
+
+    fn cf_instr_cost(
+        &self,
+        phi: bool,
+        kind: llrm_mir::tti::CostKind,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.cf_instr_cost(phi, kind)
+    }
+
+    fn int_imm_cost(
+        &self,
+        imm: i128,
+        bits: u32,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.int_imm_cost(imm, bits)
+    }
+
+    fn int_imm_cost_inst(
+        &self,
+        op: llrm_mir::tti::ImmUser,
+        index: u32,
+        imm: i128,
+        bits: u32,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.int_imm_cost_inst(op, index, imm, bits)
+    }
+
+    fn is_truncate_free(
+        &self,
+        from: llrm_mir::tti::Ty,
+        to: llrm_mir::tti::Ty,
+    ) -> bool {
+        llrm_mir::tti::Basic.is_truncate_free(from, to)
+    }
+
+    fn is_legal_addressing_mode(
+        &self,
+        gv: bool,
+        offset: i64,
+        base: bool,
+        scale: i64,
+    ) -> bool {
+        llrm_mir::tti::Basic.is_legal_addressing_mode(gv, offset, base, scale)
+    }
+
+    fn cast_cost(
+        &self,
+        op: llrm_mir::tti::CastKind,
+        dst: llrm_mir::tti::Ty,
+        src: llrm_mir::tti::Ty,
+        kind: llrm_mir::tti::CostKind,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.cast_cost(op, dst, src, kind)
+    }
+
+    fn arithmetic_cost(
+        &self,
+        op: llrm_mir::tti::ArithOp,
+        ty: llrm_mir::tti::Ty,
+        kind: llrm_mir::tti::CostKind,
+        first: llrm_mir::tti::OperandInfo,
+        second: llrm_mir::tti::OperandInfo,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.arithmetic_cost(op, ty, kind, first, second)
+    }
+}
+
+/// A target that is `Neutral` but for its `Tti`.
+struct WithTti(bool);
+
+impl llrm_mir::target::Machine for WithTti {
+    fn foreign_span(
+        &self,
+        selectors: (i64, i64),
+        offsets: (i64, i64),
+        width: i64,
+    ) -> Option<(i64, i64)> {
+        llrm_mir::target::Neutral.foreign_span(selectors, offsets, width)
+    }
+
+    fn spaces(&self) -> llrm_mir::spaces::Spaces {
+        llrm_mir::target::Neutral.spaces()
+    }
+
+    fn costs(&self) -> llrm_mir::target::OperationCosts {
+        llrm_mir::target::Neutral.costs()
+    }
+
+    fn registers(&self) -> i64 {
+        llrm_mir::target::Neutral.registers()
+    }
+
+    fn call_registers(&self) -> i64 {
+        llrm_mir::target::Neutral.call_registers()
+    }
+
+    fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {
+        llrm_mir::target::Neutral.address_forms()
+    }
+
+    fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
+        Some(std::rc::Rc::new(DivRemTti(self.0)))
+    }
+}
+
+/// `text` through the pass on a target whose `Tti` says `divrem`.
+fn run_with_tti(
+    text: &str,
+    divrem: bool,
+) -> String {
+    let mut module = parsed(&format!("{HEAD}{text}"));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(DivRemPairs);
+    manager.run_module(&mut module, std::rc::Rc::new(WithTti(divrem))).unwrap();
+    printed(&module)
+}
+
+const EXPANDED: &str = "define i32 @f(i32 noundef %a, i32 noundef %b) {
+b0:
+  %d = udiv i32 %a, %b
+  %m = mul i32 %d, %b
+  %r = sub i32 %a, %m
+  %s = add i32 %d, %r
+  ret i32 %s
+}
+";
+
+/// A target that states a divide-remainder op through its `Tti` (the 6502's
+/// runtime divide) keeps the pair: the expanded remainder becomes the real
+/// `urem`. Before the hook the pass asked only the lowering, found none and
+/// left `a - (a / b) * b`, a multiply per remainder (itoa: 581 bytes against
+/// 389).
+#[test]
+fn test_a_tti_with_a_divrem_op_keeps_the_pair() {
+    let after = run_with_tti(EXPANDED, true);
+    assert!(after.contains("urem i32 %a, %b"), "{after}");
+    assert!(!after.contains("sub i32 %a"), "the expanded remainder is gone: {after}");
+}
+
+/// x86 states its divide-remainder op on its own `Tti`, as the pin's
+/// `X86TTIImpl` does, and the pass keeps the pair through it alone. Before the
+/// exit the answer came from the `Lowering` and the `Tti` said no.
+#[test]
+fn test_x86_states_its_divrem_op_on_its_tti_and_pairs() {
+    use llrm_mir::target::Machine as _;
+    let x86 = llrm_x86_m16::Dos::default();
+    assert!(x86.tti().is_some_and(|tti| tti.has_div_rem_op(32, false)), "x86's Tti says yes");
+    let after = run(EXPANDED, true);
+    assert!(after.contains("urem i32 %a, %b"), "{after}");
+    assert!(!after.contains("sub i32 %a"), "the expanded remainder is gone: {after}");
+}
+
+/// Sibling: a `Tti` that says nothing (the base class) leaves the expanded form
+/// as it was.
+#[test]
+fn test_a_tti_without_a_divrem_op_leaves_the_expanded_remainder() {
+    assert_eq!(run_with_tti(EXPANDED, false), printed(&parsed(&format!("{HEAD}{EXPANDED}"))));
+}
+
 fn lines(text: &str) -> Vec<String> {
     text.lines().map(|one| one.trim().to_owned()).filter(|one| !one.is_empty()).collect()
 }

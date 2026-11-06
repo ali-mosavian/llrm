@@ -63,6 +63,13 @@ def test_the_output_starts_with_the_target_line_and_the_module_carries_it(tmp_pa
     assert f"-mtriple={of.triple} -mcpu={of.cpu} -mattr=-sse,-sse2,-mmx" in llc.stdout
 
 
+def test_the_64_bit_target_has_the_sse_its_cpu_has():
+    """m64 got the i486's `-sse,-sse2,-mmx`: the pin's llc did every double in x87 (nbody, stft_single -Os), 150+ bytes off the real column."""
+    pin = load()
+    assert "+sse2" in pin.target("m64").features and "-sse" not in pin.target("m64").features
+    assert pin.target("m32").features == "-sse,-sse2,-mmx"
+
+
 def test_a_module_that_names_its_own_layout_keeps_it():
     pin = load()
     text = 'target datalayout = "e-p:16:16"\n' + MODULE
@@ -86,3 +93,30 @@ def test_backend_ir_is_the_switchconv_stage_whatever_its_number(tmp_path):
     pin = load()
     assert pin.backend_ir(tmp_path) == tmp_path / "31-switchconv.ll"
     assert pin.backend_ir(tmp_path / "missing") is None
+
+
+GOT_MODULE = "@g = global i32 0\ndeclare i32 @ext(i32)\ndefine i32 @f(i32 %x) {\n  ret i32 %x\n}\n"
+LOCAL_MODULE = (
+    "@g = dso_local global i32 0\n@s = internal constant i32 1\ndeclare dso_local i32 @ext(i32)\ndeclare i32 @llvm.abs.i32(i32, i1)\n"
+    "define dso_local i32 @f(i32 %x) {\n  ret i32 %x\n}\ndefine internal fastcc i32 @h(i32 %x) {\n  ret i32 %x\n}\n"
+)
+
+
+def test_a_same_ir_pin_compare_at_x86_64_refuses_ir_without_dso_local(tmp_path):
+    """2026-11-05: the pin's llc is PIC on clang IR and ours is not; bench_jpeg_fixed x86_64 read -276 B for the pin (`mov r,imm`
+    against ours `lea r,[rip]`) where the like-for-like gap was +78 B. The row went to a card before it was caught."""
+    pin = load()
+    fake(tmp_path, "llc")
+    with pytest.raises(pin.Refused, match="dso_local"):
+        pin.llc(["-O2"], GOT_MODULE, pin.target("m64"), bin_dir=tmp_path)
+    done = pin.llc(["-O2"], LOCAL_MODULE, pin.target("m64"), bin_dir=tmp_path)
+    assert "define dso_local i32 @f" in done.stdout
+    pin.llc(["-O2"], GOT_MODULE, pin.target("m32"), bin_dir=tmp_path)  # 32-bit flows are static: no guard
+
+
+def test_the_symbols_missing_dso_local_are_named():
+    spec = importlib.util.spec_from_file_location("irguard", HERE / "irguard.py")
+    guard = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(guard)
+    assert guard.missing_dso_local(GOT_MODULE) == ["g", "ext", "f"]
+    assert guard.missing_dso_local(LOCAL_MODULE) == []

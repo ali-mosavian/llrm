@@ -85,6 +85,10 @@ pub enum Event {
     /// A callee looked up to tell whether a user of a sinking candidate is an
     /// assume (`sink_block`).
     SinkAssumeLookups,
+    /// An instruction `hoist_min_max` built a pattern query for.
+    HoistMinMaxQueries,
+    /// A lookup of where a simulated move put an instruction (`LoopCtx::contains`).
+    LoopCtxMovedLookups,
     /// A list of a block's predecessors LVI built (`predecessors`).
     LviPredecessorLists,
     /// The position of every instruction in its block worked out
@@ -94,11 +98,26 @@ pub enum Event {
     ScevKeysOwned,
     /// Every copy of a `Context`.
     ContextClones,
+    /// A call graph built over a module (`CallGraph::new`).
+    CallGraphs,
+    /// A drain of the combine worklist (`InstCombinerImpl::run`).
+    CombineDrains,
+    /// An instruction `combine` visited.
+    CombineVisits,
+    /// An instruction the combine worklist was first filled with (`prepareWorklist`).
+    CombineInitial,
+    /// An instruction put on the combine worklist that was not already on it.
+    CombineInserts,
+    /// A `BranchProbabilityInfo` calculated for a function.
+    BranchProbabilities,
+    /// A constant visited for the globals it holds the address of
+    /// (`globalsaa::embedded_once`).
+    ConstantsEmbedded,
 }
 
 const SLOTS: usize = 64;
 
-const NAMES: [&str; 32] = [
+const NAMES: [&str; 41] = [
     "function_clones",
     "function_forks",
     "machinings",
@@ -127,10 +146,19 @@ const NAMES: [&str; 32] = [
     "loop_exit_scans",
     "lvi_icmp_patterns",
     "sink_assume_lookups",
+    "hoist_min_max_queries",
+    "loop_ctx_moved_lookups",
     "lvi_predecessor_lists",
     "positions",
     "scev_keys_owned",
     "context_clones",
+    "call_graphs",
+    "combine_drains",
+    "combine_visits",
+    "combine_initial",
+    "combine_inserts",
+    "branch_probabilities",
+    "constants_embedded",
 ];
 
 /// A pass's runs and the instructions of the functions it ran over.
@@ -147,7 +175,7 @@ thread_local! {
     static PASSES: RefCell<Vec<PassRow>> = const { RefCell::new(Vec::new()) };
     /// (pass, analysis, misses): the analyses a pass made the manager compute.
     static ASKS: RefCell<Vec<(&'static str, &'static str, u64)>> = const { RefCell::new(Vec::new()) };
-    static EVENTS: [Cell<u64>; 32] = const { [const { Cell::new(0) }; 32] };
+    static EVENTS: [Cell<u64>; 41] = const { [const { Cell::new(0) }; 41] };
     /// (name, hits, misses) by the address of the name, which is a literal.
     static FOUND: [Cell<usize>; SLOTS] = const { [const { Cell::new(0) }; SLOTS] };
     static ANALYSES: RefCell<Vec<(&'static str, u64, u64)>> = const { RefCell::new(Vec::new()) };

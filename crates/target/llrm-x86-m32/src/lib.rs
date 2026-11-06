@@ -68,6 +68,64 @@ static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| {
     llrm_target::addressing::forms(include_str!("machines/datalayout.toml")).expect("datalayout.toml parses")
 });
 
+/// The target's tuning. DEVIATE: a multiply by a constant the pin leaves an
+/// `imul` (13-42 clocks on a 486, Intel 240440-002 Table 10.1) is, at -O1..-O3,
+/// the shift/`lea` chain of fewest clocks on the CPU's table with no byte term,
+/// as gcc's `synth_mult` does (`arithmetic::chain_by_clocks`, SD446); -Os keeps
+/// bytes. x_iir was 2.17x gcc's clocks. Owner llrm-target-x86-m32.
+///
+/// A code byte costs the CPU's instruction-cache fill, once per run: a line's
+/// fill clocks over its bytes (`line_fill_clocks` / `cache_line` of the CPU's
+/// sheet; 486: 5 / 16 = 312 milliclocks), so `speed_milliclocks_per_byte` is
+/// derived, never set. Owner llrm-target-x86-m32.
+fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning {
+    let per_byte = llrm_target::timings::derived_byte_rate(costs.cache_line, costs.line_fill_clocks);
+    llrm_mir::target::Tuning {
+        multiply_by_clocks: true,
+        x87_stack_slots: Some(8),
+        speed_milliclocks_per_byte: per_byte,
+        // DEVIATE SZ1 (owner x86-m32, exit 2026-11-20): D11 holds at -Os, so a callee whose copies grow the code stays a call (called_once_os: gcc -Os does; the pin inlines it).
+        inline_size_guard_at_size: true,
+        // DEVIATE SZ2 (owner x86-m32, exit 2026-11-20): -Os keeps a once-called callee whose copy grows the code (gcc does; the pin copies it).
+        inline_size_guard_single_site: true,
+        // DEVIATE REC-2: gcc 15.2's `max-inline-recursive-depth` 8 and
+        // `max-inline-insns-recursive` 450, at -O2/-O3 (never -Os). Owner w10.
+        recursive_inlining: Some((8, 450)),
+        // DEVIATE REC-2 bar: gcc's 15/30 size units in our `gcc_insns`, fitted
+        // to the 10 corpus recursions (insns = 1.6 x gcc size less 5.5; queens
+        // 22 sits on the O3 edge, zero margin). Owner x86-m32; exit 2026-12-10:
+        // the estimate becomes gcc's own size count (translated, not fitted).
+        recursive_edge_growth: Some((12, 22)),
+        // DEVIATE REC-2: the copies may add gcc's 450 at -O2 (fib 240256 -> 99687 clk,
+        // x_fib, frames), 150 at -O3 (rectwo, bintree, recchop are worse with 450; their
+        // O3 card is open). Owner x86-m32, exit 2026-11-20.
+        recursive_inlining_growth: Some((450, 150)),
+        // DEVIATE REC-2: gcc eliminates tail calls before it copies a recursion (passes.def:97, then
+        // pass_ipa_inline :164). At -O3 the copies of the loop beat the tree's (rectwo 1230664 -> 466986
+        // clk, recchop, x_hanoi2, bintree; no -O3 cell worse); at -O2 the tree's copies let GVN merge the
+        // pure same-argument calls (fib 99618 clk against 228901), so -O2 keeps today's order. Owner
+        // x86-m32, exit 2026-11-20.
+        recursive_tre_first: (false, true),
+        peel_folded_entry: true,
+        // DEVIATE UP1 (owner x86-m32; exit 2026-11-20: the pin's cost model or
+        // gcc's unroll estimate priced in clocks and bytes replaces it): a
+        // full unroll must repay its bytes at the speed rate.
+        unroll_milliclocks_per_byte: per_byte,
+        sink_select_arms: true,
+        // DEVIATE MEM-1 (the pin's `EmitTargetCodeForMemcpy`,
+        // X86SelectionDAGInfo.cpp L328, leaves a variable length to a libcall):
+        // at -O2/-O3 on the 486 and P5, the only CPUs this target accepts, it
+        // is `rep movsd` inline, as gcc's `rep_prefix_4_byte`. x_mergesort -O3:
+        // its short copy loops were `call _memcpy`; inline, 72146 -> 66173 clk
+        // (gcc 60026: row MEM-1-R1). Owner w2. Exit 2026-11-20.
+        inline_variable_memcpy: true,
+        // DEVIATE REC5-1 (owner w2, exit 2026-11-20):
+        // see `Tuning::ipsccp_widen_keeps_sign`.
+        ipsccp_widen_keeps_sign: true,
+        ..llrm_mir::target::Tuning::PIN
+    }
+}
+
 impl M32 {
     /// The pressure sets and classes of the pin's x86.
     pub fn pressure_sets() -> &'static llrm_target::pressure::PressureSets {
@@ -88,6 +146,14 @@ impl M32 {
 }
 
 impl llrm_target::Target for M32 {
+    fn objects(&self) -> &'static dyn llrm_debug::DebugObjectTarget {
+        &llrm_x86::mc::X86Objects
+    }
+
+    fn debug_target(&self) -> llrm_debug::DebugTarget {
+        llrm_x86::mc::fixup::debug_target(32)
+    }
+
     fn registers(&self) -> &'static llrm_lir::registers::Info {
         &REGISTER_INFO
     }
@@ -358,9 +424,22 @@ impl llrm_target::Target for M32 {
         4
     }
 
+    /// DEVIATE SD543: no `rep` on `bsf`; the 386, 486 and Pentium have no
+    /// `tzcnt`, so the pin's prefix is a dead byte. Owner m16. Exit 2026-11-20.
+    fn bsf_rep_prefix(&self) -> bool {
+        false
+    }
+
     /// X86ISelLowering.cpp: `setPrefLoopAlignment(Align(16))`.
     fn pref_loop_alignment(&self) -> u8 {
         4
+    }
+
+    /// DEVIATE SD545 (owner anyisa, exit 2026-11-20): the pin pads a loop
+    /// header with up to 15 bytes; gcc's `.p2align 4,,10` pads at most 10.
+    /// -O2 m32 `jpeg_single` ran 15 one-byte nops 14,457 times.
+    fn loop_alignment_max_skip(&self) -> u8 {
+        10
     }
 
     /// The i486 and Pentium have no `nopl` (`FeatureNOPL`): one byte.
@@ -406,7 +485,11 @@ impl llrm_target::Target for M32 {
                     .tti
                     .zip(layout().llvm_cpu)
                     .and_then(|(tti, cpu)| llrm_x86::tti::X86::described(&tti, &cpu))
-                    .map(|one| std::rc::Rc::new(one) as std::rc::Rc<dyn llrm_mir::tti::Tti>),
+                    .map(|one| {
+                        std::rc::Rc::new(
+                            one.with_registers(prices.registers as u32).with_tuning(tuning(&prices.operations)),
+                        ) as std::rc::Rc<dyn llrm_mir::tti::Tti>
+                    }),
                 Some(std::rc::Rc::new(llrm_x86::lowering::X86 { is_64bit: false })),
             )
         }
@@ -553,6 +636,66 @@ mod tests {
         assert!(model.port_touches_memory((0x300, 0x300)), "a port the platform does not list");
     }
 
+    /// The pin's full-unroll thresholds made matmul 2188 B against gcc's 382 at
+    /// m32 -O2 (tile 489 vs 161): m32 takes the size threshold, so a full
+    /// unroll never grows code.
+    #[test]
+    fn test_m32_full_unroll_may_not_grow_the_code() {
+        let prices = llrm_target::CpuPrices {
+            costs: Vec::new(),
+            prefix: 1,
+            address_stall: 0,
+            registers: 6,
+            call_registers: 3,
+            float_registers: 0,
+            address_forms: Vec::new(),
+            operations: OperationCosts::default(),
+            spaces: layout().spaces.roles,
+            private: None,
+            calling: None,
+            foreign: llrm_target::Foreign::none(),
+            ports: M32.flat_ports(),
+        };
+        let tti = (M32.cost_model())(&prices).tti().expect("m32 states its cost model");
+        assert_eq!(tti.unroll_threshold_overrides(), (None, None));
+        // The x87 stack the unroll counts float values against.
+        assert_eq!(tti.x87_stack_slots(), Some(8));
+    }
+
+    /// A code byte is priced by the CPU's own instruction-cache fill, never a
+    /// literal: the 486 fills a 16 byte line in 5 clocks (312 milliclocks per
+    /// byte), the Pentium a 32 byte line in 5 (156), and the price follows the
+    /// sheet. Without the derivation m32 had 0 (no byte price) and its chains
+    /// and pool constants could not be weighed against their bytes.
+    #[test]
+    fn test_a_code_byte_costs_the_cpus_line_fill_per_line_byte() {
+        let rate = |cache_line, line_fill_clocks| {
+            let prices = llrm_target::CpuPrices {
+                costs: Vec::new(),
+                prefix: 1,
+                address_stall: 0,
+                registers: 6,
+                call_registers: 3,
+                float_registers: 0,
+                address_forms: Vec::new(),
+                operations: OperationCosts { cache_line, line_fill_clocks, ..OperationCosts::default() },
+                spaces: layout().spaces.roles,
+                private: None,
+                calling: None,
+                foreign: llrm_target::Foreign::none(),
+                ports: M32.flat_ports(),
+            };
+            (M32.cost_model())(&prices).tti().expect("m32 states its cost model").speed_milliclocks_per_byte()
+        };
+        let (i486, p5) = (TIMINGS.cpu("486").expect("a 486"), TIMINGS.cpu("P5").expect("a P5"));
+        let sheet = |cpu: &llrm_target::timings::CpuTable| {
+            rate(cpu.cache_line.expect("a line"), cpu.line_fill_clocks.expect("a fill"))
+        };
+        assert_eq!((sheet(i486), sheet(p5)), (312, 156));
+        assert_eq!(rate(16, 10), 625, "a slower fill costs more per byte");
+        assert_eq!(rate(0, 5), 0, "no cache line, no byte price");
+    }
+
     /// The flat 32-bit target hands a pass that translates LLVM's the x87 X86
     /// cost model (`Machine::tti`): i486 and pentium price alike there.
     #[test]
@@ -609,6 +752,28 @@ mod tests {
         let sizes = model.size_costs();
         assert_eq!((sizes.load, sizes.float_release, sizes.call, sizes.r#move), (6, 2, 5, 4));
         assert_eq!(model.costs().load, 1, "the clock prices are the CPU's");
+    }
+
+    /// The x87 byte rows were a flat 6: a register `faddp` (2 B encoded) priced at 3x,
+    /// and the memory operand of `fadd m` at 0 (`x87_add_m` = `x87_add`), so folding
+    /// a load looked free at -Os. A register form is the integer register row.
+    #[test]
+    fn m32_x87_byte_rows_split_register_and_memory_forms() {
+        let sizes = OPCOSTS.size_costs();
+        // Mean encoded bytes of 71 float programs at -O2/-Os, per form, with the band of
+        // estimate/measured the integer rows hold: 1.4-1.5 for memory, 2 for register.
+        for (form, estimate, measured, band) in [
+            ("register add", sizes.float_add, 2.00, 1.9..=2.1),
+            ("fld m", sizes.float_load, 5.56, 1.3..=1.6),
+            ("fstp m", sizes.float_store, 4.12, 1.3..=1.6),
+            ("add m", sizes.float_add + sizes.float_load_folded, 5.87, 1.3..=1.6),
+            ("fstp st", sizes.float_release, 2.00, 0.9..=1.1),
+        ] {
+            let ratio = estimate as f64 / measured;
+            assert!(band.contains(&ratio), "{form}: {estimate} B estimated, {measured} B encoded");
+        }
+        assert_eq!(sizes.float_add, sizes.add, "a register x87 add is the integer register row");
+        assert!(sizes.float_load_folded > 0, "a memory operand costs bytes over the register form");
     }
 
     /// A condition held as a value had no price: `phiopt` priced it as the

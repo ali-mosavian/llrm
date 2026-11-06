@@ -102,6 +102,7 @@ fn context_in(
         address_mode: mode,
         opt_size: false,
         call_alignment: 1,
+        reserved_calls: false,
         map: &map,
         names: &names,
     });
@@ -315,6 +316,35 @@ fn a_lea_of_a_constant_and_a_scaled_index_at_m16_shifts_the_index() {
         let emitted = emit(&dag, &units, ctx).expect("emits");
         let names: Vec<_> = emitted.blocks[0].insns.iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
         assert_eq!(names.iter().map(|n| &**n).collect::<Vec<_>>(), ["shl", "lea", "mov"]);
+    });
+}
+
+/// `lea edx, [edx+edx*4]` at m16 carried a dword displacement of zero: nine
+/// bytes against the five of mod 00 (lru -O2 +27 B). Only an index alone needs
+/// the disp32.
+#[test]
+fn a_lea_of_a_base_and_a_scaled_dword_index_at_m16_has_no_displacement() {
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let entry = dag.entry_node();
+    let base = copy_from(&mut dag, entry, 10);
+    let index = copy_from(&mut dag, entry, 11);
+    let scale = dag.get_constant(4, EVT::I8);
+    let disp = dag.get_constant(0, EVT::I32);
+    let noreg = dag.get_register(EVT::I16, 0);
+    let lea = machine(&mut dag, "LEA32r", &[EVT::I32], &[base, scale, index, disp, noreg]);
+    let root = copy_to(&mut dag, entry, 12, lea);
+    context_in(AddrMode::Real16, |ctx| {
+        let units = schedule(&dag, root, &Info);
+        let emitted = emit(&dag, &units, ctx).expect("emits");
+        let lea = emitted.blocks[0]
+            .insns
+            .iter()
+            .find(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("lea")))
+            .expect("a lea");
+        let Some(llrm_lir::Loc::Mem(cell)) = lea.what.as_ref().and_then(|w| w.sources.first()) else {
+            panic!("{lea:?}")
+        };
+        assert_eq!(cell.disp_width, 0, "{cell:?}");
     });
 }
 

@@ -1,6 +1,9 @@
 //! Watcom m16 programs the first i8086 fork could not compile. Needs the fork's
 //! clang (`LLRM_CLANG_M16`) and the Open Watcom headers (`LLRM_OW`).
 
+#[path = "common/target_dir.rs"]
+mod target_dir;
+
 use std::path::Path;
 use std::process::Command;
 
@@ -17,9 +20,12 @@ fn compiles(
     std::fs::create_dir_all(&dir).unwrap();
     let c = dir.join(format!("{name}.c"));
     std::fs::write(&c, source).unwrap();
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_16-wat")
-        .env("LLRM_LLC", std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()))
+        .env(
+            "LLRM_LLC",
+            std::env::var_os("LLRM_LLC").unwrap_or_else(|| target_dir::of(&root).join("release/llrm-llc").into()),
+        )
         .args(["-O2", "-w", "-c", "-o"])
         .arg(dir.join(format!("{name}.obj")))
         .arg(&c)
@@ -56,9 +62,12 @@ fn a_huge_pointer_stepping_past_64k_draws_no_warning() {
     let dir = std::env::temp_dir().join(format!("llrm-cc-wat16-huge-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("h.c"), source).unwrap();
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_16-wat")
-        .env("LLRM_LLC", std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()))
+        .env(
+            "LLRM_LLC",
+            std::env::var_os("LLRM_LLC").unwrap_or_else(|| target_dir::of(&root).join("release/llrm-llc").into()),
+        )
         .args(["-O2", "-c", "-o"])
         .arg(dir.join("h.obj"))
         .arg(dir.join("h.c"))

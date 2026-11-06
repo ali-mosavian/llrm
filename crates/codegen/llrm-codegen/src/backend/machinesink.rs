@@ -69,9 +69,11 @@
 //!
 //! DEVIATE M6 (no number): an instruction that reads or writes any physical
 //! register stays, where `FindSuccToSinkTo` lets a physical def marked dead
-//! through (and a use of a constant register). Effect: none seen, 0 sinks
-//! missed over d_faces and the 820-object corpus at -O2 (counted: no
-//! instruction that passes `safe_to_move` has a physical write and no read).
+//! through (and a use of a constant register). The frame register of a frame
+//! cell, local or argument, is not one: the pin's frame index carries none
+//! (os_execute m64 -Os kept eight `mov r8,[rsp+k]` the pin sinks and folds,
+//! +35 B). The earlier count (0 sinks missed over d_faces and the 820-object
+//! corpus at -O2) saw physical writes only, not reads.
 //! The flags are the pin's rule in full: a def moves only if dead (read by no
 //! later instruction of its block and no successor), and not into a block that
 //! reads them (`SinkInstruction`'s zombie check).
@@ -84,9 +86,11 @@
 //! (a divide: `ax`, `dx`) still sinks: the pin's does not, but holding a divide
 //! in its block grew switch.c 16 B at m16 -Os. Exit: none.
 //!
-//! DEVIATE M3 (#2903): no `PerformSinkAndFold`, no sinking into cycles
-//! (`SinkInstsIntoCycle`, off by default), no debug-value handling (an
-//! instruction has none).
+//! Not ported, and not a deviation on x86 (#2903): `PerformSinkAndFold` runs
+//! in the pin only where the target sets `EnableSinkAndFold` (AArch64, RISC-V,
+//! LoongArch; `TargetPassConfig.h:136`, false by default), `SinkInstsIntoCycle`
+//! is off by default, and an instruction here has no debug values. A target
+//! here that enables sink-and-fold gets it as a per-target hook, default off.
 //!
 //! # Example
 //! `b1: v = mov 0; cmp x, 0; je b4` and `b4: r = phi [b1: v] [b2: w]` leave
@@ -589,13 +593,53 @@ impl Sinker {
         // An incoming argument's cell is a fixed stack object in the pin, a
         // frame index with no register: the frame register the address is
         // spelled through is not a read of one.
-        let fixed_stack = one.defines.first().is_some_and(|value| self.arguments.contains(value));
+        // A local object's cell is a frame index in the pin too: `%stack.N`
+        // carries no register until frame lowering, so its load sinks.
+        let frame_cell = one.what.as_ref().is_some_and(|what| {
+            let mut cells = what.sources.iter().chain(&what.dests).filter_map(|place| match place {
+                Loc::Mem(mem) => Some(mem),
+                _ => None,
+            });
+            cells.clone().next().is_some()
+                && cells.all(|mem| {
+                    mem.base.is_none()
+                        && mem.index.is_none()
+                        && mem.addr.is_some_and(|addr| addr.space == crate::model::ir::Space::Frame)
+                })
+        });
+        let fixed_stack = frame_cell || one.defines.first().is_some_and(|value| self.arguments.contains(value));
         let reads = effect.all_reads();
+        // DEVIATE (segment-reads): an access through the default data segment
+        // names no register in the pin (`MOV32rm` carries `$noreg`), so its
+        // load sinks; here it reads DS. Not while a later instruction of the
+        // block sets DS. A load of a global stayed above the branch that used
+        // it only on one arm (`mov edx,[g]` for `cmp [g],0`).
+        let default_segment = one.what.as_ref().is_some_and(|what| {
+            let mut places = what
+                .sources
+                .iter()
+                .chain(&what.dests)
+                .filter_map(
+                    |place| match place {
+                        Loc::Mem(mem) => Some(mem),
+                        _ => None,
+                    },
+                );
+            places.clone().next().is_some()
+                && places.all(|mem| {
+                    mem.addr.as_ref().is_none_or(|addr| addr.segment == llrm_lir::registers::RegId::None.iced())
+                })
+        }) && !self.insns[block][index + 1..].iter().any(|later| {
+            liveness::effect(self.regs, self.bits, later)
+                .is_none_or(|found| found.writes.iter().any(|&(register, _)| self.regs.is_data_segment(register)))
+        });
         let physical_reads = reads
             .iter()
             .any(
                 |&(register, _)| register != llrm_lir::registers::RegId::None
-                    && !(fixed_stack && (self.regs.is_frame(register) || self.regs.is_stack_segment(register))),
+                    && !(fixed_stack && (self.regs.is_frame(register) || self.regs.is_stack_segment(register)))
+                    && !(frame_cell && self.regs.is_stack(register))
+                    && !(default_segment && self.regs.is_data_segment(register)),
             );
         if physical_reads || physical(&effect.writes) || flags(&reads) {
             return true;
@@ -1162,7 +1206,7 @@ mod tests {
     use crate::support::hash::IndexMap;
 
     fn held(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 4 })
+        Loc::Held(Held { value, width: 4, offset: 0 })
     }
 
     fn insn(
@@ -1585,7 +1629,7 @@ mod tests {
     #[test]
     fn test_in_a_size_build_an_instruction_whose_operand_dies_in_the_block_moves() {
         let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
-        let wide = |value: u32| Loc::Held(Held { value, width: 10 });
+        let wide = |value: u32| Loc::Held(Held { value, width: 10, offset: 0 });
         let entry = LirBlock {
             succ: vec![1, 2].into(),
             ..LirBlock::new(
@@ -1633,7 +1677,7 @@ mod tests {
     #[test]
     fn test_a_lea_is_not_a_load_and_sinks_past_a_branch() {
         use crate::model::ir::Mem;
-        let cell = Mem { base: Some(Held { value: 1, width: 4 }), ..Mem::new(None, 4) };
+        let cell = Mem { base: Some(Held { value: 1, width: 4, offset: 0 }), ..Mem::new(None, 4) };
         let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
         let entry = LirBlock {
             succ: vec![1, 2].into(),
@@ -1774,7 +1818,7 @@ mod tests {
     #[test]
     fn test_a_load_goes_along_a_critical_edge_past_no_store() {
         use crate::model::ir::Mem;
-        let cell = Mem { base: Some(Held { value: 1, width: 4 }), ..Mem::new(None, 4) };
+        let cell = Mem { base: Some(Held { value: 1, width: 4, offset: 0 }), ..Mem::new(None, 4) };
         let block =
             |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
         let jump = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
@@ -1905,7 +1949,7 @@ mod tests {
         // (v12).
         let bubble = |reads: u32| {
             let cell = Mem {
-                index: Some(Held { value: 10, width: 4 }),
+                index: Some(Held { value: 10, width: 4, offset: 0 }),
                 scale: 4,
                 ..Mem::new(Some(Addr::new(Space::Segment, 4)), 4)
             };
@@ -1970,5 +2014,50 @@ mod tests {
         // against the latch's pressure: room for it, and none.
         assert_eq!(names(&sunk_within(&bubble(12), false, 7, None), 3), ["add", "cmp", "jne"], "room");
         assert_eq!(names(&sunk_within(&bubble(12), false, 3, None), 1), ["mov", "add", "cmp", "jle"], "full");
+    }
+
+    /// A byte load of a local buffer, compared in only one arm, stayed in the
+    /// block above the branch: its cell is addressed through the frame
+    /// register, and a physical read kept it (DEVIATE M6; os_execute m64 -Os
+    /// +35 B over the pin, eight `mov r8,[rsp+k]` the pin sinks and folds into
+    /// `cmp [slot], imm`). The pin's local is a frame index with no register.
+    #[test]
+    fn test_a_load_of_a_local_cell_sinks_into_the_arm_that_reads_it() {
+        use crate::model::ir::{Addr, Mem, Space};
+        let cell = Mem { through: llrm_lir::registers::RegId::BP, ..Mem::new(Some(Addr::new(Space::Frame, -8)), 4) };
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let mut body = LirBody::new(
+            "local",
+            0,
+            vec![
+                block(
+                    0,
+                    vec![1, 2],
+                    vec![
+                        insn(10, Operation::Move, "mov", vec![held(3)], vec![Loc::Mem(cell)], vec![3], vec![]),
+                        jump(11),
+                    ],
+                )
+                .into(),
+                block(
+                    1,
+                    vec![],
+                    vec![
+                        insn(12, Operation::Move, "mov", vec![held(5)], vec![held(3)], vec![5], vec![3]),
+                        insn(13, Operation::Return, "ret", vec![], vec![], vec![], vec![]),
+                    ],
+                )
+                .into(),
+                block(2, vec![], vec![insn(14, Operation::Return, "ret", vec![], vec![], vec![], vec![])]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let sunk = sunk(&body, false);
+        let loads = |at: usize| sunk.blocks[at].insns.iter().any(|one| one.defines.contains(&3));
+        assert!(loads(1) && !loads(0), "the load moved into the arm that reads it");
     }
 }

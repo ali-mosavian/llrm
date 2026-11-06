@@ -10,7 +10,15 @@ fn load(
 ) -> SDValue {
     let ptr = dag.get_register(EVT::I32, 7);
     let chain = dag.entry_node();
-    let info = MemInfo { mem_vt: vt, align: 1, volatile: false, base: MemBase::Stack(slot), ext: None, space: 0 };
+    let info = MemInfo {
+        mem_vt: vt,
+        align: 1,
+        volatile: false,
+        base: MemBase::Stack(slot),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     dag.get_load(vt, chain, ptr, info)
 }
 
@@ -19,7 +27,13 @@ fn lowered(
     cmov: bool,
 ) {
     let tli = TargetLowering::x86_32(Features { cmov, ..Features::default() }, MVT::I32);
-    DagLegalizer::new(dag, &tli, &mut X86Lowering { cmov, sse2: false, min_size: false }).run().unwrap();
+    DagLegalizer::new(
+        dag,
+        &tli,
+        &mut X86Lowering { cmov, sse2: false, min_size: false, three_address_adds: false, i16_mul_chains: false, sext_load: false, zext_free: false, profile: None },
+    )
+    .run()
+    .unwrap();
 }
 
 fn code(
@@ -122,4 +136,39 @@ fn narrow_selects_widen_by_cpu() {
         let root = dag.get_root();
         assert_eq!(dag.opcode(root) == ISD::Truncate, widens, "{vt:?} cmov={cmov}");
     }
+}
+
+/// The pin's `foldBinOpIntoSelect`, `(xor (and x, y), y)` and GE/LE canonicalization ran on every target but x86,
+/// which kept `select (add c, 1)` as an add of a select (bintree C -7 B and -16% clocks at -O2).
+#[test]
+fn x86_runs_the_pin_combines_the_corpus_judged_better() {
+    use super::super::dag_combiner::CombineHooks;
+    let hooks = X86Lowering { cmov: true, sse2: false, min_size: false, three_address_adds: false, i16_mul_chains: false, sext_load: false, zext_free: false, profile: None };
+    assert!(hooks.fold_bin_op_into_select() && hooks.fold_xor_of_and_with_mask() && hooks.canonicalize_ge_le());
+    assert!(!hooks.rebuild_brcond_condition() && !hooks.fold_mul_of_add_with_constant());
+    let m64 = X86Lowering { zext_free: true, ..hooks };
+    assert!(m64.rebuild_brcond_condition() && m64.fold_and_of_extload());
+}
+
+/// `and (freeze (extload i8)), 255` kept the load wide and the mask: x86 did
+/// not ask for the pin's `ReduceLoadWidth` through a freeze (the hook is
+/// default-off; the IR-level lowering drops this freeze, so the DAG is built
+/// by hand, as `pin_folds` does for the generic fold).
+#[test]
+fn x86_narrows_a_mask_over_a_frozen_extending_load() {
+    use super::super::dag_combiner::{CombineLevel, DagCombiner};
+    let mut dag = dag();
+    super::pin_folds::masked_frozen_extload(&mut dag);
+    let mut x86 = X86Lowering {
+        cmov: true,
+        sse2: false,
+        min_size: false,
+        three_address_adds: false,
+        i16_mul_chains: false,
+        sext_load: false,
+        zext_free: false,
+        profile: None,
+    };
+    DagCombiner::new(&mut dag, &mut x86, CombineLevel::BeforeLegalizeTypes).run();
+    assert_eq!(dag.opcode(dag.get_root()), ISD::AssertZext);
 }

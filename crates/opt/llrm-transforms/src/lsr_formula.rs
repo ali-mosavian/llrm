@@ -35,6 +35,9 @@ use llrm_support::hash::HashMap;
 pub struct MemAccessTy {
     pub mem_ty: Option<TypeId>,
     pub addr_space: u32,
+    /// The bytes of `mem_ty` (the target's `isLegalAddressingMode` reads the
+    /// size); 0 where it is unknown.
+    pub bytes: u64,
 }
 
 impl MemAccessTy {
@@ -43,7 +46,7 @@ impl MemAccessTy {
 
     /// `getUnknown`.
     pub fn unknown(addr_space: u32) -> Self {
-        Self { mem_ty: None, addr_space }
+        Self { mem_ty: None, addr_space, bytes: 0 }
     }
 }
 
@@ -446,7 +449,7 @@ impl Formula {
             self.scaled_reg = Some(self.base_regs[at]);
             self.base_regs[at] = scaled;
         }
-        assert!(self.is_canonical(se, l), "Failed to canonicalize?");
+        debug_assert!(self.is_canonical(se, l), "Failed to canonicalize?");
     }
 
     /// `Formula::unscale`: `reg1 + 1*reg2` into `reg1 + reg2`. The formula may

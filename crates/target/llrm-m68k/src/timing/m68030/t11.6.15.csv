@@ -1,0 +1,9 @@
+#title,11.6.15 Conditional Branch Instructions,page,11-48,notes,none printed on page
+Group,Mark,Instruction or Address Mode,Operands or Condition,Head,Tail,I-Cache Case,No-Cache Case
+,,Bcc,(Taken),6,0,6(0/0/0),8(0/2/0)
+,,Bcc.B,(Not Taken),4,0,4(0/0/0),4(0/1/0)
+,,Bcc.W,(Not Taken),6,0,6(0/0/0),6(0/1/0)
+,,Bcc.L,(Not Taken),6,0,6(0/0/0),8(0/2/0)
+,,DBcc,"(cc=False, Count Not Expired)",6,0,6(0/0/0),8(0/2/0)
+,,DBcc,"(cc=False, Count Expired)",10,0,10(0/0/0),13(0/3/0)
+,,DBcc,(cc=True),6,0,6(0/0/0),8(0/1/0)

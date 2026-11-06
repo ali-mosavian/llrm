@@ -1,0 +1,486 @@
+//! The Z80's cost model, summed from the instruction table (`timing/z80.csv`).
+//!
+//! Every price is the sum of the forms an operation expands to ([`sum`]): bytes
+//! for `CodeSize`, T-states for the other kinds, in units of a cheap
+//! instruction (4 T, `ld r,r`), so that `SimplifyCFG`'s speculation budget and
+//! the inliner's thresholds, which count in `TCC_Basic`, mean what they mean
+//! for the pin.
+//!
+//! DEVIATE: `BasicTTIImplBase` scales only `RecipThroughput`; here `Latency`
+//! and `SizeAndLatency` scale too (as `X86TTIImpl` and `AArch64TTIImpl` do).
+//! Reason: a 16-bit `add` is one instruction and an `and` six, which the
+//! `Basic` unit price hides. Exit: none; the table is the target's.
+//!
+//! DEVIATE: the runtime routines (`__mulhi3`, `__udivhi3`, `__ashlhi3`, ...)
+//! are not written, so a call is priced as the restoring loop SDCC's measured
+//! `mul8` (385 T) agrees with, per bit. Reason: the cost model runs before
+//! the runtime exists. Exit: price from the routines' own T-states once
+//! `runtime/` has them (by 2026-11-06).
+//!
+//! DEVIATE: soft float is priced as a multiply-sized call. Reason: no
+//! soft-float runtime. Exit: the same.
+//!
+//! The expansions (operands already in the registers the instruction wants;
+//! placing them is the allocator's):
+//!
+//! | operation | forms |
+//! |---|---|
+//! | add, sub, and, or, xor, i8 | `add a,r` |
+//! | add, i16 | `add hl,rr` |
+//! | sub, i16 | `or a; sbc hl,rr` |
+//! | and, or, xor, i16 | `ld a,l; and c; ld l,a; ld a,h; and b; ld h,a` |
+//! | icmp, i8 / i16 | `cp r` / `push hl; or a; sbc hl,rr; pop hl` |
+//! | select, i8 / i16 | `jr nz,e; ld r,r'` per byte |
+//! | load, store, i8 / i16 | `ld r,(hl)` / `ld a,(hl); inc hl; ld h,(hl); ld l,a` and its store |
+//! | shift by a constant, per bit, i8 / i16 | `sla r` / `add hl,hl` or `srl h; rr l` |
+//! | zext, sext i8 to i16 | `ld h,n` / `ld a,l; rla; sbc a,a; ld h,a` |
+
+use llrm_mir::datalayout::DataLayout;
+use llrm_mir::tti::*;
+use llrm_target::Target as _;
+
+use crate::driver::Level;
+use crate::target::Z80;
+use crate::timing::cost;
+
+/// The bytes and T-states of `forms`, each taken on its taken path.
+fn sum(forms: &[&str]) -> (i64, i64) {
+    forms
+        .iter()
+        .fold(
+            (0, 0),
+            |(bytes, clocks), form| {
+                let one = cost(form).unwrap_or_else(|| panic!("timing/z80.csv has no form `{form}`"));
+                (bytes + i64::from(one.bytes), clocks + i64::from(one.taken))
+            },
+        )
+}
+
+/// `forms` in the unit of `kind`.
+fn priced(
+    forms: &[&str],
+    kind: CostKind,
+) -> Cost {
+    let (bytes, clocks) = sum(forms);
+    Cost::of(match kind {
+        CostKind::CodeSize => bytes,
+        _ => (clocks + 3) / 4,
+    })
+}
+
+/// The cost model of the Z80 and Z180.
+#[derive(Clone, Copy, Debug)]
+pub struct Z80Tti {
+    /// The native integer, in bits (`n8`).
+    byte_bits: u32,
+    /// The pointer, in bits (`p:16`).
+    pointer_bits: u32,
+}
+
+impl Z80Tti {
+    pub fn new() -> Z80Tti {
+        let layout = DataLayout::parse(&Z80.layout().datalayout).expect("the Z80's datalayout parses");
+        Z80Tti { byte_bits: layout.largest_legal_integer(), pointer_bits: layout.pointer(0).bits }
+    }
+
+    /// The legal-sized pieces a value of `ty` splits into: bytes for an `i8`,
+    /// words for the rest.
+    fn parts(
+        &self,
+        ty: Ty,
+    ) -> i64 {
+        let bits = match ty {
+            Ty::Int(bits) => bits,
+            Ty::Pointer => self.pointer_bits,
+            Ty::Float => 32,
+            Ty::Double => 64,
+            Ty::X87 => 80,
+        };
+        i64::from(bits.div_ceil(16).max(1))
+    }
+
+    fn is_byte(
+        &self,
+        ty: Ty,
+    ) -> bool {
+        matches!(ty, Ty::Int(bits) if bits <= self.byte_bits.min(8))
+    }
+
+    /// A call of a runtime loop of `bits` passes, each the forms `body`, plus
+    /// the call and the return.
+    fn call(
+        &self,
+        parts: i64,
+        bits: i64,
+        body: &[&str],
+        kind: CostKind,
+    ) -> Cost {
+        let (bytes, clocks) = sum(body);
+        let (call_bytes, call_clocks) = sum(&["call nn", "ret"]);
+        match kind {
+            CostKind::CodeSize => Cost::of(call_bytes + 2 * parts),
+            _ => Cost::of((call_clocks + clocks * bits + bytes) / 4 * parts),
+        }
+    }
+}
+
+impl Default for Z80Tti {
+    fn default() -> Z80Tti {
+        Z80Tti::new()
+    }
+}
+
+impl Tti for Z80Tti {
+    fn name(&self) -> &'static str {
+        "z80"
+    }
+
+    fn cmp_sel_cost(
+        &self,
+        op: CmpSel,
+        ty: Ty,
+        kind: CostKind,
+    ) -> Cost {
+        let parts = self.parts(ty);
+        match op {
+            CmpSel::ICmp if self.is_byte(ty) => priced(&["cp b"], kind),
+            CmpSel::ICmp => priced(&["push bc", "or b", "sbc hl;bc", "pop bc"], kind) * parts.min(2),
+            CmpSel::Select if self.is_byte(ty) => priced(&["jr nz;e", "ld b;c"], kind),
+            CmpSel::Select => priced(&["jr nz;e", "ld b;c", "ld b;c"], kind) * parts,
+            // soft float: a call
+            CmpSel::FCmp => self.call(parts, 8 * parts, &["add hl;bc", "djnz e"], kind),
+        }
+    }
+
+    fn memory_op_cost(
+        &self,
+        op: MemoryOp,
+        ty: Ty,
+        kind: CostKind,
+        _: bool,
+    ) -> Cost {
+        let load = op == MemoryOp::Load;
+        if self.is_byte(ty) {
+            return priced(&[if load { "ld b;(hl)" } else { "ld (hl);b" }], kind);
+        }
+        let word = if load {
+            ["ld b;(hl)", "inc hl", "ld b;(hl)", "ld b;c"]
+        } else {
+            ["ld (hl);b", "inc hl", "ld (hl);b", "inc hl"]
+        };
+        priced(&word, kind) * self.parts(ty)
+    }
+
+    fn cf_instr_cost(
+        &self,
+        phi: bool,
+        kind: CostKind,
+    ) -> Cost {
+        Basic.cf_instr_cost(phi, kind)
+    }
+
+    fn int_imm_cost(
+        &self,
+        _: i128,
+        bits: u32,
+    ) -> Cost {
+        Cost::of(i64::from(bits.div_ceil(16).max(1)))
+    }
+
+    fn int_imm_cost_inst(
+        &self,
+        op: ImmUser,
+        index: u32,
+        imm: i128,
+        bits: u32,
+    ) -> Cost {
+        Basic.int_imm_cost_inst(op, index, imm, bits)
+    }
+
+    fn is_truncate_free(
+        &self,
+        from: Ty,
+        to: Ty,
+    ) -> bool {
+        matches!((from, to), (Ty::Int(from), Ty::Int(to)) if to < from)
+    }
+
+    /// What the selector folds into one access: a register alone (`ld a,(hl)`)
+    /// or an absolute address with its offset (`ld a,(nn)`). A register
+    /// plus a displacement is `(ix+d)`, which is not selected yet, and the Z80
+    /// has no register-plus-register or scaled mode. The pin's default
+    /// always accepts `r`, so LSR's initial formula is legal; `Basic`
+    /// accepts nothing and LSR's `Formula is illegal` assertion fires.
+    fn is_legal_addressing_mode(
+        &self,
+        gv: bool,
+        offset: i64,
+        base: bool,
+        scale: i64,
+    ) -> bool {
+        if !matches!(scale, 0 | 1) {
+            return false;
+        }
+        match usize::from(base) + usize::from(scale == 1) {
+            0 => true,
+            1 => !gv && offset == 0,
+            _ => false,
+        }
+    }
+
+    /// AArch64's `isLSRCostLess`, not X86's: the base adds come before the
+    /// add-recurrences. The Z80 has no base+register address, so a base add
+    /// is an `add hl,rr` and two moves each trip while another induction
+    /// variable is one `inc rr`: lz4's copy loops kept `dst + off` as a base
+    /// add and their pointers in the frame (170569 clocks, gcc 35781).
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L7461
+    /// DEVIATE Z80L3: `num_base_adds` also comes before `num_regs`. Three
+    /// pairs hold three induction variables, but each base add is an `add
+    /// hl,rr` and moves every trip: reverse -Oz kept `p + i` and `p + j` as
+    /// base adds to save one register and spilled the rest (105 B, 1900 T);
+    /// SDCC's 68 B / 1270 T. Exit: none; the order is the target's.
+    /// Open: `find` -O2/-Oz is 2 B / 27 T worse than the pin's order (a second
+    /// induction variable for the returned index).
+    fn is_lsr_cost_less(
+        &self,
+        a: &LsrCost,
+        b: &LsrCost,
+    ) -> bool {
+        let key = |c: &LsrCost| {
+            (
+                c.num_base_adds,
+                c.num_regs,
+                c.insns,
+                c.add_rec_cost,
+                c.num_iv_muls,
+                c.scale_cost,
+                c.imm_cost,
+                c.setup_cost,
+            )
+        };
+        key(a) < key(b)
+    }
+
+    /// The adds of a use whose fixups all lie after the loop are rated as run
+    /// once (DEVIATE LU12, off in the pin): lz4 -Oz keeps 159 instructions
+    /// against 168 without it.
+    fn lsr_exit_use_adds_run_once(&self) -> bool {
+        true
+    }
+
+    /// A word add, `add hl,bc`: the Z80 prices in machine cycles (and bytes),
+    /// so the expansion budget of four basic instructions counts word
+    /// operations. A 16-bit `umax` alone costs 6; the loop count of lz4c's
+    /// checksum loop (`umax` and an add) was refused, and the loop kept
+    /// `base + i` with its bound and base in the frame (132469 T).
+    fn tcc_basic(
+        &self,
+        kind: CostKind,
+    ) -> Cost {
+        priced(&["add hl;bc"], kind)
+    }
+
+    /// HardwareLoops: a counted loop keeps its count in a byte register,
+    /// which `djnz` counts down. Only where the loop's own counter dies (the
+    /// byte replaces the word) and nothing in the loop calls (a call takes
+    /// every register).
+    fn is_hardware_loop_profitable(
+        &self,
+        info: &mut llrm_mir::tti::HardwareLoopTarget,
+    ) -> bool {
+        info.count_bits = 8;
+        info.counter_in_reg = true;
+        info.is_nesting_legal = true;
+        info.requires_dead_counter = true;
+        info.rejects_calls = true;
+        true
+    }
+
+    /// SZ1, rule 1: a size build keeps a callee bigger than its call. The pin's
+    /// `OptSizeThreshold` 50 allows growth, and a word update is 6 B where the
+    /// call is 3.
+    fn opt_size_inline_by_code_size(&self) -> bool {
+        true
+    }
+
+    /// Where the pin's own cost is negative the inline shrinks the caller (a
+    /// wrapper, a callee that folds away): the bound stands down.
+    fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {
+        true
+    }
+
+    /// The pin counts a call as one unit and one per argument; here a unit is a
+    /// byte, and `call nn` is 3 with `ld rr,#nn` or a pair move 2 to 3 per
+    /// word argument: 250% makes one argument 5 B (2 units) and three 9 B (4).
+    fn call_code_size_percent(&self) -> i64 {
+        250
+    }
+
+    /// The call with what surrounds it, which inlining removes: `call nn` and
+    /// `ret`; the first three word arguments in HL, DE and BC (`ld rr,nn`, the
+    /// dearer of a constant and a move), a byte in a register (`ld r,n`), the
+    /// rest `push` and the `pop` that takes them back; a `byval` argument
+    /// copied by `ldir`; and the callee's frame, `push ix; ld ix,#0; add ix,sp`
+    /// and its undoing, with a `push` a word of locals (a frame over 6 B is
+    /// `ld iy,#-n; add iy,sp; ld sp,iy`).
+    ///
+    /// DEVIATE: the values live across the call (every register is
+    /// caller-saved, so each costs a spill and a reload, 6 B / 38 T) and the
+    /// frame the callee's own spills make are not here: the inliner does not
+    /// know them before allocation. Exit: none; the estimate is the floor.
+    /// `ld sp,ix` and `ld iy,nn` are priced as `ld sp,hl` and `ld ix,nn`: the
+    /// table has no form for them.
+    fn call_sequence_cost(
+        &self,
+        shape: &CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        let (mut bytes, mut clocks) = sum(&["call nn", "ret"]);
+        let mut registers = 0;
+        for argument in &shape.arguments {
+            let words = match argument.ty {
+                Some(Ty::Int(bits)) if bits <= 8 => 0,
+                Some(Ty::Int(bits)) => i64::from(bits.div_ceil(16)),
+                Some(ty) => self.parts(ty),
+                None => 1,
+            };
+            if let Some(copied) = argument.byval_bytes {
+                // `ld hl,src; ld de,dst; ld bc,n; ldir`: 21 T a byte
+                let (b, c) = sum(&["ld hl;nn", "ld hl;nn", "ld bc;nn", "ldir"]);
+                bytes += b;
+                clocks += c + 21 * (copied as i64 - 1);
+            } else if words == 0 {
+                let (b, c) = sum(&["ld b;n"]);
+                bytes += b;
+                clocks += c;
+            } else {
+                for _ in 0..words {
+                    let form = if registers < 3 { &["ld bc;nn"][..] } else { &["push bc", "pop bc"][..] };
+                    registers += 1;
+                    let (b, c) = sum(form);
+                    bytes += b;
+                    clocks += c;
+                }
+            }
+        }
+        Some(Cost::of(match kind {
+            CostKind::CodeSize => bytes,
+            _ => (clocks + 3) / 4,
+        }))
+    }
+
+    /// The callee's frame: `push ix; ld ix,#0; add ix,sp` and its undoing, with
+    /// a `push` a word of locals (a frame over 6 B is `ld iy,#-n; add iy,sp;
+    /// ld sp,iy`). `ld sp,ix` and `ld iy,nn` are priced as `ld sp,hl` and
+    /// `ld ix,nn`: the table has no form for them.
+    fn callee_frame_cost(
+        &self,
+        shape: &CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        if shape.callee_frame_bytes == 0 {
+            return None;
+        }
+        let (mut bytes, mut clocks) = (0, 0);
+        let frame: &[&str] = if shape.callee_frame_bytes > 6 {
+            &["push ix", "ld ix;nn", "add ix;bc", "ld ix;nn", "add ix;bc", "ld sp;hl", "ld sp;hl", "pop ix"]
+        } else {
+            &["push ix", "ld ix;nn", "add ix;bc", "ld sp;hl", "pop ix"]
+        };
+        let (b, c) = sum(frame);
+        bytes += b;
+        clocks += c;
+        if shape.callee_frame_bytes <= 6 {
+            let (b, c) = sum(&["push bc"]);
+            let words = (shape.callee_frame_bytes as i64 + 1) / 2;
+            bytes += b * words;
+            clocks += c * words;
+        }
+        Some(Cost::of(match kind {
+            CostKind::CodeSize => bytes,
+            _ => (clocks + 3) / 4,
+        }))
+    }
+
+    // There is no conditional move: a `select` is a branch on the Z80.
+    fn has_cmov(&self) -> bool {
+        false
+    }
+
+    // The runtime has no routine that leaves both quotient and remainder: a
+    // pair is two calls.
+    fn has_div_rem_op(
+        &self,
+        _bits: u32,
+        _signed: bool,
+    ) -> bool {
+        false
+    }
+
+    fn cast_cost(
+        &self,
+        op: CastKind,
+        dst: Ty,
+        src: Ty,
+        kind: CostKind,
+    ) -> Cost {
+        let (to, from) = (self.parts(dst), self.parts(src));
+        let widen = self.is_byte(src) && !self.is_byte(dst);
+        match op {
+            CastKind::Trunc | CastKind::BitCast => Cost::FREE,
+            CastKind::ZExt | CastKind::PtrToInt | CastKind::IntToPtr if widen => {
+                priced(&["ld b;n"], kind) * (to - from + 1).max(1)
+            }
+            CastKind::ZExt | CastKind::PtrToInt | CastKind::IntToPtr => priced(&["ld b;n"], kind) * (to - from).max(0),
+            CastKind::SExt if widen => priced(&["ld b;c", "rla", "sbc a;b", "ld b;c"], kind),
+            CastKind::SExt => priced(&["rla", "sbc a;b", "ld b;c"], kind) * (to - from).max(0),
+            // soft float: a call
+            _ => self.call(to.max(from), 8 * to.max(from), &["add hl;bc", "djnz e"], kind),
+        }
+    }
+
+    fn arithmetic_cost(
+        &self,
+        op: ArithOp,
+        ty: Ty,
+        kind: CostKind,
+        first: OperandInfo,
+        second: OperandInfo,
+    ) -> Cost {
+        use ArithOp::*;
+        let parts = self.parts(ty);
+        let byte = self.is_byte(ty);
+        let bits = if byte { 8 } else { 16 * parts };
+        let constant = first.constant || second.constant;
+        match op {
+            Add if byte => priced(&["add a;b"], kind),
+            Sub | And | Or | Xor if byte => priced(&["sub b"], kind),
+            Add => priced(&["add hl;bc"], kind) + priced(&["adc hl;bc"], kind) * (parts - 1),
+            Sub => priced(&["or b", "sbc hl;bc"], kind) + priced(&["sbc hl;bc"], kind) * (parts - 1),
+            And | Or | Xor => priced(&["ld b;c", "and b", "ld b;c", "ld b;c", "and b", "ld b;c"], kind) * parts,
+            FNeg => priced(&["xor n"], kind),
+            // one step per bit; the amount is not known here, so one step
+            // stands for a constant shift
+            Shl | LShr | AShr if second.constant && byte => priced(&["sla b"], kind),
+            Shl if second.constant => priced(&["add hl;bc"], kind) * parts,
+            Shl | LShr | AShr if second.constant => priced(&["srl b", "rr b"], kind) * parts,
+            // by a variable: a loop of one step and a `djnz`, 4 or 8 passes on
+            // average
+            Shl | LShr | AShr => self.call(parts, bits / 2, &["add hl;bc", "djnz e"], kind),
+            Mul if second.power_of_two || first.power_of_two => priced(&["add hl;bc"], kind) * parts,
+            Mul if constant => priced(&["add hl;bc", "add hl;bc", "add hl;bc"], kind) * parts,
+            // shift-and-add: add hl,hl; jr nc; add hl,de; djnz per bit
+            Mul => self.call(parts, bits, &["add hl;bc", "jr nc;e", "add hl;bc", "djnz e"], kind),
+            UDiv | URem if second.power_of_two => priced(&["srl b", "rr b"], kind) * parts,
+            // restoring division: add hl,hl; adc hl,hl; sbc hl,de; jr nc; add
+            // hl,de; djnz per bit
+            UDiv | URem | SDiv | SRem => {
+                self.call(parts, bits, &["add hl;bc", "adc hl;bc", "sbc hl;bc", "jr nc;e", "add hl;bc", "djnz e"], kind)
+            }
+            // soft float: a call
+            FAdd | FSub | FMul | FDiv | FRem => {
+                self.call(parts, bits, &["add hl;bc", "jr nc;e", "add hl;bc", "djnz e"], kind)
+            }
+        }
+    }
+}

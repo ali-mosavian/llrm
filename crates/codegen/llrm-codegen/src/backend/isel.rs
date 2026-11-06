@@ -176,7 +176,8 @@ use crate::backend::{addressforms, division};
 use crate::model::ir::{self, Addr, AddressRef, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::SrcLoc;
 use crate::model::lir::{
-    Block, BlockOdds, DebugNote, DebugPlace, DebugTags, DebugVariable, Insn, LirBlock, LirBody, NoteValue, Phi,
+    Block, BlockOdds, DebugNote, DebugPlace, DebugTags, DebugVariable, Insn, LirBlock, LirBody, NoteArg, NoteExpr,
+    NoteValue, Phi,
 };
 use crate::model::passes::AddressForm;
 use crate::support::hash::IndexMap;
@@ -184,7 +185,9 @@ use crate::support::hash::IndexMap;
 mod combined;
 /// The abstract values an operand list names, `ir.values` deciding.
 fn _named_values(where_: &[Loc]) -> Vec<u32> {
-    where_.iter().flat_map(|operand| ir::values(operand).into_iter().map(|one| one.value)).collect()
+    let mut out = Vec::with_capacity(where_.iter().map(|operand| ir::values(operand).len()).sum());
+    out.extend(where_.iter().flat_map(|operand| ir::values(operand).into_iter().map(|one| one.value)));
+    out
 }
 
 /// The values an instruction writes: a destination that *is* a value.
@@ -199,14 +202,13 @@ pub(crate) fn _written(dests: &[Loc]) -> Vec<u32> {
 }
 
 /// The values an instruction reads: its sources, and the addresses its
-/// destinations are reached by.
+/// destinations are reached by. Sized for what it holds: a list grown a push
+/// at a time was reallocated twice (107,000 growths in memory_expansion).
 pub(crate) fn _read(what: &ir::Semantics) -> Vec<u32> {
-    let mut out = _named_values(&what.sources);
-    for where_ in &what.dests {
-        if !matches!(where_, Loc::Held(_)) {
-            out.extend(ir::values(where_).into_iter().map(|one| one.value));
-        }
-    }
+    let addressed = || what.dests.iter().filter(|where_| !matches!(where_, Loc::Held(_)));
+    let count: usize = what.sources.iter().chain(addressed()).map(|operand| ir::values(operand).len()).sum();
+    let mut out = Vec::with_capacity(count);
+    out.extend(what.sources.iter().chain(addressed()).flat_map(|operand| ir::values(operand).into_iter().map(|one| one.value)));
     out
 }
 
@@ -387,8 +389,10 @@ fn passing(
                 return refuse(format!("calling convention {convention}"));
             };
             // `fastcc` is C's callee-pop twin unless the description states a
-            // `fastcc` of its own.
-            let twin = convention == llrm_mir::opcode::FAST && found.cc.as_deref() != Some("fast");
+            // `fastcc` of its own, or says C has no such twin (x86-64).
+            let twin = convention == llrm_mir::opcode::FAST
+                && found.cc.as_deref() != Some("fast")
+                && arch.calling().callee_pop(0) == Some(llrm_mir::opcode::FAST);
             let pops = twin || found.cleanup == Cleanup::Callee;
             Ok(Passing {
                 in_order: found.order == Order::LeftToRight,
@@ -499,7 +503,7 @@ pub fn convention(
     };
     let param_types: Vec<TypeId> = function.parameters().iter().map(|&one| function.value(one).ty).collect();
     let (result, _, variadic) = module.signature(function.ty);
-    convention_for(
+    convention_for_abi(
         module,
         layout,
         arch,
@@ -509,6 +513,7 @@ pub fn convention(
         variadic,
         &param_types,
         &function.parameter_attrs,
+        soft_float(&function.attrs),
     )
 }
 
@@ -526,6 +531,52 @@ pub fn convention_for(
     variadic: bool,
     param_types: &[TypeId],
     parameter_attrs: &[Vec<llrm_mir::Attribute>],
+) -> Result<Convention, Unselected> {
+    convention_for_abi(
+        module,
+        layout,
+        arch,
+        first,
+        calling_convention,
+        result,
+        variadic,
+        param_types,
+        parameter_attrs,
+        false,
+    )
+}
+
+/// Whether `attrs` ask for no FPU: clang's `-mno-80387` states `-x87` among
+/// the target features (`X86Subtarget::hasX87`), and `"use-soft-float"="true"`
+/// or `+soft-float` is the generic spelling. The floats of such a function
+/// travel as the integers of their width.
+pub fn soft_float(attrs: &[llrm_mir::Attribute]) -> bool {
+    attrs
+        .iter()
+        .any(
+            |one| match one {
+                llrm_mir::Attribute::Str(key, Some(value)) if key == "use-soft-float" => value == "true",
+                llrm_mir::Attribute::Str(key, Some(value)) if key == "target-features" => {
+                    value.split(',').any(|feature| feature == "-x87" || feature == "+soft-float")
+                }
+                _ => false,
+            },
+        )
+}
+
+/// `convention_for`, where `soft_float` makes a `float` or `double` an integer
+/// of its width for the registers and the result.
+pub fn convention_for_abi(
+    module: &Module,
+    layout: &DataLayout,
+    arch: &dyn llrm_target::Target,
+    first: i64,
+    calling_convention: u32,
+    result: TypeId,
+    variadic: bool,
+    param_types: &[TypeId],
+    parameter_attrs: &[Vec<llrm_mir::Attribute>],
+    soft_float: bool,
 ) -> Result<Convention, Unselected> {
     in_the_frame(parameter_attrs)?;
     let interrupt = calling_convention == llrm_mir::opcode::X86_INTR;
@@ -547,6 +598,46 @@ pub fn convention_for(
     if interrupt && widths.iter().any(|&one| one != 2) {
         return refuse("an interrupt handler's parameter that is not a register");
     }
+    // Row W64-1 (owner x86-m64, exit 2026-11-14): Win64's by-value structs and
+    // vectors are passed by the ABI's own rules (a pointer to a caller copy,
+    // XMM0, ...), not probed: refused, not guessed. A 128-bit integer is two
+    // i64 words (CC_X86_Win64_C has no rule for it): refused only where the
+    // pair would straddle the fourth register, which the pin splits between
+    // R9 and the stack. Row W64-2 (owner object-refactor, exit when vectors
+    // open): clang hands `__int128` over as `ptr align 16` arguments and a
+    // `<2 x i64>` result in XMM0, which the vector refusal below still stops.
+    if registers.is_some_and(|entry| entry.positional) {
+        let wide = |ty: TypeId| matches!(types.get(ty), Type::Int(128));
+        let unprobed = |ty: TypeId| match types.get(ty) {
+            Type::Int(bits) => *bits > 128,
+            Type::Vector { .. } => true,
+            _ => false,
+        };
+        let shape = |index: usize| byval_type(parameter_attrs.get(index).map_or(&[], Vec::as_slice)).is_some();
+        if param_types.iter().enumerate().any(|(index, &ty)| unprobed(ty) || shape(index)) || unprobed(result) {
+            return refuse("a Win64 by-value struct, vector or integer wider than 128 bits (row W64-1)");
+        }
+        let registers_len = registers.map_or(0, |entry| entry.argument_registers.len());
+        let mut position = usize::from(
+            param_types
+                .iter()
+                .enumerate()
+                .any(|(index, _)| class_of(parameter_attrs.get(index).map_or(&[], Vec::as_slice)) == Some(llrm_mir::opcode::RESULT_POINTER)),
+        );
+        for (index, &ty) in param_types.iter().enumerate() {
+            if class_of(parameter_attrs.get(index).map_or(&[], Vec::as_slice)) == Some(llrm_mir::opcode::RESULT_POINTER) {
+                continue;
+            }
+            if wide(ty) {
+                if position + 1 == registers_len {
+                    return refuse("a Win64 128-bit integer split between R9 and the stack (row W64-1)");
+                }
+                position += 2;
+            } else {
+                position += 1;
+            }
+        }
+    }
     let mut parameters = Vec::new();
     let mut cursor = first;
     if let Some(entry) = registers {
@@ -558,7 +649,9 @@ pub fn convention_for(
             .zip(&sizes)
             .zip(&classes)
             .filter(|(_, class)| **class != Some(llrm_mir::opcode::RESULT_POINTER))
-            .map(|((&ty, &size), class)| entry.kind(argument_of(types, ty, size, *class), arch.stack_slot_bytes()))
+            .map(|((&ty, &size), class)| {
+                entry.kind(argument_of(types, ty, size, *class, soft_float), arch.stack_slot_bytes())
+            })
             .collect();
         // A struct result's address held in a register is not one of the
         // arguments, but takes that register.
@@ -619,8 +712,17 @@ pub fn convention_for(
     // A float leaves in st(0), which no register names.
     let described = entry(arch, calling_convention, variadic);
     let answer = lone_float(types, result);
-    let returns = if types.is_void(result) || matches!(types.get(answer), Type::Float(_)) {
+    // A convention with address registers names one for a pointer result
+    // (m68k's `a0`, class `address`); `pointer` is the width-keyed x86 entry,
+    // which a far pointer's two words outgrow.
+    let pointer_result = described
+        .filter(|_| matches!(types.get(answer), Type::Pointer(_)))
+        .and_then(|one| one.results.get("address"))
+        .map(|names| names.iter().map(|name| arch.register_named(name)).collect::<Vec<_>>());
+    let returns = if types.is_void(result) || (!soft_float && matches!(types.get(answer), Type::Float(_))) {
         Vec::new()
+    } else if let Some(registers) = pointer_result {
+        registers
     } else {
         results(arch, described, size_of(module, layout, result)?)
     };
@@ -700,17 +802,24 @@ fn argument_of(
     ty: TypeId,
     size: u32,
     class: Option<&str>,
+    soft_float: bool,
 ) -> llrm_mir::target::Argument {
+    let soft = soft_float
+        && matches!(
+            types.get(ty),
+            Type::Float(kind) if !matches!(kind, llrm_mir::types::FloatKind::X86Fp80)
+        );
     llrm_mir::target::Argument {
         bytes: i64::from(size),
-        integer: types.int_bits(ty).is_some(),
+        integer: soft || types.int_bits(ty).is_some(),
         pointer: matches!(types.get(ty), Type::Pointer(_)),
         // An extended real is not a vector-register float: it travels in
         // memory.
-        floating: matches!(
-            types.get(ty),
-            Type::Float(kind) if !matches!(kind, llrm_mir::types::FloatKind::X86Fp80)
-        ),
+        floating: !soft
+            && matches!(
+                types.get(ty),
+                Type::Float(kind) if !matches!(kind, llrm_mir::types::FloatKind::X86Fp80)
+            ),
         memory: class == Some(llrm_mir::opcode::MEMORY),
     }
 }
@@ -1005,6 +1114,8 @@ pub(super) fn size_of(
         (_, Type::Struct { .. } | Type::Named(_)) => {
             u32::try_from(layout.store_size(&module.context.types, ty)).map_err(|_| Unselected("a struct".into()))
         }
+        // Two eightbytes where the datalayout has a legal i64.
+        (_, Type::Int(128)) if layout.largest_legal_integer() >= 64 => Ok(16),
         _ => width_of(module, layout, ty),
     }
 }
@@ -1395,6 +1506,7 @@ fn float_bytes(
             FloatKind::Float => 4,
             FloatKind::Double => 8,
             FloatKind::X86Fp80 => 10,
+            FloatKind::F128 => 16,
         };
         let widest = bytes.entry(number).or_insert(0);
         *widest = size.max(*widest);
@@ -1445,7 +1557,7 @@ fn homed(
 }
 
 /// The source line the `!dbg` of `inst` names.
-pub(crate) fn dbg_line(
+pub fn dbg_line(
     module: &Module,
     function: &Function,
     inst: InstId,
@@ -1508,6 +1620,76 @@ fn lined(
         })
         .collect();
     body.with_blocks(blocks)
+}
+
+/// What `ops` make of `args`, as a note: the part of the variable they say (a
+/// trailing `DW_OP_LLVM_fragment`) and the value. Without `listed`, the
+/// one argument is pushed first. A leading `DW_OP_deref` of the lone argument
+/// makes the place it addresses, not a value.
+pub(crate) fn expression_note(
+    args: Vec<NoteValue>,
+    ops: Vec<llrm_mir::DwOp>,
+    listed: bool,
+) -> (NoteValue, Option<(u32, u32)>) {
+    use llrm_debug::ExprOp as E;
+    use llrm_mir::DwOp;
+    use llrm_mir::module::{DwBinary as B, DwUnary as U};
+    let nothing = (NoteValue::Nothing, None);
+    let mut ops = ops.as_slice();
+    let piece = match ops {
+        [rest @ .., DwOp::Fragment { offset, size }] if offset % 8 == 0 && size % 8 == 0 => {
+            let (Ok(offset), Ok(bytes)) = (u32::try_from(offset / 8), u32::try_from(size / 8)) else { return nothing };
+            ops = rest;
+            Some((offset, bytes))
+        }
+        _ => None,
+    };
+    let stacked = ops.last() == Some(&DwOp::StackValue);
+    if stacked {
+        ops = &ops[..ops.len() - 1];
+    }
+    let place = !stacked && !listed && ops.first() == Some(&DwOp::Deref);
+    if place {
+        ops = &ops[1..];
+    }
+    let mut made = Vec::new();
+    if !listed {
+        made.push(E::Arg(0));
+    }
+    for op in ops {
+        made.push(match *op {
+            DwOp::Arg(n) => E::Arg(n),
+            DwOp::Constu(n) => E::Constu(n),
+            DwOp::Consts(n) => E::Consts(n),
+            DwOp::PlusUconst(n) => E::PlusUconst(n),
+            DwOp::Deref => E::Deref,
+            DwOp::Binary(B::Plus) => E::Plus,
+            DwOp::Binary(B::Minus) => E::Minus,
+            DwOp::Binary(B::Mul) => E::Mul,
+            DwOp::Binary(B::And) => E::And,
+            DwOp::Binary(B::Or) => E::Or,
+            DwOp::Binary(B::Xor) => E::Xor,
+            DwOp::Binary(B::Shl) => E::Shl,
+            DwOp::Binary(B::Shr) => E::Shr,
+            DwOp::Binary(B::Shra) => E::Shra,
+            DwOp::Unary(U::Not) => E::Not,
+            DwOp::Unary(U::Neg) => E::Neg,
+            _ => return nothing,
+        });
+    }
+    let mut named = Vec::new();
+    for arg in args {
+        named.push(match arg {
+            NoteValue::Value(vreg) => NoteArg::Value(vreg),
+            NoteValue::Constant(value) => NoteArg::Constant(value),
+            _ => return nothing,
+        });
+    }
+    let uses = |n: u32| (n as usize) < named.len();
+    if made.iter().any(|op| matches!(op, E::Arg(n) if !uses(*n))) {
+        return nothing;
+    }
+    (NoteValue::Expr(Arc::new(NoteExpr { args: named, ops: made, value: !place })), piece)
 }
 
 /// `body` with what `-g` says of the values a variable has, as notes: each
@@ -1587,7 +1769,46 @@ pub(crate) fn noted(
         }
         let (value, piece) = match record.what {
             llrm_mir::DebugWhat::Declare(_) => continue,
-            llrm_mir::DebugWhat::Value(one) => (said(one), None),
+            // Read by the assignment tracking analysis, not by the notes.
+            llrm_mir::DebugWhat::Assign { .. } => continue,
+            llrm_mir::DebugWhat::Value(one) => {
+                // What the expression does to the value: nothing, add to it, or
+                // say a part of the variable; any other is not read, and the
+                // value it would make is not said.
+                let ops_all = record.expression.and_then(|node| module.expression(node)).unwrap_or_default();
+                let ops = ops_all.strip_suffix(&[llrm_mir::DwOp::StackValue]).unwrap_or(&ops_all);
+                let ops_all = ops_all.clone();
+                match (ops, said(one)) {
+                    ([], value) => (value, None),
+                    ([llrm_mir::DwOp::PlusUconst(add)], NoteValue::Value(vreg)) => {
+                        (i64::try_from(*add).map_or(NoteValue::Nothing, |add| NoteValue::Offset(vreg, add)), None)
+                    }
+                    ([llrm_mir::DwOp::PlusUconst(add)], NoteValue::Constant(value)) => {
+                        (i64::try_from(*add).map_or(NoteValue::Nothing, |add| NoteValue::Constant(value + add)), None)
+                    }
+                    ([llrm_mir::DwOp::Fragment { offset, size }], value) if offset % 8 == 0 && size % 8 == 0 => {
+                        match (u32::try_from(offset / 8), u32::try_from(size / 8)) {
+                            (Ok(offset), Ok(bytes)) => (value, Some((offset, bytes))),
+                            _ => (NoteValue::Nothing, None),
+                        }
+                    }
+                    _ => expression_note(vec![said(one)], ops_all, false),
+                }
+            }
+            llrm_mir::DebugWhat::Args(list) => {
+                let ops = record.expression.and_then(|node| module.expression(node)).unwrap_or_default();
+                let operands = function.debug_args(list);
+                if operands.iter().any(|operand| {
+                    matches!(
+                        operand,
+                        llrm_mir::Operand::Value(one) if wides.contains_key(one)
+                    )
+                }) {
+                    (NoteValue::Nothing, None)
+                } else {
+                    expression_note(operands.iter().map(|&operand| said(operand)).collect(), ops, true)
+                }
+            }
             llrm_mir::DebugWhat::Piece { value, offset, bytes } => (said(value), Some((offset, bytes))),
             llrm_mir::DebugWhat::GonePiece { offset, bytes } => (NoteValue::Nothing, Some((offset, bytes))),
             llrm_mir::DebugWhat::Gone => (NoteValue::Nothing, None),
@@ -1601,31 +1822,63 @@ pub(crate) fn noted(
     // last is no longer known) say nothing of it.
     let mut seen: BTreeSet<(i64, u32, Option<(u32, u32)>, NoteValue)> = BTreeSet::new();
     let mut unsure: BTreeSet<(i64, u32)> = BTreeSet::new();
-    for &(at, variable, piece, value) in &said_at {
+    for (at, variable, piece, value) in &said_at {
+        let (at, variable, piece) = (*at, *variable, *piece);
         let clash = said_at
             .iter()
             .any(
-                |&(other_at, other_variable, other_piece, other_value)| other_at == at
-                    && other_variable == variable
-                    && (other_piece, other_value) != (piece, value)
-                    && (other_piece == piece || other_piece.is_none() || piece.is_none()),
+                |(other_at, other_variable, other_piece, other_value)| *other_at == at
+                    && *other_variable == variable
+                    && (*other_piece, other_value) != (piece, value)
+                    && (*other_piece == piece || other_piece.is_none() || piece.is_none()),
             );
         if clash {
             unsure.insert((at, variable));
         }
     }
+    // The register each parameter arrives in, by the number its value has.
+    let arrivals: Vec<(RegId, u32)> = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .find(|one| one.arrival())
+        .map(|one| one.delivers.iter().map(|(held, register)| (*register, held.value)).collect())
+        .unwrap_or_default();
     for (at, variable, piece, value) in said_at {
         let (piece, value) = if unsure.contains(&(at, variable)) { (None, NoteValue::Nothing) } else { (piece, value) };
         // Said twice by two passes: said once.
-        if !seen.insert((at, variable, piece, value)) {
+        // A parameter said to be its own value, whole, is also what it arrived
+        // as: where it is held nowhere, it is the value the function was
+        // entered with.
+        let value = match value {
+            NoteValue::Value(vreg)
+                if piece.is_none()
+                    && llrm_mir::debuginfo::read_variable(module, llrm_mir::MetadataId(variable))
+                        .is_some_and(|one| one.parameter) =>
+            {
+                arrivals
+                    .iter()
+                    .find(|(_, arrived)| *arrived == vreg)
+                    .map_or(NoteValue::Value(vreg), |&(register, _)| NoteValue::Arrived(vreg, register))
+            }
+            other => other,
+        };
+        if !seen.insert((at, variable, piece, value.clone())) {
             continue;
         }
         let note = u32::try_from(notes.len()).expect("a few notes");
+        match &value {
+            NoteValue::Value(vreg) | NoteValue::Offset(vreg, _) | NoteValue::Arrived(vreg, _) => {
+                named.insert(*vreg);
+            }
+            NoteValue::Expr(expr) => named.extend(expr.args.iter().filter_map(|arg| match arg {
+                NoteArg::Value(vreg) => Some(*vreg),
+                NoteArg::Constant(_) => None,
+            })),
+            _ => {}
+        }
         notes.push(DebugNote { variable, piece, value });
         before.entry(at).or_default().push(note);
-        if let NoteValue::Value(vreg) = value {
-            named.insert(vreg);
-        }
     }
     // A variable some of whose records went with deleted code is said to be
     // nowhere: a note that stands before no instruction is one that was
@@ -1638,22 +1891,16 @@ pub(crate) fn noted(
     // register from the entry, as a note, and the tracking that follows a
     // variable the code moves says for how long. Its number is past the
     // metadata's.
-    let arrivals: Vec<(RegId, u32)> = body
-        .blocks
-        .iter()
-        .flat_map(|block| block.insns.iter())
-        .find(|one| one.arrival())
-        .map(|one| one.delivers.iter().map(|(held, register)| (*register, held.value)).collect())
-        .unwrap_or_default();
     let mut entry_notes: Vec<u32> = Vec::new();
     for (index, variable) in body.variables.iter_mut().enumerate() {
         let (DebugPlace::Register(_), Some(delivered)) = (&variable.place, variable.argument) else { continue };
-        let Some(&(_, vreg)) = usize::try_from(delivered).ok().and_then(|delivered| arrivals.get(delivered)) else {
+        let Some(&(register, vreg)) = usize::try_from(delivered).ok().and_then(|delivered| arrivals.get(delivered))
+        else {
             continue;
         };
         let node = u32::MAX - u32::try_from(index).expect("a few variables");
         entry_notes.push(u32::try_from(notes.len()).expect("a few notes"));
-        notes.push(DebugNote { variable: node, piece: None, value: NoteValue::Value(vreg) });
+        notes.push(DebugNote { variable: node, piece: None, value: NoteValue::Arrived(vreg, register) });
         named.insert(vreg);
         variable.place = DebugPlace::Tracked(node);
     }
@@ -1663,17 +1910,31 @@ pub(crate) fn noted(
     // A note stands before the first instruction selected from its MIR
     // instruction, or else from the next one that was.
     let mut taken: BTreeSet<i64> = BTreeSet::new();
+    // A note of a value some instruction of the block defines stands right
+    // after that instruction, where the pin emits a `DBG_VALUE` of an SDNode's
+    // value (`InstrEmitter::EmitDbgValue`, after the node), not before the
+    // instruction selected from the record's own place: a two-address
+    // instruction in between has overwritten the register by then.
+    let mut anchored: BTreeSet<u32> = BTreeSet::new();
     let blocks = body
         .blocks
         .iter()
         .map(|block| {
+            let after_definer = after_definers(&block.insns, &before, &notes);
+            anchored.extend(after_definer.values().flatten());
             let insns = block
                 .insns
                 .iter()
-                .map(|one| {
+                .enumerate()
+                .map(|(index, one)| {
                     let ats_here: Vec<i64> =
                         before.keys().copied().filter(|&at| at <= one.at && !taken.contains(&at)).collect();
-                    let mut ahead: Vec<u32> = ats_here.iter().flat_map(|at| before[at].iter().copied()).collect();
+                    let mut ahead: Vec<u32> = ats_here
+                        .iter()
+                        .flat_map(|at| before[at].iter().copied())
+                        .filter(|id| !anchored.contains(id))
+                        .collect();
+                    ahead.extend(after_definer.get(&index).into_iter().flatten());
                     if one.arrival() {
                         ahead.extend(&entry_notes);
                     }
@@ -1700,7 +1961,10 @@ pub(crate) fn noted(
                         return Arc::clone(one);
                     }
                     taken.extend(ats_here);
-                    Arc::new(Insn { debug: DebugTags { defines: defined, before: ahead }, ..(**one).clone() })
+                    Arc::new(Insn {
+                        debug: DebugTags { defines: defined, before: ahead, slot: None },
+                        ..(**one).clone()
+                    })
                 })
                 .collect();
             block.with_insns(insns)
@@ -2016,10 +2280,10 @@ impl Selector<'_, '_, '_> {
                         .max(size & size.wrapping_neg())
                         .min(kept.max(i64::from(self.arch.stack_slot_bytes())))
                         .max(1);
-                    // More than the frame keeps the stack aligned to: the frame
-                    // realigns the stack pointer for it.
-                    let wanted = wanted.map_or(0, |one| one as i64);
-                    let align = if wanted > OVER_ALIGNED { wanted } else { align };
+                    // The declared alignment wins over the natural one; above
+                    // what the frame keeps the stack aligned to, the frame
+                    // realigns the stack pointer.
+                    let align = align.max(wanted.map_or(0, |one| one as i64));
                     let widest = align_of.entry(group_of[&inst]).or_insert(1);
                     *widest = (*widest).max(align);
                 }
@@ -2163,7 +2427,7 @@ impl Selector<'_, '_, '_> {
                     let mut halves = Vec::new();
                     for &register in registers {
                         let own = if registers.len() == 1 {
-                            Held { value: self.value(parameter), width }
+                            Held { value: self.value(parameter), width, offset: 0 }
                         } else {
                             self.fresh_held(width)
                         };
@@ -2195,7 +2459,7 @@ impl Selector<'_, '_, '_> {
                         } else if self.is_far(ty) {
                             self.fars.insert(parameter, (Some(low), high));
                         } else {
-                            let into = Held { value: self.value(parameter), width: 4 };
+                            let into = Held { value: self.value(parameter), width: 4, offset: 0 };
                             self.joined(into, low, high, block_at[&entry], &mut prologue);
                         }
                     }
@@ -2210,7 +2474,7 @@ impl Selector<'_, '_, '_> {
                 continue;
             }
             if self.is_float(ty) {
-                let (held, size) = (Held { value: self.value(parameter), width: FLOAT }, self.size(ty)?);
+                let (held, size) = (Held { value: self.value(parameter), width: FLOAT, offset: 0 }, self.size(ty)?);
                 self.float_loaded(
                     held,
                     "fld",
@@ -2245,7 +2509,7 @@ impl Selector<'_, '_, '_> {
                 continue;
             }
             let width = self.width(function.value(parameter).ty)?;
-            let held = Held { value: self.value(parameter), width };
+            let held = Held { value: self.value(parameter), width, offset: 0 };
             let what = semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Mem(frame(disp, width))]);
             prologue.push(insn(block_at[&entry], what));
         }
@@ -2894,7 +3158,11 @@ impl Selector<'_, '_, '_> {
             .name
             .as_deref()
             .is_some_and(
-                |name| llrm_mir::intrinsics::is_reserved(name) && Intrinsic::named(name) == Some(Intrinsic::LRint),
+                |name| llrm_mir::intrinsics::is_reserved(name)
+                    && matches!(
+                        Intrinsic::named(name),
+                        Some(Intrinsic::LRint | Intrinsic::LLRint)
+                    ),
             )
     }
 
@@ -3505,7 +3773,7 @@ impl Selector<'_, '_, '_> {
         &mut self,
         width: u32,
     ) -> Held {
-        Held { value: self.fresh(), width }
+        Held { value: self.fresh(), width, offset: 0 }
     }
 
     fn types(&self) -> &llrm_mir::Types {
@@ -3642,14 +3910,14 @@ impl Selector<'_, '_, '_> {
                 ConstantKind::Poison | ConstantKind::Undef
             )
         {
-            let held = Held { value: self.fresh(), width };
+            let held = Held { value: self.fresh(), width, offset: 0 };
             let what =
                 semantics(Operation::Nothing, crate::processimpdefs::IMPLICIT_DEF, vec![Loc::Held(held)], vec![]);
             out.push(insn(at, what));
             return Ok(held);
         }
         if let Some(value) = self.constant(operand, width) {
-            let held = Held { value: self.fresh(), width };
+            let held = Held { value: self.fresh(), width, offset: 0 };
             // A narrow zero is written whole where the target runs narrow
             // operations on the whole register: `xor r32,r32` has no operand-
             // size prefix, and the half above is what no reader of the word
@@ -3684,7 +3952,7 @@ impl Selector<'_, '_, '_> {
                 return Ok(offset);
             }
             if width == 4 {
-                let joined = Held { value: self.fresh(), width };
+                let joined = Held { value: self.fresh(), width, offset: 0 };
                 self.joined(joined, offset, selector, at, out);
                 return Ok(joined);
             }
@@ -3706,14 +3974,14 @@ impl Selector<'_, '_, '_> {
             } else {
                 (Space::Group, crate::backend::globals::segment_of(global))
             };
-            let word = Held { value: self.fresh(), width: 2 };
+            let word = Held { value: self.fresh(), width: 2, offset: 0 };
             let symbol = Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index, ..Addr::new(space, 0) }) });
             out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(word)], vec![symbol])));
             if width == 2 {
                 return Ok(word);
             }
             // The integer is wider than the segment word: zero-extended.
-            let wide = Held { value: self.fresh(), width };
+            let wide = Held { value: self.fresh(), width, offset: 0 };
             out.push(insn(at, semantics(Operation::Extend, "movzx", vec![Loc::Held(wide)], vec![Loc::Held(word)])));
             return Ok(wide);
         }
@@ -3725,12 +3993,12 @@ impl Selector<'_, '_, '_> {
         match pointer {
             None => {
                 let Operand::Value(value) = operand else { unreachable!("a constant is folded") };
-                Ok(Held { value: self.value(value), width })
+                Ok(Held { value: self.value(value), width, offset: 0 })
             }
             // No offset from a register: that register.
             Some(Pointer::Based { base, index: None, offset: 0, .. }) if base.width == width => Ok(base),
             Some(pointer) => {
-                let held = Held { value: self.fresh(), width };
+                let held = Held { value: self.fresh(), width, offset: 0 };
                 out.push(insn(at, self.address(pointer, held)));
                 Ok(held)
             }
@@ -3780,7 +4048,7 @@ impl Selector<'_, '_, '_> {
         };
         self.unsealed = true;
         let width = self.va_list_bytes();
-        let held = Held { value: self.fresh(), width };
+        let held = Held { value: self.fresh(), width, offset: 0 };
         out.push(insn(at, self.address(Pointer::Frame { disp, index: None, scale: 1, home: None }, held)));
         let list = self.pointer(arguments[0])?;
         out.push(insn(
@@ -3804,7 +4072,7 @@ impl Selector<'_, '_, '_> {
     ) -> Result<(), Unselected> {
         let width = self.address_bytes();
         let value = self.function.instruction(inst).result.expect("a saved stack pointer");
-        let saved = Held { value: self.value(value), width };
+        let saved = Held { value: self.value(value), width, offset: 0 };
         let sp = Loc::Reg(Reg { register: self.arch.stack_pointer(), width });
         out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(saved)], vec![sp])));
         Ok(())
@@ -3840,7 +4108,7 @@ impl Selector<'_, '_, '_> {
         let (to, from) = (self.pointer(arguments[0])?, self.pointer(arguments[1])?);
         for slot in 0..slots {
             let by = i64::from(width) * slot;
-            let held = Held { value: self.fresh(), width };
+            let held = Held { value: self.fresh(), width, offset: 0 };
             let load = semantics(
                 Operation::Move,
                 "mov",
@@ -3881,7 +4149,7 @@ impl Selector<'_, '_, '_> {
         }
         let width = self.layout.pointer(self.spaces.data).bits / 8;
         for (by, disp) in [(8, va.overflow), (16, va.save)] {
-            let held = Held { value: self.fresh(), width };
+            let held = Held { value: self.fresh(), width, offset: 0 };
             out.push(insn(at, self.address(Pointer::Frame { disp, index: None, scale: 1, home: None }, held)));
             stored(self, by, width, Loc::Held(held), out);
         }
@@ -3967,7 +4235,7 @@ impl Selector<'_, '_, '_> {
         {
             return held;
         }
-        let held = Held { value: self.fresh(), width };
+        let held = Held { value: self.fresh(), width, offset: 0 };
         out.push(insn(at, self.address(pointer, held)));
         self.symbol_registers.insert(key, (self.current, held));
         held
@@ -3993,7 +4261,13 @@ impl Selector<'_, '_, '_> {
             _ => return refuse(format!("an access through a {}", self.types().display(ty))),
         };
         let width = self.width(ty)?;
-        Ok(Pointer::Based { base: Held { value: self.value(value), width }, index: None, scale: 1, offset: 0, segment })
+        Ok(Pointer::Based {
+            base: Held { value: self.value(value), width, offset: 0 },
+            index: None,
+            scale: 1,
+            offset: 0,
+            segment,
+        })
     }
 
     /// Where `value` points, if it is an address an access folds: an
@@ -4259,7 +4533,7 @@ impl Selector<'_, '_, '_> {
             && let Pointer::Based { index: Some(_), segment: None, .. } = valued
         {
             let cell = Self::memory(regs, valued, 4);
-            let held = Held { value: self.value(address), width: 4 };
+            let held = Held { value: self.value(address), width: 4, offset: 0 };
             out.push(insn(at, semantics(Operation::Address, "lea", vec![Loc::Held(held)], vec![Loc::Mem(cell)])));
             if let Some((Operand::Value(product), _)) = one
                 && matches!(function.value(product).def, ValueDef::Instruction(_))
@@ -4333,12 +4607,12 @@ impl Selector<'_, '_, '_> {
             if held.width > width {
                 held.width = width;
             } else if held.width < width {
-                let wide = Held { value: self.fresh(), width };
+                let wide = Held { value: self.fresh(), width, offset: 0 };
                 out.push(insn(at, semantics(Operation::Extend, "movsx", vec![Loc::Held(wide)], vec![Loc::Held(held)])));
                 held = wide;
             }
             if scale != 1 {
-                let mut scaled = Held { value: self.fresh(), width };
+                let mut scaled = Held { value: self.fresh(), width, offset: 0 };
                 if absorbs && matches!(scale, 2 | 4 | 8) {
                     // The address's own scale: no instruction.
                     tail = scale;
@@ -4396,7 +4670,7 @@ impl Selector<'_, '_, '_> {
             sum = Some(match sum {
                 None => held,
                 Some(before) => {
-                    let added = Held { value: self.fresh(), width };
+                    let added = Held { value: self.fresh(), width, offset: 0 };
                     out.push(insn(
                         at,
                         semantics(
@@ -4430,7 +4704,7 @@ impl Selector<'_, '_, '_> {
             if self.only_addressed(address) || self.indexed_by_bytes(address) {
                 self.pointers.insert(address, indexed);
             } else {
-                let held = Held { value: self.value(address), width };
+                let held = Held { value: self.value(address), width, offset: 0 };
                 out.push(insn(at, self.address(indexed, held)));
             }
             return Ok(());
@@ -4442,7 +4716,7 @@ impl Selector<'_, '_, '_> {
             if self.only_addressed(address) {
                 self.pointers.insert(address, indexed);
             } else {
-                let held = Held { value: self.value(address), width };
+                let held = Held { value: self.value(address), width, offset: 0 };
                 out.push(insn(at, self.address(indexed, held)));
             }
             return Ok(());
@@ -4483,7 +4757,7 @@ impl Selector<'_, '_, '_> {
         if self.only_addressed(address)
             && let Pointer::Based { base, index: Some(index), scale: 1, offset: start, segment } = pointer
         {
-            let both = Held { value: self.fresh(), width };
+            let both = Held { value: self.fresh(), width, offset: 0 };
             out.push(insn(
                 at,
                 semantics(Operation::Binary, "add", vec![Loc::Held(both)], vec![Loc::Held(base), Loc::Held(index)]),
@@ -4509,7 +4783,7 @@ impl Selector<'_, '_, '_> {
                 return Ok(());
             }
             let start = self.symbol_register(pointer.moved(offset as i64), width, at, out);
-            let result = Held { value: self.value(address), width };
+            let result = Held { value: self.value(address), width, offset: 0 };
             let scaled = Loc::Held(sum);
             out.push(insn(
                 at,
@@ -4527,7 +4801,7 @@ impl Selector<'_, '_, '_> {
             Pointer::Far { base: None, index: None, offset: 0, .. } if offset == 0 => None,
             pointer => {
                 let moved = pointer.moved(offset as i64);
-                let start = Held { value: self.fresh(), width };
+                let start = Held { value: self.fresh(), width, offset: 0 };
                 out.push(insn(at, self.address(moved, start)));
                 Some(start)
             }
@@ -4543,7 +4817,7 @@ impl Selector<'_, '_, '_> {
                 self.fars.insert(address, (Some(offset), selector));
                 offset
             }
-            _ => Held { value: self.value(address), width },
+            _ => Held { value: self.value(address), width, offset: 0 },
         };
         let start = start.expect("a near pointer's register");
         out.push(insn(
@@ -4886,7 +5160,7 @@ impl Selector<'_, '_, '_> {
             Operand::Value(root) => Some(root),
             _ => None,
         };
-        let wide = Held { value: self.value(index), width: 4 };
+        let wide = Held { value: self.value(index), width: 4, offset: 0 };
         let (scaled, base) = match pointer {
             Pointer::Frame { disp, index: None, home, .. } => {
                 (Pointer::Frame { disp, index: Some(wide), scale, home }, None)
@@ -5177,8 +5451,10 @@ impl Selector<'_, '_, '_> {
             Some(&partner) => self.value(partner),
             None => self.fresh(),
         };
-        let (result, other) =
-            (Held { value: self.value(instruction.result.expect("a result")), width }, Held { value: other, width });
+        let (result, other) = (
+            Held { value: self.value(instruction.result.expect("a result")), width, offset: 0 },
+            Held { value: other, width, offset: 0 },
+        );
         let (quotient, remainder) =
             if matches!(op, BinaryOp::SDiv | BinaryOp::UDiv) { (result, other) } else { (other, result) };
         // A signed division by a constant is a multiply by its reciprocal
@@ -5213,7 +5489,7 @@ impl Selector<'_, '_, '_> {
             }
         }
         let divisor = self.held(instruction.operands[1], ty, at, out)?;
-        let high = Held { value: self.fresh(), width };
+        let high = Held { value: self.fresh(), width, offset: 0 };
         out.push(insn(
             at,
             if signed {
@@ -5291,7 +5567,7 @@ impl Selector<'_, '_, '_> {
                 let quotient_of = matches!(op, BinaryOp::UDiv);
                 let keep = |value: u32, from: Held, out: &mut Vec<Arc<Insn>>| {
                     let low = Held { width: 1, ..from };
-                    let into = Held { value, width: 1 };
+                    let into = Held { value, width: 1, offset: 0 };
                     out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![Loc::Held(low)])));
                 };
                 keep(
@@ -5338,7 +5614,7 @@ impl Selector<'_, '_, '_> {
         let quotient_of = matches!(op, BinaryOp::SDiv | BinaryOp::UDiv);
         let keep = |value: u32, from: Held, out: &mut Vec<Arc<Insn>>| {
             let low = Held { width: 1, ..from };
-            let into = Held { value, width: 1 };
+            let into = Held { value, width: 1, offset: 0 };
             out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![Loc::Held(low)])));
         };
         keep(own, if quotient_of { quotient } else { remainder }, out);
@@ -5681,20 +5957,20 @@ impl Selector<'_, '_, '_> {
         let (offset, selector) = self.far(operand, at, out)?;
         match (op, self.types().get(to).clone()) {
             (CastOp::AddrSpaceCast, Type::Pointer(space)) if self.spaces.is_segment(Some(space)) => {
-                out.push(mov(Held { value: self.value(result), width: 2 }, Loc::Held(selector)))
+                out.push(mov(Held { value: self.value(result), width: 2, offset: 0 }, Loc::Held(selector)))
             }
             (CastOp::AddrSpaceCast, Type::Pointer(space))
                 if space == self.spaces.near || space == self.spaces.stack =>
             {
-                out.push(mov(Held { value: self.value(result), width: 2 }, Loc::Held(offset)))
+                out.push(mov(Held { value: self.value(result), width: 2, offset: 0 }, Loc::Held(offset)))
             }
             (CastOp::PtrToInt, Type::Int(32)) => {
-                let joined = Held { value: self.value(result), width: 4 };
+                let joined = Held { value: self.value(result), width: 4, offset: 0 };
                 self.joined(joined, offset, selector, at, out);
             }
             // Truncated, as LLVM's is: segment:offset's low word.
             (CastOp::PtrToInt, Type::Int(16)) => {
-                out.push(mov(Held { value: self.value(result), width: 2 }, Loc::Held(offset)))
+                out.push(mov(Held { value: self.value(result), width: 2, offset: 0 }, Loc::Held(offset)))
             }
             _ => return refuse(format!("{op:?} of a far pointer")),
         }
@@ -5743,7 +6019,7 @@ impl Selector<'_, '_, '_> {
                 let size = self.size(to)? as u32;
                 let held = self.float(operand, at, out)?;
                 let cell = self.float_stored(held, "fstp", size, at, out);
-                let into = Held { value: self.value(result), width: FLOAT };
+                let into = Held { value: self.value(result), width: FLOAT, offset: 0 };
                 self.float_loaded(into, "fld", cell, size, false, at, out);
             }
             CastOp::SIToFP => {
@@ -5826,7 +6102,7 @@ impl Selector<'_, '_, '_> {
                 let size = self.size(from)? as u32;
                 let held = self.float(operand, at, out)?;
                 let cell = self.float_stored(held, "fstp", size, at, out);
-                let into = Held { value: self.value(result), width: self.width(to)? };
+                let into = Held { value: self.value(result), width: self.width(to)?, offset: 0 };
                 out.push(insn(
                     at,
                     semantics(
@@ -5850,7 +6126,7 @@ impl Selector<'_, '_, '_> {
                         vec![Loc::Held(held)],
                     ),
                 ));
-                let into = Held { value: self.value(result), width: FLOAT };
+                let into = Held { value: self.value(result), width: FLOAT, offset: 0 };
                 self.float_loaded(into, "fld", cell, size, false, at, out);
             }
             _ => return refuse(format!("{op:?} of a float")),
@@ -5875,7 +6151,7 @@ impl Selector<'_, '_, '_> {
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<(), Unselected> {
         let size = self.size(to)?;
-        let into = Held { value: self.value(result), width: FLOAT };
+        let into = Held { value: self.value(result), width: FLOAT, offset: 0 };
         let mantissa = match size {
             4 => 24,
             8 => 53,
@@ -5909,7 +6185,7 @@ impl Selector<'_, '_, '_> {
         let width = self.width(to)?;
         let held = self.float(operand, at, out)?;
         let cell = self.float_stored(held, name, (if unsigned { 2 * width } else { width }).max(2), at, out);
-        let into = Held { value: self.value(result), width };
+        let into = Held { value: self.value(result), width, offset: 0 };
         out.push(insn(
             at,
             semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![Loc::Mem(Self::memory(regs, cell, width))]),
@@ -5986,7 +6262,7 @@ impl Selector<'_, '_, '_> {
                         _ => unreachable!("only a one-condition compare is fused"),
                     },
                     None => {
-                        let tested = Loc::Held(Held { value: self.value(condition), width: 1 });
+                        let tested = Loc::Held(Held { value: self.value(condition), width: 1, offset: 0 });
                         let zero = Loc::Imm(Imm { value: 0, width: 1, address: None });
                         out.push(insn(at, semantics(Operation::Compare, "cmp", vec![], vec![tested, zero])));
                         "jne"
@@ -6110,7 +6386,7 @@ impl Selector<'_, '_, '_> {
                 }
                 // Else its low word, and its high word shifted down.
                 [low, high] if held.width == 4 => {
-                    let top = Held { value: self.fresh(), width: 4 };
+                    let top = Held { value: self.fresh(), width: 4, offset: 0 };
                     let sixteen = Loc::Imm(Imm { value: 16, width: 1, address: None });
                     out.push(insn(
                         at,
@@ -6133,7 +6409,7 @@ impl Selector<'_, '_, '_> {
         effects: llrm_mir::memory::Effects,
         disturbs: BTreeSet<RegId>,
     ) -> Arc<crate::model::lir::CallMemory> {
-        Arc::new(crate::model::lir::CallMemory { effects, private: self.private.clone(), disturbs })
+        Arc::new(crate::model::lir::CallMemory { effects, private: self.private.clone(), disturbs, block: false })
     }
 
     /// A direct call: its arguments pushed as its convention orders them,
@@ -6183,7 +6459,8 @@ impl Selector<'_, '_, '_> {
                         return refuse(format!("{function:?}"));
                     };
                     let a = self.float(arguments[0], at, out)?;
-                    let result = Held { value: self.value(instruction.result.expect("a result")), width: FLOAT };
+                    let result =
+                        Held { value: self.value(instruction.result.expect("a result")), width: FLOAT, offset: 0 };
                     let mut one = insn_of(
                         at,
                         semantics(Operation::FloatUnary, name, vec![Loc::Held(result)], vec![Loc::Held(a)]),
@@ -6196,7 +6473,7 @@ impl Selector<'_, '_, '_> {
                     Ok(())
                 }
                 // Rounds as the machine's default mode does: fistp.
-                Some(Intrinsic::LRint) => {
+                Some(Intrinsic::LRint | Intrinsic::LLRint) => {
                     let result = instruction.result.expect("lrint's value");
                     self.float_to_integer(arguments[0], "fistp", result, instruction.ty, false, at, out)
                 }
@@ -6250,6 +6527,9 @@ impl Selector<'_, '_, '_> {
                 Some(Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd) => Ok(()),
                 // A fact for the passes: no code.
                 Some(Intrinsic::Assume) => Ok(()),
+                // A fact for the passes (SelectionDAGBuilder.cpp#L7680): no
+                // code.
+                Some(Intrinsic::InvariantStart | Intrinsic::InvariantEnd) => Ok(()),
                 // A hint; the 386 and 486 have no prefetch instruction.
                 Some(Intrinsic::Prefetch | Intrinsic::FakeUse) => Ok(()),
                 _ => refuse(format!("@{name}")),
@@ -6301,7 +6581,7 @@ impl Selector<'_, '_, '_> {
         let offset_bits =
             self.offset_bits(self.function.operand_type(&self.module.context, arguments[0]).expect("a typed operand"));
         let high = binary(self, "shl", None, vec![Loc::Held(strides), byte(offset_bits)], out);
-        let into = Held { value: self.value(result), width: 4 };
+        let into = Held { value: self.value(result), width: 4, offset: 0 };
         binary(self, "add", Some(into), vec![Loc::Held(within), Loc::Held(high)], out);
         Ok(())
     }
@@ -6379,7 +6659,7 @@ impl Selector<'_, '_, '_> {
         if let Some(&(low, high)) = self.joins.get(&held.value).filter(|_| held.width == 4) {
             return (low, high);
         }
-        let top = Held { value: self.fresh(), width: 4 };
+        let top = Held { value: self.fresh(), width: 4, offset: 0 };
         let sixteen = Loc::Imm(Imm { value: 16, width: 1, address: None });
         out.push(insn(at, semantics(Operation::Binary, "shr", vec![Loc::Held(top)], vec![Loc::Held(held), sixteen])));
         (Held { width: 2, ..held }, Held { width: 2, ..top })
@@ -6414,7 +6694,7 @@ impl Selector<'_, '_, '_> {
         if held.width >= width {
             return held;
         }
-        let word = Held { value: self.fresh(), width };
+        let word = Held { value: self.fresh(), width, offset: 0 };
         out.push(insn(
             at,
             semantics(
@@ -6501,7 +6781,9 @@ impl Selector<'_, '_, '_> {
                     Some(bytes) => byval_bytes(self.module, &self.layout, self.arch, bytes)?,
                     None => self.size(ty)?,
                 };
-                kinds.push(entry.kind(argument_of(self.types(), ty, size, class(index)), self.arch.stack_slot_bytes()));
+                kinds.push(
+                    entry.kind(argument_of(self.types(), ty, size, class(index), false), self.arch.stack_slot_bytes()),
+                );
             }
             let mut placement = entry.place(&kinds);
             let mut next = placement.places.clone().into_iter();
@@ -6682,7 +6964,7 @@ impl Selector<'_, '_, '_> {
                     &instruction.opcode,
                     Opcode::Call(info) if info.argument_attrs.get(index).is_some_and(|attrs| llrm_mir::memory::has(attrs, "signext"))
                 );
-                let word = Held { value: self.fresh(), width: self.arch.stack_slot_bytes() as u32 };
+                let word = Held { value: self.fresh(), width: self.arch.stack_slot_bytes() as u32, offset: 0 };
                 out.push(insn(
                     at,
                     semantics(
@@ -6832,7 +7114,7 @@ impl Selector<'_, '_, '_> {
             registers.results.len() == 1 && !matches!(self.types().get(instruction.ty), Type::Struct { .. })
         }) {
             // One register answers a scalar.
-            let held = Held { value: self.value(value), width: self.width(instruction.ty)? };
+            let held = Held { value: self.value(value), width: self.width(instruction.ty)?, offset: 0 };
             delivers = vec![(held, registers.results[0])];
         } else if let Some(value) = instruction.result.filter(|_| !registers.results.is_empty()) {
             // Each field of the answer in the register the ABI names.
@@ -6854,7 +7136,7 @@ impl Selector<'_, '_, '_> {
             }
             self.fields.insert(value, held);
         } else if let Some(value) = instruction.result.filter(|_| self.is_float(instruction.ty)) {
-            float = Some(Held { value: self.value(value), width: FLOAT });
+            float = Some(Held { value: self.value(value), width: FLOAT, offset: 0 });
         } else if let Some(value) = instruction.result.filter(|_| self.is_wide(instruction.ty)) {
             let (low, high) = (self.fresh_held(4), self.fresh_held(4));
             let [low_register, high_register] = results(self.arch, self::entry(self.arch, convention, variadic), 8)[..]
@@ -6899,7 +7181,7 @@ impl Selector<'_, '_, '_> {
             self.fields.insert(value, held);
         } else if let Some(value) = instruction.result {
             let width = self.width(instruction.ty)?;
-            let held = Held { value: self.value(value), width };
+            let held = Held { value: self.value(value), width, offset: 0 };
             match results(self.arch, self::entry(self.arch, convention, variadic), width)[..] {
                 // dx:ax, joined into the dword register the value lives in.
                 // Delivered as dwords: `shrd` reads each whole register, and
@@ -7967,8 +8249,8 @@ impl Selector<'_, '_, '_> {
         // The old value lands where the new one was read: the instruction is
         // tied, as an `add` is.
         let old = match function.instruction(inst).result {
-            Some(result) => Held { value: self.value(result), width },
-            None => Held { value: self.fresh(), width },
+            Some(result) => Held { value: self.value(result), width, offset: 0 },
+            None => Held { value: self.fresh(), width, offset: 0 },
         };
         let what = semantics(
             Operation::Exchange,
@@ -8003,6 +8285,7 @@ impl Selector<'_, '_, '_> {
             let result = Held {
                 value: self.value(instruction.result.expect("a port's value")),
                 width: self.width(instruction.ty)?,
+                offset: 0,
             };
             semantics(Operation::Barrier, "in", vec![Loc::Held(result)], vec![port])
         } else {
@@ -8052,7 +8335,7 @@ impl Selector<'_, '_, '_> {
         let id = match operand {
             Operand::Value(value) => {
                 let bytes = self.size(self.type_of(operand))?;
-                return Ok(Held { value: self.value(value), width: self.arch.float_width(bytes) });
+                return Ok(Held { value: self.value(value), width: self.arch.float_width(bytes), offset: 0 });
             }
             Operand::Constant(id) => id,
             Operand::Block(_) => unreachable!("a float is no block"),
@@ -8315,5 +8598,75 @@ fn swapped(predicate: IntPredicate) -> IntPredicate {
         Ule => Uge,
         Ugt => Ult,
         Uge => Ule,
+    }
+}
+
+/// The notes of a value an instruction of the block defines, by the index of
+/// the instruction they stand before: the one after the definer, if the
+/// definer is not the last. `before` is each note's place (`at`).
+fn after_definers(
+    insns: &[Arc<Insn>],
+    before: &IndexMap<i64, Vec<u32>>,
+    notes: &[DebugNote],
+) -> IndexMap<usize, Vec<u32>> {
+    let mut stands: IndexMap<usize, Vec<u32>> = IndexMap::default();
+    let (Some(first), Some(last)) = (insns.first(), insns.last()) else { return stands };
+    for (&at, ids) in before {
+        if at < first.at || at > last.at {
+            continue;
+        }
+        for &id in ids {
+            let (NoteValue::Value(value) | NoteValue::Offset(value, _)) = notes[id as usize].value else { continue };
+            let definer = insns.iter().position(|one| one.at < at && one.defines.contains(&value));
+            if let Some(next) = definer.map(|index| index + 1).filter(|&next| next < insns.len()) {
+                stands.entry(next).or_default().push(id);
+            }
+        }
+    }
+    stands
+}
+
+#[cfg(test)]
+mod anchoring_tests {
+    use super::*;
+    use crate::model::ir::{Operation, Semantics};
+
+    /// The record of `l` (gdb.c, x86 -O2) stood before the `shl`'s place, and
+    /// the note went before whatever was selected from the instruction after
+    /// it: past the `add v4, v4` that overwrites `l`, so `l` was listed from
+    /// the wrong instruction (ours 7..11 against the pin's 5..7). It stands
+    /// right after the instruction that defines it.
+    #[test]
+    fn test_a_note_of_a_defined_value_stands_after_its_definer() {
+        let insn = |at: i64, defines: Vec<u32>| {
+            Arc::new(Insn::new(at, None, Some(Semantics::new(Operation::Move)), defines, Vec::new()))
+        };
+        let insns = vec![insn(1, vec![2]), insn(2, vec![4]), insn(3, vec![5]), insn(4, vec![6])];
+        let notes = vec![DebugNote { variable: 9, piece: None, value: NoteValue::Value(4) }];
+        // the record's place is the fourth instruction's: past the one that
+        // doubles `l`
+        let before: IndexMap<i64, Vec<u32>> = [(4, vec![0])].into_iter().collect();
+        let stands = after_definers(&insns, &before, &notes);
+        assert_eq!(stands.get(&2), Some(&vec![0]), "{stands:?}");
+    }
+}
+
+#[cfg(test)]
+mod read_tests {
+    use super::*;
+
+    /// The list of values an instruction reads was grown by pushes: five
+    /// values took a capacity of eight, and every selected instruction paid
+    /// the reallocations (107,000 growths in memory_expansion). It is sized
+    /// for the values it holds.
+    #[test]
+    fn test_the_values_an_instruction_reads_are_listed_in_one_allocation() {
+        let held = |value: u32| Loc::Held(Held { value, width: 4, offset: 0 });
+        let mut what = Semantics::new(Operation::Binary);
+        what.dests = vec![held(9)];
+        what.sources = (1..=5).map(held).collect();
+        let read = _read(&what);
+        assert_eq!(read, vec![1, 2, 3, 4, 5]);
+        assert_eq!(read.capacity(), read.len());
     }
 }

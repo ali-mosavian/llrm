@@ -114,7 +114,7 @@ def test_the_bench_programs_are_compiled_with_the_harnesss_flags(tmp_path):
     """The corpus compiled bench programs with default flags while the harness gives -fno-inline-functions (and builds the C rows through a
     volatile pointer): #1883 said 'identical objects' of rows it never compiled."""
     found = _bench_or_skip(tmp_path)
-    tool, arguments = found["bench/frames/bq16/O2#0"]
+    tool, arguments, _ = found["bench/frames/bq16/O2#0"]
     assert tool == "llrm-qb" and "-fno-inline-functions" in arguments and "-O2" in arguments
     assert any(name.startswith("bench/frames/c/O2#1") for name in found), "the C kernel's counted twin"
     assert {name.split("/")[2] for name in found} >= {"bas", "bq16", "bq32", "c", "nib"}, "every language"
@@ -164,3 +164,23 @@ def test_two_llrm_llc_builds_are_compared_through_the_llrm_cc_beside_each(tmp_pa
     assert why == "different"
     assert (work / "p-O2.old.obj").read_text() == f"old {tmp_path}/old/llrm-llc x86_32-wat\n"
     assert (work / "p-O2.new.obj").read_text() == f"new {tmp_path}/new/llrm-llc x86_32-wat\n"
+
+
+def test_a_bench_c_program_is_compiled_for_the_target_the_harness_builds_it_for(tmp_path):
+    """48 of the pgo job's 130 'failures' were 8 bench C programs (huge, lru, jpeg_*, ...) that did not compile: the harness runs llrm-cc with
+    LLRM_CC_TARGET=x86_16-wat, identical.py ran it without, so `__huge` and llrm_os.h were errors. The same row must reach both sides, and
+    llrm-cc must run over the llrm-llc under test, not the one beside it."""
+    for tag in ("old", "new"):
+        side = tmp_path / tag
+        side.mkdir()
+        (side / "llrm-llc").write_text("#!/bin/sh\n")
+        cc = side / "llrm-cc"
+        cc.write_text(f'#!/bin/sh\nwhile [ "$1" != -o ]; do shift; done\necho "{tag} $LLRM_LLC $LLRM_CC_TARGET" > "$2"\n')
+        for one in (side / "llrm-llc", cc):
+            one.chmod(0o755)
+    work = tmp_path / "w"
+    work.mkdir()
+    job = ("bench/lru/c/O2#0", "", "llrm-cc", ["x.c", "-c", "-o", "OBJ"], {"LLRM_CC_TARGET": "x86_16-wat"})
+    identical.same(job, str(tmp_path / "old/llrm-llc"), str(tmp_path / "new/llrm-llc"), work)
+    assert (work / "bench_lru_c_O2#0.old.obj").read_text() == f"old {tmp_path}/old/llrm-llc x86_16-wat\n"
+    assert (work / "bench_lru_c_O2#0.new.obj").read_text() == f"new {tmp_path}/new/llrm-llc x86_16-wat\n"

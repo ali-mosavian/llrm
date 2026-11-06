@@ -1,0 +1,22 @@
+#title,Standard Instruction Execution Time,page,10-16,notes,"¹ For entries in this column, add one cycle if the <ea> is (Ay)+, -(Ay) and Ay = An. ² Word divides have conditional exit points. ³ Add one cycle to the effective address calculation time for all addressing modes except Rn, (An), (An)+, -(An), (d16,An), and (d16,PC)."
+Instruction,Size,"op <ea>,An¹","op <ea>,Dn","op Dn,<M>"
+ADD,"Byte, Word",1(1/0),1(1/0),1(1/1)
+"""",Long,1(1/0),1(1/0),1(1/1)
+AND,"Byte, Word",—,1(1/0),1(1/1)
+"""",Long,—,1(1/0),1(1/1)
+CMP,"Byte, Word",1(1/0),1(1/0),—
+"""",Long,1(1/0),1(1/0),—
+DIVS,Word,—,<=22(1/0)²,—
+"""",Long³,—,38(1/0),—
+DIVU,Word,—,<=22(1/0)²,—
+"""",Long³,—,38(1/0),—
+EOR,"Byte, Word",—,1(1/0),1(1/1)
+"""",Long,—,1(1/0),1(1/1)
+MULS,Word,—,2(1/0),—
+"""",Long³,—,2(1/0),—
+MULU,Word,—,2(1/0),—
+"""",Long³,—,2(1/0),—
+OR,"Byte, Word",—,1(1/0),1(1/1)
+"""",Long,—,1(1/0),1(1/1)
+SUB,"Byte, Word",1(1/0),1(1/0),1(1/1)
+"""",Long,1(1/0),1(1/0),1(1/1)

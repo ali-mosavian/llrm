@@ -80,6 +80,11 @@ pub struct Target {
     /// departures from it.
     #[serde(default)]
     pub description: Option<String>,
+    /// The file of `description`'s `src/machines` that states the layout and
+    /// the C sizes, where it is not `datalayout.toml` (wasm's has a file per
+    /// pointer width).
+    #[serde(default)]
+    pub description_file: Option<String>,
     #[serde(default)]
     pub wchar_bytes: Option<u32>,
     #[serde(default)]
@@ -106,6 +111,12 @@ pub struct Target {
     /// Whether the backend takes `-O<n>`.
     #[serde(default = "yes")]
     pub llc_level: bool,
+    /// Why the backend takes no `-O<n>`; required where `llc_level` is false.
+    pub llc_level_reason: Option<String>,
+    /// Whether the backend takes `-mcmodel=` (the pin's `llc -code-model`) and
+    /// clang does not: the driver gives the flag to the backend alone.
+    #[serde(default)]
+    pub llc_mcmodel: bool,
     pub object: String,
     pub link: Vec<String>,
     /// The command that runs an executable of the target, the executable last;
@@ -152,9 +163,17 @@ fn expanded(text: &str) -> Result<String, String> {
     Ok(out)
 }
 
+/// The description file of crate `llrm-NAME`: `file`, else `datalayout.toml`.
+fn description_path(
+    name: &str,
+    file: Option<&str>,
+) -> String {
+    format!("{ROOT}/crates/target/llrm-{name}/src/machines/{}", file.unwrap_or("datalayout.toml"))
+}
+
 fn c_abi_of(target: &Target) -> Result<Option<CAbi>, String> {
     let Some(name) = &target.description else { return Ok(None) };
-    let path = format!("{ROOT}/crates/target/llrm-{name}/src/machines/datalayout.toml");
+    let path = description_path(name, target.description_file.as_deref());
     let text = std::fs::read_to_string(&path).map_err(|error| format!("{path}: {error}"))?;
     let table: toml::Table = text.parse().map_err(|error| format!("{path}: {error}"))?;
     let c = table.get("c").and_then(toml::Value::as_table).ok_or(format!("{path}: no [c]"))?;
@@ -270,6 +289,8 @@ const LLC_FLAGS: &[&str] = &[
     "-ffloat-store",
     "-fverify-ir",
     "-fno-float-store",
+    "-ffunction-sections",
+    "-fno-function-sections",
 ];
 const LLC_PREFIXES: &[&str] =
     &["--isel=", "-fobject-format=", "-mcode-segment=", "-fno-inline=", "-Wstack-usage=", "-fexcess-precision="];
@@ -364,14 +385,9 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
             // clang writes the debug metadata, the backend the format `flag`
             // names.
             if !build.clang.iter().any(|one| one == "-g") {
-                // No `#dbg_assign`: the importer reads `#dbg_value` and
-                // `#dbg_declare` only.
-                build
-                    .clang
-                    .extend(
-                        ["-g", "-fdebug-compilation-dir=.", "-Xclang", "-fexperimental-assignment-tracking=disabled"]
-                            .map(str::to_owned),
-                    );
+                // The backend makes the `#dbg_assign`s itself
+                // (`AssignmentTrackingPass`).
+                build.clang.extend(["-g", "-fdebug-compilation-dir=."].map(str::to_owned));
             }
             build.llc.push(flag.to_owned());
         } else if let Some(level) = flag.strip_prefix("-O") {
@@ -476,6 +492,15 @@ pub fn target_named<'a>(
 }
 
 /// `llrm-llc`'s argument list for one translated unit.
+/// The build's flags for clang: all of them, but the code model on a target
+/// whose backend takes it (clang refuses it there).
+pub fn clang_flags(
+    target: &Target,
+    build: &Build,
+) -> Vec<String> {
+    build.clang.iter().filter(|flag| !(target.llc_mcmodel && flag.starts_with("-mcmodel="))).cloned().collect()
+}
+
 pub fn llc_args(
     target: &Target,
     build: &Build,
@@ -488,6 +513,9 @@ pub fn llc_args(
     }
     args.extend(target.llc.iter().cloned());
     args.extend(build.llc.iter().cloned());
+    if target.llc_mcmodel {
+        args.extend(build.clang.iter().filter(|flag| flag.starts_with("-mcmodel=")).cloned());
+    }
     if build.stop == Stop::Assembly {
         args.push("-S".into());
     }
@@ -572,10 +600,35 @@ fn run(
     }
 }
 
+/// What `clang --version` is not asked twice for: the clang's path, size and
+/// modification time, with the pin file it was judged against.
+fn pin_stamp(clang: &Path) -> Option<String> {
+    let meta = std::fs::metadata(clang).ok()?;
+    let modified = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
+    Some(format!("{}\n{}\n{}\n{PIN_FILE}", clang.display(), meta.len(), modified.as_nanos()))
+}
+
+/// Where the stamp of a clang found to be a pin is kept. Any read, write or
+/// mismatch falls back to asking the clang.
+fn pin_stamp_file(clang: &Path) -> PathBuf {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    clang.hash(&mut hasher);
+    std::env::temp_dir().join(format!("llrm-cc-pin-{:016x}", hasher.finish()))
+}
+
 fn check_pin(clang: &Path) -> Result<(), String> {
+    let stamp = pin_stamp(clang);
+    let file = pin_stamp_file(clang);
+    if stamp.as_deref().is_some_and(|stamp| std::fs::read_to_string(&file).is_ok_and(|kept| kept == stamp)) {
+        return Ok(());
+    }
     let out = Command::new(clang).arg("--version").output().map_err(|error| format!("{}: {error}", clang.display()))?;
     let said = String::from_utf8_lossy(&out.stdout);
     if PIN_FILE.lines().filter_map(|line| line.split_whitespace().next()).any(|sha| said.contains(sha)) {
+        if let Some(stamp) = stamp {
+            let _ = std::fs::write(&file, stamp);
+        }
         Ok(())
     } else {
         Err(format!("{} is not the pinned clang {}", clang.display(), pin()))
@@ -648,7 +701,7 @@ fn build(
                 let ir = scratch.join(format!("{}.ll", stem(path)));
                 let mut args = target.clang.clone();
                 args.extend(resource.iter().cloned());
-                args.extend(build.clang.iter().cloned());
+                args.extend(clang_flags(target, build));
                 args.extend(
                     ["-S", "-emit-llvm", "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone", "-o"]
                         .map(String::from),

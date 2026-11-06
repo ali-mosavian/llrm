@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/twoentryphi.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/twoentryphi.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/twoentryphi.rs sha256:5b8ff752bd70ba836d3ed522590a25b0444a4103fbb0ad3232a1afbf3dcb7eee -->
+<!-- src: crates/opt/llrm-transforms/src/twoentryphi.rs sha256:93747a518df14e0a9651ab73d7b4c4d5116065aff12ad6b397d7b320a27d1a84 -->
 
 # twoentryphi
 
@@ -32,6 +32,16 @@ a block whose first instruction is a phi of two entries.
 - D4. A hoisted instruction keeps the metadata kinds LLVM keeps
   (`dropUBImplyingAttrsAndMetadata`) and loses the rest; there are no debug
   records to drop.
+
+- D5. Where a `select` is a branch (`Tti::has_cmov` false: the i486) the
+  fold's selects count against the threshold, which the pin's do not: the
+  arms' code then runs on both paths and the branch stays. gcc if-converts
+  only where a conditional move exists. x_isqrt -18%, x_mergesort -20%
+  clocks, x_crc32 1179 -> 175 B at 1.58x clocks (numbered trade row; exit
+  2026-11-20: price the loop-carried arm in the cost model so crc keeps the
+  select where the clocks pay). Owner llrm-target-x86-m32. A boolean
+  `and`/`or` select (`select x, y, false`) is no branch and is not counted:
+  the 6502's `isdigit` range test stayed two compares (28 -> 50 B).
 
 ## Example
 The phi that a branch chooses between becomes a select in the branch's

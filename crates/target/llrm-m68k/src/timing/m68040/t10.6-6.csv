@@ -1,0 +1,19 @@
+#title,"10.6 INTEGER UNIT INSTRUCTION TIMINGS: CHK2* (<ea>, Rn) | CLR | CMP",page,10-18,notes,"*This instruction interlocks the <ea> calculate and execute stages. Timing for Dn within bounds, UB > LB. For UB < LB, add three clocks to <ea> calculate and execute times. For Rn = An, add one clock to <ea> calculate and execute times."
+Addressing Mode,"CHK2* (<ea>, Rn) <ea> Calculate","CHK2* (<ea>, Rn) Execute",CLR <ea> Calculate,CLR Execute,CMP <ea> Calculate,CMP Execute
+Dn,—,—,1,1,1,1
+An,—,—,—,—,1,1
+(An),11,2L + 9,1,1,1,1
+(An)+,—,—,1,1,1,1
+–(An),—,—,1,1,1,1
+"(d 16,An)",11,2L + 9,1,1,1,1
+"(d 16,PC)",12,3L + 9,—,—,3,2L + 1
+"(xxx).W, (xxx).L",11,2L + 9,1,1,1,1
+#<xxx>,—,—,—,—,1,1
+"(d 8,An,Xn)",13,1L + 12,3,3,3,3
+"(d 8,PC,Xn)",14,2L + 12,—,—,5,1L + 4
+"(BR,Xn)",15,2L + 13,6,1L + 5,6,1L + 5
+"(bd,BR,Xn)",16,2L + 14,7,1L + 6,7,1L + 6
+"([bd,BR,Xn])",19,2L + 17,9,1L + 8,9,1L + 8
+"([bd,BR,Xn],od)",20,2L + 18,10,1L + 9,10,1L + 9
+"([bd,BR],Xn)",20,4L + 16,10,3L + 7,10,3L + 7
+"([bd,BR],Xn,od)",21,4L + 17,11,3L + 8,11,3L + 8

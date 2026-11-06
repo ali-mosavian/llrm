@@ -162,8 +162,10 @@ fn memory(one: &Insn) -> (bool, bool) {
     (reads, writes)
 }
 
-/// CF, PF, AF, ZF, SF, OF of rflags.
-const ARITHMETIC_FLAGS: u32 = 0x8d5;
+/// CF, PF, AF, ZF, SF, OF, in the lane numbering of `Lanes::flags`
+/// (`llrm_lir::flag`, the decoder's bits: the mask 0x8d5 of rflags positions
+/// named other lanes).
+const ARITHMETIC_FLAGS: u32 = llrm_lir::flag::ALL.bits();
 
 /// What an instruction does that its decoded effect leaves out, because a later
 /// pass adds it: an x87 compare writes the arithmetic flags (the stackifier
@@ -422,6 +424,7 @@ pub fn graph(
 ) -> Graph {
     let n = insns.len();
     let mut effects: Vec<_> = insns.iter().map(|one| liveness::effect(regs, bits, one)).collect();
+    let decoded = effects.clone();
     // `MOV32r0` writes EFLAGS (it becomes `xor`): a zero made between a flag
     // writer and its reader would break `add; adc` (the pin's scheduler
     // sees the def).
@@ -452,7 +455,11 @@ pub fn graph(
             Some(effect) => {
                 let writes = effect.writes.mask();
                 dead[later] = writes & !live;
-                live = (live & !writes) | effect.all_reads().mask();
+                // A write a later pass adds (a zero's `xor`) does not end the
+                // life of the flags it sits between: `add; mov 0; adc` keeps
+                // the add's carry for the `adc`.
+                let kept = decoded[later].as_ref().map_or(writes, |decoded| decoded.writes.mask());
+                live = (live & !kept) | effect.all_reads().mask();
             }
             None => live = u128::MAX,
         }
@@ -1028,6 +1035,10 @@ pub(crate) fn x87_values<'a>(insns: impl Iterator<Item = &'a Arc<Insn>>) -> Hash
         .collect()
 }
 
+/// The registers of the x87 stack the allocator hands out (`FP0`-`FP6`, the
+/// pin's `RFP` class).
+const X87_STACK_LIMIT: u32 = 7;
+
 /// `body` with each region reordered; a region of more than `limit / 2`
 /// instructions is tracked with the model `model` makes of the body (given
 /// the test of whether a value counts).
@@ -1037,9 +1048,9 @@ pub fn scheduled(
     model: impl FnOnce(&LirBody, &dyn Fn(u32) -> bool) -> Model,
 ) -> LirBody {
     let (regs, bits) = (body.regs(), body.bits);
-    // The x87 stack is its own register set with its own limit (DEVIATE MS3):
-    // its values (those of the float operations) are not counted against
-    // the general registers.
+    // The x87 stack is its own register set with its own limit: its values
+    // (those of the float operations) are not counted against the general
+    // registers.
     let stack = x87_values(body.blocks.iter().flat_map(|block| block.insns.iter()));
     let counted = |value: u32| !stack.contains(&value);
     let mut live = None;
@@ -1059,6 +1070,7 @@ pub fn scheduled(
             // What is live below a region is asked for a region of more than
             // half the allocatable registers only.
             let mut now: HashSet<u32> = HashSet::default();
+            let mut now87: HashSet<u32> = HashSet::default();
             let copies = regions.iter().any(|region| insns[region.clone()].iter().any(|one| copy_of(one).is_some()));
             if copies || regions.iter().any(|region| region.len() > limit / 2) {
                 let live = live.get_or_insert_with(|| live_rows(body));
@@ -1066,11 +1078,27 @@ pub fn scheduled(
                     insns.iter().flat_map(|one| one.defines.iter().chain(&one.uses)).copied().collect();
                 values.sort_unstable();
                 values.dedup();
-                now = values.into_iter().filter(|&value| counted(value) && live.live_out(block.at, value)).collect();
+                now = values
+                    .iter()
+                    .copied()
+                    .filter(|&value| counted(value) && live.live_out(block.at, value))
+                    .collect();
+                // The x87 values live below the block count in the stack's set
+                // (the pin: every live-out register is in the bottom pressure).
+                now87 = values.iter().copied().filter(|&value| stack.contains(&value) && live.live_out(block.at, value)).collect();
                 if regions.iter().any(|region| region.len() > limit / 2)
                     && let Some(make) = model.take()
                 {
-                    made = Some(make(body, &counted));
+                    let mut model = make(body, &counted);
+                    // The x87 stack is the pin's `RFP` register class: a set of
+                    // its own with the seven registers
+                    // `FP0`-`FP6`.
+                    let set: Rc<[usize]> = Rc::from(vec![model.limits.len()]);
+                    model.limits.push(X87_STACK_LIMIT);
+                    for &value in &stack {
+                        model.count(value, 1, set.clone());
+                    }
+                    made = Some(model);
                 }
             }
             let step = |now: &mut HashSet<u32>, one: &Insn| {
@@ -1079,16 +1107,23 @@ pub fn scheduled(
                 }
                 now.extend(one.uses.iter().copied().filter(|&value| counted(value)));
             };
+            let step87 = |now: &mut HashSet<u32>, one: &Insn| {
+                for value in &one.defines {
+                    now.remove(value);
+                }
+                now.extend(one.uses.iter().copied().filter(|value| stack.contains(value)));
+            };
             let mut out = insns.clone();
             let mut end = insns.len();
             for region in regions.iter().rev() {
                 for one in insns[region.end..end].iter().rev() {
                     step(&mut now, one);
+                    step87(&mut now87, one);
                 }
                 let slice = &insns[region.clone()];
                 if slice.len() >= 2 {
                     let tracking = made.as_ref().filter(|_| slice.len() > limit / 2).map(|model| {
-                        let mut live_out: Vec<u32> = now.iter().copied().collect();
+                        let mut live_out: Vec<u32> = now.iter().chain(&now87).copied().collect();
                         live_out.sort_unstable();
                         // `initLiveThru`: a live-out value counts unless a def
                         // in the region ties it (two-address).
@@ -1112,6 +1147,7 @@ pub fn scheduled(
                 }
                 for one in slice.iter().rev() {
                     step(&mut now, one);
+                    step87(&mut now87, one);
                 }
                 end = region.start;
             }
@@ -1130,7 +1166,7 @@ mod tests {
     use crate::model::lir::Insn;
 
     fn held(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 4 })
+        Loc::Held(Held { value, width: 4, offset: 0 })
     }
 
     fn cell(offset: i64) -> Loc {
@@ -1300,6 +1336,19 @@ mod tests {
     fn test_regions_are_the_runs_between_boundaries() {
         let mut insns = body();
         insns.insert(2, insn(9, semantics(Operation::Call, "call", vec![], vec![]), vec![], vec![]));
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
+        assert_eq!(regions(&insns, regs, 16), vec![0..2, 3..5]);
+    }
+
+    /// `modifies_stack_pointer`: `add sp, 4` is neither a push, a pop nor a
+    /// call, and `_lanes` leaves SP out of the lanes it orders by, so the two
+    /// loads around it were one region and could swap across the write.
+    #[test]
+    fn test_a_write_of_the_stack_pointer_that_is_not_a_push_or_pop_ends_a_region() {
+        let mut insns = body();
+        let sp = Loc::Reg(llrm_lir::Reg { register: llrm_lir::registers::RegId::SP, width: 2 });
+        let imm = Loc::Imm(crate::model::ir::Imm { value: 4, width: 2, address: None });
+        insns.insert(2, insn(9, semantics(Operation::Binary, "add", vec![sp.clone()], vec![sp, imm]), vec![], vec![]));
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
         assert_eq!(regions(&insns, regs, 16), vec![0..2, 3..5]);
     }
@@ -1552,7 +1601,7 @@ mod tests {
     fn test_an_x87_compare_is_ordered_before_a_flag_reader() {
         use super::x87_compare;
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
-        let wide = |value: u32| Loc::Held(crate::model::ir::Held { value, width: 10 });
+        let wide = |value: u32| Loc::Held(crate::model::ir::Held { value, width: 10, offset: 0 });
         let insns = vec![
             insn(0, semantics(Operation::Compare, "fcom", vec![], vec![wide(1), wide(2)]), vec![], vec![1, 2]),
             insn(1, semantics(Operation::Binary, "adc", vec![held(3)], vec![held(3), held(4)]), vec![3], vec![3, 4]),
@@ -1583,8 +1632,8 @@ mod tests {
     /// > 2.5).
     #[test]
     fn test_a_set_stays_after_the_float_compare_it_reads() {
-        let float = |value: u32| Loc::Held(crate::model::ir::Held { value, width: 10 });
-        let byte = Loc::Held(crate::model::ir::Held { value: 3, width: 1 });
+        let float = |value: u32| Loc::Held(crate::model::ir::Held { value, width: 10, offset: 0 });
+        let byte = Loc::Held(crate::model::ir::Held { value: 3, width: 1, offset: 0 });
         let insns = vec![
             insn(0, semantics(Operation::Compare, "fcom", vec![], vec![float(1), float(2)]), vec![], vec![1, 2]),
             insn(1, semantics(Operation::Unary, "seta", vec![byte], vec![]), vec![3], vec![]),
@@ -1611,7 +1660,7 @@ mod tests {
         assert!(!shift_effect.writes.is_disjoint(&flags), "the shl writes the flags");
         let g = graph(&[compare.clone(), shift, carry], regs, 32);
         assert!(g.preds[2].contains(&1), "adc stays after the shl: {g:?}");
-        let wide = |value: u32| Loc::Held(crate::model::ir::Held { value, width: 10 });
+        let wide = |value: u32| Loc::Held(crate::model::ir::Held { value, width: 10, offset: 0 });
         let fcmov = insn(1, semantics(Operation::Move, "fcmove", vec![wide(7)], vec![wide(8)]), vec![7], vec![7, 8]);
         // Either its effect is unknown (a boundary) or it reads the flags the
         // compare set.
@@ -1619,6 +1668,25 @@ mod tests {
         assert!(known.is_none_or(|reads| reads), "an fcmov with a known effect reads the flags");
         let g = graph(&[compare, fcmov], regs, 32);
         assert_eq!(g.preds[1], [0], "the fcmov stays after the cmp: {g:?}");
+    }
+
+    /// A zero made between an `add` and the `adc` that takes its carry wrote
+    /// the flags in the graph, so the add's carry read as dead and the add
+    /// kept no edge to the flag writes before it: the machine scheduler hoisted
+    /// the add above an `or` and two `mul`s, and the `adc` read their carry
+    /// (x_m64 and softfloat -O2 lost carries of a 128-bit product).
+    #[test]
+    fn test_an_add_keeps_its_place_after_flag_writes_when_a_zero_sits_before_its_adc() {
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let insns = vec![
+            insn(0, semantics(Operation::Binary, "or", vec![held(1)], vec![held(1), imm(1)]), vec![1], vec![1]),
+            insn(1, semantics(Operation::Binary, "add", vec![held(2)], vec![held(2), held(3)]), vec![2], vec![2, 3]),
+            insn(2, semantics(Operation::Move, "mov", vec![held(4)], vec![imm(0)]), vec![4], vec![]),
+            insn(3, semantics(Operation::Binary, "adc", vec![held(5)], vec![held(5), held(4)]), vec![5], vec![5, 4]),
+        ];
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m32::REGISTER_INFO);
+        let found = graph(&insns, regs, 32);
+        assert!(found.preds[1].contains(&0), "the add stays after the or: {found:?}");
     }
 
     #[test]

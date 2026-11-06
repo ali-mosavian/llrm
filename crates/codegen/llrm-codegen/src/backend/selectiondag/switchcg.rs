@@ -151,6 +151,8 @@ pub struct SwitchTarget {
     pub jump_tables: bool,
     /// `shouldOptimizeForSize`.
     pub opt_size: bool,
+    /// `hasMinSize`: no peeling, no balanced tree.
+    pub min_size: bool,
     /// Not -O0.
     pub optimize: bool,
 }
@@ -158,7 +160,14 @@ pub struct SwitchTarget {
 impl SwitchTarget {
     /// x86 at -O2 with the pin's defaults.
     pub fn x86(pointer_bits: u32) -> SwitchTarget {
-        SwitchTarget { pointer_bits, min_jump_table_entries: 4, jump_tables: true, opt_size: false, optimize: true }
+        SwitchTarget {
+            pointer_bits,
+            min_jump_table_entries: 4,
+            jump_tables: true,
+            opt_size: false,
+            min_size: false,
+            optimize: true,
+        }
     }
 }
 
@@ -263,7 +272,7 @@ fn peel_dominant_case_cluster(
     clusters: &mut Vec<CaseCluster>,
     target: &SwitchTarget,
 ) -> Option<(CaseCluster, BranchProbability)> {
-    if clusters.len() < 2 || !target.optimize || target.opt_size {
+    if clusters.len() < 2 || !target.optimize || target.min_size {
         return None;
     }
     let mut top = BranchProbability::new(SWITCH_PEEL_THRESHOLD, 100);

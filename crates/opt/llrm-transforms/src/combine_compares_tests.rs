@@ -455,14 +455,15 @@ fn two_operators_with_a_shared_second_operand_compare_their_first_operands() {
     );
 }
 
-/// `foldICmpBinOp`, `X * C == Y * C` for an even `C` compares the low bits
-/// (`opt` goes on to `icmp eq i32 (xor %a, %b) & 1073741823, 0`).
+/// `foldICmpBinOp`, `X * C == Y * C` for an even `C` compares the low bits,
+/// and `foldICmpEquality` makes it `icmp eq i32 (xor %a, %b) & 1073741823, 0`
+/// as `opt` does.
 #[test]
 fn an_even_shared_multiplier_in_an_equality_compares_the_low_bits() {
     check(
         "i32 %a, i32 %b",
         "  %p = mul i32 %a, 12\n  %q = mul i32 %b, 12\n  %r = icmp eq i32 %p, %q\n  ret i1 %r\n",
-        "  %0 = and i32 %a, 1073741823\n  %1 = and i32 %b, 1073741823\n  %2 = icmp eq i32 %0, %1\n  ret i1 %2\n",
+        "  %0 = xor i32 %a, %b\n  %1 = and i32 %0, 1073741823\n  %2 = icmp eq i32 %1, 0\n  ret i1 %2\n",
     );
 }
 

@@ -36,6 +36,9 @@
 //!
 //! A phi whose arms differ in kind stays.
 //!
+//! (C1 is not what left leas in m64 quicksort -O3: that was the missing
+//! base-as-register retry in `matched_over`.)
+//!
 //! DEVIATE C1 (m32): the rest of CodeGenPrepare's work is done by isel, which
 //! rebuilds an address expression in the block that uses it, and by the select
 //! lowering; the width of a switch condition is `cgpswitch`'s
@@ -179,6 +182,16 @@ impl FunctionPass for CgpAddr {
             unit.function,
             analyses.outer().target().lowering().as_deref(),
         );
+        // DEVIATE CS1: a dear conversion of a select with a constant arm.
+        let costs = analyses.outer().target().costs();
+        let converted = crate::cgpselect::casts_branched(
+            unit.context,
+            unit.layout,
+            unit.function,
+            costs.float_to_int,
+            costs.float_compare,
+            costs.branch,
+        );
         // `optimizeSwitchInst`'s `optimizeSwitchType`.
         let switches = match analyses.outer().target().lowering() {
             Some(lowering) => {
@@ -189,10 +202,40 @@ impl FunctionPass for CgpAddr {
         // Blocks and edges are as they were.
         let one_flag = !analyses.outer().target().multiple_condition_registers();
         let sunk_compares = one_flag && compares_sunk(unit.context, &analyses.outer().globals, unit.function);
+        // `optimizeCmp`'s overflow combines, before its other steps.
+        let math = match analyses.outer().target().lowering() {
+            Some(lowering) => {
+                let outer = std::rc::Rc::clone(analyses.outer());
+                crate::cgpmath::overflow_math_formed(
+                    unit.context,
+                    &outer.globals,
+                    unit.layout,
+                    unit.declared,
+                    &*lowering,
+                    &mut |function| {
+                        let loops = analyses.get::<Loops>(&*unit.context, unit.layout, function);
+                        (
+                            llrm_analysis::cfg::natural(function, &loops),
+                            analyses.get::<Dominators>(&*unit.context, unit.layout, function),
+                        )
+                    },
+                    unit.function,
+                )
+            }
+            None => false,
+        };
         let compares = match analyses.outer().target().lowering() {
             Some(lowering) => {
                 let outer = std::rc::Rc::clone(analyses.outer());
-                crate::cmpopt::compares_optimized(unit.context, &outer.globals, unit.layout, &*lowering, unit.function)
+                crate::cmpopt::compares_optimized(
+                    unit.context,
+                    unit.metadata,
+                    unit.declared,
+                    &outer.globals,
+                    unit.layout,
+                    &*lowering,
+                    unit.function,
+                )
             }
             None => false,
         };
@@ -243,7 +286,8 @@ impl FunctionPass for CgpAddr {
             None => false,
         };
         let addresses = match analyses.outer().target().tti() {
-            Some(tti) => sunk(unit, &*tti),
+            Some(tti) if tti.scaled_index_insns() == 0 => sunk(unit, &*tti, true),
+            Some(tti) => sunk_priced(unit, analyses, &*tti),
             None => false,
         };
         // An address sunk into a loop reads the cast from where it was; made
@@ -260,8 +304,8 @@ impl FunctionPass for CgpAddr {
                 ),
                 None => false,
             };
-        if merged {
-            // A block went: the blocks and edges are not as they were.
+        if merged || converted {
+            // A block went or came: the blocks and edges are not as they were.
             PreservedAnalyses::none()
         } else if phis
             || aligned
@@ -276,6 +320,7 @@ impl FunctionPass for CgpAddr {
             || remainders
             || compares
             || switches
+            || math
         {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else if closed {
@@ -323,7 +368,7 @@ fn exts_optimized(
         {
             continue;
         }
-        changed |= crate::extpromotion::optimize_ext(unit.context, lowering, unit.function, state, ext);
+        changed |= crate::extpromotion::optimize_ext(unit.context, unit.layout, lowering, unit.function, state, ext);
     }
     changed
 }
@@ -442,6 +487,9 @@ struct Mode {
     offset: i128,
     index: Option<(Operand, u64)>,
     insts: Vec<InstId>,
+    /// `ExtAddrMode::InBounds`: every `gep` folded was `inbounds`, and none of
+    /// the shifts that were.
+    in_bounds: bool,
 }
 
 /// The index of the address among a memory access's operands.
@@ -454,6 +502,20 @@ fn address_of(
         Opcode::Store { .. } => Some(1),
         _ => None,
     }
+}
+
+/// The bytes a load or store moves: the pin's `AccessTy`, which AArch64's
+/// scaled index depends on.
+fn access_bytes(
+    unit: &passes::Unit,
+    access: InstId,
+) -> u64 {
+    let inst = unit.function.instruction(access);
+    let ty = match inst.opcode {
+        Opcode::Store { .. } => unit.function.operand_type(unit.context, inst.operands[0]),
+        _ => Some(inst.ty),
+    };
+    ty.map_or(0, |ty| unit.layout.store_size(&unit.context.types, ty))
 }
 
 /// Whether folding `address` (made from the register `held` and a global)
@@ -509,8 +571,10 @@ fn integer(
 fn shifted(
     unit: &passes::Unit,
     tti: &dyn Tti,
+    retry: bool,
     space: u32,
     block: BlockId,
+    bytes: u64,
     index: Operand,
     scale: u64,
     displacement: i128,
@@ -524,8 +588,9 @@ fn shifted(
     let &[x, amount] = &one.operands[..] else { return None };
     let amount = u32::try_from(integer(unit.context, amount)?).ok().filter(|&amount| amount < 64)?;
     let scaled = scale.checked_shl(amount).filter(|&scaled| scaled >> amount == scale)?;
-    if !tti.is_legal_addressing_mode_in(
+    if !tti.is_legal_addressing_mode_at(
         space,
+        bytes,
         false,
         i64::try_from(displacement).ok()?,
         true,
@@ -548,19 +613,91 @@ fn shifted(
     (live || folds).then_some((shl, x, scaled))
 }
 
+/// `isNoopAddrSpaceCast(from, to)`: the two spaces hold the same bits as the
+/// same stable integers (x86: both below 256), so the cast changes the type
+/// and nothing else.
+fn noop_cast(
+    unit: &passes::Unit,
+    cast: InstId,
+) -> bool {
+    let instruction = unit.function.instruction(cast);
+    let space_of = |ty: Option<TypeId>| match ty.map(|ty| unit.context.types.get(ty).clone()) {
+        Some(Type::Pointer(space)) => Some(space),
+        _ => None,
+    };
+    let from = space_of(unit.function.operand_type(unit.context, instruction.operands[0]));
+    let to = space_of(instruction.result.map(|result| unit.function.value(result).ty));
+    let (Some(from), Some(to)) = (from, to) else { return false };
+    let (from, to) = (unit.layout.pointer(from), unit.layout.pointer(to));
+    from.bits == to.bits && from.index_bits == to.index_bits && !from.unstable && !to.unstable
+}
+
+/// The address-space cast `cast` read as a mode: that of its operand, and the
+/// cast itself among the instructions the mode replaces when it is
+/// `isProfitableToFoldIntoAddressingMode` (read once, or only by addresses).
+fn through_cast(
+    unit: &passes::Unit,
+    tti: &dyn Tti,
+    retry: bool,
+    space: u32,
+    block: BlockId,
+    bytes: u64,
+    cast: InstId,
+    depth: u32,
+) -> Option<Mode> {
+    if !noop_cast(unit, cast) {
+        return None;
+    }
+    let instruction = unit.function.instruction(cast);
+    let result = instruction.result?;
+    if unit.function.users(result).iter().count() != 1 && !crate::spill::address_only(unit.function, result, DEPTH) {
+        return None;
+    }
+    let mut inner = matched(unit, tti, retry, space, block, bytes, instruction.operands[0], depth);
+    inner.insts.push(cast);
+    Some(inner)
+}
+
 /// `matchAddr`: `address` read as a mode, `depth` more `gep`s allowed.
 fn matched(
     unit: &passes::Unit,
     tti: &dyn Tti,
+    retry: bool,
     space: u32,
     block: BlockId,
+    bytes: u64,
     address: Operand,
     depth: u32,
 ) -> Mode {
-    let plain = || Mode { base: address, reg: None, offset: 0, index: None, insts: Vec::new() };
+    matched_over(unit, tti, retry, space, block, bytes, address, depth, false)
+}
+
+/// [`matched`]; `opaque` reads the base operand of the `gep` as a register
+/// without matching it (the retry of `matchOperationAddr`'s GEP case:
+/// "try stuffing the base into a register instead of matching it",
+/// [L5408](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L5408)).
+fn matched_over(
+    unit: &passes::Unit,
+    tti: &dyn Tti,
+    retry: bool,
+    space: u32,
+    block: BlockId,
+    bytes: u64,
+    address: Operand,
+    depth: u32,
+    opaque: bool,
+) -> Mode {
+    let plain = || Mode { base: address, reg: None, offset: 0, index: None, insts: Vec::new(), in_bounds: true };
     let Operand::Value(value) = address else { return plain() };
     let ValueDef::Instruction(gep) = unit.function.value(value).def else { return plain() };
     let instruction = unit.function.instruction(gep);
+    // `matchOperationAddr`, `Instruction::AddrSpaceCast`
+    // ([L5244](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/CodeGenPrepare.cpp#L5244)):
+    // a cast between spaces that share their representation is the address
+    // of its operand, at the same depth.
+    if instruction.opcode == Opcode::Cast(CastOp::AddrSpaceCast) {
+        return through_cast(unit, tti, retry, space, block, bytes, gep, depth).unwrap_or_else(plain);
+    }
     let Opcode::GetElementPtr { source } = instruction.opcode else { return plain() };
     if depth == 0 {
         return plain();
@@ -582,8 +719,13 @@ fn matched(
     if variable.len() > 1 {
         return plain();
     }
-    let inner = matched(unit, tti, space, block, instruction.operands[0], depth - 1);
+    let inner = if opaque {
+        Mode { base: instruction.operands[0], reg: None, offset: 0, index: None, insts: Vec::new(), in_bounds: true }
+    } else {
+        matched(unit, tti, retry, space, block, bytes, instruction.operands[0], depth - 1)
+    };
     let mut insts = inner.insts;
+    let mut in_bounds = inner.in_bounds && instruction.flags.contains(Flags::INBOUNDS);
     let mut reg = inner.reg;
     let index = match (variable.first(), inner.index) {
         // `BaseGV + BaseReg + ScaledReg`: the earlier index is a register of
@@ -599,14 +741,55 @@ fn matched(
             reg = Some(held);
             Some((instruction.operands[1 + at], scale))
         }
-        (Some(_), Some(_)) => return plain(),
+        // The base matched an index of its own: match this one against the
+        // base as a register; a second conflict is a failure.
+        // DEVIATE CGP2: in real mode the retry is a candidate
+        // that `sunk_priced` weighs against register pressure, not a rule.
+        (Some(_), Some(_)) if !opaque && (retry || tti.scaled_index_insns() == 0) => {
+            return matched_over(unit, tti, retry, space, block, bytes, address, depth, true);
+        }
+        (Some(_), Some(_)) => {
+            RETRY_REACHED.set(true);
+            return plain();
+        }
+        // `matchScaledValue` of scale 1 is `matchAddr(ScaleReg)`
+        // ([CodeGenPrepare.cpp
+        // L4604](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/CodeGenPrepare.cpp#L4604)):
+        // the first register is the base register, not an index. Only over a
+        // global: over a register base it is the second register, the index
+        // (wasm has none, so the pin's mode fails and nothing sinks). A mode
+        // the target refuses is read as an index again (`matchAddr`'s scale-1
+        // fallback).
+        (Some(&(at, 1)), None)
+            if reg.is_none()
+                && is_global(unit.context, inner.base)
+                && shifted(
+                    unit,
+                    tti,
+                    retry,
+                    space,
+                    block,
+                    bytes,
+                    instruction.operands[1 + at],
+                    1,
+                    offset + inner.offset,
+                )
+                .is_none()
+                && i64::try_from(offset + inner.offset).is_ok_and(|displacement| {
+                    tti.is_legal_addressing_mode_at(space, bytes, true, displacement, true, 0)
+                }) =>
+        {
+            reg = Some(instruction.operands[1 + at]);
+            None
+        }
         (Some(&(at, scale)), None) => {
             let operand = instruction.operands[1 + at];
             // `matchScaledValue(index, scale)` of a `shl x, C`: the shift is
             // the scale of the mode (`matchOperationAddr`, `Instruction::Shl`).
-            match shifted(unit, tti, space, block, operand, scale, offset + inner.offset) {
+            match shifted(unit, tti, retry, space, block, bytes, operand, scale, offset + inner.offset) {
                 Some((shl, folded, scale)) => {
                     insts.push(shl);
+                    in_bounds = false;
                     Some((folded, scale))
                 }
                 None => Some((operand, scale)),
@@ -617,18 +800,83 @@ fn matched(
     let total = offset + inner.offset;
     let scale = index.map_or(0, |(_, scale)| i64::try_from(scale).unwrap_or(i64::MAX));
     let Ok(displacement) = i64::try_from(total) else { return plain() };
-    if !tti.is_legal_addressing_mode_in(space, reg.is_some(), displacement, true, scale) {
+    if !tti.is_legal_addressing_mode_at(space, bytes, reg.is_some(), displacement, true, scale) {
         return plain();
     }
     insts.push(gep);
-    Mode { base: inner.base, reg, offset: total, index, insts }
+    Mode { base: inner.base, reg, offset: total, index, insts, in_bounds }
 }
 
 /// Each load and store whose address is made in another block, with the address
 /// made where it is used; whether any was.
+thread_local! {
+    /// Whether a match reached the retry's conflict without being allowed it.
+    static RETRY_REACHED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// DEVIATE CGP2 (owner anyisa, exit 2026-11-20): in real mode the retry (the
+/// base matched as a register beside an index of its own) keeps the base and
+/// the index live to the access, and with four registers that can cost more
+/// in spills than the instructions it saves. The function made with the retry
+/// replaces the one made without it only when `profit::motion_price` (work and
+/// forecast spill traffic under the target's registers) is lower. The pin has
+/// no such price: its code16 build has 32-bit registers, so it is no oracle.
+fn sunk_priced(
+    unit: &mut passes::Unit,
+    analyses: &Analyses,
+    tti: &dyn Tti,
+) -> bool {
+    // Most functions never reach the retry: match without making anything,
+    // and clone only for one that does.
+    RETRY_REACHED.set(false);
+    for (block, inst) in unit.function.walk().collect::<Vec<_>>() {
+        let Some(at) = address_of(unit.function, inst) else { continue };
+        let address = unit.function.instruction(inst).operands[at];
+        if let Some(Type::Pointer(space)) =
+            unit.function.operand_type(unit.context, address).map(|ty| unit.context.types.get(ty).clone())
+        {
+            matched(unit, tti, false, space, block, access_bytes(unit, inst), address, DEPTH);
+        }
+    }
+    if !RETRY_REACHED.get() {
+        return sunk(unit, tti, false);
+    }
+    let mut trial = unit.function.clone();
+    let plain = sunk(unit, tti, false);
+    let retried = {
+        let mut other = passes::Unit {
+            context: &mut *unit.context,
+            layout: unit.layout,
+            function: &mut trial,
+            id: unit.id,
+            metadata: unit.metadata,
+            declared: &mut *unit.declared,
+        };
+        sunk(&mut other, tti, true)
+    };
+    if !retried || trial == *unit.function {
+        return plain;
+    }
+    let outer = analyses.outer();
+    let (costs, room) = (crate::profit::costs(outer), crate::profit::registers(outer));
+    let price = |function: &Function| {
+        let frequency = crate::profit::_frequencies(unit.context, unit.metadata, &outer.globals, function, None)?;
+        crate::profit::motion_price(unit.context, unit.layout, outer, function, &costs, room, &frequency)
+    };
+    let priced = (price(&trial), price(unit.function));
+    if let (Some(with), Some(without)) = priced
+        && with < without
+    {
+        *unit.function = trial;
+        return true;
+    }
+    plain
+}
+
 fn sunk(
     unit: &mut passes::Unit,
     tti: &dyn Tti,
+    retry: bool,
 ) -> bool {
     let accesses: Vec<(BlockId, InstId, usize)> = unit
         .function
@@ -645,12 +893,15 @@ fn sunk(
         else {
             continue;
         };
-        if let Some(ready) = select_combined(unit, tti, space, block, access, address, &mut made, &mut touched) {
+        let bytes = access_bytes(unit, access);
+        if let Some(ready) =
+            select_combined(unit, tti, retry, space, block, bytes, access, address, &mut made, &mut touched)
+        {
             unit.function.set_operand(access, at, ready);
             changed = true;
             continue;
         }
-        let mode = matched(unit, tti, space, block, address, DEPTH);
+        let mode = matched(unit, tti, retry, space, block, bytes, address, DEPTH);
         let local = |inst: &InstId| unit.function.parent(*inst) == Some(block);
         if mode.insts.is_empty() || mode.insts.iter().all(local) {
             continue;
@@ -658,7 +909,8 @@ fn sunk(
         let ready = match made.get(&(block, address)) {
             Some(&ready) => ready,
             None => {
-                let ready = remade(unit, access, space, &mode);
+                let wanted = unit.function.operand_type(unit.context, address).expect("a typed address");
+                let ready = remade(unit, access, space, &mode, wanted);
                 made.insert((block, address), ready);
                 ready
             }
@@ -690,8 +942,10 @@ fn sunk(
 fn select_combined(
     unit: &mut passes::Unit,
     tti: &dyn Tti,
+    retry: bool,
     space: u32,
     block: BlockId,
+    bytes: u64,
     access: InstId,
     address: Operand,
     made: &mut BTreeMap<(BlockId, Operand), Operand>,
@@ -707,18 +961,21 @@ fn select_combined(
         return None;
     }
     let (condition, first, second) = (chosen.operands[0], chosen.operands[1], chosen.operands[2]);
-    let (one, other) =
-        (matched(unit, tti, space, block, first, DEPTH), matched(unit, tti, space, block, second, DEPTH));
+    let (one, other) = (
+        matched(unit, tti, retry, space, block, bytes, first, DEPTH),
+        matched(unit, tti, retry, space, block, bytes, second, DEPTH),
+    );
     if one.base != other.base
         || one.reg.is_some()
         || other.reg.is_some()
         || one.index.is_some()
         || other.index.is_some()
         || one.offset == other.offset
+        || one.in_bounds != other.in_bounds
     {
         return None;
     }
-    if !tti.is_legal_addressing_mode_in(space, false, 0, true, 1) {
+    if !tti.is_legal_addressing_mode_at(space, bytes, false, 0, true, 1) {
         return None;
     }
     let local = |inst: &InstId| unit.function.parent(*inst) == Some(block);
@@ -734,7 +991,12 @@ fn select_combined(
         counting::constant(unit.context, &BigInt::from(other.offset), bits),
     );
     let put = |unit: &mut passes::Unit, opcode: Opcode, ty, operands: Vec<Operand>| -> Operand {
-        let inst = unit.function.create_instruction(opcode, ty, operands, Flags::default(), None);
+        let flags = if matches!(opcode, Opcode::GetElementPtr { .. }) && one.in_bounds {
+            Flags::INBOUNDS
+        } else {
+            Flags::default()
+        };
+        let inst = unit.function.create_instruction(opcode, ty, operands, flags, None);
         unit.function.insert(inst, Position::Before(access)).expect("a position before the access");
         Operand::Value(unit.function.instruction(inst).result.expect("a value"))
     };
@@ -753,13 +1015,20 @@ fn remade(
     access: InstId,
     space: u32,
     mode: &Mode,
+    wanted: TypeId,
 ) -> Operand {
     let bits = unit.layout.pointer(space).index_bits;
     let pointer = unit.function.operand_type(unit.context, mode.base).expect("a typed base");
     let i8 = unit.context.types.int(8);
     let mut current = mode.base;
     let put = |unit: &mut passes::Unit, opcode: Opcode, ty, operands: Vec<Operand>| -> Operand {
-        let inst = unit.function.create_instruction(opcode, ty, operands, Flags::default(), None);
+        // `CreatePtrAdd(.., "sunkaddr", AddrMode.InBounds)`.
+        let flags = if matches!(opcode, Opcode::GetElementPtr { .. }) && mode.in_bounds {
+            Flags::INBOUNDS
+        } else {
+            Flags::default()
+        };
+        let inst = unit.function.create_instruction(opcode, ty, operands, flags, None);
         unit.function.insert(inst, Position::Before(access)).expect("a position before the access");
         Operand::Value(unit.function.instruction(inst).result.expect("a value"))
     };
@@ -787,6 +1056,11 @@ fn remade(
     if mode.offset != 0 {
         let constant = counting::constant(unit.context, &BigInt::from(mode.offset), bits);
         current = put(unit, Opcode::GetElementPtr { source: i8 }, pointer, vec![current, constant]);
+    }
+    // `CreatePointerBitCastOrAddrSpaceCast(SunkAddr, Addr->getType())`: the
+    // mode's base is in the space it was read through, not the access's.
+    if unit.function.operand_type(unit.context, current) != Some(wanted) {
+        current = put(unit, Opcode::Cast(CastOp::AddrSpaceCast), wanted, vec![current]);
     }
     current
 }

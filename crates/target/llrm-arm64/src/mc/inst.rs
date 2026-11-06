@@ -40,6 +40,8 @@ pub enum MemObject {
     Global(String),
     /// A frame object.
     Slot(u32),
+    /// The function's constant pool: memory nothing writes.
+    ConstantPool,
 }
 
 /// What a load or store reaches (`MachineMemOperand`): its object and the byte
@@ -48,6 +50,9 @@ pub enum MemObject {
 pub struct MemOperand {
     pub object: MemObject,
     pub offset: Option<i64>,
+    /// `MachineMemOperand::isVolatile`: the access is not made a writeback
+    /// form (`AArch64LoadStoreOpt::tryToMergeLdStUpdate`).
+    pub volatile: bool,
 }
 
 impl MemOperand {
@@ -64,7 +69,7 @@ impl MemOperand {
     ) -> bool {
         fn object(memory: &MemOperand) -> Option<Object<&str>> {
             match &memory.object {
-                MemObject::Unknown => None,
+                MemObject::Unknown | MemObject::ConstantPool => None,
                 MemObject::Global(name) => Some(Object::Global(name.as_str())),
                 MemObject::Slot(slot) => Some(Object::Frame { id: i64::from(*slot), fixed: false }),
             }
@@ -418,8 +423,26 @@ pub enum FpConvert {
     Bits { to_fp: bool },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FrameMark {
+    PrologueEnd,
+    EpilogueBegin,
+}
+
+impl Inst {
+    /// A pseudo-instruction: it encodes to no word.
+    pub fn is_directive(&self) -> bool {
+        matches!(self, Inst::Cfi(_) | Inst::Mark(_) | Inst::Label(_))
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Inst {
+    /// Where the prologue ends or an epilogue begins: no bytes, it tells the
+    /// line table (`prologue_end`, `epilogue_begin`).
+    Mark(FrameMark),
+    /// A label inside a block (the base of a jump table's offsets): no bytes.
+    Label(String),
     /// A `.cfi_*` directive (`CFI_INSTRUCTION`): no bytes, it states what the
     /// instructions before it did to the frame.
     Cfi(llrm_object::assembler::Cfi),

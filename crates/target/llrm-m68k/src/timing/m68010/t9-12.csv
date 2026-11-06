@@ -1,0 +1,10 @@
+#title,Table 9-12. Shift/Rotate Instruction Execution Times,page,9-8,notes,+Add effective address calculation time. | n is the shift or rotate count. | * Word only.
+Instruction,Size,Register,Memory*
+"ASR, ASL","Byte, Word",6+2n(1/0),8(1/1)+
+,Long,8+2n(1/0),—
+"LSR, LSL","Byte, Word",6+2n(1/0),8(1/1)+
+,Long,8+2n(1/0),—
+"ROR, ROL","Byte, Word",6+2n(1/0),8(1/1)+
+,Long,8+2n(1/0),—
+"ROXR, ROXL","Byte, Word",6+2n(1/0),8(1/1)+
+,Long,8+2n(1/0),—

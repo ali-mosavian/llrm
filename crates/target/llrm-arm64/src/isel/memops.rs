@@ -15,13 +15,13 @@ use crate::mc::inst::*;
 
 /// Accesses a copy of up to this many may use, and a fill; half of each under
 /// `minsize`.
-const COPY_OPS: usize = 16;
-const FILL_OPS: usize = 32;
+pub(crate) const COPY_OPS: usize = 16;
+pub(crate) const FILL_OPS: usize = 32;
 /// Loads a copy has in flight before it stores them.
-const BATCH: usize = 4;
+pub(crate) const BATCH: usize = 4;
 
 /// The `(bytes, offset)` accesses that cover `total` bytes.
-fn pieces(total: u64) -> Vec<(u8, u64)> {
+pub(crate) fn pieces(total: u64) -> Vec<(u8, u64)> {
     let mut ops: Vec<(u8, u64)> = Vec::new();
     let (mut done, mut size) = (0, 16u64);
     while done < total {
@@ -45,7 +45,7 @@ fn pieces(total: u64) -> Vec<(u8, u64)> {
 
 /// The `q` accesses that cover `total >= 16` bytes, the last overlapping the
 /// one before it.
-fn wide_pieces(total: u64) -> Vec<(u8, u64)> {
+pub(crate) fn wide_pieces(total: u64) -> Vec<(u8, u64)> {
     (0..total.div_ceil(16)).map(|at| (16, (at * 16).min(total - 16))).collect()
 }
 

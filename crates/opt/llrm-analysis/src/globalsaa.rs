@@ -92,6 +92,31 @@ use llrm_support::hash::IndexMap;
 
 use crate::memory::Unit;
 
+/// What `read_by` hashes of the whole result, made once: it reads the tracked
+/// set, the named ones and the entries, which grow with the module.
+#[derive(Clone, Debug, Default)]
+struct Base(std::cell::OnceCell<u64>);
+
+impl PartialEq for Base {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
+        true
+    }
+}
+
+impl Eq for Base {}
+
+thread_local! {
+    static BASES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has hashed a whole `Globals` for `read_by`.
+pub fn base_hashes() -> usize {
+    BASES.with(std::cell::Cell::get)
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Globals {
     tracked: BTreeSet<GlobalId>,
@@ -115,6 +140,7 @@ pub struct Globals {
     /// How many globals the module had: a function at or past it was added
     /// since (an ipa-cp copy), a body as LLVM's absent `FunctionInfo` is.
     known: u32,
+    base: Base,
 }
 
 impl Globals {
@@ -189,7 +215,15 @@ impl Globals {
     ) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hasher = llrm_mir::hash::Fx::default();
-        (&self.tracked, &self.named, &self.entries).hash(&mut hasher);
+        self.base
+            .0
+            .get_or_init(|| {
+                BASES.with(|made| made.set(made.get() + 1));
+                let mut whole = llrm_mir::hash::Fx::default();
+                (&self.tracked, &self.named, &self.entries).hash(&mut whole);
+                whole.finish()
+            })
+            .hash(&mut hasher);
         // By what each is, not by its id: a copy of a body is the body.
         let mut each: Vec<(bool, Option<&BTreeSet<GlobalId>>)> =
             ids.iter().map(|id| (self.bodies.contains(id), self.writes.get(id))).collect();
@@ -207,6 +241,7 @@ pub fn embedded(
     constant: ConstantId,
     out: &mut BTreeSet<GlobalId>,
 ) {
+    llrm_mir::counts::bump(llrm_mir::counts::Event::ConstantsEmbedded);
     match &context.get(constant).kind {
         ConstantKind::Global(global) => {
             out.insert(*global);
@@ -216,6 +251,63 @@ pub fn embedded(
             operands.iter().for_each(|&one| embedded(context, one, out))
         }
         ConstantKind::Expr(ConstantExpr::Cast { value, .. }) => embedded(context, *value, out),
+        _ => {}
+    }
+}
+
+/// The constants [`embedded_once`] has visited: a bit per interned id.
+#[derive(Default)]
+pub struct Visited(Vec<u64>);
+
+impl Visited {
+    /// Whether `constant` was not visited before; it is now.
+    #[inline(always)]
+    fn first(
+        &mut self,
+        constant: ConstantId,
+    ) -> bool {
+        let (word, bit) = (constant.index() / 64, constant.index() % 64);
+        if word >= self.0.len() {
+            self.0.resize(word + 1, 0);
+        }
+        let fresh = self.0[word] & (1 << bit) == 0;
+        self.0[word] |= 1 << bit;
+        fresh
+    }
+}
+
+/// [`embedded`] over many constants: each is visited once, so a body that
+/// names one global in a thousand operands costs one visit and a bit test per
+/// operand, not a set insertion.
+#[inline(always)]
+pub fn embedded_once(
+    context: &Context,
+    constant: ConstantId,
+    seen: &mut Visited,
+    out: &mut BTreeSet<GlobalId>,
+) {
+    if seen.first(constant) {
+        embedded_fresh(context, constant, seen, out);
+    }
+}
+
+#[inline(never)]
+fn embedded_fresh(
+    context: &Context,
+    constant: ConstantId,
+    seen: &mut Visited,
+    out: &mut BTreeSet<GlobalId>,
+) {
+    llrm_mir::counts::bump(llrm_mir::counts::Event::ConstantsEmbedded);
+    match &context.get(constant).kind {
+        ConstantKind::Global(global) => {
+            out.insert(*global);
+        }
+        ConstantKind::Aggregate(members) => members.iter().for_each(|&one| embedded_once(context, one, seen, out)),
+        ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => {
+            operands.iter().for_each(|&one| embedded_once(context, one, seen, out))
+        }
+        ConstantKind::Expr(ConstantExpr::Cast { value, .. }) => embedded_once(context, *value, seen, out),
         _ => {}
     }
 }
@@ -358,7 +450,9 @@ pub struct Contribution {
 /// those it was made under.
 #[derive(Default)]
 pub struct Bodies {
-    declarations: Option<Rc<Vec<GlobalValue>>>,
+    /// The listing's number, not the listing: one nothing else holds is
+    /// brought up to date in place.
+    declarations: Option<u64>,
     elsewhere: Option<Elsewhere>,
     per: IndexMap<GlobalId, (Mark, Rc<Contribution>)>,
 }
@@ -401,11 +495,10 @@ pub fn analysis(
         Some(all) => Result::as_ref(&*all).map_err(String::clone)?[program.module].clone(),
         None => Elsewhere::default(),
     };
-    let declarations = analyses.get::<Declarations>(module);
+    analyses.get::<Declarations>(module);
+    let declarations = analyses.listing();
     let mut memo = std::mem::take(analyses.memo::<Bodies>());
-    if analyses.from_scratch()
-        || !memo.declarations.as_ref().is_some_and(|then| Rc::ptr_eq(then, &declarations))
-        || memo.elsewhere.as_ref() != Some(&elsewhere)
+    if analyses.from_scratch() || memo.declarations != Some(declarations) || memo.elsewhere.as_ref() != Some(&elsewhere)
     {
         memo.per.clear();
     }
@@ -513,7 +606,17 @@ fn found_with(
         .map(|(id, _, _)| *id)
         .chain(elsewhere.defined.iter().copied().filter(|&one| module.global(one).function().is_some()))
         .collect();
-    Ok(Globals { tracked, joined, forged, named, writes, bodies, entries, known: module.globals.len() as u32 })
+    Ok(Globals {
+        tracked,
+        joined,
+        forged,
+        named,
+        writes,
+        bodies,
+        entries,
+        known: module.globals.len() as u32,
+        base: Base::default(),
+    })
 }
 
 /// The globals `module`'s initializers hold the address of. An initializer

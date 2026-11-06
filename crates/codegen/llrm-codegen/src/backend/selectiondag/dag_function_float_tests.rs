@@ -385,7 +385,11 @@ fn long_double_constant_width(constant: &str) -> u32 {
 #[test]
 fn a_long_double_constant_is_read_at_the_narrowest_exact_width() {
     assert_eq!(long_double_constant_width("10000.0"), 4);
-    assert_eq!(long_double_constant_width("0.00005"), 8);
+    // 2^24 + 1 is a double and not a float.
+    assert_eq!(long_double_constant_width("16777217.0"), 8);
+    // A decimal x86_fp80 literal is read at 64 bits, not through a double:
+    // 0.00005 is no double's value.
+    assert_eq!(long_double_constant_width("0.00005"), 10);
 }
 
 const LONG_DOUBLE_SUM: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
@@ -562,6 +566,24 @@ fn an_lrint_of_a_double_is_a_fist_and_a_load() {
     assert!(made.iter().any(|name| name.starts_with("fist")), "{made:?}");
 }
 
+const LLRINT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i64 @f(double %x) {
+entry:
+  %r = call i64 @llvm.llrint.i64.f64(double %x)
+  ret i64 %r
+}
+declare i64 @llvm.llrint.i64.f64(double)
+";
+
+/// `llvm.llrint` was no operation and stayed a call to a function of that
+/// name; on x86 it is `fist` like `lrint`, with an `i64` result.
+#[test]
+fn an_llrint_of_a_double_is_a_fist_like_lrint() {
+    let made = names(LLRINT).unwrap_or_else(|why| panic!("{why}"));
+    assert!(made.iter().any(|name| name.starts_with("fist")), "{made:?}");
+    assert!(!made.iter().any(|name| name.contains("llrint")), "{made:?}");
+}
+
 const FLOAT_ACROSS_A_CALL: &str = "target datalayout = \"e-p:32:32-i64:32-f80:32-n8:16:32\"
 declare void @g()
 define double @f(double %a, double %b) {
@@ -590,6 +612,52 @@ fn a_float_spill_keeps_the_width_the_language_asks_for() {
     c.rounds_float_spills = true;
     let done = selected(&module, "f", &llrm_x86_m32::M32, &c, &[]).unwrap_or_else(|e| panic!("{}", e.0));
     assert!(done.body.float_bytes.values().any(|bytes| *bytes == 8), "{:?}", done.body.float_bytes);
+}
+
+const F32_LOAD_ACROSS_A_CALL: &str = "target datalayout = \"e-p:32:32-i64:32-f80:32-n8:16:32\"
+declare void @g()
+define float @f(ptr %p) {
+entry:
+  %x = load float, ptr %p
+  call void @g()
+  %y = fadd float %x, %x
+  ret float %y
+}
+";
+
+const F32_TEMP_ACROSS_A_CALL: &str = "target datalayout = \"e-p:32:32-i64:32-f80:32-n8:16:32\"
+declare void @g()
+define float @f(ptr %p, ptr %q) {
+entry:
+  %a = load float, ptr %p
+  %b = load float, ptr %q
+  %t = fmul float %a, %b
+  call void @g()
+  %y = fadd float %t, %t
+  ret float %y
+}
+";
+
+/// Where the language keeps wider temporaries (Nib), every float spilled as a
+/// qword, an f32 loaded from memory too (`fst qword` after `fld dword`:
+/// stft_single's butterfly, 4 clocks more a spill on a 486). An f32 that is a
+/// load is exact and spills as a dword; a product of two stays unrounded and
+/// keeps the qword.
+#[test]
+fn an_exact_f32_spills_as_a_dword_and_an_unrounded_temporary_keeps_the_qword() {
+    let nib = crate::backend::cpu::profile("486").expect("a cpu");
+    let table = |text: &str| {
+        let module = llrm_mir::parse::module(text).expect("parses");
+        let done = selected(&module, "f", &llrm_x86_m32::M32, nib, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+        done.body.float_bytes.values().copied().collect::<Vec<u32>>()
+    };
+    let load = table(F32_LOAD_ACROSS_A_CALL);
+    assert!(load.contains(&4), "a loaded f32 is a dword: {load:?}");
+    let temp = table(F32_TEMP_ACROSS_A_CALL);
+    assert!(temp.iter().filter(|bytes| **bytes == 8).count() >= 1, "a product stays a qword: {temp:?}");
+    // The multiply reads one load from memory: one load is left a value.
+    assert!(temp.contains(&4), "the load is a dword: {temp:?}");
+    assert!(temp.iter().all(|bytes| *bytes != 4) || temp.contains(&8), "{temp:?}");
 }
 
 const UINT32_TO_DOUBLE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
@@ -868,4 +936,70 @@ fn an_integer_feeding_a_multiplication_is_not_rounded_under_float_store() {
             .count()
     };
     assert_eq!(stores(true), stores(false));
+}
+
+fn stored_conversion(
+    to: &str,
+    store: &str,
+) -> Vec<(String, String)> {
+    use crate::model::ir::Operation;
+    let source = format!(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+@g = global {to} 0
+@h = global {to} 0
+define void @f(double %x) {{
+entry:
+  %r = fptosi double %x to {to}
+  {store}
+  ret void
+}}
+"
+    );
+    let module = llrm_mir::parse::module(&source).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    done.body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| w.op != Operation::Nothing)
+        .map(|w| (format!("{:?}", w.op), w.name.as_deref().unwrap_or("").to_owned()))
+        .collect()
+}
+
+fn movers(made: &[(String, String)]) -> usize {
+    made.iter().filter(|(_, name)| name == "mov").count()
+}
+
+/// `store i32 (fptosi x), @g` converted through a scratch slot: `fistt` to the
+/// slot, `mov eax, [slot]`, `mov [g], eax` (QB's CINT stored to a scalar, +3 B
+/// and 2 instructions a conversion). The `fistt` goes to `@g`.
+#[test]
+fn a_converted_value_stored_is_a_fist_to_the_destination() {
+    for to in ["i16", "i32"] {
+        let made = stored_conversion(to, &format!("store {to} %r, ptr @g"));
+        assert_eq!(movers(&made), 0, "{to}: {made:?}");
+        assert!(made.iter().any(|(_, name)| name.starts_with("fist")), "{to}: {made:?}");
+    }
+}
+
+/// The cases that keep the slot: a volatile store, a store of a different
+/// width than the conversion, and a value with another reader.
+#[test]
+fn a_converted_value_with_another_reader_or_a_volatile_store_keeps_its_slot() {
+    let volatile = stored_conversion("i32", "store volatile i32 %r, ptr @g");
+    assert!(movers(&volatile) > 0, "{volatile:?}");
+    let twice = stored_conversion("i32", "store i32 %r, ptr @g\n  store i32 %r, ptr @h");
+    assert!(movers(&twice) > 0, "{twice:?}");
+}
+
+/// A store to the same cell before the conversion's store stays before it:
+/// the `fist` takes the conversion store's place, not the scratch slot's.
+#[test]
+fn a_converted_store_stays_after_an_earlier_store_to_its_cell() {
+    let made = stored_conversion("i32", "store i32 7, ptr @g\n  store i32 %r, ptr @g");
+    let first_mov = made.iter().position(|(_, name)| name == "mov").expect("the store of 7");
+    let fist = made.iter().position(|(_, name)| name.starts_with("fist")).expect("a fist");
+    assert!(first_mov < fist, "{made:?}");
+    assert_eq!(movers(&made), 1, "{made:?}");
 }

@@ -30,6 +30,10 @@ def cc_environment() -> dict[str, str]:
     """The variables llrm-cc needs, from the caller's, with the usual default for the Open Watcom tree."""
     env = {name: os.environ[name] for name in CC_ENV if name in os.environ}
     env.setdefault("LLRM_OW", str(Path.home() / "scratch/ow-src"))
+    pin = REPO / "toolchain/clang/pin"
+    lines = pin.read_text().splitlines() if pin.exists() else []
+    if len(lines) > 1 and "LLRM_CLANG_M16" not in env and (m16 := Path.home() / "scratch/clang-by-sha" / lines[1].split()[0] / "bin/clang").exists():
+        env["LLRM_CLANG_M16"] = str(m16)
     return env
 
 
@@ -70,11 +74,22 @@ def stamped(found: Path) -> None:
 
 
 def declared(repo: Path) -> set[str]:
-    """The binaries `cargo build --bins` builds: the root package's [[bin]] names (others in target/ are leftovers)."""
+    """The binaries a plain `cargo build --bins` builds: the root package's [[bin]] names whose `required-features` the default features enable (others in target/ are leftovers: llrm-c
+    needs `c-legacy`, so the runner's rebuild left a day-old llrm-c in place and refused every PR as "binaries still older than the merged tree after a rebuild")."""
     import tomllib
 
     manifest = repo / "Cargo.toml"
-    return {one["name"] for one in tomllib.loads(manifest.read_text()).get("bin", [])} if manifest.is_file() else set()
+    if not manifest.is_file():
+        return set()
+    data = tomllib.loads(manifest.read_text())
+    table = data.get("features", {})
+    enabled, todo = set(), list(table.get("default", []))
+    while todo:
+        name = todo.pop()
+        if name not in enabled:
+            enabled.add(name)
+            todo += [one for one in table.get(name, []) if not one.startswith("dep:") and "/" not in one]
+    return {one["name"] for one in data.get("bin", []) if set(one.get("required-features", [])) <= enabled}
 
 
 def built_from(directory: Path, default: Path) -> Path:
@@ -185,17 +200,56 @@ def pinned(binary: Path) -> Path:
     return link
 
 
+def fresh(path) -> None:
+    """Remove the file a compile is about to write: a compile that fails or writes nothing must not leave the previous one to be read as its output."""
+    Path(path).unlink(missing_ok=True)
+
+
+def produced(done, path) -> bool:
+    """The compile `done` succeeded and wrote a non-empty `path` (call `fresh(path)` first)."""
+    return done.returncode == 0 and Path(path).is_file() and Path(path).stat().st_size > 0
+
+
 def md5(path) -> str:
     return hashlib.md5(Path(path).read_bytes()).hexdigest()
+
+
+def assert_clean_env(environ=None) -> list[str]:
+    """SystemExit on an LLRM_* variable `envguard.stray` finds (outside ab_env.sh's list, not named in `AB_ALLOW_ENV`); else the `LLRM_*=value` lines to print.
+    LLRM_WASM_BACKEND_ONLY on one side skipped the mid-end and a false second cause was chased for 40 minutes."""
+    import envguard
+
+    environ = os.environ if environ is None else environ
+    if found := envguard.stray(environ, environ.get("AB_ALLOW_ENV", "").split()):
+        raise SystemExit(f"{found[0]} changes the pipeline; unset it, or name it in AB_ALLOW_ENV if both sides are meant to run it")
+    return [f"{k}={environ[k]}" for k in sorted(environ) if k.startswith("LLRM_")]
 
 
 def assert_distinct(base, new, same_source: bool = False) -> str:
     """The header line of an A/B table: both binaries' md5. SystemExit when they are equal and the sources are not known to be: `cargo build -p X` does not
     relink target/release/X, so two builds of different commits were the same binary and a pair read "0 differ" (lir-cleanup-port's identity run)."""
+    assert_clean_env()
     a, b = md5(base), md5(new)
     if a == b and not same_source:
         raise SystemExit(f"same binary: base {base} and new {new} both have md5 {a}; the new commit was not built into it (`cargo build --bin X`, not `-p`). Refusing to print a diff.")
     return f"binaries: base {a[:12]} {base} | new {b[:12]} {new}" + (" (same binary, same source)" if a == b else "")
+
+
+def assert_distinct_llc(base, new, same_llc: bool = False, names=("llrm-llc",), required: bool = False) -> None:
+    """SystemExit when a backend named in `names` beside `base` and the one beside `new` are the same bytes: llrm-cc only drives, so two dists sharing one backend read SAME on every
+    row. A name missing from either is skipped, or refused when `required` (wasm32 runs llrm-wasm-llc: a pair sharing one gave a 0-DIFF identity run where nbody -O2 moves 939 -> 910 B).
+    `same_llc` allows a head that changes only the frontend."""
+    assert_clean_env()
+    if same_llc:
+        return
+    for name in names:
+        a, b = Path(base).parent / name, Path(new).parent / name
+        if not (a.is_file() and b.is_file()):
+            if required:
+                raise SystemExit(f"missing {name}: {a} or {b} does not exist")
+            continue
+        if md5(a) == md5(b):
+            raise SystemExit(f"same {name}: {a} and {b} both have md5 {md5(a)}; every row would read SAME whatever llrm-cc is (IDENTITY_SAME_LLC=1 for a frontend-only change).")
 
 
 OBJECT = "<object>"
@@ -204,7 +258,7 @@ OBJECT_BYTES = 100
 
 @contextlib.contextmanager
 def with_object(command: list[str]):
-    """`command` with the `OBJECT` placeholder made a path to write the object to. llrm-c encodes only for an `.o` or `.obj` output; `-o /dev/null` gets
+    """`command` with the `OBJECT` placeholder made a path to write the object to. llrm-cc encodes only for an `.o` or `.obj` output; `-o /dev/null` gets
     the assembly text, so a cost measured there leaves out the encoder and the object write (emit: 4 M of 22 M Ir on d_faces, 2026-10-23). The path is
     OBJECT_BYTES long whatever the directory: a longer argv moved an instruction count (see `pinned`)."""
     if OBJECT not in command:

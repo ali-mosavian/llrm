@@ -409,11 +409,14 @@ pub mod x86isd {
     pub const LLRM_ASM: u16 = 24578;
     pub const LLRM_CALL_FLAGS: u16 = 24585;
     pub const LLRM_CODE: u16 = 24582;
+    pub const LLRM_COPY128: u16 = 24592;
     pub const LLRM_FARCALL: u16 = 24584;
     pub const LLRM_PORT: u16 = 24586;
     pub const LLRM_PTRDIFF: u16 = 24583;
     pub const LLRM_TC_RETURN: u16 = 24587;
+    pub const LLRM_UDIV64BY32: u16 = 24593;
     pub const LLRM_WINDOW: u16 = 24581;
+    pub const LLRM_ZERO128: u16 = 24591;
     pub const LOR: u16 = 662;
     pub const LSUB: u16 = 663;
     pub const LWPINS: u16 = 664;
@@ -724,6 +727,7 @@ pub mod x86 {
     pub const ADD16mr: u16 = 583;
     pub const ADD32mi: u16 = 614;
     pub const ADD32mr: u16 = 624;
+    pub const ADD64rr: u16 = 685;
     pub const ADD8mi: u16 = 696;
     pub const ADD8mr: u16 = 702;
     pub const AH: u16 = 1;
@@ -780,9 +784,13 @@ pub mod x86 {
     pub const INC32m: u16 = 1912;
     pub const INC8m: u16 = 1933;
     pub const MOV32r0: u16 = 386;
+    pub const MOVAPSmr: u16 = 2633;
+    pub const MOVAPSrm: u16 = 2634;
     pub const MOVSX16rm8: u16 = 2735;
     pub const MOVSX16rr8: u16 = 2738;
     pub const MOVSX32rr8_NOREX: u16 = 2746;
+    pub const MOVUPSmr: u16 = 2757;
+    pub const MOVUPSrm: u16 = 2758;
     pub const MOVZX16rm8: u16 = 2763;
     pub const MOVZX16rr8: u16 = 2765;
     pub const MOVZX32rr8_NOREX: u16 = 2771;
@@ -818,6 +826,8 @@ pub mod x86 {
     pub const SBB32rr: u16 = 4208;
     pub const SBB8mi: u16 = 4240;
     pub const SBB8mr: u16 = 4244;
+    pub const SHL64ri: u16 = 4381;
+    pub const SHR64ri: u16 = 4569;
     pub const SS: u16 = 68;
     pub const SUB16mi: u16 = 4744;
     pub const SUB16mr: u16 = 4754;
@@ -827,13 +837,18 @@ pub mod x86 {
     pub const SUB8mr: u16 = 4873;
     pub const TEST16mi: u16 = 5007;
     pub const TEST16ri: u16 = 5009;
+    pub const TEST16rr: u16 = 5010;
     pub const TEST32mi: u16 = 5012;
     pub const TEST32ri: u16 = 5014;
+    pub const TEST32rr: u16 = 5015;
+    pub const TEST64rr: u16 = 5020;
     pub const TEST8mi: u16 = 5022;
     pub const TEST8ri: u16 = 5024;
+    pub const TEST8rr: u16 = 5025;
     pub const UCOM_Fpr32: u16 = 5096;
     pub const UCOM_Fpr64: u16 = 5097;
     pub const UCOM_Fpr80: u16 = 5098;
+    pub const V_SET0: u16 = 441;
     pub const XOR16mi: u16 = 22586;
     pub const XOR16mr: u16 = 22596;
     pub const XOR32mi: u16 = 22627;
@@ -848,6 +863,7 @@ pub mod x86 {
     /// The extras that are instructions, by number.
     pub const NAMES: &[(u16, &str)] = &[
         (386, "MOV32r0"),
+        (441, "V_SET0"),
         (465, "ADC16mi"),
         (471, "ADC16mr"),
         (490, "ADC32mi"),
@@ -858,6 +874,7 @@ pub mod x86 {
         (583, "ADD16mr"),
         (614, "ADD32mi"),
         (624, "ADD32mr"),
+        (685, "ADD64rr"),
         (696, "ADD8mi"),
         (702, "ADD8mr"),
         (804, "AND16mi"),
@@ -899,9 +916,13 @@ pub mod x86 {
         (1901, "INC16m"),
         (1912, "INC32m"),
         (1933, "INC8m"),
+        (2633, "MOVAPSmr"),
+        (2634, "MOVAPSrm"),
         (2735, "MOVSX16rm8"),
         (2738, "MOVSX16rr8"),
         (2746, "MOVSX32rr8_NOREX"),
+        (2757, "MOVUPSmr"),
+        (2758, "MOVUPSrm"),
         (2763, "MOVZX16rm8"),
         (2765, "MOVZX16rr8"),
         (2771, "MOVZX32rr8_NOREX"),
@@ -934,6 +955,8 @@ pub mod x86 {
         (4208, "SBB32rr"),
         (4240, "SBB8mi"),
         (4244, "SBB8mr"),
+        (4381, "SHL64ri"),
+        (4569, "SHR64ri"),
         (4744, "SUB16mi"),
         (4754, "SUB16mr"),
         (4785, "SUB32mi"),
@@ -942,10 +965,14 @@ pub mod x86 {
         (4873, "SUB8mr"),
         (5007, "TEST16mi"),
         (5009, "TEST16ri"),
+        (5010, "TEST16rr"),
         (5012, "TEST32mi"),
         (5014, "TEST32ri"),
+        (5015, "TEST32rr"),
+        (5020, "TEST64rr"),
         (5022, "TEST8mi"),
         (5024, "TEST8ri"),
+        (5025, "TEST8rr"),
         (5096, "UCOM_Fpr32"),
         (5097, "UCOM_Fpr64"),
         (5098, "UCOM_Fpr80"),
@@ -1206,11 +1233,14 @@ pub fn x86isd_id(name: &str) -> Option<u16> {
         "LLRM_ASM" => 24578,
         "LLRM_CALL_FLAGS" => 24585,
         "LLRM_CODE" => 24582,
+        "LLRM_COPY128" => 24592,
         "LLRM_FARCALL" => 24584,
         "LLRM_PORT" => 24586,
         "LLRM_PTRDIFF" => 24583,
         "LLRM_TC_RETURN" => 24587,
+        "LLRM_UDIV64BY32" => 24593,
         "LLRM_WINDOW" => 24581,
+        "LLRM_ZERO128" => 24591,
         "LOR" => 662,
         "LSUB" => 663,
         "LWPINS" => 664,

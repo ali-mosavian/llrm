@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The per-merge tests of the integration branch feat/parity: the touched crates' fastest unit tests, a few fast run tests and a compile smoke, 10 s of CPU in all.
+"""The per-merge tests of the integration branch release/next: the touched crates' fastest unit tests, a few fast run tests and a compile smoke, 10 s of CPU in all.
 First, untimed, `cargo check --workspace --all-targets` of the merged tree and every source-scan ratchet (whatever the merge touches).
 
     tools/parity_smoke.py [--bin DIR] [--base REF] [--rank CRATE...]
@@ -41,6 +41,8 @@ import xfail  # noqa: E402
 sys.path.insert(0, str(HERE / "dosbatch"))
 import cpulimit  # noqa: E402
 from buildslot import slotted  # noqa: E402
+
+BRANCH = os.environ.get("LAND_BRANCH", "release/next")  # the integration branch (tools/landing/branch.sh)
 
 SELECTION = HERE / "parity_smoke.toml"
 BUDGET = 15.0  # CPU seconds (user+sys of this process and its children, never wall); the user's rule is a fast set within 10-15 s
@@ -144,7 +146,7 @@ def run_cut(command: list[str], seconds: float, cwd: Path, env: dict[str, str] |
 
 def workspace_check(root: Path = ROOT, target: Path | None = None) -> str:
     """"" when the whole workspace, tests and benches included, compiles under `-D warnings` (the fast tier's `build` step); else the first errors. Built before the clock
-    starts, like the unit tests: two halves that each compile can fail together (a `&mut Context` parameter called with a `&Context` broke feat/parity's head for every
+    starts, like the unit tests: two halves that each compile can fail together (a `&mut Context` parameter called with a `&Context` broke release/next's head for every
     build). Under `-D warnings` because the land-time check once lacked it: #3390 landed an unused `mut` that failed the fast tier for everyone. Its own target directory:
     other RUSTFLAGS would rebuild the shared one."""
     target = target or Path(os.environ.get("LLRM_WARN_TARGET", Path.home() / ".cache/llrm/warn-target"))
@@ -900,7 +902,7 @@ def dump(data: dict) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--bin", type=Path, default=None, help="the llrm-c, llrm-qb and llrm-nib directory (default: LLRM_BIN, else the target dir's release)")
-    parser.add_argument("--base", default="origin/feat/parity", help="what the merge result is compared with to find the touched crates")
+    parser.add_argument("--base", default=f"origin/{BRANCH}", help="what the merge result is compared with to find the touched crates")
     parser.add_argument("--skip", action="append", default=[], metavar="STEP", help="a step known red (tools/parity_squash.py --known-red): not run, named as skipped in the line")
     parser.add_argument("--rank", nargs="+", metavar="CRATE", help="measure these crates' unit tests once and write the ranking")
     args = parser.parse_args()

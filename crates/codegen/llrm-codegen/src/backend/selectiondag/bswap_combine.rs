@@ -15,7 +15,6 @@ use super::dag::SDValue;
 use super::dag_combiner::{CombineHooks, DagCombiner};
 use super::isd::ISD;
 use super::known_bits::known_bits;
-use super::mvt::EVT;
 
 impl<H: CombineHooks> DagCombiner<'_, H> {
     pub(super) fn visit_bswap(
@@ -49,8 +48,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             let legal = self.level < super::dag_combiner::CombineLevel::AfterLegalizeVectorOps
                 || self.tli.is_some_and(|tli| tli.is_operation_legal(shift, vt));
             if legal {
-                let by = leading.abs_diff(trailing);
-                let by = self.dag.get_constant(u128::from(by), EVT::I8);
+                let by = self.shift_amount(vt, leading.abs_diff(trailing));
                 return Some(self.dag.get_node(shift, vt, &[src, by]));
             }
         }

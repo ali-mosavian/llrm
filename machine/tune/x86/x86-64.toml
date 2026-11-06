@@ -13,6 +13,8 @@ clear_ratio_size = 2
 jump_table = 0
 cache_line = 64
 pairing = 0
+# SandyBridgeModel, the pin's model for x86-64 (X86SchedSandyBridge.td).
+mispredict_penalty = 16
 
 [clocks]
 alu_rr = 1
@@ -54,6 +56,7 @@ rep_movs = 13
 rep_movs_cell = 1
 x87_load = 1
 x87_exchange = 1
+x87_copy = 1
 x87_store = 2
 x87_release = 1
 sse_arith = 4
@@ -94,13 +97,13 @@ udiv_w4 = 26
 
 [latency]
 alu_rr = 1
-cmov = 1
+cmov = 2
 xchg_rr = 1
 alu_ri = 1
-alu_rm = 1
+alu_rm = 6
 alu_mr = 2
 mov_rr = 1
-mov_rm = 1
+mov_rm = 5
 mov_mr = 1
 mov_ri = 1
 shift_ri = 1
@@ -109,8 +112,8 @@ movzx = 1
 setcc = 1
 cdq = 1
 lea = 1
-imul_r32 = 3
-imul_m32 = 4
+imul_r32 = 4
+imul_m32 = 9
 mul_r32 = 3
 idiv_r32 = 40
 idiv_m32 = 41
@@ -132,6 +135,7 @@ rep_movs = 13
 rep_movs_cell = 1
 x87_load = 1
 x87_exchange = 1
+x87_copy = 1
 x87_store = 2
 x87_release = 1
 sse_arith = 4

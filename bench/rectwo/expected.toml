@@ -1,2 +1,59 @@
-reason = "m16 C is built with the inlining gcc, clang and the m32 table have: the kernel is called through a volatile pointer, not built with -fno-inline-functions, which also kept a recursive function from inlining itself (rectwo -O2 2333728 -> 1463465 clocks, fib 404985 -> 266306, frames 11.94M -> 9.98M); sizes are of the kernel noinline with main as written"
-blessed = "2026-10-15"
+reason = "C references re-blessed 2026-11-05: corpus edits since 10-15 (parity kernels volatile inputs, textfill DOS-only); tcpp links CM.LIB ISATTY (#7243)"
+blessed = "2026-11-05"
+corpus = "e93b050cc701e0878f159c1c52cdbf4c"
+
+[ow.O2]
+instructions = 2212188
+memory_operands = 267407
+code_bytes = 106
+data_bytes = 0
+bss_bytes = 0
+
+[ow.Os]
+instructions = 2114949
+memory_operands = 316027
+code_bytes = 108
+data_bytes = 0
+bss_bytes = 0
+
+[bcc.O2]
+instructions = 2528213
+memory_operands = 194479
+code_bytes = 134
+data_bytes = 0
+bss_bytes = 0
+
+[bcc.Os]
+instructions = 2674071
+memory_operands = 194479
+code_bytes = 115
+data_bytes = 0
+bss_bytes = 0
+
+[tc.O2]
+instructions = 2528213
+memory_operands = 194480
+code_bytes = 104
+data_bytes = 0
+bss_bytes = 0
+
+[tc.Os]
+instructions = 2625451
+memory_operands = 194480
+code_bytes = 100
+data_bytes = 0
+bss_bytes = 0
+
+[tcpp.O2]
+instructions = 2528216
+memory_operands = 194479
+code_bytes = 111
+data_bytes = 0
+bss_bytes = 0
+
+[tcpp.Os]
+instructions = 2528216
+memory_operands = 194479
+code_bytes = 109
+data_bytes = 0
+bss_bytes = 0

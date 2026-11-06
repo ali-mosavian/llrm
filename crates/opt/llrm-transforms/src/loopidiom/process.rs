@@ -66,6 +66,11 @@ pub struct Run<'a> {
     /// The target's clock prices and what a byte of code is worth in them
     /// (thousandths of a clock), at `-Os`; none, bytes alone decide.
     pub clocks: Option<(&'a OperationCosts, i64)>,
+    /// The target's clock prices, at speed; none at `-Os`.
+    pub speed: Option<&'a OperationCosts>,
+    /// `Tuning::max_stores_per_memset`: the stores a constant fill may be
+    /// inline.
+    pub memset_stores: i64,
     /// `TTI`: the target's costs, where it has them.
     pub tti: Option<&'a dyn llrm_mir::tti::Tti>,
 }
@@ -235,43 +240,75 @@ impl LoopIdiomRecognize {
         if run.env.layout.carries(pointer_space(run.context, run.function, args.dest_ptr)) {
             return false;
         }
+        let blocks = run.cur_loop.get_blocks();
+        let cx = cx!(run);
+        let mut groups: Vec<(Operand, Operand)> = Vec::new();
+        let mut stores = 0;
+        let mut kept = 0;
+        for &block in blocks {
+            for inst in run.function.iter_block(block) {
+                let instruction = run.function.instruction(inst);
+                // The memset a loop promotes (`processLoopMemSet`) is the one
+                // fill the loop makes: priced, it is a store of its length.
+                if args.is_loop_memset && inst == args.the_store {
+                    stores += 1;
+                    let object = llrm_mir::valuetracking::underlying::get_underlying_object(
+                        &cx.query(Some(inst)),
+                        instruction.operands[0],
+                        0,
+                    );
+                    let group = (object, instruction.operands[1]);
+                    if !groups.contains(&group) {
+                        groups.push(group);
+                    }
+                    continue;
+                }
+                if !matches!(instruction.opcode, Opcode::Store { .. }) {
+                    continue;
+                }
+                stores += 1;
+                // A store of a value the loop computes stays, and with it
+                // the loop: a fill then saves that one store.
+                if let Operand::Value(value) = instruction.operands[0]
+                    && matches!(
+                        run.function.value(value).def,
+                        llrm_mir::module::ValueDef::Instruction(def) if run.function.parent(def).is_some_and(|home| blocks.contains(&home))
+                    )
+                {
+                    kept += 1;
+                }
+                let object = llrm_mir::valuetracking::underlying::get_underlying_object(
+                    &cx.query(Some(inst)),
+                    instruction.operands[1],
+                    0,
+                );
+                let group = (object, instruction.operands[0]);
+                if !groups.contains(&group) {
+                    groups.push(group);
+                }
+            }
+        }
+        // DEVIATE: at speed a loop that stays for a computed store gains from a
+        // fill only the trips of the stores it removes (nbody: two zero stores
+        // beside two computed ones, a 6-cell `rep stos` for 6 stores). Exit:
+        // none.
+        if kept > 0 && run.bytes.is_none() && !self.fills_a_set_object(run, &cx, &blocks) {
+            let (be, size) = (run.se.match_apint(args.be_count), run.se.match_apint(args.store_size_scev));
+            if let (Some(speed), Some(be), Some(size)) = (run.speed, be, size)
+                && be.active_bits() <= 32
+                && size.active_bits() <= 32
+            {
+                let (trips, width) = (be.zext_value() as i64 + 1, size.zext_value() as i64);
+                let fill = speed.fill + (trips * width + 3) / 4 * speed.fill_cell;
+                if trips * speed.store <= fill {
+                    return false;
+                }
+            }
+        }
         // DEVIATE: at -Os a loop of several stores stays one when a fill for
         // each store is more bytes than the loop (lru.c: four stores a trip
         // over three trips, five fills 33 bytes over it). Exit: none.
         if let Some((costs, callees)) = run.bytes {
-            let blocks = run.cur_loop.get_blocks();
-            let cx = cx!(run);
-            let mut groups: Vec<(Operand, Operand)> = Vec::new();
-            let mut stores = 0;
-            let mut kept = 0;
-            for &block in blocks {
-                for inst in run.function.iter_block(block) {
-                    let instruction = run.function.instruction(inst);
-                    if !matches!(instruction.opcode, Opcode::Store { .. }) {
-                        continue;
-                    }
-                    stores += 1;
-                    // A store of a value the loop computes stays, and with it
-                    // the loop: a fill then saves that one store.
-                    if let Operand::Value(value) = instruction.operands[0]
-                        && matches!(
-                            run.function.value(value).def,
-                            llrm_mir::module::ValueDef::Instruction(def) if run.function.parent(def).is_some_and(|home| blocks.contains(&home))
-                        )
-                    {
-                        kept += 1;
-                    }
-                    let object = llrm_mir::valuetracking::underlying::get_underlying_object(
-                        &cx.query(Some(inst)),
-                        instruction.operands[1],
-                        0,
-                    );
-                    let group = (object, instruction.operands[0]);
-                    if !groups.contains(&group) {
-                        groups.push(group);
-                    }
-                }
-            }
             // The fill of an object a memset sets already merges with it
             // (`vel_x[i] = 0` after `let vel_x = [0, ...]`): the loop's zero
             // stores are then dead, whatever else stays.
@@ -288,12 +325,42 @@ impl LoopIdiomRecognize {
                 stores,
                 groups.len() as i64,
                 kept,
+                !self.for_size,
                 run.clocks.map(|(clocks, rate)| {
                     let (be, size) = (run.se.match_apint(args.be_count), run.se.match_apint(args.store_size_scev));
                     let trips = be.filter(|be| be.active_bits() <= 32).map(|be| be.zext_value() as i64 + 1);
                     let width = size.filter(|size| size.active_bits() <= 32).map(|size| size.zext_value() as i64);
-                    (clocks, rate, trips, width.map(|width| width * stores))
+                    // A value no byte repeats is a pattern fill: `rep stos` of
+                    // cells, one a store, not of bytes.
+                    let cells = is_bytewise_value(&cx.query(Some(args.the_store)), args.stored_val).is_none()
+                        && self.options.force_memset_pattern_intrinsic;
+                    // DEVIATE: the -Os price counts a byte fill's cells per
+                    // byte (QCport -Os, 41 B, was fitted to
+                    // it); at speed they are dwords, as
+                    // `profit` counts them. Owner llrm-target-x86-m16,
+                    // exit 2026-11-20.
+                    let cells = trips
+                        .zip(width)
+                        .map(
+                            |(trips, width)| match (cells, self.for_size) {
+                                (true, _) => trips * stores,
+                                (false, true) => trips * width * stores,
+                                (false, false) => (trips * width * stores + 3) / 4,
+                            },
+                        );
+                    (clocks, rate, trips, cells)
                 }),
+                {
+                    let (be, size) = (run.se.match_apint(args.be_count), run.se.match_apint(args.store_size_scev));
+                    let bytes = be
+                        .filter(|be| be.active_bits() <= 32)
+                        .zip(size.filter(|size| size.active_bits() <= 32))
+                        .map(|(be, size)| (be.zext_value() as i64 + 1) * size.zext_value() as i64 * stores);
+                    bytes.map(|bytes| crate::loopidioms::InlineFills {
+                        max_stores: run.memset_stores,
+                        bytes: bytes / (groups.len() as i64).max(1),
+                    })
+                },
             ) {
                 return false;
             }
@@ -698,7 +765,8 @@ impl LoopIdiomRecognize {
         // generating the base address and checking everything.
         // DEVIATE: at -Os a copy whose length is known only at run time stays
         // a loop when the `rep movs` that replaces it is more bytes (no libc
-        // `memcpy` to call). Exit: none.
+        // `memcpy` to call). At speed, DEVIATE MEM-1 inlines the copy. Exit
+        // 2026-11-20.
         if let Some((costs, callees)) = run.bytes
             && run.se.match_apint(args.be_count).is_none()
         {
@@ -710,6 +778,7 @@ impl LoopIdiomRecognize {
                 callees,
                 &blocks,
                 costs,
+                run.clocks.is_none(),
             ) {
                 return (false, false);
             }

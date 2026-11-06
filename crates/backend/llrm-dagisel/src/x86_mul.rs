@@ -55,6 +55,18 @@ pub fn select_mul_lohi<D: AddrDag>(
         }
     }
 
+    // DEVIATE SD444: where the multiply ends early on the r/m operand, a
+    // constant (a division's full-width magic) goes to `EAX`, so the other
+    // operand is the one whose length is read. The pin keeps operand 0 in
+    // `EAX`.
+    if folded.is_none()
+        && hooks.options.multiply_early_out
+        && dag.opcode(n1.node) == isd::Constant
+        && dag.opcode(n0.node) != isd::Constant
+    {
+        std::mem::swap(&mut n0, &mut n1);
+    }
+
     let entry = dag.entry_node();
     let copy = dag.copy_to_reg(entry, lo, n0, None);
     let mut in_glue = SDValue::new(copy, 1);

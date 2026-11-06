@@ -77,6 +77,7 @@ impl Function {
         let mut values = vec![BTreeSet::new(); self.values.len()];
         let mut blocks = vec![BTreeSet::new(); self.blocks.len()];
         let mut phi_blocks = vec![BTreeSet::new(); self.blocks.len()];
+        let mut constants: Vec<BTreeSet<Use>> = Vec::new();
         for (at, instruction) in self.instructions.iter().enumerate() {
             if self.erased[at] {
                 continue;
@@ -89,7 +90,12 @@ impl Function {
                         phi_blocks[block.0 as usize].insert(one)
                     }
                     Operand::Block(block) => blocks[block.0 as usize].insert(one),
-                    Operand::Constant(_) => false,
+                    Operand::Constant(constant) => {
+                        if constants.len() <= constant.index() {
+                            constants.resize(constant.index() + 1, BTreeSet::new());
+                        }
+                        constants[constant.index()].insert(one)
+                    }
                 };
             }
         }
@@ -113,6 +119,13 @@ impl Function {
             let kept: BTreeSet<Use> = list.iter().copied().collect();
             if kept != *expected || kept.len() != list.len() {
                 problems.push(format!("phis of block {at}: kept {list:?}, operands say {expected:?}"));
+            }
+        }
+        for (at, expected) in constants.iter().enumerate() {
+            let list = self.uses.users(Held::Constant(at as u32)).iter().copied().collect::<Vec<_>>();
+            let kept: BTreeSet<Use> = list.iter().copied().collect();
+            if kept != *expected || kept.len() != list.len() {
+                problems.push(format!("constant {at}: kept {list:?}, operands say {expected:?}"));
             }
         }
         problems
@@ -787,8 +800,33 @@ impl Function {
     }
 
     /// What `-g` says of the variables, in the order of the program.
+    pub fn debug_args(
+        &self,
+        list: u32,
+    ) -> &[Operand] {
+        &self.debug_arglists[list as usize]
+    }
+
+    /// A list of values a record is made of; the record names it by the
+    /// number this returns.
+    pub fn add_debug_args(
+        &mut self,
+        values: Vec<Operand>,
+    ) -> u32 {
+        self.debug_arglists.push(values);
+        u32::try_from(self.debug_arglists.len() - 1).expect("a few lists")
+    }
+
     pub fn debug_records(&self) -> &[DebugRecord] {
         &self.debug_records
+    }
+
+    /// Says all of it again: the records `records` stand for those there were.
+    pub fn replace_debug_records(
+        &mut self,
+        records: Vec<DebugRecord>,
+    ) {
+        self.debug_records = records;
     }
 
     /// As [`add_debug_record`](Self::add_debug_record), ahead of the records
@@ -816,6 +854,52 @@ impl Function {
         self.debug_records.push(DebugRecord { before, variable, what, expression: None, location: None });
     }
 
+    /// As [`add_debug_record`](Self::add_debug_record), with the expression and
+    /// location a `#dbg_value` was written with.
+    pub fn add_debug_record_with(
+        &mut self,
+        before: InstId,
+        variable: MetadataId,
+        what: DebugWhat,
+        expression: Option<MetadataId>,
+        location: Option<MetadataId>,
+    ) {
+        self.debug_records.push(DebugRecord { before, variable, what, expression, location });
+    }
+
+    /// The `#dbg_assign` records linked to `inst`: those whose assignment id is
+    /// the `!DIAssignID` it carries (`at::getDVRAssignmentMarkers`), by their
+    /// index in [`debug_records`](Self::debug_records).
+    pub fn assignment_markers(
+        &self,
+        inst: InstId,
+    ) -> Vec<usize> {
+        let Some(&(_, id)) = self.instruction(inst).metadata.iter().find(|(kind, _)| kind == "DIAssignID") else {
+            return Vec::new();
+        };
+        (0..self.debug_records.len())
+            .filter(|&at| {
+                matches!(
+                    self.debug_records[at].what,
+                    DebugWhat::Assign { id: one, .. } if one == id
+                )
+            })
+            .collect()
+    }
+
+    /// Takes away the records at `indices`
+    /// (`DbgVariableRecord::eraseFromParent`).
+    pub fn remove_debug_records(
+        &mut self,
+        indices: &[usize],
+    ) {
+        let mut at = 0;
+        self.debug_records.retain(|_| {
+            at += 1;
+            !indices.contains(&(at - 1))
+        });
+    }
+
     /// The records of what `value` was now say `with`.
     fn retarget_debug_records(
         &mut self,
@@ -827,6 +911,18 @@ impl Function {
                 && *at == Operand::Value(value)
             {
                 *at = with;
+            }
+            if let DebugWhat::Assign { value: at, address, .. } = &mut record.what {
+                for one in [at, address] {
+                    if *one == Some(Operand::Value(value)) {
+                        *one = Some(with);
+                    }
+                }
+            }
+        }
+        for one in self.debug_arglists.iter_mut().flatten() {
+            if *one == Operand::Value(value) {
+                *one = with;
             }
         }
     }
@@ -848,8 +944,17 @@ impl Function {
         for record in &mut self.debug_records {
             match record.what {
                 DebugWhat::Value(at) if at == Operand::Value(value) => record.what = DebugWhat::Gone,
+                DebugWhat::Args(list) if self.debug_arglists[list as usize].contains(&Operand::Value(value)) => {
+                    record.what = DebugWhat::Gone
+                }
                 DebugWhat::Piece { value: at, offset, bytes } if at == Operand::Value(value) => {
                     record.what = DebugWhat::GonePiece { offset, bytes }
+                }
+                // The assignment stays (its id is what ties it to the store),
+                // with nothing where the value or the address was.
+                DebugWhat::Assign { value: at, address, id, address_expression } => {
+                    let gone = |one: Option<Operand>| one.filter(|&one| one != Operand::Value(value));
+                    record.what = DebugWhat::Assign { value: gone(at), address: gone(address), id, address_expression };
                 }
                 _ => {}
             }
@@ -1114,6 +1219,49 @@ impl Function {
         self.log(Change::Parameters);
     }
 
+    /// The function returns nothing: every `ret` loses its value, and the
+    /// type and the return attributes follow. The caller changes its calls
+    /// with `drop_call_result`.
+    pub fn drop_return_value(
+        &mut self,
+        context: &mut crate::context::Context,
+    ) {
+        let void = context.types.void();
+        let rets: Vec<InstId> =
+            self.walk().map(|(_, inst)| inst).filter(|&inst| self.instruction(inst).opcode == Opcode::Ret).collect();
+        for inst in rets {
+            self.set_operands(inst, Vec::new());
+            self.instructions[inst.0 as usize].ty = void;
+            self.log(Change::Rewritten(inst));
+        }
+        let Type::Function { parameters, variadic, .. } = context.types.get(self.ty).clone() else {
+            panic!("a function type")
+        };
+        self.ty = context.types.intern(Type::Function { returns: void, parameters, variadic });
+        self.return_attrs.clear();
+        self.log(Change::Parameters);
+    }
+
+    /// The call `inst`, whose result nothing reads, returns nothing under
+    /// `function_type`.
+    pub fn drop_call_result(
+        &mut self,
+        context: &crate::context::Context,
+        inst: InstId,
+        function_type: TypeId,
+    ) {
+        let result = self.instructions[inst.0 as usize].result.expect("a call with a result");
+        assert!(self.users(result).is_empty(), "a result dropped is unused");
+        self.forget_debug_value(result);
+        let instruction = &mut self.instructions[inst.0 as usize];
+        instruction.result = None;
+        instruction.ty = context.types.void();
+        let Opcode::Call(info) = &mut instruction.opcode else { panic!("a call") };
+        info.function_type = function_type;
+        info.return_attrs.clear();
+        self.log(Change::Rewritten(inst));
+    }
+
     /// From the first change of the parameters on, each one's origin is kept.
     fn track_parameters(&mut self) {
         if self.parameter_origins.is_empty() {
@@ -1295,6 +1443,12 @@ impl Function {
         for one in said {
             let what = match one.what {
                 DebugWhat::Value(operand) if !same_everywhere(self, operand) => DebugWhat::Gone,
+                DebugWhat::Assign { value, address, id, address_expression } => DebugWhat::Assign {
+                    value: value.filter(|&one| same_everywhere(self, one)),
+                    address,
+                    id,
+                    address_expression,
+                },
                 DebugWhat::Piece { value, offset, bytes } if !same_everywhere(self, value) => {
                     DebugWhat::GonePiece { offset, bytes }
                 }
@@ -1389,6 +1543,7 @@ impl Function {
                     + 1
             }
         };
+        self.places.invalidate();
         self.layout.insert(at, block);
         self.blocks[block.0 as usize].placed = true;
         Ok(())
@@ -1409,6 +1564,7 @@ impl Function {
             .iter()
             .position(|one| *one == before)
             .ok_or_else(|| format!("block {} is not placed", before.0))?;
+        self.places.invalidate();
         self.layout.insert(at, block);
         self.blocks[block.0 as usize].placed = true;
         Ok(())
@@ -1429,12 +1585,14 @@ impl Function {
             .iter()
             .position(|one| *one == block)
             .ok_or_else(|| format!("block {} is not placed", block.0))?;
+        self.places.invalidate();
         self.layout.remove(from);
         let at = self
             .layout
             .iter()
             .position(|one| *one == before)
             .ok_or_else(|| format!("block {} is not placed", before.0))?;
+        self.places.invalidate();
         self.layout.insert(at, block);
         Ok(())
     }
@@ -1454,12 +1612,14 @@ impl Function {
             .iter()
             .position(|one| *one == block)
             .ok_or_else(|| format!("block {} is not placed", block.0))?;
+        self.places.invalidate();
         self.layout.remove(from);
         let at = self
             .layout
             .iter()
             .position(|one| *one == after)
             .ok_or_else(|| format!("block {} is not placed", after.0))?;
+        self.places.invalidate();
         self.layout.insert(at + 1, block);
         Ok(())
     }
@@ -1477,6 +1637,7 @@ impl Function {
             self.log(Change::BlockErased(block));
         }
         self.names = NameIndex::default();
+        self.places.invalidate();
         self.layout.clear();
         self.debug_records.clear();
         self.erased.fill(true);
@@ -1602,12 +1763,23 @@ impl Function {
                 return Err(format!("block {} still has {users} users", block.0));
             }
         }
-        let mut gone = crate::dense::IdSet::<BlockId>::new();
-        for &block in blocks {
-            gone.insert(block);
-        }
         LAYOUT_SCANNED.with(|scanned| scanned.set(scanned.get() + self.layout.len()));
-        self.layout.retain(|one| !gone.contains(one));
+        self.places.invalidate();
+        if let [only] = blocks {
+            // One block, the usual call: find it and shift the tail. A set
+            // lookup for every entry of the layout was 16 k Ir a call on
+            // memory_expansion (`empty_block_removed`, 1,550 calls).
+            if let Some(at) = self.layout.iter().position(|one| one == only) {
+                self.layout.remove(at);
+            }
+        } else {
+            let mut gone = crate::dense::IdSet::<BlockId>::new();
+            for &block in blocks {
+                gone.insert(block);
+            }
+            LAYOUT_TESTED.with(|tested| tested.set(tested.get() + self.layout.len()));
+            self.layout.retain(|one| !gone.contains(one));
+        }
         for &block in blocks {
             self.release_name(block);
             self.blocks[block.0 as usize].erased = true;
@@ -1621,6 +1793,14 @@ impl Function {
 thread_local! {
     /// Layout entries looked over to take blocks out of it.
     static LAYOUT_SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Layout entries tested against a set of blocks to erase.
+    static LAYOUT_TESTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many layout entries this thread has tested against a set of blocks, for
+/// a test that erasing one block tests none.
+pub fn layout_tested() -> usize {
+    LAYOUT_TESTED.with(std::cell::Cell::get)
 }
 
 /// How many layout entries this thread has looked over to erase blocks, for a

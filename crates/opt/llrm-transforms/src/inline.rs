@@ -158,10 +158,10 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::facts::{Facts, Inlining};
 use llrm_mir::memory::{Callees, callee};
-use llrm_mir::module::{Function, InstId, Metadata, MetadataId, Module, Operand, ValueDef};
+use llrm_mir::module::{BlockId, Function, InstId, Metadata, MetadataId, Module, Operand, ValueDef};
 use llrm_mir::opcode::{CallInfo, Flags, Opcode};
 use llrm_mir::passes::Declared;
-use llrm_mir::splice::{Spliced, carries, spliced};
+use llrm_mir::splice::{Spliced, carries, merge_entry, spliced};
 use llrm_mir::types::Type;
 use llrm_support::hash::{IndexMap, SparseIdMap};
 
@@ -271,6 +271,9 @@ pub struct Candidate {
 /// What a caller says of itself that bounds what may be copied into it.
 pub struct Caller<'a> {
     pub layout: &'a DataLayout,
+    /// `CalleeAAR`: what the module analysis knows of the functions' memory
+    /// effects, for the scopes a copy's calls get.
+    pub effects: Option<&'a llrm_analysis::globalsmodref::GlobalsModRef>,
     pub recursive: bool,
     /// The copies are of the caller itself: they stop at the recursion limits,
     /// and this is the frequency of each call of the function's own body
@@ -279,6 +282,13 @@ pub struct Caller<'a> {
     /// A recursive callee inlined here may have its own calls inlined in the
     /// copy, gcc's peeling.
     pub peeling: bool,
+    /// The recursion's bounds (`walk::Recursion`): the depth of a function's
+    /// copies of itself and the largest recursive body, in `gcc_insns`,
+    /// that is copied.
+    pub depth: usize,
+    pub callee: i64,
+    /// What the copies may add together, in `gcc_insns`.
+    pub growth: i64,
 }
 
 /// DEVIATE (recursion), gcc's `--param max-inline-recursive-depth-auto` is 8
@@ -300,11 +310,12 @@ const MAX_INLINE_INSNS_RECURSIVE_GCC: i64 = 450;
 
 /// DEVIATE (recursion), gcc 13.3's `--param max-inline-insns-recursive-auto`
 /// is 450 (params.opt:553, `recursive_inlining`, ipa-inline.cc:1645); 150 here,
-/// in `gcc_insns`: the size the function may reach by copies of itself. The
-/// smallest that keeps fib and rectwo under main (depth 3, -O2 clocks/bytes;
-/// main fib 227171/537, rectwo 612458/538): 60: fib 207179/264, rectwo
-/// 1489763/280; 100: 132006/360, 876030/424; 150: 132006/360, 530081/520; 450:
-/// 132006/360, 530081/520. Owner: w-6. Exit: as the depth's.
+/// in `gcc_insns`: the size the function may reach by copies of itself. A
+/// target states its own through `Tti::recursive_inlining_growth`; m32 takes 450
+/// at -O2 (fib 240256 -> 99687 clk, 469 -> 985 B, 2026-11-05) and keeps 150 at
+/// -O3 (rectwo +185k, bintree +2k, recchop +0.8k clk worse with 450). The
+/// 10-20 numbers of fib 132006/360 are gone with the rest of the pipeline.
+/// Owner: x86-m32. Exit: 2026-11-20, the copies chosen by gcc's badness heap.
 pub const MAX_INLINE_INSNS_RECURSIVE: i64 = 150;
 
 /// `--param min-inline-recursive-probability` (10 per cent, params.opt:769): a
@@ -323,6 +334,10 @@ fn semantic(
     inst: InstId,
 ) -> bool {
     let instruction = function.instruction(inst);
+    // A scope declaration is no work (it costs nothing in the pin).
+    if crate::noaliasscopes::declares(function, inst) {
+        return false;
+    }
     match instruction.opcode {
         Opcode::Phi | Opcode::Ret => false,
         Opcode::Br => instruction.operands.len() != 1,
@@ -362,6 +377,9 @@ pub fn gcc_insns_in(
         .into_iter()
         .filter(|&inst| {
             let instruction = body.instruction(inst);
+            if crate::noaliasscopes::declares(body, inst) {
+                return false;
+            }
             match instruction.opcode {
                 Opcode::Phi => false,
                 Opcode::Br => instruction.operands.len() != 1,
@@ -381,6 +399,35 @@ pub fn gcc_insns_in(
             }
         })
         .count() as i64
+}
+
+/// The most a block counts in a function's time: the trips gcc's loop
+/// estimates stop at (ipacp's `MAX_FREQUENCY`).
+pub(crate) const LOOP_TRIPS: i64 = 10;
+
+/// What one call of `body` runs, in `gcc_insns`: the size, with the
+/// instructions inside a loop counted at its trips. A copy of the body in
+/// itself saves the call and keeps the loop's work, so a body whose work is
+/// mostly a loop gains little for the code it multiplies; the recursive
+/// callee cap is held to this (bench recchop -O2: the loop between the entry
+/// and the calls, 10242 clocks without the copy, 11310 with).
+pub fn gcc_work(body: &Function) -> i64 {
+    let mut inside = BTreeSet::new();
+    for one in llrm_analysis::cfg::loops_of(body) {
+        inside.extend(one.body.iter().map(|&at| llrm_analysis::cfg::block(at)));
+    }
+    let looped = gcc_insns_in(body, body.walk().filter(|&(block, _)| inside.contains(&block)).map(|(_, inst)| inst));
+    gcc_insns(body) + (LOOP_TRIPS - 1) * looped
+}
+
+/// What a copy of `body` into itself adds to the caller in the bar's units:
+/// the callee's `gcc_insns`. gcc's bar is in its own size units (15 at -O2, 30
+/// at -O3, `want_inline_small_function_p`; edge growth is its size less the
+/// call, 6); the target states the bar already converted, calibrated on the
+/// twelve self-recursive functions of the corpus
+/// (`Tuning.recursive_edge_growth`).
+pub fn recursive_edge_growth(body: &Function) -> i64 {
+    gcc_insns(body)
 }
 
 fn semantic_count(body: &Function) -> i64 {
@@ -610,15 +657,6 @@ pub fn size_of(
     work(module, body, callees, costs).map(|work| work + calls + kept)
 }
 
-/// What a call costs beyond its own instruction, which inlining saves: the
-/// return, and each argument pushed by the caller and read back by the callee.
-pub fn call_overhead(
-    costs: &OperationCosts,
-    arguments: usize,
-) -> i64 {
-    costs.call + costs.return_ + arguments as i64 * costs.argument
-}
-
 /// Surviving direct call counts.
 pub fn call_counts(module: &Module) -> Counter {
     let mut counts = Counter::default();
@@ -744,8 +782,9 @@ impl<'a> Plan<'a, '_> {
             // `want_inline_self_recursive_call_p`: the frequency of the
             // call within the body, over the entry's, above the minimum.
             let frequency = frequencies.get(&site).copied().unwrap_or(1.0);
-            if depth > MAX_INLINE_RECURSIVE_DEPTH
-                || self.insns + grown > MAX_INLINE_INSNS_RECURSIVE
+            if depth > self.caller.depth
+                || gcc_work(callee) > self.caller.callee
+                || self.insns + grown > self.caller.growth
                 || frequency * 100.0 <= MIN_INLINE_RECURSIVE_PROBABILITY
             {
                 return None;
@@ -864,6 +903,8 @@ struct Placed {
     copies: std::collections::BTreeMap<usize, InstId>,
     /// The copies' lifetimes, marked once every copy is made.
     lifetimes: Vec<Lifetimes>,
+    /// The call's block and the copy's entry of each site, in the order made.
+    entries: Vec<(BlockId, BlockId)>,
 }
 
 /// The static allocas of a copy no marker bounds, and where the copy begins
@@ -1169,6 +1210,7 @@ fn executed(
     layout: &DataLayout,
     call: InstId,
     planned: &Planned,
+    effects: Option<&llrm_analysis::globalsmodref::GlobalsModRef>,
     declared: &mut Declared,
     placed: &mut Placed,
     metadata: Metadata,
@@ -1185,13 +1227,40 @@ fn executed(
         Opcode::Call(info) => info.tail,
         _ => llrm_mir::opcode::Tail::None,
     };
+    let stated = crate::inlineattrs::SiteAttrs::of(function, call);
+    let marked = crate::inlinemetadata::SiteMetadata::of(function, call);
+    let scopes = crate::inlinemetadata::DeepClone::of(&planned.candidate.body, metadata, declared);
+    let noalias = crate::inlinealias::declare_scopes(context, function, call, &planned.candidate.body, declared);
     let made = spliced(context, function, call, &planned.candidate.body, anchor);
+    if let Some(scopes) = &scopes {
+        scopes.remap(function, &made.copies);
+    }
+    if let Some(noalias) = &noalias {
+        crate::inlinealias::scoped(
+            function,
+            context,
+            layout,
+            &planned.candidate.body,
+            &made.copies,
+            noalias,
+            metadata.nodes,
+            effects,
+            declared,
+        );
+    }
     if let Some(site) = located {
         inlined_at(function, &planned.candidate.body, &made.copies, site, metadata, declared);
     }
     fold_entry_allocas(context, function, layout, &planned.candidate.body, &made, anchor);
     narrow_tail_calls(function, &made.copies, site);
+    if let Some(stated) = &stated {
+        crate::inlineattrs::propagated(function, stated, &planned.candidate.body, &made.copies);
+    }
+    if let Some(marked) = &marked {
+        crate::inlinemetadata::propagated(function, marked, &made.copies, metadata, declared);
+    }
     placed.lifetimes.push(unmarked_allocas(context, function, layout, &planned.candidate.body, &made, declared));
+    placed.entries.push((made.block, made.entry));
     let copies = made.copies;
     // The call was the entry's first instruction and is gone: the copies that
     // come out of this one are anchored on what the entry starts with now.
@@ -1207,7 +1276,7 @@ fn executed(
         placed.stack.insert(seq, copy);
     }
     for (place, nested) in planned.nested.iter().rev() {
-        executed(context, function, layout, copies[*place], nested, declared, placed, metadata)?;
+        executed(context, function, layout, copies[*place], nested, effects, declared, placed, metadata)?;
     }
     Ok(())
 }
@@ -1296,12 +1365,17 @@ pub fn expanded_all(
     let mut placed =
         Placed { base: function.entry().and_then(|entry| function.block(entry).first()), ..Placed::default() };
     for (call, planned) in sites.iter().rev() {
-        executed(context, function, caller.layout, *call, planned, declared, &mut placed, metadata)?;
+        executed(context, function, caller.layout, *call, planned, caller.effects, declared, &mut placed, metadata)?;
     }
     assert_eq!(end.0, semantic_count(function), "the size kept is not the body's");
     assert_eq!(end.1, frame(context, caller.layout, function), "the stack kept is not the body's");
     for lifetimes in &placed.lifetimes {
         insert_lifetimes(context, function, caller.layout, lifetimes, declared);
+    }
+    // A site made inside an entry joins it first, that entry then the block
+    // before it.
+    for &(block, entry) in placed.entries.iter().rev() {
+        merge_entry(function, block, entry);
     }
     Ok(sites.len())
 }

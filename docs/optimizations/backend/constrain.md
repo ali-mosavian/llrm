@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/constrain.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/constrain.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/constrain.rs sha256:1d80b8bd4dd488065023fc7fa6ee979fac112d95136fefec7c531a6e11b3eab4 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/constrain.rs sha256:96b33c7e91d0549384da6ec4993012fd62a66eda1e44ff6031ef1310f32381ad -->
 
 # constrain
 
@@ -42,6 +42,17 @@ before it places values:
   a frame array (SI, DI) has no register that fits all reads. The reads that
   fit the most others keep the value; each remaining read takes a copy, live
   across that instruction alone.
+- cold reads (`distinct_classes_given`, last loop): a read that leaves a
+  value fewer than `MinRCSize` (4) registers, in a block less deep in loops
+  than the value's deepest reference, reads a copy of its own.
+
+  DEVIATE N1: `InstrEmitter::AddRegisterOperand`
+  ([`MinRCSize`](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/InstrEmitter.cpp#L40),
+  [`constrainRegClass`](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/InstrEmitter.cpp#L349))
+  copies every such read at selection and the coalescer joins the copy back
+  where it can; here only cold reads are copied, after coalescing, and the
+  route is kept only where `route_cost` is lower (`assemble::machined`).
+  Exit: none; m16 is the only target with address classes.
 - `hoisted`: a copy into a required register that a loop makes of a value
   defined before it, the same each trip, is made once in the loop's
   preheader. The register is then the value's for the whole loop, which

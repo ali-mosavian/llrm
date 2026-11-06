@@ -2142,6 +2142,25 @@ fn a_module_variable_may_be_a_struct_its_literal_laid_out_in_the_executable() {
 }
 
 #[test]
+fn a_module_variable_may_start_as_a_float_literal() {
+    // `var x: f32[2] = [0.5, 0.0]` was refused: "a module variable starts as an
+    // integer, char or bool", so a float table could only be a local and every
+    // loop over it reloaded its frame address (stft_single, +124 B, +14% instr).
+    let source = "\
+var gain: f32 = 1.5
+var table: f32[3] = [0.5, -2.0, 0.0]
+var zeros: f32[2] = [0.0] * 2
+var wide: f64 = 0.25
+
+fn main() -> i16:
+    table[2] = table[0] * gain
+    print(f\"{gain} {table[0]} {table[1]} {table[2]} {zeros[1]} {wide}\")
+    return 0
+";
+    assert_eq!(output(source), "1.5 0.5 -2.0 0.75 0.0 0.25\n");
+}
+
+#[test]
 fn a_struct_assigned_from_its_own_array_fields_reads_them_first() {
     // An array copy reads its cells when stored: `t = T(a=t.b, b=t.a)` printed
     // "2 2".
@@ -3716,4 +3735,18 @@ fn repr_c_packs_to_the_targets_alignment() {
         refused("@repr(\"c16\", pack=4)\nstruct S:\n    a: u8\n\nfn main() -> i16:\n    return 0\n")
             .contains("pack is 1 or 2")
     );
+}
+
+/// examples/level.nib at -m32 was refused as invalid HIR ("projection exceeds
+/// place"): a packed 3-byte record copied whole projected a dword, a word
+/// wider than the record.
+#[test]
+fn test_a_record_narrower_than_a_word_copies_whole_with_valid_hir_at_m32() {
+    let source = "@repr(\"c16\", pack=1)\nstruct Face:\n    plane: u16\n    side: u8\n\n\
+                  fn make() -> Face:\n    return Face(plane=1, side=2)\n\n\
+                  fn use_it() -> u8:\n    let copy = make()\n    return copy.side\n";
+    let module = super::parse(super::lex(source).expect("lexes")).expect("parses");
+    let frontend = crate::Frontend::for_target(&llrm_x86_m32::M32).unwrap();
+    let hir = super::compile_module(module, "t", &frontend).expect("compiles");
+    codec::decode(&hir).expect("valid HIR");
 }

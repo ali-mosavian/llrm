@@ -64,8 +64,13 @@ pub fn is_trivially_re_materializable(
         // generic `isReallyTriviallyReMaterializable` takes a virtual-register
         // use; `allUsesAvailableAt` asks at the use whether the registers still
         // hold.
+        //
+        // DEVIATE RM16 (owner m16, exit 2026-11-12): the pin flags only `LEA32r` and `LEA64r`
+        // `isReMaterializable` (X86InstrArithmetic.td#L21, #L40); `LEA16r` is the real-mode form of the same
+        // instruction, and a 16-bit result of registers is made again at its late use like the 32-bit one
+        // (quicksort's `hi * 2` was spilled and reloaded on every swap).
         (Operation::Address, Some("lea"), [Loc::Mem(cell)]) if !def.uses.is_empty() => {
-            into.width == 4 && cell.width == 4 && def.spread.is_empty() && !def.volatile
+            matches!((into.width, cell.width), (2, 2) | (4, 4)) && def.spread.is_empty() && !def.volatile
         }
         (Operation::Address, Some("lea"), [source]) => {
             let (addr, through, index) = match source {
@@ -98,6 +103,29 @@ pub fn is_trivially_re_materializable(
         (Operation::FloatLoad, Some("fld1" | "fldz"), []) => def.uses.is_empty() && !def.volatile,
         _ => false,
     }
+}
+
+/// The values one definition of which is a load the instruction itself calls
+/// invariant (`Insn::invariant`, from `!invariant.load` or a read of constant
+/// memory): the pin's `isLoadFromInvariantOrConstantMemory` on the load's
+/// memory operand. This is the exit of D-I; `values` still asks the shape of
+/// the load.
+pub fn flagged_loads(body: &LirBody) -> BTreeSet<u32> {
+    let mut definitions: IndexMap<u32, usize> = IndexMap::default();
+    for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        for value in &one.defines {
+            *definitions.entry(*value).or_default() += 1;
+        }
+    }
+    body.blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter(|one| one.invariant())
+        .filter_map(|one| match one.defines.as_slice() {
+            [value] if definitions.get(value) == Some(&1) => Some(*value),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The loads of an incoming stack argument that nothing in `body` writes or
@@ -177,6 +205,7 @@ pub fn argument_loads(body: &LirBody) -> BTreeSet<u32> {
 pub fn values(
     body: &LirBody,
     invariant: &BTreeSet<u32>,
+    tii: &dyn super::tii::TargetInstrInfo,
 ) -> BTreeSet<u32> {
     let mut definitions: IndexMap<u32, Vec<&Arc<Insn>>> = IndexMap::default();
     let mut widest: IndexMap<u32, u32> = IndexMap::default();
@@ -216,7 +245,7 @@ pub fn values(
                 );
             let literal = first.what.as_ref().is_some_and(|what| matches!(what.sources.as_slice(), [Loc::Imm(_)]));
             let narrow = !literal || widest.get(value).copied().unwrap_or(0) <= first_width(first);
-            (alike && narrow && is_trivially_re_materializable(first, invariant.contains(value))).then_some(*value)
+            (alike && narrow && tii.is_trivially_re_materializable(first, invariant.contains(value))).then_some(*value)
         })
         .collect()
 }
@@ -257,6 +286,7 @@ pub(crate) fn group_source(one: &Insn) -> Option<Held> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::classes::RegisterClasses;
     use crate::model::ir::{Held, Imm, Mem, Semantics};
 
     fn def(
@@ -266,7 +296,7 @@ mod tests {
     ) -> Insn {
         let what = Semantics {
             name: Some(name.into()),
-            dests: vec![Loc::Held(Held { value: 1, width: 4 })],
+            dests: vec![Loc::Held(Held { value: 1, width: 4, offset: 0 })],
             sources,
             ..Semantics::new(op)
         };
@@ -302,10 +332,25 @@ mod tests {
     /// pin makes it again where `row` still holds (`allUsesAvailableAt`).
     #[test]
     fn test_a_lea_of_a_register_is_made_again() {
-        let cell = Mem { base: Some(Held { value: 2, width: 4 }), offset: 1, ..Mem::new(None, 4) };
+        let cell = Mem { base: Some(Held { value: 2, width: 4, offset: 0 }), offset: 1, ..Mem::new(None, 4) };
         let what = Semantics {
             name: Some("lea".into()),
-            dests: vec![Loc::Held(Held { value: 1, width: 4 })],
+            dests: vec![Loc::Held(Held { value: 1, width: 4, offset: 0 })],
+            sources: vec![Loc::Mem(cell)],
+            ..Semantics::new(Operation::Address)
+        };
+        let lea = Insn::new(0, None, Some(what), vec![1], vec![2]);
+        assert!(is_trivially_re_materializable(&lea, false));
+    }
+
+    /// quicksort bq16 -O2: `lea si, [edi+edi]` (`hi * 2`) was spilled before the partition loop and reloaded for
+    /// every swap, memory operands 51961 -> 67195; the pin's `LEA16r` is not `isReMaterializable`.
+    #[test]
+    fn test_a_16_bit_lea_of_registers_is_made_again() {
+        let cell = Mem { base: Some(Held { value: 2, width: 4, offset: 0 }), ..Mem::new(None, 2) };
+        let what = Semantics {
+            name: Some("lea".into()),
+            dests: vec![Loc::Held(Held { value: 1, width: 2, offset: 0 })],
             sources: vec![Loc::Mem(cell)],
             ..Semantics::new(Operation::Address)
         };
@@ -329,7 +374,14 @@ mod tests {
             Default::default(),
             Default::default(),
         );
-        assert_eq!(values(&body, &BTreeSet::new()), BTreeSet::from([1]));
+        assert_eq!(
+            values(
+                &body,
+                &BTreeSet::new(),
+                &super::super::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16(), basic_semantics: false }
+            ),
+            BTreeSet::from([1])
+        );
     }
 
     fn one_block(insns: Vec<Arc<Insn>>) -> LirBody {
@@ -362,7 +414,7 @@ mod tests {
     }
 
     fn word(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 2 })
+        Loc::Held(Held { value, width: 2, offset: 0 })
     }
 
     /// The pin takes a load of an incoming stack argument as invariant (an
@@ -397,5 +449,36 @@ mod tests {
         };
         let taken = one_block(vec![move_of(0, word(1), argument(6), vec![1]), lea]);
         assert!(argument_loads(&taken).is_empty(), "an address taken: any call may write");
+    }
+
+    /// A load the instruction calls invariant is rematerialised and the same
+    /// load without the flag is not: the consumer of `!invariant.load` that the
+    /// spiller ignored (it took only the per-range proof and stack arguments).
+    #[test]
+    fn test_a_load_flagged_invariant_is_rematerialised_and_an_unflagged_one_is_not() {
+        let cell = || Loc::Mem(Mem::new(Some(crate::model::ir::Addr::new(Space::Segment, 0)), 2));
+        let flagged = |at: i64, value: u32| {
+            let one = move_of(at, word(value), cell(), vec![value]);
+            Arc::new(Insn { invariant: true, ..(*one).clone() })
+        };
+        let body = one_block(vec![flagged(0, 1), move_of(1, word(2), cell(), vec![2])]);
+        assert_eq!(flagged_loads(&body), BTreeSet::from([1]));
+        assert_eq!(
+            values(
+                &body,
+                &flagged_loads(&body),
+                &super::super::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16(), basic_semantics: false }
+            ),
+            BTreeSet::from([1])
+        );
+        assert!(
+            values(
+                &body,
+                &BTreeSet::new(),
+                &super::super::tii::X86InstrInfo { bits: 16, classes: &RegisterClasses::m16(), basic_semantics: false }
+            )
+            .is_empty(),
+            "the flag is what takes the load"
+        );
     }
 }
