@@ -431,6 +431,41 @@ fn test_a_memory_form_below_the_top_keeps_its_exchange_where_exchange_is_free() 
     assert_eq!(count(&result, "fxch"), 2, "{:?}", names(&result));
 }
 
+/// `a - [m]` where `a` is read again: the pin copies `a` (`fld st(i)`) and
+/// subtracts the cell (nbody -O2 m16: two copies a trip, 4 clocks each on a 486
+/// against 3 for `fld m`). Where the target prices the copy and the memory form
+/// above the load and the register form, the cell is loaded and `fsubr st,
+/// st(i)` reads `a` where it lies.
+fn memory_form_on_a_copy(cpu: &str) -> (LirBody, Vec<f64>) {
+    let cells = [frame_cell(-8, 8), frame_cell(-16, 8), frame_cell(-24, 8), frame_cell(-32, 8)];
+    let body = _body(vec![
+        _load(1, &cells[0]),
+        sem(Operation::FloatArith, "fsub", vec![fl(2)], vec![fl(1), m(&cells[1])]),
+        _store(&cells[2], 2),
+        _store(&cells[3], 1),
+    ]);
+    let result = fps_priced(&body, cpu);
+    let insns = result.insns();
+    let (_, stack, stores) = _x87_traced(&insns, &[(&cells[0], 10.0), (&cells[1], 3.0)]);
+    assert!(stack.is_empty());
+    (result, stores.iter().map(|(_, value)| *value).collect())
+}
+
+#[test]
+fn test_a_memory_form_on_a_copy_is_a_load_and_a_register_op_where_the_copy_costs() {
+    let (result, stores) = memory_form_on_a_copy("486");
+    assert_eq!(stores, vec![7.0, 10.0], "{:?}", names(&result));
+    assert_eq!((count(&result, "fsub"), count(&result, "fsubr")), (0, 1), "{:?}", names(&result));
+}
+
+/// A P5 copies in the clock a load takes: the pin's memory form stays.
+#[test]
+fn test_a_memory_form_on_a_copy_keeps_its_copy_where_the_copy_is_free() {
+    let (result, stores) = memory_form_on_a_copy("P5");
+    assert_eq!(stores, vec![7.0, 10.0], "{:?}", names(&result));
+    assert_eq!((count(&result, "fsub"), count(&result, "fsubr")), (1, 0), "{:?}", names(&result));
+}
+
 /// x_ld_max and x_ld_axpy at a 64-bit `long double` (+2 B each, axpy +3
 /// clocks): the result is stored first, so the exchange that brought the
 /// operand up also put the result on top, and the unfolded form added a `fld`
