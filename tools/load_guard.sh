@@ -16,17 +16,28 @@ above() { awk -v a="$1" -v b="$2" 'BEGIN{exit !(a>b)}'; }
 # ---- admission -------------------------------------------------------------
 admit() {
   mkdir -p "$slot_dir" || return 1
+  local next_note=0 busy l1 l5 why
   while :; do
+    busy=0
     for i in $(seq 1 "$slots"); do
       exec {slot_fd}>"$slot_dir/slot.$i"
       if flock -n "$slot_fd"; then
         read -r l1 _ < "$file"
         if above "$start1" "$l1"; then log "admit slot $i (1m $l1)"; return 0; fi
         flock -u "$slot_fd"
+      else
+        busy=$((busy + 1))
       fi
       exec {slot_fd}>&-
     done
     [ "${LG_NO_WAIT:-}" = 1 ] && { log "no free slot or load too high"; return 75; }
+    # a queued starter says so at once and every LG_WAIT_LOG seconds (60): "queued" must not look like "hung"
+    if awk -v now="$(date +%s.%N)" -v due="$next_note" 'BEGIN{exit !(now>=due)}'; then
+      read -r l1 l5 _ < "$file"
+      why=load; [ "$busy" -ge "$slots" ] && why=slot
+      log "waiting for $why (1m $l1, 5m $l5, slots $busy/$slots busy)"
+      next_note=$(awk -v now="$(date +%s.%N)" -v every="${LG_WAIT_LOG:-60}" 'BEGIN{printf "%.3f", now+every}')
+    fi
     sleep "$poll"
   done
 }

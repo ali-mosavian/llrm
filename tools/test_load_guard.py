@@ -168,5 +168,29 @@ class Admission(Env, unittest.TestCase):
         self.assertIn("load too high", guard.communicate()[1])
 
 
+    def test_a_queued_starter_says_so_at_once_and_when_admitted(self):
+        """A starter waiting for load logged nothing: a session could not tell 'queued' from 'hung'."""
+        self.set_load(30.0, 30.0)
+        guard = self.start("true", LG_WAIT_LOG="0.3")
+        time.sleep(1.0)
+        self.assertIsNone(guard.poll(), "it started under load")
+        self.set_load(1.0, 1.0)
+        self.assertEqual(guard.wait(timeout=5), 0)
+        err = guard.communicate()[1]
+        waits = re.findall(r"load_guard: \d\d:\d\dZ waiting for load \(1m 30.0, 5m 30.0, slots 0/3 busy\)", err)
+        self.assertGreaterEqual(len(waits), 2, err)
+        self.assertRegex(err, r"load_guard: \d\d:\d\dZ admit slot \d \(1m 1.0\)")
+
+    def test_a_starter_without_a_slot_says_it_waits_for_a_slot(self):
+        first = self.start("sleep", "30", LG_SLOTS="1")
+        self.assertTrue(until(lambda: os.path.isdir(self.slots) and any(descendants(first.pid))))
+        second = self.start("true", LG_SLOTS="1", LG_WAIT_LOG="0.3")
+        time.sleep(1.0)
+        first.terminate()
+        first.wait(timeout=5)
+        self.assertEqual(second.wait(timeout=5), 0)
+        self.assertRegex(second.communicate()[1], r"waiting for slot \(1m [\d.]+, 5m [\d.]+, slots 1/1 busy\)")
+
+
 if __name__ == "__main__":
     unittest.main()
