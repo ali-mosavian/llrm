@@ -2085,3 +2085,38 @@ fn test_the_memory_graph_licm_updated_is_the_one_the_next_pass_gets() {
     assert_eq!(misses, 1, "MemorySSA was computed again after LICM updated it");
     assert!(hits >= 2, "LICM and the pass after it read the one graph: {hits} hits");
 }
+
+/// How many times `@f`'s loops were scanned for a block that may throw
+/// (`Decisions::safety_scans`).
+fn safety_scans(
+    text: &str,
+    apply: bool,
+) -> usize {
+    DECIDED.with(|all| *all.borrow_mut() = Decisions::default());
+    let mut module = parsed(text);
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(Licm { apply, speculate: true });
+    passes
+        .run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral))
+        .unwrap_or_else(|error| panic!("{error}\n{text}"));
+    DECIDED.with(|all| all.borrow().safety_scans)
+}
+
+/// The sinking, the hoisting and the promotion of one loop shared two
+/// `LoopSafety` that each scanned the loop (153 loops of `jpeg_fixed` scanned
+/// twice, 2 x 153 where the pin's one `ICFLoopSafetyInfo` per `runOnLoop`
+/// scans 153 times). Decided without edits, the loop is scanned once.
+#[test]
+fn test_a_loop_decided_without_edits_is_scanned_for_a_throwing_block_once() {
+    assert_eq!(safety_scans(&slot_loop("", "", "load i16, ptr %s"), false), 1);
+}
+
+/// With the edits made, what was found of the loop stands only until the next
+/// edit: the sinking and hoisting found nothing to do and share their scan with
+/// the first promotion round; the promotion edits the loop, so the second round
+/// scans again. A scan kept across that edit would answer for a loop that is no
+/// longer there.
+#[test]
+fn test_what_was_found_of_a_loop_is_dropped_by_the_next_edit() {
+    assert_eq!(safety_scans(&slot_loop("", "", "load i16, ptr %s"), true), 2);
+}
