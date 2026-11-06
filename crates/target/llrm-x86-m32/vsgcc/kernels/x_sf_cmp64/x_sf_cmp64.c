@@ -23,6 +23,7 @@ unsigned long long llrm_udiv64by32(unsigned hi, unsigned lo, unsigned d) __asm__
 #define SF_UDIV64BY32(hi, lo, d) llrm_udiv64by32((hi), (lo), (d))
 #define SF_DIV64_UDIV 1
 #define SF_SPECIALS_ONCE 1 /* -O2 llrm mul 79912 -> 76737 clk, div 144865 -> 143041, same bytes; at -Os it costs 29 B */
+#define SF_CMP_BRANCHY 1 /* compare core three-way on branches (compiler-rt's form): x_sf_cmp64 -O2 95332 -> 89898 clk, +11 B; -Os keeps the select form (+3 B) */
 #endif
 #ifdef __OPTIMIZE_SIZE__
 #define SF_CONV_DIRECT32 1 /* f64 sidf/unsidf call the exact 32-bit path, not pack: llrm-cc -Os alone m32 516 -> 104 B, 468 -> 89; all four linked +23 B */
