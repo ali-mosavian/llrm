@@ -4,7 +4,8 @@ A link order that followed set iteration (PYTHONHASHSEED) moved code across page
 same runtime, 201888 clocks under seed 0 and 201946 under seed 3 (2026-11-06), a +58 clock floor on every "worse cell" claim.
 ours_cr.py without OURS_RT used a stale default runtime (/tmp/nv/w6/mos_rt_28a5.s): 8 programs failed to link at -O1..-O3
 (the folded sweep, 2026-11-05) and an A/B could have compared one side against the wrong runtime. It must refuse and say why."""
-import os, subprocess, sys, unittest
+import os, subprocess, sys, tempfile, unittest
+from pathlib import Path
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 def run(env_rt, script="ours_cr.py"):
@@ -67,5 +68,28 @@ class Deterministic(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr[-300:])
             got.append(open(out).read())
         self.assertEqual(got[0], got[1], "the link order followed the hash seed")
+
+@unittest.skipUnless(os.path.exists(CC) and os.path.exists(RT), "needs a llrm-cc and a runtime (OURS_TEST_CC, OURS_TEST_RT)")
+class Members(unittest.TestCase):
+    """The harness linked whole library modules: shift_int64_variable pulled 9676 B of i64 mul/div/mod for 1529 B of shifts (11300 B against
+    gcc's 6393, 2026-11-06). A program that uses shifts links the shift members, and each member defines its own routine only."""
+    def test_a_shift_program_links_only_shifts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "o.tsv")
+            r = subprocess.run([sys.executable, os.path.join(HERE, "ours_cr.py"), CC, "Os", out, "shift_int64_variable"],
+                               capture_output=True, text=True, env={**os.environ, "OURS_RT": RT, "OURS_PADS": "0"}, timeout=600)
+            self.assertEqual(r.returncode, 0, r.stderr[-300:])
+            size = int(open(out).read().split("\t")[2])
+        self.assertLess(size, 4000, f"{size} B: the link carried routines the program does not call")
+
+    def test_a_member_defines_one_routine(self):
+        sys.path.insert(0, HERE)
+        import crlib
+        rt = Path(HERE).resolve().parents[1] / "runtime" / "compiler-rt"
+        self.assertEqual(crlib.index(rt)["__ashldi3"], "lib/int/ashldi3.c")
+        text = crlib.member(rt, CC, "lib/int/ashldi3.c", ["-Os"])
+        self.assertIn("__ashldi3:", text)
+        for other in ("__udivdi3", "__muldi3", "__lshrdi3"):
+            self.assertNotIn(other + ":", text)
 
 if __name__ == "__main__": unittest.main()
