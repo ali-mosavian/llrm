@@ -389,8 +389,10 @@ fn passing(
                 return refuse(format!("calling convention {convention}"));
             };
             // `fastcc` is C's callee-pop twin unless the description states a
-            // `fastcc` of its own.
-            let twin = convention == llrm_mir::opcode::FAST && found.cc.as_deref() != Some("fast");
+            // `fastcc` of its own, or says C has no such twin (x86-64).
+            let twin = convention == llrm_mir::opcode::FAST
+                && found.cc.as_deref() != Some("fast")
+                && arch.calling().callee_pop(0) == Some(llrm_mir::opcode::FAST);
             let pops = twin || found.cleanup == Cleanup::Callee;
             Ok(Passing {
                 in_order: found.order == Order::LeftToRight,
