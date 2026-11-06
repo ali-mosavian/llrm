@@ -2613,7 +2613,13 @@ fn forward_old_copies(
             _ => continue,
         };
         let (to_at, from_at) = (at(to), at(from));
-        if !step_writes.contains(&from_at) || step_writes.contains(&to_at) || after[b][step].contains(&to_at) {
+        // a copy into a register may be free (a reload through x leaves the
+        // value there): only a copy into a cell is a store to save
+        if !is_cell(to_at)
+            || !step_writes.contains(&from_at)
+            || step_writes.contains(&to_at)
+            || after[b][step].contains(&to_at)
+        {
             continue;
         }
         let between = k + 1..step;
@@ -3833,9 +3839,31 @@ fn emit_with<const STACK: bool>(
             a_callees.insert(format!("{callee}_fast"));
         }
     }
+    let returns_x = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .filter(|inst| inst.kind == Kind::Op("RTS"))
+        .flat_map(|inst| &inst.operands)
+        .any(|operand| matches!(operand, Operand::Use(Reg::Phys(r)) if *r == reg::X));
+    // `jsr callee` reads `x` when the call lists it among the arguments
+    let mut x_callees = std::collections::BTreeSet::new();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts).filter(|inst| inst.kind == Kind::Op("JSR")) {
+        if let [Operand::Symbol(callee, _), arguments @ ..] = &inst.operands[..]
+            && arguments.iter().any(|operand| matches!(operand, Operand::Use(Reg::Phys(r)) if *r == reg::X))
+        {
+            x_callees.insert(callee.clone());
+            x_callees.insert(format!("{callee}_fast"));
+        }
+    }
     Ok((
         own_labels(
-            &finish(out, source.map(|(file, scope)| (file, scope, &function.places[..])), !returns_a, a_callees),
+            &finish(
+                out,
+                source.map(|(file, scope)| (file, scope, &function.places[..])),
+                (!returns_a, a_callees),
+                (!returns_x, x_callees),
+            ),
             &function.name,
         ),
         slots,
@@ -3885,11 +3913,13 @@ fn own_labels(
 fn finish(
     mut code: Asm,
     lines_of: Option<(&str, Option<u32>, &[llrm_codegen::model::lir::SrcLoc])>,
-    no_a_result: bool,
-    a_callees: std::collections::BTreeSet<String>,
+    (no_a_result, a_callees): (bool, std::collections::BTreeSet<String>),
+    (no_x_result, x_callees): (bool, std::collections::BTreeSet<String>),
 ) -> String {
     code.no_a_result = no_a_result;
     code.a_callees = a_callees;
+    code.no_x_result = no_x_result;
+    code.x_callees = x_callees;
     crate::peephole::run(&mut code);
     crate::relax::relax(&mut code);
     if let Some((file, scope, places)) = lines_of {

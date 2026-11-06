@@ -402,6 +402,7 @@ pub fn load_straight_into_a(asm: &mut Asm) {
 
 fn load_straight_once(asm: &mut Asm) -> bool {
     let lines = &asm.lines;
+    let exits = Exits::of(asm);
     let label_at = |name: &str| lines.iter().position(|line| matches!(line, Line::Label(l) if l == name));
     let mut drops: Vec<(usize, usize)> = Vec::new();
     for (at, line) in lines.iter().enumerate() {
@@ -425,7 +426,7 @@ fn load_straight_once(asm: &mut Asm) -> bool {
                     Op::Sta => matches!(operand, Operand::Direct(_)) && operand != from,
                     Op::Beq | Op::Bne | Op::Bcc | Op::Bcs | Op::Bmi | Op::Bpl => match operand {
                         Operand::Direct(target) => label_at(target)
-                            .is_some_and(|label| dead_from(lines, label, register, &mut HashSet::default(), Exits::default())),
+                            .is_some_and(|label| dead_from(lines, label, register, &mut HashSet::default(), exits)),
                         _ => false,
                     },
                     // the other index register: a load or store of another byte
@@ -442,7 +443,7 @@ fn load_straight_once(asm: &mut Asm) -> bool {
             }
         }
         if let Some(to) = to
-            && dead_from(lines, to + 1, register, &mut HashSet::default(), Exits::default())
+            && dead_from(lines, to + 1, register, &mut HashSet::default(), exits)
         {
             drops.push((at, to));
         }
@@ -599,11 +600,22 @@ struct Exits<'a> {
     /// The routines called with an argument in `a`; a call to any other one
     /// writes `a` without reading it. `None`: every call reads it.
     a_callees: Option<&'a std::collections::BTreeSet<String>>,
+    /// A return does not read `x`: the function leaves nothing there.
+    no_x_result: bool,
+    /// The routines called with an argument in `x`; a call to any other that is
+    /// not a runtime routine (`__`) writes `x` without reading it. `None`:
+    /// every call reads it.
+    x_callees: Option<&'a std::collections::BTreeSet<String>>,
 }
 
 impl<'a> Exits<'a> {
     fn of(asm: &'a Asm) -> Exits<'a> {
-        Exits { no_a_result: asm.no_a_result, a_callees: Some(&asm.a_callees) }
+        Exits {
+            no_a_result: asm.no_a_result,
+            a_callees: Some(&asm.a_callees),
+            no_x_result: asm.no_x_result,
+            x_callees: Some(&asm.x_callees),
+        }
     }
 }
 
@@ -683,7 +695,21 @@ fn dead_from(
                 _,
             ) => (indexed(if bit == Registers::X { Index::X } else { Index::Y }), false),
             (Op::Lda | Op::Ldx | Op::Ldy, _) => (indexed(if bit == Registers::X { Index::X } else { Index::Y }), false),
-            (Op::Rts, _) => return bit == Registers::A && exits.no_a_result,
+            (Op::Rts, _) => {
+                return bit == Registers::A && exits.no_a_result || bit == Registers::X && exits.no_x_result;
+            }
+            (Op::Jsr, _) if bit == Registers::X => {
+                // the callee writes `x` (a result) unless it was an argument; a
+                // runtime routine may take one in `x` that no instruction lists
+                let callee = match &inst.operand {
+                    Operand::Direct(name) if !name.starts_with("__") => name,
+                    _ => return false,
+                };
+                match exits.x_callees {
+                    Some(set) if !set.contains(callee) => return true,
+                    _ => return false,
+                }
+            }
             (Op::Jsr, _) if bit == Registers::A => {
                 // the callee clobbers `a`: it is dead unless it was an argument
                 let callee = match &inst.operand {

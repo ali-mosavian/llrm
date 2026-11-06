@@ -3080,3 +3080,30 @@ fn a_byte_transferred_to_an_index_register_to_be_stored_is_stored_from_a() {
         assert_eq!(pass(store_before_transfer, kept), kept);
     }
 }
+
+/// `ldx rc17; ...; txa; ...; jsr walk`: the call writes `x` (the `mos` result
+/// register) and reads none, so the load into `x` is dead after the transfer.
+/// With the later `ldx rc10` gone (a compare moved above its step) the fold
+/// was lost: phi_slot_unknown_arm kept `ldx rc17; txa` for `lda rc17`, +2
+/// clocks a trip, +4384 clocks.
+#[test]
+fn a_load_into_x_is_dead_before_a_call_that_does_not_take_x() {
+    use llrm_6502::peephole::load_straight_into_a;
+    let code = |callee: &str| {
+        format!(
+            "  ldx rc17\n  lda rc16\n  clc\n  adc rc7\n  sta rc18\n  txa\n  adc rc19\n  sta rc19\n  jsr {callee}\n  stx rc3\n  rts\n"
+        )
+    };
+    assert_eq!(
+        pass(load_straight_into_a, &code("walk")),
+        "  lda rc16\n  clc\n  adc rc7\n  sta rc18\n  lda rc17\n  adc rc19\n  sta rc19\n  jsr walk\n  stx rc3\n  rts\n"
+    );
+    // a runtime routine may read `x` as an argument no instruction lists
+    let runtime = code("__mulhi3");
+    assert_eq!(pass(load_straight_into_a, &runtime), runtime);
+    // a callee the function passes `x` to
+    let mut asm = Asm::parse(&code("walk"));
+    asm.x_callees.insert("walk".to_owned());
+    load_straight_into_a(&mut asm);
+    assert_eq!(asm.text(), code("walk"));
+}
