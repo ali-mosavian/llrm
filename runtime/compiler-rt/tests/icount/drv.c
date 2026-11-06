@@ -12,6 +12,10 @@ double LIBFN(double, double); static double (*volatile fn)(double, double) = LIB
 double LIBFN(int); static double (*volatile fn)(int) = LIBFN;
 #elif KIND == 3
 double LIBFN(i64); static double (*volatile fn)(i64) = LIBFN;
+#elif KIND == 6
+int LIBFN(double, double); static int (*volatile fn)(double, double) = LIBFN;
+#elif KIND == 5
+float LIBFN(float, float); static float (*volatile fn)(float, float) = LIBFN;
 #else
 int LIBFN(double); static int (*volatile fn)(double) = LIBFN;
 #endif
@@ -24,6 +28,10 @@ int main(void)
         acc += dbits(fn((int)(rnd() >> (rnd() % 32))));
 #elif KIND == 3
         acc += dbits(fn((i64)(rnd() >> (rnd() % 64))));
+#elif KIND == 6
+        acc += (u64)fn(bitsd(pick()), bitsd(pick()));
+#elif KIND == 5
+        { union { float f; unsigned u; } a, b, r; a.u = (unsigned)(rnd() & 0x807FFFFF) | ((100u + rnd() % 50) << 23); b.u = (unsigned)(rnd() & 0x807FFFFF) | ((100u + rnd() % 50) << 23); r.f = fn(a.f, b.f); acc += r.u; }
 #else
         { u64 r = rnd(); acc += (u64)fn(bitsd((r & 1 ? 1ull << 63 : 0) | ((1000ull + (r >> 1) % 31) << 52) | (rnd() & 0xFFFFFFFFFFFFFull))); }
 #endif
