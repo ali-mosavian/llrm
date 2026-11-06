@@ -58,6 +58,7 @@ pub fn build_all(
     function: &Function,
     target: &BuilderTarget,
     opcode: &dyn Fn(&str) -> Option<u16>,
+    data_layout: &llrm_mir::datalayout::DataLayout,
     convention: &Convention,
     arch: &dyn llrm_target::Target,
     info: &mut FunctionLoweringInfo,
@@ -88,7 +89,7 @@ pub fn build_all(
         let dag = fresh_dag(module, function, target, info, block, None);
         let chain = dag.entry_node();
         let mut declined = String::new();
-        let dag = Fast { module, function, info: &*info, names: &names, eax, any_eax: arch.registers().named(arch.register_named("eax"), 4), esp: arch.stack_pointer(), edx: arch.registers().named(arch.register_named("edx"), 4), m32, dag, chain, values: Default::default(), next }
+        let dag = Fast { layout: data_layout, module, function, info: &*info, names: &names, eax, any_eax: arch.registers().named(arch.register_named("eax"), 4), esp: arch.stack_pointer(), edx: arch.registers().named(arch.register_named("edx"), 4), m32, dag, chain, values: Default::default(), next }
             .block(block, &mut declined);
         let Some(dag) = dag else {
             llrm_support::debug!("isel", "fast declined at {declined}");
@@ -109,6 +110,7 @@ struct Names {
     mov_mi: u16,
     mov_ri: u16,
     ret: u16,
+    lea: Option<u16>,
     jmp: u16,
     jcc: u16,
     cmp_rr: u16,
@@ -136,6 +138,7 @@ impl Names {
             mov_mi: opcode("MOV32mi")?,
             mov_ri: opcode("MOV32ri")?,
             ret: opcode("RET")?,
+            lea: opcode("LEA32r"),
             jmp: opcode("JMP_1")?,
             jcc: opcode("JCC_1")?,
             cmp_rr: opcode("CMP32rr")?,
@@ -155,6 +158,7 @@ impl Names {
 }
 
 struct Fast<'a> {
+    layout: &'a llrm_mir::datalayout::DataLayout,
     module: &'a Module,
     function: &'a Function,
     info: &'a FunctionLoweringInfo,
@@ -292,6 +296,33 @@ impl Fast<'_> {
                     ops.push(self.chain);
                     let store = self.node(op, &[EVT::OTHER], &ops);
                     self.chain = store;
+                }
+                Opcode::GetElementPtr { source } if self.m32 => {
+                    // one index: base + index * size(source), `lea`
+                    let [base, index] = instruction.operands[..] else { return None };
+                    let size = self.layout.alloc_size(&self.module.context.types, *source) as i64;
+                    let base = self.value(base)?;
+                    let noreg = self.dag.get_register(EVT::I32, 0);
+                    let segment = self.dag.get_register(EVT::I16, 0);
+                    let ops = if let Some(imm) = self.int(index) {
+                        let disp = i32::try_from(i64::try_from(imm).ok()?.checked_mul(size)?).ok()?;
+                        let one = self.dag.get_constant_with(1, EVT::I8, true, false);
+                        let disp = self.dag.get_constant_with(disp as u32 as u128, EVT::I32, true, false);
+                        vec![base, one, noreg, disp, segment]
+                    } else {
+                        if !matches!(size, 1 | 2 | 4 | 8)
+                            || self.function.operand_type(&self.module.context, index).and_then(|ty| self.module.context.types.int_bits(ty)) != Some(32)
+                        {
+                            return None;
+                        }
+                        let index = self.value(index)?;
+                        let scale = self.dag.get_constant_with(size as u128, EVT::I8, true, false);
+                        let zero = self.dag.get_constant_with(0, EVT::I32, true, false);
+                        vec![base, scale, index, zero, segment]
+                    };
+                    let lea = self.names.lea?;
+                    let done = self.node(lea, &[EVT::I32], &ops);
+                    self.values.insert(instruction.result?, done);
                 }
                 Opcode::Binary(op @ (llrm_mir::opcode::BinaryOp::SDiv | llrm_mir::opcode::BinaryOp::SRem)) => {
                     // `cdq; idiv r`: the quotient in eax, the remainder in edx

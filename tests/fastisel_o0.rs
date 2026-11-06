@@ -173,3 +173,26 @@ fn fast_isel_takes_pointers_at_m32() {
         );
     }
 }
+
+/// Slice 5: an array walk at m32: a GEP with a variable index (`lea`), a loop
+/// of compares and branches. `sum` was declined at its GetElementPtr.
+#[test]
+fn fast_isel_takes_an_array_walk_at_m32() {
+    let source = "int sum(int *a, int n)\n{\n    int s = 0, i;\n    for (i = 0; i < n; i++) s += a[i];\n    return s;\n}\n\
+                  int main(void) { int v[4] = {1, 2, 3, 4}; return sum(v, 4) == 10 ? 0 : 1; }\n";
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(scratch.path().join("a.c"), source).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_32-linux")
+        .env("LLRM_FAST_ISEL", "1")
+        .env("LLRM_VERIFY", "1")
+        .env("LLRM_DEBUG", "isel")
+        .env("LLRM_ISEL_REPORT", scratch.path().join("report"))
+        .current_dir(scratch.path())
+        .args(["-O0", "-S", "a.c", "-o", "a.s"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let report = std::fs::read_to_string(scratch.path().join("report")).unwrap();
+    assert!(report.lines().any(|line| line == "sum fast" || line == "_sum fast"), "sum not taken: {report}{}", String::from_utf8_lossy(&out.stderr));
+}

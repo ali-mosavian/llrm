@@ -1066,7 +1066,7 @@ fn selected_in(
     let mut work: Vec<(BlockId, BlockId, crate::backend::selectiondag::builder::BlockDag)> = Vec::new();
     let mut fast_blocks = (!cpu.optimized && super::fastisel::enabled())
         .then(|| {
-            super::fastisel::build_all(module, function, &builder_target, &|wanted: &str| tables.names.iter().find(|(_, name)| name.split('|').next() == Some(wanted)).map(|(op, _)| *op), &convention, arch, &mut info)
+            super::fastisel::build_all(module, function, &builder_target, &|wanted: &str| tables.names.iter().find(|(_, name)| name.split('|').next() == Some(wanted)).map(|(op, _)| *op), &layout, &convention, arch, &mut info)
         })
         .flatten()
         .unwrap_or_default();
