@@ -599,7 +599,9 @@ impl CallFrameOpt {
                 adjustment.value = context.expected_dist;
             }
         }
-        insns[setup_at] = Arc::new(setup);
+        // The fold looks the setup up by identity: keep the replacement.
+        let setup = Arc::new(setup);
+        insns[setup_at] = Arc::clone(&setup);
         let call = context.call.as_ref().expect("a call");
         for slot in (0..(context.expected_dist / self.slot) as usize).rev() {
             let store = Arc::clone(context.stores[slot].as_ref().expect("a store"));
@@ -632,12 +634,13 @@ impl CallFrameOpt {
             // If a push from memory is not slow here, fold the argument's load.
             if let Loc::Held(held) = source_loc
                 && !self.slow_two_mem_ops
-                && let Some(def_at) = self.can_fold_into_reg_push(body, &insns, context, held.value)
+                && let Some(def_at) = self.can_fold_into_reg_push(body, &insns, &setup, held.value)
             {
                 let def = Arc::clone(&insns[def_at]);
                 let [Loc::Mem(cell)] = def.what.as_ref().expect("semantics").sources.as_slice() else { unreachable!() };
                 pushed.what = Some(push_what(Loc::Mem(cell.clone())));
                 pushed.uses = def.uses.clone();
+                pushed.undefs = def.undefs.clone();
                 insns.remove(def_at);
             }
             let before_call = position(&insns, call);
@@ -665,7 +668,7 @@ impl CallFrameOpt {
         &self,
         body: &LirBody,
         insns: &[Arc<Insn>],
-        context: &CallContext,
+        setup: &Arc<Insn>,
         value: u32,
     ) -> Option<usize> {
         // Make sure this is the only use of the value.
@@ -680,7 +683,7 @@ impl CallFrameOpt {
         if reads != 1 {
             return None;
         }
-        let setup_at = insns.iter().position(|one| Arc::ptr_eq(one, &context.setup))?;
+        let setup_at = insns.iter().position(|one| Arc::ptr_eq(one, setup))?;
         let def_at = insns.iter().position(|one| {
             one.what.as_ref().is_some_and(|what| matches!(what.dests.as_slice(), [Loc::Held(h)] if h.value == value))
         })?;
@@ -809,6 +812,30 @@ mod tests {
         let push = &after.blocks[0].insns[2];
         assert_eq!(name_of(push), Some("push"));
         assert_eq!((push.uses.clone(), push.undefs.clone()), (vec![], vec![1]), "{push:?}");
+    }
+
+    /// `printf(0, g)` at m32 -O2 kept `mov eax, [g]; push eax`: the fold
+    /// looked the setup up by an `Arc` it had already replaced, so the load
+    /// was never folded (the pin emits `push [g]`). The push also keeps the
+    /// load's address operands, undef flags included.
+    #[test]
+    fn a_once_read_load_is_folded_into_its_push_keeping_its_operand_flags() {
+        let cell = Mem { through: RegId::DI, offset: 0, ..Mem::new(None, 4) };
+        let mut load =
+            (*insn(0, Operation::Move, "mov", vec![held(1)], vec![Loc::Mem(cell)], vec![1], vec![8])).clone();
+        load.undefs = vec![7];
+        let after = pass().run(&body(vec![
+            Arc::new(load),
+            setup(8),
+            store(4, imm(4), vec![]),
+            store(0, held(1), vec![1]),
+            call(),
+            destroy(8),
+        ]));
+        assert_eq!(names(&after), ["call_frame_setup", "push", "push", "call", "call_frame_destroy"]);
+        let push = &after.blocks[0].insns[2];
+        assert!(matches!(push.what.as_ref().unwrap().sources.as_slice(), [Loc::Mem(_)]), "{push:?}");
+        assert_eq!((push.uses.clone(), push.undefs.clone()), (vec![8], vec![7]), "{push:?}");
     }
 
     /// A gap in the slots (slot 1 stored, slot 0 not) is left as stores.

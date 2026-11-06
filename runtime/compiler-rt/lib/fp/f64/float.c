@@ -1,7 +1,7 @@
 /* __floatsidf, __floatunsidf, __floatdidf, __floatundidf. */
 #include "conv.h"
 
-#ifdef SF_CLZ64 /* native clz: the 32-bit conversions are exact and call neither pack nor the 64-bit path */
+#if defined(SF_CLZ64) || defined(SF_CONV_DIRECT32) /* the 32-bit conversions are exact and call neither pack nor the 64-bit path */
 sf_double SF_NAME(floatsidf)(int32_t x) /* one body: a branch on the sign duplicated it */
 {
     uint32_t s = (uint32_t)(x >> 31);

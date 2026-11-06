@@ -112,7 +112,7 @@ pub fn lib_call(
         let vt = dag.value_type(*value);
         ops.push(dag.get_phys_register(vt, *reg));
     }
-    ops.push(dag.get_register_mask());
+    ops.push(dag.get_register_mask_clobbering(&super::dagisel_adapter::call_clobbered_flags()));
     ops.extend(glue);
     let call = dag.get_node_multi(x86isd::CALL, &[EVT::OTHER, EVT::GLUE], &ops);
     let end = dag.get_callseq_end(
