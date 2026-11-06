@@ -409,6 +409,8 @@ impl ProgramPass for Walk {
                                 .1
                                 .attrs
                                 .push(llrm_mir::opcode::Attribute::Flag(crate::tailcallelim::DEFERRED.to_owned()));
+                            // The flag is part of its declaration: the analyses that list declarations patch only what is told changed.
+                            modules[at].changed(id);
                         }
                         for (call, callee, cost) in decided.iter().flatten() {
                             let name = |id: GlobalId| module.global(id).name.as_deref().unwrap_or("?");
