@@ -2846,16 +2846,17 @@ fn an_or_of_two_compares_with_one_constant_is_one_setne_at_m32() {
 /// before the select becomes an `and`. A select made an `and` ahead of the
 /// DAG left `xor(and, -1)`, which De Morgan turned into `setae` + `or`: a
 /// second flag in a spill slot (switch_table_holes -O2 m32, 122 -> 132 B).
+/// Runs at m64: the hook is off at m32, where it costs sieve -O3 3 B and 172 clk.
 #[test]
-fn a_branch_on_a_bool_select_is_an_and_and_a_compare_not_an_or_of_inverses_at_m32() {
-    let ir = "target datalayout = \"@m32-datalayout@\"\n\
-              target triple = \"i686-pc-linux-gnu\"\n\
+fn a_branch_on_a_bool_select_is_an_and_and_a_compare_not_an_or_of_inverses_at_m64() {
+    let ir = "target datalayout = \"@m64-datalayout@\"\n\
+              target triple = \"x86_64-unknown-linux-gnu\"\n\
               declare void @a()\ndeclare void @b()\n\
               define void @f(i32 %x) {\n  %u = icmp ult i32 %x, 14\n  %t = trunc i32 %x to i16\n  \
               %s = lshr i16 8707, %t\n  %bit = trunc i16 %s to i1\n  \
               %c = select i1 %u, i1 %bit, i1 false\n  br i1 %c, label %t1, label %e\nt1:\n  \
               call void @a()\n  ret void\ne:\n  call void @b()\n  ret void\n}\n";
-    let (built, _) = compiled(&flags(&["-m32", "-O2", "-march=i486", "--isel=dag"]), ir, "f").unwrap();
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), ir, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(!listing.contains("setae"), "the compare was inverted:\n{listing}");
     assert!(!listing.lines().any(|l| l.trim().starts_with("or ")), "the and became an or:\n{listing}");
