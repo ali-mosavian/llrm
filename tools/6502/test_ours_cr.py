@@ -129,4 +129,37 @@ class Archive(unittest.TestCase):
         got = self.link("recdeep")
         self.assertEqual(sorted(n for n in got if "udivmod32" in n), ["mos___rt_udivmod32.o"], got)
 
+LINK_CC = os.environ.get("OURS_TEST_LINK_CC", os.path.expanduser("~/scratch/s4/frozen-setcc/lnk/llrm-cc"))
+
+@unittest.skipUnless(os.path.exists(LINK_CC), "needs a llrm-cc with the 6502-cc65 link recipe (OURS_TEST_LINK_CC)")
+class DriverLink(unittest.TestCase):
+    """`llrm-cc --target=6502-cc65 prog.c -o prog.bin` links through tools/targets/6502-link.sh: the runtime is an archive of per-routine
+    objects and ld65 pulls the members a program calls. Before, the 6502 rows stopped at -S and the harnesses pasted the runtime's text."""
+    def build(self, source):
+        tmp = tempfile.mkdtemp()
+        Path(tmp, "p.c").write_text(source)
+        env = {**os.environ, "LLRM_6502_MAP": os.path.join(tmp, "p.map")}
+        r = subprocess.run([LINK_CC, "--target=6502-cc65", "-Os", os.path.join(tmp, "p.c"), "-o", os.path.join(tmp, "p.bin")],
+                           capture_output=True, text=True, env=env, timeout=1500)
+        self.assertEqual(r.returncode, 0, r.stderr[-400:])
+        sys.path.insert(0, HERE)
+        import mkrt
+        members = mkrt.pulled(Path(tmp, "p.map").read_text())
+        code = subprocess.run(["sim65", os.path.join(tmp, "p.bin")], capture_output=True, timeout=60).returncode
+        return code, members
+
+    def test_a_multiply_program_links_the_multiply_and_no_divide_or_shift(self):
+        code, members = self.build("unsigned long a = 70000, b = 3;\nint main(void) { return (int)((a * b) >> 8) & 0x7f; }\n")
+        self.assertEqual(code, ((70000 * 3) >> 8) & 0x7F)
+        self.assertIn("mos___mulsi3.o", members)
+        self.assertEqual([m for m in members if "div" in m or "mod" in m or "di3" in m], [], members)
+
+    def test_a_shift_program_links_the_three_shifts_and_no_other_i64_routine(self):
+        code, members = self.build("unsigned long long v = 0x0123456789ABCDEFULL;\nvolatile unsigned c = 13;\n"
+                                   "int main(void) { return (int)(((v << c) >> 56) ^ (v >> c) ^ (unsigned long long)((long long)v >> c)) & 0x7f; }\n")
+        v, c, m64 = 0x0123456789ABCDEF, 13, (1 << 64) - 1
+        self.assertEqual(code, ((((v << c) & m64) >> 56) ^ (v >> c) ^ (v >> c)) & 0x7F)
+        i64 = sorted(m for m in members if m.startswith("lib_int_"))
+        self.assertEqual(i64, ["lib_int_ashldi3.o", "lib_int_ashrdi3.o", "lib_int_lshrdi3.o"], members)
+
 if __name__ == "__main__": unittest.main()
