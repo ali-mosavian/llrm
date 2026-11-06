@@ -27,11 +27,11 @@ fn only_in_zero_equality(
     let Some(result) = unit.function.instruction(site.call).result else { return true };
     unit.function.users(result).iter().all(|used| {
         let user = unit.function.instruction(used.user);
-        let zero = matches!(
-            user.operands[1],
-            Operand::Constant(id) if matches!(unit.context.get(id).kind, ConstantKind::Int(0) | ConstantKind::Null)
-        );
-        matches!(user.opcode, Opcode::ICmp(IntPredicate::Eq | IntPredicate::Ne)) && zero
+        matches!(user.opcode, Opcode::ICmp(IntPredicate::Eq | IntPredicate::Ne))
+            && matches!(
+                user.operands[1],
+                Operand::Constant(id) if matches!(unit.context.get(id).kind, ConstantKind::Int(0) | ConstantKind::Null)
+            )
     })
 }
 
