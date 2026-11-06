@@ -4,7 +4,7 @@ import sys
 import unittest
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
-from m68k_worse_cells import count, missing, skipped  # noqa: E402
+from m68k_worse_cells import count, missing, single_input, skipped  # noqa: E402
 
 HEADER = "# m68k matrix; (CpuTable::byte_rate: 68000 0.5, 68020 1.33, 68030/040/060 3.2 B per clk saved)\n"
 COLS = "target\tprog\tlevel\tcompiler\tcode_bytes\tclocks\tinstrs\tnote\n"
@@ -69,6 +69,13 @@ class WorseCells(unittest.TestCase):
         """A matrix with an absent column passed as 'fewer worse cells'; it must fail instead."""
         rows = [("m68k-68000", "muldiv", "Os", n, b, "", "", "") for n, b in (("ours", ""), ("gcc", 66))]
         self.assertEqual(missing(tsv(*rows)), [("m68k-68000", "muldiv", "Os")])
+
+    def test_max_run_on_one_input_is_reported(self):
+        """max(7, 42) alone: gcc skipped the move, ours ran it; the other order reverses it (+6.4 B-eq at 060)."""
+        once = [("m68k-68060", "max", "O2", n, 16, 10, 5, "") for n in ("ours", "gcc", "clang")]
+        both = [("m68k-68060", "max", "O2", n, 16, 11, 6, "inputs 2") for n in ("ours", "gcc", "clang")]
+        self.assertEqual(len(single_input(tsv(*once))), 3)
+        self.assertEqual(single_input(tsv(*both)), [])
 
 
 if __name__ == "__main__":
