@@ -25,6 +25,28 @@ use crate::x86_addr::AddrDag;
 use crate::x86_divrem::copy_results;
 use crate::x86_hooks::{Cpu, X86Hooks};
 
+/// Whether the constant `c` has at least as many significant bits as `other` can have
+/// (its width less its known leading zeros): the 486's multiply clocks are
+/// 10 plus the bits of the r/m operand (Intel 240440-002, Table 10.1 note 3).
+fn constant_is_wider<D: AddrDag>(
+    dag: &D,
+    c: SDValue,
+    other: SDValue,
+    signed: bool,
+) -> bool {
+    let Some(value) = dag.constant(c) else { return true };
+    let width = crate::x86_addr::vt_bits(dag.value_type(other));
+    let narrow = if width >= 64 { value } else { value & ((1i64 << width) - 1) };
+    let bits = if signed {
+        let shift = 64 - width.min(64);
+        ((narrow << shift) >> shift).unsigned_abs().checked_ilog2().map_or(0, |n| n + 1)
+    } else {
+        (narrow as u64).checked_ilog2().map_or(0, |n| n + 1)
+    };
+    let zeros = (dag.known_zero_bits(other) << (64 - width.min(64))).leading_ones();
+    bits >= width - zeros.min(width)
+}
+
 /// Selects `node`; false when its type is one the pin's case has no row for:
 /// `i32`, and `i64` at 64 bits.
 pub fn select_mul_lohi<D: AddrDag>(
@@ -55,14 +77,17 @@ pub fn select_mul_lohi<D: AddrDag>(
         }
     }
 
-    // DEVIATE SD444: where the multiply ends early on the r/m operand, a
-    // constant (a division's full-width magic) goes to `EAX`, so the other
-    // operand is the one whose length is read. The pin keeps operand 0 in
-    // `EAX`.
+    // DEVIATE SD444: where the multiply ends early on the r/m operand
+    // (10 + the bits of that operand), a constant with more significant bits
+    // as the other operand can have (a division's full-width magic) goes to
+    // `EAX`, so the variable is the r/m operand whose length is read. A
+    // narrower constant stays the r/m operand, as in the pin, which keeps
+    // operand 0 in `EAX`.
     if folded.is_none()
         && hooks.options.multiply_early_out
         && dag.opcode(n1.node) == isd::Constant
         && dag.opcode(n0.node) != isd::Constant
+        && constant_is_wider(dag, n1, n0, is_signed)
     {
         std::mem::swap(&mut n0, &mut n1);
     }
