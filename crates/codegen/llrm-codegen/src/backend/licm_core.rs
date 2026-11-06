@@ -185,6 +185,16 @@ pub trait Policy<I: Inst> {
         index: usize,
     ) -> bool;
 
+    /// `ExtractHoistableLoad`: `one` as the load it makes, defining a new
+    /// value, and what is left of it reading that value. The pin tries it for
+    /// an instruction that does not move; the load is used only if it moves.
+    fn unfold(
+        &mut self,
+        _one: &I,
+    ) -> Option<(I, I)> {
+        None
+    }
+
     /// Whether a moved instruction goes ahead of the preheader's own, not at
     /// its end: an x87 value defined first lies deepest on the stack.
     fn leads(
@@ -317,6 +327,16 @@ pub fn hoist<I: Inst, P: Policy<I>>(
                             }
                             _ => moved.push(one.clone()),
                         }
+                    } else if let Some((load, rest)) = policy.unfold(one).filter(|(load, _)| {
+                        load.uses()
+                            .iter()
+                            .all(|used| hoisted_values.contains(used) || defined.get(used).is_none_or(|home| !inside.contains(home)))
+                            && policy.movable(&facts, at, std::slice::from_ref(load), 0)
+                    }) {
+                        hoisted_values.extend(load.defines().iter().copied());
+                        any = true;
+                        moved.push(load);
+                        keep.push(rest);
                     } else {
                         keep.push(one.clone());
                     }

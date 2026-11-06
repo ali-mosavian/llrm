@@ -155,6 +155,9 @@ pub struct Profile {
     /// target states a smaller bound than the pin's (`timings.times`);
     /// none: the pin's.
     pub tail_dup_threshold: Option<usize>,
+    /// Commuting prefers the operand the result is copied back into
+    /// (DEVIATE TA-LC, from the target's table; off: the pin's order).
+    pub commute_loop_carried: bool,
     /// Clocks a mispredicted branch costs, where the target states it.
     pub mispredict_penalty: Option<i64>,
     /// `-fexcess-precision=standard` (`-ffloat-store`): a float conversion
@@ -373,6 +376,7 @@ impl Profile {
             optimized: true,
             aggressive: false,
             tail_dup_threshold: None,
+            commute_loop_carried: false,
             mispredict_penalty: None,
             float_store: false,
             rounds_float_spills: false,
@@ -407,6 +411,12 @@ impl Profile {
             return 0;
         }
         self.target().tti().map_or(0, |tti| tti.speed_milliclocks_per_byte())
+    }
+
+    /// DEVIATE TA-LC applies here: the table says so, at -O1 to -O3 only (at
+    /// -Os a different register choice can cost a REX byte: m64 grep +1 B).
+    pub fn commutes_loop_carried(&self) -> bool {
+        loop_carried_applies(self.commute_loop_carried, self.size, self.min_size)
     }
 
     /// `TuningSlow3OpsLEA`: a three-operand LEA takes three cycles, so
@@ -561,6 +571,7 @@ fn _profile(
         _latencies: std::sync::Arc::new(table.latency.clone()),
         address_prefix_stall: table.lcp_stall,
         tail_dup_threshold: table.tail_dup_placement_threshold.map(|n| n.max(0) as usize),
+        commute_loop_carried: table.commute_loop_carried,
         mispredict_penalty: table.mispredict_penalty,
         ..Profile::new(arch, name, table.issue, table.in_order, table.prefix, table.partial_stall)
     })
@@ -1095,5 +1106,30 @@ mod mask_tests {
             (rate(false, false, true), rate(false, false, false), rate(true, false, true), rate(false, true, true)),
             (312, 0, 0, 0)
         );
+    }
+}
+
+/// Whether DEVIATE TA-LC is on: the table's key, not at -Os or -Oz.
+fn loop_carried_applies(
+    table: bool,
+    size: bool,
+    min_size: bool,
+) -> bool {
+    table && !size && !min_size
+}
+
+#[cfg(test)]
+mod loop_carried_tests {
+    use super::loop_carried_applies;
+
+    /// m64 grep -Os went 558 -> 559 B with the commuting on (a REX byte from
+    /// the other register choice): the key holds at -O1..-O3 and is off for
+    /// size.
+    #[test]
+    fn test_the_loop_carried_commute_is_off_for_size_and_without_the_key() {
+        assert!(loop_carried_applies(true, false, false));
+        assert!(!loop_carried_applies(true, true, false), "-Os");
+        assert!(!loop_carried_applies(true, false, true), "-Oz");
+        assert!(!loop_carried_applies(false, false, false), "no key: the pin's order");
     }
 }

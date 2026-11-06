@@ -708,6 +708,7 @@ const IMPLEMENTED_BY: &[(&str, &str)] = &[
     ("lsr", "lsr_pass"),
     ("canonfreeze", "canonfreeze"),
     ("hardwareloops", "hardwareloops"),
+    ("constanthoisting", "constanthoisting"),
 ];
 
 /// Every source line of the module `name`: its file and its directory.

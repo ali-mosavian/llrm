@@ -18,11 +18,19 @@ fn the_table_names_each_f32_and_f64_routine_the_old_arms_named() {
         (Libcall::UIntToFp(MVT::I32, d), "__floatunsidf"),
         (Libcall::Fcmp3(Cmp3::Uo, d), "__unorddf2"),
         (Libcall::Fcmp3(Cmp3::Oge, f), "__gesf2"),
+        // binary128: compiler-rt's tf routines
+        (Libcall::Add(MVT::F128), "__addtf3"),
+        (Libcall::FpExt(d, MVT::F128), "__extenddftf2"),
+        (Libcall::FpRound(MVT::F128, f), "__trunctfsf2"),
+        (Libcall::FpToSInt(MVT::F128, MVT::I64), "__fixtfdi"),
+        (Libcall::FpToUInt(MVT::F128, MVT::I64), "__fixunstfdi"),
+        (Libcall::SIntToFp(MVT::I32, MVT::F128), "__floatsitf"),
+        (Libcall::Fcmp3(Cmp3::Uo, MVT::F128), "__unordtf2"),
     ];
     for (call, expected) in want {
         assert_eq!(name(call), Some(expected), "{call:?}");
     }
-    assert_eq!(names().count(), 40, "8 arithmetic, 2 ext/round, 8 to-int, 8 from-int, 14 compares");
+    assert_eq!(names().count(), 67, "12 arithmetic, 6 ext/round, 14 to-int, 14 from-int, 21 compares (f32, f64, f128)");
 }
 
 #[test]

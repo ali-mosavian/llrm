@@ -631,6 +631,7 @@ mod tuning_tests {
                 size_milliclocks_per_byte: 0,
                 multiply_by_clocks: false,
                 price_pin_multiplies: false,
+                imul_at_size: false,
                 speed_milliclocks_per_byte: 0,
                 price_fills: false,
                 unroll_threshold: None,

@@ -1567,6 +1567,8 @@ impl<'a> TypeLegalizer<'a> {
                 let hi = self.dag.get_constant_with(bits >> width, half, false, self.dag.is_opaque(value));
                 (lo, hi)
             }
+            // `ExpandRes_MERGE_VALUES`: each result is its operand, expanded.
+            ISD::MergeValues => self.expanded_integer(self.dag.operand(value, value.res as usize)),
             op @ (ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend) => self.expand_extend(value, op, half),
             ISD::SignExtendInReg => {
                 // `ExpandIntRes_SIGN_EXTEND_INREG`: within the low half, extend
@@ -2801,7 +2803,7 @@ impl<'a> TypeLegalizer<'a> {
         let callee = self.dag.get_target_external_symbol(pointer, routine.name);
         let root = self.dag.entry_node();
         let env = CallEnv { arch, pointer };
-        let (_chain, results) = lib_call(self.dag, &env, root, callee, &args, 0, 0, &returns);
+        let (_chain, results) = lib_call(self.dag, &env, root, callee, &args, 0, 0, &returns, &super::dagisel_adapter::call_clobbered_flags());
         Ok(if wants_quotient { (results[0], results[1]) } else { (results[2], results[3]) })
     }
 
@@ -2822,8 +2824,16 @@ impl<'a> TypeLegalizer<'a> {
             return false;
         }
         let results = self.dag.node(node).values.len();
+        // a `MERGE_VALUES` is the pin's list of replacement values
+        let merged = self.dag.opcode(result) == ISD::MergeValues && self.dag.node(result).ops.len() == results;
         for res in 0..results as u8 {
-            let new = if results == 1 { result } else { SDValue { node: result.node, res } };
+            let new = if merged {
+                self.dag.operand(result, res as usize)
+            } else if results == 1 {
+                result
+            } else {
+                SDValue { node: result.node, res }
+            };
             self.replace_value_with(SDValue { node: n, res }, new);
         }
         true

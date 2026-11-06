@@ -389,7 +389,7 @@ impl Initializer<'_> {
                 _ => self.bytes(&bits.to_le_bytes()[..size]),
             },
             ConstantKind::Float80(bits) => self.bytes(&llrm_mir::types::x87_image(*bits)),
-            ConstantKind::Float128(_) => return Err("an fp128 initializer: no emission yet".to_owned()),
+            ConstantKind::Float128(bits) => self.bytes(&bits.to_le_bytes()),
             // An undef initializer is any bytes: zero. A poison one is a hole
             // of a switch lookup table (the pin's holes are `poison` too),
             // which the guard never indexes. `emitGlobalConstantImpl` writes

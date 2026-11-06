@@ -82,11 +82,19 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
     let per_byte = llrm_target::timings::derived_byte_rate(costs.cache_line, costs.line_fill_clocks);
     llrm_mir::target::Tuning {
         multiply_by_clocks: true,
+        // DEVIATE MUL-OS (owner x86-m32, exit 2026-11-20): at -Os the pin
+        // decomposes a constant multiply (`lea; lea`, 8 B for x * 11) where
+        // gcc keeps the 3-byte `imul`; the pin keeps it at -Oz only.
+        imul_at_size: true,
         x87_stack_slots: Some(8),
+        x87_share_negated_products: true,
         speed_milliclocks_per_byte: per_byte,
-        // DEVIATE SZ1 (owner x86-m32, exit 2026-11-20): D11 holds at -Os, so a callee whose copies grow the code stays a call (called_once_os: gcc -Os does; the pin inlines it).
+        // DEVIATE SZ1 (owner x86-m32, exit 2026-11-20): D11 holds at -Os, so a
+        // callee whose copies grow the code stays a call (called_once_os:
+        // gcc -Os does; the pin inlines it).
         inline_size_guard_at_size: true,
-        // DEVIATE SZ2 (owner x86-m32, exit 2026-11-20): -Os keeps a once-called callee whose copy grows the code (gcc does; the pin copies it).
+        // DEVIATE SZ2 (owner x86-m32, exit 2026-11-20): -Os keeps a once-called
+        // callee whose copy grows the code (gcc does; the pin copies it).
         inline_size_guard_single_site: true,
         // DEVIATE REC-2: gcc 15.2's `max-inline-recursive-depth` 8 and
         // `max-inline-insns-recursive` 450, at -O2/-O3 (never -Os). Owner w10.
@@ -96,15 +104,17 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // 22 sits on the O3 edge, zero margin). Owner x86-m32; exit 2026-12-10:
         // the estimate becomes gcc's own size count (translated, not fitted).
         recursive_edge_growth: Some((12, 22)),
-        // DEVIATE REC-2: the copies may add gcc's 450 at -O2 (fib 240256 -> 99687 clk,
-        // x_fib, frames), 150 at -O3 (rectwo, bintree, recchop are worse with 450; their
-        // O3 card is open). Owner x86-m32, exit 2026-11-20.
+        // DEVIATE REC-2: the copies may add gcc's 450 at -O2 (fib 240256 ->
+        // 99687 clk, x_fib, frames), 150 at -O3 (rectwo, bintree, recchop are
+        // worse with 450; their O3 card is open). Owner x86-m32, exit
+        // 2026-11-20.
         recursive_inlining_growth: Some((450, 150)),
-        // DEVIATE REC-2: gcc eliminates tail calls before it copies a recursion (passes.def:97, then
-        // pass_ipa_inline :164). At -O3 the copies of the loop beat the tree's (rectwo 1230664 -> 466986
-        // clk, recchop, x_hanoi2, bintree; no -O3 cell worse); at -O2 the tree's copies let GVN merge the
-        // pure same-argument calls (fib 99618 clk against 228901), so -O2 keeps today's order. Owner
-        // x86-m32, exit 2026-11-20.
+        // DEVIATE REC-2: gcc eliminates tail calls before it copies a recursion
+        // (passes.def:97, then pass_ipa_inline :164). At -O3 the copies of the
+        // loop beat the tree's (rectwo 1230664 -> 466986 clk, recchop,
+        // x_hanoi2, bintree; no -O3 cell worse); at -O2 the tree's copies let
+        // GVN merge the pure same-argument calls (fib 99618 clk against
+        // 228901), so -O2 keeps today's order. Owner x86-m32, exit 2026-11-20.
         recursive_tre_first: (false, true),
         peel_folded_entry: true,
         // DEVIATE UP1 (owner x86-m32; exit 2026-11-20: the pin's cost model or
@@ -758,14 +768,16 @@ mod tests {
         assert_eq!(model.costs().load, 1, "the clock prices are the CPU's");
     }
 
-    /// The x87 byte rows were a flat 6: a register `faddp` (2 B encoded) priced at 3x,
-    /// and the memory operand of `fadd m` at 0 (`x87_add_m` = `x87_add`), so folding
-    /// a load looked free at -Os. A register form is the integer register row.
+    /// The x87 byte rows were a flat 6: a register `faddp` (2 B encoded) priced
+    /// at 3x, and the memory operand of `fadd m` at 0 (`x87_add_m` =
+    /// `x87_add`), so folding a load looked free at -Os. A register form is
+    /// the integer register row.
     #[test]
     fn m32_x87_byte_rows_split_register_and_memory_forms() {
         let sizes = OPCOSTS.size_costs();
-        // Mean encoded bytes of 71 float programs at -O2/-Os, per form, with the band of
-        // estimate/measured the integer rows hold: 1.4-1.5 for memory, 2 for register.
+        // Mean encoded bytes of 71 float programs at -O2/-Os, per form, with
+        // the band of estimate/measured the integer rows hold: 1.4-1.5
+        // for memory, 2 for register.
         for (form, estimate, measured, band) in [
             ("register add", sizes.float_add, 2.00, 1.9..=2.1),
             ("fld m", sizes.float_load, 5.56, 1.3..=1.6),
