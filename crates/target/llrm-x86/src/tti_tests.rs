@@ -419,3 +419,19 @@ fn test_partial_and_runtime_unrolling_follow_the_cpu_models_loop_buffer() {
         assert!(!up.partial && !up.runtime && !up.upper_bound, "{cpu}");
     }
 }
+
+/// crc -O1 m64: ConstantHoisting rebased the mask 0xedb88320 against 0xffffffff
+/// (`lea r, [rcx-0x12477cdf]`) because the pin prices a 64-bit constant of 32
+/// leading zeros at 2 (`isInt<32>` only) though `mov r32, imm32` zero-extends:
+/// 147 B became 162 (gcc 118). With zext_imm_is_basic it costs one.
+#[test]
+fn a_zero_extended_32_bit_constant_costs_one_instruction_where_the_target_says_so() {
+    let mut tuning = llrm_mir::target::Tuning::PIN;
+    let pin = X86::of_cpu("i486").unwrap();
+    assert_eq!(pin.int_imm_cost(0xedb8_8320, 64), Cost::of(2));
+    tuning.zext_imm_is_basic = true;
+    let zimm = X86::of_cpu("i486").unwrap().with_tuning(tuning);
+    assert_eq!(zimm.int_imm_cost(0xedb8_8320, 64), Cost::of(1));
+    assert_eq!(zimm.int_imm_cost(0x1_0000_0000, 64), Cost::of(2));
+    assert_eq!(zimm.int_imm_cost(0xedb8_8320, 32), Cost::of(1));
+}

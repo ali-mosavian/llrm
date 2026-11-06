@@ -951,7 +951,12 @@ impl Tti for X86 {
         let mut total = 0;
         let mut shift = 0;
         while shift < bits {
-            total += int_imm_chunk((extended >> shift) as i64);
+            let chunk = (extended >> shift) as i64;
+            total += if self.tuning.zext_imm_is_basic && bits == 64 && chunk > 0 && chunk <= i64::from(u32::MAX) {
+                1
+            } else {
+                int_imm_chunk(chunk)
+            };
             shift += 64;
         }
         Cost::of(total.max(1))

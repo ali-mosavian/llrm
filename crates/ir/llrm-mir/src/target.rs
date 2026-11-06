@@ -62,6 +62,12 @@ pub struct Tuning {
     /// `ConstantHoisting` runs after LSR, as the pin's `addIRPasses` does for
     /// every target (CH-STAGED: enabled target by target, each with its A/B).
     pub constant_hoisting: bool,
+    /// DEVIATE ZIMM (owner m64, exit 2026-11-27): a 64-bit constant of 32
+    /// leading zeros costs one instruction to materialize (`mov r32, imm32`
+    /// zero-extends), not the pin's two (`getIntImmCost(int64_t)` takes
+    /// `isInt<32>` only). false: the pin's.
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L6882>
+    pub zext_imm_is_basic: bool,
     /// How many values the x87 register stack holds (8) where floats live
     /// there (a target without SSE2 floating point); none: floats are not
     /// held on a stack. The loop unroll caps its copies by it.
@@ -168,6 +174,7 @@ impl Tuning {
         unroll_jam_partial_threshold: None,
         unroll_jam_exact_count: false,
         constant_hoisting: false,
+        zext_imm_is_basic: false,
         x87_stack_slots: None,
         unswitch_threshold: None,
         inline_threshold: None,
