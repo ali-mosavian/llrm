@@ -37,6 +37,10 @@ pub struct Tuning {
     /// -O1..-O3); false: the chain where `speed_milliclocks_per_byte` pays
     /// for its bytes.
     pub multiply_by_clocks: bool,
+    /// DEVIATE SD446: a divide by a constant is chosen against the multiply-high
+    /// sequence by clocks plus bytes at `speed_milliclocks_per_byte`
+    /// (`hardware_divide_wins`); false: the clocks and margin alone.
+    pub divide_by_bytes: bool,
     /// A multiply by a constant is decomposed only where the chain's saved
     /// clocks pay for its extra bytes at `speed_milliclocks_per_byte`, the
     /// pin's own decompositions included (a tie keeps the `imul`); false:
@@ -158,6 +162,7 @@ impl Tuning {
         speed_milliclocks_per_byte: 0,
         price_fills: false,
         multiply_by_clocks: false,
+        divide_by_bytes: false,
         price_pin_multiplies: false,
         unroll_threshold: None,
         unroll_max_percent_threshold_boost: None,

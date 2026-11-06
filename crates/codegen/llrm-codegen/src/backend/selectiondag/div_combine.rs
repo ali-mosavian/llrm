@@ -203,7 +203,29 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             p.product.as_ref().map(|price| (price.0)(d as i64)),
             (bits, d, signed, rem, zeros),
         );
-        clocks.0 + clocks.0 * p.margin / 100 < clocks.1
+        let Some(b) = &p.bytes else { return clocks.0 + clocks.0 * p.margin / 100 < clocks.1 };
+        // DEVIATE SD446: at speed on a target that trades bytes for clocks the
+        // choice is clocks plus bytes at the rate, the margin on the clocks
+        // alone (their spread; bytes are exact). The pin's `isIntDivCheap` is
+        // `minsize` alone.
+        let bytes = Self::sequence_price(
+            &DivSet {
+                prefix: b.prefix,
+                add: b.add,
+                shift: b.shift,
+                extend: b.extend,
+                multiply: b.multiply,
+                multiply_long: b.multiply_long,
+                multiply_high: b.multiply_high,
+                divide: b.divide,
+                divide_long: b.divide_long,
+            },
+            p.operand,
+            None,
+            (bits, d, signed, rem, zeros),
+        );
+        let rate = b.milliclocks_per_byte;
+        (clocks.0 + clocks.0 * p.margin / 100) * 1000 + bytes.0 * rate < clocks.1 * 1000 + bytes.1 * rate
     }
 
     /// The divide's price and the multiply-high sequence's, in `set`'s unit:

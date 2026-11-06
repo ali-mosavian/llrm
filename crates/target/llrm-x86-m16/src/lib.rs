@@ -611,6 +611,7 @@ mod tuning_tests {
             "the compiler reads the judge's row"
         );
         assert_eq!(table.speed_milliclocks_per_byte, 500, "policy: user 2026-10-31, 1 clk = 2 B");
+        assert!(table.divide_by_bytes, "DEVIATE SD446: m16 weighs the bytes of a divide by a constant");
         assert_eq!((table.unroll_threshold, table.unroll_max_percent_threshold_boost), (Some(0), Some(100)));
         assert_eq!(table.unroll_partial_threshold, Some(0));
         assert_eq!(table.x87_stack_slots, Some(8));
@@ -625,6 +626,7 @@ mod tuning_tests {
                 max_stores_per_memmove_opt_size: 4,
                 size_milliclocks_per_byte: 0,
                 multiply_by_clocks: false,
+                divide_by_bytes: false,
                 price_pin_multiplies: false,
                 speed_milliclocks_per_byte: 0,
                 price_fills: false,

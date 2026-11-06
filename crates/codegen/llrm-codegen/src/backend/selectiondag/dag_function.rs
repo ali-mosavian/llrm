@@ -810,6 +810,22 @@ fn div_prices(
         divide_long: costs.divide_long,
         margin: costs.divide_margin,
         product: Some(super::dag::ProductPrice(std::rc::Rc::new(product))),
+        bytes: {
+            let rate = cpu.speed_milliclocks_per_byte();
+            let size = cpu.target().size_costs();
+            (rate > 0 && cpu.target().tti().is_some_and(|tti| tti.divide_by_bytes())).then(|| super::dag::DivBytes {
+                prefix: size.prefix,
+                add: size.add,
+                shift: size.shift,
+                extend: size.extend,
+                multiply: size.multiply,
+                multiply_long: size.multiply_long,
+                multiply_high: size.multiply_high,
+                divide: size.divide,
+                divide_long: size.divide_long,
+                milliclocks_per_byte: rate,
+            })
+        },
     })
 }
 

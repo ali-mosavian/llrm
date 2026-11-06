@@ -203,6 +203,26 @@ pub struct DivPrices {
     /// The clocks of the product `q * d` a remainder subtracts, by `d`: what
     /// the selector emits for it (`Machine::multiply_by`).
     pub product: Option<ProductPrice>,
+    /// The same parts in code bytes, and what a byte is worth at speed (DEVIATE
+    /// SD446): where the target trades bytes for clocks (`rate` > 0, -O2/-O3
+    /// on m16) the divide is chosen by clocks plus bytes at that rate.
+    pub bytes: Option<DivBytes>,
+}
+
+/// [`DivPrices`]' parts in code bytes, and the rate in thousandths of a clock
+/// per byte.
+#[derive(Clone, Debug)]
+pub struct DivBytes {
+    pub prefix: i64,
+    pub add: i64,
+    pub shift: i64,
+    pub extend: i64,
+    pub multiply: i64,
+    pub multiply_long: i64,
+    pub multiply_high: i64,
+    pub divide: i64,
+    pub divide_long: i64,
+    pub milliclocks_per_byte: i64,
 }
 
 /// A price by the constant `d`.

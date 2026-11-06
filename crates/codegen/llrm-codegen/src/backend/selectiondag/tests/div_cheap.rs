@@ -2,7 +2,7 @@
 //! sequence (`movzx`, `imul`, `shr`, `imul`, `sub`; 13 instructions against 6,
 //! +21..25% clocks on bench/huge at m16 -Os).
 
-use super::super::dag::{DivPrices, ProductPrice};
+use super::super::dag::{DivBytes, DivPrices, ProductPrice};
 use super::super::dag_combiner::{CombineLevel, DagCombiner, NoCombines};
 use super::*;
 
@@ -72,6 +72,7 @@ const I486_REAL_MODE: DivPrices = DivPrices {
     divide_long: 43,
     margin: 25,
     product: None,
+    bytes: None,
 };
 
 fn priced(
@@ -134,6 +135,30 @@ fn the_margin_is_read_from_the_prices() {
     let none = DivPrices { margin: 0, ..I486_REAL_MODE };
     assert_eq!(priced(ISD::SRem, EVT::I32, 14, Some(none)), ISD::SRem);
     assert_ne!(priced(ISD::SRem, EVT::I32, 14, Some(I486_REAL_MODE)), ISD::SRem);
+}
+
+/// recmany `% 5`, `% 3`, `% 7` at m16 -O2 were three magic multiply-high
+/// sequences of about 25 bytes each where bcc's `mov ebx,k; cdq; idiv ebx`
+/// is 11: the choice weighed clocks alone (the sheet's two prices tie), so the
+/// 14 bytes never counted though m16 prices a clock at two bytes. Bytes at the
+/// rate decide where the clocks are within the margin.
+#[test]
+fn the_rate_weighs_the_bytes_of_the_divide_against_the_sequence() {
+    let bytes = DivBytes {
+        prefix: 1,
+        add: 4,
+        shift: 6,
+        extend: 6,
+        multiply: 6,
+        multiply_long: 8,
+        multiply_high: 8,
+        divide: 6,
+        divide_long: 8,
+        milliclocks_per_byte: 500,
+    };
+    assert_ne!(priced(ISD::SRem, EVT::I32, 5, Some(I486_REAL_MODE)), ISD::SRem, "clocks alone: the sequence");
+    let weighed = DivPrices { bytes: Some(bytes), ..I486_REAL_MODE };
+    assert_eq!(priced(ISD::SRem, EVT::I32, 5, Some(weighed)), ISD::SRem, "clocks plus bytes: the divide");
 }
 
 /// The remainder's `q * d` was priced as a 2-shift 2-add chain the selector
