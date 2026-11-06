@@ -316,7 +316,7 @@ fn a_target_that_does_not_ask_keeps_the_or_of_the_and() {
     assert_eq!(dag.opcode(dag.get_root()), ISD::Or);
 }
 
-fn masked_frozen_extload(dag: &mut SelectionDAG) {
+pub(super) fn masked_frozen_extload(dag: &mut SelectionDAG) {
     // a pointer that may be poison, so the freeze is not dropped
     let (base, chain) = (dag.get_register(EVT::I32, 7), dag.entry_node());
     let one = dag.get_constant(1, EVT::I32);

@@ -1254,6 +1254,29 @@ fn a_prefetch_hint_compiles_to_no_code() {
     assert!(!listing.contains("prefetch"), "{listing}");
 }
 
+/// `__builtin_trap` is `llvm.trap`: `llrm-llc` panicked on it ("no entry found
+/// for key", assemble.rs) at every x86 target, for the call was of a name with
+/// no declaration behind it. It is `ud2` (`TRAP`), and `llvm.debugtrap` is
+/// `int3`. `llvm.ubsantrap` (`UBSAN_UD1`) is not translated: a named refusal,
+/// not a panic.
+#[test]
+fn the_trap_intrinsics_select_or_are_refused_by_name() {
+    let one = |name: &str, call: &str| {
+        let text = format!(
+            "target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i486-unknown-linux-gnu\"\n\
+             declare void @{name}\ndefine void @f() {{\n  call void @{call}\n  unreachable\n}}\n"
+        );
+        compiled(&flags(&["-m32"]), &text, "f")
+    };
+    for (name, call, wanted) in [("llvm.trap()", "llvm.trap()", "ud2"), ("llvm.debugtrap()", "llvm.debugtrap()", "int3")] {
+        let (built, _) = one(name, call).unwrap_or_else(|why| panic!("{name}: {why}"));
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        assert!(listing.contains(wanted), "{name}: {listing}");
+    }
+    let why = one("llvm.ubsantrap(i8)", "llvm.ubsantrap(i8 1)").map(|_| ()).unwrap_err();
+    assert!(why.contains("llvm.ubsantrap"), "{why}");
+}
+
 /// `-Og` makes clang write `llvm.fake.use` (a debugger keeps a value live);
 /// `llrm-llc` refused the module, "@f_: @llvm.fake.use", and `-Og` compiled
 /// nothing through `llrm-cc`.

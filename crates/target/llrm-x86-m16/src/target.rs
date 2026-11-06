@@ -640,6 +640,21 @@ mod encoding_tests {
         assert_eq!(clocks.argument, clocks.load + clocks.store);
     }
 
+    /// `lea` in real mode is 3 bytes in words (`8D 40 07`), 5 as dwords behind
+    /// both prefixes (`67 66 8D 40 07`) and 6 with a base, an index and a
+    /// displacement (`67 66 8D 44 01 07`; jwasm). The table priced every dword
+    /// form at the word form plus the prefixes, 8 of its unit (twice the
+    /// bytes): inc + add (5 bytes) lost to the six-byte `lea`.
+    #[test]
+    fn a_lea_is_priced_at_its_encoding_by_width_and_parts() {
+        use llrm_mir::target::{Machine, three_operand, three_operand_of};
+        let sized = super::Dos::default().size_costs();
+        let forms = super::address_forms(&sized, 0);
+        let price = |width, word| three_operand(&sized, &forms, width, 2, 1, word).expect("a form");
+        let three = three_operand_of(&sized, &forms, 4, 2, 1, false, 3).expect("a form");
+        assert_eq!((price(2, true), price(4, false), three), (2 * 3, 2 * 5, 2 * 6));
+    }
+
     /// A fill's bytes are the instructions it becomes as encoded: `rep stos`
     /// 2, `push es` and `pop es` 1 each, two 3-byte loads of a word. The
     /// doubled `mov_ri` estimate made it 18, which the loop-idiom pass then

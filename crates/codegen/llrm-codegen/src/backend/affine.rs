@@ -160,7 +160,15 @@ pub fn lea_start(
     let (base, index) = (regs.root(cell.through), regs.root(cell.index_through));
     let terms = if base == index { vec![(base, 1 + cell.scale)] } else { vec![(base, 1), (index, cell.scale)] };
     let width = i64::from(dest.width);
-    Some((*dest, terms, cell.offset, cpu.operations.sized(cpu.operations.address, width, i64::from(cpu.operand_bytes))))
+    let operand = i64::from(cpu.operand_bytes);
+    let costs = &cpu.operations;
+    // A prefixed dword `lea` is its encoding's price, by the parts it names.
+    let price = if costs.address_dword > 0 && width != operand && width > 1 {
+        costs.address_dword + costs.address_third * (terms.len() + usize::from(cell.offset != 0)).saturating_sub(2) as i64
+    } else {
+        costs.sized(costs.address, width, operand)
+    };
+    Some((*dest, terms, cell.offset, price))
 }
 
 /// The 67h address naming `terms` plus `disp`, if one does.
