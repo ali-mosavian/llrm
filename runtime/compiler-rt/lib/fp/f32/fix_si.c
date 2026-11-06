@@ -15,8 +15,9 @@ static int32_t to_i32_bits(sf32 a)
 #endif
         return (a & SIGN) ? INT32_MIN : INT32_MAX;
     }
-    uint32_t m = (a & 0x7FFFFFu) | 0x800000u;
-    m = e >= 23 ? m << (e - 23) : m >> (23 - e);
+    /* The significand with its hidden bit at bit 31, shifted down once: one
+     * shift in one direction, so no register is spilled across it. */
+    uint32_t m = ((a << 8) | SIGN) >> (31 - e);
     return (a & SIGN) ? (int32_t)(0u - m) : (int32_t)m;
 }
 
