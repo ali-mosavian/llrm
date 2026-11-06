@@ -205,16 +205,13 @@ def md5(path) -> str:
 
 
 def assert_clean_env(environ=None) -> list[str]:
-    """SystemExit on an LLRM_* variable outside `AB_ENV_OK` of ab_env.sh (the shell drivers' list) that `AB_ALLOW_ENV` does not name; else the `LLRM_*=value` lines
-    to print. LLRM_WASM_BACKEND_ONLY on one side skipped the mid-end and a false second cause was chased for 40 minutes."""
-    import re
+    """SystemExit on an LLRM_* variable `envguard.stray` finds (outside ab_env.sh's list, not named in `AB_ALLOW_ENV`); else the `LLRM_*=value` lines to print.
+    LLRM_WASM_BACKEND_ONLY on one side skipped the mid-end and a false second cause was chased for 40 minutes."""
+    import envguard
 
     environ = os.environ if environ is None else environ
-    ok = set(re.search(r'^AB_ENV_OK="([^"]*)"', (Path(__file__).parent / "ab_env.sh").read_text(), re.M).group(1).split())
-    ok |= set(environ.get("AB_ALLOW_ENV", "").split())
-    bad = sorted(k for k in environ if k.startswith("LLRM_") and k not in ok)
-    if bad:
-        raise SystemExit(f"{bad[0]}={environ[bad[0]]} changes the pipeline; unset it, or name it in AB_ALLOW_ENV if both sides are meant to run it")
+    if found := envguard.stray(environ, environ.get("AB_ALLOW_ENV", "").split()):
+        raise SystemExit(f"{found[0]} changes the pipeline; unset it, or name it in AB_ALLOW_ENV if both sides are meant to run it")
     return [f"{k}={environ[k]}" for k in sorted(environ) if k.startswith("LLRM_")]
 
 
