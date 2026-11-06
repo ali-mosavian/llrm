@@ -512,7 +512,9 @@ pub fn run(
                 &reassociated,
             )
             .unwrap_or_else(|why| panic!("licm: {why}"));
-            memo.clear();
+            if !(sunk.is_empty() && hoisted.is_empty() && reassociated.is_empty()) {
+                memo.clear();
+            }
         }
         check_graph(unit, graph.as_ref().expect("a graph"), &|| {
             format!(
