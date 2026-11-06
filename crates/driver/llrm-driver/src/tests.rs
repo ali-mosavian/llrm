@@ -2002,6 +2002,53 @@ fn a_probed_frame_ending_in_a_sibling_call_gives_its_stack_back_first() {
     assert!(lines[jmp - 1] == format!("add rsp, {taken}") || lines[jmp - 1].starts_with("mov rsp, rbp"), "{listing}");
 }
 
+/// The COFF object of `text` (a Windows x86-64 module) built with the pin's
+/// section model.
+fn windows_object(text: &str) -> llrm_debug::Described {
+    let text = format!("target datalayout = \"@m64-datalayout@\"\ntarget triple = \"x86_64-pc-windows-msvc\"\n{text}");
+    let (built, format) = compiled(&flags(&["-m64", "-O2"]), &text, "f").unwrap();
+    assert_eq!(format, llrm_target::object::Format::Coff);
+    llrm_codegen::backend::objbuild::built_in(
+        &built,
+        "f.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .unwrap()
+}
+
+/// A `linkonce_odr` function in a comdat was written into the one `.text`
+/// with every other function, so the linker kept every copy and could not
+/// drop the duplicates other objects define. The pin (llc d1106deb71) writes
+/// it as a section of its own, flagged COMDAT, selection `any`.
+#[test]
+fn a_comdat_function_and_global_are_comdat_sections() {
+    let object = windows_object(
+        "$f = comdat any\n$v = comdat largest\n\
+         @v = linkonce_odr dso_local global i32 7, comdat, align 4\n\
+         define linkonce_odr dso_local i32 @f(i32 %a) comdat {\n  ret i32 %a\n}\n\
+         define dso_local i32 @h(i32 %a) {\n  ret i32 %a\n}\n",
+    );
+    let at = |name: &str| object.symbols.iter().find(|one| one.name == name).and_then(|one| match one.definition {
+        llrm_object::Definition::Defined { section, .. } => Some(section),
+        llrm_object::Definition::Undefined => None,
+    });
+    let selection = |section: usize| object.comdats.iter().find(|one| one.section == section).map(|one| one.selection);
+    assert_eq!(selection(at("f").unwrap()), Some(llrm_object::Selection::Any), "{:?}", object.comdats);
+    assert_eq!(selection(at("v").unwrap()), Some(llrm_object::Selection::Largest), "{:?}", object.comdats);
+    // controls: a function with no comdat stays in the plain code section, apart from f's
+    assert_eq!(selection(at("h").unwrap()), None);
+    assert_ne!(at("h"), at("f"));
+    let bytes = llrm_x86::mc::coff64::write(&object).unwrap();
+    // IMAGE_SCN_LNK_COMDAT in a section header: 2 headers carry it
+    let sections = u16::from_le_bytes([bytes[2], bytes[3]]) as usize;
+    let flagged = (0..sections)
+        .filter(|n| u32::from_le_bytes(bytes[20 + 40 * n + 36..20 + 40 * n + 40].try_into().unwrap()) & 0x1000 != 0)
+        .count();
+    assert_eq!(flagged, 2);
+}
+
 /// The `.xdata` of an x86-64 module written as COFF, found by `.pdata`'s
 /// layout: the frames the compiler declared (`.seh_*`) against the bytes read
 /// back from the same code agree.

@@ -203,6 +203,7 @@ pub fn assembled_by(
     let mut sectioned: IndexMap<String, Vec<masm::Datum>> = IndexMap::default();
     let mut huge_objects: Vec<(String, Vec<masm::Datum>)> = Vec::new();
     let mut data_publics = Vec::new();
+    let mut comdats: std::collections::BTreeMap<String, masm::Comdat> = Default::default();
     let pool = Rc::new(RefCell::new(Pool::new(module.globals.len() as i64)));
     let classes = Rc::new(RegisterClasses::of(arch));
     let (facts, order) = calleefacts::CalleeFacts::of(module);
@@ -282,7 +283,19 @@ pub fn assembled_by(
                 } else if matches!(global.address_space, FAR_SPACE | HUGE_SPACE) {
                     far_data.extend(datums);
                 } else {
+                    let start = data.len();
                     data.extend(datums);
+                    if let Some(comdat) = comdat_of(module, name) {
+                        let symbol = names[&(globals::space(module, id), at as i64)].clone();
+                        comdats.insert(
+                            symbol,
+                            masm::Comdat {
+                                extent: Some(("_DATA".to_owned(), start..data.len())),
+                                constant: variable.constant,
+                                ..comdat
+                            },
+                        );
+                    }
                 }
                 if global.linkage == llrm_mir::Linkage::External {
                     data_publics.push(names[&(globals::space(module, id), at as i64)].clone());
@@ -567,6 +580,7 @@ pub fn assembled_by(
         .iter()
         .filter_map(|one| module.sections.get(&one.name).map(|section| (one.name.clone(), section.clone())))
         .collect();
+    comdats.extend(procedures.iter().filter_map(|one| Some((one.name.clone(), comdat_of(module, &one.name)?))));
     let has_far = !far_data.is_empty();
     let far_segment = format!("{}_FARDATA", code.strip_suffix("_TEXT").unwrap_or(code));
     let mut huge_segments: Vec<(String, Vec<masm::Datum>)> = Vec::new();
@@ -597,6 +611,7 @@ pub fn assembled_by(
         debug,
         far_bss: BTreeSet::new(),
         code_segments,
+        comdats,
         stack: 0,
         object: arch.object(),
         padding: masm::Padding { function: arch.pref_function_alignment(), nop: arch.max_nop_bytes() },
@@ -1492,4 +1507,21 @@ mod saved_order_tests {
         assert_eq!(in_list_order(&order, vec![pair(4), pair(1)], pair(2)), [pair(1), pair(2), pair(4)]);
         assert_eq!(in_list_order(&order, vec![pair(3)], pair(9)), [pair(3), pair(9)]);
     }
+}
+
+/// The COMDAT the function or global `name` is in, if the module states one.
+fn comdat_of(
+    module: &llrm_mir::module::Module,
+    name: &str,
+) -> Option<masm::Comdat> {
+    let comdat = module.comdat_of.get(name)?;
+    let selection = match module.comdats.get(comdat)?.as_str() {
+        "any" => llrm_object::Selection::Any,
+        "exactmatch" => llrm_object::Selection::ExactMatch,
+        "largest" => llrm_object::Selection::Largest,
+        "nodeduplicate" => llrm_object::Selection::NoDuplicates,
+        "samesize" => llrm_object::Selection::SameSize,
+        _ => return None,
+    };
+    Some(masm::Comdat { name: comdat.clone(), selection, extent: None, constant: false })
 }

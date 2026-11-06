@@ -457,6 +457,7 @@ mod tests {
             private: Default::default(),
             far_bss: Default::default(),
             code_segments: Default::default(),
+            comdats: Default::default(),
             padding: Default::default(),
             object: llrm_target::Target::object(&llrm_x86_m16::M16),
             requests: Default::default(),

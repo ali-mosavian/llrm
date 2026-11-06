@@ -8,6 +8,7 @@ use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Target, Uns
 const SCN_CNT_CODE: u32 = 0x20;
 const SCN_CNT_INITIALIZED_DATA: u32 = 0x40;
 const SCN_CNT_UNINITIALIZED_DATA: u32 = 0x80;
+const SCN_LNK_COMDAT: u32 = 0x0000_1000;
 const SCN_LNK_NRELOC_OVFL: u32 = 0x0100_0000;
 const SCN_MEM_DISCARDABLE: u32 = 0x0200_0000;
 const SCN_MEM_EXECUTE: u32 = 0x2000_0000;
@@ -137,6 +138,7 @@ fn symbol(
 fn spelling(
     section: &Section,
     taken: bool,
+    comdat: bool,
 ) -> Result<(String, u32), Unsupported> {
     if !section.near {
         return Err(unsupported(format!(
@@ -165,17 +167,32 @@ fn spelling(
         )));
     }
     let align = (section.align.trailing_zeros() + 1) << 20;
-    let name = if taken && !matches!(section.role, Role::Debug(_)) && !unwind_data(section) {
+    // A COMDAT section keeps the plain name: the linker picks among them by
+    // their leader symbol, not by name.
+    let name = if taken && !comdat && !matches!(section.role, Role::Debug(_)) && !unwind_data(section) {
         format!("{base}${}", section.name)
     } else {
         base.to_owned()
     };
-    Ok((name, flags | align))
+    Ok((name, flags | align | if comdat { SCN_LNK_COMDAT } else { 0 }))
 }
 
 /// x64 unwind data (`.pdata`, `.xdata`), which the linker finds by name.
 fn unwind_data(section: &Section) -> bool {
     section.role == Role::ROData && matches!(section.name.as_str(), ".pdata" | ".xdata")
+}
+
+/// `JamCRC` as the COFF writer applies it to a COMDAT section: initial value
+/// 0 (not the specified all ones), no final inversion.
+pub fn jam_crc(bytes: &[u8]) -> u32 {
+    let mut crc = 0u32;
+    for &byte in bytes {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ if crc & 1 == 1 { 0xEDB8_8320 } else { 0 };
+        }
+    }
+    crc
 }
 
 fn pad(
@@ -208,7 +225,8 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
     let mut spelled: Vec<(String, u32)> = Vec::new();
     for (index, section) in object.sections.iter().enumerate() {
         let taken = object.sections[..index].iter().any(|other| other.role == section.role);
-        spelled.push(spelling(section, taken)?);
+        let comdat = object.comdats.iter().any(|one| one.section == index);
+        spelled.push(spelling(section, taken, comdat)?);
     }
 
     // Symbols: `.file`, one symbol per section, then the object's, each local
@@ -269,9 +287,13 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
         put32(&mut table, section.image.len() as u32);
         put16(&mut table, reloc_counts[index].min(0xFFFF) as u16);
         put16(&mut table, 0);
-        put32(&mut table, 0);
-        put16(&mut table, 0);
-        table.extend([0u8; 4]);
+        // A COMDAT section's checksum, its number and the selection; the rest
+        // are zeros.
+        let comdat = object.comdats.iter().find(|one| one.section == index);
+        put32(&mut table, comdat.map_or(0, |_| jam_crc(&images[index])));
+        // As the pin's writer: the section's own number, or the associated one's.
+        put16(&mut table, comdat.and_then(|one| one.associated).unwrap_or(index) as u16 + 1);
+        table.extend([comdat.map_or(0, |one| one.selection as u8), 0, 0, 0]);
     }
     for one in &object.symbols {
         let name = symbol_name(&one.name, &mut strings);
@@ -338,4 +360,19 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
     out.extend(headers);
     out.extend(body);
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::jam_crc;
+
+    /// The checksums the pin writes for two COMDAT sections (llc d1106deb71,
+    /// `x86_64-pc-windows-msvc`): `mov eax, ecx; ret` and `mov eax, [rip+0]; ret`.
+    /// A CRC started from all ones, as JamCRC is specified, gave 0xef14c8ae
+    /// for the first and the linker saw two definitions as different.
+    #[test]
+    fn a_comdat_checksum_starts_from_zero_as_the_pin_writes_it() {
+        assert_eq!(jam_crc(&[0x89, 0xC8, 0xC3]), 0xEFAA_EE43);
+        assert_eq!(jam_crc(&[0x8B, 0x05, 0, 0, 0, 0, 0xC3]), 0xD8B1_BCB1);
+    }
 }

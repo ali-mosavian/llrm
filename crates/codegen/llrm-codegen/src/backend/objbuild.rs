@@ -116,12 +116,66 @@ fn data_role(
         "_DATA" => Role::Data,
         "_BSS" | "BSSB" => Role::Bss,
         "CONST" => Role::ROData,
+        _ if name.starts_with(".rdata$") => Role::ROData,
         // The pin's mergeable constant sections (`.rodata.cst4`...).
         _ if name.starts_with(".rodata.cst") => Role::ROData,
         crate::backend::globals::INIT_SEGMENT => Role::InitFunctions,
         _ if far_bss => Role::Bss,
         _ => Role::Data,
     }
+}
+
+/// The name of the segment a COMDAT function or global is written in.
+fn comdat_segment(comdat: &masm::Comdat) -> String {
+    let base = match (&comdat.extent, comdat.constant) {
+        (None, _) => ".text",
+        (Some(_), true) => ".rdata",
+        (Some(_), false) => ".data",
+    };
+    format!("{base}${}", comdat.name)
+}
+
+/// COFF: each COMDAT function in a code segment of its own, and each COMDAT
+/// global's items out of their segment into one of its own, so the linker
+/// can keep one definition of each.
+fn comdat_sections(module: &mut masm::Module) {
+    let comdats: Vec<(String, masm::Comdat)> = module.comdats.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let mut cuts: Vec<(String, std::ops::Range<usize>, String)> = Vec::new();
+    for (symbol, comdat) in &comdats {
+        match &comdat.extent {
+            None => {
+                module.code_segments.entry(symbol.clone()).or_insert_with(|| comdat_segment(comdat));
+            }
+            Some((segment, range)) => cuts.push((segment.clone(), range.clone(), comdat_segment(comdat))),
+        }
+    }
+    // Later ranges first, so the earlier ones stay where they were recorded.
+    cuts.sort_by(|a, b| b.1.start.cmp(&a.1.start));
+    for (segment, range, into) in cuts {
+        let Some(at) = module.data.iter().position(|(name, _)| *name == segment) else { continue };
+        let items: Vec<masm::Datum> = module.data[at].1.drain(range).collect();
+        match module.data.iter_mut().find(|(name, _)| *name == into) {
+            Some((_, existing)) => existing.splice(0..0, items).for_each(drop),
+            None => module.data.push((into, items)),
+        }
+    }
+}
+
+/// The sections `comdat_sections` made, as the object's COMDAT records.
+fn comdat_records(
+    module: &masm::Module,
+    object: &Object,
+) -> Vec<llrm_object::Comdat> {
+    let by_name: IndexMap<String, llrm_object::Selection> =
+        module.comdats.values().map(|one| (comdat_segment(one), one.selection)).collect();
+    object
+        .sections
+        .iter()
+        .enumerate()
+        .filter_map(|(section, one)| {
+            Some(llrm_object::Comdat { section, selection: *by_name.get(&one.name)?, associated: None })
+        })
+        .collect()
 }
 
 /// An instruction or reference this writer has no bytes for.
@@ -710,6 +764,9 @@ fn built_inner(
         stack_probed(adjusted.to_mut(), format);
         exits_unstated(adjusted.to_mut(), format);
     }
+    if format == Format::Coff && !module.comdats.is_empty() {
+        comdat_sections(adjusted.to_mut());
+    }
     let module = &*adjusted;
     // A procedure the program put in a segment of its own naming (`code_seg`)
     // is in that one, the rest in `code`.
@@ -789,6 +846,9 @@ fn built_inner(
         }
     }
     let mut object = object_of(module, source, segments, &symbols, &sizes, &externs)?;
+    if format == Format::Coff {
+        object.comdats = comdat_records(module, &object);
+    }
     // A segment per procedure of one name is one segment to Microsoft's LINK,
     // which keeps the last one's length and loses the rest; a COMDAT per
     // procedure is what MSC's /Gy and Watcom's -zm write, which every linker
@@ -1490,6 +1550,7 @@ pub fn object_of(
             symbols: table,
             omf_groups,
             omf_comdat: Vec::new(),
+            comdats: Vec::new(),
             frames,
         },
     })
@@ -1874,6 +1935,7 @@ mod tests {
             private: BTreeSet::new(),
             far_bss: BTreeSet::new(),
             code_segments: Default::default(),
+            comdats: Default::default(),
             padding: Default::default(),
             object: llrm_target::Target::object(&llrm_x86_m16::M16),
             requests: BTreeSet::new(),
@@ -1912,6 +1974,7 @@ mod tests {
                 private: BTreeSet::new(),
                 far_bss: BTreeSet::new(),
                 code_segments: Default::default(),
+                comdats: Default::default(),
                 padding: Default::default(),
                 object: llrm_target::Target::object(&llrm_x86_m16::M16),
                 requests: BTreeSet::new(),
@@ -1959,6 +2022,7 @@ mod tests {
             private: BTreeSet::new(),
             far_bss: BTreeSet::new(),
             code_segments: Default::default(),
+            comdats: Default::default(),
             padding: Default::default(),
             object: llrm_target::Target::object(&llrm_x86_m16::M16),
             requests: BTreeSet::new(),
@@ -1996,6 +2060,7 @@ mod tests {
                 private: BTreeSet::new(),
                 far_bss: BTreeSet::new(),
                 code_segments: Default::default(),
+                comdats: Default::default(),
                 padding: Default::default(),
                 object: llrm_target::Target::object(&llrm_x86_m16::M16),
                 requests: BTreeSet::new(),
@@ -2109,6 +2174,7 @@ mod tests {
             private: BTreeSet::from(["FAR_SEG".to_owned()]),
             far_bss: BTreeSet::new(),
             code_segments: Default::default(),
+            comdats: Default::default(),
             padding: Default::default(),
             object: llrm_target::Target::object(&llrm_x86_m16::M16),
             requests: BTreeSet::new(),
@@ -2220,6 +2286,7 @@ mod tests {
                 private: BTreeSet::new(),
                 far_bss: BTreeSet::new(),
                 code_segments: Default::default(),
+                comdats: Default::default(),
                 padding: masm::Padding { function: 4, nop: 1 },
                 object: llrm_target::Target::object(&llrm_x86_m32::M32),
                 requests: BTreeSet::new(),
