@@ -35,8 +35,12 @@
 //! BASIC program at -Os and -O2, counters in a throwaway build):
 //! `getOrCreatePreheader` splitting an edge: the 6 to 32 loops per language
 //! and level without a preheader hold 0 hoistable instructions;
-//! `ExtractHoistableLoad`: 0 instructions, none of the 158 loop instructions
-//! flagged invariant (`isDereferenceableInvariantLoad`) is a folded load;
+//! `ExtractHoistableLoad`'s pricing held for the C, nib and BASIC corpus (no
+//! scalar SSE) and is wrong for SSE code: nbody_single -O3 m64 left
+//! `mulss xmm, [rip+K]` in a loop where the pin has the constant in a register
+//! before it. It is ported (`Policy::unfold`): scalar SSE arithmetic that reads
+//! a constant-pool cell is split, and the load moves if it can.
+//!
 //! `MayCSE`: only reached in the pin's high-pressure branch for an instruction
 //! outside a block that runs every trip, where the `constant` path above
 //! already hoists what the allocator can make again.
