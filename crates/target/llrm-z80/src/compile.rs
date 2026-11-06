@@ -488,10 +488,16 @@ fn allocate_once(
         best = (frameless, assignment.clone(), Vec::new(), reads.clone());
         best_price = priced_in_loops(&best, level);
     }
-    for peek in [false, true] {
+    // Z80-SLOT-CONFLICT is one more candidate, kept only where it prices
+    // lower than the others
+    let mut choices = vec![(false, false), (true, false)];
+    if SLOT_BY_CONFLICTS.with(std::cell::Cell::get) {
+        choices.push((true, true));
+    }
+    for (peek, by_conflicts) in choices {
         let mut candidate = function.clone();
-        let report = stack_slot_report(&mut candidate, &assignment, peek);
-        if peek {
+        let report = stack_slot_report_by(&mut candidate, &assignment, peek, by_conflicts);
+        if peek && !by_conflicts {
             if std::env::var_os("LLRM_Z80_STACK_WHY").is_some() {
                 for (slot, (stores, loads)) in &report.accesses {
                     let verdict = match report.refused.iter().find(|(one, _)| one == slot) {
@@ -516,7 +522,9 @@ fn allocate_once(
         let stacked = (candidate, assignment.clone(), slots, reads.clone());
         let now = priced_in_loops(&stacked, level);
         if std::env::var_os("LLRM_Z80_STACK_PRICE").is_some() {
-            eprintln!("stack-price {name} {level:?} peek {peek} best {best_price:?} stacked {now:?}");
+            eprintln!(
+                "stack-price {name} {level:?} peek {peek} conflicts {by_conflicts} best {best_price:?} stacked {now:?}"
+            );
         }
         if keeps_stacked(level, best_price, now) {
             best = stacked;
@@ -893,7 +901,7 @@ pub fn stack_slot_report(
     assignment: &Assignment,
     peek: bool,
 ) -> StackReport {
-    stack_slot_report_by(function, assignment, peek, SLOT_BY_CONFLICTS.with(std::cell::Cell::get))
+    stack_slot_report_by(function, assignment, peek, false)
 }
 
 /// [`stack_slot_report`] with the choice of the slot sent back to the frame:
