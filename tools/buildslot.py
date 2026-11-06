@@ -47,7 +47,7 @@ def landing_cap() -> list[str]:
 
 def slotted(command):
     """`command` (an argv list or a shell string) with every cargo invocation run by buildslot, unless the landing runs it (capped, not slotted)."""
-    if os.environ.get("BUILDSLOT_BYPASS") == "1":
+    if os.environ.get(LANDING) != "1" and os.environ.get("BUILDSLOT_BYPASS") == "1":  # the runner exports the bypass; the landing's cap still applies
         return command
     if os.environ.get(LANDING) == "1":
         cap = landing_cap()
