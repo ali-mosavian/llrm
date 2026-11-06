@@ -99,7 +99,7 @@ fn the_overflow_add_and_add_with_carry_are_add_and_adc() {
                 min_size: false,
                 three_address_adds: false,
                 i16_mul_chains: false,
-                sext_load: false, zext_free: false,
+                sext_load: false, zext_free: false, rebuild_brcond: false,
                 profile: None,
             },
         )

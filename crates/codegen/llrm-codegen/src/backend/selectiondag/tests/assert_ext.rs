@@ -39,7 +39,7 @@ fn a_mask_of_what_an_assert_zext_holds_is_dropped() {
         min_size: false,
         three_address_adds: false,
         i16_mul_chains: false,
-        sext_load: false, zext_free: false,
+        sext_load: false, zext_free: false, rebuild_brcond: false,
         profile: None,
     };
     DagCombiner::new(&mut dag, &mut hooks, CombineLevel::BeforeLegalizeTypes).run();

@@ -50,7 +50,7 @@ fn legalized_by(
             min_size: false,
             three_address_adds: false,
             i16_mul_chains: false,
-            sext_load: false, zext_free: false,
+            sext_load: false, zext_free: false, rebuild_brcond: false,
             profile: None,
         },
     )
@@ -142,7 +142,7 @@ fn abs_without_cmov_is_xor_with_the_sign_then_subtract_it() {
             min_size: false,
             three_address_adds: false,
             i16_mul_chains: false,
-            sext_load: false, zext_free: false,
+            sext_load: false, zext_free: false, rebuild_brcond: false,
             profile: None,
         },
     )

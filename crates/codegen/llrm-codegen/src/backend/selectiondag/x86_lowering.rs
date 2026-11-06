@@ -155,6 +155,8 @@ pub struct X86Lowering<'a> {
     pub sext_load: bool,
     /// `X86TargetLowering::isZExtFree(i32, i64)`: `Subtarget.is64Bit()`.
     pub zext_free: bool,
+    /// `visitBRCOND`'s `rebuildSetCC` runs (`rebuild_brcond_condition`): m32 and m64, not m16.
+    pub rebuild_brcond: bool,
     /// What prices a constant multiply that `combineMul` leaves an `imul`
     /// (DEVIATE SD446); none keeps the pin's `imul`.
     pub profile: Option<MulPricing<'a>>,
@@ -230,10 +232,10 @@ impl CombineHooks for X86Lowering<'_> {
 
     /// `visitBRCOND`'s `rebuildSetCC`: `!bad` on an `i1` global is `cmp byte [bad], 1; jne`,
     /// not `mov al; not al; test al, 1; jne` (jpeg_fixed `-Os` m64, 2 sites, 8 B). The
-    /// m16 judging cost a byte, so only the 64-bit lowering asks.
-    /// DEVIATE: off at m16 and m32. Exit 2026-12-01.
+    /// m16 judging cost a byte; m32 was never judged apart from it.
+    /// DEVIATE: off at m16. Exit 2026-12-01.
     fn rebuild_brcond_condition(&self) -> bool {
-        self.zext_free
+        self.rebuild_brcond
     }
 
     /// `visitAND`'s `(and (extload i1), 1)` is a `zextload`, so the branch above

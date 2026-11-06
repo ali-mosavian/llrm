@@ -1195,6 +1195,7 @@ fn selected_in(
                 i16_mul_chains: !super::x86_lowering::promotes_i16(&tli),
                 sext_load: true,
                 zext_free: m64,
+                rebuild_brcond: m64 || !m16,
                 profile: if mul_by_clocks {
                     Some(super::x86_lowering::MulPricing {
                         cpu,

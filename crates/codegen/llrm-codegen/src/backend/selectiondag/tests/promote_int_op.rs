@@ -65,7 +65,7 @@ fn promoted(
         min_size: false,
         three_address_adds: false,
         i16_mul_chains: false,
-        sext_load: false, zext_free: false,
+        sext_load: false, zext_free: false, rebuild_brcond: false,
         profile: None,
     };
     DagCombiner::new(&mut dag, &mut hooks, CombineLevel::AfterLegalizeDag).with_tli(&tli).run();
@@ -122,7 +122,7 @@ fn only_words_and_byte_multiplies_are_promoted_and_not_at_m16() {
         min_size: false,
         three_address_adds: false,
         i16_mul_chains: false,
-        sext_load: false, zext_free: false,
+        sext_load: false, zext_free: false, rebuild_brcond: false,
         profile: None,
     };
     DagCombiner::new(&mut dag, &mut hooks, CombineLevel::AfterLegalizeDag).with_tli(&tli).run();
