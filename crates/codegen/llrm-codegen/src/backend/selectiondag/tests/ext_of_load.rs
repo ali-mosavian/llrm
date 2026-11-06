@@ -49,9 +49,10 @@ fn an_extension_of_a_load_is_an_extending_load() {
     }
 }
 
-/// A volatile load keeps its width: the extension stays a node.
+/// With no target table nothing says the extending load is legal: a volatile
+/// load keeps its width and the extension stays a node.
 #[test]
-fn a_volatile_load_is_not_extended() {
+fn a_volatile_load_is_not_extended_without_a_target_table() {
     let (dag, root) = folded(ISD::ZeroExtend, true);
     assert_eq!(dag.opcode(root), ISD::ZeroExtend);
 }
@@ -145,4 +146,25 @@ fn the_extending_load_keeps_the_address_space() {
     let extended = dag.operand(root, 0);
     let NodeData::Mem(info) = dag.node(extended).data else { panic!("a load") };
     assert_eq!(info.space, 257);
+}
+
+/// `load volatile i8` + `zext`: the pin's `tryToFoldExtOfLoad` makes the
+/// extending load (the memory operand stays volatile) where the target has it
+/// legal; ours left the pair at every target, an `and.l #255` after each
+/// volatile byte read at m68k.
+#[test]
+fn a_volatile_load_is_extended_where_the_target_has_the_extending_load() {
+    use super::super::dag_combiner::DagCombiner;
+    let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+    for (op, ext) in [(ISD::ZeroExtend, LoadExt::ZExtLoad), (ISD::SignExtend, LoadExt::SExtLoad)] {
+        let mut dag = dag();
+        let byte = load(&mut dag, true);
+        let wide = dag.get_node(op, EVT::I32, &[byte]);
+        dag.set_root(wide);
+        DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
+        let root = dag.get_root();
+        assert_eq!(ext_of(&dag, root), (EVT::I32, EVT::I8, Some(ext)), "{op:?}");
+        let NodeData::Mem(info) = dag.node(root).data else { panic!("a load") };
+        assert!(info.volatile, "{op:?}: the extending load stays volatile");
+    }
 }
