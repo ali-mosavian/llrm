@@ -785,8 +785,8 @@ pub fn three_address(
 /// ecx, [eax - 5]`. Off at `-Os` ([`ThreeAddress::Dwords`]): the result takes
 /// one of the four byte-capable registers, and 11 m32 -Os cells grew from the
 /// spill that cost (greedy's region split of the shift count, not the lea).
-/// Exit 2026-11-20, or when greedy lands that split fix: re-run the 11 cells
-/// with it on; remove when the pin does the same.
+/// Owner x87. Exit 2026-11-20, or when greedy lands that split fix: re-run the
+/// 11 cells with it on; remove when the pin does the same.
 fn narrow_lea(
     mode: ThreeAddress,
     width: u32,
