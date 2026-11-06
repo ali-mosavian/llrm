@@ -32,6 +32,8 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 import llrmbin  # noqa: E402
+sys.path.insert(0, str(ROOT / "tools" / "dosbatch"))
+import cpulimit  # noqa: E402
 MAX_COMMITS = 50
 MAX_AGE_DAYS = 14
 SOURCE_PATHS = ("crates", "src", "Cargo.toml", "Cargo.lock")
@@ -104,7 +106,7 @@ def train(binary: Path, jobs: list[tuple[str, list[str], Path, bool]], driver: P
         return "" if done.returncode == 0 else f"{name} {' '.join(arguments)}: " + " ".join((done.stderr or done.stdout).split())[:200]
 
     try:
-        with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+        with ThreadPoolExecutor(max_workers=cpulimit.pool_workers()) as pool:
             done = list(pool.map(one, enumerate(jobs)))
     finally:
         shutil.rmtree(work, ignore_errors=True)

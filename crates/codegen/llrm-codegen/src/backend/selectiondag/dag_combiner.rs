@@ -3080,7 +3080,12 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let tli = self.tli?;
         let int_info = |mem_vt: EVT, align: u32, base| MemInfo { mem_vt, align, base, ..info };
         match self.dag.value_type(value) {
-            EVT::Simple(MVT::F32) => {
+            // `(isTypeLegal(i32) && !LegalOperations && isSimple) ||
+            // legalOrCustom(STORE, i32)` (DAGCombiner.cpp#L24427).
+            EVT::Simple(MVT::F32)
+                if (tli.types.is_type_legal(EVT::I32) && !self.legal_operations() && !info.volatile)
+                    || tli.is_operation_legal_or_custom(ISD::Store, EVT::I32) =>
+            {
                 let constant = self.dag.get_constant(bits & 0xFFFF_FFFF, EVT::I32);
                 Some(self.dag.get_store(chain, constant, ptr, int_info(EVT::I32, info.align, info.base)))
             }
@@ -3094,11 +3099,13 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 let constant = self.dag.get_constant(bits & 0xFFFF_FFFF_FFFF_FFFF, EVT::I64);
                 Some(self.dag.get_store(chain, constant, ptr, int_info(EVT::I64, info.align, info.base)))
             }
-            // `ST->isSimple()`: a volatile store is not split, as the pin
-            // leaves it. (The pin also asks `isOperationLegalOrCustom(STORE,
-            // i32)`; not asked here, which would change targets whose i32
-            // store is illegal.)
-            EVT::Simple(MVT::F64) if !info.volatile && !tli.is_fp_imm_legal(MVT::F64, bits) => {
+            // `ST->isSimple() && legalOrCustom(STORE, i32) && !isFPImmLegal`
+            // (DAGCombiner.cpp#L24446): a volatile store is not split.
+            EVT::Simple(MVT::F64)
+                if !info.volatile
+                    && tli.is_operation_legal_or_custom(ISD::Store, EVT::I32)
+                    && !tli.is_fp_imm_legal(MVT::F64, bits) =>
+            {
                 let lo = self.dag.get_constant(bits & 0xFFFF_FFFF, EVT::I32);
                 let hi = self.dag.get_constant((bits >> 32) & 0xFFFF_FFFF, EVT::I32);
                 // the high word comes first on a big-endian target

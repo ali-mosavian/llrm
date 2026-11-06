@@ -228,6 +228,7 @@ pub fn pin_vt(vt: EVT) -> Vt {
         EVT::Simple(MVT::F32) => mvt::f32,
         EVT::Simple(MVT::F64) => mvt::f64,
         EVT::Simple(MVT::F80) => mvt::f80,
+        EVT::Simple(MVT::F128) => mvt::f128,
         // The opaque 16 bytes of an SSE move (`LLRM_ZERO128`, `LLRM_COPY128`);
         // no pattern asks for it (SD540).
         EVT::Simple(MVT::I128) => mvt::v4i32,
@@ -248,6 +249,7 @@ fn our_vt(vt: Vt) -> EVT {
         (mvt::f32, EVT::Simple(MVT::F32)),
         (mvt::f64, EVT::Simple(MVT::F64)),
         (mvt::f80, EVT::Simple(MVT::F80)),
+        (mvt::f128, EVT::Simple(MVT::F128)),
         (mvt::v4i32, EVT::Simple(MVT::I128)),
         (mvt::Other, EVT::OTHER),
         (mvt::Glue, EVT::GLUE),
@@ -262,15 +264,19 @@ fn our_vt(vt: Vt) -> EVT {
 /// raw id.
 pub const EFLAGS_ID: llrm_lir::registers::RegId = llrm_lir::registers::RegId::from_raw(255);
 
-/// The flags every x86 call clobbers, the one register a `RegisterMask` always names. A call lowered with a convention adds that
-/// convention's clobbered registers (`SelectionDAGBuilder::clobbered_by`), as the pin's `RegisterMask` lists its caller-saved set.
-/// A call to a runtime routine, whose contract names what it disturbs, keeps the flags alone.
+/// The flags every x86 call clobbers, the one register a `RegisterMask` always
+/// names. A call lowered with a convention adds that convention's clobbered
+/// registers (`SelectionDAGBuilder::clobbered_by`), as the pin's `RegisterMask`
+/// lists its caller-saved set. A call to a runtime routine, whose contract
+/// names what it disturbs, keeps the flags alone.
 pub fn call_clobbered_flags() -> Vec<u16> {
     pin_register(EFLAGS_ID).into_iter().collect()
 }
 
-/// `X86TargetLowering::LowerCall`'s `RegisterMask`: what the call's convention does not preserve, in the pin's numbers (the flags
-/// are always in it). A register the pin has no number for cannot be a live physical definition, so it is left out.
+/// `X86TargetLowering::LowerCall`'s `RegisterMask`: what the call's convention
+/// does not preserve, in the pin's numbers (the flags are always in it). A
+/// register the pin has no number for cannot be a live physical definition, so
+/// it is left out.
 pub fn clobbered_by(
     arch: &dyn llrm_target::Target,
     found: Option<&llrm_target::calling::Convention>,
@@ -1049,6 +1055,11 @@ impl Dag for DagisAdapter<'_> {
         // carry the flag): the LIR instruction keeps it.
         if mems.iter().any(|mem| self.dag.volatile_accesses.contains(mem)) {
             self.dag.volatile_accesses.insert(node);
+        }
+        // So is one that folded only invariant loads
+        // (`isDereferenceableInvariantLoad` asks every memory operand).
+        if !mems.is_empty() && mems.iter().all(|mem| self.dag.invariant_loads.contains(mem)) {
+            self.dag.invariant_loads.insert(node);
         }
         self.mem_refs.insert(node, mems.to_vec());
     }
