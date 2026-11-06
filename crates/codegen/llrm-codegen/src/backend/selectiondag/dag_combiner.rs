@@ -180,6 +180,16 @@ pub trait CombineHooks {
         true
     }
 
+    /// `TargetLowering::isLegalAddImmediate`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/TargetLowering.h>):
+    /// whether `add x, imm` takes the constant. The pin's default is true.
+    fn is_legal_add_immediate(
+        &self,
+        _imm: i64,
+    ) -> bool {
+        true
+    }
+
     /// `TargetLowering::isMulAddWithConstProfitable` for a single-use add, on
     /// the constants `c1` and `c2` of the type `vt`.
     fn is_mul_add_with_const_profitable(
@@ -2079,6 +2089,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     ) -> Option<SDValue> {
         let ones = super::fold::mask(vt.size_in_bits());
         let cb = self.dag.constant(n1)?;
+        // `TLI.isLegalAddImmediate((CA * CM + CB).getSExtValue())`.
+        let bits = vt.size_in_bits();
+        let legal = |imm: u128| self.hooks.is_legal_add_immediate((((imm << (128 - bits)) as i128) >> (128 - bits)) as i64);
         // `m_OneUse(m_Mul(m_Add(m_Value(A), m_ConstInt(CA)), m_ConstInt(CM)))`.
         let product = |this: &Self, v: SDValue| -> Option<(SDValue, u128, u128)> {
             if this.dag.opcode(v) != ISD::Mul || !this.dag.has_one_use(v.node) {
@@ -2093,6 +2106,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         };
         if let Some((a, ca, cm)) = product(self, n0) {
             let imm = ca.wrapping_mul(cm).wrapping_add(cb) & ones;
+            if !legal(imm) {
+                return None;
+            }
             let (cm, imm) = (self.dag.get_constant(cm, vt), self.dag.get_constant(imm, vt));
             let mul = self.dag.get_node(ISD::Mul, vt, &[a, cm]);
             return Some(self.dag.get_node(ISD::Add, vt, &[mul, imm]));
@@ -2102,6 +2118,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             for (mul, b) in [(x, y), (y, x)] {
                 if let Some((a, ca, cm)) = product(self, mul) {
                     let imm = ca.wrapping_mul(cm).wrapping_add(cb) & ones;
+                    if !legal(imm) {
+                        return None;
+                    }
                     let (cm, imm) = (self.dag.get_constant(cm, vt), self.dag.get_constant(imm, vt));
                     let product = self.dag.get_node(ISD::Mul, vt, &[a, cm]);
                     let sum = self.dag.get_node(ISD::Add, vt, &[product, b]);
@@ -2160,8 +2179,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             // CM), CM*CA + CB)`, also through an intermediate add; "this can
             // help if the inner add has multiple uses"
             // ([pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L3179)).
-            // DEVIATE: the wrap flags of the result are not kept, and
-            // `isLegalAddImmediate` is the pin's default (true). Exit
+            // DEVIATE: the wrap flags of the result are not kept. Exit
             // 2026-11-12.
             if vt.size_in_bits() <= 64 {
                 if let Some(found) = self.fold_add_of_mul_of_add(n0, n1, vt) {

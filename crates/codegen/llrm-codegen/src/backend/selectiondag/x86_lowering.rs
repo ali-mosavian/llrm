@@ -197,6 +197,15 @@ impl CombineHooks for X86Lowering<'_> {
         true
     }
 
+    /// `X86TargetLowering::isLegalAddImmediate`: a signed 32-bit immediate
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L36734>).
+    fn is_legal_add_immediate(
+        &self,
+        imm: i64,
+    ) -> bool {
+        i32::try_from(imm).is_ok()
+    }
+
     /// `visitMUL`'s `(mul (add x, c1), c2)` is `(add (mul x, c2), c1*c2)` when the other
     /// multiply of `x` by `c2` is in the DAG: the pin's x86 runs it
     /// (`isMulAddWithConstProfitable` has no X86 override). Judged on the whole
@@ -2253,7 +2262,9 @@ fn combine_mul(
     profile: Option<MulPricing<'_>>,
 ) -> Option<SDValue> {
     let vt = dag.value_type(node);
-    if vt != EVT::I32 && !(vt == EVT::I16 && i16_chains) {
+    // The pin runs it on `i32` and `i64` (an `i64` node exists only where the
+    // type is legal).
+    if vt != EVT::I32 && vt != EVT::I64 && !(vt == EVT::I16 && i16_chains) {
         return None;
     }
     let (x, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
@@ -2269,7 +2280,11 @@ fn combine_mul(
     if is_pow2(bits) || min_size || level == CombineLevel::BeforeLegalizeTypes {
         return None;
     }
-    let signed = if vt == EVT::I16 { i128::from(bits as u16 as i16) } else { i128::from(bits as u32 as i32) };
+    let signed = match vt {
+        EVT::I16 => i128::from(bits as u16 as i16),
+        EVT::I64 => i128::from(bits as u64 as i64),
+        _ => i128::from(bits as u32 as i32),
+    };
     let abs = signed.unsigned_abs();
     let negate = |dag: &mut SelectionDAG, value: SDValue| if signed < 0 { dag.get_negative(value, vt) } else { value };
     let shift = |dag: &mut SelectionDAG, value: SDValue, by: u128| {
@@ -2293,6 +2308,7 @@ fn combine_mul(
         && [3u128, 5, 9].iter().any(|base| abs % base == 0 && matches!(abs / base, 2 | 4 | 8))
         && dag.has_one_use(node.node)
         && dag.users(node).next().is_some_and(|user| dag.opcode(SDValue { node: user, res: 0 }) == ISD::Add);
+    let profile = profile.filter(|_| vt != EVT::I64);
     if let Some(pricing) = profile.filter(|pricing| pricing.price_pin && !summed) {
         return priced_chain(dag, x, signed as i64, vt, pricing);
     }
