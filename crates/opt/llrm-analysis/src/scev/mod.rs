@@ -334,9 +334,19 @@ pub fn made() -> usize {
 impl ScalarEvolution {
     pub fn new() -> Self {
         MADE.with(|made| made.set(made.get() + 1));
+        Self::with_capacity(256)
+    }
+
+    /// An empty table to stand in a slot while the real one is lent out; it is
+    /// never asked and not counted by [`made`].
+    pub fn placeholder() -> Self {
+        Self::with_capacity(0)
+    }
+
+    fn with_capacity(unique: usize) -> Self {
         let mut se = Self {
             nodes: Vec::new(),
-            unique: HashMap::with_capacity_and_hasher(256, Default::default()),
+            unique: HashMap::with_capacity_and_hasher(unique, Default::default()),
             fold_cache: HashMap::default(),
             proving_split_predicate: false,
             unsigned_ranges: HashMap::default(),

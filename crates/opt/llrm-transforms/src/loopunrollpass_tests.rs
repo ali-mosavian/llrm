@@ -614,3 +614,17 @@ fn test_the_unroll_cost_analysis_reads_the_loops_expressions_the_pass_already_ma
     let made = get(Event::ScevNodes) - before;
     assert!(made <= 29, "{made} expressions were made for one loop");
 }
+
+/// Old: every unrolled loop dropped the function's whole table of expressions
+/// (`run.scev = ScalarEvolution::new()` after each of them, and a stand-in made
+/// for each trip-count query), so the next loop's trip count and its IVs were
+/// worked out again: 3,744 `will_not_overflow` calls against the pin's 2,001 on
+/// memory_expansion. The pin keeps one `ScalarEvolution` and forgets the loop.
+#[test]
+fn test_unrolling_loops_in_sequence_keeps_one_table_of_expressions() {
+    let mut module = parsed(&sequential(8));
+    let before = llrm_analysis::scev::made();
+    assert!(unrolled(&mut module));
+    let made = llrm_analysis::scev::made() - before;
+    assert!(made <= 2, "{made} tables of expressions made for 8 loops");
+}

@@ -1558,7 +1558,7 @@ fn try_to_unroll_loop(
     // on the loop trip count, but an exit at an earlier iteration is still
     // possible.
     let header = lp.get_header();
-    let mut se = std::mem::replace(&mut run.scev, ScalarEvolution::new());
+    let mut se = std::mem::replace(&mut run.scev, ScalarEvolution::placeholder());
     let cx = llrm_analysis::scev::Cx {
         context: &*run.context,
         globals: run.globals,
@@ -2023,6 +2023,7 @@ fn simplify_ivs_and_load_cse(
         tree: &analyzed.tree,
         assumptions: &analyzed.assumptions,
     };
+    let mark = run.function.mark();
     let _ = crate::simplifyindvar::simplified_loop_ivs(
         run.context,
         run.layout,
@@ -2034,7 +2035,35 @@ fn simplify_ivs_and_load_cse(
         header,
     );
     crate::loopunrollloadcse::load_cse(run, analyzed, header);
-    run.scev = ScalarEvolution::new();
+    forget_since(run, analyzed, mark);
+}
+
+/// `forgetTopmostLoop` and the deleted values (`SCEVCallbackVH`): the
+/// expressions the edits since `mark` made stale are dropped and the rest
+/// kept, where the pin's one `ScalarEvolution` lives on through the unroll.
+/// `before` are the loops of the function as it was at `mark`; a block made
+/// since has none, a block erased or rewritten drops the counts of its loops.
+/// The expressions are dropped whole where the log from `mark` is gone.
+fn forget_since(
+    run: &mut Run,
+    before: &Analyzed,
+    mark: llrm_mir::module::Mark,
+) {
+    let Some(touched) = run.function.touched_since(mark) else {
+        run.scev = ScalarEvolution::new();
+        return;
+    };
+    let cx = llrm_analysis::scev::Cx {
+        context: &*run.context,
+        globals: run.globals,
+        metadata: run.metadata,
+        function: &*run.function,
+        layout: run.layout,
+        loops: &before.loops,
+        tree: &before.tree,
+        assumptions: &before.assumptions,
+    };
+    run.scev.forget_touched(&cx, &touched);
 }
 
 /// The blocks `UnrollLoop` hands `simplifyLoopAfterUnroll`: the loop's own that
@@ -2094,13 +2123,14 @@ pub fn unroll_loops(run: &mut Run) -> bool {
         let capacity = run.function.block_capacity();
         let body = lp.get_blocks().to_vec();
         let holds_loops = lp.get_sub_loops().next().is_some();
+        let mark = run.function.mark();
         let result = try_to_unroll_loop(run, &analyzed, lp);
         if result == Unrolled::Unmodified {
             continue;
         }
         let peeled = result == Unrolled::Peeled;
         changed = true;
-        run.scev = ScalarEvolution::new();
+        forget_since(run, &analyzed, mark);
         // The pin's loop pass manager runs LPM2's whole list on a loop,
         // children before parents ([`L270`][pop]): a parent's IndVars
         // sees its child already unrolled. Here each pass runs over
@@ -2293,7 +2323,7 @@ impl FunctionPass for LoopFullUnroll {
         if changed {
             PreservedAnalyses::none()
         } else {
-            held.put(std::mem::replace(&mut run.scev, ScalarEvolution::new()));
+            held.put(std::mem::replace(&mut run.scev, ScalarEvolution::placeholder()));
             PreservedAnalyses::all()
         }
     }
