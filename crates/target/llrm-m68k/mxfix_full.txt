@@ -1,0 +1,158 @@
+warning: unused doc comment
+   --> crates/opt/llrm-transforms/src/cgpaddr.rs:819:1
+    |
+819 | / /// Each load and store whose address is made in another block, with the address
+820 | | /// made where it is used; whether any was.
+    | |_------------------------------------------^
+    |   |
+    |   rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+    = note: `#[warn(unused_doc_comments)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `Operand`
+  --> crates/opt/llrm-transforms/src/combine_abs.rs:27:32
+   |
+27 | use llrm_mir::module::{InstId, Operand};
+   |                                ^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `llrm_mir::edit::Position`
+  --> crates/opt/llrm-transforms/src/globalmerge.rs:43:5
+   |
+43 | use llrm_mir::edit::Position;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Flags`
+  --> crates/opt/llrm-transforms/src/globalmerge.rs:45:35
+   |
+45 | use llrm_mir::opcode::{Attribute, Flags, Opcode};
+   |                                   ^^^^^
+
+warning: unused doc comment
+    --> crates/opt/llrm-transforms/src/lsr_collect.rs:1066:1
+     |
+1066 | / /// The registers the loop keeps live at once beside the
+1067 | | /// recurrences LSR rewrites: the accumulators, the loaded values and the
+1068 | | /// temporaries the body defines (an `i64` takes two on a 32-bit register file).
+1069 | | /// They compete with the formulae for the target's registers, which the phis
+1070 | | /// alone did not show (shellsort bas -Os: a third formula register spilled the
+1071 | | /// `i32` chain).
+     | |_----------------^
+     |   |
+     |   rustdoc does not generate documentation for macro invocations
+     |
+     = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: variable does not need to be mutable
+    --> crates/opt/llrm-transforms/src/aggressive_instcombine.rs:1400:9
+     |
+1400 |     let mut build = |function: &mut Function, op: Opcode, ty: TypeId, operands: Vec<Operand>, flags: Flags| {
+     |         ----^^^^^
+     |         |
+     |         help: remove this `mut`
+     |
+     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+    --> crates/opt/llrm-transforms/src/aggressive_instcombine.rs:1591:13
+     |
+1591 |         let mut build = |function: &mut Function, op: Opcode, ty, operands: Vec<Operand>, flags| {
+     |             ----^^^^^
+     |             |
+     |             help: remove this `mut`
+
+warning: variable does not need to be mutable
+    --> crates/opt/llrm-transforms/src/aggressive_instcombine.rs:1857:9
+     |
+1857 |     let mut build = |function: &mut Function, op: Opcode, ty: TypeId, operands: Vec<Operand>| {
+     |         ----^^^^^
+     |         |
+     |         help: remove this `mut`
+
+warning: variable does not need to be mutable
+    --> crates/opt/llrm-transforms/src/aggressive_instcombine.rs:2480:10
+     |
+2480 |     let (mut x, x_ty, input_bits, zero_elem, isolated) = {
+     |          ----^
+     |          |
+     |          help: remove this `mut`
+
+warning: unused variable: `retry`
+   --> crates/opt/llrm-transforms/src/cgpaddr.rs:583:5
+    |
+583 |     retry: bool,
+    |     ^^^^^ help: if this is intentional, prefix it with an underscore: `_retry`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> crates/opt/llrm-transforms/src/cgpselect.rs:434:9
+    |
+434 |     let mut side_of = |function: &mut Function, arm: Option<InstId>| -> (BlockId, Operand) {
+    |         ----^^^^^^^
+    |         |
+    |         help: remove this `mut`
+
+warning: unused variable: `env`
+   --> crates/opt/llrm-transforms/src/loopidiom/pass.rs:146:13
+    |
+146 |         let env = Env {
+    |             ^^^ help: if this is intentional, prefix it with an underscore: `_env`
+
+warning: unused variable: `analyzed`
+    --> crates/opt/llrm-transforms/src/loopunrollpass.rs:1743:10
+     |
+1743 |     let (analyzed, lp) = match &remade {
+     |          ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_analyzed`
+
+warning: function `combine_with_sinking` is never used
+   --> crates/opt/llrm-transforms/src/combine.rs:690:15
+    |
+690 | pub(crate) fn combine_with_sinking(
+    |               ^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `infer_alignment` is never used
+   --> crates/opt/llrm-transforms/src/inferalignment.rs:389:4
+    |
+389 | fn infer_alignment(
+    |    ^^^^^^^^^^^^^^^
+
+warning: fields `first_iteration`, `heavy_rolled`, and `heavy_first` are never read
+   --> crates/opt/llrm-transforms/src/loopunrollpass.rs:358:5
+    |
+353 | struct EstimatedUnrollCost {
+    |        ------------------- fields in this struct
+...
+358 |     first_iteration: u32,
+    |     ^^^^^^^^^^^^^^^
+...
+369 |     heavy_rolled: u32,
+    |     ^^^^^^^^^^^^
+370 |     heavy_first: u32,
+    |     ^^^^^^^^^^^
+
+warning: unused import: `BTreeSet`
+  --> crates/codegen/llrm-codegen/src/backend/selectiondag/dagisel_adapter.rs:20:34
+   |
+20 | use std::collections::{BTreeMap, BTreeSet};
+   |                                  ^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `before`
+   --> crates/codegen/llrm-codegen/src/backend/selectiondag/dag_combiner.rs:667:17
+    |
+667 |             let before = self.dag.node_count();
+    |                 ^^^^^^ help: if this is intentional, prefix it with an underscore: `_before`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+
+running 46 tests
+..............................................
+test result: ok. 46 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
