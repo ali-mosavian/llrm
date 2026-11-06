@@ -841,9 +841,20 @@ pub struct Commuter<'a> {
     /// The values `convertInstTo3Addr` made a two-register `lea` of in this
     /// block (`isConvertibleLEA`).
     leas: llrm_support::hash::HashSet<u32>,
+    /// DEVIATE TA-LC on (`Profile::commute_loop_carried`).
+    loop_carried: bool,
 }
 
 impl<'a> Commuter<'a> {
+    /// The walk with DEVIATE TA-LC on or off.
+    pub fn with_loop_carried(
+        mut self,
+        on: bool,
+    ) -> Self {
+        self.loop_carried = on;
+        self
+    }
+
     /// The walk of `block`, at its first instruction.
     pub fn new(
         facts: &'a BodyFacts,
@@ -868,6 +879,7 @@ impl<'a> Commuter<'a> {
             dst: HashMap::default(),
             processed: Default::default(),
             leas: Default::default(),
+            loop_carried: false,
         }
     }
 
@@ -1301,6 +1313,17 @@ impl<'a> Commuter<'a> {
             if (from_c.is_none() && comp_b) || (from_c.is_some() && !comp_c && (from_b.is_none() || comp_b)) {
                 return false;
             }
+        }
+        // DEVIATE TA-LC (owner anyisa, exit 2026-11-27): the pin's bail below
+        // is a profitability heuristic, not a correctness rule. Where the
+        // result is copied back into C (the loop's back-edge copy), tying C
+        // costs no copy, whatever read C had in between (`x &= x - 1`: the pin
+        // keeps `mov tmp, x` every iteration).
+        if self.loop_carried
+            && self.is_rev_copy_chain(c, a, MAX_DATA_FLOW_EDGE)
+            && !self.is_rev_copy_chain(b, a, MAX_DATA_FLOW_EDGE)
+        {
+            return true;
         }
         // A use of C between its last definition and here: leave it.
         let (clear_c, last_def_c) = self.no_use_after_last_def(c, dist);

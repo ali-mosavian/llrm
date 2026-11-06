@@ -1056,6 +1056,11 @@ impl Dag for DagisAdapter<'_> {
         if mems.iter().any(|mem| self.dag.volatile_accesses.contains(mem)) {
             self.dag.volatile_accesses.insert(node);
         }
+        // So is one that folded only invariant loads
+        // (`isDereferenceableInvariantLoad` asks every memory operand).
+        if !mems.is_empty() && mems.iter().all(|mem| self.dag.invariant_loads.contains(mem)) {
+            self.dag.invariant_loads.insert(node);
+        }
         self.mem_refs.insert(node, mems.to_vec());
     }
 
