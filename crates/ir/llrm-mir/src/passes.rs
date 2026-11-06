@@ -1792,6 +1792,14 @@ fn check_modules() -> bool {
     CHECKING_MODULES.with(std::cell::Cell::get) || *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_MODULES"))
 }
 
+/// The other bodies as they stand now, for `LLRM_CHECK_CAPTURES` to read a callee in. Every place that runs a pass on a function
+/// takes it first: one taken earlier holds bodies the later edits have changed.
+pub fn snapshot_for_audit(module: &Module) {
+    if check_captures() {
+        MODULE_SNAPSHOT.with(|held| *held.borrow_mut() = Some(Rc::new(module.clone())));
+    }
+}
+
 pub(crate) fn check_captures() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_CAPTURES").is_some())
@@ -3635,9 +3643,7 @@ impl PassManager {
                 let id = GlobalId(at as u32);
                 // The other bodies as they stand, for an audit that
                 // reads a callee.
-                if check_captures() {
-                    MODULE_SNAPSHOT.with(|held| *held.borrow_mut() = Some(Rc::new(module.clone())));
-                }
+                snapshot_for_audit(module);
                 let Module { context, globals, metadata, .. } = &mut *module;
                 let global = &mut globals[at];
                 let GlobalKind::Function(function) = &mut global.kind else { continue };

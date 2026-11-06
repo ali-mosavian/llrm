@@ -262,10 +262,10 @@ fn our_vt(vt: Vt) -> EVT {
 /// raw id.
 pub const EFLAGS_ID: llrm_lir::registers::RegId = llrm_lir::registers::RegId::from_raw(255);
 
-/// The registers an x86 call clobbers that the scheduler must see in its
-/// `RegisterMask` operand: `EFLAGS` (the pin lists the whole caller-saved set;
-/// DEVIATE SCM1: only the flags, the one live physical register that crosses a
-/// call in this DAG. Exit: with the per-target CC clobber lists).
+/// The flags every x86 call clobbers, the one register a `RegisterMask` always names. A call lowered with a convention adds that
+/// convention's clobbered registers (`SelectionDAGBuilder::clobbered_by`) as far as `phys_reg` numbers them (DEVIATE SCM1: the
+/// pin's whole caller-saved set; ECX, ESI ... have no number here, so no node can define them live across a call). A libcall
+/// (`libcall.rs`) has no convention and keeps the flags alone. Exit: the complete X86 register numbering.
 pub fn call_clobbered_flags() -> Vec<u16> {
     pin_register(EFLAGS_ID).into_iter().collect()
 }
