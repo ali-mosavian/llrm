@@ -1526,13 +1526,22 @@ fn leaves_alone(
     a: &str,
     c: &str,
 ) -> bool {
-    items.iter().all(|item| match item {
-        Item::Inst(MInst { opcode, operands, .. }) if matches!(*opcode, op::COPY8 | op::COPY16 | op::LDI8 | op::LDI16) => {
-            let loads = matches!(*opcode, op::LDI8 | op::LDI16);
-            !matches!(operands.first(), Some(Machine::Reg(d)) if d == a || d == c && !loads)
-        }
-        _ => false,
-    })
+    items
+        .iter()
+        .all(
+            |item| match item {
+                Item::Inst(MInst { opcode, operands, .. })
+                    if matches!(*opcode, op::COPY8 | op::COPY16 | op::LDI8 | op::LDI16) =>
+                {
+                    let loads = matches!(*opcode, op::LDI8 | op::LDI16);
+                    !matches!(
+                        operands.first(),
+                        Some(Machine::Reg(d)) if d == a || d == c && !loads
+                    )
+                }
+                _ => false,
+            },
+        )
 }
 
 /// The cells defined by exactly one `LDI8`, with their values.
@@ -1655,8 +1664,10 @@ pub fn build_with_places(
         b.item = at;
         // copies and loads between the step and its compare keep the step
         // pending (the compare's right side is read from the constants)
-        let loads =
-            matches!(item, Item::Inst(MInst { opcode: op::COPY8 | op::COPY16 | op::LDI8 | op::LDI16, .. }));
+        let loads = matches!(
+            item,
+            Item::Inst(MInst { opcode: op::COPY8 | op::COPY16 | op::LDI8 | op::LDI16, .. })
+        );
         let prev_step = if loads { b.step_at.clone() } else { b.step_at.take() };
         let inst = match item {
             Item::Label(_) => {
