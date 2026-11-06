@@ -46,7 +46,7 @@ fn zero(
 }
 
 /// The instruction `opcode` placed before the call, as an operand.
-fn build(
+pub(super) fn build(
     unit: &mut Unit,
     site: &Site,
     opcode: Opcode,
@@ -59,7 +59,7 @@ fn build(
 }
 
 /// `B.CreateZExt(B.CreateLoad(i8, pointer))`, negated for `negate`.
-fn first_byte(
+pub(super) fn first_byte(
     unit: &mut Unit,
     site: &Site,
     pointer: Operand,
@@ -78,7 +78,7 @@ fn first_byte(
 
 /// `GetStringLength`: the length with the NUL of a constant string, 0 where
 /// the array has no NUL.
-fn string_length(
+pub(super) fn string_length(
     unit: &Unit,
     site: &Site,
     operand: Operand,

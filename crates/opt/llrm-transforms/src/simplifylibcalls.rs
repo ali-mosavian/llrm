@@ -58,6 +58,7 @@ use llrm_mir::types::Type;
 
 mod compare;
 mod memops;
+mod string;
 
 /// One table per module: the target's library, else the pin's defaults for
 /// the pointer's width.
@@ -505,6 +506,8 @@ impl FunctionPass for SimplifyLibCalls {
                 LibFunc::Mempcpy => memops::mem_p_cpy(unit, &site),
                 LibFunc::Memset => memops::mem_set(unit, &site),
                 LibFunc::Memccpy => memops::mem_c_cpy(unit, &site),
+                LibFunc::Strlen => string::str_len(unit, &site),
+                LibFunc::Strnlen => string::str_n_len(unit, &site),
                 _ => None,
             };
             let Some(rewrite) = rewrite else { continue };

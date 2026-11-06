@@ -152,3 +152,78 @@ fn test_memccpy_of_a_constant_string_is_a_memcpy_through_the_stop_byte() {
     assert!(!after.contains("call ptr @memccpy"), "{after}");
     assert!(after.contains("llvm.memcpy.p0.p0.i16(ptr align 1 %d, ptr align 1 @s, i16 3"), "{after}");
 }
+
+const SABC: &str = "@s = private constant [4 x i8] c\"abc\\00\"\n\
+                    declare i16 @strlen(ptr)\ndeclare i16 @strnlen(ptr, i16)\n";
+
+fn in_function(
+    signature: &str,
+    body: &str,
+) -> String {
+    run(&format!("{SABC}define {signature} {{\nb0:\n{body}\n}}\n"))
+}
+
+/// `strlen("abc")` is 3 (pin `opt`: `ret i64 3`); the call stayed.
+#[test]
+fn test_strlen_of_a_constant_string_is_its_length() {
+    let after = in_function("i16 @f()", "  %r = call i16 @strlen(ptr @s)\n  ret i16 %r");
+    assert!(after.contains("ret i16 3"), "{after}");
+}
+
+/// `strlen(p) == 0` is `*p == 0`: one byte load, no call.
+#[test]
+fn test_strlen_compared_with_zero_loads_the_first_byte() {
+    let after = in_function(
+        "i1 @f(ptr %p)",
+        "  %r = call i16 @strlen(ptr %p)\n  %c = icmp eq i16 %r, 0\n  ret i1 %c",
+    );
+    assert!(after.contains("load i8, ptr %p"), "{after}");
+    assert!(!after.contains("call i16 @strlen"), "{after}");
+}
+
+/// `strnlen("abc", 2)` is 2.
+#[test]
+fn test_strnlen_of_a_constant_string_with_a_constant_bound_is_the_smaller() {
+    let after = in_function("i16 @f()", "  %r = call i16 @strnlen(ptr @s, i16 2)\n  ret i16 %r");
+    assert!(after.contains("ret i16 2"), "{after}");
+}
+
+/// `strnlen(p, 0)` is 0 for any `p`; `strnlen(p, 1)` is `*p != 0`.
+#[test]
+fn test_strnlen_with_bound_zero_is_zero_and_with_bound_one_tests_the_first_byte() {
+    let zero = in_function("i16 @f(ptr %p)", "  %r = call i16 @strnlen(ptr %p, i16 0)\n  ret i16 %r");
+    assert!(zero.contains("ret i16 0"), "{zero}");
+    let one = in_function("i16 @f(ptr %p)", "  %r = call i16 @strnlen(ptr %p, i16 1)\n  ret i16 %r");
+    assert!(one.contains("icmp ne i8"), "{one}");
+    assert!(one.contains("zext i1"), "{one}");
+    assert!(!one.contains("call i16 @strnlen"), "{one}");
+}
+
+/// `strnlen("abc", n)` is `umin(3, n)`.
+#[test]
+fn test_strnlen_of_a_constant_string_with_a_variable_bound_is_umin() {
+    let after = in_function("i16 @f(i16 %n)", "  %r = call i16 @strnlen(ptr @s, i16 %n)\n  ret i16 %r");
+    assert!(after.contains("call i16 @llvm.umin.i16(i16 3, i16 %n)"), "{after}");
+}
+
+/// `strnlen(p, n) != 0` with `n` unknown stays: `n` may be 0 (pin `opt`
+/// keeps the call).
+#[test]
+fn test_strnlen_compared_with_zero_stays_when_the_bound_may_be_zero() {
+    let after = in_function(
+        "i1 @f(ptr %p, i16 %n)",
+        "  %r = call i16 @strnlen(ptr %p, i16 %n)\n  %c = icmp ne i16 %r, 0\n  ret i1 %c",
+    );
+    assert!(after.contains("call i16 @strnlen"), "{after}");
+}
+
+/// Only equality against zero folds to the load: `strlen(p) > 0` is not
+/// `*p != 0` here (the pin's `isOnlyUsedInZeroEqualityComparison`).
+#[test]
+fn test_strlen_in_an_ordered_comparison_is_not_the_load() {
+    let after = in_function(
+        "i1 @f(ptr %p)",
+        "  %r = call i16 @strlen(ptr %p)\n  %c = icmp ugt i16 %r, 0\n  ret i1 %c",
+    );
+    assert!(after.contains("call i16 @strlen"), "{after}");
+}
